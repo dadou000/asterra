@@ -4,13 +4,9 @@ extends RefCounted
 ##
 ## All macro-scale generation passes (geology, erosion, hydrology, climate, soil,
 ## biome, suitability) operate on this single flat index space so that they can
-## share neighbour topology. Cross-face adjacency is resolved geometrically.
-##
-## Continuous field lookup deliberately does *not* pick one cube face and trust
-## its 2-D bilinear filter at an edge. Near an edge (or a 3-face cube corner) we
-## evaluate every relevant face and blend them in direction space. That is the
-## CPU equivalent of seamless cubemap filtering: the result depends only on the
-## spherical direction, never on which face happened to win the major-axis tie.
+## share neighbour topology. Cross-face adjacency is resolved geometrically -- a
+## neighbour that falls outside a face is re-projected through the cube-sphere
+## inverse -- which removes the usual seam special-casing entirely.
 
 var res: int
 var radius: float
@@ -26,11 +22,6 @@ const OFFS := [
 	Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1), Vector2i(-1, 1),
 	Vector2i(-1, 0), Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
 ]
-
-## Width of the cross-face blend in macro cells. Two cells is wide enough that
-## the first derivative also relaxes instead of merely hiding a one-pixel crack,
-## while still being tiny compared with the planetary features in these fields.
-const SEAM_BLEND_CELLS := 2.0
 
 func _init(p_res: int, p_radius: float) -> void:
 	res = p_res
@@ -104,114 +95,56 @@ func _build() -> void:
 				var ln := d0.distance_to(dn) * radius
 				cell_size[c] = maxf(1.0, (le + ln) * 0.5)
 
-## Continuous scalar lookup on the sphere.
-##
-## Away from cube boundaries only the dominant face has non-zero weight, so the
-## cost is the same four taps as ordinary bilinear filtering. Within roughly two
-## macro cells of an edge, the adjacent face joins smoothly. At a cube corner all
-## three faces receive equal weight. Because the weights are functions of |d|
-## rather than a selected face, crossing a major-axis tie cannot create a seam.
+## Bilinearly sampled field value at an arbitrary direction. Handles face borders
+## by clamping inside the face and blending with the geometric neighbour, which is
+## continuous to within a fraction of a cell -- enough for macro fields.
 func sample_bilinear(field: PackedFloat32Array, d: Vector3) -> float:
-	var w := _seam_weights(d)
-	var sum := 0.0
-	var total := 0.0
-	if w.x > 0.0:
-		var face_x := CubeSphere.FACE_PX if d.x >= 0.0 else CubeSphere.FACE_NX
-		sum += _sample_face_float(field, d, face_x) * w.x
-		total += w.x
-	if w.y > 0.0:
-		var face_y := CubeSphere.FACE_PY if d.y >= 0.0 else CubeSphere.FACE_NY
-		sum += _sample_face_float(field, d, face_y) * w.y
-		total += w.y
-	if w.z > 0.0:
-		var face_z := CubeSphere.FACE_PZ if d.z >= 0.0 else CubeSphere.FACE_NZ
-		sum += _sample_face_float(field, d, face_z) * w.z
-		total += w.z
-	return sum / maxf(total, 1e-12)
-
-## Continuous colour lookup using the exact same seam weights as scalar fields.
-func sample_color_bilinear(field: PackedColorArray, d: Vector3) -> Color:
-	var w := _seam_weights(d)
-	var sum := Color(0.0, 0.0, 0.0, 0.0)
-	var total := 0.0
-	if w.x > 0.0:
-		var face_x := CubeSphere.FACE_PX if d.x >= 0.0 else CubeSphere.FACE_NX
-		sum += _sample_face_color(field, d, face_x) * w.x
-		total += w.x
-	if w.y > 0.0:
-		var face_y := CubeSphere.FACE_PY if d.y >= 0.0 else CubeSphere.FACE_NY
-		sum += _sample_face_color(field, d, face_y) * w.y
-		total += w.y
-	if w.z > 0.0:
-		var face_z := CubeSphere.FACE_PZ if d.z >= 0.0 else CubeSphere.FACE_NZ
-		sum += _sample_face_color(field, d, face_z) * w.z
-		total += w.z
-	return sum * (1.0 / maxf(total, 1e-12))
-
-## Smooth weights for the three signed axis faces touching `d`.
-##
-## On an equi-angular cube, one cell next to an edge corresponds approximately to
-## a PI/res change in the ratio minor_axis/major_axis around 45 degrees. Using
-## that ratio makes the blend width scale automatically with grid resolution.
-func _seam_weights(d: Vector3) -> Vector3:
-	var a := Vector3(absf(d.x), absf(d.y), absf(d.z))
-	var major := maxf(a.x, maxf(a.y, a.z))
-	if major <= 1e-12:
-		return Vector3(1.0, 0.0, 0.0)
-	var ratio_band := clampf(SEAM_BLEND_CELLS * PI / float(res), 0.002, 0.25)
-	var start := 1.0 - ratio_band
-	return Vector3(
-		smoothstep(start, 1.0, a.x / major),
-		smoothstep(start, 1.0, a.y / major),
-		smoothstep(start, 1.0, a.z / major))
-
-## Project one spherical direction into an explicitly selected cube face. This is
-## intentionally separate from CubeSphere.dir_to_face_uv(), which chooses a
-## major axis and is exactly the branch we must avoid inside a seam blend.
-func _uv_on_face(d: Vector3, face: int) -> Vector2:
-	var axis: Vector3 = CubeSphere.AXIS[face]
-	var denom := axis.dot(d)
-	if absf(denom) < 1e-12:
-		denom = 1e-12 if denom >= 0.0 else -1e-12
-	var u := atan(CubeSphere.RIGHT[face].dot(d) / denom) / CubeSphere.Q
-	var v := atan(CubeSphere.UP[face].dot(d) / denom) / CubeSphere.Q
-	return Vector2(u, v)
-
-## Bilinear sample restricted to one face. Coordinates are clamped to that
-## face's outer cell centres; the neighbouring face is supplied by the outer
-## direction-space blend rather than by a discontinuous major-axis lookup.
-func _sample_face_float(field: PackedFloat32Array, d: Vector3, face: int) -> float:
-	var uv := _uv_on_face(d, face)
-	var fx := clampf((uv.x * 0.5 + 0.5) * res - 0.5, 0.0, float(res - 1))
-	var fy := clampf((uv.y * 0.5 + 0.5) * res - 0.5, 0.0, float(res - 1))
+	var fuv := CubeSphere.dir_to_face_uv(d)
+	var face: int = fuv[0]
+	var fx: float = (fuv[1] * 0.5 + 0.5) * res - 0.5
+	var fy: float = (fuv[2] * 0.5 + 0.5) * res - 0.5
 	var i0 := int(floor(fx))
 	var j0 := int(floor(fy))
-	var i1 := mini(i0 + 1, res - 1)
-	var j1 := mini(j0 + 1, res - 1)
 	var tx := fx - float(i0)
 	var ty := fy - float(j0)
-	var v00 := field[idx(face, i0, j0)]
-	var v10 := field[idx(face, i1, j0)]
-	var v01 := field[idx(face, i0, j1)]
-	var v11 := field[idx(face, i1, j1)]
+	var v00 := _safe(field, face, i0, j0)
+	var v10 := _safe(field, face, i0 + 1, j0)
+	var v01 := _safe(field, face, i0, j0 + 1)
+	var v11 := _safe(field, face, i0 + 1, j0 + 1)
 	return lerpf(lerpf(v00, v10, tx), lerpf(v01, v11, tx), ty)
 
-func _sample_face_color(field: PackedColorArray, d: Vector3, face: int) -> Color:
-	var uv := _uv_on_face(d, face)
-	var fx := clampf((uv.x * 0.5 + 0.5) * res - 0.5, 0.0, float(res - 1))
-	var fy := clampf((uv.y * 0.5 + 0.5) * res - 0.5, 0.0, float(res - 1))
+func _safe(field: PackedFloat32Array, face: int, i: int, j: int) -> float:
+	if i >= 0 and i < res and j >= 0 and j < res:
+		return field[idx(face, i, j)]
+	var s := 2.0 / float(res)
+	var u := (float(i) + 0.5) * s - 1.0
+	var v := (float(j) + 0.5) * s - 1.0
+	return field[dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))]
+
+## Bilinearly sampled colour field. Same border handling as `sample_bilinear` --
+## a per-cell palette lookup sampled this way is what keeps the 8 km macro
+## lattice from showing up as square tiles on the ground.
+func sample_color_bilinear(field: PackedColorArray, d: Vector3) -> Color:
+	var fuv := CubeSphere.dir_to_face_uv(d)
+	var face: int = fuv[0]
+	var fx: float = (fuv[1] * 0.5 + 0.5) * res - 0.5
+	var fy: float = (fuv[2] * 0.5 + 0.5) * res - 0.5
 	var i0 := int(floor(fx))
 	var j0 := int(floor(fy))
-	var i1 := mini(i0 + 1, res - 1)
-	var j1 := mini(j0 + 1, res - 1)
 	var tx := fx - float(i0)
 	var ty := fy - float(j0)
-	var c0 := field[idx(face, i0, j0)].lerp(field[idx(face, i1, j0)], tx)
-	var c1 := field[idx(face, i0, j1)].lerp(field[idx(face, i1, j1)], tx)
+	var c0 := _safe_color(field, face, i0, j0).lerp(_safe_color(field, face, i0 + 1, j0), tx)
+	var c1 := _safe_color(field, face, i0, j0 + 1).lerp(_safe_color(field, face, i0 + 1, j0 + 1), tx)
 	return c0.lerp(c1, ty)
 
-## Nearest-cell integer field lookup. Integer/categorical fields are intentionally
-## not blended; callers that need a visually continuous quantity use the float
-## fields derived from them.
+func _safe_color(field: PackedColorArray, face: int, i: int, j: int) -> Color:
+	if i >= 0 and i < res and j >= 0 and j < res:
+		return field[idx(face, i, j)]
+	var s := 2.0 / float(res)
+	var u := (float(i) + 0.5) * s - 1.0
+	var v := (float(j) + 0.5) * s - 1.0
+	return field[dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))]
+
+## Nearest-cell integer field lookup.
 func sample_int(field: PackedByteArray, d: Vector3) -> int:
 	return field[dir_to_index(d)]
