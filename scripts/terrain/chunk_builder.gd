@@ -113,7 +113,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var max_dh := 0.0
 	for j in n + 1:
 		var v := v0 + float(j) * step
-		var fy := (v - (v0 - step)) / mspan * float(mres)
 		for i in n + 1:
 			var u := u0 + float(i) * step
 			var vi := j * (n + 1) + i
@@ -129,8 +128,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				float(dd.z * r - pivot.z))
 			uvs[vi] = Vector2(float(i) / float(n), float(j) / float(n))
 			var d3: Vector3 = dirs[ei]
-			var fx := (u - mu0) / mspan * float(mres)
-			cols[vi] = _bilerp_color(m_col, mn, fx, fy)
+			# Sample visual fields from the canonical planet direction. Interpolating
+			# a chunk-local macro cache creates discontinuities when two cube faces
+			# approach the same edge from different (u,v) coordinate systems.
+			cols[vi] = Planet.surface_color(d3)
 			# Normal from the extended height field, in the local tangent frame.
 			var hl: float = hgt[ei - 1]
 			var hr: float = hgt[ei + 1]
@@ -146,14 +147,15 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				nrm = -nrm
 			norms[vi] = nrm
 			max_dh = maxf(max_dh, maxf(absf(hr - hl), absf(hu - hd)) * 0.5)
-			var wl := _bilerp(m_water, mn, fx, fy)
+			var wl := Planet.water_height(d3)
 			water_h[vi] = wl
 			# The ocean is at sea level everywhere, so its shoreline is wherever
 			# the ground crosses zero and needs no help. A lake level only means
 			# anything inside its own basin, so it is faded out by how much of the
 			# macro cell around it actually holds that lake -- otherwise the level
 			# gets painted over the rim and down the next valley.
-			var conf := 1.0 if wl <= 0.05 else smoothstep(0.30, 0.65, _bilerp(m_wmask, mn, fx, fy))
+			var coverage := Planet.water_coverage(d3)
+			var conf := 1.0 if wl <= 0.05 else smoothstep(0.30, 0.65, coverage)
 			water_conf[vi] = conf
 			if wl > h + 0.05 and conf > 0.02:
 				water_needed = true
@@ -389,33 +391,18 @@ static func _bilerp_color(a: PackedColorArray, mn: int, fx: float, fy: float) ->
 	var c1 := a[(j0 + 1) * mn + i0].lerp(a[(j0 + 1) * mn + i0 + 1], tx)
 	return c0.lerp(c1, ty)
 
-static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float, _step: float,
+static func _height_at(_mn: int, _mres: int, _mu0: float, _mv0: float, _mspan: float, _step: float,
 		face: int, u: float, v: float,
-		m_elev: PackedFloat32Array, m_relief: PackedFloat32Array, m_flat: PackedFloat32Array,
-		m_hard: PackedFloat32Array, m_river: PackedFloat32Array,
+		_m_elev: PackedFloat32Array, _m_relief: PackedFloat32Array, _m_flat: PackedFloat32Array,
+		_m_hard: PackedFloat32Array, _m_river: PackedFloat32Array,
 		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null) -> float:
 	if debug_flat:
 		return 0.0
-	var fx := (u - mu0) / mspan * float(mres)
-	var fy := (v - mv0) / mspan * float(mres)
 	var d: Vector3 = known_dir if known_dir != null else CubeSphere.face_uv_to_dir(face, u, v)
-	var h := _bilerp(m_elev, mn, fx, fy)
-	var relief := _bilerp(m_relief, mn, fx, fy)
-	var flat := _bilerp(m_flat, mn, fx, fy)
-	var hard := _bilerp(m_hard, mn, fx, fy)
-	if h > 0.0:
-		h += detail.height(d, relief, flat, hard)
-		var w := _bilerp(m_river, mn, fx, fy)
-		if w > 4.0:
-			h -= clampf(w * 0.045, 0.0, 22.0)
-	else:
-		h += detail.height(d, relief * 0.5, 0.55, 1.0)
-	if snap.is_empty():
-		if not Deltas.is_empty():
-			h += Deltas.offset_at(d)
-	else:
-		h += Deltas.offset_at_snapshot(d, snap)
-	return h
+	# Canonical direction-space sampling is mandatory at cube-face boundaries.
+	# The former per-chunk (u,v) interpolation produced different macro heights
+	# for two faces that represented the same physical direction.
+	return Planet.terrain_height(d, detail, snap)
 
 static func _arc(a: Vector3, b: Vector3, radius: float) -> float:
 	return maxf(0.001, a.distance_to(b) * radius)
