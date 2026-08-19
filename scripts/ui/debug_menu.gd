@@ -106,10 +106,15 @@ func _ready() -> void:
 	box.add_child(hint)
 
 ## Handled in _input rather than _unhandled_input so that a focused check button
-## can never swallow the key that closes the menu.
+## can never swallow the key that closes the menu. Before the first planet bake
+## finishes `debug` is still null and there is no player/terrain to control, so
+## ignore attempts to open the menu during that short startup window.
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo \
 			and event.keycode == KEY_ESCAPE:
+		if not visible and debug == null:
+			get_viewport().set_input_as_handled()
+			return
 		toggle()
 		get_viewport().set_input_as_handled()
 
