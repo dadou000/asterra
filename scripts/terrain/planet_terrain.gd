@@ -18,6 +18,9 @@ const LOD_MORPH_TIME := 0.35
 const MORPH_EPSILON := 0.0015
 const MORPH_FORMAT := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
 const FACE_EDGE_EPS := 1e-7
+const FACE_EDGE_PROBE := 1e-5
+
+enum FaceEdge { LEFT, RIGHT, BOTTOM, TOP }
 
 class QuadNode extends RefCounted:
 	var face: int
@@ -28,11 +31,9 @@ class QuadNode extends RefCounted:
 	var center_dir: Vector3
 	var center_world: Vec3D
 	var arc: float
-	## LOD distance reference points. Interior nodes contain only their own
-	## centre. A node touching a cube-face boundary also contains the centre of
-	## the same-depth patch on the adjacent face. Both sides therefore evaluate
-	## the exact same distance set and cannot choose different LODs at the seam.
-	## Corner nodes contain the three face centres meeting at that cube corner.
+	## Interior nodes contain only their own centre. A node touching a cube-face
+	## boundary also contains the centre of its exact same-depth neighbour on the
+	## adjacent face. Corresponding nodes therefore evaluate the same distance set.
 	var lod_centers: Array = []
 	var children: Array = []
 	var chunk: Node3D = null
@@ -128,29 +129,21 @@ func _make_node(face: int, depth: int, u0: float, v0: float, size: float) -> Qua
 	q.arc = size * (PI * 0.25) * cfg.planet_radius
 	q.lod_centers = [q.center_world]
 
-	# The six roots are a special case: each one touches four cube edges. Give
-	# every root the same six reference centres so all visible roots make the same
-	# coarse LOD decision regardless of which face the observer happens to be over.
+	# All roots use the same six face centres so the first split cannot diverge.
 	if depth == 0:
 		q.lod_centers.clear()
 		for f in 6:
 			q.lod_centers.append(_surface_reference(CubeSphere.AXIS[f]))
 		return q
 
-	# For an edge patch, stepping half a patch beyond the face boundary lands at
-	# the centre of the corresponding same-depth patch on the adjacent face. The
-	# equi-angular mapping is continuous under this extension. At a cube corner we
-	# add both adjacent partners, producing the same three-centre set on all three
-	# faces that meet there.
-	var half := size * 0.5
 	if absf(u0 + 1.0) <= FACE_EDGE_EPS:
-		_add_lod_partner(q, CubeSphere.face_uv_to_dir(face, -1.0 - half, cv))
+		_add_edge_lod_partner(q, FaceEdge.LEFT, cu, cv)
 	if absf((u0 + size) - 1.0) <= FACE_EDGE_EPS:
-		_add_lod_partner(q, CubeSphere.face_uv_to_dir(face, 1.0 + half, cv))
+		_add_edge_lod_partner(q, FaceEdge.RIGHT, cu, cv)
 	if absf(v0 + 1.0) <= FACE_EDGE_EPS:
-		_add_lod_partner(q, CubeSphere.face_uv_to_dir(face, cu, -1.0 - half))
+		_add_edge_lod_partner(q, FaceEdge.BOTTOM, cu, cv)
 	if absf((v0 + size) - 1.0) <= FACE_EDGE_EPS:
-		_add_lod_partner(q, CubeSphere.face_uv_to_dir(face, cu, 1.0 + half))
+		_add_edge_lod_partner(q, FaceEdge.TOP, cu, cv)
 	return q
 
 func _surface_reference(d: Vector3) -> Vec3D:
@@ -158,12 +151,60 @@ func _surface_reference(d: Vector3) -> Vec3D:
 	var r := cfg.planet_radius + h
 	return Vec3D.new(d.x * r, d.y * r, d.z * r)
 
+## Find the centre of the exact same-depth patch across one cube face edge.
+##
+## Extending this face's u/v by half a tile is *not* correct for an equi-angular
+## cube: the adjacent face has a rotated parameterisation, which was the source of
+## the first LOD-sync attempt still drifting. Instead we identify the adjacent
+## face with a tiny outside probe, project the shared edge midpoint into that
+## explicit face, then move half a tile inward in the adjacent face's own u/v.
+func _add_edge_lod_partner(node: QuadNode, edge: int, cu: float, cv: float) -> void:
+	var edge_u := cu
+	var edge_v := cv
+	var probe_u := cu
+	var probe_v := cv
+	match edge:
+		FaceEdge.LEFT:
+			edge_u = -1.0
+			probe_u = -1.0 - FACE_EDGE_PROBE
+		FaceEdge.RIGHT:
+			edge_u = 1.0
+			probe_u = 1.0 + FACE_EDGE_PROBE
+		FaceEdge.BOTTOM:
+			edge_v = -1.0
+			probe_v = -1.0 - FACE_EDGE_PROBE
+		FaceEdge.TOP:
+			edge_v = 1.0
+			probe_v = 1.0 + FACE_EDGE_PROBE
+
+	var probe_dir := CubeSphere.face_uv_to_dir(node.face, probe_u, probe_v)
+	var adjacent_face: int = CubeSphere.dir_to_face_uv(probe_dir)[0]
+	if adjacent_face == node.face:
+		return
+
+	var seam_dir := CubeSphere.face_uv_to_dir(node.face, edge_u, edge_v)
+	var axis: Vector3 = CubeSphere.AXIS[adjacent_face]
+	var right: Vector3 = CubeSphere.RIGHT[adjacent_face]
+	var up: Vector3 = CubeSphere.UP[adjacent_face]
+	var denom := axis.dot(seam_dir)
+	if absf(denom) < 1e-12:
+		denom = 1e-12 if denom >= 0.0 else -1e-12
+	var au := atan(right.dot(seam_dir) / denom) / CubeSphere.Q
+	var av := atan(up.dot(seam_dir) / denom) / CubeSphere.Q
+	var half := node.size * 0.5
+	if absf(absf(au) - 1.0) <= 1e-5:
+		au = (1.0 if au >= 0.0 else -1.0) * (1.0 - half)
+	elif absf(absf(av) - 1.0) <= 1e-5:
+		av = (1.0 if av >= 0.0 else -1.0) * (1.0 - half)
+	else:
+		return
+	_add_lod_partner(node, CubeSphere.face_uv_to_dir(adjacent_face, au, av))
+
 func _add_lod_partner(node: QuadNode, d: Vector3) -> void:
 	var p := _surface_reference(d)
-	# Corner bookkeeping can generate the same partner twice through numerical
-	# ties. It is harmless, but avoiding duplicates keeps the distance loop tiny.
 	for existing in node.lod_centers:
-		if (existing as Vec3D).distance_to(p) < 0.01:
+		var e: Vec3D = existing
+		if e.distance_to(p) < 0.01:
 			return
 	node.lod_centers.append(p)
 
@@ -216,12 +257,9 @@ func _update(node: QuadNode, hidden: bool, morph: float) -> void:
 		return
 	_stats["nodes"] += 1
 
-	# Interior patches use their own centre. Along a cube edge, the corresponding
-	# patches on both faces store the same pair of physical centres; at a cube
-	# corner all three store the same triplet. Taking the minimum observer distance
-	# across that shared set makes the split/merge decision exactly face-invariant.
 	var center_dist := 1e30
-	for p in node.lod_centers:
+	for p_value in node.lod_centers:
+		var p: Vec3D = p_value
 		center_dist = minf(center_dist, observer.distance_to(p))
 	var dist := center_dist - node.arc * 0.6
 
