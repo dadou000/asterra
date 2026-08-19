@@ -21,6 +21,7 @@ var dig_depth := 0.45
 var elapsed := 0.0
 var _aim: Dictionary = {}
 var _started := false
+var _rebaking := false
 
 func _ready() -> void:
 	cfg = _load_config()
@@ -34,6 +35,7 @@ func _ready() -> void:
 	debug_menu = DebugMenu.new()
 	debug_menu.opened.connect(_on_menu_opened)
 	debug_menu.closed.connect(_on_menu_closed)
+	debug_menu.rebake_requested.connect(_on_rebake_requested)
 	add_child(debug_menu)
 	_setup_environment()
 
@@ -77,6 +79,30 @@ func _setup_environment() -> void:
 	add_child(sun)
 
 func _on_baked(fields: PlanetFields) -> void:
+	# During a manual debug rebake the existing world stays alive while the new
+	# fields are generated. Swap them atomically here, then rebuild only the
+	# systems that depend on baked data instead of duplicating the whole scene.
+	if _rebaking and terrain != null:
+		var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
+		Planet.adopt(fields)
+		map.invalidate()
+		if map.visible:
+			map.refresh()
+		terrain.build_roots()
+		if editor != null:
+			editor.refresh()
+		if player != null:
+			# Elevation may have changed substantially; keep the geographic
+			# location but put the player safely above the newly baked surface.
+			player.spawn_at(keep_dir, 60.0)
+			player.input_enabled = not debug_menu.visible
+		debug_menu.set_rebake_busy(false)
+		hud.hide_progress()
+		hud.notify("Planet rebaked from seed — cache ignored")
+		_rebaking = false
+		_started = true
+		return
+
 	Planet.adopt(fields)
 	hud.hide_progress()
 
@@ -141,12 +167,33 @@ func _process(dt: float) -> void:
 	hud.update_info(player, terrain, carry, brush_radius, _aim)
 
 func _on_menu_opened() -> void:
+	if player == null:
+		return
 	player.set_mouse_captured(false)
 	player.input_enabled = false
 
 func _on_menu_closed() -> void:
+	if player == null:
+		return
 	player.set_mouse_captured(true)
 	player.input_enabled = true
+
+func _on_rebake_requested() -> void:
+	# Do not start a second generator while the initial bake or another manual
+	# rebake is already running. The menu button is re-enabled if the request was
+	# made too early.
+	if not _started or _rebaking:
+		debug_menu.set_rebake_busy(false)
+		return
+	_rebaking = true
+	_started = false
+	_aim.clear()
+	hud.show_progress("Rebaking Asterra from seed…", 0.0)
+	bake = PlanetBake.new(cfg)
+	bake.finished.connect(_on_baked)
+	# Explicit false bypasses user://.../*.bake without deleting it. The fresh
+	# result is still saved by PlanetBake when generation finishes.
+	bake.bake_async(false)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _started or not (event is InputEventKey or event is InputEventMouseButton):
