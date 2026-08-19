@@ -2,18 +2,8 @@ class_name ChunkBuilder
 extends RefCounted
 ## Builds one terrain chunk's geometry on a worker thread.
 ##
-## Vertices are generated in *chunk-local* space around a double-precision pivot,
-## so a 24 m chunk on the far side of a 1000 km planet still has millimetre
-## vertex precision once it reaches the float32 scene graph.
-##
-## The macro fields (elevation, relief, rock hardness, water, colour) vary on an
-## ~8 km grid, so they are sampled on a coarse lattice per chunk and interpolated,
-## while only the sub-grid detail noise and the player's terrain deltas are
-## evaluated per vertex. On a 24 m chunk that is the difference between seven
-## cube-sphere inversions per vertex and none.
-##
-## Produces up to two surfaces: the ground, and (only where needed) the free
-## water surface for oceans and lakes.
+## The macro fields are cached per chunk for speed. Cube-face seams need special
+## treatment because neighbouring faces use different local (u,v) axes.
 
 const SKIRT_MIN := 0.4
 const SKIRT_MAX := 300.0
@@ -23,6 +13,10 @@ const WATER_DEPTH_SCALE := 4000.0
 const WATER_DEPTH_CURVE := 0.25
 const MACRO_SPACING := 800.0
 const FACE_EDGE_EPS := 1e-6
+## Number of vertex rows over which the fast face-local approximation is
+## relaxed toward the canonical planet-space sampler. Exact edge vertices remain
+## bit-identical on both faces, while the smoothstep band removes the hard crease.
+const SEAM_BLEND_ROWS := 4.0
 
 static var debug_flat := false
 
@@ -76,6 +70,8 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var cols := PackedColorArray(); cols.resize(vcount)
 	var uvs := PackedVector2Array(); uvs.resize(vcount)
 
+	# One-vertex border for central-difference normals. Samples outside a cube
+	# face are forced to the canonical sampler by _seam_weight().
 	var ext := n + 3
 	var hgt := PackedFloat32Array(); hgt.resize(ext * ext)
 	var dirs := PackedVector3Array(); dirs.resize(ext * ext)
@@ -104,6 +100,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var h: float = hgt[ei]
 			min_h = minf(min_h, h)
 			max_h = maxf(max_h, h)
+
 			var dd := CubeSphere.face_uv_to_dir_d(face, u, v)
 			var r := radius + h
 			verts[vi] = Vector3(
@@ -111,13 +108,19 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				float(dd.y * r - pivot.y),
 				float(dd.z * r - pivot.z))
 			uvs[vi] = Vector2(float(i) / float(n), float(j) / float(n))
+
 			var d3: Vector3 = dirs[ei]
 			var fx := (u - mu0) / mspan * float(mres)
 			var fy := (v - (v0 - step)) / mspan * float(mres)
-			# Only the actual outer cube edge needs canonical sampling. Keeping the
-			# original chunk-local cache everywhere else avoids doing the expensive
-			# global macro lookup for every vertex.
-			cols[vi] = Planet.surface_color(d3) if _is_face_edge(u, v) else _bilerp_color(m_col, mn, fx, fy)
+			var seam_w := _seam_weight(u, v, step)
+
+			# Colour uses the same transition as geometry. This avoids an abrupt
+			# last-row switch from the chunk cache to Planet.surface_color().
+			var local_col := _bilerp_color(m_col, mn, fx, fy)
+			if seam_w > 0.0:
+				cols[vi] = local_col.lerp(Planet.surface_color(d3), seam_w)
+			else:
+				cols[vi] = local_col
 
 			var hl: float = hgt[ei - 1]
 			var hr: float = hgt[ei + 1]
@@ -125,19 +128,39 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var hu: float = hgt[ei + ext]
 			var span := _arc(dirs[ei - 1], dirs[ei + 1], radius)
 			var span_v := _arc(dirs[ei - ext], dirs[ei + ext], radius)
-			var tb := CubeSphere.tangent_basis(d3)
-			var tang: Vector3 = (tb[0] * span + d3 * (hr - hl)).normalized()
-			var bitan: Vector3 = (tb[1] * span_v + d3 * (hu - hd)).normalized()
-			var nrm := bitan.cross(tang).normalized()
+
+			# The old code interpreted face-local U/V height differences as
+			# global east/north. That rotates the derivative basis at cube edges.
+			# Use the actual physical U and V directions of this face instead.
+			var du := dirs[ei + 1] - dirs[ei - 1]
+			du -= d3 * du.dot(d3)
+			if du.length_squared() < 1e-12:
+				du = CubeSphere.tangent_basis(d3)[0]
+			else:
+				du = du.normalized()
+			var dv := dirs[ei + ext] - dirs[ei - ext]
+			dv -= d3 * dv.dot(d3)
+			if dv.length_squared() < 1e-12:
+				dv = CubeSphere.tangent_basis(d3)[1]
+			else:
+				dv = dv.normalized()
+
+			var tang: Vector3 = (du * span + d3 * (hr - hl)).normalized()
+			var bitan: Vector3 = (dv * span_v + d3 * (hu - hd)).normalized()
+			var nrm := tang.cross(bitan).normalized()
 			if nrm.dot(d3) < 0.0:
 				nrm = -nrm
 			norms[vi] = nrm
 			max_dh = maxf(max_dh, maxf(absf(hr - hl), absf(hu - hd)) * 0.5)
 
-			var edge := _is_face_edge(u, v)
-			var wl := Planet.water_height(d3) if edge else _bilerp(m_water, mn, fx, fy)
+			var local_wl := _bilerp(m_water, mn, fx, fy)
+			var local_coverage := _bilerp(m_wmask, mn, fx, fy)
+			var wl := local_wl
+			var coverage := local_coverage
+			if seam_w > 0.0:
+				wl = lerpf(local_wl, Planet.water_height(d3), seam_w)
+				coverage = lerpf(local_coverage, Planet.water_coverage(d3), seam_w)
 			water_h[vi] = wl
-			var coverage := Planet.water_coverage(d3) if edge else _bilerp(m_wmask, mn, fx, fy)
 			var conf := 1.0 if wl <= 0.05 else smoothstep(0.30, 0.65, coverage)
 			water_conf[vi] = conf
 			if wl > h + 0.05 and conf > 0.02:
@@ -272,6 +295,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		out["water_indices"] = widx
 	return out
 
+
 static func _morph_offsets(verts: PackedVector3Array, n: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize((n + 1) * (n + 1) * 4)
@@ -294,6 +318,7 @@ static func _morph_offsets(verts: PackedVector3Array, n: int) -> PackedFloat32Ar
 			out[o + 2] = d.z
 	return out
 
+
 static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	var o := src * 4
 	out.append(out[o])
@@ -301,14 +326,18 @@ static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	out.append(out[o + 2])
 	out.append(0.0)
 
+
 static func _ground_h(hgt: PackedFloat32Array, ext: int, i: int, j: int) -> float:
 	return hgt[(j + 1) * ext + (i + 1)]
+
 
 static func cu_face(face: int) -> int:
 	return face
 
+
 static func mu0_at(origin: float, span: float, i: int, res: int) -> float:
 	return origin + span * float(i) / float(res)
+
 
 static func _bilerp(a: PackedFloat32Array, mn: int, fx: float, fy: float) -> float:
 	var i0 := clampi(int(floor(fx)), 0, mn - 2) if mn > 1 else 0
@@ -323,6 +352,7 @@ static func _bilerp(a: PackedFloat32Array, mn: int, fx: float, fy: float) -> flo
 	var v11 := a[(j0 + 1) * mn + i0 + 1]
 	return lerpf(lerpf(v00, v10, tx), lerpf(v01, v11, tx), ty)
 
+
 static func _bilerp_color(a: PackedColorArray, mn: int, fx: float, fy: float) -> Color:
 	if mn == 1:
 		return a[0]
@@ -334,7 +364,8 @@ static func _bilerp_color(a: PackedColorArray, mn: int, fx: float, fy: float) ->
 	var c1 := a[(j0 + 1) * mn + i0].lerp(a[(j0 + 1) * mn + i0 + 1], tx)
 	return c0.lerp(c1, ty)
 
-static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float, _step: float,
+
+static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float, step: float,
 		face: int, u: float, v: float,
 		m_elev: PackedFloat32Array, m_relief: PackedFloat32Array, m_flat: PackedFloat32Array,
 		m_hard: PackedFloat32Array, m_river: PackedFloat32Array,
@@ -342,12 +373,13 @@ static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float,
 	if debug_flat:
 		return 0.0
 	var d: Vector3 = known_dir if known_dir != null else CubeSphere.face_uv_to_dir(face, u, v)
-	# Shared outer-face vertices must use the exact global terrain function so
-	# both cube faces produce bit-identical radial displacement. Everywhere else
-	# keep the original coarse macro cache; evaluating Planet.terrain_height for
-	# every vertex caused the streamer backlog seen after the first seam fix.
-	if _is_face_edge(u, v):
+	var seam_w := _seam_weight(u, v, step)
+
+	# Exact edge/outside-border samples are canonical. This both seals the mesh
+	# and lets central-difference normals look across the neighbouring face.
+	if seam_w >= 0.999999:
 		return Planet.terrain_height(d, detail, snap)
+
 	var fx := (u - mu0) / mspan * float(mres)
 	var fy := (v - mv0) / mspan * float(mres)
 	var h := _bilerp(m_elev, mn, fx, fy)
@@ -366,10 +398,32 @@ static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float,
 			h += Deltas.offset_at(d)
 	else:
 		h += Deltas.offset_at_snapshot(d, snap)
+
+	if seam_w > 0.0:
+		var canonical := Planet.terrain_height(d, detail, snap)
+		h = lerpf(h, canonical, seam_w)
 	return h
+
+
+## 0 in the normal fast path, 1 exactly on or beyond a cube-face boundary.
+## The cubic smoothstep has zero slope at both ends, so blending does not create
+## a new derivative discontinuity at the inner edge of the transition strip.
+static func _seam_weight(u: float, v: float, step: float) -> float:
+	var au := absf(u)
+	var av := absf(v)
+	if au >= 1.0 - FACE_EDGE_EPS or av >= 1.0 - FACE_EDGE_EPS:
+		return 1.0
+	var dist_to_edge := minf(1.0 - au, 1.0 - av)
+	var band := maxf(step * SEAM_BLEND_ROWS, FACE_EDGE_EPS)
+	if dist_to_edge >= band:
+		return 0.0
+	var t := clampf(1.0 - dist_to_edge / band, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
 
 static func _is_face_edge(u: float, v: float) -> bool:
 	return absf(absf(u) - 1.0) <= FACE_EDGE_EPS or absf(absf(v) - 1.0) <= FACE_EDGE_EPS
+
 
 static func _arc(a: Vector3, b: Vector3, radius: float) -> float:
 	return maxf(0.001, a.distance_to(b) * radius)
