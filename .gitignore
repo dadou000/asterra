@@ -1,0 +1,4 @@
+.godot/
+*.tmp
+*.FCBak
+export_presets.cfg

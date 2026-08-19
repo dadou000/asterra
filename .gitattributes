@@ -1,0 +1,8 @@
+# The working copy is LF and the repository is LF; without this, Git on Windows
+# rewrites every source file to CRLF on checkout and the first diff after a
+# clone is the whole project.
+* text=auto eol=lf
+
+*.png binary
+*.svg text
+*.FCStd binary

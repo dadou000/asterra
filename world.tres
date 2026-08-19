@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="GenConfig" load_steps=2 format=3]
+
+; Asterra's canonical world. Edit this file (or open it in the Godot inspector)
+; to change the planet: everything the generator does is a pure function of the
+; values here. Bumping any of them invalidates the cached bake automatically.
+
+[ext_resource type="Script" path="res://scripts/gen/gen_config.gd" id="1_cfg"]
+
+[resource]
+script = ExtResource("1_cfg")
+world_seed = 4707684752384786688
+planet_radius = 1000000.0
+face_res = 192
+ocean_fraction = 0.62
