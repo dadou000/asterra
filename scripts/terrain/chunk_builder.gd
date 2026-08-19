@@ -15,28 +15,17 @@ extends RefCounted
 ## Produces up to two surfaces: the ground, and (only where needed) the free
 ## water surface for oceans and lakes.
 
-const SKIRT_MIN := 0.4           ## metres -- floor for near-flat chunks
-const SKIRT_MAX := 300.0         ## metres -- ceiling regardless of relief
-const WATER_SKIRT_MIN := 0.08    ## water is flat; only the chord sag has to be covered
+const SKIRT_MIN := 0.4
+const SKIRT_MAX := 300.0
+const WATER_SKIRT_MIN := 0.08
 const WATER_SKIRT_MAX := 400.0
-## Depth at which a water vertex saturates COLOR.r, and the curve it is stored
-## on. Both match `u_depth_scale` in ocean.gdshader.
-##
-## The range has to reach the abyss, because the shader sizes the shoreline fade
-## off the depth gradient and a saturated depth has no gradient. A fourth-root
-## curve buys that range without giving up the shoreline: 8-bit colour still
-## resolves ~0.1 m at wading depth, where the waterline is, and only coarsens out
-## in the deep where nothing reads it.
 const WATER_DEPTH_SCALE := 4000.0
 const WATER_DEPTH_CURVE := 0.25
-const MACRO_SPACING := 800.0     ## metres between macro samples
+const MACRO_SPACING := 800.0
+const FACE_EDGE_EPS := 1e-6
 
-## Debug: mesh the planet as a bare sphere, with the height field left out.
-## Read from worker threads, so it is only ever changed from the main thread with
-## a full re-mesh behind it.
 static var debug_flat := false
 
-## Pure data in, pure data out -- safe to call from WorkerThreadPool.
 static func build(face: int, u0: float, v0: float, size: float, n: int,
 		detail: TerrainDetail, snap: Dictionary, want_collision: bool) -> Dictionary:
 	var cfg: GenConfig = Planet.cfg
@@ -44,7 +33,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var step := size / float(n)
 	var arc := size * (PI * 0.25) * radius
 
-	# --- macro lattice, covering the chunk plus its one-vertex normals border ---
 	var mres := clampi(int(ceil(arc / MACRO_SPACING)), 1, n)
 	var mu0 := u0 - step
 	var mspan := size + 2.0 * step
@@ -75,7 +63,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			m_wmask[mi] = Planet.water_coverage(d)
 			m_col[mi] = Planet.surface_color(d)
 
-	# Pivot at the chunk centre, on the real surface.
 	var cu := u0 + size * 0.5
 	var cv := v0 + size * 0.5
 	var pivot_dir := CubeSphere.face_uv_to_dir_d(cu_face(face), cu, cv)
@@ -89,7 +76,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var cols := PackedColorArray(); cols.resize(vcount)
 	var uvs := PackedVector2Array(); uvs.resize(vcount)
 
-	# Sample a one-vertex border so normals at the chunk edge match the neighbour.
 	var ext := n + 3
 	var hgt := PackedFloat32Array(); hgt.resize(ext * ext)
 	var dirs := PackedVector3Array(); dirs.resize(ext * ext)
@@ -108,8 +94,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 
 	var min_h := 1e30
 	var max_h := -1e30
-	## Largest height step between neighbouring samples -- this, not the chunk's
-	## total relief, is what a skirt has to cover.
 	var max_dh := 0.0
 	for j in n + 1:
 		var v := v0 + float(j) * step
@@ -128,11 +112,13 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				float(dd.z * r - pivot.z))
 			uvs[vi] = Vector2(float(i) / float(n), float(j) / float(n))
 			var d3: Vector3 = dirs[ei]
-			# Sample visual fields from the canonical planet direction. Interpolating
-			# a chunk-local macro cache creates discontinuities when two cube faces
-			# approach the same edge from different (u,v) coordinate systems.
-			cols[vi] = Planet.surface_color(d3)
-			# Normal from the extended height field, in the local tangent frame.
+			var fx := (u - mu0) / mspan * float(mres)
+			var fy := (v - (v0 - step)) / mspan * float(mres)
+			# Only the actual outer cube edge needs canonical sampling. Keeping the
+			# original chunk-local cache everywhere else avoids doing the expensive
+			# global macro lookup for every vertex.
+			cols[vi] = Planet.surface_color(d3) if _is_face_edge(u, v) else _bilerp_color(m_col, mn, fx, fy)
+
 			var hl: float = hgt[ei - 1]
 			var hr: float = hgt[ei + 1]
 			var hd: float = hgt[ei - ext]
@@ -147,20 +133,16 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				nrm = -nrm
 			norms[vi] = nrm
 			max_dh = maxf(max_dh, maxf(absf(hr - hl), absf(hu - hd)) * 0.5)
-			var wl := Planet.water_height(d3)
+
+			var edge := _is_face_edge(u, v)
+			var wl := Planet.water_height(d3) if edge else _bilerp(m_water, mn, fx, fy)
 			water_h[vi] = wl
-			# The ocean is at sea level everywhere, so its shoreline is wherever
-			# the ground crosses zero and needs no help. A lake level only means
-			# anything inside its own basin, so it is faded out by how much of the
-			# macro cell around it actually holds that lake -- otherwise the level
-			# gets painted over the rim and down the next valley.
-			var coverage := Planet.water_coverage(d3)
+			var coverage := Planet.water_coverage(d3) if edge else _bilerp(m_wmask, mn, fx, fy)
 			var conf := 1.0 if wl <= 0.05 else smoothstep(0.30, 0.65, coverage)
 			water_conf[vi] = conf
 			if wl > h + 0.05 and conf > 0.02:
 				water_needed = true
 
-	# --- ground indices ------------------------------------------------------
 	var idx := PackedInt32Array()
 	for j in n:
 		for i in n:
@@ -170,15 +152,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var e := c + 1
 			idx.append_array([a, c, b, b, c, e])
 
-	# --- skirt: a dropped border ring that hides cracks between LOD levels ----
-	# A skirt only ever has to bridge the gap to a neighbour one level coarser:
-	# the detail that neighbour misses across a doubled sample spacing, plus the
-	# chord sag of the sphere over that same span. Sizing it off the chunk's total
-	# relief instead hung a 300 m curtain on every edge of every mountain chunk,
-	# and those curtains are the dark grid that was drawn over the planet.
-	# The relief term is what covers a neighbour that is more than one level
-	# coarser -- the tree does not enforce a 2:1 balance, so at a corner the step
-	# can be several levels and the missed detail grows with it.
 	var cell_arc := arc / float(n)
 	var sag := (cell_arc * 2.0) * (cell_arc * 2.0) / (8.0 * radius)
 	var skirt_drop := clampf(max_dh * 3.0 + (max_h - min_h) * 0.05 + sag * 3.0 + SKIRT_MIN,
@@ -201,10 +174,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		var outward := (p + pivot3).normalized()
 		verts.append(p - outward * skirt_drop)
 		norms.append(norms[src])
-		# Same colour and same normal as the edge it hangs from: an exposed skirt
-		# then shades exactly like the ground above it and reads as a continuation
-		# of the surface. Tinting it instead draws a line along every chunk edge
-		# it shows through, which is worse than the crack it is hiding.
 		cols.append(cols[src])
 		_append_morph(morph, src)
 		uvs.append(uvs[src])
@@ -214,10 +183,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		var b: int = ring[k2]
 		var sa := base + k
 		var sb := base + k2
-		# Wound to face outward, like the surface above it. The other order is
-		# back-facing on every edge of the ring, which culls the entire skirt --
-		# it was there, it just was never drawn, and every LOD crack in the
-		# planet was open.
 		idx.append_array([a, b, sa, b, sb, sa])
 
 	var out := {
@@ -266,10 +231,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 					float(dd.z * r - pivot.z))
 				wn[vi] = dirs[(j + 1) * ext + (i + 1)]
 				wuv[vi] = Vector2(float(i) / float(n), float(j) / float(n))
-				# How much water stands over the bed here, and how much to trust
-				# it. The shader dissolves the surface as the depth goes to zero,
-				# so the waterline is a shoreline instead of the edge of a polygon
-				# -- which is what made lakes read as blue rectangles.
 				var depth := maxf(water_h[vi] - _ground_h(hgt, ext, i, j), 0.0)
 				wcol[vi] = Color(pow(clampf(depth / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
 					water_conf[vi], 0.0, 1.0)
@@ -283,9 +244,6 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				var e := c + 1
 				widx.append_array([a, c, b, b, c, e])
 
-		# Same skirt trick as the ground surface: without it, two neighbouring
-		# water tiles at a different LOD don't share edge vertices and the gap
-		# between them is a hole straight through to whatever is behind.
 		var wmorph := _morph_offsets(wv, n)
 		var water_skirt := clampf(sag * 2.0 + WATER_SKIRT_MIN, WATER_SKIRT_MIN, WATER_SKIRT_MAX)
 		var wbase := wv.size()
@@ -314,22 +272,11 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		out["water_indices"] = widx
 	return out
 
-# ------------------------------------------------------------------ helpers ---
-## Where each vertex of this grid sits on the *parent* tile's surface, as an
-## offset from where it sits on this one.
-##
-## Every second vertex of a chunk coincides with one of its parent's, because the
-## parent covers twice the ground at the same grid resolution. A vertex with one
-## odd index is the point the parent interpolates along an edge; a vertex with
-## two odd indices is the centre of a parent quad, which lands exactly on the
-## diagonal the parent's triangulation actually uses. Sliding the odd vertices
-## onto those lines turns this mesh into the parent's mesh, exactly -- which is
-## what lets one level hand over to the next with no dither and no pop.
 static func _morph_offsets(verts: PackedVector3Array, n: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize((n + 1) * (n + 1) * 4)
 	if n % 2 != 0:
-		return out            # only an even grid nests inside its parent
+		return out
 	var row := n + 1
 	for j in n + 1:
 		for i in n + 1:
@@ -340,7 +287,6 @@ static func _morph_offsets(verts: PackedVector3Array, n: int) -> PackedFloat32Ar
 			elif i % 2 == 0 and j % 2 == 1:
 				d = (verts[vi - row] + verts[vi + row]) * 0.5 - verts[vi]
 			elif i % 2 == 1 and j % 2 == 1:
-				# The parent splits each quad from (i+1, j-1) to (i-1, j+1).
 				d = (verts[vi + 1 - row] + verts[vi - 1 + row]) * 0.5 - verts[vi]
 			var o := vi * 4
 			out[o] = d.x
@@ -348,8 +294,6 @@ static func _morph_offsets(verts: PackedVector3Array, n: int) -> PackedFloat32Ar
 			out[o + 2] = d.z
 	return out
 
-## Copy a ring vertex's morph offset onto the skirt vertex hanging from it, so
-## the skirt travels with the edge instead of tearing off it.
 static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	var o := src * 4
 	out.append(out[o])
@@ -357,7 +301,6 @@ static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	out.append(out[o + 2])
 	out.append(0.0)
 
-## Ground height at surface vertex (i, j), read out of the bordered height field.
 static func _ground_h(hgt: PackedFloat32Array, ext: int, i: int, j: int) -> float:
 	return hgt[(j + 1) * ext + (i + 1)]
 
@@ -391,18 +334,42 @@ static func _bilerp_color(a: PackedColorArray, mn: int, fx: float, fy: float) ->
 	var c1 := a[(j0 + 1) * mn + i0].lerp(a[(j0 + 1) * mn + i0 + 1], tx)
 	return c0.lerp(c1, ty)
 
-static func _height_at(_mn: int, _mres: int, _mu0: float, _mv0: float, _mspan: float, _step: float,
+static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float, _step: float,
 		face: int, u: float, v: float,
-		_m_elev: PackedFloat32Array, _m_relief: PackedFloat32Array, _m_flat: PackedFloat32Array,
-		_m_hard: PackedFloat32Array, _m_river: PackedFloat32Array,
+		m_elev: PackedFloat32Array, m_relief: PackedFloat32Array, m_flat: PackedFloat32Array,
+		m_hard: PackedFloat32Array, m_river: PackedFloat32Array,
 		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null) -> float:
 	if debug_flat:
 		return 0.0
 	var d: Vector3 = known_dir if known_dir != null else CubeSphere.face_uv_to_dir(face, u, v)
-	# Canonical direction-space sampling is mandatory at cube-face boundaries.
-	# The former per-chunk (u,v) interpolation produced different macro heights
-	# for two faces that represented the same physical direction.
-	return Planet.terrain_height(d, detail, snap)
+	# Shared outer-face vertices must use the exact global terrain function so
+	# both cube faces produce bit-identical radial displacement. Everywhere else
+	# keep the original coarse macro cache; evaluating Planet.terrain_height for
+	# every vertex caused the streamer backlog seen after the first seam fix.
+	if _is_face_edge(u, v):
+		return Planet.terrain_height(d, detail, snap)
+	var fx := (u - mu0) / mspan * float(mres)
+	var fy := (v - mv0) / mspan * float(mres)
+	var h := _bilerp(m_elev, mn, fx, fy)
+	var relief := _bilerp(m_relief, mn, fx, fy)
+	var flat := _bilerp(m_flat, mn, fx, fy)
+	var hard := _bilerp(m_hard, mn, fx, fy)
+	if h > 0.0:
+		h += detail.height(d, relief, flat, hard)
+		var w := _bilerp(m_river, mn, fx, fy)
+		if w > 4.0:
+			h -= clampf(w * 0.045, 0.0, 22.0)
+	else:
+		h += detail.height(d, relief * 0.5, 0.55, 1.0)
+	if snap.is_empty():
+		if not Deltas.is_empty():
+			h += Deltas.offset_at(d)
+	else:
+		h += Deltas.offset_at_snapshot(d, snap)
+	return h
+
+static func _is_face_edge(u: float, v: float) -> bool:
+	return absf(absf(u) - 1.0) <= FACE_EDGE_EPS or absf(absf(v) - 1.0) <= FACE_EDGE_EPS
 
 static func _arc(a: Vector3, b: Vector3, radius: float) -> float:
 	return maxf(0.001, a.distance_to(b) * radius)
