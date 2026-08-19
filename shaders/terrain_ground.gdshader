@@ -40,6 +40,13 @@ uniform float u_rock_tint : hint_range(0.0, 1.0) = 0.55;
 uniform vec3 u_rock_dark : source_color = vec3(0.30, 0.28, 0.26);
 uniform vec3 u_rock_light : source_color = vec3(0.55, 0.52, 0.47);
 
+// CPU chunk normals are built from each face's local grid. They are accurate
+// away from cube boundaries, but the finite-difference axes rotate when a face
+// changes. In a narrow band around a cube edge/corner, blend to the geometric
+// normal reconstructed from the actual displaced surface. The band is selected
+// in planet direction space, so no face ID or UV seam is involved.
+uniform float u_cube_seam_normal_width : hint_range(0.001, 0.15) = 0.035;
+
 varying vec3 v_planet;
 
 void vertex() {
@@ -63,6 +70,19 @@ float vnoise(vec3 p) {
 		mix(mix(hash13(i + vec3(0.0, 0.0, 1.0)), hash13(i + vec3(1.0, 0.0, 1.0)), f.x),
 			mix(hash13(i + vec3(0.0, 1.0, 1.0)), hash13(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
 		f.z);
+}
+
+/// 1 exactly on a cube-face boundary, smoothly falling to 0 away from it.
+/// The boundary is where the largest and second-largest absolute components of
+/// the unit direction are equal. At a cube corner all three are equal, so this
+/// naturally covers the three-face junction too.
+float cube_seam_factor(vec3 up) {
+	vec3 a = abs(up);
+	float hi = max(a.x, max(a.y, a.z));
+	float lo = min(a.x, min(a.y, a.z));
+	float mid = a.x + a.y + a.z - hi - lo;
+	float gap = (hi - mid) / max(hi, 1e-6);
+	return 1.0 - smoothstep(0.0, u_cube_seam_normal_width, gap);
 }
 
 /// Arrow along +V with a tick along +U. Proportions match the glyph mesh in
@@ -92,7 +112,28 @@ vec3 depth_color(float d) {
 
 void fragment() {
 	vec3 up = normalize(v_planet);
-	vec3 wn = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	vec3 mesh_wn = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
+
+	// Reconstruct the normal of the geometry that is actually being rasterised.
+	// dFdx/dFdy operate in fragment space and therefore have no concept of cube
+	// faces. We only use this in the narrow seam band; elsewhere the smoother CPU
+	// vertex normals remain untouched.
+	vec3 dx = dFdx(v_planet);
+	vec3 dy = dFdy(v_planet);
+	vec3 gc = cross(dx, dy);
+	float glen = length(gc);
+	vec3 geom_wn = glen > 1e-8 ? gc / glen : mesh_wn;
+	if (dot(geom_wn, up) < 0.0) {
+		geom_wn = -geom_wn;
+	}
+	float seam_n = cube_seam_factor(up);
+	vec3 wn = normalize(mix(mesh_wn, geom_wn, seam_n));
+
+	// NORMAL is writable in a Godot spatial fragment shader. Feeding the blended
+	// result back here makes the built-in Burley/GGX lighting use the same
+	// seam-free normal that slope/rock classification uses below.
+	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+
 	float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
 	float dist = length(VERTEX);
 	// Detail is looked up on the sphere, not at the actual altitude, so a skirt
