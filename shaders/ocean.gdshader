@@ -25,6 +25,9 @@ varying vec3 v_planet;
 varying float v_signed_depth;
 varying float v_mask;
 varying float v_ocean;
+// Fragment-to-light varying so the expensive cloud optical-depth integration is
+// evaluated once per water pixel instead of once in fragment and again in light.
+varying float v_cloud_visibility;
 
 void vertex() {
 	VERTEX += CUSTOM0.xyz * morph;
@@ -89,9 +92,9 @@ void fragment() {
 	base = mix(base, u_foam, foam * 0.75);
 
 	vec3 sun_dir = normalize(u_sun_dir);
-	float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
+	v_cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-	float sky_access = mix(0.30, 1.0, sqrt(clamp(cloud_visibility, 0.0, 1.0)));
+	float sky_access = mix(0.30, 1.0, sqrt(clamp(v_cloud_visibility, 0.0, 1.0)));
 
 	ALBEDO = base;
 	EMISSION = base * skylight * sky_access;
@@ -126,8 +129,7 @@ void light() {
 	if (LIGHT_IS_DIRECTIONAL) {
 		vec3 sun_dir = normalize(u_sun_dir);
 		float planet_visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
-		float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
-		visibility = planet_visibility * cloud_visibility;
+		visibility = planet_visibility * v_cloud_visibility;
 	}
 
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
