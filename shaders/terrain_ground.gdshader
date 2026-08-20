@@ -99,10 +99,39 @@ vec3 depth_color(float d) {
 	return 0.5 + 0.5 * cos(TAU * (d * 0.13 + vec3(0.0, 0.33, 0.67)));
 }
 
+bool exposed_skirt_wall(vec3 planet_pos, vec3 radial_up) {
+	// Skirt triangles keep the edge UV constant along the whole vertical wall,
+	// while a real terrain triangle only touches that UV on its boundary line.
+	// The geometric normal of a skirt is also almost perpendicular to radial up.
+	// This identifies the large saw-tooth walls without needing another vertex
+	// attribute and leaves the actual top-surface edge intact.
+	float edge = min(min(UV.x, 1.0 - UV.x), min(UV.y, 1.0 - UV.y));
+	if (edge > 0.00002) {
+		return false;
+	}
+	vec3 gx = dFdx(planet_pos);
+	vec3 gy = dFdy(planet_pos);
+	vec3 g = cross(gx, gy);
+	float gl = length(g);
+	if (gl < 1e-7) {
+		return false;
+	}
+	float radialness = abs(dot(g / gl, radial_up));
+	return radialness < 0.45;
+}
+
 void fragment() {
 	vec3 up = normalize(v_planet);
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
+
+	// The coverage-first streamer and exact shared edge samples make the old
+	// full-height skirt walls unnecessary as visible geometry. When a skirt wall
+	// becomes exposed at grazing angles it reads as a black serrated coastline /
+	// chunk boundary, so remove only those near-vertical edge faces.
+	if (exposed_skirt_wall(v_planet, up)) {
+		discard;
+	}
 
 	// Lock the visual coastline before the ocean representation changes. From
 	// this altitude upward, terrain LOD and the local/orbit water handoff are not
