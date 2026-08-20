@@ -8,10 +8,11 @@ render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specula
 /// wave octaves are faded out individually as they stop being resolvable, so
 /// distance costs detail instead of aliasing it.
 ///
-/// The global orbit ocean now starts well below orbital altitude and sits just
-/// above sea level, so it naturally hides streamed ocean water at distance while
-/// this material remains alive for elevated lakes. Keeping local water resident
-/// avoids a second geography change at 30 km and prevents lakes disappearing.
+/// COLOR.b tags sea-level ocean vertices. Once the global ocean shell is active
+/// those fragments (including their copied skirt vertices) are discarded, while
+/// elevated lake water remains rendered by the streamed mesh. This prevents the
+/// two nearly coincident ocean surfaces from producing the repeating square /
+/// diamond pattern seen from aircraft altitude.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -29,10 +30,7 @@ uniform vec3 u_foam : source_color = vec3(0.82, 0.90, 0.94);
 uniform float u_wave_scale : hint_range(0.0, 3.0) = 1.0;
 uniform float u_depth_scale = 4000.0;    // metres encoded in COLOR.r, fourth-root curve
 uniform float u_deep_at = 42.0;          // metres at which the deep colour is reached
-// Retained only as a safety kill-switch. Normal streaming no longer disables
-// local water at 30 km; the global shell simply occludes ocean fragments while
-// local lake meshes remain available at every altitude.
-uniform float u_orbit_handoff_altitude = 1000000000.0;
+uniform float u_orbit_handoff_altitude = 12000.0;
 /// How much of one mesh cell's worth of shoreline uncertainty the waterline
 /// fades over. 1.0 blurs it across exactly the distance the mesh cannot resolve.
 uniform float u_shore_blur : hint_range(0.0, 3.0) = 0.9;
@@ -46,6 +44,7 @@ uniform float u_cell_per_metre = 0.0223;
 varying vec3 v_planet;
 varying float v_depth;
 varying float v_mask;
+varying float v_ocean;
 
 void vertex() {
 	VERTEX += CUSTOM0.xyz * morph;
@@ -56,6 +55,7 @@ void vertex() {
 	float r2 = COLOR.r * COLOR.r;
 	v_depth = r2 * r2 * u_depth_scale;
 	v_mask = COLOR.g;
+	v_ocean = COLOR.b;
 }
 
 /// How much of an octave survives at this distance. A wave has to be several
@@ -89,7 +89,7 @@ void wave(vec3 ps, vec3 up, vec3 dir, vec3 cross_dir, float k, float amp, float 
 void fragment() {
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
-	if (camera_alt >= u_orbit_handoff_altitude) {
+	if (camera_alt >= u_orbit_handoff_altitude && v_ocean > 0.5) {
 		discard;
 	}
 
