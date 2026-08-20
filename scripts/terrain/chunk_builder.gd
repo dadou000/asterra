@@ -57,7 +57,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var u := mu0_at(mu0, mspan, i, mres)
 			var d := CubeSphere.face_uv_to_dir(face, u, v)
 			var mi := j * mn + i
-			m_elev[mi] = grid.sample_bilinear(fields.elev, d)
+			# Elevation uses Planet's derived smoothed runtime macro field. Keeping
+			# the chunk cache on the same source as the canonical edge sampler avoids
+			# reintroducing the baked 8 km cell lattice in chunk interiors.
+			m_elev[mi] = Planet.macro_height(d)
 			if m_elev[mi] <= COAST_WATER_CANDIDATE_M:
 				ocean_candidate = true
 			m_relief[mi] = grid.sample_bilinear(fields.relief, d)
