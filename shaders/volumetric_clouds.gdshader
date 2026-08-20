@@ -2,10 +2,10 @@ shader_type spatial;
 render_mode unshaded, blend_premul_alpha, depth_draw_never, depth_test_disabled, cull_disabled;
 /// Asterra volumetric clouds.
 ///
-/// Below the upper atmosphere this is a true 3D density raymarch. From orbit the
-/// geometric thickness of individual billows is sub-pixel, so a dedicated cloud
-/// shell LOD replaces the raymarch with a handful of weather/noise samples. This
-/// avoids spending hundreds of 3D texture lookups per pixel on a 200 km view.
+/// Below the upper atmosphere this is a true 3D density raymarch. From aircraft
+/// altitude upward the geometric thickness of individual march steps becomes
+/// visible and expensive, so a dedicated cloud shell LOD replaces the raymarch
+/// with a handful of weather/noise samples.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -21,7 +21,7 @@ uniform vec3 u_sun_dir = vec3(1.0, 0.15, 0.3);
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
 uniform float u_cloud_outer_radius = 1018500.0;
-uniform float u_orbit_lod_start = 75000.0;
+uniform float u_orbit_lod_start = 22000.0;
 uniform float u_orbit_shell_altitude = 8200.0;
 
 uniform float u_extinction = 0.00215;
@@ -285,9 +285,6 @@ vec4 cloud_aerial_fog(vec3 cam, vec3 frag, vec3 sun_dir) {
 	return vec4(tint, amount * 0.52);
 }
 
-/// Orbit/cloud-map LOD. At tens or hundreds of kilometres, vertical cloud
-/// thickness is much smaller than a pixel. Rendering one weather-driven shell is
-/// both more stable and orders of magnitude cheaper than a 3D raymarch.
 void orbit_cloud(vec3 ro, vec3 rd, float scene_dist, vec3 sun_dir, out vec3 color, out float alpha) {
 	color = vec3(0.0);
 	alpha = 0.0;
