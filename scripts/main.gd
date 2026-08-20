@@ -106,7 +106,7 @@ func _on_baked(fields: PlanetFields) -> void:
 	Planet.adopt(fields)
 	hud.hide_progress()
 
-	terrain = PlanetTerrain.new()
+	terrain = FastPlanetTerrain.new()
 	add_child(terrain)
 	terrain.build_roots()
 
