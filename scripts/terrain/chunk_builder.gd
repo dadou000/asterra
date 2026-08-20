@@ -74,8 +74,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var cols := PackedColorArray(); cols.resize(vcount)
 	var uvs := PackedVector2Array(); uvs.resize(vcount)
 
-	# One-vertex border for central-difference normals. Samples outside a cube
-	# face are forced to the canonical sampler by _seam_weight().
+	# One-vertex border for central-difference normals. Every actual chunk edge
+	# vertex and the one sample immediately outside it use the canonical planet
+	# sampler. Two independently built neighboring chunks therefore agree exactly
+	# at their shared edge instead of each trusting a different local macro cache.
 	var ext := n + 3
 	var hgt := PackedFloat32Array(); hgt.resize(ext * ext)
 	var dirs := PackedVector3Array(); dirs.resize(ext * ext)
@@ -85,8 +87,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var u := u0 + float(i - 1) * step
 			var d := CubeSphere.face_uv_to_dir(face, u, v)
 			dirs[j * ext + i] = d
+			var canonical_boundary := i <= 1 or i >= n + 1 or j <= 1 or j >= n + 1
 			hgt[j * ext + i] = _height_at(mn, mres, mu0, v0 - step, mspan, step, face,
-				u, v, m_elev, m_relief, m_flat, m_hard, m_river, detail, snap, d)
+				u, v, m_elev, m_relief, m_flat, m_hard, m_river, detail, snap, d,
+				canonical_boundary)
 
 	var water_needed := false
 	var water_h := PackedFloat32Array(); water_h.resize(vcount)
@@ -117,11 +121,14 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var fx := (u - mu0) / mspan * float(mres)
 			var fy := (v - (v0 - step)) / mspan * float(mres)
 			var seam_w := _seam_weight(u, v, step)
+			var chunk_edge := i == 0 or i == n or j == 0 or j == n
 
-			# Colour uses the same transition as geometry. This avoids an abrupt
-			# last-row switch from the chunk cache to Planet.surface_color().
+			# Shared chunk edges use the same direct direction-space colour lookup.
+			# Interior vertices keep the cached path for speed.
 			var local_col := _bilerp_color(m_col, mn, fx, fy)
-			if seam_w > 0.0:
+			if chunk_edge:
+				cols[vi] = Planet.surface_color(d3)
+			elif seam_w > 0.0:
 				cols[vi] = local_col.lerp(Planet.surface_color(d3), seam_w)
 			else:
 				cols[vi] = local_col
@@ -161,7 +168,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var local_coverage := _bilerp(m_wmask, mn, fx, fy)
 			var wl := local_wl
 			var coverage := local_coverage
-			if seam_w > 0.0:
+			if chunk_edge:
+				wl = Planet.water_height(d3)
+				coverage = Planet.water_coverage(d3)
+			elif seam_w > 0.0:
 				wl = lerpf(local_wl, Planet.water_height(d3), seam_w)
 				coverage = lerpf(local_coverage, Planet.water_coverage(d3), seam_w)
 			water_h[vi] = wl
@@ -384,30 +394,40 @@ static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float,
 		face: int, u: float, v: float,
 		m_elev: PackedFloat32Array, m_relief: PackedFloat32Array, m_flat: PackedFloat32Array,
 		m_hard: PackedFloat32Array, m_river: PackedFloat32Array,
-		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null) -> float:
+		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null,
+		force_canonical: bool = false) -> float:
 	if debug_flat:
 		return 0.0
 	var d: Vector3 = known_dir if known_dir != null else CubeSphere.face_uv_to_dir(face, u, v)
 	var seam_w := _seam_weight(u, v, step)
 
-	# Exact edge/outside-border samples are canonical. This both seals the mesh
-	# and lets central-difference normals look across the neighbouring face.
-	if seam_w >= 0.999999:
+	# Exact cube-face seams, every chunk perimeter vertex, and the outer normal
+	# sample ring all use one authoritative direction-space height function.
+	if force_canonical or seam_w >= 0.999999:
 		return Planet.terrain_height(d, detail, snap)
 
 	var fx := (u - mu0) / mspan * float(mres)
 	var fy := (v - mv0) / mspan * float(mres)
-	var h := _bilerp(m_elev, mn, fx, fy)
+	var macro_h := _bilerp(m_elev, mn, fx, fy)
+	var h := macro_h
 	var relief := _bilerp(m_relief, mn, fx, fy)
 	var flat := _bilerp(m_flat, mn, fx, fy)
 	var hard := _bilerp(m_hard, mn, fx, fy)
-	if h > 0.0:
-		h += detail.height(d, relief, flat, hard)
+
+	# Keep full detail through the coast and continental shelf. Only below 250 m
+	# macro depth do we start approaching the old subdued seabed profile, reaching
+	# it gradually by 1500 m. This removes the hard amplitude step at sea level.
+	var ocean_depth := maxf(-macro_h, 0.0)
+	var deep_ocean := smoothstep(250.0, 1500.0, ocean_depth)
+	var used_relief := lerpf(relief, relief * 0.5, deep_ocean)
+	var used_flat := lerpf(flat, maxf(flat, 0.55), deep_ocean)
+	var used_hard := lerpf(hard, 1.0, deep_ocean)
+	h += detail.height(d, used_relief, used_flat, used_hard)
+
+	if macro_h > 0.0:
 		var w := _bilerp(m_river, mn, fx, fy)
 		if w > 4.0:
 			h -= clampf(w * 0.045, 0.0, 22.0)
-	else:
-		h += detail.height(d, relief * 0.5, 0.55, 1.0)
 	if snap.is_empty():
 		if not Deltas.is_empty():
 			h += Deltas.offset_at(d)
