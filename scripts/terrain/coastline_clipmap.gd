@@ -36,6 +36,8 @@ var _last_applied_version: int = -1
 var _last_orbit_texture: Texture2DArray
 var _last_orbit_face_res: int = -1
 var _scan_left: float = 0.0
+var _terrain_ref: WeakRef
+var _orbit_ocean_ref: WeakRef
 
 
 func _ready() -> void:
@@ -219,25 +221,39 @@ func _sync_materials() -> void:
 	_last_orbit_face_res = Planet.orbit_texture_face_res
 	_last_applied_version = _published_version
 
-	# The runtime is an autoload so it does not depend on scene construction order.
-	# Find the active terrain/orbit materials whenever a publication or the global
-	# fallback texture changes.
-	_apply_in_tree(get_tree().root)
+	var terrain: PlanetTerrain = _terrain_ref.get_ref() if _terrain_ref != null else null
+	var orbit_ocean: OrbitOcean = _orbit_ocean_ref.get_ref() if _orbit_ocean_ref != null else null
+	if terrain == null or orbit_ocean == null:
+		_find_targets(get_tree().root)
+		terrain = _terrain_ref.get_ref() if _terrain_ref != null else null
+		orbit_ocean = _orbit_ocean_ref.get_ref() if _orbit_ocean_ref != null else null
 
-
-func _apply_in_tree(node: Node) -> void:
-	if node is PlanetTerrain:
-		var terrain: PlanetTerrain = node
+	if terrain != null:
 		for value in terrain.debug_materials():
 			var mat: ShaderMaterial = value
 			_apply_to_material(mat)
-	elif node is OrbitOcean:
-		var maybe_mat: Variant = node.get("_material")
+	if orbit_ocean != null:
+		var maybe_mat: Variant = orbit_ocean.get("_material")
 		if maybe_mat is ShaderMaterial:
 			_apply_to_material(maybe_mat)
 
+
+func _find_targets(node: Node) -> void:
+	if _terrain_ref == null or _terrain_ref.get_ref() == null:
+		if node is PlanetTerrain:
+			_terrain_ref = weakref(node)
+	if _orbit_ocean_ref == null or _orbit_ocean_ref.get_ref() == null:
+		if node is OrbitOcean:
+			_orbit_ocean_ref = weakref(node)
+
+	if _terrain_ref != null and _terrain_ref.get_ref() != null \
+			and _orbit_ocean_ref != null and _orbit_ocean_ref.get_ref() != null:
+		return
 	for child in node.get_children():
-		_apply_in_tree(child)
+		_find_targets(child)
+		if _terrain_ref != null and _terrain_ref.get_ref() != null \
+				and _orbit_ocean_ref != null and _orbit_ocean_ref.get_ref() != null:
+			return
 
 
 func _apply_to_material(mat: ShaderMaterial) -> void:
