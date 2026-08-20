@@ -38,13 +38,30 @@ void fragment() {
 	float broad = surface_vnoise(p * 0.000018 + vec3(31.0, -12.0, 7.0)) - 0.5;
 	base *= 1.0 + broad * 0.075;
 
-	float cloud_shadow = cloud_surface_shadow_amount(v_planet, normalize(u_sun_dir));
-	base *= mix(vec3(1.0), vec3(0.57, 0.64, 0.72), cloud_shadow * 0.60);
-
 	ALBEDO = base;
 	NORMAL = normalize((VIEW_MATRIX * vec4(up, 0.0)).xyz);
 	ROUGHNESS = mix(0.12, 0.055, deep_t);
-	SPECULAR = 0.5 * (1.0 - cloud_shadow * 0.62);
+	SPECULAR = 0.5;
 	METALLIC = 0.0;
 	FOG = aerial_fog(camera_planet, v_planet);
+}
+
+void light() {
+	float visibility = 1.0;
+	if (LIGHT_IS_DIRECTIONAL) {
+		visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+	}
+
+	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
+
+	if (ndotl > 0.0) {
+		vec3 h = normalize(LIGHT + VIEW);
+		float ndoth = max(dot(NORMAL, h), 0.0);
+		float ndotv = max(dot(NORMAL, VIEW), 0.0);
+		float fresnel = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
+		float spec_power = mix(420.0, 24.0, clamp(ROUGHNESS, 0.0, 1.0));
+		float spec = pow(ndoth, spec_power) * mix(0.16, 1.0, fresnel);
+		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * SPECULAR_AMOUNT * 1.5;
+	}
 }
