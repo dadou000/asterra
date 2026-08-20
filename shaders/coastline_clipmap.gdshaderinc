@@ -15,6 +15,28 @@ float coast_layer_height(vec2 metres, float texel_m, float layer) {
 	return texture(u_coast_clipmap, vec3(uv, layer)).r;
 }
 
+// 1 where the camera-centred clipmap is authoritative, fading to 0 over the
+// outermost ring. Local water uses this to fall back to its own signed mesh depth
+// instead of the much coarser whole-planet texture. That matters near the ground:
+// the global texture is intentionally an orbit representation and can differ by
+// hundreds of metres from runtime TerrainDetail at a coastline.
+float coast_clipmap_coverage(vec3 dir, float radius) {
+	if (u_coast_clipmap_ready < 0.5) {
+		return 0.0;
+	}
+	vec3 d = normalize(dir);
+	vec3 c = normalize(u_coast_center);
+	float denom = dot(d, c);
+	if (denom <= 0.08) {
+		return 0.0;
+	}
+	vec2 metres = vec2(dot(d, normalize(u_coast_right)), dot(d, normalize(u_coast_up)))
+		/ denom * radius;
+	float half2 = 0.5 * u_coast_res * u_coast_texel_m.z;
+	float q2 = max(abs(metres.x), abs(metres.y)) / max(half2, 1.0);
+	return 1.0 - smoothstep(0.82, 0.98, q2);
+}
+
 float coast_surface_height(sampler2DArray fallback_tex, vec3 dir, float fallback_face_res,
 		float radius) {
 	vec3 d = normalize(dir);
