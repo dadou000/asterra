@@ -93,6 +93,8 @@ func _setup_weather() -> void:
 	if weather == null:
 		weather = WeatherSystem.new()
 		add_child(weather)
+	if not weather.rebuilt.is_connected(_push_weather_render_resources):
+		weather.rebuilt.connect(_push_weather_render_resources)
 	weather.rebuild()
 	if clouds == null:
 		clouds = CloudRenderer.new()
@@ -101,6 +103,27 @@ func _setup_weather() -> void:
 	else:
 		clouds.weather = weather
 		clouds.refresh_weather()
+	_push_weather_render_resources()
+
+## All renderers sample the same dynamic weather texture. The volumetric cloud
+## pass owns fine 3D morphology; terrain/ocean/atmosphere use the much cheaper
+## broad envelope for projected cloud shadows and crepuscular light shafts.
+func _push_weather_render_resources() -> void:
+	if weather == null or weather.weather_map == null:
+		return
+	var face_res: float = float(weather.face_res)
+	if clouds != null:
+		clouds.refresh_weather()
+	if sky_mat != null:
+		sky_mat.set_shader_parameter("u_cloud_weather_map", weather.weather_map)
+		sky_mat.set_shader_parameter("u_cloud_weather_face_res", face_res)
+	if terrain != null:
+		for value in terrain.debug_materials():
+			var mat: ShaderMaterial = value
+			mat.set_shader_parameter("u_cloud_weather_map", weather.weather_map)
+			mat.set_shader_parameter("u_cloud_weather_face_res", face_res)
+	if orbit_ocean != null:
+		orbit_ocean.set_weather_map(weather.weather_map, face_res)
 
 func _on_baked(fields: PlanetFields) -> void:
 	# During a manual debug rebake the existing world stays alive while the new
@@ -116,6 +139,7 @@ func _on_baked(fields: PlanetFields) -> void:
 			map.refresh()
 		terrain.build_roots()
 		_push_orbit_surface_textures()
+		_push_weather_render_resources()
 		if editor != null:
 			editor.refresh()
 		if player != null:
@@ -142,6 +166,7 @@ func _on_baked(fields: PlanetFields) -> void:
 
 	orbit_ocean = OrbitOcean.new()
 	add_child(orbit_ocean)
+	_push_weather_render_resources()
 
 	terrain_debug = TerrainDebug.new()
 	terrain_debug.terrain = terrain
@@ -373,6 +398,7 @@ func _load() -> void:
 	# Every chunk must be rebuilt: the deltas it was meshed with have changed.
 	terrain.build_roots()
 	_push_orbit_surface_textures()
+	_push_weather_render_resources()
 	hud.notify("Loaded '%s' — %d delta tiles restored" % [AUTOSAVE, Deltas.edited_tile_count()])
 
 func _player_state() -> Dictionary:
