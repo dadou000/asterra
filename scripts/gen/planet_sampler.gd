@@ -19,6 +19,12 @@ var ready_state: bool = false
 
 var _detail_main: TerrainDetail
 
+## Graphics-only cube-face elevation texture. Each layer contains one macro face
+## plus a one-texel neighbour gutter. Orbit shaders use this instead of chunk
+## vertex interpolation, so shoreline position no longer depends on terrain LOD.
+var orbit_elevation_texture: Texture2DArray
+var orbit_texture_face_res: int = 0
+
 func configure(p_cfg: GenConfig) -> void:
 	cfg = p_cfg
 	Frames.set_planet_radius(cfg.planet_radius)
@@ -36,6 +42,7 @@ func adopt(p_fields: PlanetFields) -> void:
 	_build_warp_noise()
 	_build_cell_colors()
 	_build_water_fields()
+	_build_orbit_textures()
 	ready_state = true
 	world_ready.emit(fields)
 
@@ -68,6 +75,42 @@ func _warp_lookup(d: Vector3) -> Vector3:
 		_warp_noise.get_noise_3d(x, y, z),
 		_warp_noise.get_noise_3d(y + 913.0, z, x),
 		_warp_noise.get_noise_3d(z, x - 471.0, y)) * amp).normalized()
+
+## Build six small float textures directly from the authoritative macro field.
+## One virtual cell is added around every face. Those gutter samples are obtained
+## through the direction-space sampler, so linear GPU filtering sees the same
+## neighbour the CPU sees when a lookup reaches a cube edge.
+func _build_orbit_textures() -> void:
+	orbit_elevation_texture = null
+	orbit_texture_face_res = grid.res
+	var res: int = grid.res
+	var tex_res: int = res + 2
+	var cell_step: float = 2.0 / float(res)
+	var images: Array[Image] = []
+
+	for face in 6:
+		var img := Image.create(tex_res, tex_res, false, Image.FORMAT_RF)
+		for y in tex_res:
+			var j: int = y - 1
+			var v: float = (float(j) + 0.5) * cell_step - 1.0
+			for x in tex_res:
+				var i: int = x - 1
+				var h: float
+				if i >= 0 and i < res and j >= 0 and j < res:
+					h = fields.elev[grid.idx(face, i, j)]
+				else:
+					var u: float = (float(i) + 0.5) * cell_step - 1.0
+					var d := CubeSphere.face_uv_to_dir(face, u, v)
+					h = grid.sample_bilinear(fields.elev, d)
+				img.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
+		images.append(img)
+
+	var texture_array := Texture2DArray.new()
+	var err := texture_array.create_from_images(images)
+	if err != OK:
+		push_error("Failed to build orbit elevation texture array (%d)" % err)
+		return
+	orbit_elevation_texture = texture_array
 
 # ------------------------------------------------------------------ height ---
 ## Baked macro elevation (m relative to sea level), bilinear.
