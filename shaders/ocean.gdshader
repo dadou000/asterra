@@ -132,11 +132,18 @@ void fragment() {
 		* (1.0 - smoothstep(1500.0, 12000.0, dist));
 	base = mix(base, u_foam, foam * 0.75);
 
+	// Weather-projected occlusion removes the impossible full-sun water glint
+	// under a cloud deck. The blue-grey tint approximates skylight that remains
+	// after direct Helion illumination is blocked.
+	float cloud_shadow = cloud_shadow_amount(v_planet, normalize(u_sun_dir));
+	base *= mix(vec3(1.0), vec3(0.42, 0.52, 0.62), cloud_shadow * 0.86);
+
 	ALBEDO = base;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	ROUGHNESS = mix(0.04, 0.13, smoothstep(1500.0, 60000.0, dist))
-		+ clamp(length(slope) * 0.22, 0.0, 0.12) + foam * 0.45;
-	SPECULAR = 0.5;
+		+ clamp(length(slope) * 0.22, 0.0, 0.12) + foam * 0.45
+		+ cloud_shadow * 0.025;
+	SPECULAR = 0.5 * (1.0 - cloud_shadow * 0.88);
 	METALLIC = 0.0;
 
 	float shore;
