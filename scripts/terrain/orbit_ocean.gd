@@ -8,13 +8,16 @@ extends Node3D
 ## triangle can span kilometres. This shell is geometrically just a smooth
 ## sphere; its coastline is cut per-fragment from Planet.orbit_elevation_texture.
 ##
-## Important: this shell starts well *below* the old 30 km water handoff. From
-## VISUAL_LOCK_ALTITUDE_M upward the same texture-defined coastline is therefore
-## already visible before any streaming/LOD representation changes.
+## The shell starts below the visual coastline lock. Its geometry is created once
+## with Godot's native SphereMesh implementation; refreshing the coastline now
+## only swaps shader parameters. The previous 256x256-per-face GDScript mesh was
+## rebuilt whenever the detailed texture completed and could itself cause a large
+## main-thread hitch.
 
-const GRID := 256
 const SHELL_OFFSET_M := 1.5
 const VISUAL_LOCK_ALTITUDE_M := 12000.0
+const RADIAL_SEGMENTS := 256
+const RINGS := 128
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -45,51 +48,31 @@ func _refresh() -> void:
 		_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(_mesh_instance)
 
-	_material = ShaderMaterial.new()
-	_material.shader = load("res://shaders/orbit_ocean.gdshader")
+		# The shader samples by planet-space direction, so the distant ocean does
+		# not need cube-face UVs or cube topology. SphereMesh is generated in native
+		# engine code and is both much cheaper to create and much smaller.
+		var radius: float = Planet.cfg.planet_radius + SHELL_OFFSET_M
+		var sphere := SphereMesh.new()
+		sphere.radius = radius
+		sphere.height = radius * 2.0
+		sphere.radial_segments = RADIAL_SEGMENTS
+		sphere.rings = RINGS
+		_mesh_instance.mesh = sphere
+
+	if _material == null:
+		_material = ShaderMaterial.new()
+		_material.shader = load("res://shaders/orbit_ocean.gdshader")
+		_mesh_instance.material_override = _material
+
+	# Texture refreshes update only these values. No geometry allocation or
+	# hundreds of thousands of GDScript vertex operations happen here anymore.
 	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 	_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_material.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
 	_material.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
 	_material.set_shader_parameter("u_orbit_start_altitude", VISUAL_LOCK_ALTITUDE_M)
-
-	var mesh := _build_shell(Planet.cfg.planet_radius + SHELL_OFFSET_M)
-	mesh.surface_set_material(0, _material)
-	_mesh_instance.mesh = mesh
 	_sync_origin()
-
-func _build_shell(radius: float) -> ArrayMesh:
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var indices := PackedInt32Array()
-	var row := GRID + 1
-
-	for face in 6:
-		var base := verts.size()
-		for j in GRID + 1:
-			var v := float(j) / float(GRID) * 2.0 - 1.0
-			for i in GRID + 1:
-				var u := float(i) / float(GRID) * 2.0 - 1.0
-				var d := CubeSphere.face_uv_to_dir(face, u, v)
-				verts.append(d * radius)
-				norms.append(d)
-		for j in GRID:
-			for i in GRID:
-				var a := base + j * row + i
-				var b := a + 1
-				var c := a + row
-				var d_i := c + 1
-				indices.append_array([a, c, b, b, c, d_i])
-
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
 
 func _on_origin_shifted(_delta: Vector3) -> void:
 	_sync_origin()
