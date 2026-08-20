@@ -90,6 +90,14 @@ func refresh_weather() -> void:
 func _process(_dt: float) -> void:
 	if cloud_material == null:
 		return
-	cloud_material.set_shader_parameter("u_origin", Vector3(
-		float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z)))
+	# Pass the actual active camera position in Asterra's canonical planet frame.
+	# Do not rebuild it in the shader from CAMERA_POSITION_WORLD + floating-origin
+	# state: those values belong to different coordinate representations and can be
+	# observed on opposite sides of an origin rebase for a frame. A single canonical
+	# camera position keeps the cloud shell rigidly attached to the planet.
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var camera_world: Vec3D = Frames.to_world(cam.global_position)
+		cloud_material.set_shader_parameter("u_camera_world", Vector3(
+			float(camera_world.x), float(camera_world.y), float(camera_world.z)))
 	cloud_material.set_shader_parameter("u_sun_dir", Frames.helion_dir.normalized())
