@@ -6,6 +6,7 @@ const AUTOSAVE := "phase1"
 var cfg: GenConfig
 var bake: PlanetBake
 var terrain: PlanetTerrain
+var orbit_ocean: OrbitOcean
 var editor: TerrainEditor
 var player: AsterraPlayer
 var hud: AsterraHUD
@@ -89,6 +90,7 @@ func _on_baked(fields: PlanetFields) -> void:
 		if map.visible:
 			map.refresh()
 		terrain.build_roots()
+		_push_orbit_surface_textures()
 		if editor != null:
 			editor.refresh()
 		if player != null:
@@ -109,6 +111,10 @@ func _on_baked(fields: PlanetFields) -> void:
 	terrain = FastPlanetTerrain.new()
 	add_child(terrain)
 	terrain.build_roots()
+	_push_orbit_surface_textures()
+
+	orbit_ocean = OrbitOcean.new()
+	add_child(orbit_ocean)
 
 	terrain_debug = TerrainDebug.new()
 	terrain_debug.terrain = terrain
@@ -129,6 +135,16 @@ func _on_baked(fields: PlanetFields) -> void:
 	if SaveGame.list_saves().has(AUTOSAVE):
 		hud.notify("Save '%s' found — press F9 to load it" % AUTOSAVE)
 	_started = true
+
+func _push_orbit_surface_textures() -> void:
+	if terrain == null or Planet.orbit_elevation_texture == null:
+		return
+	var mats := terrain.debug_materials()
+	if mats.is_empty():
+		return
+	var ground: ShaderMaterial = mats[0]
+	ground.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
+	ground.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
 
 ## Pick the most convincing place to start: a well-drained, buildable site on a
 ## natural transport corridor beside a real river. This is the same score the
@@ -289,6 +305,7 @@ func _load() -> void:
 	elapsed = data.get("elapsed", 0.0)
 	# Every chunk must be rebuilt: the deltas it was meshed with have changed.
 	terrain.build_roots()
+	_push_orbit_surface_textures()
 	hud.notify("Loaded '%s' — %d delta tiles restored" % [AUTOSAVE, Deltas.edited_tile_count()])
 
 func _player_state() -> Dictionary:
