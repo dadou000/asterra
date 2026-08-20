@@ -33,35 +33,30 @@ var _rebase_count: int = 0
 func _ready() -> void:
 	process_priority = -100
 
-func set_planet_radius(r: float) -> void:
-	planet_radius = r
+## Canonical double position -> local float position.
+func to_render(world: Vec3D) -> Vector3:
+	return Vector3(
+		float(world.x - origin.x),
+		float(world.y - origin.y),
+		float(world.z - origin.z)
+	)
 
-## Asterra frame (double) -> local render frame (float32).
-func to_render(p: Vec3D) -> Vector3:
-	return Vector3(float(p.x - origin.x), float(p.y - origin.y), float(p.z - origin.z))
+## Local float position -> canonical double position.
+func to_world(render: Vector3) -> Vec3D:
+	return Vec3D.new(
+		origin.x + float(render.x),
+		origin.y + float(render.y),
+		origin.z + float(render.z)
+	)
 
-## Local render frame -> Asterra frame.
-func to_world(p: Vector3) -> Vec3D:
-	return Vec3D.new(origin.x + p.x, origin.y + p.y, origin.z + p.z)
-
-## Surface point helpers -------------------------------------------------------
-func dir_altitude_to_world(d: Vector3, altitude: float) -> Vec3D:
-	var r := planet_radius + altitude
-	return Vec3D.new(d.x * r, d.y * r, d.z * r)
-
-func world_to_dir(p: Vec3D) -> Vector3:
-	return p.normalized().to_v3()
-
-func world_altitude(p: Vec3D) -> float:
-	return p.length() - planet_radius
-
-## Re-base the local frame onto a new Asterra-frame origin, and report the shift
-## so live nodes can translate themselves.
+## Shift the render origin. Systems with persistent scene nodes listen to the
+## signal and move them by -delta; canonical coordinates never change.
 func rebase(new_origin: Vec3D) -> void:
 	var delta := Vector3(
-		float(origin.x - new_origin.x),
-		float(origin.y - new_origin.y),
-		float(origin.z - new_origin.z))
+		float(new_origin.x - origin.x),
+		float(new_origin.y - origin.y),
+		float(new_origin.z - origin.z)
+	)
 	origin = new_origin.dup()
 	_rebase_count += 1
 	origin_shifted.emit(delta)
@@ -76,6 +71,8 @@ func maintain_origin(observer_render_pos: Vector3) -> bool:
 func rebase_count() -> int:
 	return _rebase_count
 
-## Direction of the sun at a given surface point, in the local render frame.
+## Direction from an Asterra point toward Helion, in the Asterra/render axes.
+## helion_dir is explicitly stored as the sunward vector; returning its negative
+## here made this helper disagree with every shader uniform using helion_dir.
 func sun_dir_at(_d: Vector3) -> Vector3:
-	return -helion_dir
+	return helion_dir
