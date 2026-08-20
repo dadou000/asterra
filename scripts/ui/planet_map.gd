@@ -152,6 +152,23 @@ func _render_row(y: int) -> void:
 		var c: int = _render_grid.dir_to_index(d)
 		_render_image.set_pixel(x, y, _color_for(_render_layer, _render_fields, c))
 
+## Synchronous renderer retained for the offline preview/export test harness.
+## Interactive map rendering uses the incremental path above and never calls this.
+func _render(which: int) -> Image:
+	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
+		return Image.create(1, 1, false, Image.FORMAT_RGB8)
+	var image: Image = Image.create(W, H, false, Image.FORMAT_RGB8)
+	var fields: PlanetFields = Planet.fields
+	var grid: PlanetGrid = Planet.grid
+	for y in H:
+		var lat: float = (0.5 - float(y) / float(H)) * PI
+		for x in W:
+			var lon: float = (float(x) / float(W) - 0.5) * TAU
+			var d: Vector3 = CubeSphere.latlon_to_dir(lat, lon)
+			var c: int = grid.dir_to_index(d)
+			image.set_pixel(x, y, _color_for(which, fields, c))
+	return image
+
 func _update_title(rendering: bool) -> void:
 	var suffix := "  — rendering…" if rendering else ""
 	title.text = "%s%s   ( , / . to change layer, M to close )" % [LAYER_NAMES[layer_index], suffix]
