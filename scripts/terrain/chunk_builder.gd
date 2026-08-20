@@ -255,8 +255,12 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				wn[vi] = dirs[(j + 1) * ext + (i + 1)]
 				wuv[vi] = Vector2(float(i) / float(n), float(j) / float(n))
 				var depth := maxf(water_h[vi] - _ground_h(hgt, ext, i, j), 0.0)
+				# B is a stable ocean/lake discriminator copied to skirts as well.
+				# Sea-level streamed water can be removed once the global ocean shell
+				# is active without making elevated lakes disappear with it.
+				var ocean_flag := 1.0 if absf(water_h[vi]) <= 0.05 else 0.0
 				wcol[vi] = Color(pow(clampf(depth / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
-					water_conf[vi], 0.0, 1.0)
+					water_conf[vi], ocean_flag, 1.0)
 
 		var widx := PackedInt32Array()
 		for j in n:
