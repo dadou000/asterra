@@ -110,8 +110,8 @@ func _process(dt: float) -> void:
 
 
 func _update(node, hidden: bool, morph: float) -> void:
-	var node_ang := node.size * (PI * 0.25) * 0.78
-	var cull_at := _horizon_angle + node_ang
+	var node_ang: float = float(node.size) * (PI * 0.25) * 0.78
+	var cull_at: float = _horizon_angle + node_ang
 	if node.chunk != null or not node.is_leaf():
 		cull_at *= HORIZON_CULL_HYSTERESIS
 
@@ -125,8 +125,8 @@ func _update(node, hidden: bool, morph: float) -> void:
 		return
 	_stats["nodes"] += 1
 
-	var center_dist := _distance_to_node(node, observer)
-	var dist := center_dist - node.arc * 0.6
+	var center_dist: float = _distance_to_node(node, observer)
+	var dist: float = center_dist - float(node.arc) * 0.6
 
 	var want_split: bool
 	if forced_depth >= 0:
@@ -141,7 +141,7 @@ func _update(node, hidden: bool, morph: float) -> void:
 			# leaf and the observer moved closer, cancel it if it has not started.
 			# A running full build is allowed to finish before splitting so it cannot
 			# arrive later and reset a non-leaf's handoff state.
-			var request_id := node.get_instance_id()
+			var request_id: int = int(node.get_instance_id())
 			if node.state == 1 and not bool(_request_kind.get(request_id, true)):
 				if node.task_id < 0:
 					_cancel_queued(node)
@@ -164,7 +164,7 @@ func _update(node, hidden: bool, morph: float) -> void:
 			# Terminal leaves get the real mesh. If this leaf currently carries a
 			# temporary coverage mesh, keep drawing it while the full replacement
 			# is generated.
-			var id := node.get_instance_id()
+			var id: int = int(node.get_instance_id())
 			if node.chunk == null:
 				if node.state == 0 or node.dirty:
 					_request(node, false)
@@ -200,7 +200,7 @@ func _update(node, hidden: bool, morph: float) -> void:
 			if node.chunk != null:
 				_free_chunk(node)
 	else:
-		var id := node.get_instance_id()
+		var id: int = int(node.get_instance_id())
 		if node.chunk == null:
 			if _morph_lock == 0 and (node.state == 0 or node.dirty):
 				_request(node, false)
@@ -215,13 +215,13 @@ func _update(node, hidden: bool, morph: float) -> void:
 				_apply_chunk(node, not hidden, morph)
 				return
 
-	var showing_self := node.chunk != null and node.fine_vis <= 0.0
+	var showing_self: bool = node.chunk != null and float(node.fine_vis) <= 0.0
 	if not node.is_leaf() and (node.chunk != null or node.fine_vis < 1.0):
 		_stats["handoffs"] += 1
 	_apply_chunk(node, not hidden and showing_self, morph)
 
-	var child_morph := 1.0 - node.fine_vis
-	var lock := node.fine_vis > 0.0 and node.fine_vis < 1.0
+	var child_morph: float = 1.0 - float(node.fine_vis)
+	var lock: bool = float(node.fine_vis) > 0.0 and float(node.fine_vis) < 1.0
 	if lock:
 		_morph_lock += 1
 	for c in node.children:
@@ -247,8 +247,8 @@ func _subtree_covered(node) -> bool:
 func _request(node, coverage: bool = false) -> void:
 	if _shutting_down:
 		return
-	var id := node.get_instance_id()
-	var replacing_coverage := node.state == 2 and node.chunk != null \
+	var id: int = int(node.get_instance_id())
+	var replacing_coverage: bool = node.state == 2 and node.chunk != null \
 		and _coverage_only.has(id) and not coverage
 	if node.state == 1:
 		return
@@ -313,8 +313,8 @@ func _start_request(entry: Dictionary) -> void:
 	var band := band_for_depth(node.depth)
 	# Coverage meshes exist only to prevent holes and never need a physics cook.
 	# The player already resolves ground contact from the height field.
-	var want_collision := (not coverage) and node.depth >= cfg.collision_depth
-	var ang := node.size * (PI * 0.25) * 1.5
+	var want_collision: bool = (not coverage) and node.depth >= cfg.collision_depth
+	var ang: float = float(node.size) * (PI * 0.25) * 1.5
 	var snap := Deltas.snapshot_for_bounds(node.center_dir, ang) if band >= Band.LOCAL else {}
 
 	var detail: TerrainDetail
@@ -383,7 +383,7 @@ func _drain_results() -> void:
 
 		if not node.abandoned:
 			super._instantiate(node, item["data"])
-			var id := node.get_instance_id()
+			var id: int = int(node.get_instance_id())
 			if bool(item["coverage"]):
 				_coverage_only[id] = true
 				# The base instantiate path assumes a non-leaf mesh arriving late is
