@@ -97,12 +97,18 @@ void fragment() {
 		albedo = mix(albedo, depth_color(chunk_depth) * 0.30, uv_glyph(UV) * u_debug_uv);
 	}
 
-	// Keep material colour physically stable. Cloud cover now attenuates only the
-	// directional light in light(), leaving sky/ambient illumination intact.
+	float cloud_visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+	float cloud_shadow = 1.0 - cloud_visibility;
+	// Direct sun is handled in light(). This modest colour/AO response represents
+	// the loss of bright skylight beneath thick decks without blacking out albedo.
+	albedo *= mix(vec3(1.0), vec3(0.84, 0.88, 0.94), cloud_shadow * 0.55);
+
 	ALBEDO = albedo;
 	ROUGHNESS = mix(0.94, 0.82, rock);
 	SPECULAR = 0.12;
 	METALLIC = 0.0;
+	AO = mix(1.0, 0.28, cloud_shadow);
+	AO_LIGHT_AFFECT = 1.0;
 	FOG = aerial_fog(camera_planet, v_planet);
 }
 
@@ -115,8 +121,6 @@ void light() {
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
 
-	// Terrain specular is deliberately subdued, but it must also disappear under
-	// an opaque cloud deck instead of shining through the projected shadow.
 	if (ndotl > 0.0) {
 		vec3 h = normalize(LIGHT + VIEW);
 		float ndoth = max(dot(NORMAL, h), 0.0);
