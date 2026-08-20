@@ -5,10 +5,14 @@ extends RefCounted
 ## The macro fields are cached per chunk for speed. Cube-face seams need special
 ## treatment because neighbouring faces use different local (u,v) axes.
 
-const SKIRT_MIN := 0.4
-const SKIRT_MAX := 300.0
-const WATER_SKIRT_MIN := 0.08
-const WATER_SKIRT_MAX := 400.0
+# The old vertical skirts could be hundreds of metres deep on rugged chunks and
+# became visible as serrated walls along coasts/chunk boundaries. Keep the skirt
+# topology degenerate for now (zero drop) so it contributes no visible geometry.
+# If an LOD crack reappears, fix it with edge stitching rather than a vertical wall.
+const SKIRT_MIN := 0.0
+const SKIRT_MAX := 0.0
+const WATER_SKIRT_MIN := 0.0
+const WATER_SKIRT_MAX := 0.0
 const WATER_DEPTH_SCALE := 4000.0
 const WATER_DEPTH_CURVE := 0.25
 const MACRO_SPACING := 800.0
@@ -337,7 +341,6 @@ static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	out.append(out[o + 1])
 	out.append(out[o + 2])
 	out.append(0.0)
-
 
 static func _ground_h(hgt: PackedFloat32Array, ext: int, i: int, j: int) -> float:
 	return hgt[(j + 1) * ext + (i + 1)]
