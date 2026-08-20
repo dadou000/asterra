@@ -23,6 +23,7 @@ Frames="*res://scripts/core/frames.gd"
 Planet="*res://scripts/gen/planet_sampler.gd"
 Deltas="*res://scripts/terrain/terrain_deltas.gd"
 CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
+WeatherTaskGuard="*res://scripts/weather/weather_task_guard.gd"
 
 [display]
 
