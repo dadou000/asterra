@@ -4,6 +4,8 @@ render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_dis
 ///
 /// The dynamic WeatherSystem owns large-scale organisation and storm events.
 /// Generated 3D noise only turns that physical envelope into cloud morphology.
+/// Direct Helion light is blocked by the planet and by cloud water itself;
+/// electrical discharges inject short-lived emissive light into storm volumes.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -23,6 +25,12 @@ uniform float u_extinction = 0.00082;
 uniform float u_density_scale = 1.15;
 uniform float u_wind_speed = 1.0;
 uniform float u_detail_strength = 0.27;
+
+// xyz = canonical planet-space flash position, w = instantaneous HDR energy.
+uniform vec4 u_lightning0 = vec4(0.0);
+uniform vec4 u_lightning1 = vec4(0.0);
+uniform vec4 u_lightning2 = vec4(0.0);
+uniform vec4 u_lightning3 = vec4(0.0);
 
 const int MAX_STEPS = 60;
 const float BIG = 1.0e20;
@@ -68,8 +76,6 @@ float vertical_low_profile(float h01, float convective) {
 	return base * cap * mix(deck, tower, convective);
 }
 
-// Rotate planet-space coordinates before sampling the repeating 3D textures.
-// This keeps their periodic axes from becoming visible as a world-aligned grid.
 vec3 cloud_space(vec3 p) {
 	return vec3(
 		dot(p, vec3(0.788, 0.326, -0.522)),
@@ -107,9 +113,6 @@ float cloud_density(vec3 p, bool lighting_sample) {
 	vec3 advected = p - wind_world * TIME - d * (TIME * convective * 3.1);
 	vec3 q = cloud_space(advected);
 
-	// The broadest morphology is hundreds of kilometres across. The weather map
-	// decides where a hurricane/front/deck exists; these scales only carve its
-	// interior, so orbit no longer turns coverage into millions of popcorn puffs.
 	float broad_n = texture(u_base_noise, q * 0.0000032).r;
 	float middle_n = texture(u_base_noise, q * 0.0000115 + vec3(0.37, 0.11, 0.59)).r;
 	float detail_n = texture(u_detail_noise, q * 0.000052 + vec3(0.17, 0.43, 0.71)).r;
@@ -121,8 +124,6 @@ float cloud_density(vec3 p, bool lighting_sample) {
 		float overcast = smoothstep(0.68, 0.96, coverage);
 		float threshold = mix(0.73, 0.36, coverage);
 		threshold -= convective * (0.08 + 0.11 * h01);
-		// Convective towers become more solid with altitude while ordinary decks
-		// remain broad and stratiform.
 		float tower_body = mix(0.0, 0.12 * smoothstep(0.20, 0.78, h01), convective);
 		float shape = broad_n * 0.58 + middle_n * 0.29 + detail_n * 0.13 + overcast * 0.12 + tower_body;
 		float body = smoothstep(threshold, min(threshold + 0.17, 0.98), shape);
@@ -135,7 +136,6 @@ float cloud_density(vec3 p, bool lighting_sample) {
 		low_density *= 0.70 + convective * 0.72 + flow_data.b * 0.26;
 	}
 
-	// Cirrus/anvils can reach the lower stratosphere in deep convection.
 	float high_start = mix(8200.0, 9800.0, 1.0 - high_cov);
 	float high_end = 17000.0;
 	float high_density = 0.0;
@@ -160,6 +160,30 @@ float hg(float g, float mu) {
 
 float screen_jitter(vec2 p) {
 	return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
+float planet_sun_visibility(vec3 p, vec3 sun_dir) {
+	vec2 hit = sphere_hit(p + sun_dir * 4.0, sun_dir, u_planet_radius + 20.0);
+	if (hit.x > 0.0 && hit.y > 0.0) {
+		return 0.0;
+	}
+	return 1.0;
+}
+
+float lightning_one(vec3 p, vec4 flash) {
+	if (flash.w <= 0.001) {
+		return 0.0;
+	}
+	float radius = mix(4200.0, 26000.0, clamp(flash.w / 12.0, 0.0, 1.0));
+	float x = length(p - flash.xyz) / max(radius, 1.0);
+	return flash.w * exp(-x * x * 2.15);
+}
+
+float lightning_illumination(vec3 p) {
+	return lightning_one(p, u_lightning0)
+		+ lightning_one(p, u_lightning1)
+		+ lightning_one(p, u_lightning2)
+		+ lightning_one(p, u_lightning3);
 }
 
 void fragment() {
@@ -223,18 +247,38 @@ void fragment() {
 			float optical = density * ds * u_extinction;
 			float alpha_step = 1.0 - exp(-optical);
 
-			float ld0 = cloud_density(p + sun_dir * 1000.0, true);
-			float ld1 = cloud_density(p + sun_dir * 3000.0, true);
-			float light_tau = (ld0 * 1000.0 + ld1 * 2000.0) * u_extinction * 0.76;
+			// Long sunward probe chain makes the lower half of deep clouds genuinely
+			// shadowed instead of treating every sample as if it were near an edge.
+			float ld0 = cloud_density(p + sun_dir * 550.0, true);
+			float ld1 = cloud_density(p + sun_dir * 1750.0, true);
+			float ld2 = cloud_density(p + sun_dir * 4150.0, true);
+			float ld3 = cloud_density(p + sun_dir * 8950.0, true);
+			float light_tau = (ld0 * 550.0 + ld1 * 1200.0 + ld2 * 2400.0 + ld3 * 4800.0)
+				* u_extinction * 1.12;
 			float sun_trans = exp(-light_tau);
+			float sun_visible = planet_sun_visibility(p, sun_dir);
 			vec3 up = normalize(p);
 			float sun_elev = dot(up, sun_dir);
-			float daylight = smoothstep(-0.16, 0.10, sun_elev);
-			vec3 ambient = mix(vec3(0.018, 0.026, 0.050), vec3(0.46, 0.57, 0.70), daylight);
-			float powder = 1.0 - exp(-density * 3.2);
-			vec3 direct = vec3(1.0, 0.93, 0.82) * daylight * sun_trans
-				* (0.18 + phase * 0.72) * (0.72 + powder * 0.42);
-			vec3 sample_light = ambient * mix(0.42, 0.78, sun_trans) + direct;
+			float twilight = smoothstep(-0.22, 0.10, sun_elev);
+
+			// Night side receives only a tiny sky floor. Direct sunlight is zero when
+			// the planet blocks Helion, including deep into the night hemisphere.
+			vec3 night_ambient = vec3(0.0006, 0.0009, 0.0018);
+			vec3 day_ambient = vec3(0.34, 0.45, 0.61);
+			vec3 ambient = mix(night_ambient, day_ambient, twilight);
+			float powder = 1.0 - exp(-density * 3.4);
+			vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
+				* (0.10 + phase * 0.74) * (0.64 + powder * 0.46);
+			float sky_occlusion = mix(0.28, 0.92, sqrt(max(sun_trans, 0.0)));
+			vec3 sample_light = ambient * sky_occlusion + direct;
+
+			// Lightning is the exception: it is locally emissive and can light a
+			// cumulonimbus from within even on the dark side of Asterra.
+			float electric = lightning_illumination(p);
+			if (electric > 0.001) {
+				vec3 electric_color = vec3(0.42, 0.62, 1.0);
+				sample_light += electric_color * electric * (0.20 + powder * 0.46);
+			}
 
 			radiance += transmittance * alpha_step * sample_light;
 			transmittance *= 1.0 - alpha_step;
