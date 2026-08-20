@@ -148,12 +148,12 @@ func save_to(path: String) -> Error:
 	f.store_double(grid.radius)
 	f.store_string(cfg.cache_key())
 	f.store_8(0)
-	for name in FLOAT_FIELDS:
-		f.store_var(get(name))
-	for name in BYTE_FIELDS:
-		f.store_var(get(name))
-	for name in INT_FIELDS:
-		f.store_var(get(name))
+	for field_name in FLOAT_FIELDS:
+		f.store_var(get(field_name))
+	for field_name in BYTE_FIELDS:
+		f.store_var(get(field_name))
+	for field_name in INT_FIELDS:
+		f.store_var(get(field_name))
 	f.close()
 	return OK
 
@@ -170,14 +170,14 @@ static func load_from(path: String, p_cfg: GenConfig) -> PlanetFields:
 	var key := f.get_line()
 	if res != p_cfg.face_res or absf(radius - p_cfg.planet_radius) > 0.5 or key != p_cfg.cache_key():
 		return null
-	var grid := PlanetGrid.new(res, radius)
-	var fields := PlanetFields.new(p_cfg, grid)
-	for name in FLOAT_FIELDS:
-		fields.set(name, f.get_var())
-	for name in BYTE_FIELDS:
-		fields.set(name, f.get_var())
-	for name in INT_FIELDS:
-		fields.set(name, f.get_var())
+	var loaded_grid := PlanetGrid.new(res, radius)
+	var fields := PlanetFields.new(p_cfg, loaded_grid)
+	for field_name in FLOAT_FIELDS:
+		fields.set(field_name, f.get_var())
+	for field_name in BYTE_FIELDS:
+		fields.set(field_name, f.get_var())
+	for field_name in INT_FIELDS:
+		fields.set(field_name, f.get_var())
 	f.close()
 	return fields
 
