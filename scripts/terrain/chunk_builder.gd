@@ -254,13 +254,21 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 					float(dd.z * r - pivot.z))
 				wn[vi] = dirs[(j + 1) * ext + (i + 1)]
 				wuv[vi] = Vector2(float(i) / float(n), float(j) / float(n))
-				var depth := maxf(water_h[vi] - _ground_h(hgt, ext, i, j), 0.0)
+				# Preserve the sign of the water-to-ground separation. The old path
+				# clamped all land vertices to exactly zero depth; interpolating that
+				# made whole mesh edges become shoreline and produced the large
+				# stair-step / rectangular coastline visible at low LOD. R stores the
+				# fourth-root magnitude, A stores the sign, and the shader decodes to
+				# a signed varying before raster interpolation.
+				var signed_depth := water_h[vi] - _ground_h(hgt, ext, i, j)
+				var depth_mag := absf(signed_depth)
+				var wet_sign := 1.0 if signed_depth >= 0.0 else 0.0
 				# B is a stable ocean/lake discriminator copied to skirts as well.
 				# Sea-level streamed water can be removed once the global ocean shell
 				# is active without making elevated lakes disappear with it.
 				var ocean_flag := 1.0 if absf(water_h[vi]) <= 0.05 else 0.0
-				wcol[vi] = Color(pow(clampf(depth / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
-					water_conf[vi], ocean_flag, 1.0)
+				wcol[vi] = Color(pow(clampf(depth_mag / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
+					water_conf[vi], ocean_flag, wet_sign)
 
 		var widx := PackedInt32Array()
 		for j in n:
