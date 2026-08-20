@@ -363,11 +363,15 @@ func _rebuild_lightning_mesh(cam: Camera3D) -> void:
 	_lightning_mesh.clear_surfaces()
 	if _bolts.is_empty() or cam == null:
 		return
-	_lightning_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _lightning_material)
-	var camera_pos := cam.global_position
+
+	# ImmediateMesh rejects surface_end() if a surface was begun but every bolt
+	# faded/contained only degenerate segments. Begin lazily on the first segment
+	# that can actually emit vertices, and only end if that happened.
+	var surface_started := false
+	var camera_pos: Vector3 = cam.global_position
 	for item in _bolts:
 		var bolt: Dictionary = item
-		var pulse := _bolt_pulse(bolt)
+		var pulse: float = _bolt_pulse(bolt)
 		if pulse < 0.002:
 			continue
 		var base_width: float = float(bolt["width"])
@@ -375,8 +379,13 @@ func _rebuild_lightning_mesh(cam: Camera3D) -> void:
 			var seg: Dictionary = seg_item
 			var a_world: Vector3 = seg["a"]
 			var b_world: Vector3 = seg["b"]
-			var a := Frames.to_render(Vec3D.from_v3(a_world))
-			var b := Frames.to_render(Vec3D.from_v3(b_world))
+			var a: Vector3 = Frames.to_render(Vec3D.from_v3(a_world))
+			var b: Vector3 = Frames.to_render(Vec3D.from_v3(b_world))
+			if (b - a).length_squared() < 1e-8:
+				continue
+			if not surface_started:
+				_lightning_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _lightning_material)
+				surface_started = true
 			var strength: float = float(seg["strength"])
 			# Wide faint halo then hot core. The deliberately exaggerated metre width
 			# is optical glow, not the physical plasma-channel diameter.
@@ -384,7 +393,8 @@ func _rebuild_lightning_mesh(cam: Camera3D) -> void:
 				Color(0.22, 0.42, 1.0, 0.13 * pulse * strength))
 			_emit_ribbon(a, b, camera_pos, base_width,
 				Color(0.78, 0.90, 1.0, 0.92 * pulse * strength))
-	_lightning_mesh.surface_end()
+	if surface_started:
+		_lightning_mesh.surface_end()
 
 func _emit_ribbon(a: Vector3, b: Vector3, camera_pos: Vector3, half_width: float,
 		color: Color) -> void:
