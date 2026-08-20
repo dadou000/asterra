@@ -17,8 +17,13 @@ uniform float u_mie_scale_height = 1200.0;
 uniform float u_mie_g = 0.758;
 uniform float u_sun_intensity = 22.0;
 
-const int PRIMARY_STEPS = 16;
-const int LIGHT_STEPS = 8;
+#include "res://shaders/cloud_shadow.gdshaderinc"
+
+// 16x8 was far beyond what this background pass needs and competed directly
+// with the volumetric cloud renderer. Cloud-shadowed 8x3 integration retains a
+// smooth sky while freeing a large amount of GPU time.
+const int PRIMARY_STEPS = 8;
+const int LIGHT_STEPS = 3;
 
 // Intersect a ray with a sphere centred on the origin. near > far means miss.
 vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
@@ -50,7 +55,7 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float gg = u_mie_g * u_mie_g;
 	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mumu);
 	float phase_mie = 3.0 / (8.0 * PI) * ((1.0 - gg) * (mumu + 1.0))
-		/ (pow(1.0 + gg - 2.0 * mu * u_mie_g, 1.5) * (2.0 + gg));
+		/ (pow(max(1.0 + gg - 2.0 * mu * u_mie_g, 1e-4), 1.5) * (2.0 + gg));
 
 	vec3 total_rlh = vec3(0.0);
 	vec3 total_mie = vec3(0.0);
@@ -89,6 +94,10 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 		if (!occluded) {
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
 				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)));
+			// Clouds now occlude the sun that feeds atmospheric scattering. As the
+			// view ray crosses adjacent shadowed and lit air columns this naturally
+			// produces broad crepuscular/sun rays without a separate radial-blur pass.
+			attn *= cloud_sun_visibility(pos, sun_dir);
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;
 		}
