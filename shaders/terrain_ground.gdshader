@@ -10,10 +10,9 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 ///     *planet* space, so it stays nailed to the ground when the floating
 ///     origin re-bases underfoot.
 ///
-/// At aircraft/orbit altitude the actual land/water cut is taken from the global
-/// macro texture rather than from the triangle crossing sea level. The lock is
-/// deliberately engaged well below the 30 km ocean representation handoff, so
-/// crossing that handoff cannot change the apparent geography.
+/// At aircraft/orbit altitude the actual land/water cut comes from the same
+/// camera-centred coastline clipmap as both ocean representations. Terrain LOD
+/// can therefore change without moving the apparent shoreline.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -28,6 +27,7 @@ instance uniform float chunk_depth = 0.0;          // quadtree depth, for debug 
 // under the terrain, which is what the detail noise has to be sampled in.
 #include "res://shaders/atmosphere.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
+#include "res://shaders/coastline_clipmap.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
 uniform sampler2DArray u_orbit_elevation;
@@ -104,11 +104,12 @@ void fragment() {
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
 
-	// Lock the visual coastline before the ocean representation changes. From
-	// this altitude upward, terrain LOD and the local/orbit water handoff are not
-	// allowed to change which pixels are land or sea.
+	// The visual land/sea classification is independent of terrain geometry.
+	// Above the global-ocean handoff the terrain is clipped against exactly the
+	// same field used by the orbit shell, including the local high-resolution
+	// clipmap whenever it covers this pixel.
 	if (camera_alt >= u_orbit_coast_start_altitude) {
-		float visual_h = surface_visual_height(
+		float visual_h = coast_surface_height(
 			u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
 		if (visual_h < 0.0) {
 			discard;
