@@ -1,6 +1,6 @@
 /// Aerial perspective: the air standing between the camera and a surface.
 /// Geometry uses a deliberately cheap finite-segment approximation; the sky
-/// shader owns the higher-quality cloud-modulated scattering and visible shafts.
+/// shader owns the higher-quality integration for rays that do not hit geometry.
 
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_height = 60000.0;
@@ -13,12 +13,12 @@ uniform float u_mie_g = 0.758;
 uniform float u_sun_intensity = 22.0;
 uniform float u_aerial_strength : hint_range(0.0, 2.0) = 0.45;
 
+#include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
 
-// This runs on every terrain/water fragment. Keep it much cheaper than the sky
-// integration: four camera samples, two atmospheric sun samples, and only ONE
-// broad cloud query for the whole segment. Sampling the cloud field at every
-// camera step caused elevation-dependent terraces and was unnecessarily costly.
+// This executes on every terrain/water fragment. Four camera samples and two
+// solar samples are enough for the broad colour shift while keeping the cloud
+// volume as the dominant atmospheric cost.
 const int AP_STEPS = 4;
 const int AP_LIGHT_STEPS = 2;
 
@@ -42,12 +42,11 @@ vec4 aerial_fog(vec3 cam, vec3 frag) {
 	float t1 = min(hit.y, seg);
 	if (t1 <= t0) return vec4(0.0);
 
-	// One representative weather-shadow sample for the finite air column. This
-	// keeps broad under-cloud haze dimming without turning low sample counts into
-	// visible contour bands on the terrain. True crepuscular structure is handled
-	// in atmosphere_sky.gdshader where the ray ends in the sky rather than terrain.
+	// One representative cloud-light sample keeps this path cheap. Cloud optical
+	// depth only changes incoming sunlight; extinction between camera and surface
+	// remains atmospheric and is integrated separately below.
 	vec3 cloud_probe = cam + dir * mix(t0, t1, 0.58);
-	float cloud_vis = cloud_sun_visibility(cloud_probe, u_sun_dir);
+	float cloud_vis = cloud_sun_visibility(cloud_probe, normalize(u_sun_dir));
 
 	float step_len = (t1 - t0) / float(AP_STEPS);
 	float od_rlh = 0.0;
@@ -55,41 +54,41 @@ vec4 aerial_fog(vec3 cam, vec3 frag) {
 	vec3 total_rlh = vec3(0.0);
 	vec3 total_mie = vec3(0.0);
 	float t = t0;
+	vec3 sun_dir = normalize(u_sun_dir);
+
 	for (int i = 0; i < AP_STEPS; i++) {
 		vec3 pos = cam + dir * (t + step_len * 0.5);
-		float height = length(pos) - u_planet_radius;
+		float height = max(length(pos) - u_planet_radius, 0.0);
 		float step_rlh = exp(-height / u_rayleigh_scale_height) * step_len;
 		float step_mie = exp(-height / u_mie_scale_height) * step_len;
 		od_rlh += step_rlh;
 		od_mie += step_mie;
 
-		vec2 light_hit = atmo_sphere_hit(pos, u_sun_dir, top);
-		float light_step = light_hit.y / float(AP_LIGHT_STEPS);
-		float light_od_rlh = 0.0;
-		float light_od_mie = 0.0;
-		float lt = 0.0;
-		bool occluded = false;
-		for (int j = 0; j < AP_LIGHT_STEPS; j++) {
-			vec3 light_pos = pos + u_sun_dir * (lt + light_step * 0.5);
-			float light_height = length(light_pos) - u_planet_radius;
-			if (light_height < 0.0) {
-				occluded = true;
-				break;
+		float planet_vis = planet_direct_sun_visibility(pos, sun_dir, u_planet_radius);
+		if (planet_vis > 0.001) {
+			vec2 light_hit = atmo_sphere_hit(pos, sun_dir, top);
+			float light_len = max(light_hit.y, 0.0);
+			float light_step = light_len / float(AP_LIGHT_STEPS);
+			float light_od_rlh = 0.0;
+			float light_od_mie = 0.0;
+			float lt = 0.0;
+			for (int j = 0; j < AP_LIGHT_STEPS; j++) {
+				vec3 light_pos = pos + sun_dir * (lt + light_step * 0.5);
+				float light_height = max(length(light_pos) - u_planet_radius, 0.0);
+				light_od_rlh += exp(-light_height / u_rayleigh_scale_height) * light_step;
+				light_od_mie += exp(-light_height / u_mie_scale_height) * light_step;
+				lt += light_step;
 			}
-			light_od_rlh += exp(-light_height / u_rayleigh_scale_height) * light_step;
-			light_od_mie += exp(-light_height / u_mie_scale_height) * light_step;
-			lt += light_step;
-		}
-		if (!occluded) {
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
 				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)));
+			attn *= planet_vis * cloud_vis;
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;
 		}
 		t += step_len;
 	}
 
-	float mu = dot(dir, u_sun_dir);
+	float mu = dot(dir, sun_dir);
 	float mumu = mu * mu;
 	float gg = u_mie_g * u_mie_g;
 	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mumu);
@@ -97,9 +96,6 @@ vec4 aerial_fog(vec3 cam, vec3 frag) {
 		/ (pow(max(1.0 + gg - 2.0 * mu * u_mie_g, 1e-4), 1.5) * (2.0 + gg));
 	vec3 inscatter = u_sun_intensity
 		* (phase_rlh * u_rayleigh_coeff * total_rlh + phase_mie * u_mie_coeff * total_mie);
-	// Clouds reduce the sunlight feeding this finite air column but do not alter
-	// extinction of the surface itself.
-	inscatter *= mix(0.62, 1.0, cloud_vis);
 
 	vec3 extinction = exp(-(u_rayleigh_coeff * od_rlh + u_mie_coeff * od_mie));
 	float amount = clamp(1.0 - dot(extinction, vec3(0.33333)), 0.0, 1.0);
