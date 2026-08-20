@@ -2,13 +2,12 @@
 ///
 /// The visible cloud renderer is a fullscreen volume and cannot enter Godot's
 /// directional shadow map. This helper therefore projects the dynamic weather
-/// envelope onto a few representative cloud shells along Helion. Surface shaders
-/// use the result only in their `light()` function, so clouds block direct sun
-/// rather than painting the material/albedo darker.
+/// envelope toward Helion, then shapes it with a cheap procedural field so the
+/// footprint follows cloud bodies instead of looking like a uniform weather mask.
 
 uniform sampler2DArray u_cloud_weather_map : filter_linear, repeat_disable;
 uniform float u_cloud_weather_face_res = 0.0;
-uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.96;
+uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.98;
 uniform float u_cloud_shadow_low_altitude = 2800.0;
 uniform float u_cloud_shadow_mid_altitude = 8200.0;
 uniform float u_cloud_shadow_high_altitude = 13200.0;
@@ -68,19 +67,55 @@ vec2 cloud_shadow_sphere_hit(vec3 ro, vec3 rd, float radius) {
 	return vec2(-b - s, -b + s);
 }
 
+float cloud_shadow_hash(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
+}
+
+float cloud_shadow_vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(mix(cloud_shadow_hash(i), cloud_shadow_hash(i + vec3(1.0, 0.0, 0.0)), f.x),
+			mix(cloud_shadow_hash(i + vec3(0.0, 1.0, 0.0)), cloud_shadow_hash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+		mix(mix(cloud_shadow_hash(i + vec3(0.0, 0.0, 1.0)), cloud_shadow_hash(i + vec3(1.0, 0.0, 1.0)), f.x),
+			mix(cloud_shadow_hash(i + vec3(0.0, 1.0, 1.0)), cloud_shadow_hash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+		f.z);
+}
+
+vec3 cloud_shadow_space(vec3 p) {
+	return vec3(
+		dot(p, vec3(0.788, 0.326, -0.522)),
+		dot(p, vec3(-0.211, 0.943, 0.259)),
+		dot(p, vec3(0.578, -0.094, 0.811))
+	);
+}
+
 float cloud_shadow_layer(vec3 p, vec3 sun_dir, float altitude, int mode) {
 	float shell_radius = u_planet_radius + altitude;
 	if (length(p) >= shell_radius - 20.0) return 0.0;
 	vec2 hit = cloud_shadow_sphere_hit(p, sun_dir, shell_radius);
 	if (hit.y <= 0.0) return 0.0;
 
-	vec4 w = cloud_shadow_weather(normalize(p + sun_dir * hit.y));
-	float low = smoothstep(0.16, 0.82, w.r) * mix(0.70, 1.0, w.g);
-	float convective = smoothstep(0.12, 0.78, max(w.g, w.r * 0.28));
-	float high = smoothstep(0.12, 0.80, w.b) * 0.78;
-	if (mode == 0) return low;
-	if (mode == 1) return convective;
-	return high;
+	vec3 cloud_p = p + sun_dir * hit.y;
+	vec4 w = cloud_shadow_weather(normalize(cloud_p));
+	float coverage = clamp(max(w.r, w.b * 0.72) + w.g * 0.12, 0.0, 1.0);
+	if (coverage < 0.01) return 0.0;
+
+	vec3 q = cloud_shadow_space(cloud_p + vec3(TIME * 13.0, 0.0, TIME * -8.0));
+	float broad = cloud_shadow_vnoise(q * 0.0000032 + vec3(3.7, 9.1, 1.4));
+	float middle = cloud_shadow_vnoise(q * 0.000012 + vec3(7.3, 2.1, 5.9));
+	float overcast = smoothstep(0.68, 0.95, w.r);
+	float shape = broad * 0.68 + middle * 0.32 + w.g * 0.10 + overcast * 0.16;
+	float threshold = mix(0.78, 0.37, coverage);
+	float body = smoothstep(threshold, min(threshold + 0.14, 0.98), shape);
+	float high_veil = smoothstep(0.22, 0.85, w.b) * smoothstep(0.42, 0.72, broad) * 0.48;
+
+	if (mode == 0) return body * mix(0.70, 1.0, w.r);
+	if (mode == 1) return body * smoothstep(0.08, 0.72, w.g) * 1.18;
+	return max(high_veil, body * w.b * 0.28);
 }
 
 /// Visibility of Helion from an arbitrary atmospheric point.
@@ -88,23 +123,18 @@ float cloud_sun_visibility(vec3 p, vec3 sun_dir) {
 	if (u_cloud_weather_face_res < 1.0) return 1.0;
 	vec3 s = normalize(sun_dir);
 	vec3 up = normalize(p);
-	// The planet itself owns the night side; do not fabricate a cloud shadow there.
+	// Deep night has no direct sun to shadow. Near the terminator the planet/light
+	// geometry handles the extinction while this function only adds cloud cover.
 	if (dot(up, s) <= -0.04) return 1.0;
 
 	float low = cloud_shadow_layer(p, s, u_cloud_shadow_low_altitude, 0);
 	float mid = cloud_shadow_layer(p, s, u_cloud_shadow_mid_altitude, 1);
 	float high = cloud_shadow_layer(p, s, u_cloud_shadow_high_altitude, 2);
-
-	// Use a soft union rather than max() so overlapping low/mid/high decks become
-	// genuinely optically thick while isolated wisps retain partial transmission.
-	float optical = low * 1.85 + mid * 1.55 + high * 0.95;
+	float optical = low * 2.25 + mid * 1.85 + high * 1.10;
 	float occlusion = 1.0 - exp(-optical);
-	return clamp(1.0 - occlusion * u_cloud_shadow_strength, 0.035, 1.0);
+	return clamp(1.0 - occlusion * u_cloud_shadow_strength, 0.02, 1.0);
 }
 
-/// Surface visibility is projected from the mean sphere, not actual terrain
-/// elevation. That keeps the cloud footprint geographical and prevents mountain
-/// contours from moving the shadow lookup between fixed cloud shells.
 float cloud_surface_sun_visibility(vec3 surface_p, vec3 sun_dir) {
 	vec3 mean_surface = normalize(surface_p) * (u_planet_radius + 2.0);
 	return cloud_sun_visibility(mean_surface, sun_dir);
