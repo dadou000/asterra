@@ -1,11 +1,6 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 /// Orbit-only ocean shell.
-///
-/// Coastline visibility comes from the same planet-space coastline field as the
-/// local ocean and terrain. Terrain/water LOD changes therefore cannot move the
-/// shoreline. The camera-centred clipmap carries the fine physical coast near
-/// the observer and the global cube texture remains the seamless far fallback.
 
 #include "res://shaders/atmosphere.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
@@ -28,36 +23,28 @@ void vertex() {
 void fragment() {
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
-	if (camera_alt < u_orbit_start_altitude) {
-		discard;
-	}
+	if (camera_alt < u_orbit_start_altitude) discard;
 
 	vec3 up = normalize(v_planet);
-	float visual_h = coast_surface_height(
-		u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
-	if (visual_h >= 0.0) {
-		discard;
-	}
+	float visual_h = coast_surface_height(u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
+	if (visual_h >= 0.0) discard;
 
 	float depth = -visual_h;
 	float mid_t = smoothstep(20.0, 550.0, depth);
 	float deep_t = smoothstep(450.0, 3200.0, depth);
 	vec3 base = mix(u_ocean_shelf, u_ocean_mid, mid_t);
 	base = mix(base, u_ocean_deep, deep_t);
-
-	// Very broad planet-space modulation keeps the ocean from reading as a flat
-	// blue cut-out without reintroducing geometry-sized patterns at the coast.
 	vec3 p = up * u_planet_radius;
 	float broad = surface_vnoise(p * 0.000018 + vec3(31.0, -12.0, 7.0)) - 0.5;
 	base *= 1.0 + broad * 0.075;
 
-	float cloud_shadow = cloud_shadow_amount(v_planet, normalize(u_sun_dir));
-	base *= mix(vec3(1.0), vec3(0.43, 0.52, 0.62), cloud_shadow * 0.84);
+	float cloud_shadow = cloud_surface_shadow_amount(v_planet, normalize(u_sun_dir));
+	base *= mix(vec3(1.0), vec3(0.57, 0.64, 0.72), cloud_shadow * 0.60);
 
 	ALBEDO = base;
 	NORMAL = normalize((VIEW_MATRIX * vec4(up, 0.0)).xyz);
-	ROUGHNESS = mix(0.12, 0.055, deep_t) + cloud_shadow * 0.025;
-	SPECULAR = 0.5 * (1.0 - cloud_shadow * 0.88);
+	ROUGHNESS = mix(0.12, 0.055, deep_t);
+	SPECULAR = 0.5 * (1.0 - cloud_shadow * 0.62);
 	METALLIC = 0.0;
 	FOG = aerial_fog(camera_planet, v_planet);
 }
