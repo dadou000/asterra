@@ -79,9 +79,10 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 				lt += light_step_len;
 			}
 
-			// Updating every other primary sample is enough to preserve broad
-			// crepuscular columns while halving the cloud-light lookup cost.
-			if ((i & 1) == 0) {
+			// Updating samples 0/2/4 is enough to preserve broad crepuscular
+			// columns while halving the cloud-light lookup cost. Written explicitly
+			// for maximum Godot shader-language portability.
+			if (i == 0 || i == 2 || i == 4) {
 				cached_cloud_vis = cloud_sun_visibility(pos, sun_dir);
 			}
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
