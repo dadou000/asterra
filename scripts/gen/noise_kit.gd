@@ -14,7 +14,7 @@ func _init(p_seed: int, frequency: float, octaves: int = 4, lacunarity: float = 
 		gain: float = 0.5, type: int = FastNoiseLite.TYPE_SIMPLEX_SMOOTH) -> void:
 	n = FastNoiseLite.new()
 	n.seed = p_seed
-	n.noise_type = type
+	n.noise_type = type as FastNoiseLite.NoiseType
 	n.frequency = frequency
 	n.fractal_type = FastNoiseLite.FRACTAL_FBM
 	n.fractal_octaves = octaves
@@ -24,7 +24,7 @@ func _init(p_seed: int, frequency: float, octaves: int = 4, lacunarity: float = 
 static func cellular(p_seed: int, frequency: float, ret: int = FastNoiseLite.RETURN_DISTANCE2_SUB) -> NoiseKit:
 	var k := NoiseKit.new(p_seed, frequency, 1)
 	k.n.noise_type = FastNoiseLite.TYPE_CELLULAR
-	k.n.cellular_return_type = ret
+	k.n.cellular_return_type = ret as FastNoiseLite.CellularReturnType
 	k.n.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
 	k.n.fractal_type = FastNoiseLite.FRACTAL_NONE
 	return k

@@ -31,7 +31,7 @@ func _mk(sd: int, freq: float, oct: int, fractal: int) -> FastNoiseLite:
 	n.seed = sd
 	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	n.frequency = freq
-	n.fractal_type = fractal
+	n.fractal_type = fractal as FastNoiseLite.FractalType
 	n.fractal_octaves = oct
 	# gain * lacunarity = 0.9: each successive octave contributes slightly less
 	# gradient than the last, so the surface stays walkable instead of becoming

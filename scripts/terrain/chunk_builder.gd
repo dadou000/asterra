@@ -5,14 +5,23 @@ extends RefCounted
 ## The macro fields are cached per chunk for speed. Cube-face seams need special
 ## treatment because neighbouring faces use different local (u,v) axes.
 
-const SKIRT_MIN := 0.4
-const SKIRT_MAX := 300.0
-const WATER_SKIRT_MIN := 0.08
-const WATER_SKIRT_MAX := 400.0
+# The old vertical skirts could be hundreds of metres deep on rugged chunks and
+# became visible as serrated walls along coasts/chunk boundaries. Keep the skirt
+# topology degenerate for now (zero drop) so it contributes no visible geometry.
+# If an LOD crack reappears, fix it with edge stitching rather than a vertical wall.
+const SKIRT_MIN := 0.0
+const SKIRT_MAX := 0.0
+const WATER_SKIRT_MIN := 0.0
+const WATER_SKIRT_MAX := 0.0
 const WATER_DEPTH_SCALE := 4000.0
 const WATER_DEPTH_CURVE := 0.25
 const MACRO_SPACING := 800.0
 const FACE_EDGE_EPS := 1e-6
+# TerrainDetail can pull a macro shoreline hundreds of metres vertically. Any
+# chunk whose cached macro field comes this close to sea level gets a sea-level
+# water sheet even when none of its coarse terrain vertices happens to cross 0 m.
+# The shader's coastline clipmap clips away the dry part per fragment.
+const COAST_WATER_CANDIDATE_M := 450.0
 ## Number of vertex rows over which the fast face-local approximation is
 ## relaxed toward the canonical planet-space sampler. Exact edge vertices remain
 ## bit-identical on both faces, while the smoothstep band removes the hard crease.
@@ -41,13 +50,19 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var m_col := PackedColorArray(); m_col.resize(mn * mn)
 	var fields := Planet.fields
 	var grid := Planet.grid
+	var ocean_candidate := false
 	for j in mn:
 		var v := mu0_at(v0 - step, mspan, j, mres)
 		for i in mn:
 			var u := mu0_at(mu0, mspan, i, mres)
 			var d := CubeSphere.face_uv_to_dir(face, u, v)
 			var mi := j * mn + i
-			m_elev[mi] = grid.sample_bilinear(fields.elev, d)
+			# Elevation uses Planet's derived smoothed runtime macro field. Keeping
+			# the chunk cache on the same source as the canonical edge sampler avoids
+			# reintroducing the baked 8 km cell lattice in chunk interiors.
+			m_elev[mi] = Planet.macro_height(d)
+			if m_elev[mi] <= COAST_WATER_CANDIDATE_M:
+				ocean_candidate = true
 			m_relief[mi] = grid.sample_bilinear(fields.relief, d)
 			m_flat[mi] = clampf(grid.sample_bilinear(fields.floodplain, d) * 0.8
 				+ grid.sample_bilinear(fields.wetland, d) * 0.5, 0.0, 1.0)
@@ -70,8 +85,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var cols := PackedColorArray(); cols.resize(vcount)
 	var uvs := PackedVector2Array(); uvs.resize(vcount)
 
-	# One-vertex border for central-difference normals. Samples outside a cube
-	# face are forced to the canonical sampler by _seam_weight().
+	# One-vertex border for central-difference normals. Every actual chunk edge
+	# vertex and the one sample immediately outside it use the canonical planet
+	# sampler. Two independently built neighboring chunks therefore agree exactly
+	# at their shared edge instead of each trusting a different local macro cache.
 	var ext := n + 3
 	var hgt := PackedFloat32Array(); hgt.resize(ext * ext)
 	var dirs := PackedVector3Array(); dirs.resize(ext * ext)
@@ -81,10 +98,15 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var u := u0 + float(i - 1) * step
 			var d := CubeSphere.face_uv_to_dir(face, u, v)
 			dirs[j * ext + i] = d
+			var canonical_boundary := i <= 1 or i >= n + 1 or j <= 1 or j >= n + 1
 			hgt[j * ext + i] = _height_at(mn, mres, mu0, v0 - step, mspan, step, face,
-				u, v, m_elev, m_relief, m_flat, m_hard, m_river, detail, snap, d)
+				u, v, m_elev, m_relief, m_flat, m_hard, m_river, detail, snap, d,
+				canonical_boundary)
 
-	var water_needed := false
+	# Ocean coverage must not depend on whether a coarse chunk vertex happened to
+	# fall below sea level. A coast-candidate chunk gets the water sheet now; the
+	# LOD-independent shader mask determines the actual visible zero contour.
+	var water_needed := ocean_candidate
 	var water_h := PackedFloat32Array(); water_h.resize(vcount)
 	var water_conf := PackedFloat32Array(); water_conf.resize(vcount)
 
@@ -113,11 +135,14 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var fx := (u - mu0) / mspan * float(mres)
 			var fy := (v - (v0 - step)) / mspan * float(mres)
 			var seam_w := _seam_weight(u, v, step)
+			var chunk_edge := i == 0 or i == n or j == 0 or j == n
 
-			# Colour uses the same transition as geometry. This avoids an abrupt
-			# last-row switch from the chunk cache to Planet.surface_color().
+			# Shared chunk edges use the same direct direction-space colour lookup.
+			# Interior vertices keep the cached path for speed.
 			var local_col := _bilerp_color(m_col, mn, fx, fy)
-			if seam_w > 0.0:
+			if chunk_edge:
+				cols[vi] = Planet.surface_color(d3)
+			elif seam_w > 0.0:
 				cols[vi] = local_col.lerp(Planet.surface_color(d3), seam_w)
 			else:
 				cols[vi] = local_col
@@ -157,7 +182,10 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			var local_coverage := _bilerp(m_wmask, mn, fx, fy)
 			var wl := local_wl
 			var coverage := local_coverage
-			if seam_w > 0.0:
+			if chunk_edge:
+				wl = Planet.water_height(d3)
+				coverage = Planet.water_coverage(d3)
+			elif seam_w > 0.0:
 				wl = lerpf(local_wl, Planet.water_height(d3), seam_w)
 				coverage = lerpf(local_coverage, Planet.water_coverage(d3), seam_w)
 			water_h[vi] = wl
@@ -254,9 +282,15 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 					float(dd.z * r - pivot.z))
 				wn[vi] = dirs[(j + 1) * ext + (i + 1)]
 				wuv[vi] = Vector2(float(i) / float(n), float(j) / float(n))
-				var depth := maxf(water_h[vi] - _ground_h(hgt, ext, i, j), 0.0)
-				wcol[vi] = Color(pow(clampf(depth / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
-					water_conf[vi], 0.0, 1.0)
+				# Preserve the sign of the water-to-ground separation for lakes and
+				# for depth fallback. Sea-level shoreline visibility itself now comes
+				# from the shared coastline clipmap in the shader.
+				var signed_depth := water_h[vi] - _ground_h(hgt, ext, i, j)
+				var depth_mag := absf(signed_depth)
+				var wet_sign := 1.0 if signed_depth >= 0.0 else 0.0
+				var ocean_flag := 1.0 if absf(water_h[vi]) <= 0.05 else 0.0
+				wcol[vi] = Color(pow(clampf(depth_mag / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
+					water_conf[vi], ocean_flag, wet_sign)
 
 		var widx := PackedInt32Array()
 		for j in n:
@@ -326,7 +360,6 @@ static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	out.append(out[o + 2])
 	out.append(0.0)
 
-
 static func _ground_h(hgt: PackedFloat32Array, ext: int, i: int, j: int) -> float:
 	return hgt[(j + 1) * ext + (i + 1)]
 
@@ -369,30 +402,40 @@ static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float,
 		face: int, u: float, v: float,
 		m_elev: PackedFloat32Array, m_relief: PackedFloat32Array, m_flat: PackedFloat32Array,
 		m_hard: PackedFloat32Array, m_river: PackedFloat32Array,
-		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null) -> float:
+		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null,
+		force_canonical: bool = false) -> float:
 	if debug_flat:
 		return 0.0
 	var d: Vector3 = known_dir if known_dir != null else CubeSphere.face_uv_to_dir(face, u, v)
 	var seam_w := _seam_weight(u, v, step)
 
-	# Exact edge/outside-border samples are canonical. This both seals the mesh
-	# and lets central-difference normals look across the neighbouring face.
-	if seam_w >= 0.999999:
+	# Exact cube-face seams, every chunk perimeter vertex, and the outer normal
+	# sample ring all use one authoritative direction-space height function.
+	if force_canonical or seam_w >= 0.999999:
 		return Planet.terrain_height(d, detail, snap)
 
 	var fx := (u - mu0) / mspan * float(mres)
 	var fy := (v - mv0) / mspan * float(mres)
-	var h := _bilerp(m_elev, mn, fx, fy)
+	var macro_h := _bilerp(m_elev, mn, fx, fy)
+	var h := macro_h
 	var relief := _bilerp(m_relief, mn, fx, fy)
 	var flat := _bilerp(m_flat, mn, fx, fy)
 	var hard := _bilerp(m_hard, mn, fx, fy)
-	if h > 0.0:
-		h += detail.height(d, relief, flat, hard)
+
+	# Keep full detail through the coast and continental shelf. Only below 250 m
+	# macro depth do we start approaching the old subdued seabed profile, reaching
+	# it gradually by 1500 m. This removes the hard amplitude step at sea level.
+	var ocean_depth := maxf(-macro_h, 0.0)
+	var deep_ocean := smoothstep(250.0, 1500.0, ocean_depth)
+	var used_relief := lerpf(relief, relief * 0.5, deep_ocean)
+	var used_flat := lerpf(flat, maxf(flat, 0.55), deep_ocean)
+	var used_hard := lerpf(hard, 1.0, deep_ocean)
+	h += detail.height(d, used_relief, used_flat, used_hard)
+
+	if macro_h > 0.0:
 		var w := _bilerp(m_river, mn, fx, fy)
 		if w > 4.0:
 			h -= clampf(w * 0.045, 0.0, 22.0)
-	else:
-		h += detail.height(d, relief * 0.5, 0.55, 1.0)
 	if snap.is_empty():
 		if not Deltas.is_empty():
 			h += Deltas.offset_at(d)

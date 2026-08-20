@@ -6,6 +6,7 @@ const AUTOSAVE := "phase1"
 var cfg: GenConfig
 var bake: PlanetBake
 var terrain: PlanetTerrain
+var orbit_ocean: OrbitOcean
 var editor: TerrainEditor
 var player: AsterraPlayer
 var hud: AsterraHUD
@@ -22,6 +23,14 @@ var elapsed := 0.0
 var _aim: Dictionary = {}
 var _started := false
 var _rebaking := false
+
+## High-resolution coastline synthesis is deliberately decoupled from world
+## startup. Planet.adopt() already provides the cheap 192x192 orbit texture, so
+## the game can start immediately while a low-priority worker refines it to the
+## physical 768x768 coastline in the background.
+var _orbit_surface_task_id: int = -1
+var _orbit_surface_generation: int = 0
+var _orbit_surface_building := false
 
 func _ready() -> void:
 	cfg = _load_config()
@@ -85,10 +94,12 @@ func _on_baked(fields: PlanetFields) -> void:
 	if _rebaking and terrain != null:
 		var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 		Planet.adopt(fields)
+		_queue_orbit_surface_texture()
 		map.invalidate()
 		if map.visible:
 			map.refresh()
 		terrain.build_roots()
+		_push_orbit_surface_textures()
 		if editor != null:
 			editor.refresh()
 		if player != null:
@@ -104,11 +115,16 @@ func _on_baked(fields: PlanetFields) -> void:
 		return
 
 	Planet.adopt(fields)
+	_queue_orbit_surface_texture()
 	hud.hide_progress()
 
 	terrain = FastPlanetTerrain.new()
 	add_child(terrain)
 	terrain.build_roots()
+	_push_orbit_surface_textures()
+
+	orbit_ocean = OrbitOcean.new()
+	add_child(orbit_ocean)
 
 	terrain_debug = TerrainDebug.new()
 	terrain_debug.terrain = terrain
@@ -129,6 +145,56 @@ func _on_baked(fields: PlanetFields) -> void:
 	if SaveGame.list_saves().has(AUTOSAVE):
 		hud.notify("Save '%s' found — press F9 to load it" % AUTOSAVE)
 	_started = true
+
+## Request a refined coastline without ever doing the synthesis in the frame
+## thread. If a rebake replaces the planet while an older request is running,
+## its result is discarded and one fresh request is started afterwards.
+func _queue_orbit_surface_texture() -> void:
+	_orbit_surface_generation += 1
+	if _orbit_surface_building:
+		return
+	_start_orbit_surface_texture_build(_orbit_surface_generation)
+
+func _start_orbit_surface_texture_build(request_id: int) -> void:
+	_orbit_surface_building = true
+	var task := func() -> void:
+		var built: Dictionary = OrbitSurfaceCache.build_images()
+		call_deferred("_on_orbit_surface_images_ready", request_id, built)
+	# Normal/low priority: terrain coverage jobs may use the pool's high-priority
+	# lane and should always win over this cosmetic refinement.
+	_orbit_surface_task_id = WorkerThreadPool.add_task(task, false, "asterra_orbit_coast")
+
+func _on_orbit_surface_images_ready(request_id: int, built: Dictionary) -> void:
+	# This deferred callback is queued only after the worker finished, so the wait
+	# is effectively just cleanup and cannot contain the expensive synthesis.
+	if _orbit_surface_task_id >= 0:
+		WorkerThreadPool.wait_for_task_completion(_orbit_surface_task_id)
+		_orbit_surface_task_id = -1
+	_orbit_surface_building = false
+
+	if request_id == _orbit_surface_generation and not built.is_empty():
+		var texture: Texture2DArray = OrbitSurfaceCache.create_texture(built)
+		if texture != null:
+			Planet.orbit_elevation_texture = texture
+			Planet.orbit_texture_face_res = int(built["face_res"])
+			_push_orbit_surface_textures()
+			if orbit_ocean != null:
+				orbit_ocean.refresh_surface()
+
+	# A rebake may have arrived while this task was running. Never publish its
+	# stale result; immediately refine the newest adopted planet instead.
+	if request_id != _orbit_surface_generation:
+		_start_orbit_surface_texture_build(_orbit_surface_generation)
+
+func _push_orbit_surface_textures() -> void:
+	if terrain == null or Planet.orbit_elevation_texture == null:
+		return
+	var mats := terrain.debug_materials()
+	if mats.is_empty():
+		return
+	var ground: ShaderMaterial = mats[0]
+	ground.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
+	ground.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
 
 ## Pick the most convincing place to start: a well-drained, buildable site on a
 ## natural transport corridor beside a real river. This is the same score the
@@ -289,9 +355,15 @@ func _load() -> void:
 	elapsed = data.get("elapsed", 0.0)
 	# Every chunk must be rebuilt: the deltas it was meshed with have changed.
 	terrain.build_roots()
+	_push_orbit_surface_textures()
 	hud.notify("Loaded '%s' — %d delta tiles restored" % [AUTOSAVE, Deltas.edited_tile_count()])
 
 func _player_state() -> Dictionary:
 	var s := player.state()
 	s["carry"] = carry.serialize()
 	return s
+
+func _exit_tree() -> void:
+	if _orbit_surface_task_id >= 0:
+		WorkerThreadPool.wait_for_task_completion(_orbit_surface_task_id)
+		_orbit_surface_task_id = -1

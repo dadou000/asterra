@@ -9,6 +9,10 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 ///   * it breaks up the 8 km macro colour lattice with detail generated in
 ///     *planet* space, so it stays nailed to the ground when the floating
 ///     origin re-bases underfoot.
+///
+/// At aircraft/orbit altitude the actual land/water cut comes from the same
+/// camera-centred coastline clipmap as both ocean representations. Terrain LOD
+/// can therefore change without moving the apparent shoreline.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -22,8 +26,13 @@ instance uniform float chunk_depth = 0.0;          // quadtree depth, for debug 
 // re-based constantly; adding this back recovers a coordinate that does not move
 // under the terrain, which is what the detail noise has to be sampled in.
 #include "res://shaders/atmosphere.gdshaderinc"
+#include "res://shaders/planet_surface_lookup.gdshaderinc"
+#include "res://shaders/coastline_clipmap.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
+uniform sampler2DArray u_orbit_elevation;
+uniform float u_orbit_face_res = 192.0;
+uniform float u_orbit_coast_start_altitude = 12000.0;
 
 // Debug overlays, driven by TerrainDebug. Both are drawn from the mesh's own UV
 // attribute and its instance depth -- nothing the quadtree glyphs also use --
@@ -92,6 +101,21 @@ vec3 depth_color(float d) {
 
 void fragment() {
 	vec3 up = normalize(v_planet);
+	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
+	float camera_alt = length(camera_planet) - u_planet_radius;
+
+	// The visual land/sea classification is independent of terrain geometry.
+	// Above the global-ocean handoff the terrain is clipped against exactly the
+	// same field used by the orbit shell, including the local high-resolution
+	// clipmap whenever it covers this pixel.
+	if (camera_alt >= u_orbit_coast_start_altitude) {
+		float visual_h = coast_surface_height(
+			u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
+		if (visual_h < 0.0) {
+			discard;
+		}
+	}
+
 	vec3 wn = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
 	float dist = length(VERTEX);
@@ -139,5 +163,5 @@ void fragment() {
 	METALLIC = 0.0;
 	// The air in front of the surface, applied after lighting. Without it the
 	// sky is only ever a backdrop behind the planet.
-	FOG = aerial_fog(CAMERA_POSITION_WORLD + u_origin, v_planet);
+	FOG = aerial_fog(camera_planet, v_planet);
 }

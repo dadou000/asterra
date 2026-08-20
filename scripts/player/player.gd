@@ -45,10 +45,10 @@ func _ready() -> void:
 	Frames.origin_shifted.connect(func(_d): _sync_transform())
 	set_process_input(true)
 
-func spawn_at(dir: Vector3, altitude: float) -> void:
+func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 	var d := dir.normalized()
 	var h := Planet.terrain_height(d)
-	var r := Planet.cfg.planet_radius + maxf(h, 0.0) + altitude
+	var r := Planet.cfg.planet_radius + maxf(h, 0.0) + spawn_altitude
 	world_pos = Vec3D.new(d.x * r, d.y * r, d.z * r)
 	Frames.rebase(world_pos)
 	_sync_transform()
@@ -180,7 +180,6 @@ func aim(max_range: float = 220.0) -> Dictionary:
 	var ray := view_dir()
 	var step := 0.35
 	var t := 0.0
-	var prev_gap := _gap_at(origin, ray, 0.0)
 	while t < max_range:
 		t += step
 		step = minf(step * 1.08, 4.0)
@@ -199,7 +198,6 @@ func aim(max_range: float = 220.0) -> Dictionary:
 			var d := p.normalized().to_v3()
 			return {"world": p, "dir": d, "distance": hi,
 				"height": Planet.terrain_height(d)}
-		prev_gap = gap
 	return {}
 
 func _gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
@@ -215,7 +213,7 @@ func restore(s: Dictionary) -> void:
 	world_pos = Vec3D.new(s["x"], s["y"], s["z"])
 	yaw = s.get("yaw", 0.0)
 	pitch = s.get("pitch", 0.0)
-	mode = s.get("mode", Mode.FLY)
+	mode = int(s.get("mode", Mode.FLY)) as Mode
 	Frames.rebase(world_pos)
 	_sync_transform()
 	moved.emit(world_pos)

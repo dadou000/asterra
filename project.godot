@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Asterra"
-config/version="0.0.2"
+config/version="0.0.3"
 config/description="Systems-first open-world simulation. Phase 1: procedural planet."
 run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
@@ -22,6 +22,7 @@ config/icon="res://icon.svg"
 Frames="*res://scripts/core/frames.gd"
 Planet="*res://scripts/gen/planet_sampler.gd"
 Deltas="*res://scripts/terrain/terrain_deltas.gd"
+CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
 
 [display]
 

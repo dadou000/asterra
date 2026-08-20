@@ -36,15 +36,15 @@ func sample_spacing(radius: float) -> float:
 	return (PI * 0.5 * radius) / float(LATTICE)
 
 # ------------------------------------------------------------- addressing ---
-static func tile_key(face: int, ti: int, tj: int) -> int:
+func tile_key(face: int, ti: int, tj: int) -> int:
 	return (face << 30) | (tj << 15) | ti
 
 ## Direction -> continuous lattice coordinates [face, gi, gj].
-static func dir_to_lattice(d: Vector3) -> Array:
+func dir_to_lattice(d: Vector3) -> Array:
 	var fuv := CubeSphere.dir_to_face_uv(d)
 	return [fuv[0], (fuv[1] * 0.5 + 0.5) * float(LATTICE), (fuv[2] * 0.5 + 0.5) * float(LATTICE)]
 
-static func lattice_to_dir(face: int, gi: float, gj: float) -> Vector3:
+func lattice_to_dir(face: int, gi: float, gj: float) -> Vector3:
 	return CubeSphere.face_uv_to_dir(face, gi / float(LATTICE) * 2.0 - 1.0, gj / float(LATTICE) * 2.0 - 1.0)
 
 # ------------------------------------------------------------------ read ---
@@ -98,7 +98,9 @@ func snapshot_for_bounds(center: Vector3, angular_radius: float) -> Dictionary:
 		var face: int = (int(k) >> 30) & 0x7
 		var ti: int = int(k) & 0x7FFF
 		var tj: int = (int(k) >> 15) & 0x7FFF
-		var cd := lattice_to_dir(face, float(ti * TILE + TILE / 2), float(tj * TILE + TILE / 2))
+		var cd := lattice_to_dir(face,
+			float(ti * TILE) + float(TILE) * 0.5,
+			float(tj * TILE) + float(TILE) * 0.5)
 		# Tile half-diagonal in radians, generously padded.
 		var tile_ang := (float(TILE) / float(LATTICE)) * PI
 		if cd.angle_to(center) <= angular_radius + tile_ang:
