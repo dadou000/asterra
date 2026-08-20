@@ -2,14 +2,14 @@ shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 /// Orbit-only ocean shell.
 ///
-/// Coastline visibility comes from the macro elevation texture in planet space,
-/// not from the streamed water mesh. The shell therefore keeps exactly the same
-/// coastline while terrain geometry moves through its LODs. Local ocean chunks
-/// still provide waves/shore physics near the ground; this pass exists to make
-/// the planet read cleanly from aircraft/orbit distances.
+/// Coastline visibility comes from the same planet-space coastline field as the
+/// local ocean and terrain. Terrain/water LOD changes therefore cannot move the
+/// shoreline. The camera-centred clipmap carries the fine physical coast near
+/// the observer and the global cube texture remains the seamless far fallback.
 
 #include "res://shaders/atmosphere.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
+#include "res://shaders/coastline_clipmap.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
 uniform sampler2DArray u_orbit_elevation;
@@ -33,7 +33,7 @@ void fragment() {
 	}
 
 	vec3 up = normalize(v_planet);
-	float visual_h = surface_visual_height(
+	float visual_h = coast_surface_height(
 		u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
 	if (visual_h >= 0.0) {
 		discard;
