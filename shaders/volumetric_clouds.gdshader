@@ -152,36 +152,23 @@ float hg(float g, float mu) {
 	return (1.0 - gg) / (4.0 * PI * pow(max(1.0 + gg - 2.0 * g * mu, 1e-4), 1.5));
 }
 
-float scene_distance(vec2 screen_uv) {
-	float raw = texture(u_scene_depth, screen_uv).r;
-	// Forward+ uses reversed Z: an untouched sky pixel is near 0.
-	if (raw <= 1e-6) {
-		return BIG;
-	}
-	vec3 ndc = vec3(screen_uv * 2.0 - 1.0, raw);
-	vec4 view = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
-	view.xyz /= max(abs(view.w), 1e-8);
-	return length(view.xyz);
-}
-
-vec3 world_ray(vec2 screen_uv) {
-	// z=0 is the far plane in Forward+'s reversed-Z projection.
-	vec4 view_far = INV_PROJECTION_MATRIX * vec4(screen_uv * 2.0 - 1.0, 0.0, 1.0);
-	vec3 view_dir = normalize(view_far.xyz / max(abs(view_far.w), 1e-8));
-	return normalize((INV_VIEW_MATRIX * vec4(view_dir, 0.0)).xyz);
-}
-
 float screen_jitter(vec2 p) {
 	return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
 void fragment() {
-	// SCREEN_UV is not a spatial-shader built-in in the Godot 4.7 path used by
-	// Asterra. The full-screen QuadMesh already supplies canonical 0..1 UVs, so
-	// use those explicitly for depth lookup and camera-ray reconstruction.
-	vec2 screen_uv = UV;
+	// Keep all fragment-only inputs in fragment(). In particular, Godot's spatial
+	// shader compiler is stricter than GLSL about forwarding screen-space values
+	// through helper functions on this fullscreen path.
+	vec2 suv = UV;
+
+	// Reconstruct the camera ray directly from the fullscreen quad UV.
+	// Forward+ uses reversed Z, so z=0 is the far plane.
+	vec4 view_far = INV_PROJECTION_MATRIX * vec4(suv * 2.0 - 1.0, 0.0, 1.0);
+	vec3 view_dir = normalize(view_far.xyz / max(abs(view_far.w), 1e-8));
+	vec3 rd = normalize((INV_VIEW_MATRIX * vec4(view_dir, 0.0)).xyz);
 	vec3 ro = CAMERA_POSITION_WORLD + u_origin;
-	vec3 rd = world_ray(screen_uv);
+
 	vec2 outer = sphere_hit(ro, rd, u_cloud_outer_radius);
 	if (outer.x > outer.y || outer.y <= 0.0) {
 		discard;
@@ -194,9 +181,16 @@ void fragment() {
 	if (ground.x > 0.0) {
 		t1 = min(t1, ground.x);
 	}
-	// Opaque terrain/water in front of a cloud wins. This keeps the full-screen
-	// pass composited correctly while flying through valleys or below cloud base.
-	t1 = min(t1, scene_distance(screen_uv));
+
+	// Clip the cloud march against opaque scene depth. Untouched sky depth is
+	// approximately zero in Forward+'s reversed-Z projection.
+	float raw_depth = texture(u_scene_depth, suv).r;
+	if (raw_depth > 1e-6) {
+		vec3 ndc = vec3(suv * 2.0 - 1.0, raw_depth);
+		vec4 view_pos = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
+		view_pos.xyz /= max(abs(view_pos.w), 1e-8);
+		t1 = min(t1, length(view_pos.xyz));
+	}
 	if (t1 <= t0 + 1.0) {
 		discard;
 	}
