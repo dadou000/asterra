@@ -88,13 +88,10 @@ void fragment() {
 	float foam = smoothstep(1.6, 0.0, depth) * smoothstep(0.35, 0.85, crest) * (1.0 - smoothstep(1500.0, 12000.0, dist));
 	base = mix(base, u_foam, foam * 0.75);
 
-	float cloud_shadow = cloud_surface_shadow_amount(v_planet, normalize(u_sun_dir));
-	base *= mix(vec3(1.0), vec3(0.56, 0.64, 0.72), cloud_shadow * 0.62);
-
 	ALBEDO = base;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	ROUGHNESS = mix(0.04, 0.13, smoothstep(1500.0, 60000.0, dist)) + clamp(length(slope) * 0.22, 0.0, 0.12) + foam * 0.45;
-	SPECULAR = 0.5 * (1.0 - cloud_shadow * 0.62);
+	SPECULAR = 0.5;
 	METALLIC = 0.0;
 
 	float shore;
@@ -114,4 +111,24 @@ void fragment() {
 
 	ALPHA = shore * mix(0.62, 1.0, smoothstep(0.0, 7.0, depth));
 	FOG = aerial_fog(camera_planet, v_planet);
+}
+
+void light() {
+	float visibility = 1.0;
+	if (LIGHT_IS_DIRECTIONAL) {
+		visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+	}
+
+	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
+
+	if (ndotl > 0.0) {
+		vec3 h = normalize(LIGHT + VIEW);
+		float ndoth = max(dot(NORMAL, h), 0.0);
+		float ndotv = max(dot(NORMAL, VIEW), 0.0);
+		float fresnel = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
+		float spec_power = mix(900.0, 18.0, clamp(ROUGHNESS, 0.0, 1.0));
+		float spec = pow(ndoth, spec_power) * mix(0.18, 1.0, fresnel);
+		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * SPECULAR_AMOUNT * 1.8;
+	}
 }
