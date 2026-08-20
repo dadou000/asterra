@@ -15,6 +15,8 @@ var debug_menu: DebugMenu
 var terrain_debug: TerrainDebug
 var sun: DirectionalLight3D
 var sky_mat: ShaderMaterial
+var weather: WeatherSystem
+var clouds: CloudRenderer
 
 var carry := MaterialStock.new()
 var brush_radius := 2.5
@@ -87,6 +89,19 @@ func _setup_environment() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	add_child(sun)
 
+func _setup_weather() -> void:
+	if weather == null:
+		weather = WeatherSystem.new()
+		add_child(weather)
+	weather.rebuild()
+	if clouds == null:
+		clouds = CloudRenderer.new()
+		add_child(clouds)
+		clouds.configure(cfg, weather)
+	else:
+		clouds.weather = weather
+		clouds.refresh_weather()
+
 func _on_baked(fields: PlanetFields) -> void:
 	# During a manual debug rebake the existing world stays alive while the new
 	# fields are generated. Swap them atomically here, then rebuild only the
@@ -94,6 +109,7 @@ func _on_baked(fields: PlanetFields) -> void:
 	if _rebaking and terrain != null:
 		var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 		Planet.adopt(fields)
+		_setup_weather()
 		_queue_orbit_surface_texture()
 		map.invalidate()
 		if map.visible:
@@ -115,6 +131,7 @@ func _on_baked(fields: PlanetFields) -> void:
 		return
 
 	Planet.adopt(fields)
+	_setup_weather()
 	_queue_orbit_surface_texture()
 	hud.hide_progress()
 
