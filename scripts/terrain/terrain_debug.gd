@@ -154,11 +154,11 @@ func _apply_force_lod() -> void:
 	if terrain != null:
 		terrain.forced_depth = force_lod_depth if force_lod else -1
 
-func _set_terrain_param(name: String, value: float) -> void:
+func _set_terrain_param(shader_param: String, value: float) -> void:
 	if terrain == null:
 		return
 	for mat in terrain.debug_materials():
-		mat.set_shader_parameter(name, value)
+		mat.set_shader_parameter(shader_param, value)
 
 func _apply_water_visible(node, on: bool) -> void:
 	if node.water_mi != null:
