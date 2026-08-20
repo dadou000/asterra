@@ -4,8 +4,14 @@ render_mode unshaded, blend_premul_alpha, depth_draw_never, depth_test_disabled,
 ///
 /// Density comes from the dynamic spherical weather simulation and generated 3D
 /// morphology. Lighting is integrated through the cloud volume, with planet
-/// shadowing, adaptive cloud self-shadowing, multiple-scattering approximation,
-/// electrical illumination and atmospheric aerial perspective.
+/// shadowing, low-cost cone-traced self-shadowing, multiple-scattering
+/// approximation, electrical illumination and atmospheric aerial perspective.
+///
+/// The lighting path is intentionally decoupled from the full view-density path:
+/// shadow samples omit the finest erosion texture, use a sparse expanding cone,
+/// and are cached for several consecutive view-ray samples. This preserves soft
+/// volumetric lighting without multiplying every camera step by a second large
+/// raymarch.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -27,16 +33,17 @@ uniform float u_extinction = 0.00215;
 uniform float u_core_extinction_boost = 3.15;
 uniform float u_transmittance_cutoff = 0.004;
 uniform float u_opaque_core_path = 720.0;
-uniform float u_dense_step = 240.0;
-uniform float u_empty_step = 720.0;
+uniform float u_dense_step = 320.0;
+uniform float u_empty_step = 1100.0;
 uniform float u_density_scale = 1.18;
 uniform float u_wind_speed = 1.0;
 uniform float u_detail_strength = 0.27;
 
-// Lighting controls. The sun ray uses smaller steps in cloud and large steps in
-// empty air, removing the coherent shadow shelves produced by sparse fixed probes.
-uniform float u_sun_shadow_dense_step = 260.0;
-uniform float u_sun_shadow_empty_step = 920.0;
+// Lighting controls. Shadowing uses a six-tap expanding cone and is refreshed
+// only every ~kilometre along a continuous cloud body.
+uniform float u_sun_shadow_dense_step = 320.0;
+uniform float u_sun_shadow_empty_step = 620.0;
+uniform float u_lighting_stride = 960.0;
 uniform float u_multiple_scatter_strength = 0.42;
 uniform float u_direct_light_strength = 0.92;
 uniform float u_ambient_strength = 0.72;
@@ -47,8 +54,8 @@ uniform vec4 u_lightning1 = vec4(0.0);
 uniform vec4 u_lightning2 = vec4(0.0);
 uniform vec4 u_lightning3 = vec4(0.0);
 
-const int MAX_STEPS = 224;
-const int SUN_SHADOW_STEPS = 28;
+const int MAX_STEPS = 160;
+const int SUN_SHADOW_STEPS = 6;
 const float BIG = 1.0e20;
 
 // Same atmosphere constants as atmosphere_sky.gdshader. This pass integrates
@@ -60,8 +67,8 @@ const float CLOUD_MIE_SCALE_HEIGHT = 1200.0;
 const float CLOUD_MIE_G = 0.758;
 const float CLOUD_SUN_INTENSITY = 22.0;
 const float CLOUD_AERIAL_STRENGTH = 0.40;
-const int CLOUD_AP_STEPS = 6;
-const int CLOUD_AP_LIGHT_STEPS = 2;
+const int CLOUD_AP_STEPS = 4;
+const int CLOUD_AP_LIGHT_STEPS = 1;
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -145,7 +152,13 @@ float cloud_density(vec3 p, bool lighting_sample) {
 
 	float broad_n = texture(u_base_noise, q * 0.0000032).r;
 	float middle_n = texture(u_base_noise, q * 0.0000115 + vec3(0.37, 0.11, 0.59)).r;
-	float detail_n = texture(u_detail_noise, q * 0.000052 + vec3(0.17, 0.43, 0.71)).r;
+	// Sun-shadow samples do not need the finest erosion frequency. Skipping this
+	// texture fetch is a large saving because lighting density is evaluated many
+	// times per pixel.
+	float detail_n = 0.50;
+	if (!lighting_sample) {
+		detail_n = texture(u_detail_noise, q * 0.000052 + vec3(0.17, 0.43, 0.71)).r;
+	}
 
 	float low_density = 0.0;
 	if (altitude >= cloud_base && altitude <= low_top) {
@@ -177,8 +190,11 @@ float cloud_density(vec3 p, bool lighting_sample) {
 			* (1.0 - smoothstep(0.72, 1.0, hhi));
 		vec3 high_p = q * vec3(0.0000017, 0.0000027, 0.0000017);
 		float wispy = texture(u_base_noise, high_p + vec3(0.31, 0.07, 0.53)).r;
-		float filaments = texture(u_detail_noise, q * 0.000020
-			+ vec3(0.61, 0.13, 0.29)).r;
+		float filaments = 0.50;
+		if (!lighting_sample) {
+			filaments = texture(u_detail_noise, q * 0.000020
+				+ vec3(0.61, 0.13, 0.29)).r;
+		}
 		float hi_threshold = mix(0.84, 0.39, high_cov);
 		float hi = smoothstep(hi_threshold, min(hi_threshold + 0.17, 0.98),
 			wispy * 0.82 + filaments * 0.18 + convective * 0.06);
@@ -199,9 +215,9 @@ float hash13(vec3 p) {
 	return fract((p.x + p.y) * p.z);
 }
 
-// Adaptive sun-ray optical-depth integration. Dense material is sampled finely;
-// empty space is skipped quickly with a midpoint probe. Spatial jitter decorrelates
-// neighbouring view rays so the shadow solution does not form visible shelves.
+// Six-tap expanding cone trace. Far samples cover a larger cross-section and
+// therefore approximate soft multiple-path shadowing without a second full
+// raymarch. Jitter is stable in planet space, so there is no screen-space crawl.
 float cloud_sun_optical_depth(vec3 p, vec3 sun_dir) {
 	vec2 shell = sphere_hit(p, sun_dir, u_cloud_outer_radius);
 	float max_dist = max(shell.y, 0.0);
@@ -209,41 +225,29 @@ float cloud_sun_optical_depth(vec3 p, vec3 sun_dir) {
 		return 0.0;
 	}
 
-	float seed = hash13(p * 0.0017 + sun_dir * 19.17);
-	float dense_step = clamp(u_sun_shadow_dense_step, 140.0, 520.0);
-	float empty_step = clamp(u_sun_shadow_empty_step, dense_step * 1.8, 1800.0);
-	float travel = dense_step * (0.22 + seed * 0.58);
+	vec3 ref = abs(sun_dir.y) < 0.97 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 side0 = normalize(cross(ref, sun_dir));
+	vec3 side1 = normalize(cross(sun_dir, side0));
+	float seed = hash13(p * 0.00073 + sun_dir * 31.7);
+	float travel = clamp(u_sun_shadow_dense_step, 220.0, 520.0) * mix(0.82, 1.18, seed);
+	float growth = clamp(u_sun_shadow_empty_step / max(u_sun_shadow_dense_step, 1.0), 1.65, 2.05);
+	float previous = 0.0;
 	float tau = 0.0;
 
 	for (int i = 0; i < SUN_SHADOW_STEPS; i++) {
-		if (travel >= max_dist || tau >= 10.0) {
+		if (travel >= max_dist || tau >= 9.0) {
 			break;
 		}
-
-		vec3 q0 = p + sun_dir * travel;
-		float d0 = optical_density(cloud_density(q0, true));
-		float local_seed = hash13(q0 * 0.0023 + vec3(float(i) * 0.173));
-
-		if (d0 <= 0.0015) {
-			float step_len = min(empty_step * mix(0.82, 1.16, local_seed), max_dist - travel);
-			float probe_d = optical_density(cloud_density(
-				p + sun_dir * (travel + step_len * 0.5), true));
-			if (probe_d <= 0.0015) {
-				travel += step_len;
-				continue;
-			}
-			// Approach a detected cloud edge with a fine step rather than integrating
-			// an entire coarse empty-space interval as one slab.
-			travel += min(dense_step * mix(0.78, 1.08, local_seed), step_len * 0.38);
-			continue;
-		}
-
-		float step_len = min(dense_step * mix(0.82, 1.18, local_seed), max_dist - travel);
-		float d1 = optical_density(cloud_density(
-			p + sun_dir * (travel + step_len * 0.5), true));
-		float d = max(d0 * 0.38 + d1 * 0.62, 0.0);
-		tau += d * step_len * u_extinction * 1.08;
-		travel += step_len;
+		float segment_len = max(travel - previous, 120.0);
+		float fi = float(i);
+		float angle = seed * 6.2831853 + fi * 2.3999632;
+		float cone_radius = min(55.0 + travel * 0.075, 780.0);
+		vec3 cone_offset = (side0 * cos(angle) + side1 * sin(angle)) * cone_radius;
+		vec3 q = p + sun_dir * travel + cone_offset;
+		float d = optical_density(cloud_density(q, true));
+		tau += d * segment_len * u_extinction * 1.10;
+		previous = travel;
+		travel *= growth;
 	}
 	return tau;
 }
@@ -421,10 +425,11 @@ void fragment() {
 		discard;
 	}
 
-	float dense_step = clamp(u_dense_step, 120.0, 520.0);
-	float empty_step = max(clamp(u_empty_step, dense_step * 1.8, 1400.0), dense_step);
+	float dense_step = clamp(u_dense_step, 180.0, 620.0);
+	float empty_step = max(clamp(u_empty_step, dense_step * 1.8, 1800.0), dense_step);
+	float lighting_stride = max(u_lighting_stride, dense_step * 2.0);
 	float jitter = screen_jitter(FRAGCOORD.xy);
-	float t = t0 + dense_step * (0.10 + 0.28 * jitter);
+	float t = t0 + dense_step * (0.10 + 0.22 * jitter);
 	float transmittance = 1.0;
 	vec3 radiance = vec3(0.0);
 	float optical_t_sum = 0.0;
@@ -434,6 +439,12 @@ void fragment() {
 	float mu = dot(rd, sun_dir);
 	float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
 	phase = min(phase * 4.0 * PI, 4.25);
+
+	// Reuse the expensive sun solution across several neighbouring view samples.
+	// It is invalidated after a genuine empty-space skip so separate cloud bodies
+	// still get independent lighting.
+	float cached_sun_tau = 0.0;
+	float cached_sun_t = -BIG;
 
 	for (int i = 0; i < MAX_STEPS; i++) {
 		if (t >= t1 || transmittance <= 0.0) {
@@ -445,8 +456,13 @@ void fragment() {
 		if (density0 <= 0.0015) {
 			float skip_len = min(empty_step, t1 - t);
 			float probe_t = t + skip_len * 0.5;
-			float probe_density = cloud_density(ro + rd * probe_t, false);
+			// Broad lighting density is enough to detect whether a coarse skip crosses
+			// a cloud and avoids the detail-texture fetch in empty air.
+			float probe_density = cloud_density(ro + rd * probe_t, true);
 			if (probe_density <= 0.0015) {
+				if (skip_len >= lighting_stride * 0.70) {
+					cached_sun_t = -BIG;
+				}
 				t += skip_len;
 				continue;
 			}
@@ -463,7 +479,14 @@ void fragment() {
 		float alpha_step = 1.0 - step_transmittance;
 
 		vec3 sample_pos = p + rd * (step_len * 0.5);
-		float sun_tau = cloud_sun_optical_depth(sample_pos, sun_dir);
+		if (cached_sun_t < -BIG * 0.5 || (t - cached_sun_t) >= lighting_stride) {
+			cached_sun_tau = cloud_sun_optical_depth(sample_pos, sun_dir);
+			cached_sun_t = t;
+		}
+		// Local density correction keeps nearby billows from sharing perfectly
+		// identical lighting even though the long-range cone result is cached.
+		float sun_tau = cached_sun_tau
+			+ extinction_density * u_extinction * min(step_len, 360.0) * 0.28;
 		float sun_trans = exp(-sun_tau);
 		float sun_visible = planet_sun_visibility(sample_pos, sun_dir);
 		vec3 up = normalize(sample_pos);
