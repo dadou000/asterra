@@ -19,7 +19,7 @@ uniform float u_cloud_shadow_extinction = 0.00032;
 uniform float u_cloud_shadow_outer_altitude = 18500.0;
 uniform float u_cloud_shadow_max_distance = 48000.0;
 
-const int CLOUD_SHADOW_STEPS = 8;
+const int CLOUD_SHADOW_STEPS = 6;
 
 vec3 cloud_shadow_face_uv(vec3 dir) {
 	vec3 d = normalize(dir);
@@ -85,8 +85,15 @@ float cloud_shadow_macro_density(vec3 p) {
 	vec4 w = cloud_shadow_weather(d);
 	if (max(max(w.r, w.g), w.b) < 0.006) return 0.0;
 
-	vec2 low_n = cloud_structure_noises(d);
-	vec2 high_n = cloud_high_structure_noises(d);
+	// Surface/sky shadowing is one of the hottest shader paths. Use the primary
+	// macro scale from each independent layer and omit only the secondary edge
+	// perturbation. Layer heights/profiles and weather occupancy stay identical to
+	// the visible volume, while each integration sample needs two value-noise
+	// evaluations instead of four.
+	float low_primary = cloud_struct_vnoise(d * 17.0 + vec3(7.1, -3.4, 5.7));
+	float high_primary = cloud_struct_vnoise(d * 11.0 + vec3(-19.4, 12.1, 4.8));
+	vec2 low_n = vec2(low_primary, 0.5);
+	vec2 high_n = vec2(high_primary, 0.5);
 	return cloud_macro_density(w, altitude, low_n, high_n);
 }
 
