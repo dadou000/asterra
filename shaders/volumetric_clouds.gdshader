@@ -358,119 +358,118 @@ void fragment() {
 		if (orbit_alpha < 0.002) discard;
 		ALBEDO = orbit_color * orbit_alpha;
 		ALPHA = orbit_alpha;
-		return;
-	}
+	} else {
+		vec2 outer = sphere_hit(ro, rd, u_cloud_outer_radius);
+		if (outer.x > outer.y || outer.y <= 0.0) discard;
+		float t0 = max(outer.x, 0.0);
+		float t1 = outer.y;
+		vec2 ground = sphere_hit(ro, rd, u_planet_radius);
+		if (ground.x > 0.0) t1 = min(t1, ground.x);
+		if (scene_dist < BIG * 0.5) {
+			float depth_guard = max(3.0, scene_dist * 2.0e-6);
+			t1 = min(t1, max(scene_dist - depth_guard, 0.0));
+		}
+		if (t1 <= t0 + 1.0) discard;
 
-	vec2 outer = sphere_hit(ro, rd, u_cloud_outer_radius);
-	if (outer.x > outer.y || outer.y <= 0.0) discard;
-	float t0 = max(outer.x, 0.0);
-	float t1 = outer.y;
-	vec2 ground = sphere_hit(ro, rd, u_planet_radius);
-	if (ground.x > 0.0) t1 = min(t1, ground.x);
-	if (scene_dist < BIG * 0.5) {
-		float depth_guard = max(3.0, scene_dist * 2.0e-6);
-		t1 = min(t1, max(scene_dist - depth_guard, 0.0));
-	}
-	if (t1 <= t0 + 1.0) discard;
+		float seg = t1 - t0;
+		vec4 w0 = weather_at(normalize(ro + rd * (t0 + seg * 0.20)));
+		vec4 w1 = weather_at(normalize(ro + rd * (t0 + seg * 0.50)));
+		vec4 w2 = weather_at(normalize(ro + rd * (t0 + seg * 0.80)));
+		float possible = max(max(max(w0.r, w0.g), w0.b), max(max(w1.r, w1.g), max(w1.b, max(max(w2.r, w2.g), w2.b))));
+		if (possible < 0.010) discard;
 
-	float seg = t1 - t0;
-	vec4 w0 = weather_at(normalize(ro + rd * (t0 + seg * 0.20)));
-	vec4 w1 = weather_at(normalize(ro + rd * (t0 + seg * 0.50)));
-	vec4 w2 = weather_at(normalize(ro + rd * (t0 + seg * 0.80)));
-	float possible = max(max(max(w0.r, w0.g), w0.b), max(max(w1.r, w1.g), max(w1.b, max(max(w2.r, w2.g), w2.b))));
-	if (possible < 0.010) discard;
+		float base_dense_step = clamp(u_dense_step, 260.0, 760.0);
+		float base_empty_step = max(clamp(u_empty_step, base_dense_step * 2.0, 2600.0), base_dense_step);
+		float lighting_stride = max(u_lighting_stride, base_dense_step * 2.5);
+		float jitter = screen_jitter(FRAGCOORD.xy);
+		float t = t0 + base_dense_step * (0.10 + 0.20 * jitter);
+		float transmittance = 1.0;
+		vec3 radiance = vec3(0.0);
+		float optical_t_sum = 0.0;
+		float optical_weight = 0.0;
+		float dense_path = 0.0;
+		float mu = dot(rd, sun_dir);
+		float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
+		phase = min(phase * 4.0 * PI, 4.25);
+		float cached_sun_tau = 0.0;
+		float cached_sun_t = -BIG;
 
-	float base_dense_step = clamp(u_dense_step, 260.0, 760.0);
-	float base_empty_step = max(clamp(u_empty_step, base_dense_step * 2.0, 2600.0), base_dense_step);
-	float lighting_stride = max(u_lighting_stride, base_dense_step * 2.5);
-	float jitter = screen_jitter(FRAGCOORD.xy);
-	float t = t0 + base_dense_step * (0.10 + 0.20 * jitter);
-	float transmittance = 1.0;
-	vec3 radiance = vec3(0.0);
-	float optical_t_sum = 0.0;
-	float optical_weight = 0.0;
-	float dense_path = 0.0;
-	float mu = dot(rd, sun_dir);
-	float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
-	phase = min(phase * 4.0 * PI, 4.25);
-	float cached_sun_tau = 0.0;
-	float cached_sun_t = -BIG;
-
-	for (int i = 0; i < MAX_STEPS; i++) {
-		if (t >= t1 || transmittance <= 0.0) break;
-		float distance_lod = smoothstep(26000.0, 180000.0, t);
-		float step_scale = mix(1.0, 3.0, distance_lod);
-		float dense_step = min(base_dense_step * step_scale, 1700.0);
-		float empty_step = min(base_empty_step * step_scale, 6200.0);
-		float detail_weight = 1.0 - smoothstep(22000.0, 90000.0, t);
-		vec3 p = ro + rd * t;
-		float density = cloud_density(p, detail_weight);
-		if (density <= 0.0015) {
-			float skip_len = min(empty_step, t1 - t);
-			float probe_t = t + skip_len * 0.5;
-			if (cloud_density_light(ro + rd * probe_t) <= 0.0015) {
-				if (skip_len >= lighting_stride * 0.70) cached_sun_t = -BIG;
-				t += skip_len;
+		for (int i = 0; i < MAX_STEPS; i++) {
+			if (t >= t1 || transmittance <= 0.0) break;
+			float distance_lod = smoothstep(26000.0, 180000.0, t);
+			float step_scale = mix(1.0, 3.0, distance_lod);
+			float dense_step = min(base_dense_step * step_scale, 1700.0);
+			float empty_step = min(base_empty_step * step_scale, 6200.0);
+			float detail_weight = 1.0 - smoothstep(22000.0, 90000.0, t);
+			vec3 p = ro + rd * t;
+			float density = cloud_density(p, detail_weight);
+			if (density <= 0.0015) {
+				float skip_len = min(empty_step, t1 - t);
+				float probe_t = t + skip_len * 0.5;
+				if (cloud_density_light(ro + rd * probe_t) <= 0.0015) {
+					if (skip_len >= lighting_stride * 0.70) cached_sun_t = -BIG;
+					t += skip_len;
+					continue;
+				}
+				t += min(dense_step, skip_len * 0.34);
 				continue;
 			}
-			t += min(dense_step, skip_len * 0.34);
-			continue;
+
+			float step_len = min(dense_step, t1 - t);
+			float extinction_density = optical_density(density);
+			float optical = extinction_density * step_len * u_extinction;
+			float step_transmittance = exp(-optical);
+			float alpha_step = 1.0 - step_transmittance;
+			vec3 sample_pos = p + rd * (step_len * 0.5);
+			if (cached_sun_t < -BIG * 0.5 || (t - cached_sun_t) >= lighting_stride * step_scale) {
+				cached_sun_tau = cloud_sun_optical_depth(sample_pos, sun_dir);
+				cached_sun_t = t;
+			}
+			float sun_tau = cached_sun_tau + extinction_density * u_extinction * min(step_len, 520.0) * 0.24;
+			float sun_trans = exp(-sun_tau);
+			float sun_visible = planet_sun_visibility(sample_pos, sun_dir);
+			vec3 up = normalize(sample_pos);
+			float sun_elev = dot(up, sun_dir);
+			float twilight = smoothstep(-0.22, 0.10, sun_elev);
+			vec3 ambient = mix(vec3(0.00045, 0.00070, 0.00145), vec3(0.135, 0.180, 0.245) * u_ambient_strength, twilight);
+			float core = smoothstep(0.10, 0.75, density);
+			float sky_access = mix(0.08, 0.86, pow(max(sun_trans, 0.0), 0.28));
+			sky_access *= mix(1.0, 0.42, core * (1.0 - sqrt(max(sun_trans, 0.0))));
+			float powder = 1.0 - exp(-density * 3.4);
+			vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
+				* (0.045 + phase * 0.62) * (0.56 + powder * 0.48) * u_direct_light_strength;
+			vec3 multiple = cloud_multiple_scattering(sun_tau, density, mu, sun_visible, twilight);
+			vec3 sample_light = ambient * sky_access + direct + multiple;
+			float electric = lightning_illumination(sample_pos);
+			if (electric > 0.001) sample_light += vec3(0.42, 0.62, 1.0) * electric * (0.20 + powder * 0.46);
+			float contribution = transmittance * alpha_step;
+			radiance += contribution * sample_light;
+			optical_t_sum += contribution * (t + step_len * 0.5);
+			optical_weight += contribution;
+			transmittance *= step_transmittance;
+			float core_presence = smoothstep(0.16, 0.52, density);
+			dense_path += step_len * core_presence;
+			if (dense_path >= u_opaque_core_path) {
+				radiance += transmittance * sample_light;
+				transmittance = 0.0;
+				break;
+			}
+			if (transmittance < u_transmittance_cutoff) {
+				transmittance = 0.0;
+				break;
+			}
+			t += step_len;
 		}
 
-		float step_len = min(dense_step, t1 - t);
-		float extinction_density = optical_density(density);
-		float optical = extinction_density * step_len * u_extinction;
-		float step_transmittance = exp(-optical);
-		float alpha_step = 1.0 - step_transmittance;
-		vec3 sample_pos = p + rd * (step_len * 0.5);
-		if (cached_sun_t < -BIG * 0.5 || (t - cached_sun_t) >= lighting_stride * step_scale) {
-			cached_sun_tau = cloud_sun_optical_depth(sample_pos, sun_dir);
-			cached_sun_t = t;
+		float alpha = 1.0 - transmittance;
+		if (alpha < 0.002) discard;
+		vec3 cloud_color = radiance / max(alpha, 1e-4);
+		if (optical_weight > 1e-5) {
+			float representative_t = optical_t_sum / optical_weight;
+			vec4 aerial = cloud_aerial_fog(ro, ro + rd * representative_t, sun_dir);
+			cloud_color = mix(cloud_color, aerial.rgb, aerial.a);
 		}
-		float sun_tau = cached_sun_tau + extinction_density * u_extinction * min(step_len, 520.0) * 0.24;
-		float sun_trans = exp(-sun_tau);
-		float sun_visible = planet_sun_visibility(sample_pos, sun_dir);
-		vec3 up = normalize(sample_pos);
-		float sun_elev = dot(up, sun_dir);
-		float twilight = smoothstep(-0.22, 0.10, sun_elev);
-		vec3 ambient = mix(vec3(0.00045, 0.00070, 0.00145), vec3(0.135, 0.180, 0.245) * u_ambient_strength, twilight);
-		float core = smoothstep(0.10, 0.75, density);
-		float sky_access = mix(0.08, 0.86, pow(max(sun_trans, 0.0), 0.28));
-		sky_access *= mix(1.0, 0.42, core * (1.0 - sqrt(max(sun_trans, 0.0))));
-		float powder = 1.0 - exp(-density * 3.4);
-		vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
-			* (0.045 + phase * 0.62) * (0.56 + powder * 0.48) * u_direct_light_strength;
-		vec3 multiple = cloud_multiple_scattering(sun_tau, density, mu, sun_visible, twilight);
-		vec3 sample_light = ambient * sky_access + direct + multiple;
-		float electric = lightning_illumination(sample_pos);
-		if (electric > 0.001) sample_light += vec3(0.42, 0.62, 1.0) * electric * (0.20 + powder * 0.46);
-		float contribution = transmittance * alpha_step;
-		radiance += contribution * sample_light;
-		optical_t_sum += contribution * (t + step_len * 0.5);
-		optical_weight += contribution;
-		transmittance *= step_transmittance;
-		float core_presence = smoothstep(0.16, 0.52, density);
-		dense_path += step_len * core_presence;
-		if (dense_path >= u_opaque_core_path) {
-			radiance += transmittance * sample_light;
-			transmittance = 0.0;
-			break;
-		}
-		if (transmittance < u_transmittance_cutoff) {
-			transmittance = 0.0;
-			break;
-		}
-		t += step_len;
+		ALBEDO = cloud_color * alpha;
+		ALPHA = alpha;
 	}
-
-	float alpha = 1.0 - transmittance;
-	if (alpha < 0.002) discard;
-	vec3 cloud_color = radiance / max(alpha, 1e-4);
-	if (optical_weight > 1e-5) {
-		float representative_t = optical_t_sum / optical_weight;
-		vec4 aerial = cloud_aerial_fog(ro, ro + rd * representative_t, sun_dir);
-		cloud_color = mix(cloud_color, aerial.rgb, aerial.a);
-	}
-	ALBEDO = cloud_color * alpha;
-	ALPHA = alpha;
 }
