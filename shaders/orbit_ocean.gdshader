@@ -51,10 +51,13 @@ void fragment() {
 	float broad = surface_vnoise(p * 0.000018 + vec3(31.0, -12.0, 7.0)) - 0.5;
 	base *= 1.0 + broad * 0.075;
 
+	float cloud_shadow = cloud_shadow_amount(v_planet, normalize(u_sun_dir));
+	base *= mix(vec3(1.0), vec3(0.43, 0.52, 0.62), cloud_shadow * 0.84);
+
 	ALBEDO = base;
 	NORMAL = normalize((VIEW_MATRIX * vec4(up, 0.0)).xyz);
-	ROUGHNESS = mix(0.12, 0.055, deep_t);
-	SPECULAR = 0.5;
+	ROUGHNESS = mix(0.12, 0.055, deep_t) + cloud_shadow * 0.025;
+	SPECULAR = 0.5 * (1.0 - cloud_shadow * 0.88);
 	METALLIC = 0.0;
 	FOG = aerial_fog(camera_planet, v_planet);
 }
