@@ -8,7 +8,7 @@
 
 uniform sampler2DArray u_cloud_weather_map : filter_linear, repeat_disable;
 uniform float u_cloud_weather_face_res = 0.0;
-uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.88;
+uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.78;
 uniform float u_cloud_shadow_low_altitude = 2800.0;
 uniform float u_cloud_shadow_mid_altitude = 8200.0;
 uniform float u_cloud_shadow_high_altitude = 13200.0;
@@ -23,39 +23,21 @@ vec3 cloud_shadow_face_uv(vec3 dir) {
 
 	if (ad.x >= ad.y && ad.x >= ad.z) {
 		if (d.x >= 0.0) {
-			face = 0;
-			axis = vec3(1.0, 0.0, 0.0);
-			right = vec3(0.0, 0.0, -1.0);
-			up = vec3(0.0, 1.0, 0.0);
+			face = 0; axis = vec3(1.0, 0.0, 0.0); right = vec3(0.0, 0.0, -1.0); up = vec3(0.0, 1.0, 0.0);
 		} else {
-			face = 1;
-			axis = vec3(-1.0, 0.0, 0.0);
-			right = vec3(0.0, 0.0, 1.0);
-			up = vec3(0.0, 1.0, 0.0);
+			face = 1; axis = vec3(-1.0, 0.0, 0.0); right = vec3(0.0, 0.0, 1.0); up = vec3(0.0, 1.0, 0.0);
 		}
 	} else if (ad.y >= ad.z) {
 		if (d.y >= 0.0) {
-			face = 2;
-			axis = vec3(0.0, 1.0, 0.0);
-			right = vec3(-1.0, 0.0, 0.0);
-			up = vec3(0.0, 0.0, 1.0);
+			face = 2; axis = vec3(0.0, 1.0, 0.0); right = vec3(-1.0, 0.0, 0.0); up = vec3(0.0, 0.0, 1.0);
 		} else {
-			face = 3;
-			axis = vec3(0.0, -1.0, 0.0);
-			right = vec3(-1.0, 0.0, 0.0);
-			up = vec3(0.0, 0.0, -1.0);
+			face = 3; axis = vec3(0.0, -1.0, 0.0); right = vec3(-1.0, 0.0, 0.0); up = vec3(0.0, 0.0, -1.0);
 		}
 	} else {
 		if (d.z >= 0.0) {
-			face = 4;
-			axis = vec3(0.0, 0.0, 1.0);
-			right = vec3(1.0, 0.0, 0.0);
-			up = vec3(0.0, 1.0, 0.0);
+			face = 4; axis = vec3(0.0, 0.0, 1.0); right = vec3(1.0, 0.0, 0.0); up = vec3(0.0, 1.0, 0.0);
 		} else {
-			face = 5;
-			axis = vec3(0.0, 0.0, -1.0);
-			right = vec3(-1.0, 0.0, 0.0);
-			up = vec3(0.0, 1.0, 0.0);
+			face = 5; axis = vec3(0.0, 0.0, -1.0); right = vec3(-1.0, 0.0, 0.0); up = vec3(0.0, 1.0, 0.0);
 		}
 	}
 
@@ -81,56 +63,50 @@ vec2 cloud_shadow_sphere_hit(vec3 ro, vec3 rd, float radius) {
 	float b = dot(ro, rd);
 	float c = dot(ro, ro) - radius * radius;
 	float h = b * b - c;
-	if (h < 0.0) {
-		return vec2(1e20, -1e20);
-	}
+	if (h < 0.0) return vec2(1e20, -1e20);
 	float s = sqrt(h);
 	return vec2(-b - s, -b + s);
 }
 
 float cloud_shadow_layer(vec3 p, vec3 sun_dir, float altitude, int mode) {
 	float shell_radius = u_planet_radius + altitude;
-	if (length(p) >= shell_radius - 20.0) {
-		return 0.0;
-	}
+	if (length(p) >= shell_radius - 20.0) return 0.0;
 	vec2 hit = cloud_shadow_sphere_hit(p, sun_dir, shell_radius);
-	if (hit.y <= 0.0) {
-		return 0.0;
-	}
+	if (hit.y <= 0.0) return 0.0;
 	vec4 w = cloud_shadow_weather(normalize(p + sun_dir * hit.y));
-	if (mode == 0) {
-		return w.r * mix(0.72, 1.0, w.g);
-	}
-	if (mode == 1) {
-		return max(w.g * 0.96, w.r * 0.30);
-	}
+	if (mode == 0) return w.r * mix(0.72, 1.0, w.g);
+	if (mode == 1) return max(w.g * 0.96, w.r * 0.30);
 	return w.b * 0.62;
 }
 
-/// Fraction of direct sunlight surviving the cloud field between `p` and Helion.
-/// Works from the surface and from atmosphere samples below the cloud tops.
+/// Atmosphere/general point visibility. The radial coordinate of `p` matters here
+/// because air samples can actually be between cloud layers.
 float cloud_sun_visibility(vec3 p, vec3 sun_dir) {
-	if (u_cloud_weather_face_res < 1.0) {
-		return 1.0;
-	}
+	if (u_cloud_weather_face_res < 1.0) return 1.0;
 	vec3 s = normalize(sun_dir);
 	vec3 up = normalize(p);
-	// The planet's own shadow is handled by the normal light/atmosphere path. This
-	// function only represents cloud occlusion on the daylight side.
-	if (dot(up, s) <= -0.04) {
-		return 1.0;
-	}
-
+	if (dot(up, s) <= -0.04) return 1.0;
 	float low = cloud_shadow_layer(p, s, u_cloud_shadow_low_altitude, 0);
 	float mid = cloud_shadow_layer(p, s, u_cloud_shadow_mid_altitude, 1);
 	float high = cloud_shadow_layer(p, s, u_cloud_shadow_high_altitude, 2);
 	float envelope = max(low, max(mid, high));
-	// Beer-like remap: scattered small values stay subtle, mature decks/storms can
-	// almost extinguish direct sun without turning the whole scene pitch black.
-	float occlusion = 1.0 - exp(-envelope * 2.35);
-	return clamp(1.0 - occlusion * u_cloud_shadow_strength, 0.08, 1.0);
+	float occlusion = 1.0 - exp(-envelope * 2.05);
+	return clamp(1.0 - occlusion * u_cloud_shadow_strength, 0.12, 1.0);
+}
+
+/// Surface visibility must NOT use the actual terrain radius. Doing that made the
+/// fixed cloud-layer intersections move with mountain elevation and produced the
+/// topographic contour/terracing artifact seen from orbit. Project from mean sea
+/// level instead, so the shadow footprint depends only on geographic position.
+float cloud_surface_sun_visibility(vec3 surface_p, vec3 sun_dir) {
+	vec3 mean_surface = normalize(surface_p) * (u_planet_radius + 2.0);
+	return cloud_sun_visibility(mean_surface, sun_dir);
 }
 
 float cloud_shadow_amount(vec3 p, vec3 sun_dir) {
 	return 1.0 - cloud_sun_visibility(p, sun_dir);
+}
+
+float cloud_surface_shadow_amount(vec3 p, vec3 sun_dir) {
+	return 1.0 - cloud_surface_sun_visibility(p, sun_dir);
 }
