@@ -74,8 +74,11 @@ func _setup_environment() -> void:
 	sky_mat.set_shader_parameter("u_atmosphere_radius", cfg.planet_radius + cfg.atmosphere_height)
 	sky.sky_material = sky_mat
 	env.sky = sky
+	# Planet materials calculate their own local sky irradiance and explicitly
+	# disable Godot ambient. Keep a modest global sky term for ordinary scene
+	# objects instead of the old 85% contribution that washed out the terminator.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_sky_contribution = 0.85
+	env.ambient_light_sky_contribution = 0.25
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.ssao_enabled = false
 	we.environment = env
@@ -85,8 +88,14 @@ func _setup_environment() -> void:
 	sun.light_energy = 1.15
 	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 320.0
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	# Three independent scales now cooperate:
+	#   Godot cascades -> nearby terrain/structures,
+	#   shader sphere test -> planetary horizon/night,
+	#   weather optical field -> cloud shadows.
+	# Twelve kilometres is enough for local mountains without asking a shadow map
+	# to represent the million-metre planet.
+	sun.directional_shadow_max_distance = 12000.0
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	add_child(sun)
 
 func _setup_weather() -> void:
