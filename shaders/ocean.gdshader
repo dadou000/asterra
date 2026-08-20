@@ -88,11 +88,17 @@ void fragment() {
 	float foam = smoothstep(1.6, 0.0, depth) * smoothstep(0.35, 0.85, crest) * (1.0 - smoothstep(1500.0, 12000.0, dist));
 	base = mix(base, u_foam, foam * 0.75);
 
+	float cloud_visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+	float cloud_shadow = 1.0 - cloud_visibility;
+	base *= mix(vec3(1.0), vec3(0.72, 0.78, 0.86), cloud_shadow * 0.58);
+
 	ALBEDO = base;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	ROUGHNESS = mix(0.04, 0.13, smoothstep(1500.0, 60000.0, dist)) + clamp(length(slope) * 0.22, 0.0, 0.12) + foam * 0.45;
 	SPECULAR = 0.5;
 	METALLIC = 0.0;
+	AO = mix(1.0, 0.24, cloud_shadow);
+	AO_LIGHT_AFFECT = 1.0;
 
 	float shore;
 	if (v_ocean > 0.5) {
