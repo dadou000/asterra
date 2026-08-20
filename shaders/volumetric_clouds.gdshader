@@ -21,7 +21,7 @@ uniform vec3 u_sun_dir = vec3(1.0, 0.15, 0.3);
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
 uniform float u_cloud_outer_radius = 1018500.0;
-uniform float u_orbit_lod_start = 22000.0;
+uniform float u_orbit_lod_start = 12000.0;
 uniform float u_orbit_shell_altitude = 8200.0;
 
 uniform float u_extinction = 0.00215;
@@ -127,9 +127,16 @@ float cloud_density(vec3 p, float detail_weight) {
 	float detail_n = 0.50;
 	if (detail_weight > 0.015) detail_n = texture(u_detail_noise, q * 0.000052 + vec3(0.17, 0.43, 0.71)).r;
 
+	// Warp the vertical coordinate with the same 3D structure that shapes the
+	// cloud body. Without this, broad overcast fields reduce to concentric spherical
+	// altitude shells when viewed from inside/above the layer.
+	float vertical_warp = (broad_n - 0.5) * 900.0 + (middle_n - 0.5) * 320.0;
+	vertical_warp *= mix(1.0, 0.55, convective);
+	float shaped_altitude = altitude + vertical_warp;
+
 	float low_density = 0.0;
-	if (altitude >= cloud_base && altitude <= low_top) {
-		float h01 = remap01(altitude, cloud_base, low_top);
+	if (altitude >= cloud_base - 700.0 && altitude <= low_top + 700.0) {
+		float h01 = remap01(shaped_altitude, cloud_base, low_top);
 		float profile = vertical_low_profile(h01, convective);
 		float overcast = smoothstep(0.68, 0.96, coverage);
 		float threshold = mix(0.73, 0.36, coverage) - convective * (0.08 + 0.11 * h01);
@@ -147,8 +154,8 @@ float cloud_density(vec3 p, float detail_weight) {
 
 	float high_start = mix(8200.0, 9800.0, 1.0 - high_cov);
 	float high_density = 0.0;
-	if (altitude >= high_start && altitude <= 17000.0 && high_cov > 0.01) {
-		float hhi = remap01(altitude, high_start, 17000.0);
+	if (altitude >= high_start - 500.0 && altitude <= 17500.0 && high_cov > 0.01) {
+		float hhi = remap01(shaped_altitude, high_start, 17000.0);
 		float profile_hi = smoothstep(0.0, 0.10, hhi) * (1.0 - smoothstep(0.72, 1.0, hhi));
 		float wispy = texture(u_base_noise, q * vec3(0.0000017, 0.0000027, 0.0000017) + vec3(0.31, 0.07, 0.53)).r;
 		float filaments = 0.50;
@@ -243,9 +250,11 @@ float screen_jitter(vec2 p) {
 }
 
 float planet_sun_visibility(vec3 p, vec3 sun_dir) {
+	float local_sun = dot(normalize(p), sun_dir);
+	if (local_sun <= -0.012) return 0.0;
 	vec2 hit = sphere_hit(p + sun_dir * 4.0, sun_dir, u_planet_radius + 20.0);
 	if (hit.x > 0.0 && hit.y > 0.0) return 0.0;
-	return 1.0;
+	return smoothstep(-0.012, 0.045, local_sun);
 }
 
 vec3 cloud_multiple_scattering(float sun_tau, float density, float mu, float sun_visible, float twilight) {
@@ -274,15 +283,19 @@ vec4 cloud_aerial_fog(vec3 cam, vec3 frag, vec3 sun_dir) {
 	vec3 delta = frag - cam;
 	float seg = length(delta);
 	if (seg < 250.0) return vec4(0.0);
-	vec3 mid = normalize(cam + delta * 0.5);
-	float mid_height = max(length(cam + delta * 0.5) - u_planet_radius, 0.0);
+	vec3 probe = cam + delta * 0.5;
+	vec3 mid = normalize(probe);
+	float mid_height = max(length(probe) - u_planet_radius, 0.0);
 	float air = exp(-mid_height / 8000.0);
 	float amount = clamp(1.0 - exp(-seg * air * 1.25e-5), 0.0, 0.82);
+	float local_sun = dot(mid, sun_dir);
+	float daylight = smoothstep(-0.08, 0.055, local_sun) * planet_sun_visibility(probe, sun_dir);
+	if (daylight <= 0.001) return vec4(0.0);
 	float mu = dot(normalize(delta), sun_dir);
-	vec3 tint = mix(vec3(0.28, 0.43, 0.66), vec3(0.78, 0.70, 0.58), smoothstep(-0.12, 0.35, mu));
+	vec3 tint = mix(vec3(0.20, 0.34, 0.58), vec3(0.78, 0.70, 0.58), smoothstep(-0.12, 0.35, mu));
 	float horizon = 1.0 - abs(dot(mid, normalize(delta)));
-	tint *= 0.42 + horizon * 0.34;
-	return vec4(tint, amount * 0.52);
+	tint *= (0.40 + horizon * 0.34) * daylight;
+	return vec4(tint, amount * 0.52 * daylight);
 }
 
 void orbit_cloud(vec3 ro, vec3 rd, float scene_dist, vec3 sun_dir, out vec3 color, out float alpha) {
@@ -318,10 +331,11 @@ void orbit_cloud(vec3 ro, vec3 rd, float scene_dist, vec3 sun_dir, out vec3 colo
 	}
 
 	float sun_elev = dot(d, sun_dir);
-	float twilight = smoothstep(-0.20, 0.08, sun_elev);
+	float sun_visible = planet_sun_visibility(p, sun_dir);
+	float twilight = smoothstep(-0.16, 0.07, sun_elev) * sun_visible;
 	float front = pow(max(dot(-rd, sun_dir), 0.0), 10.0);
 	float dense = smoothstep(0.38, 0.92, body);
-	vec3 night = vec3(0.012, 0.018, 0.032);
+	vec3 night = vec3(0.0010, 0.0018, 0.0038);
 	vec3 day = vec3(0.73, 0.76, 0.79) * (0.40 + 0.60 * sqrt(max(sun_elev, 0.0)));
 	day *= mix(1.0, 0.68, dense);
 	day += vec3(1.0, 0.88, 0.72) * front * 0.34;
@@ -379,7 +393,7 @@ void fragment() {
 		float base_empty_step = max(clamp(u_empty_step, base_dense_step * 2.0, 2600.0), base_dense_step);
 		float lighting_stride = max(u_lighting_stride, base_dense_step * 2.5);
 		float jitter = screen_jitter(FRAGCOORD.xy);
-		float t = t0 + base_dense_step * (0.10 + 0.20 * jitter);
+		float t = t0 + base_dense_step * (0.05 + 0.90 * jitter);
 		float transmittance = 1.0;
 		vec3 radiance = vec3(0.0);
 		float optical_t_sum = 0.0;
@@ -427,13 +441,13 @@ void fragment() {
 			float sun_visible = planet_sun_visibility(sample_pos, sun_dir);
 			vec3 up = normalize(sample_pos);
 			float sun_elev = dot(up, sun_dir);
-			float twilight = smoothstep(-0.22, 0.10, sun_elev);
-			vec3 ambient = mix(vec3(0.00045, 0.00070, 0.00145), vec3(0.135, 0.180, 0.245) * u_ambient_strength, twilight);
+			float twilight = smoothstep(-0.12, 0.08, sun_elev) * sun_visible;
+			vec3 ambient = mix(vec3(0.00020, 0.00035, 0.00075), vec3(0.135, 0.180, 0.245) * u_ambient_strength, twilight);
 			float core = smoothstep(0.10, 0.75, density);
 			float sky_access = mix(0.08, 0.86, pow(max(sun_trans, 0.0), 0.28));
 			sky_access *= mix(1.0, 0.42, core * (1.0 - sqrt(max(sun_trans, 0.0))));
 			float powder = 1.0 - exp(-density * 3.4);
-			vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
+			vec3 direct = vec3(1.0, 0.92, 0.80) * twilight * sun_trans
 				* (0.045 + phase * 0.62) * (0.56 + powder * 0.48) * u_direct_light_strength;
 			vec3 multiple = cloud_multiple_scattering(sun_tau, density, mu, sun_visible, twilight);
 			vec3 sample_light = ambient * sky_access + direct + multiple;
