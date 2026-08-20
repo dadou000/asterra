@@ -97,15 +97,31 @@ void fragment() {
 		albedo = mix(albedo, depth_color(chunk_depth) * 0.30, uv_glyph(UV) * u_debug_uv);
 	}
 
-	// Project from mean sea level, not the actual terrain radius. This prevents
-	// mountain elevation from turning the cloud shadow into topographic contours.
-	float cloud_shadow = cloud_surface_shadow_amount(v_planet, normalize(u_sun_dir));
-	vec3 shadow_tint = vec3(0.58, 0.64, 0.72);
-	albedo *= mix(vec3(1.0), shadow_tint, cloud_shadow * 0.58);
-
+	// Keep material colour physically stable. Cloud cover now attenuates only the
+	// directional light in light(), leaving sky/ambient illumination intact.
 	ALBEDO = albedo;
 	ROUGHNESS = mix(0.94, 0.82, rock);
-	SPECULAR = 0.12 * (1.0 - cloud_shadow * 0.45);
+	SPECULAR = 0.12;
 	METALLIC = 0.0;
 	FOG = aerial_fog(camera_planet, v_planet);
+}
+
+void light() {
+	float visibility = 1.0;
+	if (LIGHT_IS_DIRECTIONAL) {
+		visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+	}
+
+	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
+
+	// Terrain specular is deliberately subdued, but it must also disappear under
+	// an opaque cloud deck instead of shining through the projected shadow.
+	if (ndotl > 0.0) {
+		vec3 h = normalize(LIGHT + VIEW);
+		float ndoth = max(dot(NORMAL, h), 0.0);
+		float spec_power = mix(96.0, 5.0, clamp(ROUGHNESS, 0.0, 1.0));
+		float spec = pow(ndoth, spec_power) * (1.0 - ROUGHNESS) * 0.22;
+		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * SPECULAR_AMOUNT;
+	}
 }
