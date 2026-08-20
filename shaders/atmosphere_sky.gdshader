@@ -12,11 +12,9 @@ uniform float u_mie_scale_height = 1200.0;
 uniform float u_mie_g = 0.758;
 uniform float u_sun_intensity = 22.0;
 
+#include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
 
-// Sky is full-screen whenever geometry is absent. Six primary and two solar
-// samples are enough for the broad atmosphere; a stable direction-space jitter
-// hides the discrete integration planes and leaves GPU budget for cloud volume.
 const int PRIMARY_STEPS = 6;
 const int LIGHT_STEPS = 2;
 
@@ -55,40 +53,40 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float od_mie = 0.0;
 	float t = ray_start;
 	float jitter = ray_jitter(dir);
+	float cached_cloud_vis = 1.0;
 
 	for (int i = 0; i < PRIMARY_STEPS; i++) {
 		float sample_t = t + step_len * mix(0.32, 0.68, jitter);
 		vec3 pos = origin + dir * sample_t;
-		float height = length(pos) - u_planet_radius;
+		float height = max(length(pos) - u_planet_radius, 0.0);
 		float step_rlh = exp(-height / u_rayleigh_scale_height) * step_len;
 		float step_mie = exp(-height / u_mie_scale_height) * step_len;
 		od_rlh += step_rlh;
 		od_mie += step_mie;
 
-		vec2 light_hit = sphere_intersect(pos, sun_dir, u_atmosphere_radius);
-		float light_step_len = light_hit.y / float(LIGHT_STEPS);
-		float light_od_rlh = 0.0;
-		float light_od_mie = 0.0;
-		float lt = 0.0;
-		bool occluded = false;
-		for (int j = 0; j < LIGHT_STEPS; j++) {
-			vec3 light_pos = pos + sun_dir * (lt + light_step_len * 0.5);
-			float light_height = length(light_pos) - u_planet_radius;
-			if (light_height < 0.0) {
-				occluded = true;
-				break;
+		float planet_vis = planet_direct_sun_visibility(pos, sun_dir, u_planet_radius);
+		if (planet_vis > 0.001) {
+			vec2 light_hit = sphere_intersect(pos, sun_dir, u_atmosphere_radius);
+			float light_step_len = max(light_hit.y, 0.0) / float(LIGHT_STEPS);
+			float light_od_rlh = 0.0;
+			float light_od_mie = 0.0;
+			float lt = 0.0;
+			for (int j = 0; j < LIGHT_STEPS; j++) {
+				vec3 light_pos = pos + sun_dir * (lt + light_step_len * 0.5);
+				float light_height = max(length(light_pos) - u_planet_radius, 0.0);
+				light_od_rlh += exp(-light_height / u_rayleigh_scale_height) * light_step_len;
+				light_od_mie += exp(-light_height / u_mie_scale_height) * light_step_len;
+				lt += light_step_len;
 			}
-			light_od_rlh += exp(-light_height / u_rayleigh_scale_height) * light_step_len;
-			light_od_mie += exp(-light_height / u_mie_scale_height) * light_step_len;
-			lt += light_step_len;
-		}
 
-		if (!occluded) {
+			// Updating every other primary sample is enough to preserve broad
+			// crepuscular columns while halving the cloud-light lookup cost.
+			if ((i & 1) == 0) {
+				cached_cloud_vis = cloud_sun_visibility(pos, sun_dir);
+			}
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
 				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)));
-			// Dynamic cloud occlusion of atmospheric inscatter creates actual
-			// crepuscular columns rather than a screen-space radial blur.
-			attn *= cloud_sun_visibility(pos, sun_dir);
+			attn *= planet_vis * cached_cloud_vis;
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;
 		}
@@ -109,7 +107,8 @@ void sky() {
 		float cos_angle = dot(dir, sun_dir);
 		float sun_radius = max(LIGHT0_SIZE, 0.02);
 		float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.25), cos_angle);
-		col += disc * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
+		float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
+		col += disc * visible * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
 	}
 	COLOR = 1.0 - exp(-col);
 }
