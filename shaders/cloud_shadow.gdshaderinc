@@ -1,14 +1,14 @@
 /// Cheap planet-space cloud occlusion shared by terrain, ocean and atmosphere.
 ///
-/// This deliberately does not re-raymarch the full 3D cloud density. The runtime
-/// weather texture already contains the broad physical cloud envelope. Projecting
-/// three representative cloud layers along the sun direction gives stable ground
-/// shadows and atmospheric light shafts for a few texture reads per fragment.
-/// Fine cloud erosion remains in the volumetric renderer where it belongs.
+/// The visible cloud renderer is a fullscreen volume and cannot enter Godot's
+/// directional shadow map. This helper therefore projects the dynamic weather
+/// envelope onto a few representative cloud shells along Helion. Surface shaders
+/// use the result only in their `light()` function, so clouds block direct sun
+/// rather than painting the material/albedo darker.
 
 uniform sampler2DArray u_cloud_weather_map : filter_linear, repeat_disable;
 uniform float u_cloud_weather_face_res = 0.0;
-uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.78;
+uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.96;
 uniform float u_cloud_shadow_low_altitude = 2800.0;
 uniform float u_cloud_shadow_mid_altitude = 8200.0;
 uniform float u_cloud_shadow_high_altitude = 13200.0;
@@ -73,31 +73,38 @@ float cloud_shadow_layer(vec3 p, vec3 sun_dir, float altitude, int mode) {
 	if (length(p) >= shell_radius - 20.0) return 0.0;
 	vec2 hit = cloud_shadow_sphere_hit(p, sun_dir, shell_radius);
 	if (hit.y <= 0.0) return 0.0;
+
 	vec4 w = cloud_shadow_weather(normalize(p + sun_dir * hit.y));
-	if (mode == 0) return w.r * mix(0.72, 1.0, w.g);
-	if (mode == 1) return max(w.g * 0.96, w.r * 0.30);
-	return w.b * 0.62;
+	float low = smoothstep(0.16, 0.82, w.r) * mix(0.70, 1.0, w.g);
+	float convective = smoothstep(0.12, 0.78, max(w.g, w.r * 0.28));
+	float high = smoothstep(0.12, 0.80, w.b) * 0.78;
+	if (mode == 0) return low;
+	if (mode == 1) return convective;
+	return high;
 }
 
-/// Atmosphere/general point visibility. The radial coordinate of `p` matters here
-/// because air samples can actually be between cloud layers.
+/// Visibility of Helion from an arbitrary atmospheric point.
 float cloud_sun_visibility(vec3 p, vec3 sun_dir) {
 	if (u_cloud_weather_face_res < 1.0) return 1.0;
 	vec3 s = normalize(sun_dir);
 	vec3 up = normalize(p);
+	// The planet itself owns the night side; do not fabricate a cloud shadow there.
 	if (dot(up, s) <= -0.04) return 1.0;
+
 	float low = cloud_shadow_layer(p, s, u_cloud_shadow_low_altitude, 0);
 	float mid = cloud_shadow_layer(p, s, u_cloud_shadow_mid_altitude, 1);
 	float high = cloud_shadow_layer(p, s, u_cloud_shadow_high_altitude, 2);
-	float envelope = max(low, max(mid, high));
-	float occlusion = 1.0 - exp(-envelope * 2.05);
-	return clamp(1.0 - occlusion * u_cloud_shadow_strength, 0.12, 1.0);
+
+	// Use a soft union rather than max() so overlapping low/mid/high decks become
+	// genuinely optically thick while isolated wisps retain partial transmission.
+	float optical = low * 1.85 + mid * 1.55 + high * 0.95;
+	float occlusion = 1.0 - exp(-optical);
+	return clamp(1.0 - occlusion * u_cloud_shadow_strength, 0.035, 1.0);
 }
 
-/// Surface visibility must NOT use the actual terrain radius. Doing that made the
-/// fixed cloud-layer intersections move with mountain elevation and produced the
-/// topographic contour/terracing artifact seen from orbit. Project from mean sea
-/// level instead, so the shadow footprint depends only on geographic position.
+/// Surface visibility is projected from the mean sphere, not actual terrain
+/// elevation. That keeps the cloud footprint geographical and prevents mountain
+/// contours from moving the shadow lookup between fixed cloud shells.
 float cloud_surface_sun_visibility(vec3 surface_p, vec3 sun_dir) {
 	vec3 mean_surface = normalize(surface_p) * (u_planet_radius + 2.0);
 	return cloud_sun_visibility(mean_surface, sun_dir);
