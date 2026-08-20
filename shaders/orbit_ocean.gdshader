@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 /// Orbit-only ocean shell.
 
 #include "res://shaders/atmosphere.gdshaderinc"
@@ -38,16 +38,18 @@ void fragment() {
 	float broad = surface_vnoise(p * 0.000018 + vec3(31.0, -12.0, 7.0)) - 0.5;
 	base *= 1.0 + broad * 0.075;
 
-	float cloud_visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
-	float cloud_shadow = 1.0 - cloud_visibility;
-	base *= mix(vec3(1.0), vec3(0.72, 0.78, 0.86), cloud_shadow * 0.60);
+	vec3 sun_dir = normalize(u_sun_dir);
+	float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
+	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
+	float sky_access = mix(0.30, 1.0, sqrt(clamp(cloud_visibility, 0.0, 1.0)));
 
 	ALBEDO = base;
+	EMISSION = base * skylight * sky_access;
 	NORMAL = normalize((VIEW_MATRIX * vec4(up, 0.0)).xyz);
 	ROUGHNESS = mix(0.12, 0.055, deep_t);
 	SPECULAR = 0.5;
 	METALLIC = 0.0;
-	AO = mix(1.0, 0.26, cloud_shadow);
+	AO = 1.0;
 	AO_LIGHT_AFFECT = 1.0;
 	FOG = aerial_fog(camera_planet, v_planet);
 }
@@ -55,7 +57,10 @@ void fragment() {
 void light() {
 	float visibility = 1.0;
 	if (LIGHT_IS_DIRECTIONAL) {
-		visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+		vec3 sun_dir = normalize(u_sun_dir);
+		float planet_visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
+		float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
+		visibility = planet_visibility * cloud_visibility;
 	}
 
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
