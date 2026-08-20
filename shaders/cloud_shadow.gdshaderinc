@@ -17,7 +17,7 @@ uniform float u_cloud_weather_face_res = 0.0;
 uniform float u_cloud_shadow_strength : hint_range(0.0, 2.0) = 1.0;
 uniform float u_cloud_shadow_extinction = 0.00032;
 uniform float u_cloud_shadow_outer_altitude = 18500.0;
-uniform float u_cloud_shadow_max_distance = 48000.0;
+uniform float u_cloud_shadow_max_distance = 64000.0;
 
 const int CLOUD_SHADOW_STEPS = 6;
 
@@ -97,10 +97,9 @@ float cloud_shadow_macro_density(vec3 p) {
 	return cloud_macro_density(w, altitude, low_n, high_n);
 }
 
-/// Cloud-only Helion transmission. The quadratic segment layout concentrates
-/// samples near the receiver (where projected shadow position matters most) and
-/// grows them with distance. This is substantially more stable at grazing sun
-/// angles than four uniformly spaced samples across an entire spherical shell.
+/// Cloud-only Helion transmission. A cubic segment layout puts several samples
+/// through the first few kilometres above the receiver (critical for shallow
+/// stratus) while still reaching long sunset shadows with only six samples.
 float cloud_sun_visibility(vec3 p, vec3 sun_dir) {
 	if (u_cloud_weather_face_res < 1.0) return 1.0;
 
@@ -120,7 +119,7 @@ float cloud_sun_visibility(vec3 p, vec3 sun_dir) {
 
 	for (int i = 0; i < CLOUD_SHADOW_STEPS; i++) {
 		float u1 = float(i + 1) / float(CLOUD_SHADOW_STEPS);
-		float next_t = max_dist * u1 * u1;
+		float next_t = max_dist * u1 * u1 * u1;
 		float segment = max(next_t - previous, 1.0);
 		float sample_t = previous + segment * 0.5;
 		float density = cloud_shadow_macro_density(p + s * sample_t);
