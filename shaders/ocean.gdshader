@@ -2,18 +2,19 @@ shader_type spatial;
 render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx;
 /// Free water: oceans and lakes.
 ///
-/// The streamed mesh only carries the water surface geometry. It no longer decides
-/// the ocean coastline: sea-level fragments are clipped against the same planet-
-/// space coastline clipmap used by terrain/orbit rendering. That removes the
-/// stair-step shoreline caused by interpolating a 32x32 chunk's vertex depths.
-/// Lakes keep the signed per-vertex depth path because each lake has its own level.
+/// The streamed mesh only carries the water surface geometry. Sea-level shoreline
+/// visibility comes from the camera-centred planet-space coastline clipmap where
+/// it is available. Outside that local authoritative region we fall back to the
+/// mesh's signed water-minus-ground field, never to the coarse orbit texture.
+/// This keeps low-altitude water attached to the actual streamed terrain while
+/// preserving an LOD-independent coast around the player.
 ///
 /// COLOR.b tags sea-level ocean vertices. Once the global ocean shell is active
 /// those fragments are discarded, while elevated lake water remains rendered by
 /// the streamed mesh.
 ///
 /// COLOR.r stores the fourth-root magnitude of water-minus-ground height and
-/// COLOR.a stores its sign for the lake/local-depth path.
+/// COLOR.a stores its sign for the local signed-depth fallback and lakes.
 
 instance uniform float morph : hint_range(0.0, 1.0) = 0.0;
 
@@ -75,13 +76,28 @@ void fragment() {
 	float dist = length(VERTEX);
 	float t = TIME;
 
-	// Sea-level ocean depth comes from the LOD-independent coastline field.
-	// Lakes retain their own streamed signed depth because their free surface is
-	// not sea level and is not represented by the global coast cache.
+	// Ground height relative to the relevant free surface. For sea-level ocean the
+	// local clipmap is authoritative only while it actually covers this fragment.
+	// Outside it, -v_signed_depth is the streamed mesh's own ground-minus-water
+	// field and therefore cannot place water above a dry terrain tile merely because
+	// the whole-planet orbit texture is coarser than runtime TerrainDetail.
 	float visual_h = coast_surface_height(
 		u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
-	float ocean_depth = max(-visual_h, 0.0);
-	float depth = v_ocean > 0.5 ? ocean_depth : max(v_signed_depth, 0.0);
+	float clip_weight = coast_clipmap_coverage(up, u_planet_radius);
+	float ocean_ground_h = mix(-v_signed_depth, visual_h, clip_weight);
+	float depth = v_ocean > 0.5 ? max(-ocean_ground_h, 0.0) : max(v_signed_depth, 0.0);
+
+	// Candidate ocean sheets deliberately span dry parts of coastal chunks so a
+	// fine coastline can exist between coarse mesh vertices. Those dry fragments
+	// must be discarded, not merely given ALPHA=0: this material uses
+	// depth_draw_always, and an invisible water fragment would otherwise still
+	// write depth and make the terrain behind it look sunken below the ocean.
+	if (v_ocean > 0.5) {
+		float dry_aa = max(fwidth(ocean_ground_h) * 1.15, 0.35);
+		if (ocean_ground_h > dry_aa * 1.5) {
+			discard;
+		}
+	}
 
 	vec3 ps = v_planet * (u_planet_radius / max(1.0, length(v_planet)));
 	float shoaling = clamp(depth / 6.0, 0.06, 1.0);
@@ -125,11 +141,8 @@ void fragment() {
 
 	float shore;
 	if (v_ocean > 0.5) {
-		// This is the important path: the zero contour comes from a fixed-resolution
-		// planet-space field, not from this mesh's vertices. fwidth gives a one-pixel
-		// antialias band without broadening the actual geographic coastline.
-		float coast_aa = max(fwidth(visual_h) * 1.15, 0.35);
-		shore = 1.0 - smoothstep(-coast_aa, coast_aa, visual_h);
+		float coast_aa = max(fwidth(ocean_ground_h) * 1.15, 0.35);
+		shore = 1.0 - smoothstep(-coast_aa, coast_aa, ocean_ground_h);
 	} else {
 		// Lake shoreline: retain the signed interpolation of the lake-level mesh.
 		float metres_per_px = max(length(fwidth(v_planet)), 1e-3);
@@ -139,6 +152,9 @@ void fragment() {
 		float aa = max(metres_per_px * 1.25, 0.30);
 		float blur = max(cell * u_shore_blur, aa);
 		shore = smoothstep(-aa, blur, to_shore) * v_mask;
+		if (shore < 0.001) {
+			discard;
+		}
 	}
 
 	ALPHA = shore * mix(0.62, 1.0, smoothstep(0.0, 7.0, depth));
