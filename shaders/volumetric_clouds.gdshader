@@ -152,21 +152,21 @@ float hg(float g, float mu) {
 	return (1.0 - gg) / (4.0 * PI * pow(max(1.0 + gg - 2.0 * g * mu, 1e-4), 1.5));
 }
 
-float scene_distance() {
-	float raw = texture(u_scene_depth, SCREEN_UV).r;
+float scene_distance(vec2 screen_uv) {
+	float raw = texture(u_scene_depth, screen_uv).r;
 	// Forward+ uses reversed Z: an untouched sky pixel is near 0.
 	if (raw <= 1e-6) {
 		return BIG;
 	}
-	vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, raw);
+	vec3 ndc = vec3(screen_uv * 2.0 - 1.0, raw);
 	vec4 view = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
 	view.xyz /= max(abs(view.w), 1e-8);
 	return length(view.xyz);
 }
 
-vec3 world_ray() {
+vec3 world_ray(vec2 screen_uv) {
 	// z=0 is the far plane in Forward+'s reversed-Z projection.
-	vec4 view_far = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, 0.0, 1.0);
+	vec4 view_far = INV_PROJECTION_MATRIX * vec4(screen_uv * 2.0 - 1.0, 0.0, 1.0);
 	vec3 view_dir = normalize(view_far.xyz / max(abs(view_far.w), 1e-8));
 	return normalize((INV_VIEW_MATRIX * vec4(view_dir, 0.0)).xyz);
 }
@@ -176,8 +176,12 @@ float screen_jitter(vec2 p) {
 }
 
 void fragment() {
+	// SCREEN_UV is not a spatial-shader built-in in the Godot 4.7 path used by
+	// Asterra. The full-screen QuadMesh already supplies canonical 0..1 UVs, so
+	// use those explicitly for depth lookup and camera-ray reconstruction.
+	vec2 screen_uv = UV;
 	vec3 ro = CAMERA_POSITION_WORLD + u_origin;
-	vec3 rd = world_ray();
+	vec3 rd = world_ray(screen_uv);
 	vec2 outer = sphere_hit(ro, rd, u_cloud_outer_radius);
 	if (outer.x > outer.y || outer.y <= 0.0) {
 		discard;
@@ -192,7 +196,7 @@ void fragment() {
 	}
 	// Opaque terrain/water in front of a cloud wins. This keeps the full-screen
 	// pass composited correctly while flying through valleys or below cloud base.
-	t1 = min(t1, scene_distance());
+	t1 = min(t1, scene_distance(screen_uv));
 	if (t1 <= t0 + 1.0) {
 		discard;
 	}
