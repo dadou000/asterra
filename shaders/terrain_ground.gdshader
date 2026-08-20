@@ -157,11 +157,19 @@ void fragment() {
 		albedo = mix(albedo, depth_color(chunk_depth) * 0.30, uv_glyph(UV) * u_debug_uv);
 	}
 
+	// Fullscreen volumetric clouds cannot participate in Godot's native shadow
+	// map. Project the dynamic weather envelope along Helion instead: mature cloud
+	// decks now visibly darken the ground and remove most of the sunlit specular.
+	float cloud_shadow = cloud_shadow_amount(v_planet, normalize(u_sun_dir));
+	vec3 shadow_tint = vec3(0.46, 0.53, 0.62);
+	albedo *= mix(vec3(1.0), shadow_tint, cloud_shadow * 0.82);
+
 	ALBEDO = albedo;
-	ROUGHNESS = mix(0.94, 0.82, rock);
-	SPECULAR = 0.12;
+	ROUGHNESS = clamp(mix(0.94, 0.82, rock) + cloud_shadow * 0.04, 0.0, 1.0);
+	SPECULAR = 0.12 * (1.0 - cloud_shadow * 0.72);
 	METALLIC = 0.0;
 	// The air in front of the surface, applied after lighting. Without it the
-	// sky is only ever a backdrop behind the planet.
+	// sky is only ever a backdrop behind the planet. aerial_fog() now uses the
+	// same cloud-shadow field, so shafts remain visible in front of terrain too.
 	FOG = aerial_fog(camera_planet, v_planet);
 }
