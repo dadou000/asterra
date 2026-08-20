@@ -8,12 +8,9 @@ render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specula
 /// wave octaves are faded out individually as they stop being resolvable, so
 /// distance costs detail instead of aliasing it.
 ///
-/// Waves are phased on the *planet-frame* position, so they neither swim when
-/// the floating origin re-bases nor break across a chunk boundary. Each
-/// component is a plane wave with a fixed 3D direction, phased on the position
-/// projected back down onto the sphere; on a sphere its crests are then the
-/// intersections of parallel planes with the surface, which is a good model of
-/// swell and costs a dot, a sin and a cos.
+/// Above the orbit handoff altitude this chunk-bound representation is discarded
+/// completely. A global ocean shell takes over there so coastline shape no longer
+/// depends on the streamed mesh resolution.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -31,6 +28,7 @@ uniform vec3 u_foam : source_color = vec3(0.82, 0.90, 0.94);
 uniform float u_wave_scale : hint_range(0.0, 3.0) = 1.0;
 uniform float u_depth_scale = 4000.0;    // metres encoded in COLOR.r, fourth-root curve
 uniform float u_deep_at = 42.0;          // metres at which the deep colour is reached
+uniform float u_orbit_handoff_altitude = 30000.0;
 /// How much of one mesh cell's worth of shoreline uncertainty the waterline
 /// fades over. 1.0 blurs it across exactly the distance the mesh cannot resolve.
 uniform float u_shore_blur : hint_range(0.0, 3.0) = 0.9;
@@ -85,6 +83,12 @@ void wave(vec3 ps, vec3 up, vec3 dir, vec3 cross_dir, float k, float amp, float 
 }
 
 void fragment() {
+	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
+	float camera_alt = length(camera_planet) - u_planet_radius;
+	if (camera_alt >= u_orbit_handoff_altitude) {
+		discard;
+	}
+
 	vec3 up = normalize(v_planet);
 	float dist = length(VERTEX);
 	float t = TIME;
@@ -170,5 +174,5 @@ void fragment() {
 	float shore = smoothstep(0.0, max(cell * u_shore_blur, 0.35), to_shore) * v_mask;
 	ALPHA = shore * mix(0.62, 1.0, smoothstep(0.0, 7.0, v_depth));
 
-	FOG = aerial_fog(CAMERA_POSITION_WORLD + u_origin, v_planet);
+	FOG = aerial_fog(camera_planet, v_planet);
 }
