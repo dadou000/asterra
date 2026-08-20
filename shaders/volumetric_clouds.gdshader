@@ -4,14 +4,8 @@ render_mode unshaded, blend_premul_alpha, depth_draw_never, depth_test_disabled,
 ///
 /// Density comes from the dynamic spherical weather simulation and generated 3D
 /// morphology. Lighting is integrated through the cloud volume, with planet
-/// shadowing, cloud self-shadowing, electrical illumination and atmospheric
-/// aerial perspective between the camera and the visible cloud body.
-///
-/// The marcher is deliberately adaptive. Long grazing rays through the spherical
-/// cloud shell used to be divided into only a few dozen multi-kilometre samples;
-/// that produced the striped / aliased silhouettes visible near the horizon and
-/// could simply step over opaque cloud water. Empty air is skipped coarsely, but
-/// cloud bodies are integrated at a few hundred metres per sample.
+/// shadowing, adaptive cloud self-shadowing, multiple-scattering approximation,
+/// electrical illumination and atmospheric aerial perspective.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -28,7 +22,7 @@ uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
 uniform float u_cloud_outer_radius = 1018500.0;
 
-// Optical / quality controls.
+// View-ray optical / quality controls.
 uniform float u_extinction = 0.00215;
 uniform float u_core_extinction_boost = 3.15;
 uniform float u_transmittance_cutoff = 0.004;
@@ -39,6 +33,14 @@ uniform float u_density_scale = 1.18;
 uniform float u_wind_speed = 1.0;
 uniform float u_detail_strength = 0.27;
 
+// Lighting controls. The sun ray uses smaller steps in cloud and large steps in
+// empty air, removing the coherent shadow shelves produced by sparse fixed probes.
+uniform float u_sun_shadow_dense_step = 260.0;
+uniform float u_sun_shadow_empty_step = 920.0;
+uniform float u_multiple_scatter_strength = 0.42;
+uniform float u_direct_light_strength = 0.92;
+uniform float u_ambient_strength = 0.72;
+
 // xyz = canonical planet-space flash position, w = instantaneous HDR energy.
 uniform vec4 u_lightning0 = vec4(0.0);
 uniform vec4 u_lightning1 = vec4(0.0);
@@ -46,7 +48,7 @@ uniform vec4 u_lightning2 = vec4(0.0);
 uniform vec4 u_lightning3 = vec4(0.0);
 
 const int MAX_STEPS = 224;
-const int SUN_SHADOW_STEPS = 9;
+const int SUN_SHADOW_STEPS = 28;
 const float BIG = 1.0e20;
 
 // Same atmosphere constants as atmosphere_sky.gdshader. This pass integrates
@@ -191,27 +193,59 @@ float optical_density(float density) {
 	return density * mix(1.0, u_core_extinction_boost, core);
 }
 
-// Integrate optical depth toward the sun through the actual same density field
-// used by the view ray. The old four probes were effectively a local AO term and
-// could miss most of a deep cloud body, which left towers brightly lit end-to-end.
-float cloud_sun_transmittance(vec3 p, vec3 sun_dir) {
+float hash13(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
+}
+
+// Adaptive sun-ray optical-depth integration. Dense material is sampled finely;
+// empty space is skipped quickly with a midpoint probe. Spatial jitter decorrelates
+// neighbouring view rays so the shadow solution does not form visible shelves.
+float cloud_sun_optical_depth(vec3 p, vec3 sun_dir) {
+	vec2 shell = sphere_hit(p, sun_dir, u_cloud_outer_radius);
+	float max_dist = max(shell.y, 0.0);
+	if (max_dist <= 1.0) {
+		return 0.0;
+	}
+
+	float seed = hash13(p * 0.0017 + sun_dir * 19.17);
+	float dense_step = clamp(u_sun_shadow_dense_step, 140.0, 520.0);
+	float empty_step = clamp(u_sun_shadow_empty_step, dense_step * 1.8, 1800.0);
+	float travel = dense_step * (0.22 + seed * 0.58);
 	float tau = 0.0;
-	float travel = 180.0;
-	float step_len = 360.0;
+
 	for (int i = 0; i < SUN_SHADOW_STEPS; i++) {
-		vec3 q = p + sun_dir * (travel + step_len * 0.5);
-		if (length(q) > u_cloud_outer_radius + 50.0) {
+		if (travel >= max_dist || tau >= 10.0) {
 			break;
 		}
-		float d = optical_density(cloud_density(q, true));
-		tau += d * step_len * u_extinction * 1.18;
-		if (tau > 8.0) {
-			return 0.0003;
+
+		vec3 q0 = p + sun_dir * travel;
+		float d0 = optical_density(cloud_density(q0, true));
+		float local_seed = hash13(q0 * 0.0023 + vec3(float(i) * 0.173));
+
+		if (d0 <= 0.0015) {
+			float step_len = min(empty_step * mix(0.82, 1.16, local_seed), max_dist - travel);
+			float probe_d = optical_density(cloud_density(
+				p + sun_dir * (travel + step_len * 0.5), true));
+			if (probe_d <= 0.0015) {
+				travel += step_len;
+				continue;
+			}
+			// Approach a detected cloud edge with a fine step rather than integrating
+			// an entire coarse empty-space interval as one slab.
+			travel += min(dense_step * mix(0.78, 1.08, local_seed), step_len * 0.38);
+			continue;
 		}
+
+		float step_len = min(dense_step * mix(0.82, 1.18, local_seed), max_dist - travel);
+		float d1 = optical_density(cloud_density(
+			p + sun_dir * (travel + step_len * 0.5), true));
+		float d = max(d0 * 0.38 + d1 * 0.62, 0.0);
+		tau += d * step_len * u_extinction * 1.08;
 		travel += step_len;
-		step_len = min(step_len * 1.45, 3200.0);
 	}
-	return exp(-tau);
+	return tau;
 }
 
 float hg(float g, float mu) {
@@ -229,6 +263,23 @@ float planet_sun_visibility(vec3 p, vec3 sun_dir) {
 		return 0.0;
 	}
 	return 1.0;
+}
+
+// Cheap higher-order scattering approximation. Secondary orders use reduced
+// extinction and a broad phase response, so deep clouds retain soft bounced light
+// without becoming uniformly grey or re-opening the background behind them.
+vec3 cloud_multiple_scattering(float sun_tau, float density, float mu,
+		float sun_visible, float twilight) {
+	float order2 = exp(-sun_tau * 0.34);
+	float order3 = exp(-sun_tau * 0.115);
+	float body = 1.0 - exp(-density * 2.6);
+	float angle = 0.72 + 0.28 * clamp(mu * 0.5 + 0.5, 0.0, 1.0);
+	float energy = (order2 * 0.17 + order3 * 0.050) * u_multiple_scatter_strength;
+	energy *= body * angle * sun_visible * twilight;
+	vec3 cool = vec3(0.54, 0.64, 0.78);
+	vec3 warm = vec3(1.0, 0.91, 0.78);
+	vec3 tint = mix(cool, warm, smoothstep(-0.12, 0.32, mu));
+	return tint * energy;
 }
 
 float lightning_one(vec3 p, vec4 flash) {
@@ -382,7 +433,7 @@ void fragment() {
 	vec3 sun_dir = normalize(u_sun_dir);
 	float mu = dot(rd, sun_dir);
 	float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
-	phase *= 4.0 * PI;
+	phase = min(phase * 4.0 * PI, 4.25);
 
 	for (int i = 0; i < MAX_STEPS; i++) {
 		if (t >= t1 || transmittance <= 0.0) {
@@ -411,27 +462,29 @@ void fragment() {
 		float step_transmittance = exp(-optical);
 		float alpha_step = 1.0 - step_transmittance;
 
-		float sun_trans = cloud_sun_transmittance(p + rd * (step_len * 0.5), sun_dir);
-		float sun_visible = planet_sun_visibility(p, sun_dir);
-		vec3 up = normalize(p);
+		vec3 sample_pos = p + rd * (step_len * 0.5);
+		float sun_tau = cloud_sun_optical_depth(sample_pos, sun_dir);
+		float sun_trans = exp(-sun_tau);
+		float sun_visible = planet_sun_visibility(sample_pos, sun_dir);
+		vec3 up = normalize(sample_pos);
 		float sun_elev = dot(up, sun_dir);
 		float twilight = smoothstep(-0.22, 0.10, sun_elev);
 
-		// Sky light is not a constant fill. A cloud core which is heavily blocked
-		// from Helion also receives less diffuse sky light, producing dark bases and
-		// deep interior structure instead of an evenly grey volume.
-		vec3 night_ambient = vec3(0.0005, 0.0008, 0.0016);
-		vec3 day_ambient = vec3(0.18, 0.235, 0.31);
+		vec3 night_ambient = vec3(0.00045, 0.00070, 0.00145);
+		vec3 day_ambient = vec3(0.135, 0.180, 0.245) * u_ambient_strength;
 		vec3 ambient = mix(night_ambient, day_ambient, twilight);
 		float core = smoothstep(0.10, 0.75, density);
-		float sky_access = mix(0.12, 0.88, pow(max(sun_trans, 0.0), 0.32));
-		sky_access *= mix(1.0, 0.48, core * (1.0 - sqrt(max(sun_trans, 0.0))));
+		float sky_access = mix(0.08, 0.86, pow(max(sun_trans, 0.0), 0.28));
+		sky_access *= mix(1.0, 0.42, core * (1.0 - sqrt(max(sun_trans, 0.0))));
+
 		float powder = 1.0 - exp(-density * 3.4);
 		vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
-			* (0.06 + phase * 0.78) * (0.58 + powder * 0.52);
-		vec3 sample_light = ambient * sky_access + direct;
+			* (0.045 + phase * 0.62) * (0.56 + powder * 0.48) * u_direct_light_strength;
+		vec3 multiple = cloud_multiple_scattering(
+			sun_tau, density, mu, sun_visible, twilight);
+		vec3 sample_light = ambient * sky_access + direct + multiple;
 
-		float electric = lightning_illumination(p);
+		float electric = lightning_illumination(sample_pos);
 		if (electric > 0.001) {
 			vec3 electric_color = vec3(0.42, 0.62, 1.0);
 			sample_light += electric_color * electric * (0.20 + powder * 0.46);
