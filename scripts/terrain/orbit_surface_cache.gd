@@ -57,8 +57,11 @@ static func build_images() -> Dictionary:
 static func create_texture(built: Dictionary) -> Texture2DArray:
 	if built.is_empty() or not built.has("images"):
 		return null
+	var images: Array[Image] = []
+	for value in built["images"]:
+		var image: Image = value
+		images.append(image)
 	var texture_array := Texture2DArray.new()
-	var images: Array[Image] = built["images"]
 	var err := texture_array.create_from_images(images)
 	if err != OK:
 		push_error("Failed to upload detailed orbit elevation texture (%d)" % err)
