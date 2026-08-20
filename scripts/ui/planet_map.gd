@@ -38,13 +38,13 @@ func _ready() -> void:
 	add_child(bg)
 	texture_rect = TextureRect.new()
 	texture_rect.set_anchors_preset(Control.PRESET_CENTER)
-	texture_rect.position = Vector2(-W / 2, -H / 2)
+	texture_rect.position = Vector2(-float(W) * 0.5, -float(H) * 0.5)
 	texture_rect.custom_minimum_size = Vector2(W, H)
 	texture_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	add_child(texture_rect)
 	title = Label.new()
 	title.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	title.position = Vector2(-W / 2, 40)
+	title.position = Vector2(-float(W) * 0.5, 40)
 	title.custom_minimum_size = Vector2(W, 24)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 17)
@@ -90,10 +90,10 @@ func _render(which: int) -> Image:
 			var lon := (float(x) / float(W) - 0.5) * TAU
 			var d := CubeSphere.latlon_to_dir(lat, lon)
 			var c := g.dir_to_index(d)
-			img.set_pixel(x, y, _color_for(which, f, c, d))
+			img.set_pixel(x, y, _color_for(which, f, c))
 	return img
 
-func _color_for(which: int, f: PlanetFields, c: int, d: Vector3) -> Color:
+func _color_for(which: int, f: PlanetFields, c: int) -> Color:
 	var h: float = f.elev[c]
 	var water := h < 0.0
 	match which:
