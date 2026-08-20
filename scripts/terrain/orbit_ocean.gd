@@ -10,8 +10,7 @@ extends Node3D
 ##
 ## Important: this shell starts well *below* the old 30 km water handoff. From
 ## VISUAL_LOCK_ALTITUDE_M upward the same texture-defined coastline is therefore
-## already visible before any streaming/LOD representation changes. Crossing
-## 30 km can no longer change the map topology.
+## already visible before any streaming/LOD representation changes.
 
 const GRID := 256
 const SHELL_OFFSET_M := 1.5
@@ -32,6 +31,9 @@ func _process(_dt: float) -> void:
 		_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 
 func _on_world_ready(_fields: PlanetFields) -> void:
+	_refresh()
+
+func refresh_surface() -> void:
 	_refresh()
 
 func _refresh() -> void:
