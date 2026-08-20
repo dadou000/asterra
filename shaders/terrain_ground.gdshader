@@ -10,9 +10,10 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 ///     *planet* space, so it stays nailed to the ground when the floating
 ///     origin re-bases underfoot.
 ///
-/// At orbit altitude the actual land/water cut is taken from the global macro
-/// texture rather than from the triangle crossing sea level. This lets coarse
-/// geometry carry a sharp coastline instead of exposing its polygon edges.
+/// At aircraft/orbit altitude the actual land/water cut is taken from the global
+/// macro texture rather than from the triangle crossing sea level. The lock is
+/// deliberately engaged well below the 30 km ocean representation handoff, so
+/// crossing that handoff cannot change the apparent geography.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -31,7 +32,7 @@ instance uniform float chunk_depth = 0.0;          // quadtree depth, for debug 
 uniform vec3 u_origin = vec3(0.0);
 uniform sampler2DArray u_orbit_elevation;
 uniform float u_orbit_face_res = 192.0;
-uniform float u_orbit_coast_start_altitude = 30000.0;
+uniform float u_orbit_coast_start_altitude = 12000.0;
 
 // Debug overlays, driven by TerrainDebug. Both are drawn from the mesh's own UV
 // attribute and its instance depth -- nothing the quadtree glyphs also use --
@@ -103,10 +104,9 @@ void fragment() {
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
 
-	// From orbit, cut the ground with the same per-fragment coastline used by the
-	// global ocean shell. Geometry may be extremely coarse here; it only carries
-	// curvature and relief while the texture determines which side of sea level
-	// is actually visible.
+	// Lock the visual coastline before the ocean representation changes. From
+	// this altitude upward, terrain LOD and the local/orbit water handoff are not
+	// allowed to change which pixels are land or sea.
 	if (camera_alt >= u_orbit_coast_start_altitude) {
 		float visual_h = surface_visual_height(
 			u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
