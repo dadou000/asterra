@@ -16,7 +16,7 @@ uniform sampler3D u_base_noise : filter_linear, repeat_enable;
 uniform sampler3D u_detail_noise : filter_linear, repeat_enable;
 
 uniform float u_weather_face_res = 192.0;
-uniform vec3 u_origin = vec3(0.0);
+uniform vec3 u_camera_world = vec3(1000000.0, 0.0, 0.0);
 uniform vec3 u_sun_dir = vec3(1.0, 0.15, 0.3);
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
@@ -68,8 +68,6 @@ float remap01(float v, float lo, float hi) {
 float vertical_low_profile(float h01, float convective) {
 	float base = smoothstep(0.0, mix(0.055, 0.025, convective), h01);
 	float cap = 1.0 - smoothstep(mix(0.72, 0.82, convective), 1.0, h01);
-	// Non-convective decks stay broad; convective air is weighted toward a fat
-	// middle and a sharper cauliflower top.
 	float body = mix(1.0, smoothstep(0.02, 0.25, h01) * (1.0 - 0.16 * h01), convective);
 	return base * cap * body;
 }
@@ -100,8 +98,6 @@ float cloud_density(vec3 p, bool lighting_sample) {
 	vec3 north;
 	tangent_frame(d, east, north);
 	vec3 wind_world = (east * flow_data.r + north * flow_data.g) * u_wind_speed;
-	// Sampling a translated volume makes the visible structures travel *with* the
-	// wind. Convective noise also rises slowly so towers do not look frozen.
 	vec3 advected = p - wind_world * TIME - d * (TIME * convective * 2.6);
 
 	float base_n = texture(u_base_noise, advected * 0.000052).r;
@@ -111,25 +107,18 @@ float cloud_density(vec3 p, bool lighting_sample) {
 	if (altitude >= cloud_base && altitude <= low_top) {
 		float h01 = remap01(altitude, cloud_base, low_top);
 		float profile = vertical_low_profile(h01, convective);
-		// Coverage controls an isosurface threshold instead of multiplying a blob.
-		// This preserves solid cloud interiors while naturally opening blue holes.
 		float threshold = mix(0.78, 0.30, coverage);
 		threshold -= convective * (0.09 + 0.08 * h01);
 		float shape = base_n * 0.82 + detail_n * 0.18;
 		float body = smoothstep(threshold, min(threshold + 0.22, 0.98), shape);
-		// Fine cellular erosion is strongest at the edge and weaker inside storm
-		// cores, producing scalloped cumulus silhouettes without hollow centres.
 		if (!lighting_sample) {
 			float erosion = (1.0 - detail_n) * u_detail_strength * (1.0 - body) * (1.0 - convective * 0.55);
 			body = max(body - erosion, 0.0);
 		}
 		low_density = body * profile;
-		// Dense rain cores become optically thick without covering the whole deck.
 		low_density *= 0.72 + convective * 0.58 + flow_data.b * 0.22;
 	}
 
-	// Independent upper deck. Frontal humidity creates broad cirrus; deep
-	// convection adds anvil shields around thunderstorm-prone regions.
 	float high_start = mix(6900.0, 7600.0, 1.0 - high_cov);
 	float high_end = 13200.0;
 	float high_density = 0.0;
@@ -157,17 +146,27 @@ float screen_jitter(vec2 p) {
 }
 
 void fragment() {
-	// Keep all fragment-only inputs in fragment(). In particular, Godot's spatial
-	// shader compiler is stricter than GLSL about forwarding screen-space values
-	// through helper functions on this fullscreen path.
-	vec2 suv = UV;
+	// Use the fragment's true viewport coordinate instead of QuadMesh UVs. This
+	// exactly matches Godot's depth-buffer screen space and avoids any mesh-UV
+	// orientation/interpolation mismatch that would make clouds slide relative to
+	// the planet while the camera pitches or rotates.
+	vec2 screen_uv = FRAGCOORD.xy / VIEWPORT_SIZE;
+	float raw_depth = texture(u_scene_depth, screen_uv).r;
+	float scene_dist = BIG;
+	if (raw_depth > 1e-6) {
+		vec3 depth_ndc = vec3(screen_uv * 2.0 - 1.0, raw_depth);
+		vec4 depth_view = INV_PROJECTION_MATRIX * vec4(depth_ndc, 1.0);
+		depth_view.xyz /= max(abs(depth_view.w), 1e-8);
+		scene_dist = length(depth_view.xyz);
+	}
 
-	// Reconstruct the camera ray directly from the fullscreen quad UV.
-	// Forward+ uses reversed Z, so z=0 is the far plane.
-	vec4 view_far = INV_PROJECTION_MATRIX * vec4(suv * 2.0 - 1.0, 0.0, 1.0);
+	vec4 view_far = INV_PROJECTION_MATRIX * vec4(screen_uv * 2.0 - 1.0, 0.0, 1.0);
 	vec3 view_dir = normalize(view_far.xyz / max(abs(view_far.w), 1e-8));
 	vec3 rd = normalize((INV_VIEW_MATRIX * vec4(view_dir, 0.0)).xyz);
-	vec3 ro = CAMERA_POSITION_WORLD + u_origin;
+	// u_camera_world is supplied directly in the same canonical Asterra frame as
+	// Planet/CubeSphere/weather data. The cloud sphere therefore has one stable
+	// centre regardless of floating-origin rebases.
+	vec3 ro = u_camera_world;
 
 	vec2 outer = sphere_hit(ro, rd, u_cloud_outer_radius);
 	if (outer.x > outer.y || outer.y <= 0.0) {
@@ -176,26 +175,15 @@ void fragment() {
 
 	float t0 = max(outer.x, 0.0);
 	float t1 = outer.y;
-	// Never integrate clouds through the planet itself.
 	vec2 ground = sphere_hit(ro, rd, u_planet_radius);
 	if (ground.x > 0.0) {
 		t1 = min(t1, ground.x);
 	}
-
-	// Clip the cloud march against opaque scene depth. Untouched sky depth is
-	// approximately zero in Forward+'s reversed-Z projection.
-	float raw_depth = texture(u_scene_depth, suv).r;
-	if (raw_depth > 1e-6) {
-		vec3 ndc = vec3(suv * 2.0 - 1.0, raw_depth);
-		vec4 view_pos = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
-		view_pos.xyz /= max(abs(view_pos.w), 1e-8);
-		t1 = min(t1, length(view_pos.xyz));
-	}
+	t1 = min(t1, scene_dist);
 	if (t1 <= t0 + 1.0) {
 		discard;
 	}
 
-	// Cheap broad rejection saves the expensive march over clear sky.
 	float seg = t1 - t0;
 	vec4 w0 = weather_at(normalize(ro + rd * (t0 + seg * 0.20)));
 	vec4 w1 = weather_at(normalize(ro + rd * (t0 + seg * 0.50)));
@@ -212,7 +200,6 @@ void fragment() {
 	vec3 radiance = vec3(0.0);
 	vec3 sun_dir = normalize(u_sun_dir);
 	float mu = dot(rd, sun_dir);
-	// Dual-lobe phase: strong silver lining plus a weak backward component.
 	float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
 	phase *= 4.0 * PI;
 
@@ -226,9 +213,6 @@ void fragment() {
 			float optical = density * ds * u_extinction;
 			float alpha_step = 1.0 - exp(-optical);
 
-			// Two sparse forward probes approximate internal sunlight. They are much
-			// cheaper than a nested light raymarch but still create bright rims and
-			// dark storm cores.
 			float ld0 = cloud_density(p + sun_dir * 850.0, true);
 			float ld1 = cloud_density(p + sun_dir * 2400.0, true);
 			float light_tau = (ld0 * 850.0 + ld1 * 1550.0) * u_extinction * 0.78;
