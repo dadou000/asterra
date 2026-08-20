@@ -8,9 +8,10 @@ render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specula
 /// wave octaves are faded out individually as they stop being resolvable, so
 /// distance costs detail instead of aliasing it.
 ///
-/// Above the orbit handoff altitude this chunk-bound representation is discarded
-/// completely. A global ocean shell takes over there so coastline shape no longer
-/// depends on the streamed mesh resolution.
+/// The global orbit ocean now starts well below orbital altitude and sits just
+/// above sea level, so it naturally hides streamed ocean water at distance while
+/// this material remains alive for elevated lakes. Keeping local water resident
+/// avoids a second geography change at 30 km and prevents lakes disappearing.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -28,7 +29,10 @@ uniform vec3 u_foam : source_color = vec3(0.82, 0.90, 0.94);
 uniform float u_wave_scale : hint_range(0.0, 3.0) = 1.0;
 uniform float u_depth_scale = 4000.0;    // metres encoded in COLOR.r, fourth-root curve
 uniform float u_deep_at = 42.0;          // metres at which the deep colour is reached
-uniform float u_orbit_handoff_altitude = 30000.0;
+// Retained only as a safety kill-switch. Normal streaming no longer disables
+// local water at 30 km; the global shell simply occludes ocean fragments while
+// local lake meshes remain available at every altitude.
+uniform float u_orbit_handoff_altitude = 1000000000.0;
 /// How much of one mesh cell's worth of shoreline uncertainty the waterline
 /// fades over. 1.0 blurs it across exactly the distance the mesh cannot resolve.
 uniform float u_shore_blur : hint_range(0.0, 3.0) = 0.9;
