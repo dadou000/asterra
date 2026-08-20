@@ -2,11 +2,11 @@ class_name PlanetMap
 extends CanvasLayer
 ## Whole-planet layer inspector.
 ##
-## Renders any baked field as an equirectangular map. This is the fastest way to
-## confirm that the passes are actually coupled: rain shadows should sit behind
-## mountain belts, rivers should thread the valleys, deserts should sit under the
-## subtropical highs, and the transport corridors should follow the valleys the
-## erosion pass cut.
+## Renders any baked field as an equirectangular map. Rendering is deliberately
+## spread over multiple frames: a 960x480 map needs ~460k spherical lookups, and
+## doing all of them inside toggle() made the M key appear to stop working while
+## the main thread was busy. The panel now becomes visible immediately and the
+## image fills in under a small frame-time budget.
 
 enum Layer {
 	ELEVATION, PLATES, GEOLOGY, RESOURCES, EROSION, DRAINAGE, WATERSHEDS,
@@ -21,6 +21,7 @@ const LAYER_NAMES := [
 
 const W := 960
 const H := 480
+const RENDER_BUDGET_USEC := 3000
 
 var layer_index: int = Layer.ELEVATION
 var texture_rect: TextureRect
@@ -28,6 +29,14 @@ var title: Label
 var marker: Control
 var _player_dir: Vector3 = Vector3(1, 0, 0)
 var _cache: Dictionary = {}
+
+# Incremental renderer state. PlanetFields/PlanetGrid are immutable between
+# adopt/rebake operations, so holding references while a map is built is safe.
+var _render_image: Image
+var _render_layer: int = -1
+var _render_y: int = 0
+var _render_fields: PlanetFields
+var _render_grid: PlanetGrid
 
 func _ready() -> void:
 	layer = 20
@@ -54,14 +63,46 @@ func _ready() -> void:
 	marker.draw.connect(_draw_marker)
 	add_child(marker)
 
+func _process(_dt: float) -> void:
+	if _render_layer < 0 or _render_image == null:
+		return
+
+	var started: int = Time.get_ticks_usec()
+	while _render_y < H:
+		_render_row(_render_y)
+		_render_y += 1
+		if Time.get_ticks_usec() - started >= RENDER_BUDGET_USEC:
+			break
+
+	if _render_y < H:
+		return
+
+	var completed_layer: int = _render_layer
+	var texture := ImageTexture.create_from_image(_render_image)
+	_cache[completed_layer] = texture
+	_render_layer = -1
+	_render_y = 0
+	_render_image = null
+	_render_fields = null
+	_render_grid = null
+
+	# The player may have changed layers while this one was rendering. Cache the
+	# completed image, but only display it if it is still the requested layer.
+	if visible and completed_layer == layer_index:
+		texture_rect.texture = texture
+		_update_title(false)
+
 func toggle() -> void:
 	visible = not visible
 	if visible:
+		# `refresh()` is now non-blocking, so the CanvasLayer is drawn immediately
+		# on this frame instead of waiting for the entire map raster to finish.
 		refresh()
 
 func cycle(step: int) -> void:
 	layer_index = wrapi(layer_index + step, 0, LAYER_NAMES.size())
-	refresh()
+	if visible:
+		refresh()
 
 func set_player_dir(d: Vector3) -> void:
 	_player_dir = d
@@ -71,27 +112,49 @@ func set_player_dir(d: Vector3) -> void:
 func refresh() -> void:
 	if not Planet.ready_state:
 		return
-	title.text = "%s   ( , / . to change layer, M to close )" % LAYER_NAMES[layer_index]
-	if not _cache.has(layer_index):
-		_cache[layer_index] = ImageTexture.create_from_image(_render(layer_index))
-	texture_rect.texture = _cache[layer_index]
+	if _cache.has(layer_index):
+		texture_rect.texture = _cache[layer_index]
+		_update_title(false)
+	else:
+		_begin_render(layer_index)
+		_update_title(true)
 	marker.queue_redraw()
 
 func invalidate() -> void:
 	_cache.clear()
+	# A rebake replaces the field set. Cancel an in-progress raster so it can
+	# never publish a map made from the old PlanetFields after adopt().
+	_render_layer = -1
+	_render_y = 0
+	_render_image = null
+	_render_fields = null
+	_render_grid = null
+	if texture_rect != null:
+		texture_rect.texture = null
 
-func _render(which: int) -> Image:
-	var img := Image.create(W, H, false, Image.FORMAT_RGB8)
-	var f := Planet.fields
-	var g := Planet.grid
-	for y in H:
-		var lat := (0.5 - float(y) / float(H)) * PI
-		for x in W:
-			var lon := (float(x) / float(W) - 0.5) * TAU
-			var d := CubeSphere.latlon_to_dir(lat, lon)
-			var c := g.dir_to_index(d)
-			img.set_pixel(x, y, _color_for(which, f, c))
-	return img
+func _begin_render(which: int) -> void:
+	if _render_layer == which:
+		return
+	_render_layer = which
+	_render_y = 0
+	_render_image = Image.create(W, H, false, Image.FORMAT_RGB8)
+	_render_fields = Planet.fields
+	_render_grid = Planet.grid
+
+func _render_row(y: int) -> void:
+	if _render_fields == null or _render_grid == null:
+		_render_layer = -1
+		return
+	var lat: float = (0.5 - float(y) / float(H)) * PI
+	for x in W:
+		var lon: float = (float(x) / float(W) - 0.5) * TAU
+		var d: Vector3 = CubeSphere.latlon_to_dir(lat, lon)
+		var c: int = _render_grid.dir_to_index(d)
+		_render_image.set_pixel(x, y, _color_for(_render_layer, _render_fields, c))
+
+func _update_title(rendering: bool) -> void:
+	var suffix := "  — rendering…" if rendering else ""
+	title.text = "%s%s   ( , / . to change layer, M to close )" % [LAYER_NAMES[layer_index], suffix]
 
 func _color_for(which: int, f: PlanetFields, c: int) -> Color:
 	var h: float = f.elev[c]
