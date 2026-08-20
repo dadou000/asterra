@@ -1,16 +1,16 @@
 shader_type spatial;
-render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_disabled;
+render_mode unshaded, blend_premul_alpha, depth_draw_never, depth_test_disabled, cull_disabled;
 /// Asterra volumetric clouds.
 ///
-/// The dynamic WeatherSystem owns large-scale organisation and storm events.
-/// Generated 3D noise only turns that physical envelope into cloud morphology.
-/// Direct Helion light is blocked by the planet and by cloud water itself;
-/// electrical discharges inject short-lived emissive light into storm volumes.
+/// Density comes from the dynamic spherical weather simulation and generated 3D
+/// morphology. Lighting is integrated through the cloud volume, with planet
+/// shadowing, cloud self-shadowing, electrical illumination and atmospheric
+/// aerial perspective between the camera and the visible cloud body.
 ///
-/// The atmosphere sky is a background pass, so it cannot naturally sit in front
-/// of this fullscreen cloud pass. To keep clouds physically inside the Rayleigh /
-/// Mie atmosphere, the same scattering model is integrated from the camera to
-/// the optical centre of the cloud contribution before the cloud is composited.
+/// This pass uses premultiplied alpha. The raymarch already accumulates radiance
+/// in premultiplied form, and dense cloud cores are deliberately allowed to drive
+/// transmittance all the way to zero so terrain / horizon cannot leak through an
+/// optically thick cloud deck.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -26,8 +26,14 @@ uniform vec3 u_sun_dir = vec3(1.0, 0.15, 0.3);
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
 uniform float u_cloud_outer_radius = 1018500.0;
-uniform float u_extinction = 0.00082;
-uniform float u_density_scale = 1.15;
+
+// Optical controls. The old extinction made kilometre-thick cloud decks behave
+// like translucent mist. Edge vapour remains translucent, but medium / dense
+// cloud water receives extra extinction and therefore becomes properly opaque.
+uniform float u_extinction = 0.00135;
+uniform float u_core_extinction_boost = 2.35;
+uniform float u_transmittance_cutoff = 0.006;
+uniform float u_density_scale = 1.18;
 uniform float u_wind_speed = 1.0;
 uniform float u_detail_strength = 0.27;
 
@@ -37,19 +43,18 @@ uniform vec4 u_lightning1 = vec4(0.0);
 uniform vec4 u_lightning2 = vec4(0.0);
 uniform vec4 u_lightning3 = vec4(0.0);
 
-const int MAX_STEPS = 60;
+const int MAX_STEPS = 72;
 const float BIG = 1.0e20;
 
-// Keep these identical to atmosphere_sky.gdshader. The cloud pass only needs a
-// short camera-to-cloud integration, so fewer samples are enough than the full
-// sky ray while still reproducing its colour/extinction relationship.
+// Same atmosphere constants as atmosphere_sky.gdshader. This pass integrates
+// only the finite camera -> cloud segment; the sky shader owns the air behind it.
 const vec3 CLOUD_RAYLEIGH_COEFF = vec3(5.5e-6, 13.0e-6, 22.4e-6);
 const float CLOUD_MIE_COEFF = 21e-6;
 const float CLOUD_RAYLEIGH_SCALE_HEIGHT = 8000.0;
 const float CLOUD_MIE_SCALE_HEIGHT = 1200.0;
 const float CLOUD_MIE_G = 0.758;
 const float CLOUD_SUN_INTENSITY = 22.0;
-const float CLOUD_AERIAL_STRENGTH = 0.45;
+const float CLOUD_AERIAL_STRENGTH = 0.40;
 const int CLOUD_AP_STEPS = 6;
 const int CLOUD_AP_LIGHT_STEPS = 2;
 
@@ -108,6 +113,7 @@ float cloud_density(vec3 p, bool lighting_sample) {
 	if (altitude < 500.0 || altitude > 18500.0) {
 		return 0.0;
 	}
+
 	vec3 d = p / max(r, 1.0);
 	vec4 w = weather_at(d);
 	vec4 flow_data = wind_at(d);
@@ -142,12 +148,14 @@ float cloud_density(vec3 p, bool lighting_sample) {
 		float overcast = smoothstep(0.68, 0.96, coverage);
 		float threshold = mix(0.73, 0.36, coverage);
 		threshold -= convective * (0.08 + 0.11 * h01);
-		float tower_body = mix(0.0, 0.12 * smoothstep(0.20, 0.78, h01), convective);
-		float shape = broad_n * 0.58 + middle_n * 0.29 + detail_n * 0.13 + overcast * 0.12 + tower_body;
+		float tower_body = 0.12 * convective * smoothstep(0.20, 0.78, h01);
+		float shape = broad_n * 0.58 + middle_n * 0.29 + detail_n * 0.13
+			+ overcast * 0.12 + tower_body;
 		float body = smoothstep(threshold, min(threshold + 0.17, 0.98), shape);
 		if (!lighting_sample) {
 			float edge_weight = 1.0 - body;
-			float erosion = (1.0 - detail_n) * u_detail_strength * edge_weight * (1.0 - convective * 0.68);
+			float erosion = (1.0 - detail_n) * u_detail_strength * edge_weight
+				* (1.0 - convective * 0.68);
 			body = max(body - erosion, 0.0);
 		}
 		low_density = body * profile;
@@ -159,16 +167,26 @@ float cloud_density(vec3 p, bool lighting_sample) {
 	float high_density = 0.0;
 	if (altitude >= high_start && altitude <= high_end && high_cov > 0.01) {
 		float hhi = remap01(altitude, high_start, high_end);
-		float profile_hi = smoothstep(0.0, 0.10, hhi) * (1.0 - smoothstep(0.72, 1.0, hhi));
+		float profile_hi = smoothstep(0.0, 0.10, hhi)
+			* (1.0 - smoothstep(0.72, 1.0, hhi));
 		vec3 high_p = q * vec3(0.0000017, 0.0000027, 0.0000017);
 		float wispy = texture(u_base_noise, high_p + vec3(0.31, 0.07, 0.53)).r;
-		float filaments = texture(u_detail_noise, q * 0.000020 + vec3(0.61, 0.13, 0.29)).r;
+		float filaments = texture(u_detail_noise, q * 0.000020
+			+ vec3(0.61, 0.13, 0.29)).r;
 		float hi_threshold = mix(0.84, 0.39, high_cov);
-		float hi = smoothstep(hi_threshold, min(hi_threshold + 0.17, 0.98), wispy * 0.82 + filaments * 0.18 + convective * 0.06);
+		float hi = smoothstep(hi_threshold, min(hi_threshold + 0.17, 0.98),
+			wispy * 0.82 + filaments * 0.18 + convective * 0.06);
 		high_density = hi * profile_hi * mix(0.18, 0.55, high_cov);
 	}
 
 	return clamp((low_density + high_density) * u_density_scale, 0.0, 1.7);
+}
+
+// Dense liquid-water regions should become optically thick while tenuous edges
+// remain soft. This remap changes extinction, not morphology or cloud coverage.
+float optical_density(float density) {
+	float core = smoothstep(0.10, 0.72, density);
+	return density * mix(1.0, u_core_extinction_boost, core);
 }
 
 float hg(float g, float mu) {
@@ -205,9 +223,6 @@ float lightning_illumination(vec3 p) {
 }
 
 // Single-scatter aerial perspective for the finite camera -> cloud segment.
-// The sky shader already integrates the atmosphere behind the clouds. This only
-// integrates the air *in front* of them, which is exactly the missing ordering
-// term that otherwise makes a fullscreen cloud pass look pasted over Rayleigh.
 vec4 cloud_aerial_fog(vec3 cam, vec3 frag, vec3 sun_dir) {
 	vec3 delta = frag - cam;
 	float seg = length(delta);
@@ -321,19 +336,17 @@ void fragment() {
 	vec4 w0 = weather_at(normalize(ro + rd * (t0 + seg * 0.20)));
 	vec4 w1 = weather_at(normalize(ro + rd * (t0 + seg * 0.50)));
 	vec4 w2 = weather_at(normalize(ro + rd * (t0 + seg * 0.80)));
-	float possible = max(max(max(w0.r, w0.g), w0.b), max(max(w1.r, w1.g), max(w1.b, max(max(w2.r, w2.g), w2.b))));
+	float possible = max(max(max(w0.r, w0.g), w0.b),
+		max(max(w1.r, w1.g), max(w1.b, max(max(w2.r, w2.g), w2.b))));
 	if (possible < 0.010) {
 		discard;
 	}
 
-	int steps = int(clamp(ceil(seg / 420.0), 22.0, float(MAX_STEPS)));
+	int steps = int(clamp(ceil(seg / 380.0), 24.0, float(MAX_STEPS)));
 	float ds = seg / float(steps);
 	float t = t0 + ds * screen_jitter(FRAGCOORD.xy);
 	float transmittance = 1.0;
 	vec3 radiance = vec3(0.0);
-	// Optical-depth weighted cloud distance. This is a much better representative
-	// point for foreground atmospheric scattering than either the shell entry or
-	// the first noisy density hit, especially for thick cloud decks near horizon.
 	float optical_t_sum = 0.0;
 	float optical_weight = 0.0;
 	vec3 sun_dir = normalize(u_sun_dir);
@@ -342,42 +355,40 @@ void fragment() {
 	phase *= 4.0 * PI;
 
 	for (int i = 0; i < MAX_STEPS; i++) {
-		if (i >= steps || transmittance < 0.008) {
+		if (i >= steps) {
 			break;
 		}
 		vec3 p = ro + rd * t;
 		float density = cloud_density(p, false);
 		if (density > 0.002) {
-			float optical = density * ds * u_extinction;
-			float alpha_step = 1.0 - exp(-optical);
+			float extinction_density = optical_density(density);
+			float optical = extinction_density * ds * u_extinction;
+			float step_transmittance = exp(-optical);
+			float alpha_step = 1.0 - step_transmittance;
 
-			// Long sunward probe chain makes the lower half of deep clouds genuinely
-			// shadowed instead of treating every sample as if it were near an edge.
-			float ld0 = cloud_density(p + sun_dir * 550.0, true);
-			float ld1 = cloud_density(p + sun_dir * 1750.0, true);
-			float ld2 = cloud_density(p + sun_dir * 4150.0, true);
-			float ld3 = cloud_density(p + sun_dir * 8950.0, true);
+			// Use the same stronger extinction in the sunward probes so an optically
+			// opaque cloud also has the dark interior expected from that opacity.
+			float ld0 = optical_density(cloud_density(p + sun_dir * 550.0, true));
+			float ld1 = optical_density(cloud_density(p + sun_dir * 1750.0, true));
+			float ld2 = optical_density(cloud_density(p + sun_dir * 4150.0, true));
+			float ld3 = optical_density(cloud_density(p + sun_dir * 8950.0, true));
 			float light_tau = (ld0 * 550.0 + ld1 * 1200.0 + ld2 * 2400.0 + ld3 * 4800.0)
-				* u_extinction * 1.12;
+				* u_extinction * 1.08;
 			float sun_trans = exp(-light_tau);
 			float sun_visible = planet_sun_visibility(p, sun_dir);
 			vec3 up = normalize(p);
 			float sun_elev = dot(up, sun_dir);
 			float twilight = smoothstep(-0.22, 0.10, sun_elev);
 
-			// Night side receives only a tiny sky floor. Direct sunlight is zero when
-			// the planet blocks Helion, including deep into the night hemisphere.
 			vec3 night_ambient = vec3(0.0006, 0.0009, 0.0018);
 			vec3 day_ambient = vec3(0.34, 0.45, 0.61);
 			vec3 ambient = mix(night_ambient, day_ambient, twilight);
 			float powder = 1.0 - exp(-density * 3.4);
 			vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
 				* (0.10 + phase * 0.74) * (0.64 + powder * 0.46);
-			float sky_occlusion = mix(0.28, 0.92, sqrt(max(sun_trans, 0.0)));
+			float sky_occlusion = mix(0.24, 0.92, sqrt(max(sun_trans, 0.0)));
 			vec3 sample_light = ambient * sky_occlusion + direct;
 
-			// Lightning is the exception: it is locally emissive and can light a
-			// cumulonimbus from within even on the dark side of Asterra.
 			float electric = lightning_illumination(p);
 			if (electric > 0.001) {
 				vec3 electric_color = vec3(0.42, 0.62, 1.0);
@@ -388,7 +399,14 @@ void fragment() {
 			radiance += contribution * sample_light;
 			optical_t_sum += contribution * t;
 			optical_weight += contribution;
-			transmittance *= 1.0 - alpha_step;
+			transmittance *= step_transmittance;
+
+			// Once a cloud has removed >99.4% of background light, make it exactly
+			// opaque. This avoids a visible terrain/horizon ghost through storm decks.
+			if (transmittance < u_transmittance_cutoff) {
+				transmittance = 0.0;
+				break;
+			}
 		}
 		t += ds;
 	}
@@ -398,10 +416,9 @@ void fragment() {
 		discard;
 	}
 
-	// `blend_mix` expects an un-premultiplied source colour. The raymarch builds
-	// premultiplied radiance, so normalise once, then apply the atmosphere between
-	// the camera and the optical centre of the cloud. The background sky already
-	// contains the atmosphere behind the cloud and is preserved by alpha blending.
+	// Aerial perspective is evaluated on an un-premultiplied cloud colour, then
+	// re-premultiplied for blend_premul_alpha. This keeps atmospheric haze in
+	// front of the cloud without accidentally making the cloud itself transparent.
 	vec3 cloud_color = radiance / max(alpha, 1e-4);
 	if (optical_weight > 1e-5) {
 		float representative_t = optical_t_sum / optical_weight;
@@ -410,6 +427,6 @@ void fragment() {
 		cloud_color = mix(cloud_color, aerial.rgb, aerial.a);
 	}
 
-	ALBEDO = cloud_color;
+	ALBEDO = cloud_color * alpha;
 	ALPHA = alpha;
 }
