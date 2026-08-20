@@ -13,6 +13,12 @@ render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specula
 /// elevated lake water remains rendered by the streamed mesh. This prevents the
 /// two nearly coincident ocean surfaces from producing the repeating square /
 /// diamond pattern seen from aircraft altitude.
+///
+/// COLOR.r stores the fourth-root magnitude of water-minus-ground height and
+/// COLOR.a stores its sign. Decoding the signed value in the vertex stage before
+/// interpolation is important: clamping land vertices to zero made entire mesh
+/// edges become shoreline, which produced the large rectangular/stair-step coast
+/// visible even when the terrain itself had enough detail.
 
 /// 0 draws this tile's own surface, 1 draws its parent's. CUSTOM0 carries the
 /// offset between the two per vertex, so a tile can be handed over to or from
@@ -32,28 +38,29 @@ uniform float u_depth_scale = 4000.0;    // metres encoded in COLOR.r, fourth-ro
 uniform float u_deep_at = 42.0;          // metres at which the deep colour is reached
 uniform float u_orbit_handoff_altitude = 12000.0;
 /// How much of one mesh cell's worth of shoreline uncertainty the waterline
-/// fades over. 1.0 blurs it across exactly the distance the mesh cannot resolve.
-uniform float u_shore_blur : hint_range(0.0, 3.0) = 0.9;
+/// fades over. The signed depth contour now determines the actual land/water
+/// crossing; this only softens it enough to hide residual LOD quantisation.
+uniform float u_shore_blur : hint_range(0.0, 3.0) = 0.35;
 /// Metres of vertex spacing per metre of view distance. The quadtree splits on
 /// distance, so tile resolution is a function of distance -- and taking the
 /// spacing from the distance rather than from the tile keeps two tiles that meet
-/// at an LOD boundary agreeing about where the shoreline is. Reading it off the
-/// tile instead draws the LOD boundary itself across the water.
+/// at an LOD boundary agreeing about where the shoreline is.
 uniform float u_cell_per_metre = 0.0223;
 
 varying vec3 v_planet;
-varying float v_depth;
+varying float v_signed_depth;
 varying float v_mask;
 varying float v_ocean;
 
 void vertex() {
 	VERTEX += CUSTOM0.xyz * morph;
 	v_planet = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz + u_origin;
-	// Depth is stored on a fourth-root curve, so 8-bit vertex colour resolves
-	// about a decimetre at the waterline -- where the shoreline fade needs it --
-	// while still reaching the abyss, which the fade needs a gradient from.
+	// R contains |water-ground| on a fourth-root curve. A is a binary sign at
+	// each vertex. Decode here so rasterisation interpolates signed metres, not a
+	// clamped non-negative depth field.
 	float r2 = COLOR.r * COLOR.r;
-	v_depth = r2 * r2 * u_depth_scale;
+	float depth_mag = r2 * r2 * u_depth_scale;
+	v_signed_depth = depth_mag * (COLOR.a >= 0.5 ? 1.0 : -1.0);
 	v_mask = COLOR.g;
 	v_ocean = COLOR.b;
 }
@@ -96,6 +103,7 @@ void fragment() {
 	vec3 up = normalize(v_planet);
 	float dist = length(VERTEX);
 	float t = TIME;
+	float depth = max(v_signed_depth, 0.0);
 	// Waves are phased on the position *projected back onto the sphere*, so the
 	// phase depends on where you are on the planet and not on how high you are.
 	// The skirt that bridges two water tiles hangs below the surface: phased on
@@ -105,7 +113,7 @@ void fragment() {
 
 	// Shallow water carries less energy: the swell shortens and dies as the
 	// bottom comes up, which is what makes a coastline read as a coastline.
-	float shoaling = clamp(v_depth / 6.0, 0.06, 1.0);
+	float shoaling = clamp(depth / 6.0, 0.06, 1.0);
 	float a = u_wave_scale * shoaling;
 
 	float h = 0.0;
@@ -129,13 +137,13 @@ void fragment() {
 		n = -n;
 	}
 
-	float depth_t = clamp(v_depth / u_deep_at, 0.0, 1.0);
+	float depth_t = clamp(depth / u_deep_at, 0.0, 1.0);
 	vec3 base = mix(u_shallow, u_deep, depth_t * (2.0 - depth_t));
 
 	// Foam where the water is thin enough for the wave crests to reach the bed.
 	float crest = clamp(h / max(0.15, 0.9 * a) * 0.5 + 0.5, 0.0, 1.0);
 	// Foam is surf: it is real at wading distance and sub-pixel from a plane.
-	float foam = smoothstep(1.6, 0.0, v_depth) * smoothstep(0.35, 0.85, crest)
+	float foam = smoothstep(1.6, 0.0, depth) * smoothstep(0.35, 0.85, crest)
 		* (1.0 - smoothstep(1500.0, 12000.0, dist));
 	base = mix(base, u_foam, foam * 0.75);
 
@@ -150,33 +158,21 @@ void fragment() {
 	SPECULAR = 0.5;
 	METALLIC = 0.0;
 
-	// Dissolve at the waterline instead of ending on a polygon edge, and let the
-	// shallows show the bed through them -- `v_mask` is how much the mesher
-	// trusts this as free water at all. Past wading depth it goes fully opaque,
-	// which is both true and what keeps the LOD skirts from showing: a skirt
-	// overlaps its neighbour's surface by a pixel or so at grazing angles, and
-	// two translucent layers over one sea bed draw a darker line along every
-	// chunk edge in the ocean.
-	// The waterline is where the ground crosses the water level, and the mesh
-	// only knows where that is to within one cell. Ending the surface there --
-	// on the geometric edge, however deep the water happens to be one cell
-	// further out -- draws the coastline as the straight edges of the triangles
-	// it was clipped against, which from orbit are 25 km wide and turn a coast
-	// into a polygon.
-	//
-	// So the fade is a *horizontal* distance, not a depth: depth divided by the
-	// depth gradient is roughly how far away the shoreline is, and the surface
-	// dissolves over one cell's worth of it. On a tile you are standing on that
-	// is sub-metre and invisible; on a tile sampled every 25 km the water gives
-	// way over a whole triangle and the smooth sea-bed colour underneath draws
-	// the coast instead. Fading in depth cannot do this: next to a continent the
-	// sea bed drops kilometres within one cell, so any depth band is a hairline.
+	// The signed water-minus-ground field is the shoreline. Unlike the old
+	// clamped depth varying, negative land vertices remain negative, so the zero
+	// contour crosses the *interior* of a triangle at the correct interpolated
+	// location instead of sticking to its edges and producing rectangular steps.
+	// Convert vertical separation to an approximate horizontal distance using
+	// the local derivative, then anti-alias the crossing and retain a modest
+	// distance-dependent fade to hide the residual linearity of very coarse LODs.
 	float metres_per_px = max(length(fwidth(v_planet)), 1e-3);
-	float depth_slope = max(fwidth(v_depth) / metres_per_px, 1e-6);
-	float to_shore = v_depth / depth_slope;
+	float depth_slope = max(fwidth(v_signed_depth) / metres_per_px, 1e-6);
+	float to_shore = v_signed_depth / depth_slope;
 	float cell = dist * u_cell_per_metre;
-	float shore = smoothstep(0.0, max(cell * u_shore_blur, 0.35), to_shore) * v_mask;
-	ALPHA = shore * mix(0.62, 1.0, smoothstep(0.0, 7.0, v_depth));
+	float aa = max(metres_per_px * 1.25, 0.30);
+	float blur = max(cell * u_shore_blur, aa);
+	float shore = smoothstep(-aa, blur, to_shore) * v_mask;
+	ALPHA = shore * mix(0.62, 1.0, smoothstep(0.0, 7.0, depth));
 
 	FOG = aerial_fog(camera_planet, v_planet);
 }
