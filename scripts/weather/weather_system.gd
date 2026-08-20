@@ -62,9 +62,20 @@ func _build_textures() -> void:
 			var v: float = (float(j) + 0.5) * cell_step - 1.0
 			for x in tex_res:
 				var i: int = x - 1
-				var u: float = (float(i) + 0.5) * cell_step - 1.0
-				var d := CubeSphere.face_uv_to_dir(face, u, v)
-				var sample := _sample_weather(d)
+				var sample: Dictionary
+				if i >= 0 and i < res and j >= 0 and j < res:
+					# Interior texels line up exactly with the baked macro cells. Reading
+					# the arrays directly avoids millions of GDScript bilinear lookups at
+					# startup; the GPU performs the interpolation when the map is sampled.
+					var c := _grid.idx(face, i, j)
+					var d := _grid.cell_dir(c)
+					sample = _sample_cell(c, d)
+				else:
+					# Only the one-texel cube-face gutter needs arbitrary-direction
+					# sampling. This preserves seamless linear filtering at every edge.
+					var u: float = (float(i) + 0.5) * cell_step - 1.0
+					var d := CubeSphere.face_uv_to_dir(face, u, v)
+					sample = _sample_direction(d)
 				wimg.set_pixel(x, y, Color(sample["coverage"], sample["convective"],
 					sample["high"], sample["base"] / 6000.0))
 				fimg.set_pixel(x, y, Color(sample["wind_u"], sample["wind_v"],
@@ -85,7 +96,18 @@ func _build_textures() -> void:
 	weather_map = weather_tex
 	wind_map = wind_tex
 
-func _sample_weather(d: Vector3) -> Dictionary:
+func _sample_cell(c: int, d: Vector3) -> Dictionary:
+	var hum: float = _fields.humidity[c]
+	var rain_mm: float = _fields.precip[c]
+	var storm: float = _fields.storm_risk[c]
+	var temp: float = _fields.temp_mean[c]
+	var wu: float = _fields.wind_u[c]
+	var wv: float = _fields.wind_v[c]
+	var h: float = _fields.elev[c]
+	var oro := _orographic_lift_cell(c, d, wu, wv, h)
+	return _compose(d, hum, rain_mm, storm, temp, wu, wv, h, oro)
+
+func _sample_direction(d: Vector3) -> Dictionary:
 	var hum: float = _grid.sample_bilinear(_fields.humidity, d)
 	var rain_mm: float = _grid.sample_bilinear(_fields.precip, d)
 	var storm: float = _grid.sample_bilinear(_fields.storm_risk, d)
@@ -93,6 +115,12 @@ func _sample_weather(d: Vector3) -> Dictionary:
 	var wu: float = _grid.sample_bilinear(_fields.wind_u, d)
 	var wv: float = _grid.sample_bilinear(_fields.wind_v, d)
 	var h: float = Planet.macro_height(d)
+	var c := _grid.dir_to_index(d)
+	var oro := _orographic_lift_cell(c, d, wu, wv, h)
+	return _compose(d, hum, rain_mm, storm, temp, wu, wv, h, oro)
+
+func _compose(d: Vector3, hum: float, rain_mm: float, storm: float, temp: float,
+		wu: float, wv: float, h: float, oro: float) -> Dictionary:
 	var wet: float = clampf(rain_mm / 1800.0, 0.0, 1.2)
 	var ocean := h < 0.0
 
@@ -102,7 +130,6 @@ func _sample_weather(d: Vector3) -> Dictionary:
 	var syn: float = _synoptic.u(d)
 	var frontal: float = clampf((_fronts.s(d) + 1.0) * 0.5, 0.0, 1.0)
 	var cellular: float = _cells.u(d)
-	var oro: float = _orographic_lift(d, wu, wv, h)
 
 	var moist_score := hum * 0.66 + wet * 0.22 + syn * 0.12
 	moist_score += oro * 0.16
@@ -148,18 +175,27 @@ func _sample_weather(d: Vector3) -> Dictionary:
 		"humidity": hum,
 	}
 
-func _orographic_lift(d: Vector3, wu: float, wv: float, h: float) -> float:
+func _orographic_lift_cell(c: int, d: Vector3, wu: float, wv: float, h: float) -> float:
 	var tb := CubeSphere.tangent_basis(d)
 	var east: Vector3 = tb[0]
 	var north: Vector3 = tb[1]
 	var wind := east * wu + north * wv
 	if wind.length_squared() < 0.04:
 		return 0.0
-	var c := _grid.dir_to_index(d)
-	var step_angle := _grid.cell_size[c] / maxf(_cfg.planet_radius, 1.0)
-	var upwind := (d - wind.normalized() * step_angle).normalized()
-	var upwind_h := Planet.macro_height(upwind)
-	return clampf((h - upwind_h) / 900.0, 0.0, 1.0)
+	var base := c * 8
+	var upwind := -wind.normalized()
+	var best_dot := -2.0
+	var best_h := h
+	for k in 8:
+		var nb := _grid.nbr[base + k]
+		var seg := _grid.cell_dir(nb) - d
+		if seg.length_squared() < 1e-12:
+			continue
+		var dp := seg.normalized().dot(upwind)
+		if dp > best_dot:
+			best_dot = dp
+			best_h = _fields.elev[nb]
+	return clampf((h - best_h) / 900.0, 0.0, 1.0)
 
 func _dewpoint_c(temp_c: float, rh: float) -> float:
 	var a := 17.625
