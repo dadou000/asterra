@@ -2,7 +2,7 @@
 // All three representations sample the same planet-space height field, so changing
 // terrain/water LOD cannot move the visible shoreline.
 
-uniform sampler2DArray u_coast_clipmap;
+uniform sampler2DArray u_coast_clipmap : filter_linear, repeat_disable;
 uniform float u_coast_clipmap_ready = 0.0;
 uniform vec3 u_coast_center = vec3(1.0, 0.0, 0.0);
 uniform vec3 u_coast_right = vec3(0.0, 0.0, -1.0);
