@@ -65,3 +65,35 @@ vec3 surface_array_coord(vec3 dir, float face_res) {
 float surface_macro_height(sampler2DArray tex, vec3 dir, float face_res) {
 	return texture(tex, surface_array_coord(dir, face_res)).r;
 }
+
+float surface_hash13(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
+}
+
+float surface_vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(mix(surface_hash13(i), surface_hash13(i + vec3(1.0, 0.0, 0.0)), f.x),
+			mix(surface_hash13(i + vec3(0.0, 1.0, 0.0)), surface_hash13(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+		mix(mix(surface_hash13(i + vec3(0.0, 0.0, 1.0)), surface_hash13(i + vec3(1.0, 0.0, 1.0)), f.x),
+			mix(surface_hash13(i + vec3(0.0, 1.0, 1.0)), surface_hash13(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+		f.z);
+}
+
+// Orbit coastline detail is intentionally graphics-only. It perturbs the zero
+// contour by a small amount in planet-space, which gives the coarse macro field
+// a crisp, irregular shoreline without making islands appear far from sea level.
+float surface_visual_height(sampler2DArray tex, vec3 dir, float face_res, float radius) {
+	vec3 up = normalize(dir);
+	float macro_h = surface_macro_height(tex, up, face_res);
+	float gate = 1.0 - smoothstep(650.0, 1800.0, abs(macro_h));
+	vec3 p = up * radius;
+	float n0 = surface_vnoise(p * 0.00014) - 0.5;
+	float n1 = surface_vnoise(p * 0.00046 + vec3(17.0, -9.0, 23.0)) - 0.5;
+	float perturb = n0 * 170.0 + n1 * 52.0;
+	return macro_h + perturb * gate;
+}
