@@ -7,10 +7,11 @@ render_mode unshaded, blend_premul_alpha, depth_draw_never, depth_test_disabled,
 /// shadowing, cloud self-shadowing, electrical illumination and atmospheric
 /// aerial perspective between the camera and the visible cloud body.
 ///
-/// This pass uses premultiplied alpha. The raymarch already accumulates radiance
-/// in premultiplied form, and dense cloud cores are deliberately allowed to drive
-/// transmittance all the way to zero so terrain / horizon cannot leak through an
-/// optically thick cloud deck.
+/// The marcher is deliberately adaptive. Long grazing rays through the spherical
+/// cloud shell used to be divided into only a few dozen multi-kilometre samples;
+/// that produced the striped / aliased silhouettes visible near the horizon and
+/// could simply step over opaque cloud water. Empty air is skipped coarsely, but
+/// cloud bodies are integrated at a few hundred metres per sample.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -27,12 +28,13 @@ uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
 uniform float u_cloud_outer_radius = 1018500.0;
 
-// Optical controls. The old extinction made kilometre-thick cloud decks behave
-// like translucent mist. Edge vapour remains translucent, but medium / dense
-// cloud water receives extra extinction and therefore becomes properly opaque.
-uniform float u_extinction = 0.00135;
-uniform float u_core_extinction_boost = 2.35;
-uniform float u_transmittance_cutoff = 0.006;
+// Optical / quality controls.
+uniform float u_extinction = 0.00215;
+uniform float u_core_extinction_boost = 3.15;
+uniform float u_transmittance_cutoff = 0.004;
+uniform float u_opaque_core_path = 720.0;
+uniform float u_dense_step = 240.0;
+uniform float u_empty_step = 720.0;
 uniform float u_density_scale = 1.18;
 uniform float u_wind_speed = 1.0;
 uniform float u_detail_strength = 0.27;
@@ -43,7 +45,7 @@ uniform vec4 u_lightning1 = vec4(0.0);
 uniform vec4 u_lightning2 = vec4(0.0);
 uniform vec4 u_lightning3 = vec4(0.0);
 
-const int MAX_STEPS = 72;
+const int MAX_STEPS = 224;
 const float BIG = 1.0e20;
 
 // Same atmosphere constants as atmosphere_sky.gdshader. This pass integrates
@@ -92,10 +94,14 @@ float remap01(float v, float lo, float hi) {
 }
 
 float vertical_low_profile(float h01, float convective) {
-	float base = smoothstep(0.0, mix(0.060, 0.020, convective), h01);
+	// A broad smooth base used to leave a long, translucent under-cloud layer.
+	// Dense/convective clouds now acquire optical depth almost immediately above
+	// their condensation level while still retaining a soft edge from morphology.
+	float base_width = mix(0.020, 0.006, clamp(convective, 0.0, 1.0));
+	float base = smoothstep(0.0, base_width, h01);
 	float cap = 1.0 - smoothstep(mix(0.70, 0.91, convective), 1.0, h01);
 	float deck = 1.0 - h01 * 0.10;
-	float tower = smoothstep(0.015, 0.18, h01) * (1.0 - 0.06 * h01);
+	float tower = smoothstep(0.010, 0.16, h01) * (1.0 - 0.06 * h01);
 	return base * cap * mix(deck, tower, convective);
 }
 
@@ -182,10 +188,8 @@ float cloud_density(vec3 p, bool lighting_sample) {
 	return clamp((low_density + high_density) * u_density_scale, 0.0, 1.7);
 }
 
-// Dense liquid-water regions should become optically thick while tenuous edges
-// remain soft. This remap changes extinction, not morphology or cloud coverage.
 float optical_density(float density) {
-	float core = smoothstep(0.10, 0.72, density);
+	float core = smoothstep(0.08, 0.58, density);
 	return density * mix(1.0, u_core_extinction_boost, core);
 }
 
@@ -327,7 +331,12 @@ void fragment() {
 	if (ground.x > 0.0) {
 		t1 = min(t1, ground.x);
 	}
-	t1 = min(t1, scene_dist);
+	if (scene_dist < BIG * 0.5) {
+		// Leave a tiny gap before opaque scene depth. It removes depth-edge sparkle
+		// without changing which side of terrain the volumetric cloud occupies.
+		float depth_guard = max(3.0, scene_dist * 2.0e-6);
+		t1 = min(t1, max(scene_dist - depth_guard, 0.0));
+	}
 	if (t1 <= t0 + 1.0) {
 		discard;
 	}
@@ -342,73 +351,105 @@ void fragment() {
 		discard;
 	}
 
-	int steps = int(clamp(ceil(seg / 380.0), 24.0, float(MAX_STEPS)));
-	float ds = seg / float(steps);
-	float t = t0 + ds * screen_jitter(FRAGCOORD.xy);
+	float dense_step = clamp(u_dense_step, 120.0, 520.0);
+	float empty_step = max(clamp(u_empty_step, dense_step * 1.8, 1400.0), dense_step);
+	float jitter = screen_jitter(FRAGCOORD.xy);
+	// Jitter only a fraction of a dense step. Full-step jitter on kilometre-scale
+	// grazing samples was the source of the screen-door / diagonal stripe pattern.
+	float t = t0 + dense_step * (0.10 + 0.28 * jitter);
 	float transmittance = 1.0;
 	vec3 radiance = vec3(0.0);
 	float optical_t_sum = 0.0;
 	float optical_weight = 0.0;
+	float dense_path = 0.0;
 	vec3 sun_dir = normalize(u_sun_dir);
 	float mu = dot(rd, sun_dir);
 	float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
 	phase *= 4.0 * PI;
 
 	for (int i = 0; i < MAX_STEPS; i++) {
-		if (i >= steps) {
+		if (t >= t1 || transmittance <= 0.0) {
 			break;
 		}
+
 		vec3 p = ro + rd * t;
-		float density = cloud_density(p, false);
-		if (density > 0.002) {
-			float extinction_density = optical_density(density);
-			float optical = extinction_density * ds * u_extinction;
-			float step_transmittance = exp(-optical);
-			float alpha_step = 1.0 - step_transmittance;
+		float density0 = cloud_density(p, false);
 
-			// Use the same stronger extinction in the sunward probes so an optically
-			// opaque cloud also has the dark interior expected from that opacity.
-			float ld0 = optical_density(cloud_density(p + sun_dir * 550.0, true));
-			float ld1 = optical_density(cloud_density(p + sun_dir * 1750.0, true));
-			float ld2 = optical_density(cloud_density(p + sun_dir * 4150.0, true));
-			float ld3 = optical_density(cloud_density(p + sun_dir * 8950.0, true));
-			float light_tau = (ld0 * 550.0 + ld1 * 1200.0 + ld2 * 2400.0 + ld3 * 4800.0)
-				* u_extinction * 1.08;
-			float sun_trans = exp(-light_tau);
-			float sun_visible = planet_sun_visibility(p, sun_dir);
-			vec3 up = normalize(p);
-			float sun_elev = dot(up, sun_dir);
-			float twilight = smoothstep(-0.22, 0.10, sun_elev);
-
-			vec3 night_ambient = vec3(0.0006, 0.0009, 0.0018);
-			vec3 day_ambient = vec3(0.34, 0.45, 0.61);
-			vec3 ambient = mix(night_ambient, day_ambient, twilight);
-			float powder = 1.0 - exp(-density * 3.4);
-			vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
-				* (0.10 + phase * 0.74) * (0.64 + powder * 0.46);
-			float sky_occlusion = mix(0.24, 0.92, sqrt(max(sun_trans, 0.0)));
-			vec3 sample_light = ambient * sky_occlusion + direct;
-
-			float electric = lightning_illumination(p);
-			if (electric > 0.001) {
-				vec3 electric_color = vec3(0.42, 0.62, 1.0);
-				sample_light += electric_color * electric * (0.20 + powder * 0.46);
+		// Empty-space skip. A midpoint probe prevents the coarse skip from jumping
+		// across a narrow cloud edge; when it detects one we approach it with the
+		// fine step rather than integrating a giant slab in one sample.
+		if (density0 <= 0.0015) {
+			float skip_len = min(empty_step, t1 - t);
+			float probe_t = t + skip_len * 0.5;
+			float probe_density = cloud_density(ro + rd * probe_t, false);
+			if (probe_density <= 0.0015) {
+				t += skip_len;
+				continue;
 			}
-
-			float contribution = transmittance * alpha_step;
-			radiance += contribution * sample_light;
-			optical_t_sum += contribution * t;
-			optical_weight += contribution;
-			transmittance *= step_transmittance;
-
-			// Once a cloud has removed >99.4% of background light, make it exactly
-			// opaque. This avoids a visible terrain/horizon ghost through storm decks.
-			if (transmittance < u_transmittance_cutoff) {
-				transmittance = 0.0;
-				break;
-			}
+			t += min(dense_step, skip_len * 0.35);
+			continue;
 		}
-		t += ds;
+
+		float step_len = min(dense_step, t1 - t);
+		// Mid-step sampling integrates the density over the interval instead of
+		// treating one sparse point as the whole slab. This removes most remaining
+		// marching bands on silhouette / horizon rays.
+		float density1 = cloud_density(p + rd * (step_len * 0.5), false);
+		float density = max(density0 * 0.35 + density1 * 0.65, 0.0);
+		float extinction_density = optical_density(density);
+		float optical = extinction_density * step_len * u_extinction;
+		float step_transmittance = exp(-optical);
+		float alpha_step = 1.0 - step_transmittance;
+
+		float ld0 = optical_density(cloud_density(p + sun_dir * 550.0, true));
+		float ld1 = optical_density(cloud_density(p + sun_dir * 1750.0, true));
+		float ld2 = optical_density(cloud_density(p + sun_dir * 4150.0, true));
+		float ld3 = optical_density(cloud_density(p + sun_dir * 8950.0, true));
+		float light_tau = (ld0 * 550.0 + ld1 * 1200.0 + ld2 * 2400.0 + ld3 * 4800.0)
+			* u_extinction * 1.08;
+		float sun_trans = exp(-light_tau);
+		float sun_visible = planet_sun_visibility(p, sun_dir);
+		vec3 up = normalize(p);
+		float sun_elev = dot(up, sun_dir);
+		float twilight = smoothstep(-0.22, 0.10, sun_elev);
+
+		vec3 night_ambient = vec3(0.0006, 0.0009, 0.0018);
+		vec3 day_ambient = vec3(0.34, 0.45, 0.61);
+		vec3 ambient = mix(night_ambient, day_ambient, twilight);
+		float powder = 1.0 - exp(-density * 3.4);
+		vec3 direct = vec3(1.0, 0.92, 0.80) * sun_visible * sun_trans
+			* (0.10 + phase * 0.74) * (0.64 + powder * 0.46);
+		float sky_occlusion = mix(0.24, 0.92, sqrt(max(sun_trans, 0.0)));
+		vec3 sample_light = ambient * sky_occlusion + direct;
+
+		float electric = lightning_illumination(p);
+		if (electric > 0.001) {
+			vec3 electric_color = vec3(0.42, 0.62, 1.0);
+			sample_light += electric_color * electric * (0.20 + powder * 0.46);
+		}
+
+		float contribution = transmittance * alpha_step;
+		radiance += contribution * sample_light;
+		optical_t_sum += contribution * (t + step_len * 0.5);
+		optical_weight += contribution;
+		transmittance *= step_transmittance;
+
+		float core_presence = smoothstep(0.16, 0.52, density);
+		dense_path += step_len * core_presence;
+		// A sustained liquid-water core is optically opaque in reality. This
+		// conservative fallback also prevents a sparse discrete marcher from ever
+		// leaving the terrain horizon visible through a kilometre of dense cloud.
+		if (dense_path >= u_opaque_core_path) {
+			radiance += transmittance * sample_light;
+			transmittance = 0.0;
+			break;
+		}
+		if (transmittance < u_transmittance_cutoff) {
+			transmittance = 0.0;
+			break;
+		}
+
+		t += step_len;
 	}
 
 	float alpha = 1.0 - transmittance;
@@ -416,9 +457,8 @@ void fragment() {
 		discard;
 	}
 
-	// Aerial perspective is evaluated on an un-premultiplied cloud colour, then
-	// re-premultiplied for blend_premul_alpha. This keeps atmospheric haze in
-	// front of the cloud without accidentally making the cloud itself transparent.
+	// Atmospheric scattering changes colour but never re-opens the background:
+	// alpha remains the Beer-Lambert cloud opacity calculated above.
 	vec3 cloud_color = radiance / max(alpha, 1e-4);
 	if (optical_weight > 1e-5) {
 		float representative_t = optical_t_sum / optical_weight;
