@@ -6,6 +6,11 @@ render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_dis
 /// Generated 3D noise only turns that physical envelope into cloud morphology.
 /// Direct Helion light is blocked by the planet and by cloud water itself;
 /// electrical discharges inject short-lived emissive light into storm volumes.
+///
+/// The atmosphere sky is a background pass, so it cannot naturally sit in front
+/// of this fullscreen cloud pass. To keep clouds physically inside the Rayleigh /
+/// Mie atmosphere, the same scattering model is integrated from the camera to
+/// the optical centre of the cloud contribution before the cloud is composited.
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
@@ -34,6 +39,19 @@ uniform vec4 u_lightning3 = vec4(0.0);
 
 const int MAX_STEPS = 60;
 const float BIG = 1.0e20;
+
+// Keep these identical to atmosphere_sky.gdshader. The cloud pass only needs a
+// short camera-to-cloud integration, so fewer samples are enough than the full
+// sky ray while still reproducing its colour/extinction relationship.
+const vec3 CLOUD_RAYLEIGH_COEFF = vec3(5.5e-6, 13.0e-6, 22.4e-6);
+const float CLOUD_MIE_COEFF = 21e-6;
+const float CLOUD_RAYLEIGH_SCALE_HEIGHT = 8000.0;
+const float CLOUD_MIE_SCALE_HEIGHT = 1200.0;
+const float CLOUD_MIE_G = 0.758;
+const float CLOUD_SUN_INTENSITY = 22.0;
+const float CLOUD_AERIAL_STRENGTH = 0.45;
+const int CLOUD_AP_STEPS = 6;
+const int CLOUD_AP_LIGHT_STEPS = 2;
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -186,6 +204,87 @@ float lightning_illumination(vec3 p) {
 		+ lightning_one(p, u_lightning3);
 }
 
+// Single-scatter aerial perspective for the finite camera -> cloud segment.
+// The sky shader already integrates the atmosphere behind the clouds. This only
+// integrates the air *in front* of them, which is exactly the missing ordering
+// term that otherwise makes a fullscreen cloud pass look pasted over Rayleigh.
+vec4 cloud_aerial_fog(vec3 cam, vec3 frag, vec3 sun_dir) {
+	vec3 delta = frag - cam;
+	float seg = length(delta);
+	if (seg < 25.0) {
+		return vec4(0.0);
+	}
+	vec3 dir = delta / seg;
+	vec2 hit = sphere_hit(cam, dir, u_atmosphere_radius);
+	float t0 = max(hit.x, 0.0);
+	float t1 = min(hit.y, seg);
+	if (t1 <= t0) {
+		return vec4(0.0);
+	}
+
+	float step_len = (t1 - t0) / float(CLOUD_AP_STEPS);
+	float od_rlh = 0.0;
+	float od_mie = 0.0;
+	vec3 total_rlh = vec3(0.0);
+	vec3 total_mie = vec3(0.0);
+	float t = t0;
+
+	for (int i = 0; i < CLOUD_AP_STEPS; i++) {
+		vec3 pos = cam + dir * (t + step_len * 0.5);
+		float height = length(pos) - u_planet_radius;
+		if (height < 0.0) {
+			t += step_len;
+			continue;
+		}
+		float step_rlh = exp(-height / CLOUD_RAYLEIGH_SCALE_HEIGHT) * step_len;
+		float step_mie = exp(-height / CLOUD_MIE_SCALE_HEIGHT) * step_len;
+		od_rlh += step_rlh;
+		od_mie += step_mie;
+
+		vec2 light_hit = sphere_hit(pos, sun_dir, u_atmosphere_radius);
+		float light_step = max(light_hit.y, 0.0) / float(CLOUD_AP_LIGHT_STEPS);
+		float light_od_rlh = 0.0;
+		float light_od_mie = 0.0;
+		float lt = 0.0;
+		bool occluded = false;
+		for (int j = 0; j < CLOUD_AP_LIGHT_STEPS; j++) {
+			vec3 light_pos = pos + sun_dir * (lt + light_step * 0.5);
+			float light_height = length(light_pos) - u_planet_radius;
+			if (light_height < 0.0) {
+				occluded = true;
+				break;
+			}
+			light_od_rlh += exp(-light_height / CLOUD_RAYLEIGH_SCALE_HEIGHT) * light_step;
+			light_od_mie += exp(-light_height / CLOUD_MIE_SCALE_HEIGHT) * light_step;
+			lt += light_step;
+		}
+		if (!occluded) {
+			vec3 attn = exp(-(CLOUD_MIE_COEFF * (od_mie + light_od_mie)
+				+ CLOUD_RAYLEIGH_COEFF * (od_rlh + light_od_rlh)));
+			total_rlh += step_rlh * attn;
+			total_mie += step_mie * attn;
+		}
+		t += step_len;
+	}
+
+	float mu = dot(dir, sun_dir);
+	float mumu = mu * mu;
+	float gg = CLOUD_MIE_G * CLOUD_MIE_G;
+	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mumu);
+	float phase_mie = 3.0 / (8.0 * PI) * ((1.0 - gg) * (mumu + 1.0))
+		/ (pow(max(1.0 + gg - 2.0 * mu * CLOUD_MIE_G, 1e-4), 1.5) * (2.0 + gg));
+	vec3 inscatter = CLOUD_SUN_INTENSITY
+		* (phase_rlh * CLOUD_RAYLEIGH_COEFF * total_rlh
+			+ phase_mie * CLOUD_MIE_COEFF * total_mie);
+
+	vec3 extinction = exp(-(CLOUD_RAYLEIGH_COEFF * od_rlh + CLOUD_MIE_COEFF * od_mie));
+	float amount = clamp(1.0 - dot(extinction, vec3(0.33333)), 0.0, 1.0);
+	if (amount < 5e-4) {
+		return vec4(0.0);
+	}
+	return vec4((1.0 - exp(-inscatter * CLOUD_AERIAL_STRENGTH)) / amount, amount);
+}
+
 void fragment() {
 	vec2 screen_uv = FRAGCOORD.xy / VIEWPORT_SIZE;
 	float raw_depth = texture(u_scene_depth, screen_uv).r;
@@ -232,6 +331,11 @@ void fragment() {
 	float t = t0 + ds * screen_jitter(FRAGCOORD.xy);
 	float transmittance = 1.0;
 	vec3 radiance = vec3(0.0);
+	// Optical-depth weighted cloud distance. This is a much better representative
+	// point for foreground atmospheric scattering than either the shell entry or
+	// the first noisy density hit, especially for thick cloud decks near horizon.
+	float optical_t_sum = 0.0;
+	float optical_weight = 0.0;
 	vec3 sun_dir = normalize(u_sun_dir);
 	float mu = dot(rd, sun_dir);
 	float phase = hg(0.72, mu) * 0.78 + hg(-0.20, mu) * 0.22;
@@ -280,7 +384,10 @@ void fragment() {
 				sample_light += electric_color * electric * (0.20 + powder * 0.46);
 			}
 
-			radiance += transmittance * alpha_step * sample_light;
+			float contribution = transmittance * alpha_step;
+			radiance += contribution * sample_light;
+			optical_t_sum += contribution * t;
+			optical_weight += contribution;
 			transmittance *= 1.0 - alpha_step;
 		}
 		t += ds;
@@ -290,6 +397,19 @@ void fragment() {
 	if (alpha < 0.002) {
 		discard;
 	}
-	ALBEDO = radiance / max(alpha, 1e-4);
+
+	// `blend_mix` expects an un-premultiplied source colour. The raymarch builds
+	// premultiplied radiance, so normalise once, then apply the atmosphere between
+	// the camera and the optical centre of the cloud. The background sky already
+	// contains the atmosphere behind the cloud and is preserved by alpha blending.
+	vec3 cloud_color = radiance / max(alpha, 1e-4);
+	if (optical_weight > 1e-5) {
+		float representative_t = optical_t_sum / optical_weight;
+		vec3 representative_pos = ro + rd * representative_t;
+		vec4 aerial = cloud_aerial_fog(ro, representative_pos, sun_dir);
+		cloud_color = mix(cloud_color, aerial.rgb, aerial.a);
+	}
+
+	ALBEDO = cloud_color;
 	ALPHA = alpha;
 }
