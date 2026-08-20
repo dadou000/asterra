@@ -117,22 +117,34 @@ func _build_orbit_textures() -> void:
 func macro_height(d: Vector3) -> float:
 	return grid.sample_bilinear(fields.elev, d)
 
+## Detail parameters stay identical through the coast and continental shelf.
+## Only genuinely deep ocean gradually approaches the old subdued seabed profile.
+## This removes the hard terrain-amplitude discontinuity that used to occur at
+## exactly 0 m macro elevation.
+func _detail_profile(macro_h: float, relief: float, flat: float, hardness: float) -> Vector3:
+	var ocean_depth := maxf(-macro_h, 0.0)
+	var deep_ocean := smoothstep(250.0, 1500.0, ocean_depth)
+	var used_relief := lerpf(relief, relief * 0.5, deep_ocean)
+	var used_flat := lerpf(flat, maxf(flat, 0.55), deep_ocean)
+	var used_hardness := lerpf(hardness, 1.0, deep_ocean)
+	return Vector3(used_relief, used_flat, used_hardness)
+
 ## Full terrain height in metres relative to sea level.
 func terrain_height(d: Vector3, detail: TerrainDetail = null, snap: Dictionary = {}) -> float:
 	var det := detail if detail != null else _detail_main
-	var h := grid.sample_bilinear(fields.elev, d)
+	var macro_h := grid.sample_bilinear(fields.elev, d)
 	var relief := grid.sample_bilinear(fields.relief, d)
 	var flat := clampf(grid.sample_bilinear(fields.floodplain, d) * 0.8
 		+ grid.sample_bilinear(fields.wetland, d) * 0.5, 0.0, 1.0)
 	var hardness: float = 1.7 - grid.sample_bilinear(fields.erodibility, d) * 0.55
-	if h > 0.0:
-		h += det.height(d, relief, flat, hardness)
-		# Macro rivers cut a shallow trench so the valley floor reads as a valley.
+	var profile := _detail_profile(macro_h, relief, flat, hardness)
+	var h := macro_h + det.height(d, profile.x, profile.y, profile.z)
+	# Macro rivers only cut the terrestrial surface. The old sea-level branch also
+	# controlled this implicitly; keep that behaviour without changing detail amplitude.
+	if macro_h > 0.0:
 		var w := grid.sample_bilinear(fields.river_width, d)
 		if w > 4.0:
 			h -= clampf(w * 0.045, 0.0, 22.0)
-	else:
-		h += det.height(d, relief * 0.5, 0.55, 1.0)
 	if snap.is_empty():
 		h += Deltas.offset_at(d)
 	else:
@@ -142,18 +154,17 @@ func terrain_height(d: Vector3, detail: TerrainDetail = null, snap: Dictionary =
 ## Height with no player edits applied -- the "regenerate from seed" reference.
 func pristine_height(d: Vector3, detail: TerrainDetail = null) -> float:
 	var det := detail if detail != null else _detail_main
-	var h := grid.sample_bilinear(fields.elev, d)
+	var macro_h := grid.sample_bilinear(fields.elev, d)
 	var relief := grid.sample_bilinear(fields.relief, d)
 	var flat := clampf(grid.sample_bilinear(fields.floodplain, d) * 0.8
 		+ grid.sample_bilinear(fields.wetland, d) * 0.5, 0.0, 1.0)
 	var hardness: float = 1.7 - grid.sample_bilinear(fields.erodibility, d) * 0.55
-	if h > 0.0:
-		h += det.height(d, relief, flat, hardness)
+	var profile := _detail_profile(macro_h, relief, flat, hardness)
+	var h := macro_h + det.height(d, profile.x, profile.y, profile.z)
+	if macro_h > 0.0:
 		var w := grid.sample_bilinear(fields.river_width, d)
 		if w > 4.0:
 			h -= clampf(w * 0.045, 0.0, 22.0)
-	else:
-		h += det.height(d, relief * 0.5, 0.55, 1.0)
 	return h
 
 func radius_at(d: Vector3, detail: TerrainDetail = null, snap: Dictionary = {}) -> float:
