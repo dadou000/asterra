@@ -93,6 +93,25 @@ void wave(vec3 ps, vec3 up, vec3 dir, vec3 cross_dir, float k, float amp, float 
 	grad += (dir - up * dot(dir, up)) * (amp * k * cos(ph));
 }
 
+bool exposed_skirt_wall(vec3 planet_pos, vec3 radial_up) {
+	// The generated water skirt reuses the chunk-edge UV for both its top and
+	// dropped vertices, so the whole vertical wall has an exactly constant edge
+	// coordinate. Real water triangles only touch that coordinate along one line.
+	float edge = min(min(UV.x, 1.0 - UV.x), min(UV.y, 1.0 - UV.y));
+	if (edge > 0.00002) {
+		return false;
+	}
+	vec3 gx = dFdx(planet_pos);
+	vec3 gy = dFdy(planet_pos);
+	vec3 g = cross(gx, gy);
+	float gl = length(g);
+	if (gl < 1e-7) {
+		return false;
+	}
+	float radialness = abs(dot(g / gl, radial_up));
+	return radialness < 0.45;
+}
+
 void fragment() {
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
@@ -101,6 +120,13 @@ void fragment() {
 	}
 
 	vec3 up = normalize(v_planet);
+	// Water skirts caused the same serrated vertical chunk-boundary walls as the
+	// terrain skirts. Their job is only to cover sub-pixel cracks; once the wall
+	// itself is visible it is doing more harm than the crack it hides.
+	if (exposed_skirt_wall(v_planet, up)) {
+		discard;
+	}
+
 	float dist = length(VERTEX);
 	float t = TIME;
 	float depth = max(v_signed_depth, 0.0);
