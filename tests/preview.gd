@@ -16,7 +16,7 @@ func _ready() -> void:
 	var dir := "user://preview"
 	DirAccess.make_dir_recursive_absolute(dir)
 	for i in PlanetMap.LAYER_NAMES.size():
-		var img := map._render(i)
+		var img: Image = map._render(i)
 		var name := String(PlanetMap.LAYER_NAMES[i]).to_lower().replace(" ", "_").replace("&", "and")
 		img.save_png("%s/%02d_%s.png" % [dir, i, name])
 	print("wrote %d layers to %s" % [PlanetMap.LAYER_NAMES.size(), ProjectSettings.globalize_path(dir)])
