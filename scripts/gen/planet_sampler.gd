@@ -12,12 +12,20 @@ extends Node
 
 signal world_ready(fields: PlanetFields)
 
+const MACRO_SMOOTH_PASSES := 2
+const MACRO_SMOOTH_STRENGTH := 0.50
+
 var cfg: GenConfig
 var fields: PlanetFields
 var grid: PlanetGrid
 var ready_state: bool = false
 
 var _detail_main: TerrainDetail
+
+## Runtime terrain macro elevation. The bake remains untouched for geology,
+## hydrology, climate, etc.; this derived field removes the visible 8 km cell
+## lattice before the value is upsampled into terrain chunks and coastline caches.
+var _macro_elev := PackedFloat32Array()
 
 ## Graphics-only cube-face elevation texture. Each layer contains one macro face
 ## plus a one-texel neighbour gutter. Orbit shaders use this instead of chunk
@@ -39,6 +47,7 @@ func adopt(p_fields: PlanetFields) -> void:
 	# Everything below is derived, never serialised, and must exist before the
 	# first chunk is meshed -- the mesher calls into it from worker threads, so
 	# nothing here may be built lazily.
+	_build_smoothed_macro_elevation()
 	_build_warp_noise()
 	_build_cell_colors()
 	_build_water_fields()
@@ -58,6 +67,35 @@ var _water_surface := PackedFloat32Array()
 ## 1 where a cell holds ocean or lake, 0 where it does not.
 var _water_mask := PackedFloat32Array()
 
+## Mild separable-looking 3x3 Gaussian relaxation on the spherical neighbour
+## graph. Two half-strength passes are enough to remove the baked cell corners and
+## slope discontinuities without turning mountains into broad domes. Because the
+## neighbour table crosses cube faces geometrically, this filter has no cube seam.
+func _build_smoothed_macro_elevation() -> void:
+	_macro_elev = fields.elev.duplicate()
+	for _pass in MACRO_SMOOTH_PASSES:
+		var src := _macro_elev
+		var dst := PackedFloat32Array()
+		dst.resize(grid.cell_count)
+		for c in grid.cell_count:
+			var base := c * 8
+			# Gaussian-like 3x3 kernel on E/NE/N/NW/W/SW/S/SE:
+			#   1 2 1
+			#   2 4 2   / 16
+			#   1 2 1
+			var blurred := src[c] * 4.0
+			blurred += src[grid.nbr[base + 0]] * 2.0
+			blurred += src[grid.nbr[base + 2]] * 2.0
+			blurred += src[grid.nbr[base + 4]] * 2.0
+			blurred += src[grid.nbr[base + 6]] * 2.0
+			blurred += src[grid.nbr[base + 1]]
+			blurred += src[grid.nbr[base + 3]]
+			blurred += src[grid.nbr[base + 5]]
+			blurred += src[grid.nbr[base + 7]]
+			blurred *= 1.0 / 16.0
+			dst[c] = lerpf(src[c], blurred, MACRO_SMOOTH_STRENGTH)
+		_macro_elev = dst
+
 func _build_warp_noise() -> void:
 	_warp_noise = FastNoiseLite.new()
 	_warp_noise.seed = cfg.stream_seed("biome_edge")
@@ -76,9 +114,9 @@ func _warp_lookup(d: Vector3) -> Vector3:
 		_warp_noise.get_noise_3d(y + 913.0, z, x),
 		_warp_noise.get_noise_3d(z, x - 471.0, y)) * amp).normalized()
 
-## Build six small float textures directly from the authoritative macro field.
-## One virtual cell is added around every face. Those gutter samples are obtained
-## through the direction-space sampler, so linear GPU filtering sees the same
+## Build six small float textures directly from the authoritative runtime macro
+## field. One virtual cell is added around every face. Those gutter samples are
+## obtained through the direction-space sampler, so filtering sees the same
 ## neighbour the CPU sees when a lookup reaches a cube edge.
 func _build_orbit_textures() -> void:
 	orbit_elevation_texture = null
@@ -97,11 +135,11 @@ func _build_orbit_textures() -> void:
 				var i: int = x - 1
 				var h: float
 				if i >= 0 and i < res and j >= 0 and j < res:
-					h = fields.elev[grid.idx(face, i, j)]
+					h = _macro_elev[grid.idx(face, i, j)]
 				else:
 					var u: float = (float(i) + 0.5) * cell_step - 1.0
 					var d := CubeSphere.face_uv_to_dir(face, u, v)
-					h = grid.sample_bilinear(fields.elev, d)
+					h = grid.sample_bilinear(_macro_elev, d)
 				img.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
 		images.append(img)
 
@@ -113,9 +151,10 @@ func _build_orbit_textures() -> void:
 	orbit_elevation_texture = texture_array
 
 # ------------------------------------------------------------------ height ---
-## Baked macro elevation (m relative to sea level), bilinear.
+## Baked macro elevation after the runtime smoothing pass, in metres relative to
+## sea level. The same field is used by chunks, coastline clipmaps and orbit.
 func macro_height(d: Vector3) -> float:
-	return grid.sample_bilinear(fields.elev, d)
+	return grid.sample_bilinear(_macro_elev, d)
 
 ## Detail parameters stay identical through the coast and continental shelf.
 ## Only genuinely deep ocean gradually approaches the old subdued seabed profile.
@@ -132,7 +171,7 @@ func _detail_profile(macro_h: float, relief: float, flat: float, hardness: float
 ## Full terrain height in metres relative to sea level.
 func terrain_height(d: Vector3, detail: TerrainDetail = null, snap: Dictionary = {}) -> float:
 	var det := detail if detail != null else _detail_main
-	var macro_h := grid.sample_bilinear(fields.elev, d)
+	var macro_h := macro_height(d)
 	var relief := grid.sample_bilinear(fields.relief, d)
 	var flat := clampf(grid.sample_bilinear(fields.floodplain, d) * 0.8
 		+ grid.sample_bilinear(fields.wetland, d) * 0.5, 0.0, 1.0)
@@ -154,7 +193,7 @@ func terrain_height(d: Vector3, detail: TerrainDetail = null, snap: Dictionary =
 ## Height with no player edits applied -- the "regenerate from seed" reference.
 func pristine_height(d: Vector3, detail: TerrainDetail = null) -> float:
 	var det := detail if detail != null else _detail_main
-	var macro_h := grid.sample_bilinear(fields.elev, d)
+	var macro_h := macro_height(d)
 	var relief := grid.sample_bilinear(fields.relief, d)
 	var flat := clampf(grid.sample_bilinear(fields.floodplain, d) * 0.8
 		+ grid.sample_bilinear(fields.wetland, d) * 0.5, 0.0, 1.0)
@@ -198,7 +237,10 @@ func _build_water_fields() -> void:
 		var lake: float = fields.lake_level[c]
 		var is_lake := lake > -1e8
 		_water_surface[c] = lake if is_lake else 0.0
-		_water_mask[c] = 1.0 if (is_lake or fields.elev[c] < 0.0) else 0.0
+		# Ocean classification follows the same smoothed runtime macro field as
+		# terrain, otherwise the water coverage cache would retain the old blocky
+		# cell coastline after the terrain itself had been smoothed.
+		_water_mask[c] = 1.0 if (is_lake or _macro_elev[c] < 0.0) else 0.0
 	# One ring of dilation. A lake's shoreline is a terrain crossing *inside* the
 	# last wet cell, so the level has to still be the lake's own out at the cell
 	# border; interpolating straight down to sea level instead sinks the water
@@ -231,7 +273,7 @@ func _build_cell_colors() -> void:
 
 func has_water(d: Vector3) -> bool:
 	var c := grid.dir_to_index(d)
-	return fields.lake_level[c] > -1e8 or fields.elev[c] < 0.0
+	return fields.lake_level[c] > -1e8 or macro_height(d) < 0.0
 
 # ------------------------------------------------------------- inspection ---
 ## Everything known about a surface location. Used by the HUD, the excavator and
@@ -244,7 +286,7 @@ func sample_info(d: Vector3) -> Dictionary:
 		"lat_deg": rad_to_deg(latlon.x),
 		"lon_deg": rad_to_deg(latlon.y),
 		"elevation": terrain_height(d),
-		"macro_elevation": fields.elev[c],
+		"macro_elevation": macro_height(d),
 		"relief": fields.relief[c],
 		"rock": fields.rock[c],
 		"rock_name": PlanetFields.ROCK_NAMES[fields.rock[c]],
