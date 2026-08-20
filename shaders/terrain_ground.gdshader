@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 /// Terrain surface.
 
 instance uniform float morph : hint_range(0.0, 1.0) = 0.0;
@@ -97,17 +97,19 @@ void fragment() {
 		albedo = mix(albedo, depth_color(chunk_depth) * 0.30, uv_glyph(UV) * u_debug_uv);
 	}
 
-	float cloud_visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
-	float cloud_shadow = 1.0 - cloud_visibility;
-	// Direct sun is handled in light(). This modest colour/AO response represents
-	// the loss of bright skylight beneath thick decks without blacking out albedo.
-	albedo *= mix(vec3(1.0), vec3(0.84, 0.88, 0.94), cloud_shadow * 0.55);
+	vec3 sun_dir = normalize(u_sun_dir);
+	float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
+	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
+	// Dense clouds strongly reduce the bright blue hemisphere but never remove
+	// all diffuse light. This replaces the previous AO/albedo darkening hack.
+	float sky_access = mix(0.24, 1.0, sqrt(clamp(cloud_visibility, 0.0, 1.0)));
 
 	ALBEDO = albedo;
+	EMISSION = albedo * skylight * sky_access;
 	ROUGHNESS = mix(0.94, 0.82, rock);
 	SPECULAR = 0.12;
 	METALLIC = 0.0;
-	AO = mix(1.0, 0.28, cloud_shadow);
+	AO = 1.0;
 	AO_LIGHT_AFFECT = 1.0;
 	FOG = aerial_fog(camera_planet, v_planet);
 }
@@ -115,7 +117,10 @@ void fragment() {
 void light() {
 	float visibility = 1.0;
 	if (LIGHT_IS_DIRECTIONAL) {
-		visibility = cloud_surface_sun_visibility(v_planet, normalize(u_sun_dir));
+		vec3 sun_dir = normalize(u_sun_dir);
+		float planet_visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
+		float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
+		visibility = planet_visibility * cloud_visibility;
 	}
 
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
