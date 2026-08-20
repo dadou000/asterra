@@ -39,6 +39,12 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 func refresh_surface() -> void:
 	_refresh()
 
+func set_weather_map(texture: Texture2DArray, face_res: float) -> void:
+	if _material == null or texture == null:
+		return
+	_material.set_shader_parameter("u_cloud_weather_map", texture)
+	_material.set_shader_parameter("u_cloud_weather_face_res", face_res)
+
 func _refresh() -> void:
 	if not Planet.ready_state or Planet.orbit_elevation_texture == null:
 		return
