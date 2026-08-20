@@ -1,19 +1,25 @@
-/// Cheap planet-space cloud optical depth shared by terrain, ocean and sky.
+/// Planet-space cloud optical depth shared by terrain, ocean and atmosphere.
 ///
-/// The fullscreen cloud volume cannot participate in Godot's shadow map. Rather
-/// than inventing a second procedural cloud field here, this projects the same
-/// weather-driven macro structure used by the visible cloud renderer onto three
-/// representative cloud shells. Fine 3D erosion is intentionally omitted from
-/// the shadow map: it is sub-pixel at long range and would multiply GPU cost.
+/// The fullscreen cloud renderer cannot cast a Godot shadow map. Instead we
+/// integrate the same weather-driven macro density used by the visible volume
+/// along the ray toward Helion. This is intentionally lower frequency than the
+/// visible 3D erosion, but it uses the same low/high layer heights and profiles.
+///
+/// Previous versions projected three fixed shells (2.6/7.2/12.4 km). That made
+/// shadows detach from clouds whenever their weather-defined base/top differed,
+/// and counted deep convection more than once. This integral removes that class
+/// of mismatch.
 
 #include "res://shaders/cloud_structure.gdshaderinc"
 
 uniform sampler2DArray u_cloud_weather_map : filter_linear, repeat_disable;
 uniform float u_cloud_weather_face_res = 0.0;
-uniform float u_cloud_shadow_strength : hint_range(0.0, 1.0) = 0.96;
-uniform float u_cloud_shadow_low_altitude = 2600.0;
-uniform float u_cloud_shadow_mid_altitude = 7200.0;
-uniform float u_cloud_shadow_high_altitude = 12400.0;
+uniform float u_cloud_shadow_strength : hint_range(0.0, 2.0) = 1.0;
+uniform float u_cloud_shadow_extinction = 0.00032;
+uniform float u_cloud_shadow_outer_altitude = 18500.0;
+uniform float u_cloud_shadow_max_distance = 48000.0;
+
+const int CLOUD_SHADOW_STEPS = 8;
 
 vec3 cloud_shadow_face_uv(vec3 dir) {
 	vec3 d = normalize(dir);
@@ -70,50 +76,53 @@ vec2 cloud_shadow_sphere_hit(vec3 ro, vec3 rd, float radius) {
 	return vec2(-b - s, -b + s);
 }
 
-float cloud_shadow_layer(vec3 p, vec3 sun_dir, float altitude, int mode) {
-	float shell_radius = u_planet_radius + altitude;
-	if (length(p) >= shell_radius - 10.0) return 0.0;
-	vec2 hit = cloud_shadow_sphere_hit(p, sun_dir, shell_radius);
-	if (hit.y <= 0.0) return 0.0;
+float cloud_shadow_macro_density(vec3 p) {
+	float r = length(p);
+	float altitude = r - u_planet_radius;
+	if (altitude < 450.0 || altitude > u_cloud_shadow_outer_altitude) return 0.0;
 
-	vec3 cloud_p = p + sun_dir * hit.y;
-	vec3 d = normalize(cloud_p);
+	vec3 d = p / max(r, 1.0);
 	vec4 w = cloud_shadow_weather(d);
-	if (max(max(w.r, w.g), w.b) < 0.008) return 0.0;
+	if (max(max(w.r, w.g), w.b) < 0.006) return 0.0;
 
-	vec2 n = cloud_structure_noises(d);
-	float low_mask = cloud_low_structure_mask(w, n);
-	float high_mask = cloud_high_structure_mask(w, n);
-	float type = cloud_type_from_weather(w);
-
-	if (mode == 0) {
-		return low_mask * mix(0.48, 1.0, clamp(w.r, 0.0, 1.0));
-	}
-	if (mode == 1) {
-		float tower = smoothstep(0.28, 0.78, type);
-		return low_mask * tower * mix(0.40, 1.15, type);
-	}
-	return high_mask * mix(0.22, 0.82, clamp(w.b, 0.0, 1.0));
+	vec2 low_n = cloud_structure_noises(d);
+	vec2 high_n = cloud_high_structure_noises(d);
+	return cloud_macro_density(w, altitude, low_n, high_n);
 }
 
-/// Cloud-only visibility of Helion from an arbitrary atmospheric point. Planet
-/// occultation is deliberately handled by planet_direct_sun_visibility() so the
-/// two effects remain independent and composable.
+/// Cloud-only Helion transmission. The quadratic segment layout concentrates
+/// samples near the receiver (where projected shadow position matters most) and
+/// grows them with distance. This is substantially more stable at grazing sun
+/// angles than four uniformly spaced samples across an entire spherical shell.
 float cloud_sun_visibility(vec3 p, vec3 sun_dir) {
 	if (u_cloud_weather_face_res < 1.0) return 1.0;
+
 	vec3 s = normalize(sun_dir);
 	vec3 up = normalize(p);
-	if (dot(up, s) <= -0.08) return 1.0;
+	// Planet occultation is handled independently by planet_lighting. Avoid
+	// wasting cloud samples on the deep night side.
+	if (dot(up, s) <= -0.12) return 1.0;
 
-	float low = cloud_shadow_layer(p, s, u_cloud_shadow_low_altitude, 0);
-	float mid = cloud_shadow_layer(p, s, u_cloud_shadow_mid_altitude, 1);
-	float high = cloud_shadow_layer(p, s, u_cloud_shadow_high_altitude, 2);
-	// Approximate vertically integrated optical depth. The exponential response
-	// produces soft translucent decks and near-black direct-sun shadows under
-	// deep convective cores without touching diffuse skylight.
-	float tau = low * 2.30 + mid * 2.05 + high * 0.95;
-	float transmission = exp(-tau * u_cloud_shadow_strength);
-	return clamp(transmission, 0.015, 1.0);
+	float outer_radius = u_planet_radius + u_cloud_shadow_outer_altitude;
+	vec2 shell = cloud_shadow_sphere_hit(p, s, outer_radius);
+	if (shell.y <= 1.0) return 1.0;
+
+	float max_dist = min(shell.y, u_cloud_shadow_max_distance);
+	float tau = 0.0;
+	float previous = 0.0;
+
+	for (int i = 0; i < CLOUD_SHADOW_STEPS; i++) {
+		float u1 = float(i + 1) / float(CLOUD_SHADOW_STEPS);
+		float next_t = max_dist * u1 * u1;
+		float segment = max(next_t - previous, 1.0);
+		float sample_t = previous + segment * 0.5;
+		float density = cloud_shadow_macro_density(p + s * sample_t);
+		tau += density * segment * u_cloud_shadow_extinction;
+		previous = next_t;
+		if (tau >= 9.0) break;
+	}
+
+	return exp(-tau * u_cloud_shadow_strength);
 }
 
 float cloud_surface_sun_visibility(vec3 surface_p, vec3 sun_dir) {
