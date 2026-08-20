@@ -86,6 +86,7 @@ func _on_baked(fields: PlanetFields) -> void:
 	if _rebaking and terrain != null:
 		var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 		Planet.adopt(fields)
+		_rebuild_orbit_surface_texture()
 		map.invalidate()
 		if map.visible:
 			map.refresh()
@@ -106,6 +107,7 @@ func _on_baked(fields: PlanetFields) -> void:
 		return
 
 	Planet.adopt(fields)
+	_rebuild_orbit_surface_texture()
 	hud.hide_progress()
 
 	terrain = FastPlanetTerrain.new()
@@ -135,6 +137,15 @@ func _on_baked(fields: PlanetFields) -> void:
 	if SaveGame.list_saves().has(AUTOSAVE):
 		hud.notify("Save '%s' found — press F9 to load it" % AUTOSAVE)
 	_started = true
+
+func _rebuild_orbit_surface_texture() -> void:
+	var built := OrbitSurfaceCache.build()
+	if built.is_empty():
+		return
+	Planet.orbit_elevation_texture = built["texture"] as Texture2DArray
+	Planet.orbit_texture_face_res = int(built["face_res"])
+	if orbit_ocean != null:
+		orbit_ocean.refresh_surface()
 
 func _push_orbit_surface_textures() -> void:
 	if terrain == null or Planet.orbit_elevation_texture == null:
