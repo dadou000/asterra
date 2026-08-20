@@ -1,15 +1,21 @@
 class_name OrbitOcean
 extends Node3D
-## Global sea-level shell used only for distant graphics.
+## Global sea-level shell used for distant graphics.
 ##
 ## The streamed water mesh is intentionally tied to terrain chunks because it
 ## needs local lake levels, shore depth and collision-scale detail. That makes it
-## the wrong representation for orbit, where a single coarse triangle can span
-## tens of kilometres. This shell is geometrically just a smooth sphere; its
-## coastline is cut per-fragment from Planet.orbit_elevation_texture.
+## the wrong representation for aircraft/orbit views, where a single terrain
+## triangle can span kilometres. This shell is geometrically just a smooth
+## sphere; its coastline is cut per-fragment from Planet.orbit_elevation_texture.
+##
+## Important: this shell starts well *below* the old 30 km water handoff. From
+## VISUAL_LOCK_ALTITUDE_M upward the same texture-defined coastline is therefore
+## already visible before any streaming/LOD representation changes. Crossing
+## 30 km can no longer change the map topology.
 
-const GRID := 96
+const GRID := 256
 const SHELL_OFFSET_M := 1.5
+const VISUAL_LOCK_ALTITUDE_M := 12000.0
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -44,6 +50,7 @@ func _refresh() -> void:
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_material.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
 	_material.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
+	_material.set_shader_parameter("u_orbit_start_altitude", VISUAL_LOCK_ALTITUDE_M)
 
 	var mesh := _build_shell(Planet.cfg.planet_radius + SHELL_OFFSET_M)
 	mesh.surface_set_material(0, _material)
