@@ -284,7 +284,6 @@ func column_material(d: Vector3, depth: float) -> Dictionary:
 	var o_th := clampf(org * 0.55, 0.0, 0.45) * clampf(sd, 0.0, 1.0)
 	var a_th := sd * 0.28
 	var b_th := sd * 0.42
-	var c_th := maxf(0.0, sd - o_th - a_th - b_th)
 	var id := MaterialDB.ROCK
 	if depth < o_th:
 		id = MaterialDB.SOIL_O
