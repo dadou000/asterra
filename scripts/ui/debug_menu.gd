@@ -10,6 +10,7 @@ extends CanvasLayer
 
 signal opened
 signal closed
+signal rebake_requested
 
 ## [property, label, note, default]
 const ROWS := [
@@ -29,6 +30,7 @@ var debug: TerrainDebug
 var _panel: PanelContainer
 var _buttons := {}
 var _lod_button: CheckButton
+var _rebake_button: Button
 var _lod_depth := 5
 
 func _ready() -> void:
@@ -38,7 +40,7 @@ func _ready() -> void:
 
 	_panel = PanelContainer.new()
 	_panel.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	_panel.position = Vector2(40, -190)
+	_panel.position = Vector2(40, -230)
 	_panel.custom_minimum_size = Vector2(430, 0)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.05, 0.06, 0.09, 0.90)
@@ -86,6 +88,17 @@ func _ready() -> void:
 	slider.value_changed.connect(_on_lod_depth_changed)
 	box.add_child(slider)
 
+	var separator := HSeparator.new()
+	separator.add_theme_constant_override("separation", 8)
+	box.add_child(separator)
+
+	_rebake_button = Button.new()
+	_rebake_button.text = "Rebake planet (ignore cache)"
+	_rebake_button.add_theme_font_size_override("font_size", 13)
+	_rebake_button.pressed.connect(_on_rebake_pressed)
+	box.add_child(_rebake_button)
+	box.add_child(_note("Regenerates all planet fields from the seed and bypasses the saved .bake cache"))
+
 	var hint := Label.new()
 	hint.text = "\nEsc to close"
 	hint.add_theme_font_size_override("font_size", 11)
@@ -93,10 +106,15 @@ func _ready() -> void:
 	box.add_child(hint)
 
 ## Handled in _input rather than _unhandled_input so that a focused check button
-## can never swallow the key that closes the menu.
+## can never swallow the key that closes the menu. Before the first planet bake
+## finishes `debug` is still null and there is no player/terrain to control, so
+## ignore attempts to open the menu during that short startup window.
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo \
 			and event.keycode == KEY_ESCAPE:
+		if not visible and debug == null:
+			get_viewport().set_input_as_handled()
+			return
 		toggle()
 		get_viewport().set_input_as_handled()
 
@@ -127,3 +145,15 @@ func _on_lod_depth_changed(value: float) -> void:
 	_lod_button.text = "Force LOD depth: %d" % _lod_depth
 	if debug != null:
 		debug.force_lod_depth = _lod_depth
+
+func _on_rebake_pressed() -> void:
+	if _rebake_button == null or _rebake_button.disabled:
+		return
+	set_rebake_busy(true)
+	rebake_requested.emit()
+
+func set_rebake_busy(busy: bool) -> void:
+	if _rebake_button == null:
+		return
+	_rebake_button.disabled = busy
+	_rebake_button.text = "Rebaking planet..." if busy else "Rebake planet (ignore cache)"
