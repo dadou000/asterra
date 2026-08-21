@@ -5,6 +5,9 @@ extends "res://scripts/character/procedural_groom.gd"
 ## projected back onto the actual imported forehead mesh. Roots are distributed
 ## through a brow-shaped band instead of a single line and each strand is drawn
 ## as a flat ribbon parallel to the local skin surface.
+##
+## Projection is radial around the head estimate rather than straight along the
+## face-forward axis, so the outer brow can wrap naturally over the temple.
 
 var _face_triangles: PackedVector3Array = PackedVector3Array()
 
@@ -92,8 +95,9 @@ func rebuild_brows() -> void:
 			var strand_len: float = _character_height * lerpf(0.0031, 0.0052, body_factor)
 			strand_len *= lerpf(0.88, 1.12, h0)
 
-			# Project the middle and tip independently. That makes each short hair
-			# follow forehead curvature instead of being a rotated 3D spike.
+			# Project the middle and tip independently. With radial projection this
+			# also bends the outer hairs around the temple instead of flattening the
+			# whole brow onto a frontal projection plane.
 			var mid_x: float = x + flow2.x * strand_len * 0.52
 			var mid_y: float = y + flow2.y * strand_len * 0.52
 			var tip_x: float = x + flow2.x * strand_len
@@ -217,14 +221,33 @@ func _append_face_triangle(a_local: Vector3, b_local: Vector3, c_local: Vector3,
 	_face_triangles.append(c)
 
 func _project_to_face(x: float, y: float, fallback_z: float, user_forward_offset: float) -> Dictionary:
-	var front := Vector3(0.0, 0.0, _front_sign)
-	var ray_direction: Vector3 = -front
-	var start_distance: float = maxf(float(_head["rz"]) * 3.0, 0.18)
 	var center: Vector3 = _head["center"]
-	var origin := Vector3(x, y, center.z + _front_sign * start_distance)
+	var front := Vector3(0.0, 0.0, _front_sign)
+	var target := Vector3(x, y, fallback_z)
+
+	# Cast toward the skin along the local radial direction of the head instead
+	# of always casting straight backward from the camera-facing/front axis.
+	# This is important at the lateral brow: the cast naturally rotates outward
+	# with the forehead and continues around the temple.
+	var outward: Vector3 = target - center
+	if outward.length_squared() < 0.000001:
+		outward = front
+	else:
+		outward = outward.normalized()
+
+	# The brow belongs to the front hemisphere. If a heavily edited head estimate
+	# produces a radial direction that points too far sideways/backward, blend it
+	# toward the face direction while still preserving lateral curvature.
+	var front_alignment: float = outward.dot(front)
+	if front_alignment < 0.12:
+		outward = (outward * 0.55 + front * 0.45).normalized()
+
+	var start_distance: float = maxf(maxf(float(_head["rx"]), float(_head["rz"])) * 2.5, 0.16)
+	var origin: Vector3 = target + outward * start_distance
+	var ray_direction: Vector3 = -outward
 
 	var best_t: float = INF
-	var best_normal: Vector3 = front
+	var best_normal: Vector3 = outward
 	var tri_count: int = _face_triangles.size() / 3
 	for tri_i in tri_count:
 		var base: int = tri_i * 3
@@ -238,24 +261,29 @@ func _project_to_face(x: float, y: float, fallback_z: float, user_forward_offset
 		var normal: Vector3 = (b - a).cross(c - a)
 		if normal.length_squared() > 0.00000001:
 			normal = normal.normalized()
-			if normal.dot(front) < 0.0:
+			# Orient the triangle normal away from the head, not merely toward the
+			# global face-forward direction. This keeps normals correct at temples.
+			if normal.dot(outward) < 0.0:
 				normal = -normal
 			best_normal = normal
 
 	if best_t < INF:
 		var hit: Vector3 = origin + ray_direction * best_t
-		# Only a quarter-millimetre baseline clearance is needed now because the
-		# ribbon itself lies parallel to the surface rather than crossing it.
+		# The artistic offset now follows the local surface normal as well, so an
+		# offset does not flatten/translate the temple section forward in Z.
 		var clearance: float = 0.00025
+		var surface_offset: float = clearance + user_forward_offset
 		return {
-			"point": hit + best_normal * clearance + front * user_forward_offset,
+			"point": hit + best_normal * surface_offset,
 			"normal": best_normal,
 			"projected": true
 		}
 
+	# Fallback still follows the estimated head radial rather than a global Z
+	# push, preserving roughly correct curvature if a triangle cannot be hit.
 	return {
-		"point": Vector3(x, y, fallback_z) + front * (0.001 + user_forward_offset),
-		"normal": front,
+		"point": target + outward * (0.001 + user_forward_offset),
+		"normal": outward,
 		"projected": false
 	}
 
