@@ -34,16 +34,19 @@ func _late_setup() -> void:
 	_refresh_status()
 
 func _ensure_advanced_brow_defaults() -> void:
-	if not _brow_settings.has("middle_spacing"):
-		_brow_settings["middle_spacing"] = 0.030
-	if not _brow_settings.has("inner_fade_ratio"):
-		_brow_settings["inner_fade_ratio"] = 0.10
-	if not _brow_settings.has("outer_fade_ratio"):
-		_brow_settings["outer_fade_ratio"] = 0.18
-	if not _brow_settings.has("thickness"):
-		_brow_settings["thickness"] = 1.0
-	if not _brow_settings.has("messiness"):
-		_brow_settings["messiness"] = 0.18
+	# Tuned Asterra brow baseline approved in Character Editor. Keep these values
+	# together so every new character-creator session starts from the same look.
+	_brow_settings["density"] = 1.0
+	_brow_settings["width"] = 0.73
+	_brow_settings["strand_width"] = 0.00045
+	_brow_settings["arch"] = 0.33
+	_brow_settings["height_offset"] = -0.013
+	_brow_settings["forward_offset"] = 0.0025
+	_brow_settings["middle_spacing"] = 0.008
+	_brow_settings["thickness"] = 0.67
+	_brow_settings["inner_fade_ratio"] = 0.14
+	_brow_settings["outer_fade_ratio"] = 0.18
+	_brow_settings["messiness"] = 0.16
 
 func _setup_ui() -> void:
 	super._setup_ui()
