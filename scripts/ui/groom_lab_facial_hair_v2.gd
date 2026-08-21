@@ -1,6 +1,6 @@
 extends "res://scripts/ui/groom_lab_facial_hair.gd"
 
-const NaturalFacialHairGenerator = preload("res://scripts/character/natural_facial_hair_groom.gd")
+const NaturalFacialHairGenerator = preload("res://scripts/character/dense_facial_hair_groom.gd")
 
 func _late_setup() -> void:
 	await get_tree().process_frame
@@ -21,29 +21,27 @@ func _late_setup() -> void:
 	var bottom: float = bounds.position.y
 	_ensure_advanced_brow_defaults()
 
-	# New neutral facial-hair baseline. These values are deliberately short and
-	# dense; the generator now provides the anatomical placement instead of using
-	# long sparse hairs to make the regions visible.
-	_mustache_settings["density"] = 0.86
-	_mustache_settings["width"] = 0.82
-	_mustache_settings["thickness"] = 0.72
+	# Dense short facial-hair baseline tuned from the close-up comparison.
+	_mustache_settings["density"] = 1.0
+	_mustache_settings["width"] = 0.86
+	_mustache_settings["thickness"] = 1.15
 	_mustache_settings["length"] = 0.0055
-	_mustache_settings["strand_width"] = 0.00030
-	_mustache_settings["middle_gap"] = 0.008
-	_mustache_settings["droop"] = 0.20
+	_mustache_settings["strand_width"] = 0.00042
+	_mustache_settings["middle_gap"] = 0.007
+	_mustache_settings["droop"] = 0.18
 	_mustache_settings["height_offset"] = 0.0
 	_mustache_settings["forward_offset"] = 0.00055
-	_mustache_settings["messiness"] = 0.14
+	_mustache_settings["messiness"] = 0.12
 
-	_beard_settings["density"] = 0.86
-	_beard_settings["coverage"] = 0.42
-	_beard_settings["fullness"] = 0.88
-	_beard_settings["length"] = 0.0040
-	_beard_settings["chin_length"] = 0.0055
-	_beard_settings["strand_width"] = 0.00028
+	_beard_settings["density"] = 1.0
+	_beard_settings["coverage"] = 0.68
+	_beard_settings["fullness"] = 1.10
+	_beard_settings["length"] = 0.0055
+	_beard_settings["chin_length"] = 0.0065
+	_beard_settings["strand_width"] = 0.00042
 	_beard_settings["height_offset"] = 0.0
 	_beard_settings["forward_offset"] = 0.00055
-	_beard_settings["messiness"] = 0.14
+	_beard_settings["messiness"] = 0.12
 
 	var default_facial_color: Color = Color(_hair_settings["color"]).darkened(0.10)
 	_mustache_settings["color"] = default_facial_color
@@ -58,3 +56,20 @@ func _late_setup() -> void:
 	_setup_ui()
 	_apply_lash_variant(1 if _available_lash_count() > 0 else 0)
 	_refresh_status()
+
+func _setup_ui() -> void:
+	super._setup_ui()
+	var layer: Node = get_node_or_null("GroomLabUI")
+	if layer != null:
+		_rename_label_recursive(layer, "Side length", "Beard hair length")
+
+func _rename_label_recursive(node: Node, old_text: String, new_text: String) -> bool:
+	if node is Label:
+		var label: Label = node as Label
+		if label.text == old_text:
+			label.text = new_text
+			return true
+	for child in node.get_children():
+		if _rename_label_recursive(child, old_text, new_text):
+			return true
+	return false
