@@ -1,6 +1,6 @@
 extends "res://scripts/ui/groom_lab_facial_hair.gd"
 
-const NaturalFacialHairGenerator = preload("res://scripts/character/continuous_surface_beard_groom.gd")
+const NaturalFacialHairGenerator = preload("res://scripts/character/point_filtered_beard_groom.gd")
 
 func _late_setup() -> void:
 	await get_tree().process_frame
@@ -78,7 +78,7 @@ func _setup_ui() -> void:
 	)
 
 	var note := Label.new()
-	note.text = "30× is the tuned default. LOD0 uses the full value; distant LODs automatically reduce follicle population. Beard roots are sampled directly on a continuous head-skin surface field and facial morphs are transferred per follicle root."
+	note.text = "30× is the tuned default. LOD0 uses the full value; distant LODs automatically reduce follicle population. Beard roots are sampled directly on source skin triangles, while beard coverage is decided per follicle from a continuous 3D field so source topology cannot create polygon islands."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.modulate = Color(0.63, 0.70, 0.76)
 	note.add_theme_font_size_override("font_size", 11)
