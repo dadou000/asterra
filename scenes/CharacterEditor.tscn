@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/character_editor.gd" id="1_character_editor"]
+[ext_resource type="Script" path="res://scripts/ui/groom_lab.gd" id="2_groom_lab"]
 
 [node name="CharacterEditor" type="Node3D"]
 script = ExtResource("1_character_editor")
+
+[node name="GroomLab" type="Node" parent="."]
+script = ExtResource("2_groom_lab")
