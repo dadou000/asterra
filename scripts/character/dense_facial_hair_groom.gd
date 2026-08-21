@@ -1,11 +1,39 @@
 extends "res://scripts/character/natural_facial_hair_groom.gd"
 
-## Dense facial-hair tuning layer.
+## Dense facial-hair tuning + build-performance layer.
 ##
-## The normal Density control still covers the useful 0..1 range. An additional
-## density_multiplier can now raise the actual generated follicle count up to
-## 100x for close-up tuning. This is deliberately expensive at rebuild time;
-## the generated/morph-bound meshes remain cheap at runtime afterwards.
+## LOD0 keeps the requested full density (up to 100x), but distant LODs cap
+## their effective multiplier because tens of thousands of sub-pixel hairs are
+## wasted beyond 6 m. Neutral face projections are quantized/cached, the LOD0
+## midpoint reuses the already-projected root/tip surface, duplicate triangle
+## vertices are indexed, and beard tangents are omitted because the facial-hair
+## material no longer uses anisotropy. The exact LOD0/1 facial morph transfer
+## remains unchanged.
+
+const BEARD_LOD1_MAX_DENSITY_MULTIPLIER := 6.0
+const BEARD_LOD2_MAX_DENSITY_MULTIPLIER := 1.5
+const FACIAL_PROJECTION_CACHE_STEP := 0.00035 # 0.35 mm; visually sub-strand.
+
+var _facial_projection_cache: Dictionary = {}
+var _facial_projection_hits := 0
+var _facial_projection_misses := 0
+var _beard_mesh_build_ms: Dictionary = {}
+var _beard_morph_build_ms: Dictionary = {}
+
+func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0) -> bool:
+	_clear_dense_build_cache()
+	return super.configure(character, meshes, character_bottom, character_height, front_sign)
+
+func set_front_sign(sign_value: float) -> void:
+	_clear_dense_build_cache()
+	super.set_front_sign(sign_value)
+
+func _clear_dense_build_cache() -> void:
+	_facial_projection_cache.clear()
+	_facial_projection_hits = 0
+	_facial_projection_misses = 0
+	_beard_mesh_build_ms.clear()
+	_beard_morph_build_ms.clear()
 
 func _apply_natural_facial_defaults() -> void:
 	mustache_settings["density"] = 1.0
@@ -30,9 +58,56 @@ func _apply_natural_facial_defaults() -> void:
 	beard_settings["forward_offset"] = 0.00055
 	beard_settings["messiness"] = 0.12
 
+func _create_render_nodes() -> void:
+	super._create_render_nodes()
+	# Tangent generation and per-morph tangent arrays were disproportionately
+	# expensive at 30x+ beard density. The beard is too small for anisotropic
+	# orientation to justify that cost, and disabling it also avoids bright fibre
+	# highlights seen in the close-up test.
+	if _facial_hair_material != null:
+		_facial_hair_material.anisotropy_enabled = false
+		_facial_hair_material.anisotropy = 0.0
+		_facial_hair_material.roughness = 0.68
+
+func _projection_cache_key(x: float, y: float, offset: float) -> Vector3i:
+	return Vector3i(
+		int(round(x / FACIAL_PROJECTION_CACHE_STEP)),
+		int(round(y / FACIAL_PROJECTION_CACHE_STEP)),
+		int(round(offset / FACIAL_PROJECTION_CACHE_STEP))
+	)
+
+func _project_facial_point(x: float, y: float, offset: float) -> Dictionary:
+	var key: Vector3i = _projection_cache_key(x, y, offset)
+	if _facial_projection_cache.has(key):
+		_facial_projection_hits += 1
+		var cached: Dictionary = _facial_projection_cache[key]
+		return cached.duplicate()
+
+	_facial_projection_misses += 1
+	var result: Dictionary = super._project_facial_point(x, y, offset)
+	_facial_projection_cache[key] = result.duplicate()
+	return result
+
+func _effective_beard_density_multiplier(lod: int, requested: float) -> float:
+	if lod <= 0:
+		return requested
+	if lod == 1:
+		return minf(requested, BEARD_LOD1_MAX_DENSITY_MULTIPLIER)
+	return minf(requested, BEARD_LOD2_MAX_DENSITY_MULTIPLIER)
+
+func _create_facial_morph_bound_mesh(neutral_mesh: ArrayMesh, lod: int, is_mustache: bool) -> ArrayMesh:
+	if is_mustache:
+		return super._create_facial_morph_bound_mesh(neutral_mesh, lod, is_mustache)
+	var started_usec: int = Time.get_ticks_usec()
+	var result: ArrayMesh = super._create_facial_morph_bound_mesh(neutral_mesh, lod, false)
+	_beard_morph_build_ms[lod] = float(Time.get_ticks_usec() - started_usec) / 1000.0
+	return result
+
 func _build_beard_mesh(lod: int) -> ArrayMesh:
+	var started_usec: int = Time.get_ticks_usec()
 	var density: float = clampf(float(beard_settings.get("density", 1.0)), 0.05, 1.0)
-	var density_multiplier: float = clampf(float(beard_settings.get("density_multiplier", 1.0)), 1.0, 100.0)
+	var requested_multiplier: float = clampf(float(beard_settings.get("density_multiplier", 1.0)), 1.0, 100.0)
+	var density_multiplier: float = _effective_beard_density_multiplier(lod, requested_multiplier)
 	var coverage: float = clampf(float(beard_settings.get("coverage", 0.68)), 0.0, 1.0)
 	var fullness: float = clampf(float(beard_settings.get("fullness", 1.10)), 0.15, 1.35)
 	var base_length: float = clampf(float(beard_settings.get("length", 0.0055)), 0.001, 0.045)
@@ -81,7 +156,6 @@ func _build_beard_mesh(lod: int) -> ArrayMesh:
 		var chin_mix: float = 0.0
 
 		if h0 < 0.42:
-			# CHEEK: lower central coverage, rising toward the sideburn.
 			var side: float = -1.0 if h1 < 0.5 else 1.0
 			var x_u: float = h2
 			var abs_x: float = rx * lerpf(0.34, 0.80, x_u)
@@ -98,7 +172,6 @@ func _build_beard_mesh(lod: int) -> ArrayMesh:
 			flow_vertical = -1.0
 			length_scale = lerpf(0.78, 0.94, down_bias)
 		elif h0 < 0.78:
-			# JAW: continuous curved mandibular band.
 			var side: float = -1.0 if h1 < 0.5 else 1.0
 			var abs_x: float = rx * lerpf(0.12, 0.80, h2)
 			var jaw_u: float = clampf(abs_x / maxf(rx * 0.80, 0.001), 0.0, 1.0)
@@ -112,7 +185,6 @@ func _build_beard_mesh(lod: int) -> ArrayMesh:
 			chin_mix = (1.0 - jaw_u) * 0.58
 			length_scale = 0.94
 		else:
-			# CHIN / GOATEE / SOUL PATCH.
 			var x_norm: float = (h2 * 2.0 - 1.0) * 0.30 * lerpf(0.88, 1.06, fullness)
 			var chin_v: float = pow(h3, 0.88)
 			x = center.x + rx * x_norm
@@ -127,7 +199,6 @@ func _build_beard_mesh(lod: int) -> ArrayMesh:
 		if h4 > keep_probability:
 			continue
 
-		# Keep the lips and mouth opening clean.
 		var mouth_x: float = absf(x - center.x) / maxf(rx * 0.40, 0.001)
 		var mouth_y: float = absf(y - mouth_center_y) / maxf(ry * 0.125, 0.001)
 		if mouth_x * mouth_x + mouth_y * mouth_y < 1.0:
@@ -164,23 +235,43 @@ func _build_beard_mesh(lod: int) -> ArrayMesh:
 		if lod >= 1:
 			_add_natural_tri_tube_segment(st, root_local, tip_local, root_normal_local, tip_normal_local, radius, radius * 0.07, 0.0, 1.0)
 		else:
-			var mid_x: float = x + flow.x * strand_len * 0.52
-			var mid_y: float = y + flow.y * strand_len * 0.52
-			var mid_place: Dictionary = _project_facial_point(mid_x, mid_y, forward_offset)
-			var mid: Vector3
-			var mid_normal: Vector3
-			if bool(mid_place.get("projected", false)):
-				mid = mid_place["point"]
-				mid_normal = mid_place["normal"]
-			else:
-				mid = root.lerp(tip, 0.52)
-				mid_normal = (root_normal + tip_normal).normalized()
+			# For a 4-8 mm beard, re-projecting a third point per strand is expensive
+			# and visually redundant. The already exact root/tip surface points define
+			# the local skin arc closely; interpolate them and keep the tiny lift.
+			var mid: Vector3 = root.lerp(tip, 0.52)
+			var mid_normal: Vector3 = (root_normal + tip_normal).normalized()
+			if mid_normal.length_squared() < 0.00000001:
+				mid_normal = root_normal
 			mid += mid_normal * lerpf(0.00004, 0.00015 + strand_len * 0.006, h3)
 			var mid_local: Vector3 = _mount.to_local(mid)
 			var mid_normal_local: Vector3 = (inv_basis * mid_normal).normalized()
 			_add_natural_tri_tube_segment(st, root_local, mid_local, root_normal_local, mid_normal_local, radius, radius * 0.78, 0.0, 0.52)
 			_add_natural_tri_tube_segment(st, mid_local, tip_local, mid_normal_local, tip_normal_local, radius * 0.78, radius * 0.06, 0.52, 1.0)
 
+	# Normals are needed for lit hair. Tangents are intentionally skipped because
+	# anisotropy is disabled above; this also removes tangent arrays from every
+	# generated facial blend shape. Index after normals to deduplicate the repeated
+	# vertices inside each triangle pair without changing the strand silhouette.
 	st.generate_normals()
-	st.generate_tangents()
-	return st.commit()
+	st.index()
+	var mesh: ArrayMesh = st.commit()
+	_beard_mesh_build_ms[lod] = float(Time.get_ticks_usec() - started_usec) / 1000.0
+	return mesh
+
+func diagnostics() -> String:
+	var base: String = super.diagnostics()
+	var mesh0: float = float(_beard_mesh_build_ms.get(0, 0.0))
+	var mesh1: float = float(_beard_mesh_build_ms.get(1, 0.0))
+	var mesh2: float = float(_beard_mesh_build_ms.get(2, 0.0))
+	var morph0: float = float(_beard_morph_build_ms.get(0, 0.0))
+	var morph1: float = float(_beard_morph_build_ms.get(1, 0.0))
+	return "%s • beard build mesh %.0f/%.0f/%.0f ms, morph %.0f/%.0f ms • face projection cache %d hit/%d miss" % [
+		base,
+		mesh0,
+		mesh1,
+		mesh2,
+		morph0,
+		morph1,
+		_facial_projection_hits,
+		_facial_projection_misses
+	]
