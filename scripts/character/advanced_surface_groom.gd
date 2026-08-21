@@ -2,18 +2,21 @@ extends "res://scripts/character/surface_groom.gd"
 
 ## Advanced surface-conforming brow groom with runtime LOD.
 ##
-## LOD0 is the existing full-quality groom and is used while the active camera
-## is closer than 6 m to the character's head. LOD1 uses an exact subset of the
-## same follicles, so the shape remains stable when switching. It keeps half of
-## the hairs and renders one ribbon segment per hair, with compensated strand
-## width so the apparent brow mass stays close to LOD0.
+## LOD0: full-quality individual curved strands below 6 m.
+## LOD1: half of the original follicles, one quad per strand from 6-15 m.
+## LOD2: a very small surface-conforming brow band beyond 15 m. At that range
+## individual hairs are sub-pixel, so preserving silhouette, thickness, arch,
+## spacing and end fades is more useful than preserving strand geometry.
 
 const BROW_LOD1_DISTANCE := 6.0
+const BROW_LOD2_DISTANCE := 15.0
 const BROW_LOD_CHECK_INTERVAL := 0.10
 const BROW_LOD1_STRIDE := 2
 const BROW_LOD1_WIDTH_COMPENSATION := 1.90
+const BROW_LOD2_SEGMENTS := 14
 
 var _brow_lod1_instance: MeshInstance3D
+var _brow_lod2_instance: MeshInstance3D
 var _active_brow_lod := 0
 var _brow_lod_elapsed := 0.0
 var _last_brow_distance := -1.0
@@ -25,6 +28,11 @@ func _create_render_nodes() -> void:
 	_brow_lod1_instance.visible = false
 	_mount.add_child(_brow_lod1_instance)
 
+	_brow_lod2_instance = MeshInstance3D.new()
+	_brow_lod2_instance.name = "ProceduralBrowsLOD2"
+	_brow_lod2_instance.visible = false
+	_mount.add_child(_brow_lod2_instance)
+
 func _process(delta: float) -> void:
 	_brow_lod_elapsed += delta
 	if _brow_lod_elapsed < BROW_LOD_CHECK_INTERVAL:
@@ -33,25 +41,32 @@ func _process(delta: float) -> void:
 	_update_brow_lod_visibility()
 
 func rebuild_brows() -> void:
-	if _brow_instance == null or _brow_lod1_instance == null or _mount == null or _head.is_empty():
+	if _brow_instance == null or _brow_lod1_instance == null or _brow_lod2_instance == null or _mount == null or _head.is_empty():
 		return
 
 	var enabled: bool = bool(brow_settings.get("enabled", true))
 	if not enabled:
 		_brow_instance.visible = false
 		_brow_lod1_instance.visible = false
+		_brow_lod2_instance.visible = false
 		_brow_instance.mesh = null
 		_brow_lod1_instance.mesh = null
+		_brow_lod2_instance.mesh = null
 		return
 
 	_ensure_face_triangle_cache()
 	_brow_instance.mesh = _build_brow_mesh(0)
 	_brow_lod1_instance.mesh = _build_brow_mesh(1)
+	_brow_lod2_instance.mesh = _build_brow_mesh(2)
 	_brow_instance.material_override = _brow_material
 	_brow_lod1_instance.material_override = _brow_material
+	_brow_lod2_instance.material_override = _brow_material
 	_update_brow_lod_visibility(true)
 
 func _build_brow_mesh(lod: int) -> ArrayMesh:
+	if lod == 2:
+		return _build_brow_lod2_mesh()
+
 	var density: float = clampf(float(brow_settings.get("density", 0.68)), 0.05, 1.0)
 	var brow_width: float = clampf(float(brow_settings.get("width", 1.0)), 0.55, 1.45)
 	var requested_width: float = clampf(float(brow_settings.get("strand_width", 0.00045)), 0.00008, 0.0012)
@@ -185,16 +200,94 @@ func _build_brow_mesh(lod: int) -> ArrayMesh:
 	st.generate_tangents()
 	return st.commit()
 
+func _build_brow_lod2_mesh() -> ArrayMesh:
+	var brow_width: float = clampf(float(brow_settings.get("width", 1.0)), 0.55, 1.45)
+	var arch: float = clampf(float(brow_settings.get("arch", 0.45)), 0.0, 1.25)
+	var height_offset: float = clampf(float(brow_settings.get("height_offset", 0.0)), -0.035, 0.035)
+	var forward_control: float = clampf(float(brow_settings.get("forward_offset", 0.0015)), -0.010, 0.025)
+	var middle_spacing: float = clampf(float(brow_settings.get("middle_spacing", 0.030)), -0.020, 0.060)
+	var inner_fade_ratio: float = clampf(float(brow_settings.get("inner_fade_ratio", 0.10)), 0.0, 0.50)
+	var outer_fade_ratio: float = clampf(float(brow_settings.get("outer_fade_ratio", 0.18)), 0.0, 0.50)
+	var thickness_scale: float = clampf(float(brow_settings.get("thickness", 1.0)), 0.30, 2.50)
+	var messiness: float = clampf(float(brow_settings.get("messiness", 0.18)), 0.0, 1.0)
+	var artistic_offset: float = forward_control - 0.0015
+
+	var center: Vector3 = _head["center"]
+	var rx: float = float(_head["rx"])
+	var ry: float = float(_head["ry"])
+	var rz: float = float(_head["rz"])
+	var inner_x: float = clampf(middle_spacing * 0.5, -rx * 0.22, rx * 0.62)
+	var nominal_outer_x: float = rx * 0.79 * brow_width
+	var outer_x: float = maxf(nominal_outer_x, inner_x + rx * 0.16)
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	for side_i in 2:
+		var side: float = -1.0 if side_i == 0 else 1.0
+		var previous_low := Vector3.ZERO
+		var previous_high := Vector3.ZERO
+		var previous_t := 0.0
+		var have_previous := false
+
+		for sample_i in BROW_LOD2_SEGMENTS + 1:
+			var t: float = float(sample_i) / float(BROW_LOD2_SEGMENTS)
+			var h: float = _hash01(float(sample_i) * 41.73 + side * 9.1)
+			var x_offset: float = lerpf(inner_x, outer_x, t)
+			var x_jitter: float = (h - 0.5) * _character_height * 0.00035 * messiness
+			var x: float = center.x + side * (x_offset + x_jitter)
+
+			var centerline_y: float = _brow_centerline_y(t, center.y, ry, arch, height_offset)
+			centerline_y += (h - 0.5) * _character_height * 0.00028 * messiness
+
+			var inner_band: float = _character_height * 0.0060
+			var tail_band: float = _character_height * 0.0020
+			var band_thickness: float = lerpf(inner_band, tail_band, pow(t, 1.35))
+			band_thickness *= 1.0 + sin(t * PI) * 0.18
+			band_thickness *= thickness_scale
+
+			var inner_factor := 1.0
+			if inner_fade_ratio > 0.0001:
+				inner_factor = smoothstep(0.0, inner_fade_ratio, t)
+			var outer_factor := 1.0
+			if outer_fade_ratio > 0.0001:
+				outer_factor = smoothstep(0.0, outer_fade_ratio, 1.0 - t)
+			# Geometry taper approximates density fading at distances where individual
+			# hairs cannot be resolved. Square root keeps the brow from looking too faint.
+			var fade: float = sqrt(clampf(inner_factor * outer_factor, 0.0, 1.0))
+			var half_band: float = band_thickness * 0.48 * fade
+
+			var low_y: float = centerline_y - half_band
+			var high_y: float = centerline_y + half_band
+			var low_fallback_z: float = _ellipsoid_front_z(x, low_y, center, rx, ry, rz)
+			var high_fallback_z: float = _ellipsoid_front_z(x, high_y, center, rx, ry, rz)
+			var low_place: Dictionary = _project_to_face(x, low_y, low_fallback_z, artistic_offset)
+			var high_place: Dictionary = _project_to_face(x, high_y, high_fallback_z, artistic_offset)
+			var low_local: Vector3 = _mount.to_local(Vector3(low_place["point"]))
+			var high_local: Vector3 = _mount.to_local(Vector3(high_place["point"]))
+
+			if have_previous:
+				_add_quad(st, previous_low, previous_high, high_local, low_local, previous_t, t)
+			previous_low = low_local
+			previous_high = high_local
+			previous_t = t
+			have_previous = true
+
+	st.generate_normals()
+	st.generate_tangents()
+	return st.commit()
+
 func _update_brow_lod_visibility(force: bool = false) -> void:
-	if _brow_instance == null or _brow_lod1_instance == null:
+	if _brow_instance == null or _brow_lod1_instance == null or _brow_lod2_instance == null:
 		return
 	if not bool(brow_settings.get("enabled", true)):
 		_brow_instance.visible = false
 		_brow_lod1_instance.visible = false
+		_brow_lod2_instance.visible = false
 		return
 
 	var desired_lod := 0
-	var forced_lod: int = clampi(AppSettings.debug_forced_brow_lod, -1, 1)
+	var forced_lod: int = clampi(AppSettings.debug_forced_brow_lod, -1, 2)
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera != null and _mount != null:
 		_last_brow_distance = camera.global_position.distance_to(_mount.global_position)
@@ -204,19 +297,25 @@ func _update_brow_lod_visibility(force: bool = false) -> void:
 	if forced_lod >= 0:
 		desired_lod = forced_lod
 	elif _last_brow_distance >= 0.0:
-		desired_lod = 0 if _last_brow_distance < BROW_LOD1_DISTANCE else 1
+		if _last_brow_distance < BROW_LOD1_DISTANCE:
+			desired_lod = 0
+		elif _last_brow_distance < BROW_LOD2_DISTANCE:
+			desired_lod = 1
+		else:
+			desired_lod = 2
 
 	if not force and desired_lod == _active_brow_lod:
 		return
 	_active_brow_lod = desired_lod
 	_brow_instance.visible = _active_brow_lod == 0
 	_brow_lod1_instance.visible = _active_brow_lod == 1
+	_brow_lod2_instance.visible = _active_brow_lod == 2
 
 func diagnostics() -> String:
 	var base: String = super.diagnostics()
 	var distance_note := "no camera"
 	if _last_brow_distance >= 0.0:
 		distance_note = "%.2f m" % _last_brow_distance
-	var forced_lod: int = clampi(AppSettings.debug_forced_brow_lod, -1, 1)
-	var mode_note := "auto, switch 6.0 m" if forced_lod < 0 else "FORCED"
+	var forced_lod: int = clampi(AppSettings.debug_forced_brow_lod, -1, 2)
+	var mode_note := "auto, switches 6/15 m" if forced_lod < 0 else "FORCED"
 	return "%s • brows LOD%d @ %s (%s)" % [base, _active_brow_lod, distance_note, mode_note]
