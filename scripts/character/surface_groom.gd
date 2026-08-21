@@ -60,7 +60,7 @@ func rebuild_brows() -> void:
 
 			# Eyebrow hairs lie along the skin rather than pointing through it.
 			# Inner hairs are more vertical, outer hairs turn increasingly lateral.
-			var raw_flow := Vector3(side * (0.50 + 0.46 * t), 0.78 - 0.94 * t, 0.0)
+			var raw_flow: Vector3 = Vector3(side * (0.50 + 0.46 * t), 0.78 - 0.94 * t, 0.0)
 			var tangent: Vector3 = raw_flow - skin_normal * raw_flow.dot(skin_normal)
 			if tangent.length_squared() < 0.000001:
 				tangent = Vector3(side, 0.0, 0.0)
@@ -96,13 +96,13 @@ func _ensure_face_triangle_cache() -> void:
 		if arrays.size() <= Mesh.ARRAY_VERTEX or arrays[Mesh.ARRAY_VERTEX] == null:
 			continue
 		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		var indices := PackedInt32Array()
+		var indices: PackedInt32Array = PackedInt32Array()
 		if arrays.size() > Mesh.ARRAY_INDEX and arrays[Mesh.ARRAY_INDEX] != null:
 			indices = PackedInt32Array(arrays[Mesh.ARRAY_INDEX])
 
 		if not indices.is_empty():
-			var triangle_count: int = indices.size() / 3
-			for tri_i in triangle_count:
+			var indexed_triangle_count: int = indices.size() / 3
+			for tri_i in indexed_triangle_count:
 				var ia: int = indices[tri_i * 3]
 				var ib: int = indices[tri_i * 3 + 1]
 				var ic: int = indices[tri_i * 3 + 2]
@@ -110,8 +110,8 @@ func _ensure_face_triangle_cache() -> void:
 					continue
 				_append_face_triangle(vertices[ia], vertices[ib], vertices[ic], min_face_y)
 		else:
-			var triangle_count: int = vertices.size() / 3
-			for tri_i in triangle_count:
+			var plain_triangle_count: int = vertices.size() / 3
+			for tri_i in plain_triangle_count:
 				var base: int = tri_i * 3
 				_append_face_triangle(vertices[base], vertices[base + 1], vertices[base + 2], min_face_y)
 
@@ -126,10 +126,11 @@ func _append_face_triangle(a_local: Vector3, b_local: Vector3, c_local: Vector3,
 	_face_triangles.append(c)
 
 func _project_to_face(x: float, y: float, fallback_z: float, user_forward_offset: float) -> Dictionary:
-	var front := Vector3(0.0, 0.0, _front_sign)
+	var front: Vector3 = Vector3(0.0, 0.0, _front_sign)
 	var ray_direction: Vector3 = -front
 	var start_distance: float = maxf(float(_head["rz"]) * 3.0, 0.18)
-	var origin := Vector3(x, y, float(_head["center"].z) + _front_sign * start_distance)
+	var center: Vector3 = _head["center"]
+	var origin: Vector3 = Vector3(x, y, center.z + _front_sign * start_distance)
 
 	var best_t: float = INF
 	var best_normal: Vector3 = front
@@ -139,16 +140,16 @@ func _project_to_face(x: float, y: float, fallback_z: float, user_forward_offset
 		var a: Vector3 = _face_triangles[base]
 		var b: Vector3 = _face_triangles[base + 1]
 		var c: Vector3 = _face_triangles[base + 2]
-		var t: float = _ray_triangle_distance(origin, ray_direction, a, b, c)
-		if t < 0.0 or t >= best_t:
+		var distance: float = _ray_triangle_distance(origin, ray_direction, a, b, c)
+		if distance < 0.0 or distance >= best_t:
 			continue
-		best_t = t
-		var n: Vector3 = (b - a).cross(c - a)
-		if n.length_squared() > 0.00000001:
-			n = n.normalized()
-			if n.dot(front) < 0.0:
-				n = -n
-			best_normal = n
+		best_t = distance
+		var normal: Vector3 = (b - a).cross(c - a)
+		if normal.length_squared() > 0.00000001:
+			normal = normal.normalized()
+			if normal.dot(front) < 0.0:
+				normal = -normal
+			best_normal = normal
 
 	if best_t < INF:
 		var hit: Vector3 = origin + ray_direction * best_t
@@ -187,7 +188,7 @@ func _ray_triangle_distance(origin: Vector3, direction: Vector3, a: Vector3, b: 
 	var v: float = direction.dot(qvec) * inv_det
 	if v < 0.0 or u + v > 1.0:
 		return -1.0
-	var t: float = edge2.dot(qvec) * inv_det
-	if t <= 0.000001:
+	var distance: float = edge2.dot(qvec) * inv_det
+	if distance <= 0.000001:
 		return -1.0
-	return t
+	return distance
