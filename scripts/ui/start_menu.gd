@@ -150,8 +150,38 @@ func _build_settings_menu() -> void:
 
 	column.add_child(HSeparator.new())
 
+	var lod_debug_row := HBoxContainer.new()
+	lod_debug_row.add_theme_constant_override("separation", 16)
+	column.add_child(lod_debug_row)
+
+	var lod_debug_text := VBoxContainer.new()
+	lod_debug_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lod_debug_text.add_theme_constant_override("separation", 3)
+	lod_debug_row.add_child(lod_debug_text)
+
+	var lod_debug_label := Label.new()
+	lod_debug_label.text = "Brow LOD debug"
+	lod_debug_label.add_theme_font_size_override("font_size", 17)
+	lod_debug_text.add_child(lod_debug_label)
+
+	var lod_debug_hint := Label.new()
+	lod_debug_hint.text = "Enables manual brow LOD testing and exposes the same LOD slider inside Character Editor."
+	lod_debug_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lod_debug_hint.modulate = Color(0.62, 0.69, 0.75)
+	lod_debug_hint.add_theme_font_size_override("font_size", 13)
+	lod_debug_text.add_child(lod_debug_hint)
+
+	var lod_debug_toggle := CheckButton.new()
+	lod_debug_toggle.button_pressed = AppSettings.debug_brow_lod_controls
+	lod_debug_row.add_child(lod_debug_toggle)
+
+	var lod_controls := VBoxContainer.new()
+	lod_controls.add_theme_constant_override("separation", 8)
+	lod_controls.visible = AppSettings.debug_brow_lod_controls
+	column.add_child(lod_controls)
+
 	var lod_title_row := HBoxContainer.new()
-	column.add_child(lod_title_row)
+	lod_controls.add_child(lod_title_row)
 	var lod_title := Label.new()
 	lod_title.text = "Force brow LOD"
 	lod_title.add_theme_font_size_override("font_size", 17)
@@ -174,10 +204,10 @@ func _build_settings_menu() -> void:
 		lod_value.text = _brow_lod_label(lod)
 		AppSettings.set_debug_forced_brow_lod(lod)
 	)
-	column.add_child(lod_slider)
+	lod_controls.add_child(lod_slider)
 
 	var lod_scale := HBoxContainer.new()
-	column.add_child(lod_scale)
+	lod_controls.add_child(lod_scale)
 	var auto_label := Label.new()
 	auto_label.text = "AUTO"
 	auto_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -201,7 +231,15 @@ func _build_settings_menu() -> void:
 	lod_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lod_hint.modulate = Color(0.62, 0.69, 0.75)
 	lod_hint.add_theme_font_size_override("font_size", 13)
-	column.add_child(lod_hint)
+	lod_controls.add_child(lod_hint)
+
+	lod_debug_toggle.toggled.connect(func(enabled: bool) -> void:
+		AppSettings.set_debug_brow_lod_controls(enabled)
+		lod_controls.visible = enabled
+		if not enabled:
+			lod_slider.set_value_no_signal(-1.0)
+			lod_value.text = "AUTO"
+	)
 
 	column.add_child(HSeparator.new())
 
