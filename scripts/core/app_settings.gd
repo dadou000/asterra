@@ -11,7 +11,7 @@ const KEY_CLOSEST_CHARACTER_DISTANCE := "closest_character_distance"
 const KEY_BROW_LOD_CONTROLS := "brow_lod_controls"
 const KEY_FORCED_BROW_LOD := "forced_brow_lod"
 
-## -1 = automatic distance-based selection, 0 = force LOD0, 1 = force LOD1.
+## -1 = automatic distance-based selection, 0/1/2 = force that brow LOD.
 var debug_closest_character_distance: bool = false
 var debug_brow_lod_controls: bool = false
 var debug_forced_brow_lod: int = -1
@@ -38,7 +38,7 @@ func set_debug_brow_lod_controls(enabled: bool) -> void:
 	debug_brow_lod_controls_changed.emit(enabled)
 
 func set_debug_forced_brow_lod(lod: int) -> void:
-	var sanitized := clampi(lod, -1, 1)
+	var sanitized := clampi(lod, -1, 2)
 	# A forced level only has an effect while brow LOD debugging is enabled.
 	if not debug_brow_lod_controls:
 		sanitized = -1
@@ -66,7 +66,7 @@ func _load_settings() -> void:
 		SECTION_DEBUG,
 		KEY_FORCED_BROW_LOD,
 		-1
-	)), -1, 1)
+	)), -1, 2)
 	if not debug_brow_lod_controls:
 		debug_forced_brow_lod = -1
 
