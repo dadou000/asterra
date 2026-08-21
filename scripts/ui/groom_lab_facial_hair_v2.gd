@@ -34,7 +34,7 @@ func _late_setup() -> void:
 	_mustache_settings["messiness"] = 0.12
 
 	_beard_settings["density"] = 1.0
-	_beard_settings["density_multiplier"] = 1.0
+	_beard_settings["density_multiplier"] = 30.0
 	_beard_settings["coverage"] = 0.68
 	_beard_settings["fullness"] = 1.10
 	_beard_settings["length"] = 0.0055
@@ -71,18 +71,18 @@ func _setup_ui() -> void:
 		push_warning("Could not find groom UI column for beard density multiplier")
 		return
 
-	_add_section(column, "BEARD DENSITY TEST")
-	_add_slider(column, "Beard density multiplier", 1.0, 100.0, 1.0, float(_beard_settings.get("density_multiplier", 1.0)), "×", func(v: float) -> void:
+	_add_section(column, "BEARD DENSITY")
+	_add_slider(column, "Beard density multiplier", 1.0, 100.0, 1.0, float(_beard_settings.get("density_multiplier", 30.0)), "×", func(v: float) -> void:
 		_beard_settings["density_multiplier"] = v
 		_schedule_facial_hair()
 	)
 
-	var warning := Label.new()
-	warning.text = "1× is the normal beard density. Up to 100× is available for testing. Very high values can take a long time and use a lot of memory while the groom and facial morph targets are rebuilt; runtime remains cheap after the build."
-	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	warning.modulate = Color(0.72, 0.66, 0.52)
-	warning.add_theme_font_size_override("font_size", 11)
-	column.add_child(warning)
+	var note := Label.new()
+	note.text = "30× is the tuned default. LOD0 uses the full value; distant LODs automatically reduce follicle population. Beard roots are sampled directly on the face surface and facial morphs are transferred per follicle root."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.modulate = Color(0.63, 0.70, 0.76)
+	note.add_theme_font_size_override("font_size", 11)
+	column.add_child(note)
 
 func _rename_label_recursive(node: Node, old_text: String, new_text: String) -> bool:
 	if node is Label:
