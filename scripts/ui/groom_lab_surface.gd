@@ -1,6 +1,6 @@
 extends "res://scripts/ui/groom_lab.gd"
 
-const SurfaceGroomGenerator = preload("res://scripts/character/morph_bound_brow_groom.gd")
+const SurfaceGroomGenerator = preload("res://scripts/character/fast_morph_bound_brow_groom.gd")
 
 func _late_setup() -> void:
 	await get_tree().process_frame
