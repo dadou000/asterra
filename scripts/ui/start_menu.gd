@@ -56,30 +56,10 @@ func _build_menu() -> void:
 	spacer.custom_minimum_size.y = 22.0
 	column.add_child(spacer)
 
-	_add_mode_button(
-		column,
-		"PLAY",
-		"Enter the current Asterra world prototype.",
-		_on_play_pressed
-	)
-	_add_mode_button(
-		column,
-		"MAP EDITOR",
-		"Open the world with the terrain-editing workflow selected.",
-		_on_map_editor_pressed
-	)
-	_add_mode_button(
-		column,
-		"CHARACTER EDITOR",
-		"Open the studio used to inspect the human rig and facial morphs.",
-		_on_character_editor_pressed
-	)
-	_add_mode_button(
-		column,
-		"SETTINGS",
-		"Display, debug and development options.",
-		_show_settings_menu
-	)
+	_add_mode_button(column, "PLAY", "Enter the current Asterra world prototype.", _on_play_pressed)
+	_add_mode_button(column, "MAP EDITOR", "Open the world with the terrain-editing workflow selected.", _on_map_editor_pressed)
+	_add_mode_button(column, "CHARACTER EDITOR", "Open the studio used to inspect the human rig and facial morphs.", _on_character_editor_pressed)
+	_add_mode_button(column, "SETTINGS", "Display, debug and development options.", _show_settings_menu)
 
 	var spacer_bottom := Control.new()
 	spacer_bottom.custom_minimum_size.y = 10.0
@@ -170,6 +150,61 @@ func _build_settings_menu() -> void:
 
 	column.add_child(HSeparator.new())
 
+	var lod_title_row := HBoxContainer.new()
+	column.add_child(lod_title_row)
+	var lod_title := Label.new()
+	lod_title.text = "Force brow LOD"
+	lod_title.add_theme_font_size_override("font_size", 17)
+	lod_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lod_title_row.add_child(lod_title)
+	var lod_value := Label.new()
+	lod_value.custom_minimum_size.x = 90.0
+	lod_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	lod_value.text = _brow_lod_label(AppSettings.debug_forced_brow_lod)
+	lod_title_row.add_child(lod_value)
+
+	var lod_slider := HSlider.new()
+	lod_slider.min_value = -1.0
+	lod_slider.max_value = 1.0
+	lod_slider.step = 1.0
+	lod_slider.value = float(AppSettings.debug_forced_brow_lod)
+	lod_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lod_slider.value_changed.connect(func(value: float) -> void:
+		var lod := int(round(value))
+		lod_value.text = _brow_lod_label(lod)
+		AppSettings.set_debug_forced_brow_lod(lod)
+	)
+	column.add_child(lod_slider)
+
+	var lod_scale := HBoxContainer.new()
+	column.add_child(lod_scale)
+	var auto_label := Label.new()
+	auto_label.text = "AUTO"
+	auto_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	auto_label.modulate = Color(0.53, 0.60, 0.67)
+	lod_scale.add_child(auto_label)
+	var lod0_label := Label.new()
+	lod0_label.text = "LOD0"
+	lod0_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lod0_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lod0_label.modulate = Color(0.53, 0.60, 0.67)
+	lod_scale.add_child(lod0_label)
+	var lod1_label := Label.new()
+	lod1_label.text = "LOD1"
+	lod1_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	lod1_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lod1_label.modulate = Color(0.53, 0.60, 0.67)
+	lod_scale.add_child(lod1_label)
+
+	var lod_hint := Label.new()
+	lod_hint.text = "AUTO uses the normal 6 m switch. LOD0 and LOD1 force that brow level regardless of camera distance for visual comparison."
+	lod_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lod_hint.modulate = Color(0.62, 0.69, 0.75)
+	lod_hint.add_theme_font_size_override("font_size", 13)
+	column.add_child(lod_hint)
+
+	column.add_child(HSeparator.new())
+
 	var registration_note := Label.new()
 	registration_note.text = "Character detection: nodes in the 'characters' group, nodes tagged with metadata 'asterra_character', and the current AsterraHuman studio model."
 	registration_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -182,6 +217,15 @@ func _build_settings_menu() -> void:
 	back.custom_minimum_size.y = 44.0
 	back.pressed.connect(_show_main_menu)
 	column.add_child(back)
+
+func _brow_lod_label(lod: int) -> String:
+	match lod:
+		0:
+			return "LOD0"
+		1:
+			return "LOD1"
+		_:
+			return "AUTO"
 
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
