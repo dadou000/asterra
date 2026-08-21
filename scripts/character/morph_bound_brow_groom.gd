@@ -11,8 +11,10 @@ extends "res://scripts/character/natural_brow_groom.gd"
 ## The binding stores the source triangle plus barycentric weights. For every
 ## imported blend shape that actually moves that patch of skin by a visible
 ## amount, an equivalent relative blend shape is generated on LOD0/1/2 by
-## barycentrically interpolating the three source vertex deltas. Runtime then
-## only mirrors blend-shape weights from the face mesh to the brow meshes.
+## barycentrically interpolating the three source vertex deltas. The tiny hair
+## offset from the skin is also rotated with the triangle's local deformation
+## frame, so strong expressions follow both skin translation and local tilt.
+## Runtime then only mirrors blend-shape weights from the face to the brows.
 ##
 ## Result: browInnerUp/browDown/etc. still work, but so do eye/cheek/expression
 ## shapes whenever those shapes genuinely deform the skin under the eyebrow.
@@ -122,8 +124,8 @@ func _ensure_morph_source_cache() -> bool:
 			indices = PackedInt32Array(arrays[Mesh.ARRAY_INDEX])
 
 		if not indices.is_empty():
-			var triangle_count: int = indices.size() / 3
-			for tri_i in triangle_count:
+			var indexed_triangle_count: int = indices.size() / 3
+			for tri_i in indexed_triangle_count:
 				var ia: int = indices[tri_i * 3]
 				var ib: int = indices[tri_i * 3 + 1]
 				var ic: int = indices[tri_i * 3 + 2]
@@ -131,8 +133,8 @@ func _ensure_morph_source_cache() -> bool:
 					continue
 				_append_morph_triangle(surface, ia, ib, ic, vertices, min_face_y)
 		else:
-			var triangle_count: int = vertices.size() / 3
-			for tri_i in triangle_count:
+			var plain_triangle_count: int = vertices.size() / 3
+			for tri_i in plain_triangle_count:
 				var base: int = tri_i * 3
 				_append_morph_triangle(surface, base, base + 1, base + 2, vertices, min_face_y)
 
@@ -221,6 +223,8 @@ func _create_morph_bound_mesh(neutral_mesh: ArrayMesh, lod: int) -> ArrayMesh:
 
 	for vertex_i in vertices.size():
 		var binding: Dictionary = _bind_brow_vertex(vertices[vertex_i])
+		if not binding.is_empty():
+			binding["neutral_vertex"] = vertices[vertex_i]
 		bindings[vertex_i] = binding
 		if binding.is_empty():
 			_morph_bind_failures += 1
@@ -325,7 +329,7 @@ func _bind_brow_vertex(vertex_local: Vector3) -> Dictionary:
 		return binding
 
 	# Temple geometry can move farther in X/Y along the radial cast. Try a wider
-	# grid neighborhood before falling back to a full-cache closest-point search.
+	# grid neighborhood before falling back to a closest-point search.
 	candidates = _candidate_triangles(world_vertex, 2)
 	binding = _best_ray_binding(ray_origin, ray_direction, candidates)
 	if not binding.is_empty():
@@ -352,6 +356,7 @@ func _best_ray_binding(origin: Vector3, direction: Vector3, candidates: Array[in
 			continue
 		best_t = hit_distance
 		best_binding = {
+			"tri": tri_index,
 			"surface": int(tri["surface"]),
 			"ia": int(tri["ia"]),
 			"ib": int(tri["ib"]),
@@ -364,8 +369,8 @@ func _closest_triangle_binding(world_vertex: Vector3, candidates: Array[int]) ->
 	var search_candidates: Array[int] = candidates
 	if search_candidates.is_empty():
 		search_candidates.resize(_morph_triangles.size())
-		for i in _morph_triangles.size():
-			search_candidates[i] = i
+		for candidate_i in _morph_triangles.size():
+			search_candidates[candidate_i] = candidate_i
 
 	var best_distance_sq := INF
 	var best_binding: Dictionary = {}
@@ -383,6 +388,7 @@ func _closest_triangle_binding(world_vertex: Vector3, candidates: Array[int]) ->
 			continue
 		best_distance_sq = distance_sq
 		best_binding = {
+			"tri": tri_index,
 			"surface": int(tri["surface"]),
 			"ia": int(tri["ia"]),
 			"ib": int(tri["ib"]),
@@ -403,10 +409,10 @@ func _triangle_barycentric(point: Vector3, a: Vector3, b: Vector3, c: Vector3) -
 	var denominator: float = d00 * d11 - d01 * d01
 	if absf(denominator) < 0.0000000001:
 		return Vector3(1.0, 0.0, 0.0)
-	var wb: float = (d11 * d20 - d01 * d21) / denominator
-	var wc: float = (d00 * d21 - d01 * d20) / denominator
-	var wa: float = 1.0 - wb - wc
-	return Vector3(wa, wb, wc)
+	var weight_b: float = (d11 * d20 - d01 * d21) / denominator
+	var weight_c: float = (d00 * d21 - d01 * d20) / denominator
+	var weight_a: float = 1.0 - weight_b - weight_c
+	return Vector3(weight_a, weight_b, weight_c)
 
 func _closest_triangle_barycentric(point: Vector3, a: Vector3, b: Vector3, c: Vector3) -> Vector3:
 	# Real-Time Collision Detection, Christer Ericson: closest point on triangle.
@@ -426,8 +432,8 @@ func _closest_triangle_barycentric(point: Vector3, a: Vector3, b: Vector3, c: Ve
 
 	var vc: float = d1 * d4 - d3 * d2
 	if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
-		var v: float = d1 / maxf(d1 - d3, 0.0000001)
-		return Vector3(1.0 - v, v, 0.0)
+		var edge_ab_weight: float = d1 / maxf(d1 - d3, 0.0000001)
+		return Vector3(1.0 - edge_ab_weight, edge_ab_weight, 0.0)
 
 	var cp: Vector3 = point - c
 	var d5: float = ab.dot(cp)
@@ -437,19 +443,19 @@ func _closest_triangle_barycentric(point: Vector3, a: Vector3, b: Vector3, c: Ve
 
 	var vb: float = d5 * d2 - d1 * d6
 	if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
-		var w: float = d2 / maxf(d2 - d6, 0.0000001)
-		return Vector3(1.0 - w, 0.0, w)
+		var edge_ac_weight: float = d2 / maxf(d2 - d6, 0.0000001)
+		return Vector3(1.0 - edge_ac_weight, 0.0, edge_ac_weight)
 
 	var va: float = d3 * d6 - d5 * d4
 	if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
-		var edge_denominator: float = (d4 - d3) + (d5 - d6)
-		var w: float = (d4 - d3) / maxf(edge_denominator, 0.0000001)
-		return Vector3(0.0, 1.0 - w, w)
+		var edge_bc_denominator: float = (d4 - d3) + (d5 - d6)
+		var edge_bc_weight: float = (d4 - d3) / maxf(edge_bc_denominator, 0.0000001)
+		return Vector3(0.0, 1.0 - edge_bc_weight, edge_bc_weight)
 
-	var denominator: float = 1.0 / maxf(va + vb + vc, 0.0000001)
-	var v: float = vb * denominator
-	var w: float = vc * denominator
-	return Vector3(1.0 - v - w, v, w)
+	var face_denominator: float = 1.0 / maxf(va + vb + vc, 0.0000001)
+	var face_weight_b: float = vb * face_denominator
+	var face_weight_c: float = vc * face_denominator
+	return Vector3(1.0 - face_weight_b - face_weight_c, face_weight_b, face_weight_c)
 
 func _binding_shape_delta(binding: Dictionary, shape_index: int) -> Vector3:
 	var surface := int(binding["surface"])
@@ -457,7 +463,60 @@ func _binding_shape_delta(binding: Dictionary, shape_index: int) -> Vector3:
 	var da: Vector3 = _source_vertex_delta(surface, shape_index, int(binding["ia"]))
 	var db: Vector3 = _source_vertex_delta(surface, shape_index, int(binding["ib"]))
 	var dc: Vector3 = _source_vertex_delta(surface, shape_index, int(binding["ic"]))
-	return da * weights.x + db * weights.y + dc * weights.z
+
+	# Exact skin-point motion is the barycentric interpolation of the source
+	# triangle's three blend-shape deltas.
+	var skin_delta: Vector3 = da * weights.x + db * weights.y + dc * weights.z
+	if not binding.has("tri") or not binding.has("neutral_vertex"):
+		return skin_delta
+
+	var tri_index := int(binding["tri"])
+	if tri_index < 0 or tri_index >= _morph_triangles.size():
+		return skin_delta
+	var tri: Dictionary = _morph_triangles[tri_index]
+
+	var a_local: Vector3 = _mount.to_local(Vector3(tri["a"]))
+	var b_local: Vector3 = _mount.to_local(Vector3(tri["b"]))
+	var c_local: Vector3 = _mount.to_local(Vector3(tri["c"]))
+	var neutral_skin: Vector3 = a_local * weights.x + b_local * weights.y + c_local * weights.z
+	var neutral_vertex: Vector3 = binding["neutral_vertex"]
+	var neutral_offset: Vector3 = neutral_vertex - neutral_skin
+
+	var shaped_a: Vector3 = a_local + da
+	var shaped_b: Vector3 = b_local + db
+	var shaped_c: Vector3 = c_local + dc
+	var shaped_skin: Vector3 = shaped_a * weights.x + shaped_b * weights.y + shaped_c * weights.z
+
+	# Rotate the hair's tiny stand-off/tube offset with the deformed triangle.
+	# This captures local forehead/temple tilt in strong expressions instead of
+	# merely translating the strand parallel to the original skin.
+	var neutral_tangent: Vector3 = b_local - a_local
+	var neutral_normal: Vector3 = neutral_tangent.cross(c_local - a_local)
+	var shaped_tangent: Vector3 = shaped_b - shaped_a
+	var shaped_normal: Vector3 = shaped_tangent.cross(shaped_c - shaped_a)
+	if neutral_tangent.length_squared() < 0.00000001 or neutral_normal.length_squared() < 0.00000001:
+		return skin_delta
+	if shaped_tangent.length_squared() < 0.00000001 or shaped_normal.length_squared() < 0.00000001:
+		return skin_delta
+
+	neutral_tangent = neutral_tangent.normalized()
+	neutral_normal = neutral_normal.normalized()
+	var neutral_bitangent: Vector3 = neutral_normal.cross(neutral_tangent).normalized()
+	shaped_tangent = shaped_tangent.normalized()
+	shaped_normal = shaped_normal.normalized()
+	if neutral_normal.dot(shaped_normal) < 0.0:
+		shaped_normal = -shaped_normal
+	var shaped_bitangent: Vector3 = shaped_normal.cross(shaped_tangent).normalized()
+
+	var tangent_amount: float = neutral_offset.dot(neutral_tangent)
+	var bitangent_amount: float = neutral_offset.dot(neutral_bitangent)
+	var normal_amount: float = neutral_offset.dot(neutral_normal)
+	var rotated_offset: Vector3 = shaped_tangent * tangent_amount
+	rotated_offset += shaped_bitangent * bitangent_amount
+	rotated_offset += shaped_normal * normal_amount
+
+	var shaped_vertex: Vector3 = shaped_skin + rotated_offset
+	return shaped_vertex - neutral_vertex
 
 func _source_vertex_delta(surface: int, shape_index: int, vertex_index: int) -> Vector3:
 	var base_arrays: Array = _morph_surface_arrays.get(surface, [])
