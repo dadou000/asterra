@@ -62,8 +62,6 @@ func _build_brow_mesh(lod: int) -> ArrayMesh:
 	var thickness_scale: float = clampf(float(brow_settings.get("thickness", 1.0)), 0.30, 2.50)
 	var messiness: float = clampf(float(brow_settings.get("messiness", 0.18)), 0.0, 1.0)
 
-	# The older UI uses +1.5 mm as its visual neutral position. Surface
-	# projection handles the actual skin clearance.
 	var artistic_offset: float = forward_control - 0.0015
 
 	var center: Vector3 = _head["center"]
@@ -71,14 +69,9 @@ func _build_brow_mesh(lod: int) -> ArrayMesh:
 	var ry: float = float(_head["ry"])
 	var rz: float = float(_head["rz"])
 
-	# LOD1 deliberately samples the LOD0 follicle sequence rather than using a
-	# separately distributed set. This makes most of the surviving hairs occupy
-	# exactly the same roots at the 6 m transition.
 	var count_per_side: int = clampi(int(round(lerpf(80.0, 255.0, density))), 54, 280)
 	var ribbon_half_width: float = requested_width * 0.30
 	if lod == 1:
-		# Fewer hairs need a little more visual weight at distance. This is still
-		# substantially thinner than the old prototype brow ribbons.
 		ribbon_half_width *= 1.55
 
 	var inner_x: float = middle_spacing * 0.5
@@ -158,8 +151,6 @@ func _build_brow_mesh(lod: int) -> ArrayMesh:
 			var tip_normal_local: Vector3 = (_mount.global_transform.basis.inverse() * tip_normal).normalized()
 
 			if lod == 1:
-				# LOD1: one surface-conforming quad per surviving hair. At >= 6 m the
-				# sub-millimetre arc is no longer resolvable, so the midpoint is omitted.
 				_add_skin_ribbon(
 					st,
 					root_local,
@@ -172,7 +163,6 @@ func _build_brow_mesh(lod: int) -> ArrayMesh:
 					1.0
 				)
 			else:
-				# LOD0: preserve the existing curved two-segment strand.
 				var mid_x: float = x + flow2.x * strand_len * 0.52
 				var mid_y: float = y + flow2.y * strand_len * 0.52
 				var mid_fallback_z: float = _ellipsoid_front_z(mid_x, mid_y, center, rx, ry, rz)
@@ -200,12 +190,17 @@ func _update_brow_lod_visibility(force: bool = false) -> void:
 		return
 
 	var desired_lod := 0
+	var forced_lod: int = clampi(AppSettings.debug_forced_brow_lod, -1, 1)
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera != null and _mount != null:
 		_last_brow_distance = camera.global_position.distance_to(_mount.global_position)
-		desired_lod = 0 if _last_brow_distance < BROW_LOD1_DISTANCE else 1
 	else:
 		_last_brow_distance = -1.0
+
+	if forced_lod >= 0:
+		desired_lod = forced_lod
+	elif _last_brow_distance >= 0.0:
+		desired_lod = 0 if _last_brow_distance < BROW_LOD1_DISTANCE else 1
 
 	if not force and desired_lod == _active_brow_lod:
 		return
@@ -218,4 +213,6 @@ func diagnostics() -> String:
 	var distance_note := "no camera"
 	if _last_brow_distance >= 0.0:
 		distance_note = "%.2f m" % _last_brow_distance
-	return "%s • brows LOD%d @ %s (switch 6.0 m)" % [base, _active_brow_lod, distance_note]
+	var forced_lod: int = clampi(AppSettings.debug_forced_brow_lod, -1, 1)
+	var mode_note := "auto, switch 6.0 m" if forced_lod < 0 else "FORCED"
+	return "%s • brows LOD%d @ %s (%s)" % [base, _active_brow_lod, distance_note, mode_note]
