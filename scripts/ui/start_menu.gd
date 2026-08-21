@@ -195,7 +195,7 @@ func _build_settings_menu() -> void:
 
 	var lod_slider := HSlider.new()
 	lod_slider.min_value = -1.0
-	lod_slider.max_value = 1.0
+	lod_slider.max_value = 2.0
 	lod_slider.step = 1.0
 	lod_slider.value = float(AppSettings.debug_forced_brow_lod)
 	lod_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -208,26 +208,16 @@ func _build_settings_menu() -> void:
 
 	var lod_scale := HBoxContainer.new()
 	lod_controls.add_child(lod_scale)
-	var auto_label := Label.new()
-	auto_label.text = "AUTO"
-	auto_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	auto_label.modulate = Color(0.53, 0.60, 0.67)
-	lod_scale.add_child(auto_label)
-	var lod0_label := Label.new()
-	lod0_label.text = "LOD0"
-	lod0_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lod0_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lod0_label.modulate = Color(0.53, 0.60, 0.67)
-	lod_scale.add_child(lod0_label)
-	var lod1_label := Label.new()
-	lod1_label.text = "LOD1"
-	lod1_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	lod1_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lod1_label.modulate = Color(0.53, 0.60, 0.67)
-	lod_scale.add_child(lod1_label)
+	for label_text in ["AUTO", "LOD0", "LOD1", "LOD2"]:
+		var label := Label.new()
+		label.text = label_text
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.modulate = Color(0.53, 0.60, 0.67)
+		lod_scale.add_child(label)
 
 	var lod_hint := Label.new()
-	lod_hint.text = "AUTO uses the normal 6 m switch. LOD0 and LOD1 force that brow level regardless of camera distance for visual comparison."
+	lod_hint.text = "AUTO switches LOD0→LOD1 at 6 m and LOD1→LOD2 at 15 m. Force a level for direct visual comparison."
 	lod_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lod_hint.modulate = Color(0.62, 0.69, 0.75)
 	lod_hint.add_theme_font_size_override("font_size", 13)
@@ -262,6 +252,8 @@ func _brow_lod_label(lod: int) -> String:
 			return "LOD0"
 		1:
 			return "LOD1"
+		2:
+			return "LOD2"
 		_:
 			return "AUTO"
 
