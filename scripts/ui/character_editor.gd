@@ -8,6 +8,7 @@ var _character: Node3D
 var _meshes: Array[MeshInstance3D] = []
 var _shape_names: Array[String] = []
 var _filtered_shapes: Array[String] = []
+var _default_shape_values: Dictionary = {}
 
 var _camera_pivot: Node3D
 var _camera: Camera3D
@@ -123,9 +124,9 @@ func _setup_stage() -> void:
 	var cylinder := CylinderMesh.new()
 	cylinder.top_radius = 1.25
 	cylinder.bottom_radius = 1.25
-	cylinder.height = PLATFORM_TOP * 2.0
+	cylinder.height = PLATFORM_TOP
 	platform.mesh = cylinder
-	platform.position.y = PLATFORM_TOP
+	platform.position.y = PLATFORM_TOP * 0.5
 	platform.material_override = _make_material(Color("303b45"), 0.62)
 	add_child(platform)
 
@@ -156,7 +157,7 @@ func _load_character() -> void:
 		return
 
 	var instance := packed.instantiate()
-	if not instance is Node3D:
+	if not (instance is Node3D):
 		push_error("Asterra human GLB root is not a Node3D")
 		instance.queue_free()
 		return
@@ -172,6 +173,7 @@ func _load_character() -> void:
 
 	_center_character_on_stage()
 	_collect_shape_names()
+	_capture_shape_defaults()
 
 func _collect_meshes(node: Node) -> void:
 	if node is MeshInstance3D:
@@ -238,6 +240,17 @@ func _collect_shape_names() -> void:
 	for name in unique.keys():
 		_shape_names.append(str(name))
 	_shape_names.sort()
+
+func _capture_shape_defaults() -> void:
+	_default_shape_values.clear()
+	for mesh_instance in _meshes:
+		if mesh_instance.mesh == null:
+			continue
+		for index in mesh_instance.mesh.get_blend_shape_count():
+			_default_shape_values[_shape_key(mesh_instance, index)] = mesh_instance.get_blend_shape_value(index)
+
+func _shape_key(mesh_instance: MeshInstance3D, index: int) -> String:
+	return "%d:%d" % [mesh_instance.get_instance_id(), index]
 
 func _setup_ui() -> void:
 	var layer := CanvasLayer.new()
@@ -370,7 +383,7 @@ func _setup_ui() -> void:
 	_add_preset_button(preset_row, "Jaw", "jaw")
 
 	var reset := Button.new()
-	reset.text = "Reset all blend shapes"
+	reset.text = "Reset to imported defaults"
 	reset.pressed.connect(_reset_all_shapes)
 	column.add_child(reset)
 
@@ -474,7 +487,8 @@ func _reset_all_shapes() -> void:
 		if mesh_instance.mesh == null:
 			continue
 		for index in mesh_instance.mesh.get_blend_shape_count():
-			mesh_instance.set_blend_shape_value(index, 0.0)
+			var key := _shape_key(mesh_instance, index)
+			mesh_instance.set_blend_shape_value(index, float(_default_shape_values.get(key, 0.0)))
 	if _shape_selector != null and _shape_selector.selected >= 0:
 		_on_shape_selected(_shape_selector.selected)
 
