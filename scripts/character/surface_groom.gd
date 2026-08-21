@@ -1,11 +1,10 @@
 extends "res://scripts/character/procedural_groom.gd"
 
-## Brow placement refinement for the Asterra groom prototype.
-## The base generator uses an estimated head ellipsoid. This subclass keeps
-## that estimate for 2D brow layout, but projects every brow root onto the
-## actual imported body mesh and derives a local skin normal from the hit
-## triangle. Brow hairs then grow mostly tangent to that normal, with a small
-## outward lift, which prevents both roots and tips from entering the forehead.
+## Surface-conforming brow refinement for the Asterra groom prototype.
+## Brow design happens in a stable 2D brow space, but every control point is
+## projected back onto the actual imported forehead mesh. Roots are distributed
+## through a brow-shaped band instead of a single line and each strand is drawn
+## as a flat ribbon parallel to the local skin surface.
 
 var _face_triangles: PackedVector3Array = PackedVector3Array()
 
@@ -21,15 +20,25 @@ func rebuild_brows() -> void:
 
 	var density: float = clampf(float(brow_settings.get("density", 0.68)), 0.05, 1.0)
 	var brow_width: float = clampf(float(brow_settings.get("width", 1.0)), 0.55, 1.45)
-	var strand_width: float = clampf(float(brow_settings.get("strand_width", 0.00045)), 0.00012, 0.002)
+	var requested_width: float = clampf(float(brow_settings.get("strand_width", 0.00045)), 0.00008, 0.0012)
 	var arch: float = clampf(float(brow_settings.get("arch", 0.45)), 0.0, 1.25)
 	var height_offset: float = clampf(float(brow_settings.get("height_offset", 0.0)), -0.035, 0.035)
-	var forward_offset: float = clampf(float(brow_settings.get("forward_offset", 0.0015)), -0.010, 0.025)
+	var forward_control: float = clampf(float(brow_settings.get("forward_offset", 0.0015)), -0.010, 0.025)
+
+	# The old UI default was +1.5 mm because the previous ellipsoid placement
+	# needed a manual push. Surface projection makes that correction unnecessary,
+	# so treat the old default value as the new neutral position.
+	var artistic_offset: float = forward_control - 0.0015
+
 	var center: Vector3 = _head["center"]
 	var rx: float = float(_head["rx"])
 	var ry: float = float(_head["ry"])
 	var rz: float = float(_head["rz"])
-	var count_per_side: int = clampi(int(round(lerpf(20.0, 92.0, density))), 12, 110)
+
+	# More roots than the first prototype, but each root is a much thinner flat
+	# ribbon. This creates the layered mass of a real eyebrow instead of a comb.
+	var count_per_side: int = clampi(int(round(lerpf(70.0, 235.0, density))), 48, 260)
+	var ribbon_half_width: float = requested_width * 0.32
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -37,48 +46,132 @@ func rebuild_brows() -> void:
 	for side_i in 2:
 		var side: float = -1.0 if side_i == 0 else 1.0
 		for i in count_per_side:
-			var jitter: float = (_hash01(float(i) * 13.91 + side * 5.2) - 0.5) / float(count_per_side)
-			var t: float = clampf((float(i) + 0.5) / float(count_per_side) + jitter, 0.0, 1.0)
+			var h0: float = _hash01(float(i) * 13.91 + side * 5.2)
+			var h1: float = _hash01(float(i) * 29.37 + side * 17.4)
+			var h2: float = _hash01(float(i) * 47.11 + side * 2.9)
+			var h3: float = _hash01(float(i) * 71.03 + side * 11.7)
 
-			# The ellipsoid still gives us a stable 2D design space for width/arch.
-			# Depth is discarded below and replaced by the real skin intersection.
+			# Low-discrepancy travel along the brow plus a very small horizontal
+			# jitter. The roots are then scattered vertically across a shaped band.
+			var t: float = (float(i) + 0.5) / float(count_per_side)
+			t = clampf(t + (h0 - 0.5) / float(count_per_side) * 1.8, 0.0, 1.0)
+
 			var inner_x: float = rx * 0.18
 			var outer_x: float = rx * 0.79 * brow_width
 			var x_offset: float = lerpf(inner_x, outer_x, t)
-			var x: float = center.x + side * x_offset
-			var base_y: float = center.y + ry * 0.37 + height_offset
-			var y: float = base_y + sin(t * PI) * (_character_height * 0.0065 * arch)
-			y -= t * _character_height * 0.0024
+			var x_jitter: float = (h1 - 0.5) * _character_height * 0.0008
+			var x: float = center.x + side * (x_offset + x_jitter)
 
-			var xn: float = (x - center.x) / maxf(rx, 0.001)
-			var yn: float = (y - center.y) / maxf(ry, 0.001)
-			var ellipsoid_surface: float = sqrt(maxf(0.04, 1.0 - xn * xn - yn * yn))
-			var fallback_z: float = center.z + _front_sign * rz * ellipsoid_surface
-			var placement: Dictionary = _project_to_face(x, y, fallback_z, forward_offset)
-			var root: Vector3 = placement["point"]
-			var skin_normal: Vector3 = placement["normal"]
+			var centerline_y: float = _brow_centerline_y(t, center.y, ry, arch, height_offset)
+			# Natural brows are thickest from the inner third through the body and
+			# taper strongly into the tail. Average several hashes to bias roots
+			# toward the center of the band rather than its edges.
+			var band_random: float = ((h1 + h2 + h3) / 3.0 - 0.5) * 2.0
+			var inner_thickness: float = _character_height * 0.0060
+			var tail_thickness: float = _character_height * 0.0020
+			var thickness: float = lerpf(inner_thickness, tail_thickness, pow(t, 1.35))
+			# Slightly fuller body around 35-55% of the brow.
+			thickness *= 1.0 + sin(t * PI) * 0.18
+			var y: float = centerline_y + band_random * thickness * 0.50
 
-			# Eyebrow hairs lie along the skin rather than pointing through it.
-			# Inner hairs are more vertical, outer hairs turn increasingly lateral.
-			var raw_flow: Vector3 = Vector3(side * (0.50 + 0.46 * t), 0.78 - 0.94 * t, 0.0)
-			var tangent: Vector3 = raw_flow - skin_normal * raw_flow.dot(skin_normal)
-			if tangent.length_squared() < 0.000001:
-				tangent = Vector3(side, 0.0, 0.0)
-			tangent = tangent.normalized()
-			var direction: Vector3 = (tangent * 0.985 + skin_normal * 0.17).normalized()
+			var fallback_z: float = _ellipsoid_front_z(x, y, center, rx, ry, rz)
+			var root_place: Dictionary = _project_to_face(x, y, fallback_z, artistic_offset)
+			var root: Vector3 = root_place["point"]
+			var root_normal: Vector3 = root_place["normal"]
 
-			var strand_len: float = _character_height * lerpf(0.0035, 0.0054, 1.0 - absf(t - 0.45))
-			var length_jitter: float = lerpf(0.88, 1.12, _hash01(float(i) * 21.77 + side * 3.7))
-			var tip: Vector3 = root + direction * strand_len * length_jitter
+			# Growth rotates from more upright inner hairs to increasingly lateral
+			# outer hairs. A small deterministic angular variation prevents rows.
+			var lateral: float = lerpf(0.36, 1.0, smoothstep(0.0, 0.82, t))
+			var vertical: float = lerpf(0.94, -0.18, smoothstep(0.0, 1.0, t))
+			lateral += (h2 - 0.5) * 0.12
+			vertical += (h3 - 0.5) * 0.14
+			var flow2 := Vector2(side * lateral, vertical).normalized()
+
+			var body_factor: float = 1.0 - absf(t - 0.42) / 0.58
+			body_factor = clampf(body_factor, 0.0, 1.0)
+			var strand_len: float = _character_height * lerpf(0.0031, 0.0052, body_factor)
+			strand_len *= lerpf(0.88, 1.12, h0)
+
+			# Project the middle and tip independently. That makes each short hair
+			# follow forehead curvature instead of being a rotated 3D spike.
+			var mid_x: float = x + flow2.x * strand_len * 0.52
+			var mid_y: float = y + flow2.y * strand_len * 0.52
+			var tip_x: float = x + flow2.x * strand_len
+			var tip_y: float = y + flow2.y * strand_len
+			var mid_fallback_z: float = _ellipsoid_front_z(mid_x, mid_y, center, rx, ry, rz)
+			var tip_fallback_z: float = _ellipsoid_front_z(tip_x, tip_y, center, rx, ry, rz)
+			var mid_place: Dictionary = _project_to_face(mid_x, mid_y, mid_fallback_z, artistic_offset)
+			var tip_place: Dictionary = _project_to_face(tip_x, tip_y, tip_fallback_z, artistic_offset)
+			var mid: Vector3 = mid_place["point"]
+			var tip: Vector3 = tip_place["point"]
+			var mid_normal: Vector3 = mid_place["normal"]
+			var tip_normal: Vector3 = tip_place["normal"]
+
+			# Tiny lift through the middle produces a hair-like arc while keeping
+			# both ends attached to the skin. It is intentionally sub-millimetre.
+			mid += mid_normal * lerpf(0.00010, 0.00030, h3)
 
 			var root_local: Vector3 = _mount.to_local(root)
+			var mid_local: Vector3 = _mount.to_local(mid)
 			var tip_local: Vector3 = _mount.to_local(tip)
-			_add_crossed_segment(st, root_local, tip_local, strand_width, strand_width * 0.12, 0.0, 1.0)
+			var root_normal_local: Vector3 = (_mount.global_transform.basis.inverse() * root_normal).normalized()
+			var mid_normal_local: Vector3 = (_mount.global_transform.basis.inverse() * mid_normal).normalized()
+			var tip_normal_local: Vector3 = (_mount.global_transform.basis.inverse() * tip_normal).normalized()
+
+			_add_skin_ribbon(st, root_local, mid_local, root_normal_local, mid_normal_local, ribbon_half_width, ribbon_half_width * 0.72, 0.0, 0.52)
+			_add_skin_ribbon(st, mid_local, tip_local, mid_normal_local, tip_normal_local, ribbon_half_width * 0.72, ribbon_half_width * 0.06, 0.52, 1.0)
 
 	st.generate_normals()
 	st.generate_tangents()
 	_brow_instance.mesh = st.commit()
 	_brow_instance.material_override = _brow_material
+
+func _brow_centerline_y(t: float, center_y: float, ry: float, arch: float, height_offset: float) -> float:
+	var y: float = center_y + ry * 0.37 + height_offset
+	# Broad natural arch with the peak slightly outside center.
+	var arch_t: float = clampf(t / 0.72, 0.0, 1.0)
+	y += sin(arch_t * PI) * (_character_height * 0.0065 * arch)
+	y -= t * _character_height * 0.0024
+	return y
+
+func _ellipsoid_front_z(x: float, y: float, center: Vector3, rx: float, ry: float, rz: float) -> float:
+	var xn: float = (x - center.x) / maxf(rx, 0.001)
+	var yn: float = (y - center.y) / maxf(ry, 0.001)
+	var surface: float = sqrt(maxf(0.04, 1.0 - xn * xn - yn * yn))
+	return center.z + _front_sign * rz * surface
+
+func _add_skin_ribbon(st: SurfaceTool, a: Vector3, b: Vector3, normal_a: Vector3, normal_b: Vector3, width_a: float, width_b: float, v0: float, v1: float) -> void:
+	var direction: Vector3 = b - a
+	if direction.length_squared() < 0.00000001:
+		return
+	direction = direction.normalized()
+
+	# Width axes live in the tangent plane of the skin. This is the key
+	# difference from the old crossed-ribbon renderer, which made brow hairs
+	# look rotated/perpendicular when seen from an oblique angle.
+	var side_a: Vector3 = normal_a.cross(direction)
+	if side_a.length_squared() < 0.000001:
+		side_a = Vector3.UP.cross(direction)
+	if side_a.length_squared() < 0.000001:
+		side_a = Vector3.RIGHT
+	side_a = side_a.normalized()
+
+	var side_b: Vector3 = normal_b.cross(direction)
+	if side_b.length_squared() < 0.000001:
+		side_b = side_a
+	side_b = side_b.normalized()
+	if side_a.dot(side_b) < 0.0:
+		side_b = -side_b
+
+	_add_quad(
+		st,
+		a - side_a * width_a,
+		a + side_a * width_a,
+		b + side_b * width_b,
+		b - side_b * width_b,
+		v0,
+		v1
+	)
 
 func _ensure_face_triangle_cache() -> void:
 	if not _face_triangles.is_empty():
@@ -86,8 +179,6 @@ func _ensure_face_triangle_cache() -> void:
 	if _body_mesh == null or _body_mesh.mesh == null:
 		return
 
-	# Only cache the head/face region. This keeps projection cheap while the
-	# brow sliders are dragged and avoids accidental hits on unrelated geometry.
 	var head_top: float = float(_head.get("top", _character_bottom + _character_height))
 	var min_face_y: float = head_top - _character_height * 0.19
 
@@ -101,8 +192,8 @@ func _ensure_face_triangle_cache() -> void:
 			indices = PackedInt32Array(arrays[Mesh.ARRAY_INDEX])
 
 		if not indices.is_empty():
-			var indexed_triangle_count: int = indices.size() / 3
-			for tri_i in indexed_triangle_count:
+			var triangle_count: int = indices.size() / 3
+			for tri_i in triangle_count:
 				var ia: int = indices[tri_i * 3]
 				var ib: int = indices[tri_i * 3 + 1]
 				var ic: int = indices[tri_i * 3 + 2]
@@ -110,8 +201,8 @@ func _ensure_face_triangle_cache() -> void:
 					continue
 				_append_face_triangle(vertices[ia], vertices[ib], vertices[ic], min_face_y)
 		else:
-			var plain_triangle_count: int = vertices.size() / 3
-			for tri_i in plain_triangle_count:
+			var triangle_count: int = vertices.size() / 3
+			for tri_i in triangle_count:
 				var base: int = tri_i * 3
 				_append_face_triangle(vertices[base], vertices[base + 1], vertices[base + 2], min_face_y)
 
@@ -126,11 +217,11 @@ func _append_face_triangle(a_local: Vector3, b_local: Vector3, c_local: Vector3,
 	_face_triangles.append(c)
 
 func _project_to_face(x: float, y: float, fallback_z: float, user_forward_offset: float) -> Dictionary:
-	var front: Vector3 = Vector3(0.0, 0.0, _front_sign)
+	var front := Vector3(0.0, 0.0, _front_sign)
 	var ray_direction: Vector3 = -front
 	var start_distance: float = maxf(float(_head["rz"]) * 3.0, 0.18)
 	var center: Vector3 = _head["center"]
-	var origin: Vector3 = Vector3(x, y, center.z + _front_sign * start_distance)
+	var origin := Vector3(x, y, center.z + _front_sign * start_distance)
 
 	var best_t: float = INF
 	var best_normal: Vector3 = front
@@ -153,26 +244,22 @@ func _project_to_face(x: float, y: float, fallback_z: float, user_forward_offset
 
 	if best_t < INF:
 		var hit: Vector3 = origin + ray_direction * best_t
-		# Fixed clearance keeps ribbon thickness off the skin. Forward offset is
-		# retained as an artistic control and is applied after real projection.
-		var clearance: float = 0.00085
+		# Only a quarter-millimetre baseline clearance is needed now because the
+		# ribbon itself lies parallel to the surface rather than crossing it.
+		var clearance: float = 0.00025
 		return {
 			"point": hit + best_normal * clearance + front * user_forward_offset,
 			"normal": best_normal,
 			"projected": true
 		}
 
-	# Graceful fallback if the imported body topology changes and no triangle
-	# can be hit at this brow coordinate.
 	return {
-		"point": Vector3(x, y, fallback_z) + front * (0.002 + user_forward_offset),
+		"point": Vector3(x, y, fallback_z) + front * (0.001 + user_forward_offset),
 		"normal": front,
 		"projected": false
 	}
 
 func _ray_triangle_distance(origin: Vector3, direction: Vector3, a: Vector3, b: Vector3, c: Vector3) -> float:
-	# Moller-Trumbore ray/triangle intersection. Returns distance along the ray,
-	# or -1 when there is no forward intersection.
 	var edge1: Vector3 = b - a
 	var edge2: Vector3 = c - a
 	var pvec: Vector3 = direction.cross(edge2)
