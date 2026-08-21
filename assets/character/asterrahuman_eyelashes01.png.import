@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://2jmhln0nw3wv"
-path.s3tc="res://.godot/imported/asterrahuman_young_lightskinned_male_diffuse2.png-2dc621a7ae4ea5a37082be7f9054146b.s3tc.ctex"
+uid="uid://n0yantig0g3r"
+path.s3tc="res://.godot/imported/asterrahuman_eyelashes01.png-b9a011db82384ec70ea452ee5c82cd00.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "e16e7ad9868cdac3a9cae5fd4aee9e51"
+"md5": "050add4f6a49b84709d4e478963163c9"
 }
 
 [deps]
 
-source_file="res://assets/character/asterrahuman_young_lightskinned_male_diffuse2.png"
-dest_files=["res://.godot/imported/asterrahuman_young_lightskinned_male_diffuse2.png-2dc621a7ae4ea5a37082be7f9054146b.s3tc.ctex"]
+source_file="res://assets/character/asterrahuman_eyelashes01.png"
+dest_files=["res://.godot/imported/asterrahuman_eyelashes01.png-b9a011db82384ec70ea452ee5c82cd00.s3tc.ctex"]
 
 [params]
 

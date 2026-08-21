@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://diq307v2rgw0v"
-path.s3tc="res://.godot/imported/asterrahuman_tongue01_diffuse.png-8f05541ff73628bcb28a896ce12f5a9c.s3tc.ctex"
+uid="uid://bcinkmcu2j403"
+path.s3tc="res://.godot/imported/asterrahuman_eyelashes03.png-33546c580d16015655f2eaffde964536.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "03f3c7040385e3ed039d14478b4cedb3"
+"md5": "54fecc30deed45c3b5d7f768285a706d"
 }
 
 [deps]
 
-source_file="res://assets/character/asterrahuman_tongue01_diffuse.png"
-dest_files=["res://.godot/imported/asterrahuman_tongue01_diffuse.png-8f05541ff73628bcb28a896ce12f5a9c.s3tc.ctex"]
+source_file="res://assets/character/asterrahuman_eyelashes03.png"
+dest_files=["res://.godot/imported/asterrahuman_eyelashes03.png-33546c580d16015655f2eaffde964536.s3tc.ctex"]
 
 [params]
 

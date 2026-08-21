@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://pqul58w43rpk"
-path.s3tc="res://.godot/imported/asterrahuman_teeth.png-19fe6c4f3a3304b02e21dcd67e06f211.s3tc.ctex"
+uid="uid://v6w0yxf85ak0"
+path.s3tc="res://.godot/imported/asterrahuman_young_lightskinned_male_diffuse.png-78dcbe21b7e112013c9330d30287784c.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "232913c8e0adfce4c0f5550203aaf54f"
+"md5": "43566c016103b22cc621275efe26b445"
 }
 
 [deps]
 
-source_file="res://assets/character/asterrahuman_teeth.png"
-dest_files=["res://.godot/imported/asterrahuman_teeth.png-19fe6c4f3a3304b02e21dcd67e06f211.s3tc.ctex"]
+source_file="res://assets/character/asterrahuman_young_lightskinned_male_diffuse.png"
+dest_files=["res://.godot/imported/asterrahuman_young_lightskinned_male_diffuse.png-78dcbe21b7e112013c9330d30287784c.s3tc.ctex"]
 
 [params]
 
