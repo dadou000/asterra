@@ -4,12 +4,14 @@ extends "res://scripts/character/surface_groom.gd"
 ##
 ## LOD0 is the existing full-quality groom and is used while the active camera
 ## is closer than 6 m to the character's head. LOD1 uses an exact subset of the
-## same follicles, so the shape remains stable when switching, but renders only
-## one quarter of the hairs and one ribbon segment per hair.
+## same follicles, so the shape remains stable when switching. It keeps half of
+## the hairs and renders one ribbon segment per hair, with compensated strand
+## width so the apparent brow mass stays close to LOD0.
 
 const BROW_LOD1_DISTANCE := 6.0
 const BROW_LOD_CHECK_INTERVAL := 0.10
-const BROW_LOD1_STRIDE := 4
+const BROW_LOD1_STRIDE := 2
+const BROW_LOD1_WIDTH_COMPENSATION := 1.90
 
 var _brow_lod1_instance: MeshInstance3D
 var _active_brow_lod := 0
@@ -72,7 +74,9 @@ func _build_brow_mesh(lod: int) -> ArrayMesh:
 	var count_per_side: int = clampi(int(round(lerpf(80.0, 255.0, density))), 54, 280)
 	var ribbon_half_width: float = requested_width * 0.30
 	if lod == 1:
-		ribbon_half_width *= 1.55
+		# LOD1 keeps half the follicles. Compensating width restores almost the
+		# same screen-space brow mass without bringing back the discarded hairs.
+		ribbon_half_width *= BROW_LOD1_WIDTH_COMPENSATION
 
 	var inner_x: float = middle_spacing * 0.5
 	inner_x = clampf(inner_x, -rx * 0.22, rx * 0.62)
