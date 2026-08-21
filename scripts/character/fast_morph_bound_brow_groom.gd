@@ -23,8 +23,6 @@ var _fast_unique_bindings := 0
 var _fast_binding_reuses := 0
 
 func rebuild_brows() -> void:
-	# Generated strand positions can change with creator sliders, so bindings are
-	# invalidated. Source morph data/topology itself is stable and remains cached.
 	_fast_binding_cache.clear()
 	_fast_unique_bindings = 0
 	_fast_binding_reuses = 0
@@ -61,7 +59,6 @@ func _ensure_morph_source_cache() -> bool:
 	var array_mesh: ArrayMesh = _body_mesh.mesh as ArrayMesh
 	_source_blend_mode = array_mesh.blend_shape_mode if array_mesh != null else Mesh.BLEND_SHAPE_MODE_RELATIVE
 	_body_to_mount_basis = _mount.global_transform.basis.inverse() * _body_mesh.global_transform.basis
-	# Smaller cells significantly reduce candidate triangles for each strand.
 	_morph_cell_size = maxf(_character_height * 0.010, 0.012)
 
 	var center: Vector3 = _head["center"]
@@ -74,7 +71,7 @@ func _ensure_morph_source_cache() -> bool:
 	var x_half: float = rx * 1.05 + SOURCE_CACHE_X_MARGIN
 	var min_x: float = center.x - x_half
 	var max_x: float = center.x + x_half
-	var front_axis := Vector3(0.0, 0.0, _front_sign)
+	var front_axis: Vector3 = Vector3(0.0, 0.0, _front_sign)
 
 	for surface in _body_mesh.mesh.get_surface_count():
 		var arrays: Array = _body_mesh.mesh.surface_get_arrays(surface)
@@ -88,13 +85,13 @@ func _ensure_morph_source_cache() -> bool:
 		_morph_surface_blends[surface] = blend_sets
 
 		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		var indices := PackedInt32Array()
+		var indices: PackedInt32Array = PackedInt32Array()
 		if arrays.size() > Mesh.ARRAY_INDEX and arrays[Mesh.ARRAY_INDEX] != null:
 			indices = PackedInt32Array(arrays[Mesh.ARRAY_INDEX])
 
 		if not indices.is_empty():
-			var triangle_count: int = indices.size() / 3
-			for tri_i in triangle_count:
+			var indexed_triangle_count: int = indices.size() / 3
+			for tri_i in indexed_triangle_count:
 				var ia: int = indices[tri_i * 3]
 				var ib: int = indices[tri_i * 3 + 1]
 				var ic: int = indices[tri_i * 3 + 2]
@@ -102,8 +99,8 @@ func _ensure_morph_source_cache() -> bool:
 					continue
 				_append_fast_triangle(surface, ia, ib, ic, vertices, center, front_axis, min_x, max_x, min_y, max_y)
 		else:
-			var triangle_count: int = vertices.size() / 3
-			for tri_i in triangle_count:
+			var plain_triangle_count: int = vertices.size() / 3
+			for tri_i in plain_triangle_count:
 				var base: int = tri_i * 3
 				_append_fast_triangle(surface, base, base + 1, base + 2, vertices, center, front_axis, min_x, max_x, min_y, max_y)
 
@@ -148,7 +145,7 @@ func _append_fast_triangle(
 	var c_local: Vector3 = _mount.to_local(c)
 	var neutral_tangent: Vector3 = b_local - a_local
 	var neutral_normal: Vector3 = neutral_tangent.cross(c_local - a_local)
-	var neutral_bitangent := Vector3.ZERO
+	var neutral_bitangent: Vector3 = Vector3.ZERO
 	if neutral_tangent.length_squared() > 0.00000001 and neutral_normal.length_squared() > 0.00000001:
 		neutral_tangent = neutral_tangent.normalized()
 		neutral_normal = neutral_normal.normalized()
@@ -175,7 +172,7 @@ func _append_fast_triangle(
 	var max_cell: Vector2i = _morph_grid_cell(Vector3(tri_max_x, tri_max_y, 0.0))
 	for gx in range(min_cell.x, max_cell.x + 1):
 		for gy in range(min_cell.y, max_cell.y + 1):
-			var key := Vector2i(gx, gy)
+			var key: Vector2i = Vector2i(gx, gy)
 			var bucket: Array = _morph_grid.get(key, [])
 			bucket.append(tri_index)
 			_morph_grid[key] = bucket
@@ -200,14 +197,12 @@ func _bind_brow_vertex(vertex_local: Vector3) -> Dictionary:
 	return binding
 
 func _create_morph_bound_mesh(neutral_mesh: ArrayMesh, lod: int) -> ArrayMesh:
-	# LOD2 starts at 15 m. Keep the already-good transparent plate cheap rather
-	# than allocating a full facial morph stack that cannot be resolved there.
 	if lod >= 2:
 		return neutral_mesh
 	return super._create_morph_bound_mesh(neutral_mesh, lod)
 
 func _source_vertex_delta(surface: int, shape_index: int, vertex_index: int) -> Vector3:
-	var key := Vector3i(surface, shape_index, vertex_index)
+	var key: Vector3i = Vector3i(surface, shape_index, vertex_index)
 	if _source_delta_cache.has(key):
 		return Vector3(_source_delta_cache[key])
 
