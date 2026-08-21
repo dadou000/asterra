@@ -475,7 +475,7 @@ func _refresh_status() -> void:
 	for mesh_instance in _meshes:
 		mesh_names.append(str(mesh_instance.name))
 	var lash_note := "%d lash mesh(es), %d variants" % [_lash_meshes.size(), _available_lash_count()]
-	var groom_note := _groom.diagnostics() if _groom != null else "Groom generator unavailable"
+	var groom_note: String = str(_groom.diagnostics()) if _groom != null else "Groom generator unavailable"
 	_status.text = "%s\n%s" % [lash_note, groom_note]
 	if _lash_meshes.is_empty():
 		_status.text += "\nNo lash mesh auto-detected. Meshes: %s" % ", ".join(mesh_names)
