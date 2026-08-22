@@ -15,6 +15,7 @@ var debug_menu: DebugMenu
 var terrain_debug: TerrainDebug
 var sun: DirectionalLight3D
 var sky_mat: ShaderMaterial
+var eye_exposure: HumanEyeExposure
 
 var carry := MaterialStock.new()
 var brush_radius := 2.5
@@ -81,6 +82,9 @@ func _setup_environment() -> void:
 	GraphicsQuality.configure_world_environment(env, AppSettings.graphics_quality)
 	we.environment = env
 	add_child(we)
+	eye_exposure = HumanEyeExposure.new()
+	eye_exposure.configure(we)
+	add_child(eye_exposure)
 
 	sun = DirectionalLight3D.new()
 	sun.light_energy = 1.15
@@ -149,6 +153,7 @@ func _on_baked(fields: PlanetFields) -> void:
 	var spawn := find_spawn()
 	player.spawn_at(spawn, 60.0)
 	player.set_mouse_captured(true)
+	eye_exposure.observe(player)
 
 	if SaveGame.list_saves().has(AUTOSAVE):
 		hud.notify("Save '%s' found — press F9 to load it" % AUTOSAVE)
