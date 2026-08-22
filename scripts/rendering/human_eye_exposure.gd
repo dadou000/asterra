@@ -15,6 +15,14 @@ const CONE_DARKNESS_LUMINANCE := 0.015625      # 1 / 64
 const ROD_DARKNESS_LUMINANCE := 0.001953125    # 1 / 512
 const MIDDLE_GREY := 0.18
 
+# Godot's luminance reducer is a full-frame arithmetic average. A mostly black
+# orbital view can therefore overpower a much smaller sunlit planet. This guard
+# gives bright content a nonlinear, highlight-priority vote and raises the
+# meter's lower bound before the average can expose the limb to white.
+const PLANET_HIGHLIGHT_FLOOR := 0.24
+const DIRECT_SUN_HIGHLIGHT_FLOOR := 0.60
+const HIGHLIGHT_PRIORITY_GAIN := 8.0
+
 # CameraAttributesPractical converts ISO sensitivity to renderer luminance as
 # sensitivity * ((12.5 / 100) / ISO). At the fixed ISO 100 baseline this is
 # exactly sensitivity / 800.
@@ -63,7 +71,8 @@ func _process(delta: float) -> void:
 	if attributes == null or observer == null or not is_instance_valid(observer):
 		return
 
-	var metered := _metered_luminance_proxy()
+	var highlight_floor := _highlight_protection_floor()
+	var metered := _metered_luminance_proxy(highlight_floor)
 	if not _initialized:
 		_adapted_luminance = metered
 		_initialized = true
@@ -87,7 +96,8 @@ func _process(delta: float) -> void:
 
 	if not is_equal_approx(attributes.auto_exposure_speed, rate):
 		attributes.auto_exposure_speed = rate
-	var min_sensitivity := _to_sensitivity(_current_darkness_floor())
+	var meter_floor := maxf(_current_darkness_floor(), highlight_floor)
+	var min_sensitivity := _to_sensitivity(meter_floor)
 	if not is_equal_approx(attributes.auto_exposure_min_sensitivity, min_sensitivity):
 		attributes.auto_exposure_min_sensitivity = min_sensitivity
 
@@ -109,7 +119,74 @@ func _current_darkness_floor() -> float:
 	))
 
 
-func _metered_luminance_proxy() -> float:
+func _highlight_protection_floor() -> float:
+	var up := observer.up_dir()
+	var view := observer.view_dir().normalized()
+	var sun_dir := Frames.helion_dir.normalized()
+	var planet_importance := _sunlit_planet_importance(up, view, sun_dir)
+
+	# A saturating curve is deliberately used instead of an area average: ten
+	# percent of bright imagery receives more than half of the available weight.
+	# This is the behavior needed for a bright limb against a large black sky.
+	var priority := 1.0 - exp(-HIGHLIGHT_PRIORITY_GAIN * planet_importance)
+	var floor := lerpf(ROD_DARKNESS_LUMINANCE, PLANET_HIGHLIGHT_FLOOR, priority)
+
+	# The solar disc covers very few pixels but is the strongest possible visual
+	# adaptation cue. Give it an independent protective ceiling when unoccluded.
+	var sun_alignment := view.dot(sun_dir)
+	var solar_view := _smoothstep(cos(0.035), cos(0.006), sun_alignment)
+	if _sun_is_visible(up, sun_dir):
+		floor = maxf(floor, lerpf(ROD_DARKNESS_LUMINANCE,
+			DIRECT_SUN_HIGHLIGHT_FLOOR, solar_view))
+	return floor
+
+
+func _sunlit_planet_importance(up: Vector3, view: Vector3, sun_dir: Vector3) -> float:
+	if observer.camera == null or Planet.cfg == null:
+		return 0.0
+
+	var planet_radius: float = Planet.cfg.planet_radius
+	var observer_radius := planet_radius + maxf(observer.altitude(), 0.01)
+	var angular_radius := asin(clampf(planet_radius / observer_radius, 0.0, 1.0))
+	var vertical_half_fov := deg_to_rad(observer.camera.fov) * 0.5
+	var viewport_size := get_viewport().get_visible_rect().size
+	var aspect := viewport_size.x / maxf(viewport_size.y, 1.0)
+	var horizontal_half_fov := atan(tan(vertical_half_fov) * aspect)
+
+	# Approximate the projected disc area and its overlap with the camera frame.
+	# The overlap has a soft edge so protection never pops while orbiting/panning.
+	var frame_radius := sqrt(vertical_half_fov * vertical_half_fov \
+		+ horizontal_half_fov * horizontal_half_fov)
+	var center_angle := acos(clampf(view.dot(-up), -1.0, 1.0))
+	var inner_edge := maxf(frame_radius - angular_radius, 0.0)
+	var outer_edge := frame_radius + angular_radius
+	var frame_overlap := 1.0 - _smoothstep(inner_edge, outer_edge, center_angle)
+	var frame_area := maxf(4.0 * vertical_half_fov * horizontal_half_fov, 1.0e-6)
+	var disc_fraction := clampf(PI * angular_radius * angular_radius / frame_area, 0.0, 1.0)
+
+	# Square-root weighting keeps a narrow crescent important: its small area is
+	# still made of day-side radiance and should not be sacrificed to black space.
+	var illuminated_fraction := clampf(0.5 * (1.0 + up.dot(sun_dir)), 0.0, 1.0)
+	return clampf(disc_fraction * frame_overlap * sqrt(illuminated_fraction), 0.0, 1.0)
+
+
+func _sun_is_visible(up: Vector3, sun_dir: Vector3) -> bool:
+	# Ray/sphere occultation in canonical planet space. This avoids treating a
+	# below-horizon sun as a highlight while still handling orbital views where
+	# the observer can see both the dark side and the solar disc.
+	var planet_radius: float = Planet.cfg.planet_radius
+	var observer_radius := planet_radius + maxf(observer.altitude(), 0.01)
+	var ray_origin := up * observer_radius
+	var b := ray_origin.dot(sun_dir)
+	var c := observer_radius * observer_radius - planet_radius * planet_radius
+	var discriminant := b * b - c
+	if discriminant <= 0.0:
+		return true
+	var nearest_hit := -b - sqrt(discriminant)
+	return nearest_hit <= 0.0
+
+
+func _metered_luminance_proxy(highlight_floor: float) -> float:
 	# Godot meters the real rendered HDR frame. This analytic proxy is used only
 	# to choose the correct directional time constant, because the renderer offers
 	# one speed rather than separate light-to-dark and dark-to-light rates.
@@ -125,11 +202,9 @@ func _metered_luminance_proxy() -> float:
 	scene_luminance += daylight * lerpf(0.12, 0.42, sky_fraction)
 	scene_luminance += twilight * 0.025
 
-	# Looking directly toward the solar disc is a genuine bright transition and
-	# must contract exposure immediately even if the local surface is near dusk.
-	var sun_alignment := view.dot(sun_dir)
-	var solar_view := _smoothstep(cos(0.035), cos(0.006), sun_alignment)
-	scene_luminance += solar_view * daylight * HIGHLIGHT_CLIP_LUMINANCE
+	# Highlight protection also selects fast light adaptation. The actual exposure
+	# is still computed from the rendered HDR frame; this proxy only selects speed.
+	scene_luminance = maxf(scene_luminance, highlight_floor)
 	return clampf(scene_luminance, ROD_DARKNESS_LUMINANCE, HIGHLIGHT_CLIP_LUMINANCE)
 
 

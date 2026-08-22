@@ -46,3 +46,21 @@ Godot's relevant API and reduction implementation:
 - https://docs.godotengine.org/en/4.7/classes/class_cameraattributes.html
 - https://docs.godotengine.org/en/4.7/classes/class_cameraattributespractical.html
 - https://github.com/godotengine/godot/blob/master/servers/rendering/renderer_rd/shaders/effects/luminance_reduce.glsl
+
+## Highlight-priority guard
+
+Godot's built-in reduction shader averages the maximum RGB channel of every
+pixel. In an orbital composition, a large black background can therefore make
+the meter overexpose a smaller sunlit planet even though the planet contains the
+perceptually important highlights.
+
+The controller supplements that average with a geometry-aware guard. It
+estimates the visible area and illuminated fraction of the planetary disc, then
+applies a saturating weight `1 - exp(-8 * importance)`. A bright minority thus
+raises the meter floor aggressively rather than being diluted by black pixels.
+The sun has a separate ray/sphere visibility test and stronger floor because its
+disc occupies too few pixels to influence an arithmetic average reliably.
+
+These floors are exposure ceilings, not added light: they cannot brighten the
+scene. They engage at the fast light-adaptation rate and release through the
+existing slow dark-adaptation path.
