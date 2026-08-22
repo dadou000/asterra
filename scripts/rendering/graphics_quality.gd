@@ -38,9 +38,9 @@ static func preset_description(preset: int) -> String:
 		Preset.BALANCED:
 			return "FSR2 Quality with SSAO, screen-space indirect light, reflections, and two-split shadows."
 		Preset.ULTRA:
-			return "Native-resolution FSR2, long-range SDFGI, SSIL, SSR, volumetrics, glow, and four-split soft shadows."
+			return "Native-resolution FSR2, long-range SDFGI, SSIL, SSR, glow, and four-split soft shadows."
 		_:
-			return "Recommended: FSR2 Ultra Quality, SDFGI, SSIL, SSR, subtle volumetrics, and four-split soft shadows."
+			return "Recommended: FSR2 Ultra Quality, SDFGI, SSIL, SSR, and four-split soft shadows."
 
 
 static func configure_viewport(viewport: Viewport, preset: int) -> void:
@@ -73,17 +73,10 @@ static func configure_world_environment(environment: Environment, preset: int) -
 	environment.sdfgi_energy = 1.0
 	environment.sdfgi_read_sky_light = true
 
-	# Very low-density fog supplies aerial depth without replacing the physical
-	# atmosphere shader. It is intentionally absent on the two cheaper tiers.
-	environment.volumetric_fog_enabled = quality >= Preset.HIGH
-	environment.volumetric_fog_density = 0.0022 if quality == Preset.ULTRA else 0.0014
-	environment.volumetric_fog_length = 320.0 if quality == Preset.ULTRA else 220.0
-	environment.volumetric_fog_detail_spread = 2.5
-	environment.volumetric_fog_ambient_inject = 0.45
-	environment.volumetric_fog_gi_inject = 0.8
-	environment.volumetric_fog_anisotropy = 0.35
-	environment.volumetric_fog_temporal_reprojection_enabled = true
-	environment.volumetric_fog_temporal_reprojection_amount = 0.92
+	# Godot's local volumetric fog sees the global DirectionalLight even when the
+	# planet is between the camera and the sun, which lights the night side gray.
+	# Planet shaders already provide horizon-aware atmospheric perspective.
+	environment.volumetric_fog_enabled = false
 
 
 static func configure_studio_environment(environment: Environment, preset: int) -> void:
