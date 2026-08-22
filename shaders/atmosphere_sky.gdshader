@@ -9,7 +9,6 @@ uniform vec3 u_rayleigh_coeff = vec3(5.5e-6, 13.0e-6, 22.4e-6);
 uniform float u_mie_coeff = 21e-6;
 uniform float u_rayleigh_scale_height = 8000.0;
 uniform float u_mie_scale_height = 1200.0;
-uniform float u_mie_g = 0.758;
 uniform float u_sun_intensity = 22.0;
 
 #include "res://shaders/planet_lighting.gdshaderinc"
@@ -41,10 +40,10 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 
 	float mu = dot(dir, sun_dir);
 	float mumu = mu * mu;
-	float gg = u_mie_g * u_mie_g;
 	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mumu);
-	float phase_mie = 3.0 / (8.0 * PI) * ((1.0 - gg) * (mumu + 1.0))
-		/ (pow(max(1.0 + gg - 2.0 * mu * u_mie_g, 1e-4), 1.5) * (2.0 + gg));
+	// Keep aerosol haze without the strongly forward-focused Mie lobe that
+	// draws a large luminous flare around the solar disc.
+	float phase_mie = 1.0 / (4.0 * PI);
 
 	vec3 total_rlh = vec3(0.0);
 	vec3 total_mie = vec3(0.0);
@@ -98,8 +97,11 @@ void sky() {
 	vec3 col = scatter(dir, origin, sun_dir);
 	if (LIGHT0_ENERGY > 0.0) {
 		float cos_angle = dot(dir, sun_dir);
-		float sun_radius = max(LIGHT0_SIZE, 0.02);
-		float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.25), cos_angle);
+		// LIGHT0_SIZE is the angular diameter in radians. Use the real solar
+		// diameter as a fallback and give the disc only a narrow antialiased edge.
+		float sun_diameter = max(LIGHT0_SIZE, 0.0087);
+		float sun_radius = sun_diameter * 0.5;
+		float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.92), cos_angle);
 		float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
 		col += disc * visible * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
 	}
