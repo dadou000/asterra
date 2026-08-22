@@ -24,8 +24,8 @@ var _last_expression := Vector4(-1.0, -1.0, -1.0, -1.0)
 var _last_outer_right := -1.0
 var _mapped_channel_count := 0
 
-func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0) -> bool:
-	var ok: bool = super.configure(character, meshes, character_bottom, character_height, front_sign)
+func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0, rebuild_initial: bool = true) -> bool:
+	var ok: bool = super.configure(character, meshes, character_bottom, character_height, front_sign, rebuild_initial)
 	if not ok:
 		return false
 	_discover_brow_channels()

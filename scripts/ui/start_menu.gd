@@ -114,6 +114,54 @@ func _build_settings_menu() -> void:
 
 	column.add_child(HSeparator.new())
 
+	var graphics_title := Label.new()
+	graphics_title.text = "GRAPHICS"
+	graphics_title.modulate = Color(0.58, 0.68, 0.77)
+	graphics_title.add_theme_font_size_override("font_size", 13)
+	column.add_child(graphics_title)
+
+	var graphics_row := HBoxContainer.new()
+	graphics_row.add_theme_constant_override("separation", 16)
+	column.add_child(graphics_row)
+
+	var graphics_text := VBoxContainer.new()
+	graphics_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graphics_text.add_theme_constant_override("separation", 3)
+	graphics_row.add_child(graphics_text)
+
+	var graphics_label := Label.new()
+	graphics_label.text = "Rendering preset"
+	graphics_label.add_theme_font_size_override("font_size", 17)
+	graphics_text.add_child(graphics_label)
+
+	var graphics_hint := Label.new()
+	graphics_hint.text = GraphicsQuality.preset_description(AppSettings.graphics_quality)
+	graphics_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	graphics_hint.modulate = Color(0.62, 0.69, 0.75)
+	graphics_hint.add_theme_font_size_override("font_size", 13)
+	graphics_text.add_child(graphics_hint)
+
+	var graphics_preset := OptionButton.new()
+	graphics_preset.custom_minimum_size = Vector2(145.0, 42.0)
+	for preset in range(GraphicsQuality.Preset.PERFORMANCE, GraphicsQuality.Preset.ULTRA + 1):
+		graphics_preset.add_item(GraphicsQuality.preset_name(preset), preset)
+	graphics_preset.select(AppSettings.graphics_quality)
+	graphics_preset.item_selected.connect(func(index: int) -> void:
+		var preset := graphics_preset.get_item_id(index)
+		AppSettings.set_graphics_quality(preset)
+		graphics_hint.text = GraphicsQuality.preset_description(preset)
+	)
+	graphics_row.add_child(graphics_preset)
+
+	var graphics_restart_note := Label.new()
+	graphics_restart_note.text = "Applied when entering Play or Character Editor. High is the recommended desktop target."
+	graphics_restart_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	graphics_restart_note.modulate = Color(0.48, 0.56, 0.63)
+	graphics_restart_note.add_theme_font_size_override("font_size", 12)
+	column.add_child(graphics_restart_note)
+
+	column.add_child(HSeparator.new())
+
 	var debug_title := Label.new()
 	debug_title.text = "DEBUG"
 	debug_title.modulate = Color(0.58, 0.68, 0.77)

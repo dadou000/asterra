@@ -42,9 +42,9 @@ var _beard_hair_count_by_lod: Dictionary = {}
 var _beard_mesh_build_ms: Dictionary = {}
 var _beard_morph_build_ms: Dictionary = {}
 
-func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0) -> bool:
+func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0, rebuild_initial: bool = true) -> bool:
 	_clear_surface_beard_cache()
-	return super.configure(character, meshes, character_bottom, character_height, front_sign)
+	return super.configure(character, meshes, character_bottom, character_height, front_sign, rebuild_initial)
 
 func set_front_sign(sign_value: float) -> void:
 	_clear_surface_beard_cache()

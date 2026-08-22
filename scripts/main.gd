@@ -33,6 +33,7 @@ var _orbit_surface_generation: int = 0
 var _orbit_surface_building := false
 
 func _ready() -> void:
+	GraphicsQuality.configure_viewport(get_viewport(), AppSettings.graphics_quality)
 	cfg = _load_config()
 	Planet.configure(cfg)
 	carry.capacity = 2.4                       ## a hand-carried bucket, not a truck
@@ -74,8 +75,7 @@ func _setup_environment() -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_sky_contribution = 0.85
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.ssao_enabled = false
+	GraphicsQuality.configure_world_environment(env, AppSettings.graphics_quality)
 	we.environment = env
 	add_child(we)
 
@@ -84,7 +84,7 @@ func _setup_environment() -> void:
 	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 320.0
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	GraphicsQuality.configure_sun(sun, AppSettings.graphics_quality)
 	add_child(sun)
 
 func _on_baked(fields: PlanetFields) -> void:

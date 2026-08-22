@@ -24,15 +24,41 @@ var _head_bone_name := "none"
 var hair_settings := {
 	"enabled": true,
 	"style": 0,
-	"density": 0.58,
-	"length": 0.085,
-	"width": 0.0009,
-	"curl": 0.08,
-	"gravity": 0.42,
-	"hairline": 0.46,
+	"density": 0.72,
+	"length": 0.09,
+	"width": 0.00032,
+	"tip_thickness": 0.08,
+	"curl": 0.10,
+	"gravity": 0.38,
+	"hairline": 0.52,
+	"front_hairline": 0.52,
+	"side_hairline": 0.68,
+	"back_hairline": 0.76,
 	"scalp_scale": 1.0,
-	"root_lift": 0.0025,
-	"color": Color("4b3426")
+	"root_lift": 0.0012,
+	"color": Color("352218"),
+	"root_color": Color("352218"),
+	"tip_color": Color("4d3326"),
+	"gradient_bias": 1.35,
+	# Frontal control. Long styles put their roots at the hairline and their tips
+	# over the eyes; thinning and shortening the front is how a groom stops that
+	# without moving the hairline itself.
+	"front_density": 1.0,
+	"front_length": 0.62,
+	# 0 = swept back, 1 = parted. A part is a styling constraint, not an
+	# equilibrium, so it is authored into the comb field and held by the rest
+	# shape rather than left for gravity to decide.
+	"part_style": 0,
+	"part_offset": 0.0,
+	"part_strength": 0.6,
+	"volume": 0.38,
+	"sheen": 0.55,
+	"sheen_roughness": 0.52,
+	"physics_enabled": true,
+	"physics_stiffness": 0.68,
+	"physics_damping": 0.92,
+	"physics_gravity": 0.55,
+	"wind_response": 0.12
 }
 
 var brow_settings := {
@@ -46,7 +72,7 @@ var brow_settings := {
 	"color": Color("3a281e")
 }
 
-func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0) -> bool:
+func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0, rebuild_initial: bool = true) -> bool:
 	_character = character
 	_source_meshes = meshes
 	_character_bottom = character_bottom
@@ -61,7 +87,8 @@ func configure(character: Node3D, meshes: Array[MeshInstance3D], character_botto
 	_create_mount()
 	_create_render_nodes()
 	_apply_material_settings()
-	rebuild_all()
+	if rebuild_initial:
+		rebuild_all()
 	return true
 
 func set_front_sign(sign_value: float) -> void:
@@ -75,6 +102,11 @@ func apply_hair(settings: Dictionary) -> void:
 		hair_settings[key] = settings[key]
 	_apply_material_settings()
 	rebuild_hair()
+
+func set_hair_runtime_setting(key: StringName, value: Variant) -> void:
+	# Physics controls are intentionally live. Rebuilding the render population
+	# would reset guide history and hide the response being tuned.
+	hair_settings[key] = value
 
 func apply_brows(settings: Dictionary) -> void:
 	for key in settings.keys():

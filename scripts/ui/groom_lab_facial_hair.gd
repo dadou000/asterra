@@ -94,14 +94,16 @@ func _setup_ui() -> void:
 			_schedule_facial_hair()
 	)
 	column.add_child(link_color)
+	_advanced_controls[_advanced_control_key("Link color")] = link_color
 
-	_add_color_control(column, "Facial hair color", Color(_mustache_settings["color"]), func(color: Color) -> void:
+	var facial_color := _add_color_control(column, "Facial hair color", Color(_mustache_settings["color"]), func(color: Color) -> void:
 		_link_facial_color = false
 		link_color.button_pressed = false
 		_mustache_settings["color"] = color
 		_beard_settings["color"] = color
 		_schedule_facial_hair()
 	)
+	_advanced_controls[_advanced_control_key("Facial hair color")] = facial_color
 
 	_add_section(column, "MUSTACHE")
 	var mustache_enabled := CheckButton.new()
@@ -112,6 +114,7 @@ func _setup_ui() -> void:
 		_schedule_facial_hair()
 	)
 	column.add_child(mustache_enabled)
+	_advanced_controls[_advanced_control_key("Enabled")] = mustache_enabled
 
 	_add_slider(column, "Density", 0.05, 1.0, 0.01, float(_mustache_settings["density"]), "", func(v: float) -> void:
 		_mustache_settings["density"] = v
@@ -163,6 +166,7 @@ func _setup_ui() -> void:
 		_schedule_facial_hair()
 	)
 	column.add_child(beard_enabled)
+	_advanced_controls[_advanced_control_key("Enabled")] = beard_enabled
 
 	_add_slider(column, "Density", 0.05, 1.0, 0.01, float(_beard_settings["density"]), "", func(v: float) -> void:
 		_beard_settings["density"] = v
@@ -223,6 +227,8 @@ func _sync_facial_color_from_hair() -> void:
 	_beard_settings["color"] = color
 
 func _apply_facial_hair_now() -> void:
+	if _facial_hair_timer != null:
+		_facial_hair_timer.stop()
 	if _groom == null:
 		return
 	if _link_facial_color:

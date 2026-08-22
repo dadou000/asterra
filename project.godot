@@ -82,4 +82,6 @@ fill={
 
 [rendering]
 
-anti_aliasing/quality/msaa_3d=1
+scaling_3d/mode=2
+scaling_3d/scale=0.77
+scaling_3d/fsr_sharpness=0.18

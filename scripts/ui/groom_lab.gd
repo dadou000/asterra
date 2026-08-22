@@ -18,19 +18,33 @@ var _status: Label
 var _groom
 var _hair_timer: Timer
 var _brow_timer: Timer
+var _advanced_controls: Dictionary = {}
+var _advanced_section := ""
 
 var _hair_settings := {
 	"enabled": true,
 	"style": 0,
-	"density": 0.58,
-	"length": 0.085,
-	"width": 0.0009,
-	"curl": 0.08,
-	"gravity": 0.42,
-	"hairline": 0.46,
+	"density": 0.72,
+	"length": 0.09,
+	"width": 0.00032,
+	"tip_thickness": 0.08,
+	"curl": 0.10,
+	"gravity": 0.38,
+	"hairline": 0.52,
+	"front_hairline": 0.52,
+	"side_hairline": 0.68,
+	"back_hairline": 0.76,
 	"scalp_scale": 1.0,
-	"root_lift": 0.0025,
-	"color": Color("4b3426")
+	"root_lift": 0.0012,
+	"color": Color("352218"),
+	"root_color": Color("352218"),
+	"tip_color": Color("4d3326"),
+	"gradient_bias": 1.35,
+	"physics_enabled": true,
+	"physics_stiffness": 0.68,
+	"physics_damping": 0.92,
+	"physics_gravity": 0.55,
+	"wind_response": 0.12
 }
 
 var _brow_settings := {
@@ -92,15 +106,18 @@ func _setup_timers() -> void:
 	add_child(_brow_timer)
 
 func _setup_ui() -> void:
+	_advanced_controls.clear()
+	_advanced_section = ""
 	var layer := CanvasLayer.new()
 	layer.name = "GroomLabUI"
 	add_child(layer)
 
 	var panel := PanelContainer.new()
+	panel.name = "AdvancedGroomPanel"
 	panel.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	panel.offset_left = 18.0
 	panel.offset_top = 94.0
-	panel.offset_right = 372.0
+	panel.offset_right = 500.0
 	panel.offset_bottom = -18.0
 	panel.add_theme_stylebox_override("panel", _panel_style(Color(0.045, 0.065, 0.085, 0.96)))
 	layer.add_child(panel)
@@ -118,7 +135,8 @@ func _setup_ui() -> void:
 	margin.add_child(scroll)
 
 	var column := VBoxContainer.new()
-	column.custom_minimum_size.x = 300.0
+	column.name = "AdvancedGroomColumn"
+	column.custom_minimum_size.x = 428.0
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	column.add_theme_constant_override("separation", 8)
 	scroll.add_child(column)
@@ -130,7 +148,7 @@ func _setup_ui() -> void:
 	column.add_child(title)
 
 	var note := Label.new()
-	note.text = "Runtime prototype: strand ribbons mounted to the head bone. Hair collision/secondary physics comes later."
+	note.text = "Scalp-surface fibers with pinned roots, color/thickness gradients, and segmented secondary-motion physics."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.modulate = Color(0.63, 0.70, 0.76)
 	note.add_theme_font_size_override("font_size", 12)
@@ -146,11 +164,13 @@ func _setup_ui() -> void:
 		_apply_lash_variant(_lash_selector.get_item_id(index))
 	)
 	column.add_child(_lash_selector)
-	_add_color_control(column, "Lash tint", Color.WHITE, func(color: Color) -> void:
+	_advanced_controls[_advanced_control_key("Lash style")] = _lash_selector
+	var lash_color := _add_color_control(column, "Lash tint", Color.WHITE, func(color: Color) -> void:
 		_lash_tint = color
 		if _lash_selector != null and _lash_selector.selected >= 0:
 			_apply_lash_variant(_lash_selector.get_item_id(_lash_selector.selected))
 	)
+	_advanced_controls[_advanced_control_key("Lash tint")] = lash_color
 
 	_add_section(column, "PROCEDURAL HAIR")
 	var hair_enabled := CheckButton.new()
@@ -161,6 +181,7 @@ func _setup_ui() -> void:
 		_schedule_hair()
 	)
 	column.add_child(hair_enabled)
+	_advanced_controls[_advanced_control_key("Enabled")] = hair_enabled
 
 	var style := OptionButton.new()
 	style.add_item("Natural growth")
@@ -173,12 +194,24 @@ func _setup_ui() -> void:
 		_schedule_hair()
 	)
 	column.add_child(style)
+	_advanced_controls[_advanced_control_key("Style")] = style
 
-	_add_color_control(column, "Hair color", _hair_settings["color"], func(color: Color) -> void:
+	var hair_color := _add_color_control(column, "Root color", _hair_settings["root_color"], func(color: Color) -> void:
 		_hair_settings["color"] = color
+		_hair_settings["root_color"] = color
 		if _link_brow_color:
 			_brow_settings["color"] = color.darkened(0.12)
 			_schedule_brows()
+		_schedule_hair()
+	)
+	_advanced_controls[_advanced_control_key("Root color")] = hair_color
+	var hair_tip_color := _add_color_control(column, "Tip color", _hair_settings["tip_color"], func(color: Color) -> void:
+		_hair_settings["tip_color"] = color
+		_schedule_hair()
+	)
+	_advanced_controls[_advanced_control_key("Tip color")] = hair_tip_color
+	_add_slider(column, "Color gradient bias", 0.20, 4.0, 0.05, float(_hair_settings["gradient_bias"]), "", func(v: float) -> void:
+		_hair_settings["gradient_bias"] = v
 		_schedule_hair()
 	)
 	_add_slider(column, "Density", 0.10, 1.0, 0.01, float(_hair_settings["density"]), "", func(v: float) -> void:
@@ -189,8 +222,12 @@ func _setup_ui() -> void:
 		_hair_settings["length"] = v * 0.01
 		_schedule_hair()
 	)
-	_add_slider(column, "Render strand width", 0.20, 2.50, 0.05, float(_hair_settings["width"]) * 1000.0, " mm", func(v: float) -> void:
+	_add_slider(column, "Root thickness", 0.04, 1.20, 0.01, float(_hair_settings["width"]) * 1000.0, " mm", func(v: float) -> void:
 		_hair_settings["width"] = v * 0.001
+		_schedule_hair()
+	)
+	_add_slider(column, "Tip thickness", 1.0, 65.0, 1.0, float(_hair_settings["tip_thickness"]) * 100.0, "%", func(v: float) -> void:
+		_hair_settings["tip_thickness"] = v * 0.01
 		_schedule_hair()
 	)
 	_add_slider(column, "Curl", 0.0, 1.0, 0.01, float(_hair_settings["curl"]), "", func(v: float) -> void:
@@ -201,17 +238,43 @@ func _setup_ui() -> void:
 		_hair_settings["gravity"] = v
 		_schedule_hair()
 	)
-	_add_slider(column, "Hairline height", 0.0, 1.0, 0.01, float(_hair_settings["hairline"]), "", func(v: float) -> void:
+	_add_slider(column, "Forehead start", 0.0, 1.0, 0.01, float(_hair_settings["front_hairline"]), "", func(v: float) -> void:
 		_hair_settings["hairline"] = v
+		_hair_settings["front_hairline"] = v
 		_schedule_hair()
 	)
-	_add_slider(column, "Scalp scale", 0.82, 1.18, 0.01, float(_hair_settings["scalp_scale"]), "×", func(v: float) -> void:
-		_hair_settings["scalp_scale"] = v
+	_add_slider(column, "Side start", 0.0, 1.0, 0.01, float(_hair_settings["side_hairline"]), "", func(v: float) -> void:
+		_hair_settings["side_hairline"] = v
+		_schedule_hair()
+	)
+	_add_slider(column, "Back start", 0.0, 1.0, 0.01, float(_hair_settings["back_hairline"]), "", func(v: float) -> void:
+		_hair_settings["back_hairline"] = v
 		_schedule_hair()
 	)
 	_add_slider(column, "Root lift", 0.0, 8.0, 0.25, float(_hair_settings["root_lift"]) * 1000.0, " mm", func(v: float) -> void:
 		_hair_settings["root_lift"] = v * 0.001
 		_schedule_hair()
+	)
+
+	var physics_enabled := CheckButton.new()
+	physics_enabled.text = "Secondary-motion physics"
+	physics_enabled.button_pressed = bool(_hair_settings["physics_enabled"])
+	physics_enabled.toggled.connect(func(value: bool) -> void:
+		_set_live_hair_setting(&"physics_enabled", value)
+	)
+	column.add_child(physics_enabled)
+	_advanced_controls[_advanced_control_key("Secondary-motion physics")] = physics_enabled
+	_add_slider(column, "Physics stiffness", 0.0, 1.0, 0.01, float(_hair_settings["physics_stiffness"]), "", func(v: float) -> void:
+		_set_live_hair_setting(&"physics_stiffness", v)
+	)
+	_add_slider(column, "Physics damping", 0.70, 0.995, 0.005, float(_hair_settings["physics_damping"]), "", func(v: float) -> void:
+		_set_live_hair_setting(&"physics_damping", v)
+	)
+	_add_slider(column, "Physics gravity", 0.0, 1.5, 0.01, float(_hair_settings["physics_gravity"]), "", func(v: float) -> void:
+		_set_live_hair_setting(&"physics_gravity", v)
+	)
+	_add_slider(column, "Wind response", 0.0, 1.0, 0.01, float(_hair_settings["wind_response"]), "", func(v: float) -> void:
+		_set_live_hair_setting(&"wind_response", v)
 	)
 	var hair_rebuild := Button.new()
 	hair_rebuild.text = "Regenerate hair"
@@ -227,6 +290,7 @@ func _setup_ui() -> void:
 		_schedule_brows()
 	)
 	column.add_child(brows_enabled)
+	_advanced_controls[_advanced_control_key("Enabled")] = brows_enabled
 
 	var link_color := CheckButton.new()
 	link_color.text = "Link brow color to hair"
@@ -238,13 +302,15 @@ func _setup_ui() -> void:
 			_schedule_brows()
 	)
 	column.add_child(link_color)
+	_advanced_controls[_advanced_control_key("Link color")] = link_color
 
-	_add_color_control(column, "Brow color", _brow_settings["color"], func(color: Color) -> void:
+	var brow_color := _add_color_control(column, "Brow color", _brow_settings["color"], func(color: Color) -> void:
 		_link_brow_color = false
 		link_color.button_pressed = false
 		_brow_settings["color"] = color
 		_schedule_brows()
 	)
+	_advanced_controls[_advanced_control_key("Brow color")] = brow_color
 	_add_slider(column, "Density", 0.10, 1.0, 0.01, float(_brow_settings["density"]), "", func(v: float) -> void:
 		_brow_settings["density"] = v
 		_schedule_brows()
@@ -297,6 +363,7 @@ func _setup_ui() -> void:
 	column.add_child(_status)
 
 func _add_section(parent: VBoxContainer, text: String) -> void:
+	_advanced_section = text
 	parent.add_child(HSeparator.new())
 	var label := Label.new()
 	label.text = text
@@ -328,6 +395,10 @@ func _add_slider(parent: VBoxContainer, text: String, min_value: float, max_valu
 		changed.call(value)
 	)
 	parent.add_child(slider)
+	slider.set_meta("value_label", value_label)
+	slider.set_meta("value_step", step)
+	slider.set_meta("value_suffix", suffix)
+	_advanced_controls[_advanced_control_key(text)] = slider
 	return slider
 
 func _add_color_control(parent: VBoxContainer, text: String, initial: Color, changed: Callable) -> ColorPickerButton:
@@ -344,6 +415,29 @@ func _add_color_control(parent: VBoxContainer, text: String, initial: Color, cha
 	row.add_child(picker)
 	return picker
 
+func _advanced_control_key(label: String, section: String = "") -> String:
+	var section_name := section if not section.is_empty() else _advanced_section
+	return "%s/%s" % [section_name, label]
+
+func _set_advanced_control(section: String, label: String, value: Variant) -> void:
+	var control: Control = _advanced_controls.get(_advanced_control_key(label, section))
+	if control == null:
+		return
+	control.set_block_signals(true)
+	if control is HSlider:
+		var slider := control as HSlider
+		slider.set_value_no_signal(float(value))
+		var value_label: Label = slider.get_meta("value_label", null)
+		if value_label != null:
+			value_label.text = _format_value(float(value), float(slider.get_meta("value_step", 0.01)), str(slider.get_meta("value_suffix", "")))
+	elif control is CheckButton:
+		(control as CheckButton).set_pressed_no_signal(bool(value))
+	elif control is OptionButton:
+		(control as OptionButton).select(clampi(int(value), 0, maxi((control as OptionButton).item_count - 1, 0)))
+	elif control is ColorPickerButton:
+		(control as ColorPickerButton).color = Color(value)
+	control.set_block_signals(false)
+
 func _format_value(value: float, step: float, suffix: String) -> String:
 	if step >= 0.5:
 		return "%.1f%s" % [value, suffix]
@@ -355,16 +449,26 @@ func _schedule_hair() -> void:
 	if _hair_timer != null:
 		_hair_timer.start()
 
+func _set_live_hair_setting(key: StringName, value: Variant) -> void:
+	_hair_settings[key] = value
+	if _groom != null:
+		_groom.set_hair_runtime_setting(key, value)
+	_refresh_status()
+
 func _schedule_brows() -> void:
 	if _brow_timer != null:
 		_brow_timer.start()
 
 func _apply_hair_now() -> void:
+	if _hair_timer != null:
+		_hair_timer.stop()
 	if _groom != null:
 		_groom.apply_hair(_hair_settings)
 		_refresh_status()
 
 func _apply_brows_now() -> void:
+	if _brow_timer != null:
+		_brow_timer.stop()
 	if _groom != null:
 		_groom.apply_brows(_brow_settings)
 		_refresh_status()

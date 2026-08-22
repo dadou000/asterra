@@ -12,7 +12,14 @@ var _default_shape_values: Dictionary = {}
 
 var _camera_pivot: Node3D
 var _camera: Camera3D
+var _turntable_root: Node3D
 var _camera_distance := 3.0
+var _camera_target_position := Vector3.ZERO
+var _camera_target_rotation := Vector3.ZERO
+var _camera_target_distance := 3.0
+var _camera_transitioning := false
+var _camera_focus_local := Vector3.ZERO
+var _follow_turntable_focus := false
 var _character_height := 1.75
 var _character_bottom := PLATFORM_TOP
 var _orbiting := false
@@ -27,6 +34,7 @@ var _updating_shape_ui := false
 
 func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	GraphicsQuality.configure_viewport(get_viewport(), AppSettings.graphics_quality)
 	_setup_environment()
 	_setup_stage()
 	_setup_camera()
@@ -35,8 +43,11 @@ func _ready() -> void:
 	_refresh_shape_controls()
 
 func _process(delta: float) -> void:
-	if _turntable_enabled and _character != null:
-		_character.rotate_y(delta * 0.35)
+	if _turntable_enabled and _turntable_root != null:
+		# Rotate one common parent so the imported rig, bone attachments and every
+		# procedural groom surface share exactly the same transform for this frame.
+		_turntable_root.rotate_y(delta * 0.35)
+	_update_camera_transition(delta)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
@@ -48,15 +59,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			_orbiting = event.pressed
 			return
 		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_camera_transitioning = false
 			_camera_distance = maxf(0.45, _camera_distance * 0.90)
+			_camera_target_distance = _camera_distance
 			_update_camera_distance()
 			return
 		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_camera_transitioning = false
 			_camera_distance = minf(12.0, _camera_distance * 1.11)
+			_camera_target_distance = _camera_distance
 			_update_camera_distance()
 			return
 
 	if event is InputEventMouseMotion and _orbiting:
+		_camera_transitioning = false
 		_camera_pivot.rotation.y -= event.relative.x * 0.006
 		_camera_pivot.rotation.x = clampf(
 			_camera_pivot.rotation.x - event.relative.y * 0.006,
@@ -72,7 +88,7 @@ func _setup_environment() -> void:
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.ambient_light_color = Color("9eafbd")
 	environment.ambient_light_energy = 0.38
-	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	GraphicsQuality.configure_studio_environment(environment, AppSettings.graphics_quality)
 	world_environment.environment = environment
 	add_child(world_environment)
 
@@ -83,6 +99,7 @@ func _setup_environment() -> void:
 	key.light_energy = 1.35
 	key.shadow_enabled = true
 	key.directional_shadow_max_distance = 12.0
+	GraphicsQuality.configure_sun(key, AppSettings.graphics_quality, true)
 	add_child(key)
 
 	var fill := DirectionalLight3D.new()
@@ -102,6 +119,10 @@ func _setup_environment() -> void:
 	add_child(rim)
 
 func _setup_stage() -> void:
+	_turntable_root = Node3D.new()
+	_turntable_root.name = "CharacterTurntable"
+	add_child(_turntable_root)
+
 	var floor := MeshInstance3D.new()
 	floor.name = "StudioFloor"
 	var plane := PlaneMesh.new()
@@ -164,7 +185,7 @@ func _load_character() -> void:
 
 	_character = instance as Node3D
 	_character.name = "AsterraHuman"
-	add_child(_character)
+	_turntable_root.add_child(_character)
 	_collect_meshes(_character)
 
 	if _meshes.is_empty():
@@ -290,6 +311,7 @@ func _setup_ui() -> void:
 	top_row.add_child(help)
 
 	var panel := PanelContainer.new()
+	panel.name = "MorphPanel"
 	panel.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
 	panel.offset_left = -380.0
 	panel.offset_top = 94.0
@@ -521,18 +543,94 @@ func _set_shape_by_hint(hints: Array[String], value: float) -> bool:
 func _focus_full_body() -> void:
 	if _camera_pivot == null:
 		return
-	_camera_pivot.rotation = Vector3(deg_to_rad(-2.0), 0.0, 0.0)
-	_camera_pivot.position = Vector3(0.0, _character_bottom + _character_height * 0.52, 0.0)
-	_camera_distance = maxf(2.2, _character_height * 1.65)
-	_update_camera_distance()
+	_set_turntable_camera_target(
+		Vector3(0.0, _character_bottom + _character_height * 0.52, 0.0),
+		maxf(2.2, _character_height * 1.65),
+		Vector3(deg_to_rad(-2.0), 0.0, 0.0)
+	)
 
 func _focus_face() -> void:
 	if _camera_pivot == null:
 		return
-	_camera_pivot.rotation = Vector3.ZERO
-	_camera_pivot.position = Vector3(0.0, _character_bottom + _character_height * 0.87, 0.0)
-	_camera_distance = maxf(0.65, _character_height * 0.48)
+	_set_turntable_camera_target(
+		Vector3(0.0, _character_bottom + _character_height * 0.87, 0.0),
+		maxf(0.65, _character_height * 0.48),
+		Vector3.ZERO
+	)
+
+func focus_customization_part(part: String) -> void:
+	var height := maxf(_character_height, 0.5)
+	var y_ratio := 0.87
+	var distance_ratio := 0.34
+	var minimum_distance := 0.52
+	match part:
+		"hair":
+			y_ratio = 1.02
+			distance_ratio = 0.36
+			minimum_distance = 0.58
+		"brows":
+			y_ratio = 0.98
+			distance_ratio = 0.30
+			minimum_distance = 0.49
+		"eyes":
+			y_ratio = 0.965
+			distance_ratio = 0.29
+			minimum_distance = 0.48
+		"mustache":
+			y_ratio = 0.92
+			distance_ratio = 0.30
+			minimum_distance = 0.50
+		"beard":
+			y_ratio = 0.875
+			distance_ratio = 0.34
+			minimum_distance = 0.56
+		"skin":
+			y_ratio = 0.80
+			distance_ratio = 0.58
+			minimum_distance = 0.88
+	_set_turntable_camera_target(
+		Vector3(0.0, _character_bottom + height * y_ratio, 0.0),
+		maxf(minimum_distance, height * distance_ratio),
+		Vector3.ZERO
+	)
+
+func _set_turntable_camera_target(local_position: Vector3, distance: float, rotation: Vector3) -> void:
+	_camera_focus_local = local_position
+	_follow_turntable_focus = _turntable_root != null
+	var world_position := _turntable_root.to_global(local_position) if _turntable_root != null else local_position
+	_set_camera_target(world_position, distance, rotation)
+
+func _set_camera_target(position: Vector3, distance: float, rotation: Vector3) -> void:
+	_camera_target_position = position
+	_camera_target_distance = clampf(distance, 0.45, 12.0)
+	_camera_target_rotation = rotation
+	_camera_transitioning = true
+
+func _update_camera_transition(delta: float) -> void:
+	if _camera_pivot == null or _camera == null:
+		return
+	if _follow_turntable_focus and _turntable_root != null:
+		_camera_target_position = _turntable_root.to_global(_camera_focus_local)
+	if not _camera_transitioning and not _follow_turntable_focus:
+		return
+	var weight := 1.0 - exp(-delta * 7.5)
+	_camera_pivot.position = _camera_pivot.position.lerp(_camera_target_position, weight)
+	var current_rotation := _camera_pivot.rotation
+	if _camera_transitioning:
+		current_rotation.x = lerp_angle(current_rotation.x, _camera_target_rotation.x, weight)
+		current_rotation.y = lerp_angle(current_rotation.y, _camera_target_rotation.y, weight)
+		current_rotation.z = lerp_angle(current_rotation.z, _camera_target_rotation.z, weight)
+		_camera_pivot.rotation = current_rotation
+		_camera_distance = lerpf(_camera_distance, _camera_target_distance, weight)
 	_update_camera_distance()
+	if _camera_transitioning and _camera_pivot.position.distance_to(_camera_target_position) < 0.0005 \
+	and absf(_camera_distance - _camera_target_distance) < 0.0005 \
+	and current_rotation.distance_to(_camera_target_rotation) < 0.0005:
+		_camera_pivot.position = _camera_target_position
+		_camera_pivot.rotation = _camera_target_rotation
+		_camera_distance = _camera_target_distance
+		_update_camera_distance()
+		_camera_transitioning = false
 
 func _update_camera_distance() -> void:
 	if _camera != null:

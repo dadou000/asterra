@@ -11,9 +11,9 @@ extends "res://scripts/character/facial_hair_groom.gd"
 ## - roots/tips that cannot be projected onto the real face are discarded rather
 ##   than falling back to the head ellipsoid and creating floating hairs.
 
-func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0) -> bool:
+func configure(character: Node3D, meshes: Array[MeshInstance3D], character_bottom: float, character_height: float, front_sign: float = 1.0, rebuild_initial: bool = true) -> bool:
 	_apply_natural_facial_defaults()
-	return super.configure(character, meshes, character_bottom, character_height, front_sign)
+	return super.configure(character, meshes, character_bottom, character_height, front_sign, rebuild_initial)
 
 func _apply_natural_facial_defaults() -> void:
 	mustache_settings["density"] = 0.86
@@ -27,15 +27,16 @@ func _apply_natural_facial_defaults() -> void:
 	mustache_settings["forward_offset"] = 0.00055
 	mustache_settings["messiness"] = 0.14
 
-	beard_settings["density"] = 0.86
-	beard_settings["coverage"] = 0.42
-	beard_settings["fullness"] = 0.88
-	beard_settings["length"] = 0.0040
-	beard_settings["chin_length"] = 0.0055
-	beard_settings["strand_width"] = 0.00028
+	beard_settings["density"] = 1.0
+	beard_settings["density_multiplier"] = 3.0
+	beard_settings["coverage"] = 1.0
+	beard_settings["fullness"] = 1.30
+	beard_settings["length"] = 0.016
+	beard_settings["chin_length"] = 0.022
+	beard_settings["strand_width"] = 0.00065
 	beard_settings["height_offset"] = 0.0
 	beard_settings["forward_offset"] = 0.00055
-	beard_settings["messiness"] = 0.14
+	beard_settings["messiness"] = 0.18
 
 func _create_render_nodes() -> void:
 	super._create_render_nodes()
@@ -174,21 +175,25 @@ func _build_mustache_mesh(lod: int) -> ArrayMesh:
 	return st.commit()
 
 func _build_beard_mesh(lod: int) -> ArrayMesh:
-	var density: float = clampf(float(beard_settings.get("density", 0.86)), 0.05, 1.0)
-	var coverage: float = clampf(float(beard_settings.get("coverage", 0.42)), 0.0, 1.0)
-	var fullness: float = clampf(float(beard_settings.get("fullness", 0.88)), 0.15, 1.35)
-	var base_length: float = clampf(float(beard_settings.get("length", 0.0040)), 0.001, 0.045)
-	var chin_length: float = clampf(float(beard_settings.get("chin_length", 0.0055)), 0.001, 0.060)
-	var requested_width: float = clampf(float(beard_settings.get("strand_width", 0.00028)), 0.00008, 0.0015)
+	var density: float = clampf(float(beard_settings.get("density", 1.0)), 0.05, 1.0)
+	var density_multiplier: float = clampf(float(beard_settings.get("density_multiplier", 3.0)), 1.0, 6.0)
+	var coverage: float = clampf(float(beard_settings.get("coverage", 1.0)), 0.0, 1.0)
+	var fullness: float = clampf(float(beard_settings.get("fullness", 1.30)), 0.15, 1.35)
+	var base_length: float = clampf(float(beard_settings.get("length", 0.016)), 0.001, 0.045)
+	var chin_length: float = clampf(float(beard_settings.get("chin_length", 0.022)), 0.001, 0.060)
+	var requested_width: float = clampf(float(beard_settings.get("strand_width", 0.00065)), 0.00008, 0.0015)
 	var height_offset: float = clampf(float(beard_settings.get("height_offset", 0.0)), -0.035, 0.035)
 	var forward_offset: float = clampf(float(beard_settings.get("forward_offset", 0.00055)), -0.002, 0.010)
-	var messiness: float = clampf(float(beard_settings.get("messiness", 0.14)), 0.0, 1.0)
+	var messiness: float = clampf(float(beard_settings.get("messiness", 0.18)), 0.0, 1.0)
 
 	var center: Vector3 = _head["center"]
 	var rx: float = float(_head["rx"])
 	var ry: float = float(_head["ry"])
-	var target_count: int = clampi(int(round(lerpf(260.0, 920.0, density))), 180, 980)
-	var radius: float = requested_width * 0.23
+	var target_count: int = clampi(int(round(lerpf(260.0, 920.0, density) * density_multiplier)), 180, 5600)
+	# The setting is a visual strand width, so a triangular tube needs close to
+	# half of it as its radius. The old 0.23 factor made even a dense groom read as
+	# scattered sub-pixel stubble in a face close-up.
+	var radius: float = requested_width * 0.46
 	if lod == 1:
 		radius *= 1.40
 	elif lod >= 2:
