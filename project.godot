@@ -23,7 +23,6 @@ Frames="*res://scripts/core/frames.gd"
 Planet="*res://scripts/gen/planet_sampler.gd"
 Deltas="*res://scripts/terrain/terrain_deltas.gd"
 CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
-WeatherTaskGuard="*res://scripts/weather/weather_task_guard.gd"
 AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
 

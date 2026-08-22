@@ -22,9 +22,6 @@ uniform vec3 u_rock_dark : source_color = vec3(0.30, 0.28, 0.26);
 uniform vec3 u_rock_light : source_color = vec3(0.55, 0.52, 0.47);
 
 varying vec3 v_planet;
-// Fragment-to-light varying: cloud optical depth is expensive, so calculate it
-// exactly once per surface pixel and reuse the identical value for direct light.
-varying float v_cloud_visibility;
 
 void vertex() {
 	VERTEX += CUSTOM0.xyz * morph;
@@ -101,13 +98,10 @@ void fragment() {
 	}
 
 	vec3 sun_dir = normalize(u_sun_dir);
-	v_cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-	// Dense clouds reduce the bright blue hemisphere but retain diffuse light.
-	float sky_access = mix(0.24, 1.0, sqrt(clamp(v_cloud_visibility, 0.0, 1.0)));
 
 	ALBEDO = albedo;
-	EMISSION = albedo * skylight * sky_access;
+	EMISSION = albedo * skylight;
 	ROUGHNESS = mix(0.94, 0.82, rock);
 	SPECULAR = 0.12;
 	METALLIC = 0.0;
@@ -120,8 +114,7 @@ void light() {
 	float visibility = 1.0;
 	if (LIGHT_IS_DIRECTIONAL) {
 		vec3 sun_dir = normalize(u_sun_dir);
-		float planet_visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
-		visibility = planet_visibility * v_cloud_visibility;
+		visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
 	}
 
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);

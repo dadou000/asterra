@@ -1,9 +1,6 @@
 /// Aerial perspective: the air standing between the camera and a surface.
 ///
-/// Geometry uses a cheap finite-segment approximation. Cloud *surface* shadows
-/// and the visible cloud volume are handled independently; this path must not use
-/// one cloud sample to tint an entire camera-to-surface segment, because that
-/// creates kilometre-scale blocks when the sample crosses a cloud-mask edge.
+/// Geometry uses a cheap finite-segment approximation.
 
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_height = 60000.0;
@@ -17,7 +14,6 @@ uniform float u_sun_intensity = 22.0;
 uniform float u_aerial_strength : hint_range(0.0, 2.0) = 0.45;
 
 #include "res://shaders/planet_lighting.gdshaderinc"
-#include "res://shaders/cloud_shadow.gdshaderinc"
 
 const int AP_STEPS = 4;
 const int AP_LIGHT_STEPS = 2;
@@ -82,9 +78,7 @@ vec4 aerial_fog(vec3 cam, vec3 frag) {
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
 				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)));
 			// Only astronomical planet occultation belongs in this finite
-			// foreground fog approximation. Cloud shadowing is evaluated at the
-			// actual surface and inside the visible cloud volume; the sky shader
-			// separately handles broad crepuscular modulation.
+			// foreground fog approximation.
 			attn *= planet_vis;
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;

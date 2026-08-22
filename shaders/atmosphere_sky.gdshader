@@ -13,7 +13,6 @@ uniform float u_mie_g = 0.758;
 uniform float u_sun_intensity = 22.0;
 
 #include "res://shaders/planet_lighting.gdshaderinc"
-#include "res://shaders/cloud_shadow.gdshaderinc"
 
 const int PRIMARY_STEPS = 6;
 const int LIGHT_STEPS = 2;
@@ -53,7 +52,6 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float od_mie = 0.0;
 	float t = ray_start;
 	float jitter = ray_jitter(dir);
-	float cached_cloud_vis = 1.0;
 
 	for (int i = 0; i < PRIMARY_STEPS; i++) {
 		float sample_t = t + step_len * mix(0.32, 0.68, jitter);
@@ -79,15 +77,9 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 				lt += light_step_len;
 			}
 
-			// Updating samples 0/2/4 is enough to preserve broad crepuscular
-			// columns while halving the cloud-light lookup cost. Written explicitly
-			// for maximum Godot shader-language portability.
-			if (i == 0 || i == 2 || i == 4) {
-				cached_cloud_vis = cloud_sun_visibility(pos, sun_dir);
-			}
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
 				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)));
-			attn *= planet_vis * cached_cloud_vis;
+			attn *= planet_vis;
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;
 		}

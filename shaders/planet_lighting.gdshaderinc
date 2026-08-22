@@ -1,4 +1,4 @@
-/// Planet-scale lighting helpers shared by terrain, ocean, clouds and sky.
+/// Planet-scale lighting helpers shared by terrain, ocean and sky.
 ///
 /// Godot's DirectionalLight3D is intentionally unaware of a spherical planet.
 /// These functions provide the missing astronomical visibility test so direct

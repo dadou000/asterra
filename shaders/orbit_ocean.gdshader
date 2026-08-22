@@ -39,12 +39,10 @@ void fragment() {
 	base *= 1.0 + broad * 0.075;
 
 	vec3 sun_dir = normalize(u_sun_dir);
-	float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-	float sky_access = mix(0.30, 1.0, sqrt(clamp(cloud_visibility, 0.0, 1.0)));
 
 	ALBEDO = base;
-	EMISSION = base * skylight * sky_access;
+	EMISSION = base * skylight;
 	NORMAL = normalize((VIEW_MATRIX * vec4(up, 0.0)).xyz);
 	ROUGHNESS = mix(0.12, 0.055, deep_t);
 	SPECULAR = 0.5;
@@ -58,9 +56,7 @@ void light() {
 	float visibility = 1.0;
 	if (LIGHT_IS_DIRECTIONAL) {
 		vec3 sun_dir = normalize(u_sun_dir);
-		float planet_visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
-		float cloud_visibility = cloud_surface_sun_visibility(v_planet, sun_dir);
-		visibility = planet_visibility * cloud_visibility;
+		visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
 	}
 
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
