@@ -447,6 +447,10 @@ func _instantiate(node: QuadNode, data: Dictionary) -> void:
 	mesh.surface_set_material(0, _ground_mat)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
+	# Procedural chunks must explicitly participate as static SDFGI occluders.
+	# They are rebuilt or moved infrequently; dynamic actors still receive their
+	# indirect light without being baked into the distance field.
+	mi.gi_mode = GeometryInstance3D.GI_MODE_STATIC
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if node.depth >= 9 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.set_instance_shader_parameter("chunk_depth", float(node.depth))
 	holder.add_child(mi)
