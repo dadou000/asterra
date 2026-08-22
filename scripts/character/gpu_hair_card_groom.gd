@@ -19,13 +19,37 @@ const CARD_SEGMENTS := 16
 const CARD_COLUMNS := 3
 ## Strip variants a card can draw, side by side in one texture.
 const STRIP_VARIANTS := 3
-const STRIP_VARIANT_WIDTH := 96
-const STRIP_HEIGHT := 512
-const STRIP_STRANDS := 32
+const STRIP_VARIANT_WIDTH := 160
+const STRIP_HEIGHT := 768
+const STRIP_STRANDS := 46
 ## Collision resolution for the head. The skull, brow, nose, cheeks and chin
 ## are all radially outward from the head centre, so the whole head is a
 ## height field over a sphere: one float per direction, O(1) to query, and it
 ## fits the real mesh instead of approximating it with primitives.
+## Scalp paint resolution: about 2.4 mm per cell on this head. A brush can
+## never be finer than a cell, so this bounds how precise painting can get.
+const PAINT_AZIMUTH := 256
+const PAINT_ELEVATION := 128
+## A shaved patch should show skin. Under this much hair the cap fades out,
+## because there is no longer any hair over it for it to be the shadow of.
+const CAP_FADE_LENGTH := 0.015
+## Range the cap encodes into vertex red. Above this the cap is solid anyway.
+const CAP_LENGTH_RANGE := 0.040
+## Shortest strand still worth a card. A card is tens of millimetres wide, so
+## below this it is drawn wider than it is long and reads as a chevron lying
+## flat on the scalp. Under it the follicle stipple is the whole appearance,
+## which is what a buzz cut actually is.
+const CARD_MIN_LENGTH := 0.005
+const BRUSH_CURSOR_SEGMENTS := 48
+## Cap strip tiling. Even counts so the azimuth wrap lands on a tile edge
+## and the back of the head has no seam.
+const SCALP_CHART_SCALE := 14.5
+## Follicle stipple. A 28x28 grid over a chart tile is about three times the
+## count per area of the 16x16 it replaced, which puts follicles roughly half
+## a millimetre apart. The map has to grow with the grid or each follicle
+## ends up only a pixel or two across and aliases at grazing angles.
+const FOLLICLE_MAP_SIZE := 384
+const FOLLICLE_GRID := 28
 const HEAD_FIELD_AZIMUTH := 96
 const HEAD_FIELD_ELEVATION := 48
 const SOLVER_ITERATIONS := 5
@@ -39,6 +63,7 @@ var _gpu_hair_material: ShaderMaterial
 var _scalp_cap_instance: MeshInstance3D
 var _scalp_cap_material: ShaderMaterial
 var _hair_strip_texture: ImageTexture
+var _follicle_texture: ImageTexture
 var _guide_image: Image
 var _guide_texture: ImageTexture
 var _guide_positions := PackedVector3Array()
@@ -55,6 +80,15 @@ var _head_field := PackedFloat32Array()
 var _head_field_center := Vector3.ZERO
 var _head_field_texture: ImageTexture
 var _head_reach_squared := 0.0
+var _scalp_cap_signature := ""
+var _scalp_paint_value := PackedFloat32Array()
+var _scalp_paint_weight := PackedFloat32Array()
+var _scalp_paint_revision := 0
+var _scalp_comb_angle := PackedFloat32Array()
+var _scalp_comb_weight := PackedFloat32Array()
+var _scalp_comb_revision := 0
+var _brush_cursor: MeshInstance3D
+var _brush_cursor_mesh: ImmediateMesh
 var _collider_rx := 0.0
 var _collider_rz := 0.0
 var _neck_a := Vector3.ZERO
@@ -106,7 +140,24 @@ func _create_render_nodes() -> void:
 	_scalp_cap_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	_mount.add_child(_scalp_cap_instance)
 
+	# Paint brush cursor. Unshaded and depth-test free so it reads through hair.
+	_brush_cursor_mesh = ImmediateMesh.new()
+	_brush_cursor = MeshInstance3D.new()
+	_brush_cursor.name = "ScalpBrushCursor"
+	_brush_cursor.mesh = _brush_cursor_mesh
+	_brush_cursor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_brush_cursor.visible = false
+	var cursor_material := StandardMaterial3D.new()
+	cursor_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cursor_material.vertex_color_use_as_albedo = true
+	cursor_material.no_depth_test = true
+	cursor_material.render_priority = 8
+	cursor_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_brush_cursor.material_override = cursor_material
+	_mount.add_child(_brush_cursor)
+
 	_bake_hair_strip()
+	_bake_follicle_map()
 	_create_guide_texture()
 
 
@@ -188,6 +239,12 @@ func _apply_material_settings() -> void:
 	if _scalp_cap_material != null:
 		# The cap reads as roots in shadow, so it sits just below the root colour.
 		_scalp_cap_material.set_shader_parameter("root_color", root_color.darkened(0.28))
+		_scalp_cap_material.set_shader_parameter("hair_length_range", CAP_LENGTH_RANGE)
+		_scalp_cap_material.set_shader_parameter("follicle_cells", float(FOLLICLE_GRID))
+		_scalp_cap_material.set_shader_parameter("scalp_centre", _head_field_center)
+		_scalp_cap_material.set_shader_parameter("scalp_chart_scale", SCALP_CHART_SCALE)
+		if _follicle_texture != null:
+			_scalp_cap_material.set_shader_parameter("follicle_map", _follicle_texture)
 		_scalp_cap_material.set_shader_parameter("sheen", clampf(float(hair_settings.get("sheen", 0.55)), 0.0, 1.0))
 		_scalp_cap_material.set_shader_parameter("sheen_roughness", clampf(float(hair_settings.get("sheen_roughness", 0.52)), 0.05, 1.0))
 		if _hair_strip_texture != null:
@@ -268,7 +325,8 @@ func rebuild_hair() -> void:
 			var normal_world: Vector3 = sample["normal"]
 			var region := _scalp_region(root_world)
 			var seed_value := float(salt + attempt)
-			if not _accepts_root(region, seed_value):
+			var root_local := _mount.to_local(root_world + normal_world * root_lift)
+			if not _accepts_root(region, seed_value, root_local):
 				continue
 			var length_scale := 0.0
 			var width_scale := 0.0
@@ -278,10 +336,9 @@ func rebuild_hair() -> void:
 				length_scale = lerpf(0.20, 0.34, _hash01(seed_value * 19.73 + 4.1))
 				width_scale = lerpf(1.35, 1.95, _hash01(seed_value * 7.91 + 2.7))
 			else:
-				length_scale = lerpf(0.82, 1.18, _hash01(seed_value * 19.73 + 4.1)) * _root_length_scale(region)
+				length_scale = lerpf(0.82, 1.18, _hash01(seed_value * 19.73 + 4.1)) * _root_length_scale(region, root_local)
 				width_scale = lerpf(0.72, 1.16, _hash01(seed_value * 7.91 + 2.7))
 			width_scale *= _part_narrowing(region)
-			var root_local := _mount.to_local(root_world + normal_world * root_lift)
 			var guide_index := _nearest_guide(root_local)
 			# A follower must use the same complete frame as its guide. Applying a
 			# guide-space bend through an independently estimated follower frame is
@@ -318,7 +375,7 @@ func rebuild_hair() -> void:
 		Vector3.ONE * reach * 2.0
 	)
 	_gpu_hair_instance.multimesh = multimesh
-	_build_scalp_cap(root_lift, style)
+	_build_scalp_cap(root_lift, style, base_length)
 	_gpu_hair_material.set_shader_parameter("guide_count", float(GUIDE_COUNT))
 	_gpu_hair_material.set_shader_parameter("guide_segment_count", float(GUIDE_SEGMENTS))
 	_apply_material_settings()
@@ -577,11 +634,11 @@ func _build_guide_rest_state(base_length: float, root_lift: float, style: int) -
 		var root_world: Vector3 = sample["position"]
 		var normal_world: Vector3 = sample["normal"]
 		var region := _scalp_region(root_world)
-		if not _accepts_root(region, float(attempt) * 3.1):
-			continue
 		var root_local := _mount.to_local(root_world + normal_world * root_lift)
+		if not _accepts_root(region, float(attempt) * 3.1, root_local):
+			continue
 		var normal_local := (_mount.global_basis.inverse() * normal_world).normalized()
-		var flow_world := _growth_flow(normal_world, region, style)
+		var flow_world := _growth_flow(normal_world, region, style, root_local)
 		var flow_local := (_mount.global_basis.inverse() * flow_world).normalized()
 		_set_guide_rest(accepted, root_local, normal_local, flow_local, base_length, style, region)
 		accepted += 1
@@ -825,6 +882,9 @@ func _upload_head_field() -> void:
 			var radius := _head_field[row * HEAD_FIELD_AZIMUTH + column]
 			image.set_pixel(column, row, Color(radius, 0.0, 0.0, 1.0))
 	_head_field_texture = ImageTexture.create_from_image(image)
+	if _scalp_cap_material != null:
+		_scalp_cap_material.set_shader_parameter("scalp_centre", _head_field_center)
+		_scalp_cap_material.set_shader_parameter("scalp_chart_scale", SCALP_CHART_SCALE)
 	if _gpu_hair_material != null:
 		_gpu_hair_material.set_shader_parameter("head_field_texture", _head_field_texture)
 		_gpu_hair_material.set_shader_parameter("head_field_center", _head_field_center)
@@ -1069,9 +1129,516 @@ func _passes_hairline(region: Vector3) -> bool:
 ## Hairline test plus frontal thinning. Long styles root at the hairline and hang
 ## their tips over the eyes; thinning the front is how a groom fixes that without
 ## dragging the hairline backwards, which would just look like a receding one.
-func _accepts_root(region: Vector3, seed_value: float) -> bool:
+## Local comb direction.
+##
+## Until now the flow field was entirely analytic: one formula decided which way
+## every strand on the head pointed. This stores a direction per scalp cell so it
+## can be combed by hand, and it shares the paint map resolution and frame, so a
+## combed cell and a painted cell describe the same patch of scalp.
+##
+## The angle is stored in the local tangent frame rather than as a 3D vector,
+## because a 3D vector interpolated across a curved scalp leaves the surface.
+## 0 points at the crown, +90 degrees points around the head toward the back.
+func _ensure_scalp_comb() -> void:
+	var cells := PAINT_AZIMUTH * PAINT_ELEVATION
+	if _scalp_comb_angle.size() == cells:
+		return
+	_scalp_comb_angle.resize(cells)
+	_scalp_comb_weight.resize(cells)
+	for index in cells:
+		_scalp_comb_angle[index] = 0.0
+		_scalp_comb_weight[index] = 0.0
+
+
+## East runs around the head toward increasing azimuth, north runs up toward the
+## crown. Both are tangent to the scalp, so anything built from them stays on it.
+func _scalp_tangent_frame(direction: Vector3) -> Array:
+	var east := Vector3.UP.cross(direction)
+	if east.length_squared() < 0.0001:
+		east = Vector3.RIGHT.cross(direction)
+	east = east.normalized()
+	return [east, direction.cross(east).normalized()]
+
+
+func comb_scalp(world_point: Vector3, radius: float, angle: float, strength: float) -> void:
+	if _mount == null or _head.is_empty():
+		return
+	_ensure_scalp_comb()
+	var local_point := _mount.to_local(world_point)
+	var relative := local_point - _head_field_center
+	if relative.length_squared() < 0.000001:
+		return
+	var brush := relative.normalized()
+	var head_radius := maxf(float(_head["rx"]), 0.03)
+	var angular := clampf(radius / head_radius, 0.008, PI)
+	var cutoff := cos(angular)
+	var brush_elevation := acos(clampf(brush.y, -1.0, 1.0))
+	var row_span := angular / PI * float(PAINT_ELEVATION) + 1.0
+	var row_centre := brush_elevation / PI * float(PAINT_ELEVATION)
+	var row_from := clampi(int(floor(row_centre - row_span)), 0, PAINT_ELEVATION - 1)
+	var row_to := clampi(int(ceil(row_centre + row_span)), 0, PAINT_ELEVATION - 1)
+	var brush_azimuth := atan2(brush.x, brush.z)
+	var combed := false
+	for row in range(row_from, row_to + 1):
+		var elevation := (float(row) + 0.5) / float(PAINT_ELEVATION) * PI
+		var azimuth_span := angular / maxf(sin(elevation), 0.02)
+		var columns := PAINT_AZIMUTH
+		var column_from := 0
+		if azimuth_span < PI:
+			var column_centre := (brush_azimuth + PI) / TAU * float(PAINT_AZIMUTH)
+			var column_span := azimuth_span / TAU * float(PAINT_AZIMUTH) + 1.0
+			column_from = int(floor(column_centre - column_span))
+			columns = int(ceil(column_centre + column_span)) - column_from + 1
+		for offset in columns:
+			var column := wrapi(column_from + offset, 0, PAINT_AZIMUTH)
+			var direction := _paint_direction(column, row)
+			var alignment := direction.dot(brush)
+			if alignment <= cutoff:
+				continue
+			var falloff := 1.0 - acos(clampf(alignment, -1.0, 1.0)) / maxf(angular, 0.0001)
+			falloff = smoothstep(0.0, 1.0, clampf(falloff, 0.0, 1.0))
+			var blend := clampf(strength * falloff, 0.0, 1.0)
+			if blend <= 0.0005:
+				continue
+			var index := row * PAINT_AZIMUTH + column
+			# Angles are blended as a vector so a stroke crossing the wrap from
+			# +179 to -179 degrees does not spin the whole way round.
+			var current := _scalp_comb_angle[index]
+			var mixed := Vector2(cos(current), sin(current)).lerp(Vector2(cos(angle), sin(angle)), blend)
+			if mixed.length_squared() > 0.000001:
+				_scalp_comb_angle[index] = atan2(mixed.y, mixed.x)
+			_scalp_comb_weight[index] = clampf(_scalp_comb_weight[index] + blend, 0.0, 1.0)
+			combed = true
+	if combed:
+		_scalp_comb_revision += 1
+
+
+func clear_scalp_comb() -> void:
+	_scalp_comb_angle.clear()
+	_scalp_comb_weight.clear()
+	_scalp_comb_revision += 1
+
+
+func has_scalp_comb() -> bool:
+	return not _scalp_comb_weight.is_empty()
+
+
+func scalp_comb_state() -> Dictionary:
+	if _scalp_comb_weight.is_empty():
+		return {}
+	return {
+		"azimuth": PAINT_AZIMUTH,
+		"elevation": PAINT_ELEVATION,
+		"angle": _scalp_comb_angle.duplicate(),
+		"weight": _scalp_comb_weight.duplicate()
+	}
+
+
+func set_scalp_comb_state(state: Dictionary) -> void:
+	if state.is_empty() or int(state.get("azimuth", 0)) != PAINT_AZIMUTH or int(state.get("elevation", 0)) != PAINT_ELEVATION:
+		clear_scalp_comb()
+		return
+	_scalp_comb_angle = PackedFloat32Array(state.get("angle", PackedFloat32Array()))
+	_scalp_comb_weight = PackedFloat32Array(state.get("weight", PackedFloat32Array()))
+	_ensure_scalp_comb()
+	_scalp_comb_revision += 1
+
+
+## Returns [combed direction in mount-local space, weight]. Angles are averaged
+## as vectors, again so the wrap does not produce a direction nothing was combed.
+func _sample_scalp_comb(local_point: Vector3) -> Array:
+	if _scalp_comb_weight.is_empty():
+		return [Vector3.ZERO, 0.0]
+	var relative := local_point - _head_field_center
+	if relative.length_squared() < 0.000001:
+		return [Vector3.ZERO, 0.0]
+	var direction := relative.normalized()
+	var azimuth := (atan2(direction.x, direction.z) + PI) / TAU * float(PAINT_AZIMUTH) - 0.5
+	var elevation := acos(clampf(direction.y, -1.0, 1.0)) / PI * float(PAINT_ELEVATION) - 0.5
+	var column := floori(azimuth)
+	var row := floori(elevation)
+	var column_fraction := azimuth - float(column)
+	var row_fraction := elevation - float(row)
+	var row_a := clampi(row, 0, PAINT_ELEVATION - 1)
+	var row_b := clampi(row + 1, 0, PAINT_ELEVATION - 1)
+	var column_a := wrapi(column, 0, PAINT_AZIMUTH)
+	var column_b := wrapi(column + 1, 0, PAINT_AZIMUTH)
+	var vector := Vector2.ZERO
+	var weight := 0.0
+	for pair in [[row_a, column_a, (1.0 - column_fraction) * (1.0 - row_fraction)],
+			[row_a, column_b, column_fraction * (1.0 - row_fraction)],
+			[row_b, column_a, (1.0 - column_fraction) * row_fraction],
+			[row_b, column_b, column_fraction * row_fraction]]:
+		var index: int = int(pair[0]) * PAINT_AZIMUTH + int(pair[1])
+		var share: float = float(pair[2])
+		var angle: float = _scalp_comb_angle[index]
+		var cell_weight: float = _scalp_comb_weight[index]
+		vector += Vector2(cos(angle), sin(angle)) * share * cell_weight
+		weight += cell_weight * share
+	if weight <= 0.0005 or vector.length_squared() < 0.000001:
+		return [Vector3.ZERO, 0.0]
+	var frame := _scalp_tangent_frame(direction)
+	var normalized := vector.normalized()
+	var north: Vector3 = frame[1]
+	var east: Vector3 = frame[0]
+	return [(north * normalized.x + east * normalized.y).normalized(), clampf(weight, 0.0, 1.0)]
+
+
+## Per-region length painting.
+##
+## The analytic controls (hairline, front density, part) shape the whole scalp at
+## once. Painting stores a length multiplier per direction instead, so one side
+## can be full length and the other shaved. It shares the head field
+## azimuth/elevation parameterisation, so a painted cell and a collision cell
+## describe the same patch of scalp.
+##
+## `value` is a multiple of the groom length, so the length slider still scales
+## the whole style; `weight` is how much of the painted value applies, which
+## gives brush edges a soft falloff for free.
+## Brush cursor.
+##
+## Built by walking a cone around the brush direction and sampling the head field
+## at each step, so the ring lies ON the scalp. A flat disc would float off a
+## curved head at anything but the smallest radius, which is exactly where
+## knowing the footprint matters most. Drawn without depth test so it stays
+## visible through the hair it is about to cut.
+func update_brush_cursor(world_point: Vector3, radius: float, length_value: float, comb_angle: float = INF) -> void:
+	if _brush_cursor == null or _head_field.is_empty():
+		return
+	var local_point := _mount.to_local(world_point)
+	var relative := local_point - _head_field_center
+	if relative.length_squared() < 0.000001:
+		hide_brush_cursor()
+		return
+	var centre := relative.normalized()
+	var head_radius := maxf(float(_head["rx"]), 0.03)
+	var angular := clampf(radius / head_radius, 0.008, PI * 0.5)
+	var across := centre.cross(Vector3.UP)
+	if across.length_squared() < 0.0001:
+		across = centre.cross(Vector3.RIGHT)
+	across = across.normalized()
+	var along := centre.cross(across).normalized()
+
+	_brush_cursor_mesh.clear_surfaces()
+	var combing := comb_angle < INF
+	# Warm for full length, cold for a shave, and a separate colour for the comb
+	# so the two tools are never confused for one another.
+	var tint := Color(1.0, 0.35, 0.30).lerp(Color(0.55, 0.95, 0.70), clampf(length_value, 0.0, 1.0))
+	if combing:
+		tint = Color(0.55, 0.80, 1.0)
+	# Outer ring is the footprint, inner ring is where the falloff is still strong.
+	for ring in 2:
+		var ring_angle := angular * (1.0 if ring == 0 else 0.5)
+		var ring_tint := tint if ring == 0 else tint * 0.65
+		_brush_cursor_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+		for step in BRUSH_CURSOR_SEGMENTS + 1:
+			var phi := float(step) / float(BRUSH_CURSOR_SEGMENTS) * TAU
+			var direction := (centre * cos(ring_angle)
+				+ (across * cos(phi) + along * sin(phi)) * sin(ring_angle)).normalized()
+			_brush_cursor_mesh.surface_set_color(ring_tint)
+			_brush_cursor_mesh.surface_add_vertex(_cursor_point(direction))
+		_brush_cursor_mesh.surface_end()
+
+	if combing:
+		# The arrow is swept along a great circle rather than drawn flat, so it
+		# stays on the scalp like the ring does and reads at any brush size.
+		var frame := _scalp_tangent_frame(centre)
+		var east: Vector3 = frame[0]
+		var north: Vector3 = frame[1]
+		var heading := (north * cos(comb_angle) + east * sin(comb_angle)).normalized()
+		var tip_angle := angular * 0.92
+		_brush_cursor_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+		for step in 17:
+			var t := lerpf(-angular * 0.55, tip_angle, float(step) / 16.0)
+			var direction := (centre * cos(t) + heading * sin(t)).normalized()
+			_brush_cursor_mesh.surface_set_color(tint)
+			_brush_cursor_mesh.surface_add_vertex(_cursor_point(direction))
+		_brush_cursor_mesh.surface_end()
+		var tip := (centre * cos(tip_angle) + heading * sin(tip_angle)).normalized()
+		var side := centre.cross(heading).normalized()
+		for barb in [-1.0, 1.0]:
+			var barb_heading := (-heading * cos(0.65) + side * float(barb) * sin(0.65)).normalized()
+			_brush_cursor_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+			for step in 5:
+				var t := angular * 0.34 * float(step) / 4.0
+				var direction := (tip * cos(t) + barb_heading * sin(t)).normalized()
+				_brush_cursor_mesh.surface_set_color(tint)
+				_brush_cursor_mesh.surface_add_vertex(_cursor_point(direction))
+			_brush_cursor_mesh.surface_end()
+	_brush_cursor.visible = true
+
+
+## 1 mm proud of the scalp, so the cursor never z-fights the skin.
+func _cursor_point(direction: Vector3) -> Vector3:
+	return _head_field_center + direction * (_sample_head_field(direction) + 0.001)
+
+
+func hide_brush_cursor() -> void:
+	if _brush_cursor == null:
+		return
+	_brush_cursor.visible = false
+	if _brush_cursor_mesh != null:
+		_brush_cursor_mesh.clear_surfaces()
+
+
+## Bakes the follicle stipple the cap uses at short lengths.
+##
+## Very short hair is not a flowing texture. It is a field of cut shafts seen end
+## on: dots of pigment with visible skin between them, getting larger and closer
+## to touching as length grows. Drawing the strand strip at 2 mm gives directional
+## streaks where there should be points, which is why a fade had no believable
+## short end.
+##
+## Stored as proximity to the nearest follicle rather than as a dot mask, so the
+## shader can grow the dots by moving a threshold instead of needing one texture
+## per length.
+##
+## R per-follicle tint · G per-follicle strength · B per-follicle angle
+## A proximity, 1 at the follicle, 0 midway to its neighbours
+func _bake_follicle_map() -> void:
+	var size := FOLLICLE_MAP_SIZE
+	# Float, not integer, division. 384 / 28 truncates to 13, which leaves a
+	# 20 pixel strip with no follicles in it; the map then repeats that gap across
+	# the scalp as a grid of seams. A float cell tiles exactly for any pairing.
+	var cell := float(size) / float(FOLLICLE_GRID)
+	var reach := cell * 0.92
+	var data := PackedByteArray()
+	data.resize(size * size * 4)
+	# Direct byte writes: set_pixel over a quarter of a million samples is slow
+	# enough to be felt at load.
+	for index in data.size():
+		data[index] = 0
+	for grid_y in FOLLICLE_GRID:
+		for grid_x in FOLLICLE_GRID:
+			var seed_value := float(grid_y * FOLLICLE_GRID + grid_x + 1)
+			var centre_x := (float(grid_x) + lerpf(0.02, 0.98, _hash01(seed_value * 3.7))) * cell
+			var centre_y := (float(grid_y) + lerpf(0.02, 0.98, _hash01(seed_value * 7.3))) * cell
+			var tint := _hash01(seed_value * 11.9)
+			var strength := lerpf(0.34, 1.0, _hash01(seed_value * 17.1))
+			var angle := _hash01(seed_value * 23.3)
+			var span := int(ceil(reach))
+			for offset_y in range(-span, span + 1):
+				for offset_x in range(-span, span + 1):
+					var pixel_x := int(floor(centre_x)) + offset_x
+					var pixel_y := int(floor(centre_y)) + offset_y
+					var dx := float(pixel_x) + 0.5 - centre_x
+					var dy := float(pixel_y) + 0.5 - centre_y
+					var distance := sqrt(dx * dx + dy * dy)
+					if distance >= reach:
+						continue
+					var proximity := 1.0 - distance / reach
+					# Wrap so the map tiles seamlessly across the scalp.
+					var wrapped := (wrapi(pixel_y, 0, size) * size + wrapi(pixel_x, 0, size)) * 4
+					var existing := float(data[wrapped + 3]) / 255.0
+					if proximity <= existing:
+						continue
+					data[wrapped] = int(clampf(tint, 0.0, 1.0) * 255.0)
+					data[wrapped + 1] = int(clampf(strength, 0.0, 1.0) * 255.0)
+					data[wrapped + 2] = int(clampf(angle, 0.0, 1.0) * 255.0)
+					data[wrapped + 3] = int(clampf(proximity, 0.0, 1.0) * 255.0)
+	var image := Image.create_from_data(size, size, false, Image.FORMAT_RGBA8, data)
+	# No mipmaps: the shader resolves the stipple analytically instead, because
+	# a mip-averaged proximity field falls below the threshold and disappears.
+	_follicle_texture = ImageTexture.create_from_image(image)
+	if _scalp_cap_material != null:
+		_scalp_cap_material.set_shader_parameter("follicle_map", _follicle_texture)
+
+
+func _ensure_scalp_paint() -> void:
+	var cells := PAINT_AZIMUTH * PAINT_ELEVATION
+	if _scalp_paint_value.size() == cells:
+		return
+	_scalp_paint_value.resize(cells)
+	_scalp_paint_weight.resize(cells)
+	for index in cells:
+		_scalp_paint_value[index] = 1.0
+		_scalp_paint_weight[index] = 0.0
+
+
+func _paint_direction(column: int, row: int) -> Vector3:
+	var azimuth := (float(column) + 0.5) / float(PAINT_AZIMUTH) * TAU - PI
+	var elevation := (float(row) + 0.5) / float(PAINT_ELEVATION) * PI
+	return Vector3(sin(azimuth) * sin(elevation), cos(elevation), cos(azimuth) * sin(elevation))
+
+
+## Paints one dab. `world_point` is a point on the scalp, `radius` is measured
+## along the scalp in metres, `value` is the length multiple (0 shaves).
+func paint_scalp(world_point: Vector3, radius: float, value: float, strength: float) -> void:
+	if _mount == null or _head.is_empty():
+		return
+	_ensure_scalp_paint()
+	var local_point := _mount.to_local(world_point)
+	var relative := local_point - _head_field_center
+	if relative.length_squared() < 0.000001:
+		return
+	var brush := relative.normalized()
+	var head_radius := maxf(float(_head["rx"]), 0.03)
+	# A radius measured on the scalp is an angle at the head centre.
+	var angular := clampf(radius / head_radius, 0.008, PI)
+	var cutoff := cos(angular)
+	# Only the rows and columns the cone can reach. Scanning the whole map made a
+	# small brush cost the same as a big one, which at this resolution is 32,768
+	# cells per motion event.
+	var brush_elevation := acos(clampf(brush.y, -1.0, 1.0))
+	var row_span := angular / PI * float(PAINT_ELEVATION) + 1.0
+	var row_centre := brush_elevation / PI * float(PAINT_ELEVATION)
+	var row_from := clampi(int(floor(row_centre - row_span)), 0, PAINT_ELEVATION - 1)
+	var row_to := clampi(int(ceil(row_centre + row_span)), 0, PAINT_ELEVATION - 1)
+	var brush_azimuth := atan2(brush.x, brush.z)
+	var painted := false
+	for row in range(row_from, row_to + 1):
+		var elevation := (float(row) + 0.5) / float(PAINT_ELEVATION) * PI
+		# Meridians converge at the poles, so a fixed angle covers more columns there.
+		var azimuth_span := angular / maxf(sin(elevation), 0.02)
+		var columns := PAINT_AZIMUTH
+		var column_from := 0
+		var column_to := PAINT_AZIMUTH - 1
+		if azimuth_span < PI:
+			var column_centre := (brush_azimuth + PI) / TAU * float(PAINT_AZIMUTH)
+			var column_span := azimuth_span / TAU * float(PAINT_AZIMUTH) + 1.0
+			column_from = int(floor(column_centre - column_span))
+			column_to = int(ceil(column_centre + column_span))
+			columns = column_to - column_from + 1
+		for offset in columns:
+			var column := wrapi(column_from + offset, 0, PAINT_AZIMUTH)
+			var direction := _paint_direction(column, row)
+			var alignment := direction.dot(brush)
+			if alignment <= cutoff:
+				continue
+			var falloff := 1.0 - acos(clampf(alignment, -1.0, 1.0)) / maxf(angular, 0.0001)
+			falloff = smoothstep(0.0, 1.0, clampf(falloff, 0.0, 1.0))
+			var blend := clampf(strength * falloff, 0.0, 1.0)
+			if blend <= 0.0005:
+				continue
+			var index := row * PAINT_AZIMUTH + column
+			_scalp_paint_value[index] = lerpf(_scalp_paint_value[index], value, blend)
+			_scalp_paint_weight[index] = clampf(_scalp_paint_weight[index] + blend, 0.0, 1.0)
+			painted = true
+	if painted:
+		_scalp_paint_revision += 1
+
+
+func clear_scalp_paint() -> void:
+	_scalp_paint_value.clear()
+	_scalp_paint_weight.clear()
+	_scalp_paint_revision += 1
+
+
+func has_scalp_paint() -> bool:
+	return not _scalp_paint_weight.is_empty()
+
+
+## Serialised into a preset alongside the sliders.
+func scalp_paint_state() -> Dictionary:
+	if _scalp_paint_weight.is_empty():
+		return {}
+	return {
+		"azimuth": PAINT_AZIMUTH,
+		"elevation": PAINT_ELEVATION,
+		"value": _scalp_paint_value.duplicate(),
+		"weight": _scalp_paint_weight.duplicate()
+	}
+
+
+func set_scalp_paint_state(state: Dictionary) -> void:
+	if state.is_empty() or int(state.get("azimuth", 0)) != PAINT_AZIMUTH or int(state.get("elevation", 0)) != PAINT_ELEVATION:
+		clear_scalp_paint()
+		return
+	_scalp_paint_value = PackedFloat32Array(state.get("value", PackedFloat32Array()))
+	_scalp_paint_weight = PackedFloat32Array(state.get("weight", PackedFloat32Array()))
+	_ensure_scalp_paint()
+	_scalp_paint_revision += 1
+
+
+## Bilinear, so a brush edge reads as a hairline rather than a staircase.
+## Returns [value, weight].
+func _sample_scalp_paint(local_point: Vector3) -> Vector2:
+	if _scalp_paint_weight.is_empty():
+		return Vector2(1.0, 0.0)
+	var relative := local_point - _head_field_center
+	if relative.length_squared() < 0.000001:
+		return Vector2(1.0, 0.0)
+	var direction := relative.normalized()
+	var azimuth := (atan2(direction.x, direction.z) + PI) / TAU * float(PAINT_AZIMUTH) - 0.5
+	var elevation := acos(clampf(direction.y, -1.0, 1.0)) / PI * float(PAINT_ELEVATION) - 0.5
+	var column := floori(azimuth)
+	var row := floori(elevation)
+	var column_fraction := azimuth - float(column)
+	var row_fraction := elevation - float(row)
+	var row_a := clampi(row, 0, PAINT_ELEVATION - 1)
+	var row_b := clampi(row + 1, 0, PAINT_ELEVATION - 1)
+	var column_a := wrapi(column, 0, PAINT_AZIMUTH)
+	var column_b := wrapi(column + 1, 0, PAINT_AZIMUTH)
+	var index_aa := row_a * PAINT_AZIMUTH + column_a
+	var index_ab := row_a * PAINT_AZIMUTH + column_b
+	var index_ba := row_b * PAINT_AZIMUTH + column_a
+	var index_bb := row_b * PAINT_AZIMUTH + column_b
+	var value := lerpf(
+		lerpf(_scalp_paint_value[index_aa], _scalp_paint_value[index_ab], column_fraction),
+		lerpf(_scalp_paint_value[index_ba], _scalp_paint_value[index_bb], column_fraction),
+		row_fraction)
+	var weight := lerpf(
+		lerpf(_scalp_paint_weight[index_aa], _scalp_paint_weight[index_ab], column_fraction),
+		lerpf(_scalp_paint_weight[index_ba], _scalp_paint_weight[index_bb], column_fraction),
+		row_fraction)
+	return Vector2(value, weight)
+
+
+## Where a ray meets the scalp, for turning a mouse position into a brush dab.
+## Marches the head field rather than the mesh: the field is already the head
+## silhouette, and a march over it is O(steps) instead of O(triangles).
+func scalp_raycast(from_world: Vector3, direction_world: Vector3) -> Dictionary:
+	if _head_field.is_empty() or _mount == null:
+		return {}
+	var origin := _mount.to_local(from_world) - _head_field_center
+	var ray := (_mount.global_basis.inverse() * direction_world).normalized()
+	var reach := sqrt(_head_reach_squared)
+	# Clip to the bounding sphere first so the march covers a short span.
+	var half := -origin.dot(ray)
+	var closest_squared := origin.length_squared() - half * half
+	var radius_squared := reach * reach
+	if closest_squared > radius_squared:
+		return {}
+	var offset := sqrt(maxf(radius_squared - closest_squared, 0.0))
+	var near := maxf(half - offset, 0.0)
+	var far := half + offset
+	if far <= near:
+		return {}
+	var steps := 96
+	var previous := near
+	var start := origin + ray * near
+	var previous_gap := start.length() - _sample_head_field(start.normalized())
+	for step in range(1, steps + 1):
+		var t := lerpf(near, far, float(step) / float(steps))
+		var point := origin + ray * t
+		var gap := point.length() - _sample_head_field(point.normalized())
+		if gap <= 0.0 and previous_gap > 0.0:
+			# Bisect the crossing for a clean surface position.
+			var low := previous
+			var high := t
+			for _refine in 14:
+				var middle := (low + high) * 0.5
+				var probe := origin + ray * middle
+				if probe.length() - _sample_head_field(probe.normalized()) > 0.0:
+					low = middle
+				else:
+					high = middle
+			var hit := origin + ray * high + _head_field_center
+			return {"position": _mount.to_global(hit), "local": hit}
+		previous = t
+		previous_gap = gap
+	return {}
+
+
+func _accepts_root(region: Vector3, seed_value: float, local_point: Vector3 = Vector3.INF) -> bool:
 	if _hairline_margin(region) < 0.0:
 		return false
+	# A shaved patch has no roots at all, not short ones — and hair too short for
+	# a card is left to the cap, which draws it as stipple instead.
+	if local_point.x < INF:
+		var base_length := clampf(float(hair_settings.get("length", 0.09)), 0.004, 0.55)
+		if _root_length_scale(region, local_point) * base_length < CARD_MIN_LENGTH:
+			return false
 	if int(hair_settings.get("part_style", 0)) == 1:
 		# A part is read as a line of exposed scalp, not as a change of direction.
 		# Diverting the comb on both sides is not enough on its own: the locks
@@ -1091,10 +1658,15 @@ func _accepts_root(region: Vector3, seed_value: float) -> bool:
 
 ## How much of the full length a strand rooted here should get. Front strands are
 ## the ones that reach the eyes, so they are the ones to shorten.
-func _root_length_scale(region: Vector3) -> float:
+func _root_length_scale(region: Vector3, local_point: Vector3 = Vector3.INF) -> float:
 	var front_length := clampf(float(hair_settings.get("front_length", 0.62)), 0.15, 1.0)
 	var frontal := smoothstep(0.14, 0.78, region.z) * smoothstep(0.90, 0.30, absf(region.x))
-	return lerpf(1.0, front_length, frontal)
+	var scale := lerpf(1.0, front_length, frontal)
+	if local_point.x < INF:
+		# Paint overrides the analytic falloff where it has been applied.
+		var painted := _sample_scalp_paint(local_point)
+		scale = lerpf(scale, painted.x, painted.y)
+	return scale
 
 
 ## Cards next to the part line have to be narrow. A part is only a few
@@ -1148,9 +1720,60 @@ func _hairline_margin(region: Vector3) -> float:
 ## An opaque shell of the scalp mesh itself, lifted just under the locks. Hair
 ## cards cannot tile a curved scalp without gaps, so without this the skin shows
 ## between locks and the crown reads as balding however dense the groom is.
-func _build_scalp_cap(root_lift: float, style: int) -> void:
+## The cap is 8,700 triangles resolved through the comb field, which costs about
+## 46 ms — three quarters of a hair rebuild. It only depends on the hairline, the
+## comb and the root lift, so a density, colour, width or physics change must not
+## pay for it.
+func _cap_signature(root_lift: float, style: int) -> String:
+	return "%d|%d|%d|%.5f|%.4f|%.4f|%.4f|%.4f|%d|%.4f|%.4f|%.1f" % [
+		style, _scalp_paint_revision, _scalp_comb_revision, root_lift,
+		float(hair_settings.get("front_hairline", hair_settings.get("hairline", 0.52))),
+		float(hair_settings.get("side_hairline", 0.68)),
+		float(hair_settings.get("back_hairline", 0.76)),
+		float(hair_settings.get("length", 0.09)),
+		int(hair_settings.get("part_style", 0)),
+		float(hair_settings.get("part_offset", 0.0)),
+		float(hair_settings.get("part_strength", 0.6)),
+		_front_sign
+	]
+
+
+## Stereographic scalp coordinates, projected from under the chin.
+##
+## The previous azimuth/elevation mapping converges at the crown: tile width goes
+## as sin(elevation), so it shrinks to nothing at the top of the skull and the
+## stipple degenerates into a smeared patch, which is exactly where balding has
+## to look right. It also carried a wrap seam down the back.
+##
+## Stereographic has neither. Its single singular point is the projection centre,
+## which sits under the chin where there is no scalp, and it is conformal, so
+## follicles stay round instead of being squashed into ovals. The cost is a
+## smooth 2x density change from crown to ear, which is far easier to live with
+## than a singularity.
+func _scalp_chart(direction: Vector3) -> Vector2:
+	var denominator := maxf(1.0 + direction.y, 0.08)
+	return Vector2(direction.x, direction.z) / denominator * SCALP_CHART_SCALE
+
+
+## Same chart differentiated along a tangent, giving the comb direction in chart
+## space. Analytic rather than differenced, so it stays exact on coarse triangles.
+func _scalp_chart_flow(direction: Vector3, flow: Vector3) -> Vector2:
+	var denominator := maxf(1.0 + direction.y, 0.08)
+	var chart := Vector2(
+		flow.x * denominator - direction.x * flow.y,
+		flow.z * denominator - direction.z * flow.y) / (denominator * denominator)
+	if chart.length_squared() < 0.000001:
+		return Vector2(0.0, 1.0)
+	return chart.normalized()
+
+func _build_scalp_cap(root_lift: float, style: int, base_length: float) -> void:
 	if _scalp_cap_instance == null:
 		return
+	var signature := _cap_signature(root_lift, style)
+	if signature == _scalp_cap_signature and _scalp_cap_instance.mesh != null:
+		_scalp_cap_instance.visible = true
+		return
+	_scalp_cap_signature = signature
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var tangents := PackedFloat32Array()
@@ -1158,9 +1781,6 @@ func _build_scalp_cap(root_lift: float, style: int) -> void:
 	var colors := PackedColorArray()
 	var lift := root_lift + 0.0016
 	var inverse_basis := _mount.global_basis.inverse()
-	# Tile the strip roughly every 35 mm along the comb, so the cap carries strands
-	# at the same physical scale as the cards lying on top of it.
-	var tile := 1.0 / 0.035
 	for triangle in _scalp_triangles:
 		var margins := [
 			_hairline_margin(_scalp_region(triangle["p0"])),
@@ -1178,24 +1798,32 @@ func _build_scalp_cap(root_lift: float, style: int) -> void:
 			# The cap is a hair surface, not a coloured shell: its strands have to
 			# run along the same comb field the cards do, or it reads as a smooth
 			# painted mask wherever a lock parts.
-			var flow_world := _growth_flow(normal_world, region, style)
 			var local_point := _mount.to_local(point + normal_world * lift)
+			var flow_world := _growth_flow(normal_world, region, style, local_point)
 			var local_normal := (inverse_basis * normal_world).normalized()
 			var local_flow := (inverse_basis * flow_world).normalized()
-			var local_width := local_flow.cross(local_normal)
-			if local_width.length_squared() < 0.0001:
-				local_width = local_flow.cross(Vector3.RIGHT)
-			local_width = local_width.normalized()
 			vertices.append(local_point)
 			normals.append(local_normal)
-			# The tangent is the comb direction, so the anisotropic highlight on the
-			# cap lines up with the highlight on the cards above it.
+			# The tangent still follows the comb, so the anisotropic highlight lines
+			# up with the cards above. Only the UVs had to become continuous.
 			tangents.append_array([local_flow.x, local_flow.y, local_flow.z, 1.0])
-			var relative := local_point
-			uvs.append(Vector2(relative.dot(local_width) * tile, relative.dot(local_flow) * tile))
 			# Cards only exist above the hairline, so the cap must not either, or it
 			# reads as a brown band across the forehead with nothing over it.
-			colors.append(Color(1.0, 1.0, 1.0, smoothstep(0.015, 0.11, float(margins[corner]))))
+			# Alpha carries the hairline feather; red carries how much hair is
+			# actually here, so the shader can keep the body opaque and still let a
+			# shaved patch disappear rather than going half transparent.
+			# Red carries the actual hair length here, normalised over CAP_LENGTH_RANGE,
+			# so the shader can choose between stipple and strands per pixel.
+			var strand_length := _root_length_scale(region, local_point) * base_length
+			# Green and blue carry the comb direction in chart space, so the stipple
+			# can be smeared along the same field the cards are combed by.
+			var surface_direction := (local_point - _head_field_center).normalized()
+			var flow_uv := _scalp_chart_flow(surface_direction, local_flow)
+			uvs.append(_scalp_chart(surface_direction))
+			colors.append(Color(
+				clampf(strand_length / CAP_LENGTH_RANGE, 0.0, 1.0),
+				flow_uv.x * 0.5 + 0.5, flow_uv.y * 0.5 + 0.5,
+				smoothstep(0.015, 0.11, float(margins[corner]))))
 	if vertices.is_empty():
 		_scalp_cap_instance.mesh = null
 		_scalp_cap_instance.visible = false
@@ -1213,7 +1841,7 @@ func _build_scalp_cap(root_lift: float, style: int) -> void:
 	_scalp_cap_instance.visible = true
 
 
-func _growth_flow(normal: Vector3, region: Vector3, style: int) -> Vector3:
+func _growth_flow(normal: Vector3, region: Vector3, style: int, local_point: Vector3 = Vector3.INF) -> Vector3:
 	var front := Vector3(0.0, 0.0, _front_sign)
 	var back := -front
 	var length := clampf(float(hair_settings.get("length", 0.09)), 0.004, 0.55)
@@ -1283,6 +1911,17 @@ func _growth_flow(normal: Vector3, region: Vector3, style: int) -> Vector3:
 		desired += Vector3(signf(region.x), 0.0, 0.0) * face_escape * 0.85
 		desired = desired.normalized()
 
+	# A combed patch overrides the analytic field entirely where it was combed,
+	# and blends back to it at the edge of a stroke. The combed direction is
+	# already tangent to the scalp, so it needs no projection.
+	if local_point.x < INF:
+		var combed := _sample_scalp_comb(local_point)
+		var comb_weight: float = combed[1]
+		if comb_weight > 0.001:
+			var comb_world: Vector3 = _mount.global_basis * Vector3(combed[0])
+			if comb_world.length_squared() > 0.0001:
+				var blended := desired.normalized().slerp(comb_world.normalized(), comb_weight)
+				desired = blended
 	var tangent := desired - normal * desired.dot(normal)
 	if tangent.length_squared() < 0.0001:
 		tangent = back - normal * back.dot(normal)

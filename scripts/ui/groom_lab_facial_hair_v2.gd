@@ -29,6 +29,20 @@ var _preset_category_selector: OptionButton
 var _preset_category_badge: Label
 var _preset_name: LineEdit
 var _preset_status: Label
+const TOOL_NONE := 0
+const TOOL_LENGTH := 1
+const TOOL_COMB := 2
+
+var _paint_tool := TOOL_NONE
+var _comb_angle := 0.0
+var _paint_length := 0.0
+var _paint_radius := 0.03
+var _paint_strength := 0.7
+var _painting := false
+var _paint_status: Label
+var _paint_length_slider: HSlider
+var _paint_timer: Timer
+var _paint_last_screen := Vector2(-1.0, -1.0)
 
 var _eye_settings := {
 	"color": Color("416d86"),
@@ -122,6 +136,100 @@ func _setup_ui() -> void:
 	if column == null:
 		push_warning("Could not find advanced groom UI column")
 		return
+
+	_add_section(column, "SCALP TOOLS")
+	var paint_hint := Label.new()
+	paint_hint.text = "Pick a tool, then drag with the left mouse button on the head. Length sets how long the hair is for that patch, so one side can be shaved while the other stays long. Comb sets which way it flows there; the scroll wheel turns the arrow."
+	paint_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	paint_hint.modulate = Color(0.62, 0.70, 0.78)
+	paint_hint.add_theme_font_size_override("font_size", 12)
+	column.add_child(paint_hint)
+
+	var tool_row := HBoxContainer.new()
+	column.add_child(tool_row)
+	var tool_label := Label.new()
+	tool_label.text = "Tool"
+	tool_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tool_row.add_child(tool_label)
+	var tool_selector := OptionButton.new()
+	tool_selector.add_item("Off")
+	tool_selector.add_item("Length brush")
+	tool_selector.add_item("Comb")
+	tool_selector.select(_paint_tool)
+	tool_selector.item_selected.connect(func(index: int) -> void:
+		_paint_tool = index
+		if _groom != null and index == TOOL_NONE:
+			_groom.hide_brush_cursor()
+		_refresh_brush_cursor()
+		_refresh_paint_status()
+	)
+	tool_row.add_child(tool_selector)
+
+	_paint_length_slider = _add_slider(column, "Brush length", 0.0, 1.0, 0.01, _paint_length, "×", func(v: float) -> void:
+		_paint_length = v
+		_refresh_brush_cursor()
+		_refresh_paint_status()
+	)
+	_add_slider(column, "Comb direction", -180.0, 180.0, 5.0, rad_to_deg(_comb_angle), "°", func(v: float) -> void:
+		_comb_angle = deg_to_rad(v)
+		_refresh_brush_cursor()
+		_refresh_paint_status()
+	)
+	_add_slider(column, "Brush size", 0.002, 0.09, 0.001, _paint_radius, " m", func(v: float) -> void:
+		_paint_radius = v
+		_refresh_brush_cursor()
+	)
+	_add_slider(column, "Brush strength", 0.05, 1.0, 0.05, _paint_strength, "", func(v: float) -> void:
+		_paint_strength = v
+	)
+
+	var paint_buttons := HBoxContainer.new()
+	column.add_child(paint_buttons)
+	var shave_button := Button.new()
+	shave_button.text = "Brush = shaved"
+	shave_button.pressed.connect(func() -> void:
+		_paint_length = 0.0
+		_set_advanced_control("SCALP TOOLS", "Brush length", 0.0)
+		_refresh_brush_cursor()
+		_refresh_paint_status()
+	)
+	paint_buttons.add_child(shave_button)
+	var full_button := Button.new()
+	full_button.text = "Brush = full"
+	full_button.pressed.connect(func() -> void:
+		_paint_length = 1.0
+		_set_advanced_control("SCALP TOOLS", "Brush length", 1.0)
+		_refresh_brush_cursor()
+		_refresh_paint_status()
+	)
+	paint_buttons.add_child(full_button)
+	var clear_button := Button.new()
+	clear_button.text = "Clear length"
+	clear_button.pressed.connect(func() -> void:
+		if _groom == null:
+			return
+		_groom.clear_scalp_paint()
+		_groom.rebuild_hair()
+		_refresh_paint_status()
+	)
+	paint_buttons.add_child(clear_button)
+	var clear_comb := Button.new()
+	clear_comb.text = "Clear comb"
+	clear_comb.pressed.connect(func() -> void:
+		if _groom == null:
+			return
+		_groom.clear_scalp_comb()
+		_groom.rebuild_hair()
+		_refresh_paint_status()
+	)
+	paint_buttons.add_child(clear_comb)
+
+	_paint_status = Label.new()
+	_paint_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_paint_status.modulate = Color(0.70, 0.78, 0.84)
+	_paint_status.add_theme_font_size_override("font_size", 12)
+	column.add_child(_paint_status)
+	_refresh_paint_status()
 
 	_rename_label_recursive(advanced_layer, "Side length", "Beard hair length")
 	_add_section(column, "BEARD DENSITY")
@@ -301,7 +409,7 @@ func _move_control_to_page(control: Node, page_variant: Variant) -> void:
 
 func _advanced_category_for_section(section: String) -> String:
 	match section:
-		"GROOM", "PROCEDURAL HAIR", "CALIBRATION": return "hair"
+		"GROOM", "PROCEDURAL HAIR", "CALIBRATION", "SCALP TOOLS": return "hair"
 		"EYELASHES", "EYES / SKIN MATERIALS": return "eyes"
 		"PROCEDURAL BROWS", "BROW SHAPE / FALLOFF": return "brows"
 		"FACIAL HAIR", "MUSTACHE": return "mustache"
@@ -477,7 +585,17 @@ func _apply_saved_preset(category: String, preset_id: String) -> void:
 				_hair_settings["tip_color"] = legacy_color.lightened(0.18)
 			if settings.has("hairline") and not settings.has("front_hairline"):
 				_hair_settings["front_hairline"] = settings["hairline"]
+			_hair_settings.erase("scalp_paint")
+			_hair_settings.erase("scalp_comb")
+			if _groom != null:
+				# Restore before the rebuild so a preset switch costs one rebuild,
+				# and so a preset without paint clears whatever was painted.
+				var paint_variant: Variant = settings.get("scalp_paint", {})
+				_groom.set_scalp_paint_state(paint_variant if paint_variant is Dictionary else {})
+				var comb_variant: Variant = settings.get("scalp_comb", {})
+				_groom.set_scalp_comb_state(comb_variant if comb_variant is Dictionary else {})
 			_apply_hair_now()
+			_refresh_paint_status()
 		"beard":
 			_restore_dictionary(_beard_settings, settings)
 			_apply_facial_hair_now()
@@ -514,7 +632,15 @@ func _save_current_category_preset() -> void:
 
 func _settings_for_preset_category(category: String) -> Dictionary:
 	match category:
-		"hair": return _hair_settings.duplicate(true)
+		"hair":
+			var hair := _hair_settings.duplicate(true)
+			# The painted length map is part of the style, so it belongs in the
+			# preset next to the sliders rather than being lost on save.
+			if _groom != null and _groom.has_scalp_paint():
+				hair["scalp_paint"] = _groom.scalp_paint_state()
+			if _groom != null and _groom.has_scalp_comb():
+				hair["scalp_comb"] = _groom.scalp_comb_state()
+			return hair
 		"beard": return _beard_settings.duplicate(true)
 		"mustache": return _mustache_settings.duplicate(true)
 		"brows": return _brow_settings.duplicate(true)
@@ -768,3 +894,127 @@ func _rename_label_recursive(node: Node, old_text: String, new_text: String) -> 
 		if _rename_label_recursive(child, old_text, new_text):
 			return true
 	return false
+
+
+func _setup_timers() -> void:
+	super._setup_timers()
+	# Painting rebuilds on a debounce: a hair rebuild is ~13 ms, which is fine
+	# once per stroke but not once per mouse-motion event.
+	_paint_timer = Timer.new()
+	_paint_timer.one_shot = true
+	_paint_timer.wait_time = 0.10
+	_paint_timer.timeout.connect(_apply_paint_now)
+	add_child(_paint_timer)
+
+## Scalp tools: turns a mouse drag into brush dabs on the groom.
+##
+## The rebuild is debounced rather than run per dab. A hair rebuild is about
+## 13 ms, which is fine once but not once per mouse-motion event.
+func _refresh_paint_status() -> void:
+	if _paint_status == null:
+		return
+	var length_m: float = _paint_length * float(_hair_settings.get("length", 0.09))
+	var state := "off"
+	if _paint_tool == TOOL_LENGTH:
+		state = "LENGTH: %.0f mm" % (length_m * 1000.0)
+	elif _paint_tool == TOOL_COMB:
+		state = "COMB: %.0f deg (scroll to turn)" % rad_to_deg(_comb_angle)
+	var marks := []
+	if _groom != null and _groom.has_scalp_paint():
+		marks.append("length painted")
+	if _groom != null and _groom.has_scalp_comb():
+		marks.append("combed")
+	_paint_status.text = "%s • brush %.0f mm • map: %s" % [
+		state, _paint_radius * 1000.0, "clean" if marks.is_empty() else ", ".join(marks)]
+
+
+func _paint_camera() -> Camera3D:
+	var root: Node = get_parent()
+	if root == null:
+		return null
+	return root.get("_camera") as Camera3D
+
+
+func _paint_at_screen(screen_position: Vector2) -> void:
+	if _groom == null or _paint_tool == TOOL_NONE:
+		return
+	var camera := _paint_camera()
+	if camera == null:
+		return
+	var hit: Dictionary = _groom.scalp_raycast(
+		camera.project_ray_origin(screen_position), camera.project_ray_normal(screen_position))
+	if hit.is_empty():
+		return
+	if _paint_tool == TOOL_COMB:
+		_groom.comb_scalp(hit["position"], _paint_radius, _comb_angle, _paint_strength)
+	else:
+		_groom.paint_scalp(hit["position"], _paint_radius, _paint_length, _paint_strength)
+	if _paint_timer != null:
+		_paint_timer.start()
+
+
+func _apply_paint_now() -> void:
+	if _groom != null:
+		_groom.rebuild_hair()
+	_refresh_paint_status()
+	_refresh_status()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if _paint_tool == TOOL_NONE or _groom == null:
+		return
+	if event is InputEventMouseButton:
+		var button := event as InputEventMouseButton
+		# The wheel turns the comb instead of zooming while the comb is active.
+		# Consumed here so the editor never sees it, otherwise the camera would
+		# dolly every time the direction is adjusted.
+		if _paint_tool == TOOL_COMB and button.pressed and (
+				button.button_index == MOUSE_BUTTON_WHEEL_UP or button.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			var turn := deg_to_rad(10.0) * (1.0 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0)
+			_comb_angle = wrapf(_comb_angle + turn, -PI, PI)
+			_refresh_brush_cursor()
+			_refresh_paint_status()
+			get_viewport().set_input_as_handled()
+			return
+		if button.button_index == MOUSE_BUTTON_LEFT:
+			_painting = button.pressed
+			if button.pressed:
+				_paint_at_screen(button.position)
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseMotion:
+		_paint_last_screen = event.position
+		# The cursor tracks every move, but only a held stroke consumes the event:
+		# swallowing motion outright would break right-button orbit while a tool
+		# is switched on.
+		_update_brush_cursor(event.position)
+		if _painting:
+			_paint_at_screen(event.position)
+			get_viewport().set_input_as_handled()
+
+
+## Keeps the ring under the pointer. Hidden when the ray misses the head, so the
+## cursor doubles as feedback on whether a dab would land at all.
+func _update_brush_cursor(screen_position: Vector2) -> void:
+	if _groom == null:
+		return
+	if _paint_tool == TOOL_NONE:
+		_groom.hide_brush_cursor()
+		return
+	var camera := _paint_camera()
+	if camera == null:
+		return
+	var hit: Dictionary = _groom.scalp_raycast(
+		camera.project_ray_origin(screen_position), camera.project_ray_normal(screen_position))
+	if hit.is_empty():
+		_groom.hide_brush_cursor()
+		return
+	_groom.update_brush_cursor(hit["position"], _paint_radius, _paint_length,
+		_comb_angle if _paint_tool == TOOL_COMB else INF)
+
+
+## Re-draws the cursor in place after a slider or the wheel moves, so brush size,
+## length and comb angle are visible without having to jiggle the mouse first.
+func _refresh_brush_cursor() -> void:
+	if _paint_last_screen.x >= 0.0:
+		_update_brush_cursor(_paint_last_screen)
