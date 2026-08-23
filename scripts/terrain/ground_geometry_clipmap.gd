@@ -15,15 +15,10 @@ extends Node3D
 ## immediately, then refreshes as fine tiles arrive in the background.
 
 const TARGET_FINE_DEPTH := 16
-# 64 cells keeps the 0.75 m representation immediately around the player while
-# keeping GPU cost fixed. Persistent backing tiles now own expensive synthesis;
-# this grid only chooses how much of those tiles is visible at each ring level.
 const GRID_CELLS := 64
 const GRID_VERTS := GRID_CELLS + 1
 const RENDER_LEVELS := 6
 const STORAGE_LEVELS := RENDER_LEVELS + 1
-# The depth-10 planetary mesh is sufficient higher up. Do not start fine height
-# streaming while the camera is still several kilometres above ground.
 const ACTIVE_AGL_M := 3500.0
 const REANCHOR_M := 12000.0
 const MATERIAL_RES := 128.0
@@ -31,9 +26,6 @@ const MATERIAL_TEXEL_M := Vector3(8.0, 128.0, 2048.0)
 const GLOBAL_CUT_FRACTION := 0.90
 const GLOBAL_BUILD_CAP := 4
 const LOCAL_GLOBAL_BUILD_CAP := 2
-# Several cache pages can finish close together. Rebuilding the complete 7-layer
-# image for every page would trade one kind of churn for another, so coalesce
-# notifications into a small number of progressive refinement updates.
 const CACHE_REFRESH_DELAY := 0.20
 
 var _material: ShaderMaterial
@@ -76,9 +68,6 @@ func _process(dt: float) -> void:
 		_set_active(false)
 		return
 
-	# Fine pages arrive asynchronously. A short debounce turns a burst of page
-	# completions into one image assembly instead of rebuilding the texture array
-	# once per disk read/tile bake.
 	if _cache_refresh_pending:
 		_cache_refresh_left -= dt
 		if _cache_refresh_left <= 0.0 and _have_frame and not _building:
@@ -98,9 +87,6 @@ func _process(dt: float) -> void:
 
 	var radius := Planet.cfg.planet_radius
 	var observer_dir := planet_pos.normalized()
-	# Activation does not need the full expensive sub-grid synthesis. Macro height
-	# can be hundreds of metres off in extreme relief and there is still kilometres
-	# of hysteresis before the clipmap ceiling, so use the cheap field here.
 	var agl := maxf(planet_pos.length() - radius - Planet.macro_height(observer_dir), 0.0)
 	if agl > ACTIVE_AGL_M:
 		_set_active(false)
@@ -109,10 +95,6 @@ func _process(dt: float) -> void:
 	if not _have_frame:
 		_reset_frame(observer_dir)
 
-	# Express the observer on one persistent tangent frame. Keeping that frame
-	# fixed for kilometres lets the image scroll rather than forcing a new local
-	# projection every few metres. The persistent store itself is face-addressed,
-	# so a reanchor still reuses exactly the same canonical height tiles.
 	var observer_surface := observer_dir * radius
 	var frame_surface := _frame_dir * radius
 	var rel := observer_surface - frame_surface
@@ -148,9 +130,6 @@ func _reset_frame(center: Vector3) -> void:
 	_have_frame = true
 	_frame_epoch += 1
 	_cache_refresh_pending = false
-	# Old image samples belong to a different tangent projection. Keep the global
-	# quadtree visible until the replacement image has been assembled from cached
-	# canonical tiles rather than stretching the old image across the new frame.
 	_images.clear()
 	_height_texture = null
 	_material.set_shader_parameter("u_height_ready", 0.0)
@@ -184,9 +163,6 @@ func _start_build(target: Vector2, force_full: bool) -> void:
 		for image in _images:
 			old_images.append(image)
 
-	# One edit snapshot serves every level and every new strip in this update. The
-	# immutable base comes from GroundHeightStore; edits remain a separate runtime
-	# delta layer and therefore never invalidate or rewrite the disk cache.
 	var outer_spacing := base_spacing * pow(2.0, float(RENDER_LEVELS - 1))
 	var outer_half := float(GRID_CELLS) * 0.5 * outer_spacing
 	var center_dir := _direction_for_plane_static(frame_dir, frame_right, frame_up,
@@ -197,9 +173,6 @@ func _start_build(target: Vector2, force_full: bool) -> void:
 		var built := _build_height_images(frame_dir, frame_right, frame_up,
 			old_images, old_center, target, base_spacing, radius, snap)
 		call_deferred("_on_build_ready", epoch, target, built)
-	# This worker now performs only image assembly, RAM lookups and cheap fallbacks.
-	# Missing visual tiles are queued inside GroundHeightStore and synthesized/read
-	# independently by its one low-priority worker.
 	_task_id = WorkerThreadPool.add_task(task, false, "asterra_ground_clipmap")
 
 
@@ -210,19 +183,28 @@ func _on_build_ready(epoch: int, built_center: Vector2, built: Array[Image]) -> 
 	_building = false
 
 	if epoch == _frame_epoch and built.size() == STORAGE_LEVELS:
-		var texture := Texture2DArray.new()
-		if texture.create_from_images(built) == OK:
+		var published := false
+		if _height_texture == null:
+			var texture := Texture2DArray.new()
+			if texture.create_from_images(built) == OK:
+				_height_texture = texture
+				_material.set_shader_parameter("u_height_pyramid", _height_texture)
+				published = true
+		else:
+			# Keep the same GPU resource alive. Reallocating a complete texture array
+			# every time a streamed page sharpens creates avoidable render-thread and
+			# driver churn. Godot 4.7 can replace each existing layer in place.
+			for layer in built.size():
+				_height_texture.update_layer(built[layer], layer)
+			published = true
+
+		if published:
 			_images = built
-			_height_texture = texture
 			_published_center = built_center
-			_material.set_shader_parameter("u_height_pyramid", _height_texture)
 			_material.set_shader_parameter("u_height_ready", 1.0)
 			_set_visible(_active)
 			_sync_global_cutout(_active)
 
-	# If the player covered several backing cells while this worker was assembling
-	# the image, publish what completed and immediately continue from it. The next
-	# job copies old texels and asks the store only for newly exposed strips.
 	if _force_full_pending or _requested_center.distance_squared_to(_published_center) > 1e-6:
 		_start_build(_requested_center, _force_full_pending)
 
@@ -255,9 +237,6 @@ static func _build_height_images(frame_dir: Vector3, frame_right: Vector3,
 				var plane := new_center + Vector2(float(x) - half, float(y) - half) * spacing
 				var d := _direction_for_plane_static(frame_dir, frame_right, frame_up,
 					plane, radius)
-				# This call is intentionally non-blocking. On a cold cache it can return
-				# a 48 m/parent/macro value for a fine ring while requesting the missing
-				# page in the background. The geometry remains valid and sharpens later.
 				var h := GroundHeightStore.sample_height_nonblocking(d, level, snap)
 				image.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
 		out.append(image)
@@ -280,8 +259,6 @@ func _build_ring_nodes() -> void:
 		mi.material_override = _material
 		mi.set_instance_shader_parameter("clip_level", float(level))
 		mi.set_instance_shader_parameter("clip_outer", 1.0 if level == RENDER_LEVELS - 1 else 0.0)
-		# Vertex displacement places the mesh around the floating-origin observer,
-		# not inside its tiny undeformed import bounds.
 		mi.custom_aabb = AABB(Vector3(-100000.0, -100000.0, -100000.0),
 			Vector3(200000.0, 200000.0, 200000.0))
 		add_child(mi)
@@ -398,10 +375,6 @@ func _sync_terrain_worker_budget(local_active: bool) -> void:
 			_terrain_ref = weakref(terrain)
 	if terrain == null or not (terrain is FastPlanetTerrain):
 		return
-	# Cache misses still need one compute worker to bake an unseen persistent tile.
-	# Leave CPU headroom by allowing only two global ChunkBuilder jobs while local
-	# ground streaming is active. Warm-cache travel is substantially cheaper, but
-	# keeping this cap prevents a sudden uncached region from causing a frame spike.
 	var normal_cap := clampi(int(OS.get_processor_count() / 4), 2, GLOBAL_BUILD_CAP)
 	terrain.set("_max_concurrent_builds",
 		LOCAL_GLOBAL_BUILD_CAP if local_active else normal_cap)
@@ -434,8 +407,6 @@ func _on_height_tile_ready(_level: int, _face: int, _tile_x: int, _tile_y: int) 
 	if not _have_frame:
 		return
 	_cache_refresh_pending = true
-	# Preserve an already-near deadline instead of postponing forever while a
-	# continuous stream of tiles completes.
 	if _cache_refresh_left <= 0.0:
 		_cache_refresh_left = CACHE_REFRESH_DELAY
 
@@ -455,8 +426,6 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 func _on_region_changed(_center: Vector3, _radius_m: float) -> void:
 	if not _have_frame:
 		return
-	# Edits never invalidate pristine cache files. Reassembling the local image
-	# simply reapplies the new Deltas over cached base samples.
 	_queue_target(_requested_center, true)
 
 
