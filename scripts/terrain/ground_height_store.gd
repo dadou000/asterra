@@ -15,15 +15,15 @@ const TARGET_FINE_DEPTH := 16
 const MAX_LEVEL := 6
 const TILE_CELLS := 32
 const TILE_VERTS := TILE_CELLS + 1
-# 2048 float tiles are only about 9 MiB of raw height samples and dramatically
-# reduce disk churn when a fast vehicle doubles back through recently seen ground.
 const MEMORY_TILE_LIMIT := 2048
 const CACHE_DIR := "terrain_height_cache"
 
-# One cold-cache baker is intentional. A shipped/precompiled world will later get
-# a wider dedicated I/O lane; unseen procedural synthesis must remain single-core
-# so it cannot starve gameplay.
-const MAX_ASYNC_IN_FLIGHT := 1
+# Warm/precompiled worlds are I/O-bound and can profit from several independent
+# ZSTD reads. Cold procedural terrain remains limited to ONE baker, so increasing
+# disk throughput cannot bring back the old all-core terrain-generation spiral.
+const MAX_ASYNC_TOTAL_IN_FLIGHT := 4
+const MAX_ASYNC_BAKE_IN_FLIGHT := 1
+const MAX_REQUEST_START_SCAN := 32
 const MAX_REQUEST_QUEUE := 384
 const REQUEST_QUEUE_TRIM_SLACK := 32
 
@@ -48,6 +48,7 @@ var _request_queue: Array[Dictionary] = []
 # repeated visual/collision probes cannot enqueue duplicate immutable work.
 var _queued: Dictionary = {}
 var _async_in_flight := 0
+var _async_bake_in_flight := 0
 var _active_tasks: Dictionary = {}
 var _async_results: Array[Dictionary] = []
 var _result_mutex := Mutex.new()
@@ -109,7 +110,6 @@ func _configure_namespace() -> void:
 	DirAccess.make_dir_recursive_absolute(root)
 
 
-## Blocking/correctness path. Visual terrain should use sample_height_nonblocking().
 func sample_height(d: Vector3, level: int, snap: Dictionary = {}) -> float:
 	var h: float = sample_pristine(d, level)
 	if snap.is_empty():
@@ -153,10 +153,7 @@ func sample_pristine(d: Vector3, level: int) -> float:
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), ty)
 
 
-## RAM-only fast path plus request creation under one mutex acquisition. Previously
-## each candidate parent level locked independently and then every missing level
-## locked again to enqueue work; a cold L0 sample could bounce through the mutex
-## more than a dozen times. Strip streaming now pays one cache lock per sample.
+## RAM-only fallback lookup and request creation under one cache lock.
 func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
 	if not Planet.ready_state or Planet.cfg == null:
 		return 0.0
@@ -184,9 +181,6 @@ func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
 	return Planet.macro_height(d)
 
 
-## Queue a hierarchy around one direction without waiting. All levels are inserted
-## under one cache lock so the velocity prefetcher cannot contend with the clipmap
-## seven times for a single probe.
 func prefetch_sample(d: Vector3, finest_level: int = 0,
 		priority: float = PRIORITY_PREFETCH) -> void:
 	if _shutting_down or not Planet.ready_state or Planet.cfg == null:
@@ -211,7 +205,6 @@ func request_sample(d: Vector3, level: int,
 	_mutex.unlock()
 
 
-## RAM-only residency query. No disk I/O, no generation, one cache lock.
 func is_sample_resident(d: Vector3, level: int) -> bool:
 	if not Planet.ready_state or Planet.cfg == null:
 		return false
@@ -241,6 +234,7 @@ func stats() -> Dictionary:
 		"tiles_built": _tiles_built,
 		"queued": _request_queue.size(),
 		"in_flight": _async_in_flight,
+		"bake_in_flight": _async_bake_in_flight,
 		"dropped": _requests_dropped,
 	}
 
@@ -265,8 +259,6 @@ func _sample_coordinates(d: Vector3, level: int) -> Dictionary:
 	}
 
 
-## Caller owns _mutex. This is intentionally separate from the public residency
-## helper so sample_pristine_nonblocking() can walk all fallback levels atomically.
 func _sample_pristine_memory_locked(d: Vector3, level: int) -> float:
 	var sample: Dictionary = _sample_coordinates(d, level)
 	var face: int = int(sample["face"])
@@ -287,7 +279,6 @@ func _sample_pristine_memory_locked(d: Vector3, level: int) -> float:
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), ty)
 
 
-## Compatibility helper for callers/debug code that want one memory-only lookup.
 func _try_sample_pristine_memory(d: Vector3, level: int) -> float:
 	_mutex.lock()
 	var h: float = _sample_pristine_memory_locked(d, level)
@@ -305,8 +296,6 @@ func _request_sample(d: Vector3, level: int, priority: float) -> void:
 	_mutex.unlock()
 
 
-## Caller owns _mutex. A bilinear sample can touch up to four canonical tiles;
-## de-duplication in _queue_tile_locked() collapses those addresses immediately.
 func _request_sample_locked(d: Vector3, level: int, priority: float) -> void:
 	var sample: Dictionary = _sample_coordinates(d, level)
 	var face: int = int(sample["face"])
@@ -386,26 +375,81 @@ func _trim_request_queue_locked() -> void:
 		_requests_dropped += 1
 
 
+## Start as many independent disk reads as the total lane permits, but never more
+## than one request that has no backing file. Requests already classified as cold
+## procedural work are temporarily skipped while that baker is occupied so warm
+## disk pages behind them can continue to stream.
 func _pump_async_requests() -> void:
-	if _shutting_down or _async_in_flight >= MAX_ASYNC_IN_FLIGHT:
+	if _shutting_down:
 		return
+	while _async_in_flight < MAX_ASYNC_TOTAL_IN_FLIGHT:
+		var request: Dictionary = _take_startable_request()
+		if request.is_empty():
+			return
+		var disk_backed: bool = bool(request.get("disk_backed", false))
+		_start_async_request(request, disk_backed)
 
-	_mutex.lock()
-	if _request_queue.is_empty():
+
+func _take_startable_request() -> Dictionary:
+	var deferred: Array[Dictionary] = []
+	var scanned := 0
+	while scanned < MAX_REQUEST_START_SCAN:
+		_mutex.lock()
+		if _request_queue.is_empty():
+			_mutex.unlock()
+			break
+		_sort_request_queue_locked()
+		var request: Dictionary = _request_queue.pop_front()
 		_mutex.unlock()
+		scanned += 1
+
+		var disk_backed: bool = _request_disk_backed(request)
+		if disk_backed or _async_bake_in_flight < MAX_ASYNC_BAKE_IN_FLIGHT:
+			request["disk_backed"] = disk_backed
+			_requeue_deferred(deferred)
+			return request
+		deferred.append(request)
+
+	_requeue_deferred(deferred)
+	return {}
+
+
+func _requeue_deferred(deferred: Array[Dictionary]) -> void:
+	if deferred.is_empty():
 		return
-	_sort_request_queue_locked()
-	var request: Dictionary = _request_queue.pop_front()
+	_mutex.lock()
+	for request: Dictionary in deferred:
+		_request_queue.append(request)
 	_mutex.unlock()
 
-	_start_async_request(request)
+
+func _request_disk_backed(request: Dictionary) -> bool:
+	if request.has("disk_hint"):
+		return bool(request["disk_hint"])
+	var cache_namespace: String = String(request["namespace"])
+	var level: int = int(request["level"])
+	var face: int = int(request["face"])
+	var tile_x: int = int(request["tile_x"])
+	var tile_y: int = int(request["tile_y"])
+	var relative: String = _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
+	var disk_backed := false
+	if FileAccess.file_exists("res://" + relative):
+		disk_backed = true
+	elif FileAccess.file_exists("user://" + relative):
+		disk_backed = true
+	request["disk_hint"] = disk_backed
+	return disk_backed
 
 
-func _start_async_request(request: Dictionary) -> void:
+func _start_async_request(request: Dictionary, disk_backed: bool) -> void:
 	_async_in_flight += 1
+	if not disk_backed:
+		_async_bake_in_flight += 1
 	var request_copy: Dictionary = request.duplicate(true)
+	var counted_as_bake: bool = not disk_backed
 	var task := func() -> void:
 		var result: Dictionary = _load_or_build_async(request_copy)
+		result["counted_as_bake"] = counted_as_bake
 		_result_mutex.lock()
 		_async_results.append(result)
 		_result_mutex.unlock()
@@ -461,6 +505,8 @@ func _drain_async_results() -> void:
 			WorkerThreadPool.wait_for_task_completion(tid)
 			_active_tasks.erase(key)
 		_async_in_flight = maxi(0, _async_in_flight - 1)
+		if bool(result.get("counted_as_bake", false)):
+			_async_bake_in_flight = maxi(0, _async_bake_in_flight - 1)
 
 		_mutex.lock()
 		_queued.erase(key)
@@ -480,7 +526,8 @@ func _drain_async_results() -> void:
 			tile_ready.emit(int(result["level"]), int(result["face"]),
 				int(result["tile_x"]), int(result["tile_y"]))
 
-		_pump_async_requests()
+	# Fill freed I/O/bake lanes immediately after draining the current result batch.
+	_pump_async_requests()
 
 
 func _sample_vertex_memory_locked(level: int, face: int, ix: int, iy: int,
