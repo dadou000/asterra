@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Asterra"
 config/description="Systems-first open-world simulation. Phase 1: procedural planet."
-config/version="0.0.4"
+config/version="0.0.5"
 run/main_scene="res://scenes/StartMenu.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
@@ -24,6 +24,7 @@ Planet="*res://scripts/gen/planet_sampler.gd"
 Deltas="*res://scripts/terrain/terrain_deltas.gd"
 CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
 MaterialClipmap="*res://scripts/terrain/material_clipmap.gd"
+GroundGeometryClipmap="*res://scripts/terrain/ground_geometry_clipmap.gd"
 AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
 
