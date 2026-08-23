@@ -13,6 +13,11 @@ const DISK_PRESENCE_LIMIT: int = 32768
 const PREFETCH_PRIORITY_MIN: float = 10.0
 const PREFETCH_QUEUE_SOFT_LIMIT: int = 96
 
+# Cached visual pages are tiny compressed files. More I/O lanes dramatically
+# reduce the time the wireframe spends showing parent/orbit geometry while still
+# keeping procedural synthesis on the single bake lane enforced by the base store.
+const PLAYABLE_MAX_ASYNC_TOTAL_IN_FLIGHT: int = 20
+
 var _disk_presence: Dictionary = {}
 var _visual_uncached_skipped: int = 0
 var _visual_cached_admitted: int = 0
@@ -65,6 +70,39 @@ func _queue_tile_locked(level: int, face: int, tile_x: int, tile_y: int,
 	super._queue_tile_locked(level, face, tile_x, tile_y, cells, priority)
 
 
+## One-lock prioritized batch path used by the visual clipmap. The renderer sends
+## centre-out priorities so nearby pages retire before distant annulus pages rather
+## than appearing in arbitrary rectangular patches.
+func request_samples_prioritized(directions: Array[Vector3], level: int,
+		priorities: PackedFloat32Array) -> void:
+	if _shutting_down or not Planet.ready_state or Planet.cfg == null \
+			or directions.is_empty():
+		return
+	var used_level: int = clampi(level, 0, MAX_LEVEL)
+	_mutex.lock()
+	for i: int in directions.size():
+		var priority: float = PRIORITY_VISIBLE
+		if i < priorities.size():
+			priority = priorities[i]
+		_request_sample_locked(directions[i], used_level, priority)
+	if _request_queue.size() > MAX_REQUEST_QUEUE + REQUEST_QUEUE_TRIM_SLACK:
+		_trim_request_queue_locked()
+	_mutex.unlock()
+
+
+## More parallelism is used only for already cached disk pages. `_take_startable_request`
+## still limits procedural baking to the base store's single bake lane.
+func _pump_async_requests() -> void:
+	if _shutting_down:
+		return
+	while _async_in_flight < PLAYABLE_MAX_ASYNC_TOTAL_IN_FLIGHT:
+		var request: Dictionary = _take_startable_request()
+		if request.is_empty():
+			return
+		var disk_backed: bool = bool(request.get("disk_backed", false))
+		_start_async_request(request, disk_backed)
+
+
 func stats() -> Dictionary:
 	var out: Dictionary = super.stats()
 	out["visual_uncached_skipped"] = _visual_uncached_skipped
@@ -73,4 +111,5 @@ func stats() -> Dictionary:
 	out["disk_presence_entries"] = _disk_presence.size()
 	out["prefetch_backpressure_dropped"] = _prefetch_backpressure_dropped
 	out["prefetch_queue_soft_limit"] = PREFETCH_QUEUE_SOFT_LIMIT
+	out["playable_io_limit"] = PLAYABLE_MAX_ASYNC_TOTAL_IN_FLIGHT
 	return out
