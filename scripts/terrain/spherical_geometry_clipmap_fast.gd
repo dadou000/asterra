@@ -21,8 +21,8 @@ const FAST_MATERIAL_TEXEL_M := Vector3(16.0, 256.0, 4096.0)
 # Twelve 30-degree wedges keep culling useful without turning the terrain into a
 # draw-call-heavy renderer. At a normal horizontal view roughly half are visible.
 const SECTOR_COUNT: int = 12
-const SECTOR_HALF_ANGLE: float = PI / float(SECTOR_COUNT)
-const SECTOR_CULL_MARGIN_RAD: float = deg_to_rad(20.0)
+const SECTOR_HALF_ANGLE: float = 0.2617993877991494
+const SECTOR_CULL_MARGIN_RAD: float = 0.3490658503988659
 const SECTOR_SHOW_ALL_RADIAL_DOT: float = 0.65
 
 var _last_visible_request_msec: int = -1000000
@@ -179,13 +179,13 @@ func _update_sector_visibility() -> void:
 
 	_visible_sector_count = 0
 	for sector: int in _sector_batches.size():
-		var visible: bool = show_all
+		var sector_visible: bool = show_all
 		if not show_all:
 			var angle: float = (float(sector) + 0.5) * TAU / float(SECTOR_COUNT)
 			var sector_dir := Vector2(cos(angle), sin(angle))
-			visible = sector_dir.dot(forward_2d) >= cos_limit
-		_sector_batches[sector].visible = visible
-		if visible:
+			sector_visible = sector_dir.dot(forward_2d) >= cos_limit
+		_sector_batches[sector].visible = sector_visible
+		if sector_visible:
 			_visible_sector_count += 1
 
 
