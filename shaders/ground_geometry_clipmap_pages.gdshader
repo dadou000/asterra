@@ -5,6 +5,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 // Persistent sparse GPU height cache. The page-table texture stores
 // (level*6+face+1, tile_x, tile_y, atlas_slot+1) in RGBA32F.
+// alpha == 0 is an empty hash cell; alpha < 0 is a tombstone left by eviction.
 uniform sampler2D u_height_page_atlas : filter_nearest, repeat_disable;
 uniform sampler2D u_height_page_table : filter_nearest, repeat_disable;
 uniform float u_page_atlas_ready = 0.0;
@@ -96,8 +97,14 @@ int page_slot(int level, int face, int tile_x, int tile_y) {
 		vec2 uv = vec2((float(table_index) + 0.5) / float(capacity), 0.5);
 		vec4 meta = textureLod(u_height_page_table, uv, 0.0);
 		int stored_slot = int(floor(meta.a + 0.5));
-		if (stored_slot <= 0) {
+		if (stored_slot == 0) {
+			// A true empty entry terminates the open-addressed search.
 			return -1;
+		}
+		if (stored_slot < 0) {
+			// Tombstone: an evicted page used to occupy this cell. Keep probing or
+			// pages farther down the collision chain would become unreachable.
+			continue;
 		}
 		if (int(floor(meta.r + 0.5)) == page_code
 				&& int(floor(meta.g + 0.5)) == tile_x
