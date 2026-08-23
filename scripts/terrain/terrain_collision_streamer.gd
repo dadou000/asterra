@@ -2,16 +2,22 @@ class_name TerrainCollisionStreamer
 extends Node3D
 ## Camera-local physics terrain, independent of visual quadtree residency.
 ##
-## Visual refinement can now split, morph, cancel, or retain parents without
-## changing the collision world. A compact fixed-depth tile set follows the
-## observer. Its height samples come from the same persistent GroundHeightStore
-## as the geometry clipmap, so visual and physics streaming share already-baked
-## terrain instead of independently evaluating the procedural surface.
+## Collision consumes the same immutable GroundHeightStore pages as the visual
+## geometry clipmap. Source pages are requested before a collision worker starts,
+## preventing the worker from becoming an accidental first-time terrain baker.
+## The active bubble is biased in the direction of travel so fast vehicles get
+## physical ground ahead of them instead of only around their previous position.
 
 const REFRESH_INTERVAL := 0.10
 const MAX_CONCURRENT_BUILDS := 2
 const KEY_AXIS_BITS := 20
 const KEY_AXIS_MASK := (1 << KEY_AXIS_BITS) - 1
+const HEIGHT_PRIORITY_COLLISION := -1000.0
+const SOURCE_PROBE_STEPS := 2 # 3x3 probes: corners, edge middles, centre
+const MOTION_FILTER := 0.30
+const TELEPORT_SPEED_MPS := 2200.0
+const COLLISION_LOOKAHEAD_SECONDS := 1.6
+const COLLISION_LOOKAHEAD_MAX_M := 240.0
 
 var cfg: GenConfig
 var observer := Vec3D.new(0.0, 0.0, 0.0)
@@ -26,6 +32,12 @@ var _pending_tasks: Array[int] = []
 var _in_flight := 0
 var _shutting_down := false
 
+var _have_motion_sample := false
+var _last_motion_observer := Vec3D.new(0.0, 0.0, 0.0)
+var _motion_dir := Vector3.ZERO
+var _motion_speed := 0.0
+var _priority_point := Vec3D.new(0.0, 0.0, 0.0)
+
 
 func _ready() -> void:
 	process_priority = 8
@@ -37,6 +49,8 @@ func configure(value: GenConfig) -> void:
 	_clear()
 	cfg = value
 	_refresh_left = 0.0
+	_have_motion_sample = false
+	_motion_speed = 0.0
 
 
 func set_observer(value: Vec3D, active := true) -> void:
@@ -51,6 +65,7 @@ func _process(dt: float) -> void:
 	_drain_results()
 	if cfg == null or not _have_observer or not _active or _shutting_down:
 		return
+	_update_motion(dt)
 	_refresh_left -= dt
 	if _refresh_left <= 0.0:
 		_refresh_left = REFRESH_INTERVAL
@@ -58,12 +73,57 @@ func _process(dt: float) -> void:
 	_pump()
 
 
+func _update_motion(dt: float) -> void:
+	if not _have_motion_sample:
+		_last_motion_observer = observer.dup()
+		_have_motion_sample = true
+		_motion_speed = 0.0
+		_motion_dir = Vector3.ZERO
+		return
+
+	var delta := observer.sub(_last_motion_observer)
+	_last_motion_observer = observer.dup()
+	var distance := delta.length()
+	if distance <= 1e-4:
+		_motion_speed = lerpf(_motion_speed, 0.0, MOTION_FILTER)
+		return
+	var safe_dt := maxf(dt, 1.0 / 240.0)
+	var instant_speed := distance / safe_dt
+	if instant_speed > TELEPORT_SPEED_MPS:
+		_motion_speed = 0.0
+		_motion_dir = Vector3.ZERO
+		return
+
+	var up := observer.normalized().to_v3()
+	var raw_dir := delta.mul(1.0 / distance).to_v3()
+	var tangent := raw_dir - up * raw_dir.dot(up)
+	if tangent.length_squared() > 1e-8:
+		_motion_dir = tangent.normalized()
+	_motion_speed = lerpf(_motion_speed, instant_speed, MOTION_FILTER)
+
+
 func _refresh_set() -> void:
 	var depth := clampi(cfg.collision_stream_depth, 1, 19)
 	var divisions := 1 << depth
 	var tile_arc := PI * 0.5 * cfg.planet_radius / float(divisions)
-	var radius := maxf(cfg.collision_stream_radius, tile_arc)
-	var center := observer.normalized().to_v3()
+	var base_radius := maxf(cfg.collision_stream_radius, tile_arc)
+	var current_center := observer.normalized().to_v3()
+
+	# Shift half the extra coverage forward and enlarge the radius by the same
+	# amount. This preserves approximately the configured radius behind the player
+	# while extending collision significantly farther in the direction of travel.
+	var lookahead := 0.0
+	if _motion_speed > 1.0 and _motion_dir.length_squared() > 0.5:
+		lookahead = minf(_motion_speed * COLLISION_LOOKAHEAD_SECONDS,
+			COLLISION_LOOKAHEAD_MAX_M)
+	var bias := lookahead * 0.5
+	var center := current_center
+	if bias > 0.0:
+		center = (current_center + _motion_dir * (bias / cfg.planet_radius)).normalized()
+	var radius := base_radius + bias
+	_priority_point = observer.add(Vec3D.from_v3(_motion_dir).mul(lookahead)) \
+		if lookahead > 0.0 else observer.dup()
+
 	var tangent := CubeSphere.tangent_basis(center)
 	var east: Vector3 = tangent[0]
 	var north: Vector3 = tangent[1]
@@ -98,14 +158,14 @@ func _refresh_set() -> void:
 		var old: Dictionary = _entries[key]
 		old["abandoned"] = true
 		old["revision"] = int(old["revision"]) + 1
+		var cancel: TerrainBuildCancel = old.get("cancel")
+		if cancel != null:
+			cancel.cancel()
 		var body: StaticBody3D = old["body"]
 		if body != null:
 			body.queue_free()
 		_entries.erase(key)
 
-	# Newly discovered entries are normally only a thin ring. Sort by distance so
-	# a cold cache first spends its time on collision immediately under/ahead of
-	# the observer rather than on an arbitrary scan-order tile.
 	_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return _entry_distance_sq(a) < _entry_distance_sq(b))
 
@@ -114,6 +174,7 @@ func _queue_entry(entry: Dictionary) -> void:
 	if int(entry["state"]) != 0 or bool(entry["abandoned"]):
 		return
 	entry["state"] = 1
+	_request_entry_source(entry)
 	_queue.append(entry)
 
 
@@ -124,13 +185,64 @@ func _entry_distance_sq(entry: Dictionary) -> float:
 		-1.0 + (float(int(entry["i"])) + 0.5) * size,
 		-1.0 + (float(int(entry["j"])) + 0.5) * size)
 	var p := Vec3D.from_v3(d).mul(cfg.planet_radius)
-	return p.sub(observer).length_sq()
+	return p.sub(_priority_point).length_sq()
+
+
+func _entry_cache_level(entry: Dictionary) -> int:
+	var depth := int(entry["depth"])
+	var divisions := 1 << depth
+	var size := 2.0 / float(divisions)
+	var n := maxi(cfg.collision_grid, 4)
+	var sample_spacing := size * PI * 0.25 * cfg.planet_radius / float(n)
+	return GroundHeightStore.level_for_spacing(sample_spacing)
+
+
+func _entry_probe_dirs(entry: Dictionary) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	var depth := int(entry["depth"])
+	var divisions := 1 << depth
+	var size := 2.0 / float(divisions)
+	var u0 := -1.0 + float(int(entry["i"])) * size
+	var v0 := -1.0 + float(int(entry["j"])) * size
+	var face := int(entry["face"])
+	for py in SOURCE_PROBE_STEPS + 1:
+		var v := v0 + size * float(py) / float(SOURCE_PROBE_STEPS)
+		for px in SOURCE_PROBE_STEPS + 1:
+			var u := u0 + size * float(px) / float(SOURCE_PROBE_STEPS)
+			out.append(CubeSphere.face_uv_to_dir(face, u, v))
+	return out
+
+
+func _request_entry_source(entry: Dictionary) -> void:
+	if not Planet.ready_state:
+		return
+	var level := _entry_cache_level(entry)
+	for d in _entry_probe_dirs(entry):
+		GroundHeightStore.request_sample(d, level, HEIGHT_PRIORITY_COLLISION)
+
+
+func _entry_source_ready(entry: Dictionary) -> bool:
+	if not Planet.ready_state:
+		return false
+	var level := _entry_cache_level(entry)
+	for d in _entry_probe_dirs(entry):
+		if not GroundHeightStore.is_sample_resident(d, level):
+			return false
+	return true
 
 
 func _pump() -> void:
-	while _in_flight < MAX_CONCURRENT_BUILDS and not _queue.is_empty():
+	# Bound the scan to the queue size at entry. If every collision patch is waiting
+	# for height I/O, re-appending them must not create an infinite loop this frame.
+	var attempts := _queue.size()
+	while _in_flight < MAX_CONCURRENT_BUILDS and attempts > 0 and not _queue.is_empty():
 		var entry: Dictionary = _queue.pop_front()
+		attempts -= 1
 		if bool(entry["abandoned"]) or int(entry["state"]) != 1:
+			continue
+		if not _entry_source_ready(entry):
+			_request_entry_source(entry)
+			_queue.append(entry)
 			continue
 		_start(entry)
 
@@ -166,13 +278,12 @@ static func _build_tile(face: int, u0: float, v0: float, size: float, n: int,
 	if cancel != null and cancel.is_cancelled():
 		return {"cancelled": true}
 
-	# Choose the persistent height level nearest this physics grid's actual sample
-	# spacing. With the current depth-15/16x16 setup this resolves to level 2
-	# (~3 m), which is also one of the visual clipmap levels and is usually already
-	# resident in GroundHeightStore's RAM cache.
 	var sample_spacing := size * PI * 0.25 * radius / float(n)
 	var cache_level := GroundHeightStore.level_for_spacing(sample_spacing)
 	var center := CubeSphere.face_uv_to_dir_d(face, u0 + size * 0.5, v0 + size * 0.5)
+	# The main-thread preflight has already made the relevant source pages resident.
+	# This remains the exact/blocking accessor so physics never silently receives a
+	# coarse visual fallback.
 	var center_h := GroundHeightStore.sample_height(center.to_v3(), cache_level, snap)
 	var pivot := center.mul(radius + center_h)
 	var vertices := PackedVector3Array()
