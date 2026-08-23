@@ -2,8 +2,9 @@ extends "res://scripts/terrain/planet_height_page_atlas.gd"
 ## Hardware-safe page-table variant for the spherical terrain renderer.
 ##
 ## Keeps the 4096-page atlas and an 8192-entry page table, bounds eviction scans,
-## and batches page-table publication so streaming no longer creates a new 1x1
-## ImageTexture/RID for every insert and tombstone.
+## batches page-table publication, and publishes a parallel page-birth table used
+## by the vertex shader to morph newly resident fine pages out of their parent
+## surface instead of snapping in as rectangular blocks.
 
 const SAFE_PAGE_TABLE_CAPACITY: int = 8192
 const SAFE_PAGE_TABLE_MAX_PROBES: int = 12
@@ -13,6 +14,13 @@ const TABLE_FLUSH_INTERVAL_MS: int = 33
 var _eviction_cursor: int = 0
 var _table_dirty: bool = false
 var _next_table_flush_msec: int = 0
+
+# Same index space as the page hash table. Birth time is seconds since engine
+# startup. It lives in a separate texture so the integer page metadata remains
+# exact and the incremental hash fix cannot be disturbed by fade state.
+var _page_birth_table: DrawableTexture2D
+var _table_birth_seconds := PackedFloat32Array()
+var _key_birth_seconds: Dictionary = {}
 
 
 func _ready() -> void:
@@ -44,6 +52,10 @@ func table_max_probes() -> int:
 	return SAFE_PAGE_TABLE_MAX_PROBES
 
 
+func page_birth_texture() -> Texture2D:
+	return _page_birth_table
+
+
 func _reset_cache() -> void:
 	_key_to_slot.clear()
 	_slots.clear()
@@ -58,6 +70,7 @@ func _reset_cache() -> void:
 	_next_prune_msec = 0
 	_table_dirty = false
 	_next_table_flush_msec = 0
+	_key_birth_seconds.clear()
 
 	_atlas = DrawableTexture2D.new()
 	_atlas.setup(ATLAS_WIDTH, ATLAS_HEIGHT,
@@ -66,6 +79,9 @@ func _reset_cache() -> void:
 	_reset_table_cpu()
 	_page_table = DrawableTexture2D.new()
 	_page_table.setup(SAFE_PAGE_TABLE_CAPACITY, 1,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
+	_page_birth_table = DrawableTexture2D.new()
+	_page_birth_table.setup(SAFE_PAGE_TABLE_CAPACITY, 1,
 		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
 
 	_pages_uploaded = 0
@@ -90,6 +106,8 @@ func _reset_table_cpu() -> void:
 	_table_y.fill(0)
 	_table_slots.resize(SAFE_PAGE_TABLE_CAPACITY)
 	_table_slots.fill(0)
+	_table_birth_seconds.resize(SAFE_PAGE_TABLE_CAPACITY)
+	_table_birth_seconds.fill(0.0)
 	_key_to_table_index.clear()
 	_table_tombstones = 0
 
@@ -136,6 +154,14 @@ func _allocate_slot() -> int:
 	_slots[chosen] = {}
 	_evictions += 1
 	return chosen
+
+
+func _set_table_entry_cpu(index: int, key: String, page_code: int,
+		tile_x: int, tile_y: int, slot_plus_one: int) -> void:
+	super._set_table_entry_cpu(index, key, page_code, tile_x, tile_y, slot_plus_one)
+	if not _key_birth_seconds.has(key):
+		_key_birth_seconds[key] = float(Time.get_ticks_usec()) / 1000000.0
+	_table_birth_seconds[index] = float(_key_birth_seconds[key])
 
 
 func _insert_table_entry(key: String, level: int, face: int,
@@ -194,14 +220,17 @@ func _remove_table_entry(key: String) -> void:
 	var index: int = int(_key_to_table_index.get(key, -1))
 	if index < 0 or index >= SAFE_PAGE_TABLE_CAPACITY:
 		_key_to_table_index.erase(key)
+		_key_birth_seconds.erase(key)
 		return
 	_key_to_table_index.erase(key)
+	_key_birth_seconds.erase(key)
 	if _table_slots[index] <= 0:
 		return
 	_table_codes[index] = 0
 	_table_x[index] = 0
 	_table_y[index] = 0
 	_table_slots[index] = -1
+	_table_birth_seconds[index] = 0.0
 	_table_tombstones += 1
 	_mark_table_dirty()
 
@@ -212,9 +241,10 @@ func _mark_table_dirty() -> void:
 
 
 func _flush_table_batch() -> void:
-	if _page_table == null:
+	if _page_table == null or _page_birth_table == null:
 		return
 	var table_image: Image = Image.create(SAFE_PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
+	var birth_image: Image = Image.create(SAFE_PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
 	for index: int in SAFE_PAGE_TABLE_CAPACITY:
 		var state: int = _table_slots[index]
 		if state == 0:
@@ -222,10 +252,16 @@ func _flush_table_batch() -> void:
 		table_image.set_pixel(index, 0, Color(
 			float(_table_codes[index]), float(_table_x[index]),
 			float(_table_y[index]), float(state)))
-	var source: ImageTexture = ImageTexture.create_from_image(table_image)
-	if source == null:
+		if state > 0:
+			birth_image.set_pixel(index, 0, Color(_table_birth_seconds[index], 0.0, 0.0, 1.0))
+
+	var table_source: ImageTexture = ImageTexture.create_from_image(table_image)
+	var birth_source: ImageTexture = ImageTexture.create_from_image(birth_image)
+	if table_source == null or birth_source == null:
 		return
-	_page_table.blit_rect(Rect2i(0, 0, SAFE_PAGE_TABLE_CAPACITY, 1), source,
+	_page_table.blit_rect(Rect2i(0, 0, SAFE_PAGE_TABLE_CAPACITY, 1), table_source,
+		Color.WHITE, 0, _direct_copy_material())
+	_page_birth_table.blit_rect(Rect2i(0, 0, SAFE_PAGE_TABLE_CAPACITY, 1), birth_source,
 		Color.WHITE, 0, _direct_copy_material())
 	_table_dirty = false
 
@@ -242,6 +278,13 @@ func _rebuild_page_table_full() -> void:
 			_table_insert_failures += 1
 	_flush_table_batch()
 	_table_full_rebuilds += 1
+
+
+func stats() -> Dictionary:
+	var out: Dictionary = super.stats()
+	out["page_birth_table"] = true
+	out["page_birth_entries"] = _key_birth_seconds.size()
+	return out
 
 
 static func _safe_page_hash(page_code: int, tile_x: int, tile_y: int) -> int:
