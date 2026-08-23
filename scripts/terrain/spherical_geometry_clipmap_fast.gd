@@ -11,6 +11,8 @@ const FAST_REQUEST_GRID_STEPS: int = 9
 const MIN_VISIBLE_REQUEST_INTERVAL_MS: int = 400
 const REQUEST_INNER_SKIP_Q: float = 0.42
 const SPARSE_VISUAL_MAX_LEVEL: int = 6
+const FAST_MATERIAL_RES: float = 64.0
+const FAST_MATERIAL_TEXEL_M := Vector3(16.0, 256.0, 4096.0)
 
 var _last_visible_request_msec: int = -1000000
 
@@ -79,6 +81,28 @@ func _request_directions_for_level(level: int) -> Array[Vector3]:
 			result.append(_direction_for_offset(_center_dir, _center_right, _center_up,
 				offset, Planet.cfg.planet_radius))
 	return result
+
+
+func _sync_material_control() -> void:
+	var source: Node = get_node_or_null("/root/MaterialClipmap")
+	if source == null:
+		_material.set_shader_parameter("u_material_clipmap_ready", 0.0)
+		return
+	var value: Variant = source.get("_texture")
+	if not (value is Texture2DArray):
+		_material.set_shader_parameter("u_material_clipmap_ready", 0.0)
+		return
+	var texture: Texture2DArray = value
+	if texture == _last_material_control:
+		return
+	_last_material_control = texture
+	_material.set_shader_parameter("u_material_clipmap", texture)
+	_material.set_shader_parameter("u_material_clipmap_ready", 1.0)
+	_material.set_shader_parameter("u_material_center", source.get("_center"))
+	_material.set_shader_parameter("u_material_right", source.get("_right"))
+	_material.set_shader_parameter("u_material_up", source.get("_up"))
+	_material.set_shader_parameter("u_material_res", FAST_MATERIAL_RES)
+	_material.set_shader_parameter("u_material_texel_m", FAST_MATERIAL_TEXEL_M)
 
 
 func gpu_stream_stats() -> Dictionary:
