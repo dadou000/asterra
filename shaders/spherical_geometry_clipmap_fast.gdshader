@@ -15,7 +15,9 @@ uniform float u_page_tile_cells = 32.0;
 uniform float u_page_tile_verts = 33.0;
 uniform float u_finest_cells = 2097152.0;
 
-uniform sampler2DArray u_orbit_elevation : filter_nearest, repeat_disable;
+// The orbit elevation has a one-texel cross-face gutter. Hardware linear
+// filtering therefore replaces the older four-texel manual bilinear path.
+uniform sampler2DArray u_orbit_elevation : filter_linear, repeat_disable;
 uniform float u_orbit_ready = 0.0;
 uniform float u_orbit_face_res = 0.0;
 
@@ -35,9 +37,11 @@ varying vec3 v_planet;
 varying vec3 v_render;
 varying float v_valid;
 varying float v_cap_valid;
+varying float v_level;
 
 const float ASTERRA_Q = 0.7853981633974483;
 const int ASTERRA_MAX_LEVEL = 14;
+const int ASTERRA_SPARSE_MAX_LEVEL = 6;
 const int ASTERRA_MAX_TABLE_PROBES = 12;
 const int ASTERRA_SPARSE_FALLBACK_STEPS = 2;
 const float RING_INNER_Q = 0.44;
@@ -49,11 +53,21 @@ float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
 }
 
-vec3 direction_for_offset(vec2 offset_m) {
+vec3 direction_for_offset(vec2 offset_m, int level) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) {
 		return normalize(u_center_dir);
 	}
+
+	// Through L6 the complete ring is only a few kilometres across. A normalized
+	// tangent projection is sub-metre close to the exponential map there and
+	// avoids sin/cos for the million or so near-field vertices processed each frame.
+	if (level <= ASTERRA_SPARSE_MAX_LEVEL) {
+		return normalize(u_center_dir
+			+ u_center_right * (offset_m.x / u_planet_radius)
+			+ u_center_up * (offset_m.y / u_planet_radius));
+	}
+
 	float raw_theta = arc / max(u_planet_radius, 1.0);
 	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
 	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
@@ -173,8 +187,6 @@ vec2 sample_exact_level(vec3 d, int level) {
 	float ty = fy - float(y0);
 	int tile_cells = int(u_page_tile_cells + 0.5);
 
-	// 31/32 samples in each axis stay inside one 33x33 page. Resolve the hash
-	// table once in that common case instead of four times for bilinear sampling.
 	ivec2 tile0 = tile_address_for_vertex(x0, y0, cells);
 	ivec2 tile1 = tile_address_for_vertex(x1, y1, cells);
 	if (tile0.x == tile1.x && tile0.y == tile1.y) {
@@ -193,7 +205,6 @@ vec2 sample_exact_level(vec3 d, int level) {
 		return vec2(mix(mix(h00, h10, tx), mix(h01, h11, tx), ty), 1.0);
 	}
 
-	// Page-edge samples are uncommon and may legitimately span up to four pages.
 	vec2 h00 = height_vertex(level, face, x0, y0, cells);
 	vec2 h10 = height_vertex(level, face, x1, y0, cells);
 	vec2 h01 = height_vertex(level, face, x0, y1, cells);
@@ -208,14 +219,18 @@ vec2 orbit_fallback(vec3 d) {
 	if (u_orbit_ready < 0.5 || u_orbit_face_res <= 0.5) {
 		return vec2(0.0, 0.0);
 	}
-	return vec2(surface_visual_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius), 1.0);
+	vec3 coord = surface_array_coord(d, u_orbit_face_res);
+	return vec2(texture(u_orbit_elevation, coord).r, 1.0);
 }
 
 vec2 sample_best_level(vec3 d, int requested_level) {
+	if (requested_level > ASTERRA_SPARSE_MAX_LEVEL) {
+		return orbit_fallback(d);
+	}
 	if (u_page_atlas_ready > 0.5) {
 		for (int step = 0; step < ASTERRA_SPARSE_FALLBACK_STEPS; step++) {
 			int candidate = requested_level + step;
-			if (candidate > ASTERRA_MAX_LEVEL) {
+			if (candidate > ASTERRA_SPARSE_MAX_LEVEL) {
 				break;
 			}
 			vec2 result = sample_exact_level(d, candidate);
@@ -243,6 +258,11 @@ float coarse_sink_weight(vec2 cell, int level) {
 }
 
 vec2 clip_height(vec3 d, vec2 cell, int level) {
+	// Far geometry is already sampling the same orbit field at every level, so it
+	// does not need a second parent sample in the morph band.
+	if (level > ASTERRA_SPARSE_MAX_LEVEL) {
+		return orbit_fallback(d);
+	}
 	vec2 fine = sample_best_level(d, level);
 	if (fine.y < 0.5) {
 		return fine;
@@ -266,7 +286,7 @@ void vertex() {
 	float spacing = ring_spacing(level);
 	vec2 offset_m = cell * spacing;
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
-	vec3 d = direction_for_offset(offset_m);
+	vec3 d = direction_for_offset(offset_m, level);
 	vec2 h = clip_height(d, cell, level);
 	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
 	float height = (u_height_enabled > 0.5 ? h.x : 0.0) - sink;
@@ -276,6 +296,7 @@ void vertex() {
 	v_render = p - u_origin;
 	v_valid = h.y;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
+	v_level = float(level);
 	VERTEX = v_render;
 }
 
@@ -295,8 +316,12 @@ void fragment() {
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
-	vec4 surf = material_clipmap_surface(v_planet, u_planet_radius,
-		vec4(0.38, 0.38, 0.12, 0.0));
+	vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
+	// Material control is useful in the playable/regional band. Very coarse rings
+	// use the fallback classification and avoid a second virtual-texture lookup.
+	if (v_level <= 8.5) {
+		surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
+	}
 
 	vec3 soil = vec3(0.24, 0.17, 0.105);
 	vec3 grass = vec3(0.17, 0.255, 0.095);
