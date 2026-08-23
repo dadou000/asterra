@@ -244,7 +244,7 @@ vec2 sample_best_level(vec3 d, int requested_level) {
 
 float fine_morph_weight(vec2 cell) {
 	float half_cells = u_grid_cells * 0.5;
-	float q = max(abs(cell.x), abs(cell.y)) / max(half_cells, 1.0);
+	float q = length(cell) / max(half_cells, 1.0);
 	return smoothstep(FINE_MORPH_START_Q, 1.0, q);
 }
 
@@ -253,7 +253,7 @@ float coarse_sink_weight(vec2 cell, int level) {
 		return 0.0;
 	}
 	float half_cells = u_grid_cells * 0.5;
-	float q = max(abs(cell.x), abs(cell.y)) / max(half_cells, 1.0);
+	float q = length(cell) / max(half_cells, 1.0);
 	return 1.0 - smoothstep(RING_INNER_Q, RING_HANDOFF_Q, q);
 }
 
