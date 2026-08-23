@@ -22,6 +22,8 @@ func _ready() -> void:
 
 
 ## Compatibility name retained for the Phase-1 harness. There are no visual roots.
+## TerrainDebug also calls this after enabling generated wireframe indices, so ask
+## the spherical renderer to recreate only its immutable static topology.
 func build_roots() -> void:
 	cfg = Planet.cfg
 	roots.clear()
@@ -29,6 +31,9 @@ func build_roots() -> void:
 		return
 	if _collision_streamer != null:
 		_collision_streamer.configure(cfg)
+	var clipmap: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	if clipmap != null and clipmap.has_method("rebuild_static_topology"):
+		clipmap.rebuild_static_topology()
 	_stats["chunks"] = 0
 	_stats["nodes"] = 0
 	_stats["queued"] = 0
