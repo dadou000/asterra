@@ -12,8 +12,6 @@ The clipmap is displaced entirely on the GPU from the persistent sparse height-p
 
 Reference camera: 3840x2160, vertical FOV 68 degrees.
 
-Pixel focal length:
-
 ```text
 f_px = 2160 / (2 * tan(68deg / 2)) = 1601.17 px
 ```
@@ -26,9 +24,7 @@ d_16 = s * 1601.17 / 16 = 100.073 * s
 
 Because adjacent clipmap levels double vertex spacing, the outgoing fine level should be about 8 px/vertex at the handoff so the incoming coarse level is about 16 px/vertex.
 
-The exact reusable topology is therefore **400 x 400 cells** (401 x 401 logical vertices), not 192 x 192. 192 cells would put the fine level near 16.7 px/vertex at its edge but the incoming 2x-coarser level near 33.4 px/vertex. A 400-cell grid gives a 200-cell half-width, which puts the 2x-coarser level at approximately 16 px/vertex at the shared handoff.
-
-With the current ~0.75 m finest spacing, nominal handoff radii are:
+The reusable topology is therefore **400 cells across** (401 x 401 logical grid vertices). A 200-cell radius places the incoming 2x-coarser level at approximately 16 px/vertex at the shared handoff.
 
 | Level | Vertex spacing | Outer/handoff radius |
 | ---: | ---: | ---: |
@@ -48,13 +44,19 @@ With the current ~0.75 m finest spacing, nominal handoff radii are:
 | L13 | ~6.144 km | ~1,229.7 km |
 | L14 | ~12.288 km | ~2,459.4 km |
 
-Asterra's radius is about 1,000 km, so the maximum visible surface cap approaches `pi*R/2 ~= 1,571 km`. L14 is therefore sufficient to cover the visible hemisphere.
+Asterra's radius is about 1,000 km, so the maximum visible surface cap approaches `pi*R/2 ~= 1,571 km`. L14 is sufficient to cover the visible hemisphere.
 
-## Geometry
+## Concentric geometry
 
-- L0 is one full square grid.
-- L1-L14 share one annular strip topology and are drawn as instances.
-- Geometry is projected with the spherical exponential map, not a large tangent-plane approximation:
+The logical vertex coordinates still come from a regular Cartesian 401 x 401 lattice because that is efficient for height sampling and VERTEX_ID reconstruction, but **only circular cells are indexed**:
+
+- L0 is a circular disc with radius 200 cells.
+- L1-L14 are circular annuli with outer radius 200 cells and inner radius about 88 cells.
+- The morph and sink weights use Euclidean radius `length(cell)`, not `max(abs(x), abs(y))`.
+
+This means the rendered hierarchy is genuinely concentric rather than a stack of square rings.
+
+Geometry is projected onto the sphere. Near-field L0-L6 uses a normalized tangent projection for speed; far levels use the spherical exponential map:
 
 ```text
 arc = length(offset)
@@ -64,23 +66,19 @@ dir = center * cos(theta) + tangent * sin(theta)
 position = dir * (planet_radius + height)
 ```
 
-Only the visible spherical cap is required. The active outer level follows camera altitude/horizon distance. Vertices in the square corners beyond that cap are clamped just outside the cap before fragment rejection, so very large L14 corners cannot wrap around the back side of the sphere.
+Only the visible spherical cap is required. The active outer level follows camera altitude/horizon distance.
 
 ## Seam-free handoff
 
-Adjacent levels overlap. The inner edge of the coarse ring begins inside the outer edge of the fine ring.
+Adjacent levels overlap:
 
-For the 400-cell topology:
-
-- nominal fine outer radius: 200 cells
-- coarse nominal shared boundary: 100 coarse cells
-- coarse geometry begins at about 88 coarse cells (~12% overlap)
-- fine height morphs toward the parent over approximately the last 12.5% of its radius
+- fine outer radius: 200 cells
+- coarse shared-boundary radius: 100 coarse cells
+- coarse geometry begins near 88 coarse cells (~12% overlap)
+- fine height morphs toward the parent over the outer 12.5%
 - coarse geometry is radially sunk at its inner edge and rises to the true parent surface at the shared boundary
 
-At the exact shared boundary the fine level has morphed to the parent height and the coarse level has zero sink, so both surfaces agree. Inside the overlap, the coarse surface is deliberately behind the fine surface.
-
-The sink is radial:
+At the shared circular boundary the fine level has morphed to the parent height and coarse sink reaches zero. Inside the overlap the coarse surface remains deliberately behind the fine surface.
 
 ```text
 position = dir * (planet_radius + height - sink)
@@ -88,54 +86,63 @@ position = dir * (planet_radius + height - sink)
 
 No quadtree stitching, skirts, T-junction repair, or cube-face geometry seams are required.
 
-## Height data
+## Sector culling
 
-The persistent 33x33 sparse page system becomes planet-wide:
+The circular outer annuli are split into **12 static 30-degree sectors**. Each sector contains every currently active L1-L14 instance, so culling one sector removes that angular wedge from all outer LODs in one node.
 
-```text
-L0  ~0.75 m
-L1  ~1.5 m
-...
-L14 ~12.3 km
-```
+For ordinary near-horizontal views, only sectors intersecting the camera's horizontal view plus a conservative margin are enabled. Looking steeply toward or away from the planet disables sector culling and renders all sectors to avoid false negatives.
 
-Runtime lookup order is:
+Typical horizontal view:
 
 ```text
-requested sparse level -> progressively coarser sparse parent -> orbit macro texture fallback
+12 total sectors
+~5-7 visible sectors
 ```
 
-The orbit texture is an immediate safety fallback while new sparse pages are still loading or being compiled. Missing pages therefore reduce detail instead of creating holes.
+This increases draw-call count slightly but can cut outer-ring vertex submissions close to half. L0 remains a single circular batch.
 
-Target cache sizes for the 15-level renderer:
+## Height data and runtime backpressure
 
-- GPU atlas: 4096 pages (64 x 64 slots, 33 x 33 texels each). The logical R32F height payload is ~17 MiB; the current Godot `DrawableTexture2D` implementation uses RGBAF for this atlas, so the allocated atlas is ~68 MiB until an RF drawable path replaces it.
-- GPU page table: 16384 entries
-- RAM page cache: 8192 pages
+The persistent 33 x 33 sparse page hierarchy exists through L14, but real-time visual refinement is intentionally bounded:
 
-Visible pages are demand touched and protected. The page-table metadata must always be copied with blending disabled.
+```text
+L0-L6: sparse GPU pages when already cached/precompiled
+L7-L14: orbit elevation texture directly
+```
+
+Broad visual requests are RAM/disk-only. They never trigger procedural runtime terrain baking. Missing visual pages therefore reduce detail instead of rebuilding the planet on the CPU.
+
+Collision and small local predictive prefetch may still synthesize missing pages, with strict queue backpressure.
+
+Current GPU cache:
+
+- height atlas: 4096 pages, 64 x 64 slots
+- page table: 8192 entries (below Godot DrawableTexture2D's 16383-dimension limit)
+- hash probe budget: 12
+- page-table changes are batched rather than creating a 1 x 1 ImageTexture per mutation
+- atlas eviction scans a bounded rotating window instead of all 4096 slots
 
 ## Shading
 
-The vertex shader performs one requested sparse height path for ordinary vertices. Only vertices in the outer morph band evaluate the parent height as a second path. Terrain normals are reconstructed in the fragment shader with screen-space derivatives. The previous five `planet_position()` evaluations per vertex are not used.
+Near sparse samples use one page-table lookup in the normal same-page bilinear case. The parent height is evaluated only in the outer morph band.
 
-This is required because a 400-cell, 15-level clipmap is intentionally vertex-rich but remains practical when normal vertices use one sparse height path rather than five.
+L7+ samples the hardware-linearly-filtered orbit elevation directly. Terrain normals are reconstructed in the fragment shader with screen-space derivatives instead of evaluating neighbouring heights in the vertex shader.
 
 ## Runtime visual architecture
 
 ```text
 camera
   -> snapped spherical clipmap centre
-  -> L0 + active L1..Ln static instances
-  -> sparse GPU page lookup
-  -> parent fallback
-  -> orbit macro fallback
-  -> radial morph + sink
-  -> final planet surface
+  -> circular L0 disc
+  -> view-culled circular L1..Ln sectors
+  -> L0-L6 sparse GPU height pages
+  -> L7+ orbit elevation
+  -> radial parent morph + radial coarse sinking
+  -> final spherical surface
 ```
 
-`FastPlanetTerrain`/`PlanetTerrain` remain compatibility shells for harness and collision ownership only. They must not create visual terrain geometry.
+`FastPlanetTerrain`/`PlanetTerrain` remain compatibility shells for harness and collision ownership only. They do not create visual terrain geometry.
 
 ## Physics
 
-Physics remains CPU-side and reads the same `GroundHeightStore` pages. Visual GPU terrain and CPU collision share one authoritative height dataset; no GPU readback is required.
+Physics remains CPU-side and reads the same `GroundHeightStore` data. Visual GPU terrain and CPU collision share one authoritative height dataset; no GPU readback is required.
