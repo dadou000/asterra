@@ -23,7 +23,7 @@ var _last_orbit_res: int = -1
 
 
 func _ready() -> void:
-	# Intentionally no super._ready(): that is the old CPU terrain pipeline.
+	# Intentionally no super._ready(): that was the old CPU terrain pipeline.
 	process_priority = 10
 	add_to_group("sparse_planet_terrain")
 
@@ -52,6 +52,12 @@ func build_roots() -> void:
 		if _planet_batch != null:
 			_planet_batch.visible = false
 		return
+
+	# Recreate only the immutable topology. This is cheap (~37k dummy vertices)
+	# and lets TerrainDebug turn wireframe generation on after startup without
+	# resurrecting any dynamic terrain-building path.
+	if _planet_batch != null and _planet_batch.multimesh != null:
+		_planet_batch.multimesh.mesh = _build_static_face_mesh()
 
 	_ground_mat.set_shader_parameter("u_planet_radius", cfg.planet_radius)
 	_ground_mat.set_shader_parameter("u_atmosphere_height", cfg.atmosphere_height)
@@ -102,7 +108,7 @@ func _process(_dt: float) -> void:
 
 
 func stats() -> Dictionary:
-	return _stats
+	return _stats.duplicate()
 
 
 func debug_materials() -> Array:
@@ -161,7 +167,9 @@ func _build_static_planet_batch() -> void:
 	_planet_batch.name = "SparsePlanetSurface"
 	_planet_batch.multimesh = mm
 	_planet_batch.material_override = _ground_mat
-	_planet_batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	# The local clipmap provides near-field terrain shadows. Casting a single
+	# planet-scale mesh into Godot's local cascades wastes fill and causes acne.
+	_planet_batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_planet_batch)
 
 
