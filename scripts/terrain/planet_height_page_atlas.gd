@@ -1,0 +1,618 @@
+extends Node
+## Planet-wide demand-driven GPU height page cache.
+##
+## The spherical geometry clipmap may address L0..L14 anywhere on the planet.
+## Pages are immutable 33x33 height tiles supplied by GroundHeightStore. Only
+## pages touched by the current renderer are admitted to VRAM; RAM-resident pages
+## can be rehydrated immediately after an eviction.
+##
+## Page-table RGBA values are metadata, not colours. Every table blit is therefore
+## an exact copy with blending disabled.
+
+const TILE_CELLS := 32
+const TILE_SHIFT := 5
+const HALF_TILE_CELLS := 16
+const TILE_VERTS := TILE_CELLS + 1
+const MAX_LEVEL := 14
+
+# 4096 pages. DrawableTexture2D currently uses RGBAF, so this intentionally trades
+# VRAM for a stable whole-visible-cap working set and almost no protected eviction.
+const ATLAS_COLS := 64
+const ATLAS_COL_SHIFT := 6
+const ATLAS_ROWS := 64
+const SLOT_COUNT := ATLAS_COLS * ATLAS_ROWS
+const ATLAS_WIDTH := ATLAS_COLS * TILE_VERTS
+const ATLAS_HEIGHT := ATLAS_ROWS * TILE_VERTS
+
+const PAGE_TABLE_CAPACITY := 16384
+const PAGE_TABLE_MAX_PROBES := 32
+const WANTED_TTL_MS := 2500
+const PRUNE_INTERVAL_MS := 1000
+
+var _atlas: DrawableTexture2D
+var _page_table: DrawableTexture2D
+
+var _key_to_slot: Dictionary = {}
+var _slots: Array[Dictionary] = []
+var _free_slots := PackedInt32Array()
+var _clock: int = 0
+
+# Persistent CPU mirror of the open-addressed GPU table.
+# 0 = empty, -1 = tombstone, >0 = atlas slot + 1.
+var _table_codes := PackedInt32Array()
+var _table_x := PackedInt32Array()
+var _table_y := PackedInt32Array()
+var _table_slots := PackedInt32Array()
+var _key_to_table_index: Dictionary = {}
+var _table_tombstones: int = 0
+
+var _wanted_until: Dictionary = {}
+var _next_prune_msec: int = 0
+var _table_copy_material: BlitMaterial
+
+var _pages_uploaded: int = 0
+var _page_reuploads: int = 0
+var _edit_reuploads: int = 0
+var _evictions: int = 0
+var _forced_protected_evictions: int = 0
+var _ignored_ready: int = 0
+var _ram_rehydrates: int = 0
+var _table_cell_updates: int = 0
+var _table_full_rebuilds: int = 0
+var _table_insert_failures: int = 0
+var _uploaded_texels: int = 0
+
+
+func _ready() -> void:
+	process_priority = 8
+	GroundHeightStore.tile_ready.connect(_on_tile_ready)
+	Planet.world_ready.connect(_on_world_ready)
+	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
+	Deltas.region_changed.connect(_on_region_changed)
+	_reset_cache()
+
+
+func _process(_dt: float) -> void:
+	var now: int = Time.get_ticks_msec()
+	if now < _next_prune_msec:
+		return
+	_next_prune_msec = now + PRUNE_INTERVAL_MS
+	var expired: Array[String] = []
+	for key_value: Variant in _wanted_until.keys():
+		var key: String = String(key_value)
+		if int(_wanted_until.get(key, 0)) < now:
+			expired.append(key)
+	for key: String in expired:
+		_wanted_until.erase(key)
+
+
+func atlas_texture() -> Texture2D:
+	return _atlas
+
+
+func page_table_texture() -> Texture2D:
+	return _page_table
+
+
+func ready_for_shader() -> bool:
+	return _atlas != null and _page_table != null
+
+
+func atlas_size() -> Vector2:
+	return Vector2(float(ATLAS_WIDTH), float(ATLAS_HEIGHT))
+
+
+func table_capacity() -> int:
+	return PAGE_TABLE_CAPACITY
+
+
+func table_max_probes() -> int:
+	return PAGE_TABLE_MAX_PROBES
+
+
+func atlas_columns() -> int:
+	return ATLAS_COLS
+
+
+func slot_count() -> int:
+	return SLOT_COUNT
+
+
+func touch_sample(d: Vector3, level: int) -> bool:
+	var addresses: Array[String] = _keys_for_sample(d, level)
+	if addresses.is_empty():
+		return false
+	var all_present := true
+	for key: String in addresses:
+		_mark_wanted(key)
+		if not _key_to_slot.has(key):
+			if not _rehydrate_from_ram(key):
+				all_present = false
+				continue
+		if _key_to_slot.has(key):
+			_touch_slot(int(_key_to_slot[key]))
+		else:
+			all_present = false
+	return all_present
+
+
+func touch_samples(directions: Array[Vector3], level: int) -> bool:
+	var all_present := true
+	for d: Vector3 in directions:
+		if not touch_sample(d, level):
+			all_present = false
+	return all_present
+
+
+func has_sample(d: Vector3, level: int) -> bool:
+	var addresses: Array[String] = _keys_for_sample(d, level)
+	if addresses.is_empty():
+		return false
+	for key: String in addresses:
+		if not _key_to_slot.has(key):
+			return false
+	return true
+
+
+func stats() -> Dictionary:
+	return {
+		"resident_pages": _key_to_slot.size(),
+		"slot_capacity": SLOT_COUNT,
+		"pages_uploaded": _pages_uploaded,
+		"page_reuploads": _page_reuploads,
+		"edit_reuploads": _edit_reuploads,
+		"evictions": _evictions,
+		"forced_protected_evictions": _forced_protected_evictions,
+		"ignored_ready": _ignored_ready,
+		"ram_rehydrates": _ram_rehydrates,
+		"wanted_pages": _wanted_until.size(),
+		"table_updates": _table_cell_updates,
+		"table_rebuilds": _table_full_rebuilds,
+		"table_tombstones": _table_tombstones,
+		"table_insert_failures": _table_insert_failures,
+		"uploaded_texels": _uploaded_texels,
+		"table_exact_copy": true,
+		"max_level": MAX_LEVEL,
+	}
+
+
+func _on_world_ready(_fields: PlanetFields) -> void:
+	_reset_cache()
+
+
+func _on_coast_profile_changed() -> void:
+	_reset_cache()
+
+
+func _reset_cache() -> void:
+	_key_to_slot.clear()
+	_slots.clear()
+	_slots.resize(SLOT_COUNT)
+	_free_slots.clear()
+	for slot: int in SLOT_COUNT:
+		_slots[slot] = {}
+		_free_slots.append(SLOT_COUNT - 1 - slot)
+	_clock = 0
+	_wanted_until.clear()
+	_next_prune_msec = 0
+
+	_atlas = DrawableTexture2D.new()
+	_atlas.setup(ATLAS_WIDTH, ATLAS_HEIGHT,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 1.0), false)
+
+	_reset_table_cpu()
+	_page_table = DrawableTexture2D.new()
+	_page_table.setup(PAGE_TABLE_CAPACITY, 1,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
+
+	_pages_uploaded = 0
+	_page_reuploads = 0
+	_edit_reuploads = 0
+	_evictions = 0
+	_forced_protected_evictions = 0
+	_ignored_ready = 0
+	_ram_rehydrates = 0
+	_table_cell_updates = 0
+	_table_full_rebuilds = 0
+	_table_insert_failures = 0
+	_uploaded_texels = 0
+
+
+func _reset_table_cpu() -> void:
+	_table_codes.resize(PAGE_TABLE_CAPACITY)
+	_table_codes.fill(0)
+	_table_x.resize(PAGE_TABLE_CAPACITY)
+	_table_x.fill(0)
+	_table_y.resize(PAGE_TABLE_CAPACITY)
+	_table_y.fill(0)
+	_table_slots.resize(PAGE_TABLE_CAPACITY)
+	_table_slots.fill(0)
+	_key_to_table_index.clear()
+	_table_tombstones = 0
+
+
+func _on_tile_ready(level: int, face: int, tile_x: int, tile_y: int) -> void:
+	var key: String = _page_key(level, face, tile_x, tile_y)
+	if not _is_wanted(key):
+		_ignored_ready += 1
+		return
+	var data: PackedFloat32Array = GroundHeightStore.resident_tile(level, face, tile_x, tile_y)
+	if data.size() != TILE_VERTS * TILE_VERTS:
+		return
+	_upload_page(level, face, tile_x, tile_y, data, false)
+
+
+func _mark_wanted(key: String) -> void:
+	_wanted_until[key] = Time.get_ticks_msec() + WANTED_TTL_MS
+
+
+func _is_wanted(key: String) -> bool:
+	var until: int = int(_wanted_until.get(key, 0))
+	if until <= 0:
+		return false
+	if until < Time.get_ticks_msec():
+		_wanted_until.erase(key)
+		return false
+	return true
+
+
+func _rehydrate_from_ram(key: String) -> bool:
+	var parts: PackedStringArray = key.split(":")
+	if parts.size() != 4:
+		return false
+	var level: int = parts[0].to_int()
+	var face: int = parts[1].to_int()
+	var tile_x: int = parts[2].to_int()
+	var tile_y: int = parts[3].to_int()
+	var data: PackedFloat32Array = GroundHeightStore.resident_tile(level, face, tile_x, tile_y)
+	if data.size() != TILE_VERTS * TILE_VERTS:
+		return false
+	_upload_page(level, face, tile_x, tile_y, data, false)
+	if _key_to_slot.has(key):
+		_ram_rehydrates += 1
+		return true
+	return false
+
+
+func _upload_page(level: int, face: int, tile_x: int, tile_y: int,
+		data: PackedFloat32Array, edit_refresh: bool) -> void:
+	var key: String = _page_key(level, face, tile_x, tile_y)
+	var is_new: bool = not _key_to_slot.has(key)
+	var slot := -1
+
+	if is_new:
+		slot = _allocate_slot()
+		if slot < 0:
+			return
+		_key_to_slot[key] = slot
+		_slots[slot] = {
+			"key": key,
+			"level": level,
+			"face": face,
+			"tile_x": tile_x,
+			"tile_y": tile_y,
+			"last": 0,
+		}
+		if not _insert_table_entry(key, level, face, tile_x, tile_y, slot):
+			_rebuild_page_table_full()
+			if not _key_to_table_index.has(key):
+				_key_to_slot.erase(key)
+				_slots[slot] = {}
+				_free_slots.append(slot)
+				return
+	else:
+		slot = int(_key_to_slot[key])
+
+	_touch_slot(slot)
+	var image: Image = _page_image_with_deltas(level, face, tile_x, tile_y, data)
+	if image == null:
+		return
+	var source: ImageTexture = ImageTexture.create_from_image(image)
+	if source == null:
+		return
+
+	var atlas_x: int = (slot & (ATLAS_COLS - 1)) * TILE_VERTS
+	var atlas_y: int = (slot >> ATLAS_COL_SHIFT) * TILE_VERTS
+	_atlas.blit_rect(Rect2i(atlas_x, atlas_y, TILE_VERTS, TILE_VERTS), source)
+	_uploaded_texels += TILE_VERTS * TILE_VERTS
+	if is_new:
+		_pages_uploaded += 1
+	else:
+		_page_reuploads += 1
+	if edit_refresh:
+		_edit_reuploads += 1
+
+
+func _allocate_slot() -> int:
+	if not _free_slots.is_empty():
+		var index: int = _free_slots.size() - 1
+		var free_slot: int = _free_slots[index]
+		_free_slots.remove_at(index)
+		return free_slot
+
+	var oldest_unwanted_slot := -1
+	var oldest_unwanted_tick := 0x7fffffffffffffff
+	var oldest_any_slot := -1
+	var oldest_any_tick := 0x7fffffffffffffff
+	for slot: int in SLOT_COUNT:
+		var meta: Dictionary = _slots[slot]
+		if meta.is_empty():
+			return slot
+		var tick: int = int(meta.get("last", 0))
+		if tick < oldest_any_tick:
+			oldest_any_tick = tick
+			oldest_any_slot = slot
+		var key: String = String(meta.get("key", ""))
+		if not _is_wanted(key) and tick < oldest_unwanted_tick:
+			oldest_unwanted_tick = tick
+			oldest_unwanted_slot = slot
+
+	var chosen: int = oldest_unwanted_slot
+	if chosen < 0:
+		chosen = oldest_any_slot
+		_forced_protected_evictions += 1
+	if chosen < 0:
+		return -1
+
+	var old_key: String = String(_slots[chosen].get("key", ""))
+	if not old_key.is_empty():
+		_key_to_slot.erase(old_key)
+		_remove_table_entry(old_key)
+	_slots[chosen] = {}
+	_evictions += 1
+	return chosen
+
+
+func _touch_slot(slot: int) -> void:
+	if slot < 0 or slot >= _slots.size() or _slots[slot].is_empty():
+		return
+	_clock += 1
+	_slots[slot]["last"] = _clock
+
+
+func _insert_table_entry(key: String, level: int, face: int,
+		tile_x: int, tile_y: int, slot: int) -> bool:
+	var page_code: int = level * 6 + face + 1
+	var start: int = _page_hash(page_code, tile_x, tile_y)
+	var first_tombstone := -1
+
+	for probe: int in PAGE_TABLE_MAX_PROBES:
+		var table_index: int = (start + probe) % PAGE_TABLE_CAPACITY
+		var state: int = _table_slots[table_index]
+		if state > 0:
+			if _table_codes[table_index] == page_code \
+					and _table_x[table_index] == tile_x \
+					and _table_y[table_index] == tile_y:
+				_table_slots[table_index] = slot + 1
+				_key_to_table_index[key] = table_index
+				_write_table_cell(table_index)
+				return true
+			continue
+		if state < 0:
+			if first_tombstone < 0:
+				first_tombstone = table_index
+			continue
+
+		var target: int = first_tombstone if first_tombstone >= 0 else table_index
+		_set_table_entry_cpu(target, key, page_code, tile_x, tile_y, slot + 1)
+		if first_tombstone >= 0:
+			_table_tombstones = maxi(_table_tombstones - 1, 0)
+		_write_table_cell(target)
+		return true
+
+	if first_tombstone >= 0:
+		_set_table_entry_cpu(first_tombstone, key, page_code, tile_x, tile_y, slot + 1)
+		_table_tombstones = maxi(_table_tombstones - 1, 0)
+		_write_table_cell(first_tombstone)
+		return true
+
+	_table_insert_failures += 1
+	return false
+
+
+func _insert_table_entry_cpu_only(key: String, level: int, face: int,
+		tile_x: int, tile_y: int, slot: int) -> bool:
+	var page_code: int = level * 6 + face + 1
+	var start: int = _page_hash(page_code, tile_x, tile_y)
+	for probe: int in PAGE_TABLE_MAX_PROBES:
+		var table_index: int = (start + probe) % PAGE_TABLE_CAPACITY
+		if _table_slots[table_index] == 0:
+			_set_table_entry_cpu(table_index, key, page_code, tile_x, tile_y, slot + 1)
+			return true
+	return false
+
+
+func _set_table_entry_cpu(index: int, key: String, page_code: int,
+		tile_x: int, tile_y: int, slot_plus_one: int) -> void:
+	_table_codes[index] = page_code
+	_table_x[index] = tile_x
+	_table_y[index] = tile_y
+	_table_slots[index] = slot_plus_one
+	_key_to_table_index[key] = index
+
+
+func _remove_table_entry(key: String) -> void:
+	var index: int = int(_key_to_table_index.get(key, -1))
+	if index < 0 or index >= PAGE_TABLE_CAPACITY:
+		_key_to_table_index.erase(key)
+		return
+	_key_to_table_index.erase(key)
+	if _table_slots[index] <= 0:
+		return
+	_table_codes[index] = 0
+	_table_x[index] = 0
+	_table_y[index] = 0
+	_table_slots[index] = -1
+	_table_tombstones += 1
+	_write_table_cell(index)
+
+
+func _direct_copy_material() -> BlitMaterial:
+	if _table_copy_material == null:
+		_table_copy_material = BlitMaterial.new()
+		_table_copy_material.blend_mode = BlitMaterial.BLEND_MODE_DISABLED
+	return _table_copy_material
+
+
+func _write_table_cell(index: int) -> void:
+	if _page_table == null or index < 0 or index >= PAGE_TABLE_CAPACITY:
+		return
+	var patch: Image = Image.create(1, 1, false, Image.FORMAT_RGBAF)
+	patch.set_pixel(0, 0, Color(
+		float(_table_codes[index]), float(_table_x[index]),
+		float(_table_y[index]), float(_table_slots[index])))
+	var source: ImageTexture = ImageTexture.create_from_image(patch)
+	if source == null:
+		return
+	_page_table.blit_rect(Rect2i(index, 0, 1, 1), source,
+		Color.WHITE, 0, _direct_copy_material())
+	_table_cell_updates += 1
+
+
+func _rebuild_page_table_full() -> void:
+	_reset_table_cpu()
+	for slot: int in SLOT_COUNT:
+		var meta: Dictionary = _slots[slot]
+		if meta.is_empty():
+			continue
+		var key: String = String(meta["key"])
+		if not _insert_table_entry_cpu_only(key, int(meta["level"]), int(meta["face"]),
+				int(meta["tile_x"]), int(meta["tile_y"]), slot):
+			_table_insert_failures += 1
+
+	var table_image: Image = Image.create(PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
+	for index: int in PAGE_TABLE_CAPACITY:
+		if _table_slots[index] <= 0:
+			continue
+		table_image.set_pixel(index, 0, Color(
+			float(_table_codes[index]), float(_table_x[index]),
+			float(_table_y[index]), float(_table_slots[index])))
+	var source: ImageTexture = ImageTexture.create_from_image(table_image)
+	var replacement := DrawableTexture2D.new()
+	replacement.setup(PAGE_TABLE_CAPACITY, 1,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
+	if source != null:
+		replacement.blit_rect(Rect2i(0, 0, PAGE_TABLE_CAPACITY, 1), source,
+			Color.WHITE, 0, _direct_copy_material())
+	_page_table = replacement
+	_table_full_rebuilds += 1
+
+
+static func _page_hash(page_code: int, tile_x: int, tile_y: int) -> int:
+	var h: int = tile_x * 1973 + tile_y * 9277 + page_code * 26699
+	var result: int = h % PAGE_TABLE_CAPACITY
+	return result + PAGE_TABLE_CAPACITY if result < 0 else result
+
+
+static func _page_key(level: int, face: int, tile_x: int, tile_y: int) -> String:
+	return "%d:%d:%d:%d" % [level, face, tile_x, tile_y]
+
+
+func _keys_for_sample(d: Vector3, level: int) -> Array[String]:
+	var keys: Array[String] = []
+	if Planet.cfg == null:
+		return keys
+	var used_level: int = clampi(level, 0, MAX_LEVEL)
+	var fuv: Array = CubeSphere.dir_to_face_uv(d.normalized())
+	var face: int = int(fuv[0])
+	var cells: int = GroundHeightStore.cells_per_face(used_level)
+	if cells <= 0:
+		return keys
+	var fx: float = clampf((float(fuv[1]) * 0.5 + 0.5) * float(cells), 0.0, float(cells))
+	var fy: float = clampf((float(fuv[2]) * 0.5 + 0.5) * float(cells), 0.0, float(cells))
+	var x0: int = int(floor(fx))
+	var y0: int = int(floor(fy))
+	var x1: int = mini(x0 + 1, cells)
+	var y1: int = mini(y0 + 1, cells)
+	var vertices: Array[Vector2i] = [
+		Vector2i(x0, y0), Vector2i(x1, y0),
+		Vector2i(x0, y1), Vector2i(x1, y1),
+	]
+	for vertex: Vector2i in vertices:
+		var addr: Vector2i = _tile_address_for_vertex(vertex.x, vertex.y, cells)
+		var key: String = _page_key(used_level, face, addr.x, addr.y)
+		if not keys.has(key):
+			keys.append(key)
+	return keys
+
+
+static func _tile_address_for_vertex(ix: int, iy: int, cells: int) -> Vector2i:
+	var tile_count: int = (cells + TILE_CELLS - 1) >> TILE_SHIFT
+	return Vector2i(
+		clampi((maxi(ix, 1) - 1) >> TILE_SHIFT, 0, tile_count - 1),
+		clampi((maxi(iy, 1) - 1) >> TILE_SHIFT, 0, tile_count - 1))
+
+
+func _page_image_with_deltas(level: int, face: int, tile_x: int, tile_y: int,
+		data: PackedFloat32Array) -> Image:
+	var cells: int = GroundHeightStore.cells_per_face(level)
+	if cells <= 0:
+		return null
+	var start_x: int = tile_x * TILE_CELLS
+	var start_y: int = tile_y * TILE_CELLS
+	var center_x: int = mini(start_x + HALF_TILE_CELLS, cells)
+	var center_y: int = mini(start_y + HALF_TILE_CELLS, cells)
+	var center_u: float = -1.0 + 2.0 * float(center_x) / float(cells)
+	var center_v: float = -1.0 + 2.0 * float(center_y) / float(cells)
+	var center_dir: Vector3 = CubeSphere.face_uv_to_dir(face, center_u, center_v)
+	var page_angle: float = (PI * 0.5 * float(TILE_CELLS) / float(cells)) * 0.95
+	var snap: Dictionary = Deltas.snapshot_for_bounds(center_dir, page_angle)
+	if snap.is_empty():
+		return Image.create_from_data(TILE_VERTS, TILE_VERTS, false,
+			Image.FORMAT_RF, data.to_byte_array())
+
+	var edited: PackedFloat32Array = data.duplicate()
+	for local_y: int in TILE_VERTS:
+		var gy: int = mini(start_y + local_y, cells)
+		var v: float = -1.0 + 2.0 * float(gy) / float(cells)
+		for local_x: int in TILE_VERTS:
+			var gx: int = mini(start_x + local_x, cells)
+			var u: float = -1.0 + 2.0 * float(gx) / float(cells)
+			var d: Vector3 = CubeSphere.face_uv_to_dir(face, u, v)
+			var index: int = local_y * TILE_VERTS + local_x
+			edited[index] += Deltas.offset_at_snapshot(d, snap)
+	return Image.create_from_data(TILE_VERTS, TILE_VERTS, false,
+		Image.FORMAT_RF, edited.to_byte_array())
+
+
+func _on_region_changed(center: Vector3, radius_m: float) -> void:
+	if Planet.cfg == null or _key_to_slot.is_empty():
+		return
+	var radius: float = Planet.cfg.planet_radius
+	var edit_dir: Vector3 = center.normalized()
+	for slot: int in SLOT_COUNT:
+		var meta: Dictionary = _slots[slot]
+		if meta.is_empty() or not _page_intersects_region(meta, edit_dir, radius_m, radius):
+			continue
+		var level: int = int(meta["level"])
+		var face: int = int(meta["face"])
+		var tile_x: int = int(meta["tile_x"])
+		var tile_y: int = int(meta["tile_y"])
+		var data: PackedFloat32Array = GroundHeightStore.resident_tile(level, face, tile_x, tile_y)
+		if data.size() == TILE_VERTS * TILE_VERTS:
+			_upload_page(level, face, tile_x, tile_y, data, true)
+		else:
+			var key: String = String(meta["key"])
+			_key_to_slot.erase(key)
+			_remove_table_entry(key)
+			_slots[slot] = {}
+			_free_slots.append(slot)
+
+
+func _page_intersects_region(meta: Dictionary, edit_dir: Vector3,
+		edit_radius_m: float, radius: float) -> bool:
+	var level: int = int(meta["level"])
+	var face: int = int(meta["face"])
+	var tile_x: int = int(meta["tile_x"])
+	var tile_y: int = int(meta["tile_y"])
+	var cells: int = GroundHeightStore.cells_per_face(level)
+	if cells <= 0:
+		return false
+	var gx: int = mini(tile_x * TILE_CELLS + HALF_TILE_CELLS, cells)
+	var gy: int = mini(tile_y * TILE_CELLS + HALF_TILE_CELLS, cells)
+	var u: float = -1.0 + 2.0 * float(gx) / float(cells)
+	var v: float = -1.0 + 2.0 * float(gy) / float(cells)
+	var page_dir: Vector3 = CubeSphere.face_uv_to_dir(face, u, v)
+	var page_radius_m: float = PI * 0.5 * radius * float(TILE_CELLS) / float(cells) * 0.95
+	var total_angle: float = (edit_radius_m + page_radius_m) / radius
+	return page_dir.dot(edit_dir) >= cos(total_angle)
