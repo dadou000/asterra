@@ -4,7 +4,9 @@ extends Node3D
 ##
 ## Visual refinement can now split, morph, cancel, or retain parents without
 ## changing the collision world. A compact fixed-depth tile set follows the
-## observer, gives edits revision-safe rebuilds, and uses high-priority workers.
+## observer. Its height samples come from the same persistent GroundHeightStore
+## as the geometry clipmap, so visual and physics streaming share already-baked
+## terrain instead of independently evaluating the procedural surface.
 
 const REFRESH_INTERVAL := 0.10
 const MAX_CONCURRENT_BUILDS := 2
@@ -62,9 +64,9 @@ func _refresh_set() -> void:
 	var tile_arc := PI * 0.5 * cfg.planet_radius / float(divisions)
 	var radius := maxf(cfg.collision_stream_radius, tile_arc)
 	var center := observer.normalized().to_v3()
-	var basis := CubeSphere.tangent_basis(center)
-	var east: Vector3 = basis[0]
-	var north: Vector3 = basis[1]
+	var tangent := CubeSphere.tangent_basis(center)
+	var east: Vector3 = tangent[0]
+	var north: Vector3 = tangent[1]
 	var step := tile_arc * 0.72
 	var reach := int(ceil(radius / step)) + 1
 	var wanted := {}
@@ -101,12 +103,28 @@ func _refresh_set() -> void:
 			body.queue_free()
 		_entries.erase(key)
 
+	# Newly discovered entries are normally only a thin ring. Sort by distance so
+	# a cold cache first spends its time on collision immediately under/ahead of
+	# the observer rather than on an arbitrary scan-order tile.
+	_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return _entry_distance_sq(a) < _entry_distance_sq(b))
+
 
 func _queue_entry(entry: Dictionary) -> void:
 	if int(entry["state"]) != 0 or bool(entry["abandoned"]):
 		return
 	entry["state"] = 1
 	_queue.append(entry)
+
+
+func _entry_distance_sq(entry: Dictionary) -> float:
+	var divisions := 1 << int(entry["depth"])
+	var size := 2.0 / float(divisions)
+	var d := CubeSphere.face_uv_to_dir(int(entry["face"]),
+		-1.0 + (float(int(entry["i"])) + 0.5) * size,
+		-1.0 + (float(int(entry["j"])) + 0.5) * size)
+	var p := Vec3D.from_v3(d).mul(cfg.planet_radius)
+	return p.sub(observer).length_sq()
 
 
 func _pump() -> void:
@@ -147,12 +165,15 @@ static func _build_tile(face: int, u0: float, v0: float, size: float, n: int,
 		radius: float, snap: Dictionary, cancel: TerrainBuildCancel = null) -> Dictionary:
 	if cancel != null and cancel.is_cancelled():
 		return {"cancelled": true}
-	var detail := Planet.make_detail()
-	# Collision represents the physical terrain function, not whichever visual LOD
-	# happens to be resident. The fixed grid itself provides its band limit.
-	detail.set_sample_spacing(size * PI * 0.25 * radius / float(n))
+
+	# Choose the persistent height level nearest this physics grid's actual sample
+	# spacing. With the current depth-15/16x16 setup this resolves to level 2
+	# (~3 m), which is also one of the visual clipmap levels and is usually already
+	# resident in GroundHeightStore's RAM cache.
+	var sample_spacing := size * PI * 0.25 * radius / float(n)
+	var cache_level := GroundHeightStore.level_for_spacing(sample_spacing)
 	var center := CubeSphere.face_uv_to_dir_d(face, u0 + size * 0.5, v0 + size * 0.5)
-	var center_h := Planet.terrain_height(center.to_v3(), detail, snap)
+	var center_h := GroundHeightStore.sample_height(center.to_v3(), cache_level, snap)
 	var pivot := center.mul(radius + center_h)
 	var vertices := PackedVector3Array()
 	vertices.resize((n + 1) * (n + 1))
@@ -163,7 +184,7 @@ static func _build_tile(face: int, u0: float, v0: float, size: float, n: int,
 		for i in n + 1:
 			var u := u0 + size * float(i) / float(n)
 			var d := CubeSphere.face_uv_to_dir_d(face, u, v)
-			var h := Planet.terrain_height(d.to_v3(), detail, snap)
+			var h := GroundHeightStore.sample_height(d.to_v3(), cache_level, snap)
 			var p := d.mul(radius + h)
 			vertices[j * (n + 1) + i] = Vector3(
 				float(p.x - pivot.x), float(p.y - pivot.y), float(p.z - pivot.z))
