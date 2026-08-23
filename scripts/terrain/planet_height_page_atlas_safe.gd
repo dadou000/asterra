@@ -1,26 +1,39 @@
 extends "res://scripts/terrain/planet_height_page_atlas.gd"
 ## Hardware-safe page-table variant for the spherical terrain renderer.
 ##
-## Godot's DrawableTexture2D backend rejects any dimension above 16383. The
-## original 16384x1 page table therefore never acquired a valid RID, which caused
-## repeated uninitialized RID errors. This keeps the 4096-page atlas with an
-## 8192-entry table and also bounds eviction work once the atlas becomes full.
+## Keeps the 4096-page atlas and an 8192-entry page table, bounds eviction scans,
+## and batches page-table publication so streaming no longer creates a new 1x1
+## ImageTexture/RID for every insert and tombstone.
 
 const SAFE_PAGE_TABLE_CAPACITY: int = 8192
 const SAFE_PAGE_TABLE_MAX_PROBES: int = 12
 const EVICTION_SCAN_BUDGET: int = 256
+const TABLE_FLUSH_INTERVAL_MS: int = 33
 
 var _eviction_cursor: int = 0
+var _table_dirty: bool = false
+var _next_table_flush_msec: int = 0
 
 
 func _ready() -> void:
-	# Do not run the parent _ready(): it constructs the invalid 16384-wide table.
 	process_priority = 8
 	GroundHeightStore.tile_ready.connect(_on_tile_ready)
 	Planet.world_ready.connect(_on_world_ready)
 	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
 	Deltas.region_changed.connect(_on_region_changed)
 	_reset_cache()
+
+
+func _process(dt: float) -> void:
+	# Preserve wanted-page TTL pruning from the base atlas.
+	super._process(dt)
+	if not _table_dirty:
+		return
+	var now: int = Time.get_ticks_msec()
+	if now < _next_table_flush_msec:
+		return
+	_next_table_flush_msec = now + TABLE_FLUSH_INTERVAL_MS
+	_flush_table_batch()
 
 
 func table_capacity() -> int:
@@ -43,6 +56,8 @@ func _reset_cache() -> void:
 	_eviction_cursor = 0
 	_wanted_until.clear()
 	_next_prune_msec = 0
+	_table_dirty = false
+	_next_table_flush_msec = 0
 
 	_atlas = DrawableTexture2D.new()
 	_atlas.setup(ATLAS_WIDTH, ATLAS_HEIGHT,
@@ -86,9 +101,6 @@ func _allocate_slot() -> int:
 		_free_slots.remove_at(index)
 		return free_slot
 
-	# The old path scanned all 4096 slots on every eviction. During sustained
-	# travel that becomes an increasingly visible main-thread hitch. Scan a bounded
-	# rotating window instead; the wanted set is normally much smaller than 4096.
 	var best_unwanted: int = -1
 	var best_unwanted_tick: int = 0x7fffffffffffffff
 	var best_any: int = -1
@@ -141,7 +153,7 @@ func _insert_table_entry(key: String, level: int, face: int,
 					and _table_y[table_index] == tile_y:
 				_table_slots[table_index] = slot + 1
 				_key_to_table_index[key] = table_index
-				_write_table_cell_safe(table_index)
+				_mark_table_dirty()
 				return true
 			continue
 		if state < 0:
@@ -153,13 +165,13 @@ func _insert_table_entry(key: String, level: int, face: int,
 		_set_table_entry_cpu(target, key, page_code, tile_x, tile_y, slot + 1)
 		if first_tombstone >= 0:
 			_table_tombstones = maxi(_table_tombstones - 1, 0)
-		_write_table_cell_safe(target)
+		_mark_table_dirty()
 		return true
 
 	if first_tombstone >= 0:
 		_set_table_entry_cpu(first_tombstone, key, page_code, tile_x, tile_y, slot + 1)
 		_table_tombstones = maxi(_table_tombstones - 1, 0)
-		_write_table_cell_safe(first_tombstone)
+		_mark_table_dirty()
 		return true
 
 	_table_insert_failures += 1
@@ -191,22 +203,31 @@ func _remove_table_entry(key: String) -> void:
 	_table_y[index] = 0
 	_table_slots[index] = -1
 	_table_tombstones += 1
-	_write_table_cell_safe(index)
+	_mark_table_dirty()
 
 
-func _write_table_cell_safe(index: int) -> void:
-	if _page_table == null or index < 0 or index >= SAFE_PAGE_TABLE_CAPACITY:
+func _mark_table_dirty() -> void:
+	_table_dirty = true
+	_table_cell_updates += 1
+
+
+func _flush_table_batch() -> void:
+	if _page_table == null:
 		return
-	var patch: Image = Image.create(1, 1, false, Image.FORMAT_RGBAF)
-	patch.set_pixel(0, 0, Color(
-		float(_table_codes[index]), float(_table_x[index]),
-		float(_table_y[index]), float(_table_slots[index])))
-	var source: ImageTexture = ImageTexture.create_from_image(patch)
+	var table_image: Image = Image.create(SAFE_PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
+	for index: int in SAFE_PAGE_TABLE_CAPACITY:
+		var state: int = _table_slots[index]
+		if state == 0:
+			continue
+		table_image.set_pixel(index, 0, Color(
+			float(_table_codes[index]), float(_table_x[index]),
+			float(_table_y[index]), float(state)))
+	var source: ImageTexture = ImageTexture.create_from_image(table_image)
 	if source == null:
 		return
-	_page_table.blit_rect(Rect2i(index, 0, 1, 1), source,
+	_page_table.blit_rect(Rect2i(0, 0, SAFE_PAGE_TABLE_CAPACITY, 1), source,
 		Color.WHITE, 0, _direct_copy_material())
-	_table_cell_updates += 1
+	_table_dirty = false
 
 
 func _rebuild_page_table_full() -> void:
@@ -219,22 +240,7 @@ func _rebuild_page_table_full() -> void:
 		if not _insert_table_entry_cpu_only(key, int(meta["level"]), int(meta["face"]),
 				int(meta["tile_x"]), int(meta["tile_y"]), slot):
 			_table_insert_failures += 1
-
-	var table_image: Image = Image.create(SAFE_PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
-	for index: int in SAFE_PAGE_TABLE_CAPACITY:
-		if _table_slots[index] <= 0:
-			continue
-		table_image.set_pixel(index, 0, Color(
-			float(_table_codes[index]), float(_table_x[index]),
-			float(_table_y[index]), float(_table_slots[index])))
-	var source: ImageTexture = ImageTexture.create_from_image(table_image)
-	var replacement := DrawableTexture2D.new()
-	replacement.setup(SAFE_PAGE_TABLE_CAPACITY, 1,
-		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
-	if source != null:
-		replacement.blit_rect(Rect2i(0, 0, SAFE_PAGE_TABLE_CAPACITY, 1), source,
-			Color.WHITE, 0, _direct_copy_material())
-	_page_table = replacement
+	_flush_table_batch()
 	_table_full_rebuilds += 1
 
 
