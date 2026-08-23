@@ -21,6 +21,7 @@ const ACTIVE_AGL_M := 6000.0
 const REANCHOR_M := 12000.0
 const MATERIAL_RES := 128.0
 const MATERIAL_TEXEL_M := Vector3(8.0, 128.0, 2048.0)
+const GLOBAL_CUT_FRACTION := 0.90
 
 var _material: ShaderMaterial
 var _rings: Array[MeshInstance3D] = []
@@ -41,6 +42,7 @@ var _task_id := -1
 var _force_full_pending := false
 var _active := false
 var _last_material_control: Texture2DArray
+var _terrain_ref: WeakRef
 
 
 func _ready() -> void:
@@ -71,7 +73,10 @@ func _process(_dt: float) -> void:
 
 	var radius := Planet.cfg.planet_radius
 	var observer_dir := planet_pos.normalized()
-	var agl := maxf(planet_pos.length() - radius - Planet.terrain_height(observer_dir), 0.0)
+	# Activation does not need the full expensive sub-grid synthesis. Macro height
+	# can be hundreds of metres off in extreme relief and there is still kilometres
+	# of hysteresis before the clipmap's 6 km ceiling, so use the cheap field here.
+	var agl := maxf(planet_pos.length() - radius - Planet.macro_height(observer_dir), 0.0)
 	if agl > ACTIVE_AGL_M:
 		_set_active(false)
 		return
@@ -122,6 +127,7 @@ func _reset_frame(center: Vector3) -> void:
 	_height_texture = null
 	_material.set_shader_parameter("u_height_ready", 0.0)
 	_set_visible(false)
+	_sync_global_cutout(false)
 	_queue_target(Vector2.ZERO, true)
 
 
@@ -179,6 +185,7 @@ func _on_build_ready(epoch: int, built_center: Vector2, built: Array[Image]) -> 
 			_material.set_shader_parameter("u_height_pyramid", _height_texture)
 			_material.set_shader_parameter("u_height_ready", 1.0)
 			_set_visible(_active)
+			_sync_global_cutout(_active)
 
 	# Do not discard useful intermediate movement. If the player covered several
 	# backing cells while this worker ran, publish what completed and continue from
@@ -299,6 +306,7 @@ func _sync_common_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
 	_material.set_shader_parameter("u_storage_levels", float(STORAGE_LEVELS))
+	_sync_global_cutout(_active and _height_texture != null)
 
 
 func _sync_material_control() -> void:
@@ -323,9 +331,45 @@ func _sync_material_control() -> void:
 	_material.set_shader_parameter("u_material_texel_m", MATERIAL_TEXEL_M)
 
 
+func _sync_global_cutout(enabled: bool) -> void:
+	var terrain: PlanetTerrain = _terrain_ref.get_ref() if _terrain_ref != null else null
+	if terrain == null:
+		terrain = _find_terrain(get_tree().root)
+		if terrain != null:
+			_terrain_ref = weakref(terrain)
+	if terrain == null:
+		return
+	var mats := terrain.debug_materials()
+	if mats.is_empty():
+		return
+	var ground: ShaderMaterial = mats[0]
+	ground.set_shader_parameter("u_ground_clipmap_cutout", 1.0 if enabled else 0.0)
+	if not enabled:
+		return
+	var outer_spacing := _base_spacing * pow(2.0, float(RENDER_LEVELS - 1))
+	var outer_half := float(GRID_CELLS) * 0.5 * outer_spacing
+	ground.set_shader_parameter("u_ground_clipmap_frame_dir", _frame_dir)
+	ground.set_shader_parameter("u_ground_clipmap_right", _frame_right)
+	ground.set_shader_parameter("u_ground_clipmap_up", _frame_up)
+	ground.set_shader_parameter("u_ground_clipmap_center_plane", _published_center)
+	ground.set_shader_parameter("u_ground_clipmap_cut_half_extent",
+		outer_half * GLOBAL_CUT_FRACTION)
+
+
+func _find_terrain(node: Node) -> PlanetTerrain:
+	if node is PlanetTerrain:
+		return node
+	for child in node.get_children():
+		var found := _find_terrain(child)
+		if found != null:
+			return found
+	return null
+
+
 func _set_active(value: bool) -> void:
 	_active = value
 	_set_visible(value and _height_texture != null)
+	_sync_global_cutout(value and _height_texture != null)
 
 
 func _set_visible(value: bool) -> void:
@@ -340,6 +384,7 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 	_height_texture = null
 	_material.set_shader_parameter("u_height_ready", 0.0)
 	_set_visible(false)
+	_sync_global_cutout(false)
 
 
 func _on_region_changed(_center: Vector3, _radius_m: float) -> void:
@@ -351,6 +396,7 @@ func _on_region_changed(_center: Vector3, _radius_m: float) -> void:
 
 
 func _exit_tree() -> void:
+	_sync_global_cutout(false)
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
