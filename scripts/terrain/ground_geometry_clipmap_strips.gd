@@ -63,7 +63,7 @@ static func _build_full_strip_indices(indices: PackedInt32Array) -> void:
 static func _build_ring_strip_indices(indices: PackedInt32Array) -> void:
 	# The inner hole is exactly half the grid width, matching the previous
 	# triangle-list topology: cells [16,48) x [16,48) for a 64-cell grid.
-	var inner_min: int = GRID_CELLS / 4
+	var inner_min: int = GRID_CELLS >> 2
 	var inner_max: int = GRID_CELLS - inner_min
 	for y: int in GRID_CELLS:
 		if y < inner_min or y >= inner_max:
