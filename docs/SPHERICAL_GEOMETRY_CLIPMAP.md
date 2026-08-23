@@ -64,7 +64,7 @@ dir = center * cos(theta) + tangent * sin(theta)
 position = dir * (planet_radius + height)
 ```
 
-Only the visible spherical cap is required. The active outer level follows camera altitude/horizon distance.
+Only the visible spherical cap is required. The active outer level follows camera altitude/horizon distance. Vertices in the square corners beyond that cap are clamped just outside the cap before fragment rejection, so very large L14 corners cannot wrap around the back side of the sphere.
 
 ## Seam-free handoff
 
@@ -109,7 +109,7 @@ The orbit texture is an immediate safety fallback while new sparse pages are sti
 
 Target cache sizes for the 15-level renderer:
 
-- GPU atlas: 4096 pages (64 x 64 slots, 33 x 33 texels each), about 18 MiB of RGBAF/RF payload scale depending on backend storage
+- GPU atlas: 4096 pages (64 x 64 slots, 33 x 33 texels each). The logical R32F height payload is ~17 MiB; the current Godot `DrawableTexture2D` implementation uses RGBAF for this atlas, so the allocated atlas is ~68 MiB until an RF drawable path replaces it.
 - GPU page table: 16384 entries
 - RAM page cache: 8192 pages
 
@@ -117,9 +117,9 @@ Visible pages are demand touched and protected. The page-table metadata must alw
 
 ## Shading
 
-The vertex shader performs one centre height lookup per vertex. Terrain normals are reconstructed in the fragment shader with screen-space derivatives. The previous five `planet_position()` evaluations per vertex are not used.
+The vertex shader performs one requested sparse height path for ordinary vertices. Only vertices in the outer morph band evaluate the parent height as a second path. Terrain normals are reconstructed in the fragment shader with screen-space derivatives. The previous five `planet_position()` evaluations per vertex are not used.
 
-This is required because a 400-cell, 15-level clipmap is intentionally vertex-rich but still cheap enough when vertex work is one sparse height path rather than five.
+This is required because a 400-cell, 15-level clipmap is intentionally vertex-rich but remains practical when normal vertices use one sparse height path rather than five.
 
 ## Runtime visual architecture
 
