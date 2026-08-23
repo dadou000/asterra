@@ -148,9 +148,14 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 		hs["queued"], height_io, height_bake, hs["dropped"]])
 	if GroundGeometryClipmap.has_method("gpu_stream_stats"):
 		var gs: Dictionary = GroundGeometryClipmap.gpu_stream_stats()
-		lines.append("[color=#666]height GPU blits %d  partial %d  full %d  texels %.1fk[/color]" % [
-			int(gs.get("blit_calls", 0)), int(gs.get("partial_blits", 0)),
-			int(gs.get("full_blits", 0)), float(gs.get("blit_texels", 0)) / 1000.0])
+		lines.append("[color=#666]height GPU pages %d/%d  uploads %d  reupload %d  evict %d  tablefail %d  coverage %s[/color]" % [
+			int(gs.get("page_resident", 0)), int(gs.get("page_capacity", 0)),
+			int(gs.get("page_uploads", 0)), int(gs.get("page_reuploads", 0)),
+			int(gs.get("page_evictions", 0)), int(gs.get("table_failures", 0)),
+			"OK" if bool(gs.get("coverage_ready", false)) else "WAIT"])
+		lines.append("[color=#666]height GPU upload %.1fk texels  batches %d  table rebuilds %d[/color]" % [
+			float(gs.get("page_texels", 0)) / 1000.0, int(gs.get("draw_batches", 0)),
+			int(gs.get("table_rebuilds", 0))])
 	var ps := GroundTerrainPrefetcher.stats()
 	lines.append("[color=#666]terrain prefetch %.0f km/h  lookahead %.0f m[/color]" % [
 		float(ps["speed_mps"]) * 3.6, float(ps["lookahead_m"])])
