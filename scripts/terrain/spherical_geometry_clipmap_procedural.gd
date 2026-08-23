@@ -48,11 +48,11 @@ func _process(_dt: float) -> void:
 		px = 0.0
 		py = 0.0
 
-	var snapped := Vector2(
+	var snapped_center := Vector2(
 		round(px / _base_spacing) * _base_spacing,
 		round(py / _base_spacing) * _base_spacing)
-	if snapped.distance_squared_to(_center_plane) > 1e-8:
-		_center_plane = snapped
+	if snapped_center.distance_squared_to(_center_plane) > 1e-8:
+		_center_plane = snapped_center
 		_update_center_basis()
 
 	_update_visible_cap(planet_pos.length(), radius)
@@ -99,8 +99,8 @@ func _sync_detail_seed() -> void:
 		return
 	# Keep the shader integer in the exact 24-bit range so conversion through the
 	# rendering parameter path cannot lose seed bits.
-	var seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
-	_material.set_shader_parameter("u_detail_seed", maxi(seed, 1))
+	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
 		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
 

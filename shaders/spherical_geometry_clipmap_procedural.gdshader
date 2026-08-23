@@ -77,11 +77,11 @@ uint terrain_hash(ivec3 p, uint seed) {
 	h ^= uint(p.y) * 0xd8163841u;
 	h ^= uint(p.z) * 0xcb1ab31fu;
 	h ^= seed * 0x9e3779b9u;
-	h ^= h >> 16;
+	h ^= h >> uint(16);
 	h *= 0x7feb352du;
-	h ^= h >> 15;
+	h ^= h >> uint(15);
 	h *= 0x846ca68bu;
-	h ^= h >> 16;
+	h ^= h >> uint(16);
 	return h;
 }
 
