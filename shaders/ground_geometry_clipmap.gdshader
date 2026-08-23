@@ -35,10 +35,10 @@ float ring_spacing(float level) {
 float transition_weight(vec2 cell) {
 	float half_cells = u_grid_cells * 0.5;
 	float q = max(abs(cell.x), abs(cell.y)) / max(half_cells, 1.0);
-	// A deliberately broad transition band makes the fine level become the exact
-	// coarse surface before their topology meets. This is what removes visible
-	// square rings instead of hiding them with skirts.
-	return smoothstep(0.78, 0.985, q);
+	// The fine spectrum is completely gone before the topology boundary. Fine
+	// edge vertices therefore lie on the same filtered surface as the next ring,
+	// including the odd vertices that terminate as T-junctions there.
+	return smoothstep(0.74, 0.94, q);
 }
 
 float sample_level(vec2 cell, float level) {
@@ -98,7 +98,10 @@ void vertex() {
 	VERTEX = p - u_origin;
 
 	float q = max(abs(cell.x), abs(cell.y)) / max(u_grid_cells * 0.5, 1.0);
-	v_edge_fade = clip_outer > 0.5 ? smoothstep(0.91, 0.995, q) : 0.0;
+	// The clipmap is already the exact ~48 m backing surface by the time this
+	// outer fade starts, so every discarded pixel reveals an equivalent global
+	// depth-10 point instead of a different shape.
+	v_edge_fade = clip_outer > 0.5 ? smoothstep(0.945, 0.995, q) : 0.0;
 }
 
 float dither_noise(vec2 p) {
