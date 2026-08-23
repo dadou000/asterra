@@ -9,6 +9,7 @@ extends "res://scripts/terrain/planet_height_store.gd"
 
 const VISUAL_PRIORITY_MIN: float = -900.0
 const VISUAL_PRIORITY_MAX: float = -100.0
+const DISK_PRESENCE_LIMIT: int = 32768
 
 var _disk_presence: Dictionary = {}
 var _visual_uncached_skipped: int = 0
@@ -35,6 +36,9 @@ func _queue_tile_locked(level: int, face: int, tile_x: int, tile_y: int,
 		if _disk_presence.has(presence_key):
 			disk_backed = bool(_disk_presence[presence_key])
 		else:
+			# Bound negative-result memoization during very long flights.
+			if _disk_presence.size() >= DISK_PRESENCE_LIMIT:
+				_disk_presence.clear()
 			var relative: String = _relative_path_for_namespace(
 				_namespace, level, face, tile_x, tile_y)
 			disk_backed = FileAccess.file_exists("res://" + relative) \
@@ -53,4 +57,5 @@ func stats() -> Dictionary:
 	out["visual_uncached_skipped"] = _visual_uncached_skipped
 	out["visual_cached_admitted"] = _visual_cached_admitted
 	out["visual_disk_only"] = true
+	out["disk_presence_entries"] = _disk_presence.size()
 	return out
