@@ -3,18 +3,18 @@ extends "res://scripts/terrain/planet_height_page_atlas.gd"
 ##
 ## Godot's DrawableTexture2D backend rejects any dimension above 16383. The
 ## original 16384x1 page table therefore never acquired a valid RID, which caused
-## the repeated `uninitialized RID` errors and forced every shader lookup onto a
-## broken resource. This override keeps the 4096-page height atlas but uses an
-## 8192-entry table and a shorter probe budget.
+## repeated uninitialized RID errors. This keeps the 4096-page atlas with an
+## 8192-entry table and also bounds eviction work once the atlas becomes full.
 
 const SAFE_PAGE_TABLE_CAPACITY: int = 8192
 const SAFE_PAGE_TABLE_MAX_PROBES: int = 12
+const EVICTION_SCAN_BUDGET: int = 256
+
+var _eviction_cursor: int = 0
 
 
 func _ready() -> void:
-	# Do not run the parent _ready(): it constructs the invalid 16384-wide table
-	# before virtual dispatch can be relied upon. Reproduce only its connections,
-	# then initialize the hardware-safe resources directly.
+	# Do not run the parent _ready(): it constructs the invalid 16384-wide table.
 	process_priority = 8
 	GroundHeightStore.tile_ready.connect(_on_tile_ready)
 	Planet.world_ready.connect(_on_world_ready)
@@ -40,6 +40,7 @@ func _reset_cache() -> void:
 		_slots[slot] = {}
 		_free_slots.append(SLOT_COUNT - 1 - slot)
 	_clock = 0
+	_eviction_cursor = 0
 	_wanted_until.clear()
 	_next_prune_msec = 0
 
@@ -76,6 +77,53 @@ func _reset_table_cpu() -> void:
 	_table_slots.fill(0)
 	_key_to_table_index.clear()
 	_table_tombstones = 0
+
+
+func _allocate_slot() -> int:
+	if not _free_slots.is_empty():
+		var index: int = _free_slots.size() - 1
+		var free_slot: int = _free_slots[index]
+		_free_slots.remove_at(index)
+		return free_slot
+
+	# The old path scanned all 4096 slots on every eviction. During sustained
+	# travel that becomes an increasingly visible main-thread hitch. Scan a bounded
+	# rotating window instead; the wanted set is normally much smaller than 4096.
+	var best_unwanted: int = -1
+	var best_unwanted_tick: int = 0x7fffffffffffffff
+	var best_any: int = -1
+	var best_any_tick: int = 0x7fffffffffffffff
+	var scan_count: int = mini(EVICTION_SCAN_BUDGET, SLOT_COUNT)
+	for offset: int in scan_count:
+		var slot: int = (_eviction_cursor + offset) % SLOT_COUNT
+		var meta: Dictionary = _slots[slot]
+		if meta.is_empty():
+			_eviction_cursor = (slot + 1) % SLOT_COUNT
+			return slot
+		var tick: int = int(meta.get("last", 0))
+		if tick < best_any_tick:
+			best_any_tick = tick
+			best_any = slot
+		var key: String = String(meta.get("key", ""))
+		if not _is_wanted(key) and tick < best_unwanted_tick:
+			best_unwanted_tick = tick
+			best_unwanted = slot
+
+	var chosen: int = best_unwanted
+	if chosen < 0:
+		chosen = best_any
+		_forced_protected_evictions += 1
+	if chosen < 0:
+		return -1
+
+	_eviction_cursor = (chosen + 1) % SLOT_COUNT
+	var old_key: String = String(_slots[chosen].get("key", ""))
+	if not old_key.is_empty():
+		_key_to_slot.erase(old_key)
+		_remove_table_entry(old_key)
+	_slots[chosen] = {}
+	_evictions += 1
+	return chosen
 
 
 func _insert_table_entry(key: String, level: int, face: int,
