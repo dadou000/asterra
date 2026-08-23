@@ -139,6 +139,10 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 	lines.append("[color=#666]chunks %d  nodes %d  queued %d  in_flight %d  culled %d  deltas %d tiles  rebases %d[/color]" % [
 		st["chunks"], st["nodes"], st["queued"], st["in_flight"], st["culled"],
 		Deltas.edited_tile_count(), Frames.rebase_count()])
+	var hs := GroundHeightStore.stats()
+	lines.append("[color=#666]height cache RAM %d  memhit %d  disk %d  baked %d  queued %d  in_flight %d[/color]" % [
+		hs["memory_tiles"], hs["memory_hits"], hs["disk_hits"], hs["tiles_built"],
+		hs["queued"], hs["in_flight"]])
 	lines.append("[color=#666]horizon %.1f°  %.0f km[/color]" % [st["horizon_deg"], st["horizon_km"]])
 	lines.append("[color=#666]fps %d[/color]" % Engine.get_frames_per_second())
 	info.text = String("\n").join(lines)
