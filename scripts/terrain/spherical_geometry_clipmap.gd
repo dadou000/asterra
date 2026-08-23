@@ -1,15 +1,15 @@
 extends Node3D
 ## Unified camera-centred spherical geometry clipmap.
 ##
-## This is the only visual terrain renderer. L0 is a full 400x400-cell grid and
-## L1..L14 share one annular topology. All positions are reconstructed in the
-## vertex shader from VERTEX_ID and projected onto the planet with a spherical
-## exponential map. Cube faces exist only in the sparse height-page address space.
+## This is the only visual terrain renderer. L0 is a circular 400-cell-diameter
+## grid disc and L1..L14 share a concentric annular topology. All positions are
+## reconstructed in the vertex shader from VERTEX_ID and projected onto the
+## planet. Cube faces exist only in the sparse height-page address space.
 ##
 ## Adjacent levels overlap. Fine geometry morphs to its parent over the outer
 ## 12.5%, while the coarse ring begins inside that region and is radially sunk.
-## At the shared boundary both levels evaluate the same parent height, eliminating
-## cracks without quadtree stitching or skirts.
+## At the shared circular boundary both levels evaluate the same parent height,
+## eliminating cracks without quadtree stitching or skirts.
 
 const TARGET_FINE_DEPTH: int = 16
 const MAX_LEVEL: int = 14
@@ -274,7 +274,7 @@ func _request_directions_for_level(level: int) -> Array[Vector3]:
 	var spacing: float = _base_spacing * pow(2.0, float(level))
 	var level_half: float = float(HALF_CELLS) * spacing
 	var half: float = minf(level_half * 1.02, _visible_cap_arc_m * 1.08)
-	var radial_limit: float = minf(level_half * 1.45, _visible_cap_arc_m * 1.08)
+	var radial_limit: float = minf(level_half * 1.03, _visible_cap_arc_m * 1.08)
 	var denom: float = float(REQUEST_GRID_STEPS - 1)
 	for yi: int in REQUEST_GRID_STEPS:
 		var fy: float = -1.0 + 2.0 * float(yi) / denom
@@ -351,38 +351,45 @@ static func _build_strip_mesh(with_hole: bool) -> ArrayMesh:
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLE_STRIP, arrays)
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
 
 static func _build_full_strip_indices(indices: PackedInt32Array) -> void:
+	var outer_sq: float = float(HALF_CELLS * HALF_CELLS)
 	for y: int in GRID_CELLS:
-		_append_row_segment(indices, y, 0, GRID_CELLS)
+		var cy: float = float(y) + 0.5 - float(HALF_CELLS)
+		for x: int in GRID_CELLS:
+			var cx: float = float(x) + 0.5 - float(HALF_CELLS)
+			if cx * cx + cy * cy > outer_sq:
+				continue
+			_append_cell_triangles(indices, x, y)
 
 
 static func _build_ring_strip_indices(indices: PackedInt32Array) -> void:
-	var inner_min: int = HALF_CELLS - RING_INNER_HALF_CELLS
-	var inner_max: int = HALF_CELLS + RING_INNER_HALF_CELLS
+	var outer_sq: float = float(HALF_CELLS * HALF_CELLS)
+	var inner_sq: float = float(RING_INNER_HALF_CELLS * RING_INNER_HALF_CELLS)
 	for y: int in GRID_CELLS:
-		if y < inner_min or y >= inner_max:
-			_append_row_segment(indices, y, 0, GRID_CELLS)
-		else:
-			_append_row_segment(indices, y, 0, inner_min)
-			_append_row_segment(indices, y, inner_max, GRID_CELLS)
+		var cy: float = float(y) + 0.5 - float(HALF_CELLS)
+		for x: int in GRID_CELLS:
+			var cx: float = float(x) + 0.5 - float(HALF_CELLS)
+			var r_sq: float = cx * cx + cy * cy
+			if r_sq > outer_sq or r_sq < inner_sq:
+				continue
+			_append_cell_triangles(indices, x, y)
 
 
-static func _append_row_segment(indices: PackedInt32Array,
-		y: int, x0: int, x1: int) -> void:
-	if x1 <= x0:
-		return
-	var first: int = y * GRID_VERTS + x0
-	if not indices.is_empty():
-		var previous_last: int = indices[indices.size() - 1]
-		indices.append(previous_last)
-		indices.append(first)
-	for x: int in range(x0, x1 + 1):
-		indices.append(y * GRID_VERTS + x)
-		indices.append((y + 1) * GRID_VERTS + x)
+static func _append_cell_triangles(indices: PackedInt32Array, x: int, y: int) -> void:
+	var i00: int = y * GRID_VERTS + x
+	var i10: int = i00 + 1
+	var i01: int = (y + 1) * GRID_VERTS + x
+	var i11: int = i01 + 1
+	indices.append(i00)
+	indices.append(i10)
+	indices.append(i11)
+	indices.append(i00)
+	indices.append(i11)
+	indices.append(i01)
 
 
 func rebuild_static_topology() -> void:
@@ -449,4 +456,5 @@ func gpu_stream_stats() -> Dictionary:
 		"coverage_ready": _bound_orbit != null or GroundHeightPageAtlas.ready_for_shader(),
 		"spherical": true,
 		"grid_cells": GRID_CELLS,
+		"concentric": true,
 	}
