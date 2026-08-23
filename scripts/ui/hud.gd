@@ -27,7 +27,7 @@ func _ready() -> void:
 	info.fit_content = false
 	info.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	info.position = Vector2(12, 10)
-	info.size = Vector2(470, 660)
+	info.size = Vector2(500, 680)
 	info.add_theme_font_size_override("normal_font_size", font_size)
 	info.add_theme_color_override("default_color", Color(0.92, 0.95, 1.0))
 	add_child(info)
@@ -146,6 +146,11 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 	lines.append("[color=#666]height cache RAM %d  memhit %d  disk %d  baked %d  queued %d  io %d  bake %d  dropped %d[/color]" % [
 		hs["memory_tiles"], hs["memory_hits"], hs["disk_hits"], hs["tiles_built"],
 		hs["queued"], height_io, height_bake, hs["dropped"]])
+	if GroundGeometryClipmap.has_method("gpu_stream_stats"):
+		var gs: Dictionary = GroundGeometryClipmap.gpu_stream_stats()
+		lines.append("[color=#666]height GPU blits %d  partial %d  full %d  texels %.1fk[/color]" % [
+			int(gs.get("blit_calls", 0)), int(gs.get("partial_blits", 0)),
+			int(gs.get("full_blits", 0)), float(gs.get("blit_texels", 0)) / 1000.0])
 	var ps := GroundTerrainPrefetcher.stats()
 	lines.append("[color=#666]terrain prefetch %.0f km/h  lookahead %.0f m[/color]" % [
 		float(ps["speed_mps"]) * 3.6, float(ps["lookahead_m"])])
