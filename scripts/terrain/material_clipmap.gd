@@ -5,16 +5,14 @@ extends Node
 ## material weights come from three camera-centred texture levels, allowing the
 ## material stream to recenter independently of visual and collision chunks.
 
-## These texels hold material *weights*, not albedo or normals. 128 samples per
-## axis preserve the same three world-space coverage bands while cutting an
-## expensive recenter from 196,608 planet evaluations to 49,152. Fine PBR detail
-## remains in the material textures and is therefore unaffected by this value.
-const RES := 128
-# 8 m ground control, 128 m regional control, and 2.048 km orbital control.
-# At 128 texels the levels retain the original 1/16/262 km spans, so material
-# identity does not fall back to mesh vertices in an ordinary aircraft view.
-const TEXEL_M := Vector3(8.0, 128.0, 2048.0)
-const RECENTER_FRACTION := 0.20
+## 64 samples per axis keeps the same physical coverage as the old 128x128
+## control maps while reducing a recenter from 49,152 planet evaluations to
+## 12,288. These are material weights, not final albedo/normal textures.
+const RES := 64
+# Double texel size so world coverage remains ~1/16/262 km per layer.
+const TEXEL_M := Vector3(16.0, 256.0, 4096.0)
+# Recenter less aggressively during fast travel; the coarse layers overlap widely.
+const RECENTER_FRACTION := 0.32
 
 var _texture: Texture2DArray
 var _center := Vector3(1.0, 0.0, 0.0)
@@ -56,9 +54,6 @@ func _process(_dt: float) -> void:
 
 func _queue(center: Vector3) -> void:
 	var target := center.normalized()
-	# Coalesce identical requests while a worker owns the current generation.
-	# Without this, the missing-texture path superseded that worker every frame,
-	# so no material clipmap could ever publish.
 	if _building and _surface_distance(_requested, target) < 1.0:
 		return
 	_requested = target
@@ -80,8 +75,6 @@ func _start(request: int, center: Vector3) -> void:
 	var task := func() -> void:
 		var images := _build_images(center, right, up, cancel)
 		call_deferred("_ready_images", request, center, right, up, images)
-	# Camera-local material identity is visible immediately after a teleport; do
-	# not queue it behind the multi-second whole-planet orbit cache.
 	_task_id = WorkerThreadPool.add_task(task, true, "asterra_material_clipmap")
 
 
