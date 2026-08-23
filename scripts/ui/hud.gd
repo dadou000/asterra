@@ -153,9 +153,10 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 			int(gs.get("page_uploads", 0)), int(gs.get("page_reuploads", 0)),
 			int(gs.get("page_evictions", 0)), int(gs.get("table_failures", 0)),
 			"OK" if bool(gs.get("coverage_ready", false)) else "WAIT"])
-		lines.append("[color=#666]height GPU upload %.1fk texels  batches %d  table rebuilds %d[/color]" % [
+		lines.append("[color=#666]GPU upload %.1fk texels  batches %d  table cell %d  full rebuild %d  tomb %d[/color]" % [
 			float(gs.get("page_texels", 0)) / 1000.0, int(gs.get("draw_batches", 0)),
-			int(gs.get("table_rebuilds", 0))])
+			int(gs.get("table_updates", 0)), int(gs.get("table_rebuilds", 0)),
+			int(gs.get("table_tombstones", 0))])
 	var ps := GroundTerrainPrefetcher.stats()
 	lines.append("[color=#666]terrain prefetch %.0f km/h  lookahead %.0f m[/color]" % [
 		float(ps["speed_mps"]) * 3.6, float(ps["lookahead_m"])])
