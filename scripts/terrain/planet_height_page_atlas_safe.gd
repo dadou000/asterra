@@ -2,24 +2,17 @@ extends "res://scripts/terrain/planet_height_page_atlas.gd"
 ## Hardware-safe page-table variant for the spherical terrain renderer.
 ##
 ## Keeps the 4096-page atlas and an 8192-entry page table, bounds eviction scans,
-## batches page-table publication, and encodes a short per-page refinement fade in
-## the fractional part of the positive slot metadata. The shader uses that fade to
-## morph newly resident fine geometry from its parent instead of snapping in as a
-## rectangular 33x33 height block.
+## and batches page-table publication so streaming no longer creates a new 1x1
+## ImageTexture/RID for every insert and tombstone.
 
 const SAFE_PAGE_TABLE_CAPACITY: int = 8192
 const SAFE_PAGE_TABLE_MAX_PROBES: int = 12
 const EVICTION_SCAN_BUDGET: int = 256
 const TABLE_FLUSH_INTERVAL_MS: int = 33
-const PAGE_REFINEMENT_FADE_MS: int = 550
-const PAGE_BLEND_ENCODING_SCALE: float = 0.875
 
 var _eviction_cursor: int = 0
 var _table_dirty: bool = false
 var _next_table_flush_msec: int = 0
-var _table_blend := PackedFloat32Array()
-# table index -> upload start msec
-var _fading_indices: Dictionary = {}
 
 
 func _ready() -> void:
@@ -34,9 +27,10 @@ func _ready() -> void:
 func _process(dt: float) -> void:
 	# Preserve wanted-page TTL pruning from the base atlas.
 	super._process(dt)
+	if not _table_dirty:
+		return
 	var now: int = Time.get_ticks_msec()
-	_advance_page_fades(now)
-	if not _table_dirty or now < _next_table_flush_msec:
+	if now < _next_table_flush_msec:
 		return
 	_next_table_flush_msec = now + TABLE_FLUSH_INTERVAL_MS
 	_flush_table_batch()
@@ -48,10 +42,6 @@ func table_capacity() -> int:
 
 func table_max_probes() -> int:
 	return SAFE_PAGE_TABLE_MAX_PROBES
-
-
-func page_blend_encoding_scale() -> float:
-	return PAGE_BLEND_ENCODING_SCALE
 
 
 func _reset_cache() -> void:
@@ -68,7 +58,6 @@ func _reset_cache() -> void:
 	_next_prune_msec = 0
 	_table_dirty = false
 	_next_table_flush_msec = 0
-	_fading_indices.clear()
 
 	_atlas = DrawableTexture2D.new()
 	_atlas.setup(ATLAS_WIDTH, ATLAS_HEIGHT,
@@ -101,11 +90,8 @@ func _reset_table_cpu() -> void:
 	_table_y.fill(0)
 	_table_slots.resize(SAFE_PAGE_TABLE_CAPACITY)
 	_table_slots.fill(0)
-	_table_blend.resize(SAFE_PAGE_TABLE_CAPACITY)
-	_table_blend.fill(0.0)
 	_key_to_table_index.clear()
 	_table_tombstones = 0
-	_fading_indices.clear()
 
 
 func _allocate_slot() -> int:
@@ -204,17 +190,6 @@ func _insert_table_entry_cpu_only(key: String, level: int, face: int,
 	return false
 
 
-func _set_table_entry_cpu(index: int, key: String, page_code: int,
-		tile_x: int, tile_y: int, slot_plus_one: int) -> void:
-	_table_codes[index] = page_code
-	_table_x[index] = tile_x
-	_table_y[index] = tile_y
-	_table_slots[index] = slot_plus_one
-	_table_blend[index] = 0.0
-	_key_to_table_index[key] = index
-	_fading_indices[index] = Time.get_ticks_msec()
-
-
 func _remove_table_entry(key: String) -> void:
 	var index: int = int(_key_to_table_index.get(key, -1))
 	if index < 0 or index >= SAFE_PAGE_TABLE_CAPACITY:
@@ -227,36 +202,8 @@ func _remove_table_entry(key: String) -> void:
 	_table_x[index] = 0
 	_table_y[index] = 0
 	_table_slots[index] = -1
-	_table_blend[index] = 0.0
-	_fading_indices.erase(index)
 	_table_tombstones += 1
 	_mark_table_dirty()
-
-
-func _advance_page_fades(now: int) -> void:
-	if _fading_indices.is_empty():
-		return
-	var finished: Array[int] = []
-	var changed := false
-	for index_value: Variant in _fading_indices.keys():
-		var index: int = int(index_value)
-		if index < 0 or index >= SAFE_PAGE_TABLE_CAPACITY or _table_slots[index] <= 0:
-			finished.append(index)
-			continue
-		var started: int = int(_fading_indices[index])
-		var t: float = clampf(float(now - started) / float(PAGE_REFINEMENT_FADE_MS), 0.0, 1.0)
-		# Smoothstep avoids visible acceleration at either end of the geometry morph.
-		var smooth_t: float = t * t * (3.0 - 2.0 * t)
-		if absf(_table_blend[index] - smooth_t) > 0.005:
-			_table_blend[index] = smooth_t
-			changed = true
-		if t >= 1.0:
-			_table_blend[index] = 1.0
-			finished.append(index)
-	for index: int in finished:
-		_fading_indices.erase(index)
-	if changed or not finished.is_empty():
-		_mark_table_dirty()
 
 
 func _mark_table_dirty() -> void:
@@ -272,12 +219,9 @@ func _flush_table_batch() -> void:
 		var state: int = _table_slots[index]
 		if state == 0:
 			continue
-		var encoded_state: float = float(state)
-		if state > 0:
-			encoded_state += clampf(_table_blend[index], 0.0, 1.0) * PAGE_BLEND_ENCODING_SCALE
 		table_image.set_pixel(index, 0, Color(
 			float(_table_codes[index]), float(_table_x[index]),
-			float(_table_y[index]), encoded_state))
+			float(_table_y[index]), float(state)))
 	var source: ImageTexture = ImageTexture.create_from_image(table_image)
 	if source == null:
 		return
@@ -296,9 +240,6 @@ func _rebuild_page_table_full() -> void:
 		if not _insert_table_entry_cpu_only(key, int(meta["level"]), int(meta["face"]),
 				int(meta["tile_x"]), int(meta["tile_y"]), slot):
 			_table_insert_failures += 1
-	# A compaction must not make every already-resident page visibly refine again.
-	_table_blend.fill(1.0)
-	_fading_indices.clear()
 	_flush_table_batch()
 	_table_full_rebuilds += 1
 
@@ -307,10 +248,3 @@ static func _safe_page_hash(page_code: int, tile_x: int, tile_y: int) -> int:
 	var h: int = tile_x * 1973 + tile_y * 9277 + page_code * 26699
 	var result: int = h % SAFE_PAGE_TABLE_CAPACITY
 	return result + SAFE_PAGE_TABLE_CAPACITY if result < 0 else result
-
-
-func stats() -> Dictionary:
-	var out: Dictionary = super.stats()
-	out["fading_pages"] = _fading_indices.size()
-	out["page_fade_ms"] = PAGE_REFINEMENT_FADE_MS
-	return out
