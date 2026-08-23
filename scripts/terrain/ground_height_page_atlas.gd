@@ -1,15 +1,14 @@
 extends Node
-## GPU-resident page cache for immutable ground-height tiles.
+## GPU-resident page cache for ground-height tiles.
 ##
-## GroundHeightStore owns disk/RAM residency. This node copies each completed
-## 33x33 page into one of 256 persistent atlas slots exactly once, then publishes
-## a tiny GPU hash table mapping (level, face, tile_x, tile_y) -> atlas slot.
-## The geometry shader can therefore address world height pages directly without
-## the old CPU-side 69x69 clipmap-window reconstruction/repacking step.
+## Each completed 33x33 GroundHeightStore tile is uploaded once into a persistent
+## atlas slot. A small open-addressed GPU table maps
+## (level, face, tile_x, tile_y) -> atlas slot.
 ##
-## Player edits remain a sparse overlay. Only atlas pages intersecting an edited
-## region are rebuilt from their pristine RAM payload plus the current delta
-## snapshot; ordinary travel never resamples page heights on the CPU.
+## The table itself is persistent too: normal page insertion/eviction changes one
+## table texel at a time. Deleted entries become tombstones so an eviction never
+## breaks a linear-probing chain. A full table rebuild is only an exceptional
+## recovery path after an insertion failure, not part of normal travel.
 
 const TILE_CELLS := 32
 const TILE_SHIFT := 5
@@ -24,27 +23,35 @@ const SLOT_COUNT := ATLAS_COLS * ATLAS_ROWS
 const ATLAS_WIDTH := ATLAS_COLS * TILE_VERTS
 const ATLAS_HEIGHT := ATLAS_ROWS * TILE_VERTS
 
-# Low load factor keeps shader lookups short even with simple linear probing.
 const PAGE_TABLE_CAPACITY := 2048
 const PAGE_TABLE_MAX_PROBES := 16
 
 var _atlas: DrawableTexture2D
-var _page_table: ImageTexture
-var _page_table_dirty := false
+var _page_table: DrawableTexture2D
 
-# key -> slot index. Slot dictionaries contain key + exact address + LRU tick.
+# Atlas residency.
 var _key_to_slot: Dictionary = {}
 var _slots: Array[Dictionary] = []
 var _free_slots := PackedInt32Array()
-var _clock := 0
+var _clock: int = 0
 
-var _pages_uploaded := 0
-var _page_reuploads := 0
-var _edit_reuploads := 0
-var _evictions := 0
-var _table_rebuilds := 0
-var _table_insert_failures := 0
-var _uploaded_texels := 0
+# Persistent CPU mirror of the GPU hash table.
+# _table_slots: 0 = empty, -1 = tombstone, >0 = atlas slot + 1.
+var _table_codes := PackedInt32Array()
+var _table_x := PackedInt32Array()
+var _table_y := PackedInt32Array()
+var _table_slots := PackedInt32Array()
+var _key_to_table_index: Dictionary = {}
+var _table_tombstones: int = 0
+
+var _pages_uploaded: int = 0
+var _page_reuploads: int = 0
+var _edit_reuploads: int = 0
+var _evictions: int = 0
+var _table_cell_updates: int = 0
+var _table_full_rebuilds: int = 0
+var _table_insert_failures: int = 0
+var _uploaded_texels: int = 0
 
 
 func _ready() -> void:
@@ -54,11 +61,6 @@ func _ready() -> void:
 	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
 	Deltas.region_changed.connect(_on_region_changed)
 	_reset_cache()
-
-
-func _process(_dt: float) -> void:
-	if _page_table_dirty:
-		_rebuild_page_table()
 
 
 func atlas_texture() -> Texture2D:
@@ -89,13 +91,11 @@ func slot_count() -> int:
 	return SLOT_COUNT
 
 
-## Touch all pages required by one bilinear sample. This makes visible/coarse
-## coverage resistant to eviction by speculative pages arriving farther ahead.
 func touch_sample(d: Vector3, level: int) -> bool:
 	var addresses: Array[String] = _keys_for_sample(d, level)
 	if addresses.is_empty():
 		return false
-	var all_present := true
+	var all_present: bool = true
 	for key: String in addresses:
 		if not _key_to_slot.has(key):
 			all_present = false
@@ -105,7 +105,7 @@ func touch_sample(d: Vector3, level: int) -> bool:
 
 
 func touch_samples(directions: Array[Vector3], level: int) -> bool:
-	var all_present := true
+	var all_present: bool = true
 	for d: Vector3 in directions:
 		if not touch_sample(d, level):
 			all_present = false
@@ -130,7 +130,9 @@ func stats() -> Dictionary:
 		"page_reuploads": _page_reuploads,
 		"edit_reuploads": _edit_reuploads,
 		"evictions": _evictions,
-		"table_rebuilds": _table_rebuilds,
+		"table_updates": _table_cell_updates,
+		"table_rebuilds": _table_full_rebuilds,
+		"table_tombstones": _table_tombstones,
 		"table_insert_failures": _table_insert_failures,
 		"uploaded_texels": _uploaded_texels,
 	}
@@ -158,17 +160,32 @@ func _reset_cache() -> void:
 	_atlas.setup(ATLAS_WIDTH, ATLAS_HEIGHT,
 		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 1.0), false)
 
-	var table_image: Image = Image.create(PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
-	_page_table = ImageTexture.create_from_image(table_image)
-	_page_table_dirty = false
+	_reset_table_cpu()
+	_page_table = DrawableTexture2D.new()
+	_page_table.setup(PAGE_TABLE_CAPACITY, 1,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
 
 	_pages_uploaded = 0
 	_page_reuploads = 0
 	_edit_reuploads = 0
 	_evictions = 0
-	_table_rebuilds = 0
+	_table_cell_updates = 0
+	_table_full_rebuilds = 0
 	_table_insert_failures = 0
 	_uploaded_texels = 0
+
+
+func _reset_table_cpu() -> void:
+	_table_codes.resize(PAGE_TABLE_CAPACITY)
+	_table_codes.fill(0)
+	_table_x.resize(PAGE_TABLE_CAPACITY)
+	_table_x.fill(0)
+	_table_y.resize(PAGE_TABLE_CAPACITY)
+	_table_y.fill(0)
+	_table_slots.resize(PAGE_TABLE_CAPACITY)
+	_table_slots.fill(0)
+	_key_to_table_index.clear()
+	_table_tombstones = 0
 
 
 func _on_tile_ready(level: int, face: int, tile_x: int, tile_y: int) -> void:
@@ -181,8 +198,9 @@ func _on_tile_ready(level: int, face: int, tile_x: int, tile_y: int) -> void:
 func _upload_page(level: int, face: int, tile_x: int, tile_y: int,
 		data: PackedFloat32Array, edit_refresh: bool) -> void:
 	var key: String = _page_key(level, face, tile_x, tile_y)
-	var slot: int
 	var is_new: bool = not _key_to_slot.has(key)
+	var slot: int = -1
+
 	if is_new:
 		slot = _allocate_slot()
 		if slot < 0:
@@ -196,7 +214,15 @@ func _upload_page(level: int, face: int, tile_x: int, tile_y: int,
 			"tile_y": tile_y,
 			"last": 0,
 		}
-		_page_table_dirty = true
+		if not _insert_table_entry(key, level, face, tile_x, tile_y, slot):
+			# Extremely rare at this load factor. Compact once and retry before
+			# abandoning the page.
+			_rebuild_page_table_full()
+			if not _key_to_table_index.has(key):
+				_key_to_slot.erase(key)
+				_slots[slot] = {}
+				_free_slots.append(slot)
+				return
 	else:
 		slot = int(_key_to_slot[key])
 
@@ -227,8 +253,8 @@ func _allocate_slot() -> int:
 		_free_slots.remove_at(index)
 		return slot
 
-	var oldest_slot := -1
-	var oldest_tick := 0x7fffffffffffffff
+	var oldest_slot: int = -1
+	var oldest_tick: int = 0x7fffffffffffffff
 	for slot: int in SLOT_COUNT:
 		var meta: Dictionary = _slots[slot]
 		if meta.is_empty():
@@ -243,9 +269,9 @@ func _allocate_slot() -> int:
 	var old_key: String = String(_slots[oldest_slot].get("key", ""))
 	if not old_key.is_empty():
 		_key_to_slot.erase(old_key)
+		_remove_table_entry(old_key)
 	_slots[oldest_slot] = {}
 	_evictions += 1
-	_page_table_dirty = true
 	return oldest_slot
 
 
@@ -256,47 +282,134 @@ func _touch_slot(slot: int) -> void:
 	_slots[slot]["last"] = _clock
 
 
-func _rebuild_page_table() -> void:
-	_page_table_dirty = false
-	var packed := PackedFloat32Array()
-	packed.resize(PAGE_TABLE_CAPACITY * 4)
-	_table_insert_failures = 0
+func _insert_table_entry(key: String, level: int, face: int,
+		tile_x: int, tile_y: int, slot: int) -> bool:
+	var page_code: int = level * 6 + face + 1
+	var start: int = _page_hash(page_code, tile_x, tile_y)
+	var first_tombstone: int = -1
 
+	for probe: int in PAGE_TABLE_MAX_PROBES:
+		var table_index: int = (start + probe) % PAGE_TABLE_CAPACITY
+		var state: int = _table_slots[table_index]
+		if state > 0:
+			if _table_codes[table_index] == page_code \
+					and _table_x[table_index] == tile_x \
+					and _table_y[table_index] == tile_y:
+				_table_slots[table_index] = slot + 1
+				_key_to_table_index[key] = table_index
+				_write_table_cell(table_index)
+				return true
+			continue
+		if state < 0:
+			if first_tombstone < 0:
+				first_tombstone = table_index
+			continue
+
+		var target: int = first_tombstone if first_tombstone >= 0 else table_index
+		_set_table_entry_cpu(target, key, page_code, tile_x, tile_y, slot + 1)
+		if first_tombstone >= 0:
+			_table_tombstones = maxi(_table_tombstones - 1, 0)
+		_write_table_cell(target)
+		return true
+
+	if first_tombstone >= 0:
+		_set_table_entry_cpu(first_tombstone, key, page_code, tile_x, tile_y, slot + 1)
+		_table_tombstones = maxi(_table_tombstones - 1, 0)
+		_write_table_cell(first_tombstone)
+		return true
+
+	_table_insert_failures += 1
+	return false
+
+
+func _set_table_entry_cpu(index: int, key: String, page_code: int,
+		tile_x: int, tile_y: int, slot_plus_one: int) -> void:
+	_table_codes[index] = page_code
+	_table_x[index] = tile_x
+	_table_y[index] = tile_y
+	_table_slots[index] = slot_plus_one
+	_key_to_table_index[key] = index
+
+
+func _remove_table_entry(key: String) -> void:
+	var index: int = int(_key_to_table_index.get(key, -1))
+	if index < 0 or index >= PAGE_TABLE_CAPACITY:
+		_key_to_table_index.erase(key)
+		return
+	_key_to_table_index.erase(key)
+	if _table_slots[index] <= 0:
+		return
+
+	_table_codes[index] = 0
+	_table_x[index] = 0
+	_table_y[index] = 0
+	_table_slots[index] = -1
+	_table_tombstones += 1
+	_write_table_cell(index)
+
+
+func _write_table_cell(index: int) -> void:
+	if _page_table == null or index < 0 or index >= PAGE_TABLE_CAPACITY:
+		return
+	var patch: Image = Image.create(1, 1, false, Image.FORMAT_RGBAF)
+	patch.set_pixel(0, 0, Color(
+		float(_table_codes[index]),
+		float(_table_x[index]),
+		float(_table_y[index]),
+		float(_table_slots[index])))
+	var source: ImageTexture = ImageTexture.create_from_image(patch)
+	if source == null:
+		return
+	_page_table.blit_rect(Rect2i(index, 0, 1, 1), source)
+	_table_cell_updates += 1
+
+
+## Exceptional recovery/compaction path. It creates one fresh GPU table and
+## repopulates it from the 256 atlas slots. Normal streaming never calls this.
+func _rebuild_page_table_full() -> void:
+	_reset_table_cpu()
 	for slot: int in SLOT_COUNT:
 		var meta: Dictionary = _slots[slot]
 		if meta.is_empty():
 			continue
+		var key: String = String(meta["key"])
 		var level: int = int(meta["level"])
 		var face: int = int(meta["face"])
 		var tile_x: int = int(meta["tile_x"])
 		var tile_y: int = int(meta["tile_y"])
-		var page_code: int = level * 6 + face + 1
-		var start: int = _page_hash(page_code, tile_x, tile_y)
-		var inserted := false
-		for probe: int in PAGE_TABLE_MAX_PROBES:
-			var table_index: int = (start + probe) % PAGE_TABLE_CAPACITY
-			var p: int = table_index * 4
-			if packed[p + 3] < 0.5:
-				packed[p] = float(page_code)
-				packed[p + 1] = float(tile_x)
-				packed[p + 2] = float(tile_y)
-				packed[p + 3] = float(slot + 1)
-				inserted = true
-				break
-		if not inserted:
+		if not _insert_table_entry_cpu_only(key, level, face, tile_x, tile_y, slot):
 			_table_insert_failures += 1
 
-	var image: Image = Image.create_from_data(PAGE_TABLE_CAPACITY, 1, false,
-		Image.FORMAT_RGBAF, packed.to_byte_array())
-	if _page_table == null:
-		_page_table = ImageTexture.create_from_image(image)
-	else:
-		_page_table.update(image)
-	_table_rebuilds += 1
+	var table_image: Image = Image.create(PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
+	for index: int in PAGE_TABLE_CAPACITY:
+		if _table_slots[index] <= 0:
+			continue
+		table_image.set_pixel(index, 0, Color(
+			float(_table_codes[index]), float(_table_x[index]),
+			float(_table_y[index]), float(_table_slots[index])))
+	var source: ImageTexture = ImageTexture.create_from_image(table_image)
+	var replacement := DrawableTexture2D.new()
+	replacement.setup(PAGE_TABLE_CAPACITY, 1,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
+	if source != null:
+		replacement.blit_rect(Rect2i(0, 0, PAGE_TABLE_CAPACITY, 1), source)
+	_page_table = replacement
+	_table_full_rebuilds += 1
+
+
+func _insert_table_entry_cpu_only(key: String, level: int, face: int,
+		tile_x: int, tile_y: int, slot: int) -> bool:
+	var page_code: int = level * 6 + face + 1
+	var start: int = _page_hash(page_code, tile_x, tile_y)
+	for probe: int in PAGE_TABLE_MAX_PROBES:
+		var table_index: int = (start + probe) % PAGE_TABLE_CAPACITY
+		if _table_slots[table_index] == 0:
+			_set_table_entry_cpu(table_index, key, page_code, tile_x, tile_y, slot + 1)
+			return true
+	return false
 
 
 static func _page_hash(page_code: int, tile_x: int, tile_y: int) -> int:
-	# Values stay below signed 32-bit range for the current depth-16 lattice.
 	var h: int = tile_x * 1973 + tile_y * 9277 + page_code * 26699
 	var result: int = h % PAGE_TABLE_CAPACITY
 	return result + PAGE_TABLE_CAPACITY if result < 0 else result
@@ -392,13 +505,11 @@ func _on_region_changed(center: Vector3, radius_m: float) -> void:
 		if data.size() == TILE_VERTS * TILE_VERTS:
 			_upload_page(level, face, tile_x, tile_y, data, true)
 		else:
-			# The RAM LRU may have dropped this page. Remove the stale edited copy;
-			# the renderer will request it again if it is still visible.
 			var key: String = String(meta["key"])
 			_key_to_slot.erase(key)
+			_remove_table_entry(key)
 			_slots[slot] = {}
 			_free_slots.append(slot)
-			_page_table_dirty = true
 
 
 func _page_intersects_region(meta: Dictionary, edit_dir: Vector3,
