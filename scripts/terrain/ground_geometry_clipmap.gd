@@ -10,9 +10,9 @@ extends Node3D
 ## All rings share one centre snapped to the ~48 m backing lattice. Consequently
 ## every finer level moves by an integer number of its own cells when the centre
 ## advances. Existing image texels are scrolled; newly exposed samples come from
-## GroundHeightStore's persistent cube-sphere tiles. Once a region has been baked
-## once (or shipped under res:// by the world compiler), movement is RAM/disk I/O
-## plus texture upload rather than procedural terrain synthesis.
+## GroundHeightStore's persistent cube-sphere tiles. Visual cache misses are
+## non-blocking: the clipmap renders the nearest resident parent/macro surface
+## immediately, then refreshes as fine tiles arrive in the background.
 
 const TARGET_FINE_DEPTH := 16
 # 64 cells keeps the 0.75 m representation immediately around the player while
@@ -31,6 +31,10 @@ const MATERIAL_TEXEL_M := Vector3(8.0, 128.0, 2048.0)
 const GLOBAL_CUT_FRACTION := 0.90
 const GLOBAL_BUILD_CAP := 4
 const LOCAL_GLOBAL_BUILD_CAP := 2
+# Several cache pages can finish close together. Rebuilding the complete 7-layer
+# image for every page would trade one kind of churn for another, so coalesce
+# notifications into a small number of progressive refinement updates.
+const CACHE_REFRESH_DELAY := 0.20
 
 var _material: ShaderMaterial
 var _rings: Array[MeshInstance3D] = []
@@ -52,6 +56,8 @@ var _force_full_pending := false
 var _active := false
 var _last_material_control: Texture2DArray
 var _terrain_ref: WeakRef
+var _cache_refresh_pending := false
+var _cache_refresh_left := 0.0
 
 
 func _ready() -> void:
@@ -62,12 +68,22 @@ func _ready() -> void:
 	_set_visible(false)
 	Planet.world_ready.connect(_on_world_ready)
 	Deltas.region_changed.connect(_on_region_changed)
+	GroundHeightStore.tile_ready.connect(_on_height_tile_ready)
 
 
-func _process(_dt: float) -> void:
+func _process(dt: float) -> void:
 	if not Planet.ready_state or Planet.cfg == null:
 		_set_active(false)
 		return
+
+	# Fine pages arrive asynchronously. A short debounce turns a burst of page
+	# completions into one image assembly instead of rebuilding the texture array
+	# once per disk read/tile bake.
+	if _cache_refresh_pending:
+		_cache_refresh_left -= dt
+		if _cache_refresh_left <= 0.0 and _have_frame and not _building:
+			_cache_refresh_pending = false
+			_queue_target(_requested_center, true)
 
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
@@ -131,6 +147,7 @@ func _reset_frame(center: Vector3) -> void:
 	_requested_center = Vector2.ZERO
 	_have_frame = true
 	_frame_epoch += 1
+	_cache_refresh_pending = false
 	# Old image samples belong to a different tangent projection. Keep the global
 	# quadtree visible until the replacement image has been assembled from cached
 	# canonical tiles rather than stretching the old image across the new frame.
@@ -180,9 +197,9 @@ func _start_build(target: Vector2, force_full: bool) -> void:
 		var built := _build_height_images(frame_dir, frame_right, frame_up,
 			old_images, old_center, target, base_spacing, radius, snap)
 		call_deferred("_on_build_ready", epoch, target, built)
-	# Normal priority. Cache hits are cheap and first-time cache misses are
-	# deliberately serialized inside GroundHeightStore instead of competing with
-	# collision/global terrain for every CPU core.
+	# This worker now performs only image assembly, RAM lookups and cheap fallbacks.
+	# Missing visual tiles are queued inside GroundHeightStore and synthesized/read
+	# independently by its one low-priority worker.
 	_task_id = WorkerThreadPool.add_task(task, false, "asterra_ground_clipmap")
 
 
@@ -238,7 +255,10 @@ static func _build_height_images(frame_dir: Vector3, frame_right: Vector3,
 				var plane := new_center + Vector2(float(x) - half, float(y) - half) * spacing
 				var d := _direction_for_plane_static(frame_dir, frame_right, frame_up,
 					plane, radius)
-				var h := GroundHeightStore.sample_height(d, level, snap)
+				# This call is intentionally non-blocking. On a cold cache it can return
+				# a 48 m/parent/macro value for a fine ring while requesting the missing
+				# page in the background. The geometry remains valid and sharpens later.
+				var h := GroundHeightStore.sample_height_nonblocking(d, level, snap)
 				image.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
 		out.append(image)
 	return out
@@ -410,9 +430,21 @@ func _set_visible(value: bool) -> void:
 		ring.visible = value
 
 
+func _on_height_tile_ready(_level: int, _face: int, _tile_x: int, _tile_y: int) -> void:
+	if not _have_frame:
+		return
+	_cache_refresh_pending = true
+	# Preserve an already-near deadline instead of postponing forever while a
+	# continuous stream of tiles completes.
+	if _cache_refresh_left <= 0.0:
+		_cache_refresh_left = CACHE_REFRESH_DELAY
+
+
 func _on_world_ready(_fields: PlanetFields) -> void:
 	_have_frame = false
 	_frame_epoch += 1
+	_cache_refresh_pending = false
+	_cache_refresh_left = 0.0
 	_images.clear()
 	_height_texture = null
 	_material.set_shader_parameter("u_height_ready", 0.0)
