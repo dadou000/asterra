@@ -81,18 +81,29 @@ static func _u32(value: int) -> int:
 	return value & 0xffffffff
 
 
+static func _mul_u32(a: int, b: int) -> int:
+	# 16-bit decomposition gives exact multiplication modulo 2^32 without ever
+	# exceeding GDScript's signed 64-bit integer range.
+	var ua: int = _u32(a)
+	var ub: int = _u32(b)
+	var a0: int = ua & 0xffff
+	var a1: int = (ua >> 16) & 0xffff
+	var b0: int = ub & 0xffff
+	var b1: int = (ub >> 16) & 0xffff
+	var low: int = a0 * b0
+	var mid: int = (a0 * b1 + a1 * b0) & 0xffff
+	return _u32(low + (mid << 16))
+
+
 static func _terrain_hash(p: Vector3i, seed: int) -> int:
-	# Coordinates here are only world/wavelength lattice coordinates (tens of
-	# thousands), so multiply signed coordinates first and then mask to uint32.
-	# This exactly matches GLSL uint wrap while staying well inside int64 range.
-	var h: int = _u32(p.x * 0x8da6b343)
-	h = _u32(h ^ _u32(p.y * 0xd8163841))
-	h = _u32(h ^ _u32(p.z * 0xcb1ab31f))
-	h = _u32(h ^ _u32(seed * 0x9e3779b9))
+	var h: int = _mul_u32(p.x, 0x8da6b343)
+	h = _u32(h ^ _mul_u32(p.y, 0xd8163841))
+	h = _u32(h ^ _mul_u32(p.z, 0xcb1ab31f))
+	h = _u32(h ^ _mul_u32(seed, 0x9e3779b9))
 	h = _u32(h ^ (h >> 16))
-	h = _u32(h * 0x7feb352d)
+	h = _mul_u32(h, 0x7feb352d)
 	h = _u32(h ^ (h >> 15))
-	h = _u32(h * 0x846ca68b)
+	h = _mul_u32(h, 0x846ca68b)
 	h = _u32(h ^ (h >> 16))
 	return h
 
