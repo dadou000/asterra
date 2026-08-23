@@ -219,10 +219,11 @@ vec2 clip_height(vec3 d, vec2 cell, int level) {
 	if (fine.y < 0.5) {
 		return fine;
 	}
-	if (level < ASTERRA_MAX_LEVEL) {
+	float morph = fine_morph_weight(cell);
+	if (level < ASTERRA_MAX_LEVEL && morph > 0.001) {
 		vec2 coarse = sample_best_level(d, level + 1);
 		if (coarse.y > 0.5) {
-			fine.x = mix(fine.x, coarse.x, fine_morph_weight(cell));
+			fine.x = mix(fine.x, coarse.x, morph);
 		}
 	}
 	return fine;
