@@ -38,7 +38,7 @@ float transition_weight(vec2 cell) {
 	// The fine spectrum is completely gone before the topology boundary. Fine
 	// edge vertices therefore lie on the same filtered surface as the next ring,
 	// including the odd vertices that terminate as T-junctions there.
-	return smoothstep(0.74, 0.94, q);
+	return smoothstep(0.72, 0.90, q);
 }
 
 float sample_level(vec2 cell, float level) {
