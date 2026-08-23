@@ -7,23 +7,8 @@ extends Node
 ## small 32x32-cell tiles, and keeps the pristine result on disk.
 ##
 ## Reads prefer a packaged res:// cache first, then the writable user:// cache.
-## That means the exact same runtime code works today as a bake-once cache and
-## later as a fully precompiled world package produced by an offline world
-## compiler. Player edits are deliberately NOT cached: callers add the current
-## Deltas layer after the immutable base height has been read.
-##
-## There are deliberately two sampling paths:
-##
-##   sample_height()             - blocking, for correctness-critical users such
-##                                 as the current collision prototype.
-##   sample_height_nonblocking() - visual streaming path. It NEVER builds or
-##                                 reads a missing tile on the caller thread. It
-##                                 requests the data and returns the nearest
-##                                 resident coarser representation immediately.
-##
-## That distinction is the first step toward the production rule that a missing
-## visual tile is allowed to be temporarily coarse but is never allowed to stall
-## the game to manufacture detail.
+## Visual requests never synchronously touch disk or synthesize terrain: they use
+## the nearest resident parent, queue the missing page, and sharpen later.
 
 signal tile_ready(level: int, face: int, tile_x: int, tile_y: int)
 
@@ -35,7 +20,19 @@ const TILE_CELLS := 32
 const TILE_VERTS := TILE_CELLS + 1
 const MEMORY_TILE_LIMIT := 256
 const CACHE_DIR := "terrain_height_cache"
+
+# One cold-cache baker is intentional. A shipped/precompiled world turns this
+# worker into almost pure disk/decompression work; during development it prevents
+# unseen terrain from taking every CPU core.
 const MAX_ASYNC_IN_FLIGHT := 1
+const MAX_REQUEST_QUEUE := 384
+const REQUEST_QUEUE_TRIM_SLACK := 32
+
+# Lower score means more urgent. Level bias is added separately so parent/coarse
+# data at the same urgency arrives before its fine residual/detail representation.
+const PRIORITY_COLLISION := -1000.0
+const PRIORITY_VISIBLE := 0.0
+const PRIORITY_PREFETCH := 50.0
 
 var _namespace := "unconfigured"
 var _memory: Dictionary = {}
@@ -45,8 +42,11 @@ var _mutex := Mutex.new()
 var _disk_hits := 0
 var _memory_hits := 0
 var _tiles_built := 0
+var _requests_dropped := 0
 
 var _request_queue: Array[Dictionary] = []
+# request key -> current best priority score. Keeping in-flight requests here as
+# well as queued ones prevents duplicate jobs for the same immutable tile.
 var _queued: Dictionary = {}
 var _async_in_flight := 0
 var _active_tasks: Dictionary = {}
@@ -103,12 +103,15 @@ func _configure_namespace() -> void:
 	_disk_hits = 0
 	_memory_hits = 0
 	_tiles_built = 0
+	_requests_dropped = 0
 	_mutex.unlock()
 
 	var root := ProjectSettings.globalize_path("user://%s/%s" % [CACHE_DIR, _namespace])
 	DirAccess.make_dir_recursive_absolute(root)
 
 
+## Blocking/correctness path. Keep this for systems that cannot yet tolerate a
+## coarser fallback. Visual terrain should use sample_height_nonblocking().
 func sample_height(d: Vector3, level: int, snap: Dictionary = {}) -> float:
 	var h := sample_pristine(d, level)
 	if snap.is_empty():
@@ -118,6 +121,8 @@ func sample_height(d: Vector3, level: int, snap: Dictionary = {}) -> float:
 	return h
 
 
+## Visual path. Missing fine data returns the nearest resident parent (or macro
+## terrain) immediately and queues the requested hierarchy in the background.
 func sample_height_nonblocking(d: Vector3, level: int,
 		snap: Dictionary = {}) -> float:
 	var h := sample_pristine_nonblocking(d, level)
@@ -168,17 +173,35 @@ func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
 
 	var request_from := MAX_LEVEL if found_level > MAX_LEVEL else found_level - 1
 	for candidate in range(request_from, used_level - 1, -1):
-		_request_sample(d, candidate)
+		_request_sample(d, candidate, PRIORITY_VISIBLE)
 
 	if is_finite(found):
 		return found
 	return Planet.macro_height(d)
 
 
-func prefetch_sample(d: Vector3, finest_level: int = 0) -> void:
+## Queue a hierarchy around one direction without waiting. Used by predictive
+## streaming. Callers may lower `priority` for physics-critical data or raise it
+## for speculative look-ahead.
+func prefetch_sample(d: Vector3, finest_level: int = 0,
+		priority: float = PRIORITY_PREFETCH) -> void:
 	var used_level := clampi(finest_level, 0, MAX_LEVEL)
 	for candidate in range(MAX_LEVEL, used_level - 1, -1):
-		_request_sample(d, candidate)
+		_request_sample(d, candidate, priority)
+
+
+## Queue exactly one level. Collision uses this to make its source pages urgent
+## without also forcing sub-metre visual data to the front of the queue.
+func request_sample(d: Vector3, level: int,
+		priority: float = PRIORITY_VISIBLE) -> void:
+	_request_sample(d, clampi(level, 0, MAX_LEVEL), priority)
+
+
+## RAM-only residency query. It does no disk I/O and never generates terrain.
+func is_sample_resident(d: Vector3, level: int) -> bool:
+	if not Planet.ready_state or Planet.cfg == null:
+		return false
+	return is_finite(_try_sample_pristine_memory(d, clampi(level, 0, MAX_LEVEL)))
 
 
 func level_for_spacing(metres: float) -> int:
@@ -201,6 +224,7 @@ func stats() -> Dictionary:
 		"tiles_built": _tiles_built,
 		"queued": _request_queue.size(),
 		"in_flight": _async_in_flight,
+		"dropped": _requests_dropped,
 	}
 
 
@@ -247,7 +271,7 @@ func _try_sample_pristine_memory(d: Vector3, level: int) -> float:
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), ty)
 
 
-func _request_sample(d: Vector3, level: int) -> void:
+func _request_sample(d: Vector3, level: int, priority: float) -> void:
 	if _shutting_down or not Planet.ready_state or Planet.cfg == null:
 		return
 	var sample := _sample_coordinates(d, level)
@@ -263,7 +287,9 @@ func _request_sample(d: Vector3, level: int) -> void:
 	_mutex.lock()
 	for vertex in vertices:
 		var addr := _tile_address_for_vertex(vertex.x, vertex.y, cells)
-		_queue_tile_locked(level, face, addr.x, addr.y, cells)
+		_queue_tile_locked(level, face, addr.x, addr.y, cells, priority)
+	if _request_queue.size() > MAX_REQUEST_QUEUE + REQUEST_QUEUE_TRIM_SLACK:
+		_trim_request_queue_locked()
 	_mutex.unlock()
 
 
@@ -288,15 +314,22 @@ func _request_key(cache_namespace: String, level: int, face: int,
 	return "%s:%d:%d:%d:%d" % [cache_namespace, level, face, tile_x, tile_y]
 
 
+func _request_score(priority: float, level: int) -> float:
+	# Within the same urgency class, a 48 m parent (level 6) wins over level 0.
+	return priority + float(MAX_LEVEL - level) * 0.25
+
+
 func _queue_tile_locked(level: int, face: int, tile_x: int, tile_y: int,
-		cells: int) -> void:
+		cells: int, priority: float) -> void:
 	var mem_key := _memory_key(level, face, tile_x, tile_y)
 	if _memory.has(mem_key):
 		return
 	var req_key := _request_key(_namespace, level, face, tile_x, tile_y)
+	var score := _request_score(priority, level)
 	if _queued.has(req_key):
+		_queued[req_key] = minf(float(_queued[req_key]), score)
 		return
-	_queued[req_key] = true
+	_queued[req_key] = score
 	_request_queue.append({
 		"key": req_key,
 		"namespace": _namespace,
@@ -308,6 +341,23 @@ func _queue_tile_locked(level: int, face: int, tile_x: int, tile_y: int,
 	})
 
 
+func _sort_request_queue_locked() -> void:
+	_request_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var pa := float(_queued.get(String(a["key"]), INF))
+		var pb := float(_queued.get(String(b["key"]), INF))
+		if absf(pa - pb) > 1e-6:
+			return pa < pb
+		return int(a["level"]) > int(b["level"]))
+
+
+func _trim_request_queue_locked() -> void:
+	_sort_request_queue_locked()
+	while _request_queue.size() > MAX_REQUEST_QUEUE:
+		var dropped: Dictionary = _request_queue.pop_back()
+		_queued.erase(String(dropped["key"]))
+		_requests_dropped += 1
+
+
 func _pump_async_requests() -> void:
 	if _shutting_down or _async_in_flight >= MAX_ASYNC_IN_FLIGHT:
 		return
@@ -316,8 +366,7 @@ func _pump_async_requests() -> void:
 	if _request_queue.is_empty():
 		_mutex.unlock()
 		return
-	_request_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return int(a["level"]) > int(b["level"]))
+	_sort_request_queue_locked()
 	var request: Dictionary = _request_queue.pop_front()
 	_mutex.unlock()
 
