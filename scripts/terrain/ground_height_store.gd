@@ -205,6 +205,46 @@ func request_sample(d: Vector3, level: int,
 	_mutex.unlock()
 
 
+## Batch visible-page requests under one mutex acquisition. The GPU page-atlas
+## renderer probes a small 3x3 footprint per LOD; issuing those probes one at a
+## time would otherwise spend more time entering the cache lock than queueing work.
+func request_samples(directions: Array[Vector3], level: int,
+		priority: float = PRIORITY_VISIBLE) -> void:
+	if _shutting_down or not Planet.ready_state or Planet.cfg == null \
+			or directions.is_empty():
+		return
+	var used_level: int = clampi(level, 0, MAX_LEVEL)
+	_mutex.lock()
+	for d: Vector3 in directions:
+		_request_sample_locked(d, used_level, priority)
+	if _request_queue.size() > MAX_REQUEST_QUEUE + REQUEST_QUEUE_TRIM_SLACK:
+		_trim_request_queue_locked()
+	_mutex.unlock()
+
+
+## Return an immutable resident page without touching disk or the procedural
+## baker. Packed arrays are ref-counted/copy-on-write, so the atlas can keep this
+## payload even if the RAM LRU later evicts the dictionary entry.
+func resident_tile(level: int, face: int, tile_x: int, tile_y: int) -> PackedFloat32Array:
+	if not Planet.ready_state or Planet.cfg == null:
+		return PackedFloat32Array()
+	var key: String = _memory_key(clampi(level, 0, MAX_LEVEL), face, tile_x, tile_y)
+	_mutex.lock()
+	var result := PackedFloat32Array()
+	if _memory.has(key):
+		result = _memory[key]
+		_memory_hits += 1
+		_touch_locked(key)
+	_mutex.unlock()
+	return result
+
+
+func cells_per_face(level: int) -> int:
+	if Planet.cfg == null:
+		return 0
+	return _cells_per_face(clampi(level, 0, MAX_LEVEL))
+
+
 func is_sample_resident(d: Vector3, level: int) -> bool:
 	if not Planet.ready_state or Planet.cfg == null:
 		return false
