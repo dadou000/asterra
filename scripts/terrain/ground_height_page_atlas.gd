@@ -12,10 +12,13 @@ extends Node
 ## snapshot; ordinary travel never resamples page heights on the CPU.
 
 const TILE_CELLS := 32
+const TILE_SHIFT := 5
+const HALF_TILE_CELLS := 16
 const TILE_VERTS := TILE_CELLS + 1
 const MAX_LEVEL := 6
 
 const ATLAS_COLS := 16
+const ATLAS_COL_SHIFT := 4
 const ATLAS_ROWS := 16
 const SLOT_COUNT := ATLAS_COLS * ATLAS_ROWS
 const ATLAS_WIDTH := ATLAS_COLS * TILE_VERTS
@@ -155,7 +158,7 @@ func _reset_cache() -> void:
 	_atlas.setup(ATLAS_WIDTH, ATLAS_HEIGHT,
 		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 1.0), false)
 
-	var table_image := Image.create(PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
+	var table_image: Image = Image.create(PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
 	_page_table = ImageTexture.create_from_image(table_image)
 	_page_table_dirty = false
 
@@ -179,7 +182,7 @@ func _upload_page(level: int, face: int, tile_x: int, tile_y: int,
 		data: PackedFloat32Array, edit_refresh: bool) -> void:
 	var key: String = _page_key(level, face, tile_x, tile_y)
 	var slot: int
-	var is_new := not _key_to_slot.has(key)
+	var is_new: bool = not _key_to_slot.has(key)
 	if is_new:
 		slot = _allocate_slot()
 		if slot < 0:
@@ -205,8 +208,8 @@ func _upload_page(level: int, face: int, tile_x: int, tile_y: int,
 	if source == null:
 		return
 
-	var atlas_x: int = (slot % ATLAS_COLS) * TILE_VERTS
-	var atlas_y: int = (slot / ATLAS_COLS) * TILE_VERTS
+	var atlas_x: int = (slot & (ATLAS_COLS - 1)) * TILE_VERTS
+	var atlas_y: int = (slot >> ATLAS_COL_SHIFT) * TILE_VERTS
 	_atlas.blit_rect(Rect2i(atlas_x, atlas_y, TILE_VERTS, TILE_VERTS), source)
 	_uploaded_texels += TILE_VERTS * TILE_VERTS
 	if is_new:
@@ -283,7 +286,7 @@ func _rebuild_page_table() -> void:
 		if not inserted:
 			_table_insert_failures += 1
 
-	var image := Image.create_from_data(PAGE_TABLE_CAPACITY, 1, false,
+	var image: Image = Image.create_from_data(PAGE_TABLE_CAPACITY, 1, false,
 		Image.FORMAT_RGBAF, packed.to_byte_array())
 	if _page_table == null:
 		_page_table = ImageTexture.create_from_image(image)
@@ -332,10 +335,10 @@ func _keys_for_sample(d: Vector3, level: int) -> Array[String]:
 
 
 static func _tile_address_for_vertex(ix: int, iy: int, cells: int) -> Vector2i:
-	var tile_count: int = int(ceil(float(cells) / float(TILE_CELLS)))
+	var tile_count: int = (cells + TILE_CELLS - 1) >> TILE_SHIFT
 	return Vector2i(
-		clampi((maxi(ix, 1) - 1) / TILE_CELLS, 0, tile_count - 1),
-		clampi((maxi(iy, 1) - 1) / TILE_CELLS, 0, tile_count - 1))
+		clampi((maxi(ix, 1) - 1) >> TILE_SHIFT, 0, tile_count - 1),
+		clampi((maxi(iy, 1) - 1) >> TILE_SHIFT, 0, tile_count - 1))
 
 
 func _page_image_with_deltas(level: int, face: int, tile_x: int, tile_y: int,
@@ -345,8 +348,8 @@ func _page_image_with_deltas(level: int, face: int, tile_x: int, tile_y: int,
 		return null
 	var start_x: int = tile_x * TILE_CELLS
 	var start_y: int = tile_y * TILE_CELLS
-	var center_x: int = mini(start_x + TILE_CELLS / 2, cells)
-	var center_y: int = mini(start_y + TILE_CELLS / 2, cells)
+	var center_x: int = mini(start_x + HALF_TILE_CELLS, cells)
+	var center_y: int = mini(start_y + HALF_TILE_CELLS, cells)
 	var center_u: float = -1.0 + 2.0 * float(center_x) / float(cells)
 	var center_v: float = -1.0 + 2.0 * float(center_y) / float(cells)
 	var center_dir: Vector3 = CubeSphere.face_uv_to_dir(face, center_u, center_v)
@@ -407,8 +410,8 @@ func _page_intersects_region(meta: Dictionary, edit_dir: Vector3,
 	var cells: int = GroundHeightStore.cells_per_face(level)
 	if cells <= 0:
 		return false
-	var gx: int = mini(tile_x * TILE_CELLS + TILE_CELLS / 2, cells)
-	var gy: int = mini(tile_y * TILE_CELLS + TILE_CELLS / 2, cells)
+	var gx: int = mini(tile_x * TILE_CELLS + HALF_TILE_CELLS, cells)
+	var gy: int = mini(tile_y * TILE_CELLS + HALF_TILE_CELLS, cells)
 	var u: float = -1.0 + 2.0 * float(gx) / float(cells)
 	var v: float = -1.0 + 2.0 * float(gy) / float(cells)
 	var page_dir: Vector3 = CubeSphere.face_uv_to_dir(face, u, v)
