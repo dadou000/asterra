@@ -35,7 +35,9 @@ static var debug_flat := false
 
 static func build(face: int, u0: float, v0: float, size: float, n: int,
 		detail: TerrainDetail, snap: Dictionary, want_collision: bool,
-		stitch_mask: int = 0) -> Dictionary:
+		stitch_mask: int = 0, cancel: TerrainBuildCancel = null) -> Dictionary:
+	if cancel != null and cancel.is_cancelled():
+		return {"cancelled": true}
 	var cfg: GenConfig = Planet.cfg
 	var radius := cfg.planet_radius
 	var step := size / float(n)
@@ -69,6 +71,8 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var grid := Planet.grid
 	var ocean_candidate := false
 	for j in mn:
+		if cancel != null and cancel.is_cancelled():
+			return {"cancelled": true}
 		var v := mu0_at(v0 - step, mspan, j, mres)
 		for i in mn:
 			var u := mu0_at(mu0, mspan, i, mres)
@@ -119,6 +123,8 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var hgt := PackedFloat32Array(); hgt.resize(ext * ext)
 	var dirs := PackedVector3Array(); dirs.resize(ext * ext)
 	for j in ext:
+		if cancel != null and cancel.is_cancelled():
+			return {"cancelled": true}
 		var v := v0 + float(j - 1) * step
 		for i in ext:
 			var u := u0 + float(i - 1) * step
@@ -165,6 +171,8 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var max_h := -1e30
 	var max_dh := 0.0
 	for j in n + 1:
+		if cancel != null and cancel.is_cancelled():
+			return {"cancelled": true}
 		var v := v0 + float(j) * step
 		for i in n + 1:
 			var u := u0 + float(i) * step
@@ -337,6 +345,8 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		var wuv := PackedVector2Array(); wuv.resize(vcount)
 		var wcol := PackedColorArray(); wcol.resize(vcount)
 		for j in n + 1:
+			if cancel != null and cancel.is_cancelled():
+				return {"cancelled": true}
 			var v := v0 + float(j) * step
 			for i in n + 1:
 				var u := u0 + float(i) * step

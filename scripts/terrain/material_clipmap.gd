@@ -25,6 +25,7 @@ var _generation := 0
 var _building := false
 var _task_id := -1
 var _terrain_ref: WeakRef
+var _cancel: TerrainBuildCancel
 
 
 func _ready() -> void:
@@ -63,6 +64,8 @@ func _queue(center: Vector3) -> void:
 	_requested = target
 	_generation += 1
 	if _building:
+		if _cancel != null:
+			_cancel.cancel()
 		return
 	_start(_generation, _requested)
 
@@ -72,22 +75,31 @@ func _start(request: int, center: Vector3) -> void:
 	var basis := CubeSphere.tangent_basis(center)
 	var right: Vector3 = basis[0]
 	var up: Vector3 = basis[1]
+	_cancel = TerrainBuildCancel.new()
+	var cancel := _cancel
 	var task := func() -> void:
-		var images := _build_images(center, right, up)
+		var images := _build_images(center, right, up, cancel)
 		call_deferred("_ready_images", request, center, right, up, images)
-	_task_id = WorkerThreadPool.add_task(task, false, "asterra_material_clipmap")
+	# Camera-local material identity is visible immediately after a teleport; do
+	# not queue it behind the multi-second whole-planet orbit cache.
+	_task_id = WorkerThreadPool.add_task(task, true, "asterra_material_clipmap")
 
 
-static func _build_images(center: Vector3, right: Vector3, up: Vector3) -> Array[Image]:
+static func _build_images(center: Vector3, right: Vector3, up: Vector3,
+		cancel: TerrainBuildCancel = null) -> Array[Image]:
 	var images: Array[Image] = []
 	if not Planet.ready_state:
 		return images
 	var radius := Planet.cfg.planet_radius
 	var half := float(RES) * 0.5
 	for texel_value in [TEXEL_M.x, TEXEL_M.y, TEXEL_M.z]:
+		if cancel != null and cancel.is_cancelled():
+			return []
 		var texel := float(texel_value)
 		var image := Image.create(RES, RES, false, Image.FORMAT_RGBA8)
 		for y in RES:
+			if cancel != null and cancel.is_cancelled():
+				return []
 			var my := (float(y) + 0.5 - half) * texel
 			var row := center + up * (my / radius)
 			for x in RES:
@@ -104,6 +116,7 @@ func _ready_images(request: int, center: Vector3, right: Vector3, up: Vector3,
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
 	_building = false
+	_cancel = null
 	if request == _generation and images.size() == 3:
 		var texture := Texture2DArray.new()
 		if texture.create_from_images(images) == OK:
@@ -148,6 +161,8 @@ func _find_terrain(node: Node) -> PlanetTerrain:
 func _on_world_ready(_fields: PlanetFields) -> void:
 	_generation += 1
 	_texture = null
+	if _building and _cancel != null:
+		_cancel.cancel()
 	if not _building:
 		_queue(_requested)
 
@@ -157,5 +172,7 @@ func _surface_distance(a: Vector3, b: Vector3) -> float:
 
 
 func _exit_tree() -> void:
+	if _cancel != null:
+		_cancel.cancel()
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)

@@ -84,6 +84,7 @@ func _refresh_set() -> void:
 					"key": key, "face": address.x, "i": address.y, "j": address.z,
 					"depth": depth, "revision": 0, "state": 0,
 					"task_id": -1, "body": null, "abandoned": false,
+					"cancel": null,
 				}
 				_entries[key] = entry
 				_queue_entry(entry)
@@ -129,8 +130,10 @@ func _start(entry: Dictionary) -> void:
 	var snap := Deltas.snapshot_for_bounds(center_dir, ang)
 	var n := maxi(cfg.collision_grid, 4)
 	var radius := cfg.planet_radius
+	var cancel := TerrainBuildCancel.new()
+	entry["cancel"] = cancel
 	var task := func() -> void:
-		var built := _build_tile(face, u0, v0, size, n, radius, snap)
+		var built := _build_tile(face, u0, v0, size, n, radius, snap, cancel)
 		_result_mutex.lock()
 		_results.append({"entry": entry, "revision": revision, "built": built})
 		_result_mutex.unlock()
@@ -141,7 +144,9 @@ func _start(entry: Dictionary) -> void:
 
 
 static func _build_tile(face: int, u0: float, v0: float, size: float, n: int,
-		radius: float, snap: Dictionary) -> Dictionary:
+		radius: float, snap: Dictionary, cancel: TerrainBuildCancel = null) -> Dictionary:
+	if cancel != null and cancel.is_cancelled():
+		return {"cancelled": true}
 	var detail := Planet.make_detail()
 	# Collision represents the physical terrain function, not whichever visual LOD
 	# happens to be resident. The fixed grid itself provides its band limit.
@@ -152,6 +157,8 @@ static func _build_tile(face: int, u0: float, v0: float, size: float, n: int,
 	var vertices := PackedVector3Array()
 	vertices.resize((n + 1) * (n + 1))
 	for j in n + 1:
+		if cancel != null and cancel.is_cancelled():
+			return {"cancelled": true}
 		var v := v0 + size * float(j) / float(n)
 		for i in n + 1:
 			var u := u0 + size * float(i) / float(n)
@@ -193,10 +200,15 @@ func _drain_results() -> void:
 			WorkerThreadPool.wait_for_task_completion(tid)
 			_pending_tasks.erase(tid)
 			entry["task_id"] = -1
+			entry["cancel"] = null
 			_in_flight = maxi(0, _in_flight - 1)
 		if bool(entry["abandoned"]):
 			continue
 		if int(result["revision"]) != int(entry["revision"]):
+			entry["state"] = 0
+			_queue_entry(entry)
+			continue
+		if bool((result["built"] as Dictionary).get("cancelled", false)):
 			entry["state"] = 0
 			_queue_entry(entry)
 			continue
@@ -234,6 +246,9 @@ func _on_region_changed(center: Vector3, radius_m: float) -> void:
 		if d.angle_to(center) * cfg.planet_radius > radius_m + tile_radius:
 			continue
 		entry["revision"] = int(entry["revision"]) + 1
+		var cancel: TerrainBuildCancel = entry.get("cancel")
+		if cancel != null:
+			cancel.cancel()
 		if int(entry["state"]) != 1:
 			entry["state"] = 0
 			_queue_entry(entry)
@@ -262,6 +277,9 @@ func _clear() -> void:
 	for value in _entries.values():
 		var entry: Dictionary = value
 		entry["abandoned"] = true
+		var cancel: TerrainBuildCancel = entry.get("cancel")
+		if cancel != null:
+			cancel.cancel()
 		var body: StaticBody3D = entry["body"]
 		if body != null:
 			body.queue_free()

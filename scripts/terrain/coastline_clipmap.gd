@@ -32,6 +32,7 @@ var _have_observer := false
 var _generation: int = 0
 var _building := false
 var _task_id: int = -1
+var _cancel: TerrainBuildCancel
 var _edit_dirty := false
 var _dirty_regions: Array[Dictionary] = []
 var _published_version: int = 0
@@ -104,6 +105,8 @@ func _queue_build(center: Vector3) -> void:
 		return
 	_requested_center = c
 	_generation += 1
+	if _building and _cancel != null:
+		_cancel.cancel()
 	if not _building:
 		_start_build(_generation, _requested_center)
 
@@ -113,6 +116,8 @@ func _start_build(request_id: int, center: Vector3) -> void:
 	var basis: Array = CubeSphere.tangent_basis(center)
 	var right: Vector3 = basis[0]
 	var up: Vector3 = basis[1]
+	_cancel = TerrainBuildCancel.new()
+	var cancel := _cancel
 
 	# Snapshot player edits on the main thread. The worker then reads an immutable
 	# copy while reproducing exactly the same terrain function used by chunks.
@@ -123,10 +128,10 @@ func _start_build(request_id: int, center: Vector3) -> void:
 		snap = Deltas.snapshot_for_bounds(center, ang)
 
 	var task := func() -> void:
-		var built := _build_images(center, right, up, snap)
+		var built := _build_images(center, right, up, snap, cancel)
 		call_deferred("_on_images_ready", request_id, center, right, up, built)
 	# Cosmetic cache work must never compete with missing terrain coverage.
-	_task_id = WorkerThreadPool.add_task(task, false, "asterra_coast_clipmap")
+	_task_id = WorkerThreadPool.add_task(task, true, "asterra_coast_clipmap")
 
 
 ## Rebuild only 32x32 cache tiles touched by terrain edits. The published images
@@ -150,14 +155,16 @@ func _start_patch_build(request_id: int) -> void:
 	var outer_half := 0.5 * float(CLIPMAP_RES) * LEVEL_TEXEL_M.z
 	var ang := outer_half * 1.45 / maxf(Planet.cfg.planet_radius, 1.0)
 	var snap := Deltas.snapshot_for_bounds(center, ang)
+	_cancel = TerrainBuildCancel.new()
+	var cancel := _cancel
 	var task := func() -> void:
-		var built := _patch_images(source, center, right, up, regions, snap)
+		var built := _patch_images(source, center, right, up, regions, snap, cancel)
 		call_deferred("_on_images_ready", request_id, center, right, up, built)
-	_task_id = WorkerThreadPool.add_task(task, false, "asterra_coast_tiles")
+	_task_id = WorkerThreadPool.add_task(task, true, "asterra_coast_tiles")
 
 
 static func _build_images(center: Vector3, right: Vector3, up: Vector3,
-		snap: Dictionary) -> Dictionary:
+		snap: Dictionary, cancel: TerrainBuildCancel = null) -> Dictionary:
 	if not Planet.ready_state or Planet.cfg == null:
 		return {}
 
@@ -168,10 +175,14 @@ static func _build_images(center: Vector3, right: Vector3, up: Vector3,
 	var half_res := float(CLIPMAP_RES) * 0.5
 
 	for level in 3:
+		if cancel != null and cancel.is_cancelled():
+			return {}
 		var texel: float = float(texels[level])
 		var values := PackedFloat32Array()
 		values.resize(CLIPMAP_RES * CLIPMAP_RES)
 		for y in CLIPMAP_RES:
+			if cancel != null and cancel.is_cancelled():
+				return {}
 			var metres_y := (float(y) + 0.5 - half_res) * texel
 			var row_dir := center + up * (metres_y / radius)
 			var row := y * CLIPMAP_RES
@@ -194,13 +205,16 @@ static func _build_images(center: Vector3, right: Vector3, up: Vector3,
 
 
 static func _patch_images(images: Array[Image], center: Vector3, right: Vector3,
-		up: Vector3, regions: Array[Dictionary], snap: Dictionary) -> Dictionary:
+		up: Vector3, regions: Array[Dictionary], snap: Dictionary,
+		cancel: TerrainBuildCancel = null) -> Dictionary:
 	if images.size() != 3 or regions.is_empty() or not Planet.ready_state:
 		return {"images": images, "patch": true}
 	var radius := Planet.cfg.planet_radius
 	var texels := [LEVEL_TEXEL_M.x, LEVEL_TEXEL_M.y, LEVEL_TEXEL_M.z]
 	var half_res := float(CLIPMAP_RES) * 0.5
 	for level in 3:
+		if cancel != null and cancel.is_cancelled():
+			return {}
 		var texel := float(texels[level])
 		var touched := {}
 		for region in regions:
@@ -226,6 +240,8 @@ static func _patch_images(images: Array[Image], center: Vector3, right: Vector3,
 		var image := images[level]
 		var detail := Planet.make_detail()
 		for tile_value in touched.values():
+			if cancel != null and cancel.is_cancelled():
+				return {}
 			var tile: Vector2i = tile_value
 			var x0 := tile.x * UPDATE_TILE
 			var y0 := tile.y * UPDATE_TILE
@@ -251,6 +267,7 @@ func _on_images_ready(request_id: int, center: Vector3, right: Vector3, up: Vect
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
 	_building = false
+	_cancel = null
 
 	# A stale tile patch is still a strict improvement over its source image and
 	# is safe to publish before applying the next dirty tile set. A stale recenter
@@ -290,6 +307,8 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 	_published_images.clear()
 	_published_version += 1
 	_last_applied_version = -1
+	if _building and _cancel != null:
+		_cancel.cancel()
 	if _have_observer:
 		_requested_center = _latest_center
 		if not _building:
@@ -303,6 +322,8 @@ func _on_coast_profile_changed() -> void:
 	_published_images.clear()
 	_published_version += 1
 	_last_applied_version = -1
+	if _building and _cancel != null:
+		_cancel.cancel()
 	if _have_observer:
 		_requested_center = _latest_center
 		if not _building:
@@ -388,6 +409,8 @@ func _surface_distance(a: Vector3, b: Vector3) -> float:
 
 
 func _exit_tree() -> void:
+	if _cancel != null:
+		_cancel.cancel()
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1

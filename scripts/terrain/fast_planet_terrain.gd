@@ -39,6 +39,8 @@ var _motion_dir := Vec3D.new(0.0, 0.0, 0.0)
 var _motion_speed := 0.0
 var _collision_streamer: TerrainCollisionStreamer
 var _topology_scan_left := 0.0
+var _active_cancels: Dictionary = {} # task id -> TerrainBuildCancel
+var _last_stream_band := -1
 
 
 func _ready() -> void:
@@ -58,6 +60,7 @@ func build_roots() -> void:
 	_have_observer = false
 	_motion_speed = 0.0
 	_topology_scan_left = 0.0
+	_last_stream_band = -1
 
 	super.build_roots()
 	_collision_streamer.configure(cfg)
@@ -88,6 +91,8 @@ func set_observer(world_pos: Vec3D) -> void:
 			_motion_speed = lerpf(_motion_speed, instant_speed, 0.35)
 		else:
 			_motion_speed = 0.0
+			if moved >= TELEPORT_THRESHOLD_METRES:
+				_restart_stream_epoch()
 	else:
 		_have_observer = true
 	observer = world_pos
@@ -130,6 +135,10 @@ func _process(dt: float) -> void:
 	# one of them is what a top-down crown model draws.
 	var camera_agl := maxf(
 		observer.length() - cfg.planet_radius - Planet.terrain_height(_obs_dir), 0.0)
+	var stream_band := _stream_band_for_agl(camera_agl)
+	if _last_stream_band >= 0 and stream_band != _last_stream_band:
+		_restart_stream_epoch()
+	_last_stream_band = stream_band
 	_ground_mat.set_shader_parameter("u_camera_agl", camera_agl)
 	_collision_streamer.set_observer(observer, camera_agl <= 320.0)
 
@@ -535,11 +544,12 @@ func _start_request(entry: Dictionary) -> void:
 		detail = Planet.make_detail()
 	else:
 		detail = _free_details.pop_back()
+	var cancel := TerrainBuildCancel.new()
 
 	var task := func() -> void:
 		var data: Dictionary = ChunkBuilder.build(
 			node.face, node.u0, node.v0, node.size,
-			cfg.chunk_grid, detail, snap, want_collision, stitch_mask)
+			cfg.chunk_grid, detail, snap, want_collision, stitch_mask, cancel)
 		_res_mutex.lock()
 		_results.append({"node": node, "data": data, "detail": detail,
 			"revision": request_revision})
@@ -550,6 +560,7 @@ func _start_request(entry: Dictionary) -> void:
 	var high_priority: bool = bool(entry["missing"]) and float(entry["priority"]) < 2.0
 	var tid: int = WorkerThreadPool.add_task(task, high_priority, "asterra_chunk")
 	node.task_id = tid
+	_active_cancels[tid] = cancel
 	_pending_tasks.append(tid)
 	_in_flight += 1
 
@@ -586,12 +597,16 @@ func _drain_results() -> void:
 		if tid >= 0:
 			WorkerThreadPool.wait_for_task_completion(tid)
 			_pending_tasks.erase(tid)
+			_active_cancels.erase(tid)
 			node.task_id = -1
 		_in_flight = maxi(0, _in_flight - 1)
 		_free_details.append(item["detail"])
 
 		var result_revision := int(item.get("revision", -1))
-		if not node.abandoned and result_revision == node.revision:
+		if bool((item["data"] as Dictionary).get("cancelled", false)):
+			node.state = 2 if node.chunk != null else 0
+			node.dirty = node.chunk != null and not node.abandoned
+		elif not node.abandoned and result_revision == node.revision:
 			super._instantiate(node, item["data"])
 			node.dirty = false
 		else:
@@ -621,6 +636,41 @@ func _priority(node: PlanetTerrain.QuadNode, missing: bool) -> float:
 	# siblings of the level that is currently supplying coverage.
 	score += float(node.depth) * 0.025
 	return score
+
+
+## Discard location-specific work at meaningful altitude bands. Queued nodes are
+## reset synchronously; running workers see their cancellation object on the next
+## generated row and return without completing obsolete geometry.
+func _restart_stream_epoch() -> void:
+	for value in _request_queue:
+		var entry: Dictionary = value
+		var node: PlanetTerrain.QuadNode = entry.get("node")
+		if node == null or node.task_id >= 0:
+			continue
+		if node.state == 1 and int(entry.get("token", -1)) == node.request_token:
+			node.request_token += 1
+			node.state = 2 if node.chunk != null else 0
+			node.requested_revision = -1
+			node.dirty = node.chunk != null
+	_request_queue.clear()
+	for value in _active_cancels.values():
+		var cancel: TerrainBuildCancel = value
+		cancel.cancel()
+	_topology_scan_left = 0.0
+
+
+static func _stream_band_for_agl(agl: float) -> int:
+	if agl > 250000.0:
+		return 0
+	if agl > 60000.0:
+		return 1
+	if agl > 12000.0:
+		return 2
+	if agl > 2000.0:
+		return 3
+	if agl > 400.0:
+		return 4
+	return 5
 
 
 func _distance_to_node(node: PlanetTerrain.QuadNode, from: Vec3D) -> float:
