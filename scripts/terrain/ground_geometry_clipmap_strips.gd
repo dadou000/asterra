@@ -4,14 +4,21 @@ extends "res://scripts/terrain/ground_geometry_clipmap.gd"
 ## The terrain shader reconstructs logical grid coordinates from VERTEX_ID, so
 ## the CPU mesh contains only a zero-valued position stream and a compact strip
 ## index stream. Height storage is seven persistent DrawableTexture2D resources.
-## Newly exposed toroidal rows/columns are uploaded as small rectangles; normal
-## movement no longer replaces a complete Texture2DArray layer.
+## Newly exposed toroidal rows/columns are uploaded as small rectangles.
+##
+## Rendering is batched into exactly two MultiMesh submissions: one instance for
+## the solid L0 centre and five instances for L1-L5 rings. INSTANCE_CUSTOM carries
+## clip level and outer-ring state, removing per-level MeshInstance draw overhead
+## without leaving Godot's normal spatial/shadow pipeline.
 
 var _gpu_height_textures: Array[DrawableTexture2D] = []
 var _gpu_blit_calls: int = 0
 var _gpu_blit_texels: int = 0
 var _gpu_full_blits: int = 0
 var _gpu_partial_blits: int = 0
+
+var _center_batch: MultiMeshInstance3D
+var _ring_batch: MultiMeshInstance3D
 
 
 func _reset_frame(center: Vector3) -> void:
@@ -81,8 +88,8 @@ func _publish_height_update(built: Dictionary, centers: Array, origins: Array,
 		_published_center = built_center_value
 
 	# The inherited streamer uses `_height_texture != null` only as its ready flag.
-	# Keep a 1x1 marker so the rest of the coverage/cutout logic can remain shared;
-	# actual terrain heights come exclusively from u_height0..u_height6.
+	# Keep a 1x1 marker so coverage/cutout logic can remain shared; actual terrain
+	# heights come exclusively from u_height0..u_height6.
 	_ensure_height_ready_marker()
 	_material.set_shader_parameter("u_height_ready", 1.0)
 	_sync_height_layout_uniforms()
@@ -157,7 +164,7 @@ func _blit_level_rect(level: int, rect: Rect2i) -> void:
 
 ## Convert an arbitrary set of changed storage texels into a small set of solid
 ## rectangles. A one-cell toroidal X shift becomes one vertical rectangle; an X+Y
-## shift normally becomes three rectangles instead of 69+ individual uploads.
+## shift normally becomes a few rectangles rather than individual texel uploads.
 static func _updates_to_rects(updates: PackedVector3Array) -> Array[Rect2i]:
 	var rects: Array[Rect2i] = []
 	if updates.is_empty():
@@ -210,25 +217,61 @@ func gpu_stream_stats() -> Dictionary:
 		"blit_texels": _gpu_blit_texels,
 		"full_blits": _gpu_full_blits,
 		"partial_blits": _gpu_partial_blits,
+		"draw_batches": 2 if _center_batch != null and _ring_batch != null else 0,
 	}
 
 
+## Two rendering submissions total. The centre and rings need different topology,
+## so they cannot share one MultiMesh, but all five annular levels can be instanced
+## together. Their identity transforms are intentional: spherical placement is
+## reconstructed entirely in the vertex shader.
 func _build_ring_nodes() -> void:
 	var full: ArrayMesh = _build_strip_mesh(false)
 	var ring: ArrayMesh = _build_strip_mesh(true)
-	for level: int in RENDER_LEVELS:
-		var mi := MeshInstance3D.new()
-		mi.name = "GroundClipmapL%d" % level
-		mi.mesh = full if level == 0 else ring
-		mi.material_override = _material
-		mi.set_instance_shader_parameter("clip_level", float(level))
-		mi.set_instance_shader_parameter("clip_outer",
-			1.0 if level == RENDER_LEVELS - 1 else 0.0)
-		mi.custom_aabb = AABB(
-			Vector3(-100000.0, -100000.0, -100000.0),
-			Vector3(200000.0, 200000.0, 200000.0))
-		add_child(mi)
-		_rings.append(mi)
+	var bounds := AABB(
+		Vector3(-100000.0, -100000.0, -100000.0),
+		Vector3(200000.0, 200000.0, 200000.0))
+
+	_center_batch = _make_clipmap_batch("GroundClipmapCenter", full, 1, bounds)
+	_center_batch.multimesh.set_instance_custom_data(0, Color(0.0, 0.0, 0.0, 0.0))
+	add_child(_center_batch)
+
+	_ring_batch = _make_clipmap_batch("GroundClipmapRings", ring, RENDER_LEVELS - 1, bounds)
+	for instance_index: int in range(RENDER_LEVELS - 1):
+		var level: int = instance_index + 1
+		var outer: float = 1.0 if level == RENDER_LEVELS - 1 else 0.0
+		_ring_batch.multimesh.set_instance_custom_data(instance_index,
+			Color(float(level), outer, 0.0, 0.0))
+	add_child(_ring_batch)
+
+
+func _make_clipmap_batch(node_name: String, mesh: ArrayMesh, count: int,
+		bounds: AABB) -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	# Formats/feature flags must be set before instance_count allocates buffers.
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_custom_data = true
+	mm.mesh = mesh
+	mm.custom_aabb = bounds
+	mm.instance_count = count
+	mm.visible_instance_count = count
+	for instance_index: int in count:
+		mm.set_instance_transform(instance_index, Transform3D.IDENTITY)
+
+	var batch := MultiMeshInstance3D.new()
+	batch.name = node_name
+	batch.multimesh = mm
+	batch.material_override = _material
+	return batch
+
+
+## Base clipmap visibility iterates an Array[MeshInstance3D]. The batched renderer
+## intentionally leaves that array empty and owns visibility here instead.
+func _set_visible(value: bool) -> void:
+	if _center_batch != null:
+		_center_batch.visible = value
+	if _ring_batch != null:
+		_ring_batch.visible = value
 
 
 static func _build_strip_mesh(with_hole: bool) -> ArrayMesh:
