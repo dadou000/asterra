@@ -181,9 +181,6 @@ func _request_visible_pages() -> void:
 func _check_backing_coverage() -> bool:
 	if not _have_frame or not GroundHeightPageAtlas.ready_for_shader():
 		return false
-	# L5 is the outer visible ring; L6 is its exact fallback/handoff source. Probe
-	# that physical area densely enough that every page intersecting the local
-	# cutout has been touched before hiding the global terrain underneath it.
 	var outer_half: float = (float(GRID_CELLS) * 0.5 + FOOTPRINT_MARGIN_CELLS) \
 		* _base_spacing * pow(2.0, float(RENDER_LEVELS - 1))
 	var directions: Array[Vector3] = _footprint_directions(STORAGE_LEVELS - 1,
@@ -222,7 +219,9 @@ func gpu_stream_stats() -> Dictionary:
 		"page_reuploads": int(page_stats.get("page_reuploads", 0)),
 		"page_evictions": int(page_stats.get("evictions", 0)),
 		"page_texels": int(page_stats.get("uploaded_texels", 0)),
+		"table_updates": int(page_stats.get("table_updates", 0)),
 		"table_rebuilds": int(page_stats.get("table_rebuilds", 0)),
+		"table_tombstones": int(page_stats.get("table_tombstones", 0)),
 		"table_failures": int(page_stats.get("table_insert_failures", 0)),
 		"coverage_ready": _coverage_ready,
 	}
