@@ -19,7 +19,7 @@ const LEVEL_COUNT: int = MAX_LEVEL + 1
 # ~8 px/vertex at its outer edge and the incoming 2x-coarser level is ~16 px.
 const GRID_CELLS: int = 400
 const GRID_VERTS: int = GRID_CELLS + 1
-const HALF_CELLS: int = GRID_CELLS / 2
+const HALF_CELLS: int = GRID_CELLS >> 1
 const RING_INNER_HALF_CELLS: int = 88
 
 const REANCHOR_M: float = 8000.0
@@ -173,7 +173,7 @@ func _update_visible_cap(observer_radius: float, planet_radius: float) -> void:
 
 func _update_active_levels() -> void:
 	var target_radius: float = maxf(_visible_cap_arc_m, _base_spacing * float(HALF_CELLS))
-	var level := 0
+	var level: int = 0
 	var outer: float = _base_spacing * float(HALF_CELLS)
 	while level < MAX_LEVEL and outer < target_radius:
 		level += 1
