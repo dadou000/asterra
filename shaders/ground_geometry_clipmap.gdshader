@@ -3,9 +3,10 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
 
-// One immutable grid is reused by every ring. Heights live in a texture-array
-// pyramid; the vertex shader turns grid coordinates into spherical planet space.
-uniform sampler2DArray u_height_pyramid : filter_linear, repeat_disable;
+// Height layers are circular CPU/GPU caches. Filtering is done manually below so
+// bilinear samples remain correct when their four texels cross the circular image
+// origin. Hardware filtering would interpolate unrelated opposite edges there.
+uniform sampler2DArray u_height_pyramid : filter_nearest, repeat_disable;
 uniform float u_height_ready = 0.0;
 uniform float u_planet_radius = 1000000.0;
 uniform vec3 u_origin = vec3(0.0);
@@ -14,9 +15,21 @@ uniform vec3 u_frame_right = vec3(0.0, 0.0, -1.0);
 uniform vec3 u_frame_up = vec3(0.0, 1.0, 0.0);
 uniform vec2 u_center_plane = vec2(0.0);
 uniform float u_base_spacing = 0.75;
-uniform float u_grid_cells = 128.0;
+uniform float u_grid_cells = 64.0;
+uniform float u_height_tex_size = 69.0;
+uniform float u_height_half = 34.0;
 uniform float u_storage_levels = 7.0;
 uniform float u_surface_bias = 0.035;
+
+// xy = physical tangent-plane centre of this storage layer.
+// zw = circular image origin: logical texel (0,0) lives at this storage texel.
+uniform vec4 u_height_layout0 = vec4(0.0);
+uniform vec4 u_height_layout1 = vec4(0.0);
+uniform vec4 u_height_layout2 = vec4(0.0);
+uniform vec4 u_height_layout3 = vec4(0.0);
+uniform vec4 u_height_layout4 = vec4(0.0);
+uniform vec4 u_height_layout5 = vec4(0.0);
+uniform vec4 u_height_layout6 = vec4(0.0);
 
 // Per-ring state. Ring 0 is the solid centre; higher levels use the same
 // coordinate mesh with the middle removed.
@@ -32,28 +45,61 @@ float ring_spacing(float level) {
 	return u_base_spacing * exp2(level);
 }
 
+vec4 height_layout(int level) {
+	if (level <= 0) { return u_height_layout0; }
+	if (level == 1) { return u_height_layout1; }
+	if (level == 2) { return u_height_layout2; }
+	if (level == 3) { return u_height_layout3; }
+	if (level == 4) { return u_height_layout4; }
+	if (level == 5) { return u_height_layout5; }
+	return u_height_layout6;
+}
+
+vec2 wrap_texel(vec2 p) {
+	return mod(mod(p, vec2(u_height_tex_size)) + vec2(u_height_tex_size),
+		vec2(u_height_tex_size));
+}
+
+float stored_height(ivec2 logical_texel, int level, vec4 layout) {
+	vec2 storage = wrap_texel(vec2(logical_texel) + layout.zw);
+	vec2 uv = (storage + vec2(0.5)) / u_height_tex_size;
+	return textureLod(u_height_pyramid, vec3(uv, float(level)), 0.0).r;
+}
+
+// Bilinear lookup in physical tangent-plane space. Every height level may have a
+// different snapped centre and circular origin; the visible ring meshes remain
+// centred together, so their topology cannot pull apart as caches scroll.
+float sample_level_plane(vec2 plane, float level_f) {
+	int level = int(floor(level_f + 0.5));
+	vec4 layout = height_layout(level);
+	float spacing = ring_spacing(float(level));
+	vec2 logical = (plane - layout.xy) / spacing + vec2(u_height_half);
+	vec2 base = floor(logical);
+	vec2 f = fract(logical);
+	ivec2 p00 = ivec2(base);
+	ivec2 p10 = p00 + ivec2(1, 0);
+	ivec2 p01 = p00 + ivec2(0, 1);
+	ivec2 p11 = p00 + ivec2(1, 1);
+	float h00 = stored_height(p00, level, layout);
+	float h10 = stored_height(p10, level, layout);
+	float h01 = stored_height(p01, level, layout);
+	float h11 = stored_height(p11, level, layout);
+	return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+}
+
 float transition_weight(vec2 cell) {
 	float half_cells = u_grid_cells * 0.5;
 	float q = max(abs(cell.x), abs(cell.y)) / max(half_cells, 1.0);
-	// The fine spectrum is completely gone before the topology boundary. Fine
-	// edge vertices therefore lie on the same filtered surface as the next ring,
-	// including the odd vertices that terminate as T-junctions there.
+	// Fine detail is completely removed before the topology boundary. The same
+	// physical plane point is sampled from the next level, independent of where
+	// that level's toroidal storage currently wraps.
 	return smoothstep(0.72, 0.90, q);
 }
 
-float sample_level(vec2 cell, float level) {
-	vec2 uv = cell / u_grid_cells + vec2(0.5);
-	return textureLod(u_height_pyramid,
-		vec3(clamp(uv, vec2(0.0), vec2(1.0)), level), 0.0).r;
-}
-
-float clip_height(vec2 cell, float level) {
-	float h = sample_level(cell, level);
+float clip_height(vec2 plane, vec2 cell, float level) {
+	float h = sample_level_plane(plane, level);
 	if (level + 0.5 < u_storage_levels - 1.0) {
-		// The next level covers twice the physical area with the same texture size.
-		// Therefore this point is exactly half as far from the coarse texture centre.
-		vec2 coarse_cell = cell * 0.5;
-		float hc = sample_level(coarse_cell, level + 1.0);
+		float hc = sample_level_plane(plane, level + 1.0);
 		h = mix(h, hc, transition_weight(cell));
 	}
 	return h;
@@ -69,16 +115,13 @@ vec3 planet_position(vec2 cell, float level) {
 	float spacing = ring_spacing(level);
 	vec2 plane = u_center_plane + cell * spacing;
 	vec3 d = direction_for_plane(plane);
-	float h = clip_height(cell, level);
+	float h = clip_height(plane, cell, level);
 	return d * (u_planet_radius + h + u_surface_bias);
 }
 
 void vertex() {
 	v_cell = VERTEX.xz;
 
-	// Godot spatial vertex processors do not allow an early `return`. Keep both
-	// branches explicit so the uninitialised state collapses harmlessly while the
-	// asynchronous height pyramid is still being produced.
 	if (u_height_ready < 0.5) {
 		VERTEX = vec3(0.0);
 		NORMAL = vec3(0.0, 1.0, 0.0);
@@ -103,9 +146,6 @@ void vertex() {
 		VERTEX = p - u_origin;
 
 		float q = max(abs(cell.x), abs(cell.y)) / max(u_grid_cells * 0.5, 1.0);
-		// The clipmap is already the exact ~48 m backing surface by the time this
-		// outer fade starts, so every discarded pixel reveals an equivalent global
-		// depth-10 point instead of a different shape.
 		v_edge_fade = clip_outer > 0.5 ? smoothstep(0.945, 0.995, q) : 0.0;
 	}
 }
@@ -115,9 +155,6 @@ float dither_noise(vec2 p) {
 }
 
 void fragment() {
-	// The outermost ring overlaps the coarse global quadtree for a short band.
-	// Screen-door fading avoids a hard square border without putting the terrain
-	// in Godot's transparent render queue.
 	if (v_edge_fade > 0.001 && dither_noise(FRAGCOORD.xy) < v_edge_fade) {
 		discard;
 	}
