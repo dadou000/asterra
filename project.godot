@@ -23,6 +23,7 @@ Frames="*res://scripts/core/frames.gd"
 Planet="*res://scripts/gen/planet_sampler.gd"
 Deltas="*res://scripts/terrain/terrain_deltas.gd"
 GroundHeightStore="*res://scripts/terrain/ground_height_store.gd"
+GroundTerrainPrefetcher="*res://scripts/terrain/ground_prefetcher.gd"
 CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
 MaterialClipmap="*res://scripts/terrain/material_clipmap.gd"
 GroundGeometryClipmap="*res://scripts/terrain/ground_geometry_clipmap.gd"
@@ -64,12 +65,12 @@ move_up={
 }
 move_down={
 "deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194325,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194325,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
 sprint={
 "deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194326,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194326,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
 dig={
