@@ -44,6 +44,7 @@ const int ASTERRA_MAX_TABLE_PROBES = 32;
 const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
 const float FINE_MORPH_START_Q = 0.875;
+const float MAX_PROJECTED_THETA = 1.62;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -54,7 +55,11 @@ vec3 direction_for_offset(vec2 offset_m) {
 	if (arc < 1e-5) {
 		return normalize(u_center_dir);
 	}
-	float theta = arc / max(u_planet_radius, 1.0);
+	// The largest square rings extend beyond the visible spherical cap. Never let
+	// those unused vertices wrap around the back side of the sphere: collapse them
+	// just outside the cap and let v_cap_valid discard their fragments.
+	float raw_theta = arc / max(u_planet_radius, 1.0);
+	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
 	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
 	return normalize(u_center_dir * cos(theta) + tangent * sin(theta));
 }
@@ -231,7 +236,7 @@ void vertex() {
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
 	float spacing = ring_spacing(level);
 	vec2 offset_m = cell * spacing;
-	float theta = length(offset_m) / max(u_planet_radius, 1.0);
+	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
 	vec3 d = direction_for_offset(offset_m);
 	vec2 h = clip_height(d, cell, level);
 	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
@@ -241,7 +246,7 @@ void vertex() {
 	v_planet = p;
 	v_render = p - u_origin;
 	v_valid = h.y;
-	v_cap_valid = theta <= u_visible_cap_angle ? 1.0 : 0.0;
+	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	VERTEX = v_render;
 }
 
