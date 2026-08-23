@@ -153,6 +153,11 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 			int(gs.get("page_uploads", 0)), int(gs.get("page_reuploads", 0)),
 			int(gs.get("page_evictions", 0)), int(gs.get("table_failures", 0)),
 			"OK" if bool(gs.get("coverage_ready", false)) else "WAIT"])
+		if bool(gs.get("spherical", false)):
+			lines.append("[color=#666]spherical L%d/%d  cap %.1f km  grid %d×%d[/color]" % [
+				int(gs.get("active_levels", 0)), int(gs.get("max_level", 0)) + 1,
+				float(gs.get("visible_cap_km", 0.0)), int(gs.get("grid_cells", 0)),
+				int(gs.get("grid_cells", 0))])
 		lines.append("[color=#666]GPU upload %.1fk texels  batches %d  table cell %d  full rebuild %d  tomb %d[/color]" % [
 			float(gs.get("page_texels", 0)) / 1000.0, int(gs.get("draw_batches", 0)),
 			int(gs.get("table_updates", 0)), int(gs.get("table_rebuilds", 0)),
