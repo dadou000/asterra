@@ -27,7 +27,7 @@ func _ready() -> void:
 	info.fit_content = false
 	info.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	info.position = Vector2(12, 10)
-	info.size = Vector2(450, 660)
+	info.size = Vector2(470, 660)
 	info.add_theme_font_size_override("normal_font_size", font_size)
 	info.add_theme_color_override("default_color", Color(0.92, 0.95, 1.0))
 	add_child(info)
@@ -140,9 +140,12 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 		st["chunks"], st["nodes"], st["queued"], st["in_flight"], st["culled"],
 		Deltas.edited_tile_count(), Frames.rebase_count()])
 	var hs := GroundHeightStore.stats()
-	lines.append("[color=#666]height cache RAM %d  memhit %d  disk %d  baked %d  queued %d  in_flight %d  dropped %d[/color]" % [
+	var height_total: int = int(hs["in_flight"])
+	var height_bake: int = int(hs.get("bake_in_flight", 0))
+	var height_io: int = maxi(height_total - height_bake, 0)
+	lines.append("[color=#666]height cache RAM %d  memhit %d  disk %d  baked %d  queued %d  io %d  bake %d  dropped %d[/color]" % [
 		hs["memory_tiles"], hs["memory_hits"], hs["disk_hits"], hs["tiles_built"],
-		hs["queued"], hs["in_flight"], hs["dropped"]])
+		hs["queued"], height_io, height_bake, hs["dropped"]])
 	var ps := GroundTerrainPrefetcher.stats()
 	lines.append("[color=#666]terrain prefetch %.0f km/h  lookahead %.0f m[/color]" % [
 		float(ps["speed_mps"]) * 3.6, float(ps["lookahead_m"])])
