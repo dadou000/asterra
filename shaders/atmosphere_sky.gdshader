@@ -9,7 +9,16 @@ uniform vec3 u_rayleigh_coeff = vec3(5.5e-6, 13.0e-6, 22.4e-6);
 uniform float u_mie_coeff = 21e-6;
 uniform float u_rayleigh_scale_height = 8000.0;
 uniform float u_mie_scale_height = 1200.0;
-uniform float u_sun_intensity = 22.0;
+uniform float u_mie_g = 0.72;
+/// Ozone absorbs in the Chappuis band without scattering, so it only bites where
+/// the slant path is long. That is what keeps a twilight sky and a viewed-from-
+/// space limb deep blue instead of letting them wash to grey.
+uniform vec3 u_ozone_coeff = vec3(0.650e-6, 1.881e-6, 0.085e-6);
+uniform float u_ozone_centre = 25000.0;
+uniform float u_ozone_width = 15000.0;
+/// See Main.solar_irradiance. Kept identical to the aerial-perspective value so
+/// the sky and the haze in front of the ground are lit by the same star.
+uniform float u_sun_intensity = 5.0265;
 
 #include "res://shaders/planet_lighting.gdshaderinc"
 
@@ -23,6 +32,19 @@ vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
 	if (disc < 0.0) return vec2(1e9, -1e9);
 	float s = sqrt(disc);
 	return vec2(-b - s, -b + s);
+}
+
+float ozone_density(float height) {
+	return max(1.0 - abs(height - u_ozone_centre) / u_ozone_width, 0.0);
+}
+
+/// Cornette-Shanks: keeps the aerosol lobe pointing at the sun -- which is what
+/// gives the limb its bright forward-scattered side -- while staying finite
+/// enough not to draw a flare around the disc.
+float mie_phase(float mu, float g) {
+	float gg = g * g;
+	return (3.0 * (1.0 - gg) * (1.0 + mu * mu))
+		/ (8.0 * PI * (2.0 + gg) * pow(max(1.0 + gg - 2.0 * g * mu, 1e-4), 1.5));
 }
 
 float ray_jitter(vec3 d) {
@@ -39,16 +61,14 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float step_len = (ray_end - ray_start) / float(PRIMARY_STEPS);
 
 	float mu = dot(dir, sun_dir);
-	float mumu = mu * mu;
-	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mumu);
-	// Keep aerosol haze without the strongly forward-focused Mie lobe that
-	// draws a large luminous flare around the solar disc.
-	float phase_mie = 1.0 / (4.0 * PI);
+	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+	float phase_mie = mie_phase(mu, u_mie_g);
 
 	vec3 total_rlh = vec3(0.0);
 	vec3 total_mie = vec3(0.0);
 	float od_rlh = 0.0;
 	float od_mie = 0.0;
+	float od_ozo = 0.0;
 	float t = ray_start;
 	float jitter = ray_jitter(dir);
 
@@ -60,6 +80,7 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 		float step_mie = exp(-height / u_mie_scale_height) * step_len;
 		od_rlh += step_rlh;
 		od_mie += step_mie;
+		od_ozo += ozone_density(height) * step_len;
 
 		float planet_vis = planet_direct_sun_visibility(pos, sun_dir, u_planet_radius);
 		if (planet_vis > 0.001) {
@@ -67,17 +88,20 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 			float light_step_len = max(light_hit.y, 0.0) / float(LIGHT_STEPS);
 			float light_od_rlh = 0.0;
 			float light_od_mie = 0.0;
+			float light_od_ozo = 0.0;
 			float lt = 0.0;
 			for (int j = 0; j < LIGHT_STEPS; j++) {
 				vec3 light_pos = pos + sun_dir * (lt + light_step_len * 0.5);
 				float light_height = max(length(light_pos) - u_planet_radius, 0.0);
 				light_od_rlh += exp(-light_height / u_rayleigh_scale_height) * light_step_len;
 				light_od_mie += exp(-light_height / u_mie_scale_height) * light_step_len;
+				light_od_ozo += ozone_density(light_height) * light_step_len;
 				lt += light_step_len;
 			}
 
 			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
-				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)));
+				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)
+				+ u_ozone_coeff * (od_ozo + light_od_ozo)));
 			attn *= planet_vis;
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;

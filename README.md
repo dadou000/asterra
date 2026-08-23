@@ -19,9 +19,10 @@ Open the folder in Godot 4.7.1 and press **F5**, or:
 
 ```
 godot --path .                               # play
-godot --headless --path . res://tests/Tests.tscn        # 56-check verification suite
+godot --headless --path . res://tests/Tests.tscn        # 68-check verification suite
 godot --headless --path . res://tests/Preview.tscn      # export all 15 map layers as PNG
 godot --headless --path . res://tests/WorldReport.tscn  # hypsometry / lake / ice statistics
+godot --headless --path . res://tests/ClimateReport.tscn # energy balance vs Earth, then Asterra
 godot --headless --path . res://tests/Stream.tscn       # streaming + triangle-budget probe
 ```
 
@@ -62,7 +63,7 @@ coupled.
 | **1.2** continents, islands, mountain belts, plateaus, valleys, basins, coastlines, shelves, icy poles | `gen/pass_macro.gd` |
 | **1.3** bedrock families and strata, faults and folds, sedimentary basins, ore veins, petroleum and gas, high-purity quartz, groundwater layers | `gen/pass_geology.gd` |
 | **1.4** erosion, deterministic watershed network, floodplains, wetlands, groundwater tendencies | `gen/pass_erosion.gd`, `gen/flow_router.gd`, `gen/pass_hydrology.gd` |
-| **1.5** climate fields, derived soil with vertical horizons, derived biomes | `gen/pass_climate.gd`, `gen/pass_soil.gd`, `gen/pass_biome.gd` |
+| **1.5** climate fields from a solved energy balance, derived soil with vertical horizons, derived biomes | `gen/climate_ebm.gd`, `gen/pass_climate.gd`, `gen/pass_soil.gd`, `gen/pass_biome.gd` |
 | **1.6** natural transport corridors computed before any city | `gen/pass_suitability.gd` |
 | **1.7** dig/cut/grade/fill, excavated volume becomes physical material, transport and redeposit, sparse deltas, save/load | `terrain/terrain_editor.gd`, `terrain/terrain_deltas.gd`, `terrain/material_stock.gd`, `terrain/loose_pile.gd`, `persist/save_game.gd` |
 
@@ -108,7 +109,7 @@ shadows.
 
 ## Verification
 
-`tests/Tests.tscn` runs 56 property checks headless, including:
+`tests/Tests.tscn` runs 68 property checks headless, including:
 
 * two bakes of the same seed are bit-identical; a different seed is a different planet
 * the cube-sphere inverse is exact and macro fields interpolate across face seams
@@ -116,6 +117,9 @@ shadows.
 * no flow runs uphill, the drainage network is acyclic, 100 % of land is exorheic
 * deep ocean floor is mafic crust; ore, petroleum and quartz provinces exist
 * poles are colder than the equator; continental interiors are drier than coasts
+* insolation integrates to exactly S0/4; the energy balance converges to a habitable climate
+* cooling the planet grows the ice caps on its own, through the albedo feedback
+* continental interiors have harsher seasons than coasts; wet ground has a flatter year than arid
 * soil texture fractions sum to 1; ≥ 8 biomes emerge from climate alone
 * excavated loose volume equals the in-place volume times the material's bulking factor
 * filling consumes real stock and cannot invent matter

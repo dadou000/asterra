@@ -35,6 +35,7 @@ func _ready() -> void:
 	test_suitability(fields)
 
 	_section("Runtime terrain")
+	test_seaward_coast_profile()
 	test_seam_continuity()
 	test_chunk_build()
 	test_geomorph_lands_on_parent()
@@ -263,6 +264,8 @@ func test_climate(f: PlanetFields) -> void:
 	check("poles are colder than the equator", eq_t - pole_t > 25.0,
 		"equator %.1f C, poles %.1f C" % [eq_t, pole_t])
 
+	test_energy_balance(f)
+
 	# Rain shadow: land far from the sea must be drier than the coast.
 	var coastal := 0.0
 	var cn := 0
@@ -291,6 +294,107 @@ func test_climate(f: PlanetFields) -> void:
 	for c in f.grid.cell_count:
 		wettest = maxf(wettest, f.precip[c])
 	check("precipitation spans a plausible range", wettest > 1500.0, "max %.0f mm/yr" % wettest)
+
+## The temperature field is solved rather than authored, so the things worth
+## checking are properties of the physics, not of a curve someone tuned.
+func test_energy_balance(f: PlanetFields) -> void:
+	var cfg: GenConfig = f.cfg
+	var ebm := ClimateEBM.new(cfg)
+
+	# A sphere intercepts exactly a disc of sunlight, whatever the obliquity.
+	# If the orbital integration is wrong, this is where it shows.
+	var tot := 0.0
+	for b in ClimateEBM.BANDS:
+		tot += ebm.insol_mean[b]
+	var mean_insol := tot / float(ClimateEBM.BANDS)
+	check("insolation integrates to S0/4", absf(mean_insol - cfg.solar_constant * 0.25) < 0.05,
+		"%.2f vs %.2f W/m^2" % [mean_insol, cfg.solar_constant * 0.25])
+
+	ebm.bind_geography(f)
+	ebm.solve()
+	check("energy balance converges", ebm.converged, "%d iterations" % ebm.iterations)
+	var gm := ebm.global_mean_temp()
+	check("solved climate is habitable, not snowball or runaway",
+		gm > -5.0 and gm < 40.0 and ebm.global_ice_fraction() < 0.5,
+		"global mean %.1f C, ice %.1f%%" % [gm, 100.0 * ebm.global_ice_fraction()])
+
+	# The ice-albedo feedback has to be live, or the caps are just a curve: a
+	# colder planet must grow them without anything else being touched.
+	var cold := GenConfig.new()
+	cold.face_res = cfg.face_res
+	cold.greenhouse_offset = -8.0
+	var cold_ebm := ClimateEBM.new(cold)
+	cold_ebm.bind_geography(f)
+	cold_ebm.solve()
+	check("ice caps grow when the planet is cooled",
+		cold_ebm.global_ice_fraction() > ebm.global_ice_fraction() + 0.01,
+		"ice %.1f%% -> %.1f%% at -8 W/m^2"
+			% [100.0 * ebm.global_ice_fraction(), 100.0 * cold_ebm.global_ice_fraction()])
+
+	# Seasonality is a damped slab response, so thermal inertia has to show:
+	# ocean flattens the year, and the continental interior does not.
+	var clim := PassClimate.new(f)
+	clim._winds()
+	clim._distance_to_ocean()
+	var coast := 0.0
+	var coast_n := 0
+	var inland := 0.0
+	var inland_n := 0
+	for c in f.grid.cell_count:
+		if f.elev[c] <= 0.0:
+			continue
+		var lat := absf(rad_to_deg(asin(clampf(f.grid.cell_dir(c).y, -1.0, 1.0))))
+		if lat < 30.0 or lat > 65.0:
+			continue
+		if clim.dist_to_ocean[c] < 60000.0:
+			coast += f.temp_range[c]
+			coast_n += 1
+		elif clim.dist_to_ocean[c] > 300000.0:
+			inland += f.temp_range[c]
+			inland_n += 1
+	if coast_n > 0 and inland_n > 0:
+		check("continental interiors have harsher seasons than coasts",
+			inland / inland_n > coast / coast_n * 1.3,
+			"coast %.1f C, interior %.1f C" % [coast / coast_n, inland / inland_n])
+	else:
+		check("continental interiors have harsher seasons than coasts", true,
+			"not enough interior land to test")
+
+	# find_spawn() filters on temperature, so a climate that drifts cold enough to
+	# empty its 2..24 C window would silently strand the player at cell 0.
+	var habitable := 0
+	for c in f.grid.cell_count:
+		if f.elev[c] <= 5.0 or f.elev[c] > 1400.0:
+			continue
+		if f.temp_mean[c] >= 2.0 and f.temp_mean[c] <= 24.0:
+			habitable += 1
+	check("temperate lowland exists for the player to start on", habitable > 200,
+		"%d cells in the spawn window" % habitable)
+
+	# Evaporation damps the seasonal cycle, so a wet tropical lowland must have a
+	# flatter year than an arid one at the same latitude.
+	var dry := 0.0
+	var dry_n := 0
+	var wet := 0.0
+	var wet_n := 0
+	for c in f.grid.cell_count:
+		if f.elev[c] <= 0.0 or f.elev[c] > 900.0:
+			continue
+		if absf(f.grid.cell_dir(c).y) > 0.42:      # roughly within 25 deg
+			continue
+		if f.precip[c] < 300.0:
+			dry += f.temp_range[c]
+			dry_n += 1
+		elif f.precip[c] > 1600.0:
+			wet += f.temp_range[c]
+			wet_n += 1
+	if dry_n > 0 and wet_n > 0:
+		check("wet ground has a flatter year than arid ground",
+			wet / wet_n < dry / dry_n,
+			"arid %.1f C, humid %.1f C" % [dry / dry_n, wet / wet_n])
+	else:
+		check("wet ground has a flatter year than arid ground", true,
+			"no arid/humid pair at low latitude")
 
 func test_soil_and_biomes(f: PlanetFields) -> void:
 	var kinds := {}
@@ -322,6 +426,29 @@ func test_suitability(f: PlanetFields) -> void:
 		"mean %.2f" % (mean / maxf(1.0, land)))
 
 # ----------------------------------------------------------------- runtime ---
+func test_seaward_coast_profile() -> void:
+	var original := Planet.coast_profile_points()
+	var sea_dir := Vector3.ZERO
+	for c in Planet.grid.cell_count:
+		var candidate := Planet.grid.cell_dir(c)
+		if Planet.macro_height(candidate) < 0.0 and Planet.coast_seaward_distance(candidate) > 1000.0:
+			sea_dir = candidate
+			break
+	var land_dir := Planet.grid.cell_dir(_a_land_cell())
+	var sea_before := Planet.pristine_height(sea_dir)
+	var land_before := Planet.pristine_height(land_dir)
+	Planet.set_coast_profile_points(PackedVector2Array([
+		Vector2(0.0, 0.0), Vector2(1.0, -125.0), Vector2(1000000.0, -125.0),
+	]), false)
+	var sea_after := Planet.pristine_height(sea_dir)
+	var land_after := Planet.pristine_height(land_dir)
+	check("coast profile changes terrain toward the sea",
+		sea_dir != Vector3.ZERO and absf((sea_after - sea_before) + 125.0) < 0.01,
+		"sea offset %.2f m" % (sea_after - sea_before))
+	check("coast profile never changes inland terrain", absf(land_after - land_before) < 1e-5,
+		"land offset %.6f m" % (land_after - land_before))
+	Planet.set_coast_profile_points(original, false)
+
 func test_seam_continuity() -> void:
 	# Three things have to hold at a cube-face seam, on all twelve edges rather
 	# than on the one that happens to be easy. The macro fields must interpolate
@@ -633,11 +760,12 @@ func test_streaming() -> void:
 	await get_tree().process_frame
 	Deltas.clear()
 
-## Subtrees part-way through an LOD hand-over: either still holding the coarse
-## mesh behind their children, or with the children still bent part-way onto it.
+## Subtrees visibly part-way through an LOD hand-over. FastPlanetTerrain retains
+## a hidden coarse parent as an instant fallback after the hand-over commits; its
+## mere residency is deliberate cache state, not an unfinished transition.
 func _resident_handoffs(node) -> int:
 	var n := 0
-	if not node.is_leaf() and (node.chunk != null or node.fine_vis < 1.0):
+	if not node.is_leaf() and node.fine_vis > 0.0 and node.fine_vis < 1.0:
 		n += 1
 	for c in node.children:
 		n += _resident_handoffs(c)

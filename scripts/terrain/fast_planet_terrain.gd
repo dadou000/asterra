@@ -16,6 +16,7 @@ const INSTALL_BUDGET_USEC := 3500
 const PREFETCH_SECONDS := 1.35
 const PREFETCH_MAX_METRES := 120000.0
 const TELEPORT_THRESHOLD_METRES := 250000.0
+const TOPOLOGY_SCAN_INTERVAL := 0.075
 
 ## Queue entries: { node, priority, missing }
 var _request_queue: Array = []
@@ -27,6 +28,8 @@ var _max_concurrent_builds: int = 8
 var _have_observer := false
 var _motion_dir := Vec3D.new(0.0, 0.0, 0.0)
 var _motion_speed := 0.0
+var _collision_streamer: TerrainCollisionStreamer
+var _topology_scan_left := 0.0
 
 
 func _ready() -> void:
@@ -36,14 +39,18 @@ func _ready() -> void:
 	_max_concurrent_builds = clampi(OS.get_processor_count() - 2, 2, MAX_CONCURRENT_BUILDS_CAP)
 	# Mesh creation/upload stays on the main thread and is time-budgeted below.
 	max_builds_per_frame = 24
+	_collision_streamer = TerrainCollisionStreamer.new()
+	add_child(_collision_streamer)
 
 
 func build_roots() -> void:
 	_request_queue.clear()
 	_have_observer = false
 	_motion_speed = 0.0
+	_topology_scan_left = 0.0
 
 	super.build_roots()
+	_collision_streamer.configure(cfg)
 
 	# Build the six actual root chunks synchronously before streaming starts.
 	# There are only six of them, and using the normal chunk resolution avoids the
@@ -96,27 +103,70 @@ func _process(dt: float) -> void:
 	_stats["horizon_km"] = _horizon_angle * cfg.planet_radius / 1000.0
 	_ground_mat.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_water_mat.set_shader_parameter("u_sun_dir", Frames.helion_dir)
+	# Angular size of one pixel. The ground material picks which octaves of its
+	# procedural detail to synthesise from this, so it decides how much texture a
+	# given resolution actually gets -- and it is the difference between 4K
+	# resolving leaf litter and 4K rendering the same blur as 900p, larger.
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var vh: float = maxf(get_viewport().get_visible_rect().size.y, 1.0)
+		_lod_projection_scale = vh / maxf(2.0 * tan(deg_to_rad(cam.fov) * 0.5), 1e-4)
+		_ground_mat.set_shader_parameter("u_pixel_angle",
+			deg_to_rad(cam.fov) / vh)
+
+	# Height above the ground under the observer. The terrain shader needs it to
+	# know whether the camera is above the canopy looking at crowns or under it
+	# looking at the forest floor -- opposite sides of the same forest, and only
+	# one of them is what a top-down crown model draws.
+	var camera_agl := maxf(
+		observer.length() - cfg.planet_radius - Planet.terrain_height(_obs_dir), 0.0)
+	_ground_mat.set_shader_parameter("u_camera_agl", camera_agl)
+	_collision_streamer.set_observer(observer, camera_agl <= 320.0)
 
 	_morph_lock = 0
 	for value in roots:
 		var root: PlanetTerrain.QuadNode = value
 		_update(root, false, 0.0)
 
+	# Neighbour discovery crosses cube faces and descends the quadtree, so doing
+	# it for every resident edge at render frequency wastes substantial main-thread
+	# time while the observer is stationary. A 75 ms cadence is still much shorter
+	# than the LOD morph and chunk-build intervals, and stitch revisions retain the
+	# old mesh until the replacement is ready.
+	_topology_scan_left -= dt
+	if _topology_scan_left <= 0.0:
+		_balance_quadtree()
+		_refresh_stitch_masks()
+		_topology_scan_left = TOPOLOGY_SCAN_INTERVAL
+
 	_pump_requests()
 	_stats["queued"] = _request_queue.size()
 	_stats["in_flight"] = _in_flight
 
 
-func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
-	var node_ang: float = node.size * (PI * 0.25) * 0.78
-	var cull_at: float = _horizon_angle + node_ang
+## Angular radius around the observer inside which this node is worth drawing.
+##
+## Nodes that already have a mesh, and interior nodes, get a wider margin: they
+## cost nothing to keep and the hysteresis stops a node flickering in and out
+## along the horizon.
+func _cull_angle(node: PlanetTerrain.QuadNode) -> float:
+	var cull_at: float = _horizon_angle + node.size * (PI * 0.25) * 0.78
 	if node.chunk != null or not node.is_leaf():
 		cull_at *= HORIZON_CULL_HYSTERESIS
+	return cull_at
 
+
+## Has the horizon culler dropped this node? Uses exactly the same test
+## `_update` applies, because coverage depends on agreeing with it.
+func _is_culled(node: PlanetTerrain.QuadNode) -> bool:
+	return node.center_dir.dot(_obs_dir) < cos(_cull_angle(node))
+
+
+func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
 	# Avoid acos/angle_to per node. When a subtree leaves the horizon, collapse
 	# its children but KEEP this node's own mesh resident as the fallback for the
 	# instant the player turns back toward it.
-	if node.center_dir.dot(_obs_dir) < cos(cull_at):
+	if _is_culled(node):
 		_cancel_queued(node)
 		if not node.is_leaf():
 			_collapse(node)
@@ -131,12 +181,13 @@ func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
 
 	var center_dist: float = _distance_to_node(node, observer)
 	var dist: float = center_dist - node.arc * 0.6
-	var want_split: bool
-	if forced_depth >= 0:
-		want_split = node.depth < forced_depth and int(_stats["nodes"]) < FORCED_NODE_BUDGET
-	else:
-		want_split = node.depth < cfg.quadtree_max_depth \
-			and dist < node.arc * cfg.lod_split_factor
+	var want_split := _wants_split(node, dist)
+
+	# Retained parents are visible fallbacks and must be rebuilt after an edit;
+	# updating only their leaf descendants briefly restores stale terrain whenever
+	# a handoff falls back to the parent.
+	if node.chunk != null and node.dirty and node.state != 1:
+		_request(node)
 
 	if node.is_leaf():
 		if want_split:
@@ -200,7 +251,11 @@ func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
 				return
 
 	var showing_self: bool = node.chunk != null and node.fine_vis <= 0.0
-	if node.chunk != null or node.fine_vis < 1.0:
+	# Only count a handoff that is actually in progress. This used to increment
+	# for every resident interior node, so the figure never reached zero once the
+	# tree had any depth, and anything waiting on "the terrain has settled" waited
+	# for ever instead.
+	if node.fine_vis > 0.0 and node.fine_vis < 1.0:
 		_stats["handoffs"] += 1
 	_apply_chunk(node, not hidden and showing_self, morph)
 
@@ -215,10 +270,142 @@ func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
 		_morph_lock -= 1
 
 
+const MAX_BALANCE_PASSES := 24
+const NEIGHBOUR_PROBE := 1e-6
+
+## Enforce a structural 2:1 quadtree before deriving edge topology. Distance
+## heuristics usually produce this accidentally, but edits, cancellation and
+## cross-face traversal do not. Splitting only resident nodes preserves the
+## coverage-first invariant: a balance repair can never remove the fallback.
+func _balance_quadtree() -> void:
+	for _pass in MAX_BALANCE_PASSES:
+		var leaves: Array[PlanetTerrain.QuadNode] = []
+		for value in roots:
+			_collect_leaves(value, leaves)
+		var changed := false
+		for leaf in leaves:
+			if leaf.depth >= cfg.quadtree_max_depth or leaf.chunk == null or leaf.state == 1:
+				continue
+			for edge in 4:
+				var neighbour := _leaf_at_direction(_edge_probe_dir(leaf, edge))
+				if neighbour != null and neighbour.depth > leaf.depth + 1:
+					_split(leaf)
+					changed = true
+					break
+			if changed:
+				break
+		if not changed:
+			return
+
+
+func _collect_leaves(node: PlanetTerrain.QuadNode,
+		out: Array[PlanetTerrain.QuadNode]) -> void:
+	if node.is_leaf():
+		out.append(node)
+		return
+	for value in node.children:
+		_collect_leaves(value, out)
+
+
+func _edge_probe_dir(node: PlanetTerrain.QuadNode, edge: int) -> Vector3:
+	var u := node.u0 + node.size * 0.5
+	var v := node.v0 + node.size * 0.5
+	match edge:
+		FaceEdge.LEFT:
+			u = node.u0 - NEIGHBOUR_PROBE
+		FaceEdge.RIGHT:
+			u = node.u0 + node.size + NEIGHBOUR_PROBE
+		FaceEdge.BOTTOM:
+			v = node.v0 - NEIGHBOUR_PROBE
+		FaceEdge.TOP:
+			v = node.v0 + node.size + NEIGHBOUR_PROBE
+	return CubeSphere.face_uv_to_dir(node.face, u, v)
+
+
+func _leaf_at_direction(d: Vector3) -> PlanetTerrain.QuadNode:
+	var fuv := CubeSphere.dir_to_face_uv(d)
+	var node: PlanetTerrain.QuadNode = roots[int(fuv[0])]
+	var u := float(fuv[1])
+	var v := float(fuv[2])
+	while not node.is_leaf():
+		var half := node.size * 0.5
+		var east := 1 if u >= node.u0 + half else 0
+		var north := 1 if v >= node.v0 + half else 0
+		node = node.children[north * 2 + east]
+	return node
+
+
+## Return the deepest actually drawn resident at a direction. Retained children
+## can exist below a visible parent during a handoff, so structural depth alone
+## is not the topology currently reaching the framebuffer.
+func _drawn_node_at_direction(d: Vector3) -> PlanetTerrain.QuadNode:
+	var fuv := CubeSphere.dir_to_face_uv(d)
+	var node: PlanetTerrain.QuadNode = roots[int(fuv[0])]
+	var result: PlanetTerrain.QuadNode = node if node.chunk != null and node.drawn else null
+	var u := float(fuv[1])
+	var v := float(fuv[2])
+	while not node.is_leaf():
+		var half := node.size * 0.5
+		var east := 1 if u >= node.u0 + half else 0
+		var north := 1 if v >= node.v0 + half else 0
+		node = node.children[north * 2 + east]
+		if node.chunk != null and node.drawn:
+			result = node
+	return result
+
+
+func _refresh_stitch_masks() -> void:
+	var residents: Array[PlanetTerrain.QuadNode] = []
+	for value in roots:
+		_collect_residents(value, residents)
+	for node in residents:
+		if not node.drawn:
+			continue
+		var mask := 0
+		for edge in 4:
+			var neighbour := _drawn_node_at_direction(_edge_probe_dir(node, edge))
+			if neighbour != null and neighbour.depth == node.depth - 1:
+				mask |= 1 << edge
+		if mask != node.stitch_mask:
+			node.stitch_mask = mask
+			if node.built_stitch_mask != mask:
+				node.revision += 1
+				node.dirty = true
+
+
+func _collect_residents(node: PlanetTerrain.QuadNode,
+		out: Array[PlanetTerrain.QuadNode]) -> void:
+	if node.chunk != null:
+		out.append(node)
+	for value in node.children:
+		_collect_residents(value, out)
+
+
 func _subtree_covered(node: PlanetTerrain.QuadNode) -> bool:
 	# Any resident node is enough to cover its entire region, regardless of how
 	# much deeper refinement underneath it is still pending.
 	if node.chunk != null:
+		return true
+	# A node the horizon culler has dropped cannot expose a hole, because nothing
+	# inside it is drawn -- and demanding a mesh from it deadlocks the entire
+	# branch above it.
+	#
+	# This is not a corner case, it is the normal state of the tree. `_update`
+	# returns early for a culled node, before the request, so a chunkless leaf
+	# out there stays in state 0 for ever: it is never drawn, so it never asks
+	# for a mesh, so it never gets one. Coverage then fails at the root, the root
+	# keeps `showing_self` and every refined chunk under it -- a thousand of them,
+	# fully built and resident -- stays hidden. The whole planet renders from the
+	# six root faces at 49 km vertex spacing, which is a smooth sphere: no relief
+	# at any altitude, and below about 450 metres the camera ends up *inside* that
+	# sphere and the ground vanishes entirely.
+	#
+	# The horizon shrinks as the observer descends, so the lower the camera the
+	# more nodes are culled and the more certain the deadlock: it is worst exactly
+	# where the terrain matters most. The parent stays resident as the fallback,
+	# so if one of these nodes does come back over the horizon, coverage drops,
+	# the parent shows itself again and the request goes out as normal.
+	if _is_culled(node):
 		return true
 	if node.is_leaf():
 		return false
@@ -241,9 +428,13 @@ func _request(node: PlanetTerrain.QuadNode) -> void:
 	node.state = 1
 	node.dirty = false
 	node.task_id = -1
+	node.requested_revision = node.revision
+	node.request_token += 1
 	_request_queue.append({
 		"node": node,
 		"missing": missing,
+		"revision": node.requested_revision,
+		"token": node.request_token,
 		"priority": 0.0,
 	})
 
@@ -252,7 +443,9 @@ func _cancel_queued(node: PlanetTerrain.QuadNode) -> void:
 	if node.state != 1 or node.task_id >= 0:
 		return
 	# The queue entry is lazily discarded by _pump_requests().
+	node.request_token += 1
 	node.state = 2 if node.chunk != null else 0
+	node.requested_revision = -1
 
 
 func _pump_requests() -> void:
@@ -268,8 +461,15 @@ func _pump_requests() -> void:
 		var node: PlanetTerrain.QuadNode = entry["node"]
 		if not is_instance_valid(node):
 			continue
-		if node.abandoned or node.state != 1 or node.task_id >= 0:
+		if node.abandoned or node.state != 1 or node.task_id >= 0 \
+				or int(entry.get("token", -1)) != node.request_token:
 			continue
+		# A queued request has not consumed worker time yet, so update it in place
+		# when an edit or stitch transition supersedes its captured generation.
+		if int(entry.get("revision", -1)) != node.revision:
+			entry["revision"] = node.revision
+			node.requested_revision = node.revision
+			node.dirty = false
 		entry["priority"] = _priority(node, bool(entry["missing"]))
 		kept.append(entry)
 	_request_queue = kept
@@ -281,15 +481,21 @@ func _pump_requests() -> void:
 	while _in_flight < _max_concurrent_builds and not _request_queue.is_empty():
 		var entry: Dictionary = _request_queue.pop_back()
 		var node: PlanetTerrain.QuadNode = entry["node"]
-		if node.abandoned or node.state != 1 or node.task_id >= 0:
+		if node.abandoned or node.state != 1 or node.task_id >= 0 \
+				or int(entry.get("token", -1)) != node.request_token:
 			continue
 		_start_request(entry)
 
 
 func _start_request(entry: Dictionary) -> void:
 	var node: PlanetTerrain.QuadNode = entry["node"]
+	var request_revision := int(entry["revision"])
+	node.requested_revision = request_revision
+	var stitch_mask := node.stitch_mask
 	var band: int = band_for_depth(node.depth)
-	var want_collision: bool = node.depth >= cfg.collision_depth
+	# Physics has its own camera-local stream; visual LOD churn must not create or
+	# retire collision bodies.
+	var want_collision := false
 	var ang: float = node.size * (PI * 0.25) * 1.5
 	var snap: Dictionary = Deltas.snapshot_for_bounds(node.center_dir, ang) if band >= Band.LOCAL else {}
 
@@ -302,9 +508,10 @@ func _start_request(entry: Dictionary) -> void:
 	var task := func() -> void:
 		var data: Dictionary = ChunkBuilder.build(
 			node.face, node.u0, node.v0, node.size,
-			cfg.chunk_grid, detail, snap, want_collision)
+			cfg.chunk_grid, detail, snap, want_collision, stitch_mask)
 		_res_mutex.lock()
-		_results.append({"node": node, "data": data, "detail": detail})
+		_results.append({"node": node, "data": data, "detail": detail,
+			"revision": request_revision})
 		_res_mutex.unlock()
 
 	# Missing geometry gets the worker pool's high-priority lane. Refinements of
@@ -352,10 +559,15 @@ func _drain_results() -> void:
 		_in_flight = maxi(0, _in_flight - 1)
 		_free_details.append(item["detail"])
 
-		if not node.abandoned:
+		var result_revision := int(item.get("revision", -1))
+		if not node.abandoned and result_revision == node.revision:
 			super._instantiate(node, item["data"])
+			node.dirty = false
 		else:
-			node.state = 0
+			# Logical cancellation: workers are not force-killed, but obsolete output
+			# can never replace a newer edit/topology generation.
+			node.state = 2 if node.chunk != null else 0
+			node.dirty = not node.abandoned
 		built += 1
 
 

@@ -108,14 +108,65 @@ Erosion needs rainfall (wet windward slopes really do incise faster), and the
 final rainfall field needs the eroded mountains to cast their rain shadows. So
 `PassClimate` runs once on the raw crust and again on the finished surface.
 
-Temperature falls as sin²(latitude) — the insolation profile — with `polar_bias`
-steepening it, which is what makes Asterra's ice caps larger than Earth's.
 Rainfall is advected moisture: a Dijkstra distance-to-ocean gives the moisture
 supply, an upwind march of 12 cells gives the orographic barrier, and the
 three-cell circulation supplies the wind directions that both depend on. Severe
 weather comes out of the same state: tropical cyclogenesis over warm water away
 from the equator, and continental convective outbreaks downwind of a mountain
 barrier where warm moist inflow meets a dry elevated layer.
+
+## Temperature is solved, not authored
+
+There is no equator-to-pole curve anywhere in the generator. `gen/climate_ebm.gd`
+closes a zonally averaged energy budget — the Budyko/Sellers/North energy-balance
+model — over 180 equal-area latitude bands:
+
+    d/dx [ D (1 - x²) dT/dx ]  -  (A + B T)  +  S(x)(1 - α(x, T))  =  0,   x = sin(lat)
+
+Absorbed sunlight, thermal emission to space and meridional heat transport have
+to balance at every latitude. The operator is linear and tridiagonal, so each
+solve is exact (Thomas); only the albedo is iterated, because α depends on T
+through the ice cover. `A + B·T` is the standard linear-OLR shortcut that carries
+the greenhouse effect implicitly instead of integrating a radiative column.
+
+Three consequences matter more than the equation:
+
+* **The ice caps find their own latitude.** Ice raises albedo, which lowers
+  temperature, which grows ice. Nothing sets a cap boundary; `greenhouse_offset`
+  moves the whole budget and the caps respond. Push it far enough down and the
+  planet snowballs, which is the real bifurcation, not a failure.
+* **Insolation is integrated from the orbit**, not approximated. `axial_tilt_deg`
+  is therefore the thing that actually sets the profile. The integral reproduces
+  published annual means to under 1% and sums to exactly S₀/4 over the sphere.
+* **Geography is in the budget.** Each band solves with its own ocean fraction
+  and land elevation histogram, so a band of continent solves differently from a
+  band of sea, and mountains can hold ice while the lowland beside them does not.
+
+`pass_climate.gd` then adds the local departures from that zonal mean, each one a
+term of a surface energy balance: elevation lapse, the cell's own albedo against
+its band's, where the circulation puts the heat it carries (the maritime edge
+takes more than the interior), and how much of the budget evaporation takes.
+
+Two dampings appear, and the distinction is load-bearing. A single cold cell is
+mixed away laterally by the atmosphere within days, so a *spatial* anomaly is
+damped hard (`anomaly_damping`). The seasonal cycle is hemisphere-wide and has
+nowhere to mix to, so only radiation damps it (`seasonal_damping`). Using one
+number for both sends the ice-albedo feedback into a cell-scale runaway.
+
+The seasonal range falls out of the same numbers rather than a separate curve: a
+slab of the appropriate heat capacity driven by the annual insolation harmonic.
+That is why the ocean flattens the year, why the maritime belt is narrow, and why
+a rainforest barely swings while a desert at the same latitude swings hard —
+evaporation is part of the damping, and it rises with temperature.
+
+Fed Earth's insolation, tilt and land distribution, the model reproduces Earth:
+15 °C global mean, 27 °C at the equator, −15 °C at 80°, 0.30 planetary albedo,
+4% permanent ice. `tests/ClimateReport.tscn` prints that comparison.
+
+Fed Asterra's own — 62% ocean against Earth's 71%, and 21.4° of tilt against
+23.44° — it produces a colder planet with larger caps, which is the correct
+consequence rather than a tuning choice: low obliquity is a known glaciation
+driver, because cool summers fail to melt what the winter laid down.
 
 ## Soil and biomes are derived, not painted
 

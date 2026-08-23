@@ -14,6 +14,31 @@ enum Preset {
 
 const DEFAULT_PRESET := Preset.HIGH
 
+## Sun brightness as Godot light energy. Everything else solar is derived from
+## this, so the scattering and the surface can never disagree about how bright
+## the star is.
+const SUN_LIGHT_ENERGY := 1.6
+
+
+## Top-of-atmosphere solar irradiance, in the same radiance units the shaders
+## work in.
+##
+## This is not a free parameter, and getting it wrong is invisible in isolation
+## and ruinous in combination. The scattering integrals build in-scattered
+## radiance as irradiance x phase x optical depth, while the surface is lit by
+## Godot, which hands `light()` a LIGHT_COLOR already multiplied by energy and by
+## PI. A Lambertian surface therefore returns albedo * energy * ndotl, which is
+## albedo * (energy * PI) * ndotl / PI -- so the irradiance the surface sees is
+## `light_energy * PI`, and the atmosphere has to be told that same number.
+##
+## It previously was not. The shaders defaulted to 22 against a sun of 1.6, so
+## every scattering term was more than four times too bright relative to the
+## ground it was scattering in front of. That does not read as a bright sky, it
+## reads as a pale wash over everything past a few kilometres, and no amount of
+## work on surface colour survives it.
+static func solar_irradiance() -> float:
+	return SUN_LIGHT_ENERGY * PI
+
 
 static func sanitize(preset: int) -> int:
 	return clampi(preset, Preset.PERFORMANCE, Preset.ULTRA)
@@ -116,7 +141,15 @@ static func configure_sun(light: DirectionalLight3D, preset: int, studio := fals
 static func _configure_common_environment(environment: Environment, quality: int) -> void:
 	# AgX preserves hue in bright highlights better than the older Filmic curve.
 	environment.tonemap_mode = Environment.TONE_MAPPER_AGX
-	environment.tonemap_agx_contrast = 1.2
+	environment.tonemap_agx_contrast = 1.45
+	# AgX is a highlight-desaturating curve by design: its inset matrix pulls
+	# every channel toward the others so bright saturated colour rolls off
+	# gracefully instead of clipping to a primary. That is the right behaviour for
+	# highlights and the wrong one for a whole landscape, and this build exposes no
+	# saturation control of its own, so it is restored here. Without it a correct
+	# foliage reflectance still renders as olive-khaki.
+	environment.adjustment_enabled = true
+	environment.adjustment_saturation = 1.38
 	environment.tonemap_agx_white = 12.0
 	environment.tonemap_exposure = 1.0
 

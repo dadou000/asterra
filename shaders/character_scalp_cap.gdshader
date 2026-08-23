@@ -51,7 +51,11 @@ void fragment() {
 	// at 1 mm they are pinpricks with skin all around, by 12 mm they have merged.
 	// Follicles have to be visible far earlier than a linear ramp gives, so the
 	// power front-loads the curve without letting it saturate early.
-	float grow = pow(smoothstep(0.3, 11.0, millimetres), 0.45);
+	// Tuned against targets rather than by feel: 2 mm reads as the old 5 mm did,
+	// 5 mm still shows scalp between flowing strands, and cover only closes near
+	// 13 mm. A smoothstep cannot hit all three because it flattens at both ends,
+	// so this is a plain power ramp with a dead zone below half a millimetre.
+	float grow = pow(clamp((millimetres - 0.4) / 12.6, 0.0, 1.0), 0.62);
 	float threshold = mix(0.82, 0.06, grow);
 	vec4 follicle = texture(follicle_map, chart);
 	float dot_field = follicle.a * mix(0.72, 1.0, follicle.g);
@@ -86,7 +90,7 @@ void fragment() {
 	// mean per-follicle strength and the soft edge folds in at half width. Getting
 	// either wrong leaves a visible ring where resolved dots meet averaged tone.
 	float radius = max(1.0 - (threshold + soft_edge * 0.5) / 0.86, 0.0);
-	float mean_coverage = clamp(2.66 * radius * radius * (1.0 + streak * 1.6), 0.0, 1.0);
+	float mean_coverage = clamp(2.66 * radius * radius * (1.0 + streak * 0.8), 0.0, 1.0);
 	float cells_per_pixel = max(fwidth(chart.x), fwidth(chart.y)) * follicle_cells;
 	float detail = 1.0 - smoothstep(0.30, 1.05, cells_per_pixel);
 	float dots = mix(mean_coverage, resolved, detail);

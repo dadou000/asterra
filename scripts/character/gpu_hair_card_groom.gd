@@ -289,7 +289,10 @@ func rebuild_hair() -> void:
 	# of strands. The old 4 mm cards were narrower than the highlight they were
 	# meant to catch, which is why the sheen aliased into sparkle instead of
 	# forming a band, and why 1700 of them still failed to cover the scalp.
-	_card_width = clampf(base_length * lerpf(0.22, 0.12, long_hair), 0.010, 0.032)
+	# The lower clamp used to be 10 mm, which on a short groom made every card
+	# wider than it was long. Cards are proportional now, with the per-card cap
+	# below as the real guarantee.
+	_card_width = clampf(base_length * lerpf(0.22, 0.12, long_hair), 0.003, 0.032)
 	# Still used as the collision margin for the guide chains.
 	_render_fiber_width = clampf(requested_fiber_width * 1.35, 0.00018, 0.00072)
 	var volume := clampf(float(hair_settings.get("volume", 0.38)), 0.0, 1.0)
@@ -339,6 +342,18 @@ func rebuild_hair() -> void:
 				length_scale = lerpf(0.82, 1.18, _hash01(seed_value * 19.73 + 4.1)) * _root_length_scale(region, root_local)
 				width_scale = lerpf(0.72, 1.16, _hash01(seed_value * 7.91 + 2.7))
 			width_scale *= _part_narrowing(region)
+			# The minimum applies to the card, not to the strand it came from. A
+			# base-layer card is a fifth to a third of the strand, so a 5 mm strand
+			# yields a 1.4 mm card that is still twenty-odd millimetres wide, and it
+			# reads as a chevron lying flat on the scalp. The stipple already covers
+			# that range, so those cards are pure noise.
+			if base_length * length_scale < CARD_MIN_LENGTH:
+				continue
+			# A card wider than it is long lies across the scalp as a chevron rather
+			# than reading as a strand. This is what a short groom kept producing,
+			# and no length threshold fixes it because the aspect ratio is the fault.
+			var card_length := base_length * length_scale
+			width_scale = minf(width_scale, card_length * 0.9 / maxf(_card_width, 0.0001))
 			var guide_index := _nearest_guide(root_local)
 			# A follower must use the same complete frame as its guide. Applying a
 			# guide-space bend through an independently estimated follower frame is

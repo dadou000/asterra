@@ -12,6 +12,11 @@ const LATTICE := 1 << EDIT_DEPTH
 const TILE := 64
 const TILE_SHIFT := 6
 const FORMAT_VERSION := 1
+## Fraction of a lattice interval used only to disambiguate an exact cube edge.
+## CubeSphere.dir_to_face_uv() deliberately resolves equal dominant axes to one
+## face; probing a tiny distance past the source edge selects the face that owns
+## the next sample without moving far enough to change its rounded lattice index.
+const SEAM_PROBE := 0.125
 
 signal region_changed(center_dir: Vector3, radius_m: float)
 
@@ -47,6 +52,39 @@ func dir_to_lattice(d: Vector3) -> Array:
 func lattice_to_dir(face: int, gi: float, gj: float) -> Vector3:
 	return CubeSphere.face_uv_to_dir(face, gi / float(LATTICE) * 2.0 - 1.0, gj / float(LATTICE) * 2.0 - 1.0)
 
+## Convert a possibly off-face integer sample to the single sparse-lattice
+## address that owns it. The edit lattice is half-open on each face
+## (`0 .. LATTICE - 1`), so the positive edge belongs to the adjacent face.
+## Reprojection also rotates or mirrors the edge coordinate as required by that
+## face's cube-sphere basis; arithmetic wrapping cannot do that correctly.
+func canonical_address(face: int, i: int, j: int) -> Vector3i:
+	if face < 0 or face >= 6:
+		return Vector3i(-1, -1, -1)
+	if i >= 0 and i < LATTICE and j >= 0 and j < LATTICE:
+		return Vector3i(face, i, j)
+
+	var pi := float(i)
+	var pj := float(j)
+	if i < 0:
+		pi -= SEAM_PROBE
+	elif i >= LATTICE:
+		pi += SEAM_PROBE
+	if j < 0:
+		pj -= SEAM_PROBE
+	elif j >= LATTICE:
+		pj += SEAM_PROBE
+
+	var owner := dir_to_lattice(lattice_to_dir(face, pi, pj))
+	var owner_face: int = owner[0]
+	var owner_i := int(round(float(owner[1])))
+	var owner_j := int(round(float(owner[2])))
+	# At the eight cube corners every incident face contains an exact positive
+	# edge. There is no fourth face to probe into, so choose its nearest valid
+	# sample. This fallback is sub-sample displacement and keeps one stable owner.
+	return Vector3i(owner_face,
+		clampi(owner_i, 0, LATTICE - 1),
+		clampi(owner_j, 0, LATTICE - 1))
+
 # ------------------------------------------------------------------ read ---
 ## Height offset in metres at a direction, bilinear over the lattice.
 func offset_at(d: Vector3) -> float:
@@ -78,8 +116,12 @@ func _offset_lattice(face: int, gi: float, gj: float, src: Dictionary, lock: boo
 	return lerpf(lerpf(v00, v10, tx), lerpf(v01, v11, tx), ty)
 
 func _raw(src: Dictionary, face: int, i: int, j: int) -> float:
-	if i < 0 or j < 0 or i >= LATTICE or j >= LATTICE:
+	var address := canonical_address(face, i, j)
+	if address.x < 0:
 		return 0.0
+	face = address.x
+	i = address.y
+	j = address.z
 	var k := tile_key(face, i >> TILE_SHIFT, j >> TILE_SHIFT)
 	if not src.has(k):
 		return 0.0
@@ -109,10 +151,18 @@ func snapshot_for_bounds(center: Vector3, angular_radius: float) -> Dictionary:
 	return out
 
 # ----------------------------------------------------------------- write ---
-## Add `delta` metres at a lattice sample. Returns the applied change.
+## Add `delta` metres at a lattice sample. Off-face addresses are reprojected
+## onto the adjacent cube face, so a brush can cross an edge without truncation.
+## Returns the applied change.
 func add_offset(face: int, i: int, j: int, delta: float, min_offset: float, max_offset: float) -> float:
-	if i < 0 or j < 0 or i >= LATTICE or j >= LATTICE or delta == 0.0:
+	if delta == 0.0:
 		return 0.0
+	var address := canonical_address(face, i, j)
+	if address.x < 0:
+		return 0.0
+	face = address.x
+	i = address.y
+	j = address.z
 	var k := tile_key(face, i >> TILE_SHIFT, j >> TILE_SHIFT)
 	_mutex.lock()
 	if not _tiles.has(k):

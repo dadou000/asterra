@@ -5,16 +5,19 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disab
 #include "res://shaders/atmosphere.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/coastline_clipmap.gdshaderinc"
+#include "res://shaders/water_surface.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
 uniform sampler2DArray u_orbit_elevation;
 uniform float u_orbit_face_res = 192.0;
-uniform float u_orbit_start_altitude = 30000.0;
-uniform vec3 u_ocean_deep : source_color = vec3(0.018, 0.075, 0.145);
-uniform vec3 u_ocean_mid : source_color = vec3(0.035, 0.175, 0.265);
-uniform vec3 u_ocean_shelf : source_color = vec3(0.075, 0.340, 0.390);
+uniform float u_orbit_start_altitude = 1000000.0;
+uniform vec3 u_ocean_deep : source_color = vec3(0.008, 0.030, 0.075);
+uniform vec3 u_ocean_mid : source_color = vec3(0.022, 0.125, 0.215);
+uniform vec3 u_ocean_shelf : source_color = vec3(0.065, 0.330, 0.360);
+uniform vec3 u_ocean_shoal : source_color = vec3(0.135, 0.470, 0.430);
 
 varying vec3 v_planet;
+varying vec3 v_atmo_t;
 
 void vertex() {
 	v_planet = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz + u_origin;
@@ -30,26 +33,48 @@ void fragment() {
 	if (visual_h >= 0.0) discard;
 
 	float depth = -visual_h;
-	float mid_t = smoothstep(20.0, 550.0, depth);
-	float deep_t = smoothstep(450.0, 3200.0, depth);
-	vec3 base = mix(u_ocean_shelf, u_ocean_mid, mid_t);
-	base = mix(base, u_ocean_deep, deep_t);
 	vec3 p = up * u_planet_radius;
+	vec3 base = water_depth_tint(depth, u_ocean_shoal, u_ocean_shelf, u_ocean_deep);
+	// Continental shelves and sediment plumes: a real ocean is not one colour.
 	float broad = surface_vnoise(p * 0.000018 + vec3(31.0, -12.0, 7.0)) - 0.5;
-	base *= 1.0 + broad * 0.075;
+	float plume = surface_vnoise(p * 0.000085 + vec3(-6.0, 22.0, 14.0)) - 0.5;
+	base *= 1.0 + broad * 0.085 + plume * 0.05;
+	// Suspended sediment brightens and greens the shelf, strongest where the
+	// shallows are widest.
+	float turbid = (1.0 - smoothstep(10.0, 260.0, depth)) * clamp(0.5 + plume, 0.0, 1.0);
+	base = mix(base, u_ocean_shoal * 1.15, turbid * 0.28);
 
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
 
-	ALBEDO = base;
-	EMISSION = base * skylight;
+	// Sea state from the generator's own wind bands, so the glint is broad and
+	// scattered under the westerlies and tight in the doldrums.
+	float gust = surface_vnoise(p * 0.000032 + vec3(5.0, -17.0, 26.0));
+	float wind = water_wind_speed(up);
+	float rough = water_roughness_from_wind(wind, gust);
+
+	// Fresnel sky reflection. At the limb the view is grazing, the reflectance
+	// goes to one, and the sea correctly turns into a mirror of the sky -- which
+	// is what gives a planet its bright rim over water.
+	vec3 view_dir = normalize(camera_planet - v_planet);
+	float ndotv = max(dot(up, view_dir), 0.0);
+	float fres = water_fresnel(ndotv);
+	vec3 refl_dir = reflect(-view_dir, up);
+	vec3 sky_refl = water_sky_radiance(refl_dir, up, sun_dir);
+
+	vec3 atmo_t;
+	vec3 atmo_l;
+	aerial_perspective(camera_planet, v_planet, atmo_t, atmo_l);
+	v_atmo_t = atmo_t;
+
+	ALBEDO = base * (1.0 - fres * 0.85) * atmo_t;
+	EMISSION = (base * skylight + sky_refl * fres * 0.9) * atmo_t + atmo_l;
 	NORMAL = normalize((VIEW_MATRIX * vec4(up, 0.0)).xyz);
-	ROUGHNESS = mix(0.12, 0.055, deep_t);
+	ROUGHNESS = rough;
 	SPECULAR = 0.5;
 	METALLIC = 0.0;
 	AO = 1.0;
 	AO_LIGHT_AFFECT = 1.0;
-	FOG = aerial_fog(camera_planet, v_planet);
 }
 
 void light() {
@@ -62,13 +87,10 @@ void light() {
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
 
-	if (ndotl > 0.0) {
-		vec3 h = normalize(LIGHT + VIEW);
-		float ndoth = max(dot(NORMAL, h), 0.0);
-		float ndotv = max(dot(NORMAL, VIEW), 0.0);
-		float fresnel = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
-		float spec_power = mix(420.0, 24.0, clamp(ROUGHNESS, 0.0, 1.0));
-		float spec = pow(ndoth, spec_power) * mix(0.16, 1.0, fresnel);
-		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * SPECULAR_AMOUNT * 1.5;
-	}
+	// Sun glint. GGX rather than a Phong lobe, so the highlight is an elongated
+	// wind-broken glitter path instead of a soft circular blob.
+	float spec = water_specular(NORMAL, VIEW, LIGHT, ROUGHNESS);
+	float fres = water_fresnel(max(dot(NORMAL, VIEW), 0.0));
+	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * fres
+		* SPECULAR_AMOUNT * v_atmo_t;
 }

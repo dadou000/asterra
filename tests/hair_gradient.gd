@@ -128,7 +128,7 @@ func _direction_for_length(target: float, base_length: float) -> Vector3:
 
 func _report(base_length: float) -> void:
 	print("=== SCALP COHERENCE (groom length %.0f mm) ===" % (base_length * 1000.0))
-	print("  target   actual   cards  present  dots  strands  solid   what it should read as")
+	print("  target   actual   cards  present  dots  flow  strands   what it should read as")
 	var mm: MultiMesh = groom._gpu_hair_instance.multimesh
 	for band in BANDS:
 		var wanted := float(band) * 0.001
@@ -142,10 +142,14 @@ func _report(base_length: float) -> void:
 			if mm.get_instance_transform(i).origin.distance_to(local) < 0.018:
 				cards += 1
 		var mm_value := actual * 1000.0
-		print("  %5.1f mm %6.1f mm %6d   %.2f  %.2f  %.2f  %.2f   %s" % [
-			band, mm_value, cards,
-			smoothstep(0.30, 1.10, mm_value), smoothstep(0.4, 13.0, mm_value),
-			smoothstep(9.0, 20.0, mm_value), smoothstep(13.0, 24.0, mm_value),
+		# These mirror character_scalp_cap.gdshader. If the shader is retuned they
+		# have to move with it, or the report quietly describes the old build.
+		var present := smoothstep(0.30, 1.10, mm_value)
+		var grow := pow(clampf((mm_value - 0.4) / 12.6, 0.0, 1.0), 0.62)
+		var streak := smoothstep(1.0, 8.0, mm_value)
+		var strand_mix := smoothstep(13.0, 24.0, mm_value)
+		print("  %5.1f mm %6.1f mm %6d   %.2f  %.2f  %.2f   %.2f   %s" % [
+			band, mm_value, cards, present, grow, streak, strand_mix,
 			_expected(float(band))])
 
 func _expected(mm_value: float) -> String:

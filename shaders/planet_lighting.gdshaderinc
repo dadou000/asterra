@@ -42,10 +42,16 @@ float planet_direct_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	return smoothstep(horizon - SOLAR_EDGE, horizon + SOLAR_EDGE, mu);
 }
 
-/// Cheap local hemispherical sky irradiance. This is deliberately modest: the
-/// direct DirectionalLight remains the main daytime energy source. The purpose
-/// here is to replace global Godot ambient on planetary materials with a local
-/// term that follows the terminator and leaves night genuinely dark.
+/// Cheap local hemispherical sky irradiance. This replaces global Godot ambient
+/// on planetary materials with a local term that follows the terminator and
+/// leaves night genuinely dark.
+///
+/// The magnitude matters more than the colour. On a clear day the diffuse sky
+/// delivers roughly a tenth of what the direct sun does; at anything
+/// approaching parity it stops reading as skylight and becomes a flat fill that
+/// cancels the terrain's own shading. That is the difference between a
+/// landscape and a pastel painting of one, so this is deliberately kept to
+/// about 12% of the direct term rather than tuned by eye for brightness.
 vec3 planet_sky_irradiance(vec3 p, vec3 sun_dir, float planet_radius) {
 	vec3 up = normalize(p);
 	float mu = dot(up, normalize(sun_dir));
@@ -53,8 +59,8 @@ vec3 planet_sky_irradiance(vec3 p, vec3 sun_dir, float planet_radius) {
 	float twilight = smoothstep(-0.22, -0.015, mu) * (1.0 - smoothstep(-0.015, 0.16, mu));
 	float high_sun = smoothstep(0.08, 0.62, mu);
 
-	vec3 night = vec3(0.0007, 0.0011, 0.0024);
-	vec3 dusk = vec3(0.022, 0.030, 0.050) * twilight;
-	vec3 blue_sky = mix(vec3(0.070, 0.105, 0.170), vec3(0.150, 0.205, 0.300), high_sun) * day;
+	vec3 night = vec3(0.0006, 0.0010, 0.0022);
+	vec3 dusk = vec3(0.017, 0.022, 0.037) * twilight;
+	vec3 blue_sky = mix(vec3(0.023, 0.034, 0.058), vec3(0.048, 0.066, 0.102), high_sun) * day;
 	return night + dusk + blue_sky;
 }

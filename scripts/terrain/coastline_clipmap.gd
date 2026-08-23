@@ -18,8 +18,10 @@ const LEVEL_TEXEL_M := Vector3(35.0, 120.0, 480.0)
 const COAST_DETAIL_BAND_M := 700.0
 const RECENTER_FRACTION := 0.22
 const TARGET_SCAN_INTERVAL := 0.35
+const UPDATE_TILE := 32
 
 var _texture: Texture2DArray
+var _published_images: Array[Image] = []
 var _published_center := Vector3(1.0, 0.0, 0.0)
 var _published_right := Vector3(0.0, 0.0, -1.0)
 var _published_up := Vector3(0.0, 1.0, 0.0)
@@ -31,6 +33,7 @@ var _generation: int = 0
 var _building := false
 var _task_id: int = -1
 var _edit_dirty := false
+var _dirty_regions: Array[Dictionary] = []
 var _published_version: int = 0
 var _last_applied_version: int = -1
 var _last_orbit_texture: Texture2DArray
@@ -43,6 +46,7 @@ var _orbit_ocean_ref: WeakRef
 func _ready() -> void:
 	process_priority = 9
 	Planet.world_ready.connect(_on_world_ready)
+	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
 	Deltas.region_changed.connect(_on_region_changed)
 	set_process(true)
 
@@ -59,8 +63,11 @@ func _process(dt: float) -> void:
 			_set_observer(planet_pos.normalized())
 
 	if _edit_dirty and not _building and _have_observer:
-		_edit_dirty = false
-		_queue_build(_latest_center)
+		if not _published_images.is_empty():
+			_start_patch_build(_generation)
+		else:
+			_edit_dirty = false
+			_queue_build(_latest_center)
 
 	_scan_left -= dt
 	var orbit_changed := Planet.orbit_elevation_texture != _last_orbit_texture \
@@ -122,6 +129,33 @@ func _start_build(request_id: int, center: Vector3) -> void:
 	_task_id = WorkerThreadPool.add_task(task, false, "asterra_coast_clipmap")
 
 
+## Rebuild only 32x32 cache tiles touched by terrain edits. The published images
+## are duplicated for the worker, so rendering continues from the previous
+## complete cache and the main thread never observes a partially updated layer.
+func _start_patch_build(request_id: int) -> void:
+	if _published_images.is_empty():
+		_edit_dirty = false
+		_queue_build(_latest_center)
+		return
+	_building = true
+	_edit_dirty = false
+	var regions := _dirty_regions.duplicate(true)
+	_dirty_regions.clear()
+	var source: Array[Image] = []
+	for image in _published_images:
+		source.append(image.duplicate())
+	var center := _published_center
+	var right := _published_right
+	var up := _published_up
+	var outer_half := 0.5 * float(CLIPMAP_RES) * LEVEL_TEXEL_M.z
+	var ang := outer_half * 1.45 / maxf(Planet.cfg.planet_radius, 1.0)
+	var snap := Deltas.snapshot_for_bounds(center, ang)
+	var task := func() -> void:
+		var built := _patch_images(source, center, right, up, regions, snap)
+		call_deferred("_on_images_ready", request_id, center, right, up, built)
+	_task_id = WorkerThreadPool.add_task(task, false, "asterra_coast_tiles")
+
+
 static func _build_images(center: Vector3, right: Vector3, up: Vector3,
 		snap: Dictionary) -> Dictionary:
 	if not Planet.ready_state or Planet.cfg == null:
@@ -145,7 +179,7 @@ static func _build_images(center: Vector3, right: Vector3, up: Vector3,
 				var metres_x := (float(x) + 0.5 - half_res) * texel
 				var d := (row_dir + right * (metres_x / radius)).normalized()
 				var macro_h: float = Planet.macro_height(d)
-				var h := macro_h
+				var h := macro_h + Planet.coast_profile_offset(d, macro_h)
 				# Runtime detail only has enough amplitude to change the shoreline in
 				# this band. Avoid four FastNoiseLite trees for unquestionably high
 				# land/deep ocean pixels.
@@ -159,6 +193,56 @@ static func _build_images(center: Vector3, right: Vector3, up: Vector3,
 	return {"images": images}
 
 
+static func _patch_images(images: Array[Image], center: Vector3, right: Vector3,
+		up: Vector3, regions: Array[Dictionary], snap: Dictionary) -> Dictionary:
+	if images.size() != 3 or regions.is_empty() or not Planet.ready_state:
+		return {"images": images, "patch": true}
+	var radius := Planet.cfg.planet_radius
+	var texels := [LEVEL_TEXEL_M.x, LEVEL_TEXEL_M.y, LEVEL_TEXEL_M.z]
+	var half_res := float(CLIPMAP_RES) * 0.5
+	for level in 3:
+		var texel := float(texels[level])
+		var touched := {}
+		for region in regions:
+			var rd: Vector3 = region["center"]
+			var denom := rd.dot(center)
+			if denom <= 0.08:
+				continue
+			var metres := Vector2(rd.dot(right), rd.dot(up)) / denom * radius
+			var rp := float(region["radius"]) / texel + 2.0
+			var px := metres.x / texel + half_res
+			var py := metres.y / texel + half_res
+			var tx0 := clampi(int(floor((px - rp) / UPDATE_TILE)), 0,
+				(CLIPMAP_RES - 1) / UPDATE_TILE)
+			var tx1 := clampi(int(floor((px + rp) / UPDATE_TILE)), 0,
+				(CLIPMAP_RES - 1) / UPDATE_TILE)
+			var ty0 := clampi(int(floor((py - rp) / UPDATE_TILE)), 0,
+				(CLIPMAP_RES - 1) / UPDATE_TILE)
+			var ty1 := clampi(int(floor((py + rp) / UPDATE_TILE)), 0,
+				(CLIPMAP_RES - 1) / UPDATE_TILE)
+			for ty in range(ty0, ty1 + 1):
+				for tx in range(tx0, tx1 + 1):
+					touched[ty * 1024 + tx] = Vector2i(tx, ty)
+		var image := images[level]
+		var detail := Planet.make_detail()
+		for tile_value in touched.values():
+			var tile: Vector2i = tile_value
+			var x0 := tile.x * UPDATE_TILE
+			var y0 := tile.y * UPDATE_TILE
+			for y in range(y0, mini(y0 + UPDATE_TILE, CLIPMAP_RES)):
+				var my := (float(y) + 0.5 - half_res) * texel
+				var row_dir := center + up * (my / radius)
+				for x in range(x0, mini(x0 + UPDATE_TILE, CLIPMAP_RES)):
+					var mx := (float(x) + 0.5 - half_res) * texel
+					var d := (row_dir + right * (mx / radius)).normalized()
+					var macro_h := Planet.macro_height(d)
+					var h := macro_h + Planet.coast_profile_offset(d, macro_h)
+					if absf(macro_h) <= COAST_DETAIL_BAND_M:
+						h = Planet.terrain_height(d, detail, snap)
+					image.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
+	return {"images": images, "patch": true}
+
+
 func _on_images_ready(request_id: int, center: Vector3, right: Vector3, up: Vector3,
 		built: Dictionary) -> void:
 	# The callback is deferred by the finished worker, so this wait is cleanup,
@@ -168,7 +252,11 @@ func _on_images_ready(request_id: int, center: Vector3, right: Vector3, up: Vect
 		_task_id = -1
 	_building = false
 
-	if request_id == _generation and not built.is_empty():
+	# A stale tile patch is still a strict improvement over its source image and
+	# is safe to publish before applying the next dirty tile set. A stale recenter
+	# has a different projection basis and remains discard-only.
+	if (request_id == _generation or bool(built.get("patch", false))) \
+			and not built.is_empty():
 		var images: Array[Image] = []
 		for value in built["images"]:
 			var image: Image = value
@@ -177,6 +265,7 @@ func _on_images_ready(request_id: int, center: Vector3, right: Vector3, up: Vect
 		var err := tex.create_from_images(images)
 		if err == OK:
 			_texture = tex
+			_published_images = images
 			_published_center = center
 			_published_right = right
 			_published_up = up
@@ -187,7 +276,10 @@ func _on_images_ready(request_id: int, center: Vector3, right: Vector3, up: Vect
 
 	# Movement/rebake may have superseded the request while the worker ran.
 	if request_id != _generation:
-		_start_build(_generation, _requested_center)
+		if _edit_dirty and not _published_images.is_empty():
+			_start_patch_build(_generation)
+		else:
+			_start_build(_generation, _requested_center)
 
 
 func _on_world_ready(_fields: PlanetFields) -> void:
@@ -195,6 +287,20 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 	# flight. Keep the old task isolated and discard its result by generation id.
 	_generation += 1
 	_texture = null
+	_published_images.clear()
+	_published_version += 1
+	_last_applied_version = -1
+	if _have_observer:
+		_requested_center = _latest_center
+		if not _building:
+			_start_build(_generation, _requested_center)
+	_sync_materials()
+
+func _on_coast_profile_changed() -> void:
+	# A profile edit affects every seaward sample, not a bounded delta region.
+	_generation += 1
+	_texture = null
+	_published_images.clear()
 	_published_version += 1
 	_last_applied_version = -1
 	if _have_observer:
@@ -211,7 +317,9 @@ func _on_region_changed(center: Vector3, radius_m: float) -> void:
 	var dist := _surface_distance(_latest_center, center.normalized())
 	if dist <= outer_half * 1.45 + radius_m:
 		# Coalesce a stream of digging edits into at most one follow-up build.
+		_dirty_regions.append({"center": center.normalized(), "radius": radius_m})
 		_edit_dirty = true
+		_generation += 1
 
 
 func _sync_materials() -> void:
@@ -260,6 +368,7 @@ func _apply_to_material(mat: ShaderMaterial) -> void:
 	if Planet.orbit_elevation_texture != null:
 		mat.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
 		mat.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
+		mat.set_shader_parameter("u_relief_ready", 1.0)
 
 	mat.set_shader_parameter("u_coast_clipmap_ready", 1.0 if _texture != null else 0.0)
 	mat.set_shader_parameter("u_coast_center", _published_center)

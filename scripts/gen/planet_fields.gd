@@ -23,6 +23,28 @@ const ROCK_ERODIBILITY := [
 const ROCK_CLAY_YIELD := [
 	0.22, 0.34, 0.30, 0.26, 0.52, 0.14, 0.72, 0.40, 0.36, 0.20, 0.06, 0.55, 0.48,
 ]
+## Dry weathered-outcrop colour per family. This is what an orbital image
+## actually shows wherever soil is thin: pale granite highlands, near-black
+## basalt provinces, red sandstone, white limestone karst. Using one grey ramp
+## for all thirteen is the reason bare ground reads as a single beige wash.
+## Linear albedo, matching BIOME_ALBEDO above rather than the mid-tone greys a
+## palette would use. Dry rock spans roughly four to one from basalt to
+## quartzite, and that spread is most of what makes bare ground legible.
+const ROCK_COLORS := [
+	Color(0.335, 0.305, 0.275),   # granite, pale feldspathic
+	Color(0.085, 0.082, 0.080),   # basalt, dark mafic
+	Color(0.105, 0.104, 0.098),   # gabbro
+	Color(0.250, 0.240, 0.232),   # gneiss, banded grey
+	Color(0.175, 0.170, 0.158),   # schist, micaceous
+	Color(0.365, 0.230, 0.140),   # sandstone, iron-stained red
+	Color(0.155, 0.146, 0.132),   # shale, dark grey-brown
+	Color(0.415, 0.400, 0.352),   # limestone, pale carbonate
+	Color(0.375, 0.358, 0.318),   # dolomite
+	Color(0.265, 0.222, 0.180),   # conglomerate
+	Color(0.455, 0.442, 0.422),   # quartzite, near-white
+	Color(0.330, 0.298, 0.260),   # rhyolitic tuff, pale ash
+	Color(0.120, 0.145, 0.118),   # serpentinite, green-black
+]
 
 enum Biome {
 	OCEAN, SHELF_SEA, LAKE, ICE_CAP, TUNDRA, TAIGA, COLD_DESERT,
@@ -35,6 +57,44 @@ const BIOME_NAMES := [
 	"Temperate grassland", "Temperate forest", "Temperate rainforest", "Mediterranean",
 	"Steppe", "Hot desert", "Savanna", "Tropical seasonal forest", "Tropical rainforest",
 	"Wetland", "Alpine", "Bare rock", "River",
+]
+## Visible-band RGB reflectance per biome, linear. This is what the renderer
+## uses; BIOME_COLORS below stays as it is because a map has to be readable and
+## a planet has to be real, and those are different jobs.
+##
+## These are deliberately NOT the published broadband albedos. Roughly half of a
+## canopy's broadband reflectance is near-infrared -- a leaf reflects about 50%
+## of the NIR and under 10% of the red, which is the entire basis of vegetation
+## indices from orbit. Feeding the broadband figure into an RGB renderer
+## therefore paints foliage far too bright and, worse, far too red, because the
+## invisible NIR gets spread across channels that should be showing chlorophyll
+## absorption. The result is the olive-khaki wash that procedural planets
+## characteristically have. In the visible, foliage is both darker and much more
+## saturated than its albedo suggests.
+##
+## Mineral surfaces have no such split, so those stay close to their broadband
+## values: dry sand near 40%, dark basalt near 8%, fresh snow near 80%.
+const BIOME_ALBEDO := [
+	Color(0.012, 0.026, 0.050),   # ocean
+	Color(0.020, 0.058, 0.090),   # shelf sea
+	Color(0.022, 0.050, 0.072),   # lake
+	Color(0.720, 0.760, 0.800),   # ice cap
+	Color(0.105, 0.100, 0.068),   # tundra, lichen and moss over peat
+	Color(0.028, 0.055, 0.030),   # taiga, closed conifer -- very dark and dull
+	Color(0.260, 0.245, 0.205),   # cold desert
+	Color(0.115, 0.145, 0.055),   # temperate grassland, part green part straw
+	Color(0.035, 0.095, 0.032),   # temperate forest
+	Color(0.026, 0.072, 0.030),   # temperate rainforest
+	Color(0.105, 0.110, 0.055),   # mediterranean scrub, grey-green
+	Color(0.185, 0.165, 0.080),   # steppe
+	Color(0.380, 0.300, 0.180),   # hot desert
+	Color(0.215, 0.185, 0.080),   # savanna, dry grass with scattered canopy
+	Color(0.045, 0.105, 0.038),   # tropical seasonal forest
+	Color(0.026, 0.080, 0.028),   # tropical rainforest
+	Color(0.055, 0.085, 0.048),   # wetland
+	Color(0.245, 0.240, 0.230),   # alpine scree
+	Color(0.215, 0.205, 0.190),   # bare rock
+	Color(0.030, 0.055, 0.070),   # river
 ]
 const BIOME_COLORS := [
 	Color(0.05, 0.13, 0.33), Color(0.10, 0.30, 0.50), Color(0.16, 0.38, 0.62),

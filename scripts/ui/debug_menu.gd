@@ -11,6 +11,7 @@ extends CanvasLayer
 signal opened
 signal closed
 signal rebake_requested
+signal coast_profile_requested
 
 ## [property, label, note, default]
 const ROWS := [
@@ -91,6 +92,13 @@ func _ready() -> void:
 	var separator := HSeparator.new()
 	separator.add_theme_constant_override("separation", 8)
 	box.add_child(separator)
+
+	var coast_profile := Button.new()
+	coast_profile.text = "Edit coastline terrain profile..."
+	coast_profile.add_theme_font_size_override("font_size", 13)
+	coast_profile.pressed.connect(func(): coast_profile_requested.emit())
+	box.add_child(coast_profile)
+	box.add_child(_note("Edits terrain height by geodesic distance toward the sea only"))
 
 	_rebake_button = Button.new()
 	_rebake_button.text = "Rebake planet (ignore cache)"

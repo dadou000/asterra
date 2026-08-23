@@ -51,12 +51,29 @@ func run(progress: Callable = Callable()) -> void:
 		var weathering := clampf(w_temp * w_wet, 0.0, 1.6)
 
 		# Slope strips soil; flats and floodplains collect it.
+		#
+		# Hillslope soil sits at a balance between production from the bedrock
+		# underneath and downslope transport, and transport scales with gradient --
+		# so thickness falls off smoothly with slope and only approaches zero near
+		# the angle of repose. It does not fall off linearly, and it certainly does
+		# not reach zero on gentle ground: the previous `1 - slope * 26` hit its
+		# floor at a gradient of 0.038, which is a slope of two degrees. Measured
+		# over eight-kilometre cells that is most of every mountain range on the
+		# planet, so every upland came out with ninety millimetres of soil, which
+		# the biome pass then reclassified as bare rock and the renderer painted in
+		# bright bare stone. One coefficient was turning every coastal range in a
+		# temperate rain belt into a desert.
+		#
+		# The exponential below is the standard steady-state form. Its length scale
+		# is deliberately shorter than a real hillslope's, because `slope` here is a
+		# cell average over kilometres and a cell whose mean gradient is 0.3 still
+		# contains plenty of ground far steeper than that.
 		var base := c * 8
 		var relief := 0.0
 		for k in 8:
 			relief = maxf(relief, absf(h - fields.elev[grid.nbr[base + k]]))
 		var slope := relief / grid.cell_size[c]
-		var retention := clampf(1.0 - slope * 26.0, 0.03, 1.0)
+		var retention := clampf(exp(-slope / 0.26), 0.04, 1.0)
 
 		var depth := (0.18 + 2.6 * weathering) * retention
 		depth += fields.floodplain[c] * 3.4

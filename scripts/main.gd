@@ -12,6 +12,7 @@ var player: AsterraPlayer
 var hud: AsterraHUD
 var map: PlanetMap
 var debug_menu: DebugMenu
+var coastline_profile_editor: CoastlineProfileEditor
 var terrain_debug: TerrainDebug
 var sun: DirectionalLight3D
 var sky_mat: ShaderMaterial
@@ -47,7 +48,11 @@ func _ready() -> void:
 	debug_menu.opened.connect(_on_menu_opened)
 	debug_menu.closed.connect(_on_menu_closed)
 	debug_menu.rebake_requested.connect(_on_rebake_requested)
+	debug_menu.coast_profile_requested.connect(_on_coast_profile_requested)
 	add_child(debug_menu)
+	coastline_profile_editor = CoastlineProfileEditor.new()
+	coastline_profile_editor.apply_requested.connect(_on_coast_profile_applied)
+	add_child(coastline_profile_editor)
 	_setup_environment()
 
 	hud.show_progress("Generating Asterra…", 0.0)
@@ -72,6 +77,7 @@ func _setup_environment() -> void:
 	sky_mat.shader = load("res://shaders/atmosphere_sky.gdshader")
 	sky_mat.set_shader_parameter("u_planet_radius", cfg.planet_radius)
 	sky_mat.set_shader_parameter("u_atmosphere_radius", cfg.planet_radius + cfg.atmosphere_height)
+	sky_mat.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	sky.sky_material = sky_mat
 	env.sky = sky
 	# Planet materials calculate their own local sky irradiance and explicitly
@@ -87,15 +93,23 @@ func _setup_environment() -> void:
 	add_child(eye_exposure)
 
 	sun = DirectionalLight3D.new()
-	sun.light_energy = 1.15
+	# Direct sun against the local sky term in planet_lighting: roughly ten to one,
+	# which is the clear-day ratio. Raised alongside the sky reduction so total
+	# daylight brightness is unchanged and only the contrast moves.
+	sun.light_energy = GraphicsQuality.SUN_LIGHT_ENERGY
 	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
 	# Three independent scales now cooperate:
 	#   Godot cascades -> nearby terrain/structures,
 	#   shader sphere test -> planetary horizon/night.
-	# Twelve kilometres is enough for local mountains without asking a shadow map
-	# to represent the million-metre planet.
-	sun.directional_shadow_max_distance = 12000.0
+	# The analytic terrain shadow in terrain_relief now owns everything above a
+	# couple of kilometres, so the map no longer has to stretch to twelve. Pulling
+	# it in concentrates the same texels on the near field, which is what removes
+	# the acne a low sun across flat ground was producing at the cascade splits.
+	sun.directional_shadow_max_distance = 2500.0
+	# Grazing light on a planet-scale surface is the worst case for depth bias.
+	sun.shadow_bias = 0.035
+	sun.shadow_normal_bias = 3.0
 	GraphicsQuality.configure_sun(sun, AppSettings.graphics_quality)
 	add_child(sun)
 
@@ -208,6 +222,9 @@ func _push_orbit_surface_textures() -> void:
 	var ground: ShaderMaterial = mats[0]
 	ground.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
 	ground.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
+	# Relief shading reads the same texture. Until it exists an unbound sampler
+	# returns zero, which would flatten every normal and shadow the whole planet.
+	ground.set_shader_parameter("u_relief_ready", 1.0)
 
 ## Pick the most convincing place to start: a well-drained, buildable site on a
 ## natural transport corridor beside a real river. This is the same score the
@@ -252,10 +269,37 @@ func _on_menu_opened() -> void:
 	player.input_enabled = false
 
 func _on_menu_closed() -> void:
+	if coastline_profile_editor != null:
+		coastline_profile_editor.close()
 	if player == null:
 		return
 	player.set_mouse_captured(true)
 	player.input_enabled = true
+
+func _on_coast_profile_requested() -> void:
+	if coastline_profile_editor != null and Planet.ready_state:
+		coastline_profile_editor.open()
+
+func _on_coast_profile_applied(points: PackedVector2Array) -> void:
+	if not _started or terrain == null:
+		return
+	var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
+	Planet.set_coast_profile_points(points)
+	# This curve is global, so every resident chunk and both coastline caches are
+	# invalid. Rebuilding roots is deterministic and does not rebake world fields.
+	terrain.build_roots()
+	_queue_orbit_surface_texture()
+	map.invalidate()
+	if map.visible:
+		map.refresh()
+	if orbit_ocean != null:
+		orbit_ocean.refresh_surface()
+	if editor != null:
+		editor.refresh()
+	if player != null:
+		player.spawn_at(keep_dir, 60.0)
+	if hud != null:
+		hud.notify("Coastline profile applied — sea side terrain rebuilt")
 
 func _on_rebake_requested() -> void:
 	# Do not start a second generator while the initial bake or another manual

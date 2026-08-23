@@ -17,10 +17,17 @@ const BAND_MIN_DEPTH := [0, 5, 10, 14]
 const LOD_MORPH_TIME := 0.35
 const MORPH_EPSILON := 0.0015
 const MORPH_FORMAT := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
+const SURFACE_FORMAT := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM1_SHIFT
+const GROUND_FORMAT := MORPH_FORMAT | SURFACE_FORMAT
 const FACE_EDGE_EPS := 1e-7
 const FACE_EDGE_PROBE := 1e-5
 
 enum FaceEdge { LEFT, RIGHT, BOTTOM, TOP }
+
+const STITCH_LEFT := 1 << FaceEdge.LEFT
+const STITCH_RIGHT := 1 << FaceEdge.RIGHT
+const STITCH_BOTTOM := 1 << FaceEdge.BOTTOM
+const STITCH_TOP := 1 << FaceEdge.TOP
 
 class QuadNode extends RefCounted:
 	var face: int
@@ -44,6 +51,16 @@ class QuadNode extends RefCounted:
 	var task_id: int = -1
 	var dirty: bool = false
 	var abandoned: bool = false
+	## Monotonic content generation. Worker results are installed only when their
+	## captured revision still matches this value.
+	var revision: int = 0
+	var requested_revision: int = -1
+	var request_token: int = 0
+	## Edge topology requested by the balanced visible quadtree.
+	var stitch_mask: int = 0
+	var built_stitch_mask: int = -1
+	## Conservative world-space deviation represented by the next refinement.
+	var geometric_error: float = 1.0
 	var fine_vis: float = 0.0
 	var drawn: bool = false
 	var morph: float = 0.0
@@ -77,11 +94,35 @@ var _in_flight := 0
 var _shutting_down := false
 var _dt := 0.0
 var _morph_lock := 0
+var _lod_projection_scale := 900.0
 
 func _ready() -> void:
 	process_priority = 10
 	_ground_mat = ShaderMaterial.new()
 	_ground_mat.shader = load("res://shaders/terrain_ground.gdshader")
+	# The dummy headless renderer cannot sample textures. Avoid decoding six PBR
+	# maps in CPU-only verification runs; every real display backend loads them.
+	if DisplayServer.get_name() != "headless":
+		_ground_mat.set_shader_parameter("u_ground_grass_albedo",
+			load("res://assets/textures/terrain/ground003_color_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_ground_grass_normal",
+			load("res://assets/textures/terrain/ground003_normal_gl_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_ground_grass_roughness",
+			load("res://assets/textures/terrain/ground003_roughness_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_ground_soil_albedo",
+			load("res://assets/textures/terrain/brown_mud_diff_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_ground_soil_normal",
+			load("res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_ground_soil_roughness",
+			load("res://assets/textures/terrain/brown_mud_rough_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_forest_floor_albedo",
+			load("res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_forest_floor_normal",
+			load("res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_forest_floor_roughness",
+			load("res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg"))
+		_ground_mat.set_shader_parameter("u_forest_canopy_albedo",
+			load("res://assets/textures/terrain/leafy_grass_diff_2k.jpg"))
 	_water_mat = ShaderMaterial.new()
 	_water_mat.shader = load("res://shaders/ocean.gdshader")
 	_push_origin()
@@ -93,10 +134,17 @@ func build_roots() -> void:
 	_clear_tree()
 	_water_mat.set_shader_parameter("u_cell_per_metre",
 		1.0 / (cfg.lod_split_factor * float(cfg.chunk_grid)))
+	# Mesh vertex spacing of a root chunk, in metres. A cube face spans a quarter
+	# of the circumference and is tessellated into `chunk_grid` quads; each
+	# quadtree level halves that. The relief shader compares it against the
+	# elevation texel to decide which of the two actually describes the surface.
+	_ground_mat.set_shader_parameter("u_relief_root_spacing",
+		PI * 0.5 * cfg.planet_radius / float(cfg.chunk_grid))
 	for mat in [_ground_mat, _water_mat]:
 		mat.set_shader_parameter("u_planet_radius", cfg.planet_radius)
 		mat.set_shader_parameter("u_atmosphere_height", cfg.atmosphere_height)
 		mat.set_shader_parameter("u_sun_dir", Frames.helion_dir)
+		mat.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	roots.clear()
 	for face in 6:
 		roots.append(_make_node(face, 0, -1.0, -1.0, 2.0))
@@ -113,6 +161,7 @@ func _abandon(node: QuadNode) -> void:
 	_free_chunk(node)
 	if node.state == 1:
 		node.abandoned = true
+	node.revision += 1
 	node.state = 0
 
 func _make_node(face: int, depth: int, u0: float, v0: float, size: float) -> QuadNode:
@@ -127,6 +176,7 @@ func _make_node(face: int, depth: int, u0: float, v0: float, size: float) -> Qua
 	q.center_dir = CubeSphere.face_uv_to_dir(face, cu, cv)
 	q.center_world = _surface_reference(q.center_dir)
 	q.arc = size * (PI * 0.25) * cfg.planet_radius
+	q.geometric_error = _estimate_geometric_error(q)
 	q.lod_centers = [q.center_world]
 
 	# All roots use the same six face centres so the first split cannot diverge.
@@ -145,6 +195,15 @@ func _make_node(face: int, depth: int, u0: float, v0: float, size: float) -> Qua
 	if absf((v0 + size) - 1.0) <= FACE_EDGE_EPS:
 		_add_edge_lod_partner(q, FaceEdge.TOP, cu, cv)
 	return q
+
+func _estimate_geometric_error(node: QuadNode) -> float:
+	var spacing := node.arc / maxf(float(cfg.chunk_grid), 1.0)
+	var sphere_sag := spacing * spacing / maxf(8.0 * cfg.planet_radius, 1.0)
+	var relief := Planet.runtime_relief(node.center_dir)
+	# The unresolved terrain band cannot exceed a cell-sized displacement; the
+	# relief term keeps rugged regions refined farther away than plains.
+	var terrain_error := minf(spacing * 0.85, relief * 0.12 + spacing * 0.035)
+	return maxf(0.05, maxf(sphere_sag, terrain_error))
 
 func _surface_reference(d: Vector3) -> Vec3D:
 	var h := Planet.macro_height(d)
@@ -236,6 +295,23 @@ func _process(dt: float) -> void:
 	_stats["horizon_km"] = _horizon_angle * cfg.planet_radius / 1000.0
 	_ground_mat.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_water_mat.set_shader_parameter("u_sun_dir", Frames.helion_dir)
+	# Angular size of one pixel. The ground material picks which octaves of its
+	# procedural detail to synthesise from this, so it decides how much texture a
+	# given resolution actually gets -- and it is the difference between 4K
+	# resolving leaf litter and 4K rendering the same blur as 900p, larger.
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var vh: float = maxf(get_viewport().get_visible_rect().size.y, 1.0)
+		_lod_projection_scale = vh / maxf(2.0 * tan(deg_to_rad(cam.fov) * 0.5), 1e-4)
+		_ground_mat.set_shader_parameter("u_pixel_angle",
+			deg_to_rad(cam.fov) / vh)
+
+	# Height above the ground under the observer. The terrain shader needs it to
+	# know whether the camera is above the canopy looking at crowns or under it
+	# looking at the forest floor -- opposite sides of the same forest, and only
+	# one of them is what a top-down crown model draws.
+	_ground_mat.set_shader_parameter("u_camera_agl", maxf(
+		observer.length() - cfg.planet_radius - Planet.terrain_height(_obs_dir), 0.0))
 	_morph_lock = 0
 	for r in roots:
 		_update(r, false, 0.0)
@@ -263,11 +339,11 @@ func _update(node: QuadNode, hidden: bool, morph: float) -> void:
 		center_dist = minf(center_dist, observer.distance_to(p))
 	var dist := center_dist - node.arc * 0.6
 
-	var want_split: bool
-	if forced_depth >= 0:
-		want_split = node.depth < forced_depth and _stats["nodes"] < FORCED_NODE_BUDGET
-	else:
-		want_split = node.depth < cfg.quadtree_max_depth and dist < node.arc * cfg.lod_split_factor
+	var want_split := _wants_split(node, dist)
+	# A retained parent remains a live fallback during refinement and therefore
+	# participates in edit invalidation just like a leaf.
+	if node.chunk != null and node.dirty and node.state != 1:
+		_request(node)
 
 	if node.is_leaf():
 		if want_split and _morph_lock == 0:
@@ -318,6 +394,20 @@ func _update(node: QuadNode, hidden: bool, morph: float) -> void:
 		_update(c, hidden or showing_self, child_morph)
 	if lock:
 		_morph_lock -= 1
+
+func _wants_split(node: QuadNode, surface_distance: float) -> bool:
+	if forced_depth >= 0:
+		return node.depth < forced_depth and int(_stats["nodes"]) < FORCED_NODE_BUDGET
+	if node.depth >= cfg.quadtree_max_depth:
+		return false
+	var error_px := node.geometric_error * _lod_projection_scale \
+		/ maxf(surface_distance, node.geometric_error * 0.25 + 0.5)
+	var threshold := cfg.lod_target_error_px
+	# Once refined, retain that decision until error falls well below the split
+	# threshold. This is geometric-error hysteresis, independent of node size.
+	if not node.is_leaf():
+		threshold *= cfg.lod_collapse_ratio
+	return error_px > threshold
 
 func _apply_chunk(node: QuadNode, drawn: bool, morph: float) -> void:
 	if node.chunk == null:
@@ -394,6 +484,7 @@ func _request(node: QuadNode) -> void:
 		return
 	node.state = 1
 	node.dirty = false
+	node.requested_revision = node.revision
 	_stats["queued"] += 1
 	_in_flight += 1
 	var band := band_for_depth(node.depth)
@@ -401,11 +492,14 @@ func _request(node: QuadNode) -> void:
 	var ang := node.size * (PI * 0.25) * 1.5
 	var snap := Deltas.snapshot_for_bounds(node.center_dir, ang) if band >= Band.LOCAL else {}
 	var n := cfg.chunk_grid
+	var request_revision := node.requested_revision
+	var stitch_mask := node.stitch_mask
 	var task := func() -> void:
 		var detail := Planet.make_detail()
-		var data := ChunkBuilder.build(node.face, node.u0, node.v0, node.size, n, detail, snap, want_collision)
+		var data := ChunkBuilder.build(node.face, node.u0, node.v0, node.size, n,
+			detail, snap, want_collision, stitch_mask)
 		_res_mutex.lock()
-		_results.append({"node": node, "data": data})
+		_results.append({"node": node, "data": data, "revision": request_revision})
 		_res_mutex.unlock()
 	var tid := WorkerThreadPool.add_task(task, false, "asterra_chunk")
 	node.task_id = tid
@@ -426,8 +520,15 @@ func _drain_results() -> void:
 			WorkerThreadPool.wait_for_task_completion(node.task_id)
 			_pending_tasks.erase(node.task_id)
 			node.task_id = -1
-		if not node.abandoned:
+		var result_revision := int(item.get("revision", -1))
+		if not node.abandoned and result_revision == node.revision:
 			_instantiate(node, item["data"])
+			node.dirty = false
+		else:
+			# A delta edit, stitch transition, collapse, or cancellation superseded
+			# this worker. Keep the resident fallback and request the current revision.
+			node.state = 2 if node.chunk != null else 0
+			node.dirty = not node.abandoned
 		built += 1
 
 func _instantiate(node: QuadNode, data: Dictionary) -> void:
@@ -442,8 +543,9 @@ func _instantiate(node: QuadNode, data: Dictionary) -> void:
 	arr[Mesh.ARRAY_COLOR] = data["colors"]
 	arr[Mesh.ARRAY_TEX_UV] = data["uvs"]
 	arr[Mesh.ARRAY_CUSTOM0] = data["morph"]
+	arr[Mesh.ARRAY_CUSTOM1] = data["surface"]
 	arr[Mesh.ARRAY_INDEX] = data["indices"]
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr, [], {}, MORPH_FORMAT)
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr, [], {}, GROUND_FORMAT)
 	mesh.surface_set_material(0, _ground_mat)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -451,6 +553,10 @@ func _instantiate(node: QuadNode, data: Dictionary) -> void:
 	# They are rebuilt or moved infrequently; dynamic actors still receive their
 	# indirect light without being baked into the distance field.
 	mi.gi_mode = GeometryInstance3D.GI_MODE_STATIC
+	# Coarse nodes must stay out of Godot's local shadow map: their kilometre-wide
+	# triangles project the quadtree as long rectangular wedges from aircraft
+	# altitude. The planet-anchored relief shadow owns that scale; the local map
+	# begins only where the mesh is dense enough to cast stable metre-scale detail.
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if node.depth >= 9 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.set_instance_shader_parameter("chunk_depth", float(node.depth))
 	holder.add_child(mi)
@@ -489,6 +595,13 @@ func _instantiate(node: QuadNode, data: Dictionary) -> void:
 	add_child(holder)
 	node.chunk = holder
 	node.state = 2
+	node.built_stitch_mask = int(data.get("stitch_mask", 0))
+	if data.has("geometric_error"):
+		# The measured morph residual is evidence from this mesh; retain part of the
+		# conservative pre-build estimate because child-band error is not directly
+		# observable until that child exists.
+		node.geometric_error = maxf(0.05,
+			maxf(float(data["geometric_error"]), node.geometric_error * 0.48))
 	_stats["chunks"] += 1
 
 	if not node.is_leaf():
@@ -515,10 +628,24 @@ func _on_origin_shifted(_delta: Vector3) -> void:
 			child.position = Frames.to_render(child.get_meta("pivot"))
 	_push_origin()
 
+## Detail coordinates repeat on this many metres. Large enough that the repeat is
+## unreachable -- seeing it would mean resolving centimetres across four
+## kilometres at once -- and small enough that a float32 still holds sub-
+## millimetre precision inside it.
+const DETAIL_ORIGIN_WRAP := 4096.0
+
 func _push_origin() -> void:
 	var o := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
 	_ground_mat.set_shader_parameter("u_origin", o)
 	_water_mat.set_shader_parameter("u_origin", o)
+	# GDScript floats are doubles, so the reduction happens here where the origin
+	# still has its full precision. Handing the shader the raw origin as a float32
+	# instead quantises every position on the planet to about 6 cm, which is
+	# coarser than the detail that reads from it.
+	_ground_mat.set_shader_parameter("u_detail_origin", Vector3(
+		fposmod(Frames.origin.x, DETAIL_ORIGIN_WRAP),
+		fposmod(Frames.origin.y, DETAIL_ORIGIN_WRAP),
+		fposmod(Frames.origin.z, DETAIL_ORIGIN_WRAP)))
 
 func _on_region_changed(center: Vector3, radius_m: float) -> void:
 	var ang := radius_m / cfg.planet_radius + 1e-5
@@ -528,13 +655,14 @@ func _on_region_changed(center: Vector3, radius_m: float) -> void:
 func _mark_dirty(node: QuadNode, center: Vector3, ang: float) -> void:
 	if node.center_dir.angle_to(center) > ang + node.size * (PI * 0.25) * 1.2:
 		return
-	if node.is_leaf():
-		if node.state == 2:
-			node.dirty = true
-			node.state = 0
-	else:
-		for c in node.children:
-			_mark_dirty(c, center, ang)
+	# Dirty every resident/requested level, including retained parents. Parents are
+	# visible while edited children rebuild; leaving them clean reintroduced the
+	# old surface for the duration of every handoff.
+	if node.chunk != null or node.state == 1:
+		node.revision += 1
+		node.dirty = true
+	for c in node.children:
+		_mark_dirty(c, center, ang)
 
 func debug_materials() -> Array:
 	return [_ground_mat, _water_mat]

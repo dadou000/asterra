@@ -8,6 +8,12 @@ extends RefCounted
 ## location: standing water, permanent ice, wetland, treeline, bare rock.
 
 const B := PlanetFields.Biome
+## Biomes whose defining feature is a closed tree canopy, and which therefore
+## cannot exist without enough soil to root one.
+const FOREST_CLASSES := [
+	B.TAIGA, B.TEMPERATE_FOREST, B.TEMPERATE_RAINFOREST,
+	B.TROPICAL_SEASONAL_FOREST, B.TROPICAL_RAINFOREST,
+]
 
 var cfg: GenConfig
 var grid: PlanetGrid
@@ -49,7 +55,7 @@ func run(progress: Callable = Callable()) -> void:
 			b = B.WETLAND
 		elif summer < 7.0:
 			b = B.TUNDRA
-		elif fields.soil_depth[c] < 0.12 and h > 1200.0:
+		elif fields.soil_depth[c] < 0.10:
 			b = B.BARE_ROCK
 		elif t < 2.0:
 			b = B.TAIGA if p > 300.0 else B.COLD_DESERT
@@ -82,6 +88,20 @@ func run(progress: Callable = Callable()) -> void:
 		# Treeline: above it, forests become alpine regardless of the mean.
 		if h > 900.0 and summer < 10.5 and b in [B.TAIGA, B.TEMPERATE_FOREST, B.TEMPERATE_RAINFOREST]:
 			b = B.ALPINE
+
+		# Substrate limit. Climate says what could grow here; the ground says what
+		# can. A closed canopy needs a rooting depth that a scoured ridge does not
+		# have, and the Whittaker scheme -- being a function of temperature and
+		# rainfall alone -- will happily put rainforest on bare rock. Where the
+		# soil is too thin to root trees, the community that actually occupies
+		# that ground is the open one for the same climate.
+		if b in FOREST_CLASSES and fields.soil_depth[c] < 0.32:
+			if summer < 11.0:
+				b = B.TUNDRA
+			elif t < 17.0:
+				b = B.TEMPERATE_GRASSLAND
+			else:
+				b = B.SAVANNA
 		fields.biome[c] = b
 
 		# Vegetation biomass: water-limited and temperature-limited productivity,

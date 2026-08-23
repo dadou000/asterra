@@ -15,7 +15,7 @@ extends Node3D
 ## main-thread hitch.
 
 const SHELL_OFFSET_M := 1.5
-const VISUAL_LOCK_ALTITUDE_M := 12000.0
+const VISUAL_LOCK_ALTITUDE_M := 1000000.0
 const RADIAL_SEGMENTS := 256
 const RINGS := 128
 
@@ -32,9 +32,14 @@ func _ready() -> void:
 func _process(_dt: float) -> void:
 	if _material != null:
 		_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
+	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 
 func _on_world_ready(_fields: PlanetFields) -> void:
 	_refresh()
+
+## Exposed so a tuning harness can hot-reload this shader alongside the ground.
+func material() -> ShaderMaterial:
+	return _material
 
 func refresh_surface() -> void:
 	_refresh()

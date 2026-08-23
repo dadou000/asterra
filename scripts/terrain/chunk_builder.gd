@@ -17,6 +17,10 @@ const WATER_DEPTH_SCALE := 4000.0
 const WATER_DEPTH_CURVE := 0.25
 const MACRO_SPACING := 800.0
 const FACE_EDGE_EPS := 1e-6
+const STITCH_LEFT := 1
+const STITCH_RIGHT := 2
+const STITCH_BOTTOM := 4
+const STITCH_TOP := 8
 # TerrainDetail can pull a macro shoreline hundreds of metres vertically. Any
 # chunk whose cached macro field comes this close to sea level gets a sea-level
 # water sheet even when none of its coarse terrain vertices happens to cross 0 m.
@@ -30,11 +34,21 @@ const SEAM_BLEND_ROWS := 4.0
 static var debug_flat := false
 
 static func build(face: int, u0: float, v0: float, size: float, n: int,
-		detail: TerrainDetail, snap: Dictionary, want_collision: bool) -> Dictionary:
+		detail: TerrainDetail, snap: Dictionary, want_collision: bool,
+		stitch_mask: int = 0) -> Dictionary:
 	var cfg: GenConfig = Planet.cfg
 	var radius := cfg.planet_radius
 	var step := size / float(n)
 	var arc := size * (PI * 0.25) * radius
+
+	# Synthesise only what this chunk's vertex grid can carry. Sampling detail
+	# finer than the grid does not add detail, it adds noise: an octave below the
+	# sampling interval becomes an uncorrelated per-vertex offset, which reads as
+	# crumpled foil at distance, prints the triangulation across the surface as a
+	# herringbone of facets, and makes every LOD change pop. The missing band is
+	# restored as shading by the terrain shader, from the whole-planet elevation
+	# texture, which resolves finer than any distant chunk does.
+	detail.set_sample_spacing(arc / float(n))
 
 	var mres := clampi(int(ceil(arc / MACRO_SPACING)), 1, n)
 	var mu0 := u0 - step
@@ -48,6 +62,9 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var m_water := PackedFloat32Array(); m_water.resize(mn * mn)
 	var m_wmask := PackedFloat32Array(); m_wmask.resize(mn * mn)
 	var m_col := PackedColorArray(); m_col.resize(mn * mn)
+	var m_surface := PackedColorArray(); m_surface.resize(mn * mn)
+	var m_geomorph := PackedColorArray(); m_geomorph.resize(mn * mn)
+	var m_drainage := PackedColorArray(); m_drainage.resize(mn * mn)
 	var fields := Planet.fields
 	var grid := Planet.grid
 	var ocean_candidate := false
@@ -63,20 +80,28 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			m_elev[mi] = Planet.macro_height(d)
 			if m_elev[mi] <= COAST_WATER_CANDIDATE_M:
 				ocean_candidate = true
-			m_relief[mi] = grid.sample_bilinear(fields.relief, d)
+			m_relief[mi] = Planet.runtime_relief(d)
 			m_flat[mi] = clampf(grid.sample_bilinear(fields.floodplain, d) * 0.8
 				+ grid.sample_bilinear(fields.wetland, d) * 0.5, 0.0, 1.0)
 			m_hard[mi] = 1.7 - grid.sample_bilinear(fields.erodibility, d) * 0.55
 			m_river[mi] = grid.sample_bilinear(fields.river_width, d)
 			m_water[mi] = Planet.water_height(d)
 			m_wmask[mi] = Planet.water_coverage(d)
-			m_col[mi] = Planet.surface_color(d)
+			# One domain-warp evaluation feeds both material channels. The warp is
+			# several noise samples, so sharing it materially reduces build time.
+			var surface_lookup := Planet.surface_lookup(d)
+			m_col[mi] = Planet.surface_color_from_lookup(surface_lookup)
+			m_surface[mi] = Planet.surface_composition_from_lookup(surface_lookup)
+			m_geomorph[mi] = Planet.geomorph_composition_from_lookup(surface_lookup)
+			m_drainage[mi] = Planet.drainage_composition(d)
 
 	var cu := u0 + size * 0.5
 	var cv := v0 + size * 0.5
 	var pivot_dir := CubeSphere.face_uv_to_dir_d(cu_face(face), cu, cv)
 	var pivot_r := radius + _height_at(mn, mres, mu0, v0 - step, mspan, step, face,
-		cu, cv, m_elev, m_relief, m_flat, m_hard, m_river, detail, snap)
+		cu, cv, m_elev, m_relief, m_flat, m_hard, m_river, m_surface, m_geomorph,
+		m_drainage,
+		detail, snap)
 	var pivot := pivot_dir.mul(pivot_r)
 
 	var vcount := (n + 1) * (n + 1)
@@ -84,6 +109,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	var norms := PackedVector3Array(); norms.resize(vcount)
 	var cols := PackedColorArray(); cols.resize(vcount)
 	var uvs := PackedVector2Array(); uvs.resize(vcount)
+	var surface := PackedFloat32Array(); surface.resize(vcount * 4)
 
 	# One-vertex border for central-difference normals. Every actual chunk edge
 	# vertex and the one sample immediately outside it use the canonical planet
@@ -100,8 +126,33 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			dirs[j * ext + i] = d
 			var canonical_boundary := i <= 1 or i >= n + 1 or j <= 1 or j >= n + 1
 			hgt[j * ext + i] = _height_at(mn, mres, mu0, v0 - step, mspan, step, face,
-				u, v, m_elev, m_relief, m_flat, m_hard, m_river, detail, snap, d,
+				u, v, m_elev, m_relief, m_flat, m_hard, m_river, m_surface, m_geomorph,
+				m_drainage,
+				detail, snap, d,
 				canonical_boundary)
+
+	# A fine edge bordering a parent-level neighbour must evaluate the exact same
+	# band-limited height spectrum as that neighbour. Odd fine-edge vertices are
+	# removed by the stitched index topology below; the remaining even vertices
+	# now agree mathematically, rather than being pulled together by a skirt.
+	var coarse_edge_detail: TerrainDetail = null
+	if stitch_mask != 0:
+		coarse_edge_detail = Planet.make_detail()
+		coarse_edge_detail.set_sample_spacing(arc / float(n) * 2.0)
+		for edge_j in n + 1:
+			if (stitch_mask & STITCH_LEFT) != 0:
+				var left_ei := (edge_j + 1) * ext + 1
+				hgt[left_ei] = Planet.terrain_height(dirs[left_ei], coarse_edge_detail, snap)
+			if (stitch_mask & STITCH_RIGHT) != 0:
+				var right_ei := (edge_j + 1) * ext + n + 1
+				hgt[right_ei] = Planet.terrain_height(dirs[right_ei], coarse_edge_detail, snap)
+		for edge_i in n + 1:
+			if (stitch_mask & STITCH_BOTTOM) != 0:
+				var bottom_ei := ext + edge_i + 1
+				hgt[bottom_ei] = Planet.terrain_height(dirs[bottom_ei], coarse_edge_detail, snap)
+			if (stitch_mask & STITCH_TOP) != 0:
+				var top_ei := (n + 1) * ext + edge_i + 1
+				hgt[top_ei] = Planet.terrain_height(dirs[top_ei], coarse_edge_detail, snap)
 
 	# Ocean coverage must not depend on whether a coarse chunk vertex happened to
 	# fall below sea level. A coast-candidate chunk gets the water sheet now; the
@@ -146,6 +197,13 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				cols[vi] = local_col.lerp(Planet.surface_color(d3), seam_w)
 			else:
 				cols[vi] = local_col
+			var local_surface := _bilerp_color(m_surface, mn, fx, fy)
+			var surface_value := local_surface
+			if chunk_edge:
+				surface_value = Planet.surface_composition(d3)
+			elif seam_w > 0.0:
+				surface_value = local_surface.lerp(Planet.surface_composition(d3), seam_w)
+			_set_surface(surface, vi, surface_value)
 
 			var hl: float = hgt[ei - 1]
 			var hr: float = hgt[ei + 1]
@@ -170,11 +228,22 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			else:
 				dv = dv.normalized()
 
-			var tang: Vector3 = (du * span + d3 * (hr - hl)).normalized()
-			var bitan: Vector3 = (dv * span_v + d3 * (hu - hd)).normalized()
-			var nrm := tang.cross(bitan).normalized()
-			if nrm.dot(d3) < 0.0:
-				nrm = -nrm
+			var nrm: Vector3
+			if chunk_edge:
+				var normal_detail := detail
+				var normal_spacing := arc / float(n)
+				if coarse_edge_detail != null \
+						and _vertex_on_stitched_edge(i, j, n, stitch_mask):
+					normal_detail = coarse_edge_detail
+					normal_spacing *= 2.0
+				nrm = _canonical_surface_normal(d3, normal_detail, snap,
+					normal_spacing, radius)
+			else:
+				var tang: Vector3 = (du * span + d3 * (hr - hl)).normalized()
+				var bitan: Vector3 = (dv * span_v + d3 * (hu - hd)).normalized()
+				nrm = tang.cross(bitan).normalized()
+				if nrm.dot(d3) < 0.0:
+					nrm = -nrm
 			norms[vi] = nrm
 			max_dh = maxf(max_dh, maxf(absf(hr - hl), absf(hu - hd)) * 0.5)
 
@@ -194,14 +263,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 			if wl > h + 0.05 and conf > 0.02:
 				water_needed = true
 
-	var idx := PackedInt32Array()
-	for j in n:
-		for i in n:
-			var a := j * (n + 1) + i
-			var b := a + 1
-			var c := a + (n + 1)
-			var e := c + 1
-			idx.append_array([a, c, b, b, c, e])
+	var idx := _grid_indices(n, stitch_mask)
 
 	var cell_arc := arc / float(n)
 	var sag := (cell_arc * 2.0) * (cell_arc * 2.0) / (8.0 * radius)
@@ -217,6 +279,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 	for j in range(n - 1, 0, -1):
 		ring.append(j * (n + 1))
 	var morph := _morph_offsets(verts, n)
+	var geometric_error := _max_morph_error(morph)
 	var base := verts.size()
 	var pivot3 := Vector3(float(pivot.x), float(pivot.y), float(pivot.z))
 	for k in ring.size():
@@ -228,6 +291,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		cols.append(cols[src])
 		_append_morph(morph, src)
 		uvs.append(uvs[src])
+		_append_surface(surface, src)
 	for k in ring.size():
 		var k2 := (k + 1) % ring.size()
 		var a: int = ring[k]
@@ -243,10 +307,13 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		"colors": cols,
 		"uvs": uvs,
 		"morph": morph,
+		"surface": surface,
 		"indices": idx,
 		"min_h": min_h,
 		"max_h": max_h,
 		"has_water": water_needed,
+		"stitch_mask": stitch_mask,
+		"geometric_error": maxf(geometric_error, sag),
 	}
 
 	if want_collision:
@@ -292,14 +359,7 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 				wcol[vi] = Color(pow(clampf(depth_mag / WATER_DEPTH_SCALE, 0.0, 1.0), WATER_DEPTH_CURVE),
 					water_conf[vi], ocean_flag, wet_sign)
 
-		var widx := PackedInt32Array()
-		for j in n:
-			for i in n:
-				var a := j * (n + 1) + i
-				var b := a + 1
-				var c := a + (n + 1)
-				var e := c + 1
-				widx.append_array([a, c, b, b, c, e])
+		var widx := _grid_indices(n, stitch_mask)
 
 		var wmorph := _morph_offsets(wv, n)
 		var water_skirt := clampf(sag * 2.0 + WATER_SKIRT_MIN, WATER_SKIRT_MIN, WATER_SKIRT_MAX)
@@ -328,6 +388,70 @@ static func build(face: int, u0: float, v0: float, size: float, n: int,
 		out["water_morph"] = wmorph
 		out["water_indices"] = widx
 	return out
+
+
+## Index-only 2:1 stitching. On an edge adjacent to a node one level coarser,
+## odd boundary vertices collapse onto the preceding even endpoint. Degenerate
+## triangles disappear in rasterisation and the surviving boundary is exactly
+## the coarse neighbour's polyline, without skirts or duplicate edge geometry.
+static func _grid_indices(n: int, stitch_mask: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for j in n:
+		for i in n:
+			var a := _stitched_vertex(i, j, n, stitch_mask)
+			var b := _stitched_vertex(i + 1, j, n, stitch_mask)
+			var c := _stitched_vertex(i, j + 1, n, stitch_mask)
+			var e := _stitched_vertex(i + 1, j + 1, n, stitch_mask)
+			out.append_array([a, c, b, b, c, e])
+	return out
+
+
+static func _stitched_vertex(i: int, j: int, n: int, stitch_mask: int) -> int:
+	if i == 0 and j % 2 == 1 and (stitch_mask & STITCH_LEFT) != 0:
+		j -= 1
+	elif i == n and j % 2 == 1 and (stitch_mask & STITCH_RIGHT) != 0:
+		j -= 1
+	if j == 0 and i % 2 == 1 and (stitch_mask & STITCH_BOTTOM) != 0:
+		i -= 1
+	elif j == n and i % 2 == 1 and (stitch_mask & STITCH_TOP) != 0:
+		i -= 1
+	return j * (n + 1) + i
+
+
+static func _vertex_on_stitched_edge(i: int, j: int, n: int, stitch_mask: int) -> bool:
+	return (i == 0 and (stitch_mask & STITCH_LEFT) != 0) \
+		or (i == n and (stitch_mask & STITCH_RIGHT) != 0) \
+		or (j == 0 and (stitch_mask & STITCH_BOTTOM) != 0) \
+		or (j == n and (stitch_mask & STITCH_TOP) != 0)
+
+
+## Direction-space derivative shared by every cube face. Face-local central
+## differences rotate at seams; this east/north stencil has the same sample
+## directions, height spectrum, and cross-product order on both sides.
+static func _canonical_surface_normal(d: Vector3, detail: TerrainDetail,
+		snap: Dictionary, sample_m: float, radius: float) -> Vector3:
+	var basis := CubeSphere.tangent_basis(d)
+	var east: Vector3 = basis[0]
+	var north: Vector3 = basis[1]
+	var da := maxf(sample_m / maxf(radius, 1.0), 1e-8)
+	var dl := (d - east * da).normalized()
+	var dr := (d + east * da).normalized()
+	var dd := (d - north * da).normalized()
+	var du := (d + north * da).normalized()
+	var pl := dl * (radius + Planet.terrain_height(dl, detail, snap))
+	var pr := dr * (radius + Planet.terrain_height(dr, detail, snap))
+	var pd := dd * (radius + Planet.terrain_height(dd, detail, snap))
+	var pu := du * (radius + Planet.terrain_height(du, detail, snap))
+	var normal := (pr - pl).cross(pu - pd).normalized()
+	return normal if normal.dot(d) >= 0.0 else -normal
+
+
+static func _max_morph_error(morph: PackedFloat32Array) -> float:
+	var maximum := 0.0
+	for vertex in morph.size() / 4:
+		var o := vertex * 4
+		maximum = maxf(maximum, Vector3(morph[o], morph[o + 1], morph[o + 2]).length())
+	return maximum
 
 
 static func _morph_offsets(verts: PackedVector3Array, n: int) -> PackedFloat32Array:
@@ -359,6 +483,22 @@ static func _append_morph(out: PackedFloat32Array, src: int) -> void:
 	out.append(out[o + 1])
 	out.append(out[o + 2])
 	out.append(0.0)
+
+
+static func _set_surface(out: PackedFloat32Array, vertex: int, value: Color) -> void:
+	var o := vertex * 4
+	out[o] = value.r
+	out[o + 1] = value.g
+	out[o + 2] = value.b
+	out[o + 3] = value.a
+
+
+static func _append_surface(out: PackedFloat32Array, src: int) -> void:
+	var o := src * 4
+	out.append(out[o])
+	out.append(out[o + 1])
+	out.append(out[o + 2])
+	out.append(out[o + 3])
 
 static func _ground_h(hgt: PackedFloat32Array, ext: int, i: int, j: int) -> float:
 	return hgt[(j + 1) * ext + (i + 1)]
@@ -402,6 +542,8 @@ static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float,
 		face: int, u: float, v: float,
 		m_elev: PackedFloat32Array, m_relief: PackedFloat32Array, m_flat: PackedFloat32Array,
 		m_hard: PackedFloat32Array, m_river: PackedFloat32Array,
+		m_surface: PackedColorArray, m_geomorph: PackedColorArray,
+		m_drainage: PackedColorArray,
 		detail: TerrainDetail, snap: Dictionary, known_dir: Variant = null,
 		force_canonical: bool = false) -> float:
 	if debug_flat:
@@ -430,12 +572,21 @@ static func _height_at(mn: int, mres: int, mu0: float, mv0: float, mspan: float,
 	var used_relief := lerpf(relief, relief * 0.5, deep_ocean)
 	var used_flat := lerpf(flat, maxf(flat, 0.55), deep_ocean)
 	var used_hard := lerpf(hard, 1.0, deep_ocean)
-	h += detail.height(d, used_relief, used_flat, used_hard)
+	var surface := _bilerp_color(m_surface, mn, fx, fy)
+	var geomorph := _bilerp_color(m_geomorph, mn, fx, fy)
+	var drainage := _bilerp_color(m_drainage, mn, fx, fy)
+	h += detail.height(d, used_relief, used_flat, used_hard, surface, geomorph, drainage)
+	if Planet.coast_profile_active:
+		h += Planet.coast_profile_offset(d, macro_h)
 
 	if macro_h > 0.0:
 		var w := _bilerp(m_river, mn, fx, fy)
-		if w > 4.0:
-			h -= clampf(w * 0.045, 0.0, 22.0)
+		# Faded in, not switched on: see Planet.terrain_height. A hard threshold
+		# here steps the surface along the contour where the interpolated river
+		# width crosses it, and a step in a height field spikes the mesh normals
+		# along that contour -- which is a dotted dark hairline tracing every
+		# drainage network on the planet from the air.
+		h -= smoothstep(3.0, 16.0, w) * clampf(w * 0.045, 0.0, 22.0)
 	if snap.is_empty():
 		if not Deltas.is_empty():
 			h += Deltas.offset_at(d)
