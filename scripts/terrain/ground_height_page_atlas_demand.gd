@@ -11,6 +11,11 @@ extends "res://scripts/terrain/ground_height_page_atlas.gd"
 ## - only pages touched by the active renderer are admitted from tile_ready;
 ## - a missing GPU page is immediately rehydrated from the RAM tile cache;
 ## - recently touched pages are protected from LRU eviction when possible.
+##
+## IMPORTANT: page-table texels are metadata, not colours. The atlas slot is
+## stored in alpha and may be 1..256; tombstones use -1. DrawableTexture2D uses
+## alpha blending by default, so ordinary blit_rect() corrupts these values.
+## Every page-table write therefore uses BLEND_MODE_DISABLED for an exact copy.
 
 const WANTED_TTL_MS: int = 1800
 const PRUNE_INTERVAL_MS: int = 1000
@@ -20,6 +25,7 @@ var _next_prune_msec: int = 0
 var _ignored_ready: int = 0
 var _ram_rehydrates: int = 0
 var _forced_protected_evictions: int = 0
+var _table_copy_material: BlitMaterial
 
 
 func _process(_dt: float) -> void:
@@ -164,10 +170,73 @@ func _allocate_slot() -> int:
 	return chosen
 
 
+## Metadata texture writes must be exact. The default DrawableTexture blit mode
+## is alpha blending; here alpha is the slot/state payload itself, not opacity.
+func _direct_copy_material() -> BlitMaterial:
+	if _table_copy_material == null:
+		_table_copy_material = BlitMaterial.new()
+		_table_copy_material.blend_mode = BlitMaterial.BLEND_MODE_DISABLED
+	return _table_copy_material
+
+
+## Override the base incremental writer so valid entries and -1 tombstones reach
+## the GPU byte-for-byte (float-for-float) instead of being alpha blended.
+func _write_table_cell(index: int) -> void:
+	if _page_table == null or index < 0 or index >= PAGE_TABLE_CAPACITY:
+		return
+	var patch: Image = Image.create(1, 1, false, Image.FORMAT_RGBAF)
+	patch.set_pixel(0, 0, Color(
+		float(_table_codes[index]),
+		float(_table_x[index]),
+		float(_table_y[index]),
+		float(_table_slots[index])))
+	var source: ImageTexture = ImageTexture.create_from_image(patch)
+	if source == null:
+		return
+	_page_table.blit_rect(Rect2i(index, 0, 1, 1), source,
+		Color.WHITE, 0, _direct_copy_material())
+	_table_cell_updates += 1
+
+
+## The exceptional full compaction path must use the same exact-copy semantics.
+## Otherwise a later compaction would silently reintroduce the corrupted table.
+func _rebuild_page_table_full() -> void:
+	_reset_table_cpu()
+	for slot: int in SLOT_COUNT:
+		var meta: Dictionary = _slots[slot]
+		if meta.is_empty():
+			continue
+		var key: String = String(meta["key"])
+		var level: int = int(meta["level"])
+		var face: int = int(meta["face"])
+		var tile_x: int = int(meta["tile_x"])
+		var tile_y: int = int(meta["tile_y"])
+		if not _insert_table_entry_cpu_only(key, level, face, tile_x, tile_y, slot):
+			_table_insert_failures += 1
+
+	var table_image: Image = Image.create(PAGE_TABLE_CAPACITY, 1, false, Image.FORMAT_RGBAF)
+	for index: int in PAGE_TABLE_CAPACITY:
+		if _table_slots[index] <= 0:
+			continue
+		table_image.set_pixel(index, 0, Color(
+			float(_table_codes[index]), float(_table_x[index]),
+			float(_table_y[index]), float(_table_slots[index])))
+	var source: ImageTexture = ImageTexture.create_from_image(table_image)
+	var replacement := DrawableTexture2D.new()
+	replacement.setup(PAGE_TABLE_CAPACITY, 1,
+		DrawableTexture2D.DRAWABLE_FORMAT_RGBAF, Color(0.0, 0.0, 0.0, 0.0), false)
+	if source != null:
+		replacement.blit_rect(Rect2i(0, 0, PAGE_TABLE_CAPACITY, 1), source,
+			Color.WHITE, 0, _direct_copy_material())
+	_page_table = replacement
+	_table_full_rebuilds += 1
+
+
 func stats() -> Dictionary:
 	var result: Dictionary = super.stats()
 	result["wanted_pages"] = _wanted_until.size()
 	result["ignored_ready"] = _ignored_ready
 	result["ram_rehydrates"] = _ram_rehydrates
 	result["forced_protected_evictions"] = _forced_protected_evictions
+	result["table_exact_copy"] = true
 	return result
