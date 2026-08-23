@@ -38,21 +38,18 @@ const CACHE_DIR := "terrain_height_cache"
 const MAX_ASYNC_IN_FLIGHT := 1
 
 var _namespace := "unconfigured"
-var _memory: Dictionary = {}            # tile key -> PackedFloat32Array
-var _last_use: Dictionary = {}          # tile key -> monotonically increasing tick
+var _memory: Dictionary = {}
+var _last_use: Dictionary = {}
 var _clock := 0
 var _mutex := Mutex.new()
 var _disk_hits := 0
 var _memory_hits := 0
 var _tiles_built := 0
 
-# Visual cache misses use exactly one low-priority background worker. During
-# development it is allowed to synthesize an absent tile once and persist it.
-# Shipping/precompiled worlds should almost exclusively hit disk instead.
 var _request_queue: Array[Dictionary] = []
-var _queued: Dictionary = {}            # namespace-aware request key -> true
+var _queued: Dictionary = {}
 var _async_in_flight := 0
-var _active_tasks: Dictionary = {}      # request key -> WorkerThreadPool task id
+var _active_tasks: Dictionary = {}
 var _async_results: Array[Dictionary] = []
 var _result_mutex := Mutex.new()
 var _shutting_down := false
@@ -76,8 +73,6 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 
 
 func _on_coast_profile_changed() -> void:
-	# Coast-profile offsets are part of pristine_height(), so a changed profile is
-	# a different immutable surface and must never reuse old cached tiles.
 	if Planet.ready_state and Planet.cfg != null:
 		_configure_namespace()
 
@@ -110,18 +105,10 @@ func _configure_namespace() -> void:
 	_tiles_built = 0
 	_mutex.unlock()
 
-	# user:// is the fallback bake location. A future world compiler can place the
-	# exact same directory tree under res:// and it will automatically win reads.
 	var root := ProjectSettings.globalize_path("user://%s/%s" % [CACHE_DIR, _namespace])
 	DirAccess.make_dir_recursive_absolute(root)
 
 
-## Return terrain including the current edit layer. `level=0` is the ~0.75 m
-## lattice, level 1 ~1.5 m, ... level 6 ~48 m.
-##
-## This is the legacy/blocking path. A cache miss may touch disk or synthesize a
-## tile before returning. Keep it for correctness-critical systems until they get
-## an explicit tile-residency state machine of their own.
 func sample_height(d: Vector3, level: int, snap: Dictionary = {}) -> float:
 	var h := sample_pristine(d, level)
 	if snap.is_empty():
@@ -131,10 +118,6 @@ func sample_height(d: Vector3, level: int, snap: Dictionary = {}) -> float:
 	return h
 
 
-## Visual/non-blocking equivalent of sample_height(). A fine miss requests all
-## required tiles in coarse-to-fine priority order and returns the nearest already
-## resident parent level. If no ground tile is resident yet, macro height is a
-## cheap always-available fallback.
 func sample_height_nonblocking(d: Vector3, level: int,
 		snap: Dictionary = {}) -> float:
 	var h := sample_pristine_nonblocking(d, level)
@@ -145,9 +128,6 @@ func sample_height_nonblocking(d: Vector3, level: int,
 	return h
 
 
-## Bilinear lookup from the canonical cube-face lattice. This keeps samples stable
-## across tangent-frame reanchors and makes the cache independent of the route the
-## player took through the world.
 func sample_pristine(d: Vector3, level: int) -> float:
 	if not Planet.ready_state or Planet.cfg == null:
 		return 0.0
@@ -162,9 +142,6 @@ func sample_pristine(d: Vector3, level: int) -> float:
 	var tx := float(sample["tx"])
 	var ty := float(sample["ty"])
 
-	# One lock covers all four vertices. Cache misses are intentionally serialized:
-	# a single low-priority baker is preferable to several workers duplicating the
-	# same expensive terrain synthesis and starving the game thread.
 	_mutex.lock()
 	var h00 := _sample_vertex_locked(used_level, face, x0, y0, cells)
 	var h10 := _sample_vertex_locked(used_level, face, x1, y0, cells)
@@ -182,8 +159,6 @@ func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
 	var found := INF
 	var found_level := MAX_LEVEL + 1
 
-	# Prefer the requested representation, then walk toward the 48 m backing
-	# level. This loop only touches RAM and a mutex; no file access and no noise.
 	for candidate in range(used_level, MAX_LEVEL + 1):
 		var h := _try_sample_pristine_memory(d, candidate)
 		if is_finite(h):
@@ -191,10 +166,6 @@ func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
 			found_level = candidate
 			break
 
-	# Queue missing detail from coarse to fine. Coarse data becomes a useful
-	# fallback quickly, then the same area progressively sharpens as parent levels
-	# arrive. Request de-duplication means thousands of visual samples collapse to
-	# a small number of tile jobs.
 	var request_from := MAX_LEVEL if found_level > MAX_LEVEL else found_level - 1
 	for candidate in range(request_from, used_level - 1, -1):
 		_request_sample(d, candidate)
@@ -204,16 +175,12 @@ func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
 	return Planet.macro_height(d)
 
 
-## Explicit prefetch hook for the next phase's velocity-aware streamer. It is
-## safe to call from worker threads; requests are de-duplicated under the cache
-## mutex and executed later by the single low-priority cache worker.
 func prefetch_sample(d: Vector3, finest_level: int = 0) -> void:
 	var used_level := clampi(finest_level, 0, MAX_LEVEL)
 	for candidate in range(MAX_LEVEL, used_level - 1, -1):
 		_request_sample(d, candidate)
 
 
-## Map an arbitrary physical sample spacing to the closest stored level.
 func level_for_spacing(metres: float) -> int:
 	if Planet.cfg == null:
 		return MAX_LEVEL
@@ -226,7 +193,6 @@ func level_for_spacing(metres: float) -> int:
 
 
 func stats() -> Dictionary:
-	# Diagnostic-only snapshot. These counters can tolerate a one-update race.
 	return {
 		"namespace": _namespace,
 		"memory_tiles": _memory.size(),
@@ -317,9 +283,9 @@ func _memory_key(level: int, face: int, tile_x: int, tile_y: int) -> String:
 	return "%d:%d:%d:%d" % [level, face, tile_x, tile_y]
 
 
-func _request_key(namespace: String, level: int, face: int,
+func _request_key(cache_namespace: String, level: int, face: int,
 		tile_x: int, tile_y: int) -> String:
-	return "%s:%d:%d:%d:%d" % [namespace, level, face, tile_x, tile_y]
+	return "%s:%d:%d:%d:%d" % [cache_namespace, level, face, tile_x, tile_y]
 
 
 func _queue_tile_locked(level: int, face: int, tile_x: int, tile_y: int,
@@ -350,8 +316,6 @@ func _pump_async_requests() -> void:
 	if _request_queue.is_empty():
 		_mutex.unlock()
 		return
-	# Parent/coarse tiles have greater level numbers. Load those first so a useful
-	# fallback appears before spending time on sub-metre detail.
 	_request_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return int(a["level"]) > int(b["level"]))
 	var request: Dictionary = _request_queue.pop_front()
@@ -373,31 +337,28 @@ func _start_async_request(request: Dictionary) -> void:
 
 
 func _load_or_build_async(request: Dictionary) -> Dictionary:
-	var namespace := String(request["namespace"])
+	var cache_namespace := String(request["namespace"])
 	var level := int(request["level"])
 	var face := int(request["face"])
 	var tile_x := int(request["tile_x"])
 	var tile_y := int(request["tile_y"])
 	var cells := int(request["cells"])
-	var data := _load_tile_for_namespace(namespace, level, face, tile_x, tile_y)
+	var data := _load_tile_for_namespace(cache_namespace, level, face, tile_x, tile_y)
 	var from_disk := data.size() == TILE_VERTS * TILE_VERTS
 	var built := false
 
 	if not from_disk:
 		data = _build_tile(level, face, tile_x, tile_y, cells)
 		built = data.size() == TILE_VERTS * TILE_VERTS
-		# A rebake/profile change can invalidate the namespace while this low-priority
-		# task is running. Never persist output into a namespace that is no longer
-		# current.
 		_mutex.lock()
-		var still_current := _namespace == namespace
+		var still_current := _namespace == cache_namespace
 		_mutex.unlock()
 		if built and still_current:
-			_write_tile_for_namespace(namespace, level, face, tile_x, tile_y, data)
+			_write_tile_for_namespace(cache_namespace, level, face, tile_x, tile_y, data)
 
 	return {
 		"key": String(request["key"]),
-		"namespace": namespace,
+		"namespace": cache_namespace,
 		"level": level,
 		"face": face,
 		"tile_x": tile_x,
@@ -442,7 +403,6 @@ func _drain_async_results() -> void:
 			tile_ready.emit(int(result["level"]), int(result["face"]),
 				int(result["tile_x"]), int(result["tile_y"]))
 
-		# Start another request immediately instead of waiting one rendered frame.
 		_pump_async_requests()
 
 
@@ -513,16 +473,15 @@ func _build_tile(level: int, face: int, tile_x: int, tile_y: int,
 	return heights
 
 
-func _relative_path_for_namespace(namespace: String, level: int, face: int,
+func _relative_path_for_namespace(cache_namespace: String, level: int, face: int,
 		tile_x: int, tile_y: int) -> String:
 	return "%s/%s/l%d/f%d/%d_%d.ghz" % [
-		CACHE_DIR, namespace, level, face, tile_x, tile_y]
+		CACHE_DIR, cache_namespace, level, face, tile_x, tile_y]
 
 
-func _load_tile_for_namespace(namespace: String, level: int, face: int,
+func _load_tile_for_namespace(cache_namespace: String, level: int, face: int,
 		tile_x: int, tile_y: int) -> PackedFloat32Array:
-	var relative := _relative_path_for_namespace(namespace, level, face, tile_x, tile_y)
-	# Prefer a shipped/precompiled world cache; fall back to bake-once local data.
+	var relative := _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
 	for prefix in ["res://", "user://"]:
 		var path := prefix + relative
 		if not FileAccess.file_exists(path):
@@ -552,9 +511,9 @@ func _load_tile_for_namespace(namespace: String, level: int, face: int,
 	return PackedFloat32Array()
 
 
-func _write_tile_for_namespace(namespace: String, level: int, face: int,
+func _write_tile_for_namespace(cache_namespace: String, level: int, face: int,
 		tile_x: int, tile_y: int, data: PackedFloat32Array) -> void:
-	var relative := _relative_path_for_namespace(namespace, level, face, tile_x, tile_y)
+	var relative := _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
 	var path := "user://" + relative
 	var parent := path.get_base_dir()
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent))
