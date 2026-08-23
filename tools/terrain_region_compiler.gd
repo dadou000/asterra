@@ -1,24 +1,23 @@
 extends SceneTree
 ## Headless regional terrain cache compiler.
 ##
-## This is the first offline-world-compiler entry point. It deliberately writes
-## the exact same GroundHeightStore .ghz format used by runtime, so no renderer or
-## streamer special case is required for precompiled regions.
+## This writes the exact same GroundHeightStore .ghz format used by runtime, so
+## the spherical L0-L14 renderer and CPU collision share one precompiled source.
 ##
 ## Example:
 ##   godot --headless --path . --script res://tools/terrain_region_compiler.gd -- \
-##     --lat=34.5 --lon=-96.0 --radius-m=500 --finest-level=0
+##     --lat=34.5 --lon=-96.0 --radius-km=50 --finest-level=0
 ##
 ## `finest-level` follows GroundHeightStore:
-##   0 ~0.75 m, 1 ~1.5 m, 2 ~3 m, ... 6 ~48 m.
+##   0 ~0.75 m, 1 ~1.5 m, ... 6 ~48 m, ... 14 ~12 km.
 ##
 ## The current .ghz-per-tile format is intentionally a migration format. This
 ## compiler proves the offline/runtime split before the later packed residual
-## archive format replaces millions of small files.
+## archive format replaces large numbers of small files.
 
 const TARGET_FINE_DEPTH := 16
 const TILE_CELLS := 32
-const MAX_LEVEL := 6
+const MAX_LEVEL := 14
 
 var _args: Dictionary = {}
 
@@ -79,8 +78,7 @@ func _compile_region(center: Vector3, radius_m: float, finest_level: int,
 		var tile_span := spacing * float(TILE_CELLS)
 		# Half-tile probe spacing deliberately overlaps coverage. sample_pristine()
 		# bilinearly touches neighbouring tiles at boundaries, so this conservative
-		# grid is much simpler and safer than duplicating private cache addressing
-		# rules in the compiler.
+		# grid is simpler and safer than duplicating private cache addressing rules.
 		var step := maxf(tile_span * 0.5, spacing)
 		var reach := int(ceil((radius_m + tile_span) / step))
 		var probes: Array[Vector2] = []
@@ -96,8 +94,14 @@ func _compile_region(center: Vector3, radius_m: float, finest_level: int,
 		var last_percent := -1
 		for i in probes.size():
 			var plane := probes[i]
-			var d := (center + east * (plane.x / cfg.planet_radius)
-				+ north * (plane.y / cfg.planet_radius)).normalized()
+			var arc: float = plane.length()
+			var d: Vector3
+			if arc <= 1e-6:
+				d = center
+			else:
+				var theta: float = arc / cfg.planet_radius
+				var dir_tangent: Vector3 = (east * plane.x + north * plane.y).normalized()
+				d = (center * cos(theta) + dir_tangent * sin(theta)).normalized()
 			# Blocking is intentional here: this is the offline compiler.
 			GroundHeightStore.sample_pristine(d, level)
 			var percent := int(floor(100.0 * float(i + 1) / maxf(float(probes.size()), 1.0)))
@@ -145,11 +149,11 @@ Options:
   --lon=DEG            center longitude, default 0
   --radius-m=M         compile radius in metres, default 250
   --radius-km=KM       compile radius in kilometres
-  --finest-level=N     0=~0.75m ... 6=~48m, default 0
+  --finest-level=N     0=~0.75m ... 6=~48m ... 14=~12km, default 0
   --rebake-world       ignore the cached macro PlanetBake
   --help               show this text
 
-Start with a few hundred metres at level 0. The present full-float .ghz format is
-for architecture testing; large production regions will move to packed quantized
-residual archives.
+The compiler always emits every parent from L14 down to the requested finest
+level. Start with regional L0 compiles while developing; production packaging can
+precompile the planet-wide coarse hierarchy before fine authored regions.
 """)
