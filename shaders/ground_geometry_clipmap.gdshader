@@ -3,10 +3,17 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
 
-// Height layers are circular CPU/GPU caches. Filtering is done manually below so
-// bilinear samples remain correct when their four texels cross the circular image
-// origin. Hardware filtering would interpolate unrelated opposite edges there.
-uniform sampler2DArray u_height_pyramid : filter_nearest, repeat_disable;
+// Each clipmap level owns a persistent DrawableTexture2D. Keeping the levels as
+// separate textures lets the CPU/GPU streamer blit only newly exposed toroidal
+// rows/columns instead of replacing a complete Texture2DArray layer. Filtering is
+// manual so sampling remains correct across each circular storage origin.
+uniform sampler2D u_height0 : filter_nearest, repeat_disable;
+uniform sampler2D u_height1 : filter_nearest, repeat_disable;
+uniform sampler2D u_height2 : filter_nearest, repeat_disable;
+uniform sampler2D u_height3 : filter_nearest, repeat_disable;
+uniform sampler2D u_height4 : filter_nearest, repeat_disable;
+uniform sampler2D u_height5 : filter_nearest, repeat_disable;
+uniform sampler2D u_height6 : filter_nearest, repeat_disable;
 uniform float u_height_ready = 0.0;
 uniform float u_planet_radius = 1000000.0;
 uniform vec3 u_origin = vec3(0.0);
@@ -21,7 +28,7 @@ uniform float u_height_half = 34.0;
 uniform float u_storage_levels = 7.0;
 uniform float u_surface_bias = 0.035;
 
-// xy = physical tangent-plane centre of this storage layer.
+// xy = physical tangent-plane centre of this storage level.
 // zw = circular image origin: logical texel (0,0) lives at this storage texel.
 uniform vec4 u_height_layout0 = vec4(0.0);
 uniform vec4 u_height_layout1 = vec4(0.0);
@@ -58,10 +65,20 @@ vec2 wrap_texel(vec2 p) {
 		vec2(u_height_tex_size));
 }
 
+float height_texel(vec2 uv, int level) {
+	if (level <= 0) { return textureLod(u_height0, uv, 0.0).r; }
+	if (level == 1) { return textureLod(u_height1, uv, 0.0).r; }
+	if (level == 2) { return textureLod(u_height2, uv, 0.0).r; }
+	if (level == 3) { return textureLod(u_height3, uv, 0.0).r; }
+	if (level == 4) { return textureLod(u_height4, uv, 0.0).r; }
+	if (level == 5) { return textureLod(u_height5, uv, 0.0).r; }
+	return textureLod(u_height6, uv, 0.0).r;
+}
+
 float stored_height(ivec2 logical_texel, int level, vec4 layout) {
 	vec2 storage = wrap_texel(vec2(logical_texel) + layout.zw);
 	vec2 uv = (storage + vec2(0.5)) / u_height_tex_size;
-	return textureLod(u_height_pyramid, vec3(uv, float(level)), 0.0).r;
+	return height_texel(uv, level);
 }
 
 float sample_level_plane(vec2 plane, float level_f) {
@@ -112,10 +129,8 @@ vec3 planet_position(vec2 cell, float level) {
 }
 
 void vertex() {
-	// Vercidium-style grid reconstruction: topology/index data chooses which
-	// logical vertex is being drawn; no position/UV/normal attribute is needed to
-	// discover its terrain coordinate. For the current indexed ArrayMesh,
-	// VERTEX_ID is the grid vertex index referenced by the index buffer.
+	// Vercidium-style grid reconstruction: the index stream chooses only a logical
+	// vertex ID. No position, UV or normal attribute is needed for terrain data.
 	int grid_verts = int(u_grid_cells + 1.5);
 	int grid_x = VERTEX_ID % grid_verts;
 	int grid_y = VERTEX_ID / grid_verts;
