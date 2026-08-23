@@ -9,19 +9,21 @@ extends Node3D
 ##
 ## All rings share one centre snapped to the ~48 m backing lattice. Consequently
 ## every finer level moves by an integer number of its own cells when the centre
-## advances. Only newly exposed height rows/columns are evaluated; existing grid
-## meshes are never rebuilt while travelling.
+## advances. Existing image texels are scrolled; newly exposed samples come from
+## GroundHeightStore's persistent cube-sphere tiles. Once a region has been baked
+## once (or shipped under res:// by the world compiler), movement is RAM/disk I/O
+## plus texture upload rather than procedural terrain synthesis.
 
 const TARGET_FINE_DEPTH := 16
-# 64 cells keeps the 0.75 m representation around the player while cutting the
-# initial runtime synthesis from 116,487 samples to 29,575. This is still a test
-# source until the height pyramid is replaced by prebaked disk tiles.
+# 64 cells keeps the 0.75 m representation immediately around the player while
+# keeping GPU cost fixed. Persistent backing tiles now own expensive synthesis;
+# this grid only chooses how much of those tiles is visible at each ring level.
 const GRID_CELLS := 64
 const GRID_VERTS := GRID_CELLS + 1
 const RENDER_LEVELS := 6
 const STORAGE_LEVELS := RENDER_LEVELS + 1
-# The depth-10 planetary mesh is sufficient higher up. Do not start expensive
-# sub-metre synthesis while the camera is still several kilometres above ground.
+# The depth-10 planetary mesh is sufficient higher up. Do not start fine height
+# streaming while the camera is still several kilometres above ground.
 const ACTIVE_AGL_M := 3500.0
 const REANCHOR_M := 12000.0
 const MATERIAL_RES := 128.0
@@ -92,8 +94,9 @@ func _process(_dt: float) -> void:
 		_reset_frame(observer_dir)
 
 	# Express the observer on one persistent tangent frame. Keeping that frame
-	# fixed for kilometres is what allows height images to scroll instead of being
-	# regenerated whenever the player advances by one clipmap cell.
+	# fixed for kilometres lets the image scroll rather than forcing a new local
+	# projection every few metres. The persistent store itself is face-addressed,
+	# so a reanchor still reuses exactly the same canonical height tiles.
 	var observer_surface := observer_dir * radius
 	var frame_surface := _frame_dir * radius
 	var rel := observer_surface - frame_surface
@@ -128,8 +131,9 @@ func _reset_frame(center: Vector3) -> void:
 	_requested_center = Vector2.ZERO
 	_have_frame = true
 	_frame_epoch += 1
-	# Old samples belong to a different tangent frame. Keep the global quadtree
-	# visible until the replacement pyramid is ready rather than stretching them.
+	# Old image samples belong to a different tangent projection. Keep the global
+	# quadtree visible until the replacement image has been assembled from cached
+	# canonical tiles rather than stretching the old image across the new frame.
 	_images.clear()
 	_height_texture = null
 	_material.set_shader_parameter("u_height_ready", 0.0)
@@ -163,7 +167,9 @@ func _start_build(target: Vector2, force_full: bool) -> void:
 		for image in _images:
 			old_images.append(image)
 
-	# One edit snapshot serves every level and every new strip in this update.
+	# One edit snapshot serves every level and every new strip in this update. The
+	# immutable base comes from GroundHeightStore; edits remain a separate runtime
+	# delta layer and therefore never invalidate or rewrite the disk cache.
 	var outer_spacing := base_spacing * pow(2.0, float(RENDER_LEVELS - 1))
 	var outer_half := float(GRID_CELLS) * 0.5 * outer_spacing
 	var center_dir := _direction_for_plane_static(frame_dir, frame_right, frame_up,
@@ -174,6 +180,9 @@ func _start_build(target: Vector2, force_full: bool) -> void:
 		var built := _build_height_images(frame_dir, frame_right, frame_up,
 			old_images, old_center, target, base_spacing, radius, snap)
 		call_deferred("_on_build_ready", epoch, target, built)
+	# Normal priority. Cache hits are cheap and first-time cache misses are
+	# deliberately serialized inside GroundHeightStore instead of competing with
+	# collision/global terrain for every CPU core.
 	_task_id = WorkerThreadPool.add_task(task, false, "asterra_ground_clipmap")
 
 
@@ -194,9 +203,9 @@ func _on_build_ready(epoch: int, built_center: Vector2, built: Array[Image]) -> 
 			_set_visible(_active)
 			_sync_global_cutout(_active)
 
-	# Do not discard useful intermediate movement. If the player covered several
-	# backing cells while this worker ran, publish what completed and continue from
-	# it; each subsequent job then scrolls only the missing strips.
+	# If the player covered several backing cells while this worker was assembling
+	# the image, publish what completed and immediately continue from it. The next
+	# job copies old texels and asks the store only for newly exposed strips.
 	if _force_full_pending or _requested_center.distance_squared_to(_published_center) > 1e-6:
 		_start_build(_requested_center, _force_full_pending)
 
@@ -206,12 +215,10 @@ static func _build_height_images(frame_dir: Vector3, frame_right: Vector3,
 		new_center: Vector2, base_spacing: float, radius: float,
 		snap: Dictionary) -> Array[Image]:
 	var out: Array[Image] = []
-	var detail := Planet.make_detail()
 	var half := float(GRID_CELLS) * 0.5
 
 	for level in STORAGE_LEVELS:
 		var spacing := base_spacing * pow(2.0, float(level))
-		detail.set_sample_spacing(spacing)
 		var shift := Vector2i(
 			int(round((new_center.x - old_center.x) / spacing)),
 			int(round((new_center.y - old_center.y) / spacing)))
@@ -231,7 +238,7 @@ static func _build_height_images(frame_dir: Vector3, frame_right: Vector3,
 				var plane := new_center + Vector2(float(x) - half, float(y) - half) * spacing
 				var d := _direction_for_plane_static(frame_dir, frame_right, frame_up,
 					plane, radius)
-				var h := Planet.terrain_height(d, detail, snap)
+				var h := GroundHeightStore.sample_height(d, level, snap)
 				image.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
 		out.append(image)
 	return out
@@ -371,9 +378,10 @@ func _sync_terrain_worker_budget(local_active: bool) -> void:
 			_terrain_ref = weakref(terrain)
 	if terrain == null or not (terrain is FastPlanetTerrain):
 		return
-	# The clipmap itself owns one compute-heavy worker. Leave CPU headroom by
-	# allowing only two global ChunkBuilder jobs while it is active. Returning to
-	# altitude restores the normal CPU-scaled cap.
+	# Cache misses still need one compute worker to bake an unseen persistent tile.
+	# Leave CPU headroom by allowing only two global ChunkBuilder jobs while local
+	# ground streaming is active. Warm-cache travel is substantially cheaper, but
+	# keeping this cap prevents a sudden uncached region from causing a frame spike.
 	var normal_cap := clampi(int(OS.get_processor_count() / 4), 2, GLOBAL_BUILD_CAP)
 	terrain.set("_max_concurrent_builds",
 		LOCAL_GLOBAL_BUILD_CAP if local_active else normal_cap)
@@ -415,8 +423,8 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 func _on_region_changed(_center: Vector3, _radius_m: float) -> void:
 	if not _have_frame:
 		return
-	# Editing is comparatively rare. A full local refresh keeps the implementation
-	# revision-safe while the streaming path remains strip-only during travel.
+	# Edits never invalidate pristine cache files. Reassembling the local image
+	# simply reapplies the new Deltas over cached base samples.
 	_queue_target(_requested_center, true)
 
 
