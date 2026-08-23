@@ -11,6 +11,18 @@ const SAFE_PAGE_TABLE_CAPACITY: int = 8192
 const SAFE_PAGE_TABLE_MAX_PROBES: int = 12
 
 
+func _ready() -> void:
+	# Do not run the parent _ready(): it constructs the invalid 16384-wide table
+	# before virtual dispatch can be relied upon. Reproduce only its connections,
+	# then initialize the hardware-safe resources directly.
+	process_priority = 8
+	GroundHeightStore.tile_ready.connect(_on_tile_ready)
+	Planet.world_ready.connect(_on_world_ready)
+	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
+	Deltas.region_changed.connect(_on_region_changed)
+	_reset_cache()
+
+
 func table_capacity() -> int:
 	return SAFE_PAGE_TABLE_CAPACITY
 
