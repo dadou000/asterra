@@ -10,6 +10,7 @@ extends Node3D
 
 const REFRESH_INTERVAL := 0.10
 const MAX_CONCURRENT_BUILDS := 2
+const MAX_SOURCE_CHECKS_PER_FRAME := 12
 const KEY_AXIS_BITS := 20
 const KEY_AXIS_MASK := (1 << KEY_AXIS_BITS) - 1
 const HEIGHT_PRIORITY_COLLISION := -1000.0
@@ -109,9 +110,6 @@ func _refresh_set() -> void:
 	var base_radius := maxf(cfg.collision_stream_radius, tile_arc)
 	var current_center := observer.normalized().to_v3()
 
-	# Shift half the extra coverage forward and enlarge the radius by the same
-	# amount. This preserves approximately the configured radius behind the player
-	# while extending collision significantly farther in the direction of travel.
 	var lookahead := 0.0
 	if _motion_speed > 1.0 and _motion_dir.length_squared() > 0.5:
 		lookahead = minf(_motion_speed * COLLISION_LOOKAHEAD_SECONDS,
@@ -121,8 +119,9 @@ func _refresh_set() -> void:
 	if bias > 0.0:
 		center = (current_center + _motion_dir * (bias / cfg.planet_radius)).normalized()
 	var radius := base_radius + bias
-	_priority_point = observer.add(Vec3D.from_v3(_motion_dir).mul(lookahead)) \
-		if lookahead > 0.0 else observer.dup()
+	_priority_point = observer.dup()
+	if lookahead > 0.0:
+		_priority_point = observer.add(Vec3D.from_v3(_motion_dir).mul(lookahead))
 
 	var tangent := CubeSphere.tangent_basis(center)
 	var east: Vector3 = tangent[0]
@@ -232,9 +231,10 @@ func _entry_source_ready(entry: Dictionary) -> bool:
 
 
 func _pump() -> void:
-	# Bound the scan to the queue size at entry. If every collision patch is waiting
-	# for height I/O, re-appending them must not create an infinite loop this frame.
-	var attempts := _queue.size()
+	# A large high-speed collision bubble can contain many waiting entries. Check a
+	# fixed number per rendered frame so RAM-residency probes themselves cannot
+	# become a new low-altitude CPU spike.
+	var attempts := mini(_queue.size(), MAX_SOURCE_CHECKS_PER_FRAME)
 	while _in_flight < MAX_CONCURRENT_BUILDS and attempts > 0 and not _queue.is_empty():
 		var entry: Dictionary = _queue.pop_front()
 		attempts -= 1
@@ -281,9 +281,6 @@ static func _build_tile(face: int, u0: float, v0: float, size: float, n: int,
 	var sample_spacing := size * PI * 0.25 * radius / float(n)
 	var cache_level := GroundHeightStore.level_for_spacing(sample_spacing)
 	var center := CubeSphere.face_uv_to_dir_d(face, u0 + size * 0.5, v0 + size * 0.5)
-	# The main-thread preflight has already made the relevant source pages resident.
-	# This remains the exact/blocking accessor so physics never silently receives a
-	# coarse visual fallback.
 	var center_h := GroundHeightStore.sample_height(center.to_v3(), cache_level, snap)
 	var pivot := center.mul(radius + center_h)
 	var vertices := PackedVector3Array()
