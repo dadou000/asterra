@@ -6,14 +6,17 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 uniform sampler2D u_height_page_atlas : filter_nearest, repeat_disable;
 uniform sampler2D u_height_page_table : filter_nearest, repeat_disable;
+uniform sampler2D u_height_page_birth_table : filter_nearest, repeat_disable;
 uniform float u_page_atlas_ready = 0.0;
-uniform vec2 u_page_atlas_size = vec2(2112.0, 2112.0);
+uniform float u_page_birth_ready = 0.0;
 uniform float u_page_table_capacity = 8192.0;
 uniform float u_page_table_probes = 12.0;
 uniform float u_page_atlas_cols = 64.0;
 uniform float u_page_tile_cells = 32.0;
 uniform float u_page_tile_verts = 33.0;
 uniform float u_finest_cells = 2097152.0;
+uniform float u_stream_time_s = 0.0;
+uniform float u_page_fade_seconds = 0.70;
 
 // The orbit elevation has a one-texel cross-face gutter. Hardware linear
 // filtering therefore replaces the older four-texel manual bilinear path.
@@ -61,7 +64,7 @@ vec3 direction_for_offset(vec2 offset_m, int level) {
 
 	// Through L6 the complete ring is only a few kilometres across. A normalized
 	// tangent projection is sub-metre close to the exponential map there and
-	// avoids sin/cos for the million or so near-field vertices processed each frame.
+	// avoids sin/cos for the near-field vertices processed every frame.
 	if (level <= ASTERRA_SPARSE_MAX_LEVEL) {
 		return normalize(u_center_dir
 			+ u_center_right * (offset_m.x / u_planet_radius)
@@ -117,7 +120,9 @@ int page_hash(int page_code, int tile_x, int tile_y) {
 	return result < 0 ? result + capacity : result;
 }
 
-int page_slot(int level, int face, int tile_x, int tile_y) {
+// x = physical atlas slot, y = hash-table index. Keeping the table index lets us
+// read the matching page-birth timestamp without another hash walk.
+ivec2 page_lookup(int level, int face, int tile_x, int tile_y) {
 	int capacity = int(u_page_table_capacity + 0.5);
 	int probe_limit = min(int(u_page_table_probes + 0.5), ASTERRA_MAX_TABLE_PROBES);
 	int page_code = level * 6 + face + 1;
@@ -130,7 +135,7 @@ int page_slot(int level, int face, int tile_x, int tile_y) {
 		vec4 meta = texelFetch(u_height_page_table, ivec2(table_index, 0), 0);
 		int stored_slot = int(floor(meta.a + 0.5));
 		if (stored_slot == 0) {
-			return -1;
+			return ivec2(-1, -1);
 		}
 		if (stored_slot < 0) {
 			continue;
@@ -138,10 +143,23 @@ int page_slot(int level, int face, int tile_x, int tile_y) {
 		if (int(floor(meta.r + 0.5)) == page_code
 				&& int(floor(meta.g + 0.5)) == tile_x
 				&& int(floor(meta.b + 0.5)) == tile_y) {
-			return stored_slot - 1;
+			return ivec2(stored_slot - 1, table_index);
 		}
 	}
-	return -1;
+	return ivec2(-1, -1);
+}
+
+float page_refinement_weight(int table_index) {
+	if (u_page_birth_ready < 0.5 || table_index < 0) {
+		return 1.0;
+	}
+	float birth = texelFetch(u_height_page_birth_table, ivec2(table_index, 0), 0).r;
+	if (birth <= 0.0) {
+		return 1.0;
+	}
+	float duration = max(u_page_fade_seconds, 0.001);
+	float t = clamp((u_stream_time_s - birth) / duration, 0.0, 1.0);
+	return t * t * (3.0 - 2.0 * t);
 }
 
 ivec2 tile_address_for_vertex(int ix, int iy, int cells) {
@@ -161,19 +179,21 @@ float atlas_height(int slot, int local_x, int local_y) {
 	return texelFetch(u_height_page_atlas, pixel, 0).r;
 }
 
-vec2 height_vertex(int level, int face, int ix, int iy, int cells) {
+// x = height, y = validity, z = page refinement weight.
+vec3 height_vertex(int level, int face, int ix, int iy, int cells) {
 	int tile_cells = int(u_page_tile_cells + 0.5);
 	ivec2 tile = tile_address_for_vertex(ix, iy, cells);
-	int slot = page_slot(level, face, tile.x, tile.y);
-	if (slot < 0) {
-		return vec2(0.0, 0.0);
+	ivec2 lookup = page_lookup(level, face, tile.x, tile.y);
+	if (lookup.x < 0) {
+		return vec3(0.0, 0.0, 0.0);
 	}
 	int local_x = ix - tile.x * tile_cells;
 	int local_y = iy - tile.y * tile_cells;
-	return vec2(atlas_height(slot, local_x, local_y), 1.0);
+	return vec3(atlas_height(lookup.x, local_x, local_y), 1.0,
+		page_refinement_weight(lookup.y));
 }
 
-vec2 sample_exact_level(vec3 d, int level) {
+vec3 sample_exact_level(vec3 d, int level) {
 	vec3 fuv = face_uv_for_dir(d);
 	int face = int(floor(fuv.x + 0.5));
 	int cells = int(floor(u_finest_cells / exp2(float(level)) + 0.5));
@@ -190,29 +210,31 @@ vec2 sample_exact_level(vec3 d, int level) {
 	ivec2 tile0 = tile_address_for_vertex(x0, y0, cells);
 	ivec2 tile1 = tile_address_for_vertex(x1, y1, cells);
 	if (tile0.x == tile1.x && tile0.y == tile1.y) {
-		int slot = page_slot(level, face, tile0.x, tile0.y);
-		if (slot < 0) {
-			return vec2(0.0, 0.0);
+		ivec2 lookup = page_lookup(level, face, tile0.x, tile0.y);
+		if (lookup.x < 0) {
+			return vec3(0.0, 0.0, 0.0);
 		}
 		int lx0 = x0 - tile0.x * tile_cells;
 		int ly0 = y0 - tile0.y * tile_cells;
 		int lx1 = x1 - tile0.x * tile_cells;
 		int ly1 = y1 - tile0.y * tile_cells;
-		float h00 = atlas_height(slot, lx0, ly0);
-		float h10 = atlas_height(slot, lx1, ly0);
-		float h01 = atlas_height(slot, lx0, ly1);
-		float h11 = atlas_height(slot, lx1, ly1);
-		return vec2(mix(mix(h00, h10, tx), mix(h01, h11, tx), ty), 1.0);
+		float h00 = atlas_height(lookup.x, lx0, ly0);
+		float h10 = atlas_height(lookup.x, lx1, ly0);
+		float h01 = atlas_height(lookup.x, lx0, ly1);
+		float h11 = atlas_height(lookup.x, lx1, ly1);
+		return vec3(mix(mix(h00, h10, tx), mix(h01, h11, tx), ty), 1.0,
+			page_refinement_weight(lookup.y));
 	}
 
-	vec2 h00 = height_vertex(level, face, x0, y0, cells);
-	vec2 h10 = height_vertex(level, face, x1, y0, cells);
-	vec2 h01 = height_vertex(level, face, x0, y1, cells);
-	vec2 h11 = height_vertex(level, face, x1, y1, cells);
+	vec3 h00 = height_vertex(level, face, x0, y0, cells);
+	vec3 h10 = height_vertex(level, face, x1, y0, cells);
+	vec3 h01 = height_vertex(level, face, x0, y1, cells);
+	vec3 h11 = height_vertex(level, face, x1, y1, cells);
 	if (min(min(h00.y, h10.y), min(h01.y, h11.y)) < 0.5) {
-		return vec2(0.0, 0.0);
+		return vec3(0.0, 0.0, 0.0);
 	}
-	return vec2(mix(mix(h00.x, h10.x, tx), mix(h01.x, h11.x, tx), ty), 1.0);
+	float fade = min(min(h00.z, h10.z), min(h01.z, h11.z));
+	return vec3(mix(mix(h00.x, h10.x, tx), mix(h01.x, h11.x, tx), ty), 1.0, fade);
 }
 
 vec2 orbit_fallback(vec3 d) {
@@ -221,6 +243,17 @@ vec2 orbit_fallback(vec3 d) {
 	}
 	vec3 coord = surface_array_coord(d, u_orbit_face_res);
 	return vec2(texture(u_orbit_elevation, coord).r, 1.0);
+}
+
+vec2 raw_parent_height(vec3 d, int child_level) {
+	int parent_level = child_level + 1;
+	if (parent_level <= ASTERRA_SPARSE_MAX_LEVEL && u_page_atlas_ready > 0.5) {
+		vec3 parent = sample_exact_level(d, parent_level);
+		if (parent.y > 0.5) {
+			return vec2(parent.x, 1.0);
+		}
+	}
+	return orbit_fallback(d);
 }
 
 vec2 sample_best_level(vec3 d, int requested_level) {
@@ -233,9 +266,16 @@ vec2 sample_best_level(vec3 d, int requested_level) {
 			if (candidate > ASTERRA_SPARSE_MAX_LEVEL) {
 				break;
 			}
-			vec2 result = sample_exact_level(d, candidate);
+			vec3 result = sample_exact_level(d, candidate);
 			if (result.y > 0.5) {
-				return result;
+				float height = result.x;
+				if (result.z < 0.999) {
+					vec2 parent = raw_parent_height(d, candidate);
+					if (parent.y > 0.5) {
+						height = mix(parent.x, result.x, result.z);
+					}
+				}
+				return vec2(height, 1.0);
 			}
 		}
 	}
