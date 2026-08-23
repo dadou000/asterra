@@ -13,15 +13,22 @@ extends Node3D
 ## meshes are never rebuilt while travelling.
 
 const TARGET_FINE_DEPTH := 16
-const GRID_CELLS := 128
+# 64 cells keeps the 0.75 m representation around the player while cutting the
+# initial runtime synthesis from 116,487 samples to 29,575. This is still a test
+# source until the height pyramid is replaced by prebaked disk tiles.
+const GRID_CELLS := 64
 const GRID_VERTS := GRID_CELLS + 1
 const RENDER_LEVELS := 6
 const STORAGE_LEVELS := RENDER_LEVELS + 1
-const ACTIVE_AGL_M := 6000.0
+# The depth-10 planetary mesh is sufficient higher up. Do not start expensive
+# sub-metre synthesis while the camera is still several kilometres above ground.
+const ACTIVE_AGL_M := 3500.0
 const REANCHOR_M := 12000.0
 const MATERIAL_RES := 128.0
 const MATERIAL_TEXEL_M := Vector3(8.0, 128.0, 2048.0)
 const GLOBAL_CUT_FRACTION := 0.90
+const GLOBAL_BUILD_CAP := 4
+const LOCAL_GLOBAL_BUILD_CAP := 2
 
 var _material: ShaderMaterial
 var _rings: Array[MeshInstance3D] = []
@@ -75,7 +82,7 @@ func _process(_dt: float) -> void:
 	var observer_dir := planet_pos.normalized()
 	# Activation does not need the full expensive sub-grid synthesis. Macro height
 	# can be hundreds of metres off in extreme relief and there is still kilometres
-	# of hysteresis before the clipmap's 6 km ceiling, so use the cheap field here.
+	# of hysteresis before the clipmap ceiling, so use the cheap field here.
 	var agl := maxf(planet_pos.length() - radius - Planet.macro_height(observer_dir), 0.0)
 	if agl > ACTIVE_AGL_M:
 		_set_active(false)
@@ -112,9 +119,9 @@ func _process(_dt: float) -> void:
 
 func _reset_frame(center: Vector3) -> void:
 	_frame_dir = center.normalized()
-	var basis := CubeSphere.tangent_basis(_frame_dir)
-	_frame_right = basis[0]
-	_frame_up = basis[1]
+	var tangent := CubeSphere.tangent_basis(_frame_dir)
+	_frame_right = tangent[0]
+	_frame_up = tangent[1]
 	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius \
 		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
 	_published_center = Vector2.ZERO
@@ -247,7 +254,7 @@ func _build_ring_nodes() -> void:
 		mi.set_instance_shader_parameter("clip_level", float(level))
 		mi.set_instance_shader_parameter("clip_outer", 1.0 if level == RENDER_LEVELS - 1 else 0.0)
 		# Vertex displacement places the mesh around the floating-origin observer,
-		# not inside its tiny undeformed [-64,+64] import bounds.
+		# not inside its tiny undeformed import bounds.
 		mi.custom_aabb = AABB(Vector3(-100000.0, -100000.0, -100000.0),
 			Vector3(200000.0, 200000.0, 200000.0))
 		add_child(mi)
@@ -356,6 +363,22 @@ func _sync_global_cutout(enabled: bool) -> void:
 		outer_half * GLOBAL_CUT_FRACTION)
 
 
+func _sync_terrain_worker_budget(local_active: bool) -> void:
+	var terrain: PlanetTerrain = _terrain_ref.get_ref() if _terrain_ref != null else null
+	if terrain == null:
+		terrain = _find_terrain(get_tree().root)
+		if terrain != null:
+			_terrain_ref = weakref(terrain)
+	if terrain == null or not (terrain is FastPlanetTerrain):
+		return
+	# The clipmap itself owns one compute-heavy worker. Leave CPU headroom by
+	# allowing only two global ChunkBuilder jobs while it is active. Returning to
+	# altitude restores the normal CPU-scaled cap.
+	var normal_cap := clampi(int(OS.get_processor_count() / 4), 2, GLOBAL_BUILD_CAP)
+	terrain.set("_max_concurrent_builds",
+		LOCAL_GLOBAL_BUILD_CAP if local_active else normal_cap)
+
+
 func _find_terrain(node: Node) -> PlanetTerrain:
 	if node is PlanetTerrain:
 		return node
@@ -367,6 +390,8 @@ func _find_terrain(node: Node) -> PlanetTerrain:
 
 
 func _set_active(value: bool) -> void:
+	if _active != value:
+		_sync_terrain_worker_budget(value)
 	_active = value
 	_set_visible(value and _height_texture != null)
 	_sync_global_cutout(value and _height_texture != null)
@@ -397,6 +422,7 @@ func _on_region_changed(_center: Vector3, _radius_m: float) -> void:
 
 func _exit_tree() -> void:
 	_sync_global_cutout(false)
+	_sync_terrain_worker_budget(false)
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
