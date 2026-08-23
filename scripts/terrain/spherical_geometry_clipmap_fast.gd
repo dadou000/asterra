@@ -20,6 +20,7 @@ const REQUEST_RADIAL_PRIORITY_SPAN: float = 80.0
 const SPARSE_VISUAL_MAX_LEVEL: int = 6
 const FAST_MATERIAL_RES: float = 64.0
 const FAST_MATERIAL_TEXEL_M := Vector3(16.0, 256.0, 4096.0)
+const PAGE_REFINEMENT_FADE_SECONDS: float = 0.70
 
 # Twelve 30-degree wedges keep culling useful without turning the terrain into a
 # draw-call-heavy renderer. At a normal horizontal view roughly half are visible.
@@ -32,11 +33,14 @@ var _last_visible_request_msec: int = -1000000
 var _sector_batches: Array[MultiMeshInstance3D] = []
 var _terrain_visible: bool = false
 var _visible_sector_count: int = 0
+var _bound_birth_table: Texture2D
 
 
 func _ready() -> void:
 	super._ready()
 	_material.shader = load("res://shaders/spherical_geometry_clipmap_fast.gdshader")
+	_bind_gpu_resources(true)
+	_material.set_shader_parameter("u_page_fade_seconds", PAGE_REFINEMENT_FADE_SECONDS)
 
 	# Until a cheap dedicated terrain-shadow representation exists, do not run the
 	# expensive displaced clipmap through directional shadow cascades.
@@ -48,8 +52,24 @@ func _ready() -> void:
 
 func _process(dt: float) -> void:
 	super._process(dt)
+	if _material != null:
+		_material.set_shader_parameter("u_stream_time_s",
+			float(Time.get_ticks_usec()) / 1000000.0)
 	if _terrain_visible:
 		_update_sector_visibility()
+
+
+func _bind_gpu_resources(force: bool) -> void:
+	super._bind_gpu_resources(force)
+	var birth: Texture2D = null
+	if GroundHeightPageAtlas.has_method("page_birth_texture"):
+		var value: Variant = GroundHeightPageAtlas.page_birth_texture()
+		if value is Texture2D:
+			birth = value
+	if force or birth != _bound_birth_table:
+		_bound_birth_table = birth
+		_material.set_shader_parameter("u_height_page_birth_table", birth)
+		_material.set_shader_parameter("u_page_birth_ready", 1.0 if birth != null else 0.0)
 
 
 func _build_batches() -> void:
@@ -299,5 +319,6 @@ func gpu_stream_stats() -> Dictionary:
 	out["concentric"] = true
 	out["sector_count"] = SECTOR_COUNT
 	out["visible_sectors"] = _visible_sector_count
+	out["page_fade_seconds"] = PAGE_REFINEMENT_FADE_SECONDS
 	out["draw_batches"] = 1 + _visible_sector_count if _active_max_level > 0 else 1
 	return out
