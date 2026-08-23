@@ -442,10 +442,15 @@ func _request(node: PlanetTerrain.QuadNode) -> void:
 func _cancel_queued(node: PlanetTerrain.QuadNode) -> void:
 	if node.state != 1 or node.task_id >= 0:
 		return
-	# The queue entry is lazily discarded by _pump_requests().
+	# The queue entry is lazily discarded by _pump_requests(). If a resident
+	# chunk was queued for an edit/stitch rebuild, _request() cleared dirty while
+	# it waited. Cancelling that queue entry must restore dirty or the old resident
+	# mesh can incorrectly become the permanent current revision.
+	var resident := node.chunk != null
 	node.request_token += 1
-	node.state = 2 if node.chunk != null else 0
+	node.state = 2 if resident else 0
 	node.requested_revision = -1
+	node.dirty = resident
 
 
 func _pump_requests() -> void:
