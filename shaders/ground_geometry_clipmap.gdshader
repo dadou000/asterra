@@ -38,9 +38,10 @@ uniform vec4 u_height_layout4 = vec4(0.0);
 uniform vec4 u_height_layout5 = vec4(0.0);
 uniform vec4 u_height_layout6 = vec4(0.0);
 
-instance uniform float clip_level = 0.0;
-instance uniform float clip_outer = 0.0;
-
+// Clipmap levels are batched through MultiMesh. INSTANCE_CUSTOM.x is the LOD
+// level; INSTANCE_CUSTOM.y is 1 only for the outermost ring. This turns six
+// separate MeshInstance submissions into two MultiMesh submissions while keeping
+// the same spatial material/shadow path.
 varying vec3 v_planet;
 varying vec3 v_world_normal;
 varying vec2 v_cell;
@@ -129,12 +130,16 @@ vec3 planet_position(vec2 cell, float level) {
 }
 
 void vertex() {
-	// Vercidium-style grid reconstruction: the index stream chooses only a logical
-	// vertex ID. No position, UV or normal attribute is needed for terrain data.
+	// Vercidium-style grid reconstruction: topology/index data chooses which
+	// logical vertex is being drawn; no position/UV/normal attribute is needed to
+	// discover its terrain coordinate. VERTEX_ID is the grid vertex referenced by
+	// the compact triangle-strip index buffer.
 	int grid_verts = int(u_grid_cells + 1.5);
 	int grid_x = VERTEX_ID % grid_verts;
 	int grid_y = VERTEX_ID / grid_verts;
 	vec2 cell = vec2(float(grid_x), float(grid_y)) - vec2(u_grid_cells * 0.5);
+	float clip_level = INSTANCE_CUSTOM.x;
+	float clip_outer = INSTANCE_CUSTOM.y;
 	v_cell = cell;
 
 	if (u_height_ready < 0.5) {
