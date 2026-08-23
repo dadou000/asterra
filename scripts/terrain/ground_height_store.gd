@@ -530,9 +530,10 @@ func _relative_path_for_namespace(cache_namespace: String, level: int, face: int
 
 func _load_tile_for_namespace(cache_namespace: String, level: int, face: int,
 		tile_x: int, tile_y: int) -> PackedFloat32Array:
-	var relative := _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
-	for prefix in ["res://", "user://"]:
-		var path := prefix + relative
+	var relative: String = _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
+	var prefixes := PackedStringArray(["res://", "user://"])
+	for prefix: String in prefixes:
+		var path: String = prefix + relative
 		if not FileAccess.file_exists(path):
 			continue
 		var file := FileAccess.open_compressed(path, FileAccess.READ,
@@ -562,9 +563,9 @@ func _load_tile_for_namespace(cache_namespace: String, level: int, face: int,
 
 func _write_tile_for_namespace(cache_namespace: String, level: int, face: int,
 		tile_x: int, tile_y: int, data: PackedFloat32Array) -> void:
-	var relative := _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
-	var path := "user://" + relative
-	var parent := path.get_base_dir()
+	var relative: String = _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
+	var path: String = "user://" + relative
+	var parent: String = path.get_base_dir()
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent))
 	var file := FileAccess.open_compressed(path, FileAccess.WRITE,
 		FileAccess.COMPRESSION_ZSTD)
