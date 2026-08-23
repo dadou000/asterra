@@ -1,16 +1,16 @@
 extends "res://scripts/terrain/ground_geometry_clipmap_pages_stable.gd"
 ## Correctness-first direct GPU-page renderer.
 ##
-## The previous renderer batched L1-L5 into one MultiMesh submission. Runtime
-## wireframe captures showed the global terrain cutout but no corresponding ring
-## geometry, so this path deliberately removes multi-instance batching as a
-## variable: each clipmap level owns a one-instance MultiMesh with its own custom
-## data and culling object.
+## Runtime wireframe testing proved that the six local clipmap levels are present.
+## Keep them as independently culled one-instance batches for now so batching is
+## not allowed to hide an entire group of rings.
 ##
-## The global terrain cutout is disabled in this diagnostic-safe path. Until the
-## local renderer is proven complete, the coarse planet is a safety backing layer
-## rather than a square hole. Once the six rings are verified we can reintroduce
-## the handoff using a validity mask/sink instead of an unconditional discard.
+## The coarse global terrain handoff is enabled again. With the local geometry now
+## verified, leaving the global quadtree underneath causes exactly the chunk-edge
+## clipping seen in wireframe: whichever coarse triangle sits above the fine page
+## wins the depth test. The inherited handoff removes the global terrain only
+## inside the protected inner footprint, while the outer L5 ring keeps a narrow
+## dithered overlap to the global surface.
 
 var _level_batches: Array[MultiMeshInstance3D] = []
 
@@ -57,14 +57,16 @@ func _set_visible(value: bool) -> void:
 		batch.visible = value
 
 
-## Never remove the global safety terrain while diagnosing local-page coverage.
-## This guarantees that a missing/invalid local page cannot become a black void.
-func _sync_global_cutout(_enabled: bool) -> void:
-	super._sync_global_cutout(false)
+## The rings are now proven present. Remove the coarse global approximation under
+## the inner clipmap footprint so coarse chunk boundaries cannot depth-occlude the
+## fine surface. This is only called active after the stable renderer has verified
+## its L6 backing coverage.
+func _sync_global_cutout(enabled: bool) -> void:
+	super._sync_global_cutout(enabled)
 
 
 func gpu_stream_stats() -> Dictionary:
 	var result: Dictionary = super.gpu_stream_stats()
 	result["draw_batches"] = _level_batches.size()
-	result["safe_global_backing"] = true
+	result["safe_global_backing"] = false
 	return result
