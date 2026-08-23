@@ -46,7 +46,7 @@ func _ready() -> void:
 	# OS.get_processor_count() reports logical processors. ChunkBuilder jobs are
 	# compute-bound, so using almost every SMT thread hurts frame time badly. Use
 	# roughly one worker per four logical processors, capped at four.
-	_max_concurrent_builds = clampi(OS.get_processor_count() / 4, 2, MAX_CONCURRENT_BUILDS_CAP)
+	_max_concurrent_builds = clampi(int(OS.get_processor_count() / 4), 2, MAX_CONCURRENT_BUILDS_CAP)
 	# Mesh creation/upload stays on the main thread and is separately time-budgeted.
 	max_builds_per_frame = 8
 	_collision_streamer = TerrainCollisionStreamer.new()
