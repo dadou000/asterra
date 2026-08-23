@@ -43,7 +43,8 @@ float transition_weight(vec2 cell) {
 
 float sample_level(vec2 cell, float level) {
 	vec2 uv = cell / u_grid_cells + vec2(0.5);
-	return textureLod(u_height_pyramid, vec3(clamp(uv, vec2(0.0), vec2(1.0)), level), 0.0).r;
+	return textureLod(u_height_pyramid,
+		vec3(clamp(uv, vec2(0.0), vec2(1.0)), level), 0.0).r;
 }
 
 float clip_height(vec2 cell, float level) {
@@ -74,34 +75,39 @@ vec3 planet_position(vec2 cell, float level) {
 
 void vertex() {
 	v_cell = VERTEX.xz;
+
+	// Godot spatial vertex processors do not allow an early `return`. Keep both
+	// branches explicit so the uninitialised state collapses harmlessly while the
+	// asynchronous height pyramid is still being produced.
 	if (u_height_ready < 0.5) {
 		VERTEX = vec3(0.0);
 		NORMAL = vec3(0.0, 1.0, 0.0);
 		v_planet = vec3(u_planet_radius, 0.0, 0.0);
 		v_world_normal = normalize(v_planet);
 		v_edge_fade = 1.0;
-		return;
+	} else {
+		vec2 cell = VERTEX.xz;
+		vec3 p = planet_position(cell, clip_level);
+		vec3 pl = planet_position(cell + vec2(-1.0, 0.0), clip_level);
+		vec3 pr = planet_position(cell + vec2( 1.0, 0.0), clip_level);
+		vec3 pd = planet_position(cell + vec2(0.0, -1.0), clip_level);
+		vec3 pu = planet_position(cell + vec2(0.0,  1.0), clip_level);
+		vec3 n = normalize(cross(pr - pl, pu - pd));
+		if (dot(n, normalize(p)) < 0.0) {
+			n = -n;
+		}
+
+		v_planet = p;
+		v_world_normal = n;
+		NORMAL = n;
+		VERTEX = p - u_origin;
+
+		float q = max(abs(cell.x), abs(cell.y)) / max(u_grid_cells * 0.5, 1.0);
+		// The clipmap is already the exact ~48 m backing surface by the time this
+		// outer fade starts, so every discarded pixel reveals an equivalent global
+		// depth-10 point instead of a different shape.
+		v_edge_fade = clip_outer > 0.5 ? smoothstep(0.945, 0.995, q) : 0.0;
 	}
-
-	vec2 cell = VERTEX.xz;
-	vec3 p = planet_position(cell, clip_level);
-	vec3 pl = planet_position(cell + vec2(-1.0, 0.0), clip_level);
-	vec3 pr = planet_position(cell + vec2( 1.0, 0.0), clip_level);
-	vec3 pd = planet_position(cell + vec2(0.0, -1.0), clip_level);
-	vec3 pu = planet_position(cell + vec2(0.0,  1.0), clip_level);
-	vec3 n = normalize(cross(pr - pl, pu - pd));
-	if (dot(n, normalize(p)) < 0.0) n = -n;
-
-	v_planet = p;
-	v_world_normal = n;
-	NORMAL = n;
-	VERTEX = p - u_origin;
-
-	float q = max(abs(cell.x), abs(cell.y)) / max(u_grid_cells * 0.5, 1.0);
-	// The clipmap is already the exact ~48 m backing surface by the time this
-	// outer fade starts, so every discarded pixel reveals an equivalent global
-	// depth-10 point instead of a different shape.
-	v_edge_fade = clip_outer > 0.5 ? smoothstep(0.945, 0.995, q) : 0.0;
 }
 
 float dither_noise(vec2 p) {
@@ -112,7 +118,9 @@ void fragment() {
 	// The outermost ring overlaps the coarse global quadtree for a short band.
 	// Screen-door fading avoids a hard square border without putting the terrain
 	// in Godot's transparent render queue.
-	if (v_edge_fade > 0.001 && dither_noise(FRAGCOORD.xy) < v_edge_fade) discard;
+	if (v_edge_fade > 0.001 && dither_noise(FRAGCOORD.xy) < v_edge_fade) {
+		discard;
+	}
 
 	vec3 up = normalize(v_planet);
 	vec3 wn = normalize(v_world_normal);
