@@ -37,21 +37,21 @@ func _process(dt: float) -> void:
 		_reset_motion()
 		return
 
-	var camera := get_viewport().get_camera_3d()
+	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null:
 		_reset_motion()
 		return
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
-	var planet_pos := camera.global_position + origin
+	var origin: Vector3 = Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var planet_pos: Vector3 = camera.global_position + origin
 	if planet_pos.length_squared() <= 1.0:
 		_reset_motion()
 		return
 
-	var observer_dir := planet_pos.normalized()
+	var observer_dir: Vector3 = planet_pos.normalized()
 	_update_motion(planet_pos, observer_dir, dt)
 
-	var agl := maxf(planet_pos.length() - Planet.cfg.planet_radius
+	var agl: float = maxf(planet_pos.length() - Planet.cfg.planet_radius
 		- Planet.macro_height(observer_dir), 0.0)
 	if agl > ACTIVE_AGL_M:
 		return
@@ -71,8 +71,8 @@ func _update_motion(planet_pos: Vector3, observer_dir: Vector3, dt: float) -> vo
 		_last_speed = 0.0
 		return
 
-	var safe_dt := maxf(dt, 1.0 / 240.0)
-	var raw_velocity := (planet_pos - _last_planet_pos) / safe_dt
+	var safe_dt: float = maxf(dt, 1.0 / 240.0)
+	var raw_velocity: Vector3 = (planet_pos - _last_planet_pos) / safe_dt
 	_last_planet_pos = planet_pos
 
 	# Teleports/reloads must not turn into a multi-kilometre speculative corridor.
@@ -83,25 +83,25 @@ func _update_motion(planet_pos: Vector3, observer_dir: Vector3, dt: float) -> vo
 
 	# Radial climb/descent does not advance the terrain footprint. Only retain the
 	# velocity tangent to the spherical surface.
-	var tangent_velocity := raw_velocity - observer_dir * raw_velocity.dot(observer_dir)
+	var tangent_velocity: Vector3 = raw_velocity - observer_dir * raw_velocity.dot(observer_dir)
 	_surface_velocity = _surface_velocity.lerp(tangent_velocity, VELOCITY_FILTER)
 	_last_speed = _surface_velocity.length()
 
 
 func _prefetch_corridor(observer_dir: Vector3) -> void:
-	var speed := _surface_velocity.length()
+	var speed: float = _surface_velocity.length()
 	if speed < MIN_PREFETCH_SPEED_MPS:
 		_last_lookahead = 0.0
 		return
 
-	var radius := Planet.cfg.planet_radius
-	var forward := _surface_velocity / speed
-	var side := observer_dir.cross(forward)
+	var radius: float = float(Planet.cfg.planet_radius)
+	var forward: Vector3 = _surface_velocity / speed
+	var side: Vector3 = observer_dir.cross(forward)
 	if side.length_squared() < 1e-8:
 		return
 	side = side.normalized()
 
-	var lookahead := minf(speed * LOOKAHEAD_SECONDS, MAX_LOOKAHEAD_M)
+	var lookahead: float = minf(speed * LOOKAHEAD_SECONDS, MAX_LOOKAHEAD_M)
 	_last_lookahead = lookahead
 
 	# Two future stations are enough to seed the corridor without flooding a cold
@@ -116,18 +116,19 @@ func _prefetch_corridor(observer_dir: Vector3) -> void:
 
 func _prefetch_station(observer_dir: Vector3, forward: Vector3, side: Vector3,
 		ahead_m: float, radius: float, priority: float) -> void:
-	# level, lateral half-width in metres
-	var bands := [
+	# Vector2(level, lateral half-width in metres).
+	var bands: Array[Vector2] = [
 		Vector2(0.0, 36.0),   # ~0.75 m data around the future wheel/footprint
 		Vector2(2.0, 180.0),  # ~3 m collision/near landscape
 		Vector2(4.0, 620.0),  # ~12 m outer visual coverage
 	]
-	for band in bands:
-		var finest_level := int(band.x)
-		var half_width := band.y
-		for lateral_factor in [-1.0, 0.0, 1.0]:
-			var offset := forward * ahead_m + side * (half_width * lateral_factor)
-			var d := (observer_dir + offset / radius).normalized()
+	var lateral_factors := PackedFloat32Array([-1.0, 0.0, 1.0])
+	for band: Vector2 in bands:
+		var finest_level: int = int(band.x)
+		var half_width: float = band.y
+		for lateral_factor: float in lateral_factors:
+			var offset: Vector3 = forward * ahead_m + side * (half_width * lateral_factor)
+			var d: Vector3 = (observer_dir + offset / radius).normalized()
 			GroundHeightStore.prefetch_sample(d, finest_level, priority)
 
 
