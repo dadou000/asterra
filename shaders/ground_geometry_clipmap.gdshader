@@ -31,8 +31,6 @@ uniform vec4 u_height_layout4 = vec4(0.0);
 uniform vec4 u_height_layout5 = vec4(0.0);
 uniform vec4 u_height_layout6 = vec4(0.0);
 
-// Per-ring state. Ring 0 is the solid centre; higher levels use the same
-// coordinate mesh with the middle removed.
 instance uniform float clip_level = 0.0;
 instance uniform float clip_outer = 0.0;
 
@@ -66,9 +64,6 @@ float stored_height(ivec2 logical_texel, int level, vec4 layout) {
 	return textureLod(u_height_pyramid, vec3(uv, float(level)), 0.0).r;
 }
 
-// Bilinear lookup in physical tangent-plane space. Every height level may have a
-// different snapped centre and circular origin; the visible ring meshes remain
-// centred together, so their topology cannot pull apart as caches scroll.
 float sample_level_plane(vec2 plane, float level_f) {
 	int level = int(floor(level_f + 0.5));
 	vec4 layout = height_layout(level);
@@ -90,9 +85,6 @@ float sample_level_plane(vec2 plane, float level_f) {
 float transition_weight(vec2 cell) {
 	float half_cells = u_grid_cells * 0.5;
 	float q = max(abs(cell.x), abs(cell.y)) / max(half_cells, 1.0);
-	// Fine detail is completely removed before the topology boundary. The same
-	// physical plane point is sampled from the next level, independent of where
-	// that level's toroidal storage currently wraps.
 	return smoothstep(0.72, 0.90, q);
 }
 
@@ -120,7 +112,15 @@ vec3 planet_position(vec2 cell, float level) {
 }
 
 void vertex() {
-	v_cell = VERTEX.xz;
+	// Vercidium-style grid reconstruction: topology/index data chooses which
+	// logical vertex is being drawn; no position/UV/normal attribute is needed to
+	// discover its terrain coordinate. For the current indexed ArrayMesh,
+	// VERTEX_ID is the grid vertex index referenced by the index buffer.
+	int grid_verts = int(u_grid_cells + 1.5);
+	int grid_x = VERTEX_ID % grid_verts;
+	int grid_y = VERTEX_ID / grid_verts;
+	vec2 cell = vec2(float(grid_x), float(grid_y)) - vec2(u_grid_cells * 0.5);
+	v_cell = cell;
 
 	if (u_height_ready < 0.5) {
 		VERTEX = vec3(0.0);
@@ -129,7 +129,6 @@ void vertex() {
 		v_world_normal = normalize(v_planet);
 		v_edge_fade = 1.0;
 	} else {
-		vec2 cell = VERTEX.xz;
 		vec3 p = planet_position(cell, clip_level);
 		vec3 pl = planet_position(cell + vec2(-1.0, 0.0), clip_level);
 		vec3 pr = planet_position(cell + vec2( 1.0, 0.0), clip_level);
