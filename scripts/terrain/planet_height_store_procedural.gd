@@ -82,10 +82,13 @@ static func _u32(value: int) -> int:
 
 
 static func _terrain_hash(p: Vector3i, seed: int) -> int:
-	var h: int = _u32(_u32(p.x) * 0x8da6b343)
-	h = _u32(h ^ _u32(_u32(p.y) * 0xd8163841))
-	h = _u32(h ^ _u32(_u32(p.z) * 0xcb1ab31f))
-	h = _u32(h ^ _u32(_u32(seed) * 0x9e3779b9))
+	# Coordinates here are only world/wavelength lattice coordinates (tens of
+	# thousands), so multiply signed coordinates first and then mask to uint32.
+	# This exactly matches GLSL uint wrap while staying well inside int64 range.
+	var h: int = _u32(p.x * 0x8da6b343)
+	h = _u32(h ^ _u32(p.y * 0xd8163841))
+	h = _u32(h ^ _u32(p.z * 0xcb1ab31f))
+	h = _u32(h ^ _u32(seed * 0x9e3779b9))
 	h = _u32(h ^ (h >> 16))
 	h = _u32(h * 0x7feb352d)
 	h = _u32(h ^ (h >> 15))
@@ -100,8 +103,11 @@ static func _lattice_value(p: Vector3i, seed: int) -> float:
 
 
 static func _smooth_value_noise(p: Vector3, seed: int) -> float:
-	var i := Vector3i(floori(p.x), floori(p.y), floori(p.z))
-	var f := Vector3(p.x - floor(p.x), p.y - floor(p.y), p.z - floor(p.z))
+	var fx0: float = floor(p.x)
+	var fy0: float = floor(p.y)
+	var fz0: float = floor(p.z)
+	var i := Vector3i(int(fx0), int(fy0), int(fz0))
+	var f := Vector3(p.x - fx0, p.y - fy0, p.z - fz0)
 	f = Vector3(
 		f.x * f.x * (3.0 - 2.0 * f.x),
 		f.y * f.y * (3.0 - 2.0 * f.y),
