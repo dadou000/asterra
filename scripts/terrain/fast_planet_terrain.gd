@@ -11,20 +11,29 @@ extends PlanetTerrain
 ## Expensive chunk work is queued by player relevance, bounded to a small number
 ## of concurrent worker jobs, and biased toward the player's direction of travel.
 
-const MAX_CONCURRENT_BUILDS_CAP := 12
-const INSTALL_BUDGET_USEC := 3500
+# ChunkBuilder is deliberately CPU-heavy: each tile evaluates the physical height
+# function, normals and surface fields at more than a thousand points. Running one
+# job per logical thread starves the main/render threads on SMT CPUs. Four heavy
+# workers is enough to keep generation moving on a modern desktop while leaving
+# real core time for the game.
+const MAX_CONCURRENT_BUILDS_CAP := 4
+# Do not let refinement manufacture thousands of jobs faster than ChunkBuilder can
+# consume them. Resident parents already cover those regions, so deferring deeper
+# splits is visually safe and turns the queue into explicit streaming backpressure.
+const MAX_PENDING_BUILDS := 256
+const INSTALL_BUDGET_USEC := 2200
 const PREFETCH_SECONDS := 1.35
 const PREFETCH_MAX_METRES := 120000.0
 const TELEPORT_THRESHOLD_METRES := 250000.0
-const TOPOLOGY_SCAN_INTERVAL := 0.075
+const TOPOLOGY_SCAN_INTERVAL := 0.15
 
 ## Queue entries: { node, priority, missing }
 var _request_queue: Array = []
-## TerrainDetail owns four FastNoiseLite generators. Keep one per concurrently
+## TerrainDetail owns several FastNoiseLite generators. Keep one per concurrently
 ## running worker and recycle it when that worker finishes.
 var _free_details: Array[TerrainDetail] = []
 
-var _max_concurrent_builds: int = 8
+var _max_concurrent_builds: int = 4
 var _have_observer := false
 var _motion_dir := Vec3D.new(0.0, 0.0, 0.0)
 var _motion_speed := 0.0
@@ -34,11 +43,12 @@ var _topology_scan_left := 0.0
 
 func _ready() -> void:
 	super._ready()
-	# Leave at least two logical processors to the main/render/physics side while
-	# still scaling up on high-core-count CPUs.
-	_max_concurrent_builds = clampi(OS.get_processor_count() - 2, 2, MAX_CONCURRENT_BUILDS_CAP)
-	# Mesh creation/upload stays on the main thread and is time-budgeted below.
-	max_builds_per_frame = 24
+	# OS.get_processor_count() reports logical processors. ChunkBuilder jobs are
+	# compute-bound, so using almost every SMT thread hurts frame time badly. Use
+	# roughly one worker per four logical processors, capped at four.
+	_max_concurrent_builds = clampi(OS.get_processor_count() / 4, 2, MAX_CONCURRENT_BUILDS_CAP)
+	# Mesh creation/upload stays on the main thread and is separately time-budgeted.
+	max_builds_per_frame = 8
 	_collision_streamer = TerrainCollisionStreamer.new()
 	add_child(_collision_streamer)
 
@@ -128,16 +138,16 @@ func _process(dt: float) -> void:
 		var root: PlanetTerrain.QuadNode = value
 		_update(root, false, 0.0)
 
-	# Neighbour discovery crosses cube faces and descends the quadtree, so doing
-	# it for every resident edge at render frequency wastes substantial main-thread
-	# time while the observer is stationary. A 75 ms cadence is still much shorter
-	# than the LOD morph and chunk-build intervals, and stitch revisions retain the
-	# old mesh until the replacement is ready.
+	# Neighbour discovery is one of the largest main-thread costs at high node
+	# counts. Keep a wall-time cadence during normal play, but if a bad frame takes
+	# longer than that interval do not immediately run the scan again next frame.
+	# This prevents the old low-FPS feedback loop where the 75 ms scan happened on
+	# every 200-300 ms frame and helped keep the game stuck there.
 	_topology_scan_left -= dt
 	if _topology_scan_left <= 0.0:
 		_balance_quadtree()
 		_refresh_stitch_masks()
-		_topology_scan_left = TOPOLOGY_SCAN_INTERVAL
+		_topology_scan_left = maxf(TOPOLOGY_SCAN_INTERVAL, dt * 2.0)
 
 	_pump_requests()
 	_stats["queued"] = _request_queue.size()
@@ -162,6 +172,10 @@ func _is_culled(node: PlanetTerrain.QuadNode) -> bool:
 	return node.center_dir.dot(_obs_dir) < cos(_cull_angle(node))
 
 
+func _streaming_saturated() -> bool:
+	return _request_queue.size() + _in_flight >= MAX_PENDING_BUILDS
+
+
 func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
 	# Avoid acos/angle_to per node. When a subtree leaves the horizon, collapse
 	# its children but KEEP this node's own mesh resident as the fallback for the
@@ -182,6 +196,11 @@ func _update(node: PlanetTerrain.QuadNode, hidden: bool, morph: float) -> void:
 	var center_dist: float = _distance_to_node(node, observer)
 	var dist: float = center_dist - node.arc * 0.6
 	var want_split := _wants_split(node, dist)
+	# Refinement is optional while a resident parent already covers this region.
+	# Once the pending-work budget is full, keep that parent instead of creating
+	# four more children and an exponentially growing backlog.
+	if node.is_leaf() and node.chunk != null and want_split and _streaming_saturated():
+		want_split = false
 
 	# Retained parents are visible fallbacks and must be rebuilt after an edit;
 	# updating only their leaf descendants briefly restores stale terrain whenever
@@ -278,7 +297,10 @@ const NEIGHBOUR_PROBE := 1e-6
 ## cross-face traversal do not. Splitting only resident nodes preserves the
 ## coverage-first invariant: a balance repair can never remove the fallback.
 func _balance_quadtree() -> void:
-	for _pass in MAX_BALANCE_PASSES:
+	# During sustained streaming, do a small amount of balancing per scan instead
+	# of potentially walking the whole tree 24 times in one frame.
+	var pass_budget := 4 if _streaming_saturated() else MAX_BALANCE_PASSES
+	for _pass in pass_budget:
 		var leaves: Array[PlanetTerrain.QuadNode] = []
 		for value in roots:
 			_collect_leaves(value, leaves)
@@ -424,6 +446,10 @@ func _request(node: PlanetTerrain.QuadNode) -> void:
 	# A resident chunk may still be rebuilt because terrain edits marked it dirty.
 	if node.state == 2 and not node.dirty:
 		return
+	# Missing refinement is deferrable because an ancestor is already resident.
+	# Dirty resident rebuilds are deliberately exempt so edits can never starve.
+	if missing and _streaming_saturated():
+		return
 
 	node.state = 1
 	node.dirty = false
@@ -457,9 +483,9 @@ func _pump_requests() -> void:
 	if _request_queue.is_empty() or _shutting_down:
 		return
 
-	# Re-rank every waiting request against the latest observer position. Turning
-	# or accelerating therefore changes the next job immediately instead of after
-	# an old FIFO backlog has drained.
+	# Re-rank every waiting request against the latest observer position. The queue
+	# is hard-bounded, so this remains cheap instead of sorting thousands of entries
+	# on the main thread every frame.
 	var kept: Array = []
 	for value in _request_queue:
 		var entry: Dictionary = value
