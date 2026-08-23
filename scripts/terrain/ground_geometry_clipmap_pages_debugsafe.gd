@@ -8,9 +8,10 @@ extends "res://scripts/terrain/ground_geometry_clipmap_pages_stable.gd"
 ## The coarse global terrain handoff is enabled again. With the local geometry now
 ## verified, leaving the global quadtree underneath causes exactly the chunk-edge
 ## clipping seen in wireframe: whichever coarse triangle sits above the fine page
-## wins the depth test. The inherited handoff removes the global terrain only
-## inside the protected inner footprint, while the outer L5 ring keeps a narrow
-## dithered overlap to the global surface.
+## wins the depth test. The global surface is removed under the opaque portion of
+## the local clipmap and reappears only immediately before the L5 dither fade.
+
+const HANDOFF_CUT_FRACTION: float = 0.94
 
 var _level_batches: Array[MultiMeshInstance3D] = []
 
@@ -57,12 +58,33 @@ func _set_visible(value: bool) -> void:
 		batch.visible = value
 
 
-## The rings are now proven present. Remove the coarse global approximation under
-## the inner clipmap footprint so coarse chunk boundaries cannot depth-occlude the
-## fine surface. This is only called active after the stable renderer has verified
-## its L6 backing coverage.
+## Remove the coarse global approximation under the opaque local clipmap. The
+## outer local ring begins dithering at q ~= 0.945, so exposing the global mesh at
+## q = 0.94 leaves only a tiny overlap before that fade instead of the old 0.90
+## handoff that allowed coarse chunk edges to occlude ~4.5% of the ring width.
 func _sync_global_cutout(enabled: bool) -> void:
-	super._sync_global_cutout(enabled)
+	var terrain: PlanetTerrain = _terrain_ref.get_ref() if _terrain_ref != null else null
+	if terrain == null:
+		terrain = _find_terrain(get_tree().root)
+		if terrain != null:
+			_terrain_ref = weakref(terrain)
+	if terrain == null:
+		return
+	var mats: Array = terrain.debug_materials()
+	if mats.is_empty():
+		return
+	var ground: ShaderMaterial = mats[0]
+	ground.set_shader_parameter("u_ground_clipmap_cutout", 1.0 if enabled else 0.0)
+	if not enabled:
+		return
+	var outer_spacing: float = _base_spacing * pow(2.0, float(RENDER_LEVELS - 1))
+	var outer_half: float = float(GRID_CELLS) * 0.5 * outer_spacing
+	ground.set_shader_parameter("u_ground_clipmap_frame_dir", _frame_dir)
+	ground.set_shader_parameter("u_ground_clipmap_right", _frame_right)
+	ground.set_shader_parameter("u_ground_clipmap_up", _frame_up)
+	ground.set_shader_parameter("u_ground_clipmap_center_plane", _published_center)
+	ground.set_shader_parameter("u_ground_clipmap_cut_half_extent",
+		outer_half * HANDOFF_CUT_FRACTION)
 
 
 func gpu_stream_stats() -> Dictionary:
