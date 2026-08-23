@@ -55,6 +55,16 @@ uniform float u_camera_agl = 1000.0;
 /// should have been showing leaf litter. The default matches 1600x900 so a
 /// material that never gets the uniform still behaves as before.
 uniform float u_pixel_angle = 0.00132;
+/// Local geometry clipmap handoff. The clipmap owns the fine surface under this
+/// tangent-frame square; the global quadtree is discarded there so its coarser
+/// approximation can never poke through a negative fine residual. A narrow
+/// overlap remains outside the cut and is screen-door faded by the clipmap.
+uniform float u_ground_clipmap_cutout = 0.0;
+uniform vec3 u_ground_clipmap_frame_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_ground_clipmap_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_ground_clipmap_up = vec3(0.0, 1.0, 0.0);
+uniform vec2 u_ground_clipmap_center_plane = vec2(0.0);
+uniform float u_ground_clipmap_cut_half_extent = 0.0;
 /// Normal-incidence reflectance of the dielectrics ground is made of -- rock,
 /// soil, leaf wax. Written out rather than taken from SPECULAR so the lobe in
 /// light() cannot silently change scale if the material's SPECULAR moves.
@@ -117,6 +127,22 @@ void fragment() {
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
 	float dist_to_camera = length(VERTEX);
+
+	// Remove the coarse global mesh underneath the local geometry clipmap. The
+	// projection is the same tangent-frame mapping used by the clipmap sampler,
+	// so the cut cannot drift into a visible square when the floating origin moves.
+	if (u_ground_clipmap_cutout > 0.5) {
+		vec3 frame_dir = normalize(u_ground_clipmap_frame_dir);
+		float denom = dot(up, frame_dir);
+		if (denom > 0.08) {
+			vec2 plane = vec2(dot(up, normalize(u_ground_clipmap_right)),
+				dot(up, normalize(u_ground_clipmap_up))) / denom * u_planet_radius;
+			vec2 local_plane = plane - u_ground_clipmap_center_plane;
+			if (max(abs(local_plane.x), abs(local_plane.y)) < u_ground_clipmap_cut_half_extent) {
+				discard;
+			}
+		}
+	}
 
 	// Cut the ground back to the authoritative coastline wherever the mesh is too
 	// coarse to find it itself.
