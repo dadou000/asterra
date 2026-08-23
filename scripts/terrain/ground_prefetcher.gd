@@ -1,14 +1,10 @@
 extends Node
 ## Velocity-aware terrain height prefetcher.
 ##
-## The geometry clipmap deliberately reacts only when its snapped backing centre
-## moves. At vehicle speed that is too late to begin disk I/O. This node predicts
-## where the observer will be a few seconds from now and requests a sparse set of
-## height pages along that corridor before the clipmap/collision systems need them.
-##
-## Requests are hints only. GroundHeightStore owns de-duplication, priority,
-## backpressure and the single cold-cache baker, so a fast aircraft cannot create
-## unbounded work merely by crossing many kilometres.
+## The spherical geometry clipmap already requests its complete visible L0-L14
+## hierarchy. This node only predicts the local pages needed soon by feet, wheels
+## and near-field rendering; it must not fan one future probe through all 15
+## planet levels.
 
 const ACTIVE_AGL_M := 4500.0
 const PREFETCH_INTERVAL := 0.15
@@ -75,14 +71,11 @@ func _update_motion(planet_pos: Vector3, observer_dir: Vector3, dt: float) -> vo
 	var raw_velocity: Vector3 = (planet_pos - _last_planet_pos) / safe_dt
 	_last_planet_pos = planet_pos
 
-	# Teleports/reloads must not turn into a multi-kilometre speculative corridor.
 	if raw_velocity.length() > TELEPORT_SPEED_MPS:
 		_surface_velocity = Vector3.ZERO
 		_last_speed = 0.0
 		return
 
-	# Radial climb/descent does not advance the terrain footprint. Only retain the
-	# velocity tangent to the spherical surface.
 	var tangent_velocity: Vector3 = raw_velocity - observer_dir * raw_velocity.dot(observer_dir)
 	_surface_velocity = _surface_velocity.lerp(tangent_velocity, VELOCITY_FILTER)
 	_last_speed = _surface_velocity.length()
@@ -103,11 +96,6 @@ func _prefetch_corridor(observer_dir: Vector3) -> void:
 
 	var lookahead: float = minf(speed * LOOKAHEAD_SECONDS, MAX_LOOKAHEAD_M)
 	_last_lookahead = lookahead
-
-	# Two future stations are enough to seed the corridor without flooding a cold
-	# development cache. Each band requests three lateral probes. The fine band is
-	# only a few dozen metres wide; coarse bands cover the outer visual/collision
-	# footprint much farther to either side.
 	_prefetch_station(observer_dir, forward, side, lookahead * 0.50, radius,
 		PREFETCH_PRIORITY_NEAR)
 	_prefetch_station(observer_dir, forward, side, lookahead, radius,
@@ -116,20 +104,20 @@ func _prefetch_corridor(observer_dir: Vector3) -> void:
 
 func _prefetch_station(observer_dir: Vector3, forward: Vector3, side: Vector3,
 		ahead_m: float, radius: float, priority: float) -> void:
-	# Vector2(level, lateral half-width in metres).
+	# Explicit local levels. The spherical renderer owns coarser planet pages.
 	var bands: Array[Vector2] = [
-		Vector2(0.0, 36.0),   # ~0.75 m data around the future wheel/footprint
-		Vector2(2.0, 180.0),  # ~3 m collision/near landscape
-		Vector2(4.0, 620.0),  # ~12 m outer visual coverage
+		Vector2(0.0, 36.0),
+		Vector2(2.0, 180.0),
+		Vector2(4.0, 620.0),
 	]
 	var lateral_factors := PackedFloat32Array([-1.0, 0.0, 1.0])
 	for band: Vector2 in bands:
-		var finest_level: int = int(band.x)
+		var level: int = int(band.x)
 		var half_width: float = band.y
 		for lateral_factor: float in lateral_factors:
 			var offset: Vector3 = forward * ahead_m + side * (half_width * lateral_factor)
 			var d: Vector3 = (observer_dir + offset / radius).normalized()
-			GroundHeightStore.prefetch_sample(d, finest_level, priority)
+			GroundHeightStore.request_sample(d, level, priority)
 
 
 func stats() -> Dictionary:
