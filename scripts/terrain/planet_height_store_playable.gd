@@ -103,6 +103,64 @@ func _pump_async_requests() -> void:
 		_start_async_request(request, disk_backed)
 
 
+## Fast path for the existing .ghz format. The base implementation calls
+## get_float() 1089 times per 33x33 page. Reading the payload once and converting
+## the packed bytes removes most per-page script-call overhead during refinement.
+func _load_tile_for_namespace(cache_namespace: String, level: int, face: int,
+		tile_x: int, tile_y: int) -> PackedFloat32Array:
+	var relative: String = _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
+	var prefixes := PackedStringArray(["res://", "user://"])
+	for prefix: String in prefixes:
+		var path: String = prefix + relative
+		if not FileAccess.file_exists(path):
+			continue
+		var file: FileAccess = FileAccess.open_compressed(path, FileAccess.READ,
+			FileAccess.COMPRESSION_ZSTD)
+		if file == null:
+			continue
+		if int(file.get_32()) != MAGIC:
+			continue
+		if int(file.get_32()) != CACHE_VERSION:
+			continue
+		if int(file.get_32()) != level or int(file.get_32()) != face:
+			continue
+		if int(file.get_32()) != tile_x or int(file.get_32()) != tile_y:
+			continue
+		if int(file.get_32()) != TILE_VERTS:
+			continue
+		var count: int = int(file.get_32())
+		if count != TILE_VERTS * TILE_VERTS:
+			continue
+		var bytes: PackedByteArray = file.get_buffer(count * 4)
+		if bytes.size() != count * 4:
+			continue
+		var result: PackedFloat32Array = bytes.to_float32_array()
+		if result.size() == count:
+			return result
+	return PackedFloat32Array()
+
+
+func _write_tile_for_namespace(cache_namespace: String, level: int, face: int,
+		tile_x: int, tile_y: int, data: PackedFloat32Array) -> void:
+	var relative: String = _relative_path_for_namespace(cache_namespace, level, face, tile_x, tile_y)
+	var path: String = "user://" + relative
+	var parent: String = path.get_base_dir()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent))
+	var file: FileAccess = FileAccess.open_compressed(path, FileAccess.WRITE,
+		FileAccess.COMPRESSION_ZSTD)
+	if file == null:
+		return
+	file.store_32(MAGIC)
+	file.store_32(CACHE_VERSION)
+	file.store_32(level)
+	file.store_32(face)
+	file.store_32(tile_x)
+	file.store_32(tile_y)
+	file.store_32(TILE_VERTS)
+	file.store_32(data.size())
+	file.store_buffer(data.to_byte_array())
+
+
 func stats() -> Dictionary:
 	var out: Dictionary = super.stats()
 	out["visual_uncached_skipped"] = _visual_uncached_skipped
@@ -112,4 +170,5 @@ func stats() -> Dictionary:
 	out["prefetch_backpressure_dropped"] = _prefetch_backpressure_dropped
 	out["prefetch_queue_soft_limit"] = PREFETCH_QUEUE_SOFT_LIMIT
 	out["playable_io_limit"] = PLAYABLE_MAX_ASYNC_TOTAL_IN_FLIGHT
+	out["bulk_page_io"] = true
 	return out
