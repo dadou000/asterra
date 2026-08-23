@@ -1,7 +1,7 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap.gd"
 ## Playability-oriented performance pass for the 400-cell spherical clipmap.
 ##
-## Geometry remains at the 4K/16-px target, but the topology is now genuinely
+## Geometry remains at the 4K/16-px target, but the topology is genuinely
 ## concentric: L0 is a circular disc and every outer LOD is a circular annulus.
 ## Outer annuli are partitioned into angular sectors so terrain well outside the
 ## camera's horizontal view is not submitted to the vertex shader.
@@ -11,9 +11,12 @@ extends "res://scripts/terrain/spherical_geometry_clipmap.gd"
 ## requests are disk/RAM-only in GroundHeightStore.
 
 const FAST_HORIZON_MARGIN_M: float = 2500.0
-const FAST_REQUEST_GRID_STEPS: int = 9
-const MIN_VISIBLE_REQUEST_INTERVAL_MS: int = 400
+# 15 samples across 400 cells gives ~28.6 cells/probe, smaller than the 32-cell
+# height page. The previous 9x9 lattice could skip entire cached pages.
+const FAST_REQUEST_GRID_STEPS: int = 15
+const MIN_VISIBLE_REQUEST_INTERVAL_MS: int = 250
 const REQUEST_INNER_SKIP_Q: float = 0.42
+const REQUEST_RADIAL_PRIORITY_SPAN: float = 80.0
 const SPARSE_VISUAL_MAX_LEVEL: int = 6
 const FAST_MATERIAL_RES: float = 64.0
 const FAST_MATERIAL_TEXEL_M := Vector3(16.0, 256.0, 4096.0)
@@ -212,8 +215,21 @@ func _request_visible_pages() -> void:
 		var directions: Array[Vector3] = _request_directions_for_level(level)
 		if directions.is_empty():
 			continue
-		var priority: float = REQUEST_PRIORITY_BASE + float(level) * REQUEST_PRIORITY_LEVEL_STEP
-		GroundHeightStore.request_samples(directions, level, priority)
+		var base_priority: float = REQUEST_PRIORITY_BASE + float(level) * REQUEST_PRIORITY_LEVEL_STEP
+		var level_half: float = maxf(float(HALF_CELLS) * _base_spacing
+			* pow(2.0, float(level)), 1.0)
+		var priorities := PackedFloat32Array()
+		priorities.resize(directions.size())
+		for i: int in directions.size():
+			var angular_distance: float = acos(clampf(_center_dir.dot(directions[i]), -1.0, 1.0))
+			var distance_m: float = angular_distance * Planet.cfg.planet_radius
+			var radial_q: float = clampf(distance_m / level_half, 0.0, 1.0)
+			priorities[i] = base_priority + radial_q * REQUEST_RADIAL_PRIORITY_SPAN
+
+		if GroundHeightStore.has_method("request_samples_prioritized"):
+			GroundHeightStore.request_samples_prioritized(directions, level, priorities)
+		else:
+			GroundHeightStore.request_samples(directions, level, base_priority)
 		GroundHeightPageAtlas.touch_samples(directions, level)
 
 
