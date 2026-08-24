@@ -185,9 +185,15 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 			camera_planet.z, planet_radius))
 		_append_vec4(push, Vector4(camera_q.x, camera_q.y, camera_q.z, camera_q.w))
 		_append_vec4(push, Vector4(sun_dir.x, sun_dir.y, sun_dir.z, sun_intensity))
+
+		# Godot caps push constants at 128 bytes for broad compatibility. Keep the
+		# four vec4 + mat4 layout exactly at that limit by packing the integer step
+		# count in the whole-number part and Helion's (< 0.5 rad) angular radius in
+		# the fractional part. GLSL recovers them with floor() and fract().
+		var packed_steps_helion := float(primary_steps) \
+			+ clampf(helion_angular_radius_rad, 1.0e-7, 0.499999)
 		_append_vec4(push, Vector4(wind_offset.x, wind_offset.y, wind_offset.z,
-			float(primary_steps)))
-		_append_vec4(push, Vector4(helion_angular_radius_rad, 0.0, 0.0, 0.0))
+			packed_steps_helion))
 		_append_vec4(push, inv_projection.x)
 		_append_vec4(push, inv_projection.y)
 		_append_vec4(push, inv_projection.z)
@@ -196,7 +202,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		var compute_list := _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipeline)
 		_rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
-		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), 144)
+		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), 128)
 		_rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
 		_rd.compute_list_end()
 
