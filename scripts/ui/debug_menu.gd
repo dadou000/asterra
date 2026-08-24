@@ -155,10 +155,11 @@ func _on_sink_scale_changed(value: float) -> void:
 
 
 func _on_reset_inspection() -> void:
-	for key: String in ["freeze_terrain", "side_cut"]:
-		var button: CheckButton = _buttons.get(key)
-		if button != null:
-			button.set_pressed_no_signal(false)
+	for key_value: Variant in ["freeze_terrain", "side_cut"]:
+		var key := String(key_value)
+		var button_value: Variant = _buttons.get(key)
+		if button_value is CheckButton:
+			(button_value as CheckButton).set_pressed_no_signal(false)
 	if _sink_slider != null:
 		_sink_slider.set_value_no_signal(DEFAULT_SINK_SCALE)
 	if _sink_label != null:
