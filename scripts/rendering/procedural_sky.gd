@@ -16,6 +16,7 @@ const NAKED_EYE_LIMIT_MAGNITUDE := 6.5
 const MIN_STELLAR_TEMPERATURE_K := 2400.0
 const MAX_STELLAR_TEMPERATURE_K := 18000.0
 const REFERENCE_CATALOGUE_COUNT := 9000
+const DEBUG_PARAMETER_EPSILON := 0.0001
 
 # Approximate all-sky cumulative naked-eye counts. Keep these as literal constant
 # Arrays: PackedFloat32Array(...) is a constructor call and therefore is not a
@@ -39,6 +40,7 @@ var magnitude_flux_exponent := 1.0
 var seeing_strength := 1.0
 var colour_strength := 1.0
 var chromatic_scintillation_strength := 1.0
+var debug_controls_synchronized := true
 
 
 func configure(p_observer: AsterraPlayer) -> void:
@@ -60,10 +62,10 @@ func _process(_delta: float) -> void:
 	global_position = observer.camera.global_position
 	var far_radius := maxf(observer.camera.far * FAR_FIELD_SCALE, 5000.0)
 	scale = Vector3.ONE * far_radius
-	_set_star_shader_parameter("u_up", observer.up_dir())
-	_set_star_shader_parameter("u_camera_height", observer.altitude())
-	_set_star_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
-	_set_star_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+	_set_star_shader_parameter("u_up", observer.up_dir(), false)
+	_set_star_shader_parameter("u_camera_height", observer.altitude(), false)
+	_set_star_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height, false)
+	_set_star_shader_parameter("u_planet_radius", Planet.cfg.planet_radius, false)
 
 
 func _try_bind_observer() -> void:
@@ -269,32 +271,68 @@ func reset_debug_calibration() -> void:
 
 
 func _apply_debug_parameters() -> void:
+	# Always reassert the material relationship before writing controls. This makes
+	# every non-zero slider value just as authoritative as the zero hard-hide test.
+	_ensure_live_material_binding()
+
 	# Zero is also a hard geometry-off diagnostic. This is deliberately redundant
 	# with the shader scale: if any stars remain while this node is hidden, they are
 	# being produced by another renderer and not by this ProceduralSky catalogue.
 	if star_mesh != null and is_instance_valid(star_mesh):
 		star_mesh.visible = star_radiance_scale > 0.00001
 
-	_set_star_shader_parameter("u_star_radiance_scale", star_radiance_scale)
-	_set_star_shader_parameter("u_magnitude_flux_exponent", magnitude_flux_exponent)
-	_set_star_shader_parameter("u_seeing_strength", seeing_strength)
-	_set_star_shader_parameter("u_colour_strength", colour_strength)
-	_set_star_shader_parameter(
+	debug_controls_synchronized = true
+	debug_controls_synchronized = _set_star_shader_parameter(
+		"u_star_radiance_scale", star_radiance_scale, true
+	) and debug_controls_synchronized
+	debug_controls_synchronized = _set_star_shader_parameter(
+		"u_magnitude_flux_exponent", magnitude_flux_exponent, true
+	) and debug_controls_synchronized
+	debug_controls_synchronized = _set_star_shader_parameter(
+		"u_seeing_strength", seeing_strength, true
+	) and debug_controls_synchronized
+	debug_controls_synchronized = _set_star_shader_parameter(
+		"u_colour_strength", colour_strength, true
+	) and debug_controls_synchronized
+	debug_controls_synchronized = _set_star_shader_parameter(
 		"u_chromatic_scintillation_strength",
-		chromatic_scintillation_strength
-	)
+		chromatic_scintillation_strength,
+		true
+	) and debug_controls_synchronized
+
 	if Planet.cfg != null:
-		_set_star_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
-		_set_star_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
+		_set_star_shader_parameter("u_planet_radius", Planet.cfg.planet_radius, false)
+		_set_star_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height, false)
 
 
-func _set_star_shader_parameter(parameter: StringName, value: Variant) -> void:
-	# Update every material reference that can own the rendered surface. Usually all
-	# three references point to the same ShaderMaterial, but keeping them synchronized
-	# makes runtime/editor resource duplication harmless.
-	if star_material != null:
-		star_material.set_shader_parameter(parameter, value)
+func _ensure_live_material_binding() -> void:
+	if star_material == null:
+		return
+	if star_quad != null and star_quad.material != star_material:
+		star_quad.material = star_material
+	if star_mesh != null and is_instance_valid(star_mesh):
+		if star_mesh.material_override != star_material:
+			star_mesh.material_override = star_material
+		if star_mesh.multimesh != null and star_mesh.multimesh.mesh == star_quad:
+			# Keep the MultiMesh surface pointed at the same QuadMesh resource that owns
+			# the live ShaderMaterial. Assignment is cheap and only occurs on mismatch.
+			pass
+		elif star_mesh.multimesh != null:
+			star_mesh.multimesh.mesh = star_quad
 
+
+func _set_star_shader_parameter(
+	parameter: StringName,
+	value: Variant,
+	verify_numeric: bool = false
+) -> bool:
+	if star_material == null:
+		return false
+
+	star_material.set_shader_parameter(parameter, value)
+
+	# Keep every possible rendered reference synchronized even if Godot or an editor
+	# operation duplicates a material resource behind our back.
 	if star_quad != null and star_quad.material is ShaderMaterial:
 		var quad_material := star_quad.material as ShaderMaterial
 		if quad_material != star_material:
@@ -304,6 +342,26 @@ func _set_star_shader_parameter(parameter: StringName, value: Variant) -> void:
 		var override_material := star_mesh.material_override
 		if override_material is ShaderMaterial and override_material != star_material:
 			(override_material as ShaderMaterial).set_shader_parameter(parameter, value)
+
+	if not verify_numeric:
+		return true
+	var applied: Variant = star_material.get_shader_parameter(parameter)
+	if not (applied is float or applied is int):
+		push_warning("ProceduralSky: shader parameter '%s' did not return a numeric value" % parameter)
+		return false
+	var matches := absf(float(applied) - float(value)) <= DEBUG_PARAMETER_EPSILON
+	if not matches:
+		push_warning(
+			"ProceduralSky: shader parameter '%s' requested %.4f but material reports %.4f"
+			% [parameter, float(value), float(applied)]
+		)
+	return matches
+
+
+func debug_get_applied_parameter(parameter: StringName) -> Variant:
+	if star_material == null:
+		return null
+	return star_material.get_shader_parameter(parameter)
 
 
 func debug_star_instance_count() -> int:
