@@ -12,7 +12,15 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_procedural.gd"
 ## has no dependency on a large sparse global index range or on VERTEX_ID meaning
 ## exactly the same thing across all backend draw paths.
 
+const RING_LABEL_REFRESH_S: float = 0.12
+const RING_LABEL_AZIMUTH_RAD: float = -0.20
+
 var _center_sector_batches: Array[MultiMeshInstance3D] = []
+var _debug_ring_indicator := false
+var _ring_labels: Array[Label3D] = []
+var _ring_label_planet_positions: Array[Vector3] = []
+var _ring_label_refresh_left: float = 0.0
+var _ring_label_last_active: int = -1
 
 
 func _ready() -> void:
@@ -25,6 +33,12 @@ func _ready() -> void:
 		batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	for batch: MultiMeshInstance3D in _sector_batches:
 		batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_create_ring_labels()
+
+
+func _process(dt: float) -> void:
+	super._process(dt)
+	_update_ring_labels(dt)
 
 
 func _build_batches() -> void:
@@ -218,9 +232,87 @@ static func _compact_vertex(remap: Dictionary, vertices: Array[Vector3],
 	return local_index
 
 
+func _create_ring_labels() -> void:
+	_ring_labels.clear()
+	_ring_label_planet_positions.clear()
+	for level: int in LEVEL_COUNT:
+		var label := Label3D.new()
+		label.name = "ClipmapRingLabelL%d" % level
+		label.text = "L%d" % level
+		label.font_size = 48
+		label.outline_size = 10
+		label.modulate = Color(1.0, 0.88, 0.20, 1.0)
+		label.outline_modulate = Color(0.02, 0.025, 0.035, 0.96)
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.fixed_size = true
+		label.no_depth_test = true
+		label.visible = false
+		add_child(label)
+		_ring_labels.append(label)
+		_ring_label_planet_positions.append(Vector3.ZERO)
+
+
+func set_debug_ring_indicator(value: bool) -> void:
+	_debug_ring_indicator = value
+	_ring_label_refresh_left = 0.0
+	_ring_label_last_active = -1
+	if not value:
+		for label: Label3D in _ring_labels:
+			label.visible = false
+
+
+func debug_ring_indicator_enabled() -> bool:
+	return _debug_ring_indicator
+
+
+func _update_ring_labels(dt: float) -> void:
+	if not _debug_ring_indicator or not Planet.ready_state or Planet.cfg == null:
+		return
+
+	_ring_label_refresh_left -= dt
+	if _ring_label_refresh_left <= 0.0 or _ring_label_last_active != _active_max_level:
+		_ring_label_refresh_left = RING_LABEL_REFRESH_S
+		_ring_label_last_active = _active_max_level
+		_refresh_ring_label_planet_positions()
+
+	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	for level: int in _ring_labels.size():
+		var label: Label3D = _ring_labels[level]
+		var active: bool = level <= _active_max_level
+		label.visible = active
+		if active:
+			label.global_position = _ring_label_planet_positions[level] - origin
+
+
+func _refresh_ring_label_planet_positions() -> void:
+	var radius: float = Planet.cfg.planet_radius
+	var marker_axis := Vector2(cos(RING_LABEL_AZIMUTH_RAD), sin(RING_LABEL_AZIMUTH_RAD))
+	for level: int in _ring_labels.size():
+		if level > _active_max_level:
+			continue
+		var spacing: float = _base_spacing * pow(2.0, float(level))
+		var outer_m: float = float(HALF_CELLS) * spacing
+		var marker_radius_m: float
+		if level == 0:
+			marker_radius_m = outer_m * 0.72
+		else:
+			var inner_m: float = float(RING_INNER_HALF_CELLS) * spacing
+			var preferred_m: float = (inner_m + outer_m) * 0.5
+			marker_radius_m = minf(preferred_m, _visible_cap_arc_m * 0.88)
+			marker_radius_m = clampf(marker_radius_m, inner_m * 1.015, outer_m * 0.94)
+
+		var offset_m: Vector2 = marker_axis * marker_radius_m
+		var dir: Vector3 = _direction_for_offset(
+			_center_dir, _center_right, _center_up, offset_m, radius)
+		var macro_h: float = Planet.macro_height(dir)
+		var lift_m: float = clampf(spacing * 0.20, 4.0, 160.0)
+		_ring_label_planet_positions[level] = dir * (radius + macro_h + lift_m)
+
+
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	out["draw_batches"] = _visible_sector_count * (2 if _active_max_level > 0 else 1)
 	out["explicit_grid_coords"] = true
 	out["compact_sector_indices"] = true
+	out["ring_indicator"] = _debug_ring_indicator
 	return out
