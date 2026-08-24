@@ -1,0 +1,94 @@
+// Shared finite-depth ocean wave model for rendering and GPU physics.
+//
+// Long waves are Gerstner-like trochoids with linear finite-depth dispersion.
+// In shallow water their propagation direction blends toward the local seabed
+// height gradient, so crests become approximately parallel to bathymetric
+// contours and therefore wrap naturally around coves, points and beaches.
+// Breaking is bounded by H ~= gamma*d (gamma ~0.78), preventing impossible wave
+// amplitudes in ankle-deep water.
+
+const float OCEAN_G = 9.81;
+const float BREAKER_GAMMA = 0.78;
+
+struct OceanWaveSample {
+	vec3 displacement;
+	vec3 slope;
+	vec3 velocity;
+	float crest;
+	float breaking;
+};
+
+vec3 ocean_safe_tangent(vec3 d, vec3 candidate) {
+	vec3 t = candidate - d * dot(candidate, d);
+	float l2 = dot(t, t);
+	if (l2 < 1e-8) {
+		vec3 axis = abs(d.y) < 0.85 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+		t = cross(axis, d);
+		l2 = max(dot(t, t), 1e-8);
+	}
+	return t * inversesqrt(l2);
+}
+
+float ocean_wave_band_weight(float wavelength, float spacing) {
+	// At least ~7 vertices/wavelength at full strength; smoothly remove waves as
+	// a clipmap level becomes too coarse to carry them.
+	return 1.0 - smoothstep(wavelength / 10.0, wavelength / 5.5, spacing);
+}
+
+float ocean_dispersion(float k, float depth) {
+	return sqrt(max(OCEAN_G * k * tanh(k * max(depth, 0.05)), 1e-5));
+}
+
+float ocean_shoal_gain(float depth, float wavelength) {
+	// Cheap conservation-of-energy approximation: long-wave amplitude rises as
+	// group velocity falls, but the breaker limit below always wins near shore.
+	float q = clamp(depth / max(wavelength * 0.20, 0.1), 0.0, 1.0);
+	return mix(1.42, 1.0, smoothstep(0.08, 0.75, q));
+}
+
+void ocean_add_wave(vec3 p, vec3 up, vec3 dir, float signed_shore_distance,
+		float depth, float spacing, float wavelength, float base_amp,
+		float steepness, float time_s, float phase_offset,
+		inout OceanWaveSample out_wave) {
+	float lod_w = ocean_wave_band_weight(wavelength, spacing);
+	if (lod_w <= 0.001 || depth <= 0.01) {
+		return;
+	}
+
+	float k = TAU / wavelength;
+	float omega = ocean_dispersion(k, depth);
+	float amp = base_amp * ocean_shoal_gain(depth, wavelength) * lod_w;
+	float breaker_amp = max(0.015, BREAKER_GAMMA * depth * 0.5);
+	float break_ratio = amp / max(breaker_amp, 0.015);
+	amp = min(amp, breaker_amp);
+
+	vec3 travel = ocean_safe_tangent(up, dir);
+	// Near shore use a signed distance coordinate measured normal to the coast.
+	// Offshore, dot(p, travel) retains coherent swell over the open sea.
+	float shore_blend = 1.0 - smoothstep(18.0, 150.0, depth);
+	float offshore_phase = dot(p, travel) * k;
+	float shore_phase = signed_shore_distance * k;
+	float phase = mix(offshore_phase, shore_phase, shore_blend) - omega * time_s + phase_offset;
+
+	float s = sin(phase);
+	float c = cos(phase);
+	float q = min(steepness / max(k * max(amp, 0.01), 0.01), 0.95);
+	float horizontal = q * amp;
+
+	out_wave.displacement += up * (amp * s) + travel * (horizontal * c);
+	out_wave.slope += travel * (amp * k * c);
+	out_wave.velocity += up * (-amp * omega * c) + travel * (horizontal * omega * s);
+	out_wave.crest = max(out_wave.crest, s * 0.5 + 0.5);
+	out_wave.breaking = max(out_wave.breaking,
+		smoothstep(0.72, 1.08, break_ratio) * (1.0 - smoothstep(0.3, 8.0, depth)));
+}
+
+OceanWaveSample ocean_empty_wave() {
+	OceanWaveSample wave;
+	wave.displacement = vec3(0.0);
+	wave.slope = vec3(0.0);
+	wave.velocity = vec3(0.0);
+	wave.crest = 0.0;
+	wave.breaking = 0.0;
+	return wave;
+}
