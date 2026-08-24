@@ -8,7 +8,7 @@ signal closed
 
 const START_MENU_SCENE := "res://scenes/StartMenu.tscn"
 
-var enabled: bool = false
+var enabled: bool = true
 var _root: Control
 var _pause_center: CenterContainer
 var _settings_center: CenterContainer
@@ -35,7 +35,14 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
-	if not key.pressed or key.echo or key.keycode != KEY_ESCAPE:
+	if not key.pressed or key.echo:
+		return
+
+	# Do not let the developer '&' overlay open behind the pause layer.
+	if visible and key.unicode == 38:
+		get_viewport().set_input_as_handled()
+		return
+	if key.keycode != KEY_ESCAPE:
 		return
 
 	if visible:
@@ -43,21 +50,33 @@ func _input(event: InputEvent) -> void:
 			_show_pause_menu()
 		else:
 			resume()
-	elif enabled:
+	elif _can_pause():
 		open()
 	else:
 		return
 	get_viewport().set_input_as_handled()
 
 
+func _can_pause() -> bool:
+	return enabled and Planet.ready_state and _find_player() != null
+
+
 func open() -> void:
-	if visible or not enabled:
+	if visible or not _can_pause():
 		return
+	# The debug menu is a separate developer flow. Close it before pausing so there
+	# is only one owner of mouse capture and player input.
+	var debug_menu := _find_debug_menu()
+	if debug_menu != null and debug_menu.visible:
+		debug_menu.toggle()
+
+	var player := _find_player()
+	if player != null:
+		player.set_mouse_captured(false)
+		player.input_enabled = false
 	visible = true
 	_show_pause_menu()
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-	# Emit before pausing so the world controller can synchronously close any
-	# developer overlay and release player input while it is still processing.
 	opened.emit()
 	get_tree().paused = true
 
@@ -67,6 +86,13 @@ func resume() -> void:
 		return
 	get_tree().paused = false
 	visible = false
+	var player := _find_player()
+	var debug_menu := _find_debug_menu()
+	if player != null:
+		var debug_open: bool = debug_menu != null and debug_menu.visible
+		player.input_enabled = not debug_open
+		if not debug_open:
+			player.set_mouse_captured(true)
 	closed.emit()
 
 
@@ -230,6 +256,7 @@ func _build_settings_menu() -> void:
 		var preset: int = graphics_preset.get_item_id(index)
 		AppSettings.set_graphics_quality(preset)
 		graphics_hint.text = GraphicsQuality.preset_description(preset)
+		_apply_graphics_quality(preset)
 	)
 	graphics_row.add_child(graphics_preset)
 
@@ -332,6 +359,57 @@ func _build_settings_menu() -> void:
 	back.custom_minimum_size.y = 44.0
 	back.pressed.connect(_show_pause_menu)
 	column.add_child(back)
+
+
+func _apply_graphics_quality(preset: int) -> void:
+	var quality: int = GraphicsQuality.sanitize(preset)
+	GraphicsQuality.configure_viewport(get_viewport(), quality)
+	var world_environment: WorldEnvironment = null
+	var parent := get_parent()
+	if parent != null:
+		for child: Node in parent.get_children():
+			if child is WorldEnvironment:
+				world_environment = child as WorldEnvironment
+				if world_environment.environment != null:
+					GraphicsQuality.configure_world_environment(
+						world_environment.environment, quality)
+			elif child is DirectionalLight3D:
+				var light := child as DirectionalLight3D
+				GraphicsQuality.configure_sun(light, quality)
+				# Preserve Helion's physical apparent disc after the quality helper
+				# changes the generic soft-shadow preset.
+				light.light_angular_distance = Frames.helion_angular_diameter_deg()
+
+	# Cloud ray steps and cloud-shadow sampling are quality-dependent too. Reusing
+	# the controller's existing configure path changes only parameters/resources;
+	# it does not regenerate the resident terrain.
+	if world_environment != null and world_environment.environment != null:
+		var sky := world_environment.environment.sky
+		if sky != null and sky.sky_material is ShaderMaterial and Planet.cfg != null:
+			VolumetricClouds.configure(
+				sky.sky_material as ShaderMaterial,
+				Planet.cfg.world_seed,
+				quality)
+
+
+func _find_player() -> AsterraPlayer:
+	var parent := get_parent()
+	if parent == null:
+		return null
+	for child: Node in parent.get_children():
+		if child is AsterraPlayer:
+			return child as AsterraPlayer
+	return null
+
+
+func _find_debug_menu() -> DebugMenu:
+	var parent := get_parent()
+	if parent == null:
+		return null
+	for child: Node in parent.get_children():
+		if child is DebugMenu:
+			return child as DebugMenu
+	return null
 
 
 func _show_pause_menu() -> void:
