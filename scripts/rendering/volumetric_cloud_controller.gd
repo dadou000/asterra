@@ -130,6 +130,18 @@ func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
 	_sync_all_shadow_receivers()
 
 
+## Change only quality-dependent budgets. Unlike configure(), this deliberately
+## preserves whether the depth compositor or fallback sky currently owns visible
+## clouds, so changing settings in the pause menu cannot enable both render paths.
+func set_quality(quality: int) -> void:
+	_quality = GraphicsQuality.sanitize(quality)
+	if _material != null:
+		_material.set_shader_parameter("u_cloud_primary_steps", _primary_steps(_quality))
+		_material.set_shader_parameter("u_cloud_light_steps", _light_steps(_quality))
+	_sync_all_shadow_receivers()
+	_sync_depth_effect()
+
+
 func _install_depth_compositor(world_environment: WorldEnvironment) -> void:
 	_ensure_noise_volumes()
 	if _depth_effect == null:
