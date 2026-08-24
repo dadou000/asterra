@@ -34,6 +34,7 @@ var _wind_accumulator := 0.0
 var _world_seed := 0x4153544552524100
 var _planet_radius := 1000000.0
 var _quality := GraphicsQuality.Preset.HIGH
+var _last_helion_angular_radius := -1.0
 
 
 func _ready() -> void:
@@ -124,6 +125,8 @@ func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
 	_material.set_shader_parameter("u_cloud_detail_strength", CLOUD_DETAIL_STRENGTH)
 	_material.set_shader_parameter("u_cloud_extinction", CLOUD_EXTINCTION)
 	_material.set_shader_parameter("u_cloud_wind_offset", _wind_offset)
+	_material.set_shader_parameter("u_helion_angular_radius_rad", Frames.helion_angular_radius_rad())
+	_last_helion_angular_radius = Frames.helion_angular_radius_rad()
 	_sync_all_shadow_receivers()
 
 
@@ -260,6 +263,7 @@ func _sync_shadow_receiver(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_cloud_shadow_disc_samples", _shadow_disc_samples(_quality))
 	material.set_shader_parameter("u_cloud_shadow_helion_radius_m", Frames.helion_radius_m)
 	material.set_shader_parameter("u_cloud_shadow_helion_distance_m", Frames.helion_distance_m)
+	material.set_shader_parameter("u_helion_angular_radius_rad", Frames.helion_angular_radius_rad())
 	material.set_shader_parameter("u_cloud_shadow_wind_offset", _wind_offset)
 	material.set_shader_parameter("u_cloud_shadow_sun_dir", Frames.helion_dir)
 
@@ -319,8 +323,16 @@ func _process(delta: float) -> void:
 		# without rebuilding materials.
 		material.set_shader_parameter("u_cloud_shadow_helion_radius_m", Frames.helion_radius_m)
 		material.set_shader_parameter("u_cloud_shadow_helion_distance_m", Frames.helion_distance_m)
+		material.set_shader_parameter("u_helion_angular_radius_rad", Frames.helion_angular_radius_rad())
 
-	var angular_diameter_deg := Frames.helion_angular_diameter_deg()
+	var angular_radius := Frames.helion_angular_radius_rad()
+	if _material != null and not is_equal_approx(angular_radius, _last_helion_angular_radius):
+		# Only touch the sky uniform when the physical stellar geometry actually
+		# changes; setting sky uniforms every tick would invalidate its radiance map.
+		_material.set_shader_parameter("u_helion_angular_radius_rad", angular_radius)
+		_last_helion_angular_radius = angular_radius
+
+	var angular_diameter_deg := rad_to_deg(angular_radius * 2.0)
 	for i in range(_helion_lights.size() - 1, -1, -1):
 		var light := _helion_lights[i].get_ref() as DirectionalLight3D
 		if light == null:
