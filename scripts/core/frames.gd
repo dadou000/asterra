@@ -18,6 +18,11 @@ const REBASE_THRESHOLD := 4096.0
 
 ## --- Helion system (Asterra's star) -------------------------------------------
 var helion_dir: Vector3 = Vector3(1, 0.15, 0.3).normalized()  ## sunward, Asterra frame
+## Physical source geometry. These defaults match the existing climate assumption
+## of Sol-like irradiance at one astronomical unit. Rendering systems derive the
+## apparent solar disc from these values instead of carrying unrelated blur angles.
+var helion_radius_m: float = 696340000.0
+var helion_distance_m: float = 149597870700.0
 var axial_tilt_deg: float = 21.4
 var day_seconds: float = 90000.0
 var year_days: float = 402.0
@@ -35,6 +40,15 @@ func _ready() -> void:
 
 func set_planet_radius(r: float) -> void:
 	planet_radius = r
+
+## Exact angular radius of Helion as seen from Asterra. For the default physical
+## geometry this is about 0.2667 degrees (0.5334 degree apparent diameter).
+func helion_angular_radius_rad() -> float:
+	var ratio := clampf(helion_radius_m / maxf(helion_distance_m, 1.0), 0.0, 0.999999)
+	return asin(ratio)
+
+func helion_angular_diameter_deg() -> float:
+	return rad_to_deg(helion_angular_radius_rad() * 2.0)
 
 ## Asterra frame (double) -> local render frame (float32).
 func to_render(p: Vec3D) -> Vector3:
