@@ -6,7 +6,7 @@ extends "res://scripts/terrain/planet_height_store_playable.gd"
 ## noise bands on CPU instead of invoking the old TerrainDetail synthesis. Existing
 ## TerrainDetail .ghz files use a different namespace and cannot leak into this path.
 
-const PROCEDURAL_CACHE_SUFFIX := "_gpuv2"
+const PROCEDURAL_CACHE_SUFFIX := "_gpuv3"
 
 
 func _configure_namespace() -> void:
@@ -88,8 +88,6 @@ static func _u32(value: int) -> int:
 
 
 static func _mul_u32(a: int, b: int) -> int:
-	# 16-bit decomposition gives exact multiplication modulo 2^32 without ever
-	# exceeding GDScript's signed 64-bit integer range.
 	var ua: int = _u32(a)
 	var ub: int = _u32(b)
 	var a0: int = ua & 0xffff
@@ -125,9 +123,6 @@ static func _smooth_value_noise(p: Vector3, noise_seed: int) -> float:
 	var fz0: float = floor(p.z)
 	var i := Vector3i(int(fx0), int(fy0), int(fz0))
 	var f := Vector3(p.x - fx0, p.y - fy0, p.z - fz0)
-	# Perlin's quintic fade gives zero first and second derivatives at every
-	# lattice boundary. That matters when several octaves/bands are composed:
-	# cubic Hermite interpolation is only C1 and can leave broad curvature seams.
 	f = Vector3(
 		f.x * f.x * f.x * (f.x * (f.x * 6.0 - 15.0) + 10.0),
 		f.y * f.y * f.y * (f.y * (f.y * 6.0 - 15.0) + 10.0),
