@@ -13,6 +13,7 @@ signal coast_profile_requested
 ## [property, label, note, default]
 const TERRAIN_ROWS := [
 	["wireframe", "Wireframe", "Shows the actual concentric clipmap triangles", false],
+	["ring_indicator", "LOD ring labels", "Shows L0, L1, L2... directly on each active concentric ring", false],
 	["freeze_terrain", "Freeze terrain clipmap", "Locks centre + active LODs in planet space while you fly around", false],
 	["side_cut", "Side cut / sinking view", "Cuts away half the terrain and colours each LOD so overlap is visible", false],
 ]
@@ -116,7 +117,7 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	reset.add_theme_font_size_override("font_size", 13)
 	reset.pressed.connect(_on_reset_inspection)
 	box.add_child(reset)
-	box.add_child(_note("Unfreezes, closes the cut and restores the normal 2× sink depth"))
+	box.add_child(_note("Clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
 
 
 func _build_sky_tab(tabs: TabContainer) -> void:
@@ -265,6 +266,10 @@ func _note(text: String) -> Label:
 
 
 func _on_toggled(pressed: bool, key: String) -> void:
+	if key == "ring_indicator":
+		if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
+			GroundGeometryClipmap.call("set_debug_ring_indicator", pressed)
+		return
 	if debug != null:
 		debug.set(key, pressed)
 
@@ -277,11 +282,13 @@ func _on_sink_scale_changed(value: float) -> void:
 
 
 func _on_reset_inspection() -> void:
-	for key_value: Variant in ["freeze_terrain", "side_cut"]:
+	for key_value: Variant in ["ring_indicator", "freeze_terrain", "side_cut"]:
 		var key := String(key_value)
 		var button_value: Variant = _buttons.get(key)
 		if button_value is CheckButton:
 			(button_value as CheckButton).set_pressed_no_signal(false)
+	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
+		GroundGeometryClipmap.call("set_debug_ring_indicator", false)
 	if _sink_slider != null:
 		_sink_slider.set_value_no_signal(DEFAULT_SINK_SCALE)
 	if _sink_label != null:
