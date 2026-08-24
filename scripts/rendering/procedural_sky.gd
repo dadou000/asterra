@@ -29,6 +29,7 @@ const CUMULATIVE_STAR_COUNTS = [
 
 var observer: AsterraPlayer
 var star_mesh: MultiMeshInstance3D
+var star_quad: QuadMesh
 var star_material: ShaderMaterial
 
 # Debug overrides. Defaults are the calibrated rendering path. They are stored on
@@ -59,9 +60,10 @@ func _process(_delta: float) -> void:
 	global_position = observer.camera.global_position
 	var far_radius := maxf(observer.camera.far * FAR_FIELD_SCALE, 5000.0)
 	scale = Vector3.ONE * far_radius
-	star_material.set_shader_parameter("u_up", observer.up_dir())
-	star_material.set_shader_parameter("u_camera_height", observer.altitude())
-	star_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
+	_set_star_shader_parameter("u_up", observer.up_dir())
+	_set_star_shader_parameter("u_camera_height", observer.altitude())
+	_set_star_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
+	_set_star_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 
 
 func _try_bind_observer() -> void:
@@ -93,19 +95,24 @@ func _build_stars() -> void:
 		return
 	if star_mesh != null:
 		star_mesh.queue_free()
+		star_mesh = null
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2.ONE
+	star_quad = QuadMesh.new()
+	star_quad.size = Vector2.ONE
 
 	star_material = ShaderMaterial.new()
 	star_material.shader = load("res://shaders/procedural_stars.gdshader")
-	_apply_debug_parameters()
+
+	# Bind the exact same material to both possible geometry paths. The override is
+	# authoritative, while the QuadMesh material makes the relationship explicit and
+	# prevents a future refactor from silently bypassing the live debug material.
+	star_quad.material = star_material
 
 	var star_count := _star_count()
 	var multimesh := MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
 	multimesh.use_custom_data = true
-	multimesh.mesh = quad
+	multimesh.mesh = star_quad
 	multimesh.instance_count = star_count
 
 	var rng := RandomNumberGenerator.new()
@@ -116,7 +123,11 @@ func _build_stars() -> void:
 		var direction := _random_unit_vector(rng)
 		# The catalogue is ordered brightest to faintest. A sub-rank jitter avoids
 		# visibly quantized magnitude bands while preserving cumulative star counts.
-		var catalogue_rank := clampf(float(i) + rng.randf_range(0.35, 1.0), 1.0, float(REFERENCE_CATALOGUE_COUNT))
+		var catalogue_rank := clampf(
+			float(i) + rng.randf_range(0.35, 1.0),
+			1.0,
+			float(REFERENCE_CATALOGUE_COUNT)
+		)
 		var magnitude := _magnitude_from_catalogue_rank(catalogue_rank)
 		var magnitude_norm := inverse_lerp(
 			BRIGHTEST_MAGNITUDE,
@@ -152,15 +163,18 @@ func _build_stars() -> void:
 		))
 
 	star_mesh = MultiMeshInstance3D.new()
+	star_mesh.name = "InstancedStars"
 	star_mesh.multimesh = multimesh
-	# Bind the exact ShaderMaterial updated by the debug setters directly to the
-	# rendered GeometryInstance. This avoids relying on material propagation through
-	# the shared QuadMesh resource and makes live uniform edits deterministic.
 	star_mesh.material_override = star_material
 	star_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	star_mesh.visibility_range_end = 0.0
 	star_mesh.extra_cull_margin = 100000000.0
 	add_child(star_mesh)
+
+	# Apply after every rendered reference exists. In particular, a zero-radiance
+	# diagnostic also hard-disables the geometry, so the test cannot be defeated by
+	# stale shader uniforms or an internally duplicated material resource.
+	_apply_debug_parameters()
 
 
 func _magnitude_from_catalogue_rank(rank: float) -> float:
@@ -255,13 +269,53 @@ func reset_debug_calibration() -> void:
 
 
 func _apply_debug_parameters() -> void:
-	if star_material == null:
-		return
-	star_material.set_shader_parameter("u_star_radiance_scale", star_radiance_scale)
-	star_material.set_shader_parameter("u_magnitude_flux_exponent", magnitude_flux_exponent)
-	star_material.set_shader_parameter("u_seeing_strength", seeing_strength)
-	star_material.set_shader_parameter("u_colour_strength", colour_strength)
-	star_material.set_shader_parameter("u_chromatic_scintillation_strength", chromatic_scintillation_strength)
+	# Zero is also a hard geometry-off diagnostic. This is deliberately redundant
+	# with the shader scale: if any stars remain while this node is hidden, they are
+	# being produced by another renderer and not by this ProceduralSky catalogue.
+	if star_mesh != null and is_instance_valid(star_mesh):
+		star_mesh.visible = star_radiance_scale > 0.00001
+
+	_set_star_shader_parameter("u_star_radiance_scale", star_radiance_scale)
+	_set_star_shader_parameter("u_magnitude_flux_exponent", magnitude_flux_exponent)
+	_set_star_shader_parameter("u_seeing_strength", seeing_strength)
+	_set_star_shader_parameter("u_colour_strength", colour_strength)
+	_set_star_shader_parameter(
+		"u_chromatic_scintillation_strength",
+		chromatic_scintillation_strength
+	)
+	if Planet.cfg != null:
+		_set_star_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+		_set_star_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
+
+
+func _set_star_shader_parameter(parameter: StringName, value: Variant) -> void:
+	# Update every material reference that can own the rendered surface. Usually all
+	# three references point to the same ShaderMaterial, but keeping them synchronized
+	# makes runtime/editor resource duplication harmless.
+	if star_material != null:
+		star_material.set_shader_parameter(parameter, value)
+
+	if star_quad != null and star_quad.material is ShaderMaterial:
+		var quad_material := star_quad.material as ShaderMaterial
+		if quad_material != star_material:
+			quad_material.set_shader_parameter(parameter, value)
+
+	if star_mesh != null and is_instance_valid(star_mesh):
+		var override_material := star_mesh.material_override
+		if override_material is ShaderMaterial and override_material != star_material:
+			(override_material as ShaderMaterial).set_shader_parameter(parameter, value)
+
+
+func debug_star_instance_count() -> int:
+	if star_mesh == null or not is_instance_valid(star_mesh):
+		return 0
+	if star_mesh.multimesh == null:
+		return 0
+	return star_mesh.multimesh.instance_count
+
+
+func debug_star_mesh_visible() -> bool:
+	return star_mesh != null and is_instance_valid(star_mesh) and star_mesh.visible
 
 
 func _random_unit_vector(rng: RandomNumberGenerator) -> Vector3:
