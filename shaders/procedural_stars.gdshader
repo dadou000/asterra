@@ -1,16 +1,21 @@
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, blend_add, fog_disabled;
 
-// GPU-instanced unresolved stellar points. The MultiMesh contains a unit-sphere
-// catalogue. Its parent follows the camera and is scaled inside the far clip, so
-// every star behaves like an object at infinity without any per-frame CPU work.
+// GPU-instanced unresolved stellar points. Stellar radiance is fixed by apparent
+// magnitude and is NEVER raised when the sky gets dark. Day/night visibility must
+// emerge from real competition with atmospheric radiance, exposure and tonemapping.
 uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
-uniform vec3 u_sun_dir = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
 uniform float u_atmosphere_height = 60000.0;
 
+const float BRIGHTEST_MAGNITUDE = -1.5;
+const float NAKED_EYE_LIMIT_MAGNITUDE = 6.5;
+// One fixed scene-linear photometric calibration for every time of day. It is
+// never modified to make the stars prettier or more visible.
+const float ZERO_MAGNITUDE_RADIANCE = 0.36;
+
 varying vec3 v_star_dir;
-varying float v_brightness;
+varying float v_magnitude_norm;
 varying float v_temperature;
 varying float v_pattern;
 varying float v_phase;
@@ -25,28 +30,43 @@ vec3 stellar_colour(float t) {
 	return mix(neutral, cool, smoothstep(0.48, 1.0, t));
 }
 
+float stellar_radiance(float magnitude_norm) {
+	float magnitude = mix(
+		BRIGHTEST_MAGNITUDE,
+		NAKED_EYE_LIMIT_MAGNITUDE,
+		clamp(magnitude_norm, 0.0, 1.0)
+	);
+	// Pogson magnitude law: five magnitudes = exactly 100x in flux.
+	return ZERO_MAGNITUDE_RADIANCE * pow(10.0, -0.4 * magnitude);
+}
+
 float twinkle_pattern(float kind, float t, float phase) {
+	// Scintillation is the only time-varying stellar flux. Every pattern is
+	// centred on 1.0 so twinkle does not secretly increase average brightness.
 	if (kind < 0.5) return 1.0;
-	if (kind < 1.5) return 0.94 + 0.06 * sin(t * 5.4 + phase);
+	if (kind < 1.5) return 1.0 + 0.035 * sin(t * 5.4 + phase);
 	if (kind < 2.5) {
 		float a = sin(t * 3.1 + phase);
 		float b = sin(t * 8.7 + phase * 2.17);
-		return 0.94 + 0.035 * a + 0.025 * b;
+		return 1.0 + 0.022 * a + 0.014 * b;
 	}
 	if (kind < 3.5) {
-		float pulse = smoothstep(0.55, 0.98, sin(t * 2.2 + phase));
-		return 0.93 + 0.07 * pulse;
+		float s = sin(t * 2.2 + phase);
+		return 1.0 + 0.040 * s * s * s;
 	}
 	float irregular = sin(t * 4.1 + phase)
 		+ 0.55 * sin(t * 10.3 + phase * 1.71)
 		+ 0.25 * sin(t * 17.7 + phase * 0.63);
-	return 0.95 + 0.035 * irregular;
+	return 1.0 + 0.020 * irregular;
 }
 
 void vertex() {
 	vec3 camera_world = INV_VIEW_MATRIX[3].xyz;
 	vec3 centre_world = (MODEL_MATRIX * vec4(vec3(0.0), 1.0)).xyz;
 	v_star_dir = normalize(centre_world - camera_world);
+
+	// The quad is only the renderer's point-spread sampling footprint. Every star
+	// gets the same size; bright stars are not enlarged for presentation.
 	float sx = length(MODEL_MATRIX[0].xyz);
 	float sy = length(MODEL_MATRIX[1].xyz);
 	vec3 camera_right = normalize(INV_VIEW_MATRIX[0].xyz);
@@ -55,7 +75,8 @@ void vertex() {
 		+ camera_right * VERTEX.x * sx
 		+ camera_up * VERTEX.y * sy;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(world_vertex, 1.0);
-	v_brightness = INSTANCE_CUSTOM.x;
+
+	v_magnitude_norm = INSTANCE_CUSTOM.x;
 	v_temperature = INSTANCE_CUSTOM.y;
 	v_pattern = INSTANCE_CUSTOM.z;
 	v_phase = INSTANCE_CUSTOM.w;
@@ -68,7 +89,6 @@ void fragment() {
 	if (profile <= 0.001) discard;
 
 	vec3 up = normalize(u_up);
-	vec3 sun_dir = normalize(u_sun_dir);
 	float atmosphere_height = max(u_atmosphere_height, 1.0);
 	float atmosphere_presence = 1.0 - smoothstep(
 		atmosphere_height * 0.72,
@@ -76,30 +96,26 @@ void fragment() {
 		u_camera_height
 	);
 
-	float sun_altitude = dot(up, sun_dir);
-	float night_visibility = 1.0 - smoothstep(-0.20, -0.025, sun_altitude);
-	float bright_star_early = 1.0 - smoothstep(-0.105, -0.012, sun_altitude);
-	float brightness_rank = smoothstep(0.10, 0.42, v_brightness);
-	night_visibility = mix(
-		night_visibility,
-		max(night_visibility, bright_star_early),
-		brightness_rank * 0.28
-	);
-
+	// Physical atmospheric loss only. There is deliberately no sun-altitude,
+	// 'night visibility', bright-star reveal, or exposure-compensation multiplier.
 	float elevation = dot(normalize(v_star_dir), up);
 	float above_horizon = smoothstep(-0.012, 0.045, elevation);
 	float air_mass = 1.0 / max(elevation, 0.055);
 	float extinction = exp(-0.060 * max(air_mass - 1.0, 0.0));
-	float atmospheric_visibility = mix(1.0, above_horizon * extinction, atmosphere_presence);
-	float visibility = mix(1.0, night_visibility, atmosphere_presence) * atmospheric_visibility;
+	float atmospheric_transmittance = mix(
+		1.0,
+		above_horizon * extinction,
+		atmosphere_presence
+	);
 
 	float kind = floor(v_pattern * 4.0 + 0.5);
 	float speed = mix(0.78, 1.34, fract(v_phase * 13.731));
 	float raw_twinkle = twinkle_pattern(kind, TIME * speed, v_phase * 6.28318530718);
 	float near_horizon = 1.0 - smoothstep(0.12, 0.82, max(elevation, 0.0));
-	float scintillation = atmosphere_presence * mix(0.18, 1.0, near_horizon);
-	float twinkle = mix(1.0, raw_twinkle, scintillation);
+	float scintillation_strength = atmosphere_presence * mix(0.18, 1.0, near_horizon);
+	float scintillation = mix(1.0, raw_twinkle, scintillation_strength);
 
-	EMISSION = stellar_colour(v_temperature) * v_brightness * twinkle;
-	ALPHA = profile * visibility;
+	float radiance = stellar_radiance(v_magnitude_norm);
+	EMISSION = stellar_colour(v_temperature) * radiance * scintillation;
+	ALPHA = profile * atmospheric_transmittance;
 }
