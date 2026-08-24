@@ -2,20 +2,13 @@ class_name OrbitOcean
 extends Node3D
 ## Global sea-level shell used for distant graphics.
 ##
-## The streamed water mesh is intentionally tied to terrain chunks because it
-## needs local lake levels, shore depth and collision-scale detail. That makes it
-## the wrong representation for aircraft/orbit views, where a single terrain
-## triangle can span kilometres. This shell is geometrically just a smooth
-## sphere; its coastline is cut per-fragment from Planet.orbit_elevation_texture.
-##
-## The shell starts below the visual coastline lock. Its geometry is created once
-## with Godot's native SphereMesh implementation; refreshing the coastline now
-## only swaps shader parameters. The previous 256x256-per-face GDScript mesh was
-## rebuilt whenever the detailed texture completed and could itself cause a large
-## main-thread hitch.
+## The local OceanGeometryClipmap owns displaced waves and surf from the ground
+## through regional/aircraft altitude. Above the handoff this smooth shell takes
+## over with the same coastline field but without spending geometry on metre-scale
+## waves that are no longer resolvable.
 
 const SHELL_OFFSET_M := 1.5
-const VISUAL_LOCK_ALTITUDE_M := 1000000.0
+const VISUAL_LOCK_ALTITUDE_M := 120000.0
 const RADIAL_SEGMENTS := 256
 const RINGS := 128
 
@@ -32,12 +25,11 @@ func _ready() -> void:
 func _process(_dt: float) -> void:
 	if _material != null:
 		_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
-	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
+		_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 
 func _on_world_ready(_fields: PlanetFields) -> void:
 	_refresh()
 
-## Exposed so a tuning harness can hot-reload this shader alongside the ground.
 func material() -> ShaderMaterial:
 	return _material
 
@@ -53,9 +45,6 @@ func _refresh() -> void:
 		_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(_mesh_instance)
 
-		# The shader samples by planet-space direction, so the distant ocean does
-		# not need cube-face UVs or cube topology. SphereMesh is generated in native
-		# engine code and is both much cheaper to create and much smaller.
 		var radius: float = Planet.cfg.planet_radius + SHELL_OFFSET_M
 		var sphere := SphereMesh.new()
 		sphere.radius = radius
@@ -69,8 +58,6 @@ func _refresh() -> void:
 		_material.shader = load("res://shaders/orbit_ocean.gdshader")
 		_mesh_instance.material_override = _material
 
-	# Texture refreshes update only these values. No geometry allocation or
-	# hundreds of thousands of GDScript vertex operations happen here anymore.
 	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 	_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
