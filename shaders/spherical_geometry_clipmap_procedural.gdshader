@@ -4,9 +4,11 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
-// One smooth low-frequency source for the entire planet. The texture is built
-// from the runtime-smoothed macro elevation at 2x face resolution and sampled
-// with hardware interpolation, so macro cells never appear as pixels/blocks.
+// One low-frequency source for the entire planet. The CPU reconstructs the
+// authoritative macro grid with a seam-safe cubic B-spline, samples that smooth
+// field at 2x face resolution, and this shader linearly interpolates only between
+// those already-smooth samples. Macro cell facets therefore do not become part of
+// the procedural detail composition.
 uniform sampler2DArray u_macro_elevation : filter_linear, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
@@ -44,6 +46,15 @@ const float MAX_PROJECTED_THETA = 1.62;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
+}
+
+float smootherstep01(float x) {
+	x = clamp(x, 0.0, 1.0);
+	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+}
+
+float smootherstep_range(float edge0, float edge1, float x) {
+	return smootherstep01((x - edge0) / max(edge1 - edge0, 1e-9));
 }
 
 vec3 direction_for_offset(vec2 offset_m, int level) {
@@ -98,7 +109,9 @@ float lattice_value(ivec3 p, uint seed) {
 float smooth_value_noise(vec3 p, uint seed) {
 	ivec3 i = ivec3(floor(p));
 	vec3 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
+	// Quintic fade is C2: both slope and curvature reach zero at every lattice
+	// boundary. This is important once many terrain bands are composed together.
+	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
 
 	float n000 = lattice_value(i + ivec3(0, 0, 0), seed);
 	float n100 = lattice_value(i + ivec3(1, 0, 0), seed);
@@ -117,9 +130,9 @@ float smooth_value_noise(vec3 p, uint seed) {
 }
 
 float band_weight(float wavelength_m, float spacing_m) {
-	// A wide transition is deliberate. Each LOD progressively loses a band rather
-	// than aliasing it, so the outer morph always has a nearby parent to land on.
-	return smoothstep(spacing_m * 4.0, spacing_m * 8.0, wavelength_m);
+	// C2 spectral fade. A band appears/disappears without a curvature kink as the
+	// clipmap transitions to a coarser spacing.
+	return smootherstep_range(spacing_m * 4.0, spacing_m * 8.0, wavelength_m);
 }
 
 float detail_band(vec3 world_m, float wavelength_m, float spacing_m,
@@ -138,8 +151,9 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 
 	// Detail is reduced around the sea-level crossing so the low-resolution macro
 	// shoreline remains stable while still allowing rocky coasts away from zero.
-	float coast_guard = mix(0.38, 1.0, smoothstep(45.0, 320.0, abs(macro_h)));
-	float mountain = smoothstep(500.0, 2600.0, max(macro_h, 0.0));
+	float coast_guard = mix(0.38, 1.0,
+		smootherstep_range(45.0, 320.0, abs(macro_h)));
+	float mountain = smootherstep_range(500.0, 2600.0, max(macro_h, 0.0));
 	float regional_gain = mix(0.72, 1.30, mountain);
 
 	float h = 0.0;
@@ -169,7 +183,7 @@ float terrain_height_for_level(vec3 d, int level) {
 float fine_morph_weight(vec2 cell) {
 	float half_cells = u_grid_cells * 0.5;
 	float q = length(cell) / max(half_cells, 1.0);
-	return smoothstep(FINE_MORPH_START_Q, 1.0, q);
+	return smootherstep_range(FINE_MORPH_START_Q, 1.0, q);
 }
 
 float coarse_sink_weight(vec2 cell, int level) {
@@ -178,7 +192,7 @@ float coarse_sink_weight(vec2 cell, int level) {
 	}
 	float half_cells = u_grid_cells * 0.5;
 	float q = length(cell) / max(half_cells, 1.0);
-	return 1.0 - smoothstep(RING_INNER_Q, RING_HANDOFF_Q, q);
+	return 1.0 - smootherstep_range(RING_INNER_Q, RING_HANDOFF_Q, q);
 }
 
 float clip_height(vec3 d, vec2 cell, int level) {
