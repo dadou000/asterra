@@ -3,17 +3,18 @@ extends Node3D
 ## Procedural night-sky manager for 0.0.5 terrain.
 ##
 ## Stars are generated once into a MultiMesh and rendered in one instanced draw.
-## Their apparent radiance is fixed from generated apparent magnitude. Nothing in
-## this manager raises stellar brightness at night; visibility must emerge from
-## atmospheric radiance, extinction, eye adaptation, tonemapping and bloom.
+## Apparent radiance is fixed by generated apparent magnitude. Stellar colour is
+## generated from a plausible naked-eye spectral-temperature distribution; colour
+## never changes the assigned stellar luminance.
 
-const TWINKLE_FRACTION := 0.16
 const FAR_FIELD_SCALE := 0.58
 # Fixed point-spread footprint for every unresolved star. This is a rasterization
 # footprint, not a brightness-dependent visual size.
 const BASE_POINT_SIZE := 0.00105
 const BRIGHTEST_MAGNITUDE := -1.5
 const NAKED_EYE_LIMIT_MAGNITUDE := 6.5
+const MIN_STELLAR_TEMPERATURE_K := 2400.0
+const MAX_STELLAR_TEMPERATURE_K := 18000.0
 
 var observer: AsterraPlayer
 var star_mesh: MultiMeshInstance3D
@@ -101,11 +102,19 @@ func _build_stars() -> void:
 			magnitude
 		)
 
-		var temperature := clampf(0.50 + rng.randfn(0.0, 0.22), 0.0, 1.0)
-		var twinkles := rng.randf() < TWINKLE_FRACTION
-		var pattern := 0
-		if twinkles:
-			pattern = rng.randi_range(1, 4)
+		# Encode actual colour temperature rather than an arbitrary warm/cool slider.
+		# The shader converts this to blackbody-like chromaticity and then explicitly
+		# normalizes luminance, preserving the magnitude-derived radiance.
+		var temperature_k := _sample_stellar_temperature_k(rng)
+		var temperature_norm := inverse_lerp(
+			MIN_STELLAR_TEMPERATURE_K,
+			MAX_STELLAR_TEMPERATURE_K,
+			temperature_k
+		)
+
+		# These are not literal periodic blink modes. They select different stochastic
+		# turbulence spectra. All are zero-mean around the star's fixed radiance.
+		var scintillation_pattern := _sample_scintillation_pattern(rng)
 		var phase := rng.randf()
 
 		# All unresolved stars use the same sampling footprint. Their prominence is
@@ -115,8 +124,8 @@ func _build_stars() -> void:
 		multimesh.set_instance_transform(i, xform)
 		multimesh.set_instance_custom_data(i, Color(
 			magnitude_norm,
-			temperature,
-			float(pattern) / 4.0,
+			temperature_norm,
+			float(scintillation_pattern) / 4.0,
 			phase
 		))
 
@@ -137,6 +146,46 @@ func _sample_apparent_magnitude(rng: RandomNumberGenerator) -> float:
 	var faint_count := pow(10.0, 0.6 * NAKED_EYE_LIMIT_MAGNITUDE)
 	var cumulative := lerpf(bright_count, faint_count, rng.randf())
 	return log(cumulative) / (0.6 * log(10.0))
+
+
+func _sample_stellar_temperature_k(rng: RandomNumberGenerator) -> float:
+	# Naked-eye catalogue weighting, not the underlying galactic population. Cool
+	# M dwarfs are intrinsically common but usually too faint to enter a naked-eye
+	# catalogue, while luminous A/B stars are strongly overrepresented.
+	var roll := rng.randf()
+	if roll < 0.06:
+		# B: blue-white.
+		return rng.randf_range(10000.0, 18000.0)
+	if roll < 0.18:
+		# A: white / blue-white.
+		return rng.randf_range(7500.0, 10000.0)
+	if roll < 0.36:
+		# F: warm white.
+		return rng.randf_range(6000.0, 7500.0)
+	if roll < 0.57:
+		# G: solar white-yellow.
+		return rng.randf_range(5200.0, 6000.0)
+	if roll < 0.88:
+		# K: pale orange.
+		return rng.randf_range(3700.0, 5200.0)
+	# M: orange-red. Kept relatively sparse in the visible catalogue.
+	return rng.randf_range(2400.0, 3700.0)
+
+
+func _sample_scintillation_pattern(rng: RandomNumberGenerator) -> int:
+	# Every stellar point is physically susceptible to scintillation, but some
+	# lines of sight are much calmer. Pattern 0 is nearly steady; 4 is the rare
+	# strongly turbulent / bursty case that becomes conspicuous near the horizon.
+	var roll := rng.randf()
+	if roll < 0.10:
+		return 0
+	if roll < 0.43:
+		return 1
+	if roll < 0.74:
+		return 2
+	if roll < 0.94:
+		return 3
+	return 4
 
 
 func _random_unit_vector(rng: RandomNumberGenerator) -> Vector3:
