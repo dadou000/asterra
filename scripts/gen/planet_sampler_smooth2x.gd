@@ -66,10 +66,24 @@ func macro_height(d: Vector3) -> float:
 	return grid.sample_cubic_bspline(_macro_elev, d)
 
 
+func _global_height_variant_key() -> String:
+	# Coast shaping is part of the immutable low-frequency base. Its profile is
+	# therefore part of the package identity rather than a streamed correction.
+	return str(coast_profile_points()).sha256_text().substr(0, 12)
+
+
 ## Planet.adopt() calls this legacy hook. It now owns the global height package;
 ## the old name is retained only so the rest of the generated-world pipeline does
 ## not need a second initialization phase.
 func _build_orbit_textures() -> void:
+	rebuild_global_height(false)
+
+
+## Rebuild is exposed only for explicit world/profile editing. Normal travel never
+## calls it. Shipping worlds should arrive with the matching `.aghm` precompiled.
+func rebuild_global_height(force_rebuild: bool = false) -> bool:
+	if cfg == null or grid == null:
+		return false
 	var started_ms: int = Time.get_ticks_msec()
 	global_height_texture = null
 	global_height_face_res = GLOBAL_HEIGHT_FACE_RES
@@ -81,30 +95,32 @@ func _build_orbit_textures() -> void:
 	var source_res: int = grid.res
 	var spline_res: int = source_res * SPLINE_SAMPLE_UPSAMPLE
 	var visual_res: int = GLOBAL_HEIGHT_FACE_RES
+	var variant_key: String = _global_height_variant_key()
 	# Preserve the intermediate image's face:gutter ratio while resizing to the
-	# fixed 2048-face package. The very wide gutter also keeps coarse mip taps on
-	# the geometrically correct adjacent cube face.
+	# fixed 2048-face package. The wide gutter keeps coarse mip taps on the
+	# geometrically correct adjacent cube face.
 	var visual_gutter: int = maxi(4, int(round(
 		float(SPLINE_GUTTER) * float(visual_res) / float(spline_res))))
 	var spline_tex_res: int = spline_res + SPLINE_GUTTER * 2
 	var visual_tex_res: int = visual_res + visual_gutter * 2
 
-	var cached: Dictionary = GlobalHeightmapCache.load_images(
-		cfg, visual_res, visual_tex_res)
-	if not cached.is_empty():
-		var cached_images: Array[Image] = []
-		var cached_value: Variant = cached.get("images", [])
-		if cached_value is Array:
-			for item: Variant in cached_value:
-				if item is Image:
-					cached_images.append(item as Image)
-		if _publish_global_height(cached_images, visual_res):
-			global_height_cache_hit = true
-			global_height_cache_path = String(cached["path"])
-			global_height_compressed_bytes = int(cached["compressed_bytes"])
-			global_height_raw_bytes = int(cached["raw_bytes"])
-			global_height_build_ms = Time.get_ticks_msec() - started_ms
-			return
+	if not force_rebuild:
+		var cached: Dictionary = GlobalHeightmapCache.load_images(
+			cfg, visual_res, visual_tex_res, variant_key)
+		if not cached.is_empty():
+			var cached_images: Array[Image] = []
+			var cached_value: Variant = cached.get("images", [])
+			if cached_value is Array:
+				for item: Variant in cached_value:
+					if item is Image:
+						cached_images.append(item as Image)
+			if _publish_global_height(cached_images, visual_res):
+				global_height_cache_hit = true
+				global_height_cache_path = String(cached["path"])
+				global_height_compressed_bytes = int(cached["compressed_bytes"])
+				global_height_raw_bytes = int(cached["raw_bytes"])
+				global_height_build_ms = Time.get_ticks_msec() - started_ms
+				return true
 
 	var spline_step: float = 2.0 / float(spline_res)
 	var images: Array[Image] = []
@@ -119,7 +135,8 @@ func _build_orbit_textures() -> void:
 				var i: int = x - SPLINE_GUTTER
 				var u: float = (float(i) + 0.5) * spline_step - 1.0
 				var d: Vector3 = CubeSphere.face_uv_to_dir(face, u, v)
-				var h: float = grid.sample_cubic_bspline(_macro_elev, d)
+				var macro_h: float = grid.sample_cubic_bspline(_macro_elev, d)
+				var h: float = macro_h + coast_profile_offset(d, macro_h)
 				img.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
 
 		img.resize(visual_tex_res, visual_tex_res, Image.INTERPOLATE_LANCZOS)
@@ -129,14 +146,15 @@ func _build_orbit_textures() -> void:
 		images.append(img)
 
 	var saved: Dictionary = GlobalHeightmapCache.save_images(
-		cfg, visual_res, visual_tex_res, images)
+		cfg, visual_res, visual_tex_res, images, variant_key)
 	if not saved.is_empty():
 		global_height_cache_path = String(saved["path"])
 		global_height_compressed_bytes = int(saved["compressed_bytes"])
 		global_height_raw_bytes = int(saved["raw_bytes"])
 
-	_publish_global_height(images, visual_res)
+	var published: bool = _publish_global_height(images, visual_res)
 	global_height_build_ms = Time.get_ticks_msec() - started_ms
+	return published
 
 
 func _publish_global_height(images: Array[Image], face_res: int) -> bool:
@@ -150,8 +168,8 @@ func _publish_global_height(images: Array[Image], face_res: int) -> bool:
 	global_height_texture = texture_array
 	global_height_face_res = face_res
 
-	# Orbit has its own later high-resolution refinement job. Until that arrives,
-	# the global field is a valid initial orbital displacement source too.
+	# The same immutable base is also the orbit displacement source. There is no
+	# second background TerrainDetail synthesis pass anymore.
 	orbit_elevation_texture = texture_array
 	orbit_texture_face_res = face_res
 	return true
