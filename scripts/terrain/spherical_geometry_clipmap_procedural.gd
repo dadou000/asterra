@@ -129,16 +129,23 @@ func _sync_debug_uniforms() -> void:
 
 
 func _show_all_active_sectors() -> void:
+	_visible_sector_count = 0
 	if _active_max_level <= 0:
-		_visible_sector_count = 0
 		for batch: MultiMeshInstance3D in _sector_batches:
 			batch.visible = false
 		return
-	_visible_sector_count = _sector_batches.size()
-	for batch: MultiMeshInstance3D in _sector_batches:
-		batch.visible = true
+
+	for sector: int in _sector_batches.size():
+		var batch: MultiMeshInstance3D = _sector_batches[sector]
+		# The topology cut keeps only cy <= 0, which maps to angular sectors 6..11.
+		# Hide the empty upper-half sector nodes entirely instead of submitting six
+		# empty MultiMeshes and reporting them as visible debug batches.
+		var sector_visible := not _debug_side_cut or sector >= (SECTOR_COUNT >> 1)
+		batch.visible = sector_visible
 		if batch.multimesh != null:
-			batch.multimesh.visible_instance_count = _active_max_level
+			batch.multimesh.visible_instance_count = _active_max_level if sector_visible else 0
+		if sector_visible:
+			_visible_sector_count += 1
 
 
 func set_debug_freeze(value: bool) -> void:
@@ -250,11 +257,15 @@ static func _append_debug_cell(indices: PackedInt32Array, x: int, y: int) -> voi
 
 static func _debug_mesh_from_indices(vertices: PackedVector3Array,
 		indices: PackedInt32Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	# A removed half-plane leaves sectors 0..5 with zero cells. Never submit the
+	# 401x401 placeholder vertex buffer as accidental non-indexed geometry.
+	if indices.is_empty():
+		return mesh
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
