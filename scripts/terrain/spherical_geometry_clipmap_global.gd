@@ -49,6 +49,26 @@ func _sync_material_control() -> void:
 	_material.set_shader_parameter("u_material_clipmap_ready", 0.0)
 
 
+## Side-cut inspection hides entire sector nodes. Keep their MultiMesh instance
+## windows populated while hidden so disabling the cut cannot leave half of the
+## dynamic LOD rings at visible_instance_count=0 until the next altitude change.
+func _update_sector_visibility() -> void:
+	super._update_sector_visibility()
+	_restore_dynamic_ring_window()
+
+
+func _show_all_active_sectors() -> void:
+	super._show_all_active_sectors()
+	_restore_dynamic_ring_window()
+
+
+func _restore_dynamic_ring_window() -> void:
+	var ring_count: int = _active_ring_count()
+	for batch: MultiMeshInstance3D in _sector_batches:
+		if batch.multimesh != null:
+			batch.multimesh.visible_instance_count = ring_count
+
+
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	out["coverage_ready"] = _bound_orbit != null
