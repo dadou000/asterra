@@ -13,6 +13,7 @@ layout(push_constant, std430) uniform Params {
 	vec4 camera_rotation;
 	vec4 sun_dir_intensity;
 	vec4 wind_steps;
+	vec4 helion_geometry; // x = physical apparent angular radius, radians
 	mat4 inv_projection;
 } params;
 
@@ -131,45 +132,34 @@ float cloud_phase(float mu) {
 	return hg(mu, 0.65) * 0.86 + hg(mu, -0.24) * 0.14;
 }
 
-// Same astronomical occultation used by planet_lighting.gdshaderinc. The local
-// geometric horizon drops below the tangent plane with altitude, while the exact
-// ray/sphere test makes it impossible for direct Helion light to cross Asterra.
 float planet_horizon_cosine(float sample_radius, float planet_radius) {
 	float r = max(sample_radius, planet_radius + 0.01);
 	float ratio = clamp(planet_radius / r, 0.0, 1.0);
 	return -sqrt(max(1.0 - ratio * ratio, 0.0));
 }
 
+// Signed angular elevation of the centre of Helion above the sample's exact
+// spherical horizon. Positive is visible, negative is below the planetary limb.
 float planet_solar_clearance(vec3 p, vec3 sun_dir, float planet_radius) {
 	float r = max(length(p), planet_radius + 0.01);
 	vec3 up = p / r;
-	return dot(up, normalize(sun_dir)) - planet_horizon_cosine(r, planet_radius);
+	float horizon_zenith = acos(clamp(
+		planet_horizon_cosine(r, planet_radius), -1.0, 1.0));
+	float sun_zenith = acos(clamp(dot(up, normalize(sun_dir)), -1.0, 1.0));
+	return horizon_zenith - sun_zenith;
 }
 
+// Fraction of Helion's physical stellar disc visible above Asterra's limb.
+// The tiny disc is treated as planar and cut by the local horizon line; the
+// circle-segment formula gives a physically meaningful partial sunrise/sunset.
 float planet_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
-	vec3 s = normalize(sun_dir);
-	float r = length(p);
-	if (r < 1.0) return 0.0;
-	vec3 up = p / r;
-
-	vec3 ro = p;
-	if (r <= planet_radius + 0.5) {
-		ro = up * (planet_radius + 0.5);
-		r = planet_radius + 0.5;
-	}
-
-	float b = dot(ro, s);
-	float c = dot(ro, ro) - planet_radius * planet_radius;
-	float disc = b * b - c;
-	if (disc > 0.0) {
-		float t_near = -b - sqrt(disc);
-		if (t_near > 1.0) return 0.0;
-	}
-
-	float horizon = planet_horizon_cosine(r, planet_radius);
-	float mu = dot(up, s);
-	const float SOLAR_EDGE = 0.0062;
-	return smoothstep(horizon - SOLAR_EDGE, horizon + SOLAR_EDGE, mu);
+	float clearance = planet_solar_clearance(p, sun_dir, planet_radius);
+	float angular_radius = max(params.helion_geometry.x, 1e-7);
+	if (clearance <= -angular_radius) return 0.0;
+	if (clearance >= angular_radius) return 1.0;
+	float x = clamp(clearance / angular_radius, -1.0, 1.0);
+	float root = sqrt(max(1.0 - x * x, 0.0));
+	return (acos(-x) + x * root) / PI;
 }
 
 // Indirect dusk light is tied to the sample's own curved-planet horizon instead
