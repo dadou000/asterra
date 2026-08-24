@@ -12,8 +12,8 @@ layout(push_constant, std430) uniform Params {
 	vec4 camera_planet_radius;
 	vec4 camera_rotation;
 	vec4 sun_dir_intensity;
+	// xyz = wind metres, w = integer primary steps + fractional Helion angular radius.
 	vec4 wind_steps;
-	vec4 helion_geometry; // x = physical apparent angular radius, radians
 	mat4 inv_projection;
 } params;
 
@@ -149,12 +149,19 @@ float planet_solar_clearance(vec3 p, vec3 sun_dir, float planet_radius) {
 	return horizon_zenith - sun_zenith;
 }
 
+float helion_angular_radius() {
+	// The CPU packs an integer step count in the whole-number part of wind_steps.w
+	// and the physical angular radius in its fractional part to keep this entire
+	// push-constant block at Godot's 128-byte compatibility limit.
+	return max(fract(params.wind_steps.w), 1e-7);
+}
+
 // Fraction of Helion's physical stellar disc visible above Asterra's limb.
 // The tiny disc is treated as planar and cut by the local horizon line; the
 // circle-segment formula gives a physically meaningful partial sunrise/sunset.
 float planet_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	float clearance = planet_solar_clearance(p, sun_dir, planet_radius);
-	float angular_radius = max(params.helion_geometry.x, 1e-7);
+	float angular_radius = helion_angular_radius();
 	if (clearance <= -angular_radius) return 0.0;
 	if (clearance >= angular_radius) return 1.0;
 	float x = clamp(clearance / angular_radius, -1.0, 1.0);
@@ -356,7 +363,7 @@ void main() {
 	vec3 sun_dir = normalize(params.sun_dir_intensity.xyz);
 	float sun_irradiance = params.sun_dir_intensity.w;
 	vec3 wind = params.wind_steps.xyz;
-	int steps = int(clamp(floor(params.wind_steps.w + 0.5), 6.0,
+	int steps = int(clamp(floor(params.wind_steps.w), 6.0,
 		float(CLOUD_MAX_PRIMARY_STEPS)));
 
 	float first_cloud_distance;
