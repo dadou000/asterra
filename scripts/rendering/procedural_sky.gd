@@ -17,13 +17,21 @@ var star_material: ShaderMaterial
 
 
 func configure(p_observer: AsterraPlayer) -> void:
+	if p_observer == null or observer == p_observer:
+		return
 	observer = p_observer
 	_build_stars()
 
 
 func _process(_delta: float) -> void:
-	if observer == null or not is_instance_valid(observer) or observer.camera == null:
+	if observer == null or not is_instance_valid(observer):
+		_try_bind_observer()
 		return
+	if observer.camera == null or star_material == null:
+		return
+
+	# Keep the catalogue camera-relative so floating-origin rebases never touch the
+	# stellar transforms and there is no large-coordinate precision loss.
 	global_position = observer.camera.global_position
 	var far_radius := maxf(observer.camera.far * FAR_FIELD_SCALE, 5000.0)
 	scale = Vector3.ONE * far_radius
@@ -33,7 +41,19 @@ func _process(_delta: float) -> void:
 	star_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
 
 
+func _try_bind_observer() -> void:
+	var root := get_parent()
+	if root == null:
+		return
+	for child in root.get_children():
+		if child is AsterraPlayer:
+			configure(child as AsterraPlayer)
+			return
+
+
 func _build_stars() -> void:
+	if Planet.cfg == null:
+		return
 	if star_mesh != null:
 		star_mesh.queue_free()
 
@@ -51,10 +71,14 @@ func _build_stars() -> void:
 	multimesh.instance_count = STAR_COUNT
 
 	var rng := RandomNumberGenerator.new()
+	# The sky is deterministic for a world seed. A separate salt ensures changing
+	# terrain generation does not accidentally correlate stars with terrain noise.
 	rng.seed = int(Planet.cfg.world_seed) ^ 0x5A17B1E
 
 	for i in STAR_COUNT:
 		var direction := _random_unit_vector(rng)
+		# Strong faint-star bias approximates the naked-eye magnitude distribution:
+		# many threshold stars, few bright ones, and a very sparse standout tail.
 		var magnitude_bias := pow(rng.randf(), 3.0)
 		var brightness := lerpf(0.010, 0.42, magnitude_bias)
 		if rng.randf() < 0.008:
