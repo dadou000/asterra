@@ -9,10 +9,10 @@ layout(set = 0, binding = 2) uniform sampler3D shape_noise;
 layout(set = 0, binding = 3) uniform sampler3D detail_noise;
 
 layout(push_constant, std430) uniform Params {
-	vec4 camera_planet_radius; // xyz camera position in planet coordinates, w planet radius
-	vec4 camera_rotation;      // Godot Quaternion xyzw, view -> render-world
-	vec4 sun_dir_intensity;    // xyz direction toward Helion, w scene-linear irradiance
-	vec4 wind_steps;           // xyz cloud wind offset, w primary step count
+	vec4 camera_planet_radius;
+	vec4 camera_rotation;
+	vec4 sun_dir_intensity;
+	vec4 wind_steps;
 	mat4 inv_projection;
 } params;
 
@@ -75,14 +75,14 @@ float density_coarse(vec3 p, float radius, vec3 wind) {
 	vec3 surface_p = surface_anchor(p, radius);
 	float weather = textureLod(shape_noise,
 		(surface_p + wind * 0.16) * CLOUD_WEATHER_SCALE, 0.0).r;
-	float coverage = clamp(
-		CLOUD_COVERAGE + (weather - 0.5) * CLOUD_WEATHER_VARIATION,
-		0.06, 0.96);
+	float coverage = clamp(CLOUD_COVERAGE
+		+ (weather - 0.5) * CLOUD_WEATHER_VARIATION, 0.06, 0.96);
 	float threshold = 1.0 - coverage * 0.78;
 	float macro = textureLod(shape_noise,
 		(p + wind) * CLOUD_SHAPE_SCALE, 0.0).r;
 	float body = smoothstep(threshold, min(threshold + 0.20, 0.99), macro);
-	return body * vertical_profile(h, smoothstep(0.22, 0.82, weather)) * CLOUD_DENSITY;
+	return body * vertical_profile(h, smoothstep(0.22, 0.82, weather))
+		* CLOUD_DENSITY;
 }
 
 float density_at(vec3 p, float radius, vec3 wind, float detail_weight) {
@@ -92,9 +92,8 @@ float density_at(vec3 p, float radius, vec3 wind, float detail_weight) {
 	float h = remap01(altitude, CLOUD_BASE, CLOUD_TOP);
 	vec3 surface_p = surface_anchor(p, radius);
 	float weather = weather_field(surface_p, wind);
-	float coverage = clamp(
-		CLOUD_COVERAGE + (weather - 0.5) * CLOUD_WEATHER_VARIATION,
-		0.06, 0.96);
+	float coverage = clamp(CLOUD_COVERAGE
+		+ (weather - 0.5) * CLOUD_WEATHER_VARIATION, 0.06, 0.96);
 	float threshold = 1.0 - coverage * 0.78;
 
 	vec3 shape_p = (p + wind) * CLOUD_SHAPE_SCALE;
@@ -117,7 +116,6 @@ float density_at(vec3 p, float radius, vec3 wind, float detail_weight) {
 		body = max(body - (1.0 - detail) * CLOUD_DETAIL_STRENGTH
 			* detail_weight * (0.22 + 0.78 * edge), 0.0);
 	}
-
 	return smoothstep(0.015, 0.30, body) * CLOUD_DENSITY;
 }
 
@@ -136,7 +134,8 @@ float planet_sun_visibility(vec3 p, vec3 sun_dir, float radius) {
 	return hit.x > 0.0 ? 0.0 : 1.0;
 }
 
-float sun_transmittance(vec3 p, vec3 sun_dir, float radius, vec3 wind, int light_steps) {
+float sun_transmittance(vec3 p, vec3 sun_dir, float radius,
+		vec3 wind, int light_steps) {
 	vec2 hit = sphere_intersect(p, sun_dir, radius + CLOUD_TOP);
 	float max_distance = min(max(hit.y, 0.0), 60000.0);
 	if (max_distance <= 1.0) return 1.0;
@@ -208,7 +207,8 @@ vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
 			float sun_air = mix(0.16, 1.0, smoothstep(-0.015, 0.32, sun_mu));
 			vec3 sunset_tint = mix(vec3(1.00, 0.34, 0.10),
 				vec3(1.00, 0.98, 0.94), smoothstep(-0.02, 0.28, sun_mu));
-			float light_trans = sun_transmittance(p, sun_dir, radius, wind, light_steps);
+			float light_trans = sun_transmittance(p, sun_dir, radius, wind,
+				light_steps);
 			float powder = 1.0 - exp(-density * CLOUD_EXTINCTION * step_len * 2.2);
 			vec3 direct = sunset_tint * sun_irradiance * phase
 				* light_trans * planet_vis * sun_air * mix(0.58, 1.03, powder);
@@ -223,20 +223,27 @@ vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
 		}
 		t += step_len;
 	}
-
 	return vec4(radiance, clamp(transmittance, 0.0, 1.0));
 }
 
+float foreground_air_transmittance(vec3 camera_pos, vec3 dir, float first_t) {
+	if (first_t <= 0.0) return 1.0;
+	vec3 up = normalize(camera_pos);
+	float elevation = clamp(dot(dir, up), -0.15, 1.0);
+	float path_scale = mix(26000.0, 110000.0,
+		smoothstep(-0.05, 0.45, elevation));
+	return exp(-first_t / max(path_scale, 1.0) * 0.55);
+}
+
 vec3 foreground_atmosphere_restore(vec3 camera_pos, vec3 dir, float first_t,
-		float cloud_transmittance) {
+		float cloud_transmittance, float air_transmittance) {
 	if (first_t <= 0.0 || cloud_transmittance > 0.999) return vec3(0.0);
 	vec3 up = normalize(camera_pos);
 	float elevation = clamp(dot(dir, up), -0.15, 1.0);
-	float path_scale = mix(26000.0, 110000.0, smoothstep(-0.05, 0.45, elevation));
-	float haze = 1.0 - exp(-first_t / max(path_scale, 1.0));
 	vec3 haze_color = mix(vec3(0.30, 0.34, 0.38), vec3(0.19, 0.36, 0.52),
 		smoothstep(-0.08, 0.25, elevation));
-	return haze_color * haze * (1.0 - cloud_transmittance) * 0.55;
+	return haze_color * (1.0 - air_transmittance)
+		* (1.0 - cloud_transmittance) * 0.55;
 }
 
 void main() {
@@ -249,7 +256,11 @@ void main() {
 	vec3 ndc = vec3(uv * 2.0 - 1.0, depth);
 	vec4 view_h = params.inv_projection * vec4(ndc, 1.0);
 	vec3 view_pos = view_h.xyz / max(abs(view_h.w), 1e-8) * sign(view_h.w);
-	float scene_distance = length(view_pos);
+
+	// Reverse-Z depth ~= 0 is untouched sky, not geometry at Camera3D.far.
+	// Leave that ray unbounded here; the spherical cloud and planet intersections
+	// provide the physically meaningful termination distances.
+	float scene_distance = depth <= 1e-6 ? 1e30 : length(view_pos);
 	if (!(scene_distance > 0.0)) return;
 
 	vec3 ray_view = normalize(view_pos);
@@ -269,11 +280,12 @@ void main() {
 	if (cloud.a > 0.9999) return;
 
 	vec4 base = imageLoad(color_image, pixel);
-	vec3 result = cloud.rgb + base.rgb * cloud.a;
-	// The scene color already contains the background atmosphere. The cloud should
-	// occlude only the portion behind it; restore a restrained approximation of the
-	// foreground air column so horizon clouds do not look pasted behind the haze.
+	float air_t = foreground_air_transmittance(camera_planet, ray_world,
+		first_cloud_distance);
+	// Correct ordering approximation:
+	// foreground air -> cloud -> already-rendered scene/sky behind the cloud.
+	vec3 result = cloud.rgb * air_t + base.rgb * cloud.a;
 	result += foreground_atmosphere_restore(camera_planet, ray_world,
-		first_cloud_distance, cloud.a);
+		first_cloud_distance, cloud.a, air_t);
 	imageStore(color_image, pixel, vec4(result, base.a));
 }
