@@ -9,14 +9,14 @@
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct Query {
-    vec4 position_depth;     // xyz planet position, w still-water depth
-    vec4 coast_shore_dist;   // xyz landward tangent, w signed shore distance
+    vec4 position_depth;
+    vec4 coast_shore_dist;
 };
 
 struct Result {
-    vec4 height_normal;      // x surface height offset, yzw normal xyz
-    vec4 normal_vx;          // xyz normal, w velocity x
-    vec4 velocity;           // xyz water velocity, w breaking intensity
+    vec4 height_normal;
+    vec4 normal_vx;
+    vec4 velocity;
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer Queries { Query q[]; };
@@ -54,13 +54,19 @@ float shoal_gain(float depth, float wavelength) {
     return mix(1.42, 1.0, smoothstep(0.08, 0.75, qd));
 }
 
+float coast_frequency_scale(float depth, float wavelength) {
+    float transition_depth = max(12.0, wavelength * 0.32);
+    float deep_blend = smoothstep(0.75, transition_depth, depth);
+    return mix(0.56, 1.0, deep_blend);
+}
+
 void add_wave(vec3 up, vec3 dir, float offshore_phase_coord, float shore_distance,
               float depth, float wavelength, float base_amp, float steepness,
               float phase_off, inout vec3 displacement, inout vec3 grad,
               inout vec3 vel, inout float breaking) {
     if (depth <= 0.01) return;
     float k = TAU_ / wavelength;
-    float omega = dispersion(k, depth);
+    float omega = dispersion(k, depth) * coast_frequency_scale(depth, wavelength);
     float raw_amp = base_amp * shoal_gain(depth, wavelength) * params.wave_scale;
     float breaker_amp = max(0.015, BREAKER_GAMMA * depth * 0.5);
     breaking = max(breaking,
@@ -68,7 +74,7 @@ void add_wave(vec3 up, vec3 dir, float offshore_phase_coord, float shore_distanc
         * (1.0 - smoothstep(0.3, 8.0, depth)));
     float amp = min(raw_amp, breaker_amp);
     vec3 travel = safe_tangent(up, dir);
-    float shore_blend = 1.0 - smoothstep(18.0, 150.0, depth);
+    float shore_blend = (1.0 - smoothstep(18.0, 150.0, depth)) * 0.94;
     float phase_coord = mix(offshore_phase_coord, shore_distance, shore_blend);
     float phase = phase_coord * k - omega * params.time_s + phase_off;
     float s = sin(phase);
