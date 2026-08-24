@@ -181,13 +181,16 @@ func _build_world_tab(tabs: TabContainer) -> void:
 	box.name = "World"
 	box.add_theme_constant_override("separation", 5)
 	tabs.add_child(box)
+
 	box.add_child(_section_title("World generation"))
+
 	var coast_profile := Button.new()
 	coast_profile.text = "Edit coastline terrain profile..."
 	coast_profile.add_theme_font_size_override("font_size", 13)
 	coast_profile.pressed.connect(func(): coast_profile_requested.emit())
 	box.add_child(coast_profile)
 	box.add_child(_note("Edits the global sea-side terrain profile"))
+
 	_rebake_button = Button.new()
 	_rebake_button.text = "Rebake planet (ignore cache)"
 	_rebake_button.add_theme_font_size_override("font_size", 13)
@@ -196,11 +199,21 @@ func _build_world_tab(tabs: TabContainer) -> void:
 	box.add_child(_note("Regenerates the macro planet fields from the current seed"))
 
 
-func _add_sky_slider(parent: VBoxContainer, key: String, title: String, note_text: String, minimum: float, maximum: float, step_value: float, default_value: float) -> void:
+func _add_sky_slider(
+	parent: VBoxContainer,
+	key: String,
+	title: String,
+	note_text: String,
+	minimum: float,
+	maximum: float,
+	step_value: float,
+	default_value: float
+) -> void:
 	var label := Label.new()
 	label.add_theme_font_size_override("font_size", 13)
 	parent.add_child(label)
 	_sky_labels[key] = label
+
 	var slider := HSlider.new()
 	slider.min_value = minimum
 	slider.max_value = maximum
@@ -215,9 +228,11 @@ func _add_sky_slider(parent: VBoxContainer, key: String, title: String, note_tex
 
 
 func _input(event: InputEvent) -> void:
-	if not (event is InputEventKey): return
+	if not (event is InputEventKey):
+		return
 	var key_event := event as InputEventKey
-	if not key_event.pressed or key_event.echo: return
+	if not key_event.pressed or key_event.echo:
+		return
 	if key_event.unicode == 38:
 		toggle()
 		get_viewport().set_input_as_handled()
@@ -233,100 +248,154 @@ func toggle() -> void:
 
 
 func _section_title(text: String) -> Label:
-	var label := Label.new(); label.text = text; label.add_theme_font_size_override("font_size", 14); label.add_theme_color_override("font_color", Color(0.86, 0.91, 1.0)); return label
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_color_override("font_color", Color(0.86, 0.91, 1.0))
+	return label
+
 
 func _note(text: String) -> Label:
-	var note := Label.new(); note.text = "     %s" % text; note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; note.add_theme_font_size_override("font_size", 11); note.add_theme_color_override("font_color", Color(0.58, 0.65, 0.76)); return note
+	var note := Label.new()
+	note.text = "     %s" % text
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", 11)
+	note.add_theme_color_override("font_color", Color(0.58, 0.65, 0.76))
+	return note
+
 
 func _on_toggled(pressed: bool, key: String) -> void:
 	if key == "ring_indicator":
-		if GroundGeometryClipmap.has_method("set_debug_ring_indicator"): GroundGeometryClipmap.call("set_debug_ring_indicator", pressed)
+		if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
+			GroundGeometryClipmap.call("set_debug_ring_indicator", pressed)
 		return
-	if debug != null: debug.set(key, pressed)
+	if debug != null:
+		debug.set(key, pressed)
+
 
 func _on_sink_scale_changed(value: float) -> void:
-	if _sink_label != null: _sink_label.text = "Sink depth: %.2f × LOD spacing" % value
-	if debug != null: debug.sink_scale = value
+	if _sink_label != null:
+		_sink_label.text = "Sink depth: %.2f × LOD spacing" % value
+	if debug != null:
+		debug.sink_scale = value
+
 
 func _on_reset_inspection() -> void:
 	for key_value: Variant in ["ring_indicator", "freeze_terrain", "side_cut"]:
-		var key := String(key_value); var button_value: Variant = _buttons.get(key)
-		if button_value is CheckButton: (button_value as CheckButton).set_pressed_no_signal(false)
-	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"): GroundGeometryClipmap.call("set_debug_ring_indicator", false)
-	if _sink_slider != null: _sink_slider.set_value_no_signal(DEFAULT_SINK_SCALE)
-	if _sink_label != null: _sink_label.text = "Sink depth: %.2f × LOD spacing" % DEFAULT_SINK_SCALE
-	if debug != null: debug.reset_inspection()
+		var key := String(key_value)
+		var button_value: Variant = _buttons.get(key)
+		if button_value is CheckButton:
+			(button_value as CheckButton).set_pressed_no_signal(false)
+	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
+		GroundGeometryClipmap.call("set_debug_ring_indicator", false)
+	if _sink_slider != null:
+		_sink_slider.set_value_no_signal(DEFAULT_SINK_SCALE)
+	if _sink_label != null:
+		_sink_label.text = "Sink depth: %.2f × LOD spacing" % DEFAULT_SINK_SCALE
+	if debug != null:
+		debug.reset_inspection()
 
 
 func _on_sky_slider_changed(value: float, key: String) -> void:
 	_update_sky_label(key, value)
 	_resolve_sky_targets()
+
 	match key:
 		"radiance":
-			if procedural_sky != null: procedural_sky.set_star_radiance_scale(value)
+			if procedural_sky != null:
+				procedural_sky.set_star_radiance_scale(value)
 		"magnitude":
-			if procedural_sky != null: procedural_sky.set_magnitude_flux_exponent(value)
+			if procedural_sky != null:
+				procedural_sky.set_magnitude_flux_exponent(value)
 		"seeing":
-			if procedural_sky != null: procedural_sky.set_seeing_strength(value)
+			if procedural_sky != null:
+				procedural_sky.set_seeing_strength(value)
 		"colour":
-			if procedural_sky != null: procedural_sky.set_colour_strength(value)
+			if procedural_sky != null:
+				procedural_sky.set_colour_strength(value)
 		"chromatic":
-			if procedural_sky != null: procedural_sky.set_chromatic_scintillation_strength(value)
+			if procedural_sky != null:
+				procedural_sky.set_chromatic_scintillation_strength(value)
 		"deep_sky":
-			if sky_material != null: sky_material.set_shader_parameter("u_deep_sky_scale", value)
+			if sky_material != null:
+				sky_material.set_shader_parameter("u_deep_sky_scale", value)
 		"galaxy":
-			if sky_material != null: sky_material.set_shader_parameter("u_galaxy_scale", value)
+			if sky_material != null:
+				sky_material.set_shader_parameter("u_galaxy_scale", value)
 		"nebula":
-			if sky_material != null: sky_material.set_shader_parameter("u_nebula_scale", value)
+			if sky_material != null:
+				sky_material.set_shader_parameter("u_nebula_scale", value)
 
 
 func _update_sky_label(key: String, value: float, explicit_title: String = "") -> void:
 	var label_value: Variant = _sky_labels.get(key)
-	if not (label_value is Label): return
+	if not (label_value is Label):
+		return
+
 	var title := explicit_title
 	if title.is_empty():
 		match key:
-			"radiance": title = "Stellar radiance calibration"
-			"magnitude": title = "Magnitude flux response"
-			"seeing": title = "Atmospheric seeing / scintillation"
-			"colour": title = "Naked-eye stellar colour response"
-			"chromatic": title = "Chromatic scintillation"
-			"deep_sky": title = "Deep-sky radiance"
-			"galaxy": title = "Galaxy radiance"
-			"nebula": title = "Nebula radiance"
+			"radiance":
+				title = "Stellar radiance calibration"
+			"magnitude":
+				title = "Magnitude flux response"
+			"seeing":
+				title = "Atmospheric seeing / scintillation"
+			"colour":
+				title = "Naked-eye stellar colour response"
+			"chromatic":
+				title = "Chromatic scintillation"
+			"deep_sky":
+				title = "Deep-sky radiance"
+			"galaxy":
+				title = "Galaxy radiance"
+			"nebula":
+				title = "Nebula radiance"
 	(label_value as Label).text = "%s: %.2f ×" % [title, value]
 
 
 func _on_reset_sky() -> void:
 	_resolve_sky_targets()
-	if procedural_sky != null: procedural_sky.reset_debug_calibration()
+	if procedural_sky != null:
+		procedural_sky.reset_debug_calibration()
 	if sky_material != null:
 		sky_material.set_shader_parameter("u_deep_sky_scale", 1.0)
 		sky_material.set_shader_parameter("u_galaxy_scale", 1.0)
 		sky_material.set_shader_parameter("u_nebula_scale", 1.0)
+
 	for key_value: Variant in ["radiance", "magnitude", "seeing", "colour", "chromatic", "deep_sky", "galaxy", "nebula"]:
-		var key := String(key_value); var slider_value: Variant = _sky_sliders.get(key)
-		if slider_value is HSlider: (slider_value as HSlider).set_value_no_signal(SKY_DEFAULT)
+		var key := String(key_value)
+		var slider_value: Variant = _sky_sliders.get(key)
+		if slider_value is HSlider:
+			(slider_value as HSlider).set_value_no_signal(SKY_DEFAULT)
 		_update_sky_label(key, SKY_DEFAULT)
 
 
 func _resolve_sky_targets() -> void:
 	var root := get_parent()
-	if root == null: return
+	if root == null:
+		return
+
 	if procedural_sky == null or not is_instance_valid(procedural_sky):
 		var candidate := root.get_node_or_null("ProceduralSky")
-		if candidate is ProceduralSky: procedural_sky = candidate as ProceduralSky
+		if candidate is ProceduralSky:
+			procedural_sky = candidate as ProceduralSky
+
 	if sky_material == null:
 		var material_value: Variant = root.get("sky_mat")
-		if material_value is ShaderMaterial: sky_material = material_value as ShaderMaterial
+		if material_value is ShaderMaterial:
+			sky_material = material_value as ShaderMaterial
 
 
 func _on_rebake_pressed() -> void:
-	if _rebake_button == null or _rebake_button.disabled: return
+	if _rebake_button == null or _rebake_button.disabled:
+		return
 	set_rebake_busy(true)
 	rebake_requested.emit()
 
+
 func set_rebake_busy(busy: bool) -> void:
-	if _rebake_button == null: return
+	if _rebake_button == null:
+		return
 	_rebake_button.disabled = busy
 	_rebake_button.text = "Rebaking planet..." if busy else "Rebake planet (ignore cache)"
