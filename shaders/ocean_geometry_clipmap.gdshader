@@ -2,6 +2,7 @@ shader_type spatial;
 render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 
 #include "res://shaders/atmosphere.gdshaderinc"
+#include "res://shaders/cloud_shadow.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/coastline_clipmap.gdshaderinc"
 #include "res://shaders/water_surface.gdshaderinc"
@@ -33,6 +34,7 @@ varying float v_crest;
 varying float v_compression;
 varying float v_diffraction;
 varying float v_level;
+varying float v_cloud_shadow;
 
 const float MAX_PROJECTED_THETA = 1.62;
 const float FINE_MORPH_START_Q = 0.875;
@@ -167,6 +169,13 @@ void vertex() {
 	v_compression = wave.compression;
 	v_diffraction = max(diffract_a, diffract_b);
 	v_level = float(level);
+
+	vec3 shadow_sun = normalize(u_cloud_shadow_sun_dir);
+	float planet_vis = planet_direct_sun_visibility(displaced, shadow_sun, u_planet_radius);
+	v_cloud_shadow = planet_vis > 0.001
+		? cloud_shadow_transmittance(displaced, shadow_sun, u_planet_radius)
+		: 0.0;
+
 	// Exact/raw height owns only the shoreline mask, so smoothing bathymetry never
 	// moves the visible land/water boundary.
 	v_valid = (raw_ground_h < 0.45 && raw_theta <= u_visible_cap_angle) ? 1.0 : 0.0;
@@ -228,6 +237,9 @@ void light() {
 	float visibility = 1.0;
 	if (LIGHT_IS_DIRECTIONAL) {
 		visibility = planet_direct_sun_visibility(v_planet, normalize(u_sun_dir), u_planet_radius);
+		// Same Beer-Lambert solar-column result as the ground, so a shadow crosses
+		// shorelines without changing intensity or sliding relative to the cloud.
+		visibility *= clamp(v_cloud_shadow, 0.0, 1.0);
 	}
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
