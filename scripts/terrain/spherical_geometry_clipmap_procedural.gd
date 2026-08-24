@@ -8,6 +8,11 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_fast.gd"
 ## of the same continuous world-space function rather than between streamed pages.
 
 const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
+const DEFAULT_SINK_SCALE: float = 2.0
+
+var _debug_freeze := false
+var _debug_side_cut := false
+var _debug_sink_scale: float = DEFAULT_SINK_SCALE
 
 
 func _ready() -> void:
@@ -15,6 +20,7 @@ func _ready() -> void:
 	_material.shader = load("res://shaders/spherical_geometry_clipmap_procedural.gdshader")
 	_bind_gpu_resources(true)
 	_sync_detail_seed()
+	_sync_debug_uniforms()
 
 
 func _process(_dt: float) -> void:
@@ -37,32 +43,43 @@ func _process(_dt: float) -> void:
 	var observer_dir: Vector3 = planet_pos.normalized()
 	if not _have_anchor:
 		_reset_anchor(observer_dir)
+		_update_visible_cap(planet_pos.length(), radius)
+		_update_active_levels()
 
-	var observer_surface: Vector3 = observer_dir * radius
-	var anchor_surface: Vector3 = _anchor_dir * radius
-	var rel: Vector3 = observer_surface - anchor_surface
-	var px: float = rel.dot(_anchor_right)
-	var py: float = rel.dot(_anchor_up)
-	if absf(px) > REANCHOR_M or absf(py) > REANCHOR_M:
-		_reset_anchor(observer_dir)
-		px = 0.0
-		py = 0.0
+	# Freeze means exactly that for terrain inspection: the clipmap centre, tangent
+	# frame, visible-cap radius and active LOD count stop following the camera.
+	# Floating-origin changes still update u_origin below, so the frozen terrain
+	# remains fixed in planet space while the camera can freely move around it.
+	if not _debug_freeze:
+		var observer_surface: Vector3 = observer_dir * radius
+		var anchor_surface: Vector3 = _anchor_dir * radius
+		var rel: Vector3 = observer_surface - anchor_surface
+		var px: float = rel.dot(_anchor_right)
+		var py: float = rel.dot(_anchor_up)
+		if absf(px) > REANCHOR_M or absf(py) > REANCHOR_M:
+			_reset_anchor(observer_dir)
+			px = 0.0
+			py = 0.0
 
-	var snapped_center := Vector2(
-		round(px / _base_spacing) * _base_spacing,
-		round(py / _base_spacing) * _base_spacing)
-	if snapped_center.distance_squared_to(_center_plane) > 1e-8:
-		_center_plane = snapped_center
-		_update_center_basis()
+		var snapped_center := Vector2(
+			round(px / _base_spacing) * _base_spacing,
+			round(py / _base_spacing) * _base_spacing)
+		if snapped_center.distance_squared_to(_center_plane) > 1e-8:
+			_center_plane = snapped_center
+			_update_center_basis()
 
-	_update_visible_cap(planet_pos.length(), radius)
-	_update_active_levels()
+		_update_visible_cap(planet_pos.length(), radius)
+		_update_active_levels()
+
 	_bind_gpu_resources(false)
 	_sync_uniforms(origin)
 	_sync_material_control()
 	_set_visible(_bound_orbit != null)
 	if _terrain_visible:
-		_update_sector_visibility()
+		if _debug_freeze or _debug_side_cut:
+			_show_all_active_sectors()
+		else:
+			_update_sector_visibility()
 
 
 func _bind_gpu_resources(force: bool) -> void:
@@ -92,6 +109,7 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_height_enabled", 1.0 if _height_enabled else 0.0)
 	_material.set_shader_parameter("u_macro_ready", 1.0 if _bound_orbit != null else 0.0)
 	_sync_detail_seed()
+	_sync_debug_uniforms()
 
 
 func _sync_detail_seed() -> void:
@@ -103,6 +121,62 @@ func _sync_detail_seed() -> void:
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
 		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
+
+
+func _sync_debug_uniforms() -> void:
+	if _material == null:
+		return
+	_material.set_shader_parameter("u_debug_side_cut", 1.0 if _debug_side_cut else 0.0)
+	_material.set_shader_parameter("u_sink_scale", _debug_sink_scale)
+
+
+func _show_all_active_sectors() -> void:
+	if _active_max_level <= 0:
+		_visible_sector_count = 0
+		for batch: MultiMeshInstance3D in _sector_batches:
+			batch.visible = false
+		return
+	_visible_sector_count = _sector_batches.size()
+	for batch: MultiMeshInstance3D in _sector_batches:
+		batch.visible = true
+		if batch.multimesh != null:
+			batch.multimesh.visible_instance_count = _active_max_level
+
+
+func set_debug_freeze(value: bool) -> void:
+	_debug_freeze = value
+	if _terrain_visible:
+		if value:
+			_show_all_active_sectors()
+		else:
+			_update_sector_visibility()
+
+
+func set_debug_side_cut(value: bool) -> void:
+	_debug_side_cut = value
+	_sync_debug_uniforms()
+	if _terrain_visible:
+		if value or _debug_freeze:
+			_show_all_active_sectors()
+		else:
+			_update_sector_visibility()
+
+
+func set_debug_sink_scale(value: float) -> void:
+	_debug_sink_scale = clampf(value, 0.0, 16.0)
+	_sync_debug_uniforms()
+
+
+func debug_freeze_enabled() -> bool:
+	return _debug_freeze
+
+
+func debug_side_cut_enabled() -> bool:
+	return _debug_side_cut
+
+
+func debug_sink_scale() -> float:
+	return _debug_sink_scale
 
 
 func _request_visible_pages() -> void:
@@ -138,4 +212,7 @@ func gpu_stream_stats() -> Dictionary:
 		"procedural_gpu": true,
 		"visual_pages": false,
 		"macro_upsample": 2,
+		"debug_frozen": _debug_freeze,
+		"debug_side_cut": _debug_side_cut,
+		"debug_sink_scale": _debug_sink_scale,
 	}
