@@ -5,10 +5,10 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
 // Robust procedural terrain shader. Logical clipmap coordinates come from UV,
-// not VERTEX_ID, so compact sector meshes cannot scramble the grid. Projection
-// mode is selected from physical arc distance rather than the LOD number, so two
-// overlapping LODs always map the same physical point through the same sphere
-// projection path.
+// not VERTEX_ID, so compact sector meshes cannot scramble the grid. The macro
+// field is reconstructed with a cubic B-spline in the vertex shader instead of
+// hardware bilinear interpolation; this preserves smooth curvature between the
+// low-frequency samples instead of turning every macro texel into a planar patch.
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
@@ -42,6 +42,7 @@ const float MAX_PROJECTED_THETA = 1.62;
 const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
+const int MACRO_MAX_MIP = 5;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -61,17 +62,11 @@ vec3 direction_for_offset(vec2 offset_m) {
 	if (arc < 1e-5) {
 		return normalize(u_center_dir);
 	}
-
-	// The previous optimisation switched projection at a fixed LOD (L8/L9), so
-	// overlapping levels could evaluate the same physical location differently.
-	// Switching on arc length preserves the optimisation without introducing an
-	// LOD-dependent coordinate system.
 	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
 		return normalize(u_center_dir
 			+ u_center_right * (offset_m.x / u_planet_radius)
 			+ u_center_up * (offset_m.y / u_planet_radius));
 	}
-
 	float raw_theta = arc / max(u_planet_radius, 1.0);
 	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
 	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
@@ -83,6 +78,8 @@ vec3 macro_array_coord(vec3 dir) {
 	ivec3 size3 = textureSize(u_macro_elevation, 0);
 	float texture_res = float(size3.x);
 	float gutter = max((texture_res - u_macro_face_res) * 0.5, 0.0);
+	// The texture stores one sample at every texel centre. For source sample i,
+	// fuv=(i+0.5)/face_res and this expression lands exactly on texel i's centre.
 	vec2 uv = (fuv.xy * u_macro_face_res + vec2(gutter)) / texture_res;
 	return vec3(uv, fuv.z);
 }
@@ -93,12 +90,78 @@ float macro_lod_for_spacing(float spacing_m) {
 	return clamp(log2(footprint_m / macro_texel_m), 0.0, MACRO_MAX_LOD);
 }
 
+// Uniform cubic B-spline basis. All four weights are positive and sum to one,
+// so the reconstruction is C2-continuous without Catmull-Rom overshoot around
+// mountain crests or coastlines.
+vec4 cubic_bspline_weights(float t) {
+	float t2 = t * t;
+	float t3 = t2 * t;
+	return vec4(
+		(1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+		(4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+		(1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+		t3 / 6.0);
+}
+
+// Exact bicubic B-spline reconstruction using four hardware-bilinear texture
+// samples instead of sixteen point samples. Pairing adjacent positive B-spline
+// weights lets one filtered fetch represent each 2x2 tap group.
+float macro_bicubic_mip(vec3 coord, int mip) {
+	ivec3 size3 = textureSize(u_macro_elevation, mip);
+	vec2 size2 = vec2(size3.xy);
+	vec2 p = coord.xy * size2 - vec2(0.5);
+	vec2 base = floor(p);
+	vec2 f = fract(p);
+
+	vec4 wx = cubic_bspline_weights(f.x);
+	vec4 wy = cubic_bspline_weights(f.y);
+	float gx0 = wx.x + wx.y;
+	float gx1 = wx.z + wx.w;
+	float gy0 = wy.x + wy.y;
+	float gy1 = wy.z + wy.w;
+
+	float x0 = base.x - 1.0 + wx.y / max(gx0, 1e-9);
+	float x1 = base.x + 1.0 + wx.w / max(gx1, 1e-9);
+	float y0 = base.y - 1.0 + wy.y / max(gy0, 1e-9);
+	float y1 = base.y + 1.0 + wy.w / max(gy1, 1e-9);
+
+	vec2 uv00 = (vec2(x0, y0) + vec2(0.5)) / size2;
+	vec2 uv10 = (vec2(x1, y0) + vec2(0.5)) / size2;
+	vec2 uv01 = (vec2(x0, y1) + vec2(0.5)) / size2;
+	vec2 uv11 = (vec2(x1, y1) + vec2(0.5)) / size2;
+	float fmip = float(mip);
+
+	float s00 = textureLod(u_macro_elevation, vec3(uv00, coord.z), fmip).r;
+	float s10 = textureLod(u_macro_elevation, vec3(uv10, coord.z), fmip).r;
+	float s01 = textureLod(u_macro_elevation, vec3(uv01, coord.z), fmip).r;
+	float s11 = textureLod(u_macro_elevation, vec3(uv11, coord.z), fmip).r;
+
+	float row0 = mix(s00, s10, gx1);
+	float row1 = mix(s01, s11, gx1);
+	return mix(row0, row1, gy1);
+}
+
+// Fractional clipmap filtering remains smooth too: reconstruct both adjacent
+// macro mips cubically, then blend them. Near levels normally use mip 0 and cost
+// four macro fetches; only coarse levels pay the eight-fetch trilinear path.
+float macro_cubic_trilinear(vec3 coord, float lod) {
+	int mip0 = clamp(int(floor(lod)), 0, MACRO_MAX_MIP);
+	int mip1 = min(mip0 + 1, MACRO_MAX_MIP);
+	float t = fract(lod);
+	float h0 = macro_bicubic_mip(coord, mip0);
+	if (mip0 == mip1 || t <= 0.001) {
+		return h0;
+	}
+	float h1 = macro_bicubic_mip(coord, mip1);
+	return mix(h0, h1, smootherstep01(t));
+}
+
 float macro_height(vec3 d, int level) {
 	if (u_macro_ready < 0.5 || u_macro_face_res <= 0.5) {
 		return 0.0;
 	}
 	float lod = macro_lod_for_spacing(ring_spacing(level));
-	return textureLod(u_macro_elevation, macro_array_coord(d), lod).r;
+	return macro_cubic_trilinear(macro_array_coord(d), lod);
 }
 
 uint terrain_hash(ivec3 p, uint seed) {
