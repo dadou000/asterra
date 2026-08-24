@@ -40,20 +40,16 @@ float ocean_dispersion(float k, float depth) {
 }
 
 float ocean_shoal_gain(float depth, float wavelength) {
-	// Cheap conservation-of-energy approximation: long-wave amplitude rises as
-	// group velocity falls, but the breaker limit below always wins near shore.
 	float q = clamp(depth / max(wavelength * 0.20, 0.1), 0.0, 1.0);
 	return mix(1.42, 1.0, smoothstep(0.08, 0.75, q));
 }
 
-void ocean_add_wave(vec3 p, vec3 up, vec3 dir, float signed_shore_distance,
-		float depth, float spacing, float wavelength, float base_amp,
-		float steepness, float time_s, float phase_offset,
+void ocean_add_wave(vec3 up, vec3 dir, float offshore_phase_coord,
+		float signed_shore_distance, float depth, float spacing, float wavelength,
+		float base_amp, float steepness, float time_s, float phase_offset,
 		inout OceanWaveSample out_wave) {
 	float lod_w = ocean_wave_band_weight(wavelength, spacing);
-	if (lod_w <= 0.001 || depth <= 0.01) {
-		return;
-	}
+	if (lod_w <= 0.001 || depth <= 0.01) return;
 
 	float k = TAU / wavelength;
 	float omega = ocean_dispersion(k, depth);
@@ -63,12 +59,12 @@ void ocean_add_wave(vec3 p, vec3 up, vec3 dir, float signed_shore_distance,
 	amp = min(amp, breaker_amp);
 
 	vec3 travel = ocean_safe_tangent(up, dir);
-	// Near shore use a signed distance coordinate measured normal to the coast.
-	// Offshore, dot(p, travel) retains coherent swell over the open sea.
+	// The offshore coordinate is intentionally supplied from a fixed planet-space
+	// phase axis. Using dot(radial_position, local_tangent) would be identically
+	// ~zero on a sphere and make every offshore vertex rise/fall in unison.
 	float shore_blend = 1.0 - smoothstep(18.0, 150.0, depth);
-	float offshore_phase = dot(p, travel) * k;
-	float shore_phase = signed_shore_distance * k;
-	float phase = mix(offshore_phase, shore_phase, shore_blend) - omega * time_s + phase_offset;
+	float phase_coord = mix(offshore_phase_coord, signed_shore_distance, shore_blend);
+	float phase = phase_coord * k - omega * time_s + phase_offset;
 
 	float s = sin(phase);
 	float c = cos(phase);
