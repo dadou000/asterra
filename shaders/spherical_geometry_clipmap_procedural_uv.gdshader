@@ -1,16 +1,16 @@
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
+#include "res://shaders/terrain_aerial_gpu.gdshaderinc"
 
 // Robust procedural terrain shader. Logical clipmap coordinates come from UV,
-// not VERTEX_ID, so compact sector meshes cannot scramble the grid. The macro
-// field is reconstructed with a cubic B-spline in the vertex shader instead of
-// hardware bilinear interpolation; this preserves smooth curvature between the
-// low-frequency samples instead of turning every macro texel into a planar patch.
+// not VERTEX_ID, so compact sector meshes cannot scramble the grid. Geometry,
+// detail displacement, atmospheric perspective and terrain lighting all remain
+// GPU-side; no terrain readback or CPU-generated visual mesh data is required.
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
@@ -33,6 +33,8 @@ uniform float u_debug_side_cut = 0.0;
 varying vec3 v_planet;
 varying vec3 v_render;
 varying vec3 v_smooth_normal;
+varying vec3 v_atmo_t;
+varying vec3 v_atmo_l;
 varying float v_valid;
 varying float v_cap_valid;
 varying float v_level;
@@ -48,11 +50,13 @@ const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
 const int MACRO_MAX_MIP = 5;
 
-// Normals deliberately use a broader footprint than the geometry. The height
-// field stays fully detailed, but lighting no longer follows individual clipmap
-// triangle planes as the lattice snaps underneath a moving camera.
+// Macro normals use a stable, broad footprint. Fragment derivatives then add
+// the visible displaced geometry back near the camera without re-evaluating the
+// expensive procedural height spectrum two more times per vertex.
 const float NORMAL_SAMPLE_SPACING_MULT = 3.0;
 const float NORMAL_SAMPLE_MIN_M = 4.0;
+const float DETAIL_NORMAL_FULL_LEVEL = 4.0;
+const float DETAIL_NORMAL_FADE_LEVEL = 8.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -281,8 +285,6 @@ vec3 geodesic_offset(vec3 d, vec3 tangent, float distance_m) {
 }
 
 vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
-	// This basis depends only on the planet-space direction, not the clipmap
-	// anchor. Reanchoring therefore cannot rotate the normal sampling stencil.
 	vec3 reference_axis = abs(d.y) < 0.95
 		? vec3(0.0, 1.0, 0.0)
 		: vec3(1.0, 0.0, 0.0);
@@ -330,10 +332,6 @@ void vertex() {
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
 
-	// Cloud shadowing is evaluated on the geometry lattice and interpolated across
-	// triangles. The density field is kilometre-scale, while even coarse visible
-	// rings have far more spatial resolution than the shadow needs. This avoids a
-	// multi-sample 3D raymarch in every 4K screen pixel.
 	vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
 	float planet_vis = planet_direct_sun_visibility(p, sun_dir, u_planet_radius);
 	v_direct_transmittance = planet_vis;
@@ -341,6 +339,13 @@ void vertex() {
 		v_direct_transmittance *= cloud_shadow_transmittance(
 			p, sun_dir, u_planet_radius);
 	}
+
+	// Camera transform is in floating-origin render coordinates. Add the current
+	// origin to recover planet space before integrating the atmosphere.
+	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
+	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius,
+		v_atmo_t, v_atmo_l);
+
 	VERTEX = v_render;
 }
 
@@ -356,10 +361,25 @@ void fragment() {
 	}
 
 	vec3 up = normalize(v_planet);
-	vec3 wn = normalize(v_smooth_normal);
-	if (dot(wn, up) < 0.0) {
-		wn = -wn;
+	vec3 macro_n = normalize(v_smooth_normal);
+	if (dot(macro_n, up) < 0.0) {
+		macro_n = -macro_n;
 	}
+
+	// Recover the normal of the actually displaced GPU geometry from derivatives.
+	// This costs no extra procedural height/noise samples and fixes the old
+	// mismatch where 24-12000 m displacement was lit by a macro-only normal.
+	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
+	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : macro_n;
+	if (dot(geom_n, up) < 0.0) {
+		geom_n = -geom_n;
+	}
+	float detail_normal_w = 1.0 - smoothstep(
+		DETAIL_NORMAL_FULL_LEVEL, DETAIL_NORMAL_FADE_LEVEL, v_level);
+	// Keep some stable macro contribution even in L0-L4. Exact triangle normals
+	// alone are too faceted when FSR2 is resolving sub-pixel terrain triangles.
+	detail_normal_w *= 0.78;
+	vec3 wn = normalize(mix(macro_n, geom_n, detail_normal_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	if (u_debug_side_cut > 0.5) {
@@ -371,10 +391,11 @@ void fragment() {
 		SPECULAR = 0.0;
 	} else {
 		float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
-		vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
-		if (v_level <= 8.5) {
-			surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
-		}
+		vec4 fallback_surface = vec4(0.38, 0.38, 0.12, 0.0);
+		// The material clipmap already has its own smooth coarse fallback. Calling
+		// it at every geometry level removes the previous hard L8/L9 material seam.
+		vec4 surf = material_clipmap_surface(v_planet, u_planet_radius, fallback_surface);
+
 		vec3 soil = vec3(0.24, 0.17, 0.105);
 		vec3 grass = vec3(0.17, 0.255, 0.095);
 		vec3 wet = vec3(0.12, 0.145, 0.085);
@@ -386,17 +407,30 @@ void fragment() {
 		albedo = mix(albedo, sand, clamp(surf.b, 0.0, 1.0));
 		albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0));
 		albedo = mix(albedo, rock, smoothstep(0.08, 0.34, slope));
+
 		ALBEDO = albedo;
 		ROUGHNESS = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
 		SPECULAR = 0.22;
+		METALLIC = 0.0;
+
+		// Generic Environment ambient is disabled above. Restore local, physically
+		// directional sky fill so the night side/terminator is no longer washed out.
+		vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
+		vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
+		float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
+		float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
+		EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
 	}
 }
 
 void light() {
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	if (ndotl > 0.0) {
-		float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
-		vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility;
+		float visibility = LIGHT_IS_DIRECTIONAL
+			? clamp(v_direct_transmittance, 0.0, 1.0)
+			: 1.0;
+		// Aerial transmittance belongs on both diffuse and specular direct light.
+		vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
 
 		float ndotv = max(dot(NORMAL, VIEW), 0.001);
 		vec3 h = normalize(LIGHT + VIEW);
