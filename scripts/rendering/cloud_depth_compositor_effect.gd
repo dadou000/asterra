@@ -67,6 +67,11 @@ func _init() -> void:
 	_depth_sampler = _rd.sampler_create(depth_state)
 
 
+func is_ready() -> bool:
+	return _rd != null and _shader.is_valid() and _pipeline.is_valid() \
+		and _linear_repeat_sampler.is_valid() and _depth_sampler.is_valid()
+
+
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_PREDELETE or _rd == null:
 		return
@@ -79,9 +84,9 @@ func _notification(what: int) -> void:
 
 
 func set_cloud_textures(shape_texture: Texture3D, detail_texture: Texture3D) -> void:
-	# Keep RenderingServer RIDs. The NoiseTexture3D resource may populate/reallocate
-	# asynchronously; resolving to the current RD texture inside the render callback
-	# follows that resource without touching the Resource object on the render thread.
+	# Keep RenderingServer RIDs. NoiseTexture3D populates asynchronously; resolving
+	# to its current RD texture inside the render callback follows that resource
+	# without touching the Resource object from the rendering thread.
 	_shape_texture_rs = shape_texture.get_rid() if shape_texture != null else RID()
 	_detail_texture_rs = detail_texture.get_rid() if detail_texture != null else RID()
 
@@ -102,7 +107,7 @@ func set_runtime_state(floating_origin: Vector3, planet_radius: float,
 func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT:
 		return
-	if _rd == null or not _shader.is_valid() or not _pipeline.is_valid():
+	if not is_ready():
 		return
 	if not _shape_texture_rs.is_valid() or not _detail_texture_rs.is_valid():
 		return
@@ -133,8 +138,9 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var camera_planet := cam_transform.origin + floating_origin
 	var camera_q: Quaternion = cam_transform.basis.get_rotation_quaternion()
 	var view_count := buffers.get_view_count()
-	var x_groups := (size.x + 7) / 8
-	var y_groups := (size.y + 7) / 8
+	# Same ceil-to-workgroup calculation used by Godot's compositor examples.
+	var x_groups := (size.x - 1) / 8 + 1
+	var y_groups := (size.y - 1) / 8 + 1
 
 	for view in range(view_count):
 		var color_rid := buffers.get_color_layer(view)
