@@ -10,25 +10,45 @@ const MAGIC: int = 0x4147484D # "AGHM"
 const FORMAT_VERSION: int = 1
 const FACE_COUNT: int = 6
 const IMAGE_FORMAT: Image.Format = Image.FORMAT_RF
+const PACKAGED_ROOT: String = "res://global_heightmaps"
 const CACHE_ROOT: String = "user://global_heightmaps"
+
+
+static func file_name_for(cfg: GenConfig, face_res: int, tex_res: int,
+		variant_key: String = "base") -> String:
+	var safe_variant: String = variant_key if not variant_key.is_empty() else "base"
+	return "%s_%s_v%d_%d_%d.aghm" % [
+		cfg.cache_key(), safe_variant, FORMAT_VERSION, face_res, tex_res]
 
 
 static func path_for(cfg: GenConfig, face_res: int, tex_res: int,
 		variant_key: String = "base") -> String:
-	var safe_variant: String = variant_key if not variant_key.is_empty() else "base"
-	return "%s/%s_%s_v%d_%d_%d.aghm" % [
-		CACHE_ROOT,
-		cfg.cache_key(),
-		safe_variant,
-		FORMAT_VERSION,
-		face_res,
-		tex_res,
-	]
+	return "%s/%s" % [CACHE_ROOT,
+		file_name_for(cfg, face_res, tex_res, variant_key)]
+
+
+static func packaged_path_for(cfg: GenConfig, face_res: int, tex_res: int,
+		variant_key: String = "base") -> String:
+	return "%s/%s" % [PACKAGED_ROOT,
+		file_name_for(cfg, face_res, tex_res, variant_key)]
 
 
 static func load_images(cfg: GenConfig, face_res: int, tex_res: int,
 		variant_key: String = "base") -> Dictionary:
-	var path: String = path_for(cfg, face_res, tex_res, variant_key)
+	# Shipping builds put the compiler product in res://. Development runs fall
+	# back to the writable user cache produced after the first local generation.
+	var candidates: PackedStringArray = [
+		packaged_path_for(cfg, face_res, tex_res, variant_key),
+		path_for(cfg, face_res, tex_res, variant_key),
+	]
+	for path: String in candidates:
+		var loaded: Dictionary = _load_path(path, face_res, tex_res)
+		if not loaded.is_empty():
+			return loaded
+	return {}
+
+
+static func _load_path(path: String, face_res: int, tex_res: int) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -68,6 +88,7 @@ static func load_images(cfg: GenConfig, face_res: int, tex_res: int,
 	return {
 		"images": images,
 		"path": path,
+		"packaged": path.begins_with("res://"),
 		"compressed_bytes": compressed_total,
 		"raw_bytes": raw_total,
 	}
@@ -110,6 +131,7 @@ static func save_images(cfg: GenConfig, face_res: int, tex_res: int,
 	file.flush()
 	return {
 		"path": path,
+		"packaged": false,
 		"compressed_bytes": compressed_total,
 		"raw_bytes": raw_total,
 	}
