@@ -138,6 +138,12 @@ float planet_horizon_cosine(float sample_radius, float planet_radius) {
 	return -sqrt(max(1.0 - ratio * ratio, 0.0));
 }
 
+float planet_solar_clearance(vec3 p, vec3 sun_dir, float planet_radius) {
+	float r = max(length(p), planet_radius + 0.01);
+	vec3 up = p / r;
+	return dot(up, normalize(sun_dir)) - planet_horizon_cosine(r, planet_radius);
+}
+
 float planet_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	vec3 s = normalize(sun_dir);
 	float r = length(p);
@@ -162,6 +168,16 @@ float planet_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	float mu = dot(up, s);
 	const float SOLAR_EDGE = 0.0062;
 	return smoothstep(horizon - SOLAR_EDGE, horizon + SOLAR_EDGE, mu);
+}
+
+// Indirect dusk light is tied to the sample's own curved-planet horizon instead
+// of a fixed dot(up, sun) band. The small negative interval is only a few degrees
+// below the cloud-level horizon; beyond it the cloud is genuinely on the night
+// side and receives only the moonless night floor.
+float cloud_twilight_weight(float solar_clearance) {
+	float rise = smoothstep(-0.035, 0.004, solar_clearance);
+	float fall = 1.0 - smoothstep(0.018, 0.12, solar_clearance);
+	return rise * fall;
 }
 
 float sun_transmittance(vec3 p, vec3 sun_dir, float radius,
@@ -231,16 +247,18 @@ vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
 		if (density > 0.008) {
 			if (first_cloud_distance < 0.0) first_cloud_distance = t;
 			float sample_alpha = 1.0 - exp(-density * CLOUD_EXTINCTION * step_len);
-			vec3 up = normalize(p);
-			float sun_mu = dot(up, sun_dir);
 			float planet_vis = planet_sun_visibility(p, sun_dir, radius);
+			float solar_clearance = planet_solar_clearance(p, sun_dir, radius);
 
-			// Direct stellar light exists only when the cloud sample can actually see
-			// Helion. The previous minimum 16% sun-air term was harmless while the
-			// sphere test worked, but made any occultation error glaring at night.
-			float sun_air = mix(0.04, 1.0, smoothstep(-0.08, 0.32, sun_mu));
+			// All sunrise/sunset response is measured from the cloud sample's true
+			// spherical horizon. A 6 km cloud can therefore remain sunlit slightly
+			// after the ground below it is dark, but cannot light up arbitrarily far
+			// into the night hemisphere.
+			float sun_air = mix(0.025, 1.0,
+				smoothstep(-0.004, 0.28, solar_clearance));
 			vec3 sunset_tint = mix(vec3(1.00, 0.34, 0.10),
-				vec3(1.00, 0.98, 0.94), smoothstep(-0.02, 0.28, sun_mu));
+				vec3(1.00, 0.98, 0.94),
+				smoothstep(0.0, 0.24, solar_clearance));
 			float light_trans = planet_vis > 0.001
 				? sun_transmittance(p, sun_dir, radius, wind, light_steps)
 				: 0.0;
@@ -248,15 +266,10 @@ vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
 			vec3 direct = sunset_tint * sun_irradiance * phase
 				* light_trans * planet_vis * sun_air * mix(0.58, 1.03, powder);
 
-			// Moonless/night cloud illumination must remain orders of magnitude below
-			// daytime skylight. HumanEyeExposure can add many stops after dark, so a
-			// daylight-sized constant here becomes a white deck even with direct sun
-			// correctly blocked by the planet.
-			float day = smoothstep(-0.08, 0.20, sun_mu) * planet_vis;
-			float twilight = smoothstep(-0.24, -0.02, sun_mu)
-				* (1.0 - smoothstep(-0.02, 0.14, sun_mu));
+			float day = smoothstep(-0.002, 0.18, solar_clearance) * planet_vis;
+			float twilight = cloud_twilight_weight(solar_clearance);
 			vec3 ambient = vec3(0.00018, 0.00030, 0.00065);
-			ambient += vec3(0.010, 0.014, 0.026) * twilight;
+			ambient += vec3(0.0045, 0.0065, 0.0120) * twilight;
 			ambient += vec3(0.050, 0.071, 0.102) * day;
 			vec3 multiple = sunset_tint * sun_irradiance
 				* (0.010 + 0.030 * (1.0 - light_trans)) * day;
@@ -283,22 +296,20 @@ vec3 foreground_atmosphere_restore(vec3 camera_pos, vec3 dir, float first_t,
 		vec3 sun_dir, float planet_radius) {
 	if (first_t <= 0.0 || cloud_transmittance > 0.999) return vec3(0.0);
 
-	// Evaluate illumination halfway through the foreground air column. This keeps
-	// night-side haze dark while still allowing a physically plausible twilight
-	// band and a sunlit limb when the camera is above the terminator.
+	// Use the same local-horizon coordinate as the cloud body. This removes the
+	// former fixed twilight belt that could brighten foreground haze far beyond
+	// the true terminator when viewed from orbit.
 	vec3 mid_p = camera_pos + dir * (first_t * 0.5);
-	vec3 local_up = normalize(mid_p);
-	float sun_mu = dot(local_up, sun_dir);
 	float solar_vis = planet_sun_visibility(mid_p, sun_dir, planet_radius);
-	float day = smoothstep(-0.08, 0.20, sun_mu) * solar_vis;
-	float twilight = smoothstep(-0.24, -0.02, sun_mu)
-		* (1.0 - smoothstep(-0.02, 0.14, sun_mu));
+	float solar_clearance = planet_solar_clearance(mid_p, sun_dir, planet_radius);
+	float day = smoothstep(-0.002, 0.18, solar_clearance) * solar_vis;
+	float twilight = cloud_twilight_weight(solar_clearance);
 
 	vec3 camera_up = normalize(camera_pos);
 	float elevation = clamp(dot(dir, camera_up), -0.15, 1.0);
 	vec3 day_haze = mix(vec3(0.30, 0.34, 0.38), vec3(0.19, 0.36, 0.52),
 		smoothstep(-0.08, 0.25, elevation));
-	vec3 dusk_haze = vec3(0.12, 0.045, 0.018);
+	vec3 dusk_haze = vec3(0.035, 0.013, 0.005);
 	vec3 night_haze = vec3(0.00012, 0.00020, 0.00045);
 	vec3 haze_color = night_haze + dusk_haze * twilight + day_haze * day;
 
