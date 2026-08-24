@@ -1,0 +1,183 @@
+shader_type spatial;
+render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
+
+#include "res://shaders/atmosphere.gdshaderinc"
+#include "res://shaders/planet_surface_lookup.gdshaderinc"
+#include "res://shaders/coastline_clipmap.gdshaderinc"
+#include "res://shaders/water_surface.gdshaderinc"
+#include "res://shaders/ocean_waves.gdshaderinc"
+
+uniform vec3 u_origin = vec3(0.0);
+uniform sampler2DArray u_orbit_elevation;
+uniform float u_orbit_face_res = 192.0;
+uniform float u_planet_radius = 1000000.0;
+uniform float u_atmosphere_height = 80000.0;
+uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_center_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_center_up = vec3(0.0, 1.0, 0.0);
+uniform float u_base_spacing = 0.75;
+uniform float u_grid_cells = 128.0;
+uniform float u_visible_cap_angle = 1.5707963;
+uniform float u_orbit_handoff_altitude = 120000.0;
+uniform float u_wave_scale : hint_range(0.0, 3.0) = 1.0;
+uniform vec3 u_deep : source_color = vec3(0.010, 0.042, 0.105);
+uniform vec3 u_shelf : source_color = vec3(0.058, 0.300, 0.360);
+uniform vec3 u_shallow : source_color = vec3(0.130, 0.475, 0.440);
+uniform vec3 u_foam : source_color = vec3(0.88, 0.93, 0.96);
+
+varying vec3 v_planet;
+varying vec3 v_render;
+varying float v_depth;
+varying float v_valid;
+varying float v_breaking;
+varying float v_crest;
+varying float v_level;
+
+const float MAX_PROJECTED_THETA = 1.62;
+
+float ocean_ring_spacing(int level) {
+	return u_base_spacing * exp2(float(level));
+}
+
+vec3 ocean_direction_for_offset(vec2 offset_m, int level) {
+	float arc = length(offset_m);
+	if (arc < 1e-5) return normalize(u_center_dir);
+	if (level <= 8) {
+		return normalize(u_center_dir
+			+ u_center_right * (offset_m.x / u_planet_radius)
+			+ u_center_up * (offset_m.y / u_planet_radius));
+	}
+	float theta = min(arc / max(u_planet_radius, 1.0), min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
+	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
+	return normalize(u_center_dir * cos(theta) + tangent * sin(theta));
+}
+
+vec3 ocean_offset_dir(vec3 d, vec3 tangent, float metres) {
+	float a = metres / max(u_planet_radius, 1.0);
+	return normalize(d * cos(a) + tangent * sin(a));
+}
+
+void ocean_bathymetry(vec3 d, float sample_m, out float ground_h, out vec3 landward,
+		out float signed_shore_distance) {
+	ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
+	vec3 tx = ocean_safe_tangent(d, u_center_right);
+	vec3 ty = ocean_safe_tangent(d, u_center_up);
+	float s = clamp(sample_m, 18.0, 90.0);
+	float hx0 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, tx, -s), u_orbit_face_res, u_planet_radius);
+	float hx1 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, tx,  s), u_orbit_face_res, u_planet_radius);
+	float hy0 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, ty, -s), u_orbit_face_res, u_planet_radius);
+	float hy1 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, ty,  s), u_orbit_face_res, u_planet_radius);
+	vec2 g = vec2(hx1 - hx0, hy1 - hy0) / max(2.0 * s, 1.0);
+	float gm = length(g);
+	landward = gm > 1e-4 ? normalize(tx * g.x + ty * g.y) : tx;
+	// Local signed-distance approximation from the zero-height contour. Clamp it
+	// so broad flat shelves do not generate enormous phase coordinates.
+	signed_shore_distance = clamp(ground_h / max(gm, 0.015), -6000.0, 6000.0);
+}
+
+void vertex() {
+	int grid_verts = int(u_grid_cells + 1.5);
+	int gx = VERTEX_ID % grid_verts;
+	int gy = VERTEX_ID / grid_verts;
+	vec2 cell = vec2(float(gx), float(gy)) - vec2(u_grid_cells * 0.5);
+	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
+	float spacing = ocean_ring_spacing(level);
+	vec2 offset_m = cell * spacing;
+	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
+	vec3 d = ocean_direction_for_offset(offset_m, level);
+
+	float ground_h;
+	vec3 landward;
+	float shore_distance;
+	// Only levels that can visibly resolve surf pay for the four extra bathymetry
+	// taps. Coarse regional rings use the open-ocean direction and one height tap.
+	if (level <= 7) {
+		ocean_bathymetry(d, max(spacing * 2.0, 24.0), ground_h, landward, shore_distance);
+	} else {
+		ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
+		landward = ocean_safe_tangent(d, vec3(0.81, 0.22, 0.54));
+		shore_distance = -max(-ground_h, 0.0) * 8.0;
+	}
+	float depth = max(-ground_h, 0.0);
+
+	vec3 p0 = d * u_planet_radius;
+	vec3 swell_a = ocean_safe_tangent(d, vec3(0.827, 0.201, 0.525));
+	vec3 swell_b = ocean_safe_tangent(d, vec3(-0.436, 0.331, 0.837));
+	float refract = 1.0 - smoothstep(22.0, 150.0, depth);
+	vec3 dir_a = normalize(mix(swell_a, landward, refract));
+	vec3 dir_b = normalize(mix(swell_b, landward, refract * 0.88));
+
+	OceanWaveSample wave = ocean_empty_wave();
+	float t = TIME;
+	ocean_add_wave(p0, d, dir_a, shore_distance, depth, spacing, 96.0, 0.78 * u_wave_scale, 0.62, t, 0.0, wave);
+	ocean_add_wave(p0, d, dir_b, shore_distance, depth, spacing, 42.0, 0.32 * u_wave_scale, 0.55, t, 1.7, wave);
+	ocean_add_wave(p0, d, dir_a, shore_distance, depth, spacing, 18.0, 0.105 * u_wave_scale, 0.48, t, 3.1, wave);
+	ocean_add_wave(p0, d, dir_b, shore_distance, depth, spacing, 8.0, 0.036 * u_wave_scale, 0.42, t, 4.6, wave);
+
+	vec3 displaced = p0 + wave.displacement;
+	v_planet = displaced;
+	v_render = displaced - u_origin;
+	v_depth = depth;
+	v_breaking = wave.breaking;
+	v_crest = wave.crest;
+	v_level = float(level);
+	v_valid = (ground_h < 0.45 && raw_theta <= u_visible_cap_angle) ? 1.0 : 0.0;
+	VERTEX = v_render;
+}
+
+void fragment() {
+	if (v_valid < 0.5) discard;
+	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
+	float camera_alt = length(camera_planet) - u_planet_radius;
+	if (camera_alt >= u_orbit_handoff_altitude) discard;
+
+	vec3 up = normalize(v_planet);
+	vec3 dx = dFdx(v_render);
+	vec3 dy = dFdy(v_render);
+	vec3 wn_raw = cross(dx, dy);
+	vec3 n = length(wn_raw) > 1e-7 ? normalize(wn_raw) : up;
+	if (dot(n, up) < 0.0) n = -n;
+	if (!FRONT_FACING) n = -n;
+
+	float depth = v_depth;
+	vec3 base = water_depth_tint(depth, u_shallow, u_shelf, u_deep);
+	float shorewash = (1.0 - smoothstep(0.15, 3.8, depth)) * smoothstep(0.52, 0.94, v_crest);
+	float foam = clamp(max(v_breaking, shorewash) * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
+	base = mix(base, u_foam, foam * 0.88);
+
+	vec3 sun_dir = normalize(u_sun_dir);
+	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
+	float gust = surface_vnoise(up * u_planet_radius * 0.000032 + vec3(5.0, -17.0, 26.0));
+	float rough = water_roughness_from_wind(water_wind_speed(up), gust);
+	rough = clamp(rough + foam * 0.50, 0.025, 0.72);
+
+	vec3 view_dir = normalize(camera_planet - v_planet);
+	float ndotv = max(dot(n, view_dir), 0.0);
+	float fres = water_fresnel(ndotv);
+	vec3 sky_refl = water_sky_radiance(reflect(-view_dir, n), up, sun_dir);
+
+	vec3 atmo_t;
+	vec3 atmo_l;
+	aerial_perspective(camera_planet, v_planet, atmo_t, atmo_l);
+	ALBEDO = base * (1.0 - fres * 0.85) * atmo_t;
+	EMISSION = (base * skylight + sky_refl * fres * 0.9) * atmo_t + atmo_l;
+	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
+	ROUGHNESS = rough;
+	SPECULAR = 0.5;
+	METALLIC = 0.0;
+	AO = 1.0;
+	AO_LIGHT_AFFECT = 1.0;
+	ALPHA = mix(0.72, 1.0, smoothstep(0.0, 6.0, depth));
+}
+
+void light() {
+	float visibility = 1.0;
+	if (LIGHT_IS_DIRECTIONAL) {
+		visibility = planet_direct_sun_visibility(v_planet, normalize(u_sun_dir), u_planet_radius);
+	}
+	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
+	float spec = water_specular(NORMAL, VIEW, LIGHT, ROUGHNESS);
+	float fres = water_fresnel(max(dot(NORMAL, VIEW), 0.0));
+	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * fres * SPECULAR_AMOUNT;
+}
