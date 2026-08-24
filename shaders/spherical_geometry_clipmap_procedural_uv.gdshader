@@ -394,38 +394,36 @@ void fragment() {
 
 void light() {
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
-	if (ndotl <= 0.0) {
-		return;
-	}
+	if (ndotl > 0.0) {
+		float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
+		vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility;
 
-	float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
-	vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility;
+		float ndotv = max(dot(NORMAL, VIEW), 0.001);
+		vec3 h = normalize(LIGHT + VIEW);
+		float ndoth = max(dot(NORMAL, h), 0.0);
+		float vdoth = max(dot(VIEW, h), 0.0);
+		float rough = clamp(ROUGHNESS, 0.045, 1.0);
 
-	float ndotv = max(dot(NORMAL, VIEW), 0.001);
-	vec3 h = normalize(LIGHT + VIEW);
-	float ndoth = max(dot(NORMAL, h), 0.0);
-	float vdoth = max(dot(VIEW, h), 0.0);
-	float rough = clamp(ROUGHNESS, 0.045, 1.0);
+		float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
+		float fl = pow(1.0 - ndotl, 5.0);
+		float fv = pow(1.0 - ndotv, 5.0);
+		float diffuse_term = (1.0 + (fd90 - 1.0) * fl)
+			* (1.0 + (fd90 - 1.0) * fv);
+		DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
 
-	float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
-	float fl = pow(1.0 - ndotl, 5.0);
-	float fv = pow(1.0 - ndotv, 5.0);
-	float diffuse_term = (1.0 + (fd90 - 1.0) * fl)
-		* (1.0 + (fd90 - 1.0) * fv);
-	DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
-
-	if (u_debug_side_cut <= 0.5) {
-		float alpha = rough * rough;
-		float a2 = alpha * alpha;
-		float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-		float d = a2 / max(PI * denom * denom, 1e-5);
-		float k = (rough + 1.0) * (rough + 1.0) * 0.125;
-		float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
-		float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
-		float f0 = 0.018;
-		float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
-		float spec = d * gv * gl * fresnel
-			/ max(4.0 * ndotv * ndotl, 1e-4);
-		SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
+		if (u_debug_side_cut <= 0.5) {
+			float alpha = rough * rough;
+			float a2 = alpha * alpha;
+			float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
+			float d = a2 / max(PI * denom * denom, 1e-5);
+			float k = (rough + 1.0) * (rough + 1.0) * 0.125;
+			float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
+			float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
+			float f0 = 0.018;
+			float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
+			float spec = d * gv * gl * fresnel
+				/ max(4.0 * ndotv * ndotl, 1e-4);
+			SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
+		}
 	}
 }
