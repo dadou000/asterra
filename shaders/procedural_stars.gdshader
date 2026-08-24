@@ -16,8 +16,6 @@ varying float v_pattern;
 varying float v_phase;
 
 vec3 stellar_colour(float t) {
-	// Restrained black-body impression. Naked-eye stars are substantially less
-	// saturated than long-exposure astrophotography.
 	vec3 warm = vec3(1.00, 0.79, 0.66);
 	vec3 neutral = vec3(1.00, 0.96, 0.91);
 	vec3 cool = vec3(0.78, 0.87, 1.00);
@@ -28,12 +26,8 @@ vec3 stellar_colour(float t) {
 }
 
 float twinkle_pattern(float kind, float t, float phase) {
-	if (kind < 0.5) {
-		return 1.0;
-	}
-	if (kind < 1.5) {
-		return 0.94 + 0.06 * sin(t * 5.4 + phase);
-	}
+	if (kind < 0.5) return 1.0;
+	if (kind < 1.5) return 0.94 + 0.06 * sin(t * 5.4 + phase);
 	if (kind < 2.5) {
 		float a = sin(t * 3.1 + phase);
 		float b = sin(t * 8.7 + phase * 2.17);
@@ -53,9 +47,6 @@ void vertex() {
 	vec3 camera_world = INV_VIEW_MATRIX[3].xyz;
 	vec3 centre_world = (MODEL_MATRIX * vec4(vec3(0.0), 1.0)).xyz;
 	v_star_dir = normalize(centre_world - camera_world);
-
-	// Camera-facing quads. MODEL_MATRIX includes both the per-star angular size
-	// and the parent far-field scale, keeping apparent diameter invariant.
 	float sx = length(MODEL_MATRIX[0].xyz);
 	float sy = length(MODEL_MATRIX[1].xyz);
 	vec3 camera_right = normalize(INV_VIEW_MATRIX[0].xyz);
@@ -64,7 +55,6 @@ void vertex() {
 		+ camera_right * VERTEX.x * sx
 		+ camera_up * VERTEX.y * sy;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(world_vertex, 1.0);
-
 	v_brightness = INSTANCE_CUSTOM.x;
 	v_temperature = INSTANCE_CUSTOM.y;
 	v_pattern = INSTANCE_CUSTOM.z;
@@ -75,9 +65,7 @@ void fragment() {
 	vec2 p = UV * 2.0 - 1.0;
 	float r2 = dot(p, p);
 	float profile = exp(-r2 * 4.8) * (1.0 - smoothstep(0.72, 1.0, r2));
-	if (profile <= 0.001) {
-		discard;
-	}
+	if (profile <= 0.001) discard;
 
 	vec3 up = normalize(u_up);
 	vec3 sun_dir = normalize(u_sun_dir);
@@ -88,9 +76,6 @@ void fragment() {
 		u_camera_height
 	);
 
-	// Stars emerge gradually through nautical/astronomical twilight. Above the
-	// atmosphere they remain present; HDR exposure decides whether the eye can
-	// actually see them beside bright objects.
 	float sun_altitude = dot(up, sun_dir);
 	float night_visibility = 1.0 - smoothstep(-0.20, -0.025, sun_altitude);
 	float bright_star_early = 1.0 - smoothstep(-0.105, -0.012, sun_altitude);
@@ -101,8 +86,6 @@ void fragment() {
 		brightness_rank * 0.28
 	);
 
-	// Bounded air-mass approximation: strong horizon extinction, and stronger
-	// scintillation through the longer turbulent atmospheric path.
 	float elevation = dot(normalize(v_star_dir), up);
 	float above_horizon = smoothstep(-0.012, 0.045, elevation);
 	float air_mass = 1.0 / max(elevation, 0.055);
@@ -112,7 +95,7 @@ void fragment() {
 
 	float kind = floor(v_pattern * 4.0 + 0.5);
 	float speed = mix(0.78, 1.34, fract(v_phase * 13.731));
-	float raw_twinkle = twinkle_pattern(kind, TIME * speed, v_phase * TAU);
+	float raw_twinkle = twinkle_pattern(kind, TIME * speed, v_phase * 6.28318530718);
 	float near_horizon = 1.0 - smoothstep(0.12, 0.82, max(elevation, 0.0));
 	float scintillation = atmosphere_presence * mix(0.18, 1.0, near_horizon);
 	float twinkle = mix(1.0, raw_twinkle, scintillation);
