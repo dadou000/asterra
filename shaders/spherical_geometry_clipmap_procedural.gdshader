@@ -5,11 +5,11 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
 // One low-frequency source for the entire planet. The CPU reconstructs the
-// authoritative macro grid with a seam-safe cubic B-spline, samples that smooth
-// field at 2x face resolution, and this shader linearly interpolates only between
-// those already-smooth samples. Macro cell facets therefore do not become part of
-// the procedural detail composition.
-uniform sampler2DArray u_macro_elevation : filter_linear, repeat_disable;
+// authoritative macro grid with a seam-safe cubic B-spline and samples that C2
+// field into a 2x texture with a wide cross-face gutter. Mipmaps provide the
+// missing low-pass stage: coarse clipmap levels sample progressively smoother
+// macro elevation instead of undersampling the same ~4 km texels.
+uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
 
@@ -27,9 +27,6 @@ uniform float u_sink_scale = 2.0;
 uniform int u_detail_seed = 1337;
 uniform float u_detail_strength = 1.0;
 
-// Inspection mode. The plane through (planet centre, clipmap centre,
-// clipmap-right) removes the +clipmap-up half of the terrain. Looking along the
-// clipmap-up direction exposes a true radial profile of every overlapping ring.
 uniform float u_debug_side_cut = 0.0;
 
 varying vec3 v_planet;
@@ -43,6 +40,8 @@ const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
 const float FINE_MORPH_START_Q = 0.875;
 const float MAX_PROJECTED_THETA = 1.62;
+const float MACRO_FILTER_FOOTPRINT_VERTICES = 2.0;
+const float MACRO_MAX_LOD = 4.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -63,8 +62,6 @@ vec3 direction_for_offset(vec2 offset_m, int level) {
 		return normalize(u_center_dir);
 	}
 
-	// Near and regional rings are small enough that the normalized tangent form
-	// is visually indistinguishable from the exponential map and much cheaper.
 	if (level <= 8) {
 		return normalize(u_center_dir
 			+ u_center_right * (offset_m.x / u_planet_radius)
@@ -77,17 +74,36 @@ vec3 direction_for_offset(vec2 offset_m, int level) {
 	return normalize(u_center_dir * cos(theta) + tangent * sin(theta));
 }
 
-float macro_height(vec3 d) {
+// The macro texture uses a wider gutter than the generic orbit textures. Derive
+// it from the actual texture size so the shader and CPU builder cannot drift out
+// of sync if the gutter changes later.
+vec3 macro_array_coord(vec3 dir) {
+	vec3 fuv = surface_face_uv(dir);
+	ivec3 size3 = textureSize(u_macro_elevation, 0);
+	float texture_res = float(size3.x);
+	float gutter = max((texture_res - u_macro_face_res) * 0.5, 0.0);
+	vec2 uv = (fuv.xy * u_macro_face_res + vec2(gutter)) / texture_res;
+	return vec3(uv, fuv.z);
+}
+
+float macro_lod_for_spacing(float spacing_m) {
+	// Quarter-circumference divided by face resolution is the nominal macro texel
+	// footprint. Once a terrain vertex spacing approaches that footprint, sample a
+	// prefiltered mip. Fractional LOD + linear-mipmap filtering gives a continuous
+	// transition, so a clipmap handoff never changes macro smoothing abruptly.
+	float macro_texel_m = (PI * 0.5 * u_planet_radius) / max(u_macro_face_res, 1.0);
+	float footprint_m = max(spacing_m * MACRO_FILTER_FOOTPRINT_VERTICES, macro_texel_m);
+	return clamp(log2(footprint_m / macro_texel_m), 0.0, MACRO_MAX_LOD);
+}
+
+float macro_height(vec3 d, int level) {
 	if (u_macro_ready < 0.5 || u_macro_face_res <= 0.5) {
 		return 0.0;
 	}
-	vec3 coord = surface_array_coord(d, u_macro_face_res);
-	return texture(u_macro_elevation, coord).r;
+	float lod = macro_lod_for_spacing(ring_spacing(level));
+	return textureLod(u_macro_elevation, macro_array_coord(d), lod).r;
 }
 
-// Integer lattice hash: no texture pages and no transcendental hash. The input is
-// planet-space, so the function is continuous across cube-face boundaries and is
-// deterministic at every visit/reanchor.
 uint terrain_hash(ivec3 p, uint seed) {
 	uint h = uint(p.x) * 0x8da6b343u;
 	h ^= uint(p.y) * 0xd8163841u;
@@ -109,8 +125,6 @@ float lattice_value(ivec3 p, uint seed) {
 float smooth_value_noise(vec3 p, uint seed) {
 	ivec3 i = ivec3(floor(p));
 	vec3 f = fract(p);
-	// Quintic fade is C2: both slope and curvature reach zero at every lattice
-	// boundary. This is important once many terrain bands are composed together.
 	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
 
 	float n000 = lattice_value(i + ivec3(0, 0, 0), seed);
@@ -130,8 +144,6 @@ float smooth_value_noise(vec3 p, uint seed) {
 }
 
 float band_weight(float wavelength_m, float spacing_m) {
-	// C2 spectral fade. A band appears/disappears without a curvature kink as the
-	// clipmap transitions to a coarser spacing.
 	return smootherstep_range(spacing_m * 4.0, spacing_m * 8.0, wavelength_m);
 }
 
@@ -149,8 +161,6 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 	vec3 world_m = d * u_planet_radius;
 	uint seed = uint(max(u_detail_seed, 1));
 
-	// Detail is reduced around the sea-level crossing so the low-resolution macro
-	// shoreline remains stable while still allowing rocky coasts away from zero.
 	float coast_guard = mix(0.38, 1.0,
 		smootherstep_range(45.0, 320.0, abs(macro_h)));
 	float mountain = smootherstep_range(500.0, 2600.0, max(macro_h, 0.0));
@@ -176,7 +186,7 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 }
 
 float terrain_height_for_level(vec3 d, int level) {
-	float macro_h = macro_height(d);
+	float macro_h = macro_height(d, level);
 	return macro_h + procedural_detail(d, level, macro_h);
 }
 
@@ -233,10 +243,6 @@ void fragment() {
 		discard;
 	}
 
-	// A half-plane rather than a narrow strip is deliberate: it leaves a clean
-	// cut edge through the centre while preserving enough triangles to inspect the
-	// overlapping annuli in wireframe. The cut plane rotates with the frozen
-	// clipmap frame, not with the camera.
 	if (u_debug_side_cut > 0.5) {
 		vec3 planet_dir = normalize(v_planet);
 		if (dot(planet_dir, u_center_up) > 0.0) {
@@ -255,8 +261,6 @@ void fragment() {
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	if (u_debug_side_cut > 0.5) {
-		// Automatic LOD colouring makes nested/sunk surfaces distinguishable even
-		// without global wireframe mode.
 		float phase = v_level * 0.13;
 		vec3 lod_color = 0.5 + 0.5 * cos(TAU * (vec3(phase) + vec3(0.0, 0.33, 0.67)));
 		ALBEDO = mix(vec3(0.06), lod_color, 0.92);
