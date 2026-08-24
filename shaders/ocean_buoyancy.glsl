@@ -1,22 +1,22 @@
 #[compute]
 #version 450
 
-// Batched ocean query kernel. One invocation evaluates one buoyancy sample.
-// CPU callers provide planet-space positions and local depth; the GPU returns
-// surface position/normal/velocity so many pontoons/hull probes can share one
-// dispatch instead of repeating wave math in GDScript.
+// Batched ocean query kernel. Rendering and physics use the same finite-depth
+// bands, shoaling, coastal refraction and breaker cap. Bathymetry itself is kept
+// outside this local RenderingDevice: callers pass depth, landward tangent and
+// signed distance to the zero-height coastline for each probe.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct Query {
-    vec4 position_depth; // xyz planet position, w still-water depth
-    vec4 coast_dir_time; // xyz landward tangent (or swell fallback), w time
+    vec4 position_depth;     // xyz planet position, w still-water depth
+    vec4 coast_shore_dist;   // xyz landward tangent, w signed shore distance
 };
 
 struct Result {
-    vec4 height_normal;  // x surface height offset, yzw normal xyz
-    vec4 normal_vx;      // xyz normal, w velocity x
-    vec4 velocity;       // xyz velocity, w breaking
+    vec4 height_normal;      // x surface height offset, yzw normal xyz
+    vec4 normal_vx;          // xyz normal, w velocity x
+    vec4 velocity;           // xyz water velocity, w breaking intensity
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer Queries { Query q[]; };
@@ -25,61 +25,91 @@ layout(set = 0, binding = 2, std430) readonly buffer Params {
     float planet_radius;
     float wave_scale;
     float query_count;
-    float pad0;
+    float time_s;
 } params;
 
-const float PI2 = 6.283185307179586;
+const float TAU_ = 6.283185307179586;
 const float G = 9.81;
+const float BREAKER_GAMMA = 0.78;
 
-vec3 tangent(vec3 up, vec3 d) {
+vec3 safe_tangent(vec3 up, vec3 d) {
     vec3 t = d - up * dot(d, up);
-    float l = length(t);
-    if (l < 1e-5) {
+    float l2 = dot(t, t);
+    if (l2 < 1e-8) {
         vec3 a = abs(up.y) < 0.85 ? vec3(0,1,0) : vec3(1,0,0);
         t = cross(a, up);
-        l = max(length(t), 1e-5);
+        l2 = max(dot(t, t), 1e-8);
     }
-    return t / l;
+    return t * inversesqrt(l2);
 }
 
-void add_wave(vec3 p, vec3 up, vec3 dir, float depth, float wavelength,
-              float base_amp, float phase_off, float time_s,
-              inout float h, inout vec3 grad, inout vec3 vel, inout float breaking) {
-    float k = PI2 / wavelength;
-    float omega = sqrt(max(G * k * tanh(k * max(depth, 0.05)), 1e-5));
-    float shoal = mix(1.42, 1.0, smoothstep(0.08, 0.75, depth / max(wavelength * 0.20, 0.1)));
-    float raw_amp = base_amp * shoal * params.wave_scale;
-    float limit = max(0.015, 0.78 * depth * 0.5);
-    breaking = max(breaking, smoothstep(0.72, 1.08, raw_amp / max(limit, 0.015)) * (1.0 - smoothstep(0.3, 8.0, depth)));
-    float amp = min(raw_amp, limit);
-    vec3 d = tangent(up, dir);
-    float ph = dot(p, d) * k - omega * time_s + phase_off;
-    float s = sin(ph), c = cos(ph);
-    h += amp * s;
-    grad += d * (amp * k * c);
-    vel += up * (-amp * omega * c);
+float dispersion(float k, float depth) {
+    return sqrt(max(G * k * tanh(k * max(depth, 0.05)), 1e-5));
+}
+
+float shoal_gain(float depth, float wavelength) {
+    float qd = clamp(depth / max(wavelength * 0.20, 0.1), 0.0, 1.0);
+    return mix(1.42, 1.0, smoothstep(0.08, 0.75, qd));
+}
+
+void add_wave(vec3 p, vec3 up, vec3 dir, float shore_distance, float depth,
+              float wavelength, float base_amp, float steepness, float phase_off,
+              inout vec3 displacement, inout vec3 grad, inout vec3 vel,
+              inout float breaking) {
+    if (depth <= 0.01) return;
+    float k = TAU_ / wavelength;
+    float omega = dispersion(k, depth);
+    float raw_amp = base_amp * shoal_gain(depth, wavelength) * params.wave_scale;
+    float breaker_amp = max(0.015, BREAKER_GAMMA * depth * 0.5);
+    breaking = max(breaking,
+        smoothstep(0.72, 1.08, raw_amp / max(breaker_amp, 0.015))
+        * (1.0 - smoothstep(0.3, 8.0, depth)));
+    float amp = min(raw_amp, breaker_amp);
+    vec3 travel = safe_tangent(up, dir);
+    float shore_blend = 1.0 - smoothstep(18.0, 150.0, depth);
+    float phase_coord = mix(dot(p, travel), shore_distance, shore_blend);
+    float phase = phase_coord * k - omega * params.time_s + phase_off;
+    float s = sin(phase);
+    float c = cos(phase);
+    float gerstner_q = min(steepness / max(k * max(amp, 0.01), 0.01), 0.95);
+    float horizontal = gerstner_q * amp;
+    displacement += up * (amp * s) + travel * (horizontal * c);
+    grad += travel * (amp * k * c);
+    vel += up * (-amp * omega * c) + travel * (horizontal * omega * s);
 }
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (float(i) >= params.query_count) return;
+
     vec3 p = q[i].position_depth.xyz;
     float depth = max(q[i].position_depth.w, 0.0);
     vec3 up = normalize(p);
-    vec3 dir = tangent(up, q[i].coast_dir_time.xyz);
-    float time_s = q[i].coast_dir_time.w;
+    vec3 landward = safe_tangent(up, q[i].coast_shore_dist.xyz);
+    float shore_distance = q[i].coast_shore_dist.w;
 
-    float h = 0.0;
+    vec3 swell_a = safe_tangent(up, vec3(0.827, 0.201, 0.525));
+    vec3 swell_b = safe_tangent(up, vec3(-0.436, 0.331, 0.837));
+    float refract = 1.0 - smoothstep(22.0, 150.0, depth);
+    vec3 dir_a = normalize(mix(swell_a, landward, refract));
+    vec3 dir_b = normalize(mix(swell_b, landward, refract * 0.88));
+
+    vec3 displacement = vec3(0.0);
     vec3 grad = vec3(0.0);
     vec3 vel = vec3(0.0);
     float breaking = 0.0;
-    add_wave(p, up, dir, depth, 96.0, 0.78, 0.0, time_s, h, grad, vel, breaking);
-    add_wave(p, up, tangent(up, vec3(-0.436, 0.331, 0.837)), depth, 42.0, 0.32, 1.7, time_s, h, grad, vel, breaking);
-    add_wave(p, up, dir, depth, 18.0, 0.105, 3.1, time_s, h, grad, vel, breaking);
-    add_wave(p, up, tangent(up, vec3(-0.703, -0.264, 0.660)), depth, 8.0, 0.036, 4.6, time_s, h, grad, vel, breaking);
+    add_wave(p, up, dir_a, shore_distance, depth, 96.0, 0.78, 0.62, 0.0,
+        displacement, grad, vel, breaking);
+    add_wave(p, up, dir_b, shore_distance, depth, 42.0, 0.32, 0.55, 1.7,
+        displacement, grad, vel, breaking);
+    add_wave(p, up, dir_a, shore_distance, depth, 18.0, 0.105, 0.48, 3.1,
+        displacement, grad, vel, breaking);
+    add_wave(p, up, dir_b, shore_distance, depth, 8.0, 0.036, 0.42, 4.6,
+        displacement, grad, vel, breaking);
 
     vec3 normal = normalize(up - grad);
-    r[i].height_normal = vec4(h, normal.x, normal.y, normal.z);
+    float height = dot(displacement, up);
+    r[i].height_normal = vec4(height, normal.x, normal.y, normal.z);
     r[i].normal_vx = vec4(normal, vel.x);
     r[i].velocity = vec4(vel, breaking);
 }
