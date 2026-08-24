@@ -35,7 +35,7 @@ func _draw() -> void:
 	var bins_value: Variant = _snapshot.get("bins")
 	if not (bins_value is PackedInt32Array):
 		return
-	var bins := bins_value as PackedInt32Array
+	var bins := PackedInt32Array(bins_value)
 	if bins.is_empty():
 		return
 
