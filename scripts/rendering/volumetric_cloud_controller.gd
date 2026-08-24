@@ -290,7 +290,8 @@ func _sync_depth_effect() -> void:
 		Frames.helion_dir,
 		GraphicsQuality.solar_irradiance(),
 		_wind_offset,
-		_compositor_steps(_quality))
+		_compositor_steps(_quality),
+		Frames.helion_angular_radius_rad())
 
 
 func _process(delta: float) -> void:
