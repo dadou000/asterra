@@ -35,9 +35,10 @@ func sample_pristine(d: Vector3, level: int) -> float:
 		return 0.0
 	var used_level: int = clampi(level, 0, MAX_LEVEL)
 	var spacing: float = spacing_for_level(used_level)
-	var macro_h: float = Planet.macro_height(d)
+	var raw_macro_h: float = Planet.macro_height(d)
+	var base_h: float = raw_macro_h + Planet.coast_profile_offset(d, raw_macro_h)
 	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
-	return macro_h + _procedural_detail(d, spacing, macro_h, maxi(detail_seed, 1))
+	return base_h + _procedural_detail(d, spacing, base_h, maxi(detail_seed, 1))
 
 
 func sample_pristine_nonblocking(d: Vector3, level: int) -> float:
