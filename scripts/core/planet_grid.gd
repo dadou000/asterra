@@ -97,7 +97,7 @@ func _build() -> void:
 
 ## Bilinearly sampled field value at an arbitrary direction. Handles face borders
 ## by clamping inside the face and blending with the geometric neighbour, which is
-## continuous to within a fraction of a cell -- enough for macro fields.
+## continuous to within a fraction of a cell -- enough for ordinary macro fields.
 func sample_bilinear(field: PackedFloat32Array, d: Vector3) -> float:
 	var fuv := CubeSphere.dir_to_face_uv(d)
 	var face: int = fuv[0]
@@ -112,6 +112,46 @@ func sample_bilinear(field: PackedFloat32Array, d: Vector3) -> float:
 	var v01 := _safe(field, face, i0, j0 + 1)
 	var v11 := _safe(field, face, i0 + 1, j0 + 1)
 	return lerpf(lerpf(v00, v10, tx), lerpf(v01, v11, tx), ty)
+
+## C2-continuous cubic B-spline reconstruction for terrain elevation.
+##
+## Bilinear interpolation is only C0: height is continuous, but slope changes at
+## every ~8 km macro-cell boundary. Once sub-grid noise is composed on top, those
+## derivative breaks read as broad square facets. A tensor-product cubic B-spline
+## uses the surrounding 4x4 samples and has continuous first and second
+## derivatives, while its positive weights avoid Catmull-Rom overshoot around
+## coastlines and sharp mountain values.
+##
+## `_safe()` reprojects taps crossing a cube edge, so the same filter remains
+## seam-safe on all six faces.
+func sample_cubic_bspline(field: PackedFloat32Array, d: Vector3) -> float:
+	var fuv := CubeSphere.dir_to_face_uv(d)
+	var face: int = fuv[0]
+	var fx: float = (fuv[1] * 0.5 + 0.5) * res - 0.5
+	var fy: float = (fuv[2] * 0.5 + 0.5) * res - 0.5
+	var i0: int = int(floor(fx))
+	var j0: int = int(floor(fy))
+	var tx: float = fx - float(i0)
+	var ty: float = fy - float(j0)
+	var wx := _bspline_weights(tx)
+	var wy := _bspline_weights(ty)
+	var value := 0.0
+	for ky in 4:
+		var row := 0.0
+		var sy: int = j0 + ky - 1
+		for kx in 4:
+			row += _safe(field, face, i0 + kx - 1, sy) * wx[kx]
+		value += row * wy[ky]
+	return value
+
+static func _bspline_weights(t: float) -> Vector4:
+	var t2: float = t * t
+	var t3: float = t2 * t
+	return Vector4(
+		(1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+		(4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+		(1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+		t3 / 6.0)
 
 func _safe(field: PackedFloat32Array, face: int, i: int, j: int) -> float:
 	if i >= 0 and i < res and j >= 0 and j < res:
