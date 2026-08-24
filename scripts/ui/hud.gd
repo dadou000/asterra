@@ -135,37 +135,38 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 		lines.append("[color=#666]AIM  no ground in range[/color]")
 	lines.append("[color=#fd9]CARRY[/color] %.2f m³ · %s" % [carry.total_volume(), carry.describe()])
 	lines.append("[color=#fd9]BRUSH[/color] %.1f m" % brush)
+
 	var st := terrain.stats()
 	lines.append("[color=#666]chunks %d  nodes %d  queued %d  in_flight %d  culled %d  deltas %d tiles  rebases %d[/color]" % [
 		st["chunks"], st["nodes"], st["queued"], st["in_flight"], st["culled"],
 		Deltas.edited_tile_count(), Frames.rebase_count()])
-	var hs := GroundHeightStore.stats()
-	var height_total: int = int(hs["in_flight"])
-	var height_bake: int = int(hs.get("bake_in_flight", 0))
-	var height_io: int = maxi(height_total - height_bake, 0)
-	lines.append("[color=#666]height cache RAM %d  memhit %d  disk %d  baked %d  queued %d  io %d  bake %d  dropped %d[/color]" % [
-		hs["memory_tiles"], hs["memory_hits"], hs["disk_hits"], hs["tiles_built"],
-		hs["queued"], height_io, height_bake, hs["dropped"]])
+
+	var hs: Dictionary = GroundHeightStore.stats()
+	var gh: Dictionary = {}
+	if Planet.has_method("global_height_stats"):
+		gh = Planet.global_height_stats()
+	if not gh.is_empty():
+		var cache_state: String = "HIT" if bool(gh.get("cache_hit", false)) else "BUILT"
+		lines.append("[color=#666]global height %d²×6  %s  %.1f MB zstd / %.1f MB raw  init %d ms  streaming OFF[/color]" % [
+			int(gh.get("face_res", 0)), cache_state,
+			float(gh.get("compressed_bytes", 0)) / (1024.0 * 1024.0),
+			float(gh.get("raw_bytes", 0)) / (1024.0 * 1024.0),
+			int(gh.get("load_or_build_ms", 0))])
+	lines.append("[color=#666]CPU terrain I/O OFF  resident queries %d  collision detail procedural[/color]" % [
+		int(hs.get("samples", 0))])
+
 	if GroundGeometryClipmap.has_method("gpu_stream_stats"):
 		var gs: Dictionary = GroundGeometryClipmap.gpu_stream_stats()
-		lines.append("[color=#666]height GPU pages %d/%d  uploads %d  reupload %d  evict %d  tablefail %d  coverage %s[/color]" % [
-			int(gs.get("page_resident", 0)), int(gs.get("page_capacity", 0)),
-			int(gs.get("page_uploads", 0)), int(gs.get("page_reuploads", 0)),
-			int(gs.get("page_evictions", 0)), int(gs.get("table_failures", 0)),
-			"OK" if bool(gs.get("coverage_ready", false)) else "WAIT"])
 		if bool(gs.get("spherical", false)):
 			lines.append("[color=#666]spherical L%d/%d  cap %.1f km  grid %d×%d  sectors %d/%d[/color]" % [
 				int(gs.get("active_levels", 0)), int(gs.get("max_level", 0)) + 1,
 				float(gs.get("visible_cap_km", 0.0)), int(gs.get("grid_cells", 0)),
 				int(gs.get("grid_cells", 0)), int(gs.get("visible_sectors", 0)),
 				int(gs.get("sector_count", 0))])
-		lines.append("[color=#666]GPU upload %.1fk texels  batches %d  table cell %d  full rebuild %d  tomb %d[/color]" % [
-			float(gs.get("page_texels", 0)) / 1000.0, int(gs.get("draw_batches", 0)),
-			int(gs.get("table_updates", 0)), int(gs.get("table_rebuilds", 0)),
-			int(gs.get("table_tombstones", 0))])
-	var ps := GroundTerrainPrefetcher.stats()
-	lines.append("[color=#666]terrain prefetch %.0f km/h  lookahead %.0f m[/color]" % [
-		float(ps["speed_mps"]) * 3.6, float(ps["lookahead_m"])])
+		lines.append("[color=#666]GPU terrain global %d²×6  batches %d  procedural detail ON  visual pages OFF[/color]" % [
+			int(gs.get("global_face_res", gh.get("face_res", 0))),
+			int(gs.get("draw_batches", 0))])
+
 	lines.append("[color=#666]horizon %.1f°  %.0f km[/color]" % [st["horizon_deg"], st["horizon_km"]])
 	lines.append("[color=#666]fps %d[/color]" % Engine.get_frames_per_second())
 	info.text = String("\n").join(lines)
