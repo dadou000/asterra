@@ -15,10 +15,28 @@ const BRIGHTEST_MAGNITUDE := -1.5
 const NAKED_EYE_LIMIT_MAGNITUDE := 6.5
 const MIN_STELLAR_TEMPERATURE_K := 2400.0
 const MAX_STELLAR_TEMPERATURE_K := 18000.0
+const REFERENCE_CATALOGUE_COUNT := 9000
+
+# Approximate all-sky cumulative naked-eye counts. These knots are intentionally
+# used as catalogue ranks rather than as an artistic brightness distribution.
+const MAGNITUDE_KNOTS := PackedFloat32Array([
+	-1.5, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.5
+])
+const CUMULATIVE_STAR_COUNTS := PackedFloat32Array([
+	1.0, 2.0, 4.0, 15.0, 48.0, 171.0, 513.0, 1602.0, 4800.0, 9000.0
+])
 
 var observer: AsterraPlayer
 var star_mesh: MultiMeshInstance3D
 var star_material: ShaderMaterial
+
+# Debug overrides. Defaults are the calibrated rendering path. They are stored on
+# the manager so controls can be changed before the MultiMesh material is built.
+var star_radiance_scale := 1.0
+var magnitude_flux_exponent := 1.0
+var seeing_strength := 1.0
+var colour_strength := 1.0
+var chromatic_scintillation_strength := 1.0
 
 
 func configure(p_observer: AsterraPlayer) -> void:
@@ -56,15 +74,15 @@ func _try_bind_observer() -> void:
 
 
 func _star_count() -> int:
-	# One draw call on every preset; only catalogue density changes. Lower tiers
-	# remove stars rather than changing the radiance of the stars that remain.
+	# Quality tiers are magnitude-limited catalogues: lower presets discard only
+	# the faint tail. The bright stars and their fluxes are identical on all tiers.
 	match GraphicsQuality.sanitize(AppSettings.graphics_quality):
 		GraphicsQuality.Preset.PERFORMANCE:
 			return 3500
 		GraphicsQuality.Preset.BALANCED:
 			return 5000
 		GraphicsQuality.Preset.ULTRA:
-			return 10000
+			return REFERENCE_CATALOGUE_COUNT
 		_:
 			return 7000
 
@@ -81,6 +99,7 @@ func _build_stars() -> void:
 	star_material = ShaderMaterial.new()
 	star_material.shader = load("res://shaders/procedural_stars.gdshader")
 	quad.material = star_material
+	_apply_debug_parameters()
 
 	var star_count := _star_count()
 	var multimesh := MultiMesh.new()
@@ -95,7 +114,10 @@ func _build_stars() -> void:
 
 	for i in star_count:
 		var direction := _random_unit_vector(rng)
-		var magnitude := _sample_apparent_magnitude(rng)
+		# The catalogue is ordered brightest to faintest. A sub-rank jitter avoids
+		# visibly quantized magnitude bands while preserving cumulative star counts.
+		var catalogue_rank := clampf(float(i) + rng.randf_range(0.35, 1.0), 1.0, float(REFERENCE_CATALOGUE_COUNT))
+		var magnitude := _magnitude_from_catalogue_rank(catalogue_rank)
 		var magnitude_norm := inverse_lerp(
 			BRIGHTEST_MAGNITUDE,
 			NAKED_EYE_LIMIT_MAGNITUDE,
@@ -112,8 +134,8 @@ func _build_stars() -> void:
 			temperature_k
 		)
 
-		# These are not literal periodic blink modes. They select different stochastic
-		# turbulence spectra. All are zero-mean around the star's fixed radiance.
+		# These are stochastic atmospheric turbulence spectra, not literal periodic
+		# blinking animations. All are approximately zero-mean around fixed radiance.
 		var scintillation_pattern := _sample_scintillation_pattern(rng)
 		var phase := rng.randf()
 
@@ -137,15 +159,18 @@ func _build_stars() -> void:
 	add_child(star_mesh)
 
 
-func _sample_apparent_magnitude(rng: RandomNumberGenerator) -> float:
-	# Approximate naked-eye cumulative star counts with log N(<m) proportional to
-	# 10^(0.6m). This naturally gives many faint stars and very few bright ones.
-	# Crucially, it generates a physical magnitude; no later stage brightens stars
-	# according to time of day or desired appearance.
-	var bright_count := pow(10.0, 0.6 * BRIGHTEST_MAGNITUDE)
-	var faint_count := pow(10.0, 0.6 * NAKED_EYE_LIMIT_MAGNITUDE)
-	var cumulative := lerpf(bright_count, faint_count, rng.randf())
-	return log(cumulative) / (0.6 * log(10.0))
+func _magnitude_from_catalogue_rank(rank: float) -> float:
+	var safe_rank := clampf(rank, CUMULATIVE_STAR_COUNTS[0], CUMULATIVE_STAR_COUNTS[-1])
+	for i in range(1, MAGNITUDE_KNOTS.size()):
+		var c1 := CUMULATIVE_STAR_COUNTS[i]
+		if safe_rank <= c1:
+			var c0 := CUMULATIVE_STAR_COUNTS[i - 1]
+			# Counts are approximately exponential with magnitude, so interpolate in
+			# log-count space rather than linearly in population.
+			var denom := maxf(log(c1) - log(c0), 1e-6)
+			var t := (log(safe_rank) - log(c0)) / denom
+			return lerpf(MAGNITUDE_KNOTS[i - 1], MAGNITUDE_KNOTS[i], clampf(t, 0.0, 1.0))
+	return NAKED_EYE_LIMIT_MAGNITUDE
 
 
 func _sample_stellar_temperature_k(rng: RandomNumberGenerator) -> float:
@@ -154,22 +179,16 @@ func _sample_stellar_temperature_k(rng: RandomNumberGenerator) -> float:
 	# catalogue, while luminous A/B stars are strongly overrepresented.
 	var roll := rng.randf()
 	if roll < 0.06:
-		# B: blue-white.
-		return rng.randf_range(10000.0, 18000.0)
+		return rng.randf_range(10000.0, 18000.0) # B: blue-white
 	if roll < 0.18:
-		# A: white / blue-white.
-		return rng.randf_range(7500.0, 10000.0)
+		return rng.randf_range(7500.0, 10000.0) # A: white / blue-white
 	if roll < 0.36:
-		# F: warm white.
-		return rng.randf_range(6000.0, 7500.0)
+		return rng.randf_range(6000.0, 7500.0) # F: warm white
 	if roll < 0.57:
-		# G: solar white-yellow.
-		return rng.randf_range(5200.0, 6000.0)
+		return rng.randf_range(5200.0, 6000.0) # G: solar white-yellow
 	if roll < 0.88:
-		# K: pale orange.
-		return rng.randf_range(3700.0, 5200.0)
-	# M: orange-red. Kept relatively sparse in the visible catalogue.
-	return rng.randf_range(2400.0, 3700.0)
+		return rng.randf_range(3700.0, 5200.0) # K: pale orange
+	return rng.randf_range(2400.0, 3700.0) # M: orange-red
 
 
 func _sample_scintillation_pattern(rng: RandomNumberGenerator) -> int:
@@ -186,6 +205,50 @@ func _sample_scintillation_pattern(rng: RandomNumberGenerator) -> int:
 	if roll < 0.94:
 		return 3
 	return 4
+
+
+func set_star_radiance_scale(value: float) -> void:
+	star_radiance_scale = clampf(value, 0.25, 2.0)
+	_apply_debug_parameters()
+
+
+func set_magnitude_flux_exponent(value: float) -> void:
+	magnitude_flux_exponent = clampf(value, 0.5, 1.5)
+	_apply_debug_parameters()
+
+
+func set_seeing_strength(value: float) -> void:
+	seeing_strength = clampf(value, 0.0, 2.0)
+	_apply_debug_parameters()
+
+
+func set_colour_strength(value: float) -> void:
+	colour_strength = clampf(value, 0.0, 1.0)
+	_apply_debug_parameters()
+
+
+func set_chromatic_scintillation_strength(value: float) -> void:
+	chromatic_scintillation_strength = clampf(value, 0.0, 2.0)
+	_apply_debug_parameters()
+
+
+func reset_debug_calibration() -> void:
+	star_radiance_scale = 1.0
+	magnitude_flux_exponent = 1.0
+	seeing_strength = 1.0
+	colour_strength = 1.0
+	chromatic_scintillation_strength = 1.0
+	_apply_debug_parameters()
+
+
+func _apply_debug_parameters() -> void:
+	if star_material == null:
+		return
+	star_material.set_shader_parameter("u_star_radiance_scale", star_radiance_scale)
+	star_material.set_shader_parameter("u_magnitude_flux_exponent", magnitude_flux_exponent)
+	star_material.set_shader_parameter("u_seeing_strength", seeing_strength)
+	star_material.set_shader_parameter("u_colour_strength", colour_strength)
+	star_material.set_shader_parameter("u_chromatic_scintillation_strength", chromatic_scintillation_strength)
 
 
 func _random_unit_vector(rng: RandomNumberGenerator) -> Vector3:
