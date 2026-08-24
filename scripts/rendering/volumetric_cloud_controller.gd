@@ -39,6 +39,7 @@ func _ready() -> void:
 	_quality = GraphicsQuality.sanitize(AppSettings.graphics_quality)
 	get_tree().node_added.connect(_on_node_added)
 	call_deferred("_scan_existing_environments")
+	call_deferred("_register_known_surface_receivers")
 
 
 func _on_node_added(node: Node) -> void:
@@ -58,6 +59,19 @@ func _scan_node(node: Node) -> void:
 		_try_bind_environment(node)
 	for child in node.get_children():
 		_scan_node(child)
+
+
+func _register_known_surface_receivers() -> void:
+	# Both are autoload GPU renderers and own one shared ShaderMaterial each. Read
+	# them after all autoload _ready() calls so the safe terrain renderer has already
+	# swapped in its final compact-UV shader.
+	for path: NodePath in [NodePath("/root/GroundGeometryClipmap"), NodePath("/root/OceanSystem")]:
+		var node := get_node_or_null(path)
+		if node == null:
+			continue
+		var value: Variant = node.get("_material")
+		if value is ShaderMaterial:
+			register_shadow_receiver(value as ShaderMaterial)
 
 
 func _try_bind_environment(world_environment: WorldEnvironment) -> void:
@@ -180,6 +194,7 @@ func _sync_shadow_receiver(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_cloud_shadow_extinction", CLOUD_EXTINCTION)
 	material.set_shader_parameter("u_cloud_shadow_steps", _shadow_steps(_quality))
 	material.set_shader_parameter("u_cloud_shadow_wind_offset", _wind_offset)
+	material.set_shader_parameter("u_cloud_shadow_sun_dir", Frames.helion_dir)
 
 
 func _sync_all_shadow_receivers() -> void:
@@ -210,6 +225,7 @@ func _process(delta: float) -> void:
 			_shadow_receivers.remove_at(i)
 			continue
 		material.set_shader_parameter("u_cloud_shadow_wind_offset", _wind_offset)
+		material.set_shader_parameter("u_cloud_shadow_sun_dir", Frames.helion_dir)
 
 
 func _primary_steps(quality: int) -> int:
