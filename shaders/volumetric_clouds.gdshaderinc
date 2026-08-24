@@ -213,7 +213,13 @@ vec4 raymarch_clouds(
 	int requested_steps,
 	int requested_light_steps
 ) {
-	if (u_cloud_enabled < 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
+	// Sky shader built-ins are global in Godot and are valid in helper functions.
+	// Do not raymarch while generating the IBL cubemap: that pass is six-faced and
+	// can update whenever the moving sun or a cloud uniform changes. The visible
+	// background still receives full volumetric clouds at half resolution.
+	if (AT_CUBEMAP_PASS || u_cloud_enabled < 0.5) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
+	}
 	vec2 segment = cloud_layer_segment(origin, dir);
 	if (segment.x > segment.y) return vec4(0.0, 0.0, 0.0, 1.0);
 
