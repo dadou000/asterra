@@ -48,6 +48,22 @@ var _initialized := false
 var _cone_dark_rate := -log(CONE_DARK_BASE) / ADAPTATION_SAMPLE_SECONDS
 var _rod_dark_rate := -log(ROD_DARK_BASE) / ADAPTATION_SAMPLE_SECONDS
 
+# Debug controls are deliberately neutral at their defaults. They are runtime
+# diagnostics only and are not persisted into world or graphics configuration.
+var _debug_auto_exposure_enabled := true
+var _debug_freeze_adaptation := false
+var _debug_rate_scale := 1.0
+var _debug_exposure_compensation_ev := 0.0
+
+# Last-frame diagnostics exposed to the debug menu. The metered value here is the
+# analytic proxy used to choose the asymmetric response rate; the actual rendered
+# luminance distribution is shown separately by ScreenHistogramCompositorEffect.
+var _last_metered_luminance := MIDDLE_GREY
+var _last_highlight_floor := ROD_DARKNESS_LUMINANCE
+var _last_meter_floor := CONE_DARKNESS_LUMINANCE
+var _last_rate := LIGHT_ADAPTATION_RATE
+var _last_direction := "steady"
+
 
 func configure(world_environment: WorldEnvironment) -> void:
 	attributes = CameraAttributesPractical.new()
@@ -73,9 +89,27 @@ func _process(delta: float) -> void:
 
 	var highlight_floor := _highlight_protection_floor()
 	var metered := _metered_luminance_proxy(highlight_floor)
+	_last_highlight_floor = highlight_floor
+	_last_metered_luminance = metered
+
 	if not _initialized:
 		_adapted_luminance = metered
 		_initialized = true
+
+	attributes.auto_exposure_enabled = _debug_auto_exposure_enabled
+	attributes.exposure_multiplier = pow(2.0, _debug_exposure_compensation_ev)
+
+	# Disabling auto exposure or freezing adaptation pauses the physiological state
+	# too. Returning to live mode therefore resumes from the exact diagnostic state
+	# that was visible when it was paused.
+	if not _debug_auto_exposure_enabled:
+		_last_direction = "disabled"
+		return
+	if _debug_freeze_adaptation:
+		attributes.auto_exposure_speed = 0.0
+		_last_rate = 0.0
+		_last_direction = "frozen"
+		return
 
 	# Sustained low light unlocks rod sensitivity only after the cone phase. Any
 	# meaningful return to daylight rapidly bleaches that accumulated adaptation.
@@ -86,7 +120,9 @@ func _process(delta: float) -> void:
 
 	var hysteresis := pow(2.0, DIRECTION_HYSTERESIS_STOPS)
 	var becoming_brighter := metered > _adapted_luminance * hysteresis
-	var rate := LIGHT_ADAPTATION_RATE if becoming_brighter else _dark_adaptation_rate()
+	var becoming_darker := metered < _adapted_luminance / hysteresis
+	var base_rate := LIGHT_ADAPTATION_RATE if becoming_brighter else _dark_adaptation_rate()
+	var rate := base_rate * _debug_rate_scale
 	var weight := 1.0 - exp(-rate * delta)
 	_adapted_luminance = exp(lerpf(
 		log(maxf(_adapted_luminance, ROD_DARKNESS_LUMINANCE)),
@@ -94,12 +130,94 @@ func _process(delta: float) -> void:
 		weight
 	))
 
+	_last_rate = rate
+	if becoming_brighter:
+		_last_direction = "light adapting"
+	elif becoming_darker:
+		_last_direction = "dark adapting"
+	else:
+		_last_direction = "hysteresis hold"
+
 	if not is_equal_approx(attributes.auto_exposure_speed, rate):
 		attributes.auto_exposure_speed = rate
 	var meter_floor := maxf(_current_darkness_floor(), highlight_floor)
+	_last_meter_floor = meter_floor
 	var min_sensitivity := _to_sensitivity(meter_floor)
 	if not is_equal_approx(attributes.auto_exposure_min_sensitivity, min_sensitivity):
 		attributes.auto_exposure_min_sensitivity = min_sensitivity
+
+
+func set_debug_auto_exposure_enabled(value: bool) -> void:
+	_debug_auto_exposure_enabled = value
+	if attributes != null:
+		attributes.auto_exposure_enabled = value
+
+
+func set_debug_freeze_adaptation(value: bool) -> void:
+	_debug_freeze_adaptation = value
+	if attributes != null and value:
+		attributes.auto_exposure_speed = 0.0
+
+
+func set_debug_rate_scale(value: float) -> void:
+	_debug_rate_scale = clampf(value, 0.05, 8.0)
+
+
+func set_debug_exposure_compensation_ev(value: float) -> void:
+	_debug_exposure_compensation_ev = clampf(value, -6.0, 6.0)
+	if attributes != null:
+		attributes.exposure_multiplier = pow(2.0, _debug_exposure_compensation_ev)
+
+
+func reset_debug_controls() -> void:
+	_debug_auto_exposure_enabled = true
+	_debug_freeze_adaptation = false
+	_debug_rate_scale = 1.0
+	_debug_exposure_compensation_ev = 0.0
+	reset_adaptation_state()
+	if attributes != null:
+		attributes.auto_exposure_enabled = true
+		attributes.exposure_multiplier = 1.0
+		attributes.auto_exposure_speed = LIGHT_ADAPTATION_RATE
+
+
+func reset_adaptation_state() -> void:
+	_initialized = false
+	_dark_seconds = 0.0
+	_adapted_luminance = MIDDLE_GREY
+	_last_direction = "reset"
+
+
+func debug_snapshot() -> Dictionary:
+	var stage := "cones"
+	if _dark_seconds >= ROD_ONSET_SECONDS:
+		stage = "rods"
+	elif _last_metered_luminance > NIGHT_RESET_LUMINANCE:
+		stage = "photopic"
+
+	var nominal_ev := log(MIDDLE_GREY / maxf(_adapted_luminance,
+		ROD_DARKNESS_LUMINANCE)) / log(2.0)
+	return {
+		"auto_exposure_enabled": _debug_auto_exposure_enabled,
+		"frozen": _debug_freeze_adaptation,
+		"stage": stage,
+		"direction": _last_direction,
+		"metered_proxy": _last_metered_luminance,
+		"adapted_luminance": _adapted_luminance,
+		"highlight_floor": _last_highlight_floor,
+		"darkness_floor": _current_darkness_floor(),
+		"meter_floor": _last_meter_floor,
+		"dark_seconds": _dark_seconds,
+		"rod_onset_seconds": ROD_ONSET_SECONDS,
+		"adaptation_rate": _last_rate,
+		"rate_scale": _debug_rate_scale,
+		"exposure_compensation_ev": _debug_exposure_compensation_ev,
+		"nominal_adaptation_ev": nominal_ev,
+		"auto_exposure_speed": attributes.auto_exposure_speed if attributes != null else 0.0,
+		"min_sensitivity": attributes.auto_exposure_min_sensitivity if attributes != null else 0.0,
+		"max_sensitivity": attributes.auto_exposure_max_sensitivity if attributes != null else 0.0,
+		"exposure_multiplier": attributes.exposure_multiplier if attributes != null else 1.0,
+	}
 
 
 func _dark_adaptation_rate() -> float:
