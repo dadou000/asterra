@@ -1,5 +1,5 @@
 class_name TerrainDebug
-extends Node3D
+extends CanvasLayer
 ## Debug controller for the current spherical procedural clipmap.
 ##
 ## The old quadtree/tile-axis/UV/forced-depth tools were removed with the CPU
@@ -22,6 +22,7 @@ var _status: Label
 
 
 func _ready() -> void:
+	layer = 19
 	process_priority = 20
 	_status = Label.new()
 	_status.set_anchors_preset(Control.PRESET_TOP_RIGHT)
