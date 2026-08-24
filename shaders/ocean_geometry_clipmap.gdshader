@@ -80,20 +80,28 @@ vec3 ocean_offset_dir(vec3 d, vec3 tangent, float metres) {
 	return normalize(d * cos(a) + tangent * sin(a));
 }
 
-void ocean_bathymetry(vec3 d, float sample_m, out float ground_h, out vec3 landward,
-		out float signed_shore_distance) {
-	ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
+void ocean_bathymetry(vec3 d, float sample_m, out float raw_ground_h, out float smooth_ground_h,
+		out vec3 landward, out float signed_shore_distance, out float coast_confidence) {
+	// Keep the exact centre sample only for the wet/dry shoreline test. Wave
+	// dynamics use a cross-filtered bathymetry so small terrain-detail variations
+	// cannot turn into high-frequency water displacement or direction noise.
+	raw_ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
 	vec3 tx = ocean_safe_tangent(d, u_center_right);
 	vec3 ty = ocean_safe_tangent(d, u_center_up);
-	float s = clamp(sample_m, 18.0, 90.0);
+	float s = clamp(sample_m, 24.0, 110.0);
 	float hx0 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, tx, -s), u_orbit_face_res, u_planet_radius);
 	float hx1 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, tx,  s), u_orbit_face_res, u_planet_radius);
 	float hy0 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, ty, -s), u_orbit_face_res, u_planet_radius);
 	float hy1 = coast_surface_height(u_orbit_elevation, ocean_offset_dir(d, ty,  s), u_orbit_face_res, u_planet_radius);
+
+	// 1-2-1-like cross low pass. It preserves broad shoals and the coastline while
+	// rejecting the fine terrain residual that was visible as blocky streaks.
+	smooth_ground_h = (raw_ground_h * 4.0 + hx0 + hx1 + hy0 + hy1) * 0.125;
 	vec2 g = vec2(hx1 - hx0, hy1 - hy0) / max(2.0 * s, 1.0);
 	float gm = length(g);
-	landward = gm > 1e-4 ? normalize(tx * g.x + ty * g.y) : tx;
-	signed_shore_distance = clamp(ground_h / max(gm, 0.015), -6000.0, 6000.0);
+	coast_confidence = smoothstep(0.025, 0.18, gm);
+	landward = gm > 1e-4 ? normalize(tx * g.x + ty * g.y) : ocean_safe_tangent(d, SWELL_AXIS_A);
+	signed_shore_distance = clamp(smooth_ground_h / max(gm, 0.025), -6000.0, 6000.0);
 }
 
 void vertex() {
@@ -110,26 +118,32 @@ void vertex() {
 	float morph = ocean_fine_morph(cell);
 	float wave_spacing = mix(spacing, spacing * 2.0, morph);
 
+	float raw_ground_h;
 	float ground_h;
 	vec3 landward;
 	float shore_distance;
+	float coast_confidence;
 	if (level <= 7) {
-		ocean_bathymetry(d, max(wave_spacing * 2.0, 24.0), ground_h, landward, shore_distance);
+		ocean_bathymetry(d, max(wave_spacing * 2.5, 32.0), raw_ground_h, ground_h,
+			landward, shore_distance, coast_confidence);
 	} else {
-		ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
-		landward = ocean_safe_tangent(d, vec3(0.81, 0.22, 0.54));
+		raw_ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
+		ground_h = raw_ground_h;
+		landward = ocean_safe_tangent(d, SWELL_AXIS_A);
 		shore_distance = -max(-ground_h, 0.0) * 8.0;
+		coast_confidence = 0.0;
 	}
 	float depth = max(-ground_h, 0.0);
 
 	vec3 p0 = d * u_planet_radius;
 	vec3 swell_a = ocean_safe_tangent(d, SWELL_AXIS_A);
 	vec3 swell_b = ocean_safe_tangent(d, SWELL_AXIS_B);
-	float refract = 1.0 - smoothstep(22.0, 150.0, depth);
+	float shallow_refract = 1.0 - smoothstep(22.0, 150.0, depth);
+	float refract = shallow_refract * coast_confidence;
 	vec3 refracted_a = normalize(mix(swell_a, landward, refract));
 	vec3 refracted_b = normalize(mix(swell_b, landward, refract * 0.88));
-	float diffract_a = ocean_diffraction_weight(d, swell_a, landward, depth);
-	float diffract_b = ocean_diffraction_weight(d, swell_b, landward, depth) * 0.82;
+	float diffract_a = ocean_diffraction_weight(d, swell_a, landward, depth) * coast_confidence;
+	float diffract_b = ocean_diffraction_weight(d, swell_b, landward, depth) * coast_confidence * 0.82;
 	vec3 dir_a = normalize(mix(refracted_a, ocean_diffraction_direction(d, swell_a, landward), diffract_a * 0.52));
 	vec3 dir_b = normalize(mix(refracted_b, ocean_diffraction_direction(d, swell_b, landward), diffract_b * 0.46));
 	float phase_a = dot(p0, normalize(SWELL_AXIS_A));
@@ -153,7 +167,9 @@ void vertex() {
 	v_compression = wave.compression;
 	v_diffraction = max(diffract_a, diffract_b);
 	v_level = float(level);
-	v_valid = (ground_h < 0.45 && raw_theta <= u_visible_cap_angle) ? 1.0 : 0.0;
+	// Exact/raw height owns only the shoreline mask, so smoothing bathymetry never
+	// moves the visible land/water boundary.
+	v_valid = (raw_ground_h < 0.45 && raw_theta <= u_visible_cap_angle) ? 1.0 : 0.0;
 	VERTEX = v_render;
 }
 
@@ -164,17 +180,9 @@ void fragment() {
 	if (camera_alt >= u_orbit_handoff_altitude) discard;
 
 	vec3 up = normalize(v_planet);
-	// Analytic wave slope is smoothly interpolated across triangles, unlike raw
-	// geometric derivatives which reveal the clipmap tessellation. Retain a small
-	// derivative contribution so coastline bending and LOD morphing remain visible.
-	vec3 analytic_n = normalize(up - v_slope);
-	vec3 dx = dFdx(v_render);
-	vec3 dy = dFdy(v_render);
-	vec3 wn_raw = cross(dx, dy);
-	vec3 geometric_n = length(wn_raw) > 1e-7 ? normalize(wn_raw) : up;
-	if (dot(geometric_n, up) < 0.0) geometric_n = -geometric_n;
-	float geometric_mix = 0.10 + 0.10 * smoothstep(0.0, 7.0, v_depth);
-	vec3 n = normalize(mix(analytic_n, geometric_n, geometric_mix));
+	// Use only the analytic Gerstner slope. Mixing triangle derivatives back into
+	// this normal was reintroducing the clipmap grid as visible faceting.
+	vec3 n = normalize(up - v_slope);
 	if (dot(n, up) < 0.0) n = -n;
 
 	float depth = v_depth;
@@ -184,16 +192,17 @@ void fragment() {
 	float whitecap = v_compression * smoothstep(0.54, 0.90, v_crest);
 	float breaker_foam = v_breaking * (0.68 + 0.32 * v_compression);
 	float diffracted_foam = v_diffraction * surf_zone * v_compression * 0.35;
-	float foam_pattern = surface_vnoise(v_planet * 0.018 + vec3(TIME * 0.018, -TIME * 0.011, TIME * 0.007));
-	float foam_detail = mix(0.72, 1.12, foam_pattern);
+	// No terrain value-noise modulation here. Foam now emerges only from the wave
+	// solution (crest compression, breaking, shore wash and diffraction).
 	float foam = max(max(shorewash, whitecap * 0.55), max(breaker_foam, diffracted_foam));
-	foam = clamp(foam * foam_detail * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
+	foam = clamp(foam * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
 	base = mix(base, u_foam, foam * 0.90);
 
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-	float gust = surface_vnoise(up * u_planet_radius * 0.000032 + vec3(5.0, -17.0, 26.0));
-	float rough = water_roughness_from_wind(water_wind_speed(up), gust);
+	// Keep roughness deterministic and broad-scale. Terrain's procedural value
+	// noise is intentionally not sampled by the ocean surface anymore.
+	float rough = water_roughness_from_wind(water_wind_speed(up), 0.5);
 	rough = clamp(rough + foam * 0.50, 0.025, 0.72);
 
 	vec3 view_dir = normalize(camera_planet - v_planet);
