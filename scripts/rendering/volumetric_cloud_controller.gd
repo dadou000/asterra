@@ -1,11 +1,12 @@
 class_name VolumetricCloudController
 extends Node
-## Runtime owner for Asterra's sky cloud volumes and their slowly advected weather
-## frame. The shader performs the actual spherical raymarch.
+## Runtime owner for Asterra's volumetric cloud field.
 ##
-## The same NoiseTexture3D resources are also bound to terrain/water shadow
-## receivers. Visible clouds and their ground shadows therefore sample one physical
-## density field instead of two look-alike procedural patterns that can drift apart.
+## Visible clouds are composited after scene geometry with a resolved-depth-aware
+## CompositorEffect. The atmosphere sky shader remains the fallback path only if
+## the compositor cannot initialize. Terrain/water shadows share the same 3D noise
+## volumes and wind coordinate, so the cloud body, its occlusion and its shadow stay
+## in one physical coordinate system.
 
 const WIND_UPDATE_INTERVAL := 0.10
 const WIND_METRES_PER_SECOND := Vector3(11.0, 0.0, 4.5)
@@ -25,10 +26,12 @@ const CLOUD_EXTINCTION := 0.00105
 var _material: ShaderMaterial
 var _shape_texture: NoiseTexture3D
 var _detail_texture: NoiseTexture3D
+var _depth_effect: CloudDepthCompositorEffect
 var _shadow_receivers: Array[WeakRef] = []
 var _wind_offset := Vector3.ZERO
 var _wind_accumulator := 0.0
 var _world_seed := 0x4153544552524100
+var _planet_radius := 1000000.0
 var _quality := GraphicsQuality.Preset.HIGH
 
 
@@ -36,6 +39,7 @@ func _ready() -> void:
 	var world_resource := load("res://world.tres")
 	if world_resource is GenConfig:
 		_world_seed = world_resource.world_seed
+		_planet_radius = world_resource.planet_radius
 	_quality = GraphicsQuality.sanitize(AppSettings.graphics_quality)
 	get_tree().node_added.connect(_on_node_added)
 	call_deferred("_scan_existing_environments")
@@ -83,19 +87,25 @@ func _try_bind_environment(world_environment: WorldEnvironment) -> void:
 	var material := sky.sky_material as ShaderMaterial
 	if material.shader == null or material.shader.resource_path != ATMOSPHERE_SHADER_PATH:
 		return
-	if material == _material:
-		return
-	configure(material, _world_seed, AppSettings.graphics_quality)
+
+	if material != _material:
+		configure(material, _world_seed, AppSettings.graphics_quality)
+	_install_depth_compositor(world_environment)
 
 
 func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
 	_material = material
 	_world_seed = world_seed
 	_quality = GraphicsQuality.sanitize(quality)
+	if Planet.ready_state and Planet.cfg != null:
+		_planet_radius = Planet.cfg.planet_radius
 	_ensure_noise_volumes()
 	if _material == null:
 		return
 
+	# Keep the sky implementation fully configured as a fallback. Once the depth
+	# compositor is installed successfully, _install_depth_compositor disables this
+	# visible sky cloud pass to prevent double rendering.
 	_material.set_shader_parameter("u_cloud_shape_noise", _shape_texture)
 	_material.set_shader_parameter("u_cloud_detail_noise", _detail_texture)
 	_material.set_shader_parameter("u_cloud_primary_steps", _primary_steps(_quality))
@@ -115,10 +125,39 @@ func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
 	_sync_all_shadow_receivers()
 
 
+func _install_depth_compositor(world_environment: WorldEnvironment) -> void:
+	_ensure_noise_volumes()
+	if _depth_effect == null:
+		_depth_effect = CloudDepthCompositorEffect.new()
+	_depth_effect.set_cloud_textures(_shape_texture, _detail_texture)
+	_sync_depth_effect()
+
+	# If the RenderingDevice shader cannot initialize, leave the old sky cloud pass
+	# enabled. This keeps the project usable on an unsupported renderer instead of
+	# silently deleting clouds.
+	if not _depth_effect.is_ready():
+		if _material != null:
+			_material.set_shader_parameter("u_cloud_enabled", 1.0)
+		return
+
+	var compositor: Compositor = world_environment.compositor
+	if compositor == null:
+		compositor = Compositor.new()
+	var effects: Array[CompositorEffect] = compositor.compositor_effects
+	if not effects.has(_depth_effect):
+		effects.append(_depth_effect)
+		compositor.compositor_effects = effects
+	world_environment.compositor = compositor
+
+	# A Sky shader is always behind scene geometry. Once the depth-aware pass is
+	# active it is the sole visible cloud renderer; the sky keeps only atmosphere,
+	# deep sky and the stellar disc.
+	if _material != null:
+		_material.set_shader_parameter("u_cloud_enabled", 0.0)
+
+
 ## Surface renderers call this once after their final ShaderMaterial has been
-## installed. Registration is deliberately order-independent: GroundGeometryClipmap
-## starts before this autoload in project.godot, while the WorldEnvironment is
-## created later by the game scene.
+## installed. Registration is deliberately order-independent.
 func register_shadow_receiver(material: ShaderMaterial) -> void:
 	if material == null:
 		return
@@ -206,18 +245,39 @@ func _sync_all_shadow_receivers() -> void:
 		_sync_shadow_receiver(material)
 
 
-func _process(delta: float) -> void:
-	if _material == null and _shadow_receivers.is_empty():
+func _sync_depth_effect() -> void:
+	if _depth_effect == null:
 		return
+	if Planet.ready_state and Planet.cfg != null:
+		_planet_radius = Planet.cfg.planet_radius
+	var frame_origin := Frames.origin
+	var origin_v3 := Vector3(float(frame_origin.x), float(frame_origin.y), float(frame_origin.z))
+	_depth_effect.set_runtime_state(
+		origin_v3,
+		_planet_radius,
+		Frames.helion_dir,
+		GraphicsQuality.solar_irradiance(),
+		_wind_offset,
+		_compositor_steps(_quality))
+
+
+func _process(delta: float) -> void:
+	if _material == null and _shadow_receivers.is_empty() and _depth_effect == null:
+		return
+
+	# The depth-aware visible cloud pass can take current wind/camera coordinates
+	# every frame without invalidating a Sky radiance cubemap, so keep it continuous.
 	_wind_offset += WIND_METRES_PER_SECOND * delta
+	_sync_depth_effect()
+
 	_wind_accumulator += delta
 	if _wind_accumulator < WIND_UPDATE_INTERVAL:
 		return
 	_wind_accumulator = fmod(_wind_accumulator, WIND_UPDATE_INTERVAL)
 
-	# Ten updates per second is visually continuous at ~12 m/s (about one metre of
-	# advection per update), while avoiding per-frame sky-radiance invalidation.
-	if _material != null:
+	# The fallback sky and the surface shadows keep their lower-frequency uniform
+	# updates. At ~12 m/s this is only about one metre of displacement per update.
+	if _material != null and (_depth_effect == null or not _depth_effect.is_ready()):
 		_material.set_shader_parameter("u_cloud_wind_offset", _wind_offset)
 	for i in range(_shadow_receivers.size() - 1, -1, -1):
 		var material: ShaderMaterial = _shadow_receivers[i].get_ref() as ShaderMaterial
@@ -250,6 +310,21 @@ func _light_steps(quality: int) -> int:
 			return 6
 		_:
 			return 4
+
+
+func _compositor_steps(quality: int) -> int:
+	# This pass runs at internal render resolution (before FSR upscaling), not the
+	# former half-res sky target, so use a tighter step budget while retaining the
+	# same density field and optical integration.
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 10
+		GraphicsQuality.Preset.BALANCED:
+			return 14
+		GraphicsQuality.Preset.ULTRA:
+			return 24
+		_:
+			return 18
 
 
 func _shadow_steps(quality: int) -> int:
