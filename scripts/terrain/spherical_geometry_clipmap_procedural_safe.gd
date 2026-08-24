@@ -8,8 +8,9 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_procedural.gd"
 ## instead compacts each sector to only the vertices it actually uses and stores
 ## the original logical grid coordinate explicitly in UV.
 ##
-## Every sector remains comfortably below 65k vertices/indices, removing any
-## dependence on large sparse index ranges while preserving angular culling.
+## Every sector remains comfortably below 65k local vertices. The shader therefore
+## has no dependency on a large sparse global index range or on VERTEX_ID meaning
+## exactly the same thing across all backend draw paths.
 
 var _center_sector_batches: Array[MultiMeshInstance3D] = []
 
@@ -143,16 +144,19 @@ func rebuild_static_topology() -> void:
 		if center.multimesh != null:
 			center.multimesh.mesh = _build_compact_sector_mesh(
 				sector, false, _debug_side_cut)
-		var ring: MultiMeshInstance3D = _sector_batches[sector]
-		if ring.multimesh != null:
-			ring.multimesh.mesh = _build_compact_sector_mesh(
+		var ring_batch: MultiMeshInstance3D = _sector_batches[sector]
+		if ring_batch.multimesh != null:
+			ring_batch.multimesh.mesh = _build_compact_sector_mesh(
 				sector, true, _debug_side_cut)
 
 
 static func _build_compact_sector_mesh(sector_index: int, ring: bool,
 		half_cut: bool) -> ArrayMesh:
-	var vertices := PackedVector3Array()
-	var uvs := PackedVector2Array()
+	# Ordinary Arrays are intentional during construction: they are reference
+	# containers, so the helper can append safely. Convert to packed arrays once at
+	# the end, avoiding any PackedArray copy-on-write ambiguity in helper calls.
+	var vertices: Array[Vector3] = []
+	var uvs: Array[Vector2] = []
 	var indices := PackedInt32Array()
 	var remap: Dictionary = {}
 	var outer_sq: float = float(HALF_CELLS * HALF_CELLS)
@@ -194,23 +198,21 @@ static func _build_compact_sector_mesh(sector_index: int, ring: bool,
 		return mesh
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
 	arrays[Mesh.ARRAY_INDEX] = indices
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
 
-static func _compact_vertex(remap: Dictionary, vertices: PackedVector3Array,
-		uvs: PackedVector2Array, gx: int, gy: int) -> int:
+static func _compact_vertex(remap: Dictionary, vertices: Array[Vector3],
+		uvs: Array[Vector2], gx: int, gy: int) -> int:
 	var logical_index: int = gy * GRID_VERTS + gx
 	var existing: Variant = remap.get(logical_index, null)
 	if existing != null:
 		return int(existing)
 	var local_index: int = vertices.size()
 	remap[logical_index] = local_index
-	# Position is only a placeholder; the vertex shader reconstructs the spherical
-	# position. UV carries the original logical coordinate exactly.
 	vertices.append(Vector3.ZERO)
 	uvs.append(Vector2(float(gx), float(gy)))
 	return local_index
