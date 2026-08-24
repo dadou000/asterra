@@ -99,7 +99,6 @@ func _build_stars() -> void:
 
 	star_material = ShaderMaterial.new()
 	star_material.shader = load("res://shaders/procedural_stars.gdshader")
-	quad.material = star_material
 	_apply_debug_parameters()
 
 	var star_count := _star_count()
@@ -154,6 +153,10 @@ func _build_stars() -> void:
 
 	star_mesh = MultiMeshInstance3D.new()
 	star_mesh.multimesh = multimesh
+	# Bind the exact ShaderMaterial updated by the debug setters directly to the
+	# rendered GeometryInstance. This avoids relying on material propagation through
+	# the shared QuadMesh resource and makes live uniform edits deterministic.
+	star_mesh.material_override = star_material
 	star_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	star_mesh.visibility_range_end = 0.0
 	star_mesh.extra_cull_margin = 100000000.0
@@ -218,7 +221,7 @@ func _sample_scintillation_pattern(rng: RandomNumberGenerator) -> int:
 
 
 func set_star_radiance_scale(value: float) -> void:
-	star_radiance_scale = clampf(value, 0.25, 2.0)
+	star_radiance_scale = clampf(value, 0.0, 2.0)
 	_apply_debug_parameters()
 
 
