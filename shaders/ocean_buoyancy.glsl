@@ -14,9 +14,9 @@ struct Query {
 };
 
 struct Result {
-    vec4 surface_height_normal_x; // x height offset, yzw normal xyz packed oddly below
-    vec4 normal_velocity_x;       // xyz normal, w velocity x
-    vec4 velocity;                // xyz velocity, w breaking
+    vec4 height_normal;  // x surface height offset, yzw normal xyz
+    vec4 normal_vx;      // xyz normal, w velocity x
+    vec4 velocity;       // xyz velocity, w breaking
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer Queries { Query q[]; };
@@ -24,7 +24,7 @@ layout(set = 0, binding = 1, std430) writeonly buffer Results { Result r[]; };
 layout(set = 0, binding = 2, std430) readonly buffer Params {
     float planet_radius;
     float wave_scale;
-    uint query_count;
+    float query_count;
     float pad0;
 } params;
 
@@ -62,7 +62,7 @@ void add_wave(vec3 p, vec3 up, vec3 dir, float depth, float wavelength,
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= params.query_count) return;
+    if (float(i) >= params.query_count) return;
     vec3 p = q[i].position_depth.xyz;
     float depth = max(q[i].position_depth.w, 0.0);
     vec3 up = normalize(p);
@@ -79,7 +79,7 @@ void main() {
     add_wave(p, up, tangent(up, vec3(-0.703, -0.264, 0.660)), depth, 8.0, 0.036, 4.6, time_s, h, grad, vel, breaking);
 
     vec3 normal = normalize(up - grad);
-    r[i].surface_height_normal_x = vec4(h, normal.x, normal.y, normal.z);
-    r[i].normal_velocity_x = vec4(normal, vel.x);
+    r[i].height_normal = vec4(h, normal.x, normal.y, normal.z);
+    r[i].normal_vx = vec4(normal, vel.x);
     r[i].velocity = vec4(vel, breaking);
 }
