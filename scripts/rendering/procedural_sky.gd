@@ -17,14 +17,15 @@ const MIN_STELLAR_TEMPERATURE_K := 2400.0
 const MAX_STELLAR_TEMPERATURE_K := 18000.0
 const REFERENCE_CATALOGUE_COUNT := 9000
 
-# Approximate all-sky cumulative naked-eye counts. These knots are intentionally
-# used as catalogue ranks rather than as an artistic brightness distribution.
-const MAGNITUDE_KNOTS := PackedFloat32Array([
+# Approximate all-sky cumulative naked-eye counts. Keep these as literal constant
+# Arrays: PackedFloat32Array(...) is a constructor call and therefore is not a
+# compile-time constant expression in GDScript.
+const MAGNITUDE_KNOTS = [
 	-1.5, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.5
-])
-const CUMULATIVE_STAR_COUNTS := PackedFloat32Array([
+]
+const CUMULATIVE_STAR_COUNTS = [
 	1.0, 2.0, 4.0, 15.0, 48.0, 171.0, 513.0, 1602.0, 4800.0, 9000.0
-])
+]
 
 var observer: AsterraPlayer
 var star_mesh: MultiMeshInstance3D
@@ -160,16 +161,25 @@ func _build_stars() -> void:
 
 
 func _magnitude_from_catalogue_rank(rank: float) -> float:
-	var safe_rank := clampf(rank, CUMULATIVE_STAR_COUNTS[0], CUMULATIVE_STAR_COUNTS[-1])
+	var last_count_index := CUMULATIVE_STAR_COUNTS.size() - 1
+	var safe_rank := clampf(
+		rank,
+		float(CUMULATIVE_STAR_COUNTS[0]),
+		float(CUMULATIVE_STAR_COUNTS[last_count_index])
+	)
 	for i in range(1, MAGNITUDE_KNOTS.size()):
-		var c1 := CUMULATIVE_STAR_COUNTS[i]
+		var c1 := float(CUMULATIVE_STAR_COUNTS[i])
 		if safe_rank <= c1:
-			var c0 := CUMULATIVE_STAR_COUNTS[i - 1]
+			var c0 := float(CUMULATIVE_STAR_COUNTS[i - 1])
 			# Counts are approximately exponential with magnitude, so interpolate in
 			# log-count space rather than linearly in population.
 			var denom := maxf(log(c1) - log(c0), 1e-6)
 			var t := (log(safe_rank) - log(c0)) / denom
-			return lerpf(MAGNITUDE_KNOTS[i - 1], MAGNITUDE_KNOTS[i], clampf(t, 0.0, 1.0))
+			return lerpf(
+				float(MAGNITUDE_KNOTS[i - 1]),
+				float(MAGNITUDE_KNOTS[i]),
+				clampf(t, 0.0, 1.0)
+			)
 	return NAKED_EYE_LIMIT_MAGNITUDE
 
 
