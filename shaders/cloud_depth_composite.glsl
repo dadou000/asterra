@@ -17,6 +17,7 @@ layout(push_constant, std430) uniform Params {
 } params;
 
 const float PI = 3.14159265358979323846;
+const float ATMOSPHERE_TOP = 60000.0;
 const float CLOUD_BASE = 1100.0;
 const float CLOUD_TOP = 6400.0;
 const float CLOUD_COVERAGE = 0.52;
@@ -29,6 +30,7 @@ const float CLOUD_DETAIL_STRENGTH = 0.36;
 const float CLOUD_EXTINCTION = 0.00105;
 const int CLOUD_MAX_PRIMARY_STEPS = 28;
 const int CLOUD_MAX_LIGHT_STEPS = 4;
+const int AIR_STEPS = 4;
 
 vec3 quat_rotate(vec4 q, vec3 v) {
 	return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -282,31 +284,56 @@ vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
 	return vec4(radiance, clamp(transmittance, 0.0, 1.0));
 }
 
-float foreground_air_transmittance(vec3 camera_pos, vec3 dir, float first_t) {
+vec2 foreground_air_segment(vec3 camera_pos, vec3 dir, float first_t,
+		float planet_radius) {
+	vec2 hit = sphere_intersect(camera_pos, dir, planet_radius + ATMOSPHERE_TOP);
+	if (hit.y <= 0.0) return vec2(1e30, -1e30);
+	float ray_start = max(hit.x, 0.0);
+	float ray_end = min(hit.y, first_t);
+	if (ray_end <= ray_start) return vec2(1e30, -1e30);
+	return vec2(ray_start, ray_end);
+}
+
+float foreground_air_transmittance(vec3 camera_pos, vec3 dir, float first_t,
+		float planet_radius) {
 	if (first_t <= 0.0) return 1.0;
-	vec3 up = normalize(camera_pos);
-	float elevation = clamp(dot(dir, up), -0.15, 1.0);
-	float path_scale = mix(26000.0, 110000.0,
-		smoothstep(-0.05, 0.45, elevation));
-	return exp(-first_t / max(path_scale, 1.0) * 0.55);
+	vec2 segment = foreground_air_segment(camera_pos, dir, first_t, planet_radius);
+	if (segment.x > segment.y) return 1.0;
+
+	float step_len = (segment.y - segment.x) / float(AIR_STEPS);
+	float optical_length = 0.0;
+	for (int i = 0; i < AIR_STEPS; i++) {
+		float t = segment.x + (float(i) + 0.5) * step_len;
+		float altitude = max(length(camera_pos + dir * t) - planet_radius, 0.0);
+		float rayleigh = exp(-altitude / 8000.0);
+		float mie = exp(-altitude / 1200.0);
+		optical_length += (0.72 * rayleigh + 0.28 * mie) * step_len;
+	}
+	// Broadband approximation only for ordering the already-computed atmosphere
+	// in front of the cloud. Vacuum contributes exactly zero because it is outside
+	// foreground_air_segment().
+	return exp(-optical_length * 1.55e-5);
 }
 
 vec3 foreground_atmosphere_restore(vec3 camera_pos, vec3 dir, float first_t,
 		float cloud_transmittance, float air_transmittance,
 		vec3 sun_dir, float planet_radius) {
 	if (first_t <= 0.0 || cloud_transmittance > 0.999) return vec3(0.0);
+	vec2 air_segment = foreground_air_segment(camera_pos, dir, first_t,
+		planet_radius);
+	if (air_segment.x > air_segment.y) return vec3(0.0);
 
-	// Use the same local-horizon coordinate as the cloud body. This removes the
-	// former fixed twilight belt that could brighten foreground haze far beyond
-	// the true terminator when viewed from orbit.
-	vec3 mid_p = camera_pos + dir * (first_t * 0.5);
+	// Evaluate the solar state in the actual atmospheric section in front of the
+	// cloud, never halfway through an orbital vacuum path.
+	float air_mid_t = (air_segment.x + air_segment.y) * 0.5;
+	vec3 mid_p = camera_pos + dir * air_mid_t;
 	float solar_vis = planet_sun_visibility(mid_p, sun_dir, planet_radius);
 	float solar_clearance = planet_solar_clearance(mid_p, sun_dir, planet_radius);
 	float day = smoothstep(-0.002, 0.18, solar_clearance) * solar_vis;
 	float twilight = cloud_twilight_weight(solar_clearance);
 
-	vec3 camera_up = normalize(camera_pos);
-	float elevation = clamp(dot(dir, camera_up), -0.15, 1.0);
+	vec3 local_up = normalize(mid_p);
+	float elevation = clamp(dot(dir, local_up), -0.15, 1.0);
 	vec3 day_haze = mix(vec3(0.30, 0.34, 0.38), vec3(0.19, 0.36, 0.52),
 		smoothstep(-0.08, 0.25, elevation));
 	vec3 dusk_haze = vec3(0.035, 0.013, 0.005);
@@ -350,7 +377,7 @@ void main() {
 
 	vec4 base = imageLoad(color_image, pixel);
 	float air_t = foreground_air_transmittance(camera_planet, ray_world,
-		first_cloud_distance);
+		first_cloud_distance, planet_radius);
 	vec3 result = cloud.rgb * air_t + base.rgb * cloud.a;
 	result += foreground_atmosphere_restore(camera_planet, ray_world,
 		first_cloud_distance, cloud.a, air_t, sun_dir, planet_radius);
