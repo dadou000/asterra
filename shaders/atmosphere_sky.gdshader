@@ -144,7 +144,7 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 		+ phase_mie * u_mie_coeff * total_mie);
 }
 
-vec3 deep_sky(vec3 dir, vec3 up, vec3 sun_dir) {
+vec3 deep_sky(vec3 dir, vec3 up) {
 	// Fixed celestial frame: this is deliberately not aligned to local up, so the
 	// player sees a coherent galaxy as they travel around the spherical planet.
 	vec3 galactic_normal = normalize(vec3(0.28, 0.91, -0.30));
@@ -160,6 +160,7 @@ vec3 deep_sky(vec3 dir, vec3 up, vec3 sun_dir) {
 	float dust = mix(1.0, 0.32, dust_lane * smoothstep(0.35, 0.72, dust_noise));
 	float core = exp(-pow(length(vec2(lat * 2.8, lon - 0.18)) / 0.48, 1.35));
 
+	// Fixed scene-linear radiances. They are never multiplied upward as night falls.
 	vec3 galaxy = vec3(0.76, 0.80, 0.86) * (band * structure * dust * 0.0058);
 	galaxy += vec3(0.92, 0.83, 0.68) * core * band * dust * 0.0030;
 	galaxy += vec3(0.58, 0.66, 0.78) * broad * 0.0016;
@@ -182,15 +183,21 @@ vec3 deep_sky(vec3 dir, vec3 up, vec3 sun_dir) {
 		atmosphere_height * 1.08,
 		u_camera_height
 	);
-	float sun_altitude = dot(up, sun_dir);
-	float night = 1.0 - smoothstep(-0.22, -0.055, sun_altitude);
+
+	// Only physical line-of-sight loss is applied. There is deliberately no
+	// sun-altitude/night reveal term: daylight invisibility emerges because the
+	// same fixed deep-sky radiance is overwhelmed by atmospheric scattering and
+	// the existing exposure system.
 	float elevation = dot(dir, up);
 	float horizon = smoothstep(-0.02, 0.12, elevation);
 	float air_mass = 1.0 / max(elevation, 0.07);
 	float extinction = exp(-0.085 * max(air_mass - 1.0, 0.0));
-	float atmospheric_visibility = horizon * extinction;
-	float visibility = mix(1.0, night * atmospheric_visibility, atmosphere_presence);
-	return (galaxy + nebula) * visibility;
+	float atmospheric_transmittance = mix(
+		1.0,
+		horizon * extinction,
+		atmosphere_presence
+	);
+	return (galaxy + nebula) * atmospheric_transmittance;
 }
 
 void sky() {
@@ -218,7 +225,7 @@ void sky() {
 	}
 
 	vec3 col = scatter(dir, origin, sun_dir);
-	col += deep_sky(dir, up, sun_dir);
+	col += deep_sky(dir, up);
 	if (LIGHT0_ENABLED && LIGHT0_ENERGY > 0.0) {
 		float cos_angle = dot(dir, sun_dir);
 		float sun_diameter = max(LIGHT0_SIZE, 0.0087);
