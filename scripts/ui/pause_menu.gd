@@ -364,12 +364,11 @@ func _build_settings_menu() -> void:
 func _apply_graphics_quality(preset: int) -> void:
 	var quality: int = GraphicsQuality.sanitize(preset)
 	GraphicsQuality.configure_viewport(get_viewport(), quality)
-	var world_environment: WorldEnvironment = null
 	var parent := get_parent()
 	if parent != null:
 		for child: Node in parent.get_children():
 			if child is WorldEnvironment:
-				world_environment = child as WorldEnvironment
+				var world_environment := child as WorldEnvironment
 				if world_environment.environment != null:
 					GraphicsQuality.configure_world_environment(
 						world_environment.environment, quality)
@@ -380,16 +379,9 @@ func _apply_graphics_quality(preset: int) -> void:
 				# changes the generic soft-shadow preset.
 				light.light_angular_distance = Frames.helion_angular_diameter_deg()
 
-	# Cloud ray steps and cloud-shadow sampling are quality-dependent too. Reusing
-	# the controller's existing configure path changes only parameters/resources;
-	# it does not regenerate the resident terrain.
-	if world_environment != null and world_environment.environment != null:
-		var sky := world_environment.environment.sky
-		if sky != null and sky.sky_material is ShaderMaterial and Planet.cfg != null:
-			VolumetricClouds.configure(
-				sky.sky_material as ShaderMaterial,
-				Planet.cfg.world_seed,
-				quality)
+	# Update only cloud sampling budgets; this preserves whichever cloud renderer
+	# (depth compositor or fallback sky) already owns the visible cloud pass.
+	VolumetricClouds.set_quality(quality)
 
 
 func _find_player() -> AsterraPlayer:
