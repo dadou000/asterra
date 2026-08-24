@@ -1,6 +1,7 @@
 shader_type sky;
+render_mode use_half_res_pass;
 /// Physically-inspired single-scatter Rayleigh + Mie atmosphere plus a restrained
-/// procedural deep-sky layer for Asterra's night sky.
+/// procedural deep-sky layer and spherical raymarched volumetric clouds.
 
 uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
@@ -17,6 +18,7 @@ uniform float u_ozone_width = 15000.0;
 uniform float u_sun_intensity = 5.0265;
 
 #include "res://shaders/planet_lighting.gdshaderinc"
+#include "res://shaders/volumetric_clouds.gdshaderinc"
 
 const int PRIMARY_STEPS = 6;
 const int LIGHT_STEPS = 2;
@@ -158,14 +160,10 @@ vec3 deep_sky(vec3 dir, vec3 up, vec3 sun_dir) {
 	float dust = mix(1.0, 0.32, dust_lane * smoothstep(0.35, 0.72, dust_noise));
 	float core = exp(-pow(length(vec2(lat * 2.8, lon - 0.18)) / 0.48, 1.35));
 
-	// Peak diffuse radiance remains far below bright stellar instances. The band
-	// should become obvious only after adaptation under genuinely dark skies.
 	vec3 galaxy = vec3(0.76, 0.80, 0.86) * (band * structure * dust * 0.0058);
 	galaxy += vec3(0.92, 0.83, 0.68) * core * band * dust * 0.0030;
 	galaxy += vec3(0.58, 0.66, 0.78) * broad * 0.0016;
 
-	// A few sparse emission/reflection complexes. These are intentionally broad,
-	// asymmetrical and low contrast rather than colourful astrophotography blobs.
 	vec3 n1 = normalize(vec3(0.48, 0.22, -0.85));
 	vec3 n2 = normalize(vec3(-0.62, 0.72, 0.31));
 	vec3 n3 = normalize(vec3(0.14, -0.36, 0.92));
@@ -200,9 +198,28 @@ void sky() {
 	vec3 origin = up * (u_planet_radius + max(u_camera_height, -500.0));
 	vec3 dir = normalize(EYEDIR);
 	vec3 sun_dir = normalize(LIGHT0_DIRECTION);
+
+	if (AT_HALF_RES_PASS) {
+		vec3 sun_color = LIGHT0_ENABLED ? LIGHT0_COLOR : vec3(1.0);
+		vec4 cloud = raymarch_clouds(
+			origin,
+			dir,
+			sun_dir,
+			sun_color,
+			u_sun_intensity,
+			u_cloud_primary_steps,
+			u_cloud_light_steps
+		);
+		COLOR = cloud.rgb;
+		// The half-res alpha stores *remaining background transmittance*, not cloud
+		// opacity. This lets the full pass compose radiance in physically correct order.
+		ALPHA = cloud.a;
+		return;
+	}
+
 	vec3 col = scatter(dir, origin, sun_dir);
 	col += deep_sky(dir, up, sun_dir);
-	if (LIGHT0_ENERGY > 0.0) {
+	if (LIGHT0_ENABLED && LIGHT0_ENERGY > 0.0) {
 		float cos_angle = dot(dir, sun_dir);
 		float sun_diameter = max(LIGHT0_SIZE, 0.0087);
 		float sun_radius = sun_diameter * 0.5;
@@ -210,5 +227,8 @@ void sky() {
 		float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
 		col += disc * visible * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
 	}
+
+	vec4 cloud = HALF_RES_COLOR;
+	col = cloud.rgb + col * cloud.a;
 	COLOR = 1.0 - exp(-col);
 }
