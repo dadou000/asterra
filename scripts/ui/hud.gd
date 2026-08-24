@@ -37,7 +37,7 @@ func _ready() -> void:
 	help.position = Vector2(12, -132)
 	help.add_theme_font_size_override("font_size", 12)
 	help.add_theme_color_override("font_color", Color(0.75, 0.80, 0.88))
-	help.text = """WASD move · Space/Shift-C up/down · Shift sprint · F walk/fly · Esc debug menu
+	help.text = """WASD move · Space/Shift-C up/down · Shift sprint · F walk/fly · Esc pause · & debug
 LMB dig · RMB fill · G grade to aim · Q drop pile · E collect pile · [ ] brush size
 M planet map · , . cycle map layer · F5 save · F9 load · T teleport to a good site"""
 	add_child(help)
