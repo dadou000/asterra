@@ -6,7 +6,6 @@ extends Node3D
 ## Large-scale galactic/nebular structure remains in the sky shader where it is
 ## effectively free compared with creating geometry for diffuse features.
 
-const STAR_COUNT := 7000
 const TWINKLE_FRACTION := 0.16
 const FAR_FIELD_SCALE := 0.58
 const BASE_POINT_SIZE := 0.00115
@@ -51,6 +50,20 @@ func _try_bind_observer() -> void:
 			return
 
 
+func _star_count() -> int:
+	# One draw call on every preset; only instance density changes. The low tier is
+	# intentionally conservative for the GTX 1050-class minimum target.
+	match GraphicsQuality.sanitize(AppSettings.graphics_quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 3500
+		GraphicsQuality.Preset.BALANCED:
+			return 5000
+		GraphicsQuality.Preset.ULTRA:
+			return 10000
+		_:
+			return 7000
+
+
 func _build_stars() -> void:
 	if Planet.cfg == null:
 		return
@@ -64,18 +77,19 @@ func _build_stars() -> void:
 	star_material.shader = load("res://shaders/procedural_stars.gdshader")
 	quad.material = star_material
 
+	var star_count := _star_count()
 	var multimesh := MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
 	multimesh.use_custom_data = true
 	multimesh.mesh = quad
-	multimesh.instance_count = STAR_COUNT
+	multimesh.instance_count = star_count
 
 	var rng := RandomNumberGenerator.new()
 	# The sky is deterministic for a world seed. A separate salt ensures changing
 	# terrain generation does not accidentally correlate stars with terrain noise.
 	rng.seed = int(Planet.cfg.world_seed) ^ 0x5A17B1E
 
-	for i in STAR_COUNT:
+	for i in star_count:
 		var direction := _random_unit_vector(rng)
 		# Strong faint-star bias approximates the naked-eye magnitude distribution:
 		# many threshold stars, few bright ones, and a very sparse standout tail.
