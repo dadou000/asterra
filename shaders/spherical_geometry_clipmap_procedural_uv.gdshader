@@ -376,9 +376,10 @@ void fragment() {
 	} else {
 		float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
 		vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
-		if (v_level <= 8.5) {
-			surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
-		}
+		// The material map is now a resident whole-planet mipmapped texture, so
+		// there is no reason to disable it above L8. Fragment derivatives select
+		// the appropriate mip automatically from ground level through orbit.
+		surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
 		vec3 soil = vec3(0.24, 0.17, 0.105);
 		vec3 grass = vec3(0.17, 0.255, 0.095);
 		vec3 wet = vec3(0.12, 0.145, 0.085);
