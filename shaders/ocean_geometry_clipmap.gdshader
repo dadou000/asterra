@@ -34,6 +34,7 @@ varying float v_level;
 varying float v_cloud_shadow;
 
 const float MAX_PROJECTED_THETA = 1.62;
+const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float FINE_MORPH_START_Q = 0.875;
 const float RING_INNER_Q = 0.4375;
 const float RING_HANDOFF_Q = 0.50;
@@ -66,7 +67,9 @@ float ocean_coarse_sink(vec2 cell, int level, float spacing) {
 vec3 ocean_direction_for_offset(vec2 offset_m, int level) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) return normalize(u_center_dir);
-	if (level <= 8) {
+	// Match spherical_geometry_clipmap_procedural_uv.gdshader exactly: the active
+	// terrain uses tangent-plane projection through 90 km, independent of LOD.
+	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
 		return normalize(u_center_dir
 			+ u_center_right * (offset_m.x / u_planet_radius)
 			+ u_center_up * (offset_m.y / u_planet_radius));
@@ -100,15 +103,12 @@ void ocean_bathymetry(vec3 d, float arc_m, float sample_m,
 	float terrain_morph;
 	ocean_visible_terrain_lod(arc_m, terrain_level, terrain_morph);
 
-	// Same macro interpolation, detail spectrum, seed and LOD morph as the active
-	// GPU terrain. Raw height owns the visible wet/dry boundary exactly.
 	raw_ground_h = gpu_terrain_height_with_morph(d, terrain_level, terrain_morph);
 	smooth_ground_h = raw_ground_h;
 	landward = ocean_safe_tangent(d, SWELL_AXIS_A);
 	signed_shore_distance = -max(-raw_ground_h, 0.0) * 8.0;
 	coast_confidence = 0.0;
 
-	// Only coast-adjacent vertices pay for the four additional terrain samples.
 	if (abs(raw_ground_h) > 320.0) return;
 
 	vec3 tx = ocean_safe_tangent(d, u_center_right);
@@ -119,8 +119,6 @@ void ocean_bathymetry(vec3 d, float arc_m, float sample_m,
 	float hy0 = gpu_terrain_height_with_morph(ocean_offset_dir(d, ty, -s), terrain_level, terrain_morph);
 	float hy1 = gpu_terrain_height_with_morph(ocean_offset_dir(d, ty,  s), terrain_level, terrain_morph);
 
-	// Filter bathymetry only for wave refraction/breaking. Do not filter the
-	// shoreline mask itself.
 	smooth_ground_h = (raw_ground_h * 4.0 + hx0 + hx1 + hy0 + hy1) * 0.125;
 	vec2 g = vec2(hx1 - hx0, hy1 - hy0) / max(2.0 * s, 1.0);
 	float gm = length(g);
