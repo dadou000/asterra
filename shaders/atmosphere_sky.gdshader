@@ -19,6 +19,7 @@ uniform float u_sun_intensity = 5.0265;
 
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/volumetric_clouds.gdshaderinc"
+#include "res://shaders/cloud_raymarch_stable.gdshaderinc"
 
 const int PRIMARY_STEPS = 6;
 const int LIGHT_STEPS = 2;
@@ -40,10 +41,6 @@ float mie_phase(float mu, float g) {
 	float gg = g * g;
 	return (3.0 * (1.0 - gg) * (1.0 + mu * mu))
 		/ (8.0 * PI * (2.0 + gg) * pow(max(1.0 + gg - 2.0 * g * mu, 1e-4), 1.5));
-}
-
-float ray_jitter(vec3 d) {
-	return fract(sin(dot(d, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
 }
 
 float hash31(vec3 p) {
@@ -101,10 +98,10 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float od_mie = 0.0;
 	float od_ozo = 0.0;
 	float t = ray_start;
-	float jitter = ray_jitter(dir);
+	float sample_phase = stable_primary_phase(dir);
 
 	for (int i = 0; i < PRIMARY_STEPS; i++) {
-		float sample_t = t + step_len * mix(0.32, 0.68, jitter);
+		float sample_t = t + step_len * sample_phase;
 		vec3 pos = origin + dir * sample_t;
 		float height = max(length(pos) - u_planet_radius, 0.0);
 		float step_rlh = exp(-height / u_rayleigh_scale_height) * step_len;
@@ -208,7 +205,7 @@ void sky() {
 
 	if (AT_HALF_RES_PASS) {
 		vec3 sun_color = LIGHT0_ENABLED ? LIGHT0_COLOR : vec3(1.0);
-		vec4 cloud = raymarch_clouds(
+		vec4 cloud = raymarch_clouds_stable(
 			origin,
 			dir,
 			sun_dir,
