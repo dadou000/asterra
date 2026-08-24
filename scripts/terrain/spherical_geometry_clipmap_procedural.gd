@@ -115,8 +115,6 @@ func _sync_uniforms(origin: Vector3) -> void:
 func _sync_detail_seed() -> void:
 	if _material == null or Planet.cfg == null:
 		return
-	# Keep the shader integer in the exact 24-bit range so conversion through the
-	# rendering parameter path cannot lose seed bits.
 	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
@@ -153,8 +151,14 @@ func set_debug_freeze(value: bool) -> void:
 
 
 func set_debug_side_cut(value: bool) -> void:
+	if _debug_side_cut == value:
+		return
 	_debug_side_cut = value
 	_sync_debug_uniforms()
+	# Rebuild only static index topology. In side-cut mode the +clipmap-up half is
+	# genuinely absent, so Godot's global wireframe debug sees the same cut as the
+	# shaded renderer instead of relying on fragment discard.
+	rebuild_static_topology()
 	if _terrain_visible:
 		if value or _debug_freeze:
 			_show_all_active_sectors()
@@ -179,10 +183,83 @@ func debug_sink_scale() -> float:
 	return _debug_sink_scale
 
 
+func rebuild_static_topology() -> void:
+	if _center_batch != null and _center_batch.multimesh != null:
+		_center_batch.multimesh.mesh = _build_debug_center_mesh(_debug_side_cut)
+	for sector: int in _sector_batches.size():
+		var batch: MultiMeshInstance3D = _sector_batches[sector]
+		if batch.multimesh != null:
+			batch.multimesh.mesh = _build_debug_sector_mesh(sector, _debug_side_cut)
+
+
+static func _build_debug_center_mesh(half_cut: bool) -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	vertices.resize(GRID_VERTS * GRID_VERTS)
+	var indices := PackedInt32Array()
+	var outer_sq: float = float(HALF_CELLS * HALF_CELLS)
+	for y: int in GRID_CELLS:
+		var cy: float = float(y) + 0.5 - float(HALF_CELLS)
+		if half_cut and cy > 0.0:
+			continue
+		for x: int in GRID_CELLS:
+			var cx: float = float(x) + 0.5 - float(HALF_CELLS)
+			if cx * cx + cy * cy > outer_sq:
+				continue
+			_append_debug_cell(indices, x, y)
+	return _debug_mesh_from_indices(vertices, indices)
+
+
+static func _build_debug_sector_mesh(sector_index: int, half_cut: bool) -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	vertices.resize(GRID_VERTS * GRID_VERTS)
+	var indices := PackedInt32Array()
+	var outer_sq: float = float(HALF_CELLS * HALF_CELLS)
+	var inner_sq: float = float(RING_INNER_HALF_CELLS * RING_INNER_HALF_CELLS)
+	for y: int in GRID_CELLS:
+		var cy: float = float(y) + 0.5 - float(HALF_CELLS)
+		if half_cut and cy > 0.0:
+			continue
+		for x: int in GRID_CELLS:
+			var cx: float = float(x) + 0.5 - float(HALF_CELLS)
+			var r_sq: float = cx * cx + cy * cy
+			if r_sq > outer_sq or r_sq < inner_sq:
+				continue
+			var angle: float = atan2(cy, cx)
+			if angle < 0.0:
+				angle += TAU
+			var owner_sector: int = int(floor(angle / TAU * float(SECTOR_COUNT)))
+			owner_sector = clampi(owner_sector, 0, SECTOR_COUNT - 1)
+			if owner_sector != sector_index:
+				continue
+			_append_debug_cell(indices, x, y)
+	return _debug_mesh_from_indices(vertices, indices)
+
+
+static func _append_debug_cell(indices: PackedInt32Array, x: int, y: int) -> void:
+	var i00: int = y * GRID_VERTS + x
+	var i10: int = i00 + 1
+	var i01: int = (y + 1) * GRID_VERTS + x
+	var i11: int = i01 + 1
+	indices.append(i00)
+	indices.append(i10)
+	indices.append(i11)
+	indices.append(i00)
+	indices.append(i11)
+	indices.append(i01)
+
+
+static func _debug_mesh_from_indices(vertices: PackedVector3Array,
+		indices: PackedInt32Array) -> ArrayMesh:
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
 func _request_visible_pages() -> void:
-	# Intentionally empty. The complete visual terrain function is evaluated on
-	# GPU at clipmap vertices. GroundHeightStore exists only for CPU physics/edit
-	# queries and is not driven by camera-visible terrain anymore.
 	pass
 
 
