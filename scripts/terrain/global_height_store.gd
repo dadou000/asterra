@@ -15,8 +15,6 @@ const PRIORITY_COLLISION: float = -1000.0
 const PRIORITY_VISIBLE: float = 0.0
 const PRIORITY_PREFETCH: float = 50.0
 
-var _samples: int = 0
-
 
 func sample_height(d: Vector3, level: int, snap: Dictionary = {}) -> float:
 	var h: float = sample_pristine(d, level)
@@ -35,7 +33,6 @@ func sample_height_nonblocking(d: Vector3, level: int,
 func sample_pristine(d: Vector3, level: int) -> float:
 	if not Planet.ready_state or Planet.cfg == null:
 		return 0.0
-	_samples += 1
 	var used_level: int = clampi(level, 0, MAX_LEVEL)
 	var spacing: float = spacing_for_level(used_level)
 	var macro_h: float = Planet.macro_height(d)
@@ -115,7 +112,7 @@ func stats() -> Dictionary:
 		"bake_in_flight": 0,
 		"dropped": 0,
 		"max_level": MAX_LEVEL,
-		"samples": _samples,
+		"samples": 0,
 		"global_resident": Planet.ready_state,
 		"terrain_io": false,
 		"procedural_collision": true,
