@@ -38,10 +38,13 @@ func _ready() -> void:
 	visible = false
 	process_mode = Node.PROCESS_MODE_ALWAYS
 
+	var viewport_h: float = get_viewport().get_visible_rect().size.y
+	var panel_h: float = clampf(viewport_h - 80.0, 420.0, 720.0)
+
 	_panel = PanelContainer.new()
 	_panel.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	_panel.position = Vector2(36, -275)
-	_panel.custom_minimum_size = Vector2(550, 550)
+	_panel.position = Vector2(36, -panel_h * 0.5)
+	_panel.custom_minimum_size = Vector2(550, panel_h)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.05, 0.06, 0.09, 0.94)
 	style.border_color = Color(0.35, 0.45, 0.60, 0.9)
@@ -62,7 +65,7 @@ func _ready() -> void:
 	root_box.add_child(title)
 
 	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(520, 470)
+	tabs.custom_minimum_size = Vector2(520, maxf(340.0, panel_h - 80.0))
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root_box.add_child(tabs)
 
@@ -78,10 +81,22 @@ func _ready() -> void:
 
 
 func _build_terrain_tab(tabs: TabContainer) -> void:
+	# Keep the tab itself scrollable. Without this, large UI scaling can make the
+	# VBox exceed the TabContainer and Godot clips the first CheckButtons below the
+	# renderer note, which made the LOD-label toggle look as though it did not exist.
+	var scroll := ScrollContainer.new()
+	scroll.name = "Terrain"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(scroll)
+
 	var box := VBoxContainer.new()
-	box.name = "Terrain"
-	box.add_theme_constant_override("separation", 4)
-	tabs.add_child(box)
+	box.name = "TerrainControls"
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 6)
+	scroll.add_child(box)
 
 	box.add_child(_section_title("Concentric GPU clipmap"))
 	box.add_child(_note("Current renderer: procedural spherical L0-L14 clipmap"))
@@ -91,6 +106,8 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 		var button := CheckButton.new()
 		button.text = row[1]
 		button.button_pressed = row[3]
+		button.custom_minimum_size = Vector2(0, 34)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.add_theme_font_size_override("font_size", 13)
 		button.toggled.connect(_on_toggled.bind(key))
 		box.add_child(button)
@@ -99,6 +116,7 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 
 	_sink_label = Label.new()
 	_sink_label.text = "Sink depth: %.2f × LOD spacing" % DEFAULT_SINK_SCALE
+	_sink_label.custom_minimum_size = Vector2(0, 26)
 	_sink_label.add_theme_font_size_override("font_size", 13)
 	box.add_child(_sink_label)
 	box.add_child(_note("Default is 2×. Increase only while inspecting overlap."))
@@ -108,12 +126,13 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	_sink_slider.max_value = 12.0
 	_sink_slider.step = 0.25
 	_sink_slider.value = DEFAULT_SINK_SCALE
-	_sink_slider.custom_minimum_size = Vector2(0, 22)
+	_sink_slider.custom_minimum_size = Vector2(0, 28)
 	_sink_slider.value_changed.connect(_on_sink_scale_changed)
 	box.add_child(_sink_slider)
 
 	var reset := Button.new()
 	reset.text = "Reset terrain inspection"
+	reset.custom_minimum_size = Vector2(0, 34)
 	reset.add_theme_font_size_override("font_size", 13)
 	reset.pressed.connect(_on_reset_inspection)
 	box.add_child(reset)
