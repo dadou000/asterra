@@ -3,6 +3,8 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
+#include "res://shaders/planet_lighting.gdshaderinc"
+#include "res://shaders/cloud_shadow.gdshaderinc"
 
 // Robust procedural terrain shader. Logical clipmap coordinates come from UV,
 // not VERTEX_ID, so compact sector meshes cannot scramble the grid. The macro
@@ -33,6 +35,7 @@ varying vec3 v_render;
 varying float v_valid;
 varying float v_cap_valid;
 varying float v_level;
+varying float v_direct_transmittance;
 
 const int ASTERRA_MAX_LEVEL = 14;
 const float RING_INNER_Q = 0.44;
@@ -284,6 +287,18 @@ void vertex() {
 	v_valid = u_macro_ready;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
+
+	// Cloud shadowing is evaluated on the geometry lattice and interpolated across
+	// triangles. The density field is kilometre-scale, while even coarse visible
+	// rings have far more spatial resolution than the shadow needs. This avoids a
+	// multi-sample 3D raymarch in every 4K screen pixel.
+	vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
+	float planet_vis = planet_direct_sun_visibility(p, sun_dir, u_planet_radius);
+	v_direct_transmittance = planet_vis;
+	if (planet_vis > 0.001) {
+		v_direct_transmittance *= cloud_shadow_transmittance(
+			p, sun_dir, u_planet_radius);
+	}
 	VERTEX = v_render;
 }
 
@@ -333,5 +348,49 @@ void fragment() {
 		ALBEDO = albedo;
 		ROUGHNESS = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
 		SPECULAR = 0.22;
+	}
+}
+
+void light() {
+	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+	if (ndotl <= 0.0) {
+		return;
+	}
+
+	// ATTENUATION still contains Godot's local/cascade shadow map. Cloud optical
+	// transmittance is an independent atmospheric visibility term and therefore
+	// multiplies it rather than replacing ordinary geometry shadows.
+	float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
+	vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility;
+
+	float ndotv = max(dot(NORMAL, VIEW), 0.001);
+	vec3 h = normalize(LIGHT + VIEW);
+	float ndoth = max(dot(NORMAL, h), 0.0);
+	float vdoth = max(dot(VIEW, h), 0.0);
+	float rough = clamp(ROUGHNESS, 0.045, 1.0);
+
+	// Disney/Burley diffuse response, matching the material's previous render mode
+	// closely enough that enabling cloud shadows does not flatten rough ground.
+	float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
+	float fl = pow(1.0 - ndotl, 5.0);
+	float fv = pow(1.0 - ndotv, 5.0);
+	float diffuse_term = (1.0 + (fd90 - 1.0) * fl)
+		* (1.0 + (fd90 - 1.0) * fv);
+	DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
+
+	if (u_debug_side_cut <= 0.5) {
+		// Isotropic Schlick-GGX for the weak dielectric terrain highlight.
+		float alpha = rough * rough;
+		float a2 = alpha * alpha;
+		float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
+		float d = a2 / max(PI * denom * denom, 1e-5);
+		float k = (rough + 1.0) * (rough + 1.0) * 0.125;
+		float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
+		float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
+		float f0 = 0.018;
+		float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
+		float spec = d * gv * gl * fresnel
+			/ max(4.0 * ndotv * ndotl, 1e-4);
+		SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
 	}
 }
