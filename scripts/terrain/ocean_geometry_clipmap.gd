@@ -2,15 +2,9 @@ class_name OceanGeometryClipmap
 extends Node3D
 ## GPU-first local/regional ocean renderer.
 ##
-## A fixed concentric grid follows the observer. The CPU only updates a handful
-## of uniforms and sector visibility; sea-level projection, finite-depth Gerstner
-## displacement, bathymetry-aware shoreline refraction, normals and foam are all
-## evaluated by the GPU in ocean_geometry_clipmap.gdshader.
-##
-## L0 is a circular disc. L1..L14 are the same annulus split into 12 angular
-## sectors, so horizontal views submit only the wedges that can be seen. Short
-## waves are filtered by vertex spacing in the shader, which keeps the outer
-## rings cheap and prevents aliasing.
+## A fixed concentric grid follows the observer. The CPU only updates uniforms
+## and sector visibility; shoreline height is evaluated by the same procedural
+## GPU terrain function as GroundGeometryClipmap.
 
 const TARGET_FINE_DEPTH: int = 16
 const MAX_LEVEL: int = 14
@@ -23,6 +17,7 @@ const REANCHOR_M: float = 8000.0
 const HORIZON_MARGIN_M: float = 12000.0
 const ORBIT_HANDOFF_ALTITUDE_M: float = 120000.0
 const GLOBAL_BOUNDS_M: float = 4000000.0
+const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 
 const SECTOR_COUNT: int = 12
 const SECTOR_HALF_ANGLE: float = 0.2617993877991494
@@ -47,10 +42,8 @@ var _active_max_level: int = 0
 var _visible_cap_arc_m: float = 0.0
 var _visible_sector_count: int = 0
 var _ocean_visible := false
-var _bound_orbit: Texture2DArray
-var _bound_orbit_res: int = -1
-var _bound_coast: Texture2DArray
-var _bound_coast_version: int = -1
+var _bound_macro: Texture2DArray
+var _bound_macro_res: int = -1
 var _physics: OceanGPUPhysics
 
 
@@ -117,9 +110,9 @@ func _process(_dt: float) -> void:
 
 	_update_visible_cap(planet_pos.length(), radius)
 	_update_active_levels()
-	_bind_textures(false)
+	_bind_gpu_terrain(false)
 	_sync_uniforms(origin)
-	_set_visible(_bound_orbit != null)
+	_set_visible(_bound_macro != null)
 	if _ocean_visible:
 		_update_sector_visibility()
 
@@ -128,11 +121,9 @@ func _configure_world() -> void:
 	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius \
 		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
 	_have_anchor = false
-	_bound_orbit = null
-	_bound_orbit_res = -1
-	_bound_coast = null
-	_bound_coast_version = -1
-	_bind_textures(true)
+	_bound_macro = null
+	_bound_macro_res = -1
+	_bind_gpu_terrain(true)
 
 
 func _on_world_ready(_fields: PlanetFields) -> void:
@@ -140,8 +131,9 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 
 
 func _on_coast_profile_changed() -> void:
-	_bound_coast_version = -1
-	_bind_textures(true)
+	# The macro texture is the authoritative low-frequency source for both terrain
+	# and ocean. A rebake will refresh this binding through Planet/world_ready.
+	_bind_gpu_terrain(true)
 
 
 func _reset_anchor(observer_dir: Vector3) -> void:
@@ -195,38 +187,18 @@ func _update_active_levels() -> void:
 			batch.multimesh.visible_instance_count = _active_max_level
 
 
-func _bind_textures(force: bool) -> void:
+func _bind_gpu_terrain(force: bool) -> void:
 	if _material == null or not Planet.ready_state:
 		return
-
-	var orbit := Planet.orbit_elevation_texture
-	var orbit_res := Planet.orbit_texture_face_res
-	if force or orbit != _bound_orbit:
-		_bound_orbit = orbit
-		_material.set_shader_parameter("u_orbit_elevation", orbit)
-	if force or orbit_res != _bound_orbit_res:
-		_bound_orbit_res = orbit_res
-		_material.set_shader_parameter("u_orbit_face_res", float(orbit_res))
-
-	var coast: Node = get_node_or_null("/root/CoastlineClipmap")
-	if coast == null:
-		_material.set_shader_parameter("u_coast_clipmap_ready", 0.0)
-		return
-	var version := int(coast.get("_published_version"))
-	var value: Variant = coast.get("_texture")
-	var texture: Texture2DArray = value if value is Texture2DArray else null
-	if not force and version == _bound_coast_version and texture == _bound_coast:
-		return
-	_bound_coast_version = version
-	_bound_coast = texture
-	_material.set_shader_parameter("u_coast_clipmap_ready", 1.0 if texture != null else 0.0)
-	_material.set_shader_parameter("u_coast_center", coast.get("_published_center"))
-	_material.set_shader_parameter("u_coast_right", coast.get("_published_right"))
-	_material.set_shader_parameter("u_coast_up", coast.get("_published_up"))
-	_material.set_shader_parameter("u_coast_res", float(coast.get("CLIPMAP_RES")) if false else 512.0)
-	_material.set_shader_parameter("u_coast_texel_m", Vector3(35.0, 120.0, 480.0))
-	if texture != null:
-		_material.set_shader_parameter("u_coast_clipmap", texture)
+	var macro: Texture2DArray = Planet.orbit_elevation_texture
+	var macro_res: int = Planet.orbit_texture_face_res
+	if force or macro != _bound_macro:
+		_bound_macro = macro
+		_material.set_shader_parameter("u_macro_elevation", macro)
+	if force or macro_res != _bound_macro_res:
+		_bound_macro_res = macro_res
+		_material.set_shader_parameter("u_macro_face_res", float(macro_res))
+	_material.set_shader_parameter("u_macro_ready", 1.0 if macro != null else 0.0)
 
 
 func _sync_uniforms(origin: Vector3) -> void:
@@ -244,6 +216,11 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	_material.set_shader_parameter("u_orbit_handoff_altitude", ORBIT_HANDOFF_ALTITUDE_M)
 	_material.set_shader_parameter("u_wave_scale", 1.0)
+
+	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
+	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
+		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
 
 
 func _build_batches() -> void:
@@ -396,6 +373,7 @@ func gpu_stats() -> Dictionary:
 		"visible_sectors": _visible_sector_count,
 		"grid_cells": GRID_CELLS,
 		"gpu_waves": true,
+		"gpu_coast_height": true,
 		"gpu_buoyancy_queries": _physics != null,
 		"orbit_handoff_m": ORBIT_HANDOFF_ALTITUDE_M,
 	}
