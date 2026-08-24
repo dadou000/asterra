@@ -40,6 +40,15 @@ const float RING_INNER_Q = 0.4375;
 const float RING_HANDOFF_Q = 0.50;
 const float TERRAIN_HALF_CELLS = 200.0;
 const float TERRAIN_FINE_MORPH_START_Q = 0.875;
+
+// Wave dynamics use one fixed full-detail bathymetry field at every ocean LOD.
+// Level 2 still carries every current terrain detail band (including 24 m) but
+// cannot change when the render clipmap changes level. The finite-difference
+// footprint is also fixed, so the same planet point always gets the same depth,
+// shore distance, refraction direction and dispersion frequency.
+const int OCEAN_BATHY_LEVEL = 2;
+const float OCEAN_BATHY_SAMPLE_M = 56.0;
+
 const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
 const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
 
@@ -64,7 +73,7 @@ float ocean_coarse_sink(vec2 cell, int level, float spacing) {
 	return blend * clamp(spacing * 0.16, 0.05, 3.0);
 }
 
-vec3 ocean_direction_for_offset(vec2 offset_m, int level) {
+vec3 ocean_direction_for_offset(vec2 offset_m) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) return normalize(u_center_dir);
 	// Match spherical_geometry_clipmap_procedural_uv.gdshader exactly: the active
@@ -95,31 +104,38 @@ void ocean_visible_terrain_lod(float arc_m, out int terrain_level, out float ter
 		: 0.0;
 }
 
-void ocean_bathymetry(vec3 d, float arc_m, float sample_m,
+void ocean_bathymetry(vec3 d, float arc_m,
 		out float raw_ground_h, out float smooth_ground_h,
 		out vec3 landward, out float signed_shore_distance,
 		out float coast_confidence) {
+	// The exact visible terrain LOD owns only the wet/dry mask. This preserves a
+	// coastline that is pixel-consistent with the current terrain representation.
 	int terrain_level;
 	float terrain_morph;
 	ocean_visible_terrain_lod(arc_m, terrain_level, terrain_morph);
-
 	raw_ground_h = gpu_terrain_height_with_morph(d, terrain_level, terrain_morph);
-	smooth_ground_h = raw_ground_h;
+
+	// Everything that controls the physical wave field comes from a fixed terrain
+	// evaluator. It is therefore identical for coincident vertices in L0, L1, ...
+	float physical_ground_h = gpu_terrain_height_for_level(d, OCEAN_BATHY_LEVEL);
+	smooth_ground_h = physical_ground_h;
 	landward = ocean_safe_tangent(d, SWELL_AXIS_A);
-	signed_shore_distance = -max(-raw_ground_h, 0.0) * 8.0;
+	signed_shore_distance = -max(-physical_ground_h, 0.0) * 8.0;
 	coast_confidence = 0.0;
 
-	if (abs(raw_ground_h) > 320.0) return;
+	if (abs(physical_ground_h) > 320.0) return;
 
 	vec3 tx = ocean_safe_tangent(d, u_center_right);
 	vec3 ty = ocean_safe_tangent(d, u_center_up);
-	float s = clamp(sample_m, 24.0, 110.0);
-	float hx0 = gpu_terrain_height_with_morph(ocean_offset_dir(d, tx, -s), terrain_level, terrain_morph);
-	float hx1 = gpu_terrain_height_with_morph(ocean_offset_dir(d, tx,  s), terrain_level, terrain_morph);
-	float hy0 = gpu_terrain_height_with_morph(ocean_offset_dir(d, ty, -s), terrain_level, terrain_morph);
-	float hy1 = gpu_terrain_height_with_morph(ocean_offset_dir(d, ty,  s), terrain_level, terrain_morph);
+	float s = OCEAN_BATHY_SAMPLE_M;
+	float hx0 = gpu_terrain_height_for_level(ocean_offset_dir(d, tx, -s), OCEAN_BATHY_LEVEL);
+	float hx1 = gpu_terrain_height_for_level(ocean_offset_dir(d, tx,  s), OCEAN_BATHY_LEVEL);
+	float hy0 = gpu_terrain_height_for_level(ocean_offset_dir(d, ty, -s), OCEAN_BATHY_LEVEL);
+	float hy1 = gpu_terrain_height_for_level(ocean_offset_dir(d, ty,  s), OCEAN_BATHY_LEVEL);
 
-	smooth_ground_h = (raw_ground_h * 4.0 + hx0 + hx1 + hy0 + hy1) * 0.125;
+	// Broad enough to reject 24 m terrain microstructure while preserving beaches,
+	// points and bays for refraction/diffraction.
+	smooth_ground_h = (physical_ground_h * 4.0 + hx0 + hx1 + hy0 + hy1) * 0.125;
 	vec2 g = vec2(hx1 - hx0, hy1 - hy0) / max(2.0 * s, 1.0);
 	float gm = length(g);
 	coast_confidence = smoothstep(0.025, 0.18, gm);
@@ -137,8 +153,12 @@ void vertex() {
 	vec2 offset_m = cell * spacing;
 	float arc_m = length(offset_m);
 	float raw_theta = arc_m / max(u_planet_radius, 1.0);
-	vec3 d = ocean_direction_for_offset(offset_m, level);
+	vec3 d = ocean_direction_for_offset(offset_m);
 
+	// This is now the only LOD-dependent input to the wave solver. It controls
+	// representability of short wavelengths, not physical phase/direction/time.
+	// At the fine ring's outer edge it becomes exactly the parent spacing, which
+	// matches the coarse ring at the same planet-space points.
 	float morph = ocean_fine_morph(cell);
 	float wave_spacing = mix(spacing, spacing * 2.0, morph);
 
@@ -147,7 +167,7 @@ void vertex() {
 	vec3 landward;
 	float shore_distance;
 	float coast_confidence;
-	ocean_bathymetry(d, arc_m, max(wave_spacing * 2.5, 32.0),
+	ocean_bathymetry(d, arc_m,
 		raw_ground_h, ground_h, landward, shore_distance, coast_confidence);
 	float depth = max(-ground_h, 0.0);
 
@@ -162,6 +182,8 @@ void vertex() {
 	float diffract_b = ocean_diffraction_weight(d, swell_b, landward, depth) * coast_confidence * 0.82;
 	vec3 dir_a = normalize(mix(refracted_a, ocean_diffraction_direction(d, swell_a, landward), diffract_a * 0.52));
 	vec3 dir_b = normalize(mix(refracted_b, ocean_diffraction_direction(d, swell_b, landward), diffract_b * 0.46));
+
+	// Planet-space phase axes: no clipmap coordinates participate here.
 	float phase_a = dot(p0, normalize(SWELL_AXIS_A));
 	float phase_b = dot(p0, normalize(SWELL_AXIS_B));
 
