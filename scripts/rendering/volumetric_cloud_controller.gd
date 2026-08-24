@@ -28,6 +28,7 @@ var _shape_texture: NoiseTexture3D
 var _detail_texture: NoiseTexture3D
 var _depth_effect: CloudDepthCompositorEffect
 var _shadow_receivers: Array[WeakRef] = []
+var _helion_lights: Array[WeakRef] = []
 var _wind_offset := Vector3.ZERO
 var _wind_accumulator := 0.0
 var _world_seed := 0x4153544552524100
@@ -91,6 +92,7 @@ func _try_bind_environment(world_environment: WorldEnvironment) -> void:
 	if material != _material:
 		configure(material, _world_seed, AppSettings.graphics_quality)
 	_install_depth_compositor(world_environment)
+	_register_helion_directional_lights(world_environment)
 
 
 func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
@@ -154,6 +156,29 @@ func _install_depth_compositor(world_environment: WorldEnvironment) -> void:
 	# deep sky and the stellar disc.
 	if _material != null:
 		_material.set_shader_parameter("u_cloud_enabled", 0.0)
+
+
+func _register_helion_directional_lights(world_environment: WorldEnvironment) -> void:
+	# The scene currently creates its stellar DirectionalLight3D beside the validated
+	# Asterra WorldEnvironment. Keep ordinary Godot shadow penumbrae and volumetric
+	# cloud penumbrae on the same physical apparent stellar diameter.
+	var parent := world_environment.get_parent()
+	if parent == null:
+		return
+	for child in parent.get_children():
+		if not (child is DirectionalLight3D):
+			continue
+		var light := child as DirectionalLight3D
+		if not light.shadow_enabled:
+			continue
+		var already_registered := false
+		for light_ref: WeakRef in _helion_lights:
+			if light_ref.get_ref() == light:
+				already_registered = true
+				break
+		if not already_registered:
+			_helion_lights.append(weakref(light))
+		light.light_angular_distance = Frames.helion_angular_diameter_deg()
 
 
 ## Surface renderers call this once after their final ShaderMaterial has been
@@ -232,6 +257,9 @@ func _sync_shadow_receiver(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_cloud_shadow_weather_scale", CLOUD_WEATHER_SCALE)
 	material.set_shader_parameter("u_cloud_shadow_extinction", CLOUD_EXTINCTION)
 	material.set_shader_parameter("u_cloud_shadow_steps", _shadow_steps(_quality))
+	material.set_shader_parameter("u_cloud_shadow_disc_samples", _shadow_disc_samples(_quality))
+	material.set_shader_parameter("u_cloud_shadow_helion_radius_m", Frames.helion_radius_m)
+	material.set_shader_parameter("u_cloud_shadow_helion_distance_m", Frames.helion_distance_m)
 	material.set_shader_parameter("u_cloud_shadow_wind_offset", _wind_offset)
 	material.set_shader_parameter("u_cloud_shadow_sun_dir", Frames.helion_dir)
 
@@ -286,6 +314,19 @@ func _process(delta: float) -> void:
 			continue
 		material.set_shader_parameter("u_cloud_shadow_wind_offset", _wind_offset)
 		material.set_shader_parameter("u_cloud_shadow_sun_dir", Frames.helion_dir)
+		# These are intentionally refreshed too. If Helion's system geometry changes
+		# later (season/orbit simulation or debug controls), penumbra width follows it
+		# without rebuilding materials.
+		material.set_shader_parameter("u_cloud_shadow_helion_radius_m", Frames.helion_radius_m)
+		material.set_shader_parameter("u_cloud_shadow_helion_distance_m", Frames.helion_distance_m)
+
+	var angular_diameter_deg := Frames.helion_angular_diameter_deg()
+	for i in range(_helion_lights.size() - 1, -1, -1):
+		var light := _helion_lights[i].get_ref() as DirectionalLight3D
+		if light == null:
+			_helion_lights.remove_at(i)
+			continue
+		light.light_angular_distance = angular_diameter_deg
 
 
 func _primary_steps(quality: int) -> int:
@@ -337,6 +378,21 @@ func _shadow_steps(quality: int) -> int:
 			return 10
 		_:
 			return 6
+
+
+func _shadow_disc_samples(quality: int) -> int:
+	# Number of equal-area points sampled across Helion's apparent disc. One sample
+	# is the point-source fallback; higher presets converge toward the finite-source
+	# Beer-Lambert integral without changing its physical angular radius.
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 1
+		GraphicsQuality.Preset.BALANCED:
+			return 3
+		GraphicsQuality.Preset.ULTRA:
+			return 7
+		_:
+			return 5
 
 
 func _seed32(world_seed: int, salt: int) -> int:
