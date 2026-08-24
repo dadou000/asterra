@@ -92,7 +92,12 @@ func _build_orbit_textures() -> void:
 	var cached: Dictionary = GlobalHeightmapCache.load_images(
 		cfg, visual_res, visual_tex_res)
 	if not cached.is_empty():
-		var cached_images: Array[Image] = cached["images"]
+		var cached_images: Array[Image] = []
+		var cached_value: Variant = cached.get("images", [])
+		if cached_value is Array:
+			for item: Variant in cached_value:
+				if item is Image:
+					cached_images.append(item as Image)
 		if _publish_global_height(cached_images, visual_res):
 			global_height_cache_hit = true
 			global_height_cache_path = String(cached["path"])
