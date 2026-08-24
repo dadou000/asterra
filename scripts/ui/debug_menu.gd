@@ -24,6 +24,7 @@ const SKY_DEFAULT := 1.0
 var debug: TerrainDebug
 var procedural_sky: ProceduralSky
 var sky_material: ShaderMaterial
+var sky_resource: Sky
 
 var _panel: PanelContainer
 var _buttons := {}
@@ -32,6 +33,7 @@ var _sink_label: Label
 var _sink_slider: HSlider
 var _sky_labels := {}
 var _sky_sliders := {}
+var _sky_target_label: Label
 
 
 func _ready() -> void:
@@ -155,6 +157,8 @@ func _build_sky_tab(tabs: TabContainer) -> void:
 	box.add_child(_section_title("Instanced stars"))
 	box.add_child(_note("1.00 values are the physical defaults. Controls are manual diagnostics only."))
 	box.add_child(_note("Set stellar radiance to 0.00 to verify the live material binding immediately."))
+	_sky_target_label = _note("Live sky target: unresolved")
+	box.add_child(_sky_target_label)
 
 	_add_sky_slider(box, "radiance", "Stellar radiance calibration", "Global fixed stellar photometric calibration; never driven by sun altitude.", 0.0, 2.0, 0.05, SKY_DEFAULT)
 	_add_sky_slider(box, "magnitude", "Magnitude flux response", "1.00 = physical Pogson law: 5 magnitudes = 100× flux.", 0.5, 1.5, 0.05, SKY_DEFAULT)
@@ -381,10 +385,41 @@ func _resolve_sky_targets() -> void:
 		if candidate is ProceduralSky:
 			procedural_sky = candidate as ProceduralSky
 
+	# Resolve the material through the actual WorldEnvironment -> Environment -> Sky
+	# chain instead of trusting a script-side cached variable. This guarantees that
+	# the sliders modify the material Godot is currently drawing.
+	sky_resource = null
+	sky_material = null
+	for child in root.get_children():
+		if not (child is WorldEnvironment):
+			continue
+		var world_environment := child as WorldEnvironment
+		var environment := world_environment.environment
+		if environment == null or environment.sky == null:
+			continue
+		sky_resource = environment.sky
+		# REALTIME makes the radiance/reflection cubemap follow the same-frame uniform
+		# edits too. Visible sky pixels already read the live material every frame.
+		sky_resource.radiance_size = Sky.RADIANCE_SIZE_256
+		sky_resource.process_mode = Sky.PROCESS_MODE_REALTIME
+		var live_material := sky_resource.sky_material
+		if live_material is ShaderMaterial:
+			sky_material = live_material as ShaderMaterial
+			break
+
+	# Fallback for unusual harnesses without a WorldEnvironment child.
 	if sky_material == null:
 		var material_value: Variant = root.get("sky_mat")
 		if material_value is ShaderMaterial:
 			sky_material = material_value as ShaderMaterial
+
+	if _sky_target_label != null:
+		if sky_material != null and sky_resource != null:
+			_sky_target_label.text = "     Live sky target: WorldEnvironment / REALTIME"
+		elif sky_material != null:
+			_sky_target_label.text = "     Live sky target: shader material fallback"
+		else:
+			_sky_target_label.text = "     Live sky target: NOT FOUND"
 
 
 func _on_rebake_pressed() -> void:
