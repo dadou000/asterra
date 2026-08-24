@@ -7,16 +7,21 @@ render_mode unshaded, cull_disabled, depth_draw_never, blend_add, fog_disabled;
 uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
 uniform float u_atmosphere_height = 60000.0;
-// Future weather/seeing integration can drive this without changing mean stellar
-// radiance. 0 = perfectly steady atmosphere, 1 = normal clear-night seeing.
+
+// Debug/validation overrides. Defaults are the physically calibrated path and are
+// constant through the day/night cycle; no automatic visibility compensation uses them.
+uniform float u_star_radiance_scale : hint_range(0.25, 2.0) = 1.0;
+uniform float u_magnitude_flux_exponent : hint_range(0.5, 1.5) = 1.0;
 uniform float u_seeing_strength : hint_range(0.0, 2.0) = 1.0;
+uniform float u_colour_strength : hint_range(0.0, 1.0) = 1.0;
+uniform float u_chromatic_scintillation_strength : hint_range(0.0, 2.0) = 1.0;
 
 const float BRIGHTEST_MAGNITUDE = -1.5;
 const float NAKED_EYE_LIMIT_MAGNITUDE = 6.5;
 const float MIN_STELLAR_TEMPERATURE_K = 2400.0;
 const float MAX_STELLAR_TEMPERATURE_K = 18000.0;
-// One fixed scene-linear photometric calibration for every time of day. It is
-// never modified to make the stars prettier or more visible.
+// Fixed scene-linear calibration. At physical magnitude response (1.0), the
+// -1.5 to +6.5 catalogue spans about 1585:1 in stellar flux.
 const float ZERO_MAGNITUDE_RADIANCE = 0.36;
 const vec3 REC709_LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -41,9 +46,8 @@ vec3 normalize_luminance(vec3 colour, float target_luminance) {
 
 
 vec3 blackbody_colour(float temperature_norm, float magnitude_norm) {
-	// Approximate a blackbody colour temperature in display RGB. The conversion is
-	// only used for chromaticity; the result is normalized to unit luminance below,
-	// so temperature can never make a star intrinsically brighter or dimmer.
+	// Approximate blackbody colour temperature in display RGB. This is chromaticity
+	// only: normalization below prevents stellar temperature changing luminance.
 	float kelvin = mix(
 		MIN_STELLAR_TEMPERATURE_K,
 		MAX_STELLAR_TEMPERATURE_K,
@@ -71,15 +75,15 @@ vec3 blackbody_colour(float temperature_norm, float magnitude_norm) {
 
 	vec3 colour = normalize_luminance(srgb_to_linear(vec3(r, g, b)), 1.0);
 
-	// Human naked-eye colour perception weakens rapidly for faint point sources.
-	// This is luminance-preserving desaturation, not a brightness adjustment.
+	// Naked-eye colour perception weakens for faint point sources. Desaturation is
+	// luminance-preserving and therefore does not alter the assigned magnitude.
 	float magnitude = mix(
 		BRIGHTEST_MAGNITUDE,
 		NAKED_EYE_LIMIT_MAGNITUDE,
 		clamp(magnitude_norm, 0.0, 1.0)
 	);
 	float cone_response = 1.0 - smoothstep(0.5, 5.8, magnitude);
-	float visible_chroma = mix(0.18, 0.90, cone_response);
+	float visible_chroma = mix(0.18, 0.90, cone_response) * clamp(u_colour_strength, 0.0, 1.0);
 	colour = mix(vec3(1.0), colour, visible_chroma);
 	return normalize_luminance(colour, 1.0);
 }
@@ -91,8 +95,12 @@ float stellar_radiance(float magnitude_norm) {
 		NAKED_EYE_LIMIT_MAGNITUDE,
 		clamp(magnitude_norm, 0.0, 1.0)
 	);
-	// Pogson magnitude law: five magnitudes = exactly 100x in flux.
-	return ZERO_MAGNITUDE_RADIANCE * pow(10.0, -0.4 * magnitude);
+	// Pogson law: five magnitudes = exactly 100x in flux when the debug exponent
+	// remains at its physical default of 1.0.
+	float response = clamp(u_magnitude_flux_exponent, 0.5, 1.5);
+	return ZERO_MAGNITUDE_RADIANCE
+		* clamp(u_star_radiance_scale, 0.25, 2.0)
+		* pow(10.0, -0.4 * magnitude * response);
 }
 
 
@@ -112,26 +120,21 @@ float temporal_noise(float x, float seed) {
 
 
 float scintillation_signal(float kind, float t, float seed) {
-	// Atmospheric scintillation is stochastic, not a periodic on/off blink. These
-	// classes are different turbulence spectra. Each is approximately zero-mean,
-	// so none of them adds average energy to a star.
+	// Different zero-mean turbulence spectra; none is a periodic on/off animation.
 	if (kind < 0.5) {
 		return 0.0;
 	}
-
 	if (kind < 1.5) {
 		float n1 = temporal_noise(t * 2.7, seed + 1.7);
 		float n2 = temporal_noise(t * 6.1, seed + 7.3);
 		return clamp(n1 * 0.64 + n2 * 0.36, -1.0, 1.0);
 	}
-
 	if (kind < 2.5) {
 		float n1 = temporal_noise(t * 4.1, seed + 2.1);
 		float n2 = temporal_noise(t * 9.3, seed + 11.8);
 		float n3 = temporal_noise(t * 15.7, seed + 23.4);
 		return clamp(n1 * 0.48 + n2 * 0.34 + n3 * 0.18, -1.0, 1.0);
 	}
-
 	if (kind < 3.5) {
 		float envelope = 0.42 + 0.58 * (temporal_noise(t * 0.62, seed + 31.2) * 0.5 + 0.5);
 		float carrier = temporal_noise(t * 5.2, seed + 3.6) * 0.57
@@ -139,9 +142,8 @@ float scintillation_signal(float kind, float t, float seed) {
 		return clamp(carrier * envelope, -1.0, 1.0);
 	}
 
-	// Rare strong, bursty seeing: a slowly varying turbulent envelope modulates
-	// several fast components. It can produce Sirius-like rapid intensity changes
-	// very near the horizon without introducing a repeated rhythm.
+	// Rare strong, bursty seeing. Near the horizon this can produce rapid changes
+	// resembling the conspicuous scintillation of a bright low-altitude star.
 	float envelope = 0.25 + 0.75 * (temporal_noise(t * 0.91, seed + 41.7) * 0.5 + 0.5);
 	float carrier = temporal_noise(t * 6.7, seed + 4.9) * 0.44
 		+ temporal_noise(t * 14.8, seed + 19.3) * 0.34
@@ -167,11 +169,14 @@ vec3 chromatic_scintillation(
 	float elevation,
 	float atmosphere_presence
 ) {
-	// Atmospheric dispersion makes bright low-altitude stars flash slightly red /
-	// blue as turbulent cells move the dispersed point image. Keep this subtle and
-	// preserve luminance exactly so it cannot act as a hidden brightness boost.
+	// Turbulence moving a dispersed low-altitude stellar image can shift apparent
+	// colour. Luminance is renormalized so this never becomes a brightness boost.
 	float low_altitude = 1.0 - smoothstep(0.035, 0.34, max(elevation, 0.0));
-	float amount = atmosphere_presence * low_altitude * pattern_gain(kind) * 0.085;
+	float amount = atmosphere_presence
+		* low_altitude
+		* pattern_gain(kind)
+		* 0.085
+		* clamp(u_chromatic_scintillation_strength, 0.0, 2.0);
 	if (amount <= 0.0001) {
 		return base_colour;
 	}
@@ -193,8 +198,8 @@ void vertex() {
 	vec3 centre_world = (MODEL_MATRIX * vec4(vec3(0.0), 1.0)).xyz;
 	v_star_dir = normalize(centre_world - camera_world);
 
-	// The quad is only the renderer's point-spread sampling footprint. Every star
-	// gets the same size; bright stars are not enlarged for presentation.
+	// Same renderer sampling footprint for every unresolved star: brightness is
+	// represented by radiance, never by scaling the star sprite.
 	float sx = length(MODEL_MATRIX[0].xyz);
 	float sy = length(MODEL_MATRIX[1].xyz);
 	vec3 camera_right = normalize(INV_VIEW_MATRIX[0].xyz);
@@ -230,8 +235,8 @@ void fragment() {
 	float air_mass = 1.0 / max(elevation, 0.055);
 	float excess_air_mass = max(air_mass - 1.0, 0.0);
 
-	// Wavelength-dependent extinction naturally reddens low stars instead of using
-	// an artistic tint. Blue light is removed more strongly over a long air path.
+	// Wavelength-dependent extinction naturally reddens low stars because blue
+	// light is removed more strongly along the longer atmospheric path.
 	vec3 extinction = exp(-vec3(0.045, 0.060, 0.092) * excess_air_mass);
 	extinction = mix(vec3(1.0), extinction, atmosphere_presence);
 	float horizon_visibility = mix(1.0, above_horizon, atmosphere_presence);
