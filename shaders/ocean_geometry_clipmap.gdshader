@@ -34,6 +34,8 @@ varying float v_crest;
 varying float v_level;
 
 const float MAX_PROJECTED_THETA = 1.62;
+const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
+const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
 
 float ocean_ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -70,8 +72,8 @@ void ocean_bathymetry(vec3 d, float sample_m, out float ground_h, out vec3 landw
 	vec2 g = vec2(hx1 - hx0, hy1 - hy0) / max(2.0 * s, 1.0);
 	float gm = length(g);
 	landward = gm > 1e-4 ? normalize(tx * g.x + ty * g.y) : tx;
-	// Local signed-distance approximation from the zero-height contour. Clamp it
-	// so broad flat shelves do not generate enormous phase coordinates.
+	// Local signed-distance approximation from the zero-height contour. Negative
+	// values are offshore, positive values are inland.
 	signed_shore_distance = clamp(ground_h / max(gm, 0.015), -6000.0, 6000.0);
 }
 
@@ -89,8 +91,7 @@ void vertex() {
 	float ground_h;
 	vec3 landward;
 	float shore_distance;
-	// Only levels that can visibly resolve surf pay for the four extra bathymetry
-	// taps. Coarse regional rings use the open-ocean direction and one height tap.
+	// Only rings capable of resolving surf pay for the four gradient taps.
 	if (level <= 7) {
 		ocean_bathymetry(d, max(spacing * 2.0, 24.0), ground_h, landward, shore_distance);
 	} else {
@@ -101,18 +102,20 @@ void vertex() {
 	float depth = max(-ground_h, 0.0);
 
 	vec3 p0 = d * u_planet_radius;
-	vec3 swell_a = ocean_safe_tangent(d, vec3(0.827, 0.201, 0.525));
-	vec3 swell_b = ocean_safe_tangent(d, vec3(-0.436, 0.331, 0.837));
+	vec3 swell_a = ocean_safe_tangent(d, SWELL_AXIS_A);
+	vec3 swell_b = ocean_safe_tangent(d, SWELL_AXIS_B);
 	float refract = 1.0 - smoothstep(22.0, 150.0, depth);
 	vec3 dir_a = normalize(mix(swell_a, landward, refract));
 	vec3 dir_b = normalize(mix(swell_b, landward, refract * 0.88));
+	float phase_a = dot(p0, normalize(SWELL_AXIS_A));
+	float phase_b = dot(p0, normalize(SWELL_AXIS_B));
 
 	OceanWaveSample wave = ocean_empty_wave();
 	float t = TIME;
-	ocean_add_wave(p0, d, dir_a, shore_distance, depth, spacing, 96.0, 0.78 * u_wave_scale, 0.62, t, 0.0, wave);
-	ocean_add_wave(p0, d, dir_b, shore_distance, depth, spacing, 42.0, 0.32 * u_wave_scale, 0.55, t, 1.7, wave);
-	ocean_add_wave(p0, d, dir_a, shore_distance, depth, spacing, 18.0, 0.105 * u_wave_scale, 0.48, t, 3.1, wave);
-	ocean_add_wave(p0, d, dir_b, shore_distance, depth, spacing, 8.0, 0.036 * u_wave_scale, 0.42, t, 4.6, wave);
+	ocean_add_wave(d, dir_a, phase_a, shore_distance, depth, spacing, 96.0, 0.78 * u_wave_scale, 0.62, t, 0.0, wave);
+	ocean_add_wave(d, dir_b, phase_b, shore_distance, depth, spacing, 42.0, 0.32 * u_wave_scale, 0.55, t, 1.7, wave);
+	ocean_add_wave(d, dir_a, phase_a, shore_distance, depth, spacing, 18.0, 0.105 * u_wave_scale, 0.48, t, 3.1, wave);
+	ocean_add_wave(d, dir_b, phase_b, shore_distance, depth, spacing, 8.0, 0.036 * u_wave_scale, 0.42, t, 4.6, wave);
 
 	vec3 displaced = p0 + wave.displacement;
 	v_planet = displaced;
