@@ -4,11 +4,11 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
-// Same procedural terrain function as the production shader, but logical clipmap
-// coordinates come from the mesh UV attribute instead of VERTEX_ID. Sector
-// batching uses compact local vertex buffers, so relying on global indexed vertex
-// ids is unnecessarily brittle and was causing triangles to reference the wrong
-// logical grid coordinates after the sector optimisation.
+// Robust procedural terrain shader. Logical clipmap coordinates come from UV,
+// not VERTEX_ID, so compact sector meshes cannot scramble the grid. Projection
+// mode is selected from physical arc distance rather than the LOD number, so two
+// overlapping LODs always map the same physical point through the same sphere
+// projection path.
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
@@ -39,6 +39,7 @@ const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
 const float FINE_MORPH_START_Q = 0.875;
 const float MAX_PROJECTED_THETA = 1.62;
+const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
 
@@ -55,16 +56,22 @@ float smootherstep_range(float edge0, float edge1, float x) {
 	return smootherstep01((x - edge0) / max(edge1 - edge0, 1e-9));
 }
 
-vec3 direction_for_offset(vec2 offset_m, int level) {
+vec3 direction_for_offset(vec2 offset_m) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) {
 		return normalize(u_center_dir);
 	}
-	if (level <= 8) {
+
+	// The previous optimisation switched projection at a fixed LOD (L8/L9), so
+	// overlapping levels could evaluate the same physical location differently.
+	// Switching on arc length preserves the optimisation without introducing an
+	// LOD-dependent coordinate system.
+	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
 		return normalize(u_center_dir
 			+ u_center_right * (offset_m.x / u_planet_radius)
 			+ u_center_up * (offset_m.y / u_planet_radius));
 	}
+
 	float raw_theta = arc / max(u_planet_radius, 1.0);
 	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
 	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
@@ -199,14 +206,12 @@ float clip_height(vec3 d, vec2 cell, int level) {
 }
 
 void vertex() {
-	// UV stores the original logical 0..400 grid coordinate explicitly. This is
-	// stable for compact sector meshes and independent of index-buffer layout.
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
 	float spacing = ring_spacing(level);
 	vec2 offset_m = cell * spacing;
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
-	vec3 d = direction_for_offset(offset_m, level);
+	vec3 d = direction_for_offset(offset_m);
 	float h = clip_height(d, cell, level);
 	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
