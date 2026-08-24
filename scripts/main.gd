@@ -1,5 +1,5 @@
 extends Node3D
-## Phase 1 harness: generate Asterra, stream it, walk it, dig it, save it.
+## Phase 1 harness: generate Asterra, keep terrain resident, walk it, dig it, save it.
 
 const AUTOSAVE := "phase1"
 
@@ -25,14 +25,6 @@ var elapsed := 0.0
 var _aim: Dictionary = {}
 var _started := false
 var _rebaking := false
-
-## High-resolution coastline synthesis is deliberately decoupled from world
-## startup. Planet.adopt() already provides the cheap 192x192 orbit texture, so
-## the game can start immediately while a low-priority worker refines it to the
-## physical 768x768 coastline in the background.
-var _orbit_surface_task_id: int = -1
-var _orbit_surface_generation: int = 0
-var _orbit_surface_building := false
 
 func _ready() -> void:
 	GraphicsQuality.configure_viewport(get_viewport(), AppSettings.graphics_quality)
@@ -114,34 +106,31 @@ func _setup_environment() -> void:
 	add_child(sun)
 
 func _on_baked(fields: PlanetFields) -> void:
-	# During a manual debug rebake the existing world stays alive while the new
-	# fields are generated. Swap them atomically here, then rebuild only the
-	# systems that depend on baked data instead of duplicating the whole scene.
+	# Planet.adopt() now loads or builds the single resident global height package.
+	# No terrain-height refinement worker is launched after this point.
 	if _rebaking and terrain != null:
 		var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 		Planet.adopt(fields)
-		_queue_orbit_surface_texture()
 		map.invalidate()
 		if map.visible:
 			map.refresh()
 		terrain.build_roots()
 		_push_orbit_surface_textures()
+		if orbit_ocean != null:
+			orbit_ocean.refresh_surface()
 		if editor != null:
 			editor.refresh()
 		if player != null:
-			# Elevation may have changed substantially; keep the geographic
-			# location but put the player safely above the newly baked surface.
 			player.spawn_at(keep_dir, 60.0)
 			player.input_enabled = not debug_menu.visible
 		debug_menu.set_rebake_busy(false)
 		hud.hide_progress()
-		hud.notify("Planet rebaked from seed — cache ignored")
+		hud.notify("Planet rebaked — resident global height refreshed")
 		_rebaking = false
 		_started = true
 		return
 
 	Planet.adopt(fields)
-	_queue_orbit_surface_texture()
 	hud.hide_progress()
 
 	terrain = FastPlanetTerrain.new()
@@ -173,46 +162,6 @@ func _on_baked(fields: PlanetFields) -> void:
 		hud.notify("Save '%s' found — press F9 to load it" % AUTOSAVE)
 	_started = true
 
-## Request a refined coastline without ever doing the synthesis in the frame
-## thread. If a rebake replaces the planet while an older request is running,
-## its result is discarded and one fresh request is started afterwards.
-func _queue_orbit_surface_texture() -> void:
-	_orbit_surface_generation += 1
-	if _orbit_surface_building:
-		return
-	_start_orbit_surface_texture_build(_orbit_surface_generation)
-
-func _start_orbit_surface_texture_build(request_id: int) -> void:
-	_orbit_surface_building = true
-	var task := func() -> void:
-		var built: Dictionary = OrbitSurfaceCache.build_images()
-		call_deferred("_on_orbit_surface_images_ready", request_id, built)
-	# Normal/low priority: terrain coverage jobs may use the pool's high-priority
-	# lane and should always win over this cosmetic refinement.
-	_orbit_surface_task_id = WorkerThreadPool.add_task(task, false, "asterra_orbit_coast")
-
-func _on_orbit_surface_images_ready(request_id: int, built: Dictionary) -> void:
-	# This deferred callback is queued only after the worker finished, so the wait
-	# is effectively just cleanup and cannot contain the expensive synthesis.
-	if _orbit_surface_task_id >= 0:
-		WorkerThreadPool.wait_for_task_completion(_orbit_surface_task_id)
-		_orbit_surface_task_id = -1
-	_orbit_surface_building = false
-
-	if request_id == _orbit_surface_generation and not built.is_empty():
-		var texture: Texture2DArray = OrbitSurfaceCache.create_texture(built)
-		if texture != null:
-			Planet.orbit_elevation_texture = texture
-			Planet.orbit_texture_face_res = int(built["face_res"])
-			_push_orbit_surface_textures()
-			if orbit_ocean != null:
-				orbit_ocean.refresh_surface()
-
-	# A rebake may have arrived while this task was running. Never publish its
-	# stale result; immediately refine the newest adopted planet instead.
-	if request_id != _orbit_surface_generation:
-		_start_orbit_surface_texture_build(_orbit_surface_generation)
-
 func _push_orbit_surface_textures() -> void:
 	if terrain == null or Planet.orbit_elevation_texture == null:
 		return
@@ -222,8 +171,6 @@ func _push_orbit_surface_textures() -> void:
 	var ground: ShaderMaterial = mats[0]
 	ground.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
 	ground.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
-	# Relief shading reads the same texture. Until it exists an unbound sampler
-	# returns zero, which would flatten every normal and shadow the whole planet.
 	ground.set_shader_parameter("u_relief_ready", 1.0)
 
 ## Pick the most convincing place to start: a well-drained, buildable site on a
@@ -285,10 +232,12 @@ func _on_coast_profile_applied(points: PackedVector2Array) -> void:
 		return
 	var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 	Planet.set_coast_profile_points(points)
-	# This curve is global, so every resident chunk and both coastline caches are
-	# invalid. Rebuilding roots is deterministic and does not rebake world fields.
+	# Coast shaping is part of the immutable global base. Explicit editing may
+	# rebuild/load a differently keyed global package, but normal travel never does.
+	if Planet.has_method("rebuild_global_height"):
+		Planet.rebuild_global_height(false)
 	terrain.build_roots()
-	_queue_orbit_surface_texture()
+	_push_orbit_surface_textures()
 	map.invalidate()
 	if map.visible:
 		map.refresh()
@@ -299,12 +248,9 @@ func _on_coast_profile_applied(points: PackedVector2Array) -> void:
 	if player != null:
 		player.spawn_at(keep_dir, 60.0)
 	if hud != null:
-		hud.notify("Coastline profile applied — sea side terrain rebuilt")
+		hud.notify("Coastline profile applied — global height refreshed")
 
 func _on_rebake_requested() -> void:
-	# Do not start a second generator while the initial bake or another manual
-	# rebake is already running. The menu button is re-enabled if the request was
-	# made too early.
 	if not _started or _rebaking:
 		debug_menu.set_rebake_busy(false)
 		return
@@ -314,8 +260,6 @@ func _on_rebake_requested() -> void:
 	hud.show_progress("Rebaking Asterra from seed…", 0.0)
 	bake = PlanetBake.new(cfg)
 	bake.finished.connect(_on_baked)
-	# Explicit false bypasses user://.../*.bake without deleting it. The fresh
-	# result is still saved by PlanetBake when generation finishes.
 	bake.bake_async(false)
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -349,7 +293,6 @@ func _dig() -> void:
 		var e: Dictionary = removed.entries[k]
 		moved += carry.add(e["material_id"], e["rock_family"], e["volume_loose"], e["props"])
 		e["volume_loose"] -= moved
-	# Anything the bucket could not take is left on the ground as a heap.
 	var leftover := MaterialStock.new()
 	for k in removed.entries.keys():
 		var e: Dictionary = removed.entries[k]
@@ -410,7 +353,6 @@ func _load() -> void:
 	player.restore(data["player"])
 	carry.deserialize(data["player"].get("carry", []))
 	elapsed = data.get("elapsed", 0.0)
-	# Every chunk must be rebuilt: the deltas it was meshed with have changed.
 	terrain.build_roots()
 	_push_orbit_surface_textures()
 	hud.notify("Loaded '%s' — %d delta tiles restored" % [AUTOSAVE, Deltas.edited_tile_count()])
@@ -419,8 +361,3 @@ func _player_state() -> Dictionary:
 	var s := player.state()
 	s["carry"] = carry.serialize()
 	return s
-
-func _exit_tree() -> void:
-	if _orbit_surface_task_id >= 0:
-		WorkerThreadPool.wait_for_task_completion(_orbit_surface_task_id)
-		_orbit_surface_task_id = -1
