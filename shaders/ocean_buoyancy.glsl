@@ -2,9 +2,9 @@
 #version 450
 
 // Batched ocean query kernel. Rendering and physics use the same finite-depth
-// bands, shoaling, coastal refraction and breaker cap. Bathymetry itself is kept
-// outside this local RenderingDevice: callers pass depth, landward tangent and
-// signed distance to the zero-height coastline for each probe.
+// bands, shoaling, coastal refraction, approximate diffraction and breaker cap.
+// Bathymetry itself is kept outside this local RenderingDevice: callers pass
+// depth, landward tangent and signed distance to the zero-height coastline.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -60,6 +60,21 @@ float coast_frequency_scale(float depth, float wavelength) {
     return mix(0.56, 1.0, deep_blend);
 }
 
+float diffraction_weight(vec3 up, vec3 incident, vec3 landward, float depth) {
+    vec3 i = safe_tangent(up, incident);
+    vec3 l = safe_tangent(up, landward);
+    float oblique = 1.0 - abs(dot(i, l));
+    float coastal = 1.0 - smoothstep(12.0, 170.0, depth);
+    return coastal * smoothstep(0.12, 0.88, oblique);
+}
+
+vec3 diffraction_direction(vec3 up, vec3 incident, vec3 landward) {
+    vec3 l = safe_tangent(up, landward);
+    vec3 coast_tangent = normalize(cross(up, l));
+    float side = dot(safe_tangent(up, incident), coast_tangent) >= 0.0 ? 1.0 : -1.0;
+    return safe_tangent(up, l + coast_tangent * side * 0.72);
+}
+
 void add_wave(vec3 up, vec3 dir, float offshore_phase_coord, float shore_distance,
               float depth, float wavelength, float base_amp, float steepness,
               float phase_off, inout vec3 displacement, inout vec3 grad,
@@ -99,8 +114,12 @@ void main() {
     vec3 swell_a = safe_tangent(up, SWELL_AXIS_A);
     vec3 swell_b = safe_tangent(up, SWELL_AXIS_B);
     float refract = 1.0 - smoothstep(22.0, 150.0, depth);
-    vec3 dir_a = normalize(mix(swell_a, landward, refract));
-    vec3 dir_b = normalize(mix(swell_b, landward, refract * 0.88));
+    vec3 refracted_a = normalize(mix(swell_a, landward, refract));
+    vec3 refracted_b = normalize(mix(swell_b, landward, refract * 0.88));
+    float diffract_a = diffraction_weight(up, swell_a, landward, depth);
+    float diffract_b = diffraction_weight(up, swell_b, landward, depth) * 0.82;
+    vec3 dir_a = normalize(mix(refracted_a, diffraction_direction(up, swell_a, landward), diffract_a * 0.52));
+    vec3 dir_b = normalize(mix(refracted_b, diffraction_direction(up, swell_b, landward), diffract_b * 0.46));
     float phase_a = dot(p, normalize(SWELL_AXIS_A));
     float phase_b = dot(p, normalize(SWELL_AXIS_B));
 
