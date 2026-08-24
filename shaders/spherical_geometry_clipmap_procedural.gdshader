@@ -4,11 +4,11 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 
-// One low-frequency source for the entire planet. The CPU reconstructs the
-// authoritative macro grid with a seam-safe cubic B-spline and samples that C2
-// field into a 2x texture with a wide cross-face gutter. Mipmaps provide the
-// missing low-pass stage: coarse clipmap levels sample progressively smoother
-// macro elevation instead of undersampling the same ~4 km texels.
+// One low-frequency source for the entire planet. The CPU strongly relaxes the
+// authoritative macro field, reconstructs it with a seam-safe cubic B-spline,
+// then supersamples that C2 surface to a dense 4x texture. Mipmaps are selected
+// from clipmap spacing so regional/coarse vertices see an appropriately low-pass
+// version instead of turning macro samples into broad facets.
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
@@ -40,8 +40,13 @@ const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
 const float FINE_MORPH_START_Q = 0.875;
 const float MAX_PROJECTED_THETA = 1.62;
-const float MACRO_FILTER_FOOTPRINT_VERTICES = 2.0;
-const float MACRO_MAX_LOD = 4.0;
+
+// Deliberately wider than the theoretical two-vertex Nyquist footprint. The
+// macro field is a landform scaffold; future terrain composition supplies the
+// high frequencies. Filtering over ~3 vertex spacings keeps broad slopes smooth
+// and prevents the macro lattice from becoming visible beneath detail noise.
+const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
+const float MACRO_MAX_LOD = 5.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -74,9 +79,6 @@ vec3 direction_for_offset(vec2 offset_m, int level) {
 	return normalize(u_center_dir * cos(theta) + tangent * sin(theta));
 }
 
-// The macro texture uses a wider gutter than the generic orbit textures. Derive
-// it from the actual texture size so the shader and CPU builder cannot drift out
-// of sync if the gutter changes later.
 vec3 macro_array_coord(vec3 dir) {
 	vec3 fuv = surface_face_uv(dir);
 	ivec3 size3 = textureSize(u_macro_elevation, 0);
@@ -87,10 +89,6 @@ vec3 macro_array_coord(vec3 dir) {
 }
 
 float macro_lod_for_spacing(float spacing_m) {
-	// Quarter-circumference divided by face resolution is the nominal macro texel
-	// footprint. Once a terrain vertex spacing approaches that footprint, sample a
-	// prefiltered mip. Fractional LOD + linear-mipmap filtering gives a continuous
-	// transition, so a clipmap handoff never changes macro smoothing abruptly.
 	float macro_texel_m = (PI * 0.5 * u_planet_radius) / max(u_macro_face_res, 1.0);
 	float footprint_m = max(spacing_m * MACRO_FILTER_FOOTPRINT_VERTICES, macro_texel_m);
 	return clamp(log2(footprint_m / macro_texel_m), 0.0, MACRO_MAX_LOD);
