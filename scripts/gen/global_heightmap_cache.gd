@@ -13,18 +13,22 @@ const IMAGE_FORMAT: Image.Format = Image.FORMAT_RF
 const CACHE_ROOT: String = "user://global_heightmaps"
 
 
-static func path_for(cfg: GenConfig, face_res: int, tex_res: int) -> String:
-	return "%s/%s_v%d_%d_%d.aghm" % [
+static func path_for(cfg: GenConfig, face_res: int, tex_res: int,
+		variant_key: String = "base") -> String:
+	var safe_variant: String = variant_key if not variant_key.is_empty() else "base"
+	return "%s/%s_%s_v%d_%d_%d.aghm" % [
 		CACHE_ROOT,
 		cfg.cache_key(),
+		safe_variant,
 		FORMAT_VERSION,
 		face_res,
 		tex_res,
 	]
 
 
-static func load_images(cfg: GenConfig, face_res: int, tex_res: int) -> Dictionary:
-	var path: String = path_for(cfg, face_res, tex_res)
+static func load_images(cfg: GenConfig, face_res: int, tex_res: int,
+		variant_key: String = "base") -> Dictionary:
+	var path: String = path_for(cfg, face_res, tex_res, variant_key)
 	if not FileAccess.file_exists(path):
 		return {}
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -70,11 +74,11 @@ static func load_images(cfg: GenConfig, face_res: int, tex_res: int) -> Dictiona
 
 
 static func save_images(cfg: GenConfig, face_res: int, tex_res: int,
-		images: Array[Image]) -> Dictionary:
+		images: Array[Image], variant_key: String = "base") -> Dictionary:
 	if images.size() != FACE_COUNT:
 		return {}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_ROOT))
-	var path: String = path_for(cfg, face_res, tex_res)
+	var path: String = path_for(cfg, face_res, tex_res, variant_key)
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		return {}
