@@ -248,8 +248,11 @@ float fine_morph_weight(vec2 cell) {
 	return smootherstep_range(FINE_MORPH_START_Q, 1.0, q);
 }
 
-float coarse_sink_weight(vec2 cell, int level) {
-	if (level <= 0) {
+float coarse_sink_weight(vec2 cell, int level, float is_ring) {
+	// A promoted centre disc may logically be L5 or L13, but it is still the
+	// centre disc and has no finer layer underneath it. Only annular instances
+	// receive the radial sink used to hide overlap with their finer neighbour.
+	if (is_ring < 0.5 || level <= 0) {
 		return 0.0;
 	}
 	float half_cells = u_grid_cells * 0.5;
@@ -310,6 +313,7 @@ vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
+	float is_ring = INSTANCE_CUSTOM.z;
 	float spacing = ring_spacing(level);
 	vec2 offset_m = cell * spacing;
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
@@ -317,7 +321,7 @@ void vertex() {
 	float morph = fine_morph_weight(cell);
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
-	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
+	float sink = coarse_sink_weight(cell, level, is_ring) * max(spacing * u_sink_scale, 0.5);
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
 	vec3 p = d * (u_planet_radius + height + u_surface_bias);
 
