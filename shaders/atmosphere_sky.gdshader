@@ -39,6 +39,18 @@ vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
 	return vec2(-b - s, -b + s);
 }
 
+// Analytic spherical limb used for the background itself. The terrain system is
+// streamed and does not necessarily provide geometry behind every downward ray,
+// so sky occlusion cannot rely on the depth buffer alone.
+float planet_sky_visibility(vec3 dir, vec3 up) {
+	float radius = max(u_planet_radius, 1.0);
+	float observer_radius = max(radius + max(u_camera_height, 0.01), radius + 0.01);
+	float radius_ratio = clamp(radius / observer_radius, 0.0, 1.0);
+	float tangent_mu = -sqrt(max(1.0 - radius_ratio * radius_ratio, 0.0));
+	float view_mu = dot(normalize(dir), normalize(up));
+	return smoothstep(tangent_mu - 0.0012, tangent_mu + 0.0012, view_mu);
+}
+
 float ozone_density(float height) {
 	return max(1.0 - abs(height - u_ozone_centre) / u_ozone_width, 0.0);
 }
@@ -200,6 +212,7 @@ void sky() {
 	vec3 origin = up * (u_planet_radius + max(u_camera_height, -500.0));
 	vec3 dir = normalize(EYEDIR);
 	vec3 sun_dir = normalize(LIGHT0_DIRECTION);
+	float planet_visibility = planet_sky_visibility(dir, up);
 
 	if (AT_HALF_RES_PASS) {
 		vec3 sun_color = LIGHT0_ENABLED ? LIGHT0_COLOR : vec3(1.0);
@@ -228,6 +241,11 @@ void sky() {
 
 		vec4 cloud = HALF_RES_COLOR;
 		col = cloud.rgb + col * cloud.a;
+
+		// The planet itself is not a sky object. If the view ray intersects the
+		// analytic sphere, suppress every background contribution (atmosphere,
+		// clouds, galaxy and sun) so missing streamed geometry can never expose sky.
+		col *= planet_visibility;
 		COLOR = 1.0 - exp(-col);
 		ALPHA = 1.0;
 	}
