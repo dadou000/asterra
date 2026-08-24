@@ -6,7 +6,7 @@ extends "res://scripts/terrain/planet_height_store_playable.gd"
 ## noise bands on CPU instead of invoking the old TerrainDetail synthesis. Existing
 ## TerrainDetail .ghz files use a different namespace and cannot leak into this path.
 
-const PROCEDURAL_CACHE_SUFFIX := "_gpuv1"
+const PROCEDURAL_CACHE_SUFFIX := "_gpuv2"
 
 
 func _configure_namespace() -> void:
@@ -44,8 +44,8 @@ func _procedural_detail(d: Vector3, spacing: float, macro_h: float,
 		noise_seed: int) -> float:
 	var world_m: Vector3 = d * Planet.cfg.planet_radius
 	var coast_guard: float = lerpf(0.38, 1.0,
-		smoothstep(45.0, 320.0, absf(macro_h)))
-	var mountain: float = smoothstep(500.0, 2600.0, maxf(macro_h, 0.0))
+		_smootherstep(45.0, 320.0, absf(macro_h)))
+	var mountain: float = _smootherstep(500.0, 2600.0, maxf(macro_h, 0.0))
 	var regional_gain: float = lerpf(0.72, 1.30, mountain)
 	var strength: float = maxf(0.05, Planet.cfg.detail_amplitude / 260.0)
 
@@ -66,8 +66,13 @@ func _procedural_detail(d: Vector3, spacing: float, macro_h: float,
 	return h * coast_guard * regional_gain * strength
 
 
+static func _smootherstep(edge0: float, edge1: float, x: float) -> float:
+	var t: float = clampf((x - edge0) / maxf(edge1 - edge0, 1e-9), 0.0, 1.0)
+	return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+
 static func _band_weight(wavelength_m: float, spacing_m: float) -> float:
-	return smoothstep(spacing_m * 4.0, spacing_m * 8.0, wavelength_m)
+	return _smootherstep(spacing_m * 4.0, spacing_m * 8.0, wavelength_m)
 
 
 func _detail_band(world_m: Vector3, wavelength_m: float, spacing_m: float,
@@ -120,10 +125,13 @@ static func _smooth_value_noise(p: Vector3, noise_seed: int) -> float:
 	var fz0: float = floor(p.z)
 	var i := Vector3i(int(fx0), int(fy0), int(fz0))
 	var f := Vector3(p.x - fx0, p.y - fy0, p.z - fz0)
+	# Perlin's quintic fade gives zero first and second derivatives at every
+	# lattice boundary. That matters when several octaves/bands are composed:
+	# cubic Hermite interpolation is only C1 and can leave broad curvature seams.
 	f = Vector3(
-		f.x * f.x * (3.0 - 2.0 * f.x),
-		f.y * f.y * (3.0 - 2.0 * f.y),
-		f.z * f.z * (3.0 - 2.0 * f.z))
+		f.x * f.x * f.x * (f.x * (f.x * 6.0 - 15.0) + 10.0),
+		f.y * f.y * f.y * (f.y * (f.y * 6.0 - 15.0) + 10.0),
+		f.z * f.z * f.z * (f.z * (f.z * 6.0 - 15.0) + 10.0))
 
 	var n000: float = _lattice_value(i + Vector3i(0, 0, 0), noise_seed)
 	var n100: float = _lattice_value(i + Vector3i(1, 0, 0), noise_seed)
@@ -145,4 +153,5 @@ func stats() -> Dictionary:
 	var out: Dictionary = super.stats()
 	out["procedural_collision"] = true
 	out["terrain_detail_generator"] = false
+	out["c2_noise"] = true
 	return out
