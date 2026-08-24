@@ -34,11 +34,31 @@ varying float v_crest;
 varying float v_level;
 
 const float MAX_PROJECTED_THETA = 1.62;
+const float FINE_MORPH_START_Q = 0.875;
+const float RING_INNER_Q = 0.4375;
+const float RING_HANDOFF_Q = 0.50;
 const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
 const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
 
 float ocean_ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
+}
+
+float ocean_smoother01(float x) {
+	x = clamp(x, 0.0, 1.0);
+	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+}
+
+float ocean_fine_morph(vec2 cell) {
+	float q = length(cell) / max(u_grid_cells * 0.5, 1.0);
+	return ocean_smoother01((q - FINE_MORPH_START_Q) / (1.0 - FINE_MORPH_START_Q));
+}
+
+float ocean_coarse_sink(vec2 cell, int level, float spacing) {
+	if (level <= 0) return 0.0;
+	float q = length(cell) / max(u_grid_cells * 0.5, 1.0);
+	float blend = 1.0 - ocean_smoother01((q - RING_INNER_Q) / (RING_HANDOFF_Q - RING_INNER_Q));
+	return blend * clamp(spacing * 0.16, 0.05, 3.0);
 }
 
 vec3 ocean_direction_for_offset(vec2 offset_m, int level) {
@@ -72,8 +92,6 @@ void ocean_bathymetry(vec3 d, float sample_m, out float ground_h, out vec3 landw
 	vec2 g = vec2(hx1 - hx0, hy1 - hy0) / max(2.0 * s, 1.0);
 	float gm = length(g);
 	landward = gm > 1e-4 ? normalize(tx * g.x + ty * g.y) : tx;
-	// Local signed-distance approximation from the zero-height contour. Negative
-	// values are offshore, positive values are inland.
 	signed_shore_distance = clamp(ground_h / max(gm, 0.015), -6000.0, 6000.0);
 }
 
@@ -88,12 +106,14 @@ void vertex() {
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
 	vec3 d = ocean_direction_for_offset(offset_m, level);
 
+	float morph = ocean_fine_morph(cell);
+	float wave_spacing = mix(spacing, spacing * 2.0, morph);
+
 	float ground_h;
 	vec3 landward;
 	float shore_distance;
-	// Only rings capable of resolving surf pay for the four gradient taps.
 	if (level <= 7) {
-		ocean_bathymetry(d, max(spacing * 2.0, 24.0), ground_h, landward, shore_distance);
+		ocean_bathymetry(d, max(wave_spacing * 2.0, 24.0), ground_h, landward, shore_distance);
 	} else {
 		ground_h = coast_surface_height(u_orbit_elevation, d, u_orbit_face_res, u_planet_radius);
 		landward = ocean_safe_tangent(d, vec3(0.81, 0.22, 0.54));
@@ -112,12 +132,13 @@ void vertex() {
 
 	OceanWaveSample wave = ocean_empty_wave();
 	float t = TIME;
-	ocean_add_wave(d, dir_a, phase_a, shore_distance, depth, spacing, 96.0, 0.78 * u_wave_scale, 0.62, t, 0.0, wave);
-	ocean_add_wave(d, dir_b, phase_b, shore_distance, depth, spacing, 42.0, 0.32 * u_wave_scale, 0.55, t, 1.7, wave);
-	ocean_add_wave(d, dir_a, phase_a, shore_distance, depth, spacing, 18.0, 0.105 * u_wave_scale, 0.48, t, 3.1, wave);
-	ocean_add_wave(d, dir_b, phase_b, shore_distance, depth, spacing, 8.0, 0.036 * u_wave_scale, 0.42, t, 4.6, wave);
+	ocean_add_wave(d, dir_a, phase_a, shore_distance, depth, wave_spacing, 96.0, 0.78 * u_wave_scale, 0.62, t, 0.0, wave);
+	ocean_add_wave(d, dir_b, phase_b, shore_distance, depth, wave_spacing, 42.0, 0.32 * u_wave_scale, 0.55, t, 1.7, wave);
+	ocean_add_wave(d, dir_a, phase_a, shore_distance, depth, wave_spacing, 18.0, 0.105 * u_wave_scale, 0.48, t, 3.1, wave);
+	ocean_add_wave(d, dir_b, phase_b, shore_distance, depth, wave_spacing, 8.0, 0.036 * u_wave_scale, 0.42, t, 4.6, wave);
 
-	vec3 displaced = p0 + wave.displacement;
+	float sink = ocean_coarse_sink(cell, level, spacing);
+	vec3 displaced = p0 + wave.displacement - d * sink;
 	v_planet = displaced;
 	v_render = displaced - u_origin;
 	v_depth = depth;
