@@ -158,11 +158,19 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 	if GroundGeometryClipmap.has_method("gpu_stream_stats"):
 		var gs: Dictionary = GroundGeometryClipmap.gpu_stream_stats()
 		if bool(gs.get("spherical", false)):
-			lines.append("[color=#666]spherical L%d/%d  cap %.1f km  grid %d×%d  sectors %d/%d[/color]" % [
-				int(gs.get("active_levels", 0)), int(gs.get("max_level", 0)) + 1,
+			var lod_min: int = int(gs.get("active_min_level", 0))
+			var lod_max: int = int(gs.get("active_max_level", int(gs.get("max_level", 0))))
+			lines.append("[color=#666]spherical L%d-L%d  %d active  cap %.1f km  grid %d×%d  sectors %d/%d[/color]" % [
+				lod_min, lod_max, int(gs.get("active_levels", 0)),
 				float(gs.get("visible_cap_km", 0.0)), int(gs.get("grid_cells", 0)),
 				int(gs.get("grid_cells", 0)), int(gs.get("visible_sectors", 0)),
 				int(gs.get("sector_count", 0))])
+		if bool(gs.get("screen_space_lod", false)):
+			lines.append("[color=#666]LOD %.2f m/px  target %.0f/%.0f px fine/parent  sample distance %.1f km[/color]" % [
+				float(gs.get("metres_per_pixel", 0.0)),
+				float(gs.get("target_fine_vertex_px", 8.0)),
+				float(gs.get("target_parent_vertex_px", 16.0)),
+				float(gs.get("lod_surface_distance_m", 0.0)) / 1000.0])
 		lines.append("[color=#666]GPU terrain global %d²×6  batches %d  procedural detail ON  visual pages OFF[/color]" % [
 			int(gs.get("global_face_res", gh.get("face_res", 0))),
 			int(gs.get("draw_batches", 0))])
