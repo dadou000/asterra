@@ -3,12 +3,17 @@ extends Node3D
 ## Procedural night-sky manager for 0.0.5 terrain.
 ##
 ## Stars are generated once into a MultiMesh and rendered in one instanced draw.
-## Large-scale galactic/nebular structure remains in the sky shader where it is
-## effectively free compared with creating geometry for diffuse features.
+## Their apparent radiance is fixed from generated apparent magnitude. Nothing in
+## this manager raises stellar brightness at night; visibility must emerge from
+## atmospheric radiance, extinction, eye adaptation, tonemapping and bloom.
 
 const TWINKLE_FRACTION := 0.16
 const FAR_FIELD_SCALE := 0.58
-const BASE_POINT_SIZE := 0.00115
+# Fixed point-spread footprint for every unresolved star. This is a rasterization
+# footprint, not a brightness-dependent visual size.
+const BASE_POINT_SIZE := 0.00105
+const BRIGHTEST_MAGNITUDE := -1.5
+const NAKED_EYE_LIMIT_MAGNITUDE := 6.5
 
 var observer: AsterraPlayer
 var star_mesh: MultiMeshInstance3D
@@ -35,7 +40,6 @@ func _process(_delta: float) -> void:
 	var far_radius := maxf(observer.camera.far * FAR_FIELD_SCALE, 5000.0)
 	scale = Vector3.ONE * far_radius
 	star_material.set_shader_parameter("u_up", observer.up_dir())
-	star_material.set_shader_parameter("u_sun_dir", Frames.helion_dir.normalized())
 	star_material.set_shader_parameter("u_camera_height", observer.altitude())
 	star_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
 
@@ -51,8 +55,8 @@ func _try_bind_observer() -> void:
 
 
 func _star_count() -> int:
-	# One draw call on every preset; only instance density changes. The low tier is
-	# intentionally conservative for the GTX 1050-class minimum target.
+	# One draw call on every preset; only catalogue density changes. Lower tiers
+	# remove stars rather than changing the radiance of the stars that remain.
 	match GraphicsQuality.sanitize(AppSettings.graphics_quality):
 		GraphicsQuality.Preset.PERFORMANCE:
 			return 3500
@@ -85,18 +89,17 @@ func _build_stars() -> void:
 	multimesh.instance_count = star_count
 
 	var rng := RandomNumberGenerator.new()
-	# The sky is deterministic for a world seed. A separate salt ensures changing
-	# terrain generation does not accidentally correlate stars with terrain noise.
+	# Deterministic celestial catalogue with a salt independent from terrain noise.
 	rng.seed = int(Planet.cfg.world_seed) ^ 0x5A17B1E
 
 	for i in star_count:
 		var direction := _random_unit_vector(rng)
-		# Strong faint-star bias approximates the naked-eye magnitude distribution:
-		# many threshold stars, few bright ones, and a very sparse standout tail.
-		var magnitude_bias := pow(rng.randf(), 3.0)
-		var brightness := lerpf(0.010, 0.42, magnitude_bias)
-		if rng.randf() < 0.008:
-			brightness = lerpf(0.42, 0.72, rng.randf())
+		var magnitude := _sample_apparent_magnitude(rng)
+		var magnitude_norm := inverse_lerp(
+			BRIGHTEST_MAGNITUDE,
+			NAKED_EYE_LIMIT_MAGNITUDE,
+			magnitude
+		)
 
 		var temperature := clampf(0.50 + rng.randfn(0.0, 0.22), 0.0, 1.0)
 		var twinkles := rng.randf() < TWINKLE_FRACTION
@@ -105,14 +108,13 @@ func _build_stars() -> void:
 			pattern = rng.randi_range(1, 4)
 		var phase := rng.randf()
 
-		# Most stars remain unresolved sub-pixel points. A tiny bright tail grows
-		# slightly so temporal AA retains them without producing oversized discs.
-		var angular_size := BASE_POINT_SIZE * lerpf(0.70, 1.65, sqrt(brightness / 0.72))
-		var basis := Basis.IDENTITY.scaled(Vector3.ONE * angular_size)
+		# All unresolved stars use the same sampling footprint. Their prominence is
+		# exclusively a consequence of magnitude-derived radiance and the renderer.
+		var basis := Basis.IDENTITY.scaled(Vector3.ONE * BASE_POINT_SIZE)
 		var xform := Transform3D(basis, direction)
 		multimesh.set_instance_transform(i, xform)
 		multimesh.set_instance_custom_data(i, Color(
-			brightness,
+			magnitude_norm,
 			temperature,
 			float(pattern) / 4.0,
 			phase
@@ -124,6 +126,17 @@ func _build_stars() -> void:
 	star_mesh.visibility_range_end = 0.0
 	star_mesh.extra_cull_margin = 100000000.0
 	add_child(star_mesh)
+
+
+func _sample_apparent_magnitude(rng: RandomNumberGenerator) -> float:
+	# Approximate naked-eye cumulative star counts with log N(<m) proportional to
+	# 10^(0.6m). This naturally gives many faint stars and very few bright ones.
+	# Crucially, it generates a physical magnitude; no later stage brightens stars
+	# according to time of day or desired appearance.
+	var bright_count := pow(10.0, 0.6 * BRIGHTEST_MAGNITUDE)
+	var faint_count := pow(10.0, 0.6 * NAKED_EYE_LIMIT_MAGNITUDE)
+	var cumulative := lerpf(bright_count, faint_count, rng.randf())
+	return log(cumulative) / (0.6 * log(10.0))
 
 
 func _random_unit_vector(rng: RandomNumberGenerator) -> Vector3:
