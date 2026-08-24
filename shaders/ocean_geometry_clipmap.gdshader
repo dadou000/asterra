@@ -25,10 +25,13 @@ uniform vec3 u_foam : source_color = vec3(0.88, 0.93, 0.96);
 
 varying vec3 v_planet;
 varying vec3 v_render;
+varying vec3 v_slope;
 varying float v_depth;
 varying float v_valid;
 varying float v_breaking;
 varying float v_crest;
+varying float v_compression;
+varying float v_diffraction;
 varying float v_level;
 
 const float MAX_PROJECTED_THETA = 1.62;
@@ -123,8 +126,12 @@ void vertex() {
 	vec3 swell_a = ocean_safe_tangent(d, SWELL_AXIS_A);
 	vec3 swell_b = ocean_safe_tangent(d, SWELL_AXIS_B);
 	float refract = 1.0 - smoothstep(22.0, 150.0, depth);
-	vec3 dir_a = normalize(mix(swell_a, landward, refract));
-	vec3 dir_b = normalize(mix(swell_b, landward, refract * 0.88));
+	vec3 refracted_a = normalize(mix(swell_a, landward, refract));
+	vec3 refracted_b = normalize(mix(swell_b, landward, refract * 0.88));
+	float diffract_a = ocean_diffraction_weight(d, swell_a, landward, depth);
+	float diffract_b = ocean_diffraction_weight(d, swell_b, landward, depth) * 0.82;
+	vec3 dir_a = normalize(mix(refracted_a, ocean_diffraction_direction(d, swell_a, landward), diffract_a * 0.52));
+	vec3 dir_b = normalize(mix(refracted_b, ocean_diffraction_direction(d, swell_b, landward), diffract_b * 0.46));
 	float phase_a = dot(p0, normalize(SWELL_AXIS_A));
 	float phase_b = dot(p0, normalize(SWELL_AXIS_B));
 
@@ -139,9 +146,12 @@ void vertex() {
 	vec3 displaced = p0 + wave.displacement - d * sink;
 	v_planet = displaced;
 	v_render = displaced - u_origin;
+	v_slope = wave.slope;
 	v_depth = depth;
 	v_breaking = wave.breaking;
 	v_crest = wave.crest;
+	v_compression = wave.compression;
+	v_diffraction = max(diffract_a, diffract_b);
 	v_level = float(level);
 	v_valid = (ground_h < 0.45 && raw_theta <= u_visible_cap_angle) ? 1.0 : 0.0;
 	VERTEX = v_render;
@@ -154,18 +164,31 @@ void fragment() {
 	if (camera_alt >= u_orbit_handoff_altitude) discard;
 
 	vec3 up = normalize(v_planet);
+	// Analytic wave slope is smoothly interpolated across triangles, unlike raw
+	// geometric derivatives which reveal the clipmap tessellation. Retain a small
+	// derivative contribution so coastline bending and LOD morphing remain visible.
+	vec3 analytic_n = normalize(up - v_slope);
 	vec3 dx = dFdx(v_render);
 	vec3 dy = dFdy(v_render);
 	vec3 wn_raw = cross(dx, dy);
-	vec3 n = length(wn_raw) > 1e-7 ? normalize(wn_raw) : up;
+	vec3 geometric_n = length(wn_raw) > 1e-7 ? normalize(wn_raw) : up;
+	if (dot(geometric_n, up) < 0.0) geometric_n = -geometric_n;
+	float geometric_mix = 0.10 + 0.10 * smoothstep(0.0, 7.0, v_depth);
+	vec3 n = normalize(mix(analytic_n, geometric_n, geometric_mix));
 	if (dot(n, up) < 0.0) n = -n;
-	if (!FRONT_FACING) n = -n;
 
 	float depth = v_depth;
 	vec3 base = water_depth_tint(depth, u_shallow, u_shelf, u_deep);
-	float shorewash = (1.0 - smoothstep(0.15, 3.8, depth)) * smoothstep(0.52, 0.94, v_crest);
-	float foam = clamp(max(v_breaking, shorewash) * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
-	base = mix(base, u_foam, foam * 0.88);
+	float surf_zone = 1.0 - smoothstep(0.2, 9.0, depth);
+	float shorewash = (1.0 - smoothstep(0.12, 3.8, depth)) * smoothstep(0.50, 0.93, v_crest);
+	float whitecap = v_compression * smoothstep(0.54, 0.90, v_crest);
+	float breaker_foam = v_breaking * (0.68 + 0.32 * v_compression);
+	float diffracted_foam = v_diffraction * surf_zone * v_compression * 0.35;
+	float foam_pattern = surface_vnoise(v_planet * 0.018 + vec3(TIME * 0.018, -TIME * 0.011, TIME * 0.007));
+	float foam_detail = mix(0.72, 1.12, foam_pattern);
+	float foam = max(max(shorewash, whitecap * 0.55), max(breaker_foam, diffracted_foam));
+	foam = clamp(foam * foam_detail * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
+	base = mix(base, u_foam, foam * 0.90);
 
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
