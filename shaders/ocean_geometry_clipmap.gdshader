@@ -10,8 +10,6 @@ render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specula
 uniform vec3 u_origin = vec3(0.0);
 uniform sampler2DArray u_orbit_elevation;
 uniform float u_orbit_face_res = 192.0;
-uniform float u_planet_radius = 1000000.0;
-uniform float u_atmosphere_height = 80000.0;
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
 uniform vec3 u_center_right = vec3(0.0, 0.0, -1.0);
 uniform vec3 u_center_up = vec3(0.0, 1.0, 0.0);
