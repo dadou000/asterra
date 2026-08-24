@@ -218,24 +218,24 @@ void sky() {
 			u_cloud_light_steps
 		);
 		COLOR = cloud.rgb;
-		// The half-res alpha stores *remaining background transmittance*, not cloud
-		// opacity. This lets the full pass compose radiance in physically correct order.
+		// The half-res alpha stores remaining background transmittance, not cloud
+		// opacity. The full pass uses it to compose the background behind clouds.
 		ALPHA = cloud.a;
-		return;
-	}
+	} else {
+		vec3 col = scatter(dir, origin, sun_dir);
+		col += deep_sky(dir, up);
+		if (LIGHT0_ENABLED && LIGHT0_ENERGY > 0.0) {
+			float cos_angle = dot(dir, sun_dir);
+			float sun_diameter = max(LIGHT0_SIZE, 0.0087);
+			float sun_radius = sun_diameter * 0.5;
+			float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.92), cos_angle);
+			float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
+			col += disc * visible * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
+		}
 
-	vec3 col = scatter(dir, origin, sun_dir);
-	col += deep_sky(dir, up);
-	if (LIGHT0_ENABLED && LIGHT0_ENERGY > 0.0) {
-		float cos_angle = dot(dir, sun_dir);
-		float sun_diameter = max(LIGHT0_SIZE, 0.0087);
-		float sun_radius = sun_diameter * 0.5;
-		float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.92), cos_angle);
-		float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
-		col += disc * visible * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
+		vec4 cloud = HALF_RES_COLOR;
+		col = cloud.rgb + col * cloud.a;
+		COLOR = 1.0 - exp(-col);
+		ALPHA = 1.0;
 	}
-
-	vec4 cloud = HALF_RES_COLOR;
-	col = cloud.rgb + col * cloud.a;
-	COLOR = 1.0 - exp(-col);
 }
