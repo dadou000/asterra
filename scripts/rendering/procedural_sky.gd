@@ -313,11 +313,7 @@ func _ensure_live_material_binding() -> void:
 	if star_mesh != null and is_instance_valid(star_mesh):
 		if star_mesh.material_override != star_material:
 			star_mesh.material_override = star_material
-		if star_mesh.multimesh != null and star_mesh.multimesh.mesh == star_quad:
-			# Keep the MultiMesh surface pointed at the same QuadMesh resource that owns
-			# the live ShaderMaterial. Assignment is cheap and only occurs on mismatch.
-			pass
-		elif star_mesh.multimesh != null:
+		if star_mesh.multimesh != null and star_mesh.multimesh.mesh != star_quad:
 			star_mesh.multimesh.mesh = star_quad
 
 
@@ -346,7 +342,8 @@ func _set_star_shader_parameter(
 	if not verify_numeric:
 		return true
 	var applied: Variant = star_material.get_shader_parameter(parameter)
-	if not (applied is float or applied is int):
+	var applied_type := typeof(applied)
+	if applied_type != TYPE_FLOAT and applied_type != TYPE_INT:
 		push_warning("ProceduralSky: shader parameter '%s' did not return a numeric value" % parameter)
 		return false
 	var matches := absf(float(applied) - float(value)) <= DEBUG_PARAMETER_EPSILON
