@@ -7,6 +7,7 @@ render_mode unshaded, cull_disabled, depth_draw_never, blend_add, fog_disabled;
 uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
 uniform float u_atmosphere_height = 60000.0;
+uniform float u_planet_radius = 1000000.0;
 
 // Debug/validation overrides. Defaults are the physically calibrated path and are
 // constant through the day/night cycle; no automatic visibility compensation uses them.
@@ -20,8 +21,6 @@ const float BRIGHTEST_MAGNITUDE = -1.5;
 const float NAKED_EYE_LIMIT_MAGNITUDE = 6.5;
 const float MIN_STELLAR_TEMPERATURE_K = 2400.0;
 const float MAX_STELLAR_TEMPERATURE_K = 18000.0;
-// Fixed scene-linear calibration. At physical magnitude response (1.0), the
-// -1.5 to +6.5 catalogue spans about 1585:1 in stellar flux.
 const float ZERO_MAGNITUDE_RADIANCE = 0.36;
 const vec3 REC709_LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -40,6 +39,18 @@ vec3 srgb_to_linear(vec3 c) {
 vec3 normalize_luminance(vec3 colour, float target_luminance) {
 	float current = max(dot(colour, REC709_LUMA), 1e-5);
 	return colour * (target_luminance / current);
+}
+
+// Analytic spherical-planet limb. This is independent of terrain depth, so stars
+// cannot leak through the far side of Asterra when the streamed terrain mesh does
+// not cover that ray. At altitude it naturally reveals more than a hemisphere.
+float planet_sky_visibility(vec3 dir, vec3 up) {
+	float radius = max(u_planet_radius, 1.0);
+	float observer_radius = max(radius + max(u_camera_height, 0.01), radius + 0.01);
+	float radius_ratio = clamp(radius / observer_radius, 0.0, 1.0);
+	float tangent_mu = -sqrt(max(1.0 - radius_ratio * radius_ratio, 0.0));
+	float view_mu = dot(normalize(dir), normalize(up));
+	return smoothstep(tangent_mu - 0.0012, tangent_mu + 0.0012, view_mu);
 }
 
 vec3 blackbody_colour(float temperature_norm, float magnitude_norm) {
@@ -148,10 +159,15 @@ void fragment() {
 	float r2 = dot(p, p);
 	float profile = exp(-r2 * 4.8) * (1.0 - smoothstep(0.72, 1.0, r2));
 	if (profile <= 0.001) discard;
+
 	vec3 up = normalize(u_up);
+	vec3 star_dir = normalize(v_star_dir);
+	float planet_visibility = planet_sky_visibility(star_dir, up);
+	if (planet_visibility <= 0.0001) discard;
+
 	float atmosphere_height = max(u_atmosphere_height, 1.0);
 	float atmosphere_presence = 1.0 - smoothstep(atmosphere_height * 0.72, atmosphere_height * 1.08, u_camera_height);
-	float elevation = dot(normalize(v_star_dir), up);
+	float elevation = dot(star_dir, up);
 	float above_horizon = smoothstep(-0.012, 0.045, elevation);
 	float air_mass = 1.0 / max(elevation, 0.055);
 	float excess_air_mass = max(air_mass - 1.0, 0.0);
@@ -164,12 +180,13 @@ void fragment() {
 	float turbulent_path = pow(near_horizon, 1.35);
 	float base_amplitude = mix(0.012, 0.58, turbulent_path);
 	float scintillation_amplitude = atmosphere_presence * clamp(u_seeing_strength, 0.0, 2.0) * gain * base_amplitude;
-	float seed = v_phase * 4096.0 + dot(v_star_dir, vec3(17.0, 59.0, 113.0));
+	float seed = v_phase * 4096.0 + dot(star_dir, vec3(17.0, 59.0, 113.0));
 	float signal = scintillation_signal(kind, TIME, seed);
 	float scintillation = max(0.0, 1.0 + scintillation_amplitude * signal);
 	vec3 colour = blackbody_colour(v_temperature_norm, v_magnitude_norm);
 	colour = chromatic_scintillation(colour, kind, TIME, seed, elevation, atmosphere_presence);
 	float radiance = stellar_radiance(v_magnitude_norm);
-	EMISSION = colour * extinction * radiance * scintillation;
-	ALPHA = profile * horizon_visibility;
+
+	EMISSION = colour * extinction * radiance * scintillation * planet_visibility;
+	ALPHA = profile * horizon_visibility * planet_visibility;
 }
