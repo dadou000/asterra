@@ -1,438 +1,259 @@
-# Asterra terrain performance architecture
+# Asterra terrain architecture
 
-Status: implementation plan for `terraintesting/0.0.5` and the path toward the production terrain renderer.
+Status: active architecture for `terraintesting/0.0.5`.
 
-The objective is not to make `ChunkBuilder` fast enough to synthesize a planet while the player moves. The objective is to remove terrain synthesis and mesh construction from the normal runtime path.
+The terrain renderer no longer streams visual height pages. The planet has one immutable, resident low-frequency elevation field; all finer untouched terrain is synthesized deterministically on the GPU at the clipmap vertices. Runtime storage is reserved for player edits and local physics structures, not for visual terrain coverage.
 
-## 1. Targets
+## 1. Runtime goals
 
-Asterra must support all of these at the same time:
+Asterra must support seamless surface-to-orbit travel, approximately 0.75 m near-ground geometry, fast vehicles and aircraft, persistent editing, spherical terrain and bounded CPU work.
 
-- seamless surface-to-orbit traversal on a spherical planet;
-- approximately 0.75 m ground geometry near the player;
-- high-speed ground vehicles without terrain-generation stalls;
-- aircraft crossing large distances quickly;
-- persistent terrain editing;
-- a low-end graphics path that remains viable on GTX 1050-class hardware;
-- deterministic world generation and multiplayer-compatible terrain deltas.
-
-### Runtime budgets
-
-These are design budgets, not promises from the current prototype:
-
-| subsystem | target |
-| --- | ---: |
-| terrain work on main thread | < 1 ms/frame typical, < 2 ms worst case |
-| runtime procedural terrain synthesis in shipped worlds | 0 samples/frame |
-| local `ChunkBuilder` jobs after ground clipmap is resident | 0 |
-| ground render submissions | 1-2 preferred, <= 6 acceptable during migration |
-| ground CPU mesh rebuilds while travelling | 0 |
-| terrain I/O | asynchronous and predictive |
-| terrain worker saturation | never allowed to starve render/physics |
-| collision coverage | guaranteed ahead of simulated bodies |
-
-The runtime may temporarily display a coarser valid representation when fine data has not arrived. It must not stall the game thread to manufacture missing visual detail.
-
-## 2. Final representation hierarchy
-
-The planet should not use one render system at every scale.
-
-### Tier A - orbit / upper atmosphere
-
-Purpose: planet silhouette and satellite-scale appearance.
-
-- very coarse sphere/cube-sphere geometry;
-- baked height/displacement at orbital scale;
-- very high resolution tiled/virtual surface atlas;
-- baked macro normal/roughness/water/snow/vegetation controls;
-- no local ground chunks;
-- no `ChunkBuilder` refinement to sub-kilometre scales.
-
-The orbital texture carries most apparent detail. Geometry only needs enough resolution for the silhouette and large mountain ranges.
-
-### Tier B - regional terrain
-
-Purpose: low atmosphere and long-distance landscape.
-
-- baked height pyramid, roughly tens to hundreds of metres per sample;
-- coarse global quadtree only for visibility/culling and spherical coverage;
-- no expensive procedural synthesis per vertex;
-- material and normal data streamed from the same authoritative bake.
-
-### Tier C - ground geometry clipmap
-
-Purpose: walking, vehicles, structures and close flight.
-
-Current target levels:
-
-| level | approximate spacing |
-| ---: | ---: |
-| L0 | 0.75 m |
-| L1 | 1.5 m |
-| L2 | 3 m |
-| L3 | 6 m |
-| L4 | 12 m |
-| L5 | 24 m |
-| backing | 48 m |
-
-The meshes are fixed concentric rings. Moving across the world changes data, not topology.
-
-Requirements:
-
-- ring origin snaps to the backing lattice;
-- fine levels morph to the exact next coarser representation before topology boundaries;
-- outer clipmap converges to the global 48 m representation before handoff;
-- no visible square rings;
-- no CPU mesh rebuilds during travel;
-- velocity-biased prefetch so high-speed vehicles load terrain ahead, not symmetrically behind.
-
-### Tier D - micro surface detail
-
-Anything much smaller than the 0.75 m geometry lattice should normally be represented by:
-
-- PBR material textures;
-- shader normals;
-- decals;
-- vegetation/rocks/meshes;
-- optional bounded tessellation/microdisplacement only where hardware and the engine path permit it.
-
-Do not increase CPU heightfield density merely to represent centimetre-scale visual roughness.
-
-## 3. Authoritative offline world compiler
-
-The production world is compiled, not synthesized during gameplay.
-
-Pipeline:
+The hard runtime rule is now:
 
 ```text
-seed/config
-   -> geology / climate / hydrology / erosion
-   -> authoritative high resolution surface
-   -> filtered multiresolution pyramid
-   -> height residual tiles
-   -> material/control tiles
-   -> orbital atlas + macro normal pyramid
-   -> collision source pyramid
-   -> manifest/index
-   -> packaged world data
+world adopted
+    -> global height field resident
+    -> no visual terrain I/O while travelling
 ```
 
-The compiler is allowed to take minutes or hours. Runtime is not.
+Normal movement must perform:
 
-### Data products
+- zero terrain page reads;
+- zero terrain page decompression;
+- zero visual terrain cache misses;
+- zero CPU visual terrain synthesis;
+- zero terrain mesh rebuilding because the camera moved.
 
-Each tile should eventually contain or reference:
+## 2. Whole-planet base height
 
-- quantized height/residual data;
-- min/max elevation;
-- geometric error bound;
-- surface/material weights;
-- water coverage and relevant water level data;
-- optional macro normal data;
-- optional vegetation/biome density controls;
-- checksums/version/world signature.
+The visual base is one six-face cube-sphere elevation texture:
 
-Normals should generally be reconstructed from height on the GPU rather than stored at ground resolution.
+```text
+6 cube faces
+2048 x 2048 samples per face
+32-bit float elevation
+seam-safe gutter
+complete mip chain
+```
 
-## 4. Hierarchical residual storage
+For a 1000 km-radius planet, 2048 samples across a quarter circumference are about 767 m apart before interpolation. This map intentionally contains only the low-frequency shape of the world: continents, basins, mountain masses, major valleys and coast-scale relief.
 
-Do not store seven unrelated full-resolution heightfields when the finer data can be represented as a correction to the parent.
+The height field is reconstructed from the authoritative 192-cell generated macro grid using the seam-safe C2 cubic B-spline, then supersampled in native image code. The shader reconstructs it cubically again rather than exposing piecewise-linear heightmap cells.
+
+### Persistent format
+
+The six RF faces and all mip levels are stored in one `.aghm` package:
+
+```text
+user://global_heightmaps/<world signature>.aghm
+```
+
+The image payload is compressed losslessly with ZSTD. The package is keyed by `GenConfig.cache_key()`, resolution and format version, so an incompatible world automatically gets a different file.
+
+Runtime behavior:
+
+```text
+cache exists
+    -> read one compressed file
+    -> decompress six faces once
+    -> create Texture2DArray once
+    -> terrain fully resident
+
+cache missing (development fallback)
+    -> build global height field once
+    -> build mip chain
+    -> write compressed package
+    -> create Texture2DArray
+```
+
+Production/world-compiler builds should package this file ahead of time so the development fallback is not part of normal gameplay startup.
+
+## 3. GPU detail from L0 to L14
+
+The visual terrain function is continuous and deterministic in planet/world space:
+
+```text
+H(level, direction)
+    = filtered_global_height(direction, level_spacing)
+    + procedural_detail(direction, level_spacing)
+    + edit_delta(direction)
+```
+
+The global height map is sampled at an appropriate mip for the current vertex spacing. Procedural detail uses fixed physical wavelengths and each frequency band fades out before the current LOD can undersample it.
 
 Conceptually:
 
 ```text
-H48
- + residual24
- + residual12
- + residual6
- + residual3
- + residual1.5
- + residual0.75
+L14  global + only very broad procedural bands
+ ...
+L4   global + regional + local bands
+L3   global + regional + local + finer bands
+L2   same world function with more bandwidth
+L1   same world function with more bandwidth
+L0   full geometry-frequency spectrum
 ```
 
-Benefits:
+The detail function is evaluated directly by the terrain vertex shader. There is no L0-L14 height-page database.
 
-- exact parent/child consistency;
-- exact geomorph targets;
-- much better compression;
-- missing fine data naturally falls back to a valid coarse surface;
-- fewer visible LOD pops.
+## 4. Spherical concentric geometry clipmap
 
-The current `.ghz` full-float tile cache is a migration format. Production should move to quantized residual tile packs after the runtime streamer is proven.
+The active renderer is a camera-centred spherical geometry clipmap.
 
-## 5. Runtime height tile service
+Near-ground target spacing begins around 0.75 m and doubles per level. The 400-cell concentric topology provides the current 4K / roughly 16-pixels-per-terrain-vertex target.
 
-All consumers must share one immutable base-height cache.
+Each logical level is either the centre disc or a circular annulus. The annuli are partitioned into angular sectors for view culling, but explicit logical UV coordinates ensure sector compaction cannot change terrain vertex addressing.
 
-Consumers include:
+Projection is spherical. Small arcs may use the cheap normalized tangent approximation; large arcs use the exponential/geodesic map. The projection decision is based on physical arc distance so overlapping LODs cannot disagree merely because their level numbers differ.
 
-- ground geometry clipmap;
-- collision streamer;
-- terrain queries that need physical ground;
-- future road/building placement systems.
+## 5. LOD morphing and sinking
 
-Runtime layers:
+Two mechanisms cooperate at every handoff.
+
+### Spectral / height morph
+
+The outside of a fine level morphs toward the same terrain function evaluated with its parent spacing. This smoothly removes frequencies the parent cannot represent.
+
+### Geometric sinking
+
+The inside edge of the coarser annulus extends underneath the finer surface and sinks radially into the planet:
 
 ```text
-packaged world tiles (res:// or external world package)
-        -> async disk read/decompression
-        -> RAM LRU cache
-        -> GPU height tile/page cache
-        -> render / collision consumers
-
-player edits remain a separate sparse delta layer
+position = direction * (planet_radius + height - sink)
 ```
 
-### Non-blocking rule
+This guarantees overlap and avoids depending on exact T-junction stitching. Sinking is a topology/coverage mechanism; the fine-to-parent morph keeps the two surfaces visually close before the hidden overlap.
 
-Visual rendering must never synchronously generate a missing tile.
+Debug tools can freeze the clipmap, cut half of it away, exaggerate sink depth and label active rings as L0, L1, L2, etc.
 
-If a requested fine tile is absent:
+## 6. Normals
 
-1. enqueue it;
-2. render the nearest resident coarser height;
-3. upgrade when the tile arrives;
-4. morph rather than pop where practical.
+Terrain lighting must not derive normals from individual rasterized triangle planes. The clipmap lattice moves and reanchors, so flat per-triangle normals would create a camera-dependent checker pattern even if the height function itself were perfectly stable.
 
-During development, a cache miss may be generated once in a low-priority background worker and persisted. Shipping worlds should be precompiled so this generation path is normally unused.
+The current path reconstructs a smooth planet-space normal from the continuous macro surface with a broader sample footprint than the displacement. Future terrain process composition should preferably provide analytic or cheaply sampled gradients for its procedural bands and add those gradients to the smooth base normal.
 
-## 6. Predictive streaming
+## 7. CPU physics without terrain streaming
 
-The cache target is not just the camera position.
+Physics does not read the GPU back and it does not load height pages from disk.
 
-Use position, velocity and simulation interest points:
+`GroundHeightStore` is now an immediate resident sampler:
 
 ```text
-predicted_position = position + velocity * lookahead_seconds
+CPU query
+    -> Planet.macro_height()       # compact resident C2 field
+    -> deterministic detail bands # same seed/spectrum as GPU
+    -> sparse edit delta
 ```
 
-Suggested behavior:
+The old request/residency methods remain temporarily as zero-cost compatibility shims for `TerrainCollisionStreamer`. A source query is always resident once `Planet` is ready.
 
-- walking: mostly symmetric fine coverage;
-- car: bias L0-L2 strongly ahead;
-- aircraft: bias regional tiles far ahead and reduce fine-ring urgency;
-- teleport: immediately provide coarse coverage, cancel obsolete fine requests, refill around the destination.
+`TerrainCollisionStreamer` still builds local collision geometry asynchronously around active simulation interest points, because Godot physics needs CPU collision shapes. What disappeared is the page-loading prerequisite before those builds.
 
-Requests require explicit priority classes:
+Future work should replace triangle-soup collision tiles with heightfield-oriented shapes where practical and support multiple physics bubbles for remote vehicles, trains and multiplayer actors.
 
-1. collision directly under/ahead of active simulated bodies;
-2. visible missing coverage;
-3. fine visual upgrades;
-4. speculative prefetch;
-5. cosmetic/orbital refinement.
+## 8. Editing
 
-No FIFO queues for spatial streaming.
-
-## 7. GPU geometry path
-
-The current fixed `ArrayMesh` rings are an intermediate implementation. They are already cheap compared with the old `ChunkBuilder`, but the final renderer can reduce state and bandwidth further.
-
-### Vertex-ID procedural ring renderer
-
-Inspired by the Vercidium terrain renderer:
-
-- derive grid coordinates from `VERTEX_ID`;
-- use `INSTANCE_ID` or draw ranges to select clipmap level;
-- sample the GPU height pyramid directly;
-- reconstruct world position in the vertex shader;
-- reconstruct normals from neighbouring height samples;
-- avoid per-terrain position/normal/UV streams;
-- use triangle strips or compact static topology;
-- batch rings into one or very few submissions.
-
-Preferred final implementation is through Godot's lower-level `RenderingDevice`/RenderingServer path or the engine fork, rather than forcing unsupported zero-vertex behavior through `ArrayMesh`.
-
-This is primarily a GPU/draw-overhead optimization. It comes after removing runtime CPU terrain synthesis.
-
-## 8. GPU tile/page cache
-
-The CPU should not rebuild a complete `Texture2DArray` every time one terrain strip changes.
-
-Production direction:
-
-- persistent GPU height page cache/atlas;
-- upload only newly exposed rows/pages;
-- toroidal or page-table addressing;
-- retain tiles across nearby clipmap movements;
-- reuse the same GPU data for normal reconstruction and material lookup where possible.
-
-The current clipmap image scrolling is a functional intermediate stage.
-
-## 9. Materials and orbital appearance
-
-Geometry LOD and apparent surface detail are separate problems.
-
-### Orbit
-
-Use a high-resolution tiled atlas/virtual texture. Target an effective resolution in the 64k-128k-class range for the whole planet, streamed by mip/tile rather than loaded as one texture.
-
-Bake at least:
-
-- albedo;
-- macro normal;
-- roughness;
-- water mask;
-- snow/ice mask;
-- vegetation/land-cover tint;
-- optional geological tint.
-
-### Ground
-
-Use material clipmaps/virtual textures with stable world coordinates. Material detail must not phase-shift across floating-origin rebases.
-
-Do not bake centimetre detail into height geometry.
-
-## 10. Collision architecture
-
-Collision must consume the same authoritative height tiles as rendering but has different spatial priorities.
-
-Target collision rings/bubbles:
-
-- near player/vehicle: 0.5-0.75 m where required;
-- medium range: 1.5-3 m;
-- farther safety coverage: coarse terrain;
-- velocity lookahead ahead of vehicles;
-- multiple simulation interest points for multiplayer, AI, dropped bodies and remote vehicles.
-
-Collision cannot be camera-only in the final architecture.
-
-The center/ahead tile must always be first. Collision generation may not compete with visual terrain synthesis because the immutable height data should already be cached.
-
-## 11. Terrain editing
-
-Keep the base world immutable:
+The immutable world remains separate from mutable gameplay state:
 
 ```text
-final_height = baked_base_height + sparse_player_delta
+final_height
+    = immutable global/procedural terrain
+    + sparse player delta
 ```
 
-Advantages:
+Only edited regions consume persistent runtime terrain storage. This keeps saves and multiplayer replication proportional to actual modification rather than planet area.
 
-- base tiles remain shareable and cacheable;
-- multiplayer only replicates edit deltas;
-- saves remain small;
-- rebaking/repackaging the base world is separate from player state.
+## 9. What is obsolete
 
-Edited regions invalidate only the affected visual/collision pages, never the entire base terrain database.
+The following are no longer part of the active visual architecture:
 
-## 12. Scheduler/backpressure rules
+- `.ghz` visual height pages;
+- visual `GroundHeightStore` page queues;
+- RAM terrain-page LRU for rendering;
+- GPU height page atlas;
+- GPU height page table;
+- page birth/fade metadata;
+- camera terrain-page prefetch;
+- runtime visual page baking;
+- CPU `ChunkBuilder` visual meshes.
 
-Even background work needs hard limits.
+Some old source files and tiny disabled autoload shims still exist during migration because older debug/base scripts contain those API names. They allocate no height atlas and perform no terrain I/O. They should be deleted once the inheritance chain is flattened around the final global renderer.
 
-- no more than a small fixed number of heavy terrain workers;
-- cap pending work;
-- cancel stale requests before they start;
-- preserve revision/dirty state through cancellation;
-- prioritize by visibility, distance, motion and physics importance;
-- never allow a low-FPS feedback loop to increase terrain work per frame;
-- main-thread installation has an explicit microsecond budget.
+## 10. Materials and orbital appearance
+
+Geometry height and apparent surface detail are independent systems.
+
+Ground materials should continue toward stable world-space material clipmaps / virtual textures. Centimetre-to-metre visual roughness belongs primarily in material normals, displacement techniques, rocks and vegetation rather than by increasing the base clipmap lattice indefinitely.
+
+Orbital albedo/material data can eventually use a much larger tiled virtual surface. That does not require height pages: the global elevation texture is already sufficient for large-scale displacement and silhouette, while satellite-scale colour/normal/roughness may stream independently.
+
+## 11. World compiler target
+
+The production compiler should emit the global height package along with the other immutable world products:
+
+```text
+seed/config
+    -> geology / hydrology / erosion / climate
+    -> smoothed C2 macro surface
+    -> 2048 x 2048 x 6 global elevation
+    -> prefiltered mip chain
+    -> ZSTD .aghm package
+    -> global material/orbit products
+    -> manifest
+```
+
+The runtime development fallback that creates `.aghm` after a cache miss exists only to keep iteration convenient. Shipping worlds should never need to synthesize this resource after installation.
+
+## 12. Performance model
+
+Steady-state terrain cost is intentionally simple:
+
+### CPU
+
+- update clipmap centre/tangent basis;
+- determine active LOD count and visible sectors;
+- maintain local physics bubbles;
+- evaluate occasional CPU ground queries;
+- maintain sparse edit deltas.
+
+There is no CPU terrain coverage scheduler.
+
+### GPU
+
+- static concentric topology;
+- cubic global height lookup;
+- band-limited procedural detail per active vertex;
+- smooth normal reconstruction;
+- terrain material/lighting.
+
+Memory usage is fixed by the global texture and static topology instead of changing according to where the player has travelled.
 
 ## 13. Instrumentation
 
-The HUD/profiler should eventually expose:
+Useful terrain debug counters are now:
 
-- ground cache RAM hits;
-- disk hits;
-- cache misses/builds;
-- async tile queue/in-flight count;
-- bytes read/decompressed/uploaded per second;
-- GPU tile residency;
-- clipmap fallback level currently visible;
-- collision queue and coverage radius;
-- global quadtree queue/in-flight count;
-- terrain CPU milliseconds and GPU milliseconds separately.
+- global height resident yes/no;
+- global face resolution;
+- global package cache hit/miss;
+- compressed and uncompressed global height size;
+- one-time load/build duration;
+- active clipmap LODs;
+- visible sectors / draw batches;
+- collision build queue/in-flight count;
+- edited tile count;
+- terrain CPU and GPU frame time.
 
-Performance work without these counters becomes guesswork.
+Page-residency, page-table, page-upload and terrain-prefetch counters are obsolete and should disappear from the HUD.
 
-## 14. Migration phases
+## 14. Definition of done
 
-### Phase 0 - current prototype
+The terrain architecture is complete when a precompiled world can move from ground to orbit and back while:
 
-Already present on `terraintesting/0.0.5`:
-
-- global quadtree capped around depth 10;
-- six fixed ground geometry rings;
-- 0.75 -> 48 m height pyramid;
-- global terrain cutout/handoff;
-- persistent `.ghz` ground tile cache;
-- visual and collision terrain share the height store.
-
-### Phase 1 - non-blocking runtime tile service
-
-**Implement first.**
-
-- async disk/load/generate queue inside `GroundHeightStore`;
-- non-blocking visual sampling;
-- coarse fallback on a fine miss;
-- tile-ready notifications;
-- debounce clipmap refreshes as pages arrive;
-- keep one low-priority development baker so first visits do not saturate the CPU.
-
-Success criterion: entering uncached terrain may initially look coarser, but must not collapse frame rate merely to synthesize visual ground.
-
-### Phase 2 - predictive prefetch + collision integration
-
-- velocity-aware tile priority;
-- prefetch future ground window;
-- collision asks for tiles before building bodies;
-- no duplicate procedural generation between collision and rendering;
-- multi-interest-point collision bubbles.
-
-### Phase 3 - offline regional/world compiler
-
-- command-line/headless compiler;
-- bake selected regions and important gameplay zones at full resolution;
-- package tiles under the same runtime namespace/layout;
-- produce manifest and statistics;
-- later expand to full production world packages.
-
-### Phase 4 - residual/quantized tile format
-
-- parent-relative residuals;
-- 16-bit or adaptive quantization with per-tile scale/offset;
-- gutters/checksums/error metadata;
-- packed tile archives to avoid millions of tiny filesystem files.
-
-### Phase 5 - GPU page cache
-
-- persistent height atlas/page table;
-- incremental page uploads;
-- no recreation of entire texture arrays for one strip;
-- GPU normal reconstruction from resident heights.
-
-### Phase 6 - procedural vertex-ID renderer
-
-- prototype `VERTEX_ID` coordinate reconstruction;
-- triangle-strip/static procedural topology;
-- instance/batch all rings;
-- migrate to RenderingDevice/engine-level render path if it materially reduces CPU/GPU overhead;
-- retain exact hierarchical morphing rather than relying only on terrain sinking.
-
-### Phase 7 - orbital virtual surface
-
-- compiler-generated high-resolution surface pyramid;
-- tiled streaming from space through atmosphere;
-- baked macro normals and material controls;
-- transition into regional/ground material representation without an obvious texture swap.
-
-### Phase 8 - remove legacy local ChunkBuilder path
-
-Once the baked regional + ground system has proven parity:
-
-- `ChunkBuilder` remains only where genuinely useful for coarse/global fallback, or is replaced by static procedural grids there too;
-- delete unreachable depth-11..16 visual build paths;
-- delete duplicated local terrain synthesis code;
-- make runtime procedural generation a developer/compiler feature rather than gameplay infrastructure.
-
-## 15. Definition of done
-
-The production terrain system is finished when a warm/precompiled world can move from ground to orbit and back while:
-
-- local terrain performs no procedural synthesis;
-- ground topology is never rebuilt because of movement;
-- fine data streams ahead of fast vehicles;
-- missing data degrades to coarse valid terrain rather than stalling;
-- LOD rings are not visually detectable under normal motion/lighting;
-- edits remain stable and physics matches the edited visual terrain;
-- orbit appearance is independent of coarse orbital mesh density;
-- terrain CPU load remains bounded and predictable regardless of travel speed.
+- the base height resource is loaded once;
+- travel triggers no visual terrain file I/O;
+- travel triggers no CPU visual terrain generation;
+- topology is never rebuilt because of movement;
+- all LODs evaluate one continuous world-space terrain function;
+- LOD transitions are not visible under normal lighting/motion;
+- physics tracks the same deterministic surface locally without GPU readback;
+- edits remain stable and sparse;
+- terrain CPU load is bounded by simulation interest points, not travel speed or explored area.
