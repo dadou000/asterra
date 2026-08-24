@@ -129,9 +129,39 @@ float cloud_phase(float mu) {
 	return hg(mu, 0.65) * 0.86 + hg(mu, -0.24) * 0.14;
 }
 
-float planet_sun_visibility(vec3 p, vec3 sun_dir, float radius) {
-	vec2 hit = sphere_intersect(p, sun_dir, radius);
-	return hit.x > 0.0 ? 0.0 : 1.0;
+// Same astronomical occultation used by planet_lighting.gdshaderinc. The local
+// geometric horizon drops below the tangent plane with altitude, while the exact
+// ray/sphere test makes it impossible for direct Helion light to cross Asterra.
+float planet_horizon_cosine(float sample_radius, float planet_radius) {
+	float r = max(sample_radius, planet_radius + 0.01);
+	float ratio = clamp(planet_radius / r, 0.0, 1.0);
+	return -sqrt(max(1.0 - ratio * ratio, 0.0));
+}
+
+float planet_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
+	vec3 s = normalize(sun_dir);
+	float r = length(p);
+	if (r < 1.0) return 0.0;
+	vec3 up = p / r;
+
+	vec3 ro = p;
+	if (r <= planet_radius + 0.5) {
+		ro = up * (planet_radius + 0.5);
+		r = planet_radius + 0.5;
+	}
+
+	float b = dot(ro, s);
+	float c = dot(ro, ro) - planet_radius * planet_radius;
+	float disc = b * b - c;
+	if (disc > 0.0) {
+		float t_near = -b - sqrt(disc);
+		if (t_near > 1.0) return 0.0;
+	}
+
+	float horizon = planet_horizon_cosine(r, planet_radius);
+	float mu = dot(up, s);
+	const float SOLAR_EDGE = 0.0062;
+	return smoothstep(horizon - SOLAR_EDGE, horizon + SOLAR_EDGE, mu);
 }
 
 float sun_transmittance(vec3 p, vec3 sun_dir, float radius,
@@ -204,19 +234,32 @@ vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
 			vec3 up = normalize(p);
 			float sun_mu = dot(up, sun_dir);
 			float planet_vis = planet_sun_visibility(p, sun_dir, radius);
-			float sun_air = mix(0.16, 1.0, smoothstep(-0.015, 0.32, sun_mu));
+
+			// Direct stellar light exists only when the cloud sample can actually see
+			// Helion. The previous minimum 16% sun-air term was harmless while the
+			// sphere test worked, but made any occultation error glaring at night.
+			float sun_air = mix(0.04, 1.0, smoothstep(-0.08, 0.32, sun_mu));
 			vec3 sunset_tint = mix(vec3(1.00, 0.34, 0.10),
 				vec3(1.00, 0.98, 0.94), smoothstep(-0.02, 0.28, sun_mu));
-			float light_trans = sun_transmittance(p, sun_dir, radius, wind,
-				light_steps);
+			float light_trans = planet_vis > 0.001
+				? sun_transmittance(p, sun_dir, radius, wind, light_steps)
+				: 0.0;
 			float powder = 1.0 - exp(-density * CLOUD_EXTINCTION * step_len * 2.2);
 			vec3 direct = sunset_tint * sun_irradiance * phase
 				* light_trans * planet_vis * sun_air * mix(0.58, 1.03, powder);
-			float day = smoothstep(-0.16, 0.12, sun_mu);
-			vec3 ambient = mix(vec3(0.0025, 0.0045, 0.010),
-				vec3(0.050, 0.071, 0.102), day);
+
+			// Moonless/night cloud illumination must remain orders of magnitude below
+			// daytime skylight. HumanEyeExposure can add many stops after dark, so a
+			// daylight-sized constant here becomes a white deck even with direct sun
+			// correctly blocked by the planet.
+			float day = smoothstep(-0.08, 0.20, sun_mu) * planet_vis;
+			float twilight = smoothstep(-0.24, -0.02, sun_mu)
+				* (1.0 - smoothstep(-0.02, 0.14, sun_mu));
+			vec3 ambient = vec3(0.00018, 0.00030, 0.00065);
+			ambient += vec3(0.010, 0.014, 0.026) * twilight;
+			ambient += vec3(0.050, 0.071, 0.102) * day;
 			vec3 multiple = sunset_tint * sun_irradiance
-				* (0.010 + 0.030 * (1.0 - light_trans)) * planet_vis * day;
+				* (0.010 + 0.030 * (1.0 - light_trans)) * day;
 			vec3 lighting = direct + ambient + multiple;
 			radiance += transmittance * sample_alpha * lighting;
 			transmittance *= 1.0 - sample_alpha;
@@ -236,12 +279,29 @@ float foreground_air_transmittance(vec3 camera_pos, vec3 dir, float first_t) {
 }
 
 vec3 foreground_atmosphere_restore(vec3 camera_pos, vec3 dir, float first_t,
-		float cloud_transmittance, float air_transmittance) {
+		float cloud_transmittance, float air_transmittance,
+		vec3 sun_dir, float planet_radius) {
 	if (first_t <= 0.0 || cloud_transmittance > 0.999) return vec3(0.0);
-	vec3 up = normalize(camera_pos);
-	float elevation = clamp(dot(dir, up), -0.15, 1.0);
-	vec3 haze_color = mix(vec3(0.30, 0.34, 0.38), vec3(0.19, 0.36, 0.52),
+
+	// Evaluate illumination halfway through the foreground air column. This keeps
+	// night-side haze dark while still allowing a physically plausible twilight
+	// band and a sunlit limb when the camera is above the terminator.
+	vec3 mid_p = camera_pos + dir * (first_t * 0.5);
+	vec3 local_up = normalize(mid_p);
+	float sun_mu = dot(local_up, sun_dir);
+	float solar_vis = planet_sun_visibility(mid_p, sun_dir, planet_radius);
+	float day = smoothstep(-0.08, 0.20, sun_mu) * solar_vis;
+	float twilight = smoothstep(-0.24, -0.02, sun_mu)
+		* (1.0 - smoothstep(-0.02, 0.14, sun_mu));
+
+	vec3 camera_up = normalize(camera_pos);
+	float elevation = clamp(dot(dir, camera_up), -0.15, 1.0);
+	vec3 day_haze = mix(vec3(0.30, 0.34, 0.38), vec3(0.19, 0.36, 0.52),
 		smoothstep(-0.08, 0.25, elevation));
+	vec3 dusk_haze = vec3(0.12, 0.045, 0.018);
+	vec3 night_haze = vec3(0.00012, 0.00020, 0.00045);
+	vec3 haze_color = night_haze + dusk_haze * twilight + day_haze * day;
+
 	return haze_color * (1.0 - air_transmittance)
 		* (1.0 - cloud_transmittance) * 0.55;
 }
@@ -258,8 +318,6 @@ void main() {
 	vec3 view_pos = view_h.xyz / max(abs(view_h.w), 1e-8) * sign(view_h.w);
 
 	// Reverse-Z depth ~= 0 is untouched sky, not geometry at Camera3D.far.
-	// Leave that ray unbounded here; the spherical cloud and planet intersections
-	// provide the physically meaningful termination distances.
 	float scene_distance = depth <= 1e-6 ? 1e30 : length(view_pos);
 	if (!(scene_distance > 0.0)) return;
 
@@ -282,10 +340,8 @@ void main() {
 	vec4 base = imageLoad(color_image, pixel);
 	float air_t = foreground_air_transmittance(camera_planet, ray_world,
 		first_cloud_distance);
-	// Correct ordering approximation:
-	// foreground air -> cloud -> already-rendered scene/sky behind the cloud.
 	vec3 result = cloud.rgb * air_t + base.rgb * cloud.a;
 	result += foreground_atmosphere_restore(camera_planet, ray_world,
-		first_cloud_distance, cloud.a, air_t);
+		first_cloud_distance, cloud.a, air_t, sun_dir, planet_radius);
 	imageStore(color_image, pixel, vec4(result, base.a));
 }
