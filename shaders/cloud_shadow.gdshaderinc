@@ -17,6 +17,7 @@ uniform float u_cloud_shadow_shape_scale = 0.000055;
 uniform float u_cloud_shadow_weather_scale = 0.0000085;
 uniform float u_cloud_shadow_extinction = 0.00105;
 uniform vec3 u_cloud_shadow_wind_offset = vec3(0.0);
+uniform vec3 u_cloud_shadow_sun_dir = vec3(1.0, 0.0, 0.0);
 uniform int u_cloud_shadow_steps = 6;
 
 const int CLOUD_SHADOW_MAX_STEPS = 10;
@@ -42,8 +43,9 @@ float cloud_shadow_vertical_profile(float h, float cloud_type) {
 }
 
 /// Same cheap density representation used for cloud light-ray integration in the
-/// sky shader: one weather sample and one body sample. Edge erosion is omitted
-/// deliberately because a many-kilometre solar path naturally integrates it away.
+/// sky shader: one weather sample and one body sample. Explicit LOD 0 keeps this
+/// helper legal and deterministic in vertex shaders, where implicit derivatives
+/// do not exist.
 float cloud_shadow_density_at(vec3 p, float planet_radius) {
 	float altitude = length(p) - planet_radius;
 	if (altitude <= u_cloud_shadow_base || altitude >= u_cloud_shadow_top) {
@@ -52,16 +54,16 @@ float cloud_shadow_density_at(vec3 p, float planet_radius) {
 
 	float h = cloud_shadow_remap01(altitude, u_cloud_shadow_base, u_cloud_shadow_top);
 	vec3 surface_p = normalize(p) * (planet_radius + 100.0);
-	float weather = texture(u_cloud_shadow_shape_noise,
+	float weather = textureLod(u_cloud_shadow_shape_noise,
 		(surface_p + u_cloud_shadow_wind_offset * 0.16)
-		* u_cloud_shadow_weather_scale).r;
+		* u_cloud_shadow_weather_scale, 0.0).r;
 	float local_coverage = clamp(
 		u_cloud_shadow_coverage
 			+ (weather - 0.5) * u_cloud_shadow_weather_variation,
 		0.06, 0.96);
 	float threshold = 1.0 - local_coverage * 0.78;
-	float macro = texture(u_cloud_shadow_shape_noise,
-		(p + u_cloud_shadow_wind_offset) * u_cloud_shadow_shape_scale).r;
+	float macro = textureLod(u_cloud_shadow_shape_noise,
+		(p + u_cloud_shadow_wind_offset) * u_cloud_shadow_shape_scale, 0.0).r;
 	float body = smoothstep(threshold, min(threshold + 0.20, 0.99), macro);
 	float cloud_type = smoothstep(0.22, 0.82, weather);
 	return body * cloud_shadow_vertical_profile(h, cloud_type)
@@ -83,20 +85,14 @@ vec2 cloud_shadow_layer_segment(vec3 origin, vec3 dir, float planet_radius) {
 	vec2 inner_hit = cloud_shadow_sphere_hit(origin, dir, inner_radius);
 
 	if (source_radius < inner_radius) {
-		// Ordinary ground/water point: skip clear air below the condensation base.
 		ray_start = max(ray_start, inner_hit.y);
 	} else if (source_radius < outer_radius) {
-		// Source is inside cloud altitude. Looking downward exits through the inner
-		// boundary; looking upward traverses to cloud top.
 		ray_start = 0.0;
 		if (inner_hit.x > 0.0 && inner_hit.x < ray_end) {
 			ray_end = inner_hit.x;
 		}
-	} else {
-		// Source is above cloud top. Keep only the first shell segment.
-		if (inner_hit.x > ray_start && inner_hit.x < ray_end) {
-			ray_end = inner_hit.x;
-		}
+	} else if (inner_hit.x > ray_start && inner_hit.x < ray_end) {
+		ray_end = inner_hit.x;
 	}
 
 	if (ray_end <= ray_start) return vec2(1e9, -1e9);
@@ -109,11 +105,11 @@ float cloud_shadow_hash(vec3 p) {
 
 /// Fraction of direct stellar irradiance reaching the receiver after cloud
 /// absorption/out-scattering. Water droplets are effectively neutral over the
-/// visible band at this scale, so one scalar transmittance is appropriate; sky
-/// colour remains supplied by the separate diffuse atmosphere term.
+/// visible band at this scale, so one scalar transmittance is appropriate.
 float cloud_shadow_transmittance(vec3 receiver, vec3 sun_dir, float planet_radius) {
 	if (u_cloud_shadow_enabled < 0.5) return 1.0;
-	vec2 segment = cloud_shadow_layer_segment(receiver, normalize(sun_dir), planet_radius);
+	vec3 s = normalize(sun_dir);
+	vec2 segment = cloud_shadow_layer_segment(receiver, s, planet_radius);
 	if (segment.x > segment.y) return 1.0;
 
 	int steps = clamp(u_cloud_shadow_steps, 2, CLOUD_SHADOW_MAX_STEPS);
@@ -125,10 +121,8 @@ float cloud_shadow_transmittance(vec3 receiver, vec3 sun_dir, float planet_radiu
 	for (int i = 0; i < CLOUD_SHADOW_MAX_STEPS; i++) {
 		if (i >= steps) break;
 		float t = segment.x + (float(i) + mix(0.32, 0.68, jitter)) * step_len;
-		vec3 p = receiver + normalize(sun_dir) * t;
+		vec3 p = receiver + s * t;
 		optical_depth += cloud_shadow_density_at(p, planet_radius) * step_len;
-		// Past ~9 optical depths the direct solar term is visually negligible;
-		// stopping here saves work below very deep cloud towers.
 		if (optical_depth * u_cloud_shadow_extinction > 9.0) {
 			return 0.00012;
 		}
