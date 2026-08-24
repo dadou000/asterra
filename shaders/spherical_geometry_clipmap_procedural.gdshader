@@ -25,6 +25,11 @@ uniform float u_sink_scale = 2.0;
 uniform int u_detail_seed = 1337;
 uniform float u_detail_strength = 1.0;
 
+// Inspection mode. The plane through (planet centre, clipmap centre,
+// clipmap-right) removes the +clipmap-up half of the terrain. Looking along the
+// clipmap-up direction exposes a true radial profile of every overlapping ring.
+uniform float u_debug_side_cut = 0.0;
+
 varying vec3 v_planet;
 varying vec3 v_render;
 varying float v_valid;
@@ -138,9 +143,6 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 	float regional_gain = mix(0.72, 1.30, mountain);
 
 	float h = 0.0;
-	// Five absolute world-space bands cover the missing interval between the
-	// ~8 km macro cells and the sub-metre clipmap. Every LOD evaluates the same
-	// bands; band_weight only removes wavelengths its vertex spacing cannot carry.
 	h += detail_band(world_m, 12000.0, spacing, seed + 11u,
 		mix(52.0, 115.0, mountain));
 
@@ -217,6 +219,17 @@ void fragment() {
 		discard;
 	}
 
+	// A half-plane rather than a narrow strip is deliberate: it leaves a clean
+	// cut edge through the centre while preserving enough triangles to inspect the
+	// overlapping annuli in wireframe. The cut plane rotates with the frozen
+	// clipmap frame, not with the camera.
+	if (u_debug_side_cut > 0.5) {
+		vec3 planet_dir = normalize(v_planet);
+		if (dot(planet_dir, u_center_up) > 0.0) {
+			discard;
+		}
+	}
+
 	vec3 up = normalize(v_planet);
 	vec3 dx = dFdx(v_render);
 	vec3 dy = dFdy(v_render);
@@ -227,26 +240,37 @@ void fragment() {
 	}
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
-	float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
-	vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
-	if (v_level <= 8.5) {
-		surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
+	if (u_debug_side_cut > 0.5) {
+		// Automatic LOD colouring makes nested/sunk surfaces distinguishable even
+		// without global wireframe mode.
+		float phase = v_level * 0.13;
+		vec3 lod_color = 0.5 + 0.5 * cos(TAU * (vec3(phase) + vec3(0.0, 0.33, 0.67)));
+		ALBEDO = mix(vec3(0.06), lod_color, 0.92);
+		EMISSION = lod_color * 0.10;
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+	} else {
+		float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
+		vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
+		if (v_level <= 8.5) {
+			surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
+		}
+
+		vec3 soil = vec3(0.24, 0.17, 0.105);
+		vec3 grass = vec3(0.17, 0.255, 0.095);
+		vec3 wet = vec3(0.12, 0.145, 0.085);
+		vec3 sand = vec3(0.48, 0.39, 0.23);
+		vec3 rock = vec3(0.285, 0.275, 0.255);
+		vec3 snow = vec3(0.78, 0.80, 0.81);
+
+		vec3 albedo = mix(soil, grass, clamp(surf.r, 0.0, 1.0));
+		albedo = mix(albedo, wet, clamp(surf.g * 0.70, 0.0, 1.0));
+		albedo = mix(albedo, sand, clamp(surf.b, 0.0, 1.0));
+		albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0));
+		albedo = mix(albedo, rock, smoothstep(0.08, 0.34, slope));
+
+		ALBEDO = albedo;
+		ROUGHNESS = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
+		SPECULAR = 0.22;
 	}
-
-	vec3 soil = vec3(0.24, 0.17, 0.105);
-	vec3 grass = vec3(0.17, 0.255, 0.095);
-	vec3 wet = vec3(0.12, 0.145, 0.085);
-	vec3 sand = vec3(0.48, 0.39, 0.23);
-	vec3 rock = vec3(0.285, 0.275, 0.255);
-	vec3 snow = vec3(0.78, 0.80, 0.81);
-
-	vec3 albedo = mix(soil, grass, clamp(surf.r, 0.0, 1.0));
-	albedo = mix(albedo, wet, clamp(surf.g * 0.70, 0.0, 1.0));
-	albedo = mix(albedo, sand, clamp(surf.b, 0.0, 1.0));
-	albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0));
-	albedo = mix(albedo, rock, smoothstep(0.08, 0.34, slope));
-
-	ALBEDO = albedo;
-	ROUGHNESS = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
-	SPECULAR = 0.22;
 }
