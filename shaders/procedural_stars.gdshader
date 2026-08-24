@@ -7,28 +7,83 @@ render_mode unshaded, cull_disabled, depth_draw_never, blend_add, fog_disabled;
 uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
 uniform float u_atmosphere_height = 60000.0;
+// Future weather/seeing integration can drive this without changing mean stellar
+// radiance. 0 = perfectly steady atmosphere, 1 = normal clear-night seeing.
+uniform float u_seeing_strength : hint_range(0.0, 2.0) = 1.0;
 
 const float BRIGHTEST_MAGNITUDE = -1.5;
 const float NAKED_EYE_LIMIT_MAGNITUDE = 6.5;
+const float MIN_STELLAR_TEMPERATURE_K = 2400.0;
+const float MAX_STELLAR_TEMPERATURE_K = 18000.0;
 // One fixed scene-linear photometric calibration for every time of day. It is
 // never modified to make the stars prettier or more visible.
 const float ZERO_MAGNITUDE_RADIANCE = 0.36;
+const vec3 REC709_LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 varying vec3 v_star_dir;
 varying float v_magnitude_norm;
-varying float v_temperature;
+varying float v_temperature_norm;
 varying float v_pattern;
 varying float v_phase;
 
-vec3 stellar_colour(float t) {
-	vec3 warm = vec3(1.00, 0.79, 0.66);
-	vec3 neutral = vec3(1.00, 0.96, 0.91);
-	vec3 cool = vec3(0.78, 0.87, 1.00);
-	if (t < 0.48) {
-		return mix(warm, neutral, smoothstep(0.0, 0.48, t));
-	}
-	return mix(neutral, cool, smoothstep(0.48, 1.0, t));
+
+vec3 srgb_to_linear(vec3 c) {
+	vec3 low = c / 12.92;
+	vec3 high = pow((c + vec3(0.055)) / 1.055, vec3(2.4));
+	return mix(low, high, step(vec3(0.04045), c));
 }
+
+
+vec3 normalize_luminance(vec3 colour, float target_luminance) {
+	float current = max(dot(colour, REC709_LUMA), 1e-5);
+	return colour * (target_luminance / current);
+}
+
+
+vec3 blackbody_colour(float temperature_norm, float magnitude_norm) {
+	// Approximate a blackbody colour temperature in display RGB. The conversion is
+	// only used for chromaticity; the result is normalized to unit luminance below,
+	// so temperature can never make a star intrinsically brighter or dimmer.
+	float kelvin = mix(
+		MIN_STELLAR_TEMPERATURE_K,
+		MAX_STELLAR_TEMPERATURE_K,
+		clamp(temperature_norm, 0.0, 1.0)
+	);
+	float t = kelvin / 100.0;
+	float r;
+	float g;
+	float b;
+
+	if (t <= 66.0) {
+		r = 1.0;
+		g = clamp(0.3900815788 * log(max(t, 1.0)) - 0.6318414438, 0.0, 1.0);
+		if (t <= 19.0) {
+			b = 0.0;
+		} else {
+			b = clamp(0.5432067891 * log(max(t - 10.0, 1.0)) - 1.1962540891, 0.0, 1.0);
+		}
+	} else {
+		float hot_t = max(t - 60.0, 1.0);
+		r = clamp(1.2929361861 * pow(hot_t, -0.1332047592), 0.0, 1.0);
+		g = clamp(1.1298908610 * pow(hot_t, -0.0755148492), 0.0, 1.0);
+		b = 1.0;
+	}
+
+	vec3 colour = normalize_luminance(srgb_to_linear(vec3(r, g, b)), 1.0);
+
+	// Human naked-eye colour perception weakens rapidly for faint point sources.
+	// This is luminance-preserving desaturation, not a brightness adjustment.
+	float magnitude = mix(
+		BRIGHTEST_MAGNITUDE,
+		NAKED_EYE_LIMIT_MAGNITUDE,
+		clamp(magnitude_norm, 0.0, 1.0)
+	);
+	float cone_response = 1.0 - smoothstep(0.5, 5.8, magnitude);
+	float visible_chroma = mix(0.18, 0.90, cone_response);
+	colour = mix(vec3(1.0), colour, visible_chroma);
+	return normalize_luminance(colour, 1.0);
+}
+
 
 float stellar_radiance(float magnitude_norm) {
 	float magnitude = mix(
@@ -40,25 +95,98 @@ float stellar_radiance(float magnitude_norm) {
 	return ZERO_MAGNITUDE_RADIANCE * pow(10.0, -0.4 * magnitude);
 }
 
-float twinkle_pattern(float kind, float t, float phase) {
-	// Scintillation is the only time-varying stellar flux. Every pattern is
-	// centred on 1.0 so twinkle does not secretly increase average brightness.
-	if (kind < 0.5) return 1.0;
-	if (kind < 1.5) return 1.0 + 0.035 * sin(t * 5.4 + phase);
-	if (kind < 2.5) {
-		float a = sin(t * 3.1 + phase);
-		float b = sin(t * 8.7 + phase * 2.17);
-		return 1.0 + 0.022 * a + 0.014 * b;
-	}
-	if (kind < 3.5) {
-		float s = sin(t * 2.2 + phase);
-		return 1.0 + 0.040 * s * s * s;
-	}
-	float irregular = sin(t * 4.1 + phase)
-		+ 0.55 * sin(t * 10.3 + phase * 1.71)
-		+ 0.25 * sin(t * 17.7 + phase * 0.63);
-	return 1.0 + 0.020 * irregular;
+
+float hash11(float p) {
+	return fract(sin(p * 127.1 + 311.7) * 43758.5453123);
 }
+
+
+float temporal_noise(float x, float seed) {
+	float i = floor(x);
+	float f = fract(x);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = hash11(i + seed * 19.19);
+	float b = hash11(i + 1.0 + seed * 19.19);
+	return mix(a, b, f) * 2.0 - 1.0;
+}
+
+
+float scintillation_signal(float kind, float t, float seed) {
+	// Atmospheric scintillation is stochastic, not a periodic on/off blink. These
+	// classes are different turbulence spectra. Each is approximately zero-mean,
+	// so none of them adds average energy to a star.
+	if (kind < 0.5) {
+		return 0.0;
+	}
+
+	if (kind < 1.5) {
+		float n1 = temporal_noise(t * 2.7, seed + 1.7);
+		float n2 = temporal_noise(t * 6.1, seed + 7.3);
+		return clamp(n1 * 0.64 + n2 * 0.36, -1.0, 1.0);
+	}
+
+	if (kind < 2.5) {
+		float n1 = temporal_noise(t * 4.1, seed + 2.1);
+		float n2 = temporal_noise(t * 9.3, seed + 11.8);
+		float n3 = temporal_noise(t * 15.7, seed + 23.4);
+		return clamp(n1 * 0.48 + n2 * 0.34 + n3 * 0.18, -1.0, 1.0);
+	}
+
+	if (kind < 3.5) {
+		float envelope = 0.42 + 0.58 * (temporal_noise(t * 0.62, seed + 31.2) * 0.5 + 0.5);
+		float carrier = temporal_noise(t * 5.2, seed + 3.6) * 0.57
+			+ temporal_noise(t * 12.6, seed + 17.1) * 0.43;
+		return clamp(carrier * envelope, -1.0, 1.0);
+	}
+
+	// Rare strong, bursty seeing: a slowly varying turbulent envelope modulates
+	// several fast components. It can produce Sirius-like rapid intensity changes
+	// very near the horizon without introducing a repeated rhythm.
+	float envelope = 0.25 + 0.75 * (temporal_noise(t * 0.91, seed + 41.7) * 0.5 + 0.5);
+	float carrier = temporal_noise(t * 6.7, seed + 4.9) * 0.44
+		+ temporal_noise(t * 14.8, seed + 19.3) * 0.34
+		+ temporal_noise(t * 23.1, seed + 37.5) * 0.22;
+	return clamp(carrier * envelope, -1.0, 1.0);
+}
+
+
+float pattern_gain(float kind) {
+	if (kind < 0.5) return 0.0;
+	if (kind < 1.5) return 0.32;
+	if (kind < 2.5) return 0.52;
+	if (kind < 3.5) return 0.76;
+	return 1.0;
+}
+
+
+vec3 chromatic_scintillation(
+	vec3 base_colour,
+	float kind,
+	float t,
+	float seed,
+	float elevation,
+	float atmosphere_presence
+) {
+	// Atmospheric dispersion makes bright low-altitude stars flash slightly red /
+	// blue as turbulent cells move the dispersed point image. Keep this subtle and
+	// preserve luminance exactly so it cannot act as a hidden brightness boost.
+	float low_altitude = 1.0 - smoothstep(0.035, 0.34, max(elevation, 0.0));
+	float amount = atmosphere_presence * low_altitude * pattern_gain(kind) * 0.085;
+	if (amount <= 0.0001) {
+		return base_colour;
+	}
+
+	float rb = temporal_noise(t * 12.4, seed + 73.1);
+	float green = temporal_noise(t * 8.9, seed + 91.7);
+	vec3 spectral_shift = vec3(
+		1.0 + amount * rb,
+		1.0 + amount * 0.24 * green,
+		1.0 - amount * rb
+	);
+	vec3 shifted = max(base_colour * spectral_shift, vec3(0.0));
+	return normalize_luminance(shifted, dot(base_colour, REC709_LUMA));
+}
+
 
 void vertex() {
 	vec3 camera_world = INV_VIEW_MATRIX[3].xyz;
@@ -77,10 +205,11 @@ void vertex() {
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(world_vertex, 1.0);
 
 	v_magnitude_norm = INSTANCE_CUSTOM.x;
-	v_temperature = INSTANCE_CUSTOM.y;
+	v_temperature_norm = INSTANCE_CUSTOM.y;
 	v_pattern = INSTANCE_CUSTOM.z;
 	v_phase = INSTANCE_CUSTOM.w;
 }
+
 
 void fragment() {
 	vec2 p = UV * 2.0 - 1.0;
@@ -96,26 +225,42 @@ void fragment() {
 		u_camera_height
 	);
 
-	// Physical atmospheric loss only. There is deliberately no sun-altitude,
-	// 'night visibility', bright-star reveal, or exposure-compensation multiplier.
 	float elevation = dot(normalize(v_star_dir), up);
 	float above_horizon = smoothstep(-0.012, 0.045, elevation);
 	float air_mass = 1.0 / max(elevation, 0.055);
-	float extinction = exp(-0.060 * max(air_mass - 1.0, 0.0));
-	float atmospheric_transmittance = mix(
-		1.0,
-		above_horizon * extinction,
+	float excess_air_mass = max(air_mass - 1.0, 0.0);
+
+	// Wavelength-dependent extinction naturally reddens low stars instead of using
+	// an artistic tint. Blue light is removed more strongly over a long air path.
+	vec3 extinction = exp(-vec3(0.045, 0.060, 0.092) * excess_air_mass);
+	extinction = mix(vec3(1.0), extinction, atmosphere_presence);
+	float horizon_visibility = mix(1.0, above_horizon, atmosphere_presence);
+
+	float kind = floor(v_pattern * 4.0 + 0.5);
+	float gain = pattern_gain(kind);
+	float near_horizon = 1.0 - smoothstep(0.07, 0.82, max(elevation, 0.0));
+	float turbulent_path = pow(near_horizon, 1.35);
+	float base_amplitude = mix(0.012, 0.58, turbulent_path);
+	float scintillation_amplitude = atmosphere_presence
+		* clamp(u_seeing_strength, 0.0, 2.0)
+		* gain
+		* base_amplitude;
+
+	float seed = v_phase * 4096.0 + dot(v_star_dir, vec3(17.0, 59.0, 113.0));
+	float signal = scintillation_signal(kind, TIME, seed);
+	float scintillation = max(0.0, 1.0 + scintillation_amplitude * signal);
+
+	vec3 colour = blackbody_colour(v_temperature_norm, v_magnitude_norm);
+	colour = chromatic_scintillation(
+		colour,
+		kind,
+		TIME,
+		seed,
+		elevation,
 		atmosphere_presence
 	);
 
-	float kind = floor(v_pattern * 4.0 + 0.5);
-	float speed = mix(0.78, 1.34, fract(v_phase * 13.731));
-	float raw_twinkle = twinkle_pattern(kind, TIME * speed, v_phase * 6.28318530718);
-	float near_horizon = 1.0 - smoothstep(0.12, 0.82, max(elevation, 0.0));
-	float scintillation_strength = atmosphere_presence * mix(0.18, 1.0, near_horizon);
-	float scintillation = mix(1.0, raw_twinkle, scintillation_strength);
-
 	float radiance = stellar_radiance(v_magnitude_norm);
-	EMISSION = stellar_colour(v_temperature) * radiance * scintillation;
-	ALPHA = profile * atmospheric_transmittance;
+	EMISSION = colour * extinction * radiance * scintillation;
+	ALPHA = profile * horizon_visibility;
 }
