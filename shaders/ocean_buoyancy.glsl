@@ -31,6 +31,8 @@ layout(set = 0, binding = 2, std430) readonly buffer Params {
 const float TAU_ = 6.283185307179586;
 const float G = 9.81;
 const float BREAKER_GAMMA = 0.78;
+const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
+const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
 
 vec3 safe_tangent(vec3 up, vec3 d) {
     vec3 t = d - up * dot(d, up);
@@ -52,10 +54,10 @@ float shoal_gain(float depth, float wavelength) {
     return mix(1.42, 1.0, smoothstep(0.08, 0.75, qd));
 }
 
-void add_wave(vec3 p, vec3 up, vec3 dir, float shore_distance, float depth,
-              float wavelength, float base_amp, float steepness, float phase_off,
-              inout vec3 displacement, inout vec3 grad, inout vec3 vel,
-              inout float breaking) {
+void add_wave(vec3 up, vec3 dir, float offshore_phase_coord, float shore_distance,
+              float depth, float wavelength, float base_amp, float steepness,
+              float phase_off, inout vec3 displacement, inout vec3 grad,
+              inout vec3 vel, inout float breaking) {
     if (depth <= 0.01) return;
     float k = TAU_ / wavelength;
     float omega = dispersion(k, depth);
@@ -67,7 +69,7 @@ void add_wave(vec3 p, vec3 up, vec3 dir, float shore_distance, float depth,
     float amp = min(raw_amp, breaker_amp);
     vec3 travel = safe_tangent(up, dir);
     float shore_blend = 1.0 - smoothstep(18.0, 150.0, depth);
-    float phase_coord = mix(dot(p, travel), shore_distance, shore_blend);
+    float phase_coord = mix(offshore_phase_coord, shore_distance, shore_blend);
     float phase = phase_coord * k - omega * params.time_s + phase_off;
     float s = sin(phase);
     float c = cos(phase);
@@ -88,23 +90,25 @@ void main() {
     vec3 landward = safe_tangent(up, q[i].coast_shore_dist.xyz);
     float shore_distance = q[i].coast_shore_dist.w;
 
-    vec3 swell_a = safe_tangent(up, vec3(0.827, 0.201, 0.525));
-    vec3 swell_b = safe_tangent(up, vec3(-0.436, 0.331, 0.837));
+    vec3 swell_a = safe_tangent(up, SWELL_AXIS_A);
+    vec3 swell_b = safe_tangent(up, SWELL_AXIS_B);
     float refract = 1.0 - smoothstep(22.0, 150.0, depth);
     vec3 dir_a = normalize(mix(swell_a, landward, refract));
     vec3 dir_b = normalize(mix(swell_b, landward, refract * 0.88));
+    float phase_a = dot(p, normalize(SWELL_AXIS_A));
+    float phase_b = dot(p, normalize(SWELL_AXIS_B));
 
     vec3 displacement = vec3(0.0);
     vec3 grad = vec3(0.0);
     vec3 vel = vec3(0.0);
     float breaking = 0.0;
-    add_wave(p, up, dir_a, shore_distance, depth, 96.0, 0.78, 0.62, 0.0,
+    add_wave(up, dir_a, phase_a, shore_distance, depth, 96.0, 0.78, 0.62, 0.0,
         displacement, grad, vel, breaking);
-    add_wave(p, up, dir_b, shore_distance, depth, 42.0, 0.32, 0.55, 1.7,
+    add_wave(up, dir_b, phase_b, shore_distance, depth, 42.0, 0.32, 0.55, 1.7,
         displacement, grad, vel, breaking);
-    add_wave(p, up, dir_a, shore_distance, depth, 18.0, 0.105, 0.48, 3.1,
+    add_wave(up, dir_a, phase_a, shore_distance, depth, 18.0, 0.105, 0.48, 3.1,
         displacement, grad, vel, breaking);
-    add_wave(p, up, dir_b, shore_distance, depth, 8.0, 0.036, 0.42, 4.6,
+    add_wave(up, dir_b, phase_b, shore_distance, depth, 8.0, 0.036, 0.42, 4.6,
         displacement, grad, vel, breaking);
 
     vec3 normal = normalize(up - grad);
