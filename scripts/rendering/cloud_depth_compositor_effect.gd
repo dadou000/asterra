@@ -25,6 +25,7 @@ var _sun_dir := Vector3(1.0, 0.0, 0.0)
 var _sun_intensity := 5.0265
 var _wind_offset := Vector3.ZERO
 var _primary_steps := 16
+var _helion_angular_radius_rad := 0.00465475
 
 
 func _init() -> void:
@@ -93,7 +94,7 @@ func set_cloud_textures(shape_texture: Texture3D, detail_texture: Texture3D) -> 
 
 func set_runtime_state(floating_origin: Vector3, planet_radius: float,
 		sun_dir: Vector3, sun_intensity: float, wind_offset: Vector3,
-		primary_steps: int) -> void:
+		primary_steps: int, helion_angular_radius_rad: float) -> void:
 	_state_mutex.lock()
 	_floating_origin = floating_origin
 	_planet_radius = planet_radius
@@ -101,6 +102,7 @@ func set_runtime_state(floating_origin: Vector3, planet_radius: float,
 	_sun_intensity = sun_intensity
 	_wind_offset = wind_offset
 	_primary_steps = clampi(primary_steps, 6, 28)
+	_helion_angular_radius_rad = maxf(helion_angular_radius_rad, 1.0e-7)
 	_state_mutex.unlock()
 
 
@@ -132,6 +134,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sun_intensity := _sun_intensity
 	var wind_offset := _wind_offset
 	var primary_steps := _primary_steps
+	var helion_angular_radius_rad := _helion_angular_radius_rad
 	_state_mutex.unlock()
 
 	var cam_transform: Transform3D = scene_data.get_cam_transform()
@@ -184,6 +187,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		_append_vec4(push, Vector4(sun_dir.x, sun_dir.y, sun_dir.z, sun_intensity))
 		_append_vec4(push, Vector4(wind_offset.x, wind_offset.y, wind_offset.z,
 			float(primary_steps)))
+		_append_vec4(push, Vector4(helion_angular_radius_rad, 0.0, 0.0, 0.0))
 		_append_vec4(push, inv_projection.x)
 		_append_vec4(push, inv_projection.y)
 		_append_vec4(push, inv_projection.z)
@@ -192,7 +196,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		var compute_list := _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipeline)
 		_rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
-		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), 128)
+		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), 144)
 		_rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
 		_rd.compute_list_end()
 
