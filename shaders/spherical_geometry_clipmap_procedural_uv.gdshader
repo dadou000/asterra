@@ -32,6 +32,7 @@ uniform float u_debug_side_cut = 0.0;
 
 varying vec3 v_planet;
 varying vec3 v_render;
+varying vec3 v_smooth_normal;
 varying float v_valid;
 varying float v_cap_valid;
 varying float v_level;
@@ -46,6 +47,12 @@ const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
 const int MACRO_MAX_MIP = 5;
+
+// Normals deliberately use a broader footprint than the geometry. The height
+// field stays fully detailed, but lighting no longer follows individual clipmap
+// triangle planes as the lattice snaps underneath a moving camera.
+const float NORMAL_SAMPLE_SPACING_MULT = 3.0;
+const float NORMAL_SAMPLE_MIN_M = 4.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -81,8 +88,6 @@ vec3 macro_array_coord(vec3 dir) {
 	ivec3 size3 = textureSize(u_macro_elevation, 0);
 	float texture_res = float(size3.x);
 	float gutter = max((texture_res - u_macro_face_res) * 0.5, 0.0);
-	// The texture stores one sample at every texel centre. For source sample i,
-	// fuv=(i+0.5)/face_res and this expression lands exactly on texel i's centre.
 	vec2 uv = (fuv.xy * u_macro_face_res + vec2(gutter)) / texture_res;
 	return vec3(uv, fuv.z);
 }
@@ -93,9 +98,6 @@ float macro_lod_for_spacing(float spacing_m) {
 	return clamp(log2(footprint_m / macro_texel_m), 0.0, MACRO_MAX_LOD);
 }
 
-// Uniform cubic B-spline basis. All four weights are positive and sum to one,
-// so the reconstruction is C2-continuous without Catmull-Rom overshoot around
-// mountain crests or coastlines.
 vec4 cubic_bspline_weights(float t) {
 	float t2 = t * t;
 	float t3 = t2 * t;
@@ -106,9 +108,6 @@ vec4 cubic_bspline_weights(float t) {
 		t3 / 6.0);
 }
 
-// Exact bicubic B-spline reconstruction using four hardware-bilinear texture
-// samples instead of sixteen point samples. Pairing adjacent positive B-spline
-// weights lets one filtered fetch represent each 2x2 tap group.
 float macro_bicubic_mip(vec3 coord, int mip) {
 	ivec3 size3 = textureSize(u_macro_elevation, mip);
 	vec2 size2 = vec2(size3.xy);
@@ -144,9 +143,6 @@ float macro_bicubic_mip(vec3 coord, int mip) {
 	return mix(row0, row1, gy1);
 }
 
-// Fractional clipmap filtering remains smooth too: reconstruct both adjacent
-// macro mips cubically, then blend them. Near levels normally use mip 0 and cost
-// four macro fetches; only coarse levels pay the eight-fetch trilinear path.
 float macro_cubic_trilinear(vec3 coord, float lod) {
 	int mip0 = clamp(int(floor(lod)), 0, MACRO_MAX_MIP);
 	int mip1 = min(mip0 + 1, MACRO_MAX_MIP);
@@ -261,14 +257,54 @@ float coarse_sink_weight(vec2 cell, int level) {
 	return 1.0 - smootherstep_range(RING_INNER_Q, RING_HANDOFF_Q, q);
 }
 
-float clip_height(vec3 d, vec2 cell, int level) {
+float terrain_height_with_morph(vec3 d, int level, float morph) {
 	float fine = terrain_height_for_level(d, level);
-	float morph = fine_morph_weight(cell);
 	if (level < ASTERRA_MAX_LEVEL && morph > 0.001) {
 		float coarse = terrain_height_for_level(d, level + 1);
 		fine = mix(fine, coarse, morph);
 	}
 	return fine;
+}
+
+float macro_height_with_morph(vec3 d, int level, float morph) {
+	float fine = macro_height(d, level);
+	if (level < ASTERRA_MAX_LEVEL && morph > 0.001) {
+		float coarse = macro_height(d, level + 1);
+		fine = mix(fine, coarse, morph);
+	}
+	return fine;
+}
+
+vec3 geodesic_offset(vec3 d, vec3 tangent, float distance_m) {
+	float theta = distance_m / max(u_planet_radius, 1.0);
+	return normalize(d * cos(theta) + tangent * sin(theta));
+}
+
+vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
+	// This basis depends only on the planet-space direction, not the clipmap
+	// anchor. Reanchoring therefore cannot rotate the normal sampling stencil.
+	vec3 reference_axis = abs(d.y) < 0.95
+		? vec3(0.0, 1.0, 0.0)
+		: vec3(1.0, 0.0, 0.0);
+	vec3 tangent_x = normalize(cross(reference_axis, d));
+	vec3 tangent_y = normalize(cross(d, tangent_x));
+	float sample_m = max(NORMAL_SAMPLE_MIN_M,
+		ring_spacing(level) * NORMAL_SAMPLE_SPACING_MULT);
+
+	vec3 dx = geodesic_offset(d, tangent_x, sample_m);
+	vec3 dy = geodesic_offset(d, tangent_y, sample_m);
+	float hx = macro_height_with_morph(dx, level, morph);
+	float hy = macro_height_with_morph(dy, level, morph);
+
+	vec3 p0 = d * (u_planet_radius + center_macro_h);
+	vec3 px = dx * (u_planet_radius + hx);
+	vec3 py = dy * (u_planet_radius + hy);
+	vec3 n_raw = cross(px - p0, py - p0);
+	vec3 n = length(n_raw) > 1e-8 ? normalize(n_raw) : d;
+	if (dot(n, d) < 0.0) {
+		n = -n;
+	}
+	return n;
 }
 
 void vertex() {
@@ -278,12 +314,18 @@ void vertex() {
 	vec2 offset_m = cell * spacing;
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
 	vec3 d = direction_for_offset(offset_m);
-	float h = clip_height(d, cell, level);
+	float morph = fine_morph_weight(cell);
+	float macro_h = macro_height_with_morph(d, level, morph);
+	float h = terrain_height_with_morph(d, level, morph);
 	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
 	vec3 p = d * (u_planet_radius + height + u_surface_bias);
+
 	v_planet = p;
 	v_render = p - u_origin;
+	v_smooth_normal = u_height_enabled > 0.5
+		? smooth_macro_normal(d, level, morph, macro_h)
+		: d;
 	v_valid = u_macro_ready;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
@@ -312,15 +354,14 @@ void fragment() {
 			discard;
 		}
 	}
+
 	vec3 up = normalize(v_planet);
-	vec3 dx = dFdx(v_render);
-	vec3 dy = dFdy(v_render);
-	vec3 wn_raw = cross(dx, dy);
-	vec3 wn = length(wn_raw) > 1e-7 ? normalize(wn_raw) : up;
+	vec3 wn = normalize(v_smooth_normal);
 	if (dot(wn, up) < 0.0) {
 		wn = -wn;
 	}
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+
 	if (u_debug_side_cut > 0.5) {
 		float phase = v_level * 0.13;
 		vec3 lod_color = 0.5 + 0.5 * cos(TAU * (vec3(phase) + vec3(0.0, 0.33, 0.67)));
@@ -357,9 +398,6 @@ void light() {
 		return;
 	}
 
-	// ATTENUATION still contains Godot's local/cascade shadow map. Cloud optical
-	// transmittance is an independent atmospheric visibility term and therefore
-	// multiplies it rather than replacing ordinary geometry shadows.
 	float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
 	vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility;
 
@@ -369,8 +407,6 @@ void light() {
 	float vdoth = max(dot(VIEW, h), 0.0);
 	float rough = clamp(ROUGHNESS, 0.045, 1.0);
 
-	// Disney/Burley diffuse response, matching the material's previous render mode
-	// closely enough that enabling cloud shadows does not flatten rough ground.
 	float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
 	float fl = pow(1.0 - ndotl, 5.0);
 	float fv = pow(1.0 - ndotv, 5.0);
@@ -379,7 +415,6 @@ void light() {
 	DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
 
 	if (u_debug_side_cut <= 0.5) {
-		// Isotropic Schlick-GGX for the weak dielectric terrain highlight.
 		float alpha = rough * rough;
 		float a2 = alpha * alpha;
 		float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
