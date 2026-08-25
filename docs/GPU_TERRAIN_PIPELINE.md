@@ -40,12 +40,16 @@ The current `GPUPlanetContext` conversion is a transition step: it uploads baked
 
 4. **GPU material detail**
    - PBR texture/material families
-   - material-specific micro-normal/parallax/displacement
-   - near-field microgeometry / higher-density geometry clipmap
+   - material-specific micro-normal detail
+   - dense near-field geometric microrelief
 
 5. **GPU scatter**
    - vegetation, trees, rocks, talus, debris, river stones, etc.
    - consume the exact same context and final material classification
+
+6. **Optional local GPU compute refinement**
+   - iterative hydraulic/thermal erosion only where analytic synthesis is insufficient
+   - immutable coarse context + deterministic GPU base remain the only inputs
 
 ## Current context textures
 
@@ -116,7 +120,7 @@ The Terrain debug tab exposes unlit views for:
 - geology / biome IDs
 - hydrology
 
-The same tab can disable scanned PBR detail independently, which makes it possible to compare geomorph/classification cost and appearance against texture-detail cost.
+The same tab can disable scanned PBR and geometric microrelief independently, making it possible to isolate terrain synthesis, topology and surface shading costs.
 
 ### M5 — PBR material families — IMPLEMENTED, FIRST PASS
 
@@ -133,40 +137,60 @@ Current implementation details:
 
 - triplanar projection, so the spherical terrain needs no authored UV unwrap
 - 4096 m wrapped floating-origin detail coordinate, calculated before conversion to `Vector3`
-- 1 m or 2 m physical tile periods that divide the 4096 m wrap exactly, preventing phase jumps at rebases
+- 1 m or 2 m physical scan periods that divide the 4096 m wrap exactly
+- explicit `textureGrad()` sampling through material-dependent branches
 - classifier-colour-preserving scan modulation rather than letting one scan repaint whole biomes
 - distance-gated scanned albedo/roughness detail
 - tighter near-field gating for normal-map cost
 - one generic loose-ground scan plus at most one specialised grass/mud/forest scan
-- live debug toggle for direct performance/quality comparison
+- periodic stochastic 3D phase warp for anti-tiling without extra PBR texture fetches
+- geology-specific procedural PBR for all 13 bedrock families, including family roughness, crystalline/bedded/foliated structure, faults and close normal response
+- live debug toggles for direct performance/quality comparison
 
 Still required for the mature M5 implementation:
 
-- stochastic anti-tiling / macro variation for repeated scans
-- dedicated PBR families for the 13 actual rock types
-- dedicated sand, scree, gravel and snow scans/procedural PBR
+- dedicated scanned/procedural sand, scree, gravel and snow families
+- optional scanned rock sets replacing procedural response where worthwhile
 - quality-tier texture budgets for lower GPUs
 
-### M6 — material microrelief — NEXT
+### M6 — dense material microrelief — IMPLEMENTED, FIRST PASS
 
-Use classified materials to control geometry and shading spectra:
+`spherical_geometry_clipmap_micro.gd` adds a dedicated circular near-field mesh at one quarter of L0 spacing. With the current ~0.75 m L0, the dense patch is ~0.1875 m spacing and ~24 m radius.
 
-- rock fractures / bedding / joints
-- scree and gravel relief
-- dune ripples
+The ordinary L0 mesh has an ~18 m-radius central hole. L0 and the dense patch overlap for ~6 m; material microrelief fades to zero through that overlap and the underlying L0 is slightly sunk so both surfaces converge to the same base terrain without a hard stitched edge or persistent coplanar z-fighting.
+
+`gpu_material_microrelief.gdshaderinc` supplies actual vertex displacement for features that are large enough for the dense topology to represent:
+
+- family-specific rock blocks, joints, bedding, foliation, fractures and clast relief
+- scree / talus irregularity
+- river gravel structure
+- broad sand relief
 - soil aggregates
-- snow buildup
-- vegetation-ground roughness
+- wet/muddy ground relief
+- snow undulation
 
-The current L0 spacing is 0.75 m, so centimetre/decimetre silhouette relief requires a future denser near-field geometry layer rather than simply adding higher-frequency displacement to the current vertices. Until that layer exists, sub-metre relief belongs in normal/parallax shading rather than vertex displacement.
+The dense shader path uses the immutable coarse context plus GPU landform fields as its vertex-stage physical proxy. Final visible material identity is still classified in `fragment()` from the actual displaced slope, so the authoritative material system remains downstream of geometry synthesis.
 
-### M7 — iterative near-field GPU erosion
+Micro displacement is distance-gated and fades before the dense patch hands off to L0. Fine centimetre-scale texture remains normal/PBR/scatter detail rather than being aliased into ~19 cm vertices.
 
-Add GPU compute-generated local height/sediment fields for the nearest terrain if analytic erosion is insufficient. The compute input remains immutable coarse context + deterministic procedural base; the CPU does not synthesize terrain.
+The Terrain debug tab can disable geometric microrelief while leaving the dense patch and normal terrain active, allowing direct topology/performance comparison.
 
-### M8 — scatter
+### M7 — scatter — NEXT
 
-Generate scatter suitability from the same final material and geomorph fields, then feed GPU-driven/indirect vegetation, trees, rocks, talus blocks, debris and river stones.
+Generate scatter suitability from the same context, geomorph and final material fields, then feed GPU-driven vegetation and object placement. Initial scatter families should include:
+
+- grass and low vegetation
+- trees / shrubs by biome, moisture, soil depth and slope
+- loose stones and exposed-rock fragments
+- scree / talus blocks
+- river stones / gravel clusters
+- deadwood / litter where ecological context allows
+
+Scatter must reuse the same deterministic process fields that shape terrain and materials so objects do not appear independently painted onto the ground.
+
+### M8 — iterative near-field GPU erosion — OPTIONAL REFINEMENT
+
+Add compute-generated local height/sediment fields only if the analytic erosion system is insufficient at walking distance. Compute input remains immutable coarse context + deterministic procedural base; the CPU does not synthesize terrain.
 
 ## Runtime invariant
 
