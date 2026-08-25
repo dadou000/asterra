@@ -18,7 +18,7 @@ layout(push_constant, std430) uniform Params {
 } params;
 
 const float PI = 3.14159265358979323846;
-const float CLOUD_BASE = 700.0;
+const float CLOUD_BASE = 800.0;
 const float CLOUD_TOP = 14500.0;
 const float CLOUD_DENSITY = 1.15;
 const float CLOUD_SHAPE_SCALE = 0.000055;
@@ -56,39 +56,45 @@ vec4 weather_state(vec3 surface_p, float radius) {
 }
 
 float vertical_profile(float h, float storm) {
-	float base = smoothstep(0.0, mix(0.055, 0.025, storm), h);
-	float top_start = mix(0.30, 0.84, storm);
+	// Fair-weather cloud stays in a shallow 0.8-3 km deck. Only a genuinely
+	// organized storm (weather G) unlocks the deep troposphere and anvil layer.
+	float base = smoothstep(0.0, mix(0.050, 0.022, storm), h);
+	float top_start = mix(0.13, 0.88, smoothstep(0.08, 0.82, storm));
 	float top = 1.0 - smoothstep(top_start, 1.0, h);
-	float anvil = smoothstep(0.58, 0.78, storm) * exp(-pow((h - 0.84) / 0.10, 2.0));
-	return max(base * top, anvil * 0.72);
+	float anvil = smoothstep(0.48, 0.72, storm) * exp(-pow((h - 0.84) / 0.095, 2.0));
+	return max(base * top, anvil * 0.80);
 }
 
 float density_coarse(vec3 p,float radius,vec3 wind){
 	float alt=length(p)-radius;if(alt<=CLOUD_BASE||alt>=CLOUD_TOP)return 0.0;
 	float h=remap01(alt,CLOUD_BASE,CLOUD_TOP);vec4 wx=weather_state(normalize(p)*radius,radius);
-	float coverage=clamp(wx.r+(0.5-wx.a)*0.20+wx.b*0.12,0.01,0.99);
-	float threshold=1.0-coverage*0.82;
+	float coverage=clamp(wx.r,0.0,0.97);
+	float storm=clamp(wx.g,0.0,1.0);
+	float precip=clamp(wx.b,0.0,1.0);
+	float threshold=1.0-coverage*0.68;
 	float macro=textureLod(shape_noise,(p+wind)*CLOUD_SHAPE_SCALE,0.0).r;
 	float body=smoothstep(threshold,min(threshold+0.18,0.995),macro);
-	return body*vertical_profile(h,wx.b)*CLOUD_DENSITY*(0.78+0.42*wx.b+0.20*wx.z);
+	return body*vertical_profile(h,storm)*CLOUD_DENSITY*(0.72+0.82*storm+0.08*precip);
 }
 
 float density_at(vec3 p,float radius,vec3 wind,float detail_weight){
 	float alt=length(p)-radius;if(alt<=CLOUD_BASE||alt>=CLOUD_TOP)return 0.0;
 	float h=remap01(alt,CLOUD_BASE,CLOUD_TOP);vec4 wx=weather_state(normalize(p)*radius,radius);
-	float coverage=clamp(wx.r+(0.5-wx.a)*0.20+wx.b*0.14,0.01,0.99);
-	float threshold=1.0-coverage*0.82;
+	float coverage=clamp(wx.r,0.0,0.97);
+	float storm=clamp(wx.g,0.0,1.0);
+	float precip=clamp(wx.b,0.0,1.0);
+	float threshold=1.0-coverage*0.68;
 	vec3 sp=(p+wind)*CLOUD_SHAPE_SCALE;
 	float n0=textureLod(shape_noise,sp,0.0).r;
 	float n1=textureLod(shape_noise,sp*2.03+vec3(0.19,0.61,0.43),0.0).r;
 	float macro=mix(n0,n1,0.24);
-	// Mesoscale storm cells get a mild convergent column bias; synoptic placement
-	// still comes entirely from the simulated weather texture.
+	// Storm organization makes a compact tower denser, never broader. Horizontal
+	// coverage remains exclusively the simulated cloud-fraction R channel.
 	float column=textureLod(shape_noise,normalize(p)*0.73+vec3(0.37,0.11,0.71),0.0).r;
-	macro += (column-0.5)*wx.b*0.22;
-	float body=smoothstep(threshold,min(threshold+0.18,0.995),macro)*vertical_profile(h,wx.b);
+	macro += (column-0.5)*storm*0.28;
+	float body=smoothstep(threshold,min(threshold+0.18,0.995),macro)*vertical_profile(h,storm);
 	if(detail_weight>0.001&&body>0.012){vec3 dp=(p+wind*1.31)*CLOUD_DETAIL_SCALE;float detail=textureLod(detail_noise,dp+vec3(0.41,0.17,0.83),0.0).r;float edge=1.0-smoothstep(0.28,0.86,body);body=max(body-(1.0-detail)*CLOUD_DETAIL_STRENGTH*detail_weight*(0.20+0.80*edge),0.0);}
-	return smoothstep(0.012,0.28,body)*CLOUD_DENSITY*(0.78+0.46*wx.b+0.22*wx.z);
+	return smoothstep(0.012,0.28,body)*CLOUD_DENSITY*(0.72+0.92*storm+0.10*precip);
 }
 
 float hg(float mu,float g){float gg=g*g;return(1.0-gg)/(4.0*PI*pow(max(1.0+gg-2.0*g*mu,1e-4),1.5));}
