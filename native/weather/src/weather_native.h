@@ -29,7 +29,8 @@ public:
 		450.0f, 1700.0f, 3300.0f, 5600.0f, 8500.0f, 12800.0f
 	};
 
-private:
+	// Public only so translation-unit-local packing helpers can consume a const
+	// Atmosphere without duplicating the type. It is not exposed to Godot.
 	struct Atmosphere {
 		int width = 0;
 		int height = 0;
@@ -57,6 +58,7 @@ private:
 		int interface_offset(int interface_index) const { return interface_index * cells; }
 	};
 
+private:
 	Atmosphere global_atm;
 	Atmosphere local_atm;
 	uint64_t seed = 1;
@@ -82,8 +84,6 @@ private:
 	void global_state_at_dir_layer(const Vector3 &dir, int layer,
 		float &theta, float &q, float &u, float &v, float &liquid,
 		float &ice, float &pressure) const;
-	PackedFloat32Array weather_rgba_from(const Atmosphere &a) const;
-	PackedFloat32Array diagnostics_rgba_from(const Atmosphere &a) const;
 
 	static float actual_temperature(float theta, int layer);
 	static float qsat_scalar(float temperature_k, float pressure_pa);
