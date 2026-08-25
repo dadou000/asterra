@@ -1351,7 +1351,7 @@ void WeatherNative::update_local_surface_geometry() {
 					Vector3 sd = (local_center + local_east * (sex / PLANET_RADIUS_M)
 						+ local_north * (sny / PLANET_RADIUS_M)).normalized();
 					float water = std::clamp(local_surface.water_fraction[sc], 0.0f, 1.0f);
-					float h = std::lerp(local_surface.elevation_m[sc], 0.0f, water);
+					float h = local_surface.elevation_m[sc];
 					return sd * (PLANET_RADIUS_M + h);
 				};
 				Vector3 tangent_x = position_at(xe, y) - position_at(xw, y);
@@ -1377,7 +1377,7 @@ void WeatherNative::update_local_surface_horizon() {
 			Vector3 d0(local_surface.dir_x[c], local_surface.dir_y[c], local_surface.dir_z[c]);
 			d0.normalize();
 			float water0 = std::clamp(local_surface.water_fraction[c], 0.0f, 1.0f);
-			float h0 = std::lerp(local_surface.elevation_m[c], 0.0f, water0);
+			float h0 = local_surface.elevation_m[c];
 			Vector3 p0 = d0 * (PLANET_RADIUS_M + h0);
 			float sky_sum = 0.0f;
 			for (int sector = 0; sector < HORIZON_SECTORS; ++sector) {
@@ -1393,7 +1393,7 @@ void WeatherNative::update_local_surface_horizon() {
 					Vector3 d1(local_surface.dir_x[sc], local_surface.dir_y[sc], local_surface.dir_z[sc]);
 					d1.normalize();
 					float water1 = std::clamp(local_surface.water_fraction[sc], 0.0f, 1.0f);
-					float h1 = std::lerp(local_surface.elevation_m[sc], 0.0f, water1);
+					float h1 = local_surface.elevation_m[sc];
 					Vector3 rel = d1 * (PLANET_RADIUS_M + h1) - p0;
 					float vertical = rel.dot(d0);
 					float horizontal_sq = std::max(rel.length_squared() - vertical * vertical, 1.0f);

@@ -25,6 +25,7 @@ var _local_request := 0
 var _local_building := false
 var _local_task_id := -1
 var _local_uploaded_center := Vector3.ZERO
+var _local_requested_center := Vector3.ZERO
 var _terrain_ref: WeakRef
 
 
@@ -107,6 +108,7 @@ func _push_solar_forcing() -> void:
 func _on_planet_world_ready(_fields: PlanetFields) -> void:
 	_surface_fields_uploaded = false
 	_local_uploaded_center = Vector3.ZERO
+	_local_requested_center = Vector3.ZERO
 	_local_request += 1
 	call_deferred("_upload_global_surface_fields")
 
@@ -142,6 +144,7 @@ func _upload_global_surface_fields() -> void:
 	_native.call(&"set_global_surface_fields", packed)
 	_surface_fields_uploaded = true
 	_local_uploaded_center = Vector3.ZERO
+	_local_requested_center = Vector3.ZERO
 	_local_request += 1
 	_push_solar_forcing()
 	_publish_surface_textures()
@@ -158,16 +161,30 @@ func _maybe_queue_local_surface() -> void:
 	var center: Vector3 = WeatherSystem.local_center.normalized()
 	if center.length_squared() < 0.5:
 		return
-	if _local_uploaded_center.length_squared() < 0.5:
-		_queue_local_surface()
+	if _local_requested_center.length_squared() >= 0.5:
+		var requested_m := acos(clampf(_local_requested_center.dot(center), -1.0, 1.0)) \
+			* Planet.cfg.planet_radius
+		if requested_m <= LOCAL_CELL_M * 0.25:
+			return
+	if _local_uploaded_center.length_squared() >= 0.5:
+		var uploaded_m := acos(clampf(_local_uploaded_center.dot(center), -1.0, 1.0)) \
+			* Planet.cfg.planet_radius
+		if uploaded_m <= LOCAL_CELL_M * 0.25:
+			return
+	_queue_local_surface(false)
+
+
+func _queue_local_surface(force_rebuild: bool = true) -> void:
+	if not _has_local_observer() or Planet.cfg == null:
 		return
-	var moved_m := acos(clampf(_local_uploaded_center.dot(center), -1.0, 1.0)) * Planet.cfg.planet_radius
-	if moved_m > LOCAL_CELL_M * 0.25:
-		_queue_local_surface()
-
-
-func _queue_local_surface() -> void:
+	var center := WeatherSystem.local_center.normalized()
+	if not force_rebuild and _local_requested_center.length_squared() >= 0.5:
+		var duplicate_m := acos(clampf(_local_requested_center.dot(center), -1.0, 1.0)) \
+			* Planet.cfg.planet_radius
+		if duplicate_m <= LOCAL_CELL_M * 0.25:
+			return
 	_local_request += 1
+	_local_requested_center = center
 	if _local_building:
 		return
 	_start_local_surface_build()
@@ -279,7 +296,7 @@ func _on_terrain_region_changed(center_dir: Vector3, radius_m: float) -> void:
 	var distance := acos(clampf(_local_uploaded_center.dot(center_dir.normalized()), -1.0, 1.0)) \
 		* Planet.cfg.planet_radius
 	if distance <= WeatherSystem.local_span_m * 0.72 + radius_m:
-		_queue_local_surface()
+		_queue_local_surface(true)
 
 
 func _create_textures() -> void:
