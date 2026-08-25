@@ -5,6 +5,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_d
 #include "res://shaders/gpu_planet_context.gdshaderinc"
 #include "res://shaders/gpu_geomorph.gdshaderinc"
 #include "res://shaders/gpu_surface_classifier.gdshaderinc"
+#include "res://shaders/gpu_surface_pbr.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
 #include "res://shaders/terrain_aerial_gpu.gdshaderinc"
@@ -339,10 +340,24 @@ void fragment() {
 			SPECULAR = 0.0;
 			METALLIC = 0.0;
 		} else {
-			vec3 albedo = sc_compose_albedo(
+			vec3 base_albedo = sc_compose_albedo(
 				primary, secondary, soil, surface, climate, biome, rock_id);
+			float base_roughness = sc_compose_roughness(primary, secondary, surface);
+			float camera_dist = length(v_render - CAMERA_POSITION_WORLD);
+			vec3 dpos = v_render + u_detail_origin;
+			vec3 albedo;
+			float roughness;
+			vec3 scan_n;
+			float scan_normal_w;
+			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
+				base_albedo, base_roughness, albedo, roughness, scan_n, scan_normal_w);
+			if (scan_normal_w > 0.001) {
+				wn = normalize(mix(wn, scan_n, scan_normal_w));
+				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+			}
+
 			ALBEDO = albedo;
-			ROUGHNESS = sc_compose_roughness(primary, secondary, surface);
+			ROUGHNESS = roughness;
 			SPECULAR = 0.22;
 			METALLIC = 0.0;
 
