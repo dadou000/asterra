@@ -32,6 +32,7 @@ GroundGeometryClipmap="*res://scripts/terrain/spherical_geometry_clipmap_procedu
 AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
 WeatherSystem="*res://scripts/weather/weather_system.gd"
+WeatherMap="*res://scripts/ui/weather_map.gd"
 VolumetricClouds="*res://scripts/rendering/weather_volumetric_cloud_controller.gd"
 
 [display]

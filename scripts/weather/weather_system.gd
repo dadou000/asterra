@@ -60,6 +60,8 @@ func _process(delta: float) -> void:
 		_texture_accum = fmod(_texture_accum, TEXTURE_REAL_INTERVAL)
 		_publish_weather_textures()
 
+	_sync_weather_map_material()
+
 
 func _try_bind_observer() -> void:
 	if _observer != null and is_instance_valid(_observer):
@@ -93,6 +95,26 @@ func _publish_weather_textures() -> void:
 		var local_image := Image.create_from_data(
 			LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_values.to_byte_array())
 		local_weather_texture.update(local_image)
+
+
+func _sync_weather_map_material() -> void:
+	var weather_map := get_node_or_null("/root/WeatherMap")
+	if weather_map == null or not weather_map.visible:
+		return
+	var material_value: Variant = weather_map.get("_material")
+	if not (material_value is ShaderMaterial):
+		return
+	var material := material_value as ShaderMaterial
+	if global_weather_texture != null:
+		material.set_shader_parameter("u_weather", global_weather_texture)
+	if local_weather_texture != null:
+		material.set_shader_parameter("u_local_weather", local_weather_texture)
+	material.set_shader_parameter("u_local_center", local_center)
+	material.set_shader_parameter("u_local_east", local_east)
+	material.set_shader_parameter("u_local_north", local_north)
+	material.set_shader_parameter("u_local_span_m", local_span_m)
+	if Planet.cfg != null:
+		material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 
 
 func global_texture() -> Texture2D:
