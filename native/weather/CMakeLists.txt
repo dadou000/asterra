@@ -5,11 +5,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-if(NOT DEFINED GODOT_CPP_DIR)
-  message(FATAL_ERROR "Set GODOT_CPP_DIR to a Godot 4.7-compatible godot-cpp checkout")
+if(DEFINED GODOT_CPP_DIR)
+  add_subdirectory(${GODOT_CPP_DIR} godot-cpp)
+else()
+  include(FetchContent)
+  FetchContent_Declare(
+    godot-cpp
+    GIT_REPOSITORY https://github.com/godotengine/godot-cpp.git
+    GIT_TAG 4.7
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(godot-cpp)
 endif()
-
-add_subdirectory(${GODOT_CPP_DIR} godot-cpp)
 
 add_library(asterra_weather SHARED
   src/register_types.cpp
