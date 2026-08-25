@@ -9,6 +9,7 @@
 - Vertical coordinate: **30 non-uniform sigma levels** from roughly **0.10 km to 20.2 km**.
 - The lowest kilometre is sampled densely (about 0.10, 0.25, 0.45, 0.70 and 1.00 km) so the surface boundary layer is no longer represented by a single ~450 m level.
 - Pressure-thickness layer weights are used for vertically integrated condensate products. Display/optical integrations are explicitly normalized from the former six-level calibration so increasing vertical resolution does not multiply apparent cloud amount.
+- Saturation thermodynamics now permit pressure down to 6 kPa; the former 12 kPa numerical floor was only valid for the old ~12.8 km model top and would artificially favor upper-level ice at the new ~20 km top.
 
 ## Runtime
 
