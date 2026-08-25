@@ -264,14 +264,14 @@ static func _build_grass_clump_mesh() -> ArrayMesh:
 static func _build_stone_mesh() -> ArrayMesh:
 	var top := Vector3(0.0, 1.0, 0.0)
 	var bottom := Vector3(0.0, 0.0, 0.0)
-	var ring := [
+	var ring: Array[Vector3] = [
 		Vector3(1.0, 0.28, 0.0),
 		Vector3(0.0, 0.34, 0.86),
 		Vector3(-0.82, 0.24, 0.0),
 		Vector3(0.0, 0.30, -1.0),
 	]
-	var vertices := PackedVector3Array()
-	var normals := PackedVector3Array()
+	var vertices: Array[Vector3] = []
+	var normals: Array[Vector3] = []
 	for i: int in 4:
 		var next: int = (i + 1) % 4
 		_append_flat_triangle(vertices, normals, top, ring[i], ring[next])
@@ -279,14 +279,14 @@ static func _build_stone_mesh() -> ArrayMesh:
 
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
+	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array(normals)
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
 
-static func _append_flat_triangle(vertices: PackedVector3Array, normals: PackedVector3Array,
+static func _append_flat_triangle(vertices: Array[Vector3], normals: Array[Vector3],
 		a: Vector3, b: Vector3, c: Vector3) -> void:
 	var n: Vector3 = (b - a).cross(c - a).normalized()
 	vertices.append(a)
