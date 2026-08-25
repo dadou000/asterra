@@ -221,18 +221,15 @@ vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
 vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
 		vec4 soil, vec4 geology, vec4 hydro, float rock_id, float biome) {
 	if (mode == 1) {
-		// R mountain, G arid, B glacial; deposition lifts all channels toward white.
 		return clamp(landform.rgb + vec3(landform.a * 0.55), 0.0, 1.0);
 	}
 	if (mode == 2) {
-		// Primary: rock red, mineral soil green, vegetation blue-green, sand yellow.
 		return clamp(vec3(
 			primary.r + primary.a,
 			primary.g + primary.a * 0.78 + primary.b * 0.45,
 			primary.b), 0.0, 1.0);
 	}
 	if (mode == 3) {
-		// Secondary: mud red/brown, snow white, scree yellow-grey, gravel cyan.
 		return clamp(
 			vec3(0.62, 0.22, 0.08) * secondary.r
 			+ vec3(1.0) * secondary.g
@@ -359,34 +356,35 @@ void fragment() {
 }
 
 void light() {
-	if (u_debug_geomorph_mode > 0) return;
-	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
-	if (ndotl > 0.0) {
-		float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
-		vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
-		float ndotv = max(dot(NORMAL, VIEW), 0.001);
-		vec3 h = normalize(LIGHT + VIEW);
-		float ndoth = max(dot(NORMAL, h), 0.0);
-		float vdoth = max(dot(VIEW, h), 0.0);
-		float rough = clamp(ROUGHNESS, 0.045, 1.0);
-		float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
-		float fl = pow(1.0 - ndotl, 5.0);
-		float fv = pow(1.0 - ndotv, 5.0);
-		float diffuse_term = (1.0 + (fd90 - 1.0) * fl) * (1.0 + (fd90 - 1.0) * fv);
-		DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
+	if (u_debug_geomorph_mode <= 0) {
+		float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+		if (ndotl > 0.0) {
+			float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
+			vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
+			float ndotv = max(dot(NORMAL, VIEW), 0.001);
+			vec3 h = normalize(LIGHT + VIEW);
+			float ndoth = max(dot(NORMAL, h), 0.0);
+			float vdoth = max(dot(VIEW, h), 0.0);
+			float rough = clamp(ROUGHNESS, 0.045, 1.0);
+			float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
+			float fl = pow(1.0 - ndotl, 5.0);
+			float fv = pow(1.0 - ndotv, 5.0);
+			float diffuse_term = (1.0 + (fd90 - 1.0) * fl) * (1.0 + (fd90 - 1.0) * fv);
+			DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
 
-		if (u_debug_side_cut <= 0.5) {
-			float alpha = rough * rough;
-			float a2 = alpha * alpha;
-			float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-			float d = a2 / max(PI * denom * denom, 1e-5);
-			float k = (rough + 1.0) * (rough + 1.0) * 0.125;
-			float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
-			float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
-			float f0 = 0.018;
-			float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
-			float spec = d * gv * gl * fresnel / max(4.0 * ndotv * ndotl, 1e-4);
-			SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
+			if (u_debug_side_cut <= 0.5) {
+				float alpha = rough * rough;
+				float a2 = alpha * alpha;
+				float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
+				float d = a2 / max(PI * denom * denom, 1e-5);
+				float k = (rough + 1.0) * (rough + 1.0) * 0.125;
+				float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
+				float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
+				float f0 = 0.018;
+				float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
+				float spec = d * gv * gl * fresnel / max(4.0 * ndotv * ndotl, 1e-4);
+				SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
+			}
 		}
 	}
 }
