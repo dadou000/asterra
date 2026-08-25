@@ -20,6 +20,7 @@ public:
 	static constexpr int LOCAL_H = 192;
 	static constexpr int LAYERS = 6;
 	static constexpr int INTERFACES = LAYERS - 1;
+	static constexpr int HORIZON_SECTORS = 24;
 	static constexpr float PLANET_RADIUS_M = 3500000.0f;
 	static constexpr float LOCAL_CELL_M = 2200.0f;
 
@@ -96,6 +97,10 @@ public:
 		std::vector<float> sensible_flux_w_m2;
 		std::vector<float> latent_flux_w_m2;
 		std::vector<float> ground_flux_w_m2;
+		// Local terrain horizon, stored as tangent(elevation angle) per azimuth.
+		std::vector<float> horizon_tan;
+		std::vector<float> sky_view_factor;
+		std::vector<float> terrain_sun_visibility;
 
 		void resize(int p_width, int p_height);
 	};
@@ -123,8 +128,10 @@ private:
 	Vector3 local_north = Vector3(0, 0, 1);
 	Vector3 solar_direction_body = Vector3(-1, 0, 0);
 	float solar_irradiance_w_m2 = 1420.0f;
+	float helion_angular_radius_rad = 0.00465f;
 	bool local_initialized = false;
 	bool surface_fields_ready = false;
+	bool local_surface_fields_ready = false;
 
 	static int wrap_x(int x, int w);
 	static int clamp_y(int y, int h);
@@ -143,6 +150,8 @@ private:
 	void update_global_surface_normals();
 	void initialize_global_surface_state();
 	void initialize_local_surface();
+	void update_local_surface_geometry();
+	void update_local_surface_horizon();
 	void horizontal_pass(Atmosphere &a, bool is_global, float dt);
 	void surface_pass(Atmosphere &a, SurfaceState &surface, bool is_global, float dt);
 	void vertical_pass(Atmosphere &a, bool is_global, float dt);
@@ -175,7 +184,9 @@ public:
 	// Packed four-float geography per global weather cell:
 	// elevation_m, water_fraction, soil_moisture, snow-free base_albedo.
 	void set_global_surface_fields(const PackedFloat32Array &fields);
-	void set_solar_forcing(const Vector3 &sun_direction_body, float irradiance_w_m2);
+	void set_local_surface_fields(const PackedFloat32Array &fields);
+	void set_solar_forcing(const Vector3 &sun_direction_body, float irradiance_w_m2,
+		float angular_radius_rad);
 
 	PackedFloat32Array get_global_weather_rgba() const;
 	PackedFloat32Array get_local_weather_rgba() const;

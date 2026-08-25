@@ -8,17 +8,16 @@ const GLOBAL_H := 128
 const LOCAL_W := 192
 const LOCAL_H := 192
 const LAYERS := 6
-const GLOBAL_REAL_INTERVAL := 0.50
-const LOCAL_REAL_INTERVAL := 0.20
 const TEXTURE_REAL_INTERVAL := 0.50
 const GLOBAL_SIM_DT := 90.0
 const LOCAL_SIM_DT := 20.0
 const SIMULATION_SPEED_MIN := 0.0
 const SIMULATION_SPEED_MAX := 128.0
 const SIMULATION_SPEED_DEFAULT := 1.0
-const MAX_CATCHUP_REAL_DELTA := 0.25
-const MAX_GLOBAL_STEPS_PER_FRAME := 4
-const MAX_LOCAL_STEPS_PER_FRAME := 10
+# A pathological external celestial time jump is allowed to leave backlog rather
+# than silently discarding physical time. Normal 0-128x operation never reaches
+# this guard at ordinary frame rates.
+const MAX_SOLVER_STEPS_PER_FRAME := 64
 const SIMULATION_WEIGHT_MIN := 0.0
 const SIMULATION_WEIGHT_MAX := 2.0
 const SIMULATION_WEIGHT_DEFAULT := 1.0
@@ -93,12 +92,15 @@ var layer_weights := PackedFloat32Array(DEFAULT_LAYER_WEIGHTS)
 
 var _native: Object = null
 var _observer: AsterraPlayer
-var _global_accum := 0.0
-var _local_accum := 0.0
+var _global_sim_accum := 0.0
+var _local_sim_accum := 0.0
 var _texture_accum := 0.0
+var _last_celestial_seconds := 0.0
 
 
 func _ready() -> void:
+	_last_celestial_seconds = CelestialSystem.simulation_seconds
+	CelestialSystem.set_time_scale(simulation_speed)
 	_create_textures()
 	_try_create_native_backend()
 	if native_available:
@@ -151,30 +153,47 @@ func _try_create_native_backend() -> void:
 func _process(delta: float) -> void:
 	_try_bind_observer()
 
+	# CelestialSystem is the authoritative physical clock. Weather no longer has
+	# independent real-time cadence multipliers: both global and local solvers
+	# consume exactly the same elapsed Asterra seconds, using their own fixed
+	# stable integration timesteps.
+	var celestial_now := CelestialSystem.simulation_seconds
+	var simulated_delta := celestial_now - _last_celestial_seconds
+	_last_celestial_seconds = celestial_now
+	if simulated_delta < 0.0:
+		# The native atmosphere is not reversible. A deliberate celestial rewind
+		# therefore starts a fresh catch-up interval instead of integrating a
+		# physically invalid negative weather timestep.
+		_global_sim_accum = 0.0
+		_local_sim_accum = 0.0
+		simulated_delta = 0.0
+
 	if not native_available or _native == null:
 		if _observer != null and is_instance_valid(_observer):
 			_update_fallback_basis(_observer.up_dir())
 		_sync_weather_map_material()
 		return
 
-	var simulated_real_delta := minf(delta, MAX_CATCHUP_REAL_DELTA) * simulation_speed
-	_global_accum = minf(
-		_global_accum + simulated_real_delta,
-		GLOBAL_REAL_INTERVAL * MAX_GLOBAL_STEPS_PER_FRAME)
-	_local_accum = minf(
-		_local_accum + simulated_real_delta,
-		LOCAL_REAL_INTERVAL * MAX_LOCAL_STEPS_PER_FRAME)
+	_global_sim_accum += simulated_delta
+	if _observer != null and is_instance_valid(_observer):
+		_local_sim_accum += simulated_delta
+	else:
+		_local_sim_accum = 0.0
 	_texture_accum += delta
 
-	while _global_accum >= GLOBAL_REAL_INTERVAL:
-		_global_accum -= GLOBAL_REAL_INTERVAL
+	var global_steps := 0
+	while _global_sim_accum >= GLOBAL_SIM_DT and global_steps < MAX_SOLVER_STEPS_PER_FRAME:
+		_global_sim_accum -= GLOBAL_SIM_DT
 		_native.call(&"step_global", GLOBAL_SIM_DT)
+		global_steps += 1
 
 	if _observer != null and is_instance_valid(_observer):
 		_native.call(&"set_local_center", _observer.up_dir())
-		while _local_accum >= LOCAL_REAL_INTERVAL:
-			_local_accum -= LOCAL_REAL_INTERVAL
+		var local_steps := 0
+		while _local_sim_accum >= LOCAL_SIM_DT and local_steps < MAX_SOLVER_STEPS_PER_FRAME:
+			_local_sim_accum -= LOCAL_SIM_DT
 			_native.call(&"step_local", LOCAL_SIM_DT)
+			local_steps += 1
 		local_center = _native.call(&"get_local_center")
 		local_east = _native.call(&"get_local_east")
 		local_north = _native.call(&"get_local_north")
@@ -285,9 +304,10 @@ func reset_simulation_weight() -> void:
 
 func set_simulation_speed(value: float) -> void:
 	var sanitized := clampf(value, SIMULATION_SPEED_MIN, SIMULATION_SPEED_MAX)
-	if is_equal_approx(simulation_speed, sanitized):
+	if is_equal_approx(simulation_speed, sanitized) and is_equal_approx(CelestialSystem.time_scale, sanitized):
 		return
 	simulation_speed = sanitized
+	CelestialSystem.set_time_scale(simulation_speed)
 	simulation_speed_changed.emit(simulation_speed)
 
 

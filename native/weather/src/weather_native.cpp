@@ -28,6 +28,7 @@ static constexpr float CP_SNOW = 2100.0f;
 static constexpr float BULK_HEAT_COEFF = 0.0014f;
 static constexpr float BULK_MOISTURE_COEFF = 0.0013f;
 static constexpr float MIN_EXCHANGE_WIND_MPS = 0.5f;
+static constexpr float FREE_CONVECTION_WIND_COEFF = 0.65f;
 static constexpr float BOTTOM_AIR_MASS_KG_M2 = 1500.0f;
 static constexpr float LAND_WATER_RESERVOIR_KG_M2 = 150.0f;
 static constexpr float MAX_PRECIP_KG_M2_S = 0.008333333f; // 30 mm/h water equivalent.
@@ -44,6 +45,9 @@ static constexpr float WET_SNOW_ALBEDO = 0.60f;
 static constexpr float OCEAN_ALBEDO = 0.060f;
 static constexpr float SNOW_COVER_EFOLD_KG_M2 = 12.0f;
 static constexpr float SNOW_ALBEDO_AGE_TAU_S = 5.0f * 11.5f * 3600.0f;
+static constexpr std::array<int, 10> HORIZON_MARCH_CELLS = {
+	1, 2, 3, 5, 8, 12, 18, 27, 40, 55
+};
 
 static constexpr std::array<float, WeatherNative::LAYERS> WIND_DRAG_TAU_S = {
 	28800.0f, 43200.0f, 64800.0f, 129600.0f, 259200.0f, 432000.0f
@@ -152,6 +156,9 @@ void WeatherNative::SurfaceState::resize(int p_width, int p_height) {
 		&sensible_flux_w_m2, &latent_flux_w_m2, &ground_flux_w_m2}) {
 		a->assign(cells, 0.0f);
 	}
+	horizon_tan.assign(size_t(cells) * HORIZON_SECTORS, 0.0f);
+	sky_view_factor.assign(cells, 1.0f);
+	terrain_sun_visibility.assign(cells, 1.0f);
 }
 
 int WeatherNative::wrap_x(int x, int w) {
@@ -216,7 +223,8 @@ void WeatherNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_local_north"), &WeatherNative::get_local_north);
 	ClassDB::bind_method(D_METHOD("get_local_span_m"), &WeatherNative::get_local_span_m);
 	ClassDB::bind_method(D_METHOD("set_global_surface_fields", "fields"), &WeatherNative::set_global_surface_fields);
-	ClassDB::bind_method(D_METHOD("set_solar_forcing", "sun_direction_body", "irradiance_w_m2"), &WeatherNative::set_solar_forcing);
+	ClassDB::bind_method(D_METHOD("set_local_surface_fields", "fields"), &WeatherNative::set_local_surface_fields);
+	ClassDB::bind_method(D_METHOD("set_solar_forcing", "sun_direction_body", "irradiance_w_m2", "angular_radius_rad"), &WeatherNative::set_solar_forcing);
 	ClassDB::bind_method(D_METHOD("get_global_surface_rgba"), &WeatherNative::get_global_surface_rgba);
 	ClassDB::bind_method(D_METHOD("get_local_surface_rgba"), &WeatherNative::get_local_surface_rgba);
 }
@@ -464,16 +472,19 @@ void WeatherNative::set_global_surface_fields(const PackedFloat32Array &fields) 
 	update_global_surface_normals();
 	initialize_global_surface_state();
 	surface_fields_ready = true;
+	local_surface_fields_ready = false;
 	// Rebuild the nest so its lower boundary is sampled from the new geography
 	// rather than retaining the all-zero placeholder surface.
 	local_initialized = false;
 }
 
-void WeatherNative::set_solar_forcing(const Vector3 &sun_direction_body, float irradiance_w_m2) {
+void WeatherNative::set_solar_forcing(const Vector3 &sun_direction_body, float irradiance_w_m2,
+		float angular_radius_rad) {
 	if (sun_direction_body.length_squared() > 1e-10f) {
 		solar_direction_body = sun_direction_body.normalized();
 	}
 	solar_irradiance_w_m2 = std::clamp(irradiance_w_m2, 0.0f, 5000.0f);
+	helion_angular_radius_rad = std::clamp(angular_radius_rad, 0.0001f, 0.03f);
 }
 
 void WeatherNative::swap_state(Atmosphere &a) {
@@ -585,7 +596,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		const float sigma = SIGMA[layer];
 		const float sf = sigma_temperature_factor(layer);
 		const float height_m = APPROX_HEIGHT_M[layer];
-		const float rho = 1.225f * std::pow(sigma, 0.82f);
+		const float rho = 1.33f * std::pow(sigma, 0.82f);
 		const float wind_damp = std::exp(-dt / WIND_DRAG_TAU_S[layer]);
 		const float wind_relax = relaxation_fraction(dt, 259200.0f, circulation_weight);
 		const float theta_relax = relaxation_fraction(dt, THERMAL_RELAX_TAU_S[layer], temperature_weight);
@@ -725,7 +736,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				// Moist microphysics. q is true specific humidity; cloud liquid/ice are
 				// condensate mixing ratios. Latent heating feeds back into theta.
 				__m256 temperature = _mm256_mul_ps(theta, _mm256_set1_ps(sf));
-				__m256 pabs = clamp8(_mm256_add_ps(_mm256_set1_ps(P0 * sigma), pressure), 12000.0f, 105000.0f);
+				__m256 pabs = clamp8(_mm256_add_ps(_mm256_set1_ps(P0 * sigma), pressure), 12000.0f, 115000.0f);
 				__m256 qsat = qsat8(temperature, pabs);
 				__m256 supersat = _mm256_max_ps(_mm256_sub_ps(q, qsat), zero);
 				__m256 cond = _mm256_mul_ps(supersat, _mm256_set1_ps(cond_frac));
@@ -816,7 +827,13 @@ void WeatherNative::surface_pass(Atmosphere &a, SurfaceState &surface, bool is_g
 		float p_abs = std::clamp(p0_layer + a.npressure[l0 + c], 80000.0f, 115000.0f);
 		float rho_air = p_abs / std::max(RD_AIR * air_t, 1.0f);
 		float wind = std::sqrt(a.nu[l0 + c] * a.nu[l0 + c] + a.nv[l0 + c] * a.nv[l0 + c]);
-		float exchange_wind = std::max(wind, MIN_EXCHANGE_WIND_MPS);
+		// Free convection keeps strongly sun-heated ground coupled to the boundary
+		// layer even in light winds; mechanical and buoyant exchange add in
+		// quadrature rather than one arbitrarily replacing the other.
+		float buoyant_wind = FREE_CONVECTION_WIND_COEFF
+			* std::sqrt(std::max(ts - air_t, 0.0f));
+		float exchange_wind = std::max(
+			std::sqrt(wind * wind + buoyant_wind * buoyant_wind), MIN_EXCHANGE_WIND_MPS);
 
 		// Surface snowfall/rain. The atmospheric precipitation field is an
 		// instantaneous intensity diagnostic, mapped here to at most 30 mm/h.
@@ -853,16 +870,39 @@ void WeatherNative::surface_pass(Atmosphere &a, SurfaceState &surface, bool is_g
 		}
 		float cloud = std::clamp(1.0f - std::exp(-condensate * 700.0f), 0.0f, 1.0f);
 
-		float radial_mu = std::max(d.dot(solar_direction_body), 0.0f);
+		float sun_dot = d.dot(solar_direction_body);
+		float radial_mu = std::max(sun_dot, 0.0f);
 		float slope_mu = std::max(n.dot(solar_direction_body), 0.0f);
-		// Planetary horizon gates direct light; the local terrain normal then
-		// gives slope/aspect heating. A later horizon map can multiply this term.
-		float direct_mu = radial_mu > 0.0f ? slope_mu : 0.0f;
+		float terrain_visibility = 1.0f;
+		float sky_view = is_global ? 1.0f : std::clamp(surface.sky_view_factor[c], 0.05f, 1.0f);
+		if (!is_global && local_surface_fields_ready && radial_mu > 0.0f) {
+			Vector3 tangent_sun = solar_direction_body - d * sun_dot;
+			if (tangent_sun.length_squared() > 1e-10f) {
+				tangent_sun.normalize();
+				float azimuth = std::atan2(tangent_sun.dot(local_north), tangent_sun.dot(local_east));
+				if (azimuth < 0.0f) azimuth += TAU_F;
+				float sector_f = azimuth / TAU_F * float(HORIZON_SECTORS) - 0.5f;
+				int sector0 = int(std::floor(sector_f));
+				float blend = sector_f - std::floor(sector_f);
+				int s0 = wrap_x(sector0, HORIZON_SECTORS);
+				int s1 = wrap_x(sector0 + 1, HORIZON_SECTORS);
+				float horizon_tan = std::lerp(
+					surface.horizon_tan[size_t(c) * HORIZON_SECTORS + s0],
+					surface.horizon_tan[size_t(c) * HORIZON_SECTORS + s1], blend);
+				float sun_elevation = std::asin(std::clamp(radial_mu, 0.0f, 1.0f));
+				float horizon_angle = std::atan(std::max(horizon_tan, 0.0f));
+				float radius = std::max(helion_angular_radius_rad, 0.0001f);
+				terrain_visibility = smoothstep01(
+					(sun_elevation - (horizon_angle - radius)) / (2.0f * radius));
+			}
+		}
+		surface.terrain_sun_visibility[c] = terrain_visibility;
+		float direct_mu = radial_mu > 0.0f ? slope_mu * terrain_visibility : 0.0f;
 		float clear_transmission = 0.72f;
 		float cloud_direct = std::exp(-2.0f * cloud);
 		float direct_sw = solar_irradiance_w_m2 * direct_mu * clear_transmission * cloud_direct;
 		float diffuse_sw = solar_irradiance_w_m2 * radial_mu
-			* (0.10f + 0.13f * cloud) * (1.0f - 0.35f * cloud);
+			* (0.10f + 0.13f * cloud) * (1.0f - 0.35f * cloud) * sky_view;
 		float absorbed_sw = std::max((direct_sw + diffuse_sw) * (1.0f - albedo), 0.0f);
 
 		// Net long-wave cooling. Humid/cloudy air is a stronger IR emitter.
@@ -991,8 +1031,22 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 			__m256 moisture = clamp8(_mm256_mul_ps(q_lo, _mm256_set1_ps(1.0f / 0.018f)), 0.0f, 1.0f);
 			__m256 convergence_up = _mm256_mul_ps(_mm256_max_ps(_mm256_sub_ps(zero, div_lo), zero), _mm256_set1_ps(0.58f * convection_weight));
 			__m256 convective_up = _mm256_mul_ps(_mm256_mul_ps(instability, moisture), _mm256_set1_ps(2.2e-4f * convection_weight));
+			// Positive sensible heat at the lower boundary is an explicit buoyancy
+			// source for interface 0. This turns differential slope heating into
+			// resolved upslope/thermal circulation instead of relying only on delayed
+			// static-instability feedback.
+			__m256 surface_buoyancy = zero;
+			if (interface_index == 0 && surface_fields_ready) {
+				const SurfaceState &surface = is_global ? global_surface : local_surface;
+				__m256 sensible = _mm256_loadu_ps(&surface.sensible_flux_w_m2[c]);
+				surface_buoyancy = _mm256_mul_ps(
+					_mm256_max_ps(sensible, zero),
+					_mm256_set1_ps((1.45e-4f / 350.0f) * convection_weight));
+			}
 			__m256 downdraft = _mm256_mul_ps(precip, _mm256_set1_ps(5.5e-5f));
-			__m256 rate = clamp8(_mm256_sub_ps(_mm256_add_ps(convergence_up, convective_up), downdraft), -1.8e-4f, 6.0e-4f);
+			__m256 rate = clamp8(_mm256_sub_ps(
+				_mm256_add_ps(_mm256_add_ps(convergence_up, convective_up), surface_buoyancy),
+				downdraft), -1.8e-4f, 6.0e-4f);
 			_mm256_storeu_ps(&a.mass_flux[flux_off + c], rate);
 
 			__m256 frac = clamp8(_mm256_mul_ps(abs8(rate), _mm256_set1_ps(dt * 0.72f)), 0.0f, max_mix);
@@ -1261,8 +1315,118 @@ void WeatherNative::initialize_local_surface() {
 			local_surface.sensible_flux_w_m2[c] = 0.0f;
 			local_surface.latent_flux_w_m2[c] = 0.0f;
 			local_surface.ground_flux_w_m2[c] = 0.0f;
+			local_surface.sky_view_factor[c] = 1.0f;
+			local_surface.terrain_sun_visibility[c] = 1.0f;
+			for (int sector = 0; sector < HORIZON_SECTORS; ++sector) {
+				local_surface.horizon_tan[size_t(c) * HORIZON_SECTORS + sector] = 0.0f;
+			}
 		}
 	}
+	local_surface_fields_ready = false;
+}
+
+void WeatherNative::update_local_surface_geometry() {
+	float half = LOCAL_CELL_M * float(LOCAL_W) * 0.5f;
+	for (int y = 0; y < LOCAL_H; ++y) {
+		for (int x = 0; x < LOCAL_W; ++x) {
+			int c = x + y * LOCAL_W;
+			float ex = (float(x) + 0.5f) * LOCAL_CELL_M - half;
+			float ny = (float(y) + 0.5f) * LOCAL_CELL_M - half;
+			Vector3 d = (local_center + local_east * (ex / PLANET_RADIUS_M)
+				+ local_north * (ny / PLANET_RADIUS_M)).normalized();
+			local_surface.dir_x[c] = d.x;
+			local_surface.dir_y[c] = d.y;
+			local_surface.dir_z[c] = d.z;
+
+			Vector3 supplied(local_surface.normal_x[c], local_surface.normal_y[c], local_surface.normal_z[c]);
+			if (supplied.length_squared() < 0.25f) {
+				int xe = std::min(x + 1, LOCAL_W - 1);
+				int xw = std::max(x - 1, 0);
+				int yn = std::min(y + 1, LOCAL_H - 1);
+				int ys = std::max(y - 1, 0);
+				auto position_at = [&](int sx, int sy) {
+					int sc = sx + sy * LOCAL_W;
+					float sex = (float(sx) + 0.5f) * LOCAL_CELL_M - half;
+					float sny = (float(sy) + 0.5f) * LOCAL_CELL_M - half;
+					Vector3 sd = (local_center + local_east * (sex / PLANET_RADIUS_M)
+						+ local_north * (sny / PLANET_RADIUS_M)).normalized();
+					float water = std::clamp(local_surface.water_fraction[sc], 0.0f, 1.0f);
+					float h = std::lerp(local_surface.elevation_m[sc], 0.0f, water);
+					return sd * (PLANET_RADIUS_M + h);
+				};
+				Vector3 tangent_x = position_at(xe, y) - position_at(xw, y);
+				Vector3 tangent_y = position_at(x, yn) - position_at(x, ys);
+				supplied = tangent_x.cross(tangent_y);
+				if (supplied.length_squared() < 1e-10f) supplied = d;
+				else supplied.normalize();
+			}
+			if (supplied.dot(d) < 0.0f) supplied = -supplied;
+			float water = std::clamp(local_surface.water_fraction[c], 0.0f, 1.0f);
+			Vector3 n = supplied.lerp(d, water).normalized();
+			local_surface.normal_x[c] = n.x;
+			local_surface.normal_y[c] = n.y;
+			local_surface.normal_z[c] = n.z;
+		}
+	}
+}
+
+void WeatherNative::update_local_surface_horizon() {
+	for (int y = 0; y < LOCAL_H; ++y) {
+		for (int x = 0; x < LOCAL_W; ++x) {
+			int c = x + y * LOCAL_W;
+			Vector3 d0(local_surface.dir_x[c], local_surface.dir_y[c], local_surface.dir_z[c]);
+			d0.normalize();
+			float water0 = std::clamp(local_surface.water_fraction[c], 0.0f, 1.0f);
+			float h0 = std::lerp(local_surface.elevation_m[c], 0.0f, water0);
+			Vector3 p0 = d0 * (PLANET_RADIUS_M + h0);
+			float sky_sum = 0.0f;
+			for (int sector = 0; sector < HORIZON_SECTORS; ++sector) {
+				float angle = (float(sector) + 0.5f) * TAU_F / float(HORIZON_SECTORS);
+				float sx_dir = std::cos(angle);
+				float sy_dir = std::sin(angle);
+				float max_tan = 0.0f;
+				for (int step : HORIZON_MARCH_CELLS) {
+					int sx = int(std::round(float(x) + sx_dir * float(step)));
+					int sy = int(std::round(float(y) + sy_dir * float(step)));
+					if (sx < 0 || sx >= LOCAL_W || sy < 0 || sy >= LOCAL_H) break;
+					int sc = sx + sy * LOCAL_W;
+					Vector3 d1(local_surface.dir_x[sc], local_surface.dir_y[sc], local_surface.dir_z[sc]);
+					d1.normalize();
+					float water1 = std::clamp(local_surface.water_fraction[sc], 0.0f, 1.0f);
+					float h1 = std::lerp(local_surface.elevation_m[sc], 0.0f, water1);
+					Vector3 rel = d1 * (PLANET_RADIUS_M + h1) - p0;
+					float vertical = rel.dot(d0);
+					float horizontal_sq = std::max(rel.length_squared() - vertical * vertical, 1.0f);
+					float horizon_tan = vertical / std::sqrt(horizontal_sq);
+					max_tan = std::max(max_tan, horizon_tan);
+				}
+				max_tan = std::max(max_tan, 0.0f);
+				local_surface.horizon_tan[size_t(c) * HORIZON_SECTORS + sector] = max_tan;
+				// Isotropic sky-view approximation: cos^2(horizon elevation), averaged
+				// over azimuth. It attenuates diffuse short-wave and leaves open terrain 1.
+				sky_sum += 1.0f / (1.0f + max_tan * max_tan);
+			}
+			local_surface.sky_view_factor[c] = std::clamp(
+				sky_sum / float(HORIZON_SECTORS), 0.05f, 1.0f);
+		}
+	}
+}
+
+void WeatherNative::set_local_surface_fields(const PackedFloat32Array &fields) {
+	constexpr int STRIDE = 7;
+	if (fields.size() != LOCAL_W * LOCAL_H * STRIDE || !local_initialized) return;
+	for (int c = 0; c < local_surface.cells; ++c) {
+		local_surface.elevation_m[c] = fields[c * STRIDE + 0];
+		local_surface.water_fraction[c] = std::clamp(fields[c * STRIDE + 1], 0.0f, 1.0f);
+		local_surface.soil_moisture[c] = std::clamp(fields[c * STRIDE + 2], 0.0f, 1.0f);
+		local_surface.base_albedo[c] = std::clamp(fields[c * STRIDE + 3], 0.04f, 0.65f);
+		local_surface.normal_x[c] = fields[c * STRIDE + 4];
+		local_surface.normal_y[c] = fields[c * STRIDE + 5];
+		local_surface.normal_z[c] = fields[c * STRIDE + 6];
+	}
+	update_local_surface_geometry();
+	update_local_surface_horizon();
+	local_surface_fields_ready = true;
 }
 
 void WeatherNative::nudge_local_boundaries(float dt) {

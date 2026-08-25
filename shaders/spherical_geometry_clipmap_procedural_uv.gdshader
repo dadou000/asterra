@@ -2,6 +2,7 @@ shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
+#include "res://shaders/weather_surface.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
@@ -409,12 +410,27 @@ void fragment() {
 		vec3 albedo = mix(soil, grass, clamp(surf.r, 0.0, 1.0));
 		albedo = mix(albedo, wet, clamp(surf.g * 0.70, 0.0, 1.0));
 		albedo = mix(albedo, sand, clamp(surf.b, 0.0, 1.0));
-		albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0));
+		// Generated frost remains a weak permanent/glacial tint. Current snow is
+		// supplied by the physical surface reservoir below, so winter cover can
+		// actually accumulate, age, wet and disappear.
+		albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0) * 0.20);
 		albedo = mix(albedo, rock, smoothstep(0.08, 0.34, slope));
 
+		vec4 dynamic_surface = surface_energy_sample(v_planet);
+		float dynamic_snow = clamp(dynamic_surface.g, 0.0, 1.0)
+			* (1.0 - smoothstep(0.16, 0.46, slope));
+		float snow_optical = clamp((dynamic_surface.b - 0.56) / 0.34, 0.0, 1.0);
+		vec3 current_snow = mix(vec3(0.61, 0.64, 0.66), vec3(0.94, 0.96, 0.98), snow_optical);
+		float dynamic_wet = clamp(dynamic_surface.a, 0.0, 1.0) * (1.0 - dynamic_snow);
+		albedo *= mix(1.0, 0.86, dynamic_wet * 0.55);
+		albedo = mix(albedo, current_snow, dynamic_snow);
+
 		ALBEDO = albedo;
-		ROUGHNESS = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
-		SPECULAR = 0.22;
+		float base_roughness = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
+		float surface_temperature_k = 220.0 + dynamic_surface.r * 110.0;
+		float melting = smoothstep(270.5, 274.0, surface_temperature_k);
+		ROUGHNESS = mix(base_roughness, mix(0.92, 0.62, melting), dynamic_snow);
+		SPECULAR = mix(0.22, mix(0.20, 0.38, melting), dynamic_snow);
 		METALLIC = 0.0;
 
 		// Generic Environment ambient is disabled above. Restore local, physically
