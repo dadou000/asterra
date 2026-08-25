@@ -12,7 +12,6 @@ uniform float u_speed_reference = 65.0;
 uniform float u_opacity : hint_range(0.0, 2.0) = 0.72;
 
 varying float v_speed;
-varying float v_edge;
 varying float v_life;
 
 vec2 flow_sample(vec2 uv) {
@@ -29,7 +28,10 @@ vec2 advect_step(vec2 uv, float dt) {
 }
 
 vec3 sphere_direction(vec2 uv) {
-	float lon = (uv.x - 0.5) * 2.0 * PI;
+	// Wind textures use the native model convention: x=0 is longitude 0 and
+	// increases eastward through 2π. The globe product shader applies its own
+	// half-turn only when converting the display map UV into this field UV.
+	float lon = uv.x * 2.0 * PI;
 	float lat = (0.5 - uv.y) * PI;
 	float cl = cos(lat);
 	return normalize(vec3(cl * cos(lon), sin(lat), cl * sin(lon)));
@@ -43,8 +45,8 @@ void vertex() {
 	float travel = life * u_particle_lifetime_s;
 	vec2 uv = seed_uv;
 
-	// Four RK-like field samples are enough visually at the 256x128 weather scale,
-	// while keeping 30k+ particles cheap and entirely GPU resident.
+	// Four field samples keep tens of thousands of instances cheap while still
+	// following synoptic curvature instead of translating straight-line sprites.
 	float dt = travel * 0.25;
 	uv = advect_step(uv, dt);
 	uv = advect_step(uv, dt);
@@ -68,7 +70,6 @@ void vertex() {
 	VERTEX = radial * u_display_radius + flow * along + side * across;
 
 	v_speed = speed;
-	v_edge = 1.0 - clamp(abs(VERTEX.x) / max(u_line_length, 1e-5), 0.0, 1.0);
 	v_life = sin(life * PI);
 }
 
@@ -81,8 +82,6 @@ vec3 speed_palette(float x) {
 }
 
 void fragment() {
-	// Rounded thin streak with temporal head/tail fade. Depth testing against the
-	// globe hides the back hemisphere automatically; there is no CPU culling pass.
 	vec2 q = UV - vec2(0.5);
 	float longitudinal = 1.0 - smoothstep(0.34, 0.50, abs(q.x));
 	float transverse = 1.0 - smoothstep(0.10, 0.49, abs(q.y));
