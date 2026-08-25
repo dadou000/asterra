@@ -26,6 +26,7 @@ var _debug_freeze := false
 var _debug_side_cut := false
 var _debug_sink_scale: float = DEFAULT_SINK_SCALE
 var _debug_geomorph_mode: int = 0
+var _debug_pbr_enabled := true
 var _bound_ctx_generation: int = -1
 var _pbr_bound := false
 
@@ -144,7 +145,7 @@ func _bind_surface_pbr(force: bool) -> void:
 	_material.set_shader_parameter("u_pbr_forest_albedo", PBR_FOREST_ALBEDO)
 	_material.set_shader_parameter("u_pbr_forest_normal", PBR_FOREST_NORMAL)
 	_material.set_shader_parameter("u_pbr_forest_roughness", PBR_FOREST_ROUGHNESS)
-	_material.set_shader_parameter("u_pbr_enabled", 1.0)
+	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled else 0.0)
 	_pbr_bound = true
 
 
@@ -190,6 +191,7 @@ func _sync_debug_uniforms() -> void:
 	_material.set_shader_parameter("u_debug_side_cut", 1.0 if _debug_side_cut else 0.0)
 	_material.set_shader_parameter("u_sink_scale", _debug_sink_scale)
 	_material.set_shader_parameter("u_debug_geomorph_mode", _debug_geomorph_mode)
+	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled else 0.0)
 
 
 func _show_all_active_sectors() -> void:
@@ -241,6 +243,11 @@ func set_debug_geomorph_mode(value: int) -> void:
 	_sync_debug_uniforms()
 
 
+func set_debug_pbr_enabled(value: bool) -> void:
+	_debug_pbr_enabled = value
+	_sync_debug_uniforms()
+
+
 func debug_freeze_enabled() -> bool:
 	return _debug_freeze
 
@@ -255,6 +262,10 @@ func debug_sink_scale() -> float:
 
 func debug_geomorph_mode() -> int:
 	return _debug_geomorph_mode
+
+
+func debug_pbr_enabled() -> bool:
+	return _debug_pbr_enabled
 
 
 func rebuild_static_topology() -> void:
@@ -368,7 +379,7 @@ func gpu_stream_stats() -> Dictionary:
 		"procedural_gpu": true,
 		"visual_pages": false,
 		"cpu_material_clipmap": false,
-		"pbr_scans": true,
+		"pbr_scans": _debug_pbr_enabled,
 		"macro_upsample": 2,
 		"debug_frozen": _debug_freeze,
 		"debug_side_cut": _debug_side_cut,
