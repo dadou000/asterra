@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/apply-weather-polar-stability.yml"
       - "tools/apply_weather_polar_patch.py"
+      - "tools/apply_weather_polar_patch_v2.py"
 
 permissions:
   contents: write
@@ -20,7 +21,7 @@ jobs:
           fetch-depth: 0
 
       - name: Apply patch
-        run: python tools/apply_weather_polar_patch.py
+        run: python tools/apply_weather_polar_patch_v2.py
 
       - name: Sanity checks
         shell: bash
