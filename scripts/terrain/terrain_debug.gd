@@ -2,13 +2,22 @@ class_name TerrainDebug
 extends CanvasLayer
 ## Debug controller for the current spherical procedural clipmap.
 ##
-## The old quadtree/tile-axis/UV/forced-depth tools were removed with the CPU
-## visual terrain. This controller intentionally exposes only debug operations
-## that map to the active renderer:
+## Debug operations map directly to the active GPU renderer:
 ##   - wireframe
 ##   - freeze the camera-following clipmap in planet space
 ##   - side-cut the concentric rings to inspect overlap/sinking
 ##   - adjust sink depth for inspection
+##   - inspect GPU context / landform / material-classification channels
+
+const GEOMORPH_MODE_NAMES := [
+	"Final",
+	"Landforms",
+	"Primary materials",
+	"Secondary materials",
+	"Soil context",
+	"Geology / biome",
+	"Hydrology",
+]
 
 var terrain: PlanetTerrain # retained only because main.gd assigns it
 
@@ -16,6 +25,7 @@ var wireframe := false: set = set_wireframe
 var freeze_terrain := false: set = set_freeze_terrain
 var side_cut := false: set = set_side_cut
 var sink_scale := 2.0: set = set_sink_scale
+var geomorph_mode := 0: set = set_geomorph_mode
 
 var _wireframes_ready := false
 var _status: Label
@@ -46,8 +56,6 @@ func set_wireframe(value: bool) -> void:
 	if viewport == null:
 		return
 	if value and not _wireframes_ready:
-		# Static clipmap meshes must be rebuilt once after wireframe index generation
-		# is enabled. Unlike the old quadtree this never regenerates terrain data.
 		RenderingServer.set_debug_generate_wireframes(true)
 		_wireframes_ready = true
 		var clipmap: Node = _clipmap()
@@ -81,10 +89,19 @@ func set_sink_scale(value: float) -> void:
 	_update_status()
 
 
+func set_geomorph_mode(value: int) -> void:
+	geomorph_mode = clampi(value, 0, GEOMORPH_MODE_NAMES.size() - 1)
+	var clipmap: Node = _clipmap()
+	if clipmap != null and clipmap.has_method("set_debug_geomorph_mode"):
+		clipmap.set_debug_geomorph_mode(geomorph_mode)
+	_update_status()
+
+
 func reset_inspection() -> void:
 	freeze_terrain = false
 	side_cut = false
 	sink_scale = 2.0
+	geomorph_mode = 0
 	var clipmap: Node = _clipmap()
 	if clipmap != null:
 		if clipmap.has_method("set_debug_freeze"):
@@ -93,6 +110,8 @@ func reset_inspection() -> void:
 			clipmap.set_debug_side_cut(false)
 		if clipmap.has_method("set_debug_sink_scale"):
 			clipmap.set_debug_sink_scale(2.0)
+		if clipmap.has_method("set_debug_geomorph_mode"):
+			clipmap.set_debug_geomorph_mode(0)
 	_update_status()
 
 
@@ -106,6 +125,8 @@ func _update_status() -> void:
 		modes.append("SIDE CUT")
 	if wireframe:
 		modes.append("WIREFRAME")
+	if geomorph_mode > 0 and geomorph_mode < GEOMORPH_MODE_NAMES.size():
+		modes.append("GPU %s" % GEOMORPH_MODE_NAMES[geomorph_mode].to_upper())
 	if modes.is_empty():
 		_status.visible = false
 		_status.text = ""
