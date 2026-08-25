@@ -68,7 +68,7 @@ float cloud_shadow_density_at(vec3 p, float planet_radius) {
 	if (altitude <= u_cloud_shadow_base || altitude >= u_cloud_shadow_top) return 0.0;
 	float h = cloud_shadow_remap01(altitude, u_cloud_shadow_base, u_cloud_shadow_top);
 	vec4 weather = cloud_shadow_weather(normalize(p) * planet_radius, planet_radius);
-	float coverage = clamp(weather.r, 0.0, 0.97);
+	float coverage = clamp(weather.r, 0.01, 0.97);
 	float storm = clamp(weather.g, 0.0, 1.0);
 	float precip = clamp(weather.b, 0.0, 1.0);
 	float threshold = 1.0 - coverage * 0.68;
