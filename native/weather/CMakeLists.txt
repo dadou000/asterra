@@ -29,6 +29,7 @@ endif()
 
 add_library(asterra_weather SHARED
   src/register_types.cpp
+  src/weather_wind_sampler.cpp
   # This translation unit includes the proven AVX2 core and wraps only the
   # capped-convection/cloud-presentation entry points. Do not compile
   # weather_native.cpp separately or its symbols would be defined twice.
