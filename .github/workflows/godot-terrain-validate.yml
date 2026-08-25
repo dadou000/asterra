@@ -32,6 +32,22 @@ jobs:
           chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
           /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
 
+      - name: Import project resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          # A fresh checkout has neither the global class cache nor imported
+          # compressed textures. Let the editor build both before the isolated
+          # terrain shader smoke test. Import diagnostics are retained, but this
+          # step is preparatory; the validation step below owns pass/fail.
+          set +e
+          "$GODOT" --headless --path . --import > /tmp/godot-import.log 2>&1
+          import_status=$?
+          set -e
+          tail -n 160 /tmp/godot-import.log || true
+          echo "Godot import exit status: $import_status"
+
       - name: Validate active terrain shader
         shell: bash
         run: |
