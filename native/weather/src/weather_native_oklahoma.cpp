@@ -299,7 +299,6 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 			a.nice[i] = std::clamp(ice, 0.0f, 0.012f);
 		}
 	}
-	}
 }
 
 void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
