@@ -1,11 +1,9 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap_fast.gd"
 ## Fully procedural visual spherical terrain.
 ##
-## Visual height pages are no longer part of the terrain path. Every L0-L14
-## clipmap vertex samples one interpolated 2x-smoothed macro elevation texture and
-## evaluates the same deterministic GPU detail spectrum, band-limited to that
-## level's spacing. The outer morph therefore transitions between two evaluations
-## of the same continuous world-space function rather than between streamed pages.
+## Every L0-L14 clipmap vertex samples the immutable coarse planet maps and then
+## synthesises all sub-grid terrain on the GPU. No camera-centred CPU terrain or
+## material generation participates in this path.
 
 const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 const DEFAULT_SINK_SCALE: float = 2.0
@@ -13,6 +11,7 @@ const DEFAULT_SINK_SCALE: float = 2.0
 var _debug_freeze := false
 var _debug_side_cut := false
 var _debug_sink_scale: float = DEFAULT_SINK_SCALE
+var _bound_ctx_generation: int = -1
 
 
 func _ready() -> void:
@@ -46,10 +45,6 @@ func _process(_dt: float) -> void:
 		_update_visible_cap(planet_pos.length(), radius)
 		_update_active_levels()
 
-	# Freeze means exactly that for terrain inspection: the clipmap centre, tangent
-	# frame, visible-cap radius and active LOD count stop following the camera.
-	# Floating-origin changes still update u_origin below, so the frozen terrain
-	# remains fixed in planet space while the camera can freely move around it.
 	if not _debug_freeze:
 		var observer_surface: Vector3 = observer_dir * radius
 		var anchor_surface: Vector3 = _anchor_dir * radius
@@ -73,7 +68,6 @@ func _process(_dt: float) -> void:
 
 	_bind_gpu_resources(false)
 	_sync_uniforms(origin)
-	_sync_material_control()
 	_set_visible(_bound_orbit != null)
 	if _terrain_visible:
 		if _debug_freeze or _debug_side_cut:
@@ -94,6 +88,28 @@ func _bind_gpu_resources(force: bool) -> void:
 		_bound_orbit_res = macro_res
 		_material.set_shader_parameter("u_macro_face_res", float(macro_res))
 	_material.set_shader_parameter("u_macro_ready", 1.0 if macro != null else 0.0)
+	_bind_planet_context(force)
+
+
+func _bind_planet_context(force: bool) -> void:
+	var context: Node = get_node_or_null("/root/PlanetContext")
+	if context == null or not bool(context.get("ready_state")):
+		_material.set_shader_parameter("u_ctx_ready", 0.0)
+		return
+
+	var generation: int = int(context.get("generation"))
+	if force or generation != _bound_ctx_generation:
+		_bound_ctx_generation = generation
+		_material.set_shader_parameter("u_ctx_soil", context.get("soil_texture"))
+		_material.set_shader_parameter("u_ctx_surface", context.get("surface_texture"))
+		_material.set_shader_parameter("u_ctx_geology", context.get("geology_texture"))
+		_material.set_shader_parameter("u_ctx_structure", context.get("structure_texture"))
+		_material.set_shader_parameter("u_ctx_climate", context.get("climate_texture"))
+		_material.set_shader_parameter("u_ctx_hydrology", context.get("hydrology_texture"))
+		_material.set_shader_parameter("u_ctx_rock", context.get("rock_texture"))
+		_material.set_shader_parameter("u_ctx_biome", context.get("biome_texture"))
+		_material.set_shader_parameter("u_ctx_face_res", float(context.get("face_res")))
+	_material.set_shader_parameter("u_ctx_ready", 1.0)
 
 
 func _sync_uniforms(origin: Vector3) -> void:
@@ -137,9 +153,6 @@ func _show_all_active_sectors() -> void:
 
 	for sector: int in _sector_batches.size():
 		var batch: MultiMeshInstance3D = _sector_batches[sector]
-		# The topology cut keeps only cy <= 0, which maps to angular sectors 6..11.
-		# Hide the empty upper-half sector nodes entirely instead of submitting six
-		# empty MultiMeshes and reporting them as visible debug batches.
 		var sector_visible := not _debug_side_cut or sector >= (SECTOR_COUNT >> 1)
 		batch.visible = sector_visible
 		if batch.multimesh != null:
@@ -162,9 +175,6 @@ func set_debug_side_cut(value: bool) -> void:
 		return
 	_debug_side_cut = value
 	_sync_debug_uniforms()
-	# Rebuild only static index topology. In side-cut mode the +clipmap-up half is
-	# genuinely absent, so Godot's global wireframe debug sees the same cut as the
-	# shaded renderer instead of relying on fragment discard.
 	rebuild_static_topology()
 	if _terrain_visible:
 		if value or _debug_freeze:
@@ -258,8 +268,6 @@ static func _append_debug_cell(indices: PackedInt32Array, x: int, y: int) -> voi
 static func _debug_mesh_from_indices(vertices: PackedVector3Array,
 		indices: PackedInt32Array) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	# A removed half-plane leaves sectors 0..5 with zero cells. Never submit the
-	# 401x401 placeholder vertex buffer as accidental non-indexed geometry.
 	if indices.is_empty():
 		return mesh
 	var arrays: Array = []
@@ -275,6 +283,7 @@ func _request_visible_pages() -> void:
 
 
 func gpu_stream_stats() -> Dictionary:
+	var context: Node = get_node_or_null("/root/PlanetContext")
 	return {
 		"draw_batches": 1 + _visible_sector_count if _active_max_level > 0 else 1,
 		"active_levels": _active_max_level + 1,
@@ -291,6 +300,8 @@ func gpu_stream_stats() -> Dictionary:
 		"table_tombstones": 0,
 		"table_failures": 0,
 		"coverage_ready": _bound_orbit != null,
+		"context_ready": context != null and bool(context.get("ready_state")),
+		"context_generation": _bound_ctx_generation,
 		"spherical": true,
 		"grid_cells": GRID_CELLS,
 		"fast_path": true,
@@ -299,6 +310,7 @@ func gpu_stream_stats() -> Dictionary:
 		"visible_sectors": _visible_sector_count,
 		"procedural_gpu": true,
 		"visual_pages": false,
+		"cpu_material_clipmap": false,
 		"macro_upsample": 2,
 		"debug_frozen": _debug_freeze,
 		"debug_side_cut": _debug_side_cut,
