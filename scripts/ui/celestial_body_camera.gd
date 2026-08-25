@@ -60,6 +60,7 @@ func _build_ui() -> void:
 	_subviewport = SubViewport.new()
 	_subviewport.name = "CelestialViewport"
 	_subviewport.disable_3d = false
+	_subviewport.own_world_3d = true
 	_subviewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	_subviewport.size = Vector2i(1280, 720)
 	_viewport_container.add_child(_subviewport)
@@ -131,9 +132,9 @@ func _build_3d_scene() -> void:
 	_helion_mesh.mesh = helion_sphere
 	var helion_material := StandardMaterial3D.new()
 	helion_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	helion_material.albedo_color = Color("fff7f1")
+	helion_material.albedo_color = Color(1.0, 0.969, 0.945)
 	helion_material.emission_enabled = true
-	helion_material.emission = Color("fff2e8")
+	helion_material.emission = Color(1.0, 0.949, 0.910)
 	helion_material.emission_energy_multiplier = 2.2
 	_helion_mesh.material_override = helion_material
 	_scene_root.add_child(_helion_mesh)
