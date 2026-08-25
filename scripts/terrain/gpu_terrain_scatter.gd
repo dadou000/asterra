@@ -167,8 +167,10 @@ func _make_batch(node_name: String, mesh: ArrayMesh, material: ShaderMaterial,
 	batch.name = node_name
 	batch.multimesh = mm
 	batch.material_override = material
-	batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON \
-		if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if cast_shadows:
+		batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	else:
+		batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	batch.visible = false
 	return batch
 
