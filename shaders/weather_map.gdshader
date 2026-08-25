@@ -2,6 +2,8 @@ shader_type canvas_item;
 
 uniform sampler2D u_weather : filter_linear, repeat_disable;
 uniform sampler2D u_local_weather : filter_linear, repeat_disable;
+uniform sampler2D u_diagnostics : filter_linear, repeat_disable;
+uniform sampler2D u_local_diagnostics : filter_linear, repeat_disable;
 uniform vec3 u_local_center = vec3(0.0, 1.0, 0.0);
 uniform vec3 u_local_east = vec3(1.0, 0.0, 0.0);
 uniform vec3 u_local_north = vec3(0.0, 0.0, 1.0);
@@ -42,41 +44,67 @@ vec3 pressure_palette(float x) {
 		: mix(neutral, vec3(0.88, 0.16, 0.10), d);
 }
 
-vec4 sample_weather_field(vec2 uv) {
-	// WeatherNative stores longitude as [0, 2pi), while the map is displayed
-	// conventionally as [-pi, +pi] with the prime meridian in the centre.
-	vec2 global_uv = vec2(fract(uv.x + 0.5), uv.y);
-	vec4 coarse = texture(u_weather, global_uv);
-	if (u_local_span_m <= 1.0) return coarse;
+vec3 signed_dynamic_palette(float x) {
+	float d = clamp((x - 0.5) * 2.0, -1.0, 1.0);
+	vec3 neutral = vec3(0.88, 0.90, 0.90);
+	return d < 0.0
+		? mix(neutral, vec3(0.10, 0.36, 0.92), -d)
+		: mix(neutral, vec3(0.92, 0.16, 0.12), d);
+}
 
+vec3 pv_palette(float x) {
+	float d = clamp((x - 0.5) * 2.0, -1.0, 1.0);
+	vec3 neutral = vec3(0.90, 0.90, 0.86);
+	return d < 0.0
+		? mix(neutral, vec3(0.20, 0.20, 0.70), -d)
+		: mix(neutral, vec3(0.72, 0.08, 0.72), d);
+}
+
+vec3 shear_palette(float x) {
+	x = clamp(x, 0.0, 1.0);
+	if (x < 0.35) return mix(vec3(0.03, 0.10, 0.16), vec3(0.10, 0.62, 0.54), x / 0.35);
+	if (x < 0.68) return mix(vec3(0.10, 0.62, 0.54), vec3(0.96, 0.82, 0.14), (x - 0.35) / 0.33);
+	return mix(vec3(0.96, 0.82, 0.14), vec3(0.90, 0.10, 0.12), (x - 0.68) / 0.32);
+}
+
+// x/y are local texture coordinates; z is blend weight. Negative z means the
+// pixel is outside the local 192x192 tangent nest.
+vec3 local_lookup(vec2 uv) {
+	if (u_local_span_m <= 1.0) return vec3(0.0, 0.0, -1.0);
 	float lon = (uv.x - 0.5) * TAU;
 	float lat = (0.5 - uv.y) * PI;
 	float cl = cos(lat);
 	vec3 dir = vec3(cl * cos(lon), sin(lat), cl * sin(lon));
 	vec3 center = normalize(u_local_center);
 	float forward = dot(dir, center);
-	if (forward <= 0.0) return coarse;
+	if (forward <= 0.0) return vec3(0.0, 0.0, -1.0);
 
 	float east_angle = atan(dot(dir, normalize(u_local_east)), forward);
 	float north_angle = atan(dot(dir, normalize(u_local_north)), forward);
 	vec2 local_uv = vec2(east_angle, north_angle) * (u_planet_radius / u_local_span_m) + vec2(0.5);
 	vec2 edge_v = abs(local_uv - vec2(0.5)) * 2.0;
 	float edge = max(edge_v.x, edge_v.y);
-	if (edge >= 1.0) return coarse;
+	if (edge >= 1.0) return vec3(local_uv, -1.0);
+	return vec3(local_uv, 1.0 - smoothstep(0.86, 1.0, edge));
+}
 
-	vec4 fine = texture(u_local_weather, local_uv);
-	float fine_weight = 1.0 - smoothstep(0.86, 1.0, edge);
-	return mix(coarse, fine, fine_weight);
+vec4 sample_nested_field(sampler2D global_tex, sampler2D local_tex, vec2 uv, vec3 lookup) {
+	vec2 global_uv = vec2(fract(uv.x + 0.5), uv.y);
+	vec4 coarse = texture(global_tex, global_uv);
+	if (lookup.z < 0.0) return coarse;
+	vec4 fine = texture(local_tex, lookup.xy);
+	return mix(coarse, fine, lookup.z);
 }
 
 void fragment() {
 	vec3 base = texture(TEXTURE, UV).rgb;
-	vec4 w = sample_weather_field(UV);
+	vec3 lookup = local_lookup(UV);
+	vec4 w = sample_nested_field(u_weather, u_local_weather, UV, lookup);
+	vec4 d = sample_nested_field(u_diagnostics, u_local_diagnostics, UV, lookup);
 
 	vec3 product_color;
 	float opacity = 0.84;
 	if (u_product == 0) {
-		// Composite: visible cloud shield + radar-like precipitation + convective cores.
 		product_color = mix(base * 0.42, cloud_palette(w.r), smoothstep(0.10, 0.82, w.r) * 0.64);
 		product_color = mix(product_color, precip_palette(w.b), smoothstep(0.03, 0.62, w.b) * 0.88);
 		product_color = mix(product_color, storm_palette(w.g), smoothstep(0.55, 0.95, w.g) * 0.82);
@@ -87,13 +115,20 @@ void fragment() {
 		product_color = precip_palette(w.b);
 	} else if (u_product == 3) {
 		product_color = storm_palette(w.g);
-	} else {
+	} else if (u_product == 4) {
 		product_color = pressure_palette(w.a);
+	} else if (u_product == 5) {
+		product_color = signed_dynamic_palette(d.r);
+	} else if (u_product == 6) {
+		product_color = signed_dynamic_palette(d.g);
+	} else if (u_product == 7) {
+		product_color = pv_palette(d.b);
+	} else {
+		product_color = shear_palette(d.a);
 	}
 
-	vec3 col = u_product == 0 ? product_color : mix(base * 0.38, product_color, opacity);
+	vec3 col = u_product == 0 ? product_color : mix(base * 0.34, product_color, opacity);
 
-	// 30 degree longitude / 15 degree latitude reference grid.
 	float dx = min(fract(UV.x * 12.0), 1.0 - fract(UV.x * 12.0));
 	float dy = min(fract(UV.y * 12.0), 1.0 - fract(UV.y * 12.0));
 	float grid = max(1.0 - smoothstep(0.0, 0.008, dx), 1.0 - smoothstep(0.0, 0.008, dy));
