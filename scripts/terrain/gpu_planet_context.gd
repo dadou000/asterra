@@ -76,13 +76,15 @@ func _build_texture(fields: PlanetFields, kind: int, format: Image.Format) -> Te
 			var v := (float(j) + 0.5) * step - 1.0
 			for x in tex_res:
 				var i := x - 1
-				var c: int
 				if i >= 0 and i < res and j >= 0 and j < res:
-					c = grid.idx(face, i, j)
+					image.set_pixel(x, y, _pack_cell(fields, grid.idx(face, i, j), kind))
 				else:
+					# Continuous gutters are sampled in direction space, exactly like the
+					# elevation texture. This lets hardware filtering cross cube faces
+					# without seeing a nearest-cell step at the seam.
 					var u := (float(i) + 0.5) * step - 1.0
-					c = grid.dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))
-				image.set_pixel(x, y, _pack_cell(fields, c, kind))
+					var d := CubeSphere.face_uv_to_dir(face, u, v)
+					image.set_pixel(x, y, _pack_direction(fields, d, kind))
 		images.append(image)
 
 	var texture := Texture2DArray.new()
@@ -90,25 +92,88 @@ func _build_texture(fields: PlanetFields, kind: int, format: Image.Format) -> Te
 		return null
 	return texture
 
+func _pack_direction(fields: PlanetFields, d: Vector3, kind: int) -> Color:
+	var grid := fields.grid
+	# Categorical maps intentionally remain nearest-neighbour.
+	if kind >= 6:
+		return _pack_cell(fields, grid.dir_to_index(d), kind)
+
+	match kind:
+		0:
+			return Color(
+				clampf(grid.sample_bilinear(fields.soil_sand, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.soil_silt, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.soil_clay, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.soil_organic, d), 0.0, 1.0))
+		1:
+			return Color(
+				clampf(grid.sample_bilinear(fields.soil_depth, d) / SOIL_DEPTH_MAX_M, 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.soil_moisture, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.vegetation, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.sediment, d) / SEDIMENT_MAX_M, 0.0, 1.0))
+		2:
+			return Color(
+				clampf(grid.sample_bilinear(fields.erodibility, d) / ERODIBILITY_MAX, 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.strata_dip, d) / STRATA_DIP_MAX, 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.basin, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.plate_boundary, d), 0.0, 1.0))
+		3:
+			var uplift_q := clampf(
+				grid.sample_bilinear(fields.uplift, d) / maxf(fields.cfg.max_uplift, 1.0) * 0.5 + 0.5,
+				0.0, 1.0)
+			return Color(
+				uplift_q,
+				clampf(grid.sample_bilinear(fields.fault, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.floodplain, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.wetland, d), 0.0, 1.0))
+		4:
+			return Color(
+				clampf((grid.sample_bilinear(fields.temp_mean, d) - TEMP_MIN_C)
+					/ (TEMP_MAX_C - TEMP_MIN_C), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.precip, d) / PRECIP_MAX_MM, 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.humidity, d), 0.0, 1.0),
+				clampf(grid.sample_bilinear(fields.temp_range, d) / TEMP_RANGE_MAX_C, 0.0, 1.0))
+		5:
+			# Flow direction is discrete at this coarse scale, while discharge and
+			# deposition are continuous. Re-express the selected flow vector in the
+			# gutter direction's tangent basis so the encoded RG frame stays valid.
+			var c := grid.dir_to_index(d)
+			var flow_index := int(fields.flow_dir[c])
+			var flow := Vector3.ZERO
+			if flow_index >= 0 and flow_index < 8:
+				var source := grid.cell_dir(c)
+				var target := grid.cell_dir(grid.nbr[c * 8 + flow_index])
+				flow = target - source
+				flow -= d * flow.dot(d)
+				if flow.length_squared() > 1e-12:
+					flow = flow.normalized()
+			var basis := CubeSphere.tangent_basis(d)
+			var fx := clampf(flow.dot(basis[0]) * 0.5 + 0.5, 0.0, 1.0)
+			var fy := clampf(flow.dot(basis[1]) * 0.5 + 0.5, 0.0, 1.0)
+			var q := clampf(log(1.0 + maxf(grid.sample_bilinear(fields.discharge, d), 0.0))
+				/ DISCHARGE_LOG_MAX, 0.0, 1.0)
+			var depositional := clampf(
+				grid.sample_bilinear(fields.floodplain, d) * 0.72
+				+ grid.sample_bilinear(fields.wetland, d) * 0.38,
+				0.0, 1.0)
+			return Color(fx, fy, q, depositional)
+	return Color(0.0, 0.0, 0.0, 0.0)
+
 func _pack_cell(fields: PlanetFields, c: int, kind: int) -> Color:
 	match kind:
 		0:
-			# Continuous soil fractions: sand / silt / clay / organic.
 			return Color(
 				clampf(fields.soil_sand[c], 0.0, 1.0),
 				clampf(fields.soil_silt[c], 0.0, 1.0),
 				clampf(fields.soil_clay[c], 0.0, 1.0),
 				clampf(fields.soil_organic[c], 0.0, 1.0))
 		1:
-			# Depth / moisture / vegetation potential / sediment thickness.
 			return Color(
 				clampf(fields.soil_depth[c] / SOIL_DEPTH_MAX_M, 0.0, 1.0),
 				clampf(fields.soil_moisture[c], 0.0, 1.0),
 				clampf(fields.vegetation[c], 0.0, 1.0),
 				clampf(fields.sediment[c] / SEDIMENT_MAX_M, 0.0, 1.0))
 		2:
-			# Continuous geology. Rock family is deliberately NOT stored here because
-			# filtering a categorical ID produces fictitious intermediate rock types.
 			return Color(
 				clampf(fields.erodibility[c] / ERODIBILITY_MAX, 0.0, 1.0),
 				clampf(fields.strata_dip[c] / STRATA_DIP_MAX, 0.0, 1.0),
@@ -150,10 +215,7 @@ func _pack_cell(fields: PlanetFields, c: int, kind: int) -> Color:
 				0.0, 1.0)
 			return Color(fx, fy, q, depositional)
 		6:
-			# Nearest-filtered categorical bedrock family.
 			return Color(clampf(float(fields.rock[c]) / ROCK_MAX_ID, 0.0, 1.0), 0.0, 0.0, 1.0)
 		7:
-			# Nearest-filtered categorical biome. Used only for special-case palettes
-			# and ecological constraints; continuous climate still drives transitions.
 			return Color(clampf(float(fields.biome[c]) / BIOME_MAX_ID, 0.0, 1.0), 0.0, 0.0, 1.0)
 	return Color(0.0, 0.0, 0.0, 0.0)
