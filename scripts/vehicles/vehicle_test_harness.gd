@@ -128,16 +128,16 @@ func _find_nearby_ocean(center: Vector3) -> Vector3:
 	var tangent: Array = CubeSphere.tangent_basis(center)
 	var east: Vector3 = tangent[0]
 	var north: Vector3 = tangent[1]
-	var best := center
-	var best_height := TerrainContactSampler.height(center)
-	var radii := [2000.0, 5000.0, 10000.0, 20000.0, 40000.0, 80000.0]
+	var best: Vector3 = center
+	var best_height: float = TerrainContactSampler.height(center)
+	var radii: Array[float] = [2000.0, 5000.0, 10000.0, 20000.0, 40000.0, 80000.0]
 	for radius_m in radii:
 		for i in 24:
-			var a := TAU * float(i) / 24.0
-			var offset := east * cos(a) + north * sin(a)
-			var angle := radius_m / Planet.cfg.planet_radius
-			var d := (center * cos(angle) + offset * sin(angle)).normalized()
-			var h := TerrainContactSampler.height(d)
+			var a: float = TAU * float(i) / 24.0
+			var offset: Vector3 = east * cos(a) + north * sin(a)
+			var angle: float = radius_m / float(Planet.cfg.planet_radius)
+			var d: Vector3 = (center * cos(angle) + offset * sin(angle)).normalized()
+			var h: float = TerrainContactSampler.height(d)
 			if h < best_height:
 				best_height = h
 				best = d
@@ -148,9 +148,9 @@ func _find_nearby_ocean(center: Vector3) -> Vector3:
 func _update_overlay() -> void:
 	if _active == null:
 		return
-	var speed_kmh := _active.linear_velocity.length() * 3.6
-	var wind_speed := _active.last_wind.length()
-	var extra := "W/S throttle · A/D steer" if _active.kind != WindVehicleTest.Kind.PLANE \
+	var speed_kmh: float = _active.linear_velocity.length() * 3.6
+	var wind_speed: float = _active.last_wind.length()
+	var extra: String = "W/S throttle · A/D steer" if _active.kind != WindVehicleTest.Kind.PLANE \
 		else "W/S pitch · A/D roll · Space/Shift throttle"
 	_overlay.text = "%s TEST   F10 return to player\n%s\nSpeed %.1f km/h   Wind %.1f m/s\nMSL %.1f m   AGL %.1f m\nApparent air %.1f m/s\nF6 boat · F7 car · F8 plane" % [
 		_active.vehicle_name(), extra, speed_kmh, wind_speed,
