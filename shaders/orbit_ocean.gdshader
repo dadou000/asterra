@@ -4,12 +4,10 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disab
 
 #include "res://shaders/atmosphere.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
-#include "res://shaders/coastline_clipmap.gdshaderinc"
+#include "res://shaders/gpu_terrain_height.gdshaderinc"
 #include "res://shaders/water_surface.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
-uniform sampler2DArray u_orbit_elevation;
-uniform float u_orbit_face_res = 192.0;
 uniform float u_orbit_start_altitude = 1000000.0;
 uniform vec3 u_ocean_deep : source_color = vec3(0.008, 0.030, 0.075);
 uniform vec3 u_ocean_mid : source_color = vec3(0.022, 0.125, 0.215);
@@ -29,33 +27,27 @@ void fragment() {
 	if (camera_alt < u_orbit_start_altitude) discard;
 
 	vec3 up = normalize(v_planet);
-	float visual_h = coast_surface_height(u_orbit_elevation, up, u_orbit_face_res, u_planet_radius);
-	if (visual_h >= 0.0) discard;
+	// At orbital scale use L6 of the exact same procedural GPU field. L6 keeps
+	// continental/coastal 480 m+ structure while intentionally filtering details
+	// too small to resolve from >120 km altitude.
+	float visual_h = gpu_terrain_height_for_level(up, 6);
+	if (u_macro_ready < 0.5 || visual_h >= 0.0) discard;
 
 	float depth = -visual_h;
 	vec3 p = up * u_planet_radius;
 	vec3 base = water_depth_tint(depth, u_ocean_shoal, u_ocean_shelf, u_ocean_deep);
-	// Continental shelves and sediment plumes: a real ocean is not one colour.
 	float broad = surface_vnoise(p * 0.000018 + vec3(31.0, -12.0, 7.0)) - 0.5;
 	float plume = surface_vnoise(p * 0.000085 + vec3(-6.0, 22.0, 14.0)) - 0.5;
 	base *= 1.0 + broad * 0.085 + plume * 0.05;
-	// Suspended sediment brightens and greens the shelf, strongest where the
-	// shallows are widest.
 	float turbid = (1.0 - smoothstep(10.0, 260.0, depth)) * clamp(0.5 + plume, 0.0, 1.0);
 	base = mix(base, u_ocean_shoal * 1.15, turbid * 0.28);
 
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-
-	// Sea state from the generator's own wind bands, so the glint is broad and
-	// scattered under the westerlies and tight in the doldrums.
 	float gust = surface_vnoise(p * 0.000032 + vec3(5.0, -17.0, 26.0));
 	float wind = water_wind_speed(up);
 	float rough = water_roughness_from_wind(wind, gust);
 
-	// Fresnel sky reflection. At the limb the view is grazing, the reflectance
-	// goes to one, and the sea correctly turns into a mirror of the sky -- which
-	// is what gives a planet its bright rim over water.
 	vec3 view_dir = normalize(camera_planet - v_planet);
 	float ndotv = max(dot(up, view_dir), 0.0);
 	float fres = water_fresnel(ndotv);
@@ -83,12 +75,8 @@ void light() {
 		vec3 sun_dir = normalize(u_sun_dir);
 		visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
 	}
-
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
-
-	// Sun glint. GGX rather than a Phong lobe, so the highlight is an elongated
-	// wind-broken glitter path instead of a soft circular blob.
 	float spec = water_specular(NORMAL, VIEW, LIGHT, ROUGHNESS);
 	float fres = water_fresnel(max(dot(NORMAL, VIEW), 0.0));
 	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * fres

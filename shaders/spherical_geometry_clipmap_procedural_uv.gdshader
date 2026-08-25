@@ -1,17 +1,16 @@
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
-#include "res://shaders/weather_surface.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
-#include "res://shaders/terrain_aerial_gpu.gdshaderinc"
 
 // Robust procedural terrain shader. Logical clipmap coordinates come from UV,
-// not VERTEX_ID, so compact sector meshes cannot scramble the grid. Geometry,
-// detail displacement, atmospheric perspective and terrain lighting all remain
-// GPU-side; no terrain readback or CPU-generated visual mesh data is required.
+// not VERTEX_ID, so compact sector meshes cannot scramble the grid. The macro
+// field is reconstructed with a cubic B-spline in the vertex shader instead of
+// hardware bilinear interpolation; this preserves smooth curvature between the
+// low-frequency samples instead of turning every macro texel into a planar patch.
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
@@ -21,6 +20,11 @@ uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
 uniform vec3 u_center_right = vec3(0.0, 0.0, -1.0);
 uniform vec3 u_center_up = vec3(0.0, 1.0, 0.0);
+uniform vec3 u_anchor_render = vec3(0.0);
+uniform vec3 u_anchor_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_anchor_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_anchor_up = vec3(0.0, 1.0, 0.0);
+uniform vec2 u_lattice_center_plane = vec2(0.0);
 uniform float u_base_spacing = 0.75;
 uniform float u_grid_cells = 400.0;
 uniform float u_visible_cap_angle = 1.5707963;
@@ -30,12 +34,11 @@ uniform float u_sink_scale = 2.0;
 uniform int u_detail_seed = 1337;
 uniform float u_detail_strength = 1.0;
 uniform float u_debug_side_cut = 0.0;
+uniform float u_stable_displacement = 1.0;
 
 varying vec3 v_planet;
 varying vec3 v_render;
 varying vec3 v_smooth_normal;
-varying vec3 v_atmo_t;
-varying vec3 v_atmo_l;
 varying float v_valid;
 varying float v_cap_valid;
 varying float v_level;
@@ -51,13 +54,11 @@ const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
 const int MACRO_MAX_MIP = 5;
 
-// Macro normals use a stable, broad footprint. Fragment derivatives then add
-// the visible displaced geometry back near the camera without re-evaluating the
-// expensive procedural height spectrum two more times per vertex.
+// Normals deliberately use a broader footprint than the geometry. The height
+// field stays fully detailed, but lighting no longer follows individual clipmap
+// triangle planes as the lattice snaps underneath a moving camera.
 const float NORMAL_SAMPLE_SPACING_MULT = 3.0;
 const float NORMAL_SAMPLE_MIN_M = 4.0;
-const float DETAIL_NORMAL_FULL_LEVEL = 4.0;
-const float DETAIL_NORMAL_FADE_LEVEL = 8.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -72,20 +73,63 @@ float smootherstep_range(float edge0, float edge1, float x) {
 	return smootherstep01((x - edge0) / max(edge1 - edge0, 1e-9));
 }
 
-vec3 direction_for_offset(vec2 offset_m) {
+vec3 direction_for_basis_offset(vec3 center, vec3 right, vec3 up,
+		vec2 offset_m) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) {
-		return normalize(u_center_dir);
+		return normalize(center);
 	}
 	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
-		return normalize(u_center_dir
-			+ u_center_right * (offset_m.x / u_planet_radius)
-			+ u_center_up * (offset_m.y / u_planet_radius));
+		return normalize(center
+			+ right * (offset_m.x / u_planet_radius)
+			+ up * (offset_m.y / u_planet_radius));
 	}
 	float raw_theta = arc / max(u_planet_radius, 1.0);
 	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
-	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
-	return normalize(u_center_dir * cos(theta) + tangent * sin(theta));
+	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
+	return normalize(center * cos(theta) + tangent * sin(theta));
+}
+
+vec3 direction_for_offset(vec2 offset_m) {
+	return direction_for_basis_offset(u_center_dir, u_center_right, u_center_up,
+		offset_m);
+}
+
+// Camera-relative reconstruction of the same spherical projection used above.
+// The legacy path first builds an absolute ~1,000 km position and subtracts an
+// equally large floating origin. Doing the subtraction in float32 quantizes the
+// result. This form keeps every intermediate in metre-scale anchor-local space.
+vec3 stable_surface_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m,
+		float altitude_m) {
+	float radius = max(u_planet_radius, 1.0);
+	float arc = length(offset_m);
+	if (arc < 1e-5) {
+		return center * altitude_m;
+	}
+
+	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
+		vec3 tangent_m = right * offset_m.x + up * offset_m.y;
+		float q2 = dot(tangent_m, tangent_m) / (radius * radius);
+		float root = sqrt(1.0 + q2);
+		float inv_root = 1.0 / root;
+		// Stable form of 1/sqrt(1+q2)-1. Direct subtraction loses the
+		// centimetre-scale spherical sag of nearby vertices.
+		float inv_root_minus_one = -q2 / (root * (root + 1.0));
+		float radial_m = radius * inv_root_minus_one + altitude_m * inv_root;
+		float tangent_scale = (1.0 + altitude_m / radius) * inv_root;
+		return center * radial_m + tangent_m * tangent_scale;
+	}
+
+	float raw_theta = arc / radius;
+	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
+	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
+	float sin_theta = sin(theta);
+	float cos_theta = cos(theta);
+	float half_sin = sin(theta * 0.5);
+	float radial_m = -2.0 * radius * half_sin * half_sin
+		+ altitude_m * cos_theta;
+	float tangent_m = (radius + altitude_m) * sin_theta;
+	return center * radial_m + tangent * tangent_m;
 }
 
 vec3 macro_array_coord(vec3 dir) {
@@ -253,8 +297,11 @@ float fine_morph_weight(vec2 cell) {
 	return smootherstep_range(FINE_MORPH_START_Q, 1.0, q);
 }
 
-float coarse_sink_weight(vec2 cell, int level) {
-	if (level <= 0) {
+float coarse_sink_weight(vec2 cell, int level, float is_ring) {
+	// A promoted centre disc may logically be L5 or L13, but it is still the
+	// centre disc and has no finer layer underneath it. Only annular instances
+	// receive the radial sink used to hide overlap with their finer neighbour.
+	if (is_ring < 0.5 || level <= 0) {
 		return 0.0;
 	}
 	float half_cells = u_grid_cells * 0.5;
@@ -286,6 +333,8 @@ vec3 geodesic_offset(vec3 d, vec3 tangent, float distance_m) {
 }
 
 vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
+	// This basis depends only on the planet-space direction, not the clipmap
+	// anchor. Reanchoring therefore cannot rotate the normal sampling stencil.
 	vec3 reference_axis = abs(d.y) < 0.95
 		? vec3(0.0, 1.0, 0.0)
 		: vec3(1.0, 0.0, 0.0);
@@ -313,19 +362,32 @@ vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
+	float is_ring = INSTANCE_CUSTOM.z;
 	float spacing = ring_spacing(level);
-	vec2 offset_m = cell * spacing;
-	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
-	vec3 d = direction_for_offset(offset_m);
+	vec2 cell_offset_m = cell * spacing;
+	float raw_theta = length(cell_offset_m) / max(u_planet_radius, 1.0);
+	bool stable_displacement = u_stable_displacement > 0.5;
+	// Each level owns a stationary lattice at its own spacing. Advancing L0 by one
+	// cell no longer moves L1 by half a cell, L2 by a quarter cell, and so on.
+	vec2 level_center_m = round(u_lattice_center_plane / spacing) * spacing;
+	vec2 anchor_offset_m = level_center_m + cell_offset_m;
+	vec3 d = stable_displacement
+		? direction_for_basis_offset(u_anchor_dir, u_anchor_right, u_anchor_up,
+			anchor_offset_m)
+		: direction_for_offset(cell_offset_m);
 	float morph = fine_morph_weight(cell);
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
-	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
+	float sink = coarse_sink_weight(cell, level, is_ring) * max(spacing * u_sink_scale, 0.5);
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
-	vec3 p = d * (u_planet_radius + height + u_surface_bias);
+	float altitude_m = height + u_surface_bias;
+	vec3 p = d * (u_planet_radius + altitude_m);
 
 	v_planet = p;
-	v_render = p - u_origin;
+	v_render = stable_displacement
+		? u_anchor_render + stable_surface_offset(u_anchor_dir, u_anchor_right,
+			u_anchor_up, anchor_offset_m, altitude_m)
+		: p - u_origin;
 	v_smooth_normal = u_height_enabled > 0.5
 		? smooth_macro_normal(d, level, morph, macro_h)
 		: d;
@@ -333,6 +395,10 @@ void vertex() {
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
 
+	// Cloud shadowing is evaluated on the geometry lattice and interpolated across
+	// triangles. The density field is kilometre-scale, while even coarse visible
+	// rings have far more spatial resolution than the shadow needs. This avoids a
+	// multi-sample 3D raymarch in every 4K screen pixel.
 	vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
 	float planet_vis = planet_direct_sun_visibility(p, sun_dir, u_planet_radius);
 	v_direct_transmittance = planet_vis;
@@ -340,17 +406,6 @@ void vertex() {
 		v_direct_transmittance *= cloud_shadow_transmittance(
 			p, sun_dir, u_planet_radius);
 	}
-
-	// Camera transform is in floating-origin render coordinates. Add the current
-	// origin to recover planet space before integrating the atmosphere.
-	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
-	vec3 atmo_t;
-	vec3 atmo_l;
-	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius,
-		atmo_t, atmo_l);
-	v_atmo_t = atmo_t;
-	v_atmo_l = atmo_l;
-
 	VERTEX = v_render;
 }
 
@@ -366,25 +421,10 @@ void fragment() {
 	}
 
 	vec3 up = normalize(v_planet);
-	vec3 macro_n = normalize(v_smooth_normal);
-	if (dot(macro_n, up) < 0.0) {
-		macro_n = -macro_n;
+	vec3 wn = normalize(v_smooth_normal);
+	if (dot(wn, up) < 0.0) {
+		wn = -wn;
 	}
-
-	// Recover the normal of the actually displaced GPU geometry from derivatives.
-	// This costs no extra procedural height/noise samples and fixes the old
-	// mismatch where 24-12000 m displacement was lit by a macro-only normal.
-	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
-	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : macro_n;
-	if (dot(geom_n, up) < 0.0) {
-		geom_n = -geom_n;
-	}
-	float detail_normal_w = 1.0 - smoothstep(
-		DETAIL_NORMAL_FULL_LEVEL, DETAIL_NORMAL_FADE_LEVEL, v_level);
-	// Keep some stable macro contribution even in L0-L4. Exact triangle normals
-	// alone are too faceted when FSR2 is resolving sub-pixel terrain triangles.
-	detail_normal_w *= 0.78;
-	vec3 wn = normalize(mix(macro_n, geom_n, detail_normal_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	if (u_debug_side_cut > 0.5) {
@@ -396,11 +436,11 @@ void fragment() {
 		SPECULAR = 0.0;
 	} else {
 		float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
-		vec4 fallback_surface = vec4(0.38, 0.38, 0.12, 0.0);
-		// The material clipmap already has its own smooth coarse fallback. Calling
-		// it at every geometry level removes the previous hard L8/L9 material seam.
-		vec4 surf = material_clipmap_surface(v_planet, u_planet_radius, fallback_surface);
-
+		vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
+		// The material map is now a resident whole-planet mipmapped texture, so
+		// there is no reason to disable it above L8. Fragment derivatives select
+		// the appropriate mip automatically from ground level through orbit.
+		surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
 		vec3 soil = vec3(0.24, 0.17, 0.105);
 		vec3 grass = vec3(0.17, 0.255, 0.095);
 		vec3 wet = vec3(0.12, 0.145, 0.085);
@@ -410,47 +450,19 @@ void fragment() {
 		vec3 albedo = mix(soil, grass, clamp(surf.r, 0.0, 1.0));
 		albedo = mix(albedo, wet, clamp(surf.g * 0.70, 0.0, 1.0));
 		albedo = mix(albedo, sand, clamp(surf.b, 0.0, 1.0));
-		// Generated frost remains a weak permanent/glacial tint. Current snow is
-		// supplied by the physical surface reservoir below, so winter cover can
-		// actually accumulate, age, wet and disappear.
-		albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0) * 0.20);
+		albedo = mix(albedo, snow, clamp(surf.a, 0.0, 1.0));
 		albedo = mix(albedo, rock, smoothstep(0.08, 0.34, slope));
-
-		vec4 dynamic_surface = surface_energy_sample(v_planet);
-		float dynamic_snow = clamp(dynamic_surface.g, 0.0, 1.0)
-			* (1.0 - smoothstep(0.16, 0.46, slope));
-		float snow_optical = clamp((dynamic_surface.b - 0.56) / 0.34, 0.0, 1.0);
-		vec3 current_snow = mix(vec3(0.61, 0.64, 0.66), vec3(0.94, 0.96, 0.98), snow_optical);
-		float dynamic_wet = clamp(dynamic_surface.a, 0.0, 1.0) * (1.0 - dynamic_snow);
-		albedo *= mix(1.0, 0.86, dynamic_wet * 0.55);
-		albedo = mix(albedo, current_snow, dynamic_snow);
-
 		ALBEDO = albedo;
-		float base_roughness = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
-		float surface_temperature_k = 220.0 + dynamic_surface.r * 110.0;
-		float melting = smoothstep(270.5, 274.0, surface_temperature_k);
-		ROUGHNESS = mix(base_roughness, mix(0.92, 0.62, melting), dynamic_snow);
-		SPECULAR = mix(0.22, mix(0.20, 0.38, melting), dynamic_snow);
-		METALLIC = 0.0;
-
-		// Generic Environment ambient is disabled above. Restore local, physically
-		// directional sky fill so the night side/terminator is no longer washed out.
-		vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
-		vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-		float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
-		float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
-		EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
+		ROUGHNESS = mix(0.94, 0.72, smoothstep(0.10, 0.42, slope));
+		SPECULAR = 0.22;
 	}
 }
 
 void light() {
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	if (ndotl > 0.0) {
-		float visibility = LIGHT_IS_DIRECTIONAL
-			? clamp(v_direct_transmittance, 0.0, 1.0)
-			: 1.0;
-		// Aerial transmittance belongs on both diffuse and specular direct light.
-		vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
+		float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
+		vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility;
 
 		float ndotv = max(dot(NORMAL, VIEW), 0.001);
 		vec3 h = normalize(LIGHT + VIEW);

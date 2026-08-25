@@ -45,6 +45,11 @@ vec3 safe_tangent(vec3 up, vec3 d) {
     return t * inversesqrt(l2);
 }
 
+float geodesic_phase_coord(vec3 up, vec3 axis) {
+    float mu = clamp(dot(normalize(up), normalize(axis)), -0.999999, 0.999999);
+    return params.planet_radius * asin(mu);
+}
+
 float dispersion(float k, float depth) {
     return sqrt(max(G * k * tanh(k * max(depth, 0.05)), 1e-5));
 }
@@ -120,8 +125,10 @@ void main() {
     float diffract_b = diffraction_weight(up, swell_b, landward, depth) * 0.82;
     vec3 dir_a = normalize(mix(refracted_a, diffraction_direction(up, swell_a, landward), diffract_a * 0.52));
     vec3 dir_b = normalize(mix(refracted_b, diffraction_direction(up, swell_b, landward), diffract_b * 0.46));
-    float phase_a = dot(p, normalize(SWELL_AXIS_A));
-    float phase_b = dot(p, normalize(SWELL_AXIS_B));
+
+    // Same constant-metric spherical phase map as the render shader.
+    float phase_a = geodesic_phase_coord(up, SWELL_AXIS_A);
+    float phase_b = geodesic_phase_coord(up, SWELL_AXIS_B);
 
     vec3 displacement = vec3(0.0);
     vec3 grad = vec3(0.0);

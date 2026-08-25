@@ -4,13 +4,14 @@ extends Node3D
 ##
 ## The local OceanGeometryClipmap owns displaced waves and surf from the ground
 ## through regional/aircraft altitude. Above the handoff this smooth shell takes
-## over with the same coastline field but without spending geometry on metre-scale
-## waves that are no longer resolvable.
+## over and evaluates the same procedural GPU terrain field for its shoreline.
 
 const SHELL_OFFSET_M := 1.5
 const VISUAL_LOCK_ALTITUDE_M := 120000.0
 const RADIAL_SEGMENTS := 256
 const RINGS := 128
+const TARGET_FINE_DEPTH: int = 16
+const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -58,11 +59,20 @@ func _refresh() -> void:
 		_material.shader = load("res://shaders/orbit_ocean.gdshader")
 		_mesh_instance.material_override = _material
 
+	var base_spacing: float = PI * 0.5 * Planet.cfg.planet_radius \
+		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+
 	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 	_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
-	_material.set_shader_parameter("u_orbit_elevation", Planet.orbit_elevation_texture)
-	_material.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
+	_material.set_shader_parameter("u_macro_elevation", Planet.orbit_elevation_texture)
+	_material.set_shader_parameter("u_macro_face_res", float(Planet.orbit_texture_face_res))
+	_material.set_shader_parameter("u_macro_ready", 1.0)
+	_material.set_shader_parameter("u_base_spacing", base_spacing)
+	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
+	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
+		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
 	_material.set_shader_parameter("u_orbit_start_altitude", VISUAL_LOCK_ALTITUDE_M)
 	_sync_origin()
 
