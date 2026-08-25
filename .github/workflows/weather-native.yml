@@ -1,0 +1,43 @@
+name: Weather Native AVX2
+
+on:
+  push:
+    branches:
+      - weather/0.0.5
+    paths:
+      - native/weather/**
+      - tools/build_weather_avx2_windows.ps1
+      - .github/workflows/weather-native.yml
+  pull_request:
+    paths:
+      - native/weather/**
+      - tools/build_weather_avx2_windows.ps1
+      - .github/workflows/weather-native.yml
+
+jobs:
+  windows-avx2:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S native/weather -B native/weather/build -A x64
+
+      - name: Build Release
+        run: cmake --build native/weather/build --config Release --target asterra_weather --parallel
+
+      - name: Verify runtime files
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "bin/asterra_weather.dll")) { throw "Missing bin/asterra_weather.dll" }
+          if (-not (Test-Path "bin/asterra_weather.gdextension")) { throw "Missing bin/asterra_weather.gdextension" }
+
+      - name: Upload Windows AVX2 backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: asterra-weather-windows-avx2
+          path: |
+            bin/asterra_weather.dll
+            bin/asterra_weather.gdextension
+          if-no-files-found: error
