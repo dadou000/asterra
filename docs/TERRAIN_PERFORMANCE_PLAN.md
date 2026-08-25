@@ -99,9 +99,31 @@ The detail function is evaluated directly by the terrain vertex shader. There is
 
 The active renderer is a camera-centred spherical geometry clipmap.
 
-Near-ground target spacing begins around 0.75 m and doubles per level. The 400-cell concentric topology provides the current 4K / roughly 16-pixels-per-terrain-vertex target.
+Near-ground target spacing begins around 0.75 m and doubles per level. The 400-cell topology was chosen from the 4K / 68 degree screen-space budget: roughly 8 pixels per outgoing fine vertex and 16 pixels for its incoming 2x parent at the handoff.
 
-Each logical level is either the centre disc or a circular annulus. The annuli are partitioned into angular sectors for view culling, but explicit logical UV coordinates ensure sector compaction cannot change terrain vertex addressing.
+That same budget now selects the **minimum active logical LOD dynamically**. L0 is not permanently rendered. At altitude, the renderer computes metres per output pixel from camera-to-local-surface distance, vertical FOV and viewport height, then promotes the centre disc to the coarsest level whose spacing still satisfies the ~8 px fine target. Its parent therefore remains near or below the ~16 px target.
+
+Conceptually:
+
+```text
+ground / low altitude
+    centre = L0
+    rings  = L1 ... horizon level
+
+higher altitude
+    centre = L5
+    rings  = L6 ... horizon level
+
+orbit
+    centre = L12/L13/etc.
+    rings  = only the remaining levels needed to cover the visible cap
+```
+
+A small level-space hysteresis prevents repeated power-of-two swaps while hovering near a transition altitude. A conservative surface-height guard keeps L0 and other fine levels active while skimming mountain relief.
+
+The centre disc and annuli reuse the same immutable meshes. Only `MultiMesh` custom data and visible instance count change when the logical LOD window changes; no topology is rebuilt. The centre instance carries an explicit centre/ring flag so a promoted centre such as L8 is not accidentally treated as a sunk coarse annulus.
+
+Each logical level is either the current centre disc or a circular annulus. The annuli are partitioned into angular sectors for view culling, but explicit logical UV coordinates ensure sector compaction cannot change terrain vertex addressing.
 
 Projection is spherical. Small arcs may use the cheap normalized tangent approximation; large arcs use the exponential/geodesic map. The projection decision is based on physical arc distance so overlapping LODs cannot disagree merely because their level numbers differ.
 
@@ -115,15 +137,17 @@ The outside of a fine level morphs toward the same terrain function evaluated wi
 
 ### Geometric sinking
 
-The inside edge of the coarser annulus extends underneath the finer surface and sinks radially into the planet:
+The inside edge of a coarser **annulus** extends underneath the finer surface and sinks radially into the planet:
 
 ```text
 position = direction * (planet_radius + height - sink)
 ```
 
-This guarantees overlap and avoids depending on exact T-junction stitching. Sinking is a topology/coverage mechanism; the fine-to-parent morph keeps the two surfaces visually close before the hidden overlap.
+The current centre disc never sinks, even when its logical level is greater than L0. This guarantees overlap only where a finer neighbour actually exists.
 
-Debug tools can freeze the clipmap, cut half of it away, exaggerate sink depth and label active rings as L0, L1, L2, etc.
+Sinking is a topology/coverage mechanism; the fine-to-parent morph keeps the two surfaces visually close before the hidden overlap.
+
+Debug tools can freeze the clipmap, cut half of it away, exaggerate sink depth and label the currently active logical rings directly as L0 ... L14. With screen-space selection enabled, labels below the active minimum disappear as altitude increases.
 
 ## 6. Normals
 
@@ -180,28 +204,29 @@ Some old source files and tiny disabled autoload shims still exist during migrat
 
 ## 10. Materials and orbital appearance
 
-Geometry height and apparent surface detail are independent systems.
+Material classification follows the same resident-world rule as height. A mipmapped six-face global RGBA material-control texture is loaded once and remains resident, so changing travel speed cannot trigger material recenter jobs or texture uploads.
 
-Ground materials should continue toward stable world-space material clipmaps / virtual textures. Centimetre-to-metre visual roughness belongs primarily in material normals, displacement techniques, rocks and vegetation rather than by increasing the base clipmap lattice indefinitely.
+The terrain shader samples this global material map at every logical LOD, including L9-L14. Fragment derivatives select progressively coarser mips with distance, so promoting the centre disc for orbit does not make the planet fall back to a flat default material.
 
-Orbital albedo/material data can eventually use a much larger tiled virtual surface. That does not require height pages: the global elevation texture is already sufficient for large-scale displacement and silhouette, while satellite-scale colour/normal/roughness may stream independently.
+Centimetre-to-metre visual roughness still belongs primarily in material normals, displacement techniques, rocks and vegetation rather than by increasing the base clipmap lattice indefinitely.
 
 ## 11. World compiler target
 
-The production compiler should emit the global height package along with the other immutable world products:
+The production compiler should emit the global height and material packages along with the other immutable world products:
 
 ```text
 seed/config
     -> geology / hydrology / erosion / climate
     -> smoothed C2 macro surface
     -> 2048 x 2048 x 6 global elevation
-    -> prefiltered mip chain
+    -> prefiltered height mip chain
     -> ZSTD .aghm package
-    -> global material/orbit products
+    -> 1024 x 1024 x 6 global material control
+    -> material mip chain / .agmm package
     -> manifest
 ```
 
-The runtime development fallback that creates `.aghm` after a cache miss exists only to keep iteration convenient. Shipping worlds should never need to synthesize this resource after installation.
+The runtime development fallbacks that create these packages after a cache miss exist only to keep iteration convenient. Shipping worlds should never need to synthesize them after installation.
 
 ## 12. Performance model
 
@@ -210,7 +235,8 @@ Steady-state terrain cost is intentionally simple:
 ### CPU
 
 - update clipmap centre/tangent basis;
-- determine active LOD count and visible sectors;
+- compute screen-space minimum LOD and horizon maximum LOD;
+- update visible sectors / instance window only when needed;
 - maintain local physics bubbles;
 - evaluate occasional CPU ground queries;
 - maintain sparse edit deltas.
@@ -220,12 +246,13 @@ There is no CPU terrain coverage scheduler.
 ### GPU
 
 - static concentric topology;
+- only the logical LOD window that can contribute visible detail;
 - cubic global height lookup;
 - band-limited procedural detail per active vertex;
 - smooth normal reconstruction;
-- terrain material/lighting.
+- resident global terrain material/lighting.
 
-Memory usage is fixed by the global texture and static topology instead of changing according to where the player has travelled.
+Memory usage is fixed by the global textures and static topology instead of changing according to where the player has travelled.
 
 ## 13. Instrumentation
 
@@ -236,7 +263,9 @@ Useful terrain debug counters are now:
 - global package cache hit/miss;
 - compressed and uncompressed global height size;
 - one-time load/build duration;
-- active clipmap LODs;
+- active minimum and maximum clipmap LOD;
+- active LOD count;
+- screen-space metres per pixel and 8/16 px target;
 - visible sectors / draw batches;
 - collision build queue/in-flight count;
 - edited tile count;
@@ -248,12 +277,13 @@ Page-residency, page-table, page-upload and terrain-prefetch counters are obsole
 
 The terrain architecture is complete when a precompiled world can move from ground to orbit and back while:
 
-- the base height resource is loaded once;
+- the base height and material resources are loaded once;
 - travel triggers no visual terrain file I/O;
 - travel triggers no CPU visual terrain generation;
 - topology is never rebuilt because of movement;
-- all LODs evaluate one continuous world-space terrain function;
+- sub-pixel fine LODs are not rendered from altitude/orbit;
+- all active LODs evaluate one continuous world-space terrain function;
 - LOD transitions are not visible under normal lighting/motion;
 - physics tracks the same deterministic surface locally without GPU readback;
 - edits remain stable and sparse;
-- terrain CPU load is bounded by simulation interest points, not travel speed or explored area.
+- terrain CPU/GPU load is bounded by visible resolution and simulation interest, not travel speed or explored area.

@@ -297,8 +297,11 @@ float fine_morph_weight(vec2 cell) {
 	return smootherstep_range(FINE_MORPH_START_Q, 1.0, q);
 }
 
-float coarse_sink_weight(vec2 cell, int level) {
-	if (level <= 0) {
+float coarse_sink_weight(vec2 cell, int level, float is_ring) {
+	// A promoted centre disc may logically be L5 or L13, but it is still the
+	// centre disc and has no finer layer underneath it. Only annular instances
+	// receive the radial sink used to hide overlap with their finer neighbour.
+	if (is_ring < 0.5 || level <= 0) {
 		return 0.0;
 	}
 	float half_cells = u_grid_cells * 0.5;
@@ -359,6 +362,7 @@ vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
+	float is_ring = INSTANCE_CUSTOM.z;
 	float spacing = ring_spacing(level);
 	vec2 cell_offset_m = cell * spacing;
 	float raw_theta = length(cell_offset_m) / max(u_planet_radius, 1.0);
@@ -374,7 +378,7 @@ void vertex() {
 	float morph = fine_morph_weight(cell);
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
-	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
+	float sink = coarse_sink_weight(cell, level, is_ring) * max(spacing * u_sink_scale, 0.5);
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
 	float altitude_m = height + u_surface_bias;
 	vec3 p = d * (u_planet_radius + altitude_m);
@@ -433,9 +437,10 @@ void fragment() {
 	} else {
 		float slope = clamp(1.0 - dot(wn, up), 0.0, 1.0);
 		vec4 surf = vec4(0.38, 0.38, 0.12, 0.0);
-		if (v_level <= 8.5) {
-			surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
-		}
+		// The material map is now a resident whole-planet mipmapped texture, so
+		// there is no reason to disable it above L8. Fragment derivatives select
+		// the appropriate mip automatically from ground level through orbit.
+		surf = material_clipmap_surface(v_planet, u_planet_radius, surf);
 		vec3 soil = vec3(0.24, 0.17, 0.105);
 		vec3 grass = vec3(0.17, 0.255, 0.095);
 		vec3 wet = vec3(0.12, 0.145, 0.085);
