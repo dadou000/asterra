@@ -44,10 +44,11 @@ The current `GPUPlanetContext` conversion is a transition step: it uploads baked
    - dense near-field geometric microrelief
 
 5. **GPU scatter**
-   - vegetation, rocks, talus, river stones, debris and later trees/shrubs
-   - deterministic candidate lattices from world seed + absolute snapped tangent cells
-   - candidate acceptance and variation entirely on GPU
-   - consume the same context / geomorph / material logic as terrain
+   - deterministic candidate cells from world seed + snapped tangent cells
+   - exact analytic terrain slope and material suitability evaluated in compute
+   - compact accepted instances directly into MultiMesh GPU buffers
+   - indirect instance count written by GPU; no CPU readback
+   - compatibility fallback retains the vertex-stage candidate lattice
 
 6. **Optional local GPU compute refinement**
    - iterative hydraulic/thermal erosion only where analytic synthesis is insufficient
@@ -177,53 +178,64 @@ Micro displacement is distance-gated and fades before the dense patch hands off 
 
 The Terrain debug tab can disable geometric microrelief while leaving the dense patch and normal terrain active, allowing direct topology/performance comparison.
 
-### M7 — GPU scatter — IMPLEMENTED, FIRST PASS
+### M7 — GPU scatter — IMPLEMENTED, COMPUTE-COMPACTED FIRST PASS
 
-`gpu_terrain_scatter.gd` creates static candidate MultiMeshes once, then only keeps snapped tangent-space windows centred near the camera and binds planet/origin/context uniforms. It does **not** classify individual candidates on the CPU.
+The original `gpu_terrain_scatter.gd` candidate-lattice implementation remains the compatibility/fallback renderer. It constructs static candidate MultiMeshes once and performs all placement/suitability work in vertex shaders rather than on the CPU.
 
-`gpu_scatter_common.gdshaderinc` reconstructs each candidate from `INSTANCE_ID`, an absolute tangent-grid cell and the deterministic `gpu_scatter` seed. The GPU then:
+`gpu_terrain_scatter_compact.gd` is now the active `TerrainScatter` autoload. On Forward+ and Mobile rendering methods it adds a RenderingDevice compute path with indirect MultiMeshes. Compatibility/headless paths automatically retain the inherited lattice implementation.
 
-- adds deterministic within-cell jitter
-- reconstructs the spherical direction
-- samples the immutable macro/context textures
-- evaluates the same analytic geomorph height used by terrain
-- derives landform and material suitability proxies
-- accepts/rejects the candidate stochastically but deterministically
-- chooses scale/orientation/colour variation
-- collapses rejected candidates before rasterisation
+`terrain_scatter_compact.glsl` performs one deterministic candidate evaluation per invocation. It:
 
-Current candidate layers:
+- reconstructs the candidate from absolute tangent-grid cell + world seed
+- performs cheap context-only pre-rejection where possible
+- samples the immutable planet context and macro elevation
+- evaluates the same analytic geomorph height stack as the terrain renderer
+- finite-differences the analytic final height field to derive a local terrain normal and slope
+- feeds that exact analytic slope through the same primary/secondary material classification rules
+- derives grass / geological-stone / river-stone suitability
+- deterministically accepts/rejects each candidate
+- atomically reserves a compact destination slot only for accepted instances
+- writes the accepted instance's 3D transform and `INSTANCE_CUSTOM` payload directly into the MultiMesh GPU buffer
+- atomically updates the MultiMesh indirect command's `instanceCount`
 
-- **Grass clumps** — 96×96 candidates, 1.25 m cells, ~60 m nominal radius. Suitability follows vegetation potential, soil depth/stability, wetness, snow/ice/bare-biome suppression and landform context. Procedural three-blade clumps are generated without external assets and have deterministic size/colour variation plus low-cost wind bend.
-- **Geological / scree stones** — 64×64 candidates, 2.5 m cells, ~80 m nominal radius. Suitability follows exposed/thin soil, mountain/scree context, erodibility and real bedrock family; colour is derived from the same 13-family rock palette.
-- **River / depositional stones** — 64×64 candidates, 2.0 m cells, ~64 m nominal radius. Suitability follows discharge, deposition, sediment and the classifier's gravel signal; shape is flatter/smaller to represent water-worn stones.
+There is no GPU-to-CPU result readback. The CPU only dispatches when a family's snapped cell window, floating origin, tangent anchor, world/context generation, or debug state changes.
 
-The candidate windows are snapped, so moving the camera inside a cell does not slide scatter across the ground. The tangent anchor is rebuilt only after ~8 km of travel; the first pass can therefore repopulate at that rare re-anchor boundary.
+Current candidate domains remain:
+
+- **Grass clumps** — 96×96 candidates, 1.25 m cells, ~60 m nominal radius
+- **Geological / scree stones** — 64×64 candidates, 2.5 m cells, ~80 m nominal radius
+- **River / depositional stones** — 64×64 candidates, 2.0 m cells, ~64 m nominal radius
+
+The compact draw shaders are intentionally cheap. Terrain/context/geomorph/classification work has already happened in compute, so the draw vertex stage only applies the compacted transform plus visual-only behavior such as grass wind. Rejected candidates do not execute draw-vertex work.
+
+Each family independently falls back to the old lattice renderer until its compacted result is ready. If RenderingDevice compute/indirect MultiMesh is unavailable, the entire system remains functional through that fallback.
 
 Current limitations / next scatter work:
 
-- scatter uses a context/landform **slope proxy** in the vertex stage rather than the exact fragment-stage displaced slope; this keeps the first pass cheap but should eventually be replaced by a local GPU suitability field or compute-generated candidate buffer
-- no tree/shrub assets or procedural tree geometry yet
-- no indirect-draw compaction yet; rejected candidates still execute vertex work and are collapsed in the shader
-- no scatter shadows in this first performance-oriented pass
-- no collision/interaction proxies for large rocks or trees yet
-- quality tiers and density/radius controls still need tuning on target GPUs
+- compute slope is exact for the current **analytic geomorph height field**, but does not include the tiny dense near-field microrelief displacement
+- tangent-grid identity still rebuilds after the ~8 km local anchor reset; mature scatter should use a planet-global stable candidate address
+- Forward+/Mobile indirect-buffer execution still needs visual/performance validation on an actual game GPU; CI currently validates shader import/SPIR-V and the live GDScript/autoload chain rather than rendering indirect instances
+- no tree/shrub/deadwood assets or procedural tree geometry yet
+- no scatter shadows in the current performance-oriented pass
+- no collision/interaction proxies for large rocks or future trees yet
+- quality tiers and density/radius budgets still need target-GPU tuning
 
 ### M8 — iterative near-field GPU erosion — OPTIONAL REFINEMENT
 
 Add compute-generated local height/sediment fields only if the analytic erosion system is insufficient at walking distance. Compute input remains immutable coarse context + deterministic procedural base; the CPU does not synthesize terrain.
 
-### M9 — mature GPU scatter / ecology
+### M9 — mature GPU ecology / interaction — NEXT
 
-Promote the first M7 candidate-lattice implementation to a compacted GPU-driven ecology system:
+Build on the compacted M7 infrastructure rather than introducing another placement system:
 
-- compute suitability from the exact final local terrain field
-- append/compact accepted candidates into GPU buffers
-- indirect draws per scatter family and LOD
-- trees, shrubs, deadwood, biome debris and larger talus blocks
-- stable planet-wide cell identity across tangent-anchor rebuilds
+- stable planet-global candidate keys across tangent-anchor rebuilds
+- trees and shrubs selected from biome, climate, soil, water and competition context
+- deadwood, leaf litter and biome-specific debris
+- larger talus blocks / boulders with family-specific geological distribution
+- multi-distance scatter LODs and impostors
 - quality-tier density and shadow budgets
 - interaction/collision proxies only for nearby large objects
+- optional local vegetation succession/disturbance state layered over deterministic pristine suitability
 
 ## Runtime invariant
 
