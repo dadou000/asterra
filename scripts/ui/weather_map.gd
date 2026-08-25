@@ -1,11 +1,15 @@
 extends CanvasLayer
-## Live whole-planet meteorological map driven by WeatherSystem.
-## `é` toggles it on French AZERTY layouts. Global and local products are sampled
-## from the same six-layer AVX2 atmosphere used by the cloud renderer.
+## Interactive whole-planet weather globe.
+##
+## `é` toggles the viewer. Drag the globe to rotate it and use the wheel to zoom.
+## Weather scalar products come directly from WeatherSystem. The wind overlay uses
+## the native per-layer vector field when the backend exposes it; until an older
+## DLL is rebuilt it falls back to the baked prevailing-wind field so the map
+## remains usable instead of failing to open.
 
 enum Product {
+	WIND,
 	COMPOSITE,
-	SYNOPTIC,
 	CLOUD_COVER,
 	PRECIPITATION,
 	CONVECTION,
@@ -21,15 +25,15 @@ enum Product {
 }
 
 const PRODUCT_NAMES := [
+	"Wind",
 	"Composite weather",
-	"Synoptic analysis",
 	"Cloud cover",
 	"Precipitation",
 	"Organised storm intensity",
 	"Surface pressure anomaly",
 	"Near-surface air temperature",
 	"Sea-surface temperature",
-	"Convective available potential energy (CAPE)",
+	"CAPE",
 	"Absorbed solar irradiance",
 	"Relative vorticity",
 	"Low-level divergence",
@@ -37,945 +41,645 @@ const PRODUCT_NAMES := [
 	"Vertical wind shear",
 ]
 const PRODUCT_NOTES := [
-	"Cloud shield + precipitation + organised convective cores",
-	"Pressure systems with automatic H/L and tropical/extratropical storm classification",
-	"Vertically integrated liquid/ice cloud condensate",
+	"Horizontal wind speed and animated flow",
+	"Clouds, precipitation and organised convection",
+	"Vertically integrated liquid/ice condensate",
 	"Current model precipitation intensity",
-	"Vertical mass flux + instability + rotation + shear",
-	"Boundary-layer pressure/geopotential perturbation",
+	"Resolved ascent + instability + rotation + shear",
+	"Boundary-layer pressure perturbation",
 	"Lowest model-layer air temperature",
-	"Live ocean mixed-layer skin temperature; land is left uncoloured",
-	"Parcel-buoyancy proxy from low-level moisture and model-layer instability",
-	"Solar power absorbed by the live land/ocean surface after clouds and terrain shading",
-	"Strongest signed relative vorticity across low/mid layers",
-	"Signed divergence in the low storm-inflow layer; negative = convergence",
-	"Upper-level absolute vorticity × potential-temperature stratification",
-	"Maximum adjacent-layer horizontal wind-vector difference",
+	"Live ocean mixed-layer temperature",
+	"Convective available potential-energy proxy",
+	"Surface short-wave power after clouds and terrain shading",
+	"Strongest signed low/mid-level relative vorticity",
+	"Signed low-level divergence; negative means convergence",
+	"Upper-level potential-vorticity proxy",
+	"Maximum adjacent-layer vector wind shear",
 ]
 const LEGEND_LEFT := [
-	"Clear", "Deep low", "0 %", "None", "Stable", "-60 hPa",
-	"−53 °C", "−13 °C", "0 J/kg", "0 W/m²",
-	"Anticyclonic", "Convergence", "Negative PV", "0 m/s",
+	"0 km/h", "Clear", "0 %", "None", "Stable", "Low",
+	"Cold", "Cold", "0 J/kg", "0 W/m²", "Anticyclonic", "Convergence", "Negative", "0 m/s",
 ]
 const LEGEND_RIGHT := [
-	"Severe", "Strong high", "100 %", "Intense", "Organised", "+60 hPa",
-	"+47 °C", "+32 °C", "4000+ J/kg", "1200+ W/m²",
-	"Cyclonic", "Divergence", "Positive PV", "55+ m/s",
+	"235+ km/h", "Severe", "100 %", "Intense", "Organised", "High",
+	"Hot", "Hot", "4000+ J/kg", "1200+ W/m²", "Cyclonic", "Divergence", "Positive", "55+ m/s",
 ]
-
-const W := 960
-const H := 480
-const BASE_RENDER_BUDGET_USEC := 2400
-const TUNING_LABELS := {
-	&"circulation": "Circulation",
-	&"temperature": "Radiative heat",
-	&"humidity": "Humidity supply",
-	&"cloud_microphysics": "Cloud physics",
-	&"convection": "Convection",
-	&"precipitation": "Precipitation",
-}
-const TUNING_TOOLTIPS := {
-	&"circulation": "Large-scale wind and pressure-pattern restoration.",
-	&"temperature": "Radiative and surface temperature relaxation rate.",
-	&"humidity": "Moisture restoration toward the saturation-limited climate.",
-	&"cloud_microphysics": "Condensation, evaporation, freezing, melting, and cloud decay.",
-	&"convection": "Resolved vertical transport from instability and convergence.",
-	&"precipitation": "Liquid/ice autoconversion and fallout rate.",
-}
-const LAYER_LABELS := [
-	"L1  0.45 km", "L2  1.7 km", "L3  3.3 km",
-	"L4  5.6 km", "L5  8.5 km", "L6  12.8 km",
+const LAYER_NAMES := [
+	"L1  ~0.45 km",
+	"L2  ~1.7 km",
+	"L3  ~3.3 km",
+	"L4  ~5.6 km",
+	"L5  ~8.5 km",
+	"L6  ~12.8 km",
 ]
+const FALLBACK_LAYER_SPEED := [1.0, 1.22, 1.48, 1.78, 2.08, 2.34]
 
-var product_index: int = Product.COMPOSITE
-var texture_rect: TextureRect
-var title: Label
-var note: Label
-var product_select: OptionButton
-var legend_texture: TextureRect
-var legend_left: Label
-var legend_right: Label
-var marker: Control
-var simulation_weight_label: Label
-var simulation_weight_slider: HSlider
-var simulation_speed_label: Label
-var simulation_speed_slider: HSlider
-var warp_indicator_label: Label
-var tuning_panel: PanelContainer
-var tuning_button: Button
-var _tuning_sliders := {}
-var _tuning_value_labels := {}
-var _layer_sliders: Array[HSlider] = []
-var _layer_value_labels: Array[Label] = []
-var _material: ShaderMaterial
-var _player: AsterraPlayer
-var _player_dir := Vector3(1, 0, 0)
-var _systems: Array[Dictionary] = []
-var _system_scan_accum := 0.0
+const GLOBAL_W := 256
+const GLOBAL_H := 128
+const PARTICLE_COUNT := 32768
+const PLANET_RADIUS_M := 3500000.0
+const FIELD_BUILD_BUDGET_USEC := 2600
+const LIVE_WIND_REFRESH_S := 0.50
+
+var product_index := Product.WIND
+var wind_layer := 0
+
+var _viewport_container: SubViewportContainer
+var _subviewport: SubViewport
+var _world_root: Node3D
+var _camera: Camera3D
+var _globe: MeshInstance3D
+var _globe_material: ShaderMaterial
+var _wind_particles: MultiMeshInstance3D
+var _wind_material: ShaderMaterial
+
+var _panel: PanelContainer
+var _product_select: OptionButton
+var _layer_select: OptionButton
+var _flow_check: CheckButton
+var _source_label: Label
+var _note_label: Label
+var _cursor_label: Label
+var _legend: TextureRect
+var _legend_left: Label
+var _legend_right: Label
+
+var _camera_yaw := 0.35
+var _camera_pitch := 0.16
+var _camera_distance := 2.72
+var _angular_velocity := Vector2.ZERO
+var _dragging := false
 
 var _base_image: Image
 var _base_texture: ImageTexture
-var _base_render_y := -1
-var _base_fields: PlanetFields
-var _base_grid: PlanetGrid
+var _wind_image: Image
+var _wind_texture: ImageTexture
+var _wind_values := PackedFloat32Array()
+var _field_build_y := -1
+var _base_ready := false
+var _wind_fallback_ready := false
+var _live_wind_available := false
+var _live_wind_accum := 999.0
+var _last_viewport_size := Vector2i.ZERO
 
 
 func _ready() -> void:
 	layer = 30
 	visible = false
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_create_placeholder_textures()
+	_build_viewer()
+	_build_ui()
+	_sync_weather_textures()
+	_update_product()
+	_update_camera()
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.012, 0.018, 0.030, 0.965)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
 
-	texture_rect = TextureRect.new()
-	texture_rect.set_anchors_preset(Control.PRESET_CENTER)
-	texture_rect.position = Vector2(-float(W) * 0.5, -float(H) * 0.5)
-	texture_rect.custom_minimum_size = Vector2(W, H)
-	texture_rect.stretch_mode = TextureRect.STRETCH_SCALE
-	texture_rect.texture = _placeholder_texture()
-	_material = ShaderMaterial.new()
-	_material.shader = load("res://shaders/weather_map.gdshader")
-	texture_rect.material = _material
-	add_child(texture_rect)
+func _build_viewer() -> void:
+	var background := ColorRect.new()
+	background.color = Color(0.0015, 0.0025, 0.0055, 1.0)
+	background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(background)
 
-	title = Label.new()
-	title.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	title.position = Vector2(-float(W) * 0.5, 24)
-	title.custom_minimum_size = Vector2(W, 28)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 19)
-	title.add_theme_color_override("font_color", Color(0.94, 0.97, 1.0))
-	add_child(title)
+	_viewport_container = SubViewportContainer.new()
+	_viewport_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_viewport_container.stretch = true
+	_viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_viewport_container)
 
-	product_select = OptionButton.new()
-	product_select.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	product_select.position = Vector2(-190, 56)
-	product_select.custom_minimum_size = Vector2(380, 36)
-	for product_name in PRODUCT_NAMES:
-		product_select.add_item(product_name)
-	product_select.item_selected.connect(_on_product_selected)
-	add_child(product_select)
+	_subviewport = SubViewport.new()
+	_subviewport.size = Vector2i(1280, 720)
+	_subviewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_subviewport.transparent_bg = false
+	_subviewport.msaa_3d = Viewport.MSAA_2X
+	_viewport_container.add_child(_subviewport)
 
-	simulation_weight_label = Label.new()
-	simulation_weight_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	simulation_weight_label.position = Vector2(-370, 99)
-	simulation_weight_label.custom_minimum_size = Vector2(260, 28)
-	simulation_weight_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	simulation_weight_label.add_theme_font_size_override("font_size", 13)
-	add_child(simulation_weight_label)
+	_world_root = Node3D.new()
+	_subviewport.add_child(_world_root)
 
-	simulation_weight_slider = HSlider.new()
-	simulation_weight_slider.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	simulation_weight_slider.position = Vector2(-92, 98)
-	simulation_weight_slider.custom_minimum_size = Vector2(300, 28)
-	simulation_weight_slider.min_value = WeatherSystem.SIMULATION_WEIGHT_MIN
-	simulation_weight_slider.max_value = WeatherSystem.SIMULATION_WEIGHT_MAX
-	simulation_weight_slider.step = 0.05
-	simulation_weight_slider.value = WeatherSystem.simulation_weight
-	simulation_weight_slider.value_changed.connect(_on_simulation_weight_changed)
-	add_child(simulation_weight_slider)
+	var world_environment := WorldEnvironment.new()
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = Color(0.001, 0.0015, 0.0035)
+	environment.background_energy_multiplier = 0.05
+	world_environment.environment = environment
+	_world_root.add_child(world_environment)
 
-	var reset_weight := Button.new()
-	reset_weight.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	reset_weight.position = Vector2(225, 96)
-	reset_weight.custom_minimum_size = Vector2(145, 32)
-	reset_weight.text = "Calibrated 1×"
-	reset_weight.pressed.connect(WeatherSystem.reset_simulation_weight)
-	add_child(reset_weight)
-	WeatherSystem.simulation_weight_changed.connect(_on_external_simulation_weight_changed)
-	_update_simulation_weight_label(WeatherSystem.simulation_weight)
+	_camera = Camera3D.new()
+	_camera.current = true
+	_camera.fov = 42.0
+	_camera.near = 0.015
+	_camera.far = 20.0
+	_world_root.add_child(_camera)
 
-	simulation_speed_label = Label.new()
-	simulation_speed_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	simulation_speed_label.position = Vector2(-370, 140)
-	simulation_speed_label.custom_minimum_size = Vector2(260, 28)
-	simulation_speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	simulation_speed_label.add_theme_font_size_override("font_size", 13)
-	add_child(simulation_speed_label)
+	_globe = MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 1.0
+	sphere.height = 2.0
+	sphere.radial_segments = 160
+	sphere.rings = 96
+	_globe.mesh = sphere
+	_globe_material = ShaderMaterial.new()
+	_globe_material.shader = load("res://shaders/weather_globe_product.gdshader")
+	_globe.material_override = _globe_material
+	_world_root.add_child(_globe)
 
-	simulation_speed_slider = HSlider.new()
-	simulation_speed_slider.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	simulation_speed_slider.position = Vector2(-92, 139)
-	simulation_speed_slider.custom_minimum_size = Vector2(300, 28)
-	simulation_speed_slider.min_value = 0.0
-	simulation_speed_slider.max_value = 14.0
-	simulation_speed_slider.step = 1.0
-	simulation_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
-	simulation_speed_slider.tooltip_text = "Logarithmic weather warp: paused, then powers of two from 1× to 8192×. Above 256× the global model spins up and the local nest resynchronises afterward."
-	simulation_speed_slider.value_changed.connect(_on_simulation_speed_slider_changed)
-	add_child(simulation_speed_slider)
 
-	var reset_speed := Button.new()
-	reset_speed.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	reset_speed.position = Vector2(225, 137)
-	reset_speed.custom_minimum_size = Vector2(145, 32)
-	reset_speed.text = "Normal 1×"
-	reset_speed.pressed.connect(WeatherSystem.reset_simulation_speed)
-	add_child(reset_speed)
-	WeatherSystem.simulation_speed_changed.connect(_on_external_simulation_speed_changed)
-	_update_simulation_speed_label(WeatherSystem.simulation_speed)
-
-	warp_indicator_label = Label.new()
-	warp_indicator_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	warp_indicator_label.position = Vector2(375, 132)
-	warp_indicator_label.custom_minimum_size = Vector2(104, 42)
-	warp_indicator_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	warp_indicator_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	warp_indicator_label.add_theme_font_size_override("font_size", 10)
-	warp_indicator_label.add_theme_color_override("font_color", Color(0.48, 0.86, 0.94))
-	warp_indicator_label.tooltip_text = "Top: simulated duration advanced per real second. Bottom: cumulative simulated time gained beyond wall-clock time this session."
-	add_child(warp_indicator_label)
-	_update_warp_indicator()
-
-	_create_tuning_panel()
-	WeatherSystem.tuning_weight_changed.connect(_on_external_tuning_weight_changed)
-	WeatherSystem.layer_weight_changed.connect(_on_external_layer_weight_changed)
-	WeatherSystem.physics_tuning_reset.connect(_refresh_tuning_controls)
-
-	note = Label.new()
-	note.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	note.position = Vector2(-float(W) * 0.5, -84)
-	note.custom_minimum_size = Vector2(W, 22)
-	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	note.add_theme_font_size_override("font_size", 12)
-	note.add_theme_color_override("font_color", Color(0.68, 0.75, 0.84))
-	add_child(note)
-
-	legend_texture = TextureRect.new()
-	legend_texture.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	legend_texture.position = Vector2(-210, -52)
-	legend_texture.custom_minimum_size = Vector2(420, 12)
-	legend_texture.texture = _make_legend_texture(product_index)
-	legend_texture.stretch_mode = TextureRect.STRETCH_SCALE
-	add_child(legend_texture)
-
-	legend_left = Label.new()
-	legend_left.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	legend_left.position = Vector2(-210, -38)
-	legend_left.custom_minimum_size = Vector2(180, 20)
-	legend_left.add_theme_font_size_override("font_size", 11)
-	add_child(legend_left)
-
-	legend_right = Label.new()
-	legend_right.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	legend_right.position = Vector2(30, -38)
-	legend_right.custom_minimum_size = Vector2(180, 20)
-	legend_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	legend_right.add_theme_font_size_override("font_size", 11)
-	add_child(legend_right)
+func _build_ui() -> void:
+	_cursor_label = Label.new()
+	_cursor_label.position = Vector2(16, 16)
+	_cursor_label.custom_minimum_size = Vector2(430, 54)
+	_cursor_label.add_theme_font_size_override("font_size", 13)
+	_cursor_label.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+	_cursor_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_cursor_label)
 
 	var hint := Label.new()
-	hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	hint.position = Vector2(-float(W) * 0.5, -18)
-	hint.custom_minimum_size = Vector2(W, 18)
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.text = "é close  •  ← / → product  •  1–9 direct  •  P physics tuning  •  6 sigma layers"
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color(0.52, 0.59, 0.69))
+	hint.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	hint.position = Vector2(-420, 16)
+	hint.custom_minimum_size = Vector2(400, 28)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	hint.text = "LMB drag  •  wheel zoom  •  R reset  •  é close"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", Color(0.62, 0.70, 0.79))
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(hint)
 
-	marker = Control.new()
-	marker.set_anchors_preset(Control.PRESET_CENTER)
-	marker.draw.connect(_draw_marker)
-	add_child(marker)
-
-	_apply_product()
-
-
-func _create_tuning_panel() -> void:
-	tuning_button = Button.new()
-	tuning_button.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	tuning_button.position = Vector2(390, 56)
-	tuning_button.custom_minimum_size = Vector2(155, 36)
-	tuning_button.text = "Physics tuning  [P]"
-	tuning_button.tooltip_text = "Tune the native atmospheric solver while it is running."
-	tuning_button.pressed.connect(_toggle_tuning_panel)
-	add_child(tuning_button)
-
-	tuning_panel = PanelContainer.new()
-	tuning_panel.set_anchor(SIDE_LEFT, 1.0)
-	tuning_panel.set_anchor(SIDE_RIGHT, 1.0)
-	tuning_panel.set_anchor(SIDE_TOP, 0.5)
-	tuning_panel.set_anchor(SIDE_BOTTOM, 0.5)
-	tuning_panel.offset_left = -350.0
-	tuning_panel.offset_right = -18.0
-	tuning_panel.offset_top = -345.0
-	tuning_panel.offset_bottom = 345.0
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.018, 0.029, 0.047, 0.97)
-	panel_style.border_color = Color(0.24, 0.39, 0.52, 0.85)
-	panel_style.set_border_width_all(1)
-	panel_style.corner_radius_top_left = 7
-	panel_style.corner_radius_top_right = 7
-	panel_style.corner_radius_bottom_left = 7
-	panel_style.corner_radius_bottom_right = 7
-	tuning_panel.add_theme_stylebox_override("panel", panel_style)
-	add_child(tuning_panel)
+	_panel = PanelContainer.new()
+	_panel.set_anchor(SIDE_LEFT, 0.0)
+	_panel.set_anchor(SIDE_RIGHT, 0.0)
+	_panel.set_anchor(SIDE_TOP, 1.0)
+	_panel.set_anchor(SIDE_BOTTOM, 1.0)
+	_panel.offset_left = 14.0
+	_panel.offset_right = 374.0
+	_panel.offset_top = -246.0
+	_panel.offset_bottom = -14.0
+	_panel.add_theme_stylebox_override("panel", _panel_style())
+	add_child(_panel)
 
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 14)
-	margin.add_theme_constant_override("margin_right", 14)
-	margin.add_theme_constant_override("margin_top", 12)
-	margin.add_theme_constant_override("margin_bottom", 12)
-	tuning_panel.add_child(margin)
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	_panel.add_child(margin)
+
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 5)
 	margin.add_child(column)
 
 	var heading := Label.new()
-	heading.text = "LIVE PHYSICS CALIBRATION"
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_font_size_override("font_size", 16)
+	heading.text = "ASTERRA  •  GLOBAL WEATHER"
+	heading.add_theme_font_size_override("font_size", 14)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.95, 1.0))
 	column.add_child(heading)
-	var explanation := Label.new()
-	explanation.text = "0× disables a parameterized process; 1× is the Earth-like baseline.\nChanges affect subsequent native solver steps."
-	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	explanation.add_theme_font_size_override("font_size", 11)
-	explanation.add_theme_color_override("font_color", Color(0.66, 0.74, 0.82))
-	column.add_child(explanation)
 
-	for tuning_key: StringName in WeatherSystem.TUNING_KEYS:
-		var row := HBoxContainer.new()
-		var label := Label.new()
-		label.custom_minimum_size = Vector2(118, 22)
-		label.text = TUNING_LABELS[tuning_key]
-		label.tooltip_text = TUNING_TOOLTIPS[tuning_key]
-		label.add_theme_font_size_override("font_size", 11)
-		row.add_child(label)
-		var slider := HSlider.new()
-		slider.custom_minimum_size = Vector2(130, 22)
-		slider.min_value = WeatherSystem.TUNING_WEIGHT_MIN
-		slider.max_value = WeatherSystem.TUNING_WEIGHT_MAX
-		slider.step = 0.05
-		slider.value = float(WeatherSystem.tuning_weights[tuning_key])
-		slider.tooltip_text = TUNING_TOOLTIPS[tuning_key]
-		slider.value_changed.connect(_on_tuning_slider_changed.bind(tuning_key))
-		row.add_child(slider)
-		var value_label := Label.new()
-		value_label.custom_minimum_size = Vector2(44, 22)
-		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		value_label.text = "%.2f×" % slider.value
-		value_label.add_theme_font_size_override("font_size", 11)
-		row.add_child(value_label)
-		_tuning_sliders[tuning_key] = slider
-		_tuning_value_labels[tuning_key] = value_label
-		column.add_child(row)
+	_source_label = Label.new()
+	_source_label.text = "Wind source: preparing field…"
+	_source_label.add_theme_font_size_override("font_size", 10)
+	_source_label.add_theme_color_override("font_color", Color(0.53, 0.74, 0.83))
+	column.add_child(_source_label)
 
-	column.add_child(HSeparator.new())
-	var layer_heading := Label.new()
-	layer_heading.text = "VERTICAL COLUMN CONTRIBUTION"
-	layer_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	layer_heading.tooltip_text = "Pressure-thickness weights used to integrate cloud condensate through the six levels."
-	layer_heading.add_theme_font_size_override("font_size", 12)
-	column.add_child(layer_heading)
+	var product_row := HBoxContainer.new()
+	var product_tag := Label.new()
+	product_tag.text = "Product"
+	product_tag.custom_minimum_size = Vector2(64, 30)
+	product_row.add_child(product_tag)
+	_product_select = OptionButton.new()
+	_product_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for name in PRODUCT_NAMES:
+		_product_select.add_item(name)
+	_product_select.selected = product_index
+	_product_select.item_selected.connect(_on_product_selected)
+	product_row.add_child(_product_select)
+	column.add_child(product_row)
 
-	for layer in WeatherSystem.LAYERS:
-		var row := HBoxContainer.new()
-		var label := Label.new()
-		label.custom_minimum_size = Vector2(118, 20)
-		label.text = LAYER_LABELS[layer]
-		label.add_theme_font_size_override("font_size", 11)
-		row.add_child(label)
-		var slider := HSlider.new()
-		slider.custom_minimum_size = Vector2(130, 20)
-		slider.min_value = WeatherSystem.TUNING_WEIGHT_MIN
-		slider.max_value = WeatherSystem.TUNING_WEIGHT_MAX
-		slider.step = 0.05
-		slider.value = WeatherSystem.layer_weights[layer]
-		slider.value_changed.connect(_on_layer_slider_changed.bind(layer))
-		row.add_child(slider)
-		var value_label := Label.new()
-		value_label.custom_minimum_size = Vector2(44, 20)
-		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		value_label.text = "%.2f×" % slider.value
-		value_label.add_theme_font_size_override("font_size", 11)
-		row.add_child(value_label)
-		_layer_sliders.append(slider)
-		_layer_value_labels.append(value_label)
-		column.add_child(row)
+	var layer_row := HBoxContainer.new()
+	var layer_tag := Label.new()
+	layer_tag.text = "Height"
+	layer_tag.custom_minimum_size = Vector2(64, 30)
+	layer_row.add_child(layer_tag)
+	_layer_select = OptionButton.new()
+	_layer_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for name in LAYER_NAMES:
+		_layer_select.add_item(name)
+	_layer_select.selected = wind_layer
+	_layer_select.item_selected.connect(_on_layer_selected)
+	layer_row.add_child(_layer_select)
+	column.add_child(layer_row)
 
-	var buttons := HBoxContainer.new()
-	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
-	var reset := Button.new()
-	reset.text = "Reset Earth-like defaults"
-	reset.pressed.connect(WeatherSystem.reset_physics_tuning)
-	buttons.add_child(reset)
-	var close_button := Button.new()
-	close_button.text = "Close"
-	close_button.pressed.connect(_toggle_tuning_panel)
-	buttons.add_child(close_button)
-	column.add_child(buttons)
-	tuning_panel.visible = false
+	_flow_check = CheckButton.new()
+	_flow_check.text = "Animated GPU wind flow"
+	_flow_check.button_pressed = true
+	_flow_check.toggled.connect(_on_flow_toggled)
+	column.add_child(_flow_check)
+
+	_note_label = Label.new()
+	_note_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_note_label.custom_minimum_size = Vector2(330, 34)
+	_note_label.add_theme_font_size_override("font_size", 10)
+	_note_label.add_theme_color_override("font_color", Color(0.67, 0.72, 0.80))
+	column.add_child(_note_label)
+
+	_legend = TextureRect.new()
+	_legend.custom_minimum_size = Vector2(330, 8)
+	_legend.stretch_mode = TextureRect.STRETCH_SCALE
+	column.add_child(_legend)
+
+	var legend_row := HBoxContainer.new()
+	_legend_left = Label.new()
+	_legend_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_legend_left.add_theme_font_size_override("font_size", 9)
+	legend_row.add_child(_legend_left)
+	_legend_right = Label.new()
+	_legend_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_legend_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_legend_right.add_theme_font_size_override("font_size", 9)
+	legend_row.add_child(_legend_right)
+	column.add_child(legend_row)
 
 
-func _input(event: InputEvent) -> void:
-	if not (event is InputEventKey):
+func _panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.012, 0.018, 0.040, 0.94)
+	style.border_color = Color(0.28, 0.38, 0.58, 0.85)
+	style.set_border_width_all(1)
+	style.corner_radius_top_left = 6
+	style.corner_radius_top_right = 6
+	style.corner_radius_bottom_left = 6
+	style.corner_radius_bottom_right = 6
+	return style
+
+
+func _create_placeholder_textures() -> void:
+	var base := Image.create(2, 1, false, Image.FORMAT_RGB8)
+	base.set_pixel(0, 0, Color(0.018, 0.045, 0.10))
+	base.set_pixel(1, 0, Color(0.035, 0.085, 0.09))
+	_base_texture = ImageTexture.create_from_image(base)
+
+	_wind_image = Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	_wind_image.fill(Color(0.0, 0.0, 0.0, 1.0))
+	_wind_texture = ImageTexture.create_from_image(_wind_image)
+	_wind_values = _wind_image.get_data().to_float32_array()
+
+
+func _sync_weather_textures() -> void:
+	if _globe_material == null:
 		return
-	var key := event as InputEventKey
-	if not key.pressed or key.echo:
+	_globe_material.set_shader_parameter("u_base", _base_texture)
+	_globe_material.set_shader_parameter("u_weather", WeatherSystem.global_weather_texture)
+	_globe_material.set_shader_parameter("u_diagnostics", WeatherSystem.global_diagnostics_texture)
+	_globe_material.set_shader_parameter("u_products", WeatherSystem.global_products_texture)
+	_globe_material.set_shader_parameter("u_wind", _wind_texture)
+	if _wind_material != null:
+		_wind_material.set_shader_parameter("u_wind", _wind_texture)
+
+
+func _ensure_particles() -> void:
+	if _wind_particles != null:
 		return
 
-	if key.unicode == 233 or key.unicode == 201:
-		toggle()
-		get_viewport().set_input_as_handled()
-		return
-	if not visible:
-		return
+	_wind_particles = MultiMeshInstance3D.new()
+	var quad := ArrayMesh.new()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+		Vector3(-0.5, -0.5, 0.0), Vector3(0.5, -0.5, 0.0),
+		Vector3(0.5, 0.5, 0.0), Vector3(-0.5, 0.5, 0.0),
+	])
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array([
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0),
+		Vector2(1.0, 1.0), Vector2(0.0, 1.0),
+	])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 0, 2, 3])
+	quad.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
-	match key.keycode:
-		KEY_ESCAPE:
-			if tuning_panel != null and tuning_panel.visible:
-				tuning_panel.visible = false
-			else:
-				close()
-		KEY_P:
-			_toggle_tuning_panel()
-		KEY_LEFT, KEY_COMMA:
-			cycle(-1)
-		KEY_RIGHT, KEY_PERIOD:
-			cycle(1)
-		KEY_1:
-			set_product(Product.COMPOSITE)
-		KEY_2:
-			set_product(Product.SYNOPTIC)
-		KEY_3:
-			set_product(Product.CLOUD_COVER)
-		KEY_4:
-			set_product(Product.PRECIPITATION)
-		KEY_5:
-			set_product(Product.CONVECTION)
-		KEY_6:
-			set_product(Product.PRESSURE)
-		KEY_7:
-			set_product(Product.AIR_TEMPERATURE)
-		KEY_8:
-			set_product(Product.SEA_TEMPERATURE)
-		KEY_9:
-			set_product(Product.CAPE)
-		_:
-			return
-	get_viewport().set_input_as_handled()
+	_wind_material = ShaderMaterial.new()
+	_wind_material.shader = load("res://shaders/weather_wind_particles.gdshader")
+	_wind_material.set_shader_parameter("u_wind", _wind_texture)
+	_wind_material.set_shader_parameter("u_planet_radius_m", PLANET_RADIUS_M)
+	quad.surface_set_material(0, _wind_material)
+
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.use_custom_data = true
+	multimesh.mesh = quad
+	multimesh.instance_count = PARTICLE_COUNT
+	multimesh.custom_aabb = AABB(Vector3(-1.12, -1.12, -1.12), Vector3(2.24, 2.24, 2.24))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x41535445525241
+	for i in PARTICLE_COUNT:
+		multimesh.set_instance_transform(i, Transform3D.IDENTITY)
+		multimesh.set_instance_custom_data(i, Color(
+			rng.randf(), rng.randf_range(0.004, 0.996), rng.randf(), rng.randf()))
+	_wind_particles.multimesh = multimesh
+	_wind_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_wind_particles.visible = _flow_check == null or _flow_check.button_pressed
+	_world_root.add_child(_wind_particles)
 
 
 func _process(delta: float) -> void:
 	if not visible:
 		return
-	_update_warp_indicator()
-	_update_system_analysis(delta)
-	_try_bind_player()
-	if _player != null and is_instance_valid(_player):
-		_player_dir = _player.up_dir()
-		marker.queue_redraw()
-	_bind_weather_texture()
-	_update_base_map()
+	_update_viewport_size()
+	_update_camera_inertia(delta)
+	_build_field_budgeted()
+	_live_wind_accum += delta
+	if _live_wind_accum >= LIVE_WIND_REFRESH_S:
+		_live_wind_accum = 0.0
+		_refresh_live_wind()
+	_update_cursor_readout()
 
 
-func toggle() -> void:
-	if visible:
-		close()
-	else:
-		open()
-
-
-func open() -> void:
-	visible = true
-	_try_bind_player()
-	_close_planet_map_if_needed()
-	_set_player_locked(true)
-	_bind_weather_texture()
-	_apply_product()
-	_update_base_map()
-	marker.queue_redraw()
-
-
-func close() -> void:
-	visible = false
-	_set_player_locked(false)
-
-
-func cycle(step: int) -> void:
-	set_product(wrapi(product_index + step, 0, PRODUCT_NAMES.size()))
-
-
-func set_product(which: int) -> void:
-	product_index = clampi(which, 0, PRODUCT_NAMES.size() - 1)
-	if product_select != null:
-		product_select.select(product_index)
-	_apply_product()
-
-
-func _on_product_selected(index: int) -> void:
-	set_product(index)
-
-
-func _on_simulation_weight_changed(value: float) -> void:
-	WeatherSystem.set_simulation_weight(value)
-	_update_simulation_weight_label(WeatherSystem.simulation_weight)
-
-
-func _on_external_simulation_weight_changed(value: float) -> void:
-	if simulation_weight_slider != null:
-		simulation_weight_slider.set_value_no_signal(value)
-	_update_simulation_weight_label(value)
-
-
-func _update_simulation_weight_label(value: float) -> void:
-	if simulation_weight_label == null:
+func _update_viewport_size() -> void:
+	var size := Vector2i(get_viewport().get_visible_rect().size)
+	if size.x < 16 or size.y < 16 or size == _last_viewport_size:
 		return
-	var mode := "calibrated"
-	if value < 0.01:
-		mode = "neutral"
-	elif value < 0.95:
-		mode = "reduced"
-	elif value > 1.05:
-		mode = "amplified"
-	simulation_weight_label.text = "Simulation influence: %.2f×  (%s)" % [value, mode]
+	_last_viewport_size = size
+	_subviewport.size = size
 
 
-func _on_simulation_speed_slider_changed(slider_value: float) -> void:
-	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
-	_update_simulation_speed_label(WeatherSystem.simulation_speed)
-	_update_product_note()
+func _update_camera_inertia(delta: float) -> void:
+	if not _dragging and _angular_velocity.length_squared() > 1e-8:
+		_camera_yaw += _angular_velocity.x * delta * 60.0
+		_camera_pitch = clampf(_camera_pitch + _angular_velocity.y * delta * 60.0, -1.48, 1.48)
+		_angular_velocity *= exp(-delta * 7.0)
+		_update_camera()
 
 
-func _on_external_simulation_speed_changed(value: float) -> void:
-	if simulation_speed_slider != null:
-		simulation_speed_slider.set_value_no_signal(_speed_to_slider(value))
-	_update_simulation_speed_label(value)
-	_update_warp_indicator()
-	_update_product_note()
-
-
-func _update_simulation_speed_label(value: float) -> void:
-	if simulation_speed_label == null:
+func _update_camera() -> void:
+	if _camera == null:
 		return
-	var mode := "normal"
-	if value < 0.01:
-		mode = "paused"
-	elif value < 0.95:
-		mode = "slow"
-	elif value >= 16.0:
-		mode = "spin-up"
-	elif value > 1.05:
-		mode = "fast"
-	if value > WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD:
-		mode = "global spin-up"
-	var speed_text := "%.2f" % value if value < 10.0 else "%.0f" % value
-	simulation_speed_label.text = "Weather speed: %s×  (%s)" % [speed_text, mode]
+	var cp := cos(_camera_pitch)
+	var direction := Vector3(cp * cos(_camera_yaw), sin(_camera_pitch), cp * sin(_camera_yaw))
+	_camera.position = direction * _camera_distance
+	var up := Vector3.UP
+	if absf(direction.dot(up)) > 0.985:
+		up = Vector3.FORWARD
+	_camera.look_at(Vector3.ZERO, up)
 
 
-func _slider_to_speed(slider_value: float) -> float:
-	if slider_value < 0.5:
-		return 0.0
-	return pow(2.0, slider_value - 1.0)
-
-
-func _speed_to_slider(speed: float) -> float:
-	if speed < 0.5:
-		return 0.0
-	return clampf(log(speed) / log(2.0) + 1.0, 1.0, 14.0)
-
-
-func _compact_duration(seconds: float) -> String:
-	var whole := maxi(int(round(seconds)), 0)
-	if whole < 60:
-		return "%ds" % whole
-	if whole < 3600:
-		return "%dm %02ds" % [whole / 60, whole % 60]
-	if whole < 86400:
-		return "%dh %02dm" % [whole / 3600, (whole % 3600) / 60]
-	return "%dd %02dh" % [whole / 86400, (whole % 86400) / 3600]
-
-
-func _update_warp_indicator() -> void:
-	if warp_indicator_label == null:
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
-	var speed := WeatherSystem.simulation_speed
-	var rate := _compact_duration(speed)
-	var total := _compact_duration(WeatherSystem.warped_ahead_seconds)
-	warp_indicator_label.text = "1s → %s\nΣ +%s" % [rate, total]
-	if WeatherSystem.solver_backlog_seconds() > 360.0:
-		warp_indicator_label.add_theme_color_override("font_color", Color(1.0, 0.68, 0.22))
-		warp_indicator_label.tooltip_text = "The global solver is catching up: %s queued." % _compact_duration(
-			WeatherSystem.solver_backlog_seconds())
-	else:
-		warp_indicator_label.add_theme_color_override("font_color", Color(0.48, 0.86, 0.94))
-		warp_indicator_label.tooltip_text = "Top: simulated duration advanced per real second. Bottom: cumulative simulated time gained beyond wall-clock time this session."
-
-
-func _toggle_tuning_panel() -> void:
-	if tuning_panel == null:
+	if event.unicode == 233 or event.unicode == 201:
+		_set_open(not visible)
+		get_viewport().set_input_as_handled()
 		return
-	tuning_panel.visible = not tuning_panel.visible
-	if tuning_panel.visible:
-		_refresh_tuning_controls()
-
-
-func _on_tuning_slider_changed(value: float, tuning_key: StringName) -> void:
-	WeatherSystem.set_tuning_weight(tuning_key, value)
-	_on_external_tuning_weight_changed(tuning_key, float(WeatherSystem.tuning_weights[tuning_key]))
-
-
-func _on_layer_slider_changed(value: float, layer: int) -> void:
-	WeatherSystem.set_layer_weight(layer, value)
-	_on_external_layer_weight_changed(layer, WeatherSystem.layer_weights[layer])
-
-
-func _on_external_tuning_weight_changed(tuning_key: StringName, value: float) -> void:
-	var slider: HSlider = _tuning_sliders.get(tuning_key)
-	if slider != null:
-		slider.set_value_no_signal(value)
-	var value_label: Label = _tuning_value_labels.get(tuning_key)
-	if value_label != null:
-		value_label.text = "%.2f×" % value
-
-
-func _on_external_layer_weight_changed(layer: int, value: float) -> void:
-	if layer < 0 or layer >= _layer_sliders.size():
+	if not visible:
 		return
-	_layer_sliders[layer].set_value_no_signal(value)
-	_layer_value_labels[layer].text = "%.2f×" % value
+	if event.keycode == KEY_ESCAPE:
+		_set_open(false)
+	elif event.keycode == KEY_R:
+		_camera_yaw = 0.35
+		_camera_pitch = 0.16
+		_camera_distance = 2.72
+		_angular_velocity = Vector2.ZERO
+		_update_camera()
+	elif event.keycode == KEY_LEFT:
+		_product_select.select((product_index + PRODUCT_NAMES.size() - 1) % PRODUCT_NAMES.size())
+		_on_product_selected(_product_select.selected)
+	elif event.keycode == KEY_RIGHT:
+		_product_select.select((product_index + 1) % PRODUCT_NAMES.size())
+		_on_product_selected(_product_select.selected)
 
 
-func _refresh_tuning_controls() -> void:
-	for tuning_key: StringName in WeatherSystem.TUNING_KEYS:
-		_on_external_tuning_weight_changed(tuning_key, float(WeatherSystem.tuning_weights[tuning_key]))
-	for layer in WeatherSystem.layer_weights.size():
-		_on_external_layer_weight_changed(layer, WeatherSystem.layer_weights[layer])
-
-
-func _apply_product() -> void:
-	if _material != null:
-		_material.set_shader_parameter("u_product", product_index)
-	if title != null:
-		title.text = "ASTERRA METEOROLOGY — %s" % PRODUCT_NAMES[product_index]
-	_update_product_note()
-	if legend_texture != null:
-		legend_texture.texture = _make_legend_texture(product_index)
-	if legend_left != null:
-		legend_left.text = LEGEND_LEFT[product_index]
-	if legend_right != null:
-		legend_right.text = LEGEND_RIGHT[product_index]
-	_system_scan_accum = 1.0
-	if marker != null:
-		marker.queue_redraw()
-
-
-func _update_product_note() -> void:
-	if note != null:
-		var resolution_note := "global spin-up" if WeatherSystem.simulation_speed \
-			> WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD else "local nest %.0f km" % \
-			(WeatherSystem.local_span_m / 1000.0)
-		note.text = "%s  •  %d layers  •  %s" % [
-			PRODUCT_NOTES[product_index], WeatherSystem.layer_count, resolution_note]
-
-
-func _bind_weather_texture() -> void:
-	if _material == null or WeatherSystem.global_weather_texture == null:
+func _input(event: InputEvent) -> void:
+	if not visible:
 		return
-	_material.set_shader_parameter("u_weather", WeatherSystem.global_weather_texture)
-	if WeatherSystem.local_weather_texture != null:
-		_material.set_shader_parameter("u_local_weather", WeatherSystem.local_weather_texture)
-	if WeatherSystem.global_diagnostics_texture != null:
-		_material.set_shader_parameter("u_diagnostics", WeatherSystem.global_diagnostics_texture)
-	if WeatherSystem.local_diagnostics_texture != null:
-		_material.set_shader_parameter("u_local_diagnostics", WeatherSystem.local_diagnostics_texture)
-	if WeatherSystem.global_products_texture != null:
-		_material.set_shader_parameter("u_products", WeatherSystem.global_products_texture)
-	if WeatherSystem.local_products_texture != null:
-		_material.set_shader_parameter("u_local_products", WeatherSystem.local_products_texture)
-	_material.set_shader_parameter("u_local_center", WeatherSystem.local_center)
-	_material.set_shader_parameter("u_local_east", WeatherSystem.local_east)
-	_material.set_shader_parameter("u_local_north", WeatherSystem.local_north)
-	_material.set_shader_parameter(
-		"u_local_span_m", 0.0 if WeatherSystem.simulation_speed \
-		> WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD else WeatherSystem.local_span_m)
-	if Planet.cfg != null:
-		_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+	if event is InputEventMouseButton:
+		var over_panel := _panel != null and _panel.get_global_rect().has_point(event.position)
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and not over_panel:
+			_camera_distance = maxf(1.10, _camera_distance * 0.86)
+			_update_camera()
+			get_viewport().set_input_as_handled()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and not over_panel:
+			_camera_distance = minf(7.5, _camera_distance / 0.86)
+			_update_camera()
+			get_viewport().set_input_as_handled()
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed and not over_panel:
+				_dragging = true
+				_angular_velocity = Vector2.ZERO
+				get_viewport().set_input_as_handled()
+			elif not event.pressed:
+				_dragging = false
+	elif event is InputEventMouseMotion and _dragging:
+		var sensitivity := 0.0060 * clampf(_camera_distance / 2.7, 0.34, 1.25)
+		_camera_yaw -= event.relative.x * sensitivity
+		_camera_pitch = clampf(_camera_pitch + event.relative.y * sensitivity, -1.48, 1.48)
+		_angular_velocity = Vector2(-event.relative.x, event.relative.y) * sensitivity * 0.045
+		_update_camera()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMagnifyGesture:
+		_camera_distance = clampf(_camera_distance / maxf(event.factor, 0.05), 1.10, 7.5)
+		_update_camera()
 
 
-func _placeholder_texture() -> ImageTexture:
-	var image := Image.create(1, 1, false, Image.FORMAT_RGB8)
-	image.set_pixel(0, 0, Color(0.025, 0.045, 0.075))
-	return ImageTexture.create_from_image(image)
+func _set_open(opened: bool) -> void:
+	visible = opened
+	_dragging = false
+	if opened:
+		_ensure_particles()
+		_sync_weather_textures()
+		_update_viewport_size()
+		_begin_field_build_if_needed()
+		_live_wind_accum = 999.0
+		_update_product()
 
 
-func _update_base_map() -> void:
-	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
+func _begin_field_build_if_needed(force_wind: bool = false) -> void:
+	if Planet.fields == null or Planet.grid == null:
 		return
-	if _base_fields != Planet.fields:
-		_begin_base_render()
-	if _base_render_y < 0:
+	if not _base_ready:
+		_base_image = Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGB8)
+	if force_wind or not _wind_fallback_ready:
+		_wind_image = Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	_field_build_y = 0
+
+
+func _build_field_budgeted() -> void:
+	if _field_build_y < 0:
+		if not _base_ready and Planet.fields != null:
+			_begin_field_build_if_needed()
+		return
+	if Planet.fields == null or Planet.grid == null:
+		_field_build_y = -1
 		return
 
 	var started := Time.get_ticks_usec()
-	while _base_render_y < H:
-		_render_base_row(_base_render_y)
-		_base_render_y += 1
-		if Time.get_ticks_usec() - started >= BASE_RENDER_BUDGET_USEC:
+	while _field_build_y < GLOBAL_H:
+		_build_field_row(_field_build_y)
+		_field_build_y += 1
+		if Time.get_ticks_usec() - started >= FIELD_BUILD_BUDGET_USEC:
 			break
+	if _field_build_y < GLOBAL_H:
+		return
 
-	if _base_render_y >= H:
+	_field_build_y = -1
+	if not _base_ready and _base_image != null:
 		_base_texture = ImageTexture.create_from_image(_base_image)
-		texture_rect.texture = _base_texture
-		_base_render_y = -1
+		_base_ready = true
+		_globe_material.set_shader_parameter("u_base", _base_texture)
+	if not _live_wind_available and _wind_image != null:
+		_publish_wind_image(_wind_image)
+		_wind_fallback_ready = true
+		_source_label.text = "Wind source: baked prevailing field (rebuild native DLL for live layer vectors)"
 
 
-func _begin_base_render() -> void:
-	_base_fields = Planet.fields
-	_base_grid = Planet.grid
-	_base_image = Image.create(W, H, false, Image.FORMAT_RGB8)
-	_base_render_y = 0
+func _build_field_row(y: int) -> void:
+	var lat := PI * (0.5 - (float(y) + 0.5) / float(GLOBAL_H))
+	var cos_lat := cos(lat)
+	var fallback_scale: float = FALLBACK_LAYER_SPEED[wind_layer]
+	for x in GLOBAL_W:
+		# Base map uses conventional -π..π display longitude.
+		if not _base_ready and _base_image != null:
+			var display_lon := TAU * (float(x) + 0.5) / float(GLOBAL_W) - PI
+			var display_dir := Vector3(cos_lat * cos(display_lon), sin(lat), cos_lat * sin(display_lon))
+			var base_color := Color(0.025, 0.07, 0.16)
+			if Planet.has_method("surface_color"):
+				base_color = Planet.surface_color(display_dir)
+			elif Planet.has_method("water_coverage"):
+				var water: float = clampf(Planet.water_coverage(display_dir), 0.0, 1.0)
+				base_color = Color(0.055, 0.20, 0.08).lerp(Color(0.018, 0.07, 0.19), water)
+			_base_image.set_pixel(x, y, base_color)
+
+		# Wind textures use the native atmosphere's 0..2π longitude convention.
+		if not _live_wind_available and _wind_image != null:
+			var lon := TAU * (float(x) + 0.5) / float(GLOBAL_W)
+			var direction := Vector3(cos_lat * cos(lon), sin(lat), cos_lat * sin(lon))
+			var u := float(Planet.grid.sample_bilinear(Planet.fields.wind_u, direction)) * fallback_scale
+			var v := float(Planet.grid.sample_bilinear(Planet.fields.wind_v, direction)) * fallback_scale
+			_wind_image.set_pixel(x, y, Color(u, v, sqrt(u * u + v * v), 1.0))
 
 
-func _render_base_row(y: int) -> void:
-	if _base_fields == null or _base_grid == null:
-		_base_render_y = -1
+func _refresh_live_wind() -> void:
+	var native: Variant = WeatherSystem.get("_native")
+	if native == null or not (native is Object) or not native.has_method(&"get_global_wind_rgba"):
+		_live_wind_available = false
+		if not _wind_fallback_ready and _field_build_y < 0:
+			_begin_field_build_if_needed(true)
 		return
-	var lat := (0.5 - float(y) / float(H)) * PI
-	for x in W:
-		var lon := (float(x) / float(W) - 0.5) * TAU
-		var d := CubeSphere.latlon_to_dir(lat, lon)
-		var c := _base_grid.dir_to_index(d)
-		var h := _base_fields.elev[c]
-		if h < 0.0:
-			var depth := clampf(-h / 5000.0, 0.0, 1.0)
-			_base_image.set_pixel(x, y, Color(0.025, 0.075, 0.135).lerp(
-				Color(0.07, 0.20, 0.31), 1.0 - depth))
-		else:
-			var biome_color: Color = PlanetFields.BIOME_COLORS[_base_fields.biome[c]]
-			var mountain := clampf(h / 4500.0, 0.0, 1.0)
-			var land := biome_color.darkened(0.52).lerp(Color(0.46, 0.43, 0.39), mountain * 0.50)
-			_base_image.set_pixel(x, y, land)
-
-
-func _try_bind_player() -> void:
-	if _player != null and is_instance_valid(_player):
+	var result: Variant = native.call(&"get_global_wind_rgba", wind_layer)
+	if not (result is PackedFloat32Array):
 		return
-	var root := get_tree().current_scene
-	if root == null:
+	var values: PackedFloat32Array = result
+	if values.size() != GLOBAL_W * GLOBAL_H * 4:
 		return
-	for child in root.get_children():
-		if child is AsterraPlayer:
-			_player = child as AsterraPlayer
-			return
+	var image := Image.create_from_data(
+		GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array())
+	_live_wind_available = true
+	_wind_values = values
+	_wind_texture.update(image)
+	_sync_weather_textures()
+	_source_label.text = "Wind source: LIVE six-layer AVX2 atmosphere  •  %s" % LAYER_NAMES[wind_layer]
 
 
-func _set_player_locked(locked: bool) -> void:
-	_try_bind_player()
-	if _player == null or not is_instance_valid(_player):
-		return
-	if locked:
-		_player.set_mouse_captured(false)
-		_player.input_enabled = false
-		return
-
-	var root := get_tree().current_scene
-	if root != null:
-		for child in root.get_children():
-			if child is DebugMenu and child.visible:
-				return
-			if child is PlanetMap and child.visible:
-				return
-	_player.set_mouse_captured(true)
-	_player.input_enabled = true
+func _publish_wind_image(image: Image) -> void:
+	_wind_values = image.get_data().to_float32_array()
+	if _wind_texture == null:
+		_wind_texture = ImageTexture.create_from_image(image)
+	else:
+		_wind_texture.update(image)
+	_sync_weather_textures()
 
 
-func _close_planet_map_if_needed() -> void:
-	var root := get_tree().current_scene
-	if root == null:
-		return
-	for child in root.get_children():
-		if child is PlanetMap and child.visible:
-			child.toggle()
-			return
+func _on_product_selected(index: int) -> void:
+	product_index = clampi(index, 0, PRODUCT_NAMES.size() - 1)
+	_update_product()
 
 
-func _update_system_analysis(delta: float) -> void:
-	if product_index != Product.SYNOPTIC:
-		if not _systems.is_empty():
-			_systems.clear()
-			marker.queue_redraw()
-		return
-	_system_scan_accum += delta
-	if _system_scan_accum < 0.75:
-		return
-	_system_scan_accum = 0.0
-	var weather := WeatherSystem.global_weather_values
-	var diagnostics := WeatherSystem.global_diagnostics_values
-	var products := WeatherSystem.global_products_values
-	var expected := WeatherSystem.GLOBAL_W * WeatherSystem.GLOBAL_H * 4
-	if weather.size() != expected or diagnostics.size() != expected or products.size() != expected:
-		return
-
-	var candidates: Array[Dictionary] = []
-	for y in range(6, WeatherSystem.GLOBAL_H - 6, 6):
-		for x in range(0, WeatherSystem.GLOBAL_W, 6):
-			var cell := x + y * WeatherSystem.GLOBAL_W
-			var offset := cell * 4
-			var pressure := weather[offset + 3]
-			var is_low := pressure < 0.475
-			var is_high := pressure > 0.525
-			if not is_low and not is_high:
-				continue
-			var is_extreme := true
-			for oy in range(-6, 7, 3):
-				for ox in range(-6, 7, 3):
-					if ox == 0 and oy == 0:
-						continue
-					var nx := wrapi(x + ox, 0, WeatherSystem.GLOBAL_W)
-					var ny := clampi(y + oy, 0, WeatherSystem.GLOBAL_H - 1)
-					var neighbour := weather[(nx + ny * WeatherSystem.GLOBAL_W) * 4 + 3]
-					if (is_low and neighbour < pressure) or (is_high and neighbour > pressure):
-						is_extreme = false
-						break
-				if not is_extreme:
-					break
-			if not is_extreme:
-				continue
-
-			var latitude_deg := 90.0 - 180.0 * (float(y) + 0.5) / float(WeatherSystem.GLOBAL_H)
-			var storm := weather[offset + 1]
-			var rain := weather[offset + 2]
-			var rotation := absf(diagnostics[offset] - 0.5) * 2.0
-			var sea_temperature := products[offset + 1]
-			var cape := products[offset + 2]
-			var system_name := "ANTICYCLONE" if is_high else "DEPRESSION"
-			if is_low and absf(latitude_deg) < 35.0 and sea_temperature > 0.35 \
-					and cape > 0.15 and storm > 0.10 and rain > 0.015 and rotation > 0.12:
-				system_name = "HURRICANE / TYPHOON"
-			elif is_low and storm > 0.11 and rotation > 0.10:
-				system_name = "STORM LOW"
-			var strength := absf(pressure - 0.5) * 5.0 + storm + cape * 0.08
-			candidates.append({
-				"x": x, "y": y, "low": is_low, "name": system_name,
-				"pressure": pressure, "strength": strength,
-			})
-
-	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return float(a.strength) > float(b.strength))
-	_systems.clear()
-	for candidate in candidates:
-		var map_x := fposmod(float(candidate.x) / float(WeatherSystem.GLOBAL_W) + 0.5, 1.0) * W
-		var map_y := (float(candidate.y) + 0.5) / float(WeatherSystem.GLOBAL_H) * H
-		var separated := true
-		for accepted in _systems:
-			var accepted_x := float(accepted.map_x)
-			var dx := absf(map_x - accepted_x)
-			dx = minf(dx, float(W) - dx)
-			if Vector2(dx, map_y - float(accepted.map_y)).length() < 82.0:
-				separated = false
-				break
-		if not separated:
-			continue
-		candidate["map_x"] = map_x
-		candidate["map_y"] = map_y
-		_systems.append(candidate)
-		if _systems.size() >= 10:
-			break
-	marker.queue_redraw()
+func _on_layer_selected(index: int) -> void:
+	wind_layer = clampi(index, 0, LAYER_NAMES.size() - 1)
+	_live_wind_accum = 999.0
+	if not _live_wind_available:
+		_wind_fallback_ready = false
+		_begin_field_build_if_needed(true)
 
 
-func _draw_marker() -> void:
-	if product_index == Product.SYNOPTIC:
-		var font := marker.get_theme_default_font()
-		for system in _systems:
-			var position := Vector2(
-				float(system.map_x) - float(W) * 0.5,
-				float(system.map_y) - float(H) * 0.5)
-			var low := bool(system.low)
-			var color := Color(0.96, 0.24, 0.16, 0.96) if low \
-				else Color(0.18, 0.48, 1.0, 0.96)
-			marker.draw_circle(position, 14.0, Color(0.015, 0.025, 0.045, 0.82))
-			marker.draw_circle(position, 14.0, color, false, 2.2, true)
-			marker.draw_string(font, position + Vector2(-12, 7), "L" if low else "H",
-				HORIZONTAL_ALIGNMENT_CENTER, 24.0, 18, color)
-			var name := String(system.name)
-			marker.draw_string(font, position + Vector2(-66, -19), name,
-				HORIZONTAL_ALIGNMENT_CENTER, 132.0, 10, Color(0.96, 0.98, 1.0, 0.96))
-			var anomaly_hpa := (float(system.pressure) - 0.5) * 120.0
-			marker.draw_string(font, position + Vector2(-40, 27), "%+.1f hPa" % anomaly_hpa,
-				HORIZONTAL_ALIGNMENT_CENTER, 80.0, 9, Color(0.78, 0.84, 0.90, 0.90))
-
-	var latlon := CubeSphere.dir_to_latlon(_player_dir)
-	var x := (latlon.y / TAU + 0.5) * float(W) - float(W) * 0.5
-	var y := (0.5 - latlon.x / PI) * float(H) - float(H) * 0.5
-
-	if Planet.cfg != null:
-		var half_angle := (WeatherSystem.local_span_m * 0.5) / maxf(Planet.cfg.planet_radius, 1.0)
-		var cos_lat := maxf(absf(cos(latlon.x)), 0.18)
-		var rx := minf(half_angle / (TAU * cos_lat) * float(W), float(W) * 0.42)
-		var ry := half_angle / PI * float(H)
-		var points := PackedVector2Array()
-		for i in 49:
-			var a := TAU * float(i) / 48.0
-			points.append(Vector2(x + cos(a) * rx, y + sin(a) * ry))
-		marker.draw_polyline(points, Color(0.18, 0.82, 0.92, 0.72), 1.3, true)
-
-	marker.draw_circle(Vector2(x, y), 5.0, Color(1.0, 0.22, 0.12, 0.95))
-	marker.draw_circle(Vector2(x, y), 9.0, Color(1.0, 1.0, 1.0, 0.42), false, 1.5)
+func _on_flow_toggled(enabled: bool) -> void:
+	if _wind_particles != null:
+		_wind_particles.visible = enabled
 
 
-func _make_legend_texture(which: int) -> GradientTexture1D:
+func _update_product() -> void:
+	if _globe_material != null:
+		_globe_material.set_shader_parameter("u_product", product_index)
+	if _note_label != null:
+		_note_label.text = PRODUCT_NOTES[product_index]
+	if _legend_left != null:
+		_legend_left.text = LEGEND_LEFT[product_index]
+		_legend_right.text = LEGEND_RIGHT[product_index]
+		_legend.texture = _make_legend_texture(product_index)
+
+
+func _make_legend_texture(product: int) -> GradientTexture1D:
 	var gradient := Gradient.new()
-	match which:
-		Product.SYNOPTIC:
-			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+	gradient.offsets = PackedFloat32Array([0.0, 0.28, 0.55, 0.78, 1.0])
+	match product:
+		Product.WIND:
 			gradient.colors = PackedColorArray([
-				Color(0.10, 0.28, 0.88), Color(0.92, 0.92, 0.88), Color(0.88, 0.16, 0.10)])
-		Product.CLOUD_COVER:
-			gradient.offsets = PackedFloat32Array([0.0, 0.55, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.035, 0.10, 0.19), Color(0.48, 0.59, 0.68), Color(0.96, 0.98, 1.0)])
+				Color(0.035, 0.075, 0.30), Color(0.025, 0.31, 0.54),
+				Color(0.045, 0.62, 0.43), Color(0.65, 0.92, 0.13), Color(0.95, 0.16, 0.12)])
 		Product.PRECIPITATION:
-			gradient.offsets = PackedFloat32Array([0.0, 0.10, 0.35, 0.62, 0.82, 1.0])
 			gradient.colors = PackedColorArray([
-				Color(0.02, 0.08, 0.13), Color(0.05, 0.42, 0.72), Color(0.08, 0.78, 0.36),
-				Color(0.98, 0.86, 0.16), Color(0.92, 0.18, 0.09), Color(0.78, 0.10, 0.82)])
-		Product.CONVECTION:
-			gradient.offsets = PackedFloat32Array([0.0, 0.25, 0.55, 0.78, 1.0])
+				Color(0.02, 0.09, 0.20), Color(0.04, 0.56, 0.88),
+				Color(0.16, 0.86, 0.34), Color(1.0, 0.82, 0.13), Color(0.90, 0.06, 0.25)])
+		Product.PRESSURE, Product.VORTICITY, Product.DIVERGENCE, Product.POTENTIAL_VORTICITY:
 			gradient.colors = PackedColorArray([
-				Color(0.035, 0.06, 0.12), Color(0.12, 0.34, 0.72), Color(1.0, 0.82, 0.12),
-				Color(0.98, 0.18, 0.06), Color(0.88, 0.08, 0.78)])
-		Product.PRESSURE:
-			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.10, 0.28, 0.88), Color(0.92, 0.92, 0.88), Color(0.88, 0.16, 0.10)])
-		Product.AIR_TEMPERATURE, Product.SEA_TEMPERATURE:
-			gradient.offsets = PackedFloat32Array([0.0, 0.25, 0.50, 0.72, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.22, 0.08, 0.55), Color(0.12, 0.48, 0.92), Color(0.18, 0.82, 0.62),
-				Color(1.0, 0.82, 0.16), Color(0.82, 0.06, 0.08)])
-		Product.CAPE:
-			gradient.offsets = PackedFloat32Array([0.0, 0.25, 0.60, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.04, 0.11, 0.20), Color(0.12, 0.62, 0.48),
-				Color(0.98, 0.80, 0.12), Color(0.88, 0.04, 0.30)])
-		Product.IRRADIANCE:
-			gradient.offsets = PackedFloat32Array([0.0, 0.45, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.015, 0.025, 0.09), Color(0.18, 0.42, 0.82), Color(1.0, 0.90, 0.30)])
-		Product.VORTICITY, Product.DIVERGENCE:
-			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.10, 0.36, 0.92), Color(0.88, 0.90, 0.90), Color(0.92, 0.16, 0.12)])
-		Product.POTENTIAL_VORTICITY:
-			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.20, 0.20, 0.70), Color(0.90, 0.90, 0.86), Color(0.72, 0.08, 0.72)])
-		Product.WIND_SHEAR:
-			gradient.offsets = PackedFloat32Array([0.0, 0.35, 0.68, 1.0])
-			gradient.colors = PackedColorArray([
-				Color(0.03, 0.10, 0.16), Color(0.10, 0.62, 0.54), Color(0.96, 0.82, 0.14), Color(0.90, 0.10, 0.12)])
+				Color(0.08, 0.24, 0.82), Color(0.40, 0.58, 0.88),
+				Color(0.86, 0.88, 0.90), Color(0.93, 0.52, 0.40), Color(0.90, 0.15, 0.08)])
 		_:
-			gradient.offsets = PackedFloat32Array([0.0, 0.32, 0.62, 0.82, 1.0])
 			gradient.colors = PackedColorArray([
-				Color(0.035, 0.10, 0.19), Color(0.70, 0.76, 0.78), Color(0.08, 0.78, 0.36),
-				Color(0.98, 0.40, 0.08), Color(0.88, 0.08, 0.78)])
-	var tex := GradientTexture1D.new()
-	tex.gradient = gradient
-	tex.width = 256
-	return tex
+				Color(0.04, 0.08, 0.18), Color(0.08, 0.42, 0.75),
+				Color(0.10, 0.75, 0.45), Color(1.0, 0.80, 0.12), Color(0.92, 0.06, 0.12)])
+	var texture := GradientTexture1D.new()
+	texture.gradient = gradient
+	texture.width = 330
+	return texture
+
+
+func _update_cursor_readout() -> void:
+	if _camera == null or _viewport_container == null:
+		return
+	var mouse := _viewport_container.get_local_mouse_position()
+	var size := Vector2(_subviewport.size)
+	if mouse.x < 0.0 or mouse.y < 0.0 or mouse.x >= size.x or mouse.y >= size.y:
+		_cursor_label.text = ""
+		return
+	var origin := _camera.project_ray_origin(mouse)
+	var direction := _camera.project_ray_normal(mouse).normalized()
+	var b := origin.dot(direction)
+	var c := origin.length_squared() - 1.0
+	var discriminant := b * b - c
+	if discriminant < 0.0:
+		_cursor_label.text = ""
+		return
+	var t := -b - sqrt(discriminant)
+	if t <= 0.0:
+		_cursor_label.text = ""
+		return
+	var hit := (origin + direction * t).normalized()
+	var lat := asin(clampf(hit.y, -1.0, 1.0))
+	var lon := atan2(hit.z, hit.x)
+	var lat_text := "%.2f°%s" % [absf(rad_to_deg(lat)), "N" if lat >= 0.0 else "S"]
+	var lon_text := "%.2f°%s" % [absf(rad_to_deg(lon)), "E" if lon >= 0.0 else "W"]
+	var wind := _sample_wind(lon, lat)
+	var speed_kmh := wind.z * 3.6
+	var toward := rad_to_deg(atan2(wind.x, wind.y))
+	var from_degrees := fmod(toward + 540.0, 360.0)
+	_cursor_label.text = "%s, %s\nWind | %03d° @ %.1f km/h  •  %s" % [
+		lat_text, lon_text, int(round(from_degrees)), speed_kmh, LAYER_NAMES[wind_layer]]
+
+
+func _sample_wind(lon: float, lat: float) -> Vector3:
+	if _wind_values.size() != GLOBAL_W * GLOBAL_H * 4:
+		return Vector3.ZERO
+	var ucoord := fposmod(lon / TAU, 1.0)
+	var vcoord := clampf(0.5 - lat / PI, 0.0, 0.999999)
+	var x := wrapi(int(floor(ucoord * GLOBAL_W)), 0, GLOBAL_W)
+	var y := clampi(int(floor(vcoord * GLOBAL_H)), 0, GLOBAL_H - 1)
+	var offset := (x + y * GLOBAL_W) * 4
+	return Vector3(
+		_wind_values[offset], _wind_values[offset + 1], _wind_values[offset + 2])
