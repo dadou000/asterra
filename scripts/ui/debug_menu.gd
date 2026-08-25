@@ -18,6 +18,16 @@ const TERRAIN_ROWS := [
 	["side_cut", "Side cut / sinking view", "Cuts away half the terrain and colours each LOD so overlap is visible", false],
 ]
 
+const GEOMORPH_DEBUG_MODES := [
+	"Final material",
+	"Landforms — R mountain / G arid / B glacial / white deposition",
+	"Primary materials — rock / soil / vegetation / sand",
+	"Secondary materials — mud / snow / scree / gravel",
+	"Soil context — sand / silt / clay, organic darkening",
+	"Geology / biome — rock ID / biome ID / erodibility",
+	"Hydrology — flow direction / discharge / deposition",
+]
+
 const DEFAULT_SINK_SCALE := 2.0
 const SKY_DEFAULT := 1.0
 
@@ -31,6 +41,7 @@ var _buttons := {}
 var _rebake_button: Button
 var _sink_label: Label
 var _sink_slider: HSlider
+var _geomorph_selector: OptionButton
 var _sky_labels := {}
 var _sky_sliders := {}
 var _sky_target_label: Label
@@ -99,7 +110,17 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	scroll.add_child(box)
 
 	box.add_child(_section_title("Concentric GPU clipmap"))
-	box.add_child(_note("Current renderer: procedural spherical L0-L14 clipmap"))
+	box.add_child(_note("Current renderer: coarse baked planet context → GPU geomorph → GPU materials"))
+
+	_geomorph_selector = OptionButton.new()
+	_geomorph_selector.custom_minimum_size = Vector2(0, 34)
+	_geomorph_selector.add_theme_font_size_override("font_size", 13)
+	for mode_name in GEOMORPH_DEBUG_MODES:
+		_geomorph_selector.add_item(mode_name)
+	_geomorph_selector.select(0)
+	_geomorph_selector.item_selected.connect(_on_geomorph_mode_selected)
+	box.add_child(_geomorph_selector)
+	box.add_child(_note("Diagnostic views are emissive/unlit so field values remain readable at night and at the terminator."))
 
 	for row in TERRAIN_ROWS:
 		var key: String = row[0]
@@ -136,7 +157,7 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	reset.add_theme_font_size_override("font_size", 13)
 	reset.pressed.connect(_on_reset_inspection)
 	box.add_child(reset)
-	box.add_child(_note("Clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
+	box.add_child(_note("Restores final materials, clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
 
 
 func _build_sky_tab(tabs: TabContainer) -> void:
@@ -277,6 +298,13 @@ func _on_toggled(pressed: bool, key: String) -> void:
 		debug.set(key, pressed)
 
 
+func _on_geomorph_mode_selected(index: int) -> void:
+	if debug != null:
+		debug.geomorph_mode = index
+	elif GroundGeometryClipmap.has_method("set_debug_geomorph_mode"):
+		GroundGeometryClipmap.call("set_debug_geomorph_mode", index)
+
+
 func _on_sink_scale_changed(value: float) -> void:
 	if _sink_label != null:
 		_sink_label.text = "Sink depth: %.2f × LOD spacing" % value
@@ -292,12 +320,16 @@ func _on_reset_inspection() -> void:
 			(button_value as CheckButton).set_pressed_no_signal(false)
 	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
 		GroundGeometryClipmap.call("set_debug_ring_indicator", false)
+	if _geomorph_selector != null:
+		_geomorph_selector.select(0)
 	if _sink_slider != null:
 		_sink_slider.set_value_no_signal(DEFAULT_SINK_SCALE)
 	if _sink_label != null:
 		_sink_label.text = "Sink depth: %.2f × LOD spacing" % DEFAULT_SINK_SCALE
 	if debug != null:
 		debug.reset_inspection()
+	elif GroundGeometryClipmap.has_method("set_debug_geomorph_mode"):
+		GroundGeometryClipmap.call("set_debug_geomorph_mode", 0)
 
 
 func _on_sky_slider_changed(value: float, key: String) -> void:
@@ -385,9 +417,6 @@ func _resolve_sky_targets() -> void:
 		if candidate is ProceduralSky:
 			procedural_sky = candidate as ProceduralSky
 
-	# Resolve the material through the actual WorldEnvironment -> Environment -> Sky
-	# chain instead of trusting a script-side cached variable. This guarantees that
-	# the sliders modify the material Godot is currently drawing.
 	sky_resource = null
 	sky_material = null
 	for child in root.get_children():
@@ -398,8 +427,6 @@ func _resolve_sky_targets() -> void:
 		if environment == null or environment.sky == null:
 			continue
 		sky_resource = environment.sky
-		# REALTIME makes the radiance/reflection cubemap follow the same-frame uniform
-		# edits too. Visible sky pixels already read the live material every frame.
 		sky_resource.radiance_size = Sky.RADIANCE_SIZE_256
 		sky_resource.process_mode = Sky.PROCESS_MODE_REALTIME
 		var live_material := sky_resource.sky_material
@@ -407,7 +434,6 @@ func _resolve_sky_targets() -> void:
 			sky_material = live_material as ShaderMaterial
 			break
 
-	# Fallback for unusual harnesses without a WorldEnvironment child.
 	if sky_material == null:
 		var material_value: Variant = root.get("sky_mat")
 		if material_value is ShaderMaterial:
