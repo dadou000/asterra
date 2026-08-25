@@ -123,6 +123,7 @@ private:
 	std::array<float, TUNING_COUNT> tuning_weights = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 	std::array<float, LAYERS> layer_weights = DEFAULT_LAYER_WEIGHTS;
 	uint64_t seed = 1;
+	double global_simulation_seconds = 0.0;
 	Vector3 local_center = Vector3(0, 1, 0);
 	Vector3 local_east = Vector3(1, 0, 0);
 	Vector3 local_north = Vector3(0, 0, 1);
@@ -180,6 +181,7 @@ public:
 	void step_global(float dt);
 	void set_local_center(const Vector3 &center_dir);
 	void step_local(float dt);
+	void reset_local_from_global();
 
 	// Packed four-float geography per global weather cell:
 	// elevation_m, water_fraction, soil_moisture, snow-free base_albedo.
@@ -194,6 +196,8 @@ public:
 	PackedFloat32Array get_local_diagnostics_rgba() const;
 	PackedFloat32Array get_global_surface_rgba() const;
 	PackedFloat32Array get_local_surface_rgba() const;
+	PackedFloat32Array get_global_products_rgba() const;
+	PackedFloat32Array get_local_products_rgba() const;
 	void set_tuning_weight(const StringName &name, float value);
 	float get_tuning_weight(const StringName &name) const;
 	void reset_tuning_weights();

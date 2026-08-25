@@ -12,11 +12,12 @@ const TEXTURE_REAL_INTERVAL := 0.50
 const GLOBAL_SIM_DT := 90.0
 const LOCAL_SIM_DT := 20.0
 const SIMULATION_SPEED_MIN := 0.0
-const SIMULATION_SPEED_MAX := 128.0
+const SIMULATION_SPEED_MAX := 8192.0
 const SIMULATION_SPEED_DEFAULT := 1.0
+const HIGH_WARP_LOCAL_THRESHOLD := 256.0
 # A pathological external celestial time jump is allowed to leave backlog rather
-# than silently discarding physical time. Normal 0-128x operation never reaches
-# this guard at ordinary frame rates.
+# than silently discarding physical time. The 8192x global spin-up path remains
+# below this guard at ordinary frame rates because it uses a larger global step.
 const MAX_SOLVER_STEPS_PER_FRAME := 64
 const SIMULATION_WEIGHT_MIN := 0.0
 const SIMULATION_WEIGHT_MAX := 2.0
@@ -39,10 +40,13 @@ const REQUIRED_NATIVE_METHODS := [
 	&"step_global",
 	&"set_local_center",
 	&"step_local",
+	&"reset_local_from_global",
 	&"get_global_weather_rgba",
 	&"get_local_weather_rgba",
 	&"get_global_diagnostics_rgba",
 	&"get_local_diagnostics_rgba",
+	&"get_global_products_rgba",
+	&"get_local_products_rgba",
 	&"set_tuning_weight",
 	&"get_tuning_weight",
 	&"reset_tuning_weights",
@@ -65,6 +69,11 @@ var global_weather_texture: ImageTexture
 var local_weather_texture: ImageTexture
 var global_diagnostics_texture: ImageTexture
 var local_diagnostics_texture: ImageTexture
+var global_products_texture: ImageTexture
+var local_products_texture: ImageTexture
+var global_weather_values := PackedFloat32Array()
+var global_diagnostics_values := PackedFloat32Array()
+var global_products_values := PackedFloat32Array()
 var local_center := Vector3.UP
 var local_east := Vector3.RIGHT
 var local_north := Vector3.FORWARD
@@ -80,6 +89,8 @@ var simulation_weight := SIMULATION_WEIGHT_DEFAULT
 ## calibrated fixed timesteps. 0 pauses weather; 1 is normal; high values are
 ## intended to spin up a realistic starting circulation quickly.
 var simulation_speed := SIMULATION_SPEED_DEFAULT
+## Cumulative simulated time gained beyond wall-clock time during this session.
+var warped_ahead_seconds := 0.0
 var tuning_weights := {
 	&"circulation": TUNING_WEIGHT_DEFAULT,
 	&"temperature": TUNING_WEIGHT_DEFAULT,
@@ -167,6 +178,7 @@ func _process(delta: float) -> void:
 		_global_sim_accum = 0.0
 		_local_sim_accum = 0.0
 		simulated_delta = 0.0
+	warped_ahead_seconds += maxf(simulated_delta - delta, 0.0)
 
 	if not native_available or _native == null:
 		if _observer != null and is_instance_valid(_observer):
@@ -181,19 +193,29 @@ func _process(delta: float) -> void:
 		_local_sim_accum = 0.0
 	_texture_accum += delta
 
+	# Keep the globally tested 90-second cadence at every warp. A 180-second
+	# shortcut is cheaper, but it excites grid-scale pressure waves after several
+	# simulated days. High warp is made fast by suspending the local nest instead.
+	var global_dt := GLOBAL_SIM_DT
 	var global_steps := 0
-	while _global_sim_accum >= GLOBAL_SIM_DT and global_steps < MAX_SOLVER_STEPS_PER_FRAME:
-		_global_sim_accum -= GLOBAL_SIM_DT
-		_native.call(&"step_global", GLOBAL_SIM_DT)
+	while _global_sim_accum >= global_dt and global_steps < MAX_SOLVER_STEPS_PER_FRAME:
+		_global_sim_accum -= global_dt
+		_native.call(&"step_global", global_dt)
 		global_steps += 1
 
 	if _observer != null and is_instance_valid(_observer):
 		_native.call(&"set_local_center", _observer.up_dir())
-		var local_steps := 0
-		while _local_sim_accum >= LOCAL_SIM_DT and local_steps < MAX_SOLVER_STEPS_PER_FRAME:
-			_local_sim_accum -= LOCAL_SIM_DT
-			_native.call(&"step_local", LOCAL_SIM_DT)
-			local_steps += 1
+		if simulation_speed > HIGH_WARP_LOCAL_THRESHOLD:
+			# Rapid spin-up evolves the useful whole-planet forecast. The expensive
+			# kilometre-scale nest is rebuilt from it when interactive speed resumes.
+			_local_sim_accum = 0.0
+		else:
+			var local_dt := 40.0 if simulation_speed >= 32.0 else LOCAL_SIM_DT
+			var local_steps := 0
+			while _local_sim_accum >= local_dt and local_steps < MAX_SOLVER_STEPS_PER_FRAME:
+				_local_sim_accum -= local_dt
+				_native.call(&"step_local", local_dt)
+				local_steps += 1
 		local_center = _native.call(&"get_local_center")
 		local_east = _native.call(&"get_local_east")
 		local_north = _native.call(&"get_local_north")
@@ -234,6 +256,10 @@ func _create_textures() -> void:
 		Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF))
 	local_diagnostics_texture = ImageTexture.create_from_image(
 		Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF))
+	global_products_texture = ImageTexture.create_from_image(
+		Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF))
+	local_products_texture = ImageTexture.create_from_image(
+		Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF))
 
 
 func _publish_fallback_weather() -> void:
@@ -250,6 +276,13 @@ func _publish_fallback_weather() -> void:
 	var local_diag := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
 	local_diag.fill(Color(0.5, 0.5, 0.5, 0.0))
 	local_diagnostics_texture.update(local_diag)
+	var global_products := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	global_products.fill(Color(0.68, -1.0, 0.0, 0.0))
+	global_products_texture.update(global_products)
+	global_products_values = global_products.get_data().to_float32_array()
+	var local_products := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+	local_products.fill(Color(0.68, -1.0, 0.0, 0.0))
+	local_products_texture.update(local_products)
 
 
 func _publish_weather_textures() -> void:
@@ -258,6 +291,7 @@ func _publish_weather_textures() -> void:
 
 	var global_result: Variant = _native.call(&"get_global_weather_rgba")
 	if global_result is PackedFloat32Array:
+		global_weather_values = global_result
 		var global_values := _apply_simulation_weight(global_result)
 		if global_values.size() == GLOBAL_W * GLOBAL_H * 4:
 			global_weather_texture.update(Image.create_from_data(
@@ -272,6 +306,7 @@ func _publish_weather_textures() -> void:
 
 	var global_diag_result: Variant = _native.call(&"get_global_diagnostics_rgba")
 	if global_diag_result is PackedFloat32Array:
+		global_diagnostics_values = global_diag_result
 		var global_diag_values := _apply_diagnostic_weight(global_diag_result)
 		if global_diag_values.size() == GLOBAL_W * GLOBAL_H * 4:
 			global_diagnostics_texture.update(Image.create_from_data(
@@ -283,6 +318,22 @@ func _publish_weather_textures() -> void:
 		if local_diag_values.size() == LOCAL_W * LOCAL_H * 4:
 			local_diagnostics_texture.update(Image.create_from_data(
 				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_diag_values.to_byte_array()))
+
+	var global_products_result: Variant = _native.call(&"get_global_products_rgba")
+	if global_products_result is PackedFloat32Array:
+		global_products_values = global_products_result
+		if global_products_values.size() == GLOBAL_W * GLOBAL_H * 4:
+			global_products_texture.update(Image.create_from_data(
+				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF,
+				global_products_values.to_byte_array()))
+
+	var local_products_result: Variant = _native.call(&"get_local_products_rgba")
+	if local_products_result is PackedFloat32Array:
+		var local_products_values: PackedFloat32Array = local_products_result
+		if local_products_values.size() == LOCAL_W * LOCAL_H * 4:
+			local_products_texture.update(Image.create_from_data(
+				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF,
+				local_products_values.to_byte_array()))
 
 
 func set_simulation_weight(value: float) -> void:
@@ -306,8 +357,14 @@ func set_simulation_speed(value: float) -> void:
 	var sanitized := clampf(value, SIMULATION_SPEED_MIN, SIMULATION_SPEED_MAX)
 	if is_equal_approx(simulation_speed, sanitized) and is_equal_approx(CelestialSystem.time_scale, sanitized):
 		return
+	var was_high_warp := simulation_speed > HIGH_WARP_LOCAL_THRESHOLD
 	simulation_speed = sanitized
 	CelestialSystem.set_time_scale(simulation_speed)
+	if was_high_warp and simulation_speed <= HIGH_WARP_LOCAL_THRESHOLD \
+			and native_available and _native != null:
+		_local_sim_accum = 0.0
+		_native.call(&"reset_local_from_global")
+		_publish_weather_textures()
 	simulation_speed_changed.emit(simulation_speed)
 
 
@@ -398,10 +455,15 @@ func _sync_weather_map_material() -> void:
 		material.set_shader_parameter("u_diagnostics", global_diagnostics_texture)
 	if local_diagnostics_texture != null:
 		material.set_shader_parameter("u_local_diagnostics", local_diagnostics_texture)
+	if global_products_texture != null:
+		material.set_shader_parameter("u_products", global_products_texture)
+	if local_products_texture != null:
+		material.set_shader_parameter("u_local_products", local_products_texture)
 	material.set_shader_parameter("u_local_center", local_center)
 	material.set_shader_parameter("u_local_east", local_east)
 	material.set_shader_parameter("u_local_north", local_north)
-	material.set_shader_parameter("u_local_span_m", local_span_m)
+	material.set_shader_parameter(
+		"u_local_span_m", 0.0 if simulation_speed > HIGH_WARP_LOCAL_THRESHOLD else local_span_m)
 	if Planet.cfg != null:
 		material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 
@@ -412,3 +474,7 @@ func global_texture() -> Texture2D:
 
 func local_texture() -> Texture2D:
 	return local_weather_texture
+
+
+func solver_backlog_seconds() -> float:
+	return maxf(_global_sim_accum - GLOBAL_SIM_DT, 0.0)

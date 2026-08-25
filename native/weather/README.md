@@ -92,7 +92,9 @@ The active procedural terrain shader samples the global and nested local surface
 
 `CelestialSystem.simulation_seconds` is authoritative. Global weather, local weather and the surface model now consume the same elapsed Asterra seconds while keeping their numerically stable fixed timesteps (90 s global, 20 s local). The speed control changes `CelestialSystem.time_scale`; it no longer creates separate global/local effective weather clocks.
 
-Press `é` to open the weather map. **Weather speed** ranges from paused `0x` through normal `1x` to `128x` spin-up. At high speed the solver performs more fixed physical steps rather than enlarging the timestep. A pathological external time jump may leave a backlog capped at 64 solver steps per rendered frame; elapsed physical time is retained rather than silently discarded.
+Press `é` to open the weather map. **Weather speed** uses logarithmic powers of two from paused `0x` through normal `1x` to `8192x` global spin-up. The helper beside it shows simulated duration per real second and cumulative warped time in seconds, minutes, hours, or days. Above `256x`, the expensive 2.2 km nest pauses while the whole-planet atmosphere advances with the native stable 180-second step; returning to interactive speed rebuilds the nest from the evolved global state. A pathological external time jump may leave a backlog capped at 64 solver steps per rendered frame; elapsed physical time is retained rather than silently discarded.
+
+The map also exposes synoptic H/L analysis, cloud, precipitation, organised storms, pressure, near-surface air temperature, sea-surface temperature, CAPE, absorbed solar irradiance, vorticity, divergence, potential vorticity and wind shear. Synoptic mode identifies depressions, anticyclones, storm lows and warm-core hurricane/typhoon candidates from the live pressure, rotation, rain, CAPE and sea-temperature fields.
 
 ## Runtime physical tuning
 

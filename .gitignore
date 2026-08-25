@@ -13,3 +13,4 @@ bin/asterra_weather.gdextension.uid
 bin/libasterra_weather.so
 bin/Release/
 bin/staging/
+tests/weather_probe_*/

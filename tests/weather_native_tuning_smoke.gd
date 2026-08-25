@@ -38,14 +38,20 @@ func _ready() -> void:
 		return
 
 	native.call(&"initialize", 0x4153544552524100)
+	native.call(&"set_global_surface_fields", _build_smoke_surface_fields())
 	# Six simulated hours is long enough to exercise horizontal dynamics,
 	# microphysics, vertical exchange, fallout, and diagnostics.
+	var simulation_seconds := 0.0
 	for _step in 240:
+		_set_smoke_solar(native, simulation_seconds)
 		native.call(&"step_global", 90.0)
+		simulation_seconds += 90.0
 
 	var weather: PackedFloat32Array = native.call(&"get_global_weather_rgba")
 	var diagnostics: PackedFloat32Array = native.call(&"get_global_diagnostics_rgba")
-	if weather.size() != 256 * 128 * 4 or diagnostics.size() != weather.size():
+	var products: PackedFloat32Array = native.call(&"get_global_products_rgba")
+	if weather.size() != 256 * 128 * 4 or diagnostics.size() != weather.size() \
+			or products.size() != weather.size():
 		fail_test("unexpected weather texture dimensions")
 		return
 
@@ -57,11 +63,14 @@ func _ready() -> void:
 		if not is_finite(diagnostics[i]) or diagnostics[i] < 0.0 or diagnostics[i] > 1.0:
 			fail_test("non-finite or unbounded diagnostic value at %d" % i)
 			return
+		if not is_finite(products[i]) or (i % 4 != 1 and (products[i] < 0.0 or products[i] > 1.0)):
+			fail_test("non-finite or unbounded meteorological product at %d" % i)
+			return
 		channel_mean[i % 4] += weather[i]
 	var cells := weather.size() / 4
 	for channel in 4:
 		channel_mean[channel] /= cells
-	if channel_mean[0] <= 0.30 or channel_mean[0] >= 0.90:
+	if channel_mean[0] <= 0.25 or channel_mean[0] >= 0.90:
 		fail_test("cloud field collapsed to an implausible mean %.4f" % channel_mean[0])
 		return
 	var weighted_pressure_anomaly := 0.0
@@ -119,6 +128,7 @@ func _ready() -> void:
 			if not is_finite(local_weather[i]) or not is_finite(local_diagnostics[i]):
 				fail_test("non-finite polar local state at %d" % i)
 				return
+	native.call(&"reset_local_from_global")
 
 	var baseline_cloud := channel_mean[0]
 	for layer in 6:
@@ -140,11 +150,15 @@ func _ready() -> void:
 	for tuning_key: StringName in tuning_keys:
 		native.call(&"set_tuning_weight", tuning_key, 2.0)
 	for _step in 120:
+		_set_smoke_solar(native, simulation_seconds)
 		native.call(&"step_global", 90.0)
+		simulation_seconds += 90.0
 	for tuning_key: StringName in tuning_keys:
 		native.call(&"set_tuning_weight", tuning_key, 0.0)
 	for _step in 120:
+		_set_smoke_solar(native, simulation_seconds)
 		native.call(&"step_global", 90.0)
+		simulation_seconds += 90.0
 	var extreme_weather: PackedFloat32Array = native.call(&"get_global_weather_rgba")
 	for i in extreme_weather.size():
 		if not is_finite(extreme_weather[i]) or extreme_weather[i] < 0.0 or extreme_weather[i] > 1.0:
@@ -154,6 +168,32 @@ func _ready() -> void:
 	print("WEATHER_TUNING_SMOKE_OK mean cloud/storm/precip/pressure = %.4f %.4f %.4f %.4f; polar span %.6f" % [
 		channel_mean[0], channel_mean[1], channel_mean[2], channel_mean[3], polar_pressure_span])
 	get_tree().quit(0)
+
+
+func _build_smoke_surface_fields() -> PackedFloat32Array:
+	var fields := PackedFloat32Array()
+	fields.resize(256 * 128 * 4)
+	for y in 128:
+		var lat := PI * (0.5 - (float(y) + 0.5) / 128.0)
+		for x in 256:
+			var lon := TAU * (float(x) + 0.5) / 256.0
+			var terrain := sin(2.0 * lon + 0.35 * sin(lat * 3.0)) \
+				+ 0.55 * cos(5.0 * lon - 1.7 * lat) - 0.35 * absf(lat)
+			var water := smoothstep(-0.08, -0.30, terrain)
+			var offset := (x + y * 256) * 4
+			fields[offset] = lerpf(maxf(terrain, 0.0) * 850.0, -2200.0, water)
+			fields[offset + 1] = water
+			fields[offset + 2] = lerpf(0.42 + 0.18 * cos(lat), 1.0, water)
+			fields[offset + 3] = lerpf(0.19 + 0.07 * absf(sin(lat)), 0.065, water)
+	return fields
+
+
+func _set_smoke_solar(native: Object, simulation_seconds: float) -> void:
+	var angle := fmod(simulation_seconds * TAU / (11.5 * 3600.0), TAU)
+	var declination := deg_to_rad(8.0)
+	native.call(&"set_solar_forcing", Vector3(
+		cos(declination) * cos(angle), sin(declination),
+		cos(declination) * sin(angle)), 1420.0, deg_to_rad(0.266))
 
 
 func fail_test(message: String) -> void:

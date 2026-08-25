@@ -50,17 +50,30 @@ static constexpr std::array<int, 10> HORIZON_MARCH_CELLS = {
 };
 
 static constexpr std::array<float, WeatherNative::LAYERS> WIND_DRAG_TAU_S = {
-	28800.0f, 43200.0f, 64800.0f, 129600.0f, 259200.0f, 432000.0f
+	172800.0f, 259200.0f, 388800.0f, 691200.0f, 1209600.0f, 1900800.0f
 };
 static constexpr std::array<float, WeatherNative::LAYERS> THERMAL_RELAX_TAU_S = {
 	172800.0f, 216000.0f, 259200.0f, 345600.0f, 518400.0f, 691200.0f
 };
 static constexpr std::array<float, WeatherNative::LAYERS> MOISTURE_RELAX_TAU_S = {
-	43200.0f, 86400.0f, 172800.0f, 259200.0f, 345600.0f, 432000.0f
+	86400.0f, 129600.0f, 216000.0f, 345600.0f, 518400.0f, 691200.0f
 };
 
 static inline float relaxation_fraction(float dt, float tau, float weight) {
 	return 1.0f - std::exp(-std::max(weight, 0.0f) * dt / tau);
+}
+
+static inline float spherical_vector_sign(int y, int h) {
+	float sign = 1.0f;
+	while (y < 0 || y >= h) {
+		if (y < 0) {
+			y = -y - 1;
+		} else {
+			y = 2 * h - y - 1;
+		}
+		sign = -sign;
+	}
+	return sign;
 }
 
 static inline float smoothstep01(float x) {
@@ -208,6 +221,7 @@ void WeatherNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("step_global", "dt"), &WeatherNative::step_global);
 	ClassDB::bind_method(D_METHOD("set_local_center", "center_dir"), &WeatherNative::set_local_center);
 	ClassDB::bind_method(D_METHOD("step_local", "dt"), &WeatherNative::step_local);
+	ClassDB::bind_method(D_METHOD("reset_local_from_global"), &WeatherNative::reset_local_from_global);
 	ClassDB::bind_method(D_METHOD("get_global_weather_rgba"), &WeatherNative::get_global_weather_rgba);
 	ClassDB::bind_method(D_METHOD("get_local_weather_rgba"), &WeatherNative::get_local_weather_rgba);
 	ClassDB::bind_method(D_METHOD("get_global_diagnostics_rgba"), &WeatherNative::get_global_diagnostics_rgba);
@@ -227,6 +241,8 @@ void WeatherNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_solar_forcing", "sun_direction_body", "irradiance_w_m2", "angular_radius_rad"), &WeatherNative::set_solar_forcing);
 	ClassDB::bind_method(D_METHOD("get_global_surface_rgba"), &WeatherNative::get_global_surface_rgba);
 	ClassDB::bind_method(D_METHOD("get_local_surface_rgba"), &WeatherNative::get_local_surface_rgba);
+	ClassDB::bind_method(D_METHOD("get_global_products_rgba"), &WeatherNative::get_global_products_rgba);
+	ClassDB::bind_method(D_METHOD("get_local_products_rgba"), &WeatherNative::get_local_products_rgba);
 }
 
 float WeatherNative::clamp01(float x) {
@@ -282,6 +298,7 @@ float WeatherNative::qsat_scalar(float temperature_k, float pressure_pa) {
 
 void WeatherNative::initialize(int64_t p_seed) {
 	seed = uint64_t(p_seed);
+	global_simulation_seconds = 0.0;
 	initialize_global();
 	center_global_pressure(global_atm.pressure);
 	diagnose(global_atm, true);
@@ -507,44 +524,100 @@ void WeatherNative::step_global(float dt) {
 	center_global_pressure(global_atm.npressure);
 	swap_state(global_atm);
 	diagnose(global_atm, true);
+	global_simulation_seconds += double(dt);
 }
 
 void WeatherNative::filter_global_poles(Atmosphere &a) {
 	// Longitude rings contain progressively less independent information as their
-	// circumference shrinks. The old solver hid that fact by inflating dx. Retain
-	// the true metric and instead blend unresolved zonal structure toward each
-	// ring mean over the final ~11.5 degrees, equivalent to a simple reduced grid.
-	constexpr float filter_cos_limit = 0.20f;
-	auto filter_row = [&](std::vector<float> &field, int offset, int y, float blend) {
+	// circumference shrinks. Retain the true metric, but average each polar ring
+	// over a continuously widening longitude footprint. This is the finite-volume
+	// equivalent of a reduced grid: at least two equatorial cell widths contribute
+	// everywhere, without introducing a hard cap edge or erasing planetary waves.
+	std::vector<float> row_buffer(a.width);
+	auto filter_row = [&](std::vector<float> &field, int offset, int y,
+			int radius, float fractional_blend) {
+		const int row = offset + y * a.width;
+		const int samples = radius * 2 + 1;
 		double sum = 0.0;
-		int row = offset + y * a.width;
-		for (int x = 0; x < a.width; ++x) sum += field[row + x];
-		float mean = float(sum / double(a.width));
-		for (int x = 0; x < a.width; ++x) {
-			field[row + x] = std::lerp(field[row + x], mean, blend);
+		for (int k = -radius; k <= radius; ++k) {
+			sum += field[row + wrap_x(k, a.width)];
 		}
+		for (int x = 0; x < a.width; ++x) {
+			row_buffer[x] = std::lerp(field[row + x], float(sum / samples), fractional_blend);
+			sum -= field[row + wrap_x(x - radius, a.width)];
+			sum += field[row + wrap_x(x + radius + 1, a.width)];
+		}
+		std::copy(row_buffer.begin(), row_buffer.end(), field.begin() + row);
 	};
 
 	for (int y = 0; y < a.height; ++y) {
 		float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(a.height);
-		float coslat = std::cos(lat);
-		if (coslat >= filter_cos_limit) continue;
-		float blend = smoothstep01((filter_cos_limit - coslat) / filter_cos_limit);
+		float coslat = std::max(std::cos(lat), 1.0e-4f);
+		float desired_radius = std::max(1.0f / coslat - 0.5f, 0.0f);
+		if (desired_radius < 1.0f) continue;
+		int radius = std::min(int(std::ceil(desired_radius)), a.width / 2);
+		float blend = std::clamp(desired_radius - float(radius - 1), 0.0f, 1.0f);
 		for (int layer = 0; layer < LAYERS; ++layer) {
 			int off = a.layer_offset(layer);
-			filter_row(a.ntheta, off, y, blend);
-			filter_row(a.nq, off, y, blend);
-			filter_row(a.nu, off, y, blend);
-			filter_row(a.nv, off, y, blend);
-			filter_row(a.nliquid, off, y, blend);
-			filter_row(a.nice, off, y, blend);
-			filter_row(a.npressure, off, y, blend);
+			filter_row(a.ntheta, off, y, radius, blend);
+			filter_row(a.nq, off, y, radius, blend);
+			filter_row(a.nu, off, y, radius, blend);
+			filter_row(a.nv, off, y, radius, blend);
+			filter_row(a.nliquid, off, y, radius, blend);
+			filter_row(a.nice, off, y, radius, blend);
+			filter_row(a.npressure, off, y, radius, blend);
 		}
-		filter_row(a.nprecip, 0, y, blend);
+		filter_row(a.nprecip, 0, y, radius, blend);
 		for (int interface_index = 0; interface_index < INTERFACES; ++interface_index) {
-			filter_row(a.mass_flux, a.interface_offset(interface_index), y, blend);
+			filter_row(a.mass_flux, a.interface_offset(interface_index), y, radius, blend);
+		}
+		// A northward vector cannot cross the coordinate singularity unchanged.
+		// Only the innermost cell is tapered; the continuous filter handles the rest.
+		float pole_taper = std::clamp(coslat * float(a.height), 0.0f, 1.0f);
+		if (pole_taper < 1.0f) {
+			for (int layer = 0; layer < LAYERS; ++layer) {
+				int row = a.layer_offset(layer) + y * a.width;
+				for (int x = 0; x < a.width; ++x) a.nv[row + x] *= pole_taper;
+			}
 		}
 	}
+
+	// The meridional spacing stays finite at the pole, but the two innermost
+	// rings share an ever larger fraction of the same physical control volume.
+	// Diffuse them together with a strength that rises continuously from zero at
+	// 60 degrees. Vector ghosts receive the basis sign used by the dynamics.
+	std::vector<float> meridional_source;
+	auto meridional_filter = [&](std::vector<float> &field, float peak_strength,
+			bool vector_component) {
+		meridional_source.assign(field.begin(), field.end());
+		for (int y = 0; y < a.height; ++y) {
+			float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(a.height);
+			float coslat = std::cos(lat);
+			if (coslat >= 0.5f) continue;
+			float strength = peak_strength * (1.0f - smoothstep01(coslat / 0.5f));
+			float north_basis = vector_component ? spherical_vector_sign(y - 1, a.height) : 1.0f;
+			float south_basis = vector_component ? spherical_vector_sign(y + 1, a.height) : 1.0f;
+			for (int layer = 0; layer < int(field.size()) / (a.width * a.height); ++layer) {
+				int off = layer * a.width * a.height;
+				for (int x = 0; x < a.width; ++x) {
+					int c = off + x + y * a.width;
+					float north = meridional_source[off + spherical_cell(x, y - 1, a.width, a.height)] * north_basis;
+					float south = meridional_source[off + spherical_cell(x, y + 1, a.width, a.height)] * south_basis;
+					float average = 0.25f * north + 0.5f * meridional_source[c] + 0.25f * south;
+					field[c] = std::lerp(meridional_source[c], average, strength);
+				}
+			}
+		}
+	};
+	meridional_filter(a.npressure, 0.58f, false);
+	meridional_filter(a.nu, 0.44f, true);
+	meridional_filter(a.nv, 0.44f, true);
+	meridional_filter(a.ntheta, 0.18f, false);
+	meridional_filter(a.nq, 0.18f, false);
+	meridional_filter(a.nliquid, 0.18f, false);
+	meridional_filter(a.nice, 0.18f, false);
+	meridional_filter(a.nprecip, 0.18f, false);
+	meridional_filter(a.mass_flux, 0.36f, false);
 }
 
 void WeatherNative::center_global_pressure(std::vector<float> &pressure) {
@@ -589,7 +662,11 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		_mm256_storeu_ps(&a.nprecip[i], _mm256_mul_ps(p, _mm256_set1_ps(precip_memory)));
 	}
 
-	alignas(32) int adv_idx[8], east_idx[8], west_idx[8], north_idx[8], south_idx[8];
+	alignas(32) int adv00_idx[8], adv10_idx[8], adv01_idx[8], adv11_idx[8];
+	alignas(32) int east_idx[8], west_idx[8], north_idx[8], south_idx[8];
+	alignas(32) float adv_fx[8], adv_fy[8], target_u_lane[8], target_v_lane[8];
+	alignas(32) float adv00_sign[8], adv10_sign[8], adv01_sign[8], adv11_sign[8];
+	alignas(32) float north_sign[8], south_sign[8];
 
 	for (int layer = 0; layer < LAYERS; ++layer) {
 		const int off = a.layer_offset(layer);
@@ -602,9 +679,9 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		const float theta_relax = relaxation_fraction(dt, THERMAL_RELAX_TAU_S[layer], temperature_weight);
 		const float q_relax = relaxation_fraction(dt, MOISTURE_RELAX_TAU_S[layer], humidity_weight);
 		const float cond_frac = std::min(cloud_weight * dt / 120.0f, 1.0f);
-		const float cloud_decay = std::exp(-cloud_weight * dt / 10800.0f);
-		const float pressure_relax = relaxation_fraction(dt, 18000.0f, circulation_weight);
-		const float pressure_smooth = relaxation_fraction(dt, 1950.0f, 1.0f);
+		const float cloud_decay = std::exp(-cloud_weight * dt / 57600.0f);
+		const float pressure_relax = relaxation_fraction(dt, 129600.0f, circulation_weight);
+		const float pressure_smooth = relaxation_fraction(dt, 3600.0f, 1.0f);
 
 		for (int y = 0; y < h; ++y) {
 			float lat = is_global
@@ -629,18 +706,57 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				* std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
 			target_u += -9.0f * (1.0f - upper * 0.55f)
 				* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));
+			float wave_envelope = std::exp(-std::pow((alat - 0.66f) / 0.36f, 2.0f));
+			float seed_phase = float(seed & 0xffffu) * 0.000173f;
+			float wave_translation = float(global_simulation_seconds / 86400.0) * 0.349066f;
 
 			for (int x = 0; x < w; x += 8) {
 				for (int k = 0; k < 8; ++k) {
 					int xx = x + k;
+					if (is_global) {
+						float lon = TAU_F * (float(xx) + 0.5f) / float(w);
+						float phase3 = 3.0f * (lon - wave_translation) + 1.7f * lat + seed_phase;
+						float phase5 = 5.0f * (lon - wave_translation * 1.15f) - 1.2f * lat + seed_phase * 0.37f;
+						float phase7 = 7.0f * (lon - wave_translation * 0.82f) + 0.8f * lat - seed_phase * 0.21f;
+						float amplitude = wave_envelope * (5.0f + 7.0f * upper);
+						target_u_lane[k] = target_u + amplitude * std::cos(phase3)
+							+ amplitude * (0.32f * std::sin(phase5) + 0.16f * std::cos(phase7));
+						target_v_lane[k] = amplitude * 0.78f * std::sin(phase3)
+							+ amplitude * (0.26f * std::cos(phase5) + 0.14f * std::sin(phase7));
+					} else {
+						// The nest axes are transported tangent-plane axes, not geographic
+						// east/north. Its large-scale circulation enters through the rim.
+						target_u_lane[k] = 0.0f;
+						target_v_lane[k] = 0.0f;
+					}
 					int c = is_global ? global_cell(xx, y) : local_cell(xx, y);
 					float cu = a.u[off + c];
 					float cv = a.v[off + c];
-					int ax = is_global
-						? wrap_x(int(std::floor(float(xx) - cu * dt / dx)), w)
-						: std::clamp(int(std::floor(float(xx) - cu * dt / dx)), 0, w - 1);
-					int ay = int(std::floor(float(y) + (is_global ? cv : -cv) * dt / dy));
-					adv_idx[k] = is_global ? spherical_cell(ax, ay, w, h) : local_cell(ax, ay);
+					float source_x = float(xx) - cu * dt / dx;
+					float source_y = float(y) + (is_global ? cv : -cv) * dt / dy;
+					if (!is_global) {
+						source_x = std::clamp(source_x, 0.0f, float(w - 1));
+						source_y = std::clamp(source_y, 0.0f, float(h - 1));
+					}
+					int x0 = int(std::floor(source_x));
+					int y0 = int(std::floor(source_y));
+					adv_fx[k] = source_x - float(x0);
+					adv_fy[k] = source_y - float(y0);
+					if (is_global) {
+						adv00_idx[k] = spherical_cell(x0, y0, w, h);
+						adv10_idx[k] = spherical_cell(x0 + 1, y0, w, h);
+						adv01_idx[k] = spherical_cell(x0, y0 + 1, w, h);
+						adv11_idx[k] = spherical_cell(x0 + 1, y0 + 1, w, h);
+						adv00_sign[k] = adv10_sign[k] = spherical_vector_sign(y0, h);
+						adv01_sign[k] = adv11_sign[k] = spherical_vector_sign(y0 + 1, h);
+					} else {
+						adv00_idx[k] = local_cell(x0, y0);
+						adv10_idx[k] = local_cell(x0 + 1, y0);
+						adv01_idx[k] = local_cell(x0, y0 + 1);
+						adv11_idx[k] = local_cell(x0 + 1, y0 + 1);
+						adv00_sign[k] = adv10_sign[k] = 1.0f;
+						adv01_sign[k] = adv11_sign[k] = 1.0f;
+					}
 					east_idx[k] = (is_global ? wrap_x(xx + 1, w) : std::min(xx + 1, w - 1)) + y * w;
 					west_idx[k] = (is_global ? wrap_x(xx - 1, w) : std::max(xx - 1, 0)) + y * w;
 					north_idx[k] = is_global
@@ -649,9 +765,24 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 					south_idx[k] = is_global
 						? spherical_cell(xx, y + 1, w, h)
 						: xx + std::max(y - 1, 0) * w;
+					north_sign[k] = is_global ? spherical_vector_sign(y - 1, h) : 1.0f;
+					south_sign[k] = is_global ? spherical_vector_sign(y + 1, h) : 1.0f;
 				}
 
-				__m256i ai = _mm256_load_si256(reinterpret_cast<const __m256i *>(adv_idx));
+				__m256i a00i = _mm256_load_si256(reinterpret_cast<const __m256i *>(adv00_idx));
+				__m256i a10i = _mm256_load_si256(reinterpret_cast<const __m256i *>(adv10_idx));
+				__m256i a01i = _mm256_load_si256(reinterpret_cast<const __m256i *>(adv01_idx));
+				__m256i a11i = _mm256_load_si256(reinterpret_cast<const __m256i *>(adv11_idx));
+				__m256 fxv = _mm256_load_ps(adv_fx);
+				__m256 fyv = _mm256_load_ps(adv_fy);
+				__m256 a00sv = _mm256_load_ps(adv00_sign);
+				__m256 a10sv = _mm256_load_ps(adv10_sign);
+				__m256 a01sv = _mm256_load_ps(adv01_sign);
+				__m256 a11sv = _mm256_load_ps(adv11_sign);
+				__m256 north_sv = _mm256_load_ps(north_sign);
+				__m256 south_sv = _mm256_load_ps(south_sign);
+				__m256 target_uv = _mm256_load_ps(target_u_lane);
+				__m256 target_vv = _mm256_load_ps(target_v_lane);
 				__m256i ei = _mm256_load_si256(reinterpret_cast<const __m256i *>(east_idx));
 				__m256i wi = _mm256_load_si256(reinterpret_cast<const __m256i *>(west_idx));
 				__m256i ni = _mm256_load_si256(reinterpret_cast<const __m256i *>(north_idx));
@@ -666,13 +797,28 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				const float *p_base = a.pressure.data() + off;
 				int base = x + y * w;
 
-				__m256 theta = _mm256_i32gather_ps(theta_base, ai, 4);
-				__m256 q = _mm256_i32gather_ps(q_base, ai, 4);
-				__m256 u = _mm256_i32gather_ps(u_base, ai, 4);
-				__m256 v = _mm256_i32gather_ps(v_base, ai, 4);
-				__m256 liquid = _mm256_i32gather_ps(liq_base, ai, 4);
-				__m256 ice = _mm256_i32gather_ps(ice_base, ai, 4);
-				__m256 pressure = _mm256_i32gather_ps(p_base, ai, 4);
+				auto advect = [&](const float *field, bool vector_component = false) {
+					__m256 a00 = _mm256_i32gather_ps(field, a00i, 4);
+					__m256 a10 = _mm256_i32gather_ps(field, a10i, 4);
+					__m256 a01 = _mm256_i32gather_ps(field, a01i, 4);
+					__m256 a11 = _mm256_i32gather_ps(field, a11i, 4);
+					if (vector_component) {
+						a00 = _mm256_mul_ps(a00, a00sv);
+						a10 = _mm256_mul_ps(a10, a10sv);
+						a01 = _mm256_mul_ps(a01, a01sv);
+						a11 = _mm256_mul_ps(a11, a11sv);
+					}
+					__m256 row0 = _mm256_fmadd_ps(fxv, _mm256_sub_ps(a10, a00), a00);
+					__m256 row1 = _mm256_fmadd_ps(fxv, _mm256_sub_ps(a11, a01), a01);
+					return _mm256_fmadd_ps(fyv, _mm256_sub_ps(row1, row0), row0);
+				};
+				__m256 theta = advect(theta_base);
+				__m256 q = advect(q_base);
+				__m256 u = advect(u_base, true);
+				__m256 v = advect(v_base, true);
+				__m256 liquid = advect(liq_base);
+				__m256 ice = advect(ice_base);
+				__m256 pressure = advect(p_base);
 
 				__m256 pe = _mm256_i32gather_ps(p_base, ei, 4);
 				__m256 pw = _mm256_i32gather_ps(p_base, wi, 4);
@@ -686,6 +832,10 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				__m256 vw = _mm256_i32gather_ps(v_base, wi, 4);
 				__m256 vn = _mm256_i32gather_ps(v_base, ni, 4);
 				__m256 vs = _mm256_i32gather_ps(v_base, si, 4);
+				un = _mm256_mul_ps(un, north_sv);
+				us = _mm256_mul_ps(us, south_sv);
+				vn = _mm256_mul_ps(vn, north_sv);
+				vs = _mm256_mul_ps(vs, south_sv);
 				__m256 center_u = _mm256_loadu_ps(&a.u[off + base]);
 				__m256 center_v = _mm256_loadu_ps(&a.v[off + base]);
 
@@ -715,7 +865,10 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 					_mm256_set1_ps(dt), v);
 				u = _mm256_mul_ps(u, _mm256_set1_ps(wind_damp));
 				v = _mm256_mul_ps(v, _mm256_set1_ps(wind_damp));
-				u = _mm256_fmadd_ps(_mm256_sub_ps(_mm256_set1_ps(target_u), u), _mm256_set1_ps(wind_relax), u);
+				if (is_global) {
+					u = _mm256_fmadd_ps(_mm256_sub_ps(target_uv, u), _mm256_set1_ps(wind_relax), u);
+					v = _mm256_fmadd_ps(_mm256_sub_ps(target_vv, v), _mm256_set1_ps(wind_relax), v);
+				}
 
 				// Thermodynamic relaxation supplies large-scale radiative/surface forcing.
 				theta = _mm256_fmadd_ps(_mm256_sub_ps(_mm256_set1_ps(clim_theta), theta), _mm256_set1_ps(theta_relax), theta);
@@ -726,10 +879,10 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				__m256 thermal = _mm256_sub_ps(theta, _mm256_set1_ps(clim_theta));
 				__m256 moisture = _mm256_sub_ps(q, _mm256_set1_ps(clim_q));
 				__m256 target_p = _mm256_sub_ps(
-					_mm256_mul_ps(thermal, _mm256_set1_ps(-70.0f * sigma)),
-					_mm256_mul_ps(moisture, _mm256_set1_ps(12000.0f)));
+					_mm256_mul_ps(thermal, _mm256_set1_ps(-900.0f * sigma)),
+					_mm256_mul_ps(moisture, _mm256_set1_ps(120000.0f)));
 				pressure = _mm256_fmadd_ps(_mm256_sub_ps(target_p, pressure), _mm256_set1_ps(pressure_relax), pressure);
-				pressure = _mm256_fnmadd_ps(div, _mm256_set1_ps(3000.0f * sigma * dt * circulation_weight), pressure);
+				pressure = _mm256_fnmadd_ps(div, _mm256_set1_ps(8000.0f * sigma * dt * circulation_weight), pressure);
 				__m256 pavg = _mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(pe, pw), _mm256_add_ps(pn, ps)), _mm256_set1_ps(0.25f));
 				pressure = _mm256_fmadd_ps(_mm256_sub_ps(pavg, pressure), _mm256_set1_ps(pressure_smooth), pressure);
 
@@ -739,7 +892,23 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				__m256 pabs = clamp8(_mm256_add_ps(_mm256_set1_ps(P0 * sigma), pressure), 12000.0f, 115000.0f);
 				__m256 qsat = qsat8(temperature, pabs);
 				__m256 supersat = _mm256_max_ps(_mm256_sub_ps(q, qsat), zero);
-				__m256 cond = _mm256_mul_ps(supersat, _mm256_set1_ps(cond_frac));
+				__m256 resolved_cond = _mm256_mul_ps(supersat, _mm256_set1_ps(cond_frac));
+				// A grid box becomes partly cloudy before its mean humidity reaches
+				// saturation. Slowly condense the sub-grid saturated fraction while
+				// retaining the fast resolved-supersaturation adjustment above.
+				__m256 subgrid_excess = _mm256_max_ps(
+					_mm256_sub_ps(q, _mm256_mul_ps(qsat, _mm256_set1_ps(0.68f))), zero);
+				__m256 subgrid_cond = _mm256_mul_ps(
+					subgrid_excess, _mm256_set1_ps(std::min(cloud_weight * dt / 43200.0f, 0.02f)));
+				// Resolved convergence concentrates vapour along fronts. Coupling a
+				// small part of that compression directly to condensate preserves the
+				// narrow comma bands that a six-level grid would otherwise smear out.
+				__m256 convergent_fraction = clamp8(_mm256_mul_ps(
+					_mm256_max_ps(_mm256_sub_ps(zero, div), zero),
+					_mm256_set1_ps(dt * 0.16f * cloud_weight)), 0.0f, 0.015f);
+				__m256 convergence_cond = _mm256_mul_ps(q, convergent_fraction);
+				__m256 cond = _mm256_min_ps(q,
+					_mm256_add_ps(_mm256_max_ps(resolved_cond, subgrid_cond), convergence_cond));
 				q = _mm256_sub_ps(q, cond);
 				__m256 ice_frac = clamp8(_mm256_mul_ps(_mm256_sub_ps(_mm256_set1_ps(268.0f), temperature), _mm256_set1_ps(1.0f / 20.0f)), 0.0f, 1.0f);
 				liquid = _mm256_fmadd_ps(cond, _mm256_sub_ps(_mm256_set1_ps(1.0f), ice_frac), liquid);
@@ -747,7 +916,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				theta = _mm256_fmadd_ps(cond, _mm256_set1_ps(2500.0f / sf), theta);
 
 				// Sub-saturated air re-evaporates cloud water, cooling the layer.
-				__m256 deficit = _mm256_max_ps(_mm256_sub_ps(_mm256_mul_ps(qsat, _mm256_set1_ps(0.82f)), q), zero);
+				__m256 deficit = _mm256_max_ps(_mm256_sub_ps(_mm256_mul_ps(qsat, _mm256_set1_ps(0.70f)), q), zero);
 				__m256 cloud_total = _mm256_add_ps(liquid, ice);
 				__m256 evap = _mm256_min_ps(cloud_total, _mm256_mul_ps(deficit, _mm256_set1_ps(std::min(cloud_weight * dt / 420.0f, 0.35f))));
 				__m256 liquid_share = _mm256_div_ps(liquid, _mm256_max_ps(cloud_total, _mm256_set1_ps(1e-7f)));
@@ -770,8 +939,8 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				theta = _mm256_fmadd_ps(_mm256_sub_ps(freeze, melt), _mm256_set1_ps(333.0f / sf), theta);
 
 				// Autoconversion/fallout. Upper ice falls more slowly than warm rain.
-				__m256 rain_excess = _mm256_max_ps(_mm256_sub_ps(liquid, _mm256_set1_ps(0.00115f)), zero);
-				__m256 snow_excess = _mm256_max_ps(_mm256_sub_ps(ice, _mm256_set1_ps(0.00075f)), zero);
+				__m256 rain_excess = _mm256_max_ps(_mm256_sub_ps(liquid, _mm256_set1_ps(0.00010f)), zero);
+				__m256 snow_excess = _mm256_max_ps(_mm256_sub_ps(ice, _mm256_set1_ps(0.00007f)), zero);
 				__m256 rain_out = _mm256_mul_ps(rain_excess, _mm256_set1_ps(std::min(precipitation_weight * dt / 650.0f, 0.35f)));
 				__m256 snow_out = _mm256_mul_ps(snow_excess, _mm256_set1_ps(std::min(precipitation_weight * dt / 1300.0f, 0.25f)));
 				liquid = _mm256_sub_ps(liquid, rain_out);
@@ -781,7 +950,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 
 				__m256 pcol = _mm256_loadu_ps(&a.nprecip[base]);
 				__m256 fallout = _mm256_add_ps(rain_out, _mm256_mul_ps(snow_out, _mm256_set1_ps(0.70f)));
-				pcol = _mm256_add_ps(pcol, _mm256_mul_ps(fallout, _mm256_set1_ps(460.0f)));
+				pcol = _mm256_add_ps(pcol, _mm256_mul_ps(fallout, _mm256_set1_ps(3600.0f)));
 				_mm256_storeu_ps(&a.nprecip[base], clamp8(pcol, 0.0f, 1.0f));
 
 				_mm256_storeu_ps(&a.ntheta[off + base], clamp8(theta, 220.0f, 430.0f));
@@ -868,7 +1037,7 @@ void WeatherNative::surface_pass(Atmosphere &a, SurfaceState &surface, bool is_g
 			int i = a.layer_offset(layer) + c;
 			condensate += (a.nliquid[i] + a.nice[i]) * layer_weights[layer];
 		}
-		float cloud = std::clamp(1.0f - std::exp(-condensate * 700.0f), 0.0f, 1.0f);
+		float cloud = std::clamp(1.0f - std::exp(-condensate * 1800.0f), 0.0f, 1.0f);
 
 		float sun_dot = d.dot(solar_direction_body);
 		float radial_mu = std::max(sun_dot, 0.0f);
@@ -1030,7 +1199,7 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 			__m256 instability = clamp8(_mm256_mul_ps(_mm256_add_ps(_mm256_sub_ps(th_lo, th_hi), _mm256_set1_ps(1.5f)), _mm256_set1_ps(1.0f / 10.0f)), 0.0f, 1.0f);
 			__m256 moisture = clamp8(_mm256_mul_ps(q_lo, _mm256_set1_ps(1.0f / 0.018f)), 0.0f, 1.0f);
 			__m256 convergence_up = _mm256_mul_ps(_mm256_max_ps(_mm256_sub_ps(zero, div_lo), zero), _mm256_set1_ps(0.58f * convection_weight));
-			__m256 convective_up = _mm256_mul_ps(_mm256_mul_ps(instability, moisture), _mm256_set1_ps(2.2e-4f * convection_weight));
+			__m256 convective_up = _mm256_mul_ps(_mm256_mul_ps(instability, moisture), _mm256_set1_ps(3.2e-4f * convection_weight));
 			// Positive sensible heat at the lower boundary is an explicit buoyancy
 			// source for interface 0. This turns differential slope heating into
 			// resolved upslope/thermal circulation instead of relying only on delayed
@@ -1097,6 +1266,7 @@ void WeatherNative::diagnose(Atmosphere &a, bool is_global) {
 	const int h = a.height;
 	const float local_lat = std::asin(std::clamp(local_center.y, -1.0f, 1.0f));
 	alignas(32) int east_idx[8], west_idx[8], north_idx[8], south_idx[8];
+	alignas(32) float north_sign[8], south_sign[8];
 
 	for (int layer = 0; layer < LAYERS; ++layer) {
 		int off = a.layer_offset(layer);
@@ -1125,6 +1295,8 @@ void WeatherNative::diagnose(Atmosphere &a, bool is_global) {
 					south_idx[k] = is_global
 						? spherical_cell(xx, y + 1, w, h)
 						: xx + std::max(y - 1, 0) * w;
+					north_sign[k] = is_global ? spherical_vector_sign(y - 1, h) : 1.0f;
+					south_sign[k] = is_global ? spherical_vector_sign(y + 1, h) : 1.0f;
 				}
 				__m256i ei = _mm256_load_si256(reinterpret_cast<const __m256i *>(east_idx));
 				__m256i wi = _mm256_load_si256(reinterpret_cast<const __m256i *>(west_idx));
@@ -1140,6 +1312,12 @@ void WeatherNative::diagnose(Atmosphere &a, bool is_global) {
 				__m256 vw = _mm256_i32gather_ps(v_base, wi, 4);
 				__m256 vn = _mm256_i32gather_ps(v_base, ni, 4);
 				__m256 vs = _mm256_i32gather_ps(v_base, si, 4);
+				__m256 north_sv = _mm256_load_ps(north_sign);
+				__m256 south_sv = _mm256_load_ps(south_sign);
+				un = _mm256_mul_ps(un, north_sv);
+				us = _mm256_mul_ps(us, south_sv);
+				vn = _mm256_mul_ps(vn, north_sv);
+				vs = _mm256_mul_ps(vs, south_sv);
 				int base = x + y * w;
 				__m256 center_u = _mm256_loadu_ps(&a.u[off + base]);
 				__m256 center_v = _mm256_loadu_ps(&a.v[off + base]);
@@ -1470,8 +1648,12 @@ void WeatherNative::step_local(float dt) {
 	diagnose(local_atm, false);
 }
 
+void WeatherNative::reset_local_from_global() {
+	initialize_local();
+}
+
 static PackedFloat32Array weather_rgba_from(const WeatherNative::Atmosphere &a,
-		const std::array<float, WeatherNative::LAYERS> &layer_weights) {
+		const std::array<float, WeatherNative::LAYERS> &layer_weights, bool is_global) {
 	PackedFloat32Array out;
 	out.resize(a.cells * 4);
 	float *w = out.ptrw();
@@ -1493,14 +1675,22 @@ static PackedFloat32Array weather_rgba_from(const WeatherNative::Atmosphere &a,
 		int l2 = a.layer_offset(2) + c;
 		float instability = std::clamp((a.theta[l0] - a.theta[l2] + 1.5f) / 11.0f, 0.0f, 1.0f);
 		float moisture = std::clamp(a.q[l0] / 0.018f, 0.0f, 1.0f);
-		float ascent = std::clamp(max_ascent / 5.0e-4f, 0.0f, 1.0f);
-		float rotation = std::clamp(max_rotation / 0.0016f, 0.0f, 1.0f);
-		float shear = std::clamp(max_shear / 38.0f, 0.0f, 1.0f);
-		float storm = std::clamp((0.36f * ascent + 0.24f * instability + 0.20f * rotation + 0.20f * shear) * (0.35f + 0.65f * moisture), 0.0f, 1.0f);
+		float ascent = std::clamp(max_ascent / 2.5e-4f, 0.0f, 1.0f);
+		float rotation = std::clamp(max_rotation / 0.00030f, 0.0f, 1.0f);
+		float shear = std::clamp(max_shear / 30.0f, 0.0f, 1.0f);
+		float polar_resolution = 1.0f;
+		if (is_global) {
+			int y = c / a.width;
+			float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(a.height);
+			polar_resolution = smoothstep01(std::cos(lat) / 0.20f);
+		}
+		float storm = std::clamp(polar_resolution
+			* (0.36f * ascent + 0.24f * instability + 0.20f * rotation + 0.20f * shear)
+			* (0.35f + 0.65f * moisture), 0.0f, 1.0f);
 		// Exponential random-overlap closure: the calibrated coefficient gives a
 		// roughly 60% global cloud fraction after spin-up, close to Earth's
 		// observed whole-sky climatology without forcing every column overcast.
-		float cloud = std::clamp(1.0f - std::exp(-condensate * 800.0f) + storm * 0.18f, 0.0f, 1.0f);
+		float cloud = std::clamp(1.0f - std::exp(-condensate * 4000.0f) + storm * 0.14f, 0.0f, 1.0f);
 		w[c * 4 + 0] = cloud;
 		w[c * 4 + 1] = storm;
 		w[c * 4 + 2] = std::clamp(a.precip[c], 0.0f, 1.0f);
@@ -1509,11 +1699,17 @@ static PackedFloat32Array weather_rgba_from(const WeatherNative::Atmosphere &a,
 	return out;
 }
 
-static PackedFloat32Array diagnostics_rgba_from(const WeatherNative::Atmosphere &a) {
+static PackedFloat32Array diagnostics_rgba_from(const WeatherNative::Atmosphere &a, bool is_global) {
 	PackedFloat32Array out;
 	out.resize(a.cells * 4);
 	float *w = out.ptrw();
 	for (int c = 0; c < a.cells; ++c) {
+		float polar_resolution = 1.0f;
+		if (is_global) {
+			int y = c / a.width;
+			float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(a.height);
+			polar_resolution = smoothstep01(std::cos(lat) / 0.20f);
+		}
 		// Select the strongest signed low/mid-level rotation so cyclonic and
 		// anticyclonic structures remain visible instead of cancelling vertically.
 		float vort = 0.0f;
@@ -1527,28 +1723,28 @@ static PackedFloat32Array diagnostics_rgba_from(const WeatherNative::Atmosphere 
 		for (int layer = 0; layer < WeatherNative::LAYERS; ++layer) {
 			shear = std::max(shear, a.shear[a.layer_offset(layer) + c]);
 		}
-		w[c * 4 + 0] = std::clamp(0.5f + vort / 0.008f, 0.0f, 1.0f);
-		w[c * 4 + 1] = std::clamp(0.5f + div / 0.006f, 0.0f, 1.0f);
-		w[c * 4 + 2] = std::clamp(0.5f + pv / 0.030f, 0.0f, 1.0f);
-		w[c * 4 + 3] = std::clamp(shear / 55.0f, 0.0f, 1.0f);
+		w[c * 4 + 0] = std::clamp(0.5f + polar_resolution * vort / 0.0008f, 0.0f, 1.0f);
+		w[c * 4 + 1] = std::clamp(0.5f + polar_resolution * div / 0.0006f, 0.0f, 1.0f);
+		w[c * 4 + 2] = std::clamp(0.5f + polar_resolution * pv / 0.0030f, 0.0f, 1.0f);
+		w[c * 4 + 3] = std::clamp(shear / 35.0f, 0.0f, 1.0f);
 	}
 	return out;
 }
 
 PackedFloat32Array WeatherNative::get_global_weather_rgba() const {
-	return weather_rgba_from(global_atm, layer_weights);
+	return weather_rgba_from(global_atm, layer_weights, true);
 }
 
 PackedFloat32Array WeatherNative::get_local_weather_rgba() const {
-	return weather_rgba_from(local_atm, layer_weights);
+	return weather_rgba_from(local_atm, layer_weights, false);
 }
 
 PackedFloat32Array WeatherNative::get_global_diagnostics_rgba() const {
-	return diagnostics_rgba_from(global_atm);
+	return diagnostics_rgba_from(global_atm, true);
 }
 
 PackedFloat32Array WeatherNative::get_local_diagnostics_rgba() const {
-	return diagnostics_rgba_from(local_atm);
+	return diagnostics_rgba_from(local_atm, false);
 }
 
 static PackedFloat32Array surface_rgba_from(const WeatherNative::SurfaceState &surface) {
@@ -1573,6 +1769,37 @@ PackedFloat32Array WeatherNative::get_global_surface_rgba() const {
 
 PackedFloat32Array WeatherNative::get_local_surface_rgba() const {
 	return surface_rgba_from(local_surface);
+}
+
+static PackedFloat32Array products_rgba_from(const WeatherNative::Atmosphere &atmosphere,
+		const WeatherNative::SurfaceState &surface) {
+	PackedFloat32Array out;
+	out.resize(atmosphere.cells * 4);
+	float *w = out.ptrw();
+	for (int c = 0; c < atmosphere.cells; ++c) {
+		int l0 = atmosphere.layer_offset(0) + c;
+		int l2 = atmosphere.layer_offset(2) + c;
+		float air_temperature = atmosphere.theta[l0] * sigma_temperature_factor(0);
+		float instability = std::clamp(
+			(atmosphere.theta[l0] - atmosphere.theta[l2] + 1.5f) / 11.0f, 0.0f, 1.0f);
+		float moisture = std::clamp(atmosphere.q[l0] / 0.018f, 0.0f, 1.0f);
+		float cape_j_kg = 4000.0f * instability * moisture;
+		w[c * 4 + 0] = std::clamp((air_temperature - 220.0f) / 100.0f, 0.0f, 1.0f);
+		w[c * 4 + 1] = surface.water_fraction[c] >= 0.5f
+			? std::clamp((surface.temperature_k[c] - 260.0f) / 45.0f, 0.0f, 1.0f)
+			: -1.0f;
+		w[c * 4 + 2] = std::clamp(cape_j_kg / 4000.0f, 0.0f, 1.0f);
+		w[c * 4 + 3] = std::clamp(surface.absorbed_solar_w_m2[c] / 1200.0f, 0.0f, 1.0f);
+	}
+	return out;
+}
+
+PackedFloat32Array WeatherNative::get_global_products_rgba() const {
+	return products_rgba_from(global_atm, global_surface);
+}
+
+PackedFloat32Array WeatherNative::get_local_products_rgba() const {
+	return products_rgba_from(local_atm, local_surface);
 }
 
 } // namespace godot

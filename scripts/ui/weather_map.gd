@@ -5,10 +5,15 @@ extends CanvasLayer
 
 enum Product {
 	COMPOSITE,
+	SYNOPTIC,
 	CLOUD_COVER,
 	PRECIPITATION,
 	CONVECTION,
 	PRESSURE,
+	AIR_TEMPERATURE,
+	SEA_TEMPERATURE,
+	CAPE,
+	IRRADIANCE,
 	VORTICITY,
 	DIVERGENCE,
 	POTENTIAL_VORTICITY,
@@ -17,10 +22,15 @@ enum Product {
 
 const PRODUCT_NAMES := [
 	"Composite weather",
+	"Synoptic analysis",
 	"Cloud cover",
 	"Precipitation",
 	"Organised storm intensity",
 	"Surface pressure anomaly",
+	"Near-surface air temperature",
+	"Sea-surface temperature",
+	"Convective available potential energy (CAPE)",
+	"Absorbed solar irradiance",
 	"Relative vorticity",
 	"Low-level divergence",
 	"Potential-vorticity proxy",
@@ -28,21 +38,28 @@ const PRODUCT_NAMES := [
 ]
 const PRODUCT_NOTES := [
 	"Cloud shield + precipitation + organised convective cores",
+	"Pressure systems with automatic H/L and tropical/extratropical storm classification",
 	"Vertically integrated liquid/ice cloud condensate",
 	"Current model precipitation intensity",
 	"Vertical mass flux + instability + rotation + shear",
 	"Boundary-layer pressure/geopotential perturbation",
+	"Lowest model-layer air temperature",
+	"Live ocean mixed-layer skin temperature; land is left uncoloured",
+	"Parcel-buoyancy proxy from low-level moisture and model-layer instability",
+	"Solar power absorbed by the live land/ocean surface after clouds and terrain shading",
 	"Strongest signed relative vorticity across low/mid layers",
 	"Signed divergence in the low storm-inflow layer; negative = convergence",
 	"Upper-level absolute vorticity × potential-temperature stratification",
 	"Maximum adjacent-layer horizontal wind-vector difference",
 ]
 const LEGEND_LEFT := [
-	"Clear", "0 %", "None", "Stable", "-60 hPa",
+	"Clear", "Deep low", "0 %", "None", "Stable", "-60 hPa",
+	"−53 °C", "−13 °C", "0 J/kg", "0 W/m²",
 	"Anticyclonic", "Convergence", "Negative PV", "0 m/s",
 ]
 const LEGEND_RIGHT := [
-	"Severe", "100 %", "Intense", "Organised", "+60 hPa",
+	"Severe", "Strong high", "100 %", "Intense", "Organised", "+60 hPa",
+	"+47 °C", "+32 °C", "4000+ J/kg", "1200+ W/m²",
 	"Cyclonic", "Divergence", "Positive PV", "55+ m/s",
 ]
 
@@ -83,6 +100,7 @@ var simulation_weight_label: Label
 var simulation_weight_slider: HSlider
 var simulation_speed_label: Label
 var simulation_speed_slider: HSlider
+var warp_indicator_label: Label
 var tuning_panel: PanelContainer
 var tuning_button: Button
 var _tuning_sliders := {}
@@ -92,6 +110,8 @@ var _layer_value_labels: Array[Label] = []
 var _material: ShaderMaterial
 var _player: AsterraPlayer
 var _player_dir := Vector3(1, 0, 0)
+var _systems: Array[Dictionary] = []
+var _system_scan_accum := 0.0
 
 var _base_image: Image
 var _base_texture: ImageTexture
@@ -180,12 +200,12 @@ func _ready() -> void:
 	simulation_speed_slider.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	simulation_speed_slider.position = Vector2(-92, 139)
 	simulation_speed_slider.custom_minimum_size = Vector2(300, 28)
-	simulation_speed_slider.min_value = WeatherSystem.SIMULATION_SPEED_MIN
-	simulation_speed_slider.max_value = WeatherSystem.SIMULATION_SPEED_MAX
+	simulation_speed_slider.min_value = 0.0
+	simulation_speed_slider.max_value = 14.0
 	simulation_speed_slider.step = 1.0
-	simulation_speed_slider.value = WeatherSystem.simulation_speed
-	simulation_speed_slider.tooltip_text = "Accelerates native weather time up to 128× for rapid atmospheric spin-up. Higher values perform more fixed solver steps per real second."
-	simulation_speed_slider.value_changed.connect(_on_simulation_speed_changed)
+	simulation_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
+	simulation_speed_slider.tooltip_text = "Logarithmic weather warp: paused, then powers of two from 1× to 8192×. Above 256× the global model spins up and the local nest resynchronises afterward."
+	simulation_speed_slider.value_changed.connect(_on_simulation_speed_slider_changed)
 	add_child(simulation_speed_slider)
 
 	var reset_speed := Button.new()
@@ -197,6 +217,18 @@ func _ready() -> void:
 	add_child(reset_speed)
 	WeatherSystem.simulation_speed_changed.connect(_on_external_simulation_speed_changed)
 	_update_simulation_speed_label(WeatherSystem.simulation_speed)
+
+	warp_indicator_label = Label.new()
+	warp_indicator_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	warp_indicator_label.position = Vector2(375, 132)
+	warp_indicator_label.custom_minimum_size = Vector2(104, 42)
+	warp_indicator_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	warp_indicator_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	warp_indicator_label.add_theme_font_size_override("font_size", 10)
+	warp_indicator_label.add_theme_color_override("font_color", Color(0.48, 0.86, 0.94))
+	warp_indicator_label.tooltip_text = "Top: simulated duration advanced per real second. Bottom: cumulative simulated time gained beyond wall-clock time this session."
+	add_child(warp_indicator_label)
+	_update_warp_indicator()
 
 	_create_tuning_panel()
 	WeatherSystem.tuning_weight_changed.connect(_on_external_tuning_weight_changed)
@@ -408,29 +440,31 @@ func _input(event: InputEvent) -> void:
 		KEY_1:
 			set_product(Product.COMPOSITE)
 		KEY_2:
-			set_product(Product.CLOUD_COVER)
+			set_product(Product.SYNOPTIC)
 		KEY_3:
-			set_product(Product.PRECIPITATION)
+			set_product(Product.CLOUD_COVER)
 		KEY_4:
-			set_product(Product.CONVECTION)
+			set_product(Product.PRECIPITATION)
 		KEY_5:
-			set_product(Product.PRESSURE)
+			set_product(Product.CONVECTION)
 		KEY_6:
-			set_product(Product.VORTICITY)
+			set_product(Product.PRESSURE)
 		KEY_7:
-			set_product(Product.DIVERGENCE)
+			set_product(Product.AIR_TEMPERATURE)
 		KEY_8:
-			set_product(Product.POTENTIAL_VORTICITY)
+			set_product(Product.SEA_TEMPERATURE)
 		KEY_9:
-			set_product(Product.WIND_SHEAR)
+			set_product(Product.CAPE)
 		_:
 			return
 	get_viewport().set_input_as_handled()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not visible:
 		return
+	_update_warp_indicator()
+	_update_system_analysis(delta)
 	_try_bind_player()
 	if _player != null and is_instance_valid(_player):
 		_player_dir = _player.up_dir()
@@ -501,15 +535,18 @@ func _update_simulation_weight_label(value: float) -> void:
 	simulation_weight_label.text = "Simulation influence: %.2f×  (%s)" % [value, mode]
 
 
-func _on_simulation_speed_changed(value: float) -> void:
-	WeatherSystem.set_simulation_speed(value)
+func _on_simulation_speed_slider_changed(slider_value: float) -> void:
+	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
 	_update_simulation_speed_label(WeatherSystem.simulation_speed)
+	_update_product_note()
 
 
 func _on_external_simulation_speed_changed(value: float) -> void:
 	if simulation_speed_slider != null:
-		simulation_speed_slider.set_value_no_signal(value)
+		simulation_speed_slider.set_value_no_signal(_speed_to_slider(value))
 	_update_simulation_speed_label(value)
+	_update_warp_indicator()
+	_update_product_note()
 
 
 func _update_simulation_speed_label(value: float) -> void:
@@ -524,7 +561,49 @@ func _update_simulation_speed_label(value: float) -> void:
 		mode = "spin-up"
 	elif value > 1.05:
 		mode = "fast"
-	simulation_speed_label.text = "Weather speed: %.2f×  (%s)" % [value, mode]
+	if value > WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD:
+		mode = "global spin-up"
+	var speed_text := "%.2f" % value if value < 10.0 else "%.0f" % value
+	simulation_speed_label.text = "Weather speed: %s×  (%s)" % [speed_text, mode]
+
+
+func _slider_to_speed(slider_value: float) -> float:
+	if slider_value < 0.5:
+		return 0.0
+	return pow(2.0, slider_value - 1.0)
+
+
+func _speed_to_slider(speed: float) -> float:
+	if speed < 0.5:
+		return 0.0
+	return clampf(log(speed) / log(2.0) + 1.0, 1.0, 14.0)
+
+
+func _compact_duration(seconds: float) -> String:
+	var whole := maxi(int(round(seconds)), 0)
+	if whole < 60:
+		return "%ds" % whole
+	if whole < 3600:
+		return "%dm %02ds" % [whole / 60, whole % 60]
+	if whole < 86400:
+		return "%dh %02dm" % [whole / 3600, (whole % 3600) / 60]
+	return "%dd %02dh" % [whole / 86400, (whole % 86400) / 3600]
+
+
+func _update_warp_indicator() -> void:
+	if warp_indicator_label == null:
+		return
+	var speed := WeatherSystem.simulation_speed
+	var rate := _compact_duration(speed)
+	var total := _compact_duration(WeatherSystem.warped_ahead_seconds)
+	warp_indicator_label.text = "1s → %s\nΣ +%s" % [rate, total]
+	if WeatherSystem.solver_backlog_seconds() > 360.0:
+		warp_indicator_label.add_theme_color_override("font_color", Color(1.0, 0.68, 0.22))
+		warp_indicator_label.tooltip_text = "The global solver is catching up: %s queued." % _compact_duration(
+			WeatherSystem.solver_backlog_seconds())
+	else:
+		warp_indicator_label.add_theme_color_override("font_color", Color(0.48, 0.86, 0.94))
+		warp_indicator_label.tooltip_text = "Top: simulated duration advanced per real second. Bottom: cumulative simulated time gained beyond wall-clock time this session."
 
 
 func _toggle_tuning_panel() -> void:
@@ -573,15 +652,25 @@ func _apply_product() -> void:
 		_material.set_shader_parameter("u_product", product_index)
 	if title != null:
 		title.text = "ASTERRA METEOROLOGY — %s" % PRODUCT_NAMES[product_index]
-	if note != null:
-		note.text = "%s  •  %d layers  •  local nest %.0f km" % [
-			PRODUCT_NOTES[product_index], WeatherSystem.layer_count, WeatherSystem.local_span_m / 1000.0]
+	_update_product_note()
 	if legend_texture != null:
 		legend_texture.texture = _make_legend_texture(product_index)
 	if legend_left != null:
 		legend_left.text = LEGEND_LEFT[product_index]
 	if legend_right != null:
 		legend_right.text = LEGEND_RIGHT[product_index]
+	_system_scan_accum = 1.0
+	if marker != null:
+		marker.queue_redraw()
+
+
+func _update_product_note() -> void:
+	if note != null:
+		var resolution_note := "global spin-up" if WeatherSystem.simulation_speed \
+			> WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD else "local nest %.0f km" % \
+			(WeatherSystem.local_span_m / 1000.0)
+		note.text = "%s  •  %d layers  •  %s" % [
+			PRODUCT_NOTES[product_index], WeatherSystem.layer_count, resolution_note]
 
 
 func _bind_weather_texture() -> void:
@@ -594,10 +683,16 @@ func _bind_weather_texture() -> void:
 		_material.set_shader_parameter("u_diagnostics", WeatherSystem.global_diagnostics_texture)
 	if WeatherSystem.local_diagnostics_texture != null:
 		_material.set_shader_parameter("u_local_diagnostics", WeatherSystem.local_diagnostics_texture)
+	if WeatherSystem.global_products_texture != null:
+		_material.set_shader_parameter("u_products", WeatherSystem.global_products_texture)
+	if WeatherSystem.local_products_texture != null:
+		_material.set_shader_parameter("u_local_products", WeatherSystem.local_products_texture)
 	_material.set_shader_parameter("u_local_center", WeatherSystem.local_center)
 	_material.set_shader_parameter("u_local_east", WeatherSystem.local_east)
 	_material.set_shader_parameter("u_local_north", WeatherSystem.local_north)
-	_material.set_shader_parameter("u_local_span_m", WeatherSystem.local_span_m)
+	_material.set_shader_parameter(
+		"u_local_span_m", 0.0 if WeatherSystem.simulation_speed \
+		> WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD else WeatherSystem.local_span_m)
 	if Planet.cfg != null:
 		_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 
@@ -699,7 +794,112 @@ func _close_planet_map_if_needed() -> void:
 			return
 
 
+func _update_system_analysis(delta: float) -> void:
+	if product_index != Product.SYNOPTIC:
+		if not _systems.is_empty():
+			_systems.clear()
+			marker.queue_redraw()
+		return
+	_system_scan_accum += delta
+	if _system_scan_accum < 0.75:
+		return
+	_system_scan_accum = 0.0
+	var weather := WeatherSystem.global_weather_values
+	var diagnostics := WeatherSystem.global_diagnostics_values
+	var products := WeatherSystem.global_products_values
+	var expected := WeatherSystem.GLOBAL_W * WeatherSystem.GLOBAL_H * 4
+	if weather.size() != expected or diagnostics.size() != expected or products.size() != expected:
+		return
+
+	var candidates: Array[Dictionary] = []
+	for y in range(6, WeatherSystem.GLOBAL_H - 6, 6):
+		for x in range(0, WeatherSystem.GLOBAL_W, 6):
+			var cell := x + y * WeatherSystem.GLOBAL_W
+			var offset := cell * 4
+			var pressure := weather[offset + 3]
+			var is_low := pressure < 0.475
+			var is_high := pressure > 0.525
+			if not is_low and not is_high:
+				continue
+			var is_extreme := true
+			for oy in range(-6, 7, 3):
+				for ox in range(-6, 7, 3):
+					if ox == 0 and oy == 0:
+						continue
+					var nx := wrapi(x + ox, 0, WeatherSystem.GLOBAL_W)
+					var ny := clampi(y + oy, 0, WeatherSystem.GLOBAL_H - 1)
+					var neighbour := weather[(nx + ny * WeatherSystem.GLOBAL_W) * 4 + 3]
+					if (is_low and neighbour < pressure) or (is_high and neighbour > pressure):
+						is_extreme = false
+						break
+				if not is_extreme:
+					break
+			if not is_extreme:
+				continue
+
+			var latitude_deg := 90.0 - 180.0 * (float(y) + 0.5) / float(WeatherSystem.GLOBAL_H)
+			var storm := weather[offset + 1]
+			var rain := weather[offset + 2]
+			var rotation := absf(diagnostics[offset] - 0.5) * 2.0
+			var sea_temperature := products[offset + 1]
+			var cape := products[offset + 2]
+			var system_name := "ANTICYCLONE" if is_high else "DEPRESSION"
+			if is_low and absf(latitude_deg) < 35.0 and sea_temperature > 0.35 \
+					and cape > 0.15 and storm > 0.10 and rain > 0.015 and rotation > 0.12:
+				system_name = "HURRICANE / TYPHOON"
+			elif is_low and storm > 0.11 and rotation > 0.10:
+				system_name = "STORM LOW"
+			var strength := absf(pressure - 0.5) * 5.0 + storm + cape * 0.08
+			candidates.append({
+				"x": x, "y": y, "low": is_low, "name": system_name,
+				"pressure": pressure, "strength": strength,
+			})
+
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a.strength) > float(b.strength))
+	_systems.clear()
+	for candidate in candidates:
+		var map_x := fposmod(float(candidate.x) / float(WeatherSystem.GLOBAL_W) + 0.5, 1.0) * W
+		var map_y := (float(candidate.y) + 0.5) / float(WeatherSystem.GLOBAL_H) * H
+		var separated := true
+		for accepted in _systems:
+			var accepted_x := float(accepted.map_x)
+			var dx := absf(map_x - accepted_x)
+			dx = minf(dx, float(W) - dx)
+			if Vector2(dx, map_y - float(accepted.map_y)).length() < 82.0:
+				separated = false
+				break
+		if not separated:
+			continue
+		candidate["map_x"] = map_x
+		candidate["map_y"] = map_y
+		_systems.append(candidate)
+		if _systems.size() >= 10:
+			break
+	marker.queue_redraw()
+
+
 func _draw_marker() -> void:
+	if product_index == Product.SYNOPTIC:
+		var font := marker.get_theme_default_font()
+		for system in _systems:
+			var position := Vector2(
+				float(system.map_x) - float(W) * 0.5,
+				float(system.map_y) - float(H) * 0.5)
+			var low := bool(system.low)
+			var color := Color(0.96, 0.24, 0.16, 0.96) if low \
+				else Color(0.18, 0.48, 1.0, 0.96)
+			marker.draw_circle(position, 14.0, Color(0.015, 0.025, 0.045, 0.82))
+			marker.draw_circle(position, 14.0, color, false, 2.2, true)
+			marker.draw_string(font, position + Vector2(-12, 7), "L" if low else "H",
+				HORIZONTAL_ALIGNMENT_CENTER, 24.0, 18, color)
+			var name := String(system.name)
+			marker.draw_string(font, position + Vector2(-66, -19), name,
+				HORIZONTAL_ALIGNMENT_CENTER, 132.0, 10, Color(0.96, 0.98, 1.0, 0.96))
+			var anomaly_hpa := (float(system.pressure) - 0.5) * 120.0
+			marker.draw_string(font, position + Vector2(-40, 27), "%+.1f hPa" % anomaly_hpa,
+				HORIZONTAL_ALIGNMENT_CENTER, 80.0, 9, Color(0.78, 0.84, 0.90, 0.90))
+
 	var latlon := CubeSphere.dir_to_latlon(_player_dir)
 	var x := (latlon.y / TAU + 0.5) * float(W) - float(W) * 0.5
 	var y := (0.5 - latlon.x / PI) * float(H) - float(H) * 0.5
@@ -722,6 +922,10 @@ func _draw_marker() -> void:
 func _make_legend_texture(which: int) -> GradientTexture1D:
 	var gradient := Gradient.new()
 	match which:
+		Product.SYNOPTIC:
+			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.10, 0.28, 0.88), Color(0.92, 0.92, 0.88), Color(0.88, 0.16, 0.10)])
 		Product.CLOUD_COVER:
 			gradient.offsets = PackedFloat32Array([0.0, 0.55, 1.0])
 			gradient.colors = PackedColorArray([
@@ -740,6 +944,20 @@ func _make_legend_texture(which: int) -> GradientTexture1D:
 			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
 			gradient.colors = PackedColorArray([
 				Color(0.10, 0.28, 0.88), Color(0.92, 0.92, 0.88), Color(0.88, 0.16, 0.10)])
+		Product.AIR_TEMPERATURE, Product.SEA_TEMPERATURE:
+			gradient.offsets = PackedFloat32Array([0.0, 0.25, 0.50, 0.72, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.22, 0.08, 0.55), Color(0.12, 0.48, 0.92), Color(0.18, 0.82, 0.62),
+				Color(1.0, 0.82, 0.16), Color(0.82, 0.06, 0.08)])
+		Product.CAPE:
+			gradient.offsets = PackedFloat32Array([0.0, 0.25, 0.60, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.04, 0.11, 0.20), Color(0.12, 0.62, 0.48),
+				Color(0.98, 0.80, 0.12), Color(0.88, 0.04, 0.30)])
+		Product.IRRADIANCE:
+			gradient.offsets = PackedFloat32Array([0.0, 0.45, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.015, 0.025, 0.09), Color(0.18, 0.42, 0.82), Color(1.0, 0.90, 0.30)])
 		Product.VORTICITY, Product.DIVERGENCE:
 			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
 			gradient.colors = PackedColorArray([

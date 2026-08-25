@@ -95,7 +95,7 @@ func test_weather_simulation_weight() -> void:
 		worst_error < 0.0001 and clamped_to_max
 			and is_equal_approx(WeatherSystem.simulation_weight, 1.0),
 		"worst channel error %.6f" % worst_error)
-	WeatherSystem.set_simulation_speed(999.0)
+	WeatherSystem.set_simulation_speed(WeatherSystem.SIMULATION_SPEED_MAX * 2.0)
 	var speed_clamped := is_equal_approx(
 		WeatherSystem.simulation_speed, WeatherSystem.SIMULATION_SPEED_MAX)
 	WeatherSystem.reset_simulation_speed()
