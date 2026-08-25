@@ -1,9 +1,8 @@
 extends Node
 ## Adaptive atmospheric refinement planner, coarse-parent calibrated version.
 ##
-## The current L0 atmosphere is still coarse, so this controller scores precursor
-## environments rather than waiting for storm-scale magnitudes that an ~86 km
-## cell cannot produce. L0 may request L1/L2 only. L3/L4 remain reserved for
+## L0 now runs at ~21.5 km with 30 vertical levels. This controller still scores
+## precursor environments; explicit storm dynamics belong to the child nests. L0 may request L1/L2 only. L3/L4 remain reserved for
 ## metrics from future child solvers.
 
 signal regions_changed
@@ -37,8 +36,9 @@ const MIN_LEVEL_LIFETIME_S: Array[float] = [0.0, 90.0 * 60.0, 45.0 * 60.0, 28.0 
 
 const PLANET_RADIUS_KM := 3500.0
 const SCAN_INTERVAL_REAL_S := 0.50
-const CANDIDATE_TILE_W := 8
-const CANDIDATE_TILE_H := 6
+const CANDIDATE_TILE_W := 32
+const CANDIDATE_TILE_H := 24
+const SCAN_STRIDE := 4
 const MAX_RAW_CANDIDATES := 64
 const MAX_ACTIVE_REGIONS := 16
 const L1_NMS_DISTANCE_KM := 300.0
@@ -105,8 +105,10 @@ func _scan_weather() -> void:
 	_update_regions(candidates, sim_dt)
 
 	_previous_pressure.resize(WeatherSystem.GLOBAL_W * WeatherSystem.GLOBAL_H)
-	for c: int in range(WeatherSystem.GLOBAL_W * WeatherSystem.GLOBAL_H):
-		_previous_pressure[c] = weather[c * 4 + 3]
+	for y: int in range(0, WeatherSystem.GLOBAL_H, SCAN_STRIDE):
+		for x: int in range(0, WeatherSystem.GLOBAL_W, SCAN_STRIDE):
+			var c := x + y * WeatherSystem.GLOBAL_W
+			_previous_pressure[c] = weather[c * 4 + 3]
 	_overlay_dirty = true
 	regions_changed.emit()
 
@@ -143,8 +145,8 @@ func _extract_candidates(weather: PackedFloat32Array, diagnostics: PackedFloat32
 			var best_y: int = -1
 			var y_end: int = mini(ty + CANDIDATE_TILE_H, height)
 			var x_end: int = mini(tx + CANDIDATE_TILE_W, width)
-			for y: int in range(ty, y_end):
-				for x: int in range(tx, x_end):
+			for y: int in range(ty, y_end, SCAN_STRIDE):
+				for x: int in range(tx, x_end, SCAN_STRIDE):
 					var c: int = x + y * width
 					var metrics: Dictionary = _cell_metrics(c, weather, diagnostics, products, convective)
 					var score: float = float(metrics["score"])

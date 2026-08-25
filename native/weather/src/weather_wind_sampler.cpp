@@ -28,6 +28,7 @@ PackedFloat32Array WeatherWindSampler::get_global_wind_rgba(Object *weather, int
 
 	out.resize(a.cells * 4);
 	float *dst = out.ptrw();
+	#pragma omp parallel for schedule(static)
 	for (int c = 0; c < a.cells; ++c) {
 		const float u = a.u[offset + c];
 		const float v = a.v[offset + c];

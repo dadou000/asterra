@@ -3,11 +3,11 @@ extends Node
 ## The native class is resolved dynamically so an unbuilt DLL never prevents the
 ## project from parsing or booting.
 
-const GLOBAL_W := 256
-const GLOBAL_H := 128
+const GLOBAL_W := 1024
+const GLOBAL_H := 512
 const LOCAL_W := 192
 const LOCAL_H := 192
-const LAYERS := 6
+const LAYERS := 30
 const TEXTURE_REAL_INTERVAL := 0.50
 const GLOBAL_SIM_DT := 90.0
 const LOCAL_SIM_DT := 20.0
@@ -31,7 +31,7 @@ const TUNING_KEYS := [
 	&"convection",
 	&"precipitation",
 ]
-const DEFAULT_LAYER_WEIGHTS := [0.77, 0.90, 1.00, 1.07, 1.07, 1.19]
+const DEFAULT_LAYER_WEIGHTS := [0.700583, 0.685757, 0.859964, 1.018795, 1.159806, 1.281069, 1.381213, 1.459443, 1.515535, 1.549812, 1.563101, 1.556674, 1.532182, 1.491570, 1.437001, 1.370766, 1.264000, 1.129507, 1.009324, 0.901929, 0.805962, 0.720205, 0.643574, 0.575096, 0.513904, 0.459223, 0.410361, 0.366697, 0.327680, 0.309267]
 const REQUIRED_NATIVE_METHODS := [
 	&"initialize",
 	&"step_global",
@@ -50,6 +50,9 @@ const REQUIRED_NATIVE_METHODS := [
 	&"set_layer_weight",
 	&"get_layer_weights",
 	&"get_layer_count",
+	&"get_global_width",
+	&"get_global_height",
+	&"get_layer_height_m",
 	&"get_local_center",
 	&"get_local_east",
 	&"get_local_north",
@@ -130,6 +133,13 @@ func _try_create_native_backend() -> void:
 			"WeatherNative binary is out of date; rebuild native/weather and restart Godot. "
 			+ "Missing methods: %s" % ", ".join(missing_methods)
 		)
+		push_warning("WeatherSystem: %s" % backend_error)
+		return
+	var native_w := int(instance.call(&"get_global_width"))
+	var native_h := int(instance.call(&"get_global_height"))
+	var native_layers := int(instance.call(&"get_layer_count"))
+	if native_w != GLOBAL_W or native_h != GLOBAL_H or native_layers != LAYERS:
+		backend_error = "WeatherNative grid mismatch: DLL reports %dx%dx%d, project expects %dx%dx%d; rebuild native/weather" % [native_w, native_h, native_layers, GLOBAL_W, GLOBAL_H, LAYERS]
 		push_warning("WeatherSystem: %s" % backend_error)
 		return
 	_native = instance

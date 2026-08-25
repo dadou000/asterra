@@ -52,13 +52,41 @@ const LEGEND_RIGHT := [
 	"4000+ J/kg", "1200+ W/m²", "Cyclonic", "Divergence", "Positive", "55+ m/s",
 ]
 const LAYER_NAMES := [
-	"L1  ~0.45 km", "L2  ~1.7 km", "L3  ~3.3 km",
-	"L4  ~5.6 km", "L5  ~8.5 km", "L6  ~12.8 km",
+	"L01  ~0.10 km",
+	"L02  ~0.25 km",
+	"L03  ~0.45 km",
+	"L04  ~0.70 km",
+	"L05  ~1.00 km",
+	"L06  ~1.35 km",
+	"L07  ~1.75 km",
+	"L08  ~2.20 km",
+	"L09  ~2.70 km",
+	"L10  ~3.25 km",
+	"L11  ~3.85 km",
+	"L12  ~4.50 km",
+	"L13  ~5.20 km",
+	"L14  ~5.95 km",
+	"L15  ~6.75 km",
+	"L16  ~7.60 km",
+	"L17  ~8.50 km",
+	"L18  ~9.40 km",
+	"L19  ~10.30 km",
+	"L20  ~11.20 km",
+	"L21  ~12.10 km",
+	"L22  ~13.00 km",
+	"L23  ~13.90 km",
+	"L24  ~14.80 km",
+	"L25  ~15.70 km",
+	"L26  ~16.60 km",
+	"L27  ~17.50 km",
+	"L28  ~18.40 km",
+	"L29  ~19.30 km",
+	"L30  ~20.20 km",
 ]
-const FALLBACK_LAYER_SPEED := [1.0, 1.22, 1.48, 1.78, 2.08, 2.34]
+const FALLBACK_LAYER_SPEED := [1.000, 1.000, 1.000, 1.044, 1.097, 1.158, 1.228, 1.301, 1.383, 1.472, 1.552, 1.637, 1.728, 1.816, 1.899, 1.987, 2.080, 2.134, 2.189, 2.243, 2.298, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340]
 
-const GLOBAL_W := 256
-const GLOBAL_H := 128
+const GLOBAL_W := 1024
+const GLOBAL_H := 512
 const PARTICLE_COUNT := 32768
 const PLANET_RADIUS_M := 3500000.0
 const FIELD_BUILD_BUDGET_USEC := 2600

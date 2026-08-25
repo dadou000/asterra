@@ -1,7 +1,7 @@
 extends Node
 ## Objective severe-weather structure probe.
 ##
-## The 86 km global mesh is evaluated for tropical cyclones and linear MCSs.
+## The ~21.5 km global mesh is evaluated for tropical cyclones and linear MCSs.
 ## The 2.2 km nest is evaluated for cumulonimbus lifecycle, squall-line shape,
 ## and persistent rotating-updraft (supercell-like) signatures.
 ##
@@ -9,8 +9,8 @@ extends Node
 ##   godot --headless --path . tests/WeatherSevereProbe.tscn -- \
 ##     --days=15 --local-hours=18 --seed=1095976005 --output=res://tests/weather_severe_output
 
-const GW := 256
-const GH := 128
+const GW := 1024
+const GH := 512
 const LW := 192
 const LH := 192
 const CHANNELS := 4

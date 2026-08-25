@@ -63,6 +63,9 @@ void WeatherNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_layer_weight", "layer", "value"), &WeatherNative::set_layer_weight);
 	ClassDB::bind_method(D_METHOD("get_layer_weights"), &WeatherNative::get_layer_weights);
 	ClassDB::bind_method(D_METHOD("get_layer_count"), &WeatherNative::get_layer_count);
+	ClassDB::bind_method(D_METHOD("get_global_width"), &WeatherNative::get_global_width);
+	ClassDB::bind_method(D_METHOD("get_global_height"), &WeatherNative::get_global_height);
+	ClassDB::bind_method(D_METHOD("get_layer_height_m", "layer"), &WeatherNative::get_layer_height_m);
 	ClassDB::bind_method(D_METHOD("get_local_center"), &WeatherNative::get_local_center);
 	ClassDB::bind_method(D_METHOD("get_local_east"), &WeatherNative::get_local_east);
 	ClassDB::bind_method(D_METHOD("get_local_north"), &WeatherNative::get_local_north);
@@ -98,9 +101,12 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		std::fill(a.convective_activation.begin(), a.convective_activation.end(), 0.0f);
 	}
 
-	const int l0_off = a.layer_offset(0);
-	const int l1_off = a.layer_offset(1);
-	const int l2_off = a.layer_offset(2);
+	const int l0_layer = 0;
+	const int l1_layer = nearest_layer_for_height(1700.0f);
+	const int l2_layer = nearest_layer_for_height(3300.0f);
+	const int l0_off = a.layer_offset(l0_layer);
+	const int l1_off = a.layer_offset(l1_layer);
+	const int l2_off = a.layer_offset(l2_layer);
 	const SurfaceState &surface = is_global ? global_surface : local_surface;
 	const bool have_surface = surface_fields_ready && (is_global || local_surface_fields_ready);
 	const float rise_tau = is_global ? 900.0f : 420.0f;
@@ -195,8 +201,8 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 	for (int layer = 0; layer < LAYERS; ++layer) {
 		const int off = a.layer_offset(layer);
 		const float sf = sigma_temperature_factor(layer);
-		const float fair_onset_rh = layer <= 1 ? 0.90f : 0.93f;
-		const float fair_full_rh = layer <= 1 ? 0.985f : 0.995f;
+		const float fair_onset_rh = APPROX_HEIGHT_M[layer] <= 2000.0f ? 0.90f : 0.93f;
+		const float fair_full_rh = APPROX_HEIGHT_M[layer] <= 2000.0f ? 0.985f : 0.995f;
 		for (int c = 0; c < a.cells; ++c) {
 			const int i = off + c;
 			float qv = std::clamp(a.nq[i], 0.00001f, 0.032f);
@@ -259,7 +265,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 			} else if (target_cloud < cloud_total) {
 				// Fair cloud clears rapidly; anvils/active storm condensate retain a
 				// much longer memory. Evaporation returns exactly the removed mass to q.
-				const float liquid_tau = std::lerp(layer <= 1 ? 480.0f : 720.0f,
+				const float liquid_tau = std::lerp(APPROX_HEIGHT_M[layer] <= 2000.0f ? 480.0f : 720.0f,
 					4800.0f, storm_keep);
 				const float ice_tau = std::lerp(1500.0f, 14400.0f, storm_keep);
 				const float liquid_share = cloud_total > 1e-9f ? liquid / cloud_total : 0.0f;
@@ -315,7 +321,7 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 	vertical_pass_original(a, is_global, dt);
 	tuning_weights[CONVECTION] = original_convection;
 
-	const float base_rate = (is_global ? 2.4e-4f : 8.5e-4f) * original_convection;
+	const float base_rate = (is_global ? 2.4e-4f : 8.5e-4f) * original_convection * old_six_level_column_scale();
 	const float max_extra_mix = is_global ? 0.035f : 0.075f;
 	for (int c = 0; c < a.cells; ++c) {
 		const float active = std::clamp(a.convective_activation[c], 0.0f, 1.0f);
@@ -333,7 +339,7 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 			const int lo_i = a.layer_offset(lo) + c;
 			const int hi_i = a.layer_offset(hi) + c;
 			const int fi = a.interface_offset(interface_index) + c;
-			const float depth_factor = std::max(1.0f - 0.13f * float(interface_index), 0.45f);
+			const float depth_factor = std::max(1.0f - 0.52f * std::clamp(APPROX_HEIGHT_M[hi] / 12800.0f, 0.0f, 1.0f), 0.45f);
 			const float burst_rate = base_rate * active * depth_factor;
 			a.mass_flux[fi] = std::clamp(std::max(a.mass_flux[fi], burst_rate),
 				-1.8e-4f, is_global ? 7.0e-4f : 1.5e-3f);

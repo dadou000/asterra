@@ -14,24 +14,41 @@ class WeatherNative : public RefCounted {
 	GDCLASS(WeatherNative, RefCounted)
 
 public:
-	static constexpr int GLOBAL_W = 256;
-	static constexpr int GLOBAL_H = 128;
+	static constexpr int GLOBAL_W = 1024;
+	static constexpr int GLOBAL_H = 512;
 	static constexpr int LOCAL_W = 192;
 	static constexpr int LOCAL_H = 192;
-	static constexpr int LAYERS = 6;
+	static constexpr int LAYERS = 30;
 	static constexpr int INTERFACES = LAYERS - 1;
 	static constexpr int HORIZON_SECTORS = 24;
 	static constexpr float PLANET_RADIUS_M = 3500000.0f;
 	static constexpr float LOCAL_CELL_M = 2200.0f;
 
+	// 30 non-uniform pressure/sigma levels. The lowest kilometre is densely
+	// sampled for boundary-layer physics, while the top reaches ~20.2 km.
+	// sigma ~= exp(-z/8 km), preserving the old six anchor levels closely.
 	static constexpr std::array<float, LAYERS> SIGMA = {
-		0.95f, 0.82f, 0.68f, 0.52f, 0.36f, 0.20f
+		0.987578f, 0.969233f, 0.945303f, 0.916219f, 0.882497f, 0.844720f,
+		0.803523f, 0.759572f, 0.713552f, 0.666144f, 0.618010f, 0.569783f,
+		0.522046f, 0.475328f, 0.430095f, 0.386741f, 0.345591f, 0.308819f,
+		0.275960f, 0.246597f, 0.220358f, 0.196912f, 0.175960f, 0.157237f,
+		0.140507f, 0.125556f, 0.112197f, 0.100259f, 0.089591f, 0.080058f
 	};
 	static constexpr std::array<float, LAYERS> APPROX_HEIGHT_M = {
-		450.0f, 1700.0f, 3300.0f, 5600.0f, 8500.0f, 12800.0f
+		100.0f, 250.0f, 450.0f, 700.0f, 1000.0f, 1350.0f, 1750.0f, 2200.0f,
+		2700.0f, 3250.0f, 3850.0f, 4500.0f, 5200.0f, 5950.0f, 6750.0f, 7600.0f,
+		8500.0f, 9400.0f, 10300.0f, 11200.0f, 12100.0f, 13000.0f, 13900.0f, 14800.0f,
+		15700.0f, 16600.0f, 17500.0f, 18400.0f, 19300.0f, 20200.0f
 	};
+	// Pressure-thickness contribution normalized to a mean of one. The sum is
+	// exactly ~30, so column products can explicitly rescale to the old six-level
+	// optical calibration where required.
 	static constexpr std::array<float, LAYERS> DEFAULT_LAYER_WEIGHTS = {
-		0.77f, 0.90f, 1.00f, 1.07f, 1.07f, 1.19f
+		0.700583f, 0.685757f, 0.859964f, 1.018795f, 1.159806f, 1.281069f,
+		1.381213f, 1.459443f, 1.515535f, 1.549812f, 1.563101f, 1.556674f,
+		1.532182f, 1.491570f, 1.437001f, 1.370766f, 1.264000f, 1.129507f,
+		1.009324f, 0.901929f, 0.805962f, 0.720205f, 0.643574f, 0.575096f,
+		0.513904f, 0.459223f, 0.410361f, 0.366697f, 0.327680f, 0.309267f
 	};
 
 	struct Atmosphere {
@@ -190,6 +207,11 @@ public:
 	PackedFloat32Array get_layer_weights() const;
 
 	int get_layer_count() const { return LAYERS; }
+	int get_global_width() const { return GLOBAL_W; }
+	int get_global_height() const { return GLOBAL_H; }
+	float get_layer_height_m(int layer) const {
+		return layer >= 0 && layer < LAYERS ? APPROX_HEIGHT_M[layer] : 0.0f;
+	}
 	Vector3 get_local_center() const { return local_center; }
 	Vector3 get_local_east() const { return local_east; }
 	Vector3 get_local_north() const { return local_north; }

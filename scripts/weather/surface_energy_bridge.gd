@@ -6,8 +6,8 @@ extends Node
 ## by rendering/collision, including sparse player terrain edits. Native code owns
 ## all evolving temperature, moisture, snow and horizon state.
 
-const GLOBAL_W := 256
-const GLOBAL_H := 128
+const GLOBAL_W := 1024
+const GLOBAL_H := 512
 const LOCAL_W := 192
 const LOCAL_H := 192
 const LOCAL_CELL_M := 2200.0
@@ -19,6 +19,9 @@ var local_surface_texture: ImageTexture
 
 var _native: Object = null
 var _surface_fields_uploaded := false
+var _global_building := false
+var _global_task_id := -1
+var _global_request := 0
 var _texture_accum := 0.0
 var _warned_stale_backend := false
 var _local_request := 0
@@ -107,6 +110,7 @@ func _push_solar_forcing() -> void:
 
 func _on_planet_world_ready(_fields: PlanetFields) -> void:
 	_surface_fields_uploaded = false
+	_global_request += 1
 	_local_uploaded_center = Vector3.ZERO
 	_local_requested_center = Vector3.ZERO
 	_local_request += 1
@@ -118,8 +122,19 @@ func _upload_global_surface_fields() -> void:
 		_bind_native()
 	if _native == null or not Planet.ready_state or Planet.grid == null or Planet.fields == null:
 		return
+	if _global_building:
+		return
+	_global_request += 1
+	var request := _global_request
+	_global_building = true
+	var task := func() -> void:
+		var packed := _build_global_surface_fields()
+		call_deferred("_finish_global_surface_fields", request, packed)
+	_global_task_id = WorkerThreadPool.add_task(task, true, "asterra_weather_surface_global")
 
-	# Four floats per global meteorology cell:
+
+static func _build_global_surface_fields() -> PackedFloat32Array:
+	# Four floats per 21.5 km global meteorology cell:
 	# elevation [m], free-water fraction, soil moisture, snow-free land albedo.
 	var packed := PackedFloat32Array()
 	packed.resize(GLOBAL_W * GLOBAL_H * 4)
@@ -132,15 +147,23 @@ func _upload_global_surface_fields() -> void:
 			var direction := Vector3(cos_lat * cos(lon), sin_lat, cos_lat * sin(lon))
 			var offset := (x + y * GLOBAL_W) * 4
 			var water := clampf(Planet.water_coverage(direction), 0.0, 1.0)
-			var moisture := clampf(
-				Planet.grid.sample_bilinear(Planet.fields.soil_moisture, direction), 0.0, 1.0)
+			var moisture := clampf(Planet.grid.sample_bilinear(Planet.fields.soil_moisture, direction), 0.0, 1.0)
 			var color := Planet.surface_color(direction)
 			var luminance := color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722
 			packed[offset + 0] = lerpf(Planet.macro_height(direction), Planet.water_height(direction), water)
 			packed[offset + 1] = water
 			packed[offset + 2] = moisture
 			packed[offset + 3] = clampf(luminance, 0.04, 0.65)
+	return packed
 
+
+func _finish_global_surface_fields(request: int, packed: PackedFloat32Array) -> void:
+	if _global_task_id >= 0:
+		WorkerThreadPool.wait_for_task_completion(_global_task_id)
+		_global_task_id = -1
+	_global_building = false
+	if request != _global_request or _native == null or not is_instance_valid(_native):
+		return
 	_native.call(&"set_global_surface_fields", packed)
 	_surface_fields_uploaded = true
 	_local_uploaded_center = Vector3.ZERO
