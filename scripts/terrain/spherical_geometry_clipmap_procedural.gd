@@ -9,18 +9,23 @@ const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 const DEFAULT_SINK_SCALE: float = 2.0
 const DETAIL_ORIGIN_WRAP_M: float = 4096.0
 
-const PBR_GROUND_ALBEDO: Texture2D = preload("res://assets/textures/terrain/ground003_diff_2k.jpg")
-const PBR_GROUND_NORMAL: Texture2D = preload("res://assets/textures/terrain/ground003_nor_gl_2k.jpg")
-const PBR_GROUND_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/ground003_rough_2k.jpg")
-const PBR_GRASS_ALBEDO: Texture2D = preload("res://assets/textures/terrain/leafy_grass_diff_2k.jpg")
-const PBR_GRASS_NORMAL: Texture2D = preload("res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg")
-const PBR_GRASS_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/leafy_grass_rough_2k.jpg")
-const PBR_MUD_ALBEDO: Texture2D = preload("res://assets/textures/terrain/brown_mud_diff_2k.jpg")
-const PBR_MUD_NORMAL: Texture2D = preload("res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg")
-const PBR_MUD_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/brown_mud_rough_2k.jpg")
-const PBR_FOREST_ALBEDO: Texture2D = preload("res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg")
-const PBR_FOREST_NORMAL: Texture2D = preload("res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg")
-const PBR_FOREST_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg")
+# Keep imported image resources out of script parse-time dependency resolution.
+# On a fresh checkout Godot creates autoloads before .godot/imported exists; a
+# preload() here can therefore make the entire terrain inheritance chain appear
+# unresolvable even though the GDScript itself is valid. Assets are loaded once
+# when the live material is bound instead.
+const PBR_GROUND_ALBEDO_PATH := "res://assets/textures/terrain/ground003_diff_2k.jpg"
+const PBR_GROUND_NORMAL_PATH := "res://assets/textures/terrain/ground003_nor_gl_2k.jpg"
+const PBR_GROUND_ROUGHNESS_PATH := "res://assets/textures/terrain/ground003_rough_2k.jpg"
+const PBR_GRASS_ALBEDO_PATH := "res://assets/textures/terrain/leafy_grass_diff_2k.jpg"
+const PBR_GRASS_NORMAL_PATH := "res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg"
+const PBR_GRASS_ROUGHNESS_PATH := "res://assets/textures/terrain/leafy_grass_rough_2k.jpg"
+const PBR_MUD_ALBEDO_PATH := "res://assets/textures/terrain/brown_mud_diff_2k.jpg"
+const PBR_MUD_NORMAL_PATH := "res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg"
+const PBR_MUD_ROUGHNESS_PATH := "res://assets/textures/terrain/brown_mud_rough_2k.jpg"
+const PBR_FOREST_ALBEDO_PATH := "res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg"
+const PBR_FOREST_NORMAL_PATH := "res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg"
+const PBR_FOREST_ROUGHNESS_PATH := "res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg"
 
 var _debug_freeze := false
 var _debug_side_cut := false
@@ -130,23 +135,46 @@ func _bind_planet_context(force: bool) -> void:
 	_material.set_shader_parameter("u_ctx_ready", 1.0)
 
 
+func _load_pbr_texture(path: String) -> Texture2D:
+	var resource: Resource = load(path)
+	return resource as Texture2D
+
+
 func _bind_surface_pbr(force: bool) -> void:
 	if _pbr_bound and not force:
 		return
-	_material.set_shader_parameter("u_pbr_ground_albedo", PBR_GROUND_ALBEDO)
-	_material.set_shader_parameter("u_pbr_ground_normal", PBR_GROUND_NORMAL)
-	_material.set_shader_parameter("u_pbr_ground_roughness", PBR_GROUND_ROUGHNESS)
-	_material.set_shader_parameter("u_pbr_grass_albedo", PBR_GRASS_ALBEDO)
-	_material.set_shader_parameter("u_pbr_grass_normal", PBR_GRASS_NORMAL)
-	_material.set_shader_parameter("u_pbr_grass_roughness", PBR_GRASS_ROUGHNESS)
-	_material.set_shader_parameter("u_pbr_mud_albedo", PBR_MUD_ALBEDO)
-	_material.set_shader_parameter("u_pbr_mud_normal", PBR_MUD_NORMAL)
-	_material.set_shader_parameter("u_pbr_mud_roughness", PBR_MUD_ROUGHNESS)
-	_material.set_shader_parameter("u_pbr_forest_albedo", PBR_FOREST_ALBEDO)
-	_material.set_shader_parameter("u_pbr_forest_normal", PBR_FOREST_NORMAL)
-	_material.set_shader_parameter("u_pbr_forest_roughness", PBR_FOREST_ROUGHNESS)
-	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled else 0.0)
-	_pbr_bound = true
+	var ground_albedo := _load_pbr_texture(PBR_GROUND_ALBEDO_PATH)
+	var ground_normal := _load_pbr_texture(PBR_GROUND_NORMAL_PATH)
+	var ground_roughness := _load_pbr_texture(PBR_GROUND_ROUGHNESS_PATH)
+	var grass_albedo := _load_pbr_texture(PBR_GRASS_ALBEDO_PATH)
+	var grass_normal := _load_pbr_texture(PBR_GRASS_NORMAL_PATH)
+	var grass_roughness := _load_pbr_texture(PBR_GRASS_ROUGHNESS_PATH)
+	var mud_albedo := _load_pbr_texture(PBR_MUD_ALBEDO_PATH)
+	var mud_normal := _load_pbr_texture(PBR_MUD_NORMAL_PATH)
+	var mud_roughness := _load_pbr_texture(PBR_MUD_ROUGHNESS_PATH)
+	var forest_albedo := _load_pbr_texture(PBR_FOREST_ALBEDO_PATH)
+	var forest_normal := _load_pbr_texture(PBR_FOREST_NORMAL_PATH)
+	var forest_roughness := _load_pbr_texture(PBR_FOREST_ROUGHNESS_PATH)
+
+	_material.set_shader_parameter("u_pbr_ground_albedo", ground_albedo)
+	_material.set_shader_parameter("u_pbr_ground_normal", ground_normal)
+	_material.set_shader_parameter("u_pbr_ground_roughness", ground_roughness)
+	_material.set_shader_parameter("u_pbr_grass_albedo", grass_albedo)
+	_material.set_shader_parameter("u_pbr_grass_normal", grass_normal)
+	_material.set_shader_parameter("u_pbr_grass_roughness", grass_roughness)
+	_material.set_shader_parameter("u_pbr_mud_albedo", mud_albedo)
+	_material.set_shader_parameter("u_pbr_mud_normal", mud_normal)
+	_material.set_shader_parameter("u_pbr_mud_roughness", mud_roughness)
+	_material.set_shader_parameter("u_pbr_forest_albedo", forest_albedo)
+	_material.set_shader_parameter("u_pbr_forest_normal", forest_normal)
+	_material.set_shader_parameter("u_pbr_forest_roughness", forest_roughness)
+	var scans_ready := ground_albedo != null and ground_normal != null and ground_roughness != null \
+		and grass_albedo != null and grass_normal != null and grass_roughness != null \
+		and mud_albedo != null and mud_normal != null and mud_roughness != null \
+		and forest_albedo != null and forest_normal != null and forest_roughness != null
+	_material.set_shader_parameter("u_pbr_enabled",
+		1.0 if _debug_pbr_enabled and scans_ready else 0.0)
+	_pbr_bound = scans_ready
 
 
 func _wrapped_detail_origin() -> Vector3:
@@ -191,7 +219,7 @@ func _sync_debug_uniforms() -> void:
 	_material.set_shader_parameter("u_debug_side_cut", 1.0 if _debug_side_cut else 0.0)
 	_material.set_shader_parameter("u_sink_scale", _debug_sink_scale)
 	_material.set_shader_parameter("u_debug_geomorph_mode", _debug_geomorph_mode)
-	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled else 0.0)
+	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled and _pbr_bound else 0.0)
 
 
 func _show_all_active_sectors() -> void:
@@ -379,7 +407,7 @@ func gpu_stream_stats() -> Dictionary:
 		"procedural_gpu": true,
 		"visual_pages": false,
 		"cpu_material_clipmap": false,
-		"pbr_scans": _debug_pbr_enabled,
+		"pbr_scans": _debug_pbr_enabled and _pbr_bound,
 		"macro_upsample": 2,
 		"debug_frozen": _debug_freeze,
 		"debug_side_cut": _debug_side_cut,
