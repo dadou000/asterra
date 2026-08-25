@@ -6,6 +6,8 @@ The CPU is responsible only for generating/loading the persistent coarse planet 
 
 No camera-centred CPU terrain generation, CPU detail height synthesis, or CPU material placement belongs in the final runtime path.
 
+The current `GPUPlanetContext` conversion is a transition step: it uploads baked `PlanetFields` into immutable GPU textures once per adopted world. The long-term bake format should persist these context textures directly so runtime work is reduced to loading/uploading them.
+
 ## Pipeline
 
 1. **Offline / load-time planet context**
@@ -25,8 +27,8 @@ No camera-centred CPU terrain generation, CPU detail height synthesis, or CPU ma
    - cellular/Voronoi structural ridges
    - mountain/crag synthesis
    - analytic drainage incision
-   - thermal/sedimentary redistribution approximations
-   - dune/badland/glacial/depositional processes
+   - sedimentary/depositional approximations
+   - dune/glacial/depositional processes
    - output final displaced terrain height
 
 3. **GPU surface classification**
@@ -37,47 +39,117 @@ No camera-centred CPU terrain generation, CPU detail height synthesis, or CPU ma
    - enforce material stability (angle of repose / exposed bedrock)
 
 4. **GPU material detail**
-   - PBR texture/material family
+   - PBR texture/material families
    - material-specific micro-normal/parallax/displacement
-   - near-field microgeometry/tessellation equivalent
+   - near-field microgeometry / higher-density geometry clipmap
 
 5. **GPU scatter**
    - vegetation, trees, rocks, talus, debris, river stones, etc.
    - consume the exact same context and final material classification
 
-## First implementation milestones
+## Current context textures
 
-### M1 — coarse context textures
-Build six-face GPU textures once when the baked world is adopted. They are immutable until another world is loaded.
+All continuous textures are linearly filtered and have direction-space cube-face gutters. Categorical maps are separate nearest-filtered textures so interpolation cannot invent nonexistent IDs.
 
-Initial packed datasets:
+- **Soil RGBA**: sand / silt / clay / organic
+- **Surface RGBA**: soil depth / soil moisture / vegetation potential / sediment thickness
+- **Geology RGBA**: erodibility / strata dip / basin / plate-boundary proximity
+- **Structure RGBA**: signed uplift / fault intensity / floodplain / wetland
+- **Climate RGBA**: mean temperature / precipitation / humidity / seasonal temperature range
+- **Hydrology RGBA**: tangent-frame flow direction RG / logarithmic discharge / depositional influence
+- **Rock R**: categorical bedrock family ID
+- **Biome R**: categorical biome ID
 
-- Soil: sand / silt / clay / organic
-- Surface state: soil depth / soil moisture / vegetation / sediment
-- Geology: rock family / erodibility / strata dip / basin
-- Structure: uplift / fault / floodplain / wetland
-- Climate: temperature / precipitation / humidity / seasonal range
-- Hydrology: flow direction / discharge / depositional influence
+## Milestone status
 
-These textures are the authoritative GPU inputs below the coarse-map scale.
+### M1 — coarse context textures — IMPLEMENTED
 
-### M2 — geomorph shader library
-Implement deterministic GPU functions for:
+`GPUPlanetContext` builds immutable six-face context textures once per adopted world. The old camera-centred `MaterialClipmap` is no longer an autoload in this branch.
 
-- band-limited value/fBm/ridged noise
+Remaining cleanup: persist the packed context with the world bake so runtime does not repack `PlanetFields`.
+
+### M2 — analytic geomorph shader library — IMPLEMENTED, FIRST PASS
+
+`gpu_geomorph.gdshaderinc` currently provides:
+
+- deterministic value noise and five-octave fBm
+- ridged multifractal structure
 - domain warping
-- inexpensive 3D cellular ridge structure
-- context-driven mountain/arid/glacial/depositional weights
-- first-pass analytic incision and deposition
+- reduced-cost cellular ridge skeletons
+- context-driven mountain / arid / glacial / depositional weights
+- multi-scale 16 km / 6 km / 1.4 km / 420 m / 120 m / 24 m bands
+- drainage-oriented analytic incision using the baked downstream vector
+- broad depositional shoulders/fans
+- arid dune contribution
+- glacial smoothing/flow
+- LOD band limiting from actual clipmap vertex spacing
 
-### M3 — active clipmap integration
-Replace the current altitude-only procedural detail heuristic in `spherical_geometry_clipmap_procedural_uv.gdshader` with the geomorph library. Preserve existing LOD band limiting and fine/coarse morph identity.
+This is analytic synthesis, not iterative hydraulic simulation yet.
 
-### M4 — material classifier
-Replace the current grass/wet/sand/snow + slope-rock blend with a classifier driven by final displaced slope plus coarse context. Bedrock exposure must resolve to the actual geological family.
+### M3 — active clipmap integration — IMPLEMENTED
 
-### M5 — near-field refinement
-Add higher-density near geometry and/or GPU compute-generated local height fields for iterative erosion and material micro-displacement. The CPU remains uninvolved.
+`spherical_geometry_clipmap_procedural_uv.gdshader` now gets sub-grid displacement from `gm_geomorph_height()` rather than the old altitude-only five-band heuristic. Existing concentric LOD morphing, atmosphere and displacement-aware fragment normals are retained.
+
+### M4 — material classifier — IMPLEMENTED, FIRST PASS
+
+Materials are classified after displacement from final geometry slope plus context. Current classes:
+
+- actual-family bedrock
+- mineral soil
+- vegetation cover
+- aeolian sand
+- mud
+- snow
+- scree / talus
+- river gravel
+
+Loose-material stability is slope-dependent. Thin soil and slopes above the plausible loose-material angle of repose reveal the actual underlying rock family.
+
+### M4.1 — diagnostics — IMPLEMENTED
+
+The Terrain debug tab exposes unlit views for:
+
+- landform weights
+- primary material weights
+- secondary material weights
+- soil context
+- geology / biome IDs
+- hydrology
+
+This is the primary tuning tool for the next passes.
+
+### M5 — PBR material families — NEXT
+
+Replace flat classifier colors with the existing photographic terrain assets and additional geology-specific families while keeping the classifier as the source of material weights.
+
+Required work:
+
+- triplanar / tangent-space texture sampling appropriate to a sphere
+- material-scale control and stochastic anti-tiling
+- actual-family rock PBR sets
+- soil, mud, sand, scree, gravel, snow, grass and forest-floor families
+- distance/footprint filtering with no material rings
+
+### M6 — material microrelief — NEXT AFTER PBR
+
+Use classified materials to control geometry and shading spectra:
+
+- rock fractures / bedding / joints
+- scree and gravel relief
+- dune ripples
+- soil aggregates
+- snow buildup
+- vegetation-ground roughness
+
+The current L0 spacing is 0.75 m, so centimetre/decimetre silhouette relief requires a future denser near-field geometry layer rather than simply adding higher-frequency displacement to the current vertices.
+
+### M7 — iterative near-field GPU erosion
+
+Add GPU compute-generated local height/sediment fields for the nearest terrain if analytic erosion is insufficient. The compute input remains immutable coarse context + deterministic procedural base; the CPU does not synthesize terrain.
+
+### M8 — scatter
+
+Generate scatter suitability from the same final material and geomorph fields, then feed GPU-driven/indirect vegetation, trees, rocks, talus blocks, debris and river stones.
 
 ## Runtime invariant
 
