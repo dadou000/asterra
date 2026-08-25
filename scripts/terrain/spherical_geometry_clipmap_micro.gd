@@ -15,7 +15,7 @@ const MICRO_STEP_L0: float = 0.25
 const MICRO_GRID_CELLS: int = 256
 const MICRO_GRID_VERTS: int = MICRO_GRID_CELLS + 1
 const MICRO_HALF_CELLS: int = MICRO_GRID_CELLS >> 1
-const MICRO_OUTER_L0_CELLS: float = float(MICRO_HALF_CELLS) * MICRO_STEP_L0 # 32 L0 cells
+const MICRO_OUTER_L0_CELLS: float = 32.0 # 128 micro half-cells * 0.25 L0
 const MICRO_L0_HOLE_CELLS: float = 24.0
 
 var _micro_batch: MultiMeshInstance3D
@@ -116,10 +116,10 @@ static func _build_center_sector_with_micro_hole(sector_index: int,
 			if owner_sector != sector_index:
 				continue
 
-			var i00: int = _compact_vertex(remap, vertices, uvs, x, y)
-			var i10: int = _compact_vertex(remap, vertices, uvs, x + 1, y)
-			var i01: int = _compact_vertex(remap, vertices, uvs, x, y + 1)
-			var i11: int = _compact_vertex(remap, vertices, uvs, x + 1, y + 1)
+			var i00: int = _center_vertex(remap, vertices, uvs, x, y)
+			var i10: int = _center_vertex(remap, vertices, uvs, x + 1, y)
+			var i01: int = _center_vertex(remap, vertices, uvs, x, y + 1)
+			var i11: int = _center_vertex(remap, vertices, uvs, x + 1, y + 1)
 			indices.append(i00)
 			indices.append(i10)
 			indices.append(i11)
@@ -128,6 +128,19 @@ static func _build_center_sector_with_micro_hole(sector_index: int,
 			indices.append(i01)
 
 	return _mesh_from_micro_arrays(vertices, uvs, indices)
+
+
+static func _center_vertex(remap: Dictionary, vertices: Array[Vector3],
+		uvs: Array[Vector2], gx: int, gy: int) -> int:
+	var logical_index: int = gy * GRID_VERTS + gx
+	var existing: Variant = remap.get(logical_index, null)
+	if existing != null:
+		return int(existing)
+	var local_index: int = vertices.size()
+	remap[logical_index] = local_index
+	vertices.append(Vector3.ZERO)
+	uvs.append(Vector2(float(gx), float(gy)))
+	return local_index
 
 
 static func _build_micro_disc_mesh(half_cut: bool) -> ArrayMesh:
@@ -147,10 +160,10 @@ static func _build_micro_disc_mesh(half_cut: bool) -> ArrayMesh:
 			if cx * cx + cy * cy > outer_sq:
 				continue
 
-			var i00 := _micro_vertex(remap, vertices, uvs, x, y, grid_center)
-			var i10 := _micro_vertex(remap, vertices, uvs, x + 1, y, grid_center)
-			var i01 := _micro_vertex(remap, vertices, uvs, x, y + 1, grid_center)
-			var i11 := _micro_vertex(remap, vertices, uvs, x + 1, y + 1, grid_center)
+			var i00: int = _micro_vertex(remap, vertices, uvs, x, y, grid_center)
+			var i10: int = _micro_vertex(remap, vertices, uvs, x + 1, y, grid_center)
+			var i01: int = _micro_vertex(remap, vertices, uvs, x, y + 1, grid_center)
+			var i11: int = _micro_vertex(remap, vertices, uvs, x + 1, y + 1, grid_center)
 			indices.append(i00)
 			indices.append(i10)
 			indices.append(i11)
