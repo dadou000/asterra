@@ -3,12 +3,18 @@ extends VolumetricCloudController
 ## Keeps the established noise volumes, lighting, depth compositing and terrain/ocean
 ## registration while replacing synthetic cloud placement with WeatherSystem state.
 
-const WEATHER_CLOUD_BASE_M := 700.0
+const WEATHER_CLOUD_BASE_M := 800.0
 const WEATHER_CLOUD_TOP_M := 14500.0
+const FALLBACK_CLOUD_COVERAGE := 0.28
 
 
 func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
 	super.configure(material, world_seed, quality)
+	# The depth compositor is the normal weather renderer. If it cannot initialize,
+	# keep the legacy sky fallback sparse rather than reverting to the old 52%
+	# synthetic overcast-like coverage.
+	if material != null:
+		material.set_shader_parameter("u_cloud_coverage", FALLBACK_CLOUD_COVERAGE)
 	_bind_weather_to_depth_effect()
 	_sync_all_weather_receivers()
 
