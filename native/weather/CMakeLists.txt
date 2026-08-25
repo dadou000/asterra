@@ -40,7 +40,8 @@ target_include_directories(asterra_weather PRIVATE src)
 target_link_libraries(asterra_weather PRIVATE godot-cpp)
 
 # The 1024x512x30 parent atmosphere is intentionally CPU-heavy. Keep AVX2 inside
-# each worker and distribute independent rows/columns through OpenMP.
+# each worker and distribute independent rows/columns through OpenMP. Polar
+# reduced-grid filtering remains inside this same native backend.
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(asterra_weather PRIVATE OpenMP::OpenMP_CXX)
