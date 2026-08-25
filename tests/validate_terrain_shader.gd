@@ -1,32 +1,35 @@
 extends SceneTree
-## Headless smoke test for the active GPU terrain shader stack.
+## Headless smoke test for the active GPU terrain + scatter shader stack.
 ##
-## Loading the top-level Shader forces Godot to preprocess its includes and send
+## Loading each top-level Shader forces Godot to preprocess its includes and send
 ## the resulting code through the renderer shader path. CI also scans the engine
-## log for shader compilation/parser errors because an invalid Shader resource can
-## still exist long enough for a script to receive a reference to it.
+## log for parser/compiler errors because an invalid Shader resource can still
+## exist long enough for a script to receive a reference to it.
 
-const TERRAIN_SHADER := "res://shaders/spherical_geometry_clipmap_procedural_uv.gdshader"
+const SHADERS := [
+	"res://shaders/spherical_geometry_clipmap_procedural_uv.gdshader",
+	"res://shaders/terrain_scatter_grass.gdshader",
+	"res://shaders/terrain_scatter_stone.gdshader",
+]
 
 
 func _init() -> void:
-	var resource: Resource = load(TERRAIN_SHADER)
-	if resource == null or not (resource is Shader):
-		push_error("TERRAIN_SHADER_LOAD_FAILED: %s" % TERRAIN_SHADER)
-		quit(1)
-		return
+	for shader_path: String in SHADERS:
+		var resource: Resource = load(shader_path)
+		if resource == null or not (resource is Shader):
+			push_error("TERRAIN_SHADER_LOAD_FAILED: %s" % shader_path)
+			quit(1)
+			return
 
-	var shader := resource as Shader
-	var material := ShaderMaterial.new()
-	material.shader = shader
-	# Creating the rendering RID forces the Shader resource through the renderer
-	# path in headless mode. Godot emits parser/compiler failures to stderr, which
-	# the workflow treats as a failed validation even if a resource object exists.
-	var shader_rid := shader.get_rid()
-	if not shader_rid.is_valid():
-		push_error("TERRAIN_SHADER_RID_INVALID: %s" % TERRAIN_SHADER)
-		quit(1)
-		return
+		var shader := resource as Shader
+		var material := ShaderMaterial.new()
+		material.shader = shader
+		var shader_rid := shader.get_rid()
+		if not shader_rid.is_valid():
+			push_error("TERRAIN_SHADER_RID_INVALID: %s" % shader_path)
+			quit(1)
+			return
+		print("TERRAIN_SHADER_LOAD_OK: %s" % shader_path)
 
-	print("TERRAIN_SHADER_LOAD_OK: %s" % TERRAIN_SHADER)
+	print("TERRAIN_SHADER_STACK_OK: %d shaders" % SHADERS.size())
 	quit(0)
