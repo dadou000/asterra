@@ -12,7 +12,9 @@ static constexpr float PI_F = std::numbers::pi_v<float>;
 static constexpr float HALF_PI_F = PI_F * 0.5f;
 static constexpr float TAU_F = PI_F * 2.0f;
 static constexpr float KAPPA = 0.286f;
-static constexpr float ROTATION_RATE = 7.2921159e-5f;
+// Asterra's locked 11.5-hour sidereal rotation. This drives Coriolis and
+// planetary-vorticity terms in both the global and local atmosphere.
+static constexpr float ROTATION_RATE = TAU_F / (11.5f * 3600.0f);
 static constexpr float P0 = 100000.0f;
 static constexpr std::array<float, WeatherNative::LAYERS> WIND_DRAG_TAU_S = {
 	28800.0f, 43200.0f, 64800.0f, 129600.0f, 259200.0f, 432000.0f
