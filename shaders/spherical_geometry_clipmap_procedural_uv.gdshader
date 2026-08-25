@@ -4,6 +4,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_d
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/gpu_planet_context.gdshaderinc"
 #include "res://shaders/gpu_geomorph.gdshaderinc"
+#include "res://shaders/gpu_surface_antitile.gdshaderinc"
 #include "res://shaders/gpu_surface_classifier.gdshaderinc"
 #include "res://shaders/gpu_surface_pbr.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
@@ -348,7 +349,7 @@ void fragment() {
 				primary, secondary, soil, surface, climate, biome, rock_id);
 			float base_roughness = sc_compose_roughness(primary, secondary, surface);
 			float camera_dist = length(v_render - CAMERA_POSITION_WORLD);
-			vec3 dpos = v_render + u_detail_origin;
+			vec3 dpos = spbr_antitile_position(v_render + u_detail_origin);
 			vec3 albedo;
 			float roughness;
 			vec3 scan_n;
