@@ -253,7 +253,7 @@ func _publish_fallback_weather() -> void:
 	global_products.fill(Color(0.68, -1.0, 0.0, 0.0))
 	global_products_texture.update(global_products)
 	global_products_values = global_products.get_data().to_float32_array()
-	var local_products := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	var local_products := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
 	local_products.fill(Color(0.68, -1.0, 0.0, 0.0))
 	local_products_texture.update(local_products)
 
@@ -406,14 +406,9 @@ func _sync_weather_map_material() -> void:
 	var weather_map := get_node_or_null("/root/WeatherMap")
 	if weather_map == null or not weather_map.visible:
 		return
-	# The new globe owns spatial materials and knows which global fields each
-	# product consumes. Let it perform its own sync rather than pushing the old
-	# equirectangular map's local-texture uniforms into a different shader.
 	if weather_map.has_method(&"_sync_from_weather_system"):
 		weather_map.call(&"_sync_from_weather_system")
 		return
-	# Compatibility with the previous flat weather map while old scenes/scripts
-	# are still present in developer checkouts.
 	var material_value: Variant = weather_map.get("_material")
 	if not (material_value is ShaderMaterial):
 		return
