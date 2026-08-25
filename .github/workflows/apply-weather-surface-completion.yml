@@ -19,14 +19,14 @@ jobs:
         with:
           ref: weather/0.0.5
           fetch-depth: 0
-      - name: Apply completion patch
-        run: python tools/apply_weather_surface_completion.py
-      - name: Commit implementation
+      - name: Apply follow-up fixes
+        run: python tools/fix_weather_surface_completion.py
+      - name: Commit fixes
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/weather/weather_system.gd scripts/weather/surface_energy_bridge.gd native/weather/src/weather_native.h native/weather/src/weather_native.cpp shaders/weather_surface.gdshaderinc shaders/spherical_geometry_clipmap_procedural_uv.gdshader
+          git add scripts/weather/surface_energy_bridge.gd native/weather/src/weather_native.cpp
           git diff --cached --check
-          git commit -m "Complete coupled terrain weather surface model"
+          git commit -m "Fix local surface rebuild coalescing and lake horizons"
           git push origin HEAD:weather/0.0.5
