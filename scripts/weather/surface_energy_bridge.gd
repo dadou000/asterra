@@ -31,6 +31,14 @@ var _local_building := false
 var _local_task_id := -1
 var _local_uploaded_center := Vector3.ZERO
 var _local_requested_center := Vector3.ZERO
+# Worker completion callbacks never touch WeatherNative directly. They only
+# park their result here; _process() applies it after both the build worker
+# and the serialized native weather worker are known to be idle.
+var _pending_global_surface_request: int = -1
+var _pending_global_surface_fields := PackedFloat32Array()
+var _pending_local_surface_request: int = -1
+var _pending_local_surface_center := Vector3.ZERO
+var _pending_local_surface_fields := PackedFloat32Array()
 var _terrain_ref: WeakRef
 
 
@@ -61,6 +69,7 @@ func _process(delta: float) -> void:
 		if Planet.ready_state and not _surface_fields_uploaded:
 			_upload_global_surface_fields()
 
+	_service_pending_surface_uploads()
 	_maybe_queue_local_surface()
 	if WeatherSystem.global_state_revision != _last_global_weather_revision:
 		_last_global_weather_revision = WeatherSystem.global_state_revision
@@ -163,24 +172,72 @@ static func _build_global_surface_fields() -> PackedFloat32Array:
 
 
 func _finish_global_surface_fields(request: int, packed: PackedFloat32Array) -> void:
-	if WeatherSystem.native_worker_busy():
-		call_deferred("_finish_global_surface_fields", request, packed)
+	# This callback may run while WeatherSystem's native worker is still inside
+	# step_global(). Never retry via call_deferred from here: Godot can drain
+	# deferred calls repeatedly in one idle cycle, which turned the 8 MiB field
+	# into an unbounded retry loop and eventually crashed the process.
+	_pending_global_surface_request = request
+	_pending_global_surface_fields = packed
+
+
+func _service_pending_surface_uploads() -> void:
+	if _native == null or not is_instance_valid(_native):
 		return
-	if _global_task_id >= 0:
-		WorkerThreadPool.wait_for_task_completion(_global_task_id)
-		_global_task_id = -1
-	_global_building = false
-	if request != _global_request or _native == null or not is_instance_valid(_native):
+
+	# Apply at most one completed surface job per frame. WeatherSystem launches
+	# its next native solver job deferred, so a native call made here on the main
+	# thread cannot overlap a newly scheduled solver invocation.
+	if _pending_global_surface_request >= 0:
+		if _global_task_id >= 0 and not WorkerThreadPool.is_task_completed(_global_task_id):
+			return
+		if WeatherSystem.native_worker_busy():
+			return
+		if _global_task_id >= 0:
+			WorkerThreadPool.wait_for_task_completion(_global_task_id)
+			_global_task_id = -1
+		_global_building = false
+		var request := _pending_global_surface_request
+		var packed := _pending_global_surface_fields
+		_pending_global_surface_request = -1
+		_pending_global_surface_fields = PackedFloat32Array()
+		if request != _global_request:
+			if Planet.ready_state and not _surface_fields_uploaded:
+				_upload_global_surface_fields()
+			return
+		_native.call(&"set_global_surface_fields", packed)
+		_surface_fields_uploaded = true
+		_local_uploaded_center = Vector3.ZERO
+		_local_requested_center = Vector3.ZERO
+		_local_request += 1
+		_push_solar_forcing()
+		_global_surface_dirty = true
+		_local_surface_dirty = true
 		return
-	_native.call(&"set_global_surface_fields", packed)
-	_surface_fields_uploaded = true
-	_local_uploaded_center = Vector3.ZERO
-	_local_requested_center = Vector3.ZERO
-	_local_request += 1
-	_push_solar_forcing()
-	_global_surface_dirty = true
-	_local_surface_dirty = true
-	_service_surface_publication()
+
+	if _pending_local_surface_request >= 0:
+		if _local_task_id >= 0 and not WorkerThreadPool.is_task_completed(_local_task_id):
+			return
+		if WeatherSystem.native_worker_busy():
+			return
+		if _local_task_id >= 0:
+			WorkerThreadPool.wait_for_task_completion(_local_task_id)
+			_local_task_id = -1
+		_local_building = false
+		var request := _pending_local_surface_request
+		var center := _pending_local_surface_center
+		var fields := _pending_local_surface_fields
+		_pending_local_surface_request = -1
+		_pending_local_surface_center = Vector3.ZERO
+		_pending_local_surface_fields = PackedFloat32Array()
+		if request == _local_request and Planet.cfg != null:
+			var current_center := WeatherSystem.local_center.normalized()
+			var mismatch_m := acos(clampf(current_center.dot(center), -1.0, 1.0)) * Planet.cfg.planet_radius
+			if mismatch_m <= LOCAL_CELL_M * 0.5:
+				_native.call(&"set_local_surface_fields", fields)
+				_local_uploaded_center = center
+				_local_surface_dirty = true
+		if request != _local_request:
+			_start_local_surface_build()
 
 
 func _has_local_observer() -> bool:
@@ -308,23 +365,11 @@ static func _build_local_surface_fields(center: Vector3, east: Vector3, north: V
 
 func _finish_local_surface_build(request: int, center: Vector3,
 		fields: PackedFloat32Array) -> void:
-	if WeatherSystem.native_worker_busy():
-		call_deferred("_finish_local_surface_build", request, center, fields)
-		return
-	if _local_task_id >= 0:
-		WorkerThreadPool.wait_for_task_completion(_local_task_id)
-		_local_task_id = -1
-	_local_building = false
-	if request == _local_request and _native != null and is_instance_valid(_native):
-		var current_center := WeatherSystem.local_center.normalized()
-		var mismatch_m := acos(clampf(current_center.dot(center), -1.0, 1.0)) * Planet.cfg.planet_radius
-		if mismatch_m <= LOCAL_CELL_M * 0.5:
-			_native.call(&"set_local_surface_fields", fields)
-			_local_uploaded_center = center
-			_local_surface_dirty = true
-			_service_surface_publication()
-	if request != _local_request:
-		_start_local_surface_build()
+	# Same rule as the global result: completion callback stores data only.
+	# _service_pending_surface_uploads() owns all WeatherNative mutation.
+	_pending_local_surface_request = request
+	_pending_local_surface_center = center
+	_pending_local_surface_fields = fields
 
 
 func _on_terrain_region_changed(center_dir: Vector3, radius_m: float) -> void:
