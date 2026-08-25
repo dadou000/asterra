@@ -4,21 +4,33 @@ This extension is the primary meteorology backend for `weather/0.0.5`.
 
 ## Build on Windows
 
-With CMake 3.20+ you can build directly and let CMake fetch `godot-cpp` master:
+The simplest route is the repository helper:
 
 ```powershell
-cmake -S native/weather -B native/weather/build -DCMAKE_BUILD_TYPE=Release
-cmake --build native/weather/build --config Release
+powershell -ExecutionPolicy Bypass -File tools/build_weather_avx2_windows.ps1
 ```
 
-For the custom Godot 4.7.1 fork, prefer an exact matching `godot-cpp` checkout when available:
+With a `godot-cpp` checkout matching the custom Godot 4.7.1 fork:
 
 ```powershell
-cmake -S native/weather -B native/weather/build -DGODOT_CPP_DIR=C:/src/godot-cpp -DCMAKE_BUILD_TYPE=Release
-cmake --build native/weather/build --config Release
+powershell -ExecutionPolicy Bypass -File tools/build_weather_avx2_windows.ps1 -GodotCppDir C:/src/godot-cpp
 ```
 
-The build emits `bin/asterra_weather.dll`. The `.gdextension` manifest is already in the project and Godot loads the native `WeatherNative` class at startup.
+You can also invoke CMake directly:
+
+```powershell
+cmake -S native/weather -B native/weather/build
+cmake --build native/weather/build --config Release --target asterra_weather --parallel
+```
+
+The build writes both files directly into `bin/`:
+
+- `bin/asterra_weather.dll`
+- `bin/asterra_weather.gdextension`
+
+The manifest is intentionally copied only after a successful native build. `WeatherNativeBootstrap` checks for that manifest and loads it before `WeatherSystem`. An unbuilt checkout therefore starts with a neutral weather field instead of failing GDScript parsing or trying to load a missing DLL.
+
+After the first successful build, restart Godot.
 
 ## CPU requirement
 
