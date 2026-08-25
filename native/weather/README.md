@@ -74,6 +74,10 @@ The baseline uses the physical Earth rotation rate, Bolton/Tetens saturation hum
 
 - 256x128x6 atmospheric cells.
 - Semi-Lagrangian horizontal transport.
+- True latitude-dependent zonal spacing, across-pole ghost topology, and a
+  reduced-resolution polar filter for wavelengths the shrinking rings cannot
+  resolve.
+- Sphere-metric divergence, vorticity, and momentum curvature terms.
 - Pressure-gradient acceleration and Coriolis coupling.
 - Layer-dependent friction/radiative relaxation and climatological circulation forcing.
 - Saturation from temperature/pressure, condensation, evaporation, latent heating, freezing/melting and condensate fallout.
@@ -82,6 +86,8 @@ The baseline uses the physical Earth rotation rate, Bolton/Tetens saturation hum
 
 - 192x192x6 at 2.2 km horizontal spacing (~422 km across).
 - Same prognostic variables and physics as global, but shorter timestep.
+- Global geographic winds are projected into the fixed local tangent frame,
+  including for nests that straddle a pole.
 - Outer 24-cell rim is smoothly nudged toward the matching global sigma layers.
 - The nest remains spatially fixed until the player moves ~18% of its width, avoiding the previous frame-by-frame rotation of local data.
 

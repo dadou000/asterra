@@ -1,7 +1,7 @@
 extends Node
 ## Focused native weather calibration/API smoke test.
-## Run from a project copy while the editor is closed, or from an isolated test
-## project containing bin/asterra_weather.{dll,gdextension}.
+## Run `godot --headless --path . tests/WeatherNativeTuningSmoke.tscn` while the
+## editor is closed, or from an isolated project containing the native runtime.
 
 
 func _ready() -> void:
@@ -77,6 +77,49 @@ func _ready() -> void:
 		fail_test("global pressure anomaly is not mass-centered: %.6f" % weighted_pressure_anomaly)
 		return
 
+	# Longitude converges to one physical point at either pole. The outermost
+	# cell-centred rows may retain a small resolved gradient, but a full-strength
+	# zonal wave here signals the old equirectangular polar singularity.
+	var polar_pressure_span := 0.0
+	for y in [0, 127]:
+		var row_min := INF
+		var row_max := -INF
+		for x in 256:
+			var pressure := weather[(x + y * 256) * 4 + 3]
+			row_min = minf(row_min, pressure)
+			row_max = maxf(row_max, pressure)
+		polar_pressure_span = maxf(polar_pressure_span, row_max - row_min)
+	if polar_pressure_span > 0.02:
+		fail_test("polar pressure is discontinuous across longitude: span %.6f" % polar_pressure_span)
+		return
+
+	# Crossing the old reference-axis threshold used to reverse both local patch
+	# axes. A transported tangent basis must remain coherent across the rebuild.
+	var y0 := 0.91
+	var y1 := 0.93
+	native.call(&"set_local_center", Vector3(sqrt(1.0 - y0 * y0), y0, 0.0))
+	var east0: Vector3 = native.call(&"get_local_east")
+	native.call(&"set_local_center", Vector3(sqrt(1.0 - y1 * y1), y1, 0.0))
+	var east1: Vector3 = native.call(&"get_local_east")
+	if east0.dot(east1) < 0.90:
+		fail_test("local tangent frame flipped near the polar threshold")
+		return
+
+	# Exercise both polar local nests after the global-to-local wind rotation.
+	for pole in [Vector3.UP, Vector3.DOWN]:
+		native.call(&"set_local_center", pole)
+		for _step in 24:
+			native.call(&"step_local", 20.0)
+		var local_weather: PackedFloat32Array = native.call(&"get_local_weather_rgba")
+		var local_diagnostics: PackedFloat32Array = native.call(&"get_local_diagnostics_rgba")
+		if local_weather.size() != 192 * 192 * 4 or local_diagnostics.size() != local_weather.size():
+			fail_test("unexpected polar local texture dimensions")
+			return
+		for i in local_weather.size():
+			if not is_finite(local_weather[i]) or not is_finite(local_diagnostics[i]):
+				fail_test("non-finite polar local state at %d" % i)
+				return
+
 	var baseline_cloud := channel_mean[0]
 	for layer in 6:
 		native.call(&"set_layer_weight", layer, 0.0)
@@ -108,8 +151,8 @@ func _ready() -> void:
 			fail_test("bounded tuning extremes destabilized weather at %d" % i)
 			return
 
-	print("WEATHER_TUNING_SMOKE_OK mean cloud/storm/precip/pressure = %.4f %.4f %.4f %.4f" % [
-		channel_mean[0], channel_mean[1], channel_mean[2], channel_mean[3]])
+	print("WEATHER_TUNING_SMOKE_OK mean cloud/storm/precip/pressure = %.4f %.4f %.4f %.4f; polar span %.6f" % [
+		channel_mean[0], channel_mean[1], channel_mean[2], channel_mean[3], polar_pressure_span])
 	get_tree().quit(0)
 
 

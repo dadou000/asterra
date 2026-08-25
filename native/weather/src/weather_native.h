@@ -88,6 +88,7 @@ private:
 
 	static int wrap_x(int x, int w);
 	static int clamp_y(int y, int h);
+	static int spherical_cell(int x, int y, int w, int h);
 	static int global_cell(int x, int y);
 	static int local_cell(int x, int y);
 
@@ -100,7 +101,9 @@ private:
 	void vertical_pass(Atmosphere &a, bool is_global, float dt);
 	void diagnose(Atmosphere &a, bool is_global);
 	void center_global_pressure(std::vector<float> &pressure);
+	void filter_global_poles(Atmosphere &a);
 	void nudge_local_boundaries(float dt);
+	void rotate_global_wind_to_local(const Vector3 &dir, float &u, float &v) const;
 	void global_state_at_dir_layer(const Vector3 &dir, int layer,
 		float &theta, float &q, float &u, float &v, float &liquid,
 		float &ice, float &pressure) const;
