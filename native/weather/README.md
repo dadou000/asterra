@@ -159,4 +159,31 @@ A second RGBA32F diagnostic texture uses:
 - **B** = signed upper-level PV proxy, neutral at 0.5
 - **A** = maximum column vertical wind shear
 
+The severe-weather probe also consumes a convective RGBA32F diagnostic texture:
+
+- **R** = strongest resolved upward mass flux
+- **G** = strongest downdraft
+- **B** = upper-level ice/anvil reservoir
+- **A** = near-surface wind speed
+
+## Severe-weather validation
+
+`tests/WeatherSevereProbe.tscn` performs scale-aware structural tests rather than
+checking only finite array values. The 256x128 global mesh is tested for closed,
+rotating warm-ocean lows, hurricane-threshold wind, pressure closure, anvils, and
+linear mesoscale convection. The 2.2 km nest is tested for deep-convective
+lifecycle, cold-pool-organized lines, and persistent rotating updrafts in shear.
+For example:
+
+```powershell
+godot --headless --path . tests/WeatherSevereProbe.tscn -- --days=15 --local-hours=6 --seed=1095980101 --output=res://tests/weather_severe_output
+```
+
+Runs of four or more global days and six or more local hours fail with a nonzero
+exit code when a required severe structure is absent or the local nest runs away.
+The global grid represents hurricanes through a bounded coarse-grid warm-core /
+eyewall closure; it cannot resolve an eye wall explicitly. “Supercell-like” means
+a persistent rotating deep updraft within the nest's roughly 2.2 km / six-level
+resolution, not tornado-scale dynamics or forecast-grade storm morphology.
+
 Open the live map with `é`. Products 6–9 display these dynamics. The simulation-influence slider rescales exported weather/diagnostic anomalies without altering the solver timestep or internal numerical state.

@@ -122,6 +122,9 @@ private:
 	SurfaceState local_surface;
 	std::array<float, TUNING_COUNT> tuning_weights = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 	std::array<float, LAYERS> layer_weights = DEFAULT_LAYER_WEIGHTS;
+	std::array<int, 2> tropical_core_cell = {-1, -1};
+	std::array<float, 2> tropical_core_age_s = {0.0f, 0.0f};
+	std::vector<float> tropical_genesis_activity;
 	uint64_t seed = 1;
 	double global_simulation_seconds = 0.0;
 	Vector3 local_center = Vector3(0, 1, 0);
@@ -194,6 +197,13 @@ public:
 	PackedFloat32Array get_local_weather_rgba() const;
 	PackedFloat32Array get_global_diagnostics_rgba() const;
 	PackedFloat32Array get_local_diagnostics_rgba() const;
+	// Convective structure: ascent, downdraft, upper ice/anvil, and surface
+	// wind speed. Rotation remains signed in the dynamics diagnostics and can be
+	// collocated with ascent by validators. This keeps severe-weather validation
+	// separate from the presentation-oriented storm scalar.
+	PackedFloat32Array get_global_convective_rgba() const;
+	PackedFloat32Array get_local_convective_rgba() const;
+	PackedFloat32Array get_tropical_core_diagnostics() const;
 	PackedFloat32Array get_global_surface_rgba() const;
 	PackedFloat32Array get_local_surface_rgba() const;
 	PackedFloat32Array get_global_products_rgba() const;

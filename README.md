@@ -115,7 +115,7 @@ shadows.
 
 ## Verification
 
-`tests/Tests.tscn` runs 71 property checks headless, including:
+`tests/Tests.tscn` runs 73 property checks headless, including:
 
 * two bakes of the same seed are bit-identical; a different seed is a different planet
 * the cube-sphere inverse is exact and macro fields interpolate across face seams

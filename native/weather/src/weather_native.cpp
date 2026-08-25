@@ -226,6 +226,9 @@ void WeatherNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_local_weather_rgba"), &WeatherNative::get_local_weather_rgba);
 	ClassDB::bind_method(D_METHOD("get_global_diagnostics_rgba"), &WeatherNative::get_global_diagnostics_rgba);
 	ClassDB::bind_method(D_METHOD("get_local_diagnostics_rgba"), &WeatherNative::get_local_diagnostics_rgba);
+	ClassDB::bind_method(D_METHOD("get_global_convective_rgba"), &WeatherNative::get_global_convective_rgba);
+	ClassDB::bind_method(D_METHOD("get_local_convective_rgba"), &WeatherNative::get_local_convective_rgba);
+	ClassDB::bind_method(D_METHOD("get_tropical_core_diagnostics"), &WeatherNative::get_tropical_core_diagnostics);
 	ClassDB::bind_method(D_METHOD("set_tuning_weight", "name", "value"), &WeatherNative::set_tuning_weight);
 	ClassDB::bind_method(D_METHOD("get_tuning_weight", "name"), &WeatherNative::get_tuning_weight);
 	ClassDB::bind_method(D_METHOD("reset_tuning_weights"), &WeatherNative::reset_tuning_weights);
@@ -299,6 +302,9 @@ float WeatherNative::qsat_scalar(float temperature_k, float pressure_pa) {
 void WeatherNative::initialize(int64_t p_seed) {
 	seed = uint64_t(p_seed);
 	global_simulation_seconds = 0.0;
+	tropical_core_cell = {-1, -1};
+	tropical_core_age_s = {0.0f, 0.0f};
+	tropical_genesis_activity.assign(GLOBAL_W * GLOBAL_H, 0.0f);
 	initialize_global();
 	center_global_pressure(global_atm.pressure);
 	diagnose(global_atm, true);
@@ -681,7 +687,11 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		const float cond_frac = std::min(cloud_weight * dt / 120.0f, 1.0f);
 		const float cloud_decay = std::exp(-cloud_weight * dt / 57600.0f);
 		const float pressure_relax = relaxation_fraction(dt, 129600.0f, circulation_weight);
-		const float pressure_smooth = relaxation_fraction(dt, 3600.0f, 1.0f);
+		// A one-hour global Laplacian erased every mesoscale pressure core before
+		// Coriolis could close its circulation. The 90 s global integrator is stable
+		// with a three-hour scale; the kilometre nest retains the tighter filter.
+		const float pressure_smooth = relaxation_fraction(
+			dt, is_global ? 10800.0f : 3600.0f, 1.0f);
 
 		for (int y = 0; y < h; ++y) {
 			float lat = is_global
@@ -882,7 +892,13 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 					_mm256_mul_ps(thermal, _mm256_set1_ps(-900.0f * sigma)),
 					_mm256_mul_ps(moisture, _mm256_set1_ps(120000.0f)));
 				pressure = _mm256_fmadd_ps(_mm256_sub_ps(target_p, pressure), _mm256_set1_ps(pressure_relax), pressure);
-				pressure = _mm256_fnmadd_ps(div, _mm256_set1_ps(8000.0f * sigma * dt * circulation_weight), pressure);
+				// The global mesh is strongly damped and can use the compact explicit
+				// pressure/divergence update. The kilometre-scale nest applies this
+				// tendency from the newly accelerated wind below, forming a stable
+				// symplectic pressure-wave step instead of a growing forward-Euler pair.
+				if (is_global) {
+					pressure = _mm256_fnmadd_ps(div, _mm256_set1_ps(8000.0f * sigma * dt * circulation_weight), pressure);
+				}
 				__m256 pavg = _mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(pe, pw), _mm256_add_ps(pn, ps)), _mm256_set1_ps(0.25f));
 				pressure = _mm256_fmadd_ps(_mm256_sub_ps(pavg, pressure), _mm256_set1_ps(pressure_smooth), pressure);
 
@@ -960,6 +976,34 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				_mm256_storeu_ps(&a.nliquid[off + base], clamp8(liquid, 0.0f, 0.012f));
 				_mm256_storeu_ps(&a.nice[off + base], clamp8(ice, 0.0f, 0.012f));
 				_mm256_storeu_ps(&a.npressure[off + base], clamp8(pressure, -6500.0f, 6500.0f));
+			}
+		}
+	}
+
+	if (!is_global) {
+		// Complete the local pressure/divergence pair with updated momentum. This
+		// is deliberately a second pass: using old pressure and old divergence in
+		// the same explicit pass injected energy into the 2.2 km acoustic mode and
+		// drove the whole nest to its wind/updraft clamps in under an hour.
+		for (int layer = 0; layer < LAYERS; ++layer) {
+			int off = a.layer_offset(layer);
+			float sigma = SIGMA[layer];
+			float coefficient = 8000.0f * sigma * dt * circulation_weight;
+			for (int y = 0; y < h; ++y) {
+				int yn = std::min(y + 1, h - 1);
+				int ys = std::max(y - 1, 0);
+				for (int x = 0; x < w; ++x) {
+					int xe = std::min(x + 1, w - 1);
+					int xw = std::max(x - 1, 0);
+					int c = x + y * w;
+					float divergence_new = (a.nu[off + xe + y * w] - a.nu[off + xw + y * w])
+						* (0.5f / LOCAL_CELL_M)
+						+ (a.nv[off + x + yn * w] - a.nv[off + x + ys * w])
+						* (0.5f / LOCAL_CELL_M);
+					a.npressure[off + c] = std::clamp(
+						a.npressure[off + c] - divergence_new * coefficient,
+						-6500.0f, 6500.0f);
+				}
 			}
 		}
 	}
@@ -1193,13 +1237,22 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 			__m256 div_lo = _mm256_loadu_ps(&a.divergence[lo_off + c]);
 			__m256 precip = _mm256_loadu_ps(&a.nprecip[c]);
 
-			// Positive theta decrease with height is statically unstable. Low-level
-			// convergence and moisture then convert that instability into upward mass
-			// transport. Heavy precipitation can generate a weaker downdraft branch.
-			__m256 instability = clamp8(_mm256_mul_ps(_mm256_add_ps(_mm256_sub_ps(th_lo, th_hi), _mm256_set1_ps(1.5f)), _mm256_set1_ps(1.0f / 10.0f)), 0.0f, 1.0f);
+			// Approximate moist static instability rather than requiring a dry-theta
+			// decrease. Real tropical/severe columns are commonly dry-stable while
+			// low-level water vapour makes a lifted parcel strongly buoyant. The
+			// 1400 K per kg/kg coefficient is a conservative fraction of Lv/cp.
+			__m256 moist_theta_excess = _mm256_add_ps(
+				_mm256_sub_ps(th_lo, th_hi),
+				_mm256_mul_ps(_mm256_sub_ps(q_lo, q_hi), _mm256_set1_ps(1400.0f)));
+			__m256 instability = clamp8(_mm256_mul_ps(
+				_mm256_add_ps(moist_theta_excess, _mm256_set1_ps(1.0f)),
+				_mm256_set1_ps(1.0f / 18.0f)), 0.0f, 1.0f);
 			__m256 moisture = clamp8(_mm256_mul_ps(q_lo, _mm256_set1_ps(1.0f / 0.018f)), 0.0f, 1.0f);
 			__m256 convergence_up = _mm256_mul_ps(_mm256_max_ps(_mm256_sub_ps(zero, div_lo), zero), _mm256_set1_ps(0.58f * convection_weight));
-			__m256 convective_up = _mm256_mul_ps(_mm256_mul_ps(instability, moisture), _mm256_set1_ps(3.2e-4f * convection_weight));
+			float convective_mass_scale = is_global ? 3.2e-4f : 1.7e-3f;
+			__m256 convective_up = _mm256_mul_ps(
+				_mm256_mul_ps(instability, moisture),
+				_mm256_set1_ps(convective_mass_scale * convection_weight));
 			// Positive sensible heat at the lower boundary is an explicit buoyancy
 			// source for interface 0. This turns differential slope heating into
 			// resolved upslope/thermal circulation instead of relying only on delayed
@@ -1217,6 +1270,21 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 				_mm256_add_ps(_mm256_add_ps(convergence_up, convective_up), surface_buoyancy),
 				downdraft), -1.8e-4f, 6.0e-4f);
 			_mm256_storeu_ps(&a.mass_flux[flux_off + c], rate);
+
+			if (interface_index == 0) {
+				// Rain-loaded, evaporatively cooled air produces a shallow cold pool.
+				// Its hydrostatic pressure excess and temperature deficit generate the
+				// gust-front convergence needed to organize new cells into lines.
+				__m256 cold_pool_cooling = _mm256_mul_ps(
+					precip, _mm256_set1_ps(dt * 7.0e-4f));
+				__m256 cold_pool_pressure = _mm256_mul_ps(
+					precip, _mm256_set1_ps(dt * 0.045f));
+				th_lo = _mm256_sub_ps(th_lo, cold_pool_cooling);
+				_mm256_storeu_ps(&a.ntheta[lo_off + c], clamp8(th_lo, 220.0f, 430.0f));
+				__m256 low_pressure = _mm256_loadu_ps(&a.npressure[lo_off + c]);
+				_mm256_storeu_ps(&a.npressure[lo_off + c], clamp8(
+					_mm256_add_ps(low_pressure, cold_pool_pressure), -6500.0f, 6500.0f));
+			}
 
 			__m256 frac = clamp8(_mm256_mul_ps(abs8(rate), _mm256_set1_ps(dt * 0.72f)), 0.0f, max_mix);
 			__m256 pos_mask = _mm256_cmp_ps(rate, zero, _CMP_GE_OS);
@@ -1253,6 +1321,197 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 			hi_ice = _mm256_add_ps(hi_ice, _mm256_mul_ps(lofted, _mm256_set1_ps(0.82f)));
 			_mm256_storeu_ps(&a.nliquid[lo_off + c], _mm256_max_ps(lo_liq, zero));
 			_mm256_storeu_ps(&a.nice[hi_off + c], _mm256_max_ps(hi_ice, zero));
+		}
+	}
+
+	if (is_global && surface_fields_ready) {
+		// An ~86 km cell cannot resolve an eyewall. Represent the unresolved
+		// wind-induced surface heat exchange / latent-heating feedback only where
+		// the resolved environment already supports tropical-cyclone genesis:
+		// warm open water, moist ascent, low shear, off-equatorial cyclonic seed.
+		// The resulting warm-core pressure tendency is continuous and state based;
+		// no storm is spawned by a timer or presentation-layer random event.
+		std::array<float, 2> best_activity = {0.0f, 0.0f};
+		std::array<int, 2> best_cell = {-1, -1};
+		std::fill(tropical_genesis_activity.begin(), tropical_genesis_activity.end(), 0.0f);
+		for (int y = 0; y < a.height; ++y) {
+			float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(a.height);
+			float alat = std::abs(lat);
+			if (alat < 5.0f * PI_F / 180.0f || alat > 32.0f * PI_F / 180.0f) continue;
+			float hemisphere = lat >= 0.0f ? 1.0f : -1.0f;
+			for (int x = 0; x < a.width; ++x) {
+				int c = x + y * a.width;
+				float water = std::clamp(global_surface.water_fraction[c], 0.0f, 1.0f);
+				float sst = global_surface.temperature_k[c];
+				if (water < 0.50f || sst < 295.0f) continue;
+				int l0 = a.layer_offset(0) + c;
+				float ascent = std::max(a.mass_flux[a.interface_offset(0) + c], 0.0f);
+				float ascent_factor = 0.18f
+					+ 0.82f * smoothstep01((ascent - 1.2e-5f) / 8.0e-5f);
+				float moisture_factor = std::clamp(a.nq[l0] / 0.018f, 0.20f, 1.0f);
+				float warm_factor = smoothstep01((sst - 295.0f) / 4.0f);
+				float max_shear = 0.0f;
+				for (int layer = 0; layer < LAYERS; ++layer) {
+					max_shear = std::max(max_shear, a.shear[a.layer_offset(layer) + c]);
+				}
+				// Strong shear suppresses tropical organization but should not make the
+				// coarse parameterization discontinuously zero in every six-layer
+				// column; retain a small ventilated-convection branch.
+				float shear_factor = 0.15f + 0.85f
+					* (1.0f - smoothstep01((max_shear - 12.0f) / 22.0f));
+				float cyclonic_vorticity = hemisphere * a.vorticity[l0];
+				float rotation_factor = smoothstep01((cyclonic_vorticity + 1.5e-5f) / 1.2e-4f);
+				float low_pressure_factor = smoothstep01((-a.npressure[l0] + 180.0f) / 1800.0f);
+				float activity = warm_factor * moisture_factor * ascent_factor * shear_factor
+					* (0.30f + 0.70f * rotation_factor)
+					* (0.25f + 0.75f * low_pressure_factor);
+				tropical_genesis_activity[c] = activity;
+				int hemisphere_index = lat >= 0.0f ? 0 : 1;
+				if (activity > best_activity[hemisphere_index]) {
+					best_activity[hemisphere_index] = activity;
+					best_cell[hemisphere_index] = c;
+				}
+			}
+		}
+		// Apply a smooth unresolved eyewall/heating footprint around only the best
+		// genesis environment in each hemisphere. This prevents every warm-ocean
+		// grid cell from deepening together (which global pressure centering would
+		// cancel) while allowing the resolved low to steer and retain the maximum.
+		for (int hemisphere_index = 0; hemisphere_index < 2; ++hemisphere_index) {
+			int center = tropical_core_cell[hemisphere_index];
+			bool retained_existing_core = false;
+			if (center >= 0) {
+				int old_x = center % a.width;
+				int old_y = center / a.width;
+				float retained_activity = tropical_genesis_activity[center];
+				int retained_cell = center;
+				// Advect the sub-grid core only to a clearly better neighbouring
+				// environment. Without this memory, the instantaneous global maximum
+				// jumps between basins and never lets a closed circulation spin up.
+				for (int oy = -2; oy <= 2; ++oy) {
+					int yy = std::clamp(old_y + oy, 0, a.height - 1);
+					for (int ox = -2; ox <= 2; ++ox) {
+						int xx = wrap_x(old_x + ox, a.width);
+						int candidate = xx + yy * a.width;
+						float candidate_activity = tropical_genesis_activity[candidate];
+						if (candidate_activity > retained_activity * 1.15f) {
+							retained_activity = candidate_activity;
+							retained_cell = candidate;
+						}
+					}
+				}
+				center = retained_activity >= 5.0e-6f ? retained_cell : -1;
+				retained_existing_core = center >= 0;
+			}
+			if (center < 0 && best_activity[hemisphere_index] >= 1.0e-5f) {
+				center = best_cell[hemisphere_index];
+			}
+			tropical_core_cell[hemisphere_index] = center;
+			if (center < 0) {
+				tropical_core_age_s[hemisphere_index] = 0.0f;
+				continue;
+			}
+			tropical_core_age_s[hemisphere_index] = retained_existing_core
+				? std::min(tropical_core_age_s[hemisphere_index] + dt, 30.0f * 86400.0f)
+				: 0.0f;
+			float activity = std::max(tropical_genesis_activity[center], 0.0020f);
+			int center_x = center % a.width;
+			int center_y = center / a.width;
+			float core_rate = std::min(activity * 4.0f, 0.055f);
+			float hemisphere_sign = hemisphere_index == 0 ? 1.0f : -1.0f;
+			for (int oy = -3; oy <= 3; ++oy) {
+				int yy = std::clamp(center_y + oy, 0, a.height - 1);
+				for (int ox = -3; ox <= 3; ++ox) {
+					int xx = wrap_x(center_x + ox, a.width);
+					int c = xx + yy * a.width;
+					float radius_sq = float(ox * ox + oy * oy);
+					// Once convection selects an ocean core, its atmospheric warm core is
+					// continuous across neighbouring coast/grid-fraction cells. Multiplying
+					// every footprint point by its own land mask inverted the pressure
+					// gradient near coasts and prevented circulation closure.
+					float footprint = std::exp(-radius_sq / 4.5f);
+					float pressure_tendency = core_rate * footprint * dt;
+					for (int layer = 0; layer <= 2; ++layer) {
+						int i = a.layer_offset(layer) + c;
+						a.npressure[i] = std::clamp(a.npressure[i] - pressure_tendency
+							* (1.0f - 0.18f * float(layer)), -6500.0f, 6500.0f);
+					}
+					for (int layer = 1; layer <= 3; ++layer) {
+						int i = a.layer_offset(layer) + c;
+						a.ntheta[i] = std::clamp(a.ntheta[i]
+							+ activity * footprint * dt * 2.0e-4f, 220.0f, 430.0f);
+					}
+					// Parameterized unresolved eyewall transport. The coarse cell carries
+					// the net angular-momentum convergence and deep mass flux; resolved
+					// pressure gradients, advection, drag, landfall, and shear still govern
+					// its subsequent evolution.
+					float radius = std::sqrt(std::max(radius_sq, 1.0f));
+					float eyewall = std::exp(-radius_sq / 6.0f)
+						* (1.0f - std::exp(-radius_sq));
+					// A newly selected disturbance first has to persist before receiving the
+					// full unresolved eyewall closure. This avoids instant hurricane genesis
+					// while retaining a weak early circulation that the resolved flow can
+					// ventilate or organize.
+					float maturity = 0.25f + 0.75f * smoothstep01(
+						tropical_core_age_s[hemisphere_index] / (1.5f * 86400.0f));
+					float wind_acceleration = std::min(activity * 0.285f, 5.7e-3f)
+						* maturity
+						* eyewall * dt;
+					for (int layer = 0; layer <= 2; ++layer) {
+						int i = a.layer_offset(layer) + c;
+						float vertical_decay = 1.0f - 0.22f * float(layer);
+						a.nu[i] = std::clamp(a.nu[i] + hemisphere_sign * float(oy) / radius
+							* wind_acceleration * vertical_decay, -110.0f, 110.0f);
+						a.nv[i] = std::clamp(a.nv[i] + hemisphere_sign * float(ox) / radius
+							* wind_acceleration * vertical_decay, -95.0f, 95.0f);
+					}
+					float core_convection = std::min(activity * 0.006f, 2.2e-4f) * footprint;
+					for (int interface_index = 0; interface_index <= 2; ++interface_index) {
+						int i = a.interface_offset(interface_index) + c;
+						a.mass_flux[i] = std::max(a.mass_flux[i],
+							core_convection * (1.0f - 0.14f * float(interface_index)));
+					}
+					int anvil_i = a.layer_offset(4) + c;
+					a.nice[anvil_i] = std::clamp(a.nice[anvil_i]
+						+ activity * footprint * dt * 5.0e-8f, 0.0f, 0.012f);
+				}
+			}
+		}
+	}
+
+	if (!is_global) {
+		// At 2.2 km the nest resolves convective gradients but six sigma levels do
+		// not explicitly tilt horizontal vorticity into a mesocyclone. Apply the
+		// bounded curl of the resolved updraft gradient in sheared environments;
+		// this is the grid-scale analogue of shear tilting and vortex stretching.
+		int flux_off = a.interface_offset(0);
+		float hemisphere_sign = local_center.y >= 0.0f ? 1.0f : -1.0f;
+		for (int y = 1; y < a.height - 1; ++y) {
+			for (int x = 1; x < a.width - 1; ++x) {
+				int c = x + y * a.width;
+				float updraft = std::max(a.mass_flux[flux_off + c], 0.0f);
+				if (updraft < 3.5e-5f) continue;
+				float gx = (a.mass_flux[flux_off + c + 1]
+					- a.mass_flux[flux_off + c - 1]) / 4.0e-4f;
+				float gy = (a.mass_flux[flux_off + c + a.width]
+					- a.mass_flux[flux_off + c - a.width]) / 4.0e-4f;
+				float shear = 0.0f;
+				for (int layer = 0; layer <= 2; ++layer) {
+					shear = std::max(shear, a.shear[a.layer_offset(layer) + c]);
+				}
+				float shear_factor = 0.25f
+					+ 0.75f * smoothstep01((shear - 4.0f) / 18.0f);
+				float updraft_factor = smoothstep01((updraft - 3.5e-5f) / 1.2e-4f);
+				float impulse = dt * 0.0020f * shear_factor * updraft_factor;
+				for (int layer = 0; layer <= 2; ++layer) {
+					int i = a.layer_offset(layer) + c;
+					float vertical_decay = 1.0f - 0.25f * float(layer);
+					a.nu[i] = std::clamp(a.nu[i]
+						+ hemisphere_sign * gy * impulse * vertical_decay, -110.0f, 110.0f);
+					a.nv[i] = std::clamp(a.nv[i]
+						- hemisphere_sign * gx * impulse * vertical_decay, -95.0f, 95.0f);
+				}
+			}
 		}
 	}
 
@@ -1422,6 +1681,12 @@ void WeatherNative::rotate_global_wind_to_local(const Vector3 &d, float &u, floa
 
 void WeatherNative::initialize_local() {
 	float half = LOCAL_CELL_M * float(LOCAL_W) * 0.5f;
+	// Bilinear downscaling from an ~86 km parent grid is otherwise almost
+	// perfectly smooth at 2.2 km. Seed a tiny, deterministic boundary-layer
+	// perturbation spectrum so explicitly resolved convection can choose cells
+	// and lines. The amplitude is well below ordinary observational noise and is
+	// tapered out across the boundary-relaxation rim.
+	float seed_phase = float(seed & 0xffffu) * 0.000173f;
 	for (int y = 0; y < LOCAL_H; ++y) {
 		for (int x = 0; x < LOCAL_W; ++x) {
 			float ex = (float(x) + 0.5f) * LOCAL_CELL_M - half;
@@ -1429,18 +1694,25 @@ void WeatherNative::initialize_local() {
 			Vector3 d = (local_center + local_east * (ex / PLANET_RADIUS_M)
 				+ local_north * (ny / PLANET_RADIUS_M)).normalized();
 			int c = x + y * LOCAL_W;
+			int edge_dist = std::min(std::min(x, LOCAL_W - 1 - x), std::min(y, LOCAL_H - 1 - y));
+			float interior = smoothstep01(float(edge_dist) / 24.0f);
+			float perturbation = interior * (
+				0.58f * std::sin(float(x) * 0.31f + seed_phase) * std::sin(float(y) * 0.27f - seed_phase * 0.7f)
+				+ 0.29f * std::sin(float(x + y) * 0.113f + seed_phase * 1.9f)
+				+ 0.13f * std::cos(float(2 * x - y) * 0.071f - seed_phase));
 			for (int layer = 0; layer < LAYERS; ++layer) {
 				float theta, q, u, v, liquid, ice, pressure;
 				global_state_at_dir_layer(d, layer, theta, q, u, v, liquid, ice, pressure);
 				rotate_global_wind_to_local(d, u, v);
 				int i = local_atm.layer_offset(layer) + c;
-				local_atm.theta[i] = theta;
-				local_atm.q[i] = q;
+				float low_level = 1.0f - float(layer) / float(LAYERS - 1);
+				local_atm.theta[i] = theta + perturbation * 0.12f * low_level;
+				local_atm.q[i] = std::clamp(q + perturbation * 3.0e-5f * low_level, 0.00001f, 0.032f);
 				local_atm.u[i] = u;
 				local_atm.v[i] = v;
 				local_atm.liquid[i] = liquid;
 				local_atm.ice[i] = ice;
-				local_atm.pressure[i] = pressure;
+				local_atm.pressure[i] = pressure + perturbation * 3.0f * low_level;
 			}
 			local_atm.precip[c] = 0.0f;
 		}
@@ -1641,11 +1913,19 @@ void WeatherNative::nudge_local_boundaries(float dt) {
 void WeatherNative::step_local(float dt) {
 	if (!local_initialized) initialize_local();
 	dt = std::clamp(dt, 1.0f, 40.0f);
-	horizontal_pass(local_atm, false, dt);
-	if (surface_fields_ready) surface_pass(local_atm, local_surface, false, dt);
-	vertical_pass(local_atm, false, dt);
-	swap_state(local_atm);
-	diagnose(local_atm, false);
+	// The 2.2 km pressure/divergence mode has a much tighter CFL limit than the
+	// global mesh. Public 20/40 s cadence is retained for callers, but integration
+	// is substepped so a nest cannot turn into a domain-wide acoustic/convective
+	// runaway before boundaries can respond.
+	int substeps = std::max(1, int(std::ceil(dt / 10.0f)));
+	float sub_dt = dt / float(substeps);
+	for (int substep = 0; substep < substeps; ++substep) {
+		horizontal_pass(local_atm, false, sub_dt);
+		if (surface_fields_ready) surface_pass(local_atm, local_surface, false, sub_dt);
+		vertical_pass(local_atm, false, sub_dt);
+		swap_state(local_atm);
+		diagnose(local_atm, false);
+	}
 }
 
 void WeatherNative::reset_local_from_global() {
@@ -1673,7 +1953,9 @@ static PackedFloat32Array weather_rgba_from(const WeatherNative::Atmosphere &a,
 		}
 		int l0 = a.layer_offset(0) + c;
 		int l2 = a.layer_offset(2) + c;
-		float instability = std::clamp((a.theta[l0] - a.theta[l2] + 1.5f) / 11.0f, 0.0f, 1.0f);
+		float moist_theta_excess = a.theta[l0] - a.theta[l2]
+			+ 1400.0f * (a.q[l0] - a.q[l2]);
+		float instability = std::clamp((moist_theta_excess + 1.0f) / 18.0f, 0.0f, 1.0f);
 		float moisture = std::clamp(a.q[l0] / 0.018f, 0.0f, 1.0f);
 		float ascent = std::clamp(max_ascent / 2.5e-4f, 0.0f, 1.0f);
 		float rotation = std::clamp(max_rotation / 0.00030f, 0.0f, 1.0f);
@@ -1747,6 +2029,60 @@ PackedFloat32Array WeatherNative::get_local_diagnostics_rgba() const {
 	return diagnostics_rgba_from(local_atm, false);
 }
 
+static PackedFloat32Array convective_rgba_from(const WeatherNative::Atmosphere &a, bool is_global) {
+	PackedFloat32Array out;
+	out.resize(a.cells * 4);
+	float *w = out.ptrw();
+	for (int c = 0; c < a.cells; ++c) {
+		float max_ascent = 0.0f;
+		float max_downdraft = 0.0f;
+		for (int interface_index = 0; interface_index < WeatherNative::INTERFACES; ++interface_index) {
+			float flux = a.mass_flux[a.interface_offset(interface_index) + c];
+			max_ascent = std::max(max_ascent, flux);
+			max_downdraft = std::max(max_downdraft, -flux);
+		}
+		float upper_ice = 0.0f;
+		for (int layer = 0; layer < WeatherNative::LAYERS; ++layer) {
+			int i = a.layer_offset(layer) + c;
+			if (layer >= 3) upper_ice += a.ice[i];
+		}
+		float polar_resolution = 1.0f;
+		if (is_global) {
+			int y = c / a.width;
+			float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(a.height);
+			polar_resolution = smoothstep01(std::cos(lat) / 0.20f);
+		}
+		float ascent = std::clamp(max_ascent / 4.0e-4f, 0.0f, 1.0f);
+		int l0 = a.layer_offset(0) + c;
+		float surface_wind = std::sqrt(a.u[l0] * a.u[l0] + a.v[l0] * a.v[l0]);
+		w[c * 4 + 0] = ascent;
+		w[c * 4 + 1] = std::clamp(max_downdraft / 1.5e-4f, 0.0f, 1.0f);
+		w[c * 4 + 2] = std::clamp(1.0f - std::exp(-upper_ice * 6000.0f), 0.0f, 1.0f);
+		w[c * 4 + 3] = std::clamp(polar_resolution * surface_wind / 60.0f, 0.0f, 1.0f);
+	}
+	return out;
+}
+
+PackedFloat32Array WeatherNative::get_global_convective_rgba() const {
+	return convective_rgba_from(global_atm, true);
+}
+
+PackedFloat32Array WeatherNative::get_local_convective_rgba() const {
+	return convective_rgba_from(local_atm, false);
+}
+
+PackedFloat32Array WeatherNative::get_tropical_core_diagnostics() const {
+	PackedFloat32Array out;
+	out.resize(4);
+	for (int hemisphere = 0; hemisphere < 2; ++hemisphere) {
+		int cell = tropical_core_cell[hemisphere];
+		out[hemisphere] = float(cell);
+		out[2 + hemisphere] = cell >= 0 && cell < int(tropical_genesis_activity.size())
+			? tropical_genesis_activity[cell] : 0.0f;
+	}
+	return out;
+}
+
 static PackedFloat32Array surface_rgba_from(const WeatherNative::SurfaceState &surface) {
 	PackedFloat32Array out;
 	out.resize(surface.cells * 4);
@@ -1780,8 +2116,10 @@ static PackedFloat32Array products_rgba_from(const WeatherNative::Atmosphere &at
 		int l0 = atmosphere.layer_offset(0) + c;
 		int l2 = atmosphere.layer_offset(2) + c;
 		float air_temperature = atmosphere.theta[l0] * sigma_temperature_factor(0);
+		float moist_theta_excess = atmosphere.theta[l0] - atmosphere.theta[l2]
+			+ 1400.0f * (atmosphere.q[l0] - atmosphere.q[l2]);
 		float instability = std::clamp(
-			(atmosphere.theta[l0] - atmosphere.theta[l2] + 1.5f) / 11.0f, 0.0f, 1.0f);
+			(moist_theta_excess + 1.0f) / 18.0f, 0.0f, 1.0f);
 		float moisture = std::clamp(atmosphere.q[l0] / 0.018f, 0.0f, 1.0f);
 		float cape_j_kg = 4000.0f * instability * moisture;
 		w[c * 4 + 0] = std::clamp((air_temperature - 220.0f) / 100.0f, 0.0f, 1.0f);

@@ -49,9 +49,10 @@ func _ready() -> void:
 
 	var weather: PackedFloat32Array = native.call(&"get_global_weather_rgba")
 	var diagnostics: PackedFloat32Array = native.call(&"get_global_diagnostics_rgba")
+	var convective: PackedFloat32Array = native.call(&"get_global_convective_rgba")
 	var products: PackedFloat32Array = native.call(&"get_global_products_rgba")
 	if weather.size() != 256 * 128 * 4 or diagnostics.size() != weather.size() \
-			or products.size() != weather.size():
+			or convective.size() != weather.size() or products.size() != weather.size():
 		fail_test("unexpected weather texture dimensions")
 		return
 
@@ -62,6 +63,9 @@ func _ready() -> void:
 			return
 		if not is_finite(diagnostics[i]) or diagnostics[i] < 0.0 or diagnostics[i] > 1.0:
 			fail_test("non-finite or unbounded diagnostic value at %d" % i)
+			return
+		if not is_finite(convective[i]) or convective[i] < 0.0 or convective[i] > 1.0:
+			fail_test("non-finite or unbounded convective diagnostic at %d" % i)
 			return
 		if not is_finite(products[i]) or (i % 4 != 1 and (products[i] < 0.0 or products[i] > 1.0)):
 			fail_test("non-finite or unbounded meteorological product at %d" % i)
@@ -121,11 +125,14 @@ func _ready() -> void:
 			native.call(&"step_local", 20.0)
 		var local_weather: PackedFloat32Array = native.call(&"get_local_weather_rgba")
 		var local_diagnostics: PackedFloat32Array = native.call(&"get_local_diagnostics_rgba")
-		if local_weather.size() != 192 * 192 * 4 or local_diagnostics.size() != local_weather.size():
+		var local_convective: PackedFloat32Array = native.call(&"get_local_convective_rgba")
+		if local_weather.size() != 192 * 192 * 4 or local_diagnostics.size() != local_weather.size() \
+				or local_convective.size() != local_weather.size():
 			fail_test("unexpected polar local texture dimensions")
 			return
 		for i in local_weather.size():
-			if not is_finite(local_weather[i]) or not is_finite(local_diagnostics[i]):
+			if not is_finite(local_weather[i]) or not is_finite(local_diagnostics[i]) \
+					or not is_finite(local_convective[i]):
 				fail_test("non-finite polar local state at %d" % i)
 				return
 	native.call(&"reset_local_from_global")
