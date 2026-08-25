@@ -129,13 +129,15 @@ void fragment() {
 	vec3 col = mix(base * 0.34, product, u_overlay_strength);
 	if (u_product == 1) col = product;
 
+	// Distance to the nearest meridian/parallel, in cell units: 0 on the line.
 	float gx = abs(fract(uv.x * 24.0 + 0.5) - 0.5);
 	float gy = abs(fract(uv.y * 12.0 + 0.5) - 0.5);
-	float grid = max(1.0 - smoothstep(0.485, 0.499, gx), 1.0 - smoothstep(0.485, 0.499, gy));
+	float grid = max(1.0 - smoothstep(0.002, 0.014, gx), 1.0 - smoothstep(0.002, 0.014, gy));
 	col = mix(col, vec3(0.72, 0.82, 0.92), grid * u_grid_strength);
 
 	float limb = pow(1.0 - abs(dot(normalize(NORMAL), normalize(VIEW))), 4.0);
-	EMISSION = col + vec3(0.04, 0.16, 0.24) * limb;
-	ALBEDO = vec3(0.0);
+	// `unshaded` outputs ALBEDO only; a colour written to EMISSION never reaches
+	// the framebuffer, which drew the whole globe black.
+	ALBEDO = col + vec3(0.04, 0.16, 0.24) * limb;
 	ROUGHNESS = 1.0;
 }

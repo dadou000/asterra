@@ -64,6 +64,17 @@ const PLANET_RADIUS_M := 3500000.0
 const FIELD_BUILD_BUDGET_USEC := 2600
 const LIVE_WIND_REFRESH_S := 0.50
 
+# Inverses of the packing WeatherNative applies to each texture channel, so the
+# pin can report physical values instead of the 0..1 display encoding.
+const PRECIP_MAX_MM_H := 30.0
+const PRESSURE_SPAN_HPA := 120.0
+const CAPE_MAX_J_KG := 4000.0
+const IRRADIANCE_MAX_W_M2 := 1200.0
+const VORTICITY_SPAN := 0.0008
+const DIVERGENCE_SPAN := 0.0006
+const POTENTIAL_VORTICITY_SPAN := 0.0030
+const SHEAR_MAX_M_S := 35.0
+
 var product_index := Product.WIND
 var wind_layer := 0
 
@@ -87,6 +98,10 @@ var _cursor_label: Label
 var _legend: TextureRect
 var _legend_left: Label
 var _legend_right: Label
+var _pin_label: Label
+var _speed_slider: HSlider
+var _speed_label: Label
+var _warp_label: Label
 
 var _camera_yaw := 0.35
 var _camera_pitch := 0.16
@@ -104,7 +119,13 @@ var _base_ready := false
 var _wind_fallback_ready := false
 var _live_wind_available := false
 var _live_wind_accum := 999.0
-var _last_viewport_size := Vector2i.ZERO
+
+var _pin_marker: MeshInstance3D
+var _pin_dir := Vector3.ZERO
+var _player: AsterraPlayer
+var _restore_mouse_capture := false
+var _restore_player_input := true
+var _warp_backlogged := false
 
 
 func _ready() -> void:
@@ -117,6 +138,8 @@ func _ready() -> void:
 	_sync_weather_textures()
 	_update_product()
 	_update_camera()
+	if not WeatherSystem.simulation_speed_changed.is_connected(_on_external_speed_changed):
+		WeatherSystem.simulation_speed_changed.connect(_on_external_speed_changed)
 
 
 func _build_viewer() -> void:
@@ -133,6 +156,9 @@ func _build_viewer() -> void:
 	add_child(_viewport_container)
 
 	_subviewport = SubViewport.new()
+	# The globe needs its own World3D: without it the sphere, the streaks and this
+	# viewer's Environment are all injected into the live planet's world.
+	_subviewport.own_world_3d = true
 	_subviewport.size = Vector2i(1280, 720)
 	_subviewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	_subviewport.transparent_bg = false
@@ -173,18 +199,26 @@ func _build_viewer() -> void:
 func _build_ui() -> void:
 	_cursor_label = Label.new()
 	_cursor_label.position = Vector2(16, 16)
-	_cursor_label.custom_minimum_size = Vector2(430, 54)
+	_cursor_label.custom_minimum_size = Vector2(430, 74)
 	_cursor_label.add_theme_font_size_override("font_size", 13)
 	_cursor_label.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	_cursor_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_cursor_label)
+
+	_pin_label = Label.new()
+	_pin_label.position = Vector2(16, 100)
+	_pin_label.custom_minimum_size = Vector2(430, 74)
+	_pin_label.add_theme_font_size_override("font_size", 13)
+	_pin_label.add_theme_color_override("font_color", Color(1.0, 0.86, 0.35))
+	_pin_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_pin_label)
 
 	var hint := Label.new()
 	hint.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	hint.position = Vector2(-420, 16)
 	hint.custom_minimum_size = Vector2(400, 28)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	hint.text = "LMB drag  •  wheel zoom  •  R reset  •  é close"
+	hint.text = "RMB drag  •  wheel zoom  •  LMB pin  •  -/= warp  •  R reset  •  é close"
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.add_theme_color_override("font_color", Color(0.62, 0.70, 0.79))
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -197,7 +231,7 @@ func _build_ui() -> void:
 	_panel.set_anchor(SIDE_BOTTOM, 1.0)
 	_panel.offset_left = 14.0
 	_panel.offset_right = 374.0
-	_panel.offset_top = -246.0
+	_panel.offset_top = -324.0
 	_panel.offset_bottom = -14.0
 	_panel.add_theme_stylebox_override("panel", _panel_style())
 	add_child(_panel)
@@ -257,6 +291,41 @@ func _build_ui() -> void:
 	_flow_check.button_pressed = true
 	_flow_check.toggled.connect(_on_flow_toggled)
 	column.add_child(_flow_check)
+
+	var warp_row := HBoxContainer.new()
+	var warp_tag := Label.new()
+	warp_tag.text = "Warp"
+	warp_tag.custom_minimum_size = Vector2(64, 30)
+	warp_row.add_child(warp_tag)
+	_speed_slider = HSlider.new()
+	_speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_speed_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_speed_slider.min_value = 0.0
+	_speed_slider.max_value = 14.0
+	_speed_slider.step = 1.0
+	_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
+	_speed_slider.tooltip_text = "Logarithmic weather warp: paused, then powers of two from 1× to 8192×. Above 256× the global model spins up and the local nest resynchronises afterward."
+	_speed_slider.value_changed.connect(_on_speed_slider_changed)
+	warp_row.add_child(_speed_slider)
+	var reset_speed := Button.new()
+	reset_speed.text = "1×"
+	reset_speed.custom_minimum_size = Vector2(46, 26)
+	reset_speed.pressed.connect(WeatherSystem.reset_simulation_speed)
+	warp_row.add_child(reset_speed)
+	column.add_child(warp_row)
+
+	_speed_label = Label.new()
+	_speed_label.add_theme_font_size_override("font_size", 10)
+	_speed_label.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	column.add_child(_speed_label)
+
+	_warp_label = Label.new()
+	_warp_label.add_theme_font_size_override("font_size", 10)
+	_warp_label.add_theme_color_override("font_color", Color(0.48, 0.86, 0.94))
+	_warp_label.tooltip_text = "Left: simulated duration advanced per real second. Right: cumulative simulated time gained beyond wall-clock time this session."
+	column.add_child(_warp_label)
+	_update_speed_label(WeatherSystem.simulation_speed)
+	_update_warp_indicator()
 
 	_note_label = Label.new()
 	_note_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -369,7 +438,6 @@ func _ensure_particles() -> void:
 func _process(delta: float) -> void:
 	if not visible:
 		return
-	_update_viewport_size()
 	_update_camera_inertia(delta)
 	_build_field_budgeted()
 	_live_wind_accum += delta
@@ -377,15 +445,7 @@ func _process(delta: float) -> void:
 		_live_wind_accum = 0.0
 		_refresh_live_wind()
 	_update_cursor_readout()
-
-
-func _update_viewport_size() -> void:
-	var visible_size := get_viewport().get_visible_rect().size
-	var size := Vector2i(maxi(int(visible_size.x), 16), maxi(int(visible_size.y), 16))
-	if size == _last_viewport_size:
-		return
-	_last_viewport_size = size
-	_subviewport.size = size
+	_update_warp_indicator()
 
 
 func _update_camera_inertia(delta: float) -> void:
@@ -431,6 +491,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif event.keycode == KEY_RIGHT:
 		_product_select.select((product_index + 1) % PRODUCT_NAMES.size())
 		_on_product_selected(_product_select.selected)
+	elif event.keycode == KEY_MINUS or event.keycode == KEY_KP_SUBTRACT:
+		_step_warp(-1)
+	elif event.keycode == KEY_EQUAL or event.keycode == KEY_KP_ADD:
+		_step_warp(1)
 
 
 func _input(event: InputEvent) -> void:
@@ -438,21 +502,27 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var over_panel := _panel != null and _panel.get_global_rect().has_point(event.position)
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and not over_panel:
+		if event.pressed and over_panel:
+			return
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
 			_camera_distance = maxf(1.10, _camera_distance * 0.86)
 			_update_camera()
 			get_viewport().set_input_as_handled()
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and not over_panel:
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
 			_camera_distance = minf(7.5, _camera_distance / 0.86)
 			_update_camera()
 			get_viewport().set_input_as_handled()
-		elif event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed and not over_panel:
-				_dragging = true
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			# Rotating on the right button keeps the left one free for pins. Both
+			# are swallowed so dig/fill never fires on the terrain behind the map.
+			_dragging = event.pressed
+			if event.pressed:
 				_angular_velocity = Vector2.ZERO
-				get_viewport().set_input_as_handled()
-			elif not event.pressed:
-				_dragging = false
+			get_viewport().set_input_as_handled()
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_place_pin()
+			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion and _dragging:
 		var sensitivity := 0.0060 * clampf(_camera_distance / 2.7, 0.34, 1.25)
 		_camera_yaw -= event.relative.x * sensitivity
@@ -469,12 +539,15 @@ func _set_open(opened: bool) -> void:
 	visible = opened
 	_dragging = false
 	if opened:
+		_free_mouse()
 		_ensure_particles()
+		_ensure_pin()
 		_sync_weather_textures()
-		_update_viewport_size()
 		_begin_field_build_if_needed()
 		_live_wind_accum = 999.0
 		_update_product()
+	else:
+		_restore_mouse()
 
 
 func _begin_field_build_if_needed(force_wind: bool = false) -> void:
@@ -635,44 +708,239 @@ func _make_legend_texture(product: int) -> GradientTexture1D:
 
 
 func _update_cursor_readout() -> void:
-	if _camera == null or _viewport_container == null:
+	if _cursor_label == null:
 		return
+	var direction := _pick_direction()
+	_cursor_label.text = "" if direction == Vector3.ZERO else _readout_block(direction, "")
+	if _pin_label != null:
+		_pin_label.text = "" if _pin_dir == Vector3.ZERO else _readout_block(_pin_dir, "PIN  ")
+
+
+## Unit-sphere hit under the mouse, or Vector3.ZERO when the cursor misses the globe.
+func _pick_direction() -> Vector3:
+	if _camera == null or _viewport_container == null:
+		return Vector3.ZERO
 	var mouse := _viewport_container.get_local_mouse_position()
 	var size := Vector2(_subviewport.size)
 	if mouse.x < 0.0 or mouse.y < 0.0 or mouse.x >= size.x or mouse.y >= size.y:
-		_cursor_label.text = ""
-		return
+		return Vector3.ZERO
 	var origin := _camera.project_ray_origin(mouse)
 	var direction := _camera.project_ray_normal(mouse).normalized()
 	var b := origin.dot(direction)
 	var c := origin.length_squared() - 1.0
 	var discriminant := b * b - c
 	if discriminant < 0.0:
-		_cursor_label.text = ""
-		return
+		return Vector3.ZERO
 	var t := -b - sqrt(discriminant)
 	if t <= 0.0:
-		_cursor_label.text = ""
+		return Vector3.ZERO
+	return (origin + direction * t).normalized()
+
+
+func _ensure_pin() -> void:
+	if _pin_marker != null:
 		return
-	var hit := (origin + direction * t).normalized()
-	var lat := asin(clampf(hit.y, -1.0, 1.0))
-	var lon := atan2(hit.z, hit.x)
+	_pin_marker = MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.016
+	sphere.height = 0.032
+	sphere.radial_segments = 16
+	sphere.rings = 8
+	_pin_marker.mesh = sphere
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(1.0, 0.86, 0.35)
+	_pin_marker.material_override = material
+	_pin_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_pin_marker.visible = false
+	_world_root.add_child(_pin_marker)
+
+
+## Left click drops a pin on the globe; clicking off the globe clears it.
+func _place_pin() -> void:
+	_ensure_pin()
+	_pin_dir = _pick_direction()
+	if _pin_marker == null:
+		return
+	_pin_marker.visible = _pin_dir != Vector3.ZERO
+	if _pin_dir != Vector3.ZERO:
+		_pin_marker.position = _pin_dir * 1.014
+
+
+func _readout_block(direction: Vector3, prefix: String) -> String:
+	var lat := asin(clampf(direction.y, -1.0, 1.0))
+	var lon := atan2(direction.z, direction.x)
 	var lat_text := "%.2f°%s" % [absf(rad_to_deg(lat)), "N" if lat >= 0.0 else "S"]
 	var lon_text := "%.2f°%s" % [absf(rad_to_deg(lon)), "E" if lon >= 0.0 else "W"]
 	var wind := _sample_wind(lon, lat)
-	var speed_kmh := wind.z * 3.6
 	var toward := rad_to_deg(atan2(wind.x, wind.y))
 	var from_degrees := fmod(toward + 540.0, 360.0)
-	_cursor_label.text = "%s, %s\nWind | %03d° @ %.1f km/h  •  %s" % [
-		lat_text, lon_text, int(round(from_degrees)), speed_kmh, LAYER_NAMES[wind_layer]]
+	return "%s%s, %s\nWind | %03d° @ %.1f km/h  •  %s\n%s: %s" % [
+		prefix, lat_text, lon_text, int(round(from_degrees)), wind.z * 3.6,
+		LAYER_NAMES[wind_layer], PRODUCT_NAMES[product_index], _product_value_text(lon, lat)]
 
 
-func _sample_wind(lon: float, lat: float) -> Vector3:
-	if _wind_values.size() != GLOBAL_W * GLOBAL_H * 4:
-		return Vector3.ZERO
+## Physical value of the selected product at a point, undoing the 0..1 packing
+## WeatherNative applies when it builds each texture.
+func _product_value_text(lon: float, lat: float) -> String:
+	var w := _sample_rgba(WeatherSystem.global_weather_values, lon, lat)
+	var d := _sample_rgba(WeatherSystem.global_diagnostics_values, lon, lat)
+	var p := _sample_rgba(WeatherSystem.global_products_values, lon, lat)
+	match product_index:
+		Product.WIND:
+			var wind := _sample_wind(lon, lat)
+			return "%.1f km/h  (%.1f m/s)" % [wind.z * 3.6, wind.z]
+		Product.COMPOSITE:
+			return "cloud %.0f %%  •  rain %.2f mm/h  •  storm %.2f" % [
+				w.r * 100.0, w.b * PRECIP_MAX_MM_H, w.g]
+		Product.CLOUD_COVER:
+			return "%.1f %%" % (w.r * 100.0)
+		Product.PRECIPITATION:
+			return "%.2f mm/h" % (w.b * PRECIP_MAX_MM_H)
+		Product.CONVECTION:
+			return "%.3f index" % w.g
+		Product.PRESSURE:
+			return "%+.1f hPa" % ((w.a - 0.5) * PRESSURE_SPAN_HPA)
+		Product.AIR_TEMPERATURE:
+			return "%.1f °C" % (p.r * 100.0 + 220.0 - 273.15)
+		Product.SEA_TEMPERATURE:
+			if p.g < 0.0:
+				return "land"
+			return "%.1f °C" % (p.g * 45.0 + 260.0 - 273.15)
+		Product.CAPE:
+			return "%.0f J/kg" % (p.b * CAPE_MAX_J_KG)
+		Product.IRRADIANCE:
+			return "%.0f W/m²" % (p.a * IRRADIANCE_MAX_W_M2)
+		Product.VORTICITY:
+			return "%+.2f ×10⁻⁴ s⁻¹" % ((d.r - 0.5) * VORTICITY_SPAN * 1.0e4)
+		Product.DIVERGENCE:
+			return "%+.2f ×10⁻⁴ s⁻¹" % ((d.g - 0.5) * DIVERGENCE_SPAN * 1.0e4)
+		Product.POTENTIAL_VORTICITY:
+			return "%+.2f ×10⁻³" % ((d.b - 0.5) * POTENTIAL_VORTICITY_SPAN * 1.0e3)
+		Product.WIND_SHEAR:
+			return "%.1f m/s" % (d.a * SHEAR_MAX_M_S)
+	return ""
+
+
+func _sample_rgba(values: PackedFloat32Array, lon: float, lat: float) -> Color:
+	if values.size() != GLOBAL_W * GLOBAL_H * 4:
+		return Color(0.0, 0.0, 0.0, 0.0)
 	var ucoord := fposmod(lon / TAU, 1.0)
 	var vcoord := clampf(0.5 - lat / PI, 0.0, 0.999999)
 	var x := wrapi(int(floor(ucoord * GLOBAL_W)), 0, GLOBAL_W)
 	var y := clampi(int(floor(vcoord * GLOBAL_H)), 0, GLOBAL_H - 1)
 	var offset := (x + y * GLOBAL_W) * 4
-	return Vector3(_wind_values[offset], _wind_values[offset + 1], _wind_values[offset + 2])
+	return Color(values[offset], values[offset + 1], values[offset + 2], values[offset + 3])
+
+
+func _sample_wind(lon: float, lat: float) -> Vector3:
+	var sample := _sample_rgba(_wind_values, lon, lat)
+	return Vector3(sample.r, sample.g, sample.b)
+
+
+## The viewer takes the mouse while it is open, mirroring the celestial camera, so
+## the cursor can drive the panel, the pin and the globe instead of the player.
+func _free_mouse() -> void:
+	_player = _find_player(get_tree().current_scene)
+	_restore_mouse_capture = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	if _player != null:
+		_restore_player_input = _player.input_enabled
+		_player.input_enabled = false
+		_player.set_mouse_captured(false)
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _restore_mouse() -> void:
+	if _player != null and is_instance_valid(_player):
+		_player.input_enabled = _restore_player_input
+		_player.set_mouse_captured(_restore_mouse_capture)
+	elif _restore_mouse_capture:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_player = null
+
+
+func _find_player(root: Node) -> AsterraPlayer:
+	if root == null:
+		return null
+	if root is AsterraPlayer:
+		return root as AsterraPlayer
+	for child in root.get_children():
+		var found := _find_player(child)
+		if found != null:
+			return found
+	return null
+
+
+func _on_speed_slider_changed(slider_value: float) -> void:
+	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+	_update_speed_label(WeatherSystem.simulation_speed)
+
+
+func _on_external_speed_changed(value: float) -> void:
+	if _speed_slider != null:
+		_speed_slider.set_value_no_signal(_speed_to_slider(value))
+	_update_speed_label(value)
+
+
+func _step_warp(steps: int) -> void:
+	var slider_value := clampf(
+		_speed_to_slider(WeatherSystem.simulation_speed) + float(steps), 0.0, 14.0)
+	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+
+
+func _slider_to_speed(slider_value: float) -> float:
+	if slider_value < 0.5:
+		return 0.0
+	return pow(2.0, slider_value - 1.0)
+
+
+func _speed_to_slider(speed: float) -> float:
+	if speed < 0.5:
+		return 0.0
+	return clampf(log(speed) / log(2.0) + 1.0, 1.0, 14.0)
+
+
+func _update_speed_label(value: float) -> void:
+	if _speed_label == null:
+		return
+	var mode := "normal"
+	if value < 0.01:
+		mode = "paused"
+	elif value < 0.95:
+		mode = "slow"
+	elif value > WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD:
+		mode = "global spin-up"
+	elif value >= 16.0:
+		mode = "spin-up"
+	elif value > 1.05:
+		mode = "fast"
+	var speed_text := "%.2f" % value if value < 10.0 else "%.0f" % value
+	_speed_label.text = "Weather speed: %s×  (%s)" % [speed_text, mode]
+
+
+func _update_warp_indicator() -> void:
+	if _warp_label == null:
+		return
+	var rate := _compact_duration(WeatherSystem.simulation_speed)
+	var total := _compact_duration(WeatherSystem.warped_ahead_seconds)
+	var text := "1 s → %s  •  Σ +%s ahead" % [rate, total]
+	if text != _warp_label.text:
+		_warp_label.text = text
+	# Only touched on transitions: this runs every frame the viewer is open.
+	var backlogged := WeatherSystem.solver_backlog_seconds() > 360.0
+	if backlogged != _warp_backlogged:
+		_warp_backlogged = backlogged
+		_warp_label.add_theme_color_override(
+			"font_color", Color(1.0, 0.68, 0.22) if backlogged else Color(0.48, 0.86, 0.94))
+
+
+func _compact_duration(seconds: float) -> String:
+	var whole := maxi(int(round(seconds)), 0)
+	if whole < 60:
+		return "%ds" % whole
+	if whole < 3600:
+		return "%dm %02ds" % [whole / 60, whole % 60]
+	if whole < 86400:
+		return "%dh %02dm" % [whole / 3600, (whole % 3600) / 60]
+	return "%dd %02dh" % [whole / 86400, (whole % 86400) / 3600]

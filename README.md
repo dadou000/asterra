@@ -49,7 +49,7 @@ automatically.
 | `Q` / `E` | drop a heap of carried material / pick one back up |
 | `[` `]` | brush radius |
 | `M`, `,` `.` | planet map overlay, previous/next layer |
-| `é` | live weather products and synoptic analysis; logarithmic weather warp from paused to 8192× |
+| `é` | interactive weather globe: RMB drag to rotate, wheel to zoom, `LMB` to pin a point and read its exact value, `-` `=` or the panel slider for logarithmic weather warp from paused to 8192× |
 | `P` | while the weather map is open, tune six physical processes and all six vertical contribution weights live |
 | `T` | teleport to the best transport-corridor site on the planet |
 | `F5` / `F9` | save / load |

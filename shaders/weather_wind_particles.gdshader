@@ -4,8 +4,10 @@ render_mode unshaded, blend_add, depth_draw_never, cull_disabled;
 uniform sampler2D u_wind : filter_linear, repeat_disable;
 uniform float u_display_radius = 1.006;
 uniform float u_planet_radius_m = 3500000.0;
-uniform float u_particle_lifetime_s = 15000.0;
-uniform float u_animation_rate = 0.085;
+// Streak travel per real second is lifetime * rate. Both were raised together
+// so the flow reads as moving weather without shortening the fade cycle.
+uniform float u_particle_lifetime_s = 36000.0;
+uniform float u_animation_rate = 0.14;
 uniform float u_line_length = 0.018;
 uniform float u_line_width = 0.00125;
 uniform float u_speed_reference = 65.0;
@@ -87,7 +89,8 @@ void fragment() {
 	float transverse = 1.0 - smoothstep(0.10, 0.49, abs(q.y));
 	float alpha = longitudinal * transverse * v_life * u_opacity;
 	vec3 col = speed_palette(v_speed / u_speed_reference);
-	ALBEDO = vec3(0.0);
-	EMISSION = col * (0.50 + alpha * 0.85);
+	// Additive + `unshaded`: the framebuffer receives ALBEDO * ALPHA, so the
+	// streak colour has to be written to ALBEDO rather than EMISSION.
+	ALBEDO = col * (0.50 + alpha * 0.85);
 	ALPHA = alpha;
 }
