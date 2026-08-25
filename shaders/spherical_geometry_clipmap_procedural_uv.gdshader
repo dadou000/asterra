@@ -6,6 +6,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_d
 #include "res://shaders/gpu_geomorph.gdshaderinc"
 #include "res://shaders/gpu_surface_antitile.gdshaderinc"
 #include "res://shaders/gpu_surface_classifier.gdshaderinc"
+#include "res://shaders/gpu_material_microrelief.gdshaderinc"
 #include "res://shaders/gpu_rock_pbr.gdshaderinc"
 #include "res://shaders/gpu_surface_pbr.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
@@ -45,6 +46,7 @@ varying float v_cap_valid;
 varying float v_level;
 varying float v_macro_h;
 varying float v_direct_transmittance;
+varying float v_micro_layer;
 
 const int ASTERRA_MAX_LEVEL = 14;
 const float RING_INNER_Q = 0.44;
@@ -59,6 +61,14 @@ const float NORMAL_SAMPLE_SPACING_MULT = 3.0;
 const float NORMAL_SAMPLE_MIN_M = 4.0;
 const float DETAIL_NORMAL_FULL_LEVEL = 4.0;
 const float DETAIL_NORMAL_FADE_LEVEL = 8.0;
+
+// Must match spherical_geometry_clipmap_micro.gd. Values are expressed in L0
+// logical-cell units because the micro mesh writes fractional L0 coordinates to UV.
+const float MICRO_HANDOFF_START_L0_CELLS = 24.0;
+const float MICRO_OUTER_L0_CELLS = 32.0;
+const float MICRO_L0_SINK_M = 0.30;
+const float MICRO_DETAIL_NEAR_M = 90.0;
+const float MICRO_DETAIL_FAR_M = 160.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -255,7 +265,9 @@ vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
 
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
+	float cell_radius = length(cell);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
+	float micro_layer = step(0.5, INSTANCE_CUSTOM.z);
 	float spacing = ring_spacing(level);
 	vec2 offset_m = cell * spacing;
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
@@ -264,8 +276,43 @@ void vertex() {
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
 	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
+
+	// L0 begins inside the dense patch's handoff band. Sink only that overlapping
+	// part so the micro surface remains unambiguously on top until both converge.
+	if (micro_layer < 0.5 && level == 0 && cell_radius < MICRO_OUTER_L0_CELLS) {
+		float overlap_sink = 1.0 - smootherstep_range(
+			MICRO_HANDOFF_START_L0_CELLS, MICRO_OUTER_L0_CELLS, cell_radius);
+		sink += overlap_sink * MICRO_L0_SINK_M;
+	}
+
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
 	vec3 p = d * (u_planet_radius + height + u_surface_bias);
+
+	if (micro_layer > 0.5 && u_height_enabled > 0.5) {
+		float edge_w = 1.0 - smootherstep_range(
+			MICRO_HANDOFF_START_L0_CELLS, MICRO_OUTER_L0_CELLS, cell_radius);
+		vec3 base_render = p - u_origin;
+		float camera_dist = length(base_render - INV_VIEW_MATRIX[3].xyz);
+		float proximity_w = 1.0 - smoothstep(MICRO_DETAIL_NEAR_M, MICRO_DETAIL_FAR_M, camera_dist);
+		float micro_w = edge_w * proximity_w;
+		if (micro_w > 0.001) {
+			vec4 soil = asterra_ctx_soil(d);
+			vec4 surface = asterra_ctx_surface(d);
+			vec4 geology = asterra_ctx_geology(d);
+			vec4 structure = asterra_ctx_structure(d);
+			vec4 climate = asterra_ctx_climate(d);
+			vec4 hydro = asterra_ctx_hydrology(d);
+			float rock_id = asterra_ctx_rock_id(d);
+			float biome = asterra_ctx_biome_id(d);
+			vec4 landform = gm_landform_weights_from_context(
+				macro_h, soil, surface, geology, structure, climate, hydro);
+			vec3 detail_position = base_render + u_detail_origin;
+			float micro_h = mmr_height(detail_position, rock_id, biome,
+				soil, surface, geology, structure, climate, hydro, landform);
+			height += micro_h * micro_w;
+			p = d * (u_planet_radius + height + u_surface_bias);
+		}
+	}
 
 	v_planet = p;
 	v_render = p - u_origin;
@@ -274,6 +321,7 @@ void vertex() {
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
 	v_macro_h = macro_h;
+	v_micro_layer = micro_layer;
 
 	vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
 	float planet_vis = planet_direct_sun_visibility(p, sun_dir, u_planet_radius);
@@ -304,12 +352,14 @@ void fragment() {
 	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : macro_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
 	float detail_normal_w = 1.0 - smoothstep(DETAIL_NORMAL_FULL_LEVEL, DETAIL_NORMAL_FADE_LEVEL, v_level);
-	detail_normal_w *= 0.78;
+	// The dense layer already carries real geometric normals, so trust them more
+	// strongly than the ordinary L0 surface.
+	detail_normal_w *= mix(0.78, 0.96, v_micro_layer);
 	vec3 wn = normalize(mix(macro_n, geom_n, detail_normal_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	if (u_debug_side_cut > 0.5) {
-		float phase = v_level * 0.13;
+		float phase = v_level * 0.13 + v_micro_layer * 0.08;
 		vec3 lod_color = 0.5 + 0.5 * cos(TAU * (vec3(phase) + vec3(0.0, 0.33, 0.67)));
 		ALBEDO = mix(vec3(0.06), lod_color, 0.92);
 		EMISSION = lod_color * 0.10;
@@ -363,6 +413,8 @@ void fragment() {
 				base_albedo, base_roughness,
 				rock_albedo, rock_roughness, material_specular, rock_n, rock_normal_w);
 			if (rock_normal_w > 0.001) {
+				// The dense layer already resolves some of this relief geometrically.
+				rock_normal_w *= mix(1.0, 0.62, v_micro_layer);
 				wn = normalize(mix(wn, rock_n, rock_normal_w));
 				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			}
@@ -375,6 +427,7 @@ void fragment() {
 			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
 				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
 			if (scan_normal_w > 0.001) {
+				scan_normal_w *= mix(1.0, 0.78, v_micro_layer);
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
 				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			}
