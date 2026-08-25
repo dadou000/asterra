@@ -1,7 +1,16 @@
 shader_type canvas_item;
 
 uniform sampler2D u_weather : filter_linear, repeat_disable;
+uniform sampler2D u_local_weather : filter_linear, repeat_disable;
+uniform vec3 u_local_center = vec3(0.0, 1.0, 0.0);
+uniform vec3 u_local_east = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_local_north = vec3(0.0, 0.0, 1.0);
+uniform float u_local_span_m = 0.0;
+uniform float u_planet_radius = 1000000.0;
 uniform int u_product = 0;
+
+const float PI = 3.14159265358979323846;
+const float TAU = 6.28318530717958647692;
 
 vec3 cloud_palette(float x) {
 	x = clamp(x, 0.0, 1.0);
@@ -36,12 +45,36 @@ vec3 pressure_palette(float x) {
 		: mix(neutral, vec3(0.88, 0.16, 0.10), d);
 }
 
-void fragment() {
-	vec3 base = texture(TEXTURE, UV).rgb;
+vec4 sample_weather_field(vec2 uv) {
 	// WeatherNative stores longitude as [0, 2pi), while the map is displayed
 	// conventionally as [-pi, +pi] with the prime meridian in the centre.
-	vec2 weather_uv = vec2(fract(UV.x + 0.5), UV.y);
-	vec4 w = texture(u_weather, weather_uv);
+	vec2 global_uv = vec2(fract(uv.x + 0.5), uv.y);
+	vec4 coarse = texture(u_weather, global_uv);
+	if (u_local_span_m <= 1.0) return coarse;
+
+	float lon = (uv.x - 0.5) * TAU;
+	float lat = (0.5 - uv.y) * PI;
+	float cl = cos(lat);
+	vec3 dir = vec3(cl * cos(lon), sin(lat), cl * sin(lon));
+	vec3 center = normalize(u_local_center);
+	float forward = dot(dir, center);
+	if (forward <= 0.0) return coarse;
+
+	float east_angle = atan(dot(dir, normalize(u_local_east)), forward);
+	float north_angle = atan(dot(dir, normalize(u_local_north)), forward);
+	vec2 local_uv = vec2(east_angle, north_angle) * (u_planet_radius / u_local_span_m) + vec2(0.5);
+	vec2 edge_v = abs(local_uv - vec2(0.5)) * 2.0;
+	float edge = max(edge_v.x, edge_v.y);
+	if (edge >= 1.0) return coarse;
+
+	vec4 fine = texture(u_local_weather, local_uv);
+	float fine_weight = 1.0 - smoothstep(0.86, 1.0, edge);
+	return mix(coarse, fine, fine_weight);
+}
+
+void fragment() {
+	vec3 base = texture(TEXTURE, UV).rgb;
+	vec4 w = sample_weather_field(UV);
 
 	vec3 product_color;
 	float opacity = 0.84;
