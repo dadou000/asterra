@@ -8,14 +8,13 @@ cd /d "%~dp0.."
 
 echo ============================================================
 echo   ASTERRA - Rebuild Weather AVX2 Backend
-
 echo   Repository: %CD%
 echo ============================================================
 echo.
 
 rem Godot keeps the non-reloadable GDExtension DLL loaded. Refuse to build
 rem while an editor/game process is running instead of killing unrelated work.
-tasklist /FI "IMAGENAME eq godot*.exe" 2>NUL | find /I "godot" >NUL
+tasklist 2>NUL | findstr /I "Godot" >NUL
 if not errorlevel 1 (
     echo [ERROR] A Godot process is currently running.
     echo.
@@ -61,14 +60,12 @@ if not exist "bin\asterra_weather.gdextension" goto :missing_output
 echo.
 echo ============================================================
 echo   WEATHER BACKEND REBUILT SUCCESSFULLY
-
 echo   bin\asterra_weather.dll
-    echo   bin\asterra_weather.gdextension
-
+echo   bin\asterra_weather.gdextension
 echo ============================================================
 echo.
 echo You can now start Godot. A full editor restart is required after every
- echo native weather rebuild.
+echo native weather rebuild.
 echo.
 pause
 exit /b 0
@@ -76,7 +73,7 @@ exit /b 0
 :missing_output
 echo.
 echo [ERROR] The build command returned success, but one or more runtime
- echo files are missing from bin\.
+echo files are missing from bin\.
 echo.
 pause
 exit /b 4
