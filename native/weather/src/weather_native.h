@@ -20,7 +20,7 @@ public:
 	static constexpr int LOCAL_H = 192;
 	static constexpr int LAYERS = 6;
 	static constexpr int INTERFACES = LAYERS - 1;
-	static constexpr float PLANET_RADIUS_M = 1000000.0f;
+	static constexpr float PLANET_RADIUS_M = 3500000.0f;
 	static constexpr float LOCAL_CELL_M = 2200.0f;
 
 	static constexpr std::array<float, LAYERS> SIGMA = {
