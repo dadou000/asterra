@@ -1,4 +1,4 @@
-name: Apply weather runtime performance patch
+name: Apply weather runtime performance follow-up
 
 on:
   push:
@@ -16,641 +16,199 @@ jobs:
         with:
           ref: weather/0.0.5
           fetch-depth: 0
-      - name: Patch weather runtime scheduling
+      - name: Fix weather worker publication scheduling
         shell: python
         run: |
           from pathlib import Path
 
-          def replace_between(path, start, end, replacement):
+          def replace_once(path, old, new):
               p = Path(path)
               s = p.read_text(encoding="utf-8")
-              a = s.index(start)
-              b = s.index(end, a)
-              p.write_text(s[:a] + replacement + s[b:], encoding="utf-8")
+              if old not in s:
+                  raise SystemExit(f"pattern not found in {path}: {old[:100]!r}")
+              p.write_text(s.replace(old, new, 1), encoding="utf-8")
 
           p = Path("scripts/weather/weather_system.gd")
           s = p.read_text(encoding="utf-8")
-          s = s.replace("const TEXTURE_REAL_INTERVAL := 0.50\n", "const WEATHER_VISUAL_MIN_INTERVAL := 0.20\nconst ANALYSIS_PHASE_MIN_INTERVAL := 0.05\nconst CENTER_UPDATE_INTERVAL := 1.0\n")
-          s = s.replace("const MAX_SOLVER_STEPS_PER_FRAME := 64\n", "const MAX_GLOBAL_STEPS_PER_JOB := 4\nconst MAX_LOCAL_STEPS_PER_JOB := 4\n")
-          s = s.replace("signal physics_tuning_reset\n", "signal physics_tuning_reset\nsignal global_state_advanced(revision: int)\nsignal local_state_advanced(revision: int)\n")
-          s = s.replace("var global_products_values := PackedFloat32Array()\n", "var global_products_values := PackedFloat32Array()\nvar global_convective_values := PackedFloat32Array()\nvar global_state_revision: int = 0\nvar local_state_revision: int = 0\nvar analysis_revision: int = -1\n")
-          old_vars = '''var _global_sim_accum := 0.0
-          var _local_sim_accum := 0.0
-          var _texture_accum := 0.0
-          var _last_celestial_seconds := 0.0
-          '''.replace("          ", "")
-          new_vars = '''var _global_sim_accum := 0.0
-          var _local_sim_accum := 0.0
-          var _last_celestial_seconds := 0.0
-          var _weather_task_id: int = -1
-          var _weather_task_global_steps: int = 0
-          var _weather_task_local_steps: int = 0
-          var _weather_task_touched_local: bool = false
-          var _weather_task_reset_local: bool = false
-          var _weather_publish_accum: float = 999.0
-          var _analysis_publish_accum: float = 999.0
-          var _center_update_accum: float = 999.0
-          var _global_weather_dirty: bool = true
-          var _local_weather_dirty: bool = true
-          var _global_analysis_dirty: bool = true
-          var _local_analysis_dirty: bool = true
-          var _global_analysis_phase: int = 0
-          var _pending_native_controls: bool = false
-          var _pending_local_reset: bool = false
-          var _map_was_open: bool = false
-          '''.replace("          ", "")
-          if old_vars not in s:
-              raise SystemExit("weather_system vars block not found")
-          s = s.replace(old_vars, new_vars)
-          s = s.replace('''\tif native_available:
-          \t\t_publish_weather_textures()
-          \telse:
-          \t\t_publish_fallback_weather()
-          '''.replace("          ", ""), '''\t_publish_fallback_weather()
-          \tif native_available:
-          \t\t_mark_all_outputs_dirty()
-          '''.replace("          ", ""), 1)
-          p.write_text(s, encoding="utf-8")
+          s = s.replace(
+              "var _map_was_open: bool = false\n",
+              "var _map_was_open: bool = false\n"
+              "var _worker_schedule_deferred: bool = false\n"
+              "var _heavy_publication_frame: int = -1\n",
+              1,
+          )
 
-          process_block = '''func _process(delta: float) -> void:
-          \t_try_bind_observer()
-          \tvar celestial_now := CelestialSystem.simulation_seconds
-          \tvar simulated_delta := celestial_now - _last_celestial_seconds
-          \t_last_celestial_seconds = celestial_now
-          \tif simulated_delta < 0.0:
-          \t\t_global_sim_accum = 0.0
-          \t\t_local_sim_accum = 0.0
-          \t\tsimulated_delta = 0.0
-          \twarped_ahead_seconds += maxf(simulated_delta - delta, 0.0)
-          
-          \tif not native_available or _native == null:
-          \t\tif _observer != null and is_instance_valid(_observer):
-          \t\t\t_update_fallback_basis(_observer.up_dir())
-          \t\t_sync_weather_map_material()
-          \t\treturn
-          
-          \t_global_sim_accum += simulated_delta
-          \tif _observer != null and is_instance_valid(_observer):
-          \t\t_local_sim_accum += simulated_delta
-          \telse:
-          \t\t_local_sim_accum = 0.0
-          \t_center_update_accum += delta
-          
-          \t_poll_weather_worker()
+          old = '''\t_poll_weather_worker()
           \tif not native_worker_busy():
           \t\t_apply_pending_native_controls()
           \t\t_schedule_weather_worker()
           
           \t_service_weather_publication(delta)
           \t_sync_weather_map_material()
+          '''.replace("          ", "")
+          new = '''\t_poll_weather_worker()
+          \tif not native_worker_busy():
+          \t\t_apply_pending_native_controls()
           
-          
-          func _run_weather_worker(global_steps: int, global_dt: float, touch_local: bool,
-          \t\tcenter: Vector3, local_steps: int, local_dt: float, reset_local: bool) -> void:
-          \tvar native: Object = _native
-          \tif native == null:
+          \t# Completed native state gets an idle main-thread publication window before
+          \t# another solver job is launched. This prevents high warp from starving
+          \t# cloud/map/surface uploads indefinitely.
+          \t_service_weather_publication(delta)
+          \tif not _has_pending_weather_publication():
+          \t\t_request_weather_worker_schedule()
+          \t_sync_weather_map_material()
+          '''.replace("          ", "")
+          if old not in s:
+              raise SystemExit("weather process scheduling block not found")
+          s = s.replace(old, new, 1)
+
+          anchor = '''func _schedule_weather_worker() -> void:
+          '''.replace("          ", "")
+          helpers = '''func _request_weather_worker_schedule() -> void:
+          \tif _worker_schedule_deferred or _weather_task_id >= 0 or _native == null:
           \t\treturn
-          \tfor _i in global_steps:
-          \t\tnative.call(&"step_global", global_dt)
-          \tif touch_local:
-          \t\tnative.call(&"set_local_center", center)
-          \tif reset_local:
-          \t\tnative.call(&"reset_local_from_global")
-          \tfor _i in local_steps:
-          \t\tnative.call(&"step_local", local_dt)
+          \t_worker_schedule_deferred = true
+          \tcall_deferred("_schedule_weather_worker_deferred")
           
           
-          func native_worker_busy() -> bool:
-          \tif _weather_task_id < 0:
+          func _schedule_weather_worker_deferred() -> void:
+          \t_worker_schedule_deferred = false
+          \tif _native == null or native_worker_busy() or _has_pending_weather_publication():
+          \t\treturn
+          \t_apply_pending_native_controls()
+          \t_schedule_weather_worker()
+          
+          
+          func heavy_publication_this_frame() -> bool:
+          \treturn _heavy_publication_frame == Engine.get_process_frames()
+          
+          
+          func claim_heavy_publication() -> bool:
+          \tvar frame := Engine.get_process_frames()
+          \tif _heavy_publication_frame == frame:
           \t\treturn false
-          \treturn not WorkerThreadPool.is_task_completed(_weather_task_id)
+          \t_heavy_publication_frame = frame
+          \treturn true
           
           
-          func _poll_weather_worker() -> void:
-          \tif _weather_task_id < 0 or not WorkerThreadPool.is_task_completed(_weather_task_id):
-          \t\treturn
-          \tWorkerThreadPool.wait_for_task_completion(_weather_task_id)
-          \t_weather_task_id = -1
-          
-          \tif _weather_task_global_steps > 0:
-          \t\tglobal_state_revision += _weather_task_global_steps
-          \t\t_global_weather_dirty = true
-          \t\t_global_analysis_dirty = true
-          \t\t_global_analysis_phase = 0
-          \t\tanalysis_revision = mini(analysis_revision, global_state_revision - 1)
-          \t\tglobal_state_advanced.emit(global_state_revision)
-          
-          \tif _weather_task_touched_local and _native != null:
-          \t\tlocal_center = _native.call(&"get_local_center")
-          \t\tlocal_east = _native.call(&"get_local_east")
-          \t\tlocal_north = _native.call(&"get_local_north")
-          \t\tlocal_span_m = float(_native.call(&"get_local_span_m"))
-          \t\t_local_weather_dirty = true
-          \t\tif _weather_task_local_steps > 0 or _weather_task_reset_local:
-          \t\t\tlocal_state_revision += maxi(_weather_task_local_steps, 1)
-          \t\t\t_local_analysis_dirty = true
-          \t\t\tlocal_state_advanced.emit(local_state_revision)
-          
-          \t_weather_task_global_steps = 0
-          \t_weather_task_local_steps = 0
-          \t_weather_task_touched_local = false
-          \t_weather_task_reset_local = false
+          func _has_pending_weather_publication() -> bool:
+          \treturn _global_weather_dirty or _local_weather_dirty or _global_analysis_dirty \\
+          \t\tor (_weather_map_open() and _local_analysis_dirty)
           
           
           func _schedule_weather_worker() -> void:
-          \tif _weather_task_id >= 0 or _native == null:
-          \t\treturn
-          
-          \tvar global_steps: int = mini(int(_global_sim_accum / GLOBAL_SIM_DT), MAX_GLOBAL_STEPS_PER_JOB)
-          \tvar local_dt: float = 40.0 if simulation_speed >= 32.0 else LOCAL_SIM_DT
-          \tvar local_steps: int = 0
-          \tvar has_observer: bool = _observer != null and is_instance_valid(_observer)
-          \tif simulation_speed > HIGH_WARP_LOCAL_THRESHOLD:
-          \t\t_local_sim_accum = 0.0
-          \telif has_observer:
-          \t\tlocal_steps = mini(int(_local_sim_accum / local_dt), MAX_LOCAL_STEPS_PER_JOB)
-          
-          \tvar reset_local: bool = _pending_local_reset and has_observer
-          \tvar touch_local: bool = has_observer and (
-          \t\tlocal_steps > 0 or reset_local or _center_update_accum >= CENTER_UPDATE_INTERVAL)
-          \tif global_steps <= 0 and local_steps <= 0 and not touch_local:
-          \t\treturn
-          
-          \t_global_sim_accum -= float(global_steps) * GLOBAL_SIM_DT
-          \t_local_sim_accum -= float(local_steps) * local_dt
-          \tvar center := _observer.up_dir() if has_observer else Vector3.ZERO
-          \tif touch_local:
-          \t\t_center_update_accum = 0.0
-          \tif reset_local:
-          \t\t_pending_local_reset = false
-          
-          \t_weather_task_global_steps = global_steps
-          \t_weather_task_local_steps = local_steps
-          \t_weather_task_touched_local = touch_local
-          \t_weather_task_reset_local = reset_local
-          \t_weather_task_id = WorkerThreadPool.add_task(
-          \t\t_run_weather_worker.bind(global_steps, GLOBAL_SIM_DT, touch_local,
-          \t\t\tcenter, local_steps, local_dt, reset_local),
-          \t\tfalse, "asterra_weather_solver")
-          
-          
-          func _apply_pending_native_controls() -> void:
-          \tif not _pending_native_controls or _native == null:
-          \t\treturn
-          \tfor tuning_key: StringName in TUNING_KEYS:
-          \t\t_native.call(&"set_tuning_weight", tuning_key, float(tuning_weights[tuning_key]))
-          \tfor layer in LAYERS:
-          \t\t_native.call(&"set_layer_weight", layer, layer_weights[layer])
-          \t_pending_native_controls = false
-          
-          
-          func _weather_map_open() -> bool:
-          \tvar weather_map := get_node_or_null("/root/WeatherMap")
-          \treturn weather_map != null and weather_map.visible
-          
-          
-          func _mark_all_outputs_dirty() -> void:
-          \t_global_weather_dirty = true
-          \t_local_weather_dirty = true
-          \t_global_analysis_dirty = true
-          \t_local_analysis_dirty = true
-          \t_global_analysis_phase = 0
-          \t_weather_publish_accum = 999.0
-          \t_analysis_publish_accum = 999.0
-          
-          
-          func _service_weather_publication(delta: float) -> void:
+          '''.replace("          ", "")
+          if anchor not in s:
+              raise SystemExit("schedule function anchor not found")
+          s = s.replace(anchor, helpers, 1)
+
+          old = '''func _service_weather_publication(delta: float) -> void:
           \tif _native == null or native_worker_busy():
           \t\treturn
           \t_weather_publish_accum += delta
           \t_analysis_publish_accum += delta
-          
-          \tvar map_open := _weather_map_open()
-          \tif map_open and not _map_was_open:
-          \t\t_global_analysis_dirty = true
-          \t\t_local_analysis_dirty = true
-          \t\t_global_analysis_phase = 0
-          \t_map_was_open = map_open
-          
-          \t# The full 1024x512 cloud field is the only large texture needed by the
-          \t# world renderer. Never rebuild it unless the physical state changed.
-          \tif _global_weather_dirty:
-          \t\tif _weather_publish_accum >= WEATHER_VISUAL_MIN_INTERVAL:
-          \t\t\t_publish_global_weather()
-          \t\t\t_global_weather_dirty = false
-          \t\t\t_weather_publish_accum = 0.0
-          \t\treturn
-          \tif _local_weather_dirty and _weather_publish_accum >= WEATHER_VISUAL_MIN_INTERVAL:
-          \t\t_publish_local_weather()
-          \t\t_local_weather_dirty = false
-          \t\t_weather_publish_accum = 0.0
-          \t\treturn
-          
-          \t# Refinement needs diagnostics/products/convective state, but doing all
-          \t# three 1024x512 reductions on one render frame creates the visible hitch.
-          \t# Spread them over separate frames and only upload map-only textures while
-          \t# the weather globe is actually open.
-          \tif _global_analysis_dirty and _analysis_publish_accum >= ANALYSIS_PHASE_MIN_INTERVAL:
-          \t\tmatch _global_analysis_phase:
-          \t\t\t0:
-          \t\t\t\t_publish_global_diagnostics(map_open)
-          \t\t\t1:
-          \t\t\t\t_publish_global_products(map_open)
-          \t\t\t_:
-          \t\t\t\t_publish_global_convective()
-          \t\t\t\t_global_analysis_dirty = false
-          \t\t\t\tanalysis_revision = global_state_revision
-          \t\t_global_analysis_phase += 1
-          \t\t_analysis_publish_accum = 0.0
-          \t\treturn
-          
-          \tif map_open and _local_analysis_dirty and _analysis_publish_accum >= ANALYSIS_PHASE_MIN_INTERVAL:
-          \t\t_publish_local_analysis()
-          \t\t_local_analysis_dirty = false
-          \t\t_analysis_publish_accum = 0.0
-          
-          
           '''.replace("          ", "")
-          replace_between("scripts/weather/weather_system.gd", "func _process(delta: float) -> void:\n", "func _try_bind_observer() -> void:\n", process_block)
+          new = '''func _service_weather_publication(delta: float) -> void:
+          \t_weather_publish_accum += delta
+          \t_analysis_publish_accum += delta
+          \tif _native == null or native_worker_busy():
+          \t\treturn
+          '''.replace("          ", "")
+          if old not in s:
+              raise SystemExit("publication accumulator block not found")
+          s = s.replace(old, new, 1)
 
-          publish_block = '''func _publish_weather_textures() -> void:
-          \t# Compatibility entry point for debug controls: publishing is now deferred
-          \t# and staggered instead of doing six large native reductions in one frame.
-          \t_mark_all_outputs_dirty()
-          
-          
-          func _publish_global_weather() -> void:
-          \tvar result: Variant = _native.call(&"get_global_weather_rgba")
-          \tif not (result is PackedFloat32Array):
-          \t\treturn
-          \tglobal_weather_values = result
-          \tvar values := _apply_simulation_weight(global_weather_values)
-          \tif values.size() == GLOBAL_W * GLOBAL_H * 4:
-          \t\tglobal_weather_texture.update(Image.create_from_data(
-          \t\t\tGLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array()))
-          
-          
-          func _publish_local_weather() -> void:
-          \tvar result: Variant = _native.call(&"get_local_weather_rgba")
-          \tif not (result is PackedFloat32Array):
-          \t\treturn
-          \tvar values := _apply_simulation_weight(result)
-          \tif values.size() == LOCAL_W * LOCAL_H * 4:
-          \t\tlocal_weather_texture.update(Image.create_from_data(
-          \t\t\tLOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array()))
-          
-          
-          func _publish_global_diagnostics(update_gpu: bool) -> void:
-          \tvar result: Variant = _native.call(&"get_global_diagnostics_rgba")
-          \tif not (result is PackedFloat32Array):
-          \t\treturn
-          \tglobal_diagnostics_values = result
-          \tif not update_gpu:
-          \t\treturn
-          \tvar values := _apply_diagnostic_weight(global_diagnostics_values)
-          \tif values.size() == GLOBAL_W * GLOBAL_H * 4:
-          \t\tglobal_diagnostics_texture.update(Image.create_from_data(
-          \t\t\tGLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array()))
-          
-          
-          func _publish_global_products(update_gpu: bool) -> void:
-          \tvar result: Variant = _native.call(&"get_global_products_rgba")
-          \tif not (result is PackedFloat32Array):
-          \t\treturn
-          \tglobal_products_values = result
-          \tif update_gpu and global_products_values.size() == GLOBAL_W * GLOBAL_H * 4:
-          \t\tglobal_products_texture.update(Image.create_from_data(
-          \t\t\tGLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF,
-          \t\t\tglobal_products_values.to_byte_array()))
-          
-          
-          func _publish_global_convective() -> void:
-          \tif not _native.has_method(&"get_global_convective_rgba"):
-          \t\tglobal_convective_values = PackedFloat32Array()
-          \t\treturn
-          \tvar result: Variant = _native.call(&"get_global_convective_rgba")
-          \tif result is PackedFloat32Array:
-          \t\tglobal_convective_values = result
-          
-          
-          func _publish_local_analysis() -> void:
-          \tvar diag_result: Variant = _native.call(&"get_local_diagnostics_rgba")
-          \tif diag_result is PackedFloat32Array:
-          \t\tvar diag_values := _apply_diagnostic_weight(diag_result)
-          \t\tif diag_values.size() == LOCAL_W * LOCAL_H * 4:
-          \t\t\tlocal_diagnostics_texture.update(Image.create_from_data(
-          \t\t\t\tLOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, diag_values.to_byte_array()))
-          \tvar products_result: Variant = _native.call(&"get_local_products_rgba")
-          \tif products_result is PackedFloat32Array:
-          \t\tvar products_values: PackedFloat32Array = products_result
-          \t\tif products_values.size() == LOCAL_W * LOCAL_H * 4:
-          \t\t\tlocal_products_texture.update(Image.create_from_data(
-          \t\t\t\tLOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, products_values.to_byte_array()))
-          
-          
-          '''.replace("          ", "")
-          replace_between("scripts/weather/weather_system.gd", "func _publish_weather_textures() -> void:\n", "func set_simulation_weight(value: float) -> void:\n", publish_block)
+          # Every full global reduction/upload must claim the frame. Local 192x192
+          # outputs are intentionally exempt because they are comparatively small.
+          for fn in [
+              "func _publish_global_weather() -> void:\n",
+              "func _publish_global_diagnostics(update_gpu: bool) -> void:\n",
+              "func _publish_global_products(update_gpu: bool) -> void:\n",
+              "func _publish_global_convective() -> void:\n",
+          ]:
+              if fn not in s:
+                  raise SystemExit(f"missing publisher {fn.strip()}")
+              s = s.replace(fn, fn + "\tif not claim_heavy_publication():\n\t\treturn\n", 1)
 
-          controls_block = '''func set_simulation_weight(value: float) -> void:
-          \tvar sanitized := clampf(value, SIMULATION_WEIGHT_MIN, SIMULATION_WEIGHT_MAX)
-          \tif is_equal_approx(simulation_weight, sanitized):
-          \t\treturn
-          \tsimulation_weight = sanitized
-          \tif native_available:
-          \t\t_mark_all_outputs_dirty()
-          \telse:
-          \t\t_publish_fallback_weather()
-          \t_sync_weather_map_material()
-          \tsimulation_weight_changed.emit(simulation_weight)
-          
-          
-          func reset_simulation_weight() -> void:
-          \tset_simulation_weight(SIMULATION_WEIGHT_DEFAULT)
-          
-          
-          func set_simulation_speed(value: float) -> void:
-          \tvar sanitized := clampf(value, SIMULATION_SPEED_MIN, SIMULATION_SPEED_MAX)
-          \tif is_equal_approx(simulation_speed, sanitized) and is_equal_approx(CelestialSystem.time_scale, sanitized):
-          \t\treturn
-          \tvar was_high_warp := simulation_speed > HIGH_WARP_LOCAL_THRESHOLD
-          \tsimulation_speed = sanitized
-          \tCelestialSystem.set_time_scale(simulation_speed)
-          \tif was_high_warp and simulation_speed <= HIGH_WARP_LOCAL_THRESHOLD \\
-          \t\t\tand native_available and _native != null:
-          \t\t_local_sim_accum = 0.0
-          \t\t_pending_local_reset = true
-          \tsimulation_speed_changed.emit(simulation_speed)
-          
-          
-          func reset_simulation_speed() -> void:
-          \tset_simulation_speed(SIMULATION_SPEED_DEFAULT)
-          
-          
-          func set_tuning_weight(name: StringName, value: float) -> void:
-          \tif not tuning_weights.has(name):
-          \t\treturn
-          \tvar sanitized := clampf(value, TUNING_WEIGHT_MIN, TUNING_WEIGHT_MAX)
-          \tif is_equal_approx(float(tuning_weights[name]), sanitized):
-          \t\treturn
-          \ttuning_weights[name] = sanitized
-          \tif native_available and _native != null:
-          \t\tif native_worker_busy():
-          \t\t\t_pending_native_controls = true
-          \t\telse:
-          \t\t\t_native.call(&"set_tuning_weight", name, sanitized)
-          \ttuning_weight_changed.emit(name, sanitized)
-          
-          
-          func set_layer_weight(layer: int, value: float) -> void:
-          \tif layer < 0 or layer >= layer_weights.size():
-          \t\treturn
-          \tvar sanitized := clampf(value, TUNING_WEIGHT_MIN, TUNING_WEIGHT_MAX)
-          \tif is_equal_approx(layer_weights[layer], sanitized):
-          \t\treturn
-          \tlayer_weights[layer] = sanitized
-          \tif native_available and _native != null:
-          \t\tif native_worker_busy():
-          \t\t\t_pending_native_controls = true
-          \t\telse:
-          \t\t\t_native.call(&"set_layer_weight", layer, sanitized)
-          \t\t_mark_all_outputs_dirty()
-          \tlayer_weight_changed.emit(layer, sanitized)
-          
-          
-          func reset_physics_tuning() -> void:
-          \tfor tuning_key: StringName in TUNING_KEYS:
-          \t\ttuning_weights[tuning_key] = TUNING_WEIGHT_DEFAULT
-          \tlayer_weights = PackedFloat32Array(DEFAULT_LAYER_WEIGHTS)
-          \tif native_available and _native != null:
-          \t\tif native_worker_busy():
-          \t\t\t_pending_native_controls = true
-          \t\telse:
-          \t\t\t_native.call(&"reset_tuning_weights")
-          \t\t_mark_all_outputs_dirty()
-          \tphysics_tuning_reset.emit()
-          
-          
-          '''.replace("          ", "")
-          replace_between("scripts/weather/weather_system.gd", "func set_simulation_weight(value: float) -> void:\n", "func _apply_simulation_weight(values: PackedFloat32Array) -> PackedFloat32Array:\n", controls_block)
-
-          p = Path("scripts/weather/weather_system.gd")
-          s = p.read_text(encoding="utf-8")
-          s = s.replace('''\tglobal_weather_texture.update(global_image)
-          '''.replace("          ", ""), '''\tglobal_weather_texture.update(global_image)
-          \tglobal_weather_values = global_image.get_data().to_float32_array()
-          '''.replace("          ", ""), 1)
-          s = s.replace('''\tglobal_diagnostics_texture.update(global_diag)
-          '''.replace("          ", ""), '''\tglobal_diagnostics_texture.update(global_diag)
-          \tglobal_diagnostics_values = global_diag.get_data().to_float32_array()
-          '''.replace("          ", ""), 1)
-          s += '''
-          
-          func _exit_tree() -> void:
-          \tif _weather_task_id >= 0:
-          \t\tWorkerThreadPool.wait_for_task_completion(_weather_task_id)
-          \t\t_weather_task_id = -1
-          '''.replace("          ", "")
           p.write_text(s, encoding="utf-8")
 
-          # Surface energy: stop fixed 0.5 s full-planet texture repacks. Publish
-          # only after corresponding atmosphere revisions and never race the solver worker.
+          # Surface output shares the same per-frame heavy-work token so it cannot
+          # coincide with the cloud/analysis 8 MiB global transfers.
           p = Path("scripts/weather/surface_energy_bridge.gd")
           s = p.read_text(encoding="utf-8")
-          s = s.replace("const TEXTURE_INTERVAL := 0.50\n", "")
-          s = s.replace("var _texture_accum := 0.0\n", "var _last_global_weather_revision: int = -1\nvar _last_local_weather_revision: int = -1\nvar _global_surface_dirty: bool = true\nvar _local_surface_dirty: bool = true\n")
-          old = '''\t_maybe_queue_local_surface()
-          \t_texture_accum += delta
-          \tif _texture_accum >= TEXTURE_INTERVAL:
-          \t\t_texture_accum = fmod(_texture_accum, TEXTURE_INTERVAL)
-          \t\t_publish_surface_textures()
-          \t_sync_terrain_materials()
-          '''.replace("          ", "")
-          new = '''\t_maybe_queue_local_surface()
-          \tif WeatherSystem.global_state_revision != _last_global_weather_revision:
-          \t\t_last_global_weather_revision = WeatherSystem.global_state_revision
-          \t\t_global_surface_dirty = true
-          \tif WeatherSystem.local_state_revision != _last_local_weather_revision:
-          \t\t_last_local_weather_revision = WeatherSystem.local_state_revision
-          \t\t_local_surface_dirty = true
-          \t_service_surface_publication()
-          \t_sync_terrain_materials()
-          '''.replace("          ", "")
-          if old not in s: raise SystemExit("surface process block not found")
-          s = s.replace(old, new)
-          s = s.replace('''func _push_solar_forcing() -> void:
-          \tif _native == null:
-          \t\treturn
-          '''.replace("          ", ""), '''func _push_solar_forcing() -> void:
-          \tif _native == null or WeatherSystem.native_worker_busy():
-          \t\treturn
-          '''.replace("          ", ""))
-          s = s.replace('''func _finish_global_surface_fields(request: int, packed: PackedFloat32Array) -> void:
-          \tif _global_task_id >= 0:
-          '''.replace("          ", ""), '''func _finish_global_surface_fields(request: int, packed: PackedFloat32Array) -> void:
-          \tif WeatherSystem.native_worker_busy():
-          \t\tcall_deferred("_finish_global_surface_fields", request, packed)
-          \t\treturn
-          \tif _global_task_id >= 0:
-          '''.replace("          ", ""))
-          s = s.replace('''\t_publish_surface_textures()
-          
-          
-          func _has_local_observer()'''.replace("          ", ""), '''\t_global_surface_dirty = true
-          \t_local_surface_dirty = true
-          \t_service_surface_publication()
-          
-          
-          func _has_local_observer()'''.replace("          ", ""), 1)
-          s = s.replace('''func _finish_local_surface_build(request: int, center: Vector3,
-          \t\tfields: PackedFloat32Array) -> void:
-          \tif _local_task_id >= 0:
-          '''.replace("          ", ""), '''func _finish_local_surface_build(request: int, center: Vector3,
-          \t\tfields: PackedFloat32Array) -> void:
-          \tif WeatherSystem.native_worker_busy():
-          \t\tcall_deferred("_finish_local_surface_build", request, center, fields)
-          \t\treturn
-          \tif _local_task_id >= 0:
-          '''.replace("          ", ""))
-          s = s.replace('''\t\t\t_native.call(&"set_local_surface_fields", fields)
-          \t\t\t_local_uploaded_center = center
-          \t\t\t_publish_surface_textures()
-          '''.replace("          ", ""), '''\t\t\t_native.call(&"set_local_surface_fields", fields)
-          \t\t\t_local_uploaded_center = center
-          \t\t\t_local_surface_dirty = true
-          \t\t\t_service_surface_publication()
-          '''.replace("          ", ""))
-          p.write_text(s, encoding="utf-8")
-
-          surface_publish = '''func _publish_surface_textures() -> void:
-          \t_global_surface_dirty = true
-          \t_local_surface_dirty = true
-          \t_service_surface_publication()
-          
-          
-          func _service_surface_publication() -> void:
-          \tif _native == null or not _surface_fields_uploaded or WeatherSystem.native_worker_busy():
-          \t\treturn
-          \t# Stagger the 8 MiB global upload and the local upload onto different frames.
-          \tif _global_surface_dirty:
+          old = '''\tif _global_surface_dirty:
           \t\tvar global_result: Variant = _native.call(&"get_global_surface_rgba")
-          \t\tif global_result is PackedFloat32Array:
-          \t\t\tvar global_values: PackedFloat32Array = global_result
-          \t\t\tif global_values.size() == GLOBAL_W * GLOBAL_H * 4:
-          \t\t\t\tglobal_surface_texture.update(Image.create_from_data(
-          \t\t\t\t\tGLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, global_values.to_byte_array()))
-          \t\t_global_surface_dirty = false
-          \t\treturn
-          \tif _local_surface_dirty:
-          \t\tvar local_result: Variant = _native.call(&"get_local_surface_rgba")
-          \t\tif local_result is PackedFloat32Array:
-          \t\t\tvar local_values: PackedFloat32Array = local_result
-          \t\t\tif local_values.size() == LOCAL_W * LOCAL_H * 4:
-          \t\t\t\tlocal_surface_texture.update(Image.create_from_data(
-          \t\t\t\t\tLOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_values.to_byte_array()))
-          \t\t_local_surface_dirty = false
-          
-          
           '''.replace("          ", "")
-          replace_between("scripts/weather/surface_energy_bridge.gd", "func _publish_surface_textures() -> void:\n", "func _sync_terrain_materials() -> void:\n", surface_publish)
-
-          # Refinement becomes atmosphere-revision driven and reuses WeatherSystem's
-          # already packed convective field instead of asking native for another 8 MiB field.
-          p = Path("scripts/weather/weather_refinement_manager_v2.gd")
-          s = p.read_text(encoding="utf-8")
-          s = s.replace("const SCAN_INTERVAL_REAL_S := 0.50\n", "")
-          s = s.replace("var _scan_accum: float = 0.0\n", "var _last_analysis_revision: int = -1\n")
-          old = '''func _process(delta: float) -> void:
-          \tif not enabled:
-          \t\t_hide_debug_overlay()
-          \t\treturn
-          \t_scan_accum += delta
-          \tif _scan_accum >= SCAN_INTERVAL_REAL_S:
-          \t\t_scan_accum = fmod(_scan_accum, SCAN_INTERVAL_REAL_S)
-          \t\t_scan_weather()
-          \t_update_debug_overlay()
+          new = '''\tif _global_surface_dirty:
+          \t\tif not WeatherSystem.claim_heavy_publication():
+          \t\t\treturn
+          \t\tvar global_result: Variant = _native.call(&"get_global_surface_rgba")
           '''.replace("          ", "")
-          new = '''func _process(_delta: float) -> void:
-          \tif not enabled:
-          \t\t_hide_debug_overlay()
-          \t\treturn
-          \tif WeatherSystem.analysis_revision >= 0 and WeatherSystem.analysis_revision != _last_analysis_revision:
-          \t\t_last_analysis_revision = WeatherSystem.analysis_revision
-          \t\t_scan_weather()
-          \t_update_debug_overlay()
-          '''.replace("          ", "")
-          if old not in s: raise SystemExit("refinement process block not found")
-          s = s.replace(old, new)
-          refresh_start = "func _refresh_convective_values(expected: int) -> void:\n"
-          refresh_end = "func _extract_candidates(weather: PackedFloat32Array, diagnostics: PackedFloat32Array,\n"
-          refresh = '''func _refresh_convective_values(expected: int) -> void:
-          \t_convective_values = PackedFloat32Array()
-          \tvar values: PackedFloat32Array = WeatherSystem.global_convective_values
-          \tif values.size() == expected:
-          \t\t_convective_values = values
-          
-          
-          '''.replace("          ", "")
+          if old not in s:
+              raise SystemExit("surface global publisher block not found")
+          s = s.replace(old, new, 1)
           p.write_text(s, encoding="utf-8")
-          replace_between("scripts/weather/weather_refinement_manager_v2.gd", refresh_start, refresh_end, refresh)
 
-          # Wind map: refresh only when the physical global state changes or the
-          # selected layer changes, and never read the native atmosphere during a worker step.
+          # Wind is another full 1024x512 RGBAF pack/upload. Defer it to a free frame.
           p = Path("scripts/ui/weather_map.gd")
           s = p.read_text(encoding="utf-8")
-          s = s.replace("const LIVE_WIND_REFRESH_S := 0.50\n", "")
-          s = s.replace("var _live_wind_accum := 999.0\n", "var _last_wind_revision: int = -1\n")
-          s = s.replace('''\t\t_live_wind_accum = 999.0
-          '''.replace("          ", ""), '''\t\t_last_wind_revision = -1
-          '''.replace("          ", ""))
-          old = '''\t_live_wind_accum += delta
-          \tif _live_wind_accum >= LIVE_WIND_REFRESH_S:
-          \t\t_live_wind_accum = 0.0
-          \t\t_refresh_live_wind()
-          '''.replace("          ", "")
-          new = '''\tif WeatherSystem.global_state_revision != _last_wind_revision:
-          \t\t_refresh_live_wind()
-          '''.replace("          ", "")
-          if old not in s: raise SystemExit("weather map wind refresh block not found")
-          s = s.replace(old, new)
-          s = s.replace('''func _refresh_live_wind() -> void:
-          \t_ensure_wind_sampler()
-          '''.replace("          ", ""), '''func _refresh_live_wind() -> void:
+          s = s.replace(
+              "## WeatherSystem; wind streaks use the selected native six-layer vector field.\n",
+              "## WeatherSystem; wind streaks use the selected native 30-layer vector field.\n",
+              1,
+          )
+          old = '''func _refresh_live_wind() -> void:
           \tif WeatherSystem.native_worker_busy():
           \t\treturn
-          \t_ensure_wind_sampler()
-          '''.replace("          ", ""))
-          s = s.replace('''\t_live_wind_available = true
-          \t_wind_values = values
-          '''.replace("          ", ""), '''\t_live_wind_available = true
-          \t_last_wind_revision = WeatherSystem.global_state_revision
-          \t_wind_values = values
-          '''.replace("          ", ""))
-          s = s.replace("LIVE six-layer AVX2 atmosphere", "LIVE 30-layer AVX2 atmosphere")
-          s = s.replace('''\t_live_wind_accum = 999.0
-          \tif not _live_wind_available:
-          '''.replace("          ", ""), '''\t_last_wind_revision = -1
-          \tif not _live_wind_available:
-          '''.replace("          ", ""))
+          '''.replace("          ", "")
+          new = '''func _refresh_live_wind() -> void:
+          \tif WeatherSystem.native_worker_busy() or WeatherSystem.heavy_publication_this_frame():
+          \t\treturn
+          \tif not WeatherSystem.claim_heavy_publication():
+          \t\treturn
+          '''.replace("          ", "")
+          if old not in s:
+              raise SystemExit("wind refresh guard not found")
+          s = s.replace(old, new, 1)
           p.write_text(s, encoding="utf-8")
 
-          # Basic static checks for accidental leftovers.
-          ws = Path("scripts/weather/weather_system.gd").read_text()
-          assert "_texture_accum" not in ws
-          assert "WorkerThreadPool.add_task" in ws
-          assert "global_convective_values" in ws
-          assert "func native_worker_busy()" in ws
-          sr = Path("scripts/weather/weather_refinement_manager_v2.gd").read_text()
-          assert "SCAN_INTERVAL_REAL_S" not in sr
-          assert "get_global_convective_rgba" not in sr
-          se = Path("scripts/weather/surface_energy_bridge.gd").read_text()
-          assert "TEXTURE_INTERVAL" not in se
-          wm = Path("scripts/ui/weather_map.gd").read_text()
-          assert "LIVE_WIND_REFRESH_S" not in wm
+          # The GDScript refinement scan is substantial too. Run it on the next free
+          # frame after the three native analysis reductions have completed.
+          p = Path("scripts/weather/weather_refinement_manager_v2.gd")
+          s = p.read_text(encoding="utf-8")
+          old = '''\tif WeatherSystem.analysis_revision >= 0 and WeatherSystem.analysis_revision != _last_analysis_revision:
+          \t\t_last_analysis_revision = WeatherSystem.analysis_revision
+          \t\t_scan_weather()
+          '''.replace("          ", "")
+          new = '''\tif not WeatherSystem.heavy_publication_this_frame() \\
+          \t\t\tand WeatherSystem.analysis_revision >= 0 \\
+          \t\t\tand WeatherSystem.analysis_revision != _last_analysis_revision:
+          \t\t_last_analysis_revision = WeatherSystem.analysis_revision
+          \t\t_scan_weather()
+          '''.replace("          ", "")
+          if old not in s:
+              raise SystemExit("refinement revision guard not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding="utf-8")
 
-      - name: Commit patch
+          # Static integrity checks.
+          ws = Path("scripts/weather/weather_system.gd").read_text(encoding="utf-8")
+          assert "call_deferred(\"_schedule_weather_worker_deferred\")" in ws
+          assert "func claim_heavy_publication()" in ws
+          assert "_has_pending_weather_publication()" in ws
+          assert ws.count("if not claim_heavy_publication():") == 4
+          se = Path("scripts/weather/surface_energy_bridge.gd").read_text(encoding="utf-8")
+          assert "WeatherSystem.claim_heavy_publication()" in se
+          wm = Path("scripts/ui/weather_map.gd").read_text(encoding="utf-8")
+          assert "WeatherSystem.heavy_publication_this_frame()" in wm
+          assert "native 30-layer vector field" in wm
+          wr = Path("scripts/weather/weather_refinement_manager_v2.gd").read_text(encoding="utf-8")
+          assert "not WeatherSystem.heavy_publication_this_frame()" in wr
+
+      - name: Commit follow-up
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add scripts/weather/weather_system.gd scripts/weather/surface_energy_bridge.gd scripts/weather/weather_refinement_manager_v2.gd scripts/ui/weather_map.gd
-          git commit -m "Move weather runtime work off the render thread"
+          git commit -m "Stagger weather publication between worker jobs"
           git push origin HEAD:weather/0.0.5
