@@ -12,6 +12,7 @@ signal coast_profile_requested
 
 ## [property, label, note, default]
 const TERRAIN_ROWS := [
+	["pbr_detail", "Scanned PBR detail", "Toggles close-range scanned albedo, roughness and normal detail without changing geomorph or material weights", true],
 	["wireframe", "Wireframe", "Shows the actual concentric clipmap triangles", false],
 	["ring_indicator", "LOD ring labels", "Shows L0, L1, L2... directly on each active concentric ring", false],
 	["freeze_terrain", "Freeze terrain clipmap", "Locks centre + active LODs in planet space while you fly around", false],
@@ -157,7 +158,7 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	reset.add_theme_font_size_override("font_size", 13)
 	reset.pressed.connect(_on_reset_inspection)
 	box.add_child(reset)
-	box.add_child(_note("Restores final materials, clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
+	box.add_child(_note("Restores final materials + PBR, clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
 
 
 func _build_sky_tab(tabs: TabContainer) -> void:
@@ -318,6 +319,9 @@ func _on_reset_inspection() -> void:
 		var button_value: Variant = _buttons.get(key)
 		if button_value is CheckButton:
 			(button_value as CheckButton).set_pressed_no_signal(false)
+	var pbr_value: Variant = _buttons.get("pbr_detail")
+	if pbr_value is CheckButton:
+		(pbr_value as CheckButton).set_pressed_no_signal(true)
 	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
 		GroundGeometryClipmap.call("set_debug_ring_indicator", false)
 	if _geomorph_selector != null:
@@ -328,8 +332,11 @@ func _on_reset_inspection() -> void:
 		_sink_label.text = "Sink depth: %.2f × LOD spacing" % DEFAULT_SINK_SCALE
 	if debug != null:
 		debug.reset_inspection()
-	elif GroundGeometryClipmap.has_method("set_debug_geomorph_mode"):
-		GroundGeometryClipmap.call("set_debug_geomorph_mode", 0)
+	else:
+		if GroundGeometryClipmap.has_method("set_debug_geomorph_mode"):
+			GroundGeometryClipmap.call("set_debug_geomorph_mode", 0)
+		if GroundGeometryClipmap.has_method("set_debug_pbr_enabled"):
+			GroundGeometryClipmap.call("set_debug_pbr_enabled", true)
 
 
 func _on_sky_slider_changed(value: float, key: String) -> void:
