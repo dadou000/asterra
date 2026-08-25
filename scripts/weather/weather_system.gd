@@ -13,10 +13,28 @@ const LOCAL_REAL_INTERVAL := 0.20
 const TEXTURE_REAL_INTERVAL := 0.50
 const GLOBAL_SIM_DT := 90.0
 const LOCAL_SIM_DT := 20.0
+const SIMULATION_SPEED_MIN := 0.0
+const SIMULATION_SPEED_MAX := 128.0
+const SIMULATION_SPEED_DEFAULT := 1.0
+const MAX_CATCHUP_REAL_DELTA := 0.25
+const MAX_GLOBAL_STEPS_PER_FRAME := 4
+const MAX_LOCAL_STEPS_PER_FRAME := 10
 const SIMULATION_WEIGHT_MIN := 0.0
 const SIMULATION_WEIGHT_MAX := 2.0
 const SIMULATION_WEIGHT_DEFAULT := 1.0
 const NEUTRAL_CLOUD := 0.16
+const TUNING_WEIGHT_MIN := 0.0
+const TUNING_WEIGHT_MAX := 2.0
+const TUNING_WEIGHT_DEFAULT := 1.0
+const TUNING_KEYS := [
+	&"circulation",
+	&"temperature",
+	&"humidity",
+	&"cloud_microphysics",
+	&"convection",
+	&"precipitation",
+]
+const DEFAULT_LAYER_WEIGHTS := [0.77, 0.90, 1.00, 1.07, 1.07, 1.19]
 const REQUIRED_NATIVE_METHODS := [
 	&"initialize",
 	&"step_global",
@@ -26,6 +44,11 @@ const REQUIRED_NATIVE_METHODS := [
 	&"get_local_weather_rgba",
 	&"get_global_diagnostics_rgba",
 	&"get_local_diagnostics_rgba",
+	&"set_tuning_weight",
+	&"get_tuning_weight",
+	&"reset_tuning_weights",
+	&"set_layer_weight",
+	&"get_layer_weights",
 	&"get_layer_count",
 	&"get_local_center",
 	&"get_local_east",
@@ -34,6 +57,10 @@ const REQUIRED_NATIVE_METHODS := [
 ]
 
 signal simulation_weight_changed(weight: float)
+signal simulation_speed_changed(speed: float)
+signal tuning_weight_changed(name: StringName, weight: float)
+signal layer_weight_changed(layer: int, weight: float)
+signal physics_tuning_reset
 
 var global_weather_texture: ImageTexture
 var local_weather_texture: ImageTexture
@@ -50,6 +77,19 @@ var backend_error := ""
 ## Runtime influence of simulated anomalies on weather consumers.
 ## 0 = neutral field, 1 = calibrated model, 2 = amplified display/renderer extremes.
 var simulation_weight := SIMULATION_WEIGHT_DEFAULT
+## Multiplies simulated time per real second while preserving the solver's
+## calibrated fixed timesteps. 0 pauses weather; 1 is normal; high values are
+## intended to spin up a realistic starting circulation quickly.
+var simulation_speed := SIMULATION_SPEED_DEFAULT
+var tuning_weights := {
+	&"circulation": TUNING_WEIGHT_DEFAULT,
+	&"temperature": TUNING_WEIGHT_DEFAULT,
+	&"humidity": TUNING_WEIGHT_DEFAULT,
+	&"cloud_microphysics": TUNING_WEIGHT_DEFAULT,
+	&"convection": TUNING_WEIGHT_DEFAULT,
+	&"precipitation": TUNING_WEIGHT_DEFAULT,
+}
+var layer_weights := PackedFloat32Array(DEFAULT_LAYER_WEIGHTS)
 
 var _native: Object = null
 var _observer: AsterraPlayer
@@ -92,6 +132,10 @@ func _try_create_native_backend() -> void:
 		return
 
 	_native = instance
+	for tuning_key: StringName in TUNING_KEYS:
+		_native.call(&"set_tuning_weight", tuning_key, float(tuning_weights[tuning_key]))
+	for layer in LAYERS:
+		_native.call(&"set_layer_weight", layer, layer_weights[layer])
 	var world := load("res://world.tres")
 	var seed := 1
 	if world is GenConfig:
@@ -113,8 +157,13 @@ func _process(delta: float) -> void:
 		_sync_weather_map_material()
 		return
 
-	_global_accum += delta
-	_local_accum += delta
+	var simulated_real_delta := minf(delta, MAX_CATCHUP_REAL_DELTA) * simulation_speed
+	_global_accum = minf(
+		_global_accum + simulated_real_delta,
+		GLOBAL_REAL_INTERVAL * MAX_GLOBAL_STEPS_PER_FRAME)
+	_local_accum = minf(
+		_local_accum + simulated_real_delta,
+		LOCAL_REAL_INTERVAL * MAX_LOCAL_STEPS_PER_FRAME)
 	_texture_accum += delta
 
 	while _global_accum >= GLOBAL_REAL_INTERVAL:
@@ -232,6 +281,53 @@ func set_simulation_weight(value: float) -> void:
 
 func reset_simulation_weight() -> void:
 	set_simulation_weight(SIMULATION_WEIGHT_DEFAULT)
+
+
+func set_simulation_speed(value: float) -> void:
+	var sanitized := clampf(value, SIMULATION_SPEED_MIN, SIMULATION_SPEED_MAX)
+	if is_equal_approx(simulation_speed, sanitized):
+		return
+	simulation_speed = sanitized
+	simulation_speed_changed.emit(simulation_speed)
+
+
+func reset_simulation_speed() -> void:
+	set_simulation_speed(SIMULATION_SPEED_DEFAULT)
+
+
+func set_tuning_weight(name: StringName, value: float) -> void:
+	if not tuning_weights.has(name):
+		return
+	var sanitized := clampf(value, TUNING_WEIGHT_MIN, TUNING_WEIGHT_MAX)
+	if is_equal_approx(float(tuning_weights[name]), sanitized):
+		return
+	tuning_weights[name] = sanitized
+	if native_available and _native != null:
+		_native.call(&"set_tuning_weight", name, sanitized)
+	tuning_weight_changed.emit(name, sanitized)
+
+
+func set_layer_weight(layer: int, value: float) -> void:
+	if layer < 0 or layer >= layer_weights.size():
+		return
+	var sanitized := clampf(value, TUNING_WEIGHT_MIN, TUNING_WEIGHT_MAX)
+	if is_equal_approx(layer_weights[layer], sanitized):
+		return
+	layer_weights[layer] = sanitized
+	if native_available and _native != null:
+		_native.call(&"set_layer_weight", layer, sanitized)
+		_publish_weather_textures()
+	layer_weight_changed.emit(layer, sanitized)
+
+
+func reset_physics_tuning() -> void:
+	for tuning_key: StringName in TUNING_KEYS:
+		tuning_weights[tuning_key] = TUNING_WEIGHT_DEFAULT
+	layer_weights = PackedFloat32Array(DEFAULT_LAYER_WEIGHTS)
+	if native_available and _native != null:
+		_native.call(&"reset_tuning_weights")
+		_publish_weather_textures()
+	physics_tuning_reset.emit()
 
 
 func _apply_simulation_weight(values: PackedFloat32Array) -> PackedFloat32Array:

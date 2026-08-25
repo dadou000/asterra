@@ -49,7 +49,8 @@ automatically.
 | `Q` / `E` | drop a heap of carried material / pick one back up |
 | `[` `]` | brush radius |
 | `M`, `,` `.` | planet map overlay, previous/next layer |
-| `é` | live weather map; its slider adjusts simulation influence from neutral 0× through calibrated 1× to amplified 2× |
+| `é` | live weather map; adjust display influence and weather speed from paused 0× to rapid spin-up at 128× |
+| `P` | while the weather map is open, tune six physical processes and all six vertical contribution weights live |
 | `T` | teleport to the best transport-corridor site on the planet |
 | `F5` / `F9` | save / load |
 

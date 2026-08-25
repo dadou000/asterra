@@ -49,6 +49,26 @@ const LEGEND_RIGHT := [
 const W := 960
 const H := 480
 const BASE_RENDER_BUDGET_USEC := 2400
+const TUNING_LABELS := {
+	&"circulation": "Circulation",
+	&"temperature": "Radiative heat",
+	&"humidity": "Humidity supply",
+	&"cloud_microphysics": "Cloud physics",
+	&"convection": "Convection",
+	&"precipitation": "Precipitation",
+}
+const TUNING_TOOLTIPS := {
+	&"circulation": "Large-scale wind and pressure-pattern restoration.",
+	&"temperature": "Radiative and surface temperature relaxation rate.",
+	&"humidity": "Moisture restoration toward the saturation-limited climate.",
+	&"cloud_microphysics": "Condensation, evaporation, freezing, melting, and cloud decay.",
+	&"convection": "Resolved vertical transport from instability and convergence.",
+	&"precipitation": "Liquid/ice autoconversion and fallout rate.",
+}
+const LAYER_LABELS := [
+	"L1  0.45 km", "L2  1.7 km", "L3  3.3 km",
+	"L4  5.6 km", "L5  8.5 km", "L6  12.8 km",
+]
 
 var product_index: int = Product.COMPOSITE
 var texture_rect: TextureRect
@@ -61,6 +81,14 @@ var legend_right: Label
 var marker: Control
 var simulation_weight_label: Label
 var simulation_weight_slider: HSlider
+var simulation_speed_label: Label
+var simulation_speed_slider: HSlider
+var tuning_panel: PanelContainer
+var tuning_button: Button
+var _tuning_sliders := {}
+var _tuning_value_labels := {}
+var _layer_sliders: Array[HSlider] = []
+var _layer_value_labels: Array[Label] = []
 var _material: ShaderMaterial
 var _player: AsterraPlayer
 var _player_dir := Vector3(1, 0, 0)
@@ -140,6 +168,41 @@ func _ready() -> void:
 	WeatherSystem.simulation_weight_changed.connect(_on_external_simulation_weight_changed)
 	_update_simulation_weight_label(WeatherSystem.simulation_weight)
 
+	simulation_speed_label = Label.new()
+	simulation_speed_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	simulation_speed_label.position = Vector2(-370, 140)
+	simulation_speed_label.custom_minimum_size = Vector2(260, 28)
+	simulation_speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	simulation_speed_label.add_theme_font_size_override("font_size", 13)
+	add_child(simulation_speed_label)
+
+	simulation_speed_slider = HSlider.new()
+	simulation_speed_slider.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	simulation_speed_slider.position = Vector2(-92, 139)
+	simulation_speed_slider.custom_minimum_size = Vector2(300, 28)
+	simulation_speed_slider.min_value = WeatherSystem.SIMULATION_SPEED_MIN
+	simulation_speed_slider.max_value = WeatherSystem.SIMULATION_SPEED_MAX
+	simulation_speed_slider.step = 1.0
+	simulation_speed_slider.value = WeatherSystem.simulation_speed
+	simulation_speed_slider.tooltip_text = "Accelerates native weather time up to 128× for rapid atmospheric spin-up. Higher values perform more fixed solver steps per real second."
+	simulation_speed_slider.value_changed.connect(_on_simulation_speed_changed)
+	add_child(simulation_speed_slider)
+
+	var reset_speed := Button.new()
+	reset_speed.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	reset_speed.position = Vector2(225, 137)
+	reset_speed.custom_minimum_size = Vector2(145, 32)
+	reset_speed.text = "Normal 1×"
+	reset_speed.pressed.connect(WeatherSystem.reset_simulation_speed)
+	add_child(reset_speed)
+	WeatherSystem.simulation_speed_changed.connect(_on_external_simulation_speed_changed)
+	_update_simulation_speed_label(WeatherSystem.simulation_speed)
+
+	_create_tuning_panel()
+	WeatherSystem.tuning_weight_changed.connect(_on_external_tuning_weight_changed)
+	WeatherSystem.layer_weight_changed.connect(_on_external_layer_weight_changed)
+	WeatherSystem.physics_tuning_reset.connect(_refresh_tuning_controls)
+
 	note = Label.new()
 	note.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	note.position = Vector2(-float(W) * 0.5, -84)
@@ -177,7 +240,7 @@ func _ready() -> void:
 	hint.position = Vector2(-float(W) * 0.5, -18)
 	hint.custom_minimum_size = Vector2(W, 18)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.text = "é close  •  ← / → product  •  1–9 direct  •  6 sigma layers global + local"
+	hint.text = "é close  •  ← / → product  •  1–9 direct  •  P physics tuning  •  6 sigma layers"
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", Color(0.52, 0.59, 0.69))
 	add_child(hint)
@@ -188,6 +251,132 @@ func _ready() -> void:
 	add_child(marker)
 
 	_apply_product()
+
+
+func _create_tuning_panel() -> void:
+	tuning_button = Button.new()
+	tuning_button.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	tuning_button.position = Vector2(390, 56)
+	tuning_button.custom_minimum_size = Vector2(155, 36)
+	tuning_button.text = "Physics tuning  [P]"
+	tuning_button.tooltip_text = "Tune the native atmospheric solver while it is running."
+	tuning_button.pressed.connect(_toggle_tuning_panel)
+	add_child(tuning_button)
+
+	tuning_panel = PanelContainer.new()
+	tuning_panel.set_anchor(SIDE_LEFT, 1.0)
+	tuning_panel.set_anchor(SIDE_RIGHT, 1.0)
+	tuning_panel.set_anchor(SIDE_TOP, 0.5)
+	tuning_panel.set_anchor(SIDE_BOTTOM, 0.5)
+	tuning_panel.offset_left = -350.0
+	tuning_panel.offset_right = -18.0
+	tuning_panel.offset_top = -345.0
+	tuning_panel.offset_bottom = 345.0
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.018, 0.029, 0.047, 0.97)
+	panel_style.border_color = Color(0.24, 0.39, 0.52, 0.85)
+	panel_style.set_border_width_all(1)
+	panel_style.corner_radius_top_left = 7
+	panel_style.corner_radius_top_right = 7
+	panel_style.corner_radius_bottom_left = 7
+	panel_style.corner_radius_bottom_right = 7
+	tuning_panel.add_theme_stylebox_override("panel", panel_style)
+	add_child(tuning_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	tuning_panel.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 5)
+	margin.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "LIVE PHYSICS CALIBRATION"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 16)
+	column.add_child(heading)
+	var explanation := Label.new()
+	explanation.text = "0× disables a parameterized process; 1× is the Earth-like baseline.\nChanges affect subsequent native solver steps."
+	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	explanation.add_theme_font_size_override("font_size", 11)
+	explanation.add_theme_color_override("font_color", Color(0.66, 0.74, 0.82))
+	column.add_child(explanation)
+
+	for tuning_key: StringName in WeatherSystem.TUNING_KEYS:
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.custom_minimum_size = Vector2(118, 22)
+		label.text = TUNING_LABELS[tuning_key]
+		label.tooltip_text = TUNING_TOOLTIPS[tuning_key]
+		label.add_theme_font_size_override("font_size", 11)
+		row.add_child(label)
+		var slider := HSlider.new()
+		slider.custom_minimum_size = Vector2(130, 22)
+		slider.min_value = WeatherSystem.TUNING_WEIGHT_MIN
+		slider.max_value = WeatherSystem.TUNING_WEIGHT_MAX
+		slider.step = 0.05
+		slider.value = float(WeatherSystem.tuning_weights[tuning_key])
+		slider.tooltip_text = TUNING_TOOLTIPS[tuning_key]
+		slider.value_changed.connect(_on_tuning_slider_changed.bind(tuning_key))
+		row.add_child(slider)
+		var value_label := Label.new()
+		value_label.custom_minimum_size = Vector2(44, 22)
+		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		value_label.text = "%.2f×" % slider.value
+		value_label.add_theme_font_size_override("font_size", 11)
+		row.add_child(value_label)
+		_tuning_sliders[tuning_key] = slider
+		_tuning_value_labels[tuning_key] = value_label
+		column.add_child(row)
+
+	column.add_child(HSeparator.new())
+	var layer_heading := Label.new()
+	layer_heading.text = "VERTICAL COLUMN CONTRIBUTION"
+	layer_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	layer_heading.tooltip_text = "Pressure-thickness weights used to integrate cloud condensate through the six levels."
+	layer_heading.add_theme_font_size_override("font_size", 12)
+	column.add_child(layer_heading)
+
+	for layer in WeatherSystem.LAYERS:
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.custom_minimum_size = Vector2(118, 20)
+		label.text = LAYER_LABELS[layer]
+		label.add_theme_font_size_override("font_size", 11)
+		row.add_child(label)
+		var slider := HSlider.new()
+		slider.custom_minimum_size = Vector2(130, 20)
+		slider.min_value = WeatherSystem.TUNING_WEIGHT_MIN
+		slider.max_value = WeatherSystem.TUNING_WEIGHT_MAX
+		slider.step = 0.05
+		slider.value = WeatherSystem.layer_weights[layer]
+		slider.value_changed.connect(_on_layer_slider_changed.bind(layer))
+		row.add_child(slider)
+		var value_label := Label.new()
+		value_label.custom_minimum_size = Vector2(44, 20)
+		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		value_label.text = "%.2f×" % slider.value
+		value_label.add_theme_font_size_override("font_size", 11)
+		row.add_child(value_label)
+		_layer_sliders.append(slider)
+		_layer_value_labels.append(value_label)
+		column.add_child(row)
+
+	var buttons := HBoxContainer.new()
+	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	var reset := Button.new()
+	reset.text = "Reset Earth-like defaults"
+	reset.pressed.connect(WeatherSystem.reset_physics_tuning)
+	buttons.add_child(reset)
+	var close_button := Button.new()
+	close_button.text = "Close"
+	close_button.pressed.connect(_toggle_tuning_panel)
+	buttons.add_child(close_button)
+	column.add_child(buttons)
+	tuning_panel.visible = false
 
 
 func _input(event: InputEvent) -> void:
@@ -206,7 +395,12 @@ func _input(event: InputEvent) -> void:
 
 	match key.keycode:
 		KEY_ESCAPE:
-			close()
+			if tuning_panel != null and tuning_panel.visible:
+				tuning_panel.visible = false
+			else:
+				close()
+		KEY_P:
+			_toggle_tuning_panel()
 		KEY_LEFT, KEY_COMMA:
 			cycle(-1)
 		KEY_RIGHT, KEY_PERIOD:
@@ -305,6 +499,73 @@ func _update_simulation_weight_label(value: float) -> void:
 	elif value > 1.05:
 		mode = "amplified"
 	simulation_weight_label.text = "Simulation influence: %.2f×  (%s)" % [value, mode]
+
+
+func _on_simulation_speed_changed(value: float) -> void:
+	WeatherSystem.set_simulation_speed(value)
+	_update_simulation_speed_label(WeatherSystem.simulation_speed)
+
+
+func _on_external_simulation_speed_changed(value: float) -> void:
+	if simulation_speed_slider != null:
+		simulation_speed_slider.set_value_no_signal(value)
+	_update_simulation_speed_label(value)
+
+
+func _update_simulation_speed_label(value: float) -> void:
+	if simulation_speed_label == null:
+		return
+	var mode := "normal"
+	if value < 0.01:
+		mode = "paused"
+	elif value < 0.95:
+		mode = "slow"
+	elif value >= 16.0:
+		mode = "spin-up"
+	elif value > 1.05:
+		mode = "fast"
+	simulation_speed_label.text = "Weather speed: %.2f×  (%s)" % [value, mode]
+
+
+func _toggle_tuning_panel() -> void:
+	if tuning_panel == null:
+		return
+	tuning_panel.visible = not tuning_panel.visible
+	if tuning_panel.visible:
+		_refresh_tuning_controls()
+
+
+func _on_tuning_slider_changed(value: float, tuning_key: StringName) -> void:
+	WeatherSystem.set_tuning_weight(tuning_key, value)
+	_on_external_tuning_weight_changed(tuning_key, float(WeatherSystem.tuning_weights[tuning_key]))
+
+
+func _on_layer_slider_changed(value: float, layer: int) -> void:
+	WeatherSystem.set_layer_weight(layer, value)
+	_on_external_layer_weight_changed(layer, WeatherSystem.layer_weights[layer])
+
+
+func _on_external_tuning_weight_changed(tuning_key: StringName, value: float) -> void:
+	var slider: HSlider = _tuning_sliders.get(tuning_key)
+	if slider != null:
+		slider.set_value_no_signal(value)
+	var value_label: Label = _tuning_value_labels.get(tuning_key)
+	if value_label != null:
+		value_label.text = "%.2f×" % value
+
+
+func _on_external_layer_weight_changed(layer: int, value: float) -> void:
+	if layer < 0 or layer >= _layer_sliders.size():
+		return
+	_layer_sliders[layer].set_value_no_signal(value)
+	_layer_value_labels[layer].text = "%.2f×" % value
+
+
+func _refresh_tuning_controls() -> void:
+	for tuning_key: StringName in WeatherSystem.TUNING_KEYS:
+		_on_external_tuning_weight_changed(tuning_key, float(WeatherSystem.tuning_weights[tuning_key]))
+	for layer in WeatherSystem.layer_weights.size():
+		_on_external_layer_weight_changed(layer, WeatherSystem.layer_weights[layer])
 
 
 func _apply_product() -> void:

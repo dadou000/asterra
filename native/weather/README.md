@@ -51,6 +51,25 @@ The prognostic state is layer-major SoA. Each layer stores potential temperature
 
 Five interface fields carry vertical mass flux. Horizontal convergence, static instability and moisture drive ascent; precipitation loading can drive downdrafts. Vertical exchange transports heat, moisture, momentum and condensate between the same matching layers in both grids.
 
+The default column contribution weights are `0.77, 0.90, 1.00, 1.07, 1.07, 1.19`. They approximate each level's pressure thickness and are normalized to a mean of one; all six can be changed live from the weather map.
+
+## Runtime physical tuning
+
+Press `é` to open the weather map and `P` to open live physics calibration. Six bounded multipliers alter subsequent native solver steps without reinitializing its state:
+
+The weather map also exposes **Weather speed** from paused `0×` through normal `1×` to rapid spin-up at `128×`. Speed changes the number of calibrated fixed solver steps performed per real second, rather than enlarging the timestep, so fast-forwarding preserves the model's numerical behavior. Values from `16×` upward are labelled spin-up mode. Per-frame catch-up is capped to prevent a frame hitch from causing an unbounded simulation spiral.
+
+- **Circulation** — large-scale wind restoration and pressure-pattern response.
+- **Radiative heat** — temperature restoration toward the zonal radiative/surface equilibrium.
+- **Humidity supply** — moisture restoration toward a saturation-limited relative-humidity climatology.
+- **Cloud physics** — condensation, evaporation, freezing, melting, and condensate decay.
+- **Convection** — instability/convergence-driven vertical mass transport.
+- **Precipitation** — liquid and ice autoconversion/fallout.
+
+`0×` disables the parameterized process, `1×` is the calibrated baseline, and `2×` doubles its rate or response subject to the solver's safety caps. The separate six altitude controls change cloud-column integration immediately. **Reset Earth-like defaults** restores both groups.
+
+The baseline uses the physical Earth rotation rate, Bolton/Tetens saturation humidity, pressure-dependent potential temperature, latent heat of vaporization and fusion, dry subtropical humidity belts, pressure-thickness layer integration, time-step-independent relaxation, and area-weighted zero-mean global pressure perturbations. These improve plausibility, but this remains a six-level hydrostatic gameplay model rather than a forecast-grade numerical weather prediction system.
+
 ### Global
 
 - 256x128x6 atmospheric cells.

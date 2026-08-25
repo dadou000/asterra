@@ -95,6 +95,27 @@ func test_weather_simulation_weight() -> void:
 		worst_error < 0.0001 and clamped_to_max
 			and is_equal_approx(WeatherSystem.simulation_weight, 1.0),
 		"worst channel error %.6f" % worst_error)
+	WeatherSystem.set_simulation_speed(999.0)
+	var speed_clamped := is_equal_approx(
+		WeatherSystem.simulation_speed, WeatherSystem.SIMULATION_SPEED_MAX)
+	WeatherSystem.reset_simulation_speed()
+	check("weather simulation speed is live, clamped, and resettable",
+		speed_clamped and is_equal_approx(WeatherSystem.simulation_speed, 1.0))
+
+	WeatherSystem.set_tuning_weight(&"convection", 3.0)
+	WeatherSystem.set_layer_weight(0, -1.0)
+	var physics_clamped := (
+		is_equal_approx(float(WeatherSystem.tuning_weights[&"convection"]), 2.0)
+		and is_equal_approx(WeatherSystem.layer_weights[0], 0.0)
+	)
+	WeatherSystem.reset_physics_tuning()
+	var defaults_restored := (
+		is_equal_approx(float(WeatherSystem.tuning_weights[&"convection"]), 1.0)
+		and is_equal_approx(WeatherSystem.layer_weights[0], 0.77)
+		and is_equal_approx(WeatherSystem.layer_weights[5], 1.19)
+	)
+	check("weather process and layer weights are live, bounded, and resettable",
+		physics_clamped and defaults_restored)
 
 # ---------------------------------------------------------------- geometry ---
 func test_cube_sphere_roundtrip() -> void:

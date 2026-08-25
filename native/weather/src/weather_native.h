@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/string_name.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <array>
 #include <cstdint>
@@ -27,6 +28,12 @@ public:
 	};
 	static constexpr std::array<float, LAYERS> APPROX_HEIGHT_M = {
 		450.0f, 1700.0f, 3300.0f, 5600.0f, 8500.0f, 12800.0f
+	};
+	// Pressure-thickness weights, normalized to a mean of one. The six levels
+	// represent unequal portions of the atmospheric column, so equal weighting
+	// would overstate the thin near-surface level and understate the deep top bin.
+	static constexpr std::array<float, LAYERS> DEFAULT_LAYER_WEIGHTS = {
+		0.77f, 0.90f, 1.00f, 1.07f, 1.07f, 1.19f
 	};
 
 	// Public only so translation-unit-local packing helpers can consume a const
@@ -59,8 +66,20 @@ public:
 	};
 
 private:
+	enum TuningIndex {
+		CIRCULATION,
+		TEMPERATURE,
+		HUMIDITY,
+		CLOUD_MICROPHYSICS,
+		CONVECTION,
+		PRECIPITATION,
+		TUNING_COUNT,
+	};
+
 	Atmosphere global_atm;
 	Atmosphere local_atm;
+	std::array<float, TUNING_COUNT> tuning_weights = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+	std::array<float, LAYERS> layer_weights = DEFAULT_LAYER_WEIGHTS;
 	uint64_t seed = 1;
 	Vector3 local_center = Vector3(0, 1, 0);
 	Vector3 local_east = Vector3(1, 0, 0);
@@ -80,6 +99,7 @@ private:
 	void horizontal_pass(Atmosphere &a, bool is_global, float dt);
 	void vertical_pass(Atmosphere &a, bool is_global, float dt);
 	void diagnose(Atmosphere &a, bool is_global);
+	void center_global_pressure(std::vector<float> &pressure);
 	void nudge_local_boundaries(float dt);
 	void global_state_at_dir_layer(const Vector3 &dir, int layer,
 		float &theta, float &q, float &u, float &v, float &liquid,
@@ -88,6 +108,7 @@ private:
 	static float actual_temperature(float theta, int layer);
 	static float qsat_scalar(float temperature_k, float pressure_pa);
 	static float clamp01(float x);
+	static int tuning_index(const StringName &name);
 
 protected:
 	static void _bind_methods();
@@ -105,6 +126,11 @@ public:
 	PackedFloat32Array get_local_weather_rgba() const;
 	PackedFloat32Array get_global_diagnostics_rgba() const;
 	PackedFloat32Array get_local_diagnostics_rgba() const;
+	void set_tuning_weight(const StringName &name, float value);
+	float get_tuning_weight(const StringName &name) const;
+	void reset_tuning_weights();
+	void set_layer_weight(int layer, float value);
+	PackedFloat32Array get_layer_weights() const;
 
 	int get_layer_count() const { return LAYERS; }
 	Vector3 get_local_center() const { return local_center; }
