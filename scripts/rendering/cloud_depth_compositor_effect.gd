@@ -3,6 +3,8 @@ extends CompositorEffect
 ## Depth-aware volumetric cloud compositor driven by the AVX2 weather model.
 
 const SHADER_PATH := "res://shaders/cloud_depth_composite.glsl"
+const PUSH_CONSTANT_FLOATS := 32
+const PUSH_CONSTANT_BYTES := PUSH_CONSTANT_FLOATS * 4
 
 var _rd: RenderingDevice
 var _shader := RID()
@@ -23,8 +25,6 @@ var _sun_intensity := 5.0265
 var _wind_offset := Vector3.ZERO
 var _primary_steps := 16
 var _weather_center := Vector3.UP
-var _weather_east := Vector3.RIGHT
-var _weather_north := Vector3.FORWARD
 var _weather_span_m := 422400.0
 
 
@@ -99,11 +99,9 @@ func set_weather_textures(global_weather: Texture2D, local_weather: Texture2D) -
 	_local_weather_rs = local_weather.get_rid() if local_weather != null else RID()
 
 
-func set_weather_basis(center: Vector3, east: Vector3, north: Vector3, span_m: float) -> void:
+func set_weather_basis(center: Vector3, _east: Vector3, _north: Vector3, span_m: float) -> void:
 	_state_mutex.lock()
 	_weather_center = center.normalized()
-	_weather_east = east.normalized()
-	_weather_north = north.normalized()
 	_weather_span_m = maxf(span_m, 1000.0)
 	_state_mutex.unlock()
 
@@ -153,14 +151,11 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var wind_offset := _wind_offset
 	var primary_steps := _primary_steps
 	var weather_center := _weather_center
-	var weather_east := _weather_east
-	var weather_north := _weather_north
 	var weather_span_m := _weather_span_m
 	_state_mutex.unlock()
 
 	var cam_transform: Transform3D = scene_data.get_cam_transform()
 	var camera_planet := cam_transform.origin + floating_origin
-	var camera_q: Quaternion = cam_transform.basis.get_rotation_quaternion()
 	var view_count := buffers.get_view_count()
 	var x_groups := (size.x - 1) / 8 + 1
 	var y_groups := (size.y - 1) / 8 + 1
@@ -214,21 +209,22 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		var inv_projection: Projection = scene_data.get_view_projection(view).inverse()
 		var push := PackedFloat32Array()
 		_append_vec4(push, Vector4(camera_planet.x, camera_planet.y, camera_planet.z, planet_radius))
-		_append_vec4(push, Vector4(camera_q.x, camera_q.y, camera_q.z, camera_q.w))
 		_append_vec4(push, Vector4(sun_dir.x, sun_dir.y, sun_dir.z, sun_intensity))
 		_append_vec4(push, Vector4(wind_offset.x, wind_offset.y, wind_offset.z, float(primary_steps)))
 		_append_vec4(push, Vector4(weather_center.x, weather_center.y, weather_center.z, weather_span_m))
-		_append_vec4(push, Vector4(weather_east.x, weather_east.y, weather_east.z, 0.0))
-		_append_vec4(push, Vector4(weather_north.x, weather_north.y, weather_north.z, 0.0))
-		_append_vec4(push, inv_projection.x)
-		_append_vec4(push, inv_projection.y)
-		_append_vec4(push, inv_projection.z)
-		_append_vec4(push, inv_projection.w)
+		_append_rotated_projection_column(push, inv_projection.x, cam_transform.basis)
+		_append_rotated_projection_column(push, inv_projection.y, cam_transform.basis)
+		_append_rotated_projection_column(push, inv_projection.z, cam_transform.basis)
+		_append_rotated_projection_column(push, inv_projection.w, cam_transform.basis)
+		if push.size() != PUSH_CONSTANT_FLOATS:
+			push_error("CloudDepthCompositorEffect: invalid push-constant layout (%d bytes)" %
+				(push.size() * 4))
+			continue
 
 		var compute_list := _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipeline)
 		_rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
-		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), 176)
+		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), PUSH_CONSTANT_BYTES)
 		_rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
 		_rd.compute_list_end()
 
@@ -238,3 +234,9 @@ static func _append_vec4(array: PackedFloat32Array, value: Vector4) -> void:
 	array.append(value.y)
 	array.append(value.z)
 	array.append(value.w)
+
+
+static func _append_rotated_projection_column(array: PackedFloat32Array,
+		column: Vector4, camera_basis: Basis) -> void:
+	var rotated := camera_basis * Vector3(column.x, column.y, column.z)
+	_append_vec4(array, Vector4(rotated.x, rotated.y, rotated.z, column.w))

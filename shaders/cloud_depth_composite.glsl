@@ -11,13 +11,10 @@ layout(set = 0, binding = 5) uniform sampler2D local_weather;
 
 layout(push_constant, std430) uniform Params {
 	vec4 camera_planet_radius;
-	vec4 camera_rotation;
 	vec4 sun_dir_intensity;
 	vec4 wind_steps;
 	vec4 weather_center_span;
-	vec4 weather_east;
-	vec4 weather_north;
-	mat4 inv_projection;
+	mat4 inv_world_projection;
 } params;
 
 const float PI = 3.14159265358979323846;
@@ -31,7 +28,6 @@ const float CLOUD_EXTINCTION = 0.0010;
 const int CLOUD_MAX_PRIMARY_STEPS = 28;
 const int CLOUD_MAX_LIGHT_STEPS = 4;
 
-vec3 quat_rotate(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 vec2 sphere_intersect(vec3 o, vec3 d, float r) { float b=dot(d,o), c=dot(o,o)-r*r, disc=b*b-c; if(disc<0.0)return vec2(1e30,-1e30);float s=sqrt(disc);return vec2(-b-s,-b+s); }
 float remap01(float v,float a,float b){return clamp((v-a)/max(b-a,1e-5),0.0,1.0);}
 
@@ -47,10 +43,12 @@ vec4 weather_state(vec3 surface_p, float radius) {
 	vec3 d = normalize(surface_p);
 	vec4 g = textureLod(global_weather, global_weather_uv(d), 0.0);
 	vec3 center = normalize(params.weather_center_span.xyz);
+	vec3 pole = abs(center.y) > 0.92 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+	vec3 east = normalize(cross(pole, center));
+	vec3 north = normalize(cross(center, east));
 	vec3 tangent_delta = d * radius - center * radius;
 	float span = max(params.weather_center_span.w, 1000.0);
-	vec2 luv = vec2(dot(tangent_delta, normalize(params.weather_east.xyz)),
-		dot(tangent_delta, normalize(params.weather_north.xyz))) / span + vec2(0.5);
+	vec2 luv = vec2(dot(tangent_delta, east), dot(tangent_delta, north)) / span + vec2(0.5);
 	float edge = max(abs(luv.x - 0.5), abs(luv.y - 0.5));
 	float local_weight = 1.0 - smoothstep(0.42, 0.50, edge);
 	vec4 l = textureLod(local_weather, clamp(luv, vec2(0.0), vec2(1.0)), 0.0);
@@ -107,4 +105,4 @@ vec4 raymarch_clouds(vec3 o,vec3 d,float radius,float scene_d,vec3 sd,float irr,
 float foreground_air_transmittance(vec3 cp,vec3 d,float ft){if(ft<=0.0)return 1.0;float elev=clamp(dot(d,normalize(cp)),-.15,1.0);float ps=mix(26000.0,110000.0,smoothstep(-.05,.45,elev));return exp(-ft/max(ps,1.0)*.55);}
 vec3 foreground_atmosphere_restore(vec3 cp,vec3 d,float ft,float ct,float at,vec3 sd,float pr){if(ft<=0.0||ct>.999)return vec3(0);vec3 mp=cp+d*(ft*.5),up=normalize(mp);float sm=dot(up,sd),sv=planet_sun_visibility(mp,sd,pr),day=smoothstep(-.08,.20,sm)*sv,tw=smoothstep(-.24,-.02,sm)*(1.0-smoothstep(-.02,.14,sm));float e=clamp(dot(d,normalize(cp)),-.15,1.0);vec3 dh=mix(vec3(.30,.34,.38),vec3(.19,.36,.52),smoothstep(-.08,.25,e));vec3 hc=vec3(.00012,.00020,.00045)+vec3(.12,.045,.018)*tw+dh*day;return hc*(1.0-at)*(1.0-ct)*.55;}
 
-void main(){ivec2 px=ivec2(gl_GlobalInvocationID.xy),sz=imageSize(color_image);if(px.x>=sz.x||px.y>=sz.y)return;vec2 uv=(vec2(px)+.5)/vec2(sz);float depth=textureLod(depth_texture,uv,0).r;vec3 ndc=vec3(uv*2.0-1.0,depth);vec4 vh=params.inv_projection*vec4(ndc,1);vec3 vp=vh.xyz/max(abs(vh.w),1e-8)*sign(vh.w);float scene_d=depth<=1e-6?1e30:length(vp);if(!(scene_d>0.0))return;vec3 rw=normalize(quat_rotate(params.camera_rotation,normalize(vp)));vec3 cp=params.camera_planet_radius.xyz;float pr=params.camera_planet_radius.w;vec3 sd=normalize(params.sun_dir_intensity.xyz);float irr=params.sun_dir_intensity.w;vec3 wind=params.wind_steps.xyz;int steps=int(clamp(floor(params.wind_steps.w+.5),6.0,float(CLOUD_MAX_PRIMARY_STEPS)));float ft;vec4 cloud=raymarch_clouds(cp,rw,pr,max(scene_d-.5,0.0),sd,irr,wind,steps,ft);if(cloud.a>.9999)return;vec4 base=imageLoad(color_image,px);float air=foreground_air_transmittance(cp,rw,ft);vec3 result=cloud.rgb*air+base.rgb*cloud.a+foreground_atmosphere_restore(cp,rw,ft,cloud.a,air,sd,pr);imageStore(color_image,px,vec4(result,base.a));}
+void main(){ivec2 px=ivec2(gl_GlobalInvocationID.xy),sz=imageSize(color_image);if(px.x>=sz.x||px.y>=sz.y)return;vec2 uv=(vec2(px)+.5)/vec2(sz);float depth=textureLod(depth_texture,uv,0.0).r;vec3 ndc=vec3(uv*2.0-1.0,depth);vec4 wh=params.inv_world_projection*vec4(ndc,1.0);vec3 wp=wh.xyz/max(abs(wh.w),1e-8)*sign(wh.w);float scene_d=depth<=1e-6?1e30:length(wp);if(!(scene_d>0.0))return;vec3 rw=normalize(wp);vec3 cp=params.camera_planet_radius.xyz;float pr=params.camera_planet_radius.w;vec3 sd=normalize(params.sun_dir_intensity.xyz);float irr=params.sun_dir_intensity.w;vec3 wind=params.wind_steps.xyz;int steps=int(clamp(floor(params.wind_steps.w+.5),6.0,float(CLOUD_MAX_PRIMARY_STEPS)));float ft;vec4 cloud=raymarch_clouds(cp,rw,pr,max(scene_d-.5,0.0),sd,irr,wind,steps,ft);if(cloud.a>.9999)return;vec4 base=imageLoad(color_image,px);float air=foreground_air_transmittance(cp,rw,ft);vec3 result=cloud.rgb*air+base.rgb*cloud.a+foreground_atmosphere_restore(cp,rw,ft,cloud.a,air,sd,pr);imageStore(color_image,px,vec4(result,base.a));}
