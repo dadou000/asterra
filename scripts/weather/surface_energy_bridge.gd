@@ -155,15 +155,19 @@ func _publish_surface_textures() -> void:
 	if _native == null or not _surface_fields_uploaded:
 		return
 	var global_result: Variant = _native.call(&"get_global_surface_rgba")
-	if global_result is PackedFloat32Array and global_result.size() == GLOBAL_W * GLOBAL_H * 4:
-		global_surface_texture.update(Image.create_from_data(
-			GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF,
-			(global_result as PackedFloat32Array).to_byte_array()))
+	if global_result is PackedFloat32Array:
+		var global_values: PackedFloat32Array = global_result
+		if global_values.size() == GLOBAL_W * GLOBAL_H * 4:
+			global_surface_texture.update(Image.create_from_data(
+				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF,
+				global_values.to_byte_array()))
 	var local_result: Variant = _native.call(&"get_local_surface_rgba")
-	if local_result is PackedFloat32Array and local_result.size() == LOCAL_W * LOCAL_H * 4:
-		local_surface_texture.update(Image.create_from_data(
-			LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF,
-			(local_result as PackedFloat32Array).to_byte_array()))
+	if local_result is PackedFloat32Array:
+		var local_values: PackedFloat32Array = local_result
+		if local_values.size() == LOCAL_W * LOCAL_H * 4:
+			local_surface_texture.update(Image.create_from_data(
+				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF,
+				local_values.to_byte_array()))
 
 
 func global_texture() -> Texture2D:
