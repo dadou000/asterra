@@ -30,6 +30,7 @@ uniform float u_sink_scale = 2.0;
 uniform int u_detail_seed = 1337;
 uniform float u_detail_strength = 1.0;
 uniform float u_debug_side_cut = 0.0;
+uniform int u_debug_geomorph_mode = 0;
 
 varying vec3 v_planet;
 varying vec3 v_render;
@@ -217,6 +218,41 @@ vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
 	return n;
 }
 
+vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
+		vec4 soil, vec4 geology, vec4 hydro, float rock_id, float biome) {
+	if (mode == 1) {
+		// R mountain, G arid, B glacial; deposition lifts all channels toward white.
+		return clamp(landform.rgb + vec3(landform.a * 0.55), 0.0, 1.0);
+	}
+	if (mode == 2) {
+		// Primary: rock red, mineral soil green, vegetation blue-green, sand yellow.
+		return clamp(vec3(
+			primary.r + primary.a,
+			primary.g + primary.a * 0.78 + primary.b * 0.45,
+			primary.b), 0.0, 1.0);
+	}
+	if (mode == 3) {
+		// Secondary: mud red/brown, snow white, scree yellow-grey, gravel cyan.
+		return clamp(
+			vec3(0.62, 0.22, 0.08) * secondary.r
+			+ vec3(1.0) * secondary.g
+			+ vec3(0.70, 0.62, 0.43) * secondary.b
+			+ vec3(0.10, 0.72, 0.86) * secondary.a,
+			0.0, 1.0);
+	}
+	if (mode == 4) {
+		return clamp(vec3(soil.r, soil.g, soil.b) * (1.0 - soil.a * 0.55), 0.0, 1.0);
+	}
+	if (mode == 5) {
+		return vec3(rock_id / 12.0, biome / 19.0, geology.r);
+	}
+	if (mode == 6) {
+		vec2 flow = hydro.rg;
+		return clamp(vec3(flow, hydro.b) + vec3(hydro.a * 0.32), 0.0, 1.0);
+	}
+	return vec3(0.0);
+}
+
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
@@ -275,6 +311,7 @@ void fragment() {
 		EMISSION = lod_color * 0.10;
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
+		METALLIC = 0.0;
 	} else {
 		float cos_slope = clamp(dot(wn, up), 0.0, 1.0);
 		float slope_deg = acos(cos_slope) * 57.2957795131;
@@ -292,26 +329,37 @@ void fragment() {
 			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
 		vec4 secondary = sc_secondary_weights(
 			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
-		// Snow buries loose organic/mineral cover; exposed cliffs remain visible on
-		// very steep slopes because the snow classifier already loses hold there.
 		primary *= 1.0 - secondary.g * 0.88;
 		secondary.r *= 1.0 - secondary.g * 0.92;
-		vec3 albedo = sc_compose_albedo(primary, secondary, soil, surface, climate, biome, rock_id);
 
-		ALBEDO = albedo;
-		ROUGHNESS = sc_compose_roughness(primary, secondary, surface);
-		SPECULAR = 0.22;
-		METALLIC = 0.0;
+		if (u_debug_geomorph_mode > 0) {
+			vec3 diagnostic = terrain_debug_color(
+				u_debug_geomorph_mode, landform, primary, secondary,
+				soil, geology, hydro, rock_id, biome);
+			ALBEDO = vec3(0.0);
+			EMISSION = diagnostic;
+			ROUGHNESS = 1.0;
+			SPECULAR = 0.0;
+			METALLIC = 0.0;
+		} else {
+			vec3 albedo = sc_compose_albedo(
+				primary, secondary, soil, surface, climate, biome, rock_id);
+			ALBEDO = albedo;
+			ROUGHNESS = sc_compose_roughness(primary, secondary, surface);
+			SPECULAR = 0.22;
+			METALLIC = 0.0;
 
-		vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
-		vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-		float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
-		float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
-		EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
+			vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
+			vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
+			float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
+			float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
+			EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
+		}
 	}
 }
 
 void light() {
+	if (u_debug_geomorph_mode > 0) return;
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	if (ndotl > 0.0) {
 		float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
