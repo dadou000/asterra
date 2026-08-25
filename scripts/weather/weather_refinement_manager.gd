@@ -376,7 +376,7 @@ func _apply_level_lifecycle(region: Dictionary, _sim_dt: float) -> void:
 	var score := float(region["score"])
 	if target > level and level < RefinementLevel.TORNADO:
 		var next_level := level + 1
-		if float(region["strong_s"]) >= PROMOTION_HOLD_S[next_level]:
+		if float(region["strong_s"]) >= float(PROMOTION_HOLD_S[next_level]):
 			region["level"] = next_level
 			region["level_age_s"] = 0.0
 			region["strong_s"] = 0.0
@@ -384,12 +384,12 @@ func _apply_level_lifecycle(region: Dictionary, _sim_dt: float) -> void:
 			region_promoted.emit(int(region["id"]), next_level)
 		return
 
-	var should_weaken := target < level or score < EXIT_SCORE[level]
+	var should_weaken: bool = target < level or score < float(EXIT_SCORE[level])
 	if not should_weaken:
 		return
-	if float(region["level_age_s"]) < MIN_LEVEL_LIFETIME_S[level]:
+	if float(region["level_age_s"]) < float(MIN_LEVEL_LIFETIME_S[level]):
 		return
-	if float(region["weak_s"]) < DEMOTION_HOLD_S[level]:
+	if float(region["weak_s"]) < float(DEMOTION_HOLD_S[level]):
 		return
 	var next_level := level - 1
 	region["level"] = next_level
@@ -412,7 +412,7 @@ func _merge_regions() -> void:
 			var b := regions[j]
 			if abs(int(a["level"]) - int(b["level"])) > 1:
 				continue
-			var overlap_distance := 0.34 * (DOMAIN_KM[int(a["level"])] + DOMAIN_KM[int(b["level"])])
+			var overlap_distance: float = 0.34 * (float(DOMAIN_KM[int(a["level"])]) + float(DOMAIN_KM[int(b["level"])]) )
 			if _surface_distance_km(a["center_dir"], b["center_dir"]) > overlap_distance:
 				continue
 			var wa := maxf(float(a["score"]), 0.05)
@@ -449,7 +449,7 @@ func resolution_at_direction(direction: Vector3) -> Dictionary:
 	var best_region := -1
 	for region in regions:
 		var level := int(region["level"])
-		var radius_km := DOMAIN_KM[level] * 0.5
+		var radius_km: float = float(DOMAIN_KM[level]) * 0.5
 		if _surface_distance_km(d, region["center_dir"]) <= radius_km and level > best_level:
 			best_level = level
 			best_region = int(region["id"])
@@ -537,7 +537,7 @@ func _rebuild_debug_regions() -> void:
 		if level <= RefinementLevel.PLANET:
 			continue
 		var mesh_instance := MeshInstance3D.new()
-		mesh_instance.mesh = _region_outline_mesh(region["center_dir"], DOMAIN_KM[level])
+		mesh_instance.mesh = _region_outline_mesh(region["center_dir"], float(DOMAIN_KM[level]))
 		var material := ShaderMaterial.new()
 		material.shader = _overlay_shader
 		material.set_shader_parameter("u_color", _level_color(level))
