@@ -4,7 +4,14 @@ This extension is the primary meteorology backend for `weather/0.0.5`.
 
 ## Build on Windows
 
-Use a Godot 4.7-compatible `godot-cpp` checkout and CMake 3.20+:
+With CMake 3.20+ you can build directly and let CMake fetch `godot-cpp` master:
+
+```powershell
+cmake -S native/weather -B native/weather/build -DCMAKE_BUILD_TYPE=Release
+cmake --build native/weather/build --config Release
+```
+
+For the custom Godot 4.7.1 fork, prefer an exact matching `godot-cpp` checkout when available:
 
 ```powershell
 cmake -S native/weather -B native/weather/build -DGODOT_CPP_DIR=C:/src/godot-cpp -DCMAKE_BUILD_TYPE=Release
