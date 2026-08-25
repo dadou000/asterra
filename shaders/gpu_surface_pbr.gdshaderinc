@@ -275,10 +275,7 @@ vec3 spbr_transfer_detail(vec3 base, vec3 scan) {
 	return max(base * mix(vec3(1.0), relative, 0.60), vec3(0.006));
 }
 
-// Returns updated albedo/roughness and a world-space scan normal. pbr_normal_w is
-// zero outside the normal-detail range, so the caller can retain the displaced
-// geometry normal without another branch.
-void spbr_apply(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_dist,
+void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_dist,
 		vec4 primary, vec4 secondary, float biome,
 		vec3 base_albedo, float base_roughness,
 		out vec3 albedo, out float roughness, out vec3 pbr_normal, out float pbr_normal_w) {
@@ -322,21 +319,15 @@ void spbr_apply(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_dist,
 		if (forest >= grass && forest >= mud) {
 			scan = spbr_tri_albedo_forest(dpos, dpdx, dpdy, geom_n);
 			scan_r = spbr_tri_rough_forest(dpos, dpdx, dpdy, geom_n);
-			if (normal_detail_w > 0.002) {
-				scan_n = spbr_tri_normal_forest(dpos, dpdx, dpdy, geom_n);
-			}
+			if (normal_detail_w > 0.002) scan_n = spbr_tri_normal_forest(dpos, dpdx, dpdy, geom_n);
 		} else if (mud >= grass) {
 			scan = spbr_tri_albedo_mud(dpos, dpdx, dpdy, geom_n);
 			scan_r = spbr_tri_rough_mud(dpos, dpdx, dpdy, geom_n);
-			if (normal_detail_w > 0.002) {
-				scan_n = spbr_tri_normal_mud(dpos, dpdx, dpdy, geom_n);
-			}
+			if (normal_detail_w > 0.002) scan_n = spbr_tri_normal_mud(dpos, dpdx, dpdy, geom_n);
 		} else {
 			scan = spbr_tri_albedo_grass(dpos, dpdx, dpdy, geom_n);
 			scan_r = spbr_tri_rough_grass(dpos, dpdx, dpdy, geom_n);
-			if (normal_detail_w > 0.002) {
-				scan_n = spbr_tri_normal_grass(dpos, dpdx, dpdy, geom_n);
-			}
+			if (normal_detail_w > 0.002) scan_n = spbr_tri_normal_grass(dpos, dpdx, dpdy, geom_n);
 		}
 		float w = special * surface_detail_w * 0.88;
 		albedo = mix(albedo, spbr_transfer_detail(albedo, scan), w);
@@ -346,4 +337,17 @@ void spbr_apply(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_dist,
 			pbr_normal_w = max(pbr_normal_w, special * normal_detail_w * 0.72);
 		}
 	}
+}
+
+// Compatibility entry point used by the active terrain shader. dFdx/dFdy are
+// evaluated here before any material-dependent branch in spbr_apply_grad().
+void spbr_apply(vec3 dpos, vec3 geom_n, float camera_dist,
+		vec4 primary, vec4 secondary, float biome,
+		vec3 base_albedo, float base_roughness,
+		out vec3 albedo, out float roughness, out vec3 pbr_normal, out float pbr_normal_w) {
+	vec3 dpdx = dFdx(dpos);
+	vec3 dpdy = dFdy(dpos);
+	spbr_apply_grad(dpos, dpdx, dpdy, geom_n, camera_dist,
+		primary, secondary, biome, base_albedo, base_roughness,
+		albedo, roughness, pbr_normal, pbr_normal_w);
 }
