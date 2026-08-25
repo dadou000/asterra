@@ -2,3 +2,10 @@
 *.tmp
 *.FCBak
 export_presets.cfg
+native/weather/build/
+bin/asterra_weather.dll
+bin/asterra_weather.pdb
+bin/asterra_weather.lib
+bin/asterra_weather.exp
+bin/asterra_weather.gdextension
+bin/libasterra_weather.so
