@@ -34,6 +34,7 @@ var _debug_geomorph_mode: int = 0
 var _debug_pbr_enabled := true
 var _bound_ctx_generation: int = -1
 var _pbr_bound := false
+var _pbr_attempted := false
 
 
 func _ready() -> void:
@@ -147,8 +148,9 @@ func _load_pbr_texture(path: String) -> Texture2D:
 
 
 func _bind_surface_pbr(force: bool) -> void:
-	if _pbr_bound and not force:
+	if _pbr_attempted and not force:
 		return
+	_pbr_attempted = true
 	var ground_albedo := _load_pbr_texture(PBR_GROUND_ALBEDO_PATH)
 	var ground_normal := _load_pbr_texture(PBR_GROUND_NORMAL_PATH)
 	var ground_roughness := _load_pbr_texture(PBR_GROUND_ROUGHNESS_PATH)
