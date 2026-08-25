@@ -8,6 +8,7 @@ on:
     paths:
       - "shaders/**"
       - "scripts/terrain/**"
+      - "project.godot"
       - "tests/validate_terrain_shader.gd"
       - ".github/workflows/godot-terrain-validate.yml"
   workflow_dispatch:
@@ -76,5 +77,32 @@ jobs:
 
           if grep -Eiq "shader compilation failed|shader.*parse error|parse error.*shader|error:.*gdshader" /tmp/terrain-shader.log; then
             echo "Godot reported a shader parser/compiler error."
+            exit 1
+          fi
+
+      - name: Parse active terrain autoload
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          # Two headless editor iterations are enough to register global classes
+          # and parse project autoloads, including GroundGeometryClipmap. We do not
+          # wait for a full asset import; this step is specifically a GDScript
+          # parser/inheritance smoke test for the live terrain chain.
+          set +e
+          timeout 90 "$GODOT" --headless --editor --path . --quit-after 2 > /tmp/terrain-gdscript.log 2>&1
+          status=$?
+          set -e
+          tail -n 220 /tmp/terrain-gdscript.log || true
+
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script.*spherical_geometry_clipmap" /tmp/terrain-gdscript.log; then
+            echo "Godot reported a GDScript parser/inheritance error in the active project."
+            exit 1
+          fi
+
+          # A timeout would mean startup never reached the intended short smoke
+          # window and should not silently count as validation.
+          if [ "$status" -eq 124 ]; then
+            echo "Terrain autoload parse smoke test timed out."
             exit 1
           fi
