@@ -39,24 +39,21 @@ vec3 storm_palette(float x) {
 vec3 pressure_palette(float x) {
 	float d = clamp((x - 0.5) * 2.0, -1.0, 1.0);
 	vec3 neutral = vec3(0.92, 0.92, 0.88);
-	return d < 0.0
-		? mix(neutral, vec3(0.10, 0.28, 0.88), -d)
+	return d < 0.0 ? mix(neutral, vec3(0.10, 0.28, 0.88), -d)
 		: mix(neutral, vec3(0.88, 0.16, 0.10), d);
 }
 
 vec3 signed_dynamic_palette(float x) {
 	float d = clamp((x - 0.5) * 2.0, -1.0, 1.0);
 	vec3 neutral = vec3(0.88, 0.90, 0.90);
-	return d < 0.0
-		? mix(neutral, vec3(0.10, 0.36, 0.92), -d)
+	return d < 0.0 ? mix(neutral, vec3(0.10, 0.36, 0.92), -d)
 		: mix(neutral, vec3(0.92, 0.16, 0.12), d);
 }
 
 vec3 pv_palette(float x) {
 	float d = clamp((x - 0.5) * 2.0, -1.0, 1.0);
 	vec3 neutral = vec3(0.90, 0.90, 0.86);
-	return d < 0.0
-		? mix(neutral, vec3(0.20, 0.20, 0.70), -d)
+	return d < 0.0 ? mix(neutral, vec3(0.20, 0.20, 0.70), -d)
 		: mix(neutral, vec3(0.72, 0.08, 0.72), d);
 }
 
@@ -67,8 +64,7 @@ vec3 shear_palette(float x) {
 	return mix(vec3(0.96, 0.82, 0.14), vec3(0.90, 0.10, 0.12), (x - 0.68) / 0.32);
 }
 
-// x/y are local texture coordinates; z is blend weight. Negative z means the
-// pixel is outside the local 192x192 tangent nest.
+// x/y = local texture coordinate, z = blend weight. Negative z means global only.
 vec3 local_lookup(vec2 uv) {
 	if (u_local_span_m <= 1.0) return vec3(0.0, 0.0, -1.0);
 	float lon = (uv.x - 0.5) * TAU;
@@ -78,7 +74,6 @@ vec3 local_lookup(vec2 uv) {
 	vec3 center = normalize(u_local_center);
 	float forward = dot(dir, center);
 	if (forward <= 0.0) return vec3(0.0, 0.0, -1.0);
-
 	float east_angle = atan(dot(dir, normalize(u_local_east)), forward);
 	float north_angle = atan(dot(dir, normalize(u_local_north)), forward);
 	vec2 local_uv = vec2(east_angle, north_angle) * (u_planet_radius / u_local_span_m) + vec2(0.5);
@@ -88,19 +83,25 @@ vec3 local_lookup(vec2 uv) {
 	return vec3(local_uv, 1.0 - smoothstep(0.86, 1.0, edge));
 }
 
-vec4 sample_nested_field(sampler2D global_tex, sampler2D local_tex, vec2 uv, vec3 lookup) {
+vec4 sample_weather_field(vec2 uv, vec3 lookup) {
 	vec2 global_uv = vec2(fract(uv.x + 0.5), uv.y);
-	vec4 coarse = texture(global_tex, global_uv);
+	vec4 coarse = texture(u_weather, global_uv);
 	if (lookup.z < 0.0) return coarse;
-	vec4 fine = texture(local_tex, lookup.xy);
-	return mix(coarse, fine, lookup.z);
+	return mix(coarse, texture(u_local_weather, lookup.xy), lookup.z);
+}
+
+vec4 sample_diagnostics_field(vec2 uv, vec3 lookup) {
+	vec2 global_uv = vec2(fract(uv.x + 0.5), uv.y);
+	vec4 coarse = texture(u_diagnostics, global_uv);
+	if (lookup.z < 0.0) return coarse;
+	return mix(coarse, texture(u_local_diagnostics, lookup.xy), lookup.z);
 }
 
 void fragment() {
 	vec3 base = texture(TEXTURE, UV).rgb;
 	vec3 lookup = local_lookup(UV);
-	vec4 w = sample_nested_field(u_weather, u_local_weather, UV, lookup);
-	vec4 d = sample_nested_field(u_diagnostics, u_local_diagnostics, UV, lookup);
+	vec4 w = sample_weather_field(UV, lookup);
+	vec4 d = sample_diagnostics_field(UV, lookup);
 
 	vec3 product_color;
 	float opacity = 0.84;
@@ -128,7 +129,6 @@ void fragment() {
 	}
 
 	vec3 col = u_product == 0 ? product_color : mix(base * 0.34, product_color, opacity);
-
 	float dx = min(fract(UV.x * 12.0), 1.0 - fract(UV.x * 12.0));
 	float dy = min(fract(UV.y * 12.0), 1.0 - fract(UV.y * 12.0));
 	float grid = max(1.0 - smoothstep(0.0, 0.008, dx), 1.0 - smoothstep(0.0, 0.008, dy));
