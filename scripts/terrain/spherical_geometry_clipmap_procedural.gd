@@ -11,6 +11,7 @@ const DEFAULT_SINK_SCALE: float = 2.0
 var _debug_freeze := false
 var _debug_side_cut := false
 var _debug_sink_scale: float = DEFAULT_SINK_SCALE
+var _debug_geomorph_mode: int = 0
 var _bound_ctx_generation: int = -1
 
 
@@ -142,6 +143,7 @@ func _sync_debug_uniforms() -> void:
 		return
 	_material.set_shader_parameter("u_debug_side_cut", 1.0 if _debug_side_cut else 0.0)
 	_material.set_shader_parameter("u_sink_scale", _debug_sink_scale)
+	_material.set_shader_parameter("u_debug_geomorph_mode", _debug_geomorph_mode)
 
 
 func _show_all_active_sectors() -> void:
@@ -188,6 +190,11 @@ func set_debug_sink_scale(value: float) -> void:
 	_sync_debug_uniforms()
 
 
+func set_debug_geomorph_mode(value: int) -> void:
+	_debug_geomorph_mode = clampi(value, 0, 6)
+	_sync_debug_uniforms()
+
+
 func debug_freeze_enabled() -> bool:
 	return _debug_freeze
 
@@ -198,6 +205,10 @@ func debug_side_cut_enabled() -> bool:
 
 func debug_sink_scale() -> float:
 	return _debug_sink_scale
+
+
+func debug_geomorph_mode() -> int:
+	return _debug_geomorph_mode
 
 
 func rebuild_static_topology() -> void:
@@ -315,4 +326,5 @@ func gpu_stream_stats() -> Dictionary:
 		"debug_frozen": _debug_freeze,
 		"debug_side_cut": _debug_side_cut,
 		"debug_sink_scale": _debug_sink_scale,
+		"debug_geomorph_mode": _debug_geomorph_mode,
 	}
