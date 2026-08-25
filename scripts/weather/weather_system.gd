@@ -15,9 +15,6 @@ const SIMULATION_SPEED_MIN := 0.0
 const SIMULATION_SPEED_MAX := 8192.0
 const SIMULATION_SPEED_DEFAULT := 1.0
 const HIGH_WARP_LOCAL_THRESHOLD := 256.0
-# A pathological external celestial time jump is allowed to leave backlog rather
-# than silently discarding physical time. The 8192x global spin-up path remains
-# below this guard at ordinary frame rates because it uses a larger global step.
 const MAX_SOLVER_STEPS_PER_FRAME := 64
 const SIMULATION_WEIGHT_MIN := 0.0
 const SIMULATION_WEIGHT_MAX := 2.0
@@ -82,14 +79,8 @@ var layer_count := LAYERS
 
 var native_available := false
 var backend_error := ""
-## Runtime influence of simulated anomalies on weather consumers.
-## 0 = neutral field, 1 = calibrated model, 2 = amplified display/renderer extremes.
 var simulation_weight := SIMULATION_WEIGHT_DEFAULT
-## Multiplies simulated time per real second while preserving the solver's
-## calibrated fixed timesteps. 0 pauses weather; 1 is normal; high values are
-## intended to spin up a realistic starting circulation quickly.
 var simulation_speed := SIMULATION_SPEED_DEFAULT
-## Cumulative simulated time gained beyond wall-clock time during this session.
 var warped_ahead_seconds := 0.0
 var tuning_weights := {
 	&"circulation": TUNING_WEIGHT_DEFAULT,
@@ -125,13 +116,11 @@ func _try_create_native_backend() -> void:
 		backend_error = "AVX2 weather extension is not loaded; build native/weather first"
 		push_warning("WeatherSystem: %s" % backend_error)
 		return
-
 	var instance: Variant = ClassDB.instantiate(&"WeatherNative")
 	if not (instance is Object):
 		backend_error = "WeatherNative registered but could not be instantiated"
 		push_error("WeatherSystem: %s" % backend_error)
 		return
-
 	var missing_methods := PackedStringArray()
 	for method: StringName in REQUIRED_NATIVE_METHODS:
 		if not instance.has_method(method):
@@ -143,7 +132,6 @@ func _try_create_native_backend() -> void:
 		)
 		push_warning("WeatherSystem: %s" % backend_error)
 		return
-
 	_native = instance
 	for tuning_key: StringName in TUNING_KEYS:
 		_native.call(&"set_tuning_weight", tuning_key, float(tuning_weights[tuning_key]))
@@ -163,18 +151,10 @@ func _try_create_native_backend() -> void:
 
 func _process(delta: float) -> void:
 	_try_bind_observer()
-
-	# CelestialSystem is the authoritative physical clock. Weather no longer has
-	# independent real-time cadence multipliers: both global and local solvers
-	# consume exactly the same elapsed Asterra seconds, using their own fixed
-	# stable integration timesteps.
 	var celestial_now := CelestialSystem.simulation_seconds
 	var simulated_delta := celestial_now - _last_celestial_seconds
 	_last_celestial_seconds = celestial_now
 	if simulated_delta < 0.0:
-		# The native atmosphere is not reversible. A deliberate celestial rewind
-		# therefore starts a fresh catch-up interval instead of integrating a
-		# physically invalid negative weather timestep.
 		_global_sim_accum = 0.0
 		_local_sim_accum = 0.0
 		simulated_delta = 0.0
@@ -193,9 +173,6 @@ func _process(delta: float) -> void:
 		_local_sim_accum = 0.0
 	_texture_accum += delta
 
-	# Keep the globally tested 90-second cadence at every warp. A 180-second
-	# shortcut is cheaper, but it excites grid-scale pressure waves after several
-	# simulated days. High warp is made fast by suspending the local nest instead.
 	var global_dt := GLOBAL_SIM_DT
 	var global_steps := 0
 	while _global_sim_accum >= global_dt and global_steps < MAX_SOLVER_STEPS_PER_FRAME:
@@ -206,8 +183,6 @@ func _process(delta: float) -> void:
 	if _observer != null and is_instance_valid(_observer):
 		_native.call(&"set_local_center", _observer.up_dir())
 		if simulation_speed > HIGH_WARP_LOCAL_THRESHOLD:
-			# Rapid spin-up evolves the useful whole-planet forecast. The expensive
-			# kilometre-scale nest is rebuilt from it when interactive speed resumes.
 			_local_sim_accum = 0.0
 		else:
 			var local_dt := 40.0 if simulation_speed >= 32.0 else LOCAL_SIM_DT
@@ -224,7 +199,6 @@ func _process(delta: float) -> void:
 	if _texture_accum >= TEXTURE_REAL_INTERVAL:
 		_texture_accum = fmod(_texture_accum, TEXTURE_REAL_INTERVAL)
 		_publish_weather_textures()
-
 	_sync_weather_map_material()
 
 
@@ -269,7 +243,6 @@ func _publish_fallback_weather() -> void:
 	var local_image := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
 	local_image.fill(Color(NEUTRAL_CLOUD, 0.0, 0.0, 0.5))
 	local_weather_texture.update(local_image)
-
 	var global_diag := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
 	global_diag.fill(Color(0.5, 0.5, 0.5, 0.0))
 	global_diagnostics_texture.update(global_diag)
@@ -280,7 +253,7 @@ func _publish_fallback_weather() -> void:
 	global_products.fill(Color(0.68, -1.0, 0.0, 0.0))
 	global_products_texture.update(global_products)
 	global_products_values = global_products.get_data().to_float32_array()
-	var local_products := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+	var local_products := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
 	local_products.fill(Color(0.68, -1.0, 0.0, 0.0))
 	local_products_texture.update(local_products)
 
@@ -288,7 +261,6 @@ func _publish_fallback_weather() -> void:
 func _publish_weather_textures() -> void:
 	if _native == null:
 		return
-
 	var global_result: Variant = _native.call(&"get_global_weather_rgba")
 	if global_result is PackedFloat32Array:
 		global_weather_values = global_result
@@ -296,14 +268,12 @@ func _publish_weather_textures() -> void:
 		if global_values.size() == GLOBAL_W * GLOBAL_H * 4:
 			global_weather_texture.update(Image.create_from_data(
 				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, global_values.to_byte_array()))
-
 	var local_result: Variant = _native.call(&"get_local_weather_rgba")
 	if local_result is PackedFloat32Array:
 		var local_values := _apply_simulation_weight(local_result)
 		if local_values.size() == LOCAL_W * LOCAL_H * 4:
 			local_weather_texture.update(Image.create_from_data(
 				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_values.to_byte_array()))
-
 	var global_diag_result: Variant = _native.call(&"get_global_diagnostics_rgba")
 	if global_diag_result is PackedFloat32Array:
 		global_diagnostics_values = global_diag_result
@@ -311,14 +281,12 @@ func _publish_weather_textures() -> void:
 		if global_diag_values.size() == GLOBAL_W * GLOBAL_H * 4:
 			global_diagnostics_texture.update(Image.create_from_data(
 				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, global_diag_values.to_byte_array()))
-
 	var local_diag_result: Variant = _native.call(&"get_local_diagnostics_rgba")
 	if local_diag_result is PackedFloat32Array:
 		var local_diag_values := _apply_diagnostic_weight(local_diag_result)
 		if local_diag_values.size() == LOCAL_W * LOCAL_H * 4:
 			local_diagnostics_texture.update(Image.create_from_data(
 				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_diag_values.to_byte_array()))
-
 	var global_products_result: Variant = _native.call(&"get_global_products_rgba")
 	if global_products_result is PackedFloat32Array:
 		global_products_values = global_products_result
@@ -326,7 +294,6 @@ func _publish_weather_textures() -> void:
 			global_products_texture.update(Image.create_from_data(
 				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF,
 				global_products_values.to_byte_array()))
-
 	var local_products_result: Variant = _native.call(&"get_local_products_rgba")
 	if local_products_result is PackedFloat32Array:
 		var local_products_values: PackedFloat32Array = local_products_result
@@ -414,13 +381,11 @@ func _apply_simulation_weight(values: PackedFloat32Array) -> PackedFloat32Array:
 	for i in int(weighted.size() / 4):
 		var offset := i * 4
 		weighted[offset] = clampf(
-			NEUTRAL_CLOUD + (weighted[offset] - NEUTRAL_CLOUD) * simulation_weight,
-			0.0, 1.0)
+			NEUTRAL_CLOUD + (weighted[offset] - NEUTRAL_CLOUD) * simulation_weight, 0.0, 1.0)
 		weighted[offset + 1] = clampf(weighted[offset + 1] * simulation_weight, 0.0, 1.0)
 		weighted[offset + 2] = clampf(weighted[offset + 2] * simulation_weight, 0.0, 1.0)
 		weighted[offset + 3] = clampf(
-			0.5 + (weighted[offset + 3] - 0.5) * simulation_weight,
-			0.0, 1.0)
+			0.5 + (weighted[offset + 3] - 0.5) * simulation_weight, 0.0, 1.0)
 	return weighted
 
 
@@ -430,11 +395,9 @@ func _apply_diagnostic_weight(values: PackedFloat32Array) -> PackedFloat32Array:
 	var weighted := values.duplicate()
 	for i in int(weighted.size() / 4):
 		var offset := i * 4
-		# Vorticity/divergence/PV are signed channels encoded around neutral 0.5.
 		for channel in 3:
 			weighted[offset + channel] = clampf(
-				0.5 + (weighted[offset + channel] - 0.5) * simulation_weight,
-				0.0, 1.0)
+				0.5 + (weighted[offset + channel] - 0.5) * simulation_weight, 0.0, 1.0)
 		weighted[offset + 3] = clampf(weighted[offset + 3] * simulation_weight, 0.0, 1.0)
 	return weighted
 
@@ -443,6 +406,14 @@ func _sync_weather_map_material() -> void:
 	var weather_map := get_node_or_null("/root/WeatherMap")
 	if weather_map == null or not weather_map.visible:
 		return
+	# The new globe owns spatial materials and knows which global fields each
+	# product consumes. Let it perform its own sync rather than pushing the old
+	# equirectangular map's local-texture uniforms into a different shader.
+	if weather_map.has_method(&"_sync_from_weather_system"):
+		weather_map.call(&"_sync_from_weather_system")
+		return
+	# Compatibility with the previous flat weather map while old scenes/scripts
+	# are still present in developer checkouts.
 	var material_value: Variant = weather_map.get("_material")
 	if not (material_value is ShaderMaterial):
 		return
