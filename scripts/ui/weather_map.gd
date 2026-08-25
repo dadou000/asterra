@@ -90,7 +90,6 @@ const GLOBAL_H := 512
 const PARTICLE_COUNT := 32768
 const PLANET_RADIUS_M := 3500000.0
 const FIELD_BUILD_BUDGET_USEC := 2600
-const LIVE_WIND_REFRESH_S := 0.50
 
 # Inverses of the packing WeatherNative applies to each texture channel, so the
 # pin can report physical values instead of the 0..1 display encoding.
@@ -146,7 +145,7 @@ var _field_build_y := -1
 var _base_ready := false
 var _wind_fallback_ready := false
 var _live_wind_available := false
-var _live_wind_accum := 999.0
+var _last_wind_revision: int = -1
 
 var _pin_marker: MeshInstance3D
 var _pin_dir := Vector3.ZERO
@@ -468,9 +467,7 @@ func _process(delta: float) -> void:
 		return
 	_update_camera_inertia(delta)
 	_build_field_budgeted()
-	_live_wind_accum += delta
-	if _live_wind_accum >= LIVE_WIND_REFRESH_S:
-		_live_wind_accum = 0.0
+	if WeatherSystem.global_state_revision != _last_wind_revision:
 		_refresh_live_wind()
 	_update_cursor_readout()
 	_update_warp_indicator()
@@ -572,7 +569,7 @@ func _set_open(opened: bool) -> void:
 		_ensure_pin()
 		_sync_weather_textures()
 		_begin_field_build_if_needed()
-		_live_wind_accum = 999.0
+		_last_wind_revision = -1
 		_update_product()
 	else:
 		_restore_mouse()
@@ -649,6 +646,8 @@ func _ensure_wind_sampler() -> void:
 
 
 func _refresh_live_wind() -> void:
+	if WeatherSystem.native_worker_busy():
+		return
 	_ensure_wind_sampler()
 	var native: Variant = WeatherSystem.get("_native")
 	if _wind_sampler == null or native == null or not (native is Object):
@@ -665,10 +664,11 @@ func _refresh_live_wind() -> void:
 	var image := Image.create_from_data(
 		GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array())
 	_live_wind_available = true
+	_last_wind_revision = WeatherSystem.global_state_revision
 	_wind_values = values
 	_wind_texture.update(image)
 	_sync_weather_textures()
-	_source_label.text = "Wind source: LIVE six-layer AVX2 atmosphere  •  %s" % LAYER_NAMES[wind_layer]
+	_source_label.text = "Wind source: LIVE 30-layer AVX2 atmosphere  •  %s" % LAYER_NAMES[wind_layer]
 
 
 func _publish_wind_image(image: Image) -> void:
@@ -687,7 +687,7 @@ func _on_product_selected(index: int) -> void:
 
 func _on_layer_selected(index: int) -> void:
 	wind_layer = clampi(index, 0, LAYER_NAMES.size() - 1)
-	_live_wind_accum = 999.0
+	_last_wind_revision = -1
 	if not _live_wind_available:
 		_wind_fallback_ready = false
 		_begin_field_build_if_needed(true)

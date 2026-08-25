@@ -12,7 +12,6 @@ const LOCAL_W := 192
 const LOCAL_H := 192
 const LOCAL_CELL_M := 2200.0
 const LOCAL_NORMAL_SAMPLE_M := 600.0
-const TEXTURE_INTERVAL := 0.50
 
 var global_surface_texture: ImageTexture
 var local_surface_texture: ImageTexture
@@ -22,7 +21,10 @@ var _surface_fields_uploaded := false
 var _global_building := false
 var _global_task_id := -1
 var _global_request := 0
-var _texture_accum := 0.0
+var _last_global_weather_revision: int = -1
+var _last_local_weather_revision: int = -1
+var _global_surface_dirty: bool = true
+var _local_surface_dirty: bool = true
 var _warned_stale_backend := false
 var _local_request := 0
 var _local_building := false
@@ -60,10 +62,13 @@ func _process(delta: float) -> void:
 			_upload_global_surface_fields()
 
 	_maybe_queue_local_surface()
-	_texture_accum += delta
-	if _texture_accum >= TEXTURE_INTERVAL:
-		_texture_accum = fmod(_texture_accum, TEXTURE_INTERVAL)
-		_publish_surface_textures()
+	if WeatherSystem.global_state_revision != _last_global_weather_revision:
+		_last_global_weather_revision = WeatherSystem.global_state_revision
+		_global_surface_dirty = true
+	if WeatherSystem.local_state_revision != _last_local_weather_revision:
+		_last_local_weather_revision = WeatherSystem.local_state_revision
+		_local_surface_dirty = true
+	_service_surface_publication()
 	_sync_terrain_materials()
 
 
@@ -99,7 +104,7 @@ func _on_celestial_state_updated(_simulation_seconds: float) -> void:
 
 
 func _push_solar_forcing() -> void:
-	if _native == null:
+	if _native == null or WeatherSystem.native_worker_busy():
 		return
 	_native.call(
 		&"set_solar_forcing",
@@ -158,6 +163,9 @@ static func _build_global_surface_fields() -> PackedFloat32Array:
 
 
 func _finish_global_surface_fields(request: int, packed: PackedFloat32Array) -> void:
+	if WeatherSystem.native_worker_busy():
+		call_deferred("_finish_global_surface_fields", request, packed)
+		return
 	if _global_task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_global_task_id)
 		_global_task_id = -1
@@ -170,7 +178,9 @@ func _finish_global_surface_fields(request: int, packed: PackedFloat32Array) -> 
 	_local_requested_center = Vector3.ZERO
 	_local_request += 1
 	_push_solar_forcing()
-	_publish_surface_textures()
+	_global_surface_dirty = true
+	_local_surface_dirty = true
+	_service_surface_publication()
 
 
 func _has_local_observer() -> bool:
@@ -298,6 +308,9 @@ static func _build_local_surface_fields(center: Vector3, east: Vector3, north: V
 
 func _finish_local_surface_build(request: int, center: Vector3,
 		fields: PackedFloat32Array) -> void:
+	if WeatherSystem.native_worker_busy():
+		call_deferred("_finish_local_surface_build", request, center, fields)
+		return
 	if _local_task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_local_task_id)
 		_local_task_id = -1
@@ -308,7 +321,8 @@ func _finish_local_surface_build(request: int, center: Vector3,
 		if mismatch_m <= LOCAL_CELL_M * 0.5:
 			_native.call(&"set_local_surface_fields", fields)
 			_local_uploaded_center = center
-			_publish_surface_textures()
+			_local_surface_dirty = true
+			_service_surface_publication()
 	if request != _local_request:
 		_start_local_surface_build()
 
@@ -341,20 +355,32 @@ func _publish_fallback() -> void:
 
 
 func _publish_surface_textures() -> void:
-	if _native == null or not _surface_fields_uploaded:
+	_global_surface_dirty = true
+	_local_surface_dirty = true
+	_service_surface_publication()
+
+
+func _service_surface_publication() -> void:
+	if _native == null or not _surface_fields_uploaded or WeatherSystem.native_worker_busy():
 		return
-	var global_result: Variant = _native.call(&"get_global_surface_rgba")
-	if global_result is PackedFloat32Array:
-		var global_values: PackedFloat32Array = global_result
-		if global_values.size() == GLOBAL_W * GLOBAL_H * 4:
-			global_surface_texture.update(Image.create_from_data(
-				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, global_values.to_byte_array()))
-	var local_result: Variant = _native.call(&"get_local_surface_rgba")
-	if local_result is PackedFloat32Array:
-		var local_values: PackedFloat32Array = local_result
-		if local_values.size() == LOCAL_W * LOCAL_H * 4:
-			local_surface_texture.update(Image.create_from_data(
-				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_values.to_byte_array()))
+	# Stagger the 8 MiB global upload and the local upload onto different frames.
+	if _global_surface_dirty:
+		var global_result: Variant = _native.call(&"get_global_surface_rgba")
+		if global_result is PackedFloat32Array:
+			var global_values: PackedFloat32Array = global_result
+			if global_values.size() == GLOBAL_W * GLOBAL_H * 4:
+				global_surface_texture.update(Image.create_from_data(
+					GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, global_values.to_byte_array()))
+		_global_surface_dirty = false
+		return
+	if _local_surface_dirty:
+		var local_result: Variant = _native.call(&"get_local_surface_rgba")
+		if local_result is PackedFloat32Array:
+			var local_values: PackedFloat32Array = local_result
+			if local_values.size() == LOCAL_W * LOCAL_H * 4:
+				local_surface_texture.update(Image.create_from_data(
+					LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_values.to_byte_array()))
+		_local_surface_dirty = false
 
 
 func _sync_terrain_materials() -> void:

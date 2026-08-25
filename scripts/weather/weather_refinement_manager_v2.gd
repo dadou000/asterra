@@ -35,7 +35,6 @@ const DEMOTION_HOLD_S: Array[float] = [0.0, 45.0 * 60.0, 25.0 * 60.0, 18.0 * 60.
 const MIN_LEVEL_LIFETIME_S: Array[float] = [0.0, 90.0 * 60.0, 45.0 * 60.0, 28.0 * 60.0, 12.0 * 60.0]
 
 const PLANET_RADIUS_KM := 3500.0
-const SCAN_INTERVAL_REAL_S := 0.50
 const CANDIDATE_TILE_W := 32
 const CANDIDATE_TILE_H := 24
 const SCAN_STRIDE := 4
@@ -56,7 +55,7 @@ var last_max_score: float = 0.0
 var last_raw_candidate_count: int = 0
 var last_max_metrics: Dictionary = {}
 
-var _scan_accum: float = 0.0
+var _last_analysis_revision: int = -1
 var _last_sim_seconds: float = 0.0
 var _next_region_id: int = 1
 var _previous_pressure := PackedFloat32Array()
@@ -75,13 +74,12 @@ func _ready() -> void:
 	_overlay_shader = load("res://shaders/weather_refinement_patch.gdshader") as Shader
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	if not enabled:
 		_hide_debug_overlay()
 		return
-	_scan_accum += delta
-	if _scan_accum >= SCAN_INTERVAL_REAL_S:
-		_scan_accum = fmod(_scan_accum, SCAN_INTERVAL_REAL_S)
+	if WeatherSystem.analysis_revision >= 0 and WeatherSystem.analysis_revision != _last_analysis_revision:
+		_last_analysis_revision = WeatherSystem.analysis_revision
 		_scan_weather()
 	_update_debug_overlay()
 
@@ -115,17 +113,9 @@ func _scan_weather() -> void:
 
 func _refresh_convective_values(expected: int) -> void:
 	_convective_values = PackedFloat32Array()
-	var native_value: Variant = WeatherSystem.get("_native")
-	if not (native_value is Object):
-		return
-	var native: Object = native_value as Object
-	if not native.has_method(&"get_global_convective_rgba"):
-		return
-	var result: Variant = native.call(&"get_global_convective_rgba")
-	if result is PackedFloat32Array:
-		var values: PackedFloat32Array = result as PackedFloat32Array
-		if values.size() == expected:
-			_convective_values = values
+	var values: PackedFloat32Array = WeatherSystem.global_convective_values
+	if values.size() == expected:
+		_convective_values = values
 
 
 func _extract_candidates(weather: PackedFloat32Array, diagnostics: PackedFloat32Array,
