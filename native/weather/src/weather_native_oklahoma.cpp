@@ -117,6 +117,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 	// away from the dry source region, allowing a humid boundary layer on the
 	// downstream side of a dryline to become highly unstable while still clear.
 	if (have_surface) {
+		#pragma omp parallel for schedule(static)
 		for (int c = 0; c < a.cells; ++c) {
 			const float land = 1.0f - std::clamp(surface.water_fraction[c], 0.0f, 1.0f);
 			const float dryness = severe_smooth01((0.52f - surface.soil_moisture[c]) / 0.38f);
@@ -141,6 +142,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 	// Capped severe-convection closure. Deep moist instability can remain loaded
 	// while the 0.45-1.7 km layer is inhibiting. Convergence, strong surface heat,
 	// or a sharp low-level moisture boundary (dryline) can release that reservoir.
+	#pragma omp parallel for schedule(static)
 	for (int y = 0; y < a.height; ++y) {
 		for (int x = 0; x < a.width; ++x) {
 			const int c = x + y * a.width;
@@ -203,6 +205,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		const float sf = sigma_temperature_factor(layer);
 		const float fair_onset_rh = APPROX_HEIGHT_M[layer] <= 2000.0f ? 0.90f : 0.93f;
 		const float fair_full_rh = APPROX_HEIGHT_M[layer] <= 2000.0f ? 0.985f : 0.995f;
+		#pragma omp parallel for schedule(static)
 		for (int c = 0; c < a.cells; ++c) {
 			const int i = off + c;
 			float qv = std::clamp(a.nq[i], 0.00001f, 0.032f);
@@ -323,6 +326,7 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 
 	const float base_rate = (is_global ? 2.4e-4f : 8.5e-4f) * original_convection * old_six_level_column_scale();
 	const float max_extra_mix = is_global ? 0.035f : 0.075f;
+	#pragma omp parallel for schedule(static)
 	for (int c = 0; c < a.cells; ++c) {
 		const float active = std::clamp(a.convective_activation[c], 0.0f, 1.0f);
 		if (active < 0.015f) {
@@ -397,6 +401,7 @@ static PackedFloat32Array remap_sparse_severe_weather(PackedFloat32Array values,
 		const WeatherNative::Atmosphere &a) {
 	if (values.size() != a.cells * 4) return values;
 	float *w = values.ptrw();
+	#pragma omp parallel for schedule(static)
 	for (int c = 0; c < a.cells; ++c) {
 		const int o = c * 4;
 		const float old_storm = std::clamp(w[o + 1], 0.0f, 1.0f);

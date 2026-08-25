@@ -723,7 +723,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 		const float pressure_smooth = relaxation_fraction(
 			dt, is_global ? 10800.0f : 3600.0f, 1.0f);
 
-		#pragma omp parallel for schedule(static) if(is_global)
+		#pragma omp parallel for schedule(static)
 		for (int y = 0; y < h; ++y) {
 			alignas(32) int adv00_idx[8], adv10_idx[8], adv01_idx[8], adv11_idx[8];
 			alignas(32) int east_idx[8], west_idx[8], north_idx[8], south_idx[8];
@@ -1053,7 +1053,7 @@ void WeatherNative::surface_pass(Atmosphere &a, SurfaceState &surface, bool is_g
 	const float sf0 = sigma_temperature_factor(0);
 	const float p0_layer = P0 * SIGMA[0];
 
-	#pragma omp parallel for schedule(static) if(is_global)
+	#pragma omp parallel for schedule(static)
 	for (int c = 0; c < a.cells; ++c) {
 		Vector3 d(surface.dir_x[c], surface.dir_y[c], surface.dir_z[c]);
 		Vector3 n(surface.normal_x[c], surface.normal_y[c], surface.normal_z[c]);
@@ -1111,7 +1111,7 @@ void WeatherNative::surface_pass(Atmosphere &a, SurfaceState &surface, bool is_g
 			std::clamp(surface.base_albedo[c], 0.04f, 0.65f), OCEAN_ALBEDO, water);
 		float albedo = std::clamp(std::lerp(snow_free_albedo, snow_albedo, snow_cover), 0.03f, 0.94f);
 
-		// Cloud optical attenuation is derived from the six prognostic condensate
+		// Cloud optical attenuation is derived from the 30 prognostic condensate
 		// reservoirs, not the renderer's aggregate weather texture.
 		float condensate = 0.0f;
 		for (int layer = 0; layer < LAYERS; ++layer) {
@@ -1267,7 +1267,7 @@ void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 		int hi_off = a.layer_offset(hi);
 		int flux_off = a.interface_offset(interface_index);
 
-		#pragma omp parallel for schedule(static) if(is_global)
+		#pragma omp parallel for schedule(static)
 		for (int c = 0; c < a.cells; c += 8) {
 			__m256 th_lo = _mm256_loadu_ps(&a.ntheta[lo_off + c]);
 			__m256 th_hi = _mm256_loadu_ps(&a.ntheta[hi_off + c]);
@@ -1569,7 +1569,7 @@ void WeatherNative::diagnose(Atmosphere &a, bool is_global) {
 	const int w = a.width;
 	const int h = a.height;
 	const float local_lat = std::asin(std::clamp(local_center.y, -1.0f, 1.0f));
-	#pragma omp parallel for schedule(static) if(is_global)
+	#pragma omp parallel for schedule(static)
 	for (int layer = 0; layer < LAYERS; ++layer) {
 		alignas(32) int east_idx[8], west_idx[8], north_idx[8], south_idx[8];
 		alignas(32) float north_sign[8], south_sign[8];
@@ -2007,7 +2007,6 @@ static PackedFloat32Array weather_rgba_from(const WeatherNative::Atmosphere &a,
 		float ascent = std::clamp(max_ascent / 2.5e-4f, 0.0f, 1.0f);
 		float rotation = std::clamp(max_rotation / 0.00030f, 0.0f, 1.0f);
 		float shear = std::clamp(max_shear / 30.0f, 0.0f, 1.0f);
-		upper_ice *= old_six_level_column_scale();
 		float polar_resolution = 1.0f;
 		if (is_global) {
 			int y = c / a.width;
@@ -2096,6 +2095,7 @@ static PackedFloat32Array convective_rgba_from(const WeatherNative::Atmosphere &
 			int i = a.layer_offset(layer) + c;
 			if (WeatherNative::APPROX_HEIGHT_M[layer] >= 5600.0f) upper_ice += a.ice[i] * WeatherNative::DEFAULT_LAYER_WEIGHTS[layer];
 		}
+		upper_ice *= old_six_level_column_scale();
 		float polar_resolution = 1.0f;
 		if (is_global) {
 			int y = c / a.width;
