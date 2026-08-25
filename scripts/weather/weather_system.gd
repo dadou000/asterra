@@ -15,6 +15,12 @@ const LOCAL_REAL_INTERVAL := 0.20
 const TEXTURE_REAL_INTERVAL := 0.50
 const GLOBAL_SIM_DT := 90.0
 const LOCAL_SIM_DT := 20.0
+const SIMULATION_WEIGHT_MIN := 0.0
+const SIMULATION_WEIGHT_MAX := 2.0
+const SIMULATION_WEIGHT_DEFAULT := 1.0
+const NEUTRAL_CLOUD := 0.16
+
+signal simulation_weight_changed(weight: float)
 
 var global_weather_texture: ImageTexture
 var local_weather_texture: ImageTexture
@@ -25,6 +31,9 @@ var local_span_m := 422400.0
 
 var native_available := false
 var backend_error := ""
+## Runtime influence of simulated anomalies on every weather consumer.
+## 0 = neutral mostly-clear field, 1 = calibrated model, 2 = amplified extremes.
+var simulation_weight := SIMULATION_WEIGHT_DEFAULT
 
 var _native: Object = null
 var _observer: AsterraPlayer
@@ -144,7 +153,7 @@ func _publish_weather_textures() -> void:
 
 	var global_result: Variant = _native.call(&"get_global_weather_rgba")
 	if global_result is PackedFloat32Array:
-		var global_values: PackedFloat32Array = global_result
+		var global_values := _apply_simulation_weight(global_result)
 		if global_values.size() == GLOBAL_W * GLOBAL_H * 4:
 			var global_image := Image.create_from_data(
 				GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, global_values.to_byte_array())
@@ -152,11 +161,45 @@ func _publish_weather_textures() -> void:
 
 	var local_result: Variant = _native.call(&"get_local_weather_rgba")
 	if local_result is PackedFloat32Array:
-		var local_values: PackedFloat32Array = local_result
+		var local_values := _apply_simulation_weight(local_result)
 		if local_values.size() == LOCAL_W * LOCAL_H * 4:
 			var local_image := Image.create_from_data(
 				LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, local_values.to_byte_array())
 			local_weather_texture.update(local_image)
+
+
+func set_simulation_weight(value: float) -> void:
+	var sanitized := clampf(value, SIMULATION_WEIGHT_MIN, SIMULATION_WEIGHT_MAX)
+	if is_equal_approx(simulation_weight, sanitized):
+		return
+	simulation_weight = sanitized
+	if native_available:
+		_publish_weather_textures()
+	else:
+		_publish_fallback_weather()
+	_sync_weather_map_material()
+	simulation_weight_changed.emit(simulation_weight)
+
+
+func reset_simulation_weight() -> void:
+	set_simulation_weight(SIMULATION_WEIGHT_DEFAULT)
+
+
+func _apply_simulation_weight(values: PackedFloat32Array) -> PackedFloat32Array:
+	if is_equal_approx(simulation_weight, 1.0):
+		return values
+	var weighted := values.duplicate()
+	for i in int(weighted.size() / 4):
+		var offset := i * 4
+		weighted[offset] = clampf(
+			NEUTRAL_CLOUD + (weighted[offset] - NEUTRAL_CLOUD) * simulation_weight,
+			0.0, 1.0)
+		weighted[offset + 1] = clampf(weighted[offset + 1] * simulation_weight, 0.0, 1.0)
+		weighted[offset + 2] = clampf(weighted[offset + 2] * simulation_weight, 0.0, 1.0)
+		weighted[offset + 3] = clampf(
+			0.5 + (weighted[offset + 3] - 0.5) * simulation_weight,
+			0.0, 1.0)
+	return weighted
 
 
 func _sync_weather_map_material() -> void:

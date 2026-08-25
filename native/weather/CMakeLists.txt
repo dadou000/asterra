@@ -5,6 +5,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# godot-cpp master no longer guesses an engine API for extension projects.
+# Asterra targets Godot 4.7.1, whose stable GDExtension ABI is the 4.7 API.
+if(NOT GODOTCPP_API_VERSION)
+  set(GODOTCPP_API_VERSION "4.7" CACHE STRING "Godot API version for godot-cpp" FORCE)
+endif()
+if(NOT GODOTCPP_TARGET)
+  set(GODOTCPP_TARGET "template_release" CACHE STRING "godot-cpp target kind")
+endif()
+
 if(DEFINED GODOT_CPP_DIR)
   add_subdirectory(${GODOT_CPP_DIR} godot-cpp)
 else()
@@ -35,7 +44,8 @@ endif()
 # Keep every generator/configuration in the exact location referenced by the
 # .gdextension manifest. Visual Studio otherwise appends Release/ or Debug/.
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(ASTERRA_BIN_DIR "${ASTERRA_ROOT}/bin")
+set(ASTERRA_BIN_DIR "${ASTERRA_ROOT}/bin" CACHE PATH
+  "Directory for the Asterra weather runtime artifacts")
 
 set_target_properties(asterra_weather PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${ASTERRA_BIN_DIR}"
@@ -49,6 +59,10 @@ set_target_properties(asterra_weather PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY_RELEASE "${ASTERRA_BIN_DIR}"
   LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${ASTERRA_BIN_DIR}"
   LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL "${ASTERRA_BIN_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${ASTERRA_BIN_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${ASTERRA_BIN_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${ASTERRA_BIN_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY_MINSIZEREL "${ASTERRA_BIN_DIR}"
   OUTPUT_NAME "asterra_weather"
 )
 

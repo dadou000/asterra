@@ -125,8 +125,8 @@ func drop_pile(stock: MaterialStock, center_dir: Vector3) -> LoosePile:
 	var h := Planet.terrain_height(center_dir)
 	var r := Planet.cfg.planet_radius + h
 	pile.setup(stock, Vec3D.new(center_dir.x * r, center_dir.y * r, center_dir.z * r), center_dir)
-	if pile_parent != null:
-		pile_parent.add_child(pile)
+	var owner: Node = pile_parent if pile_parent != null else self
+	owner.add_child(pile)
 	piles.append(pile)
 	return pile
 
@@ -175,6 +175,6 @@ func restore_piles(data: Array) -> void:
 		var wp := Vec3D.new(e["x"], e["y"], e["z"])
 		var pile := LoosePile.new()
 		pile.setup(stock, wp, wp.normalized().to_v3())
-		if pile_parent != null:
-			pile_parent.add_child(pile)
+		var owner: Node = pile_parent if pile_parent != null else self
+		owner.add_child(pile)
 		piles.append(pile)

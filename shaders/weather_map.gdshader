@@ -9,9 +9,6 @@ uniform float u_local_span_m = 0.0;
 uniform float u_planet_radius = 1000000.0;
 uniform int u_product = 0;
 
-const float PI = 3.14159265358979323846;
-const float TAU = 6.28318530717958647692;
-
 vec3 cloud_palette(float x) {
 	x = clamp(x, 0.0, 1.0);
 	vec3 clear = vec3(0.035, 0.10, 0.19);

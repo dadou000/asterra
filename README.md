@@ -1,6 +1,6 @@
 # Asterra — Phase 1: Procedural Asterra
 
-Godot **4.7.1 stable**. GDScript, no build step, no external dependencies.
+Godot **4.7.1 stable** with a C++20 AVX2/FMA weather extension.
 
 This implements **Phase 1 of the Asterra Development Roadmap**: the whole planet
 generator plus the streaming, editing and persistence needed to stand on it.
@@ -19,12 +19,16 @@ Open the folder in Godot 4.7.1 and press **F5**, or:
 
 ```
 godot --path .                               # play
-godot --headless --path . res://tests/Tests.tscn        # 68-check verification suite
+godot --headless --path . res://tests/Tests.tscn        # 71-check verification suite
 godot --headless --path . res://tests/Preview.tscn      # export all 15 map layers as PNG
 godot --headless --path . res://tests/WorldReport.tscn  # hypsometry / lake / ice statistics
 godot --headless --path . res://tests/ClimateReport.tscn # energy balance vs Earth, then Asterra
 godot --headless --path . res://tests/Stream.tscn       # streaming + triangle-budget probe
 ```
+
+On Windows, build the native weather backend once with
+`tools/build_weather_avx2_windows.ps1`, then restart Godot. See
+`native/weather/README.md` for requirements and direct CMake commands.
 
 The first run bakes the planet (~50 s single-threaded for the default 221k-cell
 macro grid) and caches it under `user://asterra/worlds/`. Every later run loads
@@ -45,6 +49,7 @@ automatically.
 | `Q` / `E` | drop a heap of carried material / pick one back up |
 | `[` `]` | brush radius |
 | `M`, `,` `.` | planet map overlay, previous/next layer |
+| `é` | live weather map; its slider adjusts simulation influence from neutral 0× through calibrated 1× to amplified 2× |
 | `T` | teleport to the best transport-corridor site on the planet |
 | `F5` / `F9` | save / load |
 
@@ -109,7 +114,7 @@ shadows.
 
 ## Verification
 
-`tests/Tests.tscn` runs 68 property checks headless, including:
+`tests/Tests.tscn` runs 71 property checks headless, including:
 
 * two bakes of the same seed are bit-identical; a different seed is a different planet
 * the cube-sphere inverse is exact and macro fields interpolate across face seams
@@ -124,10 +129,11 @@ shadows.
 * excavated loose volume equals the in-place volume times the material's bulking factor
 * filling consumes real stock and cannot invent matter
 * deltas, loose heaps and player state survive a save/load round trip exactly
-* the quadtree converges, stays bounded, culls the far side of the planet, and re-meshes an edit
+* the spherical GPU clipmap stays bounded, while the local collision bubble converges, follows movement, and rebuilds edits
 
-Measured on a 2-core container: full ground fill 439 chunks / ~1.0 M triangles in
-7.1 s; orbital view 24 chunks. Both scale with core count.
+The visual terrain uses a fixed 15-level spherical clipmap. In the headless
+movement probe, the local physics bubble remained bounded at 46-48 collision
+tiles while retiring and replacing coverage around the observer.
 
 ---
 
@@ -147,8 +153,8 @@ Measured on a 2-core container: full ground fill 439 chunks / ~1.0 M triangles i
 * **Loose material heaps are geometric, not simulated.** They carry real volume,
   density, bulking factor and angle of repose — the numbers Phase 3 needs — but
   they do not yet slump or flow.
-* Weather is a static climatology (Phase 7 turns it into a runtime atmosphere),
-  and vegetation is a density field, not instanced plants.
+* Weather has a live AVX2 global model and player-centered local nest; vegetation
+  is still a density field, not instanced plants.
 
 ## Where this hands off to Phase 2
 

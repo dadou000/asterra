@@ -343,8 +343,12 @@ void vertex() {
 	// Camera transform is in floating-origin render coordinates. Add the current
 	// origin to recover planet space before integrating the atmosphere.
 	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
+	vec3 atmo_t;
+	vec3 atmo_l;
 	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius,
-		v_atmo_t, v_atmo_l);
+		atmo_t, atmo_l);
+	v_atmo_t = atmo_t;
+	v_atmo_l = atmo_l;
 
 	VERTEX = v_render;
 }

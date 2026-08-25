@@ -43,6 +43,8 @@ var legend_texture: TextureRect
 var legend_left: Label
 var legend_right: Label
 var marker: Control
+var simulation_weight_label: Label
+var simulation_weight_slider: HSlider
 var _material: ShaderMaterial
 var _player: AsterraPlayer
 var _player_dir := Vector3(1, 0, 0)
@@ -93,6 +95,35 @@ func _ready() -> void:
 	product_select.item_selected.connect(_on_product_selected)
 	add_child(product_select)
 
+	simulation_weight_label = Label.new()
+	simulation_weight_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	simulation_weight_label.position = Vector2(-370, 99)
+	simulation_weight_label.custom_minimum_size = Vector2(260, 28)
+	simulation_weight_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	simulation_weight_label.add_theme_font_size_override("font_size", 13)
+	add_child(simulation_weight_label)
+
+	simulation_weight_slider = HSlider.new()
+	simulation_weight_slider.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	simulation_weight_slider.position = Vector2(-92, 98)
+	simulation_weight_slider.custom_minimum_size = Vector2(300, 28)
+	simulation_weight_slider.min_value = WeatherSystem.SIMULATION_WEIGHT_MIN
+	simulation_weight_slider.max_value = WeatherSystem.SIMULATION_WEIGHT_MAX
+	simulation_weight_slider.step = 0.05
+	simulation_weight_slider.value = WeatherSystem.simulation_weight
+	simulation_weight_slider.value_changed.connect(_on_simulation_weight_changed)
+	add_child(simulation_weight_slider)
+
+	var reset_weight := Button.new()
+	reset_weight.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	reset_weight.position = Vector2(225, 96)
+	reset_weight.custom_minimum_size = Vector2(145, 32)
+	reset_weight.text = "Calibrated 1×"
+	reset_weight.pressed.connect(WeatherSystem.reset_simulation_weight)
+	add_child(reset_weight)
+	WeatherSystem.simulation_weight_changed.connect(_on_external_simulation_weight_changed)
+	_update_simulation_weight_label(WeatherSystem.simulation_weight)
+
 	note = Label.new()
 	note.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	note.position = Vector2(-float(W) * 0.5, -84)
@@ -130,7 +161,7 @@ func _ready() -> void:
 	hint.position = Vector2(-float(W) * 0.5, -18)
 	hint.custom_minimum_size = Vector2(W, 18)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.text = "é close  •  ← / → change product  •  1–5 direct  •  live 256×128 AVX2 global model"
+	hint.text = "é close  •  ← / → change product  •  1–5 direct  •  weight affects map, clouds and shadows"
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", Color(0.52, 0.59, 0.69))
 	add_child(hint)
@@ -230,6 +261,30 @@ func set_product(which: int) -> void:
 
 func _on_product_selected(index: int) -> void:
 	set_product(index)
+
+
+func _on_simulation_weight_changed(value: float) -> void:
+	WeatherSystem.set_simulation_weight(value)
+	_update_simulation_weight_label(WeatherSystem.simulation_weight)
+
+
+func _on_external_simulation_weight_changed(value: float) -> void:
+	if simulation_weight_slider != null:
+		simulation_weight_slider.set_value_no_signal(value)
+	_update_simulation_weight_label(value)
+
+
+func _update_simulation_weight_label(value: float) -> void:
+	if simulation_weight_label == null:
+		return
+	var mode := "calibrated"
+	if value < 0.01:
+		mode = "neutral"
+	elif value < 0.95:
+		mode = "reduced"
+	elif value > 1.05:
+		mode = "amplified"
+	simulation_weight_label.text = "Simulation influence: %.2f×  (%s)" % [value, mode]
 
 
 func _apply_product() -> void:

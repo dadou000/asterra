@@ -41,3 +41,11 @@ The extension is intentionally compiled with AVX2 + FMA (`/arch:AVX2` on MSVC, `
 - **Global:** 256x128 spherical/equirectangular SoA state. Temperature, pressure anomaly, humidity, horizontal wind, condensed water, CAPE, vorticity and precipitation are evolved with semi-Lagrangian transport, pressure-gradient acceleration, Coriolis coupling, convergence, condensation/latent heating and convective CAPE release.
 - **Local:** 192x192 tangent-plane nest at 2.2 km/cell (~422 km across), centered on the player. It is weakly nudged to the global state while retaining stronger mesoscale convergence/convection.
 - **Renderer contract:** RGBA32F weather textures use R=cloud/coverage potential, G=storm/convection, B=precipitation, A=normalized pressure. The cloud compute shader uses these fields for placement, vertical development and optical density; 3D noise is retained only for sub-weather-scale cloud morphology.
+
+## Runtime influence
+
+Open the live weather map with `é`. The simulation-influence slider updates every
+weather consumer immediately: 0× produces a neutral mostly-clear field, 1× is
+the calibrated model, and 2× amplifies its anomalies. The control changes visual
+weather strength, not the model timestep, so its numerical evolution remains
+stable and deterministic.

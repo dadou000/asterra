@@ -59,7 +59,16 @@ func set_observer(world_pos: Vec3D) -> void:
 
 
 func stats() -> Dictionary:
-	return _stats.duplicate()
+	var out := _stats.duplicate()
+	if _collision_streamer == null:
+		return out
+	var collision := _collision_streamer.stats()
+	out["chunks"] = collision["resident"]
+	out["nodes"] = collision["entries"]
+	out["queued"] = collision["queued"]
+	out["in_flight"] = collision["in_flight"]
+	out["collision"] = collision
+	return out
 
 
 func debug_materials() -> Array:

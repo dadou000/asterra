@@ -32,6 +32,11 @@ var _result_mutex := Mutex.new()
 var _pending_tasks: Array[int] = []
 var _in_flight := 0
 var _shutting_down := false
+var _refreshes := 0
+var _builds_started := 0
+var _builds_installed := 0
+var _invalidations := 0
+var _retired := 0
 
 var _have_motion_sample := false
 var _last_motion_observer := Vec3D.new(0.0, 0.0, 0.0)
@@ -52,6 +57,11 @@ func configure(value: GenConfig) -> void:
 	_refresh_left = 0.0
 	_have_motion_sample = false
 	_motion_speed = 0.0
+	_refreshes = 0
+	_builds_started = 0
+	_builds_installed = 0
+	_invalidations = 0
+	_retired = 0
 
 
 func set_observer(value: Vec3D, active := true) -> void:
@@ -60,6 +70,30 @@ func set_observer(value: Vec3D, active := true) -> void:
 	if _active and not active:
 		_clear()
 	_active = active
+
+
+func stats() -> Dictionary:
+	var resident := 0
+	var queued := 0
+	for value in _entries.values():
+		var entry: Dictionary = value
+		if int(entry["state"]) == 2 and entry["body"] != null:
+			resident += 1
+		elif int(entry["state"]) == 1 and int(entry["task_id"]) < 0:
+			queued += 1
+	return {
+		"active": _active,
+		"entries": _entries.size(),
+		"resident": resident,
+		"queued": queued,
+		"in_flight": _in_flight,
+		"missing": maxi(_entries.size() - resident - queued - _in_flight, 0),
+		"refreshes": _refreshes,
+		"builds_started": _builds_started,
+		"builds_installed": _builds_installed,
+		"invalidations": _invalidations,
+		"retired": _retired,
+	}
 
 
 func _process(dt: float) -> void:
@@ -104,6 +138,7 @@ func _update_motion(dt: float) -> void:
 
 
 func _refresh_set() -> void:
+	_refreshes += 1
 	var depth := clampi(cfg.collision_stream_depth, 1, 19)
 	var divisions := 1 << depth
 	var tile_arc := PI * 0.5 * cfg.planet_radius / float(divisions)
@@ -164,6 +199,7 @@ func _refresh_set() -> void:
 		if body != null:
 			body.queue_free()
 		_entries.erase(key)
+		_retired += 1
 
 	_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return _entry_distance_sq(a) < _entry_distance_sq(b))
@@ -248,6 +284,7 @@ func _pump() -> void:
 
 
 func _start(entry: Dictionary) -> void:
+	_builds_started += 1
 	var revision := int(entry["revision"])
 	var face := int(entry["face"])
 	var depth := int(entry["depth"])
@@ -359,6 +396,7 @@ func _install(entry: Dictionary, built: Dictionary) -> void:
 	add_child(body)
 	entry["body"] = body
 	entry["state"] = 2
+	_builds_installed += 1
 
 
 func _on_region_changed(center: Vector3, radius_m: float) -> void:
@@ -374,6 +412,7 @@ func _on_region_changed(center: Vector3, radius_m: float) -> void:
 		var tile_radius := size * PI * 0.25 * cfg.planet_radius
 		if d.angle_to(center) * cfg.planet_radius > radius_m + tile_radius:
 			continue
+		_invalidations += 1
 		entry["revision"] = int(entry["revision"]) + 1
 		var cancel: TerrainBuildCancel = entry.get("cancel")
 		if cancel != null:

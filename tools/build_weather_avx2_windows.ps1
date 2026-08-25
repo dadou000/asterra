@@ -12,7 +12,13 @@ Write-Host "Asterra AVX2 weather build"
 Write-Host "  source: $source"
 Write-Host "  output: $bin"
 
-$cmakeArgs = @("-S", $source, "-B", $build)
+$cmakeArgs = @(
+    "-S", $source,
+    "-B", $build,
+    "-DGODOTCPP_API_VERSION=4.7",
+    "-DGODOTCPP_TARGET=template_release",
+    "-DASTERRA_BIN_DIR=$bin"
+)
 if ($GodotCppDir -ne "") {
     $resolvedGodotCpp = (Resolve-Path $GodotCppDir).Path
     $cmakeArgs += "-DGODOT_CPP_DIR=$resolvedGodotCpp"

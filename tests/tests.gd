@@ -34,6 +34,9 @@ func _ready() -> void:
 	test_soil_and_biomes(fields)
 	test_suitability(fields)
 
+	_section("Runtime weather")
+	test_weather_simulation_weight()
+
 	_section("Runtime terrain")
 	test_seaward_coast_profile()
 	test_seam_continuity()
@@ -47,6 +50,8 @@ func _ready() -> void:
 	test_dig_volume_conservation()
 	test_delta_roundtrip()
 	test_save_load(cfg)
+	# Flush queue_free() calls made by the final test before terminating the tree.
+	await get_tree().process_frame
 
 	print("\n=== %d passed, %d failed  (%.1f s) ===\n" % [passed, failed, (Time.get_ticks_msec() - _t0) / 1000.0])
 	get_tree().quit(0 if failed == 0 else 1)
@@ -69,6 +74,27 @@ func check(name: String, ok: bool, detail: String = "") -> void:
 	else:
 		failed += 1
 		print("   FAIL  %s%s" % [name, ("  (%s)" % detail) if detail != "" else ""])
+
+
+func test_weather_simulation_weight() -> void:
+	var source := PackedFloat32Array([0.30, 0.20, 0.10, 0.65])
+	WeatherSystem.set_simulation_weight(0.0)
+	var neutral: PackedFloat32Array = WeatherSystem.call(&"_apply_simulation_weight", source)
+	WeatherSystem.set_simulation_weight(2.5)
+	var amplified: PackedFloat32Array = WeatherSystem.call(&"_apply_simulation_weight", source)
+	var expected_neutral := PackedFloat32Array([0.16, 0.0, 0.0, 0.5])
+	var expected_amplified := PackedFloat32Array([0.44, 0.40, 0.20, 0.80])
+	var worst_error := 0.0
+	for i in source.size():
+		worst_error = maxf(worst_error, absf(neutral[i] - expected_neutral[i]))
+		worst_error = maxf(worst_error, absf(amplified[i] - expected_amplified[i]))
+	var clamped_to_max := is_equal_approx(
+		WeatherSystem.simulation_weight, WeatherSystem.SIMULATION_WEIGHT_MAX)
+	WeatherSystem.reset_simulation_weight()
+	check("weather influence is adjustable, clamped, and resettable",
+		worst_error < 0.0001 and clamped_to_max
+			and is_equal_approx(WeatherSystem.simulation_weight, 1.0),
+		"worst channel error %.6f" % worst_error)
 
 # ---------------------------------------------------------------- geometry ---
 func test_cube_sphere_roundtrip() -> void:
@@ -679,15 +705,12 @@ func test_save_load(cfg: GenConfig) -> void:
 	check("player state round-tripped", absf(float(data["player"]["yaw"]) - 0.5) < 1e-6)
 	editor.queue_free()
 
-## Drive the quadtree for a few frames from a ground observer and check that it
-## converges, stays bounded, culls the far side of the planet, and reacts to an
-## edit by rebuilding only the affected chunks.
+## Exercise the current terrain architecture: planet-wide visuals come from the
+## spherical GPU clipmap, while a bounded CPU streamer maintains local physics.
 func test_streaming() -> void:
-	Planet.cfg.quadtree_max_depth = 9
-	var terrain := PlanetTerrain.new()
+	var terrain := FastPlanetTerrain.new()
 	add_child(terrain)
 	terrain.build_roots()
-	terrain.max_builds_per_frame = 128
 	var d := Planet.grid.cell_dir(_a_land_cell())
 	var r := Planet.cfg.planet_radius + Planet.terrain_height(d) + 2.0
 	var obs := Vec3D.new(d.x * r, d.y * r, d.z * r)
@@ -695,91 +718,79 @@ func test_streaming() -> void:
 	terrain.set_observer(obs)
 
 	var settled := false
-	for i in 600:
+	var deadline := Time.get_ticks_msec() + 20000
+	while Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
-		var st := terrain.stats()
-		if i > 20 and int(st["in_flight"]) == 0:
+		var live: Dictionary = terrain.stats()["collision"]
+		if int(live["entries"]) > 0 and int(live["resident"]) == int(live["entries"]) \
+				and int(live["queued"]) == 0 and int(live["in_flight"]) == 0:
 			settled = true
 			break
-	var st := terrain.stats()
-	check("the quadtree converges from a ground observer", settled,
-		"%d chunks, %d nodes" % [st["chunks"], st["nodes"]])
-	check("chunk count stays bounded", int(st["chunks"]) > 0 and int(st["chunks"]) < 900,
-		"%d chunks" % st["chunks"])
-	check("the far side of the planet is culled", int(st["culled"]) > 0,
-		"%d nodes rejected over the horizon" % st["culled"])
+	var st: Dictionary = terrain.stats()["collision"]
+	check("the collision bubble converges from a ground observer", settled,
+		"%d/%d tiles resident" % [st["resident"], st["entries"]])
+	check("collision tile count stays bounded",
+		int(st["resident"]) > 0 and int(st["entries"]) < 160,
+		"%d tiles" % st["entries"])
+	var gpu: Dictionary = GroundGeometryClipmap.gpu_stream_stats()
+	check("visual terrain uses the bounded spherical GPU clipmap",
+		bool(gpu["spherical"]) and bool(gpu["procedural_gpu"])
+			and int(gpu["max_level"]) == 14 and bool(gpu["compact_sector_indices"]),
+		"%d levels, %d sectors" % [int(gpu["max_level"]) + 1, gpu["sector_count"]])
 
-	# An excavation must invalidate the chunks that cover it.
+	# An excavation must invalidate the physics tiles that cover it.
 	var editor := TerrainEditor.new()
 	add_child(editor)
 	editor.refresh()
+	var invalidations_before := int(st["invalidations"])
 	editor.dig(d, 3.0, 0.4)
 	await get_tree().process_frame
-	await get_tree().process_frame
-	var after := terrain.stats()
-	check("an edit re-meshes the chunks it touches", int(after["queued"]) > 0 or int(after["in_flight"]) > 0,
-		"%d rebuilds queued" % (int(after["queued"]) + int(after["in_flight"])))
-	for i in 300:
+	var after: Dictionary = terrain.stats()["collision"]
+	check("an edit invalidates the collision tiles it touches",
+		int(after["invalidations"]) > invalidations_before,
+		"%d tiles invalidated" % (int(after["invalidations"]) - invalidations_before))
+	deadline = Time.get_ticks_msec() + 10000
+	while Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
-		if int(terrain.stats()["in_flight"]) == 0:
+		after = terrain.stats()["collision"]
+		if int(after["resident"]) == int(after["entries"]) \
+				and int(after["queued"]) == 0 and int(after["in_flight"]) == 0:
 			break
-	# Walking past ground that is already streamed in exercises the path an
-	# approach-then-recede takes through the quadtree: split on the way in,
-	# collapse on the way out. A leaf left behind claiming a chunk it no longer
-	# owns is a hole -- one that standing still never fills, because the node
-	# believes it is already built.
+
+	# Move far enough that the bounded bubble must retire old tiles and install a
+	# new complete set around the observer.
+	var retired_before := int(after["retired"])
+	var installed_before := int(after["builds_installed"])
+	var refreshes_before := int(after["refreshes"])
 	var east := Vector3(0, 1, 0).cross(d).normalized()
-	for i in 400:
-		var nd := (obs.normalized().to_v3() + east * (60.0 / Planet.cfg.planet_radius)).normalized()
-		var nr := Planet.cfg.planet_radius + Planet.terrain_height(nd) + 2.0
-		obs = Vec3D.new(nd.x * nr, nd.y * nr, nd.z * nr)
-		Frames.rebase(obs)
-		terrain.set_observer(obs)
+	var nd := (d + east * (500.0 / Planet.cfg.planet_radius)).normalized()
+	var nr := Planet.cfg.planet_radius + Planet.terrain_height(nd) + 2.0
+	obs = Vec3D.new(nd.x * nr, nd.y * nr, nd.z * nr)
+	Frames.rebase(obs)
+	terrain.set_observer(obs)
+	settled = false
+	deadline = Time.get_ticks_msec() + 20000
+	while Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
-	var pending := 0
-	for i in 900:
-		await get_tree().process_frame
-		pending = 0
-		for root in terrain.roots:
-			pending += _resident_handoffs(root)
-		if int(terrain.stats()["in_flight"]) == 0 and pending == 0:
+		after = terrain.stats()["collision"]
+		if int(after["refreshes"]) > refreshes_before \
+				and int(after["entries"]) > 0 \
+				and int(after["resident"]) == int(after["entries"]) \
+				and int(after["queued"]) == 0 and int(after["in_flight"]) == 0:
+			settled = true
 			break
-	var holes := 0
-	for root in terrain.roots:
-		holes += _unmeshed_leaves(root)
-	check("walking away from a region leaves no holes behind", holes == 0,
-		"%d leaves claim a chunk they no longer have" % holes)
-	# Two levels of the same ground are only allowed on screen while a hand-off
-	# is dissolving between them. One that never commits is a level drawn over
-	# itself for good.
-	check("every LOD hand-over finishes", pending == 0,
-		"%d subtrees still part-way between levels" % pending)
+	check("moving refreshes the local collision bubble",
+		int(after["retired"]) > retired_before
+			and int(after["builds_installed"]) > installed_before,
+		"%d retired, %d installed" % [int(after["retired"]) - retired_before,
+			int(after["builds_installed"]) - installed_before])
+	check("the moved collision bubble finishes without holes", settled,
+		"%d/%d tiles resident" % [after["resident"], after["entries"]])
 
 	editor.queue_free()
 	terrain.queue_free()
 	await get_tree().process_frame
 	Deltas.clear()
-
-## Subtrees visibly part-way through an LOD hand-over. FastPlanetTerrain retains
-## a hidden coarse parent as an instant fallback after the hand-over commits; its
-## mere residency is deliberate cache state, not an unfinished transition.
-func _resident_handoffs(node) -> int:
-	var n := 0
-	if not node.is_leaf() and node.fine_vis > 0.0 and node.fine_vis < 1.0:
-		n += 1
-	for c in node.children:
-		n += _resident_handoffs(c)
-	return n
-
-## Leaves that report themselves as built (state 2) while holding no chunk.
-func _unmeshed_leaves(node) -> int:
-	if node.is_leaf():
-		return 1 if node.state == 2 and node.chunk == null else 0
-	var n := 0
-	for c in node.children:
-		n += _unmeshed_leaves(c)
-	return n
-
 func _a_land_cell() -> int:
 	var f := Planet.fields
 	var best := -1e30

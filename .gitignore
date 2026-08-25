@@ -8,4 +8,7 @@ bin/asterra_weather.pdb
 bin/asterra_weather.lib
 bin/asterra_weather.exp
 bin/asterra_weather.gdextension
+bin/asterra_weather.gdextension.uid
 bin/libasterra_weather.so
+bin/Release/
+bin/staging/
