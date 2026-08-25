@@ -1,0 +1,37 @@
+name: Apply Surface Native Patch
+
+on:
+  push:
+    branches:
+      - weather/0.0.5
+    paths:
+      - tools/surface_native_apply.trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble and apply patch
+        shell: bash
+        run: |
+          cat tools/surface_native.patch.part1 \
+              tools/surface_native.patch.part2 \
+              tools/surface_native.patch.part3 \
+              tools/surface_native.patch.part4 > /tmp/surface_native.patch
+          git apply --check /tmp/surface_native.patch
+          git apply /tmp/surface_native.patch
+          git diff --check
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add native/weather/src/weather_native.h native/weather/src/weather_native.cpp
+          git commit -m "Implement coupled terrain and water surface energy model"
+          git push origin HEAD:weather/0.0.5
