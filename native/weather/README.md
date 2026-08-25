@@ -53,6 +53,24 @@ Five interface fields carry vertical mass flux. Horizontal convergence, static i
 
 The default column contribution weights are `0.77, 0.90, 1.00, 1.07, 1.07, 1.19`. They approximate each level's pressure thickness and are normalized to a mean of one; all six can be changed live from the weather map.
 
+## Coupled surface energy model
+
+The atmospheric lower boundary now carries persistent land/ocean thermal and hydrological state instead of relaxing only toward a latitude curve. `SurfaceEnergy` uploads procedural elevation, water fraction, soil moisture and snow-free albedo after the planet bake, then supplies the live body-fixed Helion direction and N-body irradiance.
+
+Each global and local surface cell evolves:
+
+- surface and subsurface/mixed-layer temperature
+- land soil moisture
+- snow water equivalent, optical age and wetness
+- dynamic albedo
+- absorbed shortwave, sensible, latent and ground/deep-water heat fluxes
+
+The energy budget includes slope/aspect solar incidence, cloud attenuation from the six condensate layers, long-wave exchange, two-reservoir thermal inertia, wind-dependent bulk sensible heat exchange, wind-dependent evaporation/dew, precipitation recharge, snowfall, latent heat of fusion and snow insulation. Fresh snow starts near `0.89` albedo, ages toward roughly `0.72`, and wet snow can fall toward roughly `0.60`. Open water uses a much larger mixed-layer heat capacity than land, so the 11.5-hour day produces strong land/ocean thermal contrast without forcing unrealistic daily ocean swings.
+
+Sensible heat is returned to layer 0 potential temperature and evaporation/dew is returned to layer 0 specific humidity, closing the first runtime surface-atmosphere feedback loop. The surface debug RGBA contract is **R** temperature (220–330 K), **G** snow cover, **B** albedo, **A** soil wetness/free-water fraction.
+
+This first pass uses the global procedural macro elevation to derive surface normals and samples that state into the local nest. Fine local terrain horizon occlusion, kilometre/sub-kilometre surface remapping, sea ice and ocean horizontal transport remain separate follow-up systems.
+
 ## Runtime physical tuning
 
 Press `é` to open the weather map and `P` to open live physics calibration. Six bounded multipliers alter subsequent native solver steps without reinitializing its state:
@@ -68,7 +86,7 @@ The weather map also exposes **Weather speed** from paused `0×` through normal 
 
 `0×` disables the parameterized process, `1×` is the calibrated baseline, and `2×` doubles its rate or response subject to the solver's safety caps. The separate six altitude controls change cloud-column integration immediately. **Reset Earth-like defaults** restores both groups.
 
-The baseline uses the physical Earth rotation rate, Bolton/Tetens saturation humidity, pressure-dependent potential temperature, latent heat of vaporization and fusion, dry subtropical humidity belts, pressure-thickness layer integration, time-step-independent relaxation, and area-weighted zero-mean global pressure perturbations. These improve plausibility, but this remains a six-level hydrostatic gameplay model rather than a forecast-grade numerical weather prediction system.
+The baseline uses Asterra's locked 11.5-hour rotation rate and 1.10-bar surface pressure, Bolton/Tetens saturation humidity, pressure-dependent potential temperature, latent heat of vaporization and fusion, dry subtropical humidity belts, pressure-thickness layer integration, time-step-independent relaxation, and area-weighted zero-mean global pressure perturbations. These improve plausibility, but this remains a six-level hydrostatic gameplay model rather than a forecast-grade numerical weather prediction system.
 
 ### Global
 
