@@ -116,21 +116,38 @@ The Terrain debug tab exposes unlit views for:
 - geology / biome IDs
 - hydrology
 
-This is the primary tuning tool for the next passes.
+The same tab can disable scanned PBR detail independently, which makes it possible to compare geomorph/classification cost and appearance against texture-detail cost.
 
-### M5 — PBR material families — NEXT
+### M5 — PBR material families — IMPLEMENTED, FIRST PASS
 
-Replace flat classifier colors with the existing photographic terrain assets and additional geology-specific families while keeping the classifier as the source of material weights.
+`gpu_surface_pbr.gdshaderinc` adds precision-safe scanned surface detail while preserving the classifier as the source of material identity and large-scale colour.
 
-Required work:
+Current scanned families use the existing CC0 assets:
 
-- triplanar / tangent-space texture sampling appropriate to a sphere
-- material-scale control and stochastic anti-tiling
-- actual-family rock PBR sets
-- soil, mud, sand, scree, gravel, snow, grass and forest-floor families
-- distance/footprint filtering with no material rings
+- `ground003` — generic mineral/loose ground base
+- `leafy_grass` — vegetated open ground
+- `brown_mud` — wet cohesive ground
+- `forrest_ground_01` — forest floor
 
-### M6 — material microrelief — NEXT AFTER PBR
+Current implementation details:
+
+- triplanar projection, so the spherical terrain needs no authored UV unwrap
+- 4096 m wrapped floating-origin detail coordinate, calculated before conversion to `Vector3`
+- 1 m or 2 m physical tile periods that divide the 4096 m wrap exactly, preventing phase jumps at rebases
+- classifier-colour-preserving scan modulation rather than letting one scan repaint whole biomes
+- distance-gated scanned albedo/roughness detail
+- tighter near-field gating for normal-map cost
+- one generic loose-ground scan plus at most one specialised grass/mud/forest scan
+- live debug toggle for direct performance/quality comparison
+
+Still required for the mature M5 implementation:
+
+- stochastic anti-tiling / macro variation for repeated scans
+- dedicated PBR families for the 13 actual rock types
+- dedicated sand, scree, gravel and snow scans/procedural PBR
+- quality-tier texture budgets for lower GPUs
+
+### M6 — material microrelief — NEXT
 
 Use classified materials to control geometry and shading spectra:
 
@@ -141,7 +158,7 @@ Use classified materials to control geometry and shading spectra:
 - snow buildup
 - vegetation-ground roughness
 
-The current L0 spacing is 0.75 m, so centimetre/decimetre silhouette relief requires a future denser near-field geometry layer rather than simply adding higher-frequency displacement to the current vertices.
+The current L0 spacing is 0.75 m, so centimetre/decimetre silhouette relief requires a future denser near-field geometry layer rather than simply adding higher-frequency displacement to the current vertices. Until that layer exists, sub-metre relief belongs in normal/parallax shading rather than vertex displacement.
 
 ### M7 — iterative near-field GPU erosion
 
