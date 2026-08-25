@@ -12,6 +12,7 @@ signal coast_profile_requested
 
 ## [property, label, note, default]
 const TERRAIN_ROWS := [
+	["gpu_scatter", "GPU terrain scatter", "Toggles deterministic grass + geological/river stone candidate layers without changing terrain generation", true],
 	["microrelief", "Near-field geometric microrelief", "Toggles actual dense 1/4-L0 vertex displacement; the dense handoff patch itself remains active", true],
 	["pbr_detail", "Scanned PBR detail", "Toggles close-range scanned albedo, roughness and normal detail without changing geomorph or material weights", true],
 	["wireframe", "Wireframe", "Shows the actual concentric clipmap triangles", false],
@@ -112,7 +113,7 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	scroll.add_child(box)
 
 	box.add_child(_section_title("Concentric GPU clipmap"))
-	box.add_child(_note("Current renderer: coarse baked planet context → GPU geomorph → GPU materials → dense near-field microgeometry"))
+	box.add_child(_note("Current renderer: coarse baked planet context → GPU geomorph → GPU materials → dense microgeometry → GPU scatter"))
 
 	_geomorph_selector = OptionButton.new()
 	_geomorph_selector.custom_minimum_size = Vector2(0, 34)
@@ -159,7 +160,7 @@ func _build_terrain_tab(tabs: TabContainer) -> void:
 	reset.add_theme_font_size_override("font_size", 13)
 	reset.pressed.connect(_on_reset_inspection)
 	box.add_child(reset)
-	box.add_child(_note("Restores final materials + microrelief + PBR, clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
+	box.add_child(_note("Restores final materials + scatter + microrelief + PBR, clears ring labels, unfreezes, closes the cut and restores the normal 2× sink depth"))
 
 
 func _build_sky_tab(tabs: TabContainer) -> void:
@@ -292,6 +293,10 @@ func _note(text: String) -> Label:
 
 
 func _on_toggled(pressed: bool, key: String) -> void:
+	if key == "gpu_scatter":
+		if TerrainScatter.has_method("set_debug_enabled"):
+			TerrainScatter.call("set_debug_enabled", pressed)
+		return
 	if key == "ring_indicator":
 		if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
 			GroundGeometryClipmap.call("set_debug_ring_indicator", pressed)
@@ -320,11 +325,13 @@ func _on_reset_inspection() -> void:
 		var button_value: Variant = _buttons.get(key)
 		if button_value is CheckButton:
 			(button_value as CheckButton).set_pressed_no_signal(false)
-	for key_value: Variant in ["microrelief", "pbr_detail"]:
+	for key_value: Variant in ["gpu_scatter", "microrelief", "pbr_detail"]:
 		var key := String(key_value)
 		var button_value: Variant = _buttons.get(key)
 		if button_value is CheckButton:
 			(button_value as CheckButton).set_pressed_no_signal(true)
+	if TerrainScatter.has_method("set_debug_enabled"):
+		TerrainScatter.call("set_debug_enabled", true)
 	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
 		GroundGeometryClipmap.call("set_debug_ring_indicator", false)
 	if _geomorph_selector != null:
