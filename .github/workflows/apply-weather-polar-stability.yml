@@ -1,0 +1,418 @@
+name: Apply weather polar stability patch
+
+on:
+  push:
+    branches: ["weather/0.0.5"]
+    paths: [".github/workflows/apply-weather-polar-stability.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: weather/0.0.5
+          fetch-depth: 0
+
+      - name: Patch polar dynamics, moisture drift, warp UI and wind trails
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def must_replace(s, old, new, count=None, label="replacement"):
+              n = s.count(old)
+              if n == 0:
+                  raise SystemExit(f"{label}: source text not found")
+              if count is not None and n != count:
+                  raise SystemExit(f"{label}: expected {count}, found {n}")
+              return s.replace(old, new)
+
+          # ---------------- Native spherical dynamics ----------------
+          p = Path("native/weather/src/weather_native.cpp")
+          s = p.read_text(encoding="utf-8")
+
+          s = must_replace(s,
+              '''\t\t\t\tglobal_atm.v[i] = (2.0f + upper * 2.0f) * std::cos(lon * 2.0f + lat * 3.0f + upper * 1.85f);''',
+              '''\t\t\t\tglobal_atm.v[i] = polar_taper * (2.0f + upper * 2.0f)
+          \t\t\t\t\t* std::cos(lon * 2.0f + lat * 3.0f + upper * 1.85f);''',
+              1, "initial polar v taper")
+
+          s = must_replace(s,
+              '''\t\t\t\tfloat jet = 7.0f + 34.0f * upper;
+          \t\t\t\tjet *= std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
+          \t\t\t\tfloat trade = -9.0f * (1.0f - upper * 0.55f)
+          \t\t\t\t\t* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));
+          \t\t\t\tglobal_atm.u[i] = jet + trade + wave * (3.0f + upper * 3.5f);''',
+              '''\t\t\t\tfloat jet = 7.0f + 34.0f * upper;
+          \t\t\t\tjet *= std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
+          \t\t\t\t// Separate circumpolar jet. Its maximum is near 59 degrees and
+          \t\t\t\t// strengthens rapidly aloft, leaving the coordinate pole itself
+          \t\t\t\t// comparatively quiet like the terrestrial Antarctic vortex.
+          \t\t\t\tfloat polar_jet = (3.0f + 30.0f * upper)
+          \t\t\t\t\t* std::exp(-std::pow((alat - 1.03f) / 0.20f, 2.0f));
+          \t\t\t\tfloat trade = -9.0f * (1.0f - upper * 0.55f)
+          \t\t\t\t\t* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));
+          \t\t\t\tglobal_atm.u[i] = jet + polar_jet + trade + wave * (3.0f + upper * 3.5f);''',
+              1, "initial polar jet")
+
+          old_metric = '''\t\t\tfloat coslat = std::cos(lat);
+          \t\t\tfloat dx = is_global ? TAU_F * PLANET_RADIUS_M * coslat / float(w) : LOCAL_CELL_M;
+          \t\t\tfloat dy = is_global ? PI_F * PLANET_RADIUS_M / float(h) : LOCAL_CELL_M;
+          \t\t\tfloat coriolis = 2.0f * ROTATION_RATE * std::sin(lat);
+          \t\t\tfloat curvature = is_global ? std::tan(lat) / PLANET_RADIUS_M : 0.0f;'''
+          new_metric = '''\t\t\tfloat coslat = std::cos(lat);
+          \t\t\t// A regular lat/lon mesh has a coordinate singularity at the pole.
+          \t\t\t// Dynamics use a reduced-grid metric inside ~84 degrees while the
+          \t\t\t// post-step polar filter removes the redundant longitude DOFs.
+          \t\t\t// This preserves the circumpolar jet without a 60-m-wide top cell.
+          \t\t\tfloat metric_coslat = is_global ? std::max(std::abs(coslat), 0.10f) : 1.0f;
+          \t\t\tfloat dx = is_global ? TAU_F * PLANET_RADIUS_M * metric_coslat / float(w) : LOCAL_CELL_M;
+          \t\t\tfloat dy = is_global ? PI_F * PLANET_RADIUS_M / float(h) : LOCAL_CELL_M;
+          \t\t\tfloat coriolis = 2.0f * ROTATION_RATE * std::sin(lat);
+          \t\t\tfloat metric_lat = is_global ? std::clamp(lat, -1.3962634f, 1.3962634f) : lat;
+          \t\t\tfloat curvature = is_global ? std::tan(metric_lat) / PLANET_RADIUS_M : 0.0f;'''
+          if s.count(old_metric) != 2:
+              raise SystemExit(f"polar metric: expected 2 sites, found {s.count(old_metric)}")
+          s = s.replace(old_metric, new_metric)
+
+          s = must_replace(s,
+              '''\t\t\tfloat alat = std::abs(lat);
+          \t\t\tfloat sinlat = std::sin(alat);
+          \t\t\tfloat surface_t = 302.0f - 48.0f * std::pow(sinlat, 1.35f);''',
+              '''\t\t\tfloat alat = std::abs(lat);
+          \t\t\tfloat sinlat = std::sin(alat);
+          \t\t\tfloat polar_forcing_taper = smoothstep01(
+          \t\t\t\t(HALF_PI_F - alat) / (PI_F / 12.0f));
+          \t\t\tfloat surface_t = 302.0f - 48.0f * std::pow(sinlat, 1.35f);''',
+              1, "runtime polar forcing taper")
+
+          s = must_replace(s,
+              '''\t\t\tfloat target_u = (7.0f + 34.0f * upper)
+          \t\t\t\t* std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
+          \t\t\ttarget_u += -9.0f * (1.0f - upper * 0.55f)
+          \t\t\t\t* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));''',
+              '''\t\t\tfloat target_u = (7.0f + 34.0f * upper)
+          \t\t\t\t* std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
+          \t\t\ttarget_u += (3.0f + 30.0f * upper)
+          \t\t\t\t* std::exp(-std::pow((alat - 1.03f) / 0.20f, 2.0f));
+          \t\t\ttarget_u += -9.0f * (1.0f - upper * 0.55f)
+          \t\t\t\t* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));''',
+              1, "runtime polar jet")
+
+          s = must_replace(s,
+              '''\t\t\t\t\ttarget_v_lane[k] = amplitude * 0.78f * std::sin(phase3)
+          \t\t\t\t\t\t+ amplitude * (0.26f * std::cos(phase5) + 0.14f * std::sin(phase7));''',
+              '''\t\t\t\t\ttarget_v_lane[k] = polar_forcing_taper * (
+          \t\t\t\t\t\tamplitude * 0.78f * std::sin(phase3)
+          \t\t\t\t\t\t+ amplitude * (0.26f * std::cos(phase5) + 0.14f * std::sin(phase7)));''',
+              1, "runtime polar v taper")
+
+          old_tail = '''\tmeridional_filter(a.nprecip, 0.18f, false);
+          \tmeridional_filter(a.mass_flux, 0.36f, false);
+          }
+          '''
+          new_tail = '''\tmeridional_filter(a.nprecip, 0.18f, false);
+          \tmeridional_filter(a.mass_flux, 0.36f, false);
+          
+          \t// The final four rings represent an ever smaller physical cap but still
+          \t// carry 1024 longitude samples each. Collapse only those redundant DOFs
+          \t// toward their zonal means. The annular 50-70 degree polar jet is well
+          \t// outside this cap and therefore remains free to meander.
+          \tauto zonal_relax = [&](std::vector<float> &field, int offset, int y, float strength) {
+          \t\tint row = offset + y * a.width;
+          \t\tdouble sum = 0.0;
+          \t\tfor (int x = 0; x < a.width; ++x) sum += field[row + x];
+          \t\tfloat mean = float(sum / double(a.width));
+          \t\tfor (int x = 0; x < a.width; ++x) {
+          \t\t\tfield[row + x] = std::lerp(field[row + x], mean, strength);
+          \t\t}
+          \t};
+          \tstatic constexpr float CAP_STRENGTH[4] = {1.0f, 0.72f, 0.45f, 0.22f};
+          \tfor (int edge = 0; edge < 4; ++edge) {
+          \t\tfor (int y : {edge, a.height - 1 - edge}) {
+          \t\t\tfloat strength = CAP_STRENGTH[edge];
+          \t\t\tfor (int layer = 0; layer < LAYERS; ++layer) {
+          \t\t\t\tint off = a.layer_offset(layer);
+          \t\t\t\tzonal_relax(a.ntheta, off, y, strength);
+          \t\t\t\tzonal_relax(a.nq, off, y, strength);
+          \t\t\t\tzonal_relax(a.nu, off, y, strength);
+          \t\t\t\tzonal_relax(a.nliquid, off, y, strength);
+          \t\t\t\tzonal_relax(a.nice, off, y, strength);
+          \t\t\t\tzonal_relax(a.npressure, off, y, strength);
+          \t\t\t\tint row = off + y * a.width;
+          \t\t\t\tfor (int x = 0; x < a.width; ++x) a.nv[row + x] *= (1.0f - strength);
+          \t\t\t}
+          \t\t\tzonal_relax(a.nprecip, 0, y, strength);
+          \t\t\tfor (int interface_index = 0; interface_index < INTERFACES; ++interface_index) {
+          \t\t\t\tzonal_relax(a.mass_flux, a.interface_offset(interface_index), y, strength);
+          \t\t\t}
+          \t\t}
+          \t}
+          }
+          '''
+          s = must_replace(s, old_tail, new_tail, 1, "polar cap zonal collapse")
+          p.write_text(s, encoding="utf-8")
+
+          # ---------------- Sparse severe wrapper ----------------
+          p = Path("native/weather/src/weather_native_oklahoma.cpp")
+          s = p.read_text(encoding="utf-8")
+
+          s = must_replace(s,
+              '''\ttuning_weights[HUMIDITY] = requested_humidity_weight * (is_global ? 0.12f : 0.0f);''',
+              '''\t// Once the coupled surface is live, climatological humidity nudging
+          \t// must not act as an invisible water source. Surface evaporation/dew and
+          \t// precipitation then own the external atmospheric water budget.
+          \ttuning_weights[HUMIDITY] = requested_humidity_weight
+          \t\t* ((is_global && !surface_fields_ready) ? 0.12f : 0.0f);''',
+              1, "remove long-term humidity source")
+
+          insert_after = '''static inline float severe_smooth01(float x) {
+          \tx = std::clamp(x, 0.0f, 1.0f);
+          \treturn x * x * (3.0f - 2.0f * x);
+          }
+          '''
+          pressure_helper = '''static inline float severe_smooth01(float x) {
+          \tx = std::clamp(x, 0.0f, 1.0f);
+          \treturn x * x * (3.0f - 2.0f * x);
+          }
+          
+          // Post-dynamics Shapiro filter for the pure 2-delta-x pressure mode.
+          // The binomial stencil has near-unity response at synoptic wavelengths
+          // but zero response to a red/blue chessboard. Its strength is expressed
+          // as a physical 4-hour e-folding time, so changing dt does not retune it.
+          static void suppress_global_pressure_checkerboard(
+          \t\tWeatherNative::Atmosphere &a, float dt) {
+          \tstd::vector<float> source(a.npressure.begin(), a.npressure.end());
+          \tconst float strength = 1.0f - std::exp(-dt / (4.0f * 3600.0f));
+          \t#pragma omp parallel for schedule(static)
+          \tfor (int layer = 0; layer < WeatherNative::LAYERS; ++layer) {
+          \t\tint off = a.layer_offset(layer);
+          \t\tfor (int y = 0; y < a.height; ++y) {
+          \t\t\tint yn = std::max(y - 1, 0);
+          \t\t\tint ys = std::min(y + 1, a.height - 1);
+          \t\t\tfor (int x = 0; x < a.width; ++x) {
+          \t\t\t\tint xe = (x + 1) % a.width;
+          \t\t\t\tint xw = (x + a.width - 1) % a.width;
+          \t\t\t\tint c = off + x + y * a.width;
+          \t\t\t\tauto at = [&](int xx, int yy) -> float {
+          \t\t\t\t\treturn source[off + xx + yy * a.width];
+          \t\t\t\t};
+          \t\t\t\tfloat smooth = (
+          \t\t\t\t\t4.0f * source[c]
+          \t\t\t\t\t+ 2.0f * (at(xe, y) + at(xw, y) + at(x, yn) + at(x, ys))
+          \t\t\t\t\t+ at(xe, yn) + at(xw, yn) + at(xe, ys) + at(xw, ys))
+          \t\t\t\t\t* (1.0f / 16.0f);
+          \t\t\t\ta.npressure[c] = std::lerp(source[c], smooth, strength);
+          \t\t\t}
+          \t\t}
+          \t}
+          }
+          '''
+          s = must_replace(s, insert_after, pressure_helper, 1, "pressure helper")
+
+          s = must_replace(s,
+              '''\tvertical_pass(global_atm, true, dt);
+          \tfilter_global_poles(global_atm);
+          \tcenter_global_pressure(global_atm.npressure);''',
+              '''\tvertical_pass(global_atm, true, dt);
+          \tsuppress_global_pressure_checkerboard(global_atm, dt);
+          \tfilter_global_poles(global_atm);
+          \tcenter_global_pressure(global_atm.npressure);''',
+              1, "post-step pressure filter")
+          p.write_text(s, encoding="utf-8")
+
+          # ---------------- Weather-map warp control ----------------
+          p = Path("scripts/ui/weather_map.gd")
+          s = p.read_text(encoding="utf-8")
+          s = must_replace(s,
+              '''const FIELD_BUILD_BUDGET_USEC := 2600
+          ''',
+              '''const FIELD_BUILD_BUDGET_USEC := 2600
+          const WARP_SPEEDS: Array[float] = [
+          \t0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0,
+          \t64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0,
+          ]
+          ''', 1, "warp speeds constant")
+          s = must_replace(s,
+              '''var _warp_backlogged := false
+          ''',
+              '''var _warp_backlogged := false
+          var _speed_slider_dragging := false
+          ''', 1, "warp dragging state")
+          s = must_replace(s,
+              '''\t_speed_slider.min_value = 0.0
+          \t_speed_slider.max_value = 14.0
+          \t_speed_slider.step = 1.0
+          \t_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
+          \t_speed_slider.tooltip_text = "Logarithmic weather warp: paused, then powers of two from 1× to 8192×. Above 256× the global model spins up and the local nest resynchronises afterward."
+          \t_speed_slider.value_changed.connect(_on_speed_slider_changed)
+          ''',
+              '''\t_speed_slider.min_value = 0.0
+          \t_speed_slider.max_value = float(WARP_SPEEDS.size() - 1)
+          \t_speed_slider.step = 1.0
+          \t_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
+          \t_speed_slider.tooltip_text = "Discrete weather warp: pause, 0.25×, 0.5×, 1×, then powers of two to 8192×. Dragging previews the value and commits it on release."
+          \t_speed_slider.value_changed.connect(_on_speed_slider_changed)
+          \t_speed_slider.drag_started.connect(_on_speed_slider_drag_started)
+          \t_speed_slider.drag_ended.connect(_on_speed_slider_drag_ended)
+          ''', 1, "warp slider setup")
+
+          old_funcs = '''func _on_speed_slider_changed(slider_value: float) -> void:
+          \tWeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+          \t_update_speed_label(WeatherSystem.simulation_speed)
+          
+          
+          func _on_external_speed_changed(value: float) -> void:
+          \tif _speed_slider != null:
+          \t\t_speed_slider.set_value_no_signal(_speed_to_slider(value))
+          \t_update_speed_label(value)
+          
+          
+          func _step_warp(steps: int) -> void:
+          \tvar slider_value := clampf(
+          \t\t_speed_to_slider(WeatherSystem.simulation_speed) + float(steps), 0.0, 14.0)
+          \tWeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+          
+          
+          func _slider_to_speed(slider_value: float) -> float:
+          \tif slider_value < 0.5:
+          \t\treturn 0.0
+          \treturn pow(2.0, slider_value - 1.0)
+          
+          
+          func _speed_to_slider(speed: float) -> float:
+          \tif speed < 0.5:
+          \t\treturn 0.0
+          \treturn clampf(log(speed) / log(2.0) + 1.0, 1.0, 14.0)
+          '''
+          new_funcs = '''func _on_speed_slider_drag_started() -> void:
+          \t_speed_slider_dragging = true
+          
+          
+          func _on_speed_slider_drag_ended(value_changed: bool) -> void:
+          \t_speed_slider_dragging = false
+          \tif value_changed and _speed_slider != null:
+          \t\tWeatherSystem.set_simulation_speed(_slider_to_speed(_speed_slider.value))
+          \t_update_speed_label(WeatherSystem.simulation_speed)
+          
+          
+          func _on_speed_slider_changed(slider_value: float) -> void:
+          \tvar preview := _slider_to_speed(slider_value)
+          \tif not _speed_slider_dragging:
+          \t\tWeatherSystem.set_simulation_speed(preview)
+          \t_update_speed_label(preview)
+          
+          
+          func _on_external_speed_changed(value: float) -> void:
+          \tif _speed_slider != null and not _speed_slider_dragging:
+          \t\t_speed_slider.set_value_no_signal(_speed_to_slider(value))
+          \t_update_speed_label(value)
+          
+          
+          func _step_warp(steps: int) -> void:
+          \tvar slider_value := clampf(
+          \t\t_speed_to_slider(WeatherSystem.simulation_speed) + float(steps),
+          \t\t0.0, float(WARP_SPEEDS.size() - 1))
+          \tWeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+          
+          
+          func _slider_to_speed(slider_value: float) -> float:
+          \tvar index := clampi(int(round(slider_value)), 0, WARP_SPEEDS.size() - 1)
+          \treturn WARP_SPEEDS[index]
+          
+          
+          func _speed_to_slider(speed: float) -> float:
+          \tif speed <= 0.01:
+          \t\treturn 0.0
+          \tvar best_index := 1
+          \tvar best_error := INF
+          \tfor i in range(1, WARP_SPEEDS.size()):
+          \t\tvar error := absf(log(maxf(speed, 0.001)) - log(WARP_SPEEDS[i]))
+          \t\tif error < best_error:
+          \t\t\tbest_error = error
+          \t\t\tbest_index = i
+          \treturn float(best_index)
+          '''
+          s = must_replace(s, old_funcs, new_funcs, 1, "warp functions")
+          p.write_text(s, encoding="utf-8")
+
+          # ---------------- Time-based wind streaks ----------------
+          p = Path("shaders/weather_wind_particles.gdshader")
+          s = p.read_text(encoding="utf-8")
+          s = must_replace(s,
+              '''// Streak travel per real second is lifetime * rate. Both were raised together
+          // so the flow reads as moving weather without shortening the fade cycle.
+          uniform float u_particle_lifetime_s = 36000.0;
+          uniform float u_animation_rate = 0.14;
+          uniform float u_line_length = 0.018;
+          uniform float u_line_width = 0.00125;
+          uniform float u_speed_reference = 65.0;
+          ''',
+              '''// Advection window controls how far through the meteorological field one
+          // visual cycle travels. Trail time is physical: line length = wind speed
+          // * trail_time / planet_radius, so faster winds automatically leave a
+          // longer streak instead of merely stretching by an arbitrary factor.
+          uniform float u_advection_window_s = 36000.0;
+          uniform float u_trail_time_s = 1200.0;
+          uniform float u_animation_rate = 0.14;
+          uniform float u_min_line_length = 0.0022;
+          uniform float u_max_line_length = 0.036;
+          uniform float u_line_width = 0.00125;
+          uniform float u_speed_reference = 65.0;
+          ''', 1, "wind uniforms")
+
+          s = must_replace(s,
+              '''\tfloat phase = INSTANCE_CUSTOM.b;
+          \tfloat size_jitter = 0.70 + INSTANCE_CUSTOM.a * 0.60;
+          \tfloat life = fract(TIME * u_animation_rate + phase);
+          \tfloat travel = life * u_particle_lifetime_s;
+          \tvec2 uv = seed_uv;
+          ''',
+              '''\tfloat phase = INSTANCE_CUSTOM.b;
+          \tfloat size_jitter = 0.70 + INSTANCE_CUSTOM.a * 0.60;
+          \tvec4 seed_field = textureLod(u_wind, seed_uv, 0.0);
+          \tfloat seed_speed = length(seed_field.rg);
+          \tfloat speed01 = clamp(seed_speed / u_speed_reference, 0.0, 1.0);
+          \t// Fast particles persist longer in real time. This makes the dense,
+          \t// high-speed polar/jet-stream bands read as continuous trajectories.
+          \tfloat persistence = mix(0.72, 1.75, speed01);
+          \tfloat life = fract(TIME * u_animation_rate / persistence + phase);
+          \tfloat travel = life * u_advection_window_s;
+          \tvec2 uv = seed_uv;
+          ''', 1, "wind time persistence")
+
+          s = must_replace(s,
+              '''\tfloat speed_scale = mix(0.52, 1.55, clamp(speed / u_speed_reference, 0.0, 1.0));
+          \tfloat along = VERTEX.x * u_line_length * speed_scale * size_jitter;
+          \tfloat across = VERTEX.y * u_line_width * size_jitter;
+          ''',
+              '''\tfloat trail_length = clamp(
+          \t\tspeed * u_trail_time_s / u_planet_radius_m,
+          \t\tu_min_line_length, u_max_line_length);
+          \tfloat along = VERTEX.x * trail_length * size_jitter;
+          \tfloat across = VERTEX.y * u_line_width * size_jitter;
+          ''', 1, "wind physical trail length")
+          s = s.replace("max(abs(cos(lat)), 0.075)", "max(abs(cos(lat)), 0.10)")
+          p.write_text(s, encoding="utf-8")
+
+      - name: Sanity checks
+        shell: bash
+        run: |
+          grep -q "metric_coslat" native/weather/src/weather_native.cpp
+          grep -q "polar_jet" native/weather/src/weather_native.cpp
+          grep -q "suppress_global_pressure_checkerboard" native/weather/src/weather_native_oklahoma.cpp
+          grep -q "surface_fields_ready) ? 0.12f : 0.0f" native/weather/src/weather_native_oklahoma.cpp
+          grep -q "WARP_SPEEDS" scripts/ui/weather_map.gd
+          grep -q "u_trail_time_s" shaders/weather_wind_particles.gdshader
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add native/weather/src/weather_native.cpp native/weather/src/weather_native_oklahoma.cpp scripts/ui/weather_map.gd shaders/weather_wind_particles.gdshader
+          git commit -m "Stabilize polar vortex and long-run weather"
+          git push origin weather/0.0.5
