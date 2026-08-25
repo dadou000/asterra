@@ -55,6 +55,12 @@ public:
 		std::vector<float> nprecip;
 		std::vector<float> mass_flux;
 
+		// Capped-convection memory. 0 is a loaded but inhibited column; 1 is an
+		// actively released convective column. This lets CAPE accumulate under an
+		// elevated warm layer and release only at convergence/dryline/heat triggers
+		// instead of turning every humid grid box into permanent cloud.
+		std::vector<float> convective_activation;
+
 		// Derived diagnostics, never duplicated as prognostic wind state.
 		std::vector<float> divergence;
 		std::vector<float> vorticity;
@@ -173,8 +179,19 @@ private:
 	static float clamp01(float x);
 	static int tuning_index(const StringName &name);
 
+	// The tuned translation unit wraps a few baseline functions while continuing
+	// to include the proven AVX2 core. Keeping explicit declarations here makes
+	// that wrapper type-safe without duplicating the rest of the implementation.
+	void horizontal_pass_original(Atmosphere &a, bool is_global, float dt);
+	void vertical_pass_original(Atmosphere &a, bool is_global, float dt);
+	void step_global_original(float dt);
+	void step_local_original(float dt);
+	PackedFloat32Array get_global_weather_rgba_original() const;
+	PackedFloat32Array get_local_weather_rgba_original() const;
+
 protected:
 	static void _bind_methods();
+	static void _bind_methods_original();
 
 public:
 	WeatherNative();
