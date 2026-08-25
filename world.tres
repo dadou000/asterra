@@ -9,9 +9,12 @@
 [resource]
 script = ExtResource("1_cfg")
 world_seed = 4707684752384786688
-planet_radius = 1000000.0
+planet_radius = 3500000.0
 face_res = 192
 ocean_fraction = 0.62
-; 0.0.5 terrain test: the global cube-sphere stops at ~48 m vertex spacing.
-; The ground geometry clipmap supplies the missing 24 -> 0.75 m bands locally.
-quadtree_max_depth = 10
+solar_constant = 1420.0
+axial_tilt_deg = 26.0
+; 0.0.5 terrain test: with Asterra now 3500 km in radius, depth 12 keeps the
+; global cube-sphere's finest geometric scale close to the old ~48 m target.
+; The ground geometry clipmap still supplies the final local metre/sub-metre bands.
+quadtree_max_depth = 12
