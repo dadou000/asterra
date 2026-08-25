@@ -1,0 +1,59 @@
+name: Godot terrain validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+  pull_request:
+    paths:
+      - "shaders/**"
+      - "scripts/terrain/**"
+      - "tests/validate_terrain_shader.gd"
+      - ".github/workflows/godot-terrain-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  terrain-shader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Validate active terrain shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          set +e
+          "$GODOT" --headless --path . --script res://tests/validate_terrain_shader.gd > /tmp/terrain-shader.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/terrain-shader.log
+
+          if [ "$status" -ne 0 ]; then
+            echo "Godot exited with status $status"
+            exit "$status"
+          fi
+
+          if ! grep -q "TERRAIN_SHADER_LOAD_OK" /tmp/terrain-shader.log; then
+            echo "Terrain shader smoke-test completion marker was not emitted."
+            exit 1
+          fi
+
+          if grep -Eiq "shader compilation failed|shader.*parse error|parse error.*shader|error:.*gdshader" /tmp/terrain-shader.log; then
+            echo "Godot reported a shader parser/compiler error."
+            exit 1
+          fi
