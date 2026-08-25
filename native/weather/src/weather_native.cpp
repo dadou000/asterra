@@ -15,7 +15,36 @@ static constexpr float KAPPA = 0.286f;
 // Asterra's locked 11.5-hour sidereal rotation. This drives Coriolis and
 // planetary-vorticity terms in both the global and local atmosphere.
 static constexpr float ROTATION_RATE = TAU_F / (11.5f * 3600.0f);
-static constexpr float P0 = 100000.0f;
+// Asterra's locked mean sea-level surface pressure.
+static constexpr float P0 = 110000.0f;
+
+// Coupled lower-boundary energy/water constants.
+static constexpr float SIGMA_SB = 5.670374419e-8f;
+static constexpr float CP_AIR = 1004.0f;
+static constexpr float RD_AIR = 287.05f;
+static constexpr float LV_WATER = 2.50e6f;
+static constexpr float LF_ICE = 334000.0f;
+static constexpr float CP_SNOW = 2100.0f;
+static constexpr float BULK_HEAT_COEFF = 0.0014f;
+static constexpr float BULK_MOISTURE_COEFF = 0.0013f;
+static constexpr float MIN_EXCHANGE_WIND_MPS = 0.5f;
+static constexpr float BOTTOM_AIR_MASS_KG_M2 = 1500.0f;
+static constexpr float LAND_WATER_RESERVOIR_KG_M2 = 150.0f;
+static constexpr float MAX_PRECIP_KG_M2_S = 0.008333333f; // 30 mm/h water equivalent.
+static constexpr float LAND_DRY_CAPACITY_J_M2_K = 0.55e6f;
+static constexpr float LAND_WET_CAPACITY_J_M2_K = 2.20e6f;
+static constexpr float OCEAN_MIXED_CAPACITY_J_M2_K = 82.0e6f; // ~20 m mixed layer.
+static constexpr float LAND_SUBSURFACE_CAPACITY_J_M2_K = 8.0e6f;
+static constexpr float OCEAN_DEEP_CAPACITY_J_M2_K = 420.0e6f;
+static constexpr float LAND_GROUND_CONDUCTANCE_W_M2_K = 7.0f;
+static constexpr float OCEAN_DEEP_CONDUCTANCE_W_M2_K = 1.8f;
+static constexpr float FRESH_SNOW_ALBEDO = 0.89f;
+static constexpr float AGED_SNOW_ALBEDO = 0.72f;
+static constexpr float WET_SNOW_ALBEDO = 0.60f;
+static constexpr float OCEAN_ALBEDO = 0.060f;
+static constexpr float SNOW_COVER_EFOLD_KG_M2 = 12.0f;
+static constexpr float SNOW_ALBEDO_AGE_TAU_S = 5.0f * 11.5f * 3600.0f;
+
 static constexpr std::array<float, WeatherNative::LAYERS> WIND_DRAG_TAU_S = {
 	28800.0f, 43200.0f, 64800.0f, 129600.0f, 259200.0f, 432000.0f
 };
@@ -112,6 +141,19 @@ void WeatherNative::Atmosphere::resize(int p_width, int p_height) {
 	mass_flux.assign(interfaces, 0.0f);
 }
 
+void WeatherNative::SurfaceState::resize(int p_width, int p_height) {
+	width = p_width;
+	height = p_height;
+	cells = width * height;
+	for (auto *a : {&elevation_m, &water_fraction, &soil_moisture, &base_albedo,
+		&dir_x, &dir_y, &dir_z, &normal_x, &normal_y, &normal_z,
+		&temperature_k, &subsurface_temperature_k, &snow_swe_kg_m2,
+		&snow_age_s, &snow_wetness, &albedo, &absorbed_solar_w_m2,
+		&sensible_flux_w_m2, &latent_flux_w_m2, &ground_flux_w_m2}) {
+		a->assign(cells, 0.0f);
+	}
+}
+
 int WeatherNative::wrap_x(int x, int w) {
 	x %= w;
 	return x < 0 ? x + w : x;
@@ -149,6 +191,9 @@ int WeatherNative::local_cell(int x, int y) {
 WeatherNative::WeatherNative() {
 	global_atm.resize(GLOBAL_W, GLOBAL_H);
 	local_atm.resize(LOCAL_W, LOCAL_H);
+	global_surface.resize(GLOBAL_W, GLOBAL_H);
+	local_surface.resize(LOCAL_W, LOCAL_H);
+	initialize_global_surface_geometry();
 }
 
 void WeatherNative::_bind_methods() {
@@ -170,6 +215,10 @@ void WeatherNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_local_east"), &WeatherNative::get_local_east);
 	ClassDB::bind_method(D_METHOD("get_local_north"), &WeatherNative::get_local_north);
 	ClassDB::bind_method(D_METHOD("get_local_span_m"), &WeatherNative::get_local_span_m);
+	ClassDB::bind_method(D_METHOD("set_global_surface_fields", "fields"), &WeatherNative::set_global_surface_fields);
+	ClassDB::bind_method(D_METHOD("set_solar_forcing", "sun_direction_body", "irradiance_w_m2"), &WeatherNative::set_solar_forcing);
+	ClassDB::bind_method(D_METHOD("get_global_surface_rgba"), &WeatherNative::get_global_surface_rgba);
+	ClassDB::bind_method(D_METHOD("get_local_surface_rgba"), &WeatherNative::get_local_surface_rgba);
 }
 
 float WeatherNative::clamp01(float x) {
@@ -305,6 +354,128 @@ float WeatherNative::sample_global_layer(const std::vector<float> &field, int la
 	return std::lerp(std::lerp(a00, a10, fx), std::lerp(a01, a11, fx), fy);
 }
 
+float WeatherNative::sample_global_scalar(const std::vector<float> &field, float x, float y) const {
+	int x0 = int(std::floor(x));
+	int y0 = int(std::floor(y));
+	float fx = x - float(x0);
+	float fy = y - float(y0);
+	float a00 = field[spherical_cell(x0, y0, GLOBAL_W, GLOBAL_H)];
+	float a10 = field[spherical_cell(x0 + 1, y0, GLOBAL_W, GLOBAL_H)];
+	float a01 = field[spherical_cell(x0, y0 + 1, GLOBAL_W, GLOBAL_H)];
+	float a11 = field[spherical_cell(x0 + 1, y0 + 1, GLOBAL_W, GLOBAL_H)];
+	return std::lerp(std::lerp(a00, a10, fx), std::lerp(a01, a11, fx), fy);
+}
+
+float WeatherNative::sample_global_surface_scalar(const std::vector<float> &field, const Vector3 &d) const {
+	Vector3 n = d.normalized();
+	float lon = std::atan2(n.z, n.x);
+	if (lon < 0.0f) lon += TAU_F;
+	float lat = std::asin(std::clamp(n.y, -1.0f, 1.0f));
+	float x = lon / TAU_F * float(GLOBAL_W) - 0.5f;
+	float y = (HALF_PI_F - lat) / PI_F * float(GLOBAL_H) - 0.5f;
+	return sample_global_scalar(field, x, y);
+}
+
+void WeatherNative::initialize_global_surface_geometry() {
+	for (int y = 0; y < GLOBAL_H; ++y) {
+		float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(GLOBAL_H);
+		float sin_lat = std::sin(lat);
+		float cos_lat = std::cos(lat);
+		for (int x = 0; x < GLOBAL_W; ++x) {
+			float lon = TAU_F * (float(x) + 0.5f) / float(GLOBAL_W);
+			int c = x + y * GLOBAL_W;
+			Vector3 d(cos_lat * std::cos(lon), sin_lat, cos_lat * std::sin(lon));
+			global_surface.dir_x[c] = d.x;
+			global_surface.dir_y[c] = d.y;
+			global_surface.dir_z[c] = d.z;
+			global_surface.normal_x[c] = d.x;
+			global_surface.normal_y[c] = d.y;
+			global_surface.normal_z[c] = d.z;
+		}
+	}
+}
+
+void WeatherNative::update_global_surface_normals() {
+	for (int y = 0; y < GLOBAL_H; ++y) {
+		float lat = HALF_PI_F - PI_F * (float(y) + 0.5f) / float(GLOBAL_H);
+		float cos_lat = std::cos(lat);
+		float dx = std::max(TAU_F * PLANET_RADIUS_M * std::max(cos_lat, 0.01f) / float(GLOBAL_W), 1000.0f);
+		float dy = PI_F * PLANET_RADIUS_M / float(GLOBAL_H);
+		for (int x = 0; x < GLOBAL_W; ++x) {
+			int c = x + y * GLOBAL_W;
+			Vector3 d(global_surface.dir_x[c], global_surface.dir_y[c], global_surface.dir_z[c]);
+			float lon = TAU_F * (float(x) + 0.5f) / float(GLOBAL_W);
+			Vector3 east(-std::sin(lon), 0.0f, std::cos(lon));
+			Vector3 north = east.cross(d).normalized();
+			float h_e = global_surface.elevation_m[spherical_cell(x + 1, y, GLOBAL_W, GLOBAL_H)];
+			float h_w = global_surface.elevation_m[spherical_cell(x - 1, y, GLOBAL_W, GLOBAL_H)];
+			float h_n = global_surface.elevation_m[spherical_cell(x, y - 1, GLOBAL_W, GLOBAL_H)];
+			float h_s = global_surface.elevation_m[spherical_cell(x, y + 1, GLOBAL_W, GLOBAL_H)];
+			float slope_e = (h_e - h_w) * (0.5f / dx);
+			float slope_n = (h_n - h_s) * (0.5f / dy);
+			Vector3 terrain_normal = (d - east * slope_e - north * slope_n).normalized();
+			// Free water follows the geoid rather than the underlying seabed/lake floor.
+			float water = std::clamp(global_surface.water_fraction[c], 0.0f, 1.0f);
+			Vector3 n = terrain_normal.lerp(d, water).normalized();
+			global_surface.normal_x[c] = n.x;
+			global_surface.normal_y[c] = n.y;
+			global_surface.normal_z[c] = n.z;
+		}
+	}
+}
+
+void WeatherNative::initialize_global_surface_state() {
+	const int l0 = global_atm.layer_offset(0);
+	const float sf0 = sigma_temperature_factor(0);
+	for (int c = 0; c < global_surface.cells; ++c) {
+		float air_t = global_atm.theta[l0 + c] * sf0;
+		float water = std::clamp(global_surface.water_fraction[c], 0.0f, 1.0f);
+		float moisture = std::clamp(global_surface.soil_moisture[c], 0.0f, 1.0f);
+		float terrain_lapse = std::max(global_surface.elevation_m[c], 0.0f) * 0.0045f;
+		float land_t = air_t + 2.4f - terrain_lapse;
+		float ocean_t = air_t + 1.0f;
+		float ts = std::clamp(std::lerp(land_t, ocean_t, water), 225.0f, 315.0f);
+		global_surface.temperature_k[c] = ts;
+		global_surface.subsurface_temperature_k[c] = ts;
+		float cold = std::clamp((273.15f - ts) / 12.0f, 0.0f, 1.0f);
+		global_surface.snow_swe_kg_m2[c] = (1.0f - water) * cold * 60.0f;
+		global_surface.snow_age_s[c] = cold > 0.01f ? 2.0f * 11.5f * 3600.0f : 0.0f;
+		global_surface.snow_wetness[c] = 0.0f;
+		global_surface.albedo[c] = std::lerp(
+			std::clamp(global_surface.base_albedo[c], 0.05f, 0.60f), OCEAN_ALBEDO, water);
+		global_surface.absorbed_solar_w_m2[c] = 0.0f;
+		global_surface.sensible_flux_w_m2[c] = 0.0f;
+		global_surface.latent_flux_w_m2[c] = 0.0f;
+		global_surface.ground_flux_w_m2[c] = 0.0f;
+		global_surface.soil_moisture[c] = moisture;
+	}
+}
+
+void WeatherNative::set_global_surface_fields(const PackedFloat32Array &fields) {
+	if (fields.size() != GLOBAL_W * GLOBAL_H * 4) {
+		return;
+	}
+	for (int c = 0; c < global_surface.cells; ++c) {
+		global_surface.elevation_m[c] = fields[c * 4 + 0];
+		global_surface.water_fraction[c] = std::clamp(fields[c * 4 + 1], 0.0f, 1.0f);
+		global_surface.soil_moisture[c] = std::clamp(fields[c * 4 + 2], 0.0f, 1.0f);
+		global_surface.base_albedo[c] = std::clamp(fields[c * 4 + 3], 0.04f, 0.65f);
+	}
+	update_global_surface_normals();
+	initialize_global_surface_state();
+	surface_fields_ready = true;
+	// Rebuild the nest so its lower boundary is sampled from the new geography
+	// rather than retaining the all-zero placeholder surface.
+	local_initialized = false;
+}
+
+void WeatherNative::set_solar_forcing(const Vector3 &sun_direction_body, float irradiance_w_m2) {
+	if (sun_direction_body.length_squared() > 1e-10f) {
+		solar_direction_body = sun_direction_body.normalized();
+	}
+	solar_irradiance_w_m2 = std::clamp(irradiance_w_m2, 0.0f, 5000.0f);
+}
+
 void WeatherNative::swap_state(Atmosphere &a) {
 	a.theta.swap(a.ntheta);
 	a.q.swap(a.nq);
@@ -319,6 +490,7 @@ void WeatherNative::swap_state(Atmosphere &a) {
 void WeatherNative::step_global(float dt) {
 	dt = std::clamp(dt, 1.0f, 180.0f);
 	horizontal_pass(global_atm, true, dt);
+	if (surface_fields_ready) surface_pass(global_atm, global_surface, true, dt);
 	vertical_pass(global_atm, true, dt);
 	filter_global_poles(global_atm);
 	center_global_pressure(global_atm.npressure);
@@ -613,6 +785,185 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 	}
 }
 
+
+void WeatherNative::surface_pass(Atmosphere &a, SurfaceState &surface, bool is_global, float dt) {
+	if (surface.cells != a.cells) return;
+
+	const int l0 = a.layer_offset(0);
+	const float sf0 = sigma_temperature_factor(0);
+	const float p0_layer = P0 * SIGMA[0];
+
+	for (int c = 0; c < a.cells; ++c) {
+		Vector3 d(surface.dir_x[c], surface.dir_y[c], surface.dir_z[c]);
+		Vector3 n(surface.normal_x[c], surface.normal_y[c], surface.normal_z[c]);
+		if (d.length_squared() < 0.5f) continue;
+		d.normalize();
+		if (n.length_squared() < 0.5f) n = d;
+		else n.normalize();
+
+		float water = std::clamp(surface.water_fraction[c], 0.0f, 1.0f);
+		float land = 1.0f - water;
+		float moisture = std::clamp(surface.soil_moisture[c], 0.0f, 1.0f);
+		float ts = std::clamp(surface.temperature_k[c], 210.0f, 330.0f);
+		float tsub = std::clamp(surface.subsurface_temperature_k[c], 210.0f, 330.0f);
+		float swe = std::max(surface.snow_swe_kg_m2[c], 0.0f);
+		float snow_age = std::max(surface.snow_age_s[c], 0.0f);
+		float snow_wet = std::clamp(surface.snow_wetness[c], 0.0f, 1.0f);
+
+		float air_theta = a.ntheta[l0 + c];
+		float air_t = std::clamp(air_theta * sf0, 205.0f, 325.0f);
+		float air_q = std::clamp(a.nq[l0 + c], 0.00001f, 0.040f);
+		float p_abs = std::clamp(p0_layer + a.npressure[l0 + c], 80000.0f, 115000.0f);
+		float rho_air = p_abs / std::max(RD_AIR * air_t, 1.0f);
+		float wind = std::sqrt(a.nu[l0 + c] * a.nu[l0 + c] + a.nv[l0 + c] * a.nv[l0 + c]);
+		float exchange_wind = std::max(wind, MIN_EXCHANGE_WIND_MPS);
+
+		// Surface snowfall/rain. The atmospheric precipitation field is an
+		// instantaneous intensity diagnostic, mapped here to at most 30 mm/h.
+		float precip_mass = std::clamp(a.nprecip[c], 0.0f, 1.0f) * MAX_PRECIP_KG_M2_S;
+		float snow_fraction = land * std::clamp((274.15f - air_t) / 4.0f, 0.0f, 1.0f);
+		snow_fraction *= std::clamp((275.15f - ts) / 4.0f, 0.0f, 1.0f);
+		float snowfall = precip_mass * snow_fraction;
+		float rainfall = precip_mass * (1.0f - snow_fraction);
+		float fresh_snow = snowfall * dt;
+		if (fresh_snow > 1e-6f) {
+			swe += fresh_snow;
+			// New crystals dominate optical age quickly even under old snow.
+			snow_age *= std::exp(-fresh_snow / 2.0f);
+		}
+		if (land > 0.0f && rainfall > 0.0f) {
+			moisture = std::clamp(moisture + rainfall * dt * land / LAND_WATER_RESERVOIR_KG_M2, 0.0f, 1.0f);
+		}
+
+		// Dynamic snow albedo: fresh -> aged, then wetness darkens it further.
+		float snow_cover = land * (1.0f - std::exp(-swe / SNOW_COVER_EFOLD_KG_M2));
+		float age_fraction = 1.0f - std::exp(-snow_age / SNOW_ALBEDO_AGE_TAU_S);
+		float dry_snow_albedo = std::lerp(FRESH_SNOW_ALBEDO, AGED_SNOW_ALBEDO, age_fraction);
+		float snow_albedo = std::lerp(dry_snow_albedo, WET_SNOW_ALBEDO, snow_wet);
+		float snow_free_albedo = std::lerp(
+			std::clamp(surface.base_albedo[c], 0.04f, 0.65f), OCEAN_ALBEDO, water);
+		float albedo = std::clamp(std::lerp(snow_free_albedo, snow_albedo, snow_cover), 0.03f, 0.94f);
+
+		// Cloud optical attenuation is derived from the six prognostic condensate
+		// reservoirs, not the renderer's aggregate weather texture.
+		float condensate = 0.0f;
+		for (int layer = 0; layer < LAYERS; ++layer) {
+			int i = a.layer_offset(layer) + c;
+			condensate += (a.nliquid[i] + a.nice[i]) * layer_weights[layer];
+		}
+		float cloud = std::clamp(1.0f - std::exp(-condensate * 700.0f), 0.0f, 1.0f);
+
+		float radial_mu = std::max(d.dot(solar_direction_body), 0.0f);
+		float slope_mu = std::max(n.dot(solar_direction_body), 0.0f);
+		// Planetary horizon gates direct light; the local terrain normal then
+		// gives slope/aspect heating. A later horizon map can multiply this term.
+		float direct_mu = radial_mu > 0.0f ? slope_mu : 0.0f;
+		float clear_transmission = 0.72f;
+		float cloud_direct = std::exp(-2.0f * cloud);
+		float direct_sw = solar_irradiance_w_m2 * direct_mu * clear_transmission * cloud_direct;
+		float diffuse_sw = solar_irradiance_w_m2 * radial_mu
+			* (0.10f + 0.13f * cloud) * (1.0f - 0.35f * cloud);
+		float absorbed_sw = std::max((direct_sw + diffuse_sw) * (1.0f - albedo), 0.0f);
+
+		// Net long-wave cooling. Humid/cloudy air is a stronger IR emitter.
+		float rh = std::clamp(air_q / std::max(qsat_scalar(air_t, p_abs), 1e-6f), 0.0f, 1.2f);
+		float sky_emissivity = std::clamp(0.68f + 0.17f * rh + 0.13f * cloud, 0.60f, 0.98f);
+		float surface_emissivity = std::lerp(0.95f, 0.98f, water);
+		float lw_up = surface_emissivity * SIGMA_SB * ts * ts * ts * ts;
+		float lw_down = sky_emissivity * SIGMA_SB * air_t * air_t * air_t * air_t;
+		float net_lw_loss = lw_up - lw_down;
+
+		// Bulk aerodynamic sensible exchange. Positive means surface -> air;
+		// increasing wind therefore cools a hot surface and warms a cold one.
+		float sensible = rho_air * CP_AIR * BULK_HEAT_COEFF * exchange_wind * (ts - air_t);
+		sensible = std::clamp(sensible, -500.0f, 500.0f);
+
+		// Bulk latent exchange. Land evaporation is moisture-limited; open water
+		// is effectively unlimited. Negative values are dew/condensation.
+		float q_surface_sat = qsat_scalar(ts, P0);
+		float humidity_gradient = q_surface_sat - air_q;
+		float evap_availability = std::lerp(0.08f + 0.92f * moisture, 1.0f, water);
+		if (humidity_gradient < 0.0f) evap_availability = 1.0f;
+		float evap_mass_flux = rho_air * BULK_MOISTURE_COEFF * exchange_wind
+			* humidity_gradient * evap_availability;
+		evap_mass_flux = std::clamp(evap_mass_flux, -0.00020f, 0.00028f);
+		float latent = std::clamp(evap_mass_flux * LV_WATER, -500.0f, 700.0f);
+
+		if (land > 0.0f) {
+			moisture = std::clamp(
+				moisture - evap_mass_flux * dt * land / LAND_WATER_RESERVOIR_KG_M2,
+				0.0f, 1.0f);
+		}
+
+		// Two thermal reservoirs provide actual inertia. Snow adds heat capacity
+		// and sharply reduces conduction to the deeper land reservoir.
+		float land_capacity = std::lerp(LAND_DRY_CAPACITY_J_M2_K, LAND_WET_CAPACITY_J_M2_K, moisture);
+		float surface_capacity = std::lerp(land_capacity, OCEAN_MIXED_CAPACITY_J_M2_K, water)
+			+ swe * CP_SNOW;
+		float subsurface_capacity = std::lerp(
+			LAND_SUBSURFACE_CAPACITY_J_M2_K, OCEAN_DEEP_CAPACITY_J_M2_K, water);
+		float conductance = std::lerp(
+			LAND_GROUND_CONDUCTANCE_W_M2_K, OCEAN_DEEP_CONDUCTANCE_W_M2_K, water);
+		conductance *= 1.0f / (1.0f + swe * 0.08f * land);
+		float ground_flux = conductance * (ts - tsub);
+
+		float net_surface = absorbed_sw - net_lw_loss - sensible - latent - ground_flux;
+		float energy = net_surface * dt;
+
+		// A snowpack pins the surface near melting while positive energy is spent
+		// on fusion. Meltwater returns to the land moisture reservoir.
+		if (swe > 0.0f && ts >= 272.65f && energy > 0.0f) {
+			float melt_kg_m2 = std::min(swe, energy / LF_ICE);
+			swe -= melt_kg_m2;
+			energy -= melt_kg_m2 * LF_ICE;
+			if (land > 0.0f) {
+				moisture = std::clamp(
+					moisture + melt_kg_m2 * land / LAND_WATER_RESERVOIR_KG_M2,
+					0.0f, 1.0f);
+			}
+		}
+
+		ts += energy / std::max(surface_capacity, 1.0f);
+		tsub += ground_flux * dt / std::max(subsurface_capacity, 1.0f);
+		ts = std::clamp(ts, 210.0f, 330.0f);
+		tsub = std::clamp(tsub, 215.0f, 325.0f);
+
+		// Snow optical aging and wetting/refreezing.
+		if (swe > 1e-5f) {
+			snow_age += dt;
+			float melt_wet = std::clamp((ts - 271.5f) / 2.5f, 0.0f, 1.0f);
+			float rain_wet = std::clamp(rainfall / std::max(MAX_PRECIP_KG_M2_S * 0.25f, 1e-8f), 0.0f, 1.0f);
+			float target_wet = std::max(melt_wet, rain_wet);
+			float wet_relax = 1.0f - std::exp(-dt / 1800.0f);
+			snow_wet = std::lerp(snow_wet, target_wet, wet_relax);
+			if (ts < 270.0f) snow_wet *= std::exp(-dt / 3600.0f);
+		} else {
+			swe = 0.0f;
+			snow_age = 0.0f;
+			snow_wet = 0.0f;
+		}
+
+		// Return turbulent heat and moisture directly to atmospheric layer 0.
+		float air_delta_t = sensible * dt / (BOTTOM_AIR_MASS_KG_M2 * CP_AIR);
+		float air_delta_q = evap_mass_flux * dt / BOTTOM_AIR_MASS_KG_M2;
+		a.ntheta[l0 + c] = std::clamp(
+			a.ntheta[l0 + c] + air_delta_t / sf0, 220.0f, 430.0f);
+		a.nq[l0 + c] = std::clamp(a.nq[l0 + c] + air_delta_q, 0.00001f, 0.032f);
+
+		surface.temperature_k[c] = ts;
+		surface.subsurface_temperature_k[c] = tsub;
+		surface.soil_moisture[c] = moisture;
+		surface.snow_swe_kg_m2[c] = swe;
+		surface.snow_age_s[c] = snow_age;
+		surface.snow_wetness[c] = snow_wet;
+		surface.albedo[c] = albedo;
+		surface.absorbed_solar_w_m2[c] = absorbed_sw;
+		surface.sensible_flux_w_m2[c] = sensible;
+		surface.latent_flux_w_m2[c] = latent;
+		surface.ground_flux_w_m2[c] = ground_flux;
+	}
+}
+
 void WeatherNative::vertical_pass(Atmosphere &a, bool is_global, float dt) {
 	const __m256 zero = _mm256_setzero_ps();
 	const float max_mix = is_global ? 0.085f : 0.12f;
@@ -862,8 +1213,56 @@ void WeatherNative::initialize_local() {
 			local_atm.precip[c] = 0.0f;
 		}
 	}
+	if (surface_fields_ready) initialize_local_surface();
 	local_initialized = true;
 	diagnose(local_atm, false);
+}
+
+
+void WeatherNative::initialize_local_surface() {
+	float half = LOCAL_CELL_M * float(LOCAL_W) * 0.5f;
+	for (int y = 0; y < LOCAL_H; ++y) {
+		for (int x = 0; x < LOCAL_W; ++x) {
+			float ex = (float(x) + 0.5f) * LOCAL_CELL_M - half;
+			float ny = (float(y) + 0.5f) * LOCAL_CELL_M - half;
+			Vector3 d = (local_center + local_east * (ex / PLANET_RADIUS_M)
+				+ local_north * (ny / PLANET_RADIUS_M)).normalized();
+			int c = x + y * LOCAL_W;
+			local_surface.dir_x[c] = d.x;
+			local_surface.dir_y[c] = d.y;
+			local_surface.dir_z[c] = d.z;
+			local_surface.elevation_m[c] = sample_global_surface_scalar(global_surface.elevation_m, d);
+			local_surface.water_fraction[c] = std::clamp(
+				sample_global_surface_scalar(global_surface.water_fraction, d), 0.0f, 1.0f);
+			local_surface.soil_moisture[c] = std::clamp(
+				sample_global_surface_scalar(global_surface.soil_moisture, d), 0.0f, 1.0f);
+			local_surface.base_albedo[c] = std::clamp(
+				sample_global_surface_scalar(global_surface.base_albedo, d), 0.04f, 0.65f);
+			Vector3 n(
+				sample_global_surface_scalar(global_surface.normal_x, d),
+				sample_global_surface_scalar(global_surface.normal_y, d),
+				sample_global_surface_scalar(global_surface.normal_z, d));
+			if (n.length_squared() < 1e-8f) n = d;
+			else n.normalize();
+			local_surface.normal_x[c] = n.x;
+			local_surface.normal_y[c] = n.y;
+			local_surface.normal_z[c] = n.z;
+			local_surface.temperature_k[c] = sample_global_surface_scalar(global_surface.temperature_k, d);
+			local_surface.subsurface_temperature_k[c] = sample_global_surface_scalar(global_surface.subsurface_temperature_k, d);
+			local_surface.snow_swe_kg_m2[c] = std::max(
+				sample_global_surface_scalar(global_surface.snow_swe_kg_m2, d), 0.0f);
+			local_surface.snow_age_s[c] = std::max(
+				sample_global_surface_scalar(global_surface.snow_age_s, d), 0.0f);
+			local_surface.snow_wetness[c] = std::clamp(
+				sample_global_surface_scalar(global_surface.snow_wetness, d), 0.0f, 1.0f);
+			local_surface.albedo[c] = std::clamp(
+				sample_global_surface_scalar(global_surface.albedo, d), 0.03f, 0.94f);
+			local_surface.absorbed_solar_w_m2[c] = 0.0f;
+			local_surface.sensible_flux_w_m2[c] = 0.0f;
+			local_surface.latent_flux_w_m2[c] = 0.0f;
+			local_surface.ground_flux_w_m2[c] = 0.0f;
+		}
+	}
 }
 
 void WeatherNative::nudge_local_boundaries(float dt) {
@@ -901,6 +1300,7 @@ void WeatherNative::step_local(float dt) {
 	if (!local_initialized) initialize_local();
 	dt = std::clamp(dt, 1.0f, 40.0f);
 	horizontal_pass(local_atm, false, dt);
+	if (surface_fields_ready) surface_pass(local_atm, local_surface, false, dt);
 	vertical_pass(local_atm, false, dt);
 	swap_state(local_atm);
 	diagnose(local_atm, false);
@@ -985,6 +1385,30 @@ PackedFloat32Array WeatherNative::get_global_diagnostics_rgba() const {
 
 PackedFloat32Array WeatherNative::get_local_diagnostics_rgba() const {
 	return diagnostics_rgba_from(local_atm);
+}
+
+static PackedFloat32Array surface_rgba_from(const WeatherNative::SurfaceState &surface) {
+	PackedFloat32Array out;
+	out.resize(surface.cells * 4);
+	float *w = out.ptrw();
+	for (int c = 0; c < surface.cells; ++c) {
+		float snow_cover = (1.0f - std::clamp(surface.water_fraction[c], 0.0f, 1.0f))
+			* (1.0f - std::exp(-std::max(surface.snow_swe_kg_m2[c], 0.0f) / SNOW_COVER_EFOLD_KG_M2));
+		w[c * 4 + 0] = std::clamp((surface.temperature_k[c] - 220.0f) / 110.0f, 0.0f, 1.0f);
+		w[c * 4 + 1] = std::clamp(snow_cover, 0.0f, 1.0f);
+		w[c * 4 + 2] = std::clamp(surface.albedo[c], 0.0f, 1.0f);
+		w[c * 4 + 3] = std::clamp(std::lerp(
+			surface.soil_moisture[c], 1.0f, surface.water_fraction[c]), 0.0f, 1.0f);
+	}
+	return out;
+}
+
+PackedFloat32Array WeatherNative::get_global_surface_rgba() const {
+	return surface_rgba_from(global_surface);
+}
+
+PackedFloat32Array WeatherNative::get_local_surface_rgba() const {
+	return surface_rgba_from(local_surface);
 }
 
 } // namespace godot
