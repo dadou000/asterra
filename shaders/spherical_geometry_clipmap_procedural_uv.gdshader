@@ -6,6 +6,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_d
 #include "res://shaders/gpu_geomorph.gdshaderinc"
 #include "res://shaders/gpu_surface_antitile.gdshaderinc"
 #include "res://shaders/gpu_surface_classifier.gdshaderinc"
+#include "res://shaders/gpu_rock_pbr.gdshaderinc"
 #include "res://shaders/gpu_surface_pbr.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
@@ -349,13 +350,30 @@ void fragment() {
 				primary, secondary, soil, surface, climate, biome, rock_id);
 			float base_roughness = sc_compose_roughness(primary, secondary, surface);
 			float camera_dist = length(v_render - CAMERA_POSITION_WORLD);
+			float material_total = dot(primary, vec4(1.0)) + dot(secondary, vec4(1.0));
+			float rock_mix_w = material_total > 1e-4 ? primary.r / material_total : 0.0;
+
+			vec3 rock_albedo;
+			float rock_roughness;
+			float material_specular;
+			vec3 rock_n;
+			float rock_normal_w;
+			rrp_apply(v_render + u_detail_origin, wn, camera_dist,
+				rock_id, geology, structure, rock_mix_w,
+				base_albedo, base_roughness,
+				rock_albedo, rock_roughness, material_specular, rock_n, rock_normal_w);
+			if (rock_normal_w > 0.001) {
+				wn = normalize(mix(wn, rock_n, rock_normal_w));
+				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+			}
+
 			vec3 dpos = spbr_antitile_position(v_render + u_detail_origin);
 			vec3 albedo;
 			float roughness;
 			vec3 scan_n;
 			float scan_normal_w;
 			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
-				base_albedo, base_roughness, albedo, roughness, scan_n, scan_normal_w);
+				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
 			if (scan_normal_w > 0.001) {
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
 				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
@@ -363,7 +381,7 @@ void fragment() {
 
 			ALBEDO = albedo;
 			ROUGHNESS = roughness;
-			SPECULAR = 0.22;
+			SPECULAR = material_specular;
 			METALLIC = 0.0;
 
 			vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
