@@ -1,6 +1,5 @@
 // GPU geomorph synthesis primitives.
-// This file is self-contained apart from gpu_planet_context.gdshaderinc and
-// planet_surface_lookup.gdshaderinc being included by the caller.
+// The caller includes gpu_planet_context.gdshaderinc first.
 
 uint gm_hash(ivec3 p, uint seed) {
 	uint h = uint(p.x) * 0x8da6b343u;
@@ -42,8 +41,7 @@ float gm_fbm(vec3 p, uint seed) {
 }
 
 float gm_ridged(vec3 p, uint seed) {
-	float n = gm_fbm(p, seed);
-	return 1.0 - abs(n);
+	return 1.0 - abs(gm_fbm(p, seed));
 }
 
 vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
@@ -54,51 +52,50 @@ vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
 	return p + w * strength;
 }
 
-// Eight-cell approximation to 3-D Worley. Full 27-neighbour Worley is too
-// expensive for every terrain vertex; this still produces broad cellular divides
-// and is intended to be combined with ridged fBm and domain warping.
+// Correct 3-D Worley neighbourhood. This only runs in the broad mountain
+// skeleton band and is gated by mountain weight.
 float gm_cellular_ridge(vec3 p, uint seed) {
 	ivec3 base = ivec3(floor(p));
 	float f1 = 1e9;
 	float f2 = 1e9;
-	for (int z = 0; z <= 1; z++) {
-		for (int y = 0; y <= 1; y++) {
-			for (int x = 0; x <= 1; x++) {
+	for (int z = -1; z <= 1; z++) {
+		for (int y = -1; y <= 1; y++) {
+			for (int x = -1; x <= 1; x++) {
 				ivec3 c = base + ivec3(x, y, z);
 				vec3 jitter = vec3(
 					gm_rand(c, seed + 3u),
 					gm_rand(c, seed + 5u),
 					gm_rand(c, seed + 7u));
 				float d = length(p - (vec3(c) + jitter));
-				if (d < f1) { f2 = f1; f1 = d; }
-				else if (d < f2) { f2 = d; }
+				if (d < f1) {
+					f2 = f1;
+					f1 = d;
+				} else if (d < f2) {
+					f2 = d;
+				}
 			}
 		}
 	}
 	return clamp(1.0 - (f2 - f1) * 2.4, 0.0, 1.0);
 }
 
-vec4 gm_landform_weights(vec3 dir, float macro_h) {
-	vec4 soil = asterra_ctx_soil(dir);
-	vec4 surface = asterra_ctx_surface(dir);
-	vec4 geology = asterra_ctx_geology(dir);
-	vec4 structure = asterra_ctx_structure(dir);
-	vec4 climate = asterra_ctx_climate(dir);
-	vec4 hydro = asterra_ctx_hydrology(dir);
-
+vec4 gm_landform_weights_from_context(float macro_h, vec4 soil, vec4 surface,
+		vec4 geology, vec4 structure, vec4 climate, vec4 hydro) {
 	float uplift = max(asterra_ctx_uplift_signed(structure), 0.0);
 	float fault = structure.g;
+	float plate_boundary = geology.a;
 	float floodplain = structure.b;
 	float wetland = structure.a;
 	float moisture = surface.g;
 	float vegetation = surface.b;
 	float sand = soil.r;
-	float erodible = geology.g;
+	float erodible = geology.r;
 	float temp_c = asterra_ctx_temperature_c(climate);
 	float precip = asterra_ctx_precip_mm(climate);
 
-	float altitude = smoothstep(350.0, 2200.0, max(macro_h, 0.0));
-	float mountain = clamp(max(uplift * 0.9 + fault * 0.55, altitude * 0.55), 0.0, 1.0);
+	float altitude = smoothstep(450.0, 2600.0, max(macro_h, 0.0));
+	float tectonic = clamp(uplift * 0.82 + fault * 0.50 + plate_boundary * 0.28, 0.0, 1.0);
+	float mountain = clamp(max(tectonic, altitude * 0.50), 0.0, 1.0);
 	float arid = clamp((1.0 - moisture) * (1.0 - clamp(precip / 900.0, 0.0, 1.0))
 		* (0.35 + sand * 0.85) * (1.0 - vegetation * 0.55), 0.0, 1.0);
 	float cold = 1.0 - smoothstep(-12.0, 4.0, temp_c);
@@ -108,26 +105,42 @@ vec4 gm_landform_weights(vec3 dir, float macro_h) {
 	return vec4(mountain, arid, glacial, depositional);
 }
 
+vec4 gm_landform_weights(vec3 dir, float macro_h) {
+	return gm_landform_weights_from_context(macro_h,
+		asterra_ctx_soil(dir), asterra_ctx_surface(dir), asterra_ctx_geology(dir),
+		asterra_ctx_structure(dir), asterra_ctx_climate(dir), asterra_ctx_hydrology(dir));
+}
+
 float gm_band_weight(float wavelength_m, float spacing_m) {
 	float x = clamp((wavelength_m - spacing_m * 4.0) / max(spacing_m * 4.0, 1e-5), 0.0, 1.0);
 	return x * x * (3.0 - 2.0 * x);
 }
 
+vec3 gm_flow_world(vec3 dir, vec2 flow_xy) {
+	vec3 ref_axis = abs(dir.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 right = normalize(cross(ref_axis, dir));
+	vec3 up = normalize(cross(dir, right));
+	vec3 flow = right * flow_xy.x + up * flow_xy.y;
+	return dot(flow, flow) > 1e-5 ? normalize(flow) : vec3(0.0);
+}
+
 float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		float macro_h, uint seed) {
 	vec3 world_m = dir * planet_radius;
-	vec4 weights = gm_landform_weights(dir, macro_h);
 	vec4 soil = asterra_ctx_soil(dir);
 	vec4 surface = asterra_ctx_surface(dir);
 	vec4 geology = asterra_ctx_geology(dir);
+	vec4 structure = asterra_ctx_structure(dir);
+	vec4 climate = asterra_ctx_climate(dir);
 	vec4 hydro = asterra_ctx_hydrology(dir);
+	vec4 weights = gm_landform_weights_from_context(
+		macro_h, soil, surface, geology, structure, climate, hydro);
 
 	float mountain = weights.r;
 	float arid = weights.g;
 	float glacial = weights.b;
 	float depositional = weights.a;
-	float hardness = 1.15 - geology.g * 0.45;
-
+	float hardness = 1.20 - geology.r * 0.48;
 	float h = 0.0;
 
 	float w16k = gm_band_weight(16000.0, spacing_m);
@@ -138,7 +151,7 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 	}
 
 	float w6k = gm_band_weight(6000.0, spacing_m);
-	if (w6k > 0.001 && mountain > 0.02) {
+	if (w6k > 0.001 && mountain > 0.08) {
 		vec3 p = gm_domain_warp(world_m / 6000.0, seed + 31u, 1.1);
 		float cells = gm_cellular_ridge(p, seed + 37u);
 		float ridge = gm_ridged(p * 1.55, seed + 41u);
@@ -154,17 +167,20 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		h += ((ridge * 2.0 - 1.0) * 72.0 * mountain + detail * 24.0) * w1400;
 	}
 
-	// Analytic drainage incision: use the baked discharge as the large-scale
-	// hydrologic prior and a warped ridged field for sub-grid tributaries.
 	float w420 = gm_band_weight(420.0, spacing_m);
 	if (w420 > 0.001) {
-		vec3 p = gm_domain_warp(world_m / 420.0, seed + 71u, 0.55);
+		vec3 flow = gm_flow_world(dir, asterra_ctx_flow(hydro));
+		vec3 sample_m = world_m;
+		if (dot(flow, flow) > 0.1) {
+			float along_q = dot(sample_m, flow);
+			vec3 along = flow * along_q;
+			vec3 across = sample_m - along;
+			sample_m = along * 0.42 + across * 1.45;
+		}
+		vec3 p = gm_domain_warp(sample_m / 420.0, seed + 71u, 0.55);
 		float channel = pow(gm_ridged(p, seed + 73u), 4.6);
-		float discharge = hydro.b;
-		float incision = channel * mix(2.0, 34.0, discharge) * (1.0 - depositional * 0.78);
+		float incision = channel * mix(2.0, 34.0, hydro.b) * (1.0 - depositional * 0.78);
 		h -= incision * w420;
-		// Material removed from narrow channels is represented as a broader,
-		// lower-amplitude depositional shoulder rather than disappearing.
 		float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
 		h += fan * depositional * mix(1.0, 12.0, surface.a) * w420;
 	}
@@ -182,7 +198,6 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		h += gm_value(world_m / 24.0, seed + 109u) * 0.9 * w24;
 	}
 
-	// Glacial terrain suppresses short-frequency rock noise and restores broad flow.
 	if (glacial > 0.01) {
 		float ice = gm_fbm(world_m / 2600.0 + vec3(2.0, -7.0, 5.0), seed + 127u);
 		h = mix(h, h * 0.62 + ice * 52.0, glacial * 0.72);
