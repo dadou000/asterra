@@ -52,31 +52,40 @@ vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
 	return p + w * strength;
 }
 
-// Correct 3-D Worley neighbourhood. This only runs in the broad mountain
-// skeleton band and is gated by mountain weight.
+// Reduced-cost 3-D cellular ridge. Feature points stay near each cell centre and
+// we inspect the current cell plus the neighbour toward the closest boundary on
+// each axis (8 candidates total). That avoids the strong directional bias of the
+// old +XYZ-only search without paying 27-cell Worley cost at every terrain vertex.
 float gm_cellular_ridge(vec3 p, uint seed) {
 	ivec3 base = ivec3(floor(p));
+	vec3 f = fract(p);
+	ivec3 side = ivec3(
+		f.x < 0.5 ? -1 : 1,
+		f.y < 0.5 ? -1 : 1,
+		f.z < 0.5 ? -1 : 1);
 	float f1 = 1e9;
 	float f2 = 1e9;
-	for (int z = -1; z <= 1; z++) {
-		for (int y = -1; y <= 1; y++) {
-			for (int x = -1; x <= 1; x++) {
-				ivec3 c = base + ivec3(x, y, z);
+	for (int z = 0; z <= 1; z++) {
+		for (int y = 0; y <= 1; y++) {
+			for (int x = 0; x <= 1; x++) {
+				ivec3 c = base + ivec3(x * side.x, y * side.y, z * side.z);
 				vec3 jitter = vec3(
 					gm_rand(c, seed + 3u),
 					gm_rand(c, seed + 5u),
 					gm_rand(c, seed + 7u));
-				float d = length(p - (vec3(c) + jitter));
-				if (d < f1) {
+				vec3 feature = vec3(c) + vec3(0.25) + jitter * 0.50;
+				vec3 delta = p - feature;
+				float d2 = dot(delta, delta);
+				if (d2 < f1) {
 					f2 = f1;
-					f1 = d;
-				} else if (d < f2) {
-					f2 = d;
+					f1 = d2;
+				} else if (d2 < f2) {
+					f2 = d2;
 				}
 			}
 		}
 	}
-	return clamp(1.0 - (f2 - f1) * 2.4, 0.0, 1.0);
+	return clamp(1.0 - (f2 - f1) * 2.8, 0.0, 1.0);
 }
 
 vec4 gm_landform_weights_from_context(float macro_h, vec4 soil, vec4 surface,
@@ -116,11 +125,13 @@ float gm_band_weight(float wavelength_m, float spacing_m) {
 	return x * x * (3.0 - 2.0 * x);
 }
 
+// Must exactly match CubeSphere.tangent_basis(): [east, north], with the same
+// polar fallback axis. The hydrology context stores flow components in this basis.
 vec3 gm_flow_world(vec3 dir, vec2 flow_xy) {
-	vec3 ref_axis = abs(dir.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-	vec3 right = normalize(cross(ref_axis, dir));
-	vec3 up = normalize(cross(dir, right));
-	vec3 flow = right * flow_xy.x + up * flow_xy.y;
+	vec3 basis_up = abs(dir.y) > 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+	vec3 east = normalize(cross(basis_up, dir));
+	vec3 north = normalize(cross(dir, east));
+	vec3 flow = east * flow_xy.x + north * flow_xy.y;
 	return dot(flow, flow) > 1e-5 ? normalize(flow) : vec3(0.0);
 }
 
