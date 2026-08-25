@@ -86,11 +86,12 @@ void vertex() {
 
 void fragment() {
 	vec2 uv = globe_uv(v_object_dir);
+	vec2 field_uv = vec2(fract(uv.x + 0.5), uv.y);
 	vec3 base = texture(u_base, uv).rgb;
-	vec4 w = texture(u_weather, uv);
-	vec4 d = texture(u_diagnostics, uv);
-	vec4 p = texture(u_products, uv);
-	vec4 wind = texture(u_wind, uv);
+	vec4 w = texture(u_weather, field_uv);
+	vec4 d = texture(u_diagnostics, field_uv);
+	vec4 p = texture(u_products, field_uv);
+	vec4 wind = texture(u_wind, field_uv);
 	vec3 product;
 
 	if (u_product == 0) {
@@ -128,13 +129,11 @@ void fragment() {
 	vec3 col = mix(base * 0.34, product, u_overlay_strength);
 	if (u_product == 1) col = product;
 
-	// Subtle 15-degree graticule that remains readable when zoomed in.
 	float gx = abs(fract(uv.x * 24.0 + 0.5) - 0.5);
 	float gy = abs(fract(uv.y * 12.0 + 0.5) - 0.5);
 	float grid = max(1.0 - smoothstep(0.485, 0.499, gx), 1.0 - smoothstep(0.485, 0.499, gy));
 	col = mix(col, vec3(0.72, 0.82, 0.92), grid * u_grid_strength);
 
-	// Very small limb lift gives the globe a readable edge without fake lighting.
 	float limb = pow(1.0 - abs(dot(normalize(NORMAL), normalize(VIEW))), 4.0);
 	EMISSION = col + vec3(0.04, 0.16, 0.24) * limb;
 	ALBEDO = vec3(0.0);
