@@ -7,12 +7,27 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_fast.gd"
 
 const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 const DEFAULT_SINK_SCALE: float = 2.0
+const DETAIL_ORIGIN_WRAP_M: float = 4096.0
+
+const PBR_GROUND_ALBEDO: Texture2D = preload("res://assets/textures/terrain/ground003_diff_2k.jpg")
+const PBR_GROUND_NORMAL: Texture2D = preload("res://assets/textures/terrain/ground003_nor_gl_2k.jpg")
+const PBR_GROUND_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/ground003_rough_2k.jpg")
+const PBR_GRASS_ALBEDO: Texture2D = preload("res://assets/textures/terrain/leafy_grass_diff_2k.jpg")
+const PBR_GRASS_NORMAL: Texture2D = preload("res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg")
+const PBR_GRASS_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/leafy_grass_rough_2k.jpg")
+const PBR_MUD_ALBEDO: Texture2D = preload("res://assets/textures/terrain/brown_mud_diff_2k.jpg")
+const PBR_MUD_NORMAL: Texture2D = preload("res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg")
+const PBR_MUD_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/brown_mud_rough_2k.jpg")
+const PBR_FOREST_ALBEDO: Texture2D = preload("res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg")
+const PBR_FOREST_NORMAL: Texture2D = preload("res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg")
+const PBR_FOREST_ROUGHNESS: Texture2D = preload("res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg")
 
 var _debug_freeze := false
 var _debug_side_cut := false
 var _debug_sink_scale: float = DEFAULT_SINK_SCALE
 var _debug_geomorph_mode: int = 0
 var _bound_ctx_generation: int = -1
+var _pbr_bound := false
 
 
 func _ready() -> void:
@@ -90,6 +105,7 @@ func _bind_gpu_resources(force: bool) -> void:
 		_material.set_shader_parameter("u_macro_face_res", float(macro_res))
 	_material.set_shader_parameter("u_macro_ready", 1.0 if macro != null else 0.0)
 	_bind_planet_context(force)
+	_bind_surface_pbr(force)
 
 
 func _bind_planet_context(force: bool) -> void:
@@ -113,8 +129,38 @@ func _bind_planet_context(force: bool) -> void:
 	_material.set_shader_parameter("u_ctx_ready", 1.0)
 
 
+func _bind_surface_pbr(force: bool) -> void:
+	if _pbr_bound and not force:
+		return
+	_material.set_shader_parameter("u_pbr_ground_albedo", PBR_GROUND_ALBEDO)
+	_material.set_shader_parameter("u_pbr_ground_normal", PBR_GROUND_NORMAL)
+	_material.set_shader_parameter("u_pbr_ground_roughness", PBR_GROUND_ROUGHNESS)
+	_material.set_shader_parameter("u_pbr_grass_albedo", PBR_GRASS_ALBEDO)
+	_material.set_shader_parameter("u_pbr_grass_normal", PBR_GRASS_NORMAL)
+	_material.set_shader_parameter("u_pbr_grass_roughness", PBR_GRASS_ROUGHNESS)
+	_material.set_shader_parameter("u_pbr_mud_albedo", PBR_MUD_ALBEDO)
+	_material.set_shader_parameter("u_pbr_mud_normal", PBR_MUD_NORMAL)
+	_material.set_shader_parameter("u_pbr_mud_roughness", PBR_MUD_ROUGHNESS)
+	_material.set_shader_parameter("u_pbr_forest_albedo", PBR_FOREST_ALBEDO)
+	_material.set_shader_parameter("u_pbr_forest_normal", PBR_FOREST_NORMAL)
+	_material.set_shader_parameter("u_pbr_forest_roughness", PBR_FOREST_ROUGHNESS)
+	_material.set_shader_parameter("u_pbr_enabled", 1.0)
+	_pbr_bound = true
+
+
+func _wrapped_detail_origin() -> Vector3:
+	# Do the modulo while the Vec3D components are still double-precision scalar
+	# values. Converting the full million-metre origin to Vector3 first would lose
+	# centimetre-scale precision before the wrap had a chance to recover it.
+	return Vector3(
+		fposmod(float(Frames.origin.x), DETAIL_ORIGIN_WRAP_M),
+		fposmod(float(Frames.origin.y), DETAIL_ORIGIN_WRAP_M),
+		fposmod(float(Frames.origin.z), DETAIL_ORIGIN_WRAP_M))
+
+
 func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_origin", origin)
+	_material.set_shader_parameter("u_detail_origin", _wrapped_detail_origin())
 	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
@@ -322,6 +368,7 @@ func gpu_stream_stats() -> Dictionary:
 		"procedural_gpu": true,
 		"visual_pages": false,
 		"cpu_material_clipmap": false,
+		"pbr_scans": true,
 		"macro_upsample": 2,
 		"debug_frozen": _debug_freeze,
 		"debug_side_cut": _debug_side_cut,
