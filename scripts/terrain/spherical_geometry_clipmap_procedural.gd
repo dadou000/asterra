@@ -14,9 +14,9 @@ const DETAIL_ORIGIN_WRAP_M: float = 4096.0
 # preload() here can therefore make the entire terrain inheritance chain appear
 # unresolvable even though the GDScript itself is valid. Assets are loaded once
 # when the live material is bound instead.
-const PBR_GROUND_ALBEDO_PATH := "res://assets/textures/terrain/ground003_diff_2k.jpg"
-const PBR_GROUND_NORMAL_PATH := "res://assets/textures/terrain/ground003_nor_gl_2k.jpg"
-const PBR_GROUND_ROUGHNESS_PATH := "res://assets/textures/terrain/ground003_rough_2k.jpg"
+const PBR_GROUND_ALBEDO_PATH := "res://assets/textures/terrain/ground003_color_2k.jpg"
+const PBR_GROUND_NORMAL_PATH := "res://assets/textures/terrain/ground003_normal_gl_2k.jpg"
+const PBR_GROUND_ROUGHNESS_PATH := "res://assets/textures/terrain/ground003_roughness_2k.jpg"
 const PBR_GRASS_ALBEDO_PATH := "res://assets/textures/terrain/leafy_grass_diff_2k.jpg"
 const PBR_GRASS_NORMAL_PATH := "res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg"
 const PBR_GRASS_ROUGHNESS_PATH := "res://assets/textures/terrain/leafy_grass_rough_2k.jpg"
@@ -136,8 +136,14 @@ func _bind_planet_context(force: bool) -> void:
 
 
 func _load_pbr_texture(path: String) -> Texture2D:
+	if not ResourceLoader.exists(path, "Texture2D"):
+		push_warning("Terrain PBR texture is unavailable; scanned PBR will remain disabled: %s" % path)
+		return null
 	var resource: Resource = load(path)
-	return resource as Texture2D
+	if resource is Texture2D:
+		return resource as Texture2D
+	push_warning("Terrain PBR resource is not a Texture2D: %s" % path)
+	return null
 
 
 func _bind_surface_pbr(force: bool) -> void:
