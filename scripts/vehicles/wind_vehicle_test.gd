@@ -25,6 +25,7 @@ var _max_wind_accel := 18.0
 var _engine_force_n := 6000.0
 var _alignment_gain := 7.0
 var _alignment_damping := 2.8
+var _wind_sampler: Object = null
 
 func configure(value: Kind, direction: Vector3) -> void:
 	kind = value
@@ -33,6 +34,10 @@ func configure(value: Kind, direction: Vector3) -> void:
 	can_sleep = false
 	contact_monitor = true
 	max_contacts_reported = 8
+	if ClassDB.class_exists(&"WeatherWindSampler"):
+		var sampler_value: Variant = ClassDB.instantiate(&"WeatherWindSampler")
+		if sampler_value is Object:
+			_wind_sampler = sampler_value
 	_build_shape_and_visual()
 	_build_camera()
 	_place(direction)
@@ -249,12 +254,12 @@ func _apply_radial_alignment(up: Vector3) -> void:
 	apply_torque(torque)
 
 func _sample_wind(direction: Vector3, altitude: float) -> Vector3:
-	# New native builds expose a direct six-layer interpolated sample. Old DLLs
-	# remain usable: fall back to the baked climate wind instead of disabling the
-	# vehicle test harness.
+	# New native builds sample the live six-layer atmosphere directly at the body
+	# position and interpolate vertically. Old DLLs remain usable through the baked
+	# climate wind fallback until native/weather is rebuilt.
 	var native_value: Variant = WeatherSystem.get("_native")
-	if native_value is Object and native_value.has_method(&"sample_wind"):
-		var sampled: Variant = native_value.call(&"sample_wind", direction, altitude)
+	if _wind_sampler != null and native_value is Object and _wind_sampler.has_method(&"sample_wind"):
+		var sampled: Variant = _wind_sampler.call(&"sample_wind", native_value, direction, altitude)
 		if sampled is Vector3:
 			return sampled
 	var sample := Planet.sample_info(direction)
