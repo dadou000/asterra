@@ -125,6 +125,8 @@ var _global_analysis_phase: int = 0
 var _pending_native_controls: bool = false
 var _pending_local_reset: bool = false
 var _map_was_open: bool = false
+var _worker_schedule_deferred: bool = false
+var _heavy_publication_frame: int = -1
 
 
 func _ready() -> void:
@@ -209,9 +211,13 @@ func _process(delta: float) -> void:
 	_poll_weather_worker()
 	if not native_worker_busy():
 		_apply_pending_native_controls()
-		_schedule_weather_worker()
 
+	# Completed native state gets an idle main-thread publication window before
+	# another solver job is launched. This prevents high warp from starving
+	# cloud/map/surface uploads indefinitely.
 	_service_weather_publication(delta)
+	if not _has_pending_weather_publication():
+		_request_weather_worker_schedule()
 	_sync_weather_map_material()
 
 
@@ -265,6 +271,38 @@ func _poll_weather_worker() -> void:
 	_weather_task_local_steps = 0
 	_weather_task_touched_local = false
 	_weather_task_reset_local = false
+
+
+func _request_weather_worker_schedule() -> void:
+	if _worker_schedule_deferred or _weather_task_id >= 0 or _native == null:
+		return
+	_worker_schedule_deferred = true
+	call_deferred("_schedule_weather_worker_deferred")
+
+
+func _schedule_weather_worker_deferred() -> void:
+	_worker_schedule_deferred = false
+	if _native == null or native_worker_busy() or _has_pending_weather_publication():
+		return
+	_apply_pending_native_controls()
+	_schedule_weather_worker()
+
+
+func heavy_publication_this_frame() -> bool:
+	return _heavy_publication_frame == Engine.get_process_frames()
+
+
+func claim_heavy_publication() -> bool:
+	var frame := Engine.get_process_frames()
+	if _heavy_publication_frame == frame:
+		return false
+	_heavy_publication_frame = frame
+	return true
+
+
+func _has_pending_weather_publication() -> bool:
+	return _global_weather_dirty or _local_weather_dirty or _global_analysis_dirty \
+		or (_weather_map_open() and _local_analysis_dirty)
 
 
 func _schedule_weather_worker() -> void:
@@ -330,10 +368,10 @@ func _mark_all_outputs_dirty() -> void:
 
 
 func _service_weather_publication(delta: float) -> void:
-	if _native == null or native_worker_busy():
-		return
 	_weather_publish_accum += delta
 	_analysis_publish_accum += delta
+	if _native == null or native_worker_busy():
+		return
 
 	var map_open := _weather_map_open()
 	if map_open and not _map_was_open:
@@ -445,6 +483,8 @@ func _publish_weather_textures() -> void:
 
 
 func _publish_global_weather() -> void:
+	if not claim_heavy_publication():
+		return
 	var result: Variant = _native.call(&"get_global_weather_rgba")
 	if not (result is PackedFloat32Array):
 		return
@@ -466,6 +506,8 @@ func _publish_local_weather() -> void:
 
 
 func _publish_global_diagnostics(update_gpu: bool) -> void:
+	if not claim_heavy_publication():
+		return
 	var result: Variant = _native.call(&"get_global_diagnostics_rgba")
 	if not (result is PackedFloat32Array):
 		return
@@ -479,6 +521,8 @@ func _publish_global_diagnostics(update_gpu: bool) -> void:
 
 
 func _publish_global_products(update_gpu: bool) -> void:
+	if not claim_heavy_publication():
+		return
 	var result: Variant = _native.call(&"get_global_products_rgba")
 	if not (result is PackedFloat32Array):
 		return
@@ -490,6 +534,8 @@ func _publish_global_products(update_gpu: bool) -> void:
 
 
 func _publish_global_convective() -> void:
+	if not claim_heavy_publication():
+		return
 	if not _native.has_method(&"get_global_convective_rgba"):
 		global_convective_values = PackedFloat32Array()
 		return

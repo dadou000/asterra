@@ -1,7 +1,7 @@
 extends CanvasLayer
 ## Interactive whole-planet weather globe.
 ## `é` toggles it. Drag to rotate, wheel/pinch to zoom. Weather products come from
-## WeatherSystem; wind streaks use the selected native six-layer vector field.
+## WeatherSystem; wind streaks use the selected native 30-layer vector field.
 
 enum Product {
 	WIND,
@@ -646,7 +646,9 @@ func _ensure_wind_sampler() -> void:
 
 
 func _refresh_live_wind() -> void:
-	if WeatherSystem.native_worker_busy():
+	if WeatherSystem.native_worker_busy() or WeatherSystem.heavy_publication_this_frame():
+		return
+	if not WeatherSystem.claim_heavy_publication():
 		return
 	_ensure_wind_sampler()
 	var native: Variant = WeatherSystem.get("_native")

@@ -365,6 +365,8 @@ func _service_surface_publication() -> void:
 		return
 	# Stagger the 8 MiB global upload and the local upload onto different frames.
 	if _global_surface_dirty:
+		if not WeatherSystem.claim_heavy_publication():
+			return
 		var global_result: Variant = _native.call(&"get_global_surface_rgba")
 		if global_result is PackedFloat32Array:
 			var global_values: PackedFloat32Array = global_result

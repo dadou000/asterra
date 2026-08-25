@@ -78,7 +78,9 @@ func _process(_delta: float) -> void:
 	if not enabled:
 		_hide_debug_overlay()
 		return
-	if WeatherSystem.analysis_revision >= 0 and WeatherSystem.analysis_revision != _last_analysis_revision:
+	if not WeatherSystem.heavy_publication_this_frame() \
+			and WeatherSystem.analysis_revision >= 0 \
+			and WeatherSystem.analysis_revision != _last_analysis_revision:
 		_last_analysis_revision = WeatherSystem.analysis_revision
 		_scan_weather()
 	_update_debug_overlay()
