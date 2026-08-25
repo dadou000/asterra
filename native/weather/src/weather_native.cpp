@@ -941,7 +941,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				// Moist microphysics. q is true specific humidity; cloud liquid/ice are
 				// condensate mixing ratios. Latent heating feeds back into theta.
 				__m256 temperature = _mm256_mul_ps(theta, _mm256_set1_ps(sf));
-				__m256 pabs = clamp8(_mm256_add_ps(_mm256_set1_ps(P0 * sigma), pressure), 12000.0f, 115000.0f);
+				__m256 pabs = clamp8(_mm256_add_ps(_mm256_set1_ps(P0 * sigma), pressure), 6000.0f, 115000.0f);
 				__m256 qsat = qsat8(temperature, pabs);
 				__m256 supersat = _mm256_max_ps(_mm256_sub_ps(q, qsat), zero);
 				__m256 resolved_cond = _mm256_mul_ps(supersat, _mm256_set1_ps(cond_frac));

@@ -213,7 +213,7 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 			float ice = std::max(a.nice[i], 0.0f);
 			float cloud_total = liquid + ice;
 			float temperature = a.ntheta[i] * sf;
-			const float pabs = std::clamp(P0 * SIGMA[layer] + a.npressure[i], 12000.0f, 115000.0f);
+			const float pabs = std::clamp(P0 * SIGMA[layer] + a.npressure[i], 6000.0f, 115000.0f);
 			const float saturation = std::max(qsat_scalar(temperature, pabs), 2e-5f);
 			const float total_water = qv + cloud_total;
 			const float vapor_rh = qv / saturation;
