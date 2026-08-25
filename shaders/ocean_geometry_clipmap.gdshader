@@ -19,9 +19,16 @@ uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
 uniform vec3 u_center_right = vec3(0.0, 0.0, -1.0);
 uniform vec3 u_center_up = vec3(0.0, 1.0, 0.0);
+uniform vec3 u_anchor_render = vec3(0.0);
+uniform vec3 u_anchor_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_anchor_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_anchor_up = vec3(0.0, 1.0, 0.0);
+uniform vec2 u_lattice_center_plane = vec2(0.0);
 uniform float u_grid_cells = 128.0;
 uniform float u_visible_cap_angle = 1.5707963;
 uniform float u_orbit_handoff_altitude = 120000.0;
+uniform float u_wave_scale : hint_range(0.0, 1.0) = 1.0;
+uniform float u_stable_displacement = 1.0;
 uniform vec3 u_deep : source_color = vec3(0.010, 0.042, 0.105);
 uniform vec3 u_shelf : source_color = vec3(0.058, 0.300, 0.360);
 uniform vec3 u_shallow : source_color = vec3(0.130, 0.475, 0.440);
@@ -67,20 +74,57 @@ vec3 ocean_safe_tangent(vec3 d, vec3 candidate) {
 	return t * inversesqrt(l2);
 }
 
-vec3 ocean_direction_for_offset(vec2 offset_m) {
+vec3 ocean_direction_for_basis_offset(vec3 center, vec3 right, vec3 up,
+		vec2 offset_m) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) {
-		return normalize(u_center_dir);
+		return normalize(center);
 	}
 	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
-		return normalize(u_center_dir
-			+ u_center_right * (offset_m.x / u_planet_radius)
-			+ u_center_up * (offset_m.y / u_planet_radius));
+		return normalize(center
+			+ right * (offset_m.x / u_planet_radius)
+			+ up * (offset_m.y / u_planet_radius));
 	}
 	float theta = min(arc / max(u_planet_radius, 1.0),
 		min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
-	vec3 tangent = normalize(u_center_right * offset_m.x + u_center_up * offset_m.y);
-	return normalize(u_center_dir * cos(theta) + tangent * sin(theta));
+	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
+	return normalize(center * cos(theta) + tangent * sin(theta));
+}
+
+vec3 ocean_direction_for_offset(vec2 offset_m) {
+	return ocean_direction_for_basis_offset(u_center_dir, u_center_right,
+		u_center_up, offset_m);
+}
+
+vec3 ocean_stable_surface_offset(vec3 center, vec3 right, vec3 up,
+		vec2 offset_m, float altitude_m) {
+	float radius = max(u_planet_radius, 1.0);
+	float arc = length(offset_m);
+	if (arc < 1e-5) {
+		return center * altitude_m;
+	}
+
+	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
+		vec3 tangent_m = right * offset_m.x + up * offset_m.y;
+		float q2 = dot(tangent_m, tangent_m) / (radius * radius);
+		float root = sqrt(1.0 + q2);
+		float inv_root = 1.0 / root;
+		float inv_root_minus_one = -q2 / (root * (root + 1.0));
+		float radial_m = radius * inv_root_minus_one + altitude_m * inv_root;
+		float tangent_scale = (1.0 + altitude_m / radius) * inv_root;
+		return center * radial_m + tangent_m * tangent_scale;
+	}
+
+	float theta = min(arc / radius,
+		min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
+	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
+	float sin_theta = sin(theta);
+	float cos_theta = cos(theta);
+	float half_sin = sin(theta * 0.5);
+	float radial_m = -2.0 * radius * half_sin * half_sin
+		+ altitude_m * cos_theta;
+	float tangent_m = (radius + altitude_m) * sin_theta;
+	return center * radial_m + tangent * tangent_m;
 }
 
 // Signed constant-metric geodesic coordinate. No ring/LOD/clipmap coordinates
@@ -117,10 +161,16 @@ void vertex() {
 	vec2 cell = vec2(float(gx), float(gy)) - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
 	float spacing = ocean_ring_spacing(level);
-	vec2 offset_m = cell * spacing;
-	float arc_m = length(offset_m);
+	vec2 cell_offset_m = cell * spacing;
+	float arc_m = length(cell_offset_m);
 	float raw_theta = arc_m / max(u_planet_radius, 1.0);
-	vec3 d = ocean_direction_for_offset(offset_m);
+	bool stable_displacement = u_stable_displacement > 0.5;
+	vec2 level_center_m = round(u_lattice_center_plane / spacing) * spacing;
+	vec2 anchor_offset_m = level_center_m + cell_offset_m;
+	vec3 d = stable_displacement
+		? ocean_direction_for_basis_offset(u_anchor_dir, u_anchor_right, u_anchor_up,
+			anchor_offset_m)
+		: ocean_direction_for_offset(cell_offset_m);
 
 	float ground_h = ocean_visible_ground_height(d, arc_m);
 	float depth = max(-ground_h, 0.0);
@@ -129,18 +179,22 @@ void vertex() {
 	float phase_m = ocean_geodesic_phase_coord(d, DEBUG_SAW_AXIS);
 	float cycles = phase_m / DEBUG_SAW_WAVELENGTH_M - TIME * DEBUG_SAW_FREQUENCY_HZ;
 	float saw01 = fract(cycles);
-	float saw_height = (saw01 * 2.0 - 1.0) * DEBUG_SAW_AMPLITUDE_M;
+	float wave_amplitude = DEBUG_SAW_AMPLITUDE_M * u_wave_scale;
+	float saw_height = (saw01 * 2.0 - 1.0) * wave_amplitude;
 
 	// Between resets, dh/ds is constant. The discontinuity itself is intentionally
 	// sharp so a phase mismatch between adjacent rings is immediately visible.
 	vec3 travel = ocean_safe_tangent(d, DEBUG_SAW_AXIS);
-	float dh_ds = (2.0 * DEBUG_SAW_AMPLITUDE_M) / DEBUG_SAW_WAVELENGTH_M;
+	float dh_ds = (2.0 * wave_amplitude) / DEBUG_SAW_WAVELENGTH_M;
 	vec3 slope = travel * dh_ds;
 
 	// NO LOD SINK in diagnostic mode. Ring number cannot alter water altitude.
 	vec3 displaced = d * (u_planet_radius + saw_height);
 	v_planet = displaced;
-	v_render = displaced - u_origin;
+	v_render = stable_displacement
+		? u_anchor_render + ocean_stable_surface_offset(u_anchor_dir, u_anchor_right,
+			u_anchor_up, anchor_offset_m, saw_height)
+		: displaced - u_origin;
 	v_slope = slope;
 	v_depth = depth;
 	v_saw_phase = saw01;
@@ -179,7 +233,8 @@ void fragment() {
 
 	// Mild phase brightness ramp makes the saw reset line easy to track across
 	// rings without assigning each LOD a different debug colour.
-	base *= mix(0.72, 1.18, v_saw_phase);
+	float phase_brightness = mix(0.72, 1.18, v_saw_phase);
+	base *= mix(1.0, phase_brightness, u_wave_scale);
 
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);

@@ -7,6 +7,88 @@ signal opened
 signal closed
 
 const START_MENU_SCENE := "res://scenes/StartMenu.tscn"
+const GRAPHICS_DEBUG_VIEWS: Array[Dictionary] = [
+	{
+		"name": "Final composite",
+		"mode": Viewport.DEBUG_DRAW_DISABLED,
+		"description": "Normal rendering with every enabled effect composited together.",
+	},
+	{
+		"name": "Lighting only",
+		"mode": Viewport.DEBUG_DRAW_LIGHTING,
+		"description": "Lighting without material textures, useful for reading direct-light and shadow shape.",
+	},
+	{
+		"name": "Unshaded materials",
+		"mode": Viewport.DEBUG_DRAW_UNSHADED,
+		"description": "Material color without lighting, for separating texture detail from illumination.",
+	},
+	{
+		"name": "Normal buffer",
+		"mode": Viewport.DEBUG_DRAW_NORMAL_BUFFER,
+		"description": "World-space surface normals used by screen-space lighting effects.",
+	},
+	{
+		"name": "SSAO only",
+		"mode": Viewport.DEBUG_DRAW_SSAO,
+		"description": "The raw screen-space ambient occlusion texture. SSAO must be enabled above.",
+	},
+	{
+		"name": "SSIL only",
+		"mode": Viewport.DEBUG_DRAW_SSIL,
+		"description": "The raw screen-space indirect-light texture. SSIL must be enabled above.",
+	},
+	{
+		"name": "GI result buffer",
+		"mode": Viewport.DEBUG_DRAW_GI_BUFFER,
+		"description": "The global-illumination result contributed by SDFGI or VoxelGI.",
+	},
+	{
+		"name": "SDFGI cascades",
+		"mode": Viewport.DEBUG_DRAW_SDFGI,
+		"description": "The signed-distance cascades that move with the camera. SDFGI must be enabled.",
+	},
+	{
+		"name": "SDFGI probes",
+		"mode": Viewport.DEBUG_DRAW_SDFGI_PROBES,
+		"description": "The lighting probes populated inside the SDFGI cascades.",
+	},
+	{
+		"name": "Directional shadow atlas",
+		"mode": Viewport.DEBUG_DRAW_DIRECTIONAL_SHADOW_ATLAS,
+		"description": "The sun shadow-map atlas, displayed in the upper-left of the scene.",
+	},
+	{
+		"name": "Sun cascade regions",
+		"mode": Viewport.DEBUG_DRAW_PSSM_SPLITS,
+		"description": "Colors directional-shadow splits red, green, blue and yellow from near to far.",
+	},
+	{
+		"name": "Scene luminance",
+		"mode": Viewport.DEBUG_DRAW_SCENE_LUMINANCE,
+		"description": "The luminance buffer used by automatic exposure.",
+	},
+	{
+		"name": "Internal pre-FX buffer",
+		"mode": Viewport.DEBUG_DRAW_INTERNAL_BUFFER,
+		"description": "The internal-resolution image before tonemapping and post-processing.",
+	},
+	{
+		"name": "Motion vectors",
+		"mode": Viewport.DEBUG_DRAW_MOTION_VECTORS,
+		"description": "Per-pixel motion vectors used by temporal rendering features.",
+	},
+	{
+		"name": "Overdraw",
+		"mode": Viewport.DEBUG_DRAW_OVERDRAW,
+		"description": "Additive mesh coverage; brighter regions redraw the same pixels more often.",
+	},
+	{
+		"name": "Wireframe",
+		"mode": Viewport.DEBUG_DRAW_WIREFRAME,
+		"description": "Triangle edges only, useful for checking terrain density and mesh LOD.",
+	},
+]
 
 var enabled: bool = true
 var _root: Control
@@ -18,6 +100,10 @@ func _ready() -> void:
 	layer = 30
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	visible = false
+	# Render diagnostics are deliberately session-only. Never strand the next game
+	# or launcher scene in a debug buffer because the previous run ended there.
+	get_viewport().debug_draw = Viewport.DEBUG_DRAW_DISABLED
+	OceanSystem.set_debug_waves_disabled(false)
 	_build_ui()
 
 
@@ -189,8 +275,13 @@ func _build_settings_menu() -> void:
 	_root.add_child(_settings_center)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(620.0, 0.0)
+	# CenterContainer sizes children from their minimum size. A zero minimum
+	# height collapsed this entire settings tree, leaving only the dark backdrop
+	# visible after pressing SETTINGS. Keep a viewport-friendly window and let the
+	# scroll container handle any content that does not fit vertically.
+	scroll.custom_minimum_size = Vector2(620.0, 560.0)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_settings_center.add_child(scroll)
 
 	var panel := PanelContainer.new()
@@ -252,12 +343,6 @@ func _build_settings_menu() -> void:
 	for preset: int in range(GraphicsQuality.Preset.PERFORMANCE, GraphicsQuality.Preset.ULTRA + 1):
 		graphics_preset.add_item(GraphicsQuality.preset_name(preset), preset)
 	graphics_preset.select(AppSettings.graphics_quality)
-	graphics_preset.item_selected.connect(func(index: int) -> void:
-		var preset: int = graphics_preset.get_item_id(index)
-		AppSettings.set_graphics_quality(preset)
-		graphics_hint.text = GraphicsQuality.preset_description(preset)
-		_apply_graphics_quality(preset)
-	)
 	graphics_row.add_child(graphics_preset)
 
 	var live_note := Label.new()
@@ -266,6 +351,174 @@ func _build_settings_menu() -> void:
 	live_note.modulate = Color(0.48, 0.56, 0.63)
 	live_note.add_theme_font_size_override("font_size", 12)
 	column.add_child(live_note)
+
+	var advanced_row := HBoxContainer.new()
+	advanced_row.add_theme_constant_override("separation", 16)
+	column.add_child(advanced_row)
+	var advanced_text := VBoxContainer.new()
+	advanced_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	advanced_row.add_child(advanced_text)
+	var advanced_label := Label.new()
+	advanced_label.text = "Advanced overrides"
+	advanced_label.add_theme_font_size_override("font_size", 17)
+	advanced_text.add_child(advanced_label)
+	var advanced_hint := Label.new()
+	advanced_hint.text = "Manual controls for individual GPU costs. Your custom values are kept when you return to a preset."
+	advanced_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	advanced_hint.modulate = Color(0.62, 0.69, 0.75)
+	advanced_hint.add_theme_font_size_override("font_size", 13)
+	advanced_text.add_child(advanced_hint)
+	var advanced_toggle := CheckButton.new()
+	advanced_toggle.button_pressed = AppSettings.graphics_advanced_enabled
+	advanced_row.add_child(advanced_toggle)
+
+	var advanced_controls := VBoxContainer.new()
+	advanced_controls.visible = AppSettings.graphics_advanced_enabled
+	advanced_controls.add_theme_constant_override("separation", 10)
+	column.add_child(advanced_controls)
+
+	_add_advanced_slider(
+		advanced_controls, "3D render scale",
+		"Internal 3D resolution. UI remains full resolution.",
+		0.50, 1.00, 0.05, AppSettings.advanced_render_scale,
+		AppSettings.KEY_RENDER_SCALE, 100.0, 0, "%")
+	_add_advanced_toggle(
+		advanced_controls, "SDFGI",
+		"Dynamic global illumination. The largest cost while moving over terrain.",
+		AppSettings.advanced_sdfgi_enabled, AppSettings.KEY_SDFGI_ENABLED)
+	_add_advanced_slider(
+		advanced_controls, "SDFGI cascades",
+		"More cascades extend GI farther but increase movement update cost.",
+		2.0, 8.0, 1.0, float(AppSettings.advanced_sdfgi_cascades),
+		AppSettings.KEY_SDFGI_CASCADES, 1.0, 0, "")
+	_add_advanced_slider(
+		advanced_controls, "SDFGI minimum cell",
+		"Smaller cells add detail and make cascade movement more expensive.",
+		0.25, 2.00, 0.05, AppSettings.advanced_sdfgi_cell_size,
+		AppSettings.KEY_SDFGI_CELL_SIZE, 1.0, 2, " m")
+	_add_advanced_toggle(
+		advanced_controls, "SSAO", "Screen-space ambient contact shadows.",
+		AppSettings.advanced_ssao_enabled, AppSettings.KEY_SSAO_ENABLED)
+	_add_advanced_toggle(
+		advanced_controls, "SSIL", "Screen-space indirect lighting.",
+		AppSettings.advanced_ssil_enabled, AppSettings.KEY_SSIL_ENABLED)
+	_add_advanced_toggle(
+		advanced_controls, "SSR", "Screen-space reflections.",
+		AppSettings.advanced_ssr_enabled, AppSettings.KEY_SSR_ENABLED)
+	_add_advanced_toggle(
+		advanced_controls, "Glow", "Bright-light bloom post-processing.",
+		AppSettings.advanced_glow_enabled, AppSettings.KEY_GLOW_ENABLED)
+
+	var shadow_row := _advanced_option_row(
+		advanced_controls, "Directional shadow splits",
+		"More splits sharpen sun shadows across a larger range.")
+	var shadow_option := shadow_row["option"] as OptionButton
+	for splits: int in [0, 1, 2, 4]:
+		shadow_option.add_item("Off" if splits == 0 else str(splits), splits)
+	_select_option_id(shadow_option, AppSettings.advanced_shadow_splits)
+	shadow_option.item_selected.connect(func(index: int) -> void:
+		AppSettings.set_advanced_graphics_value(
+			AppSettings.KEY_SHADOW_SPLITS, shadow_option.get_item_id(index))
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+
+	var cloud_row := _advanced_option_row(
+		advanced_controls, "Cloud quality",
+		"Controls volumetric cloud ray-march sample counts.")
+	var cloud_option := cloud_row["option"] as OptionButton
+	for preset: int in range(GraphicsQuality.Preset.PERFORMANCE, GraphicsQuality.Preset.ULTRA + 1):
+		cloud_option.add_item(GraphicsQuality.preset_name(preset), preset)
+	_select_option_id(cloud_option, AppSettings.advanced_cloud_quality)
+	cloud_option.item_selected.connect(func(index: int) -> void:
+		AppSettings.set_advanced_graphics_value(
+			AppSettings.KEY_CLOUD_QUALITY, cloud_option.get_item_id(index))
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+
+	advanced_toggle.toggled.connect(func(value: bool) -> void:
+		AppSettings.set_graphics_advanced_enabled(value)
+		advanced_controls.visible = value
+		graphics_hint.text = (
+			"Custom per-feature overrides are active."
+			if value else GraphicsQuality.preset_description(AppSettings.graphics_quality))
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+	graphics_preset.item_selected.connect(func(index: int) -> void:
+		var preset: int = graphics_preset.get_item_id(index)
+		AppSettings.set_graphics_quality(preset)
+		advanced_toggle.set_pressed_no_signal(false)
+		advanced_controls.visible = false
+		graphics_hint.text = GraphicsQuality.preset_description(preset)
+		_apply_graphics_quality(preset)
+	)
+	if AppSettings.graphics_advanced_enabled:
+		graphics_hint.text = "Custom per-feature overrides are active."
+
+	column.add_child(HSeparator.new())
+	column.add_child(_section_title("RENDER DIAGNOSTICS"))
+
+	var debug_view_row := HBoxContainer.new()
+	debug_view_row.add_theme_constant_override("separation", 16)
+	column.add_child(debug_view_row)
+	var debug_view_text := VBoxContainer.new()
+	debug_view_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	debug_view_text.add_theme_constant_override("separation", 3)
+	debug_view_row.add_child(debug_view_text)
+	var debug_view_label := Label.new()
+	debug_view_label.text = "Graphics debug view"
+	debug_view_label.add_theme_font_size_override("font_size", 17)
+	debug_view_text.add_child(debug_view_label)
+	var debug_view_hint := Label.new()
+	debug_view_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	debug_view_hint.modulate = Color(0.62, 0.69, 0.75)
+	debug_view_hint.add_theme_font_size_override("font_size", 13)
+	debug_view_text.add_child(debug_view_hint)
+	var debug_view_option := OptionButton.new()
+	debug_view_option.custom_minimum_size = Vector2(210.0, 42.0)
+	var debug_view_descriptions: Dictionary = {}
+	for view: Dictionary in GRAPHICS_DEBUG_VIEWS:
+		var mode := int(view["mode"])
+		debug_view_option.add_item(str(view["name"]), mode)
+		debug_view_descriptions[mode] = str(view["description"])
+	_select_option_id(debug_view_option, int(get_viewport().debug_draw))
+	debug_view_hint.text = str(debug_view_descriptions.get(
+		int(get_viewport().debug_draw), "Select a render buffer to inspect."))
+	debug_view_option.item_selected.connect(func(index: int) -> void:
+		var mode := debug_view_option.get_item_id(index)
+		get_viewport().debug_draw = mode
+		debug_view_hint.text = str(debug_view_descriptions.get(mode, ""))
+	)
+	debug_view_row.add_child(debug_view_option)
+
+	var debug_view_note := Label.new()
+	debug_view_note.text = "Choose a view, then Back → Resume to inspect it. Return to Final composite when finished."
+	debug_view_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	debug_view_note.modulate = Color(0.48, 0.56, 0.63)
+	debug_view_note.add_theme_font_size_override("font_size", 12)
+	column.add_child(debug_view_note)
+
+	var waves_row := HBoxContainer.new()
+	waves_row.add_theme_constant_override("separation", 16)
+	column.add_child(waves_row)
+	var waves_text := VBoxContainer.new()
+	waves_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	waves_row.add_child(waves_text)
+	var waves_label := Label.new()
+	waves_label.text = "Disable ocean waves"
+	waves_label.add_theme_font_size_override("font_size", 17)
+	waves_text.add_child(waves_label)
+	var waves_hint := Label.new()
+	waves_hint.text = "Flattens the rendered ocean and GPU buoyancy wave field for this session."
+	waves_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	waves_hint.modulate = Color(0.62, 0.69, 0.75)
+	waves_hint.add_theme_font_size_override("font_size", 13)
+	waves_text.add_child(waves_hint)
+	var waves_toggle := CheckButton.new()
+	waves_toggle.button_pressed = OceanSystem.debug_waves_disabled()
+	waves_toggle.toggled.connect(func(disabled: bool) -> void:
+		OceanSystem.set_debug_waves_disabled(disabled)
+	)
+	waves_row.add_child(waves_toggle)
 
 	column.add_child(HSeparator.new())
 	column.add_child(_section_title("DEBUG"))
@@ -361,27 +614,127 @@ func _build_settings_menu() -> void:
 	column.add_child(back)
 
 
-func _apply_graphics_quality(preset: int) -> void:
-	var quality: int = GraphicsQuality.sanitize(preset)
-	GraphicsQuality.configure_viewport(get_viewport(), quality)
+func _apply_graphics_quality(_preset: int) -> void:
+	AppSettings.apply_viewport(get_viewport())
 	var parent := get_parent()
 	if parent != null:
 		for child: Node in parent.get_children():
 			if child is WorldEnvironment:
 				var world_environment := child as WorldEnvironment
 				if world_environment.environment != null:
-					GraphicsQuality.configure_world_environment(
-						world_environment.environment, quality)
+					AppSettings.apply_world_environment(world_environment.environment)
 			elif child is DirectionalLight3D:
 				var light := child as DirectionalLight3D
-				GraphicsQuality.configure_sun(light, quality)
+				AppSettings.apply_sun(light)
 				# Preserve Helion's physical apparent disc after the quality helper
 				# changes the generic soft-shadow preset.
 				light.light_angular_distance = Frames.helion_angular_diameter_deg()
 
 	# Update only cloud sampling budgets; this preserves whichever cloud renderer
 	# (depth compositor or fallback sky) already owns the visible cloud pass.
-	VolumetricClouds.set_quality(quality)
+	VolumetricClouds.set_quality(AppSettings.effective_cloud_quality())
+
+
+func _add_advanced_toggle(parent: VBoxContainer, title: String, hint: String,
+		pressed: bool, key: String) -> CheckButton:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	parent.add_child(row)
+	var text_column := VBoxContainer.new()
+	text_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(text_column)
+	var label := Label.new()
+	label.text = title
+	label.add_theme_font_size_override("font_size", 15)
+	text_column.add_child(label)
+	var description := Label.new()
+	description.text = hint
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	description.modulate = Color(0.55, 0.63, 0.70)
+	description.add_theme_font_size_override("font_size", 12)
+	text_column.add_child(description)
+	var toggle := CheckButton.new()
+	toggle.button_pressed = pressed
+	toggle.toggled.connect(func(value: bool) -> void:
+		AppSettings.set_advanced_graphics_value(key, value)
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+	row.add_child(toggle)
+	return toggle
+
+
+func _add_advanced_slider(parent: VBoxContainer, title: String, hint: String,
+		minimum: float, maximum: float, increment: float, current: float,
+		key: String, display_scale: float, decimals: int, suffix: String) -> HSlider:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 3)
+	parent.add_child(block)
+	var header := HBoxContainer.new()
+	block.add_child(header)
+	var title_label := Label.new()
+	title_label.text = title
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_label.add_theme_font_size_override("font_size", 15)
+	header.add_child(title_label)
+	var value_label := Label.new()
+	value_label.custom_minimum_size.x = 80.0
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.text = _advanced_value_text(current, display_scale, decimals, suffix)
+	header.add_child(value_label)
+	var description := Label.new()
+	description.text = hint
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	description.modulate = Color(0.55, 0.63, 0.70)
+	description.add_theme_font_size_override("font_size", 12)
+	block.add_child(description)
+	var slider := HSlider.new()
+	slider.min_value = minimum
+	slider.max_value = maximum
+	slider.step = increment
+	slider.value = current
+	slider.value_changed.connect(func(value: float) -> void:
+		value_label.text = _advanced_value_text(value, display_scale, decimals, suffix)
+		AppSettings.set_advanced_graphics_value(key, value)
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+	block.add_child(slider)
+	return slider
+
+
+func _advanced_option_row(parent: VBoxContainer, title: String, hint: String) -> Dictionary:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	parent.add_child(row)
+	var text_column := VBoxContainer.new()
+	text_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(text_column)
+	var label := Label.new()
+	label.text = title
+	label.add_theme_font_size_override("font_size", 15)
+	text_column.add_child(label)
+	var description := Label.new()
+	description.text = hint
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	description.modulate = Color(0.55, 0.63, 0.70)
+	description.add_theme_font_size_override("font_size", 12)
+	text_column.add_child(description)
+	var option := OptionButton.new()
+	option.custom_minimum_size = Vector2(130.0, 38.0)
+	row.add_child(option)
+	return {"row": row, "option": option}
+
+
+func _select_option_id(option: OptionButton, id: int) -> void:
+	for index: int in option.item_count:
+		if option.get_item_id(index) == id:
+			option.select(index)
+			return
+
+
+func _advanced_value_text(value: float, display_scale: float,
+		decimals: int, suffix: String) -> String:
+	var scaled := value * display_scale
+	return ("%.*f%s" % [decimals, scaled, suffix])
 
 
 func _find_player() -> AsterraPlayer:
@@ -421,6 +774,8 @@ func _show_settings_menu() -> void:
 func _return_to_main_menu() -> void:
 	get_tree().paused = false
 	visible = false
+	get_viewport().debug_draw = Viewport.DEBUG_DRAW_DISABLED
+	OceanSystem.set_debug_waves_disabled(false)
 	get_tree().change_scene_to_file(START_MENU_SCENE)
 
 

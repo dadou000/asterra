@@ -15,6 +15,8 @@ var terrain: PlanetTerrain # retained only because main.gd assigns it
 var wireframe := false: set = set_wireframe
 var freeze_terrain := false: set = set_freeze_terrain
 var side_cut := false: set = set_side_cut
+var stable_displacement := true: set = set_stable_displacement
+var stable_ocean_displacement := true: set = set_stable_ocean_displacement
 var sink_scale := 2.0: set = set_sink_scale
 
 var _wireframes_ready := false
@@ -73,6 +75,22 @@ func set_side_cut(value: bool) -> void:
 	_update_status()
 
 
+func set_stable_displacement(value: bool) -> void:
+	stable_displacement = value
+	var clipmap: Node = _clipmap()
+	if clipmap != null and clipmap.has_method("set_debug_stable_displacement"):
+		clipmap.set_debug_stable_displacement(value)
+	_update_status()
+
+
+func set_stable_ocean_displacement(value: bool) -> void:
+	stable_ocean_displacement = value
+	var ocean: Node = get_node_or_null("/root/OceanSystem")
+	if ocean != null and ocean.has_method("set_debug_stable_displacement"):
+		ocean.set_debug_stable_displacement(value)
+	_update_status()
+
+
 func set_sink_scale(value: float) -> void:
 	sink_scale = clampf(value, 0.0, 16.0)
 	var clipmap: Node = _clipmap()
@@ -84,6 +102,8 @@ func set_sink_scale(value: float) -> void:
 func reset_inspection() -> void:
 	freeze_terrain = false
 	side_cut = false
+	stable_displacement = true
+	stable_ocean_displacement = true
 	sink_scale = 2.0
 	var clipmap: Node = _clipmap()
 	if clipmap != null:
@@ -91,8 +111,13 @@ func reset_inspection() -> void:
 			clipmap.set_debug_freeze(false)
 		if clipmap.has_method("set_debug_side_cut"):
 			clipmap.set_debug_side_cut(false)
+		if clipmap.has_method("set_debug_stable_displacement"):
+			clipmap.set_debug_stable_displacement(true)
 		if clipmap.has_method("set_debug_sink_scale"):
 			clipmap.set_debug_sink_scale(2.0)
+	var ocean: Node = get_node_or_null("/root/OceanSystem")
+	if ocean != null and ocean.has_method("set_debug_stable_displacement"):
+		ocean.set_debug_stable_displacement(true)
 	_update_status()
 
 
@@ -106,6 +131,10 @@ func _update_status() -> void:
 		modes.append("SIDE CUT")
 	if wireframe:
 		modes.append("WIREFRAME")
+	if not stable_displacement:
+		modes.append("LEGACY TERRAIN")
+	if not stable_ocean_displacement:
+		modes.append("LEGACY OCEAN")
 	if modes.is_empty():
 		_status.visible = false
 		_status.text = ""

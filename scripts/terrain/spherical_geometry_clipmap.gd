@@ -334,6 +334,11 @@ func _make_batch(node_name: String, mesh: ArrayMesh, count: int,
 	batch.name = node_name
 	batch.multimesh = mm
 	batch.material_override = _material
+	# The terrain is camera-centred and displaced entirely in its vertex shader.
+	# Treating it as static GI geometry makes SDFGI rebuild its cascades while the
+	# observer moves, even though terrain lighting is already handled by the planet
+	# shader. It should receive GI, but must not be voxelized as a contributor.
+	batch.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	return batch
 

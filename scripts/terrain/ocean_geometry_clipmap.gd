@@ -42,6 +42,9 @@ var _active_max_level: int = 0
 var _visible_cap_arc_m: float = 0.0
 var _visible_sector_count: int = 0
 var _ocean_visible := false
+var _debug_waves_disabled := false
+var _debug_stable_displacement := true
+var _stable_anchor_world: Vec3D = Vec3D.new()
 var _bound_macro: Texture2DArray
 var _bound_macro_res: int = -1
 var _physics: OceanGPUPhysics
@@ -75,29 +78,33 @@ func _process(_dt: float) -> void:
 		_set_visible(false)
 		return
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
-	var planet_pos: Vector3 = camera.global_position + origin
-	if planet_pos.length_squared() <= 1.0:
+	var observer_world: Vec3D = Frames.to_world(camera.global_position)
+	var observer_radius: float = observer_world.length()
+	if observer_radius <= 1.0:
 		_set_visible(false)
 		return
 
 	var radius: float = Planet.cfg.planet_radius
-	var camera_alt: float = planet_pos.length() - radius
+	var camera_alt: float = observer_radius - radius
 	if camera_alt >= ORBIT_HANDOFF_ALTITUDE_M:
 		_set_visible(false)
 		return
 
-	var observer_dir := planet_pos.normalized()
+	var observer_unit_world: Vec3D = observer_world.normalized()
+	var observer_dir: Vector3 = observer_unit_world.to_v3()
 	if not _have_anchor:
 		_reset_anchor(observer_dir)
+		_capture_stable_anchor(observer_unit_world.mul(radius))
 
-	var observer_surface := observer_dir * radius
-	var anchor_surface := _anchor_dir * radius
-	var rel := observer_surface - anchor_surface
-	var px := rel.dot(_anchor_right)
-	var py := rel.dot(_anchor_up)
+	var observer_surface_world: Vec3D = observer_unit_world.mul(radius)
+	var rel: Vec3D = observer_surface_world.sub(_stable_anchor_world)
+	var px: float = rel.x * _anchor_right.x \
+		+ rel.y * _anchor_right.y + rel.z * _anchor_right.z
+	var py: float = rel.x * _anchor_up.x \
+		+ rel.y * _anchor_up.y + rel.z * _anchor_up.z
 	if absf(px) > REANCHOR_M or absf(py) > REANCHOR_M:
 		_reset_anchor(observer_dir)
+		_capture_stable_anchor(observer_surface_world)
 		px = 0.0
 		py = 0.0
 
@@ -108,9 +115,10 @@ func _process(_dt: float) -> void:
 		_center_plane = snapped
 		_update_center_basis()
 
-	_update_visible_cap(planet_pos.length(), radius)
+	_update_visible_cap(observer_radius, radius)
 	_update_active_levels()
 	_bind_gpu_terrain(false)
+	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
 	_sync_uniforms(origin)
 	_set_visible(_bound_macro != null)
 	if _ocean_visible:
@@ -203,6 +211,11 @@ func _bind_gpu_terrain(force: bool) -> void:
 
 func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_origin", origin)
+	_material.set_shader_parameter("u_anchor_render", Frames.to_render(_stable_anchor_world))
+	_material.set_shader_parameter("u_anchor_dir", _anchor_dir)
+	_material.set_shader_parameter("u_anchor_right", _anchor_right)
+	_material.set_shader_parameter("u_anchor_up", _anchor_up)
+	_material.set_shader_parameter("u_lattice_center_plane", _center_plane)
 	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 	_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
@@ -215,7 +228,9 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	_material.set_shader_parameter("u_orbit_handoff_altitude", ORBIT_HANDOFF_ALTITUDE_M)
-	_material.set_shader_parameter("u_wave_scale", 1.0)
+	_material.set_shader_parameter("u_wave_scale", debug_wave_scale())
+	_material.set_shader_parameter("u_stable_displacement",
+		1.0 if _debug_stable_displacement else 0.0)
 
 	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
@@ -261,6 +276,34 @@ func _make_batch(node_name: String, mesh: ArrayMesh, count: int, bounds: AABB) -
 	batch.material_override = _material
 	batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return batch
+
+
+func set_debug_waves_disabled(disabled: bool) -> void:
+	_debug_waves_disabled = disabled
+	if _material != null:
+		_material.set_shader_parameter("u_wave_scale", debug_wave_scale())
+
+
+func debug_waves_disabled() -> bool:
+	return _debug_waves_disabled
+
+
+func debug_wave_scale() -> float:
+	return 0.0 if _debug_waves_disabled else 1.0
+
+
+func set_debug_stable_displacement(value: bool) -> void:
+	_debug_stable_displacement = value
+	if _material != null:
+		_material.set_shader_parameter("u_stable_displacement", 1.0 if value else 0.0)
+
+
+func debug_stable_displacement_enabled() -> bool:
+	return _debug_stable_displacement
+
+
+func _capture_stable_anchor(surface_world: Vec3D) -> void:
+	_stable_anchor_world = surface_world.dup()
 
 
 static func _build_center_mesh() -> ArrayMesh:
@@ -372,7 +415,8 @@ func gpu_stats() -> Dictionary:
 		"active_levels": _active_max_level + 1,
 		"visible_sectors": _visible_sector_count,
 		"grid_cells": GRID_CELLS,
-		"gpu_waves": true,
+		"gpu_waves": not _debug_waves_disabled,
+		"stable_displacement": _debug_stable_displacement,
 		"gpu_coast_height": true,
 		"gpu_buoyancy_queries": _physics != null,
 		"orbit_handoff_m": ORBIT_HANDOFF_ALTITUDE_M,

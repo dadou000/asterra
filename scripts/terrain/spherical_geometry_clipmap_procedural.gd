@@ -13,6 +13,12 @@ const DEFAULT_SINK_SCALE: float = 2.0
 var _debug_freeze := false
 var _debug_side_cut := false
 var _debug_sink_scale: float = DEFAULT_SINK_SCALE
+var _debug_stable_displacement := true
+
+# Canonical double-precision surface point for the current tangent anchor. The
+# active shader can reconstruct every rendered vertex as a small offset from this
+# point, avoiding an absolute ~1,000 km position subtraction in float32.
+var _stable_anchor_world: Vec3D = Vec3D.new()
 
 
 func _ready() -> void:
@@ -33,17 +39,19 @@ func _process(_dt: float) -> void:
 		_set_visible(false)
 		return
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
-	var planet_pos: Vector3 = camera.global_position + origin
-	if planet_pos.length_squared() <= 1.0:
+	var observer_world: Vec3D = Frames.to_world(camera.global_position)
+	var observer_radius: float = observer_world.length()
+	if observer_radius <= 1.0:
 		_set_visible(false)
 		return
 
 	var radius: float = Planet.cfg.planet_radius
-	var observer_dir: Vector3 = planet_pos.normalized()
+	var observer_unit_world: Vec3D = observer_world.normalized()
+	var observer_dir: Vector3 = observer_unit_world.to_v3()
 	if not _have_anchor:
 		_reset_anchor(observer_dir)
-		_update_visible_cap(planet_pos.length(), radius)
+		_capture_stable_anchor(observer_unit_world.mul(radius))
+		_update_visible_cap(observer_radius, radius)
 		_update_active_levels()
 
 	# Freeze means exactly that for terrain inspection: the clipmap centre, tangent
@@ -51,13 +59,15 @@ func _process(_dt: float) -> void:
 	# Floating-origin changes still update u_origin below, so the frozen terrain
 	# remains fixed in planet space while the camera can freely move around it.
 	if not _debug_freeze:
-		var observer_surface: Vector3 = observer_dir * radius
-		var anchor_surface: Vector3 = _anchor_dir * radius
-		var rel: Vector3 = observer_surface - anchor_surface
-		var px: float = rel.dot(_anchor_right)
-		var py: float = rel.dot(_anchor_up)
+		var observer_surface_world: Vec3D = observer_unit_world.mul(radius)
+		var rel: Vec3D = observer_surface_world.sub(_stable_anchor_world)
+		var px: float = rel.x * _anchor_right.x \
+			+ rel.y * _anchor_right.y + rel.z * _anchor_right.z
+		var py: float = rel.x * _anchor_up.x \
+			+ rel.y * _anchor_up.y + rel.z * _anchor_up.z
 		if absf(px) > REANCHOR_M or absf(py) > REANCHOR_M:
 			_reset_anchor(observer_dir)
+			_capture_stable_anchor(observer_surface_world)
 			px = 0.0
 			py = 0.0
 
@@ -68,9 +78,10 @@ func _process(_dt: float) -> void:
 			_center_plane = snapped_center
 			_update_center_basis()
 
-		_update_visible_cap(planet_pos.length(), radius)
+		_update_visible_cap(observer_radius, radius)
 		_update_active_levels()
 
+	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
 	_bind_gpu_resources(false)
 	_sync_uniforms(origin)
 	_sync_material_control()
@@ -98,6 +109,11 @@ func _bind_gpu_resources(force: bool) -> void:
 
 func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_origin", origin)
+	_material.set_shader_parameter("u_anchor_render", Frames.to_render(_stable_anchor_world))
+	_material.set_shader_parameter("u_anchor_dir", _anchor_dir)
+	_material.set_shader_parameter("u_anchor_right", _anchor_right)
+	_material.set_shader_parameter("u_anchor_up", _anchor_up)
+	_material.set_shader_parameter("u_lattice_center_plane", _center_plane)
 	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
@@ -126,6 +142,12 @@ func _sync_debug_uniforms() -> void:
 		return
 	_material.set_shader_parameter("u_debug_side_cut", 1.0 if _debug_side_cut else 0.0)
 	_material.set_shader_parameter("u_sink_scale", _debug_sink_scale)
+	_material.set_shader_parameter("u_stable_displacement",
+		1.0 if _debug_stable_displacement else 0.0)
+
+
+func _capture_stable_anchor(surface_world: Vec3D) -> void:
+	_stable_anchor_world = surface_world.dup()
 
 
 func _show_all_active_sectors() -> void:
@@ -178,6 +200,11 @@ func set_debug_sink_scale(value: float) -> void:
 	_sync_debug_uniforms()
 
 
+func set_debug_stable_displacement(value: bool) -> void:
+	_debug_stable_displacement = value
+	_sync_debug_uniforms()
+
+
 func debug_freeze_enabled() -> bool:
 	return _debug_freeze
 
@@ -188,6 +215,10 @@ func debug_side_cut_enabled() -> bool:
 
 func debug_sink_scale() -> float:
 	return _debug_sink_scale
+
+
+func debug_stable_displacement_enabled() -> bool:
+	return _debug_stable_displacement
 
 
 func rebuild_static_topology() -> void:
@@ -303,4 +334,5 @@ func gpu_stream_stats() -> Dictionary:
 		"debug_frozen": _debug_freeze,
 		"debug_side_cut": _debug_side_cut,
 		"debug_sink_scale": _debug_sink_scale,
+		"stable_displacement": _debug_stable_displacement,
 	}

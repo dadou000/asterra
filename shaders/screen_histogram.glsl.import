@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d1gqs4ju4yu5d"
+path="res://.godot/imported/screen_histogram.glsl-ee2bd15783045dfbdc09a9618823e14a.res"
+
+[deps]
+
+source_file="res://shaders/screen_histogram.glsl"
+dest_files=["res://.godot/imported/screen_histogram.glsl-ee2bd15783045dfbdc09a9618823e14a.res"]
+
+[params]
+

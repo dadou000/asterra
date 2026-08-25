@@ -42,7 +42,7 @@ func _ready() -> void:
 	if world_resource is GenConfig:
 		_world_seed = world_resource.world_seed
 		_planet_radius = world_resource.planet_radius
-	_quality = GraphicsQuality.sanitize(AppSettings.graphics_quality)
+	_quality = GraphicsQuality.sanitize(AppSettings.effective_cloud_quality())
 	get_tree().node_added.connect(_on_node_added)
 	call_deferred("_scan_existing_environments")
 	call_deferred("_register_known_surface_receivers")
@@ -91,7 +91,7 @@ func _try_bind_environment(world_environment: WorldEnvironment) -> void:
 		return
 
 	if material != _material:
-		configure(material, _world_seed, AppSettings.graphics_quality)
+		configure(material, _world_seed, AppSettings.effective_cloud_quality())
 	_install_depth_compositor(world_environment)
 	_register_helion_directional_lights(world_environment)
 

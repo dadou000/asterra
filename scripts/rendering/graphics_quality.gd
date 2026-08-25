@@ -138,6 +138,62 @@ static func configure_sun(light: DirectionalLight3D, preset: int, studio := fals
 	light.shadow_blur = 1.0
 
 
+static func advanced_defaults(preset: int) -> Dictionary:
+	var quality := sanitize(preset)
+	return {
+		"render_scale": _render_scale(quality),
+		"sdfgi_enabled": quality >= Preset.HIGH,
+		"sdfgi_cascades": 6 if quality == Preset.ULTRA else 4,
+		"sdfgi_cell_size": 0.45 if quality == Preset.ULTRA else 0.65,
+		"ssao_enabled": true,
+		"ssil_enabled": quality >= Preset.BALANCED,
+		"ssr_enabled": quality >= Preset.BALANCED,
+		"glow_enabled": quality >= Preset.HIGH,
+		"shadow_splits": 1 if quality == Preset.PERFORMANCE \
+			else (2 if quality == Preset.BALANCED else 4),
+		"cloud_quality": quality,
+	}
+
+
+static func apply_advanced_viewport(viewport: Viewport, options: Dictionary) -> void:
+	if viewport == null:
+		return
+	viewport.scaling_3d_scale = clampf(float(options.get("render_scale", 0.77)), 0.50, 1.00)
+
+
+static func apply_advanced_world_environment(environment: Environment,
+		options: Dictionary) -> void:
+	if environment == null:
+		return
+	environment.sdfgi_enabled = bool(options.get("sdfgi_enabled", false))
+	if environment.sdfgi_enabled:
+		environment.sdfgi_cascades = clampi(int(options.get("sdfgi_cascades", 4)), 2, 8)
+		environment.sdfgi_min_cell_size = clampf(
+			float(options.get("sdfgi_cell_size", 0.65)), 0.25, 2.00)
+	environment.ssao_enabled = bool(options.get("ssao_enabled", true))
+	environment.ssil_enabled = bool(options.get("ssil_enabled", true))
+	environment.ssr_enabled = bool(options.get("ssr_enabled", true))
+	environment.glow_enabled = bool(options.get("glow_enabled", true))
+
+
+static func apply_advanced_sun(light: DirectionalLight3D, options: Dictionary,
+		_studio := false) -> void:
+	if light == null:
+		return
+	var splits := int(options.get("shadow_splits", 4))
+	light.shadow_enabled = splits > 0
+	match splits:
+		1:
+			light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+			light.directional_shadow_blend_splits = false
+		2:
+			light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+			light.directional_shadow_blend_splits = true
+		4:
+			light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+			light.directional_shadow_blend_splits = true
+
+
 static func _configure_common_environment(environment: Environment, quality: int) -> void:
 	# AgX preserves hue in bright highlights better than the older Filmic curve.
 	environment.tonemap_mode = Environment.TONE_MAPPER_AGX

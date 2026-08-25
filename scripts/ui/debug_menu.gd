@@ -19,6 +19,8 @@ const TERRAIN_ROWS := [
 	["ring_indicator", "LOD ring labels", "Shows L0, L1, L2... directly on each active concentric ring", false],
 	["freeze_terrain", "Freeze terrain clipmap", "Locks centre + active LODs in planet space while you fly around", false],
 	["side_cut", "Side cut / sinking view", "Cuts away half the terrain and colours each LOD so overlap is visible", false],
+	["stable_displacement", "Stable displacement lattice", "Camera-relative vertices + per-LOD snapping. Turn off to restore the legacy path instantly", true],
+	["stable_ocean_displacement", "Stable ocean displacement", "Camera-relative ocean vertices + per-LOD snapping. Turn off for an ocean-only legacy comparison", true],
 ]
 
 const DEFAULT_SINK_SCALE := 2.0
@@ -423,6 +425,12 @@ func _on_reset_inspection() -> void:
 			(button_value as CheckButton).set_pressed_no_signal(false)
 	if GroundGeometryClipmap.has_method("set_debug_ring_indicator"):
 		GroundGeometryClipmap.call("set_debug_ring_indicator", false)
+	var stable_button_value: Variant = _buttons.get("stable_displacement")
+	if stable_button_value is CheckButton:
+		(stable_button_value as CheckButton).set_pressed_no_signal(true)
+	var stable_ocean_button_value: Variant = _buttons.get("stable_ocean_displacement")
+	if stable_ocean_button_value is CheckButton:
+		(stable_ocean_button_value as CheckButton).set_pressed_no_signal(true)
 	if _sink_slider != null:
 		_sink_slider.set_value_no_signal(DEFAULT_SINK_SCALE)
 	if _sink_label != null:
