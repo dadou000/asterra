@@ -387,8 +387,12 @@ void WeatherNative::initialize_global() {
 				jet *= std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
 				float trade = -9.0f * (1.0f - upper * 0.55f)
 					* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));
-				global_atm.u[i] = jet + trade + wave * (3.0f + upper * 3.5f);
-				global_atm.v[i] = (2.0f + upper * 2.0f) * std::cos(lon * 2.0f + lat * 3.0f + upper * 1.85f);
+				// Separate circumpolar jet, strongest aloft near 59 degrees.
+				float polar_jet = (3.0f + 30.0f * upper)
+					* std::exp(-std::pow((alat - 1.03f) / 0.20f, 2.0f));
+				global_atm.u[i] = jet + polar_jet + trade + wave * (3.0f + upper * 3.5f);
+				global_atm.v[i] = polar_taper * (2.0f + upper * 2.0f)
+					* std::cos(lon * 2.0f + lat * 3.0f + upper * 1.85f);
 				global_atm.pressure[i] = syn * 850.0f * (0.95f - upper * 0.35f) + wave * 260.0f;
 
 				float p_abs = P0 * SIGMA[layer] + global_atm.pressure[i];
@@ -659,6 +663,37 @@ void WeatherNative::filter_global_poles(Atmosphere &a) {
 	meridional_filter(a.nice, 0.18f, false);
 	meridional_filter(a.nprecip, 0.18f, false);
 	meridional_filter(a.mass_flux, 0.36f, false);
+
+	// Collapse only the innermost ~1.4 degrees toward zonal symmetry. The
+	// Antarctic-like 50-70 degree annular jet stays outside this numerical cap.
+	auto zonal_relax = [&](std::vector<float> &field, int offset, int y, float strength) {
+		int row = offset + y * a.width;
+		double sum = 0.0;
+		for (int x = 0; x < a.width; ++x) sum += field[row + x];
+		float mean = float(sum / double(a.width));
+		for (int x = 0; x < a.width; ++x) field[row + x] = std::lerp(field[row + x], mean, strength);
+	};
+	static constexpr float CAP_STRENGTH[4] = {1.0f, 0.72f, 0.45f, 0.22f};
+	for (int edge = 0; edge < 4; ++edge) {
+		for (int y : {edge, a.height - 1 - edge}) {
+			float strength = CAP_STRENGTH[edge];
+			for (int layer = 0; layer < LAYERS; ++layer) {
+				int off = a.layer_offset(layer);
+				zonal_relax(a.ntheta, off, y, strength);
+				zonal_relax(a.nq, off, y, strength);
+				zonal_relax(a.nu, off, y, strength);
+				zonal_relax(a.nliquid, off, y, strength);
+				zonal_relax(a.nice, off, y, strength);
+				zonal_relax(a.npressure, off, y, strength);
+				int row = off + y * a.width;
+				for (int x = 0; x < a.width; ++x) a.nv[row + x] *= (1.0f - strength);
+			}
+			zonal_relax(a.nprecip, 0, y, strength);
+			for (int interface_index = 0; interface_index < INTERFACES; ++interface_index) {
+				zonal_relax(a.mass_flux, a.interface_offset(interface_index), y, strength);
+			}
+		}
+	}
 }
 
 void WeatherNative::center_global_pressure(std::vector<float> &pressure) {
@@ -734,12 +769,17 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 				? HALF_PI_F - PI_F * (float(y) + 0.5f) / float(h)
 				: local_lat;
 			float coslat = std::cos(lat);
-			float dx = is_global ? TAU_F * PLANET_RADIUS_M * coslat / float(w) : LOCAL_CELL_M;
+			// Reduced-grid metric in the polar cap: the 1024 longitude values
+			// are not independent as circumference tends to zero.
+			float metric_coslat = is_global ? std::max(std::abs(coslat), 0.10f) : 1.0f;
+			float dx = is_global ? TAU_F * PLANET_RADIUS_M * metric_coslat / float(w) : LOCAL_CELL_M;
 			float dy = is_global ? PI_F * PLANET_RADIUS_M / float(h) : LOCAL_CELL_M;
 			float coriolis = 2.0f * ROTATION_RATE * std::sin(lat);
-			float curvature = is_global ? std::tan(lat) / PLANET_RADIUS_M : 0.0f;
+			float metric_lat = is_global ? std::clamp(lat, -1.3962634f, 1.3962634f) : lat;
+			float curvature = is_global ? std::tan(metric_lat) / PLANET_RADIUS_M : 0.0f;
 			float alat = std::abs(lat);
 			float sinlat = std::sin(alat);
+			float polar_forcing_taper = smoothstep01((HALF_PI_F - alat) / (PI_F / 12.0f));
 			float surface_t = 302.0f - 48.0f * std::pow(sinlat, 1.35f);
 			float clim_actual_t = std::clamp(surface_t - 0.00615f * height_m, 205.0f, 310.0f);
 			float clim_theta = clim_actual_t / sf;
@@ -750,6 +790,8 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 			float upper = std::clamp(height_m / 12800.0f, 0.0f, 1.0f);
 			float target_u = (7.0f + 34.0f * upper)
 				* std::exp(-std::pow((alat - 0.73f) / 0.27f, 2.0f));
+			target_u += (3.0f + 30.0f * upper)
+				* std::exp(-std::pow((alat - 1.03f) / 0.20f, 2.0f));
 			target_u += -9.0f * (1.0f - upper * 0.55f)
 				* std::exp(-std::pow((alat - 0.30f) / 0.25f, 2.0f));
 			float wave_envelope = std::exp(-std::pow((alat - 0.66f) / 0.36f, 2.0f));
@@ -767,8 +809,8 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 						float amplitude = wave_envelope * (5.0f + 7.0f * upper);
 						target_u_lane[k] = target_u + amplitude * std::cos(phase3)
 							+ amplitude * (0.32f * std::sin(phase5) + 0.16f * std::cos(phase7));
-						target_v_lane[k] = amplitude * 0.78f * std::sin(phase3)
-							+ amplitude * (0.26f * std::cos(phase5) + 0.14f * std::sin(phase7));
+						target_v_lane[k] = polar_forcing_taper * (amplitude * 0.78f * std::sin(phase3)
+							+ amplitude * (0.26f * std::cos(phase5) + 0.14f * std::sin(phase7)));
 					} else {
 						// The nest axes are transported tangent-plane axes, not geographic
 						// east/north. Its large-scale circulation enters through the rim.
@@ -1583,10 +1625,14 @@ void WeatherNative::diagnose(Atmosphere &a, bool is_global) {
 		for (int y = 0; y < h; ++y) {
 			float lat = is_global ? HALF_PI_F - PI_F * (float(y) + 0.5f) / float(h) : local_lat;
 			float coslat = std::cos(lat);
-			float dx = is_global ? TAU_F * PLANET_RADIUS_M * coslat / float(w) : LOCAL_CELL_M;
+			// Reduced-grid metric in the polar cap: the 1024 longitude values
+			// are not independent as circumference tends to zero.
+			float metric_coslat = is_global ? std::max(std::abs(coslat), 0.10f) : 1.0f;
+			float dx = is_global ? TAU_F * PLANET_RADIUS_M * metric_coslat / float(w) : LOCAL_CELL_M;
 			float dy = is_global ? PI_F * PLANET_RADIUS_M / float(h) : LOCAL_CELL_M;
 			float coriolis = 2.0f * ROTATION_RATE * std::sin(lat);
-			float curvature = is_global ? std::tan(lat) / PLANET_RADIUS_M : 0.0f;
+			float metric_lat = is_global ? std::clamp(lat, -1.3962634f, 1.3962634f) : lat;
+			float curvature = is_global ? std::tan(metric_lat) / PLANET_RADIUS_M : 0.0f;
 
 			for (int x = 0; x < w; x += 8) {
 				for (int k = 0; k < 8; ++k) {

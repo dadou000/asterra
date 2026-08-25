@@ -31,6 +31,32 @@ static inline float severe_smooth01(float x) {
 	return x * x * (3.0f - 2.0f * x);
 }
 
+// Remove the pure red/blue 2-delta-x pressure mode after all physical
+// tendencies. A binomial Shapiro stencil leaves synoptic wavelengths almost
+// untouched while damping a checkerboard with a dt-independent 4-hour e-fold.
+static void suppress_global_pressure_checkerboard(WeatherNative::Atmosphere &a, float dt) {
+	std::vector<float> source(a.npressure.begin(), a.npressure.end());
+	const float strength = 1.0f - std::exp(-dt / (4.0f * 3600.0f));
+	#pragma omp parallel for schedule(static)
+	for (int layer = 0; layer < WeatherNative::LAYERS; ++layer) {
+		int off = a.layer_offset(layer);
+		for (int y = 0; y < a.height; ++y) {
+			int yn = std::max(y - 1, 0);
+			int ys = std::min(y + 1, a.height - 1);
+			for (int x = 0; x < a.width; ++x) {
+				int xe = (x + 1) % a.width;
+				int xw = (x + a.width - 1) % a.width;
+				auto at = [&](int xx, int yy) -> float { return source[off + xx + yy * a.width]; };
+				int c = off + x + y * a.width;
+				float smooth = (4.0f * source[c]
+					+ 2.0f * (at(xe, y) + at(xw, y) + at(x, yn) + at(x, ys))
+					+ at(xe, yn) + at(xw, yn) + at(xe, ys) + at(xw, ys)) * (1.0f / 16.0f);
+				a.npressure[c] = std::lerp(source[c], smooth, strength);
+			}
+		}
+	}
+}
+
 static inline int neighbour_cell(const WeatherNative::Atmosphere &a, bool is_global,
 		int x, int y) {
 	if (is_global) {
@@ -88,7 +114,9 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 	// large-scale anchor; the coupled surface evaporation is the real water source.
 	const float requested_humidity_weight = tuning_weights[HUMIDITY];
 	const float requested_cloud_weight = tuning_weights[CLOUD_MICROPHYSICS];
-	tuning_weights[HUMIDITY] = requested_humidity_weight * (is_global ? 0.12f : 0.0f);
+	// Do not refill vapour from climatology once surface evaporation/dew is live.
+	tuning_weights[HUMIDITY] = requested_humidity_weight
+		* ((is_global && !surface_fields_ready) ? 0.12f : 0.0f);
 	tuning_weights[CLOUD_MICROPHYSICS] = 0.0f;
 	horizontal_pass_original(a, is_global, dt);
 	tuning_weights[HUMIDITY] = requested_humidity_weight;
@@ -376,6 +404,7 @@ void WeatherNative::step_global(float dt) {
 	horizontal_pass(global_atm, true, dt);
 	if (surface_fields_ready) surface_pass(global_atm, global_surface, true, dt);
 	vertical_pass(global_atm, true, dt);
+	suppress_global_pressure_checkerboard(global_atm, dt);
 	filter_global_poles(global_atm);
 	center_global_pressure(global_atm.npressure);
 	swap_state(global_atm);

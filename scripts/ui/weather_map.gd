@@ -90,6 +90,10 @@ const GLOBAL_H := 512
 const PARTICLE_COUNT := 32768
 const PLANET_RADIUS_M := 3500000.0
 const FIELD_BUILD_BUDGET_USEC := 2600
+const WARP_SPEEDS: Array[float] = [
+	0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0,
+	64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0,
+]
 
 # Inverses of the packing WeatherNative applies to each texture channel, so the
 # pin can report physical values instead of the 0..1 display encoding.
@@ -153,6 +157,7 @@ var _player: AsterraPlayer
 var _restore_mouse_capture := false
 var _restore_player_input := true
 var _warp_backlogged := false
+var _speed_slider_dragging := false
 
 
 func _ready() -> void:
@@ -328,11 +333,13 @@ func _build_ui() -> void:
 	_speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_speed_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_speed_slider.min_value = 0.0
-	_speed_slider.max_value = 14.0
+	_speed_slider.max_value = float(WARP_SPEEDS.size() - 1)
 	_speed_slider.step = 1.0
 	_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
-	_speed_slider.tooltip_text = "Logarithmic weather warp: paused, then powers of two from 1× to 8192×. Above 256× the global model spins up and the local nest resynchronises afterward."
+	_speed_slider.tooltip_text = "Discrete weather warp: pause, 0.25×, 0.5×, 1×, then powers of two to 8192×. Dragging previews and commits on release."
 	_speed_slider.value_changed.connect(_on_speed_slider_changed)
+	_speed_slider.drag_started.connect(_on_speed_slider_drag_started)
+	_speed_slider.drag_ended.connect(_on_speed_slider_drag_ended)
 	warp_row.add_child(_speed_slider)
 	var reset_speed := Button.new()
 	reset_speed.text = "1×"
@@ -902,33 +909,53 @@ func _find_player(root: Node) -> AsterraPlayer:
 	return null
 
 
-func _on_speed_slider_changed(slider_value: float) -> void:
-	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+func _on_speed_slider_drag_started() -> void:
+	_speed_slider_dragging = true
+
+
+func _on_speed_slider_drag_ended(value_changed: bool) -> void:
+	_speed_slider_dragging = false
+	if value_changed and _speed_slider != null:
+		WeatherSystem.set_simulation_speed(_slider_to_speed(_speed_slider.value))
 	_update_speed_label(WeatherSystem.simulation_speed)
 
 
+func _on_speed_slider_changed(slider_value: float) -> void:
+	var preview := _slider_to_speed(slider_value)
+	if not _speed_slider_dragging:
+		WeatherSystem.set_simulation_speed(preview)
+	_update_speed_label(preview)
+
+
 func _on_external_speed_changed(value: float) -> void:
-	if _speed_slider != null:
+	if _speed_slider != null and not _speed_slider_dragging:
 		_speed_slider.set_value_no_signal(_speed_to_slider(value))
 	_update_speed_label(value)
 
 
 func _step_warp(steps: int) -> void:
 	var slider_value := clampf(
-		_speed_to_slider(WeatherSystem.simulation_speed) + float(steps), 0.0, 14.0)
+		_speed_to_slider(WeatherSystem.simulation_speed) + float(steps),
+		0.0, float(WARP_SPEEDS.size() - 1))
 	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
 
 
 func _slider_to_speed(slider_value: float) -> float:
-	if slider_value < 0.5:
-		return 0.0
-	return pow(2.0, slider_value - 1.0)
+	var index := clampi(int(round(slider_value)), 0, WARP_SPEEDS.size() - 1)
+	return WARP_SPEEDS[index]
 
 
 func _speed_to_slider(speed: float) -> float:
-	if speed < 0.5:
+	if speed <= 0.01:
 		return 0.0
-	return clampf(log(speed) / log(2.0) + 1.0, 1.0, 14.0)
+	var best_index := 1
+	var best_error := 1.0e30
+	for i in range(1, WARP_SPEEDS.size()):
+		var error := absf(log(maxf(speed, 0.001)) - log(WARP_SPEEDS[i]))
+		if error < best_error:
+			best_error = error
+			best_index = i
+	return float(best_index)
 
 
 func _update_speed_label(value: float) -> void:

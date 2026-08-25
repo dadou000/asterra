@@ -4,11 +4,14 @@ render_mode unshaded, blend_add, depth_draw_never, cull_disabled;
 uniform sampler2D u_wind : filter_linear, repeat_disable;
 uniform float u_display_radius = 1.006;
 uniform float u_planet_radius_m = 3500000.0;
-// Streak travel per real second is lifetime * rate. Both were raised together
-// so the flow reads as moving weather without shortening the fade cycle.
-uniform float u_particle_lifetime_s = 36000.0;
+// Advection window is model time. Trail time is physical: streak length is
+// speed * trail_time / planet_radius, so fast jet-stream particles stay visible
+// longer and draw proportionally longer paths.
+uniform float u_advection_window_s = 36000.0;
+uniform float u_trail_time_s = 1200.0;
 uniform float u_animation_rate = 0.14;
-uniform float u_line_length = 0.018;
+uniform float u_min_line_length = 0.0022;
+uniform float u_max_line_length = 0.036;
 uniform float u_line_width = 0.00125;
 uniform float u_speed_reference = 65.0;
 uniform float u_opacity : hint_range(0.0, 2.0) = 0.72;
@@ -23,7 +26,7 @@ vec2 flow_sample(vec2 uv) {
 vec2 advect_step(vec2 uv, float dt) {
 	vec2 wind = flow_sample(uv);
 	float lat = (0.5 - uv.y) * PI;
-	float cos_lat = max(abs(cos(lat)), 0.075);
+	float cos_lat = max(abs(cos(lat)), 0.10);
 	uv.x = fract(uv.x + wind.x * dt / (2.0 * PI * u_planet_radius_m * cos_lat));
 	uv.y = clamp(uv.y - wind.y * dt / (PI * u_planet_radius_m), 0.001, 0.999);
 	return uv;
@@ -43,8 +46,12 @@ void vertex() {
 	vec2 seed_uv = INSTANCE_CUSTOM.rg;
 	float phase = INSTANCE_CUSTOM.b;
 	float size_jitter = 0.70 + INSTANCE_CUSTOM.a * 0.60;
-	float life = fract(TIME * u_animation_rate + phase);
-	float travel = life * u_particle_lifetime_s;
+	vec4 seed_field = textureLod(u_wind, seed_uv, 0.0);
+	float seed_speed = length(seed_field.rg);
+	float speed01 = clamp(seed_speed / u_speed_reference, 0.0, 1.0);
+	float persistence = mix(0.72, 1.75, speed01);
+	float life = fract(TIME * u_animation_rate / persistence + phase);
+	float travel = life * u_advection_window_s;
 	vec2 uv = seed_uv;
 
 	// Four field samples keep tens of thousands of instances cheap while still
@@ -66,8 +73,9 @@ void vertex() {
 	flow = speed > 0.02 ? flow / speed : east;
 	vec3 side = normalize(cross(radial, flow));
 
-	float speed_scale = mix(0.52, 1.55, clamp(speed / u_speed_reference, 0.0, 1.0));
-	float along = VERTEX.x * u_line_length * speed_scale * size_jitter;
+	float trail_length = clamp(speed * u_trail_time_s / u_planet_radius_m,
+		u_min_line_length, u_max_line_length);
+	float along = VERTEX.x * trail_length * size_jitter;
 	float across = VERTEX.y * u_line_width * size_jitter;
 	VERTEX = radial * u_display_radius + flow * along + side * across;
 
