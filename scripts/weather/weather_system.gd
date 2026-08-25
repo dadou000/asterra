@@ -17,6 +17,21 @@ const SIMULATION_WEIGHT_MIN := 0.0
 const SIMULATION_WEIGHT_MAX := 2.0
 const SIMULATION_WEIGHT_DEFAULT := 1.0
 const NEUTRAL_CLOUD := 0.16
+const REQUIRED_NATIVE_METHODS := [
+	&"initialize",
+	&"step_global",
+	&"set_local_center",
+	&"step_local",
+	&"get_global_weather_rgba",
+	&"get_local_weather_rgba",
+	&"get_global_diagnostics_rgba",
+	&"get_local_diagnostics_rgba",
+	&"get_layer_count",
+	&"get_local_center",
+	&"get_local_east",
+	&"get_local_north",
+	&"get_local_span_m",
+]
 
 signal simulation_weight_changed(weight: float)
 
@@ -62,6 +77,18 @@ func _try_create_native_backend() -> void:
 	if not (instance is Object):
 		backend_error = "WeatherNative registered but could not be instantiated"
 		push_error("WeatherSystem: %s" % backend_error)
+		return
+
+	var missing_methods := PackedStringArray()
+	for method: StringName in REQUIRED_NATIVE_METHODS:
+		if not instance.has_method(method):
+			missing_methods.append(String(method))
+	if not missing_methods.is_empty():
+		backend_error = (
+			"WeatherNative binary is out of date; rebuild native/weather and restart Godot. "
+			+ "Missing methods: %s" % ", ".join(missing_methods)
+		)
+		push_warning("WeatherSystem: %s" % backend_error)
 		return
 
 	_native = instance
