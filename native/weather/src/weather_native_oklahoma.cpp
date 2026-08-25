@@ -97,6 +97,32 @@ void WeatherNative::horizontal_pass(Atmosphere &a, bool is_global, float dt) {
 	const float rise_tau = is_global ? 900.0f : 420.0f;
 	const float decay_tau = 2700.0f;
 
+	// Elevated mixed-layer source. Hot, dry continental surfaces build a warm
+	// 1.7-km layer over several hours. Horizontal advection then carries that cap
+	// away from the dry source region, allowing a humid boundary layer on the
+	// downstream side of a dryline to become highly unstable while still clear.
+	if (have_surface) {
+		for (int c = 0; c < a.cells; ++c) {
+			const float land = 1.0f - std::clamp(surface.water_fraction[c], 0.0f, 1.0f);
+			const float dryness = severe_smooth01((0.52f - surface.soil_moisture[c]) / 0.38f);
+			const float heat = severe_smooth01((surface.sensible_flux_w_m2[c] - 65.0f) / 285.0f);
+			const float solar = severe_smooth01((surface.absorbed_solar_w_m2[c] - 180.0f) / 520.0f);
+			const float source = land * dryness * std::max(heat, solar * 0.72f);
+			if (source < 0.015f) continue;
+
+			const float q0 = a.nq[l0_off + c];
+			const float q1 = a.nq[l1_off + c];
+			const float moisture_barrier = std::min(
+				1400.0f * std::max(q0 - q1, 0.0f), 10.0f);
+			const float target_theta1 = a.ntheta[l0_off + c] + moisture_barrier + 5.0f;
+			if (target_theta1 <= a.ntheta[l1_off + c]) continue;
+			const float eml_tau = 4.5f * 3600.0f;
+			const float relax = 1.0f - std::exp(-source * dt / eml_tau);
+			a.ntheta[l1_off + c] = std::clamp(std::lerp(
+				a.ntheta[l1_off + c], target_theta1, relax), 220.0f, 430.0f);
+		}
+	}
+
 	// Capped severe-convection closure. Deep moist instability can remain loaded
 	// while the 0.45-1.7 km layer is inhibiting. Convergence, strong surface heat,
 	// or a sharp low-level moisture boundary (dryline) can release that reservoir.
