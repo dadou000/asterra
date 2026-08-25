@@ -54,7 +54,9 @@ func set_observer(world_pos: Vec3D) -> void:
 	_stats["horizon_km"] = _horizon_angle * radius / 1000.0
 
 	if _collision_streamer != null:
-		var agl: float = maxf(observer.length() - radius - Planet.macro_height(_obs_dir), 0.0)
+		# Keep the collision bubble activation test on exactly the same surface used
+		# by player contact and the collision mesh, including procedural detail.
+		var agl: float = maxf(observer.length() - radius - TerrainContactSampler.height(_obs_dir), 0.0)
 		_collision_streamer.set_observer(observer, agl <= 320.0)
 
 
