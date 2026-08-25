@@ -19,13 +19,14 @@ func _init() -> void:
 	var shader := resource as Shader
 	var material := ShaderMaterial.new()
 	material.shader = shader
-	# Force creation/use of the shader RID before exiting the headless frame.
+	# Creating the rendering RID forces the Shader resource through the renderer
+	# path in headless mode. Godot emits parser/compiler failures to stderr, which
+	# the workflow treats as a failed validation even if a resource object exists.
 	var shader_rid := shader.get_rid()
 	if not shader_rid.is_valid():
 		push_error("TERRAIN_SHADER_RID_INVALID: %s" % TERRAIN_SHADER)
 		quit(1)
 		return
 
-	RenderingServer.sync()
 	print("TERRAIN_SHADER_LOAD_OK: %s" % TERRAIN_SHADER)
 	quit(0)
