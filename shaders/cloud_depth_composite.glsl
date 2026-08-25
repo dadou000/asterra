@@ -68,7 +68,7 @@ float vertical_profile(float h, float storm) {
 float density_coarse(vec3 p,float radius,vec3 wind){
 	float alt=length(p)-radius;if(alt<=CLOUD_BASE||alt>=CLOUD_TOP)return 0.0;
 	float h=remap01(alt,CLOUD_BASE,CLOUD_TOP);vec4 wx=weather_state(normalize(p)*radius,radius);
-	float coverage=clamp(wx.r,0.0,0.97);
+	float coverage=clamp(wx.r,0.01,0.97);
 	float storm=clamp(wx.g,0.0,1.0);
 	float precip=clamp(wx.b,0.0,1.0);
 	float threshold=1.0-coverage*0.68;
@@ -80,7 +80,7 @@ float density_coarse(vec3 p,float radius,vec3 wind){
 float density_at(vec3 p,float radius,vec3 wind,float detail_weight){
 	float alt=length(p)-radius;if(alt<=CLOUD_BASE||alt>=CLOUD_TOP)return 0.0;
 	float h=remap01(alt,CLOUD_BASE,CLOUD_TOP);vec4 wx=weather_state(normalize(p)*radius,radius);
-	float coverage=clamp(wx.r,0.0,0.97);
+	float coverage=clamp(wx.r,0.01,0.97);
 	float storm=clamp(wx.g,0.0,1.0);
 	float precip=clamp(wx.b,0.0,1.0);
 	float threshold=1.0-coverage*0.68;
