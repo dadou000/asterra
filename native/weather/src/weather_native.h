@@ -60,7 +60,6 @@ public:
 	void set_local_center(const Vector3 &center_dir);
 	void step_local(float dt);
 	PackedFloat32Array get_global_weather_rgba() const;
-	PackedFloat32Array get_global_diagnostics_rgba() const;
 	PackedFloat32Array get_local_weather_rgba() const;
 	Vector3 get_local_center() const { return local_center; }
 	Vector3 get_local_east() const { return local_east; }
