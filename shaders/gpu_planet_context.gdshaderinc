@@ -3,10 +3,12 @@
 
 uniform sampler2DArray u_ctx_soil : filter_linear, repeat_disable;
 uniform sampler2DArray u_ctx_surface : filter_linear, repeat_disable;
-uniform sampler2DArray u_ctx_geology : filter_nearest, repeat_disable;
+uniform sampler2DArray u_ctx_geology : filter_linear, repeat_disable;
 uniform sampler2DArray u_ctx_structure : filter_linear, repeat_disable;
 uniform sampler2DArray u_ctx_climate : filter_linear, repeat_disable;
 uniform sampler2DArray u_ctx_hydrology : filter_linear, repeat_disable;
+uniform sampler2DArray u_ctx_rock : filter_nearest, repeat_disable;
+uniform sampler2DArray u_ctx_biome : filter_nearest, repeat_disable;
 uniform float u_ctx_ready = 0.0;
 uniform float u_ctx_face_res = 0.0;
 
@@ -30,7 +32,7 @@ vec4 asterra_ctx_surface(vec3 dir) {
 }
 
 vec4 asterra_ctx_geology(vec3 dir) {
-	if (u_ctx_ready < 0.5) return vec4(0.0, 0.45, 0.0, 0.0);
+	if (u_ctx_ready < 0.5) return vec4(0.45, 0.0, 0.0, 0.0);
 	return textureLod(u_ctx_geology, asterra_context_coord(dir), 0.0);
 }
 
@@ -49,8 +51,14 @@ vec4 asterra_ctx_hydrology(vec3 dir) {
 	return textureLod(u_ctx_hydrology, asterra_context_coord(dir), 0.0);
 }
 
-float asterra_ctx_rock_id(vec4 geology) {
-	return floor(geology.r * 12.0 + 0.5);
+float asterra_ctx_rock_id(vec3 dir) {
+	if (u_ctx_ready < 0.5) return 0.0;
+	return floor(textureLod(u_ctx_rock, asterra_context_coord(dir), 0.0).r * 12.0 + 0.5);
+}
+
+float asterra_ctx_biome_id(vec3 dir) {
+	if (u_ctx_ready < 0.5) return 7.0;
+	return floor(textureLod(u_ctx_biome, asterra_context_coord(dir), 0.0).r * 19.0 + 0.5);
 }
 
 float asterra_ctx_soil_depth_m(vec4 surface) {
@@ -67,6 +75,18 @@ float asterra_ctx_temperature_c(vec4 climate) {
 
 float asterra_ctx_precip_mm(vec4 climate) {
 	return climate.g * 3000.0;
+}
+
+float asterra_ctx_temp_range_c(vec4 climate) {
+	return climate.a * 55.0;
+}
+
+float asterra_ctx_erodibility(vec4 geology) {
+	return geology.r * 1.85;
+}
+
+float asterra_ctx_strata_dip(vec4 geology) {
+	return geology.g * 1.2;
 }
 
 float asterra_ctx_uplift_signed(vec4 structure) {
