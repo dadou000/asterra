@@ -4,7 +4,7 @@
 
 The CPU is responsible only for generating/loading the persistent coarse planet maps. Once the world has been adopted, terrain below the coarse-map scale is a GPU problem.
 
-No camera-centred CPU terrain generation, CPU detail height synthesis, or CPU material placement belongs in the final runtime path.
+No camera-centred CPU terrain generation, CPU detail height synthesis, CPU material placement, or CPU scatter classification belongs in the final runtime path.
 
 The current `GPUPlanetContext` conversion is a transition step: it uploads baked `PlanetFields` into immutable GPU textures once per adopted world. The long-term bake format should persist these context textures directly so runtime work is reduced to loading/uploading them.
 
@@ -44,8 +44,10 @@ The current `GPUPlanetContext` conversion is a transition step: it uploads baked
    - dense near-field geometric microrelief
 
 5. **GPU scatter**
-   - vegetation, trees, rocks, talus, debris, river stones, etc.
-   - consume the exact same context and final material classification
+   - vegetation, rocks, talus, river stones, debris and later trees/shrubs
+   - deterministic candidate lattices from world seed + absolute snapped tangent cells
+   - candidate acceptance and variation entirely on GPU
+   - consume the same context / geomorph / material logic as terrain
 
 6. **Optional local GPU compute refinement**
    - iterative hydraulic/thermal erosion only where analytic synthesis is insufficient
@@ -175,23 +177,54 @@ Micro displacement is distance-gated and fades before the dense patch hands off 
 
 The Terrain debug tab can disable geometric microrelief while leaving the dense patch and normal terrain active, allowing direct topology/performance comparison.
 
-### M7 — scatter — NEXT
+### M7 — GPU scatter — IMPLEMENTED, FIRST PASS
 
-Generate scatter suitability from the same context, geomorph and final material fields, then feed GPU-driven vegetation and object placement. Initial scatter families should include:
+`gpu_terrain_scatter.gd` creates static candidate MultiMeshes once, then only keeps snapped tangent-space windows centred near the camera and binds planet/origin/context uniforms. It does **not** classify individual candidates on the CPU.
 
-- grass and low vegetation
-- trees / shrubs by biome, moisture, soil depth and slope
-- loose stones and exposed-rock fragments
-- scree / talus blocks
-- river stones / gravel clusters
-- deadwood / litter where ecological context allows
+`gpu_scatter_common.gdshaderinc` reconstructs each candidate from `INSTANCE_ID`, an absolute tangent-grid cell and the deterministic `gpu_scatter` seed. The GPU then:
 
-Scatter must reuse the same deterministic process fields that shape terrain and materials so objects do not appear independently painted onto the ground.
+- adds deterministic within-cell jitter
+- reconstructs the spherical direction
+- samples the immutable macro/context textures
+- evaluates the same analytic geomorph height used by terrain
+- derives landform and material suitability proxies
+- accepts/rejects the candidate stochastically but deterministically
+- chooses scale/orientation/colour variation
+- collapses rejected candidates before rasterisation
+
+Current candidate layers:
+
+- **Grass clumps** — 96×96 candidates, 1.25 m cells, ~60 m nominal radius. Suitability follows vegetation potential, soil depth/stability, wetness, snow/ice/bare-biome suppression and landform context. Procedural three-blade clumps are generated without external assets and have deterministic size/colour variation plus low-cost wind bend.
+- **Geological / scree stones** — 64×64 candidates, 2.5 m cells, ~80 m nominal radius. Suitability follows exposed/thin soil, mountain/scree context, erodibility and real bedrock family; colour is derived from the same 13-family rock palette.
+- **River / depositional stones** — 64×64 candidates, 2.0 m cells, ~64 m nominal radius. Suitability follows discharge, deposition, sediment and the classifier's gravel signal; shape is flatter/smaller to represent water-worn stones.
+
+The candidate windows are snapped, so moving the camera inside a cell does not slide scatter across the ground. The tangent anchor is rebuilt only after ~8 km of travel; the first pass can therefore repopulate at that rare re-anchor boundary.
+
+Current limitations / next scatter work:
+
+- scatter uses a context/landform **slope proxy** in the vertex stage rather than the exact fragment-stage displaced slope; this keeps the first pass cheap but should eventually be replaced by a local GPU suitability field or compute-generated candidate buffer
+- no tree/shrub assets or procedural tree geometry yet
+- no indirect-draw compaction yet; rejected candidates still execute vertex work and are collapsed in the shader
+- no scatter shadows in this first performance-oriented pass
+- no collision/interaction proxies for large rocks or trees yet
+- quality tiers and density/radius controls still need tuning on target GPUs
 
 ### M8 — iterative near-field GPU erosion — OPTIONAL REFINEMENT
 
 Add compute-generated local height/sediment fields only if the analytic erosion system is insufficient at walking distance. Compute input remains immutable coarse context + deterministic procedural base; the CPU does not synthesize terrain.
 
+### M9 — mature GPU scatter / ecology
+
+Promote the first M7 candidate-lattice implementation to a compacted GPU-driven ecology system:
+
+- compute suitability from the exact final local terrain field
+- append/compact accepted candidates into GPU buffers
+- indirect draws per scatter family and LOD
+- trees, shrubs, deadwood, biome debris and larger talus blocks
+- stable planet-wide cell identity across tangent-anchor rebuilds
+- quality-tier density and shadow budgets
+- interaction/collision proxies only for nearby large objects
+
 ## Runtime invariant
 
-For a fixed world seed and coarse map set, all untouched sub-grid terrain must be reproducible from planet position and GPU algorithms alone.
+For a fixed world seed and coarse map set, all untouched sub-grid terrain and visual scatter must be reproducible from planet position and GPU algorithms alone.
