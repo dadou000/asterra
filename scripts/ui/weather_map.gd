@@ -317,6 +317,13 @@ func _sync_weather_textures() -> void:
 		_wind_material.set_shader_parameter("u_wind", _wind_texture)
 
 
+func _sync_from_weather_system() -> void:
+	# WeatherSystem calls this every frame while the viewer is open. Keeping the
+	# contract on the map side avoids feeding legacy flat-map uniforms into the
+	# spatial globe shader and lets the textures update without reallocating them.
+	_sync_weather_textures()
+
+
 func _ensure_particles() -> void:
 	if _wind_particles != null:
 		return
