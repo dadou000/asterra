@@ -1,4 +1,3 @@
-class_name WeatherSystem
 extends Node
 ## Runtime bridge between the AVX2 native meteorology core and GPU cloud rendering.
 
