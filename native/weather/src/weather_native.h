@@ -22,10 +22,6 @@ public:
 	static constexpr float PLANET_RADIUS_M = 1000000.0f;
 	static constexpr float LOCAL_CELL_M = 2200.0f;
 
-	// Same sigma discretisation is used by both global and local solvers. Layer 0
-	// is the boundary layer and layer 5 is the upper troposphere / lower
-	// stratosphere. Approximate standard-atmosphere heights are only metadata;
-	// dynamics are carried in terrain-following pressure (sigma) coordinates.
 	static constexpr std::array<float, LAYERS> SIGMA = {
 		0.95f, 0.82f, 0.68f, 0.52f, 0.36f, 0.20f
 	};
@@ -39,20 +35,18 @@ private:
 		int height = 0;
 		int cells = 0;
 
-		// Prognostic state. Wind is deliberately tangent-space u/v rather than
-		// XYZ or angle+magnitude. theta is potential temperature [K], q is
-		// specific humidity [kg/kg], condensates are mixing ratios [kg/kg], and
-		// pressure is a pressure/geopotential perturbation [Pa-like].
+		// Prognostic layer-major SoA state. Wind is local tangent-space u/v,
+		// theta is potential temperature [K], q is specific humidity [kg/kg],
+		// condensates are mixing ratios [kg/kg], and pressure is a perturbation.
 		std::vector<float> theta, q, u, v, liquid, ice, pressure;
 		std::vector<float> ntheta, nq, nu, nv, nliquid, nice, npressure;
 
 		// Column/interface state.
-		std::vector<float> precip;       // normalised instantaneous precipitation
+		std::vector<float> precip;
 		std::vector<float> nprecip;
-		std::vector<float> mass_flux;    // s^-1, positive upward, 5 interfaces
+		std::vector<float> mass_flux;
 
-		// Derived diagnostics. These are scratch/diagnostic fields, not primary
-		// state, so vorticity never duplicates information already present in u/v.
+		// Derived diagnostics, never duplicated as prognostic wind state.
 		std::vector<float> divergence;
 		std::vector<float> vorticity;
 		std::vector<float> potential_vorticity;
@@ -88,6 +82,8 @@ private:
 	void global_state_at_dir_layer(const Vector3 &dir, int layer,
 		float &theta, float &q, float &u, float &v, float &liquid,
 		float &ice, float &pressure) const;
+	PackedFloat32Array weather_rgba_from(const Atmosphere &a) const;
+	PackedFloat32Array diagnostics_rgba_from(const Atmosphere &a) const;
 
 	static float actual_temperature(float theta, int layer);
 	static float qsat_scalar(float temperature_k, float pressure_pa);
@@ -105,14 +101,8 @@ public:
 	void set_local_center(const Vector3 &center_dir);
 	void step_local(float dt);
 
-	// Renderer-compatible aggregate fields:
-	// R cloud coverage, G organised-storm signal, B precipitation, A pressure.
 	PackedFloat32Array get_global_weather_rgba() const;
 	PackedFloat32Array get_local_weather_rgba() const;
-
-	// Map/tuning diagnostics:
-	// R signed relative vorticity, G signed divergence, B signed PV proxy,
-	// A maximum column vertical wind shear; signed channels are encoded about .5.
 	PackedFloat32Array get_global_diagnostics_rgba() const;
 	PackedFloat32Array get_local_diagnostics_rgba() const;
 
