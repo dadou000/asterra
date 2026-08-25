@@ -92,9 +92,11 @@ vec4 sc_secondary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 	mud *= 0.35 + depositional * 0.95;
 	mud = max(mud, sc_is_biome(biome, 16.0) * wet * 0.8);
 
-	float snow = smoothstep(2.0, -8.0, temp) * (1.0 - smoothstep(28.0, 50.0, slope_deg));
+	float cold = 1.0 - smoothstep(-8.0, 2.0, temp);
+	float snow = cold * (1.0 - smoothstep(28.0, 50.0, slope_deg));
 	snow = max(snow, sc_is_biome(biome, 3.0));
-	snow = max(snow, sc_is_biome(biome, 17.0) * smoothstep(3.0, -5.0, temp));
+	float alpine_cold = 1.0 - smoothstep(-5.0, 3.0, temp);
+	snow = max(snow, sc_is_biome(biome, 17.0) * alpine_cold);
 
 	float scree = mountain * smoothstep(25.0, 34.0, slope_deg)
 		* (1.0 - smoothstep(45.0, 55.0, slope_deg));
