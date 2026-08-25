@@ -1,11 +1,7 @@
 extends CanvasLayer
 ## Interactive whole-planet weather globe.
-##
-## `é` toggles the viewer. Drag the globe to rotate it and use the wheel to zoom.
-## Weather scalar products come directly from WeatherSystem. The wind overlay uses
-## the native per-layer vector field when the backend exposes it; until an older
-## DLL is rebuilt it falls back to the baked prevailing-wind field so the map
-## remains usable instead of failing to open.
+## `é` toggles it. Drag to rotate, wheel/pinch to zoom. Weather products come from
+## WeatherSystem; wind streaks use the selected native six-layer vector field.
 
 enum Product {
 	WIND,
@@ -25,20 +21,11 @@ enum Product {
 }
 
 const PRODUCT_NAMES := [
-	"Wind",
-	"Composite weather",
-	"Cloud cover",
-	"Precipitation",
-	"Organised storm intensity",
-	"Surface pressure anomaly",
-	"Near-surface air temperature",
-	"Sea-surface temperature",
-	"CAPE",
-	"Absorbed solar irradiance",
-	"Relative vorticity",
-	"Low-level divergence",
-	"Potential-vorticity proxy",
-	"Vertical wind shear",
+	"Wind", "Composite weather", "Cloud cover", "Precipitation",
+	"Organised storm intensity", "Surface pressure anomaly",
+	"Near-surface air temperature", "Sea-surface temperature", "CAPE",
+	"Absorbed solar irradiance", "Relative vorticity", "Low-level divergence",
+	"Potential-vorticity proxy", "Vertical wind shear",
 ]
 const PRODUCT_NOTES := [
 	"Horizontal wind speed and animated flow",
@@ -57,20 +44,16 @@ const PRODUCT_NOTES := [
 	"Maximum adjacent-layer vector wind shear",
 ]
 const LEGEND_LEFT := [
-	"0 km/h", "Clear", "0 %", "None", "Stable", "Low",
-	"Cold", "Cold", "0 J/kg", "0 W/m²", "Anticyclonic", "Convergence", "Negative", "0 m/s",
+	"0 km/h", "Clear", "0 %", "None", "Stable", "Low", "Cold", "Cold",
+	"0 J/kg", "0 W/m²", "Anticyclonic", "Convergence", "Negative", "0 m/s",
 ]
 const LEGEND_RIGHT := [
-	"235+ km/h", "Severe", "100 %", "Intense", "Organised", "High",
-	"Hot", "Hot", "4000+ J/kg", "1200+ W/m²", "Cyclonic", "Divergence", "Positive", "55+ m/s",
+	"235+ km/h", "Severe", "100 %", "Intense", "Organised", "High", "Hot", "Hot",
+	"4000+ J/kg", "1200+ W/m²", "Cyclonic", "Divergence", "Positive", "55+ m/s",
 ]
 const LAYER_NAMES := [
-	"L1  ~0.45 km",
-	"L2  ~1.7 km",
-	"L3  ~3.3 km",
-	"L4  ~5.6 km",
-	"L5  ~8.5 km",
-	"L6  ~12.8 km",
+	"L1  ~0.45 km", "L2  ~1.7 km", "L3  ~3.3 km",
+	"L4  ~5.6 km", "L5  ~8.5 km", "L6  ~12.8 km",
 ]
 const FALLBACK_LAYER_SPEED := [1.0, 1.22, 1.48, 1.78, 2.08, 2.34]
 
@@ -92,6 +75,7 @@ var _globe: MeshInstance3D
 var _globe_material: ShaderMaterial
 var _wind_particles: MultiMeshInstance3D
 var _wind_material: ShaderMaterial
+var _wind_sampler: Object
 
 var _panel: PanelContainer
 var _product_select: OptionButton
@@ -224,7 +208,6 @@ func _build_ui() -> void:
 	margin.add_theme_constant_override("margin_top", 10)
 	margin.add_theme_constant_override("margin_bottom", 10)
 	_panel.add_child(margin)
-
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 5)
 	margin.add_child(column)
@@ -286,7 +269,6 @@ func _build_ui() -> void:
 	_legend.custom_minimum_size = Vector2(330, 8)
 	_legend.stretch_mode = TextureRect.STRETCH_SCALE
 	column.add_child(_legend)
-
 	var legend_row := HBoxContainer.new()
 	_legend_left = Label.new()
 	_legend_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -317,7 +299,6 @@ func _create_placeholder_textures() -> void:
 	base.set_pixel(0, 0, Color(0.018, 0.045, 0.10))
 	base.set_pixel(1, 0, Color(0.035, 0.085, 0.09))
 	_base_texture = ImageTexture.create_from_image(base)
-
 	_wind_image = Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
 	_wind_image.fill(Color(0.0, 0.0, 0.0, 1.0))
 	_wind_texture = ImageTexture.create_from_image(_wind_image)
@@ -339,7 +320,6 @@ func _sync_weather_textures() -> void:
 func _ensure_particles() -> void:
 	if _wind_particles != null:
 		return
-
 	_wind_particles = MultiMeshInstance3D.new()
 	var quad := ArrayMesh.new()
 	var arrays := []
@@ -393,8 +373,9 @@ func _process(delta: float) -> void:
 
 
 func _update_viewport_size() -> void:
-	var size := Vector2i(get_viewport().get_visible_rect().size)
-	if size.x < 16 or size.y < 16 or size == _last_viewport_size:
+	var visible_size := get_viewport().get_visible_rect().size
+	var size := Vector2i(maxi(int(visible_size.x), 16), maxi(int(visible_size.y), 16))
+	if size == _last_viewport_size:
 		return
 	_last_viewport_size = size
 	_subviewport.size = size
@@ -507,7 +488,6 @@ func _build_field_budgeted() -> void:
 	if Planet.fields == null or Planet.grid == null:
 		_field_build_y = -1
 		return
-
 	var started := Time.get_ticks_usec()
 	while _field_build_y < GLOBAL_H:
 		_build_field_row(_field_build_y)
@@ -516,7 +496,6 @@ func _build_field_budgeted() -> void:
 			break
 	if _field_build_y < GLOBAL_H:
 		return
-
 	_field_build_y = -1
 	if not _base_ready and _base_image != null:
 		_base_texture = ImageTexture.create_from_image(_base_image)
@@ -525,7 +504,7 @@ func _build_field_budgeted() -> void:
 	if not _live_wind_available and _wind_image != null:
 		_publish_wind_image(_wind_image)
 		_wind_fallback_ready = true
-		_source_label.text = "Wind source: baked prevailing field (rebuild native DLL for live layer vectors)"
+		_source_label.text = "Wind source: baked prevailing fallback  •  waiting for rebuilt native DLL"
 
 
 func _build_field_row(y: int) -> void:
@@ -533,7 +512,6 @@ func _build_field_row(y: int) -> void:
 	var cos_lat := cos(lat)
 	var fallback_scale: float = FALLBACK_LAYER_SPEED[wind_layer]
 	for x in GLOBAL_W:
-		# Base map uses conventional -π..π display longitude.
 		if not _base_ready and _base_image != null:
 			var display_lon := TAU * (float(x) + 0.5) / float(GLOBAL_W) - PI
 			var display_dir := Vector3(cos_lat * cos(display_lon), sin(lat), cos_lat * sin(display_lon))
@@ -544,8 +522,6 @@ func _build_field_row(y: int) -> void:
 				var water: float = clampf(Planet.water_coverage(display_dir), 0.0, 1.0)
 				base_color = Color(0.055, 0.20, 0.08).lerp(Color(0.018, 0.07, 0.19), water)
 			_base_image.set_pixel(x, y, base_color)
-
-		# Wind textures use the native atmosphere's 0..2π longitude convention.
 		if not _live_wind_available and _wind_image != null:
 			var lon := TAU * (float(x) + 0.5) / float(GLOBAL_W)
 			var direction := Vector3(cos_lat * cos(lon), sin(lat), cos_lat * sin(lon))
@@ -554,14 +530,25 @@ func _build_field_row(y: int) -> void:
 			_wind_image.set_pixel(x, y, Color(u, v, sqrt(u * u + v * v), 1.0))
 
 
+func _ensure_wind_sampler() -> void:
+	if _wind_sampler != null:
+		return
+	if not ClassDB.class_exists(&"WeatherWindSampler"):
+		return
+	var candidate: Variant = ClassDB.instantiate(&"WeatherWindSampler")
+	if candidate is Object:
+		_wind_sampler = candidate
+
+
 func _refresh_live_wind() -> void:
+	_ensure_wind_sampler()
 	var native: Variant = WeatherSystem.get("_native")
-	if native == null or not (native is Object) or not native.has_method(&"get_global_wind_rgba"):
+	if _wind_sampler == null or native == null or not (native is Object):
 		_live_wind_available = false
 		if not _wind_fallback_ready and _field_build_y < 0:
 			_begin_field_build_if_needed(true)
 		return
-	var result: Variant = native.call(&"get_global_wind_rgba", wind_layer)
+	var result: Variant = _wind_sampler.call(&"get_global_wind_rgba", native, wind_layer)
 	if not (result is PackedFloat32Array):
 		return
 	var values: PackedFloat32Array = result
@@ -681,5 +668,4 @@ func _sample_wind(lon: float, lat: float) -> Vector3:
 	var x := wrapi(int(floor(ucoord * GLOBAL_W)), 0, GLOBAL_W)
 	var y := clampi(int(floor(vcoord * GLOBAL_H)), 0, GLOBAL_H - 1)
 	var offset := (x + y * GLOBAL_W) * 4
-	return Vector3(
-		_wind_values[offset], _wind_values[offset + 1], _wind_values[offset + 2])
+	return Vector3(_wind_values[offset], _wind_values[offset + 1], _wind_values[offset + 2])
