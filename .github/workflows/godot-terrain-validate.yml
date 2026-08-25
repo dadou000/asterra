@@ -32,29 +32,34 @@ jobs:
           chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
           /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
 
-      - name: Import project resources
+      - name: Build isolated shader test project
         shell: bash
         run: |
           set -euo pipefail
-          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
-          # A fresh checkout has neither the global class cache nor imported
-          # compressed textures. Let the editor build both before the isolated
-          # terrain shader smoke test. Import diagnostics are retained, but this
-          # step is preparatory; the validation step below owns pass/fail.
-          set +e
-          "$GODOT" --headless --path . --import > /tmp/godot-import.log 2>&1
-          import_status=$?
-          set -e
-          tail -n 160 /tmp/godot-import.log || true
-          echo "Godot import exit status: $import_status"
+          rm -rf /tmp/asterra-terrain-ci
+          mkdir -p /tmp/asterra-terrain-ci/shaders /tmp/asterra-terrain-ci/tests
+          cp -R shaders/. /tmp/asterra-terrain-ci/shaders/
+          cp tests/validate_terrain_shader.gd /tmp/asterra-terrain-ci/tests/
+          cat > /tmp/asterra-terrain-ci/project.godot <<'EOF'
+          ; Minimal project used only to compile the Asterra terrain shader stack.
+          config_version=5
+
+          [application]
+          config/name="Asterra Terrain Shader CI"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
 
       - name: Validate active terrain shader
         shell: bash
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-ci
           set +e
-          "$GODOT" --headless --path . --script res://tests/validate_terrain_shader.gd > /tmp/terrain-shader.log 2>&1
+          "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_terrain_shader.gd > /tmp/terrain-shader.log 2>&1
           status=$?
           set -e
           cat /tmp/terrain-shader.log
