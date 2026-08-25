@@ -101,7 +101,8 @@ vec4 gm_landform_weights(vec3 dir, float macro_h) {
 	float mountain = clamp(max(uplift * 0.9 + fault * 0.55, altitude * 0.55), 0.0, 1.0);
 	float arid = clamp((1.0 - moisture) * (1.0 - clamp(precip / 900.0, 0.0, 1.0))
 		* (0.35 + sand * 0.85) * (1.0 - vegetation * 0.55), 0.0, 1.0);
-	float glacial = clamp(smoothstep(4.0, -12.0, temp_c) * (0.35 + altitude * 0.75), 0.0, 1.0);
+	float cold = 1.0 - smoothstep(-12.0, 4.0, temp_c);
+	float glacial = clamp(cold * (0.35 + altitude * 0.75), 0.0, 1.0);
 	float depositional = clamp(max(hydro.a, floodplain * 0.85 + wetland * 0.9)
 		* (0.5 + erodible * 0.35), 0.0, 1.0);
 	return vec4(mountain, arid, glacial, depositional);
