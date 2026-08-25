@@ -55,7 +55,7 @@ The default column contribution weights are `0.77, 0.90, 1.00, 1.07, 1.07, 1.19`
 
 ## Coupled surface energy model
 
-The atmospheric lower boundary now carries persistent land/ocean thermal and hydrological state instead of relaxing only toward a latitude curve. `SurfaceEnergy` uploads procedural elevation, water fraction, soil moisture and snow-free albedo after the planet bake, then supplies the live body-fixed Helion direction and N-body irradiance.
+The atmospheric lower boundary carries persistent land/ocean thermal and hydrological state instead of relaxing only toward a latitude curve. `SurfaceEnergy` uploads procedural geography and then supplies the live body-fixed Helion direction, instantaneous N-body irradiance and Helion angular radius.
 
 Each global and local surface cell evolves:
 
@@ -65,49 +65,69 @@ Each global and local surface cell evolves:
 - dynamic albedo
 - absorbed shortwave, sensible, latent and ground/deep-water heat fluxes
 
-The energy budget includes slope/aspect solar incidence, cloud attenuation from the six condensate layers, long-wave exchange, two-reservoir thermal inertia, wind-dependent bulk sensible heat exchange, wind-dependent evaporation/dew, precipitation recharge, snowfall, latent heat of fusion and snow insulation. Fresh snow starts near `0.89` albedo, ages toward roughly `0.72`, and wet snow can fall toward roughly `0.60`. Open water uses a much larger mixed-layer heat capacity than land, so the 11.5-hour day produces strong land/ocean thermal contrast without forcing unrealistic daily ocean swings.
+The energy budget includes terrain slope/aspect solar incidence, six-layer cloud attenuation, terrain-horizon occlusion in the local nest, sky-view attenuation of diffuse light, long-wave exchange, two-reservoir thermal inertia, mechanical plus free-convective sensible exchange, evaporation/dew, precipitation recharge, snowfall, latent heat of fusion and snow insulation. Fresh snow starts near `0.89` albedo, ages toward roughly `0.72`, and wet snow can fall toward roughly `0.60`. Open water uses a much larger mixed-layer heat capacity than land, so Asterra's 11.5-hour day produces strong land/ocean thermal contrast without unrealistic daily ocean swings.
 
-Sensible heat is returned to layer 0 potential temperature and evaporation/dew is returned to layer 0 specific humidity, closing the first runtime surface-atmosphere feedback loop. The surface debug RGBA contract is **R** temperature (220–330 K), **G** snow cover, **B** albedo, **A** soil wetness/free-water fraction.
+Sensible heat is returned to layer 0 potential temperature and evaporation/dew is returned to layer 0 specific humidity. Positive surface sensible heat also enters the lowest vertical mass-flux interface explicitly, allowing differential slope heating to create resolved buoyant ascent rather than waiting only for the slower static-instability feedback.
 
-This first pass uses the global procedural macro elevation to derive surface normals and samples that state into the local nest. Fine local terrain horizon occlusion, kilometre/sub-kilometre surface remapping, sea ice and ocean horizontal transport remain separate follow-up systems.
+### Local terrain coupling
+
+The 192x192 local weather nest receives its own procedural surface build rather than simply resampling the coarse global surface. The build:
+
+- samples the same runtime terrain-height function used by the world
+- includes sparse player terrain deltas through a thread-safe snapshot
+- uses real lake/ocean free-water elevation
+- derives terrain normals with a 600 m geodesic footprint
+- is generated on a worker thread and coalesces repeated recenter/edit requests
+- rebuilds when the native local nest recenters or terrain inside it is edited
+
+Native code then constructs a 24-azimuth terrain horizon for every local surface cell. Ten increasing march distances reach approximately 121 km from a cell where the nest permits it. Helion visibility is compared against this horizon using the star's actual angular radius, so sunrise/sunset over mountains is softened by the stellar disc rather than switched with a binary point-light test. The same horizon supplies an approximate diffuse sky-view factor.
+
+The surface debug RGBA contract is **R** temperature (220–330 K), **G** snow cover, **B** dynamic albedo, **A** soil wetness/free-water fraction.
+
+## Dynamic terrain appearance
+
+The active procedural terrain shader samples the global and nested local surface-energy textures. Current snow cover therefore accumulates, ages, wets and melts visually instead of being only a static biome tint. Wet ground darkens and melting snow becomes less rough/more specular. The generated frost field remains only a weak permanent/glacial baseline.
+
+## Unified physical clock
+
+`CelestialSystem.simulation_seconds` is authoritative. Global weather, local weather and the surface model now consume the same elapsed Asterra seconds while keeping their numerically stable fixed timesteps (90 s global, 20 s local). The speed control changes `CelestialSystem.time_scale`; it no longer creates separate global/local effective weather clocks.
+
+Press `é` to open the weather map. **Weather speed** ranges from paused `0x` through normal `1x` to `128x` spin-up. At high speed the solver performs more fixed physical steps rather than enlarging the timestep. A pathological external time jump may leave a backlog capped at 64 solver steps per rendered frame; elapsed physical time is retained rather than silently discarded.
 
 ## Runtime physical tuning
 
-Press `é` to open the weather map and `P` to open live physics calibration. Six bounded multipliers alter subsequent native solver steps without reinitializing its state:
-
-The weather map also exposes **Weather speed** from paused `0×` through normal `1×` to rapid spin-up at `128×`. Speed changes the number of calibrated fixed solver steps performed per real second, rather than enlarging the timestep, so fast-forwarding preserves the model's numerical behavior. Values from `16×` upward are labelled spin-up mode. Per-frame catch-up is capped to prevent a frame hitch from causing an unbounded simulation spiral.
+Press `P` from the weather map to open live physics calibration. Six bounded multipliers alter subsequent native solver steps without reinitializing its state:
 
 - **Circulation** — large-scale wind restoration and pressure-pattern response.
-- **Radiative heat** — temperature restoration toward the zonal radiative/surface equilibrium.
-- **Humidity supply** — moisture restoration toward a saturation-limited relative-humidity climatology.
+- **Radiative heat** — temperature restoration toward the large-scale radiative equilibrium.
+- **Humidity supply** — moisture restoration toward a saturation-limited climatology.
 - **Cloud physics** — condensation, evaporation, freezing, melting, and condensate decay.
-- **Convection** — instability/convergence-driven vertical mass transport.
+- **Convection** — instability/convergence/surface-buoyancy-driven vertical transport.
 - **Precipitation** — liquid and ice autoconversion/fallout.
 
-`0×` disables the parameterized process, `1×` is the calibrated baseline, and `2×` doubles its rate or response subject to the solver's safety caps. The separate six altitude controls change cloud-column integration immediately. **Reset Earth-like defaults** restores both groups.
+`0x` disables the parameterized process, `1x` is the calibrated baseline, and `2x` doubles its rate or response subject to solver safety caps. The separate six altitude controls change cloud-column integration immediately.
 
-The baseline uses Asterra's locked 11.5-hour rotation rate and 1.10-bar surface pressure, Bolton/Tetens saturation humidity, pressure-dependent potential temperature, latent heat of vaporization and fusion, dry subtropical humidity belts, pressure-thickness layer integration, time-step-independent relaxation, and area-weighted zero-mean global pressure perturbations. These improve plausibility, but this remains a six-level hydrostatic gameplay model rather than a forecast-grade numerical weather prediction system.
+The baseline uses Asterra's locked 11.5-hour rotation rate and 1.10-bar surface pressure, Bolton/Tetens saturation humidity, pressure-dependent potential temperature, latent heat of vaporization and fusion, pressure-thickness layer integration, time-step-independent relaxation, and area-weighted zero-mean global pressure perturbations. It remains a six-level hydrostatic gameplay atmosphere rather than a forecast-grade NWP model.
 
 ### Global
 
 - 256x128x6 atmospheric cells.
 - Semi-Lagrangian horizontal transport.
-- True latitude-dependent zonal spacing, across-pole ghost topology, and a
-  reduced-resolution polar filter for wavelengths the shrinking rings cannot
-  resolve.
+- True latitude-dependent zonal spacing, across-pole ghost topology, and a reduced-resolution polar filter for unresolved polar wavelengths.
 - Sphere-metric divergence, vorticity, and momentum curvature terms.
 - Pressure-gradient acceleration and Coriolis coupling.
 - Layer-dependent friction/radiative relaxation and climatological circulation forcing.
 - Saturation from temperature/pressure, condensation, evaporation, latent heating, freezing/melting and condensate fallout.
+- Persistent global land/ocean/snow surface reservoirs.
 
 ### Local
 
 - 192x192x6 at 2.2 km horizontal spacing (~422 km across).
-- Same prognostic variables and physics as global, but shorter timestep.
-- Global geographic winds are projected into the fixed local tangent frame,
-  including for nests that straddle a pole.
+- Same atmospheric variables and physics as global, with a shorter fixed timestep.
+- Global geographic winds are projected into the fixed local tangent frame, including polar nests.
 - Outer 24-cell rim is smoothly nudged toward the matching global sigma layers.
-- The nest remains spatially fixed until the player moves ~18% of its width, avoiding the previous frame-by-frame rotation of local data.
+- The nest remains spatially fixed until the player moves about 18% of its width.
+- Independent procedural terrain surface, sub-kilometre normals and 24-direction terrain horizons.
 
 ## Derived dynamics
 
@@ -137,4 +157,4 @@ A second RGBA32F diagnostic texture uses:
 - **B** = signed upper-level PV proxy, neutral at 0.5
 - **A** = maximum column vertical wind shear
 
-Open the live map with `é`. Products 6–9 display these new dynamics. The simulation-influence slider rescales exported weather/diagnostic anomalies without altering the solver timestep or internal numerical state.
+Open the live map with `é`. Products 6–9 display these dynamics. The simulation-influence slider rescales exported weather/diagnostic anomalies without altering the solver timestep or internal numerical state.
