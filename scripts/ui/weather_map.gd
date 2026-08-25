@@ -1,9 +1,7 @@
 extends CanvasLayer
 ## Live whole-planet meteorological map driven by WeatherSystem.
-##
-## `é` toggles the map on French AZERTY layouts. The display consumes the same
-## 256x128 AVX2 weather field that drives the volumetric cloud renderer, so the
-## synoptic map and the sky cannot disagree about storm placement.
+## `é` toggles it on French AZERTY layouts. Global and local products are sampled
+## from the same six-layer AVX2 atmosphere used by the cloud renderer.
 
 enum Product {
 	COMPOSITE,
@@ -11,24 +9,42 @@ enum Product {
 	PRECIPITATION,
 	CONVECTION,
 	PRESSURE,
+	VORTICITY,
+	DIVERGENCE,
+	POTENTIAL_VORTICITY,
+	WIND_SHEAR,
 }
 
 const PRODUCT_NAMES := [
 	"Composite weather",
 	"Cloud cover",
 	"Precipitation",
-	"Convective storm intensity",
+	"Organised storm intensity",
 	"Surface pressure anomaly",
+	"Relative vorticity",
+	"Low-level divergence",
+	"Potential-vorticity proxy",
+	"Vertical wind shear",
 ]
 const PRODUCT_NOTES := [
-	"Cloud shield + precipitation + severe convective cores",
-	"Column cloud/coverage potential used by the global cloud field",
+	"Cloud shield + precipitation + organised convective cores",
+	"Vertically integrated liquid/ice cloud condensate",
 	"Current model precipitation intensity",
-	"CAPE + rotation/convergence storm signal",
-	"Pressure perturbation around the planetary mean sea-level state",
+	"Vertical mass flux + instability + rotation + shear",
+	"Boundary-layer pressure/geopotential perturbation",
+	"Strongest signed relative vorticity across low/mid layers",
+	"Signed divergence in the low storm-inflow layer; negative = convergence",
+	"Upper-level absolute vorticity × potential-temperature stratification",
+	"Maximum adjacent-layer horizontal wind-vector difference",
 ]
-const LEGEND_LEFT := ["Clear", "0 %", "None", "Stable", "-55 hPa"]
-const LEGEND_RIGHT := ["Severe", "100 %", "Intense", "Severe", "+55 hPa"]
+const LEGEND_LEFT := [
+	"Clear", "0 %", "None", "Stable", "-60 hPa",
+	"Anticyclonic", "Convergence", "Negative PV", "0 m/s",
+]
+const LEGEND_RIGHT := [
+	"Severe", "100 %", "Intense", "Organised", "+60 hPa",
+	"Cyclonic", "Divergence", "Positive PV", "55+ m/s",
+]
 
 const W := 960
 const H := 480
@@ -88,8 +104,8 @@ func _ready() -> void:
 
 	product_select = OptionButton.new()
 	product_select.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	product_select.position = Vector2(-170, 56)
-	product_select.custom_minimum_size = Vector2(340, 36)
+	product_select.position = Vector2(-190, 56)
+	product_select.custom_minimum_size = Vector2(380, 36)
 	for product_name in PRODUCT_NAMES:
 		product_select.add_item(product_name)
 	product_select.item_selected.connect(_on_product_selected)
@@ -144,14 +160,14 @@ func _ready() -> void:
 	legend_left = Label.new()
 	legend_left.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	legend_left.position = Vector2(-210, -38)
-	legend_left.custom_minimum_size = Vector2(160, 20)
+	legend_left.custom_minimum_size = Vector2(180, 20)
 	legend_left.add_theme_font_size_override("font_size", 11)
 	add_child(legend_left)
 
 	legend_right = Label.new()
 	legend_right.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	legend_right.position = Vector2(50, -38)
-	legend_right.custom_minimum_size = Vector2(160, 20)
+	legend_right.position = Vector2(30, -38)
+	legend_right.custom_minimum_size = Vector2(180, 20)
 	legend_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	legend_right.add_theme_font_size_override("font_size", 11)
 	add_child(legend_right)
@@ -161,7 +177,7 @@ func _ready() -> void:
 	hint.position = Vector2(-float(W) * 0.5, -18)
 	hint.custom_minimum_size = Vector2(W, 18)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.text = "é close  •  ← / → change product  •  1–5 direct  •  weight affects map, clouds and shadows"
+	hint.text = "é close  •  ← / → product  •  1–9 direct  •  6 sigma layers global + local"
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", Color(0.52, 0.59, 0.69))
 	add_child(hint)
@@ -181,13 +197,10 @@ func _input(event: InputEvent) -> void:
 	if not key.pressed or key.echo:
 		return
 
-	# Printable-key matching is layout-correct: on French AZERTY this is the `é`
-	# key rather than the physical US keyboard position.
 	if key.unicode == 233 or key.unicode == 201:
 		toggle()
 		get_viewport().set_input_as_handled()
 		return
-
 	if not visible:
 		return
 
@@ -208,6 +221,14 @@ func _input(event: InputEvent) -> void:
 			set_product(Product.CONVECTION)
 		KEY_5:
 			set_product(Product.PRESSURE)
+		KEY_6:
+			set_product(Product.VORTICITY)
+		KEY_7:
+			set_product(Product.DIVERGENCE)
+		KEY_8:
+			set_product(Product.POTENTIAL_VORTICITY)
+		KEY_9:
+			set_product(Product.WIND_SHEAR)
 		_:
 			return
 	get_viewport().set_input_as_handled()
@@ -220,7 +241,6 @@ func _process(_delta: float) -> void:
 	if _player != null and is_instance_valid(_player):
 		_player_dir = _player.up_dir()
 		marker.queue_redraw()
-
 	_bind_weather_texture()
 	_update_base_map()
 
@@ -293,8 +313,8 @@ func _apply_product() -> void:
 	if title != null:
 		title.text = "ASTERRA METEOROLOGY — %s" % PRODUCT_NAMES[product_index]
 	if note != null:
-		note.text = "%s  •  local nest %.0f km wide" % [
-			PRODUCT_NOTES[product_index], WeatherSystem.local_span_m / 1000.0]
+		note.text = "%s  •  %d layers  •  local nest %.0f km" % [
+			PRODUCT_NOTES[product_index], WeatherSystem.layer_count, WeatherSystem.local_span_m / 1000.0]
 	if legend_texture != null:
 		legend_texture.texture = _make_legend_texture(product_index)
 	if legend_left != null:
@@ -307,6 +327,18 @@ func _bind_weather_texture() -> void:
 	if _material == null or WeatherSystem.global_weather_texture == null:
 		return
 	_material.set_shader_parameter("u_weather", WeatherSystem.global_weather_texture)
+	if WeatherSystem.local_weather_texture != null:
+		_material.set_shader_parameter("u_local_weather", WeatherSystem.local_weather_texture)
+	if WeatherSystem.global_diagnostics_texture != null:
+		_material.set_shader_parameter("u_diagnostics", WeatherSystem.global_diagnostics_texture)
+	if WeatherSystem.local_diagnostics_texture != null:
+		_material.set_shader_parameter("u_local_diagnostics", WeatherSystem.local_diagnostics_texture)
+	_material.set_shader_parameter("u_local_center", WeatherSystem.local_center)
+	_material.set_shader_parameter("u_local_east", WeatherSystem.local_east)
+	_material.set_shader_parameter("u_local_north", WeatherSystem.local_north)
+	_material.set_shader_parameter("u_local_span_m", WeatherSystem.local_span_m)
+	if Planet.cfg != null:
+		_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
 
 
 func _placeholder_texture() -> ImageTexture:
@@ -385,7 +417,6 @@ func _set_player_locked(locked: bool) -> void:
 		_player.input_enabled = false
 		return
 
-	# Do not steal control back from another modal overlay that is still open.
 	var root := get_tree().current_scene
 	if root != null:
 		for child in root.get_children():
@@ -412,8 +443,6 @@ func _draw_marker() -> void:
 	var x := (latlon.y / TAU + 0.5) * float(W) - float(W) * 0.5
 	var y := (0.5 - latlon.x / PI) * float(H) - float(H) * 0.5
 
-	# The cyan ellipse is the current mesoscale refinement footprint. It is an
-	# equirectangular approximation of the 422 km tangent-plane nest.
 	if Planet.cfg != null:
 		var half_angle := (WeatherSystem.local_span_m * 0.5) / maxf(Planet.cfg.planet_radius, 1.0)
 		var cos_lat := maxf(absf(cos(latlon.x)), 0.18)
@@ -450,6 +479,18 @@ func _make_legend_texture(which: int) -> GradientTexture1D:
 			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
 			gradient.colors = PackedColorArray([
 				Color(0.10, 0.28, 0.88), Color(0.92, 0.92, 0.88), Color(0.88, 0.16, 0.10)])
+		Product.VORTICITY, Product.DIVERGENCE:
+			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.10, 0.36, 0.92), Color(0.88, 0.90, 0.90), Color(0.92, 0.16, 0.12)])
+		Product.POTENTIAL_VORTICITY:
+			gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.20, 0.20, 0.70), Color(0.90, 0.90, 0.86), Color(0.72, 0.08, 0.72)])
+		Product.WIND_SHEAR:
+			gradient.offsets = PackedFloat32Array([0.0, 0.35, 0.68, 1.0])
+			gradient.colors = PackedColorArray([
+				Color(0.03, 0.10, 0.16), Color(0.10, 0.62, 0.54), Color(0.96, 0.82, 0.14), Color(0.90, 0.10, 0.12)])
 		_:
 			gradient.offsets = PackedFloat32Array([0.0, 0.32, 0.62, 0.82, 1.0])
 			gradient.colors = PackedColorArray([
