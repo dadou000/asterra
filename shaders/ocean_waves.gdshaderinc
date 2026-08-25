@@ -1,11 +1,10 @@
 // Shared finite-depth ocean wave model for rendering and GPU physics.
 //
-// Long waves are Gerstner-like trochoids with linear finite-depth dispersion.
-// In shallow water their propagation direction blends toward the local seabed
-// height gradient, so crests become approximately parallel to bathymetric
-// contours and therefore wrap naturally around coves, points and beaches.
-// Breaking is bounded by H ~= gamma*d (gamma ~0.78), preventing impossible wave
-// amplitudes in ankle-deep water.
+// The physical wave solution is world-space invariant. Render LOD is allowed to
+// decide only how much of a wavelength can be represented by a particular mesh;
+// it must never alter phase, direction, dispersion frequency or Gerstner shape.
+// In shallow water propagation bends toward the seabed gradient, crests wrap
+// around coasts, and breaking is bounded by H ~= gamma*d (gamma ~0.78).
 
 const float OCEAN_G = 9.81;
 const float BREAKER_GAMMA = 0.78;
@@ -32,7 +31,8 @@ vec3 ocean_safe_tangent(vec3 d, vec3 candidate) {
 
 float ocean_wave_band_weight(float wavelength, float spacing) {
 	// At least ~7 vertices/wavelength at full strength; smoothly remove waves as
-	// a clipmap level becomes too coarse to carry them.
+	// a clipmap level becomes too coarse to carry them. This is a representation
+	// weight only. It is deliberately applied after the physical wave is solved.
 	return 1.0 - smoothstep(wavelength / 10.0, wavelength / 5.5, spacing);
 }
 
@@ -80,15 +80,19 @@ void ocean_add_wave(vec3 up, vec3 dir, float offshore_phase_coord,
 
 	float k = TAU / wavelength;
 	float omega = ocean_dispersion(k, depth) * ocean_coast_frequency_scale(depth, wavelength);
-	float amp = base_amp * ocean_shoal_gain(depth, wavelength) * lod_w;
+
+	// Solve the physical wave before considering mesh LOD. In the old path lod_w
+	// reduced amp before q was calculated. q then rose as amp fell, which kept much
+	// of the horizontal Gerstner displacement alive while the vertical component
+	// vanished. Adjacent clipmap levels therefore represented different trochoids.
+	float raw_amp = base_amp * ocean_shoal_gain(depth, wavelength);
 	float breaker_amp = max(0.015, BREAKER_GAMMA * depth * 0.5);
-	float break_ratio = amp / max(breaker_amp, 0.015);
-	amp = min(amp, breaker_amp);
+	float break_ratio = raw_amp / max(breaker_amp, 0.015);
+	float amp = min(raw_amp, breaker_amp);
 
 	vec3 travel = ocean_safe_tangent(up, dir);
-	// The offshore coordinate is intentionally supplied from a fixed planet-space
-	// phase axis. Using dot(radial_position, local_tangent) would be identically
-	// ~zero on a sphere and make every offshore vertex rise/fall in unison.
+	// The offshore coordinate is supplied from a fixed planet-space phase axis.
+	// It therefore has no dependency on clipmap centre, ring number or tessellation.
 	float shore_blend = (1.0 - smoothstep(18.0, 150.0, depth)) * 0.94;
 	float phase_coord = mix(offshore_phase_coord, signed_shore_distance, shore_blend);
 	float phase = phase_coord * k - omega * time_s + phase_offset;
@@ -98,16 +102,19 @@ void ocean_add_wave(vec3 up, vec3 dir, float offshore_phase_coord,
 	float q = min(steepness / max(k * max(amp, 0.01), 0.01), 0.95);
 	float horizontal = q * amp;
 
-	out_wave.displacement += up * (amp * s) + travel * (horizontal * c);
-	out_wave.slope += travel * (amp * k * c);
-	out_wave.velocity += up * (-amp * omega * c) + travel * (horizontal * omega * s);
-	out_wave.crest = max(out_wave.crest, s * 0.5 + 0.5);
+	// LOD is applied to the complete solved wave. Thus a fine ring approaching its
+	// parent becomes exactly the same wave field as that parent at the handoff.
+	out_wave.displacement += (up * (amp * s) + travel * (horizontal * c)) * lod_w;
+	out_wave.slope += travel * (amp * k * c) * lod_w;
+	out_wave.velocity += (up * (-amp * omega * c) + travel * (horizontal * omega * s)) * lod_w;
+	out_wave.crest = max(out_wave.crest, (s * 0.5 + 0.5) * lod_w);
 	out_wave.breaking = max(out_wave.breaking,
-		smoothstep(0.72, 1.08, break_ratio) * (1.0 - smoothstep(0.3, 8.0, depth)));
+		smoothstep(0.72, 1.08, break_ratio)
+		* (1.0 - smoothstep(0.3, 8.0, depth)) * lod_w);
 	// Horizontal Gerstner compression peaks close to the crest and is a useful
 	// stateless proxy for whitecap generation.
 	out_wave.compression = max(out_wave.compression,
-		clamp(max(s, 0.0) * horizontal * k * 2.4, 0.0, 1.0));
+		clamp(max(s, 0.0) * horizontal * k * 2.4 * lod_w, 0.0, 1.0));
 }
 
 OceanWaveSample ocean_empty_wave() {

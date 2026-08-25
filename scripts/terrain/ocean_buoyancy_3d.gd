@@ -133,7 +133,12 @@ func _queue_gpu_probe_batch() -> void:
 		coast_dirs[i] = _bathy_landward
 		shore_distances[i] = _bathy_shore_distance + tangent_offset.dot(_bathy_landward)
 
-	var request_id := _gpu.request_batch(points, depths, coast_dirs, shore_distances, wave_scale)
+	var effective_wave_scale := wave_scale
+	var ocean_system := _gpu.get_parent()
+	if ocean_system != null and ocean_system.has_method("debug_wave_scale"):
+		effective_wave_scale *= float(ocean_system.call("debug_wave_scale"))
+	var request_id := _gpu.request_batch(
+		points, depths, coast_dirs, shore_distances, effective_wave_scale)
 	if request_id >= 0:
 		_request_context[request_id] = count
 		# Keep the tiny context map bounded even if a caller destroys/rebuilds the
