@@ -4,12 +4,22 @@
 /// These functions provide the missing astronomical visibility test so direct
 /// sunlight cannot reach a point through Asterra itself.
 
+/// Apparent angular radius of Helion in radians. Runtime code derives this from
+/// the physical stellar radius and Asterra-Helion distance. The default is a
+/// Sol-radius source at one astronomical unit (~0.2667 degrees radius).
+uniform float u_helion_angular_radius_rad = 0.00465475;
+
 float planet_horizon_cosine(float radius, float planet_radius) {
 	float r = max(radius, planet_radius + 0.01);
 	float ratio = clamp(planet_radius / r, 0.0, 1.0);
 	return -sqrt(max(1.0 - ratio * ratio, 0.0));
 }
 
+/// Visible fraction of Helion's finite stellar disc at Asterra's geometric
+/// horizon. Unlike the old arbitrary smoothstep, this uses the actual source
+/// angular radius. The circle-segment expression approximates the planetary limb
+/// as a straight line across the tiny apparent stellar disc, which is effectively
+/// exact at stellar angular scales.
 float planet_direct_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	vec3 s = normalize(sun_dir);
 	float r = length(p);
@@ -17,29 +27,24 @@ float planet_direct_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	vec3 up = p / r;
 
 	// Lift points that numerically sit a few centimetres inside the reference
-	// sphere. This avoids false self-intersections on sea level.
-	vec3 ro = p;
+	// sphere. This avoids a false below-horizon classification at sea level.
 	if (r <= planet_radius + 0.5) {
-		ro = up * (planet_radius + 0.5);
 		r = planet_radius + 0.5;
 	}
 
-	// Exact ray/sphere occultation by the mean planetary body.
-	float b = dot(ro, s);
-	float c = dot(ro, ro) - planet_radius * planet_radius;
-	float disc = b * b - c;
-	if (disc > 0.0) {
-		float t_near = -b - sqrt(disc);
-		if (t_near > 1.0) return 0.0;
-	}
+	float horizon_cos = planet_horizon_cosine(r, planet_radius);
+	float mu = clamp(dot(up, s), -1.0, 1.0);
+	float horizon_zenith = acos(clamp(horizon_cos, -1.0, 1.0));
+	float sun_zenith = acos(mu);
+	float clearance = horizon_zenith - sun_zenith;
+	float angular_radius = max(u_helion_angular_radius_rad, 1e-7);
 
-	// A small angular transition approximates the finite solar disc and removes
-	// numerical flicker exactly at the geometric horizon. At altitude the
-	// geometric horizon correctly drops below the local tangent plane.
-	float horizon = planet_horizon_cosine(r, planet_radius);
-	float mu = dot(up, s);
-	const float SOLAR_EDGE = 0.0062;
-	return smoothstep(horizon - SOLAR_EDGE, horizon + SOLAR_EDGE, mu);
+	if (clearance <= -angular_radius) return 0.0;
+	if (clearance >= angular_radius) return 1.0;
+
+	float x = clamp(clearance / angular_radius, -1.0, 1.0);
+	float root = sqrt(max(1.0 - x * x, 0.0));
+	return (acos(-x) + x * root) / PI;
 }
 
 /// Cheap local hemispherical sky irradiance. This replaces global Godot ambient
