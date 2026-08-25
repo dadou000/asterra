@@ -5,7 +5,7 @@ uniform sampler3D u_cloud_shadow_shape_noise : repeat_enable, filter_linear;
 uniform sampler2D u_cloud_weather_global : filter_linear;
 uniform sampler2D u_cloud_weather_local : filter_linear;
 uniform float u_cloud_shadow_enabled = 0.0;
-uniform float u_cloud_shadow_base = 700.0;
+uniform float u_cloud_shadow_base = 800.0;
 uniform float u_cloud_shadow_top = 14500.0;
 uniform float u_cloud_shadow_density = 1.15;
 uniform float u_cloud_shadow_shape_scale = 0.000055;
@@ -56,11 +56,11 @@ vec4 cloud_shadow_weather(vec3 surface_p, float planet_radius) {
 }
 
 float cloud_shadow_vertical_profile(float h, float storm) {
-	float bottom = smoothstep(0.0, mix(0.055, 0.025, storm), h);
-	float top_start = mix(0.30, 0.84, storm);
+	float bottom = smoothstep(0.0, mix(0.050, 0.022, storm), h);
+	float top_start = mix(0.13, 0.88, smoothstep(0.08, 0.82, storm));
 	float top = 1.0 - smoothstep(top_start, 1.0, h);
-	float anvil = smoothstep(0.58, 0.78, storm) * exp(-pow((h - 0.84) / 0.10, 2.0));
-	return max(bottom * top, anvil * 0.72);
+	float anvil = smoothstep(0.48, 0.72, storm) * exp(-pow((h - 0.84) / 0.095, 2.0));
+	return max(bottom * top, anvil * 0.80);
 }
 
 float cloud_shadow_density_at(vec3 p, float planet_radius) {
@@ -68,13 +68,15 @@ float cloud_shadow_density_at(vec3 p, float planet_radius) {
 	if (altitude <= u_cloud_shadow_base || altitude >= u_cloud_shadow_top) return 0.0;
 	float h = cloud_shadow_remap01(altitude, u_cloud_shadow_base, u_cloud_shadow_top);
 	vec4 weather = cloud_shadow_weather(normalize(p) * planet_radius, planet_radius);
-	float coverage = clamp(weather.r + (0.5 - weather.a) * 0.20 + weather.b * 0.14, 0.01, 0.99);
-	float threshold = 1.0 - coverage * 0.82;
+	float coverage = clamp(weather.r, 0.0, 0.97);
+	float storm = clamp(weather.g, 0.0, 1.0);
+	float precip = clamp(weather.b, 0.0, 1.0);
+	float threshold = 1.0 - coverage * 0.68;
 	float macro = textureLod(u_cloud_shadow_shape_noise,
 		(p + u_cloud_shadow_wind_offset) * u_cloud_shadow_shape_scale, 0.0).r;
 	float body = smoothstep(threshold, min(threshold + 0.18, 0.995), macro);
-	return body * cloud_shadow_vertical_profile(h, weather.b)
-		* u_cloud_shadow_density * (0.78 + 0.46 * weather.b + 0.22 * weather.z);
+	return body * cloud_shadow_vertical_profile(h, storm)
+		* u_cloud_shadow_density * (0.72 + 0.82 * storm + 0.08 * precip);
 }
 
 vec2 cloud_shadow_layer_segment(vec3 origin, vec3 dir, float planet_radius) {
