@@ -280,7 +280,11 @@ void vertex() {
 		v_direct_transmittance *= cloud_shadow_transmittance(p, sun_dir, u_planet_radius);
 	}
 	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
-	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius, v_atmo_t, v_atmo_l);
+	vec3 atmo_t;
+	vec3 atmo_l;
+	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius, atmo_t, atmo_l);
+	v_atmo_t = atmo_t;
+	v_atmo_l = atmo_l;
 	VERTEX = v_render;
 }
 
