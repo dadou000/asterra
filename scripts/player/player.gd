@@ -7,9 +7,10 @@ extends Node3D
 ## and flying are the same controller with a different force model, and the
 ## transition from orbit to standing on the ground never changes representation.
 ##
-## Ground contact is resolved against the height field rather than the streamed
-## collision meshes, so the player can never fall through a chunk that has not
-## finished meshing.
+## Ground contact is resolved against the same band-limited GroundHeightStore
+## field used to build streamed collision meshes. It therefore remains available
+## even before a nearby collision tile is installed, without disagreeing with the
+## terrain detail level represented by physics.
 
 signal moved(world_pos: Vec3D)
 
@@ -47,8 +48,8 @@ func _ready() -> void:
 
 func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 	var d := dir.normalized()
-	var h := Planet.terrain_height(d)
-	var r := Planet.cfg.planet_radius + maxf(h, 0.0) + spawn_altitude
+	var h := TerrainContactSampler.height(d)
+	var r := Planet.cfg.planet_radius + h + spawn_altitude
 	world_pos = Vec3D.new(d.x * r, d.y * r, d.z * r)
 	Frames.rebase(world_pos)
 	_sync_transform()
@@ -61,7 +62,7 @@ func altitude() -> float:
 	return world_pos.length() - Planet.cfg.planet_radius
 
 func ground_height() -> float:
-	return Planet.terrain_height(up_dir())
+	return TerrainContactSampler.height(up_dir())
 
 func height_above_ground() -> float:
 	return altitude() - ground_height()
@@ -121,7 +122,7 @@ func _physics_process(dt: float) -> void:
 			world_pos = world_pos.add(Vec3D.from_v3(wish).mul(speed * dt))
 		# Re-evaluate the local vertical after moving tangentially.
 		up = world_pos.normalized().to_v3()
-		var gh := Planet.terrain_height(up)
+		var gh := TerrainContactSampler.height(up)
 		var target_r := Planet.cfg.planet_radius + gh + EYE_HEIGHT
 		var r := world_pos.length()
 		vertical_speed -= GRAVITY * dt
@@ -174,7 +175,7 @@ func _sync_transform() -> void:
 func view_dir() -> Vector3:
 	return -camera.global_transform.basis.z
 
-## March the view ray against the height field. Returns {} on a miss.
+## March the view ray against the contact height field. Returns {} on a miss.
 func aim(max_range: float = 220.0) -> Dictionary:
 	var origin := world_pos
 	var ray := view_dir()
@@ -197,13 +198,13 @@ func aim(max_range: float = 220.0) -> Dictionary:
 			var p := origin.add(Vec3D.from_v3(ray).mul(hi))
 			var d := p.normalized().to_v3()
 			return {"world": p, "dir": d, "distance": hi,
-				"height": Planet.terrain_height(d)}
+				"height": TerrainContactSampler.height(d)}
 	return {}
 
 func _gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
 	var p := origin.add(Vec3D.from_v3(ray).mul(t))
 	var d := p.normalized().to_v3()
-	return p.length() - (Planet.cfg.planet_radius + Planet.terrain_height(d))
+	return p.length() - (Planet.cfg.planet_radius + TerrainContactSampler.height(d))
 
 func state() -> Dictionary:
 	return {"x": world_pos.x, "y": world_pos.y, "z": world_pos.z,
