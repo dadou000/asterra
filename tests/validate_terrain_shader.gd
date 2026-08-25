@@ -1,20 +1,25 @@
 extends SceneTree
 ## Headless smoke test for the active GPU terrain + scatter shader stack.
 ##
-## Loading each top-level Shader forces Godot to preprocess its includes and send
-## the resulting code through the renderer shader path. CI also scans the engine
-## log for parser/compiler errors because an invalid Shader resource can still
-## exist long enough for a script to receive a reference to it.
+## Spatial shaders are loaded as Shader resources. The raw RenderingDevice compute
+## shader is checked through RDShaderFile -> RDShaderSPIRV so CI catches GLSL/SPIR-V
+## compile failures even though headless mode has no global RenderingDevice.
 
-const SHADERS := [
+const SPATIAL_SHADERS := [
 	"res://shaders/spherical_geometry_clipmap_procedural_uv.gdshader",
 	"res://shaders/terrain_scatter_grass.gdshader",
 	"res://shaders/terrain_scatter_stone.gdshader",
+	"res://shaders/terrain_scatter_compact_grass.gdshader",
+	"res://shaders/terrain_scatter_compact_stone.gdshader",
+]
+
+const COMPUTE_SHADERS := [
+	"res://shaders/terrain_scatter_compact.glsl",
 ]
 
 
 func _init() -> void:
-	for shader_path: String in SHADERS:
+	for shader_path: String in SPATIAL_SHADERS:
 		var resource: Resource = load(shader_path)
 		if resource == null or not (resource is Shader):
 			push_error("TERRAIN_SHADER_LOAD_FAILED: %s" % shader_path)
@@ -31,5 +36,26 @@ func _init() -> void:
 			return
 		print("TERRAIN_SHADER_LOAD_OK: %s" % shader_path)
 
-	print("TERRAIN_SHADER_STACK_OK: %d shaders" % SHADERS.size())
+	for shader_path: String in COMPUTE_SHADERS:
+		var resource: Resource = load(shader_path)
+		if resource == null or not (resource is RDShaderFile):
+			push_error("TERRAIN_COMPUTE_LOAD_FAILED: %s" % shader_path)
+			quit(1)
+			return
+		var spirv: RDShaderSPIRV = (resource as RDShaderFile).get_spirv()
+		if spirv == null:
+			push_error("TERRAIN_COMPUTE_SPIRV_MISSING: %s" % shader_path)
+			quit(1)
+			return
+		if not spirv.compile_error_compute.is_empty():
+			push_error("TERRAIN_COMPUTE_COMPILE_FAILED: %s\n%s" % [shader_path, spirv.compile_error_compute])
+			quit(1)
+			return
+		if spirv.bytecode_compute.is_empty():
+			push_error("TERRAIN_COMPUTE_BYTECODE_EMPTY: %s" % shader_path)
+			quit(1)
+			return
+		print("TERRAIN_COMPUTE_LOAD_OK: %s" % shader_path)
+
+	print("TERRAIN_SHADER_STACK_OK: %d spatial + %d compute" % [SPATIAL_SHADERS.size(), COMPUTE_SHADERS.size()])
 	quit(0)
