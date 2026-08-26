@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://7nqciwoyas4e"
+path="res://.godot/imported/terrain_height_query.glsl-3d6f5a6155b0b6bef3054b30f540e673.res"
+
+[deps]
+
+source_file="res://shaders/terrain_height_query.glsl"
+dest_files=["res://.godot/imported/terrain_height_query.glsl-3d6f5a6155b0b6bef3054b30f540e673.res"]
+
+[params]
+
