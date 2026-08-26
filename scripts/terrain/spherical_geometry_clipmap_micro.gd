@@ -49,7 +49,11 @@ func _sync_micro_lod_state() -> void:
 		_micro_l0_active = want_micro
 		_apply_center_mesh_variant()
 	if _micro_batch != null:
-		_micro_batch.visible = _terrain_visible and _micro_l0_active
+		_micro_batch.visible = _micro_should_be_visible()
+
+
+func _micro_should_be_visible() -> bool:
+	return _terrain_visible and _micro_l0_active and not _view_surface_culled
 
 
 func _apply_center_mesh_variant() -> void:
@@ -79,13 +83,13 @@ func _build_hole_center_meshes(half_cut: bool) -> void:
 func _set_visible(value: bool) -> void:
 	super._set_visible(value)
 	if _micro_batch != null:
-		_micro_batch.visible = value and _micro_l0_active
+		_micro_batch.visible = value and _micro_l0_active and not _view_surface_culled
 
 
 func _update_sector_visibility() -> void:
 	super._update_sector_visibility()
 	if _micro_batch != null:
-		_micro_batch.visible = _terrain_visible and _micro_l0_active
+		_micro_batch.visible = _micro_should_be_visible()
 
 
 func _show_all_active_sectors() -> void:
@@ -222,7 +226,7 @@ static func _mesh_from_micro_arrays(vertices: Array[Vector3], uvs: Array[Vector2
 
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
-	out["draw_batches"] = int(out.get("draw_batches", 0)) + 1
+	out["draw_batches"] = int(out.get("draw_batches", 0)) + (1 if _micro_batch != null and _micro_batch.visible else 0)
 	out["microgeometry"] = true
 	out["micro_active"] = _micro_l0_active
 	out["micro_spacing_m"] = _base_spacing * MICRO_STEP_L0
