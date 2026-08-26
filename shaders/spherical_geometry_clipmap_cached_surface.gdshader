@@ -3,6 +3,7 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disab
 
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
+#include "res://shaders/terrain_sun_occlusion.gdshaderinc"
 #include "res://shaders/gpu_planet_context.gdshaderinc"
 #include "res://shaders/gpu_geomorph.gdshaderinc"
 #include "res://shaders/gpu_surface_antitile.gdshaderinc"
@@ -17,6 +18,7 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disab
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
+uniform float u_terrain_sun_occlusion : hint_range(0.0, 1.0) = 1.0;
 uniform float u_planet_radius = 1000000.0;
 uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
@@ -352,6 +354,14 @@ void vertex() {
 	float planet_vis = planet_direct_sun_visibility(p, sun_dir, u_planet_radius);
 	v_direct_transmittance = planet_vis;
 	if (planet_vis > 0.001) {
+		if (u_height_enabled > 0.5 && u_macro_ready > 0.5
+				&& u_macro_face_res > 0.5 && u_terrain_sun_occlusion > 0.001) {
+			int terrain_shadow_steps = level <= 2 ? 12 : (level <= 5 ? 9 : 6);
+			float terrain_vis = terrain_sun_visibility(
+				u_macro_elevation, p, sun_dir, u_macro_face_res,
+				u_planet_radius, terrain_shadow_steps);
+			v_direct_transmittance *= mix(1.0, terrain_vis, u_terrain_sun_occlusion);
+		}
 		v_direct_transmittance *= cloud_shadow_transmittance(p, sun_dir, u_planet_radius);
 	}
 	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
