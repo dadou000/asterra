@@ -60,13 +60,10 @@ const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
 const int MACRO_MAX_MIP = 5;
-const float NORMAL_SAMPLE_SPACING_MULT = 3.0;
-const float NORMAL_SAMPLE_MIN_M = 4.0;
-const float DETAIL_NORMAL_FULL_LEVEL = 4.0;
-const float DETAIL_NORMAL_FADE_LEVEL = 8.0;
+const float NORMAL_SAMPLE_SPACING_MULT = 2.0;
+const float NORMAL_SAMPLE_MIN_M = 1.5;
+const int FINAL_DETAIL_NORMAL_MAX_LEVEL = 4;
 
-// Must match spherical_geometry_clipmap_micro.gd. UVs on the dense patch are
-// fractional L0 logical coordinates, so these remain expressed in L0 cells.
 const float MICRO_HANDOFF_START_L0_CELLS = 24.0;
 const float MICRO_OUTER_L0_CELLS = 32.0;
 const float MICRO_L0_SINK_M = 0.30;
@@ -242,16 +239,27 @@ vec3 geodesic_offset(vec3 d, vec3 tangent, float distance_m) {
 	return normalize(d * cos(theta) + tangent * sin(theta));
 }
 
-vec3 smooth_macro_normal(vec3 d, int level, float morph, float center_macro_h) {
+// Smooth vertex normal reconstructed from the same analytic height function used
+// for displacement. Near levels include geomorph detail; far levels use macro only
+// to keep the vertex budget bounded. Interpolation then smooths across triangles.
+vec3 smooth_surface_normal(vec3 d, int level, float morph, float center_height) {
 	vec3 reference_axis = abs(d.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
 	vec3 tangent_x = normalize(cross(reference_axis, d));
 	vec3 tangent_y = normalize(cross(d, tangent_x));
 	float sample_m = max(NORMAL_SAMPLE_MIN_M, ring_spacing(level) * NORMAL_SAMPLE_SPACING_MULT);
 	vec3 dx = geodesic_offset(d, tangent_x, sample_m);
 	vec3 dy = geodesic_offset(d, tangent_y, sample_m);
-	float hx = macro_height_with_morph(dx, level, morph);
-	float hy = macro_height_with_morph(dy, level, morph);
-	vec3 p0 = d * (u_planet_radius + center_macro_h);
+	float hx;
+	float hy;
+	if (level <= FINAL_DETAIL_NORMAL_MAX_LEVEL) {
+		hx = terrain_height_with_morph(dx, level, morph);
+		hy = terrain_height_with_morph(dy, level, morph);
+	} else {
+		hx = macro_height_with_morph(dx, level, morph);
+		hy = macro_height_with_morph(dy, level, morph);
+		center_height = macro_height_with_morph(d, level, morph);
+	}
+	vec3 p0 = d * (u_planet_radius + center_height);
 	vec3 px = dx * (u_planet_radius + hx);
 	vec3 py = dy * (u_planet_radius + hy);
 	vec3 n_raw = cross(px - p0, py - p0);
@@ -294,8 +302,6 @@ void vertex() {
 	float h = terrain_height_with_morph(d, level, morph);
 	float sink = coarse_sink_weight(cell, level, is_ring) * max(spacing * u_sink_scale, 0.5);
 
-	// Only the ordinary L0 centre receives the overlap sink. Promoted centre discs
-	// are never altered, and the micro disc itself is not an annulus.
 	if (micro_layer < 0.5 && is_ring < 0.5 && level == 0
 			&& cell_radius < MICRO_OUTER_L0_CELLS) {
 		float overlap_sink = 1.0 - smootherstep_range(
@@ -343,7 +349,7 @@ void vertex() {
 	v_planet = p;
 	v_render = render_p;
 	v_smooth_normal = u_height_enabled > 0.5
-		? smooth_macro_normal(d, level, morph, macro_h) : d;
+		? smooth_surface_normal(d, level, morph, h) : d;
 	v_valid = u_macro_ready;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
@@ -372,14 +378,18 @@ void fragment() {
 		if (dot(planet_dir, u_center_up) > 0.0) discard;
 	}
 	vec3 up = normalize(v_planet);
-	vec3 macro_n = normalize(v_smooth_normal);
-	if (dot(macro_n, up) < 0.0) macro_n = -macro_n;
+	vec3 smooth_n = normalize(v_smooth_normal);
+	if (dot(smooth_n, up) < 0.0) smooth_n = -smooth_n;
 	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
-	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : macro_n;
+	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : smooth_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
-	float detail_normal_w = 1.0 - smoothstep(DETAIL_NORMAL_FULL_LEVEL, DETAIL_NORMAL_FADE_LEVEL, v_level);
-	detail_normal_w *= mix(0.88, 0.98, v_micro_layer);
-	vec3 wn = normalize(mix(macro_n, geom_n, detail_normal_w));
+	// Use the geometric normal for physical slope classification, but do not let
+	// per-triangle derivatives dominate visible lighting. Only the dense micro
+	// patch gets a modest geometric contribution; scanned/procedural normal maps
+	// provide the sub-triangle shading detail afterwards.
+	float geom_shading_w = (1.0 - smoothstep(2.0, 5.0, v_level))
+		* mix(0.04, 0.18, v_micro_layer);
+	vec3 wn = normalize(mix(smooth_n, geom_n, geom_shading_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	if (u_debug_side_cut > 0.5) {
@@ -401,7 +411,7 @@ void fragment() {
 		float biome = asterra_ctx_biome_id(up);
 		vec4 landform = gm_landform_weights_from_context(v_macro_h,
 			soil, surface, geology, structure, climate, hydro);
-		float slope_deg = acos(clamp(dot(wn, up), 0.0, 1.0)) * 57.2957795131;
+		float slope_deg = acos(clamp(dot(geom_n, up), 0.0, 1.0)) * 57.2957795131;
 		vec4 primary = sc_primary_weights(
 			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
 		vec4 secondary = sc_secondary_weights(
