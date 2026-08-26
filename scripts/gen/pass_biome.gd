@@ -1,15 +1,13 @@
 class_name PassBiome
 extends RefCounted
-## 1.5 (final third) -- biomes and vegetation.
+## Biomes and vegetation.
 ##
-## Derived from climate, soil, elevation and water availability rather than
-## painted biome masks. The classification is a Whittaker-style temperature /
-## precipitation space, then overridden by the things that physically dominate a
-## location: standing water, permanent ice, wetland, treeline, bare rock.
+## Biome is an ecological/climate classification. Hydrology is orthogonal: a
+## river can cross tundra, forest or desert, and a lake can occupy a depression
+## inside any of those regions. River/lake state therefore never overwrites the
+## underlying biome here.
 
 const B := PlanetFields.Biome
-## Biomes whose defining feature is a closed tree canopy, and which therefore
-## cannot exist without enough soil to root one.
 const FOREST_CLASSES := [
 	B.TAIGA, B.TEMPERATE_FOREST, B.TEMPERATE_RAINFOREST,
 	B.TROPICAL_SEASONAL_FOREST, B.TROPICAL_RAINFOREST,
@@ -33,20 +31,14 @@ func run(progress: Callable = Callable()) -> void:
 		var t: float = fields.temp_mean[c]
 		var p: float = fields.precip[c]
 
+		# Marine biomes remain true base surface classes. Inland surface water is
+		# an attribute and does not replace the terrestrial biome underneath it.
 		if h < 0.0:
-			fields.biome[c] = B.ICE_CAP if t < -2.0 else (B.SHELF_SEA if h > cfg.shelf_depth - 40.0 else B.OCEAN)
+			fields.biome[c] = B.ICE_CAP if t < -2.0 else (
+				B.SHELF_SEA if h > cfg.shelf_depth - 40.0 else B.OCEAN)
 			fields.vegetation[c] = 0.0
-			continue
-		if fields.lake_level[c] > -1e8:
-			fields.biome[c] = B.LAKE
-			fields.vegetation[c] = 0.0
-			continue
-		if fields.river_width[c] >= 60.0:
-			fields.biome[c] = B.RIVER
-			fields.vegetation[c] = 0.05
 			continue
 
-		# Summer warmth matters more than the annual mean for ice and treeline.
 		var summer := t + fields.temp_range[c] * 0.5
 		var b: int
 		if summer < -1.0:
@@ -85,16 +77,10 @@ func run(progress: Callable = Callable()) -> void:
 			else:
 				b = B.TROPICAL_RAINFOREST
 
-		# Treeline: above it, forests become alpine regardless of the mean.
-		if h > 900.0 and summer < 10.5 and b in [B.TAIGA, B.TEMPERATE_FOREST, B.TEMPERATE_RAINFOREST]:
+		if h > 900.0 and summer < 10.5 and b in [
+			B.TAIGA, B.TEMPERATE_FOREST, B.TEMPERATE_RAINFOREST]:
 			b = B.ALPINE
 
-		# Substrate limit. Climate says what could grow here; the ground says what
-		# can. A closed canopy needs a rooting depth that a scoured ridge does not
-		# have, and the Whittaker scheme -- being a function of temperature and
-		# rainfall alone -- will happily put rainforest on bare rock. Where the
-		# soil is too thin to root trees, the community that actually occupies
-		# that ground is the open one for the same climate.
 		if b in FOREST_CLASSES and fields.soil_depth[c] < 0.32:
 			if summer < 11.0:
 				b = B.TUNDRA
@@ -104,8 +90,10 @@ func run(progress: Callable = Callable()) -> void:
 				b = B.SAVANNA
 		fields.biome[c] = b
 
-		# Vegetation biomass: water-limited and temperature-limited productivity,
-		# scaled by how much soil there is to root in.
+		# Base ecological biomass is classified independently from whether the
+		# cell is covered by standing/flowing surface water. Runtime vegetation can
+		# then suppress plants inside the actual water footprint without losing the
+		# climate biome data used around the bank/shore.
 		var water_lim := clampf(p / 1600.0, 0.0, 1.0)
 		var temp_lim := clampf((t + 6.0) / 26.0, 0.0, 1.0)
 		var soil_lim := clampf(fields.soil_depth[c] / 1.4, 0.05, 1.0)
