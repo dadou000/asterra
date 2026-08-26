@@ -90,14 +90,17 @@ func run(progress: Callable = Callable()) -> void:
 				b = B.SAVANNA
 		fields.biome[c] = b
 
-		# Base ecological biomass is classified independently from whether the
-		# cell is covered by standing/flowing surface water. Runtime vegetation can
-		# then suppress plants inside the actual water footprint without losing the
-		# climate biome data used around the bank/shore.
 		var water_lim := clampf(p / 1600.0, 0.0, 1.0)
 		var temp_lim := clampf((t + 6.0) / 26.0, 0.0, 1.0)
 		var soil_lim := clampf(fields.soil_depth[c] / 1.4, 0.05, 1.0)
 		var veg := water_lim * temp_lim * soil_lim
 		if b in [B.HOT_DESERT, B.COLD_DESERT, B.BARE_ROCK, B.ICE_CAP]:
 			veg *= 0.12
+
+		# Surface-water coverage affects biomass without changing biome identity.
+		if fields.is_lake(c):
+			veg = 0.0
+		elif fields.river_width[c] > 0.0:
+			var river_cover := clampf(fields.river_width[c] / maxf(grid.cell_size[c], 1.0), 0.0, 0.95)
+			veg *= 1.0 - river_cover
 		fields.vegetation[c] = clampf(veg, 0.0, 1.0)
