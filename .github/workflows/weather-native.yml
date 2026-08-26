@@ -1,7 +1,5 @@
 name: Weather Native AVX2
 
-# This build also validates the local wind sampler consumed by the in-world
-# weather-cell vector debug overlay.
 on:
   push:
     branches:
@@ -26,7 +24,13 @@ jobs:
       - name: Configure
         run: cmake -S native/weather -B native/weather/build -A x64
 
-      - name: Build Release
+      - name: Build core geometry tests
+        run: cmake --build native/weather/build --config Release --target asterra_weather_core_tests --parallel
+
+      - name: Run core geometry tests
+        run: ctest --test-dir native/weather/build -C Release --output-on-failure
+
+      - name: Build Release backend
         run: cmake --build native/weather/build --config Release --target asterra_weather --parallel
 
       - name: Verify runtime files
