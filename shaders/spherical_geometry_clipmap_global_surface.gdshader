@@ -105,7 +105,6 @@ vec3 stable_surface_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m,
 	float radius = max(u_planet_radius, 1.0);
 	float arc = length(offset_m);
 	if (arc < 1e-5) return center * altitude_m;
-
 	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
 		vec3 tangent_m = right * offset_m.x + up * offset_m.y;
 		float q2 = dot(tangent_m, tangent_m) / (radius * radius);
@@ -116,7 +115,6 @@ vec3 stable_surface_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m,
 		float tangent_scale = (1.0 + altitude_m / radius) * inv_root;
 		return center * radial_m + tangent_m * tangent_scale;
 	}
-
 	float raw_theta = arc / radius;
 	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
 	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
@@ -287,13 +285,11 @@ void vertex() {
 	vec2 cell_offset_m = cell * spacing;
 	float raw_theta = length(cell_offset_m) / max(u_planet_radius, 1.0);
 	bool stable_displacement = u_stable_displacement > 0.5;
-
 	vec2 level_center_m = round(u_lattice_center_plane / spacing) * spacing;
 	vec2 anchor_offset_m = level_center_m + cell_offset_m;
 	vec3 d = stable_displacement
 		? direction_for_basis_offset(u_anchor_dir, u_anchor_right, u_anchor_up, anchor_offset_m)
 		: direction_for_offset(cell_offset_m);
-
 	float morph = fine_morph_weight(cell);
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
@@ -321,14 +317,12 @@ void vertex() {
 		v_direct_transmittance *= cloud_shadow_transmittance(p, sun_dir, u_planet_radius);
 	}
 
-	// Aerial perspective is evaluated on the terrain lattice and interpolated.
-	// It is an optical-path effect rather than generic scene fog: nearby terrain
-	// stays crisp while distant ground is progressively veiled by Rayleigh/Mie
-	// extinction and in-scattering toward the geometric horizon.
 	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
-	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius,
-		v_atmo_t, v_atmo_l);
-
+	vec3 atmo_t;
+	vec3 atmo_l;
+	terrain_aerial_perspective(camera_planet, p, sun_dir, u_planet_radius, atmo_t, atmo_l);
+	v_atmo_t = atmo_t;
+	v_atmo_l = atmo_l;
 	VERTEX = v_render;
 }
 
@@ -342,9 +336,6 @@ void fragment() {
 	vec3 up = normalize(v_planet);
 	vec3 macro_n = normalize(v_smooth_normal);
 	if (dot(macro_n, up) < 0.0) macro_n = -macro_n;
-
-	// Material stability must use the final displaced terrain, not the coarse
-	// macro normal. Derivatives reconstruct the actual visible triangle normal.
 	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
 	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : macro_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
@@ -361,119 +352,112 @@ void fragment() {
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
 		METALLIC = 0.0;
-		return;
+	} else {
+		vec4 soil = asterra_ctx_soil(up);
+		vec4 surface = asterra_ctx_surface(up);
+		vec4 geology = asterra_ctx_geology(up);
+		vec4 structure = asterra_ctx_structure(up);
+		vec4 climate = asterra_ctx_climate(up);
+		vec4 hydro = asterra_ctx_hydrology(up);
+		float rock_id = asterra_ctx_rock_id(up);
+		float biome = asterra_ctx_biome_id(up);
+		vec4 landform = gm_landform_weights_from_context(
+			v_macro_h, soil, surface, geology, structure, climate, hydro);
+		float cos_slope = clamp(dot(wn, up), 0.0, 1.0);
+		float slope_deg = acos(cos_slope) * 57.2957795131;
+		vec4 primary = sc_primary_weights(
+			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
+		vec4 secondary = sc_secondary_weights(
+			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
+		primary *= 1.0 - secondary.g * 0.88;
+		secondary.r *= 1.0 - secondary.g * 0.92;
+
+		if (u_debug_geomorph_mode > 0) {
+			ALBEDO = vec3(0.0);
+			EMISSION = terrain_debug_color(u_debug_geomorph_mode,
+				landform, primary, secondary, soil, geology, hydro, rock_id, biome);
+			ROUGHNESS = 1.0;
+			SPECULAR = 0.0;
+			METALLIC = 0.0;
+		} else {
+			vec3 base_albedo = sc_compose_albedo(
+				primary, secondary, soil, surface, climate, biome, rock_id);
+			float base_roughness = sc_compose_roughness(primary, secondary, surface);
+			float camera_dist = length(v_render - CAMERA_POSITION_WORLD);
+			float material_total = dot(primary, vec4(1.0)) + dot(secondary, vec4(1.0));
+			float rock_mix_w = material_total > 1e-4 ? primary.r / material_total : 0.0;
+
+			vec3 rock_albedo;
+			float rock_roughness;
+			float material_specular;
+			vec3 rock_n;
+			float rock_normal_w;
+			rrp_apply(v_render + u_detail_origin, wn, camera_dist,
+				rock_id, geology, structure, rock_mix_w,
+				base_albedo, base_roughness,
+				rock_albedo, rock_roughness, material_specular, rock_n, rock_normal_w);
+			if (rock_normal_w > 0.001) {
+				wn = normalize(mix(wn, rock_n, rock_normal_w));
+				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+			}
+
+			vec3 dpos = spbr_antitile_position(v_render + u_detail_origin);
+			vec3 albedo;
+			float roughness;
+			vec3 scan_n;
+			float scan_normal_w;
+			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
+				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
+			if (scan_normal_w > 0.001) {
+				wn = normalize(mix(wn, scan_n, scan_normal_w));
+				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+			}
+
+			ALBEDO = albedo;
+			ROUGHNESS = roughness;
+			SPECULAR = material_specular;
+			METALLIC = 0.0;
+			vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
+			vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
+			float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
+			float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
+			EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
+		}
 	}
-
-	vec4 soil = asterra_ctx_soil(up);
-	vec4 surface = asterra_ctx_surface(up);
-	vec4 geology = asterra_ctx_geology(up);
-	vec4 structure = asterra_ctx_structure(up);
-	vec4 climate = asterra_ctx_climate(up);
-	vec4 hydro = asterra_ctx_hydrology(up);
-	float rock_id = asterra_ctx_rock_id(up);
-	float biome = asterra_ctx_biome_id(up);
-	vec4 landform = gm_landform_weights_from_context(
-		v_macro_h, soil, surface, geology, structure, climate, hydro);
-
-	float cos_slope = clamp(dot(wn, up), 0.0, 1.0);
-	float slope_deg = acos(cos_slope) * 57.2957795131;
-	vec4 primary = sc_primary_weights(
-		soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
-	vec4 secondary = sc_secondary_weights(
-		soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
-	primary *= 1.0 - secondary.g * 0.88;
-	secondary.r *= 1.0 - secondary.g * 0.92;
-
-	if (u_debug_geomorph_mode > 0) {
-		ALBEDO = vec3(0.0);
-		EMISSION = terrain_debug_color(u_debug_geomorph_mode,
-			landform, primary, secondary, soil, geology, hydro, rock_id, biome);
-		ROUGHNESS = 1.0;
-		SPECULAR = 0.0;
-		METALLIC = 0.0;
-		return;
-	}
-
-	vec3 base_albedo = sc_compose_albedo(
-		primary, secondary, soil, surface, climate, biome, rock_id);
-	float base_roughness = sc_compose_roughness(primary, secondary, surface);
-	float camera_dist = length(v_render - CAMERA_POSITION_WORLD);
-	float material_total = dot(primary, vec4(1.0)) + dot(secondary, vec4(1.0));
-	float rock_mix_w = material_total > 1e-4 ? primary.r / material_total : 0.0;
-
-	vec3 rock_albedo;
-	float rock_roughness;
-	float material_specular;
-	vec3 rock_n;
-	float rock_normal_w;
-	rrp_apply(v_render + u_detail_origin, wn, camera_dist,
-		rock_id, geology, structure, rock_mix_w,
-		base_albedo, base_roughness,
-		rock_albedo, rock_roughness, material_specular, rock_n, rock_normal_w);
-	if (rock_normal_w > 0.001) {
-		wn = normalize(mix(wn, rock_n, rock_normal_w));
-		NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
-	}
-
-	vec3 dpos = spbr_antitile_position(v_render + u_detail_origin);
-	vec3 albedo;
-	float roughness;
-	vec3 scan_n;
-	float scan_normal_w;
-	spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
-		rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
-	if (scan_normal_w > 0.001) {
-		wn = normalize(mix(wn, scan_n, scan_normal_w));
-		NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
-	}
-
-	ALBEDO = albedo;
-	ROUGHNESS = roughness;
-	SPECULAR = material_specular;
-	METALLIC = 0.0;
-
-	// Terrain owns its sky irradiance because Godot ambient is disabled for this
-	// material. Apply atmospheric transmittance to ground radiance and add the
-	// in-scattered aerial light. This is the requested distant terrain veil.
-	vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
-	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-	float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
-	float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
-	EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
 }
 
 void light() {
-	if (u_debug_geomorph_mode > 0) return;
-	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
-	if (ndotl <= 0.0) return;
+	if (u_debug_geomorph_mode <= 0) {
+		float ndotl = max(dot(NORMAL, LIGHT), 0.0);
+		if (ndotl > 0.0) {
+			float visibility = LIGHT_IS_DIRECTIONAL
+				? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
+			vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
+			float ndotv = max(dot(NORMAL, VIEW), 0.001);
+			vec3 h = normalize(LIGHT + VIEW);
+			float ndoth = max(dot(NORMAL, h), 0.0);
+			float vdoth = max(dot(VIEW, h), 0.0);
+			float rough = clamp(ROUGHNESS, 0.045, 1.0);
+			float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
+			float fl = pow(1.0 - ndotl, 5.0);
+			float fv = pow(1.0 - ndotv, 5.0);
+			float diffuse_term = (1.0 + (fd90 - 1.0) * fl)
+				* (1.0 + (fd90 - 1.0) * fv);
+			DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
 
-	float visibility = LIGHT_IS_DIRECTIONAL
-		? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
-	vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
-	float ndotv = max(dot(NORMAL, VIEW), 0.001);
-	vec3 h = normalize(LIGHT + VIEW);
-	float ndoth = max(dot(NORMAL, h), 0.0);
-	float vdoth = max(dot(VIEW, h), 0.0);
-	float rough = clamp(ROUGHNESS, 0.045, 1.0);
-
-	float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
-	float fl = pow(1.0 - ndotl, 5.0);
-	float fv = pow(1.0 - ndotv, 5.0);
-	float diffuse_term = (1.0 + (fd90 - 1.0) * fl)
-		* (1.0 + (fd90 - 1.0) * fv);
-	DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
-
-	if (u_debug_side_cut <= 0.5) {
-		float alpha = rough * rough;
-		float a2 = alpha * alpha;
-		float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-		float d = a2 / max(PI * denom * denom, 1e-5);
-		float k = (rough + 1.0) * (rough + 1.0) * 0.125;
-		float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
-		float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
-		float f0 = 0.018;
-		float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
-		float spec = d * gv * gl * fresnel / max(4.0 * ndotv * ndotl, 1e-4);
-		SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
+			if (u_debug_side_cut <= 0.5) {
+				float alpha = rough * rough;
+				float a2 = alpha * alpha;
+				float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
+				float d = a2 / max(PI * denom * denom, 1e-5);
+				float k = (rough + 1.0) * (rough + 1.0) * 0.125;
+				float gv = ndotv / max(ndotv * (1.0 - k) + k, 1e-4);
+				float gl = ndotl / max(ndotl * (1.0 - k) + k, 1e-4);
+				float f0 = 0.018;
+				float fresnel = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
+				float spec = d * gv * gl * fresnel / max(4.0 * ndotv * ndotl, 1e-4);
+				SPECULAR_LIGHT += radiance * ndotl * spec * SPECULAR_AMOUNT;
+			}
+		}
 	}
 }
