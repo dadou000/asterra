@@ -1,13 +1,10 @@
 extends SceneTree
 ## Headless smoke test for the corrected latest-0.0.5 terrain shader stack.
-##
-## This branch deliberately validates the untouched current procedural clipmap
-## shader and the GPU-geomorph derivative built from it. Scatter compute shaders
-## are added only after their latest-global-height port is activated.
 
 const SPATIAL_SHADERS := [
 	"res://shaders/spherical_geometry_clipmap_procedural_uv.gdshader",
 	"res://shaders/spherical_geometry_clipmap_global_gpu.gdshader",
+	"res://shaders/spherical_geometry_clipmap_global_surface.gdshader",
 ]
 
 
