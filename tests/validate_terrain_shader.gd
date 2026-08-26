@@ -5,6 +5,7 @@ const SPATIAL_SHADERS := [
 	"res://shaders/spherical_geometry_clipmap_procedural_uv.gdshader",
 	"res://shaders/spherical_geometry_clipmap_global_gpu.gdshader",
 	"res://shaders/spherical_geometry_clipmap_global_surface.gdshader",
+	"res://shaders/spherical_geometry_clipmap_cached_surface.gdshader",
 	"res://shaders/terrain_scatter_grass.gdshader",
 	"res://shaders/terrain_scatter_stone.gdshader",
 	"res://shaders/terrain_scatter_compact_grass.gdshader",
@@ -14,6 +15,7 @@ const SPATIAL_SHADERS := [
 const COMPUTE_SHADERS := [
 	"res://shaders/terrain_scatter_compact.glsl",
 	"res://shaders/terrain_height_query.glsl",
+	"res://shaders/terrain_clipmap_cache.glsl",
 ]
 
 
