@@ -25,6 +25,8 @@ var elapsed := 0.0
 var _aim: Dictionary = {}
 var _started := false
 var _rebaking := false
+var _last_sun_dir := Vector3.ZERO
+var _sun_dir_initialized := false
 
 func _ready() -> void:
 	AppSettings.apply_viewport(get_viewport())
@@ -104,6 +106,22 @@ func _setup_environment() -> void:
 	sun.shadow_normal_bias = 3.0
 	AppSettings.apply_sun(sun)
 	add_child(sun)
+	_sync_sun_direction(true)
+
+func _sync_sun_direction(force: bool = false) -> void:
+	if sun == null:
+		return
+	var next_dir: Vector3 = Frames.helion_dir.normalized()
+	if not force and _sun_dir_initialized \
+			and next_dir.distance_squared_to(_last_sun_dir) <= 1e-12:
+		return
+	_last_sun_dir = next_dir
+	_sun_dir_initialized = true
+	# Do not rewrite the DirectionalLight transform on ordinary frames. Changing a
+	# shadow-casting directional light marks its cascades dirty even when the
+	# resulting transform is identical. A future day cycle still updates normally
+	# whenever Frames.helion_dir actually changes.
+	sun.look_at_from_position(Vector3.ZERO, next_dir * -1.0, Vector3(0, 1, 0))
 
 func _on_baked(fields: PlanetFields) -> void:
 	# Planet.adopt() now loads or builds the single resident global height package.
@@ -201,8 +219,7 @@ func _process(dt: float) -> void:
 		return
 	elapsed += dt
 	terrain.set_observer(player.world_pos)
-	sun.rotation = Vector3.ZERO
-	sun.look_at_from_position(Vector3.ZERO, Frames.helion_dir * -1.0, Vector3(0, 1, 0))
+	_sync_sun_direction()
 	_aim = player.aim()
 	map.set_player_dir(player.up_dir())
 	sky_mat.set_shader_parameter("u_up", player.up_dir())
