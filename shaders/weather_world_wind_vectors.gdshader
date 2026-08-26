@@ -49,8 +49,13 @@ void vertex() {
 	vec3 side_dir = normalize(cross(radial, along_dir));
 
 	float speed01 = clamp(speed / u_speed_reference_mps, 0.0, 1.0);
-	float arrow_length = u_cell_size_m * mix(u_min_length_fraction, u_max_length_fraction, speed01);
-	float arrow_width = u_cell_size_m * u_width_fraction;
+	// Completely collapse calm vectors instead of leaving thousands of arbitrary
+	// east-pointing minimum-size arrows. Once the flow is measurable, retain a
+	// small readable minimum length and then scale monotonically with speed.
+	float visible = smoothstep(0.20, 1.00, speed);
+	float arrow_length = u_cell_size_m
+		* mix(u_min_length_fraction, u_max_length_fraction, speed01) * visible;
+	float arrow_width = u_cell_size_m * u_width_fraction * visible;
 
 	// The source mesh is a unit arrow facing +X. X encodes along-flow distance;
 	// Y encodes shaft/head half-width. Every weather cell remains one GPU instance.
