@@ -8,8 +8,11 @@ on:
     paths:
       - "shaders/**"
       - "scripts/terrain/**"
+      - "scripts/gen/**"
+      - "scripts/ui/planet_map.gd"
       - "project.godot"
       - "tests/validate_terrain_shader.gd"
+      - "tests/validate_generation_model.gd"
       - ".github/workflows/godot-terrain-validate.yml"
   workflow_dispatch:
 
@@ -117,5 +120,29 @@ jobs:
 
           if [ "$status" -eq 124 ]; then
             echo "Terrain autoload parse smoke test timed out."
+            exit 1
+          fi
+
+      - name: Validate generation data model
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          set +e
+          timeout 90 "$GODOT" --headless --path . --script res://tests/validate_generation_model.gd > /tmp/generation-model.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/generation-model.log
+
+          if [ "$status" -ne 0 ]; then
+            echo "Generation model validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "GENERATION_MODEL_OK" /tmp/generation-model.log; then
+            echo "Generation model completion marker was not emitted."
+            exit 1
+          fi
+          if grep -q "GENERATION_MODEL_FAILED" /tmp/generation-model.log; then
+            echo "Generation model invariant failed."
             exit 1
           fi
