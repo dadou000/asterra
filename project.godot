@@ -20,8 +20,9 @@ config/icon="res://icon.svg"
 [autoload]
 
 Frames="*res://scripts/core/frames.gd"
-Planet="*res://scripts/gen/planet_sampler_smooth2x.gd"
+Planet="*res://scripts/gen/planet_sampler_gpu_runtime.gd"
 PlanetContext="*res://scripts/terrain/gpu_planet_context.gd"
+TerrainHeightQuery="*res://scripts/terrain/gpu_terrain_height_query.gd"
 Deltas="*res://scripts/terrain/terrain_deltas.gd"
 GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
 GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
