@@ -1,0 +1,121 @@
+name: Godot terrain validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+  pull_request:
+    paths:
+      - "shaders/**"
+      - "scripts/terrain/**"
+      - "project.godot"
+      - "tests/validate_terrain_shader.gd"
+      - ".github/workflows/godot-terrain-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  terrain-shader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated shader test project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-terrain-ci
+          mkdir -p /tmp/asterra-terrain-ci/shaders /tmp/asterra-terrain-ci/tests
+          cp -R shaders/. /tmp/asterra-terrain-ci/shaders/
+          cp tests/validate_terrain_shader.gd /tmp/asterra-terrain-ci/tests/
+          cat > /tmp/asterra-terrain-ci/project.godot <<'EOF'
+          ; Minimal project used only to compile the Asterra terrain shader stack.
+          config_version=5
+
+          [application]
+          config/name="Asterra Terrain Shader CI"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import isolated shader resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-ci
+          # Raw RenderingDevice .glsl shaders become RDShaderFile resources through
+          # Godot's importer. --import waits for the filesystem/import pass to
+          # finish instead of aborting it after a fixed number of frames.
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/terrain-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 180 /tmp/terrain-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Godot isolated shader import failed with status $status"
+            exit "$status"
+          fi
+
+      - name: Validate active terrain shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-ci
+          set +e
+          "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_terrain_shader.gd > /tmp/terrain-shader.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/terrain-shader.log
+
+          if [ "$status" -ne 0 ]; then
+            echo "Godot exited with status $status"
+            exit "$status"
+          fi
+
+          if ! grep -q "TERRAIN_SHADER_LOAD_OK" /tmp/terrain-shader.log; then
+            echo "Terrain shader smoke-test completion marker was not emitted."
+            exit 1
+          fi
+
+          if grep -Eiq "shader compilation failed|shader.*parse error|parse error.*shader|error:.*gdshader|TERRAIN_COMPUTE_COMPILE_FAILED" /tmp/terrain-shader.log; then
+            echo "Godot reported a shader parser/compiler error."
+            exit 1
+          fi
+
+      - name: Parse active terrain autoload
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          set +e
+          timeout 90 "$GODOT" --headless --editor --path . --quit-after 2 > /tmp/terrain-gdscript.log 2>&1
+          status=$?
+          set -e
+          tail -n 220 /tmp/terrain-gdscript.log || true
+
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script.*spherical_geometry_clipmap|Failed to load script.*gpu_terrain_scatter" /tmp/terrain-gdscript.log; then
+            echo "Godot reported a GDScript parser/inheritance error in the active project."
+            exit 1
+          fi
+
+          if [ "$status" -eq 124 ]; then
+            echo "Terrain autoload parse smoke test timed out."
+            exit 1
+          fi
