@@ -1,26 +1,29 @@
-// First-pass GPU surface classifier. Inputs are coarse baked context plus the
-// actually displaced local slope. This deliberately classifies materials after
-// geomorph synthesis, so cliffs expose bedrock and depositional terrain collects
-// loose material coherently.
+// GPU surface classifier. Inputs are continuous baked context plus the actually
+// displaced local slope. Biome IDs remain available for diagnostics, but visible
+// material transitions are driven by continuous climate/soil/hydrology fields so
+// coarse biome-cell boundaries never become hard surface-colour borders.
 
+// Deprecated for visible rendering. Keeping the helper allows older optional
+// modules to compile while preventing nearest-filtered biome IDs from reintroducing
+// step boundaries downstream (forest PBR, grass stature, etc.).
 float sc_is_biome(float biome, float id) {
-	return 1.0 - step(0.49, abs(biome - id));
+	return 0.0;
 }
 
 vec3 sc_rock_color(float rock_id) {
-	if (rock_id < 0.5) return vec3(0.335, 0.305, 0.275); // granite
-	if (rock_id < 1.5) return vec3(0.085, 0.082, 0.080); // basalt
-	if (rock_id < 2.5) return vec3(0.105, 0.104, 0.098); // gabbro
-	if (rock_id < 3.5) return vec3(0.250, 0.240, 0.232); // gneiss
-	if (rock_id < 4.5) return vec3(0.175, 0.170, 0.158); // schist
-	if (rock_id < 5.5) return vec3(0.365, 0.230, 0.140); // sandstone
-	if (rock_id < 6.5) return vec3(0.155, 0.146, 0.132); // shale
-	if (rock_id < 7.5) return vec3(0.415, 0.400, 0.352); // limestone
-	if (rock_id < 8.5) return vec3(0.375, 0.358, 0.318); // dolomite
-	if (rock_id < 9.5) return vec3(0.265, 0.222, 0.180); // conglomerate
-	if (rock_id < 10.5) return vec3(0.455, 0.442, 0.422); // quartzite
-	if (rock_id < 11.5) return vec3(0.330, 0.298, 0.260); // rhyolitic tuff
-	return vec3(0.120, 0.145, 0.118); // serpentinite
+	if (rock_id < 0.5) return vec3(0.335, 0.305, 0.275);
+	if (rock_id < 1.5) return vec3(0.085, 0.082, 0.080);
+	if (rock_id < 2.5) return vec3(0.105, 0.104, 0.098);
+	if (rock_id < 3.5) return vec3(0.250, 0.240, 0.232);
+	if (rock_id < 4.5) return vec3(0.175, 0.170, 0.158);
+	if (rock_id < 5.5) return vec3(0.365, 0.230, 0.140);
+	if (rock_id < 6.5) return vec3(0.155, 0.146, 0.132);
+	if (rock_id < 7.5) return vec3(0.415, 0.400, 0.352);
+	if (rock_id < 8.5) return vec3(0.375, 0.358, 0.318);
+	if (rock_id < 9.5) return vec3(0.265, 0.222, 0.180);
+	if (rock_id < 10.5) return vec3(0.455, 0.442, 0.422);
+	if (rock_id < 11.5) return vec3(0.330, 0.298, 0.260);
+	return vec3(0.120, 0.145, 0.118);
 }
 
 vec3 sc_soil_color(vec4 soil, vec4 surface) {
@@ -40,12 +43,13 @@ vec3 sc_soil_color(vec4 soil, vec4 surface) {
 
 vec3 sc_vegetation_color(vec4 surface, vec4 climate, float biome) {
 	float wet = surface.g;
-	float cold = clamp((5.0 - asterra_ctx_temperature_c(climate)) / 18.0, 0.0, 1.0);
+	float temp = asterra_ctx_temperature_c(climate);
+	float precip = asterra_ctx_precip_mm(climate);
+	float cold = clamp((5.0 - temp) / 18.0, 0.0, 1.0);
+	float dry = clamp((1.0 - wet) * (1.0 - precip / 1100.0), 0.0, 1.0);
 	vec3 green = mix(vec3(0.14, 0.19, 0.055), vec3(0.055, 0.145, 0.038), wet);
 	green = mix(green, vec3(0.115, 0.120, 0.070), cold * 0.55);
-	float steppe = sc_is_biome(biome, 11.0);
-	float savanna = sc_is_biome(biome, 13.0);
-	green = mix(green, vec3(0.205, 0.175, 0.070), max(steppe, savanna) * (1.0 - wet) * 0.75);
+	green = mix(green, vec3(0.205, 0.175, 0.070), dry * 0.75);
 	return green;
 }
 
@@ -57,23 +61,31 @@ vec4 sc_primary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 	float sediment = surface.a;
 	float mountain = landform.r;
 	float arid = landform.g;
+	float precip = asterra_ctx_precip_mm(climate);
+	float temp = asterra_ctx_temperature_c(climate);
 
 	float soil_repose = mix(42.0, 27.0, clamp(wet * 0.75 + soil.b * 0.45, 0.0, 1.0));
 	float loose_stable = 1.0 - smoothstep(soil_repose - 4.0, soil_repose + 5.0, slope_deg);
 	float sand_stable = 1.0 - smoothstep(29.0, 36.0, slope_deg);
 	float veg_stable = 1.0 - smoothstep(32.0, 46.0, slope_deg);
 	float thin = 1.0 - smoothstep(0.06, 0.55, soil_depth);
-	float forced_rock = max(sc_is_biome(biome, 18.0), smoothstep(43.0, 58.0, slope_deg));
+	float climatic_bare = smoothstep(0.58, 0.94, arid)
+		* (1.0 - smoothstep(220.0, 650.0, precip));
+	climatic_bare = max(climatic_bare, 1.0 - smoothstep(-14.0, -3.0, temp));
+	float forced_rock = max(smoothstep(43.0, 58.0, slope_deg), thin * climatic_bare * 0.72);
 	float rock = clamp(max(thin * (1.0 - veg_potential * 0.65), forced_rock), 0.0, 1.0);
 	rock = max(rock, mountain * smoothstep(48.0, 62.0, slope_deg));
 
 	float sand = soil.r * arid * sand_stable * (1.0 - rock);
 	sand *= 0.45 + sediment * 0.85;
-	if (sc_is_biome(biome, 12.0) > 0.5) sand = max(sand, soil.r * 0.72 * sand_stable);
+	float dune_climate = smoothstep(0.55, 0.92, arid)
+		* (1.0 - smoothstep(300.0, 850.0, precip));
+	sand = max(sand, soil.r * dune_climate * 0.72 * sand_stable * (1.0 - rock));
 
+	float thermal_growth = smoothstep(-7.0, 4.0, temp);
 	float vegetation = veg_potential * veg_stable * loose_stable * (1.0 - rock);
 	vegetation *= 1.0 - arid * 0.62;
-	vegetation *= smoothstep(0.04, 0.28, soil_depth);
+	vegetation *= smoothstep(0.04, 0.28, soil_depth) * thermal_growth;
 
 	float mineral_soil = loose_stable * (1.0 - rock) * (1.0 - sand * 0.72);
 	mineral_soil *= smoothstep(0.025, 0.22, soil_depth);
@@ -87,16 +99,17 @@ vec4 sc_secondary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 	float mountain = landform.r;
 	float depositional = landform.a;
 	float temp = asterra_ctx_temperature_c(climate);
+	float precip = asterra_ctx_precip_mm(climate);
 
 	float mud = wet * (soil.g * 0.55 + soil.b * 0.85) * (1.0 - smoothstep(12.0, 28.0, slope_deg));
 	mud *= 0.35 + depositional * 0.95;
-	mud = max(mud, sc_is_biome(biome, 16.0) * wet * 0.8);
+	float saturated = smoothstep(0.68, 0.92, wet) * smoothstep(350.0, 900.0, precip);
+	mud = max(mud, saturated * (soil.g * 0.35 + soil.b * 0.65) * 0.72);
 
 	float cold = 1.0 - smoothstep(-8.0, 2.0, temp);
 	float snow = cold * (1.0 - smoothstep(28.0, 50.0, slope_deg));
-	snow = max(snow, sc_is_biome(biome, 3.0));
-	float alpine_cold = 1.0 - smoothstep(-5.0, 3.0, temp);
-	snow = max(snow, sc_is_biome(biome, 17.0) * alpine_cold);
+	float marginal_snow = 1.0 - smoothstep(-2.0, 5.0, temp);
+	snow = max(snow, marginal_snow * smoothstep(500.0, 1400.0, precip) * 0.62);
 
 	float scree = mountain * smoothstep(25.0, 34.0, slope_deg)
 		* (1.0 - smoothstep(45.0, 55.0, slope_deg));
@@ -104,7 +117,7 @@ vec4 sc_secondary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 
 	float gravel = hydro.b * (1.0 - smoothstep(18.0, 34.0, slope_deg));
 	gravel *= clamp(0.35 + sediment * 0.9, 0.0, 1.0);
-	gravel = max(gravel, sc_is_biome(biome, 19.0) * 0.72);
+	gravel = max(gravel, hydro.a * sediment * 0.55);
 	return clamp(vec4(mud, snow, scree, gravel), 0.0, 1.0);
 }
 

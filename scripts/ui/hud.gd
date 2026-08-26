@@ -1,11 +1,6 @@
 class_name AsterraHUD
 extends CanvasLayer
 ## Debug/inspection HUD.
-##
-## Phase 1's milestone is observational -- you have to be able to see that the
-## ground under your feet really is the product of geology, climate and water, so
-## the HUD reports the actual field values at the player's position rather than a
-## generic coordinate readout.
 
 var info: RichTextLabel
 var help: Label
@@ -106,7 +101,7 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 		s["lat_deg"], s["lon_deg"], _m(player.altitude()), _m(player.height_above_ground())])
 	lines.append("")
 	lines.append("[color=#9fd]TERRAIN[/color] %s   macro %s   relief %s" % [
-		_m(s["elevation"]), _m(s["macro_elevation"]), _m(s["relief"])])
+		_m(player.ground_height()), _m(s["macro_elevation"]), _m(s["relief"])])
 	lines.append("[color=#9fd]GEOLOGY[/color] %s   dip %.0f°   fault %.2f   basin %.2f" % [
 		s["rock_name"], rad_to_deg(s["strata_dip"]), s["fault"], s["basin"]])
 	lines.append("  Fe %.2f  Cu %.2f  coal %.2f  oil %.2f (gas %.0f%%)  quartz %.2f  aquifer %.2f" % [
@@ -152,8 +147,11 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 			float(gh.get("compressed_bytes", 0)) / (1024.0 * 1024.0),
 			float(gh.get("raw_bytes", 0)) / (1024.0 * 1024.0),
 			int(gh.get("load_or_build_ms", 0))])
-	lines.append("[color=#666]CPU terrain I/O OFF  resident queries %d  collision detail procedural[/color]" % [
-		int(hs.get("samples", 0))])
+	var hq: Dictionary = TerrainHeightQuery.stats()
+	var hq_state := "READY" if bool(hq.get("ready", false)) and bool(hq.get("latest_valid", false)) else (
+		"PENDING" if bool(hq.get("supported", false)) and not bool(hq.get("failed", false)) else "FALLBACK")
+	lines.append("[color=#666]CPU terrain synthesis OFF  resident queries %d  GPU height %s async[/color]" % [
+		int(hs.get("samples", 0)), hq_state])
 
 	if GroundGeometryClipmap.has_method("gpu_stream_stats"):
 		var gs: Dictionary = GroundGeometryClipmap.gpu_stream_stats()
@@ -185,10 +183,11 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 	var scatter_node: Node = get_node_or_null("/root/TerrainScatter")
 	if scatter_node != null and scatter_node.has_method("gpu_scatter_stats"):
 		var ss: Dictionary = scatter_node.call("gpu_scatter_stats")
-		lines.append("[color=#666]GPU scatter global %d²×6  compute %s  CPU classify OFF[/color]" % [
-			int(ss.get("global_height_face_res", 0)),
-			"READY" if bool(ss.get("compute_ready", false)) else (
-				"FALLBACK" if not bool(ss.get("compute_failed", false)) else "FAILED")])
+		var scatter_state := "STABLE FALLBACK" if bool(ss.get("stable_gpu_fallback", false)) else (
+			"COMPUTE READY" if bool(ss.get("compute_ready", false)) else (
+				"FALLBACK" if not bool(ss.get("compute_failed", false)) else "FAILED"))
+		lines.append("[color=#666]GPU scatter global %d²×6  %s  CPU classify OFF[/color]" % [
+			int(ss.get("global_height_face_res", 0)), scatter_state])
 
 	lines.append("[color=#666]horizon %.1f°  %.0f km[/color]" % [st["horizon_deg"], st["horizon_km"]])
 	lines.append("[color=#666]fps %d[/color]" % Engine.get_frames_per_second())

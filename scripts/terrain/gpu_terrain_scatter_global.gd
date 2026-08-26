@@ -1,10 +1,26 @@
 extends "res://scripts/terrain/gpu_terrain_scatter_compact.gd"
 ## Latest-0.0.5 GPU scatter binding.
 ##
-## The compact/fallback scatter implementation is unchanged; this layer replaces
-## only its legacy orbit-height binding with the same immutable resident global
-## height texture used by GroundGeometryClipmap. Candidate classification and
-## placement remain GPU-only.
+## The current real runtime reports the indirect RenderingDevice compaction path as
+## failed. Keep the proven vertex-GPU fallback authoritative for now: it still does
+## all candidate placement/classification on the GPU, but avoids stale/invalid
+## indirect buffers while the backend-specific failure is repaired separately.
+##
+## This layer also binds the same resident global height texture used by terrain.
+
+const STABLE_FALLBACK_ONLY := true
+
+
+func _ready() -> void:
+	super._ready()
+	if STABLE_FALLBACK_ONLY:
+		# Parent schedules compute initialization deferred. Clearing support here
+		# prevents that deferred attempt and makes the deterministic fallback the
+		# intentional path rather than a consequence of a runtime failure.
+		_compact_method_supported = false
+		_compact_init_failed = false
+		_compact_init_ready = false
+		_hide_compact_batches()
 
 
 func _bind_gpu_resources(force: bool) -> void:
@@ -55,7 +71,8 @@ func gpu_scatter_stats() -> Dictionary:
 		"global_heightmap": true,
 		"global_height_face_res": _bound_macro_res,
 		"cpu_scatter_classification": false,
-		"compute_supported": _compact_method_supported,
-		"compute_ready": _compact_init_ready,
-		"compute_failed": _compact_init_failed,
+		"compute_supported": false if STABLE_FALLBACK_ONLY else _compact_method_supported,
+		"compute_ready": false if STABLE_FALLBACK_ONLY else _compact_init_ready,
+		"compute_failed": false if STABLE_FALLBACK_ONLY else _compact_init_failed,
+		"stable_gpu_fallback": STABLE_FALLBACK_ONLY,
 	}
