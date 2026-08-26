@@ -32,13 +32,11 @@ var _menu: DebugMenu
 var _tabs: TabContainer
 var _status: Label
 var _buttons: Dictionary = {}
+var _level_buttons: Dictionary = {}
 var _status_accum := 0.0
 var _cloud_reassert_accum := 0.0
 var _aerial_restore_strength := DEFAULT_AERIAL_STRENGTH
 
-# Environment/light defaults are captured before the first debug override, so the
-# master restore button puts the scene back exactly as it was rather than assuming
-# every harness uses identical lighting settings.
 var _sky_background_modes: Dictionary = {}
 var _sky_background_colours: Dictionary = {}
 var _sun_visibility: Dictionary = {}
@@ -54,9 +52,6 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	# Cloud configuration can be rebuilt when a WorldEnvironment appears or quality
-	# changes. While a cloud path is intentionally disabled, periodically reassert
-	# only those debug bits; ordinary all-on rendering receives no extra writes.
 	if not bool(_state["clouds"]) or not bool(_state["cloud_shadows"]):
 		_cloud_reassert_accum += delta
 		if _cloud_reassert_accum >= CLOUD_REASSERT_S:
@@ -80,8 +75,6 @@ func _on_node_added(node: Node) -> void:
 	if node is DebugMenu:
 		call_deferred("_install_into_menu", node)
 		return
-	# Reapply persistent debug overrides to render objects created after the user
-	# flipped a switch (planet rebake, new environment, etc.).
 	if node is WorldEnvironment or node is DirectionalLight3D or node is OrbitOcean:
 		call_deferred("_apply_all_states")
 
@@ -128,7 +121,6 @@ func _install_into_menu(menu: DebugMenu) -> void:
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tabs.add_child(scroll)
-	# Keep profiling next to the existing terrain tab rather than after World.
 	if tabs.get_child_count() > 1:
 		tabs.move_child(scroll, 1)
 
@@ -172,9 +164,10 @@ func _install_into_menu(menu: DebugMenu) -> void:
 	box.add_child(_section_title("Terrain"))
 	_add_toggle(box, "terrain", "Terrain geometry", "Entire spherical clipmap draw/update path.")
 	_add_toggle(box, "scatter", "Terrain scatter", "Grass plus geological and river stones.")
-	_add_toggle(box, "micro", "Near-field microgeometry", "Dense L0 material microrelief patch only.")
+	_add_toggle(box, "micro", "Near-field microgeometry", "Dense L0 microgeometry draw itself; disabling restores the ordinary full L0 centre mesh.")
 	_add_toggle(box, "pbr", "Scanned terrain PBR", "Close triplanar scan albedo / normal / roughness detail.")
 	_add_toggle(box, "aerial", "Terrain aerial perspective", "Terrain optical-path veil toward the horizon.")
+	_build_level_controls(box)
 
 	box.add_child(HSeparator.new())
 	box.add_child(_section_title("Water"))
@@ -192,6 +185,49 @@ func _install_into_menu(menu: DebugMenu) -> void:
 
 	_refresh_status()
 	_apply_all_states()
+
+
+func _build_level_controls(box: VBoxContainer) -> void:
+	box.add_child(HSeparator.new())
+	box.add_child(_section_title("Terrain LOD submission"))
+	box.add_child(_note("Logical L0–L14 switches. Unchecked rings are removed from the MultiMesh instance prefix, so their vertex shader does not execute. The currently promoted centre disc uses the checkbox for its logical level too."))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var all_on := Button.new()
+	all_on.text = "Enable all LODs"
+	all_on.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	all_on.pressed.connect(_set_all_levels.bind(true))
+	row.add_child(all_on)
+	var all_off := Button.new()
+	all_off.text = "Disable all LODs"
+	all_off.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	all_off.pressed.connect(_set_all_levels.bind(false))
+	row.add_child(all_off)
+	box.add_child(row)
+
+	var grid := GridContainer.new()
+	grid.columns = 5
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 3)
+	var level_count := 15
+	if GroundGeometryClipmap.has_method("debug_level_count"):
+		level_count = int(GroundGeometryClipmap.call("debug_level_count"))
+	for level: int in level_count:
+		var button := CheckButton.new()
+		button.text = "L%d" % level
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.custom_minimum_size = Vector2(72, 30)
+		button.add_theme_font_size_override("font_size", 12)
+		var enabled := true
+		if GroundGeometryClipmap.has_method("debug_level_enabled"):
+			enabled = bool(GroundGeometryClipmap.call("debug_level_enabled", level))
+		button.button_pressed = enabled
+		button.toggled.connect(_on_level_toggle.bind(level))
+		grid.add_child(button)
+		_level_buttons[level] = button
+	box.add_child(grid)
 
 
 func _find_tab_container(node: Node) -> TabContainer:
@@ -237,6 +273,19 @@ func _add_toggle(box: VBoxContainer, key: String, title: String, note_text: Stri
 func _on_toggle(enabled: bool, key: String) -> void:
 	_state[key] = enabled
 	_apply_state(key)
+	_refresh_status()
+
+
+func _on_level_toggle(enabled: bool, level: int) -> void:
+	if GroundGeometryClipmap.has_method("set_debug_level_enabled"):
+		GroundGeometryClipmap.call("set_debug_level_enabled", level, enabled)
+	_refresh_status()
+
+
+func _set_all_levels(enabled: bool) -> void:
+	if GroundGeometryClipmap.has_method("set_all_debug_levels_enabled"):
+		GroundGeometryClipmap.call("set_all_debug_levels_enabled", enabled)
+	_sync_level_buttons()
 	_refresh_status()
 
 
@@ -304,8 +353,6 @@ func _apply_aerial_enabled(enabled: bool) -> void:
 
 
 func _apply_local_ocean_enabled(enabled: bool) -> void:
-	# Disable only OceanGeometryClipmap._process(). Its OceanGPUPhysics child keeps
-	# running so render profiling does not silently change vehicle buoyancy.
 	OceanSystem.set_process(enabled)
 	if not enabled and OceanSystem.has_method("_set_visible"):
 		OceanSystem.call("_set_visible", false)
@@ -325,8 +372,6 @@ func _apply_orbit_ocean_enabled(enabled: bool) -> void:
 func _apply_cloud_state() -> void:
 	var visible_clouds := bool(_state["clouds"])
 	var cloud_shadows := bool(_state["cloud_shadows"])
-	# If both visual products are disabled there is no reason to advance cloud wind
-	# or update compositor/shadow uniforms. Noise resources themselves remain cached.
 	VolumetricClouds.set_process(visible_clouds or cloud_shadows)
 
 	var effect_value: Variant = VolumetricClouds.get("_depth_effect")
@@ -339,7 +384,6 @@ func _apply_cloud_state() -> void:
 
 	var material_value: Variant = VolumetricClouds.get("_material")
 	if material_value is ShaderMaterial:
-		# The sky fallback is visible only when the depth compositor is unavailable.
 		(material_value as ShaderMaterial).set_shader_parameter(
 			"u_cloud_enabled", 1.0 if visible_clouds and not compositor_ready else 0.0)
 
@@ -425,7 +469,10 @@ func _sync_state_from_runtime() -> void:
 func _preset_restore_all() -> void:
 	for key: Variant in _state.keys():
 		_state[key] = true
+	if GroundGeometryClipmap.has_method("set_all_debug_levels_enabled"):
+		GroundGeometryClipmap.call("set_all_debug_levels_enabled", true)
 	_sync_buttons()
+	_sync_level_buttons()
 	_apply_all_states()
 	_refresh_status()
 
@@ -481,10 +528,30 @@ func _sync_buttons() -> void:
 			(value as CheckButton).set_pressed_no_signal(bool(_state.get(key, true)))
 
 
+func _sync_level_buttons() -> void:
+	for key: Variant in _level_buttons.keys():
+		var value: Variant = _level_buttons[key]
+		if not (value is CheckButton):
+			continue
+		var enabled := true
+		if GroundGeometryClipmap.has_method("debug_level_enabled"):
+			enabled = bool(GroundGeometryClipmap.call("debug_level_enabled", int(key)))
+		(value as CheckButton).set_pressed_no_signal(enabled)
+
+
 func _is_render_tab_active() -> bool:
 	if _tabs == null or _tabs.get_tab_count() <= 0:
 		return false
 	return _tabs.get_tab_title(_tabs.current_tab) == "Render"
+
+
+func _format_levels(value: Variant) -> String:
+	if not (value is Array):
+		return "—"
+	var parts := PackedStringArray()
+	for entry: Variant in value:
+		parts.append("L%d" % int(entry))
+	return ",".join(parts) if not parts.is_empty() else "none"
 
 
 func _refresh_status() -> void:
@@ -497,12 +564,17 @@ func _refresh_status() -> void:
 
 	if GroundGeometryClipmap.has_method("gpu_stream_stats"):
 		var terrain_stats: Dictionary = GroundGeometryClipmap.call("gpu_stream_stats")
-		lines.append("Terrain %s  •  L%d–L%d  •  %d rings  •  %d batches" % [
+		lines.append("Terrain %s  •  logical L%d–L%d  •  physical %d rings  •  %d batches" % [
 			"ON" if bool(_state["terrain"]) else "OFF",
 			int(terrain_stats.get("active_min_level", 0)),
 			int(terrain_stats.get("active_max_level", 0)),
 			int(terrain_stats.get("physical_ring_instances", 0)),
 			int(terrain_stats.get("draw_batches", 0)),
+		])
+		lines.append("LOD submit: %s  •  pre-mask ring prefix %d  •  view %s" % [
+			_format_levels(terrain_stats.get("submitted_logical_levels", [])),
+			int(terrain_stats.get("view_ring_prefix_before_level_mask", terrain_stats.get("view_ring_instances", 0))),
+			String(terrain_stats.get("view_cull_reason", "none")),
 		])
 	if OceanSystem.has_method("gpu_stats"):
 		var ocean_stats: Dictionary = OceanSystem.call("gpu_stats")
