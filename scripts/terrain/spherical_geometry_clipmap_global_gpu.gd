@@ -1,46 +1,57 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap_global.gd"
 ## GPU synthesis extension for the current 0.0.5 resident global clipmap.
 ##
-## This class deliberately inherits the latest global renderer instead of
-## replacing its topology/LOD implementation. Therefore the following remain
-## authoritative and unchanged:
-##   - compact UV-addressed centre/ring sectors,
-##   - screen-space promotion of the centre disc through L0..L14,
-##   - per-level stationary lattice snapping,
-##   - double-precision stable anchor reconstruction,
-##   - resident Planet.global_height_texture macro terrain,
-##   - resident Planet.global_material_texture fallback,
-##   - dynamic sector visibility.
-##
-## The only draw-window change here is that active annuli are physically packed
-## into each sector MultiMesh when the LOD window changes. We no longer leave a
-## 14-instance allocation alive and rely only on visible_instance_count. This
-## makes the GPU buffer agree with the logical LOD window and lets horizon-culling
-## completely remove levels which cannot contribute from the current altitude.
+## The latest global clipmap remains authoritative for compact sector topology,
+## promoted-centre screen-space LOD, stationary per-level lattices, stable
+## double-precision anchoring and resident whole-planet height/material maps.
+## This layer adds horizon-exact ring buffers plus immutable GPU context/PBR
+## resources without performing any runtime CPU terrain synthesis.
 
-const GPU_GEOMORPH_SHADER_PATH := "res://shaders/spherical_geometry_clipmap_global_gpu.gdshader"
+const GPU_SURFACE_SHADER_PATH := "res://shaders/spherical_geometry_clipmap_global_surface.gdshader"
 const HORIZON_RING_SAFETY: float = 1.015
+const DETAIL_ORIGIN_WRAP_M: float = 4096.0
+const DEFAULT_AERIAL_STRENGTH: float = 0.78
+
+# Keep imported textures out of script parse-time dependency resolution. They are
+# loaded once after Godot has imported the project resources.
+const PBR_GROUND_ALBEDO_PATH := "res://assets/textures/terrain/ground003_color_2k.jpg"
+const PBR_GROUND_NORMAL_PATH := "res://assets/textures/terrain/ground003_normal_gl_2k.jpg"
+const PBR_GROUND_ROUGHNESS_PATH := "res://assets/textures/terrain/ground003_roughness_2k.jpg"
+const PBR_GRASS_ALBEDO_PATH := "res://assets/textures/terrain/leafy_grass_diff_2k.jpg"
+const PBR_GRASS_NORMAL_PATH := "res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg"
+const PBR_GRASS_ROUGHNESS_PATH := "res://assets/textures/terrain/leafy_grass_rough_2k.jpg"
+const PBR_MUD_ALBEDO_PATH := "res://assets/textures/terrain/brown_mud_diff_2k.jpg"
+const PBR_MUD_NORMAL_PATH := "res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg"
+const PBR_MUD_ROUGHNESS_PATH := "res://assets/textures/terrain/brown_mud_rough_2k.jpg"
+const PBR_FOREST_ALBEDO_PATH := "res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg"
+const PBR_FOREST_NORMAL_PATH := "res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg"
+const PBR_FOREST_ROUGHNESS_PATH := "res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg"
 
 var _gpu_ctx_generation: int = -1
 var _physical_ring_count: int = 0
 var _horizon_max_level: int = 0
+var _pbr_bound := false
+var _pbr_attempted := false
+var _debug_pbr_enabled := true
+var _debug_geomorph_mode: int = 0
+var _aerial_strength: float = DEFAULT_AERIAL_STRENGTH
 
 
 func _ready() -> void:
-	# Let the complete latest 0.0.5 clipmap initialize its topology, stable anchor
-	# state and resident global textures first.
+	# Complete the latest 0.0.5 clipmap initialization first, then replace only its
+	# material shader. Geometry/topology/LOD objects are not rebuilt here.
 	super._ready()
-	_material.shader = load(GPU_GEOMORPH_SHADER_PATH)
-	# Shader replacement clears its parameter bindings, so explicitly restore the
-	# latest global height/material resources before layering context on top.
+	_material.shader = load(GPU_SURFACE_SHADER_PATH)
+	# Shader replacement clears parameter bindings.
 	super._bind_gpu_resources(true)
 	super._sync_material_control()
 	_bind_gpu_context(true)
+	_bind_surface_pbr(true)
+	_sync_detail_seed()
+	_sync_debug_uniforms()
 
 
 func _process(dt: float) -> void:
-	# Movement, promoted-centre selection and stationary lattice logic remain in
-	# the latest parent implementation.
 	super._process(dt)
 	_bind_gpu_context(false)
 
@@ -48,10 +59,8 @@ func _process(dt: float) -> void:
 func _update_active_levels() -> void:
 	_update_screen_space_min_level()
 
-	# A coarse annulus can contribute only if its inner edge intersects the
-	# horizon-safe visible cap. Stop at the first level whose entire annulus starts
-	# beyond that cap. This is stronger than drawing a broad tail and discarding it
-	# later in the fragment shader.
+	# A ring whose inner edge begins beyond the visible horizon-safe cap cannot
+	# contribute a single triangle, so it is omitted from the physical draw buffer.
 	var max_level: int = _active_min_level
 	var visible_radius_m: float = maxf(
 		_visible_cap_arc_m,
@@ -88,15 +97,12 @@ func _apply_active_level_window() -> void:
 		if rings.multimesh == null:
 			continue
 		var mm: MultiMesh = rings.multimesh
-
-		# Resizing clears the per-instance buffers. This happens only when the
-		# screen-space/horizon LOD window changes, never during ordinary movement.
-		# It guarantees that the GPU contains exactly the active annuli rather than
-		# a permanently allocated L1..L14 tail with a mutable draw count.
+		# Resize only when the LOD window changes. This makes the physical instance
+		# buffer exactly match the logical visible rings instead of keeping L1..L14
+		# permanently allocated behind visible_instance_count.
 		if mm.instance_count != ring_count:
 			mm.visible_instance_count = 0
 			mm.instance_count = ring_count
-
 		for instance_index: int in ring_count:
 			var logical_level: int = _active_min_level + instance_index + 1
 			mm.set_instance_transform(instance_index, Transform3D.IDENTITY)
@@ -106,12 +112,32 @@ func _apply_active_level_window() -> void:
 
 
 func _restore_dynamic_ring_window() -> void:
-	# Visibility/debug operations must never resurrect a horizon-culled level.
-	var ring_count: int = _physical_ring_count
+	# Visibility/debug operations must never resurrect horizon-culled levels.
 	for batch: MultiMeshInstance3D in _sector_batches:
 		if batch.multimesh != null:
 			batch.multimesh.visible_instance_count = mini(
-				ring_count, batch.multimesh.instance_count)
+				_physical_ring_count, batch.multimesh.instance_count)
+
+
+func _sync_uniforms(origin: Vector3) -> void:
+	# Preserve all stable-anchor/latest-clipmap uniforms from the parent.
+	super._sync_uniforms(origin)
+	if _material == null:
+		return
+	_material.set_shader_parameter("u_detail_origin", _wrapped_detail_origin())
+	_material.set_shader_parameter("u_terrain_atmosphere_height", Planet.cfg.atmosphere_height)
+	_material.set_shader_parameter("u_terrain_aerial_strength", _aerial_strength)
+	_material.set_shader_parameter("u_debug_geomorph_mode", _debug_geomorph_mode)
+	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled and _pbr_bound else 0.0)
+
+
+func _wrapped_detail_origin() -> Vector3:
+	# Modulo before converting the double-precision floating origin to Vector3.
+	# All scan periods divide 4096 m, so wrap crossings do not change texture phase.
+	return Vector3(
+		fposmod(float(Frames.origin.x), DETAIL_ORIGIN_WRAP_M),
+		fposmod(float(Frames.origin.y), DETAIL_ORIGIN_WRAP_M),
+		fposmod(float(Frames.origin.z), DETAIL_ORIGIN_WRAP_M))
 
 
 func _bind_gpu_context(force: bool) -> void:
@@ -137,6 +163,81 @@ func _bind_gpu_context(force: bool) -> void:
 	_material.set_shader_parameter("u_ctx_ready", 1.0)
 
 
+func _load_pbr_texture(path: String) -> Texture2D:
+	if not ResourceLoader.exists(path, "Texture2D"):
+		push_warning("Terrain PBR texture unavailable: %s" % path)
+		return null
+	var resource: Resource = load(path)
+	return resource as Texture2D if resource is Texture2D else null
+
+
+func _bind_surface_pbr(force: bool) -> void:
+	if _material == null or (_pbr_attempted and not force):
+		return
+	_pbr_attempted = true
+	var ground_albedo := _load_pbr_texture(PBR_GROUND_ALBEDO_PATH)
+	var ground_normal := _load_pbr_texture(PBR_GROUND_NORMAL_PATH)
+	var ground_roughness := _load_pbr_texture(PBR_GROUND_ROUGHNESS_PATH)
+	var grass_albedo := _load_pbr_texture(PBR_GRASS_ALBEDO_PATH)
+	var grass_normal := _load_pbr_texture(PBR_GRASS_NORMAL_PATH)
+	var grass_roughness := _load_pbr_texture(PBR_GRASS_ROUGHNESS_PATH)
+	var mud_albedo := _load_pbr_texture(PBR_MUD_ALBEDO_PATH)
+	var mud_normal := _load_pbr_texture(PBR_MUD_NORMAL_PATH)
+	var mud_roughness := _load_pbr_texture(PBR_MUD_ROUGHNESS_PATH)
+	var forest_albedo := _load_pbr_texture(PBR_FOREST_ALBEDO_PATH)
+	var forest_normal := _load_pbr_texture(PBR_FOREST_NORMAL_PATH)
+	var forest_roughness := _load_pbr_texture(PBR_FOREST_ROUGHNESS_PATH)
+
+	_material.set_shader_parameter("u_pbr_ground_albedo", ground_albedo)
+	_material.set_shader_parameter("u_pbr_ground_normal", ground_normal)
+	_material.set_shader_parameter("u_pbr_ground_roughness", ground_roughness)
+	_material.set_shader_parameter("u_pbr_grass_albedo", grass_albedo)
+	_material.set_shader_parameter("u_pbr_grass_normal", grass_normal)
+	_material.set_shader_parameter("u_pbr_grass_roughness", grass_roughness)
+	_material.set_shader_parameter("u_pbr_mud_albedo", mud_albedo)
+	_material.set_shader_parameter("u_pbr_mud_normal", mud_normal)
+	_material.set_shader_parameter("u_pbr_mud_roughness", mud_roughness)
+	_material.set_shader_parameter("u_pbr_forest_albedo", forest_albedo)
+	_material.set_shader_parameter("u_pbr_forest_normal", forest_normal)
+	_material.set_shader_parameter("u_pbr_forest_roughness", forest_roughness)
+
+	_pbr_bound = ground_albedo != null and ground_normal != null and ground_roughness != null \
+		and grass_albedo != null and grass_normal != null and grass_roughness != null \
+		and mud_albedo != null and mud_normal != null and mud_roughness != null \
+		and forest_albedo != null and forest_normal != null and forest_roughness != null
+	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled and _pbr_bound else 0.0)
+
+
+func set_debug_geomorph_mode(mode: int) -> void:
+	_debug_geomorph_mode = clampi(mode, 0, 6)
+	if _material != null:
+		_material.set_shader_parameter("u_debug_geomorph_mode", _debug_geomorph_mode)
+
+
+func set_debug_pbr_enabled(value: bool) -> void:
+	_debug_pbr_enabled = value
+	if _material != null:
+		_material.set_shader_parameter("u_pbr_enabled", 1.0 if value and _pbr_bound else 0.0)
+
+
+func set_aerial_strength(value: float) -> void:
+	_aerial_strength = clampf(value, 0.0, 2.0)
+	if _material != null:
+		_material.set_shader_parameter("u_terrain_aerial_strength", _aerial_strength)
+
+
+func debug_geomorph_mode() -> int:
+	return _debug_geomorph_mode
+
+
+func debug_pbr_enabled() -> bool:
+	return _debug_pbr_enabled
+
+
+func aerial_strength() -> float:
+	return _aerial_strength
+
+
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	var context: Node = get_node_or_null("/root/PlanetContext")
@@ -146,4 +247,8 @@ func gpu_stream_stats() -> Dictionary:
 	out["physical_ring_instances"] = _physical_ring_count
 	out["horizon_max_level"] = _horizon_max_level
 	out["horizon_exact_ring_buffers"] = true
+	out["physical_surface_classifier"] = true
+	out["scanned_pbr"] = _pbr_bound and _debug_pbr_enabled
+	out["terrain_aerial_perspective"] = true
+	out["terrain_aerial_strength"] = _aerial_strength
 	return out
