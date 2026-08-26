@@ -13,6 +13,10 @@ const MICRO_GRID_VERTS: int = MICRO_GRID_CELLS + 1
 const MICRO_HALF_CELLS: int = MICRO_GRID_CELLS >> 1
 const MICRO_OUTER_L0_CELLS: float = 32.0
 const MICRO_L0_HOLE_CELLS: float = 24.0
+# When a nadir frustum lies wholly inside this radius the dense micro disc alone
+# covers every visible terrain pixel. Hiding the much larger 400-cell centre
+# annulus avoids running its expensive geomorph vertex stack for clipped geometry.
+const MICRO_ONLY_VIEW_RADIUS_M: float = 16.0
 
 var _micro_batch: MultiMeshInstance3D
 var _full_center_meshes: Array[Mesh] = []
@@ -49,7 +53,7 @@ func _sync_micro_lod_state() -> void:
 		_micro_l0_active = want_micro
 		_apply_center_mesh_variant()
 	if _micro_batch != null:
-		_micro_batch.visible = _terrain_visible and _micro_l0_active
+		_micro_batch.visible = _terrain_visible and _micro_l0_active and _view_surface_visible
 
 
 func _apply_center_mesh_variant() -> void:
@@ -79,13 +83,31 @@ func _build_hole_center_meshes(half_cut: bool) -> void:
 func _set_visible(value: bool) -> void:
 	super._set_visible(value)
 	if _micro_batch != null:
-		_micro_batch.visible = value and _micro_l0_active
+		_micro_batch.visible = value and _micro_l0_active and _view_surface_visible
 
 
 func _update_sector_visibility() -> void:
 	super._update_sector_visibility()
-	if _micro_batch != null:
-		_micro_batch.visible = _terrain_visible and _micro_l0_active
+	if _micro_batch == null:
+		return
+
+	var micro_visible: bool = _terrain_visible and _micro_l0_active and _view_surface_visible
+	_micro_batch.visible = micro_visible
+
+	# At eye level while looking almost straight down, the 24 m micro disc covers
+	# the complete view footprint. The 18..150 m centre annulus is outside the
+	# frustum but would otherwise still run ~400-cell terrain vertex work because
+	# its shader-displaced bounds cannot be frustum-culled by Godot automatically.
+	var micro_only: bool = micro_visible and not _debug_freeze and not _debug_side_cut \
+		and _view_max_arc_m > 0.0 and _view_max_arc_m <= MICRO_ONLY_VIEW_RADIUS_M
+	if micro_only:
+		for center: MultiMeshInstance3D in _center_sector_batches:
+			center.visible = false
+		for rings: MultiMeshInstance3D in _sector_batches:
+			rings.visible = false
+			if rings.multimesh != null and rings.multimesh.visible_instance_count != 0:
+				rings.multimesh.visible_instance_count = 0
+		_visible_sector_count = 0
 
 
 func _show_all_active_sectors() -> void:
@@ -222,9 +244,10 @@ static func _mesh_from_micro_arrays(vertices: Array[Vector3], uvs: Array[Vector2
 
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
-	out["draw_batches"] = int(out.get("draw_batches", 0)) + 1
+	out["draw_batches"] = int(out.get("draw_batches", 0)) + (1 if _micro_batch != null and _micro_batch.visible else 0)
 	out["microgeometry"] = true
 	out["micro_active"] = _micro_l0_active
+	out["micro_visible"] = _micro_batch != null and _micro_batch.visible
 	out["micro_spacing_m"] = _base_spacing * MICRO_STEP_L0
 	out["micro_radius_m"] = _base_spacing * MICRO_OUTER_L0_CELLS
 	out["micro_handoff_start_m"] = _base_spacing * MICRO_L0_HOLE_CELLS
