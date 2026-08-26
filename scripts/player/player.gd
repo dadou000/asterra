@@ -1,7 +1,8 @@
 class_name AsterraPlayer
 extends Node3D
 ## Observer + excavation tool. Precise ground contact comes from the asynchronous
-## GPU terrain query; CPU terrain queries are coarse resident-map fallbacks only.
+## GPU terrain query through TerrainContactSampler; CPU queries remain coarse
+## resident-map fallbacks only.
 
 signal moved(world_pos: Vec3D)
 
@@ -26,6 +27,7 @@ var camera: Camera3D
 var _mouse_captured := false
 var input_enabled := true
 
+
 func _ready() -> void:
 	camera = Camera3D.new()
 	camera.near = 0.25
@@ -35,29 +37,33 @@ func _ready() -> void:
 	Frames.origin_shifted.connect(func(_d): _sync_transform())
 	set_process_input(true)
 
+
 func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 	var d := dir.normalized()
-	var h := Planet.terrain_height(d)
-	var r := Planet.cfg.planet_radius + maxf(h, 0.0) + spawn_altitude
+	var h := TerrainContactSampler.height(d)
+	var r := Planet.cfg.planet_radius + h + spawn_altitude
 	world_pos = Vec3D.new(d.x * r, d.y * r, d.z * r)
 	Frames.rebase(world_pos)
 	_sync_transform()
-	TerrainHeightQuery.request_height(d)
+	TerrainContactSampler.request_height(d)
 	moved.emit(world_pos)
+
 
 func up_dir() -> Vector3:
 	return world_pos.normalized().to_v3()
 
+
 func altitude() -> float:
-	return world_pos.length() - Planet.cfg.planet_radius
+	return TerrainContactSampler.altitude_msl(world_pos)
+
 
 func ground_height() -> float:
-	var d := up_dir()
-	TerrainHeightQuery.request_height(d)
-	return TerrainHeightQuery.height_for_direction(d, Planet.terrain_height(d))
+	return TerrainContactSampler.height(up_dir())
+
 
 func height_above_ground() -> float:
-	return altitude() - ground_height()
+	return TerrainContactSampler.altitude_agl(world_pos)
+
 
 func _input(event: InputEvent) -> void:
 	if not input_enabled:
@@ -70,15 +76,17 @@ func _input(event: InputEvent) -> void:
 			mode = Mode.WALK if mode == Mode.FLY else Mode.FLY
 			vertical_speed = 0.0
 
+
 func set_mouse_captured(v: bool) -> void:
 	_mouse_captured = v
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if v else Input.MOUSE_MODE_VISIBLE
+
 
 func _physics_process(dt: float) -> void:
 	if not Planet.ready_state or not input_enabled:
 		return
 	var up := up_dir()
-	TerrainHeightQuery.request_height(up)
+	TerrainContactSampler.request_height(up)
 	var basis_local := _local_basis(up)
 	var fwd: Vector3 = basis_local[0]
 	var right: Vector3 = basis_local[1]
@@ -113,9 +121,7 @@ func _physics_process(dt: float) -> void:
 			wish = wish.normalized()
 			world_pos = world_pos.add(Vec3D.from_v3(wish).mul(speed * dt))
 		up = world_pos.normalized().to_v3()
-		TerrainHeightQuery.request_height(up)
-		var coarse_h := Planet.terrain_height(up)
-		var gh := TerrainHeightQuery.height_for_direction(up, coarse_h)
+		var gh := TerrainContactSampler.height(up)
 		var target_r := Planet.cfg.planet_radius + gh + EYE_HEIGHT
 		var r := world_pos.length()
 		vertical_speed -= GRAVITY * dt
@@ -134,6 +140,7 @@ func _physics_process(dt: float) -> void:
 	_sync_transform()
 	moved.emit(world_pos)
 
+
 func _local_basis(up: Vector3) -> Array:
 	var ref := Vector3(0, 1, 0)
 	if absf(up.dot(ref)) > 0.995:
@@ -143,6 +150,7 @@ func _local_basis(up: Vector3) -> Array:
 	var fwd := (north * cos(yaw) + east * sin(yaw)).normalized()
 	var right := fwd.cross(up).normalized()
 	return [fwd, right]
+
 
 func _sync_transform() -> void:
 	position = Frames.to_render(world_pos)
@@ -156,15 +164,19 @@ func _sync_transform() -> void:
 		cam_right = flat_right
 	var true_up := cam_right.cross(look).normalized()
 	camera.transform.basis = Basis(cam_right, true_up, -look)
+	# True tangent distance from the observer to the sea-level sphere. This remains
+	# correct at high altitude and replaces arbitrary altitude multipliers.
 	var r_obs := Planet.cfg.planet_radius + maxf(altitude(), 0.0)
 	var horizon_dist := sqrt(maxf(r_obs * r_obs - Planet.cfg.planet_radius * Planet.cfg.planet_radius, 0.0))
 	camera.far = clampf(horizon_dist + 20000.0, 50000.0, 8.0e6)
 
+
 func view_dir() -> Vector3:
 	return -camera.global_transform.basis.z
 
+
 ## Coarse CPU raymarch for editing/aiming. This deliberately uses Planet's
-## resident macro fallback and no longer evaluates procedural TerrainDetail.
+## resident macro fallback and no procedural TerrainDetail.
 func aim(max_range: float = 220.0) -> Dictionary:
 	var origin := world_pos
 	var ray := view_dir()
@@ -189,14 +201,17 @@ func aim(max_range: float = 220.0) -> Dictionary:
 				"height": Planet.terrain_height(d)}
 	return {}
 
+
 func _gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
 	var p := origin.add(Vec3D.from_v3(ray).mul(t))
 	var d := p.normalized().to_v3()
 	return p.length() - (Planet.cfg.planet_radius + Planet.terrain_height(d))
 
+
 func state() -> Dictionary:
 	return {"x": world_pos.x, "y": world_pos.y, "z": world_pos.z,
 		"yaw": yaw, "pitch": pitch, "mode": int(mode)}
+
 
 func restore(s: Dictionary) -> void:
 	world_pos = Vec3D.new(s["x"], s["y"], s["z"])
@@ -205,5 +220,5 @@ func restore(s: Dictionary) -> void:
 	mode = int(s.get("mode", Mode.FLY)) as Mode
 	Frames.rebase(world_pos)
 	_sync_transform()
-	TerrainHeightQuery.request_height(up_dir())
+	TerrainContactSampler.request_height(up_dir())
 	moved.emit(world_pos)
