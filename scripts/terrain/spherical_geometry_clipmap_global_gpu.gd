@@ -4,8 +4,13 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_global.gd"
 ## The latest global clipmap remains authoritative for compact sector topology,
 ## promoted-centre screen-space LOD, stationary per-level lattices, stable
 ## double-precision anchoring and resident whole-planet height/material maps.
-## This layer adds horizon-exact ring buffers plus immutable GPU context/PBR
+## This layer adds horizon-exact visible ring windows plus immutable GPU context/PBR
 ## resources without performing any runtime CPU terrain synthesis.
+##
+## IMPORTANT: MultiMesh storage is fixed after startup. Earlier revisions resized
+## all 12 ring buffers whenever the horizon LOD changed; travelling over relief can
+## make L7/L8 (etc.) alternate and repeatedly reallocate renderer storage. We now
+## keep MAX_LEVEL slots and change only custom data + visible_instance_count.
 
 const GPU_SURFACE_SHADER_PATH := "res://shaders/spherical_geometry_clipmap_global_surface.gdshader"
 const HORIZON_RING_SAFETY: float = 1.015
@@ -60,7 +65,7 @@ func _update_active_levels() -> void:
 	_update_screen_space_min_level()
 
 	# A ring whose inner edge begins beyond the visible horizon-safe cap cannot
-	# contribute a single triangle, so it is omitted from the physical draw buffer.
+	# contribute a single triangle, so it is omitted from the visible instance window.
 	var max_level: int = _active_min_level
 	var visible_radius_m: float = maxf(
 		_visible_cap_arc_m,
@@ -79,44 +84,22 @@ func _update_active_levels() -> void:
 
 
 func _apply_active_level_window() -> void:
-	if _active_min_level == _last_applied_min_level \
-			and _active_max_level == _last_applied_max_level:
-		return
-	_last_applied_min_level = _active_min_level
-	_last_applied_max_level = _active_max_level
-	var ring_count: int = maxi(_active_max_level - _active_min_level, 0)
-	_physical_ring_count = ring_count
-
-	for sector: int in SECTOR_COUNT:
-		var center: MultiMeshInstance3D = _center_sector_batches[sector]
-		if center.multimesh != null:
-			center.multimesh.set_instance_custom_data(0,
-				Color(float(_active_min_level), float(sector), 0.0, 0.0))
-
-		var rings: MultiMeshInstance3D = _sector_batches[sector]
-		if rings.multimesh == null:
-			continue
-		var mm: MultiMesh = rings.multimesh
-		# Resize only when the LOD window changes. This makes the physical instance
-		# buffer exactly match the logical visible rings instead of keeping L1..L14
-		# permanently allocated behind visible_instance_count.
-		if mm.instance_count != ring_count:
-			mm.visible_instance_count = 0
-			mm.instance_count = ring_count
-		for instance_index: int in ring_count:
-			var logical_level: int = _active_min_level + instance_index + 1
-			mm.set_instance_transform(instance_index, Transform3D.IDENTITY)
-			mm.set_instance_custom_data(instance_index,
-				Color(float(logical_level), float(sector), 1.0, 0.0))
-		mm.visible_instance_count = ring_count
+	# Keep the storage allocated by the current 0.0.5 clipmap (MAX_LEVEL slots per
+	# sector). Only the visible prefix and its logical LOD IDs change. This avoids
+	# renderer/RID allocation churn while preserving exactly the same horizon cull.
+	_physical_ring_count = maxi(_active_max_level - _active_min_level, 0)
+	super._apply_active_level_window()
 
 
 func _restore_dynamic_ring_window() -> void:
-	# Visibility/debug operations must never resurrect horizon-culled levels.
+	# Visibility/debug operations must never resurrect horizon-culled levels. Avoid
+	# submitting redundant RenderingServer property writes on ordinary frames.
 	for batch: MultiMeshInstance3D in _sector_batches:
-		if batch.multimesh != null:
-			batch.multimesh.visible_instance_count = mini(
-				_physical_ring_count, batch.multimesh.instance_count)
+		if batch.multimesh == null:
+			continue
+		var wanted: int = mini(_physical_ring_count, batch.multimesh.instance_count)
+		if batch.multimesh.visible_instance_count != wanted:
+			batch.multimesh.visible_instance_count = wanted
 
 
 func _sync_uniforms(origin: Vector3) -> void:
@@ -246,7 +229,8 @@ func gpu_stream_stats() -> Dictionary:
 	out["gpu_context_generation"] = _gpu_ctx_generation
 	out["physical_ring_instances"] = _physical_ring_count
 	out["horizon_max_level"] = _horizon_max_level
-	out["horizon_exact_ring_buffers"] = true
+	out["horizon_exact_ring_window"] = true
+	out["ring_storage_fixed"] = true
 	out["physical_surface_classifier"] = true
 	out["scanned_pbr"] = _pbr_bound and _debug_pbr_enabled
 	out["terrain_aerial_perspective"] = true
