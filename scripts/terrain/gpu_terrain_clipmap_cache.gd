@@ -211,7 +211,8 @@ func _render_initialize(spirv: RDShaderSPIRV) -> void:
 	format.array_layers = LEVEL_COUNT
 	format.mipmaps = 1
 	format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT \
-		| RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
+		| RenderingDevice.TEXTURE_USAGE_STORAGE_BIT \
+		| RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
 	var cache := rd.texture_create(format, RDTextureView.new(), [])
 	var ok := sampler.is_valid() and cache.is_valid()
 	if ok:
