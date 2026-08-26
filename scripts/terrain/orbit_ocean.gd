@@ -1,10 +1,11 @@
 class_name OrbitOcean
 extends Node3D
-## Global sea-level shell used for distant graphics.
+## Global sea-level shell used only for distant/orbital graphics.
 ##
 ## The local OceanGeometryClipmap owns displaced waves and surf from the ground
-## through regional/aircraft altitude. Above the handoff this smooth shell takes
-## over and evaluates the same procedural GPU terrain field for its shoreline.
+## through regional/aircraft altitude. Below the handoff the global shell is not
+## submitted at all; above it this smooth sphere takes over and evaluates the same
+## procedural GPU terrain field for its shoreline.
 
 const SHELL_OFFSET_M := 1.5
 const VISUAL_LOCK_ALTITUDE_M := 120000.0
@@ -16,6 +17,7 @@ const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
 
+
 func _ready() -> void:
 	process_priority = 11
 	Frames.origin_shifted.connect(_on_origin_shifted)
@@ -23,19 +25,34 @@ func _ready() -> void:
 	if Planet.ready_state:
 		_refresh()
 
+
 func _process(_dt: float) -> void:
+	var show_orbit_ocean := false
+	if Planet.ready_state and Planet.cfg != null:
+		var camera: Camera3D = get_viewport().get_camera_3d()
+		if camera != null:
+			var world_pos: Vec3D = Frames.to_world(camera.global_position)
+			show_orbit_ocean = world_pos.length() - Planet.cfg.planet_radius >= VISUAL_LOCK_ALTITUDE_M
+	if _mesh_instance != null:
+		_mesh_instance.visible = show_orbit_ocean
+	if not show_orbit_ocean:
+		return
 	if _material != null:
 		_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 		_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 
+
 func _on_world_ready(_fields: PlanetFields) -> void:
 	_refresh()
+
 
 func material() -> ShaderMaterial:
 	return _material
 
+
 func refresh_surface() -> void:
 	_refresh()
+
 
 func _refresh() -> void:
 	if not Planet.ready_state or Planet.orbit_elevation_texture == null:
@@ -44,6 +61,7 @@ func _refresh() -> void:
 	if _mesh_instance == null:
 		_mesh_instance = MeshInstance3D.new()
 		_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_mesh_instance.visible = false
 		add_child(_mesh_instance)
 
 		var radius: float = Planet.cfg.planet_radius + SHELL_OFFSET_M
@@ -76,8 +94,10 @@ func _refresh() -> void:
 	_material.set_shader_parameter("u_orbit_start_altitude", VISUAL_LOCK_ALTITUDE_M)
 	_sync_origin()
 
+
 func _on_origin_shifted(_delta: Vector3) -> void:
 	_sync_origin()
+
 
 func _sync_origin() -> void:
 	position = Frames.to_render(Vec3D.new(0.0, 0.0, 0.0))
