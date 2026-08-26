@@ -17,15 +17,6 @@ const HORIZON_RING_SAFETY: float = 1.015
 const DETAIL_ORIGIN_WRAP_M: float = 4096.0
 const DEFAULT_AERIAL_STRENGTH: float = 0.78
 
-# View-dependent submission. The old radial fallback used abs(forward.dot(up)),
-# which made both straight-down and straight-up views submit every terrain sector
-# and every horizon ring. Nine view rays are enough to distinguish three cases:
-# horizon in view, a bounded down-looking surface footprint, or no surface at all.
-const VIEW_SAMPLE_AXIS: int = 3
-const VIEW_ARC_MARGIN_M: float = 8.0
-const VIEW_HORIZON_ANGLE_MARGIN_RAD: float = 0.010
-const UNDERGROUND_CULL_DEPTH_M: float = 2.0
-
 # Keep imported textures out of script parse-time dependency resolution. They are
 # loaded once after Godot has imported the project resources.
 const PBR_GROUND_ALBEDO_PATH := "res://assets/textures/terrain/ground003_color_2k.jpg"
@@ -49,11 +40,6 @@ var _pbr_attempted := false
 var _debug_pbr_enabled := true
 var _debug_geomorph_mode: int = 0
 var _aerial_strength: float = DEFAULT_AERIAL_STRENGTH
-
-var _view_surface_visible := true
-var _view_ring_count: int = 0
-var _view_max_arc_m: float = 0.0
-var _view_underground := false
 
 
 func _ready() -> void:
@@ -105,211 +91,9 @@ func _apply_active_level_window() -> void:
 	super._apply_active_level_window()
 
 
-func _set_visible(value: bool) -> void:
-	# The procedural parent calls _set_visible(true) and then performs its explicit
-	# camera visibility update. Avoid doing the same sector traversal twice on every
-	# ordinary frame. A transition from hidden to visible still evaluates once here.
-	var changed: bool = _terrain_visible != value
-	_terrain_visible = value
-	if not value:
-		_view_surface_visible = false
-		_view_ring_count = 0
-		_visible_sector_count = 0
-		for batch: MultiMeshInstance3D in _center_sector_batches:
-			batch.visible = false
-		for batch: MultiMeshInstance3D in _sector_batches:
-			batch.visible = false
-		return
-	if changed:
-		_update_sector_visibility()
-
-
-func _update_sector_visibility() -> void:
-	if not _terrain_visible or Planet.cfg == null:
-		return
-
-	var camera: Camera3D = get_viewport().get_camera_3d()
-	if camera == null:
-		return
-
-	var observer_d: Vec3D = Frames.to_world(camera.global_position)
-	var observer_world: Vector3 = observer_d.to_v3()
-	var observer_radius: float = observer_world.length()
-	if observer_radius <= 1.0:
-		_hide_view_surface()
-		return
-	var observer_dir: Vector3 = observer_world / observer_radius
-
-	# Use the asynchronous GPU surface query when it is fresh. This is important
-	# for procedural valleys/ridges: the macro map alone can be hundreds of metres
-	# away from the rendered surface and is not reliable enough for underground
-	# rejection by itself.
-	var macro_h: float = Planet.macro_height(observer_dir)
-	var surface_h: float = macro_h
-	var precise_surface := false
-	var query: Node = get_node_or_null("/root/TerrainHeightQuery")
-	if query != null and query.has_method("has_fresh_height") \
-			and bool(query.call("has_fresh_height", observer_dir)):
-		surface_h = float(query.call("height_for_direction", observer_dir, macro_h))
-		precise_surface = true
-
-	var surface_radius: float = Planet.cfg.planet_radius + surface_h
-	var signed_surface_altitude: float = observer_radius - surface_radius
-	_view_underground = precise_surface \
-		and signed_surface_altitude < -UNDERGROUND_CULL_DEPTH_M
-	if _view_underground:
-		_hide_view_surface()
-		return
-
-	# If the coarse map happens to put a legitimate procedural valley camera inside
-	# its reference sphere while no precise query is available, never intersect
-	# rays against the far side of the planet. Treat the reference surface as just
-	# below the camera until the GPU query catches up.
-	if not precise_surface and surface_radius >= observer_radius:
-		surface_radius = observer_radius - 0.25
-
-	var max_arc_m: float = _frustum_surface_arc_m(
-		camera, observer_world, observer_dir, surface_radius)
-	if max_arc_m < 0.0:
-		_hide_view_surface()
-		return
-
-	_view_surface_visible = true
-	_view_max_arc_m = minf(_visible_cap_arc_m, max_arc_m + VIEW_ARC_MARGIN_M)
-	_view_ring_count = _ring_count_for_view_arc(_view_max_arc_m)
-
-	var forward: Vector3 = -camera.global_transform.basis.z.normalized()
-	var radial_dot: float = forward.dot(_center_dir)
-	var forward_plane := Vector2(forward.dot(_center_right), forward.dot(_center_up))
-
-	# A down-looking frustum has a circular/elliptic surface footprint around the
-	# centre and therefore legitimately spans every azimuth. The crucial difference
-	# from the old code is that only the rings intersecting that footprint remain.
-	var show_all_azimuth: bool = radial_dot <= -SECTOR_SHOW_ALL_RADIAL_DOT \
-		or forward_plane.length_squared() < 1e-5
-
-	var cos_limit: float = -1.0
-	var forward_2d := Vector2.RIGHT
-	if not show_all_azimuth:
-		forward_2d = forward_plane.normalized()
-		var viewport_size: Vector2 = get_viewport().get_visible_rect().size
-		var aspect: float = viewport_size.x / maxf(viewport_size.y, 1.0)
-		var vertical_half: float = deg_to_rad(camera.fov) * 0.5
-		var horizontal_half: float = atan(tan(vertical_half) * aspect)
-		var limit: float = minf(horizontal_half + SECTOR_HALF_ANGLE
-			+ SECTOR_CULL_MARGIN_RAD, PI)
-		cos_limit = cos(limit)
-
-	_visible_sector_count = 0
-	for sector: int in SECTOR_COUNT:
-		var sector_visible: bool = show_all_azimuth
-		if not show_all_azimuth:
-			var angle: float = (float(sector) + 0.5) * TAU / float(SECTOR_COUNT)
-			var sector_dir := Vector2(cos(angle), sin(angle))
-			sector_visible = sector_dir.dot(forward_2d) >= cos_limit
-
-		var center: MultiMeshInstance3D = _center_sector_batches[sector]
-		var rings: MultiMeshInstance3D = _sector_batches[sector]
-		center.visible = sector_visible
-		rings.visible = sector_visible and _view_ring_count > 0
-		if rings.multimesh != null:
-			var wanted: int = _view_ring_count if sector_visible else 0
-			wanted = mini(wanted, rings.multimesh.instance_count)
-			if rings.multimesh.visible_instance_count != wanted:
-				rings.multimesh.visible_instance_count = wanted
-		if sector_visible:
-			_visible_sector_count += 1
-
-
-func _hide_view_surface() -> void:
-	_view_surface_visible = false
-	_view_ring_count = 0
-	_view_max_arc_m = 0.0
-	_visible_sector_count = 0
-	for batch: MultiMeshInstance3D in _center_sector_batches:
-		batch.visible = false
-	for batch: MultiMeshInstance3D in _sector_batches:
-		batch.visible = false
-		if batch.multimesh != null and batch.multimesh.visible_instance_count != 0:
-			batch.multimesh.visible_instance_count = 0
-
-
-func _frustum_surface_arc_m(camera: Camera3D, observer_world: Vector3,
-		observer_dir: Vector3, surface_radius: float) -> float:
-	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
-	if viewport_size.x <= 1.0 or viewport_size.y <= 1.0:
-		return _visible_cap_arc_m
-
-	var min_elevation := INF
-	var max_elevation := -INF
-	var max_hit_arc_m := -1.0
-	var denom: float = float(VIEW_SAMPLE_AXIS - 1)
-
-	for yi: int in VIEW_SAMPLE_AXIS:
-		var sy: float = viewport_size.y * float(yi) / denom
-		for xi: int in VIEW_SAMPLE_AXIS:
-			var sx: float = viewport_size.x * float(xi) / denom
-			var ray: Vector3 = camera.project_ray_normal(Vector2(sx, sy)).normalized()
-			var elevation: float = asin(clampf(ray.dot(observer_dir), -1.0, 1.0))
-			min_elevation = minf(min_elevation, elevation)
-			max_elevation = maxf(max_elevation, elevation)
-
-			var hit_t: float = _ray_sphere_nearest_t(observer_world, ray, surface_radius)
-			if hit_t <= 0.0:
-				continue
-			var hit_dir: Vector3 = (observer_world + ray * hit_t).normalized()
-			var arc_m: float = acos(clampf(_center_dir.dot(hit_dir), -1.0, 1.0)) \
-				* Planet.cfg.planet_radius
-			max_hit_arc_m = maxf(max_hit_arc_m, arc_m)
-
-	# When the planetary limb crosses the frustum, exact ray samples near the limb
-	# are numerically fragile and a 3x3 grid can sit on either side of the tangent.
-	# In that case retain the already horizon-capped LOD window. This preserves the
-	# long view straight ahead while still allowing aggressive nadir/zenith culls.
-	var observer_radius: float = observer_world.length()
-	var horizon_dip: float = 0.0
-	if observer_radius > surface_radius + 1e-4:
-		horizon_dip = acos(clampf(surface_radius / observer_radius, -1.0, 1.0))
-	var horizon_elevation: float = -horizon_dip
-	if horizon_elevation >= min_elevation - VIEW_HORIZON_ANGLE_MARGIN_RAD \
-			and horizon_elevation <= max_elevation + VIEW_HORIZON_ANGLE_MARGIN_RAD:
-		return _visible_cap_arc_m
-
-	return max_hit_arc_m
-
-
-static func _ray_sphere_nearest_t(origin: Vector3, direction: Vector3,
-		radius: float) -> float:
-	var b: float = origin.dot(direction)
-	var c: float = origin.length_squared() - radius * radius
-	var discriminant: float = b * b - c
-	if discriminant < 0.0:
-		return -1.0
-	var root: float = sqrt(discriminant)
-	var near_t: float = -b - root
-	if near_t > 1e-4:
-		return near_t
-	var far_t: float = -b + root
-	return far_t if far_t > 1e-4 else -1.0
-
-
-func _ring_count_for_view_arc(max_arc_m: float) -> int:
-	if max_arc_m <= 0.0 or _physical_ring_count <= 0:
-		return 0
-	var count := 0
-	for instance_index: int in _physical_ring_count:
-		var logical_level: int = _active_min_level + instance_index + 1
-		var spacing: float = _base_spacing * pow(2.0, float(logical_level))
-		var inner_m: float = spacing * float(RING_INNER_HALF_CELLS)
-		if inner_m > max_arc_m:
-			break
-		count = instance_index + 1
-	return count
-
-
 func _restore_dynamic_ring_window() -> void:
-	# Debug operations may explicitly ask for the complete logical window. Ordinary
-	# view culling writes its own smaller per-sector prefix in _update_sector_visibility.
+	# Visibility/debug operations must never resurrect horizon-culled levels. Avoid
+	# submitting redundant RenderingServer property writes on ordinary frames.
 	for batch: MultiMeshInstance3D in _sector_batches:
 		if batch.multimesh == null:
 			continue
@@ -447,11 +231,6 @@ func gpu_stream_stats() -> Dictionary:
 	out["horizon_max_level"] = _horizon_max_level
 	out["horizon_exact_ring_window"] = true
 	out["ring_storage_fixed"] = true
-	out["view_surface_visible"] = _view_surface_visible
-	out["view_ring_instances"] = _view_ring_count
-	out["view_max_arc_m"] = _view_max_arc_m
-	out["view_underground_cull"] = _view_underground
-	out["frustum_surface_culling"] = true
 	out["physical_surface_classifier"] = true
 	out["scanned_pbr"] = _pbr_bound and _debug_pbr_enabled
 	out["terrain_aerial_perspective"] = true
