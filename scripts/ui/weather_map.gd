@@ -1106,9 +1106,10 @@ func _set_speed_slider_from_pointer(global_x: float) -> void:
 	var rect := _speed_slider.get_global_rect()
 	if rect.size.x <= 1.0:
 		return
-	var t := clampf((global_x - rect.position.x) / rect.size.x, 0.0, 1.0)
-	var raw := lerpf(_speed_slider.min_value, _speed_slider.max_value, t)
-	var snapped := round(raw / _speed_slider.step) * _speed_slider.step
+	var t: float = clampf((global_x - rect.position.x) / rect.size.x, 0.0, 1.0)
+	var raw: float = lerpf(float(_speed_slider.min_value), float(_speed_slider.max_value), t)
+	var slider_step: float = float(_speed_slider.step)
+	var snapped: float = roundf(raw / slider_step) * slider_step
 	_speed_slider.value = clampf(snapped, _speed_slider.min_value, _speed_slider.max_value)
 
 
