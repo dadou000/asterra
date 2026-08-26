@@ -1,9 +1,9 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap_procedural_safe.gd"
 ## Final visual binding for the resident whole-planet terrain architecture.
 ##
-## The procedural/safe parents own concentric geometry, sinking, debug tools and
-## GPU detail. This layer binds the immutable global height and material-control
-## textures; neither resource recentres or streams while the camera moves.
+## The procedural/safe parents own concentric geometry, debug tools and GPU detail.
+## This layer binds immutable global height/material-control textures. It does not
+## alter ring submission: the final GPU submission layer owns that state explicitly.
 
 var _bound_global_material: Texture2DArray
 var _bound_global_material_res: int = 0
@@ -30,8 +30,8 @@ func _bind_gpu_resources(force: bool) -> void:
 
 
 ## Override the old camera-centred material clipmap binding. The parent calls this
-## every frame, but after the first reference comparison it only updates two tiny
-## readiness scalars; no image construction/upload is possible here.
+## every frame, but after the first reference comparison it only updates readiness
+## scalars; no image construction/upload is possible here.
 func _sync_material_control() -> void:
 	if _material == null:
 		return
@@ -45,28 +45,7 @@ func _sync_material_control() -> void:
 		_bound_global_material_res = face_res
 		_material.set_shader_parameter("u_material_global_res", float(face_res))
 	_material.set_shader_parameter("u_material_global_ready", 1.0 if texture != null else 0.0)
-	# Prevent accidental fallback to the obsolete three-layer moving control map.
 	_material.set_shader_parameter("u_material_clipmap_ready", 0.0)
-
-
-## Side-cut inspection hides entire sector nodes. Keep their MultiMesh instance
-## windows populated while hidden so disabling the cut cannot leave half of the
-## dynamic LOD rings at visible_instance_count=0 until the next altitude change.
-func _update_sector_visibility() -> void:
-	super._update_sector_visibility()
-	_restore_dynamic_ring_window()
-
-
-func _show_all_active_sectors() -> void:
-	super._show_all_active_sectors()
-	_restore_dynamic_ring_window()
-
-
-func _restore_dynamic_ring_window() -> void:
-	var ring_count: int = _active_ring_count()
-	for batch: MultiMeshInstance3D in _sector_batches:
-		if batch.multimesh != null:
-			batch.multimesh.visible_instance_count = ring_count
 
 
 func gpu_stream_stats() -> Dictionary:
@@ -79,4 +58,5 @@ func gpu_stream_stats() -> Dictionary:
 	out["material_streaming"] = false
 	out["terrain_streaming"] = false
 	out["visual_pages"] = false
+	out["implicit_ring_restore"] = false
 	return out
