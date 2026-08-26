@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
+render_mode cull_front, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 
 #include "res://shaders/material_clipmap.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
