@@ -49,6 +49,9 @@ void terrain_aerial_perspective(vec3 cam, vec3 frag, vec3 sun_direction,
 		float planet_radius, out vec3 transmittance, out vec3 inscatter) {
 	transmittance = vec3(1.0);
 	inscatter = vec3(0.0);
+	// Debug/perf disabling must remove the integration cost, not merely multiply
+	// the final in-scatter by zero after all samples have already run.
+	if (u_terrain_aerial_strength <= 0.0001) return;
 
 	vec3 delta = frag - cam;
 	float segment_length = length(delta);
