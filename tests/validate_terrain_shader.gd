@@ -13,6 +13,7 @@ const SPATIAL_SHADERS := [
 
 const COMPUTE_SHADERS := [
 	"res://shaders/terrain_scatter_compact.glsl",
+	"res://shaders/terrain_height_query.glsl",
 ]
 
 
