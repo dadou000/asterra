@@ -22,7 +22,11 @@ const GRID_VERTS: int = GRID_CELLS + 1
 const HALF_CELLS: int = GRID_CELLS >> 1
 const RING_INNER_HALF_CELLS: int = 88
 
-const REANCHOR_M: float = 8000.0
+# Stable tangent anchors are independent from the 4 km floating-origin rebases.
+# The cached renderer invalidates its anchor-relative texels when this changes, so
+# keep the anchor comfortably below the shader's 90 km exact-spherical transition
+# while avoiding a full cache warm-up every few seconds during fast travel.
+const REANCHOR_M: float = 65536.0
 const HORIZON_MARGIN_M: float = 20000.0
 const REQUEST_INTERVAL: float = 0.20
 const REQUEST_GRID_STEPS: int = 33
