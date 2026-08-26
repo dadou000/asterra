@@ -86,7 +86,8 @@ bool project_candidate(uint idx, out vec2 uv_min, out vec2 uv_max,
 	vec4 s = candidates.sphere[idx];
 	vec3 center = s.xyz;
 	float radius = s.w;
-	if (!(radius > 0.0) || any(isnan(center)) || any(isinf(center)) || !isfinite(radius)) {
+	if (!(radius > 0.0) || any(isnan(center)) || any(isinf(center))
+			|| isnan(radius) || isinf(radius)) {
 		return false;
 	}
 
