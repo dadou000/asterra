@@ -1,13 +1,12 @@
 class_name PassGeology
 extends RefCounted
-## 1.3 Geology first.
-##
-## The geological substrate exists *before* soil, biomes and cities because it
-## decides two things nothing else can: where resources are, and how the ground
-## behaves when you excavate or load it. Rock family is chosen from tectonic
-## setting rather than painted, so an ore body always has a reason to be there.
+## Geological substrate generated after macro geography and exceptional landforms.
+## Volcanic landmarks are physical provinces here, not visual labels: their
+## edifice receives volcanic bedrock and their tectonic setting affects resources.
 
 const R := PlanetFields.Rock
+const LM := PlanetFields.Landmark
+const TB := PlanetFields.TectonicBoundary
 
 var cfg: GenConfig
 var grid: PlanetGrid
@@ -41,22 +40,36 @@ func run(progress: Callable = Callable()) -> void:
 		var bnd: float = fields.plate_boundary[c]
 		var conv: float = fields.uplift[c]
 		var bas: float = fields.basin[c]
+		var landmark: int = fields.landmark[c]
+		var landmark_strength: float = fields.landmark_strength[c]
 		var oceanic := h < cfg.shelf_depth - 10.0
 		var lat := absf(d.y)
 
 		# --- faults and folded regions -------------------------------------
 		var f := NoiseKit.smoothstepf(0.55, 0.95, fault_n.u(d))
-		f = clampf(f * (0.35 + 1.6 * bnd) * cfg.fault_density + maxf(0.0, conv) * 0.45, 0.0, 1.0)
-		fields.fault[c] = f
-		fields.strata_dip[c] = clampf(f * 0.9 + absf(fold_n.s(d)) * 0.35 * (0.2 + bnd), 0.0, 1.2)
+		f = f * (0.35 + 1.6 * bnd) * cfg.fault_density + maxf(0.0, conv) * 0.45
+		if fields.plate_boundary_type[c] == TB.TRANSFORM:
+			f += bnd * 0.72 * cfg.fault_density
+		fields.fault[c] = clampf(f, 0.0, 1.0)
+		fields.strata_dip[c] = clampf(
+			fields.fault[c] * 0.9 + absf(fold_n.s(d)) * 0.35 * (0.2 + bnd), 0.0, 1.2)
 		fields.strata_phase[c] = strat_n.s(d) * cfg.strata_thickness * 6.0 + h * 0.35
 
 		# --- bedrock family --------------------------------------------------
 		var pv := province.u(d)
-		var craton := NoiseKit.smoothstepf(0.35, 0.0, province_d.u(d))  # province interiors
+		var craton := NoiseKit.smoothstepf(0.35, 0.0, province_d.u(d))
 		var plutonic := 1.0 - clampf(pluton.u(d) * 2.0, 0.0, 1.0)
 		var rock: int
-		if oceanic:
+
+		# Landmark geology has priority over the generic host province. This is
+		# deliberately strength-gated so the outer apron transitions back into
+		# whatever rock the volcano grew through.
+		if landmark_strength > 0.18 and landmark in [
+			LM.SHIELD_VOLCANO, LM.VOLCANIC_ISLAND, LM.RIFT_VOLCANIC_FIELD]:
+			rock = R.BASALT if landmark_strength > 0.34 else R.GABBRO
+		elif landmark_strength > 0.20 and landmark == LM.STRATOVOLCANO:
+			rock = R.RHYOLITE_TUFF if landmark_strength > 0.48 else R.BASALT
+		elif oceanic:
 			if bnd > 0.6 and conv < 0.0:
 				rock = R.BASALT
 			elif pv > 0.72:
@@ -64,7 +77,6 @@ func run(progress: Callable = Callable()) -> void:
 			else:
 				rock = R.GABBRO if pv < 0.30 else R.BASALT
 		elif conv > 0.25 and h > 900.0:
-			# Core of an orogen: metamorphic with granite plutons.
 			if plutonic > 0.55:
 				rock = R.GRANITE
 			elif pv > 0.62:
@@ -76,7 +88,6 @@ func run(progress: Callable = Callable()) -> void:
 		elif conv > 0.05 and not oceanic:
 			rock = R.RHYOLITE_TUFF if pv > 0.60 else R.GRANITE
 		elif bas > 0.35 or h < 260.0:
-			# Sedimentary basin fill; carbonates need warm shallow water.
 			if lat < 0.45 and pv > 0.55:
 				rock = R.LIMESTONE
 			elif pv > 0.78:
@@ -97,29 +108,29 @@ func run(progress: Callable = Callable()) -> void:
 			else:
 				rock = R.SCHIST
 		fields.rock[c] = rock
-		# Continuous copy so runtime detail amplitude does not jump at macro cell
-		# boundaries -- a nearest-neighbour lookup here shows up as visible terraces.
 		fields.erodibility[c] = PlanetFields.ROCK_ERODIBILITY[rock]
 
 		# --- ore veins and mineral gradients ---------------------------------
 		var vfe := NoiseKit.smoothstepf(0.62, 0.94, vein_fe.u(d))
 		var vcu := NoiseKit.smoothstepf(0.66, 0.96, vein_cu.u(d))
 		var vqz := NoiseKit.smoothstepf(0.70, 0.97, vein_qz.u(d))
-		# Banded iron sits in old cratonic and metamorphic terrain.
 		var fe_host := 1.0 if rock in [R.GNEISS, R.SCHIST, R.QUARTZITE] else 0.35
 		fields.ore_iron[c] = clampf(vfe * fe_host * (0.4 + craton) * cfg.ore_richness, 0.0, 1.0)
-		# Porphyry copper wants a volcanic arc above a subduction zone.
+
 		var arc := maxf(0.0, conv) * bnd * (1.0 if not oceanic else 0.4)
-		var cu_host := 1.0 if rock in [R.GRANITE, R.RHYOLITE_TUFF, R.GABBRO] else 0.3
-		fields.ore_copper[c] = clampf(vcu * cu_host * (0.25 + 1.8 * arc + 0.5 * f) * cfg.ore_richness, 0.0, 1.0)
-		# High-purity quartz / silica for Axiom: hydrothermal veins in quartzite
-		# and pegmatite margins of granite plutons.
+		if landmark == LM.STRATOVOLCANO:
+			arc += landmark_strength * 0.85
+		var cu_host := 1.0 if rock in [R.GRANITE, R.RHYOLITE_TUFF, R.GABBRO, R.BASALT] else 0.3
+		fields.ore_copper[c] = clampf(
+			vcu * cu_host * (0.25 + 1.8 * arc + 0.5 * fields.fault[c]) * cfg.ore_richness,
+			0.0, 1.0)
+
 		var qz_host := 1.0 if rock == R.QUARTZITE else (0.75 if rock == R.GRANITE else 0.12)
-		fields.quartz[c] = clampf(vqz * qz_host * (0.3 + 1.2 * plutonic + 0.6 * f) * cfg.ore_richness, 0.0, 1.0)
+		fields.quartz[c] = clampf(
+			vqz * qz_host * (0.3 + 1.2 * plutonic + 0.6 * fields.fault[c]) * cfg.ore_richness,
+			0.0, 1.0)
 
 		# --- coal, petroleum and natural gas ---------------------------------
-		# All three need a basin. Coal needs swampy deposition; hydrocarbons need
-		# organic-rich source rock, burial and a seal.
 		var org := NoiseKit.smoothstepf(0.1, 0.85, organic.u(d))
 		var burial := clampf(bas * 1.2 - maxf(0.0, h) / 2600.0, 0.0, 1.0)
 		var sealing := NoiseKit.smoothstepf(0.25, 0.8, seal.u(d))
@@ -128,19 +139,20 @@ func run(progress: Callable = Callable()) -> void:
 		var petro_host := 1.0 if rock in [R.SHALE, R.LIMESTONE, R.SANDSTONE, R.DOLOMITE] else 0.08
 		var petro := burial * org * petro_host * sealing * 1.5
 		fields.petroleum[c] = clampf(petro, 0.0, 1.0)
-		# Deeper, hotter basins crack oil to gas.
-		fields.gas_fraction[c] = clampf(0.22 + burial * 0.55 + (1.0 - sealing) * 0.15, 0.0, 1.0)
+		fields.gas_fraction[c] = clampf(
+			0.22 + burial * 0.55 + (1.0 - sealing) * 0.15, 0.0, 1.0)
 
 		# --- groundwater-relevant layers -------------------------------------
 		var porous := 0.0
 		match rock:
 			R.SANDSTONE, R.CONGLOMERATE: porous = 1.0
-			R.LIMESTONE, R.DOLOMITE: porous = 0.85   # karst
-			R.SHALE: porous = 0.08                   # aquitard
+			R.LIMESTONE, R.DOLOMITE: porous = 0.85
+			R.SHALE: porous = 0.08
 			R.BASALT, R.RHYOLITE_TUFF: porous = 0.45
 			_: porous = 0.18
-		fields.aquifer[c] = clampf(porous * (0.35 + 0.9 * bas) * (1.0 - clampf(maxf(0.0, h) / 3200.0, 0.0, 0.8)), 0.0, 1.0)
+		fields.aquifer[c] = clampf(
+			porous * (0.35 + 0.9 * bas) *
+			(1.0 - clampf(maxf(0.0, h) / 3200.0, 0.0, 0.8)), 0.0, 1.0)
 
-## Erodibility of the surface bedrock, used by the erosion pass.
 func erodibility(c: int) -> float:
 	return PlanetFields.ROCK_ERODIBILITY[fields.rock[c]]
