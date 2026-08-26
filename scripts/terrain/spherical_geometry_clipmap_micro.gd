@@ -1,76 +1,108 @@
-extends "res://scripts/terrain/spherical_geometry_clipmap_procedural_safe.gd"
-## Dense near-field microgeometry patch.
+extends "res://scripts/terrain/spherical_geometry_clipmap_global_gpu.gd"
+## Dense near-field material microgeometry for the corrected global clipmap.
 ##
-## The ordinary L0 grid is ~0.75 m at the current planet configuration, which is
-## intentionally too coarse for material-scale silhouette relief. This layer adds
-## one compact circular patch at 1/4 L0 spacing while keeping the same shader,
-## coarse planet context and floating-origin coordinates.
-##
-## L0 has a small central hole. The dense patch overlaps it for eight L0 cells;
-## microrelief fades to zero across that overlap while L0 is slightly sunk near
-## its inner edge. Both surfaces therefore converge to the exact same base terrain
-## before the dense patch ends, avoiding a hard stitched boundary.
+## Unlike the old implementation, this does not assume that L0 is permanently
+## present. The dense patch and the corresponding centre-disc hole exist only
+## while the promoted centre level is exactly L0. As soon as screen-space LOD
+## promotes the centre to L1+, the untouched full centre meshes are restored and
+## the dense draw disappears.
 
 const MICRO_STEP_L0: float = 0.25
 const MICRO_GRID_CELLS: int = 256
 const MICRO_GRID_VERTS: int = MICRO_GRID_CELLS + 1
 const MICRO_HALF_CELLS: int = MICRO_GRID_CELLS >> 1
-const MICRO_OUTER_L0_CELLS: float = 32.0 # 128 micro half-cells * 0.25 L0
+const MICRO_OUTER_L0_CELLS: float = 32.0
 const MICRO_L0_HOLE_CELLS: float = 24.0
 
 var _micro_batch: MultiMeshInstance3D
+var _full_center_meshes: Array[Mesh] = []
+var _hole_center_meshes: Array[ArrayMesh] = []
+var _micro_l0_active := false
 var _debug_microrelief_enabled := true
 
 
 func _build_batches() -> void:
 	super._build_batches()
-
-	# Replace the ordinary L0 sector meshes with annular centre sectors. The
-	# inherited ring topology remains unchanged.
-	for sector: int in SECTOR_COUNT:
-		var center: MultiMeshInstance3D = _center_sector_batches[sector]
-		if center.multimesh != null:
-			center.multimesh.mesh = _build_center_sector_with_micro_hole(sector, false)
+	_capture_full_center_meshes()
+	_build_hole_center_meshes(_debug_side_cut)
 
 	var bounds := AABB(
 		Vector3(-GLOBAL_BOUNDS_M, -GLOBAL_BOUNDS_M, -GLOBAL_BOUNDS_M),
 		Vector3(GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0))
 	_micro_batch = _make_batch("SphericalClipmapMicroL0", _build_micro_disc_mesh(false), 1, bounds)
-	# X remains level 0. Z=1 marks the special dense layer in the shared shader.
-	_micro_batch.multimesh.set_instance_custom_data(0, Color(0.0, 0.0, 1.0, 0.0))
+	# X = logical L0. Z remains 0 so this can never be interpreted as an annulus.
+	# W exclusively marks the dense micro layer in the shared surface shader.
+	_micro_batch.multimesh.set_instance_custom_data(0, Color(0.0, 0.0, 0.0, 1.0))
 	_micro_batch.visible = false
 	_micro_batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_micro_batch)
 
 
+func _apply_active_level_window() -> void:
+	super._apply_active_level_window()
+	_sync_micro_lod_state()
+
+
+func _sync_micro_lod_state() -> void:
+	var want_micro: bool = _active_min_level == 0
+	if want_micro != _micro_l0_active:
+		_micro_l0_active = want_micro
+		_apply_center_mesh_variant()
+	if _micro_batch != null:
+		_micro_batch.visible = _terrain_visible and _micro_l0_active
+
+
+func _apply_center_mesh_variant() -> void:
+	if _full_center_meshes.size() != SECTOR_COUNT or _hole_center_meshes.size() != SECTOR_COUNT:
+		return
+	for sector: int in SECTOR_COUNT:
+		var center: MultiMeshInstance3D = _center_sector_batches[sector]
+		if center.multimesh == null:
+			continue
+		center.multimesh.mesh = _hole_center_meshes[sector] if _micro_l0_active \
+			else _full_center_meshes[sector]
+
+
+func _capture_full_center_meshes() -> void:
+	_full_center_meshes.clear()
+	for sector: int in SECTOR_COUNT:
+		var center: MultiMeshInstance3D = _center_sector_batches[sector]
+		_full_center_meshes.append(center.multimesh.mesh if center.multimesh != null else null)
+
+
+func _build_hole_center_meshes(half_cut: bool) -> void:
+	_hole_center_meshes.clear()
+	for sector: int in SECTOR_COUNT:
+		_hole_center_meshes.append(_build_center_sector_with_micro_hole(sector, half_cut))
+
+
 func _set_visible(value: bool) -> void:
 	super._set_visible(value)
 	if _micro_batch != null:
-		_micro_batch.visible = value
+		_micro_batch.visible = value and _micro_l0_active
 
 
 func _update_sector_visibility() -> void:
 	super._update_sector_visibility()
 	if _micro_batch != null:
-		_micro_batch.visible = _terrain_visible
+		_micro_batch.visible = _terrain_visible and _micro_l0_active
 
 
 func _show_all_active_sectors() -> void:
 	super._show_all_active_sectors()
 	if _micro_batch != null:
-		_micro_batch.visible = _terrain_visible
+		_micro_batch.visible = _terrain_visible and _micro_l0_active
 
 
 func rebuild_static_topology() -> void:
+	# Parent recreates the current full centre/ring topology first. Cache those
+	# exact latest meshes, then regenerate only the optional L0 hole variant.
 	super.rebuild_static_topology()
-	# super rebuilds the inherited full centre sectors, so restore our inner hole.
-	for sector: int in SECTOR_COUNT:
-		var center: MultiMeshInstance3D = _center_sector_batches[sector]
-		if center.multimesh != null:
-			center.multimesh.mesh = _build_center_sector_with_micro_hole(
-				sector, _debug_side_cut)
+	_capture_full_center_meshes()
+	_build_hole_center_meshes(_debug_side_cut)
 	if _micro_batch != null and _micro_batch.multimesh != null:
 		_micro_batch.multimesh.mesh = _build_micro_disc_mesh(_debug_side_cut)
+	_apply_center_mesh_variant()
 
 
 func _sync_debug_uniforms() -> void:
@@ -107,26 +139,18 @@ static func _build_center_sector_with_micro_hole(sector_index: int,
 			var r_sq: float = cx * cx + cy * cy
 			if r_sq > outer_sq or r_sq < hole_sq:
 				continue
-
 			var angle: float = atan2(cy, cx)
 			if angle < 0.0:
 				angle += TAU
-			var owner_sector: int = int(floor(angle / TAU * float(SECTOR_COUNT)))
-			owner_sector = clampi(owner_sector, 0, SECTOR_COUNT - 1)
+			var owner_sector: int = clampi(
+				int(floor(angle / TAU * float(SECTOR_COUNT))), 0, SECTOR_COUNT - 1)
 			if owner_sector != sector_index:
 				continue
-
 			var i00: int = _center_vertex(remap, vertices, uvs, x, y)
 			var i10: int = _center_vertex(remap, vertices, uvs, x + 1, y)
 			var i01: int = _center_vertex(remap, vertices, uvs, x, y + 1)
 			var i11: int = _center_vertex(remap, vertices, uvs, x + 1, y + 1)
-			indices.append(i00)
-			indices.append(i10)
-			indices.append(i11)
-			indices.append(i00)
-			indices.append(i11)
-			indices.append(i01)
-
+			indices.append_array(PackedInt32Array([i00, i10, i11, i00, i11, i01]))
 	return _mesh_from_micro_arrays(vertices, uvs, indices)
 
 
@@ -159,18 +183,11 @@ static func _build_micro_disc_mesh(half_cut: bool) -> ArrayMesh:
 			var cx: float = (float(x) + 0.5 - float(MICRO_HALF_CELLS)) * MICRO_STEP_L0
 			if cx * cx + cy * cy > outer_sq:
 				continue
-
 			var i00: int = _micro_vertex(remap, vertices, uvs, x, y, grid_center)
 			var i10: int = _micro_vertex(remap, vertices, uvs, x + 1, y, grid_center)
 			var i01: int = _micro_vertex(remap, vertices, uvs, x, y + 1, grid_center)
 			var i11: int = _micro_vertex(remap, vertices, uvs, x + 1, y + 1, grid_center)
-			indices.append(i00)
-			indices.append(i10)
-			indices.append(i11)
-			indices.append(i00)
-			indices.append(i11)
-			indices.append(i01)
-
+			indices.append_array(PackedInt32Array([i00, i10, i11, i00, i11, i01]))
 	return _mesh_from_micro_arrays(vertices, uvs, indices)
 
 
@@ -207,6 +224,7 @@ func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	out["draw_batches"] = int(out.get("draw_batches", 0)) + 1
 	out["microgeometry"] = true
+	out["micro_active"] = _micro_l0_active
 	out["micro_spacing_m"] = _base_spacing * MICRO_STEP_L0
 	out["micro_radius_m"] = _base_spacing * MICRO_OUTER_L0_CELLS
 	out["micro_handoff_start_m"] = _base_spacing * MICRO_L0_HOLE_CELLS
