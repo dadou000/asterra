@@ -52,23 +52,18 @@ vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
 	return p + w * strength;
 }
 
-// Reduced-cost 3-D cellular ridge. Feature points stay near each cell centre and
-// we inspect the current cell plus the neighbour toward the closest boundary on
-// each axis (8 candidates total). That avoids the strong directional bias of the
-// old +XYZ-only search without paying 27-cell Worley cost at every terrain vertex.
+// Continuous 3-D Worley ridge. The previous 8-cell approximation changed its
+// neighbour set at fract(p)==0.5, so F1/F2 jumped on half-cell planes and those
+// discontinuities became long repeated ridges in displaced terrain. Searching the
+// full 3x3x3 neighbourhood makes F1/F2 continuous across every cell boundary.
 float gm_cellular_ridge(vec3 p, uint seed) {
 	ivec3 base = ivec3(floor(p));
-	vec3 f = fract(p);
-	ivec3 side = ivec3(
-		f.x < 0.5 ? -1 : 1,
-		f.y < 0.5 ? -1 : 1,
-		f.z < 0.5 ? -1 : 1);
 	float f1 = 1e9;
 	float f2 = 1e9;
-	for (int z = 0; z <= 1; z++) {
-		for (int y = 0; y <= 1; y++) {
-			for (int x = 0; x <= 1; x++) {
-				ivec3 c = base + ivec3(x * side.x, y * side.y, z * side.z);
+	for (int z = -1; z <= 1; z++) {
+		for (int y = -1; y <= 1; y++) {
+			for (int x = -1; x <= 1; x++) {
+				ivec3 c = base + ivec3(x, y, z);
 				vec3 jitter = vec3(
 					gm_rand(c, seed + 3u),
 					gm_rand(c, seed + 5u),
