@@ -123,6 +123,10 @@ func _update_occlusion_candidates(origin: Vector3) -> void:
 	_occlusion_last_max_level = _active_max_level
 	_occlusion_level_centers = next_centers
 	_clear_occlusion_history()
+	# Candidate state changes after the parent visibility pass has already run this
+	# frame. Restore the full production prefix immediately so an old confirmed
+	# suffix can never survive for one stale frame after a snap/reanchor.
+	_restore_full_ring_prefixes()
 
 	var spheres := PackedFloat32Array()
 	spheres.resize(OCCLUSION_CANDIDATE_COUNT * 4)
@@ -140,6 +144,16 @@ func _update_occlusion_candidates(origin: Vector3) -> void:
 			spheres[base + 3] = sphere.w
 
 	_occlusion_effect.set_candidates(spheres, _occlusion_generation, origin)
+
+
+func _restore_full_ring_prefixes() -> void:
+	var ring_count: int = mini(_physical_ring_count, _active_ring_count())
+	for sector: int in SECTOR_COUNT:
+		var batch: MultiMeshInstance3D = _sector_batches[sector]
+		if batch.multimesh == null:
+			continue
+		batch.multimesh.visible_instance_count = ring_count if batch.visible else 0
+	_occlusion_culled_instances = 0
 
 
 func _build_ring_sector_sphere(level: int, sector: int) -> Vector4:
