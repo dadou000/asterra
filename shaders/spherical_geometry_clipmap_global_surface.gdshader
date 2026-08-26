@@ -7,21 +7,16 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx, ambient_light_d
 #include "res://shaders/gpu_geomorph.gdshaderinc"
 #include "res://shaders/gpu_surface_antitile.gdshaderinc"
 #include "res://shaders/gpu_surface_classifier.gdshaderinc"
+#include "res://shaders/gpu_material_microrelief.gdshaderinc"
 #include "res://shaders/gpu_rock_pbr.gdshaderinc"
 #include "res://shaders/gpu_surface_pbr.gdshaderinc"
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
 #include "res://shaders/terrain_aerial_gpu.gdshaderinc"
 
-// Full GPU surface pass for the corrected 0.0.5 resident global clipmap.
-// Geometry reconstruction intentionally mirrors the validated latest clipmap:
-// promoted centre LOD, stationary per-level lattice, stable anchor-relative
-// displacement, cubic macro filtering, annular handoff and ring-only sinking.
-
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
 uniform float u_macro_face_res = 0.0;
-
 uniform float u_planet_radius = 1000000.0;
 uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
@@ -54,6 +49,7 @@ varying float v_cap_valid;
 varying float v_level;
 varying float v_macro_h;
 varying float v_direct_transmittance;
+varying float v_micro_layer;
 
 const int ASTERRA_MAX_LEVEL = 14;
 const float RING_INNER_Q = 0.44;
@@ -68,6 +64,14 @@ const float NORMAL_SAMPLE_SPACING_MULT = 3.0;
 const float NORMAL_SAMPLE_MIN_M = 4.0;
 const float DETAIL_NORMAL_FULL_LEVEL = 4.0;
 const float DETAIL_NORMAL_FADE_LEVEL = 8.0;
+
+// Must match spherical_geometry_clipmap_micro.gd. UVs on the dense patch are
+// fractional L0 logical coordinates, so these remain expressed in L0 cells.
+const float MICRO_HANDOFF_START_L0_CELLS = 24.0;
+const float MICRO_OUTER_L0_CELLS = 32.0;
+const float MICRO_L0_SINK_M = 0.30;
+const float MICRO_DETAIL_NEAR_M = 90.0;
+const float MICRO_DETAIL_FAR_M = 160.0;
 
 float ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
@@ -86,8 +90,7 @@ vec3 direction_for_basis_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m)
 	float arc = length(offset_m);
 	if (arc < 1e-5) return normalize(center);
 	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
-		return normalize(center
-			+ right * (offset_m.x / u_planet_radius)
+		return normalize(center + right * (offset_m.x / u_planet_radius)
 			+ up * (offset_m.y / u_planet_radius));
 	}
 	float raw_theta = arc / max(u_planet_radius, 1.0);
@@ -144,8 +147,7 @@ float macro_lod_for_spacing(float spacing_m) {
 vec4 cubic_bspline_weights(float t) {
 	float t2 = t * t;
 	float t3 = t2 * t;
-	return vec4(
-		(1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+	return vec4((1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
 		(4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
 		(1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
 		t3 / 6.0);
@@ -176,9 +178,7 @@ float macro_bicubic_mip(vec3 coord, int mip) {
 	float s10 = textureLod(u_macro_elevation, vec3(uv10, coord.z), fmip).r;
 	float s01 = textureLod(u_macro_elevation, vec3(uv01, coord.z), fmip).r;
 	float s11 = textureLod(u_macro_elevation, vec3(uv11, coord.z), fmip).r;
-	float row0 = mix(s00, s10, gx1);
-	float row1 = mix(s01, s11, gx1);
-	return mix(row0, row1, gy1);
+	return mix(mix(s00, s10, gx1), mix(s01, s11, gx1), gy1);
 }
 
 float macro_cubic_trilinear(vec3 coord, float lod) {
@@ -187,8 +187,7 @@ float macro_cubic_trilinear(vec3 coord, float lod) {
 	float t = fract(lod);
 	float h0 = macro_bicubic_mip(coord, mip0);
 	if (mip0 == mip1 || t <= 0.001) return h0;
-	float h1 = macro_bicubic_mip(coord, mip1);
-	return mix(h0, h1, smootherstep01(t));
+	return mix(h0, macro_bicubic_mip(coord, mip1), smootherstep01(t));
 }
 
 float macro_height(vec3 d, int level) {
@@ -266,10 +265,8 @@ vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
 	if (mode == 1) return clamp(landform.rgb + vec3(landform.a * 0.55), 0.0, 1.0);
 	if (mode == 2) return clamp(vec3(primary.r + primary.a,
 		primary.g + primary.a * 0.78 + primary.b * 0.45, primary.b), 0.0, 1.0);
-	if (mode == 3) return clamp(
-		vec3(0.62, 0.22, 0.08) * secondary.r
-		+ vec3(1.0) * secondary.g
-		+ vec3(0.70, 0.62, 0.43) * secondary.b
+	if (mode == 3) return clamp(vec3(0.62, 0.22, 0.08) * secondary.r
+		+ vec3(1.0) * secondary.g + vec3(0.70, 0.62, 0.43) * secondary.b
 		+ vec3(0.10, 0.72, 0.86) * secondary.a, 0.0, 1.0);
 	if (mode == 4) return clamp(vec3(soil.r, soil.g, soil.b) * (1.0 - soil.a * 0.55), 0.0, 1.0);
 	if (mode == 5) return vec3(rock_id / 12.0, biome / 19.0, geology.r);
@@ -279,8 +276,10 @@ vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
 
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
+	float cell_radius = length(cell);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
 	float is_ring = INSTANCE_CUSTOM.z;
+	float micro_layer = INSTANCE_CUSTOM.w;
 	float spacing = ring_spacing(level);
 	vec2 cell_offset_m = cell * spacing;
 	float raw_theta = length(cell_offset_m) / max(u_planet_radius, 1.0);
@@ -294,21 +293,62 @@ void vertex() {
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
 	float sink = coarse_sink_weight(cell, level, is_ring) * max(spacing * u_sink_scale, 0.5);
+
+	// Only the ordinary L0 centre receives the overlap sink. Promoted centre discs
+	// are never altered, and the micro disc itself is not an annulus.
+	if (micro_layer < 0.5 && is_ring < 0.5 && level == 0
+			&& cell_radius < MICRO_OUTER_L0_CELLS) {
+		float overlap_sink = 1.0 - smootherstep_range(
+			MICRO_HANDOFF_START_L0_CELLS, MICRO_OUTER_L0_CELLS, cell_radius);
+		sink += overlap_sink * MICRO_L0_SINK_M;
+	}
+
 	float height = (u_height_enabled > 0.5 ? h : 0.0) - sink;
 	float altitude_m = height + u_surface_bias;
 	vec3 p = d * (u_planet_radius + altitude_m);
-
-	v_planet = p;
-	v_render = stable_displacement
+	vec3 render_p = stable_displacement
 		? u_anchor_render + stable_surface_offset(u_anchor_dir, u_anchor_right,
 			u_anchor_up, anchor_offset_m, altitude_m)
 		: p - u_origin;
+
+	if (micro_layer > 0.5 && level == 0 && u_height_enabled > 0.5) {
+		float edge_w = 1.0 - smootherstep_range(
+			MICRO_HANDOFF_START_L0_CELLS, MICRO_OUTER_L0_CELLS, cell_radius);
+		float camera_dist = length(render_p - INV_VIEW_MATRIX[3].xyz);
+		float proximity_w = 1.0 - smoothstep(MICRO_DETAIL_NEAR_M, MICRO_DETAIL_FAR_M, camera_dist);
+		float micro_w = edge_w * proximity_w;
+		if (micro_w > 0.001) {
+			vec4 soil = asterra_ctx_soil(d);
+			vec4 surface = asterra_ctx_surface(d);
+			vec4 geology = asterra_ctx_geology(d);
+			vec4 structure = asterra_ctx_structure(d);
+			vec4 climate = asterra_ctx_climate(d);
+			vec4 hydro = asterra_ctx_hydrology(d);
+			float rock_id = asterra_ctx_rock_id(d);
+			float biome = asterra_ctx_biome_id(d);
+			vec4 landform = gm_landform_weights_from_context(
+				macro_h, soil, surface, geology, structure, climate, hydro);
+			float micro_h = mmr_height(render_p + u_detail_origin, rock_id, biome,
+				soil, surface, geology, structure, climate, hydro, landform);
+			height += micro_h * micro_w;
+			altitude_m = height + u_surface_bias;
+			p = d * (u_planet_radius + altitude_m);
+			render_p = stable_displacement
+				? u_anchor_render + stable_surface_offset(u_anchor_dir, u_anchor_right,
+					u_anchor_up, anchor_offset_m, altitude_m)
+				: p - u_origin;
+		}
+	}
+
+	v_planet = p;
+	v_render = render_p;
 	v_smooth_normal = u_height_enabled > 0.5
 		? smooth_macro_normal(d, level, morph, macro_h) : d;
 	v_valid = u_macro_ready;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
 	v_macro_h = macro_h;
+	v_micro_layer = micro_layer;
 
 	vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
 	float planet_vis = planet_direct_sun_visibility(p, sun_dir, u_planet_radius);
@@ -316,7 +356,6 @@ void vertex() {
 	if (planet_vis > 0.001) {
 		v_direct_transmittance *= cloud_shadow_transmittance(p, sun_dir, u_planet_radius);
 	}
-
 	vec3 camera_planet = INV_VIEW_MATRIX[3].xyz + u_origin;
 	vec3 atmo_t;
 	vec3 atmo_l;
@@ -332,20 +371,19 @@ void fragment() {
 		vec3 planet_dir = normalize(v_planet);
 		if (dot(planet_dir, u_center_up) > 0.0) discard;
 	}
-
 	vec3 up = normalize(v_planet);
 	vec3 macro_n = normalize(v_smooth_normal);
 	if (dot(macro_n, up) < 0.0) macro_n = -macro_n;
 	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
 	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : macro_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
-	float detail_normal_w = 1.0 - smoothstep(
-		DETAIL_NORMAL_FULL_LEVEL, DETAIL_NORMAL_FADE_LEVEL, v_level);
-	vec3 wn = normalize(mix(macro_n, geom_n, detail_normal_w * 0.88));
+	float detail_normal_w = 1.0 - smoothstep(DETAIL_NORMAL_FULL_LEVEL, DETAIL_NORMAL_FADE_LEVEL, v_level);
+	detail_normal_w *= mix(0.88, 0.98, v_micro_layer);
+	vec3 wn = normalize(mix(macro_n, geom_n, detail_normal_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
 	if (u_debug_side_cut > 0.5) {
-		float phase = v_level * 0.13;
+		float phase = v_level * 0.13 + v_micro_layer * 0.08;
 		vec3 lod_color = 0.5 + 0.5 * cos(TAU * (vec3(phase) + vec3(0.0, 0.33, 0.67)));
 		ALBEDO = mix(vec3(0.06), lod_color, 0.92);
 		EMISSION = lod_color * 0.10;
@@ -361,10 +399,9 @@ void fragment() {
 		vec4 hydro = asterra_ctx_hydrology(up);
 		float rock_id = asterra_ctx_rock_id(up);
 		float biome = asterra_ctx_biome_id(up);
-		vec4 landform = gm_landform_weights_from_context(
-			v_macro_h, soil, surface, geology, structure, climate, hydro);
-		float cos_slope = clamp(dot(wn, up), 0.0, 1.0);
-		float slope_deg = acos(cos_slope) * 57.2957795131;
+		vec4 landform = gm_landform_weights_from_context(v_macro_h,
+			soil, surface, geology, structure, climate, hydro);
+		float slope_deg = acos(clamp(dot(wn, up), 0.0, 1.0)) * 57.2957795131;
 		vec4 primary = sc_primary_weights(
 			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
 		vec4 secondary = sc_secondary_weights(
@@ -380,13 +417,11 @@ void fragment() {
 			SPECULAR = 0.0;
 			METALLIC = 0.0;
 		} else {
-			vec3 base_albedo = sc_compose_albedo(
-				primary, secondary, soil, surface, climate, biome, rock_id);
+			vec3 base_albedo = sc_compose_albedo(primary, secondary, soil, surface, climate, biome, rock_id);
 			float base_roughness = sc_compose_roughness(primary, secondary, surface);
 			float camera_dist = length(v_render - CAMERA_POSITION_WORLD);
 			float material_total = dot(primary, vec4(1.0)) + dot(secondary, vec4(1.0));
 			float rock_mix_w = material_total > 1e-4 ? primary.r / material_total : 0.0;
-
 			vec3 rock_albedo;
 			float rock_roughness;
 			float material_specular;
@@ -397,10 +432,10 @@ void fragment() {
 				base_albedo, base_roughness,
 				rock_albedo, rock_roughness, material_specular, rock_n, rock_normal_w);
 			if (rock_normal_w > 0.001) {
+				rock_normal_w *= mix(1.0, 0.62, v_micro_layer);
 				wn = normalize(mix(wn, rock_n, rock_normal_w));
 				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			}
-
 			vec3 dpos = spbr_antitile_position(v_render + u_detail_origin);
 			vec3 albedo;
 			float roughness;
@@ -409,10 +444,10 @@ void fragment() {
 			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
 				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
 			if (scan_normal_w > 0.001) {
+				scan_normal_w *= mix(1.0, 0.78, v_micro_layer);
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
 				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			}
-
 			ALBEDO = albedo;
 			ROUGHNESS = roughness;
 			SPECULAR = material_specular;
@@ -430,8 +465,7 @@ void light() {
 	if (u_debug_geomorph_mode <= 0) {
 		float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 		if (ndotl > 0.0) {
-			float visibility = LIGHT_IS_DIRECTIONAL
-				? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
+			float visibility = LIGHT_IS_DIRECTIONAL ? clamp(v_direct_transmittance, 0.0, 1.0) : 1.0;
 			vec3 radiance = LIGHT_COLOR * ATTENUATION * visibility * v_atmo_t;
 			float ndotv = max(dot(NORMAL, VIEW), 0.001);
 			vec3 h = normalize(LIGHT + VIEW);
@@ -441,10 +475,8 @@ void light() {
 			float fd90 = 0.5 + 2.0 * vdoth * vdoth * rough;
 			float fl = pow(1.0 - ndotl, 5.0);
 			float fv = pow(1.0 - ndotv, 5.0);
-			float diffuse_term = (1.0 + (fd90 - 1.0) * fl)
-				* (1.0 + (fd90 - 1.0) * fv);
+			float diffuse_term = (1.0 + (fd90 - 1.0) * fl) * (1.0 + (fd90 - 1.0) * fv);
 			DIFFUSE_LIGHT += radiance * ndotl * diffuse_term / PI;
-
 			if (u_debug_side_cut <= 0.5) {
 				float alpha = rough * rough;
 				float a2 = alpha * alpha;
