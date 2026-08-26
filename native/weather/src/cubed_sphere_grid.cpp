@@ -78,7 +78,6 @@ void CubedSphereGrid::build(int resolution, double radius_m) {
 				Vec3d tu = basis.u - g.center * dot(basis.u, g.center);
 				Vec3d tv = basis.v - g.center * dot(basis.v, g.center);
 				g.tangent_u = normalized(tu);
-				// Gram-Schmidt so the basis is orthonormal even away from face center.
 				tv = tv - g.tangent_u * dot(tv, g.tangent_u);
 				g.tangent_v = normalized(tv);
 				if (dot(cross(g.tangent_u, g.tangent_v), g.center) < 0.0) {
@@ -110,7 +109,6 @@ void CubedSphereGrid::build(int resolution, double radius_m) {
 		}
 	}
 
-	// Resolve the reciprocal edge index after every destination cell is known.
 	for (int id = 0; id < cell_count(); ++id) {
 		for (int edge = 0; edge < EDGE_COUNT; ++edge) {
 			Neighbour &n = cells_[static_cast<size_t>(id)].neighbour[edge];
@@ -150,11 +148,15 @@ CubedSphereGrid::CellAddress CubedSphereGrid::address(int cell) const {
 }
 
 double CubedSphereGrid::coord_center(int index) const {
-	return -1.0 + (static_cast<double>(index) + 0.5) * (2.0 / static_cast<double>(resolution_));
+	const double alpha = -PI * 0.25
+		+ (static_cast<double>(index) + 0.5) * ((PI * 0.5) / static_cast<double>(resolution_));
+	return std::tan(alpha);
 }
 
 double CubedSphereGrid::coord_edge(int index) const {
-	return -1.0 + static_cast<double>(index) * (2.0 / static_cast<double>(resolution_));
+	const double alpha = -PI * 0.25
+		+ static_cast<double>(index) * ((PI * 0.5) / static_cast<double>(resolution_));
+	return std::tan(alpha);
 }
 
 Vec3d CubedSphereGrid::direction_from_face_ab(int face, double a, double b) const {
@@ -178,8 +180,10 @@ CubedSphereGrid::CellAddress CubedSphereGrid::address_from_direction(const Vec3d
 	if (!(denom > 0.0)) throw std::runtime_error("Invalid cubed-sphere face projection");
 	const double a = dot(d, basis.u) / denom;
 	const double b = dot(d, basis.v) / denom;
-	const double u = (a + 1.0) * 0.5 * static_cast<double>(resolution_);
-	const double v = (b + 1.0) * 0.5 * static_cast<double>(resolution_);
+	const double alpha = std::atan(a);
+	const double beta = std::atan(b);
+	const double u = (alpha + PI * 0.25) / (PI * 0.5) * static_cast<double>(resolution_);
+	const double v = (beta + PI * 0.25) / (PI * 0.5) * static_cast<double>(resolution_);
 	CellAddress out;
 	out.face = face;
 	out.i = std::clamp(static_cast<int>(std::floor(u)), 0, resolution_ - 1);
@@ -196,11 +200,13 @@ Vec3d CubedSphereGrid::edge_midpoint_direction(int face, int i, int j, int edge)
 	const double a1 = coord_edge(i + 1);
 	const double b0 = coord_edge(j);
 	const double b1 = coord_edge(j + 1);
+	const double ac = coord_center(i);
+	const double bc = coord_center(j);
 	switch (edge) {
-		case WEST:  return direction_from_face_ab(face, a0, 0.5 * (b0 + b1));
-		case EAST:  return direction_from_face_ab(face, a1, 0.5 * (b0 + b1));
-		case SOUTH: return direction_from_face_ab(face, 0.5 * (a0 + a1), b0);
-		case NORTH: return direction_from_face_ab(face, 0.5 * (a0 + a1), b1);
+		case WEST:  return direction_from_face_ab(face, a0, bc);
+		case EAST:  return direction_from_face_ab(face, a1, bc);
+		case SOUTH: return direction_from_face_ab(face, ac, b0);
+		case NORTH: return direction_from_face_ab(face, ac, b1);
 		default: throw std::out_of_range("CubedSphereGrid edge out of range");
 	}
 }
@@ -229,6 +235,8 @@ CubedSphereGrid::Neighbour CubedSphereGrid::locate_neighbour(int face, int i, in
 		return {cell_id(face, ni, nj), -1};
 	}
 
+	// Extrapolate one equiangular cell-center beyond the source face and project
+	// the resulting direction back to whichever adjacent face owns it.
 	const double a = coord_center(ni);
 	const double b = coord_center(nj);
 	const Vec3d direction = direction_from_face_ab(face, a, b);
