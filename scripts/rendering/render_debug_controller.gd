@@ -189,8 +189,8 @@ func _install_into_menu(menu: DebugMenu) -> void:
 
 func _build_level_controls(box: VBoxContainer) -> void:
 	box.add_child(HSeparator.new())
-	box.add_child(_section_title("Terrain LOD submission"))
-	box.add_child(_note("Logical L0–L14 switches. Unchecked rings are removed from the MultiMesh instance prefix, so their vertex shader does not execute. The currently promoted centre disc uses the checkbox for its logical level too."))
+	box.add_child(_section_title("Terrain LOD visibility"))
+	box.add_child(_note("Logical L0–L14 visual isolation. Unchecked levels are collapsed through their instance transform; production slot order, visible_instance_count and horizon/nadir culling are left untouched. Use this to inspect coverage, not to measure per-LOD GPU cost."))
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -571,9 +571,9 @@ func _refresh_status() -> void:
 			int(terrain_stats.get("physical_ring_instances", 0)),
 			int(terrain_stats.get("draw_batches", 0)),
 		])
-		lines.append("LOD submit: %s  •  pre-mask ring prefix %d  •  view %s" % [
-			_format_levels(terrain_stats.get("submitted_logical_levels", [])),
-			int(terrain_stats.get("view_ring_prefix_before_level_mask", terrain_stats.get("view_ring_instances", 0))),
+		lines.append("LOD visible: %s  •  production ring prefix %d  •  view %s" % [
+			_format_levels(terrain_stats.get("debug_visible_levels", [])),
+			int(terrain_stats.get("view_ring_instances", 0)),
 			String(terrain_stats.get("view_cull_reason", "none")),
 		])
 	if OceanSystem.has_method("gpu_stats"):

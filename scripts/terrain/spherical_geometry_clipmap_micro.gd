@@ -1,10 +1,11 @@
-extends "res://scripts/terrain/spherical_geometry_clipmap_submission_debug.gd"
+extends "res://scripts/terrain/spherical_geometry_clipmap_global_gpu.gd"
 ## Dense near-field material microgeometry for the corrected global clipmap.
 ##
-## Unlike the old implementation, this does not assume that L0 is permanently
-## present. The dense patch and corresponding centre-disc hole exist only while
-## logical L0 is active, enabled by the render debugger, and microgeometry itself
-## is enabled. Otherwise the ordinary full centre-sector meshes are restored.
+## The production clipmap owns all logical LOD selection, horizon/nadir prefixes,
+## sector visibility and MultiMesh slot numbering. Render-debug LOD isolation is
+## intentionally non-invasive: selected logical levels are collapsed only through
+## their per-instance transforms. No debug path rewrites visible_instance_count or
+## repacks production ring slots.
 
 const MICRO_STEP_L0: float = 0.25
 const MICRO_GRID_CELLS: int = 256
@@ -18,6 +19,28 @@ var _full_center_meshes: Array[Mesh] = []
 var _hole_center_meshes: Array[ArrayMesh] = []
 var _micro_l0_active := false
 var _debug_microrelief_enabled := true
+
+# Transient Render-debug state. All levels start enabled and are never persisted.
+var _debug_level_enabled := PackedByteArray()
+var _debug_level_generation: int = 0
+var _debug_applied_generation: int = -1
+var _debug_applied_min_level: int = -1
+var _debug_applied_max_level: int = -1
+
+
+func _ready() -> void:
+	_init_debug_level_mask()
+	super._ready()
+	_apply_debug_level_transforms(true)
+	_sync_micro_lod_state()
+
+
+func _init_debug_level_mask() -> void:
+	if _debug_level_enabled.size() == MAX_LEVEL + 1:
+		return
+	_debug_level_enabled.resize(MAX_LEVEL + 1)
+	for level: int in MAX_LEVEL + 1:
+		_debug_level_enabled[level] = 1
 
 
 func _build_batches() -> void:
@@ -37,7 +60,51 @@ func _build_batches() -> void:
 
 func _apply_active_level_window() -> void:
 	super._apply_active_level_window()
+	_apply_debug_level_transforms(false)
 	_sync_micro_lod_state()
+
+
+func _hidden_debug_transform() -> Transform3D:
+	return Transform3D(
+		Basis(Vector3.ZERO, Vector3.ZERO, Vector3.ZERO),
+		Vector3.ZERO)
+
+
+func _apply_debug_level_transforms(force: bool) -> void:
+	_init_debug_level_mask()
+	if not force \
+			and _debug_applied_generation == _debug_level_generation \
+			and _debug_applied_min_level == _active_min_level \
+			and _debug_applied_max_level == _active_max_level:
+		return
+
+	_debug_applied_generation = _debug_level_generation
+	_debug_applied_min_level = _active_min_level
+	_debug_applied_max_level = _active_max_level
+	var hidden := _hidden_debug_transform()
+
+	# The promoted centre keeps its production node visibility and slot identity.
+	# Collapsing only the instance avoids fighting sector/horizon visibility logic.
+	var center_enabled := debug_level_enabled(_active_min_level)
+	var center_transform := Transform3D.IDENTITY if center_enabled else hidden
+	for center: MultiMeshInstance3D in _center_sector_batches:
+		if center.multimesh != null and center.multimesh.instance_count > 0:
+			center.multimesh.set_instance_transform(0, center_transform)
+
+	# Ring slot i remains exactly the production slot for active_min + i + 1.
+	# Never alter visible_instance_count here; global_gpu remains authoritative.
+	var active_ring_count: int = _active_ring_count()
+	for batch: MultiMeshInstance3D in _sector_batches:
+		if batch.multimesh == null:
+			continue
+		var capacity: int = batch.multimesh.instance_count
+		for slot: int in capacity:
+			var enabled := true
+			if slot < active_ring_count:
+				var logical_level: int = _active_min_level + slot + 1
+				enabled = debug_level_enabled(logical_level)
+			batch.multimesh.set_instance_transform(
+				slot, Transform3D.IDENTITY if enabled else hidden)
 
 
 func _sync_micro_lod_state() -> void:
@@ -104,6 +171,7 @@ func rebuild_static_topology() -> void:
 	if _micro_batch != null and _micro_batch.multimesh != null:
 		_micro_batch.multimesh.mesh = _build_micro_disc_mesh(_debug_side_cut)
 	_apply_center_mesh_variant()
+	_apply_debug_level_transforms(true)
 
 
 func _sync_debug_uniforms() -> void:
@@ -126,14 +194,63 @@ func debug_microrelief_enabled() -> bool:
 
 
 func set_debug_level_enabled(level: int, enabled: bool) -> void:
-	super.set_debug_level_enabled(level, enabled)
+	_init_debug_level_mask()
+	if level < 0 or level > MAX_LEVEL:
+		return
+	var next_value: int = 1 if enabled else 0
+	if int(_debug_level_enabled[level]) == next_value:
+		return
+	_debug_level_enabled[level] = next_value
+	_debug_level_generation += 1
+	_apply_debug_level_transforms(true)
 	if level == 0:
 		_sync_micro_lod_state()
 
 
 func set_all_debug_levels_enabled(enabled: bool) -> void:
-	super.set_all_debug_levels_enabled(enabled)
+	_init_debug_level_mask()
+	var next_value: int = 1 if enabled else 0
+	var changed := false
+	for level: int in MAX_LEVEL + 1:
+		if int(_debug_level_enabled[level]) != next_value:
+			_debug_level_enabled[level] = next_value
+			changed = true
+	if changed:
+		_debug_level_generation += 1
+		_apply_debug_level_transforms(true)
 	_sync_micro_lod_state()
+
+
+func debug_level_enabled(level: int) -> bool:
+	_init_debug_level_mask()
+	return level >= 0 and level <= MAX_LEVEL and _debug_level_enabled[level] != 0
+
+
+func debug_level_count() -> int:
+	return MAX_LEVEL + 1
+
+
+func debug_enabled_levels() -> Array[int]:
+	_init_debug_level_mask()
+	var out: Array[int] = []
+	for level: int in MAX_LEVEL + 1:
+		if _debug_level_enabled[level] != 0:
+			out.append(level)
+	return out
+
+
+func debug_visible_levels() -> Array[int]:
+	var out: Array[int] = []
+	if _view_surface_culled:
+		return out
+	if debug_level_enabled(_active_min_level):
+		out.append(_active_min_level)
+	var ring_prefix: int = clampi(_view_ring_instances, 0, _active_ring_count())
+	for slot: int in ring_prefix:
+		var logical_level: int = _active_min_level + slot + 1
+		if debug_level_enabled(logical_level):
+			out.append(logical_level)
+	return out
 
 
 static func _build_center_sector_with_micro_hole(sector_index: int,
@@ -244,4 +361,9 @@ func gpu_stream_stats() -> Dictionary:
 	out["micro_radius_m"] = _base_spacing * MICRO_OUTER_L0_CELLS
 	out["micro_handoff_start_m"] = _base_spacing * MICRO_L0_HOLE_CELLS
 	out["microrelief_enabled"] = _debug_microrelief_enabled
+	out["debug_level_filter"] = true
+	out["debug_level_filter_mode"] = "instance_transform_visual"
+	out["debug_enabled_levels"] = debug_enabled_levels()
+	out["debug_visible_levels"] = debug_visible_levels()
+	out["view_ring_prefix_before_level_mask"] = _view_ring_instances
 	return out

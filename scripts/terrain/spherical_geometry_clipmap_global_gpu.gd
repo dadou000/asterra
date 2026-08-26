@@ -45,6 +45,9 @@ const PBR_FOREST_ROUGHNESS_PATH := "res://assets/textures/terrain/forrest_ground
 var _gpu_ctx_generation: int = -1
 var _physical_ring_count: int = 0
 var _horizon_max_level: int = 0
+var _automatic_ring_count: int = 0
+var _debug_manual_ring_count_enabled := false
+var _debug_manual_ring_count: int = 0
 var _pbr_bound := false
 var _pbr_attempted := false
 var _debug_pbr_enabled := true
@@ -78,22 +81,31 @@ func _process(dt: float) -> void:
 func _update_active_levels() -> void:
 	_update_screen_space_min_level()
 
-	# A ring whose inner edge begins beyond the visible horizon-safe cap cannot
-	# contribute a single triangle, so it is omitted from the visible instance window.
-	var max_level: int = _active_min_level
+	# Automatic production mode: include every annulus whose inner edge can reach
+	# the horizon-safe visible cap. Because each preceding ring extends farther than
+	# the next ring's inner edge, this guarantees continuous terrain coverage with no
+	# radial hole while avoiding rings that cannot contribute a triangle.
+	var automatic_max_level: int = _active_min_level
 	var visible_radius_m: float = maxf(
 		_visible_cap_arc_m,
 		_base_spacing * pow(2.0, float(_active_min_level)) * float(HALF_CELLS))
-	while max_level < MAX_LEVEL:
-		var candidate: int = max_level + 1
+	while automatic_max_level < MAX_LEVEL:
+		var candidate: int = automatic_max_level + 1
 		var candidate_spacing: float = _base_spacing * pow(2.0, float(candidate))
 		var candidate_inner_m: float = candidate_spacing * float(RING_INNER_HALF_CELLS)
 		if candidate_inner_m > visible_radius_m * HORIZON_RING_SAFETY:
 			break
-		max_level = candidate
+		automatic_max_level = candidate
 
-	_active_max_level = maxi(max_level, _active_min_level)
-	_horizon_max_level = _active_max_level
+	_horizon_max_level = automatic_max_level
+	_automatic_ring_count = maxi(automatic_max_level - _active_min_level, 0)
+
+	# Manual mode is diagnostics only. OFF is the exact automatic production path.
+	if _debug_manual_ring_count_enabled:
+		var manual_count: int = clampi(_debug_manual_ring_count, 0, MAX_LEVEL - _active_min_level)
+		_active_max_level = _active_min_level + manual_count
+	else:
+		_active_max_level = automatic_max_level
 	_apply_active_level_window()
 
 
@@ -336,6 +348,42 @@ func set_aerial_strength(value: float) -> void:
 		_material.set_shader_parameter("u_terrain_aerial_strength", _aerial_strength)
 
 
+func set_debug_manual_ring_count_enabled(value: bool) -> void:
+	if _debug_manual_ring_count_enabled == value:
+		return
+	if value:
+		# Enter manual mode without changing the currently correct automatic shape.
+		_debug_manual_ring_count = _automatic_ring_count
+	_debug_manual_ring_count_enabled = value
+	_refresh_manual_ring_window()
+
+
+func set_debug_manual_ring_count(value: int) -> void:
+	_debug_manual_ring_count = clampi(value, 0, MAX_LEVEL)
+	if _debug_manual_ring_count_enabled:
+		_refresh_manual_ring_window()
+
+
+func _refresh_manual_ring_window() -> void:
+	if not Planet.ready_state or Planet.cfg == null:
+		return
+	_update_active_levels()
+	if _terrain_visible:
+		_update_sector_visibility()
+
+
+func debug_manual_ring_count_enabled() -> bool:
+	return _debug_manual_ring_count_enabled
+
+
+func debug_manual_ring_count() -> int:
+	return _debug_manual_ring_count
+
+
+func automatic_ring_count() -> int:
+	return _automatic_ring_count
+
+
 func debug_geomorph_mode() -> int:
 	return _debug_geomorph_mode
 
@@ -356,6 +404,9 @@ func gpu_stream_stats() -> Dictionary:
 	out["gpu_context_generation"] = _gpu_ctx_generation
 	out["physical_ring_instances"] = _physical_ring_count
 	out["horizon_max_level"] = _horizon_max_level
+	out["automatic_ring_count"] = _automatic_ring_count
+	out["manual_ring_count_enabled"] = _debug_manual_ring_count_enabled
+	out["manual_ring_count"] = _debug_manual_ring_count
 	out["horizon_exact_ring_window"] = true
 	out["ring_storage_fixed"] = true
 	out["view_surface_culled"] = _view_surface_culled

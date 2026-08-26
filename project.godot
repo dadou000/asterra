@@ -35,6 +35,7 @@ AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
 VolumetricClouds="*res://scripts/rendering/volumetric_cloud_controller.gd"
 RenderDebug="*res://scripts/rendering/render_debug_controller.gd"
+RingCountDebug="*res://scripts/terrain/ring_count_debug_controller.gd"
 VehicleTests="*res://scripts/vehicles/vehicle_test_harness.gd"
 
 [display]
