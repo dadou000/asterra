@@ -1,242 +1,119 @@
-# GPU-first terrain synthesis
+# GPU-first terrain synthesis — latest 0.0.5 clipmap port
 
-## Contract
+## Runtime contract
 
-The CPU is responsible only for generating/loading the persistent coarse planet maps. Once the world has been adopted, terrain below the coarse-map scale is a GPU problem.
+The CPU generates/loads persistent coarse planet maps. Sub-grid terrain detail, material classification and visual scatter belong on the GPU. Camera-centred CPU terrain/detail/material synthesis is not part of the target runtime architecture.
 
-No camera-centred CPU terrain generation, CPU detail height synthesis, CPU material placement, or CPU scatter classification belongs in the final runtime path.
+## Authoritative clipmap base
 
-The current `GPUPlanetContext` conversion is a transition step: it uploads baked `PlanetFields` into immutable GPU textures once per adopted world. The long-term bake format should persist these context textures directly so runtime work is reduced to loading/uploading them.
+This branch is based directly on `terraintesting/0.0.5` and preserves the current 0.0.5 terrain renderer.
 
-## Pipeline
+The active class chain is:
 
-1. **Offline / load-time planet context**
-   - macro elevation
-   - tectonic uplift / plate context
-   - bedrock family, erodibility, faults, strata, basins
-   - coarse erosion sediment
-   - drainage / discharge / floodplain / wetland
-   - climate
-   - soil depth and composition
-   - biome / vegetation potential
+```text
+spherical_geometry_clipmap_global_gpu.gd
+  -> spherical_geometry_clipmap_global.gd
+  -> spherical_geometry_clipmap_procedural_safe.gd
+  -> current 0.0.5 clipmap parents
+```
 
-2. **GPU geomorph synthesis**
-   - reconstruct coarse elevation
-   - derive continuous landform weights
-   - domain-warped multi-scale noise
-   - cellular/Voronoi structural ridges
-   - mountain/crag synthesis
-   - analytic drainage incision
-   - sedimentary/depositional approximations
-   - dune/glacial/depositional processes
-   - output final displaced terrain height
+The GPU extension must not replace or regress these current clipmap invariants:
 
-3. **GPU surface classification**
-   - derive slope from final displaced geometry
-   - derive curvature/exposure/relative height where available
-   - combine final terrain state with coarse geology, climate, soil and biome context
-   - select/blend physically plausible materials
-   - enforce material stability (angle of repose / exposed bedrock)
+- compact UV-addressed centre/ring sector meshes
+- screen-space promotion of the centre disc through L0..L14
+- dynamic active minimum/maximum LOD window
+- stationary per-level lattice snapping
+- double-precision stable anchor reconstruction
+- resident `Planet.global_height_texture` macro terrain
+- resident `Planet.global_material_texture` material fallback
+- cubic B-spline/mip-aware macro reconstruction
+- centre/ring morph and ring-only sink behavior
+- restoration of dynamic ring `visible_instance_count` after sector/debug visibility changes
 
-4. **GPU material detail**
-   - PBR texture/material families
-   - material-specific micro-normal detail
-   - dense near-field geometric microrelief
+## Current corrected-port status
 
-5. **GPU scatter**
-   - deterministic candidate cells from world seed + snapped tangent cells
-   - exact analytic terrain slope and material suitability evaluated in compute
-   - compact accepted instances directly into MultiMesh GPU buffers
-   - indirect instance count written by GPU; no CPU readback
-   - compatibility fallback retains the vertex-stage candidate lattice
+### M1 — immutable GPU planet context — ACTIVE
 
-6. **Optional local GPU compute refinement**
-   - iterative hydraulic/thermal erosion only where analytic synthesis is insufficient
-   - immutable coarse context + deterministic GPU base remain the only inputs
+`gpu_planet_context.gd` uploads six-face context textures once per adopted world:
 
-## Current context textures
+- soil composition
+- soil depth/moisture/vegetation/sediment
+- geology/erodibility/strata/basin/boundary context
+- uplift/fault/floodplain/wetland
+- climate
+- hydrology/flow/discharge/deposition
+- nearest-filtered rock family ID
+- nearest-filtered biome ID
 
-All continuous textures are linearly filtered and have direction-space cube-face gutters. Categorical maps are separate nearest-filtered textures so interpolation cannot invent nonexistent IDs.
+`PlanetContext` is an autoload. The old camera-centred `MaterialClipmap` autoload is removed on this branch. The latest resident global material texture remains available through `spherical_geometry_clipmap_global.gd`.
 
-- **Soil RGBA**: sand / silt / clay / organic
-- **Surface RGBA**: soil depth / soil moisture / vegetation potential / sediment thickness
-- **Geology RGBA**: erodibility / strata dip / basin / plate-boundary proximity
-- **Structure RGBA**: signed uplift / fault intensity / floodplain / wetland
-- **Climate RGBA**: mean temperature / precipitation / humidity / seasonal temperature range
-- **Hydrology RGBA**: tangent-frame flow direction RG / logarithmic discharge / depositional influence
-- **Rock R**: categorical bedrock family ID
-- **Biome R**: categorical biome ID
+### M2 — analytic GPU geomorph library — ACTIVE
 
-## Milestone status
+`gpu_geomorph.gdshaderinc` provides the context-driven analytic terrain stack:
 
-### M1 — coarse context textures — IMPLEMENTED
-
-`GPUPlanetContext` builds immutable six-face context textures once per adopted world. The old camera-centred `MaterialClipmap` is no longer an autoload in this branch.
-
-Remaining cleanup: persist the packed context with the world bake so runtime does not repack `PlanetFields`.
-
-### M2 — analytic geomorph shader library — IMPLEMENTED, FIRST PASS
-
-`gpu_geomorph.gdshaderinc` currently provides:
-
-- deterministic value noise and five-octave fBm
-- ridged multifractal structure
+- multi-octave fBm and ridged structure
 - domain warping
-- reduced-cost cellular ridge skeletons
-- context-driven mountain / arid / glacial / depositional weights
-- multi-scale 16 km / 6 km / 1.4 km / 420 m / 120 m / 24 m bands
-- drainage-oriented analytic incision using the baked downstream vector
-- broad depositional shoulders/fans
-- arid dune contribution
+- reduced-cost cellular ridge structure
+- mountain/arid/glacial/depositional landform weights
+- multi-scale 16 km / 6 km / 1.4 km / 420 m / 120 m / 24 m detail
+- drainage-oriented incision
+- broad deposition/fans
+- arid dunes
 - glacial smoothing/flow
-- LOD band limiting from actual clipmap vertex spacing
+- LOD band limiting from actual geometry spacing
 
-This is analytic synthesis, not iterative hydraulic simulation yet.
+### M3 — latest-clipmap geomorph integration — ACTIVE, FIRST PASS
 
-### M3 — active clipmap integration — IMPLEMENTED
+`shaders/spherical_geometry_clipmap_global_gpu.gdshader` is derived from the current 0.0.5 clipmap shader, not from the older GPU graphics branch.
 
-`spherical_geometry_clipmap_procedural_uv.gdshader` now gets sub-grid displacement from `gm_geomorph_height()` rather than the old altitude-only five-band heuristic. Existing concentric LOD morphing, atmosphere and displacement-aware fragment normals are retained.
+Only the old generic `procedural_detail()` source has been replaced with `gm_geomorph_height()` in this first integration pass. The current 0.0.5 behavior for topology addressing, promoted centre LODs, stable anchoring, macro filtering, morphing and ring sinking is retained.
 
-### M4 — material classifier — IMPLEMENTED, FIRST PASS
+The active controller swaps to this shader after the latest global clipmap has initialized, then rebinds the resident global height/material textures and adds `PlanetContext`.
 
-Materials are classified after displacement from final geometry slope plus context. Current classes:
+### M4 — physical material classifier — MODULE PRESENT, NOT YET ACTIVE ON CORRECTED PORT
 
-- actual-family bedrock
-- mineral soil
-- vegetation cover
-- aeolian sand
-- mud
-- snow
-- scree / talus
-- river gravel
+`gpu_surface_classifier.gdshaderinc` has been transplanted as a module, but the current corrected live shader still uses the latest 0.0.5 resident global material map for fragment shading.
 
-Loose-material stability is slope-dependent. Thin soil and slopes above the plausible loose-material angle of repose reveal the actual underlying rock family.
+Next port step:
 
-### M4.1 — diagnostics — IMPLEMENTED
+- derive slope from final displaced geometry
+- classify bedrock/soil/vegetation/sand/mud/snow/scree/gravel from context + final geometry
+- keep resident global material data as fallback/debug input
 
-The Terrain debug tab exposes unlit views for:
+### M5 — PBR / anti-tiling / geology-specific rock — MODULES PRESENT, NOT YET ACTIVE
 
-- landform weights
-- primary material weights
-- secondary material weights
-- soil context
-- geology / biome IDs
-- hydrology
+Available modules:
 
-The same tab can disable scanned PBR and geometric microrelief independently, making it possible to isolate terrain synthesis, topology and surface shading costs.
+- `gpu_surface_pbr.gdshaderinc`
+- `gpu_surface_antitile.gdshaderinc`
+- `gpu_rock_pbr.gdshaderinc`
 
-### M5 — PBR material families — IMPLEMENTED, FIRST PASS
+They will be re-integrated only after M3 is visually validated against the latest clipmaps.
 
-`gpu_surface_pbr.gdshaderinc` adds precision-safe scanned surface detail while preserving the classifier as the source of material identity and large-scale colour.
+### M6 — dense geometric microrelief — MODULE PRESENT, TO BE REDESIGNED FOR PROMOTED CENTRE LOD
 
-Current scanned families use the existing CC0 assets:
+`gpu_material_microrelief.gdshaderinc` is present, but the old dense microclipmap implementation is intentionally **not** copied.
 
-- `ground003` — generic mineral/loose ground base
-- `leafy_grass` — vegetated open ground
-- `brown_mud` — wet cohesive ground
-- `forrest_ground_01` — forest floor
+The old implementation assumed a permanently active L0 centre disc. The current 0.0.5 renderer can promote the centre itself to L1..L14, so the dense near-field layer must be adapted to that behavior rather than replacing the latest topology.
 
-Current implementation details:
+### M7 — GPU scatter — NOT YET PORTED/ACTIVE ON CORRECTED BRANCH
 
-- triplanar projection, so the spherical terrain needs no authored UV unwrap
-- 4096 m wrapped floating-origin detail coordinate, calculated before conversion to `Vector3`
-- 1 m or 2 m physical scan periods that divide the 4096 m wrap exactly
-- explicit `textureGrad()` sampling through material-dependent branches
-- classifier-colour-preserving scan modulation rather than letting one scan repaint whole biomes
-- distance-gated scanned albedo/roughness detail
-- tighter near-field gating for normal-map cost
-- one generic loose-ground scan plus at most one specialised grass/mud/forest scan
-- periodic stochastic 3D phase warp for anti-tiling without extra PBR texture fetches
-- geology-specific procedural PBR for all 13 bedrock families, including family roughness, crystalline/bedded/foliated structure, faults and close normal response
-- live debug toggles for direct performance/quality comparison
+The old scatter implementation is deliberately not active here yet. When ported it must sample the same current resident global height field (`Planet.global_height_texture`) and use the corrected terrain/context stack.
 
-Still required for the mature M5 implementation:
+### M8 — iterative near-field GPU erosion — FUTURE/OPTIONAL
 
-- dedicated scanned/procedural sand, scree, gravel and snow families
-- optional scanned rock sets replacing procedural response where worthwhile
-- quality-tier texture budgets for lower GPUs
+Add compute-generated local refinement only if analytic erosion remains insufficient at walking distance.
 
-### M6 — dense material microrelief — IMPLEMENTED, FIRST PASS
+## Validation
 
-`spherical_geometry_clipmap_micro.gd` adds a dedicated circular near-field mesh at one quarter of L0 spacing. With the current ~0.75 m L0, the dense patch is ~0.1875 m spacing and ~24 m radius.
+CI validates both:
 
-The ordinary L0 mesh has an ~18 m-radius central hole. L0 and the dense patch overlap for ~6 m; material microrelief fades to zero through that overlap and the underlying L0 is slightly sunk so both surfaces converge to the same base terrain without a hard stitched edge or persistent coplanar z-fighting.
+- the untouched current `spherical_geometry_clipmap_procedural_uv.gdshader`
+- the new `spherical_geometry_clipmap_global_gpu.gdshader`
+- the active project/autoload inheritance chain under Godot 4.7.1
 
-`gpu_material_microrelief.gdshaderinc` supplies actual vertex displacement for features that are large enough for the dense topology to represent:
-
-- family-specific rock blocks, joints, bedding, foliation, fractures and clast relief
-- scree / talus irregularity
-- river gravel structure
-- broad sand relief
-- soil aggregates
-- wet/muddy ground relief
-- snow undulation
-
-The dense shader path uses the immutable coarse context plus GPU landform fields as its vertex-stage physical proxy. Final visible material identity is still classified in `fragment()` from the actual displaced slope, so the authoritative material system remains downstream of geometry synthesis.
-
-Micro displacement is distance-gated and fades before the dense patch hands off to L0. Fine centimetre-scale texture remains normal/PBR/scatter detail rather than being aliased into ~19 cm vertices.
-
-The Terrain debug tab can disable geometric microrelief while leaving the dense patch and normal terrain active, allowing direct topology/performance comparison.
-
-### M7 — GPU scatter — IMPLEMENTED, COMPUTE-COMPACTED FIRST PASS
-
-The original `gpu_terrain_scatter.gd` candidate-lattice implementation remains the compatibility/fallback renderer. It constructs static candidate MultiMeshes once and performs all placement/suitability work in vertex shaders rather than on the CPU.
-
-`gpu_terrain_scatter_compact.gd` is now the active `TerrainScatter` autoload. On Forward+ and Mobile rendering methods it adds a RenderingDevice compute path with indirect MultiMeshes. Compatibility/headless paths automatically retain the inherited lattice implementation.
-
-`terrain_scatter_compact.glsl` performs one deterministic candidate evaluation per invocation. It:
-
-- reconstructs the candidate from absolute tangent-grid cell + world seed
-- performs cheap context-only pre-rejection where possible
-- samples the immutable planet context and macro elevation
-- evaluates the same analytic geomorph height stack as the terrain renderer
-- finite-differences the analytic final height field to derive a local terrain normal and slope
-- feeds that exact analytic slope through the same primary/secondary material classification rules
-- derives grass / geological-stone / river-stone suitability
-- deterministically accepts/rejects each candidate
-- atomically reserves a compact destination slot only for accepted instances
-- writes the accepted instance's 3D transform and `INSTANCE_CUSTOM` payload directly into the MultiMesh GPU buffer
-- atomically updates the MultiMesh indirect command's `instanceCount`
-
-There is no GPU-to-CPU result readback. The CPU only dispatches when a family's snapped cell window, floating origin, tangent anchor, world/context generation, or debug state changes.
-
-Current candidate domains remain:
-
-- **Grass clumps** — 96×96 candidates, 1.25 m cells, ~60 m nominal radius
-- **Geological / scree stones** — 64×64 candidates, 2.5 m cells, ~80 m nominal radius
-- **River / depositional stones** — 64×64 candidates, 2.0 m cells, ~64 m nominal radius
-
-The compact draw shaders are intentionally cheap. Terrain/context/geomorph/classification work has already happened in compute, so the draw vertex stage only applies the compacted transform plus visual-only behavior such as grass wind. Rejected candidates do not execute draw-vertex work.
-
-Each family independently falls back to the old lattice renderer until its compacted result is ready. If RenderingDevice compute/indirect MultiMesh is unavailable, the entire system remains functional through that fallback.
-
-Current limitations / next scatter work:
-
-- compute slope is exact for the current **analytic geomorph height field**, but does not include the tiny dense near-field microrelief displacement
-- tangent-grid identity still rebuilds after the ~8 km local anchor reset; mature scatter should use a planet-global stable candidate address
-- Forward+/Mobile indirect-buffer execution still needs visual/performance validation on an actual game GPU; CI currently validates shader import/SPIR-V and the live GDScript/autoload chain rather than rendering indirect instances
-- no tree/shrub/deadwood assets or procedural tree geometry yet
-- no scatter shadows in the current performance-oriented pass
-- no collision/interaction proxies for large rocks or future trees yet
-- quality tiers and density/radius budgets still need target-GPU tuning
-
-### M8 — iterative near-field GPU erosion — OPTIONAL REFINEMENT
-
-Add compute-generated local height/sediment fields only if the analytic erosion system is insufficient at walking distance. Compute input remains immutable coarse context + deterministic procedural base; the CPU does not synthesize terrain.
-
-### M9 — mature GPU ecology / interaction — NEXT
-
-Build on the compacted M7 infrastructure rather than introducing another placement system:
-
-- stable planet-global candidate keys across tangent-anchor rebuilds
-- trees and shrubs selected from biome, climate, soil, water and competition context
-- deadwood, leaf litter and biome-specific debris
-- larger talus blocks / boulders with family-specific geological distribution
-- multi-distance scatter LODs and impostors
-- quality-tier density and shadow budgets
-- interaction/collision proxies only for nearby large objects
-- optional local vegetation succession/disturbance state layered over deterministic pristine suitability
+This keeps the current clipmap shader available as an A/B baseline while the GPU terrain features are ported incrementally.
 
 ## Runtime invariant
 
-For a fixed world seed and coarse map set, all untouched sub-grid terrain and visual scatter must be reproducible from planet position and GPU algorithms alone.
+For a fixed world seed and coarse map set, untouched sub-grid terrain should be reproducible from planet position and GPU algorithms alone.
