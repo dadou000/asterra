@@ -47,14 +47,15 @@ func _bind_gpu_resources(force: bool) -> void:
 	for material: ShaderMaterial in _materials:
 		material.set_shader_parameter("u_scatter_seed", maxi(scatter_seed, 1))
 		material.set_shader_parameter("u_scatter_detail_seed", maxi(detail_seed, 1))
-		# Match the terrain renderer's L0 spacing. Geomorph is deterministic and
-		# band-limited internally, so scatter and terrain evaluate the same field.
 		material.set_shader_parameter("u_scatter_geomorph_spacing", 0.75)
 
 
 func gpu_scatter_stats() -> Dictionary:
-	var out: Dictionary = super.gpu_scatter_stats() if super.has_method("gpu_scatter_stats") else {}
-	out["global_heightmap"] = true
-	out["global_height_face_res"] = _bound_macro_res
-	out["cpu_scatter_classification"] = false
-	return out
+	return {
+		"global_heightmap": true,
+		"global_height_face_res": _bound_macro_res,
+		"cpu_scatter_classification": false,
+		"compute_supported": _compact_method_supported,
+		"compute_ready": _compact_init_ready,
+		"compute_failed": _compact_init_failed,
+	}
