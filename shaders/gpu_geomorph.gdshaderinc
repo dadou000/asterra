@@ -50,24 +50,11 @@ float gm_value(vec3 p, uint seed) {
 	return mix(mix(a, b, f.y), mix(c, d, f.y), f.z) * 2.0 - 1.0;
 }
 
-// Five octaves remain the authoritative detail signal. Keeping this unchanged
-// preserves the characteristic terrain spectrum where fBm itself is visible.
+// The renderer already has explicit 16 km, 6 km, 1.4 km, 420 m, 120 m and 24 m
+// bands. Five octaves inside every band duplicated those same frequency ranges
+// several times. Three octaves retain the band's broad/mid-scale character; the
+// 1.0957 renormalization preserves approximately the old total fBm amplitude.
 float gm_fbm(vec3 p, uint seed) {
-	float h = 0.0;
-	float a = 0.52;
-	for (int i = 0; i < 5; i++) {
-		h += gm_value(p, seed + uint(i * 17)) * a;
-		p = p * 2.01 + vec3(17.0, -11.0, 7.0);
-		a *= 0.48;
-	}
-	return h;
-}
-
-// Domain warp only establishes low-frequency coordinate distortion. Its fourth
-// and fifth octaves move features by a tiny fraction of their wavelength but cost
-// six extra 3-D value-noise evaluations per warp. Three octaves retain the same
-// large/mid-scale warped character at much lower ALU/hash cost.
-float gm_fbm_warp(vec3 p, uint seed) {
 	float h = 0.0;
 	float a = 0.52;
 	for (int i = 0; i < 3; i++) {
@@ -75,7 +62,21 @@ float gm_fbm_warp(vec3 p, uint seed) {
 		p = p * 2.01 + vec3(17.0, -11.0, 7.0);
 		a *= 0.48;
 	}
-	return h;
+	return h * 1.0957;
+}
+
+// Domain warp only establishes large/mid-scale coordinate distortion. Two
+// octaves are sufficient because the explicit terrain bands provide subsequent
+// smaller-scale structure. Renormalize to keep roughly the previous warp reach.
+float gm_fbm_warp(vec3 p, uint seed) {
+	float h = 0.0;
+	float a = 0.52;
+	for (int i = 0; i < 2; i++) {
+		h += gm_value(p, seed + uint(i * 17)) * a;
+		p = p * 2.01 + vec3(17.0, -11.0, 7.0);
+		a *= 0.48;
+	}
+	return h * 1.2662;
 }
 
 float gm_ridged(vec3 p, uint seed) {
@@ -223,8 +224,6 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		float channel = pow(gm_ridged(p, seed + 73u), 4.6);
 		float incision = channel * mix(2.0, 34.0, hydro.b) * (1.0 - depositional * 0.78);
 		h -= incision * w420;
-		// No fan shape needs to be generated where the deposited contribution is
-		// below visual precision.
 		if (depositional > 0.006) {
 			float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
 			h += fan * depositional * mix(1.0, 12.0, surface.a) * w420;
