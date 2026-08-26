@@ -66,8 +66,8 @@ func _validate_tectonic_landmarks() -> bool:
 	# factories. They should not enter the fault-driven volcanic candidate set.
 	fields.plate_boundary_type.fill(TB.TRANSFORM)
 	fields.uplift.fill(0.0)
-	var pass := PassLandmarks.new(fields)
-	var transform_candidates: Array[Dictionary] = pass._collect_volcanic_candidates()
+	var landmark_pass := PassLandmarks.new(fields)
+	var transform_candidates: Array[Dictionary] = landmark_pass._collect_volcanic_candidates()
 	if not transform_candidates.is_empty():
 		_fail("Transform margin generated generic volcano candidates")
 		return false
@@ -76,7 +76,7 @@ func _validate_tectonic_landmarks() -> bool:
 	fields.plate_boundary_type.fill(TB.CONVERGENT)
 	fields.uplift.fill(0.60)
 	fields.elev.fill(700.0)
-	var convergent: Array[Dictionary] = pass._collect_volcanic_candidates()
+	var convergent: Array[Dictionary] = landmark_pass._collect_volcanic_candidates()
 	if convergent.is_empty():
 		_fail("Convergent test margin generated no volcanic candidates")
 		return false
@@ -94,7 +94,7 @@ func _validate_tectonic_landmarks() -> bool:
 	fields.landmark.fill(LM.NONE)
 	fields.landmark_id.fill(0)
 	fields.landmark_strength.fill(0.0)
-	var divergent: Array[Dictionary] = pass._collect_volcanic_candidates()
+	var divergent: Array[Dictionary] = landmark_pass._collect_volcanic_candidates()
 	if divergent.is_empty():
 		_fail("Divergent oceanic test margin generated no volcanic candidates")
 		return false
@@ -105,7 +105,7 @@ func _validate_tectonic_landmarks() -> bool:
 
 	var feature: Dictionary = divergent[0]
 	var center: int = int(feature["cell"])
-	pass._apply_volcanic_landform(feature, 1)
+	landmark_pass._apply_volcanic_landform(feature, 1)
 	if fields.elev[center] <= 0.0:
 		_fail("Oceanic shield did not alter terrain enough to build the test island")
 		return false
