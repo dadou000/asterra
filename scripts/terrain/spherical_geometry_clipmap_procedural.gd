@@ -54,10 +54,9 @@ func _process(_dt: float) -> void:
 		_update_visible_cap(observer_radius, radius)
 		_update_active_levels()
 
-	# Freeze means exactly that for terrain inspection: the clipmap centre, tangent
-	# frame, visible-cap radius and active LOD count stop following the camera.
-	# Floating-origin changes still update u_origin below, so the frozen terrain
-	# remains fixed in planet space while the camera can freely move around it.
+	# Freeze affects only the planet-space clipmap state. Camera-dependent render
+	# culling must remain live while frozen; otherwise the debug mode itself changes
+	# GPU workload and makes profiling misleading.
 	if not _debug_freeze:
 		var observer_surface_world: Vec3D = observer_unit_world.mul(radius)
 		var rel: Vec3D = observer_surface_world.sub(_stable_anchor_world)
@@ -85,12 +84,12 @@ func _process(_dt: float) -> void:
 	_bind_gpu_resources(false)
 	_sync_uniforms(origin)
 	_sync_material_control()
+	# _set_visible(true) dispatches to the active subclass' _update_sector_visibility()
+	# exactly once. Do not run a second ordinary culling pass here. Side-cut is the
+	# sole exception because it intentionally displays the complete diagnostic half.
 	_set_visible(_bound_orbit != null)
-	if _terrain_visible:
-		if _debug_freeze or _debug_side_cut:
-			_show_all_active_sectors()
-		else:
-			_update_sector_visibility()
+	if _terrain_visible and _debug_side_cut:
+		_show_all_active_sectors()
 
 
 func _bind_gpu_resources(force: bool) -> void:
@@ -172,8 +171,10 @@ func _show_all_active_sectors() -> void:
 
 func set_debug_freeze(value: bool) -> void:
 	_debug_freeze = value
+	# Freeze only stops clipmap movement/LOD evolution. The camera still moves, so
+	# sky/nadir/azimuth culling must be recomputed exactly as in normal rendering.
 	if _terrain_visible:
-		if value:
+		if _debug_side_cut:
 			_show_all_active_sectors()
 		else:
 			_update_sector_visibility()
@@ -189,7 +190,7 @@ func set_debug_side_cut(value: bool) -> void:
 	# shaded renderer instead of relying on fragment discard.
 	rebuild_static_topology()
 	if _terrain_visible:
-		if value or _debug_freeze:
+		if value:
 			_show_all_active_sectors()
 		else:
 			_update_sector_visibility()
