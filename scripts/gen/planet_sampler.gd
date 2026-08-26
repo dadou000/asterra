@@ -587,7 +587,7 @@ func _build_cell_colors() -> void:
 			+ fields.wetland[c] * 0.92, 0.0, 1.0)
 		if biome == PlanetFields.Biome.WETLAND:
 			depositional = 1.0
-		elif biome in [PlanetFields.Biome.RIVER, PlanetFields.Biome.LAKE]:
+		if fields.is_lake(c) or fields.river_width[c] > 0.0:
 			depositional = maxf(depositional, 0.88)
 		_cell_geomorph[c] = Color(clampf(mountain, 0.0, 1.0), clampf(arid, 0.0, 1.0),
 			clampf(glacial, 0.0, 1.0), clampf(depositional, 0.0, 1.0))
@@ -609,6 +609,14 @@ func sample_info(d: Vector3) -> Dictionary:
 		"elevation": terrain_height(d),
 		"macro_elevation": macro_height(d),
 		"relief": fields.relief[c],
+		"plate": fields.plate[c],
+		"plate_boundary": fields.plate_boundary[c],
+		"tectonic_boundary": fields.plate_boundary_type[c],
+		"tectonic_boundary_name": PlanetFields.TECTONIC_BOUNDARY_NAMES[fields.plate_boundary_type[c]],
+		"landmark": fields.landmark[c],
+		"landmark_name": PlanetFields.LANDMARK_NAMES[fields.landmark[c]],
+		"landmark_id": fields.landmark_id[c],
+		"landmark_strength": fields.landmark_strength[c],
 		"rock": fields.rock[c],
 		"rock_name": PlanetFields.ROCK_NAMES[fields.rock[c]],
 		"strata_dip": fields.strata_dip[c],
@@ -629,6 +637,7 @@ func sample_info(d: Vector3) -> Dictionary:
 		"lake": fields.lake_level[c] > -1e8,
 		"floodplain": fields.floodplain[c],
 		"wetland": fields.wetland[c],
+		"hydrology_flags": fields.hydrology_flags(c),
 		"temp_mean": fields.temp_mean[c],
 		"temp_range": fields.temp_range[c],
 		"precip": fields.precip[c],
