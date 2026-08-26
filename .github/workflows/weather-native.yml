@@ -1,5 +1,7 @@
 name: Weather Native AVX2
 
+# This build also validates the local wind sampler consumed by the in-world
+# weather-cell vector debug overlay.
 on:
   push:
     branches:
