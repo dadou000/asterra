@@ -1,15 +1,7 @@
 class_name AsterraPlayer
 extends Node3D
-## Observer + excavation tool.
-##
-## The player's canonical position is a double-precision Asterra-frame vector; the
-## scene-graph transform is only ever the local-frame projection of it. Walking
-## and flying are the same controller with a different force model, and the
-## transition from orbit to standing on the ground never changes representation.
-##
-## Ground contact is resolved against the height field rather than the streamed
-## collision meshes, so the player can never fall through a chunk that has not
-## finished meshing.
+## Observer + excavation tool. Precise ground contact comes from the asynchronous
+## GPU terrain query; CPU terrain queries are coarse resident-map fallbacks only.
 
 signal moved(world_pos: Vec3D)
 
@@ -32,8 +24,6 @@ var grounded: bool = false
 var camera: Camera3D
 
 var _mouse_captured := false
-## Cleared while a menu owns the input, so the player neither looks nor walks
-## while someone is clicking check boxes.
 var input_enabled := true
 
 func _ready() -> void:
@@ -52,6 +42,7 @@ func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 	world_pos = Vec3D.new(d.x * r, d.y * r, d.z * r)
 	Frames.rebase(world_pos)
 	_sync_transform()
+	TerrainHeightQuery.request_height(d)
 	moved.emit(world_pos)
 
 func up_dir() -> Vector3:
@@ -61,7 +52,9 @@ func altitude() -> float:
 	return world_pos.length() - Planet.cfg.planet_radius
 
 func ground_height() -> float:
-	return Planet.terrain_height(up_dir())
+	var d := up_dir()
+	TerrainHeightQuery.request_height(d)
+	return TerrainHeightQuery.height_for_direction(d, Planet.terrain_height(d))
 
 func height_above_ground() -> float:
 	return altitude() - ground_height()
@@ -85,6 +78,7 @@ func _physics_process(dt: float) -> void:
 	if not Planet.ready_state or not input_enabled:
 		return
 	var up := up_dir()
+	TerrainHeightQuery.request_height(up)
 	var basis_local := _local_basis(up)
 	var fwd: Vector3 = basis_local[0]
 	var right: Vector3 = basis_local[1]
@@ -100,7 +94,6 @@ func _physics_process(dt: float) -> void:
 		wish -= right
 
 	if mode == Mode.FLY:
-		# Speed scales with altitude so orbit-to-ground is one continuous motion.
 		var alt := maxf(height_above_ground(), 1.0)
 		var speed := clampf(alt * 0.55, 8.0, 90000.0)
 		if Input.is_action_pressed("sprint"):
@@ -119,9 +112,10 @@ func _physics_process(dt: float) -> void:
 		if wish.length() > 0.001:
 			wish = wish.normalized()
 			world_pos = world_pos.add(Vec3D.from_v3(wish).mul(speed * dt))
-		# Re-evaluate the local vertical after moving tangentially.
 		up = world_pos.normalized().to_v3()
-		var gh := Planet.terrain_height(up)
+		TerrainHeightQuery.request_height(up)
+		var coarse_h := Planet.terrain_height(up)
+		var gh := TerrainHeightQuery.height_for_direction(up, coarse_h)
 		var target_r := Planet.cfg.planet_radius + gh + EYE_HEIGHT
 		var r := world_pos.length()
 		vertical_speed -= GRAVITY * dt
@@ -162,11 +156,6 @@ func _sync_transform() -> void:
 		cam_right = flat_right
 	var true_up := cam_right.cross(look).normalized()
 	camera.transform.basis = Basis(cam_right, true_up, -look)
-	# Far plane tracks the actual line-of-sight distance to the horizon (tangent
-	# from the camera to the planet's sea-level sphere), not an arbitrary
-	# altitude multiplier -- a flat multiplier undershoots the real horizon
-	# distance at moderate altitude (e.g. 3x altitude at 50 km up gives 150 km
-	# of far clip when the true horizon out there is already ~316 km away).
 	var r_obs := Planet.cfg.planet_radius + maxf(altitude(), 0.0)
 	var horizon_dist := sqrt(maxf(r_obs * r_obs - Planet.cfg.planet_radius * Planet.cfg.planet_radius, 0.0))
 	camera.far = clampf(horizon_dist + 20000.0, 50000.0, 8.0e6)
@@ -174,7 +163,8 @@ func _sync_transform() -> void:
 func view_dir() -> Vector3:
 	return -camera.global_transform.basis.z
 
-## March the view ray against the height field. Returns {} on a miss.
+## Coarse CPU raymarch for editing/aiming. This deliberately uses Planet's
+## resident macro fallback and no longer evaluates procedural TerrainDetail.
 func aim(max_range: float = 220.0) -> Dictionary:
 	var origin := world_pos
 	var ray := view_dir()
@@ -185,7 +175,6 @@ func aim(max_range: float = 220.0) -> Dictionary:
 		step = minf(step * 1.08, 4.0)
 		var gap := _gap_at(origin, ray, t)
 		if gap <= 0.0:
-			# Bisect for a clean surface point.
 			var lo := t - step
 			var hi := t
 			for _i in 18:
@@ -216,4 +205,5 @@ func restore(s: Dictionary) -> void:
 	mode = int(s.get("mode", Mode.FLY)) as Mode
 	Frames.rebase(world_pos)
 	_sync_transform()
+	TerrainHeightQuery.request_height(up_dir())
 	moved.emit(world_pos)
