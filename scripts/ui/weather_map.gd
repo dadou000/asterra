@@ -1177,13 +1177,17 @@ func _update_speed_label(value: float) -> void:
 func _update_warp_indicator() -> void:
 	if _warp_label == null:
 		return
-	var rate := _compact_duration(WeatherSystem.simulation_speed)
-	var total := _compact_duration(WeatherSystem.warped_ahead_seconds)
-	var text := "1 s → %s  •  Σ +%s ahead" % [rate, total]
+	var rate: String = _compact_duration(WeatherSystem.simulation_speed)
+	var total: String = _compact_duration(WeatherSystem.warped_ahead_seconds)
+	var backlog_seconds: float = WeatherSystem.solver_backlog_seconds()
+	var solver_state: String = "RUN" if WeatherSystem.native_worker_busy() else "idle"
+	var text: String = "1 s → %s  •  G%d L%d  •  solver %s  •  backlog %s" % [
+		rate, WeatherSystem.global_state_revision, WeatherSystem.local_state_revision,
+		solver_state, _compact_duration(backlog_seconds)]
 	if text != _warp_label.text:
 		_warp_label.text = text
 	# Only touched on transitions: this runs every frame the viewer is open.
-	var backlogged := WeatherSystem.solver_backlog_seconds() > 360.0
+	var backlogged: bool = backlog_seconds > 360.0
 	if backlogged != _warp_backlogged:
 		_warp_backlogged = backlogged
 		_warp_label.add_theme_color_override(
