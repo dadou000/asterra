@@ -136,6 +136,16 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT or not enabled or not is_ready():
 		return
 
+	# One result buffer is deliberately kept in flight at a time. Dispatching into
+	# it again before buffer_get_data_async() completes can make the callback's
+	# camera/generation metadata describe a newer GPU result. Skipping a few
+	# occlusion frames is cheap and keeps the temporal test deterministic.
+	_result_mutex.lock()
+	var readback_busy: bool = _readback_pending
+	_result_mutex.unlock()
+	if readback_busy:
+		return
+
 	var buffers: RenderSceneBuffersRD = render_data.get_render_scene_buffers() as RenderSceneBuffersRD
 	var scene_data := render_data.get_render_scene_data()
 	if buffers == null or scene_data == null or buffers.get_view_count() <= 0:
@@ -210,6 +220,12 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if not uniform_set.is_valid():
 		return
 
+	# Reserve the buffer before submitting work so no subsequent render callback can
+	# overwrite it until its asynchronous readback has completed.
+	_result_mutex.lock()
+	_readback_pending = true
+	_result_mutex.unlock()
+
 	var projection: Projection = scene_data.get_view_projection(0)
 	var compute_list: int = _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(compute_list, _pipeline)
@@ -228,14 +244,6 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_rd.compute_list_dispatch(compute_list, (candidate_count + 63) / 64, 1, 1)
 	_rd.compute_list_end()
 	_dispatch_frames += 1
-
-	_result_mutex.lock()
-	var can_request: bool = not _readback_pending
-	if can_request:
-		_readback_pending = true
-	_result_mutex.unlock()
-	if not can_request:
-		return
 
 	var callback: Callable = Callable(self, "_consume_results").bind(
 		generation, candidate_count, camera_world, camera_forward)
