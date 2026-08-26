@@ -27,7 +27,7 @@ func _ready() -> void:
 	info.fit_content = false
 	info.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	info.position = Vector2(12, 10)
-	info.size = Vector2(500, 680)
+	info.size = Vector2(570, 740)
 	info.add_theme_font_size_override("normal_font_size", font_size)
 	info.add_theme_color_override("default_color", Color(0.92, 0.95, 1.0))
 	add_child(info)
@@ -165,15 +165,30 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 				float(gs.get("visible_cap_km", 0.0)), int(gs.get("grid_cells", 0)),
 				int(gs.get("grid_cells", 0)), int(gs.get("visible_sectors", 0)),
 				int(gs.get("sector_count", 0))])
+		if bool(gs.get("horizon_exact_ring_buffers", false)):
+			lines.append("[color=#8aa]physical rings %d  horizon max L%d  micro %s[/color]" % [
+				int(gs.get("physical_ring_instances", 0)),
+				int(gs.get("horizon_max_level", 0)),
+				"ON" if bool(gs.get("micro_active", false)) else "OFF"])
 		if bool(gs.get("screen_space_lod", false)):
 			lines.append("[color=#666]LOD %.2f m/px  target %.0f/%.0f px fine/parent  sample distance %.1f km[/color]" % [
 				float(gs.get("metres_per_pixel", 0.0)),
 				float(gs.get("target_fine_vertex_px", 8.0)),
 				float(gs.get("target_parent_vertex_px", 16.0)),
 				float(gs.get("lod_surface_distance_m", 0.0)) / 1000.0])
-		lines.append("[color=#666]GPU terrain global %d²×6  batches %d  procedural detail ON  visual pages OFF[/color]" % [
+		lines.append("[color=#666]GPU terrain global %d²×6  batches %d  geomorph ON  PBR %s  aerial %.2f×[/color]" % [
 			int(gs.get("global_face_res", gh.get("face_res", 0))),
-			int(gs.get("draw_batches", 0))])
+			int(gs.get("draw_batches", 0)),
+			"ON" if bool(gs.get("scanned_pbr", false)) else "OFF",
+			float(gs.get("terrain_aerial_strength", 0.0))])
+
+	var scatter_node: Node = get_node_or_null("/root/TerrainScatter")
+	if scatter_node != null and scatter_node.has_method("gpu_scatter_stats"):
+		var ss: Dictionary = scatter_node.call("gpu_scatter_stats")
+		lines.append("[color=#666]GPU scatter global %d²×6  compute %s  CPU classify OFF[/color]" % [
+			int(ss.get("global_height_face_res", 0)),
+			"READY" if bool(ss.get("compute_ready", false)) else (
+				"FALLBACK" if not bool(ss.get("compute_failed", false)) else "FAILED")])
 
 	lines.append("[color=#666]horizon %.1f°  %.0f km[/color]" % [st["horizon_deg"], st["horizon_km"]])
 	lines.append("[color=#666]fps %d[/color]" % Engine.get_frames_per_second())
