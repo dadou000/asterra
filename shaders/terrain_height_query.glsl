@@ -2,7 +2,7 @@
 #version 450
 
 // One-point runtime terrain height query for gameplay ground contact.
-// Evaluates the same resident global macro + analytic geomorph field as L0 terrain.
+// Evaluates the same resident global macro + optimized analytic geomorph field as L0 terrain.
 // CPU receives only the resulting float asynchronously; no CPU terrain synthesis.
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -15,8 +15,8 @@ layout(set = 0, binding = 5) uniform sampler2DArray climate_tex;
 layout(set = 0, binding = 6) uniform sampler2DArray hydrology_tex;
 layout(set = 0, binding = 7, std430) restrict writeonly buffer HeightResult { vec4 value; } result;
 layout(set = 0, binding = 8, std140) uniform QueryParams {
-    vec4 direction_radius; // xyz normalized direction, w planet radius
-    vec4 texture_seed;     // x macro face res, y context face res, z detail seed, w spacing
+    vec4 direction_radius;
+    vec4 texture_seed;
 } params;
 
 const float PI = 3.14159265358979323846;
@@ -31,6 +31,13 @@ uint gm_hash(ivec3 p, uint seed) {
     return h;
 }
 float gm_rand(ivec3 p, uint seed) { return float(gm_hash(p, seed) & 0x00ffffffu) / 16777215.0; }
+vec3 gm_rand3(ivec3 p, uint seed) {
+    uint h0=gm_hash(p,seed);
+    uint h1=(h0^(h0>>13u)^0x68bc21ebu)*0x9e3779b9u;
+    uint h2=(h0^(h0<<11u)^0x02e5be93u)*0x85ebca6bu;
+    h1^=h1>>16u; h2^=h2>>15u;
+    return vec3(float(h0&0x00ffffffu),float(h1&0x00ffffffu),float(h2&0x00ffffffu))/16777215.0;
+}
 float gm_value(vec3 p, uint seed) {
     ivec3 i = ivec3(floor(p));
     vec3 f = fract(p); f = f*f*f*(f*(f*6.0-15.0)+10.0);
@@ -42,20 +49,25 @@ float gm_value(vec3 p, uint seed) {
 }
 float gm_fbm(vec3 p, uint seed) {
     float h=0.0; float a=0.52;
-    for (int i=0;i<5;i++) { h += gm_value(p,seed+uint(i*17))*a; p=p*2.01+vec3(17,-11,7); a*=0.48; }
-    return h;
+    for(int i=0;i<3;i++){h+=gm_value(p,seed+uint(i*17))*a;p=p*2.01+vec3(17,-11,7);a*=0.48;}
+    return h*1.0957;
+}
+float gm_fbm_warp(vec3 p,uint seed){
+    float h=0.0; float a=0.52;
+    for(int i=0;i<2;i++){h+=gm_value(p,seed+uint(i*17))*a;p=p*2.01+vec3(17,-11,7);a*=0.48;}
+    return h*1.2662;
 }
 float gm_ridged(vec3 p, uint seed) { return 1.0 - abs(gm_fbm(p,seed)); }
 vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
-    return p + vec3(gm_fbm(p+vec3(13.1,7.7,-4.3),seed+101u),
-        gm_fbm(p+vec3(-5.7,19.3,8.9),seed+211u),
-        gm_fbm(p+vec3(9.2,-3.8,23.4),seed+307u))*strength;
+    return p + vec3(gm_fbm_warp(p+vec3(13.1,7.7,-4.3),seed+101u),
+        gm_fbm_warp(p+vec3(-5.7,19.3,8.9),seed+211u),
+        gm_fbm_warp(p+vec3(9.2,-3.8,23.4),seed+307u))*strength;
 }
 float gm_cellular_ridge(vec3 p, uint seed) {
     ivec3 base=ivec3(floor(p)); float f1=1e9; float f2=1e9;
     for(int z=-1;z<=1;z++) for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++) {
         ivec3 c=base+ivec3(x,y,z);
-        vec3 jitter=vec3(gm_rand(c,seed+3u),gm_rand(c,seed+5u),gm_rand(c,seed+7u));
+        vec3 jitter=gm_rand3(c,seed+3u);
         vec3 delta=p-(vec3(c)+vec3(0.25)+jitter*0.50); float d2=dot(delta,delta);
         if(d2<f1){f2=f1;f1=d2;} else if(d2<f2){f2=d2;}
     }
@@ -114,9 +126,9 @@ vec4 landform(float mh,vec4 soil,vec4 surf,vec4 geo,vec4 st,vec4 clim,vec4 hyd){
     float cold=1.0-smoothstep(-12.0,4.0,ctx_temp(clim)); float glacial=clamp(cold*(0.35+altitude*0.75),0.0,1.0);
     float dep=clamp(max(hyd.a,st.b*0.85+st.a*0.9)*(0.5+geo.r*0.35),0.0,1.0); return vec4(mountain,arid,glacial,dep);
 }
-float band_weight(float w,float spacing){float x=clamp((w-spacing*4.0)/max(spacing*4.0,1e-5),0.0,1.0);return x*x*(3.0-2.0*x);}
+float band_weight(float w,float spacing){float fs=spacing*4.0;float x=clamp((w-fs)/max(fs,1e-5),0.0,1.0);return x*x*(3.0-2.0*x);}
 void tangent_basis(vec3 d,out vec3 right,out vec3 north){vec3 bu=abs(d.y)>0.999?vec3(0,0,1):vec3(0,1,0);right=normalize(cross(bu,d));north=normalize(cross(d,right));}
-vec3 flow_world(vec3 d,vec2 xy){vec3 r,n;tangent_basis(d,r,n);vec3 f=r*xy.x+n*xy.y;return dot(f,f)>1e-5?normalize(f):vec3(0);}
+vec3 flow_world(vec3 d,vec2 xy){if(dot(xy,xy)<=1e-5)return vec3(0);vec3 r,n;tangent_basis(d,r,n);return normalize(r*xy.x+n*xy.y);}
 float geomorph(vec3 dir,float mh){
     float radius=params.direction_radius.w, spacing=params.texture_seed.w; uint seed=uint(max(params.texture_seed.z,1.0)); vec3 wm=dir*radius;
     vec4 soil=ctx_soil(dir),surf=ctx_surface(dir),geo=ctx_geology(dir),st=ctx_structure(dir),clim=ctx_climate(dir),hyd=ctx_hydro(dir),w=landform(mh,soil,surf,geo,st,clim,hyd);
@@ -124,8 +136,8 @@ float geomorph(vec3 dir,float mh){
     bw=band_weight(16000.0,spacing); if(bw>0.001){vec3 p=gm_domain_warp(wm/16000.0,seed+11u,0.8);h+=gm_fbm(p,seed+13u)*mix(24.0,125.0,mountain)*bw;}
     bw=band_weight(6000.0,spacing); if(bw>0.001&&mountain>0.08){vec3 p=gm_domain_warp(wm/6000.0,seed+31u,1.1);float cells=gm_cellular_ridge(p,seed+37u),ridge=gm_ridged(p*1.55,seed+41u);h+=(mix(ridge,cells,0.58)*2.0-1.0)*210.0*mountain*hardness*bw;}
     bw=band_weight(1400.0,spacing); if(bw>0.001){vec3 p=gm_domain_warp(wm/1400.0,seed+53u,0.72);h+=((gm_ridged(p*1.25,seed+59u)*2.0-1.0)*72.0*mountain+gm_fbm(p*2.1,seed+61u)*24.0)*bw;}
-    bw=band_weight(420.0,spacing); if(bw>0.001){vec3 f=flow_world(dir,ctx_flow(hyd)),sm=wm;if(dot(f,f)>0.1){float q=dot(sm,f);vec3 along=f*q;sm=along*0.42+(sm-along)*1.45;}vec3 p=gm_domain_warp(sm/420.0,seed+71u,0.55);h-=pow(gm_ridged(p,seed+73u),4.6)*mix(2.0,34.0,hyd.b)*(1.0-dep*0.78)*bw;h+=pow(gm_ridged(p*0.48+vec3(9),seed+79u),2.2)*dep*mix(1.0,12.0,surf.a)*bw;}
-    bw=band_weight(120.0,spacing); if(bw>0.001){h+=gm_fbm(wm/120.0,seed+89u)*4.5*(1.0-glacial*0.6)*bw;float dune=gm_ridged(gm_domain_warp(wm/180.0,seed+97u,0.45),seed+101u);h+=(dune*2.0-1.0)*9.0*arid*soil.r*bw;}
+    bw=band_weight(420.0,spacing); if(bw>0.001){vec3 f=flow_world(dir,ctx_flow(hyd)),sm=wm;if(dot(f,f)>0.1){float q=dot(sm,f);vec3 along=f*q;sm=along*0.42+(sm-along)*1.45;}vec3 p=gm_domain_warp(sm/420.0,seed+71u,0.55);h-=pow(gm_ridged(p,seed+73u),4.6)*mix(2.0,34.0,hyd.b)*(1.0-dep*0.78)*bw;if(dep>0.006)h+=pow(gm_ridged(p*0.48+vec3(9),seed+79u),2.2)*dep*mix(1.0,12.0,surf.a)*bw;}
+    bw=band_weight(120.0,spacing); if(bw>0.001){h+=gm_fbm(wm/120.0,seed+89u)*4.5*(1.0-glacial*0.6)*bw;float dw=arid*soil.r;if(dw>0.004){float dune=gm_ridged(gm_domain_warp(wm/180.0,seed+97u,0.45),seed+101u);h+=(dune*2.0-1.0)*9.0*dw*bw;}}
     bw=band_weight(24.0,spacing); if(bw>0.001)h+=gm_value(wm/24.0,seed+109u)*0.9*bw;
     if(glacial>0.01){float ice=gm_fbm(wm/2600.0+vec3(2,-7,5),seed+127u);h=mix(h,h*0.62+ice*52.0,glacial*0.72);} return h;
 }
