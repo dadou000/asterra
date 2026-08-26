@@ -53,6 +53,17 @@ func _show_all_active_sectors() -> void:
 	_apply_debug_center_mask()
 
 
+# Compatibility hardening: if any older/debug code ever calls the historical
+# restore hook, route it through this final filter rather than resurrecting every
+# physical ring. No current production path needs this method.
+func _restore_dynamic_ring_window() -> void:
+	_init_debug_level_mask()
+	var prefix: int = clampi(_debug_source_ring_prefix, 0, _physical_ring_count)
+	if prefix == 0 and _physical_ring_count > 0 and not _view_surface_culled:
+		prefix = _physical_ring_count
+	_apply_debug_level_submission(prefix)
+
+
 func _apply_debug_level_submission(source_prefix: int) -> void:
 	_init_debug_level_mask()
 	source_prefix = clampi(source_prefix, 0, _physical_ring_count)
@@ -118,7 +129,9 @@ func debug_level_count() -> int:
 
 
 func debug_submitted_levels() -> Array[int]:
-	return _debug_submitted_levels.duplicate()
+	var out: Array[int] = []
+	out.assign(_debug_submitted_levels)
+	return out
 
 
 func debug_enabled_levels() -> Array[int]:
@@ -141,6 +154,10 @@ func _refresh_debug_level_submission() -> void:
 
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
+	var center_submitted := not _view_surface_culled and debug_level_enabled(_active_min_level)
+	var ring_submitted := not _view_surface_culled and not _debug_submitted_levels.is_empty()
+	var batch_kinds := (1 if center_submitted else 0) + (1 if ring_submitted else 0)
+	out["draw_batches"] = _visible_sector_count * batch_kinds
 	out["debug_level_filter"] = true
 	out["debug_enabled_levels"] = debug_enabled_levels()
 	out["submitted_logical_levels"] = debug_submitted_levels()
