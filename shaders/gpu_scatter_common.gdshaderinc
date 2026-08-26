@@ -1,7 +1,7 @@
 // Shared deterministic GPU terrain-scatter candidate pipeline.
 //
 // The CPU only moves a snapped candidate window and binds immutable planet maps.
-// Candidate position, jitter, terrain height, material suitability, scale and
+// Candidate position, jitter, terrain height, biome/material suitability, scale and
 // acceptance are derived on the GPU from absolute tangent-grid cells + world seed.
 //
 // Include order required by callers:
@@ -127,10 +127,7 @@ float sg_grass_suitability(float terrain_h, vec4 soil, vec4 surface, vec4 geolog
 	float wetland_penalty = mix(1.0, 0.48, structure.a);
 	float mud_penalty = 1.0 - secondary.r * 0.72;
 	float snow_penalty = 1.0 - secondary.g;
-	float bare_penalty = 1.0 - sc_is_biome(biome, 18.0);
-	float ice_penalty = 1.0 - sc_is_biome(biome, 3.0);
-	return clamp(primary.b * wetland_penalty * mud_penalty * snow_penalty
-		* bare_penalty * ice_penalty * land, 0.0, 1.0);
+	return clamp(primary.b * wetland_penalty * mud_penalty * snow_penalty * land, 0.0, 1.0);
 }
 
 float sg_geologic_stone_suitability(float terrain_h, vec4 soil, vec4 surface,
@@ -165,6 +162,11 @@ float sg_river_stone_suitability(float terrain_h, vec4 soil, vec4 surface,
 
 float sg_acceptance(float suitability, uint h, int instance_id) {
 	float threshold = clamp(suitability * u_scatter_density * sg_window_fade(instance_id), 0.0, 0.985);
-	float r = sg_hash01(gm_hash(ivec3(int(h & 0x0000ffffu), instance_id, u_scatter_seed), h ^ 0x9e37u));
+	// Never include instance_id in the random decision. A world cell moves to a
+	// different MultiMesh slot whenever the snapped window advances; hashing that
+	// slot made the same physical cell randomly appear/disappear while walking.
+	float r = sg_hash01(gm_hash(
+		ivec3(int(h & 0x0000ffffu), int((h >> 16u) & 0x0000ffffu), u_scatter_seed),
+		h ^ 0x9e37u));
 	return r < threshold && u_scatter_enabled > 0.5 ? 1.0 : 0.0;
 }
