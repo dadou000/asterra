@@ -4,7 +4,7 @@ extends RefCounted
 ## PlanetGrid cell space. This is the canonical world data the roadmap asks for:
 ## it is *not* a scene graph, and nothing here needs to be rendered to exist.
 
-const FORMAT_VERSION := 3
+const FORMAT_VERSION := 4
 
 ## Bedrock families (1.3 "geology first").
 enum Rock {
@@ -25,86 +25,100 @@ const ROCK_CLAY_YIELD := [
 ]
 ## Dry weathered-outcrop colour per family. This is what an orbital image
 ## actually shows wherever soil is thin: pale granite highlands, near-black
-## basalt provinces, red sandstone, white limestone karst. Using one grey ramp
-## for all thirteen is the reason bare ground reads as a single beige wash.
-## Linear albedo, matching BIOME_ALBEDO above rather than the mid-tone greys a
-## palette would use. Dry rock spans roughly four to one from basalt to
-## quartzite, and that spread is most of what makes bare ground legible.
+## basalt provinces, red sandstone, white limestone karst.
 const ROCK_COLORS := [
-	Color(0.335, 0.305, 0.275),   # granite, pale feldspathic
-	Color(0.085, 0.082, 0.080),   # basalt, dark mafic
-	Color(0.105, 0.104, 0.098),   # gabbro
-	Color(0.250, 0.240, 0.232),   # gneiss, banded grey
-	Color(0.175, 0.170, 0.158),   # schist, micaceous
-	Color(0.365, 0.230, 0.140),   # sandstone, iron-stained red
-	Color(0.155, 0.146, 0.132),   # shale, dark grey-brown
-	Color(0.415, 0.400, 0.352),   # limestone, pale carbonate
-	Color(0.375, 0.358, 0.318),   # dolomite
-	Color(0.265, 0.222, 0.180),   # conglomerate
-	Color(0.455, 0.442, 0.422),   # quartzite, near-white
-	Color(0.330, 0.298, 0.260),   # rhyolitic tuff, pale ash
-	Color(0.120, 0.145, 0.118),   # serpentinite, green-black
+	Color(0.335, 0.305, 0.275),
+	Color(0.085, 0.082, 0.080),
+	Color(0.105, 0.104, 0.098),
+	Color(0.250, 0.240, 0.232),
+	Color(0.175, 0.170, 0.158),
+	Color(0.365, 0.230, 0.140),
+	Color(0.155, 0.146, 0.132),
+	Color(0.415, 0.400, 0.352),
+	Color(0.375, 0.358, 0.318),
+	Color(0.265, 0.222, 0.180),
+	Color(0.455, 0.442, 0.422),
+	Color(0.330, 0.298, 0.260),
+	Color(0.120, 0.145, 0.118),
 ]
 
+## A biome is the ecological/climatic community occupying the substrate. Rivers
+## and lakes are deliberately absent: they are hydrology attributes which can
+## cross or occupy any terrestrial biome without destroying the biome underneath.
 enum Biome {
-	OCEAN, SHELF_SEA, LAKE, ICE_CAP, TUNDRA, TAIGA, COLD_DESERT,
+	OCEAN, SHELF_SEA, ICE_CAP, TUNDRA, TAIGA, COLD_DESERT,
 	TEMPERATE_GRASSLAND, TEMPERATE_FOREST, TEMPERATE_RAINFOREST, MEDITERRANEAN,
 	STEPPE, HOT_DESERT, SAVANNA, TROPICAL_SEASONAL_FOREST, TROPICAL_RAINFOREST,
-	WETLAND, ALPINE, BARE_ROCK, RIVER,
+	WETLAND, ALPINE, BARE_ROCK,
 }
 const BIOME_NAMES := [
-	"Ocean", "Shelf sea", "Lake", "Ice cap", "Tundra", "Taiga", "Cold desert",
+	"Ocean", "Shelf sea", "Ice cap", "Tundra", "Taiga", "Cold desert",
 	"Temperate grassland", "Temperate forest", "Temperate rainforest", "Mediterranean",
 	"Steppe", "Hot desert", "Savanna", "Tropical seasonal forest", "Tropical rainforest",
-	"Wetland", "Alpine", "Bare rock", "River",
+	"Wetland", "Alpine", "Bare rock",
 ]
-## Visible-band RGB reflectance per biome, linear. This is what the renderer
-## uses; BIOME_COLORS below stays as it is because a map has to be readable and
-## a planet has to be real, and those are different jobs.
-##
-## These are deliberately NOT the published broadband albedos. Roughly half of a
-## canopy's broadband reflectance is near-infrared -- a leaf reflects about 50%
-## of the NIR and under 10% of the red, which is the entire basis of vegetation
-## indices from orbit. Feeding the broadband figure into an RGB renderer
-## therefore paints foliage far too bright and, worse, far too red, because the
-## invisible NIR gets spread across channels that should be showing chlorophyll
-## absorption. The result is the olive-khaki wash that procedural planets
-## characteristically have. In the visible, foliage is both darker and much more
-## saturated than its albedo suggests.
-##
-## Mineral surfaces have no such split, so those stay close to their broadband
-## values: dry sand near 40%, dark basalt near 8%, fresh snow near 80%.
+## Visible-band RGB reflectance per biome, linear.
 const BIOME_ALBEDO := [
 	Color(0.012, 0.026, 0.050),   # ocean
 	Color(0.020, 0.058, 0.090),   # shelf sea
-	Color(0.022, 0.050, 0.072),   # lake
 	Color(0.720, 0.760, 0.800),   # ice cap
-	Color(0.105, 0.100, 0.068),   # tundra, lichen and moss over peat
-	Color(0.028, 0.055, 0.030),   # taiga, closed conifer -- very dark and dull
+	Color(0.105, 0.100, 0.068),   # tundra
+	Color(0.028, 0.055, 0.030),   # taiga
 	Color(0.260, 0.245, 0.205),   # cold desert
-	Color(0.115, 0.145, 0.055),   # temperate grassland, part green part straw
+	Color(0.115, 0.145, 0.055),   # temperate grassland
 	Color(0.035, 0.095, 0.032),   # temperate forest
 	Color(0.026, 0.072, 0.030),   # temperate rainforest
-	Color(0.105, 0.110, 0.055),   # mediterranean scrub, grey-green
+	Color(0.105, 0.110, 0.055),   # mediterranean scrub
 	Color(0.185, 0.165, 0.080),   # steppe
 	Color(0.380, 0.300, 0.180),   # hot desert
-	Color(0.215, 0.185, 0.080),   # savanna, dry grass with scattered canopy
+	Color(0.215, 0.185, 0.080),   # savanna
 	Color(0.045, 0.105, 0.038),   # tropical seasonal forest
 	Color(0.026, 0.080, 0.028),   # tropical rainforest
 	Color(0.055, 0.085, 0.048),   # wetland
 	Color(0.245, 0.240, 0.230),   # alpine scree
 	Color(0.215, 0.205, 0.190),   # bare rock
-	Color(0.030, 0.055, 0.070),   # river
 ]
 const BIOME_COLORS := [
-	Color(0.05, 0.13, 0.33), Color(0.10, 0.30, 0.50), Color(0.16, 0.38, 0.62),
+	Color(0.05, 0.13, 0.33), Color(0.10, 0.30, 0.50),
 	Color(0.93, 0.96, 1.00), Color(0.62, 0.66, 0.58), Color(0.16, 0.33, 0.22),
 	Color(0.62, 0.60, 0.52), Color(0.62, 0.68, 0.34), Color(0.20, 0.44, 0.20),
 	Color(0.12, 0.40, 0.26), Color(0.55, 0.58, 0.26), Color(0.68, 0.63, 0.36),
 	Color(0.83, 0.73, 0.47), Color(0.72, 0.66, 0.28), Color(0.32, 0.50, 0.20),
 	Color(0.10, 0.36, 0.16), Color(0.28, 0.44, 0.34), Color(0.55, 0.55, 0.58),
-	Color(0.44, 0.42, 0.40), Color(0.20, 0.42, 0.66),
+	Color(0.44, 0.42, 0.40),
 ]
+
+## Physical plate-margin kinematics. This is separate from geology/fault
+## intensity: a transform margin can have a very strong fault while almost no
+## normal uplift.
+enum TectonicBoundary {
+	INTERIOR, CONVERGENT, DIVERGENT, TRANSFORM,
+}
+const TECTONIC_BOUNDARY_NAMES := ["Interior", "Convergent", "Divergent", "Transform"]
+const TECTONIC_BOUNDARY_COLORS := [
+	Color(0.14, 0.14, 0.16), Color(0.95, 0.28, 0.18),
+	Color(0.20, 0.55, 0.95), Color(0.95, 0.72, 0.20),
+]
+
+## Exceptional persistent landforms. A landmark is metadata layered on top of
+## terrain, geology, hydrology and biome rather than another biome category.
+enum Landmark {
+	NONE, STRATOVOLCANO, SHIELD_VOLCANO, VOLCANIC_ISLAND, RIFT_VOLCANIC_FIELD,
+}
+const LANDMARK_NAMES := [
+	"None", "Stratovolcano", "Shield volcano", "Volcanic island", "Rift volcanic field",
+]
+const LANDMARK_COLORS := [
+	Color(0.08, 0.08, 0.09), Color(0.95, 0.22, 0.08), Color(0.92, 0.48, 0.12),
+	Color(0.90, 0.12, 0.48), Color(0.72, 0.25, 0.92),
+]
+
+enum HydrologyAttribute {
+	RIVER = 1,
+	LAKE = 2,
+	FLOODPLAIN = 4,
+	WETLAND = 8,
+}
 
 var cfg: GenConfig
 var grid: PlanetGrid
@@ -112,15 +126,21 @@ var grid: PlanetGrid
 # --- macro geography ---
 var plate := PackedByteArray()
 var plate_boundary := PackedFloat32Array()   ## 0..1 proximity to a plate margin
-var uplift := PackedFloat32Array()           ## m/Myr orogenic forcing
+var plate_boundary_type := PackedByteArray() ## TectonicBoundary
+var uplift := PackedFloat32Array()           ## signed normal plate-motion forcing
 var base_elev := PackedFloat32Array()        ## pre-erosion elevation, m rel. sea level
 var elev := PackedFloat32Array()             ## post-erosion elevation, m rel. sea level
+
+# --- exceptional landforms ---
+var landmark := PackedByteArray()            ## Landmark kind, NONE outside influence
+var landmark_id := PackedInt32Array()        ## 0 none; positive stable generated feature id
+var landmark_strength := PackedFloat32Array() ## 0..1 local influence/core proximity
 
 # --- geology ---
 var rock := PackedByteArray()                ## surface bedrock family
 var strata_phase := PackedFloat32Array()     ## vertical offset of the layer stack, m
 var strata_dip := PackedFloat32Array()       ## radians of bedding dip
-var erodibility := PackedFloat32Array()      ## continuous rock erodibility (bilinear-safe copy of ROCK_ERODIBILITY)
+var erodibility := PackedFloat32Array()      ## continuous rock erodibility
 var fault := PackedFloat32Array()            ## 0..1 fault/fold intensity
 var basin := PackedFloat32Array()            ## 0..1 sedimentary basin membership
 var ore_iron := PackedFloat32Array()
@@ -170,7 +190,7 @@ var corridor := PackedFloat32Array()         ## 0..1 natural transport corridor 
 var sea_level: float = 0.0                   ## always 0 by construction; kept explicit
 
 const FLOAT_FIELDS := [
-	"plate_boundary", "uplift", "base_elev", "elev",
+	"plate_boundary", "uplift", "base_elev", "elev", "landmark_strength",
 	"strata_phase", "strata_dip", "erodibility", "fault", "basin",
 	"ore_iron", "ore_copper", "coal", "petroleum", "gas_fraction", "quartz", "aquifer",
 	"sediment", "flow_accum", "discharge", "lake_level", "river_width", "floodplain", "wetland",
@@ -178,8 +198,10 @@ const FLOAT_FIELDS := [
 	"soil_depth", "soil_sand", "soil_silt", "soil_clay", "soil_organic", "soil_moisture",
 	"vegetation", "relief", "suitability", "corridor",
 ]
-const BYTE_FIELDS := ["plate", "rock", "flow_dir", "stream_order", "biome"]
-const INT_FIELDS := ["watershed"]
+const BYTE_FIELDS := [
+	"plate", "plate_boundary_type", "landmark", "rock", "flow_dir", "stream_order", "biome",
+]
+const INT_FIELDS := ["landmark_id", "watershed"]
 
 func _init(p_cfg: GenConfig, p_grid: PlanetGrid) -> void:
 	cfg = p_cfg
@@ -241,10 +263,28 @@ static func load_from(path: String, p_cfg: GenConfig) -> PlanetFields:
 	f.close()
 	return fields
 
+func is_lake(c: int) -> bool:
+	return lake_level[c] > -1e8
+
+func has_river(c: int, min_width_m: float = 0.0) -> bool:
+	return river_width[c] > min_width_m
+
+func hydrology_flags(c: int) -> int:
+	var flags := 0
+	if has_river(c):
+		flags |= HydrologyAttribute.RIVER
+	if is_lake(c):
+		flags |= HydrologyAttribute.LAKE
+	if floodplain[c] > 0.15:
+		flags |= HydrologyAttribute.FLOODPLAIN
+	if wetland[c] > 0.15:
+		flags |= HydrologyAttribute.WETLAND
+	return flags
+
 func is_water(c: int) -> bool:
-	return elev[c] < 0.0 or lake_level[c] > -1e8
+	return elev[c] < 0.0 or is_lake(c)
 
 func surface_level(c: int) -> float:
-	if lake_level[c] > -1e8:
+	if is_lake(c):
 		return lake_level[c]
-	return maxf(elev[c], 0.0) if elev[c] < 0.0 else elev[c]
+	return 0.0 if elev[c] < 0.0 else elev[c]
