@@ -361,7 +361,7 @@ func _build_ui() -> void:
 	_speed_slider.max_value = float(WARP_SPEEDS.size() - 1)
 	_speed_slider.step = 1.0
 	_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
-	_speed_slider.tooltip_text = "Discrete weather warp: pause, 0.25×, 0.5×, 1×, then powers of two to 8192×. Dragging previews and commits on release."
+	_speed_slider.tooltip_text = "Discrete weather warp: pause, 0.25×, 0.5×, 1×, then powers of two to 8192×. Dragging applies continuously, even outside the slider."
 	_speed_slider.value_changed.connect(_on_speed_slider_changed)
 	warp_row.add_child(_speed_slider)
 	var reset_speed := Button.new()
@@ -752,146 +752,146 @@ func _on_layer_selected(index: int) -> void:
 
 
 func _on_flow_toggled(enabled: bool) -> void:
-\tif _wind_particles != null:
-\t\t_wind_particles.visible = enabled
+	if _wind_particles != null:
+		_wind_particles.visible = enabled
 
 
 func _on_world_vectors_toggled(enabled: bool) -> void:
-\t_world_vectors_enabled = enabled
-\tif enabled:
-\t\t_ensure_world_vector_overlay()
-\t\t_world_vector_last_revision = -1
-\t\t_world_vector_last_layer = -1
-\t\t_service_world_vectors()
-\telif _world_vector_root != null and is_instance_valid(_world_vector_root):
-\t\t_world_vector_root.visible = false
+	_world_vectors_enabled = enabled
+	if enabled:
+		_ensure_world_vector_overlay()
+		_world_vector_last_revision = -1
+		_world_vector_last_layer = -1
+		_service_world_vectors()
+	elif _world_vector_root != null and is_instance_valid(_world_vector_root):
+		_world_vector_root.visible = false
 
 
 func _make_world_vector_arrow_mesh() -> ArrayMesh:
-\tvar mesh := ArrayMesh.new()
-\tvar arrays := []
-\tarrays.resize(Mesh.ARRAY_MAX)
-\t# Unit arrow along +X. The shader scales X to vector magnitude and Y to a
-\t# fixed fraction of one 2.2 km weather cell.
-\tarrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
-\t\tVector3(0.00, -0.09, 0.0), Vector3(0.66, -0.09, 0.0),
-\t\tVector3(0.66,  0.09, 0.0), Vector3(0.00,  0.09, 0.0),
-\t\tVector3(0.57, -0.30, 0.0), Vector3(1.00,  0.00, 0.0),
-\t\tVector3(0.57,  0.30, 0.0),
-\t])
-\tarrays[Mesh.ARRAY_INDEX] = PackedInt32Array([
-\t\t0, 1, 2, 0, 2, 3,
-\t\t4, 5, 6,
-\t])
-\tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-\treturn mesh
+	var mesh := ArrayMesh.new()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	# Unit arrow along +X. The shader scales X to vector magnitude and Y to a
+	# fixed fraction of one 2.2 km weather cell.
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+		Vector3(0.00, -0.09, 0.0), Vector3(0.66, -0.09, 0.0),
+		Vector3(0.66,  0.09, 0.0), Vector3(0.00,  0.09, 0.0),
+		Vector3(0.57, -0.30, 0.0), Vector3(1.00,  0.00, 0.0),
+		Vector3(0.57,  0.30, 0.0),
+	])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([
+		0, 1, 2, 0, 2, 3,
+		4, 5, 6,
+	])
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 
 func _ensure_world_vector_overlay() -> void:
-\tvar scene := get_tree().current_scene
-\tif scene == null:
-\t\treturn
-\tif _world_vector_root != null and is_instance_valid(_world_vector_root):
-\t\tif _world_vector_root.get_parent() == scene:
-\t\t\treturn
-\t\t_world_vector_root.queue_free()
+	var scene := get_tree().current_scene
+	if scene == null:
+		return
+	if _world_vector_root != null and is_instance_valid(_world_vector_root):
+		if _world_vector_root.get_parent() == scene:
+			return
+		_world_vector_root.queue_free()
 
-\t_world_vector_root = Node3D.new()
-\t_world_vector_root.name = "WeatherWindVectorDebug"
-\tscene.add_child(_world_vector_root)
+	_world_vector_root = Node3D.new()
+	_world_vector_root.name = "WeatherWindVectorDebug"
+	scene.add_child(_world_vector_root)
 
-\t_world_vector_instances = MultiMeshInstance3D.new()
-\t_world_vector_instances.name = "CellVectors"
-\t_world_vector_instances.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-\t_world_vector_root.add_child(_world_vector_instances)
+	_world_vector_instances = MultiMeshInstance3D.new()
+	_world_vector_instances.name = "CellVectors"
+	_world_vector_instances.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_world_vector_root.add_child(_world_vector_instances)
 
-\t_world_vector_material = ShaderMaterial.new()
-\t_world_vector_material.shader = load("res://shaders/weather_world_wind_vectors.gdshader")
-\tvar arrow := _make_world_vector_arrow_mesh()
-\tarrow.surface_set_material(0, _world_vector_material)
+	_world_vector_material = ShaderMaterial.new()
+	_world_vector_material.shader = load("res://shaders/weather_world_wind_vectors.gdshader")
+	var arrow := _make_world_vector_arrow_mesh()
+	arrow.surface_set_material(0, _world_vector_material)
 
-\tvar multimesh := MultiMesh.new()
-\tmultimesh.transform_format = MultiMesh.TRANSFORM_3D
-\tmultimesh.use_custom_data = true
-\tmultimesh.mesh = arrow
-\tmultimesh.instance_count = WORLD_VECTOR_COUNT
-\t# Shader displacement covers the complete ~422 km curved local nest.
-\tmultimesh.custom_aabb = AABB(Vector3(-270000.0, -270000.0, -270000.0), Vector3(540000.0, 540000.0, 540000.0))
-\tfor y in LOCAL_H:
-\t\tfor x in LOCAL_W:
-\t\t\tvar i := x + y * LOCAL_W
-\t\t\tmultimesh.set_instance_transform(i, Transform3D.IDENTITY)
-\t\t\tmultimesh.set_instance_custom_data(i, Color(
-\t\t\t\t(float(x) + 0.5) / float(LOCAL_W),
-\t\t\t\t(float(y) + 0.5) / float(LOCAL_H), 0.0, 1.0))
-\t_world_vector_instances.multimesh = multimesh
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.use_custom_data = true
+	multimesh.mesh = arrow
+	multimesh.instance_count = WORLD_VECTOR_COUNT
+	# Shader displacement covers the complete ~422 km curved local nest.
+	multimesh.custom_aabb = AABB(Vector3(-270000.0, -270000.0, -270000.0), Vector3(540000.0, 540000.0, 540000.0))
+	for y in LOCAL_H:
+		for x in LOCAL_W:
+			var i := x + y * LOCAL_W
+			multimesh.set_instance_transform(i, Transform3D.IDENTITY)
+			multimesh.set_instance_custom_data(i, Color(
+				(float(x) + 0.5) / float(LOCAL_W),
+				(float(y) + 0.5) / float(LOCAL_H), 0.0, 1.0))
+	_world_vector_instances.multimesh = multimesh
 
-\tvar neutral := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
-\tneutral.fill(Color(0.0, 0.0, 0.0, 1.0))
-\t_world_vector_texture = ImageTexture.create_from_image(neutral)
-\t_world_vector_material.set_shader_parameter("u_local_wind", _world_vector_texture)
-\t_world_vector_material.set_shader_parameter("u_cell_size_m", LOCAL_CELL_M)
-\t_update_world_vector_geometry_uniforms()
+	var neutral := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+	neutral.fill(Color(0.0, 0.0, 0.0, 1.0))
+	_world_vector_texture = ImageTexture.create_from_image(neutral)
+	_world_vector_material.set_shader_parameter("u_local_wind", _world_vector_texture)
+	_world_vector_material.set_shader_parameter("u_cell_size_m", LOCAL_CELL_M)
+	_update_world_vector_geometry_uniforms()
 
 
 func _update_world_vector_geometry_uniforms() -> void:
-\tif _world_vector_material == null:
-\t\treturn
-\tvar center := WeatherSystem.local_center
-\tif center.length_squared() < 0.5:
-\t\tcenter = Vector3.UP
-\tcenter = center.normalized()
-\tvar east := WeatherSystem.local_east.normalized()
-\tvar north := WeatherSystem.local_north.normalized()
-\tvar height := LAYER_HEIGHT_M[clampi(wind_layer, 0, LAYER_HEIGHT_M.size() - 1)]
-\t_world_vector_material.set_shader_parameter("u_center_dir", center)
-\t_world_vector_material.set_shader_parameter("u_local_east", east)
-\t_world_vector_material.set_shader_parameter("u_local_north", north)
-\t_world_vector_material.set_shader_parameter("u_planet_radius_m", PLANET_RADIUS_M)
-\t_world_vector_material.set_shader_parameter("u_local_span_m", WeatherSystem.local_span_m)
-\t_world_vector_material.set_shader_parameter("u_layer_height_m", height)
-\tif _world_vector_root != null and is_instance_valid(_world_vector_root):
-\t\t# Keep the GPU geometry in the live world's floating-origin frame. Cell
-\t\t# offsets remain small floats in the shader while the anchor is rebased here.
-\t\t_world_vector_root.global_position = Frames.to_render(
-\t\t\tVec3D.from_v3(center * (PLANET_RADIUS_M + height + 35.0)))
+	if _world_vector_material == null:
+		return
+	var center := WeatherSystem.local_center
+	if center.length_squared() < 0.5:
+		center = Vector3.UP
+	center = center.normalized()
+	var east := WeatherSystem.local_east.normalized()
+	var north := WeatherSystem.local_north.normalized()
+	var height := LAYER_HEIGHT_M[clampi(wind_layer, 0, LAYER_HEIGHT_M.size() - 1)]
+	_world_vector_material.set_shader_parameter("u_center_dir", center)
+	_world_vector_material.set_shader_parameter("u_local_east", east)
+	_world_vector_material.set_shader_parameter("u_local_north", north)
+	_world_vector_material.set_shader_parameter("u_planet_radius_m", PLANET_RADIUS_M)
+	_world_vector_material.set_shader_parameter("u_local_span_m", WeatherSystem.local_span_m)
+	_world_vector_material.set_shader_parameter("u_layer_height_m", height)
+	if _world_vector_root != null and is_instance_valid(_world_vector_root):
+		# Keep the GPU geometry in the live world's floating-origin frame. Cell
+		# offsets remain small floats in the shader while the anchor is rebased here.
+		_world_vector_root.global_position = Frames.to_render(
+			Vec3D.from_v3(center * (PLANET_RADIUS_M + height + 35.0)))
 
 
 func _service_world_vectors() -> void:
-\t_ensure_world_vector_overlay()
-\tif _world_vector_root == null or not is_instance_valid(_world_vector_root):
-\t\treturn
-\tvar local_active := WeatherSystem.simulation_speed <= WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD
-\t_world_vector_root.visible = _world_vectors_enabled and local_active
-\tif not _world_vector_root.visible:
-\t\treturn
-\t_update_world_vector_geometry_uniforms()
-\tif WeatherSystem.native_worker_busy():
-\t\treturn
-\tif _world_vector_last_revision == WeatherSystem.local_state_revision \
-\t\t\tand _world_vector_last_layer == wind_layer:
-\t\treturn
-\t_ensure_wind_sampler()
-\tvar native: Variant = WeatherSystem.get("_native")
-\tif _wind_sampler == null or native == null or not (native is Object):
-\t\treturn
-\tif not _wind_sampler.has_method(&"get_local_wind_rgba"):
-\t\treturn
-\tvar result: Variant = _wind_sampler.call(&"get_local_wind_rgba", native, wind_layer)
-\tif not (result is PackedFloat32Array):
-\t\treturn
-\tvar values: PackedFloat32Array = result
-\tif values.size() != WORLD_VECTOR_COUNT * 4:
-\t\treturn
-\tvar image := Image.create_from_data(
-\t\tLOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array())
-\tif _world_vector_texture == null:
-\t\t_world_vector_texture = ImageTexture.create_from_image(image)
-\telse:
-\t\t_world_vector_texture.update(image)
-\t_world_vector_material.set_shader_parameter("u_local_wind", _world_vector_texture)
-\t_world_vector_last_revision = WeatherSystem.local_state_revision
-\t_world_vector_last_layer = wind_layer
+	_ensure_world_vector_overlay()
+	if _world_vector_root == null or not is_instance_valid(_world_vector_root):
+		return
+	var local_active := WeatherSystem.simulation_speed <= WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD
+	_world_vector_root.visible = _world_vectors_enabled and local_active
+	if not _world_vector_root.visible:
+		return
+	_update_world_vector_geometry_uniforms()
+	if WeatherSystem.native_worker_busy():
+		return
+	if _world_vector_last_revision == WeatherSystem.local_state_revision \
+			and _world_vector_last_layer == wind_layer:
+		return
+	_ensure_wind_sampler()
+	var native: Variant = WeatherSystem.get("_native")
+	if _wind_sampler == null or native == null or not (native is Object):
+		return
+	if not _wind_sampler.has_method(&"get_local_wind_rgba"):
+		return
+	var result: Variant = _wind_sampler.call(&"get_local_wind_rgba", native, wind_layer)
+	if not (result is PackedFloat32Array):
+		return
+	var values: PackedFloat32Array = result
+	if values.size() != WORLD_VECTOR_COUNT * 4:
+		return
+	var image := Image.create_from_data(
+		LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array())
+	if _world_vector_texture == null:
+		_world_vector_texture = ImageTexture.create_from_image(image)
+	else:
+		_world_vector_texture.update(image)
+	_world_vector_material.set_shader_parameter("u_local_wind", _world_vector_texture)
+	_world_vector_last_revision = WeatherSystem.local_state_revision
+	_world_vector_last_layer = wind_layer
 
 
 func _update_product() -> void:
@@ -1097,62 +1097,62 @@ func _find_player(root: Node) -> AsterraPlayer:
 
 
 func _speed_slider_contains(point: Vector2) -> bool:
-\treturn _speed_slider != null and _speed_slider.get_global_rect().has_point(point)
+	return _speed_slider != null and _speed_slider.get_global_rect().has_point(point)
 
 
 func _set_speed_slider_from_pointer(global_x: float) -> void:
-\tif _speed_slider == null:
-\t\treturn
-\tvar rect := _speed_slider.get_global_rect()
-\tif rect.size.x <= 1.0:
-\t\treturn
-\tvar t := clampf((global_x - rect.position.x) / rect.size.x, 0.0, 1.0)
-\tvar raw := lerpf(_speed_slider.min_value, _speed_slider.max_value, t)
-\tvar snapped := round(raw / _speed_slider.step) * _speed_slider.step
-\t_speed_slider.value = clampf(snapped, _speed_slider.min_value, _speed_slider.max_value)
+	if _speed_slider == null:
+		return
+	var rect := _speed_slider.get_global_rect()
+	if rect.size.x <= 1.0:
+		return
+	var t := clampf((global_x - rect.position.x) / rect.size.x, 0.0, 1.0)
+	var raw := lerpf(_speed_slider.min_value, _speed_slider.max_value, t)
+	var snapped := round(raw / _speed_slider.step) * _speed_slider.step
+	_speed_slider.value = clampf(snapped, _speed_slider.min_value, _speed_slider.max_value)
 
 
 func _on_speed_slider_changed(slider_value: float) -> void:
-\t# Apply every step immediately. The previous implementation only committed on
-\t# drag_ended, which made the control appear broken and could miss a release
-\t# after the pointer left the knob.
-\tvar speed := _slider_to_speed(slider_value)
-\tWeatherSystem.set_simulation_speed(speed)
-\t_update_speed_label(speed)
+	# Apply every step immediately. The previous implementation only committed on
+	# drag_ended, which made the control appear broken and could miss a release
+	# after the pointer left the knob.
+	var speed := _slider_to_speed(slider_value)
+	WeatherSystem.set_simulation_speed(speed)
+	_update_speed_label(speed)
 
 
 func _on_external_speed_changed(value: float) -> void:
-\tif _speed_slider != null and not _speed_slider_dragging:
-\t\t_speed_slider.set_value_no_signal(_speed_to_slider(value))
-\t_update_speed_label(value)
+	if _speed_slider != null and not _speed_slider_dragging:
+		_speed_slider.set_value_no_signal(_speed_to_slider(value))
+	_update_speed_label(value)
 
 
 func _step_warp(steps: int) -> void:
-\tvar slider_value := clampf(
-\t\t_speed_to_slider(WeatherSystem.simulation_speed) + float(steps),
-\t\t0.0, float(WARP_SPEEDS.size() - 1))
-\tif _speed_slider != null:
-\t\t_speed_slider.value = slider_value
-\telse:
-\t\tWeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+	var slider_value := clampf(
+		_speed_to_slider(WeatherSystem.simulation_speed) + float(steps),
+		0.0, float(WARP_SPEEDS.size() - 1))
+	if _speed_slider != null:
+		_speed_slider.value = slider_value
+	else:
+		WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
 
 
 func _slider_to_speed(slider_value: float) -> float:
-\tvar index := clampi(int(round(slider_value)), 0, WARP_SPEEDS.size() - 1)
-\treturn WARP_SPEEDS[index]
+	var index := clampi(int(round(slider_value)), 0, WARP_SPEEDS.size() - 1)
+	return WARP_SPEEDS[index]
 
 
 func _speed_to_slider(speed: float) -> float:
-\tif speed <= 0.01:
-\t\treturn 0.0
-\tvar best_index := 1
-\tvar best_error := 1.0e30
-\tfor i in range(1, WARP_SPEEDS.size()):
-\t\tvar error := absf(log(maxf(speed, 0.001)) - log(WARP_SPEEDS[i]))
-\t\tif error < best_error:
-\t\t\tbest_error = error
-\t\t\tbest_index = i
-\treturn float(best_index)
+	if speed <= 0.01:
+		return 0.0
+	var best_index := 1
+	var best_error := 1.0e30
+	for i in range(1, WARP_SPEEDS.size()):
+		var error := absf(log(maxf(speed, 0.001)) - log(WARP_SPEEDS[i]))
+		if error < best_error:
+			best_error = error
+			best_index = i
+	return float(best_index)
 
 
 func _update_speed_label(value: float) -> void:
