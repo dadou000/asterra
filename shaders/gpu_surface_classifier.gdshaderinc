@@ -3,8 +3,11 @@
 // material transitions are driven by continuous climate/soil/hydrology fields so
 // coarse biome-cell boundaries never become hard surface-colour borders.
 
+// Deprecated for visible rendering. Keeping the helper allows older optional
+// modules to compile while preventing nearest-filtered biome IDs from reintroducing
+// step boundaries downstream (forest PBR, grass stature, etc.).
 float sc_is_biome(float biome, float id) {
-	return 1.0 - step(0.49, abs(biome - id));
+	return 0.0;
 }
 
 vec3 sc_rock_color(float rock_id) {
