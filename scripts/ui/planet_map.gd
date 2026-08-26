@@ -1,20 +1,15 @@
 class_name PlanetMap
 extends CanvasLayer
-## Whole-planet layer inspector.
-##
-## Renders any baked field as an equirectangular map. Rendering is deliberately
-## spread over multiple frames: a 960x480 map needs ~460k spherical lookups, and
-## doing all of them inside toggle() made the M key appear to stop working while
-## the main thread was busy. The panel now becomes visible immediately and the
-## image fills in under a small frame-time budget.
+## Whole-planet layer inspector. Base environmental classifications, hydrology
+## attributes and exceptional landmarks are intentionally separate map layers.
 
 enum Layer {
-	ELEVATION, PLATES, GEOLOGY, RESOURCES, EROSION, DRAINAGE, WATERSHEDS,
+	ELEVATION, PLATES, GEOLOGY, LANDMARKS, RESOURCES, EROSION, DRAINAGE, WATERSHEDS,
 	TEMPERATURE, PRECIPITATION, WIND, STORMS, SOIL, BIOMES, SUITABILITY, CORRIDORS,
 }
 const LAYER_NAMES := [
-	"Elevation", "Tectonic plates", "Bedrock geology", "Resources",
-	"Sediment & erosion", "Drainage network", "Watersheds",
+	"Elevation", "Tectonic plates / margins", "Bedrock geology", "Landmarks",
+	"Resources", "Sediment & erosion", "Hydrology / drainage", "Watersheds",
 	"Temperature", "Precipitation", "Prevailing winds", "Severe weather",
 	"Soil", "Biomes", "Buildability", "Transport corridors",
 ]
@@ -30,8 +25,6 @@ var marker: Control
 var _player_dir: Vector3 = Vector3(1, 0, 0)
 var _cache: Dictionary = {}
 
-# Incremental renderer state. PlanetFields/PlanetGrid are immutable between
-# adopt/rebake operations, so holding references while a map is built is safe.
 var _render_image: Image
 var _render_layer: int = -1
 var _render_y: int = 0
@@ -66,14 +59,12 @@ func _ready() -> void:
 func _process(_dt: float) -> void:
 	if _render_layer < 0 or _render_image == null:
 		return
-
 	var started: int = Time.get_ticks_usec()
 	while _render_y < H:
 		_render_row(_render_y)
 		_render_y += 1
 		if Time.get_ticks_usec() - started >= RENDER_BUDGET_USEC:
 			break
-
 	if _render_y < H:
 		return
 
@@ -85,9 +76,6 @@ func _process(_dt: float) -> void:
 	_render_image = null
 	_render_fields = null
 	_render_grid = null
-
-	# The player may have changed layers while this one was rendering. Cache the
-	# completed image, but only display it if it is still the requested layer.
 	if visible and completed_layer == layer_index:
 		texture_rect.texture = texture
 		_update_title(false)
@@ -95,8 +83,6 @@ func _process(_dt: float) -> void:
 func toggle() -> void:
 	visible = not visible
 	if visible:
-		# `refresh()` is now non-blocking, so the CanvasLayer is drawn immediately
-		# on this frame instead of waiting for the entire map raster to finish.
 		refresh()
 
 func cycle(step: int) -> void:
@@ -122,8 +108,6 @@ func refresh() -> void:
 
 func invalidate() -> void:
 	_cache.clear()
-	# A rebake replaces the field set. Cancel an in-progress raster so it can
-	# never publish a map made from the old PlanetFields after adopt().
 	_render_layer = -1
 	_render_y = 0
 	_render_image = null
@@ -152,8 +136,6 @@ func _render_row(y: int) -> void:
 		var c: int = _render_grid.dir_to_index(d)
 		_render_image.set_pixel(x, y, _color_for(_render_layer, _render_fields, c))
 
-## Synchronous renderer retained for the offline preview/export test harness.
-## Interactive map rendering uses the incremental path above and never calls this.
 func _render(which: int) -> Image:
 	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
 		return Image.create(1, 1, false, Image.FORMAT_RGB8)
@@ -175,76 +157,127 @@ func _update_title(rendering: bool) -> void:
 
 func _color_for(which: int, f: PlanetFields, c: int) -> Color:
 	var h: float = f.elev[c]
-	var water := h < 0.0
+	var sea := h < 0.0
 	match which:
 		Layer.ELEVATION:
-			if water:
+			if sea:
 				var t := clampf(-h / 5000.0, 0.0, 1.0)
 				return Color(0.02, 0.10, 0.30).lerp(Color(0.25, 0.55, 0.78), 1.0 - t)
 			var t2 := clampf(h / 5200.0, 0.0, 1.0)
-			return Color(0.24, 0.44, 0.20).lerp(Color(0.55, 0.44, 0.30), t2).lerp(
+			var land := Color(0.24, 0.44, 0.20).lerp(Color(0.55, 0.44, 0.30), t2).lerp(
 				Color(0.98, 0.98, 1.0), NoiseKit.smoothstepf(0.62, 1.0, t2))
+			if f.is_lake(c):
+				land = land.lerp(Color(0.18, 0.48, 0.78), 0.82)
+			return land
+
 		Layer.PLATES:
 			var p: int = f.plate[c]
 			var col := Color.from_hsv(fmod(float(p) * 0.137, 1.0), 0.55, 0.85)
-			return col.darkened(0.45) if water else col
+			if sea:
+				col = col.darkened(0.45)
+			var bnd := f.plate_boundary[c]
+			if bnd > 0.08:
+				var bt: int = f.plate_boundary_type[c]
+				col = col.lerp(PlanetFields.TECTONIC_BOUNDARY_COLORS[bt],
+					clampf(bnd * 0.90, 0.0, 0.90))
+			return col
+
 		Layer.GEOLOGY:
-			if water:
+			if sea:
 				return Color(0.06, 0.10, 0.16)
-			return Color.from_hsv(fmod(float(f.rock[c]) * 0.0771 + 0.08, 1.0), 0.52,
+			return Color.from_hsv(
+				fmod(float(f.rock[c]) * 0.0771 + 0.08, 1.0), 0.52,
 				0.45 + 0.4 * float(f.rock[c] % 3) / 2.0)
+
+		Layer.LANDMARKS:
+			var background := Color(0.025, 0.04, 0.065) if sea else Color(0.10, 0.105, 0.10)
+			# Low-intensity margin context makes it obvious why chains occur where
+			# they do without turning the landmark layer into a second plate map.
+			if f.plate_boundary[c] > 0.20:
+				var bt2: int = f.plate_boundary_type[c]
+				background = background.lerp(
+					PlanetFields.TECTONIC_BOUNDARY_COLORS[bt2], f.plate_boundary[c] * 0.16)
+			var lm: int = f.landmark[c]
+			if lm == PlanetFields.Landmark.NONE:
+				return background
+			var strength := clampf(f.landmark_strength[c], 0.0, 1.0)
+			var feature_col: Color = PlanetFields.LANDMARK_COLORS[lm]
+			return background.lerp(feature_col, 0.32 + strength * 0.68)
+
 		Layer.RESOURCES:
-			if water:
+			if sea:
 				return Color(0.05, 0.08, 0.12)
-			return Color(clampf(f.ore_iron[c] * 1.6 + f.ore_copper[c] * 0.4, 0, 1),
+			return Color(
+				clampf(f.ore_iron[c] * 1.6 + f.ore_copper[c] * 0.4, 0, 1),
 				clampf(f.quartz[c] * 1.8, 0, 1),
 				clampf(f.petroleum[c] * 1.4 + f.coal[c] * 0.9, 0, 1))
+
 		Layer.EROSION:
-			if water:
+			if sea:
 				return Color(0.05, 0.08, 0.14)
 			var d1 := clampf(f.sediment[c] / 60.0, 0.0, 1.0)
 			var up := clampf(f.uplift[c] * 2.0, 0.0, 1.0)
 			return Color(0.15 + up * 0.8, 0.25 + d1 * 0.5, 0.2)
+
 		Layer.DRAINAGE:
-			if water:
-				return Color(0.04, 0.07, 0.14)
-			var q: float = f.discharge[c]
-			var t3 := clampf(log(maxf(q, 0.01)) / 9.0 + 0.35, 0.0, 1.0)
-			var land := Color(0.16, 0.17, 0.16).lerp(Color(0.42, 0.42, 0.40), clampf(h / 3000.0, 0, 1))
-			return land.lerp(Color(0.25, 0.62, 1.0), NoiseKit.smoothstepf(0.42, 0.95, t3))
+			if sea:
+				return Color(0.025, 0.065, 0.16)
+			if f.is_lake(c):
+				return Color(0.10, 0.42, 0.88)
+			var land_hydro := Color(0.17, 0.17, 0.15).lerp(
+				Color(0.28, 0.30, 0.23), clampf(f.wetland[c], 0.0, 1.0) * 0.75)
+			land_hydro = land_hydro.lerp(Color(0.30, 0.42, 0.24),
+				clampf(f.floodplain[c], 0.0, 1.0) * 0.55)
+			if f.river_width[c] <= 0.0:
+				return land_hydro
+			var river := clampf(log(1.0 + f.river_width[c]) / log(2601.0), 0.0, 1.0)
+			return land_hydro.lerp(Color(0.18, 0.58, 1.0), 0.45 + river * 0.55)
+
 		Layer.WATERSHEDS:
-			if water:
+			if sea:
 				return Color(0.05, 0.07, 0.12)
 			var ws: int = f.watershed[c]
-			return Color.from_hsv(fmod(float(absi(HashRNG.hash2(7, ws)) % 997) / 997.0, 1.0), 0.5, 0.85)
+			return Color.from_hsv(
+				fmod(float(absi(HashRNG.hash2(7, ws)) % 997) / 997.0, 1.0), 0.5, 0.85)
+
 		Layer.TEMPERATURE:
 			var t4 := clampf((f.temp_mean[c] + 40.0) / 75.0, 0.0, 1.0)
 			return Color(0.15, 0.30, 0.85).lerp(Color(0.95, 0.85, 0.25), t4).lerp(
 				Color(0.9, 0.2, 0.15), NoiseKit.smoothstepf(0.68, 1.0, t4))
+
 		Layer.PRECIPITATION:
 			var p2 := clampf(f.precip[c] / 2600.0, 0.0, 1.0)
 			return Color(0.70, 0.60, 0.35).lerp(Color(0.05, 0.35, 0.75), p2)
+
 		Layer.WIND:
 			var u := clampf(f.wind_u[c] / 14.0 * 0.5 + 0.5, 0.0, 1.0)
 			var v := clampf(f.wind_v[c] / 8.0 * 0.5 + 0.5, 0.0, 1.0)
 			return Color(u, 0.35, v)
+
 		Layer.STORMS:
 			var s2: float = f.storm_risk[c]
 			return Color(0.06, 0.07, 0.10).lerp(Color(1.0, 0.85, 0.25), s2).lerp(
 				Color(1.0, 0.2, 0.1), NoiseKit.smoothstepf(0.55, 1.0, s2))
+
 		Layer.SOIL:
-			if water:
+			if sea:
 				return Color(0.05, 0.08, 0.13)
-			return Color(clampf(f.soil_sand[c], 0, 1), clampf(f.soil_organic[c] * 2.2, 0, 1),
+			return Color(
+				clampf(f.soil_sand[c], 0, 1), clampf(f.soil_organic[c] * 2.2, 0, 1),
 				clampf(f.soil_clay[c], 0, 1)) * clampf(0.25 + f.soil_depth[c] / 3.0, 0.25, 1.0)
+
 		Layer.BIOMES:
+			# Deliberately no river/lake overlay here. This is the ecological base
+			# layer; inspect Hydrology to see surface-water attributes.
 			return PlanetFields.BIOME_COLORS[f.biome[c]]
+
 		Layer.SUITABILITY:
-			if water:
+			if f.is_water(c):
 				return Color(0.05, 0.08, 0.13)
 			return Color(0.10, 0.10, 0.12).lerp(Color(0.35, 1.0, 0.45), f.suitability[c])
+
 		Layer.CORRIDORS:
-			if water:
+			if f.is_water(c):
 				return Color(0.05, 0.08, 0.13)
 			return Color(0.10, 0.10, 0.12).lerp(Color(1.0, 0.75, 0.25), f.corridor[c])
 	return Color.MAGENTA
