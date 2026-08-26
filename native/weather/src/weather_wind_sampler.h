@@ -14,6 +14,7 @@ protected:
 
 public:
 	PackedFloat32Array get_global_wind_rgba(Object *weather, int layer) const;
+	PackedFloat32Array get_local_wind_rgba(Object *weather, int layer) const;
 };
 
 } // namespace godot

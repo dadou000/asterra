@@ -220,6 +220,7 @@ public:
 	// Native-only read access for zero-copy diagnostics helpers. This is not bound
 	// to Godot; WeatherWindSampler packs only the selected layer into a GPU texture.
 	const Atmosphere &get_global_atmosphere_cpp() const { return global_atm; }
+	const Atmosphere &get_local_atmosphere_cpp() const { return local_atm; }
 };
 
 } // namespace godot

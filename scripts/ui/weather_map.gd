@@ -84,10 +84,20 @@ const LAYER_NAMES := [
 	"L30  ~20.20 km",
 ]
 const FALLBACK_LAYER_SPEED := [1.000, 1.000, 1.000, 1.044, 1.097, 1.158, 1.228, 1.301, 1.383, 1.472, 1.552, 1.637, 1.728, 1.816, 1.899, 1.987, 2.080, 2.134, 2.189, 2.243, 2.298, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340, 2.340]
+const LAYER_HEIGHT_M: Array[float] = [
+	100.0, 250.0, 450.0, 700.0, 1000.0, 1350.0, 1750.0, 2200.0,
+	2700.0, 3250.0, 3850.0, 4500.0, 5200.0, 5950.0, 6750.0, 7600.0,
+	8500.0, 9400.0, 10300.0, 11200.0, 12100.0, 13000.0, 13900.0, 14800.0,
+	15700.0, 16600.0, 17500.0, 18400.0, 19300.0, 20200.0,
+]
 
 const GLOBAL_W := 1024
 const GLOBAL_H := 512
 const PARTICLE_COUNT := 32768
+const LOCAL_W := 192
+const LOCAL_H := 192
+const LOCAL_CELL_M := 2200.0
+const WORLD_VECTOR_COUNT := LOCAL_W * LOCAL_H
 const PLANET_RADIUS_M := 3500000.0
 const FIELD_BUILD_BUDGET_USEC := 2600
 const WARP_SPEEDS: Array[float] = [
@@ -118,11 +128,19 @@ var _globe_material: ShaderMaterial
 var _wind_particles: MultiMeshInstance3D
 var _wind_material: ShaderMaterial
 var _wind_sampler: Object
+var _world_vector_root: Node3D
+var _world_vector_instances: MultiMeshInstance3D
+var _world_vector_material: ShaderMaterial
+var _world_vector_texture: ImageTexture
+var _world_vectors_enabled := false
+var _world_vector_last_revision := -1
+var _world_vector_last_layer := -1
 
 var _panel: PanelContainer
 var _product_select: OptionButton
 var _layer_select: OptionButton
 var _flow_check: CheckButton
+var _world_vector_check: CheckButton
 var _source_label: Label
 var _note_label: Label
 var _cursor_label: Label
@@ -263,7 +281,7 @@ func _build_ui() -> void:
 	_panel.set_anchor(SIDE_BOTTOM, 1.0)
 	_panel.offset_left = 14.0
 	_panel.offset_right = 374.0
-	_panel.offset_top = -324.0
+	_panel.offset_top = -360.0
 	_panel.offset_bottom = -14.0
 	_panel.add_theme_stylebox_override("panel", _panel_style())
 	add_child(_panel)
@@ -324,6 +342,13 @@ func _build_ui() -> void:
 	_flow_check.toggled.connect(_on_flow_toggled)
 	column.add_child(_flow_check)
 
+	_world_vector_check = CheckButton.new()
+	_world_vector_check.text = "World cell wind vectors"
+	_world_vector_check.button_pressed = false
+	_world_vector_check.tooltip_text = "Draw one wind-vector arrow for every 2.2 km cell in the live 192×192 local nest. The selected Height layer controls the arrows."
+	_world_vector_check.toggled.connect(_on_world_vectors_toggled)
+	column.add_child(_world_vector_check)
+
 	var warp_row := HBoxContainer.new()
 	var warp_tag := Label.new()
 	warp_tag.text = "Warp"
@@ -338,8 +363,6 @@ func _build_ui() -> void:
 	_speed_slider.value = _speed_to_slider(WeatherSystem.simulation_speed)
 	_speed_slider.tooltip_text = "Discrete weather warp: pause, 0.25×, 0.5×, 1×, then powers of two to 8192×. Dragging previews and commits on release."
 	_speed_slider.value_changed.connect(_on_speed_slider_changed)
-	_speed_slider.drag_started.connect(_on_speed_slider_drag_started)
-	_speed_slider.drag_ended.connect(_on_speed_slider_drag_ended)
 	warp_row.add_child(_speed_slider)
 	var reset_speed := Button.new()
 	reset_speed.text = "1×"
@@ -470,6 +493,10 @@ func _ensure_particles() -> void:
 
 
 func _process(delta: float) -> void:
+	if _speed_slider_dragging and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_speed_slider_dragging = false
+	if _world_vectors_enabled:
+		_service_world_vectors()
 	if not visible:
 		return
 	_update_camera_inertia(delta)
@@ -533,6 +560,21 @@ func _input(event: InputEvent) -> void:
 	if not visible:
 		return
 	if event is InputEventMouseButton:
+		# Capture the warp pointer ourselves. Godot's Range drag can stop receiving
+		# motion once the pointer leaves the knob/control; this capture keeps the
+		# slider live anywhere on the window until LMB is released.
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed and _speed_slider_contains(event.position):
+				_speed_slider_dragging = true
+				_speed_slider.grab_focus()
+				_set_speed_slider_from_pointer(event.position.x)
+				get_viewport().set_input_as_handled()
+				return
+			elif not event.pressed and _speed_slider_dragging:
+				_set_speed_slider_from_pointer(event.position.x)
+				_speed_slider_dragging = false
+				get_viewport().set_input_as_handled()
+				return
 		var over_panel := _panel != null and _panel.get_global_rect().has_point(event.position)
 		if event.pressed and over_panel:
 			return
@@ -555,6 +597,9 @@ func _input(event: InputEvent) -> void:
 			if event.pressed:
 				_place_pin()
 			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _speed_slider_dragging:
+		_set_speed_slider_from_pointer(event.position.x)
+		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion and _dragging:
 		var sensitivity := 0.0060 * clampf(_camera_distance / 2.7, 0.34, 1.25)
 		_camera_yaw -= event.relative.x * sensitivity
@@ -570,6 +615,7 @@ func _input(event: InputEvent) -> void:
 func _set_open(opened: bool) -> void:
 	visible = opened
 	_dragging = false
+	_speed_slider_dragging = false
 	if opened:
 		_free_mouse()
 		_ensure_particles()
@@ -697,14 +743,155 @@ func _on_product_selected(index: int) -> void:
 func _on_layer_selected(index: int) -> void:
 	wind_layer = clampi(index, 0, LAYER_NAMES.size() - 1)
 	_last_wind_revision = -1
+	_world_vector_last_revision = -1
+	_world_vector_last_layer = -1
+	_update_world_vector_geometry_uniforms()
 	if not _live_wind_available:
 		_wind_fallback_ready = false
 		_begin_field_build_if_needed(true)
 
 
 func _on_flow_toggled(enabled: bool) -> void:
-	if _wind_particles != null:
-		_wind_particles.visible = enabled
+\tif _wind_particles != null:
+\t\t_wind_particles.visible = enabled
+
+
+func _on_world_vectors_toggled(enabled: bool) -> void:
+\t_world_vectors_enabled = enabled
+\tif enabled:
+\t\t_ensure_world_vector_overlay()
+\t\t_world_vector_last_revision = -1
+\t\t_world_vector_last_layer = -1
+\t\t_service_world_vectors()
+\telif _world_vector_root != null and is_instance_valid(_world_vector_root):
+\t\t_world_vector_root.visible = false
+
+
+func _make_world_vector_arrow_mesh() -> ArrayMesh:
+\tvar mesh := ArrayMesh.new()
+\tvar arrays := []
+\tarrays.resize(Mesh.ARRAY_MAX)
+\t# Unit arrow along +X. The shader scales X to vector magnitude and Y to a
+\t# fixed fraction of one 2.2 km weather cell.
+\tarrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+\t\tVector3(0.00, -0.09, 0.0), Vector3(0.66, -0.09, 0.0),
+\t\tVector3(0.66,  0.09, 0.0), Vector3(0.00,  0.09, 0.0),
+\t\tVector3(0.57, -0.30, 0.0), Vector3(1.00,  0.00, 0.0),
+\t\tVector3(0.57,  0.30, 0.0),
+\t])
+\tarrays[Mesh.ARRAY_INDEX] = PackedInt32Array([
+\t\t0, 1, 2, 0, 2, 3,
+\t\t4, 5, 6,
+\t])
+\tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+\treturn mesh
+
+
+func _ensure_world_vector_overlay() -> void:
+\tvar scene := get_tree().current_scene
+\tif scene == null:
+\t\treturn
+\tif _world_vector_root != null and is_instance_valid(_world_vector_root):
+\t\tif _world_vector_root.get_parent() == scene:
+\t\t\treturn
+\t\t_world_vector_root.queue_free()
+
+\t_world_vector_root = Node3D.new()
+\t_world_vector_root.name = "WeatherWindVectorDebug"
+\tscene.add_child(_world_vector_root)
+
+\t_world_vector_instances = MultiMeshInstance3D.new()
+\t_world_vector_instances.name = "CellVectors"
+\t_world_vector_instances.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+\t_world_vector_root.add_child(_world_vector_instances)
+
+\t_world_vector_material = ShaderMaterial.new()
+\t_world_vector_material.shader = load("res://shaders/weather_world_wind_vectors.gdshader")
+\tvar arrow := _make_world_vector_arrow_mesh()
+\tarrow.surface_set_material(0, _world_vector_material)
+
+\tvar multimesh := MultiMesh.new()
+\tmultimesh.transform_format = MultiMesh.TRANSFORM_3D
+\tmultimesh.use_custom_data = true
+\tmultimesh.mesh = arrow
+\tmultimesh.instance_count = WORLD_VECTOR_COUNT
+\t# Shader displacement covers the complete ~422 km curved local nest.
+\tmultimesh.custom_aabb = AABB(Vector3(-270000.0, -270000.0, -270000.0), Vector3(540000.0, 540000.0, 540000.0))
+\tfor y in LOCAL_H:
+\t\tfor x in LOCAL_W:
+\t\t\tvar i := x + y * LOCAL_W
+\t\t\tmultimesh.set_instance_transform(i, Transform3D.IDENTITY)
+\t\t\tmultimesh.set_instance_custom_data(i, Color(
+\t\t\t\t(float(x) + 0.5) / float(LOCAL_W),
+\t\t\t\t(float(y) + 0.5) / float(LOCAL_H), 0.0, 1.0))
+\t_world_vector_instances.multimesh = multimesh
+
+\tvar neutral := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+\tneutral.fill(Color(0.0, 0.0, 0.0, 1.0))
+\t_world_vector_texture = ImageTexture.create_from_image(neutral)
+\t_world_vector_material.set_shader_parameter("u_local_wind", _world_vector_texture)
+\t_world_vector_material.set_shader_parameter("u_cell_size_m", LOCAL_CELL_M)
+\t_update_world_vector_geometry_uniforms()
+
+
+func _update_world_vector_geometry_uniforms() -> void:
+\tif _world_vector_material == null:
+\t\treturn
+\tvar center := WeatherSystem.local_center
+\tif center.length_squared() < 0.5:
+\t\tcenter = Vector3.UP
+\tcenter = center.normalized()
+\tvar east := WeatherSystem.local_east.normalized()
+\tvar north := WeatherSystem.local_north.normalized()
+\tvar height := LAYER_HEIGHT_M[clampi(wind_layer, 0, LAYER_HEIGHT_M.size() - 1)]
+\t_world_vector_material.set_shader_parameter("u_center_dir", center)
+\t_world_vector_material.set_shader_parameter("u_local_east", east)
+\t_world_vector_material.set_shader_parameter("u_local_north", north)
+\t_world_vector_material.set_shader_parameter("u_planet_radius_m", PLANET_RADIUS_M)
+\t_world_vector_material.set_shader_parameter("u_local_span_m", WeatherSystem.local_span_m)
+\t_world_vector_material.set_shader_parameter("u_layer_height_m", height)
+\tif _world_vector_root != null and is_instance_valid(_world_vector_root):
+\t\t# Keep the GPU geometry in the live world's floating-origin frame. Cell
+\t\t# offsets remain small floats in the shader while the anchor is rebased here.
+\t\t_world_vector_root.global_position = Frames.to_render(
+\t\t\tVec3D.from_v3(center * (PLANET_RADIUS_M + height + 35.0)))
+
+
+func _service_world_vectors() -> void:
+\t_ensure_world_vector_overlay()
+\tif _world_vector_root == null or not is_instance_valid(_world_vector_root):
+\t\treturn
+\tvar local_active := WeatherSystem.simulation_speed <= WeatherSystem.HIGH_WARP_LOCAL_THRESHOLD
+\t_world_vector_root.visible = _world_vectors_enabled and local_active
+\tif not _world_vector_root.visible:
+\t\treturn
+\t_update_world_vector_geometry_uniforms()
+\tif WeatherSystem.native_worker_busy():
+\t\treturn
+\tif _world_vector_last_revision == WeatherSystem.local_state_revision \
+\t\t\tand _world_vector_last_layer == wind_layer:
+\t\treturn
+\t_ensure_wind_sampler()
+\tvar native: Variant = WeatherSystem.get("_native")
+\tif _wind_sampler == null or native == null or not (native is Object):
+\t\treturn
+\tif not _wind_sampler.has_method(&"get_local_wind_rgba"):
+\t\treturn
+\tvar result: Variant = _wind_sampler.call(&"get_local_wind_rgba", native, wind_layer)
+\tif not (result is PackedFloat32Array):
+\t\treturn
+\tvar values: PackedFloat32Array = result
+\tif values.size() != WORLD_VECTOR_COUNT * 4:
+\t\treturn
+\tvar image := Image.create_from_data(
+\t\tLOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array())
+\tif _world_vector_texture == null:
+\t\t_world_vector_texture = ImageTexture.create_from_image(image)
+\telse:
+\t\t_world_vector_texture.update(image)
+\t_world_vector_material.set_shader_parameter("u_local_wind", _world_vector_texture)
+\t_world_vector_last_revision = WeatherSystem.local_state_revision
+\t_world_vector_last_layer = wind_layer
 
 
 func _update_product() -> void:
@@ -909,53 +1096,63 @@ func _find_player(root: Node) -> AsterraPlayer:
 	return null
 
 
-func _on_speed_slider_drag_started() -> void:
-	_speed_slider_dragging = true
+func _speed_slider_contains(point: Vector2) -> bool:
+\treturn _speed_slider != null and _speed_slider.get_global_rect().has_point(point)
 
 
-func _on_speed_slider_drag_ended(value_changed: bool) -> void:
-	_speed_slider_dragging = false
-	if value_changed and _speed_slider != null:
-		WeatherSystem.set_simulation_speed(_slider_to_speed(_speed_slider.value))
-	_update_speed_label(WeatherSystem.simulation_speed)
+func _set_speed_slider_from_pointer(global_x: float) -> void:
+\tif _speed_slider == null:
+\t\treturn
+\tvar rect := _speed_slider.get_global_rect()
+\tif rect.size.x <= 1.0:
+\t\treturn
+\tvar t := clampf((global_x - rect.position.x) / rect.size.x, 0.0, 1.0)
+\tvar raw := lerpf(_speed_slider.min_value, _speed_slider.max_value, t)
+\tvar snapped := round(raw / _speed_slider.step) * _speed_slider.step
+\t_speed_slider.value = clampf(snapped, _speed_slider.min_value, _speed_slider.max_value)
 
 
 func _on_speed_slider_changed(slider_value: float) -> void:
-	var preview := _slider_to_speed(slider_value)
-	if not _speed_slider_dragging:
-		WeatherSystem.set_simulation_speed(preview)
-	_update_speed_label(preview)
+\t# Apply every step immediately. The previous implementation only committed on
+\t# drag_ended, which made the control appear broken and could miss a release
+\t# after the pointer left the knob.
+\tvar speed := _slider_to_speed(slider_value)
+\tWeatherSystem.set_simulation_speed(speed)
+\t_update_speed_label(speed)
 
 
 func _on_external_speed_changed(value: float) -> void:
-	if _speed_slider != null and not _speed_slider_dragging:
-		_speed_slider.set_value_no_signal(_speed_to_slider(value))
-	_update_speed_label(value)
+\tif _speed_slider != null and not _speed_slider_dragging:
+\t\t_speed_slider.set_value_no_signal(_speed_to_slider(value))
+\t_update_speed_label(value)
 
 
 func _step_warp(steps: int) -> void:
-	var slider_value := clampf(
-		_speed_to_slider(WeatherSystem.simulation_speed) + float(steps),
-		0.0, float(WARP_SPEEDS.size() - 1))
-	WeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
+\tvar slider_value := clampf(
+\t\t_speed_to_slider(WeatherSystem.simulation_speed) + float(steps),
+\t\t0.0, float(WARP_SPEEDS.size() - 1))
+\tif _speed_slider != null:
+\t\t_speed_slider.value = slider_value
+\telse:
+\t\tWeatherSystem.set_simulation_speed(_slider_to_speed(slider_value))
 
 
 func _slider_to_speed(slider_value: float) -> float:
-	var index := clampi(int(round(slider_value)), 0, WARP_SPEEDS.size() - 1)
-	return WARP_SPEEDS[index]
+\tvar index := clampi(int(round(slider_value)), 0, WARP_SPEEDS.size() - 1)
+\treturn WARP_SPEEDS[index]
 
 
 func _speed_to_slider(speed: float) -> float:
-	if speed <= 0.01:
-		return 0.0
-	var best_index := 1
-	var best_error := 1.0e30
-	for i in range(1, WARP_SPEEDS.size()):
-		var error := absf(log(maxf(speed, 0.001)) - log(WARP_SPEEDS[i]))
-		if error < best_error:
-			best_error = error
-			best_index = i
-	return float(best_index)
+\tif speed <= 0.01:
+\t\treturn 0.0
+\tvar best_index := 1
+\tvar best_error := 1.0e30
+\tfor i in range(1, WARP_SPEEDS.size()):
+\t\tvar error := absf(log(maxf(speed, 0.001)) - log(WARP_SPEEDS[i]))
+\t\tif error < best_error:
+\t\t\tbest_error = error
+\t\t\tbest_index = i
+\treturn float(best_index)
 
 
 func _update_speed_label(value: float) -> void:
