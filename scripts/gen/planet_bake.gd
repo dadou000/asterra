@@ -2,12 +2,14 @@ class_name PlanetBake
 extends RefCounted
 ## Orchestrates the Phase 1 generation pipeline and caches the result.
 ##
-## Order matters and is the roadmap's own dependency order:
-##   macro geography -> geology -> provisional climate -> erosion -> hydrology
-##   -> final climate -> soil -> biomes -> infrastructure suitability
+## Order matters:
+##   macro geography -> exceptional landforms -> geology -> provisional climate
+##   -> erosion -> hydrology -> final climate -> soil -> biomes -> suitability
 ##
-## Climate runs twice on purpose: erosion needs to know where it rains, and the
-## final climate needs the eroded mountains to cast their rain shadows.
+## Landmarks run before geology/erosion/hydrology because a volcano is physical
+## topography: it must alter rock, drainage, rain shadows and subsequent ecology.
+## Climate runs twice because erosion needs precipitation and the final climate
+## needs the eroded terrain.
 
 signal finished(fields: PlanetFields)
 
@@ -22,7 +24,7 @@ var _fraction: float = 0.0
 var _stage_index: int = 0
 var _done: bool = false
 
-const STAGES := 9
+const STAGES := 10
 
 func _init(p_cfg: GenConfig) -> void:
 	cfg = p_cfg
@@ -46,6 +48,7 @@ func bake(progress: Callable = Callable(), use_cache: bool = true) -> PlanetFiel
 
 	_stage_index = 0
 	_run_stage(progress, "Macro geography", func(p): PassMacro.new(fields).run(p))
+	_run_stage(progress, "Landmarks", func(p): PassLandmarks.new(fields).run(p))
 	_run_stage(progress, "Geology", func(p): PassGeology.new(fields).run(p))
 	_run_stage(progress, "Provisional climate", func(p): PassClimate.new(fields).run(p))
 	_run_stage(progress, "Erosion", func(p): PassErosion.new(fields, router).run(p))
