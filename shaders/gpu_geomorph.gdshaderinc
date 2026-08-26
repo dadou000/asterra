@@ -1,5 +1,10 @@
 // GPU geomorph synthesis primitives.
 // The caller includes gpu_planet_context.gdshaderinc first.
+//
+// Runtime note: this file is executed from the terrain vertex path, so tiny
+// savings multiply by hundreds of thousands of vertices. The terrain bands and
+// their physical roles are preserved, but helper work that does not materially
+// affect the resulting landform is kept deliberately cheap.
 
 uint gm_hash(ivec3 p, uint seed) {
 	uint h = uint(p.x) * 0x8da6b343u;
@@ -18,6 +23,22 @@ float gm_rand(ivec3 p, uint seed) {
 	return float(gm_hash(p, seed) & 0x00ffffffu) / 16777215.0;
 }
 
+// Cellular feature points need three decorrelated values per lattice cell. The
+// old code executed the complete integer hash three times. One avalanche hash is
+// enough; inexpensive secondary bit-mixing supplies Y/Z. This keeps a stable,
+// continuous 3-D Worley field while cutting the cellular hash load by ~3x.
+vec3 gm_rand3(ivec3 p, uint seed) {
+	uint h0 = gm_hash(p, seed);
+	uint h1 = (h0 ^ (h0 >> uint(13)) ^ 0x68bc21ebu) * 0x9e3779b9u;
+	uint h2 = (h0 ^ (h0 << uint(11)) ^ 0x02e5be93u) * 0x85ebca6bu;
+	h1 ^= h1 >> uint(16);
+	h2 ^= h2 >> uint(15);
+	return vec3(
+		float(h0 & 0x00ffffffu),
+		float(h1 & 0x00ffffffu),
+		float(h2 & 0x00ffffffu)) / 16777215.0;
+}
+
 float gm_value(vec3 p, uint seed) {
 	ivec3 i = ivec3(floor(p));
 	vec3 f = fract(p);
@@ -29,10 +50,27 @@ float gm_value(vec3 p, uint seed) {
 	return mix(mix(a, b, f.y), mix(c, d, f.y), f.z) * 2.0 - 1.0;
 }
 
+// Five octaves remain the authoritative detail signal. Keeping this unchanged
+// preserves the characteristic terrain spectrum where fBm itself is visible.
 float gm_fbm(vec3 p, uint seed) {
 	float h = 0.0;
 	float a = 0.52;
 	for (int i = 0; i < 5; i++) {
+		h += gm_value(p, seed + uint(i * 17)) * a;
+		p = p * 2.01 + vec3(17.0, -11.0, 7.0);
+		a *= 0.48;
+	}
+	return h;
+}
+
+// Domain warp only establishes low-frequency coordinate distortion. Its fourth
+// and fifth octaves move features by a tiny fraction of their wavelength but cost
+// six extra 3-D value-noise evaluations per warp. Three octaves retain the same
+// large/mid-scale warped character at much lower ALU/hash cost.
+float gm_fbm_warp(vec3 p, uint seed) {
+	float h = 0.0;
+	float a = 0.52;
+	for (int i = 0; i < 3; i++) {
 		h += gm_value(p, seed + uint(i * 17)) * a;
 		p = p * 2.01 + vec3(17.0, -11.0, 7.0);
 		a *= 0.48;
@@ -46,16 +84,15 @@ float gm_ridged(vec3 p, uint seed) {
 
 vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
 	vec3 w = vec3(
-		gm_fbm(p + vec3(13.1, 7.7, -4.3), seed + 101u),
-		gm_fbm(p + vec3(-5.7, 19.3, 8.9), seed + 211u),
-		gm_fbm(p + vec3(9.2, -3.8, 23.4), seed + 307u));
+		gm_fbm_warp(p + vec3(13.1, 7.7, -4.3), seed + 101u),
+		gm_fbm_warp(p + vec3(-5.7, 19.3, 8.9), seed + 211u),
+		gm_fbm_warp(p + vec3(9.2, -3.8, 23.4), seed + 307u));
 	return p + w * strength;
 }
 
-// Continuous 3-D Worley ridge. The previous 8-cell approximation changed its
-// neighbour set at fract(p)==0.5, so F1/F2 jumped on half-cell planes and those
-// discontinuities became long repeated ridges in displaced terrain. Searching the
-// full 3x3x3 neighbourhood makes F1/F2 continuous across every cell boundary.
+// Continuous 3-D Worley ridge. Full 3x3x3 coverage is retained so the old
+// half-cell discontinuity cannot return. Only the per-cell random generation is
+// cheaper now.
 float gm_cellular_ridge(vec3 p, uint seed) {
 	ivec3 base = ivec3(floor(p));
 	float f1 = 1e9;
@@ -64,10 +101,7 @@ float gm_cellular_ridge(vec3 p, uint seed) {
 		for (int y = -1; y <= 1; y++) {
 			for (int x = -1; x <= 1; x++) {
 				ivec3 c = base + ivec3(x, y, z);
-				vec3 jitter = vec3(
-					gm_rand(c, seed + 3u),
-					gm_rand(c, seed + 5u),
-					gm_rand(c, seed + 7u));
+				vec3 jitter = gm_rand3(c, seed + 3u);
 				vec3 feature = vec3(c) + vec3(0.25) + jitter * 0.50;
 				vec3 delta = p - feature;
 				float d2 = dot(delta, delta);
@@ -116,18 +150,20 @@ vec4 gm_landform_weights(vec3 dir, float macro_h) {
 }
 
 float gm_band_weight(float wavelength_m, float spacing_m) {
-	float x = clamp((wavelength_m - spacing_m * 4.0) / max(spacing_m * 4.0, 1e-5), 0.0, 1.0);
+	float four_spacing = spacing_m * 4.0;
+	float x = clamp((wavelength_m - four_spacing) / max(four_spacing, 1e-5), 0.0, 1.0);
 	return x * x * (3.0 - 2.0 * x);
 }
 
 // Must exactly match CubeSphere.tangent_basis(): [east, north], with the same
-// polar fallback axis. The hydrology context stores flow components in this basis.
+// polar fallback axis. Avoid constructing/normalizing the basis for dead flow.
 vec3 gm_flow_world(vec3 dir, vec2 flow_xy) {
+	if (dot(flow_xy, flow_xy) <= 1e-5) return vec3(0.0);
 	vec3 basis_up = abs(dir.y) > 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
 	vec3 east = normalize(cross(basis_up, dir));
 	vec3 north = normalize(cross(dir, east));
 	vec3 flow = east * flow_xy.x + north * flow_xy.y;
-	return dot(flow, flow) > 1e-5 ? normalize(flow) : vec3(0.0);
+	return normalize(flow);
 }
 
 float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
@@ -187,16 +223,23 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		float channel = pow(gm_ridged(p, seed + 73u), 4.6);
 		float incision = channel * mix(2.0, 34.0, hydro.b) * (1.0 - depositional * 0.78);
 		h -= incision * w420;
-		float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
-		h += fan * depositional * mix(1.0, 12.0, surface.a) * w420;
+		// No fan shape needs to be generated where the deposited contribution is
+		// below visual precision.
+		if (depositional > 0.006) {
+			float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
+			h += fan * depositional * mix(1.0, 12.0, surface.a) * w420;
+		}
 	}
 
 	float w120 = gm_band_weight(120.0, spacing_m);
 	if (w120 > 0.001) {
 		float n = gm_fbm(world_m / 120.0, seed + 89u);
-		float dune = gm_ridged(gm_domain_warp(world_m / 180.0, seed + 97u, 0.45), seed + 101u);
 		h += n * 4.5 * (1.0 - glacial * 0.6) * w120;
-		h += (dune * 2.0 - 1.0) * 9.0 * arid * soil.r * w120;
+		float dune_weight = arid * soil.r;
+		if (dune_weight > 0.004) {
+			float dune = gm_ridged(gm_domain_warp(world_m / 180.0, seed + 97u, 0.45), seed + 101u);
+			h += (dune * 2.0 - 1.0) * 9.0 * dune_weight * w120;
+		}
 	}
 
 	float w24 = gm_band_weight(24.0, spacing_m);
