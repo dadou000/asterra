@@ -16,6 +16,7 @@ const COMPUTE_SHADERS := [
 	"res://shaders/terrain_scatter_compact.glsl",
 	"res://shaders/terrain_height_query.glsl",
 	"res://shaders/terrain_clipmap_cache.glsl",
+	"res://shaders/terrain_occlusion.glsl",
 ]
 
 
