@@ -50,6 +50,7 @@ varying float v_level;
 varying float v_macro_h;
 varying float v_direct_transmittance;
 varying float v_micro_layer;
+varying float v_geom_normal_weight;
 
 const int ASTERRA_MAX_LEVEL = 14;
 const float RING_INNER_Q = 0.44;
@@ -62,13 +63,8 @@ const float MACRO_MAX_LOD = 5.0;
 const int MACRO_MAX_MIP = 5;
 const float NORMAL_SAMPLE_SPACING_MULT = 2.0;
 const float NORMAL_SAMPLE_MIN_M = 1.5;
-const int FINAL_DETAIL_NORMAL_MAX_LEVEL = 4;
+const float DETAIL_NORMAL_RADIUS_M = 64.0;
 
-// The parent ring overlaps the final 12% of the child disc/ring. The old renderer
-// hid that overlap by subtracting roughly 2x the parent spacing. That assumption
-// fails once geomorph amplitude can exceed the spacing by a large factor. The
-// parent now follows the exact child surface throughout this overlap and receives
-// only a tiny depth bias, capped in world metres.
 const float RING_HANDOFF_BIAS_MIN_M = 0.02;
 const float RING_HANDOFF_BIAS_MAX_M = 0.35;
 const float RING_HANDOFF_BIAS_SPACING = 0.02;
@@ -209,9 +205,15 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 		* coast_guard * u_detail_strength;
 }
 
-float terrain_height_for_level(vec3 d, int level) {
+// x = macro height, y = final macro + procedural height. Returning both avoids
+// sampling the same bicubic macro field once for v_macro_h and again for geometry.
+vec2 terrain_sample_for_level(vec3 d, int level) {
 	float macro_h = macro_height(d, level);
-	return macro_h + procedural_detail(d, level, macro_h);
+	return vec2(macro_h, macro_h + procedural_detail(d, level, macro_h));
+}
+
+float terrain_height_for_level(vec3 d, int level) {
+	return terrain_sample_for_level(d, level).y;
 }
 
 float fine_morph_weight(vec2 cell) {
@@ -227,12 +229,16 @@ float ring_handoff_weight(vec2 cell, int level, float is_ring) {
 	return 1.0 - smootherstep_range(RING_INNER_Q, RING_HANDOFF_Q, q);
 }
 
-float terrain_height_with_morph(vec3 d, int level, float morph) {
-	float fine = terrain_height_for_level(d, level);
+vec2 terrain_sample_with_morph(vec3 d, int level, float morph) {
+	vec2 fine = terrain_sample_for_level(d, level);
 	if (level < ASTERRA_MAX_LEVEL && morph > 0.001) {
-		fine = mix(fine, terrain_height_for_level(d, level + 1), morph);
+		fine = mix(fine, terrain_sample_for_level(d, level + 1), morph);
 	}
 	return fine;
+}
+
+float terrain_height_with_morph(vec3 d, int level, float morph) {
+	return terrain_sample_with_morph(d, level, morph).y;
 }
 
 float macro_height_with_morph(vec3 d, int level, float morph) {
@@ -245,13 +251,14 @@ float macro_height_with_morph(vec3 d, int level, float morph) {
 
 vec3 geodesic_offset(vec3 d, vec3 tangent, float distance_m) {
 	float theta = distance_m / max(u_planet_radius, 1.0);
+	// All close-detail normal probes are tiny compared with the planet radius.
+	// Avoid transcendental sin/cos for those overwhelmingly common cases.
+	if (abs(theta) < 0.01) return normalize(d + tangent * theta);
 	return normalize(d * cos(theta) + tangent * sin(theta));
 }
 
-// Smooth vertex normal reconstructed from the same analytic height function used
-// for displacement. Near levels include geomorph detail; far levels use macro only
-// to keep the vertex budget bounded. Interpolation then smooths across triangles.
-vec3 smooth_surface_normal(vec3 d, int level, float morph, float center_height) {
+vec3 smooth_surface_normal(vec3 d, int level, float morph,
+		float center_height, float center_macro_height, bool full_detail) {
 	vec3 reference_axis = abs(d.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
 	vec3 tangent_x = normalize(cross(reference_axis, d));
 	vec3 tangent_y = normalize(cross(d, tangent_x));
@@ -260,13 +267,13 @@ vec3 smooth_surface_normal(vec3 d, int level, float morph, float center_height) 
 	vec3 dy = geodesic_offset(d, tangent_y, sample_m);
 	float hx;
 	float hy;
-	if (level <= FINAL_DETAIL_NORMAL_MAX_LEVEL) {
+	if (full_detail) {
 		hx = terrain_height_with_morph(dx, level, morph);
 		hy = terrain_height_with_morph(dy, level, morph);
 	} else {
 		hx = macro_height_with_morph(dx, level, morph);
 		hy = macro_height_with_morph(dy, level, morph);
-		center_height = macro_height_with_morph(d, level, morph);
+		center_height = center_macro_height;
 	}
 	vec3 p0 = d * (u_planet_radius + center_height);
 	vec3 px = dx * (u_planet_radius + hx);
@@ -308,16 +315,13 @@ void vertex() {
 		: direction_for_offset(cell_offset_m);
 
 	float morph = fine_morph_weight(cell);
-	float macro_h = macro_height_with_morph(d, level, morph);
-	float h = terrain_height_with_morph(d, level, morph);
+	vec2 sample = terrain_sample_with_morph(d, level, morph);
+	float macro_h = sample.x;
+	float h = sample.y;
 	float handoff_w = ring_handoff_weight(cell, level, is_ring);
 	int normal_level = level;
 	float normal_morph = morph;
 
-	// Exact all-level ring handoff. Parent vertices in the inner overlap evaluate
-	// the child's own snapped lattice position/morph, then blend back to the parent
-	// as the overlap ends. This keeps L1/L2 ... L13/L14 mathematically tied to the
-	// surface that actually covers them instead of relying on a metre sink heuristic.
 	if (handoff_w > 0.001 && level > 0) {
 		int child_level = level - 1;
 		float child_spacing = ring_spacing(child_level);
@@ -329,16 +333,13 @@ void vertex() {
 			child_cell = cell_offset_m / child_spacing;
 		}
 		float child_morph = fine_morph_weight(child_cell);
-		float child_macro_h = macro_height_with_morph(d, child_level, child_morph);
-		float child_h = terrain_height_with_morph(d, child_level, child_morph);
-		macro_h = mix(macro_h, child_macro_h, handoff_w);
-		h = mix(h, child_h, handoff_w);
+		vec2 child_sample = terrain_sample_with_morph(d, child_level, child_morph);
+		macro_h = mix(macro_h, child_sample.x, handoff_w);
+		h = mix(h, child_sample.y, handoff_w);
 		normal_level = child_level;
 		normal_morph = child_morph;
 	}
 
-	// Tiny depth bias only prevents coplanar shimmer. It is capped in metres and
-	// can never become a visible cliff when spacing grows through the LOD stack.
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
 		RING_HANDOFF_BIAS_MIN_M, RING_HANDOFF_BIAS_MAX_M) * handoff_w;
 	float sink = handoff_bias_m;
@@ -357,12 +358,12 @@ void vertex() {
 		? u_anchor_render + stable_surface_offset(u_anchor_dir, u_anchor_right,
 			u_anchor_up, anchor_offset_m, altitude_m)
 		: p - u_origin;
+	float vertex_camera_dist = length(render_p - INV_VIEW_MATRIX[3].xyz);
 
 	if (micro_layer > 0.5 && level == 0 && u_height_enabled > 0.5) {
 		float edge_w = 1.0 - smootherstep_range(
 			MICRO_HANDOFF_START_L0_CELLS, MICRO_OUTER_L0_CELLS, cell_radius);
-		float camera_dist = length(render_p - INV_VIEW_MATRIX[3].xyz);
-		float proximity_w = 1.0 - smoothstep(MICRO_DETAIL_NEAR_M, MICRO_DETAIL_FAR_M, camera_dist);
+		float proximity_w = 1.0 - smoothstep(MICRO_DETAIL_NEAR_M, MICRO_DETAIL_FAR_M, vertex_camera_dist);
 		float micro_w = edge_w * proximity_w;
 		if (micro_w > 0.001) {
 			vec4 soil = asterra_ctx_soil(d);
@@ -387,10 +388,18 @@ void vertex() {
 		}
 	}
 
+	// Full analytic geomorph normals are useful only on the closest dense L0
+	// surface. Outside 64 m the macro finite-difference normal supplies a smooth
+	// baseline and the fragment derivative below restores the actual displaced
+	// geometric slope. This removes most of the two extra full terrain evaluations.
+	bool full_detail_normal = normal_level == 0 && vertex_camera_dist <= DETAIL_NORMAL_RADIUS_M;
+	v_smooth_normal = u_height_enabled > 0.5
+		? smooth_surface_normal(d, normal_level, normal_morph, h, macro_h, full_detail_normal)
+		: d;
+	v_geom_normal_weight = full_detail_normal ? 0.04 : (normal_level <= 1 ? 0.34 : 0.10);
+
 	v_planet = p;
 	v_render = render_p;
-	v_smooth_normal = u_height_enabled > 0.5
-		? smooth_surface_normal(d, normal_level, normal_morph, h) : d;
 	v_valid = u_macro_ready;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
@@ -424,8 +433,9 @@ void fragment() {
 	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
 	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : smooth_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
-	float geom_shading_w = (1.0 - smoothstep(2.0, 5.0, v_level))
-		* mix(0.04, 0.18, v_micro_layer);
+	float geom_shading_w = max(
+		(1.0 - smoothstep(2.0, 5.0, v_level)) * mix(0.04, 0.18, v_micro_layer),
+		v_geom_normal_weight);
 	vec3 wn = normalize(mix(smooth_n, geom_n, geom_shading_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
