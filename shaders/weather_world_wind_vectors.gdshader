@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode unshaded, cull_disabled, depth_draw_opaque;
+render_mode unshaded, cull_disabled, depth_test_disabled, shadows_disabled, fog_disabled;
 
 uniform sampler2D u_local_wind : filter_nearest, repeat_disable;
 uniform vec3 u_center_dir = vec3(0.0, 1.0, 0.0);
@@ -16,6 +16,7 @@ uniform float u_max_length_fraction = 0.92;
 uniform float u_width_fraction = 0.055;
 
 varying float v_speed01;
+varying float v_visible;
 
 vec3 speed_palette(float x) {
 	x = clamp(x, 0.0, 1.0);
@@ -45,25 +46,29 @@ void vertex() {
 	vec3 flow = u_local_east * wind_sample.r + u_local_north * wind_sample.g;
 	flow -= radial * dot(flow, radial);
 	float speed = length(flow);
-	vec3 along_dir = speed > 0.01 ? flow / speed : normalize(u_local_east - radial * dot(u_local_east, radial));
+	vec3 fallback_along = u_local_east - radial * dot(u_local_east, radial);
+	if (length(fallback_along) < 1e-5) fallback_along = u_local_north - radial * dot(u_local_north, radial);
+	fallback_along = normalize(fallback_along);
+	vec3 along_dir = speed > 0.01 ? flow / speed : fallback_along;
 	vec3 side_dir = normalize(cross(radial, along_dir));
 
 	float speed01 = clamp(speed / u_speed_reference_mps, 0.0, 1.0);
-	// Completely collapse calm vectors instead of leaving thousands of arbitrary
-	// east-pointing minimum-size arrows. Once the flow is measurable, retain a
-	// small readable minimum length and then scale monotonically with speed.
+	// Debug geometry must remain readable even when the selected layer lies below
+	// local terrain. Depth testing is disabled for this overlay, so arrows report
+	// the actual model-layer vector rather than disappearing inside mountains.
 	float visible = smoothstep(0.20, 1.00, speed);
 	float arrow_length = u_cell_size_m
 		* mix(u_min_length_fraction, u_max_length_fraction, speed01) * visible;
 	float arrow_width = u_cell_size_m * u_width_fraction * visible;
 
-	// The source mesh is a unit arrow facing +X. X encodes along-flow distance;
-	// Y encodes shaft/head half-width. Every weather cell remains one GPU instance.
 	VERTEX = anchor_relative + along_dir * (VERTEX.x * arrow_length)
 		+ side_dir * (VERTEX.y * arrow_width);
 	v_speed01 = speed01;
+	v_visible = visible;
 }
 
 void fragment() {
-	ALBEDO = speed_palette(v_speed01);
+	vec3 color = speed_palette(v_speed01);
+	ALBEDO = color;
+	EMISSION = color * (0.55 + 0.45 * v_visible);
 }
