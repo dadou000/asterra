@@ -5,6 +5,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+enable_testing()
+
+# Phase-1 replacement-core tests deliberately have no Godot dependency. They
+# validate spherical geometry/connectivity and conservation before the runtime
+# backend is allowed to depend on the new core.
+add_executable(asterra_weather_core_tests
+  tests/test_cubed_sphere.cpp
+  src/cubed_sphere_grid.cpp
+)
+target_include_directories(asterra_weather_core_tests PRIVATE src)
+add_test(NAME cubed_sphere_geometry COMMAND asterra_weather_core_tests)
+
 # godot-cpp master no longer guesses an engine API for extension projects.
 # Asterra targets Godot 4.7.1, whose stable GDExtension ABI is the 4.7 API.
 if(NOT GODOTCPP_API_VERSION)
@@ -30,18 +42,18 @@ endif()
 add_library(asterra_weather SHARED
   src/register_types.cpp
   src/weather_wind_sampler.cpp
-  # This translation unit includes the proven AVX2 core and wraps only the
-  # capped-convection/cloud-presentation entry points. Do not compile
-  # weather_native.cpp separately or its symbols would be defined twice.
+  src/cubed_sphere_grid.cpp
+  # Temporary runtime implementation while the replacement dynamical core is
+  # being built. This file will be deleted rather than maintained as a fallback
+  # once the cubed-sphere dry core passes the mandatory gates.
   src/weather_native_oklahoma.cpp
 )
 
 target_include_directories(asterra_weather PRIVATE src)
 target_link_libraries(asterra_weather PRIVATE godot-cpp)
 
-# The 1024x512x30 parent atmosphere is intentionally CPU-heavy. Keep AVX2 inside
-# each worker and distribute independent rows/columns through OpenMP. Polar
-# reduced-grid filtering remains inside this same native backend.
+# The parent atmosphere is intentionally CPU-heavy. Keep AVX2 inside each worker
+# and distribute independent operations through OpenMP.
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(asterra_weather PRIVATE OpenMP::OpenMP_CXX)
@@ -50,8 +62,10 @@ endif()
 
 if(MSVC)
   target_compile_options(asterra_weather PRIVATE /O2 /arch:AVX2 /fp:fast)
+  target_compile_options(asterra_weather_core_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
+  target_compile_options(asterra_weather_core_tests PRIVATE -O3)
 endif()
 
 # Keep every generator/configuration in the exact location referenced by the
