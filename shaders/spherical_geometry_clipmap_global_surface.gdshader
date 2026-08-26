@@ -64,6 +64,15 @@ const float NORMAL_SAMPLE_SPACING_MULT = 2.0;
 const float NORMAL_SAMPLE_MIN_M = 1.5;
 const int FINAL_DETAIL_NORMAL_MAX_LEVEL = 4;
 
+// The parent ring overlaps the final 12% of the child disc/ring. The old renderer
+// hid that overlap by subtracting roughly 2x the parent spacing. That assumption
+// fails once geomorph amplitude can exceed the spacing by a large factor. The
+// parent now follows the exact child surface throughout this overlap and receives
+// only a tiny depth bias, capped in world metres.
+const float RING_HANDOFF_BIAS_MIN_M = 0.02;
+const float RING_HANDOFF_BIAS_MAX_M = 0.35;
+const float RING_HANDOFF_BIAS_SPACING = 0.02;
+
 const float MICRO_HANDOFF_START_L0_CELLS = 24.0;
 const float MICRO_OUTER_L0_CELLS = 32.0;
 const float MICRO_L0_SINK_M = 0.30;
@@ -211,7 +220,7 @@ float fine_morph_weight(vec2 cell) {
 		length(cell) / max(half_cells, 1.0));
 }
 
-float coarse_sink_weight(vec2 cell, int level, float is_ring) {
+float ring_handoff_weight(vec2 cell, int level, float is_ring) {
 	if (is_ring < 0.5 || level <= 0) return 0.0;
 	float half_cells = u_grid_cells * 0.5;
 	float q = length(cell) / max(half_cells, 1.0);
@@ -297,10 +306,42 @@ void vertex() {
 	vec3 d = stable_displacement
 		? direction_for_basis_offset(u_anchor_dir, u_anchor_right, u_anchor_up, anchor_offset_m)
 		: direction_for_offset(cell_offset_m);
+
 	float morph = fine_morph_weight(cell);
 	float macro_h = macro_height_with_morph(d, level, morph);
 	float h = terrain_height_with_morph(d, level, morph);
-	float sink = coarse_sink_weight(cell, level, is_ring) * max(spacing * u_sink_scale, 0.5);
+	float handoff_w = ring_handoff_weight(cell, level, is_ring);
+	int normal_level = level;
+	float normal_morph = morph;
+
+	// Exact all-level ring handoff. Parent vertices in the inner overlap evaluate
+	// the child's own snapped lattice position/morph, then blend back to the parent
+	// as the overlap ends. This keeps L1/L2 ... L13/L14 mathematically tied to the
+	// surface that actually covers them instead of relying on a metre sink heuristic.
+	if (handoff_w > 0.001 && level > 0) {
+		int child_level = level - 1;
+		float child_spacing = ring_spacing(child_level);
+		vec2 child_cell;
+		if (stable_displacement) {
+			vec2 child_center_m = round(u_lattice_center_plane / child_spacing) * child_spacing;
+			child_cell = (anchor_offset_m - child_center_m) / child_spacing;
+		} else {
+			child_cell = cell_offset_m / child_spacing;
+		}
+		float child_morph = fine_morph_weight(child_cell);
+		float child_macro_h = macro_height_with_morph(d, child_level, child_morph);
+		float child_h = terrain_height_with_morph(d, child_level, child_morph);
+		macro_h = mix(macro_h, child_macro_h, handoff_w);
+		h = mix(h, child_h, handoff_w);
+		normal_level = child_level;
+		normal_morph = child_morph;
+	}
+
+	// Tiny depth bias only prevents coplanar shimmer. It is capped in metres and
+	// can never become a visible cliff when spacing grows through the LOD stack.
+	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
+		RING_HANDOFF_BIAS_MIN_M, RING_HANDOFF_BIAS_MAX_M) * handoff_w;
+	float sink = handoff_bias_m;
 
 	if (micro_layer < 0.5 && is_ring < 0.5 && level == 0
 			&& cell_radius < MICRO_OUTER_L0_CELLS) {
@@ -349,7 +390,7 @@ void vertex() {
 	v_planet = p;
 	v_render = render_p;
 	v_smooth_normal = u_height_enabled > 0.5
-		? smooth_surface_normal(d, level, morph, h) : d;
+		? smooth_surface_normal(d, normal_level, normal_morph, h) : d;
 	v_valid = u_macro_ready;
 	v_cap_valid = raw_theta <= u_visible_cap_angle ? 1.0 : 0.0;
 	v_level = float(level);
@@ -383,10 +424,6 @@ void fragment() {
 	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
 	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : smooth_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
-	// Use the geometric normal for physical slope classification, but do not let
-	// per-triangle derivatives dominate visible lighting. Only the dense micro
-	// patch gets a modest geometric contribution; scanned/procedural normal maps
-	// provide the sub-triangle shading detail afterwards.
 	float geom_shading_w = (1.0 - smoothstep(2.0, 5.0, v_level))
 		* mix(0.04, 0.18, v_micro_layer);
 	vec3 wn = normalize(mix(smooth_n, geom_n, geom_shading_w));
