@@ -39,13 +39,12 @@ int main() {
 		VoronoiMoistThermodynamics moist(transport);
 		VoronoiSurfaceExchange exchange(transport);
 
-		// Near-freezing mixed-phase atmosphere, initially just subsaturated. A
-		// spatially sparse positive surface vapor pulse will cross saturation while
-		// other cells experience dew. This exercises both directions of the surface
-		// water transfer and subsequent liquid/ice phase partition in one cycle.
 		auto atmosphere = transport.make_isothermal_reference(PS, 263.0);
 		moist.initialize_uniform_relative_humidity(atmosphere, 0.98);
 		auto surface = exchange.make_uniform_surface_state(20.0, 8.0e7);
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			surface.ice_kg_m2[static_cast<size_t>(c)] = 0.1 + 0.0005 * c;
+		}
 
 		const auto dry_mass_before = atmosphere.layer_mass_kg_m2;
 		const auto wind_before = atmosphere.edge_normal_mps;
@@ -77,6 +76,8 @@ int main() {
 			"surface exchange water budget failed before phase adjustment");
 		require(exchange_diag.relative_system_energy_error < 5e-12,
 			"surface exchange energy budget failed before phase adjustment");
+		require(surface.ice_kg_m2 == surface_before.ice_kg_m2,
+			"prescribed surface exchange changed frozen water");
 
 		const auto surface_after_exchange = surface;
 		const double atmospheric_energy_before_phase =
@@ -96,9 +97,8 @@ int main() {
 		require(phase_diag.max_specific_enthalpy_error_j_kg < 1e-4,
 			"phase adjustment violated local moist enthalpy conservation");
 
-		// The phase operator owns only atmosphere-internal repartitioning. It must
-		// not touch the surface reservoir, dry mass or momentum.
 		require(surface.water_kg_m2 == surface_after_exchange.water_kg_m2
+				&& surface.ice_kg_m2 == surface_after_exchange.ice_kg_m2
 				&& surface.energy_j_m2 == surface_after_exchange.energy_j_m2,
 			"phase adjustment changed surface reservoirs");
 		require(atmosphere.layer_mass_kg_m2 == dry_mass_before,
