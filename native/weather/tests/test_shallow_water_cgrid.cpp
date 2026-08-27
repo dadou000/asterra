@@ -34,6 +34,7 @@ int main() {
 		CubedSphereGrid grid(N, R);
 		ShallowWaterCGrid sw(grid, G);
 
+		// Gate 1: exact lake at rest.
 		auto rest = sw.make_uniform_state(H);
 		const auto rest_before = rest;
 		const auto rest_diag = sw.step(rest, 86400.0, 0.40);
@@ -45,6 +46,8 @@ int main() {
 			"rest-state accepted CFL exceeded target");
 		require(rest_diag.relative_mass_error == 0.0, "lake-at-rest mass changed");
 
+		// Gate 2: a cell-centered checkerboard must strongly excite the staggered
+		// pressure-gradient operator rather than hiding in a 2-delta-x null mode.
 		auto checker = sw.make_uniform_state(H);
 		constexpr double A = 80.0;
 		for (int j = 2; j < N - 2; ++j) {
@@ -77,6 +80,8 @@ int main() {
 		require(active_interior_edges > tested_interior_edges * 9 / 10,
 			"C-grid pressure operator contains a checkerboard-like null mode");
 
+		// Gate 3: nonlinear gravity-wave packet remains positive, conservative and
+		// bounded while crossing cube seams.
 		auto wave = sw.make_uniform_state(H);
 		const Vec3d pulse_center = normalized(Vec3d{0.41, -0.72, 0.56});
 		for (int c = 0; c < grid.cell_count(); ++c) {
@@ -84,6 +89,7 @@ int main() {
 			wave.depth_m[c] += 65.0 * std::exp(-(angle * angle) / (2.0 * 0.12 * 0.12));
 		}
 		const double wave_volume0 = sw.total_volume_m3(wave);
+		const double wave_energy0 = sw.total_energy(wave);
 		const double initial_max_anomaly = *std::max_element(wave.depth_m.begin(), wave.depth_m.end()) - H;
 		double elapsed = 0.0;
 		double worst_cfl = 0.0;
@@ -109,6 +115,8 @@ int main() {
 		}
 		const double wave_volume_error = std::abs(sw.total_volume_m3(wave) - wave_volume0)
 			/ wave_volume0;
+		const double wave_energy_error = std::abs(sw.total_energy(wave) - wave_energy0)
+			/ std::max(std::abs(wave_energy0), 1.0);
 		require(wave_volume_error < 2e-11, "gravity-wave run drifted in total layer mass");
 		const double max_depth = *std::max_element(wave.depth_m.begin(), wave.depth_m.end());
 		const double min_depth = *std::min_element(wave.depth_m.begin(), wave.depth_m.end());
@@ -117,13 +125,19 @@ int main() {
 		require(H - min_depth < initial_max_anomaly * 2.0,
 			"gravity-wave trough amplitude grew without bound");
 		require(max_speed < 80.0, "gravity-wave velocity grew unrealistically large");
+		require(wave_energy_error < 3e-4, "nonlinear gravity wave drifted excessively in total energy");
 
+		// Gate 4: exact nonlinear steady solid-body geostrophic flow (Williamson
+		// test-case-2 form, un-tilted axis). The free-surface amplitude contains both
+		// planetary Coriolis and the u^2/2 nonlinear contribution.
 		constexpr double OMEGA = 2.0 * PI / (11.5 * 3600.0);
 		constexpr double FLOW_ANGULAR_RATE = 1.0e-6;
 		const Vec3d spin_axis{0.0, 1.0, 0.0};
 		ShallowWaterCGrid rotating(grid, G, OMEGA, spin_axis);
 		auto balanced = rotating.make_uniform_state(H);
-		const double balance_amplitude = OMEGA * FLOW_ANGULAR_RATE * R * R / G;
+		const double balance_amplitude =
+			(OMEGA * FLOW_ANGULAR_RATE + 0.5 * FLOW_ANGULAR_RATE * FLOW_ANGULAR_RATE)
+			* R * R / G;
 		for (int c = 0; c < grid.cell_count(); ++c) {
 			const double mu = dot(spin_axis, grid.cell(c).center);
 			balanced.depth_m[c] = H + balance_amplitude * (1.0 - mu * mu);
@@ -134,72 +148,36 @@ int main() {
 			});
 		const auto balanced_initial = balanced;
 		const double balanced_volume0 = rotating.total_volume_m3(balanced);
+		const double balanced_energy0 = rotating.total_energy(balanced);
 		const double initial_max_speed = FLOW_ANGULAR_RATE * R;
 
 		const auto reconstructed_initial = rotating.reconstruct_cell_velocity(balanced);
+		const auto vorticity_initial = rotating.reconstruct_cell_relative_vorticity(balanced);
 		long double reconstruction_error_sq = 0.0L;
 		long double analytic_velocity_sq = 0.0L;
+		long double vorticity_error_sq = 0.0L;
+		long double analytic_vorticity_sq = 0.0L;
+		long double total_relative_vorticity = 0.0L;
+		long double total_abs_relative_vorticity = 0.0L;
 		for (int c = 0; c < grid.cell_count(); ++c) {
 			const Vec3d analytic = cross(spin_axis, grid.cell(c).center) * (FLOW_ANGULAR_RATE * R);
 			const Vec3d error = reconstructed_initial[c] - analytic;
-			reconstruction_error_sq += static_cast<long double>(dot(error, error)) * grid.cell(c).area_m2;
-			analytic_velocity_sq += static_cast<long double>(dot(analytic, analytic)) * grid.cell(c).area_m2;
+			const long double area = grid.cell(c).area_m2;
+			reconstruction_error_sq += static_cast<long double>(dot(error, error)) * area;
+			analytic_velocity_sq += static_cast<long double>(dot(analytic, analytic)) * area;
+			const double analytic_zeta = 2.0 * FLOW_ANGULAR_RATE * dot(spin_axis, grid.cell(c).center);
+			const double dzeta = vorticity_initial[c] - analytic_zeta;
+			vorticity_error_sq += static_cast<long double>(dzeta * dzeta) * area;
+			analytic_vorticity_sq += static_cast<long double>(analytic_zeta * analytic_zeta) * area;
+			total_relative_vorticity += static_cast<long double>(vorticity_initial[c]) * area;
+			total_abs_relative_vorticity += std::abs(static_cast<long double>(vorticity_initial[c])) * area;
 		}
 		const double reconstruction_relative_rms = std::sqrt(static_cast<double>(
 			reconstruction_error_sq / std::max(analytic_velocity_sq, 1.0L)));
-
-		// Initial operator diagnostics. A genuinely balanced state must have pressure
-		// and Coriolis tendencies that cancel before time integration. We also compare
-		// first-order upwind and centered continuity tendencies to expose transport
-		// diffusion as a separate source of geostrophic drift.
-		long double pressure_sq = 0.0L;
-		long double coriolis_sq = 0.0L;
-		long double net_accel_sq = 0.0L;
-		long double edge_count_ld = 0.0L;
-		std::vector<long double> upwind_dhdt(static_cast<size_t>(grid.cell_count()), 0.0L);
-		std::vector<long double> centered_dhdt(static_cast<size_t>(grid.cell_count()), 0.0L);
-		for (size_t e = 0; e < rotating.topology().shared_edges().size(); ++e) {
-			const auto &edge = rotating.topology().shared_edges()[e];
-			const double distance = angular_distance(
-				grid.cell(edge.cell_a).center, grid.cell(edge.cell_b).center) * R;
-			const double gradient = (balanced.depth_m[edge.cell_b] - balanced.depth_m[edge.cell_a])
-				/ distance;
-			const double pressure_accel = -G * gradient;
-			const Vec3d radial = edge.midpoint;
-			Vec3d u_edge = (reconstructed_initial[edge.cell_a] + reconstructed_initial[edge.cell_b]) * 0.5;
-			u_edge = u_edge - radial * dot(u_edge, radial);
-			const double f = 2.0 * OMEGA * dot(spin_axis, radial);
-			const double coriolis_accel = dot(cross(radial, u_edge) * (-f), edge.normal_a_to_b);
-			const double net_accel = pressure_accel + coriolis_accel;
-			pressure_sq += static_cast<long double>(pressure_accel) * pressure_accel;
-			coriolis_sq += static_cast<long double>(coriolis_accel) * coriolis_accel;
-			net_accel_sq += static_cast<long double>(net_accel) * net_accel;
-			edge_count_ld += 1.0L;
-
-			const double u = balanced.edge_normal_mps[e];
-			const double h_upwind = u >= 0.0 ? balanced.depth_m[edge.cell_a] : balanced.depth_m[edge.cell_b];
-			const double h_centered = 0.5 * (balanced.depth_m[edge.cell_a] + balanced.depth_m[edge.cell_b]);
-			const long double flux_upwind = static_cast<long double>(u * edge.length_m * h_upwind);
-			const long double flux_centered = static_cast<long double>(u * edge.length_m * h_centered);
-			upwind_dhdt[edge.cell_a] -= flux_upwind / grid.cell(edge.cell_a).area_m2;
-			upwind_dhdt[edge.cell_b] += flux_upwind / grid.cell(edge.cell_b).area_m2;
-			centered_dhdt[edge.cell_a] -= flux_centered / grid.cell(edge.cell_a).area_m2;
-			centered_dhdt[edge.cell_b] += flux_centered / grid.cell(edge.cell_b).area_m2;
-		}
-		long double upwind_tendency_sq = 0.0L;
-		long double centered_tendency_sq = 0.0L;
-		long double tendency_area = 0.0L;
-		for (int c = 0; c < grid.cell_count(); ++c) {
-			const long double area = grid.cell(c).area_m2;
-			upwind_tendency_sq += upwind_dhdt[c] * upwind_dhdt[c] * area;
-			centered_tendency_sq += centered_dhdt[c] * centered_dhdt[c] * area;
-			tendency_area += area;
-		}
-		const double initial_pressure_rms = std::sqrt(static_cast<double>(pressure_sq / edge_count_ld));
-		const double initial_coriolis_rms = std::sqrt(static_cast<double>(coriolis_sq / edge_count_ld));
-		const double initial_net_accel_rms = std::sqrt(static_cast<double>(net_accel_sq / edge_count_ld));
-		const double initial_upwind_dhdt_rms = std::sqrt(static_cast<double>(upwind_tendency_sq / tendency_area));
-		const double initial_centered_dhdt_rms = std::sqrt(static_cast<double>(centered_tendency_sq / tendency_area));
+		const double vorticity_relative_rms = std::sqrt(static_cast<double>(
+			vorticity_error_sq / std::max(analytic_vorticity_sq, 1.0e-30L)));
+		const double global_relative_vorticity_residual = static_cast<double>(
+			std::abs(total_relative_vorticity) / std::max(total_abs_relative_vorticity, 1.0L));
 
 		double balanced_elapsed = 0.0;
 		int balanced_steps = 0;
@@ -216,19 +194,20 @@ int main() {
 		}
 		const double balanced_volume_error = std::abs(rotating.total_volume_m3(balanced) - balanced_volume0)
 			/ balanced_volume0;
+		const double balanced_energy_error = std::abs(rotating.total_energy(balanced) - balanced_energy0)
+			/ std::max(std::abs(balanced_energy0), 1.0);
 
 		long double depth_error_sq = 0.0L;
 		long double velocity_error_sq = 0.0L;
 		long double area_sum = 0.0L;
 		for (int c = 0; c < grid.cell_count(); ++c) {
-			const long double area = static_cast<long double>(grid.cell(c).area_m2);
-			const long double dh = static_cast<long double>(balanced.depth_m[c] - balanced_initial.depth_m[c]);
+			const long double area = grid.cell(c).area_m2;
+			const long double dh = balanced.depth_m[c] - balanced_initial.depth_m[c];
 			depth_error_sq += dh * dh * area;
 			area_sum += area;
 		}
 		for (size_t e = 0; e < balanced.edge_normal_mps.size(); ++e) {
-			const long double du = static_cast<long double>(balanced.edge_normal_mps[e]
-				- balanced_initial.edge_normal_mps[e]);
+			const long double du = balanced.edge_normal_mps[e] - balanced_initial.edge_normal_mps[e];
 			velocity_error_sq += du * du;
 		}
 		const double depth_rms_error = std::sqrt(static_cast<double>(depth_error_sq / area_sum));
@@ -241,22 +220,25 @@ int main() {
 
 		std::cout << "ShallowWaterCGrid diagnostics\n"
 			<< "  reconstruction relative RMS: " << reconstruction_relative_rms << "\n"
-			<< "  initial pressure accel RMS m/s2: " << initial_pressure_rms << "\n"
-			<< "  initial Coriolis accel RMS m/s2: " << initial_coriolis_rms << "\n"
-			<< "  initial net accel RMS m/s2: " << initial_net_accel_rms << "\n"
-			<< "  initial upwind dh/dt RMS m/s: " << initial_upwind_dhdt_rms << "\n"
-			<< "  initial centered dh/dt RMS m/s: " << initial_centered_dhdt_rms << "\n"
-			<< "  rotating balance amplitude m: " << balance_amplitude << "\n"
+			<< "  relative-vorticity RMS error: " << vorticity_relative_rms << "\n"
+			<< "  global relative-vorticity residual: " << global_relative_vorticity_residual << "\n"
+			<< "  nonlinear balance amplitude m: " << balance_amplitude << "\n"
 			<< "  rotating balance steps: " << balanced_steps << "\n"
 			<< "  rotating worst CFL: " << balanced_worst_cfl << "\n"
 			<< "  rotating mass error: " << balanced_volume_error << "\n"
+			<< "  rotating energy error: " << balanced_energy_error << "\n"
 			<< "  rotating depth RMS error m: " << depth_rms_error << "\n"
 			<< "  rotating velocity RMS error m/s: " << velocity_rms_error << "\n"
 			<< "  rotating max edge speed m/s: " << balanced_max_speed << "\n";
 
 		require(reconstruction_relative_rms < 0.08,
 			"edge-to-cell tangent velocity reconstruction is inaccurate");
+		require(vorticity_relative_rms < 0.12,
+			"circulation-derived relative vorticity is inaccurate");
+		require(global_relative_vorticity_residual < 2e-13,
+			"global relative vorticity does not close across shared edges");
 		require(balanced_volume_error < 2e-11, "balanced rotating flow drifted in total mass");
+		require(balanced_energy_error < 5e-4, "balanced rotating flow drifted excessively in total energy");
 		require(depth_rms_error < balance_amplitude * 0.35,
 			"balanced spherical flow developed excessive free-surface error");
 		require(velocity_rms_error < initial_max_speed * 0.35,
@@ -273,6 +255,7 @@ int main() {
 			<< "  worst wave CFL: " << worst_cfl << "\n"
 			<< "  worst per-step mass error: " << worst_mass_error << "\n"
 			<< "  total wave mass error: " << wave_volume_error << "\n"
+			<< "  wave energy error: " << wave_energy_error << "\n"
 			<< "  max wave speed m/s: " << max_speed << "\n"
 			<< "  rejected/retried steps: " << total_rejections << "\n";
 		return EXIT_SUCCESS;
