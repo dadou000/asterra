@@ -26,6 +26,7 @@ add_library(asterra_weather_core STATIC
   src/voronoi_dry_core.cpp
   src/voronoi_moist_thermodynamics.cpp
   src/voronoi_moist_diagnostics.cpp
+  src/voronoi_surface_exchange.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
 
@@ -109,6 +110,10 @@ add_executable(asterra_weather_moist_density_tests tests/test_voronoi_moist_dens
 target_link_libraries(asterra_weather_moist_density_tests PRIVATE asterra_weather_core)
 add_test(NAME voronoi_moist_density COMMAND asterra_weather_moist_density_tests)
 
+add_executable(asterra_weather_surface_exchange_tests tests/test_voronoi_surface_exchange.cpp)
+target_link_libraries(asterra_weather_surface_exchange_tests PRIVATE asterra_weather_core)
+add_test(NAME voronoi_surface_exchange COMMAND asterra_weather_surface_exchange_tests)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
@@ -131,6 +136,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_moist_thermodynamics_tests
     asterra_weather_moist_cycle_tests
     asterra_weather_moist_density_tests
+    asterra_weather_surface_exchange_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -193,6 +199,7 @@ if(MSVC)
   target_compile_options(asterra_weather_moist_thermodynamics_tests PRIVATE /O2)
   target_compile_options(asterra_weather_moist_cycle_tests PRIVATE /O2)
   target_compile_options(asterra_weather_moist_density_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_surface_exchange_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -216,6 +223,7 @@ else()
   target_compile_options(asterra_weather_moist_thermodynamics_tests PRIVATE -O3)
   target_compile_options(asterra_weather_moist_cycle_tests PRIVATE -O3)
   target_compile_options(asterra_weather_moist_density_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_surface_exchange_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
