@@ -70,6 +70,13 @@ private:
 	int64_t rejected_steps_total_ = 0;
 	int frequency_ = 0;
 
+	// Exact lifecycle metadata for automatic dry-reference -> moist-reference
+	// conversion. This avoids inferring "freshness" from zero wind, which can
+	// also occur in a legitimately evolved atmosphere.
+	bool pristine_isothermal_reference_ = false;
+	double pristine_reference_surface_pressure_pa_ = 0.0;
+	double pristine_reference_temperature_k_ = 0.0;
+
 	struct MoistureRuntimeFlag {
 		std::unique_ptr<asterra::weather::VoronoiDryCore> *dynamics = nullptr;
 		bool value = false;
@@ -107,6 +114,9 @@ private:
 	void clear_surface_exchange_state();
 	void ensure_zero_surface_reservoir();
 	void clear_moisture_state();
+	void mark_pristine_reference(double reference_surface_pressure_pa,
+		double temperature_k);
+	void clear_pristine_reference();
 	bool ready() const { return bool(grid_) && bool(dynamics_); }
 
 protected:
@@ -139,10 +149,11 @@ public:
 		double relative_humidity = 0.65);
 
 	// Moisture tracer slots 0..4 are vapor/cloud-liquid/cloud-ice/rain/snow.
-	// When called on a fresh zero-wind isothermal dry reference, initialization
-	// rebuilds the state through the moist terrain-balanced solver so adding vapor
-	// does not inject a startup pressure imbalance. Arbitrary evolved states keep
-	// their dry mass/theta and receive only tracer initialization.
+	// For RH <= 1, a pristine dry isothermal reference is rebuilt through the
+	// moist terrain-balanced solver so adding vapor cannot inject a startup
+	// pressure imbalance. Arbitrary/evolved states keep their existing dry
+	// mass/theta and receive only tracer initialization. Deliberately
+	// supersaturated RH > 1 also uses that general path before saturation adjust.
 	bool initialize_moisture(double relative_humidity = 0.65,
 		bool perform_saturation_adjustment = true);
 	void disable_moisture(bool clear_water = true);
