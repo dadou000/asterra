@@ -2,8 +2,9 @@ extends Node
 ## GPU-visible local window over the authoritative sparse terrain edit lattice.
 ##
 ## Deltas remains the persistent source of truth. This node mirrors the nearby
-## edited height offsets into a single R32F texture so the visual clipmap can add
-## exactly the same mutable height field that gameplay queries use.
+## edited height offsets into a pair of R32F textures. Rebuilds always write the
+## inactive texture and then swap the material binding, so a deformation update
+## never exposes a half-updated image to the terrain shader.
 
 const RESOLUTION := 512
 const SAMPLE_SPACING_M := 1.0
@@ -18,6 +19,8 @@ var center_up := Vector3(0.0, 1.0, 0.0)
 var generation := 0
 
 var _image: Image
+var _textures: Array[ImageTexture] = []
+var _active_texture_index := 0
 var _center_valid := false
 var _bound_material: ShaderMaterial
 var _dirty_full := true
@@ -27,8 +30,15 @@ func _ready() -> void:
 	process_priority = -4
 	_image = Image.create(RESOLUTION, RESOLUTION, false, Image.FORMAT_RF)
 	_image.fill(Color(0.0, 0.0, 0.0, 1.0))
-	texture = ImageTexture.create_from_image(_image)
-	ready_state = texture != null
+	var first: ImageTexture = ImageTexture.create_from_image(_image)
+	var second: ImageTexture = ImageTexture.create_from_image(_image)
+	if first != null:
+		_textures.append(first)
+	if second != null:
+		_textures.append(second)
+	if _textures.size() == 2:
+		texture = _textures[0]
+		ready_state = true
 	if Deltas.has_signal("region_changed"):
 		Deltas.region_changed.connect(_on_region_changed)
 	if Deltas.has_signal("all_changed"):
@@ -38,13 +48,13 @@ func _ready() -> void:
 func _process(_dt: float) -> void:
 	if not ready_state or Planet.cfg == null or not Planet.ready_state:
 		return
-	var camera := get_viewport().get_camera_3d()
+	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null:
 		_sync_renderer_binding()
 		return
-	var wp := Frames.to_world(camera.global_position)
+	var wp: Vec3D = Frames.to_world(camera.global_position)
 	if wp.length_sq() > 1.0:
-		var d := wp.normalized().to_v3()
+		var d: Vector3 = wp.normalized().to_v3()
 		if not _center_valid or _surface_distance(center_dir, d) >= RECENTER_DISTANCE_M:
 			_set_center(d)
 	if _dirty_full and _center_valid:
@@ -62,14 +72,20 @@ func _set_center(d: Vector3) -> void:
 
 
 func _rebuild_full() -> void:
+	if _textures.size() != 2:
+		return
 	var samples: PackedFloat32Array = Deltas.sample_tangent_patch(
 		center_dir, center_right, center_up, RESOLUTION, SAMPLE_SPACING_M,
 		Planet.cfg.planet_radius)
 	if samples.size() != RESOLUTION * RESOLUTION:
 		return
-	var data := samples.to_byte_array()
+	var data: PackedByteArray = samples.to_byte_array()
 	_image = Image.create_from_data(RESOLUTION, RESOLUTION, false, Image.FORMAT_RF, data)
-	texture.update(_image)
+	var staging_index: int = 1 - _active_texture_index
+	var staging: ImageTexture = _textures[staging_index]
+	staging.update(_image)
+	_active_texture_index = staging_index
+	texture = staging
 	generation += 1
 	_dirty_full = false
 
@@ -80,8 +96,6 @@ func _on_region_changed(edit_dir: Vector3, radius_m: float) -> void:
 		return
 	if _surface_distance(center_dir, edit_dir) > HALF_EXTENT_M + radius_m + 8.0:
 		return
-	# Brushes are infrequent and small; rebuilding this local authoritative window
-	# avoids stale texels and keeps cube-face seam handling centralized in Deltas.
 	_dirty_full = true
 
 
@@ -101,11 +115,13 @@ func sample_params() -> Dictionary:
 		"center_right": center_right,
 		"center_up": center_up,
 		"half_extent_m": HALF_EXTENT_M,
+		"double_buffered": true,
+		"generation": generation,
 	}
 
 
 func _sync_renderer_binding() -> void:
-	var terrain := get_node_or_null("/root/GroundGeometryClipmap")
+	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
 	if terrain == null:
 		return
 	var value: Variant = terrain.get("_material")
