@@ -34,6 +34,20 @@ int main() {
 		VoronoiDryCore core(grid, 9.80665, 8000.0, 7500.0,
 			OMEGA, {0.0, 1.0, 0.0});
 
+		int north_pole_cell = -1;
+		int south_pole_cell = -1;
+		double max_y = -2.0;
+		double min_y = 2.0;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			const double y = grid.cell(c).center.y;
+			if (y > max_y) { max_y = y; north_pole_cell = c; }
+			if (y < min_y) { min_y = y; south_pole_cell = c; }
+		}
+		require(north_pole_cell >= 0 && south_pole_cell >= 0
+				&& std::abs(max_y - 1.0) < 1.0e-14
+				&& std::abs(min_y + 1.0) < 1.0e-14,
+			"dry dynamics regression requires exact north/south pole cells");
+
 		// Rest-state diagnostics have simple independent checks. Relative AAM is
 		// exactly zero, while absolute AAM is the dry mass weighted planetary term
 		// Omega R^2 (1-mu^2) on the same fixed-radius shallow atmosphere.
@@ -47,6 +61,23 @@ int main() {
 			"dry rest energy is invalid");
 		require(rest_relative_aam == 0.0,
 			"zero-wind atmosphere has non-zero relative angular momentum");
+
+		// The exact +/-Y pole cells must see the same balanced horizontal pressure
+		// force as every other point. This directly guards against accidental
+		// latitude/cos(latitude) singularities being introduced into the solver.
+		const auto rest_hydro = core.transport().diagnose_hydrostatic(rest);
+		const auto rest_pressure = core.transport().pressure_gradient_acceleration(rest, rest_hydro);
+		double max_polar_rest_accel = 0.0;
+		for (int pole : {north_pole_cell, south_pole_cell}) {
+			for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
+				for (int e : grid.cell(pole).edges) {
+					max_polar_rest_accel = std::max(max_polar_rest_accel,
+						std::abs(rest_pressure[static_cast<size_t>(k * grid.edge_count() + e)]));
+				}
+			}
+		}
+		require(max_polar_rest_accel < 1.0e-12,
+			"exact pole cells have a spurious dry pressure-gradient force");
 
 		long double expected_planetary_aam = 0.0L;
 		for (int c = 0; c < grid.cell_count(); ++c) {
@@ -94,6 +125,14 @@ int main() {
 			velocity_error2 / std::max(velocity_reference2, 1.0L)));
 		require(velocity_relative_l2 < 0.08,
 			"cell-centred C-grid wind reconstruction is too inaccurate");
+		const double north_pole_speed = std::sqrt(std::max(0.0,
+			dot(reconstructed[static_cast<size_t>(north_pole_cell)],
+				reconstructed[static_cast<size_t>(north_pole_cell)])));
+		const double south_pole_speed = std::sqrt(std::max(0.0,
+			dot(reconstructed[static_cast<size_t>(south_pole_cell)],
+				reconstructed[static_cast<size_t>(south_pole_cell)])));
+		require(north_pole_speed < 1.0e-6 && south_pole_speed < 1.0e-6,
+			"solid-body wind reconstruction is singular at an exact pole");
 		require(core.total_relative_axial_angular_momentum_kg_m2_s(solid) > 0.0,
 			"eastward solid-body flow has wrong angular-momentum sign");
 
@@ -138,6 +177,8 @@ int main() {
 			<< "  rest total energy: " << rest_energy << " J\n"
 			<< "  rest absolute AAM / identity error: " << rest_absolute_aam
 			<< "/" << rest_aam_identity_error << "\n"
+			<< "  polar rest max pressure accel: " << max_polar_rest_accel << " m/s2\n"
+			<< "  polar solid-body speeds: " << north_pole_speed << "/" << south_pole_speed << " m/s\n"
 			<< "  solid-body velocity reconstruction L2: " << velocity_relative_l2 << "\n"
 			<< "  3h steps: " << steps << "\n"
 			<< "  3h energy drift: " << energy_drift << "\n"
