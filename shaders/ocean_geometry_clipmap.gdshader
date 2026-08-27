@@ -23,6 +23,7 @@ uniform vec3 u_anchor_dir = vec3(1.0, 0.0, 0.0);
 uniform vec3 u_anchor_right = vec3(0.0, 0.0, -1.0);
 uniform vec3 u_anchor_up = vec3(0.0, 1.0, 0.0);
 uniform vec2 u_lattice_center_plane = vec2(0.0);
+uniform float u_ocean_base_spacing = 0.75;
 uniform float u_grid_cells = 128.0;
 uniform float u_visible_cap_angle = 1.5707963;
 uniform float u_orbit_handoff_altitude = 120000.0;
@@ -71,10 +72,6 @@ const float OCEAN_FINE_MORPH_START_Q = 0.875;
 const float OCEAN_RING_INNER_Q = 0.4375;
 const float OCEAN_RING_HANDOFF_Q = 0.50;
 
-// Six non-parallel physical wave axes avoid the two-direction corrugation that
-// made a rough sea read as repeating mountain ridges. The two longest systems
-// still own the coastal refraction/diffraction response; the shorter components
-// are progressively less coast-steered, as they should be.
 const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
 const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
 const vec3 SWELL_AXIS_C = vec3(0.153, 0.879, 0.451);
@@ -91,7 +88,7 @@ const vec3 MICRO_AXIS_F = vec3(-0.362, 0.821, 0.441);
 const float KELVIN_TAN = 0.35355339;
 
 float ocean_ring_spacing(int level) {
-	return u_base_spacing * exp2(float(level));
+	return u_ocean_base_spacing * exp2(float(level));
 }
 
 float ocean_smoother01(float x) {
@@ -99,19 +96,12 @@ float ocean_smoother01(float x) {
 	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
 }
 
-// The fine level gradually adopts the parent's representation bandwidth in its
-// outer eighth. At the point where the fine mesh ends, both levels therefore
-// represent exactly the same physical wave subset instead of two different seas.
 float ocean_fine_morph(vec2 cell) {
 	float q = length(cell) / max(u_grid_cells * 0.5, 1.0);
 	return ocean_smoother01((q - OCEAN_FINE_MORPH_START_Q)
 		/ (1.0 - OCEAN_FINE_MORPH_START_Q));
 }
 
-// Adjacent radial clipmap levels overlap from q=0.4375..0.5. The coarse surface
-// is lowered only inside that overlap, so depth testing gives ownership to the
-// fine layer instead of alpha-blending/z-fighting two displaced surfaces. The
-// sink reaches zero exactly at the physical handoff and never changes wave phase.
 float ocean_coarse_sink(vec2 cell, int level, float spacing) {
 	if (level <= 0) return 0.0;
 	float q = length(cell) / max(u_grid_cells * 0.5, 1.0);
@@ -174,6 +164,9 @@ vec3 ocean_offset_dir(vec3 d, vec3 tangent, float metres) {
 }
 
 void ocean_visible_terrain_lod(float arc_m, out int terrain_level, out float terrain_morph) {
+	// u_base_spacing belongs to gpu_terrain_height.gdshaderinc and deliberately
+	// remains the terrain renderer's nominal spacing. Water geometry density is
+	// controlled independently by u_ocean_base_spacing.
 	float l0_outer = max(u_base_spacing * TERRAIN_HALF_CELLS, 1.0);
 	float ratio = max(arc_m / l0_outer, 1.0);
 	terrain_level = clamp(int(ceil(log2(ratio))), 0, GPU_TERRAIN_MAX_LEVEL);
@@ -302,10 +295,6 @@ float ocean_micro_phase_warp(vec2 plane_m) {
 	return a * 0.58 + b * 0.34;
 }
 
-// Micro waves live in stable metre-space. Only waves with a generous screen-space
-// footprint are explicitly resolved; the rest become microfacet variance. A
-// common low-frequency phase warp bends the resolved wavelets enough to remove
-// the artificial ruler-straight corduroy pattern without inventing geometry.
 void ocean_micro_wave(vec3 up, vec2 plane_m, vec3 axis, float wavelength,
 		float slope_amp, float speed, float phase_offset, float phase_warp,
 		inout vec3 slope, inout float unresolved_variance) {
@@ -345,8 +334,6 @@ vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 }
 
 void vertex() {
-	// UV carries the original logical grid coordinate. Sector meshes are compacted
-	// on the CPU, so local VERTEX_ID is deliberately not used for addressing.
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
 	float spacing = ocean_ring_spacing(level);
@@ -392,7 +379,6 @@ void vertex() {
 		ocean_diffraction_direction(d, swell_a, landward), diffract_a * 0.52));
 	vec3 dir_b = normalize(mix(refracted_b,
 		ocean_diffraction_direction(d, swell_b, landward), diffract_b * 0.46));
-
 	vec3 dir_c = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_C), landward, refract * 0.42));
 	vec3 dir_d = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_D), landward, refract * 0.30));
 	vec3 dir_e = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_E), landward, refract * 0.18));
@@ -432,8 +418,6 @@ void vertex() {
 	vec3 tangential_displacement = wave.displacement - d * radial_h;
 	vec3 displaced = d * (u_planet_radius + radial_h) + tangential_displacement;
 
-	// Only render geometry is sunk in the overlap. All lighting, atmosphere,
-	// physics-facing varyings and phase coordinates retain the real water surface.
 	float render_radial_h = radial_h - ocean_coarse_sink(cell, level, spacing);
 	vec3 render_displaced = d * (u_planet_radius + render_radial_h) + tangential_displacement;
 	v_planet = displaced;
@@ -481,10 +465,6 @@ void fragment() {
 	float surf_zone = 1.0 - smoothstep(0.2, 9.0, depth);
 	float shorewash = (1.0 - smoothstep(0.12, 3.8, depth)) * smoothstep(0.50, 0.93, v_crest);
 
-	// Offshore whitecaps are driven by crest steepness, then broken into metre-scale
-	// patches. Previously deep water could never foam because only the shallow
-	// breaker term contributed, making the requested high sea look like polished
-	// folded plastic.
 	float foam_pattern = 0.5
 		+ 0.25 * sin(dot(v_micro_plane, vec2(0.110, 0.073)) + u_time_s * 0.35)
 		+ 0.25 * sin(dot(v_micro_plane, vec2(-0.067, 0.131)) - u_time_s * 0.23 + 2.3);
@@ -503,11 +483,6 @@ void fragment() {
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
 	float wind_rough = water_roughness_from_wind(water_wind_speed(up), 0.5);
-
-	// Preserve both vertex-wave energy removed by clipmap LOD and fragment-wave
-	// energy removed by screen-space anti-aliasing. GGX alpha is a slope scale,
-	// while the public roughness parameter is sqrt(alpha); convert at that boundary
-	// instead of adding tiny arbitrary perceptual roughness offsets.
 	float all_unresolved_variance = max(v_unresolved_variance, 0.0)
 		+ max(micro_unresolved_variance, 0.0);
 	float unresolved_slope_rms = sqrt(all_unresolved_variance);
@@ -519,16 +494,10 @@ void fragment() {
 	vec3 view_dir = normalize(camera_planet - v_planet);
 	float ndotv = max(dot(n, view_dir), 0.0);
 	float fres = water_fresnel(ndotv);
-
-	// Our analytic sky is deliberately low frequency, so one roughness-aware
-	// normal contraction is enough to approximate prefiltered sky reflection and
-	// stop high sea normals from reflecting razor-sharp bands of haze.
 	float sky_blur = smoothstep(0.22, 0.52, rough);
 	vec3 reflection_n = normalize(mix(n, up, sky_blur * 0.28));
 	vec3 sky_refl = water_sky_radiance(reflect(-view_dir, reflection_n), up, sun_dir);
 
-	// Cheap water-specific subsurface/forward-scatter approximation. It is strongest
-	// through thin, high crests when the sun is behind the wave relative to camera.
 	float backlight = pow(max(dot(-sun_dir, view_dir), 0.0), 4.0);
 	float crest_thin = smoothstep(0.55, 0.96, v_crest) * (1.0 - smoothstep(2.0, 18.0, depth));
 	vec3 crest_scatter = u_scatter * backlight * crest_thin * u_crest_scatter_strength;
