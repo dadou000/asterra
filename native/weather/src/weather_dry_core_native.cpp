@@ -14,6 +14,8 @@ using asterra::weather::GeodesicVoronoiGrid;
 using asterra::weather::SphericalLatLonSampler;
 using asterra::weather::Vec3d;
 using asterra::weather::VoronoiDryCore;
+using asterra::weather::VoronoiMoistEnergyDiagnostics;
+using asterra::weather::VoronoiMoistReference;
 using asterra::weather::VoronoiMoistThermodynamics;
 using asterra::weather::VoronoiPrecipitation;
 using asterra::weather::VoronoiSurfaceExchange;
@@ -37,6 +39,9 @@ void WeatherDryCoreNative::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("reset_terrain_balanced_isothermal", "reference_surface_pressure_pa", "temperature_k"),
 		&WeatherDryCoreNative::reset_terrain_balanced_isothermal,
 		DEFVAL(110000.0), DEFVAL(288.0));
+	ClassDB::bind_method(D_METHOD("reset_moist_terrain_balanced_isothermal", "reference_surface_pressure_pa", "temperature_k", "relative_humidity"),
+		&WeatherDryCoreNative::reset_moist_terrain_balanced_isothermal,
+		DEFVAL(110000.0), DEFVAL(288.0), DEFVAL(0.65));
 	ClassDB::bind_method(D_METHOD("initialize_moisture", "relative_humidity", "perform_saturation_adjustment"),
 		&WeatherDryCoreNative::initialize_moisture, DEFVAL(0.65), DEFVAL(true));
 	ClassDB::bind_method(D_METHOD("disable_moisture", "clear_water"),
@@ -135,6 +140,19 @@ void WeatherDryCoreNative::clear_moisture_state() {
 	initial_total_water_kg_ = 0.0;
 }
 
+void WeatherDryCoreNative::mark_pristine_reference(
+		double reference_surface_pressure_pa, double temperature_k) {
+	pristine_isothermal_reference_ = true;
+	pristine_reference_surface_pressure_pa_ = reference_surface_pressure_pa;
+	pristine_reference_temperature_k_ = temperature_k;
+}
+
+void WeatherDryCoreNative::clear_pristine_reference() {
+	pristine_isothermal_reference_ = false;
+	pristine_reference_surface_pressure_pa_ = 0.0;
+	pristine_reference_temperature_k_ = 0.0;
+}
+
 void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure_pa,
 		double p_temperature_k) {
 	if (p_frequency < 1 || p_frequency > 128) {
@@ -164,6 +182,7 @@ void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure
 		rejected_steps_total_ = 0;
 		last_step_ = {};
 		clear_moisture_state();
+		mark_pristine_reference(p_surface_pressure_pa, p_temperature_k);
 		rebuild_display_lookup();
 		reset_budget_baseline();
 		refresh_state_extrema();
@@ -175,6 +194,7 @@ void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure
 		surface_height_m_.clear();
 		frequency_ = 0;
 		clear_moisture_state();
+		clear_pristine_reference();
 		UtilityFunctions::push_error(String("WeatherDryCoreNative initialization failed: ") + e.what());
 	}
 }
@@ -251,6 +271,7 @@ double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
 
 		rejected_steps_total_ += last_step_.rejected_steps;
 		simulation_seconds_ += last_step_.accepted_dt_s;
+		clear_pristine_reference();
 		refresh_state_extrema();
 		return last_step_.accepted_dt_s;
 	} catch (const std::exception &e) {
@@ -281,6 +302,7 @@ void WeatherDryCoreNative::reset_isothermal(double surface_pressure_pa,
 		rejected_steps_total_ = 0;
 		last_step_ = {};
 		clear_moisture_state();
+		mark_pristine_reference(surface_pressure_pa, temperature_k);
 		reset_budget_baseline();
 		refresh_state_extrema();
 	} catch (const std::exception &e) {
@@ -307,10 +329,52 @@ void WeatherDryCoreNative::reset_terrain_balanced_isothermal(
 		rejected_steps_total_ = 0;
 		last_step_ = {};
 		clear_moisture_state();
+		mark_pristine_reference(reference_surface_pressure_pa, temperature_k);
 		reset_budget_baseline();
 		refresh_state_extrema();
 	} catch (const std::exception &e) {
 		UtilityFunctions::push_error(String("WeatherDryCoreNative terrain-balanced reset failed: ") + e.what());
+	}
+}
+
+void WeatherDryCoreNative::reset_moist_terrain_balanced_isothermal(
+		double reference_surface_pressure_pa, double temperature_k,
+		double relative_humidity) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.reset_moist_terrain_balanced_isothermal called before initialize");
+		return;
+	}
+	if (!(reference_surface_pressure_pa > TOP_PRESSURE_PA)
+			|| !std::isfinite(reference_surface_pressure_pa)
+			|| !(temperature_k > 150.0) || !(temperature_k < 400.0)
+			|| !std::isfinite(temperature_k)
+			|| !(relative_humidity >= 0.0) || !(relative_humidity <= 1.0)
+			|| !std::isfinite(relative_humidity)) {
+		UtilityFunctions::push_error("WeatherDryCoreNative moist terrain-balanced reset parameters are invalid");
+		return;
+	}
+	try {
+		VoronoiMoistReference reference(*dynamics_);
+		auto new_state = reference.make_isothermal_terrain_balanced(
+			reference_surface_pressure_pa, temperature_k, relative_humidity);
+		state_ = std::move(new_state);
+		simulation_seconds_ = 0.0;
+		rejected_steps_total_ = 0;
+		last_step_ = {};
+		clear_surface_exchange_state();
+		last_moist_adjustment_ = {};
+		moisture_enabled_ = true;
+		precipitation_enabled_ = true;
+		ensure_zero_surface_reservoir();
+		evaporation_flux_kg_m2_s_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
+		sensible_heat_flux_w_m2_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
+		clear_pristine_reference();
+		reset_moisture_baseline();
+		reset_surface_exchange_baseline();
+		reset_budget_baseline();
+		refresh_state_extrema();
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative moist terrain-balanced reset failed: ") + e.what());
 	}
 }
 
@@ -324,29 +388,39 @@ bool WeatherDryCoreNative::initialize_moisture(double relative_humidity,
 		UtilityFunctions::push_error("WeatherDryCoreNative moisture RH must be finite and non-negative");
 		return false;
 	}
-	const VoronoiDryCore::State original = state_;
 	try {
-		VoronoiMoistThermodynamics moist(dynamics_->transport());
-		moist.initialize_uniform_relative_humidity(state_, relative_humidity);
-		last_moist_adjustment_ = {};
-		if (perform_saturation_adjustment) {
-			last_moist_adjustment_ = moist.saturation_adjust(state_);
+		VoronoiDryCore::State candidate = state_;
+		if (pristine_isothermal_reference_ && relative_humidity <= 1.0) {
+			VoronoiMoistReference reference(*dynamics_);
+			candidate = reference.make_isothermal_terrain_balanced(
+				pristine_reference_surface_pressure_pa_,
+				pristine_reference_temperature_k_, relative_humidity);
+		} else {
+			VoronoiMoistThermodynamics moist(dynamics_->transport());
+			moist.initialize_uniform_relative_humidity(candidate, relative_humidity);
 		}
+
+		VoronoiMoistThermodynamics moist(dynamics_->transport());
+		VoronoiMoistThermodynamics::AdjustmentDiagnostics adjustment{};
+		if (perform_saturation_adjustment) {
+			adjustment = moist.saturation_adjust(candidate);
+		}
+
+		state_ = std::move(candidate);
 		clear_surface_exchange_state();
+		last_moist_adjustment_ = adjustment;
 		moisture_enabled_ = true;
 		precipitation_enabled_ = true;
 		ensure_zero_surface_reservoir();
 		evaporation_flux_kg_m2_s_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
 		sensible_heat_flux_w_m2_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
+		clear_pristine_reference();
 		reset_moisture_baseline();
 		reset_surface_exchange_baseline();
 		reset_budget_baseline();
 		refresh_state_extrema();
 		return true;
 	} catch (const std::exception &e) {
-		state_ = original;
-		clear_surface_exchange_state();
-		moisture_enabled_ = false;
 		UtilityFunctions::push_error(String("WeatherDryCoreNative moisture initialization failed: ") + e.what());
 		return false;
 	}
@@ -677,6 +751,7 @@ bool WeatherDryCoreNative::add_pressure_perturbation(const Vector3 &center_direc
 			for (auto &tracer : state_.tracer_mass_kg_m2) tracer[i] *= f;
 		}
 	}
+	clear_pristine_reference();
 	last_step_ = {};
 	reset_budget_baseline();
 	if (moisture_enabled_) {
@@ -739,9 +814,17 @@ void WeatherDryCoreNative::reset_budget_baseline() {
 	}
 	initial_dry_mass_kg_ = dynamics_->total_dry_mass_kg(state_);
 	initial_theta_mass_kg_k_ = dynamics_->total_theta_mass_kg_k(state_);
-	initial_dry_energy_j_ = dynamics_->total_dry_energy_j(state_);
-	initial_absolute_aam_kg_m2_s_ =
-		dynamics_->total_absolute_axial_angular_momentum_kg_m2_s(state_);
+	if (moisture_enabled_ && state_.tracer_mass_kg_m2.size() >= 5) {
+		VoronoiMoistEnergyDiagnostics budgets(*dynamics_);
+		const auto moist = budgets.diagnose(state_);
+		initial_dry_energy_j_ = moist.total_energy_j;
+		initial_absolute_aam_kg_m2_s_ =
+			moist.absolute_axial_angular_momentum_kg_m2_s;
+	} else {
+		initial_dry_energy_j_ = dynamics_->total_dry_energy_j(state_);
+		initial_absolute_aam_kg_m2_s_ =
+			dynamics_->total_absolute_axial_angular_momentum_kg_m2_s(state_);
+	}
 }
 
 double WeatherDryCoreNative::current_total_water_kg() const {
@@ -923,11 +1006,20 @@ PackedFloat64Array WeatherDryCoreNative::get_global_budget_diagnostics() const {
 	if (!ready()) return out;
 	const double mass = dynamics_->total_dry_mass_kg(state_);
 	const double theta_mass = dynamics_->total_theta_mass_kg_k(state_);
-	const double energy = dynamics_->total_dry_energy_j(state_);
-	const double relative_aam =
-		dynamics_->total_relative_axial_angular_momentum_kg_m2_s(state_);
-	const double absolute_aam =
-		dynamics_->total_absolute_axial_angular_momentum_kg_m2_s(state_);
+	double energy = 0.0;
+	double relative_aam = 0.0;
+	double absolute_aam = 0.0;
+	if (moisture_enabled_ && state_.tracer_mass_kg_m2.size() >= 5) {
+		VoronoiMoistEnergyDiagnostics budgets(*dynamics_);
+		const auto moist = budgets.diagnose(state_);
+		energy = moist.total_energy_j;
+		relative_aam = moist.relative_axial_angular_momentum_kg_m2_s;
+		absolute_aam = moist.absolute_axial_angular_momentum_kg_m2_s;
+	} else {
+		energy = dynamics_->total_dry_energy_j(state_);
+		relative_aam = dynamics_->total_relative_axial_angular_momentum_kg_m2_s(state_);
+		absolute_aam = dynamics_->total_absolute_axial_angular_momentum_kg_m2_s(state_);
+	}
 	const double energy_drift = initial_dry_energy_j_ != 0.0
 		? (energy - initial_dry_energy_j_) / std::abs(initial_dry_energy_j_) : 0.0;
 	const double aam_drift = initial_absolute_aam_kg_m2_s_ != 0.0
