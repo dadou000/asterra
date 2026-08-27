@@ -9,19 +9,18 @@ render_mode cull_disabled, depth_draw_opaque, diffuse_burley, specular_schlick_g
 #include "res://shaders/ocean_waves.gdshaderinc"
 
 // Production ocean representation.
-// Large/medium wavelengths displace the clipmap. Once a wavelength is no longer
-// resolvable by the current mesh or graphics preset, its slope energy is retained
-// as microfacet variance rather than disappearing. This is what prevents distant
-// rough water from becoming a polished mirror.
 //
 // Every clipmap level samples one common planet-space wave field. Fine vertices
-// geomorph onto the next coarser *absolute* lattice in the outer transition band;
-// phase, bathymetry, interactions and micro detail are evaluated after that
-// morph. Adjacent L levels therefore differ only in sampling density/bandwidth,
-// never in phase origin or orientation.
+// geomorph onto the next coarser absolute lattice before entering the actual
+// geometric overlap. The overlap is kept as a watertight underlay instead of
+// being cut with fragment discard, because independently rasterized circular
+// grids do not have identical edge topology.
 //
-// The deep-ocean pass is deliberately opaque. Shallow transmission/refraction
-// belongs in a separate coast pass; the open ocean is a depth-writing PBR surface.
+// Spectral LOD is also representation-continuous. If a wavelength becomes too
+// short for a coarse vertex grid, the missing slope continues in fragment-space
+// with the same world phase. It becomes statistical GGX variance only when it is
+// genuinely too small on screen. A ring therefore changes tessellation, not the
+// apparent phase/orientation or the existence of surface detail.
 
 uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
@@ -68,18 +67,23 @@ varying float v_breaking;
 varying float v_crest;
 varying float v_compression;
 varying float v_diffraction;
-varying float v_unresolved_variance;
 varying float v_interaction_foam;
 varying float v_cloud_shadow;
 varying float v_level;
-varying float v_ring_q;
+varying float v_wave_spacing;
 varying vec3 v_direct_atmo_t;
 
 const float MAX_PROJECTED_THETA = 1.62;
 const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float TERRAIN_HALF_CELLS = 200.0;
 const float TERRAIN_FINE_MORPH_START_Q = 0.875;
-const float OCEAN_FINE_MORPH_START_Q = 0.875;
+
+// Finish geomorphing before the geometric overlap begins. The old 0.875..1.0
+// morph meant the fine and coarse surfaces represented different spectra through
+// most of their overlap. By q=0.875 the child is now exactly the parent surface.
+const float OCEAN_FINE_MORPH_START_Q = 0.720;
+const float OCEAN_FINE_MORPH_END_Q = 0.875;
+const float OCEAN_RING_INNER_Q = 0.4375;
 const float OCEAN_RING_HANDOFF_Q = 0.50;
 
 const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
@@ -106,13 +110,9 @@ float ocean_ring_q(vec2 cell) {
 float ocean_fine_morph(vec2 cell) {
 	float q = ocean_ring_q(cell);
 	return ocean_smoother01((q - OCEAN_FINE_MORPH_START_Q)
-		/ (1.0 - OCEAN_FINE_MORPH_START_Q));
+		/ (OCEAN_FINE_MORPH_END_Q - OCEAN_FINE_MORPH_START_Q));
 }
 
-// Snap an absolute tangent-plane coordinate to the next coarser nested lattice.
-// Doing this in absolute anchor coordinates is important: snapping local `cell`
-// coordinates alone fails whenever fine and parent level centres have different
-// parity after camera snapping, which was the source of the visible phase shift.
 vec2 ocean_parent_lattice(vec2 anchor_offset_m, float spacing) {
 	float parent_spacing = spacing * 2.0;
 	vec2 parent_cell = floor(anchor_offset_m / parent_spacing + vec2(0.5));
@@ -209,17 +209,6 @@ void ocean_bathymetry(vec3 d, float arc_m, float sample_m,
 	landward = gm > 1e-4 ? normalize(tx * g.x + ty * g.y)
 		: ocean_safe_tangent(d, SWELL_AXIS_A);
 	signed_shore_distance = clamp(smooth_ground_h / max(gm, 0.025), -6000.0, 6000.0);
-}
-
-float ocean_band_variance(int band, float wavelength, float base_amp,
-		float depth, float spacing) {
-	float k = TAU / wavelength;
-	float amp = min(base_amp * ocean_shoal_gain(depth, wavelength),
-		max(0.015, BREAKER_GAMMA * depth * 0.5));
-	float resolved = band < u_quality_band_count
-		? ocean_wave_band_weight(wavelength, spacing) : 0.0;
-	float slope_rms = amp * k;
-	return (1.0 - resolved) * slope_rms * slope_rms * 0.5;
 }
 
 void ocean_add_quality_wave(int band, vec3 up, vec3 dir, float phase_coord,
@@ -364,6 +353,68 @@ vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 	return slope;
 }
 
+// Residual geometric spectrum ----------------------------------------------------
+//
+// Vertex LOD is allowed to remove displacement, but removing its slope too makes
+// a coarse ring look like a different material. Reconstruct that missing slope
+// in fragment-space from the same anchored phase. Only screen-unresolvable energy
+// is converted into roughness.
+
+void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
+		float wavelength, float base_amp, float phase_offset, float depth,
+		float geometry_spacing, inout vec3 slope, inout float unresolved_variance) {
+	float geom_w = ocean_wave_band_weight(wavelength, geometry_spacing);
+	float residual = 1.0 - geom_w;
+	if (residual <= 0.001) return;
+
+	vec3 anchor_travel = ocean_safe_tangent(u_anchor_dir, axis);
+	vec2 phase_dir = vec2(dot(anchor_travel, u_anchor_right),
+		dot(anchor_travel, u_anchor_up));
+	float dir_len = length(phase_dir);
+	if (dir_len <= 1e-6) return;
+	phase_dir /= dir_len;
+
+	float coord_m = dot(plane_m, phase_dir);
+	float footprint_m = max(fwidth(coord_m), 1e-6);
+	float pixels_per_wave = wavelength / footprint_m;
+	float screen_w = smoothstep(3.5, 8.0, pixels_per_wave);
+
+	float amp = min(base_amp * u_wave_scale * ocean_shoal_gain(depth, wavelength),
+		max(0.015, BREAKER_GAMMA * depth * 0.5));
+	float k = TAU / wavelength;
+	float residual_slope = amp * k * residual;
+
+	// The coast-steered wave directions live in vertex-space. Keep this normal
+	// continuation for open/deep water, where the planet-space phase axis is the
+	// physical direction. Near shore, unresolved energy becomes roughness instead
+	// of fighting the refraction field.
+	float deep_w = smoothstep(18.0, 95.0, depth);
+	float resolved_w = screen_w * deep_w;
+	unresolved_variance += (1.0 - resolved_w * resolved_w)
+		* residual_slope * residual_slope * 0.5;
+	if (resolved_w <= 0.001) return;
+
+	float anchor_coord = ocean_geodesic_phase_coord(u_anchor_dir, axis);
+	float omega = ocean_dispersion(k, depth)
+		* ocean_coast_frequency_scale(depth, wavelength);
+	float phase = (anchor_coord + coord_m) * k - omega * u_time_s + phase_offset;
+	vec3 travel = ocean_safe_tangent(up, axis);
+	slope += travel * (residual_slope * cos(phase) * resolved_w);
+}
+
+vec3 ocean_residual_spectrum(vec3 up, out float unresolved_variance) {
+	vec3 slope = vec3(0.0);
+	unresolved_variance = 0.0;
+	float spacing = max(v_wave_spacing, 0.01);
+	if (u_quality_band_count >= 1) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_A, 192.0, 1.15, 0.0, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 2) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_B, 96.0, 0.78, 1.7, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 3) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_C, 42.0, 0.32, 3.1, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 4) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_D, 18.0, 0.105, 4.6, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 5) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_E, 8.0, 0.036, 2.2, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 6) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_F, 3.4, 0.014, 5.4, v_depth, spacing, slope, unresolved_variance);
+	return slope;
+}
+
 vec3 ocean_vertical_optical_depth() {
 	return u_rayleigh_coeff * u_rayleigh_scale_height
 		+ vec3(u_mie_coeff * u_mie_scale_height)
@@ -397,18 +448,11 @@ void vertex() {
 	float ring_q = ocean_ring_q(cell);
 	float representation_morph = ocean_fine_morph(cell);
 
-	// Each level may have a different camera-snapped centre. Start from its normal
-	// absolute lattice coordinate, then geomorph that coordinate onto the parent's
-	// absolute lattice in the outer transition. This makes the position sampled by
-	// both levels identical at the handoff even when their snapped centres differ.
 	vec2 level_center_m = floor(u_lattice_center_plane / spacing + vec2(0.5)) * spacing;
 	vec2 anchor_offset_m = level_center_m + cell * spacing;
 	vec2 parent_offset_m = ocean_parent_lattice(anchor_offset_m, spacing);
 	vec2 sample_anchor_m = mix(anchor_offset_m, parent_offset_m, representation_morph);
 
-	// Terrain LOD/bathymetry selection must also be level-independent. The old
-	// code used length(cell * spacing), so two overlapping levels could ask the
-	// terrain sampler for different LODs at the same world location.
 	vec2 observer_offset_m = sample_anchor_m - u_lattice_center_plane;
 	float arc_m = length(observer_offset_m);
 	float raw_theta = arc_m / max(u_planet_radius, 1.0);
@@ -428,8 +472,6 @@ void vertex() {
 	if (level <= u_bathymetry_level_limit) {
 		ocean_bathymetry(d, arc_m, max(wave_spacing * 2.5, 32.0), raw_ground_h,
 			ground_h, landward, shore_distance, coast_confidence);
-		// If this is the last level allowed to do detailed bathymetry, fade those
-		// derivatives to the parent's cheap representation in the same handoff band.
 		if (level == u_bathymetry_level_limit) {
 			ground_h = mix(ground_h, raw_ground_h, representation_morph);
 			landward = normalize(mix(landward, simple_landward, representation_morph));
@@ -478,19 +520,10 @@ void vertex() {
 	ocean_add_quality_wave(4, d, dir_e, phase_e, shore_distance, depth, wave_spacing, 8.0, 0.036, 0.42, 2.2, wave);
 	ocean_add_quality_wave(5, d, dir_f, phase_f, shore_distance, depth, wave_spacing, 3.4, 0.014, 0.36, 5.4, wave);
 
-	float unresolved = 0.0;
-	unresolved += ocean_band_variance(0, 192.0, 1.15 * u_wave_scale, depth, wave_spacing);
-	unresolved += ocean_band_variance(1, 96.0, 0.78 * u_wave_scale, depth, wave_spacing);
-	unresolved += ocean_band_variance(2, 42.0, 0.32 * u_wave_scale, depth, wave_spacing);
-	unresolved += ocean_band_variance(3, 18.0, 0.105 * u_wave_scale, depth, wave_spacing);
-	unresolved += ocean_band_variance(4, 8.0, 0.036 * u_wave_scale, depth, wave_spacing);
-	unresolved += ocean_band_variance(5, 3.4, 0.014 * u_wave_scale, depth, wave_spacing);
-
 	float interaction_h;
 	vec3 interaction_slope;
 	float interaction_foam;
 	ocean_interactions(d, level, interaction_h, interaction_slope, interaction_foam);
-	// The last interaction-enabled LOD must converge to the first disabled parent.
 	if (level == u_interaction_vertex_level) {
 		float interaction_lod = 1.0 - representation_morph;
 		interaction_h *= interaction_lod;
@@ -504,22 +537,37 @@ void vertex() {
 	vec3 tangential_displacement = wave.displacement - d * radial_h;
 	vec3 displaced = d * (u_planet_radius + radial_h) + tangential_displacement;
 
+	// Keep the coarse overlap instead of discarding it. The child has already
+	// converged to the parent lattice/spectrum before q=0.875, so the overlap is
+	// effectively the same surface. A millimetre/centimetre underlay bias prevents
+	// coincident-depth flicker and fills the inevitable raster gaps between two
+	// independently triangulated circular boundaries without producing a visible
+	// trench like the former metre-scale sink did.
+	float seam_underlay = 0.0;
+	if (level > 0 && ring_q < OCEAN_RING_HANDOFF_Q) {
+		float seam_t = 1.0 - ocean_smoother01((ring_q - OCEAN_RING_INNER_Q)
+			/ (OCEAN_RING_HANDOFF_Q - OCEAN_RING_INNER_Q));
+		seam_underlay = seam_t * clamp(spacing * 0.00025, 0.002, 0.020);
+	}
+	float render_radial_h = radial_h - seam_underlay;
+
 	v_planet = displaced;
 	v_render = stable_displacement
 		? u_anchor_render + ocean_stable_surface_offset(u_anchor_dir, u_anchor_right,
-			u_anchor_up, sample_anchor_m, radial_h) + tangential_displacement
-		: displaced - u_origin;
+			u_anchor_up, sample_anchor_m, render_radial_h) + tangential_displacement
+		: d * (u_planet_radius + render_radial_h) + tangential_displacement - u_origin;
 	v_slope = wave.slope;
-	v_micro_plane = stable_displacement ? sample_anchor_m : observer_offset_m;
+	// Always use the absolute anchor plane for optical detail. This must not switch
+	// coordinate systems with the debug displacement mode or the ring number.
+	v_micro_plane = sample_anchor_m;
 	v_depth = depth;
 	v_breaking = wave.breaking;
 	v_crest = wave.crest;
 	v_compression = wave.compression;
 	v_diffraction = max(diffract_a, diffract_b);
-	v_unresolved_variance = unresolved;
 	v_interaction_foam = interaction_foam;
 	v_level = float(level);
-	v_ring_q = ring_q;
+	v_wave_spacing = wave_spacing;
 
 	vec3 shadow_sun = normalize(u_cloud_shadow_sun_dir);
 	float planet_vis = planet_direct_sun_visibility(displaced, shadow_sun, u_planet_radius);
@@ -539,18 +587,16 @@ void vertex() {
 void fragment() {
 	if (v_valid < 0.5) discard;
 
-	// Ring meshes intentionally retain a small geometric overlap so topology cannot
-	// crack while moving. The fine child owns that overlap. Unlike the old sink,
-	// hiding the coarse duplicate does not bend the sea into concentric trenches.
-	if (v_level > 0.5 && v_ring_q < OCEAN_RING_HANDOFF_Q) discard;
-
 	vec3 camera_planet = CAMERA_POSITION_WORLD + u_origin;
 	float camera_alt = length(camera_planet) - u_planet_radius;
 	if (camera_alt >= u_orbit_handoff_altitude) discard;
 
 	vec3 up = normalize(v_planet);
+	float residual_unresolved_variance;
+	vec3 residual_slope = ocean_residual_spectrum(up, residual_unresolved_variance);
 	float micro_unresolved_variance;
-	vec3 resolved_slope = v_slope + ocean_micro_slope(up, micro_unresolved_variance);
+	vec3 micro_slope = ocean_micro_slope(up, micro_unresolved_variance);
+	vec3 resolved_slope = v_slope + residual_slope + micro_slope;
 	vec3 n = normalize(up - resolved_slope);
 	if (dot(n, up) < 0.0) n = -n;
 
@@ -568,7 +614,7 @@ void fragment() {
 	float wind_state = smoothstep(5.0, 17.0, wind_speed);
 	float cap_low = mix(0.105, 0.040, wind_state);
 	float cap_high = mix(0.210, 0.095, wind_state);
-	float offshore_whitecap = smoothstep(cap_low, cap_high, length(v_slope))
+	float offshore_whitecap = smoothstep(cap_low, cap_high, length(v_slope + residual_slope))
 		* smoothstep(0.53, 0.88, v_crest) * foam_patch;
 	float compression_cap = smoothstep(0.22, 0.72, v_compression)
 		* smoothstep(0.50, 0.86, v_crest) * foam_patch;
@@ -581,7 +627,7 @@ void fragment() {
 	base = mix(base, u_foam, foam * 0.88);
 
 	float wind_rough = water_roughness_from_wind(wind_speed, 0.5);
-	float all_unresolved_variance = max(v_unresolved_variance, 0.0)
+	float all_unresolved_variance = max(residual_unresolved_variance, 0.0)
 		+ max(micro_unresolved_variance, 0.0);
 	float unresolved_slope_rms = sqrt(all_unresolved_variance);
 	float wind_alpha = wind_rough * wind_rough;
