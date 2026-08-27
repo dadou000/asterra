@@ -8,14 +8,17 @@
 
 namespace asterra::weather {
 
-// Transactional 30-level dry-atmosphere integrator.
-// Horizontal dynamics and pressure-coordinate remapping form one transaction;
-// dry mass, theta mass, passive tracer masses and edge momentum roll back
-// together if any positivity or conservation gate fails.
+// Transactional 30-level atmosphere integrator. Horizontal dynamics and
+// pressure-coordinate remapping form one transaction; dry mass, theta mass,
+// passive tracer masses and edge momentum roll back together if any positivity
+// or conservation gate fails. Optional moist pressure feedback changes only the
+// diagnosed pressure/geopotential force inside the horizontal SSPRK stages;
+// the conservative vertical coordinate remains dry-mass based.
 class VoronoiDryCore {
 public:
 	static constexpr int LEVELS = VoronoiDryDynamics::LEVELS;
 	using State = VoronoiDryDynamics::State;
+	using MoistTracerIndices = VoronoiDryDynamics::MoistTracerIndices;
 
 	struct StepDiagnostics {
 		double requested_dt_s = 0.0;
@@ -55,6 +58,13 @@ public:
 	void set_surface_geopotential_m2_s2(const std::vector<double> &geopotential) {
 		dynamics_.set_surface_geopotential_m2_s2(geopotential);
 		vertical_.set_surface_geopotential_m2_s2(geopotential);
+	}
+	void set_moist_pressure_feedback(bool enabled,
+		MoistTracerIndices indices = {}) {
+		dynamics_.set_moist_pressure_feedback(enabled, indices);
+	}
+	bool moist_pressure_feedback_enabled() const {
+		return dynamics_.moist_pressure_feedback_enabled();
 	}
 
 	State make_isothermal_reference(double surface_pressure_pa,
