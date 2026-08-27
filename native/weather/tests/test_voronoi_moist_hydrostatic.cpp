@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 using asterra::weather::GeodesicVoronoiGrid;
+using asterra::weather::VoronoiDryHydrostatic;
 using asterra::weather::VoronoiDryTransport;
 using asterra::weather::VoronoiMoistHydrostatic;
 using asterra::weather::VoronoiMoistThermodynamics;
@@ -87,10 +88,11 @@ int main() {
 		require(max_abs_difference(dry_accel, moist_dry_accel) < 1e-12,
 			"moist pressure-gradient operator does not recover dry limit");
 
-		// Uniform vapor loading: total mechanical pressure must increase by exactly
-		// g times the atmospheric water column. The prognostic dry-coordinate theta
-		// still diagnoses the same sensible temperature; moisture changes Tv and
-		// mechanical pressure rather than acting as an unaccounted heat source.
+		// Uniform vapor loading: mechanical pressure gains exactly the water-column
+		// weight. Theta is standard potential temperature, so with theta held fixed
+		// the higher full pressure must diagnose a correspondingly higher sensible T.
+		// The field is horizontally uniform, however, and must still remain exactly
+		// free of horizontal pressure acceleration.
 		auto vapor_state = transport.make_isothermal_reference(PS, 288.0);
 		thermo.ensure_water_tracers(vapor_state);
 		constexpr double QV = 0.012;
@@ -111,9 +113,17 @@ int main() {
 				expected_ps, 2e-13, 1e-9),
 				"moist surface pressure does not include exact vapor column weight");
 		}
+		double max_full_pressure_temperature_increase = 0.0;
 		for (size_t i = 0; i < vapor_diag.temperature_k.size(); ++i) {
-			require(vapor_diag.temperature_k[i] == vapor_dry_diag.temperature_k[i],
-				"water loading reinterpreted dry-coordinate theta as sensible heating");
+			const double expected_temperature = vapor_diag.potential_temperature_k[i]
+				* std::pow(vapor_diag.layer_pressure_pa[i] / VoronoiDryHydrostatic::P0_PA,
+					VoronoiDryHydrostatic::KAPPA);
+			require(nearly_equal(vapor_diag.temperature_k[i], expected_temperature,
+				2e-13, 1e-11),
+				"moist temperature does not satisfy theta/full-pressure Exner identity");
+			max_full_pressure_temperature_increase = std::max(
+				max_full_pressure_temperature_increase,
+				vapor_diag.temperature_k[i] - vapor_dry_diag.temperature_k[i]);
 			require(vapor_diag.virtual_temperature_k[i] > vapor_diag.temperature_k[i],
 				"vapor loading failed to increase virtual temperature");
 			require(nearly_equal(vapor_diag.layer_total_mass_kg_m2[i],
@@ -121,6 +131,8 @@ int main() {
 					+ vapor_state.tracer_mass_kg_m2[0][i]),
 				"moist layer total mass diagnostic is inconsistent");
 		}
+		require(max_full_pressure_temperature_increase > 0.0,
+			"water weight failed to enter standard theta-to-temperature conversion");
 		const auto uniform_moist_accel = moist_hydro.pressure_gradient_acceleration(
 			vapor_state, vapor_diag);
 		double max_uniform_accel = 0.0;
@@ -134,9 +146,9 @@ int main() {
 			dry_mass + vapor_mass, 2e-13, 1.0),
 			"total moist-air mass diagnostic does not close");
 
-		// Suspended condensate contributes weight and density but not gas pressure
-		// through its own equation of state. The implemented Tv identity must match
-		// the thermodynamics helper cell-for-cell.
+		// Suspended condensate contributes weight and density. The implemented Tv
+		// identity must match the thermodynamics helper cell-for-cell under the same
+		// full-pressure temperature convention.
 		auto loaded = vapor_state;
 		constexpr double QL = 0.003;
 		constexpr double QI = 0.001;
@@ -155,8 +167,7 @@ int main() {
 				"condensate loading did not increase total layer mass");
 		}
 
-		// A horizontal moisture loading gradient should now be visible to the
-		// diagnostic pressure force, demonstrating the feedback pathway.
+		// A horizontal moisture loading gradient must be visible to the pressure force.
 		auto gradient = transport.make_isothermal_reference(PS, 288.0);
 		thermo.ensure_water_tracers(gradient);
 		for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
@@ -172,12 +183,13 @@ int main() {
 		double max_gradient_accel = 0.0;
 		for (double a : gradient_accel) max_gradient_accel = std::max(max_gradient_accel, std::abs(a));
 		require(max_gradient_accel > 1e-8,
-			"horizontal moisture loading gradient produced no diagnostic pressure force");
+			"horizontal moisture loading gradient produced no pressure force");
 
 		std::cout << "VoronoiMoistHydrostatic PASS\n"
 			<< "  dry-limit max dPhi: "
 			<< max_abs_difference(dry_diag.layer_geopotential,
 				moist_dry_diag.layer_geopotential) << " m2/s2\n"
+			<< "  max full-pressure dT: " << max_full_pressure_temperature_increase << " K\n"
 			<< "  uniform moist max accel: " << max_uniform_accel << " m/s2\n"
 			<< "  moisture-gradient max accel: " << max_gradient_accel << " m/s2\n";
 		return EXIT_SUCCESS;
