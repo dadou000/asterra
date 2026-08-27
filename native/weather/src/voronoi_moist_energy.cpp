@@ -26,14 +26,21 @@ VoronoiMoistEnergyDiagnostics::diagnose(const State &state) const {
 	const auto &vapor = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.vapor));
 	const auto &cloud_ice = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_ice));
 	const auto &snow = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.snow));
+	const double radius = grid.radius_m();
+	const double radius2 = radius * radius;
+	const double omega = core_->dynamics().rotation_rate_rad_s();
+	const Vec3d axis = core_->dynamics().rotation_axis();
 
 	Diagnostics d;
 	long double internal = 0.0L;
 	long double latent = 0.0L;
 	long double potential = 0.0L;
 	long double kinetic = 0.0L;
+	long double relative_aam = 0.0L;
+	long double absolute_aam = 0.0L;
 
 	for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
+		const auto velocity = core_->reconstruct_cell_velocity(state, k);
 		for (int c = 0; c < cells; ++c) {
 			const size_t i = static_cast<size_t>(k * cells + c);
 			long double edge_ke_sum = 0.0L;
@@ -41,7 +48,7 @@ VoronoiMoistEnergyDiagnostics::diagnose(const State &state) const {
 				const double u = state.edge_normal_mps[
 					static_cast<size_t>(k * edges + e)];
 				if (!std::isfinite(u)) {
-					throw std::runtime_error("Moist energy received non-finite edge wind");
+					throw std::runtime_error("Moist budget received non-finite edge wind");
 				}
 				edge_ke_sum += static_cast<long double>(grid.edge(e).edge_area_m2)
 					* static_cast<long double>(u * u);
@@ -51,6 +58,12 @@ VoronoiMoistEnergyDiagnostics::diagnose(const State &state) const {
 			const double dry_mass = state.layer_mass_kg_m2[i];
 			const double total_mass = hydro.layer_total_mass_kg_m2[i];
 			const double area = grid.cell(c).area_m2;
+			const Vec3d &position_unit = grid.cell(c).center;
+			const double relative_specific = radius * dot(axis,
+				cross(position_unit, velocity[static_cast<size_t>(c)]));
+			const double mu = dot(axis, position_unit);
+			const double planetary_specific = omega * radius2
+				* std::max(0.0, 1.0 - mu * mu);
 
 			internal += static_cast<long double>(area)
 				* static_cast<long double>(dry_mass)
@@ -66,6 +79,12 @@ VoronoiMoistEnergyDiagnostics::diagnose(const State &state) const {
 			kinetic += static_cast<long double>(area)
 				* static_cast<long double>(total_mass)
 				* static_cast<long double>(cell_ke);
+			relative_aam += static_cast<long double>(area)
+				* static_cast<long double>(total_mass)
+				* static_cast<long double>(relative_specific);
+			absolute_aam += static_cast<long double>(area)
+				* static_cast<long double>(total_mass)
+				* static_cast<long double>(relative_specific + planetary_specific);
 		}
 	}
 
@@ -75,12 +94,16 @@ VoronoiMoistEnergyDiagnostics::diagnose(const State &state) const {
 	d.kinetic_energy_j = static_cast<double>(kinetic);
 	d.total_energy_j = d.internal_energy_j + d.latent_reference_energy_j
 		+ d.potential_energy_j + d.kinetic_energy_j;
+	d.relative_axial_angular_momentum_kg_m2_s = static_cast<double>(relative_aam);
+	d.absolute_axial_angular_momentum_kg_m2_s = static_cast<double>(absolute_aam);
 	if (!std::isfinite(d.internal_energy_j)
 			|| !std::isfinite(d.latent_reference_energy_j)
 			|| !std::isfinite(d.potential_energy_j)
 			|| !std::isfinite(d.kinetic_energy_j)
-			|| !std::isfinite(d.total_energy_j)) {
-		throw std::runtime_error("Moist energy diagnostic produced a non-finite component");
+			|| !std::isfinite(d.total_energy_j)
+			|| !std::isfinite(d.relative_axial_angular_momentum_kg_m2_s)
+			|| !std::isfinite(d.absolute_axial_angular_momentum_kg_m2_s)) {
+		throw std::runtime_error("Moist budget diagnostic produced a non-finite component");
 	}
 	return d;
 }
