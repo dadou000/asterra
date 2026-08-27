@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -62,9 +63,9 @@ static Result evaluate(int frequency) {
 		max_abs = std::max(max_abs, std::abs(error));
 	}
 
-	// Test the matrix identity M W + (M W)^T = 0 with one global matrix norm.
-	// Local relative normalization is invalid for coefficients that are supposed
-	// to be zero: roundoff-sized pairs would otherwise dominate the result.
+	// Test M W + (M W)^T = 0 with a single global matrix norm. Near-zero
+	// coefficients must not be normalized independently because roundoff then
+	// masquerades as a large relative error.
 	double max_skew_absolute = 0.0;
 	double max_matrix_coefficient = 0.0;
 	int worst_edge = -1;
