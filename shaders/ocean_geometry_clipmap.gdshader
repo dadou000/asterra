@@ -101,6 +101,14 @@ float ocean_smoother01(float x) {
 	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
 }
 
+// Convert a wavelength from explicit resolved slope into statistical slope
+// variance over a deliberately broad screen-space interval. A narrow 3..8 pixel
+// crossover reads as a hard distance ring in low-sun glitter; 2..14 pixels keeps
+// the same energy but makes the representation change gradual enough to vanish.
+float ocean_screen_band_weight(float pixels_per_wave) {
+	return ocean_smoother01((pixels_per_wave - 2.0) / 12.0);
+}
+
 // Chebyshev radius follows the square topology exactly. A Euclidean radius here
 // would make the wave/spectral morph circular while the actual LOD boundary is
 // square, exposing the transition most strongly near the corners.
@@ -327,7 +335,8 @@ void ocean_micro_noise_band(vec3 up, vec2 plane_m, float wavelength,
 
 	vec2 fw = fwidth(q);
 	float footprint = max(max(fw.x, fw.y), 1e-6);
-	float filter_w = 1.0 - smoothstep(0.14, 0.34, footprint);
+	float pixels_per_wave = 1.0 / footprint;
+	float filter_w = ocean_screen_band_weight(pixels_per_wave);
 	float variance = slope_amp * slope_amp * 0.62;
 	unresolved_variance += (1.0 - filter_w * filter_w) * variance;
 	if (filter_w <= 0.001) return;
@@ -357,9 +366,10 @@ vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 
 // Residual geometric spectrum ----------------------------------------------------
 // Vertex LOD may remove displacement, but the same physical slope remains until
-// the wavelength becomes sub-pixel. Phase is evaluated with the exact same
-// geodesic coordinate used by the vertex spectrum.
-void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
+// the wavelength becomes sub-pixel. Both phase and footprint are evaluated from
+// the same geodesic coordinate; this prevents a tangent-plane filtering estimate
+// from drifting away from the planet-space wave on large or grazing rings.
+void ocean_residual_wave_band(vec3 up, vec3 axis,
 		float wavelength, float base_amp, float phase_offset, float depth,
 		float geometry_spacing, inout vec3 slope, inout float unresolved_variance) {
 	float geom_w = ocean_wave_band_weight(wavelength, geometry_spacing);
@@ -367,20 +377,10 @@ void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
 	if (residual <= 0.001) return;
 
 	vec3 surface_dir = normalize(v_surface_dir);
-	vec3 physical_travel = ocean_safe_tangent(surface_dir, axis);
-	vec2 footprint_dir = vec2(dot(physical_travel, u_anchor_right),
-		dot(physical_travel, u_anchor_up));
-	float dir_len = length(footprint_dir);
-	if (dir_len <= 1e-6) return;
-	footprint_dir /= dir_len;
-
-	// The plane coordinate is used only to estimate screen footprint. It no longer
-	// defines wave phase, so tangent-plane approximation error cannot accumulate
-	// across large rings.
-	float projected_m = dot(plane_m, footprint_dir);
-	float footprint_m = max(fwidth(projected_m), 1e-6);
+	float phase_coord = ocean_geodesic_phase_coord(surface_dir, axis);
+	float footprint_m = max(fwidth(phase_coord), 1e-6);
 	float pixels_per_wave = wavelength / footprint_m;
-	float screen_w = smoothstep(3.5, 8.0, pixels_per_wave);
+	float screen_w = ocean_screen_band_weight(pixels_per_wave);
 
 	float amp = min(base_amp * u_wave_scale * ocean_shoal_gain(depth, wavelength),
 		max(0.015, BREAKER_GAMMA * depth * 0.5));
@@ -393,7 +393,6 @@ void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
 		* residual_slope * residual_slope * 0.5;
 	if (resolved_w <= 0.001) return;
 
-	float phase_coord = ocean_geodesic_phase_coord(surface_dir, axis);
 	float omega = ocean_dispersion(k, depth)
 		* ocean_coast_frequency_scale(depth, wavelength);
 	float phase = phase_coord * k - omega * u_time_s + phase_offset;
@@ -405,12 +404,12 @@ vec3 ocean_residual_spectrum(vec3 up, out float unresolved_variance) {
 	vec3 slope = vec3(0.0);
 	unresolved_variance = 0.0;
 	float spacing = max(v_wave_spacing, 0.01);
-	if (u_quality_band_count >= 1) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_A, 192.0, 1.15, 0.0, v_depth, spacing, slope, unresolved_variance);
-	if (u_quality_band_count >= 2) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_B, 96.0, 0.78, 1.7, v_depth, spacing, slope, unresolved_variance);
-	if (u_quality_band_count >= 3) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_C, 42.0, 0.32, 3.1, v_depth, spacing, slope, unresolved_variance);
-	if (u_quality_band_count >= 4) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_D, 18.0, 0.105, 4.6, v_depth, spacing, slope, unresolved_variance);
-	if (u_quality_band_count >= 5) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_E, 8.0, 0.036, 2.2, v_depth, spacing, slope, unresolved_variance);
-	if (u_quality_band_count >= 6) ocean_residual_wave_band(up, v_micro_plane, SWELL_AXIS_F, 3.4, 0.014, 5.4, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 1) ocean_residual_wave_band(up, SWELL_AXIS_A, 192.0, 1.15, 0.0, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 2) ocean_residual_wave_band(up, SWELL_AXIS_B, 96.0, 0.78, 1.7, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 3) ocean_residual_wave_band(up, SWELL_AXIS_C, 42.0, 0.32, 3.1, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 4) ocean_residual_wave_band(up, SWELL_AXIS_D, 18.0, 0.105, 4.6, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 5) ocean_residual_wave_band(up, SWELL_AXIS_E, 8.0, 0.036, 2.2, v_depth, spacing, slope, unresolved_variance);
+	if (u_quality_band_count >= 6) ocean_residual_wave_band(up, SWELL_AXIS_F, 3.4, 0.014, 5.4, v_depth, spacing, slope, unresolved_variance);
 	return slope;
 }
 
