@@ -11,6 +11,7 @@
 namespace godot {
 
 using asterra::weather::GeodesicVoronoiGrid;
+using asterra::weather::SphericalLatLonSampler;
 using asterra::weather::Vec3d;
 using asterra::weather::VoronoiDryCore;
 using asterra::weather::dot;
@@ -30,6 +31,17 @@ void WeatherDryCoreNative::_bind_methods() {
 		&WeatherDryCoreNative::step, DEFVAL(0.28));
 	ClassDB::bind_method(D_METHOD("reset_isothermal", "surface_pressure_pa", "temperature_k"),
 		&WeatherDryCoreNative::reset_isothermal, DEFVAL(110000.0), DEFVAL(288.0));
+	ClassDB::bind_method(D_METHOD("reset_terrain_balanced_isothermal", "reference_surface_pressure_pa", "temperature_k"),
+		&WeatherDryCoreNative::reset_terrain_balanced_isothermal,
+		DEFVAL(110000.0), DEFVAL(288.0));
+	ClassDB::bind_method(D_METHOD("set_surface_height_cells", "height_m"),
+		&WeatherDryCoreNative::set_surface_height_cells);
+	ClassDB::bind_method(D_METHOD("set_surface_height_map", "height_m", "width", "height"),
+		&WeatherDryCoreNative::set_surface_height_map);
+	ClassDB::bind_method(D_METHOD("clear_surface_height"),
+		&WeatherDryCoreNative::clear_surface_height);
+	ClassDB::bind_method(D_METHOD("get_surface_height_cells"),
+		&WeatherDryCoreNative::get_surface_height_cells);
 	ClassDB::bind_method(D_METHOD("add_pressure_perturbation", "center_direction", "fractional_amplitude", "angular_radius_rad"),
 		&WeatherDryCoreNative::add_pressure_perturbation);
 	ClassDB::bind_method(D_METHOD("get_global_dry_rgba", "layer"),
@@ -76,6 +88,7 @@ void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure
 		grid_ = std::move(new_grid);
 		dynamics_ = std::move(new_dynamics);
 		state_ = std::move(new_state);
+		surface_height_m_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
 		frequency_ = p_frequency;
 		simulation_seconds_ = 0.0;
 		rejected_steps_total_ = 0;
@@ -88,6 +101,7 @@ void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure
 		dynamics_.reset();
 		state_ = {};
 		display_cell_lookup_.clear();
+		surface_height_m_.clear();
 		frequency_ = 0;
 		UtilityFunctions::push_error(String("WeatherDryCoreNative initialization failed: ") + e.what());
 	}
@@ -134,6 +148,134 @@ void WeatherDryCoreNative::reset_isothermal(double surface_pressure_pa,
 	} catch (const std::exception &e) {
 		UtilityFunctions::push_error(String("WeatherDryCoreNative reset failed: ") + e.what());
 	}
+}
+
+void WeatherDryCoreNative::reset_terrain_balanced_isothermal(
+		double reference_surface_pressure_pa, double temperature_k) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.reset_terrain_balanced_isothermal called before initialize");
+		return;
+	}
+	if (!(reference_surface_pressure_pa > TOP_PRESSURE_PA)
+			|| !std::isfinite(reference_surface_pressure_pa)
+			|| !(temperature_k > 150.0) || !std::isfinite(temperature_k)) {
+		UtilityFunctions::push_error("WeatherDryCoreNative terrain-balanced reset pressure/temperature is invalid");
+		return;
+	}
+	try {
+		state_ = dynamics_->make_isothermal_terrain_balanced_reference(
+			reference_surface_pressure_pa, temperature_k);
+		simulation_seconds_ = 0.0;
+		rejected_steps_total_ = 0;
+		last_step_ = {};
+		reset_budget_baseline();
+		refresh_state_extrema();
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative terrain-balanced reset failed: ") + e.what());
+	}
+}
+
+void WeatherDryCoreNative::on_static_surface_changed() {
+	// Static terrain is configuration, not a prognostic atmosphere variable. The
+	// current mass/theta state is intentionally untouched. Reset budget baselines
+	// because changing lower-boundary geopotential changes diagnosed total energy.
+	last_step_ = {};
+	reset_budget_baseline();
+	refresh_state_extrema();
+}
+
+bool WeatherDryCoreNative::set_surface_height_cells(const PackedFloat32Array &height_m) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.set_surface_height_cells called before initialize");
+		return false;
+	}
+	if (height_m.size() != grid_->cell_count()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative surface-height cell array must match get_cell_count()");
+		return false;
+	}
+	std::vector<double> candidate(static_cast<size_t>(grid_->cell_count()));
+	const float *src = height_m.ptr();
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double h = static_cast<double>(src[c]);
+		if (!std::isfinite(h)) {
+			UtilityFunctions::push_error("WeatherDryCoreNative surface-height array contains a non-finite value");
+			return false;
+		}
+		candidate[static_cast<size_t>(c)] = h;
+	}
+	try {
+		dynamics_->set_surface_height_m(candidate);
+		surface_height_m_ = std::move(candidate);
+		on_static_surface_changed();
+		return true;
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative surface-height upload failed: ") + e.what());
+		return false;
+	}
+}
+
+bool WeatherDryCoreNative::set_surface_height_map(const PackedFloat32Array &height_m,
+		int width, int height) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.set_surface_height_map called before initialize");
+		return false;
+	}
+	if (width < 2 || height < 2) {
+		UtilityFunctions::push_error("WeatherDryCoreNative surface-height map dimensions must both be >= 2");
+		return false;
+	}
+	const int64_t expected = static_cast<int64_t>(width) * static_cast<int64_t>(height);
+	if (expected != static_cast<int64_t>(height_m.size())) {
+		UtilityFunctions::push_error("WeatherDryCoreNative surface-height map size does not match width*height");
+		return false;
+	}
+
+	std::vector<double> raster(static_cast<size_t>(expected));
+	const float *src = height_m.ptr();
+	for (int64_t i = 0; i < expected; ++i) {
+		const double h = static_cast<double>(src[i]);
+		if (!std::isfinite(h)) {
+			UtilityFunctions::push_error("WeatherDryCoreNative surface-height map contains a non-finite value");
+			return false;
+		}
+		raster[static_cast<size_t>(i)] = h;
+	}
+	try {
+		auto candidate = SphericalLatLonSampler::sample_to_voronoi_cells(
+			*grid_, raster, width, height);
+		dynamics_->set_surface_height_m(candidate);
+		surface_height_m_ = std::move(candidate);
+		on_static_surface_changed();
+		return true;
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative surface-height map sampling failed: ") + e.what());
+		return false;
+	}
+}
+
+void WeatherDryCoreNative::clear_surface_height() {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.clear_surface_height called before initialize");
+		return;
+	}
+	try {
+		surface_height_m_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
+		dynamics_->set_surface_height_m(surface_height_m_);
+		on_static_surface_changed();
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative clear surface height failed: ") + e.what());
+	}
+}
+
+PackedFloat32Array WeatherDryCoreNative::get_surface_height_cells() const {
+	PackedFloat32Array out;
+	if (!ready() || surface_height_m_.size() != static_cast<size_t>(grid_->cell_count())) return out;
+	out.resize(grid_->cell_count());
+	float *dst = out.ptrw();
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		dst[c] = static_cast<float>(surface_height_m_[static_cast<size_t>(c)]);
+	}
+	return out;
 }
 
 bool WeatherDryCoreNative::add_pressure_perturbation(const Vector3 &center_direction,
