@@ -52,9 +52,21 @@ public:
 		double scale_height_m = 8000.0,
 		double top_pressure_pa = 7500.0);
 
+	void set_surface_height_m(const std::vector<double> &height_m) {
+		horizontal_.set_surface_height_m(height_m);
+	}
+	void set_surface_geopotential_m2_s2(const std::vector<double> &geopotential) {
+		horizontal_.set_surface_geopotential_m2_s2(geopotential);
+	}
+
 	State make_isothermal_reference(double surface_pressure_pa,
 		double temperature_k) const {
 		return horizontal_.make_isothermal_reference(surface_pressure_pa, temperature_k);
+	}
+	State make_isothermal_terrain_balanced_reference(double reference_surface_pressure_pa,
+		double temperature_k) const {
+		return horizontal_.make_isothermal_terrain_balanced_reference(
+			reference_surface_pressure_pa, temperature_k);
 	}
 
 	// interface_mass_flux is [interface][cell], size (LEVELS-1)*cell_count.
