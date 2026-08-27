@@ -17,8 +17,8 @@ namespace asterra::weather {
 // and coordinate remap are one transaction: any invalid/remap/conservation
 // failure restores the complete pre-step state.
 //
-// This is the runtime-facing dry dynamical core. Explicit vertical physics,
-// moisture and surface forcing remain separate future source/transport terms.
+// Static surface geopotential is propagated to every internal hydrostatic path
+// but remains outside the prognostic atmospheric state.
 class VoronoiDryCore {
 public:
 	static constexpr int LEVELS = VoronoiDryDynamics::LEVELS;
@@ -53,9 +53,23 @@ public:
 		double rotation_rate_rad_s = 0.0,
 		Vec3d rotation_axis = {0.0, 1.0, 0.0});
 
+	void set_surface_height_m(const std::vector<double> &height_m) {
+		dynamics_.set_surface_height_m(height_m);
+		vertical_.set_surface_height_m(height_m);
+	}
+	void set_surface_geopotential_m2_s2(const std::vector<double> &geopotential) {
+		dynamics_.set_surface_geopotential_m2_s2(geopotential);
+		vertical_.set_surface_geopotential_m2_s2(geopotential);
+	}
+
 	State make_isothermal_reference(double surface_pressure_pa,
 		double temperature_k) const {
 		return dynamics_.make_isothermal_reference(surface_pressure_pa, temperature_k);
+	}
+	State make_isothermal_terrain_balanced_reference(double reference_surface_pressure_pa,
+		double temperature_k) const {
+		return dynamics_.make_isothermal_terrain_balanced_reference(
+			reference_surface_pressure_pa, temperature_k);
 	}
 
 	double total_dry_mass_kg(const State &state) const {
