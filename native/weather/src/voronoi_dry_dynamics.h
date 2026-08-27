@@ -2,19 +2,26 @@
 
 #include "geodesic_voronoi_grid.h"
 #include "voronoi_dry_transport.h"
+#include "voronoi_moist_hydrostatic.h"
 
 #include <vector>
 
 namespace asterra::weather {
 
-// Coupled horizontal dry primitive-equation prototype on the spherical
-// Voronoi C-grid. It advances conservative dry mass, mass-weighted potential
+// Coupled horizontal primitive-equation prototype on the spherical Voronoi
+// C-grid. It advances conservative dry mass, mass-weighted potential
 // temperature, any passive tracer masses, and edge-normal wind together.
 // Tracers use the exact same donor dry-mass flux as thermodynamics.
+//
+// Moist pressure feedback is opt-in. When enabled, every SSPRK tendency stage
+// diagnoses total mechanical pressure and virtual-temperature geopotential from
+// the configured vapor/liquid/ice tracer slots. Dry mass remains the transport
+// and vertical-coordinate mass, matching the existing conservative state.
 class VoronoiDryDynamics {
 public:
 	static constexpr int LEVELS = VoronoiDryTransport::LEVELS;
 	using State = VoronoiDryTransport::State;
+	using MoistTracerIndices = VoronoiMoistThermodynamics::TracerIndices;
 
 	struct StepDiagnostics {
 		double requested_dt_s = 0.0;
@@ -47,6 +54,16 @@ public:
 	void set_surface_geopotential_m2_s2(const std::vector<double> &geopotential) {
 		transport_.set_surface_geopotential_m2_s2(geopotential);
 	}
+
+	// Pressure/geopotential feedback only. Scalar/tracer transport and the dry
+	// pressure coordinate remain unchanged. Enabling this requires the configured
+	// water tracer slots to exist in every state subsequently stepped.
+	void set_moist_pressure_feedback(bool enabled,
+		MoistTracerIndices indices = {});
+	bool moist_pressure_feedback_enabled() const {
+		return moist_pressure_feedback_enabled_;
+	}
+	const MoistTracerIndices &moist_tracer_indices() const { return moist_indices_; }
 
 	State make_isothermal_reference(double surface_pressure_pa,
 		double temperature_k) const {
@@ -99,7 +116,7 @@ private:
 		std::vector<double> theta_mass_dt;
 		std::vector<std::vector<double>> tracer_mass_dt;
 		std::vector<double> edge_velocity_dt;
-		std::vector<double> normal_mass_flux; // m*u, kg/(m s), globally a -> b
+		std::vector<double> normal_mass_flux; // dry m*u, kg/(m s), globally a -> b
 		double max_pressure_acceleration_mps2 = 0.0;
 	};
 
@@ -108,6 +125,8 @@ private:
 	double rotation_rate_rad_s_ = 0.0;
 	Vec3d rotation_axis_{0.0, 1.0, 0.0};
 	std::vector<CellReconstruction> reconstruction_;
+	bool moist_pressure_feedback_enabled_ = false;
+	MoistTracerIndices moist_indices_{};
 
 	int scalar_index(int level, int cell) const {
 		return level * grid_->cell_count() + cell;
