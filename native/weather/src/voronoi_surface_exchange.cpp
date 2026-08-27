@@ -151,7 +151,7 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 
 	try {
 		validate_surface(surface);
-		validate_fluxes(evaporation_kg_m2_s, sensible_heat_w_m2_sensible_heat_w_m2, dt_s);
+		validate_fluxes(evaporation_kg_m2_s, sensible_heat_w_m2, dt_s);
 		VoronoiMoistThermodynamics moist(*transport_, indices_);
 		const auto thermo_before = moist.diagnose_thermodynamics(atmosphere);
 
