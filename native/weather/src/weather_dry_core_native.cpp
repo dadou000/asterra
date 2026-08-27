@@ -1,0 +1,308 @@
+#include "weather_dry_core_native.h"
+
+#include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
+namespace godot {
+
+using asterra::weather::GeodesicVoronoiGrid;
+using asterra::weather::Vec3d;
+using asterra::weather::VoronoiDryDynamics;
+using asterra::weather::dot;
+
+namespace {
+constexpr double PI = 3.141592653589793238462643383279502884;
+
+bool finite_positive(double x) {
+	return std::isfinite(x) && x > 0.0;
+}
+} // namespace
+
+void WeatherDryCoreNative::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("initialize", "frequency", "surface_pressure_pa", "temperature_k"),
+		&WeatherDryCoreNative::initialize, DEFVAL(32), DEFVAL(110000.0), DEFVAL(288.0));
+	ClassDB::bind_method(D_METHOD("step", "requested_dt_s", "target_cfl"),
+		&WeatherDryCoreNative::step, DEFVAL(0.28));
+	ClassDB::bind_method(D_METHOD("reset_isothermal", "surface_pressure_pa", "temperature_k"),
+		&WeatherDryCoreNative::reset_isothermal, DEFVAL(110000.0), DEFVAL(288.0));
+	ClassDB::bind_method(D_METHOD("add_pressure_perturbation", "center_direction", "fractional_amplitude", "angular_radius_rad"),
+		&WeatherDryCoreNative::add_pressure_perturbation);
+	ClassDB::bind_method(D_METHOD("get_global_dry_rgba", "layer"),
+		&WeatherDryCoreNative::get_global_dry_rgba, DEFVAL(0));
+	ClassDB::bind_method(D_METHOD("get_runtime_diagnostics"),
+		&WeatherDryCoreNative::get_runtime_diagnostics);
+	ClassDB::bind_method(D_METHOD("get_frequency"), &WeatherDryCoreNative::get_frequency);
+	ClassDB::bind_method(D_METHOD("get_cell_count"), &WeatherDryCoreNative::get_cell_count);
+	ClassDB::bind_method(D_METHOD("get_edge_count"), &WeatherDryCoreNative::get_edge_count);
+	ClassDB::bind_method(D_METHOD("get_layer_count"), &WeatherDryCoreNative::get_layer_count);
+	ClassDB::bind_method(D_METHOD("get_display_width"), &WeatherDryCoreNative::get_display_width);
+	ClassDB::bind_method(D_METHOD("get_display_height"), &WeatherDryCoreNative::get_display_height);
+	ClassDB::bind_method(D_METHOD("get_simulation_seconds"), &WeatherDryCoreNative::get_simulation_seconds);
+	ClassDB::bind_method(D_METHOD("get_top_pressure_pa"), &WeatherDryCoreNative::get_top_pressure_pa);
+	ClassDB::bind_method(D_METHOD("get_layer_height_m", "layer"), &WeatherDryCoreNative::get_layer_height_m);
+}
+
+Vec3d WeatherDryCoreNative::to_vec3d(const Vector3 &v) {
+	return {static_cast<double>(v.x), static_cast<double>(v.y), static_cast<double>(v.z)};
+}
+
+void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure_pa,
+		double p_temperature_k) {
+	if (p_frequency < 1 || p_frequency > 128) {
+		UtilityFunctions::push_error("WeatherDryCoreNative frequency must be in [1, 128]");
+		return;
+	}
+	if (!(p_surface_pressure_pa > TOP_PRESSURE_PA) || !std::isfinite(p_surface_pressure_pa)
+			|| !(p_temperature_k > 150.0) || !std::isfinite(p_temperature_k)) {
+		UtilityFunctions::push_error("WeatherDryCoreNative initial pressure/temperature is invalid");
+		return;
+	}
+
+	try {
+		auto new_grid = std::make_unique<GeodesicVoronoiGrid>(p_frequency, PLANET_RADIUS_M);
+		auto new_dynamics = std::make_unique<VoronoiDryDynamics>(
+			*new_grid, GRAVITY_MPS2, 8000.0, TOP_PRESSURE_PA,
+			ROTATION_RATE_RAD_S, Vec3d{0.0, 1.0, 0.0});
+		auto new_state = new_dynamics->make_isothermal_reference(
+			p_surface_pressure_pa, p_temperature_k);
+
+		grid_ = std::move(new_grid);
+		dynamics_ = std::move(new_dynamics);
+		state_ = std::move(new_state);
+		frequency_ = p_frequency;
+		simulation_seconds_ = 0.0;
+		rejected_steps_total_ = 0;
+		last_step_ = {};
+		rebuild_display_lookup();
+		reset_budget_baseline();
+		refresh_state_extrema();
+	} catch (const std::exception &e) {
+		grid_.reset();
+		dynamics_.reset();
+		state_ = {};
+		display_cell_lookup_.clear();
+		frequency_ = 0;
+		UtilityFunctions::push_error(String("WeatherDryCoreNative initialization failed: ") + e.what());
+	}
+}
+
+double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.step called before initialize");
+		return 0.0;
+	}
+	if (!finite_positive(requested_dt_s) || !finite_positive(target_cfl) || target_cfl > 0.45) {
+		UtilityFunctions::push_error("WeatherDryCoreNative step requires dt > 0 and target_cfl in (0,0.45]");
+		return 0.0;
+	}
+	try {
+		last_step_ = dynamics_->step(state_, requested_dt_s, target_cfl, 10);
+		rejected_steps_total_ += last_step_.rejected_steps;
+		if (last_step_.accepted_dt_s > 0.0) simulation_seconds_ += last_step_.accepted_dt_s;
+		return last_step_.accepted_dt_s;
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative step failed: ") + e.what());
+		return 0.0;
+	}
+}
+
+void WeatherDryCoreNative::reset_isothermal(double surface_pressure_pa,
+		double temperature_k) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.reset_isothermal called before initialize");
+		return;
+	}
+	if (!(surface_pressure_pa > TOP_PRESSURE_PA) || !std::isfinite(surface_pressure_pa)
+			|| !(temperature_k > 150.0) || !std::isfinite(temperature_k)) {
+		UtilityFunctions::push_error("WeatherDryCoreNative reset pressure/temperature is invalid");
+		return;
+	}
+	try {
+		state_ = dynamics_->make_isothermal_reference(surface_pressure_pa, temperature_k);
+		simulation_seconds_ = 0.0;
+		rejected_steps_total_ = 0;
+		last_step_ = {};
+		reset_budget_baseline();
+		refresh_state_extrema();
+	} catch (const std::exception &e) {
+		UtilityFunctions::push_error(String("WeatherDryCoreNative reset failed: ") + e.what());
+	}
+}
+
+bool WeatherDryCoreNative::add_pressure_perturbation(const Vector3 &center_direction,
+		double fractional_amplitude, double angular_radius_rad) {
+	if (!ready()) {
+		UtilityFunctions::push_error("WeatherDryCoreNative.add_pressure_perturbation called before initialize");
+		return false;
+	}
+	if (!std::isfinite(fractional_amplitude) || std::abs(fractional_amplitude) > 0.5
+			|| !finite_positive(angular_radius_rad) || angular_radius_rad > PI) {
+		UtilityFunctions::push_error("WeatherDryCoreNative pressure perturbation parameters are invalid");
+		return false;
+	}
+	const Vec3d raw = to_vec3d(center_direction);
+	const double n2 = dot(raw, raw);
+	if (!(n2 > 1.0e-24) || !std::isfinite(n2)) {
+		UtilityFunctions::push_error("WeatherDryCoreNative perturbation center must be finite and non-zero");
+		return false;
+	}
+	const Vec3d center = raw / std::sqrt(n2);
+	std::vector<double> factor(static_cast<size_t>(grid_->cell_count()), 1.0);
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double angle = std::acos(std::clamp(dot(center, grid_->cell(c).center), -1.0, 1.0));
+		if (angle >= angular_radius_rad) continue;
+		const double bell = 0.5 * (1.0 + std::cos(PI * angle / angular_radius_rad));
+		factor[static_cast<size_t>(c)] += fractional_amplitude * bell;
+		if (!(factor[static_cast<size_t>(c)] > 0.0) || !std::isfinite(factor[static_cast<size_t>(c)])) {
+			UtilityFunctions::push_error("WeatherDryCoreNative perturbation would make dry mass non-positive");
+			return false;
+		}
+	}
+	for (int k = 0; k < VoronoiDryDynamics::LEVELS; ++k) {
+		for (int c = 0; c < grid_->cell_count(); ++c) {
+			const size_t i = static_cast<size_t>(k * grid_->cell_count() + c);
+			state_.layer_mass_kg_m2[i] *= factor[static_cast<size_t>(c)];
+			state_.theta_mass_kg_k_m2[i] *= factor[static_cast<size_t>(c)];
+		}
+	}
+	last_step_ = {};
+	reset_budget_baseline();
+	refresh_state_extrema();
+	return true;
+}
+
+int WeatherDryCoreNative::nearest_cell_hill_climb(const Vec3d &direction, int seed) const {
+	if (!grid_ || grid_->cell_count() == 0) return -1;
+	int current = (seed >= 0 && seed < grid_->cell_count()) ? seed : 0;
+	double best = dot(direction, grid_->cell(current).center);
+	for (int iteration = 0; iteration < grid_->cell_count(); ++iteration) {
+		int next = current;
+		double next_best = best;
+		for (int neighbour : grid_->cell(current).neighbours) {
+			const double score = dot(direction, grid_->cell(neighbour).center);
+			if (score > next_best + 1.0e-15) {
+				next = neighbour;
+				next_best = score;
+			}
+		}
+		if (next == current) return current;
+		current = next;
+		best = next_best;
+	}
+	return current;
+}
+
+void WeatherDryCoreNative::rebuild_display_lookup() {
+	display_cell_lookup_.assign(static_cast<size_t>(DISPLAY_W * DISPLAY_H), -1);
+	if (!grid_ || grid_->cell_count() == 0) return;
+	int previous_row_seed = 0;
+	for (int y = 0; y < DISPLAY_H; ++y) {
+		const double lat = 0.5 * PI - PI * (static_cast<double>(y) + 0.5) / DISPLAY_H;
+		const double cos_lat = std::cos(lat);
+		const double sin_lat = std::sin(lat);
+		int current = previous_row_seed;
+		int first_in_row = current;
+		for (int x = 0; x < DISPLAY_W; ++x) {
+			const double lon = -PI + 2.0 * PI * (static_cast<double>(x) + 0.5) / DISPLAY_W;
+			const Vec3d direction{cos_lat * std::cos(lon), sin_lat, cos_lat * std::sin(lon)};
+			current = nearest_cell_hill_climb(direction, current);
+			display_cell_lookup_[static_cast<size_t>(x + y * DISPLAY_W)] = current;
+			if (x == 0) first_in_row = current;
+		}
+		previous_row_seed = first_in_row;
+	}
+}
+
+void WeatherDryCoreNative::reset_budget_baseline() {
+	if (!ready()) {
+		initial_dry_mass_kg_ = 0.0;
+		initial_theta_mass_kg_k_ = 0.0;
+		return;
+	}
+	initial_dry_mass_kg_ = dynamics_->total_dry_mass_kg(state_);
+	initial_theta_mass_kg_k_ = dynamics_->total_theta_mass_kg_k(state_);
+}
+
+void WeatherDryCoreNative::refresh_state_extrema() {
+	last_step_.min_layer_mass_kg_m2 = std::numeric_limits<double>::infinity();
+	last_step_.min_potential_temperature_k = std::numeric_limits<double>::infinity();
+	last_step_.max_speed_mps = 0.0;
+	for (size_t i = 0; i < state_.layer_mass_kg_m2.size(); ++i) {
+		const double mass = state_.layer_mass_kg_m2[i];
+		last_step_.min_layer_mass_kg_m2 = std::min(last_step_.min_layer_mass_kg_m2, mass);
+		last_step_.min_potential_temperature_k = std::min(last_step_.min_potential_temperature_k,
+			state_.theta_mass_kg_k_m2[i] / mass);
+	}
+	for (double u : state_.edge_normal_mps) {
+		last_step_.max_speed_mps = std::max(last_step_.max_speed_mps, std::abs(u));
+	}
+}
+
+PackedFloat32Array WeatherDryCoreNative::get_global_dry_rgba(int layer) const {
+	PackedFloat32Array out;
+	if (!ready() || layer < 0 || layer >= VoronoiDryDynamics::LEVELS
+			|| display_cell_lookup_.size() != static_cast<size_t>(DISPLAY_W * DISPLAY_H)) return out;
+
+	const auto hydro = dynamics_->transport().diagnose_hydrostatic(state_);
+	std::vector<double> cell_speed(static_cast<size_t>(grid_->cell_count()), 0.0);
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		long double sum = 0.0L;
+		for (int e : grid_->cell(c).edges) {
+			const double u = state_.edge_normal_mps[static_cast<size_t>(layer * grid_->edge_count() + e)];
+			sum += static_cast<long double>(grid_->edge(e).edge_area_m2)
+				* static_cast<long double>(u * u);
+		}
+		const double kinetic = static_cast<double>(
+			sum / (4.0L * static_cast<long double>(grid_->cell(c).area_m2)));
+		cell_speed[static_cast<size_t>(c)] = std::sqrt(std::max(0.0, 2.0 * kinetic));
+	}
+
+	out.resize(DISPLAY_W * DISPLAY_H * 4);
+	float *dst = out.ptrw();
+	for (int p = 0; p < DISPLAY_W * DISPLAY_H; ++p) {
+		const int c = display_cell_lookup_[static_cast<size_t>(p)];
+		const size_t i = static_cast<size_t>(layer * grid_->cell_count() + c);
+		dst[4 * p + 0] = static_cast<float>(hydro.temperature_k[i]);
+		dst[4 * p + 1] = static_cast<float>(cell_speed[static_cast<size_t>(c)]);
+		dst[4 * p + 2] = static_cast<float>(hydro.surface_pressure_pa[static_cast<size_t>(c)]);
+		dst[4 * p + 3] = static_cast<float>(state_.layer_mass_kg_m2[i]);
+	}
+	return out;
+}
+
+PackedFloat32Array WeatherDryCoreNative::get_runtime_diagnostics() const {
+	PackedFloat32Array out;
+	if (!ready()) return out;
+	out.resize(15);
+	float *dst = out.ptrw();
+	const double mass = dynamics_->total_dry_mass_kg(state_);
+	const double theta_mass = dynamics_->total_theta_mass_kg_k(state_);
+	const double mass_drift = initial_dry_mass_kg_ != 0.0
+		? (mass - initial_dry_mass_kg_) / initial_dry_mass_kg_ : 0.0;
+	const double theta_drift = initial_theta_mass_kg_k_ != 0.0
+		? (theta_mass - initial_theta_mass_kg_k_) / initial_theta_mass_kg_k_ : 0.0;
+
+	dst[0] = static_cast<float>(simulation_seconds_);
+	dst[1] = static_cast<float>(last_step_.requested_dt_s);
+	dst[2] = static_cast<float>(last_step_.accepted_dt_s);
+	dst[3] = static_cast<float>(last_step_.max_courant);
+	dst[4] = static_cast<float>(rejected_steps_total_);
+	dst[5] = static_cast<float>(mass_drift);
+	dst[6] = static_cast<float>(theta_drift);
+	dst[7] = static_cast<float>(last_step_.min_layer_mass_kg_m2);
+	dst[8] = static_cast<float>(last_step_.min_potential_temperature_k);
+	dst[9] = static_cast<float>(last_step_.max_speed_mps);
+	dst[10] = static_cast<float>(last_step_.max_pressure_acceleration_mps2);
+	dst[11] = static_cast<float>(grid_->cell_count());
+	dst[12] = static_cast<float>(grid_->edge_count());
+	dst[13] = static_cast<float>(VoronoiDryDynamics::LEVELS);
+	dst[14] = static_cast<float>(TOP_PRESSURE_PA);
+	return out;
+}
+
+} // namespace godot
