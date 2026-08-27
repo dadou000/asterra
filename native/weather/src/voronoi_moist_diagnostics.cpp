@@ -1,5 +1,6 @@
 #include "voronoi_moist_thermodynamics.h"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
