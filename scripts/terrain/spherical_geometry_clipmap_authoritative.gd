@@ -37,6 +37,38 @@ func _release_staging_cache() -> void:
 	_terrain_cache_staging = null
 
 
+## Snapshot of the exact geometry inputs currently used by the production clipmap.
+## A contact query consumes the same active cache texture, anchor/lattice state and
+## surface bias as the vertex shader instead of regenerating terrain independently.
+func rendered_contact_sample_params() -> Dictionary:
+	if Planet.cfg == null or _terrain_cache_active == null \
+			or not is_instance_valid(_terrain_cache_active):
+		return {}
+	var cache_texture: Variant = _terrain_cache_active.call("texture")
+	if cache_texture == null:
+		return {}
+	var surface_bias := 0.035
+	if _material != null:
+		var bias_value: Variant = _material.get_shader_parameter("u_surface_bias")
+		if bias_value is float:
+			surface_bias = float(bias_value)
+	return {
+		"cache_texture": cache_texture,
+		"cache_ready": bool(_terrain_cache_active.call("cache_ready")),
+		"cache_generation": int(_terrain_cache_active.call("anchor_generation")),
+		"cache_res": int(_terrain_cache_active.call("cache_resolution")),
+		"anchor_dir": _anchor_dir,
+		"anchor_right": _anchor_right,
+		"anchor_up": _anchor_up,
+		"lattice_center_plane": _center_plane,
+		"base_spacing": _base_spacing,
+		"grid_cells": float(GRID_CELLS),
+		"active_min": _active_min_level,
+		"active_max": _active_max_level,
+		"surface_bias": surface_bias,
+	}
+
+
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	out["terrain_cache_architecture"] = "lazy_double_buffered_toroidal_gpu"
