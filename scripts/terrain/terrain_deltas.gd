@@ -114,10 +114,23 @@ func _raw(src: Dictionary, face: int, i: int, j: int) -> float:
 ## whole patch instead of once per texel.
 func sample_tangent_patch(center: Vector3, right: Vector3, up: Vector3,
 		resolution: int, spacing_m: float, planet_radius: float) -> PackedFloat32Array:
+	return sample_tangent_rect(center, right, up, resolution, spacing_m, planet_radius,
+		Rect2i(0, 0, resolution, resolution))
+
+## Partial read for continuously deforming terrain. A contact normally dirties only
+## a handful of texels in the 512x512 visual window; sampling just that rectangle
+## avoids re-evaluating the entire sparse lattice every publication tick.
+func sample_tangent_rect(center: Vector3, right: Vector3, up: Vector3,
+		resolution: int, spacing_m: float, planet_radius: float,
+		rect: Rect2i) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
-	if resolution <= 0 or planet_radius <= 1.0:
+	if resolution <= 0 or spacing_m <= 0.0 or planet_radius <= 1.0:
 		return out
-	out.resize(resolution * resolution)
+	var bounds := Rect2i(0, 0, resolution, resolution)
+	var clipped: Rect2i = rect.intersection(bounds)
+	if clipped.size.x <= 0 or clipped.size.y <= 0:
+		return out
+	out.resize(clipped.size.x * clipped.size.y)
 	if _count == 0:
 		return out
 	var c := center.normalized()
@@ -125,13 +138,15 @@ func sample_tangent_patch(center: Vector3, right: Vector3, up: Vector3,
 	var u := up.normalized()
 	var half := (float(resolution) - 1.0) * 0.5
 	_mutex.lock()
-	for y in resolution:
-		var oy := (float(y) - half) * spacing_m
-		for x in resolution:
-			var ox := (float(x) - half) * spacing_m
+	for local_y in clipped.size.y:
+		var image_y: int = clipped.position.y + local_y
+		var oy := (float(image_y) - half) * spacing_m
+		for local_x in clipped.size.x:
+			var image_x: int = clipped.position.x + local_x
+			var ox := (float(image_x) - half) * spacing_m
 			var d := (c + r * (ox / planet_radius) + u * (oy / planet_radius)).normalized()
 			var l := dir_to_lattice(d)
-			out[y * resolution + x] = _offset_lattice(l[0], l[1], l[2], _tiles, false)
+			out[local_y * clipped.size.x + local_x] = _offset_lattice(l[0], l[1], l[2], _tiles, false)
 	_mutex.unlock()
 	return out
 
