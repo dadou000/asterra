@@ -40,6 +40,20 @@ VoronoiDryDynamics::VoronoiDryDynamics(const GeodesicVoronoiGrid &grid,
 	build_reconstruction();
 }
 
+void VoronoiDryDynamics::set_moist_pressure_feedback(bool enabled,
+		MoistTracerIndices indices) {
+	if (indices.vapor < 0 || indices.cloud_liquid < 0 || indices.cloud_ice < 0) {
+		throw std::invalid_argument("Moist pressure-feedback tracer indices must be non-negative");
+	}
+	if (indices.vapor == indices.cloud_liquid
+			|| indices.vapor == indices.cloud_ice
+			|| indices.cloud_liquid == indices.cloud_ice) {
+		throw std::invalid_argument("Moist pressure-feedback water tracer indices must be distinct");
+	}
+	moist_indices_ = indices;
+	moist_pressure_feedback_enabled_ = enabled;
+}
+
 void VoronoiDryDynamics::validate_shape(const State &state) const {
 	const size_t scalars = static_cast<size_t>(LEVELS) * grid_->cell_count();
 	const size_t edges = static_cast<size_t>(LEVELS) * grid_->edge_count();
@@ -278,14 +292,24 @@ double VoronoiDryDynamics::max_courant(const State &state, double dt_s) const {
 	}
 
 	double maximum = transport_.max_courant(state, dt_s);
-	const auto hydro = transport_.diagnose_hydrostatic(state);
+	std::vector<double> characteristic_temperature;
+	if (moist_pressure_feedback_enabled_) {
+		VoronoiMoistHydrostatic moist_hydro(transport_, moist_indices_);
+		characteristic_temperature = moist_hydro.diagnose(state).virtual_temperature_k;
+	} else {
+		characteristic_temperature = transport_.diagnose_hydrostatic(state).temperature_k;
+	}
 	for (int k = 0; k < LEVELS; ++k) {
 		for (int e = 0; e < grid_->edge_count(); ++e) {
 			const auto &edge = grid_->edge(e);
 			const int ia = scalar_index(k, edge.cell_a);
 			const int ib = scalar_index(k, edge.cell_b);
-			const double t_edge = 0.5 * (hydro.temperature_k[static_cast<size_t>(ia)]
-				+ hydro.temperature_k[static_cast<size_t>(ib)]);
+			const double t_edge = 0.5 * (
+				characteristic_temperature[static_cast<size_t>(ia)]
+				+ characteristic_temperature[static_cast<size_t>(ib)]);
+			if (!(t_edge > 0.0) || !std::isfinite(t_edge)) {
+				throw std::runtime_error("Dry dynamics CFL diagnosed invalid characteristic temperature");
+			}
 			const double pressure_wave_speed = std::sqrt(
 				GAMMA_DRY * VoronoiDryHydrostatic::RD * t_edge);
 			const double u = std::abs(state.edge_normal_mps[static_cast<size_t>(edge_index(k, e))]);
@@ -362,8 +386,15 @@ VoronoiDryDynamics::Tendencies VoronoiDryDynamics::compute_tendencies(
 		}
 	}
 
-	const auto hydro = transport_.diagnose_hydrostatic(state);
-	const auto pressure_accel = transport_.pressure_gradient_acceleration(state, hydro);
+	std::vector<double> pressure_accel;
+	if (moist_pressure_feedback_enabled_) {
+		VoronoiMoistHydrostatic moist_hydro(transport_, moist_indices_);
+		const auto hydro = moist_hydro.diagnose(state);
+		pressure_accel = moist_hydro.pressure_gradient_acceleration(state, hydro);
+	} else {
+		const auto hydro = transport_.diagnose_hydrostatic(state);
+		pressure_accel = transport_.pressure_gradient_acceleration(state, hydro);
+	}
 	for (double a : pressure_accel) {
 		t.max_pressure_acceleration_mps2 = std::max(
 			t.max_pressure_acceleration_mps2, std::abs(a));
@@ -521,8 +552,15 @@ VoronoiDryDynamics::StepDiagnostics VoronoiDryDynamics::step(State &state,
 	bool any_motion = false;
 	for (double u : state.edge_normal_mps) if (u != 0.0) { any_motion = true; break; }
 	if (!any_motion) {
-		const auto hydro = transport_.diagnose_hydrostatic(state);
-		const auto pressure = transport_.pressure_gradient_acceleration(state, hydro);
+		std::vector<double> pressure;
+		if (moist_pressure_feedback_enabled_) {
+			VoronoiMoistHydrostatic moist_hydro(transport_, moist_indices_);
+			const auto hydro = moist_hydro.diagnose(state);
+			pressure = moist_hydro.pressure_gradient_acceleration(state, hydro);
+		} else {
+			const auto hydro = transport_.diagnose_hydrostatic(state);
+			pressure = transport_.pressure_gradient_acceleration(state, hydro);
+		}
 		bool any_force = false;
 		for (double a : pressure) {
 			diagnostics.max_pressure_acceleration_mps2 = std::max(
