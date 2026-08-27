@@ -12,15 +12,15 @@ namespace asterra::weather {
 //
 // The prognostic cell variables are layer dry-air mass [kg/m2] and
 // mass-weighted potential temperature [kg K/m2]. One globally-oriented normal
-// velocity is stored per physical edge and level. A single shared edge mass
+// velocity is stored once per physical edge and level. A single shared edge mass
 // flux transports both quantities, so the two adjacent cells always receive
 // exactly equal/opposite transfers. No latitude/pole branch or post-step clamp
 // exists in this core.
 //
 // Hydrostatic pressure is diagnosed from the prognostic layer masses, not
-// evolved as an independent perturbation scalar. Momentum is still frozen in
-// this Phase-4 slice; pressure-gradient/TRiSK momentum coupling is the next
-// operator to enter the same SSPRK3 state.
+// evolved as an independent perturbation scalar. Static surface geopotential is
+// part of the hydrostatic geometry, allowing terrain pressure forces without
+// turning terrain height into a prognostic fluid variable.
 class VoronoiDryTransport {
 public:
 	static constexpr int LEVELS = VoronoiDryHydrostatic::LEVELS;
@@ -63,11 +63,30 @@ public:
 		double scale_height_m = 8000.0,
 		double top_pressure_pa = 7500.0);
 
+	// Static lower-boundary geometry. Height is converted to geopotential with
+	// the core's constant gravity. Negative terrain is allowed; all values must
+	// remain finite. The default is a zero-height spherical surface.
+	void set_surface_height_m(const std::vector<double> &height_m);
+	void set_surface_geopotential_m2_s2(const std::vector<double> &geopotential);
+	const std::vector<double> &surface_geopotential_m2_s2() const {
+		return surface_geopotential_m2_s2_;
+	}
+
 	// Build a horizontally uniform isothermal reference using the existing
 	// 30-level vertical-spacing shape, but with a fixed pressure top. The resulting
 	// layer masses sum exactly to (ps - p_top)/g and are therefore directly
-	// prognostic.
+	// prognostic. This method intentionally ignores terrain balance and keeps the
+	// requested pressure identical at every cell (useful for forcing tests).
 	State make_isothermal_reference(double surface_pressure_pa,
+		double temperature_k) const;
+
+	// Terrain-balanced isothermal reference. reference_surface_pressure_pa is the
+	// pressure that would occur at Phi_s=0. Each terrain cell receives
+	//   ps = p_ref * exp(-Phi_s / (Rd T)),
+	// which exactly cancels the generalized-coordinate pressure force for an
+	// isothermal hydrostatic atmosphere, apart from floating-point roundoff.
+	State make_isothermal_terrain_balanced_reference(
+		double reference_surface_pressure_pa,
 		double temperature_k) const;
 
 	// Reconstruct p, T and hydrostatic geopotential directly from conservative
@@ -76,9 +95,7 @@ public:
 	HydroDiagnostics diagnose_hydrostatic(const State &state) const;
 
 	// Generalized-coordinate horizontal pressure-gradient acceleration at each
-	// edge/level: -grad_s(Phi) - Rd*T*grad_s(ln p). This is diagnostic for now;
-	// the next dynamics slice will advance edge momentum with it plus TRiSK
-	// rotational terms inside SSPRK3.
+	// edge/level: -grad_s(Phi) - Rd*T*grad_s(ln p).
 	std::vector<double> pressure_gradient_acceleration(const State &state,
 		const HydroDiagnostics &diagnostics) const;
 
@@ -112,6 +129,7 @@ private:
 	VoronoiDryHydrostatic hydrostatic_;
 	double gravity_mps2_ = 9.80665;
 	double top_pressure_pa_ = 7500.0;
+	std::vector<double> surface_geopotential_m2_s2_;
 
 	int scalar_index(int level, int cell) const {
 		return level * grid_->cell_count() + cell;
@@ -125,6 +143,9 @@ private:
 
 	void validate_shape(const State &state) const;
 	bool validate_finite_positive(const State &state) const;
+	State make_isothermal_with_surface_pressure(
+		const std::vector<double> &surface_pressure_pa,
+		double temperature_k) const;
 	Tendencies compute_tendencies(const State &state) const;
 	bool euler_stage(const State &input, State &output, double dt_s) const;
 	bool ssprk3_attempt(const State &initial, State &candidate, double dt_s) const;
