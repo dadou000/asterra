@@ -31,7 +31,7 @@ public:
 		// MPAS edgesOnEdge + weightsOnEdge. The weight already includes
 		// dvEdge(source)/dcEdge(target), exactly as stored by MPAS. Applying
 		// sum(weight[k] * normal_value[edge[k]]) reconstructs the target-edge
-		// tangential component in the target tangent_a_to_b convention.
+		// positive tangential component (k x normal).
 		std::vector<int> reconstruction_edges;
 		std::vector<double> reconstruction_weights;
 	};
@@ -40,10 +40,10 @@ public:
 		Vec3d center;
 		double area_m2 = 0.0;
 
-		// All four arrays are strictly CCW and aligned. vertices[q] is followed
-		// CCW by edges[q], which joins vertices[q] to vertices[q+1]. neighbours[q]
-		// is the cell across edges[q]. kite_area_m2[q] is the intersection area of
-		// this primal Voronoi cell with the dual triangle at vertices[q].
+		// Strictly CCW and aligned to the MPAS convention. edges[q] is the edge
+		// immediately clockwise of vertices[q], i.e. the edge ending at that
+		// vertex while walking CCW. neighbours[q] is across edges[q].
+		// kite_area_m2[q] is P_cell intersect D_vertices[q].
 		std::vector<int> vertices;
 		std::vector<int> edges;
 		std::vector<int> neighbours;
@@ -51,19 +51,23 @@ public:
 	};
 
 	struct VertexGeometry {
-		// Spherical circumcentre of one Delaunay triangle.
 		Vec3d center;
 		double dual_area_m2 = 0.0;
 		std::array<int, 3> cells{{-1, -1, -1}};
 		std::array<int, 3> edges{{-1, -1, -1}};
-		// Intersection of this dual triangle with each corresponding cells[q].
 		std::array<double, 3> kite_area_m2{{0.0, 0.0, 0.0}};
 	};
 
 	GeodesicVoronoiGrid() = default;
-	GeodesicVoronoiGrid(int frequency, double radius_m) { build(frequency, radius_m); }
+	GeodesicVoronoiGrid(int frequency, double radius_m) {
+		build(frequency, radius_m);
+		finalize_mpas_metrics();
+	}
 
+	// Raw geodesic construction. Normal runtime/tests use the constructor above;
+	// callers that invoke build() directly must follow it with finalize_mpas_metrics().
 	void build(int frequency, double radius_m);
+	void finalize_mpas_metrics();
 
 	int frequency() const { return frequency_; }
 	double radius_m() const { return radius_m_; }
@@ -78,8 +82,6 @@ public:
 	const std::vector<EdgeGeometry> &edges() const { return edges_; }
 	const std::vector<VertexGeometry> &vertices() const { return vertices_; }
 
-	// Production L0 target: frequency 196 on Asterra gives 384,162 cells and
-	// approximately a 20 km sqrt(area) scale.
 	static int expected_cell_count(int frequency) { return 10 * frequency * frequency + 2; }
 	static int expected_edge_count(int frequency) { return 30 * frequency * frequency; }
 	static int expected_vertex_count(int frequency) { return 20 * frequency * frequency; }
