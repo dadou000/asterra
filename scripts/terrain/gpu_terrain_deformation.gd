@@ -6,9 +6,9 @@ extends Node
 ## 0.25 m/texel (64 m square). Two RGBA32F textures ping-pong so compute never
 ## writes the texture it is reading. R=height delta, G=compaction, B=damage.
 ##
-## CPU physics samples an asynchronous readback cache. This keeps contact queries
-## cheap and avoids a synchronous GPU stall while the rendered terrain samples the
-## live GPU texture directly.
+## Physics normally samples this field through TerrainDeformationQueryGPU, which
+## reads only requested points. The old whole-texture asynchronous mirror remains
+## as a low-rate fallback until that query service is ready.
 
 const SHADER_PATH := "res://shaders/terrain_deformation_active.glsl"
 const RESOLUTION := 256
@@ -16,11 +16,11 @@ const SAMPLE_SPACING_M := 0.25
 const HALF_EXTENT_M := float(RESOLUTION) * SAMPLE_SPACING_M * 0.5
 const SAFE_HALF_EXTENT_M := HALF_EXTENT_M - 3.0
 const MAX_CONTACTS := 64
-const CONTACT_FLOATS := 8
+const CONTACT_FLOATS := 12
 const CONTACT_BUFFER_BYTES := MAX_CONTACTS * CONTACT_FLOATS * 4
 const PARAM_BYTES := 16
 const BYTES_PER_TEXEL := 16
-const READBACK_HZ := 30.0
+const FALLBACK_READBACK_HZ := 10.0
 
 var supported: bool = false
 var ready_state: bool = false
@@ -57,6 +57,11 @@ var _latest_readback_token := -1
 var _latest_readback_generation := -1
 var _latest_readback_time_s := 0.0
 
+var _bound_material: ShaderMaterial
+var _bound_texture: Texture2DRD
+var _bound_ready := false
+var _bound_window_generation := -1
+
 
 func _ready() -> void:
 	process_priority = -2
@@ -81,7 +86,8 @@ func _process(dt: float) -> void:
 
 func enqueue_contact(center_direction: Vector3, radius_m: float, sink_m: float,
 		compaction_gain: float, damage_gain: float, rim_fraction: float,
-		max_depth_m: float) -> bool:
+		max_depth_m: float, footprint_type: int = 0, shape_radius_m: float = 0.0,
+		penetration_m: float = 0.0) -> bool:
 	if not ready_state or failed or Planet.cfg == null:
 		return false
 	if center_direction.length_squared() <= 1e-12 or sink_m <= 0.0:
@@ -102,6 +108,7 @@ func enqueue_contact(center_direction: Vector3, radius_m: float, sink_m: float,
 		local_m.x, local_m.y, maxf(radius_m, SAMPLE_SPACING_M), sink_m,
 		maxf(compaction_gain, 0.0), maxf(damage_gain, 0.0),
 		clampf(rim_fraction, 0.0, 0.95), maxf(max_depth_m, 0.05),
+		float(footprint_type), maxf(shape_radius_m, 0.0), maxf(penetration_m, 0.0), 0.0,
 	])
 	_pending_contacts.append(record)
 	_has_active_content = true
@@ -109,11 +116,43 @@ func enqueue_contact(center_direction: Vector3, radius_m: float, sink_m: float,
 
 
 func active_height_offset(direction: Vector3) -> float:
+	var query: Node = get_node_or_null("/root/TerrainDeformationQueryGPU")
+	if query != null and bool(query.get("ready_state")) and query.has_method("active_height_offset"):
+		return float(query.call("active_height_offset", direction))
 	return _sample_channel(direction, 0)
 
 
 func active_state(direction: Vector3) -> Vector2:
+	var query: Node = get_node_or_null("/root/TerrainDeformationQueryGPU")
+	if query != null and bool(query.get("ready_state")) and query.has_method("active_state"):
+		var value: Variant = query.call("active_state", direction)
+		if value is Vector2:
+			return value as Vector2
 	return Vector2(_sample_channel(direction, 1), _sample_channel(direction, 2))
+
+
+func rd_texture_rids() -> Array[RID]:
+	var out: Array[RID] = []
+	out.assign(_rd_textures)
+	return out
+
+
+func active_texture_index() -> int:
+	return _active_index
+
+
+func window_generation() -> int:
+	return _window_generation
+
+
+func field_generation() -> int:
+	return _steps
+
+
+func project_local(direction: Vector3) -> Vector2:
+	if direction.length_squared() <= 1e-12:
+		return Vector2(INF, INF)
+	return _project_local(direction.normalized())
 
 
 func clear_active() -> void:
@@ -144,6 +183,9 @@ func sample_params() -> Dictionary:
 		"resolution": RESOLUTION,
 		"spacing_m": SAMPLE_SPACING_M,
 		"readback_ready": _latest_readback_generation == _window_generation and not _latest_readback.is_empty(),
+		"generation": _steps,
+		"window_generation": _window_generation,
+		"active_index": _active_index,
 	}
 
 
@@ -243,7 +285,9 @@ func _dispatch_pending() -> void:
 	var token: int = _dispatch_token
 	var source_index: int = _active_index
 	var target_index: int = 1 - source_index
-	var want_readback: bool = _readback_accum_s >= 1.0 / READBACK_HZ
+	var query: Node = get_node_or_null("/root/TerrainDeformationQueryGPU")
+	var query_ready: bool = query != null and bool(query.get("ready_state"))
+	var want_readback: bool = (not query_ready) and _readback_accum_s >= 1.0 / FALLBACK_READBACK_HZ
 	if want_readback:
 		_readback_accum_s = 0.0
 	_dispatch_in_flight = true
@@ -316,8 +360,6 @@ func _on_dispatch_failed(token: int) -> void:
 
 
 func _on_readback_failed() -> void:
-	# Rendering remains GPU-resident even if CPU sampling temporarily loses the
-	# asynchronous mirror. Do not disable the compute path for a readback failure.
 	pass
 
 
@@ -467,10 +509,23 @@ func _sync_renderer_binding() -> void:
 	if not (value is ShaderMaterial):
 		return
 	var material := value as ShaderMaterial
-	material.set_shader_parameter("u_active_deform", texture)
-	material.set_shader_parameter("u_active_deform_ready",
-		1.0 if ready_state and _center_valid and _has_active_content else 0.0)
-	material.set_shader_parameter("u_active_deform_center_dir", center_dir)
-	material.set_shader_parameter("u_active_deform_center_right", center_right)
-	material.set_shader_parameter("u_active_deform_center_up", center_up)
-	material.set_shader_parameter("u_active_deform_half_extent_m", HALF_EXTENT_M)
+	var ready_now: bool = ready_state and _center_valid and _has_active_content
+	var material_changed: bool = material != _bound_material
+	var texture_changed: bool = texture != _bound_texture
+	var ready_changed: bool = ready_now != _bound_ready
+	var center_changed: bool = _window_generation != _bound_window_generation
+	if not material_changed and not texture_changed and not ready_changed and not center_changed:
+		return
+	_bound_material = material
+	if material_changed or texture_changed:
+		material.set_shader_parameter("u_active_deform", texture)
+		_bound_texture = texture
+	if material_changed or ready_changed:
+		material.set_shader_parameter("u_active_deform_ready", 1.0 if ready_now else 0.0)
+		_bound_ready = ready_now
+	if material_changed or center_changed:
+		material.set_shader_parameter("u_active_deform_center_dir", center_dir)
+		material.set_shader_parameter("u_active_deform_center_right", center_right)
+		material.set_shader_parameter("u_active_deform_center_up", center_up)
+		material.set_shader_parameter("u_active_deform_half_extent_m", HALF_EXTENT_M)
+		_bound_window_generation = _window_generation
