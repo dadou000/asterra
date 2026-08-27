@@ -4,6 +4,7 @@
 #include "spherical_latlon_sampler.h"
 #include "voronoi_dry_core.h"
 #include "voronoi_dry_hydrostatic.h"
+#include "voronoi_moist_thermodynamics.h"
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
@@ -16,11 +17,11 @@
 
 namespace godot {
 
-// Runtime-facing Godot bridge for the replacement 30-level dry atmosphere.
-// The physical state lives entirely on the geodesic Voronoi C-grid; the
-// 1024x512 product is a presentation-only resample and never feeds back into
-// dynamics. Every accepted runtime step includes conservative pressure-
-// coordinate restoration through VoronoiDryCore.
+// Runtime-facing Godot bridge for the replacement 30-level atmosphere.
+// Dynamics live entirely on the geodesic Voronoi C-grid. Optional moisture is
+// carried by the same conservative tracer transport and locally phase-adjusted
+// after each accepted dry-core step. The 1024x512 products are presentation-only
+// resamples and never feed back into physics.
 class WeatherDryCoreNative : public RefCounted {
 	GDCLASS(WeatherDryCoreNative, RefCounted)
 
@@ -39,6 +40,7 @@ private:
 	std::unique_ptr<asterra::weather::VoronoiDryCore> dynamics_;
 	asterra::weather::VoronoiDryCore::State state_;
 	asterra::weather::VoronoiDryCore::StepDiagnostics last_step_;
+	asterra::weather::VoronoiMoistThermodynamics::AdjustmentDiagnostics last_moist_adjustment_;
 	std::vector<int> display_cell_lookup_;
 	std::vector<double> surface_height_m_;
 
@@ -46,16 +48,21 @@ private:
 	double initial_theta_mass_kg_k_ = 0.0;
 	double initial_dry_energy_j_ = 0.0;
 	double initial_absolute_aam_kg_m2_s_ = 0.0;
+	double initial_total_water_kg_ = 0.0;
 	double simulation_seconds_ = 0.0;
 	int64_t rejected_steps_total_ = 0;
 	int frequency_ = 0;
+	bool moisture_enabled_ = false;
 
 	static asterra::weather::Vec3d to_vec3d(const Vector3 &v);
 	int nearest_cell_hill_climb(const asterra::weather::Vec3d &direction, int seed) const;
 	void rebuild_display_lookup();
 	void reset_budget_baseline();
+	void reset_moisture_baseline();
+	double current_total_water_kg() const;
 	void refresh_state_extrema();
 	void on_static_surface_changed();
+	void clear_moisture_state();
 	bool ready() const { return bool(grid_) && bool(dynamics_); }
 
 protected:
@@ -65,12 +72,13 @@ public:
 	WeatherDryCoreNative() = default;
 	~WeatherDryCoreNative() override = default;
 
-	// F32 is the interactive bring-up default (~10k horizontal cells, 30 levels).
-	// Higher frequencies can be selected by the caller as profiling permits.
 	void initialize(int p_frequency = 32,
 		double p_surface_pressure_pa = 110000.0,
 		double p_temperature_k = 288.0);
 
+	// When moisture is enabled, one accepted dry-core transport/remap step and
+	// one local saturation adjustment are treated as one runtime transaction. If
+	// phase adjustment fails, the complete pre-step state is restored.
 	double step(double requested_dt_s, double target_cfl = 0.28);
 	void reset_isothermal(double surface_pressure_pa = 110000.0,
 		double temperature_k = 288.0);
@@ -78,25 +86,27 @@ public:
 		double reference_surface_pressure_pa = 110000.0,
 		double temperature_k = 288.0);
 
-	// Static atmospheric lower-boundary geometry. These calls do not alter
-	// atmospheric mass or theta; they only replace the surface geopotential used
-	// by hydrostatics. Use reset_terrain_balanced_isothermal() after loading a new
-	// terrain map when a zero-wind balanced initial condition is desired.
-	//
-	// set_surface_height_cells expects exactly get_cell_count() samples in native
-	// Voronoi cell order. set_surface_height_map accepts a global equirectangular
-	// raster using the same convention as the weather display: row-major,
-	// west->east, north->south, pixel-centred and longitude-periodic.
+	// Moisture uses tracer slots 0/1/2 = vapor/cloud-liquid/cloud-ice. Uniform RH
+	// initialization leaves dry mass and wind unchanged. Optional immediate phase
+	// adjustment is useful when intentionally initializing RH > 1.
+	bool initialize_moisture(double relative_humidity = 0.65,
+		bool perform_saturation_adjustment = true);
+	void disable_moisture(bool clear_water = true);
+	bool saturation_adjust_moisture();
+	bool is_moisture_enabled() const { return moisture_enabled_; }
+
+	// Static atmospheric lower-boundary geometry. These calls do not alter the
+	// atmospheric prognostic state; use reset_terrain_balanced_isothermal() after
+	// loading a new map when a zero-wind balanced initial condition is desired.
 	bool set_surface_height_cells(const PackedFloat32Array &height_m);
 	bool set_surface_height_map(const PackedFloat32Array &height_m,
 		int width, int height);
 	void clear_surface_height();
 	PackedFloat32Array get_surface_height_cells() const;
 
-	// Add a smooth multiplicative column-mass perturbation. Layer mass and theta
-	// mass receive the same factor, so potential temperature is unchanged at the
-	// instant of insertion. The perturbation therefore enters dynamics through
-	// physically diagnosed pressure/geopotential rather than a free pressure field.
+	// Smooth multiplicative column-mass perturbation. All conservative tracer
+	// masses receive the same factor as dry mass and theta mass, preserving every
+	// tracer mixing ratio at the instant the pressure anomaly is inserted.
 	bool add_pressure_perturbation(const Vector3 &center_direction,
 		double fractional_amplitude, double angular_radius_rad);
 
@@ -107,24 +117,23 @@ public:
 	//   A = selected-layer dry mass [kg/m2]
 	PackedFloat32Array get_global_dry_rgba(int layer = 0) const;
 
-	// Existing fields remain stable at indices 0..14:
-	// [simulation_s, requested_dt_s, accepted_dt_s, max_courant,
-	//  rejected_steps_total, relative_dry_mass_drift, relative_theta_mass_drift,
-	//  min_layer_mass_kg_m2, min_theta_k, max_speed_mps,
-	//  max_pressure_accel_mps2, cell_count, edge_count, level_count, top_pressure_pa,
-	//  max_coordinate_fraction_error, max_coordinate_column_mass_error,
-	//  max_coordinate_column_theta_error, max_coordinate_edge_momentum_error,
-	//  coordinate_remap_applied]
-	PackedFloat32Array get_runtime_diagnostics() const;
+	// Moist presentation product, row-major RGBA:
+	//   R = water-vapor mixing ratio [kg/kg dry]
+	//   G = cloud-liquid mixing ratio [kg/kg dry]
+	//   B = cloud-ice mixing ratio [kg/kg dry]
+	//   A = relative humidity [fraction]
+	PackedFloat32Array get_global_moist_rgba(int layer = 0) const;
 
-	// Expensive, opt-in double-precision global budgets. This reconstructs cell
-	// winds across all 30 levels, so it is intended for debug/validation sampling
-	// rather than every render frame:
-	// [dry_mass_kg, theta_mass_kg_k, total_energy_j, relative_energy_drift,
-	//  relative_axial_aam_kg_m2_s, absolute_axial_aam_kg_m2_s,
-	//  relative_absolute_aam_drift, max_coordinate_fraction_error,
-	//  initial_energy_j, initial_absolute_aam_kg_m2_s]
+	PackedFloat32Array get_runtime_diagnostics() const;
 	PackedFloat64Array get_global_budget_diagnostics() const;
+
+	// [enabled, initial_total_water_kg, current_total_water_kg,
+	//  relative_total_water_drift, last_adjust_relative_water_error,
+	//  last_adjust_max_cell_water_error, last_adjust_max_enthalpy_error_Jkg,
+	//  last_max_RH_before, last_max_RH_after, last_max_abs_dT_K,
+	//  last_condensed_kg, last_evaporated_kg, last_min_T_K, last_max_T_K,
+	//  last_saturated_cell_count]
+	PackedFloat64Array get_moisture_diagnostics() const;
 
 	int get_frequency() const { return frequency_; }
 	int get_cell_count() const { return grid_ ? grid_->cell_count() : 0; }
