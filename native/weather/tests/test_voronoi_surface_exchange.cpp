@@ -37,6 +37,7 @@ bool state_exact_equal(const VoronoiDryTransport::State &a,
 bool surface_exact_equal(const VoronoiSurfaceExchange::SurfaceState &a,
 		const VoronoiSurfaceExchange::SurfaceState &b) {
 	return a.water_kg_m2 == b.water_kg_m2
+		&& a.ice_kg_m2 == b.ice_kg_m2
 		&& a.energy_j_m2 == b.energy_j_m2;
 }
 
@@ -83,6 +84,10 @@ int main() {
 		auto atmosphere = transport.make_isothermal_reference(PS, 288.0);
 		moist.initialize_uniform_relative_humidity(atmosphere, 0.45);
 		auto surface = exchange.make_uniform_surface_state(30.0, 5.0e7);
+		// Seed frozen water to ensure prescribed evaporation/dew never consumes it.
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			surface.ice_kg_m2[static_cast<size_t>(c)] = 0.2 + 0.001 * c;
+		}
 		const auto atmosphere_before = atmosphere;
 		const auto surface_before = surface;
 		const auto thermo_before = moist.diagnose_thermodynamics(atmosphere);
@@ -126,6 +131,8 @@ int main() {
 			"surface exchange changed dry atmospheric mass");
 		require(atmosphere.edge_normal_mps == atmosphere_before.edge_normal_mps,
 			"surface exchange changed wind directly");
+		require(surface.ice_kg_m2 == surface_before.ice_kg_m2,
+			"prescribed evaporation/dew changed the frozen surface reservoir");
 		for (int k = 1; k < VoronoiDryTransport::LEVELS; ++k) {
 			for (int c = 0; c < cells; ++c) {
 				const size_t i = static_cast<size_t>(k * cells + c);
@@ -177,9 +184,6 @@ int main() {
 			5e-12, 1.0),
 			"direct atmosphere+surface water transfer does not close");
 
-		// Pure evaporation changes full pressure. With zero sensible heat, the
-		// physical temperature must nevertheless stay fixed, which requires theta
-		// to shift. This catches accidental use of dry pressure in the source path.
 		auto latent_only_atmosphere = atmosphere_before;
 		auto latent_only_surface = surface_before;
 		const auto latent_before_thermo = moist.diagnose_thermodynamics(latent_only_atmosphere);
@@ -195,10 +199,11 @@ int main() {
 			"evaporation without sensible heat spuriously changed physical temperature");
 		require(latent_only_atmosphere.theta_mass_kg_k_m2[0] != latent_before_theta[0],
 			"evaporation changed full pressure but theta was not compensated");
+		require(latent_only_surface.ice_kg_m2 == surface_before.ice_kg_m2,
+			"latent-only evaporation consumed surface ice");
 		require(latent_diag.relative_system_energy_error < 5e-13,
 			"latent-only surface exchange failed full-pressure energy closure");
 
-		// A zero source step remains an exact no-op.
 		auto zero_atmosphere = atmosphere_before;
 		auto zero_surface = surface_before;
 		const auto zero_atmosphere_before = zero_atmosphere;
@@ -213,11 +218,12 @@ int main() {
 			"zero-flux surface exchange changed total water");
 
 		auto dry_surface = exchange.make_uniform_surface_state(0.0, 5.0e7);
+		dry_surface.ice_kg_m2[0] = 100.0; // frozen water must not satisfy liquid evaporation demand.
 		auto positive_evap = zero;
 		positive_evap[0] = 1.0e-3;
 		require_transaction_rollback(exchange, atmosphere_before, dry_surface,
 			positive_evap, zero, DT,
-			"surface exchange accepted evaporation without donor water");
+			"surface exchange accepted evaporation using frozen donor water");
 
 		auto no_vapor = atmosphere_before;
 		no_vapor.tracer_mass_kg_m2[0][0] = 0.0;
