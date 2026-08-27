@@ -17,17 +17,29 @@ namespace asterra::weather {
 // exactly equal/opposite transfers. No latitude/pole branch or post-step clamp
 // exists in this core.
 //
-// Momentum is deliberately frozen in this first Phase-4 slice. The next dry
-// dynamics step will couple the existing hydrostatic pressure-gradient/TRiSK
-// momentum operator to this conservative mass/thermodynamic transport.
+// Hydrostatic pressure is diagnosed from the prognostic layer masses, not
+// evolved as an independent perturbation scalar. Momentum is still frozen in
+// this Phase-4 slice; pressure-gradient/TRiSK momentum coupling is the next
+// operator to enter the same SSPRK3 state.
 class VoronoiDryTransport {
 public:
 	static constexpr int LEVELS = VoronoiDryHydrostatic::LEVELS;
+	static constexpr int INTERFACES = LEVELS + 1;
 
 	struct State {
 		std::vector<double> layer_mass_kg_m2;       // [level][cell]
 		std::vector<double> theta_mass_kg_k_m2;    // [level][cell]
 		std::vector<double> edge_normal_mps;       // [level][edge], positive a -> b
+	};
+
+	struct HydroDiagnostics {
+		std::vector<double> surface_pressure_pa;      // [cell]
+		std::vector<double> interface_pressure_pa;    // [interface][cell], 0=surface
+		std::vector<double> layer_pressure_pa;        // [level][cell]
+		std::vector<double> potential_temperature_k;  // [level][cell]
+		std::vector<double> temperature_k;            // [level][cell]
+		std::vector<double> interface_geopotential;    // [interface][cell], m2/s2
+		std::vector<double> layer_geopotential;        // [level][cell], m2/s2
 	};
 
 	struct StepDiagnostics {
@@ -48,12 +60,27 @@ public:
 
 	VoronoiDryTransport(const GeodesicVoronoiGrid &grid,
 		double gravity_mps2 = 9.80665,
-		double scale_height_m = 8000.0);
+		double scale_height_m = 8000.0,
+		double top_pressure_pa = 7500.0);
 
-	// Creates the same 30-level hydrostatic reference profile used by
-	// VoronoiDryHydrostatic, converted to conservative mass-form variables.
+	// Build a horizontally uniform isothermal reference using the existing
+	// 30-level vertical-spacing shape, but with a fixed pressure top. The resulting
+	// layer masses sum exactly to (ps - p_top)/g and are therefore directly
+	// prognostic.
 	State make_isothermal_reference(double surface_pressure_pa,
 		double temperature_k) const;
+
+	// Reconstruct p, T and hydrostatic geopotential directly from conservative
+	// layer mass + theta mass. Interface pressure is accumulated downward from
+	// the fixed model-top pressure: p_lower = p_upper + g * layer_mass.
+	HydroDiagnostics diagnose_hydrostatic(const State &state) const;
+
+	// Generalized-coordinate horizontal pressure-gradient acceleration at each
+	// edge/level: -grad_s(Phi) - Rd*T*grad_s(ln p). This is diagnostic for now;
+	// the next dynamics slice will advance edge momentum with it plus TRiSK
+	// rotational terms inside SSPRK3.
+	std::vector<double> pressure_gradient_acceleration(const State &state,
+		const HydroDiagnostics &diagnostics) const;
 
 	double potential_temperature(const State &state, int level, int cell) const;
 	double total_dry_mass_kg(const State &state) const;
@@ -72,6 +99,8 @@ public:
 		double target_cfl = 0.45, int max_retries = 10) const;
 
 	const GeodesicVoronoiGrid &grid() const { return *grid_; }
+	double top_pressure_pa() const { return top_pressure_pa_; }
+	double gravity_mps2() const { return gravity_mps2_; }
 
 private:
 	struct Tendencies {
@@ -81,9 +110,14 @@ private:
 
 	const GeodesicVoronoiGrid *grid_ = nullptr;
 	VoronoiDryHydrostatic hydrostatic_;
+	double gravity_mps2_ = 9.80665;
+	double top_pressure_pa_ = 7500.0;
 
 	int scalar_index(int level, int cell) const {
 		return level * grid_->cell_count() + cell;
+	}
+	int interface_index(int interface_level, int cell) const {
+		return interface_level * grid_->cell_count() + cell;
 	}
 	int edge_index(int level, int edge) const {
 		return level * grid_->edge_count() + edge;
