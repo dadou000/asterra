@@ -1,7 +1,7 @@
 #pragma once
 
 #include "geodesic_voronoi_grid.h"
-#include "voronoi_dry_dynamics.h"
+#include "voronoi_dry_core.h"
 #include "voronoi_dry_hydrostatic.h"
 
 #include <godot_cpp/classes/ref_counted.hpp>
@@ -17,7 +17,8 @@ namespace godot {
 // Runtime-facing Godot bridge for the replacement 30-level dry atmosphere.
 // The physical state lives entirely on the geodesic Voronoi C-grid; the
 // 1024x512 product is a presentation-only resample and never feeds back into
-// dynamics.
+// dynamics. Every accepted runtime step includes conservative pressure-
+// coordinate restoration through VoronoiDryCore.
 class WeatherDryCoreNative : public RefCounted {
 	GDCLASS(WeatherDryCoreNative, RefCounted)
 
@@ -33,9 +34,9 @@ public:
 
 private:
 	std::unique_ptr<asterra::weather::GeodesicVoronoiGrid> grid_;
-	std::unique_ptr<asterra::weather::VoronoiDryDynamics> dynamics_;
-	asterra::weather::VoronoiDryDynamics::State state_;
-	asterra::weather::VoronoiDryDynamics::StepDiagnostics last_step_;
+	std::unique_ptr<asterra::weather::VoronoiDryCore> dynamics_;
+	asterra::weather::VoronoiDryCore::State state_;
+	asterra::weather::VoronoiDryCore::StepDiagnostics last_step_;
 	std::vector<int> display_cell_lookup_;
 
 	double initial_dry_mass_kg_ = 0.0;
@@ -82,16 +83,20 @@ public:
 	//   A = selected-layer dry mass [kg/m2]
 	PackedFloat32Array get_global_dry_rgba(int layer = 0) const;
 
+	// Existing fields remain stable at indices 0..14:
 	// [simulation_s, requested_dt_s, accepted_dt_s, max_courant,
 	//  rejected_steps_total, relative_dry_mass_drift, relative_theta_mass_drift,
 	//  min_layer_mass_kg_m2, min_theta_k, max_speed_mps,
-	//  max_pressure_accel_mps2, cell_count, edge_count, level_count, top_pressure_pa]
+	//  max_pressure_accel_mps2, cell_count, edge_count, level_count, top_pressure_pa,
+	//  max_coordinate_fraction_error, max_coordinate_column_mass_error,
+	//  max_coordinate_column_theta_error, max_coordinate_edge_momentum_error,
+	//  coordinate_remap_applied]
 	PackedFloat32Array get_runtime_diagnostics() const;
 
 	int get_frequency() const { return frequency_; }
 	int get_cell_count() const { return grid_ ? grid_->cell_count() : 0; }
 	int get_edge_count() const { return grid_ ? grid_->edge_count() : 0; }
-	int get_layer_count() const { return asterra::weather::VoronoiDryDynamics::LEVELS; }
+	int get_layer_count() const { return asterra::weather::VoronoiDryCore::LEVELS; }
 	int get_display_width() const { return DISPLAY_W; }
 	int get_display_height() const { return DISPLAY_H; }
 	double get_simulation_seconds() const { return simulation_seconds_; }
