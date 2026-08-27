@@ -9,16 +9,9 @@
 namespace asterra::weather {
 
 // Transactional 30-level dry-atmosphere integrator.
-//
-// VoronoiDryDynamics advances the horizontal primitive-equation state on a
-// temporarily deforming mass coordinate. After every accepted horizontal
-// update, VoronoiDryVerticalTransport conservatively remaps that state back to
-// the reference pressure-coordinate layer fractions. The horizontal advance
-// and coordinate remap are one transaction: any invalid/remap/conservation
-// failure restores the complete pre-step state.
-//
-// Static surface geopotential is propagated to every internal hydrostatic path
-// but remains outside the prognostic atmospheric state.
+// Horizontal dynamics and pressure-coordinate remapping form one transaction;
+// dry mass, theta mass, passive tracer masses and edge momentum roll back
+// together if any positivity or conservation gate fails.
 class VoronoiDryCore {
 public:
 	static constexpr int LEVELS = VoronoiDryDynamics::LEVELS;
@@ -34,6 +27,7 @@ public:
 		double theta_mass_before_kg_k = 0.0;
 		double theta_mass_after_kg_k = 0.0;
 		double relative_theta_mass_error = 0.0;
+		double max_relative_tracer_mass_error = 0.0;
 		double min_layer_mass_kg_m2 = 0.0;
 		double min_potential_temperature_k = 0.0;
 		double max_speed_mps = 0.0;
@@ -41,6 +35,7 @@ public:
 		double max_coordinate_mass_fraction_error = 0.0;
 		double max_coordinate_column_mass_error = 0.0;
 		double max_coordinate_column_theta_mass_error = 0.0;
+		double max_coordinate_column_tracer_mass_error = 0.0;
 		double max_coordinate_edge_momentum_error = 0.0;
 		int rejected_steps = 0;
 		bool coordinate_remap_applied = false;
@@ -77,6 +72,9 @@ public:
 	}
 	double total_theta_mass_kg_k(const State &state) const {
 		return dynamics_.total_theta_mass_kg_k(state);
+	}
+	double total_tracer_mass_kg(const State &state, int tracer) const {
+		return dynamics_.total_tracer_mass_kg(state, tracer);
 	}
 	double total_dry_energy_j(const State &state) const {
 		return dynamics_.total_dry_energy_j(state);
