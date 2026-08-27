@@ -1,6 +1,7 @@
 #include "voronoi_moist_thermodynamics.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -36,14 +37,14 @@ double saturation_mixing_ratio_or_infinity(double pressure_pa, double temperatur
 }
 
 EquilibriumPartition equilibrium_partition(double pressure_pa, double temperature_k,
-		double total_water_mixing_ratio) {
-	if (!finite_nonnegative(total_water_mixing_ratio)) {
-		throw std::invalid_argument("Moist total-water mixing ratio must be finite and non-negative");
+		double total_cloud_water_mixing_ratio) {
+	if (!finite_nonnegative(total_cloud_water_mixing_ratio)) {
+		throw std::invalid_argument("Moist cloud-water mixing ratio must be finite and non-negative");
 	}
 	const double qsat = saturation_mixing_ratio_or_infinity(pressure_pa, temperature_k);
 	EquilibriumPartition e;
-	e.vapor = std::min(total_water_mixing_ratio, qsat);
-	const double condensate = total_water_mixing_ratio - e.vapor;
+	e.vapor = std::min(total_cloud_water_mixing_ratio, qsat);
+	const double condensate = total_cloud_water_mixing_ratio - e.vapor;
 	const double fi = VoronoiMoistThermodynamics::ice_fraction(temperature_k);
 	e.ice = condensate * fi;
 	e.liquid = condensate - e.ice;
@@ -54,8 +55,8 @@ EquilibriumPartition equilibrium_partition(double pressure_pa, double temperatur
 }
 
 bool same_partition(const EquilibriumPartition &equilibrium,
-		double vapor, double liquid, double ice, double total_water) {
-	const double tolerance = 1.0e-14 * std::max(1.0, total_water);
+		double vapor, double liquid, double ice, double total_cloud_water) {
+	const double tolerance = 1.0e-14 * std::max(1.0, total_cloud_water);
 	return std::abs(equilibrium.vapor - vapor) <= tolerance
 		&& std::abs(equilibrium.liquid - liquid) <= tolerance
 		&& std::abs(equilibrium.ice - ice) <= tolerance;
@@ -77,13 +78,18 @@ int VoronoiMoistThermodynamics::scalar_count() const {
 }
 
 void VoronoiMoistThermodynamics::validate_indices() const {
-	if (indices_.vapor < 0 || indices_.cloud_liquid < 0 || indices_.cloud_ice < 0) {
-		throw std::invalid_argument("Moist tracer indices must be non-negative");
+	const std::array<int, 5> all{
+		indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice,
+		indices_.rain, indices_.snow};
+	for (int index : all) {
+		if (index < 0) throw std::invalid_argument("Moist tracer indices must be non-negative");
 	}
-	if (indices_.vapor == indices_.cloud_liquid
-			|| indices_.vapor == indices_.cloud_ice
-			|| indices_.cloud_liquid == indices_.cloud_ice) {
-		throw std::invalid_argument("Moist vapor/liquid/ice tracer indices must be distinct");
+	for (size_t a = 0; a < all.size(); ++a) {
+		for (size_t b = a + 1; b < all.size(); ++b) {
+			if (all[a] == all[b]) {
+				throw std::invalid_argument("Moist water tracer indices must be distinct");
+			}
+		}
 	}
 }
 
@@ -98,7 +104,8 @@ void VoronoiMoistThermodynamics::ensure_water_tracers(State &state) const {
 			throw std::invalid_argument("Moist thermodynamics encountered a malformed tracer field");
 		}
 	}
-	const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
+	const int highest = std::max({indices_.vapor, indices_.cloud_liquid,
+		indices_.cloud_ice, indices_.rain, indices_.snow});
 	while (static_cast<int>(state.tracer_mass_kg_m2.size()) <= highest) {
 		state.tracer_mass_kg_m2.emplace_back(expected, 0.0);
 	}
@@ -155,17 +162,19 @@ void VoronoiMoistThermodynamics::initialize_uniform_relative_humidity(
 		throw std::invalid_argument("Moist relative humidity must be finite and non-negative");
 	}
 	ensure_water_tracers(state);
-	const size_t vapor_index = static_cast<size_t>(indices_.vapor);
-	const size_t liquid_index = static_cast<size_t>(indices_.cloud_liquid);
-	const size_t ice_index = static_cast<size_t>(indices_.cloud_ice);
-	std::fill(state.tracer_mass_kg_m2[vapor_index].begin(),
-		state.tracer_mass_kg_m2[vapor_index].end(), 0.0);
-	std::fill(state.tracer_mass_kg_m2[liquid_index].begin(),
-		state.tracer_mass_kg_m2[liquid_index].end(), 0.0);
-	std::fill(state.tracer_mass_kg_m2[ice_index].begin(),
-		state.tracer_mass_kg_m2[ice_index].end(), 0.0);
+	const std::array<size_t, 5> water_indices{
+		static_cast<size_t>(indices_.vapor),
+		static_cast<size_t>(indices_.cloud_liquid),
+		static_cast<size_t>(indices_.cloud_ice),
+		static_cast<size_t>(indices_.rain),
+		static_cast<size_t>(indices_.snow)};
+	for (size_t tracer : water_indices) {
+		std::fill(state.tracer_mass_kg_m2[tracer].begin(),
+			state.tracer_mass_kg_m2[tracer].end(), 0.0);
+	}
 	if (relative_humidity == 0.0) return;
 
+	const size_t vapor_index = static_cast<size_t>(indices_.vapor);
 	bool converged = false;
 	for (int iteration = 0; iteration < RH_INITIALIZATION_ITERATIONS; ++iteration) {
 		const auto thermo = diagnose_thermodynamics(state);
@@ -212,14 +221,19 @@ void VoronoiMoistThermodynamics::initialize_uniform_relative_humidity(
 double VoronoiMoistThermodynamics::total_water_mass_kg(const State &state) const {
 	validate_water_state(state);
 	const int cells = transport_->grid().cell_count();
-	const auto &qv = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.vapor));
-	const auto &ql = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_liquid));
-	const auto &qi = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_ice));
+	const std::array<const std::vector<double> *, 5> water{
+		&state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.vapor)),
+		&state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_liquid)),
+		&state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_ice)),
+		&state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.rain)),
+		&state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.snow))};
 	long double total = 0.0L;
 	for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
 		for (int c = 0; c < cells; ++c) {
 			const size_t i = static_cast<size_t>(k * cells + c);
-			total += static_cast<long double>(qv[i] + ql[i] + qi[i])
+			double layer_water = 0.0;
+			for (const auto *field : water) layer_water += (*field)[i];
+			total += static_cast<long double>(layer_water)
 				* static_cast<long double>(transport_->grid().cell(c).area_m2);
 		}
 	}
@@ -251,7 +265,7 @@ VoronoiMoistThermodynamics::saturation_adjust(State &state) const {
 			const double qi_before = state.tracer_mass_kg_m2[ice_index][i] / dry;
 			const double qt = qv_before + ql_before + qi_before;
 			if (!finite_nonnegative(qt)) {
-				throw std::runtime_error("Moist saturation adjustment encountered invalid total water");
+				throw std::runtime_error("Moist saturation adjustment encountered invalid cloud-water total");
 			}
 
 			const double qsat_before = saturation_mixing_ratio_or_infinity(pressure, temperature_before);
@@ -266,9 +280,6 @@ VoronoiMoistThermodynamics::saturation_adjust(State &state) const {
 			const double initial_enthalpy_residual =
 				initial_equilibrium.specific_enthalpy_j_kg - h_target;
 
-			// If transport delivered an already-equilibrated parcel, leave theta and
-			// all phase masses bitwise untouched. This prevents roundoff accumulation
-			// from an otherwise inverse T<->theta conversion every model step.
 			if (std::abs(initial_enthalpy_residual) <= ROOT_ENTHALPY_TOL_J_KG
 					&& same_partition(initial_equilibrium,
 						qv_before, ql_before, qi_before, qt)) {
@@ -307,8 +318,8 @@ VoronoiMoistThermodynamics::saturation_adjust(State &state) const {
 			const double temperature_after = 0.5 * (lo + hi);
 			const EquilibriumPartition eq = equilibrium_partition(
 				pressure, temperature_after, qt);
-			const double water_after = eq.vapor + eq.liquid + eq.ice;
-			const double local_water_error = std::abs(water_after - qt)
+			const double cloud_water_after = eq.vapor + eq.liquid + eq.ice;
+			const double local_water_error = std::abs(cloud_water_after - qt)
 				/ std::max(std::abs(qt), 1.0e-15);
 			d.max_relative_cell_water_error = std::max(
 				d.max_relative_cell_water_error, local_water_error);
