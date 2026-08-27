@@ -32,7 +32,7 @@ func _ready() -> void:
 	AppSettings.apply_viewport(get_viewport())
 	cfg = _load_config()
 	Planet.configure(cfg)
-	carry.capacity = 2.4                       ## a hand-carried bucket, not a truck
+	carry.capacity = 2.4
 
 	hud = AsterraHUD.new()
 	add_child(hud)
@@ -74,9 +74,6 @@ func _setup_environment() -> void:
 	sky_mat.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	sky.sky_material = sky_mat
 	env.sky = sky
-	# Planet materials calculate their own local sky irradiance and explicitly
-	# disable Godot ambient. Keep a modest global sky term for ordinary scene
-	# objects instead of the old 85% contribution that washed out the terminator.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_sky_contribution = 0.25
 	AppSettings.apply_world_environment(env)
@@ -87,21 +84,10 @@ func _setup_environment() -> void:
 	add_child(eye_exposure)
 
 	sun = DirectionalLight3D.new()
-	# Direct sun against the local sky term in planet_lighting: roughly ten to one,
-	# which is the clear-day ratio. Raised alongside the sky reduction so total
-	# daylight brightness is unchanged and only the contrast moves.
 	sun.light_energy = GraphicsQuality.SUN_LIGHT_ENERGY
 	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
-	# Three independent scales now cooperate:
-	#   Godot cascades -> nearby terrain/structures,
-	#   shader sphere test -> planetary horizon/night.
-	# The analytic terrain shadow in terrain_relief now owns everything above a
-	# couple of kilometres, so the map no longer has to stretch to twelve. Pulling
-	# it in concentrates the same texels on the near field, which is what removes
-	# the acne a low sun across flat ground was producing at the cascade splits.
 	sun.directional_shadow_max_distance = 2500.0
-	# Grazing light on a planet-scale surface is the worst case for depth bias.
 	sun.shadow_bias = 0.035
 	sun.shadow_normal_bias = 3.0
 	AppSettings.apply_sun(sun)
@@ -117,15 +103,9 @@ func _sync_sun_direction(force: bool = false) -> void:
 		return
 	_last_sun_dir = next_dir
 	_sun_dir_initialized = true
-	# Do not rewrite the DirectionalLight transform on ordinary frames. Changing a
-	# shadow-casting directional light marks its cascades dirty even when the
-	# resulting transform is identical. A future day cycle still updates normally
-	# whenever Frames.helion_dir actually changes.
 	sun.look_at_from_position(Vector3.ZERO, next_dir * -1.0, Vector3(0, 1, 0))
 
 func _on_baked(fields: PlanetFields) -> void:
-	# Planet.adopt() now loads or builds the single resident global height package.
-	# No terrain-height refinement worker is launched after this point.
 	if _rebaking and terrain != null:
 		var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 		Planet.adopt(fields)
@@ -191,9 +171,6 @@ func _push_orbit_surface_textures() -> void:
 	ground.set_shader_parameter("u_orbit_face_res", float(Planet.orbit_texture_face_res))
 	ground.set_shader_parameter("u_relief_ready", 1.0)
 
-## Pick the most convincing place to start: a well-drained, buildable site on a
-## natural transport corridor beside a real river. This is the same score the
-## roadmap will later use to justify where Sterling grew.
 func find_spawn() -> Vector3:
 	var f := Planet.fields
 	var g := Planet.grid
@@ -249,8 +226,6 @@ func _on_coast_profile_applied(points: PackedVector2Array) -> void:
 		return
 	var keep_dir := player.up_dir() if player != null else Vector3(1, 0, 0)
 	Planet.set_coast_profile_points(points)
-	# Coast shaping is part of the immutable global base. Explicit editing may
-	# rebuild/load a differently keyed global package, but normal travel never does.
 	if Planet.has_method("rebuild_global_height"):
 		Planet.rebuild_global_height(false)
 	terrain.build_roots()
@@ -308,8 +283,9 @@ func _dig() -> void:
 	var moved := 0.0
 	for k in removed.entries.keys():
 		var e: Dictionary = removed.entries[k]
-		moved += carry.add(e["material_id"], e["rock_family"], e["volume_loose"], e["props"])
-		e["volume_loose"] -= moved
+		var accepted := carry.add(e["material_id"], e["rock_family"], e["volume_loose"], e["props"])
+		moved += accepted
+		e["volume_loose"] -= accepted
 	var leftover := MaterialStock.new()
 	for k in removed.entries.keys():
 		var e: Dictionary = removed.entries[k]
