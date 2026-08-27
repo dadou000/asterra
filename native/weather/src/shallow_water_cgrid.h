@@ -46,11 +46,13 @@ public:
 	const Vec3d &rotation_axis() const { return rotation_axis_; }
 
 	double total_volume_m3(const State &state) const;
+	double total_energy(const State &state) const;
 	double max_wave_courant(const State &state, double dt_s) const;
 	double stable_dt(const State &state, double target_cfl,
 		double maximum_dt_s) const;
 
 	std::vector<Vec3d> reconstruct_cell_velocity(const State &state) const;
+	std::vector<double> reconstruct_cell_relative_vorticity(const State &state) const;
 
 	StepDiagnostics step(State &state, double requested_dt_s,
 		double target_cfl = 0.40, int max_retries = 8) const;
@@ -66,9 +68,6 @@ private:
 	double rotation_rate_rad_s_ = 0.0;
 	Vec3d rotation_axis_{0.0, 1.0, 0.0};
 
-	// Dual-edge geometry. center_distance is used for the gravity-wave CFL. The
-	// signed normal/tangential displacement components are used by the
-	// non-orthogonal pressure-gradient correction.
 	std::vector<double> edge_center_distance_m_;
 	std::vector<double> edge_normal_separation_m_;
 	std::vector<double> edge_tangential_offset_m_;
@@ -81,11 +80,12 @@ private:
 	bool validate_finite_positive(const State &state) const;
 	bool is_exact_rest_state(const State &state) const;
 
-	// Least-squares cell gradient on the sphere, used only for the tangential
-	// correction of a shared-edge pressure jump. The normal component always
-	// retains the direct h_b-h_a difference, preserving checkerboard detection.
 	std::vector<Vec3d> reconstruct_cell_scalar_gradient(
 		const std::vector<double> &scalar) const;
+	std::vector<double> reconstruct_cell_relative_vorticity(
+		const State &state, const std::vector<Vec3d> &cell_velocity) const;
+	double corrected_edge_normal_gradient(const std::vector<double> &scalar,
+		const std::vector<Vec3d> &cell_gradient, size_t edge_index) const;
 
 	StageDiagnostics euler_stage(const State &input, State &output,
 		double dt_s) const;
