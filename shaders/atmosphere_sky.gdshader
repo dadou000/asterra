@@ -249,8 +249,11 @@ void sky() {
 		// The planet itself is not a sky object. If the view ray intersects the
 		// analytic sphere, suppress every background contribution (atmosphere,
 		// clouds, galaxy and sun) so missing streamed geometry can never expose sky.
-		col *= planet_visibility;
-		COLOR = 1.0 - exp(-col);
+		vec3 radiance = col * planet_visibility;
+		// Keep the IBL source linear/HDR. The visible background retains its old
+		// presentation curve until the sky/exposure pipeline is revised separately;
+		// applying that curve to the cubemap destroys highlight range before PBR.
+		COLOR = AT_CUBEMAP_PASS ? radiance : (1.0 - exp(-radiance));
 		ALPHA = 1.0;
 	}
 }
