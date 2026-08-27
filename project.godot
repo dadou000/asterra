@@ -3,7 +3,7 @@
 ; since the parameters that go here are not all obvious.
 ;
 ; Format:
-;   [section] ; section goes between []
+;   [section] ; section between []
 ;   param=value ; assign values to parameters
 
 config_version=5
@@ -36,7 +36,7 @@ OceanSystem="*res://scripts/terrain/ocean_geometry_clipmap.gd"
 GroundGeometryClipmap="*res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd"
 RenderedTerrainContactQuery="*res://scripts/terrain/gpu_rendered_terrain_contact_query.gd"
 TerrainScatter="*res://scripts/terrain/gpu_terrain_scatter_global.gd"
-TerrainDeformationExperiment="*res://scripts/terrain/terrain_deformation_experiment_gpu.gd"
+TerrainDeformationExperiment="*res://scripts/terrain/terrain_deformation_experiment_gpu_safe.gd"
 AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
 VolumetricClouds="*res://scripts/rendering/volumetric_cloud_controller.gd"
