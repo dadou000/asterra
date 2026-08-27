@@ -1,6 +1,7 @@
 #include "voronoi_moist_hydrostatic.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -9,13 +10,18 @@ namespace asterra::weather {
 VoronoiMoistHydrostatic::VoronoiMoistHydrostatic(
 		const VoronoiDryTransport &transport, TracerIndices indices)
 	: transport_(&transport), indices_(indices) {
-	if (indices_.vapor < 0 || indices_.cloud_liquid < 0 || indices_.cloud_ice < 0) {
-		throw std::invalid_argument("Moist hydrostatic tracer indices must be non-negative");
+	const std::array<int, 5> all{
+		indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice,
+		indices_.rain, indices_.snow};
+	for (int index : all) {
+		if (index < 0) throw std::invalid_argument("Moist hydrostatic tracer indices must be non-negative");
 	}
-	if (indices_.vapor == indices_.cloud_liquid
-			|| indices_.vapor == indices_.cloud_ice
-			|| indices_.cloud_liquid == indices_.cloud_ice) {
-		throw std::invalid_argument("Moist hydrostatic water tracer indices must be distinct");
+	for (size_t a = 0; a < all.size(); ++a) {
+		for (size_t b = a + 1; b < all.size(); ++b) {
+			if (all[a] == all[b]) {
+				throw std::invalid_argument("Moist hydrostatic water tracer indices must be distinct");
+			}
+		}
 	}
 }
 
@@ -52,7 +58,8 @@ void VoronoiMoistHydrostatic::validate_water_shape(const State &state) const {
 			}
 		}
 	}
-	const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
+	const int highest = std::max({indices_.vapor, indices_.cloud_liquid,
+		indices_.cloud_ice, indices_.rain, indices_.snow});
 	if (highest < 0 || static_cast<int>(state.tracer_mass_kg_m2.size()) <= highest) {
 		throw std::invalid_argument("Moist hydrostatic diagnosis requires configured water tracer slots");
 	}
@@ -78,8 +85,10 @@ VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 	d.layer_geopotential.resize(scalar_count);
 
 	const auto &vapor = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
-	const auto &liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
-	const auto &ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &cloud_liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
+	const auto &cloud_ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &rain = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.rain)];
+	const auto &snow = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 
 	for (int c = 0; c < cells; ++c) {
 		d.interface_geopotential[static_cast<size_t>(interface_index(0, c))]
@@ -87,7 +96,8 @@ VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 		for (int k = 0; k < LEVELS; ++k) {
 			const size_t i = static_cast<size_t>(scalar_index(k, c));
 			const double dry_mass = state.layer_mass_kg_m2[i];
-			const double total_mass = dry_mass + vapor[i] + liquid[i] + ice[i];
+			const double total_mass = dry_mass + vapor[i] + cloud_liquid[i]
+				+ cloud_ice[i] + rain[i] + snow[i];
 			const double p_lower = d.interface_pressure_pa[
 				static_cast<size_t>(interface_index(k, c))];
 			const double p_upper = d.interface_pressure_pa[
@@ -95,10 +105,10 @@ VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 			const double p_center = d.layer_pressure_pa[i];
 			const double temperature = d.temperature_k[i];
 			const double qv = vapor[i] / dry_mass;
-			const double ql = liquid[i] / dry_mass;
-			const double qi = ice[i] / dry_mass;
+			const double ql_total = (cloud_liquid[i] + rain[i]) / dry_mass;
+			const double qi_total = (cloud_ice[i] + snow[i]) / dry_mass;
 			const double tv = VoronoiMoistThermodynamics::virtual_temperature_k(
-				temperature, qv, ql, qi);
+				temperature, qv, ql_total, qi_total);
 			const double phi_lower = d.interface_geopotential[
 				static_cast<size_t>(interface_index(k, c))];
 			const double log_full = std::log(p_lower / p_upper);
@@ -143,12 +153,6 @@ std::vector<double> VoronoiMoistHydrostatic::pressure_gradient_acceleration(
 				- std::log(d.layer_pressure_pa[static_cast<size_t>(ia)])) * inv_d;
 			const double tv_edge = 0.5 * (d.virtual_temperature_k[static_cast<size_t>(ia)]
 				+ d.virtual_temperature_k[static_cast<size_t>(ib)]);
-
-			// In this dry-mass coordinate p_eta/mu_d = total_mass/dry_mass and
-			// alpha/alpha_d = dry_mass/total_mass, so the generalized-coordinate
-			// factors cancel. The moist pressure force therefore reduces exactly to
-			// the same compact vector form as the dry limit:
-			//   -grad(Phi) - Rd*Tv*grad(ln p_total).
 			acceleration[static_cast<size_t>(edge_index(k, e))]
 				= -grad_phi - VoronoiDryHydrostatic::RD * tv_edge * grad_log_p;
 		}
@@ -161,7 +165,9 @@ double VoronoiMoistHydrostatic::total_moist_air_mass_kg(const State &state) cons
 	return transport_->total_dry_mass_kg(state)
 		+ transport_->total_tracer_mass_kg(state, indices_.vapor)
 		+ transport_->total_tracer_mass_kg(state, indices_.cloud_liquid)
-		+ transport_->total_tracer_mass_kg(state, indices_.cloud_ice);
+		+ transport_->total_tracer_mass_kg(state, indices_.cloud_ice)
+		+ transport_->total_tracer_mass_kg(state, indices_.rain)
+		+ transport_->total_tracer_mass_kg(state, indices_.snow);
 }
 
 } // namespace asterra::weather
