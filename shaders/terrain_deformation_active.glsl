@@ -5,6 +5,13 @@
 // One invocation owns one texel, so no atomics are required. Contacts are batched
 // on the CPU into a tiny buffer and every texel evaluates the same contact list.
 // RGBA state: R=height delta, G=compaction, B=shear/plastic damage, A=reserved.
+//
+// Each contact occupies three vec4 records:
+//   a = center.xy, footprint radius, plastic sink step
+//   b = compaction gain, damage gain, rim fraction, max depth
+//   c = footprint type, shape radius, penetration, reserved
+// footprint type 0 = generic smooth circular patch
+// footprint type 1 = spherical cap matching the actual sphere surface
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -20,6 +27,23 @@ layout(set = 0, binding = 3, std140) uniform Params {
 	vec4 values;
 } params;
 
+float generic_footprint_weight(float distance_m, float radius_m) {
+	float q = clamp(distance_m / max(radius_m, 1e-5), 0.0, 1.0);
+	float weight = 1.0 - q * q;
+	return weight * weight;
+}
+
+float sphere_footprint_weight(float distance_m, float sphere_radius_m, float penetration_m) {
+	float r = max(sphere_radius_m, 1e-4);
+	float p = max(penetration_m, 1e-5);
+	if (distance_m >= r) {
+		return 0.0;
+	}
+	float sag = r - sqrt(max(r * r - distance_m * distance_m, 0.0));
+	float overlap = max(p - sag, 0.0);
+	return clamp(overlap / p, 0.0, 1.0);
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	int resolution = int(params.values.y + 0.5);
@@ -33,8 +57,9 @@ void main() {
 	int contact_count = clamp(int(params.values.x + 0.5), 0, 64);
 
 	for (int contact_index = 0; contact_index < contact_count; ++contact_index) {
-		vec4 a = contacts.data[contact_index * 2 + 0];
-		vec4 b = contacts.data[contact_index * 2 + 1];
+		vec4 a = contacts.data[contact_index * 3 + 0];
+		vec4 b = contacts.data[contact_index * 3 + 1];
+		vec4 c = contacts.data[contact_index * 3 + 2];
 		vec2 contact_center_m = a.xy;
 		float radius_m = max(a.z, spacing_m * 0.5);
 		float sink_m = max(a.w, 0.0);
@@ -42,12 +67,16 @@ void main() {
 		float damage_gain = max(b.y, 0.0);
 		float rim_fraction = clamp(b.z, 0.0, 0.95);
 		float max_depth_m = max(b.w, 0.05);
+		int footprint_type = int(c.x + 0.5);
+		float shape_radius_m = max(c.y, radius_m);
+		float penetration_m = max(c.z, 0.0);
 
 		float distance_m = length(local_m - contact_center_m);
 		if (distance_m <= radius_m) {
-			float q = distance_m / radius_m;
-			float weight = 1.0 - q * q;
-			weight *= weight;
+			float weight = generic_footprint_weight(distance_m, radius_m);
+			if (footprint_type == 1) {
+				weight = sphere_footprint_weight(distance_m, shape_radius_m, penetration_m);
+			}
 			float requested = -sink_m * weight;
 			float before = state.r;
 			state.r = clamp(state.r + requested, -max_depth_m, max_depth_m * 0.25);
@@ -56,9 +85,8 @@ void main() {
 			state.b = clamp(state.b + actual_removed * damage_gain, 0.0, 1.0);
 		}
 
-		// Continuous volume-normalized rim. The depression kernel integrates to
-		// PI*R^2/3. For the triangular 1.08R..1.90R ring, this coefficient puts
-		// approximately rim_fraction of that displaced volume around the crater.
+		// The rim stays outside the physical footprint. This is displaced/loosened
+		// material; the exact mass-conserving loose-soil pass comes later.
 		if (rim_fraction > 0.0) {
 			float ring_inner = radius_m * 1.08;
 			float ring_outer = radius_m * 1.90;
