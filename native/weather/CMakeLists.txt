@@ -20,6 +20,7 @@ add_library(asterra_weather_core STATIC
   src/shallow_water_cgrid.cpp
   src/geodesic_voronoi_grid.cpp
   src/geodesic_voronoi_mpas.cpp
+  src/spherical_latlon_sampler.cpp
   src/voronoi_shallow_water.cpp
   src/voronoi_dry_hydrostatic.cpp
   src/voronoi_dry_transport.cpp
@@ -48,6 +49,10 @@ add_test(NAME geodesic_voronoi_grid COMMAND asterra_weather_geodesic_tests)
 add_executable(asterra_weather_trisk_weight_tests tests/test_trisk_weights.cpp)
 target_link_libraries(asterra_weather_trisk_weight_tests PRIVATE asterra_weather_core)
 add_test(NAME trisk_weights COMMAND asterra_weather_trisk_weight_tests)
+
+add_executable(asterra_weather_latlon_sampler_tests tests/test_spherical_latlon_sampler.cpp)
+target_link_libraries(asterra_weather_latlon_sampler_tests PRIVATE asterra_weather_core)
+add_test(NAME spherical_latlon_sampler COMMAND asterra_weather_latlon_sampler_tests)
 
 add_executable(asterra_weather_voronoi_shallow_water_tests tests/test_voronoi_shallow_water.cpp)
 target_link_libraries(asterra_weather_voronoi_shallow_water_tests PRIVATE asterra_weather_core)
@@ -96,6 +101,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_shallow_water_tests
     asterra_weather_geodesic_tests
     asterra_weather_trisk_weight_tests
+    asterra_weather_latlon_sampler_tests
     asterra_weather_voronoi_shallow_water_tests
     asterra_weather_rossby_haurwitz_tests
     asterra_weather_hydrostatic_tests
@@ -153,6 +159,7 @@ if(MSVC)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE /O2)
   target_compile_options(asterra_weather_geodesic_tests PRIVATE /O2)
   target_compile_options(asterra_weather_trisk_weight_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_latlon_sampler_tests PRIVATE /O2)
   target_compile_options(asterra_weather_voronoi_shallow_water_tests PRIVATE /O2)
   target_compile_options(asterra_weather_rossby_haurwitz_tests PRIVATE /O2)
   target_compile_options(asterra_weather_hydrostatic_tests PRIVATE /O2)
@@ -171,6 +178,7 @@ else()
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE -O3)
   target_compile_options(asterra_weather_geodesic_tests PRIVATE -O3)
   target_compile_options(asterra_weather_trisk_weight_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_latlon_sampler_tests PRIVATE -O3)
   target_compile_options(asterra_weather_voronoi_shallow_water_tests PRIVATE -O3)
   target_compile_options(asterra_weather_rossby_haurwitz_tests PRIVATE -O3)
   target_compile_options(asterra_weather_hydrostatic_tests PRIVATE -O3)
