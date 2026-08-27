@@ -9,9 +9,9 @@
 // Each contact occupies three vec4 records:
 //   a = center.xy, footprint radius, plastic sink step
 //   b = compaction gain, damage gain, rim fraction, max depth
-//   c = footprint type, shape radius, penetration, reserved
+//   c = footprint type, shape radius, penetration/embed depth, reserved
 // footprint type 0 = generic smooth circular patch
-// footprint type 1 = spherical cap matching the actual sphere surface
+// footprint type 1 = spherical lower-envelope target matching the actual sphere
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -33,15 +33,17 @@ float generic_footprint_weight(float distance_m, float radius_m) {
 	return weight * weight;
 }
 
-float sphere_footprint_weight(float distance_m, float sphere_radius_m, float penetration_m) {
+// Height delta of the lower sphere surface relative to the original contact plane.
+// embed_depth_m is the sphere-bottom depth below that plane. Inside the geometric
+// contact circle this is <= 0. The terrain is only allowed to move downward toward
+// this envelope, never upward to follow the sphere out again.
+float sphere_target_delta(float distance_m, float sphere_radius_m, float embed_depth_m) {
 	float r = max(sphere_radius_m, 1e-4);
-	float p = max(penetration_m, 1e-5);
 	if (distance_m >= r) {
 		return 0.0;
 	}
 	float sag = r - sqrt(max(r * r - distance_m * distance_m, 0.0));
-	float overlap = max(p - sag, 0.0);
-	return clamp(overlap / p, 0.0, 1.0);
+	return min(-max(embed_depth_m, 0.0) + sag, 0.0);
 }
 
 void main() {
@@ -69,17 +71,28 @@ void main() {
 		float max_depth_m = max(b.w, 0.05);
 		int footprint_type = int(c.x + 0.5);
 		float shape_radius_m = max(c.y, radius_m);
-		float penetration_m = max(c.z, 0.0);
+		float embed_depth_m = max(c.z, 0.0);
 
 		float distance_m = length(local_m - contact_center_m);
 		if (distance_m <= radius_m) {
-			float weight = generic_footprint_weight(distance_m, radius_m);
-			if (footprint_type == 1) {
-				weight = sphere_footprint_weight(distance_m, shape_radius_m, penetration_m);
-			}
-			float requested = -sink_m * weight;
 			float before = state.r;
-			state.r = clamp(state.r + requested, -max_depth_m, max_depth_m * 0.25);
+			if (footprint_type == 1) {
+				// Do not repeatedly stamp a radial kernel. Instead converge each texel
+				// toward the actual lower surface of the sphere. Because the sphere's
+				// center contact datum retreats by the same sink_m each physics step,
+				// an already-contacting texel normally advances exactly one sink_m and
+				// stays on the spherical envelope. Newly contacted texels start near zero
+				// at the edge and join the same envelope without creating a needle hole.
+				float target = sphere_target_delta(distance_m, shape_radius_m, embed_depth_m);
+				target = clamp(target, -max_depth_m, 0.0);
+				float remaining = max(state.r - target, 0.0);
+				float step_down = min(remaining, sink_m);
+				state.r = clamp(state.r - step_down, -max_depth_m, max_depth_m * 0.25);
+			} else {
+				float weight = generic_footprint_weight(distance_m, radius_m);
+				float requested = -sink_m * weight;
+				state.r = clamp(state.r + requested, -max_depth_m, max_depth_m * 0.25);
+			}
 			float actual_removed = max(before - state.r, 0.0);
 			state.g = clamp(state.g + actual_removed * compaction_gain, 0.0, 1.0);
 			state.b = clamp(state.b + actual_removed * damage_gain, 0.0, 1.0);
