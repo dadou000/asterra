@@ -1,6 +1,7 @@
 #pragma once
 
 #include "geodesic_voronoi_grid.h"
+#include "spherical_latlon_sampler.h"
 #include "voronoi_dry_core.h"
 #include "voronoi_dry_hydrostatic.h"
 
@@ -39,6 +40,7 @@ private:
 	asterra::weather::VoronoiDryCore::State state_;
 	asterra::weather::VoronoiDryCore::StepDiagnostics last_step_;
 	std::vector<int> display_cell_lookup_;
+	std::vector<double> surface_height_m_;
 
 	double initial_dry_mass_kg_ = 0.0;
 	double initial_theta_mass_kg_k_ = 0.0;
@@ -53,6 +55,7 @@ private:
 	void rebuild_display_lookup();
 	void reset_budget_baseline();
 	void refresh_state_extrema();
+	void on_static_surface_changed();
 	bool ready() const { return bool(grid_) && bool(dynamics_); }
 
 protected:
@@ -71,6 +74,24 @@ public:
 	double step(double requested_dt_s, double target_cfl = 0.28);
 	void reset_isothermal(double surface_pressure_pa = 110000.0,
 		double temperature_k = 288.0);
+	void reset_terrain_balanced_isothermal(
+		double reference_surface_pressure_pa = 110000.0,
+		double temperature_k = 288.0);
+
+	// Static atmospheric lower-boundary geometry. These calls do not alter
+	// atmospheric mass or theta; they only replace the surface geopotential used
+	// by hydrostatics. Use reset_terrain_balanced_isothermal() after loading a new
+	// terrain map when a zero-wind balanced initial condition is desired.
+	//
+	// set_surface_height_cells expects exactly get_cell_count() samples in native
+	// Voronoi cell order. set_surface_height_map accepts a global equirectangular
+	// raster using the same convention as the weather display: row-major,
+	// west->east, north->south, pixel-centred and longitude-periodic.
+	bool set_surface_height_cells(const PackedFloat32Array &height_m);
+	bool set_surface_height_map(const PackedFloat32Array &height_m,
+		int width, int height);
+	void clear_surface_height();
+	PackedFloat32Array get_surface_height_cells() const;
 
 	// Add a smooth multiplicative column-mass perturbation. Layer mass and theta
 	// mass receive the same factor, so potential temperature is unchanged at the
