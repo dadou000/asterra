@@ -1,0 +1,108 @@
+name: Patch Voronoi TRiSK Dynamics
+
+on:
+  push:
+    branches: [weather/0.0.5]
+    paths: [.github/workflows/patch-voronoi-trisk.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: weather/0.0.5
+      - name: Patch exact TRiSK operators
+        shell: python
+        run: |
+          import pathlib, re
+          p = pathlib.Path('native/weather/src/voronoi_shallow_water.cpp')
+          s = p.read_text()
+
+          vorticity = r'''std::vector<double> VoronoiShallowWater::reconstruct_vertex_relative_vorticity(const State &state) const {
+          	validate_shape(state);
+          	std::vector<double> zeta(static_cast<size_t>(grid_->vertex_count()), 0.0);
+          	for (int v = 0; v < grid_->vertex_count(); ++v) {
+          		const auto &vertex = grid_->vertex(v);
+          		long double circulation = 0.0L;
+          		for (int q = 0; q < 3; ++q) {
+          			const int e = vertex.edges[q];
+          			const auto &edge = grid_->edge(e);
+          			double sign = 0.0;
+          			if (edge.vertex_b == v) sign = 1.0;
+          			else if (edge.vertex_a == v) sign = -1.0;
+          			else throw std::runtime_error("Dual vertex is not an endpoint of its incident edge");
+          			circulation += static_cast<long double>(sign)
+          				* static_cast<long double>(edge.center_distance_m)
+          				* static_cast<long double>(state.edge_normal_mps[static_cast<size_t>(e)]);
+          		}
+          		zeta[static_cast<size_t>(v)] = static_cast<double>(
+          			circulation / static_cast<long double>(vertex.dual_area_m2));
+          	}
+          	return zeta;
+          }
+
+          std::vector<double> VoronoiShallowWater::reconstruct_vertex_potential_vorticity'''
+          s, n = re.subn(r'std::vector<double> VoronoiShallowWater::reconstruct_vertex_relative_vorticity\(const State &state\) const \{.*?\n\}\n\nstd::vector<double> VoronoiShallowWater::reconstruct_vertex_potential_vorticity', vorticity, s, flags=re.S)
+          assert n == 1, n
+
+          pv = r'''std::vector<double> VoronoiShallowWater::reconstruct_vertex_potential_vorticity(const State &state) const {
+          	const std::vector<double> zeta = reconstruct_vertex_relative_vorticity(state);
+          	std::vector<double> q(static_cast<size_t>(grid_->vertex_count()), 0.0);
+          	for (int v = 0; v < grid_->vertex_count(); ++v) {
+          		const auto &vertex = grid_->vertex(v);
+          		long double weighted_h = 0.0L;
+          		for (int k = 0; k < 3; ++k) {
+          			weighted_h += static_cast<long double>(vertex.kite_area_m2[k])
+          				* static_cast<long double>(state.depth_m[static_cast<size_t>(vertex.cells[k])]);
+          		}
+          		const double h_vertex = static_cast<double>(
+          			weighted_h / static_cast<long double>(vertex.dual_area_m2));
+          		if (!(h_vertex > 0.0) || !std::isfinite(h_vertex)) {
+          			throw std::runtime_error("Invalid kite-weighted dual-vertex layer thickness");
+          		}
+          		const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, vertex.center);
+          		q[static_cast<size_t>(v)] = (zeta[static_cast<size_t>(v)] + f) / h_vertex;
+          	}
+          	return q;
+          }
+
+          std::vector<double> VoronoiShallowWater::cell_kinetic_energy'''
+          s, n = re.subn(r'std::vector<double> VoronoiShallowWater::reconstruct_vertex_potential_vorticity\(const State &state\) const \{.*?\n\}\n\nstd::vector<double> VoronoiShallowWater::cell_kinetic_energy', pv, s, flags=re.S)
+          assert n == 1, n
+
+          rotational = r'''	// TRiSK PV flux. weightsOnEdge reconstructs the positive tangential
+          	// component k x F at the target edge. The momentum equation contains
+          	// -q(h u^perp). Symmetric pairwise q averaging preserves the metric-
+          	// skew work cancellation of the Thuburn/Ringler edge operator.
+          	for (int e = 0; e < grid_->edge_count(); ++e) {
+          		const auto &target = grid_->edge(e);
+          		if (target.reconstruction_edges.size() != target.reconstruction_weights.size()) {
+          			throw std::runtime_error("TRiSK edgesOnEdge/weightsOnEdge size mismatch");
+          		}
+          		double q_flux_perp = 0.0;
+          		for (size_t k = 0; k < target.reconstruction_edges.size(); ++k) {
+          			const int source = target.reconstruction_edges[k];
+          			const double q_pair = 0.5 * (t.q_edge[static_cast<size_t>(e)]
+          				+ t.q_edge[static_cast<size_t>(source)]);
+          			q_flux_perp += target.reconstruction_weights[k]
+          				* q_pair * t.mass_flux[static_cast<size_t>(source)];
+          		}
+          		t.edge_velocity_dt[static_cast<size_t>(e)] -= q_flux_perp;
+          	}
+
+          	return t;'''
+          s, n = re.subn(r'\t// Metric-skew PV flux\..*?\n\treturn t;', rotational, s, flags=re.S)
+          assert n == 1, n
+
+          p.write_text(s)
+      - name: Commit patch
+        run: |
+          git config user.name "Asterra Weather CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add native/weather/src/voronoi_shallow_water.cpp
+          git commit -m "Use exact MPAS TRiSK PV operator"
+          git push
