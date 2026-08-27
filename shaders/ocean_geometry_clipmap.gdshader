@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
+render_mode cull_disabled, depth_draw_opaque, diffuse_burley, specular_schlick_ggx;
 
 #include "res://shaders/atmosphere.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
@@ -13,6 +13,12 @@ render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specula
 // resolvable by the current mesh or graphics preset, its slope energy is retained
 // as microfacet variance rather than disappearing. This is what prevents distant
 // rough water from becoming a polished mirror.
+//
+// The deep-ocean pass is deliberately opaque. In Godot, merely writing ALPHA
+// routes the whole material through the transparent pipeline, which loses the
+// normal environment/reflection path and makes overlapping clipmap levels prone
+// to sorting artefacts. Shallow transmission/refraction belongs in a separate
+// coast pass; the open ocean should be a depth-writing PBR surface.
 
 uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
@@ -43,9 +49,9 @@ uniform int u_interaction_count = 0;
 uniform float u_interaction_range_m = 2000.0;
 uniform int u_interaction_vertex_level = 4;
 
-uniform vec3 u_deep : source_color = vec3(0.010, 0.042, 0.105);
-uniform vec3 u_shelf : source_color = vec3(0.058, 0.300, 0.360);
-uniform vec3 u_shallow : source_color = vec3(0.130, 0.475, 0.440);
+uniform vec3 u_deep : source_color = vec3(0.006, 0.028, 0.070);
+uniform vec3 u_shelf : source_color = vec3(0.040, 0.215, 0.285);
+uniform vec3 u_shallow : source_color = vec3(0.100, 0.405, 0.385);
 uniform vec3 u_foam : source_color = vec3(0.88, 0.93, 0.96);
 uniform vec3 u_scatter : source_color = vec3(0.055, 0.34, 0.30);
 
@@ -63,6 +69,7 @@ varying float v_unresolved_variance;
 varying float v_interaction_foam;
 varying float v_cloud_shadow;
 varying float v_level;
+varying vec3 v_direct_atmo_t;
 
 const float MAX_PROJECTED_THETA = 1.62;
 const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
@@ -78,13 +85,6 @@ const vec3 SWELL_AXIS_C = vec3(0.153, 0.879, 0.451);
 const vec3 SWELL_AXIS_D = vec3(-0.741, 0.529, -0.413);
 const vec3 SWELL_AXIS_E = vec3(0.336, -0.612, 0.716);
 const vec3 SWELL_AXIS_F = vec3(-0.218, -0.771, -0.598);
-
-const vec3 MICRO_AXIS_A = vec3(0.581, -0.742, 0.334);
-const vec3 MICRO_AXIS_B = vec3(-0.703, -0.264, 0.660);
-const vec3 MICRO_AXIS_C = vec3(0.246, 0.913, -0.325);
-const vec3 MICRO_AXIS_D = vec3(-0.912, 0.128, -0.390);
-const vec3 MICRO_AXIS_E = vec3(0.693, 0.451, -0.562);
-const vec3 MICRO_AXIS_F = vec3(-0.362, 0.821, 0.441);
 const float KELVIN_TAN = 0.35355339;
 
 float ocean_ring_spacing(int level) {
@@ -164,9 +164,6 @@ vec3 ocean_offset_dir(vec3 d, vec3 tangent, float metres) {
 }
 
 void ocean_visible_terrain_lod(float arc_m, out int terrain_level, out float terrain_morph) {
-	// u_base_spacing belongs to gpu_terrain_height.gdshaderinc and deliberately
-	// remains the terrain renderer's nominal spacing. Water geometry density is
-	// controlled independently by u_ocean_base_spacing.
 	float l0_outer = max(u_base_spacing * TERRAIN_HALF_CELLS, 1.0);
 	float ratio = max(arc_m / l0_outer, 1.0);
 	terrain_level = clamp(int(ceil(log2(ratio))), 0, GPU_TERRAIN_MAX_LEVEL);
@@ -289,48 +286,114 @@ void ocean_interactions(vec3 d, int level, out float height, out vec3 slope,
 	}
 }
 
-float ocean_micro_phase_warp(vec2 plane_m) {
-	float a = sin(dot(plane_m, vec2(0.033, 0.021)) + u_time_s * 0.21);
-	float b = sin(dot(plane_m, vec2(-0.018, 0.037)) - u_time_s * 0.13 + 1.9);
-	return a * 0.58 + b * 0.34;
+// Stable stochastic micro-surface ------------------------------------------------
+// A handful of perfect sinusoids read as machined corrugation at eye level.
+// High-frequency ocean structure is instead represented by advected gradient
+// noise. Each octave is footprint-filtered before evaluation. Energy filtered
+// from the normal field is added back as microfacet variance, so the far sea
+// becomes statistically rough rather than smooth or aliased.
+
+float ocean_hash21(vec2 p) {
+	vec3 p3 = fract(vec3(p.x, p.y, p.x) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
 }
 
-void ocean_micro_wave(vec3 up, vec2 plane_m, vec3 axis, float wavelength,
-		float slope_amp, float speed, float phase_offset, float phase_warp,
+// x = signed value, yz = analytic gradient in noise-cell coordinates.
+vec3 ocean_value_noise_grad(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	float a = ocean_hash21(i);
+	float b = ocean_hash21(i + vec2(1.0, 0.0));
+	float c = ocean_hash21(i + vec2(0.0, 1.0));
+	float d = ocean_hash21(i + vec2(1.0, 1.0));
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	vec2 du = 6.0 * f * (1.0 - f);
+	float nx0 = mix(a, b, u.x);
+	float nx1 = mix(c, d, u.x);
+	float value = mix(nx0, nx1, u.y);
+	float dx = mix(b - a, d - c, u.y) * du.x;
+	float dy = (nx1 - nx0) * du.y;
+	return vec3(value * 2.0 - 1.0, dx * 2.0, dy * 2.0);
+}
+
+float ocean_noise01(vec2 p) {
+	return ocean_value_noise_grad(p).x * 0.5 + 0.5;
+}
+
+void ocean_micro_noise_band(vec3 up, vec2 plane_m, float wavelength,
+		float slope_amp, vec2 flow_mps, float angle,
 		inout vec3 slope, inout float unresolved_variance) {
-	vec3 anchor_travel = ocean_safe_tangent(u_anchor_dir, axis);
-	vec2 phase_dir = vec2(dot(anchor_travel, u_anchor_right),
-		dot(anchor_travel, u_anchor_up));
-	float phase_dir_len = length(phase_dir);
-	if (phase_dir_len < 1e-6) return;
-	phase_dir /= phase_dir_len;
-	float coord_m = dot(plane_m, phase_dir);
-	float footprint_m = max(fwidth(coord_m), 1e-6);
-	float pixels_per_wave = wavelength / footprint_m;
-	float filter_w = smoothstep(4.0, 9.0, pixels_per_wave);
-	float variance = slope_amp * slope_amp * 0.5;
+	float ca = cos(angle);
+	float sa = sin(angle);
+	vec2 rotated = vec2(
+		ca * plane_m.x - sa * plane_m.y,
+		sa * plane_m.x + ca * plane_m.y);
+	vec2 q = (rotated + flow_mps * u_time_s) / max(wavelength, 0.02);
+
+	vec2 fw = fwidth(q);
+	float footprint = max(max(fw.x, fw.y), 1e-6);
+	// Fade out before one noise cell approaches the pixel Nyquist limit. Unlike a
+	// post-AA pass this prevents the alias from being generated in the first place.
+	float filter_w = 1.0 - smoothstep(0.14, 0.34, footprint);
+	float variance = slope_amp * slope_amp * 0.62;
 	unresolved_variance += (1.0 - filter_w * filter_w) * variance;
 	if (filter_w <= 0.001) return;
 
-	float k = TAU / wavelength;
-	float anchor_phase = mod(ocean_geodesic_phase_coord(u_anchor_dir, axis), wavelength) * k;
-	float phase = anchor_phase + coord_m * k - u_time_s * speed
-		+ phase_offset + phase_warp;
-	vec3 travel = ocean_safe_tangent(up, axis);
-	slope += travel * (slope_amp * cos(phase) * filter_w);
+	vec3 ng = ocean_value_noise_grad(q);
+	vec2 gp = ng.yz;
+	// Rotate the gradient back into the anchor plane.
+	vec2 g = vec2(
+		ca * gp.x + sa * gp.y,
+		-sa * gp.x + ca * gp.y);
+	vec3 tx = ocean_safe_tangent(up, u_anchor_right);
+	vec3 ty = normalize(cross(up, tx));
+	if (dot(ty, u_anchor_up) < 0.0) ty = -ty;
+	slope += (tx * g.x + ty * g.y) * (slope_amp * filter_w);
 }
 
 vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 	vec3 slope = vec3(0.0);
 	unresolved_variance = 0.0;
-	float warp = ocean_micro_phase_warp(v_micro_plane);
-	if (u_micro_band_count >= 1) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_A, 2.8, 0.028, 3.8, 0.3, warp, slope, unresolved_variance);
-	if (u_micro_band_count >= 2) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_B, 1.3, 0.022, 5.6, 1.7, warp * 1.13, slope, unresolved_variance);
-	if (u_micro_band_count >= 3) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_C, 0.62, 0.016, 7.9, 3.0, warp * 0.91, slope, unresolved_variance);
-	if (u_micro_band_count >= 4) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_D, 0.29, 0.011, 10.8, 4.2, warp * 1.27, slope, unresolved_variance);
-	if (u_micro_band_count >= 5) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_E, 0.13, 0.0075, 15.5, 2.4, warp * 0.83, slope, unresolved_variance);
-	if (u_micro_band_count >= 6) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_F, 0.055, 0.0045, 22.0, 5.1, warp * 1.41, slope, unresolved_variance);
+	if (u_micro_band_count >= 1) ocean_micro_noise_band(up, v_micro_plane, 4.8, 0.026, vec2(0.44, 0.18), 0.24, slope, unresolved_variance);
+	if (u_micro_band_count >= 2) ocean_micro_noise_band(up, v_micro_plane, 2.25, 0.021, vec2(-0.16, 0.62), 1.07, slope, unresolved_variance);
+	if (u_micro_band_count >= 3) ocean_micro_noise_band(up, v_micro_plane, 1.05, 0.016, vec2(0.73, -0.21), 2.18, slope, unresolved_variance);
+	if (u_micro_band_count >= 4) ocean_micro_noise_band(up, v_micro_plane, 0.49, 0.012, vec2(-0.48, -0.67), 0.71, slope, unresolved_variance);
+	if (u_micro_band_count >= 5) ocean_micro_noise_band(up, v_micro_plane, 0.23, 0.0085, vec2(0.91, 0.34), 1.63, slope, unresolved_variance);
+	if (u_micro_band_count >= 6) ocean_micro_noise_band(up, v_micro_plane, 0.105, 0.0060, vec2(-0.83, 0.78), 2.74, slope, unresolved_variance);
 	return slope;
+}
+
+vec3 ocean_vertical_optical_depth() {
+	return u_rayleigh_coeff * u_rayleigh_scale_height
+		+ vec3(u_mie_coeff * u_mie_scale_height)
+		+ u_ozone_coeff * u_ozone_width;
+}
+
+// Kasten-Young style air-mass approximation. This is deliberately cheap enough
+// for a vertex shader and fixes the otherwise white low-sun reflection: sunlight
+// reaching sea level has already lost most of its blue/green on a long slant path.
+vec3 ocean_surface_sun_transmittance(vec3 p, vec3 sun_dir) {
+	float mu = dot(normalize(p), normalize(sun_dir));
+	if (mu <= -0.015) return vec3(0.0);
+	float m = max(mu, 0.001);
+	float zenith_deg = degrees(acos(clamp(m, 0.0, 1.0)));
+	float denom = m + 0.50572 * pow(max(96.07995 - zenith_deg, 0.1), -1.6364);
+	float air_mass = min(1.0 / max(denom, 0.025), 38.0);
+	return exp(-ocean_vertical_optical_depth() * air_mass);
+}
+
+// Near-surface outgoing extinction. For the local/regional water pass a density
+// at the segment midpoint is a much better approximation than leaving direct
+// specular completely unattenuated, and it costs only one exponential.
+vec3 ocean_view_transmittance(vec3 surface, vec3 camera) {
+	float distance_m = length(camera - surface);
+	float h = max((length(surface) + length(camera)) * 0.5 - u_planet_radius, 0.0);
+	float rayleigh_density = exp(-h / max(u_rayleigh_scale_height, 1.0));
+	float mie_density = exp(-h / max(u_mie_scale_height, 1.0));
+	vec3 extinction = u_rayleigh_coeff * rayleigh_density
+		+ vec3(u_mie_coeff * mie_density);
+	return exp(-extinction * min(distance_m, 80000.0));
 }
 
 void vertex() {
@@ -442,6 +505,10 @@ void vertex() {
 		? cloud_shadow_transmittance(displaced, shadow_sun, u_planet_radius)
 		: 0.0;
 
+	vec3 camera_planet_vertex = CAMERA_POSITION_WORLD + u_origin;
+	v_direct_atmo_t = ocean_surface_sun_transmittance(displaced, shadow_sun)
+		* ocean_view_transmittance(displaced, camera_planet_vertex);
+
 	v_valid = (u_macro_ready > 0.5 && raw_ground_h < 0.45
 		&& raw_theta <= u_visible_cap_angle) ? 1.0 : 0.0;
 	VERTEX = v_render;
@@ -465,38 +532,43 @@ void fragment() {
 	float surf_zone = 1.0 - smoothstep(0.2, 9.0, depth);
 	float shorewash = (1.0 - smoothstep(0.12, 3.8, depth)) * smoothstep(0.50, 0.93, v_crest);
 
-	float foam_pattern = 0.5
-		+ 0.25 * sin(dot(v_micro_plane, vec2(0.110, 0.073)) + u_time_s * 0.35)
-		+ 0.25 * sin(dot(v_micro_plane, vec2(-0.067, 0.131)) - u_time_s * 0.23 + 2.3);
-	float foam_patch = smoothstep(0.52, 0.76, foam_pattern);
-	float offshore_whitecap = smoothstep(0.14, 0.30, length(v_slope))
-		* smoothstep(0.60, 0.92, v_crest) * foam_patch;
-	float whitecap = max(v_compression * smoothstep(0.54, 0.90, v_crest),
-		offshore_whitecap * 0.82);
+	// Whitecaps are broken up with advected low-frequency noise rather than two
+	// sinusoidal masks. This keeps crest foam patchy without stamping stripes over
+	// the whole sea.
+	float foam_a = ocean_noise01(v_micro_plane / 18.0 + vec2(0.013, 0.007) * u_time_s);
+	float foam_b = ocean_noise01(v_micro_plane / 6.5 + vec2(-0.021, 0.016) * u_time_s + vec2(17.3, -9.1));
+	float foam_pattern = foam_a * 0.64 + foam_b * 0.36;
+	float foam_patch = smoothstep(0.47, 0.70, foam_pattern);
+
+	float wind_speed = water_wind_speed(up);
+	float wind_state = smoothstep(5.0, 17.0, wind_speed);
+	float cap_low = mix(0.105, 0.040, wind_state);
+	float cap_high = mix(0.210, 0.095, wind_state);
+	float offshore_whitecap = smoothstep(cap_low, cap_high, length(v_slope))
+		* smoothstep(0.53, 0.88, v_crest) * foam_patch;
+	float compression_cap = smoothstep(0.22, 0.72, v_compression)
+		* smoothstep(0.50, 0.86, v_crest) * foam_patch;
+	float whitecap = max(offshore_whitecap, compression_cap);
 	float breaker_foam = v_breaking * (0.68 + 0.32 * v_compression);
 	float diffracted_foam = v_diffraction * surf_zone * v_compression * 0.35;
-	float foam = max(max(shorewash, whitecap * 0.70), max(breaker_foam, diffracted_foam));
+	float foam = max(max(shorewash, whitecap * 0.78), max(breaker_foam, diffracted_foam));
 	foam = max(foam, v_interaction_foam);
-	foam = clamp(foam * u_foam_quality * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
-	base = mix(base, u_foam, foam * 0.90);
+	foam = clamp(foam * u_foam_quality * (1.0 - smoothstep(3500.0, 18000.0, length(VERTEX))), 0.0, 1.0);
+	base = mix(base, u_foam, foam * 0.88);
 
-	vec3 sun_dir = normalize(u_sun_dir);
-	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
-	float wind_rough = water_roughness_from_wind(water_wind_speed(up), 0.5);
+	float wind_rough = water_roughness_from_wind(wind_speed, 0.5);
 	float all_unresolved_variance = max(v_unresolved_variance, 0.0)
 		+ max(micro_unresolved_variance, 0.0);
 	float unresolved_slope_rms = sqrt(all_unresolved_variance);
 	float wind_alpha = wind_rough * wind_rough;
-	float spectral_alpha = clamp(unresolved_slope_rms * 0.70, 0.0, 0.20);
-	float rough = sqrt(clamp(wind_alpha + spectral_alpha, 0.003, 0.40));
-	rough = clamp(rough + foam * 0.16, 0.045, 0.72);
+	float spectral_alpha = clamp(unresolved_slope_rms * 0.82, 0.0, 0.24);
+	float rough = sqrt(clamp(wind_alpha + spectral_alpha, 0.004, 0.44));
+	rough = clamp(rough + foam * 0.18, 0.060, 0.76);
 
+	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 view_dir = normalize(camera_planet - v_planet);
 	float ndotv = max(dot(n, view_dir), 0.0);
 	float fres = water_fresnel(ndotv);
-	float sky_blur = smoothstep(0.22, 0.52, rough);
-	vec3 reflection_n = normalize(mix(n, up, sky_blur * 0.28));
-	vec3 sky_refl = water_sky_radiance(reflect(-view_dir, reflection_n), up, sun_dir);
 
 	float backlight = pow(max(dot(-sun_dir, view_dir), 0.0), 4.0);
 	float crest_thin = smoothstep(0.55, 0.96, v_crest) * (1.0 - smoothstep(2.0, 18.0, depth));
@@ -505,26 +577,41 @@ void fragment() {
 	vec3 atmo_t;
 	vec3 atmo_l;
 	aerial_perspective(camera_planet, v_planet, atmo_t, atmo_l);
-	ALBEDO = base * (1.0 - fres * 0.85) * atmo_t;
-	EMISSION = (base * skylight + sky_refl * fres * 0.9 + crest_scatter) * atmo_t + atmo_l;
+
+	// Environment/radiance-map reflection is intentionally left to Godot's PBR
+	// pipeline. The old analytic sky reflection in EMISSION duplicated the direct
+	// sun lobe and could never reproduce the actual procedural sunset sky.
+	ALBEDO = base * (1.0 - fres * 0.72) * atmo_t;
+	EMISSION = crest_scatter * atmo_t + atmo_l;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	ROUGHNESS = rough;
-	SPECULAR = 0.5;
+	// Godot's default dielectric specular corresponds roughly to IOR 1.5. Water is
+	// IOR ~=1.333 / F0 ~=0.02, so use half the default dielectric strength.
+	SPECULAR = 0.25;
 	METALLIC = 0.0;
 	AO = 1.0;
 	AO_LIGHT_AFFECT = 1.0;
-	ALPHA = mix(0.72, 1.0, smoothstep(0.0, 6.0, depth));
 }
 
 void light() {
 	float visibility = 1.0;
+	vec3 direct_t = vec3(1.0);
 	if (LIGHT_IS_DIRECTIONAL) {
 		visibility = planet_direct_sun_visibility(v_planet, normalize(u_sun_dir), u_planet_radius);
 		visibility *= clamp(v_cloud_shadow, 0.0, 1.0);
+		direct_t = clamp(v_direct_atmo_t, vec3(0.0), vec3(1.0));
 	}
+
+	// Deep water is not a Lambertian blue solid. Keep a small diffuse component as
+	// a stand-in for near-surface volume scattering; most of the visual energy is
+	// reflection plus the depth-dependent body colour supplied by the environment.
+	float volume_diffuse = mix(0.30, 0.10, smoothstep(0.5, 35.0, v_depth));
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
-	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility / PI;
+	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * direct_t
+		* visibility * volume_diffuse / PI;
+
 	float spec = water_specular(NORMAL, VIEW, LIGHT, ROUGHNESS);
 	float fres = water_fresnel(max(dot(NORMAL, VIEW), 0.0));
-	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * spec * fres * SPECULAR_AMOUNT;
+	SPECULAR_LIGHT += LIGHT_COLOR * direct_t * ATTENUATION * visibility
+		* spec * fres * SPECULAR_AMOUNT;
 }
