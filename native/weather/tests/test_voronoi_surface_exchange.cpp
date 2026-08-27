@@ -85,7 +85,7 @@ int main() {
 		auto surface = exchange.make_uniform_surface_state(30.0, 5.0e7);
 		const auto atmosphere_before = atmosphere;
 		const auto surface_before = surface;
-		const auto hydro_before = transport.diagnose_hydrostatic(atmosphere);
+		const auto thermo_before = moist.diagnose_thermodynamics(atmosphere);
 
 		const int cells = grid.cell_count();
 		std::vector<double> evaporation(static_cast<size_t>(cells), 0.0);
@@ -122,8 +122,6 @@ int main() {
 			static_cast<double>(expected_latent_to_atmosphere), 2e-12, 1.0),
 			"surface latent-energy diagnostic disagrees with prescribed flux integral");
 
-		// Surface exchange is a source operator only: dry mass and wind are exactly
-		// untouched, and all levels above the surface layer remain bitwise unchanged.
 		require(atmosphere.layer_mass_kg_m2 == atmosphere_before.layer_mass_kg_m2,
 			"surface exchange changed dry atmospheric mass");
 		require(atmosphere.edge_normal_mps == atmosphere_before.edge_normal_mps,
@@ -133,7 +131,7 @@ int main() {
 				const size_t i = static_cast<size_t>(k * cells + c);
 				require(atmosphere.theta_mass_kg_k_m2[i]
 					== atmosphere_before.theta_mass_kg_k_m2[i],
-					"surface sensible heat leaked above the bottom layer");
+					"surface source leaked theta above the bottom layer");
 				for (size_t tracer = 0; tracer < atmosphere.tracer_mass_kg_m2.size(); ++tracer) {
 					require(atmosphere.tracer_mass_kg_m2[tracer][i]
 						== atmosphere_before.tracer_mass_kg_m2[tracer][i],
@@ -142,7 +140,7 @@ int main() {
 			}
 		}
 
-		const auto hydro_after = transport.diagnose_hydrostatic(atmosphere);
+		const auto thermo_after = moist.diagnose_thermodynamics(atmosphere);
 		long double direct_atmosphere_water_change = 0.0L;
 		long double direct_surface_water_change = 0.0L;
 		for (int c = 0; c < cells; ++c) {
@@ -160,16 +158,14 @@ int main() {
 			const long double area = static_cast<long double>(grid.cell(c).area_m2);
 			direct_atmosphere_water_change += static_cast<long double>(vapor_delta) * area;
 			direct_surface_water_change += static_cast<long double>(surface_delta) * area;
-			const double expected_temperature = hydro_before.temperature_k[i]
+			const double expected_temperature = thermo_before.temperature_k[i]
 				+ sensible_j_m2
 					/ (VoronoiMoistThermodynamics::CP_DRY
 						* atmosphere_before.layer_mass_kg_m2[i]);
-			require(nearly_equal(hydro_after.temperature_k[i], expected_temperature, 5e-13, 1e-11),
-				"bottom-layer temperature did not receive the prescribed sensible energy");
+			require(nearly_equal(thermo_after.temperature_k[i], expected_temperature, 5e-13, 1e-11),
+				"full-pressure bottom temperature did not receive prescribed sensible energy");
 		}
 
-		// Measure the global transfer by integrating local deltas, rather than by
-		// subtracting two ~1e15 kg reservoir totals to recover a ~1e11 kg signal.
 		require(nearly_equal(static_cast<double>(direct_atmosphere_water_change),
 			static_cast<double>(expected_water_to_atmosphere), 3e-12, 1.0),
 			"area-integrated atmospheric water change disagrees with prescribed flux");
@@ -181,13 +177,32 @@ int main() {
 			5e-12, 1.0),
 			"direct atmosphere+surface water transfer does not close");
 
-		// A zero source step must be an exact no-op; running the exchange operator at
-		// every atmosphere step must not create roundoff drift by T<->theta cycling.
+		// Pure evaporation changes full pressure. With zero sensible heat, the
+		// physical temperature must nevertheless stay fixed, which requires theta
+		// to shift. This catches accidental use of dry pressure in the source path.
+		auto latent_only_atmosphere = atmosphere_before;
+		auto latent_only_surface = surface_before;
+		const auto latent_before_thermo = moist.diagnose_thermodynamics(latent_only_atmosphere);
+		const auto latent_before_theta = latent_only_atmosphere.theta_mass_kg_k_m2;
+		auto latent_evap = std::vector<double>(static_cast<size_t>(cells), 0.0);
+		auto zero = std::vector<double>(static_cast<size_t>(cells), 0.0);
+		latent_evap[0] = 2.0e-5;
+		const auto latent_diag = exchange.apply_fluxes(
+			latent_only_atmosphere, latent_only_surface, latent_evap, zero, DT);
+		const auto latent_after_thermo = moist.diagnose_thermodynamics(latent_only_atmosphere);
+		require(nearly_equal(latent_after_thermo.temperature_k[0],
+			latent_before_thermo.temperature_k[0], 5e-13, 1e-11),
+			"evaporation without sensible heat spuriously changed physical temperature");
+		require(latent_only_atmosphere.theta_mass_kg_k_m2[0] != latent_before_theta[0],
+			"evaporation changed full pressure but theta was not compensated");
+		require(latent_diag.relative_system_energy_error < 5e-13,
+			"latent-only surface exchange failed full-pressure energy closure");
+
+		// A zero source step remains an exact no-op.
 		auto zero_atmosphere = atmosphere_before;
 		auto zero_surface = surface_before;
 		const auto zero_atmosphere_before = zero_atmosphere;
 		const auto zero_surface_before = zero_surface;
-		std::vector<double> zero(static_cast<size_t>(cells), 0.0);
 		const auto zero_diag = exchange.apply_fluxes(
 			zero_atmosphere, zero_surface, zero, zero, DT);
 		require(state_exact_equal(zero_atmosphere, zero_atmosphere_before),
@@ -197,8 +212,6 @@ int main() {
 		require(zero_diag.relative_system_water_error == 0.0,
 			"zero-flux surface exchange changed total water");
 
-		// Failure paths are transactional: unavailable surface water, unavailable
-		// vapor, and physically invalid cooling all restore both reservoirs exactly.
 		auto dry_surface = exchange.make_uniform_surface_state(0.0, 5.0e7);
 		auto positive_evap = zero;
 		positive_evap[0] = 1.0e-3;
@@ -223,6 +236,7 @@ int main() {
 		std::cout << "VoronoiSurfaceExchange PASS\n"
 			<< "  water error: " << diagnostics.relative_system_water_error << "\n"
 			<< "  energy error: " << diagnostics.relative_system_energy_error << "\n"
+			<< "  latent-only energy error: " << latent_diag.relative_system_energy_error << "\n"
 			<< "  evaporation/dew: " << diagnostics.evaporated_to_atmosphere_kg
 			<< "/" << diagnostics.condensed_to_surface_kg << " kg\n"
 			<< "  bottom T range: " << diagnostics.min_bottom_temperature_k
