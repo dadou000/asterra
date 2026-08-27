@@ -15,6 +15,7 @@ add_library(asterra_weather_core STATIC
   src/conservative_transport.cpp
   src/shallow_water_cgrid.cpp
   src/geodesic_voronoi_grid.cpp
+  src/geodesic_voronoi_mpas.cpp
   src/voronoi_shallow_water.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
@@ -40,18 +41,12 @@ add_executable(asterra_weather_shallow_water_tests
 target_link_libraries(asterra_weather_shallow_water_tests PRIVATE asterra_weather_core)
 add_test(NAME shallow_water_cgrid COMMAND asterra_weather_shallow_water_tests)
 
-# Permanent global horizontal mesh gate: MPAS/TRiSK-style spherical
-# Voronoi/Delaunay C-grid with no coordinate poles.
 add_executable(asterra_weather_geodesic_tests
   tests/test_geodesic_voronoi.cpp
 )
 target_link_libraries(asterra_weather_geodesic_tests PRIVATE asterra_weather_core)
 add_test(NAME geodesic_voronoi_grid COMMAND asterra_weather_geodesic_tests)
 
-# Permanent nonlinear shallow-water gate on the new mesh. This verifies the
-# semi-discrete energy identity, circulation closure, direct pressure response,
-# rollback/CFL safety, and a strong tilted balanced-flow integration beyond the
-# failure window of the rejected cubed-sphere nonlinear core.
 add_executable(asterra_weather_voronoi_shallow_water_tests
   tests/test_voronoi_shallow_water.cpp
 )
