@@ -5,15 +5,14 @@
 
 namespace asterra::weather {
 
-// Diagnostic total energy for the current dilute moist dynamical model.
+// Diagnostic global budgets for the current dilute moist dynamical model.
 // This is intentionally diagnostic-only: it does not impose an acceptance gate
-// on SSPRK3. The convention is consistent with the active moist pressure path
-// and the surface/phase source bookkeeping:
+// on SSPRK3. Energy follows the active moist pressure/source conventions:
 //   dry internal: Cv_d T * m_d
 //   latent reference: +Lv m_v - Lf (m_ci + m_snow)
 //   potential: Phi * (m_d + all suspended water)
 //   kinetic: K * (m_d + all suspended water)
-// integrated over native Voronoi cell area.
+// Relative/absolute axial angular momentum also use total suspended mass.
 class VoronoiMoistEnergyDiagnostics {
 public:
 	using State = VoronoiDryCore::State;
@@ -25,6 +24,8 @@ public:
 		double potential_energy_j = 0.0;
 		double kinetic_energy_j = 0.0;
 		double total_energy_j = 0.0;
+		double relative_axial_angular_momentum_kg_m2_s = 0.0;
+		double absolute_axial_angular_momentum_kg_m2_s = 0.0;
 	};
 
 	explicit VoronoiMoistEnergyDiagnostics(const VoronoiDryCore &core,
