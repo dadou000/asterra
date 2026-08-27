@@ -12,8 +12,10 @@ namespace asterra::weather {
 // choosing a bulk-aerodynamic closure. Positive evaporation moves liquid water
 // from the surface reservoir into bottom-layer water vapor [kg/m2/s]. Positive
 // sensible heat moves energy from the surface into bottom-layer dry enthalpy
-// [W/m2]. Every transfer is equal/opposite and transactional; unavailable donor
-// water, invalid temperatures, or any non-finite result restores both states.
+// [W/m2]. Surface ice is a separate non-evaporable reservoir so snowfall cannot
+// silently become liquid water. Every transfer is equal/opposite and
+// transactional; unavailable donor water, invalid temperatures, or any
+// non-finite result restores both states.
 class VoronoiSurfaceExchange {
 public:
 	using State = VoronoiDryTransport::State;
@@ -21,7 +23,8 @@ public:
 
 	struct SurfaceState {
 		std::vector<double> water_kg_m2;   // liquid reservoir, [cell]
-		std::vector<double> energy_j_m2;   // arbitrary-reference surface energy, [cell]
+		std::vector<double> ice_kg_m2;     // frozen reservoir, [cell]
+		std::vector<double> energy_j_m2;   // thermodynamic energy, [cell]
 	};
 
 	struct Diagnostics {
@@ -41,6 +44,7 @@ public:
 		double sensible_to_atmosphere_j = 0.0;
 		double latent_to_atmosphere_j = 0.0;
 		double min_surface_water_kg_m2 = 0.0;
+		double min_surface_ice_kg_m2 = 0.0;
 		double min_bottom_temperature_k = 0.0;
 		double max_bottom_temperature_k = 0.0;
 	};
@@ -51,8 +55,9 @@ public:
 	SurfaceState make_uniform_surface_state(double water_kg_m2,
 		double energy_j_m2 = 0.0) const;
 
-	// Flux arrays are [cell]. Positive evaporation transfers surface -> vapor;
-	// negative evaporation is dew/condensation vapor -> surface. Positive sensible
+	// Flux arrays are [cell]. Positive evaporation transfers liquid surface water
+	// -> vapor; negative evaporation is dew/condensation vapor -> liquid surface.
+	// Frozen surface water is not available to this operator. Positive sensible
 	// heat transfers surface -> atmosphere. No implicit saturation adjustment is
 	// performed here; call VoronoiMoistThermodynamics after this operator.
 	Diagnostics apply_fluxes(State &atmosphere, SurfaceState &surface,
@@ -61,6 +66,8 @@ public:
 		double dt_s) const;
 
 	double total_surface_water_kg(const SurfaceState &surface) const;
+	double total_surface_liquid_water_kg(const SurfaceState &surface) const;
+	double total_surface_ice_kg(const SurfaceState &surface) const;
 	double total_surface_energy_j(const SurfaceState &surface) const;
 	double total_atmospheric_water_kg(const State &atmosphere) const;
 	double atmospheric_thermodynamic_energy_j(const State &atmosphere) const;
