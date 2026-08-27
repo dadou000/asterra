@@ -4,6 +4,7 @@
 #include "voronoi_dry_vertical_transport.h"
 
 #include <array>
+#include <stdexcept>
 #include <vector>
 
 namespace asterra::weather {
@@ -61,6 +62,23 @@ public:
 	}
 	void set_moist_pressure_feedback(bool enabled,
 		MoistTracerIndices indices = {}) {
+		const std::array<int, 5> all{
+			indices.vapor, indices.cloud_liquid, indices.cloud_ice,
+			indices.rain, indices.snow};
+		for (int index : all) {
+			if (index < 0) {
+				throw std::invalid_argument(
+					"Moist pressure-feedback tracer indices must be non-negative");
+			}
+		}
+		for (size_t a = 0; a < all.size(); ++a) {
+			for (size_t b = a + 1; b < all.size(); ++b) {
+				if (all[a] == all[b]) {
+					throw std::invalid_argument(
+						"Moist pressure-feedback water tracer indices must be distinct");
+				}
+			}
+		}
 		dynamics_.set_moist_pressure_feedback(enabled, indices);
 	}
 	bool moist_pressure_feedback_enabled() const {
