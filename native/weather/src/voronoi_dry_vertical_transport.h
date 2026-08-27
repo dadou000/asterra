@@ -2,22 +2,19 @@
 
 #include "voronoi_dry_transport.h"
 
+#include <array>
 #include <vector>
 
 namespace asterra::weather {
 
-// Conservative vertical mass exchange for the 30-level dry atmosphere.
+// Conservative vertical mass exchange and pressure-coordinate remap for the
+// 30-level dry atmosphere.
 //
 // Interface j lies between level j (below) and j+1 (above). Positive interface
 // mass flux is upward from j -> j+1; negative is downward. Flux units are
 // kg/m2/s. The same donor mass transfer carries mass-weighted potential
 // temperature, so every closed column conserves dry mass and theta mass exactly
-// apart from floating-point summation. Edge winds are untouched.
-//
-// This operator intentionally accepts the interface mass flux as input. The
-// subsequent dynamics slice will diagnose that flux from horizontal mass
-// convergence / coordinate remap; keeping transport separate makes its budget
-// and positivity properties independently testable.
+// apart from floating-point summation.
 class VoronoiDryVerticalTransport {
 public:
 	static constexpr int LEVELS = VoronoiDryTransport::LEVELS;
@@ -39,13 +36,22 @@ public:
 		int rejected_steps = 0;
 	};
 
+	struct RemapDiagnostics {
+		double relative_dry_mass_error = 0.0;
+		double relative_theta_mass_error = 0.0;
+		double max_column_mass_error = 0.0;
+		double max_column_theta_mass_error = 0.0;
+		double max_edge_momentum_error = 0.0;
+		double max_mass_fraction_error = 0.0;
+		double min_layer_mass_kg_m2 = 0.0;
+		double min_potential_temperature_k = 0.0;
+	};
+
 	explicit VoronoiDryVerticalTransport(const GeodesicVoronoiGrid &grid,
 		double gravity_mps2 = 9.80665,
 		double scale_height_m = 8000.0,
 		double top_pressure_pa = 7500.0);
 
-	// Convenience reference state; physics/state representation is shared with
-	// VoronoiDryTransport and VoronoiDryDynamics.
 	State make_isothermal_reference(double surface_pressure_pa,
 		double temperature_k) const {
 		return horizontal_.make_isothermal_reference(surface_pressure_pa, temperature_k);
@@ -63,6 +69,16 @@ public:
 		double requested_dt_s, double target_cfl = 0.45,
 		int max_retries = 10) const;
 
+	// Conservative remap back to the reference pressure-coordinate layer mass
+	// fractions. Cell theta mass is remapped by overlap in dry-mass coordinate.
+	// Edge-normal velocity is remapped as edge-mass-weighted momentum using the
+	// same overlap construction, preventing coordinate maintenance from injecting
+	// or deleting vertically integrated horizontal momentum.
+	RemapDiagnostics remap_to_reference_levels(State &state) const;
+
+	const std::array<double, LEVELS> &reference_mass_fractions() const {
+		return reference_mass_fraction_;
+	}
 	const VoronoiDryTransport &horizontal_transport() const { return horizontal_; }
 
 private:
@@ -73,12 +89,16 @@ private:
 
 	const GeodesicVoronoiGrid *grid_ = nullptr;
 	VoronoiDryTransport horizontal_;
+	std::array<double, LEVELS> reference_mass_fraction_{};
 
 	int scalar_index(int level, int cell) const {
 		return level * grid_->cell_count() + cell;
 	}
 	int interface_index(int interface_level, int cell) const {
 		return interface_level * grid_->cell_count() + cell;
+	}
+	int edge_index(int level, int edge) const {
+		return level * grid_->edge_count() + edge;
 	}
 
 	void validate_state(const State &state) const;
