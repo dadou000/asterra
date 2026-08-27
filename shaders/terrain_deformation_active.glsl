@@ -8,10 +8,10 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(rgba32f, set = 0, binding = 0) uniform readonly image2D src_state;
-layout(rgba32f, set = 0, binding = 1) uniform writeonly image2D dst_state;
+layout(rgba32f, set = 0, binding = 0) uniform image2D src_state;
+layout(rgba32f, set = 0, binding = 1) uniform image2D dst_state;
 
-layout(set = 0, binding = 2, std430) restrict readonly buffer ContactBuffer {
+layout(set = 0, binding = 2, std430) readonly buffer ContactBuffer {
 	vec4 data[];
 } contacts;
 
