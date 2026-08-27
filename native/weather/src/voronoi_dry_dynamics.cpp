@@ -10,7 +10,14 @@ namespace asterra::weather {
 namespace {
 constexpr double GAMMA_DRY = 1.4;
 constexpr double CONSERVATION_REJECT_TOL = 1.0e-10;
+constexpr double CV_DRY = VoronoiDryHydrostatic::CP - VoronoiDryHydrostatic::RD;
+
+Vec3d tangent_basis_1(const Vec3d &radial) {
+	const Vec3d reference = std::abs(radial.y) < 0.9
+		? Vec3d{0.0, 1.0, 0.0} : Vec3d{1.0, 0.0, 0.0};
+	return normalized(cross(reference, radial));
 }
+} // namespace
 
 VoronoiDryDynamics::VoronoiDryDynamics(const GeodesicVoronoiGrid &grid,
 		double gravity_mps2, double scale_height_m, double top_pressure_pa,
@@ -26,6 +33,7 @@ VoronoiDryDynamics::VoronoiDryDynamics(const GeodesicVoronoiGrid &grid,
 		throw std::invalid_argument("Dry dynamics rotation axis must be finite and non-zero");
 	}
 	rotation_axis_ = rotation_axis / std::sqrt(axis2);
+	build_reconstruction();
 }
 
 void VoronoiDryDynamics::validate_shape(const State &state) const {
@@ -51,6 +59,69 @@ bool VoronoiDryDynamics::validate_finite_positive(const State &state) const {
 		if (!std::isfinite(u)) return false;
 	}
 	return true;
+}
+
+void VoronoiDryDynamics::build_reconstruction() {
+	reconstruction_.resize(static_cast<size_t>(grid_->cell_count()));
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const auto &cell = grid_->cell(c);
+		const Vec3d e1 = tangent_basis_1(cell.center);
+		const Vec3d e2 = normalized(cross(cell.center, e1));
+		double a00 = 0.0;
+		double a01 = 0.0;
+		double a11 = 0.0;
+		std::vector<Vec3d> outward(cell.edges.size());
+		std::vector<double> sign(cell.edges.size(), 0.0);
+		for (size_t k = 0; k < cell.edges.size(); ++k) {
+			const auto &edge = grid_->edge(cell.edges[k]);
+			const int other = edge.cell_a == c ? edge.cell_b : edge.cell_a;
+			sign[k] = edge.cell_a == c ? 1.0 : -1.0;
+			outward[k] = normalized(project_tangent(grid_->cell(other).center, cell.center));
+			const double nx = dot(outward[k], e1);
+			const double ny = dot(outward[k], e2);
+			a00 += nx * nx;
+			a01 += nx * ny;
+			a11 += ny * ny;
+		}
+		const double determinant = a00 * a11 - a01 * a01;
+		if (!(std::abs(determinant) > 1.0e-12) || !std::isfinite(determinant)) {
+			throw std::runtime_error("Dry dynamics cell-velocity reconstruction is singular");
+		}
+		CellReconstruction &rec = reconstruction_[static_cast<size_t>(c)];
+		rec.coefficient.resize(cell.edges.size());
+		for (size_t k = 0; k < cell.edges.size(); ++k) {
+			const double nx = dot(outward[k], e1);
+			const double ny = dot(outward[k], e2);
+			const double cx = sign[k] * (a11 * nx - a01 * ny) / determinant;
+			const double cy = sign[k] * (a00 * ny - a01 * nx) / determinant;
+			rec.coefficient[k] = e1 * cx + e2 * cy;
+		}
+	}
+}
+
+Vec3d VoronoiDryDynamics::reconstruct_cell_vector_from_edges(const State &state,
+		int cell_id, int level) const {
+	const auto &cell = grid_->cell(cell_id);
+	const auto &rec = reconstruction_[static_cast<size_t>(cell_id)];
+	Vec3d vector{};
+	for (size_t k = 0; k < cell.edges.size(); ++k) {
+		vector += rec.coefficient[k] * state.edge_normal_mps[
+			static_cast<size_t>(edge_index(level, cell.edges[k]))];
+	}
+	return project_tangent(vector, cell.center);
+}
+
+std::vector<Vec3d> VoronoiDryDynamics::reconstruct_cell_velocity(
+		const State &state, int level) const {
+	validate_shape(state);
+	if (level < 0 || level >= LEVELS) {
+		throw std::out_of_range("Dry dynamics cell-velocity level is out of range");
+	}
+	std::vector<Vec3d> out(static_cast<size_t>(grid_->cell_count()));
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		out[static_cast<size_t>(c)] = reconstruct_cell_vector_from_edges(state, c, level);
+	}
+	return out;
 }
 
 std::vector<double> VoronoiDryDynamics::reconstruct_vertex_relative_vorticity(
@@ -96,6 +167,91 @@ std::vector<double> VoronoiDryDynamics::cell_kinetic_energy(const State &state,
 			sum / (4.0L * static_cast<long double>(cell.area_m2)));
 	}
 	return kinetic;
+}
+
+double VoronoiDryDynamics::total_dry_energy_j(const State &state) const {
+	validate_shape(state);
+	if (!validate_finite_positive(state)) {
+		throw std::runtime_error("Dry energy diagnostic received invalid state");
+	}
+	const auto hydro = transport_.diagnose_hydrostatic(state);
+	long double total = 0.0L;
+	for (int k = 0; k < LEVELS; ++k) {
+		const std::vector<double> kinetic = cell_kinetic_energy(state, k);
+		for (int c = 0; c < grid_->cell_count(); ++c) {
+			const int i = scalar_index(k, c);
+			const double specific_energy =
+				CV_DRY * hydro.temperature_k[static_cast<size_t>(i)]
+				+ hydro.layer_geopotential[static_cast<size_t>(i)]
+				+ kinetic[static_cast<size_t>(c)];
+			total += static_cast<long double>(grid_->cell(c).area_m2)
+				* static_cast<long double>(state.layer_mass_kg_m2[static_cast<size_t>(i)])
+				* static_cast<long double>(specific_energy);
+		}
+	}
+	const double result = static_cast<double>(total);
+	if (!(result > 0.0) || !std::isfinite(result)) {
+		throw std::runtime_error("Dry energy diagnostic produced invalid total");
+	}
+	return result;
+}
+
+double VoronoiDryDynamics::total_relative_axial_angular_momentum_kg_m2_s(
+		const State &state) const {
+	validate_shape(state);
+	if (!validate_finite_positive(state)) {
+		throw std::runtime_error("Dry angular-momentum diagnostic received invalid state");
+	}
+	const double radius = grid_->radius_m();
+	long double total = 0.0L;
+	for (int k = 0; k < LEVELS; ++k) {
+		const std::vector<Vec3d> velocity = reconstruct_cell_velocity(state, k);
+		for (int c = 0; c < grid_->cell_count(); ++c) {
+			const int i = scalar_index(k, c);
+			const double relative_specific = radius * dot(rotation_axis_,
+				cross(grid_->cell(c).center, velocity[static_cast<size_t>(c)]));
+			total += static_cast<long double>(grid_->cell(c).area_m2)
+				* static_cast<long double>(state.layer_mass_kg_m2[static_cast<size_t>(i)])
+				* static_cast<long double>(relative_specific);
+		}
+	}
+	const double result = static_cast<double>(total);
+	if (!std::isfinite(result)) {
+		throw std::runtime_error("Dry relative angular-momentum diagnostic produced invalid total");
+	}
+	return result;
+}
+
+double VoronoiDryDynamics::total_absolute_axial_angular_momentum_kg_m2_s(
+		const State &state) const {
+	validate_shape(state);
+	if (!validate_finite_positive(state)) {
+		throw std::runtime_error("Dry angular-momentum diagnostic received invalid state");
+	}
+	const double radius = grid_->radius_m();
+	const double radius2 = radius * radius;
+	long double total = 0.0L;
+	for (int k = 0; k < LEVELS; ++k) {
+		const std::vector<Vec3d> velocity = reconstruct_cell_velocity(state, k);
+		for (int c = 0; c < grid_->cell_count(); ++c) {
+			const int i = scalar_index(k, c);
+			const Vec3d &position_unit = grid_->cell(c).center;
+			const double mu = dot(rotation_axis_, position_unit);
+			const double relative_specific = radius * dot(rotation_axis_,
+				cross(position_unit, velocity[static_cast<size_t>(c)]));
+			const double planetary_specific = rotation_rate_rad_s_ * radius2
+				* std::max(0.0, 1.0 - mu * mu);
+			const double absolute_specific = relative_specific + planetary_specific;
+			total += static_cast<long double>(grid_->cell(c).area_m2)
+				* static_cast<long double>(state.layer_mass_kg_m2[static_cast<size_t>(i)])
+				* static_cast<long double>(absolute_specific);
+		}
+	}
+	const double result = static_cast<double>(total);
+	if (!std::isfinite(result)) {
+		throw std::runtime_error("Dry absolute angular-momentum diagnostic produced invalid total");
+	}
+	return result;
 }
 
 double VoronoiDryDynamics::max_courant(const State &state, double dt_s) const {
