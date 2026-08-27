@@ -55,15 +55,16 @@ int main() {
 		auto dry_surface = surface_exchange.make_uniform_surface_state(8.0, 1.0e7);
 		const auto dry_before = dry;
 		const auto dry_surface_before = dry_surface;
-		const auto zero = precipitation.step(dry, dry_surface, 600.0);
+		const auto zero = precipitation.advance_full_interval(dry, dry_surface, 600.0);
 		require(zero.accepted_dt_s == 600.0,
-			"zero-precipitation column unnecessarily reduced timestep");
+			"zero-precipitation column did not cover the complete requested interval");
 		require(dry.layer_mass_kg_m2 == dry_before.layer_mass_kg_m2
 				&& dry.theta_mass_kg_k_m2 == dry_before.theta_mass_kg_k_m2
 				&& dry.edge_normal_mps == dry_before.edge_normal_mps
 				&& dry.tracer_mass_kg_m2 == dry_before.tracer_mass_kg_m2,
 			"zero precipitation changed atmospheric state");
 		require(dry_surface.water_kg_m2 == dry_surface_before.water_kg_m2
+				&& dry_surface.ice_kg_m2 == dry_surface_before.ice_kg_m2
 				&& dry_surface.energy_j_m2 == dry_surface_before.energy_j_m2,
 			"zero precipitation changed surface reservoir");
 
@@ -86,8 +87,6 @@ int main() {
 			}
 		}
 
-		// The sedimentation CFL must account for every layer a hydrometeor can
-		// enter during SSPRK, not only layers that are wet at the start of a stage.
 		constexpr double RAIN_SPEED = 7.0;
 		constexpr double SNOW_SPEED = 1.0;
 		constexpr double TARGET_CFL = 0.45;
@@ -109,69 +108,70 @@ int main() {
 			"precipitation stable_dt ignored a dry layer that sedimentation can enter");
 
 		const auto nonprecip_reference = state;
-		const auto surface_energy_reference = surface.energy_j_m2;
 		const double atmosphere_water0 = precipitation.total_atmospheric_water_kg(state);
 		const double surface_water0 = surface_exchange.total_surface_water_kg(surface);
+		const double system_water0 = atmosphere_water0 + surface_water0;
+		const double system_energy0 = surface_exchange.atmospheric_thermodynamic_energy_j(state)
+			+ surface_exchange.total_surface_energy_j(surface);
 		const double rain0 = precipitation.total_rain_kg(state);
 		const double snow0 = precipitation.total_snow_kg(state);
-		const double system_water0 = atmosphere_water0 + surface_water0;
+		const double liquid_surface0 = surface_exchange.total_surface_liquid_water_kg(surface);
+		const double ice_surface0 = surface_exchange.total_surface_ice_kg(surface);
 
-		double elapsed = 0.0;
 		constexpr double DURATION = 1800.0;
-		int steps = 0;
-		double cumulative_rain_deposit = 0.0;
-		double cumulative_snow_deposit = 0.0;
-		double max_water_error = 0.0;
-		double max_surface_flux = 0.0;
-		while (elapsed < DURATION) {
-			const double request = std::min(300.0, DURATION - elapsed);
-			const auto d = precipitation.step(state, surface, request,
-				RAIN_SPEED, SNOW_SPEED, TARGET_CFL, 10);
-			require(d.accepted_dt_s > 0.0,
-				"precipitation sedimentation rejected all timesteps");
-			require(d.max_courant <= TARGET_CFL + 1e-10,
-				"precipitation exceeded configured CFL target");
-			require(d.relative_system_water_error < 2.1e-11,
-				"precipitation step did not close atmosphere+surface water");
-			require(d.min_rain_kg_m2 >= 0.0 && d.min_snow_kg_m2 >= 0.0,
-				"precipitation created negative hydrometeor mass");
-		cumulative_rain_deposit += d.deposited_rain_kg;
-		cumulative_snow_deposit += d.deposited_snow_kg;
-		max_water_error = std::max(max_water_error, d.relative_system_water_error);
-		max_surface_flux = std::max(max_surface_flux, d.max_surface_precip_flux_kg_m2_s);
-		elapsed += d.accepted_dt_s;
-		++steps;
-		require(steps < 5000, "precipitation sedimentation used excessive substeps");
-		}
+		const auto d = precipitation.advance_full_interval(state, surface, DURATION,
+			RAIN_SPEED, SNOW_SPEED, TARGET_CFL, 10, 5000);
+		require(d.accepted_dt_s == DURATION,
+			"precipitation subcycling did not cover the complete coupled interval");
+		require(d.substeps >= 1 && d.substeps < 5000,
+			"precipitation full interval used an invalid number of substeps");
+		require(d.max_courant <= TARGET_CFL + 1e-10,
+			"precipitation exceeded configured CFL target");
+		require(d.relative_system_water_error < 2.1e-11,
+			"precipitation full interval did not close atmosphere+surface water");
+		require(d.relative_system_energy_error < 2.1e-11,
+			"precipitation full interval did not close atmosphere+surface thermodynamic energy");
+		require(d.min_rain_kg_m2 >= 0.0 && d.min_snow_kg_m2 >= 0.0,
+			"precipitation created negative hydrometeor mass");
 
 		const double atmosphere_water1 = precipitation.total_atmospheric_water_kg(state);
 		const double surface_water1 = surface_exchange.total_surface_water_kg(surface);
+		const double system_energy1 = surface_exchange.atmospheric_thermodynamic_energy_j(state)
+			+ surface_exchange.total_surface_energy_j(surface);
 		const double rain1 = precipitation.total_rain_kg(state);
 		const double snow1 = precipitation.total_snow_kg(state);
+		const double liquid_surface1 = surface_exchange.total_surface_liquid_water_kg(surface);
+		const double ice_surface1 = surface_exchange.total_surface_ice_kg(surface);
+
 		require(relative_error(atmosphere_water1 + surface_water1, system_water0) < 5e-10,
-			"multi-step precipitation drifted total atmosphere+surface water");
+			"precipitation drifted total atmosphere+surface water");
+		require(relative_error(system_energy1, system_energy0) < 5e-10,
+			"precipitation drifted the closed thermodynamic source-energy budget");
 		require(rain1 < rain0 && snow1 < snow0,
 			"rain/snow sedimentation produced no surface fallout");
-		require(cumulative_rain_deposit > 0.0 && cumulative_snow_deposit > 0.0,
+		require(d.deposited_rain_kg > 0.0 && d.deposited_snow_kg > 0.0,
 			"precipitation diagnostics reported no rain or snow deposition");
-		require(relative_error(cumulative_rain_deposit, rain0 - rain1) < 5e-10,
-			"cumulative rain deposition does not equal atmospheric rain loss");
-		require(relative_error(cumulative_snow_deposit, snow0 - snow1) < 5e-10,
-			"cumulative snow deposition does not equal atmospheric snow loss");
-		require(max_surface_flux > 0.0,
+		require(relative_error(d.deposited_rain_kg, rain0 - rain1) < 5e-10,
+			"rain deposition does not equal atmospheric rain loss");
+		require(relative_error(d.deposited_snow_kg, snow0 - snow1) < 5e-10,
+			"snow deposition does not equal atmospheric snow loss");
+		require(relative_error(liquid_surface1 - liquid_surface0, rain0 - rain1) < 5e-10,
+			"rain fallout did not enter the liquid surface reservoir one-for-one");
+		require(relative_error(ice_surface1 - ice_surface0, snow0 - snow1) < 5e-10,
+			"snow fallout did not enter the frozen surface reservoir one-for-one");
+		require(d.max_surface_precip_flux_kg_m2_s > 0.0,
 			"precipitation produced no diagnostic surface mass flux");
 		require(exact_nonprecip_state(state, nonprecip_reference),
 			"sedimentation changed dry air, cloud/vapor tracers, theta or wind");
-		require(surface.energy_j_m2 == surface_energy_reference,
-			"water-only sedimentation changed surface energy reservoir");
 
 		std::cout << "VoronoiPrecipitation PASS\n"
 			<< "  stable dt: " << stable << " s\n"
-			<< "  30min steps: " << steps << "\n"
-			<< "  rain/snow deposited: " << cumulative_rain_deposit
-			<< "/" << cumulative_snow_deposit << " kg\n"
-			<< "  max system-water error: " << max_water_error << "\n"
-			<< "  max surface flux: " << max_surface_flux << " kg/m2/s\n";
+			<< "  30min substeps: " << d.substeps << "\n"
+			<< "  rain/snow deposited: " << d.deposited_rain_kg
+			<< "/" << d.deposited_snow_kg << " kg\n"
+			<< "  max system water/energy error: " << d.relative_system_water_error
+			<< "/" << d.relative_system_energy_error << "\n"
+			<< "  max surface flux: " << d.max_surface_precip_flux_kg_m2_s << " kg/m2/s\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "VoronoiPrecipitation FAIL: " << e.what() << "\n";
