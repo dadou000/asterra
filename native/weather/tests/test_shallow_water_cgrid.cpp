@@ -14,6 +14,8 @@ using asterra::weather::dot;
 using asterra::weather::length;
 using asterra::weather::normalized;
 
+static constexpr double PI = 3.141592653589793238462643383279502884;
+
 static void require(bool condition, const char *message) {
 	if (!condition) throw std::runtime_error(message);
 }
@@ -124,6 +126,72 @@ int main() {
 			"gravity-wave trough amplitude grew without bound");
 		require(max_speed < 80.0, "gravity-wave velocity grew unrealistically large");
 
+		// Gate 4: smooth spherical geostrophic/solid-body balance using Asterra's
+		// actual 11.5 h rotation rate. The analytic state is a linear shallow-water
+		// balance: U = W R (axis x r), h = H + Omega*W*R^2/g * cos^2(latitude).
+		// There is no latitude-coordinate code in the solver; this test crosses all
+		// cube seams and both geographic poles through pure vector geometry.
+		constexpr double OMEGA = 2.0 * PI / (11.5 * 3600.0);
+		constexpr double FLOW_ANGULAR_RATE = 1.0e-6;
+		const Vec3d spin_axis{0.0, 1.0, 0.0};
+		ShallowWaterCGrid rotating(grid, G, OMEGA, spin_axis);
+		auto balanced = rotating.make_uniform_state(H);
+		const double balance_amplitude = OMEGA * FLOW_ANGULAR_RATE * R * R / G;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			const double mu = dot(spin_axis, grid.cell(c).center);
+			balanced.depth_m[c] = H + balance_amplitude * (1.0 - mu * mu);
+		}
+		balanced.edge_normal_mps = rotating.topology().sample_edge_normal_velocity(
+			[spin_axis](const Vec3d &p) -> Vec3d {
+				return cross(spin_axis, p) * (FLOW_ANGULAR_RATE * R);
+			});
+		const auto balanced_initial = balanced;
+		const double balanced_volume0 = rotating.total_volume_m3(balanced);
+		const double initial_max_speed = FLOW_ANGULAR_RATE * R;
+		double balanced_elapsed = 0.0;
+		int balanced_steps = 0;
+		double balanced_worst_cfl = 0.0;
+		constexpr double BALANCED_DURATION = 11.5 * 3600.0;
+		while (balanced_elapsed < BALANCED_DURATION) {
+			const double request = std::min(600.0, BALANCED_DURATION - balanced_elapsed);
+			const auto diag = rotating.step(balanced, request, 0.34);
+			require(diag.accepted_dt_s > 0.0, "balanced-flow timestep collapsed");
+			balanced_worst_cfl = std::max(balanced_worst_cfl, diag.max_wave_courant);
+			balanced_elapsed += diag.accepted_dt_s;
+			++balanced_steps;
+			require(balanced_steps < 5000, "balanced-flow test used excessive timesteps");
+		}
+		const double balanced_volume_error = std::abs(rotating.total_volume_m3(balanced) - balanced_volume0)
+			/ balanced_volume0;
+		require(balanced_volume_error < 2e-11, "balanced rotating flow drifted in total mass");
+
+		long double depth_error_sq = 0.0L;
+		long double velocity_error_sq = 0.0L;
+		long double area_sum = 0.0L;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			const long double area = static_cast<long double>(grid.cell(c).area_m2);
+			const long double dh = static_cast<long double>(balanced.depth_m[c] - balanced_initial.depth_m[c]);
+			depth_error_sq += dh * dh * area;
+			area_sum += area;
+		}
+		for (size_t e = 0; e < balanced.edge_normal_mps.size(); ++e) {
+			const long double du = static_cast<long double>(balanced.edge_normal_mps[e]
+				- balanced_initial.edge_normal_mps[e]);
+			velocity_error_sq += du * du;
+		}
+		const double depth_rms_error = std::sqrt(static_cast<double>(depth_error_sq / area_sum));
+		const double velocity_rms_error = std::sqrt(static_cast<double>(
+			velocity_error_sq / static_cast<long double>(balanced.edge_normal_mps.size())));
+		require(depth_rms_error < balance_amplitude * 0.35,
+			"balanced spherical flow developed excessive free-surface error");
+		require(velocity_rms_error < initial_max_speed * 0.35,
+			"balanced spherical flow developed excessive velocity error");
+		const double balanced_max_speed = *std::max_element(
+			balanced.edge_normal_mps.begin(), balanced.edge_normal_mps.end(),
+			[](double a, double b) { return std::abs(a) < std::abs(b); });
+		require(std::abs(balanced_max_speed) < initial_max_speed * 1.8,
+			"balanced spherical flow accelerated without bound");
+
 		std::cout << "ShallowWaterCGrid PASS\n"
 			<< "  cells: " << grid.cell_count() << "\n"
 			<< "  C-grid shared velocities: " << sw.topology().shared_edges().size() << "\n"
@@ -134,7 +202,13 @@ int main() {
 			<< "  worst per-step mass error: " << worst_mass_error << "\n"
 			<< "  total wave mass error: " << wave_volume_error << "\n"
 			<< "  max wave speed m/s: " << max_speed << "\n"
-			<< "  rejected/retried steps: " << total_rejections << "\n";
+			<< "  rejected/retried steps: " << total_rejections << "\n"
+			<< "  rotating balance amplitude m: " << balance_amplitude << "\n"
+			<< "  rotating balance steps: " << balanced_steps << "\n"
+			<< "  rotating worst CFL: " << balanced_worst_cfl << "\n"
+			<< "  rotating mass error: " << balanced_volume_error << "\n"
+			<< "  rotating depth RMS error m: " << depth_rms_error << "\n"
+			<< "  rotating velocity RMS error m/s: " << velocity_rms_error << "\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "ShallowWaterCGrid FAIL: " << e.what() << "\n";
