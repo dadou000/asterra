@@ -51,6 +51,7 @@ uniform vec3 u_scatter : source_color = vec3(0.055, 0.34, 0.30);
 varying vec3 v_planet;
 varying vec3 v_render;
 varying vec3 v_slope;
+varying vec2 v_micro_plane;
 varying float v_depth;
 varying float v_valid;
 varying float v_breaking;
@@ -254,30 +255,52 @@ void ocean_interactions(vec3 d, int level, out float height, out vec3 slope,
 	}
 }
 
-void ocean_micro_wave(vec3 up, vec3 axis, float wavelength, float slope_amp,
-		float speed, float phase_offset, inout vec3 slope) {
+// Micro waves live in the stable anchor's metre-space instead of reconstructing
+// centimetre wavelengths from million-metre planet coordinates. The old global
+// phase path lost several bits of precision, then sampled sub-pixel sinusoids
+// without a footprint filter; at altitude those two errors folded into large
+// diagonal moire bands. Filter each band before evaluating it and transfer the
+// rejected slope energy into BRDF variance.
+void ocean_micro_wave(vec3 up, vec2 plane_m, vec3 axis, float wavelength,
+		float slope_amp, float speed, float phase_offset,
+		inout vec3 slope, inout float unresolved_variance) {
+	vec3 anchor_travel = ocean_safe_tangent(u_anchor_dir, axis);
+	vec2 phase_dir = vec2(dot(anchor_travel, u_anchor_right),
+		dot(anchor_travel, u_anchor_up));
+	float phase_dir_len = length(phase_dir);
+	if (phase_dir_len < 1e-6) return;
+	phase_dir /= phase_dir_len;
+	float coord_m = dot(plane_m, phase_dir);
+	float footprint_m = max(fwidth(coord_m), 1e-6);
+	float pixels_per_wave = wavelength / footprint_m;
+	float filter_w = smoothstep(2.2, 5.5, pixels_per_wave);
+	float variance = slope_amp * slope_amp * 0.5;
+	unresolved_variance += (1.0 - filter_w * filter_w) * variance;
+	if (filter_w <= 0.001) return;
+
+	float k = TAU / wavelength;
+	float anchor_phase = mod(ocean_geodesic_phase_coord(u_anchor_dir, axis), wavelength) * k;
+	float phase = anchor_phase + coord_m * k - u_time_s * speed + phase_offset;
 	vec3 travel = ocean_safe_tangent(up, axis);
-	float phase = ocean_geodesic_phase_coord(up, axis) * (TAU / wavelength)
-		- u_time_s * speed + phase_offset;
-	slope += travel * (slope_amp * cos(phase));
+	slope += travel * (slope_amp * cos(phase) * filter_w);
 }
 
-vec3 ocean_micro_slope(vec3 up) {
+vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 	vec3 slope = vec3(0.0);
-	if (u_micro_band_count >= 1) ocean_micro_wave(up, MICRO_AXIS_C, 2.8, 0.042, 3.8, 0.3, slope);
-	if (u_micro_band_count >= 2) ocean_micro_wave(up, MICRO_AXIS_D, 1.3, 0.033, 5.6, 1.7, slope);
-	if (u_micro_band_count >= 3) ocean_micro_wave(up, MICRO_AXIS_E, 0.62, 0.025, 7.9, 3.0, slope);
-	if (u_micro_band_count >= 4) ocean_micro_wave(up, MICRO_AXIS_F, 0.29, 0.019, 10.8, 4.2, slope);
-	if (u_micro_band_count >= 5) ocean_micro_wave(up, SWELL_AXIS_A, 0.13, 0.014, 15.5, 2.4, slope);
-	if (u_micro_band_count >= 6) ocean_micro_wave(up, SWELL_AXIS_B, 0.055, 0.010, 22.0, 5.1, slope);
+	unresolved_variance = 0.0;
+	if (u_micro_band_count >= 1) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_C, 2.8, 0.042, 3.8, 0.3, slope, unresolved_variance);
+	if (u_micro_band_count >= 2) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_D, 1.3, 0.033, 5.6, 1.7, slope, unresolved_variance);
+	if (u_micro_band_count >= 3) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_E, 0.62, 0.025, 7.9, 3.0, slope, unresolved_variance);
+	if (u_micro_band_count >= 4) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_F, 0.29, 0.019, 10.8, 4.2, slope, unresolved_variance);
+	if (u_micro_band_count >= 5) ocean_micro_wave(up, v_micro_plane, SWELL_AXIS_A, 0.13, 0.014, 15.5, 2.4, slope, unresolved_variance);
+	if (u_micro_band_count >= 6) ocean_micro_wave(up, v_micro_plane, SWELL_AXIS_B, 0.055, 0.010, 22.0, 5.1, slope, unresolved_variance);
 	return slope;
 }
 
 void vertex() {
-	int grid_verts = int(u_grid_cells + 1.5);
-	int gx = VERTEX_ID % grid_verts;
-	int gy = VERTEX_ID / grid_verts;
-	vec2 cell = vec2(float(gx), float(gy)) - vec2(u_grid_cells * 0.5);
+	// UV carries the original logical grid coordinate. Sector meshes are compacted
+	// on the CPU, so local VERTEX_ID is deliberately not used for addressing.
+	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	int level = int(floor(INSTANCE_CUSTOM.x + 0.5));
 	float spacing = ocean_ring_spacing(level);
 	vec2 cell_offset_m = cell * spacing;
@@ -355,6 +378,7 @@ void vertex() {
 			u_anchor_up, anchor_offset_m, radial_h) + tangential_displacement
 		: displaced - u_origin;
 	v_slope = wave.slope;
+	v_micro_plane = stable_displacement ? anchor_offset_m : cell_offset_m;
 	v_depth = depth;
 	v_breaking = wave.breaking;
 	v_crest = wave.crest;
@@ -383,7 +407,8 @@ void fragment() {
 	if (camera_alt >= u_orbit_handoff_altitude) discard;
 
 	vec3 up = normalize(v_planet);
-	vec3 resolved_slope = v_slope + ocean_micro_slope(up);
+	float micro_unresolved_variance;
+	vec3 resolved_slope = v_slope + ocean_micro_slope(up, micro_unresolved_variance);
 	vec3 n = normalize(up - resolved_slope);
 	if (dot(n, up) < 0.0) n = -n;
 
@@ -402,10 +427,11 @@ void fragment() {
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
 	float wind_rough = water_roughness_from_wind(water_wind_speed(up), 0.5);
-	// Preserve the slope variance of waves that were filtered out of displacement.
-	// This is a variance sum, not an arbitrary distance fade: the same wave energy
-	// simply changes representation from geometry to BRDF roughness.
-	float spectral_rough = sqrt(max(v_unresolved_variance, 0.0)) * 0.42;
+	// Preserve both vertex-wave energy removed by clipmap LOD and fragment-wave
+	// energy removed by screen-space anti-aliasing.
+	float all_unresolved_variance = max(v_unresolved_variance, 0.0)
+		+ max(micro_unresolved_variance, 0.0);
+	float spectral_rough = sqrt(all_unresolved_variance) * 0.42;
 	float rough = clamp(sqrt(wind_rough * wind_rough + spectral_rough * spectral_rough)
 		+ foam * 0.50, 0.025, 0.72);
 
