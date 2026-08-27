@@ -59,6 +59,10 @@ public:
 		Vec3d tangent_v;
 		double area_m2 = 0.0;
 		std::array<double, EDGE_COUNT> edge_length_m{};
+		// Unit-sphere midpoint of each physical edge. Keeping this explicit lets
+		// the finite-volume core evaluate one velocity/flux for a shared edge,
+		// including edges that cross cube-face seams.
+		std::array<Vec3d, EDGE_COUNT> edge_midpoint{};
 		std::array<Vec3d, EDGE_COUNT> outward_normal{};
 		std::array<Neighbour, EDGE_COUNT> neighbour{};
 	};
