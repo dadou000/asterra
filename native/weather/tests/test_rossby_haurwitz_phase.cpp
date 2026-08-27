@@ -92,13 +92,11 @@ double discrete_edge_velocity(const GeodesicVoronoiGrid &grid, int edge_id,
 	const auto &edge = grid.edge(edge_id);
 	const double psi_a = streamfunction(grid.vertex(edge.vertex_a).center, longitude_shift);
 	const double psi_b = streamfunction(grid.vertex(edge.vertex_b).center, longitude_shift);
-	const double raw = -(psi_b - psi_a) / edge.edge_length_m;
-	// Our global edge orientation follows sorted primal cell IDs rather than
-	// MPAS's right-handed verticesOnEdge convention. Recover the sign from the
-	// actual orthogonal primal/dual geometry.
-	const double handedness = dot(cross(edge.midpoint, edge.tangent_a_to_b), edge.normal_a_to_b);
-	require(std::abs(handedness) > 0.99, "TC6 primal/dual edge handedness is not orthogonal");
-	return raw * (handedness >= 0.0 ? 1.0 : -1.0);
+	// finalize_mpas_metrics() already orients vertex_a -> vertex_b along the
+	// MPAS positive tangential direction k x n. Match the official TC6
+	// initialization directly; applying another handedness sign here reverses
+	// the complete edge-wind field.
+	return -(psi_b - psi_a) / edge.edge_length_m;
 }
 
 double expected_phase_speed() {
