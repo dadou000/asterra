@@ -96,6 +96,7 @@ void CubedSphereGrid::build(int resolution, double radius_m) {
 					const auto endpoints = edge_endpoint_directions(face, i, j, edge);
 					g.edge_length_m[edge] = great_circle_angle(endpoints[0], endpoints[1]) * radius_m_;
 					const Vec3d midpoint = edge_midpoint_direction(face, i, j, edge);
+					g.edge_midpoint[edge] = midpoint;
 					Vec3d edge_tangent = endpoints[1] - endpoints[0];
 					edge_tangent = edge_tangent - midpoint * dot(edge_tangent, midpoint);
 					edge_tangent = normalized(edge_tangent);
