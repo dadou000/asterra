@@ -8,12 +8,12 @@ namespace asterra::weather {
 
 // Moist hydrostatic column for the replacement dry-mass coordinate.
 //
-// Interface mechanical pressure includes the weight of dry air plus suspended
-// vapor/liquid/ice, while hydrostatic thickness uses the exact dry-air-basis
-// virtual temperature. Sensible temperature remains diagnosed from the
-// prognostic dry-coordinate theta state, so adding water is not an implicit heat
-// source. The zero-water limit is required to reproduce VoronoiDryTransport
-// exactly. VoronoiDryDynamics can opt into this diagnosis at every SSPRK stage.
+// The prognostic/remap coordinate remains dry mass. Mechanical interface
+// pressure includes the weight of dry air plus suspended vapor/liquid/ice,
+// standard potential temperature is converted with that full pressure, and
+// hydrostatic thickness uses exact dry-basis virtual temperature. The resulting
+// pressure-gradient acceleration is used by the staged moist momentum path and
+// must recover the dry operator exactly when water tracers are zero.
 class VoronoiMoistHydrostatic {
 public:
 	using State = VoronoiDryTransport::State;
@@ -25,8 +25,8 @@ public:
 		std::vector<double> surface_pressure_pa;      // [cell], total mechanical pressure
 		std::vector<double> interface_pressure_pa;    // [interface][cell]
 		std::vector<double> layer_pressure_pa;        // [level][cell]
-		std::vector<double> potential_temperature_k;  // [level][cell], dry coordinate
-		std::vector<double> temperature_k;            // [level][cell], sensible T
+		std::vector<double> potential_temperature_k;  // [level][cell]
+		std::vector<double> temperature_k;            // [level][cell], theta*Exner(total p)
 		std::vector<double> virtual_temperature_k;    // [level][cell]
 		std::vector<double> layer_total_mass_kg_m2;   // dry + all water species
 		std::vector<double> interface_geopotential;   // [interface][cell], m2/s2
@@ -39,7 +39,7 @@ public:
 	Diagnostics diagnose(const State &state) const;
 
 	// Moist primitive-equation pressure acceleration on the dry-mass coordinate:
-	//   -grad(Phi) - Rd*Tv*grad(ln p).
+	//   -grad(Phi) - Rd*Tv*grad(ln p_total).
 	//
 	// This is the discrete reduction of the dry-mass-coordinate flux-form term
 	//   -alpha grad(p)
