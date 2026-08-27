@@ -38,6 +38,7 @@ var _center_up := Vector3(0.0, 1.0, 0.0)
 var _center_plane := Vector2.ZERO
 var _have_anchor := false
 var _base_spacing: float = 0.75
+var _terrain_base_spacing: float = 0.75
 
 var _active_max_level: int = 0
 var _visible_cap_arc_m: float = 0.0
@@ -109,13 +110,15 @@ func _refresh_base_spacing_for_quality() -> void:
 		return
 	var nominal_spacing := PI * 0.5 * Planet.cfg.planet_radius \
 		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	_terrain_base_spacing = nominal_spacing
 	var scale := float(_water_profile.get("geometry_spacing_scale", 1.0))
 	var new_spacing := nominal_spacing * clampf(scale, 0.35, 2.0)
 	if not is_equal_approx(new_spacing, _base_spacing):
 		_base_spacing = new_spacing
-		# Every ring snap is expressed in multiples of base spacing. Force a clean
-		# re-anchor when the graphics preset changes instead of letting old and new
-		# lattice coordinates coexist for one frame.
+		# Every ring snap is expressed in multiples of ocean base spacing. Force a
+		# clean re-anchor when the graphics preset changes instead of letting old and
+		# new lattice coordinates coexist for one frame. Terrain sampling keeps the
+		# unscaled nominal spacing and therefore does not change with water quality.
 		_have_anchor = false
 
 
@@ -294,7 +297,11 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
 	_material.set_shader_parameter("u_center_up", _center_up)
-	_material.set_shader_parameter("u_base_spacing", _base_spacing)
+	# Terrain and ocean topology deliberately have separate metric spacings. The
+	# terrain-height include must stay on the renderer's nominal LOD scale even when
+	# Ultra water uses a denser concentric lattice.
+	_material.set_shader_parameter("u_base_spacing", _terrain_base_spacing)
+	_material.set_shader_parameter("u_ocean_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
 	_material.set_shader_parameter("u_visible_cap_angle", minf(_visible_cap_arc_m / Planet.cfg.planet_radius * 1.03, PI * 0.5))
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
@@ -514,6 +521,7 @@ func gpu_stats() -> Dictionary:
 		"visible_sectors": _visible_sector_count,
 		"grid_cells": GRID_CELLS,
 		"base_spacing_m": _base_spacing,
+		"terrain_base_spacing_m": _terrain_base_spacing,
 		"geometry_spacing_scale": float(_water_profile.get("geometry_spacing_scale", 1.0)),
 		"gpu_waves": not _debug_waves_disabled,
 		"stable_displacement": _debug_stable_displacement,
