@@ -431,17 +431,30 @@ void WeatherDryCoreNative::disable_moisture(bool clear_water) {
 		UtilityFunctions::push_error("WeatherDryCoreNative.disable_moisture called before initialize");
 		return;
 	}
-	clear_surface_exchange_state();
-	if (clear_water && state_.tracer_mass_kg_m2.size() >= 5) {
-		for (size_t tracer = 0; tracer < 5; ++tracer) {
-			std::fill(state_.tracer_mass_kg_m2[tracer].begin(),
-				state_.tracer_mass_kg_m2[tracer].end(), 0.0);
-		}
-	}
-	moisture_enabled_ = false;
+
+	// Disabling the active source operators must not itself delete water unless
+	// the caller explicitly requests it. In particular, deposited snow/rain is
+	// part of the moisture system and survives clear_water=false.
+	surface_exchange_enabled_ = false;
 	precipitation_enabled_ = false;
-	last_moist_adjustment_ = {};
+	last_surface_exchange_ = {};
 	last_precipitation_ = {};
+	clear_surface_fluxes();
+
+	if (clear_water) {
+		if (state_.tracer_mass_kg_m2.size() >= 5) {
+			for (size_t tracer = 0; tracer < 5; ++tracer) {
+				std::fill(state_.tracer_mass_kg_m2[tracer].begin(),
+					state_.tracer_mass_kg_m2[tracer].end(), 0.0);
+			}
+		}
+		surface_exchange_state_ = {};
+		initial_surface_system_water_kg_ = 0.0;
+		initial_surface_system_energy_j_ = 0.0;
+	}
+
+	moisture_enabled_ = false;
+	last_moist_adjustment_ = {};
 	initial_total_water_kg_ = clear_water ? 0.0 : current_total_water_kg();
 	reset_budget_baseline();
 }
@@ -832,6 +845,13 @@ double WeatherDryCoreNative::current_total_water_kg() const {
 	double total = 0.0;
 	for (int tracer = 0; tracer < 5; ++tracer) {
 		total += dynamics_->total_tracer_mass_kg(state_, tracer);
+	}
+	const size_t cells = static_cast<size_t>(grid_->cell_count());
+	if (surface_exchange_state_.water_kg_m2.size() == cells
+			&& surface_exchange_state_.ice_kg_m2.size() == cells
+			&& surface_exchange_state_.energy_j_m2.size() == cells) {
+		VoronoiSurfaceExchange exchange(dynamics_->transport());
+		total += exchange.total_surface_water_kg(surface_exchange_state_);
 	}
 	return total;
 }
