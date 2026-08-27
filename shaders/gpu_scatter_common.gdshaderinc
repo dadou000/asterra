@@ -1,6 +1,8 @@
 // Shared deterministic GPU terrain-scatter candidate pipeline.
 // CPU moves only a snapped candidate window; placement/classification stays GPU-side.
 
+#include "res://shaders/terrain_edit_delta.gdshaderinc"
+
 uniform sampler2DArray u_scatter_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_scatter_macro_ready = 0.0;
 uniform float u_scatter_macro_face_res = 0.0;
@@ -80,7 +82,6 @@ vec4 sg_cubic_weights(float t) {
 		t3 / 6.0);
 }
 
-// Same four-fetch cubic B-spline reconstruction used by the active terrain at L0.
 float sg_macro_bicubic(vec3 coord) {
 	ivec3 size3 = textureSize(u_scatter_macro_elevation, 0);
 	vec2 size2 = vec2(size3.xy);
@@ -114,8 +115,9 @@ float sg_macro_height(vec3 dir) {
 }
 
 float sg_terrain_height(vec3 dir, float macro_h) {
-	return macro_h + gm_geomorph_height(dir, u_scatter_planet_radius,
+	float pristine = macro_h + gm_geomorph_height(dir, u_scatter_planet_radius,
 		u_scatter_geomorph_spacing, macro_h, uint(max(u_scatter_detail_seed, 1)));
+	return pristine + terrain_edit_delta(dir, u_scatter_planet_radius);
 }
 
 void sg_tangent_basis(vec3 dir, out vec3 right, out vec3 north) {
@@ -165,7 +167,6 @@ float sg_river_stone_suitability(float terrain_h, vec4 soil, vec4 surface,
 
 float sg_acceptance(float suitability, uint h, int instance_id) {
 	float threshold = clamp(suitability * u_scatter_density * sg_window_fade(instance_id), 0.0, 0.985);
-	// World-cell random decision only: MultiMesh slot identity is intentionally absent.
 	float r = sg_hash01(gm_hash(ivec3(int(h & 0xffffu), int((h >> 16u) & 0xffffu), u_scatter_seed), h ^ 0x9e37u));
 	return r < threshold && u_scatter_enabled > 0.5 ? 1.0 : 0.0;
 }
