@@ -25,6 +25,10 @@ struct Result {
 	double max_metric_skew = 0.0;
 	double max_cell_kite_error = 0.0;
 	double max_vertex_kite_error = 0.0;
+	int worst_edge = -1;
+	int worst_source = -1;
+	double worst_forward = 0.0;
+	double worst_reverse = 0.0;
 };
 
 static Result evaluate(int frequency) {
@@ -59,6 +63,10 @@ static Result evaluate(int frequency) {
 	}
 
 	double max_skew = 0.0;
+	int worst_edge = -1;
+	int worst_source = -1;
+	double worst_forward = 0.0;
+	double worst_reverse = 0.0;
 	for (int e = 0; e < grid.edge_count(); ++e) {
 		const auto &target = grid.edge(e);
 		const double m_e = target.edge_area_m2;
@@ -79,7 +87,14 @@ static Result evaluate(int frequency) {
 				+ source.edge_area_m2 * reverse;
 			const double scale = std::max({std::abs(m_e * target.reconstruction_weights[k]),
 				std::abs(source.edge_area_m2 * reverse), 1.0});
-			max_skew = std::max(max_skew, std::abs(lhs) / scale);
+			const double residual = std::abs(lhs) / scale;
+			if (residual > max_skew) {
+				max_skew = residual;
+				worst_edge = e;
+				worst_source = s;
+				worst_forward = target.reconstruction_weights[k];
+				worst_reverse = reverse;
+			}
 		}
 	}
 
@@ -105,7 +120,20 @@ static Result evaluate(int frequency) {
 	out.max_metric_skew = max_skew;
 	out.max_cell_kite_error = max_cell_kite;
 	out.max_vertex_kite_error = max_vertex_kite;
+	out.worst_edge = worst_edge;
+	out.worst_source = worst_source;
+	out.worst_forward = worst_forward;
+	out.worst_reverse = worst_reverse;
 	return out;
+}
+
+static void print_result(const char *name, const Result &r) {
+	std::cout << name << " relative RMS/max: " << r.relative_rms << " " << r.max_abs << "\n"
+		<< "  metric-skew residual: " << r.max_metric_skew
+		<< " worst pair " << r.worst_edge << "/" << r.worst_source
+		<< " weights " << r.worst_forward << "/" << r.worst_reverse << "\n"
+		<< "  cell/vertex kite closure: " << r.max_cell_kite_error
+		<< " " << r.max_vertex_kite_error << "\n";
 }
 
 int main() {
@@ -113,6 +141,10 @@ int main() {
 		const Result f6 = evaluate(6);
 		const Result f12 = evaluate(12);
 		const Result f24 = evaluate(24);
+		std::cout << "TRiSK weight diagnostics\n";
+		print_result("  F6", f6);
+		print_result("  F12", f12);
+		print_result("  F24", f24);
 
 		require(f6.max_cell_kite_error < 2e-10 && f12.max_cell_kite_error < 2e-10
 			&& f24.max_cell_kite_error < 2e-10, "TRiSK primal kite areas do not close");
@@ -126,13 +158,7 @@ int main() {
 		require(f24.relative_rms < 0.035,
 			"TRiSK tangential reconstruction remains too inaccurate at F24");
 
-		std::cout << "TRiSK weights PASS\n"
-			<< "  F6 relative RMS/max: " << f6.relative_rms << " " << f6.max_abs << "\n"
-			<< "  F12 relative RMS/max: " << f12.relative_rms << " " << f12.max_abs << "\n"
-			<< "  F24 relative RMS/max: " << f24.relative_rms << " " << f24.max_abs << "\n"
-			<< "  max metric-skew residual: " << f24.max_metric_skew << "\n"
-			<< "  max cell/vertex kite closure: " << f24.max_cell_kite_error
-			<< " " << f24.max_vertex_kite_error << "\n";
+		std::cout << "TRiSK weights PASS\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "TRiSK weights FAIL: " << e.what() << "\n";
