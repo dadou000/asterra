@@ -133,11 +133,19 @@ double VoronoiPrecipitation::max_courant(const State &state, double dt_s,
 	const auto &snow = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 	const int cells = transport_->grid().cell_count();
 	const double gravity = transport_->gravity_mps2();
+
+	// SSPRK stages can move a hydrometeor into a layer that is dry at the start
+	// of the step. Once a species exists anywhere in the column domain, its CFL
+	// therefore has to be safe for every layer it can enter during the stages,
+	// not only the currently wet donor layers.
+	const bool rain_active = std::any_of(rain.begin(), rain.end(), [](double m) { return m > 0.0; });
+	const bool snow_active = std::any_of(snow.begin(), snow.end(), [](double m) { return m > 0.0; });
+	if ((!rain_active || rain_fall_speed_mps == 0.0)
+			&& (!snow_active || snow_fall_speed_mps == 0.0)) return 0.0;
+
 	double maximum = 0.0;
 	for (int c = 0; c < cells; ++c) {
 		for (int k = 0; k < LEVELS; ++k) {
-			const size_t i = static_cast<size_t>(scalar_index(k, c));
-			if (rain[i] == 0.0 && snow[i] == 0.0) continue;
 			const double dz = (hydro.interface_geopotential[
 				static_cast<size_t>(interface_index(k + 1, c))]
 				- hydro.interface_geopotential[
@@ -145,8 +153,12 @@ double VoronoiPrecipitation::max_courant(const State &state, double dt_s,
 			if (!(dz > 0.0) || !std::isfinite(dz)) {
 				throw std::runtime_error("Precipitation CFL diagnosed invalid layer thickness");
 			}
-			if (rain[i] > 0.0) maximum = std::max(maximum, dt_s * rain_fall_speed_mps / dz);
-			if (snow[i] > 0.0) maximum = std::max(maximum, dt_s * snow_fall_speed_mps / dz);
+			if (rain_active && rain_fall_speed_mps > 0.0) {
+				maximum = std::max(maximum, dt_s * rain_fall_speed_mps / dz);
+			}
+			if (snow_active && snow_fall_speed_mps > 0.0) {
+				maximum = std::max(maximum, dt_s * snow_fall_speed_mps / dz);
+			}
 		}
 	}
 	return maximum;
