@@ -8,7 +8,7 @@ extends RefCounted
 ## shifts and ocean clipmap re-anchors cannot move an existing wake.
 
 const MAX_EVENTS := 64
-const TEXTURE_ROWS := 3
+const TEXTURE_ROWS := 4
 const EVENT_IMPACT := 0.0
 const EVENT_WAKE := 1.0
 
@@ -100,9 +100,7 @@ func _rebuild_texture() -> void:
 		image.set_pixel(i, 1, Color(travel.x, travel.y, travel.z, float(event["type"])))
 		image.set_pixel(i, 2, Color(float(event["amplitude"]), float(event["radius"]),
 			float(event["wavelength"]), float(event["speed"])))
-		# Foam is packed by sign-preserving multiplication into a fourth virtual
-		# scalar: wake/impact amplitude is scaled in the shader and foam strength is
-		# supplied globally by the quality profile. This keeps the texture at 3 rows.
+		image.set_pixel(i, 3, Color(float(event["foam"]), 0.0, 0.0, 0.0))
 	if _texture == null:
 		_texture = ImageTexture.create_from_image(image)
 	else:
