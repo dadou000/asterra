@@ -143,18 +143,23 @@ int main() {
 		}
 
 		const auto hydro_after = transport.diagnose_hydrostatic(atmosphere);
+		long double direct_atmosphere_water_change = 0.0L;
+		long double direct_surface_water_change = 0.0L;
 		for (int c = 0; c < cells; ++c) {
 			const size_t i = static_cast<size_t>(c);
 			const double dm = evaporation[static_cast<size_t>(c)] * DT;
 			const double sensible_j_m2 = sensible[static_cast<size_t>(c)] * DT;
-			require(nearly_equal(
-				atmosphere.tracer_mass_kg_m2[0][i]
-					- atmosphere_before.tracer_mass_kg_m2[0][i], dm),
+			const double vapor_delta = atmosphere.tracer_mass_kg_m2[0][i]
+				- atmosphere_before.tracer_mass_kg_m2[0][i];
+			const double surface_delta = surface.water_kg_m2[static_cast<size_t>(c)]
+				- surface_before.water_kg_m2[static_cast<size_t>(c)];
+			require(nearly_equal(vapor_delta, dm),
 				"bottom-layer vapor transfer is not the prescribed water mass");
-			require(nearly_equal(
-				surface.water_kg_m2[static_cast<size_t>(c)]
-					- surface_before.water_kg_m2[static_cast<size_t>(c)], -dm),
+			require(nearly_equal(surface_delta, -dm),
 				"surface reservoir transfer is not equal/opposite to vapor transfer");
+			const long double area = static_cast<long double>(grid.cell(c).area_m2);
+			direct_atmosphere_water_change += static_cast<long double>(vapor_delta) * area;
+			direct_surface_water_change += static_cast<long double>(surface_delta) * area;
 			const double expected_temperature = hydro_before.temperature_k[i]
 				+ sensible_j_m2
 					/ (VoronoiMoistThermodynamics::CP_DRY
@@ -163,16 +168,18 @@ int main() {
 				"bottom-layer temperature did not receive the prescribed sensible energy");
 		}
 
-		const double atmospheric_water_change = diagnostics.atmosphere_water_after_kg
-			- diagnostics.atmosphere_water_before_kg;
-		const double surface_water_change = diagnostics.surface_water_after_kg
-			- diagnostics.surface_water_before_kg;
-		require(nearly_equal(atmospheric_water_change,
+		// Measure the global transfer by integrating local deltas, rather than by
+		// subtracting two ~1e15 kg reservoir totals to recover a ~1e11 kg signal.
+		require(nearly_equal(static_cast<double>(direct_atmosphere_water_change),
 			static_cast<double>(expected_water_to_atmosphere), 3e-12, 1.0),
-			"atmospheric water change disagrees with prescribed flux integral");
-		require(nearly_equal(surface_water_change,
+			"area-integrated atmospheric water change disagrees with prescribed flux");
+		require(nearly_equal(static_cast<double>(direct_surface_water_change),
 			-static_cast<double>(expected_water_to_atmosphere), 3e-12, 1.0),
-			"surface water change is not equal/opposite to atmospheric change");
+			"area-integrated surface water change is not equal/opposite to atmosphere");
+		require(nearly_equal(static_cast<double>(
+			direct_atmosphere_water_change + direct_surface_water_change), 0.0,
+			5e-12, 1.0),
+			"direct atmosphere+surface water transfer does not close");
 
 		// A zero source step must be an exact no-op; running the exchange operator at
 		// every atmosphere step must not create roundoff drift by T<->theta cycling.
