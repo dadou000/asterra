@@ -85,6 +85,10 @@ add_executable(asterra_weather_dry_budget_tests tests/test_voronoi_dry_budgets.c
 target_link_libraries(asterra_weather_dry_budget_tests PRIVATE asterra_weather_core)
 add_test(NAME voronoi_dry_budgets COMMAND asterra_weather_dry_budget_tests)
 
+add_executable(asterra_weather_dry_orography_tests tests/test_voronoi_dry_orography.cpp)
+target_link_libraries(asterra_weather_dry_orography_tests PRIVATE asterra_weather_core)
+add_test(NAME voronoi_dry_orography COMMAND asterra_weather_dry_orography_tests)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
@@ -101,6 +105,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_dry_remap_tests
     asterra_weather_dry_core_tests
     asterra_weather_dry_budget_tests
+    asterra_weather_dry_orography_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -157,6 +162,7 @@ if(MSVC)
   target_compile_options(asterra_weather_dry_remap_tests PRIVATE /O2)
   target_compile_options(asterra_weather_dry_core_tests PRIVATE /O2)
   target_compile_options(asterra_weather_dry_budget_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_dry_orography_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -174,6 +180,7 @@ else()
   target_compile_options(asterra_weather_dry_remap_tests PRIVATE -O3)
   target_compile_options(asterra_weather_dry_core_tests PRIVATE -O3)
   target_compile_options(asterra_weather_dry_budget_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_dry_orography_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
