@@ -1,4 +1,5 @@
 #include "spherical_latlon_sampler.h"
+#include "voronoi_dry_core.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,10 +11,14 @@
 using asterra::weather::GeodesicVoronoiGrid;
 using asterra::weather::SphericalLatLonSampler;
 using asterra::weather::Vec3d;
+using asterra::weather::VoronoiDryCore;
 
 namespace {
 constexpr double PI = 3.141592653589793238462643383279502884;
 constexpr double R = 3500000.0;
+constexpr double G = 9.80665;
+constexpr double P_REF = 110000.0;
+constexpr double T = 288.0;
 
 void require(bool ok, const char *message) {
 	if (!ok) throw std::runtime_error(message);
@@ -95,9 +100,26 @@ int main() {
 			require(v == 1234.5, "constant spherical raster was not preserved exactly");
 		}
 
+		// End-to-end terrain boundary: the sampled raster becomes the static lower
+		// boundary of the transactional dry core. A terrain-balanced isothermal
+		// state must remain pressure-force free, proving that runtime resampling and
+		// hydrostatic geometry use exactly the same cell ordering and sign convention.
+		VoronoiDryCore core(grid, G, 8000.0, 7500.0, 0.0, {0.0, 1.0, 0.0});
+		core.set_surface_height_m(sampled);
+		const auto balanced = core.make_isothermal_terrain_balanced_reference(P_REF, T);
+		const auto hydro = core.transport().diagnose_hydrostatic(balanced);
+		const auto pressure = core.transport().pressure_gradient_acceleration(balanced, hydro);
+		double max_balanced_accel = 0.0;
+		for (double a : pressure) {
+			max_balanced_accel = std::max(max_balanced_accel, std::abs(a));
+		}
+		require(max_balanced_accel < 5e-10,
+			"raster-sampled terrain produced a spurious balanced pressure force");
+
 		std::cout << "SphericalLatLonSampler PASS\n"
 			<< "  Voronoi max/RMS error: " << max_error << "/" << rms << " m\n"
-			<< "  seam delta: " << std::abs(west - east) << "\n";
+			<< "  seam delta: " << std::abs(west - east) << "\n"
+			<< "  sampled-terrain balanced max accel: " << max_balanced_accel << " m/s2\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "SphericalLatLonSampler FAIL: " << e.what() << "\n";
