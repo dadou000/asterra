@@ -1,10 +1,11 @@
 extends "res://scripts/terrain/terrain_deformation_experiment.gd"
 ## GPU-stage experiment override.
 ##
-## The sphere keeps a tiny immediate CPU-side contact datum while the detailed
-## deformation remains GPU resident. The datum is created only after a strict
-## contact-grade terrain sample exists at the sphere direction; broad nearby cache
-## samples are never allowed to start a contact.
+## First contact is acquired from RenderedTerrainContactQuery, which samples the
+## exact active clipmap cache + persistent edit mirror + active deformation texture
+## used by the production vertex shader. Approximate procedural-query fallbacks can
+## never start deformation. Once contact begins, the immediate local contact datum
+## advances with the plastic yield submitted during that same physics step.
 ##
 ## Sphere footprint geometry is based on total embed depth below the original
 ## contact plane, not instantaneous overlap against already-yielded soil.
@@ -25,42 +26,21 @@ func _place_sphere(drop_immediately: bool) -> void:
 	_sphere_total_center_sink_m = 0.0
 	_sphere_reference_ready = false
 	_sphere_contact_started = false
-	TerrainHeightQuery.request_height(_sphere_dir)
-	var strict_ground_m: float = _strict_ground_height()
-	if is_finite(strict_ground_m):
-		_sphere_reference_ground_m = strict_ground_m
-		_sphere_contact_ground_m = strict_ground_m
+	RenderedTerrainContactQuery.request_height(_sphere_dir)
+	var rendered_ground_m: float = _rendered_ground_height()
+	if is_finite(rendered_ground_m):
+		_sphere_reference_ground_m = rendered_ground_m
+		_sphere_contact_ground_m = rendered_ground_m
 		_sphere_reference_ready = true
+		# When the exact sample is already resident, make R/Backspace start from a
+		# literal ten metres above the surface the player can see.
+		_sphere_altitude_msl = rendered_ground_m + SPHERE_RADIUS_M + 10.0
+		_update_visual_transforms()
 
 
-func _strict_ground_height() -> float:
-	# Pristine terrain must come from a sample within 45 cm of the requested point.
-	# The ordinary TerrainContactSampler.height() intentionally accepts much farther
-	# cached samples as a temporary fallback, which is unsuitable for first contact.
-	TerrainHeightQuery.request_height(_sphere_dir)
-	if not TerrainHeightQuery.has_method("has_contact_height") \
-			or not bool(TerrainHeightQuery.call("has_contact_height", _sphere_dir)):
-		return NAN
-	var base_value: Variant = TerrainHeightQuery.call(
-		"contact_height_for_direction", _sphere_dir, NAN)
-	var base_height_m: float = float(base_value)
-	if not is_finite(base_height_m):
-		return NAN
-
-	# If a live GPU deformation field already exists at this point, require its
-	# point-query cache to be current too. Otherwise a previous crater could again
-	# make the rigid contact plane disagree with the visible terrain.
-	if TerrainDeformationGPU.ready_state and not TerrainDeformationGPU.failed \
-			and bool(TerrainDeformationGPU.get("_has_active_content")):
-		if TerrainDeformationQueryGPU.ready_state and not TerrainDeformationQueryGPU.failed:
-			TerrainDeformationGPU.active_height_offset(_sphere_dir)
-			if not TerrainDeformationQueryGPU.has_method("has_fresh_sample") \
-					or not bool(TerrainDeformationQueryGPU.call("has_fresh_sample", _sphere_dir)):
-				return NAN
-		elif not TerrainDeformationQueryGPU.failed:
-			return NAN
-		base_height_m += TerrainDeformationGPU.active_height_offset(_sphere_dir)
-	return base_height_m
+func _rendered_ground_height() -> float:
+	RenderedTerrainContactQuery.request_height(_sphere_dir)
+	return RenderedTerrainContactQuery.height_for_direction(_sphere_dir, NAN)
 
 
 func _integrate_freefall(dt: float) -> void:
@@ -70,44 +50,43 @@ func _integrate_freefall(dt: float) -> void:
 
 
 func _step_sphere(dt: float) -> void:
-	# Before first contact, continuously refresh the exact surface plane. No terrain
-	# deformation is submitted until the sphere has geometrically crossed that exact
-	# plane. This makes an airborne sphere incapable of excavating terrain.
+	# Before first contact, continuously refresh the exact *rendered* surface. No
+	# terrain work is submitted until the sphere geometrically crosses that surface.
 	if not _sphere_contact_started:
-		var strict_ground_m: float = _strict_ground_height()
-		if not is_finite(strict_ground_m):
+		var rendered_ground_m: float = _rendered_ground_height()
+		if not is_finite(rendered_ground_m):
 			_integrate_freefall(dt)
 			_sphere_last_contact.clear()
 			return
 
-		_sphere_reference_ground_m = strict_ground_m
-		_sphere_contact_ground_m = strict_ground_m
+		_sphere_reference_ground_m = rendered_ground_m
+		_sphere_contact_ground_m = rendered_ground_m
 		_sphere_total_center_sink_m = 0.0
 		_sphere_reference_ready = true
 
 		var bottom_now_m: float = _sphere_altitude_msl - SPHERE_RADIUS_M
-		var clearance_now_m: float = bottom_now_m - strict_ground_m
+		var clearance_now_m: float = bottom_now_m - rendered_ground_m
 		if clearance_now_m > 0.0:
 			var next_velocity_mps: float = clampf(
 				_sphere_velocity_mps - GRAVITY_MPS2 * dt, -180.0, 80.0)
 			var next_altitude_m: float = _sphere_altitude_msl + next_velocity_mps * dt
 			var next_bottom_m: float = next_altitude_m - SPHERE_RADIUS_M
-			if next_bottom_m > strict_ground_m:
+			if next_bottom_m > rendered_ground_m:
 				_sphere_velocity_mps = next_velocity_mps
 				_sphere_altitude_msl = next_altitude_m
 				_sphere_last_contact.clear()
 				return
-			# Continuous crossing: land exactly on the sampled visible surface and keep
-			# the incoming velocity for the following contact substep.
+			# Continuous crossing: land exactly on the rendered surface and preserve
+			# the incoming speed for the following contact substep.
 			_sphere_velocity_mps = next_velocity_mps
-			_sphere_altitude_msl = strict_ground_m + SPHERE_RADIUS_M
+			_sphere_altitude_msl = rendered_ground_m + SPHERE_RADIUS_M
 			_sphere_contact_started = true
 			_sphere_last_contact.clear()
 			return
 
-		# A strict sample arrived after the sphere was already marginally below it.
-		# Clamp to first touch rather than converting that query latency into soil work.
-		_sphere_altitude_msl = strict_ground_m + SPHERE_RADIUS_M
+		# If the exact GPU sample arrived after the falling sphere marginally crossed
+		# it, discard that query latency as penetration. Soil work starts from zero.
+		_sphere_altitude_msl = rendered_ground_m + SPHERE_RADIUS_M
 		_sphere_contact_started = true
 		_sphere_last_contact.clear()
 		return
@@ -196,3 +175,40 @@ func _step_sphere(dt: float) -> void:
 			var weight_n: float = _sphere_mass_kg * GRAVITY_MPS2
 			if support_n >= weight_n * 0.98 and plastic_center_step_m < 1e-5:
 				_sphere_velocity_mps = 0.0
+
+
+func _update_hud() -> void:
+	if _hud_label == null:
+		return
+	if not _world_ready:
+		_hud_label.text = "TERRAIN DEFORMATION EXPERIMENT\nWaiting for the generated world...\nF10: close experiment"
+		return
+	var rendered_ground_m: float = _rendered_ground_height()
+	var clearance_text := "waiting exact render sample"
+	if is_finite(rendered_ground_m):
+		var clearance_m: float = _sphere_altitude_msl - SPHERE_RADIUS_M - rendered_ground_m
+		clearance_text = "clearance %+6.2f m" % clearance_m
+	var bearing_ratio := 0.0
+	var sink_rate := 0.0
+	if not _sphere_last_contact.is_empty():
+		bearing_ratio = float(_sphere_last_contact.get("bearing_ratio", 0.0))
+		sink_rate = float(_sphere_last_contact.get("sink_rate_mps", 0.0))
+	var sample_info: Dictionary = RenderedTerrainContactQuery.sample_info(_sphere_dir)
+	var render_level: int = int(sample_info.get("level", -1))
+	var render_morph: float = float(sample_info.get("morph", 0.0))
+	var state_stats: Dictionary = TerrainDeformation.stats()
+	_hud_label.text = (
+		"TERRAIN DEFORMATION EXPERIMENT\n" +
+		"Material [1-4]: %s\n" % TerrainDeformation.material_name(material_id) +
+		"Tungsten sphere: %.1f t | %s | v %+6.2f m/s | bearing %.2fx | sink %.3f m/s\n" % [
+			_sphere_mass_kg / 1000.0, clearance_text, _sphere_velocity_mps,
+			bearing_ratio, sink_rate] +
+		"Rendered contact: L%d morph %.2f | locked %s\n" % [
+			render_level, render_morph, "YES" if _sphere_contact_started else "NO"] +
+		"Bucket reaction: %.0f kN | moved this step %.4f m3 | state tiles %d\n\n" % [
+			_bucket_total_reaction_n / 1000.0, _bucket_last_moved_volume_m3,
+			int(state_stats.get("state_tiles", 0))] +
+		"R place + DROP sphere at aim | P pause/resume | Backspace reset suspended\n" +
+		"Bucket: I/K forward/back  J/L left/right  U/O up/down  Z/X pitch  Shift fast  B reset\n" +
+		"1 topsoil  2 wet clay  3 gravel  4 rock | Delete clears terrain edits | F10 close"
+	)
