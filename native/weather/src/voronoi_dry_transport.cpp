@@ -12,10 +12,17 @@ constexpr double CONSERVATION_REJECT_TOL = 1.0e-11;
 }
 
 VoronoiDryTransport::VoronoiDryTransport(const GeodesicVoronoiGrid &grid,
-		double gravity_mps2, double scale_height_m)
-	: grid_(&grid), hydrostatic_(grid, gravity_mps2, scale_height_m) {
+		double gravity_mps2, double scale_height_m, double top_pressure_pa)
+	: grid_(&grid), hydrostatic_(grid, gravity_mps2, scale_height_m),
+	  gravity_mps2_(gravity_mps2), top_pressure_pa_(top_pressure_pa) {
 	if (grid.cell_count() <= 0 || grid.edge_count() <= 0) {
 		throw std::invalid_argument("VoronoiDryTransport requires a built geodesic grid");
+	}
+	if (!(gravity_mps2_ > 0.0) || !std::isfinite(gravity_mps2_)) {
+		throw std::invalid_argument("Dry-transport gravity must be finite and positive");
+	}
+	if (!(top_pressure_pa_ > 0.0) || !std::isfinite(top_pressure_pa_)) {
+		throw std::invalid_argument("Dry-transport model-top pressure must be finite and positive");
 	}
 }
 
@@ -48,18 +55,129 @@ bool VoronoiDryTransport::validate_finite_positive(const State &state) const {
 
 VoronoiDryTransport::State VoronoiDryTransport::make_isothermal_reference(
 		double surface_pressure_pa, double temperature_k) const {
-	const auto primitive = hydrostatic_.make_isothermal_reference(surface_pressure_pa, temperature_k);
-	const auto diagnostics = hydrostatic_.diagnose(primitive);
+	if (!(surface_pressure_pa > top_pressure_pa_) || !std::isfinite(surface_pressure_pa)) {
+		throw std::invalid_argument("Dry reference surface pressure must exceed model-top pressure");
+	}
+	if (!(temperature_k > 100.0) || !std::isfinite(temperature_k)) {
+		throw std::invalid_argument("Dry reference temperature must be finite and positive");
+	}
+
+	const auto &sigma = hydrostatic_.sigma_interfaces();
+	const double sigma_top = sigma[LEVELS];
+	const double inv_sigma_span = 1.0 / (1.0 - sigma_top);
 
 	State state;
-	state.layer_mass_kg_m2 = diagnostics.layer_mass_kg_m2;
+	state.layer_mass_kg_m2.resize(static_cast<size_t>(LEVELS) * grid_->cell_count());
 	state.theta_mass_kg_k_m2.resize(state.layer_mass_kg_m2.size());
-	state.edge_normal_mps = primitive.edge_normal_mps;
-	for (size_t i = 0; i < state.layer_mass_kg_m2.size(); ++i) {
-		state.theta_mass_kg_k_m2[i] = state.layer_mass_kg_m2[i]
-			* primitive.potential_temperature_k[i];
+	state.edge_normal_mps.assign(static_cast<size_t>(LEVELS) * grid_->edge_count(), 0.0);
+
+	for (int k = 0; k < LEVELS; ++k) {
+		const double eta_lower = (sigma[k] - sigma_top) * inv_sigma_span;
+		const double eta_upper = (sigma[k + 1] - sigma_top) * inv_sigma_span;
+		const double p_lower = top_pressure_pa_ + eta_lower * (surface_pressure_pa - top_pressure_pa_);
+		const double p_upper = top_pressure_pa_ + eta_upper * (surface_pressure_pa - top_pressure_pa_);
+		const double mass = (p_lower - p_upper) / gravity_mps2_;
+		const double p_center = std::sqrt(p_lower * p_upper);
+		const double theta = temperature_k * std::pow(
+			VoronoiDryHydrostatic::P0_PA / p_center, VoronoiDryHydrostatic::KAPPA);
+		for (int c = 0; c < grid_->cell_count(); ++c) {
+			const int i = scalar_index(k, c);
+			state.layer_mass_kg_m2[static_cast<size_t>(i)] = mass;
+			state.theta_mass_kg_k_m2[static_cast<size_t>(i)] = mass * theta;
+		}
 	}
 	return state;
+}
+
+VoronoiDryTransport::HydroDiagnostics VoronoiDryTransport::diagnose_hydrostatic(
+		const State &state) const {
+	validate_shape(state);
+	if (!validate_finite_positive(state)) {
+		throw std::runtime_error("Cannot diagnose an invalid dry conservative state");
+	}
+
+	const size_t cells = static_cast<size_t>(grid_->cell_count());
+	const size_t scalars = cells * LEVELS;
+	HydroDiagnostics d;
+	d.surface_pressure_pa.resize(cells);
+	d.interface_pressure_pa.resize(cells * INTERFACES);
+	d.layer_pressure_pa.resize(scalars);
+	d.potential_temperature_k.resize(scalars);
+	d.temperature_k.resize(scalars);
+	d.interface_geopotential.assign(cells * INTERFACES, 0.0);
+	d.layer_geopotential.resize(scalars);
+
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		d.interface_pressure_pa[static_cast<size_t>(interface_index(LEVELS, c))] = top_pressure_pa_;
+		for (int k = LEVELS - 1; k >= 0; --k) {
+			const double p_upper = d.interface_pressure_pa[static_cast<size_t>(interface_index(k + 1, c))];
+			const double mass = state.layer_mass_kg_m2[static_cast<size_t>(scalar_index(k, c))];
+			const double p_lower = p_upper + gravity_mps2_ * mass;
+			if (!(p_lower > p_upper) || !std::isfinite(p_lower)) {
+				throw std::runtime_error("Dry mass produced a non-monotone pressure column");
+			}
+			d.interface_pressure_pa[static_cast<size_t>(interface_index(k, c))] = p_lower;
+		}
+		d.surface_pressure_pa[static_cast<size_t>(c)]
+			= d.interface_pressure_pa[static_cast<size_t>(interface_index(0, c))];
+
+		d.interface_geopotential[static_cast<size_t>(interface_index(0, c))] = 0.0;
+		for (int k = 0; k < LEVELS; ++k) {
+			const int i = scalar_index(k, c);
+			const double mass = state.layer_mass_kg_m2[static_cast<size_t>(i)];
+			const double theta = state.theta_mass_kg_k_m2[static_cast<size_t>(i)] / mass;
+			const double p_lower = d.interface_pressure_pa[static_cast<size_t>(interface_index(k, c))];
+			const double p_upper = d.interface_pressure_pa[static_cast<size_t>(interface_index(k + 1, c))];
+			const double p_center = std::sqrt(p_lower * p_upper);
+			const double temperature = theta * std::pow(
+				p_center / VoronoiDryHydrostatic::P0_PA, VoronoiDryHydrostatic::KAPPA);
+			const double phi_lower = d.interface_geopotential[static_cast<size_t>(interface_index(k, c))];
+			const double log_full = std::log(p_lower / p_upper);
+			const double log_half = std::log(p_lower / p_center);
+
+			d.layer_pressure_pa[static_cast<size_t>(i)] = p_center;
+			d.potential_temperature_k[static_cast<size_t>(i)] = theta;
+			d.temperature_k[static_cast<size_t>(i)] = temperature;
+			d.layer_geopotential[static_cast<size_t>(i)]
+				= phi_lower + VoronoiDryHydrostatic::RD * temperature * log_half;
+			d.interface_geopotential[static_cast<size_t>(interface_index(k + 1, c))]
+				= phi_lower + VoronoiDryHydrostatic::RD * temperature * log_full;
+		}
+	}
+	return d;
+}
+
+std::vector<double> VoronoiDryTransport::pressure_gradient_acceleration(
+		const State &state, const HydroDiagnostics &d) const {
+	validate_shape(state);
+	const size_t cells = static_cast<size_t>(grid_->cell_count());
+	const size_t scalars = cells * LEVELS;
+	if (d.surface_pressure_pa.size() != cells
+			|| d.interface_pressure_pa.size() != cells * INTERFACES
+			|| d.layer_pressure_pa.size() != scalars
+			|| d.temperature_k.size() != scalars
+			|| d.layer_geopotential.size() != scalars) {
+		throw std::invalid_argument("Dry mass-form hydrostatic diagnostics have wrong size");
+	}
+
+	std::vector<double> acceleration(static_cast<size_t>(LEVELS) * grid_->edge_count(), 0.0);
+	for (int k = 0; k < LEVELS; ++k) {
+		for (int e = 0; e < grid_->edge_count(); ++e) {
+			const auto &edge = grid_->edge(e);
+			const int ia = scalar_index(k, edge.cell_a);
+			const int ib = scalar_index(k, edge.cell_b);
+			const double inv_d = 1.0 / edge.center_distance_m;
+			const double grad_phi = (d.layer_geopotential[static_cast<size_t>(ib)]
+				- d.layer_geopotential[static_cast<size_t>(ia)]) * inv_d;
+			const double grad_log_p = (std::log(d.layer_pressure_pa[static_cast<size_t>(ib)])
+				- std::log(d.layer_pressure_pa[static_cast<size_t>(ia)])) * inv_d;
+			const double t_edge = 0.5 * (d.temperature_k[static_cast<size_t>(ia)]
+				+ d.temperature_k[static_cast<size_t>(ib)]);
+			acceleration[static_cast<size_t>(edge_index(k, e))]
+				= -grad_phi - VoronoiDryHydrostatic::RD * t_edge * grad_log_p;
+		}
+	}
+	return acceleration;
 }
 
 double VoronoiDryTransport::potential_temperature(const State &state,
@@ -160,8 +278,6 @@ VoronoiDryTransport::Tendencies VoronoiDryTransport::compute_tendencies(
 			const double donor_mass = state.layer_mass_kg_m2[static_cast<size_t>(donor)];
 			const double donor_theta = state.theta_mass_kg_k_m2[static_cast<size_t>(donor)]
 				/ donor_mass;
-			// Signed a -> b mass transport [kg/s]. The same flux is consumed with
-			// opposite sign by both adjacent cells; theta uses the identical donor.
 			const double mass_flux = u * edge.edge_length_m * donor_mass;
 			const double theta_flux = mass_flux * donor_theta;
 			const double inv_area_a = 1.0 / grid_->cell(edge.cell_a).area_m2;
@@ -246,9 +362,6 @@ VoronoiDryTransport::StepDiagnostics VoronoiDryTransport::step(State &state,
 		}
 	}
 	if (!any_motion) {
-		// Preserve hydrostatic rest bit-for-bit. Running an algebraically zero
-		// RHS through SSPRK3 can still perturb the last bit through convex
-		// recombination, which is undesirable for the model's exact no-source state.
 		diagnostics.accepted_dt_s = requested_dt_s;
 		diagnostics.max_courant = 0.0;
 		diagnostics.dry_mass_after_kg = diagnostics.dry_mass_before_kg;
