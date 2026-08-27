@@ -35,6 +35,10 @@ int main() {
 		double max_orthogonality_error = 0.0;
 		int pentagons = 0;
 		int hexagons = 0;
+		int north_pole_cell = -1;
+		int south_pole_cell = -1;
+		double max_y = -2.0;
+		double min_y = 2.0;
 
 		for (int c = 0; c < grid.cell_count(); ++c) {
 			const auto &cell = grid.cell(c);
@@ -44,12 +48,32 @@ int main() {
 			if (cell.edges.size() == 5) ++pentagons;
 			else if (cell.edges.size() == 6) ++hexagons;
 			else throw std::runtime_error("Voronoi cell is neither pentagon nor hexagon");
+			if (cell.center.y > max_y) { max_y = cell.center.y; north_pole_cell = c; }
+			if (cell.center.y < min_y) { min_y = cell.center.y; south_pole_cell = c; }
 			cell_area_sum += cell.area_m2;
 			min_cell_area = std::min(min_cell_area, cell.area_m2);
 			max_cell_area = std::max(max_cell_area, cell.area_m2);
 		}
 		require(pentagons == 12, "icosahedral Voronoi mesh must have exactly 12 pentagons");
 		require(hexagons == grid.cell_count() - 12, "all non-pentagon cells must be hexagons");
+
+		// Even subdivision frequencies used by the runtime contain exact +/-Y
+		// pole cells. They must be ordinary finite Voronoi cells, not coordinate
+		// singularities or special topological caps.
+		require(north_pole_cell >= 0 && south_pole_cell >= 0,
+			"geodesic mesh did not identify polar cells");
+		const auto &north_pole = grid.cell(north_pole_cell);
+		const auto &south_pole = grid.cell(south_pole_cell);
+		require(std::abs(north_pole.center.x) < 1.0e-14
+				&& std::abs(north_pole.center.y - 1.0) < 1.0e-14
+				&& std::abs(north_pole.center.z) < 1.0e-14,
+			"north geodesic pole is not an exact finite +Y cell");
+		require(std::abs(south_pole.center.x) < 1.0e-14
+				&& std::abs(south_pole.center.y + 1.0) < 1.0e-14
+				&& std::abs(south_pole.center.z) < 1.0e-14,
+			"south geodesic pole is not an exact finite -Y cell");
+		require(north_pole.edges.size() == 6 && south_pole.edges.size() == 6,
+			"polar cells are not regular six-neighbour Voronoi cells");
 
 		for (int v = 0; v < grid.vertex_count(); ++v) {
 			const auto &vertex = grid.vertex(v);
@@ -93,6 +117,7 @@ int main() {
 			<< "  frequency: " << F << "\n"
 			<< "  cells/edges/vertices: " << grid.cell_count() << "/" << grid.edge_count() << "/" << grid.vertex_count() << "\n"
 			<< "  pentagons/hexagons: " << pentagons << "/" << hexagons << "\n"
+			<< "  exact north/south pole cells: " << north_pole_cell << "/" << south_pole_cell << "\n"
 			<< "  cell area relative closure: " << cell_area_error << "\n"
 			<< "  dual area relative closure: " << dual_area_error << "\n"
 			<< "  cell area min/max ratio: " << min_cell_area / max_cell_area << "\n"
