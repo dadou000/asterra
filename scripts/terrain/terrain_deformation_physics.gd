@@ -12,10 +12,13 @@ const MATERIAL_WET_CLAY := 1
 const MATERIAL_GRAVEL := 2
 const MATERIAL_ROCK := 3
 
+const FOOTPRINT_GENERIC := 0
+const FOOTPRINT_SPHERE := 1
+
 const STATE_TILE := 64
 const STATE_CHANNELS := 2 # compaction, damage
 const MAX_VISUAL_NOTIFY_HZ := 12.0
-const MIN_CONTACT_RADIUS_M := 0.38
+const MIN_CONTACT_RADIUS_M := 0.18
 const MAX_PLASTIC_RATE_MPS := 5.0
 
 var _state_tiles: Dictionary = {}
@@ -34,8 +37,6 @@ func _ready() -> void:
 
 
 func _process(dt: float) -> void:
-	# Only CPU-fallback edits need to dirty the persistent edit mirror. The active
-	# GPU tile is sampled directly by terrain rendering.
 	if not _notify_pending:
 		return
 	_notify_timer_s += dt
@@ -58,13 +59,17 @@ func material_parameters(material_id: int) -> Dictionary:
 
 func apply_contact(center_dir: Vector3, contact_radius_m: float, normal_load_n: float,
 		penetration_m: float, normal_speed_mps: float, tangential_speed_mps: float,
-		dt: float, cutting: float = 0.0, material_id: int = MATERIAL_TOPSOIL) -> Dictionary:
+		dt: float, cutting: float = 0.0, material_id: int = MATERIAL_TOPSOIL,
+		footprint_type: int = FOOTPRINT_GENERIC, shape_radius_m: float = 0.0) -> Dictionary:
 	if Planet.cfg == null or center_dir.length_squared() <= 1e-12 or dt <= 0.0:
 		return _empty_result()
 	var d: Vector3 = center_dir.normalized()
 	var persistent_spacing_m: float = Deltas.sample_spacing(Planet.cfg.planet_radius)
-	var radius_m: float = maxf(contact_radius_m,
-		maxf(MIN_CONTACT_RADIUS_M, persistent_spacing_m * 0.72))
+	var minimum_radius_m: float = maxf(MIN_CONTACT_RADIUS_M, persistent_spacing_m * 0.72)
+	if TerrainDeformationGPU.ready_state and not TerrainDeformationGPU.failed:
+		minimum_radius_m = maxf(MIN_CONTACT_RADIUS_M,
+			float(TerrainDeformationGPU.SAMPLE_SPACING_M) * 0.72)
+	var radius_m: float = maxf(contact_radius_m, minimum_radius_m)
 	var area_m2: float = PI * radius_m * radius_m
 	var material: Dictionary = _material(material_id)
 	var state: Vector2 = state_at(d)
@@ -104,20 +109,20 @@ func apply_contact(center_dir: Vector3, contact_radius_m: float, normal_load_n: 
 		if TerrainDeformationGPU.ready_state and not TerrainDeformationGPU.failed:
 			gpu_active = TerrainDeformationGPU.enqueue_contact(
 				d, radius_m, sink_m, compaction_gain, damage_gain,
-				rim_fraction, max_depth_m)
+				rim_fraction, max_depth_m, footprint_type, shape_radius_m,
+				penetration_m)
 		if gpu_active:
-			# Integral of the (1-r^2)^2 circular depression kernel is PI*R^2/3.
-			moved_volume_m3 = sink_m * area_m2 / 3.0
+			var mean_weight: float = 0.50 if footprint_type == FOOTPRINT_SPHERE else 1.0 / 3.0
+			moved_volume_m3 = sink_m * area_m2 * mean_weight
 			_gpu_contact_events += 1
-			# Immediate one-cell state avoids waiting for the asynchronous GPU mirror
-			# before hardening/damage begins to affect the next contact step.
 			var lattice: Array = Deltas.dir_to_lattice(d)
 			_add_state(int(lattice[0]), int(round(float(lattice[1]))),
 				int(round(float(lattice[2]))), sink_m * compaction_gain,
 				sink_m * damage_gain)
 		else:
 			moved_volume_m3 = _apply_patch(d, radius_m, sink_m, compaction_gain,
-				damage_gain, rim_fraction, max_depth_m)
+				damage_gain, rim_fraction, max_depth_m, footprint_type,
+				shape_radius_m, penetration_m)
 			if moved_volume_m3 > 1e-8:
 				_cpu_fallback_events += 1
 				_queue_notify(d, radius_m * 2.1)
@@ -140,6 +145,7 @@ func apply_contact(center_dir: Vector3, contact_radius_m: float, normal_load_n: 
 		"restitution": restitution,
 		"material": String(material["name"]),
 		"gpu_active": gpu_active,
+		"footprint_type": footprint_type,
 	}
 
 
@@ -177,6 +183,7 @@ func stats() -> Dictionary:
 		"gpu_contact_events": _gpu_contact_events,
 		"cpu_fallback_events": _cpu_fallback_events,
 		"gpu": TerrainDeformationGPU.stats(),
+		"gpu_queries": TerrainDeformationQueryGPU.stats() if TerrainDeformationQueryGPU.ready_state else {},
 	}
 
 
@@ -206,7 +213,8 @@ func deserialize(data: Dictionary) -> void:
 
 func _apply_patch(center_dir: Vector3, radius_m: float, sink_m: float,
 		compaction_gain: float, damage_gain: float, rim_fraction: float,
-		max_depth_m: float) -> float:
+		max_depth_m: float, footprint_type: int = FOOTPRINT_GENERIC,
+		shape_radius_m: float = 0.0, penetration_m: float = 0.0) -> float:
 	var planet_radius: float = Planet.cfg.planet_radius
 	var spacing_m: float = Deltas.sample_spacing(planet_radius)
 	var cell_area_m2: float = spacing_m * spacing_m
@@ -221,9 +229,10 @@ func _apply_patch(center_dir: Vector3, radius_m: float, sink_m: float,
 			var distance_m: float = Vector2(float(x), float(y)).length() * spacing_m
 			if distance_m > radius_m:
 				continue
-			var q: float = distance_m / maxf(radius_m, 1e-4)
-			var weight: float = (1.0 - q * q)
-			weight *= weight
+			var weight: float = _footprint_weight(distance_m, radius_m,
+				footprint_type, shape_radius_m, penetration_m)
+			if weight <= 0.0:
+				continue
 			var requested_delta: float = -sink_m * weight
 			var actual_delta: float = Deltas.add_offset(face, center_i + x, center_j + y,
 				requested_delta, -max_depth_m, max_depth_m * 0.25)
@@ -263,6 +272,20 @@ func _apply_patch(center_dir: Vector3, radius_m: float, sink_m: float,
 		var rise_m: float = target_rim_volume_m3 * share / maxf(cell_area_m2, 1e-6)
 		Deltas.add_offset(face, point.x, point.y, rise_m, -max_depth_m, max_depth_m * 0.25)
 	return removed_volume_m3
+
+
+func _footprint_weight(distance_m: float, radius_m: float, footprint_type: int,
+		shape_radius_m: float, penetration_m: float) -> float:
+	if footprint_type == FOOTPRINT_SPHERE and shape_radius_m > 1e-4 and penetration_m > 1e-5:
+		if distance_m >= shape_radius_m:
+			return 0.0
+		var root_term: float = maxf(shape_radius_m * shape_radius_m - distance_m * distance_m, 0.0)
+		var sag_m: float = shape_radius_m - sqrt(root_term)
+		var overlap_m: float = maxf(penetration_m - sag_m, 0.0)
+		return clampf(overlap_m / penetration_m, 0.0, 1.0)
+	var q: float = distance_m / maxf(radius_m, 1e-4)
+	var weight: float = 1.0 - q * q
+	return weight * weight
 
 
 func _read_state(face: int, i: int, j: int) -> Vector2:
@@ -322,6 +345,7 @@ func _empty_result() -> Dictionary:
 		"restitution": 0.0,
 		"material": "none",
 		"gpu_active": false,
+		"footprint_type": FOOTPRINT_GENERIC,
 	}
 
 
