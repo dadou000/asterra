@@ -15,9 +15,9 @@ namespace asterra::weather {
 // heating/cooling.
 //
 // The present thermodynamic closure is deliberately dilute: pressure is the
-// dry-core diagnosed pressure and Cp is dry-air Cp. Moist hydrostatic mass and
-// virtual-temperature effects belong to the next coupling phase; keeping those
-// separate makes this saturation-adjustment budget independently testable.
+// dry-core diagnosed pressure and Cp is dry-air Cp. Virtual temperature is now
+// available as a diagnostic, but is not yet fed into pressure/hydrostatic force;
+// that coupling must adopt a consistent total-pressure/water-weight convention.
 class VoronoiMoistThermodynamics {
 public:
 	using State = VoronoiDryTransport::State;
@@ -67,6 +67,26 @@ public:
 	static double saturation_mixing_ratio(double pressure_pa,
 		double temperature_k);
 	static double ice_fraction(double temperature_k);
+
+	// Exact ideal-mixture virtual temperature for water mixing ratios expressed
+	// per kg of dry air, with condensate volume neglected:
+	//   Tv = T (1 + qv/epsilon) / (1 + qv + ql + qi).
+	// With a true total pressure p this gives rho_total = p/(Rd Tv). The current
+	// dry core does not yet diagnose total moist pressure, so this is diagnostic
+	// only and must not silently feed the dry hydrostatic operator.
+	static double virtual_temperature_k(double temperature_k,
+		double vapor_mixing_ratio,
+		double liquid_mixing_ratio = 0.0,
+		double ice_mixing_ratio = 0.0);
+	static double mixture_density_kg_m3(double total_pressure_pa,
+		double temperature_k,
+		double vapor_mixing_ratio,
+		double liquid_mixing_ratio = 0.0,
+		double ice_mixing_ratio = 0.0);
+
+	// Diagnose Tv for every model scalar using the current dry-core temperature
+	// and configured water tracer slots. This does not modify state.
+	std::vector<double> diagnose_virtual_temperature_k(const State &state) const;
 
 	// Convenience initialization: set vapor to RH * qsat and zero cloud water at
 	// every cell/level while preserving dry state and theta. RH must be >= 0.
