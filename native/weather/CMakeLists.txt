@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# godot-cpp's Windows template builds use the static MSVC runtime. Set this
+# before creating any of our targets so the standalone weather core and the
+# GDExtension cannot end up with /MD vs /MT object-library mismatches.
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 enable_testing()
 
 add_library(asterra_weather_core STATIC
