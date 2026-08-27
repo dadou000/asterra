@@ -52,14 +52,11 @@ func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 func up_dir() -> Vector3:
 	return world_pos.normalized().to_v3()
 
-
 func altitude() -> float:
 	return TerrainContactSampler.altitude_msl(world_pos)
 
-
 func ground_height() -> float:
 	return TerrainContactSampler.height(up_dir())
-
 
 func height_above_ground() -> float:
 	return TerrainContactSampler.altitude_agl(world_pos)
@@ -71,10 +68,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _mouse_captured:
 		yaw += event.relative.x * MOUSE_SENS
 		pitch = clampf(pitch - event.relative.y * MOUSE_SENS, -1.55, 1.55)
-	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F:
-			mode = Mode.WALK if mode == Mode.FLY else Mode.FLY
-			vertical_speed = 0.0
+	elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F:
+		mode = Mode.WALK if mode == Mode.FLY else Mode.FLY
+		vertical_speed = 0.0
 
 
 func set_mouse_captured(v: bool) -> void:
@@ -86,30 +82,22 @@ func _physics_process(dt: float) -> void:
 	if not Planet.ready_state or not input_enabled:
 		return
 	var up := up_dir()
-	TerrainContactSampler.request_height(up)
+	TerrainContactSampler.request_surface(up)
 	var basis_local := _local_basis(up)
 	var fwd: Vector3 = basis_local[0]
 	var right: Vector3 = basis_local[1]
-
 	var wish := Vector3.ZERO
-	if Input.is_action_pressed("move_forward"):
-		wish += fwd
-	if Input.is_action_pressed("move_back"):
-		wish -= fwd
-	if Input.is_action_pressed("move_right"):
-		wish += right
-	if Input.is_action_pressed("move_left"):
-		wish -= right
+	if Input.is_action_pressed("move_forward"): wish += fwd
+	if Input.is_action_pressed("move_back"): wish -= fwd
+	if Input.is_action_pressed("move_right"): wish += right
+	if Input.is_action_pressed("move_left"): wish -= right
 
 	if mode == Mode.FLY:
 		var alt := maxf(height_above_ground(), 1.0)
 		var speed := clampf(alt * 0.55, 8.0, 90000.0)
-		if Input.is_action_pressed("sprint"):
-			speed *= 6.0
-		if Input.is_action_pressed("move_up"):
-			wish += up
-		if Input.is_action_pressed("move_down"):
-			wish -= up
+		if Input.is_action_pressed("sprint"): speed *= 6.0
+		if Input.is_action_pressed("move_up"): wish += up
+		if Input.is_action_pressed("move_down"): wish -= up
 		if wish.length() > 0.001:
 			wish = wish.normalized()
 			world_pos = world_pos.add(Vec3D.from_v3(wish).mul(speed * dt))
@@ -164,8 +152,6 @@ func _sync_transform() -> void:
 		cam_right = flat_right
 	var true_up := cam_right.cross(look).normalized()
 	camera.transform.basis = Basis(cam_right, true_up, -look)
-	# True tangent distance from the observer to the sea-level sphere. This remains
-	# correct at high altitude and replaces arbitrary altitude multipliers.
 	var r_obs := Planet.cfg.planet_radius + maxf(altitude(), 0.0)
 	var horizon_dist := sqrt(maxf(r_obs * r_obs - Planet.cfg.planet_radius * Planet.cfg.planet_radius, 0.0))
 	camera.far = clampf(horizon_dist + 20000.0, 50000.0, 8.0e6)
@@ -175,8 +161,10 @@ func view_dir() -> Vector3:
 	return -camera.global_transform.basis.z
 
 
-## Coarse CPU raymarch for editing/aiming. This deliberately uses Planet's
-## resident macro fallback and no procedural TerrainDetail.
+## GPU-backed asynchronous terrain raymarch. Every gap sample requests the same
+## authoritative terrain field used for contact. While a sample is pending the
+## resident coarse height is used as a conservative fallback; subsequent frames
+## converge to the precise procedural/edit surface from the batched query cache.
 func aim(max_range: float = 220.0) -> Dictionary:
 	var origin := world_pos
 	var ray := view_dir()
@@ -187,7 +175,7 @@ func aim(max_range: float = 220.0) -> Dictionary:
 		step = minf(step * 1.08, 4.0)
 		var gap := _gap_at(origin, ray, t)
 		if gap <= 0.0:
-			var lo := t - step
+			var lo := maxf(t - step, 0.0)
 			var hi := t
 			for _i in 18:
 				var mid := (lo + hi) * 0.5
@@ -197,21 +185,22 @@ func aim(max_range: float = 220.0) -> Dictionary:
 					lo = mid
 			var p := origin.add(Vec3D.from_v3(ray).mul(hi))
 			var d := p.normalized().to_v3()
-			return {"world": p, "dir": d, "distance": hi,
-				"height": Planet.terrain_height(d)}
+			var h := TerrainContactSampler.height(d)
+			var surface_p := Vec3D.from_v3(d).mul(Planet.cfg.planet_radius + h)
+			return {"world": surface_p, "dir": d, "distance": hi, "height": h}
 	return {}
 
 
 func _gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
 	var p := origin.add(Vec3D.from_v3(ray).mul(t))
 	var d := p.normalized().to_v3()
-	return p.length() - (Planet.cfg.planet_radius + Planet.terrain_height(d))
+	var h := TerrainContactSampler.height(d)
+	return p.length() - (Planet.cfg.planet_radius + h)
 
 
 func state() -> Dictionary:
 	return {"x": world_pos.x, "y": world_pos.y, "z": world_pos.z,
 		"yaw": yaw, "pitch": pitch, "mode": int(mode)}
-
 
 func restore(s: Dictionary) -> void:
 	world_pos = Vec3D.new(s["x"], s["y"], s["z"])
@@ -220,5 +209,5 @@ func restore(s: Dictionary) -> void:
 	mode = int(s.get("mode", Mode.FLY)) as Mode
 	Frames.rebase(world_pos)
 	_sync_transform()
-	TerrainContactSampler.request_height(up_dir())
+	TerrainContactSampler.request_surface(up_dir())
 	moved.emit(world_pos)
