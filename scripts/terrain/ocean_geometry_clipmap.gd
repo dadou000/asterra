@@ -358,24 +358,31 @@ func _capture_stable_anchor(surface_world: Vec3D) -> void:
 	_stable_anchor_world = surface_world.dup()
 
 
+## Every logical ocean-grid coordinate is stored explicitly in UV. The old sparse
+## sector meshes relied on VERTEX_ID surviving index-buffer compaction unchanged;
+## that assumption is not guaranteed by the rendering backend and produced the
+## radial fan/strip corruption visible when several ocean sectors were active.
 static func _build_center_mesh() -> ArrayMesh:
-	var vertices := PackedVector3Array()
-	vertices.resize(GRID_VERTS * GRID_VERTS)
+	var vertices: Array[Vector3] = []
+	var uvs: Array[Vector2] = []
 	var indices := PackedInt32Array()
+	var remap: Dictionary = {}
 	var outer_sq := float(HALF_CELLS * HALF_CELLS)
 	for y in GRID_CELLS:
 		var cy := float(y) + 0.5 - float(HALF_CELLS)
 		for x in GRID_CELLS:
 			var cx := float(x) + 0.5 - float(HALF_CELLS)
-			if cx * cx + cy * cy <= outer_sq:
-				_append_cell(indices, x, y)
-	return _mesh_from_indices(vertices, indices)
+			if cx * cx + cy * cy > outer_sq:
+				continue
+			_append_compact_cell(remap, vertices, uvs, indices, x, y)
+	return _mesh_from_compact(vertices, uvs, indices)
 
 
 static func _build_sector_mesh(sector_index: int) -> ArrayMesh:
-	var vertices := PackedVector3Array()
-	vertices.resize(GRID_VERTS * GRID_VERTS)
+	var vertices: Array[Vector3] = []
+	var uvs: Array[Vector2] = []
 	var indices := PackedInt32Array()
+	var remap: Dictionary = {}
 	var outer_sq := float(HALF_CELLS * HALF_CELLS)
 	var inner_sq := float(RING_INNER_HALF_CELLS * RING_INNER_HALF_CELLS)
 	for y in GRID_CELLS:
@@ -389,25 +396,44 @@ static func _build_sector_mesh(sector_index: int) -> ArrayMesh:
 			if angle < 0.0:
 				angle += TAU
 			var owner := clampi(int(floor(angle / TAU * float(SECTOR_COUNT))), 0, SECTOR_COUNT - 1)
-			if owner == sector_index:
-				_append_cell(indices, x, y)
-	return _mesh_from_indices(vertices, indices)
+			if owner != sector_index:
+				continue
+			_append_compact_cell(remap, vertices, uvs, indices, x, y)
+	return _mesh_from_compact(vertices, uvs, indices)
 
 
-static func _append_cell(indices: PackedInt32Array, x: int, y: int) -> void:
-	var i00 := y * GRID_VERTS + x
-	var i10 := i00 + 1
-	var i01 := (y + 1) * GRID_VERTS + x
-	var i11 := i01 + 1
+static func _append_compact_cell(remap: Dictionary, vertices: Array[Vector3],
+		uvs: Array[Vector2], indices: PackedInt32Array, x: int, y: int) -> void:
+	var i00 := _compact_vertex(remap, vertices, uvs, x, y)
+	var i10 := _compact_vertex(remap, vertices, uvs, x + 1, y)
+	var i01 := _compact_vertex(remap, vertices, uvs, x, y + 1)
+	var i11 := _compact_vertex(remap, vertices, uvs, x + 1, y + 1)
 	indices.append_array([i00, i10, i11, i00, i11, i01])
 
 
-static func _mesh_from_indices(vertices: PackedVector3Array, indices: PackedInt32Array) -> ArrayMesh:
+static func _compact_vertex(remap: Dictionary, vertices: Array[Vector3],
+		uvs: Array[Vector2], gx: int, gy: int) -> int:
+	var logical_index := gy * GRID_VERTS + gx
+	var existing: Variant = remap.get(logical_index, null)
+	if existing != null:
+		return int(existing)
+	var local_index := vertices.size()
+	remap[logical_index] = local_index
+	vertices.append(Vector3.ZERO)
+	uvs.append(Vector2(float(gx), float(gy)))
+	return local_index
+
+
+static func _mesh_from_compact(vertices: Array[Vector3], uvs: Array[Vector2],
+		indices: PackedInt32Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	if indices.is_empty():
+		return mesh
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
 	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
