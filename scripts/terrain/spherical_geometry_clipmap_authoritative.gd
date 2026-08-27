@@ -6,7 +6,7 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_occlusion.gd"
 ##    travelling and released only after an idle grace period. Sustained travel no
 ##    longer allocates/frees that cache at every handoff.
 ## 2. Live GPU terrain deformation gets its own deformation-centred 0.25 m geometry
-##    overlay. A crater therefore keeps the same mesh sampling when it leaves the
+##    surface. A crater therefore keeps the same mesh sampling when it leaves the
 ##    camera-centred micro patch instead of abruptly degrading to ~0.75 m L0.
 
 const STAGING_IDLE_RELEASE_S := 12.0
@@ -15,8 +15,13 @@ const STAGING_KEEP_MOTION_M := 0.25
 const DEFORM_OVERLAY_GRID_CELLS := 256
 const DEFORM_OVERLAY_GRID_VERTS := DEFORM_OVERLAY_GRID_CELLS + 1
 const DEFORM_OVERLAY_HALF_CELLS := DEFORM_OVERLAY_GRID_CELLS >> 1
-const DEFORM_OVERLAY_SPACING_M := 0.25
-const DEFORM_OVERLAY_BIAS_M := 0.006
+const DEFORM_OVERLAY_PHYSICAL_SPACING_M := 0.25
+# TerrainHeightQuery evaluates the physical L0 synthesis at 0.75 m. The overlay
+# keeps that same synthesis bandwidth but samples it every 0.25 m geometrically.
+const DEFORM_OVERLAY_SYNTHESIS_SPACING_M := 0.75
+const DEFORM_OVERLAY_UV_STEP := DEFORM_OVERLAY_PHYSICAL_SPACING_M \
+	/ DEFORM_OVERLAY_SYNTHESIS_SPACING_M
+const DEFORM_OVERLAY_BIAS_M := 0.003
 const DEFORM_OVERLAY_DRAW_DISTANCE_M := 650.0
 
 var _staging_idle_s := 0.0
@@ -25,15 +30,19 @@ var _staging_reuses := 0
 var _staging_idle_releases := 0
 
 var _deformation_overlay: MultiMeshInstance3D
+var _deformation_overlay_material: ShaderMaterial
 var _deformation_overlay_visible := false
 var _deformation_overlay_distance_m := INF
+var _deformation_overlay_bound_active_texture: Texture2D
+var _deformation_overlay_bound_edit_texture: Texture2D
+var _deformation_overlay_bound_edit_generation := -1
 
 
 func _ready() -> void:
 	super._ready()
-	# Preserve the original low steady-state VRAM behavior at startup. Once travel
-	# actually needs a spare cache, retain that spare until motion has been quiet for
-	# long enough that releasing it cannot cause allocation churn.
+	# Preserve low steady-state VRAM at startup. Once travel actually needs a spare
+	# cache, retain that spare until motion has been quiet for long enough that
+	# releasing it cannot cause allocation churn.
 	_release_staging_cache()
 	_build_deformation_overlay()
 	_sync_deformation_overlay()
@@ -109,20 +118,37 @@ func _build_deformation_overlay() -> void:
 		Vector3(GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0))
 	_deformation_overlay = _make_batch(
 		"ActiveTerrainDeformationSurface", _build_deformation_overlay_mesh(), 1, bounds)
-	# x = logical terrain LOD, y = deformation-overlay flag, z = ring flag,
-	# w = micro-like surface (avoids the base L0 overlap sink).
-	_deformation_overlay.multimesh.set_instance_custom_data(0, Color(0.0, 1.0, 0.0, 1.0))
+	# It uses the micro-surface branch so the coarse L0 overlap sink is never applied.
+	_deformation_overlay.multimesh.set_instance_custom_data(0, Color(0.0, 0.0, 0.0, 1.0))
 	_deformation_overlay.visible = false
 	_deformation_overlay.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(_deformation_overlay)
-	if _material != null:
-		_material.set_shader_parameter("u_deformation_overlay_spacing_m", DEFORM_OVERLAY_SPACING_M)
-		_material.set_shader_parameter("u_deformation_overlay_bias_m", DEFORM_OVERLAY_BIAS_M)
+
+
+func _ensure_deformation_overlay_material() -> bool:
+	if _deformation_overlay_material != null:
+		return true
+	if _material == null:
+		return false
+	var copy_value: Resource = _material.duplicate(true)
+	if not (copy_value is ShaderMaterial):
+		return false
+	_deformation_overlay_material = copy_value as ShaderMaterial
+	_deformation_overlay.material_override = _deformation_overlay_material
+	# This surface is centred directly on the physical deformation tile. Disabling
+	# stable anchor displacement makes the existing shader use u_center_* directly,
+	# which removes camera-centred clipmap snapping from the crater geometry.
+	_deformation_overlay_material.set_shader_parameter("u_stable_displacement", 0.0)
+	_deformation_overlay_material.set_shader_parameter(
+		"u_base_spacing", DEFORM_OVERLAY_SYNTHESIS_SPACING_M)
+	_deformation_overlay_material.set_shader_parameter("u_lattice_center_plane", Vector2.ZERO)
+	_deformation_overlay_material.set_shader_parameter("u_terrain_cache_ready", 0.0)
+	return true
 
 
 func _sync_deformation_overlay() -> void:
 	if _deformation_overlay == null or _material == null or Planet.cfg == null \
-			or not Planet.ready_state or not _have_anchor:
+			or not Planet.ready_state:
 		_set_deformation_overlay_visible(false)
 		return
 	var deformation: Node = get_node_or_null("/root/TerrainDeformationGPU")
@@ -131,12 +157,20 @@ func _sync_deformation_overlay() -> void:
 			or not bool(deformation.get("_has_active_content")):
 		_set_deformation_overlay_visible(false)
 		return
+	if not _ensure_deformation_overlay_material():
+		_set_deformation_overlay_visible(false)
+		return
 
 	var center_value: Variant = deformation.get("center_dir")
-	if not (center_value is Vector3):
+	var right_value: Variant = deformation.get("center_right")
+	var up_value: Variant = deformation.get("center_up")
+	if not (center_value is Vector3) or not (right_value is Vector3) \
+			or not (up_value is Vector3):
 		_set_deformation_overlay_visible(false)
 		return
 	var deform_dir: Vector3 = (center_value as Vector3).normalized()
+	var deform_right: Vector3 = (right_value as Vector3).normalized()
+	var deform_up: Vector3 = (up_value as Vector3).normalized()
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null:
 		_set_deformation_overlay_visible(false)
@@ -153,17 +187,76 @@ func _sync_deformation_overlay() -> void:
 		_set_deformation_overlay_visible(false)
 		return
 
-	var denom: float = deform_dir.dot(_anchor_dir)
-	if denom <= 0.01:
+	var active_params_value: Variant = deformation.call("sample_params")
+	if not (active_params_value is Dictionary):
 		_set_deformation_overlay_visible(false)
 		return
-	var scale_m: float = Planet.cfg.planet_radius / denom
-	var center_plane := Vector2(
-		deform_dir.dot(_anchor_right) * scale_m,
-		deform_dir.dot(_anchor_up) * scale_m)
-	_material.set_shader_parameter("u_deformation_overlay_center_plane", center_plane)
-	_material.set_shader_parameter("u_deformation_overlay_spacing_m", DEFORM_OVERLAY_SPACING_M)
-	_material.set_shader_parameter("u_deformation_overlay_bias_m", DEFORM_OVERLAY_BIAS_M)
+	var active_params: Dictionary = active_params_value
+	var active_texture_value: Variant = active_params.get("texture", null)
+	if not (active_texture_value is Texture2D):
+		_set_deformation_overlay_visible(false)
+		return
+	var active_texture: Texture2D = active_texture_value as Texture2D
+	if active_texture != _deformation_overlay_bound_active_texture:
+		_deformation_overlay_material.set_shader_parameter("u_active_deform", active_texture)
+		_deformation_overlay_bound_active_texture = active_texture
+	_deformation_overlay_material.set_shader_parameter("u_active_deform_ready", 1.0)
+	_deformation_overlay_material.set_shader_parameter("u_active_deform_center_dir", deform_dir)
+	_deformation_overlay_material.set_shader_parameter("u_active_deform_center_right", deform_right)
+	_deformation_overlay_material.set_shader_parameter("u_active_deform_center_up", deform_up)
+	_deformation_overlay_material.set_shader_parameter("u_active_deform_half_extent_m",
+		float(active_params.get("half_extent_m", 32.0)))
+
+	var edits: Node = get_node_or_null("/root/TerrainEditDeltaGPU")
+	if edits != null and edits.has_method("sample_params"):
+		var edit_params_value: Variant = edits.call("sample_params")
+		if edit_params_value is Dictionary:
+			var edit_params: Dictionary = edit_params_value
+			var edit_texture_value: Variant = edit_params.get("texture", null)
+			var edit_generation: int = int(edit_params.get("generation", -1))
+			if edit_texture_value is Texture2D:
+				var edit_texture: Texture2D = edit_texture_value as Texture2D
+				if edit_texture != _deformation_overlay_bound_edit_texture \
+						or edit_generation != _deformation_overlay_bound_edit_generation:
+					_deformation_overlay_material.set_shader_parameter("u_edit_delta", edit_texture)
+					_deformation_overlay_bound_edit_texture = edit_texture
+					_deformation_overlay_bound_edit_generation = edit_generation
+			_deformation_overlay_material.set_shader_parameter("u_edit_ready",
+				1.0 if bool(edit_params.get("ready", false)) else 0.0)
+			_deformation_overlay_material.set_shader_parameter("u_edit_center_dir",
+				edit_params.get("center_dir", Vector3.RIGHT))
+			_deformation_overlay_material.set_shader_parameter("u_edit_center_right",
+				edit_params.get("center_right", Vector3.BACK))
+			_deformation_overlay_material.set_shader_parameter("u_edit_center_up",
+				edit_params.get("center_up", Vector3.UP))
+			_deformation_overlay_material.set_shader_parameter("u_edit_half_extent_m",
+				float(edit_params.get("half_extent_m", 256.0)))
+
+	# Copy only the render-state values that legitimately change after the material
+	# was duplicated. Static textures/context/PBR resources remain shared references.
+	_deformation_overlay_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+	_deformation_overlay_material.set_shader_parameter("u_origin", Vector3(
+		float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z)))
+	_deformation_overlay_material.set_shader_parameter("u_center_dir", deform_dir)
+	_deformation_overlay_material.set_shader_parameter("u_center_right", deform_right)
+	_deformation_overlay_material.set_shader_parameter("u_center_up", deform_up)
+	_deformation_overlay_material.set_shader_parameter("u_stable_displacement", 0.0)
+	_deformation_overlay_material.set_shader_parameter(
+		"u_base_spacing", DEFORM_OVERLAY_SYNTHESIS_SPACING_M)
+	_deformation_overlay_material.set_shader_parameter("u_terrain_cache_ready", 0.0)
+	var main_bias_value: Variant = _material.get_shader_parameter("u_surface_bias")
+	var main_bias: float = float(main_bias_value) if main_bias_value is float else 0.035
+	_deformation_overlay_material.set_shader_parameter(
+		"u_surface_bias", main_bias + DEFORM_OVERLAY_BIAS_M)
+	for parameter_name: String in [
+		"u_height_enabled", "u_detail_seed", "u_detail_strength",
+		"u_debug_side_cut", "u_debug_geomorph_mode", "u_detail_origin",
+		"u_microrelief_enabled", "u_microrelief_strength",
+		"u_terrain_atmosphere_height", "u_terrain_aerial_strength",
+		"u_pbr_enabled", "u_cloud_shadow_sun_dir"]:
+		var parameter_value: Variant = _material.get_shader_parameter(parameter_name)
+		if parameter_value != null:
+			_deformation_overlay_material.set_shader_parameter(parameter_name, parameter_value)
 	_set_deformation_overlay_visible(true)
 
 
@@ -229,14 +322,14 @@ static func _deformation_overlay_vertex(remap: Dictionary, vertices: Array[Vecto
 	remap[logical_index] = local_index
 	vertices.append(Vector3.ZERO)
 	uvs.append(Vector2(
-		terrain_grid_center + float(gx - DEFORM_OVERLAY_HALF_CELLS),
-		terrain_grid_center + float(gy - DEFORM_OVERLAY_HALF_CELLS)))
+		terrain_grid_center + float(gx - DEFORM_OVERLAY_HALF_CELLS) * DEFORM_OVERLAY_UV_STEP,
+		terrain_grid_center + float(gy - DEFORM_OVERLAY_HALF_CELLS) * DEFORM_OVERLAY_UV_STEP))
 	return local_index
 
 
 ## Snapshot of the exact geometry inputs currently used by the production clipmap.
-## RenderedTerrainContactQuery is retained as a diagnostic path; rigid contact now
-## uses the stable world-space contact query instead of camera-dependent LOD state.
+## RenderedTerrainContactQuery is retained as a diagnostic path; rigid contact uses
+## the stable world-space contact query instead of camera-dependent LOD state.
 func rendered_contact_sample_params() -> Dictionary:
 	if Planet.cfg == null or _terrain_cache_active == null \
 			or not is_instance_valid(_terrain_cache_active):
@@ -280,8 +373,8 @@ func gpu_stream_stats() -> Dictionary:
 	out["terrain_cache_staging_idle_releases"] = _staging_idle_releases
 	out["deformation_overlay"] = _deformation_overlay != null
 	out["deformation_overlay_visible"] = _deformation_overlay_visible
-	out["deformation_overlay_spacing_m"] = DEFORM_OVERLAY_SPACING_M
-	out["deformation_overlay_radius_m"] = DEFORM_OVERLAY_SPACING_M \
+	out["deformation_overlay_spacing_m"] = DEFORM_OVERLAY_PHYSICAL_SPACING_M
+	out["deformation_overlay_radius_m"] = DEFORM_OVERLAY_PHYSICAL_SPACING_M \
 		* float(DEFORM_OVERLAY_HALF_CELLS)
 	out["deformation_overlay_distance_m"] = _deformation_overlay_distance_m
 	return out
