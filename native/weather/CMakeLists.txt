@@ -41,6 +41,10 @@ add_executable(asterra_weather_voronoi_shallow_water_tests tests/test_voronoi_sh
 target_link_libraries(asterra_weather_voronoi_shallow_water_tests PRIVATE asterra_weather_core)
 add_test(NAME voronoi_shallow_water COMMAND asterra_weather_voronoi_shallow_water_tests)
 
+add_executable(asterra_weather_rossby_haurwitz_tests tests/test_rossby_haurwitz.cpp)
+target_link_libraries(asterra_weather_rossby_haurwitz_tests PRIVATE asterra_weather_core)
+add_test(NAME rossby_haurwitz COMMAND asterra_weather_rossby_haurwitz_tests)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
@@ -49,6 +53,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_geodesic_tests
     asterra_weather_trisk_weight_tests
     asterra_weather_voronoi_shallow_water_tests
+    asterra_weather_rossby_haurwitz_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -95,6 +100,7 @@ if(MSVC)
   target_compile_options(asterra_weather_geodesic_tests PRIVATE /O2)
   target_compile_options(asterra_weather_trisk_weight_tests PRIVATE /O2)
   target_compile_options(asterra_weather_voronoi_shallow_water_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_rossby_haurwitz_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -104,6 +110,7 @@ else()
   target_compile_options(asterra_weather_geodesic_tests PRIVATE -O3)
   target_compile_options(asterra_weather_trisk_weight_tests PRIVATE -O3)
   target_compile_options(asterra_weather_voronoi_shallow_water_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_rossby_haurwitz_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
