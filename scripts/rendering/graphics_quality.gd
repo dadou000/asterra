@@ -3,7 +3,8 @@ extends RefCounted
 ## One production renderer with scalable feature tiers.
 ##
 ## Asterra stays on Forward+ for every desktop preset. Lower presets remove the
-## costly passes while keeping materials, lighting, and authored content shared.
+## costly passes while keeping materials, lighting, authored content, and the
+## physical meaning of the scene shared.
 
 enum Preset {
 	PERFORMANCE,
@@ -30,12 +31,6 @@ const SUN_LIGHT_ENERGY := 1.6
 ## PI. A Lambertian surface therefore returns albedo * energy * ndotl, which is
 ## albedo * (energy * PI) * ndotl / PI -- so the irradiance the surface sees is
 ## `light_energy * PI`, and the atmosphere has to be told that same number.
-##
-## It previously was not. The shaders defaulted to 22 against a sun of 1.6, so
-## every scattering term was more than four times too bright relative to the
-## ground it was scattering in front of. That does not read as a bright sky, it
-## reads as a pale wash over everything past a few kilometres, and no amount of
-## work on surface colour survives it.
 static func solar_irradiance() -> float:
 	return SUN_LIGHT_ENERGY * PI
 
@@ -59,13 +54,77 @@ static func preset_name(preset: int) -> String:
 static func preset_description(preset: int) -> String:
 	match sanitize(preset):
 		Preset.PERFORMANCE:
-			return "FSR2 Balanced, SSAO, and fast shadows. Global illumination and reflections are disabled."
+			return "FSR2 Balanced, SSAO, fast shadows, and reduced water geometry. Global illumination and reflections are disabled."
 		Preset.BALANCED:
-			return "FSR2 Quality with SSAO, screen-space indirect light, reflections, and two-split shadows."
+			return "FSR2 Quality with SSAO, screen-space indirect light, reflections, and medium water interaction range."
 		Preset.ULTRA:
-			return "Native-resolution FSR2, long-range SDFGI, SSIL, SSR, glow, and four-split soft shadows."
+			return "Native-resolution FSR2, long-range SDFGI, SSIL, SSR, maximum water spectrum detail, and four-split soft shadows."
 		_:
-			return "Recommended: FSR2 Ultra Quality, SDFGI, SSIL, SSR, and four-split soft shadows."
+			return "Recommended: FSR2 Ultra Quality, SDFGI, SSIL, SSR, and high-detail reactive water."
+
+
+## Visual water profile. This never changes authoritative buoyancy or gameplay
+## hydrodynamics. A low preset is allowed to change *representation* only:
+## wavelengths that are too expensive to displace geometrically are converted
+## into normal/slope variance so distant water does not turn into a mirror.
+##
+## The interaction values bound the analytical disturbance history consumed by
+## the visual shader. Future hull/propeller systems can submit exactly the same
+## impulses on every preset; lower presets simply retain fewer of them visually.
+static func water_profile(preset: int) -> Dictionary:
+	match sanitize(preset):
+		Preset.PERFORMANCE:
+			return {
+				"displacement_band_count": 3,
+				"micro_normal_band_count": 1,
+				"displacement_spacing_scale": 1.45,
+				"bathymetry_level_limit": 4,
+				"foam_quality": 0.45,
+				"crest_scatter_strength": 0.35,
+				"interaction_budget": 8,
+				"interaction_lifetime_s": 12.0,
+				"interaction_range_m": 300.0,
+				"interaction_vertex_level": 2,
+			}
+		Preset.BALANCED:
+			return {
+				"displacement_band_count": 4,
+				"micro_normal_band_count": 2,
+				"displacement_spacing_scale": 1.15,
+				"bathymetry_level_limit": 6,
+				"foam_quality": 0.70,
+				"crest_scatter_strength": 0.55,
+				"interaction_budget": 16,
+				"interaction_lifetime_s": 24.0,
+				"interaction_range_m": 700.0,
+				"interaction_vertex_level": 3,
+			}
+		Preset.ULTRA:
+			return {
+				"displacement_band_count": 6,
+				"micro_normal_band_count": 6,
+				"displacement_spacing_scale": 0.82,
+				"bathymetry_level_limit": 8,
+				"foam_quality": 1.0,
+				"crest_scatter_strength": 1.0,
+				"interaction_budget": 64,
+				"interaction_lifetime_s": 90.0,
+				"interaction_range_m": 5000.0,
+				"interaction_vertex_level": 5,
+			}
+		_:
+			return {
+				"displacement_band_count": 5,
+				"micro_normal_band_count": 4,
+				"displacement_spacing_scale": 1.0,
+				"bathymetry_level_limit": 7,
+				"foam_quality": 0.90,
+				"crest_scatter_strength": 0.78,
+				"interaction_budget": 32,
+				"interaction_lifetime_s": 45.0,
+				"interaction_range_m": 2000.0,
+				"interaction_vertex_level": 4,
+			}
 
 
 static func configure_viewport(viewport: Viewport, preset: int) -> void:
