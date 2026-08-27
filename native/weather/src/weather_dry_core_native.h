@@ -6,6 +6,7 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_float64_array.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
 #include <cstdint>
@@ -41,6 +42,8 @@ private:
 
 	double initial_dry_mass_kg_ = 0.0;
 	double initial_theta_mass_kg_k_ = 0.0;
+	double initial_dry_energy_j_ = 0.0;
+	double initial_absolute_aam_kg_m2_s_ = 0.0;
 	double simulation_seconds_ = 0.0;
 	int64_t rejected_steps_total_ = 0;
 	int frequency_ = 0;
@@ -92,6 +95,15 @@ public:
 	//  max_coordinate_column_theta_error, max_coordinate_edge_momentum_error,
 	//  coordinate_remap_applied]
 	PackedFloat32Array get_runtime_diagnostics() const;
+
+	// Expensive, opt-in double-precision global budgets. This reconstructs cell
+	// winds across all 30 levels, so it is intended for debug/validation sampling
+	// rather than every render frame:
+	// [dry_mass_kg, theta_mass_kg_k, total_energy_j, relative_energy_drift,
+	//  relative_axial_aam_kg_m2_s, absolute_axial_aam_kg_m2_s,
+	//  relative_absolute_aam_drift, max_coordinate_fraction_error,
+	//  initial_energy_j, initial_absolute_aam_kg_m2_s]
+	PackedFloat64Array get_global_budget_diagnostics() const;
 
 	int get_frequency() const { return frequency_; }
 	int get_cell_count() const { return grid_ ? grid_->cell_count() : 0; }
