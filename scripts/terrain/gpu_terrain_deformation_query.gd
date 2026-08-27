@@ -71,7 +71,7 @@ func active_state(direction: Vector3) -> Vector2:
 
 
 func stats() -> Dictionary:
-	var age_s := INF
+	var age_s: float = INF
 	if _latest_result_time_s > 0.0:
 		age_s = maxf(Time.get_ticks_msec() * 0.001 - _latest_result_time_s, 0.0)
 	return {
@@ -224,7 +224,7 @@ func _accept_readback(data: PackedByteArray, token: int,
 		return
 	for query_index in count:
 		var offset: int = query_index * BYTES_PER_QUERY
-		var state := Vector4(
+		var state: Vector4 = Vector4(
 			data.decode_float(offset + 0), data.decode_float(offset + 4),
 			data.decode_float(offset + 8), data.decode_float(offset + 12))
 		var key: int = int(keys[query_index])
@@ -240,6 +240,7 @@ func _accept_readback(data: PackedByteArray, token: int,
 func _on_dispatch_failed(token: int) -> void:
 	if token == _dispatch_token:
 		_dispatch_in_flight = false
+	ready_state = false
 	failed = true
 	push_error("GPU terrain deformation point-query pass failed; full-texture fallback remains available.")
 
@@ -257,6 +258,7 @@ func _try_initialize() -> void:
 		return
 	var spirv: RDShaderSPIRV = (resource as RDShaderFile).get_spirv()
 	if spirv == null or not spirv.compile_error_compute.is_empty() or spirv.bytecode_compute.is_empty():
+		ready_state = false
 		failed = true
 		push_error("GPU terrain deformation sample shader is invalid.")
 		return
@@ -312,11 +314,11 @@ func _render_initialize(spirv: RDShaderSPIRV, texture_rids: Array[RID]) -> void:
 			param_uniform.binding = 3
 			param_uniform.add_id(param_buffer)
 			uniforms.append(param_uniform)
-			var set: RID = rd.uniform_set_create(uniforms, shader, 0)
-			if not set.is_valid():
+			var uniform_set: RID = rd.uniform_set_create(uniforms, shader, 0)
+			if not uniform_set.is_valid():
 				ok = false
 				break
-			sets.append(set)
+			sets.append(uniform_set)
 	call_deferred("_on_initialized", ok, shader, pipeline, query_buffer,
 		result_buffer, param_buffer, sets)
 
@@ -324,6 +326,7 @@ func _render_initialize(spirv: RDShaderSPIRV, texture_rids: Array[RID]) -> void:
 func _on_initialized(success: bool, shader: RID, pipeline: RID,
 		query_buffer: RID, result_buffer: RID, param_buffer: RID, sets: Array) -> void:
 	if not success:
+		ready_state = false
 		failed = true
 		push_error("GPU terrain deformation point-query initialization failed.")
 		return
@@ -334,6 +337,7 @@ func _on_initialized(success: bool, shader: RID, pipeline: RID,
 	_rd_param_buffer = param_buffer
 	_uniform_sets.assign(sets)
 	if _uniform_sets.size() != 2:
+		ready_state = false
 		failed = true
 		return
 	_last_window_generation = TerrainDeformationGPU.window_generation()
