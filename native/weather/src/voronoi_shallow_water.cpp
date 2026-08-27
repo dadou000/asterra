@@ -131,14 +131,12 @@ std::vector<double> VoronoiShallowWater::reconstruct_vertex_relative_vorticity(c
 		const auto &vertex = grid_->vertex(v);
 		long double circulation = 0.0L;
 		for (int q = 0; q < 3; ++q) {
-			const int from = vertex.cells[q];
-			const int to = vertex.cells[(q + 1) % 3];
 			const int e = vertex.edges[q];
 			const auto &edge = grid_->edge(e);
 			double sign = 0.0;
-			if (edge.cell_a == from && edge.cell_b == to) sign = 1.0;
-			else if (edge.cell_b == from && edge.cell_a == to) sign = -1.0;
-			else throw std::runtime_error("Dual triangle edge/cell orientation mismatch");
+			if (edge.vertex_b == v) sign = 1.0;
+			else if (edge.vertex_a == v) sign = -1.0;
+			else throw std::runtime_error("Dual vertex is not an endpoint of its incident edge");
 			circulation += static_cast<long double>(sign)
 				* static_cast<long double>(edge.center_distance_m)
 				* static_cast<long double>(state.edge_normal_mps[static_cast<size_t>(e)]);
@@ -154,11 +152,15 @@ std::vector<double> VoronoiShallowWater::reconstruct_vertex_potential_vorticity(
 	std::vector<double> q(static_cast<size_t>(grid_->vertex_count()), 0.0);
 	for (int v = 0; v < grid_->vertex_count(); ++v) {
 		const auto &vertex = grid_->vertex(v);
-		const double h_vertex = (state.depth_m[static_cast<size_t>(vertex.cells[0])]
-			+ state.depth_m[static_cast<size_t>(vertex.cells[1])]
-			+ state.depth_m[static_cast<size_t>(vertex.cells[2])]) / 3.0;
+		long double weighted_h = 0.0L;
+		for (int k = 0; k < 3; ++k) {
+			weighted_h += static_cast<long double>(vertex.kite_area_m2[k])
+				* static_cast<long double>(state.depth_m[static_cast<size_t>(vertex.cells[k])]);
+		}
+		const double h_vertex = static_cast<double>(
+			weighted_h / static_cast<long double>(vertex.dual_area_m2));
 		if (!(h_vertex > 0.0) || !std::isfinite(h_vertex)) {
-			throw std::runtime_error("Invalid dual-vertex layer thickness");
+			throw std::runtime_error("Invalid kite-weighted dual-vertex layer thickness");
 		}
 		const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, vertex.center);
 		q[static_cast<size_t>(v)] = (zeta[static_cast<size_t>(v)] + f) / h_vertex;
@@ -293,43 +295,24 @@ VoronoiShallowWater::Tendencies VoronoiShallowWater::compute_tendencies(const St
 			- t.bernoulli[static_cast<size_t>(edge.cell_a)]) / edge.center_distance_m;
 	}
 
-	// Metric-skew PV flux. Start from the two-cell least-squares tangential-flux
-	// reconstruction and antisymmetrize it in the edge kinetic-energy metric
-	// m_e=l_e*d_e. For every pair (e,s), S_es=-S_se exactly. Multiplying by the
-	// symmetric 0.5*(q_e+q_s) keeps the rotational term work-free:
-	// sum_e m_e F_e Q_e = 0 to roundoff.
+	// TRiSK PV flux. weightsOnEdge reconstructs the positive tangential
+	// component k x F at the target edge. The momentum equation contains
+	// -q(h u^perp). Symmetric pairwise q averaging preserves the metric-
+	// skew work cancellation of the Thuburn/Ringler edge operator.
 	for (int e = 0; e < grid_->edge_count(); ++e) {
 		const auto &target = grid_->edge(e);
-		const double m_e = target.edge_area_m2;
-		const Vec3d t_e = edge_left_tangent(target);
-		double rotational = 0.0;
-		const int adjacent_cells[2] = {target.cell_a, target.cell_b};
-		for (int side = 0; side < 2; ++side) {
-			const int c = adjacent_cells[side];
-			const auto &cell = grid_->cell(c);
-			const auto &rec = reconstruction_[static_cast<size_t>(c)];
-			int target_slot = -1;
-			for (size_t k = 0; k < cell.edges.size(); ++k) {
-				if (cell.edges[k] == e) { target_slot = static_cast<int>(k); break; }
-			}
-			if (target_slot < 0) throw std::runtime_error("Target edge missing from adjacent cell");
-			const Vec3d coeff_target = rec.coefficient[static_cast<size_t>(target_slot)];
-			for (size_t k = 0; k < cell.edges.size(); ++k) {
-				const int s = cell.edges[k];
-				if (s == e) continue;
-				const auto &source = grid_->edge(s);
-				const Vec3d t_s = edge_left_tangent(source);
-				const double raw_e_s = 0.5 * dot(
-					project_tangent(rec.coefficient[k], target.midpoint), t_e);
-				const double raw_s_e = 0.5 * dot(
-					project_tangent(coeff_target, source.midpoint), t_s);
-				const double skew = 0.5 * (m_e * raw_e_s - source.edge_area_m2 * raw_s_e);
-				const double q_pair = 0.5 * (t.q_edge[static_cast<size_t>(e)]
-					+ t.q_edge[static_cast<size_t>(s)]);
-				rotational += (skew / m_e) * q_pair * t.mass_flux[static_cast<size_t>(s)];
-			}
+		if (target.reconstruction_edges.size() != target.reconstruction_weights.size()) {
+			throw std::runtime_error("TRiSK edgesOnEdge/weightsOnEdge size mismatch");
 		}
-		t.edge_velocity_dt[static_cast<size_t>(e)] += rotational;
+		double q_flux_perp = 0.0;
+		for (size_t k = 0; k < target.reconstruction_edges.size(); ++k) {
+			const int source = target.reconstruction_edges[k];
+			const double q_pair = 0.5 * (t.q_edge[static_cast<size_t>(e)]
+				+ t.q_edge[static_cast<size_t>(source)]);
+			q_flux_perp += target.reconstruction_weights[k]
+				* q_pair * t.mass_flux[static_cast<size_t>(source)];
+		}
+		t.edge_velocity_dt[static_cast<size_t>(e)] -= q_flux_perp;
 	}
 
 	return t;
