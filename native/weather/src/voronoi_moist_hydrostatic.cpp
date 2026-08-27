@@ -20,24 +20,49 @@ VoronoiMoistHydrostatic::VoronoiMoistHydrostatic(
 }
 
 void VoronoiMoistHydrostatic::validate_water_shape(const State &state) const {
-	// Dry diagnosis performs the authoritative conservative-state shape,
-	// positivity and finite-value validation, including every existing tracer.
-	(void)transport_->diagnose_hydrostatic(state);
+	const size_t scalar_count = static_cast<size_t>(LEVELS)
+		* static_cast<size_t>(transport_->grid().cell_count());
+	const size_t edge_count = static_cast<size_t>(LEVELS)
+		* static_cast<size_t>(transport_->grid().edge_count());
+	if (state.layer_mass_kg_m2.size() != scalar_count
+			|| state.theta_mass_kg_k_m2.size() != scalar_count
+			|| state.edge_normal_mps.size() != edge_count) {
+		throw std::invalid_argument("Moist hydrostatic conservative-state arrays have wrong size");
+	}
+	for (size_t i = 0; i < scalar_count; ++i) {
+		if (!(state.layer_mass_kg_m2[i] > 0.0)
+				|| !(state.theta_mass_kg_k_m2[i] > 0.0)
+				|| !std::isfinite(state.layer_mass_kg_m2[i])
+				|| !std::isfinite(state.theta_mass_kg_k_m2[i])) {
+			throw std::runtime_error("Moist hydrostatic diagnosis received invalid dry state");
+		}
+	}
+	for (double u : state.edge_normal_mps) {
+		if (!std::isfinite(u)) {
+			throw std::runtime_error("Moist hydrostatic diagnosis received non-finite wind");
+		}
+	}
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		if (tracer.size() != scalar_count) {
+			throw std::invalid_argument("Moist hydrostatic tracer field has wrong size");
+		}
+		for (double mass : tracer) {
+			if (!(mass >= 0.0) || !std::isfinite(mass)) {
+				throw std::runtime_error("Moist hydrostatic diagnosis received invalid tracer mass");
+			}
+	}
+	}
+
 	const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
 	if (highest < 0 || static_cast<int>(state.tracer_mass_kg_m2.size()) <= highest) {
 		throw std::invalid_argument("Moist hydrostatic diagnosis requires configured water tracer slots");
-	}
-	const size_t expected = state.layer_mass_kg_m2.size();
-	for (int tracer : {indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice}) {
-		if (state.tracer_mass_kg_m2[static_cast<size_t>(tracer)].size() != expected) {
-			throw std::invalid_argument("Moist hydrostatic water tracer field has wrong size");
-		}
 	}
 }
 
 VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 		const State &state) const {
 	validate_water_shape(state);
+	const auto dry = transport_->diagnose_hydrostatic(state);
 	const int cells = transport_->grid().cell_count();
 	const size_t scalar_count = static_cast<size_t>(LEVELS) * static_cast<size_t>(cells);
 
@@ -84,15 +109,18 @@ VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 		for (int k = 0; k < LEVELS; ++k) {
 			const size_t i = static_cast<size_t>(scalar_index(k, c));
 			const double dry_mass = state.layer_mass_kg_m2[i];
-			const double theta = state.theta_mass_kg_k_m2[i] / dry_mass;
 			const double p_lower = d.interface_pressure_pa[
 				static_cast<size_t>(interface_index(k, c))];
 			const double p_upper = d.interface_pressure_pa[
 				static_cast<size_t>(interface_index(k + 1, c))];
 			const double p_center = std::sqrt(p_lower * p_upper);
-			const double temperature = theta * std::pow(
-				p_center / VoronoiDryHydrostatic::P0_PA,
-				VoronoiDryHydrostatic::KAPPA);
+
+			// Theta/temperature remain defined on the prognostic dry-mass coordinate.
+			// Adding or removing water therefore changes mechanical pressure and
+			// virtual density, but does not reinterpret the existing theta state as an
+			// instantaneous sensible-temperature source.
+			const double theta = dry.potential_temperature_k[i];
+			const double temperature = dry.temperature_k[i];
 			const double qv = vapor[i] / dry_mass;
 			const double ql = liquid[i] / dry_mass;
 			const double qi = ice[i] / dry_mass;
