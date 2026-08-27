@@ -4,6 +4,8 @@
 #include "spherical_latlon_sampler.h"
 #include "voronoi_dry_core.h"
 #include "voronoi_dry_hydrostatic.h"
+#include "voronoi_moist_energy.h"
+#include "voronoi_moist_reference.h"
 #include "voronoi_moist_thermodynamics.h"
 #include "voronoi_precipitation.h"
 #include "voronoi_surface_exchange.h"
@@ -55,7 +57,9 @@ private:
 
 	double initial_dry_mass_kg_ = 0.0;
 	double initial_theta_mass_kg_k_ = 0.0;
+	// Active dynamical energy baseline: dry in dry mode, moist total in moist mode.
 	double initial_dry_energy_j_ = 0.0;
+	// Active axial-AAM baseline: dry mass in dry mode, total suspended mass in moist mode.
 	double initial_absolute_aam_kg_m2_s_ = 0.0;
 	double initial_total_water_kg_ = 0.0;
 	double initial_surface_system_water_kg_ = 0.0;
@@ -129,10 +133,16 @@ public:
 	void reset_terrain_balanced_isothermal(
 		double reference_surface_pressure_pa = 110000.0,
 		double temperature_k = 288.0);
+	void reset_moist_terrain_balanced_isothermal(
+		double reference_surface_pressure_pa = 110000.0,
+		double temperature_k = 288.0,
+		double relative_humidity = 0.65);
 
 	// Moisture tracer slots 0..4 are vapor/cloud-liquid/cloud-ice/rain/snow.
-	// Uniform-RH initialization also creates a zero liquid+ice surface reservoir
-	// and enables staged moist pressure feedback plus precipitation sedimentation.
+	// When called on a fresh zero-wind isothermal dry reference, initialization
+	// rebuilds the state through the moist terrain-balanced solver so adding vapor
+	// does not inject a startup pressure imbalance. Arbitrary evolved states keep
+	// their dry mass/theta and receive only tracer initialization.
 	bool initialize_moisture(double relative_humidity = 0.65,
 		bool perform_saturation_adjustment = true);
 	void disable_moisture(bool clear_water = true);
@@ -177,6 +187,8 @@ public:
 	PackedFloat32Array get_global_moist_rgba(int layer = 0) const;
 
 	PackedFloat32Array get_runtime_diagnostics() const;
+	// Keeps the legacy 10-value layout; energy and AAM automatically select the
+	// dry or coherent total-moist diagnostic according to the active mode.
 	PackedFloat64Array get_global_budget_diagnostics() const;
 	PackedFloat64Array get_moisture_diagnostics() const;
 	PackedFloat64Array get_surface_exchange_diagnostics() const;
