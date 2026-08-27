@@ -88,8 +88,9 @@ int main() {
 			"moist pressure-gradient operator does not recover dry limit");
 
 		// Uniform vapor loading: total mechanical pressure must increase by exactly
-		// g times the atmospheric water column, Tv must exceed T, and a horizontally
-		// uniform moist state must remain free of pressure-gradient acceleration.
+		// g times the atmospheric water column. The prognostic dry-coordinate theta
+		// still diagnoses the same sensible temperature; moisture changes Tv and
+		// mechanical pressure rather than acting as an unaccounted heat source.
 		auto vapor_state = transport.make_isothermal_reference(PS, 288.0);
 		thermo.ensure_water_tracers(vapor_state);
 		constexpr double QV = 0.012;
@@ -111,6 +112,8 @@ int main() {
 				"moist surface pressure does not include exact vapor column weight");
 		}
 		for (size_t i = 0; i < vapor_diag.temperature_k.size(); ++i) {
+			require(vapor_diag.temperature_k[i] == vapor_dry_diag.temperature_k[i],
+				"water loading reinterpreted dry-coordinate theta as sensible heating");
 			require(vapor_diag.virtual_temperature_k[i] > vapor_diag.temperature_k[i],
 				"vapor loading failed to increase virtual temperature");
 			require(nearly_equal(vapor_diag.layer_total_mass_kg_m2[i],
@@ -153,8 +156,7 @@ int main() {
 		}
 
 		// A horizontal moisture loading gradient should now be visible to the
-		// diagnostic pressure force, demonstrating the missing feedback pathway
-		// without yet enabling it in production dynamics.
+		// diagnostic pressure force, demonstrating the feedback pathway.
 		auto gradient = transport.make_isothermal_reference(PS, 288.0);
 		thermo.ensure_water_tracers(gradient);
 		for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
