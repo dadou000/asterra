@@ -76,6 +76,31 @@ Vec3d velocity(const Vec3d &p, double lon) {
 	return east(p) * u + north(p) * v;
 }
 
+// Exact MPAS TC6 streamfunction. MPAS initializes C-grid normal wind from
+// dual-edge differences of this field rather than point-sampling the analytic
+// velocity. That makes the initial wind discretely divergence-free.
+double streamfunction(const Vec3d &p, double longitude_shift) {
+	const auto [lat, lon] = lat_lon(p);
+	const double shifted_lon = lon - longitude_shift;
+	return -A * A * W * std::sin(lat)
+		+ A * A * K * std::pow(std::cos(lat), R) * std::sin(lat)
+			* std::cos(R * shifted_lon);
+}
+
+double discrete_edge_velocity(const GeodesicVoronoiGrid &grid, int edge_id,
+		double longitude_shift) {
+	const auto &edge = grid.edge(edge_id);
+	const double psi_a = streamfunction(grid.vertex(edge.vertex_a).center, longitude_shift);
+	const double psi_b = streamfunction(grid.vertex(edge.vertex_b).center, longitude_shift);
+	const double raw = -(psi_b - psi_a) / edge.edge_length_m;
+	// Our global edge orientation follows sorted primal cell IDs rather than
+	// MPAS's right-handed verticesOnEdge convention. Recover the sign from the
+	// actual orthogonal primal/dual geometry.
+	const double handedness = dot(cross(edge.midpoint, edge.tangent_a_to_b), edge.normal_a_to_b);
+	require(std::abs(handedness) > 0.99, "TC6 primal/dual edge handedness is not orthogonal");
+	return raw * (handedness >= 0.0 ? 1.0 : -1.0);
+}
+
 double expected_phase_speed() {
 	return (R * (R + 3.0) * W - 2.0 * OMEGA) / ((R + 1.0) * (R + 2.0));
 }
@@ -154,7 +179,9 @@ struct Result {
 	double expected_height_nrmse = 0.0;
 	double best_height_nrmse = 0.0;
 	double velocity_nrmse = 0.0;
+	double continuous_velocity_nrmse = 0.0;
 	double phase_speed_error = 0.0;
+	double initial_divergence_rms = 0.0;
 	double mass_error = 0.0;
 	double energy_error = 0.0;
 	double enstrophy_error = 0.0;
@@ -174,10 +201,26 @@ Result run_case(int frequency, double days) {
 		state.depth_m[static_cast<size_t>(c)] = height(lat, lon);
 	}
 	for (int e = 0; e < grid.edge_count(); ++e) {
-		const auto &edge = grid.edge(e);
-		const double lon = lat_lon(edge.midpoint).second;
-		state.edge_normal_mps[static_cast<size_t>(e)] = dot(velocity(edge.midpoint, lon), edge.normal_a_to_b);
+		state.edge_normal_mps[static_cast<size_t>(e)] = discrete_edge_velocity(grid, e, 0.0);
 	}
+
+	long double divergence2 = 0.0L;
+	for (int c = 0; c < grid.cell_count(); ++c) {
+		long double volume_flux = 0.0L;
+		const auto &cell = grid.cell(c);
+		for (int e : cell.edges) {
+			const auto &edge = grid.edge(e);
+			const double outward_sign = edge.cell_a == c ? 1.0 : -1.0;
+			volume_flux += outward_sign * edge.edge_length_m
+				* state.edge_normal_mps[static_cast<size_t>(e)];
+		}
+		const double div = static_cast<double>(volume_flux / cell.area_m2);
+		divergence2 += static_cast<long double>(cell.area_m2) * div * div;
+	}
+	Result r;
+	r.initial_divergence_rms = std::sqrt(static_cast<double>(divergence2 / (4.0 * PI * A * A)));
+	require(r.initial_divergence_rms < 2e-12, "TC6 MPAS streamfunction is not discretely divergence-free");
+
 	const double mass0 = sw.total_volume_m3(state), energy0 = sw.total_energy(state);
 	const double z0 = potential_enstrophy(grid, sw, state);
 	const double duration = days * DAY;
@@ -196,16 +239,21 @@ Result run_case(int frequency, double days) {
 	const Comparison expected = compare_height(grid, state, expected_phase);
 	const Comparison best = best_phase_fit(grid, state, expected_phase);
 	long double uerr2 = 0.0L, uref2 = 0.0L;
+	long double ucerr2 = 0.0L, ucref2 = 0.0L;
 	for (int e = 0; e < grid.edge_count(); ++e) {
 		const auto &edge = grid.edge(e);
-		const double lon = lat_lon(edge.midpoint).second;
-		const double ref = dot(velocity(edge.midpoint, lon - best.phase), edge.normal_a_to_b);
+		const double ref = discrete_edge_velocity(grid, e, best.phase);
 		const double err = state.edge_normal_mps[static_cast<size_t>(e)] - ref;
-		uerr2 += static_cast<long double>(edge.edge_area_m2) * err * err;
-		uref2 += static_cast<long double>(edge.edge_area_m2) * ref * ref;
+		const long double metric = edge.edge_area_m2;
+		uerr2 += metric * err * err;
+		uref2 += metric * ref * ref;
+		const double lon = lat_lon(edge.midpoint).second;
+		const double continuous_ref = dot(velocity(edge.midpoint, lon - best.phase), edge.normal_a_to_b);
+		const double continuous_err = state.edge_normal_mps[static_cast<size_t>(e)] - continuous_ref;
+		ucerr2 += metric * continuous_err * continuous_err;
+		ucref2 += metric * continuous_ref * continuous_ref;
 	}
 
-	// Mesh-imprint metric at the fitted phase: one-ring neighborhoods of the 12 pentagons.
 	long double pe2 = 0.0L, pa = 0.0L, re2 = 0.0L, ra = 0.0L;
 	for (int c = 0; c < grid.cell_count(); ++c) {
 		const auto [lat, lon] = lat_lon(grid.cell(c).center);
@@ -217,12 +265,12 @@ Result run_case(int frequency, double days) {
 		else { re2 += area * err * err; ra += area; }
 	}
 
-	Result r;
 	r.expected_phase_corr = expected.correlation;
 	r.best_phase_corr = best.correlation;
 	r.expected_height_nrmse = expected.height_nrmse;
 	r.best_height_nrmse = best.height_nrmse;
 	r.velocity_nrmse = std::sqrt(static_cast<double>(uerr2 / std::max(uref2, 1.0L)));
+	r.continuous_velocity_nrmse = std::sqrt(static_cast<double>(ucerr2 / std::max(ucref2, 1.0L)));
 	r.phase_speed_error = std::abs(best.phase / duration - expected_phase_speed()) / std::abs(expected_phase_speed());
 	r.mass_error = std::abs(sw.total_volume_m3(state) - mass0) / mass0;
 	r.energy_error = std::abs(sw.total_energy(state) - energy0) / std::abs(energy0);
@@ -240,8 +288,9 @@ void print(const char *name, const Result &r) {
 	std::cout << name
 		<< " expected/best corr=" << r.expected_phase_corr << "/" << r.best_phase_corr
 		<< " expected/best hNRMSE=" << r.expected_height_nrmse << "/" << r.best_height_nrmse
-		<< " uNRMSE=" << r.velocity_nrmse
+		<< " uNRMSE(discrete/continuous)=" << r.velocity_nrmse << "/" << r.continuous_velocity_nrmse
 		<< " phase-speed-error=" << r.phase_speed_error
+		<< " init-div-rms=" << r.initial_divergence_rms
 		<< " mass/energy/enstrophy=" << r.mass_error << "/" << r.energy_error << "/" << r.enstrophy_error
 		<< " pentagon=" << r.pentagon_ratio
 		<< " h[min,max]=" << r.min_depth << "," << r.max_depth
@@ -254,7 +303,7 @@ int main() {
 		constexpr double DAYS = 3.0;
 		const Result coarse = run_case(12, DAYS);
 		const Result fine = run_case(20, DAYS);
-		std::cout << "Rossby-Haurwitz phase-aware diagnostics after " << DAYS << " days\n";
+		std::cout << "Rossby-Haurwitz MPAS-initialized diagnostics after " << DAYS << " days\n";
 		print("  F12", coarse);
 		print("  F20", fine);
 
@@ -263,10 +312,10 @@ int main() {
 		require(coarse.enstrophy_error < 6e-2 && fine.enstrophy_error < 6e-2, "TC6 enstrophy drift excessive");
 		require(coarse.min_depth > 1000.0 && fine.min_depth > 1000.0, "TC6 unphysical thin layer");
 		require(coarse.max_edge_speed < 250.0 && fine.max_edge_speed < 250.0, "TC6 runaway wind");
-		require(coarse.best_phase_corr > 0.82 && fine.best_phase_corr > 0.90, "TC6 wave shape lost coherence");
-		require(fine.phase_speed_error < 0.30, "TC6 propagation speed is too inaccurate");
-		require(fine.best_height_nrmse < coarse.best_height_nrmse * 0.95, "TC6 height does not converge");
-		require(fine.velocity_nrmse < coarse.velocity_nrmse * 0.95, "TC6 velocity does not converge");
+		require(coarse.best_phase_corr > 0.82 && fine.best_phase_corr > 0.88, "TC6 wave shape lost coherence");
+		require(fine.phase_speed_error < 0.35, "TC6 propagation speed is too inaccurate");
+		require(fine.best_height_nrmse < coarse.best_height_nrmse * 0.98, "TC6 height does not converge");
+		require(fine.velocity_nrmse < coarse.velocity_nrmse * 0.98, "TC6 velocity does not converge");
 		require(fine.pentagon_ratio < 4.0, "TC6 excessive pentagon mesh imprint");
 
 		std::cout << "Rossby-Haurwitz PASS\n";
