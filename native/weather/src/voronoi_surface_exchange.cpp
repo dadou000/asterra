@@ -43,18 +43,26 @@ VoronoiSurfaceExchange::SurfaceState VoronoiSurfaceExchange::make_uniform_surfac
 	SurfaceState surface;
 	const size_t cells = static_cast<size_t>(transport_->grid().cell_count());
 	surface.water_kg_m2.assign(cells, water_kg_m2);
+	surface.ice_kg_m2.assign(cells, 0.0);
 	surface.energy_j_m2.assign(cells, energy_j_m2);
 	return surface;
 }
 
 void VoronoiSurfaceExchange::validate_surface(const SurfaceState &surface) const {
 	const size_t cells = static_cast<size_t>(transport_->grid().cell_count());
-	if (surface.water_kg_m2.size() != cells || surface.energy_j_m2.size() != cells) {
+	if (surface.water_kg_m2.size() != cells
+			|| surface.ice_kg_m2.size() != cells
+			|| surface.energy_j_m2.size() != cells) {
 		throw std::invalid_argument("Surface exchange reservoir arrays have wrong size");
 	}
 	for (double water : surface.water_kg_m2) {
 		if (!(water >= 0.0) || !std::isfinite(water)) {
-			throw std::runtime_error("Surface exchange encountered invalid surface water");
+			throw std::runtime_error("Surface exchange encountered invalid liquid surface water");
+		}
+	}
+	for (double ice : surface.ice_kg_m2) {
+		if (!(ice >= 0.0) || !std::isfinite(ice)) {
+			throw std::runtime_error("Surface exchange encountered invalid frozen surface water");
 		}
 	}
 	for (double energy : surface.energy_j_m2) {
@@ -86,7 +94,8 @@ void VoronoiSurfaceExchange::validate_fluxes(
 	}
 }
 
-double VoronoiSurfaceExchange::total_surface_water_kg(const SurfaceState &surface) const {
+double VoronoiSurfaceExchange::total_surface_liquid_water_kg(
+		const SurfaceState &surface) const {
 	validate_surface(surface);
 	long double total = 0.0L;
 	for (int c = 0; c < transport_->grid().cell_count(); ++c) {
@@ -94,6 +103,20 @@ double VoronoiSurfaceExchange::total_surface_water_kg(const SurfaceState &surfac
 			* static_cast<long double>(transport_->grid().cell(c).area_m2);
 	}
 	return static_cast<double>(total);
+}
+
+double VoronoiSurfaceExchange::total_surface_ice_kg(const SurfaceState &surface) const {
+	validate_surface(surface);
+	long double total = 0.0L;
+	for (int c = 0; c < transport_->grid().cell_count(); ++c) {
+		total += static_cast<long double>(surface.ice_kg_m2[static_cast<size_t>(c)])
+			* static_cast<long double>(transport_->grid().cell(c).area_m2);
+	}
+	return static_cast<double>(total);
+}
+
+double VoronoiSurfaceExchange::total_surface_water_kg(const SurfaceState &surface) const {
+	return total_surface_liquid_water_kg(surface) + total_surface_ice_kg(surface);
 }
 
 double VoronoiSurfaceExchange::total_surface_energy_j(const SurfaceState &surface) const {
@@ -169,6 +192,7 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 		const auto &rain = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.rain)];
 		const auto &snow = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 		d.min_surface_water_kg_m2 = std::numeric_limits<double>::infinity();
+		d.min_surface_ice_kg_m2 = std::numeric_limits<double>::infinity();
 		d.min_bottom_temperature_k = std::numeric_limits<double>::infinity();
 		d.max_bottom_temperature_k = -std::numeric_limits<double>::infinity();
 
@@ -185,7 +209,7 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 			const double new_surface_water = surface.water_kg_m2[static_cast<size_t>(c)] - dm;
 			const double new_vapor = vapor[i] + dm;
 			if (!(new_surface_water >= 0.0) || !std::isfinite(new_surface_water)) {
-				throw std::runtime_error("Surface exchange evaporation exceeds available surface water");
+				throw std::runtime_error("Surface exchange evaporation exceeds available liquid surface water");
 			}
 			if (!(new_vapor >= 0.0) || !std::isfinite(new_vapor)) {
 				throw std::runtime_error("Surface exchange condensation exceeds available atmospheric vapor");
@@ -237,6 +261,8 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 		for (int c = 0; c < cells; ++c) {
 			d.min_surface_water_kg_m2 = std::min(d.min_surface_water_kg_m2,
 				surface.water_kg_m2[static_cast<size_t>(c)]);
+			d.min_surface_ice_kg_m2 = std::min(d.min_surface_ice_kg_m2,
+				surface.ice_kg_m2[static_cast<size_t>(c)]);
 			d.min_bottom_temperature_k = std::min(d.min_bottom_temperature_k,
 				thermo_after.temperature_k[static_cast<size_t>(c)]);
 			d.max_bottom_temperature_k = std::max(d.max_bottom_temperature_k,
