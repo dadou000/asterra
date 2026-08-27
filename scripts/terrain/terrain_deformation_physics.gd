@@ -1,10 +1,11 @@
 extends Node
-## Sparse elasto-plastic terrain response layered on top of Deltas.
+## Finite-strength elasto-plastic terrain response.
 ##
-## This is the first production-facing soil mechanics layer. It deliberately does
-## not attempt FEM. Contacts submit a footprint, load, penetration and motion; the
-## solver returns the finite support force and permanently modifies Deltas when
-## bearing or shear strength is exceeded. Untouched terrain still costs zero state.
+## Contact mechanics stay on the CPU because they are tiny and latency-sensitive.
+## The expensive per-cell deformation raster is submitted to TerrainDeformationGPU
+## when available. The original sparse Deltas implementation remains as a fallback
+## for unsupported GPUs, initialization failures, and contacts outside the active
+## 64 m high-resolution tile.
 
 const MATERIAL_TOPSOIL := 0
 const MATERIAL_WET_CLAY := 1
@@ -24,6 +25,8 @@ var _notify_radius_m := 0.0
 var _notify_timer_s := 0.0
 var _deformation_events := 0
 var _displaced_volume_m3 := 0.0
+var _gpu_contact_events := 0
+var _cpu_fallback_events := 0
 
 
 func _ready() -> void:
@@ -31,6 +34,8 @@ func _ready() -> void:
 
 
 func _process(dt: float) -> void:
+	# Only CPU-fallback edits need to dirty the persistent edit mirror. The active
+	# GPU tile is sampled directly by terrain rendering.
 	if not _notify_pending:
 		return
 	_notify_timer_s += dt
@@ -57,8 +62,9 @@ func apply_contact(center_dir: Vector3, contact_radius_m: float, normal_load_n: 
 	if Planet.cfg == null or center_dir.length_squared() <= 1e-12 or dt <= 0.0:
 		return _empty_result()
 	var d: Vector3 = center_dir.normalized()
-	var spacing_m: float = Deltas.sample_spacing(Planet.cfg.planet_radius)
-	var radius_m: float = maxf(contact_radius_m, maxf(MIN_CONTACT_RADIUS_M, spacing_m * 0.72))
+	var persistent_spacing_m: float = Deltas.sample_spacing(Planet.cfg.planet_radius)
+	var radius_m: float = maxf(contact_radius_m,
+		maxf(MIN_CONTACT_RADIUS_M, persistent_spacing_m * 0.72))
 	var area_m2: float = PI * radius_m * radius_m
 	var material: Dictionary = _material(material_id)
 	var state: Vector2 = state_at(d)
@@ -89,17 +95,35 @@ func apply_contact(center_dir: Vector3, contact_radius_m: float, normal_load_n: 
 	sink_rate_mps = clampf(sink_rate_mps, 0.0, MAX_PLASTIC_RATE_MPS)
 	var sink_m: float = sink_rate_mps * dt
 	var moved_volume_m3 := 0.0
+	var gpu_active := false
 	if sink_m > 1e-6:
 		var compaction_gain: float = float(material["compaction_gain"])
-		var damage_gain: float = float(material["damage_gain"])
+		var damage_gain: float = float(material["damage_gain"]) * (0.35 + shear_over)
 		var rim_fraction: float = float(material["rim_fraction"])
 		var max_depth_m: float = float(material["max_depth_m"])
-		moved_volume_m3 = _apply_patch(d, radius_m, sink_m, compaction_gain,
-			damage_gain * (0.35 + shear_over), rim_fraction, max_depth_m)
+		if TerrainDeformationGPU.ready_state and not TerrainDeformationGPU.failed:
+			gpu_active = TerrainDeformationGPU.enqueue_contact(
+				d, radius_m, sink_m, compaction_gain, damage_gain,
+				rim_fraction, max_depth_m)
+		if gpu_active:
+			# Integral of the (1-r^2)^2 circular depression kernel is PI*R^2/3.
+			moved_volume_m3 = sink_m * area_m2 / 3.0
+			_gpu_contact_events += 1
+			# Immediate one-cell state avoids waiting for the asynchronous GPU mirror
+			# before hardening/damage begins to affect the next contact step.
+			var lattice: Array = Deltas.dir_to_lattice(d)
+			_add_state(int(lattice[0]), int(round(float(lattice[1]))),
+				int(round(float(lattice[2]))), sink_m * compaction_gain,
+				sink_m * damage_gain)
+		else:
+			moved_volume_m3 = _apply_patch(d, radius_m, sink_m, compaction_gain,
+				damage_gain, rim_fraction, max_depth_m)
+			if moved_volume_m3 > 1e-8:
+				_cpu_fallback_events += 1
+				_queue_notify(d, radius_m * 2.1)
 		if moved_volume_m3 > 1e-8:
 			_deformation_events += 1
 			_displaced_volume_m3 += moved_volume_m3
-			_queue_notify(d, radius_m * 2.1)
 	var restitution: float = float(material["restitution"])
 	return {
 		"support_force_n": support_force_n,
@@ -115,23 +139,33 @@ func apply_contact(center_dir: Vector3, contact_radius_m: float, normal_load_n: 
 		"damage": damage,
 		"restitution": restitution,
 		"material": String(material["name"]),
+		"gpu_active": gpu_active,
 	}
 
 
 func state_at(direction: Vector3) -> Vector2:
 	if direction.length_squared() <= 1e-12:
 		return Vector2.ZERO
-	var lattice: Array = Deltas.dir_to_lattice(direction.normalized())
+	var d: Vector3 = direction.normalized()
+	var lattice: Array = Deltas.dir_to_lattice(d)
 	var face: int = int(lattice[0])
 	var i: int = int(round(float(lattice[1])))
 	var j: int = int(round(float(lattice[2])))
-	return _read_state(face, i, j)
+	var persistent: Vector2 = _read_state(face, i, j)
+	if TerrainDeformationGPU.ready_state and not TerrainDeformationGPU.failed:
+		var active: Vector2 = TerrainDeformationGPU.active_state(d)
+		return Vector2(maxf(persistent.x, active.x), maxf(persistent.y, active.y))
+	return persistent
 
 
 func clear_state() -> void:
 	_state_tiles.clear()
 	_deformation_events = 0
 	_displaced_volume_m3 = 0.0
+	_gpu_contact_events = 0
+	_cpu_fallback_events = 0
+	if TerrainDeformationGPU.ready_state:
+		TerrainDeformationGPU.clear_active()
 
 
 func stats() -> Dictionary:
@@ -140,6 +174,9 @@ func stats() -> Dictionary:
 		"events": _deformation_events,
 		"displaced_volume_m3": _displaced_volume_m3,
 		"visual_notify_hz": MAX_VISUAL_NOTIFY_HZ,
+		"gpu_contact_events": _gpu_contact_events,
+		"cpu_fallback_events": _cpu_fallback_events,
+		"gpu": TerrainDeformationGPU.stats(),
 	}
 
 
@@ -155,6 +192,8 @@ func serialize() -> Dictionary:
 
 func deserialize(data: Dictionary) -> void:
 	_state_tiles.clear()
+	if TerrainDeformationGPU.ready_state:
+		TerrainDeformationGPU.clear_active()
 	if not data.has("keys") or not data.has("state"):
 		return
 	var keys: PackedInt64Array = data["keys"]
@@ -282,6 +321,7 @@ func _empty_result() -> Dictionary:
 		"damage": 0.0,
 		"restitution": 0.0,
 		"material": "none",
+		"gpu_active": false,
 	}
 
 
