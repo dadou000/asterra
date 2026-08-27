@@ -50,9 +50,8 @@ void VoronoiMoistHydrostatic::validate_water_shape(const State &state) const {
 			if (!(mass >= 0.0) || !std::isfinite(mass)) {
 				throw std::runtime_error("Moist hydrostatic diagnosis received invalid tracer mass");
 			}
+		}
 	}
-	}
-
 	const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
 	if (highest < 0 || static_cast<int>(state.tracer_mass_kg_m2.size()) <= highest) {
 		throw std::invalid_argument("Moist hydrostatic diagnosis requires configured water tracer slots");
@@ -62,16 +61,17 @@ void VoronoiMoistHydrostatic::validate_water_shape(const State &state) const {
 VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 		const State &state) const {
 	validate_water_shape(state);
-	const auto dry = transport_->diagnose_hydrostatic(state);
+	VoronoiMoistThermodynamics thermo(*transport_, indices_);
+	const auto thermodynamic = thermo.diagnose_thermodynamics(state);
 	const int cells = transport_->grid().cell_count();
 	const size_t scalar_count = static_cast<size_t>(LEVELS) * static_cast<size_t>(cells);
 
 	Diagnostics d;
-	d.surface_pressure_pa.resize(static_cast<size_t>(cells));
-	d.interface_pressure_pa.resize(static_cast<size_t>(INTERFACES) * cells);
-	d.layer_pressure_pa.resize(scalar_count);
-	d.potential_temperature_k.resize(scalar_count);
-	d.temperature_k.resize(scalar_count);
+	d.surface_pressure_pa = thermodynamic.surface_pressure_pa;
+	d.interface_pressure_pa = thermodynamic.interface_pressure_pa;
+	d.layer_pressure_pa = thermodynamic.layer_pressure_pa;
+	d.potential_temperature_k = thermodynamic.potential_temperature_k;
+	d.temperature_k = thermodynamic.temperature_k;
 	d.virtual_temperature_k.resize(scalar_count);
 	d.layer_total_mass_kg_m2.resize(scalar_count);
 	d.interface_geopotential.resize(static_cast<size_t>(INTERFACES) * cells);
@@ -80,47 +80,20 @@ VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 	const auto &vapor = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
 	const auto &liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
 	const auto &ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
-	const double gravity = transport_->gravity_mps2();
 
 	for (int c = 0; c < cells; ++c) {
-		d.interface_pressure_pa[static_cast<size_t>(interface_index(LEVELS, c))]
-			= transport_->top_pressure_pa();
-		for (int k = LEVELS - 1; k >= 0; --k) {
-			const size_t i = static_cast<size_t>(scalar_index(k, c));
-			const double total_mass = state.layer_mass_kg_m2[i]
-				+ vapor[i] + liquid[i] + ice[i];
-			if (!(total_mass > 0.0) || !std::isfinite(total_mass)) {
-				throw std::runtime_error("Moist hydrostatic layer total mass is invalid");
-			}
-			d.layer_total_mass_kg_m2[i] = total_mass;
-			const double p_upper = d.interface_pressure_pa[
-				static_cast<size_t>(interface_index(k + 1, c))];
-			const double p_lower = p_upper + gravity * total_mass;
-			if (!(p_lower > p_upper) || !std::isfinite(p_lower)) {
-				throw std::runtime_error("Moist hydrostatic mass produced non-monotone pressure");
-			}
-			d.interface_pressure_pa[static_cast<size_t>(interface_index(k, c))] = p_lower;
-		}
-		d.surface_pressure_pa[static_cast<size_t>(c)]
-			= d.interface_pressure_pa[static_cast<size_t>(interface_index(0, c))];
-
 		d.interface_geopotential[static_cast<size_t>(interface_index(0, c))]
 			= transport_->surface_geopotential_m2_s2()[static_cast<size_t>(c)];
 		for (int k = 0; k < LEVELS; ++k) {
 			const size_t i = static_cast<size_t>(scalar_index(k, c));
 			const double dry_mass = state.layer_mass_kg_m2[i];
+			const double total_mass = dry_mass + vapor[i] + liquid[i] + ice[i];
 			const double p_lower = d.interface_pressure_pa[
 				static_cast<size_t>(interface_index(k, c))];
 			const double p_upper = d.interface_pressure_pa[
 				static_cast<size_t>(interface_index(k + 1, c))];
-			const double p_center = std::sqrt(p_lower * p_upper);
-
-			// Theta/temperature remain defined on the prognostic dry-mass coordinate.
-			// Adding or removing water therefore changes mechanical pressure and
-			// virtual density, but does not reinterpret the existing theta state as an
-			// instantaneous sensible-temperature source.
-			const double theta = dry.potential_temperature_k[i];
-			const double temperature = dry.temperature_k[i];
+			const double p_center = d.layer_pressure_pa[i];
+			const double temperature = d.temperature_k[i];
 			const double qv = vapor[i] / dry_mass;
 			const double ql = liquid[i] / dry_mass;
 			const double qi = ice[i] / dry_mass;
@@ -131,9 +104,7 @@ VoronoiMoistHydrostatic::Diagnostics VoronoiMoistHydrostatic::diagnose(
 			const double log_full = std::log(p_lower / p_upper);
 			const double log_half = std::log(p_lower / p_center);
 
-			d.layer_pressure_pa[i] = p_center;
-			d.potential_temperature_k[i] = theta;
-			d.temperature_k[i] = temperature;
+			d.layer_total_mass_kg_m2[i] = total_mass;
 			d.virtual_temperature_k[i] = tv;
 			d.layer_geopotential[i] = phi_lower
 				+ VoronoiDryHydrostatic::RD * tv * log_half;
@@ -172,6 +143,12 @@ std::vector<double> VoronoiMoistHydrostatic::pressure_gradient_acceleration(
 				- std::log(d.layer_pressure_pa[static_cast<size_t>(ia)])) * inv_d;
 			const double tv_edge = 0.5 * (d.virtual_temperature_k[static_cast<size_t>(ia)]
 				+ d.virtual_temperature_k[static_cast<size_t>(ib)]);
+
+			// In this dry-mass coordinate p_eta/mu_d = total_mass/dry_mass and
+			// alpha/alpha_d = dry_mass/total_mass, so the generalized-coordinate
+			// factors cancel. The moist pressure force therefore reduces exactly to
+			// the same compact vector form as the dry limit:
+			//   -grad(Phi) - Rd*Tv*grad(ln p_total).
 			acceleration[static_cast<size_t>(edge_index(k, e))]
 				= -grad_phi - VoronoiDryHydrostatic::RD * tv_edge * grad_log_p;
 		}
