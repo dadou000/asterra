@@ -230,7 +230,11 @@ void sky() {
 	} else {
 		vec3 col = scatter(dir, origin, sun_dir);
 		col += deep_sky(dir, up);
-		if (LIGHT0_ENABLED && LIGHT0_ENERGY > 0.0) {
+		// The visible background contains the finite solar disc, but the radiance
+		// cubemap intentionally does not. Direct sun reflection is handled by the
+		// DirectionalLight BRDF; storing the disc in IBL as well double-counts the
+		// same source and turns water/metal highlights into blown-out white bands.
+		if (!AT_CUBEMAP_PASS && LIGHT0_ENABLED && LIGHT0_ENERGY > 0.0) {
 			float cos_angle = dot(dir, sun_dir);
 			float sun_diameter = max(LIGHT0_SIZE, 0.0087);
 			float sun_radius = sun_diameter * 0.5;
