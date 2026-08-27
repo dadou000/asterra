@@ -1,12 +1,11 @@
 extends "res://scripts/terrain/gpu_terrain_edit_delta.gd"
 ## Persistent sparse edit mirror optimized for traversal.
 ##
-## The base implementation correctly performs partial updates for ordinary edits,
-## but a 160 m recenter previously re-sampled all 512x512 output texels. Once any
-## persistent edit existed that became an expensive CPU cube-sphere/lattice pass and
-## produced the regular traversal hitch seen while flying. Full-window publication
-## now starts from zero and samples only rectangles covered by nearby sparse Deltas
-## tiles. Dense edit regions still fall back to the proven base rebuild.
+## A 160 m recenter used to publish a complete 512x512 CPU mirror even when the new
+## window contained no persistent edits. Once any edit existed elsewhere in the
+## world that produced regular traversal stalls. Recenter now starts from a clean
+## CPU image, samples only rectangles covered by nearby sparse Deltas tiles, and
+## disables the edit texture entirely for empty local windows without uploading it.
 
 const SPARSE_DENSE_FALLBACK_FRACTION := 0.42
 const SPARSE_TILE_SIDE_CELLS := 64
@@ -19,21 +18,22 @@ var _opt_bound_generation := -1
 var _opt_bound_ready := false
 var _sparse_recenters := 0
 var _dense_recenters := 0
+var _empty_recenters := 0
 var _last_recenter_sampled_pixels := 0
+var _local_content := false
 
 
 func _rebuild_full() -> void:
 	if _textures.size() != 2 or Planet.cfg == null:
 		return
 
-	# Recenter always starts from a clean image so edits from the previous tangent
-	# window can never leak into the new one.
+	# Always clear the CPU image so a future partial edit can safely publish it
+	# without carrying pixels from the previous tangent window.
 	_image.fill(Color(0.0, 0.0, 0.0, 1.0))
 	_last_recenter_sampled_pixels = 0
 
 	if Deltas.is_empty():
-		_publish_sparse_recenter()
-		_sparse_recenters += 1
+		_finish_empty_recenter()
 		return
 
 	var planet_radius: float = Planet.cfg.planet_radius
@@ -44,11 +44,13 @@ func _rebuild_full() -> void:
 	var snapshot: Dictionary = Deltas.snapshot_for_bounds(
 		center_dir, window_radius_m / maxf(planet_radius, 1.0))
 	if snapshot.is_empty():
-		_publish_sparse_recenter()
-		_sparse_recenters += 1
+		_finish_empty_recenter()
 		return
 
 	var rects: Array[Rect2i] = _sparse_rects_for_snapshot(snapshot, tile_radius_m)
+	if rects.is_empty():
+		_finish_empty_recenter()
+		return
 	var total_pixels: int = 0
 	for rect: Rect2i in rects:
 		total_pixels += rect.size.x * rect.size.y
@@ -56,6 +58,7 @@ func _rebuild_full() -> void:
 	var full_pixels: int = RESOLUTION * RESOLUTION
 	if total_pixels > int(float(full_pixels) * SPARSE_DENSE_FALLBACK_FRACTION):
 		_dense_recenters += 1
+		_local_content = true
 		super._rebuild_full()
 		return
 
@@ -65,8 +68,8 @@ func _rebuild_full() -> void:
 			planet_radius, rect)
 		var expected_samples: int = rect.size.x * rect.size.y
 		if samples.size() != expected_samples:
-			# A malformed sparse patch must never leave a partially rebuilt mirror.
 			_dense_recenters += 1
+			_local_content = true
 			super._rebuild_full()
 			return
 		var patch_data: PackedByteArray = samples.to_byte_array()
@@ -75,7 +78,27 @@ func _rebuild_full() -> void:
 		_image.blit_rect(patch, Rect2i(Vector2i.ZERO, rect.size), rect.position)
 		_last_recenter_sampled_pixels += expected_samples
 
+	_local_content = true
 	_publish_sparse_recenter()
+	_sparse_recenters += 1
+
+
+func _rebuild_partial() -> void:
+	# A local edit is about to be written into the already-cleared CPU image. Mark
+	# content before the base publishes so the new texture becomes visible atomically.
+	_local_content = true
+	super._rebuild_partial()
+
+
+func _finish_empty_recenter() -> void:
+	_local_content = false
+	_dirty_full = false
+	_dirty_partial = false
+	_dirty_rect = Rect2i()
+	# No texture bytes changed. Advance only the logical generation so renderer/query
+	# bindings publish ready=false and the new centre without a 1 MiB GPU upload.
+	generation += 1
+	_empty_recenters += 1
 	_sparse_recenters += 1
 
 
@@ -138,6 +161,21 @@ func _merge_sparse_rects(input_rects: Array[Rect2i]) -> Array[Rect2i]:
 	return merged
 
 
+func sample_params() -> Dictionary:
+	return {
+		"texture": texture,
+		"ready": ready_state and _center_valid and _local_content,
+		"center_dir": center_dir,
+		"center_right": center_right,
+		"center_up": center_up,
+		"half_extent_m": HALF_EXTENT_M,
+		"double_buffered": true,
+		"partial_updates": true,
+		"sparse_recenters": true,
+		"generation": generation,
+	}
+
+
 func _sync_renderer_binding() -> void:
 	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
 	if terrain == null:
@@ -146,7 +184,7 @@ func _sync_renderer_binding() -> void:
 	if not (value is ShaderMaterial):
 		return
 	var material: ShaderMaterial = value as ShaderMaterial
-	var ready_now: bool = ready_state and _center_valid
+	var ready_now: bool = ready_state and _center_valid and _local_content
 	var material_changed: bool = material != _opt_bound_material
 	var generation_changed: bool = generation != _opt_bound_generation
 	var ready_changed: bool = ready_now != _opt_bound_ready
@@ -167,6 +205,8 @@ func stats() -> Dictionary:
 	return {
 		"sparse_recenters": _sparse_recenters,
 		"dense_recenters": _dense_recenters,
+		"empty_recenters": _empty_recenters,
+		"local_content": _local_content,
 		"last_recenter_sampled_pixels": _last_recenter_sampled_pixels,
 		"full_window_pixels": RESOLUTION * RESOLUTION,
 	}
