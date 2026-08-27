@@ -2,35 +2,120 @@ extends "res://scripts/terrain/terrain_deformation_experiment.gd"
 ## GPU-stage experiment override.
 ##
 ## The sphere keeps a tiny immediate CPU-side contact datum while the detailed
-## deformation remains GPU resident. This avoids feeding delayed GPU readback back
-## into the same contact constraint that produced it. The datum only tracks the
-## center-line plastic retreat; the GPU still owns the actual 2D crater profile.
+## deformation remains GPU resident. The datum is created only after a strict
+## contact-grade terrain sample exists at the sphere direction; broad nearby cache
+## samples are never allowed to start a contact.
 ##
 ## Sphere footprint geometry is based on total embed depth below the original
-## contact plane, not instantaneous overlap against already-yielded soil. Otherwise
-## the overlap stays near zero while the sphere follows the yielding surface and a
-## deep, impossibly narrow needle hole is produced.
+## contact plane, not instantaneous overlap against already-yielded soil.
 
 var _sphere_reference_ground_m := 0.0
 var _sphere_contact_ground_m := 0.0
 var _sphere_total_center_sink_m := 0.0
+var _sphere_reference_ready := false
+var _sphere_contact_started := false
 
 
 func _place_sphere(drop_immediately: bool) -> void:
 	super._place_sphere(drop_immediately)
 	if not _world_ready:
 		return
-	var h: float = TerrainContactSampler.height(_sphere_dir)
-	_sphere_reference_ground_m = h
-	_sphere_contact_ground_m = h
+	_sphere_reference_ground_m = 0.0
+	_sphere_contact_ground_m = 0.0
 	_sphere_total_center_sink_m = 0.0
+	_sphere_reference_ready = false
+	_sphere_contact_started = false
+	TerrainHeightQuery.request_height(_sphere_dir)
+	var strict_ground_m: float = _strict_ground_height()
+	if is_finite(strict_ground_m):
+		_sphere_reference_ground_m = strict_ground_m
+		_sphere_contact_ground_m = strict_ground_m
+		_sphere_reference_ready = true
+
+
+func _strict_ground_height() -> float:
+	# Pristine terrain must come from a sample within 45 cm of the requested point.
+	# The ordinary TerrainContactSampler.height() intentionally accepts much farther
+	# cached samples as a temporary fallback, which is unsuitable for first contact.
+	TerrainHeightQuery.request_height(_sphere_dir)
+	if not TerrainHeightQuery.has_method("has_contact_height") \
+			or not bool(TerrainHeightQuery.call("has_contact_height", _sphere_dir)):
+		return NAN
+	var base_value: Variant = TerrainHeightQuery.call(
+		"contact_height_for_direction", _sphere_dir, NAN)
+	var base_height_m: float = float(base_value)
+	if not is_finite(base_height_m):
+		return NAN
+
+	# If a live GPU deformation field already exists at this point, require its
+	# point-query cache to be current too. Otherwise a previous crater could again
+	# make the rigid contact plane disagree with the visible terrain.
+	if TerrainDeformationGPU.ready_state and not TerrainDeformationGPU.failed \
+			and bool(TerrainDeformationGPU.get("_has_active_content")):
+		if TerrainDeformationQueryGPU.ready_state and not TerrainDeformationQueryGPU.failed:
+			TerrainDeformationGPU.active_height_offset(_sphere_dir)
+			if not TerrainDeformationQueryGPU.has_method("has_fresh_sample") \
+					or not bool(TerrainDeformationQueryGPU.call("has_fresh_sample", _sphere_dir)):
+				return NAN
+		elif not TerrainDeformationQueryGPU.failed:
+			return NAN
+		base_height_m += TerrainDeformationGPU.active_height_offset(_sphere_dir)
+	return base_height_m
+
+
+func _integrate_freefall(dt: float) -> void:
+	_sphere_velocity_mps -= GRAVITY_MPS2 * dt
+	_sphere_velocity_mps = clampf(_sphere_velocity_mps, -180.0, 80.0)
+	_sphere_altitude_msl += _sphere_velocity_mps * dt
 
 
 func _step_sphere(dt: float) -> void:
-	# Contact uses the immediate local datum instead of an asynchronous GPU sample.
-	# The GPU result remains authoritative visually; this scalar exists only to make
-	# the current rigid contact causally consistent with the deformation command it
-	# submitted during the same physics step.
+	# Before first contact, continuously refresh the exact surface plane. No terrain
+	# deformation is submitted until the sphere has geometrically crossed that exact
+	# plane. This makes an airborne sphere incapable of excavating terrain.
+	if not _sphere_contact_started:
+		var strict_ground_m: float = _strict_ground_height()
+		if not is_finite(strict_ground_m):
+			_integrate_freefall(dt)
+			_sphere_last_contact.clear()
+			return
+
+		_sphere_reference_ground_m = strict_ground_m
+		_sphere_contact_ground_m = strict_ground_m
+		_sphere_total_center_sink_m = 0.0
+		_sphere_reference_ready = true
+
+		var bottom_now_m: float = _sphere_altitude_msl - SPHERE_RADIUS_M
+		var clearance_now_m: float = bottom_now_m - strict_ground_m
+		if clearance_now_m > 0.0:
+			var next_velocity_mps: float = clampf(
+				_sphere_velocity_mps - GRAVITY_MPS2 * dt, -180.0, 80.0)
+			var next_altitude_m: float = _sphere_altitude_msl + next_velocity_mps * dt
+			var next_bottom_m: float = next_altitude_m - SPHERE_RADIUS_M
+			if next_bottom_m > strict_ground_m:
+				_sphere_velocity_mps = next_velocity_mps
+				_sphere_altitude_msl = next_altitude_m
+				_sphere_last_contact.clear()
+				return
+			# Continuous crossing: land exactly on the sampled visible surface and keep
+			# the incoming velocity for the following contact substep.
+			_sphere_velocity_mps = next_velocity_mps
+			_sphere_altitude_msl = strict_ground_m + SPHERE_RADIUS_M
+			_sphere_contact_started = true
+			_sphere_last_contact.clear()
+			return
+
+		# A strict sample arrived after the sphere was already marginally below it.
+		# Clamp to first touch rather than converting that query latency into soil work.
+		_sphere_altitude_msl = strict_ground_m + SPHERE_RADIUS_M
+		_sphere_contact_started = true
+		_sphere_last_contact.clear()
+		return
+
+	if not _sphere_reference_ready:
+		_integrate_freefall(dt)
+		return
+
 	var bottom_altitude_m: float = _sphere_altitude_msl - SPHERE_RADIUS_M
 	var overlap_m: float = _sphere_contact_ground_m - bottom_altitude_m
 	var embed_depth_m: float = maxf(_sphere_reference_ground_m - bottom_altitude_m, 0.0)
@@ -41,10 +126,6 @@ func _step_sphere(dt: float) -> void:
 	_sphere_last_contact.clear()
 
 	if overlap_m > 0.0:
-		# The spherical contact patch grows with total embed depth relative to the
-		# original far-field surface. Once the equator is below that surface the
-		# heightfield cannot represent an overhang, so keep a full-radius bore rather
-		# than letting the footprint shrink again.
 		var geometry_depth_m: float = minf(embed_depth_m, SPHERE_RADIUS_M)
 		var contact_radius_m := SPHERE_RADIUS_M
 		if geometry_depth_m < SPHERE_RADIUS_M:
@@ -60,9 +141,6 @@ func _step_sphere(dt: float) -> void:
 		impact_force_n /= 2.0 * stopping_distance_m
 		var load_n: float = _sphere_mass_kg * GRAVITY_MPS2 + impact_force_n
 
-		# For the spherical test use embed depth as the footprint depth. It also adds
-		# confinement with burial depth to this first-order soil model. The actual
-		# contact overlap is retained in the returned diagnostics below.
 		_sphere_last_contact = TerrainDeformation.apply_contact(
 			_sphere_dir, contact_radius_m, load_n, maxf(embed_depth_m, 1e-5),
 			_sphere_velocity_mps, 0.0, dt, 0.0, material_id,
@@ -81,9 +159,6 @@ func _step_sphere(dt: float) -> void:
 			_sphere_total_center_sink_m += plastic_center_step_m
 			_sphere_contact_ground_m = _sphere_reference_ground_m - _sphere_total_center_sink_m
 
-		# Plastic deformation consumes impact energy. Wet/loose ground should remain
-		# in contact rather than acting like a penalty spring. Hard ground retains the
-		# material restitution already defined by the terrain preset.
 		var plastic_fraction: float = clampf(
 			plastic_center_step_m / maxf(overlap_m, 1e-5), 0.0, 1.0)
 		effective_restitution = float(
@@ -106,8 +181,6 @@ func _step_sphere(dt: float) -> void:
 		var terrain_retreat_speed_mps: float = -plastic_center_step_m / maxf(dt, 1e-6)
 		if projected:
 			if effective_restitution <= 0.03:
-				# A yielding, highly damped surface keeps the body attached to the retreating
-				# support surface. This removes the stop/fall/stop numerical chatter.
 				_sphere_velocity_mps = terrain_retreat_speed_mps
 			elif velocity_before_contact_mps < 0.0 and _sphere_velocity_mps > 0.0:
 				var rebound_limit_mps: float = -velocity_before_contact_mps * effective_restitution
