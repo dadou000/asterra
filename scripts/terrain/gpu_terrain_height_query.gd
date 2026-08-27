@@ -125,7 +125,7 @@ func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictio
 	var basis := _tangent_basis(d)
 	var theta := NORMAL_SAMPLE_M / Planet.cfg.planet_radius
 	var dx := (d + basis[0] * theta).normalized()
-	var dy := (d + basis[1] * theta).normalized())
+	var dy := (d + basis[1] * theta).normalized()
 	var s0 := _find_sample(d, MAX_CACHE_DISTANCE_M, MAX_CACHE_AGE_S)
 	var sx := _find_sample(dx, MAX_CACHE_DISTANCE_M, MAX_CACHE_AGE_S)
 	var sy := _find_sample(dy, MAX_CACHE_DISTANCE_M, MAX_CACHE_AGE_S)
