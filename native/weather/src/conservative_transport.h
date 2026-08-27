@@ -11,6 +11,11 @@ namespace asterra::weather {
 
 class ConservativeTransport2D {
 public:
+	enum class Reconstruction {
+		DONOR_CELL,
+		MUSCL_MC,
+	};
+
 	struct SharedEdge {
 		int cell_a = -1;
 		int edge_a = -1;
@@ -54,7 +59,8 @@ public:
 		double dt_s) const;
 
 	// Advance a non-negative areal density (kg/m^2, tracer mass/m^2, etc.) using
-	// flux-form finite volume, MC-limited MUSCL reconstruction and SSPRK3.
+	// flux-form finite volume and SSPRK3. DONOR_CELL is retained as the deliberately
+	// diffusive first-order reference solution; MUSCL_MC is the production path.
 	// The timestep is automatically reduced to satisfy target_cfl. Shared edge
 	// fluxes are applied once with equal/opposite signs, so total mass closes to
 	// round-off. A donor outflow limiter guarantees positivity without clipping
@@ -62,7 +68,8 @@ public:
 	StepDiagnostics step_ssprk3(std::vector<double> &density,
 		const std::vector<double> &edge_normal_velocity_mps,
 		double requested_dt_s,
-		double target_cfl = 0.45) const;
+		double target_cfl = 0.45,
+		Reconstruction reconstruction = Reconstruction::MUSCL_MC) const;
 
 	double total_mass(const std::vector<double> &density) const;
 
@@ -76,12 +83,14 @@ private:
 
 	double reconstruct_outflow_density(const std::vector<double> &density,
 		int donor_cell, int donor_edge, int receiver_cell,
-		const Vec3d &edge_midpoint) const;
+		const Vec3d &edge_midpoint,
+		Reconstruction reconstruction) const;
 
 	std::size_t euler_stage(const std::vector<double> &input,
 		std::vector<double> &output,
 		const std::vector<double> &edge_normal_velocity_mps,
-		double dt_s) const;
+		double dt_s,
+		Reconstruction reconstruction) const;
 };
 
 } // namespace asterra::weather
