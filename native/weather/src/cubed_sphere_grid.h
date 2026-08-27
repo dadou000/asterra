@@ -1,26 +1,12 @@
 #pragma once
 
+#include "spherical_math.h"
+
 #include <array>
 #include <cstdint>
 #include <vector>
 
 namespace asterra::weather {
-
-struct Vec3d {
-	double x = 0.0;
-	double y = 0.0;
-	double z = 0.0;
-
-	Vec3d operator+(const Vec3d &o) const { return {x + o.x, y + o.y, z + o.z}; }
-	Vec3d operator-(const Vec3d &o) const { return {x - o.x, y - o.y, z - o.z}; }
-	Vec3d operator*(double s) const { return {x * s, y * s, z * s}; }
-	Vec3d operator/(double s) const { return {x / s, y / s, z / s}; }
-};
-
-double dot(const Vec3d &a, const Vec3d &b);
-Vec3d cross(const Vec3d &a, const Vec3d &b);
-double length(const Vec3d &v);
-Vec3d normalized(const Vec3d &v);
 
 class CubedSphereGrid {
 public:
@@ -59,9 +45,6 @@ public:
 		Vec3d tangent_v;
 		double area_m2 = 0.0;
 		std::array<double, EDGE_COUNT> edge_length_m{};
-		// Unit-sphere midpoint of each physical edge. Keeping this explicit lets
-		// the finite-volume core evaluate one velocity/flux for a shared edge,
-		// including edges that cross cube-face seams.
 		std::array<Vec3d, EDGE_COUNT> edge_midpoint{};
 		std::array<Vec3d, EDGE_COUNT> outward_normal{};
 		std::array<Neighbour, EDGE_COUNT> neighbour{};
