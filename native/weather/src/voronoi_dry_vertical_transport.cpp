@@ -66,10 +66,6 @@ VoronoiDryVerticalTransport::VoronoiDryVerticalTransport(
 		throw std::invalid_argument("Dry vertical transport requires a built geodesic grid");
 	}
 
-	// The fixed-top reference constructor uses a pressure-coordinate shape whose
-	// layer fractions are independent of surface pressure. Derive those fractions
-	// once from a representative column so the remapper does not carry a second,
-	// potentially divergent definition of the vertical coordinate.
 	const State reference = horizontal_.make_isothermal_reference(100000.0, 288.0);
 	double total = 0.0;
 	for (int k = 0; k < LEVELS; ++k) {
@@ -100,6 +96,11 @@ void VoronoiDryVerticalTransport::validate_state(const State &state) const {
 			|| state.edge_normal_mps.size() != edge_count) {
 		throw std::invalid_argument("Dry vertical transport state arrays have wrong size");
 	}
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		if (tracer.size() != scalar_count) {
+			throw std::invalid_argument("Dry vertical tracer-mass array has wrong size");
+		}
+	}
 }
 
 void VoronoiDryVerticalTransport::validate_flux(
@@ -125,6 +126,11 @@ bool VoronoiDryVerticalTransport::finite_positive(const State &state) const {
 		if (!(theta > 100.0) || !std::isfinite(theta)) return false;
 	}
 	for (double u : state.edge_normal_mps) if (!std::isfinite(u)) return false;
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		for (double mass : tracer) {
+			if (!(mass >= 0.0) || !std::isfinite(mass)) return false;
+		}
+	}
 	return true;
 }
 
@@ -185,6 +191,8 @@ VoronoiDryVerticalTransport::compute_tendencies(const State &state,
 	const size_t scalar_count = static_cast<size_t>(LEVELS) * grid_->cell_count();
 	t.mass_dt.assign(scalar_count, 0.0);
 	t.theta_mass_dt.assign(scalar_count, 0.0);
+	t.tracer_mass_dt.resize(state.tracer_mass_kg_m2.size());
+	for (auto &field : t.tracer_mass_dt) field.assign(scalar_count, 0.0);
 
 	for (int j = 0; j < INTERFACES; ++j) {
 		for (int c = 0; c < grid_->cell_count(); ++c) {
@@ -194,14 +202,20 @@ VoronoiDryVerticalTransport::compute_tendencies(const State &state,
 			const int upper = scalar_index(j + 1, c);
 			const int donor = flux > 0.0 ? lower : upper;
 			const double donor_mass = state.layer_mass_kg_m2[static_cast<size_t>(donor)];
-			const double donor_theta = state.theta_mass_kg_k_m2[static_cast<size_t>(donor)]
-				/ donor_mass;
+			const double donor_theta = state.theta_mass_kg_k_m2[static_cast<size_t>(donor)] / donor_mass;
 			const double theta_flux = flux * donor_theta;
 
 			t.mass_dt[static_cast<size_t>(lower)] -= flux;
 			t.mass_dt[static_cast<size_t>(upper)] += flux;
 			t.theta_mass_dt[static_cast<size_t>(lower)] -= theta_flux;
 			t.theta_mass_dt[static_cast<size_t>(upper)] += theta_flux;
+			for (size_t tracer = 0; tracer < state.tracer_mass_kg_m2.size(); ++tracer) {
+				const double mixing_ratio = state.tracer_mass_kg_m2[tracer][static_cast<size_t>(donor)]
+					/ donor_mass;
+				const double tracer_flux = flux * mixing_ratio;
+				t.tracer_mass_dt[tracer][static_cast<size_t>(lower)] -= tracer_flux;
+				t.tracer_mass_dt[tracer][static_cast<size_t>(upper)] += tracer_flux;
+			}
 		}
 	}
 	return t;
@@ -214,6 +228,11 @@ bool VoronoiDryVerticalTransport::euler_stage(const State &input, State &output,
 	for (size_t i = 0; i < output.layer_mass_kg_m2.size(); ++i) {
 		output.layer_mass_kg_m2[i] += dt_s * t.mass_dt[i];
 		output.theta_mass_kg_k_m2[i] += dt_s * t.theta_mass_dt[i];
+	}
+	for (size_t tracer = 0; tracer < output.tracer_mass_kg_m2.size(); ++tracer) {
+		for (size_t i = 0; i < output.tracer_mass_kg_m2[tracer].size(); ++i) {
+			output.tracer_mass_kg_m2[tracer][i] += dt_s * t.tracer_mass_dt[tracer][i];
+		}
 	}
 	return finite_positive(output);
 }
@@ -233,6 +252,12 @@ bool VoronoiDryVerticalTransport::ssprk3_attempt(const State &initial,
 		s2.theta_mass_kg_k_m2[i] = 0.75 * initial.theta_mass_kg_k_m2[i]
 			+ 0.25 * e2.theta_mass_kg_k_m2[i];
 	}
+	for (size_t tracer = 0; tracer < s2.tracer_mass_kg_m2.size(); ++tracer) {
+		for (size_t i = 0; i < s2.tracer_mass_kg_m2[tracer].size(); ++i) {
+			s2.tracer_mass_kg_m2[tracer][i] = 0.75 * initial.tracer_mass_kg_m2[tracer][i]
+				+ 0.25 * e2.tracer_mass_kg_m2[tracer][i];
+		}
+	}
 	if (!finite_positive(s2)) return false;
 
 	State e3;
@@ -243,6 +268,12 @@ bool VoronoiDryVerticalTransport::ssprk3_attempt(const State &initial,
 			+ (2.0 / 3.0) * e3.layer_mass_kg_m2[i];
 		candidate.theta_mass_kg_k_m2[i] = (1.0 / 3.0) * initial.theta_mass_kg_k_m2[i]
 			+ (2.0 / 3.0) * e3.theta_mass_kg_k_m2[i];
+	}
+	for (size_t tracer = 0; tracer < candidate.tracer_mass_kg_m2.size(); ++tracer) {
+		for (size_t i = 0; i < candidate.tracer_mass_kg_m2[tracer].size(); ++i) {
+			candidate.tracer_mass_kg_m2[tracer][i] = (1.0 / 3.0) * initial.tracer_mass_kg_m2[tracer][i]
+				+ (2.0 / 3.0) * e3.tracer_mass_kg_m2[tracer][i];
+		}
 	}
 	return finite_positive(candidate);
 }
@@ -268,6 +299,10 @@ VoronoiDryVerticalTransport::step(State &state,
 	d.requested_dt_s = requested_dt_s;
 	d.dry_mass_before_kg = horizontal_.total_dry_mass_kg(state);
 	d.theta_mass_before_kg_k = horizontal_.total_theta_mass_kg_k(state);
+	std::vector<double> tracer_before(state.tracer_mass_kg_m2.size(), 0.0);
+	for (size_t tracer = 0; tracer < tracer_before.size(); ++tracer) {
+		tracer_before[tracer] = horizontal_.total_tracer_mass_kg(state, static_cast<int>(tracer));
+	}
 
 	bool any_flux = false;
 	for (double f : interface_mass_flux) if (f != 0.0) { any_flux = true; break; }
@@ -293,13 +328,19 @@ VoronoiDryVerticalTransport::step(State &state,
 		if (ssprk3_attempt(original, candidate, interface_mass_flux, attempt_dt)) {
 			const double mass_after = horizontal_.total_dry_mass_kg(candidate);
 			const double theta_after = horizontal_.total_theta_mass_kg_k(candidate);
-			const double mass_error = std::abs(mass_after - d.dry_mass_before_kg)
-				/ std::max(std::abs(d.dry_mass_before_kg), 1.0);
-			const double theta_error = std::abs(theta_after - d.theta_mass_before_kg_k)
-				/ std::max(std::abs(d.theta_mass_before_kg_k), 1.0);
+			const double mass_error = relative_error(mass_after, d.dry_mass_before_kg);
+			const double theta_error = relative_error(theta_after, d.theta_mass_before_kg_k);
+			double tracer_error = 0.0;
+			for (size_t tracer = 0; tracer < tracer_before.size(); ++tracer) {
+				tracer_error = std::max(tracer_error, relative_error(
+					horizontal_.total_tracer_mass_kg(candidate, static_cast<int>(tracer)),
+					tracer_before[tracer]));
+			}
 			if (std::isfinite(mass_error) && std::isfinite(theta_error)
+					&& std::isfinite(tracer_error)
 					&& mass_error <= CONSERVATION_REJECT_TOL
-					&& theta_error <= CONSERVATION_REJECT_TOL) {
+					&& theta_error <= CONSERVATION_REJECT_TOL
+					&& tracer_error <= CONSERVATION_REJECT_TOL) {
 				state = std::move(candidate);
 				d.accepted_dt_s = attempt_dt;
 				d.max_vertical_courant = max_courant(original, interface_mass_flux, attempt_dt);
@@ -307,6 +348,7 @@ VoronoiDryVerticalTransport::step(State &state,
 				d.theta_mass_after_kg_k = theta_after;
 				d.relative_dry_mass_error = mass_error;
 				d.relative_theta_mass_error = theta_error;
+				d.max_relative_tracer_mass_error = tracer_error;
 				break;
 			}
 		}
@@ -343,11 +385,17 @@ VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
 	RemapDiagnostics d;
 	const double global_mass_before = horizontal_.total_dry_mass_kg(original);
 	const double global_theta_before = horizontal_.total_theta_mass_kg_k(original);
+	std::vector<double> global_tracer_before(original.tracer_mass_kg_m2.size(), 0.0);
+	for (size_t tracer = 0; tracer < global_tracer_before.size(); ++tracer) {
+		global_tracer_before[tracer]
+			= horizontal_.total_tracer_mass_kg(original, static_cast<int>(tracer));
+	}
 	std::vector<double> column_mass_before(static_cast<size_t>(grid_->cell_count()), 0.0);
 	std::vector<double> column_theta_before(static_cast<size_t>(grid_->cell_count()), 0.0);
+	std::vector<std::vector<double>> column_tracer_before(
+		original.tracer_mass_kg_m2.size(),
+		std::vector<double>(static_cast<size_t>(grid_->cell_count()), 0.0));
 
-	// Cell-centred mass and thermodynamics: conservative overlap remap in each
-	// column's dry-mass coordinate.
 	for (int c = 0; c < grid_->cell_count(); ++c) {
 		std::array<double, LEVELS> source_mass{};
 		std::array<double, LEVELS> source_theta_mass{};
@@ -360,6 +408,10 @@ VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
 			source_theta_mass[static_cast<size_t>(k)] = original.theta_mass_kg_k_m2[static_cast<size_t>(i)];
 			column_mass += source_mass[static_cast<size_t>(k)];
 			column_theta += source_theta_mass[static_cast<size_t>(k)];
+			for (size_t tracer = 0; tracer < original.tracer_mass_kg_m2.size(); ++tracer) {
+				column_tracer_before[tracer][static_cast<size_t>(c)]
+					+= original.tracer_mass_kg_m2[tracer][static_cast<size_t>(i)];
+			}
 		}
 		column_mass_before[static_cast<size_t>(c)] = column_mass;
 		column_theta_before[static_cast<size_t>(c)] = column_theta;
@@ -379,12 +431,24 @@ VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
 			state.layer_mass_kg_m2[static_cast<size_t>(i)] = target_mass[static_cast<size_t>(k)];
 			state.theta_mass_kg_k_m2[static_cast<size_t>(i)] = target_theta_mass[static_cast<size_t>(k)];
 		}
+
+		for (size_t tracer = 0; tracer < original.tracer_mass_kg_m2.size(); ++tracer) {
+			std::array<double, LEVELS> source_tracer_mass{};
+			for (int k = 0; k < LEVELS; ++k) {
+				source_tracer_mass[static_cast<size_t>(k)] = original.tracer_mass_kg_m2[tracer][
+					static_cast<size_t>(scalar_index(k, c))];
+			}
+			const auto target_tracer_mass = remap_extensive_by_mass_overlap(
+				source_mass, source_tracer_mass, target_mass);
+			for (int k = 0; k < LEVELS; ++k) {
+				state.tracer_mass_kg_m2[tracer][static_cast<size_t>(scalar_index(k, c))]
+					= target_tracer_mass[static_cast<size_t>(k)];
+			}
+		}
 	}
 
-	// Edge winds are vertical-coordinate variables too. Remap the extensive
-	// edge-mass-weighted momentum, then divide by the remapped edge mass. This is
-	// more conservative than interpolating velocity directly when neighbouring
-	// columns have different total masses.
+	// Remap edge-mass-weighted horizontal momentum with the same source/target
+	// vertical mass coordinate.
 	for (int e = 0; e < grid_->edge_count(); ++e) {
 		const auto &edge = grid_->edge(e);
 		std::array<double, LEVELS> source_edge_mass{};
@@ -432,18 +496,27 @@ VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
 	const double global_theta_after = horizontal_.total_theta_mass_kg_k(state);
 	d.relative_dry_mass_error = relative_error(global_mass_after, global_mass_before);
 	d.relative_theta_mass_error = relative_error(global_theta_after, global_theta_before);
+	for (size_t tracer = 0; tracer < global_tracer_before.size(); ++tracer) {
+		d.max_relative_tracer_mass_error = std::max(d.max_relative_tracer_mass_error,
+			relative_error(horizontal_.total_tracer_mass_kg(state, static_cast<int>(tracer)),
+				global_tracer_before[tracer]));
+	}
 	d.min_layer_mass_kg_m2 = std::numeric_limits<double>::infinity();
 	d.min_potential_temperature_k = std::numeric_limits<double>::infinity();
 
 	for (int c = 0; c < grid_->cell_count(); ++c) {
 		double column_mass_after = 0.0;
 		double column_theta_after = 0.0;
+		std::vector<double> column_tracer_after(state.tracer_mass_kg_m2.size(), 0.0);
 		for (int k = 0; k < LEVELS; ++k) {
 			const int i = scalar_index(k, c);
 			const double mass = state.layer_mass_kg_m2[static_cast<size_t>(i)];
 			const double theta_mass = state.theta_mass_kg_k_m2[static_cast<size_t>(i)];
 			column_mass_after += mass;
 			column_theta_after += theta_mass;
+			for (size_t tracer = 0; tracer < state.tracer_mass_kg_m2.size(); ++tracer) {
+				column_tracer_after[tracer] += state.tracer_mass_kg_m2[tracer][static_cast<size_t>(i)];
+			}
 			d.min_layer_mass_kg_m2 = std::min(d.min_layer_mass_kg_m2, mass);
 			d.min_potential_temperature_k = std::min(
 				d.min_potential_temperature_k, theta_mass / mass);
@@ -452,6 +525,11 @@ VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
 			relative_error(column_mass_after, column_mass_before[static_cast<size_t>(c)]));
 		d.max_column_theta_mass_error = std::max(d.max_column_theta_mass_error,
 			relative_error(column_theta_after, column_theta_before[static_cast<size_t>(c)]));
+		for (size_t tracer = 0; tracer < state.tracer_mass_kg_m2.size(); ++tracer) {
+			d.max_column_tracer_mass_error = std::max(d.max_column_tracer_mass_error,
+				relative_error(column_tracer_after[tracer],
+					column_tracer_before[tracer][static_cast<size_t>(c)]));
+		}
 		for (int k = 0; k < LEVELS; ++k) {
 			const double fraction = state.layer_mass_kg_m2[
 				static_cast<size_t>(scalar_index(k, c))] / column_mass_after;
@@ -462,8 +540,10 @@ VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
 
 	if (d.relative_dry_mass_error > REMAP_REJECT_TOL
 			|| d.relative_theta_mass_error > REMAP_REJECT_TOL
+			|| d.max_relative_tracer_mass_error > REMAP_REJECT_TOL
 			|| d.max_column_mass_error > REMAP_REJECT_TOL
 			|| d.max_column_theta_mass_error > REMAP_REJECT_TOL
+			|| d.max_column_tracer_mass_error > REMAP_REJECT_TOL
 			|| d.max_edge_momentum_error > REMAP_REJECT_TOL) {
 		state = original;
 		throw std::runtime_error("Dry coordinate remap failed conservation gate");
