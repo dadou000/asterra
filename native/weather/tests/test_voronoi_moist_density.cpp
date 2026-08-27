@@ -1,5 +1,6 @@
 #include "voronoi_moist_thermodynamics.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -85,8 +86,6 @@ int main() {
 		require(min_delta > 0.0,
 			"uniform vapor field did not increase virtual temperature anywhere");
 
-		// Adding condensate at fixed vapor/temperature must reduce Tv exactly by
-		// its added inert mass in the denominator.
 		for (size_t i = 0; i < state.layer_mass_kg_m2.size(); ++i) {
 			state.tracer_mass_kg_m2[1][i] = 0.003 * state.layer_mass_kg_m2[i];
 		}
