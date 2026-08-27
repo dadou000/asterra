@@ -219,8 +219,6 @@ bool VoronoiPrecipitation::euler_stage(const State &input,
 	try {
 		const Tendencies t = compute_tendencies(input,
 			rain_fall_speed_mps, snow_fall_speed_mps);
-		VoronoiMoistThermodynamics moist(*transport_, indices_);
-		const auto thermo_before = moist.diagnose_thermodynamics(input);
 		output = input;
 		surface_output = surface_input;
 		auto &rain = output.tracer_mass_kg_m2[static_cast<size_t>(indices_.rain)];
@@ -239,21 +237,9 @@ bool VoronoiPrecipitation::euler_stage(const State &input,
 					|| !std::isfinite(surface_output.water_kg_m2[c])
 					|| !std::isfinite(surface_output.ice_kg_m2[c])) return false;
 		}
-
-		// Removing hydrometeor loading changes full pressure and therefore T at
-		// fixed theta. Transfer the exact local atmospheric source-energy change
-		// to the surface rather than accounting only for snow's fusion reference.
-		const auto thermo_after = moist.diagnose_thermodynamics(output);
-		const int cells = transport_->grid().cell_count();
-		for (int c = 0; c < cells; ++c) {
-			const double before = column_thermodynamic_energy_j_m2(
-				input, thermo_before, indices_, c, cells);
-			const double after = column_thermodynamic_energy_j_m2(
-				output, thermo_after, indices_, c, cells);
-			surface_output.energy_j_m2[static_cast<size_t>(c)]
-				= surface_input.energy_j_m2[static_cast<size_t>(c)] - (after - before);
-			if (!std::isfinite(surface_output.energy_j_m2[static_cast<size_t>(c)])) return false;
-		}
+		// Surface energy is diagnostic to sedimentation and does not enter the
+		// tendencies. The exact nonlinear atmosphere<->surface energy transfer is
+		// applied once to the accepted SSPRK endpoint in ssprk3_attempt().
 		return true;
 	} catch (const std::exception &) {
 		return false;
@@ -286,8 +272,7 @@ bool VoronoiPrecipitation::ssprk3_attempt(const State &initial,
 			+ 0.25 * surface_euler2.water_kg_m2[c];
 		surface2.ice_kg_m2[c] = 0.75 * surface_initial.ice_kg_m2[c]
 			+ 0.25 * surface_euler2.ice_kg_m2[c];
-		surface2.energy_j_m2[c] = 0.75 * surface_initial.energy_j_m2[c]
-			+ 0.25 * surface_euler2.energy_j_m2[c];
+		surface2.energy_j_m2[c] = surface_initial.energy_j_m2[c];
 	}
 	State euler3;
 	SurfaceState surface_euler3;
@@ -307,14 +292,35 @@ bool VoronoiPrecipitation::ssprk3_attempt(const State &initial,
 			+ (2.0 / 3.0) * surface_euler3.water_kg_m2[c];
 		surface_candidate.ice_kg_m2[c] = (1.0 / 3.0) * surface_initial.ice_kg_m2[c]
 			+ (2.0 / 3.0) * surface_euler3.ice_kg_m2[c];
-		surface_candidate.energy_j_m2[c] = (1.0 / 3.0) * surface_initial.energy_j_m2[c]
-			+ (2.0 / 3.0) * surface_euler3.energy_j_m2[c];
 	}
 	for (int tracer : {indices_.rain, indices_.snow}) {
 		for (double mass : candidate.tracer_mass_kg_m2[static_cast<size_t>(tracer)]) {
 			if (!(mass >= 0.0) || !std::isfinite(mass)) return false;
 		}
 	}
+
+	// Close the nonlinear thermodynamic source budget on the final SSPRK state.
+	// Internal stage surface energy is irrelevant to sedimentation tendencies, so
+	// this endpoint transfer is exact and avoids blending nonlinear pressure/T
+	// changes as though energy were a linear prognostic variable.
+	try {
+		VoronoiMoistThermodynamics moist(*transport_, indices_);
+		const auto thermo_before = moist.diagnose_thermodynamics(initial);
+		const auto thermo_after = moist.diagnose_thermodynamics(candidate);
+		const int cells = transport_->grid().cell_count();
+		for (int c = 0; c < cells; ++c) {
+			const double before = column_thermodynamic_energy_j_m2(
+				initial, thermo_before, indices_, c, cells);
+			const double after = column_thermodynamic_energy_j_m2(
+				candidate, thermo_after, indices_, c, cells);
+			surface_candidate.energy_j_m2[static_cast<size_t>(c)]
+				= surface_initial.energy_j_m2[static_cast<size_t>(c)] - (after - before);
+			if (!std::isfinite(surface_candidate.energy_j_m2[static_cast<size_t>(c)])) return false;
+		}
+	} catch (const std::exception &) {
+		return false;
+	}
+
 	for (size_t c = 0; c < surface_candidate.water_kg_m2.size(); ++c) {
 		if (!(surface_candidate.water_kg_m2[c] >= 0.0)
 				|| !(surface_candidate.ice_kg_m2[c] >= 0.0)
