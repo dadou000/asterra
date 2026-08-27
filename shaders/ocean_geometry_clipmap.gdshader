@@ -11,16 +11,14 @@ render_mode cull_disabled, depth_draw_opaque, diffuse_burley, specular_schlick_g
 // Production ocean representation.
 //
 // Every clipmap level samples one common planet-space wave field. Fine vertices
-// geomorph onto the next coarser absolute lattice before entering the actual
-// geometric overlap. The overlap is kept as a watertight underlay instead of
-// being cut with fragment discard, because independently rasterized circular
-// grids do not have identical edge topology.
+// geomorph onto the next coarser absolute lattice before entering the geometric
+// overlap. The mesh itself is a nested 2:1 square clipmap so child and parent
+// boundaries are exact members of the same Cartesian lattice.
 //
-// Spectral LOD is also representation-continuous. If a wavelength becomes too
-// short for a coarse vertex grid, the missing slope continues in fragment-space
-// with the same world phase. It becomes statistical GGX variance only when it is
-// genuinely too small on screen. A ring therefore changes tessellation, not the
-// apparent phase/orientation or the existence of surface detail.
+// Spectral LOD is representation-continuous. If a wavelength becomes too short
+// for a coarse vertex grid, the missing slope continues in fragment-space with
+// the same geodesic planet phase. It becomes statistical GGX variance only when
+// it is genuinely too small on screen.
 
 uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_center_dir = vec3(1.0, 0.0, 0.0);
@@ -61,6 +59,7 @@ varying vec3 v_planet;
 varying vec3 v_render;
 varying vec3 v_slope;
 varying vec2 v_micro_plane;
+varying vec3 v_surface_dir;
 varying float v_depth;
 varying float v_valid;
 varying float v_breaking;
@@ -78,9 +77,8 @@ const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float TERRAIN_HALF_CELLS = 200.0;
 const float TERRAIN_FINE_MORPH_START_Q = 0.875;
 
-// Finish geomorphing before the geometric overlap begins. The old 0.875..1.0
-// morph meant the fine and coarse surfaces represented different spectra through
-// most of their overlap. By q=0.875 the child is now exactly the parent surface.
+// Fine q=0.875 is 56 cells. The next level's inner half-width is 28 cells at
+// twice the spacing, also 56 fine-cell units. Finish the morph exactly there.
 const float OCEAN_FINE_MORPH_START_Q = 0.720;
 const float OCEAN_FINE_MORPH_END_Q = 0.875;
 const float OCEAN_RING_INNER_Q = 0.4375;
@@ -103,8 +101,12 @@ float ocean_smoother01(float x) {
 	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
 }
 
+// Chebyshev radius follows the square topology exactly. A Euclidean radius here
+// would make the wave/spectral morph circular while the actual LOD boundary is
+// square, exposing the transition most strongly near the corners.
 float ocean_ring_q(vec2 cell) {
-	return length(cell) / max(u_grid_cells * 0.5, 1.0);
+	float half_cells = max(u_grid_cells * 0.5, 1.0);
+	return max(abs(cell.x), abs(cell.y)) / half_cells;
 }
 
 float ocean_fine_morph(vec2 cell) {
@@ -354,12 +356,9 @@ vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 }
 
 // Residual geometric spectrum ----------------------------------------------------
-//
-// Vertex LOD is allowed to remove displacement, but removing its slope too makes
-// a coarse ring look like a different material. Reconstruct that missing slope
-// in fragment-space from the same anchored phase. Only screen-unresolvable energy
-// is converted into roughness.
-
+// Vertex LOD may remove displacement, but the same physical slope remains until
+// the wavelength becomes sub-pixel. Phase is evaluated with the exact same
+// geodesic coordinate used by the vertex spectrum.
 void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
 		float wavelength, float base_amp, float phase_offset, float depth,
 		float geometry_spacing, inout vec3 slope, inout float unresolved_variance) {
@@ -367,15 +366,19 @@ void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
 	float residual = 1.0 - geom_w;
 	if (residual <= 0.001) return;
 
-	vec3 anchor_travel = ocean_safe_tangent(u_anchor_dir, axis);
-	vec2 phase_dir = vec2(dot(anchor_travel, u_anchor_right),
-		dot(anchor_travel, u_anchor_up));
-	float dir_len = length(phase_dir);
+	vec3 surface_dir = normalize(v_surface_dir);
+	vec3 physical_travel = ocean_safe_tangent(surface_dir, axis);
+	vec2 footprint_dir = vec2(dot(physical_travel, u_anchor_right),
+		dot(physical_travel, u_anchor_up));
+	float dir_len = length(footprint_dir);
 	if (dir_len <= 1e-6) return;
-	phase_dir /= dir_len;
+	footprint_dir /= dir_len;
 
-	float coord_m = dot(plane_m, phase_dir);
-	float footprint_m = max(fwidth(coord_m), 1e-6);
+	// The plane coordinate is used only to estimate screen footprint. It no longer
+	// defines wave phase, so tangent-plane approximation error cannot accumulate
+	// across large rings.
+	float projected_m = dot(plane_m, footprint_dir);
+	float footprint_m = max(fwidth(projected_m), 1e-6);
 	float pixels_per_wave = wavelength / footprint_m;
 	float screen_w = smoothstep(3.5, 8.0, pixels_per_wave);
 
@@ -384,20 +387,16 @@ void ocean_residual_wave_band(vec3 up, vec2 plane_m, vec3 axis,
 	float k = TAU / wavelength;
 	float residual_slope = amp * k * residual;
 
-	// The coast-steered wave directions live in vertex-space. Keep this normal
-	// continuation for open/deep water, where the planet-space phase axis is the
-	// physical direction. Near shore, unresolved energy becomes roughness instead
-	// of fighting the refraction field.
 	float deep_w = smoothstep(18.0, 95.0, depth);
 	float resolved_w = screen_w * deep_w;
 	unresolved_variance += (1.0 - resolved_w * resolved_w)
 		* residual_slope * residual_slope * 0.5;
 	if (resolved_w <= 0.001) return;
 
-	float anchor_coord = ocean_geodesic_phase_coord(u_anchor_dir, axis);
+	float phase_coord = ocean_geodesic_phase_coord(surface_dir, axis);
 	float omega = ocean_dispersion(k, depth)
 		* ocean_coast_frequency_scale(depth, wavelength);
-	float phase = (anchor_coord + coord_m) * k - omega * u_time_s + phase_offset;
+	float phase = phase_coord * k - omega * u_time_s + phase_offset;
 	vec3 travel = ocean_safe_tangent(up, axis);
 	slope += travel * (residual_slope * cos(phase) * resolved_w);
 }
@@ -537,17 +536,14 @@ void vertex() {
 	vec3 tangential_displacement = wave.displacement - d * radial_h;
 	vec3 displaced = d * (u_planet_radius + radial_h) + tangential_displacement;
 
-	// Keep the coarse overlap instead of discarding it. The child has already
-	// converged to the parent lattice/spectrum before q=0.875, so the overlap is
-	// effectively the same surface. A millimetre/centimetre underlay bias prevents
-	// coincident-depth flicker and fills the inevitable raster gaps between two
-	// independently triangulated circular boundaries without producing a visible
-	// trench like the former metre-scale sink did.
+	// With exact square nesting the underlay is only a depth-fighting guard, not a
+	// seam filler. Keep it sub-centimetre so it cannot read as a trench at grazing
+	// angles while the fine child owns the visible overlap.
 	float seam_underlay = 0.0;
 	if (level > 0 && ring_q < OCEAN_RING_HANDOFF_Q) {
 		float seam_t = 1.0 - ocean_smoother01((ring_q - OCEAN_RING_INNER_Q)
 			/ (OCEAN_RING_HANDOFF_Q - OCEAN_RING_INNER_Q));
-		seam_underlay = seam_t * clamp(spacing * 0.00025, 0.002, 0.020);
+		seam_underlay = seam_t * clamp(spacing * 0.000125, 0.001, 0.008);
 	}
 	float render_radial_h = radial_h - seam_underlay;
 
@@ -557,9 +553,8 @@ void vertex() {
 			u_anchor_up, sample_anchor_m, render_radial_h) + tangential_displacement
 		: d * (u_planet_radius + render_radial_h) + tangential_displacement - u_origin;
 	v_slope = wave.slope;
-	// Always use the absolute anchor plane for optical detail. This must not switch
-	// coordinate systems with the debug displacement mode or the ring number.
 	v_micro_plane = sample_anchor_m;
+	v_surface_dir = d;
 	v_depth = depth;
 	v_breaking = wave.breaking;
 	v_crest = wave.crest;
