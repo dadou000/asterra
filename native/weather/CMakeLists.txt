@@ -14,9 +14,13 @@ add_library(asterra_weather_core STATIC
   src/cubed_sphere_grid.cpp
   src/conservative_transport.cpp
   src/shallow_water_cgrid.cpp
+  src/geodesic_voronoi_grid.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
 
+# Legacy cubed-sphere foundation tests remain temporarily as useful regression
+# references for conservative transport. The nonlinear cubed-sphere dynamical
+# path has been rejected and is no longer a release gate.
 add_executable(asterra_weather_geometry_tests
   tests/test_cubed_sphere.cpp
 )
@@ -35,27 +39,20 @@ add_executable(asterra_weather_shallow_water_tests
 target_link_libraries(asterra_weather_shallow_water_tests PRIVATE asterra_weather_core)
 add_test(NAME shallow_water_cgrid COMMAND asterra_weather_shallow_water_tests)
 
-add_executable(asterra_weather_standard_tests
-  tests/test_shallow_water_standard.cpp
+# Permanent global horizontal mesh gate: MPAS/TRiSK-style spherical
+# Voronoi/Delaunay C-grid with no coordinate poles.
+add_executable(asterra_weather_geodesic_tests
+  tests/test_geodesic_voronoi.cpp
 )
-target_link_libraries(asterra_weather_standard_tests PRIVATE asterra_weather_core)
-add_test(NAME shallow_water_standard COMMAND asterra_weather_standard_tests)
-
-# Temporary diagnostic probe. Remove as soon as the strong TC2 rejection has
-# been localized; it is not part of the permanent benchmark suite.
-add_executable(asterra_weather_strong_balance_probe
-  tests/test_strong_balance_probe.cpp
-)
-target_link_libraries(asterra_weather_strong_balance_probe PRIVATE asterra_weather_core)
-add_test(NAME strong_balance_probe COMMAND asterra_weather_strong_balance_probe)
+target_link_libraries(asterra_weather_geodesic_tests PRIVATE asterra_weather_core)
+add_test(NAME geodesic_voronoi_grid COMMAND asterra_weather_geodesic_tests)
 
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
     asterra_weather_transport_tests
     asterra_weather_shallow_water_tests
-    asterra_weather_standard_tests
-    asterra_weather_strong_balance_probe
+    asterra_weather_geodesic_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -81,9 +78,8 @@ endif()
 add_library(asterra_weather SHARED
   src/register_types.cpp
   src/weather_wind_sampler.cpp
-  # Temporary runtime implementation while the replacement dynamical core is
-  # being built. This file will be deleted rather than maintained as a fallback
-  # once the cubed-sphere dry core passes the mandatory gates.
+  # Temporary runtime implementation until the Voronoi dry core passes its
+  # mandatory gates. It will be deleted, not maintained as a fallback.
   src/weather_native_oklahoma.cpp
 )
 
@@ -102,16 +98,14 @@ if(MSVC)
   target_compile_options(asterra_weather_geometry_tests PRIVATE /O2)
   target_compile_options(asterra_weather_transport_tests PRIVATE /O2)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE /O2)
-  target_compile_options(asterra_weather_standard_tests PRIVATE /O2)
-  target_compile_options(asterra_weather_strong_balance_probe PRIVATE /O2)
+  target_compile_options(asterra_weather_geodesic_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
   target_compile_options(asterra_weather_geometry_tests PRIVATE -O3)
   target_compile_options(asterra_weather_transport_tests PRIVATE -O3)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE -O3)
-  target_compile_options(asterra_weather_standard_tests PRIVATE -O3)
-  target_compile_options(asterra_weather_strong_balance_probe PRIVATE -O3)
+  target_compile_options(asterra_weather_geodesic_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
