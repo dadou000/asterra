@@ -14,6 +14,7 @@ using asterra::weather::normalized;
 
 namespace {
 constexpr double R = 3500000.0;
+constexpr double G = 9.80665;
 constexpr double PS = 110000.0;
 constexpr double T = 288.0;
 constexpr double U = 42.0;
@@ -51,11 +52,65 @@ int main() {
 		GeodesicVoronoiGrid grid(8, R);
 		VoronoiDryTransport transport(grid);
 		require(VoronoiDryTransport::LEVELS == 30, "dry transport is not 30-level");
+		require(transport.top_pressure_pa() > 5000.0 && transport.top_pressure_pa() < 10000.0,
+			"dry transport model-top pressure is outside the intended ~20 km range");
 
-		// Zero-flow hydrostatic reference is an exact no-source state. This also
-		// catches accidental state clipping or thermodynamic reconstruction in the
-		// transport layer.
+		// Mass-form hydrostatic reference. Pressure is reconstructed downward from
+		// the fixed model top using dp = g dm, so surface pressure is a diagnostic
+		// consequence of prognostic dry mass rather than an independently forced
+		// scalar. The isothermal reference must also recover T and the hypsometric
+		// identity at every level.
 		auto rest = transport.make_isothermal_reference(PS, T);
+		const auto hydro = transport.diagnose_hydrostatic(rest);
+		double max_surface_pressure_error = 0.0;
+		double max_layer_mass_pressure_error = 0.0;
+		double max_temperature_error = 0.0;
+		double max_hydrostatic_residual = 0.0;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			max_surface_pressure_error = std::max(max_surface_pressure_error,
+				relative_error(hydro.surface_pressure_pa[static_cast<size_t>(c)], PS));
+			const int top_i = VoronoiDryTransport::LEVELS * grid.cell_count() + c;
+			require(relative_error(hydro.interface_pressure_pa[static_cast<size_t>(top_i)],
+				transport.top_pressure_pa()) < 2e-15,
+				"mass-form hydrostatic model-top pressure changed");
+			for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
+				const int i = k * grid.cell_count() + c;
+				const int il = k * grid.cell_count() + c;
+				const int iu = (k + 1) * grid.cell_count() + c;
+				const double pl = hydro.interface_pressure_pa[static_cast<size_t>(il)];
+				const double pu = hydro.interface_pressure_pa[static_cast<size_t>(iu)];
+				const double mass_from_pressure = (pl - pu) / G;
+				const double mass = rest.layer_mass_kg_m2[static_cast<size_t>(i)];
+				require(pl > pu && pu > 0.0, "mass-form interface pressure is not monotone");
+				max_layer_mass_pressure_error = std::max(max_layer_mass_pressure_error,
+					relative_error(mass_from_pressure, mass));
+				max_temperature_error = std::max(max_temperature_error,
+					std::abs(hydro.temperature_k[static_cast<size_t>(i)] - T));
+				const double expected_dphi = 287.05 * hydro.temperature_k[static_cast<size_t>(i)]
+					* std::log(pl / pu);
+				const double actual_dphi = hydro.interface_geopotential[static_cast<size_t>(iu)]
+					- hydro.interface_geopotential[static_cast<size_t>(il)];
+				max_hydrostatic_residual = std::max(max_hydrostatic_residual,
+					relative_error(actual_dphi, expected_dphi));
+			}
+		}
+		require(max_surface_pressure_error < 5e-14,
+			"prognostic dry mass does not reconstruct reference surface pressure");
+		require(max_layer_mass_pressure_error < 5e-13,
+			"mass-form dp/g identity failed");
+		require(max_temperature_error < 5e-11,
+			"mass-form isothermal reference changed temperature with height");
+		require(max_hydrostatic_residual < 5e-13,
+			"mass-form hypsometric hydrostatic identity failed");
+
+		const auto rest_pg = transport.pressure_gradient_acceleration(rest, hydro);
+		double max_rest_pressure_accel = 0.0;
+		for (double a : rest_pg) max_rest_pressure_accel = std::max(max_rest_pressure_accel, std::abs(a));
+		require(max_rest_pressure_accel < 2e-12,
+			"uniform mass-form hydrostatic atmosphere has a pressure-gradient source");
+
+		// Zero-flow hydrostatic reference is an exact no-source state. This catches
+		// accidental state clipping and roundoff changes from RK recombination.
 		const auto rest_before = rest;
 		const auto rest_diag = transport.step(rest, 21600.0, 0.45);
 		require(rest.layer_mass_kg_m2 == rest_before.layer_mass_kg_m2,
@@ -146,9 +201,44 @@ int main() {
 		require(min_mass > 0.0, "dry transport produced non-positive layer mass");
 		require(min_theta > 150.0, "dry transport produced invalid potential temperature");
 
+		// The transported conservative state must remain diagnosable as a valid
+		// hydrostatic column. A warm anomaly should produce a finite non-zero
+		// hydrostatic pressure/geopotential force without requiring a free pressure
+		// prognostic variable.
+		const auto adv_hydro = transport.diagnose_hydrostatic(advected);
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			require(std::isfinite(adv_hydro.surface_pressure_pa[static_cast<size_t>(c)])
+				&& adv_hydro.surface_pressure_pa[static_cast<size_t>(c)] > transport.top_pressure_pa(),
+				"transported dry state produced invalid surface pressure");
+			for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
+				const int i = k * grid.cell_count() + c;
+				const int il = k * grid.cell_count() + c;
+				const int iu = (k + 1) * grid.cell_count() + c;
+				require(adv_hydro.interface_pressure_pa[static_cast<size_t>(il)]
+					> adv_hydro.interface_pressure_pa[static_cast<size_t>(iu)],
+					"transported dry state lost pressure monotonicity");
+				require(std::isfinite(adv_hydro.temperature_k[static_cast<size_t>(i)])
+					&& adv_hydro.temperature_k[static_cast<size_t>(i)] > 150.0,
+					"transported dry state produced invalid temperature");
+			}
+		}
+		const auto adv_pg = transport.pressure_gradient_acceleration(advected, adv_hydro);
+		double max_adv_pressure_accel = 0.0;
+		for (double a : adv_pg) {
+			require(std::isfinite(a), "transported dry state produced non-finite pressure acceleration");
+			max_adv_pressure_accel = std::max(max_adv_pressure_accel, std::abs(a));
+		}
+		require(max_adv_pressure_accel > 1e-7,
+			"warm dry anomaly produced no hydrostatic horizontal pressure force");
+
 		std::cout << "VoronoiDryTransport PASS\n"
 			<< "  cells/edges/levels: " << grid.cell_count() << "/" << grid.edge_count()
 			<< "/" << VoronoiDryTransport::LEVELS << "\n"
+			<< "  mass-form ps/dp/T/hydro residuals: " << max_surface_pressure_error << "/"
+			<< max_layer_mass_pressure_error << "/" << max_temperature_error << "/"
+			<< max_hydrostatic_residual << "\n"
+			<< "  rest/max warm pressure acceleration: " << max_rest_pressure_accel
+			<< "/" << max_adv_pressure_accel << "\n"
 			<< "  uniform max relative mass/theta error: " << max_uniform_mass_relative
 			<< "/" << max_uniform_theta_relative << "\n"
 			<< "  12h steps/max CFL: " << steps << "/" << max_cfl << "\n"
