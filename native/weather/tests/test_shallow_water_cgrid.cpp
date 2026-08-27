@@ -33,9 +33,6 @@ int main() {
 		CubedSphereGrid grid(N, R);
 		ShallowWaterCGrid sw(grid, G);
 
-		// Gate 1: exact lake-at-rest state. Even an absurdly large requested dt is
-		// reduced to the gravity-wave CFL envelope, but the state itself must remain
-		// bitwise untouched because its RHS is identically zero.
 		auto rest = sw.make_uniform_state(H);
 		const auto rest_before = rest;
 		const auto rest_diag = sw.step(rest, 86400.0, 0.40);
@@ -47,9 +44,6 @@ int main() {
 			"rest-state accepted CFL exceeded target");
 		require(rest_diag.relative_mass_error == 0.0, "lake-at-rest mass changed");
 
-		// Gate 2: explicitly challenge the old A-grid null mode. A cell-centered
-		// +/- checkerboard on one cube face must generate edge acceleration because
-		// each C-grid velocity lies directly between the two scalar cells.
 		auto checker = sw.make_uniform_state(H);
 		constexpr double A = 80.0;
 		for (int j = 2; j < N - 2; ++j) {
@@ -82,9 +76,6 @@ int main() {
 		require(active_interior_edges > tested_interior_edges * 9 / 10,
 			"C-grid pressure operator contains a checkerboard-like null mode");
 
-		// Gate 3: compact free-surface perturbation launches gravity waves for half
-		// a simulated day. It may disperse/damp, but must remain positive, finite,
-		// mass-conservative and bounded without any polar or pressure smoothing.
 		auto wave = sw.make_uniform_state(H);
 		const Vec3d pulse_center = normalized(Vec3d{0.41, -0.72, 0.56});
 		for (int c = 0; c < grid.cell_count(); ++c) {
@@ -126,11 +117,6 @@ int main() {
 			"gravity-wave trough amplitude grew without bound");
 		require(max_speed < 80.0, "gravity-wave velocity grew unrealistically large");
 
-		// Gate 4: smooth spherical geostrophic/solid-body balance using Asterra's
-		// actual 11.5 h rotation rate. The analytic state is a linear shallow-water
-		// balance: U = W R (axis x r), h = H + Omega*W*R^2/g * cos^2(latitude).
-		// There is no latitude-coordinate code in the solver; this test crosses all
-		// cube seams and both geographic poles through pure vector geometry.
 		constexpr double OMEGA = 2.0 * PI / (11.5 * 3600.0);
 		constexpr double FLOW_ANGULAR_RATE = 1.0e-6;
 		const Vec3d spin_axis{0.0, 1.0, 0.0};
@@ -148,6 +134,21 @@ int main() {
 		const auto balanced_initial = balanced;
 		const double balanced_volume0 = rotating.total_volume_m3(balanced);
 		const double initial_max_speed = FLOW_ANGULAR_RATE * R;
+
+		// Diagnose edge->cell reconstruction before time integration. If this fails,
+		// the Coriolis error is geometric reconstruction rather than temporal drift.
+		const auto reconstructed_initial = rotating.reconstruct_cell_velocity(balanced);
+		long double reconstruction_error_sq = 0.0L;
+		long double analytic_velocity_sq = 0.0L;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			const Vec3d analytic = cross(spin_axis, grid.cell(c).center) * (FLOW_ANGULAR_RATE * R);
+			const Vec3d error = reconstructed_initial[c] - analytic;
+			reconstruction_error_sq += static_cast<long double>(dot(error, error)) * grid.cell(c).area_m2;
+			analytic_velocity_sq += static_cast<long double>(dot(analytic, analytic)) * grid.cell(c).area_m2;
+		}
+		const double reconstruction_relative_rms = std::sqrt(static_cast<double>(
+			reconstruction_error_sq / std::max(analytic_velocity_sq, 1.0L)));
+
 		double balanced_elapsed = 0.0;
 		int balanced_steps = 0;
 		double balanced_worst_cfl = 0.0;
@@ -163,7 +164,6 @@ int main() {
 		}
 		const double balanced_volume_error = std::abs(rotating.total_volume_m3(balanced) - balanced_volume0)
 			/ balanced_volume0;
-		require(balanced_volume_error < 2e-11, "balanced rotating flow drifted in total mass");
 
 		long double depth_error_sq = 0.0L;
 		long double velocity_error_sq = 0.0L;
@@ -182,14 +182,29 @@ int main() {
 		const double depth_rms_error = std::sqrt(static_cast<double>(depth_error_sq / area_sum));
 		const double velocity_rms_error = std::sqrt(static_cast<double>(
 			velocity_error_sq / static_cast<long double>(balanced.edge_normal_mps.size())));
+		const auto max_velocity_it = std::max_element(
+			balanced.edge_normal_mps.begin(), balanced.edge_normal_mps.end(),
+			[](double a, double b) { return std::abs(a) < std::abs(b); });
+		const double balanced_max_speed = std::abs(*max_velocity_it);
+
+		std::cout << "ShallowWaterCGrid diagnostics\n"
+			<< "  reconstruction relative RMS: " << reconstruction_relative_rms << "\n"
+			<< "  rotating balance amplitude m: " << balance_amplitude << "\n"
+			<< "  rotating balance steps: " << balanced_steps << "\n"
+			<< "  rotating worst CFL: " << balanced_worst_cfl << "\n"
+			<< "  rotating mass error: " << balanced_volume_error << "\n"
+			<< "  rotating depth RMS error m: " << depth_rms_error << "\n"
+			<< "  rotating velocity RMS error m/s: " << velocity_rms_error << "\n"
+			<< "  rotating max edge speed m/s: " << balanced_max_speed << "\n";
+
+		require(reconstruction_relative_rms < 0.08,
+			"edge-to-cell tangent velocity reconstruction is inaccurate");
+		require(balanced_volume_error < 2e-11, "balanced rotating flow drifted in total mass");
 		require(depth_rms_error < balance_amplitude * 0.35,
 			"balanced spherical flow developed excessive free-surface error");
 		require(velocity_rms_error < initial_max_speed * 0.35,
 			"balanced spherical flow developed excessive velocity error");
-		const double balanced_max_speed = *std::max_element(
-			balanced.edge_normal_mps.begin(), balanced.edge_normal_mps.end(),
-			[](double a, double b) { return std::abs(a) < std::abs(b); });
-		require(std::abs(balanced_max_speed) < initial_max_speed * 1.8,
+		require(balanced_max_speed < initial_max_speed * 1.8,
 			"balanced spherical flow accelerated without bound");
 
 		std::cout << "ShallowWaterCGrid PASS\n"
@@ -202,13 +217,7 @@ int main() {
 			<< "  worst per-step mass error: " << worst_mass_error << "\n"
 			<< "  total wave mass error: " << wave_volume_error << "\n"
 			<< "  max wave speed m/s: " << max_speed << "\n"
-			<< "  rejected/retried steps: " << total_rejections << "\n"
-			<< "  rotating balance amplitude m: " << balance_amplitude << "\n"
-			<< "  rotating balance steps: " << balanced_steps << "\n"
-			<< "  rotating worst CFL: " << balanced_worst_cfl << "\n"
-			<< "  rotating mass error: " << balanced_volume_error << "\n"
-			<< "  rotating depth RMS error m: " << depth_rms_error << "\n"
-			<< "  rotating velocity RMS error m/s: " << velocity_rms_error << "\n";
+			<< "  rejected/retried steps: " << total_rejections << "\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "ShallowWaterCGrid FAIL: " << e.what() << "\n";
