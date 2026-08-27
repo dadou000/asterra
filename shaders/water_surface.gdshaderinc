@@ -86,12 +86,19 @@ float water_wind_speed(vec3 up) {
 	return length(vec2(u, v));
 }
 
-/// Microfacet roughness from sea state. Calibrated so a dead calm is close to a
-/// mirror and a gale scatters the glint across tens of degrees, which is the
-/// Cox-Munk observation that slope variance rises roughly linearly with wind.
+/// Perceptual GGX roughness from unresolved ocean slope statistics.
+///
+/// Godot's material `ROUGHNESS` is perceptual: the GGX alpha used by the BRDF is
+/// roughness^2. Treating the wind-speed response itself as perceptual roughness
+/// made a 10 m/s sea use alpha ~= 0.01, far too mirror-like. A real wind-roughened
+/// sea has a much wider slope distribution. The approximation below stores that
+/// distribution as GGX alpha first and only then converts to perceptual roughness.
+/// Calm water therefore stays sharp, while moderate/high sea produces a broad,
+/// broken sun-glitter path instead of coherent white stripes.
 float water_roughness_from_wind(float wind_speed, float gust) {
 	float w = max(wind_speed * (0.72 + 0.56 * gust), 0.0);
-	return clamp(0.035 + 0.021 * sqrt(w), 0.035, 0.22);
+	float alpha = clamp(0.004 + 0.011 * w, 0.004, 0.215);
+	return sqrt(alpha);
 }
 
 /// Depth colour. Shallow water over sediment is green-turquoise because the
