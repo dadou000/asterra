@@ -17,6 +17,10 @@ Vec3d tangent_basis_1(const Vec3d &radial) {
 		? Vec3d{0.0, 1.0, 0.0} : Vec3d{1.0, 0.0, 0.0};
 	return normalized(cross(reference, radial));
 }
+
+double relative_error(double after, double before) {
+	return std::abs(after - before) / std::max(std::abs(before), 1.0);
+}
 } // namespace
 
 VoronoiDryDynamics::VoronoiDryDynamics(const GeodesicVoronoiGrid &grid,
@@ -44,6 +48,11 @@ void VoronoiDryDynamics::validate_shape(const State &state) const {
 			|| state.edge_normal_mps.size() != edges) {
 		throw std::invalid_argument("Dry dynamics state arrays have wrong size");
 	}
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		if (tracer.size() != scalars) {
+			throw std::invalid_argument("Dry dynamics tracer-mass array has wrong size");
+		}
+	}
 }
 
 bool VoronoiDryDynamics::validate_finite_positive(const State &state) const {
@@ -57,6 +66,11 @@ bool VoronoiDryDynamics::validate_finite_positive(const State &state) const {
 	}
 	for (double u : state.edge_normal_mps) {
 		if (!std::isfinite(u)) return false;
+	}
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		for (double mass : tracer) {
+			if (!(mass >= 0.0) || !std::isfinite(mass)) return false;
+		}
 	}
 	return true;
 }
@@ -310,11 +324,13 @@ VoronoiDryDynamics::Tendencies VoronoiDryDynamics::compute_tendencies(
 	Tendencies t;
 	t.mass_dt.assign(scalar_count, 0.0);
 	t.theta_mass_dt.assign(scalar_count, 0.0);
+	t.tracer_mass_dt.resize(state.tracer_mass_kg_m2.size());
+	for (auto &field : t.tracer_mass_dt) field.assign(scalar_count, 0.0);
 	t.edge_velocity_dt.assign(edge_count, 0.0);
 	t.normal_mass_flux.assign(edge_count, 0.0);
 
-	// Exactly one donor mass flux exists per physical edge and level. The same
-	// flux transports dry mass and mass-weighted theta.
+	// Exactly one donor mass flux exists per physical edge and level. Dry mass,
+	// theta mass and every passive tracer use that same flux.
 	for (int k = 0; k < LEVELS; ++k) {
 		for (int e = 0; e < grid_->edge_count(); ++e) {
 			const auto &edge = grid_->edge(e);
@@ -325,16 +341,24 @@ VoronoiDryDynamics::Tendencies VoronoiDryDynamics::compute_tendencies(
 			if (u == 0.0) continue;
 			const int donor = u > 0.0 ? ia : ib;
 			const double donor_mass = state.layer_mass_kg_m2[static_cast<size_t>(donor)];
-			const double donor_theta = state.theta_mass_kg_k_m2[static_cast<size_t>(donor)]
-				/ donor_mass;
+			const double donor_theta = state.theta_mass_kg_k_m2[static_cast<size_t>(donor)] / donor_mass;
 			const double normal_mass_flux = donor_mass * u;
 			const double mass_rate = edge.edge_length_m * normal_mass_flux;
 			const double theta_rate = mass_rate * donor_theta;
+			const double inv_area_a = 1.0 / grid_->cell(edge.cell_a).area_m2;
+			const double inv_area_b = 1.0 / grid_->cell(edge.cell_b).area_m2;
 			t.normal_mass_flux[static_cast<size_t>(ei)] = normal_mass_flux;
-			t.mass_dt[static_cast<size_t>(ia)] -= mass_rate / grid_->cell(edge.cell_a).area_m2;
-			t.mass_dt[static_cast<size_t>(ib)] += mass_rate / grid_->cell(edge.cell_b).area_m2;
-			t.theta_mass_dt[static_cast<size_t>(ia)] -= theta_rate / grid_->cell(edge.cell_a).area_m2;
-			t.theta_mass_dt[static_cast<size_t>(ib)] += theta_rate / grid_->cell(edge.cell_b).area_m2;
+			t.mass_dt[static_cast<size_t>(ia)] -= mass_rate * inv_area_a;
+			t.mass_dt[static_cast<size_t>(ib)] += mass_rate * inv_area_b;
+			t.theta_mass_dt[static_cast<size_t>(ia)] -= theta_rate * inv_area_a;
+			t.theta_mass_dt[static_cast<size_t>(ib)] += theta_rate * inv_area_b;
+			for (size_t tracer = 0; tracer < state.tracer_mass_kg_m2.size(); ++tracer) {
+				const double mixing_ratio = state.tracer_mass_kg_m2[tracer][static_cast<size_t>(donor)]
+					/ donor_mass;
+				const double tracer_rate = mass_rate * mixing_ratio;
+				t.tracer_mass_dt[tracer][static_cast<size_t>(ia)] -= tracer_rate * inv_area_a;
+				t.tracer_mass_dt[tracer][static_cast<size_t>(ib)] += tracer_rate * inv_area_b;
+			}
 		}
 	}
 
@@ -379,8 +403,6 @@ VoronoiDryDynamics::Tendencies VoronoiDryDynamics::compute_tendencies(
 				= pressure_accel[static_cast<size_t>(edge_index(k, e))] - grad_k;
 		}
 
-		// TRiSK absolute-vorticity flux. q has units (1/s)/(kg/m2), and
-		// normal_mass_flux has kg/(m s), giving the required m/s2 acceleration.
 		for (int e = 0; e < grid_->edge_count(); ++e) {
 			const auto &target = grid_->edge(e);
 			if (target.reconstruction_edges.size() != target.reconstruction_weights.size()) {
@@ -411,6 +433,11 @@ bool VoronoiDryDynamics::euler_stage(const State &input, State &output,
 			output.layer_mass_kg_m2[i] += dt_s * t.mass_dt[i];
 			output.theta_mass_kg_k_m2[i] += dt_s * t.theta_mass_dt[i];
 		}
+		for (size_t tracer = 0; tracer < output.tracer_mass_kg_m2.size(); ++tracer) {
+			for (size_t i = 0; i < output.tracer_mass_kg_m2[tracer].size(); ++i) {
+				output.tracer_mass_kg_m2[tracer][i] += dt_s * t.tracer_mass_dt[tracer][i];
+			}
+		}
 		for (size_t i = 0; i < output.edge_normal_mps.size(); ++i) {
 			output.edge_normal_mps[i] += dt_s * t.edge_velocity_dt[i];
 		}
@@ -434,6 +461,12 @@ bool VoronoiDryDynamics::ssprk3_attempt(const State &initial, State &candidate,
 		s2.theta_mass_kg_k_m2[i] = 0.75 * initial.theta_mass_kg_k_m2[i]
 			+ 0.25 * euler2.theta_mass_kg_k_m2[i];
 	}
+	for (size_t tracer = 0; tracer < s2.tracer_mass_kg_m2.size(); ++tracer) {
+		for (size_t i = 0; i < s2.tracer_mass_kg_m2[tracer].size(); ++i) {
+			s2.tracer_mass_kg_m2[tracer][i] = 0.75 * initial.tracer_mass_kg_m2[tracer][i]
+				+ 0.25 * euler2.tracer_mass_kg_m2[tracer][i];
+		}
+	}
 	for (size_t i = 0; i < s2.edge_normal_mps.size(); ++i) {
 		s2.edge_normal_mps[i] = 0.75 * initial.edge_normal_mps[i]
 			+ 0.25 * euler2.edge_normal_mps[i];
@@ -448,6 +481,12 @@ bool VoronoiDryDynamics::ssprk3_attempt(const State &initial, State &candidate,
 			+ (2.0 / 3.0) * euler3.layer_mass_kg_m2[i];
 		candidate.theta_mass_kg_k_m2[i] = (1.0 / 3.0) * initial.theta_mass_kg_k_m2[i]
 			+ (2.0 / 3.0) * euler3.theta_mass_kg_k_m2[i];
+	}
+	for (size_t tracer = 0; tracer < candidate.tracer_mass_kg_m2.size(); ++tracer) {
+		for (size_t i = 0; i < candidate.tracer_mass_kg_m2[tracer].size(); ++i) {
+			candidate.tracer_mass_kg_m2[tracer][i] = (1.0 / 3.0) * initial.tracer_mass_kg_m2[tracer][i]
+				+ (2.0 / 3.0) * euler3.tracer_mass_kg_m2[tracer][i];
+		}
 	}
 	for (size_t i = 0; i < candidate.edge_normal_mps.size(); ++i) {
 		candidate.edge_normal_mps[i] = (1.0 / 3.0) * initial.edge_normal_mps[i]
@@ -474,6 +513,10 @@ VoronoiDryDynamics::StepDiagnostics VoronoiDryDynamics::step(State &state,
 	diagnostics.requested_dt_s = requested_dt_s;
 	diagnostics.dry_mass_before_kg = total_dry_mass_kg(state);
 	diagnostics.theta_mass_before_kg_k = total_theta_mass_kg_k(state);
+	std::vector<double> tracer_before(state.tracer_mass_kg_m2.size(), 0.0);
+	for (size_t tracer = 0; tracer < tracer_before.size(); ++tracer) {
+		tracer_before[tracer] = total_tracer_mass_kg(state, static_cast<int>(tracer));
+	}
 
 	bool any_motion = false;
 	for (double u : state.edge_normal_mps) if (u != 0.0) { any_motion = true; break; }
@@ -511,13 +554,18 @@ VoronoiDryDynamics::StepDiagnostics VoronoiDryDynamics::step(State &state,
 		if (ssprk3_attempt(original, candidate, attempt_dt, attempt_max_pressure)) {
 			const double mass_after = total_dry_mass_kg(candidate);
 			const double theta_after = total_theta_mass_kg_k(candidate);
-			const double mass_error = std::abs(mass_after - diagnostics.dry_mass_before_kg)
-				/ std::max(std::abs(diagnostics.dry_mass_before_kg), 1.0);
-			const double theta_error = std::abs(theta_after - diagnostics.theta_mass_before_kg_k)
-				/ std::max(std::abs(diagnostics.theta_mass_before_kg_k), 1.0);
+			const double mass_error = relative_error(mass_after, diagnostics.dry_mass_before_kg);
+			const double theta_error = relative_error(theta_after, diagnostics.theta_mass_before_kg_k);
+			double tracer_error = 0.0;
+			for (size_t tracer = 0; tracer < tracer_before.size(); ++tracer) {
+				tracer_error = std::max(tracer_error, relative_error(
+					total_tracer_mass_kg(candidate, static_cast<int>(tracer)), tracer_before[tracer]));
+			}
 			if (std::isfinite(mass_error) && std::isfinite(theta_error)
+					&& std::isfinite(tracer_error)
 					&& mass_error <= CONSERVATION_REJECT_TOL
-					&& theta_error <= CONSERVATION_REJECT_TOL) {
+					&& theta_error <= CONSERVATION_REJECT_TOL
+					&& tracer_error <= CONSERVATION_REJECT_TOL) {
 				state = std::move(candidate);
 				diagnostics.accepted_dt_s = attempt_dt;
 				diagnostics.max_courant = max_courant(original, attempt_dt);
@@ -525,6 +573,7 @@ VoronoiDryDynamics::StepDiagnostics VoronoiDryDynamics::step(State &state,
 				diagnostics.theta_mass_after_kg_k = theta_after;
 				diagnostics.relative_dry_mass_error = mass_error;
 				diagnostics.relative_theta_mass_error = theta_error;
+				diagnostics.max_relative_tracer_mass_error = tracer_error;
 				diagnostics.max_pressure_acceleration_mps2 = attempt_max_pressure;
 				break;
 			}
