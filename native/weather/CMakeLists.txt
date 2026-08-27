@@ -104,6 +104,7 @@ endif()
 add_library(asterra_weather SHARED
   src/register_types.cpp
   src/weather_core_native.cpp
+  src/weather_dry_core_native.cpp
   src/weather_wind_sampler.cpp
   src/weather_native_oklahoma.cpp
 )
