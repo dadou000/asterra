@@ -33,6 +33,10 @@ const float G = 9.81;
 const float BREAKER_GAMMA = 0.78;
 const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
 const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
+const vec3 SWELL_AXIS_C = vec3(0.153, 0.879, 0.451);
+const vec3 SWELL_AXIS_D = vec3(-0.741, 0.529, -0.413);
+const vec3 SWELL_AXIS_E = vec3(0.336, -0.612, 0.716);
+const vec3 SWELL_AXIS_F = vec3(-0.218, -0.771, -0.598);
 
 vec3 safe_tangent(vec3 up, vec3 d) {
     vec3 t = d - up * dot(d, up);
@@ -125,9 +129,17 @@ void main() {
     float diffract_b = diffraction_weight(up, swell_b, landward, depth) * 0.82;
     vec3 dir_a = normalize(mix(refracted_a, diffraction_direction(up, swell_a, landward), diffract_a * 0.52));
     vec3 dir_b = normalize(mix(refracted_b, diffraction_direction(up, swell_b, landward), diffract_b * 0.46));
+    vec3 dir_c = normalize(mix(safe_tangent(up, SWELL_AXIS_C), landward, refract * 0.42));
+    vec3 dir_d = normalize(mix(safe_tangent(up, SWELL_AXIS_D), landward, refract * 0.30));
+    vec3 dir_e = normalize(mix(safe_tangent(up, SWELL_AXIS_E), landward, refract * 0.18));
+    vec3 dir_f = normalize(mix(safe_tangent(up, SWELL_AXIS_F), landward, refract * 0.10));
 
     float phase_a = geodesic_phase_coord(up, SWELL_AXIS_A);
     float phase_b = geodesic_phase_coord(up, SWELL_AXIS_B);
+    float phase_c = geodesic_phase_coord(up, SWELL_AXIS_C);
+    float phase_d = geodesic_phase_coord(up, SWELL_AXIS_D);
+    float phase_e = geodesic_phase_coord(up, SWELL_AXIS_E);
+    float phase_f = geodesic_phase_coord(up, SWELL_AXIS_F);
 
     vec3 displacement = vec3(0.0);
     vec3 grad = vec3(0.0);
@@ -141,13 +153,13 @@ void main() {
         displacement, grad, vel, breaking);
     add_wave(up, dir_b, phase_b, shore_distance, depth, 96.0, 0.78, 0.62, 1.7,
         displacement, grad, vel, breaking);
-    add_wave(up, dir_a, phase_a, shore_distance, depth, 42.0, 0.32, 0.55, 3.1,
+    add_wave(up, dir_c, phase_c, shore_distance, depth, 42.0, 0.32, 0.55, 3.1,
         displacement, grad, vel, breaking);
-    add_wave(up, dir_b, phase_b, shore_distance, depth, 18.0, 0.105, 0.48, 4.6,
+    add_wave(up, dir_d, phase_d, shore_distance, depth, 18.0, 0.105, 0.48, 4.6,
         displacement, grad, vel, breaking);
-    add_wave(up, dir_a, phase_a, shore_distance, depth, 8.0, 0.036, 0.42, 2.2,
+    add_wave(up, dir_e, phase_e, shore_distance, depth, 8.0, 0.036, 0.42, 2.2,
         displacement, grad, vel, breaking);
-    add_wave(up, dir_b, phase_b, shore_distance, depth, 3.4, 0.014, 0.36, 5.4,
+    add_wave(up, dir_f, phase_f, shore_distance, depth, 3.4, 0.014, 0.36, 5.4,
         displacement, grad, vel, breaking);
 
     vec3 normal = normalize(up - grad);
