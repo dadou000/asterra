@@ -12,12 +12,23 @@ static double gc_distance_m(const Vec3d &a, const Vec3d &b, double radius_m) {
 	return angle * radius_m;
 }
 
-ShallowWaterCGrid::ShallowWaterCGrid(const CubedSphereGrid &grid, double gravity_mps2)
-	: grid_(&grid), topology_(grid), gravity_mps2_(gravity_mps2) {
+ShallowWaterCGrid::ShallowWaterCGrid(const CubedSphereGrid &grid,
+		double gravity_mps2, double rotation_rate_rad_s, Vec3d rotation_axis)
+	: grid_(&grid), topology_(grid), gravity_mps2_(gravity_mps2),
+	  rotation_rate_rad_s_(rotation_rate_rad_s), rotation_axis_(normalized(rotation_axis)) {
 	if (!(gravity_mps2_ > 0.0) || !std::isfinite(gravity_mps2_)) {
 		throw std::invalid_argument("ShallowWaterCGrid gravity must be finite and positive");
 	}
+	if (!std::isfinite(rotation_rate_rad_s_)) {
+		throw std::invalid_argument("ShallowWaterCGrid rotation rate must be finite");
+	}
+
 	edge_center_distance_m_.resize(topology_.shared_edges().size());
+	cell_shared_edge_index_.resize(static_cast<size_t>(grid.cell_count()));
+	cell_shared_edge_sign_.resize(static_cast<size_t>(grid.cell_count()));
+	for (auto &indices : cell_shared_edge_index_) indices.fill(-1);
+	for (auto &signs : cell_shared_edge_sign_) signs.fill(0.0);
+
 	for (size_t e = 0; e < topology_.shared_edges().size(); ++e) {
 		const auto &edge = topology_.shared_edges()[e];
 		const double distance = gc_distance_m(
@@ -26,6 +37,18 @@ ShallowWaterCGrid::ShallowWaterCGrid(const CubedSphereGrid &grid, double gravity
 			throw std::runtime_error("ShallowWaterCGrid encountered a degenerate dual edge");
 		}
 		edge_center_distance_m_[e] = distance;
+		cell_shared_edge_index_[edge.cell_a][edge.edge_a] = static_cast<int>(e);
+		cell_shared_edge_sign_[edge.cell_a][edge.edge_a] = 1.0;
+		cell_shared_edge_index_[edge.cell_b][edge.edge_b] = static_cast<int>(e);
+		cell_shared_edge_sign_[edge.cell_b][edge.edge_b] = -1.0;
+	}
+	for (int c = 0; c < grid.cell_count(); ++c) {
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			if (cell_shared_edge_index_[c][local_edge] < 0
+					|| cell_shared_edge_sign_[c][local_edge] == 0.0) {
+				throw std::runtime_error("ShallowWaterCGrid cell is missing a shared edge mapping");
+			}
+		}
 	}
 }
 
@@ -98,10 +121,11 @@ double ShallowWaterCGrid::max_wave_courant(const State &state, double dt_s) cons
 			+ std::sqrt(gravity_mps2_ * h);
 		max_rate = std::max(max_rate, characteristic_speed / edge_center_distance_m_[e]);
 	}
-	// The fastest 2-D C-grid gravity mode contains simultaneous propagation in
-	// both horizontal directions. sqrt(2) converts the edge Courant to a safe
-	// quasi-uniform two-dimensional wave Courant.
-	return dt_s * max_rate * std::sqrt(2.0);
+	const double gravity_wave_cfl = dt_s * max_rate * std::sqrt(2.0);
+	// Explicit Coriolis is an inertial oscillator. Keep its dimensionless rotation
+	// interval bounded by the same controller even on very deep/coarse test grids.
+	const double inertial_cfl = dt_s * 2.0 * std::abs(rotation_rate_rad_s_);
+	return std::max(gravity_wave_cfl, inertial_cfl);
 }
 
 double ShallowWaterCGrid::stable_dt(const State &state, double target_cfl,
@@ -117,6 +141,45 @@ double ShallowWaterCGrid::stable_dt(const State &state, double target_cfl,
 		throw std::runtime_error("Shallow-water state has invalid characteristic speed");
 	}
 	return std::min(maximum_dt_s, target_cfl / unit_cfl);
+}
+
+std::vector<Vec3d> ShallowWaterCGrid::reconstruct_cell_velocity(const State &state) const {
+	validate_shape(state);
+	std::vector<Vec3d> velocity(static_cast<size_t>(grid_->cell_count()));
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const auto &geom = grid_->cell(c);
+		double a00 = 0.0;
+		double a01 = 0.0;
+		double a11 = 0.0;
+		double b0 = 0.0;
+		double b1 = 0.0;
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			const int shared_index = cell_shared_edge_index_[c][local_edge];
+			const double sign = cell_shared_edge_sign_[c][local_edge];
+			const auto &shared = topology_.shared_edges()[static_cast<size_t>(shared_index)];
+			const Vec3d outward = shared.normal_a_to_b * sign;
+			const double measured_outward = state.edge_normal_mps[shared_index] * sign;
+			const double nx = dot(outward, geom.tangent_u);
+			const double ny = dot(outward, geom.tangent_v);
+			a00 += nx * nx;
+			a01 += nx * ny;
+			a11 += ny * ny;
+			b0 += nx * measured_outward;
+			b1 += ny * measured_outward;
+		}
+		const double determinant = a00 * a11 - a01 * a01;
+		if (!(std::abs(determinant) > 1.0e-12) || !std::isfinite(determinant)) {
+			throw std::runtime_error("C-grid tangent velocity reconstruction is singular");
+		}
+		const double u = (b0 * a11 - b1 * a01) / determinant;
+		const double v = (b1 * a00 - b0 * a01) / determinant;
+		velocity[c] = geom.tangent_u * u + geom.tangent_v * v;
+		if (!std::isfinite(velocity[c].x) || !std::isfinite(velocity[c].y)
+				|| !std::isfinite(velocity[c].z)) {
+			throw std::runtime_error("C-grid tangent velocity reconstruction produced NaN/Inf");
+		}
+	}
+	return velocity;
 }
 
 ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
@@ -139,7 +202,7 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 	// finite-volume mass equation monotone. A multidimensional donor limiter scales
 	// all outgoing fluxes from a nearly dry cell together, preserving positivity
 	// and exact equal/opposite transfer without post-step clipping.
-	std::vector<double> raw_volume_rate(edge_count, 0.0); // m^3/s, positive a -> b
+	std::vector<double> raw_volume_rate(edge_count, 0.0);
 	std::vector<double> outgoing_rate(cell_count, 0.0);
 	for (size_t e = 0; e < edge_count; ++e) {
 		const auto &edge = topology_.shared_edges()[e];
@@ -181,16 +244,27 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 		output.depth_m[c] = volume / grid_->cell(c).area_m2;
 	}
 
-	// C-grid pressure gradient: scalar geopotential lives at cell centers and its
-	// difference accelerates the normal velocity that lives directly between those
-	// cells. An alternating +/- cell field therefore produces a maximum, not zero,
-	// edge gradient; this removes the old collocated checkerboard null mode.
+	const std::vector<Vec3d> cell_velocity = rotation_rate_rad_s_ != 0.0
+		? reconstruct_cell_velocity(input) : std::vector<Vec3d>{};
+
+	// C-grid pressure gradient + geometric spherical Coriolis. Scalar geopotential
+	// lives at cell centers and its difference accelerates the normal velocity
+	// directly between those cells. Coriolis uses f=2*Omega*(axis dot r) and the
+	// reconstructed physical tangent vector; there is no latitude/pole branch.
 	for (size_t e = 0; e < edge_count; ++e) {
 		const auto &edge = topology_.shared_edges()[e];
 		const double gradient = (input.depth_m[edge.cell_b] - input.depth_m[edge.cell_a])
 			/ edge_center_distance_m_[e];
-		output.edge_normal_mps[e] = input.edge_normal_mps[e]
-			- gravity_mps2_ * gradient * dt_s;
+		double acceleration = -gravity_mps2_ * gradient;
+		if (rotation_rate_rad_s_ != 0.0) {
+			const Vec3d radial = edge.midpoint;
+			Vec3d u_edge = (cell_velocity[edge.cell_a] + cell_velocity[edge.cell_b]) * 0.5;
+			u_edge = u_edge - radial * dot(u_edge, radial);
+			const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, radial);
+			const Vec3d coriolis = cross(radial, u_edge) * (-f);
+			acceleration += dot(coriolis, edge.normal_a_to_b);
+		}
+		output.edge_normal_mps[e] = input.edge_normal_mps[e] + acceleration * dt_s;
 		if (!std::isfinite(output.edge_normal_mps[e])) {
 			throw std::runtime_error("Shallow-water momentum produced NaN/Inf");
 		}
@@ -254,9 +328,6 @@ ShallowWaterCGrid::StepDiagnostics ShallowWaterCGrid::step(
 	const State initial = state;
 	const double first_dt = stable_dt(initial, target_cfl, requested_dt_s);
 
-	// A perfectly uniform resting layer has exactly zero RHS. Preserve it bitwise;
-	// still report the CFL-limited accepted interval so the scheduler never claims
-	// an explicit step larger than its gravity-wave stability envelope.
 	if (is_exact_rest_state(initial)) {
 		diag.accepted_dt_s = first_dt;
 		diag.max_wave_courant = max_wave_courant(initial, first_dt);
