@@ -238,6 +238,34 @@ VoronoiDryTransport::StepDiagnostics VoronoiDryTransport::step(State &state,
 	diagnostics.dry_mass_before_kg = total_dry_mass_kg(state);
 	diagnostics.theta_mass_before_kg_k = total_theta_mass_kg_k(state);
 
+	bool any_motion = false;
+	for (double u : state.edge_normal_mps) {
+		if (u != 0.0) {
+			any_motion = true;
+			break;
+		}
+	}
+	if (!any_motion) {
+		// Preserve hydrostatic rest bit-for-bit. Running an algebraically zero
+		// RHS through SSPRK3 can still perturb the last bit through convex
+		// recombination, which is undesirable for the model's exact no-source state.
+		diagnostics.accepted_dt_s = requested_dt_s;
+		diagnostics.max_courant = 0.0;
+		diagnostics.dry_mass_after_kg = diagnostics.dry_mass_before_kg;
+		diagnostics.theta_mass_after_kg_k = diagnostics.theta_mass_before_kg_k;
+		diagnostics.relative_dry_mass_error = 0.0;
+		diagnostics.relative_theta_mass_error = 0.0;
+		diagnostics.min_layer_mass_kg_m2 = std::numeric_limits<double>::infinity();
+		diagnostics.min_potential_temperature_k = std::numeric_limits<double>::infinity();
+		for (size_t i = 0; i < state.layer_mass_kg_m2.size(); ++i) {
+			const double mass = state.layer_mass_kg_m2[i];
+			diagnostics.min_layer_mass_kg_m2 = std::min(diagnostics.min_layer_mass_kg_m2, mass);
+			diagnostics.min_potential_temperature_k = std::min(
+				diagnostics.min_potential_temperature_k, state.theta_mass_kg_k_m2[i] / mass);
+		}
+		return diagnostics;
+	}
+
 	const State original = state;
 	double attempt_dt = stable_dt(state, target_cfl, requested_dt_s);
 	for (int attempt = 0; attempt <= max_retries; ++attempt) {
