@@ -68,6 +68,11 @@ static func preset_description(preset: int) -> String:
 ## wavelengths that are too expensive to displace geometrically are converted
 ## into normal/slope variance so distant water does not turn into a mirror.
 ##
+## `geometry_spacing_scale` changes the metre spacing of the same concentric
+## topology rather than multiplying mesh vertex count. Ultra therefore halves
+## triangle size at a given distance and pays roughly one additional clipmap
+## level, while Performance can cover the same horizon with fewer vertices.
+##
 ## The interaction values bound the analytical disturbance history consumed by
 ## the visual shader. Future hull/propeller systems can submit exactly the same
 ## impulses on every preset; lower presets simply retain fewer of them visually.
@@ -77,6 +82,7 @@ static func water_profile(preset: int) -> Dictionary:
 			return {
 				"displacement_band_count": 3,
 				"micro_normal_band_count": 1,
+				"geometry_spacing_scale": 1.35,
 				"displacement_spacing_scale": 1.45,
 				"bathymetry_level_limit": 4,
 				"foam_quality": 0.45,
@@ -90,6 +96,7 @@ static func water_profile(preset: int) -> Dictionary:
 			return {
 				"displacement_band_count": 4,
 				"micro_normal_band_count": 2,
+				"geometry_spacing_scale": 1.0,
 				"displacement_spacing_scale": 1.15,
 				"bathymetry_level_limit": 6,
 				"foam_quality": 0.70,
@@ -103,6 +110,7 @@ static func water_profile(preset: int) -> Dictionary:
 			return {
 				"displacement_band_count": 6,
 				"micro_normal_band_count": 6,
+				"geometry_spacing_scale": 0.50,
 				"displacement_spacing_scale": 0.82,
 				"bathymetry_level_limit": 8,
 				"foam_quality": 1.0,
@@ -116,6 +124,7 @@ static func water_profile(preset: int) -> Dictionary:
 			return {
 				"displacement_band_count": 5,
 				"micro_normal_band_count": 4,
+				"geometry_spacing_scale": 0.72,
 				"displacement_spacing_scale": 1.0,
 				"bathymetry_level_limit": 7,
 				"foam_quality": 0.90,
