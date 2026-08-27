@@ -24,6 +24,34 @@ VoronoiDryTransport::VoronoiDryTransport(const GeodesicVoronoiGrid &grid,
 	if (!(top_pressure_pa_ > 0.0) || !std::isfinite(top_pressure_pa_)) {
 		throw std::invalid_argument("Dry-transport model-top pressure must be finite and positive");
 	}
+	surface_geopotential_m2_s2_.assign(static_cast<size_t>(grid.cell_count()), 0.0);
+}
+
+void VoronoiDryTransport::set_surface_height_m(const std::vector<double> &height_m) {
+	if (height_m.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Dry terrain height array has wrong size");
+	}
+	std::vector<double> geopotential(height_m.size());
+	for (size_t i = 0; i < height_m.size(); ++i) {
+		if (!std::isfinite(height_m[i])) {
+			throw std::invalid_argument("Dry terrain height must be finite");
+		}
+		geopotential[i] = gravity_mps2_ * height_m[i];
+	}
+	set_surface_geopotential_m2_s2(geopotential);
+}
+
+void VoronoiDryTransport::set_surface_geopotential_m2_s2(
+		const std::vector<double> &geopotential) {
+	if (geopotential.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Dry surface-geopotential array has wrong size");
+	}
+	for (double phi : geopotential) {
+		if (!std::isfinite(phi)) {
+			throw std::invalid_argument("Dry surface geopotential must be finite");
+		}
+	}
+	surface_geopotential_m2_s2_ = geopotential;
 }
 
 void VoronoiDryTransport::validate_shape(const State &state) const {
@@ -53,13 +81,19 @@ bool VoronoiDryTransport::validate_finite_positive(const State &state) const {
 	return true;
 }
 
-VoronoiDryTransport::State VoronoiDryTransport::make_isothermal_reference(
-		double surface_pressure_pa, double temperature_k) const {
-	if (!(surface_pressure_pa > top_pressure_pa_) || !std::isfinite(surface_pressure_pa)) {
-		throw std::invalid_argument("Dry reference surface pressure must exceed model-top pressure");
+VoronoiDryTransport::State VoronoiDryTransport::make_isothermal_with_surface_pressure(
+		const std::vector<double> &surface_pressure_pa,
+		double temperature_k) const {
+	if (surface_pressure_pa.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Dry reference surface-pressure array has wrong size");
 	}
 	if (!(temperature_k > 100.0) || !std::isfinite(temperature_k)) {
 		throw std::invalid_argument("Dry reference temperature must be finite and positive");
+	}
+	for (double ps : surface_pressure_pa) {
+		if (!(ps > top_pressure_pa_) || !std::isfinite(ps)) {
+			throw std::invalid_argument("Dry reference surface pressure must exceed model-top pressure");
+		}
 	}
 
 	const auto &sigma = hydrostatic_.sigma_interfaces();
@@ -71,22 +105,51 @@ VoronoiDryTransport::State VoronoiDryTransport::make_isothermal_reference(
 	state.theta_mass_kg_k_m2.resize(state.layer_mass_kg_m2.size());
 	state.edge_normal_mps.assign(static_cast<size_t>(LEVELS) * grid_->edge_count(), 0.0);
 
-	for (int k = 0; k < LEVELS; ++k) {
-		const double eta_lower = (sigma[k] - sigma_top) * inv_sigma_span;
-		const double eta_upper = (sigma[k + 1] - sigma_top) * inv_sigma_span;
-		const double p_lower = top_pressure_pa_ + eta_lower * (surface_pressure_pa - top_pressure_pa_);
-		const double p_upper = top_pressure_pa_ + eta_upper * (surface_pressure_pa - top_pressure_pa_);
-		const double mass = (p_lower - p_upper) / gravity_mps2_;
-		const double p_center = std::sqrt(p_lower * p_upper);
-		const double theta = temperature_k * std::pow(
-			VoronoiDryHydrostatic::P0_PA / p_center, VoronoiDryHydrostatic::KAPPA);
-		for (int c = 0; c < grid_->cell_count(); ++c) {
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double ps = surface_pressure_pa[static_cast<size_t>(c)];
+		for (int k = 0; k < LEVELS; ++k) {
+			const double eta_lower = (sigma[k] - sigma_top) * inv_sigma_span;
+			const double eta_upper = (sigma[k + 1] - sigma_top) * inv_sigma_span;
+			const double p_lower = top_pressure_pa_ + eta_lower * (ps - top_pressure_pa_);
+			const double p_upper = top_pressure_pa_ + eta_upper * (ps - top_pressure_pa_);
+			const double mass = (p_lower - p_upper) / gravity_mps2_;
+			const double p_center = std::sqrt(p_lower * p_upper);
+			const double theta = temperature_k * std::pow(
+				VoronoiDryHydrostatic::P0_PA / p_center, VoronoiDryHydrostatic::KAPPA);
 			const int i = scalar_index(k, c);
 			state.layer_mass_kg_m2[static_cast<size_t>(i)] = mass;
 			state.theta_mass_kg_k_m2[static_cast<size_t>(i)] = mass * theta;
 		}
 	}
 	return state;
+}
+
+VoronoiDryTransport::State VoronoiDryTransport::make_isothermal_reference(
+		double surface_pressure_pa, double temperature_k) const {
+	std::vector<double> pressure(static_cast<size_t>(grid_->cell_count()), surface_pressure_pa);
+	return make_isothermal_with_surface_pressure(pressure, temperature_k);
+}
+
+VoronoiDryTransport::State VoronoiDryTransport::make_isothermal_terrain_balanced_reference(
+		double reference_surface_pressure_pa, double temperature_k) const {
+	if (!(reference_surface_pressure_pa > top_pressure_pa_)
+			|| !std::isfinite(reference_surface_pressure_pa)) {
+		throw std::invalid_argument("Terrain-balanced reference pressure must exceed model-top pressure");
+	}
+	if (!(temperature_k > 100.0) || !std::isfinite(temperature_k)) {
+		throw std::invalid_argument("Terrain-balanced reference temperature is invalid");
+	}
+	std::vector<double> pressure(static_cast<size_t>(grid_->cell_count()), 0.0);
+	const double inv_rd_t = 1.0 / (VoronoiDryHydrostatic::RD * temperature_k);
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		pressure[static_cast<size_t>(c)] = reference_surface_pressure_pa * std::exp(
+			-surface_geopotential_m2_s2_[static_cast<size_t>(c)] * inv_rd_t);
+		if (!(pressure[static_cast<size_t>(c)] > top_pressure_pa_)
+				|| !std::isfinite(pressure[static_cast<size_t>(c)])) {
+			throw std::runtime_error("Terrain is too high for the configured pressure top/reference state");
+		}
+	}
+	return make_isothermal_with_surface_pressure(pressure, temperature_k);
 }
 
 VoronoiDryTransport::HydroDiagnostics VoronoiDryTransport::diagnose_hydrostatic(
@@ -121,7 +184,8 @@ VoronoiDryTransport::HydroDiagnostics VoronoiDryTransport::diagnose_hydrostatic(
 		d.surface_pressure_pa[static_cast<size_t>(c)]
 			= d.interface_pressure_pa[static_cast<size_t>(interface_index(0, c))];
 
-		d.interface_geopotential[static_cast<size_t>(interface_index(0, c))] = 0.0;
+		d.interface_geopotential[static_cast<size_t>(interface_index(0, c))]
+			= surface_geopotential_m2_s2_[static_cast<size_t>(c)];
 		for (int k = 0; k < LEVELS; ++k) {
 			const int i = scalar_index(k, c);
 			const double mass = state.layer_mass_kg_m2[static_cast<size_t>(i)];
