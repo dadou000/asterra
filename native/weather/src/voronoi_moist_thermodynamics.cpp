@@ -1,0 +1,316 @@
+#include "voronoi_moist_thermodynamics.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
+namespace asterra::weather {
+
+namespace {
+constexpr double MIN_THERMODYNAMIC_T_K = 150.0;
+constexpr double MAX_THERMODYNAMIC_T_K = 400.0;
+constexpr double ROOT_ENTHALPY_TOL_J_KG = 1.0e-7;
+constexpr int ROOT_ITERATIONS = 96;
+
+struct EquilibriumPartition {
+	double vapor = 0.0;
+	double liquid = 0.0;
+	double ice = 0.0;
+	double specific_enthalpy_j_kg = 0.0;
+};
+
+bool finite_nonnegative(double x) {
+	return std::isfinite(x) && x >= 0.0;
+}
+
+// Internal saturation helper used by the root solve. At temperatures where
+// saturation vapor pressure reaches the dry-core pressure, the dilute closure
+// cannot represent a saturated state; treating qsat as +infinity correctly
+// selects the all-vapor branch for finite total-water mixing ratios.
+double saturation_mixing_ratio_or_infinity(double pressure_pa, double temperature_k) {
+	const double es = VoronoiMoistThermodynamics::saturation_vapor_pressure_pa(temperature_k);
+	if (!(pressure_pa > 0.0) || !std::isfinite(pressure_pa)) {
+		throw std::invalid_argument("Moist thermodynamics pressure must be finite and positive");
+	}
+	if (es >= pressure_pa) return std::numeric_limits<double>::infinity();
+	return VoronoiMoistThermodynamics::EPSILON * es / (pressure_pa - es);
+}
+
+EquilibriumPartition equilibrium_partition(double pressure_pa, double temperature_k,
+		double total_water_mixing_ratio) {
+	if (!finite_nonnegative(total_water_mixing_ratio)) {
+		throw std::invalid_argument("Moist total-water mixing ratio must be finite and non-negative");
+	}
+	const double qsat = saturation_mixing_ratio_or_infinity(pressure_pa, temperature_k);
+	EquilibriumPartition e;
+	e.vapor = std::min(total_water_mixing_ratio, qsat);
+	const double condensate = total_water_mixing_ratio - e.vapor;
+	const double fi = VoronoiMoistThermodynamics::ice_fraction(temperature_k);
+	e.ice = condensate * fi;
+	e.liquid = condensate - e.ice;
+	e.specific_enthalpy_j_kg = VoronoiMoistThermodynamics::CP_DRY * temperature_k
+		+ VoronoiMoistThermodynamics::LV0_J_KG * e.vapor
+		- VoronoiMoistThermodynamics::LF0_J_KG * e.ice;
+	return e;
+}
+
+} // namespace
+
+VoronoiMoistThermodynamics::VoronoiMoistThermodynamics(
+		const VoronoiDryTransport &transport, TracerIndices indices)
+	: transport_(&transport), indices_(indices) {
+	validate_indices();
+	if (transport.grid().cell_count() <= 0) {
+		throw std::invalid_argument("Moist thermodynamics requires a built dry transport grid");
+	}
+}
+
+int VoronoiMoistThermodynamics::scalar_count() const {
+	return VoronoiDryTransport::LEVELS * transport_->grid().cell_count();
+}
+
+void VoronoiMoistThermodynamics::validate_indices() const {
+	if (indices_.vapor < 0 || indices_.cloud_liquid < 0 || indices_.cloud_ice < 0) {
+		throw std::invalid_argument("Moist tracer indices must be non-negative");
+	}
+	if (indices_.vapor == indices_.cloud_liquid
+			|| indices_.vapor == indices_.cloud_ice
+			|| indices_.cloud_liquid == indices_.cloud_ice) {
+		throw std::invalid_argument("Moist vapor/liquid/ice tracer indices must be distinct");
+	}
+}
+
+void VoronoiMoistThermodynamics::ensure_water_tracers(State &state) const {
+	const size_t expected = static_cast<size_t>(scalar_count());
+	if (state.layer_mass_kg_m2.size() != expected
+			|| state.theta_mass_kg_k_m2.size() != expected) {
+		throw std::invalid_argument("Moist thermodynamics dry scalar arrays have wrong size");
+	}
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		if (tracer.size() != expected) {
+			throw std::invalid_argument("Moist thermodynamics encountered a malformed tracer field");
+		}
+	}
+	const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
+	while (static_cast<int>(state.tracer_mass_kg_m2.size()) <= highest) {
+		state.tracer_mass_kg_m2.emplace_back(expected, 0.0);
+	}
+}
+
+double VoronoiMoistThermodynamics::saturation_vapor_pressure_pa(double temperature_k) {
+	if (!(temperature_k >= MIN_THERMODYNAMIC_T_K)
+			|| !(temperature_k <= MAX_THERMODYNAMIC_T_K)
+			|| !std::isfinite(temperature_k)) {
+		throw std::invalid_argument("Moist saturation temperature is outside [150,400] K");
+	}
+
+	// Murphy & Koop (2005) style closed forms over liquid water and ice. The
+	// mixed-phase range is blended in log-pressure space so qsat remains smooth
+	// across the 253.15..273.15 K cloud phase transition used below.
+	const double log_t = std::log(temperature_k);
+	const double log_es_water = 54.842763 - 6763.22 / temperature_k
+		- 4.210 * log_t + 0.000367 * temperature_k
+		+ std::tanh(0.0415 * (temperature_k - 218.8))
+			* (53.878 - 1331.22 / temperature_k - 9.44523 * log_t
+				+ 0.014025 * temperature_k);
+	const double log_es_ice = 9.550426 - 5723.265 / temperature_k
+		+ 3.53068 * log_t - 0.00728332 * temperature_k;
+	const double fi = ice_fraction(temperature_k);
+	const double log_es = (1.0 - fi) * log_es_water + fi * log_es_ice;
+	const double es = std::exp(log_es);
+	if (!(es > 0.0) || !std::isfinite(es)) {
+		throw std::runtime_error("Moist saturation vapor pressure became invalid");
+	}
+	return es;
+}
+
+double VoronoiMoistThermodynamics::saturation_mixing_ratio(
+		double pressure_pa, double temperature_k) {
+	if (!(pressure_pa > 0.0) || !std::isfinite(pressure_pa)) {
+		throw std::invalid_argument("Moist saturation pressure must be finite and positive");
+	}
+	const double es = saturation_vapor_pressure_pa(temperature_k);
+	if (!(pressure_pa > es)) {
+		throw std::invalid_argument("Moist saturation mixing ratio requires p > saturation vapor pressure");
+	}
+	return EPSILON * es / (pressure_pa - es);
+}
+
+double VoronoiMoistThermodynamics::ice_fraction(double temperature_k) {
+	if (!std::isfinite(temperature_k)) {
+		throw std::invalid_argument("Moist phase temperature must be finite");
+	}
+	if (temperature_k <= T_ALL_ICE_K) return 1.0;
+	if (temperature_k >= T_FREEZE_K) return 0.0;
+	return (T_FREEZE_K - temperature_k) / (T_FREEZE_K - T_ALL_ICE_K);
+}
+
+void VoronoiMoistThermodynamics::initialize_uniform_relative_humidity(
+		State &state, double relative_humidity) const {
+	if (!(relative_humidity >= 0.0) || !std::isfinite(relative_humidity)) {
+		throw std::invalid_argument("Moist relative humidity must be finite and non-negative");
+	}
+	ensure_water_tracers(state);
+	const auto hydro = transport_->diagnose_hydrostatic(state);
+	const int cells = transport_->grid().cell_count();
+	for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
+		for (int c = 0; c < cells; ++c) {
+			const size_t i = static_cast<size_t>(k * cells + c);
+			const double qsat = saturation_mixing_ratio_or_infinity(
+				hydro.layer_pressure_pa[i], hydro.temperature_k[i]);
+			if (!std::isfinite(qsat)) {
+				throw std::runtime_error("Uniform-RH initialization reached non-dilute saturation regime");
+			}
+			const double dry = state.layer_mass_kg_m2[i];
+			state.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)][i]
+				= dry * relative_humidity * qsat;
+			state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)][i] = 0.0;
+			state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)][i] = 0.0;
+		}
+	}
+}
+
+double VoronoiMoistThermodynamics::total_water_mass_kg(const State &state) const {
+	const int cells = transport_->grid().cell_count();
+	const auto &qv = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.vapor));
+	const auto &ql = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_liquid));
+	const auto &qi = state.tracer_mass_kg_m2.at(static_cast<size_t>(indices_.cloud_ice));
+	long double total = 0.0L;
+	for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
+		for (int c = 0; c < cells; ++c) {
+			const size_t i = static_cast<size_t>(k * cells + c);
+			total += static_cast<long double>(qv[i] + ql[i] + qi[i])
+				* static_cast<long double>(transport_->grid().cell(c).area_m2);
+		}
+	}
+	return static_cast<double>(total);
+}
+
+VoronoiMoistThermodynamics::AdjustmentDiagnostics
+VoronoiMoistThermodynamics::saturation_adjust(State &state) const {
+	ensure_water_tracers(state);
+	const auto hydro = transport_->diagnose_hydrostatic(state);
+	const int cells = transport_->grid().cell_count();
+	const size_t vapor_index = static_cast<size_t>(indices_.vapor);
+	const size_t liquid_index = static_cast<size_t>(indices_.cloud_liquid);
+	const size_t ice_index = static_cast<size_t>(indices_.cloud_ice);
+
+	for (size_t t : {vapor_index, liquid_index, ice_index}) {
+		for (double water_mass : state.tracer_mass_kg_m2[t]) {
+			if (!finite_nonnegative(water_mass)) {
+				throw std::runtime_error("Moist saturation adjustment received negative/non-finite water mass");
+			}
+	}
+	}
+
+	AdjustmentDiagnostics d;
+	d.total_water_before_kg = total_water_mass_kg(state);
+	d.min_temperature_k = std::numeric_limits<double>::infinity();
+	d.max_temperature_k = -std::numeric_limits<double>::infinity();
+
+	for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
+		for (int c = 0; c < cells; ++c) {
+			const size_t i = static_cast<size_t>(k * cells + c);
+			const double dry = state.layer_mass_kg_m2[i];
+			if (!(dry > 0.0) || !std::isfinite(dry)) {
+				throw std::runtime_error("Moist saturation adjustment encountered invalid dry mass");
+			}
+			const double pressure = hydro.layer_pressure_pa[i];
+			const double temperature_before = hydro.temperature_k[i];
+			const double qv_before = state.tracer_mass_kg_m2[vapor_index][i] / dry;
+			const double ql_before = state.tracer_mass_kg_m2[liquid_index][i] / dry;
+			const double qi_before = state.tracer_mass_kg_m2[ice_index][i] / dry;
+			const double qt = qv_before + ql_before + qi_before;
+			if (!finite_nonnegative(qt)) {
+				throw std::runtime_error("Moist saturation adjustment encountered invalid total water");
+			}
+
+			const double qsat_before = saturation_mixing_ratio_or_infinity(pressure, temperature_before);
+			if (std::isfinite(qsat_before) && qsat_before > 0.0) {
+				d.max_relative_humidity_before = std::max(
+					d.max_relative_humidity_before, qv_before / qsat_before);
+			}
+			const double h_target = CP_DRY * temperature_before
+				+ LV0_J_KG * qv_before - LF0_J_KG * qi_before;
+
+			auto residual = [&](double temperature) -> double {
+				return equilibrium_partition(pressure, temperature, qt).specific_enthalpy_j_kg
+					- h_target;
+			};
+
+			double lo = MIN_THERMODYNAMIC_T_K;
+			double hi = MAX_THERMODYNAMIC_T_K;
+			double flo = residual(lo);
+			double fhi = residual(hi);
+			if (!(flo <= 0.0 && fhi >= 0.0)) {
+				throw std::runtime_error("Moist saturation adjustment could not bracket enthalpy root");
+			}
+
+			double temperature_after = temperature_before;
+			const double f_initial = residual(temperature_before);
+			if (std::abs(f_initial) > ROOT_ENTHALPY_TOL_J_KG) {
+				for (int iteration = 0; iteration < ROOT_ITERATIONS; ++iteration) {
+					const double mid = 0.5 * (lo + hi);
+					const double fm = residual(mid);
+					if (fm > 0.0) hi = mid;
+					else lo = mid;
+				}
+				temperature_after = 0.5 * (lo + hi);
+			}
+
+			const EquilibriumPartition eq = equilibrium_partition(
+				pressure, temperature_after, qt);
+			const double water_after = eq.vapor + eq.liquid + eq.ice;
+			const double local_water_error = std::abs(water_after - qt)
+				/ std::max(std::abs(qt), 1.0e-15);
+			d.max_relative_cell_water_error = std::max(
+				d.max_relative_cell_water_error, local_water_error);
+			d.max_specific_enthalpy_error_j_kg = std::max(
+				d.max_specific_enthalpy_error_j_kg,
+				std::abs(eq.specific_enthalpy_j_kg - h_target));
+
+			const double condensate_before = ql_before + qi_before;
+			const double condensate_after = eq.liquid + eq.ice;
+			const double phase_delta_kg = (condensate_after - condensate_before)
+				* dry * transport_->grid().cell(c).area_m2;
+			if (phase_delta_kg > 0.0) d.condensed_water_kg += phase_delta_kg;
+			else d.evaporated_water_kg += -phase_delta_kg;
+
+			state.tracer_mass_kg_m2[vapor_index][i] = dry * eq.vapor;
+			state.tracer_mass_kg_m2[liquid_index][i] = dry * eq.liquid;
+			state.tracer_mass_kg_m2[ice_index][i] = dry * eq.ice;
+			const double theta_after = temperature_after * std::pow(
+				VoronoiDryHydrostatic::P0_PA / pressure, VoronoiDryHydrostatic::KAPPA);
+			state.theta_mass_kg_k_m2[i] = dry * theta_after;
+
+			const double qsat_after = saturation_mixing_ratio_or_infinity(pressure, temperature_after);
+			if (std::isfinite(qsat_after) && qsat_after > 0.0) {
+				const double rh_after = eq.vapor / qsat_after;
+				d.max_relative_humidity_after = std::max(d.max_relative_humidity_after, rh_after);
+				if (condensate_after > 1.0e-14
+						&& std::abs(eq.vapor - qsat_after) <= 1.0e-9 * std::max(qsat_after, 1.0e-12)) {
+					++d.saturated_cell_count;
+				}
+			}
+			d.max_abs_temperature_change_k = std::max(
+				d.max_abs_temperature_change_k,
+				std::abs(temperature_after - temperature_before));
+			d.min_temperature_k = std::min(d.min_temperature_k, temperature_after);
+			d.max_temperature_k = std::max(d.max_temperature_k, temperature_after);
+		}
+	}
+
+	d.total_water_after_kg = total_water_mass_kg(state);
+	d.relative_total_water_error = std::abs(d.total_water_after_kg - d.total_water_before_kg)
+		/ std::max(std::abs(d.total_water_before_kg), 1.0);
+	if (!std::isfinite(d.relative_total_water_error)
+			|| d.relative_total_water_error > 5.0e-12
+			|| d.max_relative_cell_water_error > 5.0e-12
+			|| d.max_specific_enthalpy_error_j_kg > 1.0e-4) {
+		throw std::runtime_error("Moist saturation adjustment failed conservation/enthalpy gate");
+	}
+	return d;
+}
+
+} // namespace asterra::weather
