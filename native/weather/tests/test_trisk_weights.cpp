@@ -22,13 +22,13 @@ static void require(bool condition, const char *message) {
 struct Result {
 	double relative_rms = 0.0;
 	double max_abs = 0.0;
-	double max_metric_skew = 0.0;
+	double matrix_skew_relative = 0.0;
+	double matrix_skew_absolute = 0.0;
+	double matrix_coefficient_scale = 0.0;
 	double max_cell_kite_error = 0.0;
 	double max_vertex_kite_error = 0.0;
 	int worst_edge = -1;
 	int worst_source = -1;
-	double worst_forward = 0.0;
-	double worst_reverse = 0.0;
 };
 
 static Result evaluate(int frequency) {
@@ -62,11 +62,13 @@ static Result evaluate(int frequency) {
 		max_abs = std::max(max_abs, std::abs(error));
 	}
 
-	double max_skew = 0.0;
+	// Test the matrix identity M W + (M W)^T = 0 with one global matrix norm.
+	// Local relative normalization is invalid for coefficients that are supposed
+	// to be zero: roundoff-sized pairs would otherwise dominate the result.
+	double max_skew_absolute = 0.0;
+	double max_matrix_coefficient = 0.0;
 	int worst_edge = -1;
 	int worst_source = -1;
-	double worst_forward = 0.0;
-	double worst_reverse = 0.0;
 	for (int e = 0; e < grid.edge_count(); ++e) {
 		const auto &target = grid.edge(e);
 		const double m_e = target.edge_area_m2;
@@ -83,20 +85,19 @@ static Result evaluate(int frequency) {
 				}
 			}
 			require(found, "TRiSK reconstruction relation is not reciprocal");
-			const double lhs = m_e * target.reconstruction_weights[k]
-				+ source.edge_area_m2 * reverse;
-			const double scale = std::max({std::abs(m_e * target.reconstruction_weights[k]),
-				std::abs(source.edge_area_m2 * reverse), 1.0});
-			const double residual = std::abs(lhs) / scale;
-			if (residual > max_skew) {
-				max_skew = residual;
+			const double a = m_e * target.reconstruction_weights[k];
+			const double b = source.edge_area_m2 * reverse;
+			const double skew = std::abs(a + b);
+			max_matrix_coefficient = std::max({max_matrix_coefficient, std::abs(a), std::abs(b)});
+			if (skew > max_skew_absolute) {
+				max_skew_absolute = skew;
 				worst_edge = e;
 				worst_source = s;
-				worst_forward = target.reconstruction_weights[k];
-				worst_reverse = reverse;
 			}
 		}
 	}
+	const double matrix_skew_relative = max_skew_absolute
+		/ std::max(max_matrix_coefficient, std::numeric_limits<double>::min());
 
 	double max_cell_kite = 0.0;
 	for (int c = 0; c < grid.cell_count(); ++c) {
@@ -117,21 +118,21 @@ static Result evaluate(int frequency) {
 	Result out;
 	out.relative_rms = std::sqrt(static_cast<double>(error2 / std::max(reference2, 1.0L)));
 	out.max_abs = max_abs;
-	out.max_metric_skew = max_skew;
+	out.matrix_skew_relative = matrix_skew_relative;
+	out.matrix_skew_absolute = max_skew_absolute;
+	out.matrix_coefficient_scale = max_matrix_coefficient;
 	out.max_cell_kite_error = max_cell_kite;
 	out.max_vertex_kite_error = max_vertex_kite;
 	out.worst_edge = worst_edge;
 	out.worst_source = worst_source;
-	out.worst_forward = worst_forward;
-	out.worst_reverse = worst_reverse;
 	return out;
 }
 
 static void print_result(const char *name, const Result &r) {
 	std::cout << name << " relative RMS/max: " << r.relative_rms << " " << r.max_abs << "\n"
-		<< "  metric-skew residual: " << r.max_metric_skew
-		<< " worst pair " << r.worst_edge << "/" << r.worst_source
-		<< " weights " << r.worst_forward << "/" << r.worst_reverse << "\n"
+		<< "  matrix skew rel/abs/scale: " << r.matrix_skew_relative
+		<< " " << r.matrix_skew_absolute << " " << r.matrix_coefficient_scale
+		<< " worst pair " << r.worst_edge << "/" << r.worst_source << "\n"
 		<< "  cell/vertex kite closure: " << r.max_cell_kite_error
 		<< " " << r.max_vertex_kite_error << "\n";
 }
@@ -150,7 +151,8 @@ int main() {
 			&& f24.max_cell_kite_error < 2e-10, "TRiSK primal kite areas do not close");
 		require(f6.max_vertex_kite_error < 2e-10 && f12.max_vertex_kite_error < 2e-10
 			&& f24.max_vertex_kite_error < 2e-10, "TRiSK dual kite areas do not close");
-		require(f24.max_metric_skew < 5e-11, "TRiSK weights violate kinetic-energy metric skew symmetry");
+		require(f24.matrix_skew_relative < 5e-11,
+			"TRiSK weights violate kinetic-energy metric skew symmetry");
 		require(f12.relative_rms < f6.relative_rms * 0.80,
 			"TRiSK tangential reconstruction does not converge from F6 to F12");
 		require(f24.relative_rms < f12.relative_rms * 0.80,
