@@ -80,6 +80,13 @@ void VoronoiDryCore::refresh_extrema(const State &state,
 		if (!std::isfinite(u)) throw std::runtime_error("Dry core extrema encountered invalid wind");
 		diagnostics.max_speed_mps = std::max(diagnostics.max_speed_mps, std::abs(u));
 	}
+	for (const auto &tracer : state.tracer_mass_kg_m2) {
+		for (double mass : tracer) {
+			if (!(mass >= 0.0) || !std::isfinite(mass)) {
+				throw std::runtime_error("Dry core extrema encountered invalid tracer mass");
+			}
+		}
+	}
 }
 
 VoronoiDryCore::StepDiagnostics VoronoiDryCore::step(State &state,
@@ -88,6 +95,10 @@ VoronoiDryCore::StepDiagnostics VoronoiDryCore::step(State &state,
 	d.requested_dt_s = requested_dt_s;
 	d.dry_mass_before_kg = total_dry_mass_kg(state);
 	d.theta_mass_before_kg_k = total_theta_mass_kg_k(state);
+	std::vector<double> tracer_before(state.tracer_mass_kg_m2.size(), 0.0);
+	for (size_t tracer = 0; tracer < tracer_before.size(); ++tracer) {
+		tracer_before[tracer] = total_tracer_mass_kg(state, static_cast<int>(tracer));
+	}
 	const State original = state;
 
 	const auto horizontal = dynamics_.step(state, requested_dt_s,
@@ -95,6 +106,7 @@ VoronoiDryCore::StepDiagnostics VoronoiDryCore::step(State &state,
 	d.accepted_dt_s = horizontal.accepted_dt_s;
 	d.max_courant = horizontal.max_courant;
 	d.max_pressure_acceleration_mps2 = horizontal.max_pressure_acceleration_mps2;
+	d.max_relative_tracer_mass_error = horizontal.max_relative_tracer_mass_error;
 	d.rejected_steps = horizontal.rejected_steps;
 
 	if (!(horizontal.accepted_dt_s > 0.0)) {
@@ -114,7 +126,10 @@ VoronoiDryCore::StepDiagnostics VoronoiDryCore::step(State &state,
 			d.max_coordinate_mass_fraction_error = remap.max_mass_fraction_error;
 			d.max_coordinate_column_mass_error = remap.max_column_mass_error;
 			d.max_coordinate_column_theta_mass_error = remap.max_column_theta_mass_error;
+			d.max_coordinate_column_tracer_mass_error = remap.max_column_tracer_mass_error;
 			d.max_coordinate_edge_momentum_error = remap.max_edge_momentum_error;
+			d.max_relative_tracer_mass_error = std::max(
+				d.max_relative_tracer_mass_error, remap.max_relative_tracer_mass_error);
 		} else {
 			d.max_coordinate_mass_fraction_error = coordinate_error_before;
 		}
@@ -125,17 +140,24 @@ VoronoiDryCore::StepDiagnostics VoronoiDryCore::step(State &state,
 			d.dry_mass_after_kg, d.dry_mass_before_kg);
 		d.relative_theta_mass_error = relative_error(
 			d.theta_mass_after_kg_k, d.theta_mass_before_kg_k);
+		for (size_t tracer = 0; tracer < tracer_before.size(); ++tracer) {
+			d.max_relative_tracer_mass_error = std::max(
+				d.max_relative_tracer_mass_error,
+				relative_error(total_tracer_mass_kg(state, static_cast<int>(tracer)),
+					tracer_before[tracer]));
+		}
 
 		if (!std::isfinite(d.relative_dry_mass_error)
 				|| !std::isfinite(d.relative_theta_mass_error)
+				|| !std::isfinite(d.max_relative_tracer_mass_error)
 				|| d.relative_dry_mass_error > CORE_CONSERVATION_REJECT_TOL
-				|| d.relative_theta_mass_error > CORE_CONSERVATION_REJECT_TOL) {
+				|| d.relative_theta_mass_error > CORE_CONSERVATION_REJECT_TOL
+				|| d.max_relative_tracer_mass_error > CORE_CONSERVATION_REJECT_TOL) {
 			throw std::runtime_error("Dry core combined step failed conservation gate");
 		}
 		refresh_extrema(state, d);
 		return d;
 	} catch (const std::exception &) {
-		// Horizontal dynamics and coordinate maintenance are one transaction.
 		state = original;
 		d.accepted_dt_s = 0.0;
 		d.rejected_steps += 1;
@@ -143,9 +165,11 @@ VoronoiDryCore::StepDiagnostics VoronoiDryCore::step(State &state,
 		d.theta_mass_after_kg_k = d.theta_mass_before_kg_k;
 		d.relative_dry_mass_error = 0.0;
 		d.relative_theta_mass_error = 0.0;
+		d.max_relative_tracer_mass_error = 0.0;
 		d.coordinate_remap_applied = false;
 		d.max_coordinate_column_mass_error = 0.0;
 		d.max_coordinate_column_theta_mass_error = 0.0;
+		d.max_coordinate_column_tracer_mass_error = 0.0;
 		d.max_coordinate_edge_momentum_error = 0.0;
 		d.max_coordinate_mass_fraction_error = max_coordinate_mass_fraction_error(state);
 		refresh_extrema(state, d);
