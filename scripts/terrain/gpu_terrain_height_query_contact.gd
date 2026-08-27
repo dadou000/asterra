@@ -2,18 +2,37 @@ extends "res://scripts/terrain/gpu_terrain_height_query.gd"
 ## Strict contact-grade accessors layered over the pooled terrain query.
 ##
 ## General terrain lookups intentionally accept a broad nearby cached sample while
-## a precise GPU result is still in flight. That is useful for aiming/streaming but
-## is unsafe for rigid contacts: a sample tens of metres away can differ by metres
-## in height and make an object appear to touch terrain while it is still airborne.
+## a precise GPU result is in flight. Rigid contacts use a separate urgent path:
+## only a sample within centimetres of the requested world point is accepted, and
+## that request is pushed to the front of the pooled GPU queue instead of being
+## deduplicated against an unrelated aiming/sample point up to 35 cm away.
 
-const CONTACT_CACHE_DISTANCE_M := 0.45
-const CONTACT_CACHE_AGE_S := 0.55
+const CONTACT_CACHE_DISTANCE_M := 0.035
+const CONTACT_CACHE_AGE_S := 0.80
+const CONTACT_DEDUPE_DISTANCE_M := 0.025
+
+
+func request_contact_height(direction: Vector3) -> void:
+	if Planet.cfg == null or direction.length_squared() <= 1e-12:
+		return
+	var d: Vector3 = direction.normalized()
+	if not _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S).is_empty():
+		return
+	for queued: Vector3 in _pending:
+		var distance_m: float = acos(clampf(queued.dot(d), -1.0, 1.0)) \
+			* Planet.cfg.planet_radius
+		if distance_m <= CONTACT_DEDUPE_DISTANCE_M:
+			return
+	if _pending.size() >= MAX_PENDING:
+		_pending.pop_back()
+	_pending.push_front(d)
 
 
 func contact_height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return fallback
 	var d: Vector3 = direction.normalized()
+	request_contact_height(d)
 	var found: Dictionary = _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S)
 	if found.is_empty():
 		return fallback
@@ -24,4 +43,5 @@ func has_contact_height(direction: Vector3) -> bool:
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return false
 	var d: Vector3 = direction.normalized()
+	request_contact_height(d)
 	return not _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S).is_empty()
