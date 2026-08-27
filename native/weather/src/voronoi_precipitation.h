@@ -13,8 +13,10 @@ namespace asterra::weather {
 // layers as the other water species. Sedimentation is a relative fall through
 // the air column, independent of the dry-air vertical remap. A single downward
 // donor flux per species/interface transfers hydrometeor mass between layers;
-// bottom fallout is added exactly to the surface-water reservoir. No UI rain
-// rate is prognostic: it is diagnosed from the accepted surface mass flux.
+// bottom rain enters liquid surface water while snow enters a distinct frozen
+// reservoir. Surface energy receives the exact opposite local atmospheric
+// thermodynamic-energy change of each sedimentation stage, so phase/loading
+// changes are closed under the same source-energy convention as surface exchange.
 class VoronoiPrecipitation {
 public:
 	using State = VoronoiDryTransport::State;
@@ -27,12 +29,18 @@ public:
 		double accepted_dt_s = 0.0;
 		double max_courant = 0.0;
 		int rejected_steps = 0;
+		int substeps = 0;
 
 		double atmosphere_water_before_kg = 0.0;
 		double atmosphere_water_after_kg = 0.0;
 		double surface_water_before_kg = 0.0;
 		double surface_water_after_kg = 0.0;
 		double relative_system_water_error = 0.0;
+		double atmosphere_thermo_before_j = 0.0;
+		double atmosphere_thermo_after_j = 0.0;
+		double surface_energy_before_j = 0.0;
+		double surface_energy_after_j = 0.0;
+		double relative_system_energy_error = 0.0;
 
 		double rain_before_kg = 0.0;
 		double rain_after_kg = 0.0;
@@ -63,15 +71,26 @@ public:
 	double stable_dt(const State &state, double target_cfl, double maximum_dt_s,
 		double rain_fall_speed_mps, double snow_fall_speed_mps) const;
 
-	// Default fall speeds are deliberately simple bulk bring-up values. The
-	// conservative operator is independent of the later size-distribution/fall-
-	// speed closure, which can replace these values without changing budgets.
+	// One CFL-limited SSPRK3 sedimentation step. accepted_dt_s may be smaller than
+	// requested_dt_s; callers that must cover a coupled atmosphere timestep should
+	// use advance_full_interval().
 	Diagnostics step(State &state, SurfaceState &surface,
 		double requested_dt_s,
 		double rain_fall_speed_mps = 7.0,
 		double snow_fall_speed_mps = 1.0,
 		double target_cfl = 0.45,
 		int max_retries = 10) const;
+
+	// Transactionally subcycle sedimentation until the complete requested
+	// interval is covered. Failure to cover the whole interval restores both
+	// atmosphere and surface and returns accepted_dt_s == 0.
+	Diagnostics advance_full_interval(State &state, SurfaceState &surface,
+		double interval_dt_s,
+		double rain_fall_speed_mps = 7.0,
+		double snow_fall_speed_mps = 1.0,
+		double target_cfl = 0.45,
+		int max_retries_per_substep = 10,
+		int max_substeps = 10000) const;
 
 	const TracerIndices &tracer_indices() const { return indices_; }
 
