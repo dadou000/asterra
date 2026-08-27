@@ -131,6 +131,24 @@ double ShallowWaterCGrid::total_volume_m3(const State &state) const {
 	return static_cast<double>(total);
 }
 
+double ShallowWaterCGrid::total_energy(const State &state) const {
+	validate_shape(state);
+	const auto velocity = reconstruct_cell_velocity(state);
+	long double total = 0.0L;
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double h = state.depth_m[c];
+		const double speed2 = dot(velocity[c], velocity[c]);
+		if (!(h > 0.0) || !std::isfinite(h) || !std::isfinite(speed2)) {
+			throw std::runtime_error("Shallow-water energy received invalid state");
+		}
+		const long double energy_density = 0.5L * static_cast<long double>(gravity_mps2_)
+			* static_cast<long double>(h) * static_cast<long double>(h)
+			+ 0.5L * static_cast<long double>(h) * static_cast<long double>(speed2);
+		total += energy_density * static_cast<long double>(grid_->cell(c).area_m2);
+	}
+	return static_cast<double>(total);
+}
+
 double ShallowWaterCGrid::max_wave_courant(const State &state, double dt_s) const {
 	validate_shape(state);
 	if (!(dt_s >= 0.0) || !std::isfinite(dt_s)) {
@@ -249,6 +267,56 @@ std::vector<Vec3d> ShallowWaterCGrid::reconstruct_cell_scalar_gradient(
 	return gradient;
 }
 
+double ShallowWaterCGrid::corrected_edge_normal_gradient(
+		const std::vector<double> &scalar,
+		const std::vector<Vec3d> &cell_gradient,
+		size_t edge_index) const {
+	const auto &edge = topology_.shared_edges().at(edge_index);
+	const Vec3d radial = edge.midpoint;
+	Vec3d grad_edge = (cell_gradient[edge.cell_a] + cell_gradient[edge.cell_b]) * 0.5;
+	grad_edge = grad_edge - radial * dot(grad_edge, radial);
+	const double grad_t = dot(grad_edge, edge_tangent_direction_[edge_index]);
+	const double ds = scalar[edge.cell_b] - scalar[edge.cell_a];
+	return (ds - grad_t * edge_tangential_offset_m_[edge_index])
+		/ edge_normal_separation_m_[edge_index];
+}
+
+std::vector<double> ShallowWaterCGrid::reconstruct_cell_relative_vorticity(
+		const State &state, const std::vector<Vec3d> &cell_velocity) const {
+	validate_shape(state);
+	if (cell_velocity.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Cell velocity array has the wrong size for vorticity");
+	}
+	std::vector<double> vorticity(static_cast<size_t>(grid_->cell_count()), 0.0);
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		long double circulation = 0.0L;
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			const int shared_index = cell_shared_edge_index_[c][local_edge];
+			const double sign = cell_shared_edge_sign_[c][local_edge];
+			const auto &edge = topology_.shared_edges()[static_cast<size_t>(shared_index)];
+			const int other = edge.cell_a == c ? edge.cell_b : edge.cell_a;
+			const Vec3d radial = edge.midpoint;
+			const Vec3d outward = edge.normal_a_to_b * sign;
+			const Vec3d tangent_ccw = normalized(cross(radial, outward));
+			Vec3d u_edge = (cell_velocity[c] + cell_velocity[other]) * 0.5;
+			u_edge = u_edge - radial * dot(u_edge, radial);
+			circulation += static_cast<long double>(dot(u_edge, tangent_ccw))
+				* static_cast<long double>(edge.length_m);
+		}
+		vorticity[c] = static_cast<double>(circulation
+			/ static_cast<long double>(grid_->cell(c).area_m2));
+		if (!std::isfinite(vorticity[c])) {
+			throw std::runtime_error("C-grid circulation produced non-finite vorticity");
+		}
+	}
+	return vorticity;
+}
+
+std::vector<double> ShallowWaterCGrid::reconstruct_cell_relative_vorticity(
+		const State &state) const {
+	return reconstruct_cell_relative_vorticity(state, reconstruct_cell_velocity(state));
+}
+
 ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 		const State &input, State &output, double dt_s) const {
 	validate_shape(input);
@@ -265,10 +333,6 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 	output.depth_m.resize(cell_count);
 	output.edge_normal_mps.resize(edge_count);
 
-	// Conservative continuity. A centered edge depth is second-order for smooth
-	// balanced flow and avoids first-order cross-isobar diffusion on skewed cube
-	// faces. Positivity is still enforced conservatively by scaling every outgoing
-	// flux from the same donor together if required.
 	std::vector<double> raw_volume_rate(edge_count, 0.0);
 	std::vector<double> outgoing_rate(cell_count, 0.0);
 	for (size_t e = 0; e < edge_count; ++e) {
@@ -312,34 +376,36 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 		output.depth_m[c] = volume / grid_->cell(c).area_m2;
 	}
 
+	const std::vector<Vec3d> cell_velocity = reconstruct_cell_velocity(input);
+	const std::vector<double> relative_vorticity =
+		reconstruct_cell_relative_vorticity(input, cell_velocity);
+	std::vector<double> kinetic_energy(cell_count, 0.0);
+	for (size_t c = 0; c < cell_count; ++c) {
+		kinetic_energy[c] = 0.5 * dot(cell_velocity[c], cell_velocity[c]);
+	}
 	const std::vector<Vec3d> depth_gradient = reconstruct_cell_scalar_gradient(input.depth_m);
-	const std::vector<Vec3d> cell_velocity = rotation_rate_rad_s_ != 0.0
-		? reconstruct_cell_velocity(input) : std::vector<Vec3d>{};
+	const std::vector<Vec3d> kinetic_gradient = reconstruct_cell_scalar_gradient(kinetic_energy);
 
-	// Non-orthogonal finite-volume pressure gradient. The cell-center connector is
-	// decomposed into normal/tangential components at the physical shared edge:
-	//   dh = grad_n * dn + grad_t * dt
-	// so grad_n = (dh - grad_t*dt)/dn.
-	// The direct dh term remains present, therefore an alternating checkerboard
-	// scalar cannot vanish under this operator.
+	// Full vector-invariant shallow-water momentum equation:
+	// du/dt = -(zeta+f) k x u - grad(g h + K).
+	// Relative vorticity comes from a paired circulation sum around each cell;
+	// each shared-edge contribution is equal/opposite in the two neighbouring
+	// cells, so the global integral of relative vorticity closes by construction.
 	for (size_t e = 0; e < edge_count; ++e) {
 		const auto &edge = topology_.shared_edges()[e];
 		const Vec3d radial = edge.midpoint;
-		Vec3d grad_edge = (depth_gradient[edge.cell_a] + depth_gradient[edge.cell_b]) * 0.5;
-		grad_edge = grad_edge - radial * dot(grad_edge, radial);
-		const double grad_t = dot(grad_edge, edge_tangent_direction_[e]);
-		const double dh = input.depth_m[edge.cell_b] - input.depth_m[edge.cell_a];
-		const double gradient_normal = (dh - grad_t * edge_tangential_offset_m_[e])
-			/ edge_normal_separation_m_[e];
-		double acceleration = -gravity_mps2_ * gradient_normal;
+		const double grad_h = corrected_edge_normal_gradient(input.depth_m, depth_gradient, e);
+		const double grad_k = corrected_edge_normal_gradient(kinetic_energy, kinetic_gradient, e);
+		double acceleration = -gravity_mps2_ * grad_h - grad_k;
 
-		if (rotation_rate_rad_s_ != 0.0) {
-			Vec3d u_edge = (cell_velocity[edge.cell_a] + cell_velocity[edge.cell_b]) * 0.5;
-			u_edge = u_edge - radial * dot(u_edge, radial);
-			const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, radial);
-			const Vec3d coriolis = cross(radial, u_edge) * (-f);
-			acceleration += dot(coriolis, edge.normal_a_to_b);
-		}
+		Vec3d u_edge = (cell_velocity[edge.cell_a] + cell_velocity[edge.cell_b]) * 0.5;
+		u_edge = u_edge - radial * dot(u_edge, radial);
+		const double zeta_edge = 0.5 * (relative_vorticity[edge.cell_a]
+			+ relative_vorticity[edge.cell_b]);
+		const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, radial);
+		const double absolute_vorticity = zeta_edge + f;
+		const Vec3d rotational = cross(radial, u_edge) * (-absolute_vorticity);
+		acceleration += dot(rotational, edge.normal_a_to_b);
 
 		output.edge_normal_mps[e] = input.edge_normal_mps[e] + acceleration * dt_s;
 		if (!std::isfinite(output.edge_normal_mps[e])) {
