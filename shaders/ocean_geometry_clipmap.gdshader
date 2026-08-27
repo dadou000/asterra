@@ -67,16 +67,57 @@ const float MAX_PROJECTED_THETA = 1.62;
 const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
 const float TERRAIN_HALF_CELLS = 200.0;
 const float TERRAIN_FINE_MORPH_START_Q = 0.875;
+const float OCEAN_FINE_MORPH_START_Q = 0.875;
+const float OCEAN_RING_INNER_Q = 0.4375;
+const float OCEAN_RING_HANDOFF_Q = 0.50;
+
+// Six non-parallel physical wave axes avoid the two-direction corrugation that
+// made a rough sea read as repeating mountain ridges. The two longest systems
+// still own the coastal refraction/diffraction response; the shorter components
+// are progressively less coast-steered, as they should be.
 const vec3 SWELL_AXIS_A = vec3(0.827, 0.201, 0.525);
 const vec3 SWELL_AXIS_B = vec3(-0.436, 0.331, 0.837);
-const vec3 MICRO_AXIS_C = vec3(0.581, -0.742, 0.334);
-const vec3 MICRO_AXIS_D = vec3(-0.703, -0.264, 0.660);
-const vec3 MICRO_AXIS_E = vec3(0.246, 0.913, -0.325);
-const vec3 MICRO_AXIS_F = vec3(-0.912, 0.128, -0.390);
+const vec3 SWELL_AXIS_C = vec3(0.153, 0.879, 0.451);
+const vec3 SWELL_AXIS_D = vec3(-0.741, 0.529, -0.413);
+const vec3 SWELL_AXIS_E = vec3(0.336, -0.612, 0.716);
+const vec3 SWELL_AXIS_F = vec3(-0.218, -0.771, -0.598);
+
+const vec3 MICRO_AXIS_A = vec3(0.581, -0.742, 0.334);
+const vec3 MICRO_AXIS_B = vec3(-0.703, -0.264, 0.660);
+const vec3 MICRO_AXIS_C = vec3(0.246, 0.913, -0.325);
+const vec3 MICRO_AXIS_D = vec3(-0.912, 0.128, -0.390);
+const vec3 MICRO_AXIS_E = vec3(0.693, 0.451, -0.562);
+const vec3 MICRO_AXIS_F = vec3(-0.362, 0.821, 0.441);
 const float KELVIN_TAN = 0.35355339;
 
 float ocean_ring_spacing(int level) {
 	return u_base_spacing * exp2(float(level));
+}
+
+float ocean_smoother01(float x) {
+	x = clamp(x, 0.0, 1.0);
+	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+}
+
+// The fine level gradually adopts the parent's representation bandwidth in its
+// outer eighth. At the point where the fine mesh ends, both levels therefore
+// represent exactly the same physical wave subset instead of two different seas.
+float ocean_fine_morph(vec2 cell) {
+	float q = length(cell) / max(u_grid_cells * 0.5, 1.0);
+	return ocean_smoother01((q - OCEAN_FINE_MORPH_START_Q)
+		/ (1.0 - OCEAN_FINE_MORPH_START_Q));
+}
+
+// Adjacent radial clipmap levels overlap from q=0.4375..0.5. The coarse surface
+// is lowered only inside that overlap, so depth testing gives ownership to the
+// fine layer instead of alpha-blending/z-fighting two displaced surfaces. The
+// sink reaches zero exactly at the physical handoff and never changes wave phase.
+float ocean_coarse_sink(vec2 cell, int level, float spacing) {
+	if (level <= 0) return 0.0;
+	float q = length(cell) / max(u_grid_cells * 0.5, 1.0);
+	float blend = 1.0 - ocean_smoother01((q - OCEAN_RING_INNER_Q)
+		/ (OCEAN_RING_HANDOFF_Q - OCEAN_RING_INNER_Q));
+	return blend * clamp(spacing * 0.25, 0.12, 4.0);
 }
 
 vec3 ocean_direction_for_basis_offset(vec3 center, vec3 right, vec3 up,
@@ -255,14 +296,18 @@ void ocean_interactions(vec3 d, int level, out float height, out vec3 slope,
 	}
 }
 
-// Micro waves live in the stable anchor's metre-space instead of reconstructing
-// centimetre wavelengths from million-metre planet coordinates. The old global
-// phase path lost several bits of precision, then sampled sub-pixel sinusoids
-// without a footprint filter; at altitude those two errors folded into large
-// diagonal moire bands. Filter each band before evaluating it and transfer the
-// rejected slope energy into BRDF variance.
+float ocean_micro_phase_warp(vec2 plane_m) {
+	float a = sin(dot(plane_m, vec2(0.033, 0.021)) + u_time_s * 0.21);
+	float b = sin(dot(plane_m, vec2(-0.018, 0.037)) - u_time_s * 0.13 + 1.9);
+	return a * 0.58 + b * 0.34;
+}
+
+// Micro waves live in stable metre-space. Only waves with a generous screen-space
+// footprint are explicitly resolved; the rest become microfacet variance. A
+// common low-frequency phase warp bends the resolved wavelets enough to remove
+// the artificial ruler-straight corduroy pattern without inventing geometry.
 void ocean_micro_wave(vec3 up, vec2 plane_m, vec3 axis, float wavelength,
-		float slope_amp, float speed, float phase_offset,
+		float slope_amp, float speed, float phase_offset, float phase_warp,
 		inout vec3 slope, inout float unresolved_variance) {
 	vec3 anchor_travel = ocean_safe_tangent(u_anchor_dir, axis);
 	vec2 phase_dir = vec2(dot(anchor_travel, u_anchor_right),
@@ -273,14 +318,15 @@ void ocean_micro_wave(vec3 up, vec2 plane_m, vec3 axis, float wavelength,
 	float coord_m = dot(plane_m, phase_dir);
 	float footprint_m = max(fwidth(coord_m), 1e-6);
 	float pixels_per_wave = wavelength / footprint_m;
-	float filter_w = smoothstep(2.2, 5.5, pixels_per_wave);
+	float filter_w = smoothstep(4.0, 9.0, pixels_per_wave);
 	float variance = slope_amp * slope_amp * 0.5;
 	unresolved_variance += (1.0 - filter_w * filter_w) * variance;
 	if (filter_w <= 0.001) return;
 
 	float k = TAU / wavelength;
 	float anchor_phase = mod(ocean_geodesic_phase_coord(u_anchor_dir, axis), wavelength) * k;
-	float phase = anchor_phase + coord_m * k - u_time_s * speed + phase_offset;
+	float phase = anchor_phase + coord_m * k - u_time_s * speed
+		+ phase_offset + phase_warp;
 	vec3 travel = ocean_safe_tangent(up, axis);
 	slope += travel * (slope_amp * cos(phase) * filter_w);
 }
@@ -288,12 +334,13 @@ void ocean_micro_wave(vec3 up, vec2 plane_m, vec3 axis, float wavelength,
 vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 	vec3 slope = vec3(0.0);
 	unresolved_variance = 0.0;
-	if (u_micro_band_count >= 1) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_C, 2.8, 0.042, 3.8, 0.3, slope, unresolved_variance);
-	if (u_micro_band_count >= 2) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_D, 1.3, 0.033, 5.6, 1.7, slope, unresolved_variance);
-	if (u_micro_band_count >= 3) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_E, 0.62, 0.025, 7.9, 3.0, slope, unresolved_variance);
-	if (u_micro_band_count >= 4) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_F, 0.29, 0.019, 10.8, 4.2, slope, unresolved_variance);
-	if (u_micro_band_count >= 5) ocean_micro_wave(up, v_micro_plane, SWELL_AXIS_A, 0.13, 0.014, 15.5, 2.4, slope, unresolved_variance);
-	if (u_micro_band_count >= 6) ocean_micro_wave(up, v_micro_plane, SWELL_AXIS_B, 0.055, 0.010, 22.0, 5.1, slope, unresolved_variance);
+	float warp = ocean_micro_phase_warp(v_micro_plane);
+	if (u_micro_band_count >= 1) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_A, 2.8, 0.028, 3.8, 0.3, warp, slope, unresolved_variance);
+	if (u_micro_band_count >= 2) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_B, 1.3, 0.022, 5.6, 1.7, warp * 1.13, slope, unresolved_variance);
+	if (u_micro_band_count >= 3) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_C, 0.62, 0.016, 7.9, 3.0, warp * 0.91, slope, unresolved_variance);
+	if (u_micro_band_count >= 4) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_D, 0.29, 0.011, 10.8, 4.2, warp * 1.27, slope, unresolved_variance);
+	if (u_micro_band_count >= 5) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_E, 0.13, 0.0075, 15.5, 2.4, warp * 0.83, slope, unresolved_variance);
+	if (u_micro_band_count >= 6) ocean_micro_wave(up, v_micro_plane, MICRO_AXIS_F, 0.055, 0.0045, 22.0, 5.1, warp * 1.41, slope, unresolved_variance);
 	return slope;
 }
 
@@ -313,7 +360,9 @@ void vertex() {
 		? ocean_direction_for_basis_offset(u_anchor_dir, u_anchor_right, u_anchor_up, anchor_offset_m)
 		: ocean_direction_for_basis_offset(u_center_dir, u_center_right, u_center_up, cell_offset_m);
 
-	float wave_spacing = spacing * max(u_displacement_spacing_scale, 0.5);
+	float representation_morph = ocean_fine_morph(cell);
+	float wave_spacing = mix(spacing, spacing * 2.0, representation_morph)
+		* max(u_displacement_spacing_scale, 0.5);
 	float raw_ground_h;
 	float ground_h;
 	vec3 landward;
@@ -343,16 +392,26 @@ void vertex() {
 		ocean_diffraction_direction(d, swell_a, landward), diffract_a * 0.52));
 	vec3 dir_b = normalize(mix(refracted_b,
 		ocean_diffraction_direction(d, swell_b, landward), diffract_b * 0.46));
+
+	vec3 dir_c = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_C), landward, refract * 0.42));
+	vec3 dir_d = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_D), landward, refract * 0.30));
+	vec3 dir_e = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_E), landward, refract * 0.18));
+	vec3 dir_f = normalize(mix(ocean_safe_tangent(d, SWELL_AXIS_F), landward, refract * 0.10));
+
 	float phase_a = ocean_geodesic_phase_coord(d, SWELL_AXIS_A);
 	float phase_b = ocean_geodesic_phase_coord(d, SWELL_AXIS_B);
+	float phase_c = ocean_geodesic_phase_coord(d, SWELL_AXIS_C);
+	float phase_d = ocean_geodesic_phase_coord(d, SWELL_AXIS_D);
+	float phase_e = ocean_geodesic_phase_coord(d, SWELL_AXIS_E);
+	float phase_f = ocean_geodesic_phase_coord(d, SWELL_AXIS_F);
 
 	OceanWaveSample wave = ocean_empty_wave();
 	ocean_add_quality_wave(0, d, dir_a, phase_a, shore_distance, depth, wave_spacing, 192.0, 1.15, 0.66, 0.0, wave);
 	ocean_add_quality_wave(1, d, dir_b, phase_b, shore_distance, depth, wave_spacing, 96.0, 0.78, 0.62, 1.7, wave);
-	ocean_add_quality_wave(2, d, dir_a, phase_a, shore_distance, depth, wave_spacing, 42.0, 0.32, 0.55, 3.1, wave);
-	ocean_add_quality_wave(3, d, dir_b, phase_b, shore_distance, depth, wave_spacing, 18.0, 0.105, 0.48, 4.6, wave);
-	ocean_add_quality_wave(4, d, dir_a, phase_a, shore_distance, depth, wave_spacing, 8.0, 0.036, 0.42, 2.2, wave);
-	ocean_add_quality_wave(5, d, dir_b, phase_b, shore_distance, depth, wave_spacing, 3.4, 0.014, 0.36, 5.4, wave);
+	ocean_add_quality_wave(2, d, dir_c, phase_c, shore_distance, depth, wave_spacing, 42.0, 0.32, 0.55, 3.1, wave);
+	ocean_add_quality_wave(3, d, dir_d, phase_d, shore_distance, depth, wave_spacing, 18.0, 0.105, 0.48, 4.6, wave);
+	ocean_add_quality_wave(4, d, dir_e, phase_e, shore_distance, depth, wave_spacing, 8.0, 0.036, 0.42, 2.2, wave);
+	ocean_add_quality_wave(5, d, dir_f, phase_f, shore_distance, depth, wave_spacing, 3.4, 0.014, 0.36, 5.4, wave);
 
 	float unresolved = 0.0;
 	unresolved += ocean_band_variance(0, 192.0, 1.15 * u_wave_scale, depth, wave_spacing);
@@ -372,11 +431,16 @@ void vertex() {
 	float radial_h = dot(wave.displacement, d);
 	vec3 tangential_displacement = wave.displacement - d * radial_h;
 	vec3 displaced = d * (u_planet_radius + radial_h) + tangential_displacement;
+
+	// Only render geometry is sunk in the overlap. All lighting, atmosphere,
+	// physics-facing varyings and phase coordinates retain the real water surface.
+	float render_radial_h = radial_h - ocean_coarse_sink(cell, level, spacing);
+	vec3 render_displaced = d * (u_planet_radius + render_radial_h) + tangential_displacement;
 	v_planet = displaced;
 	v_render = stable_displacement
 		? u_anchor_render + ocean_stable_surface_offset(u_anchor_dir, u_anchor_right,
-			u_anchor_up, anchor_offset_m, radial_h) + tangential_displacement
-		: displaced - u_origin;
+			u_anchor_up, anchor_offset_m, render_radial_h) + tangential_displacement
+		: render_displaced - u_origin;
 	v_slope = wave.slope;
 	v_micro_plane = stable_displacement ? anchor_offset_m : cell_offset_m;
 	v_depth = depth;
@@ -416,10 +480,22 @@ void fragment() {
 	vec3 base = water_depth_tint(depth, u_shallow, u_shelf, u_deep);
 	float surf_zone = 1.0 - smoothstep(0.2, 9.0, depth);
 	float shorewash = (1.0 - smoothstep(0.12, 3.8, depth)) * smoothstep(0.50, 0.93, v_crest);
-	float whitecap = v_compression * smoothstep(0.54, 0.90, v_crest);
+
+	// Offshore whitecaps are driven by crest steepness, then broken into metre-scale
+	// patches. Previously deep water could never foam because only the shallow
+	// breaker term contributed, making the requested high sea look like polished
+	// folded plastic.
+	float foam_pattern = 0.5
+		+ 0.25 * sin(dot(v_micro_plane, vec2(0.110, 0.073)) + u_time_s * 0.35)
+		+ 0.25 * sin(dot(v_micro_plane, vec2(-0.067, 0.131)) - u_time_s * 0.23 + 2.3);
+	float foam_patch = smoothstep(0.52, 0.76, foam_pattern);
+	float offshore_whitecap = smoothstep(0.14, 0.30, length(v_slope))
+		* smoothstep(0.60, 0.92, v_crest) * foam_patch;
+	float whitecap = max(v_compression * smoothstep(0.54, 0.90, v_crest),
+		offshore_whitecap * 0.82);
 	float breaker_foam = v_breaking * (0.68 + 0.32 * v_compression);
 	float diffracted_foam = v_diffraction * surf_zone * v_compression * 0.35;
-	float foam = max(max(shorewash, whitecap * 0.55), max(breaker_foam, diffracted_foam));
+	float foam = max(max(shorewash, whitecap * 0.70), max(breaker_foam, diffracted_foam));
 	foam = max(foam, v_interaction_foam);
 	foam = clamp(foam * u_foam_quality * (1.0 - smoothstep(2500.0, 14000.0, length(VERTEX))), 0.0, 1.0);
 	base = mix(base, u_foam, foam * 0.90);
@@ -427,18 +503,29 @@ void fragment() {
 	vec3 sun_dir = normalize(u_sun_dir);
 	vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
 	float wind_rough = water_roughness_from_wind(water_wind_speed(up), 0.5);
+
 	// Preserve both vertex-wave energy removed by clipmap LOD and fragment-wave
-	// energy removed by screen-space anti-aliasing.
+	// energy removed by screen-space anti-aliasing. GGX alpha is a slope scale,
+	// while the public roughness parameter is sqrt(alpha); convert at that boundary
+	// instead of adding tiny arbitrary perceptual roughness offsets.
 	float all_unresolved_variance = max(v_unresolved_variance, 0.0)
 		+ max(micro_unresolved_variance, 0.0);
-	float spectral_rough = sqrt(all_unresolved_variance) * 0.42;
-	float rough = clamp(sqrt(wind_rough * wind_rough + spectral_rough * spectral_rough)
-		+ foam * 0.50, 0.025, 0.72);
+	float unresolved_slope_rms = sqrt(all_unresolved_variance);
+	float wind_alpha = wind_rough * wind_rough;
+	float spectral_alpha = clamp(unresolved_slope_rms * 0.70, 0.0, 0.20);
+	float rough = sqrt(clamp(wind_alpha + spectral_alpha, 0.003, 0.40));
+	rough = clamp(rough + foam * 0.16, 0.045, 0.72);
 
 	vec3 view_dir = normalize(camera_planet - v_planet);
 	float ndotv = max(dot(n, view_dir), 0.0);
 	float fres = water_fresnel(ndotv);
-	vec3 sky_refl = water_sky_radiance(reflect(-view_dir, n), up, sun_dir);
+
+	// Our analytic sky is deliberately low frequency, so one roughness-aware
+	// normal contraction is enough to approximate prefiltered sky reflection and
+	// stop high sea normals from reflecting razor-sharp bands of haze.
+	float sky_blur = smoothstep(0.22, 0.52, rough);
+	vec3 reflection_n = normalize(mix(n, up, sky_blur * 0.28));
+	vec3 sky_refl = water_sky_radiance(reflect(-view_dir, reflection_n), up, sun_dir);
 
 	// Cheap water-specific subsurface/forward-scatter approximation. It is strongest
 	// through thin, high crests when the sun is behind the wave relative to camera.
