@@ -8,13 +8,9 @@
 namespace asterra::weather {
 
 // Conservative vertical mass exchange and pressure-coordinate remap for the
-// 30-level dry atmosphere.
-//
-// Interface j lies between level j (below) and j+1 (above). Positive interface
-// mass flux is upward from j -> j+1; negative is downward. Flux units are
-// kg/m2/s. The same donor mass transfer carries mass-weighted potential
-// temperature, so every closed column conserves dry mass and theta mass exactly
-// apart from floating-point summation.
+// 30-level atmosphere. Dry mass, theta mass and every passive tracer use the
+// same donor transfer across interfaces and the same overlap remap in dry-mass
+// coordinate.
 class VoronoiDryVerticalTransport {
 public:
 	static constexpr int LEVELS = VoronoiDryTransport::LEVELS;
@@ -31,6 +27,7 @@ public:
 		double theta_mass_before_kg_k = 0.0;
 		double theta_mass_after_kg_k = 0.0;
 		double relative_theta_mass_error = 0.0;
+		double max_relative_tracer_mass_error = 0.0;
 		double min_layer_mass_kg_m2 = 0.0;
 		double min_potential_temperature_k = 0.0;
 		int rejected_steps = 0;
@@ -39,8 +36,10 @@ public:
 	struct RemapDiagnostics {
 		double relative_dry_mass_error = 0.0;
 		double relative_theta_mass_error = 0.0;
+		double max_relative_tracer_mass_error = 0.0;
 		double max_column_mass_error = 0.0;
 		double max_column_theta_mass_error = 0.0;
+		double max_column_tracer_mass_error = 0.0;
 		double max_edge_momentum_error = 0.0;
 		double max_mass_fraction_error = 0.0;
 		double min_layer_mass_kg_m2 = 0.0;
@@ -69,7 +68,6 @@ public:
 			reference_surface_pressure_pa, temperature_k);
 	}
 
-	// interface_mass_flux is [interface][cell], size (LEVELS-1)*cell_count.
 	double max_courant(const State &state,
 		const std::vector<double> &interface_mass_flux, double dt_s) const;
 	double stable_dt(const State &state,
@@ -81,11 +79,6 @@ public:
 		double requested_dt_s, double target_cfl = 0.45,
 		int max_retries = 10) const;
 
-	// Conservative remap back to the reference pressure-coordinate layer mass
-	// fractions. Cell theta mass is remapped by overlap in dry-mass coordinate.
-	// Edge-normal velocity is remapped as edge-mass-weighted momentum using the
-	// same overlap construction, preventing coordinate maintenance from injecting
-	// or deleting vertically integrated horizontal momentum.
 	RemapDiagnostics remap_to_reference_levels(State &state) const;
 
 	const std::array<double, LEVELS> &reference_mass_fractions() const {
@@ -97,6 +90,7 @@ private:
 	struct Tendencies {
 		std::vector<double> mass_dt;
 		std::vector<double> theta_mass_dt;
+		std::vector<std::vector<double>> tracer_mass_dt;
 	};
 
 	const GeodesicVoronoiGrid *grid_ = nullptr;
