@@ -24,10 +24,6 @@ bool finite_nonnegative(double x) {
 	return std::isfinite(x) && x >= 0.0;
 }
 
-// Internal saturation helper used by the root solve. At temperatures where
-// saturation vapor pressure reaches the dry-core pressure, the dilute closure
-// cannot represent a saturated state; treating qsat as +infinity correctly
-// selects the all-vapor branch for finite total-water mixing ratios.
 double saturation_mixing_ratio_or_infinity(double pressure_pa, double temperature_k) {
 	const double es = VoronoiMoistThermodynamics::saturation_vapor_pressure_pa(temperature_k);
 	if (!(pressure_pa > 0.0) || !std::isfinite(pressure_pa)) {
@@ -53,6 +49,14 @@ EquilibriumPartition equilibrium_partition(double pressure_pa, double temperatur
 		+ VoronoiMoistThermodynamics::LV0_J_KG * e.vapor
 		- VoronoiMoistThermodynamics::LF0_J_KG * e.ice;
 	return e;
+}
+
+bool same_partition(const EquilibriumPartition &equilibrium,
+		double vapor, double liquid, double ice, double total_water) {
+	const double tolerance = 1.0e-14 * std::max(1.0, total_water);
+	return std::abs(equilibrium.vapor - vapor) <= tolerance
+		&& std::abs(equilibrium.liquid - liquid) <= tolerance
+		&& std::abs(equilibrium.ice - ice) <= tolerance;
 }
 
 } // namespace
@@ -105,9 +109,6 @@ double VoronoiMoistThermodynamics::saturation_vapor_pressure_pa(double temperatu
 		throw std::invalid_argument("Moist saturation temperature is outside [150,400] K");
 	}
 
-	// Murphy & Koop (2005) style closed forms over liquid water and ice. The
-	// mixed-phase range is blended in log-pressure space so qsat remains smooth
-	// across the 253.15..273.15 K cloud phase transition used below.
 	const double log_t = std::log(temperature_k);
 	const double log_es_water = 54.842763 - 6763.22 / temperature_k
 		- 4.210 * log_t + 0.000367 * temperature_k
@@ -233,6 +234,31 @@ VoronoiMoistThermodynamics::saturation_adjust(State &state) const {
 			}
 			const double h_target = CP_DRY * temperature_before
 				+ LV0_J_KG * qv_before - LF0_J_KG * qi_before;
+			const EquilibriumPartition initial_equilibrium = equilibrium_partition(
+				pressure, temperature_before, qt);
+			const double initial_enthalpy_residual =
+				initial_equilibrium.specific_enthalpy_j_kg - h_target;
+
+			// Critical for operator splitting: if transport has delivered a cell that
+			// is already in phase equilibrium, publish it unchanged. Reconstructing
+			// theta through a mathematically inverse T<->theta conversion would still
+			// add a few ulps every model step, including in perfectly dry atmosphere.
+			if (std::abs(initial_enthalpy_residual) <= ROOT_ENTHALPY_TOL_J_KG
+					&& same_partition(initial_equilibrium,
+						qv_before, ql_before, qi_before, qt)) {
+				if (std::isfinite(qsat_before) && qsat_before > 0.0) {
+					const double rh = qv_before / qsat_before;
+					d.max_relative_humidity_after = std::max(d.max_relative_humidity_after, rh);
+					if ((ql_before + qi_before) > 1.0e-14
+							&& std::abs(qv_before - qsat_before)
+								<= 1.0e-9 * std::max(qsat_before, 1.0e-12)) {
+						++d.saturated_cell_count;
+					}
+				}
+				d.min_temperature_k = std::min(d.min_temperature_k, temperature_before);
+				d.max_temperature_k = std::max(d.max_temperature_k, temperature_before);
+				continue;
+			}
 
 			auto residual = [&](double temperature) -> double {
 				return equilibrium_partition(pressure, temperature, qt).specific_enthalpy_j_kg
@@ -241,23 +267,18 @@ VoronoiMoistThermodynamics::saturation_adjust(State &state) const {
 
 			double lo = MIN_THERMODYNAMIC_T_K;
 			double hi = MAX_THERMODYNAMIC_T_K;
-			double flo = residual(lo);
-			double fhi = residual(hi);
+			const double flo = residual(lo);
+			const double fhi = residual(hi);
 			if (!(flo <= 0.0 && fhi >= 0.0)) {
 				throw std::runtime_error("Moist saturation adjustment could not bracket enthalpy root");
 			}
-
-			double temperature_after = temperature_before;
-			const double f_initial = residual(temperature_before);
-			if (std::abs(f_initial) > ROOT_ENTHALPY_TOL_J_KG) {
-				for (int iteration = 0; iteration < ROOT_ITERATIONS; ++iteration) {
-					const double mid = 0.5 * (lo + hi);
-					const double fm = residual(mid);
-					if (fm > 0.0) hi = mid;
-					else lo = mid;
-				}
-				temperature_after = 0.5 * (lo + hi);
+			for (int iteration = 0; iteration < ROOT_ITERATIONS; ++iteration) {
+				const double mid = 0.5 * (lo + hi);
+				const double fm = residual(mid);
+				if (fm > 0.0) hi = mid;
+				else lo = mid;
 			}
+			const double temperature_after = 0.5 * (lo + hi);
 
 			const EquilibriumPartition eq = equilibrium_partition(
 				pressure, temperature_after, qt);
