@@ -64,7 +64,20 @@ public:
 	double total_theta_mass_kg_k(const State &state) const {
 		return dynamics_.total_theta_mass_kg_k(state);
 	}
+	double total_dry_energy_j(const State &state) const {
+		return dynamics_.total_dry_energy_j(state);
+	}
+	double total_relative_axial_angular_momentum_kg_m2_s(const State &state) const {
+		return dynamics_.total_relative_axial_angular_momentum_kg_m2_s(state);
+	}
+	double total_absolute_axial_angular_momentum_kg_m2_s(const State &state) const {
+		return dynamics_.total_absolute_axial_angular_momentum_kg_m2_s(state);
+	}
 
+	std::vector<Vec3d> reconstruct_cell_velocity(const State &state,
+		int level) const {
+		return dynamics_.reconstruct_cell_velocity(state, level);
+	}
 	std::vector<double> reconstruct_vertex_relative_vorticity(const State &state,
 		int level) const {
 		return dynamics_.reconstruct_vertex_relative_vorticity(state, level);
