@@ -4,7 +4,10 @@ extends RefCounted
 ##
 ## Precise pristine terrain comes from TerrainHeightQuery, persistent edits come
 ## from Deltas, and the live high-resolution deformation tile is sampled from the
-## asynchronous TerrainDeformationGPU CPU mirror. No synchronous GPU readback is
+## asynchronous TerrainDeformationGPU CPU mirror. New rigid contacts can request an
+## exact rendered-contact height from RenderedTerrainContactQuery, which samples
+## the production clipmap cache and the exact deformation textures instead of an
+## independently regenerated terrain approximation. No synchronous GPU readback is
 ## ever performed by a physics contact.
 
 
@@ -26,6 +29,28 @@ static func request_surface(direction: Vector3) -> void:
 
 static func request_surfaces(directions: Array[Vector3]) -> void:
 	TerrainHeightQuery.request_surfaces(directions)
+
+
+## First-contact path. This returns NAN (or the supplied fallback) until the exact
+## currently rendered clipmap/deformation stack has produced a matching sample.
+static func request_rendered_contact_height(direction: Vector3) -> void:
+	if direction.length_squared() <= 1e-12:
+		return
+	RenderedTerrainContactQuery.request_height(direction.normalized())
+
+
+static func rendered_contact_height(direction: Vector3, fallback: float = NAN) -> float:
+	if direction.length_squared() <= 1e-12:
+		return fallback
+	var d: Vector3 = direction.normalized()
+	RenderedTerrainContactQuery.request_height(d)
+	return RenderedTerrainContactQuery.height_for_direction(d, fallback)
+
+
+static func has_rendered_contact_height(direction: Vector3) -> bool:
+	if direction.length_squared() <= 1e-12:
+		return false
+	return RenderedTerrainContactQuery.has_height(direction.normalized())
 
 
 static func coarse_height(direction: Vector3, snap: Dictionary = {}) -> float:
