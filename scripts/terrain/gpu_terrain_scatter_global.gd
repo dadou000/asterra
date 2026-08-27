@@ -60,9 +60,8 @@ func _bind_gpu_resources(force: bool) -> void:
 		material.set_shader_parameter("u_scatter_detail_seed", maxi(detail_seed, 1))
 		material.set_shader_parameter("u_scatter_geomorph_spacing", 0.75)
 
-	# Scatter placement must follow mutable terrain edits too. Bind the same local
-	# delta window as the terrain renderer; shaders add it after pristine geomorph.
-	var edits := get_node_or_null("/root/TerrainEditDeltaGPU")
+	# Persistent mutable terrain.
+	var edits: Node = get_node_or_null("/root/TerrainEditDeltaGPU")
 	if edits != null and edits.has_method("sample_params"):
 		var ep: Dictionary = edits.call("sample_params")
 		for material: ShaderMaterial in _materials:
@@ -72,6 +71,24 @@ func _bind_gpu_resources(force: bool) -> void:
 			material.set_shader_parameter("u_edit_center_right", ep.get("center_right", Vector3.BACK))
 			material.set_shader_parameter("u_edit_center_up", ep.get("center_up", Vector3.UP))
 			material.set_shader_parameter("u_edit_half_extent_m", float(ep.get("half_extent_m", 256.0)))
+
+	# Live high-resolution GPU deformation. The shared shader include adds this on
+	# top of persistent Deltas, so grass/stones track active ruts and excavation.
+	var active: Node = get_node_or_null("/root/TerrainDeformationGPU")
+	if active != null and active.has_method("sample_params"):
+		var ap: Dictionary = active.call("sample_params")
+		for material: ShaderMaterial in _materials:
+			material.set_shader_parameter("u_active_deform", ap.get("texture"))
+			material.set_shader_parameter("u_active_deform_ready",
+				1.0 if bool(ap.get("ready", false)) else 0.0)
+			material.set_shader_parameter("u_active_deform_center_dir",
+				ap.get("center_dir", Vector3.RIGHT))
+			material.set_shader_parameter("u_active_deform_center_right",
+				ap.get("center_right", Vector3.BACK))
+			material.set_shader_parameter("u_active_deform_center_up",
+				ap.get("center_up", Vector3.UP))
+			material.set_shader_parameter("u_active_deform_half_extent_m",
+				float(ap.get("half_extent_m", 32.0)))
 
 
 func gpu_scatter_stats() -> Dictionary:
@@ -84,4 +101,5 @@ func gpu_scatter_stats() -> Dictionary:
 		"compute_failed": false if STABLE_FALLBACK_ONLY else _compact_init_failed,
 		"stable_gpu_fallback": STABLE_FALLBACK_ONLY,
 		"edit_delta_bound": get_node_or_null("/root/TerrainEditDeltaGPU") != null,
+		"active_deform_bound": get_node_or_null("/root/TerrainDeformationGPU") != null,
 	}
