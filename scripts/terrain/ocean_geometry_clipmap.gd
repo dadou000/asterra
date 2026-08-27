@@ -365,7 +365,7 @@ func _capture_stable_anchor(surface_world: Vec3D) -> void:
 static func _build_center_mesh() -> ArrayMesh:
 	var vertices: Array[Vector3] = []
 	var uvs: Array[Vector2] = []
-	var indices := PackedInt32Array()
+	var indices: Array[int] = []
 	var remap: Dictionary = {}
 	var outer_sq := float(HALF_CELLS * HALF_CELLS)
 	for y in GRID_CELLS:
@@ -381,7 +381,7 @@ static func _build_center_mesh() -> ArrayMesh:
 static func _build_sector_mesh(sector_index: int) -> ArrayMesh:
 	var vertices: Array[Vector3] = []
 	var uvs: Array[Vector2] = []
-	var indices := PackedInt32Array()
+	var indices: Array[int] = []
 	var remap: Dictionary = {}
 	var outer_sq := float(HALF_CELLS * HALF_CELLS)
 	var inner_sq := float(RING_INNER_HALF_CELLS * RING_INNER_HALF_CELLS)
@@ -403,12 +403,17 @@ static func _build_sector_mesh(sector_index: int) -> ArrayMesh:
 
 
 static func _append_compact_cell(remap: Dictionary, vertices: Array[Vector3],
-		uvs: Array[Vector2], indices: PackedInt32Array, x: int, y: int) -> void:
+		uvs: Array[Vector2], indices: Array[int], x: int, y: int) -> void:
 	var i00 := _compact_vertex(remap, vertices, uvs, x, y)
 	var i10 := _compact_vertex(remap, vertices, uvs, x + 1, y)
 	var i01 := _compact_vertex(remap, vertices, uvs, x, y + 1)
 	var i11 := _compact_vertex(remap, vertices, uvs, x + 1, y + 1)
-	indices.append_array([i00, i10, i11, i00, i11, i01])
+	indices.append(i00)
+	indices.append(i10)
+	indices.append(i11)
+	indices.append(i00)
+	indices.append(i11)
+	indices.append(i01)
 
 
 static func _compact_vertex(remap: Dictionary, vertices: Array[Vector3],
@@ -425,7 +430,7 @@ static func _compact_vertex(remap: Dictionary, vertices: Array[Vector3],
 
 
 static func _mesh_from_compact(vertices: Array[Vector3], uvs: Array[Vector2],
-		indices: PackedInt32Array) -> ArrayMesh:
+		indices: Array[int]) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	if indices.is_empty():
 		return mesh
@@ -433,7 +438,7 @@ static func _mesh_from_compact(vertices: Array[Vector3], uvs: Array[Vector2],
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
 	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
-	arrays[Mesh.ARRAY_INDEX] = indices
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array(indices)
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
