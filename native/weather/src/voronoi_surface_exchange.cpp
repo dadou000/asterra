@@ -1,6 +1,7 @@
 #include "voronoi_surface_exchange.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -18,13 +19,18 @@ double relative_error(double before, double after, double scale) {
 VoronoiSurfaceExchange::VoronoiSurfaceExchange(const VoronoiDryTransport &transport,
 		TracerIndices indices)
 	: transport_(&transport), indices_(indices) {
-	if (indices_.vapor < 0 || indices_.cloud_liquid < 0 || indices_.cloud_ice < 0) {
-		throw std::invalid_argument("Surface exchange tracer indices must be non-negative");
+	const std::array<int, 5> all{
+		indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice,
+		indices_.rain, indices_.snow};
+	for (int index : all) {
+		if (index < 0) throw std::invalid_argument("Surface exchange tracer indices must be non-negative");
 	}
-	if (indices_.vapor == indices_.cloud_liquid
-			|| indices_.vapor == indices_.cloud_ice
-			|| indices_.cloud_liquid == indices_.cloud_ice) {
-		throw std::invalid_argument("Surface exchange water tracer indices must be distinct");
+	for (size_t a = 0; a < all.size(); ++a) {
+		for (size_t b = a + 1; b < all.size(); ++b) {
+			if (all[a] == all[b]) {
+				throw std::invalid_argument("Surface exchange water tracer indices must be distinct");
+			}
+		}
 	}
 }
 
@@ -103,7 +109,9 @@ double VoronoiSurfaceExchange::total_surface_energy_j(const SurfaceState &surfac
 double VoronoiSurfaceExchange::total_atmospheric_water_kg(const State &atmosphere) const {
 	return transport_->total_tracer_mass_kg(atmosphere, indices_.vapor)
 		+ transport_->total_tracer_mass_kg(atmosphere, indices_.cloud_liquid)
-		+ transport_->total_tracer_mass_kg(atmosphere, indices_.cloud_ice);
+		+ transport_->total_tracer_mass_kg(atmosphere, indices_.cloud_ice)
+		+ transport_->total_tracer_mass_kg(atmosphere, indices_.rain)
+		+ transport_->total_tracer_mass_kg(atmosphere, indices_.snow);
 }
 
 double VoronoiSurfaceExchange::atmospheric_thermodynamic_energy_j(
@@ -112,7 +120,8 @@ double VoronoiSurfaceExchange::atmospheric_thermodynamic_energy_j(
 	const auto thermo = moist.diagnose_thermodynamics(atmosphere);
 	const int cells = transport_->grid().cell_count();
 	const auto &vapor = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
-	const auto &ice = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &cloud_ice = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &snow = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 	long double total = 0.0L;
 	for (int k = 0; k < VoronoiDryTransport::LEVELS; ++k) {
 		for (int c = 0; c < cells; ++c) {
@@ -124,7 +133,7 @@ double VoronoiSurfaceExchange::atmospheric_thermodynamic_energy_j(
 				+ static_cast<long double>(VoronoiMoistThermodynamics::LV0_J_KG)
 					* static_cast<long double>(vapor[i])
 				- static_cast<long double>(VoronoiMoistThermodynamics::LF0_J_KG)
-					* static_cast<long double>(ice[i]);
+					* static_cast<long double>(cloud_ice[i] + snow[i]);
 			total += column_enthalpy
 				* static_cast<long double>(transport_->grid().cell(c).area_m2);
 		}
@@ -142,7 +151,7 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 
 	try {
 		validate_surface(surface);
-		validate_fluxes(evaporation_kg_m2_s, sensible_heat_w_m2, dt_s);
+		validate_fluxes(evaporation_kg_m2_s, sensible_heat_w_m2_sensible_heat_w_m2, dt_s);
 		VoronoiMoistThermodynamics moist(*transport_, indices_);
 		const auto thermo_before = moist.diagnose_thermodynamics(atmosphere);
 
@@ -155,14 +164,16 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 
 		const int cells = transport_->grid().cell_count();
 		auto &vapor = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
-		const auto &liquid = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
-		const auto &ice = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+		const auto &cloud_liquid = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
+		const auto &cloud_ice = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+		const auto &rain = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.rain)];
+		const auto &snow = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 		d.min_surface_water_kg_m2 = std::numeric_limits<double>::infinity();
 		d.min_bottom_temperature_k = std::numeric_limits<double>::infinity();
 		d.max_bottom_temperature_k = -std::numeric_limits<double>::infinity();
 
 		for (int c = 0; c < cells; ++c) {
-			const size_t i = static_cast<size_t>(c); // level 0 is the bottom layer
+			const size_t i = static_cast<size_t>(c);
 			const double dry_mass = atmosphere.layer_mass_kg_m2[i];
 			if (!(dry_mass > 0.0) || !std::isfinite(dry_mass)) {
 				throw std::runtime_error("Surface exchange encountered invalid bottom-layer dry mass");
@@ -186,14 +197,10 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 				if (!(target_temperature > 100.0) || !std::isfinite(target_temperature)) {
 					throw std::runtime_error("Surface exchange produced invalid bottom temperature");
 				}
-
-				// Only the bottom layer's water mass changes, so its upper interface
-				// pressure is unchanged. Recompute the new full layer-center pressure and
-				// choose theta so the requested sensible temperature is exact. This is
-				// required even for zero sensible heat when evaporation/dew changes weight.
 				const double p_upper = thermo_before.interface_pressure_pa[
-					static_cast<size_t>(cells + c)]; // interface level 1
-				const double total_mass_after = dry_mass + new_vapor + liquid[i] + ice[i];
+					static_cast<size_t>(cells + c)];
+				const double total_mass_after = dry_mass + new_vapor + cloud_liquid[i]
+					+ cloud_ice[i] + rain[i] + snow[i];
 				const double p_lower = p_upper + transport_->gravity_mps2() * total_mass_after;
 				const double pressure_after = std::sqrt(p_lower * p_upper);
 				const double target_theta = target_temperature * std::pow(
