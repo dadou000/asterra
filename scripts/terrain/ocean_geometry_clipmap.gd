@@ -90,6 +90,7 @@ func _on_graphics_quality_changed(preset: int) -> void:
 func _apply_quality(preset: int) -> void:
 	_quality_preset = GraphicsQuality.sanitize(preset)
 	_water_profile = GraphicsQuality.water_profile(_quality_preset)
+	_refresh_base_spacing_for_quality()
 	if _material == null:
 		return
 	_material.set_shader_parameter("u_quality_band_count", int(_water_profile["displacement_band_count"]))
@@ -101,6 +102,21 @@ func _apply_quality(preset: int) -> void:
 	_material.set_shader_parameter("u_interaction_range_m", float(_water_profile["interaction_range_m"]))
 	_material.set_shader_parameter("u_interaction_vertex_level", int(_water_profile["interaction_vertex_level"]))
 	_sync_interactions()
+
+
+func _refresh_base_spacing_for_quality() -> void:
+	if not Planet.ready_state or Planet.cfg == null:
+		return
+	var nominal_spacing := PI * 0.5 * Planet.cfg.planet_radius \
+		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	var scale := float(_water_profile.get("geometry_spacing_scale", 1.0))
+	var new_spacing := nominal_spacing * clampf(scale, 0.35, 2.0)
+	if not is_equal_approx(new_spacing, _base_spacing):
+		_base_spacing = new_spacing
+		# Every ring snap is expressed in multiples of base spacing. Force a clean
+		# re-anchor when the graphics preset changes instead of letting old and new
+		# lattice coordinates coexist for one frame.
+		_have_anchor = false
 
 
 func _process(_dt: float) -> void:
@@ -188,7 +204,7 @@ func clear_visual_interactions() -> void:
 
 
 func _configure_world() -> void:
-	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius / (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	_refresh_base_spacing_for_quality()
 	_have_anchor = false
 	_bound_macro = null
 	_bound_macro_res = -1
@@ -497,6 +513,8 @@ func gpu_stats() -> Dictionary:
 		"active_levels": _active_max_level + 1,
 		"visible_sectors": _visible_sector_count,
 		"grid_cells": GRID_CELLS,
+		"base_spacing_m": _base_spacing,
+		"geometry_spacing_scale": float(_water_profile.get("geometry_spacing_scale", 1.0)),
 		"gpu_waves": not _debug_waves_disabled,
 		"stable_displacement": _debug_stable_displacement,
 		"gpu_coast_height": true,
