@@ -14,6 +14,7 @@ render_mode cull_front, diffuse_burley, specular_schlick_ggx, ambient_light_disa
 #include "res://shaders/planet_lighting.gdshaderinc"
 #include "res://shaders/cloud_shadow.gdshaderinc"
 #include "res://shaders/terrain_aerial_gpu.gdshaderinc"
+#include "res://shaders/terrain_edit_delta.gdshaderinc"
 
 uniform sampler2DArray u_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_macro_ready = 0.0;
@@ -59,7 +60,8 @@ const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
 const float FINE_MORPH_START_Q = 0.875;
 const float MAX_PROJECTED_THETA = 1.62;
-const float TANGENT_APPROX_MAX_ARC_M = 90000.0;
+const float TANGENT_FAST_MAX_ARC_M = 70000.0;
+const float PROJECTION_BLEND_END_M = 110000.0;
 const float MACRO_FILTER_FOOTPRINT_VERTICES = 3.0;
 const float MACRO_MAX_LOD = 5.0;
 const int MACRO_MAX_MIP = 5;
@@ -89,15 +91,22 @@ float smootherstep_range(float edge0, float edge1, float x) {
 	return smootherstep01((x - edge0) / max(edge1 - edge0, 1e-9));
 }
 
+float projected_theta(float arc, float radius) {
+	float q = arc / max(radius, 1.0);
+	float gnomonic_theta = atan(q);
+	float geodesic_theta = q;
+	float blend = smootherstep_range(TANGENT_FAST_MAX_ARC_M, PROJECTION_BLEND_END_M, arc);
+	return min(mix(gnomonic_theta, geodesic_theta, blend), MAX_PROJECTED_THETA);
+}
+
 vec3 direction_for_basis_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m) {
 	float arc = length(offset_m);
 	if (arc < 1e-5) return normalize(center);
-	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
+	if (arc <= TANGENT_FAST_MAX_ARC_M) {
 		return normalize(center + right * (offset_m.x / u_planet_radius)
 			+ up * (offset_m.y / u_planet_radius));
 	}
-	float raw_theta = arc / max(u_planet_radius, 1.0);
-	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
+	float theta = min(projected_theta(arc, u_planet_radius), u_visible_cap_angle * 1.02);
 	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
 	return normalize(center * cos(theta) + tangent * sin(theta));
 }
@@ -111,7 +120,7 @@ vec3 stable_surface_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m,
 	float radius = max(u_planet_radius, 1.0);
 	float arc = length(offset_m);
 	if (arc < 1e-5) return center * altitude_m;
-	if (arc <= TANGENT_APPROX_MAX_ARC_M) {
+	if (arc <= TANGENT_FAST_MAX_ARC_M) {
 		vec3 tangent_m = right * offset_m.x + up * offset_m.y;
 		float q2 = dot(tangent_m, tangent_m) / (radius * radius);
 		float root = sqrt(1.0 + q2);
@@ -121,8 +130,7 @@ vec3 stable_surface_offset(vec3 center, vec3 right, vec3 up, vec2 offset_m,
 		float tangent_scale = (1.0 + altitude_m / radius) * inv_root;
 		return center * radial_m + tangent_m * tangent_scale;
 	}
-	float raw_theta = arc / radius;
-	float theta = min(raw_theta, min(u_visible_cap_angle * 1.02, MAX_PROJECTED_THETA));
+	float theta = min(projected_theta(arc, radius), u_visible_cap_angle * 1.02);
 	vec3 tangent = normalize(right * offset_m.x + up * offset_m.y);
 	float sin_theta = sin(theta);
 	float cos_theta = cos(theta);
@@ -206,7 +214,6 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 		* coast_guard * u_detail_strength;
 }
 
-// Analytic fallback for cache misses during staggered warm-up.
 vec2 terrain_sample_for_level(vec3 d, int level) {
 	float macro_h = macro_height(d, level);
 	return vec2(macro_h, macro_h + procedural_detail(d, level, macro_h));
@@ -285,6 +292,9 @@ void vertex() {
 		normal_morph = child_morph;
 	}
 
+	float edit_h = terrain_edit_delta(d, u_planet_radius);
+	h += edit_h;
+
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
 		RING_HANDOFF_BIAS_MIN_M, RING_HANDOFF_BIAS_MAX_M) * handoff_w;
 	float sink = handoff_bias_m;
@@ -336,7 +346,8 @@ void vertex() {
 	if (u_height_enabled > 0.5 && stable_displacement) {
 		v_smooth_normal = terrain_cached_surface_normal(
 			d, normal_level, normal_morph, h, anchor_offset_m);
-		v_geom_normal_weight = normal_level <= 1 ? 0.28 : 0.10;
+		v_geom_normal_weight = max(normal_level <= 1 ? 0.28 : 0.10,
+			abs(edit_h) > 0.001 ? 0.90 : 0.0);
 	} else {
 		v_smooth_normal = d;
 		v_geom_normal_weight = 0.65;
