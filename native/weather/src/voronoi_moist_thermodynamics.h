@@ -10,7 +10,7 @@ namespace asterra::weather {
 //
 // Water species are stored as tracer masses [kg/m2] per model layer while dry
 // layer mass remains the prognostic vertical-coordinate mass. Mechanical
-// pressure, however, is the weight of dry air plus vapor/liquid/ice. The
+// pressure is the weight of dry air plus every suspended water species. The
 // prognostic theta is standard potential temperature and therefore converts to
 // sensible temperature using that full mechanical pressure everywhere in this
 // module and in the moist hydrostatic/surface source operators.
@@ -24,6 +24,8 @@ public:
 		int vapor = 0;
 		int cloud_liquid = 1;
 		int cloud_ice = 2;
+		int rain = 3;
+		int snow = 4;
 	};
 
 	struct ThermodynamicDiagnostics {
@@ -63,27 +65,24 @@ public:
 
 	const TracerIndices &tracer_indices() const { return indices_; }
 
-	// Ensure the configured tracer slots exist. Existing tracer fields are never
-	// reordered or overwritten; newly-created fields are initialized to zero.
+	// Ensure vapor/cloud-liquid/cloud-ice/rain/snow tracer slots exist. Existing
+	// tracer fields are never reordered or overwritten; newly-created fields are
+	// initialized to zero.
 	void ensure_water_tracers(State &state) const;
 
 	// Diagnose total mechanical pressure and the single canonical theta->T
-	// conversion for a moist state. Pressure includes dry + vapor + liquid + ice
-	// layer weight while the vertical coordinate itself remains dry-mass based.
+	// conversion for a moist state. Pressure includes dry air plus all five water
+	// species while the vertical coordinate itself remains dry-mass based.
 	ThermodynamicDiagnostics diagnose_thermodynamics(const State &state) const;
 
-	// Saturation vapor pressure and dry-air-basis saturation mixing ratio.
-	// Pressure must be the full mechanical pressure and exceed saturation vapor
-	// pressure.
 	static double saturation_vapor_pressure_pa(double temperature_k);
 	static double saturation_mixing_ratio(double pressure_pa,
 		double temperature_k);
 	static double ice_fraction(double temperature_k);
 
 	// Exact ideal-mixture virtual temperature for water mixing ratios expressed
-	// per kg of dry air, with condensate volume neglected:
-	//   Tv = T (1 + qv/epsilon) / (1 + qv + ql + qi).
-	// With total mechanical pressure p this gives rho_total = p/(Rd Tv).
+	// per kg of dry air, with condensate volume neglected. Liquid/ice arguments
+	// may include precipitating rain/snow loading respectively.
 	static double virtual_temperature_k(double temperature_k,
 		double vapor_mixing_ratio,
 		double liquid_mixing_ratio = 0.0,
@@ -94,23 +93,21 @@ public:
 		double liquid_mixing_ratio = 0.0,
 		double ice_mixing_ratio = 0.0);
 
-	// Diagnose Tv for every model scalar from the same full-pressure temperature
-	// convention used by saturation adjustment and moist hydrostatics.
 	std::vector<double> diagnose_virtual_temperature_k(const State &state) const;
 
-	// Convenience initialization: set vapor to RH * qsat and zero cloud water at
-	// every cell/level while preserving dry mass, wind and theta. The initializer
-	// iterates the added vapor weight to a self-consistent full-pressure RH.
+	// Convenience initialization: set vapor to RH * qsat and zero every
+	// condensate/precipitation species while preserving dry mass, wind and theta.
+	// The initializer iterates the added vapor weight to a self-consistent
+	// full-pressure RH.
 	void initialize_uniform_relative_humidity(State &state,
 		double relative_humidity) const;
 
-	// Instantaneous local saturation adjustment. Each cell/level independently
-	// conserves total water and the approximate moist specific enthalpy
-	//   h = Cp_d T + Lv qv - Lf qi
-	// while enforcing qv <= qsat(T,p). Because phase repartition preserves total
-	// layer water mass, p is fixed during each local enthalpy root. Existing
-	// condensate evaporates when subsaturated; equilibrium condensate is split
-	// between liquid and ice by a 253.15..273.15 K mixed-phase ramp.
+	// Instantaneous local cloud saturation adjustment. It repartitions only
+	// vapor/cloud-liquid/cloud-ice; rain and snow remain separate precipitating
+	// reservoirs. Each cell/level conserves the non-precipitating cloud-water sum
+	// and the approximate moist specific enthalpy
+	//   h = Cp_d T + Lv qv - Lf qi.
+	// Total atmospheric water including rain/snow is checked globally.
 	AdjustmentDiagnostics saturation_adjust(State &state) const;
 
 private:
