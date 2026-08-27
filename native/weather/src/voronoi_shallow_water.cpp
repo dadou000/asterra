@@ -295,10 +295,10 @@ VoronoiShallowWater::Tendencies VoronoiShallowWater::compute_tendencies(const St
 			- t.bernoulli[static_cast<size_t>(edge.cell_a)]) / edge.center_distance_m;
 	}
 
-	// TRiSK PV flux. weightsOnEdge reconstructs the positive tangential
-	// component k x F at the target edge. The momentum equation contains
-	// -q(h u^perp). Symmetric pairwise q averaging preserves the metric-
-	// skew work cancellation of the Thuburn/Ringler edge operator.
+	// TRiSK PV flux, matching MPAS sw_compute_tend exactly: the MPAS
+	// weightsOnEdge orientation makes the PV-flux contribution positive in the
+	// normal momentum tendency. Symmetric pairwise PV averaging preserves the
+	// metric-skew work cancellation of the Thuburn/Ringler edge operator.
 	for (int e = 0; e < grid_->edge_count(); ++e) {
 		const auto &target = grid_->edge(e);
 		if (target.reconstruction_edges.size() != target.reconstruction_weights.size()) {
@@ -312,7 +312,7 @@ VoronoiShallowWater::Tendencies VoronoiShallowWater::compute_tendencies(const St
 			q_flux_perp += target.reconstruction_weights[k]
 				* q_pair * t.mass_flux[static_cast<size_t>(source)];
 		}
-		t.edge_velocity_dt[static_cast<size_t>(e)] -= q_flux_perp;
+		t.edge_velocity_dt[static_cast<size_t>(e)] += q_flux_perp;
 	}
 
 	return t;
