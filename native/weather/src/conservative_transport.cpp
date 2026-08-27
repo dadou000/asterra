@@ -91,8 +91,8 @@ double ConservativeTransport2D::stable_dt(
 	if (!(target_cfl > 0.0) || !std::isfinite(target_cfl)) {
 		throw std::invalid_argument("Target CFL must be finite and positive");
 	}
-	if (!(maximum_dt_s > 0.0) && !std::isinf(maximum_dt_s)) {
-		throw std::invalid_argument("Maximum timestep must be positive or infinity");
+	if (!(maximum_dt_s > 0.0)) {
+		throw std::invalid_argument("Maximum timestep must be positive");
 	}
 	if (edge_normal_velocity_mps.size() != edges_.size()) {
 		throw std::invalid_argument("Edge velocity array has the wrong size");
@@ -287,6 +287,24 @@ ConservativeTransport2D::StepDiagnostics ConservativeTransport2D::step_ssprk3(
 	const double cfl_dt = stable_dt(edge_normal_velocity_mps, target_cfl, requested_dt_s);
 	diagnostics.used_dt_s = std::min(requested_dt_s, cfl_dt);
 	diagnostics.max_courant = max_courant(edge_normal_velocity_mps, diagnostics.used_dt_s);
+
+	// No physical flux means no numerical operation. Apart from avoiding pointless
+	// work, this keeps a resting/constant state bitwise invariant instead of adding
+	// round-off through SSPRK convex recombination coefficients.
+	if (diagnostics.max_courant == 0.0) {
+		diagnostics.mass_after = diagnostics.mass_before;
+		diagnostics.relative_mass_error = 0.0;
+		diagnostics.min_density = std::numeric_limits<double>::infinity();
+		diagnostics.max_density = -std::numeric_limits<double>::infinity();
+		for (double q : density) {
+			if (!std::isfinite(q) || q < 0.0) {
+				throw std::runtime_error("Transport state is invalid even though flux is zero");
+			}
+			diagnostics.min_density = std::min(diagnostics.min_density, q);
+			diagnostics.max_density = std::max(diagnostics.max_density, q);
+		}
+		return diagnostics;
+	}
 
 	const std::vector<double> u0 = density;
 	std::vector<double> u1, euler2, u2, euler3;
