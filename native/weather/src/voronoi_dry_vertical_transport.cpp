@@ -1,6 +1,7 @@
 #include "voronoi_dry_vertical_transport.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -9,7 +10,53 @@ namespace asterra::weather {
 
 namespace {
 constexpr double CONSERVATION_REJECT_TOL = 1.0e-11;
+constexpr double REMAP_REJECT_TOL = 2.0e-11;
+
+template <size_t N>
+std::array<double, N> remap_extensive_by_mass_overlap(
+		const std::array<double, N> &source_mass,
+		const std::array<double, N> &source_extensive,
+		const std::array<double, N> &target_mass) {
+	std::array<double, N> source_lo{};
+	std::array<double, N> source_hi{};
+	std::array<double, N> target_lo{};
+	std::array<double, N> target_hi{};
+	std::array<double, N> target_extensive{};
+
+	double cumulative = 0.0;
+	for (size_t k = 0; k < N; ++k) {
+		source_lo[k] = cumulative;
+		cumulative += source_mass[k];
+		source_hi[k] = cumulative;
+	}
+	cumulative = 0.0;
+	for (size_t k = 0; k < N; ++k) {
+		target_lo[k] = cumulative;
+		cumulative += target_mass[k];
+		target_hi[k] = cumulative;
+	}
+
+	for (size_t t = 0; t < N; ++t) {
+		long double q = 0.0L;
+		for (size_t s = 0; s < N; ++s) {
+			const double overlap = std::max(0.0,
+				std::min(target_hi[t], source_hi[s]) - std::max(target_lo[t], source_lo[s]));
+			if (overlap == 0.0) continue;
+			if (!(source_mass[s] > 0.0)) {
+				throw std::runtime_error("Dry coordinate remap encountered non-positive source mass");
+			}
+			q += static_cast<long double>(overlap)
+				* static_cast<long double>(source_extensive[s] / source_mass[s]);
+		}
+		target_extensive[t] = static_cast<double>(q);
+	}
+	return target_extensive;
 }
+
+double relative_error(double after, double before) {
+	return std::abs(after - before) / std::max(std::abs(before), 1.0);
+}
+} // namespace
 
 VoronoiDryVerticalTransport::VoronoiDryVerticalTransport(
 		const GeodesicVoronoiGrid &grid, double gravity_mps2,
@@ -17,6 +64,31 @@ VoronoiDryVerticalTransport::VoronoiDryVerticalTransport(
 	: grid_(&grid), horizontal_(grid, gravity_mps2, scale_height_m, top_pressure_pa) {
 	if (grid.cell_count() <= 0) {
 		throw std::invalid_argument("Dry vertical transport requires a built geodesic grid");
+	}
+
+	// The fixed-top reference constructor uses a pressure-coordinate shape whose
+	// layer fractions are independent of surface pressure. Derive those fractions
+	// once from a representative column so the remapper does not carry a second,
+	// potentially divergent definition of the vertical coordinate.
+	const State reference = horizontal_.make_isothermal_reference(100000.0, 288.0);
+	double total = 0.0;
+	for (int k = 0; k < LEVELS; ++k) {
+		total += reference.layer_mass_kg_m2[static_cast<size_t>(scalar_index(k, 0))];
+	}
+	if (!(total > 0.0) || !std::isfinite(total)) {
+		throw std::runtime_error("Dry coordinate reference column has invalid total mass");
+	}
+	double fraction_sum = 0.0;
+	for (int k = 0; k < LEVELS - 1; ++k) {
+		reference_mass_fraction_[static_cast<size_t>(k)]
+			= reference.layer_mass_kg_m2[static_cast<size_t>(scalar_index(k, 0))] / total;
+		fraction_sum += reference_mass_fraction_[static_cast<size_t>(k)];
+	}
+	reference_mass_fraction_[LEVELS - 1] = 1.0 - fraction_sum;
+	for (double f : reference_mass_fraction_) {
+		if (!(f > 0.0) || !std::isfinite(f)) {
+			throw std::runtime_error("Dry coordinate reference mass fractions are invalid");
+		}
 	}
 }
 
@@ -256,6 +328,145 @@ VoronoiDryVerticalTransport::step(State &state,
 		d.min_layer_mass_kg_m2 = std::min(d.min_layer_mass_kg_m2, mass);
 		d.min_potential_temperature_k = std::min(
 			d.min_potential_temperature_k, state.theta_mass_kg_k_m2[i] / mass);
+	}
+	return d;
+}
+
+VoronoiDryVerticalTransport::RemapDiagnostics
+VoronoiDryVerticalTransport::remap_to_reference_levels(State &state) const {
+	validate_state(state);
+	if (!finite_positive(state)) {
+		throw std::runtime_error("Dry coordinate remap received invalid state");
+	}
+
+	const State original = state;
+	RemapDiagnostics d;
+	const double global_mass_before = horizontal_.total_dry_mass_kg(original);
+	const double global_theta_before = horizontal_.total_theta_mass_kg_k(original);
+	std::vector<double> column_mass_before(static_cast<size_t>(grid_->cell_count()), 0.0);
+	std::vector<double> column_theta_before(static_cast<size_t>(grid_->cell_count()), 0.0);
+
+	// Cell-centred mass and thermodynamics: conservative overlap remap in each
+	// column's dry-mass coordinate.
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		std::array<double, LEVELS> source_mass{};
+		std::array<double, LEVELS> source_theta_mass{};
+		std::array<double, LEVELS> target_mass{};
+		double column_mass = 0.0;
+		double column_theta = 0.0;
+		for (int k = 0; k < LEVELS; ++k) {
+			const int i = scalar_index(k, c);
+			source_mass[static_cast<size_t>(k)] = original.layer_mass_kg_m2[static_cast<size_t>(i)];
+			source_theta_mass[static_cast<size_t>(k)] = original.theta_mass_kg_k_m2[static_cast<size_t>(i)];
+			column_mass += source_mass[static_cast<size_t>(k)];
+			column_theta += source_theta_mass[static_cast<size_t>(k)];
+		}
+		column_mass_before[static_cast<size_t>(c)] = column_mass;
+		column_theta_before[static_cast<size_t>(c)] = column_theta;
+
+		double assigned = 0.0;
+		for (int k = 0; k < LEVELS - 1; ++k) {
+			target_mass[static_cast<size_t>(k)]
+				= column_mass * reference_mass_fraction_[static_cast<size_t>(k)];
+			assigned += target_mass[static_cast<size_t>(k)];
+		}
+		target_mass[LEVELS - 1] = column_mass - assigned;
+		const auto target_theta_mass = remap_extensive_by_mass_overlap(
+			source_mass, source_theta_mass, target_mass);
+
+		for (int k = 0; k < LEVELS; ++k) {
+			const int i = scalar_index(k, c);
+			state.layer_mass_kg_m2[static_cast<size_t>(i)] = target_mass[static_cast<size_t>(k)];
+			state.theta_mass_kg_k_m2[static_cast<size_t>(i)] = target_theta_mass[static_cast<size_t>(k)];
+		}
+	}
+
+	// Edge winds are vertical-coordinate variables too. Remap the extensive
+	// edge-mass-weighted momentum, then divide by the remapped edge mass. This is
+	// more conservative than interpolating velocity directly when neighbouring
+	// columns have different total masses.
+	for (int e = 0; e < grid_->edge_count(); ++e) {
+		const auto &edge = grid_->edge(e);
+		std::array<double, LEVELS> source_edge_mass{};
+		std::array<double, LEVELS> source_momentum{};
+		std::array<double, LEVELS> target_edge_mass{};
+		long double momentum_before = 0.0L;
+		for (int k = 0; k < LEVELS; ++k) {
+			const double ma = original.layer_mass_kg_m2[
+				static_cast<size_t>(scalar_index(k, edge.cell_a))];
+			const double mb = original.layer_mass_kg_m2[
+				static_cast<size_t>(scalar_index(k, edge.cell_b))];
+			const double mt_a = state.layer_mass_kg_m2[
+				static_cast<size_t>(scalar_index(k, edge.cell_a))];
+			const double mt_b = state.layer_mass_kg_m2[
+				static_cast<size_t>(scalar_index(k, edge.cell_b))];
+			source_edge_mass[static_cast<size_t>(k)] = 0.5 * (ma + mb);
+			target_edge_mass[static_cast<size_t>(k)] = 0.5 * (mt_a + mt_b);
+			const double momentum = source_edge_mass[static_cast<size_t>(k)]
+				* original.edge_normal_mps[static_cast<size_t>(edge_index(k, e))];
+			source_momentum[static_cast<size_t>(k)] = momentum;
+			momentum_before += momentum;
+		}
+		const auto target_momentum = remap_extensive_by_mass_overlap(
+			source_edge_mass, source_momentum, target_edge_mass);
+		long double momentum_after = 0.0L;
+		for (int k = 0; k < LEVELS; ++k) {
+			if (!(target_edge_mass[static_cast<size_t>(k)] > 0.0)) {
+				state = original;
+				throw std::runtime_error("Dry coordinate remap produced non-positive edge mass");
+			}
+			state.edge_normal_mps[static_cast<size_t>(edge_index(k, e))]
+				= target_momentum[static_cast<size_t>(k)] / target_edge_mass[static_cast<size_t>(k)];
+			momentum_after += target_momentum[static_cast<size_t>(k)];
+		}
+		d.max_edge_momentum_error = std::max(d.max_edge_momentum_error,
+			relative_error(static_cast<double>(momentum_after), static_cast<double>(momentum_before)));
+	}
+
+	if (!finite_positive(state)) {
+		state = original;
+		throw std::runtime_error("Dry coordinate remap produced invalid state");
+	}
+
+	const double global_mass_after = horizontal_.total_dry_mass_kg(state);
+	const double global_theta_after = horizontal_.total_theta_mass_kg_k(state);
+	d.relative_dry_mass_error = relative_error(global_mass_after, global_mass_before);
+	d.relative_theta_mass_error = relative_error(global_theta_after, global_theta_before);
+	d.min_layer_mass_kg_m2 = std::numeric_limits<double>::infinity();
+	d.min_potential_temperature_k = std::numeric_limits<double>::infinity();
+
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		double column_mass_after = 0.0;
+		double column_theta_after = 0.0;
+		for (int k = 0; k < LEVELS; ++k) {
+			const int i = scalar_index(k, c);
+			const double mass = state.layer_mass_kg_m2[static_cast<size_t>(i)];
+			const double theta_mass = state.theta_mass_kg_k_m2[static_cast<size_t>(i)];
+			column_mass_after += mass;
+			column_theta_after += theta_mass;
+			d.min_layer_mass_kg_m2 = std::min(d.min_layer_mass_kg_m2, mass);
+			d.min_potential_temperature_k = std::min(
+				d.min_potential_temperature_k, theta_mass / mass);
+		}
+		d.max_column_mass_error = std::max(d.max_column_mass_error,
+			relative_error(column_mass_after, column_mass_before[static_cast<size_t>(c)]));
+		d.max_column_theta_mass_error = std::max(d.max_column_theta_mass_error,
+			relative_error(column_theta_after, column_theta_before[static_cast<size_t>(c)]));
+		for (int k = 0; k < LEVELS; ++k) {
+			const double fraction = state.layer_mass_kg_m2[
+				static_cast<size_t>(scalar_index(k, c))] / column_mass_after;
+			d.max_mass_fraction_error = std::max(d.max_mass_fraction_error,
+				std::abs(fraction - reference_mass_fraction_[static_cast<size_t>(k)]));
+		}
+	}
+
+	if (d.relative_dry_mass_error > REMAP_REJECT_TOL
+			|| d.relative_theta_mass_error > REMAP_REJECT_TOL
+			|| d.max_column_mass_error > REMAP_REJECT_TOL
+			|| d.max_column_theta_mass_error > REMAP_REJECT_TOL
+			|| d.max_edge_momentum_error > REMAP_REJECT_TOL) {
+		state = original;
+		throw std::runtime_error("Dry coordinate remap failed conservation gate");
 	}
 	return d;
 }
