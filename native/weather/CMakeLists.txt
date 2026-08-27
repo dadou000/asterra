@@ -35,6 +35,12 @@ add_executable(asterra_weather_shallow_water_tests
 target_link_libraries(asterra_weather_shallow_water_tests PRIVATE asterra_weather_core)
 add_test(NAME shallow_water_cgrid COMMAND asterra_weather_shallow_water_tests)
 
+add_executable(asterra_weather_standard_tests
+  tests/test_shallow_water_standard.cpp
+)
+target_link_libraries(asterra_weather_standard_tests PRIVATE asterra_weather_core)
+add_test(NAME shallow_water_standard COMMAND asterra_weather_standard_tests)
+
 # CI and the local build script can keep building one gate target. Any new core
 # validation executable must be added as a dependency here before the runtime DLL.
 add_custom_target(asterra_weather_core_tests
@@ -42,6 +48,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_geometry_tests
     asterra_weather_transport_tests
     asterra_weather_shallow_water_tests
+    asterra_weather_standard_tests
 )
 
 # godot-cpp master no longer guesses an engine API for extension projects.
@@ -92,12 +99,14 @@ if(MSVC)
   target_compile_options(asterra_weather_geometry_tests PRIVATE /O2)
   target_compile_options(asterra_weather_transport_tests PRIVATE /O2)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_standard_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
   target_compile_options(asterra_weather_geometry_tests PRIVATE -O3)
   target_compile_options(asterra_weather_transport_tests PRIVATE -O3)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_standard_tests PRIVATE -O3)
 endif()
 
 # Keep every generator/configuration in the exact location referenced by the
