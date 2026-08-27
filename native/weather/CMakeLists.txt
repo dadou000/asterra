@@ -15,6 +15,7 @@ add_library(asterra_weather_core STATIC
   src/conservative_transport.cpp
   src/shallow_water_cgrid.cpp
   src/geodesic_voronoi_grid.cpp
+  src/voronoi_shallow_water.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
 
@@ -47,12 +48,23 @@ add_executable(asterra_weather_geodesic_tests
 target_link_libraries(asterra_weather_geodesic_tests PRIVATE asterra_weather_core)
 add_test(NAME geodesic_voronoi_grid COMMAND asterra_weather_geodesic_tests)
 
+# Permanent nonlinear shallow-water gate on the new mesh. This verifies the
+# semi-discrete energy identity, circulation closure, direct pressure response,
+# rollback/CFL safety, and a strong tilted balanced-flow integration beyond the
+# failure window of the rejected cubed-sphere nonlinear core.
+add_executable(asterra_weather_voronoi_shallow_water_tests
+  tests/test_voronoi_shallow_water.cpp
+)
+target_link_libraries(asterra_weather_voronoi_shallow_water_tests PRIVATE asterra_weather_core)
+add_test(NAME voronoi_shallow_water COMMAND asterra_weather_voronoi_shallow_water_tests)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
     asterra_weather_transport_tests
     asterra_weather_shallow_water_tests
     asterra_weather_geodesic_tests
+    asterra_weather_voronoi_shallow_water_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -99,6 +111,7 @@ if(MSVC)
   target_compile_options(asterra_weather_transport_tests PRIVATE /O2)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE /O2)
   target_compile_options(asterra_weather_geodesic_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_voronoi_shallow_water_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -106,6 +119,7 @@ else()
   target_compile_options(asterra_weather_transport_tests PRIVATE -O3)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE -O3)
   target_compile_options(asterra_weather_geodesic_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_voronoi_shallow_water_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
