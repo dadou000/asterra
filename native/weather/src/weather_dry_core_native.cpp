@@ -12,7 +12,7 @@ namespace godot {
 
 using asterra::weather::GeodesicVoronoiGrid;
 using asterra::weather::Vec3d;
-using asterra::weather::VoronoiDryDynamics;
+using asterra::weather::VoronoiDryCore;
 using asterra::weather::dot;
 
 namespace {
@@ -65,7 +65,7 @@ void WeatherDryCoreNative::initialize(int p_frequency, double p_surface_pressure
 
 	try {
 		auto new_grid = std::make_unique<GeodesicVoronoiGrid>(p_frequency, PLANET_RADIUS_M);
-		auto new_dynamics = std::make_unique<VoronoiDryDynamics>(
+		auto new_dynamics = std::make_unique<VoronoiDryCore>(
 			*new_grid, GRAVITY_MPS2, 8000.0, TOP_PRESSURE_PA,
 			ROTATION_RATE_RAD_S, Vec3d{0.0, 1.0, 0.0});
 		auto new_state = new_dynamics->make_isothermal_reference(
@@ -163,7 +163,7 @@ bool WeatherDryCoreNative::add_pressure_perturbation(const Vector3 &center_direc
 			return false;
 		}
 	}
-	for (int k = 0; k < VoronoiDryDynamics::LEVELS; ++k) {
+	for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
 		for (int c = 0; c < grid_->cell_count(); ++c) {
 			const size_t i = static_cast<size_t>(k * grid_->cell_count() + c);
 			state_.layer_mass_kg_m2[i] *= factor[static_cast<size_t>(c)];
@@ -241,11 +241,15 @@ void WeatherDryCoreNative::refresh_state_extrema() {
 	for (double u : state_.edge_normal_mps) {
 		last_step_.max_speed_mps = std::max(last_step_.max_speed_mps, std::abs(u));
 	}
+	if (ready()) {
+		last_step_.max_coordinate_mass_fraction_error =
+			dynamics_->max_coordinate_mass_fraction_error(state_);
+	}
 }
 
 PackedFloat32Array WeatherDryCoreNative::get_global_dry_rgba(int layer) const {
 	PackedFloat32Array out;
-	if (!ready() || layer < 0 || layer >= VoronoiDryDynamics::LEVELS
+	if (!ready() || layer < 0 || layer >= VoronoiDryCore::LEVELS
 			|| display_cell_lookup_.size() != static_cast<size_t>(DISPLAY_W * DISPLAY_H)) return out;
 
 	const auto hydro = dynamics_->transport().diagnose_hydrostatic(state_);
@@ -278,7 +282,7 @@ PackedFloat32Array WeatherDryCoreNative::get_global_dry_rgba(int layer) const {
 PackedFloat32Array WeatherDryCoreNative::get_runtime_diagnostics() const {
 	PackedFloat32Array out;
 	if (!ready()) return out;
-	out.resize(15);
+	out.resize(20);
 	float *dst = out.ptrw();
 	const double mass = dynamics_->total_dry_mass_kg(state_);
 	const double theta_mass = dynamics_->total_theta_mass_kg_k(state_);
@@ -300,8 +304,13 @@ PackedFloat32Array WeatherDryCoreNative::get_runtime_diagnostics() const {
 	dst[10] = static_cast<float>(last_step_.max_pressure_acceleration_mps2);
 	dst[11] = static_cast<float>(grid_->cell_count());
 	dst[12] = static_cast<float>(grid_->edge_count());
-	dst[13] = static_cast<float>(VoronoiDryDynamics::LEVELS);
+	dst[13] = static_cast<float>(VoronoiDryCore::LEVELS);
 	dst[14] = static_cast<float>(TOP_PRESSURE_PA);
+	dst[15] = static_cast<float>(last_step_.max_coordinate_mass_fraction_error);
+	dst[16] = static_cast<float>(last_step_.max_coordinate_column_mass_error);
+	dst[17] = static_cast<float>(last_step_.max_coordinate_column_theta_mass_error);
+	dst[18] = static_cast<float>(last_step_.max_coordinate_edge_momentum_error);
+	dst[19] = last_step_.coordinate_remap_applied ? 1.0f : 0.0f;
 	return out;
 }
 
