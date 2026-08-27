@@ -5,8 +5,6 @@ extends "res://scripts/terrain/gpu_terrain_scatter_compact.gd"
 ## failed. Keep the proven vertex-GPU fallback authoritative for now: it still does
 ## all candidate placement/classification on the GPU, but avoids stale/invalid
 ## indirect buffers while the backend-specific failure is repaired separately.
-##
-## This layer also binds the same resident global height texture used by terrain.
 
 const STABLE_FALLBACK_ONLY := true
 
@@ -14,9 +12,6 @@ const STABLE_FALLBACK_ONLY := true
 func _ready() -> void:
 	super._ready()
 	if STABLE_FALLBACK_ONLY:
-		# Parent schedules compute initialization deferred. Clearing support here
-		# prevents that deferred attempt and makes the deterministic fallback the
-		# intentional path rather than a consequence of a runtime failure.
 		_compact_method_supported = false
 		_compact_init_failed = false
 		_compact_init_ready = false
@@ -65,6 +60,19 @@ func _bind_gpu_resources(force: bool) -> void:
 		material.set_shader_parameter("u_scatter_detail_seed", maxi(detail_seed, 1))
 		material.set_shader_parameter("u_scatter_geomorph_spacing", 0.75)
 
+	# Scatter placement must follow mutable terrain edits too. Bind the same local
+	# delta window as the terrain renderer; shaders add it after pristine geomorph.
+	var edits := get_node_or_null("/root/TerrainEditDeltaGPU")
+	if edits != null and edits.has_method("sample_params"):
+		var ep: Dictionary = edits.call("sample_params")
+		for material: ShaderMaterial in _materials:
+			material.set_shader_parameter("u_edit_delta", ep.get("texture"))
+			material.set_shader_parameter("u_edit_ready", 1.0 if bool(ep.get("ready", false)) else 0.0)
+			material.set_shader_parameter("u_edit_center_dir", ep.get("center_dir", Vector3.RIGHT))
+			material.set_shader_parameter("u_edit_center_right", ep.get("center_right", Vector3.BACK))
+			material.set_shader_parameter("u_edit_center_up", ep.get("center_up", Vector3.UP))
+			material.set_shader_parameter("u_edit_half_extent_m", float(ep.get("half_extent_m", 256.0)))
+
 
 func gpu_scatter_stats() -> Dictionary:
 	return {
@@ -75,4 +83,5 @@ func gpu_scatter_stats() -> Dictionary:
 		"compute_ready": false if STABLE_FALLBACK_ONLY else _compact_init_ready,
 		"compute_failed": false if STABLE_FALLBACK_ONLY else _compact_init_failed,
 		"stable_gpu_fallback": STABLE_FALLBACK_ONLY,
+		"edit_delta_bound": get_node_or_null("/root/TerrainEditDeltaGPU") != null,
 	}
