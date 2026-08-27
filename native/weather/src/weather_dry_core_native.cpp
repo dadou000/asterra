@@ -36,6 +36,8 @@ void WeatherDryCoreNative::_bind_methods() {
 		&WeatherDryCoreNative::get_global_dry_rgba, DEFVAL(0));
 	ClassDB::bind_method(D_METHOD("get_runtime_diagnostics"),
 		&WeatherDryCoreNative::get_runtime_diagnostics);
+	ClassDB::bind_method(D_METHOD("get_global_budget_diagnostics"),
+		&WeatherDryCoreNative::get_global_budget_diagnostics);
 	ClassDB::bind_method(D_METHOD("get_frequency"), &WeatherDryCoreNative::get_frequency);
 	ClassDB::bind_method(D_METHOD("get_cell_count"), &WeatherDryCoreNative::get_cell_count);
 	ClassDB::bind_method(D_METHOD("get_edge_count"), &WeatherDryCoreNative::get_edge_count);
@@ -222,10 +224,15 @@ void WeatherDryCoreNative::reset_budget_baseline() {
 	if (!ready()) {
 		initial_dry_mass_kg_ = 0.0;
 		initial_theta_mass_kg_k_ = 0.0;
+		initial_dry_energy_j_ = 0.0;
+		initial_absolute_aam_kg_m2_s_ = 0.0;
 		return;
 	}
 	initial_dry_mass_kg_ = dynamics_->total_dry_mass_kg(state_);
 	initial_theta_mass_kg_k_ = dynamics_->total_theta_mass_kg_k(state_);
+	initial_dry_energy_j_ = dynamics_->total_dry_energy_j(state_);
+	initial_absolute_aam_kg_m2_s_ =
+		dynamics_->total_absolute_axial_angular_momentum_kg_m2_s(state_);
 }
 
 void WeatherDryCoreNative::refresh_state_extrema() {
@@ -311,6 +318,37 @@ PackedFloat32Array WeatherDryCoreNative::get_runtime_diagnostics() const {
 	dst[17] = static_cast<float>(last_step_.max_coordinate_column_theta_mass_error);
 	dst[18] = static_cast<float>(last_step_.max_coordinate_edge_momentum_error);
 	dst[19] = last_step_.coordinate_remap_applied ? 1.0f : 0.0f;
+	return out;
+}
+
+PackedFloat64Array WeatherDryCoreNative::get_global_budget_diagnostics() const {
+	PackedFloat64Array out;
+	if (!ready()) return out;
+	const double mass = dynamics_->total_dry_mass_kg(state_);
+	const double theta_mass = dynamics_->total_theta_mass_kg_k(state_);
+	const double energy = dynamics_->total_dry_energy_j(state_);
+	const double relative_aam =
+		dynamics_->total_relative_axial_angular_momentum_kg_m2_s(state_);
+	const double absolute_aam =
+		dynamics_->total_absolute_axial_angular_momentum_kg_m2_s(state_);
+	const double energy_drift = initial_dry_energy_j_ != 0.0
+		? (energy - initial_dry_energy_j_) / std::abs(initial_dry_energy_j_) : 0.0;
+	const double aam_drift = initial_absolute_aam_kg_m2_s_ != 0.0
+		? (absolute_aam - initial_absolute_aam_kg_m2_s_)
+			/ std::abs(initial_absolute_aam_kg_m2_s_) : 0.0;
+
+	out.resize(10);
+	double *dst = out.ptrw();
+	dst[0] = mass;
+	dst[1] = theta_mass;
+	dst[2] = energy;
+	dst[3] = energy_drift;
+	dst[4] = relative_aam;
+	dst[5] = absolute_aam;
+	dst[6] = aam_drift;
+	dst[7] = dynamics_->max_coordinate_mass_fraction_error(state_);
+	dst[8] = initial_dry_energy_j_;
+	dst[9] = initial_absolute_aam_kg_m2_s_;
 	return out;
 }
 
