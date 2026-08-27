@@ -7,13 +7,13 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-layout(rgba32f, set = 0, binding = 0) uniform readonly image2D state_field;
+layout(rgba32f, set = 0, binding = 0) uniform image2D state_field;
 
-layout(set = 0, binding = 1, std430) restrict readonly buffer QueryBuffer {
+layout(set = 0, binding = 1, std430) readonly buffer QueryBuffer {
 	vec4 data[];
 } queries;
 
-layout(set = 0, binding = 2, std430) restrict writeonly buffer ResultBuffer {
+layout(set = 0, binding = 2, std430) writeonly buffer ResultBuffer {
 	vec4 data[];
 } results;
 
