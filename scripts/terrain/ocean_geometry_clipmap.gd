@@ -2,9 +2,10 @@ class_name OceanGeometryClipmap
 extends Node3D
 ## GPU-first local/regional ocean renderer.
 ##
-## A fixed concentric grid follows the observer. The CPU only updates uniforms
-## and sector visibility; shoreline height is evaluated by the same procedural
-## GPU terrain function as GroundGeometryClipmap.
+## A fixed concentric grid follows the observer. The CPU only updates uniforms,
+## bounded visual interaction events and sector visibility. Authoritative
+## buoyancy remains in OceanGPUPhysics and is deliberately independent of the
+## selected graphics preset.
 
 const TARGET_FINE_DEPTH: int = 16
 const MAX_LEVEL: int = 14
@@ -48,6 +49,9 @@ var _stable_anchor_world: Vec3D = Vec3D.new()
 var _bound_macro: Texture2DArray
 var _bound_macro_res: int = -1
 var _physics: OceanGPUPhysics
+var _interactions := OceanVisualInteractions.new()
+var _water_profile: Dictionary = GraphicsQuality.water_profile(GraphicsQuality.DEFAULT_PRESET)
+var _quality_preset: int = GraphicsQuality.DEFAULT_PRESET
 
 
 func _ready() -> void:
@@ -56,6 +60,7 @@ func _ready() -> void:
 	_material.shader = load("res://shaders/ocean_geometry_clipmap.gdshader")
 	_build_batches()
 	_set_visible(false)
+	_apply_quality(GraphicsQuality.DEFAULT_PRESET)
 
 	Planet.world_ready.connect(_on_world_ready)
 	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
@@ -64,8 +69,38 @@ func _ready() -> void:
 	_physics.name = "OceanGPUPhysics"
 	add_child(_physics)
 
+	# OceanSystem is listed before AppSettings in the autoload table. Deferring the
+	# initial read guarantees AppSettings has loaded user://settings.cfg first.
+	call_deferred("_initialize_quality")
+
 	if Planet.ready_state and Planet.cfg != null:
 		_configure_world()
+
+
+func _initialize_quality() -> void:
+	if not AppSettings.graphics_quality_changed.is_connected(_on_graphics_quality_changed):
+		AppSettings.graphics_quality_changed.connect(_on_graphics_quality_changed)
+	_apply_quality(AppSettings.graphics_quality)
+
+
+func _on_graphics_quality_changed(preset: int) -> void:
+	_apply_quality(preset)
+
+
+func _apply_quality(preset: int) -> void:
+	_quality_preset = GraphicsQuality.sanitize(preset)
+	_water_profile = GraphicsQuality.water_profile(_quality_preset)
+	if _material == null:
+		return
+	_material.set_shader_parameter("u_quality_band_count", int(_water_profile["displacement_band_count"]))
+	_material.set_shader_parameter("u_micro_band_count", int(_water_profile["micro_normal_band_count"]))
+	_material.set_shader_parameter("u_displacement_spacing_scale", float(_water_profile["displacement_spacing_scale"]))
+	_material.set_shader_parameter("u_bathymetry_level_limit", int(_water_profile["bathymetry_level_limit"]))
+	_material.set_shader_parameter("u_foam_quality", float(_water_profile["foam_quality"]))
+	_material.set_shader_parameter("u_crest_scatter_strength", float(_water_profile["crest_scatter_strength"]))
+	_material.set_shader_parameter("u_interaction_range_m", float(_water_profile["interaction_range_m"]))
+	_material.set_shader_parameter("u_interaction_vertex_level", int(_water_profile["interaction_vertex_level"]))
+	_sync_interactions()
 
 
 func _process(_dt: float) -> void:
@@ -98,19 +133,15 @@ func _process(_dt: float) -> void:
 
 	var observer_surface_world: Vec3D = observer_unit_world.mul(radius)
 	var rel: Vec3D = observer_surface_world.sub(_stable_anchor_world)
-	var px: float = rel.x * _anchor_right.x \
-		+ rel.y * _anchor_right.y + rel.z * _anchor_right.z
-	var py: float = rel.x * _anchor_up.x \
-		+ rel.y * _anchor_up.y + rel.z * _anchor_up.z
+	var px: float = rel.x * _anchor_right.x + rel.y * _anchor_right.y + rel.z * _anchor_right.z
+	var py: float = rel.x * _anchor_up.x + rel.y * _anchor_up.y + rel.z * _anchor_up.z
 	if absf(px) > REANCHOR_M or absf(py) > REANCHOR_M:
 		_reset_anchor(observer_dir)
 		_capture_stable_anchor(observer_surface_world)
 		px = 0.0
 		py = 0.0
 
-	var snapped := Vector2(
-		round(px / _base_spacing) * _base_spacing,
-		round(py / _base_spacing) * _base_spacing)
+	var snapped := Vector2(round(px / _base_spacing) * _base_spacing, round(py / _base_spacing) * _base_spacing)
 	if snapped.distance_squared_to(_center_plane) > 1e-8:
 		_center_plane = snapped
 		_update_center_basis()
@@ -118,6 +149,7 @@ func _process(_dt: float) -> void:
 	_update_visible_cap(observer_radius, radius)
 	_update_active_levels()
 	_bind_gpu_terrain(false)
+	_sync_interactions()
 	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
 	_sync_uniforms(origin)
 	_set_visible(_bound_macro != null)
@@ -125,9 +157,38 @@ func _process(_dt: float) -> void:
 		_update_sector_visibility()
 
 
+func _sync_interactions() -> void:
+	if _material == null:
+		return
+	var now_s := float(Time.get_ticks_usec()) / 1000000.0
+	_interactions.prune(now_s, float(_water_profile["interaction_lifetime_s"]), int(_water_profile["interaction_budget"]))
+	_material.set_shader_parameter("u_interaction_tex", _interactions.sync_texture())
+	_material.set_shader_parameter("u_interaction_count", _interactions.event_count())
+
+
+## Visual surface impulse. Gameplay code can call this when an object crosses the
+## water surface. The result is intentionally non-authoritative.
+func add_impact(world_position: Vec3D, amplitude_m: float, radius_m: float,
+		wavelength_m := 5.0, propagation_speed_mps := 8.0, foam := 0.35) -> void:
+	_interactions.add_impact(world_position, amplitude_m, radius_m, wavelength_m, propagation_speed_mps, foam)
+
+
+## Visual wake sample. A moving hull should submit these periodically along its
+## waterline/centreline. The shader turns the history into a Kelvin-like V wake.
+func add_wake(world_position: Vec3D, travel_direction: Vector3, amplitude_m: float,
+		beam_m: float, wavelength_m := 12.0, propagation_speed_mps := 10.0,
+		foam := 0.7) -> void:
+	_interactions.add_wake(world_position, travel_direction, amplitude_m, beam_m,
+		wavelength_m, propagation_speed_mps, foam)
+
+
+func clear_visual_interactions() -> void:
+	_interactions.clear()
+	_sync_interactions()
+
+
 func _configure_world() -> void:
-	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius \
-		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius / (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
 	_have_anchor = false
 	_bound_macro = null
 	_bound_macro_res = -1
@@ -139,8 +200,6 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 
 
 func _on_coast_profile_changed() -> void:
-	# The macro texture is the authoritative low-frequency source for both terrain
-	# and ocean. A rebake will refresh this binding through Planet/world_ready.
 	_bind_gpu_terrain(true)
 
 
@@ -157,8 +216,7 @@ func _reset_anchor(observer_dir: Vector3) -> void:
 
 
 func _update_center_basis() -> void:
-	_center_dir = _direction_for_offset(_anchor_dir, _anchor_right, _anchor_up,
-		_center_plane, Planet.cfg.planet_radius)
+	_center_dir = _direction_for_offset(_anchor_dir, _anchor_right, _anchor_up, _center_plane, Planet.cfg.planet_radius)
 	var tangent: Array = CubeSphere.tangent_basis(_center_dir)
 	_center_right = tangent[0]
 	_center_up = tangent[1]
@@ -178,8 +236,7 @@ func _update_visible_cap(observer_radius: float, planet_radius: float) -> void:
 	var safe_r := maxf(observer_radius, planet_radius + 0.01)
 	var horizon_angle := acos(clampf(planet_radius / safe_r, -1.0, 1.0))
 	var horizon_arc := horizon_angle * planet_radius
-	_visible_cap_arc_m = minf(PI * 0.5 * planet_radius,
-		horizon_arc + HORIZON_MARGIN_M)
+	_visible_cap_arc_m = minf(PI * 0.5 * planet_radius, horizon_arc + HORIZON_MARGIN_M)
 
 
 func _update_active_levels() -> void:
@@ -223,27 +280,22 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_center_up", _center_up)
 	_material.set_shader_parameter("u_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
-	_material.set_shader_parameter("u_visible_cap_angle",
-		minf(_visible_cap_arc_m / Planet.cfg.planet_radius * 1.03, PI * 0.5))
+	_material.set_shader_parameter("u_visible_cap_angle", minf(_visible_cap_arc_m / Planet.cfg.planet_radius * 1.03, PI * 0.5))
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	_material.set_shader_parameter("u_orbit_handoff_altitude", ORBIT_HANDOFF_ALTITUDE_M)
 	_material.set_shader_parameter("u_wave_scale", debug_wave_scale())
-	_material.set_shader_parameter("u_stable_displacement",
-		1.0 if _debug_stable_displacement else 0.0)
+	_material.set_shader_parameter("u_stable_displacement", 1.0 if _debug_stable_displacement else 0.0)
 
 	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
-	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
-		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
+	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH * maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
 
 
 func _build_batches() -> void:
 	_sector_batches.clear()
 	var center_mesh := _build_center_mesh()
-	var bounds := AABB(
-		Vector3(-GLOBAL_BOUNDS_M, -GLOBAL_BOUNDS_M, -GLOBAL_BOUNDS_M),
-		Vector3(GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0))
+	var bounds := AABB(Vector3(-GLOBAL_BOUNDS_M, -GLOBAL_BOUNDS_M, -GLOBAL_BOUNDS_M), Vector3(GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0, GLOBAL_BOUNDS_M * 2.0))
 	_center_batch = _make_batch("OceanClipmapL0", center_mesh, 1, bounds)
 	_center_batch.multimesh.set_instance_custom_data(0, Color(0.0, 0.0, 0.0, 0.0))
 	add_child(_center_batch)
@@ -252,8 +304,7 @@ func _build_batches() -> void:
 		var mesh := _build_sector_mesh(sector)
 		var batch := _make_batch("OceanClipmapSector%02d" % sector, mesh, MAX_LEVEL, bounds)
 		for instance_index in MAX_LEVEL:
-			batch.multimesh.set_instance_custom_data(instance_index,
-				Color(float(instance_index + 1), float(sector), 0.0, 0.0))
+			batch.multimesh.set_instance_custom_data(instance_index, Color(float(instance_index + 1), float(sector), 0.0, 0.0))
 		batch.multimesh.visible_instance_count = 0
 		batch.visible = false
 		_sector_batches.append(batch)
@@ -384,8 +435,7 @@ func _update_sector_visibility() -> void:
 	var forward := -camera.global_transform.basis.z.normalized()
 	var radial_dot := forward.dot(_center_dir)
 	var forward_plane := Vector2(forward.dot(_center_right), forward.dot(_center_up))
-	var show_all := absf(radial_dot) >= SECTOR_SHOW_ALL_RADIAL_DOT \
-		or forward_plane.length_squared() < 1e-5
+	var show_all := absf(radial_dot) >= SECTOR_SHOW_ALL_RADIAL_DOT or forward_plane.length_squared() < 1e-5
 	var cos_limit := -1.0
 	var forward_2d := Vector2.RIGHT
 	if not show_all:
@@ -419,5 +469,8 @@ func gpu_stats() -> Dictionary:
 		"stable_displacement": _debug_stable_displacement,
 		"gpu_coast_height": true,
 		"gpu_buoyancy_queries": _physics != null,
+		"quality": GraphicsQuality.preset_name(_quality_preset),
+		"visual_interactions": _interactions.event_count(),
+		"interaction_budget": int(_water_profile["interaction_budget"]),
 		"orbit_handoff_m": ORBIT_HANDOFF_ALTITUDE_M,
 	}
