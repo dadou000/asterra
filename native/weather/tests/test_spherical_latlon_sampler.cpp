@@ -32,6 +32,15 @@ Vec3d direction_from_lat_lon(double lat, double lon) {
 	const double clat = std::cos(lat);
 	return {clat * std::cos(lon), std::sin(lat), clat * std::sin(lon)};
 }
+
+double row_mean(const std::vector<double> &raster, int width, int y) {
+	long double sum = 0.0L;
+	for (int x = 0; x < width; ++x) {
+		sum += static_cast<long double>(raster[
+			static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)]);
+	}
+	return static_cast<double>(sum / static_cast<long double>(width));
+}
 } // namespace
 
 int main() {
@@ -61,12 +70,37 @@ int main() {
 			raster, W, H, {0.0, 1.0, 0.0});
 		const double south = SphericalLatLonSampler::sample_bilinear(
 			raster, W, H, {0.0, -1.0, 0.0});
+		const double north_row = row_mean(raster, W, 0);
+		const double south_row = row_mean(raster, W, H - 1);
 		require(std::isfinite(north) && std::isfinite(south),
 			"lat/lon sampler produced non-finite polar values");
-		require(std::abs(north - analytic({0.0, 1.0, 0.0})) < 5.0,
-			"north-pole raster extrapolation is inaccurate");
-		require(std::abs(south - analytic({0.0, -1.0, 0.0})) < 5.0,
-			"south-pole raster extrapolation is inaccurate");
+		require(north == north_row && south == south_row,
+			"exact-pole raster sample depends on an arbitrary longitude");
+		require(std::abs(north - analytic({0.0, 1.0, 0.0})) < 0.02,
+			"north-pole row-mean extrapolation is inaccurate");
+		require(std::abs(south - analytic({0.0, -1.0, 0.0})) < 0.02,
+			"south-pole row-mean extrapolation is inaccurate");
+
+		// Deliberately make the nearest polar rows strongly longitude-dependent.
+		// A scalar field at the mathematical pole cannot depend on longitude, so
+		// exact-pole sampling must return the row mean, independent of atan2(0,0)
+		// or signed-zero behavior.
+		constexpr int PW = 16;
+		constexpr int PH = 8;
+		std::vector<double> hostile_polar(static_cast<size_t>(PW) * PH, 7.0);
+		for (int x = 0; x < PW; ++x) {
+			hostile_polar[static_cast<size_t>(x)] = 1000.0 + 37.0 * x;
+			hostile_polar[static_cast<size_t>(PH - 1) * PW + static_cast<size_t>(x)]
+				= -500.0 + 23.0 * x;
+		}
+		const double hostile_north = SphericalLatLonSampler::sample_bilinear(
+			hostile_polar, PW, PH, {-0.0, 1.0, 0.0});
+		const double hostile_south = SphericalLatLonSampler::sample_bilinear(
+			hostile_polar, PW, PH, {0.0, -1.0, -0.0});
+		require(hostile_north == row_mean(hostile_polar, PW, 0),
+			"north pole selected a longitude-dependent raster value");
+		require(hostile_south == row_mean(hostile_polar, PW, PH - 1),
+			"south pole selected a longitude-dependent raster value");
 
 		GeodesicVoronoiGrid grid(8, R);
 		const auto sampled = SphericalLatLonSampler::sample_to_voronoi_cells(
@@ -74,24 +108,38 @@ int main() {
 		require(sampled.size() == static_cast<size_t>(grid.cell_count()),
 			"lat/lon sampler returned wrong Voronoi cell count");
 
+		int north_cell = -1;
+		int south_cell = -1;
+		double north_y = -2.0;
+		double south_y = 2.0;
 		double max_error = 0.0;
 		double rms = 0.0;
 		for (int c = 0; c < grid.cell_count(); ++c) {
-			const double expected = analytic(grid.cell(c).center);
+			const auto &center = grid.cell(c).center;
+			if (center.y > north_y) { north_y = center.y; north_cell = c; }
+			if (center.y < south_y) { south_y = center.y; south_cell = c; }
+			const double expected = analytic(center);
 			const double error = sampled[static_cast<size_t>(c)] - expected;
 			max_error = std::max(max_error, std::abs(error));
 			rms += error * error;
 		}
+		require(north_cell >= 0 && south_cell >= 0
+				&& std::abs(north_y - 1.0) < 1.0e-14
+				&& std::abs(south_y + 1.0) < 1.0e-14,
+			"even-frequency geodesic regression did not contain exact pole cells");
+		require(sampled[static_cast<size_t>(north_cell)] == north_row,
+			"north geodesic pole cell did not use longitude-invariant raster sampling");
+		require(sampled[static_cast<size_t>(south_cell)] == south_row,
+			"south geodesic pole cell did not use longitude-invariant raster sampling");
+
 		rms = std::sqrt(rms / static_cast<double>(grid.cell_count()));
 		std::cout << "SphericalLatLonSampler interpolation diagnostics\n"
 			<< "  Voronoi max/RMS error: " << max_error << "/" << rms << " m\n";
 
 		// At 720x360, the pixel centres stop half a pixel (0.25 degrees) short of
-		// each pole. The documented sampler clamps those unresolved polar half-caps
-		// to the nearest row, so the correct global worst-case gate is tied to the
-		// input pixel resolution rather than the much smaller interior bilinear
-		// truncation error. These limits are still tiny relative to weather-cell and
-		// terrain scales while covering the mathematically unavoidable cap error.
+		// each pole. The sampler clamps the unresolved polar half-caps to the
+		// nearest row and collapses the exact mathematical pole to that row's mean.
+		// The remaining worst-case gate is therefore tied to pixel resolution.
 		require(max_error < 5.0,
 			"lat/lon -> Voronoi sampling exceeded pixel-resolution max error bound");
 		require(rms < 0.25,
@@ -118,6 +166,7 @@ int main() {
 
 		std::cout << "SphericalLatLonSampler PASS\n"
 			<< "  seam delta: " << std::abs(west - east) << "\n"
+			<< "  exact pole cell ids: " << north_cell << "/" << south_cell << "\n"
 			<< "  sampled-terrain balanced max accel: " << max_balanced_accel << " m/s2\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
