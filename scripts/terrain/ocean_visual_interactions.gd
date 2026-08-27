@@ -24,11 +24,14 @@ func texture() -> Texture2D:
 
 
 func clear() -> void:
+	if _events.is_empty():
+		return
 	_events.clear()
 	_dirty = true
 
 
 func prune(now_s: float, lifetime_s: float, budget: int) -> void:
+	var old_size := _events.size()
 	var keep: Array[Dictionary] = []
 	for event: Dictionary in _events:
 		if now_s - float(event["start_time"]) <= lifetime_s:
@@ -36,7 +39,8 @@ func prune(now_s: float, lifetime_s: float, budget: int) -> void:
 	_events = keep
 	while _events.size() > mini(maxi(budget, 0), MAX_EVENTS):
 		_events.pop_front()
-	_dirty = true
+	if _events.size() != old_size:
+		_dirty = true
 
 
 func add_impact(world_position: Vec3D, amplitude_m: float, radius_m: float,
