@@ -1,5 +1,6 @@
 #include "weather_native.h"
 #include "weather_core_native.h"
+#include "weather_dry_core_native.h"
 #include "weather_wind_sampler.h"
 #include <godot_cpp/godot.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -10,6 +11,7 @@ void initialize_asterra_weather(ModuleInitializationLevel level) {
 	if (level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 	GDREGISTER_CLASS(WeatherNative);
 	GDREGISTER_CLASS(WeatherCoreNative);
+	GDREGISTER_CLASS(WeatherDryCoreNative);
 	GDREGISTER_CLASS(WeatherWindSampler);
 }
 
