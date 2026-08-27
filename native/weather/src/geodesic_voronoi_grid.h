@@ -24,18 +24,30 @@ public:
 		Vec3d midpoint;
 		Vec3d normal_a_to_b;
 		Vec3d tangent_a_to_b;
-		double center_distance_m = 0.0; // d_e
-		double edge_length_m = 0.0;     // l_e, Voronoi edge
+		double center_distance_m = 0.0; // dcEdge / d_e
+		double edge_length_m = 0.0;     // dvEdge / l_e, Voronoi edge
 		double edge_area_m2 = 0.0;      // d_e * l_e
+
+		// MPAS edgesOnEdge + weightsOnEdge. The weight already includes
+		// dvEdge(source)/dcEdge(target), exactly as stored by MPAS. Applying
+		// sum(weight[k] * normal_value[edge[k]]) reconstructs the target-edge
+		// tangential component in the target tangent_a_to_b convention.
+		std::vector<int> reconstruction_edges;
+		std::vector<double> reconstruction_weights;
 	};
 
 	struct CellGeometry {
 		Vec3d center;
 		double area_m2 = 0.0;
+
+		// All four arrays are strictly CCW and aligned. vertices[q] is followed
+		// CCW by edges[q], which joins vertices[q] to vertices[q+1]. neighbours[q]
+		// is the cell across edges[q]. kite_area_m2[q] is the intersection area of
+		// this primal Voronoi cell with the dual triangle at vertices[q].
+		std::vector<int> vertices;
 		std::vector<int> edges;
 		std::vector<int> neighbours;
-		// Ordered counter-clockwise Voronoi vertices around this cell.
-		std::vector<int> vertices;
+		std::vector<double> kite_area_m2;
 	};
 
 	struct VertexGeometry {
@@ -44,6 +56,8 @@ public:
 		double dual_area_m2 = 0.0;
 		std::array<int, 3> cells{{-1, -1, -1}};
 		std::array<int, 3> edges{{-1, -1, -1}};
+		// Intersection of this dual triangle with each corresponding cells[q].
+		std::array<double, 3> kite_area_m2{{0.0, 0.0, 0.0}};
 	};
 
 	GeodesicVoronoiGrid() = default;
