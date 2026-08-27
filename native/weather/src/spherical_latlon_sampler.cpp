@@ -8,11 +8,21 @@ namespace asterra::weather {
 
 namespace {
 constexpr double PI = 3.141592653589793238462643383279502884;
+constexpr double POLAR_HORIZONTAL_NORM2_EPS = 1.0e-24;
 
 int wrap_x(int x, int width) {
 	x %= width;
 	if (x < 0) x += width;
 	return x;
+}
+
+double row_mean(const std::vector<double> &raster, int width, int y) {
+	long double sum = 0.0L;
+	const size_t offset = static_cast<size_t>(y) * static_cast<size_t>(width);
+	for (int x = 0; x < width; ++x) {
+		sum += static_cast<long double>(raster[offset + static_cast<size_t>(x)]);
+	}
+	return static_cast<double>(sum / static_cast<long double>(width));
 }
 
 double sample_unchecked(const std::vector<double> &raster,
@@ -22,6 +32,18 @@ double sample_unchecked(const std::vector<double> &raster,
 		throw std::invalid_argument("Spherical lat/lon sample direction must be finite and non-zero");
 	}
 	const Vec3d p = direction / std::sqrt(n2);
+
+	// Longitude is undefined at an exact pole. Even-frequency geodesic meshes
+	// used by the weather core contain exact +/-Y cells, so using atan2(0,0)
+	// would make their raster value depend on an arbitrary meridian. A pixel-
+	// centred equirectangular raster has no exact pole sample; the longitude-
+	// invariant limiting value is represented by the mean of its nearest row.
+	// The epsilon only covers points within ~1e-12 rad of the mathematical pole.
+	const double horizontal_n2 = p.x * p.x + p.z * p.z;
+	if (horizontal_n2 <= POLAR_HORIZONTAL_NORM2_EPS) {
+		return row_mean(raster, width, p.y >= 0.0 ? 0 : height - 1);
+	}
+
 	const double lon = std::atan2(p.z, p.x);
 	const double lat = std::asin(std::clamp(p.y, -1.0, 1.0));
 
