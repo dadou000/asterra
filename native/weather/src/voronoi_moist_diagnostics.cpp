@@ -1,6 +1,7 @@
 #include "voronoi_moist_thermodynamics.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -20,8 +21,8 @@ void VoronoiMoistThermodynamics::validate_water_state(const State &state) const 
 			|| state.theta_mass_kg_k_m2.size() != expected) {
 		throw std::invalid_argument("Moist thermodynamic state arrays have wrong size");
 	}
-	const int highest = std::max({indices_.vapor,
-		indices_.cloud_liquid, indices_.cloud_ice});
+	const int highest = std::max({indices_.vapor, indices_.cloud_liquid,
+		indices_.cloud_ice, indices_.rain, indices_.snow});
 	if (highest < 0 || static_cast<int>(state.tracer_mass_kg_m2.size()) <= highest) {
 		throw std::invalid_argument("Moist diagnostics require configured water tracer slots");
 	}
@@ -58,8 +59,10 @@ VoronoiMoistThermodynamics::diagnose_thermodynamics(const State &state) const {
 	d.temperature_k.resize(scalar_count_value);
 
 	const auto &vapor = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
-	const auto &liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
-	const auto &ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &cloud_liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
+	const auto &cloud_ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &rain = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.rain)];
+	const auto &snow = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 	const double gravity = transport_->gravity_mps2();
 
 	auto scalar_index = [cells](int level, int cell) {
@@ -74,7 +77,7 @@ VoronoiMoistThermodynamics::diagnose_thermodynamics(const State &state) const {
 		for (int k = LEVELS - 1; k >= 0; --k) {
 			const size_t i = scalar_index(k, c);
 			const double total_mass = state.layer_mass_kg_m2[i]
-				+ vapor[i] + liquid[i] + ice[i];
+				+ vapor[i] + cloud_liquid[i] + cloud_ice[i] + rain[i] + snow[i];
 			if (!(total_mass > 0.0) || !std::isfinite(total_mass)) {
 				throw std::runtime_error("Moist layer total mass is invalid");
 			}
@@ -152,12 +155,16 @@ std::vector<double> VoronoiMoistThermodynamics::diagnose_virtual_temperature_k(
 	const size_t expected = state.layer_mass_kg_m2.size();
 	std::vector<double> result(expected, 0.0);
 	const auto &vapor = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
-	const auto &liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
-	const auto &ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &cloud_liquid = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
+	const auto &cloud_ice = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
+	const auto &rain = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.rain)];
+	const auto &snow = state.tracer_mass_kg_m2[static_cast<size_t>(indices_.snow)];
 	for (size_t i = 0; i < expected; ++i) {
 		const double dry = state.layer_mass_kg_m2[i];
 		result[i] = virtual_temperature_k(thermo.temperature_k[i],
-			vapor[i] / dry, liquid[i] / dry, ice[i] / dry);
+			vapor[i] / dry,
+			(cloud_liquid[i] + rain[i]) / dry,
+			(cloud_ice[i] + snow[i]) / dry);
 	}
 	return result;
 }
