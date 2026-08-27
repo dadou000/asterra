@@ -62,7 +62,31 @@ private:
 	double simulation_seconds_ = 0.0;
 	int64_t rejected_steps_total_ = 0;
 	int frequency_ = 0;
-	bool moisture_enabled_ = false;
+
+	// Existing runtime code already funnels every moisture lifecycle transition
+	// through assignments to this flag. Binding the assignment to the core switch
+	// therefore keeps initialization, reset, disable, and error cleanup in exact
+	// lockstep without duplicating lifecycle branches in the GDExtension source.
+	struct MoistureRuntimeFlag {
+		std::unique_ptr<asterra::weather::VoronoiDryCore> *dynamics = nullptr;
+		bool value = false;
+
+		explicit MoistureRuntimeFlag(
+				std::unique_ptr<asterra::weather::VoronoiDryCore> *owner)
+			: dynamics(owner) {}
+
+		MoistureRuntimeFlag &operator=(bool enabled) {
+			value = enabled;
+			if (dynamics && dynamics->get()) {
+				(*dynamics)->set_moist_pressure_feedback(enabled);
+			}
+			return *this;
+		}
+
+		operator bool() const { return value; }
+	};
+
+	MoistureRuntimeFlag moisture_enabled_{&dynamics_};
 	bool surface_exchange_enabled_ = false;
 
 	static asterra::weather::Vec3d to_vec3d(const Vector3 &v);
@@ -166,7 +190,7 @@ public:
 	//  last_adjust_max_cell_water_error, last_adjust_max_enthalpy_error_Jkg,
 	//  last_max_RH_before, last_max_RH_after, last_max_abs_dT_K,
 	//  last_condensed_kg, last_evaporated_kg, last_min_T_K, last_max_T_K,
-	//  last_saturated_cell_count, moist_pressure_feedback_enabled]
+	//  last_saturated_cell_count]
 	PackedFloat64Array get_moisture_diagnostics() const;
 
 	// [enabled, initial_system_water_kg, current_system_water_kg,
