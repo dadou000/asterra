@@ -23,20 +23,46 @@ ShallowWaterCGrid::ShallowWaterCGrid(const CubedSphereGrid &grid,
 		throw std::invalid_argument("ShallowWaterCGrid rotation rate must be finite");
 	}
 
-	edge_center_distance_m_.resize(topology_.shared_edges().size());
+	const size_t edge_count = topology_.shared_edges().size();
+	edge_center_distance_m_.resize(edge_count);
+	edge_normal_separation_m_.resize(edge_count);
+	edge_tangential_offset_m_.resize(edge_count);
+	edge_tangent_direction_.resize(edge_count);
 	cell_shared_edge_index_.resize(static_cast<size_t>(grid.cell_count()));
 	cell_shared_edge_sign_.resize(static_cast<size_t>(grid.cell_count()));
 	for (auto &indices : cell_shared_edge_index_) indices.fill(-1);
 	for (auto &signs : cell_shared_edge_sign_) signs.fill(0.0);
 
-	for (size_t e = 0; e < topology_.shared_edges().size(); ++e) {
+	for (size_t e = 0; e < edge_count; ++e) {
 		const auto &edge = topology_.shared_edges()[e];
-		const double distance = gc_distance_m(
-			grid.cell(edge.cell_a).center, grid.cell(edge.cell_b).center, grid.radius_m());
+		const auto &cell_a = grid.cell(edge.cell_a);
+		const auto &cell_b = grid.cell(edge.cell_b);
+		const double distance = gc_distance_m(cell_a.center, cell_b.center, grid.radius_m());
 		if (!(distance > 0.0) || !std::isfinite(distance)) {
 			throw std::runtime_error("ShallowWaterCGrid encountered a degenerate dual edge");
 		}
 		edge_center_distance_m_[e] = distance;
+
+		const Vec3d radial = edge.midpoint;
+		const Vec3d tangent_along_edge = normalized(cross(radial, edge.normal_a_to_b));
+		edge_tangent_direction_[e] = tangent_along_edge;
+
+		Vec3d connector = cell_b.center - cell_a.center;
+		connector = connector - radial * dot(connector, radial);
+		if (!(length(connector) > 0.0)) {
+			throw std::runtime_error("ShallowWaterCGrid dual connector is degenerate");
+		}
+		const Vec3d connector_direction = normalized(connector);
+		const Vec3d displacement = connector_direction * distance;
+		const double normal_separation = dot(displacement, edge.normal_a_to_b);
+		const double tangential_offset = dot(displacement, tangent_along_edge);
+		if (!(normal_separation > 0.0) || !std::isfinite(normal_separation)
+				|| !std::isfinite(tangential_offset)) {
+			throw std::runtime_error("ShallowWaterCGrid invalid nonorthogonal edge metric");
+		}
+		edge_normal_separation_m_[e] = normal_separation;
+		edge_tangential_offset_m_[e] = tangential_offset;
+
 		cell_shared_edge_index_[edge.cell_a][edge.edge_a] = static_cast<int>(e);
 		cell_shared_edge_sign_[edge.cell_a][edge.edge_a] = 1.0;
 		cell_shared_edge_index_[edge.cell_b][edge.edge_b] = static_cast<int>(e);
@@ -122,8 +148,6 @@ double ShallowWaterCGrid::max_wave_courant(const State &state, double dt_s) cons
 		max_rate = std::max(max_rate, characteristic_speed / edge_center_distance_m_[e]);
 	}
 	const double gravity_wave_cfl = dt_s * max_rate * std::sqrt(2.0);
-	// Explicit Coriolis is an inertial oscillator. Keep its dimensionless rotation
-	// interval bounded by the same controller even on very deep/coarse test grids.
 	const double inertial_cfl = dt_s * 2.0 * std::abs(rotation_rate_rad_s_);
 	return std::max(gravity_wave_cfl, inertial_cfl);
 }
@@ -182,6 +206,49 @@ std::vector<Vec3d> ShallowWaterCGrid::reconstruct_cell_velocity(const State &sta
 	return velocity;
 }
 
+std::vector<Vec3d> ShallowWaterCGrid::reconstruct_cell_scalar_gradient(
+		const std::vector<double> &scalar) const {
+	if (scalar.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Scalar gradient array has the wrong size");
+	}
+	std::vector<Vec3d> gradient(static_cast<size_t>(grid_->cell_count()));
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const auto &geom = grid_->cell(c);
+		double a00 = 0.0;
+		double a01 = 0.0;
+		double a11 = 0.0;
+		double b0 = 0.0;
+		double b1 = 0.0;
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			const int n = geom.neighbour[local_edge].cell;
+			const auto &ng = grid_->cell(n);
+			const double distance = gc_distance_m(geom.center, ng.center, grid_->radius_m());
+			Vec3d toward = ng.center - geom.center * dot(ng.center, geom.center);
+			toward = normalized(toward) * distance;
+			const double dx = dot(toward, geom.tangent_u);
+			const double dy = dot(toward, geom.tangent_v);
+			const double ds = scalar[n] - scalar[c];
+			a00 += dx * dx;
+			a01 += dx * dy;
+			a11 += dy * dy;
+			b0 += dx * ds;
+			b1 += dy * ds;
+		}
+		const double determinant = a00 * a11 - a01 * a01;
+		if (!(std::abs(determinant) > 1.0e-6) || !std::isfinite(determinant)) {
+			throw std::runtime_error("C-grid scalar-gradient reconstruction is singular");
+		}
+		const double gu = (b0 * a11 - b1 * a01) / determinant;
+		const double gv = (b1 * a00 - b0 * a01) / determinant;
+		gradient[c] = geom.tangent_u * gu + geom.tangent_v * gv;
+		if (!std::isfinite(gradient[c].x) || !std::isfinite(gradient[c].y)
+				|| !std::isfinite(gradient[c].z)) {
+			throw std::runtime_error("C-grid scalar-gradient reconstruction produced NaN/Inf");
+		}
+	}
+	return gradient;
+}
+
 ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 		const State &input, State &output, double dt_s) const {
 	validate_shape(input);
@@ -198,10 +265,10 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 	output.depth_m.resize(cell_count);
 	output.edge_normal_mps.resize(edge_count);
 
-	// Continuity: one physical volume flux per shared edge. Upwind depth makes the
-	// finite-volume mass equation monotone. A multidimensional donor limiter scales
-	// all outgoing fluxes from a nearly dry cell together, preserving positivity
-	// and exact equal/opposite transfer without post-step clipping.
+	// Conservative continuity. A centered edge depth is second-order for smooth
+	// balanced flow and avoids first-order cross-isobar diffusion on skewed cube
+	// faces. Positivity is still enforced conservatively by scaling every outgoing
+	// flux from the same donor together if required.
 	std::vector<double> raw_volume_rate(edge_count, 0.0);
 	std::vector<double> outgoing_rate(cell_count, 0.0);
 	for (size_t e = 0; e < edge_count; ++e) {
@@ -209,7 +276,8 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 		const double u = input.edge_normal_mps[e];
 		if (u == 0.0) continue;
 		const int donor = u > 0.0 ? edge.cell_a : edge.cell_b;
-		const double flux = u * edge.length_m * input.depth_m[donor];
+		const double h_face = 0.5 * (input.depth_m[edge.cell_a] + input.depth_m[edge.cell_b]);
+		const double flux = u * edge.length_m * h_face;
 		raw_volume_rate[e] = flux;
 		outgoing_rate[donor] += std::abs(flux);
 	}
@@ -244,26 +312,35 @@ ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
 		output.depth_m[c] = volume / grid_->cell(c).area_m2;
 	}
 
+	const std::vector<Vec3d> depth_gradient = reconstruct_cell_scalar_gradient(input.depth_m);
 	const std::vector<Vec3d> cell_velocity = rotation_rate_rad_s_ != 0.0
 		? reconstruct_cell_velocity(input) : std::vector<Vec3d>{};
 
-	// C-grid pressure gradient + geometric spherical Coriolis. Scalar geopotential
-	// lives at cell centers and its difference accelerates the normal velocity
-	// directly between those cells. Coriolis uses f=2*Omega*(axis dot r) and the
-	// reconstructed physical tangent vector; there is no latitude/pole branch.
+	// Non-orthogonal finite-volume pressure gradient. The cell-center connector is
+	// decomposed into normal/tangential components at the physical shared edge:
+	//   dh = grad_n * dn + grad_t * dt
+	// so grad_n = (dh - grad_t*dt)/dn.
+	// The direct dh term remains present, therefore an alternating checkerboard
+	// scalar cannot vanish under this operator.
 	for (size_t e = 0; e < edge_count; ++e) {
 		const auto &edge = topology_.shared_edges()[e];
-		const double gradient = (input.depth_m[edge.cell_b] - input.depth_m[edge.cell_a])
-			/ edge_center_distance_m_[e];
-		double acceleration = -gravity_mps2_ * gradient;
+		const Vec3d radial = edge.midpoint;
+		Vec3d grad_edge = (depth_gradient[edge.cell_a] + depth_gradient[edge.cell_b]) * 0.5;
+		grad_edge = grad_edge - radial * dot(grad_edge, radial);
+		const double grad_t = dot(grad_edge, edge_tangent_direction_[e]);
+		const double dh = input.depth_m[edge.cell_b] - input.depth_m[edge.cell_a];
+		const double gradient_normal = (dh - grad_t * edge_tangential_offset_m_[e])
+			/ edge_normal_separation_m_[e];
+		double acceleration = -gravity_mps2_ * gradient_normal;
+
 		if (rotation_rate_rad_s_ != 0.0) {
-			const Vec3d radial = edge.midpoint;
 			Vec3d u_edge = (cell_velocity[edge.cell_a] + cell_velocity[edge.cell_b]) * 0.5;
 			u_edge = u_edge - radial * dot(u_edge, radial);
 			const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, radial);
 			const Vec3d coriolis = cross(radial, u_edge) * (-f);
 			acceleration += dot(coriolis, edge.normal_a_to_b);
 		}
+
 		output.edge_normal_mps[e] = input.edge_normal_mps[e] + acceleration * dt_s;
 		if (!std::isfinite(output.edge_normal_mps[e])) {
 			throw std::runtime_error("Shallow-water momentum produced NaN/Inf");
