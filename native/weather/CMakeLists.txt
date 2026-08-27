@@ -41,18 +41,23 @@ add_executable(asterra_weather_standard_tests
 target_link_libraries(asterra_weather_standard_tests PRIVATE asterra_weather_core)
 add_test(NAME shallow_water_standard COMMAND asterra_weather_standard_tests)
 
-# CI and the local build script can keep building one gate target. Any new core
-# validation executable must be added as a dependency here before the runtime DLL.
+# Temporary diagnostic probe. Remove as soon as the strong TC2 rejection has
+# been localized; it is not part of the permanent benchmark suite.
+add_executable(asterra_weather_strong_balance_probe
+  tests/test_strong_balance_probe.cpp
+)
+target_link_libraries(asterra_weather_strong_balance_probe PRIVATE asterra_weather_core)
+add_test(NAME strong_balance_probe COMMAND asterra_weather_strong_balance_probe)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
     asterra_weather_transport_tests
     asterra_weather_shallow_water_tests
     asterra_weather_standard_tests
+    asterra_weather_strong_balance_probe
 )
 
-# godot-cpp master no longer guesses an engine API for extension projects.
-# Asterra targets Godot 4.7.1, whose stable GDExtension ABI is the 4.7 API.
 if(NOT GODOTCPP_API_VERSION)
   set(GODOTCPP_API_VERSION "4.7" CACHE STRING "Godot API version for godot-cpp" FORCE)
 endif()
@@ -85,8 +90,6 @@ add_library(asterra_weather SHARED
 target_include_directories(asterra_weather PRIVATE src)
 target_link_libraries(asterra_weather PRIVATE godot-cpp asterra_weather_core)
 
-# The parent atmosphere is intentionally CPU-heavy. Keep AVX2 inside each worker
-# and distribute independent operations through OpenMP.
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(asterra_weather PRIVATE OpenMP::OpenMP_CXX)
@@ -100,6 +103,7 @@ if(MSVC)
   target_compile_options(asterra_weather_transport_tests PRIVATE /O2)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE /O2)
   target_compile_options(asterra_weather_standard_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_strong_balance_probe PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -107,10 +111,9 @@ else()
   target_compile_options(asterra_weather_transport_tests PRIVATE -O3)
   target_compile_options(asterra_weather_shallow_water_tests PRIVATE -O3)
   target_compile_options(asterra_weather_standard_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_strong_balance_probe PRIVATE -O3)
 endif()
 
-# Keep every generator/configuration in the exact location referenced by the
-# .gdextension manifest. Visual Studio otherwise appends Release/ or Debug/.
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(ASTERRA_BIN_DIR "${ASTERRA_ROOT}/bin" CACHE PATH
   "Directory for the Asterra weather runtime artifacts")
@@ -134,8 +137,6 @@ set_target_properties(asterra_weather PROPERTIES
   OUTPUT_NAME "asterra_weather"
 )
 
-# Do not publish a live .gdextension until the DLL/SO exists. This prevents an
-# unbuilt checkout from producing GDExtension load errors during project startup.
 add_custom_command(TARGET asterra_weather POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "${ASTERRA_BIN_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
