@@ -20,10 +20,12 @@ namespace godot {
 
 // Runtime-facing Godot bridge for the replacement 30-level atmosphere.
 // Dynamics live entirely on the geodesic Voronoi C-grid. Optional moisture is
-// carried by the same conservative tracer transport and locally phase-adjusted
-// after each accepted dry-core step. Optional prescribed surface water/sensible
-// fluxes use the actual accepted atmosphere timestep and are part of the same
-// rollback transaction. The 1024x512 products are presentation-only resamples.
+// carried by the same conservative tracer transport, feeds the staged
+// virtual-temperature/total-pressure momentum diagnosis, and is locally
+// phase-adjusted after each accepted core step. Optional prescribed surface
+// water/sensible fluxes use the actual accepted atmosphere timestep and are
+// part of the same rollback transaction. The 1024x512 products are
+// presentation-only resamples.
 class WeatherDryCoreNative : public RefCounted {
 	GDCLASS(WeatherDryCoreNative, RefCounted)
 
@@ -90,7 +92,7 @@ public:
 		double p_temperature_k = 288.0);
 
 	// Runtime transaction order:
-	//   conservative dry dynamics/remap
+	//   conservative dynamics/remap (with moist pressure feedback when enabled)
 	//   -> prescribed surface exchange using accepted_dt_s
 	//   -> reversible saturation adjustment.
 	// Any source failure restores both atmospheric and surface states to the
@@ -104,7 +106,9 @@ public:
 
 	// Moisture uses tracer slots 0/1/2 = vapor/cloud-liquid/cloud-ice. Uniform RH
 	// initialization leaves dry mass and wind unchanged. Optional immediate phase
-	// adjustment is useful when intentionally initializing RH > 1.
+	// adjustment is useful when intentionally initializing RH > 1. Successfully
+	// enabling moisture also enables staged moist pressure/geopotential feedback;
+	// disabling moisture returns the core to the exact dry pressure path.
 	bool initialize_moisture(double relative_humidity = 0.65,
 		bool perform_saturation_adjustment = true);
 	void disable_moisture(bool clear_water = true);
@@ -162,7 +166,7 @@ public:
 	//  last_adjust_max_cell_water_error, last_adjust_max_enthalpy_error_Jkg,
 	//  last_max_RH_before, last_max_RH_after, last_max_abs_dT_K,
 	//  last_condensed_kg, last_evaporated_kg, last_min_T_K, last_max_T_K,
-	//  last_saturated_cell_count]
+	//  last_saturated_cell_count, moist_pressure_feedback_enabled]
 	PackedFloat64Array get_moisture_diagnostics() const;
 
 	// [enabled, initial_system_water_kg, current_system_water_kg,
