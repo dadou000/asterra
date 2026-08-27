@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 using asterra::weather::GeodesicVoronoiGrid;
@@ -82,8 +83,10 @@ int main() {
 		}
 		const auto wd = hydro.diagnose(wave);
 		const auto accel = hydro.pressure_gradient_acceleration(wave, wd);
-		double max_pg_relative_error = 0.0;
-		double rms_accel = 0.0;
+		long double pg_error2 = 0.0L;
+		long double pg_reference2 = 0.0L;
+		long double accel2 = 0.0L;
+		double max_pg_absolute_error = 0.0;
 		long long samples = 0;
 		for (int k = 0; k < VoronoiDryHydrostatic::LEVELS; ++k) {
 			for (int e = 0; e < grid.edge_count(); ++e) {
@@ -92,18 +95,22 @@ int main() {
 					- std::log(wave.surface_pressure_pa[static_cast<size_t>(edge.cell_a)])) / edge.center_distance_m;
 				const double expected = -VoronoiDryHydrostatic::RD * T * grad_ln_ps;
 				const double actual = accel[static_cast<size_t>(k * grid.edge_count() + e)];
-				if (std::abs(expected) > 1e-10) {
-					max_pg_relative_error = std::max(max_pg_relative_error,
-						std::abs(actual - expected) / std::abs(expected));
-				}
-				rms_accel += actual * actual;
+				const double error = actual - expected;
+				pg_error2 += static_cast<long double>(error) * error;
+				pg_reference2 += static_cast<long double>(expected) * expected;
+				accel2 += static_cast<long double>(actual) * actual;
+				max_pg_absolute_error = std::max(max_pg_absolute_error, std::abs(error));
 				++samples;
 			}
 		}
-		rms_accel = std::sqrt(rms_accel / double(samples));
+		const double pg_relative_l2 = std::sqrt(static_cast<double>(
+			pg_error2 / std::max(pg_reference2, std::numeric_limits<long double>::min())));
+		const double rms_accel = std::sqrt(static_cast<double>(accel2 / samples));
 		require(rms_accel > 1e-5, "surface-pressure perturbation produced no horizontal force");
-		require(max_pg_relative_error < 3e-9,
-			"sigma-coordinate isothermal pressure-gradient identity failed");
+		require(pg_relative_l2 < 2e-9,
+			"sigma-coordinate isothermal pressure-gradient L2 identity failed");
+		require(max_pg_absolute_error < 2e-12,
+			"sigma-coordinate isothermal pressure-gradient absolute identity failed");
 
 		long double mesh_area = 0.0L;
 		for (int c = 0; c < grid.cell_count(); ++c) mesh_area += grid.cell(c).area_m2;
@@ -118,7 +125,8 @@ int main() {
 			<< "  hydrostatic residual: " << max_hydrostatic_residual << "\n"
 			<< "  column/global mass residual: " << max_column_mass_error << "/" << mass_error << "\n"
 			<< "  max rest acceleration: " << max_rest_accel << " m/s2\n"
-			<< "  pressure-gradient RMS/max relative error: " << rms_accel << "/" << max_pg_relative_error << "\n";
+			<< "  pressure-gradient RMS/L2/maxabs: " << rms_accel << "/"
+			<< pg_relative_l2 << "/" << max_pg_absolute_error << "\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "VoronoiDryHydrostatic FAIL: " << e.what() << "\n";
