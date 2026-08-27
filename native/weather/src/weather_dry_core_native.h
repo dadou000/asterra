@@ -5,6 +5,7 @@
 #include "voronoi_dry_core.h"
 #include "voronoi_dry_hydrostatic.h"
 #include "voronoi_moist_thermodynamics.h"
+#include "voronoi_surface_exchange.h"
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
@@ -20,8 +21,9 @@ namespace godot {
 // Runtime-facing Godot bridge for the replacement 30-level atmosphere.
 // Dynamics live entirely on the geodesic Voronoi C-grid. Optional moisture is
 // carried by the same conservative tracer transport and locally phase-adjusted
-// after each accepted dry-core step. The 1024x512 products are presentation-only
-// resamples and never feed back into physics.
+// after each accepted dry-core step. Optional prescribed surface water/sensible
+// fluxes use the actual accepted atmosphere timestep and are part of the same
+// rollback transaction. The 1024x512 products are presentation-only resamples.
 class WeatherDryCoreNative : public RefCounted {
 	GDCLASS(WeatherDryCoreNative, RefCounted)
 
@@ -41,6 +43,10 @@ private:
 	asterra::weather::VoronoiDryCore::State state_;
 	asterra::weather::VoronoiDryCore::StepDiagnostics last_step_;
 	asterra::weather::VoronoiMoistThermodynamics::AdjustmentDiagnostics last_moist_adjustment_;
+	asterra::weather::VoronoiSurfaceExchange::SurfaceState surface_exchange_state_;
+	asterra::weather::VoronoiSurfaceExchange::Diagnostics last_surface_exchange_;
+	std::vector<double> evaporation_flux_kg_m2_s_;
+	std::vector<double> sensible_heat_flux_w_m2_;
 	std::vector<int> display_cell_lookup_;
 	std::vector<double> surface_height_m_;
 
@@ -49,19 +55,26 @@ private:
 	double initial_dry_energy_j_ = 0.0;
 	double initial_absolute_aam_kg_m2_s_ = 0.0;
 	double initial_total_water_kg_ = 0.0;
+	double initial_surface_system_water_kg_ = 0.0;
+	double initial_surface_system_energy_j_ = 0.0;
 	double simulation_seconds_ = 0.0;
 	int64_t rejected_steps_total_ = 0;
 	int frequency_ = 0;
 	bool moisture_enabled_ = false;
+	bool surface_exchange_enabled_ = false;
 
 	static asterra::weather::Vec3d to_vec3d(const Vector3 &v);
 	int nearest_cell_hill_climb(const asterra::weather::Vec3d &direction, int seed) const;
 	void rebuild_display_lookup();
 	void reset_budget_baseline();
 	void reset_moisture_baseline();
+	void reset_surface_exchange_baseline();
 	double current_total_water_kg() const;
+	double current_surface_system_water_kg() const;
+	double current_surface_system_energy_j() const;
 	void refresh_state_extrema();
 	void on_static_surface_changed();
+	void clear_surface_exchange_state();
 	void clear_moisture_state();
 	bool ready() const { return bool(grid_) && bool(dynamics_); }
 
@@ -76,9 +89,12 @@ public:
 		double p_surface_pressure_pa = 110000.0,
 		double p_temperature_k = 288.0);
 
-	// When moisture is enabled, one accepted dry-core transport/remap step and
-	// one local saturation adjustment are treated as one runtime transaction. If
-	// phase adjustment fails, the complete pre-step state is restored.
+	// Runtime transaction order:
+	//   conservative dry dynamics/remap
+	//   -> prescribed surface exchange using accepted_dt_s
+	//   -> reversible saturation adjustment.
+	// Any source failure restores both atmospheric and surface states to the
+	// complete pre-step snapshot.
 	double step(double requested_dt_s, double target_cfl = 0.28);
 	void reset_isothermal(double surface_pressure_pa = 110000.0,
 		double temperature_k = 288.0);
@@ -94,6 +110,20 @@ public:
 	void disable_moisture(bool clear_water = true);
 	bool saturation_adjust_moisture();
 	bool is_moisture_enabled() const { return moisture_enabled_; }
+
+	// Conservative surface-reservoir bridge for the replacement core. Moisture
+	// must be enabled first. Water/energy are per native Voronoi cell area.
+	// set_surface_fluxes_cells stores rates; step() applies them using the actual
+	// accepted atmosphere dt, never the requested dt.
+	bool initialize_surface_exchange(double water_kg_m2 = 20.0,
+		double energy_j_m2 = 0.0);
+	void disable_surface_exchange(bool clear_reservoir = true);
+	bool set_surface_fluxes_cells(const PackedFloat32Array &evaporation_kg_m2_s,
+		const PackedFloat32Array &sensible_heat_w_m2);
+	void clear_surface_fluxes();
+	bool is_surface_exchange_enabled() const { return surface_exchange_enabled_; }
+	PackedFloat32Array get_surface_water_cells() const;
+	PackedFloat32Array get_surface_energy_cells() const;
 
 	// Static atmospheric lower-boundary geometry. These calls do not alter the
 	// atmospheric prognostic state; use reset_terrain_balanced_isothermal() after
@@ -134,6 +164,14 @@ public:
 	//  last_condensed_kg, last_evaporated_kg, last_min_T_K, last_max_T_K,
 	//  last_saturated_cell_count]
 	PackedFloat64Array get_moisture_diagnostics() const;
+
+	// [enabled, initial_system_water_kg, current_system_water_kg,
+	//  relative_system_water_drift, initial_system_thermo_energy_j,
+	//  current_system_thermo_energy_j, relative_system_energy_drift,
+	//  last_requested_dt_s, last_water_error, last_energy_error,
+	//  last_evaporated_kg, last_dew_kg, last_sensible_J, last_latent_J,
+	//  last_min_surface_water_kg_m2, last_min_bottom_T_K, last_max_bottom_T_K]
+	PackedFloat64Array get_surface_exchange_diagnostics() const;
 
 	int get_frequency() const { return frequency_; }
 	int get_cell_count() const { return grid_ ? grid_->cell_count() : 0; }
