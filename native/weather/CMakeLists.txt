@@ -25,6 +25,7 @@ add_library(asterra_weather_core STATIC
   src/voronoi_dry_transport.cpp
   src/voronoi_dry_dynamics.cpp
   src/voronoi_dry_vertical_transport.cpp
+  src/voronoi_dry_core.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
 
@@ -76,6 +77,10 @@ add_executable(asterra_weather_dry_remap_tests tests/test_voronoi_dry_coordinate
 target_link_libraries(asterra_weather_dry_remap_tests PRIVATE asterra_weather_core)
 add_test(NAME voronoi_dry_coordinate_remap COMMAND asterra_weather_dry_remap_tests)
 
+add_executable(asterra_weather_dry_core_tests tests/test_voronoi_dry_core.cpp)
+target_link_libraries(asterra_weather_dry_core_tests PRIVATE asterra_weather_core)
+add_test(NAME voronoi_dry_core COMMAND asterra_weather_dry_core_tests)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
@@ -90,6 +95,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_dry_dynamics_tests
     asterra_weather_dry_vertical_tests
     asterra_weather_dry_remap_tests
+    asterra_weather_dry_core_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -144,6 +150,7 @@ if(MSVC)
   target_compile_options(asterra_weather_dry_dynamics_tests PRIVATE /O2)
   target_compile_options(asterra_weather_dry_vertical_tests PRIVATE /O2)
   target_compile_options(asterra_weather_dry_remap_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_dry_core_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -159,6 +166,7 @@ else()
   target_compile_options(asterra_weather_dry_dynamics_tests PRIVATE -O3)
   target_compile_options(asterra_weather_dry_vertical_tests PRIVATE -O3)
   target_compile_options(asterra_weather_dry_remap_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_dry_core_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
