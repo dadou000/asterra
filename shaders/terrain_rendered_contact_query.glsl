@@ -60,25 +60,25 @@ ivec2 terrain_cache_coord(ivec2 cell, int cache_res) {
 }
 
 bool cache_fetch_exact(ivec2 cell, int level, int generation, int cache_res,
-		out vec2 sample) {
-	sample = vec2(0.0);
+		out vec2 out_sample) {
+	out_sample = vec2(0.0);
 	if (level < 0 || level > ASTERRA_MAX_LEVEL) return false;
 	vec4 cached = texelFetch(terrain_cache,
 		ivec3(terrain_cache_coord(cell, cache_res), level), 0);
 	float expected = float(terrain_cache_key(cell, level, generation));
 	if (abs(cached.b - expected) > 0.25) return false;
 	// Renderer cache storage: R=final procedural height, G=macro height.
-	sample = vec2(cached.g, cached.r);
+	out_sample = vec2(cached.g, cached.r);
 	return true;
 }
 
 bool cache_fetch_bilinear(vec2 lattice_cell, int level, int generation,
-		int cache_res, out vec2 sample) {
+		int cache_res, out vec2 out_sample) {
 	ivec2 c00 = ivec2(floor(lattice_cell));
 	vec2 f = fract(lattice_cell);
 	vec2 s00;
 	if (max(f.x, f.y) <= 1e-5) {
-		return cache_fetch_exact(c00, level, generation, cache_res, sample);
+		return cache_fetch_exact(c00, level, generation, cache_res, out_sample);
 	}
 	vec2 s10;
 	vec2 s01;
@@ -87,10 +87,10 @@ bool cache_fetch_bilinear(vec2 lattice_cell, int level, int generation,
 			|| !cache_fetch_exact(c00 + ivec2(1, 0), level, generation, cache_res, s10)
 			|| !cache_fetch_exact(c00 + ivec2(0, 1), level, generation, cache_res, s01)
 			|| !cache_fetch_exact(c00 + ivec2(1, 1), level, generation, cache_res, s11)) {
-		sample = vec2(0.0);
+		out_sample = vec2(0.0);
 		return false;
 	}
-	sample = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+	out_sample = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 	return true;
 }
 
@@ -161,11 +161,11 @@ void main() {
 		return;
 	}
 
-	vec2 fine;
+	vec2 fine_height;
 	vec2 lattice_cell = anchor_offset_m / selected_spacing;
 	int cache_res = max(int(params.p[11].x + 0.5), 1);
 	if (!cache_fetch_bilinear(lattice_cell, selected_level, cache_generation,
-			cache_res, fine)) {
+			cache_res, fine_height)) {
 		results.data[query_index] = vec4(0.0, 0.0, float(selected_level), 0.0);
 		return;
 	}
@@ -174,16 +174,16 @@ void main() {
 		length(selected_cell) / max(half_cells, 1.0));
 	if (selected_level < ASTERRA_MAX_LEVEL && morph > 0.001) {
 		float coarse_spacing = base_spacing * exp2(float(selected_level + 1));
-		vec2 coarse;
+		vec2 coarse_height;
 		if (!cache_fetch_bilinear(anchor_offset_m / coarse_spacing,
-				selected_level + 1, cache_generation, cache_res, coarse)) {
+				selected_level + 1, cache_generation, cache_res, coarse_height)) {
 			results.data[query_index] = vec4(0.0, 0.0, float(selected_level), morph);
 			return;
 		}
-		fine = mix(fine, coarse, morph);
+		fine_height = mix(fine_height, coarse_height, morph);
 	}
 
-	float h = fine.y;
+	float h = fine_height.y;
 	if (params.p[5].w > 0.5) {
 		h += projected_edit_delta(d, params.p[5].xyz, params.p[6].xyz,
 			params.p[7].xyz, params.p[6].w, planet_radius, persistent_edit);
