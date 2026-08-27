@@ -108,18 +108,8 @@ double VoronoiSurfaceExchange::total_atmospheric_water_kg(const State &atmospher
 
 double VoronoiSurfaceExchange::atmospheric_thermodynamic_energy_j(
 		const State &atmosphere) const {
-	const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
-	if (highest < 0 || static_cast<int>(atmosphere.tracer_mass_kg_m2.size()) <= highest) {
-		throw std::invalid_argument("Surface exchange requires configured water tracer slots");
-	}
-	const size_t expected = atmosphere.layer_mass_kg_m2.size();
-	for (int tracer : {indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice}) {
-		if (atmosphere.tracer_mass_kg_m2[static_cast<size_t>(tracer)].size() != expected) {
-			throw std::invalid_argument("Surface exchange water tracer field has wrong size");
-		}
-	}
-
-	const auto hydro = transport_->diagnose_hydrostatic(atmosphere);
+	VoronoiMoistThermodynamics moist(*transport_, indices_);
+	const auto thermo = moist.diagnose_thermodynamics(atmosphere);
 	const int cells = transport_->grid().cell_count();
 	const auto &vapor = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
 	const auto &ice = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
@@ -129,7 +119,7 @@ double VoronoiSurfaceExchange::atmospheric_thermodynamic_energy_j(
 			const size_t i = static_cast<size_t>(k * cells + c);
 			const long double column_enthalpy =
 				static_cast<long double>(VoronoiMoistThermodynamics::CP_DRY)
-					* static_cast<long double>(hydro.temperature_k[i])
+					* static_cast<long double>(thermo.temperature_k[i])
 					* static_cast<long double>(atmosphere.layer_mass_kg_m2[i])
 				+ static_cast<long double>(VoronoiMoistThermodynamics::LV0_J_KG)
 					* static_cast<long double>(vapor[i])
@@ -153,17 +143,8 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 	try {
 		validate_surface(surface);
 		validate_fluxes(evaporation_kg_m2_s, sensible_heat_w_m2, dt_s);
-
-		const int highest = std::max({indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice});
-		if (highest < 0 || static_cast<int>(atmosphere.tracer_mass_kg_m2.size()) <= highest) {
-			throw std::invalid_argument("Surface exchange requires configured water tracer slots");
-		}
-		const size_t scalar_count = atmosphere.layer_mass_kg_m2.size();
-		for (int tracer : {indices_.vapor, indices_.cloud_liquid, indices_.cloud_ice}) {
-			if (atmosphere.tracer_mass_kg_m2[static_cast<size_t>(tracer)].size() != scalar_count) {
-				throw std::invalid_argument("Surface exchange water tracer field has wrong size");
-			}
-		}
+		VoronoiMoistThermodynamics moist(*transport_, indices_);
+		const auto thermo_before = moist.diagnose_thermodynamics(atmosphere);
 
 		Diagnostics d;
 		d.requested_dt_s = dt_s;
@@ -172,9 +153,10 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 		d.atmosphere_thermo_before_j = atmospheric_thermodynamic_energy_j(atmosphere);
 		d.surface_energy_before_j = total_surface_energy_j(surface);
 
-		const auto hydro = transport_->diagnose_hydrostatic(atmosphere);
 		const int cells = transport_->grid().cell_count();
 		auto &vapor = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.vapor)];
+		const auto &liquid = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_liquid)];
+		const auto &ice = atmosphere.tracer_mass_kg_m2[static_cast<size_t>(indices_.cloud_ice)];
 		d.min_surface_water_kg_m2 = std::numeric_limits<double>::infinity();
 		d.min_bottom_temperature_k = std::numeric_limits<double>::infinity();
 		d.max_bottom_temperature_k = -std::numeric_limits<double>::infinity();
@@ -189,7 +171,6 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 			const double dm = evaporation_kg_m2_s[static_cast<size_t>(c)] * dt_s;
 			const double sensible_j_m2 = sensible_heat_w_m2[static_cast<size_t>(c)] * dt_s;
 			const double latent_j_m2 = VoronoiMoistThermodynamics::LV0_J_KG * dm;
-
 			const double new_surface_water = surface.water_kg_m2[static_cast<size_t>(c)] - dm;
 			const double new_vapor = vapor[i] + dm;
 			if (!(new_surface_water >= 0.0) || !std::isfinite(new_surface_water)) {
@@ -199,19 +180,27 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 				throw std::runtime_error("Surface exchange condensation exceeds available atmospheric vapor");
 			}
 
-			if (sensible_j_m2 != 0.0) {
-				const double target_temperature = hydro.temperature_k[i]
+			if (dm != 0.0 || sensible_j_m2 != 0.0) {
+				const double target_temperature = thermo_before.temperature_k[i]
 					+ sensible_j_m2 / (VoronoiMoistThermodynamics::CP_DRY * dry_mass);
 				if (!(target_temperature > 100.0) || !std::isfinite(target_temperature)) {
-					throw std::runtime_error("Surface exchange sensible heat produced invalid bottom temperature");
+					throw std::runtime_error("Surface exchange produced invalid bottom temperature");
 				}
-				const double pressure = hydro.layer_pressure_pa[i];
-				const double exner = std::pow(
-					pressure / VoronoiDryHydrostatic::P0_PA,
+
+				// Only the bottom layer's water mass changes, so its upper interface
+				// pressure is unchanged. Recompute the new full layer-center pressure and
+				// choose theta so the requested sensible temperature is exact. This is
+				// required even for zero sensible heat when evaporation/dew changes weight.
+				const double p_upper = thermo_before.interface_pressure_pa[
+					static_cast<size_t>(cells + c)]; // interface level 1
+				const double total_mass_after = dry_mass + new_vapor + liquid[i] + ice[i];
+				const double p_lower = p_upper + transport_->gravity_mps2() * total_mass_after;
+				const double pressure_after = std::sqrt(p_lower * p_upper);
+				const double target_theta = target_temperature * std::pow(
+					VoronoiDryHydrostatic::P0_PA / pressure_after,
 					VoronoiDryHydrostatic::KAPPA);
-				const double target_theta = target_temperature / exner;
 				if (!(target_theta > 100.0) || !std::isfinite(target_theta)) {
-					throw std::runtime_error("Surface exchange sensible heat produced invalid potential temperature");
+					throw std::runtime_error("Surface exchange produced invalid potential temperature");
 				}
 				atmosphere.theta_mass_kg_k_m2[i] = dry_mass * target_theta;
 			}
@@ -237,14 +226,14 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 				static_cast<long double>(latent_j_m2) * area);
 		}
 
-		const auto after_hydro = transport_->diagnose_hydrostatic(atmosphere);
+		const auto thermo_after = moist.diagnose_thermodynamics(atmosphere);
 		for (int c = 0; c < cells; ++c) {
 			d.min_surface_water_kg_m2 = std::min(d.min_surface_water_kg_m2,
 				surface.water_kg_m2[static_cast<size_t>(c)]);
 			d.min_bottom_temperature_k = std::min(d.min_bottom_temperature_k,
-				after_hydro.temperature_k[static_cast<size_t>(c)]);
+				thermo_after.temperature_k[static_cast<size_t>(c)]);
 			d.max_bottom_temperature_k = std::max(d.max_bottom_temperature_k,
-				after_hydro.temperature_k[static_cast<size_t>(c)]);
+				thermo_after.temperature_k[static_cast<size_t>(c)]);
 		}
 
 		d.atmosphere_water_after_kg = total_atmospheric_water_kg(atmosphere);
