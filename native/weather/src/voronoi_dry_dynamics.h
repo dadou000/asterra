@@ -8,14 +8,9 @@
 namespace asterra::weather {
 
 // Coupled horizontal dry primitive-equation prototype on the spherical
-// Voronoi C-grid. It advances the conservative 30-level dry-mass and
-// mass-weighted-potential-temperature state together with edge-normal wind.
-//
-// Horizontal momentum uses vector-invariant C-grid structure:
-//   du/dt = pressure_force - grad(K) + Q[(absolute-vorticity/mass) * mass_flux]
-// where Q is the existing MPAS/TRiSK edgesOnEdge reconstruction. The pressure
-// force is diagnosed from prognostic layer mass by VoronoiDryTransport; there is
-// no independent pressure prognostic variable.
+// Voronoi C-grid. It advances conservative dry mass, mass-weighted potential
+// temperature, any passive tracer masses, and edge-normal wind together.
+// Tracers use the exact same donor dry-mass flux as thermodynamics.
 class VoronoiDryDynamics {
 public:
 	static constexpr int LEVELS = VoronoiDryTransport::LEVELS;
@@ -31,6 +26,7 @@ public:
 		double theta_mass_before_kg_k = 0.0;
 		double theta_mass_after_kg_k = 0.0;
 		double relative_theta_mass_error = 0.0;
+		double max_relative_tracer_mass_error = 0.0;
 		double min_layer_mass_kg_m2 = 0.0;
 		double min_potential_temperature_k = 0.0;
 		double max_speed_mps = 0.0;
@@ -68,36 +64,23 @@ public:
 	double total_theta_mass_kg_k(const State &state) const {
 		return transport_.total_theta_mass_kg_k(state);
 	}
+	double total_tracer_mass_kg(const State &state, int tracer) const {
+		return transport_.total_tracer_mass_kg(state, tracer);
+	}
 
-	// Least-squares C-grid reconstruction of the horizontal vector at cell
-	// centres. This is diagnostic/output only; prognostic momentum remains the
-	// single normal component stored on each physical edge.
 	std::vector<Vec3d> reconstruct_cell_velocity(const State &state,
 		int level) const;
 	std::vector<double> reconstruct_vertex_relative_vorticity(const State &state,
 		int level) const;
 
-	// Global dry-air budgets. Energy uses the same discrete cell kinetic energy
-	// that appears in the vector-invariant momentum operator:
-	//   E = integral dm [Cv*T + Phi + K]
-	// Angular momentum uses the shallow-atmosphere fixed-radius geometry solved
-	// by this core. The absolute diagnostic adds Omega R^2 (1-mu^2) to the
-	// reconstructed relative axial angular momentum per unit mass.
 	double total_dry_energy_j(const State &state) const;
 	double total_relative_axial_angular_momentum_kg_m2_s(const State &state) const;
 	double total_absolute_axial_angular_momentum_kg_m2_s(const State &state) const;
 
-	// Characteristic CFL combines resolved transport, an intentionally
-	// conservative dry pressure-wave speed sqrt(gamma Rd T), and inertial
-	// frequency. This can later be relaxed when the vertical/semi-implicit split
-	// is introduced, but it keeps this explicit bring-up core on the safe side.
 	double max_courant(const State &state, double dt_s) const;
 	double stable_dt(const State &state, double target_cfl,
 		double maximum_dt_s) const;
 
-	// Coupled SSPRK3 with rollback. No post-step clipping is used. A failed
-	// positivity/finite/conservation gate retries from the original state at half
-	// dt. Returns accepted_dt_s=0 if retries are exhausted.
 	StepDiagnostics step(State &state, double requested_dt_s,
 		double target_cfl = 0.30, int max_retries = 10) const;
 
@@ -114,6 +97,7 @@ private:
 	struct Tendencies {
 		std::vector<double> mass_dt;
 		std::vector<double> theta_mass_dt;
+		std::vector<std::vector<double>> tracer_mass_dt;
 		std::vector<double> edge_velocity_dt;
 		std::vector<double> normal_mass_flux; // m*u, kg/(m s), globally a -> b
 		double max_pressure_acceleration_mps2 = 0.0;
