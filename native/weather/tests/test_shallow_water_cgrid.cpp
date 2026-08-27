@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 using asterra::weather::CubedSphereGrid;
 using asterra::weather::ShallowWaterCGrid;
@@ -135,8 +136,6 @@ int main() {
 		const double balanced_volume0 = rotating.total_volume_m3(balanced);
 		const double initial_max_speed = FLOW_ANGULAR_RATE * R;
 
-		// Diagnose edge->cell reconstruction before time integration. If this fails,
-		// the Coriolis error is geometric reconstruction rather than temporal drift.
 		const auto reconstructed_initial = rotating.reconstruct_cell_velocity(balanced);
 		long double reconstruction_error_sq = 0.0L;
 		long double analytic_velocity_sq = 0.0L;
@@ -148,6 +147,59 @@ int main() {
 		}
 		const double reconstruction_relative_rms = std::sqrt(static_cast<double>(
 			reconstruction_error_sq / std::max(analytic_velocity_sq, 1.0L)));
+
+		// Initial operator diagnostics. A genuinely balanced state must have pressure
+		// and Coriolis tendencies that cancel before time integration. We also compare
+		// first-order upwind and centered continuity tendencies to expose transport
+		// diffusion as a separate source of geostrophic drift.
+		long double pressure_sq = 0.0L;
+		long double coriolis_sq = 0.0L;
+		long double net_accel_sq = 0.0L;
+		long double edge_count_ld = 0.0L;
+		std::vector<long double> upwind_dhdt(static_cast<size_t>(grid.cell_count()), 0.0L);
+		std::vector<long double> centered_dhdt(static_cast<size_t>(grid.cell_count()), 0.0L);
+		for (size_t e = 0; e < rotating.topology().shared_edges().size(); ++e) {
+			const auto &edge = rotating.topology().shared_edges()[e];
+			const double distance = angular_distance(
+				grid.cell(edge.cell_a).center, grid.cell(edge.cell_b).center) * R;
+			const double gradient = (balanced.depth_m[edge.cell_b] - balanced.depth_m[edge.cell_a])
+				/ distance;
+			const double pressure_accel = -G * gradient;
+			const Vec3d radial = edge.midpoint;
+			Vec3d u_edge = (reconstructed_initial[edge.cell_a] + reconstructed_initial[edge.cell_b]) * 0.5;
+			u_edge = u_edge - radial * dot(u_edge, radial);
+			const double f = 2.0 * OMEGA * dot(spin_axis, radial);
+			const double coriolis_accel = dot(cross(radial, u_edge) * (-f), edge.normal_a_to_b);
+			const double net_accel = pressure_accel + coriolis_accel;
+			pressure_sq += static_cast<long double>(pressure_accel) * pressure_accel;
+			coriolis_sq += static_cast<long double>(coriolis_accel) * coriolis_accel;
+			net_accel_sq += static_cast<long double>(net_accel) * net_accel;
+			edge_count_ld += 1.0L;
+
+			const double u = balanced.edge_normal_mps[e];
+			const double h_upwind = u >= 0.0 ? balanced.depth_m[edge.cell_a] : balanced.depth_m[edge.cell_b];
+			const double h_centered = 0.5 * (balanced.depth_m[edge.cell_a] + balanced.depth_m[edge.cell_b]);
+			const long double flux_upwind = static_cast<long double>(u * edge.length_m * h_upwind);
+			const long double flux_centered = static_cast<long double>(u * edge.length_m * h_centered);
+			upwind_dhdt[edge.cell_a] -= flux_upwind / grid.cell(edge.cell_a).area_m2;
+			upwind_dhdt[edge.cell_b] += flux_upwind / grid.cell(edge.cell_b).area_m2;
+			centered_dhdt[edge.cell_a] -= flux_centered / grid.cell(edge.cell_a).area_m2;
+			centered_dhdt[edge.cell_b] += flux_centered / grid.cell(edge.cell_b).area_m2;
+		}
+		long double upwind_tendency_sq = 0.0L;
+		long double centered_tendency_sq = 0.0L;
+		long double tendency_area = 0.0L;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			const long double area = grid.cell(c).area_m2;
+			upwind_tendency_sq += upwind_dhdt[c] * upwind_dhdt[c] * area;
+			centered_tendency_sq += centered_dhdt[c] * centered_dhdt[c] * area;
+			tendency_area += area;
+		}
+		const double initial_pressure_rms = std::sqrt(static_cast<double>(pressure_sq / edge_count_ld));
+		const double initial_coriolis_rms = std::sqrt(static_cast<double>(coriolis_sq / edge_count_ld));
+		const double initial_net_accel_rms = std::sqrt(static_cast<double>(net_accel_sq / edge_count_ld));
+		const double initial_upwind_dhdt_rms = std::sqrt(static_cast<double>(upwind_tendency_sq / tendency_area));
+		const double initial_centered_dhdt_rms = std::sqrt(static_cast<double>(centered_tendency_sq / tendency_area));
 
 		double balanced_elapsed = 0.0;
 		int balanced_steps = 0;
@@ -189,6 +241,11 @@ int main() {
 
 		std::cout << "ShallowWaterCGrid diagnostics\n"
 			<< "  reconstruction relative RMS: " << reconstruction_relative_rms << "\n"
+			<< "  initial pressure accel RMS m/s2: " << initial_pressure_rms << "\n"
+			<< "  initial Coriolis accel RMS m/s2: " << initial_coriolis_rms << "\n"
+			<< "  initial net accel RMS m/s2: " << initial_net_accel_rms << "\n"
+			<< "  initial upwind dh/dt RMS m/s: " << initial_upwind_dhdt_rms << "\n"
+			<< "  initial centered dh/dt RMS m/s: " << initial_centered_dhdt_rms << "\n"
 			<< "  rotating balance amplitude m: " << balance_amplitude << "\n"
 			<< "  rotating balance steps: " << balanced_steps << "\n"
 			<< "  rotating worst CFL: " << balanced_worst_cfl << "\n"
