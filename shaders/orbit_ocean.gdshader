@@ -105,22 +105,28 @@ void fragment() {
 
 void light() {
 	float visibility = 1.0;
-	vec3 direct_t = vec3(1.0);
+	vec3 diffuse_t = vec3(1.0);
+	vec3 specular_t = vec3(1.0);
 	if (LIGHT_IS_DIRECTIONAL) {
 		vec3 sun_dir = normalize(u_sun_dir);
 		visibility = planet_direct_sun_visibility(v_planet, sun_dir, u_planet_radius);
-		direct_t = orbit_ocean_sun_transmittance(v_planet, sun_dir) * v_atmo_t;
+		vec3 sun_t = orbit_ocean_sun_transmittance(v_planet, sun_dir);
+		// ALBEDO already contains the surface->camera extinction. The diffuse light
+		// therefore needs only the incoming solar path; custom specular bypasses
+		// ALBEDO and needs both incoming and outgoing atmospheric paths.
+		diffuse_t = sun_t;
+		specular_t = sun_t * v_atmo_t;
 	}
 
 	float ndotl = max(dot(NORMAL, LIGHT), 0.0);
 	DIFFUSE_LIGHT += ndotl * ATTENUATION * LIGHT_COLOR * visibility
-		* orbit_ocean_sun_transmittance(v_planet, normalize(u_sun_dir)) / PI;
+		* diffuse_t / PI;
 
 	vec3 wind_world = water_wind_direction(normalize(v_planet));
 	vec3 wind_view = normalize((VIEW_MATRIX * vec4(wind_world, 0.0)).xyz);
 	float stretch = water_cx_munk_stretch(water_wind_speed(normalize(v_planet)));
 	float spec = water_specular_direct_anisotropic(
 		NORMAL, wind_view, VIEW, LIGHT, ROUGHNESS, stretch);
-	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * direct_t
+	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * visibility * specular_t
 		* spec * SPECULAR_AMOUNT;
 }
