@@ -8,11 +8,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 enable_testing()
 
 # Replacement dynamical-core foundation. This library deliberately has no Godot
-# dependency so geometry, flux conservation and timestep invariants can be tested
+# dependency so geometry, transport and staggered dynamics can be validated
 # deterministically before the runtime backend is allowed to depend on them.
 add_library(asterra_weather_core STATIC
   src/cubed_sphere_grid.cpp
   src/conservative_transport.cpp
+  src/shallow_water_cgrid.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
 
@@ -28,10 +29,19 @@ add_executable(asterra_weather_transport_tests
 target_link_libraries(asterra_weather_transport_tests PRIVATE asterra_weather_core)
 add_test(NAME conservative_transport COMMAND asterra_weather_transport_tests)
 
+add_executable(asterra_weather_shallow_water_tests
+  tests/test_shallow_water_cgrid.cpp
+)
+target_link_libraries(asterra_weather_shallow_water_tests PRIVATE asterra_weather_core)
+add_test(NAME shallow_water_cgrid COMMAND asterra_weather_shallow_water_tests)
+
 # CI and the local build script can keep building one gate target. Any new core
 # validation executable must be added as a dependency here before the runtime DLL.
 add_custom_target(asterra_weather_core_tests
-  DEPENDS asterra_weather_geometry_tests asterra_weather_transport_tests
+  DEPENDS
+    asterra_weather_geometry_tests
+    asterra_weather_transport_tests
+    asterra_weather_shallow_water_tests
 )
 
 # godot-cpp master no longer guesses an engine API for extension projects.
@@ -81,11 +91,13 @@ if(MSVC)
   target_compile_options(asterra_weather_core PRIVATE /O2)
   target_compile_options(asterra_weather_geometry_tests PRIVATE /O2)
   target_compile_options(asterra_weather_transport_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_shallow_water_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
   target_compile_options(asterra_weather_geometry_tests PRIVATE -O3)
   target_compile_options(asterra_weather_transport_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_shallow_water_tests PRIVATE -O3)
 endif()
 
 # Keep every generator/configuration in the exact location referenced by the
