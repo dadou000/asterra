@@ -69,22 +69,28 @@ int main() {
 		VoronoiMoistThermodynamics moist(transport);
 		auto state = transport.make_isothermal_reference(110000.0, 288.0);
 		moist.initialize_uniform_relative_humidity(state, 0.70);
-		const auto hydro = transport.diagnose_hydrostatic(state);
+		const auto dry_hydro = transport.diagnose_hydrostatic(state);
+		const auto thermo = moist.diagnose_thermodynamics(state);
 		const auto virtual_temperature = moist.diagnose_virtual_temperature_k(state);
 		require(virtual_temperature.size() == state.layer_mass_kg_m2.size(),
 			"state virtual-temperature diagnostic returned wrong shape");
 
-		double min_delta = 1e300;
-		double max_delta = -1e300;
+		double min_tv_delta = 1e300;
+		double max_tv_delta = -1e300;
+		double max_full_pressure_temp_delta = 0.0;
 		for (size_t i = 0; i < virtual_temperature.size(); ++i) {
-			const double delta = virtual_temperature[i] - hydro.temperature_k[i];
+			const double delta = virtual_temperature[i] - thermo.temperature_k[i];
 			require(std::isfinite(virtual_temperature[i]) && virtual_temperature[i] > 0.0,
 				"state virtual-temperature diagnostic produced invalid value");
-			min_delta = std::min(min_delta, delta);
-			max_delta = std::max(max_delta, delta);
+			min_tv_delta = std::min(min_tv_delta, delta);
+			max_tv_delta = std::max(max_tv_delta, delta);
+			max_full_pressure_temp_delta = std::max(max_full_pressure_temp_delta,
+				thermo.temperature_k[i] - dry_hydro.temperature_k[i]);
 		}
-		require(min_delta > 0.0,
-			"uniform vapor field did not increase virtual temperature anywhere");
+		require(min_tv_delta > 0.0,
+			"uniform vapor field did not increase virtual temperature above physical T");
+		require(max_full_pressure_temp_delta > 0.0,
+			"moist water weight did not enter theta->T full-pressure conversion");
 
 		for (size_t i = 0; i < state.layer_mass_kg_m2.size(); ++i) {
 			state.tracer_mass_kg_m2[1][i] = 0.003 * state.layer_mass_kg_m2[i];
@@ -98,7 +104,8 @@ int main() {
 		std::cout << "VoronoiMoistDensity PASS\n"
 			<< "  dry/vapor/liquid density: " << dry_density << "/"
 			<< vapor_density << "/" << liquid_density << " kg/m3\n"
-			<< "  70% RH Tv-T range: " << min_delta << ".." << max_delta << " K\n";
+			<< "  70% RH Tv-T range: " << min_tv_delta << ".." << max_tv_delta << " K\n"
+			<< "  max full-vs-dry pressure T delta: " << max_full_pressure_temp_delta << " K\n";
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		std::cerr << "VoronoiMoistDensity FAIL: " << e.what() << "\n";
