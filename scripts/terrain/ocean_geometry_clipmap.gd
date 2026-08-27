@@ -286,6 +286,7 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_orbit_handoff_altitude", ORBIT_HANDOFF_ALTITUDE_M)
 	_material.set_shader_parameter("u_wave_scale", debug_wave_scale())
 	_material.set_shader_parameter("u_stable_displacement", 1.0 if _debug_stable_displacement else 0.0)
+	_material.set_shader_parameter("u_time_s", float(Time.get_ticks_usec()) / 1000000.0)
 
 	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
