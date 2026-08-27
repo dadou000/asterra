@@ -29,6 +29,7 @@ add_library(asterra_weather_core STATIC
   src/voronoi_surface_exchange.cpp
   src/voronoi_moist_hydrostatic.cpp
   src/voronoi_moist_energy.cpp
+  src/voronoi_moist_reference.cpp
   src/voronoi_precipitation.cpp
 )
 target_include_directories(asterra_weather_core PUBLIC src)
@@ -137,6 +138,10 @@ add_executable(asterra_weather_moist_energy_tests tests/test_voronoi_moist_energ
 target_link_libraries(asterra_weather_moist_energy_tests PRIVATE asterra_weather_core)
 add_test(NAME voronoi_moist_energy COMMAND asterra_weather_moist_energy_tests)
 
+add_executable(asterra_weather_moist_reference_tests tests/test_voronoi_moist_reference.cpp)
+target_link_libraries(asterra_weather_moist_reference_tests PRIVATE asterra_weather_core)
+add_test(NAME voronoi_moist_reference COMMAND asterra_weather_moist_reference_tests)
+
 add_custom_target(asterra_weather_core_tests
   DEPENDS
     asterra_weather_geometry_tests
@@ -165,6 +170,7 @@ add_custom_target(asterra_weather_core_tests
     asterra_weather_moist_pressure_feedback_tests
     asterra_weather_precipitation_tests
     asterra_weather_moist_energy_tests
+    asterra_weather_moist_reference_tests
 )
 
 if(NOT GODOTCPP_API_VERSION)
@@ -233,6 +239,7 @@ if(MSVC)
   target_compile_options(asterra_weather_moist_pressure_feedback_tests PRIVATE /O2)
   target_compile_options(asterra_weather_precipitation_tests PRIVATE /O2)
   target_compile_options(asterra_weather_moist_energy_tests PRIVATE /O2)
+  target_compile_options(asterra_weather_moist_reference_tests PRIVATE /O2)
 else()
   target_compile_options(asterra_weather PRIVATE -O3 -mavx2 -mfma -ffast-math)
   target_compile_options(asterra_weather_core PRIVATE -O3)
@@ -262,6 +269,7 @@ else()
   target_compile_options(asterra_weather_moist_pressure_feedback_tests PRIVATE -O3)
   target_compile_options(asterra_weather_precipitation_tests PRIVATE -O3)
   target_compile_options(asterra_weather_moist_energy_tests PRIVATE -O3)
+  target_compile_options(asterra_weather_moist_reference_tests PRIVATE -O3)
 endif()
 
 get_filename_component(ASTERRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
