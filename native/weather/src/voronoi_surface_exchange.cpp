@@ -199,18 +199,21 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 				throw std::runtime_error("Surface exchange condensation exceeds available atmospheric vapor");
 			}
 
-			const double target_temperature = hydro.temperature_k[i]
-				+ sensible_j_m2 / (VoronoiMoistThermodynamics::CP_DRY * dry_mass);
-			if (!(target_temperature > 100.0) || !std::isfinite(target_temperature)) {
-				throw std::runtime_error("Surface exchange sensible heat produced invalid bottom temperature");
-			}
-			const double pressure = hydro.layer_pressure_pa[i];
-			const double exner = std::pow(
-				pressure / VoronoiDryHydrostatic::P0_PA,
-				VoronoiDryHydrostatic::KAPPA);
-			const double target_theta = target_temperature / exner;
-			if (!(target_theta > 100.0) || !std::isfinite(target_theta)) {
-				throw std::runtime_error("Surface exchange sensible heat produced invalid potential temperature");
+			if (sensible_j_m2 != 0.0) {
+				const double target_temperature = hydro.temperature_k[i]
+					+ sensible_j_m2 / (VoronoiMoistThermodynamics::CP_DRY * dry_mass);
+				if (!(target_temperature > 100.0) || !std::isfinite(target_temperature)) {
+					throw std::runtime_error("Surface exchange sensible heat produced invalid bottom temperature");
+				}
+				const double pressure = hydro.layer_pressure_pa[i];
+				const double exner = std::pow(
+					pressure / VoronoiDryHydrostatic::P0_PA,
+					VoronoiDryHydrostatic::KAPPA);
+				const double target_theta = target_temperature / exner;
+				if (!(target_theta > 100.0) || !std::isfinite(target_theta)) {
+					throw std::runtime_error("Surface exchange sensible heat produced invalid potential temperature");
+				}
+				atmosphere.theta_mass_kg_k_m2[i] = dry_mass * target_theta;
 			}
 
 			surface.water_kg_m2[static_cast<size_t>(c)] = new_surface_water;
@@ -219,7 +222,6 @@ VoronoiSurfaceExchange::Diagnostics VoronoiSurfaceExchange::apply_fluxes(
 				throw std::runtime_error("Surface exchange produced non-finite surface energy");
 			}
 			vapor[i] = new_vapor;
-			atmosphere.theta_mass_kg_k_m2[i] = dry_mass * target_theta;
 
 			const long double area = static_cast<long double>(transport_->grid().cell(c).area_m2);
 			if (dm >= 0.0) {
