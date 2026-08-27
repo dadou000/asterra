@@ -15,6 +15,7 @@ using asterra::weather::SphericalLatLonSampler;
 using asterra::weather::Vec3d;
 using asterra::weather::VoronoiDryCore;
 using asterra::weather::VoronoiMoistThermodynamics;
+using asterra::weather::VoronoiPrecipitation;
 using asterra::weather::VoronoiSurfaceExchange;
 using asterra::weather::dot;
 
@@ -56,8 +57,16 @@ void WeatherDryCoreNative::_bind_methods() {
 		&WeatherDryCoreNative::is_surface_exchange_enabled);
 	ClassDB::bind_method(D_METHOD("get_surface_water_cells"),
 		&WeatherDryCoreNative::get_surface_water_cells);
+	ClassDB::bind_method(D_METHOD("get_surface_ice_cells"),
+		&WeatherDryCoreNative::get_surface_ice_cells);
 	ClassDB::bind_method(D_METHOD("get_surface_energy_cells"),
 		&WeatherDryCoreNative::get_surface_energy_cells);
+	ClassDB::bind_method(D_METHOD("set_precipitation_enabled", "enabled"),
+		&WeatherDryCoreNative::set_precipitation_enabled);
+	ClassDB::bind_method(D_METHOD("is_precipitation_enabled"),
+		&WeatherDryCoreNative::is_precipitation_enabled);
+	ClassDB::bind_method(D_METHOD("set_precipitation_fall_speeds", "rain_mps", "snow_mps"),
+		&WeatherDryCoreNative::set_precipitation_fall_speeds);
 	ClassDB::bind_method(D_METHOD("set_surface_height_cells", "height_m"),
 		&WeatherDryCoreNative::set_surface_height_cells);
 	ClassDB::bind_method(D_METHOD("set_surface_height_map", "height_m", "width", "height"),
@@ -80,6 +89,8 @@ void WeatherDryCoreNative::_bind_methods() {
 		&WeatherDryCoreNative::get_moisture_diagnostics);
 	ClassDB::bind_method(D_METHOD("get_surface_exchange_diagnostics"),
 		&WeatherDryCoreNative::get_surface_exchange_diagnostics);
+	ClassDB::bind_method(D_METHOD("get_precipitation_diagnostics"),
+		&WeatherDryCoreNative::get_precipitation_diagnostics);
 	ClassDB::bind_method(D_METHOD("get_frequency"), &WeatherDryCoreNative::get_frequency);
 	ClassDB::bind_method(D_METHOD("get_cell_count"), &WeatherDryCoreNative::get_cell_count);
 	ClassDB::bind_method(D_METHOD("get_edge_count"), &WeatherDryCoreNative::get_edge_count);
@@ -97,12 +108,24 @@ Vec3d WeatherDryCoreNative::to_vec3d(const Vector3 &v) {
 
 void WeatherDryCoreNative::clear_surface_exchange_state() {
 	surface_exchange_enabled_ = false;
+	precipitation_enabled_ = false;
 	surface_exchange_state_ = {};
 	last_surface_exchange_ = {};
+	last_precipitation_ = {};
 	evaporation_flux_kg_m2_s_.clear();
 	sensible_heat_flux_w_m2_.clear();
 	initial_surface_system_water_kg_ = 0.0;
 	initial_surface_system_energy_j_ = 0.0;
+}
+
+void WeatherDryCoreNative::ensure_zero_surface_reservoir() {
+	if (!ready()) return;
+	const size_t cells = static_cast<size_t>(grid_->cell_count());
+	if (surface_exchange_state_.water_kg_m2.size() == cells
+			&& surface_exchange_state_.ice_kg_m2.size() == cells
+			&& surface_exchange_state_.energy_j_m2.size() == cells) return;
+	VoronoiSurfaceExchange exchange(dynamics_->transport());
+	surface_exchange_state_ = exchange.make_uniform_surface_state(0.0, 0.0);
 }
 
 void WeatherDryCoreNative::clear_moisture_state() {
@@ -170,6 +193,7 @@ double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
 	const auto original_surface = surface_exchange_state_;
 	const auto previous_moist = last_moist_adjustment_;
 	const auto previous_surface = last_surface_exchange_;
+	const auto previous_precipitation = last_precipitation_;
 	try {
 		last_step_ = dynamics_->step(state_, requested_dt_s, target_cfl, 10);
 		if (!(last_step_.accepted_dt_s > 0.0)) {
@@ -178,6 +202,7 @@ double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
 		}
 
 		try {
+			if (moisture_enabled_) ensure_zero_surface_reservoir();
 			if (surface_exchange_enabled_) {
 				if (!moisture_enabled_) {
 					throw std::runtime_error("surface exchange requires enabled moisture");
@@ -187,7 +212,25 @@ double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
 					state_, surface_exchange_state_,
 					evaporation_flux_kg_m2_s_, sensible_heat_flux_w_m2_,
 					last_step_.accepted_dt_s);
+			} else {
+				last_surface_exchange_ = {};
 			}
+
+			if (moisture_enabled_ && precipitation_enabled_) {
+				VoronoiPrecipitation precipitation(dynamics_->transport());
+				last_precipitation_ = precipitation.advance_full_interval(
+					state_, surface_exchange_state_, last_step_.accepted_dt_s,
+					rain_fall_speed_mps_, snow_fall_speed_mps_, 0.45, 10, 10000);
+				const double dt_error = std::abs(
+					last_precipitation_.accepted_dt_s - last_step_.accepted_dt_s);
+				if (!(last_precipitation_.accepted_dt_s > 0.0)
+						|| dt_error > 1.0e-10 * std::max(1.0, last_step_.accepted_dt_s)) {
+					throw std::runtime_error("precipitation failed to cover the accepted atmosphere timestep");
+				}
+			} else {
+				last_precipitation_ = {};
+			}
+
 			if (moisture_enabled_) {
 				VoronoiMoistThermodynamics moist(dynamics_->transport());
 				last_moist_adjustment_ = moist.saturation_adjust(state_);
@@ -197,6 +240,7 @@ double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
 			surface_exchange_state_ = original_surface;
 			last_moist_adjustment_ = previous_moist;
 			last_surface_exchange_ = previous_surface;
+			last_precipitation_ = previous_precipitation;
 			last_step_.accepted_dt_s = 0.0;
 			last_step_.rejected_steps += 1;
 			rejected_steps_total_ += last_step_.rejected_steps;
@@ -214,6 +258,7 @@ double WeatherDryCoreNative::step(double requested_dt_s, double target_cfl) {
 		surface_exchange_state_ = original_surface;
 		last_moist_adjustment_ = previous_moist;
 		last_surface_exchange_ = previous_surface;
+		last_precipitation_ = previous_precipitation;
 		UtilityFunctions::push_error(String("WeatherDryCoreNative step failed: ") + e.what());
 		return 0.0;
 	}
@@ -289,12 +334,19 @@ bool WeatherDryCoreNative::initialize_moisture(double relative_humidity,
 		}
 		clear_surface_exchange_state();
 		moisture_enabled_ = true;
+		precipitation_enabled_ = true;
+		ensure_zero_surface_reservoir();
+		evaporation_flux_kg_m2_s_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
+		sensible_heat_flux_w_m2_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
 		reset_moisture_baseline();
+		reset_surface_exchange_baseline();
 		reset_budget_baseline();
 		refresh_state_extrema();
 		return true;
 	} catch (const std::exception &e) {
 		state_ = original;
+		clear_surface_exchange_state();
+		moisture_enabled_ = false;
 		UtilityFunctions::push_error(String("WeatherDryCoreNative moisture initialization failed: ") + e.what());
 		return false;
 	}
@@ -306,15 +358,18 @@ void WeatherDryCoreNative::disable_moisture(bool clear_water) {
 		return;
 	}
 	clear_surface_exchange_state();
-	if (clear_water && state_.tracer_mass_kg_m2.size() >= 3) {
-		for (size_t tracer = 0; tracer < 3; ++tracer) {
+	if (clear_water && state_.tracer_mass_kg_m2.size() >= 5) {
+		for (size_t tracer = 0; tracer < 5; ++tracer) {
 			std::fill(state_.tracer_mass_kg_m2[tracer].begin(),
 				state_.tracer_mass_kg_m2[tracer].end(), 0.0);
 		}
 	}
 	moisture_enabled_ = false;
+	precipitation_enabled_ = false;
 	last_moist_adjustment_ = {};
+	last_precipitation_ = {};
 	initial_total_water_kg_ = clear_water ? 0.0 : current_total_water_kg();
+	reset_budget_baseline();
 }
 
 bool WeatherDryCoreNative::saturation_adjust_moisture() {
@@ -354,11 +409,16 @@ bool WeatherDryCoreNative::initialize_surface_exchange(double water_kg_m2,
 		evaporation_flux_kg_m2_s_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
 		sensible_heat_flux_w_m2_.assign(static_cast<size_t>(grid_->cell_count()), 0.0);
 		last_surface_exchange_ = {};
+		last_precipitation_ = {};
 		surface_exchange_enabled_ = true;
 		reset_surface_exchange_baseline();
 		return true;
 	} catch (const std::exception &e) {
-		clear_surface_exchange_state();
+		surface_exchange_enabled_ = false;
+		last_surface_exchange_ = {};
+		ensure_zero_surface_reservoir();
+		clear_surface_fluxes();
+		reset_surface_exchange_baseline();
 		UtilityFunctions::push_error(String("WeatherDryCoreNative surface exchange initialization failed: ") + e.what());
 		return false;
 	}
@@ -369,20 +429,19 @@ void WeatherDryCoreNative::disable_surface_exchange(bool clear_reservoir) {
 		UtilityFunctions::push_error("WeatherDryCoreNative.disable_surface_exchange called before initialize");
 		return;
 	}
-	if (clear_reservoir) {
-		clear_surface_exchange_state();
-		return;
-	}
 	surface_exchange_enabled_ = false;
 	last_surface_exchange_ = {};
-	if (evaporation_flux_kg_m2_s_.size() == static_cast<size_t>(grid_->cell_count())) {
-		std::fill(evaporation_flux_kg_m2_s_.begin(), evaporation_flux_kg_m2_s_.end(), 0.0);
+	clear_surface_fluxes();
+	if (clear_reservoir) {
+		if (moisture_enabled_) {
+			VoronoiSurfaceExchange exchange(dynamics_->transport());
+			surface_exchange_state_ = exchange.make_uniform_surface_state(0.0, 0.0);
+			last_precipitation_ = {};
+		} else {
+			surface_exchange_state_ = {};
+		}
 	}
-	if (sensible_heat_flux_w_m2_.size() == static_cast<size_t>(grid_->cell_count())) {
-		std::fill(sensible_heat_flux_w_m2_.begin(), sensible_heat_flux_w_m2_.end(), 0.0);
-	}
-	initial_surface_system_water_kg_ = 0.0;
-	initial_surface_system_energy_j_ = 0.0;
+	reset_surface_exchange_baseline();
 }
 
 bool WeatherDryCoreNative::set_surface_fluxes_cells(
@@ -434,6 +493,18 @@ PackedFloat32Array WeatherDryCoreNative::get_surface_water_cells() const {
 	return out;
 }
 
+PackedFloat32Array WeatherDryCoreNative::get_surface_ice_cells() const {
+	PackedFloat32Array out;
+	if (!ready() || surface_exchange_state_.ice_kg_m2.size()
+			!= static_cast<size_t>(grid_->cell_count())) return out;
+	out.resize(grid_->cell_count());
+	float *dst = out.ptrw();
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		dst[c] = static_cast<float>(surface_exchange_state_.ice_kg_m2[static_cast<size_t>(c)]);
+	}
+	return out;
+}
+
 PackedFloat32Array WeatherDryCoreNative::get_surface_energy_cells() const {
 	PackedFloat32Array out;
 	if (!ready() || surface_exchange_state_.energy_j_m2.size()
@@ -444,6 +515,28 @@ PackedFloat32Array WeatherDryCoreNative::get_surface_energy_cells() const {
 		dst[c] = static_cast<float>(surface_exchange_state_.energy_j_m2[static_cast<size_t>(c)]);
 	}
 	return out;
+}
+
+void WeatherDryCoreNative::set_precipitation_enabled(bool enabled) {
+	if (!ready()) return;
+	if (enabled && !moisture_enabled_) {
+		UtilityFunctions::push_error("WeatherDryCoreNative precipitation requires enabled moisture");
+		return;
+	}
+	if (enabled) ensure_zero_surface_reservoir();
+	precipitation_enabled_ = enabled;
+	if (!enabled) last_precipitation_ = {};
+}
+
+bool WeatherDryCoreNative::set_precipitation_fall_speeds(double rain_mps, double snow_mps) {
+	if (!(rain_mps >= 0.0) || !std::isfinite(rain_mps)
+			|| !(snow_mps >= 0.0) || !std::isfinite(snow_mps)) {
+		UtilityFunctions::push_error("WeatherDryCoreNative precipitation fall speeds must be finite and non-negative");
+		return false;
+	}
+	rain_fall_speed_mps_ = rain_mps;
+	snow_fall_speed_mps_ = snow_mps;
+	return true;
 }
 
 void WeatherDryCoreNative::on_static_surface_changed() {
@@ -586,8 +679,10 @@ bool WeatherDryCoreNative::add_pressure_perturbation(const Vector3 &center_direc
 	}
 	last_step_ = {};
 	reset_budget_baseline();
-	if (moisture_enabled_) reset_moisture_baseline();
-	if (surface_exchange_enabled_) reset_surface_exchange_baseline();
+	if (moisture_enabled_) {
+		reset_moisture_baseline();
+		reset_surface_exchange_baseline();
+	}
 	refresh_state_extrema();
 	return true;
 }
@@ -650,10 +745,12 @@ void WeatherDryCoreNative::reset_budget_baseline() {
 }
 
 double WeatherDryCoreNative::current_total_water_kg() const {
-	if (!ready() || state_.tracer_mass_kg_m2.size() < 3) return 0.0;
-	return dynamics_->total_tracer_mass_kg(state_, 0)
-		+ dynamics_->total_tracer_mass_kg(state_, 1)
-		+ dynamics_->total_tracer_mass_kg(state_, 2);
+	if (!ready() || state_.tracer_mass_kg_m2.size() < 5) return 0.0;
+	double total = 0.0;
+	for (int tracer = 0; tracer < 5; ++tracer) {
+		total += dynamics_->total_tracer_mass_kg(state_, tracer);
+	}
+	return total;
 }
 
 void WeatherDryCoreNative::reset_moisture_baseline() {
@@ -661,8 +758,9 @@ void WeatherDryCoreNative::reset_moisture_baseline() {
 }
 
 double WeatherDryCoreNative::current_surface_system_water_kg() const {
-	if (!ready() || surface_exchange_state_.water_kg_m2.size()
-			!= static_cast<size_t>(grid_->cell_count())) return 0.0;
+	if (!ready()
+			|| surface_exchange_state_.water_kg_m2.size() != static_cast<size_t>(grid_->cell_count())
+			|| surface_exchange_state_.ice_kg_m2.size() != static_cast<size_t>(grid_->cell_count())) return 0.0;
 	VoronoiSurfaceExchange exchange(dynamics_->transport());
 	return exchange.total_atmospheric_water_kg(state_)
 		+ exchange.total_surface_water_kg(surface_exchange_state_);
@@ -677,7 +775,10 @@ double WeatherDryCoreNative::current_surface_system_energy_j() const {
 }
 
 void WeatherDryCoreNative::reset_surface_exchange_baseline() {
-	if (!surface_exchange_enabled_) {
+	if (!ready()
+			|| surface_exchange_state_.water_kg_m2.size() != static_cast<size_t>(grid_->cell_count())
+			|| surface_exchange_state_.ice_kg_m2.size() != static_cast<size_t>(grid_->cell_count())
+			|| surface_exchange_state_.energy_j_m2.size() != static_cast<size_t>(grid_->cell_count())) {
 		initial_surface_system_water_kg_ = 0.0;
 		initial_surface_system_energy_j_ = 0.0;
 		return;
@@ -710,7 +811,19 @@ PackedFloat32Array WeatherDryCoreNative::get_global_dry_rgba(int layer) const {
 	if (!ready() || layer < 0 || layer >= VoronoiDryCore::LEVELS
 			|| display_cell_lookup_.size() != static_cast<size_t>(DISPLAY_W * DISPLAY_H)) return out;
 
-	const auto hydro = dynamics_->transport().diagnose_hydrostatic(state_);
+	std::vector<double> temperature;
+	std::vector<double> surface_pressure;
+	if (moisture_enabled_ && state_.tracer_mass_kg_m2.size() >= 5) {
+		VoronoiMoistThermodynamics moist(dynamics_->transport());
+		const auto thermo = moist.diagnose_thermodynamics(state_);
+		temperature = thermo.temperature_k;
+		surface_pressure = thermo.surface_pressure_pa;
+	} else {
+		const auto hydro = dynamics_->transport().diagnose_hydrostatic(state_);
+		temperature = hydro.temperature_k;
+		surface_pressure = hydro.surface_pressure_pa;
+	}
+
 	std::vector<double> cell_speed(static_cast<size_t>(grid_->cell_count()), 0.0);
 	for (int c = 0; c < grid_->cell_count(); ++c) {
 		long double sum = 0.0L;
@@ -729,9 +842,9 @@ PackedFloat32Array WeatherDryCoreNative::get_global_dry_rgba(int layer) const {
 	for (int p = 0; p < DISPLAY_W * DISPLAY_H; ++p) {
 		const int c = display_cell_lookup_[static_cast<size_t>(p)];
 		const size_t i = static_cast<size_t>(layer * grid_->cell_count() + c);
-		dst[4 * p + 0] = static_cast<float>(hydro.temperature_k[i]);
+		dst[4 * p + 0] = static_cast<float>(temperature[i]);
 		dst[4 * p + 1] = static_cast<float>(cell_speed[static_cast<size_t>(c)]);
-		dst[4 * p + 2] = static_cast<float>(hydro.surface_pressure_pa[static_cast<size_t>(c)]);
+		dst[4 * p + 2] = static_cast<float>(surface_pressure[static_cast<size_t>(c)]);
 		dst[4 * p + 3] = static_cast<float>(state_.layer_mass_kg_m2[i]);
 	}
 	return out;
@@ -740,10 +853,11 @@ PackedFloat32Array WeatherDryCoreNative::get_global_dry_rgba(int layer) const {
 PackedFloat32Array WeatherDryCoreNative::get_global_moist_rgba(int layer) const {
 	PackedFloat32Array out;
 	if (!ready() || !moisture_enabled_ || layer < 0 || layer >= VoronoiDryCore::LEVELS
-			|| state_.tracer_mass_kg_m2.size() < 3
+			|| state_.tracer_mass_kg_m2.size() < 5
 			|| display_cell_lookup_.size() != static_cast<size_t>(DISPLAY_W * DISPLAY_H)) return out;
 
-	const auto hydro = dynamics_->transport().diagnose_hydrostatic(state_);
+	VoronoiMoistThermodynamics moist(dynamics_->transport());
+	const auto thermo = moist.diagnose_thermodynamics(state_);
 	out.resize(DISPLAY_W * DISPLAY_H * 4);
 	float *dst = out.ptrw();
 	for (int p = 0; p < DISPLAY_W * DISPLAY_H; ++p) {
@@ -754,11 +868,11 @@ PackedFloat32Array WeatherDryCoreNative::get_global_moist_rgba(int layer) const 
 		const double ql = state_.tracer_mass_kg_m2[1][i] / dry;
 		const double qi = state_.tracer_mass_kg_m2[2][i] / dry;
 		const double es = VoronoiMoistThermodynamics::saturation_vapor_pressure_pa(
-			hydro.temperature_k[i]);
+			thermo.temperature_k[i]);
 		double rh = 0.0;
-		if (hydro.layer_pressure_pa[i] > es) {
+		if (thermo.layer_pressure_pa[i] > es) {
 			const double qsat = VoronoiMoistThermodynamics::EPSILON * es
-				/ (hydro.layer_pressure_pa[i] - es);
+				/ (thermo.layer_pressure_pa[i] - es);
 			if (qsat > 0.0) rh = qv / qsat;
 		}
 		dst[4 * p + 0] = static_cast<float>(qv);
@@ -891,6 +1005,29 @@ PackedFloat64Array WeatherDryCoreNative::get_surface_exchange_diagnostics() cons
 	dst[14] = last_surface_exchange_.min_surface_water_kg_m2;
 	dst[15] = last_surface_exchange_.min_bottom_temperature_k;
 	dst[16] = last_surface_exchange_.max_bottom_temperature_k;
+	return out;
+}
+
+PackedFloat64Array WeatherDryCoreNative::get_precipitation_diagnostics() const {
+	PackedFloat64Array out;
+	if (!ready()) return out;
+	out.resize(15);
+	double *dst = out.ptrw();
+	dst[0] = precipitation_enabled_ ? 1.0 : 0.0;
+	dst[1] = last_precipitation_.requested_dt_s;
+	dst[2] = last_precipitation_.accepted_dt_s;
+	dst[3] = last_precipitation_.max_courant;
+	dst[4] = static_cast<double>(last_precipitation_.substeps);
+	dst[5] = static_cast<double>(last_precipitation_.rejected_steps);
+	dst[6] = last_precipitation_.relative_system_water_error;
+	dst[7] = last_precipitation_.relative_system_energy_error;
+	dst[8] = last_precipitation_.rain_before_kg;
+	dst[9] = last_precipitation_.rain_after_kg;
+	dst[10] = last_precipitation_.snow_before_kg;
+	dst[11] = last_precipitation_.snow_after_kg;
+	dst[12] = last_precipitation_.deposited_rain_kg;
+	dst[13] = last_precipitation_.deposited_snow_kg;
+	dst[14] = last_precipitation_.max_surface_precip_flux_kg_m2_s;
 	return out;
 }
 
