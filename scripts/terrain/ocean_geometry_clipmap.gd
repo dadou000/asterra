@@ -2,7 +2,7 @@ class_name OceanGeometryClipmap
 extends Node3D
 ## GPU-first local/regional ocean renderer.
 ##
-## A fixed concentric grid follows the observer. The CPU only updates uniforms,
+## A fixed nested square grid follows the observer. The CPU only updates uniforms,
 ## bounded visual interaction events and sector visibility. Authoritative
 ## buoyancy remains in OceanGPUPhysics and is deliberately independent of the
 ## selected graphics preset.
@@ -299,7 +299,7 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_center_up", _center_up)
 	# Terrain and ocean topology deliberately have separate metric spacings. The
 	# terrain-height include must stay on the renderer's nominal LOD scale even when
-	# Ultra water uses a denser concentric lattice.
+	# Ultra water uses a denser nested lattice.
 	_material.set_shader_parameter("u_base_spacing", _terrain_base_spacing)
 	_material.set_shader_parameter("u_ocean_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
@@ -381,22 +381,16 @@ func _capture_stable_anchor(surface_world: Vec3D) -> void:
 	_stable_anchor_world = surface_world.dup()
 
 
-## Every logical ocean-grid coordinate is stored explicitly in UV. The old sparse
-## sector meshes relied on VERTEX_ID surviving index-buffer compaction unchanged;
-## that assumption is not guaranteed by the rendering backend and produced the
-## radial fan/strip corruption visible when several ocean sectors were active.
+## Every logical ocean-grid coordinate is stored explicitly in UV. The mesh is a
+## nested 2:1 square clipmap: a Cartesian lattice should have Cartesian boundaries.
+## Circularly cutting that lattice created unrelated staircase edges at every LOD.
 static func _build_center_mesh() -> ArrayMesh:
 	var vertices: Array[Vector3] = []
 	var uvs: Array[Vector2] = []
 	var indices: Array[int] = []
 	var remap: Dictionary = {}
-	var outer_sq := float(HALF_CELLS * HALF_CELLS)
 	for y in GRID_CELLS:
-		var cy := float(y) + 0.5 - float(HALF_CELLS)
 		for x in GRID_CELLS:
-			var cx := float(x) + 0.5 - float(HALF_CELLS)
-			if cx * cx + cy * cy > outer_sq:
-				continue
 			_append_compact_cell(remap, vertices, uvs, indices, x, y)
 	return _mesh_from_compact(vertices, uvs, indices)
 
@@ -406,15 +400,18 @@ static func _build_sector_mesh(sector_index: int) -> ArrayMesh:
 	var uvs: Array[Vector2] = []
 	var indices: Array[int] = []
 	var remap: Dictionary = {}
-	var outer_sq := float(HALF_CELLS * HALF_CELLS)
-	var inner_sq := float(RING_INNER_HALF_CELLS * RING_INNER_HALF_CELLS)
+	var inner := float(RING_INNER_HALF_CELLS)
 	for y in GRID_CELLS:
 		var cy := float(y) + 0.5 - float(HALF_CELLS)
 		for x in GRID_CELLS:
 			var cx := float(x) + 0.5 - float(HALF_CELLS)
-			var r_sq := cx * cx + cy * cy
-			if r_sq > outer_sq or r_sq < inner_sq:
+			# Chebyshev distance produces a square annulus whose boundaries are exact
+			# members of the 2:1 nested lattice. The loop bounds are already the outer
+			# square, so only the inner square needs to be removed.
+			if maxf(absf(cx), absf(cy)) < inner:
 				continue
+			# Sectors remain angular only for view culling; they no longer define the
+			# LOD boundary itself.
 			var angle := atan2(cy, cx)
 			if angle < 0.0:
 				angle += TAU
