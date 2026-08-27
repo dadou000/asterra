@@ -36,15 +36,16 @@ double total_water(const VoronoiDryCore &core, const VoronoiDryCore::State &stat
 
 double max_relative_humidity(const VoronoiDryCore &core,
 		const VoronoiDryCore::State &state) {
-	const auto hydro = core.transport().diagnose_hydrostatic(state);
+	VoronoiMoistThermodynamics moist(core.transport());
+	const auto thermo = moist.diagnose_thermodynamics(state);
 	double maximum = 0.0;
 	for (size_t i = 0; i < state.layer_mass_kg_m2.size(); ++i) {
 		const double qv = state.tracer_mass_kg_m2[0][i] / state.layer_mass_kg_m2[i];
 		const double es = VoronoiMoistThermodynamics::saturation_vapor_pressure_pa(
-			hydro.temperature_k[i]);
-		if (!(hydro.layer_pressure_pa[i] > es)) continue;
+			thermo.temperature_k[i]);
+		if (!(thermo.layer_pressure_pa[i] > es)) continue;
 		const double qs = VoronoiMoistThermodynamics::EPSILON * es
-			/ (hydro.layer_pressure_pa[i] - es);
+			/ (thermo.layer_pressure_pa[i] - es);
 		maximum = std::max(maximum, qv / qs);
 	}
 	return maximum;
@@ -69,10 +70,6 @@ int main() {
 		VoronoiMoistThermodynamics moist(core.transport());
 		moist.initialize_uniform_relative_humidity(state, 0.72);
 
-		// Create two broad source-operator challenges before starting dynamics:
-		// x>0 receives enough extra vapor to become supersaturated; x<0 receives
-		// warm cloud liquid in otherwise subsaturated air so it must evaporate.
-		// Total water is not sourced or removed; only its local phase is changed.
 		for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
 			const double vertical = static_cast<double>(k)
 				/ static_cast<double>(VoronoiDryCore::LEVELS - 1);
@@ -101,9 +98,6 @@ int main() {
 		require(relative_error(total_water(core, state), water_before_adjust) < 5e-12,
 			"initial coupled saturation adjustment changed total water");
 
-		// Apply a smooth pressure anomaly exactly as the runtime bridge does: dry
-		// mass, theta mass, and every tracer mass receive the same factor. This
-		// creates winds without changing local mixing ratios at insertion.
 		for (int c = 0; c < grid.cell_count(); ++c) {
 			const double factor = std::exp(0.018 * grid.cell(c).center.z);
 			for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
