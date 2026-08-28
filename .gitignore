@@ -2,3 +2,7 @@
 *.tmp
 *.FCBak
 export_presets.cfg
+
+# Poly Haven source scans are an authoring cache. Optimized game-ready assets
+# belong in assets/scatter/runtime/ and are committed separately.
+/assets/scatter/source/
