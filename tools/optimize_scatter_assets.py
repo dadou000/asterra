@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Batch wrapper for tools/scatter_optimize_blender.py.
 
-Examples:
-    python tools/optimize_scatter_assets.py --all --priority core
-    python tools/optimize_scatter_assets.py --biome TAIGA
-    python tools/optimize_scatter_assets.py --asset boulder_01
-    python tools/optimize_scatter_assets.py --all --blender "C:/Program Files/Blender Foundation/Blender 4.5/blender.exe"
+The wrapper enforces the repository's scatter budgets after each Blender build.
+A model that produces an oversized file or an excessive LOD0 is deleted from the
+runtime directory and reported as rejected, so it cannot be committed by accident.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "assets" / "scatter" / "asset_manifest.json"
 BLENDER_SCRIPT = REPO_ROOT / "tools" / "scatter_optimize_blender.py"
+MIB = 1024 * 1024
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -45,8 +44,6 @@ def find_blender(explicit: str | None) -> str:
     if found:
         return found
 
-    # Common Windows installs. Newer versions first; this keeps the wrapper useful
-    # on a development workstation without forcing Blender onto PATH.
     roots = [
         Path("C:/Program Files/Blender Foundation"),
         Path("C:/Program Files (x86)/Blender Foundation"),
@@ -57,7 +54,6 @@ def find_blender(explicit: str | None) -> str:
             candidates.extend(root.glob("Blender */blender.exe"))
     if candidates:
         return str(sorted(candidates, reverse=True)[0])
-
     raise FileNotFoundError("Blender not found. Pass --blender /path/to/blender")
 
 
@@ -89,6 +85,58 @@ def select_assets(
         if select_all or ids or biome is not None:
             result.append(raw)
     return result
+
+
+def policy_number(manifest: dict[str, Any], key: str, fallback: float) -> float:
+    policy = manifest.get("selection_policy", {})
+    if isinstance(policy, dict):
+        try:
+            return float(policy.get(key, fallback))
+        except (TypeError, ValueError):
+            pass
+    return fallback
+
+
+def validate_runtime_asset(asset_id: str, runtime_dir: Path, manifest: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    max_file_mib = policy_number(manifest, "max_runtime_file_mib", 100.0)
+    max_lod0_triangles = int(policy_number(manifest, "max_runtime_lod0_triangles", 750000.0))
+
+    metadata_path = runtime_dir / "metadata.json"
+    if not metadata_path.exists():
+        return ["optimizer did not produce metadata.json"]
+
+    metadata = read_json(metadata_path)
+    lods = metadata.get("lods", [])
+    if not isinstance(lods, list) or not lods:
+        errors.append("metadata contains no LOD records")
+    else:
+        lod0_record: dict[str, Any] | None = None
+        for raw in lods:
+            if isinstance(raw, dict) and int(raw.get("lod", -1)) == 0:
+                lod0_record = raw
+                break
+        if lod0_record is None:
+            errors.append("metadata contains no LOD0")
+        else:
+            triangles = int(lod0_record.get("triangles", 0) or 0)
+            if triangles <= 0:
+                errors.append("LOD0 triangle count is missing")
+            elif triangles > max_lod0_triangles:
+                errors.append(
+                    f"LOD0 has {triangles:,} triangles; cap is {max_lod0_triangles:,}"
+                )
+
+    max_bytes = int(max_file_mib * MIB)
+    for path in runtime_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        size = path.stat().st_size
+        if size > max_bytes:
+            errors.append(
+                f"{path.name} is {size / MIB:.1f} MiB; cap is {max_file_mib:.1f} MiB"
+            )
+    return errors
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,7 +171,8 @@ def main() -> int:
     for index, asset in enumerate(selected, start=1):
         asset_id = str(asset["id"])
         source_meta = source_root / asset_id / "source.json"
-        runtime_meta = runtime_root / asset_id / "metadata.json"
+        runtime_dir = runtime_root / asset_id
+        runtime_meta = runtime_dir / "metadata.json"
         print(f"[{index}/{len(selected)}] {asset_id}")
 
         if not source_meta.exists():
@@ -134,9 +183,13 @@ def main() -> int:
                 break
             continue
         if runtime_meta.exists() and not args.force:
-            print("  cached runtime metadata; use --force to rebuild")
-            skipped += 1
-            continue
+            existing_errors = validate_runtime_asset(asset_id, runtime_dir, manifest)
+            if not existing_errors:
+                print("  cached runtime asset passes budgets; use --force to rebuild")
+                skipped += 1
+                continue
+            print("  cached asset violates current budgets; rebuilding")
+            shutil.rmtree(runtime_dir, ignore_errors=True)
 
         command = [
             blender,
@@ -155,8 +208,22 @@ def main() -> int:
             failures.append((asset_id, f"Blender exited {completed.returncode}"))
             if not args.keep_going:
                 break
-        else:
-            built += 1
+            continue
+
+        runtime_errors = validate_runtime_asset(asset_id, runtime_dir, manifest)
+        if runtime_errors:
+            message = "; ".join(runtime_errors)
+            failures.append((asset_id, message))
+            print(f"  REJECTED: {message}", file=sys.stderr)
+            # Invalid generated files should never sit in runtime/ waiting to be
+            # accidentally staged with a broad `git add`.
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+            if not args.keep_going:
+                break
+            continue
+
+        built += 1
+        print("  accepted: runtime file and LOD0 budgets satisfied")
 
     print(f"\nbuilt={built} skipped={skipped} failed={len(failures)}")
     if failures:
