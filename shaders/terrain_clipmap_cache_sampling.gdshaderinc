@@ -1,6 +1,12 @@
 // Toroidal GPU terrain-cache sampling for the spherical geometry clipmap.
 // Include this after the analytic height helpers; cache misses deliberately fall
 // back to those helpers so staggered warm-up can never expose stale geometry.
+//
+// IMPORTANT: the visible clipmap is a triangle mesh, not a bilinear height patch.
+// Fine vertices that morph to their parent therefore have to converge to the
+// parent's actual piecewise-planar triangles. Bilinear interpolation of the four
+// parent samples is a different surface between lattice vertices and creates the
+// classic alternating zipper crack at every LOD boundary.
 
 uniform sampler2DArray u_terrain_cache : filter_nearest, repeat_disable;
 uniform float u_terrain_cache_ready = 0.0;
@@ -39,6 +45,41 @@ bool terrain_cache_fetch_exact(ivec2 cell, int level, out vec2 sample) {
 	return true;
 }
 
+vec2 terrain_triangle_interpolate(vec2 s00, vec2 s10, vec2 s01, vec2 s11,
+		vec2 f) {
+	// Static topology uses triangles (00,10,11) and (00,11,01), i.e. the diagonal
+	// from the lower-left lattice vertex to the upper-right lattice vertex.
+	if (f.y <= f.x) {
+		return s00 * (1.0 - f.x)
+			+ s10 * (f.x - f.y)
+			+ s11 * f.y;
+	}
+	return s00 * (1.0 - f.y)
+		+ s11 * f.x
+		+ s01 * (f.y - f.x);
+}
+
+bool terrain_cache_fetch_triangle(vec2 lattice_cell, int level, out vec2 sample) {
+	ivec2 c00 = ivec2(floor(lattice_cell));
+	vec2 f = fract(lattice_cell);
+	vec2 s00;
+	if (max(f.x, f.y) <= 1e-5) {
+		return terrain_cache_fetch_exact(c00, level, sample);
+	}
+	vec2 s10;
+	vec2 s01;
+	vec2 s11;
+	if (!terrain_cache_fetch_exact(c00, level, s00)
+			|| !terrain_cache_fetch_exact(c00 + ivec2(1, 0), level, s10)
+			|| !terrain_cache_fetch_exact(c00 + ivec2(0, 1), level, s01)
+			|| !terrain_cache_fetch_exact(c00 + ivec2(1, 1), level, s11)) {
+		sample = vec2(0.0);
+		return false;
+	}
+	sample = terrain_triangle_interpolate(s00, s10, s01, s11, f);
+	return true;
+}
+
 bool terrain_cache_fetch_bilinear(vec2 lattice_cell, int level, out vec2 sample) {
 	ivec2 c00 = ivec2(floor(lattice_cell));
 	vec2 f = fract(lattice_cell);
@@ -60,12 +101,37 @@ bool terrain_cache_fetch_bilinear(vec2 lattice_cell, int level, out vec2 sample)
 	return true;
 }
 
+vec2 terrain_analytic_vertex_sample(ivec2 cell, int level) {
+	float spacing = ring_spacing(level);
+	vec2 offset_m = vec2(cell) * spacing;
+	vec3 d = direction_for_basis_offset(
+		u_anchor_dir, u_anchor_right, u_anchor_up, offset_m);
+	return terrain_sample_for_level(d, level);
+}
+
+vec2 terrain_analytic_triangle_sample(vec2 lattice_cell, int level) {
+	ivec2 c00 = ivec2(floor(lattice_cell));
+	vec2 f = fract(lattice_cell);
+	vec2 s00 = terrain_analytic_vertex_sample(c00, level);
+	if (max(f.x, f.y) <= 1e-5) return s00;
+	vec2 s10 = terrain_analytic_vertex_sample(c00 + ivec2(1, 0), level);
+	vec2 s01 = terrain_analytic_vertex_sample(c00 + ivec2(0, 1), level);
+	vec2 s11 = terrain_analytic_vertex_sample(c00 + ivec2(1, 1), level);
+	return terrain_triangle_interpolate(s00, s10, s01, s11, f);
+}
+
 vec2 terrain_cached_level_sample(vec3 d, int level, vec2 anchor_offset_m,
 		bool stable_displacement) {
-	if (stable_displacement && u_terrain_cache_ready > 0.5) {
-		vec2 cached;
+	if (stable_displacement) {
 		vec2 lattice_cell = anchor_offset_m / max(ring_spacing(level), 1e-6);
-		if (terrain_cache_fetch_bilinear(lattice_cell, level, cached)) return cached;
+		if (u_terrain_cache_ready > 0.5) {
+			vec2 cached;
+			if (terrain_cache_fetch_triangle(lattice_cell, level, cached)) return cached;
+		}
+		// A cold cache still has to target the same parent triangle surface. Evaluating
+		// the analytic field directly at this in-between point would reintroduce the
+		// same T-junction crack until the cache finished warming.
+		return terrain_analytic_triangle_sample(lattice_cell, level);
 	}
 	return terrain_sample_for_level(d, level);
 }
@@ -82,9 +148,10 @@ vec2 terrain_cached_sample_with_morph(vec3 d, int level, float morph,
 	return fine;
 }
 
-// Normals never force an analytic detail regeneration. If a neighboring cache
-// sample is still warming, use its inexpensive macro surface until that texel is
-// ready; fragment derivatives retain the actual rendered triangle slope.
+// Normals are intentionally smoother than the piecewise-planar geometry. They can
+// retain bilinear cache interpolation without affecting vertex watertightness.
+// If a neighboring cache sample is still warming, use its inexpensive macro
+// surface; fragment derivatives retain the actual rendered triangle slope.
 vec2 terrain_cached_or_macro_level(vec3 d, int level, vec2 anchor_offset_m) {
 	if (u_terrain_cache_ready > 0.5) {
 		vec2 cached;
