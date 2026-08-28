@@ -121,4 +121,17 @@ void terrain_aerial_perspective(vec3 cam, vec3 frag, vec3 sun_direction,
 		TERRAIN_RAYLEIGH_COEFF * od_rayleigh
 		+ TERRAIN_MIE_COEFF * od_mie
 		+ TERRAIN_OZONE_COEFF * od_ozone));
+
+	// The physical integral is deliberately too haze-heavy for an orbital terrain
+	// view because it is composited on top of a separately rendered atmospheric
+	// limb/sky. Preserve the atmosphere close to the surface, but progressively
+	// suppress additive veiling luminance at long terrain sight lines so continents
+	// retain dark forests, bright deserts and readable biome contrast from orbit.
+	float orbital_view = smoothstep(70000.0, 420000.0, segment_length);
+	inscatter *= mix(1.0, 0.34, orbital_view);
+	// Recover a small amount of colour transmission as the view becomes orbital.
+	// This is intentionally modest: extinction remains visible, but no longer turns
+	// the whole surface into a grey/blue pastel under the additive haze.
+	vec3 lifted_transmittance = sqrt(max(transmittance, vec3(0.0)));
+	transmittance = mix(transmittance, lifted_transmittance, orbital_view * 0.22);
 }
