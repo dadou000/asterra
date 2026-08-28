@@ -157,14 +157,17 @@ float gm_band_weight(float wavelength_m, float spacing_m) {
 }
 
 // Must exactly match CubeSphere.tangent_basis(): [east, north], with the same
-// polar fallback axis. Avoid constructing/normalizing the basis for dead flow.
+// polar fallback axis. The raw coarse flow texture is linearly filtered and can
+// cancel to nearly zero where neighboring cells disagree. Never let normalization
+// of that near-zero vector become a binary terrain-coordinate switch.
 vec3 gm_flow_world(vec3 dir, vec2 flow_xy) {
-	if (dot(flow_xy, flow_xy) <= 1e-5) return vec3(0.0);
+	float flow_len_sq = dot(flow_xy, flow_xy);
+	if (flow_len_sq <= 1e-10) return vec3(0.0);
 	vec3 basis_up = abs(dir.y) > 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
 	vec3 east = normalize(cross(basis_up, dir));
 	vec3 north = normalize(cross(dir, east));
 	vec3 flow = east * flow_xy.x + north * flow_xy.y;
-	return normalize(flow);
+	return flow * inversesqrt(max(dot(flow, flow), 1e-10));
 }
 
 float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
@@ -194,12 +197,18 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 	}
 
 	float w6k = gm_band_weight(6000.0, spacing_m);
-	if (w6k > 0.001 && mountain > 0.08) {
+	// The old `mountain > 0.08` branch switched a roughly +/-17 m ridge term on in
+	// one vertex. Around a ~1 km macro elevation, altitude-derived mountain weight
+	// crosses 0.08, producing a literal world-space cliff contour. Ramp from 0.04
+	// to the old full-strength threshold instead. The expensive Worley path remains
+	// skipped over truly flat terrain, while the contribution is zero at the branch.
+	float mountain_gate = smoothstep(0.04, 0.08, mountain);
+	if (w6k > 0.001 && mountain > 0.04) {
 		vec3 p = gm_domain_warp(world_m / 6000.0, seed + 31u, 1.1);
 		float cells = gm_cellular_ridge(p, seed + 37u);
 		float ridge = gm_ridged(p * 1.55, seed + 41u);
 		float skeleton = mix(ridge, cells, 0.58);
-		h += (skeleton * 2.0 - 1.0) * 210.0 * mountain * hardness * w6k;
+		h += (skeleton * 2.0 - 1.0) * 210.0 * mountain * mountain_gate * hardness * w6k;
 	}
 
 	float w1400 = gm_band_weight(1400.0, spacing_m);
@@ -212,21 +221,29 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 
 	float w420 = gm_band_weight(420.0, spacing_m);
 	if (w420 > 0.001) {
-		vec3 flow = gm_flow_world(dir, asterra_ctx_flow(hydro));
+		vec2 raw_flow = asterra_ctx_flow(hydro);
+		float flow_mag = length(raw_flow);
+		float flow_gate = smoothstep(0.02, 0.20, flow_mag);
 		vec3 sample_m = world_m;
-		if (dot(flow, flow) > 0.1) {
-			float along_q = dot(sample_m, flow);
+		if (flow_mag > 1e-5) {
+			vec3 flow = gm_flow_world(dir, raw_flow);
+			float along_q = dot(world_m, flow);
 			vec3 along = flow * along_q;
-			vec3 across = sample_m - along;
-			sample_m = along * 0.42 + across * 1.45;
+			vec3 across = world_m - along;
+			vec3 warped_m = along * 0.42 + across * 1.45;
+			// At coarse-cell flow cancellations the old code changed directly from
+			// unwarped to fully warped coordinates. Blend the coordinate transform by
+			// confidence so the 420 m channel field stays spatially continuous.
+			sample_m = mix(world_m, warped_m, flow_gate);
 		}
 		vec3 p = gm_domain_warp(sample_m / 420.0, seed + 71u, 0.55);
 		float channel = pow(gm_ridged(p, seed + 73u), 4.6);
 		float incision = channel * mix(2.0, 34.0, hydro.b) * (1.0 - depositional * 0.78);
 		h -= incision * w420;
-		if (depositional > 0.006) {
+		float depositional_gate = smoothstep(0.0, 0.03, depositional);
+		if (depositional > 0.0) {
 			float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
-			h += fan * depositional * mix(1.0, 12.0, surface.a) * w420;
+			h += fan * depositional * depositional_gate * mix(1.0, 12.0, surface.a) * w420;
 		}
 	}
 
@@ -235,9 +252,10 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		float n = gm_fbm(world_m / 120.0, seed + 89u);
 		h += n * 4.5 * (1.0 - glacial * 0.6) * w120;
 		float dune_weight = arid * soil.r;
-		if (dune_weight > 0.004) {
+		float dune_gate = smoothstep(0.0, 0.03, dune_weight);
+		if (dune_weight > 0.0) {
 			float dune = gm_ridged(gm_domain_warp(world_m / 180.0, seed + 97u, 0.45), seed + 101u);
-			h += (dune * 2.0 - 1.0) * 9.0 * dune_weight * w120;
+			h += (dune * 2.0 - 1.0) * 9.0 * dune_weight * dune_gate * w120;
 		}
 	}
 
@@ -246,9 +264,10 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		h += gm_value(world_m / 24.0, seed + 109u) * 0.9 * w24;
 	}
 
-	if (glacial > 0.01) {
+	float glacial_gate = smoothstep(0.0, 0.05, glacial);
+	if (glacial > 0.0) {
 		float ice = gm_fbm(world_m / 2600.0 + vec3(2.0, -7.0, 5.0), seed + 127u);
-		h = mix(h, h * 0.62 + ice * 52.0, glacial * 0.72);
+		h = mix(h, h * 0.62 + ice * 52.0, glacial * glacial_gate * 0.72);
 	}
 
 	return h;
