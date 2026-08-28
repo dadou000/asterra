@@ -13,3 +13,18 @@
 *.gltf text eol=lf
 *.svg text
 *.FCStd binary
+
+# Optimized ecological scatter can contain very large meshes. Keep these assets
+# in Git LFS instead of normal Git objects so high-detail source-derived LODs do
+# not hit GitHub's regular file-size limit or permanently bloat repository history.
+assets/scatter/runtime/**/*.glb filter=lfs diff=lfs merge=lfs -text
+
+# Future runtime texture/packed-buffer outputs should use the same storage path.
+# These patterns are harmless until such files exist and avoid another migration
+# when the terrain/scatter texture milestone begins.
+assets/scatter/runtime/**/*.bin filter=lfs diff=lfs merge=lfs -text
+assets/scatter/runtime/**/*.ktx2 filter=lfs diff=lfs merge=lfs -text
+assets/scatter/runtime/**/*.png filter=lfs diff=lfs merge=lfs -text
+assets/scatter/runtime/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+assets/scatter/runtime/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
+assets/scatter/runtime/**/*.webp filter=lfs diff=lfs merge=lfs -text
