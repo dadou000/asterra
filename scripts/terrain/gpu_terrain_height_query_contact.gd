@@ -2,10 +2,10 @@ extends "res://scripts/terrain/gpu_terrain_height_query.gd"
 ## Strict contact-grade accessors layered over the pooled terrain query.
 ##
 ## General terrain lookups intentionally accept a broad nearby cached sample while
-## a precise GPU result is in flight. Rigid contacts use a separate urgent path:
-## only a sample within centimetres of the requested world point is accepted, and
-## that request is pushed to the front of the pooled GPU queue instead of being
-## deduplicated against an unrelated aiming/sample point up to 35 cm away.
+## a precise GPU result is in flight. Rigid contacts and altitude/culling decisions
+## must not: only a sample within centimetres of the requested world point is
+## accepted, and that request is pushed to the front of the pooled GPU queue instead
+## of being deduplicated against an unrelated aiming/sample point.
 
 const CONTACT_CACHE_DISTANCE_M := 0.035
 const CONTACT_CACHE_AGE_S := 0.80
@@ -45,3 +45,12 @@ func has_contact_height(direction: Vector3) -> bool:
 	var d: Vector3 = direction.normalized()
 	request_contact_height(d)
 	return not _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S).is_empty()
+
+
+## `spherical_geometry_clipmap_global_gpu.gd` uses has_fresh_height() before it is
+## allowed to classify the camera as underground. The inherited implementation
+## accepted a sample as far as 64 m away, which could make a camera physically above
+## the local surface report negative AGL on sloped/rough terrain and hide all ground.
+## On this production contact subclass, "fresh" therefore means contact-grade.
+func has_fresh_height(direction: Vector3) -> bool:
+	return has_contact_height(direction)
