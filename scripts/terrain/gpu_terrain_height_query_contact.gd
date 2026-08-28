@@ -1,61 +1,61 @@
 extends "res://scripts/terrain/gpu_terrain_height_query.gd"
 ## Strict contact-grade accessors layered over the pooled terrain query.
 ##
-## General terrain lookups intentionally accept a broad nearby cached sample while
-## a precise GPU result is in flight. Rigid contacts and altitude/culling decisions
-## use a much tighter local sample. Distance matching uses chord length instead of
-## acos(dot): at a ~1000 km planet radius the latter loses far too much precision
-## for sub-metre contact queries when directions are stored as float Vector3 values.
+## General terrain lookups may accept a broad nearby cached sample while a precise
+## GPU result is in flight. Rigid contact/AGL use a much tighter local sample.
+## Distance matching is deliberately squared-chord based: aim() can perform many
+## thousands of cache comparisons per frame, and trigonometric arc-distance calls
+## there were a major CPU hot path after the contact cache became well populated.
 
 # 15 cm is below the active terrain's 25 cm physical texel size and remains stable
-# with float32 unit directions on a 1000 km-radius planet. The previous 3.5 cm gate
-# was below the reliable angular precision of Vector3 and could starve exact contact.
+# with float32 unit directions on a ~1000 km-radius planet.
 const CONTACT_CACHE_DISTANCE_M := 0.15
 const CONTACT_CACHE_AGE_S := 0.45
 const CONTACT_DEDUPE_DISTANCE_M := 0.10
 
 
-func _surface_distance_m(a: Vector3, b: Vector3) -> float:
+func _surface_distance_sq_m(a: Vector3, b: Vector3) -> float:
 	if Planet.cfg == null:
 		return INF
-	# For two unit vectors, chord = 2*sin(theta/2). This is well conditioned near
-	# theta=0, unlike acos(dot), and is effectively arc length at contact scales.
-	var chord: float = (a - b).length()
-	var half_chord: float = clampf(chord * 0.5, 0.0, 1.0)
-	return 2.0 * Planet.cfg.planet_radius * asin(half_chord)
+	# For local terrain lookups chord and arc distance differ by an immeasurably
+	# small amount, while this form needs no sqrt/asin/acos inside the GDScript loop.
+	var radius: float = Planet.cfg.planet_radius
+	return a.distance_squared_to(b) * radius * radius
 
 
-## Override the pooled cache matcher for the production contact subclass. All
-## inherited broad lookups still pass their own max_distance_m; only the numerical
-## distance metric changes.
+## Override the pooled matcher for both broad and contact lookups. The caller still
+## supplies its own distance/age policy; only the hot distance metric changes.
 func _find_sample(direction: Vector3, max_distance_m: float, max_age_s: float) -> Dictionary:
 	if Planet.cfg == null:
 		return {}
 	var now_s: float = Time.get_ticks_msec() * 0.001
+	var max_distance_sq_m: float = max_distance_m * max_distance_m
 	var best: Dictionary = {}
-	var best_distance_m: float = INF
+	var best_distance_sq_m: float = INF
+	var radius: float = Planet.cfg.planet_radius
+	var radius_sq: float = radius * radius
 	for sample: Dictionary in _samples:
 		var age_s: float = now_s - float(sample["time"])
 		if age_s > max_age_s:
 			continue
 		var sample_dir: Vector3 = sample["dir"]
-		var distance_m: float = _surface_distance_m(sample_dir, direction)
-		if distance_m <= max_distance_m and distance_m < best_distance_m:
-			best_distance_m = distance_m
+		var distance_sq_m: float = sample_dir.distance_squared_to(direction) * radius_sq
+		if distance_sq_m <= max_distance_sq_m and distance_sq_m < best_distance_sq_m:
+			best_distance_sq_m = distance_sq_m
 			best = sample
 	return best
 
 
-## Same numerical fix for the inherited general queue dedupe path. This prevents a
-## nearby-but-not-identical aim/terrain request from suppressing the contact sample.
+## Same no-trig metric for the inherited general queue dedupe path.
 func _enqueue(direction: Vector3) -> void:
 	if direction.length_squared() <= 1e-12 or Planet.cfg == null:
 		return
 	var d: Vector3 = direction.normalized()
 	if not _find_sample(d, DEDUPE_DISTANCE_M, 0.08).is_empty():
 		return
+	var dedupe_sq_m: float = DEDUPE_DISTANCE_M * DEDUPE_DISTANCE_M
 	for queued: Vector3 in _pending:
-		if _surface_distance_m(queued, d) <= DEDUPE_DISTANCE_M:
+		if _surface_distance_sq_m(queued, d) <= dedupe_sq_m:
 			return
 	if _pending.size() >= MAX_PENDING:
 		_pending.pop_front()
@@ -68,8 +68,9 @@ func request_contact_height(direction: Vector3) -> void:
 	var d: Vector3 = direction.normalized()
 	if not _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S).is_empty():
 		return
+	var dedupe_sq_m: float = CONTACT_DEDUPE_DISTANCE_M * CONTACT_DEDUPE_DISTANCE_M
 	for queued: Vector3 in _pending:
-		if _surface_distance_m(queued, d) <= CONTACT_DEDUPE_DISTANCE_M:
+		if _surface_distance_sq_m(queued, d) <= dedupe_sq_m:
 			return
 	if _pending.size() >= MAX_PENDING:
 		_pending.pop_back()
