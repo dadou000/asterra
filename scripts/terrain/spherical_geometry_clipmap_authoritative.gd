@@ -11,11 +11,18 @@ const BudgetedTerrainClipmapCacheScript := preload(
 	"res://scripts/terrain/gpu_terrain_clipmap_cache_budgeted.gd")
 const STAGING_IDLE_RELEASE_S := 12.0
 const STAGING_KEEP_MOTION_M := 0.25
+# Far-ring occlusion performs a full-resolution depth reduction before testing its
+# coarse 128x72 tiles. It is temporal, conservative and fail-open, so running it
+# every render frame only creates compute/readback pressure at high FPS.
+const OCCLUSION_CADENCE_FRAMES: int = 6
 
 var _staging_idle_s := 0.0
 var _staging_allocations := 0
 var _staging_reuses := 0
 var _staging_idle_releases := 0
+var _occlusion_cadence_frame: int = OCCLUSION_CADENCE_FRAMES - 1
+var _occlusion_enabled_frames: int = 0
+var _occlusion_skipped_frames: int = 0
 
 
 func _ready() -> void:
@@ -28,8 +35,22 @@ func _ready() -> void:
 
 
 func _process(dt: float) -> void:
+	_update_occlusion_cadence()
 	super._process(dt)
 	_manage_staging_cache_lifetime(dt)
+
+
+func _update_occlusion_cadence() -> void:
+	if _occlusion_effect == null:
+		return
+	_occlusion_cadence_frame += 1
+	var run_now: bool = _occlusion_cadence_frame >= OCCLUSION_CADENCE_FRAMES
+	if run_now:
+		_occlusion_cadence_frame = 0
+		_occlusion_enabled_frames += 1
+	else:
+		_occlusion_skipped_frames += 1
+	_occlusion_effect.enabled = run_now
 
 
 func _replace_initial_active_cache() -> void:
@@ -158,6 +179,9 @@ func gpu_stream_stats() -> Dictionary:
 	out["terrain_cache_staging_reuses"] = _staging_reuses
 	out["terrain_cache_staging_idle_releases"] = _staging_idle_releases
 	out["terrain_cache_staging_sample_budget"] = 2048
+	out["terrain_occlusion_cadence_frames"] = OCCLUSION_CADENCE_FRAMES
+	out["terrain_occlusion_enabled_frames"] = _occlusion_enabled_frames
+	out["terrain_occlusion_skipped_frames"] = _occlusion_skipped_frames
 	out["deformation_overlay"] = false
 	out["deformation_overlay_visible"] = false
 	out["deformation_render_path"] = "authoritative_clipmap_lod"
