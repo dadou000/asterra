@@ -4,5 +4,12 @@
 * text=auto eol=lf
 
 *.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.glb binary
+*.fbx binary
+*.blend binary
+*.gltf text eol=lf
 *.svg text
 *.FCStd binary
