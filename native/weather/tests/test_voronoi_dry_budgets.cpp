@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 using asterra::weather::GeodesicVoronoiGrid;
 using asterra::weather::Vec3d;
@@ -61,6 +62,15 @@ int main() {
 			"dry rest energy is invalid");
 		require(rest_relative_aam == 0.0,
 			"zero-wind atmosphere has non-zero relative angular momentum");
+
+		// Exact hydrostatic rest must be a bitwise no-op for the numerical filter.
+		auto filtered_rest = rest;
+		const auto rest_filter = core.apply_divergence_damping(filtered_rest, 300.0);
+		require(!rest_filter.applied
+				&& rest_filter.rms_divergence_before_s1 == 0.0
+				&& rest_filter.rms_divergence_after_s1 == 0.0
+				&& filtered_rest.edge_normal_mps == rest.edge_normal_mps,
+			"divergence damping modified exact hydrostatic rest");
 
 		// The exact +/-Y pole cells must see the same balanced horizontal pressure
 		// force as every other point. This directly guards against accidental
@@ -136,6 +146,95 @@ int main() {
 		require(core.total_relative_axial_angular_momentum_kg_m2_s(solid) > 0.0,
 			"eastward solid-body flow has wrong angular-momentum sign");
 
+		// Divergence damping must leave a nearly non-divergent solid-body rotation
+		// essentially unchanged. This is the selectivity requirement: suppress
+		// compressive fast modes without acting like broad Rayleigh drag.
+		auto solid_filtered = solid;
+		const auto solid_filter = core.apply_divergence_damping(solid_filtered, 300.0);
+		double max_solid_filter_delta = 0.0;
+		for (size_t i = 0; i < solid.edge_normal_mps.size(); ++i) {
+			max_solid_filter_delta = std::max(max_solid_filter_delta,
+				std::abs(solid_filtered.edge_normal_mps[i] - solid.edge_normal_mps[i]));
+		}
+		require(solid_filter.rms_divergence_after_s1
+				<= solid_filter.rms_divergence_before_s1 * (1.0 + 1.0e-10) + 1.0e-18,
+			"divergence filter amplified solid-body divergence");
+		require(max_solid_filter_delta < 1.0e-3,
+			"divergence filter damps non-divergent solid-body rotation too strongly");
+
+		// A deliberately grid-scale divergent edge field must be strongly reduced
+		// without touching any conservative scalar. This isolates the filter from
+		// pressure dynamics and catches a sign error in +nu grad(div u).
+		auto noisy = rest;
+		std::vector<double> pseudo_phi(static_cast<size_t>(grid.cell_count()), 0.0);
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			pseudo_phi[static_cast<size_t>(c)] = std::sin(12.9898 * (c + 1.0))
+				+ 0.5 * std::sin(78.233 * (c + 0.25));
+		}
+		for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
+			for (int e = 0; e < grid.edge_count(); ++e) {
+				const auto &edge = grid.edge(e);
+				noisy.edge_normal_mps[static_cast<size_t>(k * grid.edge_count() + e)]
+					= 30.0 * (pseudo_phi[static_cast<size_t>(edge.cell_b)]
+						- pseudo_phi[static_cast<size_t>(edge.cell_a)]);
+			}
+		}
+		const auto noisy_scalars = noisy.layer_mass_kg_m2;
+		const auto noisy_theta = noisy.theta_mass_kg_k_m2;
+		const auto noisy_filter = core.apply_divergence_damping(noisy, 300.0);
+		require(noisy_filter.applied && noisy_filter.substeps >= 1,
+			"grid-scale divergent field did not activate damping");
+		require(noisy_filter.rms_divergence_after_s1
+				< 0.995 * noisy_filter.rms_divergence_before_s1,
+			"grid-scale divergent field was not measurably damped");
+		require(noisy.layer_mass_kg_m2 == noisy_scalars
+				&& noisy.theta_mass_kg_k_m2 == noisy_theta,
+			"divergence damping modified conservative thermodynamic scalars");
+
+		// Direct A/B pressure-pulse regression. Both cores begin with an identical
+		// unbalanced cosine-bell pressure anomaly. The horizontal solver and remap
+		// therefore produce the same conservative scalar state and accept the same
+		// timestep; only the filtered core may reduce the final divergent wind.
+		VoronoiDryCore pulse_filtered_core(grid, 9.80665, 8000.0, 7500.0,
+			0.0, {0.0, 1.0, 0.0});
+		VoronoiDryCore pulse_raw_core(grid, 9.80665, 8000.0, 7500.0,
+			0.0, {0.0, 1.0, 0.0});
+		pulse_raw_core.set_divergence_damping_strength(0.0);
+		auto pulse_filtered = pulse_filtered_core.make_isothermal_reference(PS, T);
+		auto pulse_raw = pulse_filtered;
+		constexpr double PULSE_RADIUS = 0.55;
+		for (int c = 0; c < grid.cell_count(); ++c) {
+			const double angle = std::acos(std::clamp(grid.cell(c).center.x, -1.0, 1.0));
+			if (angle >= PULSE_RADIUS) continue;
+			const double bell = 0.5 * (1.0 + std::cos(PI * angle / PULSE_RADIUS));
+			const double factor = 1.0 + 0.03 * bell;
+			for (int k = 0; k < VoronoiDryCore::LEVELS; ++k) {
+				const size_t i = static_cast<size_t>(k * grid.cell_count() + c);
+				pulse_filtered.layer_mass_kg_m2[i] *= factor;
+				pulse_filtered.theta_mass_kg_k_m2[i] *= factor;
+				pulse_raw.layer_mass_kg_m2[i] *= factor;
+				pulse_raw.theta_mass_kg_k_m2[i] *= factor;
+			}
+		}
+		const auto pulse_filtered_step = pulse_filtered_core.step(pulse_filtered, 300.0, 0.28);
+		const auto pulse_raw_step = pulse_raw_core.step(pulse_raw, 300.0, 0.28);
+		require(pulse_filtered_step.accepted_dt_s > 0.0
+				&& pulse_raw_step.accepted_dt_s > 0.0,
+			"pressure-pulse damping A/B timestep collapsed");
+		require(std::abs(pulse_filtered_step.accepted_dt_s
+				- pulse_raw_step.accepted_dt_s) < 1.0e-12,
+			"divergence damping changed the pressure-wave CFL timestep");
+		require(pulse_filtered.layer_mass_kg_m2 == pulse_raw.layer_mass_kg_m2
+				&& pulse_filtered.theta_mass_kg_k_m2 == pulse_raw.theta_mass_kg_k_m2,
+			"divergence damping changed pressure-pulse conservative scalars");
+		const double pulse_filtered_div =
+			pulse_filtered_core.rms_horizontal_divergence_s1(pulse_filtered);
+		const double pulse_raw_div = pulse_raw_core.rms_horizontal_divergence_s1(pulse_raw);
+		require(pulse_filtered_step.divergence_damping_applied,
+			"pressure pulse did not activate automatic core divergence damping");
+		require(pulse_filtered_div < 0.995 * pulse_raw_div,
+			"automatic divergence damping did not reduce pressure-pulse ringing");
+
 		// Characterize conservation through coupled pressure adjustment and the
 		// conservative coordinate remap. These are intentionally broad bring-up
 		// gates; measured values are printed so the limits can be tightened once
@@ -180,6 +279,15 @@ int main() {
 			<< "  polar rest max pressure accel: " << max_polar_rest_accel << " m/s2\n"
 			<< "  polar solid-body speeds: " << north_pole_speed << "/" << south_pole_speed << " m/s\n"
 			<< "  solid-body velocity reconstruction L2: " << velocity_relative_l2 << "\n"
+			<< "  solid-body filter max delta: " << max_solid_filter_delta << " m/s\n"
+			<< "  synthetic divergence RMS before/after: "
+			<< noisy_filter.rms_divergence_before_s1 << "/"
+			<< noisy_filter.rms_divergence_after_s1 << " 1/s\n"
+			<< "  pressure-pulse divergence raw/filtered: "
+			<< pulse_raw_div << "/" << pulse_filtered_div << " 1/s\n"
+			<< "  pressure-pulse damping max accel/Courant: "
+			<< pulse_filtered_step.max_divergence_damping_acceleration_mps2 << "/"
+			<< pulse_filtered_step.max_divergence_damping_courant << "\n"
 			<< "  3h steps: " << steps << "\n"
 			<< "  3h energy drift: " << energy_drift << "\n"
 			<< "  3h absolute AAM drift: " << aam_drift << "\n";
