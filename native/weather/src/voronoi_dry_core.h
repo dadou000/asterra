@@ -15,11 +15,34 @@ namespace asterra::weather {
 // or conservation gate fails. Optional moist pressure feedback changes only the
 // diagnosed pressure/geopotential force inside the horizontal SSPRK stages;
 // the conservative vertical coordinate remains dry-mass based.
+//
+// A scale-aware divergence damper is applied as a separate SSPRK3 momentum
+// source after coordinate remapping. It targets fast compressive/grid-scale
+// modes through +nu_D grad(div u), with nu_D = C_D * c * d_edge. Because it
+// changes only edge-normal wind, conservative scalar/tracer budgets are not
+// altered. The complete dry-core transaction rolls back if the filter becomes
+// anti-diffusive or numerically invalid.
 class VoronoiDryCore {
 public:
 	static constexpr int LEVELS = VoronoiDryDynamics::LEVELS;
+	static constexpr double DEFAULT_DIVERGENCE_DAMPING_STRENGTH = 0.12;
+	static constexpr double MAX_DIVERGENCE_DAMPING_STRENGTH = 0.35;
 	using State = VoronoiDryDynamics::State;
 	using MoistTracerIndices = VoronoiDryDynamics::MoistTracerIndices;
+
+	struct DivergenceDampingDiagnostics {
+		double requested_dt_s = 0.0;
+		double applied_dt_s = 0.0;
+		double strength = 0.0;
+		double rms_divergence_before_s1 = 0.0;
+		double rms_divergence_after_s1 = 0.0;
+		double max_abs_divergence_before_s1 = 0.0;
+		double max_abs_divergence_after_s1 = 0.0;
+		double max_damping_acceleration_mps2 = 0.0;
+		double max_diffusive_courant = 0.0;
+		int substeps = 0;
+		bool applied = false;
+	};
 
 	struct StepDiagnostics {
 		double requested_dt_s = 0.0;
@@ -41,8 +64,16 @@ public:
 		double max_coordinate_column_theta_mass_error = 0.0;
 		double max_coordinate_column_tracer_mass_error = 0.0;
 		double max_coordinate_edge_momentum_error = 0.0;
+		double divergence_rms_before_s1 = 0.0;
+		double divergence_rms_after_s1 = 0.0;
+		double max_abs_divergence_before_s1 = 0.0;
+		double max_abs_divergence_after_s1 = 0.0;
+		double max_divergence_damping_acceleration_mps2 = 0.0;
+		double max_divergence_damping_courant = 0.0;
+		int divergence_damping_substeps = 0;
 		int rejected_steps = 0;
 		bool coordinate_remap_applied = false;
+		bool divergence_damping_applied = false;
 	};
 
 	VoronoiDryCore(const GeodesicVoronoiGrid &grid,
@@ -85,6 +116,14 @@ public:
 		return dynamics_.moist_pressure_feedback_enabled();
 	}
 
+	// Dimensionless C_D in nu_D = C_D * c * d_edge. Zero disables damping.
+	// Values above MAX_DIVERGENCE_DAMPING_STRENGTH are rejected; strong values
+	// automatically subcycle the explicit SSPRK3 diffusion source.
+	void set_divergence_damping_strength(double strength);
+	double divergence_damping_strength() const {
+		return divergence_damping_strength_;
+	}
+
 	State make_isothermal_reference(double surface_pressure_pa,
 		double temperature_k) const {
 		return dynamics_.make_isothermal_reference(surface_pressure_pa, temperature_k);
@@ -123,6 +162,16 @@ public:
 		return dynamics_.reconstruct_vertex_relative_vorticity(state, level);
 	}
 
+	// Native C-grid horizontal divergence, one value per scalar Voronoi cell.
+	std::vector<double> horizontal_divergence_s1(const State &state,
+		int level) const;
+	// Area-weighted RMS over every cell and vertical level.
+	double rms_horizontal_divergence_s1(const State &state) const;
+	// Public mainly for diagnostics/regression tests; normal runtime stepping
+	// invokes the same source automatically after coordinate remapping.
+	DivergenceDampingDiagnostics apply_divergence_damping(
+		State &state, double dt_s) const;
+
 	double max_coordinate_mass_fraction_error(const State &state) const;
 
 	StepDiagnostics step(State &state, double requested_dt_s,
@@ -140,6 +189,7 @@ private:
 	const GeodesicVoronoiGrid *grid_ = nullptr;
 	VoronoiDryDynamics dynamics_;
 	VoronoiDryVerticalTransport vertical_;
+	double divergence_damping_strength_ = DEFAULT_DIVERGENCE_DAMPING_STRENGTH;
 
 	void refresh_extrema(const State &state, StepDiagnostics &diagnostics) const;
 };
