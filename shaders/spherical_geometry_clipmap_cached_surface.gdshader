@@ -250,6 +250,68 @@ vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
 	return vec3(0.0);
 }
 
+// The map inspector intentionally uses a categorical, high-chroma biome palette.
+// For terrain rendering we reconstruct that same palette spatially instead of
+// interpolating biome numbers. Four categorical texels are converted to colours
+// first, then blended with a controllable sigmoid. This gives a true smooth fade
+// at ecological borders without turning an entire coarse context cell into a
+// broad pastel band when viewed from orbit.
+vec3 terrain_biome_map_color(float biome) {
+	if (biome < 0.5) return vec3(0.05, 0.13, 0.33);
+	if (biome < 1.5) return vec3(0.10, 0.30, 0.50);
+	if (biome < 2.5) return vec3(0.93, 0.96, 1.00);
+	if (biome < 3.5) return vec3(0.62, 0.66, 0.58);
+	if (biome < 4.5) return vec3(0.16, 0.33, 0.22);
+	if (biome < 5.5) return vec3(0.62, 0.60, 0.52);
+	if (biome < 6.5) return vec3(0.62, 0.68, 0.34);
+	if (biome < 7.5) return vec3(0.20, 0.44, 0.20);
+	if (biome < 8.5) return vec3(0.12, 0.40, 0.26);
+	if (biome < 9.5) return vec3(0.55, 0.58, 0.26);
+	if (biome < 10.5) return vec3(0.68, 0.63, 0.36);
+	if (biome < 11.5) return vec3(0.83, 0.73, 0.47);
+	if (biome < 12.5) return vec3(0.72, 0.66, 0.28);
+	if (biome < 13.5) return vec3(0.32, 0.50, 0.20);
+	if (biome < 14.5) return vec3(0.10, 0.36, 0.16);
+	if (biome < 15.5) return vec3(0.28, 0.44, 0.34);
+	if (biome < 16.5) return vec3(0.55, 0.55, 0.58);
+	return vec3(0.44, 0.42, 0.40);
+}
+
+float terrain_biome_edge_weight(float t, float sharpness) {
+	t = clamp(t, 0.0, 1.0);
+	float a = pow(max(t, 1e-5), sharpness);
+	float b = pow(max(1.0 - t, 1e-5), sharpness);
+	return a / max(a + b, 1e-6);
+}
+
+float terrain_biome_id_texel(ivec2 texel, int layer, ivec2 size2) {
+	ivec2 p = clamp(texel, ivec2(0), size2 - ivec2(1));
+	return floor(texelFetch(u_ctx_biome, ivec3(p, layer), 0).r * 19.0 + 0.5);
+}
+
+vec3 terrain_biome_palette(vec3 dir, float sharpness) {
+	if (u_ctx_ready < 0.5 || u_ctx_face_res <= 0.5) {
+		return terrain_biome_map_color(7.0);
+	}
+	vec3 coord = asterra_context_coord(dir);
+	ivec3 size3 = textureSize(u_ctx_biome, 0);
+	vec2 p = coord.xy * vec2(size3.xy) - vec2(0.5);
+	ivec2 base = ivec2(floor(p));
+	vec2 f = fract(p);
+	f = vec2(terrain_biome_edge_weight(f.x, sharpness),
+		terrain_biome_edge_weight(f.y, sharpness));
+	int layer = int(coord.z + 0.5);
+	float id00 = terrain_biome_id_texel(base, layer, size3.xy);
+	float id10 = terrain_biome_id_texel(base + ivec2(1, 0), layer, size3.xy);
+	float id01 = terrain_biome_id_texel(base + ivec2(0, 1), layer, size3.xy);
+	float id11 = terrain_biome_id_texel(base + ivec2(1, 1), layer, size3.xy);
+	vec3 c00 = terrain_biome_map_color(id00);
+	vec3 c10 = terrain_biome_map_color(id10);
+	vec3 c01 = terrain_biome_map_color(id01);
+	vec3 c11 = terrain_biome_map_color(id11);
+	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
 void vertex() {
 	vec2 cell = UV - vec2(u_grid_cells * 0.5);
 	float cell_radius = length(cell);
@@ -470,6 +532,18 @@ void fragment() {
 			float scan_normal_w;
 			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
 				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
+			// Close range remains the physically classified/PBR surface. Once the
+			// terrain is seen as landscape rather than individual material, restore
+			// some of the biome inspector's chroma and categorical structure. The
+			// transition itself spans tens of kilometres, while ecological edges are
+			// sharpened independently so orbit does not look Gaussian-blurred.
+			float orbit_palette_w = smootherstep_range(12000.0, 90000.0, camera_dist);
+			if (orbit_palette_w > 0.001) {
+				float edge_sharpness = mix(1.35, 3.20, orbit_palette_w);
+				vec3 map_palette = terrain_biome_palette(up, edge_sharpness);
+				vec3 palette_anchor = mix(albedo, map_palette, 0.38);
+				albedo = mix(albedo, palette_anchor, orbit_palette_w);
+			}
 			if (scan_normal_w > 0.001) {
 				scan_normal_w *= mix(1.0, 0.78, v_micro_layer);
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
