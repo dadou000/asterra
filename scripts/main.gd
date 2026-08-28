@@ -2,6 +2,7 @@ extends Node3D
 ## Phase 1 harness: generate Asterra, keep terrain resident, walk it, dig it, save it.
 
 const AUTOSAVE := "phase1"
+const HUD_UPDATE_INTERVAL_S := 0.20
 
 var cfg: GenConfig
 var bake: PlanetBake
@@ -22,6 +23,7 @@ var carry := MaterialStock.new()
 var brush_radius := 2.5
 var dig_depth := 0.45
 var elapsed := 0.0
+var _hud_update_accum := 0.0
 var _aim: Dictionary = {}
 var _started := false
 var _rebaking := false
@@ -195,13 +197,16 @@ func _process(dt: float) -> void:
 		hud.show_progress("%s" % st["stage"], st["fraction"])
 		return
 	elapsed += dt
+	_hud_update_accum += dt
 	terrain.set_observer(player.world_pos)
 	_sync_sun_direction()
 	_aim = player.aim()
 	map.set_player_dir(player.up_dir())
 	sky_mat.set_shader_parameter("u_up", player.up_dir())
 	sky_mat.set_shader_parameter("u_camera_height", player.altitude())
-	hud.update_info(player, terrain, carry, brush_radius, _aim)
+	if _hud_update_accum >= HUD_UPDATE_INTERVAL_S:
+		_hud_update_accum = fmod(_hud_update_accum, HUD_UPDATE_INTERVAL_S)
+		hud.update_info(player, terrain, carry, brush_radius, _aim)
 
 func _on_menu_opened() -> void:
 	if player == null:
