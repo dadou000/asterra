@@ -13,6 +13,16 @@ extends "res://scripts/terrain/gpu_rendered_terrain_contact_query.gd"
 ## still prevents old values from lingering.
 
 
+## This service is diagnostic now; production contact uses TerrainHeightQuery.
+## Avoid capturing renderer/edit/deformation dictionaries every frame when nothing
+## has asked for a rendered-contact sample. Initialization still completes normally.
+func _process(dt: float) -> void:
+	if ready_state and _pending.is_empty() and _samples.is_empty() \
+			and not _dispatch_in_flight:
+		return
+	super._process(dt)
+
+
 func _update_source_serial(snapshot: Dictionary) -> void:
 	var render_params: Dictionary = snapshot["render"]
 	var edit_params: Dictionary = snapshot["edit"]
