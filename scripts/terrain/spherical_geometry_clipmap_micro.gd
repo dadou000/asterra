@@ -6,6 +6,10 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_global_gpu.gd"
 ## intentionally non-invasive: selected logical levels are collapsed only through
 ## their per-instance transforms. No debug path rewrites visible_instance_count or
 ## repacks production ring slots.
+##
+## The dense micro lattice is geometry topology, not the optional material
+## microrelief displacement. Turning microrelief off must never remove this lattice
+## or expose the deliberately sunken coarse L0 overlap surface underneath it.
 
 const MICRO_STEP_L0: float = 0.25
 const MICRO_GRID_CELLS: int = 256
@@ -108,8 +112,9 @@ func _apply_debug_level_transforms(force: bool) -> void:
 
 
 func _sync_micro_lod_state() -> void:
-	var want_micro: bool = _active_min_level == 0 \
-		and _debug_microrelief_enabled and debug_level_enabled(0)
+	# Keep the stable dense geometry whenever L0 is active. Microrelief only controls
+	# the shader displacement inside that geometry and must not control its topology.
+	var want_micro: bool = _active_min_level == 0 and debug_level_enabled(0)
 	if want_micro != _micro_l0_active:
 		_micro_l0_active = want_micro
 		_apply_center_mesh_variant()
