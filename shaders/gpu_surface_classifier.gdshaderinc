@@ -31,25 +31,37 @@ vec3 sc_soil_color(vec4 soil, vec4 surface) {
 	float silt = soil.g;
 	float clay = soil.b;
 	float organic = soil.a;
-	vec3 sandy = vec3(0.31, 0.235, 0.135);
-	vec3 silty = vec3(0.205, 0.155, 0.095);
-	vec3 clayey = vec3(0.245, 0.105, 0.055);
+	// Richer mineral colours than the original neutral palette. These still remain
+	// physically dark in linear space, but retain enough chroma to survive orbital
+	// atmospheric attenuation.
+	vec3 sandy = vec3(0.385, 0.225, 0.075);
+	vec3 silty = vec3(0.220, 0.120, 0.040);
+	vec3 clayey = vec3(0.315, 0.075, 0.028);
 	vec3 mineral = (sandy * sand + silty * silt + clayey * clay)
 		/ max(sand + silt + clay, 1e-4);
-	vec3 humus = vec3(0.055, 0.035, 0.018);
-	vec3 c = mix(mineral, humus, clamp(organic * 1.35, 0.0, 0.82));
-	return c * mix(1.0, 0.68, surface.g);
+	vec3 humus = vec3(0.028, 0.017, 0.006);
+	vec3 c = mix(mineral, humus, clamp(organic * 1.35, 0.0, 0.84));
+	return c * mix(1.0, 0.62, surface.g);
 }
 
 vec3 sc_vegetation_color(vec4 surface, vec4 climate, float biome) {
 	float wet = surface.g;
+	float biomass = surface.b;
 	float temp = asterra_ctx_temperature_c(climate);
 	float precip = asterra_ctx_precip_mm(climate);
 	float cold = clamp((5.0 - temp) / 18.0, 0.0, 1.0);
 	float dry = clamp((1.0 - wet) * (1.0 - precip / 1100.0), 0.0, 1.0);
-	vec3 green = mix(vec3(0.14, 0.19, 0.055), vec3(0.055, 0.145, 0.038), wet);
-	green = mix(green, vec3(0.115, 0.120, 0.070), cold * 0.55);
-	green = mix(green, vec3(0.205, 0.175, 0.070), dry * 0.75);
+
+	// Grassland stays comparatively bright, while sustained wet/biomass-rich
+	// vegetation collapses toward a genuinely deep forest green. This is continuous
+	// climate-driven colour, so it does not create categorical biome seams.
+	vec3 green = mix(vec3(0.185, 0.255, 0.042), vec3(0.030, 0.155, 0.030), wet);
+	float lush = smoothstep(450.0, 1350.0, precip)
+		* smoothstep(0.26, 0.76, biomass)
+		* smoothstep(0.22, 0.72, wet);
+	green = mix(green, vec3(0.010, 0.075, 0.016), lush * 0.92);
+	green = mix(green, vec3(0.095, 0.105, 0.045), cold * 0.55);
+	green = mix(green, vec3(0.285, 0.175, 0.030), dry * 0.82);
 	return green;
 }
 
@@ -121,22 +133,32 @@ vec4 sc_secondary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 	return clamp(vec4(mud, snow, scree, gravel), 0.0, 1.0);
 }
 
+vec3 sc_grade_albedo(vec3 c) {
+	float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+	// Stronger chroma plus a mild linear-space S-like contrast expansion. Keeping
+	// the pivot low is important because physically plausible terrain albedos live
+	// far below display-space middle grey.
+	c = mix(vec3(luma), c, 1.24);
+	c = vec3(0.115) + (c - vec3(0.115)) * 1.10;
+	return clamp(c, vec3(0.004), vec3(0.92));
+}
+
 vec3 sc_compose_albedo(vec4 primary, vec4 secondary, vec4 soil, vec4 surface,
 		vec4 climate, float biome, float rock_id) {
 	vec3 rock = sc_rock_color(rock_id);
 	vec3 soil_c = sc_soil_color(soil, surface);
 	vec3 vegetation = sc_vegetation_color(surface, climate, biome);
-	vec3 sand = mix(vec3(0.40, 0.315, 0.185), vec3(0.53, 0.42, 0.245), soil.r);
-	vec3 mud = soil_c * vec3(0.50, 0.46, 0.42);
-	vec3 snow = vec3(0.82, 0.86, 0.89);
-	vec3 scree = rock * 0.82 + vec3(0.035);
-	vec3 gravel = mix(rock, vec3(0.23, 0.215, 0.195), 0.48);
+	vec3 sand = mix(vec3(0.485, 0.285, 0.095), vec3(0.660, 0.445, 0.155), soil.r);
+	vec3 mud = soil_c * vec3(0.42, 0.36, 0.30);
+	vec3 snow = vec3(0.84, 0.89, 0.94);
+	vec3 scree = rock * 0.80 + vec3(0.026);
+	vec3 gravel = mix(rock, vec3(0.205, 0.185, 0.155), 0.44);
 
 	float total = dot(primary, vec4(1.0)) + dot(secondary, vec4(1.0));
-	if (total < 1e-4) return soil_c;
+	if (total < 1e-4) return sc_grade_albedo(soil_c);
 	vec3 c = rock * primary.r + soil_c * primary.g + vegetation * primary.b + sand * primary.a;
 	c += mud * secondary.r + snow * secondary.g + scree * secondary.b + gravel * secondary.a;
-	return c / total;
+	return sc_grade_albedo(c / total);
 }
 
 float sc_compose_roughness(vec4 primary, vec4 secondary, vec4 surface) {
