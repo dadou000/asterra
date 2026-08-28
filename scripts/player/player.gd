@@ -15,6 +15,16 @@ const JUMP_SPEED := 5.2
 const GRAVITY := 9.62
 const MOUSE_SENS := 0.0022
 
+# Aim is deliberately two-stage. The broad ray uses the cheap resident macro field;
+# only the final candidate requests centimetre-grade GPU terrain. The old path sent
+# 50-90 GPU-backed height lookups per rendered frame and each lookup searched the
+# query cache/pending queue, producing a strongly state-dependent CPU/compute load.
+const AIM_COARSE_CAPTURE_M: float = 16.0
+const AIM_COARSE_STEP_START_M: float = 0.5
+const AIM_COARSE_STEP_MAX_M: float = 6.0
+const AIM_COARSE_STEP_GROWTH: float = 1.12
+const AIM_BINARY_STEPS: int = 10
+
 @export var mode: Mode = Mode.FLY
 
 var world_pos: Vec3D = Vec3D.new(0, 0, 0)
@@ -166,40 +176,62 @@ func view_dir() -> Vector3:
 	return -camera.global_transform.basis.z
 
 
-## GPU-backed asynchronous terrain raymarch. Every gap sample requests the same
-## authoritative terrain field used for contact. While a sample is pending the
-## resident coarse height is used as a conservative fallback; subsequent frames
-## converge to the precise procedural/edit surface from the batched query cache.
+## Two-stage terrain raycast.
+##
+## Stage 1 walks the cheap resident macro field and uses a small capture envelope so
+## fine procedural relief cannot easily be skipped. Stage 2 submits only the final
+## candidate to the strict contact query, then applies one radial Newton correction.
+## This keeps the editing cursor converging to the authoritative GPU/deformed terrain
+## without flooding TerrainHeightQuery with dozens of unique probes every frame.
 func aim(max_range: float = 220.0) -> Dictionary:
-	var origin := world_pos
-	var ray := view_dir()
-	var step := 0.35
-	var t := 0.0
+	if Planet.cfg == null or not Planet.ready_state:
+		return {}
+	var origin: Vec3D = world_pos
+	var ray: Vector3 = view_dir()
+	var step: float = AIM_COARSE_STEP_START_M
+	var previous_t: float = 0.0
+	var t: float = 0.0
 	while t < max_range:
-		t += step
-		step = minf(step * 1.08, 4.0)
-		var gap := _gap_at(origin, ray, t)
-		if gap <= 0.0:
-			var lo := maxf(t - step, 0.0)
-			var hi := t
-			for _i in 18:
-				var mid := (lo + hi) * 0.5
-				if _gap_at(origin, ray, mid) <= 0.0:
+		previous_t = t
+		t = minf(t + step, max_range)
+		step = minf(step * AIM_COARSE_STEP_GROWTH, AIM_COARSE_STEP_MAX_M)
+		if _coarse_gap_at(origin, ray, t) <= AIM_COARSE_CAPTURE_M:
+			var lo: float = previous_t
+			var hi: float = t
+			for _i: int in AIM_BINARY_STEPS:
+				var mid: float = (lo + hi) * 0.5
+				if _coarse_gap_at(origin, ray, mid) <= AIM_COARSE_CAPTURE_M:
 					hi = mid
 				else:
 					lo = mid
-			var p := origin.add(Vec3D.from_v3(ray).mul(hi))
-			var d := p.normalized().to_v3()
-			var h := TerrainContactSampler.height(d)
-			var surface_p := Vec3D.from_v3(d).mul(Planet.cfg.planet_radius + h)
-			return {"world": surface_p, "dir": d, "distance": hi, "height": h}
+
+			var hit_t: float = hi
+			var p: Vec3D = origin.add(Vec3D.from_v3(ray).mul(hit_t))
+			var d: Vector3 = p.normalized().to_v3()
+			var coarse_h: float = TerrainContactSampler.coarse_height(d)
+			var h: float = TerrainContactSampler.contact_height(d, coarse_h)
+
+			# Correct the conservative capture-shell hit onto the best terrain height
+			# currently available. Once the asynchronous contact sample arrives this
+			# converges to the exact procedural/edit/deformation surface on the next frame.
+			var precise_gap: float = p.length() - (Planet.cfg.planet_radius + h)
+			var radial_rate: float = ray.dot(d)
+			if absf(radial_rate) > 0.08:
+				hit_t = clampf(hit_t - precise_gap / radial_rate, 0.0, max_range)
+				p = origin.add(Vec3D.from_v3(ray).mul(hit_t))
+				d = p.normalized().to_v3()
+				coarse_h = TerrainContactSampler.coarse_height(d)
+				h = TerrainContactSampler.contact_height(d, coarse_h)
+
+			var surface_p: Vec3D = Vec3D.from_v3(d).mul(Planet.cfg.planet_radius + h)
+			return {"world": surface_p, "dir": d, "distance": hit_t, "height": h}
 	return {}
 
 
-func _gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
-	var p := origin.add(Vec3D.from_v3(ray).mul(t))
-	var d := p.normalized().to_v3()
-	var h := TerrainContactSampler.height(d)
+func _coarse_gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
+	var p: Vec3D = origin.add(Vec3D.from_v3(ray).mul(t))
+	var d: Vector3 = p.normalized().to_v3()
+	var h: float = TerrainContactSampler.coarse_height(d)
 	return p.length() - (Planet.cfg.planet_radius + h)
 
 
