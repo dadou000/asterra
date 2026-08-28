@@ -12,6 +12,9 @@ extends "res://scripts/terrain/gpu_terrain_height_query.gd"
 const CONTACT_CACHE_DISTANCE_M := 0.15
 const CONTACT_CACHE_AGE_S := 0.45
 const CONTACT_DEDUPE_DISTANCE_M := 0.10
+const SAMPLE_PRUNE_INTERVAL_MS: int = 250
+
+var _next_sample_prune_msec: int = 0
 
 
 func _surface_distance_sq_m(a: Vector3, b: Vector3) -> float:
@@ -102,3 +105,14 @@ func has_contact_height(direction: Vector3) -> bool:
 ## autoload therefore means a genuine local contact sample.
 func has_fresh_height(direction: Vector3) -> bool:
 	return has_contact_height(direction)
+
+
+## Cache lookups already reject stale samples by age, so physical removal does not
+## need to scan the entire sample array every rendered frame. Staggering housekeeping
+## removes a small but measurable CPU pulse without changing contact freshness.
+func _prune_samples() -> void:
+	var now_msec: int = Time.get_ticks_msec()
+	if now_msec < _next_sample_prune_msec:
+		return
+	_next_sample_prune_msec = now_msec + SAMPLE_PRUNE_INTERVAL_MS
+	super._prune_samples()
