@@ -68,9 +68,11 @@ const int MACRO_MAX_MIP = 5;
 const float NORMAL_SAMPLE_SPACING_MULT = 2.0;
 const float NORMAL_SAMPLE_MIN_M = 1.5;
 
-const float RING_HANDOFF_BIAS_MIN_M = 0.02;
-const float RING_HANDOFF_BIAS_MAX_M = 0.35;
-const float RING_HANDOFF_BIAS_SPACING = 0.02;
+// The coarser annulus is only a hidden overlap surface. Keep it a few millimetres
+// below the exact child-morphed surface to order depth without opening a visible gap.
+const float RING_HANDOFF_BIAS_MIN_M = 0.004;
+const float RING_HANDOFF_BIAS_MAX_M = 0.025;
+const float RING_HANDOFF_BIAS_SPACING = 0.001;
 
 const float MICRO_HANDOFF_START_L0_CELLS = 24.0;
 const float MICRO_OUTER_L0_CELLS = 32.0;
@@ -286,8 +288,13 @@ void vertex() {
 		float child_morph = fine_morph_weight(child_cell);
 		vec2 child_sample = terrain_cached_sample_with_morph(
 			d, child_level, child_morph, anchor_offset_m, stable_displacement);
-		macro_h = mix(macro_h, child_sample.x, handoff_w);
-		h = mix(h, child_sample.y, handoff_w);
+		// The child already morphs continuously to this parent over exactly the
+		// shared annulus. A second independent parent->child blend produces two
+		// different overlapping height sheets (with either sign depending on relief).
+		// Clone the child's final morphed height instead; at q=0.5 child_morph=1, so
+		// this naturally converges back to the pure parent with no discontinuity.
+		macro_h = child_sample.x;
+		h = child_sample.y;
 		normal_level = child_level;
 		normal_morph = child_morph;
 	}
