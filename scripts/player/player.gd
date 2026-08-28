@@ -46,6 +46,7 @@ func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 	Frames.rebase(world_pos)
 	_sync_transform()
 	TerrainContactSampler.request_height(d)
+	TerrainContactSampler.request_contact_height(d)
 	moved.emit(world_pos)
 
 
@@ -56,7 +57,9 @@ func altitude() -> float:
 	return TerrainContactSampler.altitude_msl(world_pos)
 
 func ground_height() -> float:
-	return TerrainContactSampler.height(up_dir())
+	var d: Vector3 = up_dir()
+	var broad_height: float = TerrainContactSampler.height(d)
+	return TerrainContactSampler.contact_height(d, broad_height)
 
 func height_above_ground() -> float:
 	return TerrainContactSampler.altitude_agl(world_pos)
@@ -83,6 +86,7 @@ func _physics_process(dt: float) -> void:
 		return
 	var up := up_dir()
 	TerrainContactSampler.request_surface(up)
+	TerrainContactSampler.request_contact_height(up)
 	var basis_local := _local_basis(up)
 	var fwd: Vector3 = basis_local[0]
 	var right: Vector3 = basis_local[1]
@@ -109,7 +113,8 @@ func _physics_process(dt: float) -> void:
 			wish = wish.normalized()
 			world_pos = world_pos.add(Vec3D.from_v3(wish).mul(speed * dt))
 		up = world_pos.normalized().to_v3()
-		var gh := TerrainContactSampler.height(up)
+		var broad_height: float = TerrainContactSampler.height(up)
+		var gh: float = TerrainContactSampler.contact_height(up, broad_height)
 		var target_r := Planet.cfg.planet_radius + gh + EYE_HEIGHT
 		var r := world_pos.length()
 		vertical_speed -= GRAVITY * dt
@@ -210,4 +215,5 @@ func restore(s: Dictionary) -> void:
 	Frames.rebase(world_pos)
 	_sync_transform()
 	TerrainContactSampler.request_surface(up_dir())
+	TerrainContactSampler.request_contact_height(up_dir())
 	moved.emit(world_pos)
