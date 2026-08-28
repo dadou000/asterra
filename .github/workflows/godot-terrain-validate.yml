@@ -10,6 +10,11 @@ on:
       - "scripts/terrain/**"
       - "scripts/gen/**"
       - "scripts/ui/planet_map.gd"
+      - "assets/scatter/**"
+      - "tools/fetch_scatter_assets.py"
+      - "tools/validate_scatter_manifest.py"
+      - "tools/optimize_scatter_assets.py"
+      - "tools/scatter_optimize_blender.py"
       - "project.godot"
       - "tests/validate_terrain_shader.gd"
       - "tests/validate_generation_model.gd"
@@ -23,6 +28,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate scatter asset manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/validate_scatter_manifest.py
 
       - name: Install Godot 4.7.1
         shell: bash
