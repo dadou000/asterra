@@ -15,6 +15,10 @@ const GEOMORPH_MODE_NAMES := [
 	"Geology / biome — rock ID / biome ID / erodibility",
 	"Hydrology — flow direction / discharge / deposition",
 ]
+const HEIGHT_DIAGNOSTIC_INTERVAL_S: float = 0.10
+const AGL_CURSOR_COLOR := Color(0.08, 0.92, 1.0, 0.78)
+const GPU_CURSOR_COLOR := Color(1.0, 0.80, 0.08, 0.78)
+const PHYSICS_CURSOR_COLOR := Color(1.0, 0.12, 0.66, 0.78)
 
 var terrain: PlanetTerrain # retained because main.gd assigns it
 
@@ -30,12 +34,27 @@ var sink_scale := 2.0: set = set_sink_scale
 var geomorph_mode := 0: set = set_geomorph_mode
 var aerial_strength := 0.78: set = set_aerial_strength
 
+# Height diagnostics are opt-in so opening the debug menu cannot silently add GPU
+# readback/contact-query work. Each provider has its own independent cursor.
+var agl_height_cursor := false
+var gpu_height_cursor := false
+var physics_height_cursor := false
+
 var _wireframes_ready := false
 var _status: Label
 var _gpu_controls_installed := false
 var _gpu_status_label: Label
 var _aerial_label: Label
 var _gpu_status_accum := 0.0
+var _height_status_label: Label
+var _height_debug_accum := 0.0
+var _height_cursor_root: Node3D
+var _agl_marker: MeshInstance3D
+var _gpu_marker: MeshInstance3D
+var _physics_marker: MeshInstance3D
+var _agl_sample: Dictionary = {}
+var _gpu_sample: Dictionary = {}
+var _physics_sample: Dictionary = {}
 
 
 func _ready() -> void:
@@ -54,13 +73,24 @@ func _ready() -> void:
 	call_deferred("_install_gpu_debug_controls")
 
 
+func _exit_tree() -> void:
+	if _height_cursor_root != null and is_instance_valid(_height_cursor_root):
+		_height_cursor_root.queue_free()
+
+
 func _process(delta: float) -> void:
+	_sync_height_cursor_positions()
 	if not _gpu_controls_installed:
 		return
 	_gpu_status_accum += delta
 	if _gpu_status_accum >= 0.25:
 		_gpu_status_accum = fmod(_gpu_status_accum, 0.25)
 		_refresh_gpu_control_status()
+	if _height_diagnostics_enabled():
+		_height_debug_accum += delta
+		if _height_debug_accum >= HEIGHT_DIAGNOSTIC_INTERVAL_S:
+			_height_debug_accum = fmod(_height_debug_accum, HEIGHT_DIAGNOSTIC_INTERVAL_S)
+			_refresh_height_diagnostics()
 
 
 func _clipmap() -> Node:
@@ -69,6 +99,18 @@ func _clipmap() -> Node:
 
 func _scatter() -> Node:
 	return get_node_or_null("/root/TerrainScatter")
+
+
+func _main_node() -> Node:
+	return get_parent()
+
+
+func _player_node() -> Node:
+	var main: Node = _main_node()
+	if main == null:
+		return null
+	var value: Variant = main.get("player")
+	return value as Node if value is Node else null
 
 
 func _install_gpu_debug_controls() -> void:
@@ -135,9 +177,39 @@ func _install_gpu_debug_controls() -> void:
 	box.add_child(aerial_slider)
 	box.add_child(_menu_note("Optical-path terrain veil. Near ground remains clear; contrast is progressively lost toward the horizon."))
 
+	_install_height_diagnostic_controls(box)
 	_gpu_controls_installed = true
 	_update_aerial_label()
 	_refresh_gpu_control_status()
+	_refresh_height_diagnostics()
+
+
+func _install_height_diagnostic_controls(box: VBoxContainer) -> void:
+	box.add_child(HSeparator.new())
+	var title := Label.new()
+	title.text = "Terrain height agreement cursors"
+	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_color_override("font_color", Color(0.86, 0.91, 1.0))
+	box.add_child(title)
+
+	_height_status_label = Label.new()
+	_height_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_height_status_label.add_theme_font_size_override("font_size", 11)
+	_height_status_label.add_theme_color_override("font_color", Color(0.74, 0.82, 0.92))
+	box.add_child(_height_status_label)
+
+	_add_gpu_toggle(box, "CYAN — AGL ground cursor", agl_height_cursor,
+		"Directly below the player at the surface implied by the player's reported AGL.",
+		func(value: bool): set_agl_height_cursor(value))
+	_add_gpu_toggle(box, "YELLOW — GPU terrain cursor", gpu_height_cursor,
+		"At the nearest rendered clipmap lattice vertex to the terrain point under the crosshair.",
+		func(value: bool): set_gpu_height_cursor(value))
+	_add_gpu_toggle(box, "MAGENTA — physics terrain cursor", physics_height_cursor,
+		"Strict physics/contact height at exactly the same lattice direction as the yellow GPU cursor.",
+		func(value: bool): set_physics_height_cursor(value))
+	box.add_child(_menu_note(
+		"GPU/physics sampling is capped at 10 Hz. MICRO BASE means the selected vertex is in the dense micro lattice; the current rendered-contact query includes cache/morph/edits/deformation/surface bias but not the material microrelief displacement."))
+	_create_height_cursor_markers()
 
 
 func _menu_note(text: String) -> Label:
@@ -160,6 +232,262 @@ func _add_gpu_toggle(box: VBoxContainer, text: String, initial: bool,
 	button.toggled.connect(callback)
 	box.add_child(button)
 	box.add_child(_menu_note(note))
+
+
+func _create_height_cursor_markers() -> void:
+	if _height_cursor_root != null and is_instance_valid(_height_cursor_root):
+		return
+	var main: Node = _main_node()
+	if main == null:
+		return
+	_height_cursor_root = Node3D.new()
+	_height_cursor_root.name = "TerrainHeightDiagnosticCursors"
+	main.add_child(_height_cursor_root)
+	_agl_marker = _make_height_marker("AGLGroundCursor", AGL_CURSOR_COLOR, 0.30)
+	_gpu_marker = _make_height_marker("GPUTerrainCursor", GPU_CURSOR_COLOR, 0.24)
+	_physics_marker = _make_height_marker("PhysicsTerrainCursor", PHYSICS_CURSOR_COLOR, 0.18)
+	_height_cursor_root.add_child(_agl_marker)
+	_height_cursor_root.add_child(_gpu_marker)
+	_height_cursor_root.add_child(_physics_marker)
+
+
+func _make_height_marker(marker_name: String, color: Color,
+		radius: float) -> MeshInstance3D:
+	var marker := MeshInstance3D.new()
+	marker.name = marker_name
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 12
+	sphere.rings = 6
+	marker.mesh = sphere
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = Color(color.r, color.g, color.b)
+	marker.material_override = material
+	marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	marker.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	marker.visible = false
+	return marker
+
+
+func _height_diagnostics_enabled() -> bool:
+	return agl_height_cursor or gpu_height_cursor or physics_height_cursor
+
+
+func _refresh_height_diagnostics() -> void:
+	if _height_status_label == null:
+		return
+	var lines := PackedStringArray()
+	lines.append("CYAN AGL under player  •  YELLOW GPU vertex  •  MAGENTA physics @ GPU vertex")
+	var player: Node = _player_node()
+	if player == null or Planet.cfg == null or not Planet.ready_state:
+		_clear_height_samples()
+		lines.append("Player/planet not ready")
+		_height_status_label.text = "\n".join(lines)
+		return
+
+	if agl_height_cursor:
+		_refresh_agl_diagnostic(player, lines)
+	else:
+		_agl_sample.clear()
+		_set_marker_sample(_agl_marker, _agl_sample, false)
+
+	if gpu_height_cursor or physics_height_cursor:
+		_refresh_look_height_diagnostics(lines)
+	else:
+		_gpu_sample.clear()
+		_physics_sample.clear()
+		_set_marker_sample(_gpu_marker, _gpu_sample, false)
+		_set_marker_sample(_physics_marker, _physics_sample, false)
+
+	if not _height_diagnostics_enabled():
+		lines.append("All height cursors are off")
+	_height_status_label.text = "\n".join(lines)
+
+
+func _refresh_agl_diagnostic(player: Node, lines: PackedStringArray) -> void:
+	if not player.has_method("altitude") or not player.has_method("height_above_ground") \
+			or not player.has_method("up_dir"):
+		_agl_sample.clear()
+		_set_marker_sample(_agl_marker, _agl_sample, false)
+		lines.append("CYAN AGL: unavailable")
+		return
+	var altitude_msl: float = float(player.call("altitude"))
+	var agl_m: float = float(player.call("height_above_ground"))
+	var dir_value: Variant = player.call("up_dir")
+	if not (dir_value is Vector3) or not is_finite(altitude_msl) or not is_finite(agl_m):
+		_agl_sample.clear()
+		_set_marker_sample(_agl_marker, _agl_sample, false)
+		lines.append("CYAN AGL: pending")
+		return
+	var direction: Vector3 = (dir_value as Vector3).normalized()
+	var implied_ground_msl: float = altitude_msl - agl_m
+	_agl_sample = {"dir": direction, "height": implied_ground_msl}
+	_set_marker_sample(_agl_marker, _agl_sample, true)
+	lines.append("CYAN AGL %.3f m  → implied ground %.3f m MSL" % [agl_m, implied_ground_msl])
+
+
+func _refresh_look_height_diagnostics(lines: PackedStringArray) -> void:
+	var main: Node = _main_node()
+	var clipmap: Node = _clipmap()
+	if main == null or clipmap == null or not clipmap.has_method("debug_closest_rendered_vertex"):
+		_clear_look_height_samples()
+		lines.append("LOOK vertex: clipmap diagnostic unavailable")
+		return
+	var aim_value: Variant = main.get("_aim")
+	if not (aim_value is Dictionary):
+		_clear_look_height_samples()
+		lines.append("LOOK vertex: no terrain under crosshair")
+		return
+	var aim: Dictionary = aim_value
+	var aim_dir_value: Variant = aim.get("dir", null)
+	if aim.is_empty() or not (aim_dir_value is Vector3):
+		_clear_look_height_samples()
+		lines.append("LOOK vertex: no terrain under crosshair")
+		return
+	var vertex_value: Variant = clipmap.call(
+		"debug_closest_rendered_vertex", (aim_dir_value as Vector3).normalized())
+	if not (vertex_value is Dictionary):
+		_clear_look_height_samples()
+		lines.append("LOOK vertex: outside active clipmap")
+		return
+	var vertex: Dictionary = vertex_value
+	var vertex_dir_value: Variant = vertex.get("dir", null)
+	if vertex.is_empty() or not (vertex_dir_value is Vector3):
+		_clear_look_height_samples()
+		lines.append("LOOK vertex: outside active clipmap")
+		return
+	var vertex_dir: Vector3 = (vertex_dir_value as Vector3).normalized()
+	var level: int = int(vertex.get("level", -1))
+	var spacing_m: float = float(vertex.get("spacing_m", 0.0))
+	var snap_error_m: float = float(vertex.get("target_error_m", 0.0))
+	var is_micro: bool = bool(vertex.get("micro", false))
+	var kind: String = "MICRO BASE L0" if is_micro else "L%d" % level
+	lines.append("LOOK vertex %s  spacing %.3f m  aim snap %.3f m" % [
+		kind, spacing_m, snap_error_m])
+
+	var gpu_height: float = NAN
+	if gpu_height_cursor:
+		var rendered_query: Node = get_node_or_null("/root/RenderedTerrainContactQuery")
+		if rendered_query != null and rendered_query.has_method("height_for_direction"):
+			gpu_height = float(rendered_query.call("height_for_direction", vertex_dir, NAN))
+		if is_finite(gpu_height):
+			_gpu_sample = {"dir": vertex_dir, "height": gpu_height}
+			_set_marker_sample(_gpu_marker, _gpu_sample, true)
+			lines.append("YELLOW GPU %.3f m MSL" % gpu_height)
+		else:
+			_gpu_sample.clear()
+			_set_marker_sample(_gpu_marker, _gpu_sample, false)
+			lines.append("YELLOW GPU: pending")
+	else:
+		_gpu_sample.clear()
+		_set_marker_sample(_gpu_marker, _gpu_sample, false)
+
+	var physics_height: float = NAN
+	if physics_height_cursor:
+		physics_height = TerrainContactSampler.contact_height(vertex_dir, NAN)
+		if is_finite(physics_height):
+			_physics_sample = {"dir": vertex_dir, "height": physics_height}
+			_set_marker_sample(_physics_marker, _physics_sample, true)
+			var delta_text: String = ""
+			if is_finite(gpu_height):
+				var delta_gpu: float = physics_height - gpu_height
+				delta_text = "  Δphys-gpu %s%.3f m" % [
+					"+" if delta_gpu >= 0.0 else "", delta_gpu]
+			lines.append("MAGENTA PHYS %.3f m MSL%s" % [physics_height, delta_text])
+		else:
+			_physics_sample.clear()
+			_set_marker_sample(_physics_marker, _physics_sample, false)
+			lines.append("MAGENTA PHYS: pending exact contact")
+	else:
+		_physics_sample.clear()
+		_set_marker_sample(_physics_marker, _physics_sample, false)
+
+
+func _set_marker_sample(marker: MeshInstance3D, sample: Dictionary,
+		enabled: bool) -> void:
+	if marker == null or not is_instance_valid(marker):
+		return
+	marker.visible = enabled and not sample.is_empty()
+
+
+func _sync_height_cursor_positions() -> void:
+	if Planet.cfg == null or _height_cursor_root == null \
+			or not is_instance_valid(_height_cursor_root):
+		return
+	_sync_one_height_cursor(_agl_marker, _agl_sample, agl_height_cursor)
+	_sync_one_height_cursor(_gpu_marker, _gpu_sample, gpu_height_cursor)
+	_sync_one_height_cursor(_physics_marker, _physics_sample, physics_height_cursor)
+
+
+func _sync_one_height_cursor(marker: MeshInstance3D, sample: Dictionary,
+		enabled: bool) -> void:
+	if marker == null or not is_instance_valid(marker):
+		return
+	if not enabled or sample.is_empty():
+		marker.visible = false
+		return
+	var dir_value: Variant = sample.get("dir", null)
+	if not (dir_value is Vector3):
+		marker.visible = false
+		return
+	var height: float = float(sample.get("height", NAN))
+	if not is_finite(height):
+		marker.visible = false
+		return
+	var direction: Vector3 = (dir_value as Vector3).normalized()
+	var radius: float = Planet.cfg.planet_radius + height
+	var world_pos := Vec3D.new(
+		direction.x * radius, direction.y * radius, direction.z * radius)
+	marker.global_position = Frames.to_render(world_pos)
+	marker.visible = true
+
+
+func _clear_look_height_samples() -> void:
+	_gpu_sample.clear()
+	_physics_sample.clear()
+	_set_marker_sample(_gpu_marker, _gpu_sample, false)
+	_set_marker_sample(_physics_marker, _physics_sample, false)
+
+
+func _clear_height_samples() -> void:
+	_agl_sample.clear()
+	_clear_look_height_samples()
+	_set_marker_sample(_agl_marker, _agl_sample, false)
+
+
+func set_agl_height_cursor(value: bool) -> void:
+	agl_height_cursor = value
+	_height_debug_accum = HEIGHT_DIAGNOSTIC_INTERVAL_S
+	if not value:
+		_agl_sample.clear()
+		_set_marker_sample(_agl_marker, _agl_sample, false)
+	_refresh_height_diagnostics()
+	_update_status()
+
+
+func set_gpu_height_cursor(value: bool) -> void:
+	gpu_height_cursor = value
+	_height_debug_accum = HEIGHT_DIAGNOSTIC_INTERVAL_S
+	if not value:
+		_gpu_sample.clear()
+		_set_marker_sample(_gpu_marker, _gpu_sample, false)
+	_refresh_height_diagnostics()
+	_update_status()
+
+
+func set_physics_height_cursor(value: bool) -> void:
+	physics_height_cursor = value
+	_height_debug_accum = HEIGHT_DIAGNOSTIC_INTERVAL_S
+	if not value:
+		_physics_sample.clear()
+		_set_marker_sample(_physics_marker, _physics_sample, false)
+	_refresh_height_diagnostics()
+	_update_status()
 
 
 func _refresh_gpu_control_status() -> void:
@@ -294,6 +622,10 @@ func reset_inspection() -> void:
 	sink_scale = 2.0
 	geomorph_mode = 0
 	aerial_strength = 0.78
+	agl_height_cursor = false
+	gpu_height_cursor = false
+	physics_height_cursor = false
+	_clear_height_samples()
 	var clipmap: Node = _clipmap()
 	if clipmap != null:
 		if clipmap.has_method("set_debug_freeze"):
@@ -319,6 +651,7 @@ func reset_inspection() -> void:
 	if ocean != null and ocean.has_method("set_debug_stable_displacement"):
 		ocean.set_debug_stable_displacement(true)
 	_update_aerial_label()
+	_refresh_height_diagnostics()
 	_update_status()
 
 
@@ -342,6 +675,8 @@ func _update_status() -> void:
 		modes.append("PBR OFF")
 	if not gpu_scatter:
 		modes.append("SCATTER OFF")
+	if _height_diagnostics_enabled():
+		modes.append("HEIGHT CURSORS")
 	if geomorph_mode > 0 and geomorph_mode < GEOMORPH_MODE_NAMES.size():
 		modes.append("GPU %s" % GEOMORPH_MODE_NAMES[geomorph_mode].to_upper())
 	if absf(aerial_strength - 0.78) > 0.001:
