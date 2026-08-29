@@ -13,6 +13,8 @@ on:
       - "scenes/world_authoring/**"
       - "scripts/ui/planet_map.gd"
       - "scripts/ui/start_menu.gd"
+      - "scripts/ui/start_menu_planet_studio.gd"
+      - "scenes/StartMenu.tscn"
       - "assets/scatter/**"
       - "tools/fetch_scatter_assets.py"
       - "tools/validate_scatter_manifest.py"
@@ -112,29 +114,50 @@ jobs:
             exit 1
           fi
 
-      - name: Exclude runtime scatter payloads from script smoke test
+      - name: Build isolated script test project
         shell: bash
         run: |
           set -euo pipefail
-          if [ -d assets/scatter/runtime ]; then
-            rm -rf /tmp/asterra-scatter-runtime-ci
-            mv assets/scatter/runtime /tmp/asterra-scatter-runtime-ci
-            mkdir -p assets/scatter/runtime
-          fi
+          rm -rf /tmp/asterra-script-ci
+          mkdir -p /tmp/asterra-script-ci/scripts /tmp/asterra-script-ci/shaders /tmp/asterra-script-ci/tests /tmp/asterra-script-ci/scenes/world_authoring
+          cp -R scripts/. /tmp/asterra-script-ci/scripts/
+          cp -R shaders/. /tmp/asterra-script-ci/shaders/
+          cp tests/validate_terrain_scripts.gd /tmp/asterra-script-ci/tests/
+          cp tests/validate_generation_model.gd /tmp/asterra-script-ci/tests/
+          cp tests/validate_world_authoring_phase0.gd /tmp/asterra-script-ci/tests/
+          cp -R scenes/world_authoring/. /tmp/asterra-script-ci/scenes/world_authoring/
+          cp world.tres /tmp/asterra-script-ci/world.tres
+          cat > /tmp/asterra-script-ci/project.godot <<'EOF'
+          ; Script-only project. Deliberately excludes game art, generated maps and
+          ; GDExtensions so parser/class-registry tests remain deterministic and fast.
+          config_version=5
 
-      - name: Import project script classes
+          [application]
+          config/name="Asterra Script CI"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import isolated script classes
         shell: bash
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-script-ci
           set +e
-          timeout 90 "$GODOT" --headless --path . --import > /tmp/asterra-project-import.log 2>&1
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/asterra-script-import.log 2>&1
           status=$?
           set -e
-          tail -n 220 /tmp/asterra-project-import.log || true
+          tail -n 220 /tmp/asterra-script-import.log || true
           if [ "$status" -ne 0 ]; then
-            echo "Asterra project import failed with status $status"
+            echo "Asterra isolated script import failed with status $status"
             exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script" /tmp/asterra-script-import.log; then
+            echo "Godot reported a script parse/load error while building the isolated class registry."
+            exit 1
           fi
 
       - name: Validate Planet Studio phase 0
@@ -142,8 +165,9 @@ jobs:
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-script-ci
           set +e
-          timeout 90 "$GODOT" --headless --path . --script res://tests/validate_world_authoring_phase0.gd > /tmp/world-authoring-phase0.log 2>&1
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_world_authoring_phase0.gd > /tmp/world-authoring-phase0.log 2>&1
           status=$?
           set -e
           cat /tmp/world-authoring-phase0.log
@@ -165,8 +189,9 @@ jobs:
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-script-ci
           set +e
-          timeout 90 "$GODOT" --headless --path . --script res://tests/validate_terrain_scripts.gd > /tmp/terrain-gdscript.log 2>&1
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_terrain_scripts.gd > /tmp/terrain-gdscript.log 2>&1
           status=$?
           set -e
           cat /tmp/terrain-gdscript.log
@@ -188,8 +213,9 @@ jobs:
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-script-ci
           set +e
-          timeout 90 "$GODOT" --headless --path . --script res://tests/validate_generation_model.gd > /tmp/generation-model.log 2>&1
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_generation_model.gd > /tmp/generation-model.log 2>&1
           status=$?
           set -e
           cat /tmp/generation-model.log
