@@ -16,6 +16,20 @@ var _cap_rejects: int = 0
 var _cap_accepts: int = 0
 
 
+func _process(delta: float) -> void:
+	super._process(delta)
+	# The query parent originally wrapped its shared clock to preserve float
+	# precision. Different river currents have different temporal frequencies, so
+	# no finite common wrap can preserve every phase. Re-publish unwrapped engine
+	# elapsed time at the active runtime layer; normal editor/game sessions retain
+	# ample float precision and never suffer a periodic wave discontinuity.
+	_author_time_s = float(Time.get_ticks_msec()) * 0.001
+	for record: Dictionary in _records:
+		var material: ShaderMaterial = record.get("material") as ShaderMaterial
+		if material != null:
+			material.set_shader_parameter("u_author_time_s", _author_time_s)
+
+
 func _rebuild() -> void:
 	super._rebuild()
 	_rebuild_query_caps()
@@ -131,4 +145,5 @@ func stats() -> Dictionary:
 	out["query_cap_rejects"] = _cap_rejects
 	out["query_cap_accepts"] = _cap_accepts
 	out["query_spatial_pruning"] = true
+	out["wave_clock_unwrapped"] = true
 	return out
