@@ -75,23 +75,34 @@ extends Resource
 func import_from_resource(source: Resource) -> void:
 	if source == null:
 		return
-	var source_names: Dictionary = {}
-	for source_property: Dictionary in source.get_property_list():
-		source_names[StringName(source_property.get("name", ""))] = true
+	var source_names: Dictionary = _script_variable_names(source)
 	for own_property: Dictionary in get_property_list():
+		if not _is_script_variable(own_property):
+			continue
 		var property_name := StringName(own_property.get("name", ""))
-		if property_name == &"script" or not source_names.has(property_name):
+		if not source_names.has(property_name):
 			continue
 		set(property_name, source.get(property_name))
 
 func copy_to_resource(target: Resource) -> void:
 	if target == null:
 		return
-	var target_names: Dictionary = {}
-	for target_property: Dictionary in target.get_property_list():
-		target_names[StringName(target_property.get("name", ""))] = true
+	var target_names: Dictionary = _script_variable_names(target)
 	for own_property: Dictionary in get_property_list():
+		if not _is_script_variable(own_property):
+			continue
 		var property_name := StringName(own_property.get("name", ""))
-		if property_name == &"script" or not target_names.has(property_name):
+		if not target_names.has(property_name):
 			continue
 		target.set(property_name, get(property_name))
+
+func _script_variable_names(resource: Resource) -> Dictionary:
+	var result: Dictionary = {}
+	for property: Dictionary in resource.get_property_list():
+		if _is_script_variable(property):
+			result[StringName(property.get("name", ""))] = true
+	return result
+
+func _is_script_variable(property: Dictionary) -> bool:
+	var usage := int(property.get("usage", 0))
+	return (usage & PROPERTY_USAGE_SCRIPT_VARIABLE) != 0
