@@ -10,8 +10,14 @@ extends "res://scripts/world_authoring/world_authoring_editor_live.gd"
 ## Continuous biome painting is batched for the same reason: no per-motion full
 ## system snapshots or recovery-file writes.
 
+# Kept outside the base enum so this pass can remain an additive editor layer.
+# The base placement machinery accepts integer modes, while this subclass owns the
+# erase-specific routing/preview/status behavior.
+const SCULPT_ERASE_MODE: int = 6
+
 var _sculpt_transaction_active: bool = false
 var _sculpt_transaction_body_id: String = ""
+var _erase_strength: float = 0.35
 
 var _biome_transaction_active: bool = false
 var _biome_transaction_body_id: String = ""
@@ -51,13 +57,24 @@ func _build_terrain_page() -> void:
 	status.custom_minimum_size.x = 300.0
 	status.modulate = Color(0.64, 0.76, 0.86)
 	persistence_row.add_child(status)
+	var erase_button := Button.new()
+	erase_button.text = "STOP ERASE" if _placement_mode == SCULPT_ERASE_MODE else "ERASE AUTHORED"
+	erase_button.tooltip_text = "Brush hand-authored height deltas back toward zero without changing procedural terrain."
+	erase_button.pressed.connect(func() -> void:
+		_set_placement_mode(PlacementMode.NONE if _placement_mode == SCULPT_ERASE_MODE else SCULPT_ERASE_MODE)
+		_refresh_current_category()
+	)
+	persistence_row.add_child(erase_button)
 	var clear_button := Button.new()
 	clear_button.text = "CLEAR SCULPT LAYER"
 	clear_button.disabled = tile_count <= 0 and Deltas.is_empty()
 	clear_button.pressed.connect(_clear_sculpt_layer)
 	persistence_row.add_child(clear_button)
-	_add_note("A complete sculpt drag is one Planet Studio history action. Sculpt deltas are saved with presets and swapped when selecting another celestial body. Biome drag painting is also committed once per drag instead of autosaving every stamp.")
-	_add_note("Viewport shortcuts while sculpting: mouse wheel changes radius, Shift+wheel changes strength, and holding Shift temporarily inverts Raise/Lower. Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) use Planet Studio history.")
+	_add_number_field("Erase strength", _erase_strength, 0.01, 1.0, 0.01, "", func(value: float) -> void:
+		_erase_strength = value
+	)
+	_add_note("A complete sculpt drag is one Planet Studio history action. Sculpt deltas are saved with presets and swapped when selecting another celestial body. ERASE AUTHORED reveals the seed-generated surface again and prunes fully empty sparse tiles.")
+	_add_note("Viewport shortcuts while sculpting: mouse wheel changes radius, Shift+wheel changes Raise/Lower strength, and holding Shift temporarily inverts Raise/Lower. Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) use Planet Studio history.")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -84,7 +101,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				and (wheel_event.button_index == MOUSE_BUTTON_WHEEL_UP \
 				or wheel_event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
 			var direction_scale: float = 1.12 if wheel_event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12
-			if wheel_event.shift_pressed:
+			if wheel_event.shift_pressed and _placement_mode != SCULPT_ERASE_MODE:
 				_sculpt_strength_m = clampf(_sculpt_strength_m * direction_scale, 0.01, 20.0)
 				_set_status("Sculpt strength %.3f m/stamp." % _sculpt_strength_m)
 			else:
@@ -123,19 +140,79 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _is_sculpt_placement() -> bool:
 	return _placement_mode == PlacementMode.SCULPT_RAISE \
-		or _placement_mode == PlacementMode.SCULPT_LOWER
+		or _placement_mode == PlacementMode.SCULPT_LOWER \
+		or _placement_mode == SCULPT_ERASE_MODE
+
+
+func _continuous_drag_mode() -> bool:
+	return super._continuous_drag_mode() or _placement_mode == SCULPT_ERASE_MODE
 
 
 func _placement_status_text() -> String:
+	if _placement_mode == SCULPT_ERASE_MODE:
+		return "SCULPT ERASE — LMB restores generated terrain • wheel radius • RMB/Esc stop"
 	if _is_sculpt_placement():
 		var base: String = super._placement_status_text()
 		return "%s • Shift invert • wheel radius • Shift+wheel strength" % base
 	return super._placement_status_text()
 
 
+func _place_current_hit(continuous: bool) -> void:
+	if _placement_mode != SCULPT_ERASE_MODE:
+		super._place_current_hit(continuous)
+		return
+	if _last_hit.is_empty():
+		_set_status("Viewport pick did not intersect terrain.")
+		return
+	var direction: Vector3 = _last_hit.get("dir", Vector3.ZERO)
+	if direction.length_squared() < 0.99:
+		return
+	_place_erase_stroke(direction, continuous)
+	_update_preview()
+
+
 func _place_sculpt_stroke(direction: Vector3, continuous: bool, sign_value: float) -> void:
 	var effective_sign: float = -sign_value if Input.is_key_pressed(KEY_SHIFT) else sign_value
 	super._place_sculpt_stroke(direction, continuous, effective_sign)
+
+
+func _place_erase_stroke(direction: Vector3, continuous: bool) -> void:
+	if Planet.cfg == null:
+		return
+	var planet_radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
+	if continuous and _last_sculpt_dir.length_squared() > 0.99:
+		var arc_distance: float = acos(clampf(_last_sculpt_dir.dot(direction), -1.0, 1.0)) * planet_radius
+		if arc_distance < maxf(_sculpt_radius_m * 0.16, 0.2):
+			return
+	var changed: int = int(Deltas.erase_radial_brush(
+		direction,
+		_sculpt_radius_m,
+		_erase_strength,
+		_sculpt_hardness,
+		planet_radius
+	))
+	if changed <= 0:
+		return
+	_last_sculpt_dir = direction
+	_set_status("Erased authored terrain: %d samples • %.1f m radius • %.0f%% strength." % [changed, _sculpt_radius_m, _erase_strength * 100.0])
+
+
+func _update_preview() -> void:
+	if _placement_mode != SCULPT_ERASE_MODE:
+		super._update_preview()
+		return
+	if _preview_mesh == null:
+		return
+	_preview_mesh.clear_surfaces()
+	if _navigation_active:
+		return
+	if not _last_hit.is_empty():
+		var direction: Vector3 = _last_hit.get("dir", Vector3.ZERO)
+		var height: float = float(_last_hit.get("height", 0.0))
+		_draw_surface_ring(direction, height, _sculpt_radius_m, Color(0.92, 0.92, 0.98, 1.0))
+		if _sculpt_hardness > 0.02:
+			_draw_surface_ring(direction, height, maxf(0.1, _sculpt_radius_m * _sculpt_hardness), Color(0.62, 0.66, 0.74, 0.85))
+	_draw_selected_water_feature()
 
 
 func _place_biome_stroke(direction: Vector3, continuous: bool) -> void:
