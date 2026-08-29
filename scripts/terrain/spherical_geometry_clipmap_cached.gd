@@ -124,19 +124,13 @@ func _observer_surface_state() -> Dictionary:
 
 
 func _project_surface_to_active_anchor(surface_world: Vec3D) -> Vector2:
-	var rel: Vec3D = surface_world.sub(_stable_anchor_world)
-	return Vector2(
-		rel.x * _anchor_right.x + rel.y * _anchor_right.y + rel.z * _anchor_right.z,
-		rel.x * _anchor_up.x + rel.y * _anchor_up.y + rel.z * _anchor_up.z)
+	return _project_surface_gnomonic(
+		surface_world, _anchor_dir, _anchor_right, _anchor_up, Planet.cfg.planet_radius)
 
 
 func _project_surface_to_pending_anchor(surface_world: Vec3D) -> Vector2:
-	var rel: Vec3D = surface_world.sub(_pending_anchor_world)
-	return Vector2(
-		rel.x * _pending_anchor_right.x + rel.y * _pending_anchor_right.y
-			+ rel.z * _pending_anchor_right.z,
-		rel.x * _pending_anchor_up.x + rel.y * _pending_anchor_up.y
-			+ rel.z * _pending_anchor_up.z)
+	return _project_surface_gnomonic(surface_world, _pending_anchor_dir,
+		_pending_anchor_right, _pending_anchor_up, Planet.cfg.planet_radius)
 
 
 func _resolve_parent_reanchor(previous_dir: Vector3, previous_world: Vec3D,
@@ -176,15 +170,13 @@ func _resolve_parent_reanchor(previous_dir: Vector3, previous_world: Vec3D,
 	_handoff_delayed_parent_resets += 1
 
 
-func _project_surface_to_anchor(surface_world: Vec3D, anchor_world: Vec3D,
+func _project_surface_to_anchor(surface_world: Vec3D, _anchor_world: Vec3D,
 		anchor_dir: Vector3) -> Vector2:
 	var tangent: Array = CubeSphere.tangent_basis(anchor_dir)
 	var right: Vector3 = tangent[0]
 	var up: Vector3 = tangent[1]
-	var rel: Vec3D = surface_world.sub(anchor_world)
-	return Vector2(
-		rel.x * right.x + rel.y * right.y + rel.z * right.z,
-		rel.x * up.x + rel.y * up.y + rel.z * up.z)
+	return _project_surface_gnomonic(
+		surface_world, anchor_dir, right, up, Planet.cfg.planet_radius)
 
 
 func _republish_anchor_state(observer_state: Dictionary) -> void:
@@ -283,14 +275,13 @@ func _start_handoff(target_offset: Vector2, retarget: bool) -> void:
 	_handoff_quiet_frames = 0
 	_pending_target_offset = target_offset
 
-	# Exact inverse of tangent-plane projection onto a sphere. Using normalize(R*n +
-	# tangent) would introduce a measurable position error near a 65 km boundary.
+	# target_offset is gnomonic because it is predicted in the exact same coordinate
+	# system as the visible lattice. Use the exact inverse of that mapping; the old
+	# sqrt(R^2-|t|^2) orthographic inverse was paired with R*sin(theta) and was the
+	# second half of the centre-drift bug.
 	var radius: float = Planet.cfg.planet_radius
-	var tangent_sq: float = target_offset.length_squared()
-	var radial: float = sqrt(maxf(radius * radius - tangent_sq, 1.0))
-	var target_surface: Vector3 = _anchor_dir * radial \
-		+ _anchor_right * target_offset.x + _anchor_up * target_offset.y
-	_pending_anchor_dir = target_surface.normalized()
+	_pending_anchor_dir = _gnomonic_direction_for_offset(
+		_anchor_dir, _anchor_right, _anchor_up, target_offset, radius)
 	var tangent: Array = CubeSphere.tangent_basis(_pending_anchor_dir)
 	_pending_anchor_right = tangent[0]
 	_pending_anchor_up = tangent[1]
