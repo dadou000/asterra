@@ -3,14 +3,17 @@ extends Node
 ## Installs Planet Studio over Main when launched in planet_studio mode and owns
 ## the deliberate boundary between staged authoring resources and the production
 ## one-planet runtime. Apply can rebuild the currently selected terrestrial body;
-## sparse sculpt data is synchronized immediately while biome/water/graph runtime
-## compilers remain staged behind their dedicated rasterization passes.
+## sparse sculpt data is synchronized immediately and biome paint is mirrored into
+## a high-resolution non-destructive near-field preview. Water/graph runtime
+## compilers remain staged behind their dedicated passes.
 
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase2.gd")
+const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 
 var _main: Node
 var _layer: CanvasLayer
 var _editor: Control
+var _biome_preview: Node
 var _opened: bool = false
 
 func _ready() -> void:
@@ -49,6 +52,17 @@ func _open_live_editor(player: Node) -> void:
 	live_editor.connect("runtime_apply_requested", Callable(self, "_on_runtime_apply_requested"))
 	_layer.add_child(live_editor)
 	_editor = live_editor
+
+	# The live editor is now inside the tree, so its transactional session has been
+	# initialized by _ready(). Bind the disposable near-field biome rasterizer to
+	# exactly that staged session instead of keeping a second authoring model.
+	var session_value: Variant = live_editor.get("_session")
+	if session_value is WorldAuthoringSession:
+		var biome_preview: Node = BIOME_PREVIEW_SCRIPT.new()
+		biome_preview.name = "PlanetStudioBiomePreview"
+		biome_preview.call("bind", session_value as WorldAuthoringSession, _main)
+		add_child(biome_preview)
+		_biome_preview = biome_preview
 	set_process(false)
 
 func _set_existing_ui_visible(visible: bool) -> void:
@@ -101,6 +115,8 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	Frames.day_seconds = maxf(0.001, absf(float(body.get(&"sidereal_rotation_period_s"))))
 	Planet.configure(cfg)
 	_update_environment_radius(cfg)
+	if _biome_preview != null and _biome_preview.has_method("mark_dirty"):
+		_biome_preview.call("mark_dirty")
 	if bool(_main.get("_rebaking")):
 		_set_editor_status("A terrain rebuild is already running.")
 		return
