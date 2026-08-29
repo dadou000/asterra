@@ -5,12 +5,34 @@ extends "res://scripts/world_authoring/authored_water_runtime.gd"
 ## Rendering remains owned by AuthoredWaterRuntime. This final layer exposes the
 ## same staged lake polygons and river Bezier ribbons as a cheap CPU query so
 ## buoyancy, swimming, particles and debugging can agree on feature membership,
-## still-water altitude, local depth and authored current before the dedicated
-## batched GPU inland-water physics path is added.
+## surface altitude, local depth and authored current. The query also evaluates
+## the exact compact wave field used by authored_water_surface.gdshader; both CPU
+## and shader consume the same explicit runtime clock rather than independent TIME
+## sources, preventing visual/physics phase drift.
 
 const RIVER_QUERY_COARSE_STEPS: int = 12
 const RIVER_QUERY_REFINE_STEPS: int = 7
 const RIVER_QUERY_DT: float = 0.0025
+const WAVE_TIME_WRAP_S: float = 4096.0
+const WAVE_AXIS_A := Vector3(0.827, 0.201, 0.525)
+const WAVE_AXIS_B := Vector3(-0.436, 0.331, 0.837)
+const LAKE_WAVE_AMPLITUDE_M: float = 0.095
+const RIVER_WAVE_AMPLITUDE_SCALE: float = 0.24
+const LAKE_WAVELENGTH_M: float = 18.0
+const RIVER_WAVELENGTH_M: float = 5.5
+
+var _author_time_s: float = 0.0
+
+
+func _process(delta: float) -> void:
+	_author_time_s = fposmod(float(Time.get_ticks_msec()) * 0.001, WAVE_TIME_WRAP_S)
+	super._process(delta)
+	# The base renderer has already synchronized all ordinary terrain/water
+	# resources. Publish the same explicit clock to every authored-water material.
+	for record: Dictionary in _records:
+		var material: ShaderMaterial = record.get("material") as ShaderMaterial
+		if material != null:
+			material.set_shader_parameter("u_author_time_s", _author_time_s)
 
 
 func query_render_point(render_point: Vector3) -> Dictionary:
@@ -59,6 +81,7 @@ func query_all_world_point(world_point: Vec3D) -> Array[Dictionary]:
 		else:
 			match = _query_lake(feature, direction, point_altitude_m, body_radius)
 		if not match.is_empty():
+			_apply_wave_state(match, water, direction, body_radius)
 			out.append(match)
 	return out
 
@@ -209,11 +232,15 @@ func _result_dictionary(feature: Resource, feature_type: int, direction: Vector3
 		"feature_type": feature_type,
 		"direction": direction,
 		"point_altitude_m": point_altitude_m,
+		"mean_surface_altitude_m": surface_altitude_m,
 		"surface_altitude_m": surface_altitude_m,
 		"submergence_m": surface_altitude_m - point_altitude_m,
 		"depth_m": depth_m,
 		"current_m_s": current_m_s,
 		"current_velocity": current_velocity,
+		"surface_normal": direction,
+		"wave_height_m": 0.0,
+		"wave_slope": 0.0,
 		"edge_distance_m": edge_distance_m,
 		"lateral_ratio": lateral_ratio,
 		"river_segment": segment,
@@ -222,6 +249,59 @@ func _result_dictionary(feature: Resource, feature_type: int, direction: Vector3
 		"wave_frequency_scale": maxf(float(feature.get(&"wave_frequency_scale")), 0.0),
 		"clipmap_simulation_enabled": bool(feature.get(&"clipmap_simulation_enabled")),
 	}
+
+
+func _apply_wave_state(sample: Dictionary, water: Resource, direction: Vector3,
+		body_radius: float) -> void:
+	var feature_type: int = int(sample.get("feature_type", 0))
+	var feature_amplitude: float = maxf(float(sample.get("wave_amplitude_scale", 1.0)), 0.0)
+	var global_amplitude: float = maxf(float(water.get(&"wave_amplitude_scale")), 0.0)
+	var amplitude_m: float = LAKE_WAVE_AMPLITUDE_M * feature_amplitude * global_amplitude
+	if feature_type == 1:
+		amplitude_m *= RIVER_WAVE_AMPLITUDE_SCALE
+	if amplitude_m <= 1e-7:
+		sample["surface_normal"] = direction
+		return
+
+	var feature_frequency: float = maxf(float(sample.get("wave_frequency_scale", 1.0)), 0.001)
+	var global_frequency: float = maxf(float(water.get(&"wave_frequency_scale")), 0.001)
+	var frequency_scale: float = feature_frequency * global_frequency
+	var base_wavelength_m: float = RIVER_WAVELENGTH_M if feature_type == 1 else LAKE_WAVELENGTH_M
+	var wavelength_m: float = base_wavelength_m / maxf(frequency_scale, 0.001)
+	var k: float = TAU / maxf(wavelength_m, 0.25)
+	var current_speed: float = maxf(float(sample.get("current_m_s", 0.0)), 0.0)
+	var time_speed: float = 1.8 + current_speed * 0.22 if feature_type == 1 else 1.15
+	var mean_altitude_m: float = float(sample.get("mean_surface_altitude_m", 0.0))
+	# Match the tiny render-only surface bias in the phase coordinate without
+	# treating that anti-z-fighting offset as physical water elevation.
+	var render_bias_m: float = RIVER_SURFACE_BIAS_M if feature_type == 1 else LAKE_SURFACE_BIAS_M
+	var phase_point: Vector3 = direction * (body_radius + mean_altitude_m + render_bias_m)
+	var phase_a: float = phase_point.dot(WAVE_AXIS_A) * k + _author_time_s * time_speed
+	var phase_b: float = phase_point.dot(WAVE_AXIS_B) * (k * 1.73) \
+		- _author_time_s * (time_speed * 0.73)
+	var wave_height_m: float = (sin(phase_a) * 0.72 + sin(phase_b) * 0.28) * amplitude_m
+	var tangent_a: Vector3 = _safe_wave_tangent(direction, WAVE_AXIS_A)
+	var tangent_b: Vector3 = _safe_wave_tangent(direction, WAVE_AXIS_B)
+	var slope_a: float = cos(phase_a) * amplitude_m * k * 0.72
+	var slope_b: float = cos(phase_b) * amplitude_m * (k * 1.73) * 0.28
+	var surface_normal: Vector3 = (direction - tangent_a * slope_a - tangent_b * slope_b).normalized()
+
+	var base_depth_m: float = float(sample.get("depth_m", 0.0))
+	var surface_altitude_m: float = mean_altitude_m + wave_height_m
+	sample["wave_height_m"] = wave_height_m
+	sample["wave_slope"] = absf(slope_a) + absf(slope_b)
+	sample["surface_normal"] = surface_normal
+	sample["surface_altitude_m"] = surface_altitude_m
+	sample["submergence_m"] = surface_altitude_m - float(sample.get("point_altitude_m", 0.0))
+	sample["depth_m"] = maxf(base_depth_m + wave_height_m, 0.0)
+
+
+func _safe_wave_tangent(up: Vector3, axis: Vector3) -> Vector3:
+	var tangent: Vector3 = axis - up * axis.dot(up)
+	if tangent.length_squared() < 1e-8:
+		var fallback: Vector3 = Vector3.UP if absf(up.y) < 0.92 else Vector3.RIGHT
+		tangent = fallback - up * fallback.dot(up)
+	return tangent.normalized()
 
 
 func _resolved_water_depth(direction: Vector3, surface_altitude_m: float,
