@@ -3,13 +3,20 @@ extends "res://scripts/world_authoring/world_authoring_editor_live.gd"
 ## Transactional live-world terrain authoring.
 ##
 ## The base live editor performs immediate Deltas sculpting for zero-latency visual
-## feedback. This layer turns those runtime edits into proper Planet Studio state:
-## one mouse stroke becomes one undo entry, sparse data round-trips through presets,
-## each celestial body owns its own sculpt layer, and Undo/Redo/Revert immediately
-## republish the matching Deltas state to rendering and terrain contact.
+## feedback. This layer turns runtime edits into proper Planet Studio state: one
+## mouse drag becomes one history action, sparse sculpt data round-trips through
+## presets, each celestial body owns its own sculpt layer, and Undo/Redo/Revert
+## immediately republish the matching Deltas state to rendering and contact.
+## Continuous biome painting is batched for the same reason: no per-motion full
+## system snapshots or recovery-file writes.
 
 var _sculpt_transaction_active: bool = false
 var _sculpt_transaction_body_id: String = ""
+
+var _biome_transaction_active: bool = false
+var _biome_transaction_body_id: String = ""
+var _biome_transaction_layer_id: String = ""
+var _pending_biome_strokes: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -49,36 +56,117 @@ func _build_terrain_page() -> void:
 	clear_button.disabled = tile_count <= 0 and Deltas.is_empty()
 	clear_button.pressed.connect(_clear_sculpt_layer)
 	persistence_row.add_child(clear_button)
-	_add_note("A complete drag is committed as one Planet Studio history action. Sculpt deltas are saved with presets and swapped when selecting another celestial body; the procedural generator itself remains untouched.")
+	_add_note("A complete sculpt drag is one Planet Studio history action. Sculpt deltas are saved with presets and swapped when selecting another celestial body. Biome drag painting is also committed once per drag instead of autosaving every stamp.")
+	_add_note("Viewport shortcuts while sculpting: mouse wheel changes radius, Shift+wheel changes strength, and holding Shift temporarily inverts Raise/Lower. Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) use Planet Studio history.")
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	var should_finish_transaction := false
+	if event is InputEventKey:
+		var shortcut_key := event as InputEventKey
+		if shortcut_key.pressed and not shortcut_key.echo \
+				and (shortcut_key.ctrl_pressed or shortcut_key.meta_pressed):
+			if shortcut_key.keycode == KEY_Z:
+				if shortcut_key.shift_pressed:
+					_on_redo_pressed()
+				else:
+					_on_undo_pressed()
+				get_viewport().set_input_as_handled()
+				return
+			if shortcut_key.keycode == KEY_Y:
+				_on_redo_pressed()
+				get_viewport().set_input_as_handled()
+				return
+
+	if event is InputEventMouseButton:
+		var wheel_event := event as InputEventMouseButton
+		if wheel_event.pressed and _is_sculpt_placement() \
+				and _is_live_viewport_point(wheel_event.position) \
+				and (wheel_event.button_index == MOUSE_BUTTON_WHEEL_UP \
+				or wheel_event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			var direction_scale: float = 1.12 if wheel_event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12
+			if wheel_event.shift_pressed:
+				_sculpt_strength_m = clampf(_sculpt_strength_m * direction_scale, 0.01, 20.0)
+				_set_status("Sculpt strength %.3f m/stamp." % _sculpt_strength_m)
+			else:
+				_sculpt_radius_m = clampf(_sculpt_radius_m * direction_scale, 0.5, 150.0)
+				_set_status("Sculpt radius %.2f m." % _sculpt_radius_m)
+			_update_preview()
+			get_viewport().set_input_as_handled()
+			return
+
+	var should_finish_transactions := false
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT:
-			if mouse_button.pressed and _is_sculpt_placement() and _is_live_viewport_point(mouse_button.position):
-				_begin_sculpt_transaction()
-			elif not mouse_button.pressed and _sculpt_transaction_active:
-				should_finish_transaction = true
+			if mouse_button.pressed and _is_live_viewport_point(mouse_button.position):
+				if _is_sculpt_placement():
+					_begin_sculpt_transaction()
+				elif _placement_mode == PlacementMode.BIOME:
+					_begin_biome_transaction()
+			elif not mouse_button.pressed \
+					and (_sculpt_transaction_active or _biome_transaction_active):
+				should_finish_transactions = true
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed \
-				and _sculpt_transaction_active:
-			should_finish_transaction = true
+				and (_sculpt_transaction_active or _biome_transaction_active):
+			should_finish_transactions = true
 	elif event is InputEventKey:
 		var key_event := event as InputEventKey
 		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_ESCAPE \
-				and _sculpt_transaction_active:
-			should_finish_transaction = true
+				and (_sculpt_transaction_active or _biome_transaction_active):
+			should_finish_transactions = true
 
 	super._unhandled_input(event)
 
-	if should_finish_transaction:
-		_commit_sculpt_transaction()
+	if should_finish_transactions:
+		_commit_interactive_transactions()
 
 
 func _is_sculpt_placement() -> bool:
 	return _placement_mode == PlacementMode.SCULPT_RAISE \
 		or _placement_mode == PlacementMode.SCULPT_LOWER
+
+
+func _placement_status_text() -> String:
+	if _is_sculpt_placement():
+		var base: String = super._placement_status_text()
+		return "%s • Shift invert • wheel radius • Shift+wheel strength" % base
+	return super._placement_status_text()
+
+
+func _place_sculpt_stroke(direction: Vector3, continuous: bool, sign_value: float) -> void:
+	var effective_sign: float = -sign_value if Input.is_key_pressed(KEY_SHIFT) else sign_value
+	super._place_sculpt_stroke(direction, continuous, effective_sign)
+
+
+func _place_biome_stroke(direction: Vector3, continuous: bool) -> void:
+	var terrain: Resource = _session.active_terrain_profile() as Resource
+	if terrain == null:
+		return
+	var layer: Resource = terrain.call("find_biome_layer", _selected_biome_layer_id) as Resource
+	if layer == null:
+		_set_status("Select a biome paint layer before painting.")
+		return
+	if not _biome_transaction_active:
+		_begin_biome_transaction()
+	var radius_m: float = float(layer.get(&"brush_radius_m"))
+	if continuous and _last_paint_dir.length_squared() > 0.99:
+		var body: Resource = _session.active_body() as Resource
+		var planet_radius: float = maxf(float(body.get(&"radius_m")), 1.0) if body != null else maxf(float(Planet.cfg.planet_radius), 1.0)
+		var arc_distance: float = acos(clampf(_last_paint_dir.dot(direction), -1.0, 1.0)) * planet_radius
+		if arc_distance < maxf(radius_m * 0.22, 0.25):
+			return
+	var biome_id: int = int(layer.get(&"active_biome_id"))
+	var hardness: float = float(layer.get(&"brush_hardness"))
+	var opacity: float = float(layer.get(&"brush_opacity"))
+	_pending_biome_strokes.append({
+		"dir": direction.normalized(),
+		"biome": biome_id,
+		"radius": radius_m,
+		"hardness": hardness,
+		"opacity": opacity,
+	})
+	_last_paint_dir = direction
+	_set_status("Painting %s • %d pending stamp(s) • %.1f m radius." % [BIOME_NAMES[biome_id], _pending_biome_strokes.size(), radius_m])
 
 
 func _begin_sculpt_transaction() -> void:
@@ -88,11 +176,25 @@ func _begin_sculpt_transaction() -> void:
 	_sculpt_transaction_body_id = _active_body_id()
 
 
+func _begin_biome_transaction() -> void:
+	if _biome_transaction_active:
+		return
+	_biome_transaction_active = true
+	_biome_transaction_body_id = _active_body_id()
+	_biome_transaction_layer_id = _selected_biome_layer_id
+	_pending_biome_strokes.clear()
+
+
+func _commit_interactive_transactions() -> void:
+	_commit_sculpt_transaction()
+	_commit_biome_transaction()
+
+
 func _commit_sculpt_transaction() -> void:
 	if not _sculpt_transaction_active:
 		return
 	_sculpt_transaction_active = false
-	var started_body_id := _sculpt_transaction_body_id
+	var started_body_id: String = _sculpt_transaction_body_id
 	_sculpt_transaction_body_id = ""
 	if started_body_id.is_empty() or started_body_id != _active_body_id():
 		_sync_runtime_sculpt_from_profile()
@@ -109,8 +211,55 @@ func _commit_sculpt_transaction() -> void:
 	_refresh_toolbar()
 
 
+func _commit_biome_transaction() -> void:
+	if not _biome_transaction_active:
+		return
+	_biome_transaction_active = false
+	var started_body_id: String = _biome_transaction_body_id
+	var started_layer_id: String = _biome_transaction_layer_id
+	_biome_transaction_body_id = ""
+	_biome_transaction_layer_id = ""
+	if _pending_biome_strokes.is_empty():
+		return
+	if started_body_id != _active_body_id() or started_layer_id != _selected_biome_layer_id:
+		_pending_biome_strokes.clear()
+		return
+	var terrain: Resource = _session.active_terrain_profile() as Resource
+	if terrain == null:
+		_pending_biome_strokes.clear()
+		return
+	var layer: Resource = terrain.call("find_biome_layer", started_layer_id) as Resource
+	if layer == null:
+		_pending_biome_strokes.clear()
+		return
+	var strokes: Array[Dictionary] = _pending_biome_strokes.duplicate(true)
+	_pending_biome_strokes.clear()
+	_session.stage_action("Paint biome stroke", func() -> void:
+		for stroke: Dictionary in strokes:
+			layer.call(
+				"add_stroke",
+				stroke["dir"],
+				int(stroke["biome"]),
+				float(stroke["radius"]),
+				float(stroke["hardness"]),
+				float(stroke["opacity"])
+			)
+	, SESSION_SCRIPT.ApplyScope.TILES)
+	_set_status("Committed %d biome paint stamp(s) as one history action." % strokes.size())
+	_refresh_toolbar()
+
+
+func _discard_interactive_transactions() -> void:
+	_sculpt_transaction_active = false
+	_sculpt_transaction_body_id = ""
+	_biome_transaction_active = false
+	_biome_transaction_body_id = ""
+	_biome_transaction_layer_id = ""
+	_pending_biome_strokes.clear()
+
+
 func _clear_sculpt_layer() -> void:
-	_commit_sculpt_transaction()
+	_commit_interactive_transactions()
 	var terrain: Resource = _session.active_terrain_profile() as Resource
 	if terrain == null or not terrain.has_method("clear_sculpt_deltas"):
 		return
@@ -129,32 +278,31 @@ func _clear_sculpt_layer() -> void:
 
 
 func _on_undo_pressed() -> void:
-	_commit_sculpt_transaction()
+	_commit_interactive_transactions()
 	super._on_undo_pressed()
 	_sync_runtime_sculpt_from_profile()
 
 
 func _on_redo_pressed() -> void:
-	_commit_sculpt_transaction()
+	_commit_interactive_transactions()
 	super._on_redo_pressed()
 	_sync_runtime_sculpt_from_profile()
 
 
 func _on_apply_pressed() -> void:
-	_commit_sculpt_transaction()
+	_commit_interactive_transactions()
 	super._on_apply_pressed()
 	_sync_runtime_sculpt_from_profile()
 
 
 func _on_revert_pressed() -> void:
-	_sculpt_transaction_active = false
-	_sculpt_transaction_body_id = ""
+	_discard_interactive_transactions()
 	super._on_revert_pressed()
 	_sync_runtime_sculpt_from_profile()
 
 
 func _on_body_selected(index: int) -> void:
-	_commit_sculpt_transaction()
+	_commit_interactive_transactions()
 	super._on_body_selected(index)
 	_sync_runtime_sculpt_from_profile()
 	_last_hit.clear()
@@ -163,7 +311,7 @@ func _on_body_selected(index: int) -> void:
 
 
 func _on_preset_selected(path: String) -> void:
-	_commit_sculpt_transaction()
+	_commit_interactive_transactions()
 	super._on_preset_selected(path)
 	_sync_runtime_sculpt_from_profile()
 	_last_hit.clear()
