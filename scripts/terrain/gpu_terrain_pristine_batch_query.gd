@@ -50,10 +50,26 @@ func is_busy() -> bool:
 	return _busy
 
 
+## Compatibility entry point for callers that still own a typed Array[Vector3].
+## New high-volume terrain authoring paths should prefer request_packed() so they
+## never expand dense sample buffers into one Variant element per direction.
 func request(directions: Array[Vector3], callback: Callable) -> bool:
+	if directions.is_empty():
+		return false
+	var packed_directions := PackedVector3Array()
+	packed_directions.resize(directions.size())
+	for index: int in directions.size():
+		packed_directions[index] = directions[index]
+	return request_packed(packed_directions, callback)
+
+
+func request_packed(directions: PackedVector3Array, callback: Callable) -> bool:
 	if directions.is_empty() or not callback.is_valid() or not is_available():
 		return false
 	var count: int = directions.size()
+	# std430 vec4 input keeps alignment unambiguous across Vulkan backends. The
+	# source remains a dense PackedVector3Array; only this final GPU upload buffer
+	# expands xyz to xyzw.
 	var packed := PackedFloat32Array()
 	packed.resize(count * 4)
 	for index: int in count:
@@ -108,6 +124,7 @@ func stats() -> Dictionary:
 		"failed": failed,
 		"busy": _busy,
 		"async_readback": true,
+		"packed_direction_input": true,
 		"persistent_envelope_only": true,
 	}
 
