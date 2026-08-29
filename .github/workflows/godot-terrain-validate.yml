@@ -244,6 +244,10 @@ jobs:
             echo "Phase 13 asynchronous shaping completion marker was not emitted."
             exit 1
           fi
+          if ! grep -q "PHASE14_SAMPLER_OK" /tmp/terrain-gdscript.log; then
+            echo "Phase 14 spherical brush sampler completion marker was not emitted."
+            exit 1
+          fi
           if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script.*spherical_geometry_clipmap|Failed to load script.*gpu_terrain_scatter" /tmp/terrain-gdscript.log; then
             echo "Godot reported a GDScript parser/inheritance error in the active terrain scripts."
             exit 1
