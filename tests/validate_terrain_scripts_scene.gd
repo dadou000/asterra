@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase9.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase10.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
