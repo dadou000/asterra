@@ -1,5 +1,8 @@
 // Immutable six-face coarse planet context.
 // Built once from PlanetFields and then sampled directly by runtime terrain shaders.
+// Planet Studio can additionally bind a high-resolution camera-centred categorical
+// biome override. The generated context texture remains pristine; authoring data is
+// a disposable overlay rebuilt from sparse spherical brush strokes.
 
 uniform sampler2DArray u_ctx_soil : filter_linear, repeat_disable;
 uniform sampler2DArray u_ctx_surface : filter_linear, repeat_disable;
@@ -11,6 +14,14 @@ uniform sampler2DArray u_ctx_rock : filter_nearest, repeat_disable;
 uniform sampler2DArray u_ctx_biome : filter_nearest, repeat_disable;
 uniform float u_ctx_ready = 0.0;
 uniform float u_ctx_face_res = 0.0;
+
+uniform sampler2D u_author_biome_override : filter_nearest, repeat_disable;
+uniform float u_author_biome_ready = 0.0;
+uniform vec3 u_author_biome_center = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_author_biome_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_author_biome_up = vec3(0.0, 1.0, 0.0);
+uniform float u_author_biome_half_extent_m = 512.0;
+uniform float u_author_biome_planet_radius = 1000000.0;
 
 vec3 asterra_context_coord(vec3 dir) {
 	vec3 fuv = surface_face_uv(dir);
@@ -56,9 +67,32 @@ float asterra_ctx_rock_id(vec3 dir) {
 	return floor(textureLod(u_ctx_rock, asterra_context_coord(dir), 0.0).r * 12.0 + 0.5);
 }
 
-float asterra_ctx_biome_id(vec3 dir) {
+float asterra_generated_biome_id(vec3 dir) {
 	if (u_ctx_ready < 0.5) return 7.0;
 	return floor(textureLod(u_ctx_biome, asterra_context_coord(dir), 0.0).r * 19.0 + 0.5);
+}
+
+float asterra_author_biome_id(vec3 dir, float generated_biome) {
+	if (u_author_biome_ready < 0.5) return generated_biome;
+	vec3 d = normalize(dir);
+	float denom = dot(d, normalize(u_author_biome_center));
+	if (denom <= 0.01) return generated_biome;
+	float radius = max(u_author_biome_planet_radius, 1.0);
+	vec2 plane_m = vec2(
+		dot(d, normalize(u_author_biome_right)),
+		dot(d, normalize(u_author_biome_up))) * (radius / denom);
+	float half_extent = max(u_author_biome_half_extent_m, 0.001);
+	if (abs(plane_m.x) > half_extent || abs(plane_m.y) > half_extent)
+		return generated_biome;
+	// Image rows increase downward; the tangent up vector increases upward.
+	vec2 uv = vec2(plane_m.x, -plane_m.y) / (half_extent * 2.0) + vec2(0.5);
+	vec2 authored = textureLod(u_author_biome_override, uv, 0.0).rg;
+	if (authored.g < 0.5) return generated_biome;
+	return floor(authored.r * 19.0 + 0.5);
+}
+
+float asterra_ctx_biome_id(vec3 dir) {
+	return asterra_author_biome_id(dir, asterra_generated_biome_id(dir));
 }
 
 float asterra_ctx_soil_depth_m(vec4 surface) {
