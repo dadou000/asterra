@@ -29,6 +29,7 @@ on:
       - "tests/validate_world_authoring_phase0.gd"
       - "tests/ci_autoload_planet.gd"
       - "tests/ci_autoload_frames.gd"
+      - "tests/ci_autoload_terrain_runtime_stub.gd"
       - ".github/workflows/godot-terrain-validate.yml"
   workflow_dispatch:
 
@@ -133,6 +134,7 @@ jobs:
           cp tests/validate_world_authoring_phase0.gd /tmp/asterra-script-ci/tests/
           cp tests/ci_autoload_planet.gd /tmp/asterra-script-ci/tests/
           cp tests/ci_autoload_frames.gd /tmp/asterra-script-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-script-ci/tests/
           cp -R scenes/world_authoring/. /tmp/asterra-script-ci/scenes/world_authoring/
           cp world.tres /tmp/asterra-script-ci/world.tres
           cat > /tmp/asterra-script-ci/project.godot <<'EOF'
@@ -147,6 +149,10 @@ jobs:
           Frames="*res://tests/ci_autoload_frames.gd"
           Planet="*res://tests/ci_autoload_planet.gd"
           Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
           GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
           GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
 
@@ -220,6 +226,10 @@ jobs:
           fi
           if ! grep -q "TERRAIN_SCRIPT_STACK_OK" /tmp/terrain-gdscript.log; then
             echo "Terrain script-chain completion marker was not emitted."
+            exit 1
+          fi
+          if ! grep -q "PHASE7_SCULPT_OK" /tmp/terrain-gdscript.log; then
+            echo "Phase 7 numerical sculpt completion marker was not emitted."
             exit 1
           fi
           if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script.*spherical_geometry_clipmap|Failed to load script.*gpu_terrain_scatter" /tmp/terrain-gdscript.log; then
