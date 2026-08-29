@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "character_id": "asterrahuman",
+  "canonical": true,
+  "source": {
+    "repository_path": "assets/character/asterrahuman.glb",
+    "godot_path": "res://assets/character/asterrahuman.glb",
+    "repository_blob_sha": "dbf0063e47e85b9f467f82c89bed4a3f84f46463",
+    "godot_import_type": "PackedScene"
+  },
+  "uses": [
+    "character_editor_visual",
+    "runtime_player_visual",
+    "rest_pose_and_proportions",
+    "mocap_retarget_target",
+    "physics_proxy_generation"
+  ],
+  "skin_skeleton_policy": {
+    "preserve_all_deform_bones": true,
+    "do_not_reduce_skin_to_19_bones": true,
+    "physics_proxy_body_count": 19,
+    "physics_proxy_follows_selected_skin_landmarks": true
+  },
+  "generated": {
+    "skeleton_manifest": "experiments/locomotion_19body/generated/asterrahuman_skeleton_manifest.json",
+    "physics_proxy_map": "experiments/locomotion_19body/generated/asterrahuman_physics_proxy_map.json",
+    "training_articulation": "experiments/locomotion_19body/assets/asterra_humanoid.usd"
+  },
+  "coordinate_contract": {
+    "runtime_up": "+Y",
+    "runtime_forward": "-Z",
+    "derive_character_forward_from_manifest": true,
+    "never_assume_character_forward_matches_runtime": true
+  },
+  "rules": [
+    "Never create or train against a second humanoid with independent proportions.",
+    "Extract exact bone names, parents, rest transforms and mesh bounds from the imported GLB before generating the physics proxy.",
+    "Retarget CMU motion into the canonical character rest frame before fitting the physical articulation.",
+    "Fail closed on ambiguous or duplicate limb mappings instead of choosing a low-confidence bone."
+  ]
+}
