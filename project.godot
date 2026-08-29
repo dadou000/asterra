@@ -1,121 +1,29 @@
-; Engine configuration file.
-; It's best edited using the editor UI and not directly,
-; since the parameters that go here are not all obvious.
-;
-; Format:
-;   [section] ; section between []
-;   param=value ; assign values to parameters
+; Minimal Asterra 19-body ragdoll experiment project.
+; No game autoloads, terrain, weather, UI or gameplay systems are enabled here.
 
 config_version=5
 
 [application]
 
-config/name="Asterra"
-config/description="Systems-first open-world simulation. Phase 1: procedural planet."
-config/version="0.0.5"
-run/main_scene="res://scenes/StartMenu.tscn"
-config/features=PackedStringArray("4.7", "Forward Plus")
-config/icon="res://icon.svg"
-
-[autoload]
-
-Frames="*res://scripts/core/frames.gd"
-Planet="*res://scripts/gen/planet_sampler_gpu_runtime.gd"
-PlanetContext="*res://scripts/terrain/gpu_planet_context.gd"
-TerrainHeightQuery="*res://scripts/terrain/gpu_terrain_height_query_contact.gd"
-Deltas="*res://scripts/terrain/terrain_deltas.gd"
-TerrainDeformationGPU="*res://scripts/terrain/gpu_terrain_deformation.gd"
-TerrainDeformationQueryGPU="*res://scripts/terrain/gpu_terrain_deformation_query_contact.gd"
-TerrainDeformation="*res://scripts/terrain/terrain_deformation_physics_coupled.gd"
-TerrainEditDeltaGPU="*res://scripts/terrain/gpu_terrain_edit_delta_optimized.gd"
-GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
-GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
-GroundTerrainPrefetcher="*res://scripts/terrain/ground_prefetcher_gpu_visual.gd"
-CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
-OceanSystem="*res://scripts/terrain/ocean_geometry_clipmap.gd"
-GroundGeometryClipmap="*res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd"
-RenderedTerrainContactQuery="*res://scripts/terrain/gpu_rendered_terrain_contact_query_stable.gd"
-TerrainScatter="*res://scripts/terrain/gpu_terrain_scatter_authoring.gd"
-TerrainHeightDebugOverlay="*res://scripts/terrain/terrain_height_debug_overlay.gd"
-TerrainDeformationExperiment="*res://scripts/terrain/terrain_deformation_experiment_gpu_safe.gd"
-AppSettings="*res://scripts/core/app_settings.gd"
-ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
-VolumetricClouds="*res://scripts/rendering/volumetric_cloud_controller.gd"
-RenderDebug="*res://scripts/rendering/render_debug_controller.gd"
-RingCountDebug="*res://scripts/terrain/ring_count_debug_controller.gd"
-VehicleTests="*res://scripts/vehicles/vehicle_test_harness.gd"
+config/name="Asterra 19-Body Ragdoll Test"
+run/main_scene="res://scenes/ragdoll_test.tscn"
 
 [display]
 
-window/size/viewport_width=1600
-window/size/viewport_height=900
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
 window/stretch/mode="canvas_items"
-
-[input]
-
-move_forward={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":87,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-move_back={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":83,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-move_left={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":65,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-move_right={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":68,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-move_up={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":32,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-move_down={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194325,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-sprint={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194326,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-dig={
-"deadzone": 0.5,
-"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":1,"canceled":false,"pressed":false,"double_click":false,"script":null)
-]
-}
-fill={
-"deadzone": 0.5,
-"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"pressed":false,"double_click":false,"script":null)
-]
-}
 
 [physics]
 
-3d/physics_engine="Jolt Physics"
-3d/run_on_separate_thread=false
 common/physics_ticks_per_second=120
-common/max_physics_steps_per_frame=16
-common/physics_interpolation=true
-jolt_physics_3d/simulation/position_steps=4
-jolt_physics_3d/simulation/velocity_steps=16
-jolt_physics_3d/simulation/penetration_slop=0.01
-jolt_physics_3d/limits/temporary_memory_buffer_size=64
-jolt_physics_3d/limits/max_bodies=65536
-jolt_physics_3d/limits/max_body_pairs=524288
-jolt_physics_3d/limits/max_contact_constraints=131072
+3d/default_gravity=9.81
+3d/physics_engine="Jolt Physics"
 
 [rendering]
 
-scaling_3d/mode=2
-scaling_3d/scale=0.77
-scaling_3d/fsr_sharpness=0.18
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.025, 0.03, 0.04, 1)
