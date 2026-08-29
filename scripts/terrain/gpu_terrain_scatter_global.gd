@@ -1,12 +1,33 @@
 extends "res://scripts/terrain/gpu_terrain_scatter_compact.gd"
-## Latest-0.0.5 GPU scatter binding.
+## Latest-0.0.5 GPU scatter binding plus the first real-asset ecology layer.
 ##
-## The current real runtime reports the indirect RenderingDevice compaction path as
-## failed. Keep the proven vertex-GPU fallback authoritative for now: it still does
-## all candidate placement/classification on the GPU, but avoids stale/invalid
-## indirect buffers while the backend-specific failure is repaired separately.
+## The indirect RenderingDevice compaction path is still disabled because the real
+## runtime previously reported invalid/stale indirect buffers. Optimized scanned
+## assets are therefore introduced conservatively on top of the proven vertex-GPU
+## fallback: sparse candidate grids, deliberately low LODs, and a hard triangle
+## guard keep the cost bounded until indirect compaction is repaired.
 
 const STABLE_FALLBACK_ONLY := true
+const ECOLOGY_SHADER_PATH := "res://shaders/terrain_scatter_ecology.gdshader"
+const ECOLOGY_RUNTIME_ROOT := "res://assets/scatter/runtime"
+const ECOLOGY_MAX_SELECTED_LOD_TRIANGLES := 200000
+
+# These are deliberately the lightweight/runtime-safe subset of the downloaded
+# library. Heavy source-scan foliage (for example the ~700k-triangle fir sapling)
+# stays out of the fallback renderer until foliage LODs/impostors are authored.
+# The original procedural grass/stones remain active underneath this layer.
+const ECOLOGY_ASSETS := [
+	{"id":"grass_bermuda_01", "lod":0, "grid":16, "spacing":4.0, "density":0.75, "kind":0, "salt":1201, "scale_min":0.82, "scale_max":1.18, "wind":0.045, "shadows":false},
+	{"id":"fern_02", "lod":0, "grid":8, "spacing":11.0, "density":0.58, "kind":1, "salt":1213, "scale_min":0.76, "scale_max":1.24, "wind":0.025, "shadows":false},
+	{"id":"shrub_03", "lod":0, "grid":7, "spacing":18.0, "density":0.40, "kind":2, "salt":1229, "scale_min":0.72, "scale_max":1.34, "wind":0.018, "shadows":true},
+	{"id":"anthurium_botany_01", "lod":0, "grid":3, "spacing":28.0, "density":0.42, "kind":6, "salt":1249, "scale_min":0.78, "scale_max":1.22, "wind":0.014, "shadows":false},
+	{"id":"cheiridopsis_succulent", "lod":0, "grid":3, "spacing":40.0, "density":0.32, "kind":3, "salt":1277, "scale_min":0.54, "scale_max":1.10, "wind":0.002, "shadows":false},
+	{"id":"boulder_01", "lod":2, "grid":3, "spacing":62.0, "density":0.42, "kind":4, "salt":1301, "scale_min":0.72, "scale_max":1.85, "wind":0.0, "shadows":true},
+	{"id":"dead_tree_trunk", "lod":2, "grid":3, "spacing":55.0, "density":0.25, "kind":5, "salt":1327, "scale_min":0.78, "scale_max":1.30, "wind":0.0, "shadows":true},
+	{"id":"dead_quiver_branch_01", "lod":2, "grid":5, "spacing":14.0, "density":0.30, "kind":3, "salt":1361, "scale_min":0.72, "scale_max":1.34, "wind":0.0, "shadows":false},
+	{"id":"dry_quiver_leaf", "lod":2, "grid":4, "spacing":18.0, "density":0.24, "kind":3, "salt":1381, "scale_min":0.72, "scale_max":1.25, "wind":0.0, "shadows":false},
+	{"id":"quiver_tree_01", "lod":0, "grid":2, "spacing":120.0, "density":0.22, "kind":7, "salt":1409, "scale_min":0.82, "scale_max":1.22, "wind":0.010, "shadows":true},
+]
 
 var _static_scatter_bound := false
 var _bound_edit_generation := -1
@@ -14,6 +35,12 @@ var _bound_edit_ready := false
 var _bound_active_generation := -1
 var _bound_active_window_generation := -1
 var _bound_active_ready := false
+
+var _ecology_shader: Shader
+var _ecology_batches: Array[Dictionary] = []
+var _ecology_loaded_asset_ids: PackedStringArray = PackedStringArray()
+var _ecology_selected_triangles: int = 0
+var _ecology_candidate_instances: int = 0
 
 
 func _ready() -> void:
@@ -23,6 +50,46 @@ func _ready() -> void:
 		_compact_init_failed = false
 		_compact_init_ready = false
 		_hide_compact_batches()
+	_build_ecology_batches()
+	# Materials created after super._ready() missed the initial static/context bind.
+	# Force one complete bind after the runtime meshes have been attached.
+	_static_scatter_bound = false
+	if Planet.ready_state and Planet.cfg != null:
+		_bind_gpu_resources(true)
+
+
+func _process(dt: float) -> void:
+	super._process(dt)
+	if _ecology_batches.is_empty() or not _debug_enabled or not Planet.ready_state or Planet.cfg == null:
+		return
+	var camera: Camera3D = get_viewport().get_camera_3d()
+	if camera == null or not _have_anchor:
+		return
+	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var planet_pos: Vector3 = camera.global_position + origin
+	if planet_pos.length_squared() <= 1.0:
+		return
+	var observer_radius: float = planet_pos.length()
+	var radial_altitude: float = observer_radius - Planet.cfg.planet_radius
+	if radial_altitude > MAX_RADIAL_ALTITUDE_M or radial_altitude < MIN_RADIAL_ALTITUDE_M:
+		return
+	var observer_dir: Vector3 = planet_pos / observer_radius
+	var observer_surface: Vector3 = observer_dir * Planet.cfg.planet_radius
+	var anchor_surface: Vector3 = _anchor_dir * Planet.cfg.planet_radius
+	var rel: Vector3 = observer_surface - anchor_surface
+	var px: float = rel.dot(_anchor_right)
+	var py: float = rel.dot(_anchor_up)
+
+	for batch_data: Dictionary in _ecology_batches:
+		var grid: int = int(batch_data["grid"])
+		var spacing: float = float(batch_data["spacing"])
+		var density: float = float(batch_data["density"])
+		var center := Vector2(round(px / spacing), round(py / spacing))
+		var batch_materials: Array = batch_data["materials"]
+		for value: Variant in batch_materials:
+			var material: ShaderMaterial = value as ShaderMaterial
+			if material != null:
+				_sync_material_window(material, grid, spacing, density, center, origin)
 
 
 func _bind_gpu_resources(force: bool) -> void:
@@ -106,6 +173,220 @@ func _bind_gpu_resources(force: bool) -> void:
 			_bound_active_ready = active_ready
 
 
+func _build_ecology_batches() -> void:
+	_ecology_shader = load(ECOLOGY_SHADER_PATH) as Shader
+	if _ecology_shader == null:
+		push_error("Terrain ecology scatter shader could not be loaded")
+		return
+
+	for definition_value: Variant in ECOLOGY_ASSETS:
+		if not (definition_value is Dictionary):
+			continue
+		var definition: Dictionary = definition_value
+		_build_ecology_asset(definition)
+
+
+func _build_ecology_asset(definition: Dictionary) -> void:
+	var asset_id: String = str(definition.get("id", ""))
+	var lod_index: int = int(definition.get("lod", 0))
+	if asset_id.is_empty():
+		return
+	var metadata: Dictionary = _load_ecology_metadata(asset_id)
+	if metadata.is_empty():
+		return
+	var selected_triangles: int = _metadata_lod_triangles(metadata, lod_index)
+	if selected_triangles <= 0 or selected_triangles > ECOLOGY_MAX_SELECTED_LOD_TRIANGLES:
+		push_warning("Skipping ecology asset %s LOD%d (%d triangles)" % [asset_id, lod_index, selected_triangles])
+		return
+
+	var glb_path := "%s/%s/lod%d.glb" % [ECOLOGY_RUNTIME_ROOT, asset_id, lod_index]
+	# GitHub Actions checks out LFS pointers, not the multi-megabyte payloads. Do not
+	# ask Godot to parse a 132-byte pointer as glTF; local/editor builds with LFS
+	# materialized naturally pass this header test.
+	if not _runtime_glb_is_materialized(glb_path):
+		return
+	var packed: PackedScene = load(glb_path) as PackedScene
+	if packed == null:
+		push_warning("Skipping ecology asset that failed to import: %s" % glb_path)
+		return
+	var root: Node = packed.instantiate()
+	if root == null:
+		return
+
+	var height_m: float = _metadata_height_m(metadata)
+	var asset_materials: Array[ShaderMaterial] = []
+	var batches_before: int = _ecology_batches.size()
+	_collect_ecology_meshes(root, Transform3D.IDENTITY, definition, height_m, asset_materials)
+	root.free()
+	if _ecology_batches.size() > batches_before:
+		_ecology_loaded_asset_ids.append(asset_id)
+		_ecology_selected_triangles += selected_triangles
+		_ecology_candidate_instances += int(definition.get("grid", 1)) * int(definition.get("grid", 1))
+
+
+func _collect_ecology_meshes(node: Node, parent_transform: Transform3D,
+		definition: Dictionary, height_m: float, asset_materials: Array[ShaderMaterial]) -> void:
+	var accumulated := parent_transform
+	if node is Node3D:
+		accumulated = parent_transform * (node as Node3D).transform
+
+	if node is MeshInstance3D:
+		var mesh_instance: MeshInstance3D = node as MeshInstance3D
+		var source_mesh: ArrayMesh = mesh_instance.mesh as ArrayMesh
+		if source_mesh != null and source_mesh.get_surface_count() > 0:
+			var runtime_mesh: ArrayMesh = source_mesh.duplicate(true) as ArrayMesh
+			if runtime_mesh != null:
+				var surface_materials: Array[ShaderMaterial] = []
+				for surface_index: int in range(runtime_mesh.get_surface_count()):
+					var source_material: Material = mesh_instance.get_active_material(surface_index)
+					var material: ShaderMaterial = _make_ecology_material(
+						source_material, definition, height_m, accumulated)
+					runtime_mesh.surface_set_material(surface_index, material)
+					surface_materials.append(material)
+					asset_materials.append(material)
+					_materials.append(material)
+
+				var grid: int = int(definition.get("grid", 1))
+				var batch := _make_ecology_batch(
+					"Ecology_%s_%s" % [str(definition.get("id", "asset")), mesh_instance.name],
+					runtime_mesh, grid * grid, bool(definition.get("shadows", false)))
+				add_child(batch)
+				_ecology_batches.append({
+					"instance": batch,
+					"materials": surface_materials,
+					"grid": grid,
+					"spacing": float(definition.get("spacing", 20.0)),
+					"density": float(definition.get("density", 0.25)),
+				})
+
+	for child_value: Variant in node.get_children():
+		var child: Node = child_value as Node
+		if child != null:
+			_collect_ecology_meshes(child, accumulated, definition, height_m, asset_materials)
+
+
+func _make_ecology_material(source_material: Material, definition: Dictionary,
+		height_m: float, asset_transform: Transform3D) -> ShaderMaterial:
+	var material := ShaderMaterial.new()
+	material.shader = _ecology_shader
+	material.set_shader_parameter("u_ecology_kind", int(definition.get("kind", 0)))
+	material.set_shader_parameter("u_asset_salt", int(definition.get("salt", 911)))
+	material.set_shader_parameter("u_asset_scale_min", float(definition.get("scale_min", 0.82)))
+	material.set_shader_parameter("u_asset_scale_max", float(definition.get("scale_max", 1.18)))
+	material.set_shader_parameter("u_asset_height_m", maxf(height_m, 0.05))
+	material.set_shader_parameter("u_wind_strength", float(definition.get("wind", 0.0)))
+	material.set_shader_parameter("u_asset_axis_x", asset_transform.basis.x)
+	material.set_shader_parameter("u_asset_axis_y", asset_transform.basis.y)
+	material.set_shader_parameter("u_asset_axis_z", asset_transform.basis.z)
+	material.set_shader_parameter("u_asset_origin", asset_transform.origin)
+
+	var ecology_kind: int = int(definition.get("kind", 0))
+	var is_cutout: bool = ecology_kind == 0 or ecology_kind == 1 or ecology_kind == 2 \
+		or ecology_kind == 3 or ecology_kind == 6 or ecology_kind == 7
+	material.set_shader_parameter("u_alpha_cutoff", 0.32 if is_cutout else 0.0)
+	material.set_shader_parameter("u_specular", 0.10 if is_cutout else 0.18)
+
+	var base: BaseMaterial3D = source_material as BaseMaterial3D
+	if base == null:
+		return material
+	material.set_shader_parameter("u_albedo_color", base.albedo_color)
+	material.set_shader_parameter("u_material_roughness", base.roughness)
+	material.set_shader_parameter("u_material_metallic", base.metallic)
+	material.set_shader_parameter("u_normal_scale", base.normal_scale)
+
+	if base.albedo_texture != null:
+		material.set_shader_parameter("u_source_albedo", base.albedo_texture)
+		material.set_shader_parameter("u_has_albedo", 1)
+	if base.normal_texture != null:
+		material.set_shader_parameter("u_source_normal", base.normal_texture)
+		material.set_shader_parameter("u_has_normal", 1)
+	if base.roughness_texture != null:
+		material.set_shader_parameter("u_source_roughness", base.roughness_texture)
+		material.set_shader_parameter("u_roughness_channel", int(base.roughness_texture_channel))
+		material.set_shader_parameter("u_has_roughness", 1)
+	if base.metallic_texture != null:
+		material.set_shader_parameter("u_source_metallic", base.metallic_texture)
+		material.set_shader_parameter("u_metallic_channel", int(base.metallic_texture_channel))
+		material.set_shader_parameter("u_has_metallic", 1)
+	if base.ao_texture != null:
+		material.set_shader_parameter("u_source_ao", base.ao_texture)
+		material.set_shader_parameter("u_ao_channel", int(base.ao_texture_channel))
+		material.set_shader_parameter("u_has_ao", 1)
+	if is_cutout:
+		material.set_shader_parameter("u_alpha_cutoff", maxf(0.28, base.alpha_scissor_threshold))
+	return material
+
+
+func _make_ecology_batch(node_name: String, mesh: ArrayMesh, count: int,
+		cast_shadows: bool) -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = count
+	mm.visible_instance_count = count
+	mm.custom_aabb = AABB(
+		Vector3(-SCATTER_BOUNDS_M, -SCATTER_BOUNDS_M, -SCATTER_BOUNDS_M),
+		Vector3(SCATTER_BOUNDS_M * 2.0, SCATTER_BOUNDS_M * 2.0, SCATTER_BOUNDS_M * 2.0))
+	for i: int in range(count):
+		mm.set_instance_transform(i, Transform3D.IDENTITY)
+	var batch := MultiMeshInstance3D.new()
+	batch.name = node_name
+	batch.multimesh = mm
+	batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows \
+		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	batch.visible = false
+	return batch
+
+
+func _runtime_glb_is_materialized(path: String) -> bool:
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null or file.get_length() < 4:
+		return false
+	var magic: PackedByteArray = file.get_buffer(4)
+	return magic.size() == 4 and magic[0] == 0x67 and magic[1] == 0x6c \
+		and magic[2] == 0x54 and magic[3] == 0x46
+
+
+func _load_ecology_metadata(asset_id: String) -> Dictionary:
+	var path := "%s/%s/metadata.json" % [ECOLOGY_RUNTIME_ROOT, asset_id]
+	if not FileAccess.file_exists(path):
+		return {}
+	var text: String = FileAccess.get_file_as_string(path)
+	var parsed: Variant = JSON.parse_string(text)
+	if parsed is Dictionary:
+		return parsed
+	return {}
+
+
+func _metadata_lod_triangles(metadata: Dictionary, lod_index: int) -> int:
+	var lods_value: Variant = metadata.get("lods", [])
+	if not (lods_value is Array):
+		return 0
+	for record_value: Variant in lods_value:
+		if record_value is Dictionary:
+			var record: Dictionary = record_value
+			if int(record.get("lod", -1)) == lod_index:
+				return int(record.get("triangles", 0))
+	return 0
+
+
+func _metadata_height_m(metadata: Dictionary) -> float:
+	var bounds_value: Variant = metadata.get("bounds_size_m", [])
+	if bounds_value is Array:
+		var bounds: Array = bounds_value
+		if bounds.size() >= 3:
+			return maxf(float(bounds[2]), 0.05)
+	return 1.0
+
+
+func _set_visible(value: bool) -> void:
+	super._set_visible(value)
+	for batch_data: Dictionary in _ecology_batches:
+		var instance: MultiMeshInstance3D = batch_data.get("instance") as MultiMeshInstance3D
+		if instance != null:
+			instance.visible = value
+
+
 func gpu_scatter_stats() -> Dictionary:
 	return {
 		"global_heightmap": true,
@@ -117,4 +398,9 @@ func gpu_scatter_stats() -> Dictionary:
 		"stable_gpu_fallback": STABLE_FALLBACK_ONLY,
 		"edit_delta_bound": get_node_or_null("/root/TerrainEditDeltaGPU") != null,
 		"active_deform_bound": get_node_or_null("/root/TerrainDeformationGPU") != null,
+		"ecology_real_assets": _ecology_loaded_asset_ids.size(),
+		"ecology_asset_ids": _ecology_loaded_asset_ids,
+		"ecology_mesh_batches": _ecology_batches.size(),
+		"ecology_selected_lod_triangles": _ecology_selected_triangles,
+		"ecology_candidate_instances": _ecology_candidate_instances,
 	}
