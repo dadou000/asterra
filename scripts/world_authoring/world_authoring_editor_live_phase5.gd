@@ -68,18 +68,25 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _world_host == null:
 		return
 
+	# Match the base editor's navigation contract exactly: MOVE mode remains armed
+	# while TAB temporarily gives input to the player, and a second TAB resumes
+	# editing. No water mouse event is consumed while navigation is active.
 	if event is InputEventKey:
 		var key_event := event as InputEventKey
 		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_TAB:
-			_finish_water_drag()
-			_set_navigation(true)
+			if not _navigation_active:
+				_finish_water_drag()
+			_set_navigation(not _navigation_active)
 			get_viewport().set_input_as_handled()
 			return
-		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_ESCAPE:
+		if not _navigation_active and key_event.pressed and not key_event.echo \
+				and key_event.keycode == KEY_ESCAPE:
 			_cancel_water_drag()
 			_set_placement_mode(PlacementMode.NONE)
 			get_viewport().set_input_as_handled()
 			return
+	if _navigation_active:
+		return
 
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
