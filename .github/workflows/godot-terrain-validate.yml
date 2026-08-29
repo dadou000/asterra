@@ -113,6 +113,20 @@ jobs:
             exit 1
           fi
 
+      - name: Exclude runtime scatter payloads from parser smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The optimized ecological library is Git-LFS content and is validated by
+          # its manifest/metadata plus the isolated shader test above. A full editor
+          # filesystem import of every scatter mesh/textural dependency is unrelated
+          # to GDScript parsing and can dominate the 90-second parser smoke-test.
+          if [ -d assets/scatter/runtime ]; then
+            rm -rf /tmp/asterra-scatter-runtime-ci
+            mv assets/scatter/runtime /tmp/asterra-scatter-runtime-ci
+            mkdir -p assets/scatter/runtime
+          fi
+
       - name: Parse active terrain autoload
         shell: bash
         run: |
