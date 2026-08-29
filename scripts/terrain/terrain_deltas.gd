@@ -194,6 +194,63 @@ func add_offset(face: int, i: int, j: int, delta: float, min_offset: float, max_
 	_mutex.unlock()
 	return after - before
 
+## Writes absolute sparse lattice offsets while holding the mutex once for the
+## complete stamp. Each write dictionary contains an `address: Vector3i` and a
+## target `value: float`. Addresses are canonicalized again defensively so callers
+## may safely submit seam-adjacent samples. Zero targets do not allocate new tiles,
+## and tiles that become entirely zero are pruned before the lock is released.
+## Region publication is intentionally left to the caller so one logical brush can
+## combine multiple batches and emit one precise dirty radius.
+func set_offsets_batch(writes: Array[Dictionary], min_offset: float = -10000.0,
+		max_offset: float = 10000.0) -> int:
+	if writes.is_empty():
+		return 0
+	var changed: int = 0
+	var touched_tiles: Dictionary = {}
+	_mutex.lock()
+	for write: Dictionary in writes:
+		var raw_address: Variant = write.get("address")
+		if not (raw_address is Vector3i):
+			continue
+		var source: Vector3i = raw_address as Vector3i
+		var address: Vector3i = canonical_address(source.x, source.y, source.z)
+		if address.x < 0:
+			continue
+		var desired: float = clampf(float(write.get("value", 0.0)), min_offset, max_offset)
+		var k: int = tile_key(address.x, address.y >> TILE_SHIFT, address.z >> TILE_SHIFT)
+		if not _tiles.has(k):
+			if absf(desired) <= 1e-7:
+				continue
+			var arr := PackedFloat32Array()
+			arr.resize(TILE * TILE)
+			_tiles[k] = arr
+			_count += 1
+		var tile: PackedFloat32Array = _tiles[k]
+		var index: int = (address.z & (TILE - 1)) * TILE + (address.y & (TILE - 1))
+		var before: float = tile[index]
+		if absf(desired - before) <= 1e-7:
+			continue
+		tile[index] = desired
+		_tiles[k] = tile
+		touched_tiles[k] = true
+		changed += 1
+
+	for key_value: Variant in touched_tiles.keys():
+		var key: int = int(key_value)
+		if not _tiles.has(key):
+			continue
+		var tile: PackedFloat32Array = _tiles[key]
+		var has_nonzero := false
+		for value: float in tile:
+			if absf(value) > 1e-7:
+				has_nonzero = true
+				break
+		if not has_nonzero:
+			_tiles.erase(key)
+			_count = maxi(0, _count - 1)
+	_mutex.unlock()
+	return changed
+
 ## Applies an interactive spherical sculpt brush while holding the sparse-store
 ## mutex only once. This is substantially cheaper than issuing add_offset() for
 ## every lattice point of a mouse-drag stroke. It also canonicalizes seam samples
