@@ -118,33 +118,38 @@ jobs:
         run: |
           set -euo pipefail
           # The optimized ecological library is Git-LFS content and is validated by
-          # its manifest/metadata plus the isolated shader test above. A full editor
-          # filesystem import of every scatter mesh/textural dependency is unrelated
-          # to GDScript parsing and can dominate the 90-second parser smoke-test.
+          # its manifest/metadata plus the isolated shader test above. GDScript
+          # syntax validation must not spend CI time importing binary scatter data.
           if [ -d assets/scatter/runtime ]; then
             rm -rf /tmp/asterra-scatter-runtime-ci
             mv assets/scatter/runtime /tmp/asterra-scatter-runtime-ci
             mkdir -p assets/scatter/runtime
           fi
 
-      - name: Parse active terrain autoload
+      - name: Parse active terrain scripts
         shell: bash
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
-          set +e
-          timeout 90 "$GODOT" --headless --editor --path . --quit-after 2 > /tmp/terrain-gdscript.log 2>&1
-          status=$?
-          set -e
-          tail -n 220 /tmp/terrain-gdscript.log || true
-
+          scripts=(
+            res://scripts/terrain/gpu_terrain_scatter_global.gd
+            res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd
+          )
+          : > /tmp/terrain-gdscript.log
+          for script in "${scripts[@]}"; do
+            set +e
+            timeout 45 "$GODOT" --headless --path . --check-only --script "$script" >> /tmp/terrain-gdscript.log 2>&1
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ]; then
+              cat /tmp/terrain-gdscript.log
+              echo "Godot check-only failed for $script with status $status"
+              exit "$status"
+            fi
+          done
+          cat /tmp/terrain-gdscript.log
           if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script.*spherical_geometry_clipmap|Failed to load script.*gpu_terrain_scatter" /tmp/terrain-gdscript.log; then
-            echo "Godot reported a GDScript parser/inheritance error in the active project."
-            exit 1
-          fi
-
-          if [ "$status" -eq 124 ]; then
-            echo "Terrain autoload parse smoke test timed out."
+            echo "Godot reported a GDScript parser/inheritance error in the active terrain scripts."
             exit 1
           fi
 
