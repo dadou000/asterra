@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase8.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase9.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
@@ -23,6 +23,8 @@ func _ready() -> void:
 			return
 		print("TERRAIN_SCRIPT_LOAD_OK: %s" % script_path)
 	if not _validate_phase7_sculpt_math():
+		return
+	if not _validate_phase9_falloff_profiles():
 		return
 	print("TERRAIN_SCRIPT_STACK_OK: %d scripts" % SCRIPT_CHAIN.size())
 	get_tree().quit(0)
@@ -76,7 +78,28 @@ func _validate_phase7_sculpt_math() -> bool:
 		return false
 	Deltas.clear()
 	editor.free()
-	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 8 batch writes")
+	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via batched writes")
+	return true
+
+func _validate_phase9_falloff_profiles() -> bool:
+	var editor: Control = ACTIVE_SCULPT_EDITOR.new()
+	for profile: int in 4:
+		editor.set("_sculpt_falloff_profile", profile)
+		var core: float = float(editor.call("_sculpt_profile_weight", 0.20, 0.35))
+		var edge: float = float(editor.call("_sculpt_profile_weight", 1.0, 0.35))
+		if not is_equal_approx(core, 1.0) or absf(edge) > 1e-6:
+			_fail("PHASE9_FALLOFF_FAILED: profile %d does not preserve core/edge invariants" % profile)
+			return false
+		var previous := 1.0
+		for step: int in range(1, 9):
+			var d: float = 0.35 + (1.0 - 0.35) * float(step) / 8.0
+			var weight: float = float(editor.call("_sculpt_profile_weight", d, 0.35))
+			if weight < -1e-6 or weight > 1.000001 or weight > previous + 1e-6:
+				_fail("PHASE9_FALLOFF_FAILED: profile %d is unbounded or non-monotonic" % profile)
+				return false
+			previous = weight
+	editor.free()
+	print("PHASE9_FALLOFF_OK: smooth + linear + cosine + gaussian")
 	return true
 
 func _fail(message: String) -> void:
