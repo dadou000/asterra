@@ -10,7 +10,7 @@ extends Node
 
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase3.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
-const AUTHORED_WATER_RUNTIME_SCRIPT := preload("res://scripts/world_authoring/authored_water_runtime_query.gd")
+const AUTHORED_WATER_RUNTIME_SCRIPT := preload("res://scripts/world_authoring/authored_water_runtime_spatial.gd")
 
 var _main: Node
 var _layer: CanvasLayer
