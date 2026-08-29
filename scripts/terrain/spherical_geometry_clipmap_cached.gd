@@ -21,9 +21,11 @@ const HANDOFF_QUIET_FRAMES: int = 2
 const HANDOFF_WARM_FRAMES_ESTIMATE: float = 360.0
 const HANDOFF_OVERDUE_LEAD_MIN_M: float = 2048.0
 const HANDOFF_OVERDUE_LEAD_MAX_M: float = 32768.0
-# Do not keep an old tangent anchor indefinitely after a teleport or failed cache.
-# Normal high-speed travel should never reach this because staging begins at 8 km.
-const HANDOFF_MAX_HOLD_M: float = 86000.0
+# Never retain the old visible anchor into the shader's >70 km projection-blend
+# region. Normal movement reanchors at 65.536 km; the small 2.464 km grace window
+# lets a nearly-ready staging cache finish without allowing CPU/GPU centre-space
+# semantics to diverge again. A missed handoff falls back cold rather than drifting.
+const HANDOFF_MAX_HOLD_M: float = 68000.0
 
 var _terrain_cache_active: Node
 var _terrain_cache_staging: Node
