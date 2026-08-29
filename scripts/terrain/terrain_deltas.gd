@@ -257,6 +257,84 @@ func apply_radial_brush(center_dir: Vector3, radius_m: float, delta_m: float,
 		region_changed.emit(center, radius_m + spacing_m * 2.0)
 	return changed
 
+## Non-destructive eraser for authoring. Only existing sparse offsets are moved
+## toward zero; no tile is allocated and the seed-generated terrain is never
+## modified. Completely erased tiles are pruned so save size follows actual edits.
+func erase_radial_brush(center_dir: Vector3, radius_m: float, strength: float,
+		hardness: float, planet_radius: float) -> int:
+	if center_dir.length_squared() < 0.5 or radius_m <= 0.0 or strength <= 0.0 \
+			or planet_radius <= 1.0 or _count == 0:
+		return 0
+	var center: Vector3 = center_dir.normalized()
+	var spacing_m: float = maxf(sample_spacing(planet_radius), 0.001)
+	var center_lattice: Array = dir_to_lattice(center)
+	var face: int = int(center_lattice[0])
+	var center_i: int = int(round(float(center_lattice[1])))
+	var center_j: int = int(round(float(center_lattice[2])))
+	var extent: int = maxi(1, int(ceil(radius_m / spacing_m)) + 2)
+	var hard: float = clampf(hardness, 0.0, 0.98)
+	var erase_strength: float = clampf(strength, 0.0, 1.0)
+	var visited: Dictionary = {}
+	var touched_tiles: Dictionary = {}
+	var changed: int = 0
+
+	_mutex.lock()
+	for source_j: int in range(center_j - extent, center_j + extent + 1):
+		for source_i: int in range(center_i - extent, center_i + extent + 1):
+			var address: Vector3i = canonical_address(face, source_i, source_j)
+			if address.x < 0:
+				continue
+			var address_key: String = "%d:%d:%d" % [address.x, address.y, address.z]
+			if visited.has(address_key):
+				continue
+			visited[address_key] = true
+			var k: int = tile_key(address.x, address.y >> TILE_SHIFT, address.z >> TILE_SHIFT)
+			if not _tiles.has(k):
+				continue
+			var sample_dir: Vector3 = lattice_to_dir(address.x, float(address.y), float(address.z))
+			var distance_m: float = acos(clampf(center.dot(sample_dir), -1.0, 1.0)) * planet_radius
+			if distance_m > radius_m:
+				continue
+			var normalized_distance: float = distance_m / maxf(radius_m, 0.001)
+			var weight: float = 1.0
+			if normalized_distance > hard:
+				var edge_t: float = (normalized_distance - hard) / maxf(1.0 - hard, 0.001)
+				weight = 1.0 - smoothstep(0.0, 1.0, edge_t)
+			var amount: float = clampf(erase_strength * weight, 0.0, 1.0)
+			if amount <= 0.0001:
+				continue
+			var tile: PackedFloat32Array = _tiles[k]
+			var index: int = (address.z & (TILE - 1)) * TILE + (address.y & (TILE - 1))
+			var before: float = tile[index]
+			if absf(before) <= 1e-7:
+				continue
+			var after: float = lerpf(before, 0.0, amount)
+			if absf(after) < 1e-5:
+				after = 0.0
+			tile[index] = after
+			_tiles[k] = tile
+			touched_tiles[k] = true
+			changed += 1
+
+	for key_value: Variant in touched_tiles.keys():
+		var key: int = int(key_value)
+		if not _tiles.has(key):
+			continue
+		var tile: PackedFloat32Array = _tiles[key]
+		var has_nonzero: bool = false
+		for value: float in tile:
+			if absf(value) > 1e-7:
+				has_nonzero = true
+				break
+		if not has_nonzero:
+			_tiles.erase(key)
+			_count = maxi(0, _count - 1)
+	_mutex.unlock()
+
+	if changed > 0:
+		region_changed.emit(center, radius_m + spacing_m * 2.0)
+	return changed
+
 func get_offset(face: int, i: int, j: int) -> float:
 	_mutex.lock()
 	var v := _raw(_tiles, face, i, j)
