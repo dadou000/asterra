@@ -206,7 +206,7 @@ func _apply_water_forces(results: Array[Dictionary], count: int) -> void:
 		var authored: Dictionary = _authored_sample_for_probe(render_point)
 		if not authored.is_empty():
 			water_alt = float(authored.get("surface_altitude_m", probe_alt - probe_depth_m))
-			normal = up
+			normal = authored.get("surface_normal", up)
 			water_velocity = authored.get("current_velocity", Vector3.ZERO)
 			local_density = authored_water_density
 			_last_authored_probe_count += 1
