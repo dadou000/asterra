@@ -3,6 +3,10 @@ extends Node3D
 ## Observer + excavation tool. Precise ground contact comes from the asynchronous
 ## GPU terrain query through TerrainContactSampler; CPU queries remain coarse
 ## resident-map fallbacks only.
+##
+## Press P to toggle the experimental force/torque-driven physics walker. The
+## legacy WALK/FLY controller remains intact so the test can be compared against
+## the existing traversal without changing the authoritative terrain stack.
 
 signal moved(world_pos: Vec3D)
 
@@ -14,6 +18,8 @@ const RUN_SPEED := 11.0
 const JUMP_SPEED := 5.2
 const GRAVITY := 9.62
 const MOUSE_SENS := 0.0022
+const PHYSICS_CAMERA_BACK := 3.6
+const PHYSICS_CAMERA_UP := 0.55
 
 # Aim is deliberately two-stage. The broad ray uses the cheap resident macro field;
 # only the final candidate requests centimetre-grade GPU terrain. The old path sent
@@ -34,6 +40,10 @@ var vertical_speed: float = 0.0
 var grounded: bool = false
 var camera: Camera3D
 
+var physics_walk_enabled := false
+var physics_body: PhysicsWalkerBody
+var physics_visual: PhysicsWalkerVisual
+
 var _mouse_captured := false
 var input_enabled := true
 
@@ -46,9 +56,26 @@ func _ready() -> void:
 	add_child(camera)
 	Frames.origin_shifted.connect(func(_d): _sync_transform())
 	set_process_input(true)
+	call_deferred("_setup_physics_walker")
+
+
+func _setup_physics_walker() -> void:
+	if physics_body != null or get_parent() == null:
+		return
+	physics_body = PhysicsWalkerBody.new()
+	physics_body.name = "PhysicsWalkerBody"
+	get_parent().add_child(physics_body)
+
+	physics_visual = PhysicsWalkerVisual.new()
+	physics_visual.name = "PhysicsWalkerVisual"
+	physics_visual.body = physics_body
+	get_parent().add_child(physics_visual)
+	physics_visual.visible = false
 
 
 func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
+	if physics_walk_enabled:
+		_disable_physics_walker()
 	var d := dir.normalized()
 	var h := TerrainContactSampler.height(d)
 	var r := Planet.cfg.planet_radius + h + spawn_altitude
@@ -81,9 +108,12 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _mouse_captured:
 		yaw += event.relative.x * MOUSE_SENS
 		pitch = clampf(pitch - event.relative.y * MOUSE_SENS, -1.55, 1.55)
-	elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F:
-		mode = Mode.WALK if mode == Mode.FLY else Mode.FLY
-		vertical_speed = 0.0
+	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_P:
+			_toggle_physics_walker()
+		elif event.keycode == KEY_F and not physics_walk_enabled:
+			mode = Mode.WALK if mode == Mode.FLY else Mode.FLY
+			vertical_speed = 0.0
 
 
 func set_mouse_captured(v: bool) -> void:
@@ -91,9 +121,71 @@ func set_mouse_captured(v: bool) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if v else Input.MOUSE_MODE_VISIBLE
 
 
+func _toggle_physics_walker() -> void:
+	if physics_body == null:
+		_setup_physics_walker()
+	if physics_body == null:
+		push_warning("Physics walker is not ready yet")
+		return
+	if physics_walk_enabled:
+		_disable_physics_walker()
+	else:
+		_enable_physics_walker()
+
+
+func _enable_physics_walker() -> void:
+	if physics_body == null:
+		return
+	var up := up_dir()
+	var basis_local := _local_basis(up)
+	var forward: Vector3 = basis_local[0]
+	physics_body.activate_at(up, forward)
+	physics_walk_enabled = true
+	mode = Mode.WALK
+	vertical_speed = 0.0
+	grounded = false
+	if physics_visual != null:
+		physics_visual.visible = true
+	_sync_from_physics_body()
+	_sync_transform()
+
+
+func _disable_physics_walker() -> void:
+	if physics_body == null:
+		physics_walk_enabled = false
+		return
+	if physics_body.active:
+		_sync_from_physics_body()
+	physics_body.deactivate()
+	physics_walk_enabled = false
+	mode = Mode.WALK
+	vertical_speed = 0.0
+	grounded = true
+	if physics_visual != null:
+		physics_visual.visible = false
+	_sync_transform()
+
+
+func _sync_from_physics_body() -> void:
+	if physics_body == null or not physics_body.active:
+		return
+	var body_world := physics_body.world_position()
+	if body_world.length_sq() <= 1.0:
+		return
+	var up := body_world.normalized().to_v3()
+	world_pos = body_world.add(Vec3D.from_v3(up).mul(EYE_HEIGHT - physics_body.com_height))
+	grounded = physics_body.grounded
+	vertical_speed = physics_body.linear_velocity.dot(up)
+
+
 func _physics_process(dt: float) -> void:
 	if not Planet.ready_state or not input_enabled:
 		return
+
+	if physics_walk_enabled:
+		_physics_walk_process()
+		return
+
 	var up := up_dir()
 	TerrainContactSampler.request_surface(up)
 	TerrainContactSampler.request_contact_height(up)
@@ -144,6 +236,36 @@ func _physics_process(dt: float) -> void:
 	moved.emit(world_pos)
 
 
+func _physics_walk_process() -> void:
+	if physics_body == null or not physics_body.active:
+		physics_walk_enabled = false
+		return
+	_sync_from_physics_body()
+	var up := up_dir()
+	TerrainContactSampler.request_surface(up)
+	TerrainContactSampler.request_contact_height(up)
+	var basis_local := _local_basis(up)
+	var fwd: Vector3 = basis_local[0]
+	var right: Vector3 = basis_local[1]
+	var wish := Vector3.ZERO
+	if Input.is_action_pressed("move_forward"): wish += fwd
+	if Input.is_action_pressed("move_back"): wish -= fwd
+	if Input.is_action_pressed("move_right"): wish += right
+	if Input.is_action_pressed("move_left"): wish -= right
+	var speed := RUN_SPEED if Input.is_action_pressed("sprint") else WALK_SPEED
+	var target_velocity := Vector3.ZERO
+	if wish.length_squared() > 1e-6:
+		target_velocity = wish.normalized() * speed
+	physics_body.set_control(target_velocity, fwd)
+	if Input.is_action_just_pressed("move_up"):
+		physics_body.request_jump()
+
+	Frames.maintain_origin(physics_body.global_position)
+	_sync_from_physics_body()
+	_sync_transform()
+	moved.emit(world_pos)
+
+
 func _local_basis(up: Vector3) -> Array:
 	var ref := Vector3(0, 1, 0)
 	if absf(up.dot(ref)) > 0.995:
@@ -167,6 +289,10 @@ func _sync_transform() -> void:
 		cam_right = flat_right
 	var true_up := cam_right.cross(look).normalized()
 	camera.transform.basis = Basis(cam_right, true_up, -look)
+	if physics_walk_enabled:
+		camera.position = -fwd * PHYSICS_CAMERA_BACK + up * PHYSICS_CAMERA_UP
+	else:
+		camera.position = Vector3.ZERO
 	var r_obs := Planet.cfg.planet_radius + maxf(altitude(), 0.0)
 	var horizon_dist := sqrt(maxf(r_obs * r_obs - Planet.cfg.planet_radius * Planet.cfg.planet_radius, 0.0))
 	camera.far = clampf(horizon_dist + 20000.0, 50000.0, 8.0e6)
@@ -174,6 +300,14 @@ func _sync_transform() -> void:
 
 func view_dir() -> Vector3:
 	return -camera.global_transform.basis.z
+
+
+func physics_walker_state() -> Dictionary:
+	if physics_body == null:
+		return {"enabled": false}
+	var result := physics_body.debug_state()
+	result["enabled"] = physics_walk_enabled
+	return result
 
 
 ## Two-stage terrain raycast.
@@ -237,9 +371,12 @@ func _coarse_gap_at(origin: Vec3D, ray: Vector3, t: float) -> float:
 
 func state() -> Dictionary:
 	return {"x": world_pos.x, "y": world_pos.y, "z": world_pos.z,
-		"yaw": yaw, "pitch": pitch, "mode": int(mode)}
+		"yaw": yaw, "pitch": pitch, "mode": int(mode),
+		"physics_walk": physics_walk_enabled}
 
 func restore(s: Dictionary) -> void:
+	if physics_walk_enabled:
+		_disable_physics_walker()
 	world_pos = Vec3D.new(s["x"], s["y"], s["z"])
 	yaw = s.get("yaw", 0.0)
 	pitch = s.get("pitch", 0.0)
