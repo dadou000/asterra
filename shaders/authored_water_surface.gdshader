@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_draw_alpha_prepass, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
+render_mode blend_mix, cull_disabled, depth_prepass_alpha, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/gpu_terrain_height.gdshaderinc"
