@@ -16,8 +16,6 @@ extends "res://scripts/world_authoring/world_authoring_editor_live_phase6.gd"
 
 const SCULPT_SMOOTH_MODE: int = 7
 const SCULPT_FLATTEN_MODE: int = 8
-const SCULPT_MIN_OFFSET_M: float = -10000.0
-const SCULPT_MAX_OFFSET_M: float = 10000.0
 const SMOOTH_MAX_NEIGHBOR_RADIUS_M: float = 4.0
 
 var _smooth_strength: float = 0.34
@@ -61,7 +59,25 @@ func _build_terrain_page() -> void:
 		_flatten_strength = clampf(value, 0.01, 1.0)
 	)
 	_add_note("SMOOTH and FLATTEN use the same radius/hardness as Raise/Lower. Each stamp reads an immutable sparse-delta snapshot before writing, so results do not depend on lattice traversal order. FLATTEN captures one MSL target from the first click and keeps it for the full drag.")
-	_add_note("These tools reshape the persistent generated terrain envelope without baking transient deformation or procedural high-frequency visual detail into saves. Rendering/contact still consume the resulting Deltas through the authoritative terrain stack.")
+	_add_note("Mouse wheel changes radius; Shift+wheel changes the active Smooth/Flatten strength. These tools reshape the persistent generated terrain envelope without baking transient deformation or procedural high-frequency visual detail into saves.")
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton \
+			and (_placement_mode == SCULPT_SMOOTH_MODE or _placement_mode == SCULPT_FLATTEN_MODE):
+		var wheel := event as InputEventMouseButton
+		if wheel.pressed and wheel.shift_pressed and _is_live_viewport_point(wheel.position) \
+				and (wheel.button_index == MOUSE_BUTTON_WHEEL_UP or wheel.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			var scale: float = 1.12 if wheel.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12
+			if _placement_mode == SCULPT_SMOOTH_MODE:
+				_smooth_strength = clampf(_smooth_strength * scale, 0.01, 1.0)
+				_set_status("Smooth strength %.3f." % _smooth_strength)
+			else:
+				_flatten_strength = clampf(_flatten_strength * scale, 0.01, 1.0)
+				_set_status("Flatten strength %.3f." % _flatten_strength)
+			get_viewport().set_input_as_handled()
+			return
+	super._unhandled_input(event)
 
 
 func _is_sculpt_placement() -> bool:
@@ -78,10 +94,10 @@ func _continuous_drag_mode() -> bool:
 
 func _placement_status_text() -> String:
 	if _placement_mode == SCULPT_SMOOTH_MODE:
-		return "SCULPT SMOOTH — LMB drag • wheel radius • RMB/Esc stop • TAB navigate"
+		return "SCULPT SMOOTH — LMB drag • wheel radius • Shift+wheel strength • RMB/Esc stop"
 	if _placement_mode == SCULPT_FLATTEN_MODE:
 		var target := "first click picks target" if not _flatten_target_valid else "target %.2f m MSL" % _flatten_target_height_m
-		return "SCULPT FLATTEN — %s • LMB drag • wheel radius • RMB/Esc stop" % target
+		return "SCULPT FLATTEN — %s • LMB drag • wheel radius • Shift+wheel strength" % target
 	return super._placement_status_text()
 
 
