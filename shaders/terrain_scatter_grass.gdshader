@@ -22,8 +22,9 @@ void vertex() {
 	ivec2 absolute_cell;
 	uint h;
 	vec3 d = sg_candidate_direction(INSTANCE_ID, 0x117u, absolute_cell, h);
-	float macro_h = sg_macro_height(d);
-	float terrain_h = sg_terrain_height(d, macro_h);
+	vec2 terrain_sample = sg_terrain_sample(d);
+	float macro_h = terrain_sample.x;
+	float terrain_h = terrain_sample.y;
 	vec4 soil = asterra_ctx_soil(d);
 	vec4 surface = asterra_ctx_surface(d);
 	vec4 geology = asterra_ctx_geology(d);
