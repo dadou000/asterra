@@ -2,9 +2,10 @@ class_name PhysicsWalkerVisual
 extends Node3D
 ## Skinned-mesh bridge for the articulated active ragdoll.
 ##
-## No locomotion is authored here anymore. ActiveRagdollRig drives real constrained
-## rigid bodies with finite torques; this node reads their measured relative joint
-## rotations and applies those rotations to the imported Skeleton3D.
+## ActiveRagdollRig drives the physical bodies. This node resolves the imported
+## humanoid bones, then copies measured physical joint rotations onto the skin.
+## Bone names are treated only as hints: side and chain fallbacks use the rest-pose
+## geometry/hierarchy so Blender/Rigify/Mixamo/custom naming can all be handled.
 
 const CHARACTER_PATH := "res://assets/character/asterrahuman.glb"
 const ARM_LOWER_DEG := 76.0
@@ -104,9 +105,7 @@ func _apply_ragdoll_pose() -> void:
 	_set_pose_delta("left_foot", ragdoll.relative_rotation("left_foot"))
 	_set_pose_delta("right_foot", ragdoll.relative_rotation("right_foot"))
 
-	# The mesh rest pose is a T pose while the physical arm capsules are authored in
-	# the natural hanging orientation. Apply that fixed rest-to-physics offset once;
-	# every additional shoulder/elbow rotation is measured from the real bodies.
+	# The skin is authored in a T pose while the physical arm bodies start hanging.
 	var left_arm_down := _q_axis(Vector3.BACK, deg_to_rad(ARM_LOWER_DEG))
 	var right_arm_down := _q_axis(Vector3.BACK, deg_to_rad(-ARM_LOWER_DEG))
 	_set_pose_delta("left_upper_arm", left_arm_down * ragdoll.relative_rotation("left_upper_arm"))
@@ -118,16 +117,9 @@ func _apply_ragdoll_pose() -> void:
 func _apply_neutral_pose() -> void:
 	if skeleton == null:
 		return
-	_set_pose_delta("spine", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("chest", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("neck", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("head", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("left_upper_leg", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("right_upper_leg", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("left_lower_leg", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("right_lower_leg", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("left_foot", Quaternion.IDENTITY, 1.0)
-	_set_pose_delta("right_foot", Quaternion.IDENTITY, 1.0)
+	for role in ["spine", "chest", "neck", "head", "left_upper_leg", "right_upper_leg",
+			"left_lower_leg", "right_lower_leg", "left_foot", "right_foot"]:
+		_set_pose_delta(role, Quaternion.IDENTITY, 1.0)
 	_set_pose_delta("left_upper_arm", _q_axis(Vector3.BACK, deg_to_rad(ARM_LOWER_DEG)), 1.0)
 	_set_pose_delta("right_upper_arm", _q_axis(Vector3.BACK, deg_to_rad(-ARM_LOWER_DEG)), 1.0)
 	_set_pose_delta("left_lower_arm", _q_axis(Vector3.RIGHT, deg_to_rad(-7.0)), 1.0)
@@ -157,21 +149,27 @@ func _resolve_bone_map() -> void:
 	_bones.clear()
 	if skeleton == null:
 		return
+
 	_bones["pelvis"] = _find_role(["hips", "pelvis", "hip"], 0)
 	_bones["spine"] = _find_spine(false)
 	_bones["chest"] = _find_spine(true)
 	_bones["neck"] = _find_role(["neck"], 0)
 	_bones["head"] = _find_role(["head"], 0)
+
 	_bones["left_upper_leg"] = _find_limb_role(-1, ["upleg", "up_leg", "upperleg", "upper_leg", "thigh"], ["lower", "calf", "shin"])
 	_bones["right_upper_leg"] = _find_limb_role(1, ["upleg", "up_leg", "upperleg", "upper_leg", "thigh"], ["lower", "calf", "shin"])
 	_bones["left_lower_leg"] = _find_limb_role(-1, ["lowerleg", "lower_leg", "calf", "shin", "leg"], ["upper", "up_leg", "upleg", "thigh", "foot", "toe"])
 	_bones["right_lower_leg"] = _find_limb_role(1, ["lowerleg", "lower_leg", "calf", "shin", "leg"], ["upper", "up_leg", "upleg", "thigh", "foot", "toe"])
 	_bones["left_foot"] = _find_limb_role(-1, ["foot", "ankle"], ["toe"])
 	_bones["right_foot"] = _find_limb_role(1, ["foot", "ankle"], ["toe"])
-	_bones["left_upper_arm"] = _find_limb_role(-1, ["upperarm", "upper_arm", "uparm", "up_arm", "arm"], ["fore", "lower", "hand", "shoulder"])
-	_bones["right_upper_arm"] = _find_limb_role(1, ["upperarm", "upper_arm", "uparm", "up_arm", "arm"], ["fore", "lower", "hand", "shoulder"])
+	_bones["left_upper_arm"] = _find_limb_role(-1, ["upperarm", "upper_arm", "uparm", "up_arm", "arm"], ["fore", "lower", "hand", "shoulder", "clavicle"])
+	_bones["right_upper_arm"] = _find_limb_role(1, ["upperarm", "upper_arm", "uparm", "up_arm", "arm"], ["fore", "lower", "hand", "shoulder", "clavicle"])
 	_bones["left_lower_arm"] = _find_limb_role(-1, ["forearm", "fore_arm", "lowerarm", "lower_arm"], ["hand", "upper"])
 	_bones["right_lower_arm"] = _find_limb_role(1, ["forearm", "fore_arm", "lowerarm", "lower_arm"], ["hand", "upper"])
+
+	_resolve_hierarchy_fallbacks()
+	_remove_duplicate_limb_assignments()
+	_resolve_hierarchy_fallbacks()
 	_report_bone_mapping()
 
 
@@ -179,23 +177,25 @@ func _find_limb_role(side: int, include_tokens: Array[String], exclude_tokens: A
 	var best := -1
 	var best_score := -100000
 	for bone in skeleton.get_bone_count():
-		var original := String(skeleton.get_bone_name(bone))
-		if _name_side(original) != side:
+		if _bone_side(bone) != side:
 			continue
-		var normalized := _normalized_name(original)
+		var normalized := _normalized_name(String(skeleton.get_bone_name(bone)))
+		var compact := normalized.replace("_", "")
 		var score := 0
 		var matched := false
 		for token in include_tokens:
-			if normalized.contains(token):
+			var token_compact := token.replace("_", "")
+			if normalized.contains(token) or compact.contains(token_compact):
 				matched = true
 				score += 30 + token.length()
 		for token in exclude_tokens:
-			if normalized.contains(token):
+			var token_compact := token.replace("_", "")
+			if normalized.contains(token) or compact.contains(token_compact):
 				score -= 55
 		if not matched:
 			continue
-		if normalized.contains("twist") or normalized.contains("helper") or normalized.contains("mch"):
-			score -= 35
+		if _is_helper_bone(normalized):
+			score -= 50
 		if normalized.contains("def"):
 			score += 5
 		if score > best_score:
@@ -208,20 +208,20 @@ func _find_role(tokens: Array[String], side: int) -> int:
 	var best := -1
 	var best_score := -100000
 	for bone in skeleton.get_bone_count():
-		var original := String(skeleton.get_bone_name(bone))
-		if side != 0 and _name_side(original) != side:
+		if side != 0 and _bone_side(bone) != side:
 			continue
-		var normalized := _normalized_name(original)
+		var normalized := _normalized_name(String(skeleton.get_bone_name(bone)))
+		var compact := normalized.replace("_", "")
 		var score := 0
 		var matched := false
 		for token in tokens:
-			if normalized.contains(token):
+			if normalized.contains(token) or compact.contains(token.replace("_", "")):
 				matched = true
 				score += 30 + token.length()
 		if not matched:
 			continue
-		if normalized.contains("twist") or normalized.contains("helper") or normalized.contains("mch"):
-			score -= 35
+		if _is_helper_bone(normalized):
+			score -= 50
 		if score > best_score:
 			best_score = score
 			best = bone
@@ -232,15 +232,232 @@ func _find_spine(highest: bool) -> int:
 	var candidates: Array[int] = []
 	for bone in skeleton.get_bone_count():
 		var normalized := _normalized_name(String(skeleton.get_bone_name(bone)))
-		if normalized.contains("spine") or normalized.contains("chest"):
-			if not normalized.contains("twist") and not normalized.contains("helper"):
-				candidates.append(bone)
+		if (normalized.contains("spine") or normalized.contains("chest")) and not _is_helper_bone(normalized):
+			candidates.append(bone)
 	if candidates.is_empty():
 		return -1
 	candidates.sort_custom(func(a: int, b: int) -> bool:
 		return _bone_depth(a) < _bone_depth(b)
 	)
 	return candidates[candidates.size() - 1] if highest else candidates[0]
+
+
+func _resolve_hierarchy_fallbacks() -> void:
+	var pelvis := int(_bones.get("pelvis", -1))
+	if pelvis < 0:
+		pelvis = _guess_pelvis()
+		_bones["pelvis"] = pelvis
+
+	var spine := int(_bones.get("spine", -1))
+	var chest := int(_bones.get("chest", -1))
+	if spine < 0 and pelvis >= 0:
+		spine = _guess_central_up_chain(pelvis, false)
+		_bones["spine"] = spine
+	if chest < 0 and pelvis >= 0:
+		chest = _guess_central_up_chain(pelvis, true)
+		_bones["chest"] = chest
+
+	for side in [-1, 1]:
+		var prefix := "left" if side < 0 else "right"
+		var upper_leg_key := "%s_upper_leg" % prefix
+		var lower_leg_key := "%s_lower_leg" % prefix
+		var foot_key := "%s_foot" % prefix
+		var upper_arm_key := "%s_upper_arm" % prefix
+		var lower_arm_key := "%s_lower_arm" % prefix
+
+		var upper_leg := int(_bones.get(upper_leg_key, -1))
+		if upper_leg < 0 and pelvis >= 0:
+			upper_leg = _guess_upper_leg(pelvis, side)
+			_bones[upper_leg_key] = upper_leg
+		var lower_leg := int(_bones.get(lower_leg_key, -1))
+		if lower_leg < 0 and upper_leg >= 0:
+			lower_leg = _guess_chain_child(upper_leg, side, false)
+			_bones[lower_leg_key] = lower_leg
+		if int(_bones.get(foot_key, -1)) < 0 and lower_leg >= 0:
+			_bones[foot_key] = _guess_foot(lower_leg, side)
+
+		var arm_root := chest if chest >= 0 else spine
+		var upper_arm := int(_bones.get(upper_arm_key, -1))
+		if upper_arm < 0 and arm_root >= 0:
+			upper_arm = _guess_upper_arm(arm_root, side)
+			_bones[upper_arm_key] = upper_arm
+		if int(_bones.get(lower_arm_key, -1)) < 0 and upper_arm >= 0:
+			_bones[lower_arm_key] = _guess_chain_child(upper_arm, side, true)
+
+
+func _guess_pelvis() -> int:
+	var bounds := _rest_bounds()
+	var min_y := (bounds[0] as Vector3).y
+	var max_y := (bounds[1] as Vector3).y
+	var target_y := lerpf(min_y, max_y, 0.47)
+	var best := -1
+	var best_score := -INF
+	for bone in skeleton.get_bone_count():
+		var p := skeleton.get_bone_global_rest(bone).origin
+		var children := _direct_children(bone).size()
+		if children < 2:
+			continue
+		var score := float(children) * 4.0 - absf(p.x) * 8.0 - absf(p.y - target_y) * 3.0
+		if score > best_score:
+			best_score = score
+			best = bone
+	return best
+
+
+func _guess_central_up_chain(root: int, highest: bool) -> int:
+	var root_p := skeleton.get_bone_global_rest(root).origin
+	var best := -1
+	var best_value := -INF if highest else INF
+	for bone in _descendants(root, 5):
+		var p := skeleton.get_bone_global_rest(bone).origin
+		if p.y <= root_p.y + 0.02:
+			continue
+		if absf(p.x - root_p.x) > maxf(model_height * 0.12, 0.08):
+			continue
+		if highest:
+			if p.y > best_value:
+				best_value = p.y
+				best = bone
+		else:
+			if p.y < best_value:
+				best_value = p.y
+				best = bone
+	return best
+
+
+func _guess_upper_leg(pelvis_bone: int, side: int) -> int:
+	var root_p := skeleton.get_bone_global_rest(pelvis_bone).origin
+	var best := -1
+	var best_score := -INF
+	for bone in _descendants(pelvis_bone, 3):
+		if _bone_side(bone) != side:
+			continue
+		var p := skeleton.get_bone_global_rest(bone).origin
+		if p.y > root_p.y + model_height * 0.08:
+			continue
+		var drop := _max_downstream_drop(bone)
+		if drop < model_height * 0.10:
+			continue
+		var score := drop * 8.0 - float(_distance_from_ancestor(pelvis_bone, bone)) * 0.9
+		score -= absf(p.y - root_p.y) * 0.8
+		if score > best_score:
+			best_score = score
+			best = bone
+	return best
+
+
+func _guess_upper_arm(root: int, side: int) -> int:
+	var root_p := skeleton.get_bone_global_rest(root).origin
+	var best := -1
+	var best_score := -INF
+	for bone in _descendants(root, 4):
+		if _bone_side(bone) != side:
+			continue
+		var p := skeleton.get_bone_global_rest(bone).origin
+		var lateral := absf(p.x - root_p.x)
+		var reach := _max_downstream_lateral_reach(bone, root_p.x)
+		if reach < model_height * 0.12:
+			continue
+		var score := reach * 7.0 + lateral * 2.0 - float(_distance_from_ancestor(root, bone)) * 0.8
+		if score > best_score:
+			best_score = score
+			best = bone
+	return best
+
+
+func _guess_chain_child(parent_bone: int, side: int, lateral_chain: bool) -> int:
+	var parent_p := skeleton.get_bone_global_rest(parent_bone).origin
+	var best := -1
+	var best_score := -INF
+	for bone in _descendants(parent_bone, 2):
+		if _bone_side(bone) != side:
+			continue
+		var p := skeleton.get_bone_global_rest(bone).origin
+		var progress := absf(p.x - parent_p.x) if lateral_chain else (parent_p.y - p.y)
+		if progress <= 0.015:
+			continue
+		var score := progress * 8.0 - float(_distance_from_ancestor(parent_bone, bone)) * 0.9
+		if score > best_score:
+			best_score = score
+			best = bone
+	return best
+
+
+func _guess_foot(lower_leg: int, side: int) -> int:
+	var parent_p := skeleton.get_bone_global_rest(lower_leg).origin
+	var best := -1
+	var best_score := -INF
+	for bone in _descendants(lower_leg, 3):
+		if _bone_side(bone) != side:
+			continue
+		var p := skeleton.get_bone_global_rest(bone).origin
+		var depth := _distance_from_ancestor(lower_leg, bone)
+		var score := (parent_p.y - p.y) * 5.0 + absf(p.z - parent_p.z) * 2.0 - float(depth) * 0.45
+		if score > best_score:
+			best_score = score
+			best = bone
+	return best
+
+
+func _remove_duplicate_limb_assignments() -> void:
+	var roles := ["left_upper_leg", "right_upper_leg", "left_lower_leg", "right_lower_leg",
+		"left_foot", "right_foot", "left_upper_arm", "right_upper_arm",
+		"left_lower_arm", "right_lower_arm"]
+	var used: Dictionary = {}
+	for role in roles:
+		var bone := int(_bones.get(role, -1))
+		if bone < 0:
+			continue
+		if used.has(bone):
+			push_warning("Bone %s was assigned to both %s and %s; re-resolving %s" % [
+				skeleton.get_bone_name(bone), used[bone], role, role])
+			_bones[role] = -1
+		else:
+			used[bone] = role
+
+
+func _bone_side(bone: int) -> int:
+	var named_side := _name_side(String(skeleton.get_bone_name(bone)))
+	if named_side != 0:
+		return named_side
+	var center_x := 0.0
+	var pelvis := int(_bones.get("pelvis", -1))
+	if pelvis >= 0 and pelvis < skeleton.get_bone_count():
+		center_x = skeleton.get_bone_global_rest(pelvis).origin.x
+	var x := skeleton.get_bone_global_rest(bone).origin.x - center_x
+	var threshold := maxf(model_height * 0.015, 0.012)
+	if x < -threshold:
+		return -1
+	if x > threshold:
+		return 1
+	return 0
+
+
+func _name_side(name: String) -> int:
+	var lower := name.to_lower()
+	var normalized := _normalized_name(name)
+	var parts := normalized.split("_", false)
+	if lower.contains("left") or lower.ends_with(".l") or lower.ends_with("-l") \
+			or normalized.begins_with("l_") or normalized.ends_with("_l") \
+			or normalized.contains("_l_") or parts.has("l"):
+		return -1
+	if lower.contains("right") or lower.ends_with(".r") or lower.ends_with("-r") \
+			or normalized.begins_with("r_") or normalized.ends_with("_r") \
+			or normalized.contains("_r_") or parts.has("r"):
+		return 1
+	return 0
+
+
+func _is_helper_bone(normalized: String) -> bool:
+	return normalized.contains("twist") or normalized.contains("helper") \
+		or normalized.contains("mch") or normalized.contains("mechanism")
+
+
+func _normalized_name(name: String) -> String:
+	var result := name.to_lower()
+	for separator in [".", "-", ":", " ", "/", "\\"]:
+		result = result.replace(separator, "_")
+	return result
 
 
 func _bone_depth(bone: int) -> int:
@@ -252,23 +469,68 @@ func _bone_depth(bone: int) -> int:
 	return depth
 
 
-func _name_side(name: String) -> int:
-	var lower := name.to_lower()
-	var normalized := _normalized_name(name)
-	if lower.contains("left") or lower.ends_with(".l") or lower.ends_with("-l") \
-			or normalized.begins_with("l_") or normalized.ends_with("_l"):
-		return -1
-	if lower.contains("right") or lower.ends_with(".r") or lower.ends_with("-r") \
-			or normalized.begins_with("r_") or normalized.ends_with("_r"):
-		return 1
-	return 0
-
-
-func _normalized_name(name: String) -> String:
-	var result := name.to_lower()
-	for separator in [".", "-", ":", " ", "/", "\\"]:
-		result = result.replace(separator, "_")
+func _direct_children(parent_bone: int) -> Array[int]:
+	var result: Array[int] = []
+	for bone in skeleton.get_bone_count():
+		if skeleton.get_bone_parent(bone) == parent_bone:
+			result.append(bone)
 	return result
+
+
+func _descendants(root: int, max_depth: int) -> Array[int]:
+	var result: Array[int] = []
+	var frontier: Array[Dictionary] = [{"bone": root, "depth": 0}]
+	var cursor := 0
+	while cursor < frontier.size():
+		var item := frontier[cursor]
+		cursor += 1
+		var depth := int(item["depth"])
+		if depth >= max_depth:
+			continue
+		for child in _direct_children(int(item["bone"])):
+			result.append(child)
+			frontier.append({"bone": child, "depth": depth + 1})
+	return result
+
+
+func _distance_from_ancestor(ancestor: int, bone: int) -> int:
+	var distance := 0
+	var current := bone
+	while current >= 0 and current != ancestor:
+		current = skeleton.get_bone_parent(current)
+		distance += 1
+		if distance > skeleton.get_bone_count():
+			break
+	return distance if current == ancestor else 999
+
+
+func _max_downstream_drop(bone: int) -> float:
+	var origin_y := skeleton.get_bone_global_rest(bone).origin.y
+	var drop := 0.0
+	for child in _descendants(bone, 5):
+		drop = maxf(drop, origin_y - skeleton.get_bone_global_rest(child).origin.y)
+	return drop
+
+
+func _max_downstream_lateral_reach(bone: int, center_x: float) -> float:
+	var reach := absf(skeleton.get_bone_global_rest(bone).origin.x - center_x)
+	for child in _descendants(bone, 5):
+		reach = maxf(reach, absf(skeleton.get_bone_global_rest(child).origin.x - center_x))
+	return reach
+
+
+func _rest_bounds() -> Array[Vector3]:
+	var min_p := Vector3(INF, INF, INF)
+	var max_p := Vector3(-INF, -INF, -INF)
+	for bone in skeleton.get_bone_count():
+		var p := skeleton.get_bone_global_rest(bone).origin
+		min_p.x = minf(min_p.x, p.x)
+		min_p.y = minf(min_p.y, p.y)
+		min_p.z = minf(min_p.z, p.z)
+		max_p.x = maxf(max_p.x, p.x)
+		max_p.y = maxf(max_p.y, p.y)
+		max_p.z = maxf(max_p.z, p.z)
+	return [min_p, max_p]
 
 
 func _report_bone_mapping() -> void:
@@ -280,12 +542,24 @@ func _report_bone_mapping() -> void:
 	for role in _bones.keys():
 		var index := int(_bones[role])
 		if index >= 0:
-			parts.append("%s=%s" % [role, skeleton.get_bone_name(index)])
+			var p := skeleton.get_bone_global_rest(index).origin
+			parts.append("%s=#%d %s rest=(%.3f,%.3f,%.3f)" % [
+				role, index, skeleton.get_bone_name(index), p.x, p.y, p.z])
 		else:
 			missing.append(String(role))
 	print("Active ragdoll bone map: ", ", ".join(parts))
 	if not missing.is_empty():
 		push_warning("Active ragdoll could not resolve bones: %s" % ", ".join(missing))
+		_print_skeleton_inventory()
+
+
+func _print_skeleton_inventory() -> void:
+	var rows: Array[String] = []
+	for bone in skeleton.get_bone_count():
+		var p := skeleton.get_bone_global_rest(bone).origin
+		rows.append("#%d %s parent=%d rest=(%.3f,%.3f,%.3f)" % [
+			bone, skeleton.get_bone_name(bone), skeleton.get_bone_parent(bone), p.x, p.y, p.z])
+	print("Asterra humanoid skeleton inventory:\n", "\n".join(rows))
 
 
 func _find_skeleton(node: Node) -> Skeleton3D:
