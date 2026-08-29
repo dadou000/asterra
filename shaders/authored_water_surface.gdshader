@@ -1,13 +1,14 @@
 shader_type spatial;
 render_mode blend_mix, cull_disabled, depth_prepass_alpha, diffuse_burley, specular_schlick_ggx, ambient_light_disabled;
 
+uniform float u_planet_radius = 1000000.0;
+
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/gpu_terrain_height.gdshaderinc"
 #include "res://shaders/terrain_edit_delta.gdshaderinc"
 #include "res://shaders/water_surface.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
-uniform float u_planet_radius = 1000000.0;
 uniform int u_feature_type = 0; // 0 lake, 1 river
 uniform float u_feature_wave_amplitude_scale = 1.0;
 uniform float u_feature_wave_frequency_scale = 1.0;
