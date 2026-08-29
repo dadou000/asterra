@@ -44,6 +44,10 @@ void vertex() {
 	vec3 planet = render_world + u_origin;
 	vec3 up = normalize(planet);
 
+	v_authored_depth = max(UV.x, 0.0);
+	v_current_m_s = max(UV.y, 0.0);
+	v_cross_section = UV2.x;
+
 	float feature_wave = max(u_feature_wave_amplitude_scale, 0.0)
 		* max(u_global_wave_amplitude_scale, 0.0);
 	float amplitude_m = 0.095 * feature_wave;
@@ -69,9 +73,6 @@ void vertex() {
 	VERTEX += NORMAL * wave;
 	NORMAL = displaced_normal;
 	v_planet = planet + up * wave;
-	v_authored_depth = max(UV.x, 0.0);
-	v_current_m_s = max(UV.y, 0.0);
-	v_cross_section = UV2.x;
 	v_wave_energy = clamp(abs(slope_a) + abs(slope_b), 0.0, 1.0);
 }
 
