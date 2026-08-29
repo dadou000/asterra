@@ -1,8 +1,18 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "rig_name": "asterra_humanoid_19body",
   "root_body": "pelvis",
   "body_count": 19,
+  "canonical_character_source": {
+    "repository_path": "assets/character/asterrahuman.glb",
+    "godot_path": "res://assets/character/asterrahuman.glb",
+    "repository_blob_sha": "dbf0063e47e85b9f467f82c89bed4a3f84f46463",
+    "role": "canonical_visual_skeleton_and_proportion_source",
+    "preserve_full_skin_skeleton": true,
+    "physics_proxy_body_count": 19,
+    "skeleton_manifest": "experiments/locomotion_19body/generated/asterrahuman_skeleton_manifest.json",
+    "physics_proxy_map": "experiments/locomotion_19body/generated/asterrahuman_physics_proxy_map.json"
+  },
   "canonical_bodies": [
     "pelvis",
     "spine",
@@ -48,8 +58,10 @@
   "required_key_bodies": ["head", "left_hand", "right_hand", "left_foot", "right_foot"],
   "runtime_name_map": {},
   "notes": [
-    "runtime_name_map is intentionally empty until the final 19-body physics asset is exported.",
+    "assets/character/asterrahuman.glb is the canonical character. Do not create a second training humanoid with different proportions or rest axes.",
+    "The complete imported skin skeleton is preserved for deformation; the 19 bodies are a physics/control proxy generated around selected skeleton landmarks.",
+    "runtime_name_map is generated only after the canonical GLB skeleton manifest and 19-body proxy are resolved; do not guess limb names.",
     "Training must fail closed if any canonical body cannot be resolved uniquely.",
-    "The action dimension is derived from the exported articulation DOFs, not from body_count."
+    "The action dimension is derived from the generated articulation DOFs, not from body_count."
   ]
 }
