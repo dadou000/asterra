@@ -517,8 +517,8 @@ func _make_push_constants(job: Dictionary) -> PackedByteArray:
 		float(Planet.global_height_face_res))
 	var context: Node = get_node_or_null("/root/PlanetContext")
 	var context_res := float(context.get("face_res")) if context != null else 0.0
-	var detail_seed := Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
-	var detail_strength := maxf(0.05, Planet.cfg.detail_amplitude / 260.0)
+	var detail_seed: int = int(Planet.cfg.stream_seed("gpu_visual_detail")) & 0x00ffffff
+	var detail_strength: float = maxf(0.05, float(Planet.cfg.detail_amplitude) / 260.0)
 	_encode_vec4(bytes, 48, context_res, float(maxi(detail_seed, 1)),
 		detail_strength, 0.0)
 	var origin: Vector2i = job["origin"]
