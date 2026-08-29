@@ -1,7 +1,7 @@
 class_name WorldAuthoringSession
 extends RefCounted
-## Transactional staging model for Planet Studio.
-## Phase 0 intentionally does not mutate the live terrain runtime on Apply.
+## Transactional staging model for Planet Studio. Editing resources happens only
+## in the staged copy; Apply promotes a coherent system snapshot.
 
 const SYSTEM_SCRIPT := preload("res://scripts/world_authoring/model/celestial_system_definition.gd")
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
@@ -10,6 +10,8 @@ const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/ter
 const GENERATION_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 const WATER_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/water_authoring_profile.gd")
 const ATMOSPHERE_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/atmosphere_profile.gd")
+const SHADER_SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
+const WATER_FEATURE_SCRIPT := preload("res://scripts/world_authoring/model/water_feature_definition.gd")
 
 signal changed(dirty: bool, apply_scope: int)
 signal applied(system: Resource)
@@ -59,6 +61,7 @@ func bootstrap_from_generation_profile(generation: Resource) -> void:
 	profile.set(&"water", water)
 	profile.set(&"atmosphere", atmosphere)
 	profile.set(&"reference_sea_level_m", 0.0)
+	profile.call("ensure_children")
 
 	var body: Resource = BODY_SCRIPT.new()
 	body.set(&"body_id", "asterra")
@@ -93,6 +96,24 @@ func active_body() -> Resource:
 		return null
 	return staged_system.call("active_body") as Resource
 
+func active_planet_profile() -> Resource:
+	var body := active_body()
+	if body == null:
+		return null
+	return body.get(&"planet_profile") as Resource
+
+func active_terrain_profile() -> Resource:
+	var profile := active_planet_profile()
+	if profile == null:
+		return null
+	return profile.get(&"terrain") as Resource
+
+func active_water_profile() -> Resource:
+	var profile := active_planet_profile()
+	if profile == null:
+		return null
+	return profile.get(&"water") as Resource
+
 func can_undo() -> bool:
 	return not _undo_stack.is_empty()
 
@@ -105,6 +126,7 @@ func stage_set(target: Object, property_name: StringName, value: Variant, scope:
 	_push_undo_state()
 	_redo_stack.clear()
 	target.set(property_name, value)
+	staged_system.call("ensure_valid")
 	_mark_dirty(scope)
 
 func stage_action(_action_name: String, action: Callable, scope: int) -> void:
@@ -122,6 +144,19 @@ func select_body(body_id: String) -> void:
 	if String(staged_system.get(&"active_body_id")) == body_id:
 		return
 	stage_set(staged_system, &"active_body_id", body_id, ApplyScope.CLIPMAP, "Select body")
+
+func set_active_body_parent(parent_body_id: String) -> bool:
+	var body := active_body()
+	if body == null or staged_system == null:
+		return false
+	var body_id := String(body.get(&"body_id"))
+	if not bool(staged_system.call("can_parent_body", body_id, parent_body_id)):
+		error_reported.emit("Invalid orbit parent: the celestial hierarchy cannot contain self-parenting or cycles.")
+		return false
+	stage_action("Change orbit parent", func() -> void:
+		staged_system.call("set_parent_body", body_id, parent_body_id)
+	, ApplyScope.FULL_REBUILD)
+	return true
 
 func create_body(display_name: String, body_type: int, parent_body_id: String = "") -> Resource:
 	if staged_system == null:
@@ -159,6 +194,79 @@ func delete_active_body() -> bool:
 	stage_action("Delete body", func() -> void:
 		staged_system.call("remove_body", body_id)
 	, ApplyScope.FULL_REBUILD)
+	return true
+
+func create_biome_layer(display_name: String = "Biome Paint") -> Resource:
+	var terrain := active_terrain_profile()
+	if terrain == null:
+		return null
+	var created: Resource
+	stage_action("Create biome paint layer", func() -> void:
+		created = terrain.call("create_biome_layer", display_name) as Resource
+	, ApplyScope.TILES)
+	return created
+
+func remove_biome_layer(layer_id: String) -> bool:
+	var terrain := active_terrain_profile()
+	if terrain == null or terrain.call("find_biome_layer", layer_id) == null:
+		return false
+	stage_action("Delete biome paint layer", func() -> void:
+		terrain.call("remove_biome_layer", layer_id)
+	, ApplyScope.TILES)
+	return true
+
+func add_biome_stroke(layer_id: String, center_direction: Vector3, biome_id: int, radius_m: float, hardness: float, opacity: float) -> bool:
+	var terrain := active_terrain_profile()
+	if terrain == null:
+		return false
+	var layer: Resource = terrain.call("find_biome_layer", layer_id) as Resource
+	if layer == null:
+		return false
+	if center_direction.length_squared() < 1e-9:
+		return false
+	stage_action("Paint biome", func() -> void:
+		layer.call("add_stroke", center_direction, biome_id, radius_m, hardness, opacity)
+	, ApplyScope.TILES)
+	return true
+
+func create_terrain_shader_slot(domain: int, display_name: String = "Terrain Slot") -> Resource:
+	var terrain := active_terrain_profile()
+	if terrain == null:
+		return null
+	var resolved_domain := SHADER_SLOT_SCRIPT.Domain.MATERIAL if domain == SHADER_SLOT_SCRIPT.Domain.MATERIAL else SHADER_SLOT_SCRIPT.Domain.DISPLACEMENT
+	var created: Resource
+	stage_action("Create terrain shader slot", func() -> void:
+		created = terrain.call("create_shader_slot", resolved_domain, display_name) as Resource
+	, ApplyScope.GRAPH)
+	return created
+
+func remove_terrain_shader_slot(slot_id: String) -> bool:
+	var terrain := active_terrain_profile()
+	if terrain == null or terrain.call("find_shader_slot", slot_id) == null:
+		return false
+	stage_action("Delete terrain shader slot", func() -> void:
+		terrain.call("remove_shader_slot", slot_id)
+	, ApplyScope.GRAPH)
+	return true
+
+func create_water_feature(feature_type: int, display_name: String = "Water Feature") -> Resource:
+	var water := active_water_profile()
+	if water == null:
+		return null
+	var resolved_type := WATER_FEATURE_SCRIPT.FeatureType.RIVER if feature_type == WATER_FEATURE_SCRIPT.FeatureType.RIVER else WATER_FEATURE_SCRIPT.FeatureType.LAKE
+	var created: Resource
+	stage_action("Create water feature", func() -> void:
+		created = water.call("create_feature", resolved_type, display_name) as Resource
+	, ApplyScope.TILES)
+	return created
+
+func remove_water_feature(feature_id: String) -> bool:
+	var water := active_water_profile()
+	if water == null or water.call("find_feature", feature_id) == null:
+		return false
+	stage_action("Delete water feature", func() -> void:
+		water.call("remove_feature", feature_id)
+	, ApplyScope.TILES)
 	return true
 
 func undo() -> void:
