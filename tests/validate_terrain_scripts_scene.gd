@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase11.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase12.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
@@ -80,7 +80,7 @@ func _validate_phase7_sculpt_math() -> bool:
 		return false
 	Deltas.clear()
 	editor.free()
-	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via batched writes")
+	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 12 cache/batch-compatible writes")
 	return true
 
 func _validate_phase9_falloff_profiles() -> bool:
