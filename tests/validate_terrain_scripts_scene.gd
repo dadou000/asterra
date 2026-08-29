@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase14.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase15.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
@@ -31,6 +31,8 @@ func _ready() -> void:
 	if not _validate_phase13_async_shape_math():
 		return
 	if not _validate_phase14_sampler_equivalence():
+		return
+	if not _validate_phase15_packed_deltas():
 		return
 	print("TERRAIN_SCRIPT_STACK_OK: %d scripts" % SCRIPT_CHAIN.size())
 	get_tree().quit(0)
@@ -79,7 +81,7 @@ func _validate_phase7_sculpt_math() -> bool:
 		return false
 	Deltas.clear()
 	editor.free()
-	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 14 sampler")
+	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 15 packed publication")
 	return true
 
 func _validate_phase9_falloff_profiles() -> bool:
@@ -196,6 +198,7 @@ func _validate_phase13_async_shape_math() -> bool:
 	var flatten_job := {
 		"center": center,
 		"planet_radius": planet_radius,
+		"radius_m": 3.0,
 		"target_height_m": flatten_target,
 		"strength": 1.0,
 		"samples": flatten_samples,
@@ -339,6 +342,36 @@ func _validate_phase14_sampler_equivalence() -> bool:
 		return false
 	editor.free()
 	print("PHASE14_SAMPLER_OK: seam-canonical sample set matches exact geodesic reference; max weight error %.8f" % maximum_weight_error)
+	return true
+
+func _validate_phase15_packed_deltas() -> bool:
+	Deltas.clear()
+	var base := Deltas.dir_to_lattice(Vector3(1.0, 0.17, -0.11).normalized())
+	var a: Vector3i = Deltas.canonical_address(
+		int(base[0]), int(round(float(base[1]))), int(round(float(base[2]))))
+	var b: Vector3i = Deltas.canonical_address(a.x, a.y + 3, a.z - 2)
+	var packed_a: int = Deltas.pack_address(a)
+	var packed_b: int = Deltas.pack_address(b)
+	if packed_a < 0 or packed_b < 0 or Deltas.unpack_address(packed_a) != a or Deltas.unpack_address(packed_b) != b:
+		_fail("PHASE15_PACKED_FAILED: canonical address codec did not round-trip")
+		return false
+	var addresses := PackedInt64Array([packed_a, packed_b])
+	var values := PackedFloat32Array([3.25, -2.5])
+	var changed: int = Deltas.set_packed_offsets_batch(addresses, values, -10000.0, 10000.0)
+	if changed != 2:
+		_fail("PHASE15_PACKED_FAILED: initial packed write changed %d samples instead of 2" % changed)
+		return false
+	if not is_equal_approx(Deltas.get_offset(a.x, a.y, a.z), 3.25) \
+			or not is_equal_approx(Deltas.get_offset(b.x, b.y, b.z), -2.5):
+		_fail("PHASE15_PACKED_FAILED: packed absolute targets were not stored exactly")
+		return false
+	values[0] = 0.0
+	values[1] = 0.0
+	changed = Deltas.set_packed_offsets_batch(addresses, values, -10000.0, 10000.0)
+	if changed != 2 or not Deltas.is_empty():
+		_fail("PHASE15_PACKED_FAILED: zero packed targets did not prune the sparse tile layer")
+		return false
+	print("PHASE15_PACKED_OK: address codec + absolute write + zero-tile pruning")
 	return true
 
 func _packed_address_key(address: Vector3i) -> int:
