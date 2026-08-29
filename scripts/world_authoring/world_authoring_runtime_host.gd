@@ -3,9 +3,10 @@ extends Node
 ## Installs Planet Studio over Main when launched in planet_studio mode and owns
 ## the deliberate boundary between staged authoring resources and the production
 ## one-planet runtime. Apply can rebuild the currently selected terrestrial body;
-## biome/water/graph layers remain staged until their runtime rasterizers compile.
+## sparse sculpt data is synchronized immediately while biome/water/graph runtime
+## compilers remain staged behind their dedicated rasterization passes.
 
-const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live.gd")
+const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase2.gd")
 
 var _main: Node
 var _layer: CanvasLayer
@@ -22,7 +23,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _opened or _main == null:
 		return
-	var player := _main.get("player") as Node
+	var player: Node = _main.get("player") as Node
 	if player == null:
 		return
 	_open_live_editor(player)
@@ -52,7 +53,7 @@ func _open_live_editor(player: Node) -> void:
 
 func _set_existing_ui_visible(visible: bool) -> void:
 	for property_name: StringName in [&"hud", &"map", &"debug_menu", &"coastline_profile_editor"]:
-		var node := _main.get(property_name) as CanvasItem
+		var node: CanvasItem = _main.get(property_name) as CanvasItem
 		if node != null:
 			node.visible = visible
 
@@ -76,10 +77,20 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_set_editor_status("Apply rejected: active body has no terrain profile.")
 		return
 	var generation: Resource = terrain.get(&"generation_profile") as Resource
-	var cfg := _main.get("cfg") as Resource
+	var cfg: Resource = _main.get("cfg") as Resource
 	if generation == null or cfg == null:
 		_set_editor_status("Apply rejected: generation/runtime configuration is unavailable.")
 		return
+
+	# Sculpt deltas are already authored in the runtime while painting, but Apply is
+	# also the boundary used after preset loads/body changes. Re-adopt the staged
+	# sparse state here so the production renderer/contact stack cannot retain data
+	# from a previously selected body.
+	if terrain.has_method("sculpt_delta_serialized"):
+		var sculpt_value: Variant = terrain.call("sculpt_delta_serialized")
+		if sculpt_value is Dictionary:
+			Deltas.deserialize(sculpt_value as Dictionary)
+
 	generation.call("copy_to_resource", cfg)
 	cfg.set(&"planet_radius", maxf(1.0, float(body.get(&"radius_m"))))
 	cfg.set(&"axial_tilt_deg", float(body.get(&"axial_tilt_deg")))
@@ -94,24 +105,28 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_set_editor_status("A terrain rebuild is already running.")
 		return
 	_main.call("_on_rebake_requested")
+
 	var terrain_profile: Resource = profile.get(&"terrain") as Resource
-	var biome_count := 0
-	var displacement_count := 0
-	var material_count := 0
+	var biome_count: int = 0
+	var displacement_count: int = 0
+	var material_count: int = 0
+	var sculpt_tile_count: int = 0
 	if terrain_profile != null:
 		biome_count = (terrain_profile.get(&"biome_override_layers") as Array).size()
 		displacement_count = (terrain_profile.get(&"displacement_slots") as Array).size()
 		material_count = (terrain_profile.get(&"material_slots") as Array).size()
+		if terrain_profile.has_method("sculpt_edited_tile_count"):
+			sculpt_tile_count = int(terrain_profile.call("sculpt_edited_tile_count"))
 	var water: Resource = profile.get(&"water") as Resource
-	var water_count := (water.get(&"authored_features") as Array).size() if water != null else 0
-	_set_editor_status("Applying %s to live runtime — generator/planet/atmosphere rebuild started. Staged runtime layers: %d biome, %d displacement, %d material, %d water feature(s)." % [String(body.get(&"display_name")), biome_count, displacement_count, material_count, water_count])
+	var water_count: int = (water.get(&"authored_features") as Array).size() if water != null else 0
+	_set_editor_status("Applying %s to live runtime — generator/planet/atmosphere rebuild started. Runtime layers: %d sculpt tiles, %d biome, %d displacement, %d material, %d water feature(s)." % [String(body.get(&"display_name")), sculpt_tile_count, biome_count, displacement_count, material_count, water_count])
 
 func _update_environment_radius(cfg: Resource) -> void:
-	var sky_material := _main.get("sky_mat") as ShaderMaterial
+	var sky_material: ShaderMaterial = _main.get("sky_mat") as ShaderMaterial
 	if sky_material == null:
 		return
-	var radius := float(cfg.get(&"planet_radius"))
-	var atmosphere_height := float(cfg.get(&"atmosphere_height"))
+	var radius: float = float(cfg.get(&"planet_radius"))
+	var atmosphere_height: float = float(cfg.get(&"atmosphere_height"))
 	sky_material.set_shader_parameter("u_planet_radius", radius)
 	sky_material.set_shader_parameter("u_atmosphere_radius", radius + atmosphere_height)
 
