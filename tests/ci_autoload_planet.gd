@@ -28,6 +28,7 @@ func pristine_height(direction: Vector3, _detail: Variant = null) -> float:
 	if direction.length_squared() <= 1e-12:
 		return 0.0
 	var d := direction.normalized()
-	# Non-flat on purpose: a correct flatten brush must compensate this generated
-	# slope with different sparse delta values instead of equalizing the deltas.
-	return 12.0 + d.y * 8.0 + d.z * 3.0
+	# Non-flat on purpose: near Vector3.RIGHT this is roughly a 0.8 m/m + 0.3 m/m
+	# plane, large enough that adjacent ~0.75 m edit samples clearly need different
+	# offsets to reach one common final MSL height.
+	return 12.0 + d.y * 800000.0 + d.z * 300000.0
