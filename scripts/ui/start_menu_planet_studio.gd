@@ -1,8 +1,8 @@
 extends "res://scripts/ui/start_menu.gd"
 ## Thin launcher extension that keeps the existing development menu intact while
-## exposing the new Planet Studio as its own workflow.
+## exposing Planet Studio as a live-world authoring workflow.
 
-const PLANET_STUDIO_SCENE := "res://scenes/world_authoring/PlanetStudio.tscn"
+const MAIN_SCENE := "res://scenes/Main.tscn"
 
 func _build_menu() -> void:
 	super._build_menu()
@@ -15,7 +15,7 @@ func _build_menu() -> void:
 	_add_mode_button(
 		column,
 		"PLANET STUDIO",
-		"Author planets, terrain, water, atmospheres and the celestial system with staged Apply/Undo/Presets.",
+		"Author the live planet, terrain, water, atmosphere and celestial system with staged Apply/Undo/Presets.",
 		_on_planet_studio_pressed
 	)
 	if appended_index < column.get_child_count():
@@ -28,4 +28,4 @@ func _build_menu() -> void:
 
 func _on_planet_studio_pressed() -> void:
 	get_tree().set_meta("launch_mode", "planet_studio")
-	get_tree().change_scene_to_file(PLANET_STUDIO_SCENE)
+	get_tree().change_scene_to_file(MAIN_SCENE)
