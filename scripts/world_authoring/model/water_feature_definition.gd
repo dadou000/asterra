@@ -101,7 +101,13 @@ func sample_river_depth(segment_index: int, t: float) -> float:
 	return _sample_knot_scalar(segment_index, t, "depth_m", default_depth_m)
 
 func sample_river_current(segment_index: int, t: float) -> float:
-	return _sample_knot_scalar(segment_index, t, "current_m_s", 1.0) * current_scale
+	# Return the authored per-knot current field only. current_scale is the
+	# feature-wide runtime multiplier and is deliberately applied exactly once by
+	# the renderer/query path. Keeping sampling raw prevents quadratic scaling.
+	return _sample_knot_scalar(segment_index, t, "current_m_s", 1.0)
+
+func sample_river_current_effective(segment_index: int, t: float) -> float:
+	return sample_river_current(segment_index, t) * current_scale
 
 func _sample_knot_scalar(segment_index: int, t: float, key: String, fallback: float) -> float:
 	if segment_index < 0 or segment_index >= river_segment_count():
