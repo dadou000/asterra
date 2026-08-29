@@ -9,6 +9,8 @@ extends Resource
 const GENERATION_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 const BIOME_LAYER_SCRIPT := preload("res://scripts/world_authoring/model/biome_paint_layer.gd")
 const SHADER_SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
+const SCULPT_TILE_SIDE := 64
+const SCULPT_TILE_BYTES := SCULPT_TILE_SIDE * SCULPT_TILE_SIDE * 4
 
 @export var generation_profile: Resource
 @export var biome_override_layers: Array[Resource] = []
@@ -30,6 +32,10 @@ func ensure_generation_profile() -> Resource:
 func ensure_valid() -> void:
 	ensure_generation_profile()
 	sculpt_delta_version = maxi(1, sculpt_delta_version)
+	# A damaged/truncated preset must never reach Deltas.deserialize(), which
+	# expects exactly one 64x64 float tile for every stored key.
+	if sculpt_delta_tiles.size() != sculpt_delta_keys.size() * SCULPT_TILE_BYTES:
+		clear_sculpt_deltas()
 	for layer: Resource in biome_override_layers:
 		if layer != null and layer.has_method("ensure_valid"):
 			layer.call("ensure_valid")
@@ -43,11 +49,19 @@ func ensure_valid() -> void:
 			slot.call("ensure_valid")
 
 func set_sculpt_delta_serialized(data: Dictionary) -> void:
-	sculpt_delta_version = maxi(1, int(data.get("version", 1)))
 	var keys_value: Variant = data.get("keys", PackedInt64Array())
 	var tiles_value: Variant = data.get("tiles", PackedByteArray())
-	sculpt_delta_keys = (keys_value as PackedInt64Array).duplicate() if keys_value is PackedInt64Array else PackedInt64Array()
-	sculpt_delta_tiles = (tiles_value as PackedByteArray).duplicate() if tiles_value is PackedByteArray else PackedByteArray()
+	if not (keys_value is PackedInt64Array) or not (tiles_value is PackedByteArray):
+		clear_sculpt_deltas()
+		return
+	var next_keys: PackedInt64Array = (keys_value as PackedInt64Array).duplicate()
+	var next_tiles: PackedByteArray = (tiles_value as PackedByteArray).duplicate()
+	if next_tiles.size() != next_keys.size() * SCULPT_TILE_BYTES:
+		clear_sculpt_deltas()
+		return
+	sculpt_delta_version = maxi(1, int(data.get("version", 1)))
+	sculpt_delta_keys = next_keys
+	sculpt_delta_tiles = next_tiles
 
 func sculpt_delta_serialized() -> Dictionary:
 	return {
