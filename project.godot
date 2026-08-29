@@ -19,8 +19,13 @@ window/stretch/mode="canvas_items"
 [physics]
 
 common/physics_ticks_per_second=120
+common/physics_interpolation=true
 3d/default_gravity=9.81
 3d/physics_engine="Jolt Physics"
+jolt_physics_3d/simulation/position_steps=8
+jolt_physics_3d/simulation/velocity_steps=20
+jolt_physics_3d/simulation/penetration_slop=0.005
+jolt_physics_3d/limits/max_angular_velocity=30.0
 
 [rendering]
 
