@@ -23,6 +23,8 @@ on:
       - "project.godot"
       - "tests/validate_terrain_shader.gd"
       - "tests/validate_terrain_scripts.gd"
+      - "tests/validate_terrain_scripts_scene.gd"
+      - "tests/validate_terrain_scripts.tscn"
       - "tests/validate_generation_model.gd"
       - "tests/validate_world_authoring_phase0.gd"
       - "tests/ci_autoload_planet.gd"
@@ -125,6 +127,8 @@ jobs:
           cp -R scripts/. /tmp/asterra-script-ci/scripts/
           cp -R shaders/. /tmp/asterra-script-ci/shaders/
           cp tests/validate_terrain_scripts.gd /tmp/asterra-script-ci/tests/
+          cp tests/validate_terrain_scripts_scene.gd /tmp/asterra-script-ci/tests/
+          cp tests/validate_terrain_scripts.tscn /tmp/asterra-script-ci/tests/
           cp tests/validate_generation_model.gd /tmp/asterra-script-ci/tests/
           cp tests/validate_world_authoring_phase0.gd /tmp/asterra-script-ci/tests/
           cp tests/ci_autoload_planet.gd /tmp/asterra-script-ci/tests/
@@ -203,7 +207,7 @@ jobs:
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
           TEST_PROJECT=/tmp/asterra-script-ci
           set +e
-          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_terrain_scripts.gd > /tmp/terrain-gdscript.log 2>&1
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://tests/validate_terrain_scripts.tscn > /tmp/terrain-gdscript.log 2>&1
           status=$?
           set -e
           cat /tmp/terrain-gdscript.log
