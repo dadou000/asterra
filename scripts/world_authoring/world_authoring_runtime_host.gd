@@ -78,6 +78,7 @@ func _open_live_editor(player: Node) -> void:
 		authored_water.name = "PlanetStudioAuthoredWaterRuntime"
 		authored_water.call("bind", session, _main)
 		add_child(authored_water)
+		authored_water.add_to_group(&"authored_water_query")
 		_authored_water_runtime = authored_water
 	set_process(false)
 
