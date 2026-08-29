@@ -24,12 +24,20 @@ var _mapping_reported := false
 
 
 func _ready() -> void:
+	_ensure_ragdoll()
 	_load_character()
 
 
 func _process(_dt: float) -> void:
 	if body == null or character == null:
 		return
+	if ragdoll == null:
+		_ensure_ragdoll()
+	if ragdoll != null:
+		if body.active and not ragdoll.active:
+			ragdoll.activate()
+		elif not body.active and ragdoll.active:
+			ragdoll.deactivate()
 	visible = visible_character and body.active
 	if not body.active:
 		return
@@ -40,6 +48,19 @@ func _process(_dt: float) -> void:
 		_apply_ragdoll_pose()
 	else:
 		_apply_neutral_pose()
+
+
+func _ensure_ragdoll() -> void:
+	if body == null or get_parent() == null:
+		return
+	if body.ragdoll != null:
+		ragdoll = body.ragdoll
+		return
+	ragdoll = ActiveRagdollRig.new()
+	ragdoll.name = "ActiveRagdollRig"
+	ragdoll.pelvis = body
+	body.ragdoll = ragdoll
+	get_parent().add_child(ragdoll)
 
 
 func _load_character() -> void:
