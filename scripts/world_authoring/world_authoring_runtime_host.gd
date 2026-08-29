@@ -7,7 +7,7 @@ extends Node
 ## a high-resolution non-destructive near-field preview. Water/graph runtime
 ## compilers remain staged behind their dedicated passes.
 
-const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase2.gd")
+const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase3.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 
 var _main: Node
@@ -63,6 +63,12 @@ func _open_live_editor(player: Node) -> void:
 		biome_preview.call("bind", session_value as WorldAuthoringSession, _main)
 		add_child(biome_preview)
 		_biome_preview = biome_preview
+		if live_editor.has_signal("biome_preview_stroke_added"):
+			live_editor.connect("biome_preview_stroke_added",
+				Callable(biome_preview, "append_transient_stroke"))
+		if live_editor.has_signal("biome_preview_transient_cleared"):
+			live_editor.connect("biome_preview_transient_cleared",
+				Callable(biome_preview, "clear_transient_strokes"))
 	set_process(false)
 
 func _set_existing_ui_visible(visible: bool) -> void:
