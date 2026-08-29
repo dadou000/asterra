@@ -9,7 +9,8 @@ extends Node
 ## into a camera-centred categorical override texture consumed by terrain and
 ## scatter shaders. The saved source of truth remains the authoring layer's
 ## spherical strokes; this texture is disposable and is rebuilt after recenter,
-## history, preset or body changes.
+## history, preset or body changes. Pending drag stamps can be mirrored here before
+## they are committed, preserving live feedback while history stays batched.
 
 const RESOLUTION: int = 512
 const SAMPLE_SPACING_M: float = 2.0
@@ -31,6 +32,8 @@ var _has_content: bool = false
 var _bound_material: ShaderMaterial
 var _rasterized_strokes: int = 0
 var _rasterized_pixels: int = 0
+var _transient_layer_id: String = ""
+var _transient_strokes: Array[Dictionary] = []
 
 
 func bind(session: WorldAuthoringSession, world_host: Node) -> void:
@@ -75,11 +78,30 @@ func mark_dirty() -> void:
 	_dirty = true
 
 
+func append_transient_stroke(layer_id: String, stroke: Dictionary) -> void:
+	if layer_id.is_empty() or stroke.is_empty():
+		return
+	if _transient_layer_id != layer_id:
+		_transient_layer_id = layer_id
+		_transient_strokes.clear()
+	_transient_strokes.append(stroke.duplicate(true))
+	_dirty = true
+
+
+func clear_transient_strokes() -> void:
+	if _transient_layer_id.is_empty() and _transient_strokes.is_empty():
+		return
+	_transient_layer_id = ""
+	_transient_strokes.clear()
+	_dirty = true
+
+
 func _on_authoring_changed(_dirty_state: bool, _apply_scope: int) -> void:
 	_dirty = true
 
 
 func _on_preset_loaded(_path: String) -> void:
+	clear_transient_strokes()
 	_dirty = true
 
 
@@ -138,6 +160,14 @@ func _rebuild() -> void:
 			if not (stroke_value is Dictionary):
 				continue
 			_rasterize_stroke(stroke_value as Dictionary, layer_opacity, blend_mode, stroke_index)
+
+		# Pending stamps are inserted at the same logical layer position rather than
+		# painted last globally. Higher-priority layers therefore continue to win
+		# exactly as they will after the drag is committed.
+		if String(layer.get(&"layer_id")) == _transient_layer_id:
+			for transient_index: int in _transient_strokes.size():
+				_rasterize_stroke(_transient_strokes[transient_index], layer_opacity,
+					blend_mode, strokes.size() + transient_index)
 	_publish()
 
 
@@ -289,6 +319,7 @@ func stats() -> Dictionary:
 		"has_content": _has_content,
 		"rasterized_strokes": _rasterized_strokes,
 		"rasterized_pixels": _rasterized_pixels,
+		"transient_strokes": _transient_strokes.size(),
 		"categorical_dither": true,
 		"non_destructive": true,
 		"scatter_synchronized": true,
