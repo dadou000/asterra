@@ -200,11 +200,11 @@ func create_biome_layer(display_name: String = "Biome Paint") -> Resource:
 	var terrain := active_terrain_profile()
 	if terrain == null:
 		return null
-	var created: Resource
 	stage_action("Create biome paint layer", func() -> void:
-		created = terrain.call("create_biome_layer", display_name) as Resource
+		terrain.call("create_biome_layer", display_name)
 	, ApplyScope.TILES)
-	return created
+	var layers: Array = terrain.get(&"biome_override_layers")
+	return layers.back() as Resource if not layers.is_empty() else null
 
 func remove_biome_layer(layer_id: String) -> bool:
 	var terrain := active_terrain_profile()
@@ -234,11 +234,11 @@ func create_terrain_shader_slot(domain: int, display_name: String = "Terrain Slo
 	if terrain == null:
 		return null
 	var resolved_domain := SHADER_SLOT_SCRIPT.Domain.MATERIAL if domain == SHADER_SLOT_SCRIPT.Domain.MATERIAL else SHADER_SLOT_SCRIPT.Domain.DISPLACEMENT
-	var created: Resource
 	stage_action("Create terrain shader slot", func() -> void:
-		created = terrain.call("create_shader_slot", resolved_domain, display_name) as Resource
+		terrain.call("create_shader_slot", resolved_domain, display_name)
 	, ApplyScope.GRAPH)
-	return created
+	var collection: Array = terrain.get(&"material_slots") if resolved_domain == SHADER_SLOT_SCRIPT.Domain.MATERIAL else terrain.get(&"displacement_slots")
+	return collection.back() as Resource if not collection.is_empty() else null
 
 func remove_terrain_shader_slot(slot_id: String) -> bool:
 	var terrain := active_terrain_profile()
@@ -254,11 +254,11 @@ func create_water_feature(feature_type: int, display_name: String = "Water Featu
 	if water == null:
 		return null
 	var resolved_type := WATER_FEATURE_SCRIPT.FeatureType.RIVER if feature_type == WATER_FEATURE_SCRIPT.FeatureType.RIVER else WATER_FEATURE_SCRIPT.FeatureType.LAKE
-	var created: Resource
 	stage_action("Create water feature", func() -> void:
-		created = water.call("create_feature", resolved_type, display_name) as Resource
+		water.call("create_feature", resolved_type, display_name)
 	, ApplyScope.TILES)
-	return created
+	var features: Array = water.get(&"authored_features")
+	return features.back() as Resource if not features.is_empty() else null
 
 func remove_water_feature(feature_id: String) -> bool:
 	var water := active_water_profile()
