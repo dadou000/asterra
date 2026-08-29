@@ -9,6 +9,7 @@ const SPATIAL_SHADERS := [
 	"res://shaders/ocean_geometry_clipmap.gdshader",
 	"res://shaders/terrain_scatter_grass.gdshader",
 	"res://shaders/terrain_scatter_stone.gdshader",
+	"res://shaders/terrain_scatter_ecology.gdshader",
 	"res://shaders/terrain_scatter_compact_grass.gdshader",
 	"res://shaders/terrain_scatter_compact_stone.gdshader",
 ]
