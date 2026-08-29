@@ -1,0 +1,44 @@
+{
+  "asset_id": "moss_01",
+  "biomes": [
+    "TUNDRA",
+    "TAIGA",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND",
+    "ALPINE",
+    "BARE_ROCK"
+  ],
+  "bounds_size_m": [
+    0.21525999903678894,
+    0.02942086011171341,
+    0.0403679758310318
+  ],
+  "collision": null,
+  "kind": "moss",
+  "lod_authoring_required": true,
+  "lod_strategy": "provider",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "provider_lod": 0,
+      "source": "provider",
+      "triangles": 204
+    }
+  ],
+  "pivot_offset_m": [
+    -0.0987308919429779,
+    0.004618973936885595,
+    0.003544004401192069
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 204,
+  "source_url": "https://polyhaven.com/a/moss_01"
+}

@@ -6,3 +6,7 @@ export_presets.cfg
 # Poly Haven source scans are an authoring cache. Optimized game-ready assets
 # belong in assets/scatter/runtime/ and are committed separately.
 /assets/scatter/source/
+
+# Local CMake/Visual Studio output. Native sources live beside this directory;
+# only the generated build tree must stay out of Git history.
+/native/weather/build/

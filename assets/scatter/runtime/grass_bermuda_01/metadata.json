@@ -1,0 +1,47 @@
+{
+  "asset_id": "grass_bermuda_01",
+  "biomes": [
+    "TUNDRA",
+    "TAIGA",
+    "COLD_DESERT",
+    "TEMPERATE_GRASSLAND",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "MEDITERRANEAN",
+    "STEPPE",
+    "SAVANNA",
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND",
+    "ALPINE"
+  ],
+  "bounds_size_m": [
+    1.6864763498306274,
+    0.14219453930854797,
+    0.1582556813955307
+  ],
+  "collision": null,
+  "kind": "grass",
+  "lod_authoring_required": true,
+  "lod_strategy": "lod0_only_foliage_safe",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 941
+    }
+  ],
+  "pivot_offset_m": [
+    -0.08433592319488525,
+    0.0009903572499752045,
+    0.011469792574644089
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 941,
+  "source_url": "https://polyhaven.com/a/grass_bermuda_01"
+}

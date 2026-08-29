@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c5mcs27axyvrd"
+path="res://.godot/imported/terrain_rendered_contact_query.glsl-c42937eb6fea30743a1949c5e3ae459f.res"
+
+[deps]
+
+source_file="res://shaders/terrain_rendered_contact_query.glsl"
+dest_files=["res://.godot/imported/terrain_rendered_contact_query.glsl-c42937eb6fea30743a1949c5e3ae459f.res"]
+
+[params]
+

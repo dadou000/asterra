@@ -1,0 +1,53 @@
+{
+  "asset_id": "dry_quiver_leaf",
+  "biomes": [
+    "COLD_DESERT",
+    "MEDITERRANEAN",
+    "STEPPE",
+    "HOT_DESERT",
+    "SAVANNA"
+  ],
+  "bounds_size_m": [
+    0.39670225977897644,
+    0.19179785251617432,
+    0.42499423027038574
+  ],
+  "collision": null,
+  "kind": "dry_debris",
+  "lod_authoring_required": false,
+  "lod_strategy": "auto_safe_decimate",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 78720
+    },
+    {
+      "lod": 1,
+      "path": "lod1.glb",
+      "ratio": 0.45,
+      "source": "auto_decimate",
+      "triangles": 35423
+    },
+    {
+      "lod": 2,
+      "path": "lod2.glb",
+      "ratio": 0.16,
+      "source": "auto_decimate",
+      "triangles": 12595
+    }
+  ],
+  "pivot_offset_m": [
+    0.12484513223171234,
+    -0.014998991042375565,
+    0.22361698746681213
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 78720,
+  "source_url": "https://polyhaven.com/a/dry_quiver_leaf"
+}

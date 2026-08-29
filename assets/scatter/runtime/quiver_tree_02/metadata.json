@@ -1,0 +1,36 @@
+{
+  "asset_id": "quiver_tree_02",
+  "biomes": [
+    "HOT_DESERT",
+    "SAVANNA"
+  ],
+  "bounds_size_m": [
+    0.8716385960578918,
+    0.8808197975158691,
+    1.4688606262207031
+  ],
+  "collision": null,
+  "kind": "desert_tree",
+  "lod_authoring_required": true,
+  "lod_strategy": "lod0_only_foliage_safe",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 82074
+    }
+  ],
+  "pivot_offset_m": [
+    0.048070162534713745,
+    0.00836019217967987,
+    0.049302227795124054
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "secondary",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 82074,
+  "source_url": "https://polyhaven.com/a/quiver_tree_02"
+}

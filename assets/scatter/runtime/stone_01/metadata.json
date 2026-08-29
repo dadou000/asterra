@@ -1,0 +1,65 @@
+{
+  "asset_id": "stone_01",
+  "biomes": [
+    "SHELF_SEA",
+    "ICE_CAP",
+    "TUNDRA",
+    "TAIGA",
+    "COLD_DESERT",
+    "TEMPERATE_GRASSLAND",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "MEDITERRANEAN",
+    "STEPPE",
+    "HOT_DESERT",
+    "SAVANNA",
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND",
+    "ALPINE",
+    "BARE_ROCK"
+  ],
+  "bounds_size_m": [
+    0.14686474204063416,
+    0.08905630558729172,
+    0.07179516553878784
+  ],
+  "collision": null,
+  "kind": "stone",
+  "lod_authoring_required": false,
+  "lod_strategy": "auto_safe_decimate",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 53520
+    },
+    {
+      "lod": 1,
+      "path": "lod1.glb",
+      "ratio": 0.45,
+      "source": "auto_decimate",
+      "triangles": 24084
+    },
+    {
+      "lod": 2,
+      "path": "lod2.glb",
+      "ratio": 0.16,
+      "source": "auto_decimate",
+      "triangles": 8563
+    }
+  ],
+  "pivot_offset_m": [
+    -0.0031541958451271057,
+    -0.00013256072998046875,
+    0.01463993638753891
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 53520,
+  "source_url": "https://polyhaven.com/a/stone_01"
+}

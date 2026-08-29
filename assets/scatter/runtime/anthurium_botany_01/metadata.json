@@ -1,0 +1,37 @@
+{
+  "asset_id": "anthurium_botany_01",
+  "biomes": [
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND"
+  ],
+  "bounds_size_m": [
+    2.7960691452026367,
+    1.7977514266967773,
+    0.49968433380126953
+  ],
+  "collision": null,
+  "kind": "tropical_groundcover",
+  "lod_authoring_required": true,
+  "lod_strategy": "lod0_only_foliage_safe",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 67152
+    }
+  ],
+  "pivot_offset_m": [
+    0.021952807903289795,
+    -0.24713468551635742,
+    0.010338996537029743
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 67152,
+  "source_url": "https://polyhaven.com/a/anthurium_botany_01"
+}

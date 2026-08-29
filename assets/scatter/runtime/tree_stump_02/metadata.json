@@ -1,0 +1,58 @@
+{
+  "asset_id": "tree_stump_02",
+  "biomes": [
+    "TAIGA",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND"
+  ],
+  "bounds_size_m": [
+    1.5216976404190063,
+    1.3925330638885498,
+    0.5220921635627747
+  ],
+  "collision": {
+    "mode": "simplified_visual_hull_source",
+    "path": "collision.glb",
+    "triangles": 6233
+  },
+  "kind": "stump",
+  "lod_authoring_required": false,
+  "lod_strategy": "auto_safe_decimate",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 62345
+    },
+    {
+      "lod": 1,
+      "path": "lod1.glb",
+      "ratio": 0.45,
+      "source": "auto_decimate",
+      "triangles": 28055
+    },
+    {
+      "lod": 2,
+      "path": "lod2.glb",
+      "ratio": 0.16,
+      "source": "auto_decimate",
+      "triangles": 9975
+    }
+  ],
+  "pivot_offset_m": [
+    -0.04296368360519409,
+    0.021958619356155396,
+    0.23348920047283173
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "secondary",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 62345,
+  "source_url": "https://polyhaven.com/a/tree_stump_02"
+}

@@ -1,0 +1,38 @@
+{
+  "asset_id": "cheiridopsis_succulent",
+  "biomes": [
+    "COLD_DESERT",
+    "HOT_DESERT",
+    "STEPPE"
+  ],
+  "bounds_size_m": [
+    2.161457061767578,
+    0.9586485624313354,
+    0.2707609534263611
+  ],
+  "collision": null,
+  "kind": "succulent",
+  "lod_authoring_required": true,
+  "lod_strategy": "provider",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "provider_lod": 0,
+      "source": "provider",
+      "triangles": 82438
+    }
+  ],
+  "pivot_offset_m": [
+    0.026014626026153564,
+    -0.11076074838638306,
+    0.04314419627189636
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 82438,
+  "source_url": "https://polyhaven.com/a/cheiridopsis_succulent"
+}

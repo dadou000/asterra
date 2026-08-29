@@ -1,0 +1,58 @@
+{
+  "asset_id": "single_root",
+  "biomes": [
+    "TAIGA",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND"
+  ],
+  "bounds_size_m": [
+    0.5551624298095703,
+    1.8359534740447998,
+    0.1779155731201172
+  ],
+  "collision": {
+    "mode": "simplified_visual_hull_source",
+    "path": "collision.glb",
+    "triangles": 6101
+  },
+  "kind": "root",
+  "lod_authoring_required": false,
+  "lod_strategy": "auto_safe_decimate",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 61027
+    },
+    {
+      "lod": 1,
+      "path": "lod1.glb",
+      "ratio": 0.45,
+      "source": "auto_decimate",
+      "triangles": 27461
+    },
+    {
+      "lod": 2,
+      "path": "lod2.glb",
+      "ratio": 0.16,
+      "source": "auto_decimate",
+      "triangles": 9764
+    }
+  ],
+  "pivot_offset_m": [
+    -0.049871593713760376,
+    1.1709061861038208,
+    0.08137246966362
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 61027,
+  "source_url": "https://polyhaven.com/a/single_root"
+}

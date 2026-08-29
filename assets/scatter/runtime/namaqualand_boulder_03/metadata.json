@@ -1,0 +1,46 @@
+{
+  "asset_id": "namaqualand_boulder_03",
+  "biomes": [
+    "COLD_DESERT",
+    "MEDITERRANEAN",
+    "STEPPE",
+    "HOT_DESERT",
+    "SAVANNA",
+    "ALPINE",
+    "BARE_ROCK"
+  ],
+  "bounds_size_m": [
+    2.407097101211548,
+    3.065406084060669,
+    1.4731931686401367
+  ],
+  "collision": {
+    "mode": "simplified_visual_hull_source",
+    "path": "collision.glb",
+    "triangles": 3888
+  },
+  "kind": "desert_boulder",
+  "lod_authoring_required": true,
+  "lod_strategy": "provider",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "provider_lod": 0,
+      "source": "provider",
+      "triangles": 64826
+    }
+  ],
+  "pivot_offset_m": [
+    -0.14873766899108887,
+    0.14312231540679932,
+    0.014703452587127686
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 64826,
+  "source_url": "https://polyhaven.com/a/namaqualand_boulder_03"
+}

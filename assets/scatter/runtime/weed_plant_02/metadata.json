@@ -1,0 +1,44 @@
+{
+  "asset_id": "weed_plant_02",
+  "biomes": [
+    "TUNDRA",
+    "TEMPERATE_GRASSLAND",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "MEDITERRANEAN",
+    "STEPPE",
+    "SAVANNA",
+    "TROPICAL_SEASONAL_FOREST",
+    "WETLAND"
+  ],
+  "bounds_size_m": [
+    2.1252529621124268,
+    0.2909194231033325,
+    0.07507292926311493
+  ],
+  "collision": null,
+  "kind": "groundcover",
+  "lod_authoring_required": true,
+  "lod_strategy": "provider",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "provider_lod": 0,
+      "source": "provider",
+      "triangles": 11116
+    }
+  ],
+  "pivot_offset_m": [
+    -0.9770148396492004,
+    0.034338392317295074,
+    0.00856288243085146
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 11116,
+  "source_url": "https://polyhaven.com/a/weed_plant_02"
+}

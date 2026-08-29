@@ -1,0 +1,42 @@
+{
+  "asset_id": "dead_quiver_trunk",
+  "biomes": [
+    "COLD_DESERT",
+    "HOT_DESERT",
+    "SAVANNA"
+  ],
+  "bounds_size_m": [
+    0.3064730167388916,
+    0.26808640360832214,
+    1.994105577468872
+  ],
+  "collision": {
+    "mode": "simplified_visual_hull_source",
+    "path": "collision.glb",
+    "triangles": 1796
+  },
+  "kind": "dry_deadwood",
+  "lod_authoring_required": true,
+  "lod_strategy": "provider",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "provider_lod": 0,
+      "source": "provider",
+      "triangles": 17978
+    }
+  ],
+  "pivot_offset_m": [
+    0.017262659966945648,
+    0.0029795020818710327,
+    -0.011838450096547604
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "secondary",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 17978,
+  "source_url": "https://polyhaven.com/a/dead_quiver_trunk"
+}

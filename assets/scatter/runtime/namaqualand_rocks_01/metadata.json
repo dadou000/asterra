@@ -1,0 +1,61 @@
+{
+  "asset_id": "namaqualand_rocks_01",
+  "biomes": [
+    "ICE_CAP",
+    "TUNDRA",
+    "COLD_DESERT",
+    "MEDITERRANEAN",
+    "STEPPE",
+    "HOT_DESERT",
+    "SAVANNA",
+    "ALPINE",
+    "BARE_ROCK"
+  ],
+  "bounds_size_m": [
+    1.4482358694076538,
+    0.21695975959300995,
+    0.15248534083366394
+  ],
+  "collision": {
+    "mode": "simplified_visual_hull_source",
+    "path": "collision.glb",
+    "triangles": 5138
+  },
+  "kind": "stone_set",
+  "lod_authoring_required": false,
+  "lod_strategy": "auto_safe_decimate",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 85716
+    },
+    {
+      "lod": 1,
+      "path": "lod1.glb",
+      "ratio": 0.45,
+      "source": "auto_decimate",
+      "triangles": 38569
+    },
+    {
+      "lod": 2,
+      "path": "lod2.glb",
+      "ratio": 0.16,
+      "source": "auto_decimate",
+      "triangles": 13712
+    }
+  ],
+  "pivot_offset_m": [
+    0.6277355551719666,
+    1.0952353477478027e-06,
+    0.0011913850903511047
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 85716,
+  "source_url": "https://polyhaven.com/a/namaqualand_rocks_01"
+}

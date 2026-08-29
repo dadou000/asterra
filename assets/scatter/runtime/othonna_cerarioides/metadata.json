@@ -1,0 +1,38 @@
+{
+  "asset_id": "othonna_cerarioides",
+  "biomes": [
+    "COLD_DESERT",
+    "HOT_DESERT",
+    "MEDITERRANEAN",
+    "STEPPE"
+  ],
+  "bounds_size_m": [
+    3.9691309928894043,
+    1.798905849456787,
+    1.9695868492126465
+  ],
+  "collision": null,
+  "kind": "succulent_shrub",
+  "lod_authoring_required": true,
+  "lod_strategy": "lod0_only_foliage_safe",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 118149
+    }
+  ],
+  "pivot_offset_m": [
+    -0.13366681337356567,
+    -0.2703874111175537,
+    0.061036571860313416
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "secondary",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 118149,
+  "source_url": "https://polyhaven.com/a/othonna_cerarioides"
+}

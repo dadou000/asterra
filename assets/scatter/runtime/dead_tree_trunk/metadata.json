@@ -1,0 +1,60 @@
+{
+  "asset_id": "dead_tree_trunk",
+  "biomes": [
+    "TAIGA",
+    "TEMPERATE_FOREST",
+    "TEMPERATE_RAINFOREST",
+    "MEDITERRANEAN",
+    "SAVANNA",
+    "TROPICAL_SEASONAL_FOREST",
+    "TROPICAL_RAINFOREST",
+    "WETLAND"
+  ],
+  "bounds_size_m": [
+    3.0510149002075195,
+    0.27752751111984253,
+    0.29043155908584595
+  ],
+  "collision": {
+    "mode": "simplified_visual_hull_source",
+    "path": "collision.glb",
+    "triangles": 10180
+  },
+  "kind": "deadwood",
+  "lod_authoring_required": false,
+  "lod_strategy": "auto_safe_decimate",
+  "lods": [
+    {
+      "lod": 0,
+      "path": "lod0.glb",
+      "source": "source",
+      "triangles": 101802
+    },
+    {
+      "lod": 1,
+      "path": "lod1.glb",
+      "ratio": 0.45,
+      "source": "auto_decimate",
+      "triangles": 45810
+    },
+    {
+      "lod": 2,
+      "path": "lod2.glb",
+      "ratio": 0.16,
+      "source": "auto_decimate",
+      "triangles": 16287
+    }
+  ],
+  "pivot_offset_m": [
+    0.013593018054962158,
+    -0.03203912079334259,
+    0.02773353084921837
+  ],
+  "pivot_policy": "xy_bounds_center_z_ground",
+  "priority": "core",
+  "schema_version": 1,
+  "source_provider": "Poly Haven",
+  "source_resolution": "1k",
+  "source_triangles": 101802,
+  "source_url": "https://polyhaven.com/a/dead_tree_trunk"
+}
