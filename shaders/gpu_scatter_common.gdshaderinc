@@ -6,6 +6,22 @@
 uniform sampler2DArray u_scatter_macro_elevation : filter_linear_mipmap, repeat_disable;
 uniform float u_scatter_macro_ready = 0.0;
 uniform float u_scatter_macro_face_res = 0.0;
+
+// Exact rendered terrain cache. The production clipmap exposes its active toroidal
+// cache to scatter so every scatter family sits on the same piecewise-triangular
+// L0 surface as the terrain instead of independently re-evaluating the height field
+// at arbitrary candidate positions. Besides fixing visible height disagreement,
+// this replaces a very expensive geomorph/noise evaluation per mesh vertex with
+// four cache texel fetches in the normal warmed path.
+uniform sampler2DArray u_scatter_terrain_cache : filter_nearest, repeat_disable;
+uniform float u_scatter_terrain_cache_ready = 0.0;
+uniform int u_scatter_terrain_cache_generation = 1;
+uniform int u_scatter_terrain_cache_res = 512;
+uniform vec3 u_scatter_terrain_anchor_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_scatter_terrain_anchor_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_scatter_terrain_anchor_up = vec3(0.0, 1.0, 0.0);
+uniform float u_scatter_terrain_base_spacing = 0.75;
+
 uniform float u_scatter_enabled = 1.0;
 uniform float u_scatter_density = 1.0;
 uniform float u_scatter_spacing = 1.25;
@@ -114,9 +130,110 @@ float sg_macro_height(vec3 dir) {
 	return sg_macro_bicubic(sg_macro_coord(dir));
 }
 
+uint sg_terrain_cache_key(ivec2 cell, int level, int generation) {
+	uint h = uint(cell.x) * 0x8da6b343u;
+	h ^= uint(cell.y) * 0xd8163841u;
+	h ^= uint(level + 1) * 0xcb1ab31fu;
+	h ^= uint(generation) * 0x9e3779b9u;
+	h ^= h >> uint(16);
+	h *= 0x7feb352du;
+	h ^= h >> uint(15);
+	h *= 0x846ca68bu;
+	h ^= h >> uint(16);
+	return (h & 0x00ffffffu) + 1u;
+}
+
+ivec2 sg_terrain_cache_coord(ivec2 cell) {
+	float r = float(max(u_scatter_terrain_cache_res, 1));
+	return ivec2(mod(vec2(cell), vec2(r)));
+}
+
+bool sg_terrain_cache_fetch_exact(ivec2 cell, out vec2 sample) {
+	sample = vec2(0.0);
+	if (u_scatter_terrain_cache_ready < 0.5 || u_scatter_terrain_cache_res <= 0) return false;
+	vec4 cached = texelFetch(u_scatter_terrain_cache,
+		ivec3(sg_terrain_cache_coord(cell), 0), 0);
+	float expected = float(sg_terrain_cache_key(
+		cell, 0, u_scatter_terrain_cache_generation));
+	if (abs(cached.b - expected) > 0.25) return false;
+	// Cache storage is R=final pristine height, G=macro height.
+	sample = vec2(cached.g, cached.r);
+	return true;
+}
+
+vec2 sg_triangle_interpolate(vec2 s00, vec2 s10, vec2 s01, vec2 s11, vec2 f) {
+	if (f.y <= f.x) {
+		return s00 * (1.0 - f.x)
+			+ s10 * (f.x - f.y)
+			+ s11 * f.y;
+	}
+	return s00 * (1.0 - f.y)
+		+ s11 * f.x
+		+ s01 * (f.y - f.x);
+}
+
+bool sg_rendered_l0_sample(vec3 dir, out vec2 sample) {
+	sample = vec2(0.0);
+	if (u_scatter_terrain_cache_ready < 0.5
+			|| u_scatter_terrain_base_spacing <= 1e-6) return false;
+	vec3 d = normalize(dir);
+	vec3 anchor = normalize(u_scatter_terrain_anchor_dir);
+	vec3 right = normalize(u_scatter_terrain_anchor_right);
+	vec3 up = normalize(u_scatter_terrain_anchor_up);
+	float denom = dot(d, anchor);
+	if (denom <= 0.01) return false;
+	vec2 plane_m = vec2(dot(d, right), dot(d, up)) / denom
+		* u_scatter_planet_radius;
+	vec2 lattice_cell = plane_m / u_scatter_terrain_base_spacing;
+	ivec2 c00 = ivec2(floor(lattice_cell));
+	vec2 f = fract(lattice_cell);
+	vec2 s00;
+	if (max(f.x, f.y) <= 1e-5) return sg_terrain_cache_fetch_exact(c00, sample);
+	vec2 s10;
+	vec2 s01;
+	vec2 s11;
+	if (!sg_terrain_cache_fetch_exact(c00, s00)
+			|| !sg_terrain_cache_fetch_exact(c00 + ivec2(1, 0), s10)
+			|| !sg_terrain_cache_fetch_exact(c00 + ivec2(0, 1), s01)
+			|| !sg_terrain_cache_fetch_exact(c00 + ivec2(1, 1), s11)) {
+		return false;
+	}
+	sample = sg_triangle_interpolate(s00, s10, s01, s11, f);
+	return true;
+}
+
+vec2 sg_terrain_sample(vec3 dir) {
+	vec2 rendered;
+	if (sg_rendered_l0_sample(dir, rendered)) {
+		return vec2(rendered.x,
+			rendered.y + terrain_edit_delta(dir, u_scatter_planet_radius));
+	}
+
+	// Cache warm-up fallback must use the same L0 analytic field as terrain. The
+	// old scatter path omitted the coastline detail guard, which created another
+	// systematic height disagreement even before triangle interpolation mattered.
+	float macro_h = sg_macro_height(dir);
+	float coast_guard = mix(0.38, 1.0,
+		smoothstep(45.0, 320.0, abs(macro_h)));
+	float pristine = macro_h + gm_geomorph_height(
+		dir, u_scatter_planet_radius, u_scatter_geomorph_spacing,
+		macro_h, uint(max(u_scatter_detail_seed, 1))) * coast_guard;
+	return vec2(macro_h,
+		pristine + terrain_edit_delta(dir, u_scatter_planet_radius));
+}
+
 float sg_terrain_height(vec3 dir, float macro_h) {
+	// Compatibility helper for older scatter shaders. New shaders should call
+	// sg_terrain_sample() once so the cache is not sampled twice.
+	vec2 rendered;
+	if (sg_rendered_l0_sample(dir, rendered)) {
+		return rendered.y + terrain_edit_delta(dir, u_scatter_planet_radius);
+	}
+	float coast_guard = mix(0.38, 1.0,
+		smoothstep(45.0, 320.0, abs(macro_h)));
 	float pristine = macro_h + gm_geomorph_height(dir, u_scatter_planet_radius,
-		u_scatter_geomorph_spacing, macro_h, uint(max(u_scatter_detail_seed, 1)));
+		u_scatter_geomorph_spacing, macro_h, uint(max(u_scatter_detail_seed, 1)))
+		* coast_guard;
 	return pristine + terrain_edit_delta(dir, u_scatter_planet_radius);
 }
 
