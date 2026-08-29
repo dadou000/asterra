@@ -59,11 +59,15 @@ func _process(_dt: float) -> void:
 	# GPU workload and makes profiling misleading.
 	if not _debug_freeze:
 		var observer_surface_world: Vec3D = observer_unit_world.mul(radius)
-		var rel: Vec3D = observer_surface_world.sub(_stable_anchor_world)
-		var px: float = rel.x * _anchor_right.x \
-			+ rel.y * _anchor_right.y + rel.z * _anchor_right.z
-		var py: float = rel.x * _anchor_up.x \
-			+ rel.y * _anchor_up.y + rel.z * _anchor_up.z
+		# The production shaders interpret anchor-plane coordinates gnomonically:
+		# offset = R * tangent / radial, then reconstruct direction by normalizing
+		# anchor + tangent / R. The old CPU path used the orthographic chord
+		# R*sin(theta), so the CPU centre and GPU centre diverged continuously between
+		# reanchors (about 140 m at the 65.5 km threshold on a 1000 km planet).
+		var observer_plane: Vector2 = _project_surface_gnomonic(
+			observer_surface_world, _anchor_dir, _anchor_right, _anchor_up, radius)
+		var px: float = observer_plane.x
+		var py: float = observer_plane.y
 		if absf(px) > REANCHOR_M or absf(py) > REANCHOR_M:
 			_reset_anchor(observer_dir)
 			_capture_stable_anchor(observer_surface_world)
@@ -147,6 +151,41 @@ func _sync_debug_uniforms() -> void:
 
 func _capture_stable_anchor(surface_world: Vec3D) -> void:
 	_stable_anchor_world = surface_world.dup()
+
+
+func _project_surface_gnomonic(surface_world: Vec3D, anchor_dir: Vector3,
+		right: Vector3, up: Vector3, radius: float) -> Vector2:
+	# Work directly from the double-precision surface point instead of subtracting
+	# two ~planet-radius vectors. For a unit direction d this is exactly
+	# R*(dot(d,right), dot(d,up))/dot(d,anchor), the inverse of the near-field GPU
+	# projection used by the terrain and terrain-cache shaders.
+	var radial: float = surface_world.x * anchor_dir.x \
+		+ surface_world.y * anchor_dir.y + surface_world.z * anchor_dir.z
+	if radial <= maxf(radius, 1.0) * 1.0e-6:
+		return Vector2.ZERO
+	var scale: float = radius / radial
+	return Vector2(
+		(surface_world.x * right.x + surface_world.y * right.y + surface_world.z * right.z) * scale,
+		(surface_world.x * up.x + surface_world.y * up.y + surface_world.z * up.z) * scale)
+
+
+func _gnomonic_direction_for_offset(center: Vector3, right: Vector3, up: Vector3,
+		offset_m: Vector2, radius: float) -> Vector3:
+	var safe_radius: float = maxf(radius, 1.0)
+	return (center.normalized()
+		+ right.normalized() * (offset_m.x / safe_radius)
+		+ up.normalized() * (offset_m.y / safe_radius)).normalized()
+
+
+func _update_center_basis() -> void:
+	# Override the legacy arc-length helper. The active GPU shader's near-field
+	# lattice is gnomonic, so its CPU culling/centre basis must use the exact same
+	# inverse or the clipmap disc visibly walks away from the camera between anchors.
+	_center_dir = _gnomonic_direction_for_offset(
+		_anchor_dir, _anchor_right, _anchor_up, _center_plane, Planet.cfg.planet_radius)
+	var tangent: Array = CubeSphere.tangent_basis(_center_dir)
+	_center_right = tangent[0]
+	_center_up = tangent[1]
 
 
 func _show_all_active_sectors() -> void:
