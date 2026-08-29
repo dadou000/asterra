@@ -44,6 +44,7 @@ func _build_terrain_page() -> void:
 func _place_sculpt_stroke(direction: Vector3, continuous: bool, sign_value: float) -> void:
 	if Planet.cfg == null or not Planet.ready_state:
 		return
+	var effective_sign: float = -sign_value if Input.is_key_pressed(KEY_SHIFT) else sign_value
 	var planet_radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
 	if _skip_redundant_sculpt_stamp(direction, continuous, planet_radius):
 		return
@@ -59,7 +60,7 @@ func _place_sculpt_stroke(direction: Vector3, continuous: bool, sign_value: floa
 		var sample_dir: Vector3 = sample["dir"]
 		var before: float = Deltas.offset_at_snapshot(sample_dir, snap)
 		var desired: float = clampf(
-			before + _sculpt_strength_m * sign_value * float(sample["weight"]),
+			before + _sculpt_strength_m * effective_sign * float(sample["weight"]),
 			SCULPT_MIN_OFFSET_M,
 			SCULPT_MAX_OFFSET_M)
 		if absf(desired - before) > 1e-7:
@@ -68,7 +69,7 @@ func _place_sculpt_stroke(direction: Vector3, continuous: bool, sign_value: floa
 	if changed <= 0:
 		return
 	_last_sculpt_dir = direction
-	var verb: String = "Raised" if sign_value > 0.0 else "Lowered"
+	var verb: String = "Raised" if effective_sign > 0.0 else "Lowered"
 	_set_status("%s terrain: %d samples • %.1f m radius • %.2f m stamp • %s falloff." % [
 		verb, changed, _sculpt_radius_m, _sculpt_strength_m,
 		FALLOFF_NAMES[_sculpt_falloff_profile]])
