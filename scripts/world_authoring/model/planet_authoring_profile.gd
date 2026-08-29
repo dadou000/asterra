@@ -14,8 +14,13 @@ const ATMOSPHERE_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/
 func ensure_children() -> void:
 	if terrain == null:
 		terrain = TERRAIN_PROFILE_SCRIPT.new()
-	terrain.call("ensure_generation_profile")
+	if terrain.has_method("ensure_valid"):
+		terrain.call("ensure_valid")
+	else:
+		terrain.call("ensure_generation_profile")
 	if water == null:
 		water = WATER_PROFILE_SCRIPT.new()
+	if water.has_method("ensure_valid"):
+		water.call("ensure_valid")
 	if atmosphere == null:
 		atmosphere = ATMOSPHERE_PROFILE_SCRIPT.new()
