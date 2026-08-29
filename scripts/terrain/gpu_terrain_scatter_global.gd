@@ -238,7 +238,7 @@ func _bind_authoritative_terrain_cache(force: bool) -> void:
 	var cache_anchor_right: Vector3 = params.get("anchor_right", Vector3.BACK)
 	var cache_anchor_up: Vector3 = params.get("anchor_up", Vector3.UP)
 	var base_spacing: float = float(params.get("base_spacing", 0.75))
-	var changed := force \
+	var changed: bool = force \
 		or texture != _bound_terrain_cache_texture \
 		or ready != _bound_terrain_cache_ready \
 		or cache_generation != _bound_terrain_cache_generation \
