@@ -46,9 +46,11 @@ The 240 Hz training step is intentional: it gives contact-rich feet and a high-D
 
 The actual articulation may use different object names. Put those exact exported names in `runtime_name_map`. Training should fail if a role is unresolved or duplicated. **Body count is not action count**: action dimension comes from the articulation's controllable joint DOFs.
 
+The source animation does **not** need exactly 19 bones. A richer motion-capture skeleton is retargeted and collapsed into these 19 physical segments. `config/cmu_retarget.json` defines that mapping explicitly.
+
 ## Motion set
 
-Use the **CMU Graphics Lab Motion Capture Database** for this experiment. Do not use AMASS/LaFAN for Asterra production training because their public licenses are non-commercial. Do not use Mixamo as training data; Adobe's published FAQ excludes ML training use.
+Use the **CMU Graphics Lab Motion Capture Database** for this experiment because CMU explicitly permits copying/modifying the data and inclusion in commercially sold products. This gives the project a clear provenance path for a production locomotion policy.
 
 The first dataset is intentionally conservative:
 
@@ -61,7 +63,17 @@ CMU source data is 120 fps. Keep the original source files outside Git. `config/
 
 ## Reference retargeting
 
-Retarget the CMU skeleton to the final 19-body articulation before training. Preserve these quantities per reference frame:
+`config/cmu_retarget.json` maps the CMU ASF hierarchy onto the 19 physical bodies. Examples:
+
+- `lfemur/rfemur` -> thighs;
+- `ltibia/rtibia` -> shins;
+- `lhumerus/rhumerus` -> upper arms;
+- `lradius/rradius` -> forearms;
+- `lowerback + upperback` -> Asterra spine;
+- `upperback + thorax` -> Asterra chest;
+- toe trajectories remain available for contact inference even though toes are not independent physical bodies.
+
+Preserve these quantities per reference frame:
 
 - root position/orientation;
 - joint position and velocity for every controllable DOF;
@@ -128,6 +140,19 @@ Later experiments should add uneven terrain, moving supports and partial foot co
 5. feed targets into bounded joint motors.
 
 The ONNX actor should not contain the critic or training-only AMP discriminator.
+
+The final network dimensions are intentionally not guessed from the 19 body count. Once the final articulation reports its controllable DOFs, derive them with:
+
+```bash
+python experiments/locomotion_19body/scripts/derive_policy_dimensions.py DOF_COUNT
+```
+
+For this v0 observation contract the formulas are:
+
+- actions = `N`;
+- observations = `35 + 3*N`;
+
+where `N` is the final controllable articulation DOF count.
 
 ## Local layout
 
