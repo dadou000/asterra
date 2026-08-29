@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "experiment": "asterra_19body_walk_v0",
+  "training_backend": "Isaac Lab / GPU PhysX",
+  "algorithm": "PPO + motion imitation / AMP-style prior",
+  "reference_initialization": "random_motion_frame",
+  "simulation": {
+    "physics_hz": 240,
+    "policy_hz": 60,
+    "decimation": 4,
+    "parallel_envs_initial": 2048,
+    "parallel_envs_target": 4096,
+    "device": "cuda:0",
+    "episode_seconds": 12.0
+  },
+  "policy": {
+    "action_mode": "normalized_joint_position_targets",
+    "action_dimension": "derive_from_articulation",
+    "network": [512, 512, 256],
+    "activation": "elu",
+    "observation_normalization": true,
+    "include_previous_action": true,
+    "include_phase": true
+  },
+  "observations": [
+    "root_height",
+    "root_orientation_tangent_normal",
+    "root_local_linear_velocity",
+    "root_local_angular_velocity",
+    "joint_positions",
+    "joint_velocities",
+    "key_body_positions_relative_to_root",
+    "left_foot_contact",
+    "right_foot_contact",
+    "command_forward_speed",
+    "command_lateral_speed",
+    "command_yaw_rate",
+    "gait_phase_sin_cos",
+    "previous_action"
+  ],
+  "commands": {
+    "phase_0_speed_mps": [0.8, 1.35],
+    "phase_1_speed_mps": [0.55, 1.65],
+    "phase_2_speed_mps": [0.4, 2.0],
+    "phase_3_speed_mps": [0.25, 2.3],
+    "lateral_speed_mps": [0.0, 0.0],
+    "yaw_rate_rad_s": [0.0, 0.0]
+  },
+  "reward_terms": {
+    "reference_pose": 1.0,
+    "reference_joint_velocity": 0.35,
+    "reference_key_bodies": 0.55,
+    "reference_root_velocity": 0.4,
+    "reference_foot_contacts": 0.4,
+    "command_velocity": 0.3,
+    "upright": 0.35,
+    "foot_slip_penalty": -0.12,
+    "action_rate_penalty": -0.015,
+    "joint_power_penalty": -0.00015,
+    "joint_limit_penalty": -0.08
+  },
+  "termination": {
+    "root_height_below_m": 0.5,
+    "up_dot_world_below": 0.35,
+    "terminate_on_head_ground_contact": true,
+    "terminate_on_chest_ground_contact": true
+  },
+  "domain_randomization_final": {
+    "body_mass_scale": [0.9, 1.1],
+    "joint_strength_scale": [0.85, 1.15],
+    "ground_friction": [0.55, 1.25],
+    "latency_policy_steps": [0, 1],
+    "external_push_interval_s": [2.0, 5.0],
+    "external_push_mps": [0.0, 1.3],
+    "slope_deg": [-8.0, 8.0]
+  },
+  "export": {
+    "format": "ONNX",
+    "opset": 17,
+    "file": "artifacts/asterra_walk_v0.onnx",
+    "normalization_file": "artifacts/asterra_walk_v0_normalization.json"
+  }
+}
