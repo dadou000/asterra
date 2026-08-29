@@ -1,0 +1,10 @@
+# Motion source data and generated retargets are local/training artifacts.
+data/
+assets/*.usd
+assets/*.usda
+assets/*.usdc
+logs/
+checkpoints/
+artifacts/
+__pycache__/
+*.pyc
