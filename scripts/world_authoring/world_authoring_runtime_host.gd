@@ -10,7 +10,11 @@ extends Node
 
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase15.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
-const AUTHORED_WATER_RUNTIME_SCRIPT := preload("res://scripts/world_authoring/authored_water_runtime_spatial.gd")
+const AUTHORED_WATER_RUNTIME_CANDIDATES := PackedStringArray([
+	"res://scripts/world_authoring/authored_water_runtime_spatial.gd",
+	"res://scripts/world_authoring/authored_water_runtime_query.gd",
+	"res://scripts/world_authoring/authored_water_runtime.gd",
+])
 
 var _main: Node
 var _layer: CanvasLayer
@@ -74,15 +78,32 @@ func _open_live_editor(player: Node) -> void:
 			live_editor.connect("biome_preview_transient_cleared",
 				Callable(biome_preview, "clear_transient_strokes"))
 
-		var authored_water: Node = AUTHORED_WATER_RUNTIME_SCRIPT.new()
-		authored_water.name = "PlanetStudioAuthoredWaterRuntime"
-		authored_water.call("bind", session, _main)
-		add_child(authored_water)
-		authored_water.add_to_group(&"authored_water_query")
-		_authored_water_runtime = authored_water
-		if live_editor.has_signal("water_preview_changed"):
-			live_editor.connect("water_preview_changed", Callable(authored_water, "mark_dirty"))
+		var authored_water_script: Script = _resolve_authored_water_runtime_script()
+		if authored_water_script != null:
+			var authored_water: Node = authored_water_script.new() as Node
+			if authored_water != null:
+				authored_water.name = "PlanetStudioAuthoredWaterRuntime"
+				authored_water.call("bind", session, _main)
+				add_child(authored_water)
+				authored_water.add_to_group(&"authored_water_query")
+				_authored_water_runtime = authored_water
+				if live_editor.has_signal("water_preview_changed"):
+					live_editor.connect("water_preview_changed", Callable(authored_water, "mark_dirty"))
+		else:
+			_set_editor_status("Authored-water runtime scripts are missing from this checkout; terrain authoring remains available.")
 	set_process(false)
+
+func _resolve_authored_water_runtime_script() -> Script:
+	# Do not preload optional water layers. A partial/local checkout must not make
+	# the entire Planet Studio host fail to parse. Prefer the spatially-pruned
+	# implementation, then degrade to the query/runtime parents when necessary.
+	for path: String in AUTHORED_WATER_RUNTIME_CANDIDATES:
+		if not ResourceLoader.exists(path, "Script"):
+			continue
+		var resource: Resource = load(path)
+		if resource is Script:
+			return resource as Script
+	return null
 
 func _set_existing_ui_visible(visible: bool) -> void:
 	for property_name: StringName in [&"hud", &"map", &"debug_menu", &"coastline_profile_editor"]:
