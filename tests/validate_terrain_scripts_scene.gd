@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const PHASE7_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase7.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase8.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
@@ -33,7 +33,7 @@ func _validate_phase7_sculpt_math() -> bool:
 		return false
 	Planet.call("configure_for_sculpt_ci", 1000000.0)
 	Deltas.clear()
-	var editor: Control = PHASE7_EDITOR.new()
+	var editor: Control = ACTIVE_SCULPT_EDITOR.new()
 	editor.set("_sculpt_radius_m", 4.0)
 	editor.set("_sculpt_hardness", 0.35)
 	editor.set("_flatten_strength", 1.0)
@@ -76,7 +76,7 @@ func _validate_phase7_sculpt_math() -> bool:
 		return false
 	Deltas.clear()
 	editor.free()
-	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing")
+	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 8 batch writes")
 	return true
 
 func _fail(message: String) -> void:
