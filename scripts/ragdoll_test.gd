@@ -1,27 +1,45 @@
 extends Node3D
 ## Isolated passive 19-body ragdoll validation scene.
 ##
-## Deliberately contains no active motors, animation authority, balance controller,
-## terrain contacts or neural policy. Joint behavior is passive: hard anatomical
-## safety limits plus position-dependent ROM coupling that approximates capsules,
-## ligaments and the screw-home behavior of human knees.
+## No active motors, animation authority, balance controller or neural policy.
+## Joint behavior is passive: optional anatomical hard limits plus position-
+## dependent ROM coupling. The mouse manipulator is also fully physical: it
+## applies a damped spring at the exact grabbed point instead of teleporting.
 
 const SPAWN_OFFSET := Vector3(0.0, 0.55, 0.0)
 const FLOOR_SIZE := Vector3(12.0, 0.20, 12.0)
 const EXPECTED_BODY_COUNT := 19
 const EXPECTED_JOINT_COUNT := 18
+const RAY_LENGTH := 100.0
+const MIN_GRAB_DISTANCE := 0.45
+const MAX_GRAB_DISTANCE := 12.0
+const GRAB_DEPTH_STEP := 0.18
+const GRAB_STIFFNESS_PER_KG := 175.0
+const GRAB_DAMPING_PER_KG := 27.0
+const GRAB_MAX_FORCE_PER_KG := 320.0
 
 var _bodies: Dictionary = {}
 var _initial_positions: Dictionary = {}
 var _joints: Dictionary = {}
 var _joint_specs_by_name: Dictionary = {}
 var _joint_count := 0
+
 var _camera: Camera3D
 var _camera_target := Vector3(0.0, 1.05, 0.0)
 var _camera_yaw := 0.55
 var _camera_pitch := -0.08
 var _camera_distance := 4.2
 var _orbit_dragging := false
+
+var _overlay_label: Label
+var _anatomical_limits_enabled := true
+
+var _mouse_position := Vector2.ZERO
+var _grabbed_body: RigidBody3D
+var _grabbed_role := ""
+var _grab_local_point := Vector3.ZERO
+var _grab_distance := 2.0
+var _grab_target_world := Vector3.ZERO
 
 
 func _ready() -> void:
@@ -32,39 +50,60 @@ func _ready() -> void:
 	_build_ragdoll()
 	_assert_articulation_contract()
 	_reset_ragdoll()
+	_update_overlay()
 
 
 func _physics_process(_delta: float) -> void:
-	# These are passive, state-dependent joint envelopes, not pose motors.
-	# Human ROM is coupled: secondary rotation changes with flexion/elevation.
-	_update_knee_coupling("left_knee")
-	_update_knee_coupling("right_knee")
-	_update_hip_coupling("left_hip", -1.0)
-	_update_hip_coupling("right_hip", 1.0)
-	_update_shoulder_coupling("left_shoulder")
-	_update_shoulder_coupling("right_shoulder")
-	_update_ankle_coupling("left_ankle")
-	_update_ankle_coupling("right_ankle")
+	if _anatomical_limits_enabled:
+		# Passive state-dependent envelopes. These are constraints, not motors.
+		_update_knee_coupling("left_knee")
+		_update_knee_coupling("right_knee")
+		_update_hip_coupling("left_hip", -1.0)
+		_update_hip_coupling("right_hip", 1.0)
+		_update_shoulder_coupling("left_shoulder")
+		_update_shoulder_coupling("right_shoulder")
+		_update_ankle_coupling("left_ankle")
+		_update_ankle_coupling("right_ankle")
+
+	_update_physics_grab()
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouse:
+		_mouse_position = event.position
+
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:
+			_release_grab()
 			_reset_ragdoll()
+		elif event.keycode == KEY_L:
+			_set_anatomical_limits_enabled(not _anatomical_limits_enabled)
 		elif event.keycode == KEY_ESCAPE:
 			_orbit_dragging = false
+			_release_grab()
 
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_begin_grab(event.position)
+			else:
+				_release_grab()
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			_orbit_dragging = event.pressed
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_camera_distance = maxf(1.8, _camera_distance - 0.30)
-			_update_camera()
+			if _grabbed_body != null:
+				_grab_distance = clampf(_grab_distance - GRAB_DEPTH_STEP, MIN_GRAB_DISTANCE, MAX_GRAB_DISTANCE)
+			else:
+				_camera_distance = maxf(1.8, _camera_distance - 0.30)
+				_update_camera()
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_camera_distance = minf(9.0, _camera_distance + 0.30)
-			_update_camera()
+			if _grabbed_body != null:
+				_grab_distance = clampf(_grab_distance + GRAB_DEPTH_STEP, MIN_GRAB_DISTANCE, MAX_GRAB_DISTANCE)
+			else:
+				_camera_distance = minf(9.0, _camera_distance + 0.30)
+				_update_camera()
 
-	if event is InputEventMouseMotion and _orbit_dragging:
+	if event is InputEventMouseMotion and _orbit_dragging and _grabbed_body == null:
 		_camera_yaw -= event.relative.x * 0.006
 		_camera_pitch = clampf(_camera_pitch - event.relative.y * 0.006, -1.15, 0.95)
 		_update_camera()
@@ -144,19 +183,35 @@ func _make_overlay() -> void:
 	canvas.name = "Overlay"
 	add_child(canvas)
 
-	var label := Label.new()
-	label.position = Vector2(18.0, 16.0)
-	label.text = "19-BODY PASSIVE ANATOMICAL RAGDOLL / JOLT / 120 Hz\nR: reset   RMB drag: orbit   wheel: zoom\nAsymmetric ROM + coupled ligament envelopes • no motors • no neural policy"
-	label.add_theme_font_size_override("font_size", 16)
-	canvas.add_child(label)
+	_overlay_label = Label.new()
+	_overlay_label.position = Vector2(18.0, 16.0)
+	_overlay_label.add_theme_font_size_override("font_size", 16)
+	canvas.add_child(_overlay_label)
+
+
+func _update_overlay() -> void:
+	if _overlay_label == null:
+		return
+	var limit_state := "ON" if _anatomical_limits_enabled else "OFF"
+	var grab_state := "none"
+	if _grabbed_body != null:
+		grab_state = "%s  depth %.2f m" % [_grabbed_role, _grab_distance]
+	_overlay_label.text = (
+		"19-BODY PASSIVE RAGDOLL / JOLT / 120 Hz\n"
+		+ "L: anatomical limits [%s]   R: reset\n" % limit_state
+		+ "LMB drag body: physical grab   wheel while grabbed: depth\n"
+		+ "RMB drag: orbit   wheel: zoom   ESC: release\n"
+		+ "Grab: %s\n" % grab_state
+		+ "No motors • no animation • no neural policy"
+	)
 
 
 func _build_ragdoll() -> void:
 	for spec in _body_specs():
 		_make_body(spec)
 
-	# Keep self-collision disabled while validating joint behavior. This makes a
-	# bad limit/constraint obvious instead of mixing it with body-body contacts.
+	# Keep self-collision disabled while validating joint behavior. This isolates
+	# articulation constraints from body-body collision tuning.
 	var names: Array = _bodies.keys()
 	for i in range(names.size()):
 		for j in range(i + 1, names.size()):
@@ -203,6 +258,7 @@ func _make_body(spec: Dictionary) -> void:
 	body.linear_damp = 0.04
 	body.angular_damp = 0.08
 	body.freeze = true
+	body.set_meta("ragdoll_role", String(spec["name"]))
 	add_child(body)
 
 	var physics_material := PhysicsMaterial.new()
@@ -267,55 +323,24 @@ func _body_color(body_name: String) -> Color:
 
 func _joint_specs() -> Array:
 	# Axis convention for this neutral mockup:
-	#   X = sagittal flexion/extension for spine, hips, knees, shoulders, elbows, ankles.
-	#   Y = axial twist (pronation/supination or internal/external rotation).
-	#   Z = lateral bend / abduction-adduction / varus-valgus.
-	# Signs differ naturally by body direction. These ranges are physiological outer
-	# envelopes for a healthy adult, not comfortable animation ranges.
+	# X = sagittal flexion/extension, Y = axial twist, Z = lateral/ab-adduction.
 	return [
-		# Lumbar/lumbosacral contribution. Flexion is -X, extension +X.
 		_joint("pelvis_spine", "pelvis", "spine", Vector3(0,1.11,0), Vector3(-40,-15,-20), Vector3(25,15,20)),
-		# Thoracic contribution: less sagittal ROM but materially more axial rotation.
 		_joint("spine_chest", "spine", "chest", Vector3(0,1.35,0), Vector3(-30,-30,-22), Vector3(20,30,22)),
-		# Lower and upper cervical motion are split across two bodies.
 		_joint("chest_neck", "chest", "neck", Vector3(0,1.625,0), Vector3(-22,-32,-22), Vector3(18,32,22)),
 		_joint("neck_head", "neck", "head", Vector3(0,1.77,0), Vector3(-35,-48,-28), Vector3(42,48,28)),
-
-		# Sternoclavicular/scapular surrogate. Mirrored Z ranges represent elevation/
-		# depression without giving the shoulder girdle a free ball-joint feel.
 		_joint("chest_left_clavicle", "chest", "left_clavicle", Vector3(-0.145,1.58,0), Vector3(-25,-20,-18), Vector3(25,20,12)),
 		_joint("chest_right_clavicle", "chest", "right_clavicle", Vector3(0.145,1.58,0), Vector3(-25,-20,-12), Vector3(25,20,18)),
-
-		# Glenohumeral joints. The clavicle/scapular proxy supplies the remaining
-		# overhead excursion, so the humerus itself is deliberately kept below a
-		# pathological 180-degree rectangular box.
-		# At arms-down neutral: +X = flexion; left -Z/right +Z = abduction.
 		_joint("left_shoulder", "left_clavicle", "left_upper_arm", Vector3(-0.34,1.55,0), Vector3(-45,-80,-135), Vector3(135,80,30)),
 		_joint("right_shoulder", "right_clavicle", "right_upper_arm", Vector3(0.34,1.55,0), Vector3(-45,-80,-30), Vector3(135,80,135)),
-
-		# Elbow flexion bends forward (+X). Y is forearm pronation/supination because
-		# the 19-body abstraction has one forearm rigid body rather than radius+ulna.
 		_joint("left_elbow", "left_upper_arm", "left_forearm", Vector3(-0.39,1.225,0), Vector3(-5,-85,-4), Vector3(150,85,4)),
 		_joint("right_elbow", "right_upper_arm", "right_forearm", Vector3(0.39,1.225,0), Vector3(-5,-85,-4), Vector3(150,85,4)),
-
-		# Wrist flexion/extension is broad; axial twist belongs almost entirely to the
-		# forearm. Z deviation is mirrored to retain radial/ulnar asymmetry.
 		_joint("left_wrist", "left_forearm", "left_hand", Vector3(-0.39,0.925,-0.005), Vector3(-75,-5,-20), Vector3(70,5,35)),
 		_joint("right_wrist", "right_forearm", "right_hand", Vector3(0.39,0.925,-0.005), Vector3(-75,-5,-35), Vector3(70,5,20)),
-
-		# Hip: +X flexion, -X extension. Z abduction is mirrored. Axial rotation is
-		# asymmetric by side and is tightened dynamically in deep hip flexion.
 		_joint("left_hip", "pelvis", "left_thigh", Vector3(-0.105,0.90,0), Vector3(-30,-40,-45), Vector3(125,50,30)),
 		_joint("right_hip", "pelvis", "right_thigh", Vector3(0.105,0.90,0), Vector3(-30,-50,-30), Vector3(125,40,45)),
-
-		# Knee: -X flexion, only a few degrees hyperextension. Y/Z are intentionally
-		# tiny at extension and are expanded dynamically as the knee flexes.
 		_joint("left_knee", "left_thigh", "left_shin", Vector3(-0.105,0.535,0.005), Vector3(-145,-2,-2), Vector3(5,2,2)),
 		_joint("right_knee", "right_thigh", "right_shin", Vector3(0.105,0.535,0.005), Vector3(-145,-2,-2), Vector3(5,2,2)),
-
-		# Talocrural + subtalar approximation: -X plantarflexion, +X dorsiflexion;
-		# Y is small foot ab/adduction; Z is inversion/eversion. Coupling tightens
-		# subtalar freedom near the extremes of plantar/dorsiflexion.
 		_joint("left_ankle", "left_shin", "left_foot", Vector3(-0.105,0.175,-0.025), Vector3(-50,-12,-18), Vector3(25,12,32)),
 		_joint("right_ankle", "right_shin", "right_foot", Vector3(0.105,0.175,-0.025), Vector3(-50,-12,-32), Vector3(25,12,18)),
 	]
@@ -366,9 +391,6 @@ func _validate_joint_spec(spec: Dictionary) -> void:
 
 
 func _lock_linear_axes(joint: Generic6DOFJoint3D) -> void:
-	# Jolt supports the hard linear/angular bounds used here. We intentionally do
-	# not touch Generic6DOF soft-limit ERP/damping/restitution properties because
-	# the built-in Jolt backend ignores those compatibility properties.
 	for axis in ["x", "y", "z"]:
 		joint.set("linear_limit_%s/enabled" % axis, true)
 		joint.set("linear_limit_%s/lower_distance" % axis, 0.0)
@@ -383,6 +405,29 @@ func _set_angular_limit(joint: Generic6DOFJoint3D, axis: String, lower_deg: floa
 func _set_angular_range(joint: Generic6DOFJoint3D, axis: String, lower_deg: float, upper_deg: float) -> void:
 	joint.set("angular_limit_%s/lower_angle" % axis, deg_to_rad(lower_deg))
 	joint.set("angular_limit_%s/upper_angle" % axis, deg_to_rad(upper_deg))
+
+
+func _restore_outer_joint_ranges() -> void:
+	for joint_name in _joints:
+		var joint: Generic6DOFJoint3D = _joints[joint_name]
+		var spec: Dictionary = _joint_specs_by_name[joint_name]
+		var lower: Vector3 = spec["lower"]
+		var upper: Vector3 = spec["upper"]
+		_set_angular_range(joint, "x", lower.x, upper.x)
+		_set_angular_range(joint, "y", lower.y, upper.y)
+		_set_angular_range(joint, "z", lower.z, upper.z)
+
+
+func _set_anatomical_limits_enabled(enabled: bool) -> void:
+	_anatomical_limits_enabled = enabled
+	if enabled:
+		_restore_outer_joint_ranges()
+	for joint_name in _joints:
+		var joint: Generic6DOFJoint3D = _joints[joint_name]
+		for axis in ["x", "y", "z"]:
+			joint.set("angular_limit_%s/enabled" % axis, enabled)
+	_update_overlay()
+	print("Anatomical angular limits: %s" % ("ON" if enabled else "OFF"))
 
 
 func _relative_joint_euler(joint_name: String) -> Vector3:
@@ -401,8 +446,6 @@ func _update_knee_coupling(joint_name: String) -> void:
 	var joint: Generic6DOFJoint3D = _joints[joint_name]
 	var euler := _relative_joint_euler(joint_name)
 	var flexion_deg := clampf(-rad_to_deg(euler.x), 0.0, 145.0)
-	# Collateral ligaments and the screw-home mechanism make the extended knee very
-	# resistant to twist/varus-valgus. Flexion progressively unlocks a small amount.
 	var unlock := smoothstep(8.0, 95.0, flexion_deg)
 	var axial_deg := lerpf(2.0, 12.0, unlock)
 	var frontal_deg := lerpf(2.0, 5.0, unlock)
@@ -416,8 +459,6 @@ func _update_hip_coupling(joint_name: String, side: float) -> void:
 	var joint: Generic6DOFJoint3D = _joints[joint_name]
 	var euler := _relative_joint_euler(joint_name)
 	var flexion_deg := clampf(rad_to_deg(euler.x), 0.0, 125.0)
-	# Deep flexion tensions the capsule/soft tissue and reduces available axial
-	# rotation and ab/adduction. Keep the hard sagittal ROM unchanged.
 	var deep := smoothstep(70.0, 120.0, flexion_deg)
 	var internal_deg := lerpf(40.0, 24.0, deep)
 	var external_deg := lerpf(50.0, 28.0, deep)
@@ -440,8 +481,6 @@ func _update_shoulder_coupling(joint_name: String) -> void:
 	var flexion_fraction := clampf(absf(rad_to_deg(euler.x)) / 135.0, 0.0, 1.0)
 	var abduction_fraction := clampf(absf(rad_to_deg(euler.z)) / 135.0, 0.0, 1.0)
 	var elevation := maxf(flexion_fraction, abduction_fraction)
-	# Near overhead elevation the capsule and scapulohumeral geometry reduce free
-	# humeral axial rotation. The separate clavicle body still supplies girdle ROM.
 	var tighten := smoothstep(0.62, 1.0, elevation)
 	var axial_deg := lerpf(80.0, 48.0, tighten)
 	_set_angular_range(joint, "y", -axial_deg, axial_deg)
@@ -454,9 +493,7 @@ func _update_ankle_coupling(joint_name: String) -> void:
 	var spec: Dictionary = _joint_specs_by_name[joint_name]
 	var euler := _relative_joint_euler(joint_name)
 	var sagittal_deg := rad_to_deg(euler.x)
-	# Subtalar inversion/eversion is most available around the middle of the ankle's
-	# sagittal range and tightens toward full plantarflexion/dorsiflexion.
-	var center_distance := absf((sagittal_deg - -12.5) / 37.5)
+	var center_distance := absf((sagittal_deg + 12.5) / 37.5)
 	var tighten := smoothstep(0.55, 1.0, clampf(center_distance, 0.0, 1.0))
 	var lower: Vector3 = spec["lower"]
 	var upper: Vector3 = spec["upper"]
@@ -464,6 +501,67 @@ func _update_ankle_coupling(joint_name: String) -> void:
 	var z_scale := lerpf(1.0, 0.62, tighten)
 	_set_angular_range(joint, "y", lower.y * y_scale, upper.y * y_scale)
 	_set_angular_range(joint, "z", lower.z * z_scale, upper.z * z_scale)
+
+
+func _begin_grab(screen_position: Vector2) -> void:
+	if _camera == null:
+		return
+	var ray_origin := _camera.project_ray_origin(screen_position)
+	var ray_direction := _camera.project_ray_normal(screen_position).normalized()
+	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_origin + ray_direction * RAY_LENGTH)
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return
+	var collider: Object = hit.get("collider")
+	if not (collider is RigidBody3D):
+		return
+	var body := collider as RigidBody3D
+	if not body.has_meta("ragdoll_role"):
+		return
+
+	_grabbed_body = body
+	_grabbed_role = String(body.get_meta("ragdoll_role"))
+	var hit_position: Vector3 = hit.get("position")
+	_grab_local_point = body.to_local(hit_position)
+	_grab_distance = clampf(ray_origin.distance_to(hit_position), MIN_GRAB_DISTANCE, MAX_GRAB_DISTANCE)
+	_grab_target_world = hit_position
+	body.sleeping = false
+	_update_overlay()
+
+
+func _release_grab() -> void:
+	_grabbed_body = null
+	_grabbed_role = ""
+	_grab_local_point = Vector3.ZERO
+	_update_overlay()
+
+
+func _update_physics_grab() -> void:
+	if _grabbed_body == null or not is_instance_valid(_grabbed_body) or _camera == null:
+		return
+
+	var ray_origin := _camera.project_ray_origin(_mouse_position)
+	var ray_direction := _camera.project_ray_normal(_mouse_position).normalized()
+	_grab_target_world = ray_origin + ray_direction * _grab_distance
+
+	var body := _grabbed_body
+	body.sleeping = false
+	var world_grab_point := body.global_transform * _grab_local_point
+	var offset := world_grab_point - body.global_position
+	var point_velocity := body.linear_velocity + body.angular_velocity.cross(offset)
+	var error := _grab_target_world - world_grab_point
+
+	# Mass-scaled spring gives all body parts roughly comparable acceleration.
+	# Damping is close to critical for k/m ~= 175 s^-2 without feeling welded.
+	var spring_force := error * (GRAB_STIFFNESS_PER_KG * body.mass)
+	var damping_force := -point_velocity * (GRAB_DAMPING_PER_KG * body.mass)
+	var force := spring_force + damping_force
+	var max_force := GRAB_MAX_FORCE_PER_KG * body.mass
+	if force.length() > max_force:
+		force = force.normalized() * max_force
+	body.apply_force(force, offset)
 
 
 func _assert_articulation_contract() -> void:
@@ -475,11 +573,13 @@ func _assert_articulation_contract() -> void:
 		var body: RigidBody3D = _bodies[body_name]
 		total_mass += body.mass
 	print("Asterra passive anatomical ragdoll ready: %d bodies, %d joints, %.2f kg total" % [_bodies.size(), _joint_count, total_mass])
-	print("Joint model: asymmetric hard ROM + flexion/elevation-dependent passive coupling")
+	print("L toggles anatomical angular limits; linear joint anchors remain constrained")
+	print("LMB applies a physical spring at the clicked body point")
 	print("3D physics engine setting: %s" % String(ProjectSettings.get_setting("physics/3d/physics_engine", "default")))
 
 
 func _reset_ragdoll() -> void:
+	_release_grab()
 	for body_name in _bodies:
 		var body: RigidBody3D = _bodies[body_name]
 		body.freeze = true
@@ -488,22 +588,17 @@ func _reset_ragdoll() -> void:
 		body.linear_velocity = Vector3.ZERO
 		body.angular_velocity = Vector3.ZERO
 
-	# Restore every static outer limit before the first coupled-limit physics tick.
+	_restore_outer_joint_ranges()
 	for joint_name in _joints:
 		var joint: Generic6DOFJoint3D = _joints[joint_name]
-		var spec: Dictionary = _joint_specs_by_name[joint_name]
-		var lower: Vector3 = spec["lower"]
-		var upper: Vector3 = spec["upper"]
-		_set_angular_range(joint, "x", lower.x, upper.x)
-		_set_angular_range(joint, "y", lower.y, upper.y)
-		_set_angular_range(joint, "z", lower.z, upper.z)
+		for axis in ["x", "y", "z"]:
+			joint.set("angular_limit_%s/enabled" % axis, _anatomical_limits_enabled)
 
 	for body_name in _bodies:
 		var body: RigidBody3D = _bodies[body_name]
 		body.freeze = false
 		body.sleeping = false
 
-	# Small asymmetric kick: enough to expose ROM/constraint problems without
-	# injecting enough energy to dominate the passive articulation test.
 	var pelvis: RigidBody3D = _bodies["pelvis"]
 	pelvis.angular_velocity = Vector3(0.15, 0.05, 0.28)
+	_update_overlay()
