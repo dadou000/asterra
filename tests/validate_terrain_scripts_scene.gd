@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase10.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase11.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
@@ -25,6 +25,8 @@ func _ready() -> void:
 	if not _validate_phase7_sculpt_math():
 		return
 	if not _validate_phase9_falloff_profiles():
+		return
+	if not _validate_phase11_thermal_erosion():
 		return
 	print("TERRAIN_SCRIPT_STACK_OK: %d scripts" % SCRIPT_CHAIN.size())
 	get_tree().quit(0)
@@ -100,6 +102,64 @@ func _validate_phase9_falloff_profiles() -> bool:
 			previous = weight
 	editor.free()
 	print("PHASE9_FALLOFF_OK: smooth + linear + cosine + gaussian")
+	return true
+
+func _validate_phase11_thermal_erosion() -> bool:
+	Planet.call("configure_for_sculpt_ci", 1000000.0)
+	Deltas.clear()
+	var editor: Control = ACTIVE_SCULPT_EDITOR.new()
+	editor.set("_sculpt_radius_m", 3.0)
+	editor.set("_sculpt_hardness", 0.98)
+	editor.set("_sculpt_falloff_profile", 0)
+	editor.set("_thermal_talus_deg", 75.0)
+	editor.set("_thermal_strength", 0.5)
+
+	var lattice: Array = Deltas.dir_to_lattice(Vector3.RIGHT)
+	var center_address := Deltas.canonical_address(
+		int(lattice[0]),
+		int(round(float(lattice[1]))),
+		int(round(float(lattice[2]))))
+	var exact_center: Vector3 = Deltas.lattice_to_dir(
+		center_address.x, float(center_address.y), float(center_address.z))
+	Deltas.add_offset(center_address.x, center_address.y, center_address.z,
+		20.0, -10000.0, 10000.0)
+
+	var writes_value: Variant = editor.call("_thermal_erosion_writes", exact_center, 1000000.0)
+	if not (writes_value is Array):
+		_fail("PHASE11_THERMAL_FAILED: erosion target builder returned invalid data")
+		return false
+	var writes: Array = writes_value as Array
+	if writes.is_empty():
+		_fail("PHASE11_THERMAL_FAILED: isolated authored spike produced no transfers")
+		return false
+	var net_change := 0.0
+	var center_after := 20.0
+	var recipient_gain := false
+	for write: Dictionary in writes:
+		var address: Vector3i = write["address"]
+		var before: float = Deltas.get_offset(address.x, address.y, address.z)
+		var desired: float = float(write["value"])
+		var change: float = desired - before
+		net_change += change
+		if address == center_address:
+			center_after = desired
+		elif change > 1e-6:
+			recipient_gain = true
+	if absf(net_change) > 1e-4:
+		_fail("PHASE11_THERMAL_FAILED: proposed transfers do not conserve local material")
+		return false
+	if center_after >= 20.0 or not recipient_gain:
+		_fail("PHASE11_THERMAL_FAILED: spike did not erode and deposit downhill")
+		return false
+
+	var changed: int = int(editor.call("_thermal_erosion_brush", exact_center, 1000000.0))
+	var applied_center: float = Deltas.get_offset(center_address.x, center_address.y, center_address.z)
+	if changed <= 0 or applied_center >= 20.0:
+		_fail("PHASE11_THERMAL_FAILED: conservative targets were not applied to Deltas")
+		return false
+	Deltas.clear()
+	editor.free()
+	print("PHASE11_THERMAL_OK: downhill deposition + conservative simultaneous relaxation")
 	return true
 
 func _fail(message: String) -> void:
