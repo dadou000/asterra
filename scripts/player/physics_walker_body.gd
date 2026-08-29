@@ -1,23 +1,20 @@
 class_name PhysicsWalkerBody
 extends RigidBody3D
-## Experimental force/torque-driven humanoid COM controller for the authoritative
-## GPU terrain stack.
+## Pelvis / high-level COM controller for the authoritative-terrain active ragdoll.
 ##
-## The terrain branch intentionally has no CPU collision mesh under the player.
-## Consequently this body treats the two feet as virtual compliant contacts whose
-## height/normal come from TerrainContactSampler. The rigid body remains a genuine
-## Godot RigidBody3D, so inertia, impacts against ordinary physics objects, finite
-## traction and finite balance torque still matter. This is the first locomotion
-## layer; bone-level active-ragdoll motors can be built on top of the same COM and
-## contact controller once the physical skeleton is authored.
+## body_mass is the mass of the complete humanoid. This RigidBody3D is only the
+## pelvis portion; ActiveRagdollRig owns the remaining distributed masses. When the
+## articulated rig is active, authoritative terrain support comes through its two
+## physical feet. The older virtual-foot path remains as a fallback.
 
 const GRAVITY_MPS2 := 9.62
 const MIN_NORMAL_DOT := 0.05
 
 @export_group("Body")
 @export var body_mass := 72.0
-@export var body_radius := 0.28
-@export var body_height := 1.58
+@export var pelvis_mass := 18.5
+@export var body_radius := 0.16
+@export var body_height := 0.32
 @export var com_height := 0.90
 
 @export_group("Locomotion")
@@ -28,7 +25,7 @@ const MIN_NORMAL_DOT := 0.05
 @export var friction_coefficient := 1.05
 @export var max_walkable_slope_deg := 52.0
 
-@export_group("Virtual legs")
+@export_group("Fallback virtual legs")
 @export var foot_separation := 0.26
 @export var foot_fore_aft := 0.035
 @export var support_probe := 0.24
@@ -50,6 +47,7 @@ var active := false
 var grounded := false
 var desired_velocity := Vector3.ZERO
 var desired_forward := Vector3.ZERO
+var ragdoll: ActiveRagdollRig
 
 var last_agl := INF
 var last_surface_normal := Vector3.UP
@@ -64,7 +62,7 @@ var _jump_cooldown := 0.0
 
 
 func _ready() -> void:
-	mass = body_mass
+	mass = pelvis_mass
 	gravity_scale = 0.0
 	linear_damp = 0.04
 	angular_damp = 0.12
@@ -72,7 +70,7 @@ func _ready() -> void:
 	freeze = true
 
 	var collision := CollisionShape3D.new()
-	collision.name = "BodyCollision"
+	collision.name = "PelvisCollision"
 	var capsule := CapsuleShape3D.new()
 	capsule.radius = body_radius
 	capsule.height = body_height
@@ -137,7 +135,7 @@ func set_control(target_velocity: Vector3, forward: Vector3) -> void:
 func request_jump() -> void:
 	if active:
 		_jump_requested = true
-		sleeping = false
+	sleeping = false
 
 
 func world_position() -> Vec3D:
@@ -145,7 +143,7 @@ func world_position() -> Vec3D:
 
 
 func debug_state() -> Dictionary:
-	return {
+	var result := {
 		"grounded": grounded,
 		"agl": last_agl,
 		"support_n": last_support_force,
@@ -154,7 +152,12 @@ func debug_state() -> Dictionary:
 		"left_contact": left_foot_contact,
 		"right_contact": right_foot_contact,
 		"speed": linear_velocity.length(),
+		"pelvis_mass": mass,
+		"total_mass": body_mass,
 	}
+	if ragdoll != null:
+		result["ragdoll"] = ragdoll.debug_state()
+	return result
 
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
@@ -177,49 +180,60 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		body_forward = body_forward.normalized()
 	var body_right := body_forward.cross(radial_up).normalized()
 
-	# Asterra gravity is radial. Project gravity ourselves because Godot's project
-	# gravity points in one fixed world direction.
-	state.apply_central_force(-radial_up * body_mass * GRAVITY_MPS2)
+	# Only the pelvis mass belongs to this body. ActiveRagdollRig applies radial
+	# gravity independently to every other physical segment.
+	state.apply_central_force(-radial_up * mass * GRAVITY_MPS2)
 
-	var left := _sample_foot(state, world, radial_up, body_right, body_forward, -1.0)
-	var right := _sample_foot(state, world, radial_up, body_right, body_forward, 1.0)
-	left_foot_contact = bool(left["contact"])
-	right_foot_contact = bool(right["contact"])
-	var contact_count := int(left_foot_contact) + int(right_foot_contact)
+	var use_ragdoll_feet := ragdoll != null and ragdoll.active
+	var left: Dictionary = {}
+	var right: Dictionary = {}
+	var total_support := 0.0
+	var support_surface_normal := radial_up
 
-	# Jump is an impulse because it is a one-shot momentum change. During the short
-	# release window the virtual leg springs are disabled so they cannot immediately
-	# cancel the jump impulse.
+	if use_ragdoll_feet:
+		total_support = ragdoll.total_support_force
+		support_surface_normal = ragdoll.support_normal
+		left_foot_contact = ragdoll.left_support_force > 0.0
+		right_foot_contact = ragdoll.right_support_force > 0.0
+		last_agl = ragdoll.min_foot_agl
+	else:
+		left = _sample_foot(state, world, radial_up, body_right, body_forward, -1.0)
+		right = _sample_foot(state, world, radial_up, body_right, body_forward, 1.0)
+		left_foot_contact = bool(left["contact"])
+		right_foot_contact = bool(right["contact"])
+		var contact_count := int(left_foot_contact) + int(right_foot_contact)
+		var weighted_normal := Vector3.ZERO
+		if contact_count > 0 and _jump_cooldown <= 0.0:
+			var share := 1.0 / float(contact_count)
+			total_support += _apply_foot_support(state, left, radial_up, share)
+			total_support += _apply_foot_support(state, right, radial_up, share)
+			if float(left["support"]) > 0.0:
+				weighted_normal += (left["normal"] as Vector3) * float(left["support"])
+			if float(right["support"]) > 0.0:
+				weighted_normal += (right["normal"] as Vector3) * float(right["support"])
+		if weighted_normal.length_squared() > 1e-8:
+			support_surface_normal = weighted_normal.normalized()
+		last_agl = minf(float(left["agl"]), float(right["agl"]))
+
+	if support_surface_normal.dot(radial_up) < 0.0:
+		support_surface_normal = -support_surface_normal
+	last_surface_normal = support_surface_normal
+	last_support_force = total_support
+	last_slope_deg = rad_to_deg(acos(clampf(support_surface_normal.dot(radial_up), -1.0, 1.0)))
+	grounded = total_support > body_mass * GRAVITY_MPS2 * 0.16 and _jump_cooldown <= 0.0
+
+	# Jump is a whole-body impulse delivered through the pelvis. The articulated
+	# joints distribute it to the other masses. Release physical feet briefly so the
+	# terrain springs cannot immediately oppose the impulse.
 	if _jump_requested and grounded:
 		state.apply_central_impulse(radial_up * body_mass * jump_speed)
 		_jump_cooldown = 0.16
+		if use_ragdoll_feet:
+			ragdoll.begin_jump_release(_jump_cooldown)
 	_jump_requested = false
 
-	var total_support := 0.0
-	var weighted_normal := Vector3.ZERO
-	if contact_count > 0 and _jump_cooldown <= 0.0:
-		var share := 1.0 / float(contact_count)
-		total_support += _apply_foot_support(state, left, radial_up, share)
-		total_support += _apply_foot_support(state, right, radial_up, share)
-		if float(left["support"]) > 0.0:
-			weighted_normal += (left["normal"] as Vector3) * float(left["support"])
-		if float(right["support"]) > 0.0:
-			weighted_normal += (right["normal"] as Vector3) * float(right["support"])
-
-	var support_normal := radial_up
-	if weighted_normal.length_squared() > 1e-8:
-		support_normal = weighted_normal.normalized()
-	last_surface_normal = support_normal
-	last_support_force = total_support
-	last_agl = minf(float(left["agl"]), float(right["agl"]))
-	last_slope_deg = rad_to_deg(acos(clampf(support_normal.dot(radial_up), -1.0, 1.0)))
-	grounded = total_support > body_mass * GRAVITY_MPS2 * 0.18 and _jump_cooldown <= 0.0
-
-	# Velocity servo expressed as a force and limited by the available normal force.
-	# This is deliberate: low normal force means low traction, so the same controller
-	# naturally becomes weak on jumps, steep slopes and near-loss-of-contact events.
-	var target_velocity := desired_velocity - support_normal * desired_velocity.dot(support_normal)
-	var current_tangent := state.linear_velocity - support_normal * state.linear_velocity.dot(support_normal)
+	var target_velocity := desired_velocity - support_surface_normal * desired_velocity.dot(support_surface_normal)
+	var current_tangent := state.linear_velocity - support_surface_normal * state.linear_velocity.dot(support_surface_normal)
 	var velocity_error := target_velocity - current_tangent
 	var accel_limit := max_ground_accel if grounded else max_air_accel
 	var desired_accel := _clamp_length(velocity_error * velocity_gain, accel_limit)
@@ -230,12 +244,16 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		if not walkable:
 			traction_limit *= 0.12
 		drive_force = _clamp_length(drive_force, traction_limit)
-		_apply_drive_through_feet(state, drive_force, left, right, total_support)
+		if use_ragdoll_feet:
+			ragdoll.apply_drive_force(drive_force)
+		else:
+			_apply_drive_through_feet(state, drive_force, left, right, total_support)
 	else:
+		# Mild in-air authority acts at the pelvis only.
 		state.apply_central_force(drive_force)
 	last_drive_force = drive_force.length()
 
-	_apply_balance_torque(state, radial_up, support_normal, desired_accel)
+	_apply_balance_torque(state, radial_up, support_surface_normal, desired_accel)
 
 
 func _sample_foot(
@@ -324,15 +342,13 @@ func _apply_drive_through_feet(
 func _apply_balance_torque(
 		state: PhysicsDirectBodyState3D,
 		radial_up: Vector3,
-		surface_normal: Vector3,
+		surface_normal_value: Vector3,
 		desired_accel: Vector3
 	) -> void:
 	var base_up := radial_up
 	if grounded:
-		base_up = radial_up.lerp(surface_normal, clampf(terrain_normal_follow, 0.0, 1.0)).normalized()
+		base_up = radial_up.lerp(surface_normal_value, clampf(terrain_normal_follow, 0.0, 1.0)).normalized()
 
-	# Lean the target body axis into acceleration. The torque controller must then
-	# physically create that lean; the visual is never rotated directly.
 	var lean := desired_accel * (acceleration_lean / GRAVITY_MPS2)
 	var max_lean := tan(deg_to_rad(max_lean_deg))
 	lean = _clamp_length(lean, max_lean)
