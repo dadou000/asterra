@@ -9,7 +9,7 @@ const SCRIPT_CHAIN := [
 	"res://scripts/terrain/spherical_geometry_clipmap.gd",
 	"res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd",
 ]
-const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase13.gd")
+const ACTIVE_SCULPT_EDITOR := preload("res://scripts/world_authoring/world_authoring_editor_live_phase14.gd")
 
 func _ready() -> void:
 	for script_path: String in SCRIPT_CHAIN:
@@ -29,6 +29,8 @@ func _ready() -> void:
 	if not _validate_phase11_thermal_erosion():
 		return
 	if not _validate_phase13_async_shape_math():
+		return
+	if not _validate_phase14_sampler_equivalence():
 		return
 	print("TERRAIN_SCRIPT_STACK_OK: %d scripts" % SCRIPT_CHAIN.size())
 	get_tree().quit(0)
@@ -53,9 +55,6 @@ func _validate_phase7_sculpt_math() -> bool:
 		_fail("PHASE7_SCULPT_FAILED: flatten did not converge final terrain toward fixed MSL target")
 		return false
 
-	# Verify flatten compensated a generated slope rather than writing one constant
-	# delta everywhere. Two nearby lattice points have slightly different pristine
-	# heights and must therefore end with different offsets at the same final target.
 	var lattice: Array = Deltas.dir_to_lattice(center)
 	var face: int = int(lattice[0])
 	var ci: int = int(round(float(lattice[1])))
@@ -68,8 +67,6 @@ func _validate_phase7_sculpt_math() -> bool:
 		_fail("PHASE7_SCULPT_FAILED: flatten equalized deltas instead of final height")
 		return false
 
-	# Smooth must reduce a sharp authored spike. Use an exact lattice direction so
-	# interpolation does not hide whether the center sample actually changed.
 	Deltas.clear()
 	var center_address: Vector3i = Deltas.canonical_address(face, ci, cj)
 	var exact_center: Vector3 = Deltas.lattice_to_dir(center_address.x, float(center_address.y), float(center_address.z))
@@ -82,7 +79,7 @@ func _validate_phase7_sculpt_math() -> bool:
 		return false
 	Deltas.clear()
 	editor.free()
-	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 13 batch-compatible writes")
+	print("PHASE7_SCULPT_OK: flatten final-height compensation + smoothing via Phase 14 sampler")
 	return true
 
 func _validate_phase9_falloff_profiles() -> bool:
@@ -184,8 +181,6 @@ func _validate_phase13_async_shape_math() -> bool:
 	var center: Vector3 = Deltas.lattice_to_dir(
 		center_address.x, float(center_address.y), float(center_address.z))
 
-	# Flatten finalization: feed deterministic pristine values into the same function
-	# used by asynchronous GPU readback and require movement toward one fixed MSL target.
 	var flatten_samples_value: Variant = editor.call("_collect_sculpt_samples", center, planet_radius)
 	if not (flatten_samples_value is Array):
 		_fail("PHASE13_ASYNC_FAILED: flatten sample collection returned invalid data")
@@ -212,8 +207,6 @@ func _validate_phase13_async_shape_math() -> bool:
 		_fail("PHASE13_ASYNC_FAILED: async flatten finalization did not converge final height")
 		return false
 
-	# Smooth finalization: build the exact unique neighborhood address set used by
-	# the GPU path, then verify an authored center spike is reduced.
 	Deltas.clear()
 	Deltas.add_offset(center_address.x, center_address.y, center_address.z,
 		20.0, -10000.0, 10000.0)
@@ -239,8 +232,6 @@ func _validate_phase13_async_shape_math() -> bool:
 		_fail("PHASE13_ASYNC_FAILED: async smooth finalization did not reduce center spike")
 		return false
 
-	# Thermal finalization: conservative offset transfer must preserve the sum of
-	# authored delta heights over the complete source+recipient address set.
 	Deltas.clear()
 	Deltas.add_offset(center_address.x, center_address.y, center_address.z,
 		20.0, -10000.0, 10000.0)
@@ -279,6 +270,79 @@ func _validate_phase13_async_shape_math() -> bool:
 	editor.free()
 	print("PHASE13_ASYNC_MATH_OK: flatten + smooth + conservative thermal readback finalization")
 	return true
+
+func _validate_phase14_sampler_equivalence() -> bool:
+	var planet_radius := 1000000.0
+	var brush_radius := 18.0
+	var hardness := 0.41
+	var center := Vector3(1.0, 1.0, 0.12).normalized()
+	var editor: Control = ACTIVE_SCULPT_EDITOR.new()
+	editor.set("_sculpt_radius_m", brush_radius)
+	editor.set("_sculpt_hardness", hardness)
+	editor.set("_sculpt_falloff_profile", 2)
+	var optimized_value: Variant = editor.call("_collect_sculpt_samples", center, planet_radius)
+	if not (optimized_value is Array):
+		_fail("PHASE14_SAMPLER_FAILED: optimized collector returned invalid data")
+		return false
+	var optimized: Array = optimized_value as Array
+	var optimized_weights: Dictionary = {}
+	for sample_value: Variant in optimized:
+		var sample: Dictionary = sample_value as Dictionary
+		var address: Vector3i = sample["address"]
+		var key: int = _packed_address_key(address)
+		if optimized_weights.has(key):
+			_fail("PHASE14_SAMPLER_FAILED: optimized collector emitted duplicate seam address")
+			return false
+		optimized_weights[key] = float(sample["weight"])
+
+	var spacing_m: float = maxf(Deltas.sample_spacing(planet_radius), 0.001)
+	var center_lattice: Array = Deltas.dir_to_lattice(center)
+	var face: int = int(center_lattice[0])
+	var center_i: int = int(round(float(center_lattice[1])))
+	var center_j: int = int(round(float(center_lattice[2])))
+	var extent: int = maxi(1, int(ceil(brush_radius / spacing_m)) + 2)
+	var reference_weights: Dictionary = {}
+	for source_j: int in range(center_j - extent, center_j + extent + 1):
+		for source_i: int in range(center_i - extent, center_i + extent + 1):
+			var address: Vector3i = Deltas.canonical_address(face, source_i, source_j)
+			if address.x < 0:
+				continue
+			var key: int = _packed_address_key(address)
+			if reference_weights.has(key):
+				continue
+			var sample_dir: Vector3 = Deltas.lattice_to_dir(address.x, float(address.y), float(address.z))
+			var distance_m: float = acos(clampf(center.dot(sample_dir), -1.0, 1.0)) * planet_radius
+			if distance_m > brush_radius:
+				continue
+			var normalized_distance: float = distance_m / brush_radius
+			var weight: float = float(editor.call("_sculpt_profile_weight", normalized_distance, hardness))
+			if weight <= 0.0001:
+				continue
+			reference_weights[key] = weight
+
+	if optimized_weights.size() != reference_weights.size():
+		_fail("PHASE14_SAMPLER_FAILED: optimized/reference sample counts differ (%d vs %d)" % [optimized_weights.size(), reference_weights.size()])
+		return false
+	var maximum_weight_error := 0.0
+	for key_value: Variant in reference_weights.keys():
+		var key: int = int(key_value)
+		if not optimized_weights.has(key):
+			_fail("PHASE14_SAMPLER_FAILED: optimized collector missed canonical seam sample")
+			return false
+		maximum_weight_error = maxf(maximum_weight_error,
+			absf(float(optimized_weights[key]) - float(reference_weights[key])))
+	if maximum_weight_error > 2e-5:
+		_fail("PHASE14_SAMPLER_FAILED: polynomial arc falloff error %.8f exceeds tolerance" % maximum_weight_error)
+		return false
+	if not bool(editor.get("_phase14_last_fast_arc")):
+		_fail("PHASE14_SAMPLER_FAILED: planetary test did not exercise fast arc path")
+		return false
+	editor.free()
+	print("PHASE14_SAMPLER_OK: seam-canonical sample set matches exact geodesic reference; max weight error %.8f" % maximum_weight_error)
+	return true
+
+func _packed_address_key(address: Vector3i) -> int:
+	return (int(address.x) << 42) | (int(address.y) << 21) | int(address.z)
 
 func _fail(message: String) -> void:
 	push_error(message)
