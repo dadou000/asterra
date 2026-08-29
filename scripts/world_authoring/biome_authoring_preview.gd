@@ -6,10 +6,10 @@ extends Node
 ## (192 cells/face in the canonical Asterra preset). Authoring brushes can be tens
 ## of metres wide, so baking them into that map would turn a small edit into a
 ## multi-kilometre block. This node instead rasterizes nearby sparse biome strokes
-## into a camera-centred categorical override texture consumed by the terrain
-## shader. The saved source of truth remains the authoring layer's spherical
-## strokes; this texture is disposable and is rebuilt after recenter/history/body
-## changes.
+## into a camera-centred categorical override texture consumed by terrain and
+## scatter shaders. The saved source of truth remains the authoring layer's
+## spherical strokes; this texture is disposable and is rebuilt after recenter,
+## history, preset or body changes.
 
 const RESOLUTION: int = 512
 const SAMPLE_SPACING_M: float = 2.0
@@ -235,33 +235,42 @@ func _publish() -> void:
 
 
 func _sync_shader_binding() -> void:
+	var ready_now: bool = _center_valid and _has_content and _texture != null
+	var planet_radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0
+
 	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
-	if terrain == null:
-		return
-	var value: Variant = terrain.get("_material")
-	if not (value is ShaderMaterial):
-		return
-	var material: ShaderMaterial = value as ShaderMaterial
-	_bound_material = material
-	material.set_shader_parameter("u_author_biome_override", _texture)
-	material.set_shader_parameter("u_author_biome_center", _center_dir)
-	material.set_shader_parameter("u_author_biome_right", _center_right)
-	material.set_shader_parameter("u_author_biome_up", _center_up)
-	material.set_shader_parameter("u_author_biome_half_extent_m", HALF_EXTENT_M)
-	material.set_shader_parameter("u_author_biome_planet_radius",
-		maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0)
-	material.set_shader_parameter("u_author_biome_ready",
-		1.0 if _center_valid and _has_content and _texture != null else 0.0)
+	if terrain != null:
+		var value: Variant = terrain.get("_material")
+		if value is ShaderMaterial:
+			var material: ShaderMaterial = value as ShaderMaterial
+			_bound_material = material
+			material.set_shader_parameter("u_author_biome_override", _texture)
+			material.set_shader_parameter("u_author_biome_center", _center_dir)
+			material.set_shader_parameter("u_author_biome_right", _center_right)
+			material.set_shader_parameter("u_author_biome_up", _center_up)
+			material.set_shader_parameter("u_author_biome_half_extent_m", HALF_EXTENT_M)
+			material.set_shader_parameter("u_author_biome_planet_radius", planet_radius)
+			material.set_shader_parameter("u_author_biome_ready", 1.0 if ready_now else 0.0)
+
+	# Scatter shaders use the same gpu_planet_context include as terrain. Supplying
+	# the identical local categorical map keeps grass/stones/scanned ecology in sync
+	# with the authored biome without modifying the immutable global context maps.
+	var scatter: Node = get_node_or_null("/root/TerrainScatter")
+	if scatter != null and scatter.has_method("set_author_biome_preview"):
+		scatter.call("set_author_biome_preview", _texture, ready_now,
+			_center_dir, _center_right, _center_up, HALF_EXTENT_M, planet_radius)
 
 
 func _set_shader_ready(value: bool) -> void:
 	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
-	if terrain == null:
-		return
-	var material_value: Variant = terrain.get("_material")
-	if material_value is ShaderMaterial:
-		(material_value as ShaderMaterial).set_shader_parameter(
-			"u_author_biome_ready", 1.0 if value else 0.0)
+	if terrain != null:
+		var material_value: Variant = terrain.get("_material")
+		if material_value is ShaderMaterial:
+			(material_value as ShaderMaterial).set_shader_parameter(
+				"u_author_biome_ready", 1.0 if value else 0.0)
+	var scatter: Node = get_node_or_null("/root/TerrainScatter")
+	if scatter != null and scatter.has_method("clear_author_biome_preview") and not value:
+		scatter.call("clear_author_biome_preview")
 
 
 func _surface_distance(a: Vector3, b: Vector3) -> float:
@@ -282,4 +291,5 @@ func stats() -> Dictionary:
 		"rasterized_pixels": _rasterized_pixels,
 		"categorical_dither": true,
 		"non_destructive": true,
+		"scatter_synchronized": true,
 	}
