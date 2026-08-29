@@ -34,10 +34,10 @@ func _ready() -> void:
 	main.map.visible = false
 	DirAccess.make_dir_recursive_absolute("user://look/%s" % _out)
 
-	var f := Planet.fields
-	var g := Planet.grid
-	var land := g.cell_dir(_find_relief(f, g))
-	var sea := g.cell_dir(_find_open_sea(f, g))
+	var f: PlanetFields = Planet.fields
+	var g: PlanetGrid = Planet.grid
+	var land: Vector3 = g.cell_dir(_find_relief(f, g))
+	var sea: Vector3 = g.cell_dir(_find_open_sea(f, g))
 
 	# Orbit and high altitude are where relief shading and cast shadows have to
 	# do all the work: the mesh carries no shape at either.
