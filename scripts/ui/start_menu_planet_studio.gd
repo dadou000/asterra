@@ -1,0 +1,31 @@
+extends "res://scripts/ui/start_menu.gd"
+## Thin launcher extension that keeps the existing development menu intact while
+## exposing the new Planet Studio as its own workflow.
+
+const PLANET_STUDIO_SCENE := "res://scenes/world_authoring/PlanetStudio.tscn"
+
+func _build_menu() -> void:
+	super._build_menu()
+	if _main_menu_center == null or _main_menu_center.get_child_count() == 0:
+		return
+	var column := _main_menu_center.get_child(0) as VBoxContainer
+	if column == null:
+		return
+	var appended_index := column.get_child_count()
+	_add_mode_button(
+		column,
+		"PLANET STUDIO",
+		"Author planets, terrain, water, atmospheres and the celestial system with staged Apply/Undo/Presets.",
+		_on_planet_studio_pressed
+	)
+	if appended_index < column.get_child_count():
+		var planet_studio_panel := column.get_child(appended_index)
+		# Place it immediately after Map Editor and before Character Editor.
+		column.move_child(planet_studio_panel, mini(5, column.get_child_count() - 1))
+	for child: Node in column.get_children():
+		if child is Label and (child as Label).text.begins_with("Asterra 0.0."):
+			(child as Label).text = "Asterra 0.0.5 development"
+
+func _on_planet_studio_pressed() -> void:
+	get_tree().set_meta("launch_mode", "planet_studio")
+	get_tree().change_scene_to_file(PLANET_STUDIO_SCENE)
