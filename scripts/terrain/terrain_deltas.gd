@@ -13,6 +13,9 @@ const TILE := 64
 const TILE_SHIFT := 6
 const FORMAT_VERSION := 1
 const SEAM_PROBE := 0.125
+const PACKED_AXIS_BITS := EDIT_DEPTH
+const PACKED_AXIS_MASK := LATTICE - 1
+const PACKED_FACE_SHIFT := EDIT_DEPTH * 2
 
 signal region_changed(center_dir: Vector3, radius_m: float)
 signal all_changed
@@ -69,6 +72,27 @@ func canonical_address(face: int, i: int, j: int) -> Vector3i:
 	return Vector3i(owner_face,
 		clampi(owner_i, 0, LATTICE - 1),
 		clampi(owner_j, 0, LATTICE - 1))
+
+## Packs one seam-canonical edit-lattice address into 45 bits:
+## 3 face bits + 21 i bits + 21 j bits. The value is safe in Godot's signed
+## 64-bit int and can be stored densely in PackedInt64Array.
+func pack_address(source: Vector3i) -> int:
+	var address: Vector3i = canonical_address(source.x, source.y, source.z)
+	if address.x < 0:
+		return -1
+	return (int(address.x) << PACKED_FACE_SHIFT) \
+		| (int(address.y) << PACKED_AXIS_BITS) \
+		| int(address.z)
+
+func unpack_address(packed: int) -> Vector3i:
+	if packed < 0:
+		return Vector3i(-1, -1, -1)
+	var face: int = (packed >> PACKED_FACE_SHIFT) & 0x7
+	if face < 0 or face >= 6:
+		return Vector3i(-1, -1, -1)
+	var i: int = (packed >> PACKED_AXIS_BITS) & PACKED_AXIS_MASK
+	var j: int = packed & PACKED_AXIS_MASK
+	return Vector3i(face, i, j)
 
 func offset_at(d: Vector3) -> float:
 	if _count == 0:
@@ -241,6 +265,58 @@ func set_offsets_batch(writes: Array[Dictionary], min_offset: float = -10000.0,
 			continue
 		var tile: PackedFloat32Array = _tiles[key]
 		var has_nonzero := false
+		for value: float in tile:
+			if absf(value) > 1e-7:
+				has_nonzero = true
+				break
+		if not has_nonzero:
+			_tiles.erase(key)
+			_count = maxi(0, _count - 1)
+	_mutex.unlock()
+	return changed
+
+## Packed counterpart of set_offsets_batch(). It avoids allocating one Dictionary
+## per target write for very large authoring stamps. Addresses must be values from
+## pack_address(); values are absolute sparse offsets. Both arrays are consumed up
+## to their shorter length, written under one mutex acquisition, and use identical
+## zero-allocation/pruning semantics to the dictionary API.
+func set_packed_offsets_batch(addresses: PackedInt64Array, values: PackedFloat32Array,
+		min_offset: float = -10000.0, max_offset: float = 10000.0) -> int:
+	var count: int = mini(addresses.size(), values.size())
+	if count <= 0:
+		return 0
+	var changed: int = 0
+	var touched_tiles: Dictionary = {}
+	_mutex.lock()
+	for write_index: int in count:
+		var address: Vector3i = unpack_address(addresses[write_index])
+		if address.x < 0:
+			continue
+		var desired: float = clampf(values[write_index], min_offset, max_offset)
+		var k: int = tile_key(address.x, address.y >> TILE_SHIFT, address.z >> TILE_SHIFT)
+		if not _tiles.has(k):
+			if absf(desired) <= 1e-7:
+				continue
+			var arr := PackedFloat32Array()
+			arr.resize(TILE * TILE)
+			_tiles[k] = arr
+			_count += 1
+		var tile: PackedFloat32Array = _tiles[k]
+		var index: int = (address.z & (TILE - 1)) * TILE + (address.y & (TILE - 1))
+		var before: float = tile[index]
+		if absf(desired - before) <= 1e-7:
+			continue
+		tile[index] = desired
+		_tiles[k] = tile
+		touched_tiles[k] = true
+		changed += 1
+
+	for key_value: Variant in touched_tiles.keys():
+		var key: int = int(key_value)
+		if not _tiles.has(key):
+			continue
+		var tile: PackedFloat32Array = _tiles[key]
+		var has_nonzero: bool = false
 		for value: float in tile:
 			if absf(value) > 1e-7:
 				has_nonzero = true
