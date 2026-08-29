@@ -146,6 +146,9 @@ jobs:
           [autoload]
           Frames="*res://tests/ci_autoload_frames.gd"
           Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
 
           [rendering]
           renderer/rendering_method="gl_compatibility"
