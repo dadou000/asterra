@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "source_skeleton": "CMU ASF/AMC",
+  "target_rig": "asterra_humanoid_19body",
+  "source_forward_axis": "derive_from_root_motion",
+  "target_forward_axis": "-Z",
+  "target_up_axis": "+Y",
+  "scale_mode": "leg_length_ratio",
+  "canonical_mapping": {
+    "pelvis": {"source": ["root"], "mode": "root_transform"},
+    "spine": {"source": ["lowerback", "upperback"], "mode": "chain_fit"},
+    "chest": {"source": ["upperback", "thorax"], "mode": "chain_fit"},
+    "neck": {"source": ["lowerneck", "upperneck"], "mode": "chain_fit"},
+    "head": {"source": ["head"], "mode": "orientation"},
+
+    "left_clavicle": {"source": ["lclavicle"], "mode": "orientation"},
+    "right_clavicle": {"source": ["rclavicle"], "mode": "orientation"},
+    "left_upper_arm": {"source": ["lhumerus"], "mode": "orientation"},
+    "right_upper_arm": {"source": ["rhumerus"], "mode": "orientation"},
+    "left_forearm": {"source": ["lradius"], "mode": "orientation"},
+    "right_forearm": {"source": ["rradius"], "mode": "orientation"},
+    "left_hand": {"source": ["lwrist", "lhand"], "mode": "chain_fit"},
+    "right_hand": {"source": ["rwrist", "rhand"], "mode": "chain_fit"},
+
+    "left_thigh": {"source": ["lfemur"], "mode": "orientation"},
+    "right_thigh": {"source": ["rfemur"], "mode": "orientation"},
+    "left_shin": {"source": ["ltibia"], "mode": "orientation"},
+    "right_shin": {"source": ["rtibia"], "mode": "orientation"},
+    "left_foot": {"source": ["lfoot"], "mode": "orientation"},
+    "right_foot": {"source": ["rfoot"], "mode": "orientation"}
+  },
+  "ignored_source_bones": [
+    "lhipjoint",
+    "rhipjoint",
+    "ltoes",
+    "rtoes",
+    "lfingers",
+    "rfingers",
+    "lthumb",
+    "rthumb"
+  ],
+  "contact_sources": {
+    "left_foot": ["lfoot", "ltoes"],
+    "right_foot": ["rfoot", "rtoes"]
+  },
+  "retarget_constraints": {
+    "preserve_root_horizontal_velocity": true,
+    "preserve_root_yaw": true,
+    "preserve_foot_world_trajectory": true,
+    "preserve_hand_world_trajectory": true,
+    "infer_contacts_before_downsampling": true,
+    "remove_source_root_drift": false,
+    "output_fps": 60
+  },
+  "notes": [
+    "CMU helper hip joints have no useful keyed motion and are intentionally ignored.",
+    "Toe bones are not physical Asterra bodies, but their source trajectories help estimate stance contact and foot orientation.",
+    "Finger/thumb source joints are ignored for locomotion.",
+    "chain_fit means fit the target segment orientation to the endpoints of the listed source chain rather than copying one local Euler channel."
+  ]
+}
