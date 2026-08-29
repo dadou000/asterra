@@ -166,6 +166,108 @@ func rendered_contact_sample_params() -> Dictionary:
 	}
 
 
+## Debug-only lookup for the actual lattice vertex nearest a looked-at direction.
+## It uses the same gnomonic anchor coordinates as the production vertex shader.
+## The dense L0 micro lattice is preferred while it is the visible centre surface;
+## otherwise the finest active clipmap level that contains the target is used.
+func debug_closest_rendered_vertex(target_direction: Vector3) -> Dictionary:
+	if Planet.cfg == null or not _have_anchor or target_direction.length_squared() <= 1e-12:
+		return {}
+	var d: Vector3 = target_direction.normalized()
+	var denom: float = d.dot(_anchor_dir)
+	if denom <= 0.01:
+		return {}
+	var radius: float = Planet.cfg.planet_radius
+	var target_plane := Vector2(d.dot(_anchor_right), d.dot(_anchor_up)) \
+		/ denom * radius
+
+	# The micro mesh encodes quarter-L0 cell coordinates in UV, but its shader still
+	# multiplies those UV offsets by the ordinary L0 spacing. Snap to that exact grid.
+	if _micro_l0_active and _active_min_level == 0 and debug_level_enabled(0):
+		var l0_spacing: float = _base_spacing
+		var l0_center := Vector2(
+			round(_center_plane.x / l0_spacing) * l0_spacing,
+			round(_center_plane.y / l0_spacing) * l0_spacing)
+		var relative: Vector2 = target_plane - l0_center
+		var micro_radius: float = l0_spacing * MICRO_OUTER_L0_CELLS
+		var micro_spacing: float = l0_spacing * MICRO_STEP_L0
+		if relative.length() <= micro_radius + micro_spacing * 0.75:
+			var snapped_relative := Vector2(
+				round(relative.x / micro_spacing) * micro_spacing,
+				round(relative.y / micro_spacing) * micro_spacing)
+			if snapped_relative.length() <= micro_radius + micro_spacing * 0.75:
+				var snapped_plane: Vector2 = l0_center + snapped_relative
+				var vertex_dir: Vector3 = _gnomonic_direction_for_offset(
+					_anchor_dir, _anchor_right, _anchor_up, snapped_plane, radius)
+				return {
+					"dir": vertex_dir,
+					"plane_m": snapped_plane,
+					"level": 0,
+					"spacing_m": micro_spacing,
+					"micro": true,
+					"target_error_m": snapped_plane.distance_to(target_plane),
+				}
+
+	var selected_level: int = -1
+	var selected_spacing: float = _base_spacing
+	var selected_center := Vector2.ZERO
+	var selected_cell := Vector2.ZERO
+	for level: int in range(_active_min_level, _active_max_level + 1):
+		if not debug_level_enabled(level):
+			continue
+		var spacing: float = _base_spacing * pow(2.0, float(level))
+		var level_center := Vector2(
+			round(_center_plane.x / spacing) * spacing,
+			round(_center_plane.y / spacing) * spacing)
+		var cell: Vector2 = (target_plane - level_center) / spacing
+		if cell.length() <= float(HALF_CELLS) + 1e-4:
+			selected_level = level
+			selected_spacing = spacing
+			selected_center = level_center
+			selected_cell = cell
+			break
+	if selected_level < 0:
+		return {}
+
+	# Search a tiny neighbourhood because simply rounding a point near a circular
+	# disc/annulus edge can select a grid coordinate that is not referenced by any
+	# rendered cell. The 5x5 search remains debug-only and runs at low cadence.
+	var rounded_cell := Vector2i(roundi(selected_cell.x), roundi(selected_cell.y))
+	var best_cell := rounded_cell
+	var best_distance_sq: float = INF
+	var found := false
+	for oy: int in range(-2, 3):
+		for ox: int in range(-2, 3):
+			var candidate_i := Vector2i(rounded_cell.x + ox, rounded_cell.y + oy)
+			var candidate := Vector2(float(candidate_i.x), float(candidate_i.y))
+			var candidate_radius: float = candidate.length()
+			if candidate_radius > float(HALF_CELLS) + 1.0:
+				continue
+			if selected_level > _active_min_level \
+					and candidate_radius < float(RING_INNER_HALF_CELLS) - 1.0:
+				continue
+			var distance_sq: float = candidate.distance_squared_to(selected_cell)
+			if distance_sq < best_distance_sq:
+				best_distance_sq = distance_sq
+				best_cell = candidate_i
+				found = true
+	if not found:
+		return {}
+
+	var snapped_plane: Vector2 = selected_center \
+		+ Vector2(float(best_cell.x), float(best_cell.y)) * selected_spacing
+	var vertex_dir: Vector3 = _gnomonic_direction_for_offset(
+		_anchor_dir, _anchor_right, _anchor_up, snapped_plane, radius)
+	return {
+		"dir": vertex_dir,
+		"plane_m": snapped_plane,
+		"level": selected_level,
+		"spacing_m": selected_spacing,
+		"micro": false,
+		"target_error_m": snapped_plane.distance_to(target_plane),
+	}
+
+
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	var staging_allocated: bool = _terrain_cache_staging != null \
