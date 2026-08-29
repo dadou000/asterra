@@ -23,6 +23,20 @@ func _process(dt: float) -> void:
 	super._process(dt)
 
 
+## The exact rendered query rejects a cold cache texel instead of returning a
+## guessed value. When a diagnostic asks for a sample, promote the tiny renderer
+## cache neighbourhood containing that point to urgent work so the result cannot
+## sit at "pending" behind the normal staggered cache warm-up.
+func height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
+	var value: float = super.height_for_direction(direction, fallback)
+	if is_finite(value) or direction.length_squared() <= 1e-12:
+		return value
+	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	if terrain != null and terrain.has_method("debug_prime_rendered_contact_direction"):
+		terrain.call("debug_prime_rendered_contact_direction", direction.normalized())
+	return value
+
+
 func _update_source_serial(snapshot: Dictionary) -> void:
 	var render_params: Dictionary = snapshot["render"]
 	var edit_params: Dictionary = snapshot["edit"]
