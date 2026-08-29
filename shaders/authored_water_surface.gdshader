@@ -9,6 +9,7 @@ uniform float u_planet_radius = 1000000.0;
 #include "res://shaders/water_surface.gdshaderinc"
 
 uniform vec3 u_origin = vec3(0.0);
+uniform float u_author_time_s = 0.0;
 uniform int u_feature_type = 0; // 0 lake, 1 river
 uniform float u_feature_wave_amplitude_scale = 1.0;
 uniform float u_feature_wave_frequency_scale = 1.0;
@@ -61,8 +62,9 @@ void vertex() {
 	float k = TAU / max(wavelength_m, 0.25);
 	float current_speed = max(v_current_m_s * u_current_scale, 0.0);
 	float time_speed = (u_feature_type == 1 ? 1.8 + current_speed * 0.22 : 1.15);
-	float phase_a = dot(planet, AUTHORED_WAVE_AXIS_A) * k + TIME * time_speed;
-	float phase_b = dot(planet, AUTHORED_WAVE_AXIS_B) * (k * 1.73) - TIME * (time_speed * 0.73);
+	float phase_a = dot(planet, AUTHORED_WAVE_AXIS_A) * k + u_author_time_s * time_speed;
+	float phase_b = dot(planet, AUTHORED_WAVE_AXIS_B) * (k * 1.73)
+		- u_author_time_s * (time_speed * 0.73);
 	float wave = (sin(phase_a) * 0.72 + sin(phase_b) * 0.28) * amplitude_m;
 
 	vec3 tangent_a = authored_safe_tangent(up, AUTHORED_WAVE_AXIS_A);
