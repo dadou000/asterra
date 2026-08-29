@@ -1,8 +1,10 @@
 class_name WorldAuthoringLiveEditor
 extends "res://scripts/world_authoring/world_authoring_editor_phase1.gd"
-## Planet Studio over the live rendered planet. The editor remains transactional,
-## while this layer provides viewport navigation, authoritative terrain picking and
-## direct biome/lake/river placement into the staged authoring resources.
+## Planet Studio over the live rendered planet.
+##
+## This layer keeps the transactional authoring UI from Phase 1, adds viewport
+## navigation/picking, biome and water placement, and exposes the runtime sparse
+## terrain-delta lattice as an immediate non-destructive sculpt layer.
 
 signal runtime_apply_requested(system: Resource)
 
@@ -11,6 +13,8 @@ enum PlacementMode {
 	BIOME,
 	LAKE,
 	RIVER,
+	SCULPT_RAISE,
+	SCULPT_LOWER,
 }
 
 const PANEL_WIDTH_PX: float = 1080.0
@@ -21,6 +25,8 @@ const AIM_COARSE_STEP_MAX_M: float = 12.0
 const AIM_COARSE_STEP_GROWTH: float = 1.16
 const AIM_BINARY_STEPS: int = 10
 const CURSOR_SAMPLE_INTERVAL_S: float = 0.04
+const SCULPT_MIN_OFFSET_M: float = -10000.0
+const SCULPT_MAX_OFFSET_M: float = 10000.0
 
 var _world_host: Node
 var _player: Node
@@ -29,14 +35,21 @@ var _placement_mode: int = PlacementMode.NONE
 var _navigation_active: bool = false
 var _last_hit: Dictionary = {}
 var _last_paint_dir: Vector3 = Vector3.ZERO
+var _last_sculpt_dir: Vector3 = Vector3.ZERO
 var _cursor_sample_accum: float = 0.0
 var _live_status_label: Label
 var _preview_instance: MeshInstance3D
 var _preview_mesh: ImmediateMesh
 var _preview_material: StandardMaterial3D
 
+var _sculpt_radius_m: float = 12.0
+var _sculpt_strength_m: float = 0.35
+var _sculpt_hardness: float = 0.55
+
+
 func bind_world(world_host: Node) -> void:
 	_world_host = world_host
+
 
 func _ready() -> void:
 	super._ready()
@@ -50,7 +63,8 @@ func _ready() -> void:
 	)
 	_create_live_preview()
 	_set_navigation(false)
-	_set_status("LIVE Planet Studio — TAB toggles viewport navigation; authoring clicks use the authoritative terrain contact path.")
+	_set_status("LIVE Planet Studio — TAB toggles viewport navigation. Terrain sculpting writes directly to the authoritative sparse edit layer.")
+
 
 func _build_shell() -> void:
 	if _world_host == null:
@@ -140,6 +154,7 @@ func _build_shell() -> void:
 	_live_status_label.text = "LIVE VIEW — TAB: navigate"
 	add_child(_live_status_label)
 
+
 func _build_live_toolbar() -> HBoxContainer:
 	var toolbar := HBoxContainer.new()
 	toolbar.custom_minimum_size.y = 42.0
@@ -182,18 +197,55 @@ func _build_live_toolbar() -> HBoxContainer:
 	toolbar.add_child(_revert_button)
 	return toolbar
 
+
 func _compact_toolbar_button(text: String, width: float) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.custom_minimum_size = Vector2(width, 34.0)
 	return button
 
+
 func _build_terrain_page() -> void:
 	super._build_terrain_page()
 	if _world_host == null:
 		return
+
+	_section("Live terrain sculpting")
+	var sculpt_row := HBoxContainer.new()
+	sculpt_row.add_theme_constant_override("separation", 7)
+	_workspace.add_child(sculpt_row)
+	var raise_button := Button.new()
+	raise_button.text = "STOP RAISE" if _placement_mode == PlacementMode.SCULPT_RAISE else "RAISE"
+	raise_button.pressed.connect(func() -> void:
+		_set_placement_mode(PlacementMode.NONE if _placement_mode == PlacementMode.SCULPT_RAISE else PlacementMode.SCULPT_RAISE)
+		_refresh_current_category()
+	)
+	sculpt_row.add_child(raise_button)
+	var lower_button := Button.new()
+	lower_button.text = "STOP LOWER" if _placement_mode == PlacementMode.SCULPT_LOWER else "LOWER"
+	lower_button.pressed.connect(func() -> void:
+		_set_placement_mode(PlacementMode.NONE if _placement_mode == PlacementMode.SCULPT_LOWER else PlacementMode.SCULPT_LOWER)
+		_refresh_current_category()
+	)
+	sculpt_row.add_child(lower_button)
+	var sculpt_info := Label.new()
+	sculpt_info.text = "%.1f m radius • %.2f m/stamp" % [_sculpt_radius_m, _sculpt_strength_m]
+	sculpt_info.modulate = Color(0.64, 0.76, 0.86)
+	sculpt_row.add_child(sculpt_info)
+	_add_number_field("Sculpt radius", _sculpt_radius_m, 0.5, 150.0, 0.5, " m", func(value: float) -> void:
+		_sculpt_radius_m = value
+		_update_preview()
+	)
+	_add_number_field("Stamp strength", _sculpt_strength_m, 0.01, 20.0, 0.01, " m", func(value: float) -> void:
+		_sculpt_strength_m = value
+	)
+	_add_number_field("Sculpt hardness", _sculpt_hardness, 0.0, 0.98, 0.01, "", func(value: float) -> void:
+		_sculpt_hardness = value
+	)
+	_add_note("Raise/Lower edits Deltas, the same sparse spherical layer consumed by terrain rendering and terrain contact. Untouched procedural terrain remains seed-generated. Drag with LMB; RMB/Esc stops the brush.")
+
 	_section("Live viewport biome painting")
-	var terrain := _session.active_terrain_profile()
+	var terrain: Resource = _session.active_terrain_profile() as Resource
 	if terrain == null:
 		_add_note("The current authoring body has no terrain profile.")
 		return
@@ -217,12 +269,13 @@ func _build_terrain_page() -> void:
 	row.add_child(active_label)
 	_add_note("Left-click the visible terrain to stamp. Hold left mouse and drag to paint continuously. The pick follows rendered/contact terrain, while the stored edit remains a sparse spherical post-generation override.")
 
+
 func _build_water_page() -> void:
 	super._build_water_page()
 	if _world_host == null:
 		return
 	_section("Live 3D feature placement")
-	var water := _session.active_water_profile()
+	var water: Resource = _session.active_water_profile() as Resource
 	if water == null or _selected_water_feature_id.is_empty():
 		_add_note("Create/select a lake or river above, then arm viewport placement.")
 		return
@@ -230,8 +283,8 @@ func _build_water_page() -> void:
 	if feature == null:
 		_add_note("Select a valid authored water feature.")
 		return
-	var is_river := int(feature.get(&"feature_type")) == WATER_FEATURE_SCRIPT.FeatureType.RIVER
-	var desired_mode := PlacementMode.RIVER if is_river else PlacementMode.LAKE
+	var is_river: bool = int(feature.get(&"feature_type")) == WATER_FEATURE_SCRIPT.FeatureType.RIVER
+	var desired_mode: int = PlacementMode.RIVER if is_river else PlacementMode.LAKE
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 7)
 	_workspace.add_child(row)
@@ -251,11 +304,13 @@ func _build_water_page() -> void:
 	row.add_child(remove_last)
 	_add_note("Each click stores a body-space 3D control point. Lakes close as a freeform polygon; rivers create cubic Bézier knots with width, depth and current metadata. The magenta preview is rebuilt in floating-origin render space.")
 
+
 func _build_celestials_page() -> void:
 	super._build_celestials_page()
 	if _world_host != null:
 		_section("Live body preview")
 		_add_note("Selecting a body changes the authoring target immediately. Apply asks the live runtime host to rebuild the active non-star body from its staged generation/planet/atmosphere values.")
+
 
 func _process(delta: float) -> void:
 	if _world_host == null or _navigation_active or _placement_mode == PlacementMode.NONE:
@@ -272,6 +327,7 @@ func _process(delta: float) -> void:
 	_last_hit = _screen_aim(mouse_position)
 	_update_live_status(mouse_position)
 	_update_preview()
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _world_host == null:
@@ -299,12 +355,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_place_current_hit(false)
 			get_viewport().set_input_as_handled()
 			return
-	if event is InputEventMouseMotion and _placement_mode == PlacementMode.BIOME:
+	if event is InputEventMouseMotion and _continuous_drag_mode():
 		var mouse_motion := event as InputEventMouseMotion
 		if (mouse_motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 and _is_live_viewport_point(mouse_motion.position):
 			_last_hit = _screen_aim(mouse_motion.position)
 			_place_current_hit(true)
 			get_viewport().set_input_as_handled()
+
+
+func _continuous_drag_mode() -> bool:
+	return _placement_mode == PlacementMode.BIOME \
+		or _placement_mode == PlacementMode.SCULPT_RAISE \
+		or _placement_mode == PlacementMode.SCULPT_LOWER
+
 
 func _set_navigation(enabled: bool) -> void:
 	_navigation_active = enabled
@@ -320,14 +383,17 @@ func _set_navigation(enabled: bool) -> void:
 	if _live_status_label != null:
 		_live_status_label.text = "VIEWPORT NAVIGATION — TAB to return to authoring" if enabled else _placement_status_text()
 
+
 func _set_placement_mode(mode: int) -> void:
 	_placement_mode = mode
 	_last_paint_dir = Vector3.ZERO
+	_last_sculpt_dir = Vector3.ZERO
 	if mode != PlacementMode.NONE:
 		_set_navigation(false)
 	if _live_status_label != null:
 		_live_status_label.text = _placement_status_text()
 	_update_preview()
+
 
 func _placement_status_text() -> String:
 	match _placement_mode:
@@ -337,11 +403,17 @@ func _placement_status_text() -> String:
 			return "LAKE POLYGON ARMED — click shoreline vertices • RMB/Esc stop • TAB navigate"
 		PlacementMode.RIVER:
 			return "RIVER BÉZIER ARMED — click knots downstream • RMB/Esc stop • TAB navigate"
+		PlacementMode.SCULPT_RAISE:
+			return "RAISE TERRAIN — left click/drag • RMB/Esc stop • TAB navigate"
+		PlacementMode.SCULPT_LOWER:
+			return "LOWER TERRAIN — left click/drag • RMB/Esc stop • TAB navigate"
 		_:
 			return "LIVE VIEW — TAB: navigate"
 
+
 func _is_live_viewport_point(point: Vector2) -> bool:
 	return point.x > PANEL_WIDTH_PX + 2.0 and point.x < get_viewport_rect().size.x and point.y >= 0.0 and point.y < get_viewport_rect().size.y
+
 
 func _screen_aim(screen_position: Vector2) -> Dictionary:
 	if _player == null:
@@ -353,8 +425,8 @@ func _screen_aim(screen_position: Vector2) -> Dictionary:
 	if _camera == null or Planet.cfg == null or not Planet.ready_state:
 		return {}
 	var origin: Vec3D = Frames.to_world(_camera.global_position)
-	var ray := _camera.project_ray_normal(screen_position).normalized()
-	var step := AIM_COARSE_STEP_START_M
+	var ray: Vector3 = _camera.project_ray_normal(screen_position).normalized()
+	var step: float = AIM_COARSE_STEP_START_M
 	var previous_t := 0.0
 	var t := 0.0
 	while t < PICK_MAX_RANGE_M:
@@ -362,36 +434,38 @@ func _screen_aim(screen_position: Vector2) -> Dictionary:
 		t = minf(t + step, PICK_MAX_RANGE_M)
 		step = minf(step * AIM_COARSE_STEP_GROWTH, AIM_COARSE_STEP_MAX_M)
 		if _coarse_gap_at(origin, ray, t) <= AIM_COARSE_CAPTURE_M:
-			var lo := previous_t
-			var hi := t
+			var lo: float = previous_t
+			var hi: float = t
 			for _i: int in AIM_BINARY_STEPS:
-				var mid := (lo + hi) * 0.5
+				var mid: float = (lo + hi) * 0.5
 				if _coarse_gap_at(origin, ray, mid) <= AIM_COARSE_CAPTURE_M:
 					hi = mid
 				else:
 					lo = mid
-			var hit_t := hi
+			var hit_t: float = hi
 			var p: Vec3D = origin.add(Vec3D.from_v3(ray).mul(hit_t))
-			var direction := p.normalized().to_v3()
-			var coarse_height := TerrainContactSampler.coarse_height(direction)
-			var height := TerrainContactSampler.contact_height(direction, coarse_height)
-			var precise_gap := p.length() - (Planet.cfg.planet_radius + height)
-			var radial_rate := ray.dot(direction)
+			var direction: Vector3 = p.normalized().to_v3()
+			var coarse_height: float = TerrainContactSampler.coarse_height(direction)
+			var height: float = TerrainContactSampler.contact_height(direction, coarse_height)
+			var precise_gap: float = p.length() - (Planet.cfg.planet_radius + height)
+			var radial_rate: float = ray.dot(direction)
 			if absf(radial_rate) > 0.08:
 				hit_t = clampf(hit_t - precise_gap / radial_rate, 0.0, PICK_MAX_RANGE_M)
 				p = origin.add(Vec3D.from_v3(ray).mul(hit_t))
 				direction = p.normalized().to_v3()
 				coarse_height = TerrainContactSampler.coarse_height(direction)
 				height = TerrainContactSampler.contact_height(direction, coarse_height)
-			var surface_world := Vec3D.from_v3(direction).mul(Planet.cfg.planet_radius + height)
+			var surface_world: Vec3D = Vec3D.from_v3(direction).mul(Planet.cfg.planet_radius + height)
 			return {"world": surface_world, "dir": direction, "distance": hit_t, "height": height}
 	return {}
 
+
 func _coarse_gap_at(origin: Vec3D, ray: Vector3, distance_m: float) -> float:
 	var p: Vec3D = origin.add(Vec3D.from_v3(ray).mul(distance_m))
-	var direction := p.normalized().to_v3()
-	var height := TerrainContactSampler.coarse_height(direction)
+	var direction: Vector3 = p.normalized().to_v3()
+	var height: float = TerrainContactSampler.coarse_height(direction)
 	return p.length() - (Planet.cfg.planet_radius + height)
+
 
 func _place_current_hit(continuous: bool) -> void:
 	if _last_hit.is_empty():
@@ -405,31 +479,62 @@ func _place_current_hit(continuous: bool) -> void:
 			_place_biome_stroke(direction, continuous)
 		PlacementMode.LAKE, PlacementMode.RIVER:
 			_place_water_point()
+		PlacementMode.SCULPT_RAISE:
+			_place_sculpt_stroke(direction, continuous, 1.0)
+		PlacementMode.SCULPT_LOWER:
+			_place_sculpt_stroke(direction, continuous, -1.0)
 	_update_preview()
 
+
+func _place_sculpt_stroke(direction: Vector3, continuous: bool, sign_value: float) -> void:
+	if Planet.cfg == null:
+		return
+	var planet_radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
+	if continuous and _last_sculpt_dir.length_squared() > 0.99:
+		var arc_distance: float = acos(clampf(_last_sculpt_dir.dot(direction), -1.0, 1.0)) * planet_radius
+		if arc_distance < maxf(_sculpt_radius_m * 0.16, Deltas.sample_spacing(planet_radius) * 1.5):
+			return
+	var changed: int = int(Deltas.apply_radial_brush(
+		direction,
+		_sculpt_radius_m,
+		_sculpt_strength_m * sign_value,
+		_sculpt_hardness,
+		planet_radius,
+		SCULPT_MIN_OFFSET_M,
+		SCULPT_MAX_OFFSET_M
+	))
+	if changed <= 0:
+		return
+	_last_sculpt_dir = direction
+	var verb: String = "Raised" if sign_value > 0.0 else "Lowered"
+	_set_status("%s terrain: %d samples • %.1f m radius • %.2f m stamp." % [verb, changed, _sculpt_radius_m, _sculpt_strength_m])
+
+
 func _place_biome_stroke(direction: Vector3, continuous: bool) -> void:
-	var terrain := _session.active_terrain_profile()
+	var terrain: Resource = _session.active_terrain_profile() as Resource
 	if terrain == null:
 		return
 	var layer: Resource = terrain.call("find_biome_layer", _selected_biome_layer_id) as Resource
 	if layer == null:
 		_set_status("Select a biome paint layer before painting.")
 		return
-	var radius_m := float(layer.get(&"brush_radius_m"))
+	var radius_m: float = float(layer.get(&"brush_radius_m"))
 	if continuous and _last_paint_dir.length_squared() > 0.99:
-		var planet_radius := maxf(float(_session.active_body().get(&"radius_m")), 1.0)
-		var arc_distance := acos(clampf(_last_paint_dir.dot(direction), -1.0, 1.0)) * planet_radius
+		var body: Resource = _session.active_body() as Resource
+		var planet_radius: float = maxf(float(body.get(&"radius_m")), 1.0) if body != null else maxf(float(Planet.cfg.planet_radius), 1.0)
+		var arc_distance: float = acos(clampf(_last_paint_dir.dot(direction), -1.0, 1.0)) * planet_radius
 		if arc_distance < maxf(radius_m * 0.22, 0.25):
 			return
-	var biome_id := int(layer.get(&"active_biome_id"))
-	var hardness := float(layer.get(&"brush_hardness"))
-	var opacity := float(layer.get(&"brush_opacity"))
+	var biome_id: int = int(layer.get(&"active_biome_id"))
+	var hardness: float = float(layer.get(&"brush_hardness"))
+	var opacity: float = float(layer.get(&"brush_opacity"))
 	if _session.add_biome_stroke(_selected_biome_layer_id, direction, biome_id, radius_m, hardness, opacity):
 		_last_paint_dir = direction
 		_set_status("Painted %s at %.1f m radius." % [BIOME_NAMES[biome_id], radius_m])
 
+
 func _place_water_point() -> void:
-	var water := _session.active_water_profile()
+	var water: Resource = _session.active_water_profile() as Resource
 	if water == null:
 		return
 	var feature: Resource = water.call("find_feature", _selected_water_feature_id) as Resource
@@ -448,11 +553,12 @@ func _place_water_point() -> void:
 	, SESSION_SCRIPT.ApplyScope.TILES)
 	_set_status("Added %s control point." % ("river" if _placement_mode == PlacementMode.RIVER else "lake"))
 
+
 func _remove_last_water_point(feature: Resource) -> void:
 	if feature == null:
 		return
-	var is_river := int(feature.get(&"feature_type")) == WATER_FEATURE_SCRIPT.FeatureType.RIVER
-	var count := (feature.get(&"river_knots") as Array).size() if is_river else (feature.get(&"lake_polygon_body_m") as PackedVector3Array).size()
+	var is_river: bool = int(feature.get(&"feature_type")) == WATER_FEATURE_SCRIPT.FeatureType.RIVER
+	var count: int = (feature.get(&"river_knots") as Array).size() if is_river else (feature.get(&"lake_polygon_body_m") as PackedVector3Array).size()
 	if count <= 0:
 		return
 	_session.stage_action("Remove water control point", func() -> void:
@@ -462,6 +568,7 @@ func _remove_last_water_point(feature: Resource) -> void:
 			feature.call("remove_lake_point", count - 1)
 	, SESSION_SCRIPT.ApplyScope.TILES)
 	_update_preview()
+
 
 func _create_live_preview() -> void:
 	if _world_host == null or not (_world_host is Node3D):
@@ -479,6 +586,7 @@ func _create_live_preview() -> void:
 	_preview_instance.material_override = _preview_material
 	_world_host.add_child(_preview_instance)
 
+
 func _update_preview() -> void:
 	if _preview_mesh == null:
 		return
@@ -487,48 +595,59 @@ func _update_preview() -> void:
 		return
 	if not _last_hit.is_empty():
 		var direction: Vector3 = _last_hit.get("dir", Vector3.ZERO)
-		var height := float(_last_hit.get("height", 0.0))
+		var height: float = float(_last_hit.get("height", 0.0))
 		var radius := 2.0
-		if _placement_mode == PlacementMode.BIOME:
-			var terrain := _session.active_terrain_profile()
-			if terrain != null:
-				var layer: Resource = terrain.call("find_biome_layer", _selected_biome_layer_id) as Resource
-				if layer != null:
-					radius = maxf(0.1, float(layer.get(&"brush_radius_m")))
-		_draw_surface_ring(direction, height, radius, Color(0.25, 0.86, 1.0, 1.0) if _placement_mode == PlacementMode.BIOME else Color(1.0, 0.22, 0.82, 1.0))
+		var color := Color(1.0, 0.22, 0.82, 1.0)
+		match _placement_mode:
+			PlacementMode.BIOME:
+				color = Color(0.25, 0.86, 1.0, 1.0)
+				var terrain: Resource = _session.active_terrain_profile() as Resource
+				if terrain != null:
+					var layer: Resource = terrain.call("find_biome_layer", _selected_biome_layer_id) as Resource
+					if layer != null:
+						radius = maxf(0.1, float(layer.get(&"brush_radius_m")))
+			PlacementMode.SCULPT_RAISE:
+				radius = _sculpt_radius_m
+				color = Color(0.34, 1.0, 0.46, 1.0)
+			PlacementMode.SCULPT_LOWER:
+				radius = _sculpt_radius_m
+				color = Color(1.0, 0.48, 0.20, 1.0)
+		_draw_surface_ring(direction, height, radius, color)
 	_draw_selected_water_feature()
 
+
 func _draw_surface_ring(direction: Vector3, height: float, radius_m: float, color: Color) -> void:
-	if direction.length_squared() < 0.99:
+	if direction.length_squared() < 0.99 or Planet.cfg == null:
 		return
 	var up := direction.normalized()
 	var reference := Vector3.UP if absf(up.dot(Vector3.UP)) < 0.95 else Vector3.RIGHT
 	var tangent_x := reference.cross(up).normalized()
 	var tangent_y := up.cross(tangent_x).normalized()
-	var base_radius := Planet.cfg.planet_radius + height + 0.08
+	var base_radius: float = Planet.cfg.planet_radius + height + 0.08
 	_preview_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
 	for index: int in 65:
-		var angle := TAU * float(index) / 64.0
-		var offset := tangent_x * cos(angle) * radius_m + tangent_y * sin(angle) * radius_m
-		var world_point := Vec3D.from_v3(up).mul(base_radius).add(Vec3D.from_v3(offset))
+		var angle: float = TAU * float(index) / 64.0
+		var offset: Vector3 = tangent_x * cos(angle) * radius_m + tangent_y * sin(angle) * radius_m
+		var world_point: Vec3D = Vec3D.from_v3(up).mul(base_radius).add(Vec3D.from_v3(offset))
 		_preview_mesh.surface_set_color(color)
 		_preview_mesh.surface_add_vertex(Frames.to_render(world_point))
 	_preview_mesh.surface_end()
 
+
 func _draw_selected_water_feature() -> void:
 	if _selected_water_feature_id.is_empty():
 		return
-	var water := _session.active_water_profile()
+	var water: Resource = _session.active_water_profile() as Resource
 	if water == null:
 		return
 	var feature: Resource = water.call("find_feature", _selected_water_feature_id) as Resource
 	if feature == null:
 		return
 	var color := Color(1.0, 0.18, 0.78, 1.0)
-	var is_river := int(feature.get(&"feature_type")) == WATER_FEATURE_SCRIPT.FeatureType.RIVER
+	var is_river: bool = int(feature.get(&"feature_type")) == WATER_FEATURE_SCRIPT.FeatureType.RIVER
 	var points: Array[Vector3] = []
 	if is_river:
-		var segment_count := int(feature.call("river_segment_count"))
+		var segment_count: int = int(feature.call("river_segment_count"))
 		for segment: int in segment_count:
 			for sample_index: int in 17:
 				if segment > 0 and sample_index == 0:
@@ -548,6 +667,7 @@ func _draw_selected_water_feature() -> void:
 		_preview_mesh.surface_add_vertex(Frames.to_render(Vec3D.from_v3(point)))
 	_preview_mesh.surface_end()
 
+
 func _update_live_status(mouse_position: Vector2) -> void:
 	if _live_status_label == null:
 		return
@@ -555,6 +675,7 @@ func _update_live_status(mouse_position: Vector2) -> void:
 		_live_status_label.text = "%s\nNo terrain hit at %.0f, %.0f" % [_placement_status_text(), mouse_position.x, mouse_position.y]
 		return
 	_live_status_label.text = "%s\nterrain %.2f m MSL • range %.1f m" % [_placement_status_text(), float(_last_hit.get("height", 0.0)), float(_last_hit.get("distance", 0.0))]
+
 
 func _exit_tree() -> void:
 	if _preview_instance != null and is_instance_valid(_preview_instance):
