@@ -17,6 +17,7 @@ on:
       - "tools/scatter_optimize_blender.py"
       - "project.godot"
       - "tests/validate_terrain_shader.gd"
+      - "tests/validate_terrain_scripts.gd"
       - "tests/validate_generation_model.gd"
       - ".github/workflows/godot-terrain-validate.yml"
   workflow_dispatch:
@@ -113,41 +114,37 @@ jobs:
             exit 1
           fi
 
-      - name: Exclude runtime scatter payloads from parser smoke test
+      - name: Exclude runtime scatter payloads from script smoke test
         shell: bash
         run: |
           set -euo pipefail
           # The optimized ecological library is Git-LFS content and is validated by
-          # its manifest/metadata plus the isolated shader test above. GDScript
-          # syntax validation must not spend CI time importing binary scatter data.
+          # its manifest/metadata plus the isolated shader test above. Script syntax
+          # validation must not spend CI time importing binary scatter data.
           if [ -d assets/scatter/runtime ]; then
             rm -rf /tmp/asterra-scatter-runtime-ci
             mv assets/scatter/runtime /tmp/asterra-scatter-runtime-ci
             mkdir -p assets/scatter/runtime
           fi
 
-      - name: Parse active terrain scripts
+      - name: Validate active terrain script chain
         shell: bash
         run: |
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
-          scripts=(
-            res://scripts/terrain/gpu_terrain_scatter_global.gd
-            res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd
-          )
-          : > /tmp/terrain-gdscript.log
-          for script in "${scripts[@]}"; do
-            set +e
-            timeout 45 "$GODOT" --headless --path . --check-only --script "$script" >> /tmp/terrain-gdscript.log 2>&1
-            status=$?
-            set -e
-            if [ "$status" -ne 0 ]; then
-              cat /tmp/terrain-gdscript.log
-              echo "Godot check-only failed for $script with status $status"
-              exit "$status"
-            fi
-          done
+          set +e
+          timeout 90 "$GODOT" --headless --path . --script res://tests/validate_terrain_scripts.gd > /tmp/terrain-gdscript.log 2>&1
+          status=$?
+          set -e
           cat /tmp/terrain-gdscript.log
+          if [ "$status" -ne 0 ]; then
+            echo "Terrain script-chain validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "TERRAIN_SCRIPT_STACK_OK" /tmp/terrain-gdscript.log; then
+            echo "Terrain script-chain completion marker was not emitted."
+            exit 1
+          fi
           if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script.*spherical_geometry_clipmap|Failed to load script.*gpu_terrain_scatter" /tmp/terrain-gdscript.log; then
             echo "Godot reported a GDScript parser/inheritance error in the active terrain scripts."
             exit 1
