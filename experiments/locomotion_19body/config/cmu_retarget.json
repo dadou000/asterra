@@ -1,11 +1,19 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_skeleton": "CMU ASF/AMC",
   "target_rig": "asterra_humanoid_19body",
+  "target_character": {
+    "repository_path": "assets/character/asterrahuman.glb",
+    "godot_path": "res://assets/character/asterrahuman.glb",
+    "rest_pose_manifest": "experiments/locomotion_19body/generated/asterrahuman_skeleton_manifest.json",
+    "physics_proxy_map": "experiments/locomotion_19body/generated/asterrahuman_physics_proxy_map.json",
+    "preserve_full_skin_skeleton": true,
+    "fit_reference_to_character_proportions": true
+  },
   "source_forward_axis": "derive_from_root_motion",
-  "target_forward_axis": "-Z",
+  "target_forward_axis": "derive_from_character_manifest_then_convert_to_runtime_-Z",
   "target_up_axis": "+Y",
-  "scale_mode": "leg_length_ratio",
+  "scale_mode": "canonical_character_leg_length_ratio",
   "canonical_mapping": {
     "pelvis": {"source": ["root"], "mode": "root_transform"},
     "spine": {"source": ["lowerback", "upperback"], "mode": "chain_fit"},
@@ -53,9 +61,11 @@
     "output_fps": 60
   },
   "notes": [
+    "The Character Editor humanoid is the retarget target. Do not retarget through a generic intermediate humanoid and then scale it again at runtime.",
     "CMU helper hip joints have no useful keyed motion and are intentionally ignored.",
     "Toe bones are not physical Asterra bodies, but their source trajectories help estimate stance contact and foot orientation.",
-    "Finger/thumb source joints are ignored for locomotion.",
-    "chain_fit means fit the target segment orientation to the endpoints of the listed source chain rather than copying one local Euler channel."
+    "Finger/thumb source joints are ignored for locomotion; the canonical skin may retain its own hand/finger bones for deformation.",
+    "chain_fit means fit the target segment orientation to the endpoints of the listed source chain rather than copying one local Euler channel.",
+    "Character forward is measured from the imported rest frame before conversion to Asterra's -Z runtime convention, preventing a hidden 180-degree retarget error."
   ]
 }
