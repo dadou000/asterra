@@ -2,31 +2,37 @@ extends "res://scripts/terrain/gpu_terrain_scatter_compact.gd"
 ## Latest-0.0.5 GPU scatter binding plus the first real-asset ecology layer.
 ##
 ## The indirect RenderingDevice compaction path is still disabled because the real
-## runtime previously reported invalid/stale indirect buffers. Optimized scanned
-## assets are therefore introduced conservatively on top of the proven vertex-GPU
-## fallback: sparse candidate grids, deliberately low LODs, and a hard triangle
-## guard keep the cost bounded until indirect compaction is repaired.
+## runtime previously reported invalid/stale indirect buffers. Until that backend
+## is repaired, scanned assets are a sparse accent layer over the cheap procedural
+## grass/stones. Every scatter material is now fed the active rendered-terrain cache
+## so placement uses the same L0 height surface as GroundGeometryClipmap.
 
 const STABLE_FALLBACK_ONLY := true
 const ECOLOGY_SHADER_PATH := "res://shaders/terrain_scatter_ecology.gdshader"
 const ECOLOGY_RUNTIME_ROOT := "res://assets/scatter/runtime"
-const ECOLOGY_MAX_SELECTED_LOD_TRIANGLES := 200000
 
-# These are deliberately the lightweight/runtime-safe subset of the downloaded
-# library. Heavy source-scan foliage (for example the ~700k-triangle fir sapling)
-# stays out of the fallback renderer until foliage LODs/impostors are authored.
-# The original procedural grass/stones remain active underneath this layer.
+# Vertex-fallback classification is evaluated once per mesh vertex, not once per
+# instance. A permissive 200k-triangle source-mesh guard therefore turns a tiny
+# candidate lattice into millions of expensive terrain/context evaluations. Keep
+# only genuinely light source/LOD meshes in this path; heavier library assets stay
+# available for the future transform-compute/impostor renderer.
+const ECOLOGY_MAX_SELECTED_LOD_TRIANGLES := 12000
+const FALLBACK_SCATTER_MAX_ALTITUDE_M := 1200.0
+
+# Preserve roughly the same physical coverage as the first integration while
+# reducing the number of scanned-mesh candidates. Procedural grass/stones still
+# provide dense ground coverage beneath these real-asset accents.
 const ECOLOGY_ASSETS := [
-	{"id":"grass_bermuda_01", "lod":0, "grid":16, "spacing":4.0, "density":0.75, "kind":0, "salt":1201, "scale_min":0.82, "scale_max":1.18, "wind":0.045, "shadows":false},
-	{"id":"fern_02", "lod":0, "grid":8, "spacing":11.0, "density":0.58, "kind":1, "salt":1213, "scale_min":0.76, "scale_max":1.24, "wind":0.025, "shadows":false},
-	{"id":"shrub_03", "lod":0, "grid":7, "spacing":18.0, "density":0.40, "kind":2, "salt":1229, "scale_min":0.72, "scale_max":1.34, "wind":0.018, "shadows":true},
-	{"id":"anthurium_botany_01", "lod":0, "grid":3, "spacing":28.0, "density":0.42, "kind":6, "salt":1249, "scale_min":0.78, "scale_max":1.22, "wind":0.014, "shadows":false},
-	{"id":"cheiridopsis_succulent", "lod":0, "grid":3, "spacing":40.0, "density":0.32, "kind":3, "salt":1277, "scale_min":0.54, "scale_max":1.10, "wind":0.002, "shadows":false},
-	{"id":"boulder_01", "lod":2, "grid":3, "spacing":62.0, "density":0.42, "kind":4, "salt":1301, "scale_min":0.72, "scale_max":1.85, "wind":0.0, "shadows":true},
-	{"id":"dead_tree_trunk", "lod":2, "grid":3, "spacing":55.0, "density":0.25, "kind":5, "salt":1327, "scale_min":0.78, "scale_max":1.30, "wind":0.0, "shadows":true},
-	{"id":"dead_quiver_branch_01", "lod":2, "grid":5, "spacing":14.0, "density":0.30, "kind":3, "salt":1361, "scale_min":0.72, "scale_max":1.34, "wind":0.0, "shadows":false},
-	{"id":"dry_quiver_leaf", "lod":2, "grid":4, "spacing":18.0, "density":0.24, "kind":3, "salt":1381, "scale_min":0.72, "scale_max":1.25, "wind":0.0, "shadows":false},
-	{"id":"quiver_tree_01", "lod":0, "grid":2, "spacing":120.0, "density":0.22, "kind":7, "salt":1409, "scale_min":0.82, "scale_max":1.22, "wind":0.010, "shadows":true},
+	{"id":"grass_bermuda_01", "lod":0, "grid":12, "spacing":5.3, "density":0.72, "kind":0, "salt":1201, "scale_min":0.82, "scale_max":1.18, "wind":0.045, "shadows":false},
+	{"id":"fern_02", "lod":0, "grid":5, "spacing":17.5, "density":0.54, "kind":1, "salt":1213, "scale_min":0.76, "scale_max":1.24, "wind":0.025, "shadows":false},
+	{"id":"shrub_03", "lod":0, "grid":4, "spacing":31.0, "density":0.36, "kind":2, "salt":1229, "scale_min":0.72, "scale_max":1.34, "wind":0.018, "shadows":false},
+	{"id":"anthurium_botany_01", "lod":0, "grid":2, "spacing":42.0, "density":0.36, "kind":6, "salt":1249, "scale_min":0.78, "scale_max":1.22, "wind":0.014, "shadows":false},
+	{"id":"cheiridopsis_succulent", "lod":0, "grid":2, "spacing":52.0, "density":0.28, "kind":3, "salt":1277, "scale_min":0.54, "scale_max":1.10, "wind":0.002, "shadows":false},
+	{"id":"boulder_01", "lod":2, "grid":2, "spacing":82.0, "density":0.34, "kind":4, "salt":1301, "scale_min":0.72, "scale_max":1.85, "wind":0.0, "shadows":false},
+	{"id":"dead_tree_trunk", "lod":2, "grid":2, "spacing":72.0, "density":0.20, "kind":5, "salt":1327, "scale_min":0.78, "scale_max":1.30, "wind":0.0, "shadows":false},
+	{"id":"dead_quiver_branch_01", "lod":2, "grid":4, "spacing":17.5, "density":0.28, "kind":3, "salt":1361, "scale_min":0.72, "scale_max":1.34, "wind":0.0, "shadows":false},
+	{"id":"dry_quiver_leaf", "lod":2, "grid":3, "spacing":24.0, "density":0.20, "kind":3, "salt":1381, "scale_min":0.72, "scale_max":1.25, "wind":0.0, "shadows":false},
+	{"id":"quiver_tree_01", "lod":0, "grid":2, "spacing":120.0, "density":0.18, "kind":7, "salt":1409, "scale_min":0.82, "scale_max":1.22, "wind":0.010, "shadows":false},
 ]
 
 var _static_scatter_bound := false
@@ -35,6 +41,15 @@ var _bound_edit_ready := false
 var _bound_active_generation := -1
 var _bound_active_window_generation := -1
 var _bound_active_ready := false
+
+var _bound_terrain_cache_texture: Variant = null
+var _bound_terrain_cache_generation := -1
+var _bound_terrain_cache_res := -1
+var _bound_terrain_cache_ready := false
+var _bound_terrain_cache_anchor_dir := Vector3.ZERO
+var _bound_terrain_cache_anchor_right := Vector3.ZERO
+var _bound_terrain_cache_anchor_up := Vector3.ZERO
+var _bound_terrain_cache_base_spacing := -1.0
 
 var _ecology_shader: Shader
 var _ecology_batches: Array[Dictionary] = []
@@ -60,7 +75,7 @@ func _ready() -> void:
 
 func _process(dt: float) -> void:
 	super._process(dt)
-	if _ecology_batches.is_empty() or not _debug_enabled or not Planet.ready_state or Planet.cfg == null:
+	if not _debug_enabled or not Planet.ready_state or Planet.cfg == null:
 		return
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null or not _have_anchor:
@@ -71,7 +86,21 @@ func _process(dt: float) -> void:
 		return
 	var observer_radius: float = planet_pos.length()
 	var radial_altitude: float = observer_radius - Planet.cfg.planet_radius
-	if radial_altitude > MAX_RADIAL_ALTITUDE_M or radial_altitude < MIN_RADIAL_ALTITUDE_M:
+	if radial_altitude > FALLBACK_SCATTER_MAX_ALTITUDE_M:
+		# Grass-sized geometry is sub-pixel here. Suppress both inherited procedural
+		# candidates and ecology rather than paying vertex cost out to the old 12 km
+		# diagnostic ceiling.
+		_set_visible(false)
+		return
+	if radial_altitude < MIN_RADIAL_ALTITUDE_M:
+		return
+
+	# The terrain cache can swap/advance independently of planet-context generation,
+	# so check its cheap signature every frame. Shader uniforms are touched only when
+	# the active cache, generation or tangent anchor actually changes.
+	_bind_authoritative_terrain_cache(false)
+
+	if _ecology_batches.is_empty():
 		return
 	var observer_dir: Vector3 = planet_pos / observer_radius
 	var observer_surface: Vector3 = observer_dir * Planet.cfg.planet_radius
@@ -85,17 +114,29 @@ func _process(dt: float) -> void:
 		var spacing: float = float(batch_data["spacing"])
 		var density: float = float(batch_data["density"])
 		var center := Vector2(round(px / spacing), round(py / spacing))
+		var last_center: Vector2 = batch_data.get("last_center", Vector2(1.0e30, 1.0e30))
+		var last_origin: Vector3 = batch_data.get("last_origin", Vector3(1.0e30, 1.0e30, 1.0e30))
+		var last_anchor: Vector3 = batch_data.get("last_anchor", Vector3.ZERO)
+		if center == last_center and origin == last_origin \
+				and last_anchor.distance_squared_to(_anchor_dir) <= 1.0e-12:
+			continue
 		var batch_materials: Array = batch_data["materials"]
 		for value: Variant in batch_materials:
 			var material: ShaderMaterial = value as ShaderMaterial
 			if material != null:
 				_sync_material_window(material, grid, spacing, density, center, origin)
+		batch_data["last_center"] = center
+		batch_data["last_origin"] = origin
+		batch_data["last_anchor"] = _anchor_dir
 
 
 func _bind_gpu_resources(force: bool) -> void:
 	if Planet.cfg == null:
 		return
 
+	# GroundGeometryClipmap also uses this resident global macro map. It is only the
+	# cold-cache fallback for scatter now; warmed near-field placement comes directly
+	# from GroundGeometryClipmap's active L0 cache below.
 	var macro: Texture2DArray = Planet.global_height_texture if Planet.ready_state else null
 	var macro_res: int = Planet.global_height_face_res if Planet.ready_state else 0
 	if force or macro != _bound_macro or macro_res != _bound_macro_res:
@@ -136,6 +177,8 @@ func _bind_gpu_resources(force: bool) -> void:
 			material.set_shader_parameter("u_scatter_geomorph_spacing", 0.75)
 		_static_scatter_bound = true
 
+	_bind_authoritative_terrain_cache(force)
+
 	var edits: Node = get_node_or_null("/root/TerrainEditDeltaGPU")
 	if edits != null and edits.has_method("sample_params"):
 		var ep: Dictionary = edits.call("sample_params")
@@ -173,6 +216,75 @@ func _bind_gpu_resources(force: bool) -> void:
 			_bound_active_ready = active_ready
 
 
+func _bind_authoritative_terrain_cache(force: bool) -> void:
+	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	if terrain == null or not terrain.has_method("rendered_contact_sample_params"):
+		_disable_authoritative_terrain_cache(force)
+		return
+	var params_value: Variant = terrain.call("rendered_contact_sample_params")
+	if not (params_value is Dictionary):
+		_disable_authoritative_terrain_cache(force)
+		return
+	var params: Dictionary = params_value
+	if params.is_empty():
+		_disable_authoritative_terrain_cache(force)
+		return
+
+	var texture: Variant = params.get("cache_texture")
+	var ready: bool = bool(params.get("cache_ready", false)) and texture != null
+	var cache_generation: int = int(params.get("cache_generation", 0))
+	var cache_res: int = int(params.get("cache_res", 512))
+	var cache_anchor_dir: Vector3 = params.get("anchor_dir", Vector3.RIGHT)
+	var cache_anchor_right: Vector3 = params.get("anchor_right", Vector3.BACK)
+	var cache_anchor_up: Vector3 = params.get("anchor_up", Vector3.UP)
+	var base_spacing: float = float(params.get("base_spacing", 0.75))
+	var changed := force \
+		or texture != _bound_terrain_cache_texture \
+		or ready != _bound_terrain_cache_ready \
+		or cache_generation != _bound_terrain_cache_generation \
+		or cache_res != _bound_terrain_cache_res \
+		or cache_anchor_dir.distance_squared_to(_bound_terrain_cache_anchor_dir) > 1.0e-12 \
+		or cache_anchor_right.distance_squared_to(_bound_terrain_cache_anchor_right) > 1.0e-12 \
+		or cache_anchor_up.distance_squared_to(_bound_terrain_cache_anchor_up) > 1.0e-12 \
+		or absf(base_spacing - _bound_terrain_cache_base_spacing) > 1.0e-6
+	if not changed:
+		return
+
+	for material: ShaderMaterial in _materials:
+		material.set_shader_parameter("u_scatter_terrain_cache", texture)
+		material.set_shader_parameter("u_scatter_terrain_cache_ready", 1.0 if ready else 0.0)
+		material.set_shader_parameter("u_scatter_terrain_cache_generation", cache_generation)
+		material.set_shader_parameter("u_scatter_terrain_cache_res", cache_res)
+		material.set_shader_parameter("u_scatter_terrain_anchor_dir", cache_anchor_dir)
+		material.set_shader_parameter("u_scatter_terrain_anchor_right", cache_anchor_right)
+		material.set_shader_parameter("u_scatter_terrain_anchor_up", cache_anchor_up)
+		material.set_shader_parameter("u_scatter_terrain_base_spacing", base_spacing)
+
+	_bound_terrain_cache_texture = texture
+	_bound_terrain_cache_ready = ready
+	_bound_terrain_cache_generation = cache_generation
+	_bound_terrain_cache_res = cache_res
+	_bound_terrain_cache_anchor_dir = cache_anchor_dir
+	_bound_terrain_cache_anchor_right = cache_anchor_right
+	_bound_terrain_cache_anchor_up = cache_anchor_up
+	_bound_terrain_cache_base_spacing = base_spacing
+
+
+func _disable_authoritative_terrain_cache(force: bool) -> void:
+	if not force and not _bound_terrain_cache_ready and _bound_terrain_cache_texture == null:
+		return
+	for material: ShaderMaterial in _materials:
+		material.set_shader_parameter("u_scatter_terrain_cache_ready", 0.0)
+	_bound_terrain_cache_texture = null
+	_bound_terrain_cache_ready = false
+	_bound_terrain_cache_generation = -1
+	_bound_terrain_cache_res = -1
+	_bound_terrain_cache_anchor_dir = Vector3.ZERO
+	_bound_terrain_cache_anchor_right = Vector3.ZERO
+	_bound_terrain_cache_anchor_up = Vector3.ZERO
+	_bound_terrain_cache_base_spacing = -1.0
+
+
 func _build_ecology_batches() -> void:
 	_ecology_shader = load(ECOLOGY_SHADER_PATH) as Shader
 	if _ecology_shader == null:
@@ -196,13 +308,14 @@ func _build_ecology_asset(definition: Dictionary) -> void:
 		return
 	var selected_triangles: int = _metadata_lod_triangles(metadata, lod_index)
 	if selected_triangles <= 0 or selected_triangles > ECOLOGY_MAX_SELECTED_LOD_TRIANGLES:
-		push_warning("Skipping ecology asset %s LOD%d (%d triangles)" % [asset_id, lod_index, selected_triangles])
+		push_warning("Skipping ecology asset %s LOD%d (%d triangles; fallback cap %d)" % [
+			asset_id, lod_index, selected_triangles, ECOLOGY_MAX_SELECTED_LOD_TRIANGLES])
 		return
 
 	var glb_path := "%s/%s/lod%d.glb" % [ECOLOGY_RUNTIME_ROOT, asset_id, lod_index]
 	# GitHub Actions checks out LFS pointers, not the multi-megabyte payloads. Do not
-	# ask Godot to parse a 132-byte pointer as glTF; local/editor builds with LFS
-	# materialized naturally pass this header test.
+	# ask Godot to parse a pointer as glTF; local/editor builds with LFS materialized
+	# naturally pass this header test.
 	if not _runtime_glb_is_materialized(glb_path):
 		return
 	var packed: PackedScene = load(glb_path) as PackedScene
@@ -257,6 +370,9 @@ func _collect_ecology_meshes(node: Node, parent_transform: Transform3D,
 					"grid": grid,
 					"spacing": float(definition.get("spacing", 20.0)),
 					"density": float(definition.get("density", 0.25)),
+					"last_center": Vector2(1.0e30, 1.0e30),
+					"last_origin": Vector3(1.0e30, 1.0e30, 1.0e30),
+					"last_anchor": Vector3.ZERO,
 				})
 
 	for child_value: Variant in node.get_children():
@@ -391,11 +507,16 @@ func gpu_scatter_stats() -> Dictionary:
 	return {
 		"global_heightmap": true,
 		"global_height_face_res": _bound_macro_res,
+		"authoritative_terrain_cache_bound": _bound_terrain_cache_ready,
+		"authoritative_terrain_cache_generation": _bound_terrain_cache_generation,
+		"authoritative_terrain_cache_res": _bound_terrain_cache_res,
 		"cpu_scatter_classification": false,
 		"compute_supported": false if STABLE_FALLBACK_ONLY else _compact_method_supported,
 		"compute_ready": false if STABLE_FALLBACK_ONLY else _compact_init_ready,
 		"compute_failed": false if STABLE_FALLBACK_ONLY else _compact_init_failed,
 		"stable_gpu_fallback": STABLE_FALLBACK_ONLY,
+		"fallback_triangle_cap": ECOLOGY_MAX_SELECTED_LOD_TRIANGLES,
+		"fallback_max_altitude_m": FALLBACK_SCATTER_MAX_ALTITUDE_M,
 		"edit_delta_bound": get_node_or_null("/root/TerrainEditDeltaGPU") != null,
 		"active_deform_bound": get_node_or_null("/root/TerrainDeformationGPU") != null,
 		"ecology_real_assets": _ecology_loaded_asset_ids.size(),
