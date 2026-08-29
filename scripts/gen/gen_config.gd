@@ -3,6 +3,8 @@ extends Resource
 ## Everything the planet generator needs. Two worlds with the same GenConfig are
 ## bit-identical; nothing in the pipeline may read state from outside this object.
 
+const HASH_RNG := preload("res://scripts/core/hash_rng.gd")
+
 ## Bump when a generation pass changes, so stale bakes are not reused.
 const PIPELINE_VERSION := 12
 
@@ -107,4 +109,4 @@ func cache_key() -> String:
 	return String(",").join(parts.map(func(v): return str(v))).sha256_text().substr(0, 16)
 
 func stream_seed(label: String) -> int:
-	return HashRNG.stream(world_seed, label)
+	return HASH_RNG.stream(world_seed, label)

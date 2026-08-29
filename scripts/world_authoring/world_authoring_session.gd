@@ -3,8 +3,16 @@ extends RefCounted
 ## Transactional staging model for Planet Studio.
 ## Phase 0 intentionally does not mutate the live terrain runtime on Apply.
 
+const SYSTEM_SCRIPT := preload("res://scripts/world_authoring/model/celestial_system_definition.gd")
+const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
+const PLANET_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/planet_authoring_profile.gd")
+const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
+const GENERATION_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
+const WATER_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/water_authoring_profile.gd")
+const ATMOSPHERE_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/atmosphere_profile.gd")
+
 signal changed(dirty: bool, apply_scope: int)
-signal applied(system: CelestialSystemDefinition)
+signal applied(system: Resource)
 signal preset_saved(path: String)
 signal preset_loaded(path: String)
 signal error_reported(message: String)
@@ -18,12 +26,11 @@ enum ApplyScope {
 	FULL_REBUILD,
 }
 
-const PRESET_DIR := "user://world_authoring/presets"
 const RECOVERY_PATH := "user://world_authoring/recovery.tres"
 const DEFAULT_PRESET_PATH := "user://world_authoring/presets/last_preset.tres"
 
-var applied_system: CelestialSystemDefinition
-var staged_system: CelestialSystemDefinition
+var applied_system: Resource
+var staged_system: Resource
 var dirty: bool = false
 var apply_scope: int = ApplyScope.NONE
 
@@ -31,43 +38,49 @@ var _undo_stack: Array[Dictionary] = []
 var _redo_stack: Array[Dictionary] = []
 
 func bootstrap_from_current_world() -> void:
-	var cfg := GenConfig.new()
+	var generation: Resource = GENERATION_PROFILE_SCRIPT.new()
 	if ResourceLoader.exists("res://world.tres"):
 		var loaded: Resource = ResourceLoader.load("res://world.tres")
-		if loaded is GenConfig:
-			cfg = (loaded as GenConfig).duplicate(true) as GenConfig
+		if loaded != null:
+			generation.call("import_from_resource", loaded)
+	bootstrap_from_generation_profile(generation)
 
-	var terrain := TerrainAuthoringProfile.new()
-	terrain.generation_config = cfg
-	var water := WaterAuthoringProfile.new()
-	water.sea_level_m = 0.0
-	var atmosphere := AtmosphereAuthoringProfile.new()
-	atmosphere.atmosphere_height_m = cfg.atmosphere_height
-	var profile := PlanetAuthoringProfile.new()
-	profile.terrain = terrain
-	profile.water = water
-	profile.atmosphere = atmosphere
-	profile.reference_sea_level_m = 0.0
+func bootstrap_from_generation_profile(generation: Resource) -> void:
+	if generation == null:
+		generation = GENERATION_PROFILE_SCRIPT.new()
+	var terrain: Resource = TERRAIN_PROFILE_SCRIPT.new()
+	terrain.set(&"generation_profile", generation.duplicate(true))
+	var water: Resource = WATER_PROFILE_SCRIPT.new()
+	water.set(&"sea_level_m", 0.0)
+	var atmosphere: Resource = ATMOSPHERE_PROFILE_SCRIPT.new()
+	atmosphere.set(&"atmosphere_height_m", float(generation.get(&"atmosphere_height")))
+	var profile: Resource = PLANET_PROFILE_SCRIPT.new()
+	profile.set(&"terrain", terrain)
+	profile.set(&"water", water)
+	profile.set(&"atmosphere", atmosphere)
+	profile.set(&"reference_sea_level_m", 0.0)
 
-	var body := CelestialBodyDefinition.new()
-	body.body_id = "asterra"
-	body.display_name = "Asterra"
-	body.body_type = CelestialBodyDefinition.BodyType.PLANET
-	body.radius_m = cfg.planet_radius
-	body.sidereal_rotation_period_s = 24.0 * 3600.0
-	body.axial_tilt_deg = cfg.axial_tilt_deg
-	body.planet_profile = profile
-	body.ensure_children()
+	var body: Resource = BODY_SCRIPT.new()
+	body.set(&"body_id", "asterra")
+	body.set(&"display_name", "Asterra")
+	body.set(&"body_type", BODY_SCRIPT.BodyType.PLANET)
+	body.set(&"radius_m", float(generation.get(&"planet_radius")))
+	body.set(&"sidereal_rotation_period_s", 24.0 * 3600.0)
+	body.set(&"axial_tilt_deg", float(generation.get(&"axial_tilt_deg")))
+	body.set(&"planet_profile", profile)
+	body.call("ensure_children")
 
-	var system := CelestialSystemDefinition.new()
-	system.system_id = "asterra-system"
-	system.display_name = "Asterra System"
-	system.bodies = [body]
-	system.active_body_id = body.body_id
-	system.ensure_valid()
+	var system: Resource = SYSTEM_SCRIPT.new()
+	system.set(&"system_id", "asterra-system")
+	system.set(&"display_name", "Asterra System")
+	var body_array: Array[Resource] = []
+	body_array.append(body)
+	system.set(&"bodies", body_array)
+	system.set(&"active_body_id", String(body.get(&"body_id")))
+	system.call("ensure_valid")
 
 	applied_system = system
-	staged_system = system.duplicate(true) as CelestialSystemDefinition
+	staged_system = system.duplicate(true)
 	dirty = false
 	apply_scope = ApplyScope.NONE
 	_undo_stack.clear()
@@ -75,10 +88,10 @@ func bootstrap_from_current_world() -> void:
 	_autosave_recovery()
 	changed.emit(dirty, apply_scope)
 
-func active_body() -> CelestialBodyDefinition:
+func active_body() -> Resource:
 	if staged_system == null:
 		return null
-	return staged_system.active_body()
+	return staged_system.call("active_body") as Resource
 
 func can_undo() -> bool:
 	return not _undo_stack.is_empty()
@@ -100,48 +113,51 @@ func stage_action(_action_name: String, action: Callable, scope: int) -> void:
 	_push_undo_state()
 	_redo_stack.clear()
 	action.call()
-	staged_system.ensure_valid()
+	staged_system.call("ensure_valid")
 	_mark_dirty(scope)
 
 func select_body(body_id: String) -> void:
-	if staged_system == null or staged_system.find_body(body_id) == null:
+	if staged_system == null or staged_system.call("find_body", body_id) == null:
 		return
-	if staged_system.active_body_id == body_id:
+	if String(staged_system.get(&"active_body_id")) == body_id:
 		return
 	stage_set(staged_system, &"active_body_id", body_id, ApplyScope.CLIPMAP, "Select body")
 
-func create_body(display_name: String, body_type: int, parent_body_id: String = "") -> CelestialBodyDefinition:
+func create_body(display_name: String, body_type: int, parent_body_id: String = "") -> Resource:
 	if staged_system == null:
 		return null
 	var body := _make_default_body(display_name, body_type, parent_body_id)
 	stage_action("Create body", func() -> void:
-		staged_system.add_body(body)
-		staged_system.active_body_id = body.body_id
+		staged_system.call("add_body", body)
+		staged_system.set(&"active_body_id", String(body.get(&"body_id")))
 	, ApplyScope.FULL_REBUILD)
 	return body
 
-func duplicate_active_body() -> CelestialBodyDefinition:
-	var source := active_body()
+func duplicate_active_body() -> Resource:
+	var source: Resource = active_body()
 	if source == null:
 		return null
-	var copy := source.duplicate(true) as CelestialBodyDefinition
-	copy.body_id = CelestialBodyDefinition.make_body_id(source.display_name)
-	copy.display_name = "%s Copy" % source.display_name
+	var copy: Resource = source.duplicate(true)
+	copy.set(&"body_id", BODY_SCRIPT.make_body_id(String(source.get(&"display_name"))))
+	copy.set(&"display_name", "%s Copy" % String(source.get(&"display_name")))
 	stage_action("Duplicate body", func() -> void:
-		staged_system.add_body(copy)
-		staged_system.active_body_id = copy.body_id
+		staged_system.call("add_body", copy)
+		staged_system.set(&"active_body_id", String(copy.get(&"body_id")))
 	, ApplyScope.FULL_REBUILD)
 	return copy
 
 func delete_active_body() -> bool:
-	if staged_system == null or staged_system.bodies.size() <= 1:
+	if staged_system == null:
 		return false
-	var body := active_body()
+	var bodies: Array = staged_system.get(&"bodies")
+	if bodies.size() <= 1:
+		return false
+	var body: Resource = active_body()
 	if body == null:
 		return false
-	var body_id := body.body_id
+	var body_id := String(body.get(&"body_id"))
 	stage_action("Delete body", func() -> void:
-		staged_system.remove_body(body_id)
+		staged_system.call("remove_body", body_id)
 	, ApplyScope.FULL_REBUILD)
 	return true
 
@@ -164,8 +180,8 @@ func redo() -> void:
 func apply() -> void:
 	if staged_system == null:
 		return
-	staged_system.ensure_valid()
-	applied_system = staged_system.duplicate(true) as CelestialSystemDefinition
+	staged_system.call("ensure_valid")
+	applied_system = staged_system.duplicate(true)
 	dirty = false
 	apply_scope = ApplyScope.NONE
 	_undo_stack.clear()
@@ -177,7 +193,7 @@ func apply() -> void:
 func revert() -> void:
 	if applied_system == null:
 		return
-	staged_system = applied_system.duplicate(true) as CelestialSystemDefinition
+	staged_system = applied_system.duplicate(true)
 	dirty = false
 	apply_scope = ApplyScope.NONE
 	_undo_stack.clear()
@@ -201,13 +217,13 @@ func load_preset(path: String = DEFAULT_PRESET_PATH) -> Error:
 		error_reported.emit("Planet Studio preset does not exist: %s" % path)
 		return ERR_FILE_NOT_FOUND
 	var loaded: Resource = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
-	if not (loaded is CelestialSystemDefinition):
-		error_reported.emit("Preset is not a CelestialSystemDefinition: %s" % path)
+	if loaded == null or loaded.get_script() != SYSTEM_SCRIPT:
+		error_reported.emit("Preset is not a Planet Studio celestial system: %s" % path)
 		return ERR_INVALID_DATA
 	_push_undo_state()
 	_redo_stack.clear()
-	staged_system = (loaded as CelestialSystemDefinition).duplicate(true) as CelestialSystemDefinition
-	staged_system.ensure_valid()
+	staged_system = loaded.duplicate(true)
+	staged_system.call("ensure_valid")
 	dirty = true
 	apply_scope = ApplyScope.FULL_REBUILD
 	_autosave_recovery()
@@ -215,15 +231,15 @@ func load_preset(path: String = DEFAULT_PRESET_PATH) -> Error:
 	preset_loaded.emit(path)
 	return OK
 
-func _make_default_body(display_name: String, body_type: int, parent_body_id: String) -> CelestialBodyDefinition:
-	var body := CelestialBodyDefinition.new()
-	body.display_name = display_name
-	body.body_type = body_type
-	body.parent_body_id = parent_body_id
-	body.body_id = CelestialBodyDefinition.make_body_id(display_name)
-	body.radius_m = 600000.0 if body_type == CelestialBodyDefinition.BodyType.MOON else 1000000.0
-	body.sidereal_rotation_period_s = 24.0 * 3600.0
-	body.ensure_children()
+func _make_default_body(display_name: String, body_type: int, parent_body_id: String) -> Resource:
+	var body: Resource = BODY_SCRIPT.new()
+	body.set(&"display_name", display_name)
+	body.set(&"body_type", body_type)
+	body.set(&"parent_body_id", parent_body_id)
+	body.set(&"body_id", BODY_SCRIPT.make_body_id(display_name))
+	body.set(&"radius_m", 600000.0 if body_type == BODY_SCRIPT.BodyType.MOON else 1000000.0)
+	body.set(&"sidereal_rotation_period_s", 24.0 * 3600.0)
+	body.call("ensure_children")
 	return body
 
 func _push_undo_state() -> void:
@@ -240,8 +256,8 @@ func _capture_state() -> Dictionary:
 
 func _restore_state(state: Dictionary) -> void:
 	var restored: Variant = state.get("system")
-	if restored is CelestialSystemDefinition:
-		staged_system = restored as CelestialSystemDefinition
+	if restored is Resource:
+		staged_system = restored as Resource
 	dirty = bool(state.get("dirty", true))
 	apply_scope = int(state.get("scope", ApplyScope.FULL_REBUILD))
 

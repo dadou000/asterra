@@ -9,7 +9,10 @@ on:
       - "shaders/**"
       - "scripts/terrain/**"
       - "scripts/gen/**"
+      - "scripts/world_authoring/**"
+      - "scenes/world_authoring/**"
       - "scripts/ui/planet_map.gd"
+      - "scripts/ui/start_menu.gd"
       - "assets/scatter/**"
       - "tools/fetch_scatter_assets.py"
       - "tools/validate_scatter_manifest.py"
@@ -19,6 +22,7 @@ on:
       - "tests/validate_terrain_shader.gd"
       - "tests/validate_terrain_scripts.gd"
       - "tests/validate_generation_model.gd"
+      - "tests/validate_world_authoring_phase0.gd"
       - ".github/workflows/godot-terrain-validate.yml"
   workflow_dispatch:
 
@@ -74,9 +78,6 @@ jobs:
           set -euo pipefail
           GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
           TEST_PROJECT=/tmp/asterra-terrain-ci
-          # Raw RenderingDevice .glsl shaders become RDShaderFile resources through
-          # Godot's importer. --import waits for the filesystem/import pass to
-          # finish instead of aborting it after a fixed number of frames.
           set +e
           timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/terrain-import.log 2>&1
           status=$?
@@ -98,17 +99,14 @@ jobs:
           status=$?
           set -e
           cat /tmp/terrain-shader.log
-
           if [ "$status" -ne 0 ]; then
             echo "Godot exited with status $status"
             exit "$status"
           fi
-
           if ! grep -q "TERRAIN_SHADER_LOAD_OK" /tmp/terrain-shader.log; then
             echo "Terrain shader smoke-test completion marker was not emitted."
             exit 1
           fi
-
           if grep -Eiq "shader compilation failed|shader.*parse error|parse error.*shader|error:.*gdshader|TERRAIN_COMPUTE_COMPILE_FAILED" /tmp/terrain-shader.log; then
             echo "Godot reported a shader parser/compiler error."
             exit 1
@@ -118,13 +116,48 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The optimized ecological library is Git-LFS content and is validated by
-          # its manifest/metadata plus the isolated shader test above. Script syntax
-          # validation must not spend CI time importing binary scatter data.
           if [ -d assets/scatter/runtime ]; then
             rm -rf /tmp/asterra-scatter-runtime-ci
             mv assets/scatter/runtime /tmp/asterra-scatter-runtime-ci
             mkdir -p assets/scatter/runtime
+          fi
+
+      - name: Import project script classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          set +e
+          timeout 90 "$GODOT" --headless --path . --import > /tmp/asterra-project-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 220 /tmp/asterra-project-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Asterra project import failed with status $status"
+            exit "$status"
+          fi
+
+      - name: Validate Planet Studio phase 0
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          set +e
+          timeout 90 "$GODOT" --headless --path . --script res://tests/validate_world_authoring_phase0.gd > /tmp/world-authoring-phase0.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/world-authoring-phase0.log
+          if [ "$status" -ne 0 ]; then
+            echo "Planet Studio phase-0 validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "WORLD_AUTHORING_PHASE0_OK" /tmp/world-authoring-phase0.log; then
+            echo "Planet Studio phase-0 completion marker was not emitted."
+            exit 1
+          fi
+          if grep -q "WORLD_AUTHORING_PHASE0_FAILED" /tmp/world-authoring-phase0.log; then
+            echo "Planet Studio phase-0 invariant failed."
+            exit 1
           fi
 
       - name: Validate active terrain script chain
@@ -160,7 +193,6 @@ jobs:
           status=$?
           set -e
           cat /tmp/generation-model.log
-
           if [ "$status" -ne 0 ]; then
             echo "Generation model validation exited with status $status"
             exit "$status"

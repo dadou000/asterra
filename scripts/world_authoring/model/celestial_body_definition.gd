@@ -2,6 +2,10 @@ class_name CelestialBodyDefinition
 extends Resource
 ## Stable persistent definition for a star, planet or moon.
 
+const ORBIT_SCRIPT := preload("res://scripts/world_authoring/model/orbit_definition.gd")
+const RING_SCRIPT := preload("res://scripts/world_authoring/model/ring_system_definition.gd")
+const PLANET_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/planet_authoring_profile.gd")
+
 enum BodyType {
 	STAR,
 	PLANET,
@@ -25,21 +29,21 @@ enum BodyType {
 @export var rotation_phase_at_epoch_deg: float = 0.0
 @export var rotation_epoch_s: float = 0.0
 
-@export var orbit: AuthoringOrbitDefinition
-@export var rings: AuthoringRingSystemDefinition
-@export var planet_profile: PlanetAuthoringProfile
+@export var orbit: Resource
+@export var rings: Resource
+@export var planet_profile: Resource
 
 func ensure_children() -> void:
 	if body_id.is_empty():
 		body_id = make_body_id(display_name)
 	if orbit == null:
-		orbit = AuthoringOrbitDefinition.new()
+		orbit = ORBIT_SCRIPT.new()
 	if rings == null:
-		rings = AuthoringRingSystemDefinition.new()
+		rings = RING_SCRIPT.new()
 	if body_type != BodyType.STAR:
 		if planet_profile == null:
-			planet_profile = PlanetAuthoringProfile.new()
-		planet_profile.ensure_children()
+			planet_profile = PLANET_PROFILE_SCRIPT.new()
+		planet_profile.call("ensure_children")
 
 func hours_per_day() -> float:
 	return sidereal_rotation_period_s / 3600.0
