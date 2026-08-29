@@ -8,7 +8,7 @@ extends Node
 ## compile to disposable terrain-aware local water meshes. Shader-graph runtime
 ## compilation remains staged behind its dedicated pass.
 
-const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase6.gd")
+const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase7.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 const AUTHORED_WATER_RUNTIME_SCRIPT := preload("res://scripts/world_authoring/authored_water_runtime_spatial.gd")
 
