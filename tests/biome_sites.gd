@@ -30,9 +30,12 @@ static func find(biome_name: String) -> Vector3:
 		return Vector3.ZERO
 	var f := Planet.fields
 	var g := Planet.grid
-	var wants_land: bool = not (id in [PlanetFields.Biome.OCEAN,
-		PlanetFields.Biome.SHELF_SEA, PlanetFields.Biome.LAKE,
-		PlanetFields.Biome.RIVER])
+	# Lakes and rivers are authored hydrology features now, not categorical
+	# PlanetFields biomes. Only the two actual water biomes are excluded here.
+	var wants_land: bool = not (id in [
+		PlanetFields.Biome.OCEAN,
+		PlanetFields.Biome.SHELF_SEA,
+	])
 	var best := -1.0
 	var best_c := -1
 	for c in g.cell_count:
