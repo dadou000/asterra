@@ -7,6 +7,12 @@ extends Node
 ## it locally as a plane, batches all wave queries through OceanGPUPhysics, then
 ## applies buoyancy and water drag at the probe offsets. Applying forces at each
 ## probe naturally produces pitch/roll torque without a custom rigid-body solver.
+##
+## When Planet Studio exposes an authored-water query, the same probes transparently
+## prefer lake/river surfaces over the ocean result. This keeps one force solver:
+## lakes contribute fresh-water buoyancy and rivers additionally contribute their
+## authored tangent current velocity. Outside authored features the original GPU
+## ocean path is unchanged.
 
 @export var probe_points: Array[Vector3] = [
 	Vector3(-1.0, -0.35, -1.8), Vector3(1.0, -0.35, -1.8),
@@ -18,16 +24,19 @@ extends Node
 @export_range(0.0, 1000.0, 0.1) var drag_area_m2: float = 5.0
 @export_range(0.0, 5.0, 0.01) var drag_coefficient: float = 0.9
 @export_range(100.0, 1400.0, 1.0) var water_density: float = 1025.0
+@export_range(100.0, 1400.0, 1.0) var authored_water_density: float = 1000.0
 @export_range(1.0, 30.0, 0.1) var max_drag_accel: float = 10.0
 @export_range(1.0, 30.0, 0.1) var bathymetry_hz: float = 6.0
 @export_range(2.0, 100.0, 0.5) var bathymetry_sample_m: float = 16.0
 @export_range(0.0, 3.0, 0.01) var wave_scale: float = 1.0
 
 const GRAVITY_M_S2 := 9.81
+const AUTHORED_WATER_GROUP: StringName = &"authored_water_query"
 
 var _body: RigidBody3D
 var _gpu: OceanGPUPhysics
 var _detail: TerrainDetail
+var _authored_water_query: Node
 var _bathy_left := 0.0
 var _bathy_valid := false
 var _bathy_center_dir := Vector3.RIGHT
@@ -40,6 +49,7 @@ var _request_context: Dictionary = {}
 var _ready_results: Array[Dictionary] = []
 var _ready_probe_count := 0
 var _last_submerged_fraction := 0.0
+var _last_authored_probe_count := 0
 
 
 func _ready() -> void:
@@ -62,6 +72,7 @@ func _ready() -> void:
 func _physics_process(dt: float) -> void:
 	if _body == null or _gpu == null or not _gpu.available() or probe_points.is_empty():
 		return
+	_resolve_authored_water_query()
 	if _detail == null and Planet.ready_state:
 		_detail = Planet.make_detail()
 	if _detail == null:
@@ -76,6 +87,15 @@ func _physics_process(dt: float) -> void:
 		_apply_water_forces(_ready_results, mini(_ready_probe_count, probe_points.size()))
 
 	_queue_gpu_probe_batch()
+
+
+func _resolve_authored_water_query() -> void:
+	if _authored_water_query != null and is_instance_valid(_authored_water_query):
+		return
+	_authored_water_query = null
+	var candidate: Node = get_tree().get_first_node_in_group(AUTHORED_WATER_GROUP)
+	if candidate != null and candidate.has_method("query_render_point"):
+		_authored_water_query = candidate
 
 
 func _update_bathymetry() -> void:
@@ -164,9 +184,9 @@ func _apply_water_forces(results: Array[Dictionary], count: int) -> void:
 	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
 	var volume_per_probe := displaced_volume_m3 / float(count)
 	var area_per_probe := drag_area_m2 / float(count)
-	var buoyancy_full := water_density * GRAVITY_M_S2 * volume_per_probe
 	var max_drag_force := maxf(_body.mass, 0.01) * max_drag_accel / float(count)
 	var submerged_sum := 0.0
+	_last_authored_probe_count = 0
 
 	for i in count:
 		if i >= results.size():
@@ -178,14 +198,29 @@ func _apply_water_forces(results: Array[Dictionary], count: int) -> void:
 			continue
 		var up := planet_point / radial
 		var probe_alt := radial - Planet.cfg.planet_radius
-		var result: Dictionary = results[i]
-		var water_alt := float(result["height"])
+
+		var water_alt: float
+		var normal: Vector3
+		var water_velocity: Vector3
+		var local_density := water_density
+		var authored: Dictionary = _authored_sample_for_probe(render_point)
+		if not authored.is_empty():
+			water_alt = float(authored.get("surface_altitude_m", probe_alt - probe_depth_m))
+			normal = up
+			water_velocity = authored.get("current_velocity", Vector3.ZERO)
+			local_density = authored_water_density
+			_last_authored_probe_count += 1
+		else:
+			var result: Dictionary = results[i]
+			water_alt = float(result["height"])
+			normal = result["normal"]
+			water_velocity = result["velocity"]
+
 		var submerged := clampf((water_alt - probe_alt) / maxf(probe_depth_m, 0.05) + 0.5, 0.0, 1.0)
 		if submerged <= 0.0001:
 			continue
 		submerged_sum += submerged
 
-		var normal: Vector3 = result["normal"]
 		if normal.length_squared() < 0.25:
 			normal = up
 		else:
@@ -194,16 +229,16 @@ func _apply_water_forces(results: Array[Dictionary], count: int) -> void:
 		# normal contribution transfers breaker/slope impulse without making a hull
 		# accelerate sideways on every long swell face.
 		var buoyancy_dir := (up * 0.88 + normal * 0.12).normalized()
+		var buoyancy_full := local_density * GRAVITY_M_S2 * volume_per_probe
 		var buoyancy_force := buoyancy_dir * (buoyancy_full * submerged)
 
 		var offset_global := render_point - _body.global_position
 		var point_velocity := _body.linear_velocity + _body.angular_velocity.cross(offset_global)
-		var water_velocity: Vector3 = result["velocity"]
 		var relative := water_velocity - point_velocity
 		var speed := relative.length()
 		var drag_force := Vector3.ZERO
 		if speed > 1e-4 and area_per_probe > 0.0:
-			drag_force = relative * (0.5 * water_density * drag_coefficient
+			drag_force = relative * (0.5 * local_density * drag_coefficient
 				* area_per_probe * speed * submerged)
 			if drag_force.length() > max_drag_force:
 				drag_force = drag_force.normalized() * max_drag_force
@@ -213,6 +248,20 @@ func _apply_water_forces(results: Array[Dictionary], count: int) -> void:
 	_last_submerged_fraction = submerged_sum / float(count)
 
 
+func _authored_sample_for_probe(render_point: Vector3) -> Dictionary:
+	if _authored_water_query == null or not is_instance_valid(_authored_water_query):
+		return {}
+	var value: Variant = _authored_water_query.call("query_render_point", render_point)
+	if not (value is Dictionary):
+		return {}
+	var sample: Dictionary = value as Dictionary
+	if sample.is_empty() \
+			or not bool(sample.get("clipmap_simulation_enabled", true)) \
+			or float(sample.get("depth_m", 0.0)) <= 0.01:
+		return {}
+	return sample
+
+
 func _offset_direction(center: Vector3, tangent: Vector3, metres: float) -> Vector3:
 	var angle := metres / maxf(Planet.cfg.planet_radius, 1.0)
 	return (center * cos(angle) + tangent.normalized() * sin(angle)).normalized()
@@ -220,3 +269,7 @@ func _offset_direction(center: Vector3, tangent: Vector3, metres: float) -> Vect
 
 func submerged_fraction() -> float:
 	return _last_submerged_fraction
+
+
+func authored_probe_count() -> int:
+	return _last_authored_probe_count
