@@ -10,11 +10,9 @@ extends Node
 
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase15.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
-const AUTHORED_WATER_RUNTIME_CANDIDATES := PackedStringArray([
-	"res://scripts/world_authoring/authored_water_runtime_spatial.gd",
-	"res://scripts/world_authoring/authored_water_runtime_query.gd",
-	"res://scripts/world_authoring/authored_water_runtime.gd",
-])
+const AUTHORED_WATER_RUNTIME_SPATIAL_PATH := "res://scripts/world_authoring/authored_water_runtime_spatial.gd"
+const AUTHORED_WATER_RUNTIME_QUERY_PATH := "res://scripts/world_authoring/authored_water_runtime_query.gd"
+const AUTHORED_WATER_RUNTIME_BASE_PATH := "res://scripts/world_authoring/authored_water_runtime.gd"
 
 var _main: Node
 var _layer: CanvasLayer
@@ -94,10 +92,15 @@ func _open_live_editor(player: Node) -> void:
 	set_process(false)
 
 func _resolve_authored_water_runtime_script() -> Script:
-	# Do not preload optional water layers. A partial/local checkout must not make
-	# the entire Planet Studio host fail to parse. Prefer the spatially-pruned
-	# implementation, then degrade to the query/runtime parents when necessary.
-	for path: String in AUTHORED_WATER_RUNTIME_CANDIDATES:
+	# Keep the path constants themselves as compile-time String expressions. The
+	# candidate container is created here at runtime because PackedStringArray(...)
+	# is not a valid GDScript constant expression in Godot 4.7.1.
+	var candidates := PackedStringArray([
+		AUTHORED_WATER_RUNTIME_SPATIAL_PATH,
+		AUTHORED_WATER_RUNTIME_QUERY_PATH,
+		AUTHORED_WATER_RUNTIME_BASE_PATH,
+	])
+	for path: String in candidates:
 		if not ResourceLoader.exists(path, "Script"):
 			continue
 		var resource: Resource = load(path)
