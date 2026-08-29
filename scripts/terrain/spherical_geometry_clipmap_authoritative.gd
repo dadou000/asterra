@@ -268,6 +268,41 @@ func debug_closest_rendered_vertex(target_direction: Vector3) -> Dictionary:
 	}
 
 
+## The rendered-contact compute path validates cache keys and deliberately refuses
+## cold texels. The visible vertex shader, however, can temporarily fall back to the
+## analytic field while those texels warm. A debug query must therefore promote the
+## tiny neighbourhood it needs to the cache's urgent queue instead of staying
+## "pending" behind unrelated warm-up work.
+func debug_prime_rendered_contact_direction(target_direction: Vector3) -> void:
+	if _terrain_cache_active == null or not is_instance_valid(_terrain_cache_active):
+		return
+	if not _terrain_cache_active.has_method("_queue_rect"):
+		return
+	var vertex: Dictionary = debug_closest_rendered_vertex(target_direction)
+	if vertex.is_empty():
+		return
+	var plane_value: Variant = vertex.get("plane_m", null)
+	if not (plane_value is Vector2):
+		return
+	var plane_m: Vector2 = plane_value as Vector2
+	var level: int = clampi(int(vertex.get("level", 0)), 0, MAX_LEVEL)
+	_debug_prime_cache_level(level, plane_m)
+	# Fine-ring morph can read the parent. Priming it as well costs only four texels
+	# and prevents a valid fine sample from still being rejected at the handoff.
+	if level < MAX_LEVEL:
+		_debug_prime_cache_level(level + 1, plane_m)
+
+
+func _debug_prime_cache_level(level: int, plane_m: Vector2) -> void:
+	var spacing: float = _base_spacing * pow(2.0, float(level))
+	if spacing <= 1e-6:
+		return
+	var lattice: Vector2 = plane_m / spacing
+	var cell_min := Vector2i(floori(lattice.x), floori(lattice.y))
+	_terrain_cache_active.call("_queue_rect", level,
+		Rect2i(cell_min, Vector2i(2, 2)), true)
+
+
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	var staging_allocated: bool = _terrain_cache_staging != null \
