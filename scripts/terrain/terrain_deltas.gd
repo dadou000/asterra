@@ -194,6 +194,69 @@ func add_offset(face: int, i: int, j: int, delta: float, min_offset: float, max_
 	_mutex.unlock()
 	return after - before
 
+## Applies an interactive spherical sculpt brush while holding the sparse-store
+## mutex only once. This is substantially cheaper than issuing add_offset() for
+## every lattice point of a mouse-drag stroke. It also canonicalizes seam samples
+## and de-duplicates addresses that fold across cube faces.
+func apply_radial_brush(center_dir: Vector3, radius_m: float, delta_m: float,
+		hardness: float, planet_radius: float, min_offset: float = -10000.0,
+		max_offset: float = 10000.0) -> int:
+	if center_dir.length_squared() < 0.5 or radius_m <= 0.0 or delta_m == 0.0 \
+			or planet_radius <= 1.0:
+		return 0
+	var center: Vector3 = center_dir.normalized()
+	var spacing_m: float = maxf(sample_spacing(planet_radius), 0.001)
+	var center_lattice: Array = dir_to_lattice(center)
+	var face: int = int(center_lattice[0])
+	var center_i: int = int(round(float(center_lattice[1])))
+	var center_j: int = int(round(float(center_lattice[2])))
+	var extent: int = maxi(1, int(ceil(radius_m / spacing_m)) + 2)
+	var hard: float = clampf(hardness, 0.0, 0.98)
+	var visited: Dictionary = {}
+	var changed := 0
+
+	_mutex.lock()
+	for source_j: int in range(center_j - extent, center_j + extent + 1):
+		for source_i: int in range(center_i - extent, center_i + extent + 1):
+			var address: Vector3i = canonical_address(face, source_i, source_j)
+			if address.x < 0:
+				continue
+			var address_key: String = "%d:%d:%d" % [address.x, address.y, address.z]
+			if visited.has(address_key):
+				continue
+			visited[address_key] = true
+			var sample_dir: Vector3 = lattice_to_dir(address.x, float(address.y), float(address.z))
+			var distance_m: float = acos(clampf(center.dot(sample_dir), -1.0, 1.0)) * planet_radius
+			if distance_m > radius_m:
+				continue
+			var normalized_distance: float = distance_m / maxf(radius_m, 0.001)
+			var weight := 1.0
+			if normalized_distance > hard:
+				var edge_t: float = (normalized_distance - hard) / maxf(1.0 - hard, 0.001)
+				weight = 1.0 - smoothstep(0.0, 1.0, edge_t)
+			if weight <= 0.0001:
+				continue
+			var k: int = tile_key(address.x, address.y >> TILE_SHIFT, address.z >> TILE_SHIFT)
+			if not _tiles.has(k):
+				var arr := PackedFloat32Array()
+				arr.resize(TILE * TILE)
+				_tiles[k] = arr
+				_count += 1
+			var tile: PackedFloat32Array = _tiles[k]
+			var index: int = (address.z & (TILE - 1)) * TILE + (address.y & (TILE - 1))
+			var before: float = tile[index]
+			var after: float = clampf(before + delta_m * weight, min_offset, max_offset)
+			if absf(after - before) <= 1e-7:
+				continue
+			tile[index] = after
+			_tiles[k] = tile
+			changed += 1
+	_mutex.unlock()
+
+	if changed > 0:
+		region_changed.emit(center, radius_m + spacing_m * 2.0)
+	return changed
+
 func get_offset(face: int, i: int, j: int) -> float:
 	_mutex.lock()
 	var v := _raw(_tiles, face, i, j)
