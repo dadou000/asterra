@@ -5,6 +5,7 @@ extends Node
 ## in the editor/runtime instead of using --script MainLoop semantics.
 
 const APPLY_PLANNER := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
+const RUNTIME_HOST := preload("res://scripts/world_authoring/world_authoring_runtime_host.gd")
 const GENERATION_PROFILE := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 
 const SCRIPT_PATHS := [
@@ -15,6 +16,15 @@ const SCRIPT_PATHS := [
 	"res://scripts/world_authoring/world_authoring_runtime_host.gd",
 	"res://tools/terrain_region_compiler.gd",
 ]
+
+class FakeRuntimeMain extends Node:
+	var cfg: Resource
+	var sky_mat: ShaderMaterial
+	var _rebaking: bool = false
+	var rebake_calls: int = 0
+
+	func _on_rebake_requested() -> void:
+		rebake_calls += 1
 
 
 func _ready() -> void:
@@ -30,6 +40,8 @@ func _ready() -> void:
 		print("SECONDARY_TERRAIN_SCRIPT_LOAD_OK: %s" % script_path)
 
 	if not _validate_apply_planner():
+		return
+	if not _validate_hot_apply_execution():
 		return
 	print("SECONDARY_TERRAIN_SCRIPT_STACK_OK: %d scripts" % SCRIPT_PATHS.size())
 	get_tree().quit(0)
@@ -117,6 +129,48 @@ func _validate_apply_planner() -> bool:
 		return false
 
 	print("APPLY_PLANNER_OK: HOT/local/clipmap edits avoid PlanetBake; generator edits require it")
+	return true
+
+
+func _validate_hot_apply_execution() -> bool:
+	var pair: Array = _fresh_system_pair()
+	var previous: Resource = pair[0]
+	var next: Resource = pair[1]
+	var profile: Resource = _active_profile(next)
+	var atmosphere: Resource = profile.get(&"atmosphere") as Resource
+	atmosphere.set(&"cloud_coverage", 0.71)
+
+	var fake_main := FakeRuntimeMain.new()
+	fake_main.cfg = GENERATION_PROFILE.new()
+	var host: Node = RUNTIME_HOST.new()
+	host.set("_main", fake_main)
+	host.set("_runtime_applied_snapshot", previous)
+	host.set("_pending_apply_scope", WorldAuthoringSession.ApplyScope.HOT)
+	host.call("_on_runtime_apply_requested", next)
+	if fake_main.rebake_calls != 0:
+		host.free()
+		fake_main.free()
+		_fail("APPLY_EXECUTION_FAILED: HOT atmosphere Apply invoked PlanetBake")
+		return false
+
+	pair = _fresh_system_pair()
+	previous = pair[0]
+	next = pair[1]
+	profile = _active_profile(next)
+	var water: Resource = profile.get(&"water") as Resource
+	water.set(&"wave_frequency_scale", 1.23)
+	host.set("_runtime_applied_snapshot", previous)
+	host.set("_pending_apply_scope", WorldAuthoringSession.ApplyScope.HOT)
+	host.call("_on_runtime_apply_requested", next)
+	if fake_main.rebake_calls != 0:
+		host.free()
+		fake_main.free()
+		_fail("APPLY_EXECUTION_FAILED: HOT wave Apply invoked PlanetBake")
+		return false
+
+	host.free()
+	fake_main.free()
+	print("APPLY_EXECUTION_OK: HOT atmosphere/wave Apply performs zero PlanetBake calls")
 	return true
 
 
