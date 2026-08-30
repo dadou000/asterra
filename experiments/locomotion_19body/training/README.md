@@ -49,12 +49,15 @@ Stage-0A actuator effort/velocity/gain values are deliberately marked **provisio
 `training/asterra_rl/articulation.py` now:
 
 - loads and validates `articulation_manifest.json` without requiring Isaac Sim;
-- derives the exact 54-DOF name/order contract;
+- derives the exact canonical 54-DOF action order;
 - derives the 55 expected PhysX link names (19 real + 36 virtual);
 - computes neutral pelvis spawn height from foot geometry;
 - builds Isaac Lab `ArticulationCfg` actuator groups directly from manifest torque/velocity/Kp/Kd values;
 - supports a zero-drive passive mode without changing hard joint limits;
-- validates live PhysX joint order, body names, limits, effort/velocity caps, gains and total mass after `sim.reset()`.
+- maps the canonical manifest action order onto whatever internal DOF order PhysX imports by joint name;
+- validates live PhysX body/joint name sets, limits, effort/velocity caps, gains and total mass after `sim.reset()`.
+
+PhysX traversal order is explicitly **not** part of the policy ABI. Observation/action code must use the generated canonical-to-PhysX index map.
 
 Pure helper checks:
 
@@ -78,7 +81,7 @@ After USD conversion, the smoke harness can spawn many copies through `Interacti
 
 The smoke test is intentionally not an RL task. It fails on infrastructure errors such as:
 
-- PhysX joint name/order drift from the canonical 54-action manifest;
+- missing/extra PhysX joint names relative to the canonical 54-action manifest;
 - missing/extra physical or virtual links;
 - wrong hard limits, torque limits, velocity limits or PD gains;
 - mass mismatch;
@@ -87,7 +90,7 @@ The smoke test is intentionally not an RL task. It fails on infrastructure error
 - runaway root/joint velocities;
 - optionally, missing left/right foot contact.
 
-Ordinary falling is **not** considered an infrastructure failure. `hold` and `passive` write diagnostic root heights, joint speeds, limit excursions, contact force and throughput to ignored JSON reports under `runs/smoke/`.
+A different internal PhysX DOF order is accepted and mapped explicitly. Ordinary falling is **not** considered an infrastructure failure. `hold` and `passive` write diagnostic root heights, joint speeds, limit excursions, contact force and throughput to ignored JSON reports under `runs/smoke/`.
 
 ## Isaac setup
 
