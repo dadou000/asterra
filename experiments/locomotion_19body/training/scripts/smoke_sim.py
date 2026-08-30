@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import random
 import sys
@@ -358,17 +359,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    exit_code = 1
     try:
         exit_code = main()
     except Exception:
-        # Make failure semantics explicit even if this block is edited later.
-        exit_code = 1
-        # Isaac can take a long time to tear down after a failed PhysX reset.
-        # Emit the actionable failure before close() so it is never hidden.
+        # Isaac Sim's fast close path can terminate the process with status 0 on
+        # Windows before Python's later SystemExit is observed. Flush the traceback
+        # and terminate non-zero immediately on validator failure.
         traceback.print_exc()
-    finally:
-        # This is a short-lived validator with no Replicator output to flush. Isaac Sim
-        # 5.1 can stall in graceful teardown on Windows after PhysX tensor use.
-        simulation_app.close(skip_cleanup=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+
+    simulation_app.close(skip_cleanup=True)
     raise SystemExit(exit_code)
