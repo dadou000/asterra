@@ -3,11 +3,18 @@ extends Node
 ## Installs Planet Studio over Main and owns the boundary between staged authoring
 ## resources and the production runtime. BLANK terrain is an analytic backend: it
 ## never invokes PlanetBake and owns no generated height/material map.
+##
+## The host also owns the live celestial preview boundary. The one generated
+## terrestrial runtime can only belong to one applied body at a time; other staged
+## bodies are shown with an explicit preview sphere so they never inherit another
+## body's heightmap. Selection automatically frames the active body.
 
-const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase21.gd")
+const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase22.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
+const CELESTIAL_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/celestial_body_preview_runtime.gd")
 const APPLY_PLANNER_SCRIPT := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
 const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
+const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
 const AUTHORED_WATER_RUNTIME_SPATIAL_PATH := "res://scripts/world_authoring/authored_water_runtime_spatial.gd"
 const AUTHORED_WATER_RUNTIME_QUERY_PATH := "res://scripts/world_authoring/authored_water_runtime_query.gd"
 const AUTHORED_WATER_RUNTIME_BASE_PATH := "res://scripts/world_authoring/authored_water_runtime.gd"
@@ -16,13 +23,22 @@ const BASE_RAYLEIGH_COEFF := Vector3(5.5e-6, 13.0e-6, 22.4e-6)
 const BASE_OZONE_COEFF := Vector3(0.650e-6, 1.881e-6, 0.085e-6)
 const BASE_MIE_COEFF: float = 21.0e-6
 const DEFAULT_CLOUD_THICKNESS_M: float = 5300.0
+const BODY_FRAME_MARGIN: float = 1.18
+const BODY_FRAME_SURFACE_MARGIN: float = 1.04
 
 var _main: Node
 var _layer: CanvasLayer
 var _editor: Control
 var _biome_preview: Node
 var _authored_water_runtime: Node
+var _celestial_preview: Node3D
+var _authoring_session: WorldAuthoringSession
+var _preview_player: Node
 var _runtime_applied_snapshot: Resource
+var _preview_body_id: String = ""
+var _preview_sync_pending: bool = false
+var _preview_focus_pending: bool = false
+var _terrestrial_runtime_visible: bool = true
 var _pending_apply_scope: int = 0
 var _opened: bool = false
 
@@ -48,6 +64,7 @@ func _launch_mode() -> String:
 
 func _open_live_editor(player: Node) -> void:
 	_opened = true
+	_preview_player = player
 	_set_existing_ui_visible(false)
 	player.set("input_enabled", false)
 	if player.has_method("set_mouse_captured"):
@@ -60,16 +77,25 @@ func _open_live_editor(player: Node) -> void:
 	live_editor.name = "PlanetStudioLive"
 	live_editor.call("bind_world", _main)
 	live_editor.connect("runtime_apply_requested", Callable(self, "_on_runtime_apply_requested"))
+	if live_editor.has_signal("body_focus_requested"):
+		live_editor.connect("body_focus_requested", Callable(self, "_on_body_focus_requested"))
 	_layer.add_child(live_editor)
 	_editor = live_editor
 
 	var session_value: Variant = live_editor.get("_session")
 	if session_value is WorldAuthoringSession:
 		var session: WorldAuthoringSession = session_value as WorldAuthoringSession
+		_authoring_session = session
 		if session.applied_system != null:
 			_runtime_applied_snapshot = session.applied_system.duplicate(true)
 		if not session.changed.is_connected(_on_authoring_session_changed):
 			session.changed.connect(_on_authoring_session_changed)
+
+		var celestial_preview: Node3D = CELESTIAL_PREVIEW_SCRIPT.new() as Node3D
+		if celestial_preview != null:
+			celestial_preview.name = "PlanetStudioCelestialBodyPreview"
+			_main.add_child(celestial_preview)
+			_celestial_preview = celestial_preview
 
 		var biome_preview: Node = BIOME_PREVIEW_SCRIPT.new()
 		biome_preview.name = "PlanetStudioBiomePreview"
@@ -96,11 +122,136 @@ func _open_live_editor(player: Node) -> void:
 					live_editor.connect("water_preview_changed", Callable(authored_water, "mark_dirty"))
 		else:
 			_set_editor_status("Authored-water runtime scripts are missing from this checkout; terrain authoring remains available.")
+
+		if Planet.has_signal("world_ready") and not Planet.world_ready.is_connected(_on_planet_world_ready):
+			Planet.world_ready.connect(_on_planet_world_ready)
+		_schedule_active_body_preview(true)
 	set_process(false)
 
 func _on_authoring_session_changed(dirty_state: bool, apply_scope: int) -> void:
 	if dirty_state:
 		_pending_apply_scope = apply_scope
+	var active_id: String = _active_staged_body_id()
+	_schedule_active_body_preview(active_id != _preview_body_id)
+
+func _on_body_focus_requested(_body_id: String) -> void:
+	_schedule_active_body_preview(true)
+
+func _on_planet_world_ready(_fields: PlanetFields) -> void:
+	# Main finishes adopting the new fields and clears its rebake flag in the same
+	# frame. Defer one turn before replacing the staged sphere with real terrain.
+	_schedule_active_body_preview(true)
+
+func _active_staged_body_id() -> String:
+	if _authoring_session == null or _authoring_session.staged_system == null:
+		return ""
+	return String(_authoring_session.staged_system.get(&"active_body_id"))
+
+func _schedule_active_body_preview(focus: bool = false) -> void:
+	_preview_focus_pending = _preview_focus_pending or focus
+	if _preview_sync_pending:
+		return
+	_preview_sync_pending = true
+	call_deferred("_flush_active_body_preview")
+
+func _flush_active_body_preview() -> void:
+	_preview_sync_pending = false
+	if _authoring_session == null or _main == null:
+		_preview_focus_pending = false
+		return
+	var body: Resource = _authoring_session.active_body() as Resource
+	if body == null:
+		_preview_focus_pending = false
+		return
+	var body_id: String = String(body.get(&"body_id"))
+	var body_changed: bool = body_id != _preview_body_id
+	_preview_body_id = body_id
+
+	var body_type: int = int(body.get(&"body_type"))
+	var is_star: bool = body_type == BODY_SCRIPT.BodyType.STAR
+	var applied_id: String = ""
+	if _runtime_applied_snapshot != null:
+		applied_id = String(_runtime_applied_snapshot.get(&"active_body_id"))
+	var rebaking: bool = bool(_main.get("_rebaking"))
+	var owns_live_terrain: bool = not is_star and body_id == applied_id and not rebaking
+	var staged_preview: bool = not owns_live_terrain
+
+	if staged_preview:
+		_set_terrestrial_runtime_visible(false)
+		if _celestial_preview != null:
+			_celestial_preview.call("show_body", body)
+	else:
+		if _celestial_preview != null:
+			_celestial_preview.call("hide_preview")
+		_set_terrestrial_runtime_visible(true)
+
+	var should_focus: bool = _preview_focus_pending or body_changed
+	_preview_focus_pending = false
+	if should_focus:
+		_focus_camera_on_body(body, staged_preview)
+		if is_star:
+			_set_editor_status("Focused %s — live stellar photosphere/corona preview." % String(body.get(&"display_name")))
+		elif staged_preview:
+			_set_editor_status("Focused %s — staged body preview. Apply this procedural body to generate its own terrain; no previous heightmap is reused." % String(body.get(&"display_name")))
+		else:
+			_set_editor_status("Focused %s — showing its applied live terrain." % String(body.get(&"display_name")))
+
+func _focus_camera_on_body(body: Resource, staged_preview: bool) -> void:
+	if _preview_player == null or body == null:
+		return
+	var camera: Camera3D = _preview_player.get("camera") as Camera3D
+	if camera == null:
+		return
+	var radius_m: float = maxf(float(body.get(&"radius_m")), 1.0)
+	var visual_radius_m: float = radius_m * BODY_FRAME_SURFACE_MARGIN
+	if staged_preview and _celestial_preview != null:
+		visual_radius_m = maxf(float(_celestial_preview.call("visual_radius_m")), radius_m)
+	var frame_distance: float = float(CELESTIAL_PREVIEW_SCRIPT.frame_distance_for_radius(
+		visual_radius_m, camera.fov, BODY_FRAME_MARGIN))
+
+	var radial_axis := Vector3(1.0, 0.18, 0.32).normalized()
+	var current_world: Vec3D = _preview_player.get("world_pos") as Vec3D
+	if current_world != null and current_world.length_sq() > 1.0:
+		radial_axis = current_world.normalized().to_v3()
+	var next_world: Vec3D = Vec3D.from_v3(radial_axis).mul(frame_distance)
+	_preview_player.set("world_pos", next_world)
+	# At -90 degrees the player's spherical camera points exactly toward -up, i.e.
+	# the selected body's centre. Yaw is intentionally preserved for the first
+	# tangent direction when the author resumes RMB look.
+	_preview_player.set("pitch", -PI * 0.5)
+	Frames.rebase(next_world)
+	if _preview_player.has_method("_sync_transform"):
+		_preview_player.call("_sync_transform")
+	camera.far = maxf(camera.far, frame_distance + visual_radius_m * 4.0)
+	_preview_player.emit_signal("moved", next_world)
+
+func _set_terrestrial_runtime_visible(value: bool) -> void:
+	if _terrestrial_runtime_visible == value:
+		return
+	_terrestrial_runtime_visible = value
+	var nodes: Array[Node] = []
+	for candidate: Variant in [
+		_main.get("terrain"),
+		_main.get("orbit_ocean"),
+		get_node_or_null("/root/GroundGeometryClipmap"),
+		get_node_or_null("/root/OceanGeometryClipmap"),
+		get_node_or_null("/root/TerrainScatter"),
+	]:
+		if candidate is Node:
+			nodes.append(candidate as Node)
+	for node: Node in nodes:
+		if node is Node3D:
+			(node as Node3D).visible = value
+		node.set_process(value)
+		node.set_physics_process(value)
+	if _authored_water_runtime != null:
+		_authored_water_runtime.set_process(value)
+		if _authored_water_runtime.has_method("_set_visible"):
+			_authored_water_runtime.call("_set_visible", value)
+		if value and _authored_water_runtime.has_method("mark_dirty"):
+			_authored_water_runtime.call("mark_dirty")
+	if value:
+		_refresh_clipmap_without_bake()
 
 func _resolve_authored_water_runtime_script() -> Script:
 	var candidates := PackedStringArray([
@@ -134,12 +285,10 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	if body == null:
 		_set_editor_status("Apply rejected: no active celestial body.")
 		return
-	if int(body.get(&"body_type")) == 0:
-		# Stars are now fully persistent/editable in Planet Studio. The current scene
-		# still previews the terrestrial runtime, so applying a star performs no
-		# terrain work and never triggers PlanetBake.
+	if int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
 		_set_editor_status("Applied stellar authoring state for %s — no terrestrial terrain rebuild." % String(body.get(&"display_name")))
 		_runtime_applied_snapshot = system.duplicate(true)
+		_schedule_active_body_preview(false)
 		return
 
 	var profile: Resource = body.get(&"planet_profile") as Resource
@@ -163,6 +312,7 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	if blank:
 		_apply_blank_terrain(body, atmosphere, generation, terrain_profile, cfg)
 		_runtime_applied_snapshot = system.duplicate(true)
+		_schedule_active_body_preview(false)
 		return
 
 	# Procedural runtime. Deltas are meaningful only in this backend.
@@ -175,6 +325,7 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	if bool(plan.get("full_rebuild", false)):
 		_apply_full_rebuild(plan, body, atmosphere, generation, cfg)
 		_runtime_applied_snapshot = system.duplicate(true)
+		_schedule_active_body_preview(false)
 		return
 
 	var refreshed: PackedStringArray = PackedStringArray()
@@ -217,6 +368,7 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		refreshed.append("sparse sculpt deltas")
 
 	_runtime_applied_snapshot = system.duplicate(true)
+	_schedule_active_body_preview(false)
 	if refreshed.is_empty():
 		_set_editor_status("Applied %s metadata only — no terrain, heightmap or biome rebuild required." % String(body.get(&"display_name")))
 	else:
