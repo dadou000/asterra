@@ -1,11 +1,11 @@
 extends Node3D
 ## Multi-body live preview for Planet Studio.
 ##
-## The selected body is always treated as the local body-centred origin. The
-## generated terrain runtime may occupy that origin when it owns the selected
-## applied body; every other celestial is still rendered here as a lightweight
-## sphere at its staged orbital position. This keeps moons/parents/siblings visible
-## while preserving the one-authoritative-terrain-runtime architecture.
+## All bodies stay in one stable system/world coordinate frame. Selecting a body
+## changes only the editor camera interest point; it never redefines Frames or moves
+## the rest of the system underneath renderers that assume a fixed planet centre.
+## The one detailed terrestrial runtime can replace its lightweight preview sphere,
+## while parents, moons and siblings remain at their staged orbital positions.
 
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
 
@@ -19,7 +19,7 @@ const FALLBACK_ANOMALY_DEG: float = 35.0
 
 var _system: Resource
 var _selected_body_id: String = ""
-var _show_selected_body: bool = true
+var _detailed_body_id: String = ""
 var _records: Dictionary = {}
 var _world_positions: Dictionary = {}
 var _selected_visual_radius_m: float = 1.0
@@ -42,10 +42,10 @@ func _process(_delta: float) -> void:
 
 
 func show_system(system: Resource, selected_body_id: String,
-		show_selected_body: bool = true) -> void:
+		detailed_body_id: String = "") -> void:
 	_system = system
 	_selected_body_id = selected_body_id
-	_show_selected_body = show_selected_body
+	_detailed_body_id = detailed_body_id
 	if _system == null:
 		hide_preview()
 		return
@@ -58,18 +58,20 @@ func show_system(system: Resource, selected_body_id: String,
 	_sync_camera_clip()
 
 
-## Compatibility entry point for older callers. New Planet Studio code should use
-## show_system() so companions are not discarded when the active body changes.
+## Compatibility entry point for older callers. The body is placed at the system
+## origin because no hierarchy/orbit information is available through this API.
 func show_body(body: Resource) -> void:
 	_clear_records()
 	_system = null
 	_selected_body_id = String(body.get(&"body_id")) if body != null else ""
-	_show_selected_body = true
+	_detailed_body_id = ""
+	_world_positions.clear()
 	if body == null:
 		hide_preview()
 		return
-	var relative := Vec3D.new()
-	var record: Dictionary = _create_body_record(body, relative, true)
+	var world := Vec3D.new()
+	_world_positions[_selected_body_id] = world
+	var record: Dictionary = _create_body_record(body, world, world, true)
 	_records[_selected_body_id] = record
 	_selected_visual_radius_m = float(record.get("visual_radius_m", 1.0))
 	_family_frame_radius_m = _selected_visual_radius_m
@@ -87,6 +89,10 @@ func body_id() -> String:
 	return _selected_body_id
 
 
+func detailed_body_id() -> String:
+	return _detailed_body_id
+
+
 func visual_radius_m() -> float:
 	return _selected_visual_radius_m
 
@@ -101,6 +107,16 @@ func system_extent_m() -> float:
 
 func preview_body_count() -> int:
 	return _records.size()
+
+
+func selected_center_world() -> Vec3D:
+	var center: Vec3D = _world_positions.get(_selected_body_id) as Vec3D
+	return center.dup() if center != null else Vec3D.new()
+
+
+func body_world_position(body_id: String) -> Vec3D:
+	var center: Vec3D = _world_positions.get(body_id) as Vec3D
+	return center.dup() if center != null else Vec3D.new()
 
 
 func _build_shared_meshes() -> void:
@@ -136,19 +152,24 @@ func _rebuild_system_preview() -> void:
 		var absolute_world: Vec3D = _world_positions.get(body_id) as Vec3D
 		if absolute_world == null:
 			absolute_world = Vec3D.new()
-		var relative: Vec3D = absolute_world.sub(selected_world)
-		var body_visible: bool = body_id != _selected_body_id or _show_selected_body
-		var record: Dictionary = _create_body_record(body, relative, body_visible)
+		var offset_from_selected: Vec3D = absolute_world.sub(selected_world)
+		# The detailed terrain/ocean renderer already represents this body. Hide only
+		# its lightweight duplicate; selecting another body must not hide the detailed
+		# body itself or move its centre.
+		var body_visible: bool = body_id != _detailed_body_id
+		var record: Dictionary = _create_body_record(
+			body, absolute_world, offset_from_selected, body_visible)
 		_records[body_id] = record
 		var visual_radius: float = float(record.get("visual_radius_m", 1.0))
-		_system_extent_m = maxf(_system_extent_m, relative.length() + visual_radius)
+		_system_extent_m = maxf(_system_extent_m, absolute_world.length() + visual_radius)
 		if body_id == _selected_body_id:
 			_selected_visual_radius_m = visual_radius
 
 	_family_frame_radius_m = _compute_family_frame_radius()
 
 
-func _create_body_record(body: Resource, relative: Vec3D, body_visible: bool) -> Dictionary:
+func _create_body_record(body: Resource, world: Vec3D,
+		offset_from_selected: Vec3D, body_visible: bool) -> Dictionary:
 	body.call("ensure_children")
 	var body_id: String = String(body.get(&"body_id"))
 	var body_type: int = int(body.get(&"body_type"))
@@ -180,7 +201,8 @@ func _create_body_record(body: Resource, relative: Vec3D, body_visible: bool) ->
 	return {
 		"body": body,
 		"root": root,
-		"relative": relative,
+		"world": world,
+		"offset_from_selected": offset_from_selected,
 		"surface": surface,
 		"corona": corona,
 		"visual_radius_m": visual_radius,
@@ -342,14 +364,14 @@ func _compute_family_frame_radius() -> float:
 			continue
 		var record: Dictionary = _records[key] as Dictionary
 		var body: Resource = record.get("body") as Resource
-		var relative: Vec3D = record.get("relative") as Vec3D
-		if body == null or relative == null:
+		var offset: Vec3D = record.get("offset_from_selected") as Vec3D
+		if body == null or offset == null:
 			continue
 		var direct_family: bool = body_id == selected_parent_id \
 			or String(body.get(&"parent_body_id")) == _selected_body_id
 		if not direct_family:
 			continue
-		var distance: float = relative.length()
+		var distance: float = offset.length()
 		if distance > selected_radius * FAMILY_FRAME_DISTANCE_RATIO:
 			continue
 		var visual_radius: float = float(record.get("visual_radius_m", 1.0))
@@ -361,9 +383,9 @@ func _sync_floating_origin() -> void:
 	for key: Variant in _records:
 		var record: Dictionary = _records[key] as Dictionary
 		var root: Node3D = record.get("root") as Node3D
-		var relative: Vec3D = record.get("relative") as Vec3D
-		if root != null and relative != null:
-			root.position = Frames.to_render(relative)
+		var world: Vec3D = record.get("world") as Vec3D
+		if root != null and world != null:
+			root.position = Frames.to_render(world)
 
 
 func _sync_camera_clip() -> void:
@@ -373,9 +395,16 @@ func _sync_camera_clip() -> void:
 	var camera: Camera3D = viewport.get_camera_3d()
 	if camera == null:
 		return
-	var selected_center_render: Vector3 = Frames.to_render(Vec3D.new())
+	var selected_world: Vec3D = _world_positions.get(_selected_body_id) as Vec3D
+	if selected_world == null:
+		selected_world = Vec3D.new()
+	var selected_center_render: Vector3 = Frames.to_render(selected_world)
 	var center_distance: float = selected_center_render.distance_to(camera.global_position)
-	camera.far = maxf(camera.far, center_distance + _system_extent_m * 1.10)
+	# Never expand depth precision to the entire solar system. Only the selected
+	# body's direct family is part of this close 3D framing pass; remote planets and
+	# stars use their own future system-scale representation.
+	camera.far = maxf(camera.far,
+		center_distance + _family_frame_radius_m * 1.15)
 
 
 func _clear_records() -> void:
