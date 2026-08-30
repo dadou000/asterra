@@ -3,7 +3,7 @@
 
 This script intentionally depends only on Python's standard library. Godot launches
 it with the selected training Python interpreter, then polls the status JSON and log
-files while the bridge executes repo-owned build/test/Isaac commands.
+files while the bridge executes repo-owned build/test/Isaac/training commands.
 """
 
 from __future__ import annotations
@@ -148,11 +148,32 @@ class Bridge:
             command.append("--strict-contact")
         return command
 
+    def stand_training_command(self) -> list[str]:
+        script = self.exp / "training" / "train_foundation.py"
+        command = [
+            sys.executable,
+            str(script),
+            "--stage",
+            "stand",
+            "--num-envs",
+            str(self.args.num_envs),
+            "--max-iterations",
+            str(self.args.max_iterations),
+            "--seed",
+            str(self.args.seed),
+        ]
+        if self.args.headless:
+            command.append("--headless")
+        if self.args.device:
+            command.extend(["--device", self.args.device])
+        return command
+
     def build_steps(self) -> list[tuple[str, list[str]]]:
         scripts = self.exp / "training" / "scripts"
         build = [sys.executable, str(scripts / "build_articulation.py")]
         test_build = [sys.executable, str(scripts / "test_build_articulation.py")]
         test_helpers = [sys.executable, str(scripts / "test_articulation_helpers.py")]
+        test_foundation = [sys.executable, str(scripts / "test_foundation_policy.py")]
         check_stack = [sys.executable, str(self.exp / "training" / "check_training_stack.py")]
         convert = [sys.executable, str(scripts / "convert_training_asset.py")]
         if self.args.headless:
@@ -171,17 +192,21 @@ class Bridge:
             return [
                 ("articulation builder tests", test_build),
                 ("articulation helper tests", test_helpers),
+                ("foundation tensor tests", test_foundation),
             ]
         if task == "convert":
             return [("convert URDF to USD", convert)]
         if task == "smoke":
             return [(f"PhysX smoke {self.args.mode}", self.smoke_command(self.args.mode))]
+        if task == "train_stand":
+            return [("train foundation: stand", self.stand_training_command())]
         if task == "preflight":
             return [
                 ("check training stack", check_stack),
                 ("build articulation", build),
                 ("articulation builder tests", test_build),
                 ("articulation helper tests", test_helpers),
+                ("foundation tensor tests", test_foundation),
                 ("convert URDF to USD", convert),
                 ("PhysX smoke hold", self.smoke_command("hold")),
                 ("PhysX smoke passive", self.smoke_command("passive")),
@@ -224,7 +249,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Asterra Godot training-process bridge")
     parser.add_argument(
         "--task",
-        choices=("check_stack", "build", "tests", "convert", "smoke", "preflight"),
+        choices=("check_stack", "build", "tests", "convert", "smoke", "preflight", "train_stand"),
         required=True,
     )
     parser.add_argument("--status", type=Path, required=True)
@@ -233,6 +258,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mode", choices=("hold", "passive"), default="hold")
     parser.add_argument("--num-envs", type=int, default=256)
     parser.add_argument("--seconds", type=float, default=2.0)
+    parser.add_argument("--max-iterations", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=1467)
     parser.add_argument("--joint-noise-deg", type=float, default=0.0)
     parser.add_argument("--device", default="cuda:0")
@@ -244,6 +270,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--num-envs must be >= 1")
     if args.seconds <= 0.0:
         parser.error("--seconds must be > 0")
+    if args.max_iterations < 1:
+        parser.error("--max-iterations must be >= 1")
     if args.joint_noise_deg < 0.0:
         parser.error("--joint-noise-deg must be >= 0")
     return args
