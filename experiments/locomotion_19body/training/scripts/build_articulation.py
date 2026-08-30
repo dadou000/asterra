@@ -390,6 +390,15 @@ def add_virtual_link(robot, name: str, contract: dict):
     ET.SubElement(inertial, "mass", value=f"{mass:.10g}")
     ET.SubElement(inertial, "inertia", ixx=f"{inertia[0]:.12g}", ixy="0", ixz="0", iyy=f"{inertia[1]:.12g}", iyz="0", izz=f"{inertia[2]:.12g}")
 
+    # Isaac Sim 5.1's URDF importer authors instanceable /visuals references even
+    # for links that have no URDF visual. A microscopic transparent visual gives
+    # that reference a real target without adding collision or meaningful geometry.
+    visual = ET.SubElement(link, "visual", name=f"{name}_import_anchor")
+    geometry = ET.SubElement(visual, "geometry")
+    ET.SubElement(geometry, "sphere", radius="0.00001")
+    material = ET.SubElement(visual, "material", name="virtual_frame_invisible")
+    ET.SubElement(material, "color", rgba="0 0 0 0")
+
 
 def add_revolute_joint(robot, name, parent, child, xyz, rpy, axis, limits, actuator, index):
     joint = ET.SubElement(robot, "joint", name=name, type="revolute")
