@@ -26,6 +26,8 @@ FOOT_NAMES = ("left_foot", "right_foot")
 # impulses and can make the synthetic XYZ revolute chains converge poorly.
 PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S = 100.0
 TRAINING_JOINT_ARMATURE_KGM2 = 0.005
+PHYSX_SOLVER_POSITION_ITERATIONS = 16
+PHYSX_SOLVER_VELOCITY_ITERATIONS = 4
 
 
 def repo_root() -> Path:
@@ -299,11 +301,12 @@ def make_articulation_cfg(
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=False,
-                # The passive fall repeatedly hits anatomical hard stops. Keep the
-                # 240 Hz step and strengthen the constraint solve instead of
-                # widening anatomical limits.
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=8,
+                # TGS recently warns above four velocity iterations. The armature
+                # and high solver-speed ceiling now provide the conditioning, so
+                # keep 16 position iterations and stay at the supported 4-velocity
+                # regime unless a measured regression justifies changing it.
+                solver_position_iteration_count=PHYSX_SOLVER_POSITION_ITERATIONS,
+                solver_velocity_iteration_count=PHYSX_SOLVER_VELOCITY_ITERATIONS,
                 sleep_threshold=0.0,
                 stabilization_threshold=0.001,
             ),
@@ -427,6 +430,8 @@ def validate_live_articulation(
         "passive_actuators": passive,
         "physx_solver_velocity_limit_rad_s": PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S,
         "training_joint_armature_kgm2": TRAINING_JOINT_ARMATURE_KGM2,
+        "solver_position_iterations": PHYSX_SOLVER_POSITION_ITERATIONS,
+        "solver_velocity_iterations": PHYSX_SOLVER_VELOCITY_ITERATIONS,
         "device": str(device),
         "dtype": str(dtype),
     }
