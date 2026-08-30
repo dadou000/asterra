@@ -1,11 +1,9 @@
 extends Node
 ## Batched asynchronous GPU terrain query service.
 ##
-## The compute kernel remains the exact one-point pristine terrain evaluator, but
-## a pool of independent parameter/result buffers lets gameplay submit many points
-## in one frame (wheels, landing gear, foundations, ray probes, etc.). Mutable
-## terrain deltas are added from Deltas on read, so gameplay and visible edits use
-## the same persistent edit source without duplicating procedural synthesis on CPU.
+## Procedural bodies query the exact GPU terrain evaluator. Blank bodies have no
+## heightmap by definition, so this service short-circuits to the analytic sphere
+## and never creates a fake zero texture or dispatches the height compute kernel.
 
 const SHADER_PATH := "res://shaders/terrain_height_query.glsl"
 const PARAM_BYTES := 32
@@ -49,11 +47,16 @@ func _ready() -> void:
 	supported = method == "forward_plus" or method == "mobile"
 	if Planet.has_signal("world_ready"):
 		Planet.world_ready.connect(_on_world_ready)
-	if supported:
+	if supported and not _is_blank_backend():
 		call_deferred("_try_initialize")
 
 
 func _process(_dt: float) -> void:
+	if _is_blank_backend():
+		_pending.clear()
+		_samples.clear()
+		_bindings_ready = false
+		return
 	if not supported or failed:
 		return
 	if not ready_state:
@@ -81,11 +84,15 @@ func request_height(direction: Vector3) -> void:
 
 
 func request_batch(directions: Array[Vector3]) -> void:
+	if _is_blank_backend():
+		return
 	for d: Vector3 in directions:
 		_enqueue(d)
 
 
 func request_surface(direction: Vector3) -> void:
+	if _is_blank_backend():
+		return
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return
 	var d := direction.normalized()
@@ -97,11 +104,17 @@ func request_surface(direction: Vector3) -> void:
 
 
 func request_surfaces(directions: Array[Vector3]) -> void:
+	if _is_blank_backend():
+		return
 	for d: Vector3 in directions:
 		request_surface(d)
 
 
 func height_for_direction(direction: Vector3, fallback: float) -> float:
+	if Planet.cfg == null or direction.length_squared() <= 1e-12:
+		return fallback
+	if _is_blank_backend():
+		return 0.0
 	var pristine := pristine_height_for_direction(direction, NAN)
 	if is_nan(pristine):
 		return fallback
@@ -111,6 +124,8 @@ func height_for_direction(direction: Vector3, fallback: float) -> float:
 func pristine_height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return fallback
+	if _is_blank_backend():
+		return 0.0
 	var found := _find_sample(direction.normalized(), MAX_CACHE_DISTANCE_M, MAX_CACHE_AGE_S)
 	if found.is_empty():
 		return fallback
@@ -121,6 +136,8 @@ func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictio
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return {"height": fallback_height, "normal": direction.normalized(), "precise": false}
 	var d := direction.normalized()
+	if _is_blank_backend():
+		return {"height": 0.0, "normal": d, "precise": true, "analytic": true}
 	request_surface(d)
 	var basis := _tangent_basis(d)
 	var theta := NORMAL_SAMPLE_M / Planet.cfg.planet_radius
@@ -150,12 +167,16 @@ func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictio
 
 
 func has_fresh_height(direction: Vector3) -> bool:
-	if direction.length_squared() <= 1e-12:
+	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return false
+	if _is_blank_backend():
+		return true
 	return not _find_sample(direction.normalized(), MAX_CACHE_DISTANCE_M, MAX_CACHE_AGE_S).is_empty()
 
 
 func _enqueue(direction: Vector3) -> void:
+	if _is_blank_backend():
+		return
 	if direction.length_squared() <= 1e-12 or Planet.cfg == null:
 		return
 	var d := direction.normalized()
@@ -171,7 +192,7 @@ func _enqueue(direction: Vector3) -> void:
 
 
 func _find_sample(direction: Vector3, max_distance_m: float, max_age_s: float) -> Dictionary:
-	if Planet.cfg == null:
+	if Planet.cfg == null or _is_blank_backend():
 		return {}
 	var now := Time.get_ticks_msec() * 0.001
 	var best := {}
@@ -206,7 +227,13 @@ func _tangent_basis(d: Vector3) -> Array[Vector3]:
 	return [right, up]
 
 
+func _is_blank_backend() -> bool:
+	return bool(Planet.get("blank_mode"))
+
+
 func _try_initialize() -> void:
+	if _is_blank_backend():
+		return
 	if _init_requested or ready_state or failed or not supported:
 		return
 	var resource: Resource = load(SHADER_PATH)
@@ -269,6 +296,8 @@ func _on_initialized(success: bool, shader: RID, pipeline: RID, sampler: RID,
 
 
 func _ensure_bindings() -> bool:
+	if _is_blank_backend():
+		return false
 	if not ready_state or Planet.cfg == null or not Planet.ready_state:
 		return false
 	var context := get_node_or_null("/root/PlanetContext")
@@ -351,7 +380,7 @@ func _on_uniform_sets_built(success: bool, generation: int, macro_rid: RID, sets
 
 
 func _dispatch_pending() -> void:
-	if _pending.is_empty() or _slot_uniform_sets.size() != SLOT_COUNT:
+	if _is_blank_backend() or _pending.is_empty() or _slot_uniform_sets.size() != SLOT_COUNT:
 		return
 	var context := get_node_or_null("/root/PlanetContext")
 	if context == null:
@@ -405,7 +434,7 @@ func _accept_height(slot: int, token: int, direction: Vector3, height: float) ->
 		return
 	_slot_busy[slot] = 0
 	_slot_tokens[slot] = 0
-	if not is_finite(height):
+	if _is_blank_backend() or not is_finite(height):
 		return
 	_samples.append({"dir": direction.normalized(), "height": height,
 		"time": Time.get_ticks_msec() * 0.001})
@@ -425,4 +454,5 @@ func stats() -> Dictionary:
 		"bindings_ready": _bindings_ready, "in_flight": busy,
 		"pending": _pending.size(), "cached_samples": _samples.size(),
 		"query_slots": SLOT_COUNT, "cpu_procedural_detail": false,
+		"blank_analytic": _is_blank_backend(),
 		"async_readback": true, "batched": true}
