@@ -13,6 +13,7 @@ const SCRIPT_PATHS := [
 	"res://scripts/world_authoring/authored_water_runtime_query.gd",
 	"res://scripts/world_authoring/authored_water_runtime_spatial.gd",
 	"res://scripts/world_authoring/world_authoring_apply_planner.gd",
+	"res://scripts/world_authoring/world_authoring_editor_live_phase18.gd",
 	"res://scripts/world_authoring/world_authoring_runtime_host.gd",
 	"res://tools/terrain_region_compiler.gd",
 ]
@@ -76,6 +77,18 @@ func _validate_apply_planner() -> bool:
 	pair = _fresh_system_pair()
 	previous = pair[0]
 	next = pair[1]
+	profile = _active_profile(next)
+	profile.call("set_runtime_shader_uniform", "terrain_ground", "u_surface_bias", 0.125)
+	plan = APPLY_PLANNER.build(previous, next, WorldAuthoringSession.ApplyScope.HOT)
+	if not bool(plan.get("runtime_shader")) or not bool(plan.get("hot")) \
+			or bool(plan.get("full_rebuild")) or bool(plan.get("clipmap")) \
+			or bool(plan.get("biome")) or bool(plan.get("water_geometry")):
+		_fail("APPLY_PLANNER_FAILED: direct runtime shader override escaped HOT path")
+		return false
+
+	pair = _fresh_system_pair()
+	previous = pair[0]
+	next = pair[1]
 	var terrain: Resource = _active_terrain(next)
 	terrain.call("create_biome_layer", "CI Biome")
 	plan = APPLY_PLANNER.build(previous, next, WorldAuthoringSession.ApplyScope.TILES)
@@ -128,7 +141,7 @@ func _validate_apply_planner() -> bool:
 		_fail("APPLY_PLANNER_FAILED: frame-only edit requested PlanetBake")
 		return false
 
-	print("APPLY_PLANNER_OK: HOT/local/clipmap edits avoid PlanetBake; generator edits require it")
+	print("APPLY_PLANNER_OK: HOT/local/runtime-shader/clipmap edits avoid PlanetBake; generator edits require it")
 	return true
 
 
@@ -168,9 +181,23 @@ func _validate_hot_apply_execution() -> bool:
 		_fail("APPLY_EXECUTION_FAILED: HOT wave Apply invoked PlanetBake")
 		return false
 
+	pair = _fresh_system_pair()
+	previous = pair[0]
+	next = pair[1]
+	profile = _active_profile(next)
+	profile.call("set_runtime_shader_uniform", "atmosphere_sky", "u_mie_g", 0.61)
+	host.set("_runtime_applied_snapshot", previous)
+	host.set("_pending_apply_scope", WorldAuthoringSession.ApplyScope.HOT)
+	host.call("_on_runtime_apply_requested", next)
+	if fake_main.rebake_calls != 0:
+		host.free()
+		fake_main.free()
+		_fail("APPLY_EXECUTION_FAILED: runtime shader Apply invoked PlanetBake")
+		return false
+
 	host.free()
 	fake_main.free()
-	print("APPLY_EXECUTION_OK: HOT atmosphere/wave Apply performs zero PlanetBake calls")
+	print("APPLY_EXECUTION_OK: HOT atmosphere/wave/runtime-shader Apply performs zero PlanetBake calls")
 	return true
 
 
