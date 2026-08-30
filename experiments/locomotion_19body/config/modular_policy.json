@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "architecture": "asterra_modular_physics_policy_v1",
   "principle": "physics_capability_is_external_to_policy",
   "foundation": {
@@ -24,38 +24,12 @@
     "independently_trained_full_network_weight_interpolation": false
   },
   "regions": {
-    "core_balance": [
-      "pelvis_spine",
-      "spine_chest",
-      "chest_neck",
-      "neck_head"
-    ],
-    "left_leg": [
-      "left_hip",
-      "left_knee",
-      "left_ankle"
-    ],
-    "right_leg": [
-      "right_hip",
-      "right_knee",
-      "right_ankle"
-    ],
-    "left_arm": [
-      "chest_left_clavicle",
-      "left_shoulder",
-      "left_elbow",
-      "left_wrist"
-    ],
-    "right_arm": [
-      "chest_right_clavicle",
-      "right_shoulder",
-      "right_elbow",
-      "right_wrist"
-    ],
-    "head_neck": [
-      "chest_neck",
-      "neck_head"
-    ]
+    "core_balance": ["pelvis_spine", "spine_chest"],
+    "head_neck": ["chest_neck", "neck_head"],
+    "left_leg": ["left_hip", "left_knee", "left_ankle"],
+    "right_leg": ["right_hip", "right_knee", "right_ankle"],
+    "left_arm": ["chest_left_clavicle", "left_shoulder", "left_elbow", "left_wrist"],
+    "right_arm": ["chest_right_clavicle", "right_shoulder", "right_elbow", "right_wrist"]
   },
   "adapter_training": {
     "freeze_shared_encoder": true,
