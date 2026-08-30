@@ -6,6 +6,12 @@ extends "res://scripts/world_authoring/world_authoring_editor_live_phase22.gd"
 ## frame, while camera up/forward/WASD are computed around the currently selected
 ## body's absolute centre. Selecting a moon therefore never reinterprets Asterra's
 ## terrain/ocean/cloud coordinates as moon-local coordinates.
+##
+## This layer is also the final owner of Planet Studio's perspective clip range.
+## Celestial previews can span many orders of magnitude; allowing Camera3D.far to
+## grow monotonically while near remains 0.25 m eventually collapses the renderer's
+## frustum-plane intersections. Near/far are therefore recomputed every frame from
+## the current body-local camera distance and kept inside a bounded depth ratio.
 
 const INTEREST_MIN_RADIUS_M: float = 1.0
 const INTEREST_MIN_SPEED_M_S: float = 8.0
@@ -13,10 +19,30 @@ const INTEREST_MAX_SPEED_M_S: float = 90000.0
 const INTEREST_SPEED_ALTITUDE_SCALE: float = 0.55
 const INTEREST_SPRINT_MULTIPLIER: float = 6.0
 
+const CAMERA_NEAR_FLOOR_M: float = 0.25
+const CAMERA_FAR_FLOOR_M: float = 50000.0
+const CAMERA_FAR_HARD_LIMIT_M: float = 2.0e10
+const CAMERA_MAX_DEPTH_RATIO: float = 400000.0
+const CAMERA_DETAILED_FAR_LIMIT_M: float = 8.0e6
+const CAMERA_HORIZON_MARGIN_M: float = 20000.0
+const CAMERA_SURFACE_MODE_ALTITUDE_RATIO: float = 0.25
+const CAMERA_LIGHTWEIGHT_DISTANCE_SCALE: float = 1.60
+const CAMERA_LIGHTWEIGHT_RADIUS_SCALE: float = 1.35
+
 var _interest_enabled: bool = false
 var _interest_center_world: Vec3D = Vec3D.new()
 var _interest_radius_m: float = INTEREST_MIN_RADIUS_M
 var _interest_uses_detailed_surface: bool = true
+var _clip_sync_pending: bool = false
+
+
+func _ready() -> void:
+	super._ready()
+	# Celestial preview runs at the default priority and the runtime host at 200.
+	# Run after both so this script is the final writer of Camera3D near/far before
+	# the renderer constructs its culling frustum.
+	process_priority = 300
+	_schedule_interest_camera_clip()
 
 
 func set_camera_interest(center_world: Vec3D, radius_m: float,
@@ -32,6 +58,7 @@ func set_camera_interest(center_world: Vec3D, radius_m: float,
 		if _player.has_method("set_mouse_captured"):
 			_player.call("set_mouse_captured", false)
 	_sync_interest_camera_transform()
+	_schedule_interest_camera_clip()
 
 
 func camera_interest_center_world() -> Vec3D:
@@ -48,6 +75,9 @@ func _process(delta: float) -> void:
 		return
 	if _navigation_active:
 		_update_interest_navigation(delta)
+	# Authoritative every-frame projection write. In particular, this allows far to
+	# SHRINK again after returning from a system/family view to a surface view.
+	_sync_interest_camera_clip()
 
 
 func _set_navigation(enabled: bool) -> void:
@@ -167,6 +197,81 @@ func _sync_interest_camera_transform() -> void:
 	var true_up: Vector3 = camera_right.cross(look).normalized()
 	_camera.transform.basis = Basis(camera_right, true_up, -look)
 	_camera.position = Vector3.ZERO
+	_schedule_interest_camera_clip()
+
+
+func _schedule_interest_camera_clip() -> void:
+	if _clip_sync_pending or not is_inside_tree():
+		return
+	_clip_sync_pending = true
+	call_deferred("_flush_interest_camera_clip")
+
+
+func _flush_interest_camera_clip() -> void:
+	_clip_sync_pending = false
+	_sync_interest_camera_clip()
+
+
+func _sync_interest_camera_clip() -> void:
+	if not _interest_enabled or _player == null:
+		return
+	if _camera == null:
+		_camera = _player.get("camera") as Camera3D
+	if _camera == null:
+		return
+	var world_pos: Vec3D = _player.get("world_pos") as Vec3D
+	if world_pos == null:
+		return
+
+	var radial: Vec3D = world_pos.sub(_interest_center_world)
+	var center_distance_m: float = maxf(radial.length(), _interest_radius_m + 0.001)
+	var altitude_m: float = maxf(center_distance_m - _interest_radius_m, 0.0)
+	var horizon_sq: float = maxf(
+		center_distance_m * center_distance_m
+		- _interest_radius_m * _interest_radius_m,
+		0.0)
+	var horizon_m: float = sqrt(horizon_sq)
+	var desired_far_m: float
+
+	if _interest_uses_detailed_surface:
+		# Detailed terrain is horizon-limited; there is no reason to keep the back side
+		# of the planet or its whole celestial family inside this camera frustum.
+		desired_far_m = clampf(
+			horizon_m + CAMERA_HORIZON_MARGIN_M,
+			CAMERA_FAR_FLOOR_M,
+			CAMERA_DETAILED_FAR_LIMIT_M)
+	elif altitude_m <= _interest_radius_m * CAMERA_SURFACE_MODE_ALTITUDE_RATIO:
+		# When the user approaches a lightweight moon/planet, switch back to a local
+		# surface-style frustum so metre-scale authoring gizmos remain usable.
+		desired_far_m = maxf(
+			CAMERA_FAR_FLOOR_M,
+			horizon_m + CAMERA_HORIZON_MARGIN_M)
+	else:
+		# Family/system framing. The current centre distance already contains the
+		# framing scale selected by the host, so no global system extent is required.
+		desired_far_m = maxf(
+			CAMERA_FAR_FLOOR_M,
+			center_distance_m * CAMERA_LIGHTWEIGHT_DISTANCE_SCALE
+			+ _interest_radius_m * CAMERA_LIGHTWEIGHT_RADIUS_SCALE)
+
+	if not is_finite(desired_far_m):
+		desired_far_m = CAMERA_FAR_FLOOR_M
+	desired_far_m = clampf(desired_far_m,
+		CAMERA_FAR_FLOOR_M, CAMERA_FAR_HARD_LIMIT_M)
+
+	# Projection stability invariant. At system scale, preserving a 25 cm near plane
+	# is less useful than preserving a valid frustum. Raising near only occurs as the
+	# requested far range grows; local/surface views stay at 0.25 m.
+	var desired_near_m: float = maxf(
+		CAMERA_NEAR_FLOOR_M,
+		desired_far_m / CAMERA_MAX_DEPTH_RATIO)
+	if not is_finite(desired_near_m):
+		desired_near_m = CAMERA_NEAR_FLOOR_M
+	desired_near_m = minf(desired_near_m, desired_far_m * 0.10)
+	desired_far_m = maxf(desired_far_m, desired_near_m * 8.0)
+
+	_camera.near = desired_near_m
+	_camera.far = desired_far_m
 
 
 func _screen_aim(screen_position: Vector2) -> Dictionary:
