@@ -1,17 +1,19 @@
 extends "res://scripts/terrain/gpu_terrain_height_query.gd"
 ## Strict contact-grade accessors layered over the pooled terrain query.
 ##
-## Procedural terrain uses tight cached GPU samples. Blank terrain has no height
-## texture to query, so contact is the analytic body sphere at height 0.
+## Procedural terrain uses cached GPU generated-height samples. Blank terrain has
+## no generated height texture, but it may still have authoritative shader graph
+## displacement. The shared displacement bytecode is evaluated directly for blank
+## contact so visible mountains are physical mountains rather than a visual shell.
 
-# 15 cm is below the active terrain's 25 cm physical texel size and remains stable
-# with float32 unit directions on a ~1000 km-radius planet.
 const CONTACT_CACHE_DISTANCE_M := 0.15
 const CONTACT_CACHE_AGE_S := 0.45
 const CONTACT_DEDUPE_DISTANCE_M := 0.10
 const SAMPLE_PRUNE_INTERVAL_MS: int = 250
+const BLANK_NORMAL_SAMPLE_M: float = 1.5
 
 var _next_sample_prune_msec: int = 0
+var _blank_runtime: Node
 
 
 func _surface_distance_sq_m(a: Vector3, b: Vector3) -> float:
@@ -76,11 +78,62 @@ func request_contact_height(direction: Vector3) -> void:
 	_pending.push_front(d)
 
 
+func height_for_direction(direction: Vector3, fallback: float) -> float:
+	if _is_blank_backend():
+		if Planet.cfg == null or direction.length_squared() <= 1e-12:
+			return fallback
+		return _blank_shader_height(direction.normalized())
+	return super.height_for_direction(direction, fallback)
+
+
+func pristine_height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
+	if _is_blank_backend():
+		if Planet.cfg == null or direction.length_squared() <= 1e-12:
+			return fallback
+		# Blank has no generated/pristine heightmap. Its authored displacement is the
+		# complete height above the analytic radius and is authoritative by itself.
+		return _blank_shader_height(direction.normalized())
+	return super.pristine_height_for_direction(direction, fallback)
+
+
+func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictionary:
+	if not _is_blank_backend():
+		return super.surface_for_direction(direction, fallback_height)
+	if Planet.cfg == null or direction.length_squared() <= 1e-12:
+		return {"height": fallback_height, "normal": direction.normalized(), "precise": false}
+	var d: Vector3 = direction.normalized()
+	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
+	var basis: Array[Vector3] = _tangent_basis(d)
+	var theta: float = BLANK_NORMAL_SAMPLE_M / radius
+	var dx: Vector3 = (d + basis[0] * theta).normalized()
+	var dy: Vector3 = (d + basis[1] * theta).normalized()
+	var h0: float = _blank_shader_height(d)
+	var hx: float = _blank_shader_height(dx)
+	var hy: float = _blank_shader_height(dy)
+	var p0: Vector3 = d * (radius + h0)
+	var px: Vector3 = dx * (radius + hx)
+	var py: Vector3 = dy * (radius + hy)
+	var normal: Vector3 = (px - p0).cross(py - p0)
+	if normal.length_squared() <= 1e-10:
+		normal = d
+	else:
+		normal = normal.normalized()
+		if normal.dot(d) < 0.0:
+			normal = -normal
+	return {
+		"height": h0,
+		"normal": normal,
+		"precise": true,
+		"analytic_base": true,
+		"shader_displacement": true,
+	}
+
+
 func contact_height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return fallback
 	if _is_blank_backend():
-		return 0.0
+		return _blank_shader_height(direction.normalized())
 	var d: Vector3 = direction.normalized()
 	request_contact_height(d)
 	var found: Dictionary = _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S)
@@ -101,6 +154,14 @@ func has_contact_height(direction: Vector3) -> bool:
 
 func has_fresh_height(direction: Vector3) -> bool:
 	return has_contact_height(direction)
+
+
+func _blank_shader_height(direction: Vector3) -> float:
+	if _blank_runtime == null or not is_instance_valid(_blank_runtime):
+		_blank_runtime = get_tree().get_first_node_in_group(&"terrain_displacement_runtime")
+	if _blank_runtime == null or not _blank_runtime.has_method("evaluate_height"):
+		return 0.0
+	return float(_blank_runtime.call("evaluate_height", direction, 0.0, 0, -1, NAN))
 
 
 func _prune_samples() -> void:
