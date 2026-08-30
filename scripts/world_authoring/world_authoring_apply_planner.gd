@@ -134,6 +134,8 @@ static func build(previous_system: Resource, next_system: Resource,
 		plan["runtime_shader"] = (
 			not _equivalent(previous_profile.get(&"runtime_shader_paths"),
 				next_profile.get(&"runtime_shader_paths"))
+			or not _equivalent(previous_profile.get(&"runtime_shader_source_overrides"),
+				next_profile.get(&"runtime_shader_source_overrides"))
 			or not _equivalent(previous_profile.get(&"runtime_shader_overrides"),
 				next_profile.get(&"runtime_shader_overrides")))
 	else:
