@@ -62,6 +62,16 @@ class ArticulationContractTests(unittest.TestCase):
         self.assertEqual(names[-3:], ["right_ankle_x", "right_ankle_y", "right_ankle_z"])
         self.assertEqual([dof["action_index"] for dof in manifest["dofs"]], list(range(54)))
 
+    def test_knee_hard_limits_are_outer_coupled_envelope(self):
+        manifest = builder.build_manifest(self.contract, self.policy)
+        dofs = {dof["name"]: dof for dof in manifest["dofs"]}
+        for side in ("left", "right"):
+            self.assertEqual((dofs[f"{side}_knee_y"]["lower_deg"], dofs[f"{side}_knee_y"]["upper_deg"]), (-10.0, 10.0))
+            self.assertEqual((dofs[f"{side}_knee_z"]["lower_deg"], dofs[f"{side}_knee_z"]["upper_deg"]), (-4.0, 4.0))
+            joint = next(joint for joint in manifest["anatomical_joints"] if joint["name"] == f"{side}_knee")
+            self.assertEqual(joint["coupling"]["axial_abs_deg"], [1.5, 10])
+            self.assertEqual(joint["coupling"]["frontal_abs_deg"], [1.5, 4])
+
     def test_each_joint_has_one_policy_region(self):
         regions = {}
         for region, joints in self.policy["regions"].items():
