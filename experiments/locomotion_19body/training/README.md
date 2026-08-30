@@ -1,6 +1,6 @@
-# Repo-local Isaac Lab training bootstrap
+# Repo-local Asterra humanoid training
 
-This directory is the training side of the stripped 19-body experiment.
+This directory owns the training side of the stripped 19-body humanoid experiment.
 
 Pinned first reproducible stack:
 
@@ -9,121 +9,245 @@ Pinned first reproducible stack:
 - Isaac Sim 5.1
 - Isaac Lab 2.3.1
 - RSL-RL PPO
-- CUDA PyTorch 2.7 / cu128 on x86_64
+- CUDA PyTorch on x86_64
 
-The repo owns all Asterra task, policy, runner and export code. Isaac Lab is a dependency, not a second project containing our experiment.
+Isaac Lab is a dependency. The Asterra repository owns the body contract, observations, actions, rewards, runner, checkpoints and runtime export ABI.
 
-## Implemented now
+## Design rule
 
-### 1. Deterministic physical articulation build
+The neural controller is never allowed to bypass physics.
+
+```text
+intent / learned policy
+        ↓
+normalized 54-DOF action
+        ↓
+anatomical ROM + coupled-ROM clamp
+        ↓
+physical PD targets
+        ↓
+torque / velocity limits
+        ↓
+PhysX during training
+Jolt at runtime
+        ↓
+actual motion
+```
+
+A policy may learn a better way to use the body. It may not increase joint range, torque, velocity, friction, reach or mass properties in order to satisfy a desired pose.
+
+The neutral-PD baseline falling from about 0.94 m to about 0.44 m is therefore expected: a pose servo is not a balance controller. Stage 1 now trains the missing balance intelligence.
+
+## 1. Deterministic physical articulation build
 
 ```powershell
 python experiments/locomotion_19body/training/scripts/build_articulation.py
 python experiments/locomotion_19body/training/scripts/test_build_articulation.py
 ```
 
-`build_articulation.py` reads `config/physics_contract_19body.json` and `config/modular_policy.json`, validates the complete tree/action contract, and deterministically generates:
+`build_articulation.py` reads:
+
+- `config/physics_contract_19body.json`
+- `config/modular_policy.json`
+
+and deterministically generates:
 
 - `generated/articulation_manifest.json`
 - `assets/asterra_19body_training.urdf`
 
-Current Stage-0A mockup:
+Current Stage-0A representation:
 
 - 19 massive/colliding semantic bodies
 - 18 anatomical joints
 - 54 controlled rotational DOFs
 - 36 non-colliding near-massless coordinate-frame links
-- 72.0 kg physical mass (+ 0.0036 kg total virtual-frame mass)
-- explicit right-handed Asterra `+Y`-up -> training `+Z`-up conversion
+- 55 training links total
+- approximately 72 kg physical mass
+- Asterra `+Y` up / `-Z` forward converted to training `+Z` up / `+Y` forward
 
-Each anatomical joint is expanded as three co-located X/Y/Z revolute joints for the training asset. This is intentional: Isaac Lab's mature vectorized actuator path is revolute/prismatic, while runtime Jolt retains the true 19-body anatomical articulation.
+Each anatomical 3-axis joint is represented as three co-located X/Y/Z revolute joints for Isaac Lab. Runtime Jolt keeps the semantic 19-body articulation.
 
-The generated action order is explicit in `articulation_manifest.json`; never infer policy indices from PhysX traversal order.
+The action order in `articulation_manifest.json` is canonical. PhysX traversal order is never part of the policy ABI.
 
-The URDF is pelvis-centered. Asterra `+X,+Y,-Z` (right, up, forward) maps to training `+X,+Z,+Y`. Policy observations remain gravity-aligned, so this simulator-axis conversion does not leak into runtime policy semantics.
+## 2. Manifest-driven Isaac articulation
 
-Stage-0A actuator effort/velocity/gain values are deliberately marked **provisional**. They exist to prove the pipeline and must be calibrated before serious locomotion training.
+`training/asterra_rl/articulation.py`:
 
-### 2. Manifest-driven Isaac articulation config
+- validates the generated manifest without starting Isaac Sim;
+- derives the canonical 54-DOF order;
+- derives all expected PhysX body/link names;
+- computes neutral root spawn height from foot geometry;
+- creates Isaac Lab actuator groups from torque, velocity, Kp and Kd values in the manifest;
+- supports passive and driven modes;
+- builds a name-based canonical-to-PhysX index map;
+- validates live PhysX limits, gains and mass after `sim.reset()`.
 
-`training/asterra_rl/articulation.py` now:
+A different internal PhysX ordering is accepted and explicitly remapped.
 
-- loads and validates `articulation_manifest.json` without requiring Isaac Sim;
-- derives the exact canonical 54-DOF action order;
-- derives the 55 expected PhysX link names (19 real + 36 virtual);
-- computes neutral pelvis spawn height from foot geometry;
-- builds Isaac Lab `ArticulationCfg` actuator groups directly from manifest torque/velocity/Kp/Kd values;
-- supports a zero-drive passive mode without changing hard joint limits;
-- maps the canonical manifest action order onto whatever internal DOF order PhysX imports by joint name;
-- validates live PhysX body/joint name sets, limits, effort/velocity caps, gains and total mass after `sim.reset()`.
+## 3. PhysX smoke tests
 
-PhysX traversal order is explicitly **not** part of the policy ABI. Observation/action code must use the generated canonical-to-PhysX index map.
-
-Pure helper checks:
-
-```powershell
-python experiments/locomotion_19body/training/scripts/test_articulation_helpers.py
-```
-
-### 3. Vectorized GPU PhysX smoke simulation
-
-After USD conversion, the smoke harness can spawn many copies through `InteractiveScene`:
+After USD conversion:
 
 ```powershell
-# neutral PD hold diagnostics
+# neutral pose-servo diagnostic
 .\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/smoke_sim.py `
   --headless --num-envs 256 --mode hold --seconds 2
 
-# passive-fall / contact diagnostics
+# passive fall/contact diagnostic
 .\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/smoke_sim.py `
   --headless --num-envs 256 --mode passive --seconds 2 --strict-contact
 ```
 
-The smoke test is intentionally not an RL task. It fails on infrastructure errors such as:
+The smoke stage rejects infrastructure failures such as:
 
-- missing/extra PhysX joint names relative to the canonical 54-action manifest;
-- missing/extra physical or virtual links;
-- wrong hard limits, torque limits, velocity limits or PD gains;
+- missing or unexpected joints/links;
+- hard-limit, torque-limit, velocity-limit or gain mismatches;
 - mass mismatch;
-- NaN/Inf in joint, root, body or contact tensors;
-- excessive hard-limit penetration;
-- runaway root/joint velocities;
-- optionally, missing left/right foot contact.
+- NaN/Inf tensors;
+- catastrophic hard-limit penetration;
+- runaway velocities;
+- optionally missing foot contact.
 
-A different internal PhysX DOF order is accepted and mapped explicitly. Ordinary falling is **not** considered an infrastructure failure. `hold` and `passive` write diagnostic root heights, joint speeds, limit excursions, contact force and throughput to ignored JSON reports under `runs/smoke/`.
+Falling itself is valid physics and is not an infrastructure failure.
 
-### 4. In-game training console
+## 4. Permanent foundation-policy ABI
 
-The stripped Godot scene now includes `scripts/training_control_panel.gd`. The panel is visible by default and can be hidden/shown with **F3**.
+The stand controller already uses the observation/action layout intended for later walking. We do not want to train a throwaway stand-only network.
 
-It controls the currently implemented training pipeline directly from the running game:
+### Observation: 197 values
 
-- install/update `.venv-isaac` on Windows;
-- verify the Isaac/PyTorch/RSL-RL stack;
-- build the articulation manifest + URDF;
-- run both pure-Python contract suites;
-- convert the URDF to USD;
-- launch selected `hold` or `passive` PhysX smoke tests;
-- run the complete preflight sequence in one click;
-- configure device, environment count, duration, seed, initial joint noise, headless mode and strict contact checks;
-- cancel an active bridge/Isaac child cleanly;
-- view live UTF-8 process output and final smoke diagnostics without leaving Godot.
-
-The Godot process never blocks on Python/Isaac. `training/scripts/game_training_bridge.py` launches each step as a child process and writes status/log files under the ignored `runs/control/` directory. The game polls those files while Jolt continues running.
-
-`FULL PREFLIGHT` currently executes:
+`training/asterra_rl/observations.py` defines:
 
 ```text
-check training stack
--> build articulation
--> builder tests
--> articulation helper tests
--> convert URDF to USD
--> PhysX hold smoke
--> PhysX passive smoke (strict foot contact)
+root height                                      1
+root forward + up orientation                   6
+root linear velocity                            3
+root angular velocity                           3
+5 key body positions × 3                       15
+left/right foot contact load                    2
+locomotion/task command                         3
+phase sin/cos                                   2
+canonical joint position                       54
+canonical joint velocity                       54
+previous canonical action                      54
+                                              ---
+                                              197
 ```
 
-The training console uses the canonical repo files and does not duplicate the humanoid contract in UI code.
+The spatial portion is expressed in a gravity-aligned local frame. It does not assume global `+Z` or global `+Y` is the final planetary up direction.
+
+Stand supplies a zero movement command and a fixed phase. Walking will reuse the same tensor layout.
+
+### Action: 54 values
+
+`training/asterra_rl/actions.py` maps normalized `[-1, +1]` policy actions to joint-position targets.
+
+Before targets reach PhysX it applies the same anatomical coupling contract used by the ragdoll model:
+
+- shoulder elevation-dependent axial-twist reduction;
+- hip deep-flexion capsule tightening;
+- knee screw-home / flexion-dependent axial and frontal freedom;
+- ankle sagittal-dependent subtalar tightening.
+
+The action processor never changes the manifest torque or velocity capability.
+
+Fast tensor/ABI checks:
+
+```powershell
+.\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/test_foundation_policy.py
+```
+
+These checks are also part of `Run tests` and `FULL PREFLIGHT` in Godot.
+
+## 5. Stage 1 — learned standing and balance
+
+`training/asterra_rl/stand_env.py` is a vectorized Isaac Lab `DirectRLEnv`:
+
+- PhysX: 240 Hz
+- policy: 60 Hz (`decimation = 4`)
+- default parallel environments: 2048
+- episode length: 8 s
+- small joint/linear/angular perturbations on reset
+- actual foot contact sensing
+- actual whole-body center of mass
+- canonical observation/action ordering
+
+The reward is not simply “stay in the neutral pose”. It emphasizes physical balance:
+
+- root height near standing height;
+- pelvis/body uprightness;
+- whole-body COM near the support midpoint of the feet;
+- foot support/contact;
+- low unnecessary root and joint velocity;
+- low normalized torque;
+- smooth actions;
+- a weak neutral-pose preference only as a regularizer.
+
+This allows hips, knees, ankles, spine and arms to move when those movements improve balance.
+
+Episodes terminate on a clear fall/invalid state, not because the body deviates from the T-pose.
+
+### Train from the command line
+
+```powershell
+.\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/train_foundation.py `
+  --stage stand `
+  --headless `
+  --device cuda:0 `
+  --num-envs 2048 `
+  --max-iterations 1500
+```
+
+Training runs are written under:
+
+```text
+experiments/locomotion_19body/runs/training/stand/<timestamp>/
+```
+
+with RSL-RL checkpoints/TensorBoard data and an Asterra `run_manifest.json`.
+
+The first success criterion is **not animation quality**. Watch for:
+
+1. average episode duration increasing;
+2. fewer fall terminations and more timeouts;
+3. root height remaining near standing height;
+4. COM-support reward improving;
+5. policy avoiding large constant torque/action-rate penalties.
+
+Only once it can stand reliably do we add progressively stronger push recovery.
+
+## 6. In-game training console
+
+The stripped Godot scene includes `scripts/training_control_panel.gd`. Press **F3** to hide/show it.
+
+The panel controls:
+
+- setup/update `.venv-isaac` on Windows;
+- check the Isaac/PyTorch/RSL-RL stack;
+- build articulation;
+- run contract + foundation tensor tests;
+- convert URDF to USD;
+- run PhysX smoke diagnostics;
+- run the full preflight pipeline;
+- start the stand PPO run;
+- choose CUDA device, random seed, smoke environment count, training environment count and iteration count;
+- cancel the active process;
+- inspect live process output without leaving Godot.
+
+### Recommended in-game sequence
+
+```text
+FULL PREFLIGHT
+      ↓
+all checks PASS
+      ↓
+Training envs = 2048
+Iterations = 1500
+      ↓
+TRAIN STAND
+```
+
+Godot does not block while Isaac runs. `training/scripts/game_training_bridge.py` owns the child process and the game polls status/log files under `runs/control/`.
 
 ## Isaac setup
 
@@ -132,27 +256,31 @@ powershell -ExecutionPolicy Bypass -File experiments/locomotion_19body/training/
 .\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/check_training_stack.py
 ```
 
-Then build and convert the asset:
+Then build/convert if not using the in-game preflight:
 
 ```powershell
 .\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/build_articulation.py
 .\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/convert_training_asset.py --headless --force
 ```
 
-`convert_training_asset.py` uses Isaac Lab's URDF converter with fixed-joint merging disabled and leaves per-DOF joint-drive gains to the Asterra `ArticulationCfg`.
+## After stand
 
-### Isaac Lab 2.3.1 / Isaac Sim 5.1 URDF note
+Do not jump directly to motion imitation. The intended progression is:
 
-NVIDIA's official Isaac Lab 2.3.1 pip instructions use `isaaclab[isaacsim,all]==2.3.1`. Some Isaac Sim 5.1 pip combinations have also had a reported URDF-importer extension version mismatch. If AppLauncher fails during extension resolution, do not mutate the Asterra asset to work around it; treat it as an installation/toolchain issue and use a compatible NVIDIA package/source combination.
+```text
+stand
+  ↓
+push recovery / balance curriculum
+  ↓
+velocity-command locomotion
+  ↓
+CMU/reference-motion retargeting
+  ↓
+nuanced motion prior / imitation
+  ↓
+modular body-region skill adapters
+  ↓
+reach / grasp / phone / tools / vehicle controls
+```
 
-The pure-Python builder/tests do not depend on Isaac and can run regardless.
-
-## Next implementation gate
-
-Once both PhysX smoke modes pass on the training machine:
-
-1. `asterra_rl/observations.py` — freeze gravity-aligned proprioception and action-history tensor ordering.
-2. `asterra_rl/actions.py` — normalized target offsets -> physical PD target envelope with coupled-ROM clamping.
-3. `train_foundation.py --stage stand` — first actual RSL-RL PPO controller.
-
-Do not begin motion imitation until the passive PhysX articulation passes the same neutral-pose and fall sanity checks as the Jolt test.
+Throughout the sequence the physical body contract remains authoritative.
