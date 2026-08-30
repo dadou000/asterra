@@ -3,8 +3,12 @@ data/
 assets/*.usd
 assets/*.usda
 assets/*.usdc
+assets/*.urdf
+assets/usd/
+generated/articulation_manifest.json
 logs/
 checkpoints/
 artifacts/
+runs/
 __pycache__/
 *.pyc
