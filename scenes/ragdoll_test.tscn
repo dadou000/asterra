@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=3]
 
-[ext_resource type="Script" path="res://scripts/ragdoll_policy_parity.gd" id="1_ragdoll"]
+[ext_resource type="Script" path="res://scripts/ragdoll_training_topology_runtime.gd" id="1_ragdoll"]
 [ext_resource type="Script" path="res://scripts/ragdoll_character_overlay.gd" id="2_overlay"]
 [ext_resource type="Script" path="res://scripts/training_control_panel_guided.gd" id="3_training"]
 [ext_resource type="Script" path="res://scripts/ragdoll_policy_panel.gd" id="4_policy"]
