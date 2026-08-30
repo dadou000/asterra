@@ -64,6 +64,30 @@ class ArticulationHelperTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.helper.validate_manifest(broken)
 
+    def test_physx_reordering_is_mapped_not_rejected(self) -> None:
+        canonical = self.helper.expected_dof_names(self.manifest)
+
+        class FakeRobot:
+            joint_names = list(reversed(canonical))
+
+        mapping = self.helper.canonical_to_physx_joint_ids(FakeRobot(), self.manifest)
+        self.assertEqual(len(mapping), 54)
+        self.assertEqual(mapping[0], 53)
+        self.assertEqual(mapping[-1], 0)
+        self.assertEqual(
+            [FakeRobot.joint_names[index] for index in mapping],
+            canonical,
+        )
+
+    def test_physx_missing_joint_is_rejected(self) -> None:
+        canonical = self.helper.expected_dof_names(self.manifest)
+
+        class FakeRobot:
+            joint_names = canonical[:-1]
+
+        with self.assertRaises(RuntimeError):
+            self.helper.canonical_to_physx_joint_ids(FakeRobot(), self.manifest)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
