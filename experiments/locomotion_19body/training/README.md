@@ -92,6 +92,39 @@ The smoke test is intentionally not an RL task. It fails on infrastructure error
 
 A different internal PhysX DOF order is accepted and mapped explicitly. Ordinary falling is **not** considered an infrastructure failure. `hold` and `passive` write diagnostic root heights, joint speeds, limit excursions, contact force and throughput to ignored JSON reports under `runs/smoke/`.
 
+### 4. In-game training console
+
+The stripped Godot scene now includes `scripts/training_control_panel.gd`. The panel is visible by default and can be hidden/shown with **F3**.
+
+It controls the currently implemented training pipeline directly from the running game:
+
+- install/update `.venv-isaac` on Windows;
+- verify the Isaac/PyTorch/RSL-RL stack;
+- build the articulation manifest + URDF;
+- run both pure-Python contract suites;
+- convert the URDF to USD;
+- launch selected `hold` or `passive` PhysX smoke tests;
+- run the complete preflight sequence in one click;
+- configure device, environment count, duration, seed, initial joint noise, headless mode and strict contact checks;
+- cancel an active bridge/Isaac child cleanly;
+- view live UTF-8 process output and final smoke diagnostics without leaving Godot.
+
+The Godot process never blocks on Python/Isaac. `training/scripts/game_training_bridge.py` launches each step as a child process and writes status/log files under the ignored `runs/control/` directory. The game polls those files while Jolt continues running.
+
+`FULL PREFLIGHT` currently executes:
+
+```text
+check training stack
+-> build articulation
+-> builder tests
+-> articulation helper tests
+-> convert URDF to USD
+-> PhysX hold smoke
+-> PhysX passive smoke (strict foot contact)
+```
+
+The training console uses the canonical repo files and does not duplicate the humanoid contract in UI code.
+
 ## Isaac setup
 
 ```powershell
