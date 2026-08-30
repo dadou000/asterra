@@ -16,6 +16,7 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import traceback
 
 WINDOWS_TENSORDICT_VERSION = "0.11.0"
 RSL_RL_VERSION = "3.0.1"
@@ -194,6 +195,11 @@ def make_log_dir() -> Path:
     return path
 
 
+def _write_manifest(path: Path, data: dict, status: str) -> None:
+    data["status"] = status
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     torch.manual_seed(args_cli.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -224,54 +230,112 @@ def main() -> int:
         "runner": runner_cfg,
     }
     manifest_path = log_dir / "run_manifest.json"
-    manifest_path.write_text(json.dumps(run_manifest, indent=2) + "\n", encoding="utf-8")
+    _write_manifest(manifest_path, run_manifest, "starting")
 
-    print("Asterra foundation training")
-    print(f"  stage: {args_cli.stage}")
-    print(f"  envs: {args_cli.num_envs}")
-    print(f"  observation/action: {OBSERVATION_SIZE}/{DOF_COUNT}")
-    print("  physics/policy: 240/60 Hz")
-    print(f"  iterations: {args_cli.max_iterations}")
-    print(f"  log_dir: {log_dir}")
+    print("Asterra foundation training", flush=True)
+    print(f"  stage: {args_cli.stage}", flush=True)
+    print(f"  envs: {args_cli.num_envs}", flush=True)
+    print(f"  observation/action: {OBSERVATION_SIZE}/{DOF_COUNT}", flush=True)
+    print("  physics/policy: 240/60 Hz", flush=True)
+    print(f"  iterations: {args_cli.max_iterations}", flush=True)
+    print(f"  log_dir: {log_dir}", flush=True)
 
-    env = AsterraStandEnv(env_cfg)
-    wrapped = RslRlVecEnvWrapper(env, clip_actions=1.0)
-    runner = OnPolicyRunner(wrapped, runner_cfg, log_dir=str(log_dir), device=str(args_cli.device))
+    env = None
+    wrapped = None
     try:
-        runner.add_git_repo_to_log(__file__)
-    except Exception as exc:
-        print(f"[WARN] Could not add git metadata to RSL-RL log: {exc}")
+        print("[Asterra training] constructing DirectRLEnv...", flush=True)
+        env = AsterraStandEnv(env_cfg)
+        print("[Asterra training] DirectRLEnv constructed", flush=True)
 
-    if args_cli.resume is not None:
-        checkpoint = args_cli.resume.expanduser().resolve()
-        if not checkpoint.is_file():
-            raise FileNotFoundError(f"Resume checkpoint does not exist: {checkpoint}")
-        print(f"Resuming checkpoint: {checkpoint}")
-        runner.load(str(checkpoint))
+        print("[Asterra training] wrapping environment for RSL-RL (includes initial reset)...", flush=True)
+        wrapped = RslRlVecEnvWrapper(env, clip_actions=1.0)
+        print("[Asterra training] RSL-RL environment wrapper ready", flush=True)
 
-    run_manifest["status"] = "training"
-    manifest_path.write_text(json.dumps(run_manifest, indent=2) + "\n", encoding="utf-8")
-    try:
+        print("[Asterra training] constructing PPO runner...", flush=True)
+        runner = OnPolicyRunner(wrapped, runner_cfg, log_dir=str(log_dir), device=str(args_cli.device))
+        print("[Asterra training] PPO runner ready", flush=True)
+        try:
+            runner.add_git_repo_to_log(__file__)
+        except Exception as exc:
+            print(f"[WARN] Could not add git metadata to RSL-RL log: {exc}", flush=True)
+
+        if args_cli.resume is not None:
+            checkpoint = args_cli.resume.expanduser().resolve()
+            if not checkpoint.is_file():
+                raise FileNotFoundError(f"Resume checkpoint does not exist: {checkpoint}")
+            print(f"Resuming checkpoint: {checkpoint}", flush=True)
+            runner.load(str(checkpoint))
+
+        _write_manifest(manifest_path, run_manifest, "training")
+        print("[Asterra training] entering PPO learn loop", flush=True)
         runner.learn(
             num_learning_iterations=int(args_cli.max_iterations),
             init_at_random_ep_len=True,
         )
-    except BaseException:
-        run_manifest["status"] = "failed"
-        manifest_path.write_text(json.dumps(run_manifest, indent=2) + "\n", encoding="utf-8")
+        print("[Asterra training] PPO learn loop returned", flush=True)
+    except BaseException as exc:
+        run_manifest["failed_exception"] = f"{type(exc).__name__}: {exc}"
+        _write_manifest(manifest_path, run_manifest, "failed")
+        print(
+            f"[Asterra training] FAILED before completion: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        traceback.print_exc(file=sys.stderr)
         raise
     finally:
-        wrapped.close()
+        if wrapped is not None:
+            try:
+                wrapped.close()
+            except BaseException as exc:
+                print(f"[Asterra shutdown] environment close warning: {type(exc).__name__}: {exc}", flush=True)
+        elif env is not None:
+            try:
+                env.close()
+            except BaseException as exc:
+                print(f"[Asterra shutdown] environment close warning: {type(exc).__name__}: {exc}", flush=True)
 
-    run_manifest["status"] = "complete"
     run_manifest["completed_at"] = datetime.now().isoformat(timespec="seconds")
-    manifest_path.write_text(json.dumps(run_manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Asterra stand training complete: {log_dir}")
+    _write_manifest(manifest_path, run_manifest, "complete")
+    print(f"Asterra stand training complete: {log_dir}", flush=True)
     return 0
 
 
-if __name__ == "__main__":
+def _run_and_close() -> int:
+    """Run training while preserving Python errors before Kit teardown.
+
+    ``simulation_app.close()`` can emit/trigger shutdown behavior that obscures an
+    exception raised during DirectRLEnv construction. Always print the original
+    exception first, then close Kit, and preserve a non-zero process result.
+    """
+    exit_code = 0
     try:
-        raise SystemExit(main())
+        exit_code = int(main())
+    except BaseException as exc:
+        exit_code = 1
+        print(
+            f"[Asterra fatal] {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        # main() already prints a full traceback for training-stage failures. This
+        # second traceback covers failures before main() enters that guarded block.
+        if not isinstance(exc, SystemExit):
+            traceback.print_exc(file=sys.stderr)
     finally:
-        simulation_app.close()
+        print(f"[Asterra shutdown] closing Isaac application (preserved exit={exit_code})", flush=True)
+        try:
+            simulation_app.close()
+        except BaseException as exc:
+            print(
+                f"[Asterra shutdown] Isaac close raised {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            if exit_code == 0:
+                exit_code = 1
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_and_close())
