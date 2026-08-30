@@ -39,13 +39,24 @@ func _run() -> void:
 		quit(2)
 		return
 	var cfg: GenConfig = cfg_resource
-	Planet.configure(cfg)
+
+	# Resolve autoloads dynamically. Static `Planet.configure(...)` member lookup in
+	# this SceneTree tool participates in Planet's script dependency graph during
+	# parsing and can create a false compile-time cycle. Runtime Node.call() keeps the
+	# offline tool outside that graph while invoking the same production APIs.
+	var planet_node: Node = root.get_node_or_null("Planet")
+	var height_store: Node = root.get_node_or_null("GroundHeightStore")
+	if planet_node == null or height_store == null:
+		printerr("terrain compiler: Planet/GroundHeightStore autoloads are unavailable")
+		quit(2)
+		return
+	planet_node.call("configure", cfg)
 
 	var use_world_cache := not bool(_args.get("rebake_world", false))
 	print("terrain compiler: preparing world seed %d" % cfg.world_seed)
 	var bake := PlanetBake.new(cfg)
 	var fields := bake.bake(Callable(), use_world_cache)
-	Planet.adopt(fields)
+	planet_node.call("adopt", fields)
 
 	var lat_deg := float(_args.get("lat", 0.0))
 	var lon_deg := float(_args.get("lon", 0.0))
@@ -55,17 +66,18 @@ func _run() -> void:
 
 	print("terrain compiler: center %.5f°, %.5f°  radius %.0f m  levels %d..%d" % [
 		lat_deg, lon_deg, radius_m, finest_level, MAX_LEVEL])
-	_compile_region(center, radius_m, finest_level, cfg)
+	_compile_region(center, radius_m, finest_level, cfg, height_store)
 
-	var st := GroundHeightStore.stats()
+	var stats_value: Variant = height_store.call("stats")
+	var st: Dictionary = stats_value as Dictionary if stats_value is Dictionary else {}
 	print("terrain compiler: done  RAM=%d disk_hits=%d newly_baked=%d" % [
-		int(st["memory_tiles"]), int(st["disk_hits"]), int(st["tiles_built"])])
+		int(st.get("memory_tiles", 0)), int(st.get("disk_hits", 0)), int(st.get("tiles_built", 0))])
 	print("terrain compiler: output is under the project user://terrain_height_cache directory")
 	quit(0)
 
 
 func _compile_region(center: Vector3, radius_m: float, finest_level: int,
-		cfg: GenConfig) -> void:
+		cfg: GenConfig, height_store: Node) -> void:
 	var tangent := CubeSphere.tangent_basis(center)
 	var east: Vector3 = tangent[0]
 	var north: Vector3 = tangent[1]
@@ -103,7 +115,7 @@ func _compile_region(center: Vector3, radius_m: float, finest_level: int,
 				var dir_tangent: Vector3 = (east * plane.x + north * plane.y).normalized()
 				d = (center * cos(theta) + dir_tangent * sin(theta)).normalized()
 			# Blocking is intentional here: this is the offline compiler.
-			GroundHeightStore.sample_pristine(d, level)
+			height_store.call("sample_pristine", d, level)
 			var percent := int(floor(100.0 * float(i + 1) / maxf(float(probes.size()), 1.0)))
 			if percent >= last_percent + 10:
 				last_percent = percent
