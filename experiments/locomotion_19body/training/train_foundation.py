@@ -9,9 +9,86 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import importlib.metadata as metadata
 import json
+import os
 from pathlib import Path
+import platform
+import subprocess
 import sys
+
+WINDOWS_TENSORDICT_VERSION = "0.11.0"
+RSL_RL_VERSION = "3.0.1"
+
+
+def _distribution_version(name: str) -> str | None:
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def _ensure_windows_rl_import_compatibility() -> None:
+    """Repair the known TensorDict/Isaac Sim 5.1 Windows import crash.
+
+    RSL-RL 3.0.1 declares ``tensordict>=0.7`` without an upper bound. TensorDict
+    0.12.x can access-violate Python 3.11 while RSL-RL is imported after Isaac Sim
+    has started. We inspect package metadata before importing either package and pin
+    the known-good 0.11.0 wheel in-place. ``--no-deps`` keeps the already validated
+    Torch/Isaac installation untouched.
+    """
+    rsl_version = _distribution_version("rsl-rl-lib")
+    if rsl_version != RSL_RL_VERSION:
+        raise RuntimeError(
+            f"Asterra requires rsl-rl-lib=={RSL_RL_VERSION}; installed={rsl_version!r}. "
+            "Run Setup Isaac from the in-game training panel."
+        )
+
+    if platform.system() != "Windows":
+        return
+
+    installed = _distribution_version("tensordict")
+    if installed == WINDOWS_TENSORDICT_VERSION:
+        return
+
+    if os.environ.get("ASTERRA_SKIP_RL_AUTO_REPAIR", "") == "1":
+        raise RuntimeError(
+            f"Unsafe TensorDict version for Windows Isaac/RSL-RL: {installed!r}; "
+            f"required={WINDOWS_TENSORDICT_VERSION}. Auto-repair is disabled by "
+            "ASTERRA_SKIP_RL_AUTO_REPAIR=1."
+        )
+
+    print(
+        f"[Asterra startup] TensorDict {installed!r} is unsafe with Windows Isaac Sim 5.1/RSL-RL; "
+        f"repairing to {WINDOWS_TENSORDICT_VERSION} before Isaac starts...",
+        flush=True,
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--force-reinstall",
+        "--no-deps",
+        f"tensordict=={WINDOWS_TENSORDICT_VERSION}",
+    ]
+    result = subprocess.run(command, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"TensorDict compatibility repair failed with exit code {result.returncode}")
+
+    repaired = _distribution_version("tensordict")
+    if repaired != WINDOWS_TENSORDICT_VERSION:
+        raise RuntimeError(
+            f"TensorDict repair completed but metadata reports {repaired!r}; "
+            f"expected {WINDOWS_TENSORDICT_VERSION!r}"
+        )
+    print(f"[Asterra startup] TensorDict compatibility repair complete: {repaired}", flush=True)
+
+
+# This must run before AppLauncher. The problematic TensorDict module must never be
+# imported into the process before the compatible wheel is in place.
+_ensure_windows_rl_import_compatibility()
 
 from isaaclab.app import AppLauncher
 
@@ -36,12 +113,24 @@ if args_cli.num_steps_per_env < 4:
 if args_cli.save_interval < 1:
     parser.error("--save-interval must be >= 1")
 
+print(
+    "[Asterra startup] dependency metadata: "
+    f"rsl-rl-lib={_distribution_version('rsl-rl-lib')} "
+    f"tensordict={_distribution_version('tensordict')}",
+    flush=True,
+)
+print("[Asterra startup] launching Isaac application...", flush=True)
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+print("[Asterra startup] Isaac application launched", flush=True)
 
+print("[Asterra startup] importing torch...", flush=True)
 import torch  # noqa: E402
+print("[Asterra startup] importing RSL-RL runner...", flush=True)
 from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+print("[Asterra startup] importing Isaac Lab RSL-RL wrapper...", flush=True)
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
+print("[Asterra startup] RL imports complete", flush=True)
 
 TRAINING_DIR = Path(__file__).resolve().parent
 if str(TRAINING_DIR) not in sys.path:
