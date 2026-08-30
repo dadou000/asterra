@@ -78,6 +78,8 @@ ROBOT_CFG = make_articulation_cfg(
     passive=args_cli.mode == "passive",
 )
 
+MAX_HARD_LIMIT_VIOLATION_RAD = 0.20
+
 
 @configclass
 class AsterraSmokeSceneCfg(InteractiveSceneCfg):
@@ -157,6 +159,29 @@ def _contact_magnitudes(scene: InteractiveScene) -> tuple[torch.Tensor, torch.Te
     return left, right
 
 
+def _worst_limit_violation(robot, joint_pos: torch.Tensor) -> dict:
+    low = robot.data.joint_pos_limits[..., 0]
+    high = robot.data.joint_pos_limits[..., 1]
+    violation = torch.maximum(low - joint_pos, joint_pos - high).clamp_min(0.0)
+    flat_index = int(torch.argmax(violation).item())
+    joint_count = int(violation.shape[1])
+    env_index = flat_index // joint_count
+    joint_index = flat_index % joint_count
+    value = float(violation[env_index, joint_index].item())
+    position = float(joint_pos[env_index, joint_index].item())
+    lower = float(low[env_index, joint_index].item())
+    upper = float(high[env_index, joint_index].item())
+    return {
+        "violation_rad": value,
+        "env_index": env_index,
+        "joint_index": joint_index,
+        "joint_name": str(robot.joint_names[joint_index]),
+        "position_rad": position,
+        "lower_rad": lower,
+        "upper_rad": upper,
+    }
+
+
 def _write_report(report: dict) -> Path:
     path = args_cli.report
     if path is None:
@@ -176,6 +201,16 @@ def run_smoke(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> dict
     step_count = max(1, int(math.ceil(args_cli.seconds / dt)))
     max_joint_speed = 0.0
     max_limit_violation = 0.0
+    worst_limit = {
+        "violation_rad": 0.0,
+        "env_index": -1,
+        "joint_index": -1,
+        "joint_name": "",
+        "position_rad": 0.0,
+        "lower_rad": 0.0,
+        "upper_rad": 0.0,
+        "step": -1,
+    }
     max_root_speed = 0.0
     max_contact_force = 0.0
     any_foot_contact = False
@@ -202,10 +237,12 @@ def run_smoke(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> dict
         ):
             _assert_finite(label, tensor)
 
-        low = robot.data.joint_pos_limits[..., 0]
-        high = robot.data.joint_pos_limits[..., 1]
-        violation = torch.maximum(low - joint_pos, joint_pos - high).clamp_min(0.0)
-        max_limit_violation = max(max_limit_violation, float(violation.max().item()))
+        current_limit = _worst_limit_violation(robot, joint_pos)
+        if current_limit["violation_rad"] > max_limit_violation:
+            max_limit_violation = float(current_limit["violation_rad"])
+            worst_limit = dict(current_limit)
+            worst_limit["step"] = step_index
+
         max_joint_speed = max(max_joint_speed, float(joint_vel.abs().max().item()))
         root_speed = torch.linalg.vector_norm(root_state[:, 7:10], dim=-1)
         max_root_speed = max(max_root_speed, float(root_speed.max().item()))
@@ -223,10 +260,13 @@ def run_smoke(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> dict
         max_root_height = max(max_root_height, float(env_relative_root_z.max().item()))
 
         # Infrastructure smoke test: reject catastrophic divergence, not ordinary falling.
-        if max_limit_violation > 0.20:
+        if max_limit_violation > MAX_HARD_LIMIT_VIOLATION_RAD:
             raise RuntimeError(
-                f"Hard joint limit violation exceeded 0.20 rad at step {step_index}: "
-                f"{max_limit_violation:.6f}"
+                "Hard joint limit violation exceeded "
+                f"{MAX_HARD_LIMIT_VIOLATION_RAD:.2f} rad at step {worst_limit['step']}: "
+                f"{worst_limit['violation_rad']:.6f} rad on {worst_limit['joint_name']} "
+                f"(env {worst_limit['env_index']}, q={worst_limit['position_rad']:.6f}, "
+                f"range=[{worst_limit['lower_rad']:.6f}, {worst_limit['upper_rad']:.6f}])"
             )
         if max_root_speed > 50.0 or max_joint_speed > 80.0:
             raise RuntimeError(
@@ -261,6 +301,7 @@ def run_smoke(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> dict
         "diagnostics": {
             "max_joint_speed_rad_s": max_joint_speed,
             "max_joint_limit_violation_rad": max_limit_violation,
+            "worst_joint_limit": worst_limit,
             "max_root_linear_speed_m_s": max_root_speed,
             "max_foot_contact_force_n": max_contact_force,
             "any_foot_contact_over_1n": any_foot_contact,
@@ -297,10 +338,18 @@ def main() -> int:
     report = run_smoke(sim, scene)
     report_path = _write_report(report)
     diag = report["diagnostics"]
+    worst = diag["worst_joint_limit"]
     print("\nAsterra PhysX smoke PASS")
     print(f"  mode: {report['mode']}  envs: {report['num_envs']}  device: {report['device']}")
     print(f"  joints/bodies: {report['contract']['joint_count']}/{report['contract']['body_count']}")
     print(f"  max joint-limit violation: {diag['max_joint_limit_violation_rad']:.6f} rad")
+    if worst["joint_name"]:
+        print(
+            "  worst limit: "
+            f"{worst['joint_name']} env={worst['env_index']} step={worst['step']} "
+            f"q={worst['position_rad']:.5f} "
+            f"range=[{worst['lower_rad']:.5f},{worst['upper_rad']:.5f}]"
+        )
     print(f"  max foot contact: {diag['max_foot_contact_force_n']:.2f} N")
     print(f"  final root height mean: {diag['final_root_height_mean_m']:.3f} m")
     print(f"  throughput: {report['sim_steps_per_wall_second']:.0f} env-steps/s")
@@ -313,6 +362,8 @@ if __name__ == "__main__":
     try:
         exit_code = main()
     except Exception:
+        # Make failure semantics explicit even if this block is edited later.
+        exit_code = 1
         # Isaac can take a long time to tear down after a failed PhysX reset.
         # Emit the actionable failure before close() so it is never hidden.
         traceback.print_exc()
