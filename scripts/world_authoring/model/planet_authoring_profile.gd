@@ -2,10 +2,11 @@ class_name PlanetAuthoringProfile
 extends Resource
 ## Per-terrestrial-body authoring bundle.
 ##
-## `runtime_shader_paths` and `runtime_shader_overrides` are deliberately generic:
-## they describe the exact file-backed Shader resources and uniform overrides used
-## by Planet Studio's live renderer. They do not replace the higher-level terrain
-## node graphs; they are an advanced, direct runtime inspection/editing layer.
+## `runtime_shader_paths`, `runtime_shader_source_overrides` and
+## `runtime_shader_overrides` are deliberately generic: they describe the exact
+## Shader resources/source and uniform overrides used by Planet Studio's live
+## renderer. They do not replace the higher-level terrain node graphs; they are an
+## advanced, direct runtime inspection/editing layer.
 
 const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const WATER_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/water_authoring_profile.gd")
@@ -19,6 +20,11 @@ const ATMOSPHERE_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/
 # Stable target id -> res:// shader path. Only explicit user overrides are stored;
 # absent targets continue to use the production renderer's built-in shader.
 @export var runtime_shader_paths: Dictionary = {}
+# Stable target id -> complete Godot shading-language source. A source override is
+# compiled into a transient Shader at runtime and takes precedence over the path.
+# Keeping source in the authoring Resource makes live edits preset/Undo safe while
+# leaving the repository's production .gdshader files untouched.
+@export var runtime_shader_source_overrides: Dictionary = {}
 # Stable target id -> { uniform_name: Variant }. Overrides are re-applied after the
 # production renderer updates its dynamic uniforms, so an authored value is the
 # value actually seen by the GPU until it is cleared.
@@ -39,6 +45,8 @@ func ensure_children() -> void:
 		atmosphere = ATMOSPHERE_PROFILE_SCRIPT.new()
 	if not (runtime_shader_paths is Dictionary):
 		runtime_shader_paths = {}
+	if not (runtime_shader_source_overrides is Dictionary):
+		runtime_shader_source_overrides = {}
 	if not (runtime_shader_overrides is Dictionary):
 		runtime_shader_overrides = {}
 
@@ -53,6 +61,23 @@ func set_runtime_shader_path(target_id: String, path: String) -> void:
 		runtime_shader_paths.erase(target_id)
 	else:
 		runtime_shader_paths[target_id] = next_path
+
+func runtime_shader_source(target_id: String) -> String:
+	return String(runtime_shader_source_overrides.get(target_id, ""))
+
+func has_runtime_shader_source(target_id: String) -> bool:
+	return not runtime_shader_source(target_id).is_empty()
+
+func set_runtime_shader_source(target_id: String, source: String) -> void:
+	if target_id.is_empty():
+		return
+	if source.is_empty():
+		runtime_shader_source_overrides.erase(target_id)
+	else:
+		runtime_shader_source_overrides[target_id] = source
+
+func clear_runtime_shader_source(target_id: String) -> void:
+	runtime_shader_source_overrides.erase(target_id)
 
 func runtime_shader_uniform_overrides(target_id: String) -> Dictionary:
 	var value: Variant = runtime_shader_overrides.get(target_id, {})
@@ -77,4 +102,5 @@ func clear_runtime_shader_uniform(target_id: String, uniform_name: String) -> vo
 
 func clear_runtime_shader_target(target_id: String) -> void:
 	runtime_shader_paths.erase(target_id)
+	runtime_shader_source_overrides.erase(target_id)
 	runtime_shader_overrides.erase(target_id)
