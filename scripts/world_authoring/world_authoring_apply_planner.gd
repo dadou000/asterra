@@ -7,7 +7,7 @@ extends RefCounted
 ## mean atmosphere, waves, or metadata. The planner compares the last applied
 ## snapshot with the new snapshot and returns independent subsystem dirty flags.
 
-const RUNTIME_GENERATION_FIELDS := PackedStringArray([
+const RUNTIME_GENERATION_FIELDS: PackedStringArray = [
 	"detail_amplitude",
 	"detail_octaves",
 	"detail_base_frequency",
@@ -22,15 +22,15 @@ const RUNTIME_GENERATION_FIELDS := PackedStringArray([
 	"collision_grid",
 	"edit_cell_size",
 	"use_gpu_bake",
-])
+]
 
 # These are represented by body/profile fields at runtime and therefore should
 # not trigger a generator bake merely because the generation-profile copy differs.
-const REDUNDANT_GENERATION_FIELDS := PackedStringArray([
+const REDUNDANT_GENERATION_FIELDS: PackedStringArray = [
 	"planet_radius",
 	"axial_tilt_deg",
 	"atmosphere_height",
-])
+]
 
 static func build(previous_system: Resource, next_system: Resource,
 		fallback_scope: int = 0) -> Dictionary:
