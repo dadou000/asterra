@@ -3,7 +3,7 @@ extends "res://scripts/world_authoring/world_authoring_runtime_host_phase24.gd"
 ## persistent root-detail / multi-body preview ownership rules.
 
 const LIVE_SHADER_EDITOR_SCRIPT := preload(
-	"res://scripts/world_authoring/world_authoring_editor_live_phase25.gd")
+	"res://scripts/world_authoring/world_authoring_editor_live_phase26.gd")
 
 
 func _open_live_editor(player: Node) -> void:
