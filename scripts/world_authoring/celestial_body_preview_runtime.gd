@@ -30,6 +30,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if visible:
 		_sync_floating_origin()
+		_sync_camera_clip()
 
 
 func show_body(body: Resource) -> void:
@@ -41,6 +42,7 @@ func show_body(body: Resource) -> void:
 	_configure_from_body(_body)
 	visible = true
 	_sync_floating_origin()
+	_sync_camera_clip()
 
 
 func hide_preview() -> void:
@@ -158,6 +160,21 @@ func _sync_floating_origin() -> void:
 	# Preview bodies are body-centred just like the current production planet. The
 	# mesh follows the local floating-origin frame while canonical position remains 0.
 	position = Frames.to_render(Vec3D.new())
+
+
+func _sync_camera_clip() -> void:
+	var viewport: Viewport = get_viewport()
+	if viewport == null:
+		return
+	var camera: Camera3D = viewport.get_camera_3d()
+	if camera == null:
+		return
+	# AsterraPlayer recomputes its normal terrestrial far plane on every movement
+	# and RMB look. Reassert the preview requirement afterwards so a solar-sized
+	# staged star cannot disappear as soon as the author starts navigating.
+	var center_distance: float = global_position.distance_to(camera.global_position)
+	var required_far: float = center_distance + _visual_radius_m * 4.0
+	camera.far = maxf(camera.far, required_far)
 
 
 static func frame_distance_for_radius(radius_m: float, vertical_fov_deg: float,
