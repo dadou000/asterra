@@ -6,6 +6,7 @@ extends Node
 
 const APPLY_PLANNER := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
 const RUNTIME_HOST := preload("res://scripts/world_authoring/world_authoring_runtime_host.gd")
+const CELESTIAL_PREVIEW := preload("res://scripts/world_authoring/celestial_body_preview_runtime.gd")
 const GENERATION_PROFILE := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 const TERRAIN_PROFILE := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
@@ -17,11 +18,13 @@ const SCRIPT_PATHS := [
 	"res://scripts/terrain/spherical_geometry_clipmap_blankaware.gd",
 	"res://scripts/world_authoring/authored_water_runtime_query.gd",
 	"res://scripts/world_authoring/authored_water_runtime_spatial.gd",
+	"res://scripts/world_authoring/celestial_body_preview_runtime.gd",
 	"res://scripts/world_authoring/model/star_authoring_profile.gd",
 	"res://scripts/world_authoring/terrain_displacement_runtime.gd",
 	"res://scripts/world_authoring/world_authoring_apply_planner.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase18.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase20.gd",
+	"res://scripts/world_authoring/world_authoring_editor_live_phase22.gd",
 	"res://scripts/world_authoring/world_authoring_runtime_host.gd",
 	"res://tools/terrain_region_compiler.gd",
 ]
@@ -53,6 +56,8 @@ func _ready() -> void:
 	if not _validate_blank_and_star_authoring():
 		return
 	if not _validate_blank_shader_displacement():
+		return
+	if not _validate_celestial_multi_preview():
 		return
 	if not _validate_hot_apply_execution():
 		return
@@ -262,6 +267,54 @@ func _validate_blank_shader_displacement() -> bool:
 		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: expected 75 m shader terrain, got %.6f m" % height_m)
 		return false
 	print("BLANK_SHADER_DISPLACEMENT_OK: generated height off; shared bytecode produces 75.0 m physical shader terrain")
+	return true
+
+
+func _validate_celestial_multi_preview() -> bool:
+	var session := WorldAuthoringSession.new()
+	session.bootstrap_from_generation_profile(GENERATION_PROFILE.new())
+	var parent: Resource = session.active_body()
+	if parent == null:
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: bootstrap has no parent planet")
+		return false
+	var parent_id: String = String(parent.get(&"body_id"))
+	var moon: Resource = session.create_body("CI Moon", BODY_SCRIPT.BodyType.MOON, parent_id)
+	if moon == null:
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: moon creation failed")
+		return false
+	var orbit: Resource = moon.get(&"orbit") as Resource
+	var minimum_separation: float = float(parent.get(&"radius_m")) + float(moon.get(&"radius_m"))
+	if orbit == null or float(orbit.get(&"semi_major_axis_m")) <= minimum_separation:
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: child body retained zero/overlapping default orbit")
+		return false
+
+	var preview: Node3D = CELESTIAL_PREVIEW.new() as Node3D
+	if preview == null:
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: preview runtime did not instantiate")
+		return false
+	add_child(preview)
+	preview.call("show_system", session.staged_system, parent_id, false)
+	if int(preview.call("preview_body_count")) != 2:
+		preview.free()
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: parent selection did not retain both bodies")
+		return false
+	if float(preview.call("family_frame_radius_m")) <= float(parent.get(&"radius_m")):
+		preview.free()
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: parent focus ignored moon orbital extent")
+		return false
+
+	var moon_id: String = String(moon.get(&"body_id"))
+	preview.call("show_system", session.staged_system, moon_id, true)
+	if int(preview.call("preview_body_count")) != 2:
+		preview.free()
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: moon selection discarded its parent planet")
+		return false
+	if float(preview.call("family_frame_radius_m")) <= float(moon.get(&"radius_m")):
+		preview.free()
+		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: moon focus ignored parent orbital extent")
+		return false
+	preview.free()
+	print("CELESTIAL_MULTI_PREVIEW_OK: parent + moon coexist; non-zero orbit and family framing validated")
 	return true
 
 
