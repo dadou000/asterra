@@ -57,7 +57,11 @@ class AsterraStandEnvCfg(DirectRLEnvCfg):
         num_envs=2048,
         env_spacing=2.5,
         replicate_physics=True,
-        clone_in_fabric=True,
+        # Keep Stage-1 initialization on the same cloning path that passed the
+        # 256-env hold/passive smoke tests. Fabric cloning is an optimization,
+        # not part of the policy/physics contract, and can be re-enabled only
+        # after the first DirectRLEnv/RSL-RL training gate is proven stable.
+        clone_in_fabric=False,
     )
     robot = make_articulation_cfg(
         _USD_PATH,
@@ -87,7 +91,9 @@ class AsterraStandEnv(DirectRLEnv):
     cfg: AsterraStandEnvCfg
 
     def __init__(self, cfg: AsterraStandEnvCfg, render_mode: str | None = None, **kwargs):
+        print("[Asterra env] entering DirectRLEnv initialization", flush=True)
         super().__init__(cfg, render_mode, **kwargs)
+        print("[Asterra env] DirectRLEnv initialization complete", flush=True)
 
         self.manifest = _MANIFEST
         self.target_root_height = standing_root_height_m(self.manifest)
@@ -131,10 +137,12 @@ class AsterraStandEnv(DirectRLEnv):
         print(
             "Asterra stand env ready: "
             f"{self.num_envs} envs, obs={OBSERVATION_SIZE}, action={DOF_COUNT}, "
-            f"policy={1.0 / self.step_dt:.1f} Hz, physics={1.0 / self.cfg.sim.dt:.1f} Hz"
+            f"policy={1.0 / self.step_dt:.1f} Hz, physics={1.0 / self.cfg.sim.dt:.1f} Hz",
+            flush=True,
         )
 
     def _setup_scene(self) -> None:
+        print("[Asterra env] setting up robot/contact scene", flush=True)
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.feet_contact)
@@ -155,6 +163,7 @@ class AsterraStandEnv(DirectRLEnv):
             self.scene.filter_collisions(global_prim_paths=["/World/ground"])
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.78, 0.84))
         light_cfg.func("/World/Light", light_cfg)
+        print("[Asterra env] scene setup complete", flush=True)
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self._previous_actions.copy_(self._actions)
