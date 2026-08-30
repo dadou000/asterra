@@ -239,9 +239,12 @@ void vertex() {
 	vec2 offset_m = cell * spacing;
 	float raw_theta = length(offset_m) / max(u_planet_radius, 1.0);
 	vec3 d = direction_for_offset(offset_m);
-	vec2 h = clip_height(d, cell, level);
+	// Blank terrain owns no height texture. Do not even enter the sparse/orbit
+	// sampling path when generated height is disabled; the analytic sphere is a
+	// valid surface by itself and shader-authored displacement can build from it.
+	vec2 h = u_height_enabled > 0.5 ? clip_height(d, cell, level) : vec2(0.0, 1.0);
 	float sink = coarse_sink_weight(cell, level) * max(spacing * u_sink_scale, 0.5);
-	float height = (u_height_enabled > 0.5 ? h.x : 0.0) - sink;
+	float height = h.x - sink;
 	vec3 p = d * (u_planet_radius + height + u_surface_bias);
 
 	v_planet = p;
