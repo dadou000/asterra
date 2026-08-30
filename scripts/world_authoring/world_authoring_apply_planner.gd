@@ -32,6 +32,15 @@ const REDUNDANT_GENERATION_FIELDS: PackedStringArray = [
 	"atmosphere_height",
 ]
 
+const WATER_HOT_FIELDS: PackedStringArray = [
+	"wave_amplitude_scale",
+	"wave_frequency_scale",
+	"wind_response",
+	"foam_strength",
+	"absorption_scale",
+	"scattering_scale",
+]
+
 static func build(previous_system: Resource, next_system: Resource,
 		fallback_scope: int = 0) -> Dictionary:
 	var plan := _empty_plan()
@@ -98,7 +107,7 @@ static func build(previous_system: Resource, next_system: Resource,
 
 	var previous_water: Resource = previous_profile.get(&"water") as Resource
 	var next_water: Resource = next_profile.get(&"water") as Resource
-	plan["water"] = not _equivalent(previous_water, next_water)
+	_classify_water(previous_water, next_water, plan)
 
 	var previous_atmosphere: Resource = previous_profile.get(&"atmosphere") as Resource
 	var next_atmosphere: Resource = next_profile.get(&"atmosphere") as Resource
@@ -107,7 +116,8 @@ static func build(previous_system: Resource, next_system: Resource,
 	# Body metadata, gravity and orbital authoring do not require terrain data to
 	# be regenerated. They are still an Apply, but the terrain pipeline does zero
 	# work unless one of the explicit flags above is set.
-	plan["hot"] = bool(plan["frames"]) or bool(plan["water"]) or bool(plan["atmosphere"])
+	plan["hot"] = bool(plan["frames"]) or bool(plan["water_material"]) \
+		or bool(plan["atmosphere"])
 
 	if bool(plan["full_rebuild"]):
 		return plan
@@ -147,6 +157,32 @@ static func _classify_generation(previous: Resource, next: Resource,
 			plan["full_rebuild"] = true
 			plan["reason"] = "generator field changed: %s" % property_name
 
+static func _classify_water(previous: Resource, next: Resource,
+		plan: Dictionary) -> void:
+	if previous == null or next == null:
+		if previous != next:
+			plan["water_geometry"] = true
+			plan["ocean"] = true
+			plan["water_material"] = true
+			plan["water"] = true
+		return
+	plan["water_geometry"] = not _equivalent(
+		previous.get(&"authored_features"), next.get(&"authored_features"))
+	plan["ocean"] = (
+		bool(previous.get(&"ocean_enabled")) != bool(next.get(&"ocean_enabled"))
+		or not is_equal_approx(float(previous.get(&"sea_level_m")),
+			float(next.get(&"sea_level_m"))))
+	var hot_changed := false
+	for field_name: String in WATER_HOT_FIELDS:
+		if not _equivalent(previous.get(field_name), next.get(field_name)):
+			hot_changed = true
+			break
+	plan["water_material"] = hot_changed
+	if not _equivalent(previous.get(&"material_slots"), next.get(&"material_slots")):
+		plan["graph"] = true
+	plan["water"] = bool(plan["water_geometry"]) or bool(plan["ocean"]) \
+		or bool(plan["water_material"])
+
 static func _empty_plan() -> Dictionary:
 	return {
 		"full_rebuild": false,
@@ -154,6 +190,9 @@ static func _empty_plan() -> Dictionary:
 		"tiles": false,
 		"biome": false,
 		"water": false,
+		"water_geometry": false,
+		"water_material": false,
+		"ocean": false,
 		"atmosphere": false,
 		"graph": false,
 		"sculpt": false,
@@ -165,7 +204,8 @@ static func _empty_plan() -> Dictionary:
 
 static func _has_runtime_work(plan: Dictionary) -> bool:
 	for key: String in ["full_rebuild", "clipmap", "tiles", "biome", "water",
-			"atmosphere", "graph", "sculpt", "frames", "hot"]:
+			"water_geometry", "water_material", "ocean", "atmosphere", "graph",
+			"sculpt", "frames", "hot"]:
 		if bool(plan.get(key, false)):
 			return true
 	return false
