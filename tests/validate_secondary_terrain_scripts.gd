@@ -7,13 +7,18 @@ extends Node
 const APPLY_PLANNER := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
 const RUNTIME_HOST := preload("res://scripts/world_authoring/world_authoring_runtime_host.gd")
 const GENERATION_PROFILE := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
+const TERRAIN_PROFILE := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
+const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
 
 const SCRIPT_PATHS := [
 	"res://scripts/terrain/planet_height_store_procedural.gd",
+	"res://scripts/terrain/spherical_geometry_clipmap_blankaware.gd",
 	"res://scripts/world_authoring/authored_water_runtime_query.gd",
 	"res://scripts/world_authoring/authored_water_runtime_spatial.gd",
+	"res://scripts/world_authoring/model/star_authoring_profile.gd",
 	"res://scripts/world_authoring/world_authoring_apply_planner.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase18.gd",
+	"res://scripts/world_authoring/world_authoring_editor_live_phase20.gd",
 	"res://scripts/world_authoring/world_authoring_runtime_host.gd",
 	"res://tools/terrain_region_compiler.gd",
 ]
@@ -41,6 +46,8 @@ func _ready() -> void:
 		print("SECONDARY_TERRAIN_SCRIPT_LOAD_OK: %s" % script_path)
 
 	if not _validate_apply_planner():
+		return
+	if not _validate_blank_and_star_authoring():
 		return
 	if not _validate_hot_apply_execution():
 		return
@@ -142,6 +149,60 @@ func _validate_apply_planner() -> bool:
 		return false
 
 	print("APPLY_PLANNER_OK: HOT/local/runtime-shader/clipmap edits avoid PlanetBake; generator edits require it")
+	return true
+
+
+func _validate_blank_and_star_authoring() -> bool:
+	# Switching to Blank while simultaneously changing a dormant macro generator
+	# field must still avoid PlanetBake. Blank has no generated height/material map.
+	var pair: Array = _fresh_system_pair()
+	var previous: Resource = pair[0]
+	var next: Resource = pair[1]
+	var terrain: Resource = _active_terrain(next)
+	terrain.set(&"generation_mode", TERRAIN_PROFILE.GenerationMode.BLANK)
+	var generation: Resource = terrain.get(&"generation_profile") as Resource
+	generation.set(&"ocean_fraction", 0.21)
+	var plan: Dictionary = APPLY_PLANNER.build(previous, next,
+		WorldAuthoringSession.ApplyScope.FULL_REBUILD)
+	if not bool(plan.get("blank_terrain")) or not bool(plan.get("terrain_backend")) \
+			or not bool(plan.get("clipmap")) or bool(plan.get("full_rebuild")) \
+			or bool(plan.get("sculpt")):
+		_fail("BLANK_TERRAIN_MODE_FAILED: Blank requested generator/sculpt heightfield work")
+		return false
+
+	# Once already Blank, custom biome paint remains a local authored categorical
+	# edit and still cannot escape to generated biome/material work.
+	var blank_previous: Resource = next.duplicate(true)
+	var blank_next: Resource = next.duplicate(true)
+	var blank_terrain: Resource = _active_terrain(blank_next)
+	blank_terrain.call("create_biome_layer", "Blank Custom Biome")
+	plan = APPLY_PLANNER.build(blank_previous, blank_next,
+		WorldAuthoringSession.ApplyScope.TILES)
+	if not bool(plan.get("blank_terrain")) or not bool(plan.get("biome")) \
+			or bool(plan.get("full_rebuild")) or bool(plan.get("sculpt")):
+		_fail("BLANK_TERRAIN_MODE_FAILED: custom biome paint did not remain local")
+		return false
+	print("BLANK_TERRAIN_MODE_OK: no generated heightmap/bake contract; custom biome paint remains local")
+
+	var session := WorldAuthoringSession.new()
+	session.bootstrap_from_generation_profile(GENERATION_PROFILE.new())
+	var star: Resource = session.create_body("CI Helion", BODY_SCRIPT.BodyType.STAR)
+	if star == null or session.active_star_profile() == null:
+		_fail("STAR_AUTHORING_FAILED: new star has no star profile")
+		return false
+	var star_profile: Resource = session.active_star_profile()
+	star_profile.set(&"effective_temperature_k", 9100.0)
+	star_profile.set(&"flare_activity", 2.5)
+	plan = APPLY_PLANNER.build(session.applied_system, session.staged_system,
+		WorldAuthoringSession.ApplyScope.FULL_REBUILD)
+	if not bool(plan.get("star")) or not bool(plan.get("hot")) \
+			or bool(plan.get("full_rebuild")):
+		_fail("STAR_AUTHORING_FAILED: stellar edit requested terrestrial PlanetBake")
+		return false
+	if not is_equal_approx(float(star_profile.get(&"effective_temperature_k")), 9100.0):
+		_fail("STAR_AUTHORING_FAILED: stellar profile did not retain custom parameters")
+		return false
+	print("STAR_AUTHORING_OK: first-class customizable star profile avoids terrestrial PlanetBake")
 	return true
 
 
