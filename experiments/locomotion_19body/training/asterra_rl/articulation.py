@@ -19,6 +19,14 @@ EXPECTED_LINKS = 55
 EXPECTED_DOFS = 54
 FOOT_NAMES = ("left_foot", "right_foot")
 
+# These are solver-conditioning parameters, not humanoid capability limits.
+# The physical/voluntary angular-speed values remain in the manifest and are used
+# by observations/rewards/policy logic. PhysX must be able to exceed them during
+# impacts; otherwise its hard speed constraint fights contact and joint-limit
+# impulses and can make the synthetic XYZ revolute chains converge poorly.
+PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S = 100.0
+TRAINING_JOINT_ARMATURE_KGM2 = 0.005
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
@@ -217,6 +225,17 @@ def _dofs_by_region(manifest: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
     return groups
 
 
+def physx_solver_velocity_limits(manifest: dict[str, Any]) -> dict[str, float]:
+    """Return the numerical PhysX speed ceiling for every canonical DOF.
+
+    The manifest's ``velocity_limit_rad_s`` is a humanoid capability/normalization
+    value. It must not be reused as a hard solver limit because collision impulses
+    can legitimately drive a passive joint faster than voluntary motion.
+    """
+    validate_manifest(manifest)
+    return {str(dof["name"]): PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S for dof in manifest["dofs"]}
+
+
 def make_articulation_cfg(
     usd_path: Path | str,
     manifest: dict[str, Any],
@@ -228,8 +247,11 @@ def make_articulation_cfg(
     """Build an Isaac Lab 2.3.1 ``ArticulationCfg`` from the manifest.
 
     The manifest is the source of joint order/gains/limits. The USD contains hard
-    geometric/joint limits; the actuator config reasserts torque, velocity and PD
-    capability. ``passive=True`` zeroes joint drives without changing hard limits.
+    geometric/joint limits; the actuator config reasserts torque and PD capability.
+    The manifest's voluntary speed capability is intentionally *not* installed as
+    ``velocity_limit_sim``. PhysX gets a high numerical ceiling plus small armature
+    so contact/joint-limit impulses can converge without changing anatomical ROM.
+    ``passive=True`` zeroes joint drives without changing hard limits.
     """
     validate_manifest(manifest)
     usd = Path(usd_path).expanduser().resolve()
@@ -240,11 +262,12 @@ def make_articulation_cfg(
     from isaaclab.actuators import ImplicitActuatorCfg
     from isaaclab.assets import ArticulationCfg
 
+    solver_velocity = physx_solver_velocity_limits(manifest)
     actuators: dict[str, ImplicitActuatorCfg] = {}
     for region, dofs in _dofs_by_region(manifest).items():
         names = [str(dof["name"]) for dof in dofs]
         effort = {str(dof["name"]): float(dof["effort_limit_nm"]) for dof in dofs}
-        velocity = {str(dof["name"]): float(dof["velocity_limit_rad_s"]) for dof in dofs}
+        velocity_sim = {name: solver_velocity[name] for name in names}
         if passive:
             stiffness: dict[str, float] | float = 0.0
             damping: dict[str, float] | float = 0.0
@@ -254,9 +277,10 @@ def make_articulation_cfg(
         actuators[region] = ImplicitActuatorCfg(
             joint_names_expr=names,
             effort_limit_sim=effort,
-            velocity_limit_sim=velocity,
+            velocity_limit_sim=velocity_sim,
             stiffness=stiffness,
             damping=damping,
+            armature=TRAINING_JOINT_ARMATURE_KGM2,
         )
 
     return ArticulationCfg(
@@ -275,10 +299,9 @@ def make_articulation_cfg(
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=False,
-                # The passive fall repeatedly hits anatomical hard stops. 8/4 let
-                # impact momentum push elbow/other stops >0.20 rad past their ROM.
-                # Keep the 240 Hz step and strengthen the constraint solve instead
-                # of widening anatomical limits.
+                # The passive fall repeatedly hits anatomical hard stops. Keep the
+                # 240 Hz step and strengthen the constraint solve instead of
+                # widening anatomical limits.
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=8,
                 sleep_threshold=0.0,
@@ -348,8 +371,15 @@ def validate_live_articulation(
         device=device,
         dtype=dtype,
     )
-    expected_velocity = torch.tensor(
-        [float(dof["velocity_limit_rad_s"]) for dof in dofs_physx_order],
+    expected_velocity = torch.full(
+        (len(dofs_physx_order),),
+        PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S,
+        device=device,
+        dtype=dtype,
+    )
+    expected_armature = torch.full(
+        (len(dofs_physx_order),),
+        TRAINING_JOINT_ARMATURE_KGM2,
         device=device,
         dtype=dtype,
     )
@@ -358,6 +388,7 @@ def validate_live_articulation(
         ("joint position limits", robot.data.joint_pos_limits[0], expected_limits),
         ("joint effort limits", robot.data.joint_effort_limits[0], expected_effort),
         ("joint velocity limits", robot.data.joint_vel_limits[0], expected_velocity),
+        ("joint armature", robot.data.joint_armature[0], expected_armature),
     )
     for label, actual, expected in checks:
         if not torch.allclose(actual, expected, atol=atol, rtol=0.0):
@@ -394,6 +425,8 @@ def validate_live_articulation(
         "virtual_body_count": int(manifest["training_virtual_link_count"]),
         "training_total_mass_kg": total_mass,
         "passive_actuators": passive,
+        "physx_solver_velocity_limit_rad_s": PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S,
+        "training_joint_armature_kgm2": TRAINING_JOINT_ARMATURE_KGM2,
         "device": str(device),
         "dtype": str(dtype),
     }
