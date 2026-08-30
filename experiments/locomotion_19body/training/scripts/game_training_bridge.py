@@ -87,12 +87,48 @@ class Bridge:
     def canceled(self) -> bool:
         return self.cancel_path.exists()
 
+    def _smoke_mode_from_step(self, name: str) -> str | None:
+        prefix = "PhysX smoke "
+        if not name.startswith(prefix):
+            return None
+        mode = name[len(prefix) :].strip()
+        return mode if mode in ("hold", "passive") else None
+
+    def _smoke_report_path(self, mode: str) -> Path:
+        return self.exp / "runs" / "smoke" / f"latest_{mode}.json"
+
+    def _prepare_step_outputs(self, name: str) -> None:
+        mode = self._smoke_mode_from_step(name)
+        if mode is None:
+            return
+        report = self._smoke_report_path(mode)
+        if report.exists():
+            report.unlink()
+
+    def _validate_smoke_report(self, name: str) -> tuple[bool, str]:
+        mode = self._smoke_mode_from_step(name)
+        if mode is None:
+            return True, ""
+        report_path = self._smoke_report_path(mode)
+        if not report_path.is_file():
+            return False, f"Smoke child returned 0 but did not create {report_path}"
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return False, f"Smoke report is unreadable: {type(exc).__name__}: {exc}"
+        if report.get("status") != "pass":
+            return False, f"Smoke report status is {report.get('status')!r}, expected 'pass'"
+        if report.get("mode") != mode:
+            return False, f"Smoke report mode is {report.get('mode')!r}, expected {mode!r}"
+        return True, ""
+
     def run_step(self, name: str, command: list[str]) -> int:
         self.step_index += 1
         self.status("running", f"Running {name}", current_step=name)
         append_log(self.log_path, "")
         append_log(self.log_path, f"===== [{self.step_index}/{len(self.steps)}] {name} =====")
         append_log(self.log_path, command_text(command))
+        self._prepare_step_outputs(name)
 
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
@@ -110,8 +146,14 @@ class Bridge:
                 code = self.current_child.poll()
                 if code is not None:
                     self.current_child = None
+                    code = int(code)
+                    if code == 0:
+                        valid, reason = self._validate_smoke_report(name)
+                        if not valid:
+                            append_log(self.log_path, f"SMOKE RESULT INVALID: {reason}")
+                            code = 1
                     append_log(self.log_path, f"===== {name}: exit {code} =====")
-                    return int(code)
+                    return code
                 if self.canceled():
                     append_log(self.log_path, f"Cancellation requested during {name}")
                     self.current_child.terminate()
