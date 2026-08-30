@@ -12,6 +12,8 @@ extends "res://scripts/world_authoring/world_authoring_editor_live_phase22.gd"
 ## grow monotonically while near remains 0.25 m eventually collapses the renderer's
 ## frustum-plane intersections. Near/far are therefore recomputed every frame from
 ## the current body-local camera distance and kept inside a bounded depth ratio.
+## Selected-body framing and family visibility are independent: selection frames the
+## target itself while the parent/children extent only expands the far clip plane.
 
 const INTEREST_MIN_RADIUS_M: float = 1.0
 const INTEREST_MIN_SPEED_M_S: float = 8.0
@@ -22,16 +24,18 @@ const INTEREST_SPRINT_MULTIPLIER: float = 6.0
 const CAMERA_NEAR_FLOOR_M: float = 0.25
 const CAMERA_FAR_FLOOR_M: float = 50000.0
 const CAMERA_FAR_HARD_LIMIT_M: float = 2.0e10
-const CAMERA_MAX_DEPTH_RATIO: float = 400000.0
+const CAMERA_MAX_DEPTH_RATIO: float = 5000000.0
 const CAMERA_DETAILED_FAR_LIMIT_M: float = 8.0e6
 const CAMERA_HORIZON_MARGIN_M: float = 20000.0
 const CAMERA_SURFACE_MODE_ALTITUDE_RATIO: float = 0.25
 const CAMERA_LIGHTWEIGHT_DISTANCE_SCALE: float = 1.60
 const CAMERA_LIGHTWEIGHT_RADIUS_SCALE: float = 1.35
+const CAMERA_FAMILY_CLIP_MARGIN: float = 1.15
 
 var _interest_enabled: bool = false
 var _interest_center_world: Vec3D = Vec3D.new()
 var _interest_radius_m: float = INTEREST_MIN_RADIUS_M
+var _interest_family_radius_m: float = INTEREST_MIN_RADIUS_M
 var _interest_uses_detailed_surface: bool = true
 var _clip_sync_pending: bool = false
 
@@ -46,9 +50,12 @@ func _ready() -> void:
 
 
 func set_camera_interest(center_world: Vec3D, radius_m: float,
-		uses_detailed_surface: bool) -> void:
+		uses_detailed_surface: bool, family_radius_m: float = 0.0) -> void:
 	_interest_center_world = center_world.dup() if center_world != null else Vec3D.new()
 	_interest_radius_m = maxf(radius_m, INTEREST_MIN_RADIUS_M)
+	_interest_family_radius_m = maxf(
+		_interest_radius_m,
+		family_radius_m if family_radius_m > 0.0 else _interest_radius_m)
 	_interest_uses_detailed_surface = uses_detailed_surface
 	_interest_enabled = true
 	if _player != null:
@@ -67,6 +74,10 @@ func camera_interest_center_world() -> Vec3D:
 
 func camera_interest_radius_m() -> float:
 	return _interest_radius_m
+
+
+func camera_interest_family_radius_m() -> float:
+	return _interest_family_radius_m
 
 
 func _process(delta: float) -> void:
@@ -128,17 +139,26 @@ func _update_interest_navigation(delta: float) -> void:
 	var up: Vector3 = radial.normalized().to_v3() if radial.length_sq() > 1.0 \
 		else Vector3.UP
 	var basis: Array = _interest_basis(up)
-	var forward: Vector3 = basis[0]
-	var right: Vector3 = basis[1]
+	var flat_forward: Vector3 = basis[0]
+	var flat_right: Vector3 = basis[1]
+	var pitch: float = float(_player.get("pitch"))
+	var look: Vector3 = (flat_forward * cos(pitch) + up * sin(pitch)).normalized()
+	var camera_right: Vector3 = look.cross(up).normalized()
+	if camera_right.length_squared() < 1.0e-8:
+		camera_right = flat_right
+
+	# Free-fly editor semantics: W/S follow the actual camera aim, not the tangent
+	# plane. After Focus Selected sets pitch downward, W therefore flies directly
+	# toward the selected moon/planet instead of sliding sideways around it.
 	var wish := Vector3.ZERO
 	if Input.is_action_pressed("move_forward"):
-		wish += forward
+		wish += look
 	if Input.is_action_pressed("move_back"):
-		wish -= forward
+		wish -= look
 	if Input.is_action_pressed("move_right"):
-		wish += right
+		wish += camera_right
 	if Input.is_action_pressed("move_left"):
-		wish -= right
+		wish -= camera_right
 	if Input.is_action_pressed("move_up"):
 		wish += up
 	if Input.is_action_pressed("move_down"):
@@ -234,8 +254,8 @@ func _sync_interest_camera_clip() -> void:
 	var desired_far_m: float
 
 	if _interest_uses_detailed_surface:
-		# Detailed terrain is horizon-limited; there is no reason to keep the back side
-		# of the planet or its whole celestial family inside this camera frustum.
+		# Detailed terrain itself is horizon-limited. Family visibility is added below
+		# without changing how closely the selected body is framed.
 		desired_far_m = clampf(
 			horizon_m + CAMERA_HORIZON_MARGIN_M,
 			CAMERA_FAR_FLOOR_M,
@@ -247,21 +267,26 @@ func _sync_interest_camera_clip() -> void:
 			CAMERA_FAR_FLOOR_M,
 			horizon_m + CAMERA_HORIZON_MARGIN_M)
 	else:
-		# Family/system framing. The current centre distance already contains the
-		# framing scale selected by the host, so no global system extent is required.
 		desired_far_m = maxf(
 			CAMERA_FAR_FLOOR_M,
 			center_distance_m * CAMERA_LIGHTWEIGHT_DISTANCE_SCALE
 			+ _interest_radius_m * CAMERA_LIGHTWEIGHT_RADIUS_SCALE)
+
+	# Keep the selected body's direct family renderable if the user pans toward it,
+	# but never use this extent to determine focus distance. This is the separation
+	# between "focus selected" and "show the multi-body system".
+	desired_far_m = maxf(
+		desired_far_m,
+		center_distance_m + _interest_family_radius_m * CAMERA_FAMILY_CLIP_MARGIN)
 
 	if not is_finite(desired_far_m):
 		desired_far_m = CAMERA_FAR_FLOOR_M
 	desired_far_m = clampf(desired_far_m,
 		CAMERA_FAR_FLOOR_M, CAMERA_FAR_HARD_LIMIT_M)
 
-	# Projection stability invariant. At system scale, preserving a 25 cm near plane
-	# is less useful than preserving a valid frustum. Raising near only occurs as the
-	# requested far range grows; local/surface views stay at 0.25 m.
+	# Projection stability invariant. Planet/moon family views need a much smaller
+	# near increase than solar-system views, so the ratio is large enough to retain
+	# sub-metre authoring precision while still preventing degenerate frustum planes.
 	var desired_near_m: float = maxf(
 		CAMERA_NEAR_FLOOR_M,
 		desired_far_m / CAMERA_MAX_DEPTH_RATIO)
@@ -294,9 +319,6 @@ func _screen_aim(screen_position: Vector2) -> Dictionary:
 	var distance_m: float = -b - root
 	if distance_m < 0.0:
 		distance_m = -b + root
-	# Family framing can intentionally place the camera millions of metres away.
-	# Keep the ordinary terrain pick cap for detailed terrain, but allow the exact
-	# analytic staged sphere hit to reach its selected body from that framing view.
 	var staged_pick_max: float = maxf(
 		PICK_MAX_RANGE_M,
 		offset.length() + _interest_radius_m * 2.0)
