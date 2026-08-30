@@ -4,8 +4,9 @@ extends RefCounted
 ##
 ## The editor's ApplyScope remains a useful UI hint, but it is intentionally not
 ## the authority here: TILES can mean biome paint or authored water, and HOT can
-## mean atmosphere, waves, or metadata. The planner compares the last applied
-## snapshot with the new snapshot and returns independent subsystem dirty flags.
+## mean atmosphere, waves, direct runtime shader overrides, or metadata. The
+## planner compares the last applied snapshot with the new snapshot and returns
+## independent subsystem dirty flags.
 
 const RUNTIME_GENERATION_FIELDS: PackedStringArray = [
 	"detail_amplitude",
@@ -79,6 +80,12 @@ static func build(previous_system: Resource, next_system: Resource,
 		plan["reason"] = "planet profile changed incompatibly"
 		return plan
 
+	plan["runtime_shader"] = (
+		not _equivalent(previous_profile.get(&"runtime_shader_paths"),
+			next_profile.get(&"runtime_shader_paths"))
+		or not _equivalent(previous_profile.get(&"runtime_shader_overrides"),
+			next_profile.get(&"runtime_shader_overrides")))
+
 	var previous_terrain: Resource = previous_profile.get(&"terrain") as Resource
 	var next_terrain: Resource = next_profile.get(&"terrain") as Resource
 	if previous_terrain == null or next_terrain == null:
@@ -117,7 +124,7 @@ static func build(previous_system: Resource, next_system: Resource,
 	# be regenerated. They are still an Apply, but the terrain pipeline does zero
 	# work unless one of the explicit flags above is set.
 	plan["hot"] = bool(plan["frames"]) or bool(plan["water_material"]) \
-		or bool(plan["atmosphere"])
+		or bool(plan["atmosphere"]) or bool(plan["runtime_shader"])
 
 	if bool(plan["full_rebuild"]):
 		return plan
@@ -194,6 +201,7 @@ static func _empty_plan() -> Dictionary:
 		"water_material": false,
 		"ocean": false,
 		"atmosphere": false,
+		"runtime_shader": false,
 		"graph": false,
 		"sculpt": false,
 		"frames": false,
@@ -204,8 +212,8 @@ static func _empty_plan() -> Dictionary:
 
 static func _has_runtime_work(plan: Dictionary) -> bool:
 	for key: String in ["full_rebuild", "clipmap", "tiles", "biome", "water",
-			"water_geometry", "water_material", "ocean", "atmosphere", "graph",
-			"sculpt", "frames", "hot"]:
+			"water_geometry", "water_material", "ocean", "atmosphere",
+			"runtime_shader", "graph", "sculpt", "frames", "hot"]:
 		if bool(plan.get(key, false)):
 			return true
 	return false
