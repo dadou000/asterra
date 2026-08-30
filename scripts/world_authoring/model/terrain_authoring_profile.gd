@@ -1,10 +1,15 @@
 class_name TerrainAuthoringProfile
 extends Resource
-## Non-destructive authoring state layered on top of the pristine generator.
+## Non-destructive terrain authoring state.
 ##
-## Procedural terrain remains reproducible from generation_profile. Sparse sculpt
-## deltas are serialized separately so hand-authored terrain survives presets,
-## Undo/Redo, Apply/Revert and body switching without baking a second heightmap.
+## PROCEDURAL uses the normal deterministic planet generator and can layer sparse
+## sculpt edits, biome paint and shader slots on top of the generated world.
+## BLANK is deliberately not a zero-valued generated heightfield: it has no
+## generated heightmap/material/biome field at all. The geometric base is the
+## analytic body sphere; surface shape is authored by displacement shaders and
+## biome classification may only be supplied by custom painted biome layers.
+## Dormant procedural/sculpt data is retained when switching modes so changing the
+## backend is reversible and never silently destroys authoring work.
 
 const GENERATION_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 const BIOME_LAYER_SCRIPT := preload("res://scripts/world_authoring/model/biome_paint_layer.gd")
@@ -12,14 +17,21 @@ const SHADER_SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain
 const SCULPT_TILE_SIDE := 64
 const SCULPT_TILE_BYTES := SCULPT_TILE_SIDE * SCULPT_TILE_SIDE * 4
 
+enum GenerationMode {
+	PROCEDURAL,
+	BLANK,
+}
+
+@export_enum("Procedural", "Blank") var generation_mode: int = GenerationMode.PROCEDURAL
 @export var generation_profile: Resource
 @export var biome_override_layers: Array[Resource] = []
 @export var displacement_slots: Array[Resource] = []
 @export var material_slots: Array[Resource] = []
 @export var imported_texture_asset_ids: PackedStringArray = PackedStringArray()
 
-# Serialized form of the authoritative Deltas sparse cube-sphere lattice. The
-# format mirrors Deltas.serialize(): one tile key list plus a packed float blob.
+# Serialized form of the authoritative Deltas sparse cube-sphere lattice. It is
+# ignored while generation_mode == BLANK, but retained so switching back to
+# PROCEDURAL restores the previous non-destructive sculpt state.
 @export var sculpt_delta_version: int = 1
 @export var sculpt_delta_keys: PackedInt64Array = PackedInt64Array()
 @export var sculpt_delta_tiles: PackedByteArray = PackedByteArray()
@@ -29,7 +41,20 @@ func ensure_generation_profile() -> Resource:
 		generation_profile = GENERATION_PROFILE_SCRIPT.new()
 	return generation_profile
 
+func is_blank() -> bool:
+	return generation_mode == GenerationMode.BLANK
+
+func uses_generated_heightmap() -> bool:
+	return generation_mode == GenerationMode.PROCEDURAL
+
+func allows_sculpt() -> bool:
+	return generation_mode == GenerationMode.PROCEDURAL
+
+func allows_custom_biome_paint() -> bool:
+	return true
+
 func ensure_valid() -> void:
+	generation_mode = clampi(generation_mode, GenerationMode.PROCEDURAL, GenerationMode.BLANK)
 	ensure_generation_profile()
 	sculpt_delta_version = maxi(1, sculpt_delta_version)
 	# A damaged/truncated preset must never reach Deltas.deserialize(), which
