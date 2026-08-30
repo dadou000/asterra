@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
 [ext_resource type="Script" path="res://scripts/rendering/procedural_sky.gd" id="2_sky"]
 [ext_resource type="Script" path="res://scripts/ui/pause_menu.gd" id="3_pause"]
-[ext_resource type="Script" path="res://scripts/world_authoring/world_authoring_runtime_host.gd" id="4_planet_studio"]
+[ext_resource type="Script" path="res://scripts/world_authoring/world_authoring_runtime_host_phase24.gd" id="4_planet_studio"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1")
