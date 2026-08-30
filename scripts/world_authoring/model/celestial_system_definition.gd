@@ -4,6 +4,9 @@ extends Resource
 
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
 const SCHEMA_VERSION: int = 2
+const DEFAULT_CHILD_ORBIT_PARENT_RADII: float = 4.0
+const DEFAULT_CHILD_ORBIT_CHILD_RADII: float = 3.0
+const DEFAULT_CHILD_ORBIT_ANOMALY_DEG: float = 35.0
 
 @export var schema_version: int = SCHEMA_VERSION
 @export var system_id: String = "asterra-system"
@@ -21,6 +24,7 @@ func ensure_valid() -> void:
 	if find_body(active_body_id) == null and not bodies.is_empty():
 		active_body_id = String(bodies[0].get(&"body_id"))
 	_repair_parent_hierarchy()
+	_repair_zero_child_orbits()
 
 func find_body(search_body_id: String) -> Resource:
 	for body: Resource in bodies:
@@ -45,6 +49,8 @@ func add_body(body: Resource) -> void:
 	var parent_id := String(body.get(&"parent_body_id"))
 	if not can_parent_body(String(body.get(&"body_id")), parent_id):
 		body.set(&"parent_body_id", "")
+	else:
+		_seed_default_child_orbit(body)
 
 func remove_body(remove_body_id: String) -> bool:
 	for index: int in bodies.size():
@@ -87,6 +93,7 @@ func set_parent_body(body_id: String, candidate_parent_id: String) -> bool:
 	if body == null:
 		return false
 	body.set(&"parent_body_id", candidate_parent_id)
+	_seed_default_child_orbit(body)
 	return true
 
 func children_of(parent_body_id: String) -> Array[Resource]:
@@ -106,3 +113,30 @@ func _repair_parent_hierarchy() -> void:
 			continue
 		if not can_parent_body(body_id, parent_id):
 			body.set(&"parent_body_id", "")
+
+func _repair_zero_child_orbits() -> void:
+	for body: Resource in bodies:
+		_seed_default_child_orbit(body)
+
+func _seed_default_child_orbit(body: Resource) -> void:
+	if body == null:
+		return
+	var parent_id: String = String(body.get(&"parent_body_id"))
+	if parent_id.is_empty():
+		return
+	var parent: Resource = find_body(parent_id)
+	var orbit: Resource = body.get(&"orbit") as Resource
+	if parent == null or orbit == null:
+		return
+	if float(orbit.get(&"semi_major_axis_m")) > 0.0:
+		return
+	var parent_radius: float = maxf(float(parent.get(&"radius_m")), 1.0)
+	var child_radius: float = maxf(float(body.get(&"radius_m")), 1.0)
+	orbit.set(&"semi_major_axis_m", maxf(
+		parent_radius * DEFAULT_CHILD_ORBIT_PARENT_RADII,
+		parent_radius + child_radius * DEFAULT_CHILD_ORBIT_CHILD_RADII))
+	if absf(float(orbit.get(&"mean_anomaly_at_epoch_deg"))) <= 1e-6:
+		orbit.set(&"mean_anomaly_at_epoch_deg", DEFAULT_CHILD_ORBIT_ANOMALY_DEG)
+	if int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.MOON \
+			and absf(float(orbit.get(&"inclination_deg"))) <= 1e-6:
+		orbit.set(&"inclination_deg", 5.0)
