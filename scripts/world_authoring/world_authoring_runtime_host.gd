@@ -4,12 +4,12 @@ extends Node
 ## resources and the production runtime. BLANK terrain is an analytic backend: it
 ## never invokes PlanetBake and owns no generated height/material map.
 ##
-## The host also owns the live celestial preview boundary. The selected body is
-## treated as the local body-centred origin. If it owns the generated terrestrial
-## runtime that terrain remains at the origin while every other staged body is
-## rendered by the lightweight celestial-system preview at its orbital offset.
+## Celestial preview invariant: Frames always remains one stable system/world frame.
+## Selecting a moon/planet changes only the camera interest point. The production
+## terrain/ocean/contact stack may represent one root terrestrial body at system
+## origin; orbital bodies stay lightweight until that stack is body-centre-aware.
 
-const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase22.gd")
+const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase23.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 const CELESTIAL_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/celestial_body_preview_runtime.gd")
 const APPLY_PLANNER_SCRIPT := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
@@ -36,7 +36,11 @@ var _celestial_preview: Node3D
 var _authoring_session: WorldAuthoringSession
 var _preview_player: Node
 var _runtime_applied_snapshot: Resource
+var _detailed_runtime_body_id: String = ""
 var _preview_body_id: String = ""
+var _selected_center_world: Vec3D = Vec3D.new()
+var _selected_radius_m: float = 1.0
+var _selected_uses_detailed_surface: bool = false
 var _preview_sync_pending: bool = false
 var _preview_focus_pending: bool = false
 var _terrestrial_runtime_visible: bool = true
@@ -44,6 +48,7 @@ var _pending_apply_scope: int = 0
 var _opened: bool = false
 
 func _ready() -> void:
+	process_priority = 200
 	_main = get_parent()
 	if _launch_mode() != "planet_studio":
 		set_process(false)
@@ -51,12 +56,14 @@ func _ready() -> void:
 	set_process(true)
 
 func _process(_delta: float) -> void:
-	if _opened or _main == null:
+	if _main == null:
 		return
-	var player: Node = _main.get("player") as Node
-	if player == null:
+	if not _opened:
+		var player: Node = _main.get("player") as Node
+		if player != null:
+			_open_live_editor(player)
 		return
-	_open_live_editor(player)
+	_sync_selected_preview_environment()
 
 func _launch_mode() -> String:
 	if not get_tree().has_meta("launch_mode"):
@@ -89,6 +96,7 @@ func _open_live_editor(player: Node) -> void:
 		_authoring_session = session
 		if session.applied_system != null:
 			_runtime_applied_snapshot = session.applied_system.duplicate(true)
+			_detailed_runtime_body_id = String(session.applied_system.get(&"active_body_id"))
 		if not session.changed.is_connected(_on_authoring_session_changed):
 			session.changed.connect(_on_authoring_session_changed)
 
@@ -127,7 +135,6 @@ func _open_live_editor(player: Node) -> void:
 		if Planet.has_signal("world_ready") and not Planet.world_ready.is_connected(_on_planet_world_ready):
 			Planet.world_ready.connect(_on_planet_world_ready)
 		_schedule_active_body_preview(true)
-	set_process(false)
 
 func _on_authoring_session_changed(dirty_state: bool, apply_scope: int) -> void:
 	if dirty_state:
@@ -139,8 +146,8 @@ func _on_body_focus_requested(_body_id: String) -> void:
 	_schedule_active_body_preview(true)
 
 func _on_planet_world_ready(_fields: PlanetFields) -> void:
-	# Main finishes adopting the new fields and clears its rebake flag in the same
-	# frame. Defer one turn before replacing the staged selected sphere with terrain.
+	# Main finishes adopting generated fields in the same frame. Defer one turn so
+	# preview visibility switches only after the runtime is coherent again.
 	_schedule_active_body_preview(true)
 
 func _active_staged_body_id() -> String:
@@ -167,36 +174,64 @@ func _flush_active_body_preview() -> void:
 	var body_id: String = String(body.get(&"body_id"))
 	var body_changed: bool = body_id != _preview_body_id
 	_preview_body_id = body_id
+	_selected_radius_m = maxf(float(body.get(&"radius_m")), 1.0)
 
-	var body_type: int = int(body.get(&"body_type"))
-	var is_star: bool = body_type == BODY_SCRIPT.BodyType.STAR
-	var applied_id: String = ""
-	if _runtime_applied_snapshot != null:
-		applied_id = String(_runtime_applied_snapshot.get(&"active_body_id"))
 	var rebaking: bool = bool(_main.get("_rebaking"))
-	var owns_live_terrain: bool = not is_star and body_id == applied_id and not rebaking
-	var staged_preview: bool = not owns_live_terrain
+	var detailed_available: bool = _detailed_runtime_is_root_usable(
+		_authoring_session.staged_system) and not rebaking
+	_selected_uses_detailed_surface = detailed_available \
+		and body_id == _detailed_runtime_body_id
 
-	_set_terrestrial_runtime_visible(owns_live_terrain)
+	# A body-centred detailed renderer is only exposed while its own body is the
+	# selected interest frame. Otherwise every body uses stable lightweight meshes;
+	# this prevents water/biome/cloud/terrain subsystems from being rebound to a moon
+	# while still spatially centred on the root planet.
+	_set_terrestrial_runtime_visible(_selected_uses_detailed_surface)
 	if _celestial_preview != null:
-		# Even when the selected body owns the detailed terrain runtime, keep all
-		# *other* bodies rendered. For staged bodies the selected sphere is rendered
-		# too because no generated terrain belongs to it yet.
+		var hidden_detailed_id: String = _detailed_runtime_body_id \
+			if _selected_uses_detailed_surface else ""
 		_celestial_preview.call("show_system", _authoring_session.staged_system,
-			body_id, staged_preview)
+			body_id, hidden_detailed_id)
+		_selected_center_world = _celestial_preview.call("selected_center_world") as Vec3D
+	if _selected_center_world == null:
+		_selected_center_world = Vec3D.new()
+
+	if _editor != null and _editor.has_method("set_camera_interest"):
+		_editor.call("set_camera_interest", _selected_center_world,
+			_selected_radius_m, _selected_uses_detailed_surface)
+	_apply_preview_atmosphere(body)
+	_sync_depth_cloud_preview()
 
 	var should_focus: bool = _preview_focus_pending or body_changed
 	_preview_focus_pending = false
 	if should_focus:
-		_focus_camera_on_body(body, staged_preview)
-		if is_star:
-			_set_editor_status("Focused %s — stellar preview active; orbital companions remain visible." % String(body.get(&"display_name")))
-		elif staged_preview:
-			_set_editor_status("Focused %s — staged body preview with parent/moons kept at their orbital positions. Apply to generate this body's own terrain." % String(body.get(&"display_name")))
+		_focus_camera_on_body(body)
+		if int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+			_set_editor_status("Focused %s — fixed system frame; stellar preview and orbital companions remain stable." % String(body.get(&"display_name")))
+		elif _selected_uses_detailed_surface:
+			_set_editor_status("Focused %s — detailed terrain owns this root body; companions stay at absolute orbital positions." % String(body.get(&"display_name")))
 		else:
-			_set_editor_status("Focused %s — applied terrain active; moons and other staged bodies remain visible around it." % String(body.get(&"display_name")))
+			_set_editor_status("Focused %s — lightweight orbital preview in the fixed system frame. No other planet runtime is re-centred." % String(body.get(&"display_name")))
 
-func _focus_camera_on_body(body: Resource, staged_preview: bool) -> void:
+func _detailed_runtime_is_root_usable(system: Resource) -> bool:
+	if system == null or _detailed_runtime_body_id.is_empty():
+		return false
+	var detailed: Resource = system.call("find_body", _detailed_runtime_body_id) as Resource
+	if detailed == null:
+		return false
+	if int(detailed.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		return false
+	# Current terrain/contact/ocean shaders are root-body centred. If authoring puts
+	# that body into orbit, hide the detailed stack instead of drawing its pieces at
+	# the wrong world position.
+	return String(detailed.get(&"parent_body_id")).is_empty()
+
+func _body_can_own_detailed_runtime(body: Resource) -> bool:
+	if body == null or int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		return false
+	return String(body.get(&"parent_body_id")).is_empty()
+
+func _focus_camera_on_body(body: Resource) -> void:
 	if _preview_player == null or body == null:
 		return
 	var camera: Camera3D = _preview_player.get("camera") as Camera3D
@@ -205,39 +240,123 @@ func _focus_camera_on_body(body: Resource, staged_preview: bool) -> void:
 	var radius_m: float = maxf(float(body.get(&"radius_m")), 1.0)
 	var selected_visual_radius: float = radius_m * BODY_FRAME_SURFACE_MARGIN
 	var frame_radius: float = selected_visual_radius
-	var system_extent: float = selected_visual_radius
 	if _celestial_preview != null:
 		selected_visual_radius = maxf(float(_celestial_preview.call("visual_radius_m")), radius_m)
 		frame_radius = maxf(selected_visual_radius,
 			float(_celestial_preview.call("family_frame_radius_m")))
-		system_extent = maxf(frame_radius,
-			float(_celestial_preview.call("system_extent_m")))
-	elif staged_preview:
-		selected_visual_radius = radius_m
-		frame_radius = selected_visual_radius
 
 	var frame_distance: float = float(CELESTIAL_PREVIEW_SCRIPT.frame_distance_for_radius(
 		frame_radius, camera.fov, BODY_FRAME_MARGIN))
-
 	var radial_axis := Vector3(1.0, 0.18, 0.32).normalized()
 	var current_world: Vec3D = _preview_player.get("world_pos") as Vec3D
-	if current_world != null and current_world.length_sq() > 1.0:
-		radial_axis = current_world.normalized().to_v3()
-	# The preview's Keplerian reference plane is XZ. Looking down the Y axis keeps
-	# a nearby parent/moon pair spread across the viewport instead of stacking one
-	# behind the other. Single-body focus preserves the author's current radial side.
+	if current_world != null:
+		var current_radial: Vec3D = current_world.sub(_selected_center_world)
+		if current_radial.length_sq() > 1.0:
+			radial_axis = current_radial.normalized().to_v3()
+	# The staged Keplerian reference plane is XZ. Looking down Y keeps nearby
+	# parent/moon pairs separated on screen when family framing is requested.
 	if frame_radius > selected_visual_radius * FAMILY_FRAME_TRIGGER:
 		radial_axis = Vector3.UP
-	var next_world: Vec3D = Vec3D.from_v3(radial_axis).mul(frame_distance)
+	var next_world: Vec3D = _selected_center_world.add(
+		Vec3D.from_v3(radial_axis).mul(frame_distance))
 	_preview_player.set("world_pos", next_world)
-	# At -90 degrees the player's spherical camera points exactly toward -up, i.e.
-	# the selected body's centre. Yaw remains available for tangent navigation.
 	_preview_player.set("pitch", -PI * 0.5)
 	Frames.rebase(next_world)
-	if _preview_player.has_method("_sync_transform"):
-		_preview_player.call("_sync_transform")
-	camera.far = maxf(camera.far, frame_distance + system_extent * 1.10)
+	if _editor != null and _editor.has_method("_sync_interest_camera_transform"):
+		_editor.call("_sync_interest_camera_transform")
+	camera.far = maxf(camera.far, frame_distance + frame_radius * 1.15)
 	_preview_player.emit_signal("moved", next_world)
+
+func _sync_selected_preview_environment() -> void:
+	if _preview_player == null or _main == null:
+		return
+	var sky_material: ShaderMaterial = _main.get("sky_mat") as ShaderMaterial
+	if sky_material == null:
+		return
+	var world_pos: Vec3D = _preview_player.get("world_pos") as Vec3D
+	if world_pos == null:
+		return
+	var local: Vec3D = world_pos.sub(_selected_center_world)
+	var up: Vector3 = local.normalized().to_v3() if local.length_sq() > 1.0 \
+		else Vector3.UP
+	var height_m: float = local.length() - _selected_radius_m
+	# main.gd still publishes its root-planet values earlier in the frame. Planet
+	# Studio runs later and replaces only these genuinely camera-dependent values.
+	sky_material.set_shader_parameter("u_up", up)
+	sky_material.set_shader_parameter("u_camera_height", height_m)
+
+func _apply_preview_atmosphere(body: Resource) -> void:
+	var sky_material: ShaderMaterial = _main.get("sky_mat") as ShaderMaterial
+	if sky_material == null or body == null:
+		return
+	if int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		# The star is explicit geometry. Keep the sky from inventing a second giant
+		# planet limb/atmosphere around the camera while inspecting it.
+		sky_material.set_shader_parameter("u_planet_radius", 1.0)
+		sky_material.set_shader_parameter("u_atmosphere_radius", 2.0)
+		sky_material.set_shader_parameter("u_rayleigh_coeff", Vector3.ZERO)
+		sky_material.set_shader_parameter("u_mie_coeff", 0.0)
+		sky_material.set_shader_parameter("u_ozone_coeff", Vector3.ZERO)
+		sky_material.set_shader_parameter("u_cloud_enabled", 0.0)
+		return
+
+	var profile: Resource = body.get(&"planet_profile") as Resource
+	var atmosphere: Resource = profile.get(&"atmosphere") as Resource if profile != null else null
+	var radius: float = maxf(float(body.get(&"radius_m")), 1.0)
+	var atmosphere_height: float = 1.0
+	if atmosphere != null:
+		atmosphere_height = maxf(float(atmosphere.get(&"atmosphere_height_m")), 1.0)
+	sky_material.set_shader_parameter("u_planet_radius", radius)
+	sky_material.set_shader_parameter("u_atmosphere_radius", radius + atmosphere_height)
+	if atmosphere == null:
+		sky_material.set_shader_parameter("u_rayleigh_coeff", Vector3.ZERO)
+		sky_material.set_shader_parameter("u_mie_coeff", 0.0)
+		sky_material.set_shader_parameter("u_ozone_coeff", Vector3.ZERO)
+		sky_material.set_shader_parameter("u_cloud_enabled", 0.0)
+		return
+	var enabled: bool = bool(atmosphere.get(&"enabled"))
+	var enabled_scale: float = 1.0 if enabled else 0.0
+	sky_material.set_shader_parameter("u_rayleigh_coeff", BASE_RAYLEIGH_COEFF
+		* maxf(float(atmosphere.get(&"rayleigh_strength")), 0.0) * enabled_scale)
+	sky_material.set_shader_parameter("u_mie_coeff", BASE_MIE_COEFF
+		* maxf(float(atmosphere.get(&"mie_strength")), 0.0) * enabled_scale)
+	sky_material.set_shader_parameter("u_ozone_coeff", BASE_OZONE_COEFF
+		* maxf(float(atmosphere.get(&"ozone_strength")), 0.0) * enabled_scale)
+	sky_material.set_shader_parameter("u_cloud_coverage",
+		clampf(float(atmosphere.get(&"cloud_coverage")), 0.0, 1.0))
+	sky_material.set_shader_parameter("u_cloud_density",
+		maxf(float(atmosphere.get(&"cloud_density")), 0.0))
+	var cloud_base: float = maxf(float(atmosphere.get(&"cloud_altitude_m")), 1.0)
+	sky_material.set_shader_parameter("u_cloud_base", cloud_base)
+	sky_material.set_shader_parameter("u_cloud_top", cloud_base + DEFAULT_CLOUD_THICKNESS_M)
+	sky_material.set_shader_parameter("u_cloud_enabled", enabled_scale)
+
+func _selected_cloud_enabled() -> bool:
+	if _authoring_session == null:
+		return false
+	var body: Resource = _authoring_session.active_body() as Resource
+	if body == null or int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		return false
+	var profile: Resource = body.get(&"planet_profile") as Resource
+	var atmosphere: Resource = profile.get(&"atmosphere") as Resource if profile != null else null
+	return atmosphere != null and bool(atmosphere.get(&"enabled"))
+
+func _sync_depth_cloud_preview() -> void:
+	var clouds: Node = get_node_or_null("/root/VolumetricClouds")
+	var effect: Object = clouds.get("_depth_effect") as Object if clouds != null else null
+	var depth_ready: bool = false
+	if effect != null and effect.has_method("is_ready"):
+		depth_ready = bool(effect.call("is_ready"))
+	var use_depth: bool = _selected_uses_detailed_surface and depth_ready
+	if effect != null:
+		effect.set("enabled", use_depth)
+	var sky_material: ShaderMaterial = _main.get("sky_mat") as ShaderMaterial
+	if sky_material != null:
+		# The depth compositor is centred on the production root body. For staged
+		# orbital bodies use the body-local sky fallback rather than a spatially wrong
+		# cloud volume. Detailed root view keeps one renderer only, avoiding doubles.
+		sky_material.set_shader_parameter("u_cloud_enabled",
+			0.0 if use_depth else (1.0 if _selected_cloud_enabled() else 0.0))
 
 func _set_terrestrial_runtime_visible(value: bool) -> void:
 	if _terrestrial_runtime_visible == value:
@@ -258,6 +377,10 @@ func _set_terrestrial_runtime_visible(value: bool) -> void:
 			(node as Node3D).visible = value
 		node.set_process(value)
 		node.set_physics_process(value)
+	if _biome_preview != null:
+		_biome_preview.set_process(value)
+		if value and _biome_preview.has_method("mark_dirty"):
+			_biome_preview.call("mark_dirty")
 	if _authored_water_runtime != null:
 		_authored_water_runtime.set_process(value)
 		if _authored_water_runtime.has_method("_set_visible"):
@@ -299,9 +422,21 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	if body == null:
 		_set_editor_status("Apply rejected: no active celestial body.")
 		return
+	var body_id: String = String(body.get(&"body_id"))
 	if int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
 		_set_editor_status("Applied stellar authoring state for %s — no terrestrial terrain rebuild." % String(body.get(&"display_name")))
 		_runtime_applied_snapshot = system.duplicate(true)
+		_schedule_active_body_preview(false)
+		return
+
+	# The current production terrain/contact/ocean stack is centred at system origin.
+	# Applying an orbital moon/planet into that singleton used to move radius/config
+	# without moving all dependent coordinate systems, producing the visible breakup.
+	# Preserve the authored snapshot but leave that orbital body on the lightweight
+	# preview until a body-centre-aware detailed runtime exists.
+	if not _body_can_own_detailed_runtime(body):
+		_runtime_applied_snapshot = system.duplicate(true)
+		_set_editor_status("Applied %s authoring data without PlanetBake — orbital bodies stay on the coherent lightweight preview until detailed terrain supports non-zero body centres." % String(body.get(&"display_name")))
 		_schedule_active_body_preview(false)
 		return
 
@@ -324,6 +459,7 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	var blank: bool = int(terrain_profile.get(&"generation_mode")) \
 		== TERRAIN_PROFILE_SCRIPT.GenerationMode.BLANK
 	if blank:
+		_detailed_runtime_body_id = body_id
 		_apply_blank_terrain(body, atmosphere, generation, terrain_profile, cfg)
 		_runtime_applied_snapshot = system.duplicate(true)
 		_schedule_active_body_preview(false)
@@ -337,6 +473,7 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_apply_sculpt_state(terrain_profile)
 
 	if bool(plan.get("full_rebuild", false)):
+		_detailed_runtime_body_id = body_id
 		_apply_full_rebuild(plan, body, atmosphere, generation, cfg)
 		_runtime_applied_snapshot = system.duplicate(true)
 		_schedule_active_body_preview(false)
