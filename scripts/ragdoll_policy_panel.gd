@@ -3,6 +3,8 @@ extends CanvasLayer
 
 const PANEL_WIDTH: float = 430.0
 const REFRESH_INTERVAL: float = 0.20
+const TRAINING_TOPOLOGY_SCENE: String = "res://scenes/ragdoll_test.tscn"
+const COMPACT_TOPOLOGY_SCENE: String = "res://scenes/ragdoll_compact.tscn"
 
 var _ragdoll: Node
 var _panel: PanelContainer
@@ -10,6 +12,8 @@ var _model_label: Label
 var _status_label: Label
 var _detail_label: Label
 var _latency_label: Label
+var _topology_label: Label
+var _topology_button: Button
 var _activate_button: Button
 var _latest_button: Button
 var _browse_button: Button
@@ -42,7 +46,7 @@ func _build_ui() -> void:
 	_panel.anchor_bottom = 1.0
 	_panel.offset_left = 14.0
 	_panel.offset_right = 14.0 + PANEL_WIDTH
-	_panel.offset_top = -230.0
+	_panel.offset_top = -282.0
 	_panel.offset_bottom = -14.0
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_panel)
@@ -65,6 +69,17 @@ func _build_ui() -> void:
 	explanation.text = "Load a trained checkpoint, then activate it on this physical ragdoll. The model requests joint targets; Jolt still enforces physics, ROM and torque."
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(explanation)
+
+	var topology_row := HBoxContainer.new()
+	root.add_child(topology_row)
+	_topology_label = Label.new()
+	_topology_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_topology_label.text = "Skeleton: checking..."
+	topology_row.add_child(_topology_label)
+	_topology_button = Button.new()
+	_topology_button.text = "Switch skeleton"
+	_topology_button.pressed.connect(_on_topology_pressed)
+	topology_row.add_child(_topology_button)
 
 	_model_label = Label.new()
 	_model_label.text = "Model: none"
@@ -168,6 +183,16 @@ func _on_unload_pressed() -> void:
 	_refresh()
 
 
+func _on_topology_pressed() -> void:
+	if _ragdoll != null and _ragdoll.has_method("unload_policy"):
+		_ragdoll.call("unload_policy")
+	var target_scene: String = COMPACT_TOPOLOGY_SCENE if _skeleton_mode() == "training" else TRAINING_TOPOLOGY_SCENE
+	var error: Error = get_tree().change_scene_to_file(target_scene)
+	if error != OK:
+		_status_label.text = "SCENE SWITCH FAILED"
+		_detail_label.text = "Could not open %s (error %d)." % [target_scene, error]
+
+
 func _refresh() -> void:
 	if _ragdoll == null or not _ragdoll.has_method("get_policy_ui_state"):
 		return
@@ -179,6 +204,16 @@ func _refresh() -> void:
 	var checkpoint: String = String(data.get("checkpoint", ""))
 	var iteration: int = int(data.get("model_iteration", -1))
 	var latency: float = float(data.get("latency_ms", 0.0))
+	var topology: String = _skeleton_mode()
+
+	if topology == "training":
+		_topology_label.text = "Skeleton: TRAINING 55 links / 54 DOF"
+		_topology_button.text = "Compare compact"
+		_topology_button.tooltip_text = "Switch to the older 19-body / 18x6DOF approximation."
+	else:
+		_topology_label.text = "Skeleton: COMPACT 19 / 18x6DOF"
+		_topology_button.text = "Use training skeleton"
+		_topology_button.tooltip_text = "Switch to the 19 physical + 36 virtual link / 54 serial-DOF training topology."
 
 	if checkpoint.is_empty():
 		_model_label.text = "Model: none"
@@ -197,6 +232,7 @@ func _refresh() -> void:
 	_unload_button.disabled = checkpoint.is_empty()
 	_latest_button.disabled = state == "loading"
 	_browse_button.disabled = state == "loading"
+	_topology_button.disabled = state == "loading"
 
 
 func _policy_state() -> Dictionary:
@@ -204,6 +240,12 @@ func _policy_state() -> Dictionary:
 	if value is Dictionary:
 		return value as Dictionary
 	return {}
+
+
+func _skeleton_mode() -> String:
+	if _ragdoll != null and _ragdoll.has_method("get_skeleton_mode"):
+		return String(_ragdoll.call("get_skeleton_mode"))
+	return "compact"
 
 
 func _stand_runs_root() -> String:
