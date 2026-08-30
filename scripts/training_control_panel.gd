@@ -1,14 +1,14 @@
 extends CanvasLayer
 ## In-game controller for the repo-local humanoid training pipeline.
-## External Python/Isaac work is launched asynchronously through
-## game_training_bridge.py, so Jolt and the ragdoll remain interactive.
+## Python/Isaac/RSL-RL work runs out-of-process so Jolt stays interactive.
 
-const PANEL_WIDTH: float = 452.0
+const PANEL_WIDTH: float = 468.0
 const POLL_INTERVAL: float = 0.25
-const LOG_CHAR_LIMIT: int = 18000
+const LOG_CHAR_LIMIT: int = 20000
 
 var _repo_root: String = ""
 var _experiment_root: String = ""
+var _runs_root: String = ""
 var _control_dir: String = ""
 var _status_path: String = ""
 var _log_path: String = ""
@@ -21,11 +21,13 @@ var _status_label: Label
 var _detail_label: Label
 var _python_path: LineEdit
 var _device_edit: LineEdit
-var _env_count: SpinBox
-var _seconds: SpinBox
+var _smoke_env_count: SpinBox
+var _smoke_seconds: SpinBox
 var _seed: SpinBox
 var _noise_deg: SpinBox
 var _mode: OptionButton
+var _train_env_count: SpinBox
+var _train_iterations: SpinBox
 var _headless: CheckButton
 var _strict_contact: CheckButton
 var _log_view: TextEdit
@@ -44,7 +46,8 @@ func _ready() -> void:
 	layer = 40
 	_repo_root = ProjectSettings.globalize_path("res://").trim_suffix("/").trim_suffix("\\")
 	_experiment_root = _repo_root.path_join("experiments").path_join("locomotion_19body")
-	_control_dir = _experiment_root.path_join("runs").path_join("control")
+	_runs_root = _experiment_root.path_join("runs")
+	_control_dir = _runs_root.path_join("control")
 	_status_path = _control_dir.path_join("game_bridge_status.json")
 	_log_path = _control_dir.path_join("game_bridge.log")
 	_cancel_path = _control_dir.path_join("cancel.request")
@@ -130,19 +133,26 @@ func _build_ui() -> void:
 	_section(root, "Runtime")
 	_python_path = _line_row(root, "Python", _default_training_python())
 	_device_edit = _line_row(root, "Device", "cuda:0")
-
-	_section(root, "PhysX smoke parameters")
-	_env_count = _spin_row(root, "Environments", 1.0, 4096.0, 256.0, 1.0)
-	_seconds = _spin_row(root, "Seconds", 0.1, 30.0, 2.0, 0.1)
 	_seed = _spin_row(root, "Seed", 0.0, 2147483647.0, 1467.0, 1.0)
-	_noise_deg = _spin_row(root, "Joint noise °", 0.0, 45.0, 0.0, 0.25)
 
+	_section(root, "PhysX preflight / smoke")
+	_smoke_env_count = _spin_row(root, "Smoke envs", 1.0, 4096.0, 256.0, 1.0)
+	_smoke_seconds = _spin_row(root, "Seconds", 0.1, 30.0, 2.0, 0.1)
+	_noise_deg = _spin_row(root, "Joint noise °", 0.0, 45.0, 0.0, 0.25)
 	var mode_row: HBoxContainer = _labeled_row(root, "Mode")
 	_mode = OptionButton.new()
 	_mode.add_item("Hold / neutral PD", 0)
 	_mode.add_item("Passive fall", 1)
 	_mode.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mode_row.add_child(_mode)
+
+	_section(root, "Stand PPO")
+	_train_env_count = _spin_row(root, "Training envs", 1.0, 8192.0, 2048.0, 1.0)
+	_train_iterations = _spin_row(root, "Iterations", 1.0, 100000.0, 1500.0, 1.0)
+	var stand_note: Label = Label.new()
+	stand_note.text = "197 observations • 54 actions • PhysX 240 Hz • policy 60 Hz"
+	stand_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(stand_note)
 
 	var checks: HBoxContainer = HBoxContainer.new()
 	root.add_child(checks)
@@ -171,27 +181,26 @@ func _build_ui() -> void:
 	var row_d: HBoxContainer = HBoxContainer.new()
 	root.add_child(row_d)
 	_task_button(row_d, "FULL PREFLIGHT", _on_preflight_pressed)
+	_task_button(row_d, "TRAIN STAND", _on_train_stand_pressed)
+	var row_e: HBoxContainer = HBoxContainer.new()
+	root.add_child(row_e)
 	_cancel_button = Button.new()
-	_cancel_button.text = "Cancel"
+	_cancel_button.text = "Cancel active process"
+	_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_cancel_button.disabled = true
 	_cancel_button.pressed.connect(_on_cancel_pressed)
-	row_d.add_child(_cancel_button)
+	row_e.add_child(_cancel_button)
 
-	var tools: HBoxContainer = HBoxContainer.new()
-	root.add_child(tools)
 	var folder_button: Button = Button.new()
-	folder_button.text = "Open run folder"
+	folder_button.text = "Open runs folder"
+	folder_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	folder_button.pressed.connect(_on_open_folder_pressed)
-	tools.add_child(folder_button)
-	var refresh_button: Button = Button.new()
-	refresh_button.text = "Refresh status"
-	refresh_button.pressed.connect(_on_refresh_pressed)
-	tools.add_child(refresh_button)
+	row_e.add_child(folder_button)
 
 	_section(root, "Process log")
 	_log_view = TextEdit.new()
 	_log_view.editable = false
-	_log_view.custom_minimum_size.y = 180.0
+	_log_view.custom_minimum_size.y = 210.0
 	_log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	root.add_child(_log_view)
 
@@ -281,12 +290,10 @@ func _on_setup_pressed() -> void:
 	if not FileAccess.file_exists(_setup_script_path):
 		_set_status("SETUP ERROR", "Missing setup script: %s" % _setup_script_path)
 		return
-	var arguments: PackedStringArray = PackedStringArray()
-	for argument: String in [
+	var arguments: PackedStringArray = PackedStringArray([
 		"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", _setup_script_path,
 		"-VenvPath", _repo_root.path_join(".venv-isaac")
-	]:
-		arguments.append(argument)
+	])
 	var pid: int = OS.create_process("powershell.exe", arguments, false)
 	if pid < 0:
 		_set_status("SETUP ERROR", "Unable to launch powershell.exe")
@@ -295,7 +302,7 @@ func _on_setup_pressed() -> void:
 	_active_task = "setup"
 	_setup_process = true
 	_set_busy(true)
-	_set_status("RUNNING • setup", "Installing/updating .venv-isaac in the background. Godot remains interactive.")
+	_set_status("RUNNING • setup", "Installing/updating .venv-isaac in the background.")
 
 
 func _on_check_stack_pressed() -> void:
@@ -322,6 +329,10 @@ func _on_preflight_pressed() -> void:
 	_launch_bridge("preflight")
 
 
+func _on_train_stand_pressed() -> void:
+	_launch_bridge("train_stand")
+
+
 func _on_cancel_pressed() -> void:
 	if _active_pid <= 0:
 		return
@@ -339,21 +350,15 @@ func _on_cancel_pressed() -> void:
 		return
 	file.store_string("cancel\n")
 	file.close()
-	_set_status("CANCEL REQUESTED", "Waiting for the bridge to terminate the active child cleanly...")
+	_set_status("CANCEL REQUESTED", "Waiting for the bridge to stop the active child...")
 
 
 func _on_open_folder_pressed() -> void:
-	DirAccess.make_dir_recursive_absolute(_control_dir)
-	var path: String = _control_dir.replace("\\", "/")
+	DirAccess.make_dir_recursive_absolute(_runs_root)
+	var path: String = _runs_root.replace("\\", "/")
 	if not path.begins_with("/"):
 		path = "/" + path
 	OS.shell_open("file://" + path)
-
-
-func _on_refresh_pressed() -> void:
-	_refresh_environment_status()
-	_refresh_bridge_status()
-	_refresh_log()
 
 
 func _launch_bridge(task: String) -> void:
@@ -367,21 +372,22 @@ func _launch_bridge(task: String) -> void:
 		_set_status("BRIDGE MISSING", "Missing %s" % _bridge_path)
 		return
 	_clear_runtime_files()
-	var arguments: PackedStringArray = PackedStringArray()
-	for argument: String in [
+
+	var env_count: int = int(_train_env_count.value) if task == "train_stand" else int(_smoke_env_count.value)
+	var arguments: PackedStringArray = PackedStringArray([
 		_bridge_path, "--task", task,
 		"--status", _status_path,
 		"--log", _log_path,
 		"--cancel", _cancel_path,
 		"--mode", _selected_mode(),
-		"--num-envs", str(int(_env_count.value)),
-		"--seconds", str(_seconds.value),
+		"--num-envs", str(env_count),
+		"--seconds", str(_smoke_seconds.value),
+		"--max-iterations", str(int(_train_iterations.value)),
 		"--seed", str(int(_seed.value)),
 		"--joint-noise-deg", str(_noise_deg.value),
 		"--device", _device_edit.text.strip_edges(),
 		"--force"
-	]:
-		arguments.append(argument)
+	])
 	if _headless.button_pressed:
 		arguments.append("--headless")
 	if _strict_contact.button_pressed:
@@ -471,14 +477,17 @@ func _finish_bridge_process() -> void:
 	_active_task = ""
 	_set_busy(false)
 	if final_state == "passed" and (finished_task == "smoke" or finished_task == "preflight"):
-		var summary: String = _latest_smoke_summary(_selected_mode() if finished_task == "smoke" else "passive")
+		var summary_mode: String = _selected_mode() if finished_task == "smoke" else "passive"
+		var summary: String = _latest_smoke_summary(summary_mode)
 		if not summary.is_empty():
 			final_message += "\n" + summary
+	elif final_state == "passed" and finished_task == "train_stand":
+		final_message += "\nStand PPO run finished. Check runs/training/stand for checkpoints and TensorBoard logs."
 	_set_status(final_state.to_upper() + " • " + finished_task, final_message)
 
 
 func _latest_smoke_summary(mode: String) -> String:
-	var path: String = _experiment_root.path_join("runs").path_join("smoke").path_join("latest_%s.json" % mode)
+	var path: String = _runs_root.path_join("smoke").path_join("latest_%s.json" % mode)
 	if not FileAccess.file_exists(path):
 		return ""
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
@@ -520,10 +529,12 @@ func _set_busy(busy: bool) -> void:
 	_cancel_button.disabled = not busy
 	_python_path.editable = not busy
 	_device_edit.editable = not busy
-	_env_count.editable = not busy
-	_seconds.editable = not busy
+	_smoke_env_count.editable = not busy
+	_smoke_seconds.editable = not busy
 	_seed.editable = not busy
 	_noise_deg.editable = not busy
+	_train_env_count.editable = not busy
+	_train_iterations.editable = not busy
 	_mode.disabled = busy
 	_headless.disabled = busy
 	_strict_contact.disabled = busy
