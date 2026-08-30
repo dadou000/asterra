@@ -6,6 +6,7 @@ extends Node
 
 const APPLY_PLANNER := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
 const RUNTIME_HOST := preload("res://scripts/world_authoring/world_authoring_runtime_host.gd")
+const RUNTIME_HOST_PHASE24 := preload("res://scripts/world_authoring/world_authoring_runtime_host_phase24.gd")
 const CELESTIAL_PREVIEW := preload("res://scripts/world_authoring/celestial_body_preview_runtime.gd")
 const GENERATION_PROFILE := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 const TERRAIN_PROFILE := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
@@ -27,6 +28,7 @@ const SCRIPT_PATHS := [
 	"res://scripts/world_authoring/world_authoring_editor_live_phase22.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase23.gd",
 	"res://scripts/world_authoring/world_authoring_runtime_host.gd",
+	"res://scripts/world_authoring/world_authoring_runtime_host_phase24.gd",
 	"res://tools/terrain_region_compiler.gd",
 ]
 
@@ -304,7 +306,7 @@ func _validate_celestial_multi_preview() -> bool:
 		return false
 	if float(preview.call("family_frame_radius_m")) <= float(parent.get(&"radius_m")):
 		preview.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: parent focus ignored moon orbital extent")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: parent family extent ignored moon orbit")
 		return false
 
 	var moon_id: String = String(moon.get(&"body_id"))
@@ -328,8 +330,28 @@ func _validate_celestial_multi_preview() -> bool:
 		return false
 	if float(preview.call("family_frame_radius_m")) <= float(moon.get(&"radius_m")):
 		preview.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon focus ignored parent orbital extent")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon family extent ignored parent orbit")
 		return false
+
+	# Phase 24 invariant: selecting an orbital child cannot make the detailed root
+	# disappear, and the one global atmosphere remains owned by that detailed root.
+	var phase24_host: Node = RUNTIME_HOST_PHASE24.new()
+	phase24_host.set("_detailed_runtime_body_id", parent_id)
+	phase24_host.set("_authoring_session", session)
+	phase24_host.set("_celestial_preview", preview)
+	if not bool(phase24_host.call("detailed_runtime_should_be_visible",
+			session.staged_system, false)):
+		phase24_host.free()
+		preview.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon selection hid resident root detail")
+		return false
+	phase24_host.call("_update_sky_owner", session.staged_system, moon, true)
+	if String(phase24_host.get("_sky_owner_body_id")) != parent_id:
+		phase24_host.free()
+		preview.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon selection stole the root atmosphere")
+		return false
+	phase24_host.free()
 	preview.free()
 
 	# Applying an orbital child must never redirect the singleton root PlanetBake to
@@ -349,7 +371,7 @@ func _validate_celestial_multi_preview() -> bool:
 		return false
 	host.free()
 	fake_main.free()
-	print("CELESTIAL_SYSTEM_FRAME_OK: selection preserves absolute centres; orbital child Apply cannot hijack root PlanetBake")
+	print("CELESTIAL_SYSTEM_FRAME_OK: absolute centres + persistent root detail/atmosphere + safe orbital Apply")
 	return true
 
 
