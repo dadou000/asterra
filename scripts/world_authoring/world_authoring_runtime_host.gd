@@ -1,13 +1,13 @@
 class_name WorldAuthoringRuntimeHost
 extends Node
-## Installs Planet Studio over Main when launched in planet_studio mode and owns
-## the deliberate boundary between staged authoring resources and the production
-## one-planet runtime. Apply now computes the minimum dirty runtime subsystems so
-## HOT/local authoring never falls through to the expensive PlanetBake path.
+## Installs Planet Studio over Main and owns the boundary between staged authoring
+## resources and the production runtime. BLANK terrain is an analytic backend: it
+## never invokes PlanetBake and owns no generated height/material map.
 
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase19.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 const APPLY_PLANNER_SCRIPT := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
+const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const AUTHORED_WATER_RUNTIME_SPATIAL_PATH := "res://scripts/world_authoring/authored_water_runtime_spatial.gd"
 const AUTHORED_WATER_RUNTIME_QUERY_PATH := "res://scripts/world_authoring/authored_water_runtime_query.gd"
 const AUTHORED_WATER_RUNTIME_BASE_PATH := "res://scripts/world_authoring/authored_water_runtime.gd"
@@ -63,9 +63,6 @@ func _open_live_editor(player: Node) -> void:
 	_layer.add_child(live_editor)
 	_editor = live_editor
 
-	# The live editor is now inside the tree, so its transactional session has been
-	# initialized by _ready(). Keep a private copy of the last state actually sent
-	# to the runtime; ApplyScope is reset by session.apply() before `applied` emits.
 	var session_value: Variant = live_editor.get("_session")
 	if session_value is WorldAuthoringSession:
 		var session: WorldAuthoringSession = session_value as WorldAuthoringSession
@@ -102,15 +99,10 @@ func _open_live_editor(player: Node) -> void:
 	set_process(false)
 
 func _on_authoring_session_changed(dirty_state: bool, apply_scope: int) -> void:
-	# apply() emits changed(false, NONE) immediately before its applied signal.
-	# Preserve the last dirty scope until _on_runtime_apply_requested consumes it.
 	if dirty_state:
 		_pending_apply_scope = apply_scope
 
 func _resolve_authored_water_runtime_script() -> Script:
-	# Keep the path constants themselves as compile-time String expressions. The
-	# candidate container is created here at runtime because PackedStringArray(...)
-	# is not a valid GDScript constant expression in Godot 4.7.1.
 	var candidates := PackedStringArray([
 		AUTHORED_WATER_RUNTIME_SPATIAL_PATH,
 		AUTHORED_WATER_RUNTIME_QUERY_PATH,
@@ -143,9 +135,13 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_set_editor_status("Apply rejected: no active celestial body.")
 		return
 	if int(body.get(&"body_type")) == 0:
-		_set_editor_status("Stars are editable in the system definition, but the current terrain runtime previews terrestrial bodies only.")
+		# Stars are now fully persistent/editable in Planet Studio. The current scene
+		# still previews the terrestrial runtime, so applying a star performs no
+		# terrain work and never triggers PlanetBake.
+		_set_editor_status("Applied stellar authoring state for %s — no terrestrial terrain rebuild." % String(body.get(&"display_name")))
 		_runtime_applied_snapshot = system.duplicate(true)
 		return
+
 	var profile: Resource = body.get(&"planet_profile") as Resource
 	if profile == null:
 		_set_editor_status("Apply rejected: active body has no terrestrial profile.")
@@ -162,6 +158,17 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_set_editor_status("Apply rejected: generation/runtime configuration is unavailable.")
 		return
 
+	var blank: bool = int(terrain_profile.get(&"generation_mode")) \
+		== TERRAIN_PROFILE_SCRIPT.GenerationMode.BLANK
+	if blank:
+		_apply_blank_terrain(body, atmosphere, generation, terrain_profile, cfg)
+		_runtime_applied_snapshot = system.duplicate(true)
+		return
+
+	# Procedural runtime. Deltas are meaningful only in this backend.
+	if bool(Planet.get("blank_mode")):
+		Planet.call("set_blank_mode", false)
+		_set_ground_generated_height_enabled(true)
 	if bool(plan.get("sculpt", false)) or bool(plan.get("full_rebuild", false)):
 		_apply_sculpt_state(terrain_profile)
 
@@ -191,27 +198,19 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 	if bool(plan.get("biome", false)):
 		_mark_biome_dirty()
 		refreshed.append("authored biome preview")
-
 	if bool(plan.get("water_geometry", false)):
 		_mark_water_dirty()
 		refreshed.append("authored water geometry")
 	elif bool(plan.get("water_material", false)):
-		# Current authored-water materials are configured when their disposable mesh
-		# is compiled. This is still local work and deliberately never PlanetBake.
 		_mark_water_dirty()
 		refreshed.append("water material/wave parameters")
-
 	if bool(plan.get("ocean", false)):
 		_refresh_ocean_runtime()
 		refreshed.append("ocean runtime")
-
 	if bool(plan.get("tiles", false)):
-		# Fallback for a future TILES edit the planner does not know yet. Refresh only
-		# disposable local mirrors; never regenerate PlanetFields.
 		_mark_biome_dirty()
 		_mark_water_dirty()
 		refreshed.append("local authored tiles")
-
 	if bool(plan.get("graph", false)):
 		refreshed.append("shader graph staging")
 	if bool(plan.get("sculpt", false)):
@@ -224,11 +223,31 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_set_editor_status("Applied %s without PlanetBake — refreshed: %s." % [
 			String(body.get(&"display_name")), ", ".join(refreshed)])
 
+func _apply_blank_terrain(body: Resource, atmosphere: Resource, generation: Resource,
+		terrain_profile: Resource, cfg: Resource) -> void:
+	# Runtime config still carries radius and clipmap resolution controls, but none
+	# of the dormant macro/geology/climate values are evaluated while Blank is live.
+	generation.call("copy_to_resource", cfg)
+	_sync_body_config(body, atmosphere, cfg)
+	Planet.configure(cfg)
+	Planet.call("set_blank_mode", true)
+
+	# Persisted sculpt data is intentionally retained in TerrainAuthoringProfile for
+	# lossless mode switching, but it is not part of Blank's runtime surface.
+	Deltas.clear()
+	_set_ground_generated_height_enabled(false)
+	_refresh_clipmap_without_bake()
+	_mark_biome_dirty()
+	_apply_atmosphere_hot(body, atmosphere, cfg)
+	_set_editor_status("Applied %s as BLANK terrain — analytic sphere, no PlanetBake, no generated heightmap/material/biome map. Terrain shape is shader-authored; only custom biome paint is categorical." % String(body.get(&"display_name")))
+
 func _apply_full_rebuild(plan: Dictionary, body: Resource, atmosphere: Resource,
 		generation: Resource, cfg: Resource) -> void:
 	if bool(_main.get("_rebaking")):
 		_set_editor_status("A generator rebuild is already running; this Apply was not started.")
 		return
+	Planet.call("set_blank_mode", false)
+	_set_ground_generated_height_enabled(true)
 	generation.call("copy_to_resource", cfg)
 	_sync_body_config(body, atmosphere, cfg)
 	Planet.configure(cfg)
@@ -249,6 +268,11 @@ func _apply_sculpt_state(terrain_profile: Resource) -> void:
 	if sculpt_value is Dictionary:
 		Deltas.deserialize(sculpt_value as Dictionary)
 
+func _set_ground_generated_height_enabled(enabled: bool) -> void:
+	var ground: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	if ground != null and ground.has_method("set_heightmap_enabled"):
+		ground.call("set_heightmap_enabled", enabled)
+
 func _sync_body_config(body: Resource, atmosphere: Resource, cfg: Resource) -> void:
 	cfg.set(&"planet_radius", maxf(1.0, float(body.get(&"radius_m"))))
 	cfg.set(&"axial_tilt_deg", float(body.get(&"axial_tilt_deg")))
@@ -264,12 +288,12 @@ func _sync_frames(body: Resource, cfg: Resource) -> void:
 		absf(float(body.get(&"sidereal_rotation_period_s"))))
 
 func _refresh_clipmap_without_bake() -> void:
-	# Planet.configure() only replaces runtime configuration; it does not invoke
-	# PlanetBake or Planet.adopt(). Rebuild static GPU topology/material bindings
-	# against the already resident PlanetFields.
 	var terrain_node: Node = _main.get("terrain") as Node
 	if terrain_node != null and terrain_node.has_method("build_roots"):
 		terrain_node.call("build_roots")
+	var ground: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	if ground != null and ground.has_method("_configure_world"):
+		ground.call("_configure_world")
 	_refresh_ocean_runtime()
 	var runtime_editor: Node = _main.get("editor") as Node
 	if runtime_editor != null and runtime_editor.has_method("refresh"):
