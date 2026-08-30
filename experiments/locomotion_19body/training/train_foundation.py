@@ -324,8 +324,17 @@ def _run_and_close() -> int:
             traceback.print_exc(file=sys.stderr)
     finally:
         print(f"[Asterra shutdown] closing Isaac application (preserved exit={exit_code})", flush=True)
+        if exit_code != 0:
+            # SimulationApp.close() terminates the Windows process with status 0,
+            # masking the training exception. Flush the diagnostics and preserve
+            # the failure code for the Godot bridge and command-line callers.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(exit_code)
         try:
-            simulation_app.close()
+            # No Replicator output is produced by training. Immediate cleanup avoids
+            # Isaac Sim 5.1's Windows teardown stall and preserves SystemExit below.
+            simulation_app.close(skip_cleanup=True)
         except BaseException as exc:
             print(
                 f"[Asterra shutdown] Isaac close raised {type(exc).__name__}: {exc}",

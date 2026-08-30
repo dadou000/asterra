@@ -70,7 +70,9 @@ class AsterraStandEnvCfg(DirectRLEnvCfg):
         passive=False,
     )
     feet_contact = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*_foot",
+        # DirectRLEnv constructs this sensor manually in _setup_scene(), so the
+        # InteractiveScene config formatter never expands {ENV_REGEX_NS} here.
+        prim_path="/World/envs/env_.*/Robot/.*_foot",
         update_period=0.0,
         history_length=3,
         track_air_time=True,
@@ -128,7 +130,10 @@ class AsterraStandEnv(DirectRLEnv):
         self._gravity_w = torch.tensor(self.cfg.sim.gravity, device=self.device, dtype=torch.float32)
         self._reference_forward_w = torch.tensor((0.0, 1.0, 0.0), device=self.device, dtype=torch.float32)
         self._gravity_up_w = -self._gravity_w / torch.linalg.vector_norm(self._gravity_w)
-        self._body_mass = self._robot.data.default_mass
+        # Isaac Lab 2.3 exposes default_mass as a CPU tensor even when live body
+        # state is backed by CUDA. Cache it on the simulation device once so COM
+        # reward/termination calculations never mix devices in the rollout loop.
+        self._body_mass = self._robot.data.default_mass.to(device=self.device)
         self._total_physical_mass = float(self.manifest["total_physical_mass_kg"])
         self._half_body_weight = 0.5 * self._total_physical_mass * torch.linalg.vector_norm(self._gravity_w).item()
 
