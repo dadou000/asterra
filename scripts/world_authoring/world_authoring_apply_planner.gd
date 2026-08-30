@@ -3,10 +3,11 @@ extends RefCounted
 ## Computes the minimum live-runtime work required for a Planet Studio Apply.
 ##
 ## The editor's ApplyScope remains a useful UI hint, but it is intentionally not
-## the authority here: TILES can mean biome paint or authored water, and HOT can
-## mean atmosphere, waves, direct runtime shader overrides, or metadata. The
-## planner compares the last applied snapshot with the new snapshot and returns
-## independent subsystem dirty flags.
+## the authority here. In particular BLANK terrain is a separate analytic backend:
+## it must never fall through to PlanetBake merely because dormant generator data
+## changed while the body is blank.
+
+const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 
 const RUNTIME_GENERATION_FIELDS: PackedStringArray = [
 	"detail_amplitude",
@@ -57,15 +58,71 @@ static func build(previous_system: Resource, next_system: Resource,
 		plan["full_rebuild"] = true
 		plan["reason"] = "active body unavailable"
 		return plan
-	if String(previous_body.get(&"body_id")) != String(next_body.get(&"body_id")):
-		plan["full_rebuild"] = true
-		plan["reason"] = "active body changed"
+
+	var body_changed := String(previous_body.get(&"body_id")) != String(next_body.get(&"body_id"))
+	plan["body_changed"] = body_changed
+	var previous_type := int(previous_body.get(&"body_type"))
+	var next_type := int(next_body.get(&"body_type"))
+
+	# Stars are authorable first-class bodies, but they have no terrestrial terrain
+	# runtime to rebuild. Their authoring changes are therefore metadata/HOT from the
+	# point of view of this terrain host.
+	if next_type == 0:
+		plan["star"] = body_changed or previous_type != next_type \
+			or not _equivalent(previous_body.get(&"star_profile"), next_body.get(&"star_profile")) \
+			or not _equivalent(previous_body, next_body)
+		plan["hot"] = bool(plan["star"])
+		plan["reason"] = "stellar authoring state changed" if bool(plan["star"]) else ""
 		return plan
 
+	var previous_profile: Resource = previous_body.get(&"planet_profile") as Resource
+	var next_profile: Resource = next_body.get(&"planet_profile") as Resource
+	if next_profile == null:
+		plan["full_rebuild"] = true
+		plan["reason"] = "planet profile unavailable"
+		return plan
+	var previous_terrain: Resource = previous_profile.get(&"terrain") as Resource \
+		if previous_profile != null else null
+	var next_terrain: Resource = next_profile.get(&"terrain") as Resource
+	if next_terrain == null:
+		plan["full_rebuild"] = true
+		plan["reason"] = "terrain profile unavailable"
+		return plan
+
+	var next_mode := int(next_terrain.get(&"generation_mode"))
+	var previous_mode := int(previous_terrain.get(&"generation_mode")) \
+		if previous_terrain != null else -1
+	var next_blank := next_mode == TERRAIN_PROFILE_SCRIPT.GenerationMode.BLANK
+	var mode_changed := previous_mode != next_mode
+	plan["blank_terrain"] = next_blank
+	plan["terrain_backend"] = mode_changed or body_changed
+
+	# A different/reradiused procedural planet needs generated fields. A blank body
+	# only needs its analytic sphere/topology rebound; no height or material map is
+	# constructed in that path.
+	if body_changed:
+		if next_blank:
+			plan["clipmap"] = true
+			plan["reason"] = "selected blank terrain body"
+		else:
+			plan["full_rebuild"] = true
+			plan["reason"] = "active procedural body changed"
 	if not is_equal_approx(float(previous_body.get(&"radius_m")),
 			float(next_body.get(&"radius_m"))):
-		plan["full_rebuild"] = true
-		plan["reason"] = "planet radius changed"
+		if next_blank:
+			plan["clipmap"] = true
+			plan["terrain_backend"] = true
+			plan["reason"] = "blank body radius changed"
+		else:
+			plan["full_rebuild"] = true
+			plan["reason"] = "planet radius changed"
+	if mode_changed:
+		if next_blank:
+			plan["clipmap"] = true
+			plan["reason"] = "terrain backend changed to Blank"
+		else:
+			plan["full_rebuild"] = true
+			plan["reason"] = "terrain backend changed to Procedural"
 
 	plan["frames"] = (
 		not is_equal_approx(float(previous_body.get(&"axial_tilt_deg")),
@@ -73,65 +130,56 @@ static func build(previous_system: Resource, next_system: Resource,
 		or not is_equal_approx(float(previous_body.get(&"sidereal_rotation_period_s")),
 			float(next_body.get(&"sidereal_rotation_period_s"))))
 
-	var previous_profile: Resource = previous_body.get(&"planet_profile") as Resource
-	var next_profile: Resource = next_body.get(&"planet_profile") as Resource
-	if previous_profile == null or next_profile == null:
-		plan["full_rebuild"] = true
-		plan["reason"] = "planet profile changed incompatibly"
-		return plan
+	if previous_profile != null:
+		plan["runtime_shader"] = (
+			not _equivalent(previous_profile.get(&"runtime_shader_paths"),
+				next_profile.get(&"runtime_shader_paths"))
+			or not _equivalent(previous_profile.get(&"runtime_shader_overrides"),
+				next_profile.get(&"runtime_shader_overrides")))
+	else:
+		plan["runtime_shader"] = true
 
-	plan["runtime_shader"] = (
-		not _equivalent(previous_profile.get(&"runtime_shader_paths"),
-			next_profile.get(&"runtime_shader_paths"))
-		or not _equivalent(previous_profile.get(&"runtime_shader_overrides"),
-			next_profile.get(&"runtime_shader_overrides")))
+	# Generator settings remain stored on a Blank body so switching back is lossless,
+	# but they are dormant and must not trigger generation while Blank is active.
+	if not next_blank:
+		var previous_generation: Resource = previous_terrain.get(&"generation_profile") as Resource \
+			if previous_terrain != null else null
+		var next_generation: Resource = next_terrain.get(&"generation_profile") as Resource
+		_classify_generation(previous_generation, next_generation, plan)
 
-	var previous_terrain: Resource = previous_profile.get(&"terrain") as Resource
-	var next_terrain: Resource = next_profile.get(&"terrain") as Resource
-	if previous_terrain == null or next_terrain == null:
-		plan["full_rebuild"] = true
-		plan["reason"] = "terrain profile changed incompatibly"
-		return plan
-
-	var previous_generation: Resource = previous_terrain.get(&"generation_profile") as Resource
-	var next_generation: Resource = next_terrain.get(&"generation_profile") as Resource
-	_classify_generation(previous_generation, next_generation, plan)
-
-	plan["biome"] = not _equivalent(
+	plan["biome"] = previous_terrain == null or not _equivalent(
 		previous_terrain.get(&"biome_override_layers"),
 		next_terrain.get(&"biome_override_layers"))
-	plan["graph"] = (
+	plan["graph"] = previous_terrain == null or (
 		not _equivalent(previous_terrain.get(&"displacement_slots"),
 			next_terrain.get(&"displacement_slots"))
 		or not _equivalent(previous_terrain.get(&"material_slots"),
 			next_terrain.get(&"material_slots"))
 		or not _equivalent(previous_terrain.get(&"imported_texture_asset_ids"),
 			next_terrain.get(&"imported_texture_asset_ids")))
-	plan["sculpt"] = (
+	# BLANK deliberately has no authored heightfield. Keep dormant sculpt data in
+	# the profile, but never publish or classify it into the live blank backend.
+	plan["sculpt"] = not next_blank and previous_terrain != null and (
 		int(previous_terrain.get(&"sculpt_delta_version")) != int(next_terrain.get(&"sculpt_delta_version"))
 		or previous_terrain.get(&"sculpt_delta_keys") != next_terrain.get(&"sculpt_delta_keys")
 		or previous_terrain.get(&"sculpt_delta_tiles") != next_terrain.get(&"sculpt_delta_tiles"))
 
-	var previous_water: Resource = previous_profile.get(&"water") as Resource
+	var previous_water: Resource = previous_profile.get(&"water") as Resource \
+		if previous_profile != null else null
 	var next_water: Resource = next_profile.get(&"water") as Resource
 	_classify_water(previous_water, next_water, plan)
 
-	var previous_atmosphere: Resource = previous_profile.get(&"atmosphere") as Resource
+	var previous_atmosphere: Resource = previous_profile.get(&"atmosphere") as Resource \
+		if previous_profile != null else null
 	var next_atmosphere: Resource = next_profile.get(&"atmosphere") as Resource
 	plan["atmosphere"] = not _equivalent(previous_atmosphere, next_atmosphere)
 
-	# Body metadata, gravity and orbital authoring do not require terrain data to
-	# be regenerated. They are still an Apply, but the terrain pipeline does zero
-	# work unless one of the explicit flags above is set.
 	plan["hot"] = bool(plan["frames"]) or bool(plan["water_material"]) \
 		or bool(plan["atmosphere"]) or bool(plan["runtime_shader"])
 
 	if bool(plan["full_rebuild"]):
 		return plan
 	if not _has_runtime_work(plan):
-		# Unknown future edits fall back conservatively to the declared scope, while
-		# known metadata-only HOT/FULL_REBUILD fields stay cheap because their data
-		# was already inspected above.
 		match fallback_scope:
 			2: plan["graph"] = true
 			3: plan["tiles"] = true
@@ -206,6 +254,10 @@ static func _empty_plan() -> Dictionary:
 		"sculpt": false,
 		"frames": false,
 		"hot": false,
+		"terrain_backend": false,
+		"blank_terrain": false,
+		"body_changed": false,
+		"star": false,
 		"fallback_scope": 0,
 		"reason": "",
 	}
@@ -213,7 +265,8 @@ static func _empty_plan() -> Dictionary:
 static func _has_runtime_work(plan: Dictionary) -> bool:
 	for key: String in ["full_rebuild", "clipmap", "tiles", "biome", "water",
 			"water_geometry", "water_material", "ocean", "atmosphere",
-			"runtime_shader", "graph", "sculpt", "frames", "hot"]:
+			"runtime_shader", "graph", "sculpt", "frames", "hot",
+			"terrain_backend", "star"]:
 		if bool(plan.get(key, false)):
 			return true
 	return false
