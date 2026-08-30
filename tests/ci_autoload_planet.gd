@@ -13,6 +13,7 @@ class CIPlanetConfig extends Resource:
 	var planet_radius: float = 1000000.0
 
 var ready_state: bool = false
+var blank_mode: bool = false
 var cfg: Resource
 var fields: Resource
 var orbit_elevation_texture: Texture2DArray
@@ -24,7 +25,12 @@ func configure_for_sculpt_ci(radius_m: float = 1000000.0) -> void:
 	cfg = next
 	ready_state = true
 
+func set_blank_mode(enabled: bool) -> void:
+	blank_mode = enabled
+
 func pristine_height(direction: Vector3, _detail: Variant = null) -> float:
+	if blank_mode:
+		return 0.0
 	if direction.length_squared() <= 1e-12:
 		return 0.0
 	var d := direction.normalized()
