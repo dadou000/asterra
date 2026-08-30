@@ -75,14 +75,14 @@ func query_all_world_point(world_point: Vec3D) -> Array[Dictionary]:
 		var feature: Resource = feature_value as Resource
 		if feature == null or not bool(feature.get(&"enabled")):
 			continue
-		var match: Dictionary
+		var feature_hit: Dictionary
 		if int(feature.get(&"feature_type")) == 1:
-			match = _query_river(feature, direction, point_altitude_m, body_radius)
+			feature_hit = _query_river(feature, direction, point_altitude_m, body_radius)
 		else:
-			match = _query_lake(feature, direction, point_altitude_m, body_radius)
-		if not match.is_empty():
-			_apply_wave_state(match, water, direction, body_radius)
-			out.append(match)
+			feature_hit = _query_lake(feature, direction, point_altitude_m, body_radius)
+		if not feature_hit.is_empty():
+			_apply_wave_state(feature_hit, water, direction, body_radius)
+			out.append(feature_hit)
 	return out
 
 
