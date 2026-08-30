@@ -25,6 +25,7 @@ const SCRIPT_PATHS := [
 	"res://scripts/world_authoring/world_authoring_editor_live_phase18.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase20.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase22.gd",
+	"res://scripts/world_authoring/world_authoring_editor_live_phase23.gd",
 	"res://scripts/world_authoring/world_authoring_runtime_host.gd",
 	"res://tools/terrain_region_compiler.gd",
 ]
@@ -163,8 +164,6 @@ func _validate_apply_planner() -> bool:
 
 
 func _validate_blank_and_star_authoring() -> bool:
-	# Switching to Blank while simultaneously changing a dormant macro generator
-	# field must still avoid PlanetBake. Blank has no generated height/material map.
 	var pair: Array = _fresh_system_pair()
 	var previous: Resource = pair[0]
 	var next: Resource = pair[1]
@@ -180,8 +179,6 @@ func _validate_blank_and_star_authoring() -> bool:
 		_fail("BLANK_TERRAIN_MODE_FAILED: Blank requested generator/sculpt heightfield work")
 		return false
 
-	# Once already Blank, custom biome paint remains a local authored categorical
-	# edit and still cannot escape to generated biome/material work.
 	var blank_previous: Resource = next.duplicate(true)
 	var blank_next: Resource = next.duplicate(true)
 	var blank_terrain: Resource = _active_terrain(blank_next)
@@ -275,46 +272,84 @@ func _validate_celestial_multi_preview() -> bool:
 	session.bootstrap_from_generation_profile(GENERATION_PROFILE.new())
 	var parent: Resource = session.active_body()
 	if parent == null:
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: bootstrap has no parent planet")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: bootstrap has no parent planet")
 		return false
 	var parent_id: String = String(parent.get(&"body_id"))
 	var moon: Resource = session.create_body("CI Moon", BODY_SCRIPT.BodyType.MOON, parent_id)
 	if moon == null:
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: moon creation failed")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon creation failed")
 		return false
 	var orbit: Resource = moon.get(&"orbit") as Resource
 	var minimum_separation: float = float(parent.get(&"radius_m")) + float(moon.get(&"radius_m"))
 	if orbit == null or float(orbit.get(&"semi_major_axis_m")) <= minimum_separation:
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: child body retained zero/overlapping default orbit")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: child body retained zero/overlapping default orbit")
 		return false
 
 	var preview: Node3D = CELESTIAL_PREVIEW.new() as Node3D
 	if preview == null:
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: preview runtime did not instantiate")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: preview runtime did not instantiate")
 		return false
 	add_child(preview)
-	preview.call("show_system", session.staged_system, parent_id, false)
+	preview.call("show_system", session.staged_system, parent_id, parent_id)
 	if int(preview.call("preview_body_count")) != 2:
 		preview.free()
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: parent selection did not retain both bodies")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: parent selection did not retain both bodies")
+		return false
+	var parent_world: Vec3D = preview.call("body_world_position", parent_id) as Vec3D
+	var parent_selected_center: Vec3D = preview.call("selected_center_world") as Vec3D
+	if parent_world == null or parent_world.length_sq() > 1.0e-6 \
+			or parent_selected_center == null or parent_selected_center.length_sq() > 1.0e-6:
+		preview.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: root planet moved away from system origin")
 		return false
 	if float(preview.call("family_frame_radius_m")) <= float(parent.get(&"radius_m")):
 		preview.free()
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: parent focus ignored moon orbital extent")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: parent focus ignored moon orbital extent")
 		return false
 
 	var moon_id: String = String(moon.get(&"body_id"))
-	preview.call("show_system", session.staged_system, moon_id, true)
+	preview.call("show_system", session.staged_system, moon_id, parent_id)
 	if int(preview.call("preview_body_count")) != 2:
 		preview.free()
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: moon selection discarded its parent planet")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon selection discarded its parent planet")
+		return false
+	var parent_after_select: Vec3D = preview.call("body_world_position", parent_id) as Vec3D
+	var moon_world: Vec3D = preview.call("body_world_position", moon_id) as Vec3D
+	var moon_selected_center: Vec3D = preview.call("selected_center_world") as Vec3D
+	if parent_after_select == null or parent_after_select.length_sq() > 1.0e-6:
+		preview.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: selecting moon re-centred the parent planet")
+		return false
+	if moon_world == null or moon_world.length() <= minimum_separation \
+			or moon_selected_center == null \
+			or moon_selected_center.sub(moon_world).length() > 0.001:
+		preview.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon did not retain its absolute orbital centre")
 		return false
 	if float(preview.call("family_frame_radius_m")) <= float(moon.get(&"radius_m")):
 		preview.free()
-		_fail("CELESTIAL_MULTI_PREVIEW_FAILED: moon focus ignored parent orbital extent")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon focus ignored parent orbital extent")
 		return false
 	preview.free()
-	print("CELESTIAL_MULTI_PREVIEW_OK: parent + moon coexist; non-zero orbit and family framing validated")
+
+	# Applying an orbital child must never redirect the singleton root PlanetBake to
+	# that child's radius at system origin. Authoring state can apply, but runtime
+	# generation remains untouched until non-zero body centres are supported.
+	var fake_main := FakeRuntimeMain.new()
+	fake_main.cfg = GENERATION_PROFILE.new()
+	var host: Node = RUNTIME_HOST.new()
+	host.set("_main", fake_main)
+	host.set("_runtime_applied_snapshot", session.applied_system.duplicate(true))
+	host.set("_pending_apply_scope", WorldAuthoringSession.ApplyScope.FULL_REBUILD)
+	host.call("_on_runtime_apply_requested", session.staged_system)
+	if fake_main.rebake_calls != 0:
+		host.free()
+		fake_main.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: orbital moon Apply invoked root PlanetBake")
+		return false
+	host.free()
+	fake_main.free()
+	print("CELESTIAL_SYSTEM_FRAME_OK: selection preserves absolute centres; orbital child Apply cannot hijack root PlanetBake")
 	return true
 
 
