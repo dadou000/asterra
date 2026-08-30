@@ -102,6 +102,12 @@ func active_planet_profile() -> Resource:
 		return null
 	return body.get(&"planet_profile") as Resource
 
+func active_star_profile() -> Resource:
+	var body := active_body()
+	if body == null or int(body.get(&"body_type")) != BODY_SCRIPT.BodyType.STAR:
+		return null
+	return body.get(&"star_profile") as Resource
+
 func active_terrain_profile() -> Resource:
 	var profile := active_planet_profile()
 	if profile == null:
@@ -345,8 +351,19 @@ func _make_default_body(display_name: String, body_type: int, parent_body_id: St
 	body.set(&"body_type", body_type)
 	body.set(&"parent_body_id", parent_body_id)
 	body.set(&"body_id", BODY_SCRIPT.make_body_id(display_name))
-	body.set(&"radius_m", 600000.0 if body_type == BODY_SCRIPT.BodyType.MOON else 1000000.0)
-	body.set(&"sidereal_rotation_period_s", 24.0 * 3600.0)
+	if body_type == BODY_SCRIPT.BodyType.STAR:
+		# Solar-like defaults are useful without constraining the authoring range.
+		body.set(&"radius_m", 696340000.0)
+		body.set(&"mass_kg", 1.98847e30)
+		body.set(&"gravitational_parameter_m3_s2", 1.32712440018e20)
+		body.set(&"surface_gravity_m_s2", 274.0)
+		body.set(&"sidereal_rotation_period_s", 25.05 * 86400.0)
+	elif body_type == BODY_SCRIPT.BodyType.MOON:
+		body.set(&"radius_m", 600000.0)
+		body.set(&"sidereal_rotation_period_s", 24.0 * 3600.0)
+	else:
+		body.set(&"radius_m", 1000000.0)
+		body.set(&"sidereal_rotation_period_s", 24.0 * 3600.0)
 	body.call("ensure_children")
 	return body
 
