@@ -189,7 +189,13 @@ func _screen_aim(screen_position: Vector2) -> Dictionary:
 	var distance_m: float = -b - root
 	if distance_m < 0.0:
 		distance_m = -b + root
-	if distance_m < 0.0 or distance_m > PICK_MAX_RANGE_M:
+	# Family framing can intentionally place the camera millions of metres away.
+	# Keep the ordinary terrain pick cap for detailed terrain, but allow the exact
+	# analytic staged sphere hit to reach its selected body from that framing view.
+	var staged_pick_max: float = maxf(
+		PICK_MAX_RANGE_M,
+		offset.length() + _interest_radius_m * 2.0)
+	if distance_m < 0.0 or distance_m > staged_pick_max:
 		return {}
 	var system_world: Vec3D = ray_origin.add(Vec3D.from_v3(ray).mul(distance_m))
 	var body_local: Vec3D = system_world.sub(_interest_center_world)
@@ -224,6 +230,46 @@ func _draw_surface_ring(direction: Vector3, height: float,
 		var body_local: Vec3D = Vec3D.from_v3(up).mul(base_radius).add(
 			Vec3D.from_v3(offset))
 		var system_world: Vec3D = _interest_center_world.add(body_local)
+		_preview_mesh.surface_set_color(color)
+		_preview_mesh.surface_add_vertex(Frames.to_render(system_world))
+	_preview_mesh.surface_end()
+
+
+func _draw_selected_water_feature() -> void:
+	if not _interest_enabled or _interest_uses_detailed_surface:
+		super._draw_selected_water_feature()
+		return
+	if _selected_water_feature_id.is_empty() or _preview_mesh == null:
+		return
+	var water: Resource = _session.active_water_profile() as Resource
+	if water == null:
+		return
+	var feature: Resource = water.call("find_feature", _selected_water_feature_id) as Resource
+	if feature == null:
+		return
+	var color := Color(1.0, 0.18, 0.78, 1.0)
+	var is_river: bool = int(feature.get(&"feature_type")) \
+		== WATER_FEATURE_SCRIPT.FeatureType.RIVER
+	var points: Array[Vector3] = []
+	if is_river:
+		var segment_count: int = int(feature.call("river_segment_count"))
+		for segment: int in segment_count:
+			for sample_index: int in 17:
+				if segment > 0 and sample_index == 0:
+					continue
+				points.append(Vector3(feature.call("sample_river_segment",
+					segment, float(sample_index) / 16.0)))
+	else:
+		var polygon: PackedVector3Array = feature.get(&"lake_polygon_body_m")
+		for point: Vector3 in polygon:
+			points.append(point)
+		if polygon.size() > 2:
+			points.append(polygon[0])
+	if points.size() < 2:
+		return
+	_preview_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+	for point: Vector3 in points:
+		var system_world: Vec3D = _interest_center_world.add(Vec3D.from_v3(point))
 		_preview_mesh.surface_set_color(color)
 		_preview_mesh.surface_add_vertex(Frames.to_render(system_world))
 	_preview_mesh.surface_end()
