@@ -51,6 +51,25 @@ class ArticulationHelperTests(unittest.TestCase):
         height = self.helper.standing_root_height_m(self.manifest, clearance_m=0.005)
         self.assertAlmostEqual(height, 0.945, places=6)
 
+    def test_solver_velocity_is_not_humanoid_velocity_capability(self) -> None:
+        solver_limits = self.helper.physx_solver_velocity_limits(self.manifest)
+        voluntary_limits = {
+            str(dof["name"]): float(dof["velocity_limit_rad_s"])
+            for dof in self.manifest["dofs"]
+        }
+        self.assertEqual(set(solver_limits), set(voluntary_limits))
+        self.assertTrue(
+            all(
+                solver_limits[name] == self.helper.PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S
+                for name in solver_limits
+            )
+        )
+        self.assertGreater(
+            self.helper.PHYSX_SOLVER_VELOCITY_LIMIT_RAD_S,
+            max(voluntary_limits.values()),
+        )
+        self.assertAlmostEqual(self.helper.TRAINING_JOINT_ARMATURE_KGM2, 0.005)
+
     def test_load_manifest_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "manifest.json"
