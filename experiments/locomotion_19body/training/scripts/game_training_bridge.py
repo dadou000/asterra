@@ -52,9 +52,11 @@ class Bridge:
         self.log_path = args.log.expanduser().resolve()
         self.cancel_path = args.cancel.expanduser().resolve()
         self.started = time.time()
+        self.step_started = self.started
         self.step_index = 0
         self.steps: list[tuple[str, list[str]]] = []
         self.current_child: subprocess.Popen[str] | None = None
+        self._training_runs_before: set[Path] = set()
 
     def status(
         self,
@@ -97,13 +99,23 @@ class Bridge:
     def _smoke_report_path(self, mode: str) -> Path:
         return self.exp / "runs" / "smoke" / f"latest_{mode}.json"
 
+    def _stand_training_root(self) -> Path:
+        return self.exp / "runs" / "training" / "stand"
+
+    def _stand_manifests(self) -> set[Path]:
+        root = self._stand_training_root()
+        if not root.is_dir():
+            return set()
+        return {path.resolve() for path in root.glob("*/run_manifest.json") if path.is_file()}
+
     def _prepare_step_outputs(self, name: str) -> None:
         mode = self._smoke_mode_from_step(name)
-        if mode is None:
-            return
-        report = self._smoke_report_path(mode)
-        if report.exists():
-            report.unlink()
+        if mode is not None:
+            report = self._smoke_report_path(mode)
+            if report.exists():
+                report.unlink()
+        if name == "train foundation: stand":
+            self._training_runs_before = self._stand_manifests()
 
     def _validate_smoke_report(self, name: str) -> tuple[bool, str]:
         mode = self._smoke_mode_from_step(name)
@@ -122,8 +134,40 @@ class Bridge:
             return False, f"Smoke report mode is {report.get('mode')!r}, expected {mode!r}"
         return True, ""
 
+    def _validate_stand_training(self, name: str) -> tuple[bool, str]:
+        if name != "train foundation: stand":
+            return True, ""
+        current = self._stand_manifests()
+        new_manifests = list(current - self._training_runs_before)
+        if not new_manifests:
+            return False, "Training child returned 0 but created no new stand run manifest"
+        newest = max(new_manifests, key=lambda path: path.stat().st_mtime)
+        try:
+            report = json.loads(newest.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return False, f"Stand run manifest is unreadable: {type(exc).__name__}: {exc}"
+        status = report.get("status")
+        if status != "complete":
+            failure = report.get("failed_exception")
+            detail = f" ({failure})" if failure else ""
+            return False, f"Stand run ended with manifest status {status!r}, expected 'complete'{detail}"
+        if int(report.get("max_iterations", -1)) != int(self.args.max_iterations):
+            return False, (
+                f"Stand run manifest iteration target is {report.get('max_iterations')!r}, "
+                f"expected {self.args.max_iterations}"
+            )
+        append_log(self.log_path, f"Validated completed stand run: {newest.parent}")
+        return True, ""
+
+    def _validate_step_result(self, name: str) -> tuple[bool, str]:
+        valid, reason = self._validate_smoke_report(name)
+        if not valid:
+            return valid, reason
+        return self._validate_stand_training(name)
+
     def run_step(self, name: str, command: list[str]) -> int:
         self.step_index += 1
+        self.step_started = time.time()
         self.status("running", f"Running {name}", current_step=name)
         append_log(self.log_path, "")
         append_log(self.log_path, f"===== [{self.step_index}/{len(self.steps)}] {name} =====")
@@ -148,9 +192,9 @@ class Bridge:
                     self.current_child = None
                     code = int(code)
                     if code == 0:
-                        valid, reason = self._validate_smoke_report(name)
+                        valid, reason = self._validate_step_result(name)
                         if not valid:
-                            append_log(self.log_path, f"SMOKE RESULT INVALID: {reason}")
+                            append_log(self.log_path, f"RESULT INVALID: {reason}")
                             code = 1
                     append_log(self.log_path, f"===== {name}: exit {code} =====")
                     return code
