@@ -20,11 +20,13 @@ on:
       - "tools/validate_scatter_manifest.py"
       - "tools/optimize_scatter_assets.py"
       - "tools/scatter_optimize_blender.py"
+      - "tools/terrain_region_compiler.gd"
       - "project.godot"
       - "tests/validate_terrain_shader.gd"
       - "tests/validate_terrain_scripts.gd"
       - "tests/validate_terrain_scripts_scene.gd"
       - "tests/validate_terrain_scripts.tscn"
+      - "tests/validate_secondary_terrain_scripts.gd"
       - "tests/validate_generation_model.gd"
       - "tests/validate_world_authoring_phase0.gd"
       - "tests/ci_autoload_planet.gd"
@@ -124,17 +126,19 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf /tmp/asterra-script-ci
-          mkdir -p /tmp/asterra-script-ci/scripts /tmp/asterra-script-ci/shaders /tmp/asterra-script-ci/tests /tmp/asterra-script-ci/scenes/world_authoring
+          mkdir -p /tmp/asterra-script-ci/scripts /tmp/asterra-script-ci/shaders /tmp/asterra-script-ci/tests /tmp/asterra-script-ci/tools /tmp/asterra-script-ci/scenes/world_authoring
           cp -R scripts/. /tmp/asterra-script-ci/scripts/
           cp -R shaders/. /tmp/asterra-script-ci/shaders/
           cp tests/validate_terrain_scripts.gd /tmp/asterra-script-ci/tests/
           cp tests/validate_terrain_scripts_scene.gd /tmp/asterra-script-ci/tests/
           cp tests/validate_terrain_scripts.tscn /tmp/asterra-script-ci/tests/
+          cp tests/validate_secondary_terrain_scripts.gd /tmp/asterra-script-ci/tests/
           cp tests/validate_generation_model.gd /tmp/asterra-script-ci/tests/
           cp tests/validate_world_authoring_phase0.gd /tmp/asterra-script-ci/tests/
           cp tests/ci_autoload_planet.gd /tmp/asterra-script-ci/tests/
           cp tests/ci_autoload_frames.gd /tmp/asterra-script-ci/tests/
           cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-script-ci/tests/
+          cp tools/terrain_region_compiler.gd /tmp/asterra-script-ci/tools/
           cp -R scenes/world_authoring/. /tmp/asterra-script-ci/scenes/world_authoring/
           cp world.tres /tmp/asterra-script-ci/world.tres
           cat > /tmp/asterra-script-ci/project.godot <<'EOF'
@@ -178,6 +182,30 @@ jobs:
           fi
           if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script" /tmp/asterra-script-import.log; then
             echo "Godot reported a script parse/load error while building the isolated class registry."
+            exit 1
+          fi
+
+      - name: Validate secondary terrain scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-script-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_secondary_terrain_scripts.gd > /tmp/secondary-terrain-scripts.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/secondary-terrain-scripts.log
+          if [ "$status" -ne 0 ]; then
+            echo "Secondary terrain-script validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "SECONDARY_TERRAIN_SCRIPT_STACK_OK" /tmp/secondary-terrain-scripts.log; then
+            echo "Secondary terrain-script completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference" /tmp/secondary-terrain-scripts.log; then
+            echo "Godot reported a parser/inheritance cycle in a secondary terrain script."
             exit 1
           fi
 
