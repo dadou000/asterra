@@ -1,6 +1,9 @@
-class_name WorldAuthoringLiveEditorPhase15
 extends "res://scripts/world_authoring/world_authoring_editor_live_phase14.gd"
 ## Phase 15: packed sparse target publication.
+##
+## Internal inheritance layer: intentionally loaded by resource path instead of a
+## global `class_name`. This avoids stale Godot global-script-class cache entries
+## resolving the moving Planet Studio phase chain as a cyclic reference.
 ##
 ## Phase 14 removed String/trigonometry overhead from candidate collection. This
 ## layer removes the second large Array[Dictionary] previously allocated while
