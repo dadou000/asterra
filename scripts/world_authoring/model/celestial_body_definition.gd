@@ -1,10 +1,11 @@
 class_name CelestialBodyDefinition
 extends Resource
-## Stable persistent definition for a star, planet or moon.
+## Stable persistent definition for a star, planet, moon or other celestial body.
 
 const ORBIT_SCRIPT := preload("res://scripts/world_authoring/model/orbit_definition.gd")
 const RING_SCRIPT := preload("res://scripts/world_authoring/model/ring_system_definition.gd")
 const PLANET_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/planet_authoring_profile.gd")
+const STAR_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/star_authoring_profile.gd")
 
 enum BodyType {
 	STAR,
@@ -32,6 +33,7 @@ enum BodyType {
 @export var orbit: Resource
 @export var rings: Resource
 @export var planet_profile: Resource
+@export var star_profile: Resource
 
 func ensure_children() -> void:
 	if body_id.is_empty():
@@ -40,7 +42,11 @@ func ensure_children() -> void:
 		orbit = ORBIT_SCRIPT.new()
 	if rings == null:
 		rings = RING_SCRIPT.new()
-	if body_type != BodyType.STAR:
+	if body_type == BodyType.STAR:
+		if star_profile == null:
+			star_profile = STAR_PROFILE_SCRIPT.new()
+		star_profile.call("ensure_valid")
+	else:
 		if planet_profile == null:
 			planet_profile = PLANET_PROFILE_SCRIPT.new()
 		planet_profile.call("ensure_children")
