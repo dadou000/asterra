@@ -247,9 +247,12 @@ class Bridge:
             str(self.args.max_iterations),
             "--seed",
             str(self.args.seed),
+            # Godot already owns the interactive Vulkan window. Starting a second
+            # Isaac/Kit GUI from that process tree can access-violate in Kit's
+            # renderer initialization on Windows, so in-game training is always
+            # headless even if visual smoke tests are configured otherwise.
+            "--headless",
         ]
-        if self.args.headless:
-            command.append("--headless")
         if self.args.device:
             command.extend(["--device", self.args.device])
         return command
