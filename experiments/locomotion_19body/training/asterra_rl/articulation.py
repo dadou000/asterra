@@ -275,8 +275,12 @@ def make_articulation_cfg(
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=False,
-                solver_position_iteration_count=8,
-                solver_velocity_iteration_count=4,
+                # The passive fall repeatedly hits anatomical hard stops. 8/4 let
+                # impact momentum push elbow/other stops >0.20 rad past their ROM.
+                # Keep the 240 Hz step and strengthen the constraint solve instead
+                # of widening anatomical limits.
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=8,
                 sleep_threshold=0.0,
                 stabilization_threshold=0.001,
             ),
