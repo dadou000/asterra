@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "skills": {
+    "reach_small_object_right": {
+      "purpose": "generic physical reach/grasp precursor to phone pickup",
+      "region_weights": {
+        "right_arm": 1.0,
+        "head_neck": 0.35,
+        "core_balance": 0.30,
+        "left_arm": 0.05,
+        "left_leg": 0.0,
+        "right_leg": 0.0
+      },
+      "allow_balance_latent_residual": true,
+      "task_inputs": [
+        "target_position_root_frame",
+        "target_orientation_root_frame",
+        "target_linear_velocity_root_frame",
+        "grip_width",
+        "task_phase_sin_cos"
+      ]
+    },
+    "phone_pickup_right": {
+      "purpose": "future specialization built on generic reach/grasp",
+      "inherits": "reach_small_object_right",
+      "region_weights": {
+        "right_arm": 1.0,
+        "head_neck": 0.70,
+        "core_balance": 0.35,
+        "left_arm": 0.05,
+        "left_leg": 0.0,
+        "right_leg": 0.0
+      },
+      "allow_balance_latent_residual": true
+    },
+    "wave_right": {
+      "region_weights": {
+        "right_arm": 1.0,
+        "head_neck": 0.10,
+        "core_balance": 0.10,
+        "left_arm": 0.0,
+        "left_leg": 0.0,
+        "right_leg": 0.0
+      },
+      "allow_balance_latent_residual": false
+    },
+    "heavy_door_right": {
+      "region_weights": {
+        "right_arm": 1.0,
+        "head_neck": 0.20,
+        "core_balance": 0.80,
+        "left_arm": 0.15,
+        "left_leg": 0.40,
+        "right_leg": 0.40
+      },
+      "allow_balance_latent_residual": true
+    }
+  },
+  "runtime_rules": {
+    "multiple_active_skills_allowed": true,
+    "sum_then_clamp": true,
+    "gate_range": [0.0, 1.0],
+    "skill_may_not_modify_physical_limits": true,
+    "skill_may_not_modify_torque_limits": true,
+    "skill_may_not_teleport_body_or_contact": true
+  }
+}

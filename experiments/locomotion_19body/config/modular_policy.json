@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "architecture": "asterra_modular_physics_policy_v1",
+  "principle": "physics_capability_is_external_to_policy",
+  "foundation": {
+    "shared_encoder": [512, 512],
+    "activation": "elu",
+    "observation_normalization": true,
+    "heads": {
+      "core_balance": [256, 128],
+      "left_leg": [256, 128],
+      "right_leg": [256, 128],
+      "left_arm": [256, 128],
+      "right_arm": [256, 128],
+      "head_neck": [128, 64]
+    },
+    "critic": [512, 512, 256]
+  },
+  "action_composition": {
+    "mode": "masked_residual",
+    "formula": "clamp(base + sum(gate_i * mask_i * residual_i), -1, 1)",
+    "gates_are_continuous": true,
+    "gates_are_low_pass_filtered": true,
+    "independently_trained_full_network_weight_interpolation": false
+  },
+  "regions": {
+    "core_balance": [
+      "pelvis_spine",
+      "spine_chest",
+      "chest_neck",
+      "neck_head"
+    ],
+    "left_leg": [
+      "left_hip",
+      "left_knee",
+      "left_ankle"
+    ],
+    "right_leg": [
+      "right_hip",
+      "right_knee",
+      "right_ankle"
+    ],
+    "left_arm": [
+      "chest_left_clavicle",
+      "left_shoulder",
+      "left_elbow",
+      "left_wrist"
+    ],
+    "right_arm": [
+      "chest_right_clavicle",
+      "right_shoulder",
+      "right_elbow",
+      "right_wrist"
+    ],
+    "head_neck": [
+      "chest_neck",
+      "neck_head"
+    ]
+  },
+  "adapter_training": {
+    "freeze_shared_encoder": true,
+    "freeze_foundation_heads": true,
+    "train_task_encoder": true,
+    "train_residual_head": true,
+    "balance_head_late_unfreeze_allowed": true,
+    "regression_gate_zero_required": true
+  },
+  "runtime": {
+    "foundation_file": "artifacts/foundation/actor.onnx",
+    "adapter_directory": "artifacts/adapters",
+    "policy_hz": 60,
+    "physics_hz": 120,
+    "composition_location": "runtime_before_actuator_envelope"
+  },
+  "coordinate_contract": {
+    "up_axis": "local_opposite_gravity",
+    "horizontal_frame": "gravity_aligned_root_tangent",
+    "global_up_assumption": false
+  }
+}
