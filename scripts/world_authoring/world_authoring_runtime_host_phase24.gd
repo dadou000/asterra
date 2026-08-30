@@ -35,10 +35,15 @@ func _flush_active_body_preview() -> void:
 	_selected_uses_detailed_surface = detailed_available \
 		and body_id == _detailed_runtime_body_id
 
-	# Critical invariant: the root runtime is system-owned, not selection-owned.
-	# Selecting a moon therefore leaves Asterra terrain/ocean resident and hides its
-	# blue lightweight duplicate for the entire time that detailed runtime is valid.
+	# Critical invariant: the production root runtime is system-owned, not
+	# selection-owned. Selecting a moon leaves Asterra terrain/ocean resident and
+	# hides its blue lightweight duplicate for as long as detailed runtime is valid.
 	_set_terrestrial_runtime_visible(detailed_available)
+	# The biome/water authoring mirrors are different: they follow session.active_body
+	# and are still root-centred. Do not let a moon selection make those disposable
+	# overlays rebuild around Asterra. They are enabled only while editing the root.
+	_set_selected_authoring_overlays_visible(_selected_uses_detailed_surface)
+
 	var family_radius_m: float = _selected_radius_m
 	if _celestial_preview != null:
 		var hidden_detailed_id: String = _detailed_runtime_body_id \
@@ -79,6 +84,25 @@ func detailed_runtime_should_be_visible(system: Resource, rebaking: bool = false
 	# Kept as an explicit testable invariant: changing active/selected body is not an
 	# input. Only root-runtime validity and an in-progress replacement bake matter.
 	return not rebaking and _detailed_runtime_is_root_usable(system)
+
+
+func _set_selected_authoring_overlays_visible(value: bool) -> void:
+	if _biome_preview != null and is_instance_valid(_biome_preview):
+		_biome_preview.set_process(value)
+		if value:
+			if _biome_preview.has_method("mark_dirty"):
+				_biome_preview.call("mark_dirty")
+		elif _biome_preview.has_method("_set_shader_ready"):
+			# Remove the last root-centred categorical texture binding immediately;
+			# merely stopping _process() would leave stale moon data on Asterra.
+			_biome_preview.call("_set_shader_ready", false)
+	if _authored_water_runtime != null and is_instance_valid(_authored_water_runtime):
+		_authored_water_runtime.set_process(value)
+		_authored_water_runtime.set_physics_process(value)
+		if _authored_water_runtime.has_method("_set_visible"):
+			_authored_water_runtime.call("_set_visible", value)
+		if value and _authored_water_runtime.has_method("mark_dirty"):
+			_authored_water_runtime.call("mark_dirty")
 
 
 func _update_sky_owner(system: Resource, selected_body: Resource,
