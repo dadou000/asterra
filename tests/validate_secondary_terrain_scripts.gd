@@ -9,6 +9,8 @@ const RUNTIME_HOST := preload("res://scripts/world_authoring/world_authoring_run
 const GENERATION_PROFILE := preload("res://scripts/world_authoring/model/generation_authoring_profile.gd")
 const TERRAIN_PROFILE := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
+const SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
+const DISPLACEMENT_RUNTIME := preload("res://scripts/world_authoring/terrain_displacement_runtime.gd")
 
 const SCRIPT_PATHS := [
 	"res://scripts/terrain/planet_height_store_procedural.gd",
@@ -16,6 +18,7 @@ const SCRIPT_PATHS := [
 	"res://scripts/world_authoring/authored_water_runtime_query.gd",
 	"res://scripts/world_authoring/authored_water_runtime_spatial.gd",
 	"res://scripts/world_authoring/model/star_authoring_profile.gd",
+	"res://scripts/world_authoring/terrain_displacement_runtime.gd",
 	"res://scripts/world_authoring/world_authoring_apply_planner.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase18.gd",
 	"res://scripts/world_authoring/world_authoring_editor_live_phase20.gd",
@@ -48,6 +51,8 @@ func _ready() -> void:
 	if not _validate_apply_planner():
 		return
 	if not _validate_blank_and_star_authoring():
+		return
+	if not _validate_blank_shader_displacement():
 		return
 	if not _validate_hot_apply_execution():
 		return
@@ -203,6 +208,60 @@ func _validate_blank_and_star_authoring() -> bool:
 		_fail("STAR_AUTHORING_FAILED: stellar profile did not retain custom parameters")
 		return false
 	print("STAR_AUTHORING_OK: first-class customizable star profile avoids terrestrial PlanetBake")
+	return true
+
+
+func _validate_blank_shader_displacement() -> bool:
+	var terrain: Resource = TERRAIN_PROFILE.new()
+	terrain.set(&"generation_mode", TERRAIN_PROFILE.GenerationMode.BLANK)
+	terrain.call("ensure_valid")
+	if bool(terrain.call("uses_generated_heightmap")):
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: Blank still reports a generated heightmap")
+		return false
+
+	var slot: Resource = terrain.call("create_shader_slot",
+		SLOT_SCRIPT.Domain.DISPLACEMENT, "CI Blank Mountains") as Resource
+	if slot == null:
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: displacement slot was not created")
+		return false
+	slot.set(&"strength", 2.0)
+	var graph: Resource = slot.get(&"graph") as Resource
+	if graph == null:
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: displacement graph was not created")
+		return false
+	var output_id: String = ""
+	for node_value: Variant in graph.get(&"nodes") as Array:
+		if not (node_value is Dictionary):
+			continue
+		var node: Dictionary = node_value as Dictionary
+		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String(node.get("id", ""))
+			break
+	if output_id.is_empty():
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: graph has no displacement output")
+		return false
+	var constant_id: String = String(graph.call("add_node", "CONSTANT_FLOAT",
+		Vector2(120.0, 120.0), {"value": 37.5}))
+	if constant_id.is_empty() or not bool(graph.call("connect_nodes",
+		constant_id, 0, output_id, 0)):
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: test graph could not connect to output")
+		return false
+
+	var runtime: Node = DISPLACEMENT_RUNTIME.new() as Node
+	if runtime == null:
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: runtime compiler could not instantiate")
+		return false
+	var stats: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	var height_m: float = float(runtime.call("evaluate_height",
+		Vector3.RIGHT, 0.0, 0, 0, 0.0))
+	runtime.free()
+	if not bool(stats.get("active", false)):
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: compiled displacement program is inactive")
+		return false
+	if not is_equal_approx(height_m, 75.0):
+		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: expected 75 m shader terrain, got %.6f m" % height_m)
+		return false
+	print("BLANK_SHADER_DISPLACEMENT_OK: generated height off; shared bytecode produces 75.0 m physical shader terrain")
 	return true
 
 
