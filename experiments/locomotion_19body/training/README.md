@@ -15,7 +15,7 @@ The repo owns all Asterra task, policy, runner and export code. Isaac Lab is a d
 
 ## Implemented now
 
-The first physical bridge is live:
+### 1. Deterministic physical articulation build
 
 ```powershell
 python experiments/locomotion_19body/training/scripts/build_articulation.py
@@ -44,6 +44,51 @@ The URDF is pelvis-centered. Asterra `+X,+Y,-Z` (right, up, forward) maps to tra
 
 Stage-0A actuator effort/velocity/gain values are deliberately marked **provisional**. They exist to prove the pipeline and must be calibrated before serious locomotion training.
 
+### 2. Manifest-driven Isaac articulation config
+
+`training/asterra_rl/articulation.py` now:
+
+- loads and validates `articulation_manifest.json` without requiring Isaac Sim;
+- derives the exact 54-DOF name/order contract;
+- derives the 55 expected PhysX link names (19 real + 36 virtual);
+- computes neutral pelvis spawn height from foot geometry;
+- builds Isaac Lab `ArticulationCfg` actuator groups directly from manifest torque/velocity/Kp/Kd values;
+- supports a zero-drive passive mode without changing hard joint limits;
+- validates live PhysX joint order, body names, limits, effort/velocity caps, gains and total mass after `sim.reset()`.
+
+Pure helper checks:
+
+```powershell
+python experiments/locomotion_19body/training/scripts/test_articulation_helpers.py
+```
+
+### 3. Vectorized GPU PhysX smoke simulation
+
+After USD conversion, the smoke harness can spawn many copies through `InteractiveScene`:
+
+```powershell
+# neutral PD hold diagnostics
+.\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/smoke_sim.py `
+  --headless --num-envs 256 --mode hold --seconds 2
+
+# passive-fall / contact diagnostics
+.\.venv-isaac\Scripts\python.exe experiments/locomotion_19body/training/scripts/smoke_sim.py `
+  --headless --num-envs 256 --mode passive --seconds 2 --strict-contact
+```
+
+The smoke test is intentionally not an RL task. It fails on infrastructure errors such as:
+
+- PhysX joint name/order drift from the canonical 54-action manifest;
+- missing/extra physical or virtual links;
+- wrong hard limits, torque limits, velocity limits or PD gains;
+- mass mismatch;
+- NaN/Inf in joint, root, body or contact tensors;
+- excessive hard-limit penetration;
+- runaway root/joint velocities;
+- optionally, missing left/right foot contact.
+
+Ordinary falling is **not** considered an infrastructure failure. `hold` and `passive` write diagnostic root heights, joint speeds, limit excursions, contact force and throughput to ignored JSON reports under `runs/smoke/`.
+
 ## Isaac setup
 
 ```powershell
@@ -68,8 +113,10 @@ The pure-Python builder/tests do not depend on Isaac and can run regardless.
 
 ## Next implementation gate
 
-1. `scripts/smoke_sim.py` — spawn copies of the generated USD and verify body/joint names, limits, contacts and finite tensors.
-2. `asterra_rl/articulation.py` — build actuator groups directly from `articulation_manifest.json`.
-3. `train_foundation.py --stage stand` — first actual PPO controller.
+Once both PhysX smoke modes pass on the training machine:
+
+1. `asterra_rl/observations.py` — freeze gravity-aligned proprioception and action-history tensor ordering.
+2. `asterra_rl/actions.py` — normalized target offsets -> physical PD target envelope with coupled-ROM clamping.
+3. `train_foundation.py --stage stand` — first actual RSL-RL PPO controller.
 
 Do not begin motion imitation until the passive PhysX articulation passes the same neutral-pose and fall sanity checks as the Jolt test.
