@@ -4,10 +4,10 @@ extends Node
 ## resources and the production runtime. BLANK terrain is an analytic backend: it
 ## never invokes PlanetBake and owns no generated height/material map.
 ##
-## The host also owns the live celestial preview boundary. The one generated
-## terrestrial runtime can only belong to one applied body at a time; other staged
-## bodies are shown with an explicit preview sphere so they never inherit another
-## body's heightmap. Selection automatically frames the active body.
+## The host also owns the live celestial preview boundary. The selected body is
+## treated as the local body-centred origin. If it owns the generated terrestrial
+## runtime that terrain remains at the origin while every other staged body is
+## rendered by the lightweight celestial-system preview at its orbital offset.
 
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase22.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
@@ -25,6 +25,7 @@ const BASE_MIE_COEFF: float = 21.0e-6
 const DEFAULT_CLOUD_THICKNESS_M: float = 5300.0
 const BODY_FRAME_MARGIN: float = 1.18
 const BODY_FRAME_SURFACE_MARGIN: float = 1.04
+const FAMILY_FRAME_TRIGGER: float = 1.50
 
 var _main: Node
 var _layer: CanvasLayer
@@ -93,7 +94,7 @@ func _open_live_editor(player: Node) -> void:
 
 		var celestial_preview: Node3D = CELESTIAL_PREVIEW_SCRIPT.new() as Node3D
 		if celestial_preview != null:
-			celestial_preview.name = "PlanetStudioCelestialBodyPreview"
+			celestial_preview.name = "PlanetStudioCelestialSystemPreview"
 			_main.add_child(celestial_preview)
 			_celestial_preview = celestial_preview
 
@@ -139,7 +140,7 @@ func _on_body_focus_requested(_body_id: String) -> void:
 
 func _on_planet_world_ready(_fields: PlanetFields) -> void:
 	# Main finishes adopting the new fields and clears its rebake flag in the same
-	# frame. Defer one turn before replacing the staged sphere with real terrain.
+	# frame. Defer one turn before replacing the staged selected sphere with terrain.
 	_schedule_active_body_preview(true)
 
 func _active_staged_body_id() -> String:
@@ -176,25 +177,24 @@ func _flush_active_body_preview() -> void:
 	var owns_live_terrain: bool = not is_star and body_id == applied_id and not rebaking
 	var staged_preview: bool = not owns_live_terrain
 
-	if staged_preview:
-		_set_terrestrial_runtime_visible(false)
-		if _celestial_preview != null:
-			_celestial_preview.call("show_body", body)
-	else:
-		if _celestial_preview != null:
-			_celestial_preview.call("hide_preview")
-		_set_terrestrial_runtime_visible(true)
+	_set_terrestrial_runtime_visible(owns_live_terrain)
+	if _celestial_preview != null:
+		# Even when the selected body owns the detailed terrain runtime, keep all
+		# *other* bodies rendered. For staged bodies the selected sphere is rendered
+		# too because no generated terrain belongs to it yet.
+		_celestial_preview.call("show_system", _authoring_session.staged_system,
+			body_id, staged_preview)
 
 	var should_focus: bool = _preview_focus_pending or body_changed
 	_preview_focus_pending = false
 	if should_focus:
 		_focus_camera_on_body(body, staged_preview)
 		if is_star:
-			_set_editor_status("Focused %s — live stellar photosphere/corona preview." % String(body.get(&"display_name")))
+			_set_editor_status("Focused %s — stellar preview active; orbital companions remain visible." % String(body.get(&"display_name")))
 		elif staged_preview:
-			_set_editor_status("Focused %s — staged body preview. Apply this procedural body to generate its own terrain; no previous heightmap is reused." % String(body.get(&"display_name")))
+			_set_editor_status("Focused %s — staged body preview with parent/moons kept at their orbital positions. Apply to generate this body's own terrain." % String(body.get(&"display_name")))
 		else:
-			_set_editor_status("Focused %s — showing its applied live terrain." % String(body.get(&"display_name")))
+			_set_editor_status("Focused %s — applied terrain active; moons and other staged bodies remain visible around it." % String(body.get(&"display_name")))
 
 func _focus_camera_on_body(body: Resource, staged_preview: bool) -> void:
 	if _preview_player == null or body == null:
@@ -203,26 +203,40 @@ func _focus_camera_on_body(body: Resource, staged_preview: bool) -> void:
 	if camera == null:
 		return
 	var radius_m: float = maxf(float(body.get(&"radius_m")), 1.0)
-	var visual_radius_m: float = radius_m * BODY_FRAME_SURFACE_MARGIN
-	if staged_preview and _celestial_preview != null:
-		visual_radius_m = maxf(float(_celestial_preview.call("visual_radius_m")), radius_m)
+	var selected_visual_radius: float = radius_m * BODY_FRAME_SURFACE_MARGIN
+	var frame_radius: float = selected_visual_radius
+	var system_extent: float = selected_visual_radius
+	if _celestial_preview != null:
+		selected_visual_radius = maxf(float(_celestial_preview.call("visual_radius_m")), radius_m)
+		frame_radius = maxf(selected_visual_radius,
+			float(_celestial_preview.call("family_frame_radius_m")))
+		system_extent = maxf(frame_radius,
+			float(_celestial_preview.call("system_extent_m")))
+	elif staged_preview:
+		selected_visual_radius = radius_m
+		frame_radius = selected_visual_radius
+
 	var frame_distance: float = float(CELESTIAL_PREVIEW_SCRIPT.frame_distance_for_radius(
-		visual_radius_m, camera.fov, BODY_FRAME_MARGIN))
+		frame_radius, camera.fov, BODY_FRAME_MARGIN))
 
 	var radial_axis := Vector3(1.0, 0.18, 0.32).normalized()
 	var current_world: Vec3D = _preview_player.get("world_pos") as Vec3D
 	if current_world != null and current_world.length_sq() > 1.0:
 		radial_axis = current_world.normalized().to_v3()
+	# The preview's Keplerian reference plane is XZ. Looking down the Y axis keeps
+	# a nearby parent/moon pair spread across the viewport instead of stacking one
+	# behind the other. Single-body focus preserves the author's current radial side.
+	if frame_radius > selected_visual_radius * FAMILY_FRAME_TRIGGER:
+		radial_axis = Vector3.UP
 	var next_world: Vec3D = Vec3D.from_v3(radial_axis).mul(frame_distance)
 	_preview_player.set("world_pos", next_world)
 	# At -90 degrees the player's spherical camera points exactly toward -up, i.e.
-	# the selected body's centre. Yaw is intentionally preserved for the first
-	# tangent direction when the author resumes RMB look.
+	# the selected body's centre. Yaw remains available for tangent navigation.
 	_preview_player.set("pitch", -PI * 0.5)
 	Frames.rebase(next_world)
 	if _preview_player.has_method("_sync_transform"):
 		_preview_player.call("_sync_transform")
-	camera.far = maxf(camera.far, frame_distance + visual_radius_m * 4.0)
+	camera.far = maxf(camera.far, frame_distance + system_extent * 1.10)
 	_preview_player.emit_signal("moved", next_world)
 
 func _set_terrestrial_runtime_visible(value: bool) -> void:
