@@ -478,14 +478,14 @@ def build_urdf(contract: dict) -> ET.ElementTree:
     for body in contract["bodies"]:
         add_physical_link(robot, body, frames[str(body["name"])], contract)
     for joint in contract["joints"]:
-        add_virtual_link(robot, f"__frame__{joint['name']}_x", contract)
-        add_virtual_link(robot, f"__frame__{joint['name']}_y", contract)
+        add_virtual_link(robot, f"frame__{joint['name']}_x", contract)
+        add_virtual_link(robot, f"frame__{joint['name']}_y", contract)
     for joint in contract["joints"]:
         name, parent, child = str(joint["name"]), str(joint["parent"]), str(joint["child"])
         joint_position = point_to_training(contract, vec3(joint["anchor_m"], f"{name}.anchor"))
         joint_rotation = rotation_to_training(contract, anatomical_basis(joint["frame"]))
         first_xyz, first_rpy = origin_relative(frames[parent], joint_position, joint_rotation)
-        x_link, y_link = f"__frame__{name}_x", f"__frame__{name}_y"
+        x_link, y_link = f"frame__{name}_x", f"frame__{name}_y"
         actuator, limits = joint["actuator"], joint["limits_deg"]
         add_revolute_joint(robot, f"{name}_x", parent, x_link, first_xyz, first_rpy, (1,0,0), limits["x"], actuator, 0)
         add_revolute_joint(robot, f"{name}_y", x_link, y_link, (0,0,0), (0,0,0), (0,1,0), limits["y"], actuator, 1)

@@ -127,8 +127,8 @@ def expected_body_names(manifest: dict[str, Any]) -> list[str]:
     names = [str(body["name"]) for body in manifest["physical_bodies"]]
     for joint in manifest["anatomical_joints"]:
         joint_name = str(joint["name"])
-        names.append(f"__frame__{joint_name}_x")
-        names.append(f"__frame__{joint_name}_y")
+        names.append(f"frame__{joint_name}_x")
+        names.append(f"frame__{joint_name}_y")
     return names
 
 

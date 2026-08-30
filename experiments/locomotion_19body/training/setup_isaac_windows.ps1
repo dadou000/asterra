@@ -4,6 +4,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Assert-LastCommandSucceeded {
+    param([string]$Step)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Step failed with exit code $LASTEXITCODE."
+    }
+}
+
 Write-Host "Asterra Isaac Lab training environment"
 Write-Host "Virtual environment: $VenvPath"
 
@@ -13,11 +20,22 @@ if ($null -eq $py) {
 }
 
 & py -3.11 -m venv $VenvPath
+Assert-LastCommandSucceeded "Python 3.11 virtual environment creation"
 $python = Join-Path $VenvPath "Scripts\python.exe"
 
 & $python -m pip install --upgrade pip
+Assert-LastCommandSucceeded "pip upgrade"
+& $python -m pip install "setuptools==80.9.0" "wheel==0.42.0"
+Assert-LastCommandSucceeded "packaging tool installation"
+# flatdict 4.0.1 imports pkg_resources while determining build requirements.
+# Installing it without isolation keeps that legacy build on the compatible
+# setuptools version above instead of the latest isolated build environment.
+& $python -m pip install "flatdict==4.0.1" --no-build-isolation
+Assert-LastCommandSucceeded "flatdict compatibility installation"
 & $python -m pip install "isaaclab[isaacsim,all]==2.3.1" --extra-index-url https://pypi.nvidia.com
+Assert-LastCommandSucceeded "Isaac Lab installation"
 & $python -m pip install --upgrade torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+Assert-LastCommandSucceeded "CUDA PyTorch installation"
 
 Write-Host ""
 Write-Host "Environment installed. Verify with:"

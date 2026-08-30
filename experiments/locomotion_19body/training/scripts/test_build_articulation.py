@@ -78,7 +78,7 @@ class ArticulationContractTests(unittest.TestCase):
         self.assertTrue(all(joint.get("type") == "revolute" for joint in joints))
         physical_names = {body["name"] for body in self.contract["bodies"]}
         self.assertEqual(len([link for link in links if link.get("name") in physical_names]), 19)
-        virtual = [link for link in links if link.get("name", "").startswith("__frame__")]
+        virtual = [link for link in links if link.get("name", "").startswith("frame__")]
         self.assertEqual(len(virtual), 36)
         self.assertTrue(all(link.find("collision") is None for link in virtual))
 

@@ -212,11 +212,19 @@ def main() -> int:
     bones = list(manifest["skeleton"]["bones"])
     parents = [int(bone["parent_index"]) for bone in bones]
     by_index = {int(bone["index"]): bone for bone in bones}
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for bone in bones:
+        by_name.setdefault(str(bone["name"]), []).append(bone)
 
     expected_parent: dict[str, str] = dict(rig["expected_parent"])
+    overrides: dict[str, str] = dict(rig.get("skin_landmark_overrides", {}))
     resolved: dict[str, int] = {}
     candidates_report: dict[str, list[dict[str, Any]]] = {}
     errors: list[str] = []
+
+    unknown_overrides = sorted(set(overrides) - set(ROLE_ORDER))
+    if unknown_overrides:
+        errors.append(f"unknown skin landmark overrides: {', '.join(unknown_overrides)}")
 
     for role in ROLE_ORDER:
         parent_role = expected_parent.get(role)
@@ -240,6 +248,38 @@ def main() -> int:
             }
             for score, bone, reasons in scored[:5]
         ]
+
+        override_name = overrides.get(role)
+        if override_name is not None:
+            matches = by_name.get(override_name, [])
+            if len(matches) != 1:
+                errors.append(
+                    f"{role}: override {override_name!r} matched {len(matches)} bones; expected exactly one"
+                )
+                continue
+            override_bone = matches[0]
+            override_index = int(override_bone["index"])
+            if override_index in resolved.values():
+                errors.append(f"{role}: override {override_name!r} is already assigned to another role")
+                continue
+            if parent_index is not None and not is_descendant(override_index, parent_index, parents):
+                parent_name = str(by_index[parent_index]["name"])
+                errors.append(
+                    f"{role}: override {override_name!r} is not below parent role bone {parent_name!r}"
+                )
+                continue
+            resolved[role] = override_index
+            candidates_report[role].insert(
+                0,
+                {
+                    "index": override_index,
+                    "name": override_name,
+                    "score": None,
+                    "reasons": ["explicit-override"],
+                    "global_rest_origin": override_bone["global_rest_origin"],
+                },
+            )
+            continue
 
         if not scored:
             errors.append(f"{role}: no candidate bones")
@@ -267,6 +307,7 @@ def main() -> int:
         "canonical_character": manifest.get("source", {}).get("godot_path", ""),
         "body_count": int(rig["body_count"]),
         "complete": not errors and len(resolved) == int(rig["body_count"]),
+        "explicit_overrides": overrides,
         "skin_landmarks": {
             role: {
                 "bone_index": index,

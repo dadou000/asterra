@@ -8,6 +8,7 @@ extends Node3D
 ## preserve their imported rest pose and inherit from their nearest driven parent.
 
 const CHARACTER_SCENE: PackedScene = preload("res://assets/character/asterrahuman.glb")
+const PROXY_MAP_PATH: String = "res://experiments/locomotion_19body/generated/asterrahuman_physics_proxy_map.json"
 const TOGGLE_KEY: Key = KEY_C
 const EXPECTED_ANCHORS: int = 19
 
@@ -132,6 +133,46 @@ func _find_skeleton(node: Node) -> Skeleton3D:
 
 
 func _resolve_anchor_bones() -> void:
+	_anchor_bones.clear()
+	_semantic_by_bone.clear()
+	var used: Dictionary = {}
+	if not _resolve_anchor_bones_from_proxy_map(used):
+		push_error("Canonical character overlay could not load the audited 19-body proxy map")
+
+
+func _resolve_anchor_bones_from_proxy_map(used: Dictionary) -> bool:
+	if not FileAccess.file_exists(PROXY_MAP_PATH):
+		return false
+	var file: FileAccess = FileAccess.open(PROXY_MAP_PATH, FileAccess.READ)
+	if file == null:
+		return false
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not (parsed is Dictionary):
+		return false
+	var document: Dictionary = parsed as Dictionary
+	if not bool(document.get("complete", false)):
+		return false
+	var landmarks_variant: Variant = document.get("skin_landmarks", {})
+	if not (landmarks_variant is Dictionary):
+		return false
+	var landmarks: Dictionary = landmarks_variant as Dictionary
+	var resolved: Dictionary = {}
+	for semantic: String in SEMANTICS:
+		var record_variant: Variant = landmarks.get(semantic, {})
+		if not (record_variant is Dictionary):
+			return false
+		var record: Dictionary = record_variant as Dictionary
+		var bone_name: String = String(record.get("bone_name", ""))
+		var bone_idx: int = _skeleton.find_bone(bone_name)
+		if bone_idx < 0 or bone_idx != int(record.get("bone_index", -1)) or resolved.values().has(bone_idx):
+			return false
+		resolved[semantic] = bone_idx
+	for semantic: String in SEMANTICS:
+		_register_anchor(semantic, int(resolved[semantic]), used)
+	return _anchor_bones.size() == EXPECTED_ANCHORS
+
+
+func _resolve_anchor_bones_heuristically() -> void:
 	_anchor_bones.clear()
 	_semantic_by_bone.clear()
 	var used: Dictionary = {}

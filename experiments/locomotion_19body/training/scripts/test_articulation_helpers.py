@@ -45,7 +45,7 @@ class ArticulationHelperTests(unittest.TestCase):
         self.assertEqual(len(names), 55)
         self.assertEqual(len(set(names)), 55)
         self.assertIn("pelvis", names)
-        self.assertIn("__frame__right_ankle_y", names)
+        self.assertIn("frame__right_ankle_y", names)
 
     def test_neutral_root_height(self) -> None:
         height = self.helper.standing_root_height_m(self.manifest, clearance_m=0.005)

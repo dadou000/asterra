@@ -1,5 +1,6 @@
 .godot/
 .import/
+.venv-isaac/
 *.tmp
 *.log
 experiments/locomotion_19body/data/

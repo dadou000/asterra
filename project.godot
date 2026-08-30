@@ -1,5 +1,10 @@
-; Minimal Asterra 19-body ragdoll experiment project.
-; No game autoloads, terrain, weather, UI or gameplay systems are enabled here.
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
@@ -7,6 +12,7 @@ config_version=5
 
 config/name="Asterra 19-Body Ragdoll Test"
 run/main_scene="res://scenes/ragdoll_test.tscn"
+config/features=PackedStringArray("4.7")
 
 [display]
 
@@ -19,13 +25,13 @@ window/stretch/mode="canvas_items"
 [physics]
 
 common/physics_ticks_per_second=120
-common/physics_interpolation=true
-3d/default_gravity=9.81
 3d/physics_engine="Jolt Physics"
-jolt_physics_3d/simulation/position_steps=8
 jolt_physics_3d/simulation/velocity_steps=20
+jolt_physics_3d/simulation/position_steps=8
 jolt_physics_3d/simulation/penetration_slop=0.005
 jolt_physics_3d/limits/max_angular_velocity=30.0
+3d/default_gravity=9.81
+common/physics_interpolation=true
 
 [rendering]
 
