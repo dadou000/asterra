@@ -1,9 +1,7 @@
 extends CanvasLayer
 ## In-game controller for the repo-local humanoid training pipeline.
-##
-## The panel never runs Isaac/Python work on Godot's main thread. It launches a
-## small standard-library bridge process, then polls UTF-8 status/log files while
-## the Jolt ragdoll remains fully interactive.
+## External Python/Isaac work is launched asynchronously through
+## game_training_bridge.py, so Jolt and the ragdoll remain interactive.
 
 const PANEL_WIDTH: float = 452.0
 const POLL_INTERVAL: float = 0.25
@@ -55,7 +53,6 @@ func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(_control_dir)
 	_build_ui()
 	_refresh_environment_status()
-	set_process(true)
 
 
 func _process(delta: float) -> void:
@@ -63,28 +60,24 @@ func _process(delta: float) -> void:
 	if _poll_accumulator < POLL_INTERVAL:
 		return
 	_poll_accumulator = 0.0
-
 	_refresh_log()
 	if _active_pid <= 0:
 		return
-
 	if _setup_process:
 		if not OS.is_process_running(_active_pid):
 			_finish_setup_process()
 		return
-
 	_refresh_bridge_status()
 	if not OS.is_process_running(_active_pid):
 		_finish_bridge_process()
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not (event is InputEventKey):
-		return
-	var key_event: InputEventKey = event as InputEventKey
-	if key_event.pressed and not key_event.echo and key_event.keycode == KEY_F3:
-		_panel.visible = not _panel.visible
-		get_viewport().set_input_as_handled()
+	if event is InputEventKey:
+		var key_event: InputEventKey = event as InputEventKey
+		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_F3:
+			_panel.visible = not _panel.visible
+			get_viewport().set_input_as_handled()
 
 
 func _build_ui() -> void:
@@ -92,7 +85,6 @@ func _build_ui() -> void:
 	_panel.name = "HumanoidTrainingConsole"
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
-	_panel.anchor_top = 0.0
 	_panel.anchor_bottom = 1.0
 	_panel.offset_left = -PANEL_WIDTH - 12.0
 	_panel.offset_right = -12.0
@@ -102,22 +94,26 @@ func _build_ui() -> void:
 	add_child(_panel)
 
 	var margin: MarginContainer = MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_top", 10)
-	margin.add_theme_constant_override("margin_bottom", 10)
+	for side: String in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 10)
 	_panel.add_child(margin)
 
+	var scroll: ScrollContainer = ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(scroll)
+
 	var root: VBoxContainer = VBoxContainer.new()
-	root.add_theme_constant_override("separation", 6)
-	margin.add_child(root)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_theme_constant_override("separation", 5)
+	scroll.add_child(root)
 
 	var title_row: HBoxContainer = HBoxContainer.new()
 	root.add_child(title_row)
 	var title: Label = Label.new()
 	title.text = "HUMANOID TRAINING CONTROL"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 18)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title)
 	var hide_button: Button = Button.new()
 	hide_button.text = "Hide [F3]"
@@ -125,152 +121,130 @@ func _build_ui() -> void:
 	title_row.add_child(hide_button)
 
 	_status_label = Label.new()
-	_status_label.text = "IDLE"
 	_status_label.add_theme_font_size_override("font_size", 14)
 	root.add_child(_status_label)
-
 	_detail_label = Label.new()
-	_detail_label.text = "Checking training environment..."
 	_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_detail_label)
 
-	root.add_child(HSeparator.new())
-	_add_section_label(root, "Runtime")
+	_section(root, "Runtime")
+	_python_path = _line_row(root, "Python", _default_training_python())
+	_device_edit = _line_row(root, "Device", "cuda:0")
 
-	_python_path = _add_line_row(root, "Python", _default_training_python())
-	_device_edit = _add_line_row(root, "Device", "cuda:0")
+	_section(root, "PhysX smoke parameters")
+	_env_count = _spin_row(root, "Environments", 1.0, 4096.0, 256.0, 1.0)
+	_seconds = _spin_row(root, "Seconds", 0.1, 30.0, 2.0, 0.1)
+	_seed = _spin_row(root, "Seed", 0.0, 2147483647.0, 1467.0, 1.0)
+	_noise_deg = _spin_row(root, "Joint noise °", 0.0, 45.0, 0.0, 0.25)
 
-	root.add_child(HSeparator.new())
-	_add_section_label(root, "PhysX smoke parameters")
-
-	_env_count = _add_spin_row(root, "Environments", 1.0, 4096.0, 256.0, 1.0, false)
-	_seconds = _add_spin_row(root, "Seconds", 0.1, 30.0, 2.0, 0.1, true)
-	_seed = _add_spin_row(root, "Seed", 0.0, 2147483647.0, 1467.0, 1.0, false)
-	_noise_deg = _add_spin_row(root, "Joint noise °", 0.0, 45.0, 0.0, 0.25, true)
-
-	var mode_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(mode_row)
-	var mode_label: Label = Label.new()
-	mode_label.text = "Mode"
-	mode_label.custom_minimum_size.x = 128.0
-	mode_row.add_child(mode_label)
+	var mode_row: HBoxContainer = _labeled_row(root, "Mode")
 	_mode = OptionButton.new()
-	_mode.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_mode.add_item("Hold / neutral PD", 0)
 	_mode.add_item("Passive fall", 1)
+	_mode.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mode_row.add_child(_mode)
 
-	var check_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(check_row)
+	var checks: HBoxContainer = HBoxContainer.new()
+	root.add_child(checks)
 	_headless = CheckButton.new()
 	_headless.text = "Headless"
 	_headless.button_pressed = true
-	check_row.add_child(_headless)
+	checks.add_child(_headless)
 	_strict_contact = CheckButton.new()
 	_strict_contact.text = "Strict foot contact"
 	_strict_contact.button_pressed = true
-	check_row.add_child(_strict_contact)
+	checks.add_child(_strict_contact)
 
-	root.add_child(HSeparator.new())
-	_add_section_label(root, "Pipeline")
-
-	var setup_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(setup_row)
-	_add_task_button(setup_row, "Setup Isaac", _on_setup_pressed)
-	_add_task_button(setup_row, "Check stack", _on_check_stack_pressed)
-
-	var build_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(build_row)
-	_add_task_button(build_row, "Build articulation", _on_build_pressed)
-	_add_task_button(build_row, "Run tests", _on_tests_pressed)
-
-	var sim_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(sim_row)
-	_add_task_button(sim_row, "Convert USD", _on_convert_pressed)
-	_add_task_button(sim_row, "Smoke selected", _on_smoke_pressed)
-
-	var action_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(action_row)
-	var preflight: Button = _add_task_button(action_row, "FULL PREFLIGHT", _on_preflight_pressed)
-	preflight.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_section(root, "Pipeline")
+	var row_a: HBoxContainer = HBoxContainer.new()
+	root.add_child(row_a)
+	_task_button(row_a, "Setup Isaac", _on_setup_pressed)
+	_task_button(row_a, "Check stack", _on_check_stack_pressed)
+	var row_b: HBoxContainer = HBoxContainer.new()
+	root.add_child(row_b)
+	_task_button(row_b, "Build articulation", _on_build_pressed)
+	_task_button(row_b, "Run tests", _on_tests_pressed)
+	var row_c: HBoxContainer = HBoxContainer.new()
+	root.add_child(row_c)
+	_task_button(row_c, "Convert USD", _on_convert_pressed)
+	_task_button(row_c, "Smoke selected", _on_smoke_pressed)
+	var row_d: HBoxContainer = HBoxContainer.new()
+	root.add_child(row_d)
+	_task_button(row_d, "FULL PREFLIGHT", _on_preflight_pressed)
 	_cancel_button = Button.new()
 	_cancel_button.text = "Cancel"
 	_cancel_button.disabled = true
 	_cancel_button.pressed.connect(_on_cancel_pressed)
-	action_row.add_child(_cancel_button)
+	row_d.add_child(_cancel_button)
 
-	var folder_row: HBoxContainer = HBoxContainer.new()
-	root.add_child(folder_row)
-	var open_folder: Button = Button.new()
-	open_folder.text = "Open run folder"
-	open_folder.pressed.connect(_on_open_folder_pressed)
-	folder_row.add_child(open_folder)
+	var tools: HBoxContainer = HBoxContainer.new()
+	root.add_child(tools)
+	var folder_button: Button = Button.new()
+	folder_button.text = "Open run folder"
+	folder_button.pressed.connect(_on_open_folder_pressed)
+	tools.add_child(folder_button)
 	var refresh_button: Button = Button.new()
 	refresh_button.text = "Refresh status"
 	refresh_button.pressed.connect(_on_refresh_pressed)
-	folder_row.add_child(refresh_button)
+	tools.add_child(refresh_button)
 
-	root.add_child(HSeparator.new())
-	_add_section_label(root, "Process log")
+	_section(root, "Process log")
 	_log_view = TextEdit.new()
 	_log_view.editable = false
 	_log_view.custom_minimum_size.y = 180.0
-	_log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	root.add_child(_log_view)
 
 
-func _add_section_label(parent: VBoxContainer, text: String) -> void:
+func _section(parent: VBoxContainer, text: String) -> void:
+	parent.add_child(HSeparator.new())
 	var label: Label = Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", 14)
 	parent.add_child(label)
 
 
-func _add_line_row(parent: VBoxContainer, label_text: String, initial: String) -> LineEdit:
+func _labeled_row(parent: VBoxContainer, label_text: String) -> HBoxContainer:
 	var row: HBoxContainer = HBoxContainer.new()
 	parent.add_child(row)
 	var label: Label = Label.new()
 	label.text = label_text
 	label.custom_minimum_size.x = 128.0
 	row.add_child(label)
+	return row
+
+
+func _line_row(parent: VBoxContainer, label_text: String, value: String) -> LineEdit:
+	var row: HBoxContainer = _labeled_row(parent, label_text)
 	var edit: LineEdit = LineEdit.new()
-	edit.text = initial
+	edit.text = value
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(edit)
 	return edit
 
 
-func _add_spin_row(
+func _spin_row(
 	parent: VBoxContainer,
 	label_text: String,
 	minimum: float,
 	maximum: float,
-	initial: float,
-	step: float,
-	allow_decimals: bool
+	value: float,
+	step: float
 ) -> SpinBox:
-	var row: HBoxContainer = HBoxContainer.new()
-	parent.add_child(row)
-	var label: Label = Label.new()
-	label.text = label_text
-	label.custom_minimum_size.x = 128.0
-	row.add_child(label)
+	var row: HBoxContainer = _labeled_row(parent, label_text)
 	var spin: SpinBox = SpinBox.new()
 	spin.min_value = minimum
 	spin.max_value = maximum
+	spin.value = value
 	spin.step = step
-	spin.value = initial
-	spin.allow_lesser = false
-	spin.allow_greater = false
+	spin.custom_arrow_step = step
 	spin.update_on_text_changed = true
-	spin.custom_arrow_step = step if allow_decimals else 1.0
 	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spin)
 	return spin
 
 
-func _add_task_button(parent: HBoxContainer, text: String, callback: Callable) -> Button:
+func _task_button(parent: HBoxContainer, text: String, callback: Callable) -> Button:
 	var button: Button = Button.new()
 	button.text = text
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -307,16 +281,12 @@ func _on_setup_pressed() -> void:
 	if not FileAccess.file_exists(_setup_script_path):
 		_set_status("SETUP ERROR", "Missing setup script: %s" % _setup_script_path)
 		return
-
-	var venv_path: String = _repo_root.path_join(".venv-isaac")
 	var arguments: PackedStringArray = PackedStringArray()
-	arguments.append("-NoProfile")
-	arguments.append("-ExecutionPolicy")
-	arguments.append("Bypass")
-	arguments.append("-File")
-	arguments.append(_setup_script_path)
-	arguments.append("-VenvPath")
-	arguments.append(venv_path)
+	for argument: String in [
+		"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", _setup_script_path,
+		"-VenvPath", _repo_root.path_join(".venv-isaac")
+	]:
+		arguments.append(argument)
 	var pid: int = OS.create_process("powershell.exe", arguments, false)
 	if pid < 0:
 		_set_status("SETUP ERROR", "Unable to launch powershell.exe")
@@ -357,20 +327,19 @@ func _on_cancel_pressed() -> void:
 		return
 	if _setup_process:
 		OS.kill(_active_pid)
-		_set_status("CANCELED • setup", "Setup process was terminated. The environment may be incomplete.")
 		_active_pid = 0
 		_active_task = ""
 		_setup_process = false
 		_set_busy(false)
+		_set_status("CANCELED • setup", "Setup was terminated; the environment may be incomplete.")
 		return
-
 	var file: FileAccess = FileAccess.open(_cancel_path, FileAccess.WRITE)
-	if file != null:
-		file.store_string("cancel\n")
-		file.close()
-		_set_status("CANCEL REQUESTED", "Waiting for the bridge to terminate the active child process cleanly...")
-	else:
+	if file == null:
 		_set_status("CANCEL ERROR", "Could not write %s" % _cancel_path)
+		return
+	file.store_string("cancel\n")
+	file.close()
+	_set_status("CANCEL REQUESTED", "Waiting for the bridge to terminate the active child cleanly...")
 
 
 func _on_open_folder_pressed() -> void:
@@ -392,41 +361,31 @@ func _launch_bridge(task: String) -> void:
 		return
 	var python: String = _python_path.text.strip_edges()
 	if not FileAccess.file_exists(python):
-		_set_status("PYTHON MISSING", "Training Python not found. Run Setup Isaac or correct the Python field.")
+		_set_status("PYTHON MISSING", "Run Setup Isaac or correct the Python field.")
 		return
 	if not FileAccess.file_exists(_bridge_path):
 		_set_status("BRIDGE MISSING", "Missing %s" % _bridge_path)
 		return
-
 	_clear_runtime_files()
 	var arguments: PackedStringArray = PackedStringArray()
-	arguments.append(_bridge_path)
-	arguments.append("--task")
-	arguments.append(task)
-	arguments.append("--status")
-	arguments.append(_status_path)
-	arguments.append("--log")
-	arguments.append(_log_path)
-	arguments.append("--cancel")
-	arguments.append(_cancel_path)
-	arguments.append("--mode")
-	arguments.append(_selected_mode())
-	arguments.append("--num-envs")
-	arguments.append(str(int(_env_count.value)))
-	arguments.append("--seconds")
-	arguments.append(str(_seconds.value))
-	arguments.append("--seed")
-	arguments.append(str(int(_seed.value)))
-	arguments.append("--joint-noise-deg")
-	arguments.append(str(_noise_deg.value))
-	arguments.append("--device")
-	arguments.append(_device_edit.text.strip_edges())
-	arguments.append("--force")
+	for argument: String in [
+		_bridge_path, "--task", task,
+		"--status", _status_path,
+		"--log", _log_path,
+		"--cancel", _cancel_path,
+		"--mode", _selected_mode(),
+		"--num-envs", str(int(_env_count.value)),
+		"--seconds", str(_seconds.value),
+		"--seed", str(int(_seed.value)),
+		"--joint-noise-deg", str(_noise_deg.value),
+		"--device", _device_edit.text.strip_edges(),
+		"--force"
+	]:
+		arguments.append(argument)
 	if _headless.button_pressed:
 		arguments.append("--headless")
 	if _strict_contact.button_pressed:
 		arguments.append("--strict-contact")
-
 	var pid: int = OS.create_process(python, arguments, false)
 	if pid < 0:
 		_set_status("LAUNCH ERROR", "Unable to start training bridge with %s" % python)
@@ -459,17 +418,16 @@ func _refresh_bridge_status() -> void:
 		return
 	var data: Dictionary = parsed as Dictionary
 	var state: String = String(data.get("state", "unknown"))
-	var message: String = String(data.get("message", ""))
 	var current_step: String = String(data.get("current_step", ""))
+	var detail: String = String(data.get("message", ""))
 	var step_index: int = int(data.get("step_index", 0))
 	var step_count: int = int(data.get("step_count", 0))
-	var status_text: String = state.to_upper()
+	var heading: String = state.to_upper()
 	if not current_step.is_empty():
-		status_text += " • %s" % current_step
-	var detail: String = message
+		heading += " • %s" % current_step
 	if step_count > 0:
 		detail += "\nStep %d/%d • PID %d" % [step_index, step_count, _active_pid]
-	_set_status(status_text, detail)
+	_set_status(heading, detail)
 
 
 func _refresh_log() -> void:
@@ -501,23 +459,21 @@ func _finish_bridge_process() -> void:
 	_refresh_bridge_status()
 	_refresh_log()
 	var final_state: String = "unknown"
-	var final_message: String = "Bridge process exited without a readable final status."
+	var final_message: String = "Bridge exited without a readable final status."
 	if FileAccess.file_exists(_status_path):
 		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(_status_path))
 		if parsed is Dictionary:
 			var data: Dictionary = parsed as Dictionary
 			final_state = String(data.get("state", "unknown"))
 			final_message = String(data.get("message", final_message))
-
 	var finished_task: String = _active_task
 	_active_pid = 0
 	_active_task = ""
 	_set_busy(false)
-	var report_summary: String = ""
 	if final_state == "passed" and (finished_task == "smoke" or finished_task == "preflight"):
-		report_summary = _latest_smoke_summary(_selected_mode() if finished_task == "smoke" else "passive")
-	if not report_summary.is_empty():
-		final_message += "\n" + report_summary
+		var summary: String = _latest_smoke_summary(_selected_mode() if finished_task == "smoke" else "passive")
+		if not summary.is_empty():
+			final_message += "\n" + summary
 	_set_status(final_state.to_upper() + " • " + finished_task, final_message)
 
 
@@ -533,16 +489,13 @@ func _latest_smoke_summary(mode: String) -> String:
 	if not (diagnostics_variant is Dictionary):
 		return ""
 	var diagnostics: Dictionary = diagnostics_variant as Dictionary
-	return (
-		"%s smoke: root %.3f m • contact %.1f N • limit Δ %.4f rad • %.0f env-steps/s"
-		% [
-			mode,
-			float(diagnostics.get("final_root_height_mean_m", 0.0)),
-			float(diagnostics.get("max_foot_contact_force_n", 0.0)),
-			float(diagnostics.get("max_joint_limit_violation_rad", 0.0)),
-			float(report.get("sim_steps_per_wall_second", 0.0)),
-		]
-	)
+	return "%s smoke: root %.3f m • contact %.1f N • limit Δ %.4f rad • %.0f env-steps/s" % [
+		mode,
+		float(diagnostics.get("final_root_height_mean_m", 0.0)),
+		float(diagnostics.get("max_foot_contact_force_n", 0.0)),
+		float(diagnostics.get("max_joint_limit_violation_rad", 0.0)),
+		float(report.get("sim_steps_per_wall_second", 0.0)),
+	]
 
 
 func _refresh_environment_status() -> void:
@@ -553,13 +506,12 @@ func _refresh_environment_status() -> void:
 	var manifest_exists: bool = FileAccess.file_exists(_experiment_root.path_join("generated").path_join("articulation_manifest.json"))
 	var usd_dir: String = _experiment_root.path_join("assets").path_join("usd")
 	var status: String = "READY" if python_exists and bridge_exists else "SETUP REQUIRED"
-	var detail: String = "Python %s • bridge %s • manifest %s • USD dir %s" % [
+	_set_status(status, "Python %s • bridge %s • manifest %s • USD %s" % [
 		"OK" if python_exists else "missing",
 		"OK" if bridge_exists else "missing",
 		"present" if manifest_exists else "not built",
 		"present" if DirAccess.dir_exists_absolute(usd_dir) else "not converted",
-	]
-	_set_status(status, detail)
+	])
 
 
 func _set_busy(busy: bool) -> void:
