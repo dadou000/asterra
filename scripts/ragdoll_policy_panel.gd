@@ -201,7 +201,9 @@ func _refresh() -> void:
 
 func _policy_state() -> Dictionary:
 	var value: Variant = _ragdoll.call("get_policy_ui_state")
-	return value as Dictionary if value is Dictionary else {}
+	if value is Dictionary:
+		return value as Dictionary
+	return {}
 
 
 func _stand_runs_root() -> String:
