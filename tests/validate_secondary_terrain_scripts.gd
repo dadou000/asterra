@@ -1,8 +1,8 @@
-extends SceneTree
+extends Node
 ## Parse/load smoke test for dependency-heavy terrain/authoring scripts that are not
-## necessarily instantiated by the active gameplay validation scene. Keeping these
-## explicit prevents stale compatibility tools from remaining invisible to CI while
-## still breaking the Godot editor's project-wide language-server scan.
+## necessarily instantiated by the active gameplay validation scene. This test is
+## launched through a .tscn so project autoload globals resolve exactly as they do
+## in the editor/runtime instead of using --script MainLoop semantics.
 
 const SCRIPT_PATHS := [
 	"res://scripts/terrain/planet_height_store_procedural.gd",
@@ -13,19 +13,22 @@ const SCRIPT_PATHS := [
 ]
 
 
-func _init() -> void:
+func _ready() -> void:
 	for script_path: String in SCRIPT_PATHS:
 		var resource: Resource = load(script_path)
 		if resource == null or not (resource is Script):
-			push_error("SECONDARY_TERRAIN_SCRIPT_LOAD_FAILED: %s" % script_path)
-			quit(1)
+			_fail("SECONDARY_TERRAIN_SCRIPT_LOAD_FAILED: %s" % script_path)
 			return
 		var script: Script = resource as Script
 		if not script.can_instantiate():
-			push_error("SECONDARY_TERRAIN_SCRIPT_NOT_INSTANTIABLE: %s" % script_path)
-			quit(1)
+			_fail("SECONDARY_TERRAIN_SCRIPT_NOT_INSTANTIABLE: %s" % script_path)
 			return
 		print("SECONDARY_TERRAIN_SCRIPT_LOAD_OK: %s" % script_path)
 
 	print("SECONDARY_TERRAIN_SCRIPT_STACK_OK: %d scripts" % SCRIPT_PATHS.size())
-	quit(0)
+	get_tree().quit(0)
+
+
+func _fail(message: String) -> void:
+	push_error(message)
+	get_tree().quit(1)
