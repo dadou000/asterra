@@ -101,6 +101,20 @@ def expected_dof_names(manifest: dict[str, Any]) -> list[str]:
     return [str(dof["name"]) for dof in manifest["dofs"]]
 
 
+def canonical_to_physx_joint_ids(robot: Any, manifest: dict[str, Any]) -> list[int]:
+    """Map canonical manifest action order to the articulation's internal DOF order."""
+    expected = expected_dof_names(manifest)
+    actual = list(robot.joint_names)
+    if len(actual) != len(expected) or set(actual) != set(expected):
+        raise RuntimeError(
+            "PhysX joint-name drift: "
+            f"missing={sorted(set(expected) - set(actual))} "
+            f"extra={sorted(set(actual) - set(expected))}"
+        )
+    index_by_name = {name: index for index, name in enumerate(actual)}
+    return [index_by_name[name] for name in expected]
+
+
 def expected_body_names(manifest: dict[str, Any]) -> list[str]:
     """Return all expected PhysX links as a set-stable list.
 
@@ -286,32 +300,15 @@ def validate_live_articulation(
     """Validate an initialized Isaac articulation against the generated contract.
 
     ``sim.reset()`` must have completed so joint limits/gains/masses are populated.
-    The function raises ``RuntimeError`` on any name/order/property drift.
+    The canonical policy order is never inferred from PhysX traversal order; a
+    name-based manifest->PhysX index map is returned for later observation/action code.
     """
     validate_manifest(manifest)
     import torch
 
     expected_joints = expected_dof_names(manifest)
     actual_joints = list(robot.joint_names)
-    if actual_joints != expected_joints:
-        mismatch = next(
-            (
-                (
-                    i,
-                    expected_joints[i] if i < len(expected_joints) else None,
-                    actual_joints[i] if i < len(actual_joints) else None,
-                )
-                for i in range(max(len(expected_joints), len(actual_joints)))
-                if i >= len(expected_joints)
-                or i >= len(actual_joints)
-                or expected_joints[i] != actual_joints[i]
-            ),
-            None,
-        )
-        raise RuntimeError(
-            f"PhysX joint order drift: expected {len(expected_joints)} joints, "
-            f"got {len(actual_joints)}; first mismatch={mismatch}"
-        )
+    canonical_to_physx = canonical_to_physx_joint_ids(robot, manifest)
 
     expected_bodies = set(expected_body_names(manifest))
     actual_bodies = set(robot.body_names)
@@ -324,29 +321,31 @@ def validate_live_articulation(
 
     device = robot.data.joint_pos.device
     dtype = robot.data.joint_pos.dtype
-    dofs = manifest["dofs"]
+    dof_by_name = {str(dof["name"]): dof for dof in manifest["dofs"]}
+    dofs_physx_order = [dof_by_name[name] for name in actual_joints]
+
     expected_limits = torch.tensor(
-        [[float(dof["lower_rad"]), float(dof["upper_rad"])] for dof in dofs],
+        [[float(dof["lower_rad"]), float(dof["upper_rad"])] for dof in dofs_physx_order],
         device=device,
         dtype=dtype,
     )
     expected_stiffness = torch.tensor(
-        [float(dof["stiffness_nm_per_rad"]) for dof in dofs],
+        [float(dof["stiffness_nm_per_rad"]) for dof in dofs_physx_order],
         device=device,
         dtype=dtype,
     )
     expected_damping = torch.tensor(
-        [float(dof["damping_nms_per_rad"]) for dof in dofs],
+        [float(dof["damping_nms_per_rad"]) for dof in dofs_physx_order],
         device=device,
         dtype=dtype,
     )
     expected_effort = torch.tensor(
-        [float(dof["effort_limit_nm"]) for dof in dofs],
+        [float(dof["effort_limit_nm"]) for dof in dofs_physx_order],
         device=device,
         dtype=dtype,
     )
     expected_velocity = torch.tensor(
-        [float(dof["velocity_limit_rad_s"]) for dof in dofs],
+        [float(dof["velocity_limit_rad_s"]) for dof in dofs_physx_order],
         device=device,
         dtype=dtype,
     )
@@ -384,6 +383,8 @@ def validate_live_articulation(
 
     return {
         "joint_count": len(actual_joints),
+        "physx_order_matches_canonical": actual_joints == expected_joints,
+        "canonical_to_physx_joint_ids": canonical_to_physx,
         "body_count": len(actual_bodies),
         "physical_body_count": int(manifest["physical_body_count"]),
         "virtual_body_count": int(manifest["training_virtual_link_count"]),
