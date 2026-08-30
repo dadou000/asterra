@@ -91,6 +91,10 @@ class ArticulationContractTests(unittest.TestCase):
         virtual = [link for link in links if link.get("name", "").startswith("frame__")]
         self.assertEqual(len(virtual), 36)
         self.assertTrue(all(link.find("collision") is None for link in virtual))
+        self.assertTrue(all(link.find("visual") is not None for link in virtual))
+        self.assertTrue(
+            all(link.find("visual/geometry/sphere").get("radius") == "0.00001" for link in virtual)
+        )
 
     def test_generated_files_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
