@@ -70,6 +70,11 @@ class ArticulationHelperTests(unittest.TestCase):
         )
         self.assertAlmostEqual(self.helper.TRAINING_JOINT_ARMATURE_KGM2, 0.005)
 
+    def test_tgs_iteration_budget_is_warning_safe(self) -> None:
+        self.assertEqual(self.helper.PHYSX_SOLVER_POSITION_ITERATIONS, 16)
+        self.assertEqual(self.helper.PHYSX_SOLVER_VELOCITY_ITERATIONS, 4)
+        self.assertLessEqual(self.helper.PHYSX_SOLVER_VELOCITY_ITERATIONS, 4)
+
     def test_load_manifest_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "manifest.json"
