@@ -1,3 +1,4 @@
+class_name TerrainScatterEmpty
 extends "res://scripts/terrain/gpu_terrain_scatter_authoring.gd"
 ## Intentionally empty production scatter binding.
 ##
