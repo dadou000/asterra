@@ -70,6 +70,8 @@ varying float v_interaction_foam;
 varying float v_cloud_shadow;
 varying float v_level;
 varying float v_wave_spacing;
+varying vec2 v_dynamic_velocity;
+varying float v_dynamic_activity;
 varying vec3 v_sun_atmo_t;
 varying vec3 v_direct_atmo_t;
 
@@ -116,17 +118,10 @@ float ocean_smoother01(float x) {
 	return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
 }
 
-// Convert a wavelength from explicit resolved slope into statistical slope
-// variance over a deliberately broad screen-space interval. A narrow 3..8 pixel
-// crossover reads as a hard distance ring in low-sun glitter; 2..14 pixels keeps
-// the same energy but makes the representation change gradual enough to vanish.
 float ocean_screen_band_weight(float pixels_per_wave) {
 	return ocean_smoother01((pixels_per_wave - 2.0) / 12.0);
 }
 
-// Chebyshev radius follows the square topology exactly. A Euclidean radius here
-// would make the wave/spectral morph circular while the actual LOD boundary is
-// square, exposing the transition most strongly near the corners.
 float ocean_ring_q(vec2 cell) {
 	float half_cells = max(u_grid_cells * 0.5, 1.0);
 	return max(abs(cell.x), abs(cell.y)) / half_cells;
@@ -309,8 +304,6 @@ void ocean_interactions(vec3 d, int level, out float height, out vec3 slope,
 	}
 }
 
-// Stable stochastic micro-surface ------------------------------------------------
-
 float ocean_hash21(vec2 p) {
 	vec3 p3 = fract(vec3(p.x, p.y, p.x) * 0.1031);
 	p3 += dot(p3, p3.yzx + 33.33);
@@ -354,11 +347,6 @@ float ocean_short_wave_phase_speed(float wavelength, float depth) {
 	return sqrt(max(omega2, 1e-6)) / k;
 }
 
-// Wind-oriented, dispersive ripple band. The previous micro surface translated
-// isotropic value noise across the water, which reads as moving pebbles rather
-// than waves. Here noise only warps a propagating carrier; the dominant gradient
-// remains perpendicular to a crest and every wavelength travels at its own
-// gravity/capillary phase speed. Lost sub-pixel energy is still handed to GGX.
 void ocean_micro_noise_band(vec3 up, vec2 plane_m, float wavelength,
 		float slope_amp, float spread_angle, float phase_offset,
 		inout vec3 slope, inout float unresolved_variance) {
@@ -411,8 +399,6 @@ vec3 ocean_micro_slope(vec3 up, out float unresolved_variance) {
 	return slope;
 }
 
-// Visual directional spreading ---------------------------------------------------
-
 void ocean_visual_chop_band(vec3 up, vec3 axis, float wavelength,
 		float slope_amp, float phase_offset,
 		inout vec3 slope, inout float unresolved_variance) {
@@ -446,11 +432,6 @@ vec3 ocean_directional_spread_slope(vec3 up, out float unresolved_variance) {
 	return slope;
 }
 
-// Residual geometric spectrum ----------------------------------------------------
-// Vertex LOD may remove displacement, but the same physical slope remains until
-// the wavelength becomes sub-pixel. Both phase and footprint are evaluated from
-// the same geodesic coordinate; this prevents a tangent-plane filtering estimate
-// from drifting away from the planet-space wave on large or grazing rings.
 void ocean_residual_wave_band(vec3 up, vec3 axis,
 		float wavelength, float base_amp, float phase_offset, float depth,
 		float geometry_spacing, inout vec3 slope, inout float unresolved_variance) {
@@ -566,7 +547,11 @@ void vertex() {
 		shore_distance = -max(-ground_h, 0.0) * 8.0;
 		coast_confidence = 0.0;
 	}
-	float depth = max(-ground_h, 0.0);
+
+	WaterDynamicSurfaceSample dynamic_surface = water_dynamic_surface_sample(sample_anchor_m);
+	vec2 dynamic_gradient = water_dynamic_surface_gradient(sample_anchor_m);
+	float dynamic_height = dynamic_surface.height * dynamic_surface.valid;
+	float depth = max(dynamic_height - ground_h, 0.0);
 
 	vec3 swell_a = ocean_safe_tangent(d, SWELL_AXIS_A);
 	vec3 swell_b = ocean_safe_tangent(d, SWELL_AXIS_B);
@@ -593,6 +578,12 @@ void vertex() {
 	float phase_f = ocean_geodesic_phase_coord(d, SWELL_AXIS_F);
 
 	OceanWaveSample wave = ocean_empty_wave();
+	vec3 dynamic_tx = ocean_safe_tangent(d, u_anchor_right);
+	vec3 dynamic_ty = normalize(cross(d, dynamic_tx));
+	if (dot(dynamic_ty, u_anchor_up) < 0.0) dynamic_ty = -dynamic_ty;
+	wave.displacement += d * dynamic_height;
+	wave.slope += dynamic_tx * dynamic_gradient.x + dynamic_ty * dynamic_gradient.y;
+
 	ocean_add_quality_wave(0, d, dir_a, phase_a, shore_distance, depth, wave_spacing, 192.0, 1.15, 0.66, 0.0, wave);
 	ocean_add_quality_wave(1, d, dir_b, phase_b, shore_distance, depth, wave_spacing, 96.0, 0.78, 0.62, 1.7, wave);
 	ocean_add_quality_wave(2, d, dir_c, phase_c, shore_distance, depth, wave_spacing, 42.0, 0.32, 0.55, 3.1, wave);
@@ -617,9 +608,6 @@ void vertex() {
 	vec3 tangential_displacement = wave.displacement - d * radial_h;
 	vec3 displaced = d * (u_planet_radius + radial_h) + tangential_displacement;
 
-	// With exact square nesting the underlay is only a depth-fighting guard, not a
-	// seam filler. Keep it sub-centimetre so it cannot read as a trench at grazing
-	// angles while the fine child owns the visible overlap.
 	float seam_underlay = 0.0;
 	if (level > 0 && ring_q < OCEAN_RING_HANDOFF_Q) {
 		float seam_t = 1.0 - ocean_smoother01((ring_q - OCEAN_RING_INNER_Q)
@@ -641,9 +629,11 @@ void vertex() {
 	v_crest = wave.crest;
 	v_compression = wave.compression;
 	v_diffraction = max(diffract_a, diffract_b);
-	v_interaction_foam = interaction_foam;
+	v_interaction_foam = max(interaction_foam, dynamic_surface.activity);
 	v_level = float(level);
 	v_wave_spacing = wave_spacing;
+	v_dynamic_velocity = dynamic_surface.velocity;
+	v_dynamic_activity = dynamic_surface.activity;
 
 	vec3 shadow_sun = normalize(u_cloud_shadow_sun_dir);
 	float planet_vis = planet_direct_sun_visibility(displaced, shadow_sun, u_planet_radius);
@@ -684,8 +674,6 @@ void fragment() {
 	float surf_zone = 1.0 - smoothstep(0.2, 9.0, depth);
 	float shorewash = (1.0 - smoothstep(0.12, 3.8, depth)) * smoothstep(0.50, 0.93, v_crest);
 
-	// Foam is a slowly advected stochastic mask. Aligning the transport with the
-	// local wind removes the old screen-obvious diagonal texture slide.
 	vec2 foam_wind = ocean_wind_plane_dir(up);
 	vec2 foam_cross = vec2(-foam_wind.y, foam_wind.x);
 	float foam_a = ocean_noise01((v_micro_plane - foam_wind * (0.22 * u_time_s)) / 18.0);
@@ -706,14 +694,13 @@ void fragment() {
 	float whitecap = max(offshore_whitecap, compression_cap);
 	float breaker_foam = v_breaking * (0.68 + 0.32 * v_compression);
 	float diffracted_foam = v_diffraction * surf_zone * v_compression * 0.35;
+	float dynamic_flow_foam = v_dynamic_activity
+		* smoothstep(0.35, 3.0, length(v_dynamic_velocity));
 	float foam = max(max(shorewash, whitecap * 0.78), max(breaker_foam, diffracted_foam));
-	foam = max(foam, v_interaction_foam);
+	foam = max(foam, max(v_interaction_foam, dynamic_flow_foam));
 	foam = clamp(foam * u_foam_quality * (1.0 - smoothstep(3500.0, 18000.0, length(VERTEX))), 0.0, 1.0);
 	base = mix(base, u_foam, foam * 0.88);
 
-	// Independent slope fields add in variance, not linearly in GGX alpha. The
-	// former alpha sum made the horizon become abruptly over-rough as bands crossed
-	// their screen-space cutoff. Quadrature keeps the slope energy continuous.
 	float wind_rough = water_roughness_from_wind(wind_speed, 0.5);
 	float all_unresolved_variance = max(residual_unresolved_variance, 0.0)
 		+ max(spread_unresolved_variance, 0.0)
@@ -724,8 +711,6 @@ void fragment() {
 	float combined_alpha = sqrt(wind_alpha * wind_alpha
 		+ spectral_alpha * spectral_alpha);
 	float rough = sqrt(clamp(combined_alpha, 0.004, 0.36));
-	// 0.068^2 ~= Helion's angular radius in radians, preventing an unphysical
-	// sub-solar-disc mirror lobe on perfectly calm water.
 	rough = clamp(rough + foam * 0.20, 0.068, 0.82);
 
 	vec3 sun_dir = normalize(u_sun_dir);
@@ -734,9 +719,6 @@ void fragment() {
 	float fres = water_fresnel(ndotv);
 
 	float backlight = pow(max(dot(-sun_dir, view_dir), 0.0), 4.0);
-	// Thin back-lit crests also exist offshore; water depth is not crest thickness.
-	// Compression is a better proxy for a steep, optically thin crest than seabed
-	// depth, while foam suppresses the clear-water transmission once it breaks.
 	float crest_thin = smoothstep(0.64, 0.97, v_crest)
 		* (0.35 + 0.65 * smoothstep(0.08, 0.65, v_compression))
 		* (1.0 - foam * 0.55);
@@ -746,23 +728,15 @@ void fragment() {
 	vec3 atmo_l;
 	aerial_perspective(camera_planet, v_planet, atmo_t, atmo_l);
 
-	// Water-body light has to vanish at grazing incidence as reflection tends to
-	// one. Leaving a fixed 28% diffuse floor was one reason distant water looked
-	// painted rather than reflective.
 	ALBEDO = base * (1.0 - fres) * atmo_t;
 	EMISSION = crest_scatter * atmo_t + atmo_l;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	ROUGHNESS = rough;
-	// Match Godot's IBL dielectric F0 to the same 1.333 IOR used by our direct BRDF.
 	SPECULAR = WATER_GODOT_SPECULAR;
 	METALLIC = 0.0;
 	AO = 1.0;
 	AO_LIGHT_AFFECT = 1.0;
 
-	// Godot's radiance map is evaluated at the surface but knows nothing about the
-	// atmosphere between that surface and this camera. Attenuate its reflected sky
-	// by the luminance of the view transmittance; spectral aerial in-scatter is
-	// already added above. Nearby water is unchanged because this alpha is zero.
 	float view_t = clamp(dot(atmo_t, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
 	RADIANCE = vec4(vec3(0.0), 1.0 - view_t);
 }
@@ -774,8 +748,6 @@ void light() {
 	if (LIGHT_IS_DIRECTIONAL) {
 		visibility = planet_direct_sun_visibility(v_planet, normalize(u_sun_dir), u_planet_radius);
 		visibility *= clamp(v_cloud_shadow, 0.0, 1.0);
-		// ALBEDO already carries camera->surface transmittance, so diffuse needs
-		// only sun->surface extinction. Specular bypasses ALBEDO and needs both.
 		diffuse_t = clamp(v_sun_atmo_t, vec3(0.0), vec3(1.0));
 		specular_t = clamp(v_direct_atmo_t, vec3(0.0), vec3(1.0));
 	}
