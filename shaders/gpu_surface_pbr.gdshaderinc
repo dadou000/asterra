@@ -10,8 +10,6 @@
 // computes dFdx/dFdy of the precision-safe detail position before branching and
 // passes them through this file for explicit anisotropic mip selection.
 
-#include "res://shaders/terrain_author_material_bytecode.gdshaderinc"
-
 uniform sampler2D u_pbr_ground_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D u_pbr_ground_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D u_pbr_ground_roughness : filter_linear_mipmap_anisotropic, repeat_enable;
@@ -352,20 +350,4 @@ void spbr_apply(vec3 dpos, vec3 geom_n, float camera_dist,
 	spbr_apply_grad(dpos, dpdx, dpdy, geom_n, camera_dist,
 		primary, secondary, biome, base_albedo, base_roughness,
 		albedo, roughness, pbr_normal, pbr_normal_w);
-
-	// Phase 28 graph authoring is a post-PBR override. The generated/scanned
-	// material is therefore available to graph GAME_INPUT nodes as base_* values.
-	float authored_metallic = 0.0;
-	float authored_ao = 1.0;
-	vec3 authored_normal = pbr_normal;
-	vec3 planet_direction = normalize(v_planet);
-	float slope = clamp(1.0 - dot(normalize(geom_n), planet_direction), 0.0, 1.0);
-	author_material_apply(planet_direction, v_planet,
-		length(v_planet) - u_planet_radius, slope, biome,
-		int(round(v_level)), camera_dist, TIME,
-		albedo, authored_normal, roughness, authored_metallic, authored_ao);
-	if (u_author_mat_ready > 0.5) {
-		pbr_normal = authored_normal;
-		pbr_normal_w = 1.0;
-	}
 }
