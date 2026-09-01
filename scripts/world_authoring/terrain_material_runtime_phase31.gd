@@ -6,8 +6,6 @@ extends "res://scripts/world_authoring/terrain_material_runtime_phase30.gd"
 ## of editor-only black boxes. Utility opcodes let authored graphs split the packed
 ## production/context vectors and rebuild arbitrary material logic from them.
 
-const PRODUCTION_SURFACE_SLOT_ID := "production-terrain-surface"
-
 # Keep in lock-step with terrain_author_material_bytecode.gdshaderinc.
 const OP_CHANNEL_R := 61
 const OP_CHANNEL_G := 62
