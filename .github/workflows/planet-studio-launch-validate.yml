@@ -14,6 +14,8 @@ on:
       - "tests/validate_planet_studio_phase29_launch.tscn"
       - "tests/validate_planet_studio_phase30_launch.gd"
       - "tests/validate_planet_studio_phase30_launch.tscn"
+      - "tests/validate_planet_studio_phase31_launch.gd"
+      - "tests/validate_planet_studio_phase31_launch.tscn"
       - ".github/workflows/planet-studio-launch-validate.yml"
   workflow_dispatch:
 
@@ -50,6 +52,8 @@ jobs:
           cp tests/validate_planet_studio_phase29_launch.tscn /tmp/asterra-planet-studio-ci/tests/
           cp tests/validate_planet_studio_phase30_launch.gd /tmp/asterra-planet-studio-ci/tests/
           cp tests/validate_planet_studio_phase30_launch.tscn /tmp/asterra-planet-studio-ci/tests/
+          cp tests/validate_planet_studio_phase31_launch.gd /tmp/asterra-planet-studio-ci/tests/
+          cp tests/validate_planet_studio_phase31_launch.tscn /tmp/asterra-planet-studio-ci/tests/
           cp tests/ci_autoload_planet.gd /tmp/asterra-planet-studio-ci/tests/
           cp tests/ci_autoload_frames.gd /tmp/asterra-planet-studio-ci/tests/
           cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-planet-studio-ci/tests/
@@ -149,5 +153,29 @@ jobs:
           fi
           if grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch30.log; then
             echo "Planet Studio emitted a runtime error during Phase 30 launch smoke test."
+            exit 1
+          fi
+
+      - name: Launch Phase 31 production-stage graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-planet-studio-ci
+          set +e
+          timeout 45 "$GODOT" --headless --path "$TEST_PROJECT" res://tests/validate_planet_studio_phase31_launch.tscn > /tmp/planet-studio-launch31.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/planet-studio-launch31.log
+          if [ "$status" -ne 0 ]; then
+            echo "Planet Studio Phase 31 launch smoke test exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "PLANET_STUDIO_PHASE31_LAUNCH_OK" /tmp/planet-studio-launch31.log; then
+            echo "Planet Studio Phase 31 completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null|PLANET_STUDIO_PHASE31_LAUNCH_FAILED" /tmp/planet-studio-launch31.log; then
+            echo "Planet Studio emitted a runtime error during Phase 31 launch smoke test."
             exit 1
           fi
