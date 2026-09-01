@@ -86,23 +86,30 @@ func _init_render_thread(reduce_spirv: RDShaderSPIRV, final_spirv: RDShaderSPIRV
 		call_deferred("_finish_init", ERR_UNAVAILABLE, {})
 		return
 	var resources: Array = []
-	var bundle := {}
 	var reduce_shader := rd.shader_create_from_spirv(reduce_spirv)
+	if not reduce_shader.is_valid():
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(reduce_shader)
 	var final_shader := rd.shader_create_from_spirv(final_spirv)
-	for shader in [reduce_shader, final_shader]:
-		if not shader.is_valid():
-			_free_many(rd, resources + [reduce_shader, final_shader])
-			call_deferred("_finish_init", ERR_CANT_CREATE, {})
-			return
-		resources.append(shader)
+	if not final_shader.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(final_shader)
+
 	var reduce_pipeline := rd.compute_pipeline_create(reduce_shader)
+	if not reduce_pipeline.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(reduce_pipeline)
 	var final_pipeline := rd.compute_pipeline_create(final_shader)
-	for pipeline in [reduce_pipeline, final_pipeline]:
-		if not pipeline.is_valid():
-			_free_many(rd, resources + [reduce_pipeline, final_pipeline])
-			call_deferred("_finish_init", ERR_CANT_CREATE, {})
-			return
-		resources.append(pipeline)
+	if not final_pipeline.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(final_pipeline)
 
 	var partial_bytes := PackedByteArray()
 	partial_bytes.resize(_partial_count * 4)
@@ -112,29 +119,43 @@ func _init_render_thread(reduce_spirv: RDShaderSPIRV, final_spirv: RDShaderSPIRV
 		float(_width), float(_height), _dx, float(_partial_count),
 	])
 	var partials := rd.storage_buffer_create(partial_bytes.size(), partial_bytes)
+	if not partials.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(partials)
 	var result := rd.storage_buffer_create(result_bytes.size(), result_bytes)
+	if not result.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(result)
 	var params := rd.storage_buffer_create(16, params_values.to_byte_array())
-	for buffer in [partials, result, params]:
-		if not buffer.is_valid():
-			_free_many(rd, resources + [partials, result, params])
-			call_deferred("_finish_init", ERR_CANT_CREATE, {})
-			return
-		resources.append(buffer)
+	if not params.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(params)
 
 	var reduce_set := rd.uniform_set_create([
 		_storage_uniform(0, _state), _storage_uniform(1, partials),
 		_storage_uniform(2, params),
 	], reduce_shader, 0)
+	if not reduce_set.is_valid():
+		_free_many(rd, resources)
+		call_deferred("_finish_init", ERR_CANT_CREATE, {})
+		return
+	resources.append(reduce_set)
 	var final_set := rd.uniform_set_create([
 		_storage_uniform(0, partials), _storage_uniform(1, result),
 		_storage_uniform(2, params),
 	], final_shader, 0)
-	if not reduce_set.is_valid() or not final_set.is_valid():
-		_free_many(rd, resources + [reduce_set, final_set])
+	if not final_set.is_valid():
+		_free_many(rd, resources)
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
 		return
 
-	bundle = {
+	call_deferred("_finish_init", OK, {
 		"reduce_shader": reduce_shader,
 		"reduce_pipeline": reduce_pipeline,
 		"final_shader": final_shader,
@@ -144,8 +165,7 @@ func _init_render_thread(reduce_spirv: RDShaderSPIRV, final_spirv: RDShaderSPIRV
 		"params": params,
 		"reduce_set": reduce_set,
 		"final_set": final_set,
-	}
-	call_deferred("_finish_init", OK, bundle)
+	})
 
 
 func _finish_init(error: Error, bundle: Dictionary) -> void:
@@ -221,8 +241,10 @@ func _storage_uniform(binding: int, buffer: RID) -> RDUniform:
 
 func _free_many(rd: RenderingDevice, values: Array) -> void:
 	for value in values:
-		if value is RID and (value as RID).is_valid():
-			rd.free_rid(value)
+		if value is RID:
+			var rid: RID = value
+			if rid.is_valid():
+				rd.free_rid(rid)
 
 
 func release() -> void:
