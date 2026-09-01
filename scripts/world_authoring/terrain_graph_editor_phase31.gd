@@ -25,6 +25,7 @@ const PHASE31_SPECIAL_TYPES: Array[String] = [
 	"COMBINE_RGB",
 	"SATURATE",
 	"ONE_MINUS",
+	"OUTPUT_MATERIAL",
 ]
 
 const PRODUCTION_SHAPE_SLOT_ID_PHASE31 := "production-terrain-shape"
@@ -129,7 +130,15 @@ func _create_graph_node(node_data: Dictionary) -> void:
 			_add_port_row(graph_node, "B", true, false)
 		"SATURATE", "ONE_MINUS":
 			_add_port_row(graph_node, "Value  →  Result", true, true)
-	_add_node_action_row(graph_node, node_id)
+		"OUTPUT_MATERIAL":
+			_add_port_row(graph_node, "Albedo", true, false)
+			_add_port_row(graph_node, "Normal", true, false)
+			_add_port_row(graph_node, "Roughness", true, false)
+			_add_port_row(graph_node, "Metallic", true, false)
+			_add_port_row(graph_node, "AO", true, false)
+			_add_port_row(graph_node, "Specular", true, false)
+	if not node_type.begins_with("OUTPUT_"):
+		_add_node_action_row(graph_node, node_id)
 
 
 func _add_source_row(node: GraphNode, text: String) -> void:
