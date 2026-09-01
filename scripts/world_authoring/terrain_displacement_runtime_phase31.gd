@@ -67,4 +67,19 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 				var sculpt: int = _append_instruction(OP_INPUT_SCULPT_DELTA)
 				memo[node_id] = sculpt
 				return sculpt
+			"SATURATE":
+				var source: int = _compile_input(node_id, 0, nodes, inputs,
+					memo, visiting, graph_seed)
+				var zero: int = _append_instruction(OP_CONST, -1, -1, -1, Vector4.ZERO)
+				var one: int = _append_instruction(OP_CONST, -1, -1, -1, Vector4(1.0, 0.0, 0.0, 0.0))
+				var saturated: int = _append_instruction(OP_CLAMP, source, zero, one)
+				memo[node_id] = saturated
+				return saturated
+			"ONE_MINUS":
+				var source: int = _compile_input(node_id, 0, nodes, inputs,
+					memo, visiting, graph_seed)
+				var one: int = _append_instruction(OP_CONST, -1, -1, -1, Vector4(1.0, 0.0, 0.0, 0.0))
+				var inverted: int = _append_instruction(OP_SUB, one, source)
+				memo[node_id] = inverted
+				return inverted
 	return super._compile_node(node_id, nodes, inputs, memo, visiting, graph_seed)
