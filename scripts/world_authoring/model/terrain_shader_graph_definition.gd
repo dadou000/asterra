@@ -2,9 +2,10 @@ class_name TerrainShaderGraphDefinition
 extends Resource
 ## Serializable node graph used by terrain displacement/material authoring slots.
 ##
-## Production terrain is represented as ordinary graph sources. Phase 31 adds an
-## explicit production-stage factory while the older factory remains byte-for-byte
-## compatible with the Phase 29/30 migration chain and its regression tests.
+## Phase 32 keeps the Phase 31 production boundary nodes and adds serialized
+## production-control nodes for the renderer stages that used to be shader-only.
+## Their defaults are the exact current production values, so Reset Flow preserves
+## the existing terrain while making the implementation discoverable/editable.
 
 enum Domain {
 	DISPLACEMENT,
@@ -22,6 +23,7 @@ const CATEGORY_TERRAIN_SOURCE := "Terrain source"
 const CATEGORY_GEOMORPH := "Geomorph"
 const CATEGORY_WORLD_DATA := "World data"
 const CATEGORY_CLASSIFICATION := "Classification"
+const CATEGORY_MICRODETAIL := "Microdetail"
 const CATEGORY_SURFACE_PBR := "Surface / PBR"
 const CATEGORY_TEXTURES := "Textures"
 const CATEGORY_MATH := "Math"
@@ -34,6 +36,7 @@ const NODE_CATEGORIES: Array[String] = [
 	CATEGORY_GEOMORPH,
 	CATEGORY_WORLD_DATA,
 	CATEGORY_CLASSIFICATION,
+	CATEGORY_MICRODETAIL,
 	CATEGORY_SURFACE_PBR,
 	CATEGORY_TEXTURES,
 	CATEGORY_MATH,
@@ -143,6 +146,7 @@ const GAME_INPUTS: Array[String] = [
 
 const DISPLACEMENT_ONLY_NODES: Array[String] = [
 	"PRODUCTION_GENERATED_HEIGHT",
+	"PRODUCTION_GEOMORPH_SETTINGS",
 	"PRODUCTION_SCULPT_DELTA",
 	"NOISE_LAYER",
 	"RIDGED_MOUNTAINS",
@@ -158,6 +162,12 @@ const MATERIAL_ONLY_NODES: Array[String] = [
 	"PRODUCTION_METALLIC",
 	"PRODUCTION_AO",
 	"PRODUCTION_SPECULAR",
+	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_MICRORELIEF_SETTINGS",
+	"PRODUCTION_ANTITILE_SETTINGS",
+	"PRODUCTION_ROCK_PBR_SETTINGS",
+	"PRODUCTION_SCAN_PBR_SETTINGS",
+	"PRODUCTION_SCAN_TEXTURES",
 	"CLASSIFIER_PRIMARY",
 	"CLASSIFIER_SECONDARY",
 	"CHANNEL_R",
@@ -170,8 +180,19 @@ const MATERIAL_ONLY_NODES: Array[String] = [
 	"OUTPUT_MATERIAL",
 ]
 
+const PRODUCTION_CONTROL_NODES: Array[String] = [
+	"PRODUCTION_GEOMORPH_SETTINGS",
+	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_MICRORELIEF_SETTINGS",
+	"PRODUCTION_ANTITILE_SETTINGS",
+	"PRODUCTION_ROCK_PBR_SETTINGS",
+	"PRODUCTION_SCAN_PBR_SETTINGS",
+	"PRODUCTION_SCAN_TEXTURES",
+]
+
 const NODE_TYPES: Array[String] = [
 	"PRODUCTION_GENERATED_HEIGHT",
+	"PRODUCTION_GEOMORPH_SETTINGS",
 	"PRODUCTION_SCULPT_DELTA",
 	"PRODUCTION_ALBEDO",
 	"PRODUCTION_NORMAL",
@@ -179,6 +200,12 @@ const NODE_TYPES: Array[String] = [
 	"PRODUCTION_METALLIC",
 	"PRODUCTION_AO",
 	"PRODUCTION_SPECULAR",
+	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_MICRORELIEF_SETTINGS",
+	"PRODUCTION_ANTITILE_SETTINGS",
+	"PRODUCTION_ROCK_PBR_SETTINGS",
+	"PRODUCTION_SCAN_PBR_SETTINGS",
+	"PRODUCTION_SCAN_TEXTURES",
 	"CLASSIFIER_PRIMARY",
 	"CLASSIFIER_SECONDARY",
 	"GAME_INPUT",
@@ -226,6 +253,13 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"PRODUCTION_METALLIC": CATEGORY_PRODUCTION,
 	"PRODUCTION_AO": CATEGORY_PRODUCTION,
 	"PRODUCTION_SPECULAR": CATEGORY_PRODUCTION,
+	"PRODUCTION_GEOMORPH_SETTINGS": CATEGORY_GEOMORPH,
+	"PRODUCTION_CLASSIFIER_SETTINGS": CATEGORY_CLASSIFICATION,
+	"PRODUCTION_MICRORELIEF_SETTINGS": CATEGORY_MICRODETAIL,
+	"PRODUCTION_ANTITILE_SETTINGS": CATEGORY_MICRODETAIL,
+	"PRODUCTION_ROCK_PBR_SETTINGS": CATEGORY_SURFACE_PBR,
+	"PRODUCTION_SCAN_PBR_SETTINGS": CATEGORY_SURFACE_PBR,
+	"PRODUCTION_SCAN_TEXTURES": CATEGORY_TEXTURES,
 	"CLASSIFIER_PRIMARY": CATEGORY_CLASSIFICATION,
 	"CLASSIFIER_SECONDARY": CATEGORY_CLASSIFICATION,
 	"GAME_INPUT": CATEGORY_WORLD_DATA,
@@ -286,9 +320,7 @@ func create_default_graph(next_domain: int) -> void:
 	revision += 1
 
 func create_production_graph(next_domain: int) -> void:
-	# Legacy Phase 29 production representation. Phase 30 intentionally transforms
-	# the displacement GAME_INPUT into generated/sculpt GAME_INPUT nodes. Keep this
-	# stable so historical editors and validation continue to mean what they meant.
+	# Legacy Phase 29 production representation; retained for migrations/tests.
 	domain = next_domain
 	nodes.clear()
 	links.clear()
@@ -312,8 +344,9 @@ func create_production_graph(next_domain: int) -> void:
 	revision += 1
 
 func create_production_stage_graph(next_domain: int) -> void:
-	# Phase 31 representation of the exact same production boundary. Dedicated node
-	# types make renderer-owned stages discoverable in the categorized graph UI.
+	# Phase 32 canonical production graph. Data-flow nodes still represent the exact
+	# renderer boundary; unconnected settings nodes configure the production stages
+	# that calculate those sources. Defaults below match the shader defaults.
 	domain = next_domain
 	nodes.clear()
 	links.clear()
@@ -321,16 +354,18 @@ func create_production_stage_graph(next_domain: int) -> void:
 		displacement_output_mode = DisplacementOutputMode.ABSOLUTE_HEIGHT
 		var generated_id: String = add_node("PRODUCTION_GENERATED_HEIGHT",
 			Vector2(70.0, 100.0), {})
+		add_node("PRODUCTION_GEOMORPH_SETTINGS", Vector2(70.0, 300.0),
+			production_control_defaults("PRODUCTION_GEOMORPH_SETTINGS"))
 		var sculpt_id: String = add_node("PRODUCTION_SCULPT_DELTA",
-			Vector2(70.0, 320.0), {})
-		var add_id: String = add_node("ADD", Vector2(390.0, 205.0), {})
-		var output_id: String = add_node("OUTPUT_DISPLACEMENT", Vector2(720.0, 205.0), {})
+			Vector2(70.0, 650.0), {})
+		var add_id: String = add_node("ADD", Vector2(430.0, 205.0), {})
+		var output_id: String = add_node("OUTPUT_DISPLACEMENT", Vector2(760.0, 205.0), {})
 		connect_nodes(generated_id, 0, add_id, 0)
 		connect_nodes(sculpt_id, 0, add_id, 1)
 		connect_nodes(add_id, 0, output_id, 0)
 	else:
 		displacement_output_mode = DisplacementOutputMode.DELTA
-		var output_id: String = add_node("OUTPUT_MATERIAL", Vector2(650.0, 210.0), {})
+		var output_id: String = add_node("OUTPUT_MATERIAL", Vector2(740.0, 245.0), {})
 		var source_types: Array[String] = [
 			"PRODUCTION_ALBEDO",
 			"PRODUCTION_NORMAL",
@@ -341,18 +376,104 @@ func create_production_stage_graph(next_domain: int) -> void:
 		]
 		for port: int in source_types.size():
 			var source_id: String = add_node(source_types[port],
-				Vector2(90.0, 55.0 + float(port) * 96.0), {})
+				Vector2(70.0, 55.0 + float(port) * 96.0), {})
 			connect_nodes(source_id, 0, output_id, port)
+		add_node("PRODUCTION_CLASSIFIER_SETTINGS", Vector2(1080.0, 30.0),
+			production_control_defaults("PRODUCTION_CLASSIFIER_SETTINGS"))
+		add_node("PRODUCTION_MICRORELIEF_SETTINGS", Vector2(1080.0, 370.0),
+			production_control_defaults("PRODUCTION_MICRORELIEF_SETTINGS"))
+		add_node("PRODUCTION_ANTITILE_SETTINGS", Vector2(1080.0, 570.0),
+			production_control_defaults("PRODUCTION_ANTITILE_SETTINGS"))
+		add_node("PRODUCTION_ROCK_PBR_SETTINGS", Vector2(1440.0, 30.0),
+			production_control_defaults("PRODUCTION_ROCK_PBR_SETTINGS"))
+		add_node("PRODUCTION_SCAN_PBR_SETTINGS", Vector2(1440.0, 300.0),
+			production_control_defaults("PRODUCTION_SCAN_PBR_SETTINGS"))
+		add_node("PRODUCTION_SCAN_TEXTURES", Vector2(1800.0, 30.0),
+			production_control_defaults("PRODUCTION_SCAN_TEXTURES"))
 	revision += 1
+
+static func production_control_defaults(node_type: String) -> Dictionary:
+	match node_type:
+		"PRODUCTION_GEOMORPH_SETTINGS":
+			return {
+				"detail_strength": 1.0,
+				"override_seed": false,
+				"detail_seed": 1337,
+				"warp_strength": 1.0,
+				"broad_strength": 1.0,
+				"mountain_strength": 1.0,
+				"mid_strength": 1.0,
+				"channel_strength": 1.0,
+				"deposit_strength": 1.0,
+				"fine_strength": 1.0,
+				"dune_strength": 1.0,
+				"glacial_strength": 1.0,
+			}
+		"PRODUCTION_CLASSIFIER_SETTINGS":
+			return {
+				"rock_scale": 1.0,
+				"soil_scale": 1.0,
+				"vegetation_scale": 1.0,
+				"sand_scale": 1.0,
+				"mud_scale": 1.0,
+				"snow_scale": 1.0,
+				"scree_scale": 1.0,
+				"gravel_scale": 1.0,
+				"albedo_chroma": 1.24,
+				"albedo_contrast": 1.10,
+				"albedo_pivot": 0.115,
+				"roughness_scale": 1.0,
+				"roughness_bias": 0.0,
+				"roughness_min": 0.42,
+				"roughness_max": 0.98,
+			}
+		"PRODUCTION_MICRORELIEF_SETTINGS":
+			return {"enabled": true, "strength": 1.0}
+		"PRODUCTION_ANTITILE_SETTINGS":
+			return {"strength": 1.0}
+		"PRODUCTION_ROCK_PBR_SETTINGS":
+			return {
+				"enabled": true,
+				"detail_strength": 1.0,
+				"normal_strength": 1.0,
+				"color_strength": 1.0,
+			}
+		"PRODUCTION_SCAN_PBR_SETTINGS":
+			return {
+				"enabled": true,
+				"ground_metres": 2.0,
+				"grass_metres": 2.0,
+				"mud_metres": 1.0,
+				"forest_metres": 2.0,
+			}
+		"PRODUCTION_SCAN_TEXTURES":
+			return {
+				"ground_albedo": "res://assets/textures/terrain/ground003_color_2k.jpg",
+				"ground_normal": "res://assets/textures/terrain/ground003_normal_gl_2k.jpg",
+				"ground_roughness": "res://assets/textures/terrain/ground003_roughness_2k.jpg",
+				"grass_albedo": "res://assets/textures/terrain/leafy_grass_diff_2k.jpg",
+				"grass_normal": "res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg",
+				"grass_roughness": "res://assets/textures/terrain/leafy_grass_rough_2k.jpg",
+				"mud_albedo": "res://assets/textures/terrain/brown_mud_diff_2k.jpg",
+				"mud_normal": "res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg",
+				"mud_roughness": "res://assets/textures/terrain/brown_mud_rough_2k.jpg",
+				"forest_albedo": "res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg",
+				"forest_normal": "res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg",
+				"forest_roughness": "res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg",
+			}
+	return {}
 
 func add_node(node_type: String, position: Vector2, parameters: Dictionary = {}) -> String:
 	var resolved_type := node_type if NODE_TYPES.has(node_type) else "CONSTANT_FLOAT"
 	var node_id := make_node_id(resolved_type)
+	var resolved_parameters: Dictionary = parameters.duplicate(true)
+	if PRODUCTION_CONTROL_NODES.has(resolved_type) and resolved_parameters.is_empty():
+		resolved_parameters = production_control_defaults(resolved_type)
 	nodes.append({
 		"id": node_id,
 		"type": resolved_type,
 		"position": position,
-		"parameters": parameters.duplicate(true),
+		"parameters": resolved_parameters,
 	})
 	revision += 1
 	return node_id
