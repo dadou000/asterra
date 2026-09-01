@@ -42,7 +42,7 @@ func _run() -> void:
 	editor.call("_show_category", "SHADERS")
 	await _frames(5)
 
-	for required_title: String in ["GENERATED TERRAIN", "SCULPT / EDIT DELTA", "ADD", "FINAL TERRAIN"]:
+	for required_title: String in ["GENERATED TERRAIN", "SCULPT / EDIT DELTA", "Add", "FINAL TERRAIN"]:
 		if _find_graph_node(editor, required_title) == null:
 			_fail("Base Terrain graph is missing '%s'." % required_title)
 			return
