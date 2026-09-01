@@ -4,8 +4,7 @@
 // Phase 2 fixed-domain shallow-water update.
 // Mirrors HydroReferenceSolver: conservative h/hu/hv, hydrostatic reconstruction,
 // Rusanov interface flux, positivity-preserving wet/dry handling and semi-implicit
-// Manning friction. GPU CFL preparation supplies sub_dt/substeps; a push constant
-// selects which recorded dispatch in the fixed maximum sequence is active.
+// Manning friction. The scheduler recomputes CFL before every candidate substep.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -35,14 +34,24 @@ layout(set = 0, binding = 4, std430) readonly buffer Control {
     uint post_invalid_count;
 
     float requested_dt;
-    float sub_dt;
+    float remaining_dt;
+    float current_dt;
     float advanced_dt;
-    float cfl_dt;
 
-    uint substeps;
+    float min_cfl_dt;
+    float last_cfl_dt;
+    uint steps_taken;
     uint max_substeps;
+
     uint cfl_clamped;
-    uint reserved;
+    uint iteration_active;
+    uint iter_max_speed_bits;
+    uint iter_max_depth_bits;
+
+    uint iter_wet_count;
+    uint iter_invalid_count;
+    uint reserved0;
+    uint reserved1;
 } control;
 
 layout(push_constant, std430) uniform StepPush {
@@ -61,7 +70,7 @@ struct HydroInterface {
 int grid_width() { return int(params.grid_dt.x + 0.5); }
 int grid_height() { return int(params.grid_dt.y + 0.5); }
 float dx() { return max(params.grid_dt.z, 1e-4); }
-float dt() { return max(control.sub_dt, 0.0); }
+float dt() { return max(control.current_dt, 0.0); }
 float grav() { return max(params.physics.x, 1e-4); }
 float dry_eps() { return max(params.physics.y, 1e-8); }
 float manning_n() { return max(params.physics.z, 0.0); }
@@ -146,9 +155,10 @@ vec3 apply_friction(vec3 q, float step_dt) {
 }
 
 void main() {
-    // All potential substeps are recorded once. The GPU-computed schedule enables
-    // only a prefix, so no CPU readback is required before stepping.
-    if (pc.step_index >= control.substeps || dt() <= 0.0) return;
+    // prepare_step increments steps_taken only for an active prefix. Later
+    // candidate dispatches become no-ops without changing ping-pong parity.
+    if (pc.step_index >= control.steps_taken || control.iteration_active == 0u
+            || dt() <= 0.0) return;
 
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     int w = grid_width();
@@ -190,8 +200,6 @@ void main() {
         - (fe.flux - fw.flux) * scale
         - (fn.flux - fs.flux) * scale;
 
-    // Hydrostatic source correction: exactly cancels the pressure-flux gradient
-    // for eta=h+z constant and zero velocity.
     updated.y += 0.5 * grav() * scale
         * (fe.h_left * fe.h_left - fw.h_right * fw.h_right);
     updated.z += 0.5 * grav() * scale
