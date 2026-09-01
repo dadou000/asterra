@@ -9,6 +9,8 @@
 //
 // Requires planet_lighting.gdshaderinc for the day/night terminator.
 
+#include "res://shaders/water_dynamic_surface.gdshaderinc"
+
 const float WATER_IOR = 1.333;
 const float WATER_F0 = 0.0203732;
 // Godot's dielectric F0 is 0.16 * SPECULAR^2. This value makes its environment
