@@ -1,26 +1,23 @@
-extends SceneTree
+extends Node
 ## Runtime smoke test for the exact Phase 28 construction path that static parser
-## validation cannot cover. The editor is bound before entering the tree, matching
-## WorldAuthoringRuntimeHostPhase25._open_live_editor().
+## validation cannot cover. This is launched through a .tscn so project autoload
+## globals resolve exactly as they do in the game.
 
 const EDITOR_SCRIPT := preload(
 	"res://scripts/world_authoring/world_authoring_editor_live_phase28.gd")
 
-class DummyWorld:
-	extends Node3D
+class DummyWorld extends Node3D:
 	var player: Node = null
 
-var _failed: bool = false
 
-
-func _initialize() -> void:
+func _ready() -> void:
 	call_deferred("_run")
 
 
 func _run() -> void:
 	var world := DummyWorld.new()
 	world.name = "Phase28SmokeWorld"
-	root.add_child(world)
+	add_child(world)
 
 	var editor: Control = EDITOR_SCRIPT.new() as Control
 	if editor == null:
@@ -28,21 +25,21 @@ func _run() -> void:
 		return
 	editor.name = "PlanetStudioLive"
 	editor.call("bind_world", world)
-	root.add_child(editor)
+	add_child(editor)
 
 	# Phase 21 deliberately defers full/category rebuilds. Give both _ready() and
 	# those deferred calls time to drain before entering the shader lab.
-	await process_frame
-	await process_frame
-	await process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
 	if not is_instance_valid(editor) or not editor.is_inside_tree():
 		_fail("Phase 28 editor left the tree during launch.")
 		return
 
 	editor.call("_show_category", "SHADERS")
-	await process_frame
-	await process_frame
-	await process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
 	if not is_instance_valid(editor) or not editor.is_inside_tree():
 		_fail("Phase 28 editor left the tree while opening SHADERS.")
 		return
@@ -51,12 +48,11 @@ func _run() -> void:
 	print("PLANET_STUDIO_PHASE28_LAUNCH_OK: editor alive; GraphEdit count=%d" % graph_edits.size())
 	editor.queue_free()
 	world.queue_free()
-	await process_frame
-	quit(0)
+	await get_tree().process_frame
+	get_tree().quit(0)
 
 
 func _fail(message: String) -> void:
-	_failed = true
 	push_error(message)
 	print("PLANET_STUDIO_PHASE28_LAUNCH_FAILED: %s" % message)
-	quit(1)
+	get_tree().quit(1)
