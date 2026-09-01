@@ -1,0 +1,113 @@
+name: Planet Studio launch validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/**"
+      - "scripts/terrain/**"
+      - "shaders/**"
+      - "tests/validate_planet_studio_phase28_launch.gd"
+      - ".github/workflows/planet-studio-launch-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  launch-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+
+      - name: Build isolated Planet Studio project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-planet-studio-ci
+          mkdir -p /tmp/asterra-planet-studio-ci/scripts /tmp/asterra-planet-studio-ci/shaders /tmp/asterra-planet-studio-ci/tests
+          cp -R scripts/. /tmp/asterra-planet-studio-ci/scripts/
+          cp -R shaders/. /tmp/asterra-planet-studio-ci/shaders/
+          cp tests/validate_planet_studio_phase28_launch.gd /tmp/asterra-planet-studio-ci/tests/
+          cp tests/ci_autoload_planet.gd /tmp/asterra-planet-studio-ci/tests/
+          cp tests/ci_autoload_frames.gd /tmp/asterra-planet-studio-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-planet-studio-ci/tests/
+          cp world.tres /tmp/asterra-planet-studio-ci/world.tres
+          cat > /tmp/asterra-planet-studio-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Planet Studio Launch CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [display]
+          window/size/viewport_width=1600
+          window/size/viewport_height=900
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import Planet Studio classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-planet-studio-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/planet-studio-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 220 /tmp/planet-studio-import.log || true
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference" /tmp/planet-studio-import.log; then
+            exit 1
+          fi
+
+      - name: Launch Phase 28 editor and shader lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-planet-studio-ci
+          set +e
+          timeout 45 "$GODOT" --headless --path "$TEST_PROJECT" --script res://tests/validate_planet_studio_phase28_launch.gd > /tmp/planet-studio-launch.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/planet-studio-launch.log
+          if [ "$status" -ne 0 ]; then
+            echo "Planet Studio launch smoke test exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "PLANET_STUDIO_PHASE28_LAUNCH_OK" /tmp/planet-studio-launch.log; then
+            echo "Planet Studio launch completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eiq "SCRIPT ERROR|ERROR:|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch.log; then
+            echo "Planet Studio emitted a runtime error during launch smoke test."
+            exit 1
+          fi
