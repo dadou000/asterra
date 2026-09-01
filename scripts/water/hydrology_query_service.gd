@@ -50,14 +50,15 @@ func request_batch(points_planet: PackedVector3Array, depths: PackedFloat32Array
 
 
 func latest_results() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
 	if _backend == null or not is_instance_valid(_backend):
-		return []
+		return out
 	if not _backend.has_method(&"latest_results"):
-		return []
+		return out
 	var value: Variant = _backend.call(&"latest_results")
 	if value is Array:
-		return value as Array[Dictionary]
-	return []
+		out.assign(value)
+	return out
 
 
 func latest_request_id() -> int:
