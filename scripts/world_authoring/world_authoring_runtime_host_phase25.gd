@@ -1,9 +1,9 @@
 extends "res://scripts/world_authoring/world_authoring_runtime_host_phase24.gd"
-## Phase 25 host: installs the live shader-source editor while retaining Phase 24's
-## persistent root-detail / multi-body preview ownership rules.
+## Phase 25 host: installs the live/scoped shader authoring editor while retaining
+## Phase 24's persistent root-detail / multi-body preview ownership rules.
 
 const LIVE_SHADER_EDITOR_SCRIPT := preload(
-	"res://scripts/world_authoring/world_authoring_editor_live_phase27.gd")
+	"res://scripts/world_authoring/world_authoring_editor_live_phase28.gd")
 
 
 func _open_live_editor(player: Node) -> void:
