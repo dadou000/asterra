@@ -95,6 +95,21 @@ def validate(data: dict[str, Any], online: bool) -> list[str]:
     if allow_empty_catalog and assets:
         errors.append("allow_empty_catalog=true requires assets to be an empty array")
 
+    runtime_root_value = data.get("runtime_root")
+    if not isinstance(runtime_root_value, str) or not runtime_root_value:
+        errors.append("runtime_root must be a non-empty string")
+    elif allow_empty_catalog:
+        runtime_root = REPO_ROOT / runtime_root_value
+        if runtime_root.exists():
+            runtime_files = sorted(path for path in runtime_root.rglob("*") if path.is_file())
+            if runtime_files:
+                preview = ", ".join(str(path.relative_to(REPO_ROOT)) for path in runtime_files[:8])
+                suffix = " ..." if len(runtime_files) > 8 else ""
+                errors.append(
+                    "allow_empty_catalog=true requires an empty runtime tree; found: "
+                    f"{preview}{suffix}"
+                )
+
     seen: set[str] = set()
     coverage = {biome: 0 for biome in VALID_BIOMES}
     for index, raw in enumerate(assets):
