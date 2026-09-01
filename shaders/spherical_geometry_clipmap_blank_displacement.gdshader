@@ -31,6 +31,7 @@ varying vec3 v_render;
 varying float v_biome;
 varying float v_cap_valid;
 varying float v_level;
+varying float v_micro_layer;
 
 const float TANGENT_FAST_MAX_ARC_M = 70000.0;
 const float PROJECTION_BLEND_END_M = 110000.0;
@@ -148,6 +149,7 @@ void vertex() {
 	v_render = render_position;
 	v_biome = biome;
 	v_level = float(level);
+	v_micro_layer = micro_layer;
 	v_cap_valid = length(anchor_offset_m) / max(u_planet_radius, 1.0) <= u_visible_cap_angle * 1.03 ? 1.0 : 0.0;
 	VERTEX = render_position;
 }
@@ -162,21 +164,37 @@ void fragment() {
 
 	vec3 albedo = biome_color(v_biome);
 	float roughness = 0.88;
+	float specular = 0.22;
 	float metallic = 0.0;
 	float ao = 1.0;
 	float slope = clamp(1.0 - dot(world_normal, up), 0.0, 1.0);
 	float camera_distance = length(v_render - CAMERA_POSITION_WORLD);
 	#ifdef ASTERRA_AUTHORED_TERRAIN
+	// Blank terrain intentionally owns no generated context textures. Supply the
+	// same neutral fallback context used by gpu_planet_context so every graph input
+	// remains defined and deterministic while authored textures/material logic can
+	// freely replace the blank surface.
+	vec4 soil = vec4(0.45, 0.35, 0.20, 0.05);
+	vec4 surface = vec4(0.08, 0.35, 0.25, 0.05);
+	vec4 geology = vec4(0.45, 0.0, 0.0, 0.0);
+	vec4 structure = vec4(0.5, 0.0, 0.0, 0.0);
+	vec4 climate = vec4(0.55, 0.35, 0.45, 0.35);
+	vec4 hydrology = vec4(0.5, 0.5, 0.0, 0.0);
+	vec4 landform = vec4(0.0);
+	vec4 primary = vec4(0.0);
+	vec4 secondary = vec4(0.0);
 	author_material_apply(up, v_planet,
 		length(v_planet) - u_planet_radius,
 		slope, v_biome, int(round(v_level)), camera_distance, TIME,
-		albedo, world_normal, roughness, metallic, ao);
+		soil, surface, geology, structure, climate, hydrology, landform,
+		primary, secondary, 0.0, v_micro_layer, 0.0,
+		albedo, world_normal, roughness, specular, metallic, ao);
 	#endif
 
 	NORMAL = normalize((VIEW_MATRIX * vec4(world_normal, 0.0)).xyz);
 	ALBEDO = albedo;
 	ROUGHNESS = roughness;
-	SPECULAR = 0.22;
+	SPECULAR = specular;
 	METALLIC = metallic;
 	AO = ao;
 }
