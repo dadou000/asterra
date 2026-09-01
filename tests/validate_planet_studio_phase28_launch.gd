@@ -48,6 +48,23 @@ func _run() -> void:
 		_fail("Phase 28 editor left the tree during launch.")
 		return
 
+	# Seed one real graph so the SHADERS page must construct TerrainGraphEditor and
+	# its GraphEdit/GraphNodes. This is the lifecycle path that previously built the
+	# graph while detached from the scene tree.
+	var session: Object = editor.get("_session") as Object
+	if session == null or not session.has_method("active_terrain_profile"):
+		_fail("Phase 28 editor has no authoring session.")
+		return
+	var terrain: Resource = session.call("active_terrain_profile") as Resource
+	if terrain == null:
+		_fail("Phase 28 smoke world has no terrain profile.")
+		return
+	var slot: Resource = terrain.call("create_shader_slot", 0, "Launch smoke displacement") as Resource
+	if slot == null:
+		_fail("Phase 28 failed to create smoke displacement graph.")
+		return
+	slot.set(&"clipmap_level_mask", 1)
+
 	editor.call("_show_category", "SHADERS")
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -55,8 +72,12 @@ func _run() -> void:
 	if not is_instance_valid(editor) or not editor.is_inside_tree():
 		_fail("Phase 28 editor left the tree while opening SHADERS.")
 		return
+	var graph_edits: Array[Node] = editor.find_children("*", "GraphEdit", true, false)
+	if graph_edits.is_empty():
+		_fail("Phase 28 SHADERS page did not construct its GraphEdit.")
+		return
 
-	print("PLANET_STUDIO_PHASE28_LAUNCH_OK: editor alive through launch and SHADERS page")
+	print("PLANET_STUDIO_PHASE28_LAUNCH_OK: editor and GraphEdit alive")
 	editor.queue_free()
 	layer.queue_free()
 	host.queue_free()
