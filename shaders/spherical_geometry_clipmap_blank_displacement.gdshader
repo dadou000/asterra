@@ -2,6 +2,7 @@ shader_type spatial;
 render_mode cull_front, diffuse_burley, specular_schlick_ggx;
 
 #include "res://shaders/terrain_author_displacement_bytecode.gdshaderinc"
+#include "res://shaders/terrain_author_material_bytecode.gdshaderinc"
 
 uniform float u_planet_radius = 1000000.0;
 uniform vec3 u_origin = vec3(0.0);
@@ -158,9 +159,22 @@ void fragment() {
 	vec3 raw_normal = cross(dFdx(v_render), dFdy(v_render));
 	vec3 world_normal = dot(raw_normal, raw_normal) > 1e-12 ? normalize(raw_normal) : up;
 	if (dot(world_normal, up) < 0.0) world_normal = -world_normal;
+
+	vec3 albedo = biome_color(v_biome);
+	float roughness = 0.88;
+	float metallic = 0.0;
+	float ao = 1.0;
+	float slope = clamp(1.0 - dot(world_normal, up), 0.0, 1.0);
+	float camera_distance = length(v_render - CAMERA_POSITION_WORLD);
+	author_material_apply(up, v_planet,
+		length(v_planet) - u_planet_radius,
+		slope, v_biome, int(round(v_level)), camera_distance, TIME,
+		albedo, world_normal, roughness, metallic, ao);
+
 	NORMAL = normalize((VIEW_MATRIX * vec4(world_normal, 0.0)).xyz);
-	ALBEDO = biome_color(v_biome);
-	ROUGHNESS = 0.88;
+	ALBEDO = albedo;
+	ROUGHNESS = roughness;
 	SPECULAR = 0.22;
-	METALLIC = 0.0;
+	METALLIC = metallic;
+	AO = ao;
 }
