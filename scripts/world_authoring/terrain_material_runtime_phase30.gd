@@ -24,6 +24,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	var stats: Dictionary = super.compile_from_terrain(terrain)
 	for slot: Resource in skipped:
 		slot.set(&"enabled", true)
+	_fingerprint = profile_fingerprint(terrain)
 	return stats
 
 
