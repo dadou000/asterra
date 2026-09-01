@@ -150,6 +150,51 @@ material for the test, and then performs a test-only texture readback verifying:
 
 The test disables the dynamic coat again before exiting.
 
+#### Long closed-basin conservation soak
+
+Implemented:
+
+```text
+tests/water/HydroGPUSoak.tscn
+tests/water/test_hydro_gpu_soak.gd
+```
+
+The default soak uses a 64x64 closed domain with:
+
+- uneven bowl bathymetry plus deterministic roughness;
+- shallow but initially wet corners;
+- a non-flat free surface;
+- a smooth rotational momentum impulse;
+- Manning friction;
+- no rain, infiltration, source or sink terms.
+
+It performs **10,000 macro advances by default** (`0.4 s` each, 4,000 simulated
+seconds). The run length can be overridden with:
+
+```text
+-- --hydro-soak-steps=<count>
+```
+
+Every 250 advances the test:
+
+1. waits for both the recorded GPU advance and its asynchronous scheduler health
+   callback, independent of callback ordering;
+2. fails if the final state reports invalid cells;
+3. fails if the adaptive CFL substep cap was exhausted;
+4. verifies the full requested macro timestep was advanced;
+5. requests only the four-byte GPU-reduced water volume;
+6. records absolute and relative drift from the initial volume.
+
+The initial gate is:
+
+```text
+relative drift <= 1e-4 OR absolute drift <= 0.08 m3
+```
+
+This is intentionally a release gate, not a target to game. Tighten it after real
+GPU measurements; numerical trends must be fixed rather than hidden by tolerance
+inflation.
+
 ## Validation status
 
 The current ChatGPT execution environment does not contain the project Godot 4.7
@@ -169,6 +214,13 @@ godot --headless --path . tests/water/Phase1WaterSmoke.tscn
 godot --path . tests/water/FixedHydroGPUSmoke.tscn
 godot --path . tests/water/HydroGPUParityTests.tscn
 godot --path . tests/water/HydroSurfaceReconstructionSmoke.tscn
+godot --path . tests/water/HydroGPUSoak.tscn
+```
+
+Shorter development soak example:
+
+```text
+godot --path . tests/water/HydroGPUSoak.tscn -- --hydro-soak-steps=1000
 ```
 
 Use the executable name/path appropriate for the local Godot 4.7 build.
@@ -177,9 +229,7 @@ Use the executable name/path appropriate for the local Godot 4.7 build.
 
 1. Run all renderer-mode tests on the project GPU and fix numerical/API failures;
    do not hide real parity errors by broadly increasing tolerances.
-2. Add a long closed-basin GPU soak test that samples only the four-byte volume
-   diagnostic and records accumulated mass drift over many thousands of advances.
-3. Exercise reconstructed dynamics in the normal playable world at a coast and
+2. Exercise reconstructed dynamics in the normal playable world at a coast and
    check visual phase/LOD stability while moving the camera/clipmap.
-4. Once those gates pass, freeze the fixed-domain numerical contract and begin
+3. Once those gates pass, freeze the fixed-domain numerical contract and begin
    Phase 3 sparse tile allocation + hydrological active-frontier scheduling.
