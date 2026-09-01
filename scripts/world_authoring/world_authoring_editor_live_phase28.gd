@@ -320,8 +320,12 @@ func _build_phase28_cell_editor(terrain: Resource) -> void:
 	_build_phase28_slot_controls(terrain, selected)
 	var graph_editor := COMPOSER_GRAPH_EDITOR.new()
 	graph_editor.custom_minimum_size = Vector2(1050.0, 620.0)
-	graph_editor.setup(_session, selected, Callable(self, "_refresh_current_category"))
+	# Attach the Control before TerrainGraphEditor builds GraphEdit/GraphNodes. Its
+	# setup path connects graph nodes immediately; doing that while detached can
+	# make Godot Control internals observe a null viewport during an input rebuild.
 	_workspace.add_child(graph_editor)
+	graph_editor.call_deferred("setup", _session, selected,
+		Callable(self, "_refresh_current_category"))
 
 	if _phase28_domain == SHADER_SLOT_MODEL.Domain.MATERIAL:
 		_add_note("Material graphs are post-PBR: GAME_INPUT base_albedo/base_normal/base_roughness expose the current production terrain shader. TEXTURE_2D and TRIPLANAR nodes are live GPU inputs. Leaving the pass-through base nodes connected produces the current shader unchanged.")
