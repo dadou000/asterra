@@ -15,6 +15,12 @@ extends Node
 signal origin_shifted(delta_render: Vector3)
 
 const REBASE_THRESHOLD := 4096.0
+# Floating-origin changes are global coordinate-frame mutations. Never commit one
+# from an arbitrary player's _physics_process callback: render consumers may have
+# already published uniforms for that rendered frame. Requests are committed here
+# at the very beginning of the next physics tick, before ordinary physics nodes and
+# before the following render-process pass.
+const REBASE_PHYSICS_PRIORITY := -100000
 
 ## --- Helion system (Asterra's star) -------------------------------------------
 var helion_dir: Vector3 = Vector3(1, 0.15, 0.3).normalized()  ## sunward, Asterra frame
@@ -34,12 +40,24 @@ var planet_radius: float = 1000000.0
 var origin: Vec3D = Vec3D.new(0, 0, 0)
 
 var _rebase_count: int = 0
+var _pending_rebase_origin: Vec3D
+
 
 func _ready() -> void:
+	# Ordinary render/process consumers should still see Frames early, but the
+	# stronger guarantee is physics ordering: a queued rebase is committed before
+	# player, ragdoll and vehicle physics update for that tick.
 	process_priority = -100
+	process_physics_priority = REBASE_PHYSICS_PRIORITY
+
+
+func _physics_process(_dt: float) -> void:
+	_commit_pending_rebase()
+
 
 func set_planet_radius(r: float) -> void:
 	planet_radius = r
+
 
 ## Exact angular radius of Helion as seen from Asterra. For the default physical
 ## geometry this is about 0.2667 degrees (0.5334 degree apparent diameter).
@@ -47,31 +65,44 @@ func helion_angular_radius_rad() -> float:
 	var ratio := clampf(helion_radius_m / maxf(helion_distance_m, 1.0), 0.0, 0.999999)
 	return asin(ratio)
 
+
 func helion_angular_diameter_deg() -> float:
 	return rad_to_deg(helion_angular_radius_rad() * 2.0)
+
 
 ## Asterra frame (double) -> local render frame (float32).
 func to_render(p: Vec3D) -> Vector3:
 	return Vector3(float(p.x - origin.x), float(p.y - origin.y), float(p.z - origin.z))
 
+
 ## Local render frame -> Asterra frame.
 func to_world(p: Vector3) -> Vec3D:
 	return Vec3D.new(origin.x + p.x, origin.y + p.y, origin.z + p.z)
+
 
 ## Surface point helpers -------------------------------------------------------
 func dir_altitude_to_world(d: Vector3, altitude: float) -> Vec3D:
 	var r := planet_radius + altitude
 	return Vec3D.new(d.x * r, d.y * r, d.z * r)
 
+
 func world_to_dir(p: Vec3D) -> Vector3:
 	return p.normalized().to_v3()
+
 
 func world_altitude(p: Vec3D) -> float:
 	return p.length() - planet_radius
 
+
 ## Re-base the local frame onto a new Asterra-frame origin, and report the shift
-## so live nodes can translate themselves.
+## so live nodes can translate themselves. Explicit rebases (spawn/teleport/setup)
+## remain immediate; any queued travel rebase is superseded by this exact request.
 func rebase(new_origin: Vec3D) -> void:
+	_pending_rebase_origin = null
+	_commit_rebase(new_origin)
+
+
+func _commit_rebase(new_origin: Vec3D) -> void:
 	var delta := Vector3(
 		float(origin.x - new_origin.x),
 		float(origin.y - new_origin.y),
@@ -80,15 +111,36 @@ func rebase(new_origin: Vec3D) -> void:
 	_rebase_count += 1
 	origin_shifted.emit(delta)
 
-## Call each frame with the observer's render-space position.
+
+## Called by moving observers with their current render-space position. Crossing
+## the threshold requests a rebase; it intentionally does NOT mutate `origin` in
+## the caller's callback. Returning true means a rebase is pending for the next
+## physics-frame boundary.
 func maintain_origin(observer_render_pos: Vector3) -> bool:
-	if observer_render_pos.length() > REBASE_THRESHOLD:
-		rebase(to_world(observer_render_pos))
-		return true
-	return false
+	if observer_render_pos.length() <= REBASE_THRESHOLD:
+		return false
+	# Convert while the current origin is still authoritative. If several observers
+	# request in one physics tick, the latest request wins and is still committed
+	# exactly once by the next early Frames physics callback.
+	_pending_rebase_origin = to_world(observer_render_pos)
+	return true
+
+
+func _commit_pending_rebase() -> void:
+	if _pending_rebase_origin == null:
+		return
+	var target: Vec3D = _pending_rebase_origin.dup()
+	_pending_rebase_origin = null
+	_commit_rebase(target)
+
+
+func rebase_pending() -> bool:
+	return _pending_rebase_origin != null
+
 
 func rebase_count() -> int:
 	return _rebase_count
+
 
 ## Direction from an Asterra point toward Helion, in the local render axes.
 ## helion_dir is stored as the sunward direction and is the convention used by
