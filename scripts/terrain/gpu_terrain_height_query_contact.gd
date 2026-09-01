@@ -1,19 +1,19 @@
 extends "res://scripts/terrain/gpu_terrain_height_query.gd"
 ## Strict contact-grade accessors layered over the pooled terrain query.
 ##
-## Procedural terrain uses cached GPU generated-height samples. Blank terrain has
-## no generated height texture, but it may still have authoritative shader graph
-## displacement. The shared displacement bytecode is evaluated directly for blank
-## contact so visible mountains are physical mountains rather than a visual shell.
+## Authored displacement is authoritative in both terrain backends. Procedural
+## bodies evaluate the same graph after generated height and before sparse Deltas;
+## Blank bodies use the graph as the complete height above the analytic sphere.
 
 const CONTACT_CACHE_DISTANCE_M := 0.15
 const CONTACT_CACHE_AGE_S := 0.45
 const CONTACT_DEDUPE_DISTANCE_M := 0.10
 const SAMPLE_PRUNE_INTERVAL_MS: int = 250
-const BLANK_NORMAL_SAMPLE_M: float = 1.5
+const AUTHOR_NORMAL_SAMPLE_M: float = 1.5
+const AUTHOR_CONTACT_LEVEL: int = 0
 
 var _next_sample_prune_msec: int = 0
-var _blank_runtime: Node
+var _author_runtime: Node
 
 
 func _surface_distance_sq_m(a: Vector3, b: Vector3) -> float:
@@ -79,37 +79,78 @@ func request_contact_height(direction: Vector3) -> void:
 
 
 func height_for_direction(direction: Vector3, fallback: float) -> float:
+	if Planet.cfg == null or direction.length_squared() <= 1e-12:
+		return fallback
+	var d: Vector3 = direction.normalized()
 	if _is_blank_backend():
-		if Planet.cfg == null or direction.length_squared() <= 1e-12:
-			return fallback
-		return _blank_shader_height(direction.normalized())
-	return super.height_for_direction(direction, fallback)
+		return _authored_displacement(d, 0.0, -1)
+	var generated: float = super.pristine_height_for_direction(d, NAN)
+	if is_nan(generated):
+		return fallback
+	return generated + _authored_displacement(d, generated, _procedural_biome_id(d)) \
+		+ Deltas.offset_at(d)
 
 
 func pristine_height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
+	if Planet.cfg == null or direction.length_squared() <= 1e-12:
+		return fallback
+	var d: Vector3 = direction.normalized()
 	if _is_blank_backend():
-		if Planet.cfg == null or direction.length_squared() <= 1e-12:
-			return fallback
-		# Blank has no generated/pristine heightmap. Its authored displacement is the
-		# complete height above the analytic radius and is authoritative by itself.
-		return _blank_shader_height(direction.normalized())
-	return super.pristine_height_for_direction(direction, fallback)
+		return _authored_displacement(d, 0.0, -1)
+	var generated: float = super.pristine_height_for_direction(d, NAN)
+	if is_nan(generated):
+		return fallback
+	return generated + _authored_displacement(d, generated, _procedural_biome_id(d))
 
 
 func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictionary:
-	if not _is_blank_backend():
-		return super.surface_for_direction(direction, fallback_height)
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return {"height": fallback_height, "normal": direction.normalized(), "precise": false}
 	var d: Vector3 = direction.normalized()
-	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
+	if _is_blank_backend():
+		return _authored_surface(d, fallback_height, true)
+
+	request_surface(d)
 	var basis: Array[Vector3] = _tangent_basis(d)
-	var theta: float = BLANK_NORMAL_SAMPLE_M / radius
+	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
+	var theta: float = AUTHOR_NORMAL_SAMPLE_M / radius
 	var dx: Vector3 = (d + basis[0] * theta).normalized()
 	var dy: Vector3 = (d + basis[1] * theta).normalized()
-	var h0: float = _blank_shader_height(d)
-	var hx: float = _blank_shader_height(dx)
-	var hy: float = _blank_shader_height(dy)
+	var generated0: float = super.pristine_height_for_direction(d, NAN)
+	var generated_x: float = super.pristine_height_for_direction(dx, NAN)
+	var generated_y: float = super.pristine_height_for_direction(dy, NAN)
+	if is_nan(generated0):
+		return {"height": fallback_height, "normal": d, "precise": false}
+	var h0: float = generated0 + _authored_displacement(d, generated0,
+		_procedural_biome_id(d)) + Deltas.offset_at(d)
+	if is_nan(generated_x) or is_nan(generated_y):
+		return {"height": h0, "normal": d, "precise": true, "shader_displacement": true}
+	var hx: float = generated_x + _authored_displacement(dx, generated_x,
+		_procedural_biome_id(dx)) + Deltas.offset_at(dx)
+	var hy: float = generated_y + _authored_displacement(dy, generated_y,
+		_procedural_biome_id(dy)) + Deltas.offset_at(dy)
+	return _surface_from_samples(d, dx, dy, h0, hx, hy, radius, false)
+
+
+func _authored_surface(direction: Vector3, fallback_height: float,
+		analytic_base: bool) -> Dictionary:
+	var d: Vector3 = direction.normalized()
+	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0)
+	var basis: Array[Vector3] = _tangent_basis(d)
+	var theta: float = AUTHOR_NORMAL_SAMPLE_M / radius
+	var dx: Vector3 = (d + basis[0] * theta).normalized()
+	var dy: Vector3 = (d + basis[1] * theta).normalized()
+	var h0: float = _authored_displacement(d, 0.0, -1)
+	var hx: float = _authored_displacement(dx, 0.0, -1)
+	var hy: float = _authored_displacement(dy, 0.0, -1)
+	if not is_finite(h0):
+		h0 = fallback_height
+	return _surface_from_samples(d, dx, dy, h0, hx, hy, radius, analytic_base)
+
+
+func _surface_from_samples(d: Vector3, dx: Vector3, dy: Vector3,
+		h0: float, hx: float, hy: float, radius: float,
+		analytic_base: bool) -> Dictionary:
 	var p0: Vector3 = d * (radius + h0)
 	var px: Vector3 = dx * (radius + hx)
 	var py: Vector3 = dy * (radius + hy)
@@ -124,7 +165,7 @@ func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictio
 		"height": h0,
 		"normal": normal,
 		"precise": true,
-		"analytic_base": true,
+		"analytic_base": analytic_base,
 		"shader_displacement": true,
 	}
 
@@ -132,14 +173,16 @@ func surface_for_direction(direction: Vector3, fallback_height: float) -> Dictio
 func contact_height_for_direction(direction: Vector3, fallback: float = NAN) -> float:
 	if Planet.cfg == null or direction.length_squared() <= 1e-12:
 		return fallback
-	if _is_blank_backend():
-		return _blank_shader_height(direction.normalized())
 	var d: Vector3 = direction.normalized()
+	if _is_blank_backend():
+		return _authored_displacement(d, 0.0, -1)
 	request_contact_height(d)
 	var found: Dictionary = _find_sample(d, CONTACT_CACHE_DISTANCE_M, CONTACT_CACHE_AGE_S)
 	if found.is_empty():
 		return fallback
-	return float(found["height"]) + Deltas.offset_at(d)
+	var generated: float = float(found["height"])
+	return generated + _authored_displacement(d, generated, _procedural_biome_id(d)) \
+		+ Deltas.offset_at(d)
 
 
 func has_contact_height(direction: Vector3) -> bool:
@@ -156,12 +199,21 @@ func has_fresh_height(direction: Vector3) -> bool:
 	return has_contact_height(direction)
 
 
-func _blank_shader_height(direction: Vector3) -> float:
-	if _blank_runtime == null or not is_instance_valid(_blank_runtime):
-		_blank_runtime = get_tree().get_first_node_in_group(&"terrain_displacement_runtime")
-	if _blank_runtime == null or not _blank_runtime.has_method("evaluate_height"):
+func _authored_displacement(direction: Vector3, base_height_m: float,
+		biome_id: int) -> float:
+	if _author_runtime == null or not is_instance_valid(_author_runtime):
+		_author_runtime = get_tree().get_first_node_in_group(&"terrain_displacement_runtime")
+	if _author_runtime == null or not _author_runtime.has_method("evaluate_height"):
 		return 0.0
-	return float(_blank_runtime.call("evaluate_height", direction, 0.0, 0, -1, NAN))
+	return float(_author_runtime.call("evaluate_height", direction, base_height_m,
+		AUTHOR_CONTACT_LEVEL, biome_id, NAN))
+
+
+func _procedural_biome_id(direction: Vector3) -> int:
+	if Planet.get("ready_state") and Planet.has_method("sample_info"):
+		var info: Dictionary = Planet.call("sample_info", direction) as Dictionary
+		return clampi(int(info.get("biome", 0)), 0, 17)
+	return 0
 
 
 func _prune_samples() -> void:
