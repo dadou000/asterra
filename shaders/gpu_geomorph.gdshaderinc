@@ -1,10 +1,18 @@
 // GPU geomorph synthesis primitives.
 // The caller includes gpu_planet_context.gdshaderinc first.
 //
-// Runtime note: this file is executed from the terrain vertex path, so tiny
-// savings multiply by hundreds of thousands of vertices. The terrain bands and
-// their physical roles are preserved, but helper work that does not materially
-// affect the resulting landform is kept deliberately cheap.
+// Phase 32 exposes the production bands in Planet Studio. Every new multiplier
+// defaults to 1.0, preserving the previous renderer exactly until edited.
+
+uniform float u_geomorph_warp_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_broad_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_mountain_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_mid_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_channel_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_deposit_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_fine_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_dune_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_glacial_strength : hint_range(0.0, 3.0) = 1.0;
 
 uint gm_hash(ivec3 p, uint seed) {
 	uint h = uint(p.x) * 0x8da6b343u;
@@ -23,10 +31,6 @@ float gm_rand(ivec3 p, uint seed) {
 	return float(gm_hash(p, seed) & 0x00ffffffu) / 16777215.0;
 }
 
-// Cellular feature points need three decorrelated values per lattice cell. The
-// old code executed the complete integer hash three times. One avalanche hash is
-// enough; inexpensive secondary bit-mixing supplies Y/Z. This keeps a stable,
-// continuous 3-D Worley field while cutting the cellular hash load by ~3x.
 vec3 gm_rand3(ivec3 p, uint seed) {
 	uint h0 = gm_hash(p, seed);
 	uint h1 = (h0 ^ (h0 >> uint(13)) ^ 0x68bc21ebu) * 0x9e3779b9u;
@@ -50,10 +54,6 @@ float gm_value(vec3 p, uint seed) {
 	return mix(mix(a, b, f.y), mix(c, d, f.y), f.z) * 2.0 - 1.0;
 }
 
-// The renderer already has explicit 16 km, 6 km, 1.4 km, 420 m, 120 m and 24 m
-// bands. Five octaves inside every band duplicated those same frequency ranges
-// several times. Three octaves retain the band's broad/mid-scale character; the
-// 1.0957 renormalization preserves approximately the old total fBm amplitude.
 float gm_fbm(vec3 p, uint seed) {
 	float h = 0.0;
 	float a = 0.52;
@@ -65,9 +65,6 @@ float gm_fbm(vec3 p, uint seed) {
 	return h * 1.0957;
 }
 
-// Domain warp only establishes large/mid-scale coordinate distortion. Two
-// octaves are sufficient because the explicit terrain bands provide subsequent
-// smaller-scale structure. Renormalize to keep roughly the previous warp reach.
 float gm_fbm_warp(vec3 p, uint seed) {
 	float h = 0.0;
 	float a = 0.52;
@@ -88,12 +85,9 @@ vec3 gm_domain_warp(vec3 p, uint seed, float strength) {
 		gm_fbm_warp(p + vec3(13.1, 7.7, -4.3), seed + 101u),
 		gm_fbm_warp(p + vec3(-5.7, 19.3, 8.9), seed + 211u),
 		gm_fbm_warp(p + vec3(9.2, -3.8, 23.4), seed + 307u));
-	return p + w * strength;
+	return p + w * strength * u_geomorph_warp_strength;
 }
 
-// Continuous 3-D Worley ridge. Full 3x3x3 coverage is retained so the old
-// half-cell discontinuity cannot return. Only the per-cell random generation is
-// cheaper now.
 float gm_cellular_ridge(vec3 p, uint seed) {
 	ivec3 base = ivec3(floor(p));
 	float f1 = 1e9;
@@ -156,10 +150,6 @@ float gm_band_weight(float wavelength_m, float spacing_m) {
 	return x * x * (3.0 - 2.0 * x);
 }
 
-// Must exactly match CubeSphere.tangent_basis(): [east, north], with the same
-// polar fallback axis. The raw coarse flow texture is linearly filtered and can
-// cancel to nearly zero where neighboring cells disagree. Never let normalization
-// of that near-zero vector become a binary terrain-coordinate switch.
 vec3 gm_flow_world(vec3 dir, vec2 flow_xy) {
 	float flow_len_sq = dot(flow_xy, flow_xy);
 	if (flow_len_sq <= 1e-10) return vec3(0.0);
@@ -193,22 +183,18 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 	if (w16k > 0.001) {
 		vec3 p = gm_domain_warp(world_m / 16000.0, seed + 11u, 0.8);
 		float broad = gm_fbm(p, seed + 13u);
-		h += broad * mix(24.0, 125.0, mountain) * w16k;
+		h += broad * mix(24.0, 125.0, mountain) * w16k * u_geomorph_broad_strength;
 	}
 
 	float w6k = gm_band_weight(6000.0, spacing_m);
-	// The old `mountain > 0.08` branch switched a roughly +/-17 m ridge term on in
-	// one vertex. Around a ~1 km macro elevation, altitude-derived mountain weight
-	// crosses 0.08, producing a literal world-space cliff contour. Ramp from 0.04
-	// to the old full-strength threshold instead. The expensive Worley path remains
-	// skipped over truly flat terrain, while the contribution is zero at the branch.
 	float mountain_gate = smoothstep(0.04, 0.08, mountain);
 	if (w6k > 0.001 && mountain > 0.04) {
 		vec3 p = gm_domain_warp(world_m / 6000.0, seed + 31u, 1.1);
 		float cells = gm_cellular_ridge(p, seed + 37u);
 		float ridge = gm_ridged(p * 1.55, seed + 41u);
 		float skeleton = mix(ridge, cells, 0.58);
-		h += (skeleton * 2.0 - 1.0) * 210.0 * mountain * mountain_gate * hardness * w6k;
+		h += (skeleton * 2.0 - 1.0) * 210.0 * mountain * mountain_gate
+			* hardness * w6k * u_geomorph_mountain_strength;
 	}
 
 	float w1400 = gm_band_weight(1400.0, spacing_m);
@@ -216,7 +202,8 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 		vec3 p = gm_domain_warp(world_m / 1400.0, seed + 53u, 0.72);
 		float ridge = gm_ridged(p * 1.25, seed + 59u);
 		float detail = gm_fbm(p * 2.1, seed + 61u);
-		h += ((ridge * 2.0 - 1.0) * 72.0 * mountain + detail * 24.0) * w1400;
+		h += ((ridge * 2.0 - 1.0) * 72.0 * mountain + detail * 24.0)
+			* w1400 * u_geomorph_mid_strength;
 	}
 
 	float w420 = gm_band_weight(420.0, spacing_m);
@@ -231,43 +218,43 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 			vec3 along = flow * along_q;
 			vec3 across = world_m - along;
 			vec3 warped_m = along * 0.42 + across * 1.45;
-			// At coarse-cell flow cancellations the old code changed directly from
-			// unwarped to fully warped coordinates. Blend the coordinate transform by
-			// confidence so the 420 m channel field stays spatially continuous.
 			sample_m = mix(world_m, warped_m, flow_gate);
 		}
 		vec3 p = gm_domain_warp(sample_m / 420.0, seed + 71u, 0.55);
 		float channel = pow(gm_ridged(p, seed + 73u), 4.6);
 		float incision = channel * mix(2.0, 34.0, hydro.b) * (1.0 - depositional * 0.78);
-		h -= incision * w420;
+		h -= incision * w420 * u_geomorph_channel_strength;
 		float depositional_gate = smoothstep(0.0, 0.03, depositional);
 		if (depositional > 0.0) {
 			float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
-			h += fan * depositional * depositional_gate * mix(1.0, 12.0, surface.a) * w420;
+			h += fan * depositional * depositional_gate * mix(1.0, 12.0, surface.a)
+				* w420 * u_geomorph_deposit_strength;
 		}
 	}
 
 	float w120 = gm_band_weight(120.0, spacing_m);
 	if (w120 > 0.001) {
 		float n = gm_fbm(world_m / 120.0, seed + 89u);
-		h += n * 4.5 * (1.0 - glacial * 0.6) * w120;
+		h += n * 4.5 * (1.0 - glacial * 0.6) * w120 * u_geomorph_fine_strength;
 		float dune_weight = arid * soil.r;
 		float dune_gate = smoothstep(0.0, 0.03, dune_weight);
 		if (dune_weight > 0.0) {
 			float dune = gm_ridged(gm_domain_warp(world_m / 180.0, seed + 97u, 0.45), seed + 101u);
-			h += (dune * 2.0 - 1.0) * 9.0 * dune_weight * dune_gate * w120;
+			h += (dune * 2.0 - 1.0) * 9.0 * dune_weight * dune_gate * w120
+				* u_geomorph_dune_strength;
 		}
 	}
 
 	float w24 = gm_band_weight(24.0, spacing_m);
 	if (w24 > 0.001) {
-		h += gm_value(world_m / 24.0, seed + 109u) * 0.9 * w24;
+		h += gm_value(world_m / 24.0, seed + 109u) * 0.9 * w24 * u_geomorph_fine_strength;
 	}
 
 	float glacial_gate = smoothstep(0.0, 0.05, glacial);
 	if (glacial > 0.0) {
 		float ice = gm_fbm(world_m / 2600.0 + vec3(2.0, -7.0, 5.0), seed + 127u);
-		h = mix(h, h * 0.62 + ice * 52.0, glacial * glacial_gate * 0.72);
+		float glacial_mix = clamp(glacial * glacial_gate * 0.72 * u_geomorph_glacial_strength, 0.0, 1.0);
+		h = mix(h, h * 0.62 + ice * 52.0 * u_geomorph_glacial_strength, glacial_mix);
 	}
 
 	return h;
