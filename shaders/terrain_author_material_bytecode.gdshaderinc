@@ -231,6 +231,13 @@ void author_material_apply(
 		else if (op == 58) v = climate;
 		else if (op == 59) v = landform;
 		else if (op == 60) v = vec4(rock_mix);
+		else if (op == 61) v = vec4(a.r);
+		else if (op == 62) v = vec4(a.g);
+		else if (op == 63) v = vec4(a.b);
+		else if (op == 64) v = vec4(a.a);
+		else if (op == 65) v = vec4(a.x, b.x, c.x, 1.0);
+		else if (op == 66) v = clamp(a, vec4(0.0), vec4(1.0));
+		else if (op == 67) v = vec4(1.0) - a;
 		values[i] = v;
 	}
 
