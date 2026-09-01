@@ -29,6 +29,9 @@ var _max_abs_drift_m3 := 0.0
 var _max_rel_drift := 0.0
 var _checkpoint_step_id := -1
 var _checkpoint_pending := false
+var _checkpoint_advance_recorded := false
+var _checkpoint_diagnostics_received := false
+var _checkpoint_diagnostics: Dictionary = {}
 var _volume_pending := false
 var _stall_frames := 0
 var _finished := false
@@ -176,6 +179,9 @@ func _on_volume_ready(_request_id: int, volume_m3: float) -> void:
 		return
 
 	_checkpoint_pending = false
+	_checkpoint_advance_recorded = false
+	_checkpoint_diagnostics_received = false
+	_checkpoint_diagnostics.clear()
 	if _completed_advances >= _target_advances:
 		_pass()
 	else:
@@ -198,6 +204,10 @@ func _advance_one() -> void:
 	var next_index := _completed_advances + 1
 	var checkpoint := next_index % SAMPLE_INTERVAL == 0 or next_index == _target_advances
 	_checkpoint_pending = checkpoint
+	if checkpoint:
+		_checkpoint_advance_recorded = false
+		_checkpoint_diagnostics_received = false
+		_checkpoint_diagnostics.clear()
 	var step_id := _solver.advance(MACRO_DT, MAX_SUBSTEPS, checkpoint)
 	if step_id < 0:
 		_fail("advance rejected at index %d" % next_index)
@@ -206,19 +216,33 @@ func _advance_one() -> void:
 		_checkpoint_step_id = step_id
 
 
-func _on_advance_recorded(_step_id: int) -> void:
+func _on_advance_recorded(step_id: int) -> void:
 	_progress()
 	_completed_advances += 1
 	if not _checkpoint_pending:
 		call_deferred("_advance_one")
-	# Checkpoints wait for diagnostics_ready, which guarantees the compact health
-	# readback has observed this advance before the control buffer is reused.
+		return
+	if step_id == _checkpoint_step_id:
+		_checkpoint_advance_recorded = true
+		_try_complete_checkpoint()
 
 
 func _on_diagnostics_ready(step_id: int, d: Dictionary) -> void:
 	_progress()
 	if not _checkpoint_pending or step_id != _checkpoint_step_id:
 		return
+	_checkpoint_diagnostics = d.duplicate(true)
+	_checkpoint_diagnostics_received = true
+	_try_complete_checkpoint()
+
+
+func _try_complete_checkpoint() -> void:
+	if not _checkpoint_pending or _volume_pending:
+		return
+	if not _checkpoint_advance_recorded or not _checkpoint_diagnostics_received:
+		return
+
+	var d := _checkpoint_diagnostics
 	if int(d.get("post_invalid_cells", -1)) != 0:
 		_fail("invalid GPU cells at checkpoint %d: %s" % [
 			_completed_advances, str(d)])
