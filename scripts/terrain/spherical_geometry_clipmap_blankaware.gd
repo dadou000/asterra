@@ -14,9 +14,17 @@ const MATERIAL_RUNTIME_SCRIPT := preload(
 	"res://scripts/world_authoring/terrain_material_runtime.gd")
 
 const AUTHORING_NONE_FINGERPRINT := "__no_enabled_authoring_graph__"
+const AUTHORED_SHADER_DEFINE := "#define ASTERRA_AUTHORED_TERRAIN\n"
+const AUTHORED_PROCEDURAL_INCLUDES := \
+	"#include \"res://shaders/terrain_author_procedural_displacement.gdshaderinc\"\n" + \
+	"#include \"res://shaders/terrain_author_material_post_cached.gdshaderinc\"\n"
+const AUTHORED_BLANK_INCLUDES := \
+	"#include \"res://shaders/terrain_author_displacement_bytecode.gdshaderinc\"\n" + \
+	"#include \"res://shaders/terrain_author_material_bytecode.gdshaderinc\"\n"
 
 var _blank_cache_state_applied: bool = false
 var _blank_shader_active: bool = false
+var _authored_shader_active: bool = false
 var _displacement_runtime: Node
 var _displacement_fingerprint: String = ""
 var _material_runtime: Node
@@ -29,6 +37,7 @@ func _ready() -> void:
 	_ensure_backend_shader(_blank_backend())
 	_sync_authoring_displacement(true)
 	_sync_authoring_material(true)
+	_sync_authoring_shader_variant(true)
 
 
 func _process(dt: float) -> void:
@@ -37,6 +46,7 @@ func _process(dt: float) -> void:
 	_set_cache_nodes_processing(not blank)
 	_sync_authoring_displacement(false)
 	_sync_authoring_material(false)
+	_sync_authoring_shader_variant(false)
 	super._process(dt)
 	if blank:
 		_apply_blank_material_state()
@@ -158,6 +168,27 @@ func _sync_authoring_material(force: bool) -> void:
 func _ensure_backend_shader(blank: bool) -> void:
 	if _material == null or blank == _blank_shader_active:
 		return
+	_install_backend_shader(blank, _authored_shader_active)
+
+
+func _sync_authoring_shader_variant(force: bool) -> void:
+	if _material == null:
+		return
+	var authored: bool = _runtime_program_active(_displacement_runtime) \
+		or _runtime_program_active(_material_runtime)
+	if not force and authored == _authored_shader_active:
+		return
+	_install_backend_shader(_blank_backend(), authored)
+
+
+func _runtime_program_active(runtime: Node) -> bool:
+	if runtime == null or not is_instance_valid(runtime) or not runtime.has_method("stats"):
+		return false
+	var value: Variant = runtime.call("stats")
+	return value is Dictionary and bool((value as Dictionary).get("active", false))
+
+
+func _install_backend_shader(blank: bool, authored: bool) -> void:
 	var path: String = BLANK_SHADER_PATH if blank else PROCEDURAL_SHADER_PATH
 	if not ResourceLoader.exists(path, "Shader"):
 		push_error("Terrain backend shader is missing: %s" % path)
@@ -166,8 +197,29 @@ func _ensure_backend_shader(blank: bool) -> void:
 	if shader == null:
 		push_error("Terrain backend shader failed to load: %s" % path)
 		return
+	if authored:
+		var marker := "render_mode cull_front, diffuse_burley, specular_schlick_ggx"
+		var marker_end := shader.code.find(";", shader.code.find(marker))
+		if marker_end < 0:
+			push_error("Terrain authored shader insertion marker is missing: %s" % path)
+			return
+		var source := shader.code.insert(marker_end + 1,
+			"\n" + AUTHORED_SHADER_DEFINE)
+		var include_marker := "void vertex()" if blank else \
+			"#include \"res://shaders/terrain_clipmap_cache_sampling.gdshaderinc\""
+		var include_at := source.find(include_marker)
+		if include_at < 0:
+			push_error("Terrain authored shader include marker is missing: %s" % path)
+			return
+		var includes := AUTHORED_BLANK_INCLUDES if blank else AUTHORED_PROCEDURAL_INCLUDES
+		var candidate := Shader.new()
+		candidate.resource_name = "AsterraAuthoredTerrainBlank" if blank \
+			else "AsterraAuthoredTerrainProcedural"
+		candidate.code = source.insert(include_at, includes + "\n")
+		shader = candidate
 	_material.shader = shader
 	_blank_shader_active = blank
+	_authored_shader_active = authored
 	if blank:
 		_apply_blank_material_state()
 		_sync_authoring_displacement(true)
@@ -234,6 +286,7 @@ func _sync_uniforms(origin: Vector3) -> void:
 		_apply_blank_material_state()
 	_sync_authoring_displacement(false)
 	_sync_authoring_material(false)
+	_sync_authoring_shader_variant(false)
 
 
 func _apply_blank_material_state() -> void:

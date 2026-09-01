@@ -10,7 +10,9 @@ extends Node
 ## on both CPU and GPU. Texture/triplanar displacement is rejected with a warning
 ## until a matching contact-side sampler exists; visual-only terrain is not allowed.
 
-const MAX_INSTRUCTIONS: int = 96
+# Keep GPU interpreter storage small enough to remain resident per terrain vertex.
+# Larger local arrays have triggered Vulkan device loss on current NVIDIA drivers.
+const MAX_INSTRUCTIONS: int = 32
 const BIOME_COUNT: int = 18
 
 # Keep these opcodes in lock-step with terrain_author_displacement_bytecode.gdshaderinc.
@@ -36,6 +38,10 @@ const OP_SCALE := 18
 const OP_LEVEL_MASK := 19
 const OP_BIOME_MASK := 20
 const OP_REPLACE := 21
+const OP_NOISE_LAYER := 22
+const OP_RIDGED_MOUNTAINS := 23
+const OP_EROSION_CHANNELS := 24
+const OP_SEDIMENT_DEPOSIT := 25
 
 var _headers := PackedVector4Array()
 var _params := PackedVector4Array()
@@ -248,6 +254,24 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 			result = _append_instruction(OP_NOISE, -1, -1, -1,
 				Vector4(maxf(absf(float(parameters.get("scale", 1.0))), 0.000001),
 					float(int(parameters.get("seed", graph_seed)) & 0x7fffffff), 0.0, 0.0))
+		"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT":
+			var terrain_input: int = _compile_input(node_id, 0, nodes, inputs,
+				memo, visiting, graph_seed)
+			var operation: int = OP_NOISE_LAYER
+			match node_type:
+				"RIDGED_MOUNTAINS": operation = OP_RIDGED_MOUNTAINS
+				"EROSION_CHANNELS": operation = OP_EROSION_CHANNELS
+				"SEDIMENT_DEPOSIT": operation = OP_SEDIMENT_DEPOSIT
+			var default_amount: float = 100.0 if node_type == "NOISE_LAYER" else 250.0
+			if node_type == "EROSION_CHANNELS":
+				default_amount = 40.0
+			elif node_type == "SEDIMENT_DEPOSIT":
+				default_amount = 25.0
+			result = _append_instruction(operation, terrain_input, -1, -1, Vector4(
+				maxf(absf(float(parameters.get("scale", 6.0))), 0.000001),
+				float(parameters.get("amount", default_amount)),
+				float(clampi(int(parameters.get("passes", 3)), 1, 4)),
+				float(int(parameters.get("seed", graph_seed)) & 0x000fffff)))
 		"ABS":
 			result = _append_instruction(OP_ABS,
 				_compile_input(node_id, 0, nodes, inputs, memo, visiting, graph_seed))
@@ -396,6 +420,22 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 					allow = not selected
 				out = a if allow else 0.0
 			OP_REPLACE: out = b
+			OP_NOISE_LAYER:
+				out = a + _terrain_fbm(d, p.x, int(round(p.w)), int(round(p.z))) * p.y
+			OP_RIDGED_MOUNTAINS:
+				var ridge: float = 1.0 - absf(_terrain_fbm(
+					d, p.x, int(round(p.w)), int(round(p.z))))
+				out = a + ridge * ridge * p.y
+			OP_EROSION_CHANNELS:
+				var erosion_field: float = _terrain_fbm(
+					d, p.x, int(round(p.w)), int(round(p.z)))
+				var channel: float = clampf(1.0 - absf(erosion_field), 0.0, 1.0)
+				out = a - channel * channel * channel * p.y
+			OP_SEDIMENT_DEPOSIT:
+				var sediment_field: float = _terrain_fbm(
+					d, p.x, int(round(p.w)), int(round(p.z)))
+				var deposit: float = clampf(1.0 - absf(sediment_field * 1.65), 0.0, 1.0)
+				out = a + deposit * deposit * p.y
 			_: out = 0.0
 		values[index] = out if is_finite(out) else 0.0
 	return float(values[_output_index]) if _output_index < values.size() else 0.0
@@ -437,6 +477,20 @@ func _value_noise_3d(position: Vector3, seed: int) -> float:
 	var x01 := lerpf(c001, c101, fx)
 	var x11 := lerpf(c011, c111, fx)
 	return lerpf(lerpf(x00, x10, fy), lerpf(x01, x11, fy), fz)
+
+
+func _terrain_fbm(direction: Vector3, scale: float, seed: int, passes: int) -> float:
+	var total: float = 0.0
+	var normalizer: float = 0.0
+	var amplitude: float = 1.0
+	var frequency: float = maxf(absf(scale), 0.000001)
+	for octave: int in clampi(passes, 1, 4):
+		var sample: float = _value_noise_3d(direction * frequency, seed + octave * 1013)
+		total += sample * amplitude
+		normalizer += amplitude
+		frequency *= 2.0
+		amplitude *= 0.5
+	return total / normalizer if normalizer > 0.0 else 0.0
 
 
 func _noise_hash(x: int, y: int, z: int, seed: int) -> float:

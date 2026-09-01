@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bpb7gm6grdpgw"
+path="res://.godot/imported/terrain_pristine_batch_query.glsl-01c82639c54650bbc78be40cf356f07b.res"
+
+[deps]
+
+source_file="res://shaders/terrain_pristine_batch_query.glsl"
+dest_files=["res://.godot/imported/terrain_pristine_batch_query.glsl-01c82639c54650bbc78be40cf356f07b.res"]
+
+[params]
+

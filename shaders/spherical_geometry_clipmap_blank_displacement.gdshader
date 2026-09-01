@@ -1,9 +1,6 @@
 shader_type spatial;
 render_mode cull_front, diffuse_burley, specular_schlick_ggx;
 
-#include "res://shaders/terrain_author_displacement_bytecode.gdshaderinc"
-#include "res://shaders/terrain_author_material_bytecode.gdshaderinc"
-
 uniform float u_planet_radius = 1000000.0;
 uniform vec3 u_origin = vec3(0.0);
 uniform vec3 u_anchor_render = vec3(0.0);
@@ -127,9 +124,12 @@ void vertex() {
 	vec3 direction = direction_for_basis_offset(u_anchor_dir, u_anchor_right, u_anchor_up, anchor_offset_m);
 	float biome = authored_biome_id(direction);
 	float generated_height = 0.0;
-	float shader_height = u_shader_displacement_enabled > 0.5
+	float shader_height = 0.0;
+	#ifdef ASTERRA_AUTHORED_TERRAIN
+	shader_height = u_shader_displacement_enabled > 0.5
 		? author_displacement_height(direction, generated_height, biome, level, TIME)
 		: 0.0;
+	#endif
 	float sink = is_ring > 0.5
 		? clamp(spacing * 0.001 * max(u_sink_scale, 0.0), 0.004, 0.025)
 		: 0.0;
@@ -166,10 +166,12 @@ void fragment() {
 	float ao = 1.0;
 	float slope = clamp(1.0 - dot(world_normal, up), 0.0, 1.0);
 	float camera_distance = length(v_render - CAMERA_POSITION_WORLD);
+	#ifdef ASTERRA_AUTHORED_TERRAIN
 	author_material_apply(up, v_planet,
 		length(v_planet) - u_planet_radius,
 		slope, v_biome, int(round(v_level)), camera_distance, TIME,
 		albedo, world_normal, roughness, metallic, ao);
+	#endif
 
 	NORMAL = normalize((VIEW_MATRIX * vec4(world_normal, 0.0)).xyz);
 	ALBEDO = albedo;

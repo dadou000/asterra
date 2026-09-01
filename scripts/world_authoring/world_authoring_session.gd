@@ -40,12 +40,33 @@ var _undo_stack: Array[Dictionary] = []
 var _redo_stack: Array[Dictionary] = []
 
 func bootstrap_from_current_world() -> void:
+	if _bootstrap_from_recovery():
+		return
 	var generation: Resource = GENERATION_PROFILE_SCRIPT.new()
 	if ResourceLoader.exists("res://world.tres"):
 		var loaded: Resource = ResourceLoader.load("res://world.tres")
 		if loaded != null:
 			generation.call("import_from_resource", loaded)
 	bootstrap_from_generation_profile(generation)
+
+
+func _bootstrap_from_recovery() -> bool:
+	var path: String = _recovery_path()
+	if not ResourceLoader.exists(path):
+		return false
+	var loaded: Resource = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if loaded == null or loaded.get_script() != SYSTEM_SCRIPT:
+		error_reported.emit("Planet Studio recovery is invalid; starting from the current world: %s" % path)
+		return false
+	loaded.call("ensure_valid")
+	applied_system = loaded.duplicate(true)
+	staged_system = loaded.duplicate(true)
+	dirty = false
+	apply_scope = ApplyScope.NONE
+	_undo_stack.clear()
+	_redo_stack.clear()
+	changed.emit(dirty, apply_scope)
+	return true
 
 func bootstrap_from_generation_profile(generation: Resource) -> void:
 	if generation == null:
@@ -395,10 +416,16 @@ func _mark_dirty(scope: int) -> void:
 func _autosave_recovery() -> void:
 	if staged_system == null:
 		return
-	_ensure_parent_directory(RECOVERY_PATH)
-	var err := ResourceSaver.save(staged_system, RECOVERY_PATH)
+	var path: String = _recovery_path()
+	_ensure_parent_directory(path)
+	var err := ResourceSaver.save(staged_system, path)
 	if err != OK:
 		error_reported.emit("Planet Studio recovery autosave failed: %s" % error_string(err))
+
+
+func _recovery_path() -> String:
+	var override: String = OS.get_environment("ASTERRA_AUTHORING_RECOVERY_PATH").strip_edges()
+	return override if override.begins_with("user://") else RECOVERY_PATH
 
 func _ensure_parent_directory(path: String) -> void:
 	var absolute := ProjectSettings.globalize_path(path.get_base_dir())

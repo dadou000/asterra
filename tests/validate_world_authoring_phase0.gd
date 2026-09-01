@@ -7,6 +7,8 @@ const SHADER_SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain
 const WATER_FEATURE_SCRIPT := preload("res://scripts/world_authoring/model/water_feature_definition.gd")
 
 func _init() -> void:
+	OS.set_environment("ASTERRA_AUTHORING_RECOVERY_PATH",
+		"user://world_authoring/tests/phase0_recovery_%d.tres" % OS.get_process_id())
 	var session: RefCounted = SESSION_SCRIPT.new()
 	session.bootstrap_from_current_world()
 	_assert(session.staged_system != null, "staged system missing")
@@ -68,11 +70,25 @@ func _init() -> void:
 	var graph_nodes: Array = graph.get(&"nodes")
 	_assert(graph_nodes.size() == 1, "default displacement graph should contain one output")
 	var output_id: String = String((graph_nodes[0] as Dictionary).get("id", ""))
-	var input_id: String = String(graph.call("add_node", "GAME_INPUT", Vector2(80.0, 120.0), {"source": "terrain_height_m"}))
+	var input_id_box: Array[String] = [""]
+	session.stage_action("CI graph connection", func() -> void:
+		input_id_box[0] = String(graph.call("add_node", "GAME_INPUT", Vector2(80.0, 120.0),
+			{"source": "terrain_height_m"}))
+		graph.call("connect_nodes", input_id_box[0], 0, output_id, 0)
+	, SESSION_SCRIPT.ApplyScope.GRAPH)
+	var input_id: String = input_id_box[0]
 	_assert(not input_id.is_empty(), "graph input node creation failed")
-	_assert(bool(graph.call("connect_nodes", input_id, 0, output_id, 0)), "graph connection failed")
 	var graph_links: Array = graph.get(&"links")
 	_assert(graph_links.size() == 1, "graph link was not stored")
+
+	var restored_session: RefCounted = SESSION_SCRIPT.new()
+	restored_session.bootstrap_from_current_world()
+	var restored_terrain: Resource = restored_session.active_terrain_profile()
+	var restored_displacement_slots: Array = restored_terrain.get(&"displacement_slots")
+	_assert(restored_displacement_slots.size() == 1, "recovery startup lost the authored displacement graph")
+	var restored_graph: Resource = (restored_displacement_slots[0] as Resource).get(&"graph") as Resource
+	_assert((restored_graph.get(&"links") as Array).size() == 1,
+		"recovery startup lost the authored node connection")
 
 	var material_slot: Resource = session.create_terrain_shader_slot(SHADER_SLOT_SCRIPT.Domain.MATERIAL, "CI Material")
 	_assert(material_slot != null, "material slot creation failed")
@@ -161,6 +177,7 @@ func _init() -> void:
 	print("WORLD_AUTHORING_PHASE0_OK")
 	print("WORLD_AUTHORING_PHASE1_OK")
 	print("WORLD_AUTHORING_PHASE2_SCULPT_OK")
+	print("WORLD_AUTHORING_RECOVERY_RESTORE_OK")
 	quit(0)
 
 func _assert(condition: bool, message: String) -> void:

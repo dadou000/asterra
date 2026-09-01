@@ -19,6 +19,7 @@ var _phase28_biome_id: int = 7
 var _phase28_domain: int = SHADER_SLOT_MODEL.Domain.DISPLACEMENT
 var _phase28_selected_slot_id: String = ""
 var _phase28_show_advanced: bool = false
+var _phase28_show_scope_tools: bool = false
 
 
 func _show_category(category_name: String) -> void:
@@ -71,10 +72,13 @@ func _build_terrain_shader_composer_page() -> void:
 		return
 
 	_build_phase28_address_bar()
-	_build_phase28_effective_stack(terrain)
+	_build_phase28_shader_library(terrain)
 	_build_phase28_domain_tabs()
 	_build_phase28_cell_editor(terrain)
-	_build_phase28_scope_overview(terrain)
+	_build_phase28_scope_tools_toggle()
+	if _phase28_show_scope_tools:
+		_build_phase28_effective_stack(terrain)
+		_build_phase28_scope_overview(terrain)
 	_build_phase28_advanced_runtime()
 
 
@@ -169,6 +173,94 @@ func _phase28_level_name(level: int) -> String:
 	return "L%d — progressively coarser" % level
 
 
+func _build_phase28_shader_library(terrain: Resource) -> void:
+	_section("Saved graphs")
+	var all_slots: Array[Resource] = []
+	for property_name: StringName in [&"displacement_slots", &"material_slots"]:
+		for slot_value: Variant in terrain.get(property_name) as Array:
+			var slot: Resource = slot_value as Resource
+			if slot != null:
+				all_slots.append(slot)
+	if all_slots.is_empty():
+		_add_note("No authored graphs yet. Choose an L layer and create a displacement or material flow below.")
+		return
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 7)
+	_workspace.add_child(row)
+	var label := Label.new()
+	label.text = "Open any graph"
+	label.custom_minimum_size.x = 120.0
+	row.add_child(label)
+	var picker := OptionButton.new()
+	picker.custom_minimum_size.x = 660.0
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for slot: Resource in all_slots:
+		var domain_label: String = "D" if int(slot.get(&"domain")) == SHADER_SLOT_MODEL.Domain.DISPLACEMENT else "M"
+		picker.add_item("[%s] %s%s — %s / %s" % [
+			domain_label,
+			"" if bool(slot.get(&"enabled")) else "[OFF] ",
+			String(slot.get(&"display_name")),
+			_phase28_slot_levels_text(slot),
+			_phase28_slot_scope_text(slot),
+		])
+		picker.set_item_metadata(picker.item_count - 1, String(slot.get(&"slot_id")))
+		if String(slot.get(&"slot_id")) == _phase28_selected_slot_id:
+			picker.select(picker.item_count - 1)
+	picker.item_selected.connect(func(index: int) -> void:
+		var selected: Resource = terrain.call("find_shader_slot",
+			String(picker.get_item_metadata(index))) as Resource
+		_phase28_focus_existing_slot(selected)
+	)
+	row.add_child(picker)
+	var open := Button.new()
+	open.text = "Open"
+	open.tooltip_text = "Open the selected saved graph and switch to its L layer, scope, and domain"
+	open.pressed.connect(func() -> void:
+		var selected: Resource = terrain.call("find_shader_slot",
+			String(picker.get_item_metadata(picker.selected))) as Resource
+		_phase28_focus_existing_slot(selected)
+	)
+	row.add_child(open)
+	var count := Label.new()
+	count.text = "%d graph(s)" % all_slots.size()
+	count.modulate = Color(0.55, 0.66, 0.74)
+	row.add_child(count)
+
+
+func _phase28_slot_levels_text(slot: Resource) -> String:
+	var levels := PackedStringArray()
+	for level: int in PHASE28_LEVEL_COUNT:
+		if bool(slot.call("applies_to_clipmap", level)):
+			levels.append("L%d" % level)
+	return ", ".join(levels) if not levels.is_empty() else "No L layer"
+
+
+func _phase28_focus_existing_slot(slot: Resource) -> void:
+	if slot == null:
+		return
+	_phase28_domain = int(slot.get(&"domain"))
+	_phase28_selected_slot_id = String(slot.get(&"slot_id"))
+	if not bool(slot.call("applies_to_clipmap", _shader_composer_level)):
+		for level: int in PHASE28_LEVEL_COUNT:
+			if bool(slot.call("applies_to_clipmap", level)):
+				_shader_composer_level = level
+				break
+	var mode: int = int(slot.get(&"biome_mask_mode"))
+	if mode == SHADER_SLOT_MODEL.BiomeMaskMode.ALL:
+		_phase28_scope_mode = ScopeMode.GLOBAL
+	else:
+		_phase28_scope_mode = ScopeMode.BIOME
+		var ids: PackedInt32Array = slot.get(&"biome_ids")
+		if mode == SHADER_SLOT_MODEL.BiomeMaskMode.ONLY and not ids.is_empty():
+			_phase28_biome_id = clampi(ids[0], 0, BIOME_NAMES.size() - 1)
+		elif not bool(slot.call("applies_to_biome", _phase28_biome_id)):
+			for biome_id: int in BIOME_NAMES.size():
+				if bool(slot.call("applies_to_biome", biome_id)):
+					_phase28_biome_id = biome_id
+					break
+	_refresh_current_category()
+
+
 func _build_phase28_domain_tabs() -> void:
 	_section("2 — Graph domain")
 	var row := HBoxContainer.new()
@@ -193,6 +285,20 @@ func _build_phase28_domain_tabs() -> void:
 			_refresh_current_category()
 		)
 		row.add_child(button)
+
+
+func _build_phase28_scope_tools_toggle() -> void:
+	_section("Composition details")
+	var toggle := Button.new()
+	toggle.text = "Hide scope map and effective stacks" if _phase28_show_scope_tools \
+		else "Show scope map and effective stacks"
+	toggle.pressed.connect(func() -> void:
+		_phase28_show_scope_tools = not _phase28_show_scope_tools
+		_refresh_current_category()
+	)
+	_workspace.add_child(toggle)
+	if not _phase28_show_scope_tools:
+		_add_note("Optional: inspect how Global and biome flows combine across all L layers.")
 
 
 func _build_phase28_effective_stack(terrain: Resource) -> void:
@@ -225,12 +331,7 @@ func _build_phase28_effective_stack(terrain: Resource) -> void:
 			button.text = "%d. %s  ·  %s" % [index + 1,
 				String(slot.get(&"display_name")), _phase28_slot_scope_text(slot)]
 			button.tooltip_text = "Click to edit this contributing graph"
-			var slot_id: String = String(slot.get(&"slot_id"))
-			button.pressed.connect(func() -> void:
-				_phase28_domain = domain
-				_phase28_selected_slot_id = slot_id
-				_refresh_current_category()
-			)
+			button.pressed.connect(_phase28_focus_existing_slot.bind(slot))
 			box.add_child(button)
 
 
@@ -275,8 +376,16 @@ func _phase28_scope_slots(terrain: Resource, domain: int) -> Array[Resource]:
 
 
 func _build_phase28_cell_editor(terrain: Resource) -> void:
-	_section("3 — Edit graph")
+	_section("3 — Build live terrain flow")
 	var scope_slots: Array[Resource] = _phase28_scope_slots(terrain, _phase28_domain)
+	# Library/effective-stack navigation is allowed to select shared and legacy
+	# (including EXCEPT-mask) graphs that do not belong to one canonical Phase 28
+	# cell. Keep that explicit selection visible instead of silently replacing it.
+	var selected: Resource = terrain.call("find_shader_slot", _phase28_selected_slot_id) as Resource
+	if selected != null and int(selected.get(&"domain")) == _phase28_domain \
+			and bool(selected.call("applies_to_clipmap", _shader_composer_level)) \
+			and not scope_slots.has(selected):
+		scope_slots.push_front(selected)
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 7)
 	_workspace.add_child(header)
@@ -293,12 +402,13 @@ func _build_phase28_cell_editor(terrain: Resource) -> void:
 	header.add_child(create)
 
 	if scope_slots.is_empty():
-		_add_note("No authored graph exists for this cell. The renderer currently falls through to the Global/base result. Create a graph to author this exact L/scope/domain.")
+		_build_phase28_implicit_base_preview()
+		_add_note("The renderer-owned base above is already active and cannot be deleted. Create this L/scope flow to insert editable operations between the base and final terrain.")
 		return
 
 	if _phase28_selected_slot_id.is_empty() or terrain.call("find_shader_slot", _phase28_selected_slot_id) == null:
 		_phase28_selected_slot_id = String(scope_slots[0].get(&"slot_id"))
-	var selected: Resource = terrain.call("find_shader_slot", _phase28_selected_slot_id) as Resource
+	selected = terrain.call("find_shader_slot", _phase28_selected_slot_id) as Resource
 	if selected == null or not scope_slots.has(selected):
 		selected = scope_slots[0]
 		_phase28_selected_slot_id = String(selected.get(&"slot_id"))
@@ -330,7 +440,7 @@ func _build_phase28_cell_editor(terrain: Resource) -> void:
 	if _phase28_domain == SHADER_SLOT_MODEL.Domain.MATERIAL:
 		_add_note("Material graphs are post-PBR: GAME_INPUT base_albedo/base_normal/base_roughness expose the current production terrain shader. TEXTURE_2D and TRIPLANAR nodes are live GPU inputs. Leaving the pass-through base nodes connected produces the current shader unchanged.")
 	else:
-		_add_note("Displacement graphs are authoritative geometry. The same deterministic graph is used for rendered terrain and contact/physics. L-specific graphs are evaluated before LOD triangle morphing to preserve watertight transitions.")
+		_add_note("Use the one-click terrain operations above the canvas; each new operation inserts itself before Output. Drag ports only when you want custom math. The rendered terrain and contact/physics update from the same flow.")
 
 
 func _build_phase28_slot_controls(terrain: Resource, slot: Resource) -> void:
@@ -393,10 +503,13 @@ func _build_phase28_slot_controls(terrain: Resource, slot: Resource) -> void:
 func _phase28_create_cell_slot(terrain: Resource) -> void:
 	var scope_name: String = "Global" if _phase28_scope_mode == ScopeMode.GLOBAL else BIOME_NAMES[_phase28_biome_id]
 	var domain_name: String = "Displacement" if _phase28_domain == SHADER_SLOT_MODEL.Domain.DISPLACEMENT else "Material"
-	var created: Resource = null
+	# Lambda captures are value captures in GDScript. Keep the created resource in
+	# a shared container so the UI can select and open the graph after staging it.
+	var created_box: Array[Resource] = [null]
 	_session.stage_action("Create L%d %s %s graph" % [_shader_composer_level, scope_name, domain_name], func() -> void:
-		created = terrain.call("create_shader_slot", _phase28_domain,
+		created_box[0] = terrain.call("create_shader_slot", _phase28_domain,
 			"L%d %s %s" % [_shader_composer_level, scope_name, domain_name]) as Resource
+		var created: Resource = created_box[0]
 		if created == null:
 			return
 		created.set(&"clipmap_level_mask", 1 << _shader_composer_level)
@@ -409,14 +522,72 @@ func _phase28_create_cell_slot(terrain: Resource) -> void:
 		if _phase28_domain == SHADER_SLOT_MODEL.Domain.MATERIAL:
 			created.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.REPLACE)
 			created.set(&"strength", 1.0)
-			_phase28_make_material_passthrough(created)
 		else:
 			created.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
 			created.set(&"strength", 1.0)
 	, WorldAuthoringSession.ApplyScope.GRAPH)
+	var created: Resource = created_box[0]
 	if created != null:
 		_phase28_selected_slot_id = String(created.get(&"slot_id"))
 	_refresh_current_category()
+
+
+func _build_phase28_implicit_base_preview() -> void:
+	var flow := HBoxContainer.new()
+	flow.add_theme_constant_override("separation", 10)
+	flow.custom_minimum_size.y = 105.0
+	_workspace.add_child(flow)
+	var base_title: String = "PRODUCTION TERRAIN BASE" if _phase28_domain == SHADER_SLOT_MODEL.Domain.DISPLACEMENT \
+		else "PRODUCTION TEXTURES / PBR"
+	var base_detail: String = "Generated height + sculpt" if _phase28_domain == SHADER_SLOT_MODEL.Domain.DISPLACEMENT \
+		else "Albedo + normal + roughness + metallic + AO"
+	flow.add_child(_phase28_flow_preview_card(base_title, base_detail, Color(0.17, 0.28, 0.36)))
+	var arrow := Label.new()
+	arrow.text = "→"
+	arrow.add_theme_font_size_override("font_size", 28)
+	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	arrow.modulate = Color(0.68, 0.78, 0.87)
+	flow.add_child(arrow)
+	var empty_title: String = "ADD DISPLACEMENT OPERATIONS" if _phase28_domain == SHADER_SLOT_MODEL.Domain.DISPLACEMENT \
+		else "ADD MATERIAL OPERATIONS"
+	flow.add_child(_phase28_flow_preview_card(empty_title, "Create graph to edit this stage",
+		Color(0.20, 0.21, 0.24)))
+	var final_arrow := Label.new()
+	final_arrow.text = "→"
+	final_arrow.add_theme_font_size_override("font_size", 28)
+	final_arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	final_arrow.modulate = Color(0.68, 0.78, 0.87)
+	flow.add_child(final_arrow)
+	flow.add_child(_phase28_flow_preview_card("FINAL TERRAIN", "Live renderer output",
+		Color(0.20, 0.27, 0.22)))
+
+
+func _phase28_flow_preview_card(title_text: String, detail_text: String,
+		color: Color) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(295.0, 92.0)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.border_color = Color(0.36, 0.48, 0.58)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 14.0
+	style.content_margin_right = 14.0
+	style.content_margin_top = 12.0
+	style.content_margin_bottom = 12.0
+	panel.add_theme_stylebox_override("panel", style)
+	var box := VBoxContainer.new()
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = title_text
+	title.add_theme_font_size_override("font_size", 15)
+	box.add_child(title)
+	var detail := Label.new()
+	detail.text = detail_text
+	detail.modulate = Color(0.67, 0.76, 0.83)
+	box.add_child(detail)
+	return panel
 
 
 func _phase28_make_material_passthrough(slot: Resource) -> void:
@@ -523,17 +694,22 @@ func _phase28_count_scope_cell(terrain: Resource, domain: int, level: int,
 
 
 func _build_phase28_advanced_runtime() -> void:
-	_section("Advanced runtime shader")
+	_section("Production displacement + texture shader")
 	var toggle := Button.new()
-	toggle.text = "Hide raw ShaderMaterial / source" if _phase28_show_advanced else "Show raw ShaderMaterial / live source"
+	toggle.text = "Hide production shader source" if _phase28_show_advanced \
+		else "Edit production displacement + texture source"
 	toggle.pressed.connect(func() -> void:
 		_phase28_show_advanced = not _phase28_show_advanced
+		if _phase28_show_advanced:
+			_live_shader_source_expanded[TARGET_TERRAIN] = true
 		_refresh_current_category()
 	)
 	_workspace.add_child(toggle)
 	if not _phase28_show_advanced:
-		_add_note("Normally you should author with the scoped node graphs above. The raw production .gdshader editor remains available for engine-level work.")
+		_add_note("The generated displacement and terrain texture/PBR pipeline live together in the resident production .gdshader, so they are not authored-graph slots. Open it here to modify the actual compiled source; saved node graphs are listed separately above.")
 		return
 	if _world_host != null:
 		_build_runtime_shader_inspector(TARGET_TERRAIN,
-			"Ground terrain — actual compiled render shader", _runtime_material(TARGET_TERRAIN))
+			"Ground terrain — actual displacement + material render shader", _runtime_material(TARGET_TERRAIN))
+	else:
+		_add_note("The production ShaderMaterial is not resident yet. It will appear after the detailed terrain renderer initializes.")

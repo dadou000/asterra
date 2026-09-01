@@ -55,8 +55,6 @@ varying float v_direct_transmittance;
 varying float v_micro_layer;
 varying float v_geom_normal_weight;
 
-#include "res://shaders/terrain_author_material_post_cached.gdshaderinc"
-
 const int ASTERRA_MAX_LEVEL = 14;
 const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
@@ -533,10 +531,12 @@ void fragment() {
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
 			}
 
-			float authored_metallic;
-			float authored_ao;
+			float authored_metallic = 0.0;
+			float authored_ao = 1.0;
+			#ifdef ASTERRA_AUTHORED_TERRAIN
 			author_cached_material_post(biome, camera_dist, geom_n,
 				albedo, wn, roughness, authored_metallic, authored_ao);
+			#endif
 			NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			ALBEDO = albedo;
 			ROUGHNESS = roughness;

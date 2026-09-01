@@ -2,7 +2,8 @@ uniform sampler2D u_author_disp_code : filter_nearest, repeat_disable;
 uniform int u_author_disp_count = 0;
 uniform int u_author_disp_output = -1;
 uniform float u_author_disp_ready = 0.0;
-const int AUTHOR_DISP_MAX_INSTRUCTIONS = 96;
+// Mirrored by TerrainDisplacementRuntime; this is per-vertex local storage.
+const int AUTHOR_DISP_MAX_INSTRUCTIONS = 32;
 
 float ad_hash(ivec3 p, int seed) {
 	uint h = uint(p.x) * 374761393u + uint(p.y) * 668265263u + uint(p.z) * 2147483647u + uint(seed) * 1274126177u;
@@ -20,6 +21,22 @@ float ad_noise(vec3 p, int seed) {
 	float b0 = mix(ad_hash(i + ivec3(0,0,1), seed), ad_hash(i + ivec3(1,0,1), seed), f.x);
 	float b1 = mix(ad_hash(i + ivec3(0,1,1), seed), ad_hash(i + ivec3(1,1,1), seed), f.x);
 	return mix(mix(a0, a1, f.y), mix(b0, b1, f.y), f.z);
+}
+
+float ad_terrain_fbm(vec3 direction, float scale, int seed, int passes) {
+	float total = 0.0;
+	float normalizer = 0.0;
+	float amplitude = 1.0;
+	float frequency = max(abs(scale), 0.000001);
+	for (int octave = 0; octave < 4; octave++) {
+		if (octave >= clamp(passes, 1, 4)) break;
+		float sample_value = ad_noise(direction * frequency, seed + octave * 1013);
+		total += sample_value * amplitude;
+		normalizer += amplitude;
+		frequency *= 2.0;
+		amplitude *= 0.5;
+	}
+	return normalizer > 0.0 ? total / normalizer : 0.0;
 }
 
 float ad_reg(float values[AUTHOR_DISP_MAX_INSTRUCTIONS], int index, int current) {
@@ -63,6 +80,10 @@ float author_displacement_height(vec3 direction, float base_height_m, float biom
 		else if (op == 19) { int mask = int(round(p.x)); int level = clamp(clipmap_level, 0, 30); v = (mask & (1 << level)) != 0 ? a : 0.0; }
 		else if (op == 20) { int mode = int(round(p.x)); int mask = int(round(p.y)); int bid = clamp(int(round(biome_id)), 0, 17); bool selected = (mask & (1 << bid)) != 0; bool allow = mode == 1 ? selected : (mode == 2 ? selected == false : true); v = allow ? a : 0.0; }
 		else if (op == 21) v = b;
+		else if (op == 22) v = a + ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))) * p.y;
+		else if (op == 23) { float ridge = 1.0 - abs(ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z)))); v = a + ridge * ridge * p.y; }
+		else if (op == 24) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float channel = clamp(1.0 - abs(field), 0.0, 1.0); v = a - channel * channel * channel * p.y; }
+		else if (op == 25) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0); v = a + deposit * deposit * p.y; }
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];

@@ -43,6 +43,8 @@ class FakeRuntimeMain extends Node:
 
 
 func _ready() -> void:
+	OS.set_environment("ASTERRA_AUTHORING_RECOVERY_PATH",
+		"user://world_authoring/tests/secondary_recovery_%d.tres" % OS.get_process_id())
 	for script_path: String in SCRIPT_PATHS:
 		var resource: Resource = load(script_path)
 		if resource == null or not (resource is Script):
@@ -59,6 +61,8 @@ func _ready() -> void:
 	if not _validate_blank_and_star_authoring():
 		return
 	if not _validate_blank_shader_displacement():
+		return
+	if not _validate_live_terrain_operations():
 		return
 	if not _validate_celestial_multi_preview():
 		return
@@ -266,6 +270,55 @@ func _validate_blank_shader_displacement() -> bool:
 		_fail("BLANK_SHADER_DISPLACEMENT_FAILED: expected 75 m shader terrain, got %.6f m" % height_m)
 		return false
 	print("BLANK_SHADER_DISPLACEMENT_OK: generated height off; shared bytecode produces 75.0 m physical shader terrain")
+	return true
+
+
+func _validate_live_terrain_operations() -> bool:
+	var terrain: Resource = TERRAIN_PROFILE.new()
+	terrain.call("ensure_valid")
+	var slot: Resource = terrain.call("create_shader_slot",
+		SLOT_SCRIPT.Domain.DISPLACEMENT, "CI Live Terrain Flow") as Resource
+	var graph: Resource = slot.get(&"graph") as Resource if slot != null else null
+	if graph == null:
+		_fail("LIVE_TERRAIN_FLOW_FAILED: graph was not created")
+		return false
+	var output_id: String = ""
+	for node_value: Variant in graph.get(&"nodes") as Array:
+		var node: Dictionary = node_value as Dictionary
+		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String(node.get("id", ""))
+			break
+	var previous_id: String = ""
+	var operation_types: Array[String] = [
+		"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT"]
+	for index: int in operation_types.size():
+		var operation_id: String = String(graph.call("add_node", operation_types[index],
+			Vector2(100.0 + index * 220.0, 160.0), {
+				"scale": 5.0 + index * 2.0,
+				"amount": 30.0 + index * 10.0,
+				"passes": 3,
+				"seed": 1200 + index * 17,
+			}))
+		if not previous_id.is_empty():
+			graph.call("connect_nodes", previous_id, 0, operation_id, 0)
+		previous_id = operation_id
+	graph.call("connect_nodes", previous_id, 0, output_id, 0)
+	var runtime: Node = DISPLACEMENT_RUNTIME.new() as Node
+	var stats: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	var height_a: float = float(runtime.call("evaluate_height",
+		Vector3(1.0, 0.2, 0.1).normalized(), 0.0, 0, 0, 0.0))
+	var height_b: float = float(runtime.call("evaluate_height",
+		Vector3(-0.3, 0.7, 0.5).normalized(), 0.0, 0, 0, 0.0))
+	runtime.free()
+	if not bool(stats.get("active", false)) or not is_finite(height_a) \
+			or not is_finite(height_b) or is_equal_approx(height_a, height_b):
+		_fail("LIVE_TERRAIN_FLOW_FAILED: modifier chain did not produce finite spatial terrain")
+		return false
+	for warning_value: Variant in stats.get("warnings", PackedStringArray()):
+		if String(warning_value).contains("Unsupported"):
+			_fail("LIVE_TERRAIN_FLOW_FAILED: %s" % String(warning_value))
+			return false
+	print("LIVE_TERRAIN_FLOW_OK: noise, ridges, erosion, and sediment compile to shared CPU/GPU bytecode")
 	return true
 
 

@@ -16,7 +16,8 @@ uniform sampler2D u_author_mat_tex5 : source_color, filter_linear_mipmap, repeat
 uniform sampler2D u_author_mat_tex6 : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D u_author_mat_tex7 : source_color, filter_linear_mipmap, repeat_enable;
 
-const int AUTHOR_MAT_MAX_INSTRUCTIONS = 160;
+// Mirrored by TerrainMaterialRuntime; this is per-fragment local storage.
+const int AUTHOR_MAT_MAX_INSTRUCTIONS = 32;
 
 float am_hash(ivec3 p, int seed) {
 	uint h = uint(p.x) * 374761393u + uint(p.y) * 668265263u

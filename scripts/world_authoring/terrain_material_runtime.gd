@@ -10,7 +10,9 @@ extends Node
 ## Slot level/biome masks are compiled into the same program. Global slots run for
 ## every biome on their selected L levels; biome slots are additional overrides.
 
-const MAX_INSTRUCTIONS: int = 160
+# This becomes a per-fragment vec4 register file; a large historical limit caused
+# driver timeouts even for otherwise modest graphs.
+const MAX_INSTRUCTIONS: int = 32
 const MAX_TEXTURES: int = 8
 const BIOME_COUNT: int = 18
 
