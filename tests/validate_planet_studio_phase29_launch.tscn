@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource path="res://tests/validate_planet_studio_phase29_launch.gd" type="Script" id="1"]
+
+[node name="ValidatePlanetStudioPhase29Launch" type="Node"]
+script = ExtResource("1")
