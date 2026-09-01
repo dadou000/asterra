@@ -4,7 +4,8 @@
 // Phase 2 fixed-domain shallow-water update.
 // Mirrors HydroReferenceSolver: conservative h/hu/hv, hydrostatic reconstruction,
 // Rusanov interface flux, positivity-preserving wet/dry handling and semi-implicit
-// Manning friction. One invocation owns one cell and writes to a ping-pong buffer.
+// Manning friction. GPU CFL preparation supplies sub_dt/substeps; a push constant
+// selects which recorded dispatch in the fixed maximum sequence is active.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -18,9 +19,38 @@ layout(set = 0, binding = 2, std430) readonly buffer Sources {
     vec4 sources[];   // rain m/s, infiltration m/s, reserved, reserved
 };
 layout(set = 0, binding = 3, std430) readonly buffer Params {
-    vec4 grid_dt;     // width, height, cell_size_m, dt_s
-    vec4 physics;     // gravity, dry_eps, Manning n, reserved
+    vec4 grid_dt;     // width, height, cell_size_m, requested macro dt
+    vec4 physics;     // gravity, dry_eps, Manning n, CFL
+    vec4 schedule;    // max substeps, reserved...
 } params;
+layout(set = 0, binding = 4, std430) readonly buffer Control {
+    uint pre_max_speed_bits;
+    uint pre_max_depth_bits;
+    uint pre_wet_count;
+    uint pre_invalid_count;
+
+    uint post_max_speed_bits;
+    uint post_max_depth_bits;
+    uint post_wet_count;
+    uint post_invalid_count;
+
+    float requested_dt;
+    float sub_dt;
+    float advanced_dt;
+    float cfl_dt;
+
+    uint substeps;
+    uint max_substeps;
+    uint cfl_clamped;
+    uint reserved;
+} control;
+
+layout(push_constant, std430) uniform StepPush {
+    uint step_index;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} pc;
 
 struct HydroInterface {
     vec3 flux;
@@ -31,7 +61,7 @@ struct HydroInterface {
 int grid_width() { return int(params.grid_dt.x + 0.5); }
 int grid_height() { return int(params.grid_dt.y + 0.5); }
 float dx() { return max(params.grid_dt.z, 1e-4); }
-float dt() { return max(params.grid_dt.w, 0.0); }
+float dt() { return max(control.sub_dt, 0.0); }
 float grav() { return max(params.physics.x, 1e-4); }
 float dry_eps() { return max(params.physics.y, 1e-8); }
 float manning_n() { return max(params.physics.z, 0.0); }
@@ -116,6 +146,10 @@ vec3 apply_friction(vec3 q, float step_dt) {
 }
 
 void main() {
+    // All potential substeps are recorded once. The GPU-computed schedule enables
+    // only a prefix, so no CPU readback is required before stepping.
+    if (pc.step_index >= control.substeps || dt() <= 0.0) return;
+
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     int w = grid_width();
     int hgt = grid_height();
