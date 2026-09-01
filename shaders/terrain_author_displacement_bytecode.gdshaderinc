@@ -44,7 +44,8 @@ float ad_reg(float values[AUTHOR_DISP_MAX_INSTRUCTIONS], int index, int current)
 	return values[index];
 }
 
-float author_displacement_height(vec3 direction, float base_height_m, float biome_id, int clipmap_level, float time_s) {
+float author_displacement_height_with_sculpt(vec3 direction, float base_height_m,
+		float biome_id, int clipmap_level, float time_s, float sculpt_delta_m) {
 	if (u_author_disp_ready < 0.5 || u_author_disp_count <= 0 || u_author_disp_output < 0) return 0.0;
 	float values[AUTHOR_DISP_MAX_INSTRUCTIONS];
 	for (int i = 0; i < AUTHOR_DISP_MAX_INSTRUCTIONS; i++) values[i] = 0.0;
@@ -84,7 +85,15 @@ float author_displacement_height(vec3 direction, float base_height_m, float biom
 		else if (op == 23) { float ridge = 1.0 - abs(ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z)))); v = a + ridge * ridge * p.y; }
 		else if (op == 24) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float channel = clamp(1.0 - abs(field), 0.0, 1.0); v = a - channel * channel * channel * p.y; }
 		else if (op == 25) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0); v = a + deposit * deposit * p.y; }
+		else if (op == 26) v = sculpt_delta_m;
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];
+}
+
+// Backward-compatible entry point for Blank terrain and older shader callers.
+float author_displacement_height(vec3 direction, float base_height_m, float biome_id,
+		int clipmap_level, float time_s) {
+	return author_displacement_height_with_sculpt(direction, base_height_m, biome_id,
+		clipmap_level, time_s, 0.0);
 }
