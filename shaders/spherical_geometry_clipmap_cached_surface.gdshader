@@ -534,8 +534,11 @@ void fragment() {
 			float authored_metallic = 0.0;
 			float authored_ao = 1.0;
 			#ifdef ASTERRA_AUTHORED_TERRAIN
-			author_cached_material_post(biome, camera_dist, geom_n,
-				albedo, wn, roughness, authored_metallic, authored_ao);
+			author_cached_material_post(
+				biome, camera_dist, geom_n,
+				soil, surface, geology, structure, climate, hydro, landform,
+				primary, secondary, rock_id, rock_mix_w, v_micro_layer,
+				albedo, wn, roughness, material_specular, authored_metallic, authored_ao);
 			#endif
 			NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			ALBEDO = albedo;
