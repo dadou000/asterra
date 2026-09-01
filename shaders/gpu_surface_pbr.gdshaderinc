@@ -25,11 +25,15 @@ uniform sampler2D u_pbr_forest_roughness : filter_linear_mipmap_anisotropic, rep
 
 uniform vec3 u_detail_origin = vec3(0.0);
 uniform float u_pbr_enabled = 1.0;
+uniform float u_pbr_ground_metres : hint_range(0.02, 1024.0) = 2.0;
+uniform float u_pbr_grass_metres : hint_range(0.02, 1024.0) = 2.0;
+uniform float u_pbr_mud_metres : hint_range(0.02, 1024.0) = 1.0;
+uniform float u_pbr_forest_metres : hint_range(0.02, 1024.0) = 2.0;
 
-const float SPBR_GROUND_M = 2.0;
-const float SPBR_GRASS_M = 2.0;
-const float SPBR_MUD_M = 1.0;
-const float SPBR_FOREST_M = 2.0;
+#define SPBR_GROUND_M u_pbr_ground_metres
+#define SPBR_GRASS_M u_pbr_grass_metres
+#define SPBR_MUD_M u_pbr_mud_metres
+#define SPBR_FOREST_M u_pbr_forest_metres
 
 vec3 spbr_weights(vec3 n) {
 	vec3 w = pow(abs(n), vec3(5.0));
