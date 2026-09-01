@@ -1,27 +1,32 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap_authoritative.gd"
 ## Production terrain wrapper for Planet Studio's BLANK backend.
 ##
-## PROCEDURAL delegates unchanged to the authoritative cached renderer. BLANK keeps
-## the exact spherical clipmap topology/camera tracking but suspends every generated
-## height cache and switches to a shader-authored surface. Generated height and
-## authored displacement are deliberately independent sources.
+## PROCEDURAL delegates to the authoritative cached renderer while still allowing
+## scoped authored shader graphs to compose on top. BLANK keeps the exact spherical
+## clipmap topology/camera tracking but suspends every generated height/material
+## cache and uses the authored displacement/material programs as its surface source.
 
 const BLANK_SHADER_PATH := "res://shaders/spherical_geometry_clipmap_blank_displacement.gdshader"
 const PROCEDURAL_SHADER_PATH := "res://shaders/spherical_geometry_clipmap_cached_surface.gdshader"
 const DISPLACEMENT_RUNTIME_SCRIPT := preload(
 	"res://scripts/world_authoring/terrain_displacement_runtime.gd")
+const MATERIAL_RUNTIME_SCRIPT := preload(
+	"res://scripts/world_authoring/terrain_material_runtime.gd")
 
 var _blank_cache_state_applied: bool = false
 var _blank_shader_active: bool = false
 var _displacement_runtime: Node
 var _displacement_fingerprint: String = ""
+var _material_runtime: Node
+var _material_fingerprint: String = ""
 
 
 func _ready() -> void:
 	super._ready()
-	_ensure_displacement_runtime()
+	_ensure_authoring_runtimes()
 	_ensure_backend_shader(_blank_backend())
 	_sync_authoring_displacement(true)
+	_sync_authoring_material(true)
 
 
 func _process(dt: float) -> void:
@@ -29,6 +34,7 @@ func _process(dt: float) -> void:
 	_ensure_backend_shader(blank)
 	_set_cache_nodes_processing(not blank)
 	_sync_authoring_displacement(false)
+	_sync_authoring_material(false)
 	super._process(dt)
 	if blank:
 		_apply_blank_material_state()
@@ -41,6 +47,11 @@ func _process(dt: float) -> void:
 		_force_cache_rebind()
 
 
+func _ensure_authoring_runtimes() -> void:
+	_ensure_displacement_runtime()
+	_ensure_material_runtime()
+
+
 func _ensure_displacement_runtime() -> void:
 	if _displacement_runtime != null and is_instance_valid(_displacement_runtime):
 		return
@@ -51,22 +62,54 @@ func _ensure_displacement_runtime() -> void:
 	add_child(_displacement_runtime)
 
 
+func _ensure_material_runtime() -> void:
+	if _material_runtime != null and is_instance_valid(_material_runtime):
+		return
+	_material_runtime = MATERIAL_RUNTIME_SCRIPT.new() as Node
+	if _material_runtime == null:
+		return
+	_material_runtime.name = "TerrainMaterialRuntime"
+	add_child(_material_runtime)
+
+
+func _active_authoring_terrain() -> Resource:
+	var editor: Node = get_tree().root.find_child("PlanetStudioLive", true, false)
+	if editor == null:
+		return null
+	var session_value: Variant = editor.get("_session")
+	if session_value == null or not session_value.has_method("active_terrain_profile"):
+		return null
+	return session_value.call("active_terrain_profile") as Resource
+
+
 func _sync_authoring_displacement(force: bool) -> void:
 	_ensure_displacement_runtime()
 	if _displacement_runtime == null:
 		return
-	var editor: Node = get_tree().root.find_child("PlanetStudioLive", true, false)
-	if editor != null:
-		var session_value: Variant = editor.get("_session")
-		if session_value != null and session_value.has_method("active_terrain_profile"):
-			var terrain: Resource = session_value.call("active_terrain_profile") as Resource
-			var fingerprint: String = String(
-				_displacement_runtime.call("profile_fingerprint", terrain))
-			if force or fingerprint != _displacement_fingerprint:
-				_displacement_fingerprint = fingerprint
-				_displacement_runtime.call("compile_from_terrain", terrain)
+	var terrain: Resource = _active_authoring_terrain()
+	if terrain != null:
+		var fingerprint: String = String(
+			_displacement_runtime.call("profile_fingerprint", terrain))
+		if force or fingerprint != _displacement_fingerprint:
+			_displacement_fingerprint = fingerprint
+			_displacement_runtime.call("compile_from_terrain", terrain)
 	if _material != null and _displacement_runtime.has_method("bind_material"):
 		_displacement_runtime.call("bind_material", _material)
+
+
+func _sync_authoring_material(force: bool) -> void:
+	_ensure_material_runtime()
+	if _material_runtime == null:
+		return
+	var terrain: Resource = _active_authoring_terrain()
+	if terrain != null:
+		var fingerprint: String = String(
+			_material_runtime.call("profile_fingerprint", terrain))
+		if force or fingerprint != _material_fingerprint:
+			_material_fingerprint = fingerprint
+			_material_runtime.call("compile_from_terrain", terrain)
+	if _material != null and _material_runtime.has_method("bind_material"):
+		_material_runtime.call("bind_material", _material)
 
 
 func _ensure_backend_shader(blank: bool) -> void:
@@ -85,6 +128,7 @@ func _ensure_backend_shader(blank: bool) -> void:
 	if blank:
 		_apply_blank_material_state()
 		_sync_authoring_displacement(true)
+		_sync_authoring_material(true)
 	else:
 		# Shader replacement clears every binding. Restore the exact production
 		# resources before allowing the inherited cache stack to run again.
@@ -94,6 +138,8 @@ func _ensure_backend_shader(blank: bool) -> void:
 		_bind_surface_pbr(true)
 		_sync_detail_seed()
 		_sync_debug_uniforms()
+		_sync_authoring_displacement(true)
+		_sync_authoring_material(true)
 		_force_cache_rebind()
 
 
@@ -143,7 +189,8 @@ func _sync_uniforms(origin: Vector3) -> void:
 	super._sync_uniforms(origin)
 	if _blank_backend():
 		_apply_blank_material_state()
-		_sync_authoring_displacement(false)
+	_sync_authoring_displacement(false)
+	_sync_authoring_material(false)
 
 
 func _apply_blank_material_state() -> void:
@@ -162,6 +209,8 @@ func _apply_blank_material_state() -> void:
 	_material.set_shader_parameter("u_material_global_ready", 0.0)
 	if _displacement_runtime != null and _displacement_runtime.has_method("bind_material"):
 		_displacement_runtime.call("bind_material", _material)
+	if _material_runtime != null and _material_runtime.has_method("bind_material"):
+		_material_runtime.call("bind_material", _material)
 
 
 func _set_cache_nodes_processing(enabled: bool) -> void:
@@ -186,9 +235,11 @@ func gpu_stream_stats() -> Dictionary:
 	out["blank_analytic_base"] = _blank_backend()
 	out["generated_heightmap"] = not _blank_backend()
 	out["generated_material_map"] = not _blank_backend()
-	out["shader_displacement_enabled"] = _blank_backend()
+	out["shader_displacement_enabled"] = true
 	if _displacement_runtime != null and _displacement_runtime.has_method("stats"):
 		out["author_displacement"] = _displacement_runtime.call("stats")
+	if _material_runtime != null and _material_runtime.has_method("stats"):
+		out["author_material"] = _material_runtime.call("stats")
 	if _blank_backend():
 		out["terrain_cache_active"] = false
 		out["terrain_cache_ready"] = false
