@@ -2,11 +2,10 @@ class_name TerrainShaderGraphDefinition
 extends Resource
 ## Serializable node graph used by terrain displacement/material authoring slots.
 ##
-## Phase 29 treats the production renderer as an explicit graph source instead of
-## an opaque editor-only block. Existing graphs remain compatible: displacement
-## graphs default to additive DELTA output and the first five material output ports
-## keep their historical ordering. New production-flow graphs can opt into
-## ABSOLUTE_HEIGHT, which the compiler converts back to an authoritative delta.
+## Production terrain is represented as ordinary graph sources. The default graph
+## is deliberately identity-neutral: it reads the mature renderer/generator stages
+## that already exist and routes them to the output without duplicating work.
+## Authors can then delete, reroute, mask, split or replace those stages.
 
 enum Domain {
 	DISPLACEMENT,
@@ -19,6 +18,7 @@ enum DisplacementOutputMode {
 }
 
 const CATEGORY_OUTPUT := "Output"
+const CATEGORY_PRODUCTION := "Production stages"
 const CATEGORY_TERRAIN_SOURCE := "Terrain source"
 const CATEGORY_GEOMORPH := "Geomorph"
 const CATEGORY_WORLD_DATA := "World data"
@@ -30,6 +30,7 @@ const CATEGORY_UTILITY := "Utility"
 
 const NODE_CATEGORIES: Array[String] = [
 	CATEGORY_OUTPUT,
+	CATEGORY_PRODUCTION,
 	CATEGORY_TERRAIN_SOURCE,
 	CATEGORY_GEOMORPH,
 	CATEGORY_WORLD_DATA,
@@ -40,8 +41,10 @@ const NODE_CATEGORIES: Array[String] = [
 	CATEGORY_UTILITY,
 ]
 
-# The first five material base inputs existed before Phase 29. Keep them and append
-# Specular rather than inserting it in the middle so old graph port numbers survive.
+# Material inputs are the exact values already available at the production terrain
+# material post-pass. Vector forms are exposed as well as common decoded scalars so
+# the graph can rebuild classification/material logic instead of only tinting the
+# final renderer result.
 const MATERIAL_GAME_INPUTS: Array[String] = [
 	"base_albedo",
 	"base_normal",
@@ -72,24 +75,37 @@ const MATERIAL_GAME_INPUTS: Array[String] = [
 	"flow_x",
 	"flow_y",
 	"hydrology",
+	"soil",
+	"surface",
+	"geology",
+	"structure",
+	"climate",
+	"landform",
 	"material_primary",
 	"material_secondary",
+	"rock_mix",
 	"micro_layer",
 	"camera_distance_m",
 	"clipmap_level",
 	"time_s",
 ]
 
+# Phase 30 already has authoritative compiler support for generated terrain and the
+# sparse sculpt field. Keeping them here makes that capability discoverable in the
+# actual node picker instead of relying on hidden migration-only strings.
 const DISPLACEMENT_GAME_INPUTS: Array[String] = [
+	"generated_height_m",
+	"sculpt_delta_m",
 	"terrain_height_m",
 	"biome_id",
 	"clipmap_level",
 	"time_s",
 ]
 
-# Backward-compatible union used by older editor code. New editors should call
-# game_input_options(domain) so displacement does not advertise render-only data.
+# Backward-compatible union used by older editor code.
 const GAME_INPUTS: Array[String] = [
+	"generated_height_m",
+	"sculpt_delta_m",
 	"base_albedo",
 	"base_normal",
 	"base_roughness",
@@ -119,15 +135,61 @@ const GAME_INPUTS: Array[String] = [
 	"flow_x",
 	"flow_y",
 	"hydrology",
+	"soil",
+	"surface",
+	"geology",
+	"structure",
+	"climate",
+	"landform",
 	"material_primary",
 	"material_secondary",
+	"rock_mix",
 	"micro_layer",
 	"camera_distance_m",
 	"clipmap_level",
 	"time_s",
 ]
 
+const DISPLACEMENT_ONLY_NODES: Array[String] = [
+	"PRODUCTION_GENERATED_HEIGHT",
+	"PRODUCTION_SCULPT_DELTA",
+	"NOISE_LAYER",
+	"RIDGED_MOUNTAINS",
+	"EROSION_CHANNELS",
+	"SEDIMENT_DEPOSIT",
+	"OUTPUT_DISPLACEMENT",
+]
+
+const MATERIAL_ONLY_NODES: Array[String] = [
+	"PRODUCTION_ALBEDO",
+	"PRODUCTION_NORMAL",
+	"PRODUCTION_ROUGHNESS",
+	"PRODUCTION_METALLIC",
+	"PRODUCTION_AO",
+	"PRODUCTION_SPECULAR",
+	"CLASSIFIER_PRIMARY",
+	"CLASSIFIER_SECONDARY",
+	"CHANNEL_R",
+	"CHANNEL_G",
+	"CHANNEL_B",
+	"CHANNEL_A",
+	"COMBINE_RGB",
+	"NORMAL_BLEND",
+	"TRIPLANAR",
+	"OUTPUT_MATERIAL",
+]
+
 const NODE_TYPES: Array[String] = [
+	"PRODUCTION_GENERATED_HEIGHT",
+	"PRODUCTION_SCULPT_DELTA",
+	"PRODUCTION_ALBEDO",
+	"PRODUCTION_NORMAL",
+	"PRODUCTION_ROUGHNESS",
+	"PRODUCTION_METALLIC",
+	"PRODUCTION_AO",
+	"PRODUCTION_SPECULAR",
+	"CLASSIFIER_PRIMARY",
+	"CLASSIFIER_SECONDARY",
 	"GAME_INPUT",
 	"TEXTURE_2D",
 	"CONSTANT_FLOAT",
@@ -141,9 +203,16 @@ const NODE_TYPES: Array[String] = [
 	"ABS",
 	"POWER",
 	"CLAMP",
+	"SATURATE",
+	"ONE_MINUS",
 	"SMOOTHSTEP",
 	"REMAP",
 	"MIX",
+	"CHANNEL_R",
+	"CHANNEL_G",
+	"CHANNEL_B",
+	"CHANNEL_A",
+	"COMBINE_RGB",
 	"NORMAL_BLEND",
 	"NOISE",
 	"NOISE_LAYER",
@@ -158,6 +227,16 @@ const NODE_TYPES: Array[String] = [
 const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"OUTPUT_DISPLACEMENT": CATEGORY_OUTPUT,
 	"OUTPUT_MATERIAL": CATEGORY_OUTPUT,
+	"PRODUCTION_GENERATED_HEIGHT": CATEGORY_PRODUCTION,
+	"PRODUCTION_SCULPT_DELTA": CATEGORY_PRODUCTION,
+	"PRODUCTION_ALBEDO": CATEGORY_PRODUCTION,
+	"PRODUCTION_NORMAL": CATEGORY_PRODUCTION,
+	"PRODUCTION_ROUGHNESS": CATEGORY_PRODUCTION,
+	"PRODUCTION_METALLIC": CATEGORY_PRODUCTION,
+	"PRODUCTION_AO": CATEGORY_PRODUCTION,
+	"PRODUCTION_SPECULAR": CATEGORY_PRODUCTION,
+	"CLASSIFIER_PRIMARY": CATEGORY_CLASSIFICATION,
+	"CLASSIFIER_SECONDARY": CATEGORY_CLASSIFICATION,
 	"GAME_INPUT": CATEGORY_WORLD_DATA,
 	"NOISE": CATEGORY_TERRAIN_SOURCE,
 	"NOISE_LAYER": CATEGORY_GEOMORPH,
@@ -167,6 +246,11 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"TEXTURE_2D": CATEGORY_TEXTURES,
 	"TRIPLANAR": CATEGORY_TEXTURES,
 	"NORMAL_BLEND": CATEGORY_SURFACE_PBR,
+	"COMBINE_RGB": CATEGORY_SURFACE_PBR,
+	"CHANNEL_R": CATEGORY_UTILITY,
+	"CHANNEL_G": CATEGORY_UTILITY,
+	"CHANNEL_B": CATEGORY_UTILITY,
+	"CHANNEL_A": CATEGORY_UTILITY,
 	"ADD": CATEGORY_MATH,
 	"SUBTRACT": CATEGORY_MATH,
 	"MULTIPLY": CATEGORY_MATH,
@@ -176,6 +260,8 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"ABS": CATEGORY_MATH,
 	"POWER": CATEGORY_MATH,
 	"CLAMP": CATEGORY_MATH,
+	"SATURATE": CATEGORY_MATH,
+	"ONE_MINUS": CATEGORY_MATH,
 	"SMOOTHSTEP": CATEGORY_MATH,
 	"REMAP": CATEGORY_MATH,
 	"MIX": CATEGORY_MATH,
@@ -209,32 +295,36 @@ func create_default_graph(next_domain: int) -> void:
 	revision += 1
 
 func create_production_graph(next_domain: int) -> void:
-	# Identity graph for the exact renderer result that exists before authored
-	# composition. It is intentionally opt-in; opening Planet Studio stays GPU-neutral.
+	# This graph describes the real production boundary without recomputing it. The
+	# source nodes are direct reads from the existing generator/sculpt/PBR pipeline.
 	domain = next_domain
 	nodes.clear()
 	links.clear()
 	if domain == Domain.DISPLACEMENT:
 		displacement_output_mode = DisplacementOutputMode.ABSOLUTE_HEIGHT
-		var source_id: String = add_node("GAME_INPUT", Vector2(80.0, 180.0), {
-			"source": "terrain_height_m",
-		})
-		var output_id: String = add_node("OUTPUT_DISPLACEMENT", Vector2(520.0, 180.0), {})
-		connect_nodes(source_id, 0, output_id, 0)
+		var generated_id: String = add_node("PRODUCTION_GENERATED_HEIGHT",
+			Vector2(70.0, 100.0), {})
+		var sculpt_id: String = add_node("PRODUCTION_SCULPT_DELTA",
+			Vector2(70.0, 320.0), {})
+		var add_id: String = add_node("ADD", Vector2(390.0, 205.0), {})
+		var output_id: String = add_node("OUTPUT_DISPLACEMENT", Vector2(720.0, 205.0), {})
+		connect_nodes(generated_id, 0, add_id, 0)
+		connect_nodes(sculpt_id, 0, add_id, 1)
+		connect_nodes(add_id, 0, output_id, 0)
 	else:
 		displacement_output_mode = DisplacementOutputMode.DELTA
-		var output_id: String = add_node("OUTPUT_MATERIAL", Vector2(620.0, 180.0), {})
-		var sources: Array[String] = [
-			"base_albedo",
-			"base_normal",
-			"base_roughness",
-			"base_metallic",
-			"base_ao",
-			"base_specular",
+		var output_id: String = add_node("OUTPUT_MATERIAL", Vector2(650.0, 210.0), {})
+		var source_types: Array[String] = [
+			"PRODUCTION_ALBEDO",
+			"PRODUCTION_NORMAL",
+			"PRODUCTION_ROUGHNESS",
+			"PRODUCTION_METALLIC",
+			"PRODUCTION_AO",
+			"PRODUCTION_SPECULAR",
 		]
-		for port: int in sources.size():
-			var source_id: String = add_node("GAME_INPUT",
-				Vector2(80.0, 70.0 + float(port) * 92.0), {"source": sources[port]})
+		for port: int in source_types.size():
+			var source_id: String = add_node(source_types[port],
+				Vector2(90.0, 55.0 + float(port) * 96.0), {})
 			connect_nodes(source_id, 0, output_id, port)
 	revision += 1
 
@@ -332,9 +422,9 @@ static func node_category(node_type: String) -> String:
 static func node_catalog(next_domain: int, category: String = "") -> Array[String]:
 	var out: Array[String] = []
 	for node_type: String in NODE_TYPES:
-		if node_type == "OUTPUT_DISPLACEMENT" and next_domain != Domain.DISPLACEMENT:
+		if DISPLACEMENT_ONLY_NODES.has(node_type) and next_domain != Domain.DISPLACEMENT:
 			continue
-		if node_type == "OUTPUT_MATERIAL" and next_domain != Domain.MATERIAL:
+		if MATERIAL_ONLY_NODES.has(node_type) and next_domain != Domain.MATERIAL:
 			continue
 		if not category.is_empty() and node_category(node_type) != category:
 			continue
@@ -358,14 +448,15 @@ static func game_input_options(next_domain: int) -> Array[String]:
 static func game_input_category(source: String) -> String:
 	if source.begins_with("base_"):
 		return CATEGORY_SURFACE_PBR
-	if source in ["material_primary", "material_secondary", "biome_id", "rock_id"]:
+	if source in ["material_primary", "material_secondary", "biome_id", "rock_id", "rock_mix"]:
 		return CATEGORY_CLASSIFICATION
-	if source in ["soil_sand", "soil_silt", "soil_clay", "soil_depth_m",
-			"surface_sediment_m", "temperature", "precipitation", "temperature_range",
-			"moisture", "vegetation_biomass", "erodibility", "strata_dip", "uplift",
+	if source in ["soil", "surface", "geology", "structure", "climate", "landform",
+			"soil_sand", "soil_silt", "soil_clay", "soil_depth_m", "surface_sediment_m",
+			"temperature", "precipitation", "temperature_range", "moisture",
+			"vegetation_biomass", "erodibility", "strata_dip", "uplift",
 			"flow_x", "flow_y", "hydrology"]:
 		return CATEGORY_WORLD_DATA
-	if source in ["terrain_height_m", "micro_layer"]:
+	if source in ["terrain_height_m", "generated_height_m", "sculpt_delta_m", "micro_layer"]:
 		return CATEGORY_TERRAIN_SOURCE
 	return CATEGORY_UTILITY
 
