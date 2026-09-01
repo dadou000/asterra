@@ -1,11 +1,18 @@
 // GPU surface classifier. Inputs are continuous baked context plus the actually
-// displaced local slope. Biome IDs remain available for diagnostics, but visible
-// material transitions are driven by continuous climate/soil/hydrology fields so
-// coarse biome-cell boundaries never become hard surface-colour borders.
+// displaced local slope. Biome IDs remain diagnostic only; visible transitions
+// are continuous. Phase 32 exposes the production weighting/grade controls while
+// preserving every previous value as the default.
 
-// Deprecated for visible rendering. Keeping the helper allows older optional
-// modules to compile while preventing nearest-filtered biome IDs from reintroducing
-// step boundaries downstream (forest PBR, grass stature, etc.).
+uniform vec4 u_classifier_primary_scale = vec4(1.0);
+uniform vec4 u_classifier_secondary_scale = vec4(1.0);
+uniform float u_classifier_albedo_chroma : hint_range(0.0, 3.0) = 1.24;
+uniform float u_classifier_albedo_contrast : hint_range(0.0, 3.0) = 1.10;
+uniform float u_classifier_albedo_pivot : hint_range(0.0, 1.0) = 0.115;
+uniform float u_classifier_roughness_scale : hint_range(0.0, 3.0) = 1.0;
+uniform float u_classifier_roughness_bias : hint_range(-1.0, 1.0) = 0.0;
+uniform float u_classifier_roughness_min : hint_range(0.0, 1.0) = 0.42;
+uniform float u_classifier_roughness_max : hint_range(0.0, 1.0) = 0.98;
+
 float sc_is_biome(float biome, float id) {
 	return 0.0;
 }
@@ -31,9 +38,6 @@ vec3 sc_soil_color(vec4 soil, vec4 surface) {
 	float silt = soil.g;
 	float clay = soil.b;
 	float organic = soil.a;
-	// Richer mineral colours than the original neutral palette. These still remain
-	// physically dark in linear space, but retain enough chroma to survive orbital
-	// atmospheric attenuation.
 	vec3 sandy = vec3(0.385, 0.225, 0.075);
 	vec3 silty = vec3(0.220, 0.120, 0.040);
 	vec3 clayey = vec3(0.315, 0.075, 0.028);
@@ -51,10 +55,6 @@ vec3 sc_vegetation_color(vec4 surface, vec4 climate, float biome) {
 	float precip = asterra_ctx_precip_mm(climate);
 	float cold = clamp((5.0 - temp) / 18.0, 0.0, 1.0);
 	float dry = clamp((1.0 - wet) * (1.0 - precip / 1100.0), 0.0, 1.0);
-
-	// Grassland stays comparatively bright, while sustained wet/biomass-rich
-	// vegetation collapses toward a genuinely deep forest green. This is continuous
-	// climate-driven colour, so it does not create categorical biome seams.
 	vec3 green = mix(vec3(0.185, 0.255, 0.042), vec3(0.030, 0.155, 0.030), wet);
 	float lush = smoothstep(450.0, 1350.0, precip)
 		* smoothstep(0.26, 0.76, biomass)
@@ -101,7 +101,8 @@ vec4 sc_primary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 
 	float mineral_soil = loose_stable * (1.0 - rock) * (1.0 - sand * 0.72);
 	mineral_soil *= smoothstep(0.025, 0.22, soil_depth);
-	return clamp(vec4(rock, mineral_soil, vegetation, sand), 0.0, 1.0);
+	return clamp(vec4(rock, mineral_soil, vegetation, sand) * u_classifier_primary_scale,
+		vec4(0.0), vec4(1.0));
 }
 
 vec4 sc_secondary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
@@ -130,16 +131,15 @@ vec4 sc_secondary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 	float gravel = hydro.b * (1.0 - smoothstep(18.0, 34.0, slope_deg));
 	gravel *= clamp(0.35 + sediment * 0.9, 0.0, 1.0);
 	gravel = max(gravel, hydro.a * sediment * 0.55);
-	return clamp(vec4(mud, snow, scree, gravel), 0.0, 1.0);
+	return clamp(vec4(mud, snow, scree, gravel) * u_classifier_secondary_scale,
+		vec4(0.0), vec4(1.0));
 }
 
 vec3 sc_grade_albedo(vec3 c) {
 	float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
-	// Stronger chroma plus a mild linear-space S-like contrast expansion. Keeping
-	// the pivot low is important because physically plausible terrain albedos live
-	// far below display-space middle grey.
-	c = mix(vec3(luma), c, 1.24);
-	c = vec3(0.115) + (c - vec3(0.115)) * 1.10;
+	c = mix(vec3(luma), c, u_classifier_albedo_chroma);
+	c = vec3(u_classifier_albedo_pivot)
+		+ (c - vec3(u_classifier_albedo_pivot)) * u_classifier_albedo_contrast;
 	return clamp(c, vec3(0.004), vec3(0.92));
 }
 
@@ -163,9 +163,15 @@ vec3 sc_compose_albedo(vec4 primary, vec4 secondary, vec4 soil, vec4 surface,
 
 float sc_compose_roughness(vec4 primary, vec4 secondary, vec4 surface) {
 	float total = dot(primary, vec4(1.0)) + dot(secondary, vec4(1.0));
-	if (total < 1e-4) return 0.9;
+	if (total < 1e-4) return clamp(0.9 * u_classifier_roughness_scale
+		+ u_classifier_roughness_bias,
+		min(u_classifier_roughness_min, u_classifier_roughness_max),
+		max(u_classifier_roughness_min, u_classifier_roughness_max));
 	float r = 0.76 * primary.r + 0.92 * primary.g + 0.96 * primary.b + 0.82 * primary.a;
 	r += mix(0.72, 0.48, surface.g) * secondary.r;
 	r += 0.92 * secondary.g + 0.86 * secondary.b + 0.80 * secondary.a;
-	return clamp(r / total, 0.42, 0.98);
+	float result = (r / total) * u_classifier_roughness_scale + u_classifier_roughness_bias;
+	return clamp(result,
+		min(u_classifier_roughness_min, u_classifier_roughness_max),
+		max(u_classifier_roughness_min, u_classifier_roughness_max));
 }
