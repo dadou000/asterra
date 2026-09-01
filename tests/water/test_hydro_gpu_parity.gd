@@ -17,7 +17,7 @@ var _frames := 0
 var _finished := false
 var _volume_phase := 0 # 1=initial, 2=final
 var _final_state := PackedFloat32Array()
-var _final_volume := NAN
+var _final_volume := 0.0
 var _have_state := false
 var _have_volume := false
 
@@ -48,15 +48,19 @@ func _start_next_fixture() -> void:
 		return
 
 	_cfg = _build_fixture(_fixture_index)
-	_reference = _cfg["reference"]
+	var ref_value: Variant = _cfg["reference"]
+	_reference = ref_value as HydroReferenceSolver
+	if _reference == null:
+		_fail("fixture did not provide a HydroReferenceSolver")
+		return
 	_macro_index = 0
 	_have_state = false
 	_have_volume = false
 	_final_state = PackedFloat32Array()
-	_final_volume = NAN
+	_final_volume = 0.0
 
 	_solver = FixedHydroGPU.new()
-	_solver.name = "FixedHydroGPU_%s" % _cfg["name"]
+	_solver.name = "FixedHydroGPU_%s" % String(_cfg["name"])
 	add_child(_solver)
 	_solver.initialized.connect(_on_solver_initialized)
 	_solver.initialization_failed.connect(_on_solver_init_failed)
@@ -74,9 +78,10 @@ func _start_next_fixture() -> void:
 	_volume.volume_ready.connect(_on_volume_ready)
 	_volume.readback_failed.connect(_on_volume_readback_failed)
 
+	var state: PackedFloat32Array = _cfg["state"]
+	var sources: PackedFloat32Array = _cfg["sources"]
 	var err := _solver.initialize(
-		int(_cfg["w"]), int(_cfg["h"]), float(_cfg["dx"]),
-		_cfg["state"], _cfg["sources"])
+		int(_cfg["w"]), int(_cfg["h"]), float(_cfg["dx"]), state, sources)
 	if err != OK:
 		_fail("%s: solver initialize rejected (%d)" % [_cfg["name"], int(err)])
 
@@ -132,11 +137,11 @@ func _on_advance_recorded(_step_id: int) -> void:
 		call_deferred("_advance_macro")
 		return
 
-	var rid_before := _solver.current_state_rid()
-	if not rid_before.is_valid():
+	var canonical := _solver.current_state_rid()
+	if not canonical.is_valid():
 		_fail("%s: canonical state RID invalid" % _cfg["name"])
 		return
-	if _readback.request_state(rid_before, _solver.cell_count()) < 0:
+	if _readback.request_state(canonical, _solver.cell_count()) < 0:
 		_fail("%s: state readback request rejected" % _cfg["name"])
 		return
 	_volume_phase = 2
@@ -185,9 +190,10 @@ func _maybe_finish_fixture() -> void:
 		_fail("%s: depth parity error %.9g > %.9g" % [
 			_cfg["name"], max_h, float(_cfg["h_tol"])])
 		return
-	if max(max_hu, max_hv) > float(_cfg["momentum_tol"]):
+	var max_momentum := maxf(max_hu, max_hv)
+	if max_momentum > float(_cfg["momentum_tol"]):
 		_fail("%s: momentum parity error %.9g > %.9g" % [
-			_cfg["name"], max(max_hu, max_hv), float(_cfg["momentum_tol"])])
+			_cfg["name"], max_momentum, float(_cfg["momentum_tol"])])
 		return
 	if max_bed > 1.0e-6:
 		_fail("%s: bed changed on GPU (max error %.9g)" % [_cfg["name"], max_bed])
@@ -259,7 +265,7 @@ func _build_dam_fixture() -> Dictionary:
 	for y in hgt:
 		for x in w:
 			var z := 0.04 * sin(float(y) * 0.7)
-			var depth := 2.0 if x < w / 2 else 0.0
+			var depth := 2.0 if x < (w / 2) else 0.0
 			ref.set_bed(x, y, z)
 			ref.set_state(x, y, depth)
 			_pack_state(state, w, x, y, depth, Vector2.ZERO, z)
