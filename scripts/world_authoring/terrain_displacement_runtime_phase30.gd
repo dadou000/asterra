@@ -9,6 +9,80 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase29.gd"
 ## without applying sculpt twice.
 
 const OP_INPUT_SCULPT_DELTA: int = 26
+const PRODUCTION_SHAPE_SLOT_ID := "production-terrain-shape"
+
+
+func compile_from_terrain(terrain: Resource) -> Dictionary:
+	# Keep the visible default graph free. Its generated+sculpt Add is exactly what
+	# the mature renderer already does, so entering the bytecode interpreter would
+	# only waste GPU time. The moment topology/source selection changes, this test is
+	# false and the graph compiles normally.
+	if terrain == null:
+		return super.compile_from_terrain(terrain)
+	var skipped: Array[Resource] = []
+	var slots_value: Variant = terrain.get(&"displacement_slots")
+	if slots_value is Array:
+		for slot_value: Variant in slots_value as Array:
+			var slot: Resource = slot_value as Resource
+			if slot != null and bool(slot.get(&"enabled")) and _is_identity_shape_slot(slot):
+				slot.set(&"enabled", false)
+				skipped.append(slot)
+	var stats: Dictionary = super.compile_from_terrain(terrain)
+	for slot: Resource in skipped:
+		slot.set(&"enabled", true)
+	# super compiled a temporary view with the identity slot disabled. Store the
+	# fingerprint of the restored profile so the runtime does not recompile forever.
+	_fingerprint = profile_fingerprint(terrain)
+	return stats
+
+
+func _is_identity_shape_slot(slot: Resource) -> bool:
+	if String(slot.get(&"slot_id")) != PRODUCTION_SHAPE_SLOT_ID:
+		return false
+	var graph: Resource = slot.get(&"graph") as Resource
+	if graph == null or int(graph.get(&"displacement_output_mode")) != GRAPH_OUTPUT_ABSOLUTE_HEIGHT:
+		return false
+	var nodes: Array = graph.get(&"nodes") as Array
+	var links: Array = graph.get(&"links") as Array
+	if nodes.size() != 4 or links.size() != 3:
+		return false
+	var generated_id: String = ""
+	var sculpt_id: String = ""
+	var add_id: String = ""
+	var output_id: String = ""
+	for node_value: Variant in nodes:
+		var node: Dictionary = node_value as Dictionary
+		var node_type: String = String(node.get("type", ""))
+		var node_id: String = String(node.get("id", ""))
+		if node_type == "GAME_INPUT":
+			var parameters: Dictionary = node.get("parameters", {}) as Dictionary
+			var source: String = String(parameters.get("source", ""))
+			if source == "generated_height_m":
+				generated_id = node_id
+			elif source == "sculpt_delta_m":
+				sculpt_id = node_id
+			else:
+				return false
+		elif node_type == "ADD":
+			add_id = node_id
+		elif node_type == "OUTPUT_DISPLACEMENT":
+			output_id = node_id
+		else:
+			return false
+	if generated_id.is_empty() or sculpt_id.is_empty() or add_id.is_empty() or output_id.is_empty():
+		return false
+	var expected: Dictionary = {
+		"%s:0" % add_id: generated_id,
+		"%s:1" % add_id: sculpt_id,
+		"%s:0" % output_id: add_id,
+	}
+	for link_value: Variant in links:
+		var link: Dictionary = link_value as Dictionary
+		var key: String = "%s:%d" % [String(link.get("to", "")), int(link.get("to_port", -1))]
+		if String(expected.get(key, "")) != String(link.get("from", "")):
+			return false
+		expected.erase(key)
+	return expected.is_empty()
 
 
 func _compile_graph(graph: Resource, graph_seed_index: int) -> int:
