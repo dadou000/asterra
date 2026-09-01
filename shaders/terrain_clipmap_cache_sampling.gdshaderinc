@@ -8,6 +8,8 @@
 // parent samples is a different surface between lattice vertices and creates the
 // classic alternating zipper crack at every LOD boundary.
 
+#include "res://shaders/terrain_author_procedural_displacement.gdshaderinc"
+
 uniform sampler2DArray u_terrain_cache : filter_nearest, repeat_disable;
 uniform float u_terrain_cache_ready = 0.0;
 uniform int u_terrain_cache_generation = 1;
@@ -40,8 +42,9 @@ bool terrain_cache_fetch_exact(ivec2 cell, int level, out vec2 sample) {
 		ivec3(terrain_cache_coord(cell), level), 0);
 	float expected = float(terrain_cache_key(cell, level, u_terrain_cache_generation));
 	if (abs(cached.b - expected) > 0.25) return false;
-	// Cache storage is R=final height, G=macro height.
-	sample = vec2(cached.g, cached.r);
+	// Cache storage is R=final generated height, G=macro height. Authored graph
+	// displacement stays live and is applied at the exact lattice sample here.
+	sample = author_procedural_lattice_sample(cell, level, vec2(cached.g, cached.r));
 	return true;
 }
 
@@ -106,7 +109,7 @@ vec2 terrain_analytic_vertex_sample(ivec2 cell, int level) {
 	vec2 offset_m = vec2(cell) * spacing;
 	vec3 d = direction_for_basis_offset(
 		u_anchor_dir, u_anchor_right, u_anchor_up, offset_m);
-	return terrain_sample_for_level(d, level);
+	return author_procedural_lattice_sample(cell, level, terrain_sample_for_level(d, level));
 }
 
 vec2 terrain_analytic_triangle_sample(vec2 lattice_cell, int level) {
@@ -133,7 +136,7 @@ vec2 terrain_cached_level_sample(vec3 d, int level, vec2 anchor_offset_m,
 		// same T-junction crack until the cache finished warming.
 		return terrain_analytic_triangle_sample(lattice_cell, level);
 	}
-	return terrain_sample_for_level(d, level);
+	return author_procedural_sample(d, level, terrain_sample_for_level(d, level));
 }
 
 vec2 terrain_cached_sample_with_morph(vec3 d, int level, float morph,
@@ -159,7 +162,7 @@ vec2 terrain_cached_or_macro_level(vec3 d, int level, vec2 anchor_offset_m) {
 		if (terrain_cache_fetch_bilinear(lattice_cell, level, cached)) return cached;
 	}
 	float macro_h = macro_height(d, level);
-	return vec2(macro_h, macro_h);
+	return author_procedural_sample(d, level, vec2(macro_h, macro_h));
 }
 
 vec2 terrain_cached_or_macro_with_morph(vec3 d, int level, float morph,
