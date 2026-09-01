@@ -2,16 +2,14 @@ class_name TerrainMaterialRuntime
 extends Node
 ## GPU material-graph compiler for Planet Studio terrain authoring.
 ##
-## Material graphs compile to a compact vec4 register program. The production
-## terrain shader evaluates the program after its normal generated/PBR material,
-## so authored graphs can use the current renderer output as `base_*` inputs and
-## selectively replace or compose albedo, normal, roughness, metallic and AO.
+## The authored program runs after the resident terrain classifier/PBR stack. Phase
+## 29 exposes that stack as graph-readable values instead of a locked editor block:
+## final PBR channels plus the continuous soil/surface/geology/climate/hydrology,
+## landform and classifier weights that produced them.
 ##
-## Slot level/biome masks are compiled into the same program. Global slots run for
-## every biome on their selected L levels; biome slots are additional overrides.
+## Keep the register file small. A larger historical limit caused Vulkan/NVIDIA
+## device timeouts; adding input opcodes does not increase per-fragment storage.
 
-# This becomes a per-fragment vec4 register file; a large historical limit caused
-# driver timeouts even for otherwise modest graphs.
 const MAX_INSTRUCTIONS: int = 32
 const MAX_TEXTURES: int = 8
 const BIOME_COUNT: int = 18
@@ -50,6 +48,36 @@ const OP_TRIPLANAR := 29
 const OP_NORMAL_BLEND := 30
 const OP_SCOPE_MASK := 31
 const OP_SLOT_BLEND := 32
+# Phase 29 production/context inputs. Opcode values may grow without growing the
+# 32-entry register array; only compiled instruction count controls that cost.
+const OP_INPUT_BASE_SPECULAR := 33
+const OP_INPUT_TEMPERATURE := 34
+const OP_INPUT_PRECIPITATION := 35
+const OP_INPUT_TEMPERATURE_RANGE := 36
+const OP_INPUT_MOISTURE := 37
+const OP_INPUT_BIOMASS := 38
+const OP_INPUT_SOIL_SAND := 39
+const OP_INPUT_SOIL_SILT := 40
+const OP_INPUT_SOIL_CLAY := 41
+const OP_INPUT_SOIL_DEPTH := 42
+const OP_INPUT_SEDIMENT := 43
+const OP_INPUT_ROCK_ID := 44
+const OP_INPUT_ERODIBILITY := 45
+const OP_INPUT_STRATA_DIP := 46
+const OP_INPUT_UPLIFT := 47
+const OP_INPUT_FLOW_X := 48
+const OP_INPUT_FLOW_Y := 49
+const OP_INPUT_HYDROLOGY := 50
+const OP_INPUT_PRIMARY := 51
+const OP_INPUT_SECONDARY := 52
+const OP_INPUT_MICRO_LAYER := 53
+const OP_INPUT_SOIL := 54
+const OP_INPUT_SURFACE := 55
+const OP_INPUT_GEOLOGY := 56
+const OP_INPUT_STRUCTURE := 57
+const OP_INPUT_CLIMATE := 58
+const OP_INPUT_LANDFORM := 59
+const OP_INPUT_ROCK_MIX := 60
 
 var _headers := PackedVector4Array()
 var _params := PackedVector4Array()
@@ -59,6 +87,7 @@ var _output_normal: int = -1
 var _output_roughness: int = -1
 var _output_metallic: int = -1
 var _output_ao: int = -1
+var _output_specular: int = -1
 var _active: bool = false
 var _warnings: PackedStringArray = PackedStringArray()
 var _fingerprint: String = ""
@@ -81,6 +110,7 @@ func clear() -> void:
 	_output_roughness = -1
 	_output_metallic = -1
 	_output_ao = -1
+	_output_specular = -1
 	_active = false
 	_warnings = PackedStringArray()
 	_fingerprint = ""
@@ -126,6 +156,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	_output_roughness = -1
 	_output_metallic = -1
 	_output_ao = -1
+	_output_specular = -1
 	_active = false
 	_warnings = PackedStringArray()
 	_texture_paths = PackedStringArray()
@@ -142,15 +173,15 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 		_publish_texture()
 		return stats()
 
-	# Accumulators start at the actual production material. An authored material
-	# graph can therefore be a small override instead of a duplicate of the large
-	# generated terrain PBR shader.
+	# Preserve the five historical channels and append specular as channel 5. Old
+	# serialized links therefore keep exactly the same meaning.
 	var accum: Array[int] = [
 		_append_instruction(OP_INPUT_BASE_ALBEDO),
 		_append_instruction(OP_INPUT_BASE_NORMAL),
 		_append_instruction(OP_INPUT_BASE_ROUGHNESS),
 		_append_instruction(OP_INPUT_BASE_METALLIC),
 		_append_instruction(OP_INPUT_BASE_AO),
+		_append_instruction(OP_INPUT_BASE_SPECULAR),
 	]
 
 	var slot_index: int = 0
@@ -166,7 +197,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 			continue
 
 		var outputs: Array[int] = _compile_graph(graph, slot_index)
-		if outputs.size() != 5:
+		if outputs.size() != 6:
 			slot_index += 1
 			continue
 		var biome_mask: int = _slot_biome_mask(slot)
@@ -176,7 +207,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 		if scope_index < 0:
 			break
 
-		for channel: int in 5:
+		for channel: int in 6:
 			var candidate: int = outputs[channel]
 			if candidate < 0:
 				continue
@@ -197,13 +228,14 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	_output_roughness = accum[2]
 	_output_metallic = accum[3]
 	_output_ao = accum[4]
+	_output_specular = accum[5]
 	_active = _compiled_slot_outputs > 0 and not _headers.is_empty()
 	_publish_texture()
 	return stats()
 
 
 func _compile_graph(graph: Resource, graph_seed_index: int) -> Array[int]:
-	var empty: Array[int] = [-1, -1, -1, -1, -1]
+	var empty: Array[int] = [-1, -1, -1, -1, -1, -1]
 	var nodes_value: Variant = graph.get(&"nodes")
 	var links_value: Variant = graph.get(&"links")
 	if not (nodes_value is Array) or not (links_value is Array):
@@ -242,7 +274,7 @@ func _compile_graph(graph: Resource, graph_seed_index: int) -> Array[int]:
 	var graph_seed: int = abs(String(graph.get(&"graph_id")).hash() ^
 		(graph_seed_index * 97531)) & 0x7fffffff
 	var outputs: Array[int] = []
-	for port: int in 5:
+	for port: int in 6:
 		var source_id: String = String(input_sources.get("%s:%d" % [output_id, port], ""))
 		if source_id.is_empty():
 			outputs.append(-1)
@@ -358,6 +390,7 @@ func _compile_game_input(source: String) -> int:
 		"base_roughness": return _append_instruction(OP_INPUT_BASE_ROUGHNESS)
 		"base_metallic": return _append_instruction(OP_INPUT_BASE_METALLIC)
 		"base_ao": return _append_instruction(OP_INPUT_BASE_AO)
+		"base_specular": return _append_instruction(OP_INPUT_BASE_SPECULAR)
 		"terrain_height_m": return _append_instruction(OP_INPUT_HEIGHT)
 		"biome_id": return _append_instruction(OP_INPUT_BIOME)
 		"clipmap_level": return _append_instruction(OP_INPUT_LEVEL)
@@ -367,6 +400,33 @@ func _compile_game_input(source: String) -> int:
 		"world_position": return _append_instruction(OP_INPUT_WORLD_POSITION)
 		"surface_normal": return _append_instruction(OP_INPUT_SURFACE_NORMAL)
 		"camera_distance_m": return _append_instruction(OP_INPUT_CAMERA_DISTANCE)
+		"temperature": return _append_instruction(OP_INPUT_TEMPERATURE)
+		"precipitation": return _append_instruction(OP_INPUT_PRECIPITATION)
+		"temperature_range": return _append_instruction(OP_INPUT_TEMPERATURE_RANGE)
+		"moisture": return _append_instruction(OP_INPUT_MOISTURE)
+		"vegetation_biomass": return _append_instruction(OP_INPUT_BIOMASS)
+		"soil_sand": return _append_instruction(OP_INPUT_SOIL_SAND)
+		"soil_silt": return _append_instruction(OP_INPUT_SOIL_SILT)
+		"soil_clay": return _append_instruction(OP_INPUT_SOIL_CLAY)
+		"soil_depth_m": return _append_instruction(OP_INPUT_SOIL_DEPTH)
+		"surface_sediment_m": return _append_instruction(OP_INPUT_SEDIMENT)
+		"rock_id": return _append_instruction(OP_INPUT_ROCK_ID)
+		"erodibility": return _append_instruction(OP_INPUT_ERODIBILITY)
+		"strata_dip": return _append_instruction(OP_INPUT_STRATA_DIP)
+		"uplift": return _append_instruction(OP_INPUT_UPLIFT)
+		"flow_x": return _append_instruction(OP_INPUT_FLOW_X)
+		"flow_y": return _append_instruction(OP_INPUT_FLOW_Y)
+		"hydrology": return _append_instruction(OP_INPUT_HYDROLOGY)
+		"material_primary": return _append_instruction(OP_INPUT_PRIMARY)
+		"material_secondary": return _append_instruction(OP_INPUT_SECONDARY)
+		"micro_layer": return _append_instruction(OP_INPUT_MICRO_LAYER)
+		"soil": return _append_instruction(OP_INPUT_SOIL)
+		"surface": return _append_instruction(OP_INPUT_SURFACE)
+		"geology": return _append_instruction(OP_INPUT_GEOLOGY)
+		"structure": return _append_instruction(OP_INPUT_STRUCTURE)
+		"climate": return _append_instruction(OP_INPUT_CLIMATE)
+		"landform": return _append_instruction(OP_INPUT_LANDFORM)
+		"rock_mix": return _append_instruction(OP_INPUT_ROCK_MIX)
 		_:
 			_warnings.append("GAME_INPUT '%s' is not available to the live material compiler yet; using 0." % source)
 			return _append_instruction(OP_CONST, -1, -1, -1, Vector4.ZERO)
@@ -470,6 +530,7 @@ func bind_material(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_author_mat_output_roughness", _output_roughness)
 	material.set_shader_parameter("u_author_mat_output_metallic", _output_metallic)
 	material.set_shader_parameter("u_author_mat_output_ao", _output_ao)
+	material.set_shader_parameter("u_author_mat_output_specular", _output_specular)
 	material.set_shader_parameter("u_author_mat_ready", 1.0 if _active else 0.0)
 	var ready_mask: int = 0
 	for index: int in MAX_TEXTURES:
@@ -492,4 +553,6 @@ func stats() -> Dictionary:
 		"fingerprint": _fingerprint,
 		"generation": _compile_generation,
 		"gpu_texture_ready": _code_texture != null,
+		"production_context_inputs": true,
+		"specular_output": true,
 	}
