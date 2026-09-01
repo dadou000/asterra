@@ -5,6 +5,7 @@ uniform int u_author_mat_output_normal = -1;
 uniform int u_author_mat_output_roughness = -1;
 uniform int u_author_mat_output_metallic = -1;
 uniform int u_author_mat_output_ao = -1;
+uniform int u_author_mat_output_specular = -1;
 uniform float u_author_mat_ready = 0.0;
 uniform int u_author_mat_texture_ready_mask = 0;
 uniform sampler2D u_author_mat_tex0 : source_color, filter_linear_mipmap, repeat_enable;
@@ -16,7 +17,8 @@ uniform sampler2D u_author_mat_tex5 : source_color, filter_linear_mipmap, repeat
 uniform sampler2D u_author_mat_tex6 : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D u_author_mat_tex7 : source_color, filter_linear_mipmap, repeat_enable;
 
-// Mirrored by TerrainMaterialRuntime; this is per-fragment local storage.
+// Mirrored by TerrainMaterialRuntime; this is per-fragment local storage. Keep the
+// register file at 32 even though opcode IDs now extend above 32.
 const int AUTHOR_MAT_MAX_INSTRUCTIONS = 32;
 
 float am_hash(ivec3 p, int seed) {
@@ -87,9 +89,22 @@ void author_material_apply(
 		int clipmap_level,
 		float camera_distance_m,
 		float time_s,
+		vec4 soil,
+		vec4 surface,
+		vec4 geology,
+		vec4 structure,
+		vec4 climate,
+		vec4 hydrology,
+		vec4 landform,
+		vec4 material_primary,
+		vec4 material_secondary,
+		float rock_id,
+		float micro_layer,
+		float rock_mix,
 		inout vec3 albedo,
 		inout vec3 surface_normal,
 		inout float roughness,
+		inout float specular,
 		inout float metallic,
 		inout float ao) {
 	if (u_author_mat_ready < 0.5 || u_author_mat_count <= 0) return;
@@ -102,6 +117,7 @@ void author_material_apply(
 	vec4 base_roughness = vec4(roughness);
 	vec4 base_metallic = vec4(metallic);
 	vec4 base_ao = vec4(ao);
+	vec4 base_specular = vec4(specular);
 
 	for (int i = 0; i < AUTHOR_MAT_MAX_INSTRUCTIONS; i++) {
 		if (i >= count) break;
@@ -187,6 +203,34 @@ void author_material_apply(
 			else if (blend_mode == 5) composed = candidate;
 			v = mix(a, composed, mask);
 		}
+		else if (op == 33) v = base_specular;
+		else if (op == 34) v = vec4(mix(-40.0, 50.0, climate.r));
+		else if (op == 35) v = vec4(climate.g * 3000.0);
+		else if (op == 36) v = vec4(climate.a * 55.0);
+		else if (op == 37) v = vec4(surface.g);
+		else if (op == 38) v = vec4(surface.b);
+		else if (op == 39) v = vec4(soil.r);
+		else if (op == 40) v = vec4(soil.g);
+		else if (op == 41) v = vec4(soil.b);
+		else if (op == 42) v = vec4(surface.r * 14.0);
+		else if (op == 43) v = vec4(surface.a * 160.0);
+		else if (op == 44) v = vec4(rock_id);
+		else if (op == 45) v = vec4(geology.r * 1.85);
+		else if (op == 46) v = vec4(geology.g * 1.2);
+		else if (op == 47) v = vec4(structure.r * 2.0 - 1.0);
+		else if (op == 48) v = vec4(hydrology.r * 2.0 - 1.0);
+		else if (op == 49) v = vec4(hydrology.g * 2.0 - 1.0);
+		else if (op == 50) v = hydrology;
+		else if (op == 51) v = material_primary;
+		else if (op == 52) v = material_secondary;
+		else if (op == 53) v = vec4(micro_layer);
+		else if (op == 54) v = soil;
+		else if (op == 55) v = surface;
+		else if (op == 56) v = geology;
+		else if (op == 57) v = structure;
+		else if (op == 58) v = climate;
+		else if (op == 59) v = landform;
+		else if (op == 60) v = vec4(rock_mix);
 		values[i] = v;
 	}
 
@@ -202,4 +246,6 @@ void author_material_apply(
 		metallic = clamp(values[u_author_mat_output_metallic].x, 0.0, 1.0);
 	if (u_author_mat_output_ao >= 0 && u_author_mat_output_ao < count)
 		ao = clamp(values[u_author_mat_output_ao].x, 0.0, 1.0);
+	if (u_author_mat_output_specular >= 0 && u_author_mat_output_specular < count)
+		specular = clamp(values[u_author_mat_output_specular].x, 0.0, 1.0);
 }
