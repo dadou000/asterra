@@ -1,6 +1,10 @@
 // Authored displacement wrapper for the generated/cached terrain path.
 // The caller supplies each exact LOD lattice sample before triangle interpolation,
 // so L-specific authored graphs remain watertight through parent/child morphing.
+// Phase 30 also exposes the existing sparse sculpt/edit field to the graph. The
+// compiler evaluates absolute production graphs relative to generated+sculpt, while
+// the mature renderer still adds its normal sculpt path afterward; identity remains
+// bit-for-bit neutral and sculpt can be rerouted/scaled by the graph.
 
 #include "res://shaders/terrain_author_displacement_bytecode.gdshaderinc"
 
@@ -13,7 +17,9 @@ vec2 author_procedural_sample(vec3 direction, int level, vec2 sample) {
 		return sample;
 	}
 	float biome = asterra_ctx_biome_id(direction);
-	sample.y += author_displacement_height(direction, sample.y, biome, level, TIME);
+	float sculpt_delta = terrain_edit_delta(direction, u_planet_radius);
+	sample.y += author_displacement_height_with_sculpt(direction, sample.y, biome,
+		level, TIME, sculpt_delta);
 	return sample;
 }
 
