@@ -13,6 +13,8 @@ const DISPLACEMENT_RUNTIME_SCRIPT := preload(
 const MATERIAL_RUNTIME_SCRIPT := preload(
 	"res://scripts/world_authoring/terrain_material_runtime.gd")
 
+const AUTHORING_NONE_FINGERPRINT := "__no_enabled_authoring_graph__"
+
 var _blank_cache_state_applied: bool = false
 var _blank_shader_active: bool = false
 var _displacement_runtime: Node
@@ -82,17 +84,47 @@ func _active_authoring_terrain() -> Resource:
 	return session_value.call("active_terrain_profile") as Resource
 
 
+func _has_enabled_authoring_graph(terrain: Resource, property_name: StringName,
+		domain: int) -> bool:
+	if terrain == null:
+		return false
+	var slots_value: Variant = terrain.get(property_name)
+	if not (slots_value is Array):
+		return false
+	for slot_value: Variant in slots_value as Array:
+		var slot: Resource = slot_value as Resource
+		if slot == null or not bool(slot.get(&"enabled")):
+			continue
+		if int(slot.get(&"domain")) != domain:
+			continue
+		if slot.get(&"graph") is Resource:
+			return true
+	return false
+
+
 func _sync_authoring_displacement(force: bool) -> void:
 	_ensure_displacement_runtime()
 	if _displacement_runtime == null:
 		return
 	var terrain: Resource = _active_authoring_terrain()
-	if terrain != null:
-		var fingerprint: String = String(
-			_displacement_runtime.call("profile_fingerprint", terrain))
-		if force or fingerprint != _displacement_fingerprint:
-			_displacement_fingerprint = fingerprint
-			_displacement_runtime.call("compile_from_terrain", terrain)
+	if terrain == null:
+		return
+	if not _has_enabled_authoring_graph(terrain, &"displacement_slots", 0):
+		# Opening Planet Studio with a clean profile must be a GPU no-op. Do not
+		# allocate/upload even the one-row fallback bytecode texture just because the
+		# editor node became visible. If the last graph was deleted, explicitly turn
+		# the old program off once and then stay dormant.
+		if _displacement_fingerprint != AUTHORING_NONE_FINGERPRINT:
+			_displacement_fingerprint = AUTHORING_NONE_FINGERPRINT
+			_displacement_runtime.call("clear")
+			if _material != null:
+				_material.set_shader_parameter("u_author_disp_ready", 0.0)
+		return
+	var fingerprint: String = String(
+		_displacement_runtime.call("profile_fingerprint", terrain))
+	if force or fingerprint != _displacement_fingerprint:
+		_displacement_fingerprint = fingerprint
+		_displacement_runtime.call("compile_from_terrain", terrain)
 	if _material != null and _displacement_runtime.has_method("bind_material"):
 		_displacement_runtime.call("bind_material", _material)
 
@@ -102,12 +134,23 @@ func _sync_authoring_material(force: bool) -> void:
 	if _material_runtime == null:
 		return
 	var terrain: Resource = _active_authoring_terrain()
-	if terrain != null:
-		var fingerprint: String = String(
-			_material_runtime.call("profile_fingerprint", terrain))
-		if force or fingerprint != _material_fingerprint:
-			_material_fingerprint = fingerprint
-			_material_runtime.call("compile_from_terrain", terrain)
+	if terrain == null:
+		return
+	if not _has_enabled_authoring_graph(terrain, &"material_slots", 1):
+		# Same launch invariant as displacement: an empty staged profile must not
+		# create an ImageTexture, replace sampler bindings, or otherwise perturb the
+		# resident terrain material merely because Planet Studio was opened.
+		if _material_fingerprint != AUTHORING_NONE_FINGERPRINT:
+			_material_fingerprint = AUTHORING_NONE_FINGERPRINT
+			_material_runtime.call("clear")
+			if _material != null:
+				_material.set_shader_parameter("u_author_mat_ready", 0.0)
+		return
+	var fingerprint: String = String(
+		_material_runtime.call("profile_fingerprint", terrain))
+	if force or fingerprint != _material_fingerprint:
+		_material_fingerprint = fingerprint
+		_material_runtime.call("compile_from_terrain", terrain)
 	if _material != null and _material_runtime.has_method("bind_material"):
 		_material_runtime.call("bind_material", _material)
 
@@ -207,9 +250,11 @@ func _apply_blank_material_state() -> void:
 	_material.set_shader_parameter("u_terrain_cache_ready", 0.0)
 	_material.set_shader_parameter("u_material_clipmap_ready", 0.0)
 	_material.set_shader_parameter("u_material_global_ready", 0.0)
-	if _displacement_runtime != null and _displacement_runtime.has_method("bind_material"):
+	if _displacement_runtime != null and _displacement_runtime.has_method("bind_material") \
+			and _displacement_fingerprint != AUTHORING_NONE_FINGERPRINT:
 		_displacement_runtime.call("bind_material", _material)
-	if _material_runtime != null and _material_runtime.has_method("bind_material"):
+	if _material_runtime != null and _material_runtime.has_method("bind_material") \
+			and _material_fingerprint != AUTHORING_NONE_FINGERPRINT:
 		_material_runtime.call("bind_material", _material)
 
 
