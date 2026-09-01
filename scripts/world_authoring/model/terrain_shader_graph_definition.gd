@@ -10,6 +10,14 @@ enum Domain {
 }
 
 const GAME_INPUTS: Array[String] = [
+	# Material graphs receive the already-composed production terrain material as
+	# explicit inputs. This lets a scoped graph modify the current shader instead
+	# of recreating Asterra's complete PBR stack from scratch.
+	"base_albedo",
+	"base_normal",
+	"base_roughness",
+	"base_metallic",
+	"base_ao",
 	"world_position",
 	"planet_direction",
 	"terrain_height_m",
