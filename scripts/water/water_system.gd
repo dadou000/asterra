@@ -12,6 +12,7 @@ signal dynamic_surface_ready
 var _query_service: HydrologyQueryService
 var _surface_resources: WaterSurfaceResources
 var _legacy_backend_bind_attempts := 0
+var _render_consumer_bound := false
 
 
 func _ready() -> void:
@@ -25,6 +26,7 @@ func _ready() -> void:
 	_surface_resources.name = "WaterSurfaceResources"
 	add_child(_surface_resources)
 	if _surface_resources.available():
+		_bind_dynamic_surface_material()
 		dynamic_surface_ready.emit()
 	else:
 		_surface_resources.resources_ready.connect(_on_surface_resources_ready)
@@ -73,6 +75,7 @@ func gpu_stats() -> Dictionary:
 		"query_backend_bound": _query_service != null and _query_service.backend() != null,
 		"query_available": _query_service != null and _query_service.available(),
 		"query_in_flight": 0 if _query_service == null else _query_service.in_flight_count(),
+		"render_consumer_bound": _render_consumer_bound,
 		"dynamic_surface": {} if _surface_resources == null else _surface_resources.stats(),
 	}
 
@@ -110,5 +113,33 @@ func _retry_legacy_bind_if_needed() -> void:
 			+ "HydrologyQueryService will remain offline until explicitly rebound.")
 
 
+func _bind_dynamic_surface_material() -> void:
+	_render_consumer_bound = false
+	if _surface_resources == null or not _surface_resources.available():
+		return
+	var ocean := get_node_or_null("/root/OceanSystem")
+	if ocean == null or not ocean.has_method(&"material"):
+		return
+	var material_value: Variant = ocean.call(&"material")
+	if not (material_value is ShaderMaterial):
+		return
+	var water_material := material_value as ShaderMaterial
+	var texture := _surface_resources.field_texture()
+	if texture == null:
+		return
+
+	water_material.set_shader_parameter("u_dynamic_surface_field", texture)
+	water_material.set_shader_parameter("u_dynamic_surface_center_plane",
+		_surface_resources.field_center_plane())
+	water_material.set_shader_parameter("u_dynamic_surface_half_extent_m",
+		_surface_resources.field_half_extent_m())
+	# The data path is live, but displacement stays off until the next migration
+	# patch explicitly samples it in the vertex reconstruction. This guarantees the
+	# Phase 1 foundation cannot change the current 0.0.5 ocean appearance.
+	water_material.set_shader_parameter("u_dynamic_surface_enabled", 0.0)
+	_render_consumer_bound = true
+
+
 func _on_surface_resources_ready() -> void:
+	_bind_dynamic_surface_material()
 	dynamic_surface_ready.emit()
