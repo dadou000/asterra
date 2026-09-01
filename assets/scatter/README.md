@@ -4,41 +4,46 @@ This directory is the authoring/runtime boundary for Asterra terrain scatter.
 
 ## Current baseline
 
-The foliage library is intentionally **empty** as of 2026-09-01. The previous grass,
-shrubs, plants, trees, roots, stumps, deadwood and other organic scatter assets were
-removed so replacement foliage can be introduced gradually and reviewed one asset
-at a time.
+The runtime scatter asset library is intentionally **empty** as of 2026-09-01.
+The previous foliage, deadwood and geological assets have all been removed so the
+library can be rebuilt deliberately from a clean baseline.
 
-The production `TerrainScatter` autoload currently uses
-`gpu_terrain_scatter_authoring_geology_only.gd`:
+The production `TerrainScatter` autoload uses
+`gpu_terrain_scatter_authoring_empty.gd`:
 
-- file-backed foliage assets: **disabled / none**;
+- file-backed foliage assets: **none**;
+- file-backed geological assets: **none**;
 - built-in procedural grass fallback: **disabled**;
-- geological rocks/stones: **still enabled**;
+- built-in procedural stone fallbacks: **disabled**;
 - terrain/scatter placement infrastructure: **kept intact**.
+
+`assets/scatter/runtime/` currently has no tracked files, so Git does not retain the
+empty directory. Asset tooling will recreate it when new runtime assets are built.
 
 ## Layout
 
 ```text
 assets/scatter/
-  asset_manifest.json       # current curated runtime catalog; geology only for now
+  asset_manifest.json       # intentionally empty curated runtime catalog
   external_candidates.json # replacement candidate list; intentionally empty
   source/                   # optional downloaded authoring cache (gitignored)
-  runtime/                  # optimized game-ready assets; currently geology only
+  runtime/                  # created when replacement runtime assets are built
 ```
 
-## Adding replacement foliage
+## Adding replacement assets
 
-Add vegetation deliberately rather than restoring the old catalog wholesale:
+Reintroduce foliage or geology deliberately rather than restoring the old catalog:
 
-1. Add the candidate to `asset_manifest.json` with its source, license, biome use,
+1. Set `allow_empty_catalog` to `false` when the first replacement asset is ready.
+2. Add the asset to `asset_manifest.json` with source, license, biome use,
    resolution and priority.
-2. Validate the catalog with `python tools/validate_scatter_manifest.py`.
-3. Fetch or import the source and optimize it into `runtime/<asset-id>/`.
-4. Add the asset to the active foliage runtime binding only after its LOD, material,
-   wind, alpha and performance behavior have been reviewed.
-5. Re-enable procedural/mesh foliage families explicitly when their replacement
-   assets are ready.
+3. Validate with `python tools/validate_scatter_manifest.py`.
+4. Fetch/import the source and optimize it into `runtime/<asset-id>/`.
+5. Add it to the active runtime scatter binding only after LOD, material,
+   collision and performance behavior have been reviewed.
+
+While `allow_empty_catalog=true`, validation requires both `assets: []` and an
+empty runtime asset tree. This prevents accidental partial reintroduction.
 
 The existing acquisition/optimization tools remain available:
 
@@ -55,9 +60,8 @@ python tools/optimize_scatter_assets.py --asset <asset-id>
 - maximum runtime LOD0: **750,000 triangles**;
 - preferred runtime LOD0: **250,000 triangles or less**.
 
-These are upper authoring limits, not recommended foliage targets. High-density
-vegetation should normally be substantially cheaper and use appropriate cards,
-cluster meshes, LODs and impostors.
+These are upper authoring limits. Dense foliage and frequently repeated geology
+should normally be substantially cheaper and use appropriate LODs/impostors.
 
 ## Runtime rules
 
@@ -71,6 +75,6 @@ cluster meshes, LODs and impostors.
 
 ## License
 
-Current geological assets in `asset_manifest.json` retain their source/license
-metadata. Every replacement foliage asset must be checked independently before it
-is added to the runtime catalog.
+There are currently no third-party runtime scatter assets in the catalog. Every
+replacement asset must have its license and redistribution/game-use terms checked
+and recorded before it is added.
