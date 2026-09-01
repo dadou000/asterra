@@ -2,10 +2,9 @@
 #version 450
 
 // Workgroup diagnostic reduction for the fixed-domain SWE prototype.
-// Positive IEEE754 floats can be reduced with atomicMax on their bit patterns.
-// Each 8x8 workgroup reduces locally first, so only four global atomics are issued
-// per group instead of per cell. Mode 0 writes pre-step CFL metrics; mode 1 writes
-// post-step health metrics.
+// Mode 0 writes per-iteration scratch used by the adaptive CFL scheduler.
+// Mode 1 writes final post-step diagnostics. The first iteration's scratch is
+// copied into the persistent pre-step fields by hydro_prepare_step.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -24,19 +23,29 @@ layout(set = 0, binding = 1, std430) buffer Control {
     uint post_invalid_count;
 
     float requested_dt;
-    float sub_dt;
+    float remaining_dt;
+    float current_dt;
     float advanced_dt;
-    float cfl_dt;
 
-    uint substeps;
+    float min_cfl_dt;
+    float last_cfl_dt;
+    uint steps_taken;
     uint max_substeps;
+
     uint cfl_clamped;
-    uint reserved;
+    uint iteration_active;
+    uint iter_max_speed_bits;
+    uint iter_max_depth_bits;
+
+    uint iter_wet_count;
+    uint iter_invalid_count;
+    uint reserved0;
+    uint reserved1;
 } control;
 layout(set = 0, binding = 2, std430) readonly buffer Params {
-    vec4 grid_dt;  // width, height, dx, requested macro dt
-    vec4 physics;  // gravity, dry eps, Manning n, CFL
-    vec4 schedule; // max substeps, reserved...
+    vec4 grid_dt;
+    vec4 physics;
+    vec4 schedule;
 } params;
 
 layout(push_constant, std430) uniform ReducePush {
@@ -85,7 +94,6 @@ void main() {
                 bad = true;
             }
         }
-
         atomicMax(group_max_speed_bits, floatBitsToUint(max(speed, 0.0)));
         atomicMax(group_max_depth_bits, floatBitsToUint(max(depth, 0.0)));
         if (wet) atomicAdd(group_wet_count, 1u);
@@ -96,10 +104,10 @@ void main() {
     if (gl_LocalInvocationIndex != 0u) return;
 
     if (pc.mode == 0u) {
-        atomicMax(control.pre_max_speed_bits, group_max_speed_bits);
-        atomicMax(control.pre_max_depth_bits, group_max_depth_bits);
-        atomicAdd(control.pre_wet_count, group_wet_count);
-        atomicAdd(control.pre_invalid_count, group_invalid_count);
+        atomicMax(control.iter_max_speed_bits, group_max_speed_bits);
+        atomicMax(control.iter_max_depth_bits, group_max_depth_bits);
+        atomicAdd(control.iter_wet_count, group_wet_count);
+        atomicAdd(control.iter_invalid_count, group_invalid_count);
     } else {
         atomicMax(control.post_max_speed_bits, group_max_speed_bits);
         atomicMax(control.post_max_depth_bits, group_max_depth_bits);
