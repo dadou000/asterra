@@ -55,6 +55,8 @@ varying float v_direct_transmittance;
 varying float v_micro_layer;
 varying float v_geom_normal_weight;
 
+#include "res://shaders/terrain_author_material_post_cached.gdshaderinc"
+
 const int ASTERRA_MAX_LEVEL = 14;
 const float RING_INNER_Q = 0.44;
 const float RING_HANDOFF_Q = 0.50;
@@ -68,8 +70,6 @@ const int MACRO_MAX_MIP = 5;
 const float NORMAL_SAMPLE_SPACING_MULT = 2.0;
 const float NORMAL_SAMPLE_MIN_M = 1.5;
 
-// The coarser annulus is only a hidden overlap surface. Keep it a few millimetres
-// below the exact child-morphed surface to order depth without opening a visible gap.
 const float RING_HANDOFF_BIAS_MIN_M = 0.004;
 const float RING_HANDOFF_BIAS_MAX_M = 0.025;
 const float RING_HANDOFF_BIAS_SPACING = 0.001;
@@ -250,12 +250,6 @@ vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
 	return vec3(0.0);
 }
 
-// The map inspector intentionally uses a categorical, high-chroma biome palette.
-// For terrain rendering we reconstruct that same palette spatially instead of
-// interpolating biome numbers. Four categorical texels are converted to colours
-// first, then blended with a controllable sigmoid. This gives a true smooth fade
-// at ecological borders without turning an entire coarse context cell into a
-// broad pastel band when viewed from orbit.
 vec3 terrain_biome_map_color(float biome) {
 	if (biome < 0.5) return vec3(0.05, 0.13, 0.33);
 	if (biome < 1.5) return vec3(0.10, 0.30, 0.50);
@@ -350,11 +344,6 @@ void vertex() {
 		float child_morph = fine_morph_weight(child_cell);
 		vec2 child_sample = terrain_cached_sample_with_morph(
 			d, child_level, child_morph, anchor_offset_m, stable_displacement);
-		// The child already morphs continuously to this parent over exactly the
-		// shared annulus. A second independent parent->child blend produces two
-		// different overlapping height sheets (with either sign depending on relief).
-		// Clone the child's final morphed height instead; at q=0.5 child_morph=1, so
-		// this naturally converges back to the pure parent with no discontinuity.
 		macro_h = child_sample.x;
 		h = child_sample.y;
 		normal_level = child_level;
@@ -532,11 +521,6 @@ void fragment() {
 			float scan_normal_w;
 			spbr_apply(dpos, wn, camera_dist, primary, secondary, biome,
 				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
-			// Close range remains the physically classified/PBR surface. Once the
-			// terrain is seen as landscape rather than individual material, restore
-			// some of the biome inspector's chroma and categorical structure. The
-			// transition itself spans tens of kilometres, while ecological edges are
-			// sharpened independently so orbit does not look Gaussian-blurred.
 			float orbit_palette_w = smootherstep_range(12000.0, 90000.0, camera_dist);
 			if (orbit_palette_w > 0.001) {
 				float edge_sharpness = mix(1.35, 3.20, orbit_palette_w);
@@ -547,12 +531,18 @@ void fragment() {
 			if (scan_normal_w > 0.001) {
 				scan_normal_w *= mix(1.0, 0.78, v_micro_layer);
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
-				NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			}
+
+			float authored_metallic;
+			float authored_ao;
+			author_cached_material_post(biome, camera_dist, geom_n,
+				albedo, wn, roughness, authored_metallic, authored_ao);
+			NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 			ALBEDO = albedo;
 			ROUGHNESS = roughness;
 			SPECULAR = material_specular;
-			METALLIC = 0.0;
+			METALLIC = authored_metallic;
+			AO = authored_ao;
 			vec3 sun_dir = normalize(u_cloud_shadow_sun_dir);
 			vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
 			float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
