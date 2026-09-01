@@ -1,3 +1,4 @@
+class_name TerrainScatterGeologyOnly
 extends "res://scripts/terrain/gpu_terrain_scatter_authoring.gd"
 ## Temporary foliage-free production binding.
 ##
