@@ -1,9 +1,8 @@
 #[compute]
 #version 450
 
-// After a GPU-determined number of ping-pong substeps, canonicalize the final
-// state back into the buffer that was authoritative when advance() began.
-// Even substep counts already end there; odd counts require one copy.
+// After a GPU-determined number of adaptive ping-pong substeps, canonicalize the
+// final state back into the buffer that was authoritative when advance() began.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -25,14 +24,24 @@ layout(set = 0, binding = 2, std430) readonly buffer Control {
     uint post_invalid_count;
 
     float requested_dt;
-    float sub_dt;
+    float remaining_dt;
+    float current_dt;
     float advanced_dt;
-    float cfl_dt;
 
-    uint substeps;
+    float min_cfl_dt;
+    float last_cfl_dt;
+    uint steps_taken;
     uint max_substeps;
+
     uint cfl_clamped;
-    uint reserved;
+    uint iteration_active;
+    uint iter_max_speed_bits;
+    uint iter_max_depth_bits;
+
+    uint iter_wet_count;
+    uint iter_invalid_count;
+    uint reserved0;
+    uint reserved1;
 } control;
 layout(set = 0, binding = 3, std430) readonly buffer Params {
     vec4 grid_dt;
@@ -41,7 +50,7 @@ layout(set = 0, binding = 3, std430) readonly buffer Params {
 } params;
 
 void main() {
-    if ((control.substeps & 1u) == 0u) return;
+    if ((control.steps_taken & 1u) == 0u) return;
     uvec2 p = gl_GlobalInvocationID.xy;
     uint w = uint(params.grid_dt.x + 0.5);
     uint hgt = uint(params.grid_dt.y + 0.5);
