@@ -88,6 +88,13 @@ def validate(data: dict[str, Any], online: bool) -> list[str]:
     if not isinstance(assets, list):
         return errors + ["assets must be an array"]
 
+    allow_empty_catalog = data.get("allow_empty_catalog", False)
+    if not isinstance(allow_empty_catalog, bool):
+        errors.append("allow_empty_catalog must be a boolean when present")
+        allow_empty_catalog = False
+    if allow_empty_catalog and assets:
+        errors.append("allow_empty_catalog=true requires assets to be an empty array")
+
     seen: set[str] = set()
     coverage = {biome: 0 for biome in VALID_BIOMES}
     for index, raw in enumerate(assets):
@@ -135,13 +142,16 @@ def validate(data: dict[str, Any], online: bool) -> list[str]:
             except Exception as exc:
                 errors.append(f"{asset_id}: online verification failed: {exc}")
 
-    # Deep ocean is intentionally an explicit no-scatter plan in v1. Every other
-    # macro biome must have at least one concrete model assigned.
-    for biome, count in coverage.items():
-        if biome != "OCEAN" and count == 0:
-            errors.append(f"no model coverage for biome: {biome}")
+    # Empty catalogs are permitted only when explicitly declared. Otherwise the
+    # normal coverage invariant remains strict: every non-ocean macro biome needs
+    # at least one concrete model assignment.
+    if not allow_empty_catalog:
+        for biome, count in coverage.items():
+            if biome != "OCEAN" and count == 0:
+                errors.append(f"no model coverage for biome: {biome}")
 
     print(f"assets: {len(assets)}")
+    print(f"intentional_empty_catalog: {allow_empty_catalog}")
     print("coverage:")
     for biome in VALID_BIOMES:
         print(f"  {biome:28} {coverage[biome]:2d}")
