@@ -1,11 +1,7 @@
 class_name FixedHydroGPU
 extends Node
-## Phase 2 fixed-domain GPU SWE dispatcher.
-##
-## This is deliberately not sparse yet. It proves the authoritative compute path
-## on the same global RenderingDevice used by the water renderer. State is two
-## ping-pong SSBOs of vec4(h, hu, hv, bed). All RD mutations/dispatches happen on
-## the render thread; no per-step CPU readback is required.
+## Fixed-domain GPU SWE dispatcher used before sparse-tile scheduling exists.
+## State ping-pongs as vec4(h, hu, hv, bed) on the global RenderingDevice.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -14,8 +10,8 @@ signal released
 
 const STATE_FLOATS := 4
 const SOURCE_FLOATS := 4
-const LOCAL_SIZE_X := 8
-const LOCAL_SIZE_Y := 8
+const LOCAL_X := 8
+const LOCAL_Y := 8
 
 var width := 0
 var height := 0
@@ -24,59 +20,51 @@ var gravity := 9.81
 var dry_eps := 1.0e-5
 var manning_n := 0.025
 
-var _rd: RenderingDevice
 var _shader := RID()
 var _pipeline := RID()
 var _state_a := RID()
 var _state_b := RID()
 var _sources := RID()
 var _params := RID()
-var _set_a_to_b := RID()
-var _set_b_to_a := RID()
-var _front_is_a := true
+var _set_a_b := RID()
+var _set_b_a := RID()
+var _front_a := true
 var _initialized := false
-var _initialization_pending := false
+var _init_pending := false
 var _step_pending := false
 var _next_step_id := 1
 
 
-func initialize(p_width: int, p_height: int, p_cell_size_m: float,
+func initialize(p_width: int, p_height: int, p_dx: float,
 		state: PackedFloat32Array, source_terms := PackedFloat32Array()) -> Error:
-	if _initialization_pending or _step_pending:
+	if _init_pending or _step_pending:
 		return ERR_BUSY
 	var w := maxi(p_width, 1)
 	var hgt := maxi(p_height, 1)
-	var count := w * hgt
-	if state.size() != count * STATE_FLOATS:
+	var cell_count := w * hgt
+	if state.size() != cell_count * STATE_FLOATS:
 		return ERR_INVALID_PARAMETER
-
-	var sources_data: PackedFloat32Array = source_terms
-	if sources_data.is_empty():
-		sources_data = PackedFloat32Array()
-		sources_data.resize(count * SOURCE_FLOATS)
-	elif sources_data.size() != count * SOURCE_FLOATS:
+	var source_data: PackedFloat32Array = source_terms
+	if source_data.is_empty():
+		source_data = PackedFloat32Array()
+		source_data.resize(cell_count * SOURCE_FLOATS)
+	elif source_data.size() != cell_count * SOURCE_FLOATS:
 		return ERR_INVALID_PARAMETER
 
 	var shader_file: RDShaderFile = load("res://shaders/water/hydro_step.glsl")
 	if shader_file == null:
 		return ERR_CANT_OPEN
-	var spirv := shader_file.get_spirv()
-	if spirv == null:
-		return ERR_CANT_CREATE
+	var spirv: RDShaderSPIRV = shader_file.get_spirv()
+	if spirv == null or RenderingServer.get_rendering_device() == null:
+		return ERR_UNAVAILABLE
 
 	width = w
 	height = hgt
-	cell_size_m = maxf(p_cell_size_m, 1.0e-3)
-	_rd = RenderingServer.get_rendering_device()
-	if _rd == null:
-		return ERR_UNAVAILABLE
-
-	_initialization_pending = true
-	var state_bytes := state.to_byte_array()
-	var source_bytes := sources_data.to_byte_array()
+	cell_size_m = maxf(p_dx, 1.0e-3)
+	_init_pending = true
 	RenderingServer.call_on_render_thread(
-		Callable(self, &"_initialize_render_thread").bind(
-			spirv, state_bytes, source_bytes, count))
+		Callable(self, &"_init_render_thread").bind(
+			spirv, state.to_byte_array(), source_data.to_byte_array()))
 	return OK
 
 
@@ -85,37 +73,33 @@ func initialized_ok() -> bool:
 
 
 func initialization_pending() -> bool:
-	return _initialization_pending
+	return _init_pending
 
 
 func step_pending() -> bool:
 	return _step_pending
 
 
-## Records one CFL-safe caller-selected substep. The scheduler will later choose
-## dt from a GPU reduction; for Phase 2 tests the reference solver supplies/limits
-## the requested dt. Returns step id, or -1 if unavailable/busy.
 func step(dt_s: float) -> int:
 	if not _initialized or _step_pending or dt_s <= 0.0:
 		return -1
-	_step_pending = true
 	var step_id := _next_step_id
 	_next_step_id += 1
-	var params_data := PackedFloat32Array([
+	_step_pending = true
+	var p := PackedFloat32Array([
 		float(width), float(height), cell_size_m, dt_s,
 		gravity, dry_eps, manning_n, 0.0,
 	])
-	var front_a := _front_is_a
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_step_render_thread").bind(
-			front_a, params_data.to_byte_array(), step_id))
+			_front_a, p.to_byte_array(), step_id))
 	return step_id
 
 
 func current_state_rid() -> RID:
 	if not _initialized:
 		return RID()
-	return _state_a if _front_is_a else _state_b
+	return _state_a if _front_a else _state_b
 
 
 func source_buffer_rid() -> RID:
@@ -127,180 +111,165 @@ func cell_count() -> int:
 
 
 func gpu_bytes_estimate() -> int:
-	var count := cell_count()
-	return count * (STATE_FLOATS * 4 * 2 + SOURCE_FLOATS * 4) + 8 * 4
+	return cell_count() * (STATE_FLOATS * 8 + SOURCE_FLOATS * 4) + 32
 
 
 func stats() -> Dictionary:
 	return {
 		"initialized": _initialized,
-		"initialization_pending": _initialization_pending,
+		"initialization_pending": _init_pending,
 		"step_pending": _step_pending,
 		"width": width,
 		"height": height,
 		"cell_size_m": cell_size_m,
 		"cells": cell_count(),
 		"gpu_bytes": gpu_bytes_estimate(),
-		"front": "A" if _front_is_a else "B",
+		"front": "A" if _front_a else "B",
 	}
 
 
 ## Render-thread only.
-func _initialize_render_thread(spirv: RDShaderSPIRV, state_bytes: PackedByteArray,
-		source_bytes: PackedByteArray, count: int) -> void:
+func _init_render_thread(spirv: RDShaderSPIRV, state_bytes: PackedByteArray,
+		source_bytes: PackedByteArray) -> void:
 	var rd := RenderingServer.get_rendering_device()
 	if rd == null:
-		call_deferred("_finish_initialization", ERR_UNAVAILABLE,
-			RID(), RID(), RID(), RID(), RID(), RID(), RID())
+		_fail_init_deferred(ERR_UNAVAILABLE)
 		return
-
 	var shader := rd.shader_create_from_spirv(spirv)
 	if not shader.is_valid():
-		call_deferred("_finish_initialization", ERR_CANT_CREATE,
-			RID(), RID(), RID(), RID(), RID(), RID(), RID())
+		_fail_init_deferred(ERR_CANT_CREATE)
 		return
 	var pipeline := rd.compute_pipeline_create(shader)
 	if not pipeline.is_valid():
 		rd.free_rid(shader)
-		call_deferred("_finish_initialization", ERR_CANT_CREATE,
-			RID(), RID(), RID(), RID(), RID(), RID(), RID())
+		_fail_init_deferred(ERR_CANT_CREATE)
 		return
 
 	var zero_state := PackedByteArray()
 	zero_state.resize(state_bytes.size())
-	var params_bytes := PackedByteArray()
-	params_bytes.resize(8 * 4)
-	var state_a := rd.storage_buffer_create(state_bytes.size(), state_bytes)
-	var state_b := rd.storage_buffer_create(zero_state.size(), zero_state)
-	var sources := rd.storage_buffer_create(source_bytes.size(), source_bytes)
-	var params := rd.storage_buffer_create(params_bytes.size(), params_bytes)
-	if not state_a.is_valid() or not state_b.is_valid() \
-			or not sources.is_valid() or not params.is_valid():
-		_free_render_thread_many(rd, [state_a, state_b, sources, params, pipeline, shader])
-		call_deferred("_finish_initialization", ERR_CANT_CREATE,
-			RID(), RID(), RID(), RID(), RID(), RID(), RID())
+	var zero_params := PackedByteArray()
+	zero_params.resize(32)
+	var a := rd.storage_buffer_create(state_bytes.size(), state_bytes)
+	var b := rd.storage_buffer_create(zero_state.size(), zero_state)
+	var src := rd.storage_buffer_create(source_bytes.size(), source_bytes)
+	var prm := rd.storage_buffer_create(zero_params.size(), zero_params)
+	if not a.is_valid() or not b.is_valid() or not src.is_valid() or not prm.is_valid():
+		var failed_rids: Array[RID] = [a, b, src, prm, pipeline, shader]
+		_free_many(rd, failed_rids)
+		_fail_init_deferred(ERR_CANT_CREATE)
 		return
 
-	var set_a := rd.uniform_set_create([
-		_storage_uniform(0, state_a), _storage_uniform(1, state_b),
-		_storage_uniform(2, sources), _storage_uniform(3, params),
-	], shader, 0)
-	var set_b := rd.uniform_set_create([
-		_storage_uniform(0, state_b), _storage_uniform(1, state_a),
-		_storage_uniform(2, sources), _storage_uniform(3, params),
-	], shader, 0)
-	if not set_a.is_valid() or not set_b.is_valid():
-		_free_render_thread_many(rd,
-			[set_a, set_b, state_a, state_b, sources, params, pipeline, shader])
-		call_deferred("_finish_initialization", ERR_CANT_CREATE,
-			RID(), RID(), RID(), RID(), RID(), RID(), RID())
+	var set_ab := _make_set(rd, shader, a, b, src, prm)
+	var set_ba := _make_set(rd, shader, b, a, src, prm)
+	if not set_ab.is_valid() or not set_ba.is_valid():
+		var failed_rids: Array[RID] = [set_ab, set_ba, a, b, src, prm, pipeline, shader]
+		_free_many(rd, failed_rids)
+		_fail_init_deferred(ERR_CANT_CREATE)
 		return
-
-	call_deferred("_finish_initialization", OK, shader, pipeline,
-		state_a, state_b, sources, params, set_a, set_b)
+	call_deferred("_finish_init", OK, shader, pipeline, a, b, src, prm, set_ab, set_ba)
 
 
-func _finish_initialization(error: Error, shader: RID, pipeline: RID,
-		state_a: RID, state_b: RID, sources: RID, params: RID,
-		set_a: RID, set_b: RID) -> void:
-	_initialization_pending = false
+## Render-thread only.
+func _fail_init_deferred(error: Error) -> void:
+	call_deferred("_finish_init", error,
+		RID(), RID(), RID(), RID(), RID(), RID(), RID(), RID())
+
+
+func _finish_init(error: Error, shader: RID, pipeline: RID,
+		a: RID, b: RID, src: RID, prm: RID, set_ab: RID, set_ba: RID) -> void:
+	_init_pending = false
 	if error != OK:
-		_initialization_failed(error)
+		_initialized = false
+		initialization_failed.emit(error)
 		return
 	_shader = shader
 	_pipeline = pipeline
-	_state_a = state_a
-	_state_b = state_b
-	_sources = sources
-	_params = params
-	_set_a_to_b = set_a
-	_set_b_to_a = set_b
-	_front_is_a = true
+	_state_a = a
+	_state_b = b
+	_sources = src
+	_params = prm
+	_set_a_b = set_ab
+	_set_b_a = set_ba
+	_front_a = true
 	_initialized = true
 	initialized.emit()
 
 
-func _initialization_failed(error: Error) -> void:
-	_initialized = false
-	initialization_failed.emit(error)
-
-
-## Render-thread only. Global RenderingDevice command lists are consumed by the
-## renderer; unlike a local RenderingDevice, do not call submit()/sync() here.
-func _step_render_thread(front_a: bool, params_bytes: PackedByteArray,
+## Render-thread only. The global RD is submitted by Godot's renderer; no
+## submit()/sync() call belongs here.
+func _step_render_thread(front_a: bool, param_bytes: PackedByteArray,
 		step_id: int) -> void:
 	var rd := RenderingServer.get_rendering_device()
-	if rd == null or not _pipeline.is_valid() or not _params.is_valid():
+	var set_rid := _set_a_b if front_a else _set_b_a
+	if rd == null or not _pipeline.is_valid() or not _params.is_valid() \
+			or not set_rid.is_valid():
 		call_deferred("_finish_step", step_id, false, front_a)
 		return
-	var set_rid := _set_a_to_b if front_a else _set_b_to_a
-	if not set_rid.is_valid():
-		call_deferred("_finish_step", step_id, false, front_a)
-		return
-
-	rd.buffer_update(_params, 0, params_bytes.size(), params_bytes)
+	rd.buffer_update(_params, 0, param_bytes.size(), param_bytes)
 	var list := rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(list, _pipeline)
 	rd.compute_list_bind_uniform_set(list, set_rid, 0)
 	rd.compute_list_dispatch(list,
-		int(ceil(float(width) / float(LOCAL_SIZE_X))),
-		int(ceil(float(height) / float(LOCAL_SIZE_Y))), 1)
+		int(ceil(float(width) / float(LOCAL_X))),
+		int(ceil(float(height) / float(LOCAL_Y))), 1)
 	rd.compute_list_end()
 	call_deferred("_finish_step", step_id, true, front_a)
 
 
-func _finish_step(step_id: int, success: bool, previous_front_a: bool) -> void:
+func _finish_step(step_id: int, success: bool, old_front_a: bool) -> void:
 	_step_pending = false
 	if not success:
-		push_error("FixedHydroGPU: failed to record compute step %d" % step_id)
+		push_error("FixedHydroGPU: failed to record step %d" % step_id)
 		return
-	# GPU command ordering guarantees this output becomes the next input before a
-	# subsequent render-thread callback records another step.
-	_front_is_a = not previous_front_a
+	_front_a = not old_front_a
 	step_recorded.emit(step_id)
 
 
+## Render-thread only.
+func _make_set(rd: RenderingDevice, shader: RID, input: RID, output: RID,
+		src: RID, prm: RID) -> RID:
+	var uniforms: Array[RDUniform] = []
+	uniforms.append(_storage_uniform(0, input))
+	uniforms.append(_storage_uniform(1, output))
+	uniforms.append(_storage_uniform(2, src))
+	uniforms.append(_storage_uniform(3, prm))
+	return rd.uniform_set_create(uniforms, shader, 0)
+
+
 func _storage_uniform(binding: int, buffer: RID) -> RDUniform:
-	var uniform := RDUniform.new()
-	uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	uniform.binding = binding
-	uniform.add_id(buffer)
-	return uniform
+	var u := RDUniform.new()
+	u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u.binding = binding
+	u.add_id(buffer)
+	return u
 
 
 ## Render-thread only.
-func _free_render_thread_many(rd: RenderingDevice, rids: Array) -> void:
-	for value in rids:
-		if value is RID:
-			var rid: RID = value
-			if rid.is_valid():
-				rd.free_rid(rid)
+func _free_many(rd: RenderingDevice, rids: Array[RID]) -> void:
+	for rid in rids:
+		if rid.is_valid():
+			rd.free_rid(rid)
 
 
 ## Render-thread only.
-func _release_render_thread(rids: Array) -> void:
+func _release_render_thread(rids: Array[RID]) -> void:
 	var rd := RenderingServer.get_rendering_device()
 	if rd != null:
-		_free_render_thread_many(rd, rids)
+		_free_many(rd, rids)
 
 
 func release() -> void:
 	if not _initialized and not _shader.is_valid():
 		return
-	var rids: Array = [
-		_set_a_to_b, _set_b_to_a, _state_a, _state_b,
+	var rids: Array[RID] = [
+		_set_a_b, _set_b_a, _state_a, _state_b,
 		_sources, _params, _pipeline, _shader,
 	]
 	_initialized = false
 	_step_pending = false
-	_shader = RID()
-	_pipeline = RID()
-	_state_a = RID()
-	_state_b = RID()
-	_sources = RID()
-	_params = RID()
-	_set_a_to_b = RID()
-	_set_b_to_a = RID()
+	_shader = RID(); _pipeline = RID()
+	_state_a = RID(); _state_b = RID(); _sources = RID(); _params = RID()
+	_set_a_b = RID(); _set_b_a = RID()
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_release_render_thread").bind(rids))
 	released.emit()
@@ -308,4 +277,3 @@ func release() -> void:
 
 func _exit_tree() -> void:
 	release()
-	_rd = null
