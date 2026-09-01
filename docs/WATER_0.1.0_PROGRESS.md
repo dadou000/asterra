@@ -37,10 +37,7 @@ Smoke scene:
 tests/water/Phase1WaterSmoke.tscn
 ```
 
-The dynamic RenderingDevice field is intentionally unavailable in Godot headless
-mode; the test treats that as the documented fallback rather than a failure.
-
-### Phase 2 — fixed-domain shallow water: GPU scheduler implemented, parity/reconstruction pending
+### Phase 2 — fixed-domain shallow water: adaptive GPU scheduler implemented, parity/reconstruction pending
 
 Implemented numerical core:
 
@@ -58,46 +55,52 @@ Implemented numerical core:
   - compute implementation of the same fixed-domain equations;
   - one invocation per cell;
   - closed reflective test boundaries;
-  - reads `sub_dt`/`substeps` from the GPU control buffer;
-  - push constant selects the current candidate substep.
+  - consumes the current GPU-selected timestep;
+  - candidate dispatches become no-ops after requested macro time is consumed.
 
-Implemented GPU scheduling/diagnostics:
+Implemented adaptive GPU scheduling/diagnostics:
 
+- `shaders/water/hydro_reset_reduction.glsl`
+  - resets only per-iteration characteristic-speed scratch.
 - `shaders/water/hydro_reduce.glsl`
-  - 8x8 workgroup reduction;
-  - pre/post max characteristic speed;
-  - pre/post max depth;
-  - wet-cell count;
-  - invalid-cell count;
-  - local shared-memory reduction before global atomics.
+  - 8x8 shared-memory workgroup reduction;
+  - current maximum characteristic speed/depth;
+  - wet-cell and invalid-cell counts;
+  - separate final post-step health metrics.
 - `shaders/water/hydro_prepare_step.glsl`
-  - derives CFL-safe timestep entirely on GPU;
-  - derives the required substep count;
-  - clamps to configured maximum;
-  - if the cap is insufficient, advances only a stable amount of simulation time
-    and reports `cfl_clamped=1` rather than taking a super-CFL step.
+  - runs before **every** candidate SWE substep;
+  - recomputes CFL-safe `dt` from the state produced by the preceding step;
+  - tracks requested, advanced and remaining macro time;
+  - tracks minimum/last CFL timestep and actual executed step count;
+  - if the configured cap is exhausted, leaves the remainder unadvanced and sets
+    `cfl_clamped=1` instead of violating stability.
 - `shaders/water/hydro_finalize.glsl`
   - canonicalizes odd ping-pong results back into the original authoritative RID;
   - consumers do not need a CPU readback to discover which state buffer is final.
 - `scripts/water/fixed_hydro_gpu.gd`
   - global-RenderingDevice compute dispatcher;
   - render-thread resource creation, dispatch and destruction;
+  - uses a RID bundle for initialization/failure cleanup;
   - records one macro advance as:
 
 ```text
-pre reduction
-    -> CFL prepare
-    -> N candidate ping-pong dispatches
-    -> canonicalize
-    -> post reduction
-    -> 64-byte async diagnostic readback
+for each candidate substep:
+    reset iteration reduction
+        -> reduce current state
+        -> prepare one CFL-safe dt
+        -> conditionally execute SWE step
+
+then:
+    canonicalize ping-pong parity
+        -> reduce final state
+        -> 96-byte async diagnostic readback
 ```
 
-  - the active substep prefix is selected by the GPU;
-  - barriers are inserted between dependent compute dispatches;
+  - CFL is therefore not stale across accelerating flood/dam-break flow;
+  - all dependent dispatches are separated by compute barriers;
   - no `submit()` or `sync()` calls on the global RenderingDevice;
   - `advance(dt, max_substeps, request_diagnostics)` is the main scheduler API;
-  - `step(dt)` remains as a compatibility wrapper with a one-substep cap;
+  - `step(dt)` remains a compatibility wrapper with a one-substep cap;
   - exposes current conservative-state and control-buffer RIDs for later kernels.
 
 Numerical reference scene:
@@ -120,10 +123,10 @@ tests/water/FixedHydroGPUSmoke.tscn
 
 It now checks:
 
-1. all four compute shaders/pipelines initialize;
+1. all fixed-domain compute pipelines initialize;
 2. GPU reduction reports the expected wet/invalid cell counts;
 3. a 1 s macro timestep is split into multiple CFL-safe GPU substeps;
-4. the canonical state RID remains stable after an odd/even unknown GPU schedule;
+4. the canonical state RID remains stable after unknown odd/even GPU step count;
 5. an intentionally huge timestep with a two-substep cap reports `cfl_clamped`;
 6. the clamped case advances less than the requested timestep instead of violating
    the stability bound;
