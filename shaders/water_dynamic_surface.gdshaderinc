@@ -48,3 +48,28 @@ WaterDynamicSurfaceSample water_dynamic_surface_sample(vec2 plane_m) {
 	sample_value.valid = 1.0;
 	return sample_value;
 }
+
+// Central difference in the same tangent-plane metric used by the ocean clipmap.
+// The dominant hydrology normal therefore comes from the exact same reconstructed
+// height field as vertex displacement instead of from an unrelated normal texture.
+vec2 water_dynamic_surface_gradient(vec2 plane_m) {
+	if (u_dynamic_surface_enabled < 0.5) return vec2(0.0);
+	ivec2 tex_size_i = textureSize(u_dynamic_surface_field, 0);
+	vec2 tex_size = max(vec2(tex_size_i), vec2(1.0));
+	vec2 texel_m = vec2(2.0 * max(u_dynamic_surface_half_extent_m, 1.0)) / tex_size;
+
+	WaterDynamicSurfaceSample c = water_dynamic_surface_sample(plane_m);
+	if (c.valid < 0.5) return vec2(0.0);
+	WaterDynamicSurfaceSample xm = water_dynamic_surface_sample(plane_m - vec2(texel_m.x, 0.0));
+	WaterDynamicSurfaceSample xp = water_dynamic_surface_sample(plane_m + vec2(texel_m.x, 0.0));
+	WaterDynamicSurfaceSample ym = water_dynamic_surface_sample(plane_m - vec2(0.0, texel_m.y));
+	WaterDynamicSurfaceSample yp = water_dynamic_surface_sample(plane_m + vec2(0.0, texel_m.y));
+
+	float hx0 = xm.valid > 0.5 ? xm.height : c.height;
+	float hx1 = xp.valid > 0.5 ? xp.height : c.height;
+	float hy0 = ym.valid > 0.5 ? ym.height : c.height;
+	float hy1 = yp.valid > 0.5 ? yp.height : c.height;
+	return vec2(
+		(hx1 - hx0) / max(2.0 * texel_m.x, 1e-4),
+		(hy1 - hy0) / max(2.0 * texel_m.y, 1e-4));
+}
