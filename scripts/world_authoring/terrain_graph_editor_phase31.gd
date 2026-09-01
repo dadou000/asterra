@@ -82,6 +82,7 @@ func _graph_node_title(node_type: String, node_data: Dictionary) -> String:
 		"COMBINE_RGB": return "COMBINE RGB"
 		"SATURATE": return "SATURATE 0…1"
 		"ONE_MINUS": return "ONE MINUS"
+		"OUTPUT_MATERIAL": return "FINAL SURFACE"
 	return super._graph_node_title(node_type, node_data)
 
 
