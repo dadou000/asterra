@@ -2,9 +2,9 @@ extends "res://scripts/world_authoring/terrain_material_runtime_phase30.gd"
 ## Phase 31: production-stage Surface graph compiler.
 ##
 ## The mature renderer remains the source of truth for its production PBR result,
-## but that result and its classifier outputs are now explicit graph nodes instead
-## of editor-only black boxes. Utility opcodes let authored graphs split the packed
-## production/context vectors and rebuild arbitrary material logic from them.
+## but that result and its classifier outputs are now explicit graph nodes. Phase
+## 32 adds unconnected production settings nodes; those describe/bind renderer
+## stages and do not make the canonical surface pass-through bytecode-active.
 
 # Keep in lock-step with terrain_author_material_bytecode.gdshaderinc.
 const OP_CHANNEL_R := 61
@@ -15,12 +15,17 @@ const OP_COMBINE_RGB := 65
 const OP_SATURATE := 66
 const OP_ONE_MINUS := 67
 
+const PRODUCTION_SETTING_TYPES: Array[String] = [
+	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_MICRORELIEF_SETTINGS",
+	"PRODUCTION_ANTITILE_SETTINGS",
+	"PRODUCTION_ROCK_PBR_SETTINGS",
+	"PRODUCTION_SCAN_PBR_SETTINGS",
+	"PRODUCTION_SCAN_TEXTURES",
+]
+
 
 func compile_from_terrain(terrain: Resource) -> Dictionary:
-	# The canonical production pass-through graph is only a visible description of
-	# work the renderer has already done. Do not enter the material interpreter for
-	# that identity graph. Any reroute/replacement immediately stops matching this
-	# predicate and compiles normally.
 	if terrain == null:
 		return super.compile_from_terrain(terrain)
 	var skipped: Array[Resource] = []
@@ -55,6 +60,7 @@ func _is_identity_surface_slot(slot: Resource) -> bool:
 		return false
 	var output_id: String = ""
 	var source_by_id: Dictionary = {}
+	var seen_settings: Dictionary = {}
 	for node_value: Variant in nodes:
 		if not (node_value is Dictionary):
 			return false
@@ -63,6 +69,11 @@ func _is_identity_surface_slot(slot: Resource) -> bool:
 		var node_type: String = String(node.get("type", ""))
 		if node_type == "OUTPUT_MATERIAL":
 			output_id = node_id
+			continue
+		if PRODUCTION_SETTING_TYPES.has(node_type):
+			if seen_settings.has(node_type):
+				return false
+			seen_settings[node_type] = true
 			continue
 		var channel: int = _identity_surface_channel(node)
 		if channel < 0:
