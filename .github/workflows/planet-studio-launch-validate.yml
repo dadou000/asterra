@@ -12,6 +12,8 @@ on:
       - "tests/validate_planet_studio_phase28_launch.tscn"
       - "tests/validate_planet_studio_phase29_launch.gd"
       - "tests/validate_planet_studio_phase29_launch.tscn"
+      - "tests/validate_planet_studio_phase30_launch.gd"
+      - "tests/validate_planet_studio_phase30_launch.tscn"
       - ".github/workflows/planet-studio-launch-validate.yml"
   workflow_dispatch:
 
@@ -46,6 +48,8 @@ jobs:
           cp tests/validate_planet_studio_phase28_launch.tscn /tmp/asterra-planet-studio-ci/tests/
           cp tests/validate_planet_studio_phase29_launch.gd /tmp/asterra-planet-studio-ci/tests/
           cp tests/validate_planet_studio_phase29_launch.tscn /tmp/asterra-planet-studio-ci/tests/
+          cp tests/validate_planet_studio_phase30_launch.gd /tmp/asterra-planet-studio-ci/tests/
+          cp tests/validate_planet_studio_phase30_launch.tscn /tmp/asterra-planet-studio-ci/tests/
           cp tests/ci_autoload_planet.gd /tmp/asterra-planet-studio-ci/tests/
           cp tests/ci_autoload_frames.gd /tmp/asterra-planet-studio-ci/tests/
           cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-planet-studio-ci/tests/
@@ -105,18 +109,9 @@ jobs:
           status=$?
           set -e
           cat /tmp/planet-studio-launch28.log
-          if [ "$status" -ne 0 ]; then
-            echo "Planet Studio Phase 28 launch smoke test exited with status $status"
-            exit "$status"
-          fi
-          if ! grep -q "PLANET_STUDIO_PHASE28_LAUNCH_OK" /tmp/planet-studio-launch28.log; then
-            echo "Planet Studio Phase 28 launch completion marker was not emitted."
-            exit 1
-          fi
-          if grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch28.log; then
-            echo "Planet Studio emitted a runtime error during Phase 28 launch smoke test."
-            exit 1
-          fi
+          [ "$status" -eq 0 ]
+          grep -q "PLANET_STUDIO_PHASE28_LAUNCH_OK" /tmp/planet-studio-launch28.log
+          ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch28.log
 
       - name: Launch Phase 29 editable production graphs
         shell: bash
@@ -129,15 +124,30 @@ jobs:
           status=$?
           set -e
           cat /tmp/planet-studio-launch29.log
+          [ "$status" -eq 0 ]
+          grep -q "PLANET_STUDIO_PHASE29_LAUNCH_OK" /tmp/planet-studio-launch29.log
+          ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch29.log
+
+      - name: Launch Phase 30 decomposed production graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-planet-studio-ci
+          set +e
+          timeout 45 "$GODOT" --headless --path "$TEST_PROJECT" res://tests/validate_planet_studio_phase30_launch.tscn > /tmp/planet-studio-launch30.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/planet-studio-launch30.log
           if [ "$status" -ne 0 ]; then
-            echo "Planet Studio Phase 29 launch smoke test exited with status $status"
+            echo "Planet Studio Phase 30 launch smoke test exited with status $status"
             exit "$status"
           fi
-          if ! grep -q "PLANET_STUDIO_PHASE29_LAUNCH_OK" /tmp/planet-studio-launch29.log; then
-            echo "Planet Studio Phase 29 completion marker was not emitted."
+          if ! grep -q "PLANET_STUDIO_PHASE30_LAUNCH_OK" /tmp/planet-studio-launch30.log; then
+            echo "Planet Studio Phase 30 completion marker was not emitted."
             exit 1
           fi
-          if grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch29.log; then
-            echo "Planet Studio emitted a runtime error during Phase 29 launch smoke test."
+          if grep -Eiq "SCRIPT ERROR|CRASH|FATAL|Parameter .* is null|get_viewport\(\).*null" /tmp/planet-studio-launch30.log; then
+            echo "Planet Studio emitted a runtime error during Phase 30 launch smoke test."
             exit 1
           fi
