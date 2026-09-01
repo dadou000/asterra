@@ -2,13 +2,9 @@ class_name FixedHydroGPU
 extends Node
 ## Fixed-domain GPU SWE dispatcher used before sparse-tile scheduling exists.
 ##
-## A macro advance is recorded entirely on the global RenderingDevice:
-##   pre-step reduction -> GPU CFL schedule -> conditional substeps -> canonicalize
-##   -> post-step reduction -> compact asynchronous diagnostic readback.
-##
-## The authoritative state RID remains stable across advance(): if the GPU selects
-## an odd number of ping-pong substeps, hydro_finalize copies the result back into
-## the buffer that was authoritative at the start of the macro step.
+## A macro advance is entirely GPU-scheduled on the global RenderingDevice. CFL
+## is recomputed before every candidate substep, so accelerating dam-break flows do
+## not reuse a stale timestep. The CPU never waits for the reductions.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -20,7 +16,7 @@ signal released
 const STATE_FLOATS := 4
 const SOURCE_FLOATS := 4
 const PARAM_FLOATS := 12
-const CONTROL_BYTES := 64
+const CONTROL_BYTES := 96
 const LOCAL_X := 8
 const LOCAL_Y := 8
 const MAX_GPU_SUBSTEPS := 32
@@ -37,6 +33,8 @@ var _step_shader := RID()
 var _step_pipeline := RID()
 var _reduce_shader := RID()
 var _reduce_pipeline := RID()
+var _reset_shader := RID()
+var _reset_pipeline := RID()
 var _prepare_shader := RID()
 var _prepare_pipeline := RID()
 var _finalize_shader := RID()
@@ -52,6 +50,7 @@ var _step_ab := RID()
 var _step_ba := RID()
 var _reduce_a := RID()
 var _reduce_b := RID()
+var _reset_set := RID()
 var _prepare_set := RID()
 var _finalize_to_a := RID()
 var _finalize_to_b := RID()
@@ -80,13 +79,16 @@ func initialize(p_width: int, p_height: int, p_dx: float,
 	elif source_data.size() != count * SOURCE_FLOATS:
 		return ERR_INVALID_PARAMETER
 
-	var step_spirv := _load_spirv("res://shaders/water/hydro_step.glsl")
-	var reduce_spirv := _load_spirv("res://shaders/water/hydro_reduce.glsl")
-	var prepare_spirv := _load_spirv("res://shaders/water/hydro_prepare_step.glsl")
-	var finalize_spirv := _load_spirv("res://shaders/water/hydro_finalize.glsl")
-	if step_spirv == null or reduce_spirv == null or prepare_spirv == null \
-			or finalize_spirv == null:
-		return ERR_CANT_OPEN
+	var spirv := {
+		"step": _load_spirv("res://shaders/water/hydro_step.glsl"),
+		"reduce": _load_spirv("res://shaders/water/hydro_reduce.glsl"),
+		"reset": _load_spirv("res://shaders/water/hydro_reset_reduction.glsl"),
+		"prepare": _load_spirv("res://shaders/water/hydro_prepare_step.glsl"),
+		"finalize": _load_spirv("res://shaders/water/hydro_finalize.glsl"),
+	}
+	for value in spirv.values():
+		if value == null:
+			return ERR_CANT_OPEN
 	if RenderingServer.get_rendering_device() == null:
 		return ERR_UNAVAILABLE
 
@@ -96,8 +98,7 @@ func initialize(p_width: int, p_height: int, p_dx: float,
 	_init_pending = true
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_init_render_thread").bind(
-			step_spirv, reduce_spirv, prepare_spirv, finalize_spirv,
-			state.to_byte_array(), source_data.to_byte_array()))
+			spirv, state.to_byte_array(), source_data.to_byte_array()))
 	return OK
 
 
@@ -118,15 +119,12 @@ func step_pending() -> bool:
 	return _step_pending
 
 
-## Compatibility entry point. It now uses the same GPU CFL scheduler with a cap
-## of one substep; if dt is unsafe, it advances only the safe amount rather than
-## deliberately violating CFL stability.
+## Compatibility entry point. A one-substep cap may under-advance if dt is unsafe,
+## but it never intentionally records a super-CFL update.
 func step(dt_s: float) -> int:
 	return advance(dt_s, 1, true)
 
 
-## Advance a requested macro timestep. The CPU records max_substeps candidate
-## dispatches, but hydro_prepare_step computes the active prefix and sub_dt on GPU.
 func advance(dt_s: float, max_substeps: int = 16,
 		request_diagnostics: bool = true) -> int:
 	if not _initialized or _step_pending or dt_s <= 0.0:
@@ -190,35 +188,30 @@ func stats() -> Dictionary:
 
 
 ## Render-thread only.
-func _init_render_thread(step_spirv: RDShaderSPIRV, reduce_spirv: RDShaderSPIRV,
-		prepare_spirv: RDShaderSPIRV, finalize_spirv: RDShaderSPIRV,
-		state_bytes: PackedByteArray, source_bytes: PackedByteArray) -> void:
+func _init_render_thread(spirv: Dictionary, state_bytes: PackedByteArray,
+		source_bytes: PackedByteArray) -> void:
 	var rd := RenderingServer.get_rendering_device()
 	if rd == null:
-		_fail_init_deferred(ERR_UNAVAILABLE)
+		call_deferred("_finish_init", ERR_UNAVAILABLE, {})
 		return
 
-	var step_shader := rd.shader_create_from_spirv(step_spirv)
-	var reduce_shader := rd.shader_create_from_spirv(reduce_spirv)
-	var prepare_shader := rd.shader_create_from_spirv(prepare_spirv)
-	var finalize_shader := rd.shader_create_from_spirv(finalize_spirv)
-	var shaders: Array[RID] = [step_shader, reduce_shader, prepare_shader, finalize_shader]
-	for shader in shaders:
+	var resources: Array = []
+	var bundle := {}
+	for key in ["step", "reduce", "reset", "prepare", "finalize"]:
+		var shader := rd.shader_create_from_spirv(spirv[key])
 		if not shader.is_valid():
-			_free_many(rd, shaders)
-			_fail_init_deferred(ERR_CANT_CREATE)
+			_free_many(rd, resources)
+			call_deferred("_finish_init", ERR_CANT_CREATE, {})
 			return
-
-	var step_pipeline := rd.compute_pipeline_create(step_shader)
-	var reduce_pipeline := rd.compute_pipeline_create(reduce_shader)
-	var prepare_pipeline := rd.compute_pipeline_create(prepare_shader)
-	var finalize_pipeline := rd.compute_pipeline_create(finalize_shader)
-	var pipelines: Array[RID] = [step_pipeline, reduce_pipeline, prepare_pipeline, finalize_pipeline]
-	for pipeline in pipelines:
+		resources.append(shader)
+		var pipeline := rd.compute_pipeline_create(shader)
 		if not pipeline.is_valid():
-			_free_many(rd, pipelines + shaders)
-			_fail_init_deferred(ERR_CANT_CREATE)
+			_free_many(rd, resources)
+			call_deferred("_finish_init", ERR_CANT_CREATE, {})
 			return
+		resources.append(pipeline)
+		bundle[key + "_shader"] = shader
+		bundle[key + "_pipeline"] = pipeline
 
 	var zero_state := PackedByteArray()
 	zero_state.resize(state_bytes.size())
@@ -231,73 +224,63 @@ func _init_render_thread(step_spirv: RDShaderSPIRV, reduce_spirv: RDShaderSPIRV,
 	var src := rd.storage_buffer_create(source_bytes.size(), source_bytes)
 	var prm := rd.storage_buffer_create(zero_params.size(), zero_params)
 	var ctl := rd.storage_buffer_create(zero_control.size(), zero_control)
-	var buffers: Array[RID] = [a, b, src, prm, ctl]
-	for buffer in buffers:
+	for buffer in [a, b, src, prm, ctl]:
 		if not buffer.is_valid():
-			_free_many(rd, buffers + pipelines + shaders)
-			_fail_init_deferred(ERR_CANT_CREATE)
+			_free_many(rd, resources + [a, b, src, prm, ctl])
+			call_deferred("_finish_init", ERR_CANT_CREATE, {})
 			return
+		resources.append(buffer)
+	bundle["state_a"] = a; bundle["state_b"] = b
+	bundle["sources"] = src; bundle["params"] = prm; bundle["control"] = ctl
 
-	var step_ab := _make_step_set(rd, step_shader, a, b, src, prm, ctl)
-	var step_ba := _make_step_set(rd, step_shader, b, a, src, prm, ctl)
-	var reduce_a := _make_reduce_set(rd, reduce_shader, a, ctl, prm)
-	var reduce_b := _make_reduce_set(rd, reduce_shader, b, ctl, prm)
-	var prepare_set := _make_prepare_set(rd, prepare_shader, ctl, prm)
-	var finalize_to_a := _make_finalize_set(rd, finalize_shader, b, a, ctl, prm)
-	var finalize_to_b := _make_finalize_set(rd, finalize_shader, a, b, ctl, prm)
-	var sets: Array[RID] = [
-		step_ab, step_ba, reduce_a, reduce_b, prepare_set,
-		finalize_to_a, finalize_to_b,
-	]
+	var step_ab := _make_step_set(rd, bundle.step_shader, a, b, src, prm, ctl)
+	var step_ba := _make_step_set(rd, bundle.step_shader, b, a, src, prm, ctl)
+	var reduce_a := _make_reduce_set(rd, bundle.reduce_shader, a, ctl, prm)
+	var reduce_b := _make_reduce_set(rd, bundle.reduce_shader, b, ctl, prm)
+	var reset_set := _make_reset_set(rd, bundle.reset_shader, ctl)
+	var prepare_set := _make_prepare_set(rd, bundle.prepare_shader, ctl, prm)
+	var finalize_to_a := _make_finalize_set(rd, bundle.finalize_shader, b, a, ctl, prm)
+	var finalize_to_b := _make_finalize_set(rd, bundle.finalize_shader, a, b, ctl, prm)
+	var sets := [step_ab, step_ba, reduce_a, reduce_b, reset_set, prepare_set,
+		finalize_to_a, finalize_to_b]
 	for set_rid in sets:
 		if not set_rid.is_valid():
-			_free_many(rd, sets + buffers + pipelines + shaders)
-			_fail_init_deferred(ERR_CANT_CREATE)
+			_free_many(rd, resources + sets)
+			call_deferred("_finish_init", ERR_CANT_CREATE, {})
 			return
+		resources.append(set_rid)
+	bundle["step_ab"] = step_ab; bundle["step_ba"] = step_ba
+	bundle["reduce_a"] = reduce_a; bundle["reduce_b"] = reduce_b
+	bundle["reset_set"] = reset_set; bundle["prepare_set"] = prepare_set
+	bundle["finalize_to_a"] = finalize_to_a; bundle["finalize_to_b"] = finalize_to_b
 
-	call_deferred("_finish_init", OK,
-		step_shader, step_pipeline, reduce_shader, reduce_pipeline,
-		prepare_shader, prepare_pipeline, finalize_shader, finalize_pipeline,
-		a, b, src, prm, ctl, step_ab, step_ba, reduce_a, reduce_b,
-		prepare_set, finalize_to_a, finalize_to_b)
-
-
-## Render-thread only.
-func _fail_init_deferred(error: Error) -> void:
-	call_deferred("_finish_init", error,
-		RID(), RID(), RID(), RID(), RID(), RID(), RID(), RID(),
-		RID(), RID(), RID(), RID(), RID(), RID(), RID(), RID(), RID(),
-		RID(), RID(), RID())
+	call_deferred("_finish_init", OK, bundle)
 
 
-func _finish_init(error: Error,
-		step_shader: RID, step_pipeline: RID, reduce_shader: RID, reduce_pipeline: RID,
-		prepare_shader: RID, prepare_pipeline: RID,
-		finalize_shader: RID, finalize_pipeline: RID,
-		a: RID, b: RID, src: RID, prm: RID, ctl: RID,
-		step_ab: RID, step_ba: RID, reduce_a: RID, reduce_b: RID,
-		prepare_set: RID, finalize_to_a: RID, finalize_to_b: RID) -> void:
+func _finish_init(error: Error, bundle: Dictionary) -> void:
 	_init_pending = false
 	if error != OK:
 		_initialized = false
 		initialization_failed.emit(error)
 		return
-	_step_shader = step_shader; _step_pipeline = step_pipeline
-	_reduce_shader = reduce_shader; _reduce_pipeline = reduce_pipeline
-	_prepare_shader = prepare_shader; _prepare_pipeline = prepare_pipeline
-	_finalize_shader = finalize_shader; _finalize_pipeline = finalize_pipeline
-	_state_a = a; _state_b = b; _sources = src; _params = prm; _control = ctl
-	_step_ab = step_ab; _step_ba = step_ba
-	_reduce_a = reduce_a; _reduce_b = reduce_b
-	_prepare_set = prepare_set
-	_finalize_to_a = finalize_to_a; _finalize_to_b = finalize_to_b
+	_step_shader = bundle.step_shader; _step_pipeline = bundle.step_pipeline
+	_reduce_shader = bundle.reduce_shader; _reduce_pipeline = bundle.reduce_pipeline
+	_reset_shader = bundle.reset_shader; _reset_pipeline = bundle.reset_pipeline
+	_prepare_shader = bundle.prepare_shader; _prepare_pipeline = bundle.prepare_pipeline
+	_finalize_shader = bundle.finalize_shader; _finalize_pipeline = bundle.finalize_pipeline
+	_state_a = bundle.state_a; _state_b = bundle.state_b
+	_sources = bundle.sources; _params = bundle.params; _control = bundle.control
+	_step_ab = bundle.step_ab; _step_ba = bundle.step_ba
+	_reduce_a = bundle.reduce_a; _reduce_b = bundle.reduce_b
+	_reset_set = bundle.reset_set; _prepare_set = bundle.prepare_set
+	_finalize_to_a = bundle.finalize_to_a; _finalize_to_b = bundle.finalize_to_b
 	_front_a = true
 	_initialized = true
 	initialized.emit()
 
 
-## Render-thread only. The global RD is submitted by Godot's renderer; no
-## submit()/sync() call belongs here.
+## Render-thread only. Each candidate iteration recomputes characteristic speed
+## from the state produced by the preceding active iteration.
 func _advance_render_thread(front_a: bool, param_bytes: PackedByteArray,
 		step_id: int, cap: int, request_diagnostics: bool) -> void:
 	var rd := RenderingServer.get_rendering_device()
@@ -306,8 +289,7 @@ func _advance_render_thread(front_a: bool, param_bytes: PackedByteArray,
 		return
 
 	rd.buffer_update(_params, 0, param_bytes.size(), param_bytes)
-	var clear_error := rd.buffer_clear(_control, 0, CONTROL_BYTES)
-	if clear_error != OK:
+	if rd.buffer_clear(_control, 0, CONTROL_BYTES) != OK:
 		call_deferred("_finish_advance", step_id, false)
 		return
 
@@ -315,38 +297,45 @@ func _advance_render_thread(front_a: bool, param_bytes: PackedByteArray,
 	var groups_y := int(ceil(float(height) / float(LOCAL_Y)))
 	var compute := rd.compute_list_begin()
 
-	# Pre-step characteristic-speed + health reduction.
-	rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
-	rd.compute_list_bind_uniform_set(compute, _reduce_a if front_a else _reduce_b, 0)
-	_set_u32_push(rd, compute, 0)
-	rd.compute_list_dispatch(compute, groups_x, groups_y, 1)
-	rd.compute_list_add_barrier(compute)
+	for iteration in cap:
+		# Reset only current-iteration reduction scratch.
+		rd.compute_list_bind_compute_pipeline(compute, _reset_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _reset_set, 0)
+		rd.compute_list_dispatch(compute, 1, 1, 1)
+		rd.compute_list_add_barrier(compute)
 
-	# Convert reduction into a CFL-safe substep schedule entirely on GPU.
-	rd.compute_list_bind_compute_pipeline(compute, _prepare_pipeline)
-	rd.compute_list_bind_uniform_set(compute, _prepare_set, 0)
-	rd.compute_list_dispatch(compute, 1, 1, 1)
-	rd.compute_list_add_barrier(compute)
-
-	# Record the maximum candidate sequence. Each shader invocation checks the
-	# GPU-computed control.substeps and only the active prefix writes state.
-	for substep in cap:
-		var input_is_a := front_a if (substep & 1) == 0 else not front_a
-		rd.compute_list_bind_compute_pipeline(compute, _step_pipeline)
-		rd.compute_list_bind_uniform_set(compute, _step_ab if input_is_a else _step_ba, 0)
-		_set_u32_push(rd, compute, substep)
+		# Active steps are always a prefix, therefore iteration parity is identical
+		# to current-state parity until the scheduler finishes the requested time.
+		var input_is_a := front_a if (iteration & 1) == 0 else not front_a
+		rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _reduce_a if input_is_a else _reduce_b, 0)
+		_set_u32_push(rd, compute, 0)
 		rd.compute_list_dispatch(compute, groups_x, groups_y, 1)
 		rd.compute_list_add_barrier(compute)
 
-	# Make the original front buffer authoritative again regardless of odd/even
-	# GPU-selected substep count, so consumers never need an immediate readback.
+		# Recompute a safe dt from this exact state and update remaining macro time.
+		rd.compute_list_bind_compute_pipeline(compute, _prepare_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _prepare_set, 0)
+		_set_u32_push(rd, compute, iteration)
+		rd.compute_list_dispatch(compute, 1, 1, 1)
+		rd.compute_list_add_barrier(compute)
+
+		# No-op automatically once the requested macro time has been consumed.
+		rd.compute_list_bind_compute_pipeline(compute, _step_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _step_ab if input_is_a else _step_ba, 0)
+		_set_u32_push(rd, compute, iteration)
+		rd.compute_list_dispatch(compute, groups_x, groups_y, 1)
+		rd.compute_list_add_barrier(compute)
+
+	# Restore the original CPU-known authoritative RID when an odd number of
+	# adaptive substeps executed.
 	rd.compute_list_bind_compute_pipeline(compute, _finalize_pipeline)
 	rd.compute_list_bind_uniform_set(compute,
 		_finalize_to_a if front_a else _finalize_to_b, 0)
 	rd.compute_list_dispatch(compute, groups_x, groups_y, 1)
 	rd.compute_list_add_barrier(compute)
 
-	# Post-step health metrics are separate from the pre-step CFL reduction.
+	# Final-state diagnostics use the canonical state.
 	rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _reduce_a if front_a else _reduce_b, 0)
 	_set_u32_push(rd, compute, 1)
@@ -358,7 +347,6 @@ func _advance_render_thread(front_a: bool, param_bytes: PackedByteArray,
 		var err := rd.buffer_get_data_async(_control, callback, 0, CONTROL_BYTES)
 		if err != OK:
 			push_warning("FixedHydroGPU: async diagnostic readback request failed (%d)." % int(err))
-
 	call_deferred("_finish_advance", step_id, true)
 
 
@@ -367,7 +355,6 @@ func _finish_advance(step_id: int, success: bool) -> void:
 	if not success:
 		push_error("FixedHydroGPU: failed to record advance %d" % step_id)
 		return
-	# Canonicalization intentionally keeps _front_a unchanged.
 	step_recorded.emit(step_id)
 	advance_recorded.emit(step_id)
 
@@ -375,6 +362,7 @@ func _finish_advance(step_id: int, success: bool) -> void:
 func _on_diagnostics_bytes(bytes: PackedByteArray, step_id: int) -> void:
 	if bytes.size() < CONTROL_BYTES:
 		return
+	var steps := int(bytes.decode_u32(56))
 	var diagnostics := {
 		"pre_max_speed_mps": bytes.decode_float(0),
 		"pre_max_depth_m": bytes.decode_float(4),
@@ -385,12 +373,15 @@ func _on_diagnostics_bytes(bytes: PackedByteArray, step_id: int) -> void:
 		"post_wet_cells": int(bytes.decode_u32(24)),
 		"post_invalid_cells": int(bytes.decode_u32(28)),
 		"requested_dt_s": bytes.decode_float(32),
-		"sub_dt_s": bytes.decode_float(36),
-		"advanced_dt_s": bytes.decode_float(40),
-		"cfl_dt_s": bytes.decode_float(44),
-		"substeps": int(bytes.decode_u32(48)),
-		"max_substeps": int(bytes.decode_u32(52)),
-		"cfl_clamped": bytes.decode_u32(56) != 0,
+		"remaining_dt_s": bytes.decode_float(36),
+		"last_sub_dt_s": bytes.decode_float(40),
+		"advanced_dt_s": bytes.decode_float(44),
+		"min_cfl_dt_s": bytes.decode_float(48),
+		"last_cfl_dt_s": bytes.decode_float(52),
+		"steps_taken": steps,
+		"substeps": steps,
+		"max_substeps": int(bytes.decode_u32(60)),
+		"cfl_clamped": bytes.decode_u32(64) != 0,
 	}
 	call_deferred("_publish_diagnostics", step_id, diagnostics)
 
@@ -408,9 +399,10 @@ func _set_u32_push(rd: RenderingDevice, compute: int, value: int) -> void:
 
 func _all_runtime_rids_valid() -> bool:
 	return _step_pipeline.is_valid() and _reduce_pipeline.is_valid() \
-		and _prepare_pipeline.is_valid() and _finalize_pipeline.is_valid() \
-		and _state_a.is_valid() and _state_b.is_valid() \
-		and _sources.is_valid() and _params.is_valid() and _control.is_valid()
+		and _reset_pipeline.is_valid() and _prepare_pipeline.is_valid() \
+		and _finalize_pipeline.is_valid() and _state_a.is_valid() \
+		and _state_b.is_valid() and _sources.is_valid() \
+		and _params.is_valid() and _control.is_valid()
 
 
 ## Render-thread only.
@@ -430,6 +422,11 @@ func _make_reduce_set(rd: RenderingDevice, shader: RID, state: RID,
 		_storage_uniform(0, state), _storage_uniform(1, ctl),
 		_storage_uniform(2, prm),
 	], shader, 0)
+
+
+## Render-thread only.
+func _make_reset_set(rd: RenderingDevice, shader: RID, ctl: RID) -> RID:
+	return rd.uniform_set_create([_storage_uniform(0, ctl)], shader, 0)
 
 
 ## Render-thread only.
@@ -457,14 +454,16 @@ func _storage_uniform(binding: int, buffer: RID) -> RDUniform:
 
 
 ## Render-thread only.
-func _free_many(rd: RenderingDevice, rids: Array[RID]) -> void:
-	for rid in rids:
-		if rid.is_valid():
-			rd.free_rid(rid)
+func _free_many(rd: RenderingDevice, rids: Array) -> void:
+	for value in rids:
+		if value is RID:
+			var rid: RID = value
+			if rid.is_valid():
+				rd.free_rid(rid)
 
 
 ## Render-thread only.
-func _release_render_thread(rids: Array[RID]) -> void:
+func _release_render_thread(rids: Array) -> void:
 	var rd := RenderingServer.get_rendering_device()
 	if rd != null:
 		_free_many(rd, rids)
@@ -473,22 +472,25 @@ func _release_render_thread(rids: Array[RID]) -> void:
 func release() -> void:
 	if not _initialized and not _step_shader.is_valid():
 		return
-	var rids: Array[RID] = [
-		_step_ab, _step_ba, _reduce_a, _reduce_b, _prepare_set,
+	var rids := [
+		_step_ab, _step_ba, _reduce_a, _reduce_b, _reset_set, _prepare_set,
 		_finalize_to_a, _finalize_to_b,
 		_state_a, _state_b, _sources, _params, _control,
-		_step_pipeline, _reduce_pipeline, _prepare_pipeline, _finalize_pipeline,
-		_step_shader, _reduce_shader, _prepare_shader, _finalize_shader,
+		_step_pipeline, _reduce_pipeline, _reset_pipeline, _prepare_pipeline,
+		_finalize_pipeline,
+		_step_shader, _reduce_shader, _reset_shader, _prepare_shader, _finalize_shader,
 	]
 	_initialized = false
 	_step_pending = false
 	_step_shader = RID(); _step_pipeline = RID()
 	_reduce_shader = RID(); _reduce_pipeline = RID()
+	_reset_shader = RID(); _reset_pipeline = RID()
 	_prepare_shader = RID(); _prepare_pipeline = RID()
 	_finalize_shader = RID(); _finalize_pipeline = RID()
 	_state_a = RID(); _state_b = RID(); _sources = RID(); _params = RID(); _control = RID()
 	_step_ab = RID(); _step_ba = RID(); _reduce_a = RID(); _reduce_b = RID()
-	_prepare_set = RID(); _finalize_to_a = RID(); _finalize_to_b = RID()
+	_reset_set = RID(); _prepare_set = RID()
+	_finalize_to_a = RID(); _finalize_to_b = RID()
 	_latest_diagnostics.clear()
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_release_render_thread").bind(rids))
