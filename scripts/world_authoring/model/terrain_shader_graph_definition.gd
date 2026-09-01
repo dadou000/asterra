@@ -2,10 +2,9 @@ class_name TerrainShaderGraphDefinition
 extends Resource
 ## Serializable node graph used by terrain displacement/material authoring slots.
 ##
-## Production terrain is represented as ordinary graph sources. The default graph
-## is deliberately identity-neutral: it reads the mature renderer/generator stages
-## that already exist and routes them to the output without duplicating work.
-## Authors can then delete, reroute, mask, split or replace those stages.
+## Production terrain is represented as ordinary graph sources. Phase 31 adds an
+## explicit production-stage factory while the older factory remains byte-for-byte
+## compatible with the Phase 29/30 migration chain and its regression tests.
 
 enum Domain {
 	DISPLACEMENT,
@@ -41,10 +40,6 @@ const NODE_CATEGORIES: Array[String] = [
 	CATEGORY_UTILITY,
 ]
 
-# Material inputs are the exact values already available at the production terrain
-# material post-pass. Vector forms are exposed as well as common decoded scalars so
-# the graph can rebuild classification/material logic instead of only tinting the
-# final renderer result.
 const MATERIAL_GAME_INPUTS: Array[String] = [
 	"base_albedo",
 	"base_normal",
@@ -90,9 +85,6 @@ const MATERIAL_GAME_INPUTS: Array[String] = [
 	"time_s",
 ]
 
-# Phase 30 already has authoritative compiler support for generated terrain and the
-# sparse sculpt field. Keeping them here makes that capability discoverable in the
-# actual node picker instead of relying on hidden migration-only strings.
 const DISPLACEMENT_GAME_INPUTS: Array[String] = [
 	"generated_height_m",
 	"sculpt_delta_m",
@@ -102,7 +94,6 @@ const DISPLACEMENT_GAME_INPUTS: Array[String] = [
 	"time_s",
 ]
 
-# Backward-compatible union used by older editor code.
 const GAME_INPUTS: Array[String] = [
 	"generated_height_m",
 	"sculpt_delta_m",
@@ -295,8 +286,34 @@ func create_default_graph(next_domain: int) -> void:
 	revision += 1
 
 func create_production_graph(next_domain: int) -> void:
-	# This graph describes the real production boundary without recomputing it. The
-	# source nodes are direct reads from the existing generator/sculpt/PBR pipeline.
+	# Legacy Phase 29 production representation. Phase 30 intentionally transforms
+	# the displacement GAME_INPUT into generated/sculpt GAME_INPUT nodes. Keep this
+	# stable so historical editors and validation continue to mean what they meant.
+	domain = next_domain
+	nodes.clear()
+	links.clear()
+	if domain == Domain.DISPLACEMENT:
+		displacement_output_mode = DisplacementOutputMode.ABSOLUTE_HEIGHT
+		var source_id: String = add_node("GAME_INPUT", Vector2(90.0, 180.0),
+			{"source":"terrain_height_m"})
+		var output_id: String = add_node("OUTPUT_DISPLACEMENT", Vector2(520.0, 180.0), {})
+		connect_nodes(source_id, 0, output_id, 0)
+	else:
+		displacement_output_mode = DisplacementOutputMode.DELTA
+		var output_id: String = add_node("OUTPUT_MATERIAL", Vector2(650.0, 210.0), {})
+		var sources: Array[String] = [
+			"base_albedo", "base_normal", "base_roughness",
+			"base_metallic", "base_ao", "base_specular",
+		]
+		for port: int in sources.size():
+			var source_id: String = add_node("GAME_INPUT",
+				Vector2(90.0, 55.0 + float(port) * 96.0), {"source":sources[port]})
+			connect_nodes(source_id, 0, output_id, port)
+	revision += 1
+
+func create_production_stage_graph(next_domain: int) -> void:
+	# Phase 31 representation of the exact same production boundary. Dedicated node
+	# types make renderer-owned stages discoverable in the categorized graph UI.
 	domain = next_domain
 	nodes.clear()
 	links.clear()
