@@ -37,7 +37,7 @@ Smoke scene:
 tests/water/Phase1WaterSmoke.tscn
 ```
 
-### Phase 2 — fixed-domain shallow water: adaptive GPU scheduler implemented, parity/reconstruction pending
+### Phase 2 — fixed-domain shallow water: numerical parity gate implemented, reconstruction pending
 
 Implemented numerical core:
 
@@ -58,7 +58,7 @@ Implemented numerical core:
   - consumes the current GPU-selected timestep;
   - candidate dispatches become no-ops after requested macro time is consumed.
 
-Implemented adaptive GPU scheduling/diagnostics:
+Implemented adaptive GPU scheduling/health diagnostics:
 
 - `shaders/water/hydro_reset_reduction.glsl`
   - resets only per-iteration characteristic-speed scratch.
@@ -81,57 +81,61 @@ Implemented adaptive GPU scheduling/diagnostics:
   - global-RenderingDevice compute dispatcher;
   - render-thread resource creation, dispatch and destruction;
   - uses a RID bundle for initialization/failure cleanup;
-  - records one macro advance as:
-
-```text
-for each candidate substep:
-    reset iteration reduction
-        -> reduce current state
-        -> prepare one CFL-safe dt
-        -> conditionally execute SWE step
-
-then:
-    canonicalize ping-pong parity
-        -> reduce final state
-        -> 96-byte async diagnostic readback
-```
-
-  - CFL is therefore not stale across accelerating flood/dam-break flow;
+  - CFL is recomputed on the exact state produced by each prior active substep;
   - all dependent dispatches are separated by compute barriers;
   - no `submit()` or `sync()` calls on the global RenderingDevice;
-  - `advance(dt, max_substeps, request_diagnostics)` is the main scheduler API;
-  - `step(dt)` remains a compatibility wrapper with a one-substep cap;
-  - exposes current conservative-state and control-buffer RIDs for later kernels.
+  - `advance(dt, max_substeps, request_diagnostics)` is the main scheduler API.
 
-Numerical reference scene:
+Implemented parity/debug instrumentation:
+
+- `scripts/water/hydro_state_readback.gd`
+  - explicit debug/test-only full conservative-state readback;
+  - asynchronous `buffer_get_data_async()` path;
+  - one request at a time;
+  - production gameplay does not use this path.
+- `shaders/water/hydro_mass_reduce.glsl`
+  - pairwise 8x8 workgroup depth reduction;
+  - writes one FP32 partial sum per workgroup;
+  - no floating-point atomics required.
+- `shaders/water/hydro_mass_finalize.glsl`
+  - reduces the small partial buffer on GPU;
+  - converts depth sum to cubic metres using cell area.
+- `scripts/water/hydro_volume_diagnostics_gpu.gd`
+  - separate GPU-only volume diagnostic pipeline;
+  - only the final four-byte volume value is read to CPU;
+  - solver CFL/control buffers are untouched by instrumentation.
+
+Reference-only numerical scene:
 
 ```text
 tests/water/HydroReferenceTests.tscn
 ```
 
-It checks:
-
-1. lake-at-rest over uneven bathymetry;
-2. dam-break positivity and mass conservation;
-3. exact uniform-rain volume accounting.
-
-GPU pipeline/scheduler scene:
+GPU pipeline/scheduler smoke scene:
 
 ```text
 tests/water/FixedHydroGPUSmoke.tscn
 ```
 
-It now checks:
+GPU/CPU parity scene:
 
-1. all fixed-domain compute pipelines initialize;
-2. GPU reduction reports the expected wet/invalid cell counts;
-3. a 1 s macro timestep is split into multiple CFL-safe GPU substeps;
-4. the canonical state RID remains stable after unknown odd/even GPU step count;
-5. an intentionally huge timestep with a two-substep cap reports `cfl_clamped`;
-6. the clamped case advances less than the requested timestep instead of violating
-   the stability bound;
-7. post-step invalid-cell count remains zero;
-8. compact asynchronous diagnostic readback completes.
+```text
+tests/water/HydroGPUParityTests.tscn
+```
+
+The parity scene runs multiple macro advances for:
+
+1. lake-at-rest over uneven bathymetry;
+2. wet/dry dam break;
+3. uniform rainfall + infiltration.
+
+For each fixture it verifies:
+
+- cell-by-cell `h`, `hu`, `hv` against `HydroReferenceSolver`;
+- bed elevation remains unchanged;
+- GPU-only reduced water volume agrees with the CPU reference;
+- GPU-only reduced volume agrees with volume reconstructed from the full debug
+  state readback, independently checking reduction indexing/layout.
 
 ## Validation status
 
@@ -140,26 +144,32 @@ these Godot scenes have **not** been executed here. Static review and Godot 4.7 
 matching have been performed, but runtime success must not be inferred until the
 scenes are run with the project's Godot 4.7 build.
 
+Official Godot 4.7 documentation confirms the RenderingDevice API used here:
+`buffer_get_data_async()` and `compute_list_add_barrier()` are available on the
+modern RenderingDevice path. RenderingDevice remains unavailable in headless and
+Compatibility rendering modes.
+
 Suggested local commands:
 
 ```text
 godot --headless --path . tests/water/HydroReferenceTests.tscn
 godot --headless --path . tests/water/Phase1WaterSmoke.tscn
 godot --path . tests/water/FixedHydroGPUSmoke.tscn
+godot --path . tests/water/HydroGPUParityTests.tscn
 ```
 
 Use the executable name/path appropriate for the local Godot 4.7 build.
 
 ## Next Phase 2 tasks
 
-1. Add a test-only async state-buffer readback path.
-2. Compare GPU state numerically against `HydroReferenceSolver` for lake-at-rest,
-   dam break and rainfall fixtures over multiple steps.
-3. Add mass/volume reduction to GPU diagnostics so long GPU-only soak tests can
-   track unexplained volume drift without reading the state grid.
-4. Add fixed-domain state -> dynamic-height/velocity reconstruction into the
+1. Run the parity scene on the project GPU and tune only evidence-based tolerance
+   differences; numerical mismatches must be fixed, not hidden by broad tolerances.
+2. Add fixed-domain state -> dynamic-height/velocity reconstruction into the
    shared `WaterSurfaceResources` texture.
-5. Enable the reconstructed contribution in a dedicated test scene, not in the
-   production ocean by default.
-6. Only after parity/stability: begin sparse tile allocation and active-frontier
+3. Enable the reconstructed contribution in a dedicated visual test scene only;
+   the production ocean remains at `u_dynamic_surface_enabled = 0.0` until the
+   reconstruction and parity tests pass.
+4. Add a long GPU-only closed-basin soak test using the four-byte volume diagnostic
+   to measure accumulated mass drift without full-grid readbacks.
+5. Only after parity/stability: begin sparse tile allocation and active-frontier
    scheduling (Phase 3).
