@@ -3,9 +3,9 @@ extends Node
 ## Phase 3 GPU storage for transient hydrology tiles.
 ##
 ## Slots are fixed-size contiguous ranges in SSBOs. Stable HydroTileKey identity
-## is managed separately by HydroTilePool; recycling a slot never changes world
-## identity. This first atlas deliberately favors simple, inspectable FP32 storage
-## over packing tricks.
+## is mirrored into a portable uvec4-style metadata buffer as (face, level, x, y);
+## the packed 64-bit Morton ID remains a CPU/save identity and is not required by
+## shaders. Recycling a slot never changes world identity outside this binding.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -13,6 +13,7 @@ signal released
 
 const STATE_FLOATS := 4
 const SOURCE_FLOATS := 4
+const METADATA_INTS := 4
 
 var capacity := 0
 var tile_resolution := 0
@@ -22,12 +23,14 @@ var _state_a := RID()
 var _state_b := RID()
 var _sources := RID()
 var _occupancy := RID()
+var _tile_metadata := RID()
 var _initialized := false
 var _init_pending := false
 
 
 func initialize(p_capacity: int, p_tile_resolution: int, p_cell_size_m: float,
-		initial_state := PackedFloat32Array(), initial_occupancy := PackedInt32Array()) -> Error:
+		initial_state := PackedFloat32Array(), initial_occupancy := PackedInt32Array(),
+		initial_metadata := PackedInt32Array()) -> Error:
 	if _init_pending or _initialized:
 		return ERR_BUSY
 	if p_capacity <= 0 or p_tile_resolution <= 0 or p_cell_size_m <= 0.0:
@@ -53,6 +56,12 @@ func initialize(p_capacity: int, p_tile_resolution: int, p_cell_size_m: float,
 	elif occupancy_values.size() != capacity:
 		return ERR_INVALID_PARAMETER
 
+	var metadata_values: PackedInt32Array = initial_metadata
+	if metadata_values.is_empty():
+		metadata_values = _empty_metadata_values()
+	elif metadata_values.size() != capacity * METADATA_INTS:
+		return ERR_INVALID_PARAMETER
+
 	var zero_state := PackedFloat32Array()
 	zero_state.resize(cells * STATE_FLOATS)
 	var zero_sources := PackedFloat32Array()
@@ -60,7 +69,8 @@ func initialize(p_capacity: int, p_tile_resolution: int, p_cell_size_m: float,
 	_init_pending = true
 	RenderingServer.call_on_render_thread(Callable(self, &"_init_render_thread").bind(
 		state_values.to_byte_array(), zero_state.to_byte_array(),
-		zero_sources.to_byte_array(), occupancy_values.to_byte_array()))
+		zero_sources.to_byte_array(), occupancy_values.to_byte_array(),
+		metadata_values.to_byte_array()))
 	return OK
 
 
@@ -92,9 +102,14 @@ func occupancy_rid() -> RID:
 	return _occupancy if _initialized else RID()
 
 
+func tile_metadata_rid() -> RID:
+	return _tile_metadata if _initialized else RID()
+
+
 func gpu_bytes_estimate() -> int:
 	var cells := total_cell_count()
-	return cells * (STATE_FLOATS * 4 * 2 + SOURCE_FLOATS * 4) + capacity * 4
+	return cells * (STATE_FLOATS * 4 * 2 + SOURCE_FLOATS * 4) \
+		+ capacity * (4 + METADATA_INTS * 4)
 
 
 func stats() -> Dictionary:
@@ -106,6 +121,7 @@ func stats() -> Dictionary:
 		"cells_per_tile": cells_per_tile(),
 		"total_cells": total_cell_count(),
 		"gpu_bytes": gpu_bytes_estimate(),
+		"metadata_bytes": capacity * METADATA_INTS * 4,
 	}
 
 
@@ -130,8 +146,64 @@ func set_occupancy(values: PackedInt32Array) -> Error:
 	return OK
 
 
+## Atomically from the policy layer's point of view, publish metadata before
+## setting occupancy. A GPU classifier can never observe active=1 with the prior
+## tile identity after slot recycling.
+func bind_slot_key(slot: int, key: HydroTileKey) -> Error:
+	if not _initialized or key == null or slot < 0 or slot >= capacity:
+		return ERR_INVALID_PARAMETER
+	var metadata := PackedInt32Array([key.face, key.level, key.x, key.y])
+	RenderingServer.call_on_render_thread(Callable(self, &"_bind_slot_render_thread").bind(
+		slot, metadata.to_byte_array()))
+	return OK
+
+
+## Clear occupancy before invalidating metadata so in-flight summary/frontier
+## passes cannot treat a sentinel metadata row as a live tile.
+func unbind_slot(slot: int) -> Error:
+	if not _initialized or slot < 0 or slot >= capacity:
+		return ERR_INVALID_PARAMETER
+	var metadata := PackedInt32Array([-1, 0, 0, 0])
+	RenderingServer.call_on_render_thread(Callable(self, &"_unbind_slot_render_thread").bind(
+		slot, metadata.to_byte_array()))
+	return OK
+
+
+## Full synchronization helper used during bootstrap/test. Incremental production
+## streaming should use bind_slot_key()/unbind_slot() as allocations change.
+func sync_pool(pool: HydroTilePool) -> Error:
+	if not _initialized or pool == null or pool.capacity != capacity:
+		return ERR_INVALID_PARAMETER
+	var occupancy := PackedInt32Array()
+	occupancy.resize(capacity)
+	var metadata := _empty_metadata_values()
+	for slot in capacity:
+		var id := pool.id_for_slot(slot)
+		if id < 0:
+			continue
+		var key := HydroTileKey.unpack(id)
+		occupancy[slot] = 1
+		var o := slot * METADATA_INTS
+		metadata[o] = key.face
+		metadata[o + 1] = key.level
+		metadata[o + 2] = key.x
+		metadata[o + 3] = key.y
+	RenderingServer.call_on_render_thread(Callable(self, &"_sync_identity_render_thread").bind(
+		metadata.to_byte_array(), occupancy.to_byte_array()))
+	return OK
+
+
+func _empty_metadata_values() -> PackedInt32Array:
+	var values := PackedInt32Array()
+	values.resize(capacity * METADATA_INTS)
+	for slot in capacity:
+		values[slot * METADATA_INTS] = -1
+	return values
+
+
 func _init_render_thread(state_a_bytes: PackedByteArray, state_b_bytes: PackedByteArray,
-		source_bytes: PackedByteArray, occupancy_bytes: PackedByteArray) -> void:
+		source_bytes: PackedByteArray, occupancy_bytes: PackedByteArray,
+		metadata_bytes: PackedByteArray) -> void:
 	var rd := RenderingServer.get_rendering_device()
 	if rd == null:
 		call_deferred("_finish_init", ERR_UNAVAILABLE, {})
@@ -140,7 +212,8 @@ func _init_render_thread(state_a_bytes: PackedByteArray, state_b_bytes: PackedBy
 	var b := rd.storage_buffer_create(state_b_bytes.size(), state_b_bytes)
 	var src := rd.storage_buffer_create(source_bytes.size(), source_bytes)
 	var occ := rd.storage_buffer_create(occupancy_bytes.size(), occupancy_bytes)
-	var created := [a, b, src, occ]
+	var meta := rd.storage_buffer_create(metadata_bytes.size(), metadata_bytes)
+	var created := [a, b, src, occ, meta]
 	for value in created:
 		var rid: RID = value
 		if not rid.is_valid():
@@ -148,7 +221,8 @@ func _init_render_thread(state_a_bytes: PackedByteArray, state_b_bytes: PackedBy
 			call_deferred("_finish_init", ERR_CANT_CREATE, {})
 			return
 	call_deferred("_finish_init", OK, {
-		"state_a": a, "state_b": b, "sources": src, "occupancy": occ,
+		"state_a": a, "state_b": b, "sources": src,
+		"occupancy": occ, "tile_metadata": meta,
 	})
 
 
@@ -162,6 +236,7 @@ func _finish_init(error: Error, bundle: Dictionary) -> void:
 	_state_b = bundle["state_b"]
 	_sources = bundle["sources"]
 	_occupancy = bundle["occupancy"]
+	_tile_metadata = bundle["tile_metadata"]
 	_initialized = true
 	initialized.emit()
 
@@ -172,6 +247,57 @@ func _update_buffer_render_thread(rid: RID, offset: int, bytes: PackedByteArray)
 		var err := rd.buffer_update(rid, offset, bytes.size(), bytes)
 		if err != OK:
 			push_error("SparseHydroAtlasGPU: buffer update failed (%d)" % int(err))
+
+
+func _bind_slot_render_thread(slot: int, metadata_bytes: PackedByteArray) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	var metadata_offset := slot * METADATA_INTS * 4
+	var err := rd.buffer_update(_tile_metadata, metadata_offset,
+		metadata_bytes.size(), metadata_bytes)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: metadata bind failed (%d)" % int(err))
+		return
+	var occupied := PackedInt32Array([1]).to_byte_array()
+	err = rd.buffer_update(_occupancy, slot * 4, 4, occupied)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: occupancy bind failed (%d)" % int(err))
+
+
+func _unbind_slot_render_thread(slot: int, metadata_bytes: PackedByteArray) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	var empty := PackedInt32Array([0]).to_byte_array()
+	var err := rd.buffer_update(_occupancy, slot * 4, 4, empty)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: occupancy unbind failed (%d)" % int(err))
+		return
+	var metadata_offset := slot * METADATA_INTS * 4
+	err = rd.buffer_update(_tile_metadata, metadata_offset,
+		metadata_bytes.size(), metadata_bytes)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: metadata unbind failed (%d)" % int(err))
+
+
+func _sync_identity_render_thread(metadata_bytes: PackedByteArray,
+		occupancy_bytes: PackedByteArray) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	# Disable all ownership first; publish full metadata; then publish occupancy.
+	var clear_error := rd.buffer_clear(_occupancy, 0, capacity * 4)
+	if clear_error != OK:
+		push_error("SparseHydroAtlasGPU: identity occupancy clear failed (%d)" % int(clear_error))
+		return
+	var err := rd.buffer_update(_tile_metadata, 0, metadata_bytes.size(), metadata_bytes)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: identity metadata sync failed (%d)" % int(err))
+		return
+	err = rd.buffer_update(_occupancy, 0, occupancy_bytes.size(), occupancy_bytes)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: identity occupancy sync failed (%d)" % int(err))
 
 
 func _free_many(rd: RenderingDevice, values: Array) -> void:
@@ -185,9 +311,10 @@ func _free_many(rd: RenderingDevice, values: Array) -> void:
 func release() -> void:
 	if not _initialized and not _state_a.is_valid():
 		return
-	var rids := [_state_a, _state_b, _sources, _occupancy]
+	var rids := [_state_a, _state_b, _sources, _occupancy, _tile_metadata]
 	_initialized = false
-	_state_a = RID(); _state_b = RID(); _sources = RID(); _occupancy = RID()
+	_state_a = RID(); _state_b = RID(); _sources = RID()
+	_occupancy = RID(); _tile_metadata = RID()
 	RenderingServer.call_on_render_thread(Callable(self, &"_release_render_thread").bind(rids))
 	released.emit()
 
