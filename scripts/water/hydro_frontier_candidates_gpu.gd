@@ -6,6 +6,9 @@ extends Node
 ## candidate snapshots stable (face, level, x, y) identity beside the transient
 ## source slot, allowing delayed readbacks to detect slot recycling safely.
 ## Candidate flux is max(actual advective Q, predictive dry-neighbor wetting Q).
+##
+## When canonical state + tile resolution are supplied, the queue also snapshots
+## max(h+bed) on the emitting source edge for terrain-aware reachability policy.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -15,11 +18,12 @@ signal queue_failed(request_id: int, error: Error)
 signal released
 
 const HEADER_BYTES := 16
-const ENTRY_BYTES := 32
+const ENTRY_BYTES := 48
 const LOCAL_X := 64
 
 var _summary := RID()
 var _metadata := RID()
+var _state := RID()
 var _shader := RID()
 var _pipeline := RID()
 var _queue := RID()
@@ -28,6 +32,7 @@ var _uniform_set := RID()
 var _capacity := 0
 var _max_candidates := 0
 var _threshold_m3s := 0.01
+var _tile_resolution := 0
 var _initialized := false
 var _init_pending := false
 var _dispatch_pending := false
@@ -35,8 +40,12 @@ var _readback_pending := false
 var _next_request_id := 1
 
 
+## state_rid/tile_resolution are optional for compatibility with older isolated
+## tests. Without them candidates expose source_surface_m=-FLT_MAX and production
+## terrain reachability therefore fails closed.
 func initialize(summary_rid: RID, metadata_rid: RID, capacity: int,
-		threshold_m3s: float = 0.01) -> Error:
+		threshold_m3s: float = 0.01, state_rid: RID = RID(),
+		tile_resolution: int = 0) -> Error:
 	if _init_pending or _initialized or _dispatch_pending or _readback_pending:
 		return ERR_BUSY
 	if not summary_rid.is_valid() or not metadata_rid.is_valid() or capacity <= 0:
@@ -52,9 +61,11 @@ func initialize(summary_rid: RID, metadata_rid: RID, capacity: int,
 
 	_summary = summary_rid
 	_metadata = metadata_rid
+	_state = state_rid if state_rid.is_valid() else summary_rid
 	_capacity = capacity
 	_max_candidates = capacity * 4
 	_threshold_m3s = maxf(threshold_m3s, 0.0)
+	_tile_resolution = maxi(tile_resolution, 0) if state_rid.is_valid() else 0
 	_init_pending = true
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_init_render_thread").bind(spirv))
@@ -103,7 +114,7 @@ func _init_render_thread(spirv: RDShaderSPIRV) -> void:
 	var queue_bytes := PackedByteArray()
 	queue_bytes.resize(HEADER_BYTES + _max_candidates * ENTRY_BYTES)
 	var params_values := PackedFloat32Array([
-		float(_capacity), _threshold_m3s, float(_max_candidates), 0.0,
+		float(_capacity), _threshold_m3s, float(_max_candidates), float(_tile_resolution),
 	])
 	var queue := rd.storage_buffer_create(queue_bytes.size(), queue_bytes)
 	var params := rd.storage_buffer_create(16, params_values.to_byte_array())
@@ -116,6 +127,7 @@ func _init_render_thread(spirv: RDShaderSPIRV) -> void:
 		_storage_uniform(1, _metadata),
 		_storage_uniform(2, queue),
 		_storage_uniform(3, params),
+		_storage_uniform(4, _state),
 	], shader, 0)
 	if not set_rid.is_valid():
 		_free_many(rd, [queue, params, pipeline, shader])
@@ -199,6 +211,7 @@ func _on_queue_bytes(bytes: PackedByteArray, request_id: int) -> void:
 			"x": int(bytes.decode_u32(o + 20)),
 			"y": int(bytes.decode_u32(o + 24)),
 			"predictive_wetting": (flags & 1) != 0,
+			"source_surface_m": bytes.decode_float(o + 32),
 		})
 	call_deferred("_publish_candidates", request_id, candidates, overflow)
 
@@ -238,7 +251,7 @@ func release() -> void:
 	_readback_pending = false
 	_uniform_set = RID(); _queue = RID(); _params = RID()
 	_pipeline = RID(); _shader = RID()
-	_summary = RID(); _metadata = RID()
+	_summary = RID(); _metadata = RID(); _state = RID()
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_release_render_thread").bind(rids))
 	released.emit()
