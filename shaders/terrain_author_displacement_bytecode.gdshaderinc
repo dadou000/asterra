@@ -39,6 +39,14 @@ float ad_terrain_fbm(vec3 direction, float scale, int seed, int passes) {
 	return normalizer > 0.0 ? total / normalizer : 0.0;
 }
 
+float ad_wrap_degrees(float degrees) {
+	return mod(degrees + 180.0, 360.0) - 180.0;
+}
+
+float ad_positive_arc_degrees(float from_deg, float to_deg) {
+	return mod(to_deg - from_deg + 360.0, 360.0);
+}
+
 float ad_latitude_mask(vec3 direction, vec4 p) {
 	vec3 d = normalize(direction);
 	float latitude_deg = asin(clamp(d.y, -1.0, 1.0)) * 57.29577951308232;
@@ -52,7 +60,39 @@ float ad_latitude_mask(vec3 direction, vec4 p) {
 		upper = 1.0 - smoothstep(north_deg, north_deg + feather_deg, latitude_deg);
 	}
 	float value = clamp(lower * upper, 0.0, 1.0);
-	return p.w >= 0.5 ? 1.0 - value : value;
+	return mod(round(p.w), 2.0) >= 0.5 ? 1.0 - value : value;
+}
+
+float ad_longitude_mask(vec3 direction, vec4 p) {
+	vec3 d = normalize(direction);
+	// 0 degrees is +Z, +90 degrees is +X. Work in a positive eastward arc so
+	// west > east naturally represents a band crossing the +/-180 degree seam.
+	float longitude_deg = atan(d.x, d.z) * 57.29577951308232;
+	float west_deg = ad_wrap_degrees(p.x);
+	float east_deg = ad_wrap_degrees(p.y);
+	float feather_deg = max(p.z, 0.0);
+	float span_deg = ad_positive_arc_degrees(west_deg, east_deg);
+	float along_deg = ad_positive_arc_degrees(west_deg, longitude_deg);
+	float value = 0.0;
+	if (span_deg <= 1e-6) {
+		// Equal edges intentionally mean a full 360 degree band, not an empty mask.
+		value = 1.0;
+	} else if (along_deg <= span_deg) {
+		value = 1.0;
+		if (feather_deg > 1e-6) {
+			float from_west = along_deg;
+			float from_east = span_deg - along_deg;
+			value = min(smoothstep(0.0, feather_deg, from_west),
+					smoothstep(0.0, feather_deg, from_east));
+		}
+	} else if (feather_deg > 1e-6) {
+		float after_east = along_deg - span_deg;
+		float before_west = 360.0 - along_deg;
+		float edge_distance = min(after_east, before_west);
+		value = 1.0 - smoothstep(0.0, feather_deg, edge_distance);
+	}
+	value = clamp(value, 0.0, 1.0);
+	return mod(round(p.w), 2.0) >= 0.5 ? 1.0 - value : value;
 }
 
 float ad_reg(float values[AUTHOR_DISP_MAX_INSTRUCTIONS], int index, int current) {
@@ -102,7 +142,7 @@ float author_displacement_height_with_sculpt(vec3 direction, float base_height_m
 		else if (op == 24) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float channel = clamp(1.0 - abs(field), 0.0, 1.0); v = a - channel * channel * channel * p.y; }
 		else if (op == 25) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0); v = a + deposit * deposit * p.y; }
 		else if (op == 26) v = sculpt_delta_m;
-		else if (op == 27) v = ad_latitude_mask(direction, p);
+		else if (op == 27) v = round(p.w) >= 2.0 ? ad_longitude_mask(direction, p) : ad_latitude_mask(direction, p);
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];
