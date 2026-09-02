@@ -30,7 +30,10 @@ var identity_bridge: SparseHydroIdentityBridge
 var runtime: SparseHydrologyRuntime
 var volume_diagnostic: SparseHydroTileVolumeDiagnosticsGPU
 
-var minimum_transfer_volume_m3 := 1.0e-7
+## Zero by default: every positive GPU-measured parcel participates in a real
+## incoming coarse transaction. Tests/debug may raise this only when they explicitly
+## accept that sub-threshold water is treated as numerically dry.
+var minimum_transfer_volume_m3 := 0.0
 
 var _initialized := false
 var _busy := false
@@ -176,8 +179,8 @@ func _on_tile_volume_ready(request_id: int, slot: int, volume_m3: float) -> void
 		return
 	_fine_volume_m3 = maxf(volume_m3, 0.0)
 
-	# A dry tile has no representation parcel to transfer. It may be unpublished
-	# directly while the sparse runtime is paused.
+	# An exactly dry tile has no representation parcel to transfer. A positive
+	# measured value follows the transactional path by default, even when tiny.
 	if _fine_volume_m3 <= maxf(minimum_transfer_volume_m3, 0.0):
 		if not scheduler.force_release(_key, "planet_demotion_dry"):
 			_fail(ERR_CANT_ACQUIRE_RESOURCE, "dry_release")
