@@ -69,12 +69,18 @@ func _validate() -> String:
 		runtime.free()
 		return "longitude mask did not preserve exact [0,100] m conservative bounds"
 
+	# Interior and both exact edges remain fully selected. Feather is exterior-only,
+	# matching Latitude Band: 5 degrees outside a 10 degree feather gives 0.5.
 	var ordinary_samples: Array[Dictionary] = [
 		{"lon":0.0, "expected":100.0},
-		{"lon":-40.0, "expected":50.0},
-		{"lon":40.0, "expected":50.0},
-		{"lon":-45.0, "expected":0.0},
-		{"lon":45.0, "expected":0.0},
+		{"lon":-40.0, "expected":100.0},
+		{"lon":40.0, "expected":100.0},
+		{"lon":-45.0, "expected":100.0},
+		{"lon":45.0, "expected":100.0},
+		{"lon":-50.0, "expected":50.0},
+		{"lon":50.0, "expected":50.0},
+		{"lon":-55.0, "expected":0.0},
+		{"lon":55.0, "expected":0.0},
 		{"lon":90.0, "expected":0.0},
 	]
 	for sample: Dictionary in ordinary_samples:
