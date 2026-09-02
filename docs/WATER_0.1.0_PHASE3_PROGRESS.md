@@ -42,8 +42,7 @@ This prevents a new tile from becoming solver-visible before its state is valid.
   - source terms;
   - occupancy;
   - stable `(face, level, x, y)` metadata per transient slot;
-  - `stage_slot_state()` initializes both A and B while a slot remains unpublished,
-    preventing stale recycled water from leaking into a new owner.
+  - `stage_slot_state()` remains as a legacy/test CPU bootstrap path.
 - `HydroTileActivityGPU`
   - compact per-tile depth, velocity, kinetic activity and wet/invalid count;
   - keeps **actual outward advective Q** on W/E/S/N;
@@ -61,9 +60,9 @@ This prevents a new tile from becoming solver-visible before its state is valid.
     for conservative handoff.
 
 The predictive wetting term fixes an important frontier edge case: stationary water
-with hydrostatic head can now request an adjacent dry tile even before a nonzero
-outward `hu/hv` already exists. Reachability still filters cliffs, high banks,
-levees and other impossible destinations.
+with hydrostatic head can request an adjacent dry tile even before a nonzero outward
+`hu/hv` already exists. Reachability still filters cliffs, high banks, levees and
+other impossible destinations.
 
 ### Resident connectivity
 
@@ -174,8 +173,47 @@ Multiple incoming frontier candidates for the same destination are grouped: the
 destination is staged once, can receive conservative seeds from multiple source
 edges, and is activated only after its final seed.
 
-A failed/missing destination terrain initializer cancels the reservation rather
-than publishing arbitrary stale state.
+A failed/missing destination initializer cancels the reservation rather than
+publishing arbitrary stale state.
+
+### GPU terrain / bathymetry reconstruction
+
+Added:
+
+```text
+shaders/water/hydro_terrain_bed_init.glsl
+scripts/water/hydro_terrain_bed_gpu.gd
+```
+
+Production frontier allocation no longer needs to upload a complete dry bed/state
+tile from CPU. `HydroTerrainBedGPU` samples the already-resident
+`Planet.global_height_texture` directly on the main RenderingDevice and rebuilds
+the same deterministic procedural detail spectrum as `gpu_terrain_height.gdshaderinc`.
+
+For every cell in the reserved tile it computes cube-sphere cell-centre direction
+from the stable `HydroTileKey`, evaluates pristine bed elevation, applies the sparse
+runtime terrain-edit offset, and writes in one dispatch:
+
+```text
+atlas A = vec4(0, 0, 0, bed)
+atlas B = vec4(0, 0, 0, bed)
+sources = vec4(0)
+```
+
+The slot remains `ALLOCATING` and GPU occupancy remains zero throughout this pass.
+The following conservative handoff is queued after the terrain dispatch; only after
+seeding completes is identity/occupancy published.
+
+The macro terrain and procedural bed are therefore GPU-only. Current `Deltas` are
+still a sparse CPU dictionary, so the initializer uploads only a tiny
+`tile_resolution^2` float offset patch for edited terrain. An unmodified tile sends
+only zero offsets, not a complete height/state field. A future Deltas GPU mirror can
+remove even this small transfer without changing the frontier lifecycle contract.
+
+`HydroFrontierActivationPipeline` now accepts both:
+
+- legacy `PackedFloat32Array` destination providers for isolated tests;
+- queued GPU initializer dictionaries for the production terrain path.
 
 ## Tests added for Phase 3
 
@@ -194,10 +232,11 @@ tests/water/SparseHydroGPUSmoke.tscn
 tests/water/SparseHydroConnectedStep.tscn
 tests/water/SparseHydroSeamStep.tscn
 tests/water/SparseHydroAdaptiveSmoke.tscn
+tests/water/HydroTerrainBedGPUSmoke.tscn
 tests/water/SparseHydroFrontierHandoff.tscn
 ```
 
-`SparseHydroGPUSmoke` now verifies both actual boundary discharge and predictive
+`SparseHydroGPUSmoke` verifies both actual boundary discharge and predictive
 hydrostatic wetting candidates while ensuring unoccupied/dry slots produce none.
 
 `SparseHydroConnectedStep` verifies water transfer across a resident same-face
@@ -217,8 +256,18 @@ different local momentum vectors; the seam must remain numerically quiet.
 - closed-tile water mass remains conserved;
 - canonical commit clears stale unoccupied state.
 
-`SparseHydroFrontierHandoff` is the first end-to-end self-expanding flood gate. It
-uses a rotated +X -> polar-face seam and validates:
+`HydroTerrainBedGPUSmoke` uses a synthetic six-face RF macro terrain with a distinct
+constant elevation per face plus explicit sparse delta offsets. It verifies that:
+
+- the correct cube face is sampled;
+- h/hu/hv are reset to zero;
+- bed equals macro elevation + delta;
+- A and B receive the same initialized bed;
+- source terms are cleared;
+- no full CPU bed/state tile participates in reconstruction.
+
+`SparseHydroFrontierHandoff` is the end-to-end self-expanding flood gate. It now uses
+`HydroTerrainBedGPU` rather than a CPU-built flat destination state and validates:
 
 ```text
 occupied source
@@ -226,7 +275,7 @@ occupied source
   -> GPU frontier queue
   -> reachability permits one seam only
   -> destination reserved but unpublished
-  -> stale destination storage overwritten by staged dry terrain state
+  -> GPU terrain bed reconstruction overwrites stale recycled storage
   -> conservative water transfer
   -> physical parcel momentum preserved across rotated face frame
   -> destination activated
@@ -254,6 +303,7 @@ godot --path . tests/water/SparseHydroGPUSmoke.tscn
 godot --path . tests/water/SparseHydroConnectedStep.tscn
 godot --path . tests/water/SparseHydroSeamStep.tscn
 godot --path . tests/water/SparseHydroAdaptiveSmoke.tscn
+godot --path . tests/water/HydroTerrainBedGPUSmoke.tscn
 godot --path . tests/water/SparseHydroFrontierHandoff.tscn
 ```
 
@@ -261,30 +311,41 @@ Use the executable path/name appropriate for the local Godot 4.7 build.
 
 ## Next Phase 3 integration
 
-The sparse flood can now expand conservatively, but the activation pipeline's
-`destination_state_provider` is intentionally a temporary abstraction. The test
-uses a CPU-built flat dry tile; production must not upload full terrain tiles from
-CPU for every frontier wake.
-
-The next implementation should therefore provide **GPU destination terrain/bathymetry
-reconstruction** for an ALLOCATING slot:
+The sparse flood can now allocate, reconstruct terrain, pre-wet, publish, and
+continue solving without a full CPU bed upload. The next implementation should wrap
+the individual pieces into one persistent runtime controller:
 
 ```text
-HydroTileKey(face, level, x, y)
-          |
-          v
-planet/cube-sphere cell coordinates
-          |
-          v
-procedural terrain + TerrainDeltas sampling
-          |
-          v
-write dry vec4(0,0,0,bed) directly into atlas A+B
-          |
-          v
-conservative frontier handoff
+carry pending simulation time
+        |
+        v
+SparseHydroStepGPU.advance()
+        |
+        v
+HydroTileActivityGPU.classify()
+        |
+        v
+HydroFrontierCandidatesGPU.generate()
+        |
+        v
+HydroFrontierActivationPipeline
+  -> GPU terrain stage
+  -> conservative handoff
+  -> connectivity publish
+        |
+        v
+feed activity into settle/sleep policy
+        |
+        +----> repeat with any CFL remainder
 ```
 
-After that, wrap `advance -> classify -> frontier -> handoff -> connectivity` into a
-persistent sparse-hydrology runtime loop and carry any CFL remainder forward rather
-than requiring test/manual orchestration.
+That controller should own macro simulation time, carry `remaining_dt_s` when a CFL
+substep cap is hit, prevent overlapping GPU phases, and make frontier expansion an
+ordinary part of every hydrology tick rather than test/manual orchestration.
+
+After the runtime loop is stable, the next storage/terrain tasks are:
+
+1. mirror sparse `Deltas` on GPU so edited offsets also require no CPU patch;
+2. invalidate/reconstruct affected active hydrology tiles on `Deltas.region_changed`;
+3. begin conservative physical-LOD restriction/prolongation/refluxing between
+   different hydrology tile resolutions.
