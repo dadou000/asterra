@@ -14,7 +14,7 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_phase30.gd"
 ## remain authoritative on both sides of the A/B comparison.
 
 const BOUNDED_DISPLACEMENT_RUNTIME := preload(
-	"res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd")
+	"res://scripts/world_authoring/terrain_displacement_runtime_phase41.gd")
 const TERRAIN_PREVIEW_META := &"terrain_graph_preview_enabled"
 
 var _displacement_guard_m: float = LOD_SURFACE_GUARD_M
