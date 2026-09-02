@@ -3,9 +3,9 @@ extends Node
 ##
 ## Two resident tiles on different cube faces contain the same physical uniform
 ## current, but their stored (hu,hv) vectors are expressed in different face-local
-## frames. The seam shader must reverse the edge index when required and rotate the
-## destination momentum into the source frame. If either mapping is wrong, the
-## otherwise-uniform seam immediately develops a depth/momentum discontinuity.
+## frames. This case deliberately crosses +X north into a polar face so the local
+## solver axes rotate across the seam. A missing momentum rotation therefore
+## creates an immediate numerical wave instead of accidentally passing.
 
 const CAPACITY := 2
 const TILE_RES := 8
@@ -15,6 +15,7 @@ const DT := 0.01
 const TIMEOUT_FRAMES := 1200
 const STATE_TOLERANCE := 2.0e-5
 const MASS_TOLERANCE := 2.0e-3
+const SOURCE_DIRECTION := HydroTileTopology.DIR_NORTH
 
 var _pool: HydroTilePool
 var _atlas: SparseHydroAtlasGPU
@@ -39,14 +40,18 @@ func _ready() -> void:
 
 	const LEVEL := 5
 	var side := 1 << LEVEL
-	_source = HydroTileKey.new(CubeSphere.FACE_PX, LEVEL, side - 1, side >> 1)
-	_link = HydroTileTopology.neighbor(_source, HydroTileTopology.DIR_EAST)
+	_source = HydroTileKey.new(CubeSphere.FACE_PX, LEVEL, side >> 1, side - 1)
+	_link = HydroTileTopology.neighbor(_source, SOURCE_DIRECTION)
 	_require(not _link.is_empty() and bool(_link["crossed_face"]),
 		"selected source did not resolve across a cube seam")
 	if _finished:
 		return
 	_destination = _link["key"] as HydroTileKey
 	var destination_direction := int(_link["destination_direction"])
+	_require(destination_direction != HydroTileTopology.opposite_direction(SOURCE_DIRECTION),
+		"selected seam did not rotate local edge axes; test would be too weak")
+	if _finished:
+		return
 	var back := HydroTileTopology.neighbor(_destination, destination_direction)
 	_require(not back.is_empty() and (back["key"] as HydroTileKey).equals(_source),
 		"seam reciprocal topology missing")
@@ -55,15 +60,17 @@ func _ready() -> void:
 
 	# Physical current in source coordinates: both normal and tangential components
 	# are non-zero so a bad 90-degree rotation or tangent reversal is observable.
-	_source_q = HydroEdgeFrame.edge_normal(HydroTileTopology.DIR_EAST) * 0.40 \
-		+ HydroEdgeFrame.edge_tangent(HydroTileTopology.DIR_EAST) * 0.15
+	_source_q = HydroEdgeFrame.edge_normal(SOURCE_DIRECTION) * 0.40 \
+		+ HydroEdgeFrame.edge_tangent(SOURCE_DIRECTION) * 0.15
 	_destination_q = HydroEdgeFrame.momentum_to_source(_source_q,
 		destination_direction, int(back["destination_direction"]),
 		int(back["edge_orientation"]))
 	var mapped_back := HydroEdgeFrame.momentum_across_link(
-		_destination_q, HydroTileTopology.DIR_EAST, _link)
+		_destination_q, SOURCE_DIRECTION, _link)
 	_require(mapped_back.distance_to(_source_q) < 1.0e-7,
 		"CPU seam frame construction is not reciprocal")
+	_require(_destination_q.distance_to(_source_q) > 0.1,
+		"seam test did not produce a meaningfully rotated local momentum vector")
 	if _finished:
 		return
 
@@ -118,7 +125,7 @@ func _on_connectivity_initialized() -> void:
 	var arrays := SparseHydroConnectivityGPU.build_arrays(_pool)
 	var slots := arrays["neighbor_slots"] as PackedInt32Array
 	var links := arrays["neighbor_links"] as PackedInt32Array
-	var source_index := HydroTileTopology.DIR_EAST
+	var source_index := SOURCE_DIRECTION
 	_require(slots[source_index] == 1, "source seam does not point to destination slot")
 	_require(SparseHydroConnectivityGPU.unpack_destination_direction(links[source_index])
 		== int(_link["destination_direction"]), "GPU destination edge encoding mismatch")
@@ -163,7 +170,7 @@ func _on_state_ready(_request_id: int, state: PackedFloat32Array) -> void:
 	_require(absf(final_mass - _initial_mass) <= MASS_TOLERANCE,
 		"cube seam step changed total water mass delta=%.9g" % (final_mass - _initial_mass))
 
-	var source_cell := Vector2i(TILE_RES - 1, MID)
+	var source_cell := _edge_cell(SOURCE_DIRECTION, MID)
 	var destination_k := TILE_RES - 1 - MID \
 		if int(_link["edge_orientation"]) < 0 else MID
 	var destination_cell := _edge_cell(int(_link["destination_direction"]), destination_k)
@@ -184,7 +191,9 @@ func _on_state_ready(_request_id: int, state: PackedFloat32Array) -> void:
 
 	_finished = true
 	print("SPARSE_HYDRO_SEAM_STEP: PASS source=", _source,
-		" destination=", _destination, " orientation=", _link["edge_orientation"])
+		" destination=", _destination, " destination_edge=", _link["destination_direction"],
+		" orientation=", _link["edge_orientation"], " q_src=", _source_q,
+		" q_dst=", _destination_q)
 	_cleanup()
 	get_tree().quit(0)
 
@@ -217,7 +226,8 @@ func _fill_uniform_tile(state: PackedFloat32Array, slot: int, depth: float,
 
 func _sum_depth(state: PackedFloat32Array) -> float:
 	var total := 0.0
-	for i in CAPACITY * TILE_RES * TILE_RES:
+	var cell_count := CAPACITY * TILE_RES * TILE_RES
+	for i in cell_count:
 		total += float(state[i * 4])
 	return total
 
