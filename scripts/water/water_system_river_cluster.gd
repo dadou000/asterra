@@ -1,9 +1,9 @@
 extends "res://scripts/water/water_system_river_collapse_production.gd"
 ## Final production facade preferring contiguous multi-tile river refinement.
 ##
-## Public river APIs stay unchanged. promote_coarse_river_reach() now requests a
-## short cluster when possible and emits the existing river_reach_promotion_completed
-## signal, so the cluster-aware continuous coupling registers it transparently.
+## Public river APIs stay unchanged. Cluster coupling registration is performed by
+## the promotion bridge before sparse runtime resume, closing the brief state where
+## fine tiles were visible while the coarse reach still lacked its refinement hole.
 
 var default_river_cluster_tiles := 3
 var _river_cluster_promotion: PlanetRiverReachClusterPromotionBridge
@@ -68,15 +68,35 @@ func gpu_stats() -> Dictionary:
 		"default_tiles": default_river_cluster_tiles,
 		"free_member_slots": river_cluster_free_member_slots(),
 		"capacity_available": river_cluster_member_capacity_available(),
+		"registration_before_runtime_resume": true,
 		"fallback": "single_tile_river_promotion",
 	}
 	return out
 
 
+## The parent connected this virtual method to river_reach_promotion_completed.
+## Cluster reports are already registered synchronously inside their bridge; legacy
+## single-tile reports still use the inherited post-promotion registration path.
+func _on_river_promotion_for_coupling(report: Dictionary) -> void:
+	var cell := int(report.get("cell", -1))
+	if _river_reach_coupling != null and cell >= 0 \
+			and not _river_reach_coupling.registered_reach(cell).is_empty():
+		return
+	super._on_river_promotion_for_coupling(report)
+
+
+func _register_cluster_before_runtime_resume(report: Dictionary) -> int:
+	if not (_river_reach_coupling is HydroRiverReachClusterCoupling):
+		return ERR_UNCONFIGURED
+	return (_river_reach_coupling as HydroRiverReachClusterCoupling) \
+		.register_promoted_cluster(report)
+
+
 func _try_bind_river_cluster_promotion() -> void:
 	if _river_cluster_promotion != null or not sparse_runtime_available() \
 			or not river_reach_coupling_available() or not PersistentHydrologySystem.available() \
-			or not (PersistentHydrologySystem.store() is PlanetHydrologyRiverClusterStore):
+			or not (PersistentHydrologySystem.store() is PlanetHydrologyRiverClusterStore) \
+			or not (_river_reach_coupling is HydroRiverReachClusterCoupling):
 		return
 	var runtime := sparse_runtime()
 	if runtime == null or runtime.terrain_bed == null or not runtime.terrain_bed.initialized_ok():
@@ -84,6 +104,7 @@ func _try_bind_river_cluster_promotion() -> void:
 	var bridge := PlanetRiverReachClusterPromotionBridge.new()
 	bridge.name = "PlanetRiverReachClusterPromotionBridge"
 	bridge.default_cluster_tiles = default_river_cluster_tiles
+	bridge.set_registration_callback(Callable(self, &"_register_cluster_before_runtime_resume"))
 	_river_cluster_promotion = bridge
 	add_child(bridge)
 	bridge.promotion_completed.connect(func(_request_id: int, report: Dictionary):
