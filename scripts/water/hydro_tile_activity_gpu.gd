@@ -30,12 +30,13 @@ var _dry_eps := 1.0e-5
 var _initialized := false
 var _init_pending := false
 var _dispatch_pending := false
+var _readback_pending := false
 var _next_request_id := 1
 
 
 func initialize(state_rid: RID, occupancy_rid: RID, capacity: int,
 		tile_resolution: int, cell_size_m: float, dry_eps: float = 1.0e-5) -> Error:
-	if _init_pending or _dispatch_pending or _initialized:
+	if _init_pending or _dispatch_pending or _readback_pending or _initialized:
 		return ERR_BUSY
 	if not state_rid.is_valid() or not occupancy_rid.is_valid() \
 			or capacity <= 0 or tile_resolution <= 0 or cell_size_m <= 0.0:
@@ -66,7 +67,7 @@ func initialized_ok() -> bool:
 
 
 func pending() -> bool:
-	return _dispatch_pending
+	return _dispatch_pending or _readback_pending
 
 
 func summary_rid() -> RID:
@@ -74,11 +75,12 @@ func summary_rid() -> RID:
 
 
 func classify(request_readback: bool = false) -> int:
-	if not _initialized or _dispatch_pending:
+	if not _initialized or _dispatch_pending or _readback_pending:
 		return -1
 	var request_id := _next_request_id
 	_next_request_id += 1
 	_dispatch_pending = true
+	_readback_pending = request_readback
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_classify_render_thread").bind(request_id, request_readback))
 	return request_id
@@ -165,6 +167,7 @@ func _classify_render_thread(request_id: int, request_readback: bool) -> void:
 func _finish_classification(request_id: int, error: Error) -> void:
 	_dispatch_pending = false
 	if error != OK:
+		_readback_pending = false
 		classification_failed.emit(request_id, error)
 		return
 	classification_recorded.emit(request_id)
@@ -194,10 +197,12 @@ func _on_summary_bytes(bytes: PackedByteArray, request_id: int) -> void:
 
 
 func _publish_summaries(request_id: int, summaries: Array[Dictionary]) -> void:
+	_readback_pending = false
 	summaries_ready.emit(request_id, summaries)
 
 
 func _publish_bad_readback(request_id: int) -> void:
+	_readback_pending = false
 	classification_failed.emit(request_id, ERR_INVALID_DATA)
 
 
@@ -223,6 +228,7 @@ func release() -> void:
 	var rids := [_uniform_set, _summary, _params, _pipeline, _shader]
 	_initialized = false
 	_dispatch_pending = false
+	_readback_pending = false
 	_uniform_set = RID(); _summary = RID(); _params = RID()
 	_pipeline = RID(); _shader = RID()
 	RenderingServer.call_on_render_thread(
