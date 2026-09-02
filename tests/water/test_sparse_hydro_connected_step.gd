@@ -8,6 +8,7 @@ extends Node
 
 const CAPACITY := 2
 const TILE_RES := 8
+const MID := TILE_RES >> 1
 const DX := 1.0
 const DT := 0.01
 const TIMEOUT_FRAMES := 1200
@@ -129,8 +130,8 @@ func _on_state_ready(_request_id: int, state: PackedFloat32Array) -> void:
 		"connected sparse step lost/gained water: initial=%.9g final=%.9g delta=%.9g" % [
 			_initial_mass, final_mass, final_mass - _initial_mass])
 
-	var west_east_depth := _depth(state, 0, TILE_RES - 1, TILE_RES / 2)
-	var east_west_depth := _depth(state, 1, 0, TILE_RES / 2)
+	var west_east_depth := _depth(state, 0, TILE_RES - 1, MID)
+	var east_west_depth := _depth(state, 1, 0, MID)
 	_require(west_east_depth < 2.0,
 		"west tile did not discharge across resident east boundary (h=%.9g)" % west_east_depth)
 	_require(east_west_depth > 1.0,
@@ -138,8 +139,8 @@ func _on_state_ready(_request_id: int, state: PackedFloat32Array) -> void:
 
 	# A cell away from the interface has equal states on all of its interfaces and
 	# should remain unchanged after this single local step.
-	var west_interior := _depth(state, 0, 2, TILE_RES / 2)
-	var east_interior := _depth(state, 1, TILE_RES - 3, TILE_RES / 2)
+	var west_interior := _depth(state, 0, 2, MID)
+	var east_interior := _depth(state, 1, TILE_RES - 3, MID)
 	_require(absf(west_interior - 2.0) <= 1.0e-6,
 		"west interior changed unexpectedly h=%.9g" % west_interior)
 	_require(absf(east_interior - 1.0) <= 1.0e-6,
