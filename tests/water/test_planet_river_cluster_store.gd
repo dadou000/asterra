@@ -47,6 +47,8 @@ func _run(fixture: Dictionary) -> void:
 	_expect(int(registered.get("error", FAILED)) == OK, "cluster registration failed")
 	_expect(store.refined_reach_count() == 1, "cluster created more than one coarse hole")
 	_expect(store.refined_cluster_size(cell) == 3, "cluster member count is not three")
+	_expect(store.refined_sparse_member_count() == 3,
+		"global refined-member counter did not count all cluster slots")
 	var record := store.refined_reach_record(cell)
 	_expect(int(record.get("tile_id", -1)) == k0.packed(),
 		"legacy primary identity is not upstream member")
@@ -66,6 +68,8 @@ func _run(fixture: Dictionary) -> void:
 	_expect_close(float(unregistered.get("returned_pending_m3", -1.0)), pending,
 		ABS_TOL, "pending cluster inflow was not returned")
 	_expect(not store.is_refined_reach(cell), "cluster coarse hole survived unregister")
+	_expect(store.refined_sparse_member_count() == 0,
+		"refined-member counter retained released cluster slots")
 	var returned := store.accept_demotion(cell, 0.0, transfer)
 	_expect(int(returned.get("error", FAILED)) == OK, "cluster fine volume return failed")
 	_expect_close(store.channel_storage_m3[cell], channel_before, ABS_TOL,
