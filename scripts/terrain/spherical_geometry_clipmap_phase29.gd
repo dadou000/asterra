@@ -1,9 +1,10 @@
-extends "res://scripts/terrain/spherical_geometry_clipmap_blankaware.gd"
+extends "res://scripts/terrain/spherical_geometry_clipmap_cache_contract_phase42.gd"
 ## Phase 29 terrain runtime bridge.
 ##
-## Keep the mature Blank/Procedural clipmap ownership from blankaware, but install
-## the Phase 29 displacement compiler whose production graphs use absolute-height
-## semantics. Everything else remains inherited from the validated terrain stack.
+## Keep the mature Blank/Procedural clipmap ownership while installing the Phase 29
+## displacement compiler whose production graphs use absolute-height semantics.
+## Phase 42A inserts only the cache-factory contract below this runtime chain; all
+## topology, handoff, Blank backend and authoring behavior remain inherited.
 
 const PHASE29_DISPLACEMENT_RUNTIME := preload(
 	"res://scripts/world_authoring/terrain_displacement_runtime_phase29.gd")
