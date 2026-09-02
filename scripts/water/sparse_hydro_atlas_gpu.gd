@@ -125,8 +125,8 @@ func stats() -> Dictionary:
 	}
 
 
-## Debug/bootstrap upload for one slot. Production active tiles will be initialized
-## by GPU reconstruction/prolongation rather than regular CPU uploads.
+## Debug/bootstrap upload for one slot. Writes only canonical A and is retained for
+## older tests. Production frontier allocation should use stage_slot_state().
 func debug_upload_slot(slot: int, values: PackedFloat32Array) -> Error:
 	if not _initialized or slot < 0 or slot >= capacity:
 		return ERR_INVALID_PARAMETER
@@ -135,6 +135,25 @@ func debug_upload_slot(slot: int, values: PackedFloat32Array) -> Error:
 	var offset := slot * cells_per_tile() * STATE_FLOATS * 4
 	RenderingServer.call_on_render_thread(Callable(self, &"_update_buffer_render_thread").bind(
 		_state_a, offset, values.to_byte_array()))
+	return OK
+
+
+## Initialize an ALLOCATING slot while it is still unpublished. Both A and B are
+## written so no stale state from the prior owner can leak into later ping-pong or
+## diagnostics. The values normally contain dry h/hu/hv plus the destination bed.
+##
+## This is a bootstrap interface for the frontier pipeline. The future terrain GPU
+## reconstruction pass can write the same two SSBO ranges directly without a CPU
+## upload; the lifecycle contract remains identical.
+func stage_slot_state(slot: int, values: PackedFloat32Array) -> Error:
+	if not _initialized or slot < 0 or slot >= capacity:
+		return ERR_INVALID_PARAMETER
+	if values.size() != cells_per_tile() * STATE_FLOATS:
+		return ERR_INVALID_PARAMETER
+	var offset := slot * cells_per_tile() * STATE_FLOATS * 4
+	var bytes := values.to_byte_array()
+	RenderingServer.call_on_render_thread(Callable(self, &"_stage_slot_render_thread").bind(
+		offset, bytes))
 	return OK
 
 
@@ -182,6 +201,12 @@ func sync_pool(pool: HydroTilePool) -> Error:
 		if id < 0:
 			continue
 		var key := HydroTileKey.unpack(id)
+		# ALLOCATING slots intentionally stay invisible until activate_reserved()
+		# emits tile_woken and the identity bridge publishes them.
+		var record := pool.record(id)
+		if int(record.get("state", HydroTilePool.TileState.ALLOCATING)) \
+				== HydroTilePool.TileState.ALLOCATING:
+			continue
 		occupancy[slot] = 1
 		var o := slot * METADATA_INTS
 		metadata[o] = key.face
@@ -247,6 +272,19 @@ func _update_buffer_render_thread(rid: RID, offset: int, bytes: PackedByteArray)
 		var err := rd.buffer_update(rid, offset, bytes.size(), bytes)
 		if err != OK:
 			push_error("SparseHydroAtlasGPU: buffer update failed (%d)" % int(err))
+
+
+func _stage_slot_render_thread(offset: int, bytes: PackedByteArray) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	var err := rd.buffer_update(_state_a, offset, bytes.size(), bytes)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: staged A state upload failed (%d)" % int(err))
+		return
+	err = rd.buffer_update(_state_b, offset, bytes.size(), bytes)
+	if err != OK:
+		push_error("SparseHydroAtlasGPU: staged B state upload failed (%d)" % int(err))
 
 
 func _bind_slot_render_thread(slot: int, metadata_bytes: PackedByteArray) -> void:
