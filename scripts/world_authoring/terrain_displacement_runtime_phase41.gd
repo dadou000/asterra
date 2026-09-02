@@ -123,6 +123,101 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 	return float(values[_output_index]) if _output_index < values.size() else 0.0
 
 
+func _compiled_program_bounds() -> Dictionary:
+	if not _active or _output_index < 0 or _headers.is_empty():
+		return {"known": true, "min_m": 0.0, "max_m": 0.0, "reason": ""}
+
+	var registers: Array[Dictionary] = []
+	for index: int in _headers.size():
+		var h: Vector4 = _headers[index]
+		var p: Vector4 = _params[index]
+		var op: int = int(round(h.x))
+		var a: Dictionary = _bound_register(registers, int(round(h.y)), index)
+		var b: Dictionary = _bound_register(registers, int(round(h.z)), index)
+		var c: Dictionary = _bound_register(registers, int(round(h.w)), index)
+		var out: Dictionary
+		match op:
+			OP_CONST:
+				out = _bound(float(p.x), float(p.x))
+			OP_INPUT_BASE_HEIGHT:
+				out = _bound(0.0, 0.0, 1.0, 0.0)
+			OP_INPUT_SCULPT_DELTA:
+				out = _bound(0.0, 0.0, 0.0, 1.0)
+			OP_INPUT_BIOME:
+				out = _bound(0.0, float(BIOME_COUNT - 1))
+			OP_INPUT_LEVEL:
+				out = _bound(0.0, 30.0)
+			OP_INPUT_TIME:
+				out = _unknown_bound("time-dependent displacement has no static bound yet")
+			OP_NOISE:
+				out = _bound(-1.0, 1.0)
+			OP_LATITUDE_MASK:
+				# Spatial localization is deliberately NOT used to shrink culling bounds.
+				# Only the scalar range is propagated, preserving one global conservative
+				# displacement envelope across every cube face and latitude.
+				out = _bound(0.0, 1.0)
+			OP_ADD:
+				out = _add_bounds(a, b, 1.0)
+			OP_SUB:
+				out = _add_bounds(a, b, -1.0)
+			OP_MUL:
+				out = _multiply_bounds(a, b)
+			OP_DIV:
+				out = _divide_bounds(a, b)
+			OP_MIN:
+				out = _minmax_bounds(a, b, false)
+			OP_MAX:
+				out = _minmax_bounds(a, b, true)
+			OP_ABS:
+				out = _abs_bound(a)
+			OP_POWER:
+				out = _power_bound(a, b)
+			OP_CLAMP:
+				out = _clamp_bound(a, b, c)
+			OP_SMOOTHSTEP:
+				out = _bound(0.0, 1.0) if _all_pure([a, b, c]) \
+					else _unknown_bound("Smoothstep depends on absolute production/sculpt height")
+			OP_REMAP:
+				out = _remap_bound(a, b, c, float(p.x), float(p.y))
+			OP_MIX:
+				out = _mix_bound(a, b, c)
+			OP_SCALE:
+				out = _scale_bound(a, float(p.x))
+			OP_LEVEL_MASK, OP_BIOME_MASK:
+				out = _masked_bound(a)
+			OP_REPLACE:
+				out = b.duplicate(true)
+			OP_NOISE_LAYER:
+				out = _add_interval_to_affine(a, -absf(float(p.y)), absf(float(p.y)))
+			OP_RIDGED_MOUNTAINS:
+				out = _add_interval_to_affine(a, minf(0.0, float(p.y)), maxf(0.0, float(p.y)))
+			OP_EROSION_CHANNELS:
+				out = _add_interval_to_affine(a, minf(-float(p.y), 0.0), maxf(-float(p.y), 0.0))
+			OP_SEDIMENT_DEPOSIT:
+				out = _add_interval_to_affine(a, minf(0.0, float(p.y)), maxf(0.0, float(p.y)))
+			_:
+				out = _unknown_bound("opcode %d has no conservative bound rule" % op)
+		registers.append(out)
+
+	if _output_index < 0 or _output_index >= registers.size():
+		return {"known": false, "min_m": 0.0, "max_m": 0.0,
+			"reason": "compiled output register is invalid"}
+	var result: Dictionary = registers[_output_index]
+	if not bool(result.get("known", false)):
+		return {"known": false, "min_m": 0.0, "max_m": 0.0,
+			"reason": String(result.get("reason", "compiled displacement bound is unknown"))}
+	if absf(float(result.get("base", 0.0))) > COEFFICIENT_EPSILON \
+			or absf(float(result.get("sculpt", 0.0))) > COEFFICIENT_EPSILON:
+		return {"known": false, "min_m": 0.0, "max_m": 0.0,
+			"reason": "graph changes absolute production/sculpt height in a way that is not statically bounded"}
+	return {
+		"known": true,
+		"min_m": float(result.get("min", 0.0)),
+		"max_m": float(result.get("max", 0.0)),
+		"reason": "",
+	}
+
+
 static func latitude_mask_value(direction: Vector3, south_deg: float,
 		north_deg: float, feather_deg: float = 5.0, invert_mask: bool = false) -> float:
 	if direction.length_squared() <= 1e-12:
