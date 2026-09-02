@@ -111,3 +111,15 @@ jobs:
           [ "$status" -eq 0 ]
           grep -q "PRODUCTION_GEOMORPH_EQUIVALENCE_OK" /tmp/production-geomorph-equivalence.log
           ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|PRODUCTION_GEOMORPH_EQUIVALENCE_FAILED" /tmp/production-geomorph-equivalence.log
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terrain-program-validation-logs
+          path: |
+            /tmp/terrain-transaction-import.log
+            /tmp/terrain-transaction.log
+            /tmp/production-geomorph-equivalence.log
+          if-no-files-found: ignore
+          retention-days: 7
