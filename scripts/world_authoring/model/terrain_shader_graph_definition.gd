@@ -21,6 +21,7 @@ const CATEGORY_PRODUCTION := "Production stages"
 const CATEGORY_TERRAIN_SOURCE := "Terrain source"
 const CATEGORY_GEOMORPH := "Geomorph"
 const CATEGORY_WORLD_DATA := "World data"
+const CATEGORY_MASKS := "Masks"
 const CATEGORY_CLASSIFICATION := "Classification"
 const CATEGORY_PALETTE := "Palette / materials"
 const CATEGORY_MICRODETAIL := "Microdetail"
@@ -35,6 +36,7 @@ const NODE_CATEGORIES: Array[String] = [
 	CATEGORY_TERRAIN_SOURCE,
 	CATEGORY_GEOMORPH,
 	CATEGORY_WORLD_DATA,
+	CATEGORY_MASKS,
 	CATEGORY_CLASSIFICATION,
 	CATEGORY_PALETTE,
 	CATEGORY_MICRODETAIL,
@@ -149,6 +151,7 @@ const DISPLACEMENT_ONLY_NODES: Array[String] = [
 	"PRODUCTION_GENERATED_HEIGHT",
 	"PRODUCTION_GEOMORPH_SETTINGS",
 	"PRODUCTION_SCULPT_DELTA",
+	"LATITUDE_MASK",
 	"NOISE_LAYER",
 	"RIDGED_MOUNTAINS",
 	"EROSION_CHANNELS",
@@ -240,6 +243,7 @@ const NODE_TYPES: Array[String] = [
 	"COMBINE_RGB",
 	"NORMAL_BLEND",
 	"NOISE",
+	"LATITUDE_MASK",
 	"NOISE_LAYER",
 	"RIDGED_MOUNTAINS",
 	"EROSION_CHANNELS",
@@ -273,6 +277,7 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"CLASSIFIER_SECONDARY": CATEGORY_CLASSIFICATION,
 	"GAME_INPUT": CATEGORY_WORLD_DATA,
 	"NOISE": CATEGORY_TERRAIN_SOURCE,
+	"LATITUDE_MASK": CATEGORY_MASKS,
 	"NOISE_LAYER": CATEGORY_GEOMORPH,
 	"RIDGED_MOUNTAINS": CATEGORY_GEOMORPH,
 	"EROSION_CHANNELS": CATEGORY_GEOMORPH,
@@ -541,12 +546,25 @@ static func production_control_defaults(node_type: String) -> Dictionary:
 			}
 	return {}
 
+static func node_parameter_defaults(node_type: String) -> Dictionary:
+	if node_type == "LATITUDE_MASK":
+		return {
+			"south_deg":-30.0,
+			"north_deg":30.0,
+			"feather_deg":5.0,
+			"invert":false,
+		}
+	return {}
+
 func add_node(node_type: String, position: Vector2, parameters: Dictionary = {}) -> String:
 	var resolved_type := node_type if NODE_TYPES.has(node_type) else "CONSTANT_FLOAT"
 	var node_id := make_node_id(resolved_type)
 	var resolved_parameters: Dictionary = parameters.duplicate(true)
-	if PRODUCTION_CONTROL_NODES.has(resolved_type) and resolved_parameters.is_empty():
-		resolved_parameters = production_control_defaults(resolved_type)
+	if resolved_parameters.is_empty():
+		if PRODUCTION_CONTROL_NODES.has(resolved_type):
+			resolved_parameters = production_control_defaults(resolved_type)
+		else:
+			resolved_parameters = node_parameter_defaults(resolved_type)
 	nodes.append({"id":node_id, "type":resolved_type, "position":position, "parameters":resolved_parameters})
 	revision += 1
 	return node_id
