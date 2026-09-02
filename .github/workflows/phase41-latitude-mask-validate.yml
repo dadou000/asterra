@@ -1,0 +1,122 @@
+name: Phase 41 latitude mask validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scripts/world_authoring/validate_latitude_mask_phase41_ci.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
+      - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
+      - "scenes/world_authoring/ValidateLatitudeMaskPhase41CI.tscn"
+      - ".github/workflows/phase41-latitude-mask-validate.yml"
+  pull_request:
+    paths:
+      - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scripts/world_authoring/validate_latitude_mask_phase41_ci.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
+      - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
+      - "scenes/world_authoring/ValidateLatitudeMaskPhase41CI.tscn"
+      - ".github/workflows/phase41-latitude-mask-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  latitude-mask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated Phase 41 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-phase41-ci
+          mkdir -p /tmp/asterra-phase41-ci/scripts /tmp/asterra-phase41-ci/shaders /tmp/asterra-phase41-ci/tests /tmp/asterra-phase41-ci/tools /tmp/asterra-phase41-ci/scenes/world_authoring
+          cp -R scripts/. /tmp/asterra-phase41-ci/scripts/
+          cp -R shaders/. /tmp/asterra-phase41-ci/shaders/
+          cp tests/ci_autoload_planet.gd /tmp/asterra-phase41-ci/tests/
+          cp tests/ci_autoload_frames.gd /tmp/asterra-phase41-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-phase41-ci/tests/
+          cp tools/terrain_region_compiler.gd /tmp/asterra-phase41-ci/tools/
+          cp -R scenes/world_authoring/. /tmp/asterra-phase41-ci/scenes/world_authoring/
+          cp world.tres /tmp/asterra-phase41-ci/world.tres
+          cat > /tmp/asterra-phase41-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Phase 41 Latitude Mask CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import Phase 41 scripts and shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/phase41-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 220 /tmp/phase41-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 isolated import failed with status $status"
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|shader compilation failed|shader.*parse error" /tmp/phase41-import.log; then
+            echo "Phase 41 import reported a script or shader parser error."
+            exit 1
+          fi
+
+      - name: Validate deterministic latitude mask
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateLatitudeMaskPhase41CI.tscn > /tmp/phase41-latitude-mask.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-latitude-mask.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 latitude-mask validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "LATITUDE_MASK_PHASE41_OK" /tmp/phase41-latitude-mask.log; then
+            echo "Phase 41 latitude-mask completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "LATITUDE_MASK_PHASE41_FAILED|SCRIPT ERROR|Parse Error|FATAL" /tmp/phase41-latitude-mask.log; then
+            echo "Phase 41 latitude-mask regression reported a failure."
+            exit 1
+          fi
