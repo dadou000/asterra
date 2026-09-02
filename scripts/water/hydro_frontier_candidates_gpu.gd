@@ -5,6 +5,7 @@ extends Node
 ## Reads HydroTileActivityGPU summaries and SparseHydroAtlasGPU metadata. Every
 ## candidate snapshots stable (face, level, x, y) identity beside the transient
 ## source slot, allowing delayed readbacks to detect slot recycling safely.
+## Candidate flux is max(actual advective Q, predictive dry-neighbor wetting Q).
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -188,6 +189,7 @@ func _on_queue_bytes(bytes: PackedByteArray, request_id: int) -> void:
 		if o + ENTRY_BYTES > bytes.size():
 			overflow = true
 			break
+		var flags := int(bytes.decode_u32(o + 28))
 		candidates.append({
 			"slot": int(bytes.decode_u32(o + 0)),
 			"direction": int(bytes.decode_u32(o + 4)),
@@ -196,6 +198,7 @@ func _on_queue_bytes(bytes: PackedByteArray, request_id: int) -> void:
 			"level": int(bytes.decode_u32(o + 16)),
 			"x": int(bytes.decode_u32(o + 20)),
 			"y": int(bytes.decode_u32(o + 24)),
+			"predictive_wetting": (flags & 1) != 0,
 		})
 	call_deferred("_publish_candidates", request_id, candidates, overflow)
 
