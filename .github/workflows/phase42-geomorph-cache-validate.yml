@@ -1,0 +1,136 @@
+name: Phase 42 geomorph cache validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/model/terrain_geomorph_gpu_contract.gd"
+      - "scripts/world_authoring/terrain_displacement_runtime_phase42.gd"
+      - "scripts/world_authoring/validate_geomorph_cache_contract_phase42_ci.gd"
+      - "scripts/world_authoring/validate_geomorph_cache_contract_phase42_runner.gd"
+      - "scripts/terrain/gpu_terrain_clipmap_cache_phase42.gd"
+      - "scripts/terrain/gpu_terrain_clipmap_cache_phase42_active.gd"
+      - "scripts/terrain/gpu_terrain_clipmap_cache_phase42_final.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_cache_contract_phase42.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_phase29.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
+      - "shaders/terrain_clipmap_cache_phase42.glsl"
+      - "scenes/world_authoring/ValidateGeomorphCachePhase42CI.tscn"
+      - ".github/workflows/phase42-geomorph-cache-validate.yml"
+  pull_request:
+    paths:
+      - "scripts/world_authoring/model/terrain_geomorph_gpu_contract.gd"
+      - "scripts/world_authoring/terrain_displacement_runtime_phase42.gd"
+      - "scripts/world_authoring/validate_geomorph_cache_contract_phase42_ci.gd"
+      - "scripts/world_authoring/validate_geomorph_cache_contract_phase42_runner.gd"
+      - "scripts/terrain/gpu_terrain_clipmap_cache_phase42.gd"
+      - "scripts/terrain/gpu_terrain_clipmap_cache_phase42_active.gd"
+      - "scripts/terrain/gpu_terrain_clipmap_cache_phase42_final.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_cache_contract_phase42.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_phase29.gd"
+      - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
+      - "shaders/terrain_clipmap_cache_phase42.glsl"
+      - "scenes/world_authoring/ValidateGeomorphCachePhase42CI.tscn"
+      - ".github/workflows/phase42-geomorph-cache-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  geomorph-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated Phase 42 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-phase42-ci
+          mkdir -p /tmp/asterra-phase42-ci/scripts /tmp/asterra-phase42-ci/shaders /tmp/asterra-phase42-ci/tests /tmp/asterra-phase42-ci/tools /tmp/asterra-phase42-ci/scenes/world_authoring
+          cp -R scripts/. /tmp/asterra-phase42-ci/scripts/
+          cp -R shaders/. /tmp/asterra-phase42-ci/shaders/
+          cp tests/ci_autoload_planet.gd /tmp/asterra-phase42-ci/tests/
+          cp tests/ci_autoload_frames.gd /tmp/asterra-phase42-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-phase42-ci/tests/
+          cp tools/terrain_region_compiler.gd /tmp/asterra-phase42-ci/tools/
+          cp -R scenes/world_authoring/. /tmp/asterra-phase42-ci/scenes/world_authoring/
+          cp world.tres /tmp/asterra-phase42-ci/world.tres
+          cat > /tmp/asterra-phase42-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Phase 42 Geomorph Cache CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import Phase 42 scripts and compute shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase42-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/phase42-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 260 /tmp/phase42-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 42 isolated import failed with status $status"
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|shader compilation failed|shader.*parse error" /tmp/phase42-import.log; then
+            echo "Phase 42 import reported a script or shader parser error."
+            exit 1
+          fi
+
+      - name: Validate shared geomorph cache contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase42-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateGeomorphCachePhase42CI.tscn > /tmp/phase42-geomorph-cache.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase42-geomorph-cache.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 42 geomorph-cache validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "GEOMORPH_CACHE_PHASE42_OK" /tmp/phase42-geomorph-cache.log; then
+            echo "Phase 42 geomorph-cache completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "GEOMORPH_CACHE_PHASE42_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase42-geomorph-cache.log; then
+            echo "Phase 42 geomorph-cache regression reported a failure."
+            exit 1
+          fi
