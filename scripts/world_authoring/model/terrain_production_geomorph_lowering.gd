@@ -1,0 +1,187 @@
+class_name TerrainProductionGeomorphLowering
+extends RefCounted
+## Exact structural lowering for the resident production geomorph pipeline.
+##
+## The first executable topology operation is intentionally narrow: a graph may
+## bypass any production stage while preserving the shader's original relative
+## order. Skipped stages are lowered to exact resident shader controls rather than
+## approximated with author bytecode. Reordering, branching, duplicate stages and
+## partial tail rewires remain invalid candidates.
+
+const NATIVE := preload(
+	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
+
+
+static func ordered_bypass_plan(graph: Resource) -> Dictionary:
+	if graph == null:
+		return _invalid("native production graph is unavailable")
+	if int(graph.get(&"displacement_output_mode")) != NATIVE.OUTPUT_MODE_ABSOLUTE:
+		return _invalid("native production graph must output absolute terrain height")
+
+	var nodes_value: Variant = graph.get(&"nodes")
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
+		return _invalid("native production graph arrays are malformed")
+
+	var expected_types := PackedStringArray([NATIVE.START_TYPE, NATIVE.SETTINGS_TYPE])
+	expected_types.append_array(NATIVE.native_stage_types())
+	expected_types.append_array(PackedStringArray([
+		NATIVE.COMPOSE_TYPE, NATIVE.SCULPT_TYPE, NATIVE.ADD_TYPE, NATIVE.OUTPUT_TYPE]))
+
+	var by_type: Dictionary = {}
+	var by_id: Dictionary = {}
+	for node_value: Variant in nodes_value as Array:
+		if not (node_value is Dictionary):
+			return _invalid("native production graph contains an invalid node record")
+		var node: Dictionary = node_value as Dictionary
+		var node_id: String = String(node.get("id", ""))
+		var node_type: String = String(node.get("type", ""))
+		if node_id.is_empty():
+			return _invalid("native production graph contains a node with no ID")
+		if not expected_types.has(node_type):
+			return _invalid("unsupported node %s is mixed into the native production chain" % node_type)
+		if by_id.has(node_id):
+			return _invalid("duplicate native node ID %s" % node_id)
+		if by_type.has(node_type):
+			return _invalid("duplicate native node type %s" % node_type)
+		by_id[node_id] = node_type
+		by_type[node_type] = node_id
+
+	if by_type.size() != expected_types.size():
+		return _invalid("native production graph is missing a required stage or terminal node")
+	for node_type: String in expected_types:
+		if not by_type.has(node_type) or String(by_type[node_type]).is_empty():
+			return _invalid("native production graph is missing %s" % node_type)
+
+	var links: Array = links_value as Array
+	var outgoing: Dictionary = {}
+	var exact_links: Dictionary = {}
+	for link_value: Variant in links:
+		if not (link_value is Dictionary):
+			return _invalid("native production graph contains an invalid connection")
+		var link: Dictionary = link_value as Dictionary
+		var from_id: String = String(link.get("from", ""))
+		var to_id: String = String(link.get("to", ""))
+		var from_port: int = int(link.get("from_port", -1))
+		var to_port: int = int(link.get("to_port", -1))
+		if not by_id.has(from_id) or not by_id.has(to_id):
+			return _invalid("native production graph contains a connection to a missing node")
+		var exact_key: String = _link_key(from_id, from_port, to_id, to_port)
+		if exact_links.has(exact_key):
+			return _invalid("native production graph contains a duplicate connection")
+		exact_links[exact_key] = true
+		if not outgoing.has(from_id):
+			outgoing[from_id] = []
+		(outgoing[from_id] as Array).append(link)
+
+	var used_links: Dictionary = {}
+	var active_stage_ids := PackedStringArray()
+	var current_id: String = String(by_type[NATIVE.START_TYPE])
+	var previous_stage_index: int = -1
+	var ordered_ids: PackedStringArray = NATIVE.SCHEMA.ordered_stage_ids()
+	var traversal_guard: int = 0
+
+	while current_id != String(by_type[NATIVE.COMPOSE_TYPE]):
+		traversal_guard += 1
+		if traversal_guard > expected_types.size():
+			return _invalid("native production stage chain contains a loop")
+		var next_links: Array = outgoing.get(current_id, []) as Array
+		if next_links.size() != 1:
+			return _invalid("native production stage chain must have exactly one forward connection")
+		var link: Dictionary = next_links[0] as Dictionary
+		if int(link.get("from_port", -1)) != 0 or int(link.get("to_port", -1)) != 0:
+			return _invalid("native production stage flow must use scalar port 0")
+		var next_id: String = String(link.get("to", ""))
+		var next_type: String = String(by_id.get(next_id, ""))
+		if next_type == NATIVE.COMPOSE_TYPE:
+			used_links[_link_key(current_id, 0, next_id, 0)] = true
+			current_id = next_id
+			continue
+		var stage_id: String = NATIVE.stage_id_for_node_type(next_type)
+		var stage_index: int = ordered_ids.find(stage_id)
+		if stage_index < 0:
+			return _invalid("native stage flow reached non-stage node %s before composition" % next_type)
+		if stage_index <= previous_stage_index:
+			return _invalid("native production stages may be bypassed but not reordered")
+		previous_stage_index = stage_index
+		active_stage_ids.append(stage_id)
+		used_links[_link_key(current_id, 0, next_id, 0)] = true
+		current_id = next_id
+
+	var compose_id: String = String(by_type[NATIVE.COMPOSE_TYPE])
+	var sculpt_id: String = String(by_type[NATIVE.SCULPT_TYPE])
+	var add_id: String = String(by_type[NATIVE.ADD_TYPE])
+	var output_id: String = String(by_type[NATIVE.OUTPUT_TYPE])
+	var tail: Array = [
+		[compose_id, 0, add_id, 0],
+		[sculpt_id, 0, add_id, 1],
+		[add_id, 0, output_id, 0],
+	]
+	for row_value: Variant in tail:
+		var row: Array = row_value as Array
+		var key: String = _link_key(String(row[0]), int(row[1]), String(row[2]), int(row[3]))
+		if not exact_links.has(key):
+			return _invalid("native production compose/sculpt/output tail is incomplete")
+		used_links[key] = true
+
+	if used_links.size() != links.size():
+		return _invalid("native production graph contains a branch or unsupported extra connection")
+
+	var disabled_stage_ids := PackedStringArray()
+	for stage_id: String in ordered_ids:
+		if not active_stage_ids.has(stage_id):
+			disabled_stage_ids.append(stage_id)
+
+	return {
+		"valid": true,
+		"canonical": disabled_stage_ids.is_empty(),
+		"active_stage_ids": active_stage_ids,
+		"disabled_stage_ids": disabled_stage_ids,
+		"reason": "",
+	}
+
+
+static func apply_bypass_controls(controls: Dictionary, plan: Dictionary) -> Dictionary:
+	var out: Dictionary = controls.duplicate(true)
+	if not bool(plan.get("valid", false)):
+		return out
+	var disabled_value: Variant = plan.get("disabled_stage_ids", PackedStringArray())
+	if not (disabled_value is PackedStringArray):
+		return out
+	for stage_id: String in disabled_value as PackedStringArray:
+		var overrides: Dictionary = disabled_control_overrides(stage_id)
+		for key_value: Variant in overrides.keys():
+			out[key_value] = overrides[key_value]
+	return out
+
+
+static func disabled_control_overrides(stage_id: String) -> Dictionary:
+	# These controls are chosen from the exact resident shader equations. In
+	# particular, Fine uses amplitude rather than fine_strength because Micro Relief
+	# also intentionally consumes fine_strength; Channel keeps its shared sample alive
+	# so Deposition can remain enabled when incision itself is bypassed.
+	match stage_id:
+		"broad": return {"broad_strength": 0.0}
+		"mountain": return {"mountain_strength": 0.0}
+		"mid": return {"mid_strength": 0.0}
+		"channel": return {"channel_strength": 0.0}
+		"deposit": return {"deposit_strength": 0.0}
+		"fine": return {"fine_amplitude_m": 0.0}
+		"dune": return {"dune_strength": 0.0}
+		"micro": return {"micro_amplitude_m": 0.0}
+		"glacial": return {"glacial_strength": 0.0}
+	return {}
+
+
+static func _invalid(reason: String) -> Dictionary:
+	return {
+		"valid": false,
+		"canonical": false,
+		"active_stage_ids": PackedStringArray(),
+		"disabled_stage_ids": PackedStringArray(),
+		"reason": reason,
+	}
+
+
+static func _link_key(from_id: String, from_port: int, to_id: String, to_port: int) -> String:
+	return "%s:%d>%s:%d" % [from_id, from_port, to_id, to_port]
