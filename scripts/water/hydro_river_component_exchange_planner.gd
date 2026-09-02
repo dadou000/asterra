@@ -12,13 +12,15 @@ extends RefCounted
 
 static func plan(store: PlanetHydrologyRiverClusterStore, component_id: int,
 		coupling_records: Dictionary, dt_s: float, mouth_cells: float,
-		cell_size_m: float) -> Dictionary:
+		cell_size_m: float, tile_resolution: int) -> Dictionary:
 	if store == null or not store.initialized or component_id < 0 \
 			or not is_finite(dt_s) or dt_s <= 0.0 \
-			or not is_finite(cell_size_m) or cell_size_m <= 0.0:
+			or not is_finite(cell_size_m) or cell_size_m <= 0.0 \
+			or tile_resolution <= 0:
 		return {"error": ERR_INVALID_PARAMETER, "reason": "invalid_component_exchange_request"}
 
-	var contract := HydroRiverComponentCouplingContract.evaluate(store, component_id)
+	var contract := HydroRiverComponentCouplingContract.evaluate(store, component_id,
+		tile_resolution, cell_size_m)
 	if int(contract.get("error", FAILED)) != OK or not bool(contract.get("ready", false)):
 		return contract
 	var cells := contract.get("cells", PackedInt32Array()) as PackedInt32Array
