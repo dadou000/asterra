@@ -45,5 +45,6 @@ void main() {
 
     uint i = slot * params.dims.y + local_i;
     if (i >= params.dims.w) return;
-    sources[i] = max(e.rates, vec4(0.0, 0.0, -3.402823e38, -3.402823e38));
+    sources[i] = vec4(max(e.rates.x, 0.0), max(e.rates.y, 0.0),
+        e.rates.z, e.rates.w);
 }
