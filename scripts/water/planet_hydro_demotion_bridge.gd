@@ -44,6 +44,7 @@ var _slot := -1
 var _physical_lod := 0
 var _runtime_was_enabled := true
 var _fine_volume_m3 := 0.0
+var _fine_unpublished := false
 
 
 func initialize(p_store: PlanetHydrologyOwnershipStore,
@@ -141,6 +142,7 @@ func demote_cell(cell: int, target_key: HydroTileKey = null) -> int:
 	_slot = slot
 	_physical_lod = int(record.get("physical_lod", 0))
 	_fine_volume_m3 = 0.0
+	_fine_unpublished = false
 	if runtime != null:
 		_runtime_was_enabled = runtime.enabled
 		runtime.enabled = false
@@ -180,6 +182,7 @@ func _on_tile_volume_ready(request_id: int, slot: int, volume_m3: float) -> void
 		if not scheduler.force_release(_key, "planet_demotion_dry"):
 			_fail(ERR_CANT_ACQUIRE_RESOURCE, "dry_release")
 			return
+		_fine_unpublished = true
 		var dry_conn := connectivity.sync_pool(scheduler.pool)
 		if dry_conn != OK:
 			_restore_fine_after_release(dry_conn, "dry_connectivity")
@@ -212,6 +215,7 @@ func _on_tile_volume_ready(request_id: int, slot: int, volume_m3: float) -> void
 		_transaction_id = -1
 		_fail(ERR_CANT_ACQUIRE_RESOURCE, "fine_release")
 		return
+	_fine_unpublished = true
 	var conn_error := connectivity.sync_pool(scheduler.pool)
 	if conn_error != OK:
 		_restore_fine_after_release(conn_error, "connectivity")
@@ -252,6 +256,7 @@ func _restore_fine_after_release(original_error: Error, stage: String) -> void:
 			"planet_demotion_restore")
 		var restore_conn := connectivity.sync_pool(scheduler.pool)
 		if activated == _slot and restore_conn == OK:
+			_fine_unpublished = false
 			if _transaction_id >= 0:
 				store.rollback_demotion(_transaction_id)
 				_transaction_id = -1
@@ -264,6 +269,7 @@ func _restore_fine_after_release(original_error: Error, stage: String) -> void:
 	# connectivity/identity state needs explicit recovery before further stepping.
 	if scheduler.pool.contains(_key):
 		scheduler.force_release(_key, "planet_demotion_restore_failed")
+	_fine_unpublished = true
 	if _transaction_id >= 0:
 		var committed := store.commit_demotion(_transaction_id)
 		_transaction_id = -1
@@ -284,7 +290,12 @@ func _complete(report: Dictionary) -> void:
 func _fail(error: Error, stage: String, restore_runtime: bool = true) -> void:
 	var failed_id := _request_id
 	if _transaction_id >= 0 and store != null:
-		store.rollback_demotion(_transaction_id)
+		if _fine_unpublished:
+			# Fine ownership already left. Never roll the incoming reservation back in
+			# this state; doing so would make the measured parcel disappear.
+			store.commit_demotion(_transaction_id)
+		else:
+			store.rollback_demotion(_transaction_id)
 		_transaction_id = -1
 	_finish_request(restore_runtime)
 	demotion_failed.emit(failed_id, error, stage)
@@ -302,6 +313,7 @@ func _finish_request(restore_runtime: bool) -> void:
 	_slot = -1
 	_physical_lod = 0
 	_fine_volume_m3 = 0.0
+	_fine_unpublished = false
 
 
 func _clear_refs() -> void:
@@ -315,11 +327,14 @@ func _clear_refs() -> void:
 
 func release() -> void:
 	if _busy:
-		# Before fine release, rollback is enough. After fine release the normal
-		# request callback owns recovery; release() should not fabricate a parcel from
-		# an incomplete GPU readback.
+		# Teardown must preserve whichever side currently owns the parcel. Before
+		# fine release, roll back the incoming reservation. After fine release, commit
+		# the already-validated reservation before dropping the bridge generation.
 		if _transaction_id >= 0 and store != null:
-			store.rollback_demotion(_transaction_id)
+			if _fine_unpublished:
+				store.commit_demotion(_transaction_id)
+			else:
+				store.rollback_demotion(_transaction_id)
 		_finish_request(false)
 	if volume_diagnostic != null and is_instance_valid(volume_diagnostic):
 		volume_diagnostic.release()
