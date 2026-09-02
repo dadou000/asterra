@@ -4,8 +4,9 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase34.gd"
 ## A canonical structural production graph is still an identity view of the
 ## resident GPU terrain implementation, so it emits no authored displacement
 ## bytecode. Stage parameters bind directly to the exact production uniforms.
-## Structural rewiring is deliberately rejected until each native stage has an
-## exact CPU/GPU lowering path; last-known-good terrain remains active meanwhile.
+## Structural rewiring is deliberately rejected here; later runtime phases may
+## override the topology validation hook only for structural forms that have an
+## exact resident-shader lowering. Last-known-good terrain remains active otherwise.
 
 const NATIVE_GRAPH := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
@@ -57,9 +58,16 @@ func _validate_candidate(terrain: Resource) -> PackedStringArray:
 		if String(slot.get(&"slot_id")) != NATIVE_GRAPH.PRODUCTION_SHAPE_SLOT_ID:
 			issues.append("Native production geomorph stages may only exist in Base Terrain Shape; keeping the last valid terrain.")
 			continue
-		if not NATIVE_GRAPH.is_canonical_structural_graph(graph):
-			issues.append("Base Terrain native-stage topology is incomplete or reordered. Exact structural lowering is not enabled yet; keeping the last valid terrain.")
+		var topology_issue: String = _native_topology_validation_issue(graph)
+		if not topology_issue.is_empty():
+			issues.append(topology_issue)
 	return issues
+
+
+func _native_topology_validation_issue(graph: Resource) -> String:
+	if NATIVE_GRAPH.is_canonical_structural_graph(graph):
+		return ""
+	return "Base Terrain native-stage topology is incomplete or reordered. Exact structural lowering is not enabled yet; keeping the last valid terrain."
 
 
 func stats() -> Dictionary:
