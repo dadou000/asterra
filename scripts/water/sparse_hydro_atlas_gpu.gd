@@ -141,8 +141,9 @@ func _init_render_thread(state_a_bytes: PackedByteArray, state_b_bytes: PackedBy
 	var src := rd.storage_buffer_create(source_bytes.size(), source_bytes)
 	var occ := rd.storage_buffer_create(occupancy_bytes.size(), occupancy_bytes)
 	var created := [a, b, src, occ]
-	for rid in created:
-		if not (rid as RID).is_valid():
+	for value in created:
+		var rid: RID = value
+		if not rid.is_valid():
 			_free_many(rd, created)
 			call_deferred("_finish_init", ERR_CANT_CREATE, {})
 			return
