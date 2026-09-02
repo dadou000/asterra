@@ -1,16 +1,19 @@
 extends Node
-## Phase 31 regression: production displacement and PBR are visible as ordinary
-## categorized nodes, identity graphs stay GPU-neutral, and raw classifier vectors
-## can be split/recombined by the live material compiler.
+## Phase 31+ regression: production displacement is visible as the real native
+## geomorph stage chain, ordered bypasses stay on the resident GPU implementation,
+## PBR sources remain ordinary categorized graph nodes, and raw classifier vectors
+## can still be split/recombined by the live material compiler.
 
 const EDITOR_SCRIPT := preload(
 	"res://scripts/world_authoring/world_authoring_editor_live_phase31.gd")
 const DISP_RUNTIME_SCRIPT := preload(
-	"res://scripts/world_authoring/terrain_displacement_runtime_phase31.gd")
+	"res://scripts/world_authoring/terrain_displacement_runtime_phase36.gd")
 const MAT_RUNTIME_SCRIPT := preload(
 	"res://scripts/world_authoring/terrain_material_runtime_phase31.gd")
 const GRAPH_MODEL := preload(
 	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
+const NATIVE := preload(
+	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
 
 class DummyWorld extends Node3D:
 	var player: Node = null
@@ -46,7 +49,22 @@ func _run() -> void:
 	editor.call("_show_category", "SHADERS")
 	await _frames(5)
 
-	for required_title: String in ["GENERATED TERRAIN", "SCULPT / EDIT DELTA", "Add", "FINAL TERRAIN"]:
+	for required_title: String in [
+		"PRODUCTION · GEOMORPH START",
+		"PRODUCTION · BROAD RELIEF",
+		"PRODUCTION · MOUNTAINS",
+		"PRODUCTION · MID RELIEF",
+		"PRODUCTION · CHANNELS / INCISION",
+		"PRODUCTION · DEPOSITION",
+		"PRODUCTION · FINE DETAIL",
+		"PRODUCTION · DUNES",
+		"PRODUCTION · MICRO RELIEF",
+		"PRODUCTION · GLACIAL SHAPING",
+		"PRODUCTION · MACRO + DETAIL",
+		"SCULPT / EDIT DELTA",
+		"Add",
+		"FINAL TERRAIN",
+	]:
 		if _find_graph_node(editor, required_title) == null:
 			_fail("Phase 31 Base Terrain graph is missing '%s'." % required_title)
 			return
@@ -63,35 +81,55 @@ func _run() -> void:
 		return
 
 	var shape_graph: Resource = shape_slot.get(&"graph") as Resource
-	if not _has_node_type(shape_graph, "PRODUCTION_GENERATED_HEIGHT") \
-			or not _has_node_type(shape_graph, "PRODUCTION_SCULPT_DELTA"):
-		_fail("Phase 31 Shape graph did not migrate to explicit production-stage nodes.")
+	if not NATIVE.is_canonical_structural_graph(shape_graph):
+		_fail("Phase 31 Shape graph did not migrate to the canonical native production-stage chain.")
 		return
+	if _has_node_type(shape_graph, NATIVE.LEGACY_GENERATED_TYPE):
+		_fail("Opaque PRODUCTION_GENERATED_HEIGHT survived native production migration.")
+		return
+	for stage_id: String in NATIVE.SCHEMA.ordered_stage_ids():
+		if not _has_node_type(shape_graph, NATIVE.stage_node_type(stage_id)):
+			_fail("Phase 31 Shape graph is missing native stage '%s'." % stage_id)
+			return
+
 	var disp_runtime: Node = DISP_RUNTIME_SCRIPT.new() as Node
 	add_child(disp_runtime)
 	var disp_stats: Dictionary = disp_runtime.call("compile_from_terrain", terrain)
-	if bool(disp_stats.get("active", true)):
-		_fail("Identity production Shape graph should stay outside the bytecode interpreter.")
+	if not bool(disp_stats.get("candidate_valid", false)) \
+			or bool(disp_stats.get("active", true)) \
+			or int(disp_stats.get("instructions", -1)) != 0:
+		_fail("Canonical native production Shape graph should remain GPU-resident and bytecode-neutral.")
 		return
 
-	# The exact rendered/contact baseline is generated + sculpt. Removing sculpt from
-	# the graph must therefore ask the inherited renderer for -7 m adjustment.
-	var generated_id: String = _node_id(shape_graph, "PRODUCTION_GENERATED_HEIGHT")
-	var sculpt_id: String = _node_id(shape_graph, "PRODUCTION_SCULPT_DELTA")
-	var add_id: String = _node_id(shape_graph, "ADD")
-	shape_graph.call("disconnect_nodes", sculpt_id, 0, add_id, 1)
-	var zero_id: String = String(shape_graph.call("add_node", "CONSTANT_FLOAT",
-		Vector2(170, 390), {"value":0.0}))
-	shape_graph.call("connect_nodes", zero_id, 0, add_id, 1)
-	disp_runtime.call("compile_from_terrain", terrain)
-	var remove_sculpt_delta: float = float(disp_runtime.call("evaluate_height",
-		Vector3(1, 0, 0), 123.0, 0, 7, 0.0, 7.0))
-	if absf(remove_sculpt_delta + 7.0) > 0.001:
-		_fail("Explicit Sculpt stage expected -7 m adjustment when removed, got %f." % remove_sculpt_delta)
+	# Exercise the structural operation exposed by the current editor/runtime: skip
+	# Channels while retaining Deposition. This must remain zero-bytecode and lower
+	# only incision strength because Deposition reuses the resident channel sample.
+	var mid_id: String = _node_id(shape_graph, NATIVE.stage_node_type("mid"))
+	var channel_id: String = _node_id(shape_graph, NATIVE.stage_node_type("channel"))
+	var deposit_id: String = _node_id(shape_graph, NATIVE.stage_node_type("deposit"))
+	if mid_id.is_empty() or channel_id.is_empty() or deposit_id.is_empty():
+		_fail("Phase 31 ordered-bypass fixture is missing native stages.")
+		return
+	if not bool(shape_graph.call("disconnect_nodes", mid_id, 0, channel_id, 0)) \
+			or not bool(shape_graph.call("disconnect_nodes", channel_id, 0, deposit_id, 0)) \
+			or not bool(shape_graph.call("connect_nodes", mid_id, 0, deposit_id, 0)):
+		_fail("Phase 31 could not construct a production-order Channel bypass.")
+		return
+	var bypass_stats: Dictionary = disp_runtime.call("compile_from_terrain", terrain)
+	if not bool(bypass_stats.get("candidate_valid", false)) \
+			or bool(bypass_stats.get("active", true)) \
+			or int(bypass_stats.get("instructions", -1)) != 0:
+		_fail("Phase 31 ordered native bypass escaped the resident zero-bytecode production path.")
+		return
+	var bypass_controls: Dictionary = bypass_stats.get("production_geomorph_controls", {}) as Dictionary
+	if not is_zero_approx(float(bypass_controls.get("channel_strength", -1.0))) \
+			or is_zero_approx(float(bypass_controls.get("deposit_strength", 0.0))):
+		_fail("Phase 31 Channel bypass did not preserve exact Deposition semantics.")
 		return
 
-	# Restore the canonical Shape graph before checking the Surface domain.
-	shape_graph.call("create_production_stage_graph", 0)
+	# Restore the canonical native Shape graph before checking the Surface domain.
+	var restored_controls: Dictionary = NATIVE.extract_controls(shape_graph)
+	NATIVE.build_canonical_graph(shape_graph, restored_controls)
 
 	# Surface graph: six real PBR production sources, not a synthetic locked block.
 	editor.call("_phase28_focus_existing_slot", surface_slot)
@@ -134,10 +172,10 @@ func _run() -> void:
 	var channel_ids: Array[String] = []
 	for index: int in 3:
 		var channel_type: String = ["CHANNEL_R", "CHANNEL_G", "CHANNEL_B"][index]
-		var channel_id: String = String(surface_graph.call("add_node", channel_type,
+		var channel_id_value: String = String(surface_graph.call("add_node", channel_type,
 			Vector2(330, 590 + index * 95), {}))
-		surface_graph.call("connect_nodes", classifier_id, 0, channel_id, 0)
-		channel_ids.append(channel_id)
+		surface_graph.call("connect_nodes", classifier_id, 0, channel_id_value, 0)
+		channel_ids.append(channel_id_value)
 	var combine_id: String = String(surface_graph.call("add_node",
 		"COMBINE_RGB", Vector2(540, 660), {}))
 	for index: int in 3:
@@ -153,7 +191,7 @@ func _run() -> void:
 			_fail("Phase 31 material compiler warning: %s" % warning)
 			return
 
-	print("PLANET_STUDIO_PHASE31_LAUNCH_OK: production shape/PBR stages are categorized editable graph nodes")
+	print("PLANET_STUDIO_PHASE31_LAUNCH_OK: native production geomorph stages, ordered bypass lowering and editable PBR graph launch cleanly")
 	mat_runtime.queue_free()
 	disp_runtime.queue_free()
 	editor.queue_free()
