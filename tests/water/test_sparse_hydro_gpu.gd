@@ -1,6 +1,6 @@
 extends Node
 ## Renderer-mode Phase 3 smoke test for sparse slot storage, compact GPU
-## summaries, and the summary -> active-frontier candidate queue.
+## summaries, stable slot metadata and the summary -> active-frontier queue.
 
 const CAPACITY := 4
 const TILE_RES := 8
@@ -13,6 +13,7 @@ var _activity: HydroTileActivityGPU
 var _frontier: HydroFrontierCandidatesGPU
 var _frames := 0
 var _finished := false
+var _keys: Array[HydroTileKey] = []
 
 
 func _ready() -> void:
@@ -25,18 +26,34 @@ func _ready() -> void:
 	state.resize(CAPACITY * TILE_RES * TILE_RES * 4)
 	_fill_uniform_tile(state, 0, 2.0, Vector2(0.5, 0.0), -2.0)
 	# Slot 1 intentionally contains water but is unoccupied; summary/frontier must
-	# ignore stale data from a recycled GPU slot.
+	# ignore stale data and stale metadata from a recycled GPU slot.
 	_fill_uniform_tile(state, 1, 5.0, Vector2(3.0, 2.0), -5.0)
 	_fill_uniform_tile(state, 2, 1.0, Vector2(0.0, -0.25), -1.0)
 	_fill_uniform_tile(state, 3, 0.0, Vector2.ZERO, 0.0)
 	var occupancy := PackedInt32Array([1, 0, 1, 1])
+
+	_keys = [
+		HydroTileKey.new(CubeSphere.FACE_PX, 6, 63, 23),
+		HydroTileKey.new(CubeSphere.FACE_NX, 5, 7, 9), # intentionally inactive
+		HydroTileKey.new(CubeSphere.FACE_PZ, 7, 41, 0),
+		HydroTileKey.new(CubeSphere.FACE_PY, 4, 3, 6),
+	]
+	var metadata := PackedInt32Array()
+	metadata.resize(CAPACITY * 4)
+	for slot in CAPACITY:
+		var key := _keys[slot]
+		var o := slot * 4
+		metadata[o] = key.face
+		metadata[o + 1] = key.level
+		metadata[o + 2] = key.x
+		metadata[o + 3] = key.y
 
 	_atlas = SparseHydroAtlasGPU.new()
 	add_child(_atlas)
 	_atlas.initialized.connect(_on_atlas_initialized)
 	_atlas.initialization_failed.connect(func(error: Error):
 		_fail("atlas initialization failed (%d)" % int(error)))
-	var err := _atlas.initialize(CAPACITY, TILE_RES, DX, state, occupancy)
+	var err := _atlas.initialize(CAPACITY, TILE_RES, DX, state, occupancy, metadata)
 	if err != OK:
 		_fail("atlas initialize rejected (%d)" % int(err))
 
@@ -103,8 +120,7 @@ func _on_summaries_ready(_request_id: int, summaries: Array[Dictionary]) -> void
 	if _finished:
 		return
 
-	# The next stage consumes the GPU summary RID directly; it does not rebuild a
-	# queue from the CPU dictionaries above.
+	# The frontier stage consumes GPU summary + metadata RIDs directly.
 	_frontier = HydroFrontierCandidatesGPU.new()
 	add_child(_frontier)
 	_frontier.initialized.connect(_on_frontier_initialized)
@@ -113,8 +129,8 @@ func _on_summaries_ready(_request_id: int, summaries: Array[Dictionary]) -> void
 	_frontier.candidates_ready.connect(_on_candidates_ready)
 	_frontier.queue_failed.connect(func(_request_id: int, error: Error):
 		_fail("frontier queue failed (%d)" % int(error)))
-	var err := _frontier.initialize(_activity.summary_rid(), CAPACITY,
-		FRONTIER_THRESHOLD_M3S)
+	var err := _frontier.initialize(_activity.summary_rid(), _atlas.tile_metadata_rid(),
+		CAPACITY, FRONTIER_THRESHOLD_M3S)
 	if err != OK:
 		_fail("frontier initialize rejected (%d)" % int(err))
 
@@ -141,6 +157,13 @@ func _on_candidates_ready(_request_id: int, candidates: Array[Dictionary],
 		var flux := float(c.get("flux_m3s", NAN))
 		_require(slot != 1, "inactive stale slot generated a frontier candidate")
 		_require(slot != 3, "dry occupied slot generated a frontier candidate")
+		var key := _keys[slot]
+		_require(int(c.get("face", -1)) == key.face
+			and int(c.get("level", -1)) == key.level
+			and int(c.get("x", -1)) == key.x
+			and int(c.get("y", -1)) == key.y,
+			"frontier stable identity mismatch slot=%d candidate=%s expected=%s" % [
+				slot, str(c), str(key)])
 		if slot == 0 and direction == SparseHydroScheduler.DIR_EAST:
 			_require_close(flux, 16.0, 2.0e-4, "frontier slot0 east flux")
 			found_east = true
