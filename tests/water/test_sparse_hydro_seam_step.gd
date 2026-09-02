@@ -58,8 +58,6 @@ func _ready() -> void:
 	if _finished:
 		return
 
-	# Physical current in source coordinates: both normal and tangential components
-	# are non-zero so a bad 90-degree rotation or tangent reversal is observable.
 	_source_q = HydroEdgeFrame.edge_normal(SOURCE_DIRECTION) * 0.40 \
 		+ HydroEdgeFrame.edge_tangent(SOURCE_DIRECTION) * 0.15
 	_destination_q = HydroEdgeFrame.momentum_to_source(_source_q,
@@ -77,6 +75,8 @@ func _ready() -> void:
 	_pool = HydroTilePool.new(CAPACITY)
 	_require(_pool.allocate(_source, 0) == 0, "source tile did not receive slot 0")
 	_require(_pool.allocate(_destination, 0) == 1, "destination tile did not receive slot 1")
+	_pool.set_state(_source, HydroTilePool.TileState.ACTIVE, "test_bootstrap")
+	_pool.set_state(_destination, HydroTilePool.TileState.ACTIVE, "test_bootstrap")
 	if _finished:
 		return
 
