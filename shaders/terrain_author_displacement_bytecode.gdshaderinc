@@ -106,7 +106,14 @@ float ad_radial_mask(vec3 direction, vec4 p) {
 	vec3 center_direction = ad_direction_from_latlon(p.x, p.y);
 	float angle_deg = acos(clamp(dot(d, center_direction), -1.0, 1.0)) * 57.29577951308232;
 	float radius_deg = max(p.z, 0.0);
-	float feather_deg = max(p.w, 0.0);
+	float feather_deg = abs(p.w);
+	if (p.w < 0.0) {
+		// Private Ring Area inner-edge mode: select at/outside the radius and put
+		// the feather only inside the excluded center hole.
+		if (angle_deg >= radius_deg) return 1.0;
+		if (feather_deg <= 1e-6) return 0.0;
+		return clamp(smoothstep(radius_deg - feather_deg, radius_deg, angle_deg), 0.0, 1.0);
+	}
 	if (radius_deg >= 180.0 - 1e-6 || angle_deg <= radius_deg) return 1.0;
 	if (feather_deg <= 1e-6) return 0.0;
 	return clamp(1.0 - smoothstep(radius_deg, radius_deg + feather_deg, angle_deg), 0.0, 1.0);
