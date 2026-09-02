@@ -27,10 +27,14 @@ var identity_bridge: SparseHydroIdentityBridge
 var terrain_bed: HydroTerrainBedGPU
 var writer: HydroSourceTermsGPU
 
-var default_tile_level := 12
+## Derived from HydroMetricGrid during initialize(). Callers may still supply an
+## explicit tile_level per source for isolated tests/special representations.
+var default_tile_level := 0
 var max_point_sources := 8192
 
 var _sources: Dictionary = {} # String -> Dictionary
+var _metric_contract: Dictionary = {}
+var _planet_radius_m := 1.0
 var _initialized := false
 var _busy := false
 var _dirty := false
@@ -69,6 +73,19 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 	terrain_bed.stage_recorded.connect(_on_terrain_stage_recorded)
 	terrain_bed.stage_failed.connect(_on_terrain_stage_failed)
 
+	var terrain_cfg := terrain_bed.configuration()
+	_planet_radius_m = maxf(float(terrain_cfg.get("planet_radius", 1.0)), 1.0)
+	_metric_contract = HydroMetricGrid.atlas_contract(atlas, _planet_radius_m)
+	default_tile_level = int(_metric_contract.get("level", 0))
+	var metric_error := float(_metric_contract.get("relative_error", 0.0))
+	if metric_error > 0.05:
+		push_warning("HydroSourceIngress: atlas dx %.6f m does not exactly match cube-sphere "
+			+ "level %d (compatible %.6f m, %.1f%% mismatch). Production bootstrap should "
+			+ "initialize the atlas with HydroMetricGrid.compatible_cell_size_m()." % [
+				atlas.cell_size_m, default_tile_level,
+				float(_metric_contract.get("compatible_cell_size_m", atlas.cell_size_m)),
+				metric_error * 100.0])
+
 	writer = HydroSourceTermsGPU.new()
 	writer.name = "HydroSourceTermsGPU"
 	add_child(writer)
@@ -100,6 +117,10 @@ func source_ids() -> Array[String]:
 	for id: Variant in _sources.keys():
 		out.append(String(id))
 	return out
+
+
+func metric_contract() -> Dictionary:
+	return _metric_contract.duplicate(true)
 
 
 ## Signed volumetric flow Q [m^3/s]. Positive adds water; negative removes it.
@@ -179,6 +200,7 @@ func stats() -> Dictionary:
 		"flush_revision": _flush_revision,
 		"source_count": _sources.size(),
 		"default_tile_level": default_tile_level,
+		"metric_contract": metric_contract(),
 		"max_point_sources": max_point_sources,
 		"activation_queue": _activation_queue.size() - _activation_index,
 		"writer_gpu_bytes": 0 if writer == null else writer.gpu_bytes_estimate(),
@@ -436,6 +458,8 @@ func release() -> void:
 	_dirty = false
 	_revision = 0
 	_flush_revision = 0
+	_metric_contract.clear()
+	_planet_radius_m = 1.0
 	_reset_flush_state()
 	_sources.clear()
 	scheduler = null
