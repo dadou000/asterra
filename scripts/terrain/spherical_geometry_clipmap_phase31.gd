@@ -1,5 +1,5 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap_phase30.gd"
-## Phase 31: displacement-aware LOD and horizon safety.
+## Phase 31: displacement-aware LOD, horizon safety and transactional preview source.
 ##
 ## The production clipmap historically assumed 220 m was enough headroom above the
 ## macro height field when selecting its finest visible LOD. The editable production
@@ -7,13 +7,15 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_phase30.gd"
 ## compilation yet still disappear because the CPU selected/cut geometry using stale
 ## bounds. This layer consumes the authoritative runtime's conservative envelope.
 ##
-## If an advanced graph cannot be statically bounded, visibility deliberately fails
-## open to GLOBAL_BOUNDS_M. That can be expensive, but it is preferable to silently
-## removing valid terrain. The runtime stats expose this fallback so we can tighten
-## more graph operations later without compromising correctness.
+## Planet Studio also owns distinct staged and applied system snapshots. The graph
+## editor can now explicitly choose which one feeds the terrain runtime: PREVIEW uses
+## staged authoring data; ORIGINAL/APPLIED resolves the immutable applied snapshot.
+## This is a source switch only—the same bytecode runtime, contact query and renderer
+## remain authoritative on both sides of the A/B comparison.
 
 const BOUNDED_DISPLACEMENT_RUNTIME := preload(
 	"res://scripts/world_authoring/terrain_displacement_runtime_phase33.gd")
+const TERRAIN_PREVIEW_META := &"terrain_graph_preview_enabled"
 
 var _displacement_guard_m: float = LOD_SURFACE_GUARD_M
 var _displacement_guard_fallback: bool = false
@@ -33,6 +35,36 @@ func _ensure_displacement_runtime() -> void:
 	_displacement_runtime.name = "TerrainDisplacementRuntime"
 	add_child(_displacement_runtime)
 	_displacement_fingerprint = ""
+
+
+func _active_authoring_terrain() -> Resource:
+	var editor: Node = get_tree().root.find_child("PlanetStudioLive", true, false)
+	if editor == null:
+		return null
+	var session_value: Variant = editor.get("_session")
+	if session_value == null:
+		return null
+
+	# Preserve the historical live-preview behaviour until the Phase 36 graph UI
+	# explicitly creates this metadata flag. Once present, the user owns the A/B
+	# choice and the renderer never silently changes source underneath them.
+	var preview_enabled: bool = true
+	if session_value.has_method("has_meta") and bool(session_value.call("has_meta", TERRAIN_PREVIEW_META)):
+		preview_enabled = bool(session_value.call("get_meta", TERRAIN_PREVIEW_META, true))
+	if preview_enabled:
+		if session_value.has_method("active_terrain_profile"):
+			return session_value.call("active_terrain_profile") as Resource
+		return null
+
+	var applied_value: Variant = session_value.get("applied_system")
+	var applied_system: Resource = applied_value as Resource if applied_value is Resource else null
+	if applied_system == null or not applied_system.has_method("active_body"):
+		return null
+	var body: Resource = applied_system.call("active_body") as Resource
+	if body == null:
+		return null
+	var profile: Resource = body.get(&"planet_profile") as Resource
+	return profile.get(&"terrain") as Resource if profile != null else null
 
 
 func _current_displacement_guard_m() -> float:
