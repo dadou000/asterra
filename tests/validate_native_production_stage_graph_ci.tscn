@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/world_authoring/validate_native_production_stage_graph_ci.gd" id="1_native"]
+
+[node name="ValidateNativeProductionStageGraph" type="Node"]
+script = ExtResource("1_native")
