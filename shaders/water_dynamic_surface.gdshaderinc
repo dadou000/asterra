@@ -2,7 +2,7 @@
 //
 // The texture is owned by WaterSurfaceResources on the global RenderingDevice.
 // It is intentionally a local tangent-plane cache, not persistent world state.
-// Production sparse hydrology will repopulate/recenter this representation.
+// Production sparse hydrology repopulates/recenters this representation.
 //
 // IMPORTANT: the field owns its own planet-space tangent frame. The visible
 // toroidal clipmap supplies a separate temporary input frame. Samples are mapped
@@ -10,10 +10,10 @@
 // cannot move an already-simulated disturbance.
 //
 // RGBA channels:
-//   R = dynamic surface-height residual [m]
+//   R = water surface elevation / dynamic height relative datum [m]
 //   G = tangent velocity X [m/s]
 //   B = tangent velocity Y [m/s]
-//   A = activity/foam hint [0..1]
+//   A = physical water depth [m]
 
 uniform sampler2D u_dynamic_surface_field : filter_linear, repeat_disable;
 uniform float u_dynamic_surface_enabled = 0.0;
@@ -34,6 +34,7 @@ uniform float u_dynamic_surface_planet_radius = 1.0;
 struct WaterDynamicSurfaceSample {
 	float height;
 	vec2 velocity;
+	float depth;
 	float activity;
 	float valid;
 };
@@ -42,6 +43,7 @@ WaterDynamicSurfaceSample water_dynamic_surface_empty() {
 	WaterDynamicSurfaceSample sample_value;
 	sample_value.height = 0.0;
 	sample_value.velocity = vec2(0.0);
+	sample_value.depth = 0.0;
 	sample_value.activity = 0.0;
 	sample_value.valid = 0.0;
 	return sample_value;
@@ -89,7 +91,11 @@ WaterDynamicSurfaceSample water_dynamic_surface_sample_field(vec2 field_plane_m)
 	vec4 packed = texture(u_dynamic_surface_field, uv);
 	sample_value.height = packed.r;
 	sample_value.velocity = packed.gb;
-	sample_value.activity = clamp(packed.a, 0.0, 1.0);
+	sample_value.depth = max(packed.a, 0.0);
+	float wet = smoothstep(0.002, 0.05, sample_value.depth);
+	// Visual activity is representation-only. Physical wetness/depth stays in A;
+	// fast flow derives a foam hint here without corrupting the cache contract.
+	sample_value.activity = smoothstep(0.65, 4.0, length(sample_value.velocity)) * wet;
 	sample_value.valid = 1.0;
 	return sample_value;
 }
