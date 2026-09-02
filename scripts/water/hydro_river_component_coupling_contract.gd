@@ -1,24 +1,17 @@
 class_name HydroRiverComponentCouplingContract
 extends RefCounted
-## Pure CPU validation for switching a logical refined river component from the
-## legacy per-reach 1D<->2D mouths to one physically continuous fine component.
+## Pure CPU validation for switching a refined river component to direct fine/fine
+## coupling across its internal coarse reach boundaries.
 ##
-## Bypassing an internal coarse boundary is conservative only when:
-##   1. the upstream coarse reach has no residual 1D length left;
-##   2. no residual coarse channel parcel is waiting in that reach;
-##   3. the upstream cluster's final sparse member is cardinally adjacent to the
-##      receiver cluster's first sparse member; and
-##   4. their actual seeded corridor centerlines cross that shared edge continuously.
-##
-## A true multi-root confluence additionally requires branched junction geometry in
-## the receiver tile. The current straight-corridor seeder cannot prove that shape,
-## so multi-root components remain on legacy per-reach coupling until a dedicated
-## junction builder publishes `fine_junction_verified` metadata.
+## Ordinary links validate straight corridor edge crossings. Links entering a
+## verified junction validate against the actual incoming junction arm instead.
 
 const LENGTH_REL_TOL := 1.0e-6
 const LENGTH_ABS_TOL_M := 1.0e-4
-const VOLUME_REL_TOL := 1.0e-9
-const VOLUME_ABS_TOL_M3 := 1.0e-7
+# Component promotion quantizes each member parcel downward to FP32. A fully
+# represented reach can therefore retain a very small sum-of-members coarse residue.
+const VOLUME_REL_TOL := 5.0e-6
+const VOLUME_ABS_TOL_M3 := 1.0e-5
 const EDGE_EPS := 1.0e-8
 
 
@@ -40,6 +33,8 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 		junction["upstream_mouth_count"] = upstream_mouth_count
 		junction["requires_branched_junction_seeding"] = true
 		return junction
+	if upstream_mouth_count > 1 and not bool(component.get("physical_topology_verified", false)):
+		return _error(ERR_BUSY, "component_physical_topology_not_verified")
 
 	for raw_cell in cells:
 		var cell := int(raw_cell)
@@ -53,6 +48,7 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 			return absent
 
 	var physical_links: Array[Dictionary] = []
+	var junction_links := 0
 	var edges_value: Variant = component.get("internal_reach_edges", [])
 	if not (edges_value is Array):
 		return _error(ERR_INVALID_DATA, "component_internal_edges_missing")
@@ -112,10 +108,19 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 			"source_parameter": -1.0,
 			"destination_parameter": -1.0,
 			"parameter_delta_cells": 0.0,
+			"junction_arm": false,
 		}
 		if tile_resolution > 0:
-			continuity = _corridor_continuity(from_last, to_first, link,
-				tile_resolution, cell_size_m)
+			if bool(to_first.get("junction", false)):
+				if not bool(component.get("fine_junction_verified", false)):
+					return _error(ERR_BUSY, "component_fine_junction_not_verified")
+				continuity = _junction_continuity(from_cell, from_last, to_first, link,
+					tile_resolution, cell_size_m)
+				if int(continuity.get("error", FAILED)) == OK:
+					junction_links += 1
+			else:
+				continuity = _corridor_continuity(from_last, to_first, link,
+					tile_resolution, cell_size_m)
 			if int(continuity.get("error", FAILED)) != OK:
 				continuity["from_cell"] = from_cell
 				continuity["to_cell"] = to_cell
@@ -133,6 +138,7 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 			"source_edge_parameter": float(continuity.get("source_parameter", -1.0)),
 			"destination_edge_parameter": float(continuity.get("destination_parameter", -1.0)),
 			"corridor_parameter_delta_cells": float(continuity.get("parameter_delta_cells", 0.0)),
+			"junction_arm": bool(continuity.get("junction_arm", false)),
 		})
 
 	var out := component.duplicate(true)
@@ -140,12 +146,86 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 	out["ready"] = true
 	out["physical_internal_links"] = physical_links
 	out["physical_internal_link_count"] = physical_links.size()
+	out["junction_internal_link_count"] = junction_links
 	out["internal_coarse_mouths_bypassed"] = physical_links.size()
 	out["ownership_changed"] = false
 	out["requires_full_internal_reaches"] = true
 	out["requires_cardinal_fine_links"] = true
 	out["corridor_continuity_verified"] = tile_resolution > 0
+	out["junction_continuity_verified"] = upstream_mouth_count <= 1 \
+		or junction_links > 0
 	return out
+
+
+static func _junction_continuity(from_cell: int, from_member: Dictionary,
+		junction_member: Dictionary, link: Dictionary, resolution: int,
+		cell_size_m: float) -> Dictionary:
+	var source_edge := int(link.get("source_direction", -1))
+	var destination_edge := int(link.get("destination_direction", -1))
+	var source_hit := _line_edge_hit(from_member, source_edge, resolution)
+	if int(source_hit.get("error", FAILED)) != OK \
+			or float(source_hit.get("t", -INF)) < -EDGE_EPS:
+		return _error(ERR_CANT_RESOLVE, "component_internal_corridor_edge_miss")
+	var source_parameter := float(source_hit.get("parameter", -1.0))
+	var expected_destination := source_parameter if int(link.get("edge_orientation", 1)) >= 0 \
+		else 1.0 - source_parameter
+
+	var segments_value: Variant = junction_member.get("junction_segments", null)
+	if not (segments_value is Array) or (segments_value as Array).size() < 2:
+		return _error(ERR_INVALID_DATA, "component_junction_segments_missing")
+	var best_delta := INF
+	var best_parameter := -1.0
+	var matched := false
+	for value: Variant in segments_value:
+		if not (value is Dictionary):
+			continue
+		var segment := value as Dictionary
+		var start_value: Variant = segment.get("start_cell", null)
+		var end_value: Variant = segment.get("end_cell", null)
+		if not (start_value is Vector2) or not (end_value is Vector2):
+			continue
+		var start := start_value as Vector2
+		var finish := end_value as Vector2
+		var edge_parameter := _point_edge_parameter(start, destination_edge, resolution)
+		if float(edge_parameter.get("error", FAILED)) != OK:
+			continue
+		# Incoming junction arms point from the shared edge into the tile. Reject the
+		# outgoing arm even if it happens to start on another edge.
+		if _distance_to_tile_center(finish, resolution) \
+				>= _distance_to_tile_center(start, resolution) - EDGE_EPS:
+			continue
+		var parameter := float(edge_parameter.get("parameter", -1.0))
+		var delta_cells := absf(parameter - expected_destination) * float(resolution)
+		if delta_cells < best_delta:
+			best_delta = delta_cells
+			best_parameter = parameter
+			matched = true
+	if not matched:
+		var absent := _error(ERR_CANT_RESOLVE, "component_junction_incoming_arm_missing")
+		absent["from_cell"] = from_cell
+		return absent
+
+	var tolerance_cells := 1.5
+	if is_finite(cell_size_m) and cell_size_m > 0.0:
+		var from_half := maxf(float(from_member.get("half_width_m", 0.0)), 0.0)
+		var junction_half := maxf(float(junction_member.get("half_width_m", 0.0)), 0.0)
+		tolerance_cells = maxf(1.0, (from_half + junction_half) / cell_size_m + 0.5)
+	if best_delta > tolerance_cells:
+		var gap := _error(ERR_CANT_RESOLVE, "component_internal_junction_gap")
+		gap["source_parameter"] = source_parameter
+		gap["destination_parameter"] = best_parameter
+		gap["expected_destination_parameter"] = expected_destination
+		gap["parameter_delta_cells"] = best_delta
+		gap["tolerance_cells"] = tolerance_cells
+		return gap
+	return {
+		"error": OK,
+		"source_parameter": source_parameter,
+		"destination_parameter": best_parameter,
+		"parameter_delta_cells": best_delta,
+		"tolerance_cells": tolerance_cells,
+		"junction_arm": true,
+	}
 
 
 static func _corridor_continuity(from_member: Dictionary, to_member: Dictionary,
@@ -157,13 +237,9 @@ static func _corridor_continuity(from_member: Dictionary, to_member: Dictionary,
 	if int(source_hit.get("error", FAILED)) != OK \
 			or int(destination_hit.get("error", FAILED)) != OK:
 		return _error(ERR_CANT_RESOLVE, "component_internal_corridor_edge_miss")
-
-	# The upstream centerline must travel forward to the shared edge. The receiver
-	# centerline must reach that same entry edge when traced backward.
 	if float(source_hit.get("t", -INF)) < -EDGE_EPS \
 			or float(destination_hit.get("t", INF)) > EDGE_EPS:
 		return _error(ERR_CANT_RESOLVE, "component_internal_corridor_wrong_orientation")
-
 	var source_parameter := float(source_hit.get("parameter", -1.0))
 	var destination_parameter := float(destination_hit.get("parameter", -1.0))
 	var expected_destination := source_parameter if int(link.get("edge_orientation", 1)) >= 0 \
@@ -188,7 +264,38 @@ static func _corridor_continuity(from_member: Dictionary, to_member: Dictionary,
 		"destination_parameter": destination_parameter,
 		"parameter_delta_cells": delta_cells,
 		"tolerance_cells": tolerance_cells,
+		"junction_arm": false,
 	}
+
+
+static func _point_edge_parameter(point: Vector2, edge: int,
+		resolution: int) -> Dictionary:
+	if resolution <= 0:
+		return {"error": ERR_INVALID_PARAMETER}
+	var r := float(resolution)
+	var tolerance := 1.0e-4
+	match edge:
+		HydroTileTopology.DIR_WEST:
+			if absf(point.x) > tolerance or point.y < -tolerance or point.y > r + tolerance:
+				return {"error": ERR_CANT_RESOLVE}
+			return {"error": OK, "parameter": clampf(point.y / r, 0.0, 1.0)}
+		HydroTileTopology.DIR_EAST:
+			if absf(point.x - r) > tolerance or point.y < -tolerance or point.y > r + tolerance:
+				return {"error": ERR_CANT_RESOLVE}
+			return {"error": OK, "parameter": clampf(point.y / r, 0.0, 1.0)}
+		HydroTileTopology.DIR_SOUTH:
+			if absf(point.y) > tolerance or point.x < -tolerance or point.x > r + tolerance:
+				return {"error": ERR_CANT_RESOLVE}
+			return {"error": OK, "parameter": clampf(point.x / r, 0.0, 1.0)}
+		HydroTileTopology.DIR_NORTH:
+			if absf(point.y - r) > tolerance or point.x < -tolerance or point.x > r + tolerance:
+				return {"error": ERR_CANT_RESOLVE}
+			return {"error": OK, "parameter": clampf(point.x / r, 0.0, 1.0)}
+	return {"error": ERR_INVALID_PARAMETER}
+
+
+static func _distance_to_tile_center(point: Vector2, resolution: int) -> float:
+	return point.distance_to(Vector2.ONE * (0.5 * float(resolution)))
 
 
 static func _line_edge_hit(member: Dictionary, edge: int, resolution: int) -> Dictionary:
