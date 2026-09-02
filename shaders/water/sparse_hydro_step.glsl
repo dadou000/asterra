@@ -13,6 +13,9 @@
 // source tile frame before the Riemann problem is solved. A nonresident boundary
 // is temporarily reflective; the separate frontier queue is responsible for
 // allocating/waking the destination tile.
+//
+// dt is supplied by the GPU adaptive-CFL control block. Candidate iterations after
+// the requested macro time is consumed are strict no-ops.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -35,9 +38,48 @@ layout(set = 0, binding = 5, std430) readonly buffer NeighborLinks {
     int neighbor_links[]; // destination edge[0..3] | reversed<<2, or -1
 };
 layout(set = 0, binding = 6, std430) readonly buffer Params {
-    vec4 grid_dt; // tile_resolution, capacity, cell_size_m, dt_s
-    vec4 physics; // gravity, dry_eps, Manning n, reserved
+    vec4 grid_dt;  // tile_resolution, capacity, cell_size_m, requested macro dt
+    vec4 physics;  // gravity, dry_eps, Manning n, CFL
+    vec4 schedule; // max substeps, reserved...
 } params;
+layout(set = 0, binding = 7, std430) readonly buffer Control {
+    uint pre_max_speed_bits;
+    uint pre_max_depth_bits;
+    uint pre_wet_count;
+    uint pre_invalid_count;
+
+    uint post_max_speed_bits;
+    uint post_max_depth_bits;
+    uint post_wet_count;
+    uint post_invalid_count;
+
+    float requested_dt;
+    float remaining_dt;
+    float current_dt;
+    float advanced_dt;
+
+    float min_cfl_dt;
+    float last_cfl_dt;
+    uint steps_taken;
+    uint max_substeps;
+
+    uint cfl_clamped;
+    uint iteration_active;
+    uint iter_max_speed_bits;
+    uint iter_max_depth_bits;
+
+    uint iter_wet_count;
+    uint iter_invalid_count;
+    uint reserved0;
+    uint reserved1;
+} control;
+
+layout(push_constant, std430) uniform StepPush {
+    uint step_index;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} pc;
 
 const int DIR_WEST = 0;
 const int DIR_EAST = 1;
@@ -54,7 +96,7 @@ struct HydroInterface {
 int tile_res() { return max(int(params.grid_dt.x + 0.5), 1); }
 int capacity() { return max(int(params.grid_dt.y + 0.5), 1); }
 float dx() { return max(params.grid_dt.z, 1e-4); }
-float dt() { return max(params.grid_dt.w, 0.0); }
+float dt() { return max(control.current_dt, 0.0); }
 float grav() { return max(params.physics.x, 1e-4); }
 float dry_eps() { return max(params.physics.y, 1e-8); }
 float manning_n() { return max(params.physics.z, 0.0); }
@@ -72,20 +114,15 @@ vec2 edge_normal(int direction) {
     if (direction == DIR_WEST) return vec2(-1.0, 0.0);
     if (direction == DIR_EAST) return vec2( 1.0, 0.0);
     if (direction == DIR_SOUTH) return vec2(0.0, -1.0);
-    return vec2(0.0, 1.0); // north
+    return vec2(0.0, 1.0);
 }
 
 vec2 edge_tangent(int direction) {
-    // Increasing source edge parameter: +v on W/E, +u on S/N.
     if (direction == DIR_WEST || direction == DIR_EAST)
         return vec2(0.0, 1.0);
     return vec2(1.0, 0.0);
 }
 
-// Convert destination-local momentum into source-local momentum.
-// Destination outward normal is physically opposite source outward normal.
-// Destination increasing edge tangent agrees with source when orientation=+1,
-// and is physically reversed when orientation=-1.
 vec2 momentum_to_source(vec2 q_dest, int source_direction,
         int destination_direction, bool reversed) {
     vec2 ns = edge_normal(source_direction);
@@ -212,6 +249,9 @@ vec3 apply_friction(vec3 q, float step_dt) {
 }
 
 void main() {
+    if (pc.step_index >= control.steps_taken || control.iteration_active == 0u
+            || dt() <= 0.0) return;
+
     ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
     int slot = gid.z;
     int r = tile_res();
@@ -220,8 +260,6 @@ void main() {
     ivec2 p = gid.xy;
     int i = idx(slot, p);
 
-    // Keep unoccupied scratch deterministic. No state from a recycled slot is
-    // allowed to become authoritative merely because a broad z-dispatch touched it.
     if (occupied[slot] == 0) {
         cells_out[i] = vec4(0.0);
         return;
