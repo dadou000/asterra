@@ -286,13 +286,9 @@ static func _longitude_mask_value(direction_normalized: Vector3, parameters: Vec
 		# Equal edges intentionally mean the entire circumference.
 		value = 1.0
 	elif along_deg <= span_deg:
+		# Match Latitude Band semantics: the requested band is fully selected and
+		# feather only softens the exterior, never the interior.
 		value = 1.0
-		if feather_deg > 1e-6:
-			var from_west: float = along_deg
-			var from_east: float = span_deg - along_deg
-			value = minf(
-				_smoothstep_static(0.0, feather_deg, from_west),
-				_smoothstep_static(0.0, feather_deg, from_east))
 	elif feather_deg > 1e-6:
 		var after_east: float = along_deg - span_deg
 		var before_west: float = 360.0 - along_deg
