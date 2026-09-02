@@ -1,4 +1,4 @@
-extends "res://scripts/world_authoring/validate_terrain_program_transaction_ci.gd"
+extends "res://tests/validate_secondary_terrain_scripts.gd"
 ## Phase 29 regression: staged graph edits are runtime inputs immediately.
 ##
 ## No session Apply occurs in this test. A node parameter mutation increments the
