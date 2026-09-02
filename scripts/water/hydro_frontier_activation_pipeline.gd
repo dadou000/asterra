@@ -111,6 +111,13 @@ func busy() -> bool:
 	return _busy
 
 
+## True only after at least one source-edge parcel has moved into the hidden
+## destination. Coarse-only preseeds are exactly reversible and therefore do not
+## require preserving/publishing a failed destination.
+static func owns_irreversible_frontier_water(successful_edge_handoffs: int) -> bool:
+	return successful_edge_handoffs > 0
+
+
 func set_coarse_preseed(provider: HydroFrontierCoarsePreseed) -> Error:
 	if _busy:
 		return ERR_BUSY
@@ -381,7 +388,7 @@ func _fail_current_job(error: Error) -> void:
 		var slot := int(job.get("destination_slot", -1))
 		var successful_handoffs := int(_handoff_success_by_destination.get(
 			destination_id, 0))
-		if destination != null and successful_handoffs > 0:
+		if destination != null and owns_irreversible_frontier_water(successful_handoffs):
 			# At least one source edge has already been debited. There is no reverse GPU
 			# transfer here, so publish the partial destination rather than deleting it.
 			var record := scheduler.pool.record(destination)
@@ -390,10 +397,20 @@ func _fail_current_job(error: Error) -> void:
 				var activated := scheduler.activate_reserved(destination,
 					"frontier_partial_after_failure")
 				if activated >= 0:
-					connectivity.sync_pool(scheduler.pool)
-			_finalize_coarse_preseed(destination_id)
-			_mark_destination_result(destination_id,
-				"activated_after_handoff_failure")
+					var conn_error := connectivity.sync_pool(scheduler.pool)
+					_finalize_coarse_preseed(destination_id)
+					_mark_destination_result(destination_id,
+						"activated_after_handoff_failure")
+					destination_activated.emit(_batch_id, destination_id, activated)
+					if conn_error != OK:
+						error = conn_error
+				# If publication failed, deliberately leave the provisional coarse
+				# metadata and ALLOCATING destination intact. Batch cleanup below gets one
+				# more preservation attempt; generation teardown is the final fail-safe.
+			else:
+				_finalize_coarse_preseed(destination_id)
+				_mark_destination_result(destination_id,
+					"activated_after_handoff_failure")
 		else:
 			# No edge parcel moved. A coarse-only preseed is exactly reversible, so
 			# restore it before releasing the still-hidden destination.
@@ -454,7 +471,7 @@ func _cleanup_unfinished_destinations() -> Error:
 			_finalize_coarse_preseed(destination_id)
 			continue
 
-		if successful_handoffs > 0:
+		if owns_irreversible_frontier_water(successful_handoffs):
 			# At least one conservative edge transfer has already reduced a source tile.
 			# Publishing the partially constructed destination is the only operation that
 			# preserves that transferred water without inventing a reverse GPU handoff.
