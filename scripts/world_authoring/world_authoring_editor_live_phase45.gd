@@ -12,6 +12,15 @@ const TERRAIN_PRESETS := preload(
 	"res://scripts/world_authoring/model/terrain_feature_preset_catalog.gd")
 
 
+func _phase28_focus_existing_slot(slot: Resource) -> void:
+	# Phase 28/41 tooling and saved editor actions use this API to request a concrete
+	# graph. Phase 45 opens Terrain in Simple mode, so make that explicit raw-graph
+	# request a compatibility bridge into Advanced rather than leaving the requested
+	# graph hidden behind the simplified presentation.
+	_phase43_advanced_terrain = true
+	super._phase28_focus_existing_slot(slot)
+
+
 func _phase43_build_local_features(terrain: Resource) -> void:
 	_section("Local Features")
 	_add_note("Start from a preset or add a blank feature. Presets create the same editable WHAT × WHERE features shown below; they do not introduce special runtime terrain types.")
