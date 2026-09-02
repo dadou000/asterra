@@ -4,8 +4,8 @@ extends Node
 ##
 ## One coarse ownership transaction covers every fine member. All members remain
 ## ALLOCATING/occupancy=0 through terrain staging and corridor seeding. The coarse
-## channel debit commits once, then the full chain is published and connectivity is
-## rebuilt once so internal fine<->fine edges appear atomically.
+## channel debit commits once, then the full chain is batch-published and sparse
+## connectivity is rebuilt once so internal fine<->fine edges appear atomically.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -123,8 +123,6 @@ func promote_cluster(cell: int, tile_count: int = -1,
 	if not is_finite(requested) or requested <= 0.0:
 		return -1
 
-	# Quantize every member independently before reserving coarse water, then reserve
-	# exactly the sum that the GPU members can represent.
 	var each_requested := requested / float(planned.size())
 	var members: Array[Dictionary] = []
 	var represented_total := 0.0
@@ -142,8 +140,6 @@ func promote_cluster(cell: int, tile_count: int = -1,
 	if int(prepared.get("error", FAILED)) != OK:
 		return -1
 
-	# Reserve the entire chain before any GPU mutation. Failure is therefore a clean
-	# rollback with no published sparse ownership.
 	for i in members.size():
 		var key := members[i].get("key") as HydroTileKey
 		if key == null or scheduler.pool.contains(key):
@@ -195,7 +191,6 @@ func _on_terrain_stage_recorded(request_id: int, tile_id: int, slot: int) -> voi
 	_staged += 1
 	if _staged != _members.size():
 		return
-	# All beds exist before any member receives water.
 	for i in _members.size():
 		var m := _members[i]
 		var seed_id := seeder.seed_reserved(int(m["slot"]),
@@ -240,17 +235,20 @@ func _commit_and_publish() -> void:
 		_fail(int(committed.get("error", ERR_INVALID_DATA)), "coarse_commit")
 		return
 	_transaction_id = -1
+	var keys: Array[HydroTileKey] = []
+	for member in _members:
+		keys.append(member["key"] as HydroTileKey)
+	var slots := HydroSchedulerBatchOps.activate_reserved(scheduler, keys,
+		"river_cluster_publish")
+	if slots.size() != keys.size():
+		_fail(ERR_CANT_ACQUIRE_RESOURCE, "cluster_publish", false)
+		return
 	var published_members: Array[Dictionary] = []
 	for i in _members.size():
-		var member := _members[i]
-		var key := member["key"] as HydroTileKey
-		var slot := scheduler.activate_reserved(key, "river_cluster_publish")
-		if slot != int(member["slot"]):
-			# Coarse debit already committed and GPU water exists. Preserve the entire
-			# generation fail-closed; never cancel a subset and lose its parcel.
-			_fail(ERR_CANT_ACQUIRE_RESOURCE, "cluster_publish", false)
+		if slots[i] != int(_members[i]["slot"]):
+			_fail(ERR_INVALID_DATA, "cluster_slot_changed", false)
 			return
-		var out := member.duplicate(true)
+		var out := _members[i].duplicate(true)
 		out.erase("key")
 		published_members.append(out)
 	var conn_error := connectivity.sync_pool(scheduler.pool)
@@ -287,8 +285,6 @@ func _fail(error: Error, stage: String, rollback_coarse: bool = true) -> void:
 		_cancel_reserved_members(_members)
 		_restore_runtime()
 	else:
-		# Ownership already left coarse or a subset may be published. Freeze sparse
-		# advancement rather than silently duplicating/removing water.
 		if runtime != null:
 			runtime.enabled = false
 	_clear_request()
