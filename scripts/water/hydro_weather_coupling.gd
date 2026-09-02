@@ -7,6 +7,11 @@ extends Node
 ## has already returned to IDLE there and defers its next pump, so the atmospheric
 ## compute dispatch is recorded before the next SWE command chain. One macro cycle
 ## therefore sees one coherent weather-forcing snapshot.
+##
+## The atmospheric buffer is indexed by transient atlas slot, so every completed
+## hydro cycle forces a refresh. This is also an identity-safety rule: a slot that
+## was released/recycled during the cycle cannot carry its former owner's weather
+## value into the next solve.
 
 signal coupling_ready
 signal coupling_updated(request_id: int)
@@ -77,9 +82,9 @@ func _process(delta: float) -> void:
 	if not is_finite(delta) or delta < 0.0:
 		return
 	_refresh_accum += delta
-	# This fallback handles an idle runtime that has no current time debt/cycle.
-	# Active runtimes normally refresh from _on_runtime_cycle_completed instead.
-	_try_refresh_now()
+	# Fallback for an idle runtime with no active hydro cycle. Active runtimes refresh
+	# unconditionally from _on_runtime_cycle_completed for slot-identity safety.
+	_try_refresh_now(false)
 
 
 func _on_sparse_runtime_ready() -> void:
@@ -98,13 +103,14 @@ func _on_weather_weight_changed(_weight: float) -> void:
 
 
 func _on_runtime_cycle_completed(_cycle_id: int, _report: Dictionary) -> void:
-	_try_refresh_now()
+	_try_refresh_now(true)
 
 
-func _try_refresh_now() -> void:
+func _try_refresh_now(force_cycle_refresh: bool = false) -> void:
 	if not enabled or not available() or _forcing.pending() or _runtime.busy():
 		return
-	if not _update_requested and _refresh_accum < maxf(refresh_interval_s, 0.01):
+	if not force_cycle_refresh and not _update_requested \
+			and _refresh_accum < maxf(refresh_interval_s, 0.01):
 		return
 	_apply_policy()
 	var request_id := _forcing.request_update()
@@ -160,7 +166,7 @@ func _apply_policy() -> void:
 func _on_forcing_initialized() -> void:
 	_ready_coupling = true
 	request_refresh()
-	_try_refresh_now()
+	_try_refresh_now(false)
 	coupling_ready.emit()
 
 
