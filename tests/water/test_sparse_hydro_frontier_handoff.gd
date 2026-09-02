@@ -3,9 +3,9 @@ extends Node
 ##
 ## A wet source tile on +X sits at its north cube seam. Only that boundary is
 ## declared reachable. GPU activity produces predictive frontier candidates,
-## policy reserves the polar-face neighbor without publishing it, a dry terrain
-## state is staged, the conservative handoff pre-wets the mapped edge, then the
-## tile becomes active and connectivity opens. Finally the adaptive sparse SWE
+## policy reserves the polar-face neighbor without publishing it, the destination
+## bed is reconstructed on GPU, the conservative handoff pre-wets the mapped edge,
+## then the tile becomes active and connectivity opens. Finally adaptive sparse SWE
 ## advances across the newly live seam.
 
 const CAPACITY := 2
@@ -20,16 +20,19 @@ const SOLVER_DT := 0.03
 const TIMEOUT_FRAMES := 1800
 const MASS_TOLERANCE := 3.0e-3
 const MOMENTUM_TOLERANCE := 3.0e-5
+const MACRO_FACE_RES := 16
 
 var _scheduler: SparseHydroScheduler
 var _atlas: SparseHydroAtlasGPU
 var _identity_bridge: SparseHydroIdentityBridge
 var _connectivity: SparseHydroConnectivityGPU
+var _terrain_bed: HydroTerrainBedGPU
 var _activity: HydroTileActivityGPU
 var _frontier: HydroFrontierCandidatesGPU
 var _activation: HydroFrontierActivationPipeline
 var _solver: SparseHydroStepGPU
 var _readback: HydroStateReadback
+var _macro: Texture2DArray
 
 var _source: HydroTileKey
 var _destination: HydroTileKey
@@ -73,7 +76,7 @@ func _ready() -> void:
 	var state := PackedFloat32Array()
 	state.resize(CAPACITY * TILE_RES * TILE_RES * 4)
 	_fill_uniform_tile(state, 0, 1.0, _source_q, 0.0)
-	# Slot 1 deliberately contains impossible stale state. stage_slot_state() must
+	# Slot 1 deliberately contains impossible stale state. GPU terrain staging must
 	# overwrite both A and B before the reservation is published.
 	_fill_uniform_tile(state, 1, 50.0, Vector2(900.0, -700.0), -50.0)
 	_initial_mass = float(TILE_RES * TILE_RES) * 1.0
@@ -120,6 +123,41 @@ func _on_connectivity_initialized() -> void:
 	if _finished:
 		return
 
+	_macro = _make_zero_macro_texture()
+	_require(_macro != null, "synthetic macro texture creation failed")
+	if _finished:
+		return
+	_terrain_bed = HydroTerrainBedGPU.new()
+	add_child(_terrain_bed)
+	_terrain_bed.initialized.connect(_on_terrain_bed_initialized)
+	_terrain_bed.initialization_failed.connect(func(error: Error):
+		_fail("terrain bed initialization failed (%d)" % int(error)))
+	_terrain_bed.stage_failed.connect(func(_request_id: int, error: Error):
+		_fail("terrain bed staging failed (%d)" % int(error)))
+	var terrain_error := _terrain_bed.initialize(_atlas, _macro, MACRO_FACE_RES, {
+		"planet_radius": 1000.0,
+		"base_spacing": 1.0,
+		"terrain_level": 0,
+		"detail_seed": 1,
+		"detail_strength": 0.0,
+	})
+	if terrain_error != OK:
+		_fail("terrain bed initialize rejected (%d)" % int(terrain_error))
+
+
+func _make_zero_macro_texture() -> Texture2DArray:
+	var images: Array[Image] = []
+	for _face in 6:
+		var image := Image.create(MACRO_FACE_RES, MACRO_FACE_RES, false, Image.FORMAT_RF)
+		image.fill(Color(0.0, 0.0, 0.0, 1.0))
+		if image.generate_mipmaps() != OK:
+			return null
+		images.append(image)
+	var texture := Texture2DArray.new()
+	return texture if texture.create_from_images(images) == OK else null
+
+
+func _on_terrain_bed_initialized() -> void:
 	_activation = HydroFrontierActivationPipeline.new()
 	add_child(_activation)
 	_activation.initialized.connect(_on_activation_initialized)
@@ -210,20 +248,12 @@ func _reachability(_source_key: HydroTileKey, direction: int,
 	return direction == SOURCE_DIRECTION and destination_key.equals(_destination)
 
 
-func _destination_state(destination_key: HydroTileKey, destination_slot: int) -> PackedFloat32Array:
+func _destination_state(destination_key: HydroTileKey, destination_slot: int) -> Dictionary:
 	_require(destination_key.equals(_destination), "initializer received wrong destination")
 	_require(destination_slot == 1, "reserved destination did not receive slot 1")
-	var state := PackedFloat32Array()
-	state.resize(TILE_RES * TILE_RES * 4)
-	# Flat dry terrain for this numerical fixture. Real runtime terrain reconstruction
-	# will fill the same state contract on GPU before activation.
-	for i in TILE_RES * TILE_RES:
-		var o := i * 4
-		state[o] = 0.0
-		state[o + 1] = 0.0
-		state[o + 2] = 0.0
-		state[o + 3] = 0.0
-	return state
+	var zero_deltas := PackedFloat32Array()
+	zero_deltas.resize(TILE_RES * TILE_RES)
+	return _terrain_bed.stage_reserved_tile(destination_key, destination_slot, zero_deltas)
 
 
 func _on_activation_completed(_batch_id: int, results: Array[Dictionary]) -> void:
@@ -274,6 +304,8 @@ func _on_handoff_state(state: PackedFloat32Array) -> void:
 	var dst := _cell(state, 1, destination_cell)
 	_require(src.x < 1.0 and dst.x > 0.0,
 		"handoff did not transfer water src_h=%.9g dst_h=%.9g" % [src.x, dst.x])
+	_require(absf(dst.w) <= 1.0e-6,
+		"GPU destination terrain was not staged before handoff bed=%.9g" % dst.w)
 
 	var removed_q := _source_q - Vector2(src.y, src.z)
 	var destination_q_in_source := HydroEdgeFrame.momentum_across_link(
@@ -406,6 +438,9 @@ func _cleanup() -> void:
 	if _activity != null and is_instance_valid(_activity):
 		_activity.release()
 		_activity.queue_free()
+	if _terrain_bed != null and is_instance_valid(_terrain_bed):
+		_terrain_bed.release()
+		_terrain_bed.queue_free()
 	if _connectivity != null and is_instance_valid(_connectivity):
 		_connectivity.release()
 		_connectivity.queue_free()
@@ -415,3 +450,4 @@ func _cleanup() -> void:
 	if _atlas != null and is_instance_valid(_atlas):
 		_atlas.release()
 		_atlas.queue_free()
+	_macro = null
