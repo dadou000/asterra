@@ -1,5 +1,6 @@
 extends "res://scripts/terrain/spherical_geometry_clipmap_phase30.gd"
-## Phase 31: displacement-aware LOD, horizon safety and transactional preview source.
+## Phase 31/42: displacement-aware LOD, transactional preview source and exact
+## production-control cache synchronization.
 ##
 ## The production clipmap historically assumed 220 m was enough headroom above the
 ## macro height field when selecting its finest visible LOD. The editable production
@@ -7,19 +8,19 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_phase30.gd"
 ## compilation yet still disappear because the CPU selected/cut geometry using stale
 ## bounds. This layer consumes the authoritative runtime's conservative envelope.
 ##
-## Planet Studio also owns distinct staged and applied system snapshots. The graph
-## editor can now explicitly choose which one feeds the terrain runtime: PREVIEW uses
-## staged authoring data; ORIGINAL/APPLIED resolves the immutable applied snapshot.
-## This is a source switch only—the same bytecode runtime, contact query and renderer
-## remain authoritative on both sides of the A/B comparison.
+## Phase 42A also closes the warm-cache/analytic split: immediately before either
+## cache synthesizes texels, it receives the same last-known-good production control
+## snapshot that is bound to the visible material. A changed snapshot invalidates
+## cache keys first, so analytic fallback remains authoritative during refill.
 
 const BOUNDED_DISPLACEMENT_RUNTIME := preload(
-	"res://scripts/world_authoring/terrain_displacement_runtime_phase41.gd")
+	"res://scripts/world_authoring/terrain_displacement_runtime_phase42.gd")
 const TERRAIN_PREVIEW_META := &"terrain_graph_preview_enabled"
 
 var _displacement_guard_m: float = LOD_SURFACE_GUARD_M
 var _displacement_guard_fallback: bool = false
 var _displacement_guard_reason: String = ""
+var _cache_geomorph_snapshot_changes: int = 0
 
 
 func _ensure_displacement_runtime() -> void:
@@ -35,6 +36,28 @@ func _ensure_displacement_runtime() -> void:
 	_displacement_runtime.name = "TerrainDisplacementRuntime"
 	add_child(_displacement_runtime)
 	_displacement_fingerprint = ""
+
+
+func _update_terrain_caches() -> void:
+	# cached.gd calls this virtual hook from its normal process path. Synchronize the
+	# transactional snapshot before update_cache() can queue a compute dispatch.
+	_sync_cache_production_controls(_terrain_cache_active)
+	_sync_cache_production_controls(_terrain_cache_staging)
+	super._update_terrain_caches()
+
+
+func _sync_cache_production_controls(cache: Node) -> void:
+	if cache == null or not is_instance_valid(cache) \
+			or not cache.has_method("set_production_controls"):
+		return
+	if _displacement_runtime == null or not is_instance_valid(_displacement_runtime) \
+			or not _displacement_runtime.has_method("active_production_controls"):
+		return
+	var controls_value: Variant = _displacement_runtime.call("active_production_controls")
+	if not (controls_value is Dictionary):
+		return
+	if bool(cache.call("set_production_controls", controls_value as Dictionary)):
+		_cache_geomorph_snapshot_changes += 1
 
 
 func _active_authoring_terrain() -> Resource:
@@ -164,7 +187,11 @@ func gpu_stream_stats() -> Dictionary:
 	out["terrain_displacement_guard_m"] = _current_displacement_guard_m()
 	out["terrain_displacement_guard_fallback"] = _displacement_guard_fallback
 	out["terrain_displacement_guard_reason"] = _displacement_guard_reason
+	out["terrain_cache_geomorph_snapshot_changes"] = _cache_geomorph_snapshot_changes
 	if _displacement_runtime != null and is_instance_valid(_displacement_runtime) \
 			and _displacement_runtime.has_method("displacement_envelope"):
 		out["terrain_displacement_envelope"] = _displacement_runtime.call("displacement_envelope")
+	if _terrain_cache_active != null and is_instance_valid(_terrain_cache_active) \
+			and _terrain_cache_active.has_method("stats"):
+		out["terrain_cache_geomorph"] = _terrain_cache_active.call("stats")
 	return out
