@@ -26,6 +26,7 @@ var _planet_promotion_state := "offline"
 var _frontier_coarse_preseed: HydroFrontierCoarsePreseed
 var _sparse_volume_diagnostic: SparseHydroVolumeDiagnosticsGPU
 var _representation_audit: HydroRepresentationAudit
+var _failed_runtime_teardown_queued := false
 
 
 func _ready() -> void:
@@ -151,6 +152,7 @@ func gpu_stats() -> Dictionary:
 
 
 func _on_sparse_runtime_ready_for_promotion() -> void:
+	_failed_runtime_teardown_queued = false
 	_try_bind_sparse_volume_diagnostic()
 	_try_bind_frontier_coarse_preseed()
 	_try_bind_planet_promotion_bridge()
@@ -158,14 +160,32 @@ func _on_sparse_runtime_ready_for_promotion() -> void:
 
 func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 	if state == "ready":
+		_failed_runtime_teardown_queued = false
 		_try_bind_sparse_volume_diagnostic()
 		_try_bind_frontier_coarse_preseed()
 		_try_bind_planet_promotion_bridge()
 		return
-	# Defensive path in addition to _release_sparse_runtime() override: even if a
-	# future base implementation changes bootstrap sequencing, no diagnostic or
-	# ownership helper may retain references to sparse resources once runtime leaves
-	# READY.
+
+	# A runtime can fail while HydroFrontierActivationPipeline still owns an
+	# asynchronous coarse preseed/handoff batch. Releasing the preseed coordinator
+	# alone would restore its provisional coarse debit while the hidden GPU tile could
+	# still finish activation, creating duplicate ownership. Keep that coordinator
+	# attached until one synchronous sparse-runtime teardown destroys the entire old
+	# atlas generation.
+	if state == "failed":
+		_release_representation_audit()
+		_release_sparse_volume_diagnostic()
+		if _planet_promotion_bridge != null:
+			_release_planet_promotion_bridge()
+		_set_planet_promotion_state("failed")
+		if not _failed_runtime_teardown_queued:
+			_failed_runtime_teardown_queued = true
+			call_deferred(&"_teardown_failed_sparse_runtime")
+		return
+
+	# Defensive path in addition to _release_sparse_runtime() override: bootstrap
+	# transitions such as disabled/unavailable already destroyed the runtime, so no
+	# helper may retain externally-owned sparse RIDs.
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
 	_release_frontier_coarse_preseed()
@@ -179,14 +199,25 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 		_set_planet_promotion_state("waiting_for_sparse_runtime")
 
 
+func _teardown_failed_sparse_runtime() -> void:
+	_failed_runtime_teardown_queued = false
+	if sparse_runtime_state() != "failed":
+		return
+	# Leave the public state as FAILED for diagnosis. Only remove the stale runtime
+	# generation and its helpers so no queued activation can publish after failure.
+	_release_sparse_runtime()
+
+
 func _on_persistent_hydrology_store_rebuilt() -> void:
-	# A rebuilt planet store invalidates every helper retaining the old coarse state.
-	_release_representation_audit()
-	_release_frontier_coarse_preseed()
-	_release_planet_promotion_bridge()
-	call_deferred(&"_try_bind_representation_audit")
-	call_deferred(&"_try_bind_frontier_coarse_preseed")
-	call_deferred(&"_try_bind_planet_promotion_bridge")
+	# The coarse store is part of physical ownership identity, not merely a data
+	# source. Rebinding helpers to a replacement store while the old sparse atlas is
+	# alive can make a mid-flight provisional seed belong to both generations. Treat
+	# every store rebuild as a hard generation boundary: synchronously invalidate the
+	# complete sparse runtime, then bootstrap a fresh atlas against the new store.
+	_failed_runtime_teardown_queued = false
+	_release_sparse_runtime()
+	_set_sparse_state("recycling_coarse_store")
+	call_deferred(&"_bootstrap_sparse_runtime")
 
 
 func _try_bind_sparse_volume_diagnostic() -> void:
