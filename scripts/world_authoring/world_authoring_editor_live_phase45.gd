@@ -146,7 +146,7 @@ func _phase45_create_preset(terrain: Resource, preset_id: String) -> void:
 			var graph: Resource = created.get(&"graph") as Resource
 			var config: Dictionary = spec.get("config", {}) as Dictionary
 			if graph == null or not PHASE45_GUIDED.rebuild(graph, config):
-				terrain.call("remove_shader_slot", String(created.get(&"slot_id"))) if terrain.has_method("remove_shader_slot") else null
+				terrain.call("remove_shader_slot", String(created.get(&"slot_id")))
 				continue
 			created_box.append(created)
 	, WorldAuthoringSession.ApplyScope.GRAPH)
