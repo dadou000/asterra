@@ -2,10 +2,11 @@ extends Node
 ## Production bridge from WeatherSystem's published global precipitation texture
 ## into the sparse SWE atmospheric source layer.
 ##
-## The bridge is deliberately outside SparseHydrologyRuntime. It may update only
-## while the runtime is idle, so one macro SWE cycle always sees a coherent forcing
-## snapshot. Weather may therefore lag by one refresh interval without ever changing
-## source terms halfway through an adaptive multi-substep advance.
+## The bridge is deliberately outside SparseHydrologyRuntime. It updates only at
+## an idle boundary, preferentially from `cycle_completed`: SparseHydrologyRuntime
+## has already returned to IDLE there and defers its next pump, so the atmospheric
+## compute dispatch is recorded before the next SWE command chain. One macro cycle
+## therefore sees one coherent weather-forcing snapshot.
 
 signal coupling_ready
 signal coupling_updated(request_id: int)
@@ -76,18 +77,9 @@ func _process(delta: float) -> void:
 	if not is_finite(delta) or delta < 0.0:
 		return
 	_refresh_accum += delta
-	if not enabled or not available():
-		return
-	if _forcing.pending() or _runtime.busy():
-		return
-	if not _update_requested and _refresh_accum < maxf(refresh_interval_s, 0.01):
-		return
-	_apply_policy()
-	_last_request_id = _forcing.request_update()
-	if _last_request_id < 0:
-		return
-	_update_requested = false
-	_refresh_accum = 0.0
+	# This fallback handles an idle runtime that has no current time debt/cycle.
+	# Active runtimes normally refresh from _on_runtime_cycle_completed instead.
+	_try_refresh_now()
 
 
 func _on_sparse_runtime_ready() -> void:
@@ -105,6 +97,24 @@ func _on_weather_weight_changed(_weight: float) -> void:
 	request_refresh()
 
 
+func _on_runtime_cycle_completed(_cycle_id: int, _report: Dictionary) -> void:
+	_try_refresh_now()
+
+
+func _try_refresh_now() -> void:
+	if not enabled or not available() or _forcing.pending() or _runtime.busy():
+		return
+	if not _update_requested and _refresh_accum < maxf(refresh_interval_s, 0.01):
+		return
+	_apply_policy()
+	var request_id := _forcing.request_update()
+	if request_id < 0:
+		return
+	_last_request_id = request_id
+	_update_requested = false
+	_refresh_accum = 0.0
+
+
 func _try_bind() -> void:
 	if WaterSystem.sparse_runtime_state() != "ready":
 		return
@@ -120,6 +130,8 @@ func _try_bind() -> void:
 
 	_teardown()
 	_runtime = runtime
+	if not _runtime.cycle_completed.is_connected(_on_runtime_cycle_completed):
+		_runtime.cycle_completed.connect(_on_runtime_cycle_completed)
 	_forcing = HydroWeatherForcingGPU.new()
 	_forcing.name = "HydroWeatherForcingGPU"
 	add_child(_forcing)
@@ -148,6 +160,7 @@ func _apply_policy() -> void:
 func _on_forcing_initialized() -> void:
 	_ready_coupling = true
 	request_refresh()
+	_try_refresh_now()
 	coupling_ready.emit()
 
 
@@ -181,6 +194,9 @@ func _fail(error: Error) -> void:
 func _teardown() -> void:
 	_ready_coupling = false
 	_clear_runtime_forcing()
+	if _runtime != null and is_instance_valid(_runtime) \
+			and _runtime.cycle_completed.is_connected(_on_runtime_cycle_completed):
+		_runtime.cycle_completed.disconnect(_on_runtime_cycle_completed)
 	if _forcing != null and is_instance_valid(_forcing):
 		_forcing.release()
 		_forcing.queue_free()
