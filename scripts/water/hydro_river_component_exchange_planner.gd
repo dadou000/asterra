@@ -115,9 +115,15 @@ static func _record(cell: int, member: Dictionary, add_volume: float, dt_s: floa
 	var direction_value: Variant = member.get("direction_cell", null)
 	var center_value: Variant = member.get("center_cell", null)
 	var velocity_value: Variant = member.get("local_velocity", null)
-	var direction := direction_value as Vector2 if direction_value is Vector2 else Vector2.ZERO
-	var center := center_value as Vector2 if center_value is Vector2 else Vector2.ZERO
-	var velocity := velocity_value as Vector2 if velocity_value is Vector2 else Vector2.ZERO
+	var direction := Vector2.ZERO
+	var center := Vector2.ZERO
+	var velocity := Vector2.ZERO
+	if direction_value is Vector2:
+		direction = direction_value as Vector2
+	if center_value is Vector2:
+		center = center_value as Vector2
+	if velocity_value is Vector2:
+		velocity = velocity_value as Vector2
 	return {
 		"cell": cell,
 		"slot": int(member.get("slot", -1)),
