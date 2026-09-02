@@ -2,9 +2,9 @@ extends "res://scripts/water/water_system_base.gd"
 ## Production facade extending the stable 0.1.0 water coordinator with
 ## transactional planet-coarse <-> sparse-SWE ownership bridges and diagnostics.
 ##
-## Automatic surface/flood promotion exists but deliberately remains OFF until its
-## conservation gates run on the project Godot build/GPU. Automatic deactivation is
-## not installed yet; fine->coarse collapse is explicit through the demotion bridge.
+## Automatic surface/flood promotion and isolated quiet-surface demotion policies
+## are installed but deliberately remain OFF until their conservation gates run on
+## the project Godot build/GPU. Explicit transactional handoffs remain available.
 
 signal planet_promotion_bridge_state_changed(state: String)
 signal planet_promotion_bridge_ready
@@ -21,9 +21,10 @@ signal active_sparse_volume_failed(request_id: int, error: Error)
 signal representation_audit_ready(audit_id: int, report: Dictionary)
 signal representation_audit_failed(audit_id: int, error: Error, stage: String)
 
-## Policy switch consumed by HydroAutomaticSurfacePromotion. It remains false in
-## production until the automatic promotion renderer conservation gate is run.
+## Policy switches consumed by the automatic surface promotion/demotion autoloads.
+## Both remain false in production until their renderer conservation gates run.
 var automatic_coarse_promotion_enabled := false
+var automatic_fine_demotion_enabled := false
 
 var _planet_promotion_bridge: PlanetHydroPromotionBridge
 var _planet_promotion_state := "offline"
@@ -150,7 +151,7 @@ func promote_coarse_surface_cell(cell: int, requested_volume_m3: float = -1.0,
 
 ## Explicit fine -> coarse surface collapse. This initial reverse path is only for a
 ## tile that maps back to the supplied coarse cell; all reduced fine water returns
-## to coarse surface storage. Automatic deactivation remains disabled.
+## to coarse surface storage.
 func demote_fine_surface_cell(cell: int) -> int:
 	if not planet_demotion_bridge_available() or _planet_demotion_bridge.busy():
 		return -1
@@ -172,7 +173,7 @@ func gpu_stats() -> Dictionary:
 		"state": _planet_demotion_state,
 		"available": planet_demotion_bridge_available(),
 		"busy": _planet_demotion_bridge != null and _planet_demotion_bridge.busy(),
-		"automatic_enabled": false,
+		"automatic_enabled": automatic_fine_demotion_enabled,
 		"surface_only": true,
 	}
 	out["frontier_coarse_preseed"] = {
