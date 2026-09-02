@@ -244,10 +244,13 @@ func _on_promotion_completed(report: Dictionary) -> void:
 	var request_id := int(report.get("request_id", -1))
 	if request_id != _active_request_id:
 		return
+	var completed_cell := _active_cell
+	var completed_tile_id := _active_tile_id
 	_promotion_completed_count += 1
-	_latched_cells.erase(_active_cell)
+	_latched_cells.erase(completed_cell)
 	_clear_active_request()
 	_last_reason = "promotion_completed"
+	_register_for_automatic_collapse(completed_cell, completed_tile_id)
 
 
 func _on_promotion_failed(_error: Error, stage: String) -> void:
@@ -259,6 +262,14 @@ func _on_promotion_failed(_error: Error, stage: String) -> void:
 	_last_failure_stage = stage
 	_clear_active_request()
 	_last_reason = "promotion_failed"
+
+
+func _register_for_automatic_collapse(cell: int, tile_id: int) -> void:
+	if cell < 0 or tile_id < 0 or not is_inside_tree():
+		return
+	var policy := get_node_or_null("/root/HydroAutomaticSurfaceDemotion")
+	if policy != null and policy.has_method("register_promoted_tile"):
+		policy.call("register_promoted_tile", cell, tile_id)
 
 
 func _on_store_rebuilt() -> void:
