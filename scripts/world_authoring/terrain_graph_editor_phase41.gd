@@ -1,32 +1,35 @@
 extends "res://scripts/world_authoring/terrain_graph_editor_phase40.gd"
 ## Phase 41 graph presentation for deterministic planet-space spatial masks.
 ##
-## Latitude/Longitude Bands, Geographic Region and Radial Area are exposed only on
-## generic authored displacement graphs. Base Terrain native stages are still
-## resident shader contributions lowered to scalar coefficients, so presenting a
-## spatial mask there would imply support that does not exist yet. Saved unsupported
-## native topology remains visible but is rejected transactionally by Phase 40 lowering.
+## Latitude/Longitude Bands, Geographic Region, Radial Area and Ring Area are
+## exposed only on generic authored displacement graphs. Base Terrain native stages
+## are still resident shader contributions lowered to scalar coefficients, so
+## presenting a spatial mask there would imply support that does not exist yet.
+## Saved unsupported native topology remains visible but is rejected transactionally
+## by Phase 40 lowering.
 ##
-## LONGITUDE_MASK, GEOGRAPHIC_REGION_MASK and RADIAL_MASK are editor-facing picker
-## identities. Serialized graphs keep the canonical LATITUDE_MASK node type and opt
-## into richer semantics with parameters.axis. Missing axis therefore remains byte-
-## for-byte backward compatible with every original Phase 41 latitude graph.
+## LONGITUDE_MASK, GEOGRAPHIC_REGION_MASK, RADIAL_MASK and RING_MASK are editor-facing
+## picker identities. Serialized graphs keep the canonical LATITUDE_MASK node type
+## and opt into richer semantics with parameters.axis. Missing axis therefore remains
+## byte-for-byte backward compatible with every original Phase 41 latitude graph.
 
 const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
 const LONGITUDE_MASK_PICKER_TYPE := "LONGITUDE_MASK"
 const GEOGRAPHIC_REGION_PICKER_TYPE := "GEOGRAPHIC_REGION_MASK"
 const RADIAL_MASK_PICKER_TYPE := "RADIAL_MASK"
+const RING_MASK_PICKER_TYPE := "RING_MASK"
 const LATITUDE_MASK_PICKER_LABEL := "Mask  ·  Latitude Band"
 const LONGITUDE_MASK_PICKER_LABEL := "Mask  ·  Longitude Band"
 const GEOGRAPHIC_REGION_PICKER_LABEL := "Mask  ·  Geographic Region"
 const RADIAL_MASK_PICKER_LABEL := "Mask  ·  Radial Area"
+const RING_MASK_PICKER_LABEL := "Mask  ·  Ring Area"
 
 
 func _build_ui() -> void:
 	super._build_ui()
 	_sync_phase41_spatial_picker_entries()
 	if _status != null and _spatial_mask_available_here():
-		_status.text = "Live authored displacement: Latitude / Longitude Bands, Geographic Region and Radial Area use normalized planet-space coordinates and the same CPU/contact + GPU bytecode definition. Invalid edits keep the last valid terrain active."
+		_status.text = "Live authored displacement: Latitude / Longitude Bands, Geographic Region, Radial Area and Ring Area use normalized planet-space coordinates and the same CPU/contact + GPU bytecode definition. Invalid edits keep the last valid terrain active."
 
 
 func _create_graph_node(node_data: Dictionary) -> void:
@@ -39,6 +42,8 @@ func _create_graph_node(node_data: Dictionary) -> void:
 				_create_geographic_region_node(node_data)
 			"radial":
 				_create_radial_mask_node(node_data)
+			"ring":
+				_create_ring_mask_node(node_data)
 			_:
 				_create_latitude_mask_node(node_data)
 		return
@@ -53,7 +58,8 @@ func _on_add_node() -> void:
 	if node_type != LATITUDE_MASK_TYPE \
 			and node_type != LONGITUDE_MASK_PICKER_TYPE \
 			and node_type != GEOGRAPHIC_REGION_PICKER_TYPE \
-			and node_type != RADIAL_MASK_PICKER_TYPE:
+			and node_type != RADIAL_MASK_PICKER_TYPE \
+			and node_type != RING_MASK_PICKER_TYPE:
 		super._on_add_node()
 		return
 	if not _spatial_mask_available_here() or _session == null or _graph == null:
@@ -77,6 +83,10 @@ func _on_add_node() -> void:
 			_session.call("stage_action", "Add Radial Area", func() -> void:
 				_append_radial_mask_node(position)
 			, 2)
+		RING_MASK_PICKER_TYPE:
+			_session.call("stage_action", "Add Ring Area", func() -> void:
+				_append_ring_mask_node(position)
+			, 2)
 		_:
 			_session.call("stage_action", "Add Latitude Mask", func() -> void:
 				_append_latitude_mask_node(position)
@@ -91,6 +101,7 @@ func _sync_phase41_spatial_picker_entries() -> void:
 	var longitude_index: int = _picker_index_for_metadata(LONGITUDE_MASK_PICKER_TYPE)
 	var region_index: int = _picker_index_for_metadata(GEOGRAPHIC_REGION_PICKER_TYPE)
 	var radial_index: int = _picker_index_for_metadata(RADIAL_MASK_PICKER_TYPE)
+	var ring_index: int = _picker_index_for_metadata(RING_MASK_PICKER_TYPE)
 
 	# LATITUDE_MASK is part of the canonical displacement schema. The richer spatial
 	# nodes use parameter variants so old graph resources need no migration. Resident
@@ -98,6 +109,9 @@ func _sync_phase41_spatial_picker_entries() -> void:
 	# can carry a spatial factor identically through render, warm cache and physical/
 	# contact evaluation.
 	if not _spatial_mask_available_here():
+		if ring_index >= 0:
+			_node_type_picker.remove_item(ring_index)
+		radial_index = _picker_index_for_metadata(RADIAL_MASK_PICKER_TYPE)
 		if radial_index >= 0:
 			_node_type_picker.remove_item(radial_index)
 		region_index = _picker_index_for_metadata(GEOGRAPHIC_REGION_PICKER_TYPE)
@@ -142,7 +156,15 @@ func _sync_phase41_spatial_picker_entries() -> void:
 	else:
 		_node_type_picker.set_item_text(radial_index, RADIAL_MASK_PICKER_LABEL)
 
-	_node_type_picker.tooltip_text = "Planet-space masks output 0 to 1 from normalized direction. Geographic Region combines latitude and seam-safe longitude; Radial Area uses great-circle angular distance and is seam/pole-safe. Use masks with Multiply or Mix in an authored displacement flow."
+	ring_index = _picker_index_for_metadata(RING_MASK_PICKER_TYPE)
+	if ring_index < 0:
+		_node_type_picker.add_item(RING_MASK_PICKER_LABEL)
+		ring_index = _node_type_picker.item_count - 1
+		_node_type_picker.set_item_metadata(ring_index, RING_MASK_PICKER_TYPE)
+	else:
+		_node_type_picker.set_item_text(ring_index, RING_MASK_PICKER_LABEL)
+
+	_node_type_picker.tooltip_text = "Planet-space masks output 0 to 1 from normalized direction. Geographic Region combines latitude and seam-safe longitude; Radial Area and Ring Area use great-circle angular distance and are seam/pole-safe. Use masks with Multiply or Mix in an authored displacement flow."
 
 
 func _picker_index_for_metadata(metadata_value: String) -> int:
@@ -161,7 +183,7 @@ func _spatial_mask_available_here() -> bool:
 
 func _latitude_mask_available_here() -> bool:
 	# Kept for Phase 41 regressions and downstream wrappers that used the original
-	# helper name before longitude/region/radial support was added.
+	# helper name before longitude/region/radial/ring support was added.
 	return _spatial_mask_available_here()
 
 
@@ -210,6 +232,22 @@ func _append_radial_mask_node(position: Vector2) -> void:
 		"center_latitude_deg":0.0,
 		"center_longitude_deg":0.0,
 		"radius_deg":15.0,
+		"feather_deg":5.0,
+		"invert":false,
+	})
+
+
+func _append_ring_mask_node(position: Vector2) -> void:
+	if _graph == null:
+		return
+	# Ring Area uses one center and an angular interval. Feather is outside-only on
+	# both boundaries: inward into the hole and outward beyond the outer radius.
+	_graph.call("add_node", LATITUDE_MASK_TYPE, position, {
+		"axis":"ring",
+		"center_latitude_deg":0.0,
+		"center_longitude_deg":0.0,
+		"inner_radius_deg":10.0,
+		"outer_radius_deg":20.0,
 		"feather_deg":5.0,
 		"invert":false,
 	})
@@ -381,6 +419,49 @@ func _create_radial_mask_node(node_data: Dictionary) -> void:
 	_add_node_action_row(graph_node, node_id)
 
 
+func _create_ring_mask_node(node_data: Dictionary) -> void:
+	var node_id: String = String(node_data.get("id", ""))
+	if node_id.is_empty():
+		return
+	var graph_node := GraphNode.new()
+	graph_node.name = node_id
+	graph_node.title = "RING AREA MASK"
+	graph_node.position_offset = Vector2(node_data.get("position", Vector2.ZERO))
+	graph_node.resizable = false
+	graph_node.ignore_invalid_connection_type = true
+	_graph_edit.add_child(graph_node)
+
+	_add_port_row(graph_node, "Ring 0 → 1", false, true)
+	var parameters: Dictionary = node_data.get("parameters", {}) as Dictionary
+	_add_degree_parameter(graph_node, node_id, "Center latitude", "center_latitude_deg",
+		float(parameters.get("center_latitude_deg", 0.0)), -90.0, 90.0, 0.5)
+	_add_degree_parameter(graph_node, node_id, "Center longitude", "center_longitude_deg",
+		float(parameters.get("center_longitude_deg", 0.0)), -180.0, 180.0, 0.5)
+	_add_degree_parameter(graph_node, node_id, "Inner radius", "inner_radius_deg",
+		float(parameters.get("inner_radius_deg", 10.0)), 0.0, 180.0, 0.5)
+	_add_degree_parameter(graph_node, node_id, "Outer radius", "outer_radius_deg",
+		float(parameters.get("outer_radius_deg", 20.0)), 0.0, 180.0, 0.5)
+	_add_degree_parameter(graph_node, node_id, "Feather", "feather_deg",
+		float(parameters.get("feather_deg", 5.0)), 0.0, 180.0, 0.5)
+
+	var invert := CheckButton.new()
+	invert.text = "Invert — affect outside the ring"
+	invert.button_pressed = bool(parameters.get("invert", false))
+	invert.tooltip_text = "Off: 1 between inner and outer great-circle radii. On: complement the finished ring."
+	invert.toggled.connect(func(value: bool) -> void:
+		_set_node_parameter(node_id, "invert", value)
+	)
+	graph_node.add_child(invert)
+
+	var note := Label.new()
+	note.text = "A seam/pole-safe spherical annulus. The requested band is fully selected from Inner radius through Outer radius. Feather fades only outside it: inward into the center hole and outward beyond the outer edge."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 345.0
+	note.modulate = Color(0.60, 0.70, 0.80)
+	graph_node.add_child(note)
+	_add_node_action_row(graph_node, node_id)
+
+
 func _add_latitude_parameter(node: GraphNode, node_id: String, label_text: String,
 		key: String, value: float, minimum: float, maximum: float, step: float) -> void:
 	# Backward-compatible helper retained for any downstream Phase 41 wrapper.
@@ -390,7 +471,7 @@ func _add_latitude_parameter(node: GraphNode, node_id: String, label_text: Strin
 func _add_degree_parameter(node: GraphNode, node_id: String, label_text: String,
 		key: String, value: float, minimum: float, maximum: float, step: float) -> void:
 	var row := HBoxContainer.new()
-	row.custom_minimum_size = Vector2(330.0, 32.0)
+	row.custom_minimum_size = Vector2(345.0, 32.0)
 	var label := Label.new()
 	label.text = label_text
 	label.custom_minimum_size.x = 128.0
