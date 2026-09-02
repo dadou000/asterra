@@ -79,6 +79,18 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_microrelief_enabled", 1.0 if bool(micro.get("enabled", true)) else 0.0)
 	material.set_shader_parameter("u_microrelief_strength",
 		maxf(float(micro.get("strength", 1.0)), 0.0))
+	for binding: Array in [
+		["u_microrelief_rock_scale", "rock_scale"],
+		["u_microrelief_soil_scale", "soil_scale"],
+		["u_microrelief_sand_scale", "sand_scale"],
+		["u_microrelief_mud_scale", "mud_scale"],
+		["u_microrelief_snow_scale", "snow_scale"],
+		["u_microrelief_gravel_scale", "gravel_scale"],
+		["u_microrelief_scree_scale", "scree_scale"],
+		["u_microrelief_base_noise_scale", "base_noise_scale"],
+	]:
+		material.set_shader_parameter(String(binding[0]),
+			maxf(float(micro.get(String(binding[1]), 1.0)), 0.0))
 
 	var antitile: Dictionary = _control("PRODUCTION_ANTITILE_SETTINGS")
 	material.set_shader_parameter("u_pbr_antitile_strength",
@@ -108,6 +120,38 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 		maxf(float(rock.get("normal_strength", 1.0)), 0.0))
 	material.set_shader_parameter("u_rock_color_strength",
 		maxf(float(rock.get("color_strength", 1.0)), 0.0))
+	var rock_coarse_cell: float = _snap_periodic_cell(float(rock.get("coarse_cell_m", 4.0)))
+	var rock_fine_cell: float = _snap_periodic_cell(float(rock.get("fine_cell_m", 1.0)))
+	material.set_shader_parameter("u_rock_coarse_cell_m", rock_coarse_cell)
+	material.set_shader_parameter("u_rock_fine_cell_m", rock_fine_cell)
+	material.set_shader_parameter("u_rock_coarse_period",
+		maxi(1, int(round(DETAIL_WRAP_M / rock_coarse_cell))))
+	material.set_shader_parameter("u_rock_fine_period",
+		maxi(1, int(round(DETAIL_WRAP_M / rock_fine_cell))))
+	material.set_shader_parameter("u_rock_coarse_seed", maxi(1, int(rock.get("coarse_seed", 11665))))
+	material.set_shader_parameter("u_rock_fine_seed", maxi(1, int(rock.get("fine_seed", 35415))))
+	_bind_nonnegative(material, "u_rock_coarse_fade_near_m", rock, "coarse_fade_near_m", 850.0)
+	_bind_nonnegative(material, "u_rock_coarse_fade_far_m", rock, "coarse_fade_far_m", 3400.0)
+	_bind_nonnegative(material, "u_rock_fine_fade_near_m", rock, "fine_fade_near_m", 130.0)
+	_bind_nonnegative(material, "u_rock_fine_fade_far_m", rock, "fine_fade_far_m", 920.0)
+	_bind_nonnegative(material, "u_rock_normal_fade_near_m", rock, "normal_fade_near_m", 90.0)
+	_bind_nonnegative(material, "u_rock_normal_fade_far_m", rock, "normal_fade_far_m", 620.0)
+	material.set_shader_parameter("u_rock_weatherability_pivot",
+		clampf(float(rock.get("weatherability_pivot", 0.45)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_weatherability_roughness",
+		float(rock.get("weatherability_roughness", 0.055)))
+	material.set_shader_parameter("u_rock_family_roughness_min",
+		clampf(float(rock.get("family_roughness_min", 0.48)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_family_roughness_max",
+		clampf(float(rock.get("family_roughness_max", 0.97)), 0.0, 1.0))
+	_bind_nonnegative(material, "u_rock_fracture_color_base", rock, "fracture_color_base", 0.09)
+	_bind_nonnegative(material, "u_rock_fracture_color_fault", rock, "fracture_color_fault", 0.15)
+	_bind_nonnegative(material, "u_rock_fracture_roughness", rock, "fracture_roughness", 0.040)
+	_bind_nonnegative(material, "u_rock_normal_fracture_mix", rock, "normal_fracture_mix", 0.55)
+	material.set_shader_parameter("u_rock_output_roughness_min",
+		clampf(float(rock.get("output_roughness_min", 0.45)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_output_roughness_max",
+		clampf(float(rock.get("output_roughness_max", 0.98)), 0.0, 1.0))
 
 	var scan: Dictionary = _control("PRODUCTION_SCAN_PBR_SETTINGS")
 	material.set_shader_parameter("u_pbr_enabled", 1.0 if bool(scan.get("enabled", true)) else 0.0)
