@@ -9,6 +9,7 @@ extends RefCounted
 signal tile_woken(tile_id: int, slot: int, reason: String)
 signal tile_settling(tile_id: int)
 signal tile_slept(tile_id: int, released_slot: int)
+signal tile_released(tile_id: int, released_slot: int, reason: String)
 signal tile_frozen(tile_id: int)
 signal allocation_failed(tile_id: int, reason: String)
 
@@ -80,9 +81,11 @@ func report_activity(key: HydroTileKey, max_depth_m: float,
 
 	if max_depth_m <= dry_depth_threshold_m:
 		var released := pool.slot_for(key)
+		var id := key.packed()
 		pool.set_state(key, HydroTilePool.TileState.SLEEPING_DRY, "dry_sleep")
 		pool.release(key)
-		tile_slept.emit(key.packed(), released)
+		tile_slept.emit(id, released)
+		tile_released.emit(id, released, "dry_sleep")
 	elif freeze_wet_tiles and state == HydroTilePool.TileState.SETTLING:
 		pool.set_state(key, HydroTilePool.TileState.FROZEN_WATER, "quiet_wet")
 		tile_frozen.emit(key.packed())
@@ -130,8 +133,15 @@ func thaw(key: HydroTileKey, reason: String = "disturbance") -> int:
 	return pool.slot_for(key)
 
 
-func force_release(key: HydroTileKey) -> bool:
-	return key != null and pool.release(key)
+func force_release(key: HydroTileKey, reason: String = "forced") -> bool:
+	if key == null or not pool.contains(key):
+		return false
+	var id := key.packed()
+	var slot := pool.slot_for(key)
+	if not pool.release(key):
+		return false
+	tile_released.emit(id, slot, reason)
+	return true
 
 
 func stats() -> Dictionary:
