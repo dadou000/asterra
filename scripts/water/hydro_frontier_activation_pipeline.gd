@@ -27,6 +27,11 @@ extends Node
 ## RenderingServer.call_on_render_thread(). Coarse preseed and edge handoff are
 ## queued afterwards, so render-thread FIFO ordering preserves stage -> seed ->
 ## handoff. Missing/invalid initialization FAILS CLOSED and releases reservation.
+##
+## Once a hidden destination has received any physical parcel, later failures may
+## no longer discard it. A late handoff failure therefore activates/preserves the
+## partially seeded destination before reporting batch failure. This keeps water
+## ownership conservative even when the runtime subsequently stops for diagnosis.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -56,6 +61,7 @@ var _results: Array[Dictionary] = []
 var _jobs: Array[Dictionary] = []
 var _job_index := 0
 var _pending_preseeds: Dictionary = {} # request id -> {destination_id, slot}
+var _handoff_success_by_destination: Dictionary = {} # tile id -> successful handoff count
 var _seed_dt_s := 0.02
 var _max_seed_fraction := 0.12
 var _gravity := 9.81
@@ -192,6 +198,7 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 	_jobs = jobs
 	_job_index = 0
 	_pending_preseeds = pending_preseeds
+	_handoff_success_by_destination.clear()
 	_batch_id = batch_id
 	_seed_dt_s = seed_dt_s
 	_max_seed_fraction = clampf(max_seed_fraction, 0.0, 0.5)
@@ -200,9 +207,6 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 	batch_started.emit(batch_id, reserved_destinations, jobs.size())
 
 	if not _pending_preseeds.is_empty():
-		# Do not queue edge handoffs until the coarse owner has acknowledged every
-		# preseed, otherwise a tile could activate while its macro parcel is still
-		# authoritative in both representations.
 		return batch_id
 	if jobs.is_empty():
 		call_deferred("_finish_batch")
@@ -250,6 +254,8 @@ func _on_coarse_preseed_completed(request_id: int, tile_id: int, slot: int,
 	var expected: Dictionary = _pending_preseeds[request_id]
 	if int(expected.get("destination_id", -1)) != tile_id \
 			or int(expected.get("slot", -1)) != slot:
+		if coarse_preseed != null and coarse_preseed.has_provisional_tile(tile_id):
+			coarse_preseed.restore_tile(tile_id)
 		_on_coarse_preseed_failed(request_id, tile_id, slot,
 			ERR_INVALID_DATA, "preseed_ack_identity")
 		return
@@ -268,6 +274,8 @@ func _on_coarse_preseed_failed(request_id: int, tile_id: int, slot: int,
 	var destination_id := int(expected.get("destination_id", tile_id))
 	var destination_slot := int(expected.get("slot", slot))
 	_pending_preseeds.erase(request_id)
+	if coarse_preseed != null and coarse_preseed.has_provisional_tile(destination_id):
+		coarse_preseed.restore_tile(destination_id)
 	var destination := HydroTileKey.unpack(destination_id)
 	if destination != null:
 		scheduler.cancel_reserved(destination, "coarse_preseed_" + stage)
@@ -328,17 +336,26 @@ func _on_handoff_recorded(_request_id: int, _source_slot: int,
 	if destination_slot != int(job.get("destination_slot", -1)):
 		_fail_current_job(ERR_INVALID_DATA)
 		return
+	var destination_id := int(job.get("destination_tile_id", -1))
+	_handoff_success_by_destination[destination_id] = \
+		int(_handoff_success_by_destination.get(destination_id, 0)) + 1
 
 	if bool(job.get("activate_after", false)):
-		var destination := HydroTileKey.unpack(int(job["destination_tile_id"]))
+		var destination := HydroTileKey.unpack(destination_id)
 		var slot := scheduler.activate_reserved(destination, "frontier_handoff_complete")
 		if slot < 0:
 			_fail_current_job(ERR_CANT_ACQUIRE_RESOURCE)
 			return
 		var conn_error := connectivity.sync_pool(scheduler.pool)
 		if conn_error != OK:
-			_fail_current_job(conn_error)
+			# Tile is already published and owns all seeded water. Never release it here;
+			# stopping the runtime with stale connectivity is recoverable, deleting the
+			# physical parcel is not.
+			_finalize_coarse_preseed(destination_id)
+			_mark_destination_result(destination_id, "activated_connectivity_failed")
+			_fail_batch_preserving_state(conn_error)
 			return
+		_finalize_coarse_preseed(destination_id)
 		destination_activated.emit(_batch_id, destination.packed(), slot)
 		_mark_destination_result(destination.packed(), "activated")
 
@@ -357,16 +374,50 @@ func _on_handoff_failed(_request_id: int, error: Error) -> void:
 func _fail_current_job(error: Error) -> void:
 	if _job_index >= 0 and _job_index < _jobs.size():
 		var job := _jobs[_job_index]
-		var destination := HydroTileKey.unpack(int(job.get("destination_tile_id", -1)))
+		var destination_id := int(job.get("destination_tile_id", -1))
+		var destination := HydroTileKey.unpack(destination_id)
 		var slot := int(job.get("destination_slot", -1))
-		if destination != null:
-			scheduler.cancel_reserved(destination, "handoff_gpu_failed")
-			_mark_destination_result(destination.packed(), "handoff_gpu_failed")
-			destination_cancelled.emit(_batch_id, destination.packed(), slot,
-				"handoff_gpu_failed")
+		var owns_water := int(_handoff_success_by_destination.get(destination_id, 0)) > 0 \
+			or (coarse_preseed != null \
+				and coarse_preseed.has_provisional_tile(destination_id))
+		if destination != null and owns_water:
+			# Preserve any already-transferred parcel. A recorded handoff modifies the
+			# source and hidden destination conservatively; canceling now would lose it.
+			var record := scheduler.pool.record(destination)
+			var state := int(record.get("state", HydroTilePool.TileState.ALLOCATING))
+			if state == HydroTilePool.TileState.ALLOCATING:
+				var activated := scheduler.activate_reserved(destination,
+					"frontier_partial_after_failure")
+				if activated >= 0:
+					connectivity.sync_pool(scheduler.pool)
+			_finalize_coarse_preseed(destination_id)
+			_mark_destination_result(destination_id,
+				"activated_after_handoff_failure")
+		else:
+			if destination != null:
+				scheduler.cancel_reserved(destination, "handoff_gpu_failed")
+				_restore_coarse_preseed(destination_id)
+				_mark_destination_result(destination_id, "handoff_gpu_failed")
+				destination_cancelled.emit(_batch_id, destination_id, slot,
+					"handoff_gpu_failed")
+	_fail_batch_preserving_state(error)
+
+
+func _fail_batch_preserving_state(error: Error) -> void:
+	var failed_batch := _batch_id
 	_busy = false
-	batch_failed.emit(_batch_id, error)
+	batch_failed.emit(failed_batch, error)
 	_reset_batch_state()
+
+
+func _finalize_coarse_preseed(destination_id: int) -> void:
+	if coarse_preseed != null and coarse_preseed.has_provisional_tile(destination_id):
+		coarse_preseed.finalize_tile(destination_id)
+
+
+func _restore_coarse_preseed(destination_id: int) -> void:
+	if coarse_preseed != null and coarse_preseed.has_provisional_tile(destination_id):
+		coarse_preseed.restore_tile(destination_id)
 
 
 func _mark_destination_result(destination_id: int, reason: String) -> void:
@@ -376,7 +427,7 @@ func _mark_destination_result(destination_id: int, reason: String) -> void:
 		result["reason"] = reason
 		result["reserved"] = false
 		result["needs_handoff"] = false
-		result["accepted"] = reason == "activated"
+		result["accepted"] = reason.begins_with("activated")
 
 
 func _finish_batch() -> void:
@@ -393,6 +444,7 @@ func _reset_batch_state() -> void:
 	_jobs = []
 	_job_index = 0
 	_pending_preseeds.clear()
+	_handoff_success_by_destination.clear()
 
 
 func _on_handoff_initialized() -> void:
