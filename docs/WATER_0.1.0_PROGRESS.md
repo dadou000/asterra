@@ -8,6 +8,7 @@ Branch: `water/0.1.0`
 
 - `project.godot` reports 0.1.0.
 - `WaterSystem` autoload added after the legacy `OceanSystem`.
+- `PersistentHydrologySystem` is autoloaded after `WeatherSystem`.
 - Full architecture plan lives in `docs/WATER_HYDROLOGY_0.1.0_IMPLEMENTATION_PLAN.md`.
 
 ### Phase 1 — rendering/physics ownership split: implemented, runtime validation pending
@@ -86,23 +87,15 @@ instead of intentionally violating the stability limit.
   - only a final four-byte FP32 volume is read back.
 
 `tests/water/HydroGPUParityTests.tscn` compares GPU and CPU results across multiple
-macro advances for:
-
-1. lake at rest over uneven bathymetry;
-2. wet/dry dam break;
-3. uniform rain + infiltration.
-
-It verifies cell-by-cell `h/hu/hv`, unchanged bed elevation and two independent
-GPU-volume checks.
+macro advances for lake-at-rest, wet/dry dam-break and uniform rain/infiltration.
 
 #### SWE -> visible-water reconstruction
 
-Implemented:
-
 - `shaders/water/hydro_surface_reconstruct.glsl`
-  - reads `vec4(h, hu, hv, bed)` directly from the conservative GPU state buffer;
-  - maps the fixed-domain metric grid into the shared local tangent-plane cache;
-  - writes:
+- `scripts/water/hydro_surface_reconstruction_gpu.gd`
+- dynamic contribution in `shaders/ocean_geometry_clipmap.gdshader`
+
+The shared RGBA32F reconstruction contract remains:
 
 ```text
 R = (bed + h) - reference_surface
@@ -111,110 +104,130 @@ B = velocity Y
 A = activity / foam hint
 ```
 
-  - dry/out-of-domain texels become zero;
-  - source state is bilinearly reconstructed into the render cache.
-- `scripts/water/hydro_surface_reconstruction_gpu.gd`
-  - global-RenderingDevice compute dispatcher;
-  - binds the solver SSBO and `WaterSurfaceResources` texture as a storage image;
-  - source and target resources remain externally owned;
-  - reconstruction requires no CPU readback.
-- `shaders/ocean_geometry_clipmap.gdshader`
-  - the toroidal ocean coat now samples the dynamic hydrology texture;
-  - dynamic height contributes to actual vertex displacement;
-  - reconstructed height changes local water depth used by wave shoaling;
-  - finite-difference dynamic gradient contributes to the same resolved surface
-    normal as the FFT/interaction wave field;
-  - hydraulic velocity/activity can contribute to local foam response;
-  - all of the above is exactly bypassed while `u_dynamic_surface_enabled = 0`.
-- `scripts/water/water_system.gd`
-  - production default remains disabled;
-  - `set_dynamic_surface_render_enabled()` is the explicit opt-in gate;
-  - `set_dynamic_surface_center_plane()` keeps compute/render metric frames aligned.
-
-Reconstruction smoke scene:
-
-```text
-tests/water/HydroSurfaceReconstructionSmoke.tscn
-```
-
-It creates a known Gaussian free-surface disturbance with nonzero momentum,
-reconstructs it directly into the shared RGBA32F texture, enables the real ocean
-material for the test, and then performs a test-only texture readback verifying:
-
-- reconstructed maximum surface residual;
-- velocity channels;
-- activity channel;
-- source-domain masking;
-- finite values;
-- the ocean material actually received the dynamic-surface enable.
-
-The test disables the dynamic coat again before exiting.
+`tests/water/HydroSurfaceReconstructionSmoke.tscn` verifies reconstruction through
+the real shared texture. Production dynamic-water rendering remains disabled by
+default and is bypassed exactly while `u_dynamic_surface_enabled = 0`.
 
 #### Long closed-basin conservation soak
 
+`tests/water/HydroGPUSoak.tscn` performs 10,000 macro advances by default and uses
+only the four-byte GPU volume diagnostic at checkpoints. The initial release gate
+is `relative drift <= 1e-4 OR absolute drift <= 0.08 m3`; tighten it from measured
+results rather than broadening it to hide numerical errors.
+
+### Phase 3 — sparse active hydrology: implemented through persistent ownership gate, runtime validation pending
+
+#### Sparse GPU runtime
+
+Already implemented:
+
+- `SparseHydroScheduler` / `HydroTilePool` stable tile ownership;
+- `SparseHydroAtlasGPU` A+B conservative state, source, occupancy and metadata;
+- `SparseHydroConnectivityGPU`;
+- `SparseHydroStepGPU`;
+- GPU activity classification and frontier candidate extraction;
+- exact cube-sphere frontier resolution;
+- terrain staging directly on the global RenderingDevice;
+- conservative fine->fine frontier handoff;
+- point-source ingress;
+- `SparseHydrologyRuntime` orchestration and CFL time-debt carry;
+- `WaterSystem` production sparse bootstrap.
+
+#### Persistent planetary store
+
 Implemented:
 
+- `scripts/water/planet_hydrology_store.gd`
+  - slow conservative planet-wide soil/surface/channel state;
+  - surface routing on the real `PlanetGrid` topology;
+  - compact snapshots and promotion-candidate queries.
+- `scripts/water/persistent_hydrology_system.gd`
+  - production owner/autoload;
+  - samples the CPU weather publication without GPU readback;
+  - applies the same `WeatherSystem.simulation_weight` used by fine GPU forcing;
+  - maintains a local committed weather-snapshot revision rather than pretending
+    an asynchronous CPU snapshot is the newest native solver revision.
+
+#### Transactional coarse <-> fine ownership
+
+Implemented:
+
+- `scripts/water/planet_hydrology_ownership_store.gd`
+  - two-phase `prepare_promotion()` / `commit_promotion()`;
+  - prepare reserves water but does not debit physical coarse storage;
+  - rollback releases reservation with no physical state change;
+  - over-reservation and duplicate commit fail closed;
+  - coarse stepping pauses with `ERR_BUSY` while ownership is unresolved;
+  - unresolved transactions are never serialized and block snapshots;
+  - promotion/demotion have explicit representation-transfer ledger terms;
+  - `accept_demotion()` returns conserved fine water to coarse storage.
+- `scripts/water/hydro_coarse_seed_gpu.gd`
+- `shaders/water/hydro_coarse_seed.glsl`
+  - exact one-shot seed into an unpublished sparse tile;
+  - writes identical depth/momentum parcel to state A and B;
+  - leaves bed unchanged;
+  - `plan_volume()` quantizes depth to the exact FP32 value sent to the GPU and
+    reports the corresponding represented volume so CPU ownership debits the same
+    parcel the GPU actually receives.
+- `scripts/water/planet_hydro_promotion_bridge.gd`
+  - sequences coarse reservation -> sparse reserve -> terrain stage -> exact seed
+    -> coarse commit -> sparse activation/connectivity;
+  - temporarily pauses the sparse runtime during the ownership handoff;
+  - promotes only into a new unpublished tile for now;
+  - restores coarse ownership and unpublishes/releases the fine tile if an
+    activation/connectivity failure occurs after commit;
+  - exposes a flood-oriented suggested parcel based on
+    `coarse_surface_depth * one_fine_tile_area`, never the entire macro-cell volume.
+
+Detailed contract:
+
 ```text
-tests/water/HydroGPUSoak.tscn
-tests/water/test_hydro_gpu_soak.gd
+docs/WATER_PHASE3_PERSISTENT_OWNERSHIP.md
 ```
 
-The default soak uses a 64x64 closed domain with:
+#### Phase 3 conservation gates
 
-- uneven bowl bathymetry plus deterministic roughness;
-- shallow but initially wet corners;
-- a non-flat free surface;
-- a smooth rotational momentum impulse;
-- Manning friction;
-- no rain, infiltration, source or sink terms.
-
-It performs **10,000 macro advances by default** (`0.4 s` each, 4,000 simulated
-seconds). The run length can be overridden with:
+CPU-only:
 
 ```text
--- --hydro-soak-steps=<count>
+tests/water/PlanetHydrologyStoreTests.tscn
+tests/water/test_planet_hydrology_store.gd
 ```
 
-Every 250 advances the test:
+Checks closed conservation, exact precipitation accounting, snapshot round-trip,
+reservation/rollback/commit behavior, snapshot fail-closed behavior, duplicate
+commit rejection and promotion/demotion mass accounting using the real cube-sphere
+`PlanetGrid`/`PlanetFields` constructors.
 
-1. waits for both the recorded GPU advance and its asynchronous scheduler health
-   callback, independent of callback ordering;
-2. fails if the final state reports invalid cells;
-3. fails if the adaptive CFL substep cap was exhausted;
-4. verifies the full requested macro timestep was advanced;
-5. requests only the four-byte GPU-reduced water volume;
-6. records absolute and relative drift from the initial volume.
-
-The initial gate is:
+Renderer-mode exact-seed gate:
 
 ```text
-relative drift <= 1e-4 OR absolute drift <= 0.08 m3
+tests/water/HydroCoarseSeedGPUSmoke.tscn
+tests/water/test_hydro_coarse_seed_gpu.gd
 ```
 
-This is intentionally a release gate, not a target to game. Tighten it after real
-GPU measurements; numerical trends must be fixed rather than hidden by tolerance
-inflation.
+Creates a one-slot sparse atlas, plans a known parcel, seeds both A and B, then
+uses two independent GPU volume reducers to verify both ping-pong states contain
+the planned represented volume.
 
 ## Validation status
 
 The current ChatGPT execution environment does not contain the project Godot 4.7
-binary, so renderer-mode tests have **not** been executed here. Static review and
-Godot RenderingDevice API matching have been performed; runtime success must not
-be inferred until the scenes run on the project renderer/GPU.
-
-The Godot 4.7 RenderingDevice path used here supports storage images via
-`UNIFORM_TYPE_IMAGE` and textures carrying `TEXTURE_USAGE_STORAGE_BIT`, as well as
-the asynchronous buffer/texture readbacks used only by tests.
+binary, so Godot scenes have **not** been executed here. Static review and Godot
+4.7 API matching have been performed; runtime success must not be inferred until
+the scenes run on the project build/GPU.
 
 Suggested local runs:
 
 ```text
 godot --headless --path . tests/water/HydroReferenceTests.tscn
 godot --headless --path . tests/water/Phase1WaterSmoke.tscn
+godot --headless --path . tests/water/PlanetHydrologyStoreTests.tscn
 godot --path . tests/water/FixedHydroGPUSmoke.tscn
 godot --path . tests/water/HydroGPUParityTests.tscn
 godot --path . tests/water/HydroSurfaceReconstructionSmoke.tscn
 godot --path . tests/water/HydroGPUSoak.tscn
+godot --path . tests/water/HydroCoarseSeedGPUSmoke.tscn
 ```
 
 Shorter development soak example:
@@ -225,11 +238,26 @@ godot --path . tests/water/HydroGPUSoak.tscn -- --hydro-soak-steps=1000
 
 Use the executable name/path appropriate for the local Godot 4.7 build.
 
-## Remaining Phase 2 gates
+## Next gates
 
-1. Run all renderer-mode tests on the project GPU and fix numerical/API failures;
-   do not hide real parity errors by broadly increasing tolerances.
-2. Exercise reconstructed dynamics in the normal playable world at a coast and
-   check visual phase/LOD stability while moving the camera/clipmap.
-3. Once those gates pass, freeze the fixed-domain numerical contract and begin
-   Phase 3 sparse tile allocation + hydrological active-frontier scheduling.
+1. Run the CPU persistent-store gate and the renderer-mode exact-seed gate locally;
+   fix actual parser/API/numerical failures without evidence-free tolerance changes.
+2. Expose `PlanetHydroPromotionBridge` from `WaterSystem` only when both the sparse
+   runtime and `PersistentHydrologySystem` store are ready.
+3. Add an end-to-end promotion smoke scene that verifies:
+
+```text
+coarse_before
+    == coarse_after_commit + GPU_seeded_fine_volume
+```
+
+and the inverse after demotion.
+4. Add low-cadence automatic promotion for **surface/flood** candidates only.
+   Channel-only promotion stays explicit until river/reach reconstruction exists.
+5. Add representation-wide conservation diagnostics combining coarse storage,
+   GPU-reduced active sparse water and exported outlet volume.
+6. Replace uniform tile seeding with terrain-aware conservative prolongation while
+   preserving the same exact-volume transaction/acknowledgement interface.
+7. Separately run the existing Phase 2 GPU parity/reconstruction/soak gates and
+   exercise the reconstructed coat in a normal playable coast scene before turning
+   dynamic hydrology rendering on by default.
