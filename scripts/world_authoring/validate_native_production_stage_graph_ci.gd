@@ -1,5 +1,5 @@
 extends Node
-## Regression for exact native production contribution/merge semantics.
+## Regression for exact native production contribution/merge and typed scale semantics.
 
 const GRAPH := preload("res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
 const TERRAIN := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
@@ -15,7 +15,7 @@ func _ready() -> void:
 		push_error("NATIVE_PRODUCTION_STAGE_GRAPH_FAILED: " + error)
 		get_tree().quit(1)
 		return
-	print("NATIVE_PRODUCTION_STAGE_GRAPH_OK: contribution fan-in, exact bypasses, legacy linear migration and invalid-branch rollback preserve zero-bytecode production")
+	print("NATIVE_PRODUCTION_STAGE_GRAPH_OK: contribution fan-in, typed scaling, exact bypasses, legacy migration and invalid-branch rollback preserve zero-bytecode production")
 	get_tree().quit(0)
 
 
@@ -99,6 +99,109 @@ func _validate() -> String:
 		runtime.free()
 		return "Channel contribution bypass incorrectly disabled Deposition"
 
+	# Typed scale composition: Mountains -> Multiply <- 0.5 -> Mountains Merge input.
+	# This must lower to mountain_strength *= 0.5, remain resident/zero-bytecode, and
+	# update the conservative production guard from the effective controls.
+	controls = NATIVE.extract_controls(graph)
+	NATIVE.build_canonical_graph(graph, controls)
+	var baseline: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	if not _resident_zero_bytecode(baseline):
+		runtime.free()
+		return "could not establish pre-scale production baseline"
+	var baseline_guard: float = float((baseline.get("displacement_envelope", {}) as Dictionary).get(
+		"production_max_abs_m", -1.0))
+	merge_id = _find_type(graph, NATIVE.MERGE_TYPE)
+	mountain_id = _find_type(graph, NATIVE.stage_node_type("mountain"))
+	var mountain_port: int = NATIVE.merge_port_for_stage("mountain")
+	var mountain_factor_id: String = String(graph.call("add_node", "CONSTANT_FLOAT",
+		Vector2(590.0, 260.0), {"value":0.5}))
+	var mountain_multiply_id: String = String(graph.call("add_node", "MULTIPLY",
+		Vector2(690.0, 210.0), {}))
+	if not bool(graph.call("disconnect_nodes", mountain_id, 0, merge_id, mountain_port)) \
+			or not bool(graph.call("connect_nodes", mountain_id, 0, mountain_multiply_id, 0)) \
+			or not bool(graph.call("connect_nodes", mountain_factor_id, 0, mountain_multiply_id, 1)) \
+			or not bool(graph.call("connect_nodes", mountain_multiply_id, 0, merge_id, mountain_port)):
+		runtime.free()
+		return "could not construct typed Mountain scale path"
+	var mountain_scale_plan: Dictionary = LOWERING.contribution_merge_plan(graph)
+	var mountain_scales: Dictionary = mountain_scale_plan.get("scale_factors", {}) as Dictionary
+	if not bool(mountain_scale_plan.get("valid", false)) \
+			or not bool(mountain_scale_plan.get("typed_composition", false)) \
+			or String(mountain_scale_plan.get("execution_mode", "")) != "resident_contribution_scale" \
+			or not is_equal_approx(float(mountain_scales.get("mountain", -1.0)), 0.5):
+		runtime.free()
+		return "Mountain typed scale was not recognized as exact resident lowering"
+	var mountain_scaled: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	if not _resident_zero_bytecode(mountain_scaled):
+		runtime.free()
+		return "Mountain typed scale left resident zero-bytecode production path"
+	var mountain_scaled_controls: Dictionary = mountain_scaled.get("production_geomorph_controls", {}) as Dictionary
+	if not is_equal_approx(float(mountain_scaled_controls.get("mountain_strength", 0.0)), 1.125):
+		runtime.free()
+		return "Mountain scale did not lower to mountain_strength *= 0.5"
+	var mountain_scaled_guard: float = float((mountain_scaled.get("displacement_envelope", {}) as Dictionary).get(
+		"production_max_abs_m", -1.0))
+	if mountain_scaled_guard < 0.0 or mountain_scaled_guard >= baseline_guard:
+		runtime.free()
+		return "Mountain scale did not update conservative production displacement bounds"
+
+	# Fine cannot be scaled through fine_strength because Micro consumes that same
+	# control. The lowering must change only fine_amplitude_m and leave Micro intact.
+	controls = NATIVE.extract_controls(graph)
+	NATIVE.build_canonical_graph(graph, controls)
+	var fine_id: String = _find_type(graph, NATIVE.stage_node_type("fine"))
+	var micro_id: String = _find_type(graph, NATIVE.stage_node_type("micro"))
+	graph.call("set_node_parameter", fine_id, "fine_strength", 2.0)
+	graph.call("set_node_parameter", fine_id, "fine_amplitude_m", 8.0)
+	graph.call("set_node_parameter", micro_id, "micro_amplitude_m", 1.5)
+	merge_id = _find_type(graph, NATIVE.MERGE_TYPE)
+	var fine_port: int = NATIVE.merge_port_for_stage("fine")
+	var fine_factor_id: String = String(graph.call("add_node", "CONSTANT_FLOAT",
+		Vector2(590.0, 1260.0), {"value":0.25}))
+	var fine_multiply_id: String = String(graph.call("add_node", "MULTIPLY",
+		Vector2(690.0, 1210.0), {}))
+	if not bool(graph.call("disconnect_nodes", fine_id, 0, merge_id, fine_port)) \
+			or not bool(graph.call("connect_nodes", fine_id, 0, fine_multiply_id, 1)) \
+			or not bool(graph.call("connect_nodes", fine_factor_id, 0, fine_multiply_id, 0)) \
+			or not bool(graph.call("connect_nodes", fine_multiply_id, 0, merge_id, fine_port)):
+		runtime.free()
+		return "could not construct commuted typed Fine scale path"
+	var fine_scaled: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	if not _resident_zero_bytecode(fine_scaled):
+		runtime.free()
+		return "Fine typed scale left resident zero-bytecode production path"
+	var fine_controls: Dictionary = fine_scaled.get("production_geomorph_controls", {}) as Dictionary
+	if not is_equal_approx(float(fine_controls.get("fine_amplitude_m", 0.0)), 2.0) \
+			or not is_equal_approx(float(fine_controls.get("fine_strength", 0.0)), 2.0) \
+			or not is_equal_approx(float(fine_controls.get("micro_amplitude_m", 0.0)), 1.5):
+		runtime.free()
+		return "Fine scale altered its shared Micro dependency instead of only Fine amplitude"
+
+	# A factor outside the guarded range must leave the just-committed Fine scale as
+	# last-known-good, including controls, generation and displacement bounds.
+	var fine_good_generation: int = int(fine_scaled.get("generation", -1))
+	var fine_good_guard: float = float((fine_scaled.get("displacement_envelope", {}) as Dictionary).get(
+		"production_max_abs_m", -1.0))
+	graph.call("set_node_parameter", fine_factor_id, "value", 4.5)
+	var factor_plan: Dictionary = LOWERING.contribution_merge_plan(graph)
+	if bool(factor_plan.get("valid", true)):
+		runtime.free()
+		return "out-of-range native contribution scale factor was accepted"
+	var factor_rejected: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	if bool(factor_rejected.get("candidate_valid", true)) \
+			or int(factor_rejected.get("generation", -2)) != fine_good_generation:
+		runtime.free()
+		return "invalid scale factor replaced the last-known-good terrain"
+	var factor_controls: Dictionary = factor_rejected.get("production_geomorph_controls", {}) as Dictionary
+	if not is_equal_approx(float(factor_controls.get("fine_amplitude_m", 0.0)), 2.0):
+		runtime.free()
+		return "invalid scale factor leaked candidate Fine controls"
+	var factor_guard: float = float((factor_rejected.get("displacement_envelope", {}) as Dictionary).get(
+		"production_max_abs_m", -2.0))
+	if not is_equal_approx(factor_guard, fine_good_guard):
+		runtime.free()
+		return "invalid scale factor changed active displacement bounds"
+
 	# Glacial is a transform, not a contribution. Its exact bypass is Merge -> Compose.
 	controls = NATIVE.extract_controls(graph)
 	NATIVE.build_canonical_graph(graph, controls)
@@ -124,8 +227,9 @@ func _validate() -> String:
 		runtime.free()
 		return "Glacial bypass did not disable resident transform exactly"
 
-	# Preserve a known-good active snapshot, then cross-wire Mid into Channel's fixed
-	# merge socket. The candidate must fail without leaking controls or culling bounds.
+	# Preserve a known-good active snapshot, then try to launder Mid Relief through a
+	# valid-looking Multiply into Channel's socket. Provenance must survive the math
+	# node and the candidate must fail without leaking controls or culling bounds.
 	controls = NATIVE.extract_controls(graph)
 	NATIVE.build_canonical_graph(graph, controls)
 	var good: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
@@ -143,37 +247,43 @@ func _validate() -> String:
 	channel_id = _find_type(graph, NATIVE.stage_node_type("channel"))
 	var mid_port: int = NATIVE.merge_port_for_stage("mid")
 	channel_port = NATIVE.merge_port_for_stage("channel")
+	var wrong_factor_id: String = String(graph.call("add_node", "CONSTANT_FLOAT",
+		Vector2(600.0, 620.0), {"value":0.5}))
+	var wrong_multiply_id: String = String(graph.call("add_node", "MULTIPLY",
+		Vector2(700.0, 570.0), {}))
 	if not bool(graph.call("disconnect_nodes", mid_id, 0, merge_id, mid_port)) \
 			or not bool(graph.call("disconnect_nodes", channel_id, 0, merge_id, channel_port)) \
-			or not bool(graph.call("connect_nodes", mid_id, 0, merge_id, channel_port)):
+			or not bool(graph.call("connect_nodes", mid_id, 0, wrong_multiply_id, 0)) \
+			or not bool(graph.call("connect_nodes", wrong_factor_id, 0, wrong_multiply_id, 1)) \
+			or not bool(graph.call("connect_nodes", wrong_multiply_id, 0, merge_id, channel_port)):
 		runtime.free()
-		return "could not construct wrong-socket contribution branch"
+		return "could not construct wrong-provenance scale branch"
 	var invalid_plan: Dictionary = LOWERING.contribution_merge_plan(graph)
 	if bool(invalid_plan.get("valid", true)):
 		runtime.free()
-		return "wrong-socket contribution branch was accepted"
+		return "Multiply laundered Mid contribution into Channel socket"
 	mountain_id = _find_type(graph, NATIVE.stage_node_type("mountain"))
 	graph.call("set_node_parameter", mountain_id, "mountain_strength", 4.0)
 	var rejected: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
 	if bool(rejected.get("candidate_valid", true)) or not bool(rejected.get("candidate_rejected", false)):
 		runtime.free()
-		return "invalid contribution branch was not transactionally rejected"
+		return "invalid typed contribution branch was not transactionally rejected"
 	if int(rejected.get("generation", -2)) != good_generation:
 		runtime.free()
-		return "rejected contribution branch changed active bytecode generation"
+		return "rejected typed contribution branch changed active bytecode generation"
 	var rejected_controls: Dictionary = rejected.get("production_geomorph_controls", {}) as Dictionary
 	if not is_equal_approx(float(rejected_controls.get("mountain_strength", 0.0)), good_mountain_strength):
 		runtime.free()
-		return "rejected contribution branch leaked candidate controls"
+		return "rejected typed contribution branch leaked candidate controls"
 	var rejected_guard: float = float((rejected.get("displacement_envelope", {}) as Dictionary).get(
 		"production_max_abs_m", -2.0))
 	if not is_equal_approx(rejected_guard, good_guard):
 		runtime.free()
-		return "rejected contribution branch changed displacement bounds"
+		return "rejected typed contribution branch changed displacement bounds"
 
 	# Reconstruct a saved Phase 37 linear graph with a real reorder and Channel
-	# bypass. The compatibility lowering must read it, then Phase 38 migration must
-	# preserve both its edited controls and its enabled-stage set.
+	# bypass. Compatibility lowering must read it, then contribution migration must
+	# preserve both edited controls and enabled stages.
 	controls = NATIVE.extract_controls(graph)
 	controls["mountain_strength"] = 2.65
 	NATIVE.build_canonical_graph(graph, controls)
