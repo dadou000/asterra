@@ -11,10 +11,20 @@ extends Node
 ##   -> identity bridge publishes metadata/occupancy
 ##   -> rebuild resident connectivity
 ##
-## Destination state provider contract:
+## Destination initializer contract supports two modes:
+##
+## Legacy/test CPU state:
 ##   PackedFloat32Array provider(destination_key, destination_slot)
-## containing tile_res*tile_res vec4(h,hu,hv,bed). Normally h/hu/hv are zero and
-## bed is reconstructed from the terrain system. Invalid/missing data FAILS CLOSED.
+##   containing tile_res*tile_res vec4(h,hu,hv,bed).
+##
+## Production GPU stage:
+##   Dictionary provider(destination_key, destination_slot)
+##   { "queued": true, "error": OK, "request_id": ... }
+##
+## A queued GPU initializer must record its RenderingDevice work through
+## RenderingServer.call_on_render_thread(). The handoff is queued afterwards, so
+## render-thread FIFO ordering keeps terrain staging ahead of conservative seeding.
+## Missing/invalid initialization FAILS CLOSED and releases the reservation.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -125,18 +135,10 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 		var destination := HydroTileKey.unpack(destination_id)
 		if destination == null:
 			continue
-		var state_variant: Variant = destination_state_provider.call(
+
+		var stage_variant: Variant = destination_state_provider.call(
 			destination, destination_slot)
-		if typeof(state_variant) != TYPE_PACKED_FLOAT32_ARRAY:
-			_cancel_group(batch_id, destination, destination_slot,
-				"destination_initializer_missing", resolved)
-			continue
-		var state: PackedFloat32Array = state_variant
-		if state.size() != atlas.cells_per_tile() * SparseHydroAtlasGPU.STATE_FLOATS:
-			_cancel_group(batch_id, destination, destination_slot,
-				"destination_initializer_size", resolved)
-			continue
-		var stage_error := atlas.stage_slot_state(destination_slot, state)
+		var stage_error := _accept_destination_stage(stage_variant, destination_slot)
 		if stage_error != OK:
 			_cancel_group(batch_id, destination, destination_slot,
 				"destination_stage_failed", resolved)
@@ -163,6 +165,23 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 	else:
 		_start_current_job()
 	return batch_id
+
+
+func _accept_destination_stage(stage_variant: Variant, destination_slot: int) -> Error:
+	if typeof(stage_variant) == TYPE_PACKED_FLOAT32_ARRAY:
+		var state: PackedFloat32Array = stage_variant
+		if state.size() != atlas.cells_per_tile() * SparseHydroAtlasGPU.STATE_FLOATS:
+			return ERR_INVALID_DATA
+		return atlas.stage_slot_state(destination_slot, state)
+
+	if typeof(stage_variant) == TYPE_DICTIONARY:
+		var result: Dictionary = stage_variant
+		var error := int(result.get("error", ERR_INVALID_DATA))
+		if error != OK or not bool(result.get("queued", false)):
+			return error if error != OK else ERR_INVALID_DATA
+		return OK
+
+	return ERR_INVALID_DATA
 
 
 func _cancel_group(batch_id: int, destination: HydroTileKey, slot: int,
