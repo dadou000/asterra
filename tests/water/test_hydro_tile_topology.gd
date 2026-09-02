@@ -1,5 +1,5 @@
 extends Node
-## CPU-only exact cube-sphere adjacency tests for Phase 3 hydrology tiles.
+## CPU-only exact cube-sphere adjacency and momentum-frame tests for Phase 3.
 
 const LEVELS := [0, 1, 2, 5, 10, 20, HydroTileKey.MAX_LEVEL]
 
@@ -7,6 +7,7 @@ const LEVELS := [0, 1, 2, 5, 10, 20, HydroTileKey.MAX_LEVEL]
 func _ready() -> void:
 	_test_same_face_neighbors()
 	_test_all_cube_seams()
+	_test_momentum_frame_transforms()
 	print("HYDRO_TILE_TOPOLOGY: PASS")
 	get_tree().quit(0)
 
@@ -25,6 +26,12 @@ func _test_same_face_neighbors() -> void:
 		var back := HydroTileTopology.neighbor(link["key"], int(link["destination_direction"]))
 		_require(not back.is_empty() and (back["key"] as HydroTileKey).equals(key),
 			"same-face reciprocity failed")
+
+		var q := Vector2(1.75, -0.625)
+		var transformed := HydroEdgeFrame.momentum_across_link(q, direction, link)
+		_require(transformed.is_equal_approx(q),
+			"same-face momentum transform must be identity dir=%d got=%s" % [
+				direction, str(transformed)])
 
 
 func _test_all_cube_seams() -> void:
@@ -72,6 +79,50 @@ func _test_all_cube_seams() -> void:
 								a.dot(b), str(key), str(dest)])
 					seam_links += 1
 	_require(seam_links > 0, "no seam links tested")
+
+
+func _test_momentum_frame_transforms() -> void:
+	# Test every seam at a representative level. The transform must preserve
+	# magnitude, map destination outward normal to -source outward normal, preserve
+	# or reverse the edge tangent according to topology, and be exactly reciprocal.
+	var level := 6
+	var side := 1 << level
+	for face in 6:
+		for direction in 4:
+			for index in _edge_samples(side):
+				var source := _edge_key(face, level, direction, index)
+				var link := HydroTileTopology.neighbor(source, direction)
+				_require(not link.is_empty(), "momentum test missing topology link")
+				var destination := link["key"] as HydroTileKey
+				var destination_direction := int(link["destination_direction"])
+				var orientation := int(link["edge_orientation"])
+
+				var nd := HydroEdgeFrame.edge_normal(destination_direction)
+				var td := HydroEdgeFrame.edge_tangent(destination_direction)
+				var ns := HydroEdgeFrame.edge_normal(direction)
+				var ts := HydroEdgeFrame.edge_tangent(direction)
+				var mapped_normal := HydroEdgeFrame.momentum_to_source(
+					nd, direction, destination_direction, orientation)
+				var mapped_tangent := HydroEdgeFrame.momentum_to_source(
+					td, direction, destination_direction, orientation)
+				_require(mapped_normal.distance_to(-ns) < 1.0e-6,
+					"destination normal mapped incorrectly %s dir=%d" % [str(source), direction])
+				_require(mapped_tangent.distance_to(ts * float(orientation)) < 1.0e-6,
+					"destination tangent mapped incorrectly %s dir=%d" % [str(source), direction])
+
+				var q_destination := Vector2(2.375, -0.8125)
+				var q_source := HydroEdgeFrame.momentum_to_source(q_destination,
+					direction, destination_direction, orientation)
+				_require(absf(q_source.length() - q_destination.length()) < 1.0e-6,
+					"seam momentum transform changed vector magnitude")
+
+				var back := HydroTileTopology.neighbor(destination, destination_direction)
+				var roundtrip := HydroEdgeFrame.momentum_to_source(q_source,
+					destination_direction, int(back["destination_direction"]),
+					int(back["edge_orientation"]))
+				_require(roundtrip.distance_to(q_destination) < 1.0e-6,
+					"seam momentum transform not reciprocal: q=%s roundtrip=%s" % [
+						str(q_destination), str(roundtrip)])
 
 
 func _edge_samples(side: int) -> Array[int]:
