@@ -73,8 +73,6 @@ func _validate() -> String:
 		runtime.free()
 		return "Ring Area did not preserve exact [0,100] m conservative bounds"
 
-	# Requested annulus is fully selected from 10 through 20 degrees. The 5 degree
-	# feather lies outside that interval: 5..10 inward and 20..25 outward.
 	var samples: Array[Dictionary] = [
 		{"angle":0.0, "expected":0.0},
 		{"angle":5.0, "expected":0.0},
@@ -98,12 +96,11 @@ func _validate() -> String:
 	var normalized_sample: float = float(runtime.call("evaluate_height",
 		_direction(14.0, 0.0), 0.0, 0, 0, 0.0, 0.0))
 	var scaled_sample: float = float(runtime.call("evaluate_height",
-		_direction(14.0, 0.0) * 503.0, 0.0, 0, 0, 0.0, 0.0))
+		_direction(14.0, 0.0) * 503.0, 0.0, 0, 0.0, 0.0))
 	if absf(normalized_sample - scaled_sample) > 0.001:
 		runtime.free()
 		return "Ring Area changed for a non-unit copy of the same planet direction"
 
-	# Antimeridian continuity: center at +179 degrees, ring interval 1..5 degrees.
 	graph.call("set_node_parameter", ring_id, "center_latitude_deg", 20.0)
 	graph.call("set_node_parameter", ring_id, "center_longitude_deg", 179.0)
 	graph.call("set_node_parameter", ring_id, "inner_radius_deg", 1.0)
@@ -125,7 +122,6 @@ func _validate() -> String:
 		runtime.free()
 		return "Ring Area is not continuous across the antimeridian"
 
-	# Polar ring: every longitude at 88 degrees latitude is 2 degrees from north pole.
 	graph.call("set_node_parameter", ring_id, "center_latitude_deg", 90.0)
 	graph.call("set_node_parameter", ring_id, "center_longitude_deg", 0.0)
 	graph.call("set_node_parameter", ring_id, "inner_radius_deg", 1.0)
@@ -141,7 +137,6 @@ func _validate() -> String:
 			runtime.free()
 			return "polar Ring Area incorrectly depends on longitude %.1f" % longitude
 
-	# Invert complements the finished annulus, not either radial selector separately.
 	graph.call("set_node_parameter", ring_id, "center_latitude_deg", 0.0)
 	graph.call("set_node_parameter", ring_id, "center_longitude_deg", 0.0)
 	graph.call("set_node_parameter", ring_id, "inner_radius_deg", 10.0)
@@ -164,7 +159,6 @@ func _validate() -> String:
 		runtime.free()
 		return "Ring Area inversion did not complement the finished annulus"
 
-	# Inner > outer is invalid and must leave the last-known-good program active.
 	graph.call("set_node_parameter", ring_id, "invert", false)
 	graph.call("set_node_parameter", ring_id, "feather_deg", 5.0)
 	var good: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
@@ -193,7 +187,8 @@ func _validate() -> String:
 		runtime.free()
 		return "GPU displacement VM source could not be read"
 	if shader_source.find("float ad_radial_mask") < 0 \
-			or shader_source.find("if (p.w < 0.0)") < 0 \
+			or shader_source.find("p.w <= -181.0") < 0 \
+			or shader_source.find("max(-p.w - 181.0, 0.0)") < 0 \
 			or shader_source.find("smoothstep(radius_deg - feather_deg, radius_deg, angle_deg)") < 0 \
 			or shader_source.find("else if (op == 28) v = ad_radial_mask(direction, p);") < 0:
 		runtime.free()
