@@ -3,12 +3,14 @@ extends Node
 ##
 ## Fine tiles claim rainfall only after scheduler activation (the same event that
 ## publishes atlas occupancy). Their nominal SWE area accumulates in the containing
-## PlanetGrid macro cell and is returned exactly on release. No RenderingDevice is
-## required.
+## PlanetGrid macro cell and is returned exactly on release. The gate also verifies
+## that PersistentHydrologySystem reapplies a changed ownership mask to its current
+## native precipitation snapshot synchronously; no RenderingDevice is required.
 
 const GRID_RES := 4
 const PLANET_RADIUS_M := 10000.0
 const TILE_AREA_M2 := 400.0
+const TEST_NATIVE_RAIN_MPS := 2.5e-6
 const ABS_TOL := 1.0e-10
 
 var _failures: Array[String] = []
@@ -51,6 +53,11 @@ func _ready() -> void:
 		"first fine tile area mismatch")
 	_expect_close(ownership.coarse_fraction(macro_a), one_fraction,
 		"first fine tile coarse fraction mismatch")
+
+	# Authority changes must alter the currently installed coarse precipitation
+	# field immediately. Waiting for the next weather sampling interval creates a
+	# one-frame overlap with already-queued fine forcing.
+	_test_immediate_authority_application(store, ownership, macro_a, one_fraction)
 
 	var slot_b := scheduler.reserve(key_b, 0, "ownership_test")
 	_expect(slot_b >= 0, "second fine tile reservation failed")
@@ -95,6 +102,41 @@ func _ready() -> void:
 
 	ownership.release()
 	_finish()
+
+
+func _test_immediate_authority_application(store: PlanetHydrologyOwnershipStore,
+		ownership: HydroCoarseFineOwnershipMap, affected_cell: int,
+		expected_fraction: float) -> void:
+	var owner_script: GDScript = load(
+		"res://scripts/water/persistent_hydrology_system.gd")
+	var owner: Node = owner_script.new()
+	owner.set("_store", store)
+	var native := PackedFloat64Array()
+	native.resize(store.cell_count())
+	native.fill(TEST_NATIVE_RAIN_MPS)
+	var masked := native.duplicate()
+	owner.set("_precipitation_native_snapshot_mps", native)
+	owner.set("_precipitation_snapshot_mps", masked)
+	var full := PackedFloat64Array()
+	full.resize(store.cell_count())
+	full.fill(1.0)
+	owner.set("_precipitation_authority_fractions", full)
+	store.set_precipitation_field_mps(native)
+
+	var err: Error = owner.call(&"set_precipitation_authority_fractions",
+		ownership.coarse_precipitation_fractions())
+	_expect(err == OK, "coarse authority API rejected ownership vector (%d)" % int(err))
+	_expect_close(store.precipitation_mps[affected_cell],
+		TEST_NATIVE_RAIN_MPS * expected_fraction,
+		"authority change did not synchronously mask current coarse rain")
+	var unaffected := (affected_cell + 1) % store.cell_count()
+	_expect_close(store.precipitation_mps[unaffected], TEST_NATIVE_RAIN_MPS,
+		"authority mask changed an unrelated coarse cell")
+
+	owner.call(&"clear_precipitation_authority_fractions")
+	_expect_close(store.precipitation_mps[affected_cell], TEST_NATIVE_RAIN_MPS,
+		"authority clear did not synchronously restore current coarse rain")
+	owner.free()
 
 
 func _make_store() -> PlanetHydrologyOwnershipStore:
