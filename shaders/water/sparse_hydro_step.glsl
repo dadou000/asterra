@@ -26,7 +26,8 @@ layout(set = 0, binding = 1, std430) writeonly buffer StateOut {
     vec4 cells_out[];
 };
 layout(set = 0, binding = 2, std430) readonly buffer Sources {
-    vec4 sources[]; // rain m/s, infiltration m/s, reserved, reserved
+    // add depth m/s, remove depth m/s, injected hu rate, injected hv rate.
+    vec4 sources[];
 };
 layout(set = 0, binding = 3, std430) readonly buffer Occupancy {
     int occupied[];
@@ -248,6 +249,26 @@ vec3 apply_friction(vec3 q, float step_dt) {
     return vec3(q.x, q.yz / denom);
 }
 
+vec3 apply_sources(vec3 q, vec4 source, float step_dt) {
+    float add_h = max(source.x, 0.0) * step_dt;
+    float remove_h = max(source.y, 0.0) * step_dt;
+
+    // Added water carries explicit local-frame momentum supplied by the emitter.
+    q.x += add_h;
+    q.yz += source.zw * step_dt;
+
+    // A sink removes the local fluid parcel, not just scalar depth. Scaling the
+    // existing momentum with remaining depth keeps velocity finite and prevents a
+    // drain/infiltration term from manufacturing kinetic energy.
+    if (remove_h > 0.0 && q.x > 0.0) {
+        float kept_h = max(q.x - remove_h, 0.0);
+        float keep_fraction = kept_h / max(q.x, 1e-12);
+        q.yz *= keep_fraction;
+        q.x = kept_h;
+    }
+    return q;
+}
+
 void main() {
     if (pc.step_index >= control.steps_taken || control.iteration_active == 0u
             || dt() <= 0.0) return;
@@ -289,9 +310,7 @@ void main() {
     updated.z += 0.5 * grav() * scale
         * (fn.h_left * fn.h_left - fs.h_right * fs.h_right);
 
-    vec4 source = sources[i];
-    updated.x = max(updated.x
-        + (max(source.x, 0.0) - max(source.y, 0.0)) * dt(), 0.0);
+    updated = apply_sources(updated, sources[i], dt());
 
     if (updated.x <= dry_eps()
             || any(isnan(updated)) || any(isinf(updated))) {
