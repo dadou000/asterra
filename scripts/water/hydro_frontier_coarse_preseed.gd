@@ -73,6 +73,10 @@ func provisional_commit_count() -> int:
 	return _committed_by_tile.size()
 
 
+func has_provisional_tile(tile_id: int) -> bool:
+	return _committed_by_tile.has(tile_id)
+
+
 ## Returns:
 ##   >0 asynchronous preseed request ID
 ##    0 no coarse surface water overlaps this fine footprint
