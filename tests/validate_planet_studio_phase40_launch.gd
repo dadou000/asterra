@@ -1,15 +1,18 @@
 extends Node
-## Phase 40 smoke test for the actual PlanetStudio.tscn activation path and the
-## beginner-readable native linear-composition graph presentation.
+## Phase 40 semantic smoke test through the current PlanetStudio activation path.
+##
+## Phase 41 is a strict successor wrapper. This regression continues to prove that
+## the beginner-readable Phase 40 resident linear-composition graph remains intact
+## and bytecode-neutral after newer graph/runtime capabilities are activated.
 
 const PLANET_STUDIO_SCENE := preload("res://scenes/world_authoring/PlanetStudio.tscn")
-const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase40.gd"
+const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase41.gd"
 const NATIVE := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
 const LOWERING := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_lowering_phase40.gd")
 const RUNTIME := preload(
-	"res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd")
+	"res://scripts/world_authoring/terrain_displacement_runtime_phase41.gd")
 
 class DummyWorld extends Node3D:
 	var player: Node = null
@@ -41,7 +44,7 @@ func _run() -> void:
 		return
 	var script: Script = editor.get_script() as Script
 	if script == null or script.resource_path != EXPECTED_EDITOR_PATH:
-		_fail("PlanetStudio.tscn is not using the Phase 40 live editor wrapper.")
+		_fail("PlanetStudio.tscn is not using the current Phase 41 live editor wrapper.")
 		return
 	editor.call("bind_world", world)
 	layer.add_child(editor)
@@ -52,11 +55,11 @@ func _run() -> void:
 	var session: Object = editor.get("_session") as Object
 	var terrain: Resource = session.call("active_terrain_profile") as Resource if session != null else null
 	if terrain == null:
-		_fail("Phase 40 Planet Studio has no active terrain profile.")
+		_fail("Current Planet Studio has no active terrain profile.")
 		return
 	var shape_slot: Resource = terrain.call("find_shader_slot", NATIVE.PRODUCTION_SHAPE_SLOT_ID) as Resource
 	if shape_slot == null:
-		_fail("Phase 40 Planet Studio has no Base Terrain Shape slot.")
+		_fail("Current Planet Studio has no Base Terrain Shape slot.")
 		return
 	var graph: Resource = shape_slot.get(&"graph") as Resource
 	if graph == null or not NATIVE.has_merge_node(graph):
@@ -64,7 +67,7 @@ func _run() -> void:
 		return
 
 	# Build a single-stage Scale path. The saved node types stay generic, while the
-	# Phase 40 editor should present them as terrain-language controls.
+	# Phase 40 editor presentation inherited by Phase 41 uses terrain-language controls.
 	var merge_id: String = _node_id(graph, NATIVE.MERGE_TYPE)
 	var mountain_id: String = _node_id(graph, NATIVE.stage_node_type("mountain"))
 	var mountain_port: int = NATIVE.merge_port_for_stage("mountain")
@@ -103,8 +106,8 @@ func _run() -> void:
 		_fail("Phase 40 Scale/Blend fixture is not recognized by exact symbolic lowering.")
 		return
 
-	# Re-focus the same serialized graph so the UI rebuilds from the newly added
-	# generic node records and applies the contextual human-readable presentation.
+	# Re-focus the same serialized graph so the current UI rebuilds from the newly
+	# added generic node records and retains the contextual Phase 40 presentation.
 	editor.call("_phase28_focus_existing_slot", shape_slot)
 	await _frames(5)
 	for required_title: String in [
@@ -115,7 +118,7 @@ func _run() -> void:
 		"PRODUCTION · NATIVE DETAIL MERGE",
 	]:
 		if _find_graph_node(editor, required_title) == null:
-			_fail("Phase 40 Base Terrain graph is missing beginner-facing node '%s'." % required_title)
+			_fail("Current Base Terrain graph is missing inherited Phase 40 node '%s'." % required_title)
 			return
 	var merge_node: GraphNode = _find_graph_node(editor, "PRODUCTION · NATIVE DETAIL MERGE")
 	for group_index: int in LOWERING.group_merge_port_count():
@@ -123,14 +126,14 @@ func _run() -> void:
 			_fail("Native Detail Merge is missing Custom Group %d." % (group_index + 1))
 			return
 
-	# The editor presentation must not introduce a second native terrain program.
+	# Phase 41 must not introduce a second program for native production stages.
 	var runtime: Node = RUNTIME.new() as Node
 	add_child(runtime)
 	var compiled: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
 	if not bool(compiled.get("candidate_valid", false)) \
 			or bool(compiled.get("active", true)) \
 			or int(compiled.get("instructions", -1)) != 0:
-		_fail("Phase 40 UI-authored Scale/Blend graph left resident zero-bytecode production.")
+		_fail("Phase 41 changed Phase 40 resident Scale/Blend into authored bytecode.")
 		return
 	var controls: Dictionary = compiled.get("production_geomorph_controls", {}) as Dictionary
 	if not is_equal_approx(float(controls.get("mountain_strength", 0.0)), 0.5):
@@ -141,7 +144,7 @@ func _run() -> void:
 		_fail("Blend Contributions did not reduce to the expected resident coefficients.")
 		return
 
-	print("PLANET_STUDIO_PHASE40_LAUNCH_OK: actual scene uses Phase 40; friendly Scale/Blend graph remains resident and bytecode-neutral")
+	print("PLANET_STUDIO_PHASE40_LAUNCH_OK: Phase 41 activation preserves Phase 40 friendly Scale/Blend graph as resident zero-bytecode terrain")
 	runtime.queue_free()
 	editor.queue_free()
 	await _frames(2)
