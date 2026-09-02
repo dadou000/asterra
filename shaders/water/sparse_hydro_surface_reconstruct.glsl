@@ -10,7 +10,7 @@
 //   R = absolute local free-surface elevation eta=h+bed relative planet mean [m]
 //       (0 outside resident wet sparse state, matching mean-ocean baseline)
 //   G/B = velocity in the persistent dynamic-cache tangent frame [m/s]
-//   A = simple hydraulic activity hint [0..1]
+//   A = physical water depth h [m]
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -33,7 +33,7 @@ layout(set = 0, binding = 5, std430) readonly buffer Params {
     vec4 anchor_dir;   // xyz
     vec4 anchor_right; // xyz
     vec4 anchor_up;    // xyz
-    vec4 view;         // target_center_plane x/y, activity_gain, reserved
+    vec4 view;         // target_center_plane x/y, reserved, reserved
 } params;
 
 const float CUBE_Q = 0.7853981633974483;
@@ -187,8 +187,6 @@ void main() {
     float eta = q.w + h;
     vec2 local_velocity = q.yz / h;
     vec2 cache_velocity = local_velocity_to_cache(d, face, local_velocity);
-    float speed = length(cache_velocity);
-    float activity = clamp(speed * max(params.view.z, 0.0), 0.0, 1.0);
     imageStore(target_field, pixel,
-        vec4(eta, cache_velocity.x, cache_velocity.y, activity));
+        vec4(eta, cache_velocity.x, cache_velocity.y, h));
 }
