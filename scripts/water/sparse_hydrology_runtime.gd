@@ -3,21 +3,21 @@ extends Node
 ## Persistent Phase 3 sparse-hydrology orchestration loop.
 ##
 ## The runtime owns no stable world identity and no atlas storage. Those remain in
-## SparseHydroScheduler/SparseHydroAtlasGPU. This node only sequences the already
-## validated GPU passes and carries unadvanced CFL time debt between cycles:
+## SparseHydroScheduler/SparseHydroAtlasGPU. This node sequences compact source
+## synchronization and the validated GPU solve/frontier chain while carrying any
+## unadvanced CFL time debt between cycles:
 ##
-##   advance -> diagnostics -> classify -> frontier -> policy activity
-##           -> connectivity sync -> terrain stage/handoff -> repeat
+##   source sync -> advance -> diagnostics -> classify -> frontier -> policy
+##               -> terrain stage/handoff -> connectivity -> repeat
 ##
-## Frontier and activity compact buffers are read back today because allocation,
-## exact topology, terrain/structure reachability and settle/sleep policy are still
-## CPU decisions. Full water grids remain GPU-resident.
+## Full h/hu/hv/bed grids remain GPU-resident.
 
 signal initialized
 signal initialization_failed(error: Error, component: String)
 signal cycle_started(cycle_id: int, requested_dt_s: float, time_debt_s: float)
 signal cycle_completed(cycle_id: int, report: Dictionary)
 signal frontier_overflow(cycle_id: int)
+signal source_sync_completed(source_count: int, entry_count: int)
 signal runtime_failed(error: Error, stage: String)
 signal released
 
@@ -25,6 +25,7 @@ enum Phase {
 	OFFLINE,
 	INITIALIZING,
 	IDLE,
+	SOURCES,
 	ADVANCING,
 	CLASSIFYING,
 	FRONTIER,
@@ -43,8 +44,7 @@ var seed_dt_s := 0.02
 var max_seed_fraction := 0.12
 var gravity := 9.81
 ## FROZEN_WATER is currently a policy label only; GPU occupancy remains live.
-## Keep it disabled until the later analytical-domain collapse pass actually
-## removes frozen tiles from the SWE domain.
+## Keep it disabled until analytical-domain collapse can really remove the tile.
 var disable_placeholder_wet_freeze := true
 
 var scheduler: SparseHydroScheduler
@@ -57,6 +57,7 @@ var activity: HydroTileActivityGPU
 var frontier: HydroFrontierCandidatesGPU
 var activation: HydroFrontierActivationPipeline
 var terrain_bed: HydroTerrainBedGPU
+var source_ingress: HydroSourceIngress
 
 var _phase := Phase.OFFLINE
 var _reachability := Callable()
@@ -115,6 +116,9 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 		"frontier": false,
 		"activation": false,
 		"terrain": not _using_internal_terrain_provider,
+		# Generic point-source ingress currently depends on HydroTerrainBedGPU for
+		# first-domain creation. Custom numerical providers can still run without it.
+		"sources": not _using_internal_terrain_provider,
 	}
 
 	solver = SparseHydroStepGPU.new()
@@ -187,11 +191,47 @@ func phase_name() -> String:
 
 
 func busy() -> bool:
-	return _phase in [Phase.ADVANCING, Phase.CLASSIFYING, Phase.FRONTIER, Phase.ACTIVATING]
+	return _phase in [Phase.SOURCES, Phase.ADVANCING, Phase.CLASSIFYING,
+		Phase.FRONTIER, Phase.ACTIVATING]
 
 
 func time_debt_s() -> float:
 	return _time_debt_s
+
+
+func sources_available() -> bool:
+	return source_ingress != null and source_ingress.initialized_ok()
+
+
+## Generic world-space point source. Positive Q adds water; negative Q removes it.
+func upsert_point_source(source_id: String, direction: Vector3,
+		rate_m3_s: float, injection_velocity_world: Vector3 = Vector3.ZERO,
+		tile_level: int = -1, source_enabled: bool = true) -> Error:
+	if not sources_available():
+		return ERR_UNAVAILABLE
+	var err := source_ingress.upsert_point_source(source_id, direction, rate_m3_s,
+		injection_velocity_world, tile_level, source_enabled)
+	if err == OK:
+		_pump()
+	return err
+
+
+func remove_point_source(source_id: String) -> bool:
+	if not sources_available():
+		return false
+	var removed := source_ingress.remove_source(source_id)
+	if removed:
+		_pump()
+	return removed
+
+
+func set_point_source_enabled(source_id: String, source_enabled: bool) -> bool:
+	if not sources_available():
+		return false
+	var changed := source_ingress.set_source_enabled(source_id, source_enabled)
+	if changed:
+		_pump()
+	return changed
 
 
 ## Add physical simulation time. The remainder is never discarded merely because
@@ -223,6 +263,7 @@ func stats() -> Dictionary:
 		"cycles_completed": _cycles_completed,
 		"frontier_overflows": _frontier_overflows,
 		"last_solver_diagnostics": _last_solver_diagnostics.duplicate(true),
+		"sources": {} if source_ingress == null else source_ingress.stats(),
 		"scheduler": {} if scheduler == null else scheduler.stats(),
 	}
 
@@ -232,8 +273,11 @@ func _process(delta: float) -> void:
 		return
 	if not is_finite(delta) or delta <= 0.0:
 		return
-	# Do not accumulate a huge catch-up burst while no physical water domain exists.
-	if not _has_solver_visible_tiles():
+	var source_work := source_ingress != null and source_ingress.dirty()
+	# Do not accumulate a huge catch-up burst while neither physical water nor a
+	# pending source exists. A new spring/glacier source is allowed to create the
+	# first tile and then consume the time accumulated in this frame.
+	if not _has_solver_visible_tiles() and not source_work:
 		_time_debt_s = 0.0
 		return
 	advance_time(delta * maxf(time_scale, 0.0))
@@ -251,6 +295,14 @@ func _has_solver_visible_tiles() -> bool:
 
 func _pump() -> void:
 	if not enabled or _phase != Phase.IDLE:
+		return
+	# Source definitions are synchronized only at an idle boundary, before the next
+	# SWE command chain can read the source buffer.
+	if source_ingress != null and source_ingress.dirty():
+		_phase = Phase.SOURCES
+		var source_request := source_ingress.flush()
+		if source_request < 0:
+			_fail_runtime(ERR_BUSY, "source_sync_submit")
 		return
 	if _time_debt_s < min_cycle_dt_s or not _has_solver_visible_tiles():
 		return
@@ -304,6 +356,25 @@ func _on_activation_initialized() -> void:
 func _on_terrain_initialized() -> void:
 	_component_ready["terrain"] = true
 	_destination_provider = Callable(terrain_bed, &"stage_reserved_tile")
+
+	source_ingress = HydroSourceIngress.new()
+	source_ingress.name = "HydroSourceIngress"
+	add_child(source_ingress)
+	source_ingress.initialized.connect(_on_source_ingress_initialized)
+	source_ingress.initialization_failed.connect(
+		func(error: Error): _fail_initialization(error, "sources"))
+	source_ingress.flush_completed.connect(_on_source_flush_completed)
+	source_ingress.flush_failed.connect(_on_source_flush_failed)
+	var err := source_ingress.initialize(scheduler, atlas, connectivity,
+		identity_bridge, terrain_bed)
+	if err != OK:
+		_fail_initialization(err, "sources")
+		return
+	_try_finish_initialization()
+
+
+func _on_source_ingress_initialized() -> void:
+	_component_ready["sources"] = true
 	_try_finish_initialization()
 
 
@@ -319,6 +390,20 @@ func _try_finish_initialization() -> void:
 	_phase = Phase.IDLE
 	initialized.emit()
 	_pump()
+
+
+func _on_source_flush_completed(_request_id: int, source_count: int,
+		entry_count: int) -> void:
+	if _phase != Phase.SOURCES:
+		return
+	_phase = Phase.IDLE
+	source_sync_completed.emit(source_count, entry_count)
+	call_deferred(&"_pump")
+
+
+func _on_source_flush_failed(_request_id: int, error: Error, stage: String) -> void:
+	if _phase == Phase.SOURCES:
+		_fail_runtime(error, "source_sync_" + stage)
 
 
 func _on_solver_diagnostics(step_id: int, diagnostics: Dictionary) -> void:
@@ -346,8 +431,6 @@ func _on_activity_summaries(request_id: int, summaries: Array[Dictionary]) -> vo
 	if _phase != Phase.CLASSIFYING or request_id != _cycle_activity_request_id:
 		return
 
-	# Snapshot stable identity before policy can release a dry tile. Frontier work is
-	# queued first, so its GPU metadata snapshot precedes any release/unbind calls.
 	_cycle_summaries = []
 	for summary in summaries:
 		if not bool(summary.get("active", false)):
@@ -436,7 +519,6 @@ func _finish_cycle(activation_results: Array[Dictionary]) -> void:
 	_reset_cycle_state()
 	_phase = Phase.IDLE
 	cycle_completed.emit(completed_id, report)
-	# Carry solver remainder forward without recursive callback chains.
 	call_deferred(&"_pump")
 
 
@@ -498,6 +580,9 @@ func release() -> void:
 	_reachability = Callable()
 	_destination_provider = Callable()
 
+	if source_ingress != null and is_instance_valid(source_ingress):
+		source_ingress.release()
+		source_ingress.queue_free()
 	if terrain_bed != null and is_instance_valid(terrain_bed):
 		terrain_bed.release()
 		terrain_bed.queue_free()
@@ -514,6 +599,7 @@ func release() -> void:
 		solver.release()
 		solver.queue_free()
 
+	source_ingress = null
 	terrain_bed = null
 	frontier = null
 	activation = null
