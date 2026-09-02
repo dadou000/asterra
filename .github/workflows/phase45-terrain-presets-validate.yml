@@ -1,0 +1,140 @@
+name: Phase 45 terrain preset validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/model/terrain_feature_preset_catalog.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase45.gd"
+      - "scripts/world_authoring/validate_terrain_presets_phase45_ci.gd"
+      - "scripts/world_authoring/validate_terrain_presets_phase45_ui_ci.gd"
+      - "scripts/world_authoring/model/terrain_guided_feature_graph.gd"
+      - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scenes/world_authoring/PlanetStudio.tscn"
+      - "scenes/world_authoring/ValidateTerrainPresetsPhase45CI.tscn"
+      - "scenes/world_authoring/ValidateTerrainPresetsPhase45UI.tscn"
+      - ".github/workflows/phase45-terrain-presets-validate.yml"
+  pull_request:
+    paths:
+      - "scripts/world_authoring/model/terrain_feature_preset_catalog.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase45.gd"
+      - "scripts/world_authoring/validate_terrain_presets_phase45_ci.gd"
+      - "scripts/world_authoring/validate_terrain_presets_phase45_ui_ci.gd"
+      - "scripts/world_authoring/model/terrain_guided_feature_graph.gd"
+      - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scenes/world_authoring/PlanetStudio.tscn"
+      - "scenes/world_authoring/ValidateTerrainPresetsPhase45CI.tscn"
+      - "scenes/world_authoring/ValidateTerrainPresetsPhase45UI.tscn"
+      - ".github/workflows/phase45-terrain-presets-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  terrain-presets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated Phase 45 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-phase45-preset-ci
+          mkdir -p /tmp/asterra-phase45-preset-ci/scripts /tmp/asterra-phase45-preset-ci/shaders /tmp/asterra-phase45-preset-ci/tests /tmp/asterra-phase45-preset-ci/tools /tmp/asterra-phase45-preset-ci/scenes/world_authoring
+          cp -R scripts/. /tmp/asterra-phase45-preset-ci/scripts/
+          cp -R shaders/. /tmp/asterra-phase45-preset-ci/shaders/
+          cp tests/ci_autoload_planet.gd /tmp/asterra-phase45-preset-ci/tests/
+          cp tests/ci_autoload_frames.gd /tmp/asterra-phase45-preset-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-phase45-preset-ci/tests/
+          cp tools/terrain_region_compiler.gd /tmp/asterra-phase45-preset-ci/tools/
+          cp -R scenes/world_authoring/. /tmp/asterra-phase45-preset-ci/scenes/world_authoring/
+          cp world.tres /tmp/asterra-phase45-preset-ci/world.tres
+          cat > /tmp/asterra-phase45-preset-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Phase 45 Terrain Preset CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [display]
+          window/size/viewport_width=1600
+          window/size/viewport_height=900
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import Phase 45 scripts and shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase45-preset-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/phase45-preset-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 300 /tmp/phase45-preset-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 45 terrain preset isolated import failed with status $status"
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|shader compilation failed|shader.*parse error" /tmp/phase45-preset-import.log; then
+            echo "Phase 45 terrain preset import reported a parser error."
+            exit 1
+          fi
+
+      - name: Validate preset recipes and authoritative runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase45-preset-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateTerrainPresetsPhase45CI.tscn > /tmp/phase45-preset-runtime.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase45-preset-runtime.log
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          grep -q "TERRAIN_PRESETS_PHASE45_OK" /tmp/phase45-preset-runtime.log
+          if grep -Eq "TERRAIN_PRESETS_PHASE45_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase45-preset-runtime.log; then exit 1; fi
+
+      - name: Validate preset Planet Studio workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase45-preset-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateTerrainPresetsPhase45UI.tscn > /tmp/phase45-preset-ui.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase45-preset-ui.log
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          grep -q "TERRAIN_PRESETS_PHASE45_UI_OK" /tmp/phase45-preset-ui.log
+          if grep -Eq "TERRAIN_PRESETS_PHASE45_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase45-preset-ui.log; then exit 1; fi
