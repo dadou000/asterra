@@ -1,0 +1,164 @@
+name: Phase 44 simplified terrain UI validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/model/terrain_beginner_surface_catalog.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase44.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase44.gd"
+      - "scripts/world_authoring/validate_simplified_surface_ui_phase44_ci.gd"
+      - "scripts/world_authoring/model/terrain_guided_feature_graph.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase43.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase43.gd"
+      - "scripts/world_authoring/validate_simplified_terrain_features_phase43_ci.gd"
+      - "scripts/world_authoring/validate_simplified_terrain_ui_phase43_ci.gd"
+      - "scenes/world_authoring/PlanetStudio.tscn"
+      - "scenes/world_authoring/ValidateSimplifiedSurfaceUIPhase44CI.tscn"
+      - "scenes/world_authoring/ValidateSimplifiedTerrainFeaturesPhase43CI.tscn"
+      - "scenes/world_authoring/ValidateSimplifiedTerrainUIPhase43CI.tscn"
+      - ".github/workflows/phase44-simplified-surface-validate.yml"
+  pull_request:
+    paths:
+      - "scripts/world_authoring/model/terrain_beginner_surface_catalog.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase44.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase44.gd"
+      - "scripts/world_authoring/validate_simplified_surface_ui_phase44_ci.gd"
+      - "scripts/world_authoring/model/terrain_guided_feature_graph.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase43.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase43.gd"
+      - "scripts/world_authoring/validate_simplified_terrain_features_phase43_ci.gd"
+      - "scripts/world_authoring/validate_simplified_terrain_ui_phase43_ci.gd"
+      - "scenes/world_authoring/PlanetStudio.tscn"
+      - "scenes/world_authoring/ValidateSimplifiedSurfaceUIPhase44CI.tscn"
+      - "scenes/world_authoring/ValidateSimplifiedTerrainFeaturesPhase43CI.tscn"
+      - "scenes/world_authoring/ValidateSimplifiedTerrainUIPhase43CI.tscn"
+      - ".github/workflows/phase44-simplified-surface-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  simplified-terrain-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated Phase 44 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-phase44-simple-ci
+          mkdir -p /tmp/asterra-phase44-simple-ci/scripts /tmp/asterra-phase44-simple-ci/shaders /tmp/asterra-phase44-simple-ci/tests /tmp/asterra-phase44-simple-ci/tools /tmp/asterra-phase44-simple-ci/scenes/world_authoring
+          cp -R scripts/. /tmp/asterra-phase44-simple-ci/scripts/
+          cp -R shaders/. /tmp/asterra-phase44-simple-ci/shaders/
+          cp tests/ci_autoload_planet.gd /tmp/asterra-phase44-simple-ci/tests/
+          cp tests/ci_autoload_frames.gd /tmp/asterra-phase44-simple-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-phase44-simple-ci/tests/
+          cp tools/terrain_region_compiler.gd /tmp/asterra-phase44-simple-ci/tools/
+          cp -R scenes/world_authoring/. /tmp/asterra-phase44-simple-ci/scenes/world_authoring/
+          cp world.tres /tmp/asterra-phase44-simple-ci/world.tres
+          cat > /tmp/asterra-phase44-simple-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Phase 44 Simplified Terrain UI CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [display]
+          window/size/viewport_width=1600
+          window/size/viewport_height=900
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import Phase 44 scripts and shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase44-simple-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/phase44-simple-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 280 /tmp/phase44-simple-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 44 simplified terrain isolated import failed with status $status"
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|shader compilation failed|shader.*parse error" /tmp/phase44-simple-import.log; then
+            echo "Phase 44 simplified terrain import reported a parser error."
+            exit 1
+          fi
+
+      - name: Revalidate guided Shape feature runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase44-simple-ci
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateSimplifiedTerrainFeaturesPhase43CI.tscn > /tmp/phase44-shape-runtime.log 2>&1
+          cat /tmp/phase44-shape-runtime.log
+          grep -q "SIMPLIFIED_TERRAIN_PHASE43_OK" /tmp/phase44-shape-runtime.log
+          if grep -Eq "SIMPLIFIED_TERRAIN_PHASE43_FAILED|SCRIPT ERROR|Parse Error|FATAL" /tmp/phase44-shape-runtime.log; then exit 1; fi
+
+      - name: Revalidate simplified Shape workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase44-simple-ci
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateSimplifiedTerrainUIPhase43CI.tscn > /tmp/phase44-shape-ui.log 2>&1
+          cat /tmp/phase44-shape-ui.log
+          grep -q "SIMPLIFIED_TERRAIN_PHASE43_UI_OK" /tmp/phase44-shape-ui.log
+          if grep -Eq "SIMPLIFIED_TERRAIN_PHASE43_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase44-shape-ui.log; then exit 1; fi
+
+      - name: Validate simplified Surface workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase44-simple-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateSimplifiedSurfaceUIPhase44CI.tscn > /tmp/phase44-surface-ui.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase44-surface-ui.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 44 simplified Surface validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "SIMPLIFIED_SURFACE_PHASE44_UI_OK" /tmp/phase44-surface-ui.log; then
+            echo "Phase 44 simplified Surface completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "SIMPLIFIED_SURFACE_PHASE44_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase44-surface-ui.log; then
+            echo "Phase 44 simplified Surface regression reported a failure."
+            exit 1
+          fi
