@@ -1,13 +1,16 @@
 extends Node
-## Renderer-mode Phase 3 smoke test for sparse slot storage + compact GPU summaries.
+## Renderer-mode Phase 3 smoke test for sparse slot storage, compact GPU
+## summaries, and the summary -> active-frontier candidate queue.
 
 const CAPACITY := 4
 const TILE_RES := 8
 const DX := 2.0
+const FRONTIER_THRESHOLD_M3S := 0.5
 const TIMEOUT_FRAMES := 1200
 
 var _atlas: SparseHydroAtlasGPU
 var _activity: HydroTileActivityGPU
+var _frontier: HydroFrontierCandidatesGPU
 var _frames := 0
 var _finished := false
 
@@ -21,7 +24,8 @@ func _ready() -> void:
 	var state := PackedFloat32Array()
 	state.resize(CAPACITY * TILE_RES * TILE_RES * 4)
 	_fill_uniform_tile(state, 0, 2.0, Vector2(0.5, 0.0), -2.0)
-	# Slot 1 intentionally contains water but is unoccupied; summary must stay zero.
+	# Slot 1 intentionally contains water but is unoccupied; summary/frontier must
+	# ignore stale data from a recycled GPU slot.
 	_fill_uniform_tile(state, 1, 5.0, Vector2(3.0, 2.0), -5.0)
 	_fill_uniform_tile(state, 2, 1.0, Vector2(0.0, -0.25), -1.0)
 	_fill_uniform_tile(state, 3, 0.0, Vector2.ZERO, 0.0)
@@ -96,11 +100,63 @@ func _on_summaries_ready(_request_id: int, summaries: Array[Dictionary]) -> void
 	_require(bool(s3["active"]), "occupied dry slot should still report active ownership")
 	_require(int(s3["wet_cells"]) == 0, "dry slot wet count")
 	_require_close(float(s3["max_depth_m"]), 0.0, 1.0e-6, "dry slot depth")
+	if _finished:
+		return
 
+	# The next stage consumes the GPU summary RID directly; it does not rebuild a
+	# queue from the CPU dictionaries above.
+	_frontier = HydroFrontierCandidatesGPU.new()
+	add_child(_frontier)
+	_frontier.initialized.connect(_on_frontier_initialized)
+	_frontier.initialization_failed.connect(func(error: Error):
+		_fail("frontier pipeline initialization failed (%d)" % int(error)))
+	_frontier.candidates_ready.connect(_on_candidates_ready)
+	_frontier.queue_failed.connect(func(_request_id: int, error: Error):
+		_fail("frontier queue failed (%d)" % int(error)))
+	var err := _frontier.initialize(_activity.summary_rid(), CAPACITY,
+		FRONTIER_THRESHOLD_M3S)
+	if err != OK:
+		_fail("frontier initialize rejected (%d)" % int(err))
+
+
+func _on_frontier_initialized() -> void:
+	if _frontier.generate(true) < 0:
+		_fail("frontier generation request rejected")
+
+
+func _on_candidates_ready(_request_id: int, candidates: Array[Dictionary],
+		overflow: bool) -> void:
+	_require(not overflow, "frontier queue overflowed")
+	_require(candidates.size() == 2,
+		"expected exactly 2 frontier candidates, got %d: %s" % [
+			candidates.size(), str(candidates)])
+	if _finished:
+		return
+
+	var found_east := false
+	var found_south := false
+	for c in candidates:
+		var slot := int(c.get("slot", -1))
+		var direction := int(c.get("direction", -1))
+		var flux := float(c.get("flux_m3s", NAN))
+		_require(slot != 1, "inactive stale slot generated a frontier candidate")
+		_require(slot != 3, "dry occupied slot generated a frontier candidate")
+		if slot == 0 and direction == SparseHydroScheduler.DIR_EAST:
+			_require_close(flux, 16.0, 2.0e-4, "frontier slot0 east flux")
+			found_east = true
+		elif slot == 2 and direction == SparseHydroScheduler.DIR_SOUTH:
+			_require_close(flux, 4.0, 2.0e-4, "frontier slot2 south flux")
+			found_south = true
+		else:
+			_fail("unexpected frontier candidate: %s" % str(c))
+			return
+
+	_require(found_east, "missing slot0 east frontier candidate")
+	_require(found_south, "missing slot2 south frontier candidate")
 	if _finished:
 		return
 	_finished = true
-	print("SPARSE_HYDRO_GPU: PASS summaries=", summaries)
+	print("SPARSE_HYDRO_GPU: PASS frontier=", candidates)
 	_cleanup()
 	get_tree().quit(0)
 
@@ -117,7 +173,7 @@ func _fill_uniform_tile(state: PackedFloat32Array, slot: int, depth: float,
 
 
 func _require_close(actual: float, expected: float, tolerance: float, label: String) -> void:
-	_require(absf(actual - expected) <= tolerance,
+	_require(is_finite(actual) and absf(actual - expected) <= tolerance,
 		"%s %.9g != %.9g (tol %.3g)" % [label, actual, expected, tolerance])
 
 
@@ -137,6 +193,9 @@ func _fail(message: String) -> void:
 
 
 func _cleanup() -> void:
+	if _frontier != null and is_instance_valid(_frontier):
+		_frontier.release()
+		_frontier.queue_free()
 	if _activity != null and is_instance_valid(_activity):
 		_activity.release()
 		_activity.queue_free()
