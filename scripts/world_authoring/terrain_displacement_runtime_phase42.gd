@@ -4,10 +4,8 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
 ##
 ## This is read-only runtime state. Rejected graph candidates already restore
 ## `_production_controls` in Phase 33, so consumers can never observe settings that
-## failed the displacement transaction.
-
-const GEOMORPH_CONTRACT := preload(
-	"res://scripts/world_authoring/model/terrain_geomorph_gpu_contract.gd")
+## failed the displacement transaction. The shared GEOMORPH_CONTRACT is inherited
+## from Phase 32, which also uses it for visible material binding.
 
 
 func active_production_controls() -> Dictionary:
