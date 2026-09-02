@@ -10,6 +10,10 @@ extends RefCounted
 ## Reachability callable contract:
 ##   bool(source_key, source_direction, destination_key, flux_m3s, topology_link)
 ##
+## topology_link is enriched with compact hydraulic metadata when present:
+##   source_surface_m   = GPU max(h+bed) on the emitting source edge
+##   predictive_wetting = true when dry-neighbor Rusanov Q dominated actual Q
+##
 ## An absent/invalid callback FAILS CLOSED. Topological adjacency is not evidence
 ## that a cliff, levee, building or dry high boundary can actually be inundated.
 ##
@@ -47,6 +51,10 @@ func resolve_candidates(candidates: Array[Dictionary],
 			"destination_slot": -1,
 			"reason": "",
 		}
+		if candidate.has("source_surface_m"):
+			result["source_surface_m"] = float(candidate["source_surface_m"])
+		if candidate.has("predictive_wetting"):
+			result["predictive_wetting"] = bool(candidate["predictive_wetting"])
 
 		if source_slot < 0 or source_slot >= scheduler.pool.capacity:
 			result["reason"] = "invalid_source_slot"
@@ -94,10 +102,18 @@ func resolve_candidates(candidates: Array[Dictionary],
 		result["edge_orientation"] = int(link["edge_orientation"])
 		result["crossed_face"] = bool(link["crossed_face"])
 
+		# Preserve the established callback signature while carrying hydraulic data
+		# beside the geometric topology record.
+		var policy_link := link.duplicate(true)
+		if candidate.has("source_surface_m"):
+			policy_link["source_surface_m"] = float(candidate["source_surface_m"])
+		if candidate.has("predictive_wetting"):
+			policy_link["predictive_wetting"] = bool(candidate["predictive_wetting"])
+
 		var can_enter := false
 		if reachability.is_valid():
 			var answer: Variant = reachability.call(
-				source, direction, destination, flux_m3s, link)
+				source, direction, destination, flux_m3s, policy_link)
 			can_enter = bool(answer)
 		result["reachable"] = can_enter
 		if not can_enter:
