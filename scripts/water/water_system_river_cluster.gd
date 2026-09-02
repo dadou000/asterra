@@ -26,6 +26,24 @@ func river_cluster_default_member_count() -> int:
 	return maxi(default_river_cluster_tiles, 1)
 
 
+## Exact member count the current planner would request for this reach. This may be
+## smaller than the configured cluster size for a short macro reach. The query is
+## CPU-only and does not reserve sparse slots or begin an ownership transaction.
+func river_cluster_requested_member_count(cell: int) -> int:
+	if not river_cluster_promotion_available() or not PersistentHydrologySystem.available() \
+			or not (PersistentHydrologySystem.store() is PlanetHydrologyRiverClusterStore):
+		return 1
+	var runtime := sparse_runtime()
+	if runtime == null or runtime.atlas == null or not runtime.atlas.initialized_ok():
+		return 0
+	var planned := HydroRiverClusterPlanner.plan(
+		PersistentHydrologySystem.store() as PlanetHydrologyRiverClusterStore,
+		runtime.atlas, cell, default_river_cluster_tiles)
+	if int(planned.get("error", FAILED)) != OK:
+		return 0
+	return maxi(int(planned.get("member_count", 0)), 0)
+
+
 func river_cluster_free_member_slots() -> int:
 	var runtime := sparse_runtime()
 	if runtime == null or runtime.scheduler == null or runtime.scheduler.pool == null:
@@ -53,7 +71,8 @@ func promote_coarse_river_reach(cell: int, requested_volume_m3: float = -1.0) ->
 			and (_river_reach_coupling.pending() or _river_reach_coupling.failed()):
 		return -1
 	if river_cluster_promotion_available() and not _river_cluster_promotion.busy():
-		if not river_cluster_member_capacity_available(default_river_cluster_tiles):
+		var required_members := river_cluster_requested_member_count(cell)
+		if required_members <= 0 or not river_cluster_member_capacity_available(required_members):
 			return -1
 		return _river_cluster_promotion.promote_cluster(
 			cell, default_river_cluster_tiles, requested_volume_m3)
