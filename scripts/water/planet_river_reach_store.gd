@@ -1,21 +1,8 @@
 class_name PlanetRiverReachStore
 extends RefCounted
-## Persistent 1D channel geometry/flux model layered on PlanetHydrologyStore.
-##
-## One generated macro river cell (fields.river_width > 0) is one conservative
-## reach segment for this first runtime implementation. The physical water volume
-## remains in PlanetHydrologyStore.channel_storage_m3; this class owns only static
-## geometry and deterministic storage->stage/discharge transforms.
-##
-## The generated drainage graph supplies connectivity. River width and baseline
-## discharge calibrate a trapezoidal Manning cross-section. Normal depth is solved
-## from the generated mean discharge; bankfull depth is solved at a higher flow and
-## the channel bed is placed so bankfull stage meets the coarse terrain elevation.
-## Storage above bankfull is returned to coarse surface storage as overbank flood
-## water by PlanetHydrologyStore rather than being silently carried inside the 1D
-## channel.
+## Static 1D channel geometry and storage->flow transforms for generated macro rivers.
+## Dynamic water stays authoritative in PlanetHydrologyStore.channel_storage_m3.
 
-const GRAVITY := 9.81
 const MIN_SLOPE := 1.0e-5
 const MIN_REACH_LENGTH_M := 1.0
 const MIN_WIDTH_M := 1.0
@@ -61,8 +48,10 @@ func initialize(p_fields: PlanetFields, p_receiver: PackedInt32Array) -> Error:
 	grid = p_fields.grid
 	receiver = p_receiver.duplicate()
 	_resize(grid.cell_count)
-	_build_geometry()
+	# Geometry calibration calls is_reach_cell()/Manning helpers. Mark the object
+	# usable before building, then leave it initialized after the deterministic pass.
 	initialized = true
+	_build_geometry()
 	return OK
 
 
@@ -78,10 +67,6 @@ func bankfull_storage_for_cell(cell: int) -> float:
 	return bankfull_storage_m3[cell] if is_reach_cell(cell) else 0.0
 
 
-## Deterministic conservative update for one 1D reach. `storage_m3` is the volume
-## currently owned by the coarse channel reservoir at this cell. The return value
-## separates overbank spill (still owned by coarse hydrology) from downstream
-## outflow (routed by PlanetHydrologyStore after every source cell has advanced).
 func advance_cell(cell: int, storage_m3: float, dt_s: float) -> Dictionary:
 	if not is_reach_cell(cell) or not is_finite(storage_m3) \
 			or not is_finite(dt_s) or dt_s <= 0.0:
@@ -105,8 +90,6 @@ func advance_cell(cell: int, storage_m3: float, dt_s: float) -> Dictionary:
 	outflow_volume = maxf(outflow_volume, 0.0)
 	var remaining := maxf(volume - outflow_volume, 0.0)
 	var depth_after := depth_from_storage(cell, remaining)
-	var bank_ratio := 0.0 if bankfull_depth_m[cell] <= 0.0 \
-		else depth_after / bankfull_depth_m[cell]
 	return {
 		"error": OK,
 		"cell": cell,
@@ -117,7 +100,7 @@ func advance_cell(cell: int, storage_m3: float, dt_s: float) -> Dictionary:
 		"depth_before_m": depth_before,
 		"depth_after_m": depth_after,
 		"stage_after_m": channel_bed_elevation_m[cell] + depth_after,
-		"bankfull_depth_ratio": bank_ratio,
+		"bankfull_depth_ratio": depth_after / maxf(bankfull_depth_m[cell], 1.0e-9),
 		"hydraulic_velocity_mps": velocity,
 		"travel_time_s": travel_tau,
 		"manning_capacity_m3s": q_capacity,
@@ -175,21 +158,20 @@ func discharge_for_depth(cell: int, depth_m: float) -> float:
 	var area := cross_section_area(cell, depth_m)
 	var perimeter := maxf(wetted_perimeter(cell, depth_m), 1.0e-9)
 	var hydraulic_radius := area / perimeter
-	var n := maxf(manning_n[cell], 1.0e-4)
-	return (1.0 / n) * area * pow(maxf(hydraulic_radius, 1.0e-9), 2.0 / 3.0) \
+	return (1.0 / maxf(manning_n[cell], 1.0e-4)) * area \
+		* pow(maxf(hydraulic_radius, 1.0e-9), 2.0 / 3.0) \
 		* sqrt(maxf(bed_slope[cell], MIN_SLOPE))
 
 
 func depth_from_storage(cell: int, storage_m3: float) -> float:
 	if not is_reach_cell(cell) or storage_m3 <= 0.0:
 		return 0.0
-	var area := maxf(storage_m3, 0.0) / maxf(reach_length_m[cell], MIN_REACH_LENGTH_M)
+	var area := storage_m3 / maxf(reach_length_m[cell], MIN_REACH_LENGTH_M)
 	var b := maxf(bottom_width_m[cell], MIN_WIDTH_M)
 	var z := maxf(side_slope_h_over_v, 0.0)
 	if z <= 1.0e-9:
 		return area / b
-	var disc := maxf(b * b + 4.0 * z * area, 0.0)
-	return maxf((-b + sqrt(disc)) / (2.0 * z), 0.0)
+	return maxf((-b + sqrt(maxf(b * b + 4.0 * z * area, 0.0))) / (2.0 * z), 0.0)
 
 
 func stats() -> Dictionary:
@@ -231,11 +213,10 @@ func _build_geometry() -> void:
 		var angle := acos(clampf(a.dot(bdir), -1.0, 1.0))
 		var length := maxf(angle * grid.radius, maxf(float(grid.cell_size[c]), 1.0))
 		var width := maxf(float(fields.river_width[c]), MIN_WIDTH_M)
-		var downstream_elev := float(fields.elev[r])
-		var raw_slope := (float(fields.elev[c]) - downstream_elev) / length
+		var raw_slope := (float(fields.elev[c]) - float(fields.elev[r])) / length
 		var slope := maxf(raw_slope, MIN_SLOPE)
-		var floodplain := clampf(float(fields.floodplain[c]), 0.0, 1.0)
-		var roughness := lerpf(manning_n_min, manning_n_max, floodplain)
+		var roughness := lerpf(manning_n_min, manning_n_max,
+			clampf(float(fields.floodplain[c]), 0.0, 1.0))
 
 		reach_mask[c] = 1
 		reach_length_m[c] = length
@@ -255,8 +236,6 @@ func _build_geometry() -> void:
 		bankfull_depth_m[c] = bank_depth
 		normal_storage_m3[c] = cross_section_area(c, normal_depth) * length
 		bankfull_storage_m3[c] = cross_section_area(c, bank_depth) * length
-		# At bankfull, water reaches the coarse terrain surface. The 1D reach is
-		# therefore incised below fields.elev by exactly its calibrated bank depth.
 		channel_bed_elevation_m[c] = float(fields.elev[c]) - bank_depth
 
 
