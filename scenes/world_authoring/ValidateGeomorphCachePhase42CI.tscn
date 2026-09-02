@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://scripts/world_authoring/validate_geomorph_cache_contract_phase42_ci.gd" id="1_phase42"]
+[ext_resource type="Script" path="res://scripts/world_authoring/validate_geomorph_cache_contract_phase42_runner.gd" id="1_phase42"]
 
 [node name="ValidateGeomorphCachePhase42CI" type="Node"]
 script = ExtResource("1_phase42")
