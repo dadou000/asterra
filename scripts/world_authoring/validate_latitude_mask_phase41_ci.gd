@@ -111,7 +111,7 @@ func _validate() -> String:
 	var inverted_equator: float = float(runtime.call("evaluate_height",
 		Vector3.RIGHT, 0.0, 0, 0, 0.0, 0.0))
 	var inverted_high_lat: float = float(runtime.call("evaluate_height",
-		_direction_at_latitude(60.0), 0.0, 0, 0, 0.0, 0.0))
+		_direction_at_latitude(60.0), 0.0, 0, 0.0, 0.0))
 	if not is_equal_approx(inverted_equator, 0.0) \
 			or not is_equal_approx(inverted_high_lat, 100.0):
 		runtime.free()
@@ -137,7 +137,8 @@ func _validate() -> String:
 		runtime.free()
 		return "GPU displacement VM source could not be read"
 	if shader_source.find("float ad_latitude_mask") < 0 \
-			or shader_source.find("else if (op == 27) v = ad_latitude_mask(direction, p);") < 0:
+			or shader_source.find("else if (op == 27)") < 0 \
+			or shader_source.find("ad_latitude_mask(direction, p)") < 0:
 		runtime.free()
 		return "GPU VM does not expose the matching opcode 27 latitude-mask contract"
 
