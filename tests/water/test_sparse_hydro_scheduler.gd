@@ -1,6 +1,6 @@
 extends Node
 ## CPU-only Phase 3 policy tests. These run without RenderingDevice and validate
-## the sparse identity/allocation/frontier rules before GPU atlas state is attached.
+## sparse identity/allocation/frontier rules before GPU atlas state is attached.
 
 
 func _ready() -> void:
@@ -76,13 +76,23 @@ func _test_frontier_wake_reachability() -> void:
 	var record := scheduler.pool.record(east)
 	_require(int(record["state"]) == HydroTilePool.TileState.ACTIVE,
 		"new frontier tile is not active")
+	_require(int(record["physical_lod"]) == 2,
+		"same-face frontier did not inherit physical LOD")
 
-	# Same-face helper deliberately refuses to invent cross-face topology.
-	var edge := HydroTileKey.new(1, 6, (1 << 6) - 1, 10)
-	_require(scheduler.wake(edge) >= 0, "edge tile allocation failed")
-	_require(scheduler.report_boundary_flux(edge,
-		SparseHydroScheduler.DIR_EAST, 1.0, true) == -1,
-		"same-face scheduler must not fabricate cube seam neighbor")
+	# Cube seams now use the exact equi-angular topology rather than stopping at
+	# face boundaries.
+	var edge := HydroTileKey.new(CubeSphere.FACE_NX, 6, (1 << 6) - 1, 10)
+	_require(scheduler.wake(edge, 4, "edge_seed") >= 0, "edge tile allocation failed")
+	var seam_link := HydroTileTopology.neighbor(edge, SparseHydroScheduler.DIR_EAST)
+	_require(not seam_link.is_empty() and bool(seam_link["crossed_face"]),
+		"edge fixture did not resolve a cube seam")
+	var seam_dest := seam_link["key"] as HydroTileKey
+	var seam_slot := scheduler.report_boundary_flux(edge,
+		SparseHydroScheduler.DIR_EAST, 1.0, true)
+	_require(seam_slot >= 0 and scheduler.pool.contains(seam_dest),
+		"cross-face boundary flux did not wake exact destination")
+	_require(int(scheduler.pool.record(seam_dest)["physical_lod"]) == 4,
+		"cross-face frontier did not inherit physical LOD")
 
 
 func _test_sleep_hysteresis() -> void:
@@ -137,5 +147,4 @@ func _require(condition: bool, message: String) -> void:
 	push_error("SPARSE_HYDRO_SCHEDULER: " + message)
 	get_tree().quit(1)
 	set_process(false)
-	# Assertions make failures visible even if the scene-tree quit is deferred.
 	assert(condition, message)
