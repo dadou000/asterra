@@ -14,7 +14,7 @@ func _ready() -> void:
 		push_error("LATITUDE_MASK_PHASE41_FAILED: " + error)
 		get_tree().quit(1)
 		return
-	print("LATITUDE_MASK_PHASE41_OK: normalized planet-space latitude mask matches CPU/contact samples, GPU opcode contract, inversion and transactional rollback")
+	print("LATITUDE_MASK_PHASE41_OK: normalized planet-space latitude mask matches CPU/contact samples, GPU opcode contract, global conservative bounds, inversion and transactional rollback")
 	get_tree().quit(0)
 
 
@@ -45,6 +45,15 @@ func _validate() -> String:
 			or not bool(compiled.get("spatial_latitude_mask", false)):
 		runtime.free()
 		return "Phase 41 runtime did not advertise the latitude-mask opcode"
+	var envelope: Dictionary = compiled.get("displacement_envelope", {}) as Dictionary
+	if not bool(envelope.get("bounds_known", false)) \
+			or not is_equal_approx(float(envelope.get("author_program_min_m", -1.0)), 0.0) \
+			or not is_equal_approx(float(envelope.get("author_program_max_m", -1.0)), 100.0):
+		runtime.free()
+		return "Latitude Mask did not preserve the exact global [0,100] m author-program envelope"
+	if not String(envelope.get("unknown_reason", "")).is_empty():
+		runtime.free()
+		return "Latitude Mask unexpectedly forced the renderer maximum-bounds fallback"
 
 	var samples: Array[Dictionary] = [
 		{"lat": 0.0, "expected": 100.0},
