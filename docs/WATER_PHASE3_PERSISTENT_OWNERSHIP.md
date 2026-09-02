@@ -128,6 +128,66 @@ fine footprint represented by the promoted tile. Channel-only promotion needs a
 separate river/reach reconstruction policy and therefore requires an explicit
 parcel volume for now.
 
+## WaterSystem production facade
+
+The original 0.1.0 water coordinator is preserved byte-for-byte as:
+
+```text
+scripts/water/water_system_base.gd
+```
+
+The active autoload remains:
+
+```text
+scripts/water/water_system.gd
+```
+
+but is now a thin derived facade that owns promotion binding/lifecycle. This keeps
+all pre-existing sparse runtime, render-cache and point-source behavior in the base
+script while making the ownership extension isolated and reversible.
+
+Bridge readiness is event-driven from both sides:
+
+```text
+PersistentHydrologySystem.store_rebuilt
+            +
+WaterSystem sparse runtime READY
+            |
+            v
+PlanetHydroPromotionBridge initialize
+            |
+            v
+planet_promotion_bridge_ready
+```
+
+A coarse-store rebuild releases the prior bridge before rebinding. Any sparse
+runtime transition away from READY also releases it, preventing references to
+recycled atlas/connectivity/terrain resources. `_release_sparse_runtime()` is
+additionally overridden so an in-flight ownership transaction is rolled back while
+its coarse store and sparse scheduler are still valid.
+
+Production/manual API:
+
+```text
+WaterSystem.planet_promotion_bridge_available()
+WaterSystem.planet_promotion_bridge_state()
+WaterSystem.coarse_promotion_candidates(...)
+WaterSystem.suggested_surface_promotion_volume_m3(cell)
+WaterSystem.promote_coarse_surface_cell(cell, volume=-1, local_velocity=Vector2.ZERO)
+```
+
+`volume < 0` selects the flood-oriented suggested footprint parcel.
+
+Automatic policy is intentionally still disabled:
+
+```text
+WaterSystem.automatic_coarse_promotion_enabled == false
+```
+
+No background candidate loop is installed yet. Explicit promotion is available
+for validation/gameplay tooling without silently changing production water
+ownership policy.
+
 ## CPU conservation gate
 
 Scene:
@@ -165,27 +225,94 @@ Run locally with the Godot 4.7 project build:
 godot --headless --path . tests/water/PlanetHydrologyStoreTests.tscn
 ```
 
-The current ChatGPT environment does not contain the project Godot executable, so
-this gate has not been runtime-executed here.
+## Exact seed GPU gate
 
-## Next integration gates
-
-1. Runtime-run `PlanetHydrologyStoreTests.tscn` and fix parser/numerical issues if
-   the project build exposes any; do not widen tolerances without evidence.
-2. Add a renderer-mode sparse promotion smoke scene that creates one reserved tile,
-   stages terrain, performs an exact seed, and verifies fine GPU volume against the
-   committed coarse debit.
-3. Expose the bridge from `WaterSystem` only after both `PersistentHydrologySystem`
-   and the sparse runtime are ready.
-4. Add a low-cadence promotion policy for surface/flood candidates. Keep channel
-   promotion manual until a river/reach reconstruction model exists.
-5. Add a representation-wide conservation diagnostic:
+Scene:
 
 ```text
-coarse store volume + GPU-reduced active sparse volume + exported outlet volume
+tests/water/HydroCoarseSeedGPUSmoke.tscn
 ```
 
-tracked across promotion/demotion cycles.
-6. Replace uniform tile seeding with terrain-aware prolongation (equal free-surface
+This renderer-mode test seeds a known parcel into a one-slot sparse atlas and
+uses independent GPU volume reducers on state A and state B. Both ping-pong states
+must contain the exact FP32-represented parcel before the gate passes.
+
+```text
+godot --path . tests/water/HydroCoarseSeedGPUSmoke.tscn
+```
+
+## End-to-end promotion conservation gate
+
+Scene:
+
+```text
+tests/water/PlanetHydroPromotionBridgeTests.tscn
+```
+
+Script:
+
+```text
+tests/water/test_planet_hydro_promotion_bridge.gd
+```
+
+This gate uses:
+
+- the real `PlanetHydrologyOwnershipStore`;
+- real `SparseHydroScheduler`;
+- real `SparseHydroAtlasGPU`;
+- real `SparseHydroIdentityBridge`;
+- real `SparseHydroConnectivityGPU`;
+- real `PlanetHydroPromotionBridge`;
+- real `HydroCoarseSeedGPU`;
+- independent GPU volume reduction of both A and B.
+
+Only terrain reconstruction is stubbed with a deterministic flat dry bed so the
+numerical ownership gate does not depend on a full procedural planet bake.
+
+After promotion it checks the authoritative conservation identity:
+
+```text
+coarse_after + fine_GPU_volume == coarse_before
+```
+
+It also checks that the coarse ownership ledger is closed, both GPU ping-pong
+states contain the acknowledged parcel, the sparse tile is resident only after
+acknowledgement, and no coarse transaction remains pending.
+
+The final test step unpublishes the fine tile and returns the exact acknowledged
+parcel through `accept_demotion()`, checking that coarse storage and the transfer
+ledger return to the original state.
+
+```text
+godot --path . tests/water/PlanetHydroPromotionBridgeTests.tscn
+```
+
+The current ChatGPT environment does not contain the project Godot executable, so
+none of these newly added ownership gates have been runtime-executed here.
+
+## Remaining integration gates
+
+1. Runtime-run all three ownership tests above on the project Godot 4.7 build and
+   fix parser/API/numerical issues; do not widen conservation tolerances without
+   measured evidence.
+2. Add a GPU reduction over **all occupied sparse tiles**, rather than one fixed
+   tile, to expose representation-wide active fine-water volume without full-state
+   readback.
+3. Track the global diagnostic:
+
+```text
+coarse store volume
++ active sparse GPU volume
++ water already exported through outlets
+```
+
+across explicit promotion/demotion cycles and sparse frontier expansion.
+4. Once that accounting gate is stable, add a low-cadence automatic policy for
+   **surface/flood** candidates only. Keep channel/river promotion manual until a
+   reach-aware reconstruction model exists.
+5. Replace uniform tile seeding with terrain-aware prolongation (equal free-surface
    reconstruction or conservative subcell distribution) while retaining the same
    exact-volume transaction/acknowledgement interface.
+6. Implement true fine -> coarse collapse: GPU-reduce an inactive wet tile/reach,
+   atomically unpublish it, then return the exact reduced parcel to the coarse
+   store. Do not use raw stale atlas bytes as ownership after release.
