@@ -148,12 +148,12 @@ func _capture_active_state() -> Dictionary:
 
 
 func _restore_active_state(snapshot: Dictionary) -> void:
-	_headers = snapshot["headers"] as PackedVector4Array
-	_params = snapshot["params"] as PackedVector4Array
+	_headers = snapshot["headers"]
+	_params = snapshot["params"]
 	_code_texture = snapshot["code_texture"] as ImageTexture
 	_output_index = int(snapshot["output_index"])
 	_active = bool(snapshot["active"])
-	_warnings = snapshot["warnings"] as PackedStringArray
+	_warnings = snapshot["warnings"]
 	_fingerprint = String(snapshot["fingerprint"])
 	_compile_generation = int(snapshot["generation"])
 
@@ -278,16 +278,16 @@ func _variant_is_finite(value: Variant) -> bool:
 		TYPE_FLOAT:
 			return is_finite(float(value))
 		TYPE_VECTOR2:
-			var v2: Vector2 = value as Vector2
+			var v2: Vector2 = value
 			return is_finite(v2.x) and is_finite(v2.y)
 		TYPE_VECTOR3:
-			var v3: Vector3 = value as Vector3
+			var v3: Vector3 = value
 			return is_finite(v3.x) and is_finite(v3.y) and is_finite(v3.z)
 		TYPE_VECTOR4:
-			var v4: Vector4 = value as Vector4
+			var v4: Vector4 = value
 			return is_finite(v4.x) and is_finite(v4.y) and is_finite(v4.z) and is_finite(v4.w)
 		TYPE_COLOR:
-			var color: Color = value as Color
+			var color: Color = value
 			return is_finite(color.r) and is_finite(color.g) and is_finite(color.b) and is_finite(color.a)
 		TYPE_ARRAY:
 			for item: Variant in value as Array:
