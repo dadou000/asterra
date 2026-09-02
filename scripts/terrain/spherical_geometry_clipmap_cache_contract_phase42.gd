@@ -6,7 +6,7 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_blankaware.gd"
 ## control contract. The existing budget/handoff lifecycle remains inherited.
 
 const Phase42TerrainClipmapCacheScript := preload(
-	"res://scripts/terrain/gpu_terrain_clipmap_cache_phase42_active.gd")
+	"res://scripts/terrain/gpu_terrain_clipmap_cache_phase42_final.gd")
 
 
 func _replace_initial_active_cache() -> void:
