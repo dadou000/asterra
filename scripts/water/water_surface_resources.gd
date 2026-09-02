@@ -2,15 +2,19 @@ class_name WaterSurfaceResources
 extends Node
 ## Main-RenderingDevice resource owner for dynamic surface-water fields.
 ##
-## The production hydrology solver will write this texture directly on the global
+## The production hydrology solver writes this texture directly on the global
 ## RenderingDevice. Texture2DRD exposes the same RID to spatial materials, so the
-## visible water coat can sample solver output without GPU -> CPU -> GPU copies.
+## visible water coats can sample solver output without GPU -> CPU -> GPU copies.
 ##
-## Phase 1 stores one local tangent-plane field:
-##   R = dynamic surface-height residual [m]
+## The local tangent-plane cache contract is:
+##   R = water surface elevation / dynamic height relative datum [m]
 ##   G = tangent velocity X [m/s]
 ##   B = tangent velocity Y [m/s]
-##   A = activity/foam hint [0..1]
+##   A = physical water depth [m]
+##
+## Depth is deliberately stored instead of a render-specific foam value. It gives
+## inland/flood renderers an exact wet mask while ocean/local materials derive
+## visual activity from velocity/slope without changing physical state.
 ##
 ## IMPORTANT: every mutation of the global RenderingDevice is dispatched through
 ## RenderingServer.call_on_render_thread(). Only the Texture2DRD wrapper and
@@ -97,8 +101,8 @@ func clear() -> Error:
 
 ## Debug-only writer used to prove that a main-RD hydrology texture can drive the
 ## visible water path without any GPU readback. It intentionally performs one CPU
-## upload; the production solver will replace this writer with compute dispatches.
-## OK means the upload was queued, not that the render thread has completed it.
+## upload. The fourth argument retains its historical `activity` name for API
+## compatibility but now represents peak physical depth in metres.
 func debug_write_gaussian(amplitude_m: float = 2.0, radius_m: float = 260.0,
 		velocity_plane: Vector2 = Vector2.ZERO, activity: float = 1.0) -> Error:
 	if not available():
@@ -119,7 +123,7 @@ func debug_write_gaussian(amplitude_m: float = 2.0, radius_m: float = 260.0,
 			values[offset + 0] = amplitude_m * envelope
 			values[offset + 1] = velocity_plane.x * envelope
 			values[offset + 2] = velocity_plane.y * envelope
-			values[offset + 3] = clampf(activity * envelope, 0.0, 1.0)
+			values[offset + 3] = maxf(activity, 0.0) * envelope
 
 	var rid := _field_rid
 	var bytes := values.to_byte_array()
@@ -141,6 +145,7 @@ func stats() -> Dictionary:
 		"bytes": gpu_bytes_estimate(),
 		"revision": _revision,
 		"center_plane": _field_center_plane,
+		"channel_a": "physical_depth_m",
 	}
 
 
