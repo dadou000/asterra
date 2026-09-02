@@ -101,7 +101,7 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 	var batch_id := _next_batch_id
 	_next_batch_id += 1
 	var resolved := resolver.resolve_candidates(candidates, reachability, true)
-	var groups: Dictionary = {} # destination packed ID -> Array[Dictionary]
+	var groups: Dictionary = {}
 	for result in resolved:
 		if not bool(result.get("accepted", false)) \
 				or not bool(result.get("needs_handoff", false)):
@@ -123,13 +123,15 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 		var first := incoming[0] as Dictionary
 		var destination_slot := int(first.get("destination_slot", -1))
 		var destination := HydroTileKey.unpack(destination_id)
+		if destination == null:
+			continue
 		var state_variant: Variant = destination_state_provider.call(
 			destination, destination_slot)
-		if not (state_variant is PackedFloat32Array):
+		if typeof(state_variant) != TYPE_PACKED_FLOAT32_ARRAY:
 			_cancel_group(batch_id, destination, destination_slot,
 				"destination_initializer_missing", resolved)
 			continue
-		var state := state_variant as PackedFloat32Array
+		var state: PackedFloat32Array = state_variant
 		if state.size() != atlas.cells_per_tile() * SparseHydroAtlasGPU.STATE_FLOATS:
 			_cancel_group(batch_id, destination, destination_slot,
 				"destination_initializer_size", resolved)
@@ -157,8 +159,6 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 	batch_started.emit(batch_id, reserved_destinations, jobs.size())
 
 	if jobs.is_empty():
-		# No new destinations may simply mean all candidates already had resident
-		# neighbors or were blocked. That is a successful empty activation batch.
 		call_deferred("_finish_batch")
 	else:
 		_start_current_job()
@@ -167,15 +167,17 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 
 func _cancel_group(batch_id: int, destination: HydroTileKey, slot: int,
 		reason: String, resolved: Array[Dictionary]) -> void:
-	if destination != null:
-		scheduler.cancel_reserved(destination, reason)
+	if destination == null:
+		return
+	var destination_id := destination.packed()
+	scheduler.cancel_reserved(destination, reason)
 	for result in resolved:
-		if int(result.get("destination_tile_id", -1)) == destination.packed():
+		if int(result.get("destination_tile_id", -1)) == destination_id:
 			result["accepted"] = false
 			result["reserved"] = false
 			result["needs_handoff"] = false
 			result["reason"] = reason
-	destination_cancelled.emit(batch_id, destination.packed(), slot, reason)
+	destination_cancelled.emit(batch_id, destination_id, slot, reason)
 
 
 func _start_current_job() -> void:
@@ -207,9 +209,6 @@ func _on_handoff_recorded(_request_id: int, _source_slot: int,
 		if slot < 0:
 			_fail_current_job(ERR_CANT_ACQUIRE_RESOURCE)
 			return
-		# tile_woken synchronously schedules identity publication through the bound
-		# bridge. Queue connectivity sync afterwards so render-thread ordering is:
-		# handoff compute -> metadata/occupancy publish -> connectivity publish.
 		var conn_error := connectivity.sync_pool(scheduler.pool)
 		if conn_error != OK:
 			_fail_current_job(conn_error)
