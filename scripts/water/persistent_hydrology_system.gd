@@ -12,6 +12,13 @@ extends Node
 ## representation preserves rainfall/runoff/channel state everywhere else and is
 ## the source of promotion requests.
 ##
+## Distributed precipitation has explicit spatial authority. When fine atmospheric
+## forcing is active, HydroWeatherCoupling supplies one coarse authority fraction per
+## PlanetGrid cell. Native precipitation is multiplied by that fraction so the fine
+## footprint is not injected again into the coarse representation. Climatology
+## fallback is deliberately NOT masked; the coupling clears the fractions before
+## fine forcing loses authority.
+##
 ## Coarse -> fine ownership transfer is transactional. prepare_promotion() only
 ## reserves water. The caller must seed a fine representation and acknowledge it
 ## with commit_promotion(); failures call rollback_promotion(). The coarse store
@@ -23,6 +30,7 @@ signal store_rebuilt
 ## revision. The global CPU publication is asynchronous and may legitimately lag
 ## that native revision.
 signal weather_snapshot_updated(weather_revision: int)
+signal precipitation_authority_changed(affected_cells: int, fine_owned_area_m2: float)
 signal coarse_step_completed(report: Dictionary)
 signal promotion_prepared(transaction: Dictionary)
 signal promotion_committed(transaction: Dictionary)
@@ -43,6 +51,10 @@ var weather_gain := 1.0
 
 var _store: PlanetHydrologyOwnershipStore
 var _precipitation_snapshot_mps := PackedFloat64Array()
+## Fraction [0,1] of each macro cell whose distributed native precipitation remains
+## coarse-owned. Default is 1 everywhere. This is forcing authority only; it does
+## not alter water already stored/routed by the coarse hydrology model.
+var _precipitation_authority_fractions := PackedFloat64Array()
 var _time_debt_s := 0.0
 var _last_simulation_seconds := 0.0
 var _last_weather_sample_sim_s := -1.0e30
@@ -79,6 +91,55 @@ func store() -> PlanetHydrologyOwnershipStore:
 
 func request_weather_snapshot() -> void:
 	_last_weather_sample_sim_s = -1.0e30
+
+
+## Install the fraction of native distributed precipitation that stays coarse-owned
+## per PlanetGrid cell. Fine forcing authority is managed by HydroWeatherCoupling;
+## callers must clear this mask before disabling/tearing down fine forcing.
+func set_precipitation_authority_fractions(fractions: PackedFloat64Array) -> Error:
+	if not available() or fractions.size() != _store.cell_count():
+		return ERR_INVALID_PARAMETER
+	var next := PackedFloat64Array()
+	next.resize(fractions.size())
+	var affected := 0
+	var fine_area := 0.0
+	for c in fractions.size():
+		var value := float(fractions[c])
+		if not is_finite(value):
+			return ERR_INVALID_DATA
+		value = clampf(value, 0.0, 1.0)
+		next[c] = value
+		if value < 1.0 - 1.0e-12:
+			affected += 1
+			fine_area += (1.0 - value) * maxf(_store.area_m2[c], 0.0)
+	_precipitation_authority_fractions = next
+	request_weather_snapshot()
+	precipitation_authority_changed.emit(affected, fine_area)
+	return OK
+
+
+func clear_precipitation_authority_fractions() -> void:
+	if not available():
+		_precipitation_authority_fractions = PackedFloat64Array()
+		return
+	_precipitation_authority_fractions.resize(_store.cell_count())
+	_precipitation_authority_fractions.fill(1.0)
+	request_weather_snapshot()
+	precipitation_authority_changed.emit(0, 0.0)
+
+
+func precipitation_authority_fractions() -> PackedFloat64Array:
+	if not available():
+		return PackedFloat64Array()
+	_ensure_authority_size()
+	return _precipitation_authority_fractions.duplicate()
+
+
+func precipitation_authority_fraction(cell: int) -> float:
+	if not available() or cell < 0 or cell >= _store.cell_count():
+		return 1.0
+	_ensure_authority_size()
+	return _precipitation_authority_fractions[cell]
 
 
 func cell_state(cell: int) -> Dictionary:
@@ -148,6 +209,7 @@ func restore_snapshot(data: Dictionary) -> Error:
 
 
 func stats() -> Dictionary:
+	var authority := _authority_stats()
 	return {
 		"available": available(),
 		"enabled": enabled,
@@ -165,6 +227,7 @@ func stats() -> Dictionary:
 		# Compatibility alias: this is now explicitly the local sample revision.
 		"last_weather_revision": _last_weather_revision,
 		"coarse_steps": _coarse_steps,
+		"precipitation_authority": authority,
 		"store": {} if _store == null else _store.stats(),
 	}
 
@@ -215,6 +278,9 @@ func _rebuild_store() -> void:
 	_precipitation_snapshot_mps = PackedFloat64Array()
 	_precipitation_snapshot_mps.resize(Planet.grid.cell_count)
 	_precipitation_snapshot_mps.fill(0.0)
+	_precipitation_authority_fractions = PackedFloat64Array()
+	_precipitation_authority_fractions.resize(Planet.grid.cell_count)
+	_precipitation_authority_fractions.fill(1.0)
 	_time_debt_s = 0.0
 	_last_simulation_seconds = CelestialSystem.simulation_seconds
 	_last_weather_sample_sim_s = -1.0e30
@@ -242,6 +308,7 @@ func _refresh_weather_snapshot(simulation_seconds: float) -> void:
 	var n := _store.cell_count()
 	if _precipitation_snapshot_mps.size() != n:
 		_precipitation_snapshot_mps.resize(n)
+	_ensure_authority_size()
 
 	_weather_native_revision_upper_bound = int(WeatherSystem.global_state_revision)
 	if not WeatherSystem.native_available:
@@ -274,7 +341,8 @@ func _refresh_weather_snapshot(simulation_seconds: float) -> void:
 		var d: Vector3 = _store.grid.cell_dir(c)
 		var normalized_precip := _sample_weather_channel_bilinear(
 			values, width, height, d, WEATHER_PRECIP_CHANNEL)
-		_precipitation_snapshot_mps[c] = clampf(normalized_precip, 0.0, 1.0) * scale_mps
+		_precipitation_snapshot_mps[c] = clampf(normalized_precip, 0.0, 1.0) \
+			* scale_mps * _precipitation_authority_fractions[c]
 	_store.set_precipitation_field_mps(_precipitation_snapshot_mps)
 	_store.set_climatology_fallback_enabled(false)
 	_weather_snapshot_valid = true
@@ -313,6 +381,37 @@ func _drain_time_debt() -> void:
 		_time_debt_s = maxf(_time_debt_s - dt, 0.0)
 		_coarse_steps += 1
 		coarse_step_completed.emit(report)
+
+
+func _ensure_authority_size() -> void:
+	if not available():
+		return
+	var n := _store.cell_count()
+	if _precipitation_authority_fractions.size() == n:
+		return
+	_precipitation_authority_fractions.resize(n)
+	_precipitation_authority_fractions.fill(1.0)
+
+
+func _authority_stats() -> Dictionary:
+	if not available():
+		return {"active": false, "affected_cells": 0, "fine_owned_area_m2": 0.0}
+	_ensure_authority_size()
+	var affected := 0
+	var fine_area := 0.0
+	var minimum := 1.0
+	for c in _precipitation_authority_fractions.size():
+		var fraction := _precipitation_authority_fractions[c]
+		minimum = minf(minimum, fraction)
+		if fraction < 1.0 - 1.0e-12:
+			affected += 1
+			fine_area += (1.0 - fraction) * maxf(_store.area_m2[c], 0.0)
+	return {
+		"active": affected > 0,
+		"affected_cells": affected,
+		"fine_owned_area_m2": fine_area,
+		"minimum_coarse_fraction": minimum,
+	}
 
 
 ## Exact CPU counterpart of WeatherNative's global lat/lon indexing. Longitude
@@ -354,3 +453,4 @@ func _exit_tree() -> void:
 	if WeatherSystem.native_failed.is_connected(_on_weather_native_failed):
 		WeatherSystem.native_failed.disconnect(_on_weather_native_failed)
 	_store = null
+	_precipitation_authority_fractions = PackedFloat64Array()
