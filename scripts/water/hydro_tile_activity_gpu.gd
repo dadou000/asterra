@@ -3,8 +3,9 @@ extends Node
 ## Compact GPU summary pass for SparseHydroAtlasGPU.
 ##
 ## Production policy can consume summary_rid() without reading cell grids. The
-## async readback parser exists for tests/debug until the Phase 3 GPU work queue is
-## added.
+## async readback parser exists for tests/debug. Actual advective boundary Q and
+## predictive dry-neighbor wetting Q are kept separate so diagnostics remain
+## physically interpretable while the frontier can still wake from hydrostatic head.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -13,8 +14,9 @@ signal summaries_ready(request_id: int, summaries: Array[Dictionary])
 signal classification_failed(request_id: int, error: Error)
 signal released
 
-const SUMMARY_VEC4S := 3
+const SUMMARY_VEC4S := 4
 const SUMMARY_BYTES_PER_TILE := SUMMARY_VEC4S * 16
+const PARAM_BYTES := 32
 
 var _state := RID()
 var _occupancy := RID()
@@ -27,6 +29,7 @@ var _capacity := 0
 var _tile_resolution := 0
 var _cell_size_m := 1.0
 var _dry_eps := 1.0e-5
+var _gravity := 9.81
 var _initialized := false
 var _init_pending := false
 var _dispatch_pending := false
@@ -35,7 +38,8 @@ var _next_request_id := 1
 
 
 func initialize(state_rid: RID, occupancy_rid: RID, capacity: int,
-		tile_resolution: int, cell_size_m: float, dry_eps: float = 1.0e-5) -> Error:
+		tile_resolution: int, cell_size_m: float, dry_eps: float = 1.0e-5,
+		gravity: float = 9.81) -> Error:
 	if _init_pending or _dispatch_pending or _readback_pending or _initialized:
 		return ERR_BUSY
 	if not state_rid.is_valid() or not occupancy_rid.is_valid() \
@@ -56,6 +60,7 @@ func initialize(state_rid: RID, occupancy_rid: RID, capacity: int,
 	_tile_resolution = tile_resolution
 	_cell_size_m = cell_size_m
 	_dry_eps = maxf(dry_eps, 1.0e-8)
+	_gravity = maxf(gravity, 1.0e-4)
 	_init_pending = true
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_init_render_thread").bind(spirv))
@@ -105,9 +110,10 @@ func _init_render_thread(spirv: RDShaderSPIRV) -> void:
 	summary_bytes.resize(_capacity * SUMMARY_BYTES_PER_TILE)
 	var param_values := PackedFloat32Array([
 		float(_tile_resolution), float(_capacity), _cell_size_m, _dry_eps,
+		_gravity, 0.0, 0.0, 0.0,
 	])
 	var summary := rd.storage_buffer_create(summary_bytes.size(), summary_bytes)
-	var params := rd.storage_buffer_create(16, param_values.to_byte_array())
+	var params := rd.storage_buffer_create(PARAM_BYTES, param_values.to_byte_array())
 	if not summary.is_valid() or not params.is_valid():
 		_free_many(rd, [summary, params, pipeline, shader])
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
@@ -192,6 +198,10 @@ func _on_summary_bytes(bytes: PackedByteArray, request_id: int) -> void:
 			"flux_north_m3s": bytes.decode_float(o + 28),
 			"wet_cells": int(round(bytes.decode_float(o + 32))),
 			"active": bytes.decode_float(o + 36) > 0.5,
+			"wetting_west_m3s": bytes.decode_float(o + 48),
+			"wetting_east_m3s": bytes.decode_float(o + 52),
+			"wetting_south_m3s": bytes.decode_float(o + 56),
+			"wetting_north_m3s": bytes.decode_float(o + 60),
 		})
 	call_deferred("_publish_summaries", request_id, out)
 
