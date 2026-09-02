@@ -148,9 +148,7 @@ func _try_start_promotion(water: Node, persistent: Node,
 
 func _refined_member_slots(store: PlanetHydrologyRiverCoupledStore) -> int:
 	if store is PlanetHydrologyRiverClusterStore:
-		var store_stats := (store as PlanetHydrologyRiverClusterStore).stats()
-		return maxi(int(store_stats.get("refined_sparse_members",
-			store.refined_reach_count())), 0)
+		return (store as PlanetHydrologyRiverClusterStore).refined_sparse_member_count()
 	return maxi(store.refined_reach_count(), 0)
 
 
