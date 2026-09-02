@@ -16,6 +16,11 @@
 //
 // dt is supplied by the GPU adaptive-CFL control block. Candidate iterations after
 // the requested macro time is consumed are strict no-ops.
+//
+// Source layers are intentionally independent. `sources` is rebuilt by persistent
+// gameplay/world emitters; `atmospheric_sources` is owned by distributed weather
+// forcing. The solver composes them at read time so one producer never clears or
+// overwrites another producer's source field.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -74,6 +79,10 @@ layout(set = 0, binding = 7, std430) readonly buffer Control {
     uint reserved0;
     uint reserved1;
 } control;
+layout(set = 0, binding = 8, std430) readonly buffer AtmosphericSources {
+    // Same units/layout as Sources. Written by weather/surface forcing passes.
+    vec4 atmospheric_sources[];
+};
 
 layout(push_constant, std430) uniform StepPush {
     uint step_index;
@@ -310,7 +319,8 @@ void main() {
     updated.z += 0.5 * grav() * scale
         * (fn.h_left * fn.h_left - fs.h_right * fs.h_right);
 
-    updated = apply_sources(updated, sources[i], dt());
+    vec4 source = sources[i] + atmospheric_sources[i];
+    updated = apply_sources(updated, source, dt());
 
     if (updated.x <= dry_eps()
             || any(isnan(updated)) || any(isinf(updated))) {
