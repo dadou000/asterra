@@ -67,7 +67,6 @@ static func plan(store: PlanetHydrologyRiverPromotionStore,
 
 	if members.is_empty():
 		return {"error": ERR_CANT_RESOLVE, "reason": "empty_cluster"}
-	# Record exact pairwise topology so tests/runtime can verify every internal edge.
 	for i in members.size() - 1:
 		var a := members[i]
 		var b := members[i + 1]
@@ -130,7 +129,9 @@ static func _dominant_cardinal(direction: Vector2) -> int:
 static func _link_between(a: HydroTileKey, b: HydroTileKey) -> Dictionary:
 	for direction in 4:
 		var link := HydroTileTopology.neighbor(a, direction)
-		var key := link.get("key") as HydroTileKey if not link.is_empty() else null
+		if link.is_empty():
+			continue
+		var key := link.get("key") as HydroTileKey
 		if key != null and key.equals(b):
 			return link
 	return {}
