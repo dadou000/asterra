@@ -1,0 +1,158 @@
+name: Phase 41 ring mask validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase41.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase41.gd"
+      - "scripts/world_authoring/validate_ring_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_ring_mask_phase41_ui_ci.gd"
+      - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
+      - "scenes/world_authoring/PlanetStudio.tscn"
+      - "scenes/world_authoring/ValidateRingMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateRingMaskPhase41UI.tscn"
+      - ".github/workflows/phase41-ring-mask-validate.yml"
+  pull_request:
+    paths:
+      - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase41.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase41.gd"
+      - "scripts/world_authoring/validate_ring_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_ring_mask_phase41_ui_ci.gd"
+      - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
+      - "scenes/world_authoring/PlanetStudio.tscn"
+      - "scenes/world_authoring/ValidateRingMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateRingMaskPhase41UI.tscn"
+      - ".github/workflows/phase41-ring-mask-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  ring-mask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated Phase 41 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-phase41-ring-ci
+          mkdir -p /tmp/asterra-phase41-ring-ci/scripts /tmp/asterra-phase41-ring-ci/shaders /tmp/asterra-phase41-ring-ci/tests /tmp/asterra-phase41-ring-ci/tools /tmp/asterra-phase41-ring-ci/scenes/world_authoring
+          cp -R scripts/. /tmp/asterra-phase41-ring-ci/scripts/
+          cp -R shaders/. /tmp/asterra-phase41-ring-ci/shaders/
+          cp tests/ci_autoload_planet.gd /tmp/asterra-phase41-ring-ci/tests/
+          cp tests/ci_autoload_frames.gd /tmp/asterra-phase41-ring-ci/tests/
+          cp tests/ci_autoload_terrain_runtime_stub.gd /tmp/asterra-phase41-ring-ci/tests/
+          cp tools/terrain_region_compiler.gd /tmp/asterra-phase41-ring-ci/tools/
+          cp -R scenes/world_authoring/. /tmp/asterra-phase41-ring-ci/scenes/world_authoring/
+          cp world.tres /tmp/asterra-phase41-ring-ci/world.tres
+          cat > /tmp/asterra-phase41-ring-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Phase 41 Ring Mask CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [display]
+          window/size/viewport_width=1600
+          window/size/viewport_height=900
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import Phase 41 scripts and shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ring-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/phase41-ring-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 220 /tmp/phase41-ring-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Ring Area isolated import failed with status $status"
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|shader compilation failed|shader.*parse error" /tmp/phase41-ring-import.log; then
+            echo "Phase 41 Ring Area import reported a script or shader parser error."
+            exit 1
+          fi
+
+      - name: Validate deterministic Ring Area mask
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ring-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateRingMaskPhase41CI.tscn > /tmp/phase41-ring-mask.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-ring-mask.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Ring Area validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "RING_MASK_PHASE41_OK" /tmp/phase41-ring-mask.log; then
+            echo "Phase 41 Ring Area completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "RING_MASK_PHASE41_FAILED|SCRIPT ERROR|Parse Error|FATAL" /tmp/phase41-ring-mask.log; then
+            echo "Phase 41 Ring Area regression reported a failure."
+            exit 1
+          fi
+
+      - name: Validate Ring Area editor workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ring-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateRingMaskPhase41UI.tscn > /tmp/phase41-ring-mask-ui.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-ring-mask-ui.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Ring Area UI validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "RING_MASK_PHASE41_UI_OK" /tmp/phase41-ring-mask-ui.log; then
+            echo "Phase 41 Ring Area UI completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "RING_MASK_PHASE41_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase41-ring-mask-ui.log; then
+            echo "Phase 41 Ring Area UI regression reported a failure."
+            exit 1
+          fi
