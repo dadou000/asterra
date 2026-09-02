@@ -28,13 +28,12 @@ extends Node
 ## queued afterwards, so render-thread FIFO ordering preserves stage -> seed ->
 ## handoff. Missing/invalid initialization FAILS CLOSED and releases reservation.
 ##
-## Once a hidden destination has received any physical parcel, later failures may
-## no longer discard it. A late handoff failure therefore activates/preserves the
-## partially seeded destination before reporting batch failure. Other destinations
-## in that same batch are cleaned deterministically: already-active/edge-seeded
-## destinations remain fine-owned, while untouched ALLOCATING destinations restore
-## any provisional coarse parcel and release their slot. The pipeline therefore does
-## not rely on WaterSystem teardown to close representation ownership.
+## Failure ownership is based on reversibility. A coarse-only preseed can be
+## restored exactly if the first edge handoff fails, so that hidden destination is
+## cancelled. Once any edge handoff succeeds, however, the source tile has already
+## lost a parcel and there is no reverse GPU handoff; the destination must therefore
+## be published/preserved. Other unfinished destinations in the same batch are
+## cleaned deterministically by the same rule.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -380,12 +379,11 @@ func _fail_current_job(error: Error) -> void:
 		var destination_id := int(job.get("destination_tile_id", -1))
 		var destination := HydroTileKey.unpack(destination_id)
 		var slot := int(job.get("destination_slot", -1))
-		var owns_water := int(_handoff_success_by_destination.get(destination_id, 0)) > 0 \
-			or (coarse_preseed != null \
-				and coarse_preseed.has_provisional_tile(destination_id))
-		if destination != null and owns_water:
-			# Preserve any already-transferred parcel. A recorded handoff modifies the
-			# source and hidden destination conservatively; canceling now would lose it.
+		var successful_handoffs := int(_handoff_success_by_destination.get(
+			destination_id, 0))
+		if destination != null and successful_handoffs > 0:
+			# At least one source edge has already been debited. There is no reverse GPU
+			# transfer here, so publish the partial destination rather than deleting it.
 			var record := scheduler.pool.record(destination)
 			var state := int(record.get("state", HydroTilePool.TileState.ALLOCATING))
 			if state == HydroTilePool.TileState.ALLOCATING:
@@ -397,9 +395,11 @@ func _fail_current_job(error: Error) -> void:
 			_mark_destination_result(destination_id,
 				"activated_after_handoff_failure")
 		else:
+			# No edge parcel moved. A coarse-only preseed is exactly reversible, so
+			# restore it before releasing the still-hidden destination.
+			_restore_coarse_preseed(destination_id)
 			if destination != null:
 				scheduler.cancel_reserved(destination, "handoff_gpu_failed")
-				_restore_coarse_preseed(destination_id)
 				_mark_destination_result(destination_id, "handoff_gpu_failed")
 				destination_cancelled.emit(_batch_id, destination_id, slot,
 					"handoff_gpu_failed")
