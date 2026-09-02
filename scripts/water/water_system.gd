@@ -105,9 +105,9 @@ func representation_audit_available() -> bool:
 		and _representation_audit.initialized_ok()
 
 
-## Coordinated coarse+fine snapshot. Set expect_no_untracked_fine_flux=true only
-## for controlled gates where atmospheric/gameplay fine sources are known disabled;
-## production fine-source cumulative ledgers are not implemented yet.
+## Coordinated coarse+fine snapshot. The production fine external-flux ledger is
+## auto-detected by HydroRepresentationAudit. Set expect_no_untracked_fine_flux=true
+## only for controlled fixtures that intentionally run without that autoload.
 func request_representation_audit(expect_no_untracked_fine_flux: bool = false,
 		abs_tolerance_m3: float = 0.01,
 		relative_tolerance: float = 1.0e-6) -> int:
@@ -187,10 +187,17 @@ func gpu_stats() -> Dictionary:
 	}
 	out["active_sparse_volume_diagnostic"] = {} if _sparse_volume_diagnostic == null \
 		else _sparse_volume_diagnostic.stats()
+	var fine_ledger := get_node_or_null("/root/HydroFineExternalFluxLedger")
+	var fine_ledger_stats: Dictionary = {}
+	if fine_ledger != null and fine_ledger.has_method("stats"):
+		var ledger_value: Variant = fine_ledger.call("stats")
+		if ledger_value is Dictionary:
+			fine_ledger_stats = ledger_value
+	out["fine_external_flux_ledger"] = fine_ledger_stats
 	out["representation_audit"] = {
 		"available": representation_audit_available(),
 		"pending": _representation_audit != null and _representation_audit.pending(),
-		"fine_external_flux_ledger_complete": false,
+		"fine_external_flux_ledger_complete": bool(fine_ledger_stats.get("complete", false)),
 	}
 	var runtime := sparse_runtime()
 	out["failed_generation_preserved"] = sparse_runtime_state() == "failed" \
@@ -216,10 +223,6 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 		_try_bind_planet_demotion_bridge()
 		return
 
-	# A failed generation may still own real fine water. Destroying its atlas would
-	# silently delete that representation. Release nonessential readers/forward
-	# promotion, but let an in-flight demotion finish and preserve the failed atlas
-	# whenever any tile remains allocated.
 	if state == "failed":
 		_release_representation_audit()
 		_release_sparse_volume_diagnostic()
@@ -234,9 +237,6 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 			call_deferred(&"_teardown_failed_sparse_runtime")
 		return
 
-	# Defensive path in addition to _release_sparse_runtime() override: bootstrap
-	# transitions such as disabled/unavailable already destroyed the runtime, so no
-	# helper may retain externally-owned sparse RIDs.
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
 	_release_frontier_coarse_preseed()
@@ -259,14 +259,10 @@ func _teardown_failed_sparse_runtime() -> void:
 		_failed_runtime_teardown_queued = false
 		return
 	if _planet_demotion_bridge != null and _planet_demotion_bridge.busy():
-		# Its compact GPU readback/ownership transfer still needs the current atlas.
-		# The completion/failure callback will schedule this check again.
 		return
 	var runtime := sparse_runtime()
 	if runtime != null and runtime.scheduler != null and runtime.scheduler.pool != null \
 			and runtime.scheduler.pool.allocated_count() > 0:
-		# Freeze failed-but-authoritative fine state in place. Recovery/demotion may
-		# inspect it later; deleting it here would violate representation conservation.
 		_failed_runtime_teardown_queued = false
 		return
 	_failed_runtime_teardown_queued = false
@@ -279,13 +275,6 @@ func _resume_failed_teardown_after_demotion() -> void:
 
 
 func _on_persistent_hydrology_store_rebuilt() -> void:
-	# The coarse store is part of physical ownership identity, not merely a data
-	# source. Rebinding helpers to a replacement store while the old sparse atlas is
-	# alive can make a mid-flight provisional seed belong to both generations. Treat
-	# every store rebuild as a hard generation boundary: synchronously invalidate the
-	# complete sparse runtime, then bootstrap a fresh atlas against the new store.
-	# Save/world-transition ownership collapse is a separate gate; normal store
-	# rebuilds should only occur when no gameplay fine state is being preserved.
 	_failed_runtime_teardown_queued = false
 	_release_sparse_runtime()
 	_set_sparse_state("recycling_coarse_store")
@@ -403,31 +392,24 @@ func _try_bind_planet_promotion_bridge() -> void:
 	if not PersistentHydrologySystem.available():
 		_set_planet_promotion_state("waiting_for_coarse_store")
 		return
-
 	var runtime := sparse_runtime()
 	if runtime == null or runtime.terrain_bed == null \
 			or not runtime.terrain_bed.initialized_ok():
 		_set_planet_promotion_state("waiting_for_sparse_terrain")
 		return
-
 	var bridge := PlanetHydroPromotionBridge.new()
 	bridge.name = "PlanetHydroPromotionBridge"
 	_planet_promotion_bridge = bridge
 	add_child(bridge)
-	bridge.initialized.connect(
-		func(): _on_planet_promotion_bridge_initialized(bridge))
-	bridge.initialization_failed.connect(
-		func(error: Error): _on_planet_promotion_bridge_initialization_failed(
-			bridge, error))
-	bridge.promotion_completed.connect(
-		func(_request_id: int, report: Dictionary):
-			if bridge == _planet_promotion_bridge:
-				planet_promotion_completed.emit(report.duplicate(true)))
-	bridge.promotion_failed.connect(
-		func(_request_id: int, error: Error, stage: String):
-			if bridge == _planet_promotion_bridge:
-				planet_promotion_failed.emit(error, stage))
-
+	bridge.initialized.connect(func(): _on_planet_promotion_bridge_initialized(bridge))
+	bridge.initialization_failed.connect(func(error: Error):
+		_on_planet_promotion_bridge_initialization_failed(bridge, error))
+	bridge.promotion_completed.connect(func(_request_id: int, report: Dictionary):
+		if bridge == _planet_promotion_bridge:
+			planet_promotion_completed.emit(report.duplicate(true)))
+	bridge.promotion_failed.connect(func(_request_id: int, error: Error, stage: String):
+		if bridge == _planet_promotion_bridge:
+			planet_promotion_failed.emit(error, stage))
 	_set_planet_promotion_state("initializing")
 	var err := bridge.initialize(PersistentHydrologySystem.store(),
 		runtime.scheduler, runtime.atlas, runtime.connectivity,
@@ -450,27 +432,21 @@ func _try_bind_planet_demotion_bridge() -> void:
 			or runtime.connectivity == null or runtime.identity_bridge == null:
 		_set_planet_demotion_state("waiting_for_sparse_runtime")
 		return
-
 	var bridge := PlanetHydroDemotionBridge.new()
 	bridge.name = "PlanetHydroDemotionBridge"
 	_planet_demotion_bridge = bridge
 	add_child(bridge)
-	bridge.initialized.connect(
-		func(): _on_planet_demotion_bridge_initialized(bridge))
-	bridge.initialization_failed.connect(
-		func(error: Error): _on_planet_demotion_bridge_initialization_failed(
-			bridge, error))
-	bridge.demotion_completed.connect(
-		func(_request_id: int, report: Dictionary):
-			if bridge == _planet_demotion_bridge:
-				planet_demotion_completed.emit(report.duplicate(true))
-				_resume_failed_teardown_after_demotion())
-	bridge.demotion_failed.connect(
-		func(_request_id: int, error: Error, stage: String):
-			if bridge == _planet_demotion_bridge:
-				planet_demotion_failed.emit(error, stage)
-				_resume_failed_teardown_after_demotion())
-
+	bridge.initialized.connect(func(): _on_planet_demotion_bridge_initialized(bridge))
+	bridge.initialization_failed.connect(func(error: Error):
+		_on_planet_demotion_bridge_initialization_failed(bridge, error))
+	bridge.demotion_completed.connect(func(_request_id: int, report: Dictionary):
+		if bridge == _planet_demotion_bridge:
+			planet_demotion_completed.emit(report.duplicate(true))
+			_resume_failed_teardown_after_demotion())
+	bridge.demotion_failed.connect(func(_request_id: int, error: Error, stage: String):
+		if bridge == _planet_demotion_bridge:
+			planet_demotion_failed.emit(error, stage)
+			_resume_failed_teardown_after_demotion())
 	_set_planet_demotion_state("initializing")
 	var err := bridge.initialize(PersistentHydrologySystem.store(),
 		runtime.scheduler, runtime.atlas, runtime.connectivity,
@@ -479,8 +455,7 @@ func _try_bind_planet_demotion_bridge() -> void:
 		_on_planet_demotion_bridge_initialization_failed(bridge, err)
 
 
-func _on_planet_promotion_bridge_initialized(
-		bridge: PlanetHydroPromotionBridge) -> void:
+func _on_planet_promotion_bridge_initialized(bridge: PlanetHydroPromotionBridge) -> void:
 	if bridge != _planet_promotion_bridge:
 		return
 	_set_planet_promotion_state("ready")
@@ -498,8 +473,7 @@ func _on_planet_promotion_bridge_initialization_failed(
 	_planet_promotion_bridge = null
 
 
-func _on_planet_demotion_bridge_initialized(
-		bridge: PlanetHydroDemotionBridge) -> void:
+func _on_planet_demotion_bridge_initialized(bridge: PlanetHydroDemotionBridge) -> void:
 	if bridge != _planet_demotion_bridge:
 		return
 	_set_planet_demotion_state("ready")
@@ -578,9 +552,6 @@ func _release_planet_demotion_bridge() -> void:
 	_set_planet_demotion_state("offline")
 
 
-## Parent bootstrap calls this whenever a world/runtime is recycled. Release all
-## uniform sets/ownership helpers first so their externally-owned sparse RIDs are
-## still valid while cleanup and transaction rollback/commit recovery run.
 func _release_sparse_runtime() -> void:
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
