@@ -2,32 +2,42 @@
 #version 450
 
 // Converts compact per-tile activity summaries into a still-smaller frontier
-// queue. Terrain reachability and cube-face neighbor mapping are intentionally not
-// guessed here; each entry is only a source-slot + boundary-direction + flux
-// candidate for the policy/topology layer.
+// queue. Each candidate snapshots stable (face, level, x, y) identity together
+// with the transient source slot. A delayed async queue can therefore be rejected
+// if that slot has been recycled before the policy layer consumes it.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct FrontierEntry {
+    uvec4 a; // slot, direction, floatBitsToUint(flux), face
+    uvec4 b; // level, x, y, reserved
+};
 
 layout(set = 0, binding = 0, std430) readonly buffer Summaries {
     vec4 summary[]; // 3 vec4 per slot
 };
-layout(set = 0, binding = 1, std430) buffer Queue {
+layout(set = 0, binding = 1, std430) readonly buffer TileMetadata {
+    uvec4 tile_meta[]; // face, level, x, y; face=0xffffffff means unbound
+};
+layout(set = 0, binding = 2, std430) buffer Queue {
     uint count;
     uint overflow;
     uint reserved0;
     uint reserved1;
-    uvec4 entries[]; // slot, direction, floatBitsToUint(flux), reserved
+    FrontierEntry entries[];
 } queue_out;
-layout(set = 0, binding = 2, std430) readonly buffer Params {
+layout(set = 0, binding = 3, std430) readonly buffer Params {
     vec4 config; // capacity, threshold_m3s, max_candidates, reserved
 } params;
 
-void emit_candidate(uint slot, uint direction, float flux, uint max_candidates) {
+void emit_candidate(uint slot, uint direction, float flux,
+        uvec4 meta, uint max_candidates) {
     uint index = atomicAdd(queue_out.count, 1u);
     if (index >= max_candidates) {
         atomicOr(queue_out.overflow, 1u);
         return;
     }
-    queue_out.entries[index] = uvec4(slot, direction, floatBitsToUint(flux), 0u);
+    queue_out.entries[index].a = uvec4(slot, direction, floatBitsToUint(flux), meta.x);
+    queue_out.entries[index].b = uvec4(meta.y, meta.z, meta.w, 0u);
 }
 
 void main() {
@@ -40,11 +50,12 @@ void main() {
     vec4 health = summary[o + 0u];
     vec4 edges = summary[o + 1u];
     vec4 ownership = summary[o + 2u];
-    if (ownership.y < 0.5 || health.w > 0.5) return;
+    uvec4 meta = tile_meta[slot];
+    if (ownership.y < 0.5 || health.w > 0.5 || meta.x == 0xffffffffu) return;
 
     float threshold = max(params.config.y, 0.0);
-    if (edges.x > threshold) emit_candidate(slot, 0u, edges.x, max_candidates); // west
-    if (edges.y > threshold) emit_candidate(slot, 1u, edges.y, max_candidates); // east
-    if (edges.z > threshold) emit_candidate(slot, 2u, edges.z, max_candidates); // south
-    if (edges.w > threshold) emit_candidate(slot, 3u, edges.w, max_candidates); // north
+    if (edges.x > threshold) emit_candidate(slot, 0u, edges.x, meta, max_candidates); // west
+    if (edges.y > threshold) emit_candidate(slot, 1u, edges.y, meta, max_candidates); // east
+    if (edges.z > threshold) emit_candidate(slot, 2u, edges.z, meta, max_candidates); // south
+    if (edges.w > threshold) emit_candidate(slot, 3u, edges.w, meta, max_candidates); // north
 }
