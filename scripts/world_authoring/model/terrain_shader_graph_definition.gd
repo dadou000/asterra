@@ -2,10 +2,9 @@ class_name TerrainShaderGraphDefinition
 extends Resource
 ## Serializable node graph used by terrain displacement/material authoring slots.
 ##
-## Phase 32 keeps the Phase 31 production boundary nodes and adds serialized
-## production-control nodes for the renderer stages that used to be shader-only.
-## Their defaults are the exact current production values, so Reset Flow preserves
-## the existing terrain while making the implementation discoverable/editable.
+## Production terrain stages are represented by ordinary serialized graph nodes.
+## Control-node defaults mirror the production shaders exactly so Reset Flow is a
+## lossless representation of the renderer rather than an approximate preset.
 
 enum Domain {
 	DISPLACEMENT,
@@ -23,6 +22,7 @@ const CATEGORY_TERRAIN_SOURCE := "Terrain source"
 const CATEGORY_GEOMORPH := "Geomorph"
 const CATEGORY_WORLD_DATA := "World data"
 const CATEGORY_CLASSIFICATION := "Classification"
+const CATEGORY_PALETTE := "Palette / materials"
 const CATEGORY_MICRODETAIL := "Microdetail"
 const CATEGORY_SURFACE_PBR := "Surface / PBR"
 const CATEGORY_TEXTURES := "Textures"
@@ -36,6 +36,7 @@ const NODE_CATEGORIES: Array[String] = [
 	CATEGORY_GEOMORPH,
 	CATEGORY_WORLD_DATA,
 	CATEGORY_CLASSIFICATION,
+	CATEGORY_PALETTE,
 	CATEGORY_MICRODETAIL,
 	CATEGORY_SURFACE_PBR,
 	CATEGORY_TEXTURES,
@@ -163,6 +164,8 @@ const MATERIAL_ONLY_NODES: Array[String] = [
 	"PRODUCTION_AO",
 	"PRODUCTION_SPECULAR",
 	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_CLASSIFIER_THRESHOLDS",
+	"PRODUCTION_SURFACE_PALETTE",
 	"PRODUCTION_MICRORELIEF_SETTINGS",
 	"PRODUCTION_ANTITILE_SETTINGS",
 	"PRODUCTION_ROCK_PBR_SETTINGS",
@@ -183,6 +186,8 @@ const MATERIAL_ONLY_NODES: Array[String] = [
 const PRODUCTION_CONTROL_NODES: Array[String] = [
 	"PRODUCTION_GEOMORPH_SETTINGS",
 	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_CLASSIFIER_THRESHOLDS",
+	"PRODUCTION_SURFACE_PALETTE",
 	"PRODUCTION_MICRORELIEF_SETTINGS",
 	"PRODUCTION_ANTITILE_SETTINGS",
 	"PRODUCTION_ROCK_PBR_SETTINGS",
@@ -201,6 +206,8 @@ const NODE_TYPES: Array[String] = [
 	"PRODUCTION_AO",
 	"PRODUCTION_SPECULAR",
 	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_CLASSIFIER_THRESHOLDS",
+	"PRODUCTION_SURFACE_PALETTE",
 	"PRODUCTION_MICRORELIEF_SETTINGS",
 	"PRODUCTION_ANTITILE_SETTINGS",
 	"PRODUCTION_ROCK_PBR_SETTINGS",
@@ -255,6 +262,8 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"PRODUCTION_SPECULAR": CATEGORY_PRODUCTION,
 	"PRODUCTION_GEOMORPH_SETTINGS": CATEGORY_GEOMORPH,
 	"PRODUCTION_CLASSIFIER_SETTINGS": CATEGORY_CLASSIFICATION,
+	"PRODUCTION_CLASSIFIER_THRESHOLDS": CATEGORY_CLASSIFICATION,
+	"PRODUCTION_SURFACE_PALETTE": CATEGORY_PALETTE,
 	"PRODUCTION_MICRORELIEF_SETTINGS": CATEGORY_MICRODETAIL,
 	"PRODUCTION_ANTITILE_SETTINGS": CATEGORY_MICRODETAIL,
 	"PRODUCTION_ROCK_PBR_SETTINGS": CATEGORY_SURFACE_PBR,
@@ -320,7 +329,6 @@ func create_default_graph(next_domain: int) -> void:
 	revision += 1
 
 func create_production_graph(next_domain: int) -> void:
-	# Legacy Phase 29 production representation; retained for migrations/tests.
 	domain = next_domain
 	nodes.clear()
 	links.clear()
@@ -344,9 +352,6 @@ func create_production_graph(next_domain: int) -> void:
 	revision += 1
 
 func create_production_stage_graph(next_domain: int) -> void:
-	# Phase 32 canonical production graph. Data-flow nodes still represent the exact
-	# renderer boundary; unconnected settings nodes configure the production stages
-	# that calculate those sources. Defaults below match the shader defaults.
 	domain = next_domain
 	nodes.clear()
 	links.clear()
@@ -380,15 +385,19 @@ func create_production_stage_graph(next_domain: int) -> void:
 			connect_nodes(source_id, 0, output_id, port)
 		add_node("PRODUCTION_CLASSIFIER_SETTINGS", Vector2(1080.0, 30.0),
 			production_control_defaults("PRODUCTION_CLASSIFIER_SETTINGS"))
-		add_node("PRODUCTION_MICRORELIEF_SETTINGS", Vector2(1080.0, 370.0),
+		add_node("PRODUCTION_CLASSIFIER_THRESHOLDS", Vector2(1080.0, 500.0),
+			production_control_defaults("PRODUCTION_CLASSIFIER_THRESHOLDS"))
+		add_node("PRODUCTION_SURFACE_PALETTE", Vector2(1080.0, 1050.0),
+			production_control_defaults("PRODUCTION_SURFACE_PALETTE"))
+		add_node("PRODUCTION_MICRORELIEF_SETTINGS", Vector2(1440.0, 30.0),
 			production_control_defaults("PRODUCTION_MICRORELIEF_SETTINGS"))
-		add_node("PRODUCTION_ANTITILE_SETTINGS", Vector2(1080.0, 570.0),
+		add_node("PRODUCTION_ANTITILE_SETTINGS", Vector2(1440.0, 370.0),
 			production_control_defaults("PRODUCTION_ANTITILE_SETTINGS"))
-		add_node("PRODUCTION_ROCK_PBR_SETTINGS", Vector2(1440.0, 30.0),
+		add_node("PRODUCTION_ROCK_PBR_SETTINGS", Vector2(1800.0, 30.0),
 			production_control_defaults("PRODUCTION_ROCK_PBR_SETTINGS"))
-		add_node("PRODUCTION_SCAN_PBR_SETTINGS", Vector2(1440.0, 300.0),
+		add_node("PRODUCTION_SCAN_PBR_SETTINGS", Vector2(2160.0, 30.0),
 			production_control_defaults("PRODUCTION_SCAN_PBR_SETTINGS"))
-		add_node("PRODUCTION_SCAN_TEXTURES", Vector2(1800.0, 30.0),
+		add_node("PRODUCTION_SCAN_TEXTURES", Vector2(2520.0, 30.0),
 			production_control_defaults("PRODUCTION_SCAN_TEXTURES"))
 	revision += 1
 
@@ -396,70 +405,139 @@ static func production_control_defaults(node_type: String) -> Dictionary:
 	match node_type:
 		"PRODUCTION_GEOMORPH_SETTINGS":
 			return {
-				"detail_strength": 1.0,
-				"override_seed": false,
-				"detail_seed": 1337,
-				"warp_strength": 1.0,
-				"broad_strength": 1.0,
-				"mountain_strength": 1.0,
-				"mid_strength": 1.0,
-				"channel_strength": 1.0,
-				"deposit_strength": 1.0,
-				"fine_strength": 1.0,
-				"dune_strength": 1.0,
-				"glacial_strength": 1.0,
+				"detail_strength":1.0, "override_seed":false, "detail_seed":1337,
+				"warp_strength":1.0, "broad_strength":1.0, "mountain_strength":1.0,
+				"mid_strength":1.0, "channel_strength":1.0, "deposit_strength":1.0,
+				"fine_strength":1.0, "dune_strength":1.0, "glacial_strength":1.0,
+				"broad_wavelength_m":16000.0, "broad_low_amplitude_m":24.0,
+				"broad_mountain_amplitude_m":125.0, "broad_warp":0.8,
+				"mountain_wavelength_m":6000.0, "mountain_amplitude_m":210.0,
+				"mountain_warp":1.1, "mountain_ridge_scale":1.55, "mountain_cell_mix":0.58,
+				"mid_wavelength_m":1400.0, "mid_ridge_amplitude_m":72.0,
+				"mid_noise_amplitude_m":24.0, "mid_warp":0.72,
+				"mid_ridge_scale":1.25, "mid_detail_scale":2.1,
+				"channel_wavelength_m":420.0, "channel_depth_min_m":2.0,
+				"channel_depth_max_m":34.0, "channel_warp":0.55, "channel_power":4.6,
+				"flow_along_scale":0.42, "flow_across_scale":1.45,
+				"deposit_amplitude_min_m":1.0, "deposit_amplitude_max_m":12.0,
+				"deposit_scale":0.48, "deposit_power":2.2,
+				"fine_wavelength_m":120.0, "fine_amplitude_m":4.5,
+				"dune_wavelength_m":180.0, "dune_amplitude_m":9.0, "dune_warp":0.45,
+				"micro_wavelength_m":24.0, "micro_amplitude_m":0.9,
+				"glacial_wavelength_m":2600.0, "glacial_amplitude_m":52.0,
+				"glacial_base_scale":0.62, "glacial_mix":0.72,
 			}
 		"PRODUCTION_CLASSIFIER_SETTINGS":
 			return {
-				"rock_scale": 1.0,
-				"soil_scale": 1.0,
-				"vegetation_scale": 1.0,
-				"sand_scale": 1.0,
-				"mud_scale": 1.0,
-				"snow_scale": 1.0,
-				"scree_scale": 1.0,
-				"gravel_scale": 1.0,
-				"albedo_chroma": 1.24,
-				"albedo_contrast": 1.10,
-				"albedo_pivot": 0.115,
-				"roughness_scale": 1.0,
-				"roughness_bias": 0.0,
-				"roughness_min": 0.42,
-				"roughness_max": 0.98,
+				"rock_scale":1.0, "soil_scale":1.0, "vegetation_scale":1.0, "sand_scale":1.0,
+				"mud_scale":1.0, "snow_scale":1.0, "scree_scale":1.0, "gravel_scale":1.0,
+				"albedo_chroma":1.24, "albedo_contrast":1.10, "albedo_pivot":0.115,
+				"roughness_scale":1.0, "roughness_bias":0.0,
+				"roughness_min":0.42, "roughness_max":0.98,
+			}
+		"PRODUCTION_CLASSIFIER_THRESHOLDS":
+			return {
+				"soil_repose_dry_deg":42.0, "soil_repose_wet_deg":27.0,
+				"loose_margin_low_deg":4.0, "loose_margin_high_deg":5.0,
+				"sand_slope_start_deg":29.0, "sand_slope_end_deg":36.0,
+				"vegetation_slope_start_deg":32.0, "vegetation_slope_end_deg":46.0,
+				"thin_soil_start_m":0.06, "thin_soil_end_m":0.55,
+				"rock_slope_start_deg":43.0, "rock_slope_end_deg":58.0,
+				"mountain_rock_slope_start_deg":48.0, "mountain_rock_slope_end_deg":62.0,
+				"arid_bare_start":0.58, "arid_bare_end":0.94,
+				"bare_precip_start_mm":220.0, "bare_precip_end_mm":650.0,
+				"bare_temp_start_c":-14.0, "bare_temp_end_c":-3.0,
+				"dune_arid_start":0.55, "dune_arid_end":0.92,
+				"dune_precip_start_mm":300.0, "dune_precip_end_mm":850.0,
+				"thermal_growth_start_c":-7.0, "thermal_growth_end_c":4.0,
+				"vegetation_depth_start_m":0.04, "vegetation_depth_end_m":0.28,
+				"soil_depth_start_m":0.025, "soil_depth_end_m":0.22,
+				"mud_slope_start_deg":12.0, "mud_slope_end_deg":28.0,
+				"saturated_wet_start":0.68, "saturated_wet_end":0.92,
+				"saturated_precip_start_mm":350.0, "saturated_precip_end_mm":900.0,
+				"snow_temp_start_c":-8.0, "snow_temp_end_c":2.0,
+				"snow_slope_start_deg":28.0, "snow_slope_end_deg":50.0,
+				"marginal_snow_temp_start_c":-2.0, "marginal_snow_temp_end_c":5.0,
+				"snow_precip_start_mm":500.0, "snow_precip_end_mm":1400.0,
+				"scree_slope_start_deg":25.0, "scree_slope_full_deg":34.0,
+				"scree_slope_fade_deg":45.0, "scree_slope_end_deg":55.0,
+				"gravel_slope_start_deg":18.0, "gravel_slope_end_deg":34.0,
+			}
+		"PRODUCTION_SURFACE_PALETTE":
+			return {
+				"rock_granite":Color(0.335,0.305,0.275), "rock_basalt":Color(0.085,0.082,0.080),
+				"rock_gabbro":Color(0.105,0.104,0.098), "rock_gneiss":Color(0.250,0.240,0.232),
+				"rock_schist":Color(0.175,0.170,0.158), "rock_sandstone":Color(0.365,0.230,0.140),
+				"rock_shale":Color(0.155,0.146,0.132), "rock_limestone":Color(0.415,0.400,0.352),
+				"rock_dolomite":Color(0.375,0.358,0.318), "rock_conglomerate":Color(0.265,0.222,0.180),
+				"rock_quartzite":Color(0.455,0.442,0.422), "rock_tuff":Color(0.330,0.298,0.260),
+				"rock_serpentinite":Color(0.120,0.145,0.118),
+				"soil_sandy":Color(0.385,0.225,0.075), "soil_silty":Color(0.220,0.120,0.040),
+				"soil_clayey":Color(0.315,0.075,0.028), "soil_humus":Color(0.028,0.017,0.006),
+				"vegetation_dry":Color(0.285,0.175,0.030), "vegetation_grass":Color(0.185,0.255,0.042),
+				"vegetation_wet":Color(0.030,0.155,0.030), "vegetation_lush":Color(0.010,0.075,0.016),
+				"vegetation_cold":Color(0.095,0.105,0.045),
+				"sand_low":Color(0.485,0.285,0.095), "sand_high":Color(0.660,0.445,0.155),
+				"mud_tint":Color(0.42,0.36,0.30), "snow":Color(0.84,0.89,0.94),
+				"gravel":Color(0.205,0.185,0.155),
+				"scree_rock_mix":0.80, "scree_add":0.026, "gravel_rock_mix":0.44,
+				"roughness_fallback":0.90, "roughness_rock":0.76, "roughness_soil":0.92,
+				"roughness_vegetation":0.96, "roughness_sand":0.82,
+				"roughness_mud_dry":0.72, "roughness_mud_wet":0.48,
+				"roughness_snow":0.92, "roughness_scree":0.86, "roughness_gravel":0.80,
 			}
 		"PRODUCTION_MICRORELIEF_SETTINGS":
-			return {"enabled": true, "strength": 1.0}
+			return {
+				"enabled":true, "strength":1.0, "rock_scale":1.0, "soil_scale":1.0,
+				"sand_scale":1.0, "mud_scale":1.0, "snow_scale":1.0,
+				"gravel_scale":1.0, "scree_scale":1.0, "base_noise_scale":1.0,
+			}
 		"PRODUCTION_ANTITILE_SETTINGS":
-			return {"strength": 1.0}
+			return {
+				"strength":1.0, "coarse_cell_m":32.0, "fine_cell_m":8.0,
+				"coarse_offset_m":0.58, "fine_offset_m":0.14,
+				"coarse_seed":29093, "fine_seed":46141,
+			}
 		"PRODUCTION_ROCK_PBR_SETTINGS":
 			return {
-				"enabled": true,
-				"detail_strength": 1.0,
-				"normal_strength": 1.0,
-				"color_strength": 1.0,
+				"enabled":true, "detail_strength":1.0, "normal_strength":1.0, "color_strength":1.0,
+				"coarse_cell_m":4.0, "fine_cell_m":1.0, "coarse_seed":11665, "fine_seed":35415,
+				"coarse_fade_near_m":850.0, "coarse_fade_far_m":3400.0,
+				"fine_fade_near_m":130.0, "fine_fade_far_m":920.0,
+				"normal_fade_near_m":90.0, "normal_fade_far_m":620.0,
+				"weatherability_pivot":0.45, "weatherability_roughness":0.055,
+				"family_roughness_min":0.48, "family_roughness_max":0.97,
+				"fracture_color_base":0.09, "fracture_color_fault":0.15,
+				"fracture_roughness":0.040, "normal_fracture_mix":0.55,
+				"output_roughness_min":0.45, "output_roughness_max":0.98,
 			}
 		"PRODUCTION_SCAN_PBR_SETTINGS":
 			return {
-				"enabled": true,
-				"ground_metres": 2.0,
-				"grass_metres": 2.0,
-				"mud_metres": 1.0,
-				"forest_metres": 2.0,
+				"enabled":true, "ground_metres":2.0, "grass_metres":2.0,
+				"mud_metres":1.0, "forest_metres":2.0, "triplanar_sharpness":5.0,
+				"transfer_strength":0.60, "transfer_min":0.48, "transfer_max":1.72,
+				"surface_fade_near_m":900.0, "surface_fade_far_m":3200.0,
+				"normal_fade_near_m":120.0, "normal_fade_far_m":520.0,
+				"loose_threshold":0.015, "loose_albedo_strength":0.72,
+				"loose_roughness_strength":0.70, "loose_normal_mix":0.42,
+				"loose_normal_weight":0.48, "special_threshold":0.015,
+				"special_albedo_strength":0.88, "special_roughness_strength":0.82,
+				"special_normal_mix":0.58, "special_normal_weight":0.72,
 			}
 		"PRODUCTION_SCAN_TEXTURES":
 			return {
-				"ground_albedo": "res://assets/textures/terrain/ground003_color_2k.jpg",
-				"ground_normal": "res://assets/textures/terrain/ground003_normal_gl_2k.jpg",
-				"ground_roughness": "res://assets/textures/terrain/ground003_roughness_2k.jpg",
-				"grass_albedo": "res://assets/textures/terrain/leafy_grass_diff_2k.jpg",
-				"grass_normal": "res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg",
-				"grass_roughness": "res://assets/textures/terrain/leafy_grass_rough_2k.jpg",
-				"mud_albedo": "res://assets/textures/terrain/brown_mud_diff_2k.jpg",
-				"mud_normal": "res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg",
-				"mud_roughness": "res://assets/textures/terrain/brown_mud_rough_2k.jpg",
-				"forest_albedo": "res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg",
-				"forest_normal": "res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg",
-				"forest_roughness": "res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg",
+				"ground_albedo":"res://assets/textures/terrain/ground003_color_2k.jpg",
+				"ground_normal":"res://assets/textures/terrain/ground003_normal_gl_2k.jpg",
+				"ground_roughness":"res://assets/textures/terrain/ground003_roughness_2k.jpg",
+				"grass_albedo":"res://assets/textures/terrain/leafy_grass_diff_2k.jpg",
+				"grass_normal":"res://assets/textures/terrain/leafy_grass_nor_gl_2k.jpg",
+				"grass_roughness":"res://assets/textures/terrain/leafy_grass_rough_2k.jpg",
+				"mud_albedo":"res://assets/textures/terrain/brown_mud_diff_2k.jpg",
+				"mud_normal":"res://assets/textures/terrain/brown_mud_nor_gl_2k.jpg",
+				"mud_roughness":"res://assets/textures/terrain/brown_mud_rough_2k.jpg",
+				"forest_albedo":"res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg",
+				"forest_normal":"res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg",
+				"forest_roughness":"res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg",
 			}
 	return {}
 
@@ -469,12 +547,7 @@ func add_node(node_type: String, position: Vector2, parameters: Dictionary = {})
 	var resolved_parameters: Dictionary = parameters.duplicate(true)
 	if PRODUCTION_CONTROL_NODES.has(resolved_type) and resolved_parameters.is_empty():
 		resolved_parameters = production_control_defaults(resolved_type)
-	nodes.append({
-		"id": node_id,
-		"type": resolved_type,
-		"position": position,
-		"parameters": resolved_parameters,
-	})
+	nodes.append({"id":node_id, "type":resolved_type, "position":position, "parameters":resolved_parameters})
 	revision += 1
 	return node_id
 
@@ -521,22 +594,15 @@ func connect_nodes(from_id: String, from_port: int, to_id: String, to_port: int)
 	for link: Dictionary in links:
 		if String(link.get("to", "")) == to_id and int(link.get("to_port", -1)) == to_port:
 			return false
-	links.append({
-		"from": from_id,
-		"from_port": maxi(0, from_port),
-		"to": to_id,
-		"to_port": maxi(0, to_port),
-	})
+	links.append({"from":from_id, "from_port":maxi(0, from_port), "to":to_id, "to_port":maxi(0, to_port)})
 	revision += 1
 	return true
 
 func disconnect_nodes(from_id: String, from_port: int, to_id: String, to_port: int) -> bool:
 	for index: int in links.size():
 		var link: Dictionary = links[index]
-		if String(link.get("from", "")) == from_id \
-		and int(link.get("from_port", -1)) == from_port \
-		and String(link.get("to", "")) == to_id \
-		and int(link.get("to_port", -1)) == to_port:
+		if String(link.get("from", "")) == from_id and int(link.get("from_port", -1)) == from_port \
+		and String(link.get("to", "")) == to_id and int(link.get("to_port", -1)) == to_port:
 			links.remove_at(index)
 			revision += 1
 			return true
@@ -580,8 +646,7 @@ static func node_categories(next_domain: int) -> Array[String]:
 	return out
 
 static func game_input_options(next_domain: int) -> Array[String]:
-	return DISPLACEMENT_GAME_INPUTS.duplicate() if next_domain == Domain.DISPLACEMENT \
-		else MATERIAL_GAME_INPUTS.duplicate()
+	return DISPLACEMENT_GAME_INPUTS.duplicate() if next_domain == Domain.DISPLACEMENT else MATERIAL_GAME_INPUTS.duplicate()
 
 static func game_input_category(source: String) -> String:
 	if source.begins_with("base_"):
@@ -589,10 +654,9 @@ static func game_input_category(source: String) -> String:
 	if source in ["material_primary", "material_secondary", "biome_id", "rock_id", "rock_mix"]:
 		return CATEGORY_CLASSIFICATION
 	if source in ["soil", "surface", "geology", "structure", "climate", "landform",
-			"soil_sand", "soil_silt", "soil_clay", "soil_depth_m", "surface_sediment_m",
-			"temperature", "precipitation", "temperature_range", "moisture",
-			"vegetation_biomass", "erodibility", "strata_dip", "uplift",
-			"flow_x", "flow_y", "hydrology"]:
+		"soil_sand", "soil_silt", "soil_clay", "soil_depth_m", "surface_sediment_m",
+		"temperature", "precipitation", "temperature_range", "moisture",
+		"vegetation_biomass", "erodibility", "strata_dip", "uplift", "flow_x", "flow_y", "hydrology"]:
 		return CATEGORY_WORLD_DATA
 	if source in ["terrain_height_m", "generated_height_m", "sculpt_delta_m", "micro_layer"]:
 		return CATEGORY_TERRAIN_SOURCE
