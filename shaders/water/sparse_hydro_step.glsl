@@ -21,6 +21,10 @@
 // gameplay/world emitters; `atmospheric_sources` is owned by distributed weather
 // forcing. The solver composes them at read time so one producer never clears or
 // overwrites another producer's source field.
+//
+// `external_flux_m3` is cleared once per macro advance. Every cell invocation owns
+// exactly one ledger element and accumulates gross water added/actually removed by
+// the composed external source term across CFL substeps. No float atomics are used.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -82,6 +86,10 @@ layout(set = 0, binding = 7, std430) readonly buffer Control {
 layout(set = 0, binding = 8, std430) readonly buffer AtmosphericSources {
     // Same units/layout as Sources. Written by weather/surface forcing passes.
     vec4 atmospheric_sources[];
+};
+layout(set = 0, binding = 9, std430) buffer ExternalFluxLedger {
+    // Gross applied volume for this macro advance: x=added, y=removed [m^3].
+    vec2 external_flux_m3[];
 };
 
 layout(push_constant, std430) uniform StepPush {
@@ -320,6 +328,12 @@ void main() {
         * (fn.h_left * fn.h_left - fs.h_right * fs.h_right);
 
     vec4 source = sources[i] + atmospheric_sources[i];
+    float add_h = max(source.x, 0.0) * dt();
+    float requested_remove_h = max(source.y, 0.0) * dt();
+    float available_after_add = max(updated.x + add_h, 0.0);
+    float actual_remove_h = min(requested_remove_h, available_after_add);
+    float cell_area_m2 = dx() * dx();
+    external_flux_m3[i] += vec2(add_h, actual_remove_h) * cell_area_m2;
     updated = apply_sources(updated, source, dt());
 
     if (updated.x <= dry_eps()
