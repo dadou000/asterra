@@ -34,6 +34,8 @@ var _sources: Dictionary = {} # String -> Dictionary
 var _initialized := false
 var _busy := false
 var _dirty := false
+var _revision := 0
+var _flush_revision := 0
 var _next_flush_id := 1
 var _flush_id := -1
 var _activation_queue: Array[Dictionary] = []
@@ -119,6 +121,7 @@ func upsert_point_source(source_id: String, direction: Vector3,
 		"tile_level": level,
 		"enabled": enabled,
 	}
+	_revision += 1
 	_dirty = true
 	source_changed.emit(source_id)
 	return OK
@@ -127,6 +130,7 @@ func upsert_point_source(source_id: String, direction: Vector3,
 func remove_source(source_id: String) -> bool:
 	if not _sources.erase(source_id):
 		return false
+	_revision += 1
 	_dirty = true
 	source_changed.emit(source_id)
 	return true
@@ -139,6 +143,7 @@ func set_source_enabled(source_id: String, enabled: bool) -> bool:
 	var source: Dictionary = value
 	source["enabled"] = enabled
 	_sources[source_id] = source
+	_revision += 1
 	_dirty = true
 	source_changed.emit(source_id)
 	return true
@@ -153,6 +158,7 @@ func flush() -> int:
 		return 0
 	_flush_id = _next_flush_id
 	_next_flush_id += 1
+	_flush_revision = _revision
 	_busy = true
 	_activation_queue = _collect_missing_positive_source_tiles()
 	_activation_index = 0
@@ -169,6 +175,8 @@ func stats() -> Dictionary:
 		"initialized": _initialized,
 		"busy": _busy,
 		"dirty": _dirty,
+		"revision": _revision,
+		"flush_revision": _flush_revision,
 		"source_count": _sources.size(),
 		"default_tile_level": default_tile_level,
 		"max_point_sources": max_point_sources,
@@ -380,7 +388,8 @@ func _on_writer_update_recorded(_request_id: int, entry_count: int) -> void:
 	var completed_id := _flush_id
 	var source_total := _sources.size()
 	_busy = false
-	_dirty = false
+	# Do not erase a source edit that arrived while this GPU rebuild was in flight.
+	_dirty = _revision != _flush_revision
 	_reset_flush_state()
 	flush_completed.emit(completed_id, source_total, entry_count)
 
@@ -425,6 +434,8 @@ func release() -> void:
 	_initialized = false
 	_busy = false
 	_dirty = false
+	_revision = 0
+	_flush_revision = 0
 	_reset_flush_state()
 	_sources.clear()
 	scheduler = null
