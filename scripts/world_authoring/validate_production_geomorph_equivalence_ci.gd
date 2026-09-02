@@ -2,7 +2,7 @@ extends Node
 ## Hard gate for splitting PRODUCTION_GENERATED_HEIGHT into editable graph stages.
 ##
 ## Untouched authoring must remain a literal identity view of the resident production
-## terrain. This test therefore verifies the semantic schema, graph defaults, shader
+## terrain. This test verifies the semantic schema, graph defaults, shader
 ## declarations/order/operations, and most importantly that the canonical production
 ## Shape graph emits ZERO authored displacement instructions.
 
@@ -20,10 +20,7 @@ const RUNTIME := preload(
 const GEOMORPH_SHADER_PATH := "res://shaders/gpu_geomorph.gdshaderinc"
 const CACHED_SHADER_PATH := "res://shaders/spherical_geometry_clipmap_cached_surface.gdshader"
 const PRODUCTION_SHAPE_SLOT_ID := "production-terrain-shape"
-const EXPECTED_STAGE_IDS := PackedStringArray([
-	"broad", "mountain", "mid", "channel", "deposit",
-	"fine", "dune", "micro", "glacial",
-])
+const EXPECTED_STAGE_ORDER := "broad|mountain|mid|channel|deposit|fine|dune|micro|glacial"
 const EXPECTED_DEFAULT_GUARD_M: float = 533.4
 
 
@@ -38,24 +35,30 @@ func _ready() -> void:
 
 
 func _validate_all() -> String:
+	print("PRODUCTION_GEOMORPH_EQUIVALENCE_STEP: schema")
 	var schema_errors: PackedStringArray = SCHEMA.validate_schema()
 	if not schema_errors.is_empty():
 		return "schema invalid: %s" % "; ".join(schema_errors)
-	if SCHEMA.ordered_stage_ids() != EXPECTED_STAGE_IDS:
-		return "production stage order changed: %s" % str(SCHEMA.ordered_stage_ids())
+	var actual_order: String = "|".join(SCHEMA.ordered_stage_ids())
+	if actual_order != EXPECTED_STAGE_ORDER:
+		return "production stage order changed: %s" % actual_order
 
+	print("PRODUCTION_GEOMORPH_EQUIVALENCE_STEP: semantics")
 	var semantic_error: String = _validate_stage_semantics()
 	if not semantic_error.is_empty():
 		return semantic_error
 
+	print("PRODUCTION_GEOMORPH_EQUIVALENCE_STEP: graph_defaults")
 	var defaults_error: String = _validate_graph_defaults()
 	if not defaults_error.is_empty():
 		return defaults_error
 
+	print("PRODUCTION_GEOMORPH_EQUIVALENCE_STEP: shader_contract")
 	var shader_error: String = _validate_shader_contract()
 	if not shader_error.is_empty():
 		return shader_error
 
+	print("PRODUCTION_GEOMORPH_EQUIVALENCE_STEP: identity_runtime")
 	var identity_error: String = _validate_identity_runtime()
 	if not identity_error.is_empty():
 		return identity_error
@@ -164,9 +167,6 @@ func _validate_shader_contract() -> String:
 			return "shader default %s drifted: shader=%s schema=%s" \
 				% [uniform_name, str(shader_default), str(defaults[key])]
 
-	# This multiplier is outside gpu_geomorph and is semantically part of the final
-	# production result. Its presence keeps detail_strength from becoming a dead or
-	# differently-placed control during future decomposition.
 	if cached.find("* coast_guard * u_detail_strength;") < 0:
 		return "cached terrain no longer applies coast_guard * detail_strength after geomorph"
 	return ""
@@ -175,15 +175,16 @@ func _validate_shader_contract() -> String:
 func _validate_identity_runtime() -> String:
 	var terrain: Resource = TERRAIN_PROFILE.new()
 	terrain.call("ensure_valid")
-	var slot: Resource = SLOT.new()
+	var slot: Resource = terrain.call("create_shader_slot",
+		SLOT.Domain.DISPLACEMENT, "Base Terrain Shape") as Resource
+	if slot == null:
+		return "could not create canonical production displacement slot"
 	slot.set(&"slot_id", PRODUCTION_SHAPE_SLOT_ID)
-	slot.set(&"display_name", "Base Terrain Shape")
 	slot.set(&"enabled", true)
-	slot.set(&"domain", SLOT.Domain.DISPLACEMENT)
-	var graph: Resource = GRAPH.new()
+	var graph: Resource = slot.get(&"graph") as Resource
+	if graph == null:
+		return "canonical production displacement slot has no graph"
 	graph.call("create_production_stage_graph", GRAPH.Domain.DISPLACEMENT)
-	slot.set(&"graph", graph)
-	terrain.set(&"displacement_slots", [slot])
 
 	var settings: Dictionary = {}
 	for node_value: Variant in graph.get(&"nodes") as Array:
