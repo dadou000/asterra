@@ -19,7 +19,9 @@ extends Node
 ## returns the exact committed surface/channel categories to coarse storage while
 ## the hidden/released sparse bytes cease to be authoritative. A restore that is
 ## temporarily blocked by another pending promotion is retained and retried as soon
-## as the ownership store has no unresolved reservations.
+## as the ownership store has no unresolved reservations. A lightweight process
+## poll closes the same guarantee even when the blocking reservation belongs to a
+## different ownership path rather than this coordinator.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -82,6 +84,11 @@ func deferred_restore_count() -> int:
 
 func has_provisional_tile(tile_id: int) -> bool:
 	return _committed_by_tile.has(tile_id)
+
+
+func _process(_delta: float) -> void:
+	if _initialized and not _restore_requested.is_empty():
+		_retry_requested_restores()
 
 
 ## Returns:
@@ -168,8 +175,8 @@ func finalize_tile(tile_id: int) -> bool:
 
 ## Activation/handoff failed after coarse commit. Return the exact categories that
 ## commit_promotion() removed. If another coarse reservation is still outstanding,
-## remember the request rather than dropping it; a later seed completion/failure
-## retries once the store barrier is clear.
+## remember the request rather than dropping it; a later seed completion/failure or
+## process poll retries once the store barrier is clear.
 func restore_tile(tile_id: int) -> Dictionary:
 	var value: Variant = _committed_by_tile.get(tile_id, null)
 	if not (value is Dictionary) or store == null:
