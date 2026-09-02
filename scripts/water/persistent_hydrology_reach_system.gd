@@ -6,7 +6,7 @@ extends "res://scripts/water/persistent_hydrology_system.gd"
 func _rebuild_store() -> void:
 	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
 		return
-	var next_store := PlanetHydrologyReachOwnershipStore.new()
+	var next_store := PlanetHydrologyRiverPromotionStore.new()
 	var err := next_store.initialize(Planet.fields)
 	if err != OK:
 		push_error("PersistentHydrologySystem: reach store initialization failed (%d)." % int(err))
@@ -50,3 +50,10 @@ func river_reach_state(cell: int) -> Dictionary:
 		return {}
 	return reach_store.river_reaches.reach_state(cell, reach_store.channel_storage_m3[cell]) \
 		if cell >= 0 and cell < reach_store.cell_count() else {}
+
+
+func suggested_channel_tile_volume_m3(cell: int, fine_tile_span_m: float) -> float:
+	if _store == null or not (_store is PlanetHydrologyRiverPromotionStore):
+		return 0.0
+	return (_store as PlanetHydrologyRiverPromotionStore).suggested_channel_tile_volume_m3(
+		cell, fine_tile_span_m)
