@@ -11,7 +11,7 @@ extends HydroRiverReachCouplingCollapse
 ## Component mode is conservative and opportunistic. It activates only when the
 ## CPU component contract proves every internal upstream reach is fully represented,
 ## has no residual coarse parcel, and the corresponding sparse boundary members are
-## cardinally connected. Otherwise the existing per-reach exchange remains active.
+## physically/corridor continuous. Otherwise the existing per-reach exchange remains active.
 
 var _pending_component_count := 0
 var _pending_component_fallback_count := 0
@@ -121,7 +121,7 @@ func _on_runtime_cycle_completed(_cycle_id: int, report: Dictionary) -> void:
 			if all_registered:
 				var component_plan := HydroRiverComponentExchangePlanner.plan(
 					cluster_store, component_id, _records, dt, mouth_cells,
-					runtime.atlas.cell_size_m)
+					runtime.atlas.cell_size_m, runtime.atlas.tile_resolution)
 				if int(component_plan.get("error", FAILED)) == OK:
 					var planned_records := component_plan.get("exchange_records", []) as Array
 					for planned: Variant in planned_records:
@@ -397,7 +397,8 @@ func stats() -> Dictionary:
 			if component_id < 0 or seen_components.has(component_id):
 				continue
 			seen_components[component_id] = true
-			var contract := HydroRiverComponentCouplingContract.evaluate(cluster_store, component_id)
+			var contract := HydroRiverComponentCouplingContract.evaluate(cluster_store, component_id,
+				runtime.atlas.tile_resolution, runtime.atlas.cell_size_m)
 			if int(contract.get("error", FAILED)) == OK and bool(contract.get("ready", false)):
 				ready_components += 1
 		out["registered_refined_components"] = seen_components.size()
