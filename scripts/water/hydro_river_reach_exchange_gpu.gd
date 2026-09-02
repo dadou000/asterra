@@ -1,11 +1,11 @@
 class_name HydroRiverReachExchangeGPU
 extends Node
-## Compact operator-split river exchange dispatcher.
+## Compact operator-split river boundary exchange dispatcher.
 ##
 ## One 64-byte record describes one resident sparse river member. Boundary flags
-## select whether that member owns the external upstream and/or downstream mouth.
-## Multi-tile clusters therefore exchange only at their two outer ends while normal
-## sparse SWE carries water across internal member interfaces.
+## select upstream/downstream mouths. Branched junction members may request centered
+## upstream injection so local coarse inflow enters the wet junction core instead of
+## being projected onto an arbitrary straight incoming edge.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -18,6 +18,7 @@ const RESULT_BYTES := 16
 const PARAM_BYTES := 32
 const FLAG_UPSTREAM := 1
 const FLAG_DOWNSTREAM := 2
+const FLAG_UPSTREAM_CENTERED := 4
 
 var max_records := 256
 
@@ -64,7 +65,7 @@ func pending() -> bool:
 ## Record contract:
 ## {cell, slot, center_cell:Vector2, direction_cell:Vector2, half_width_m,
 ##  add_volume_m3, exchange_dt_s, mouth_cells, add_velocity:Vector2,
-##  upstream_enabled=true, downstream_enabled=true}
+##  upstream_enabled=true, downstream_enabled=true, upstream_centered=false}
 func exchange(records: Array[Dictionary]) -> int:
 	if not _initialized or _exchange_pending or records.is_empty() \
 			or records.size() > max_records:
@@ -89,6 +90,8 @@ func exchange(records: Array[Dictionary]) -> int:
 			flags |= FLAG_UPSTREAM
 		if bool(rec.get("downstream_enabled", true)):
 			flags |= FLAG_DOWNSTREAM
+		if bool(rec.get("upstream_centered", false)):
+			flags |= FLAG_UPSTREAM_CENTERED
 		_pending_cells[i] = cell
 		var o := i * RECORD_BYTES
 		bytes.encode_u32(o + 0, slot)
