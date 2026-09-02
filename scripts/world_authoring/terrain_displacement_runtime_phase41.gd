@@ -11,13 +11,14 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd"
 ##   0 latitude, 1 latitude inverted, 2 longitude, 3 longitude inverted.
 ## Geographic Region is not a new GPU opcode: one serialized node lowers to a
 ## latitude opcode, a longitude opcode and Multiply. Invert adds 1 - intersection.
-## Opcode 28 is the spherical Radial Area primitive. Positive p.w is an ordinary
-## cap with exterior feather. Negative p.w is an internal outside-cap selector with
-## inward feather; Ring Area multiplies that inner selector by an ordinary outer cap.
-## Direct Radial Area authoring never emits a negative feather.
+## Opcode 28 is the spherical Radial Area primitive. p.w >= 0 is an ordinary cap
+## with exterior feather. p.w <= -181 is an internal outside-cap selector whose
+## inward feather is decoded as -p.w - 181; this keeps zero feather unambiguous.
+## Direct Radial Area authoring never emits the private negative range.
 
 const OP_LATITUDE_MASK: int = 27
 const OP_RADIAL_MASK: int = 28
+const RADIAL_INNER_MODE_OFFSET: float = 181.0
 const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
 const MASK_AXIS_LATITUDE := "latitude"
 const MASK_AXIS_LONGITUDE := "longitude"
@@ -163,12 +164,11 @@ func _compile_ring_area(parameters: Dictionary) -> int:
 			inner_radius_deg, outer_radius_deg, feather_deg):
 		return -1
 
-	# The inner selector uses opcode 28's private negative-feather mode: it is 1 at
-	# and beyond the inner radius, with its fade occurring inward into the center
-	# hole. The outer selector is the ordinary Radial Area cap. Multiplication gives
-	# an exact spherical annulus while keeping both requested boundaries fully 1.0.
+	# The private p.w range <= -181 keeps inner-mode identity distinct even when
+	# the authored feather is exactly zero (where a sign-only -0.0 marker fails).
+	var inner_mode_w: float = -(RADIAL_INNER_MODE_OFFSET + feather_deg)
 	var inner_instruction: int = _append_instruction(OP_RADIAL_MASK, -1, -1, -1,
-		Vector4(center_latitude_deg, center_longitude_deg, inner_radius_deg, -feather_deg))
+		Vector4(center_latitude_deg, center_longitude_deg, inner_radius_deg, inner_mode_w))
 	if inner_instruction < 0:
 		return -1
 	var outer_instruction: int = _append_instruction(OP_RADIAL_MASK, -1, -1, -1,
@@ -355,9 +355,6 @@ func _compiled_program_bounds() -> Dictionary:
 			OP_NOISE:
 				out = _bound(-1.0, 1.0)
 			OP_LATITUDE_MASK, OP_RADIAL_MASK:
-				# Spatial localization is deliberately NOT used to shrink culling bounds.
-				# Only the scalar range is propagated, preserving one global conservative
-				# displacement envelope across every cube face and planet-space mask.
 				out = _bound(0.0, 1.0)
 			OP_ADD:
 				out = _add_bounds(a, b, 1.0)
@@ -452,7 +449,6 @@ static func longitude_mask_value(direction: Vector3, west_deg: float,
 
 
 static func _longitude_mask_value(direction_normalized: Vector3, parameters: Vector4) -> float:
-	# Coordinate convention matches the GPU VM: 0° = +Z and +90° = +X.
 	var longitude_deg: float = rad_to_deg(atan2(direction_normalized.x, direction_normalized.z))
 	var west_deg: float = _wrap_degrees(parameters.x)
 	var east_deg: float = _wrap_degrees(parameters.y)
@@ -494,12 +490,11 @@ static func _radial_mask_value(direction_normalized: Vector3, parameters: Vector
 	var angle_deg: float = rad_to_deg(acos(clampf(
 		direction_normalized.dot(center_direction), -1.0, 1.0)))
 	var radius_deg: float = maxf(parameters.z, 0.0)
-	var signed_feather_deg: float = parameters.w
-	var feather_deg: float = absf(signed_feather_deg)
+	var inner_mode: bool = parameters.w <= -RADIAL_INNER_MODE_OFFSET
+	var feather_deg: float = maxf(-parameters.w - RADIAL_INNER_MODE_OFFSET, 0.0) \
+		if inner_mode else maxf(parameters.w, 0.0)
 
-	if signed_feather_deg < 0.0:
-		# Internal Ring Area inner-edge mode. The selected side is outside the cap,
-		# including the exact radius. Feather lies only inside the excluded hole.
+	if inner_mode:
 		if angle_deg >= radius_deg:
 			return 1.0
 		if feather_deg <= 1e-6:
