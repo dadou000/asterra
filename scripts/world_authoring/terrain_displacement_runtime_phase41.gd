@@ -11,12 +11,17 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd"
 ##   0 latitude, 1 latitude inverted, 2 longitude, 3 longitude inverted.
 ## Geographic Region is not a new GPU opcode: one serialized node lowers to a
 ## latitude opcode, a longitude opcode and Multiply. Invert adds 1 - intersection.
+## Opcode 28 is the spherical Radial Area primitive. It stores center latitude,
+## center longitude, angular radius and exterior feather in one vec4. Inversion is
+## lowered with the existing Const/Sub opcodes instead of being hidden in its ABI.
 
 const OP_LATITUDE_MASK: int = 27
+const OP_RADIAL_MASK: int = 28
 const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
 const MASK_AXIS_LATITUDE := "latitude"
 const MASK_AXIS_LONGITUDE := "longitude"
 const MASK_AXIS_REGION := "region"
+const MASK_AXIS_RADIAL := "radial"
 
 
 func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
@@ -33,6 +38,11 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 				if region_instruction >= 0:
 					memo[node_id] = region_instruction
 				return region_instruction
+			if axis == MASK_AXIS_RADIAL:
+				var radial_instruction: int = _compile_radial_area(parameters)
+				if radial_instruction >= 0:
+					memo[node_id] = radial_instruction
+				return radial_instruction
 
 			var edge_a_deg: float = float(parameters.get("south_deg", -30.0))
 			var edge_b_deg: float = float(parameters.get("north_deg", 30.0))
@@ -52,7 +62,7 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 						return -1
 					axis_code = 2.0
 				_:
-					_warnings.append("Spatial Band axis must be latitude, longitude or region; candidate rejected.")
+					_warnings.append("Spatial Mask axis must be latitude, longitude, region or radial; candidate rejected.")
 					return -1
 			var flags: float = axis_code + (1.0 if invert_mask else 0.0)
 			var instruction: int = _append_instruction(OP_LATITUDE_MASK, -1, -1, -1,
@@ -107,6 +117,32 @@ func _compile_geographic_region(parameters: Dictionary) -> int:
 		Vector4.ZERO)
 
 
+func _compile_radial_area(parameters: Dictionary) -> int:
+	var center_latitude_deg: float = float(parameters.get("center_latitude_deg", 0.0))
+	var center_longitude_deg: float = float(parameters.get("center_longitude_deg", 0.0))
+	var radius_deg: float = float(parameters.get("radius_deg", 15.0))
+	var feather_deg: float = float(parameters.get("feather_deg", 5.0))
+	var invert_mask: bool = bool(parameters.get("invert", false))
+	if not is_finite(center_latitude_deg) or not is_finite(center_longitude_deg) \
+			or not is_finite(radius_deg) or not is_finite(feather_deg):
+		_warnings.append("Radial Area contains a non-finite setting; candidate rejected.")
+		return -1
+	if not _valid_radial_area(center_latitude_deg, center_longitude_deg,
+			radius_deg, feather_deg):
+		return -1
+
+	var radial_instruction: int = _append_instruction(OP_RADIAL_MASK, -1, -1, -1,
+		Vector4(center_latitude_deg, center_longitude_deg, radius_deg, feather_deg))
+	if radial_instruction < 0 or not invert_mask:
+		return radial_instruction
+	var one_instruction: int = _append_instruction(OP_CONST, -1, -1, -1,
+		Vector4(1.0, 0.0, 0.0, 0.0))
+	if one_instruction < 0:
+		return -1
+	return _append_instruction(OP_SUB, one_instruction, radial_instruction, -1,
+		Vector4.ZERO)
+
+
 func _valid_latitude_band(south_deg: float, north_deg: float, feather_deg: float) -> bool:
 	if south_deg < -90.0 or south_deg > 90.0 \
 			or north_deg < -90.0 or north_deg > 90.0:
@@ -125,6 +161,23 @@ func _valid_longitude_band(west_deg: float, east_deg: float, feather_deg: float)
 		return false
 	if feather_deg < 0.0 or feather_deg > 180.0:
 		_warnings.append("Longitude Mask feather must stay between 0 and 180 degrees; candidate rejected.")
+		return false
+	return true
+
+
+func _valid_radial_area(center_latitude_deg: float, center_longitude_deg: float,
+		radius_deg: float, feather_deg: float) -> bool:
+	if center_latitude_deg < -90.0 or center_latitude_deg > 90.0:
+		_warnings.append("Radial Area center latitude must stay between -90 and +90 degrees; candidate rejected.")
+		return false
+	if center_longitude_deg < -180.0 or center_longitude_deg > 180.0:
+		_warnings.append("Radial Area center longitude must stay between -180 and +180 degrees; candidate rejected.")
+		return false
+	if radius_deg < 0.0 or radius_deg > 180.0:
+		_warnings.append("Radial Area radius must stay between 0 and 180 degrees; candidate rejected.")
+		return false
+	if feather_deg < 0.0 or feather_deg > 180.0:
+		_warnings.append("Radial Area feather must stay between 0 and 180 degrees; candidate rejected.")
 		return false
 	return true
 
@@ -161,6 +214,7 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 			OP_LATITUDE_MASK:
 				out = _longitude_mask_value(d, p) if int(round(p.w)) >= 2 \
 					else _latitude_mask_value(d, p)
+			OP_RADIAL_MASK: out = _radial_mask_value(d, p)
 			OP_NOISE: out = _value_noise_3d(d * p.x, int(round(p.y)))
 			OP_ADD: out = a + b
 			OP_SUB: out = a - b
@@ -242,7 +296,7 @@ func _compiled_program_bounds() -> Dictionary:
 				out = _unknown_bound("time-dependent displacement has no static bound yet")
 			OP_NOISE:
 				out = _bound(-1.0, 1.0)
-			OP_LATITUDE_MASK:
+			OP_LATITUDE_MASK, OP_RADIAL_MASK:
 				# Spatial localization is deliberately NOT used to shrink culling bounds.
 				# Only the scalar range is propagated, preserving one global conservative
 				# displacement envelope across every cube face and planet-space mask.
@@ -364,6 +418,36 @@ static func _longitude_mask_value(direction_normalized: Vector3, parameters: Vec
 	return 1.0 - value if (int(round(parameters.w)) & 1) != 0 else value
 
 
+static func radial_mask_value(direction: Vector3, center_latitude_deg: float,
+		center_longitude_deg: float, radius_deg: float, feather_deg: float = 5.0,
+		invert_mask: bool = false) -> float:
+	if direction.length_squared() <= 1e-12:
+		return 0.0
+	var value: float = _radial_mask_value(direction.normalized(),
+		Vector4(center_latitude_deg, center_longitude_deg, radius_deg, feather_deg))
+	return 1.0 - value if invert_mask else value
+
+
+static func _radial_mask_value(direction_normalized: Vector3, parameters: Vector4) -> float:
+	var latitude_rad: float = deg_to_rad(parameters.x)
+	var longitude_rad: float = deg_to_rad(parameters.y)
+	var cos_latitude: float = cos(latitude_rad)
+	var center_direction := Vector3(
+		sin(longitude_rad) * cos_latitude,
+		sin(latitude_rad),
+		cos(longitude_rad) * cos_latitude)
+	var angle_deg: float = rad_to_deg(acos(clampf(
+		direction_normalized.dot(center_direction), -1.0, 1.0)))
+	var radius_deg: float = maxf(parameters.z, 0.0)
+	var feather_deg: float = maxf(parameters.w, 0.0)
+	if radius_deg >= 180.0 - 1e-6 or angle_deg <= radius_deg:
+		return 1.0
+	if feather_deg <= 1e-6:
+		return 0.0
+	return clampf(1.0 - _smoothstep_static(radius_deg,
+		radius_deg + feather_deg, angle_deg), 0.0, 1.0)
+
+
 static func _wrap_degrees(degrees: float) -> float:
 	return fposmod(degrees + 180.0, 360.0) - 180.0
 
@@ -378,8 +462,11 @@ static func _smoothstep_static(edge0: float, edge1: float, value: float) -> floa
 func stats() -> Dictionary:
 	var out: Dictionary = super.stats()
 	out["latitude_mask_opcode"] = OP_LATITUDE_MASK
+	out["radial_mask_opcode"] = OP_RADIAL_MASK
 	out["spatial_latitude_mask"] = true
 	out["spatial_longitude_mask"] = true
 	out["spatial_geographic_region_mask"] = true
+	out["spatial_radial_mask"] = true
 	out["geographic_region_lowering"] = "latitude*longitude; invert=1-region"
+	out["radial_mask_metric"] = "great_circle_angle"
 	return out
