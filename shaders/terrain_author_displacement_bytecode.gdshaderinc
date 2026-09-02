@@ -39,6 +39,22 @@ float ad_terrain_fbm(vec3 direction, float scale, int seed, int passes) {
 	return normalizer > 0.0 ? total / normalizer : 0.0;
 }
 
+float ad_latitude_mask(vec3 direction, vec4 p) {
+	vec3 d = normalize(direction);
+	float latitude_deg = asin(clamp(d.y, -1.0, 1.0)) * 57.29577951308232;
+	float south_deg = min(p.x, p.y);
+	float north_deg = max(p.x, p.y);
+	float feather_deg = max(p.z, 0.0);
+	float lower = latitude_deg >= south_deg ? 1.0 : 0.0;
+	float upper = latitude_deg <= north_deg ? 1.0 : 0.0;
+	if (feather_deg > 1e-6) {
+		lower = smoothstep(south_deg - feather_deg, south_deg, latitude_deg);
+		upper = 1.0 - smoothstep(north_deg, north_deg + feather_deg, latitude_deg);
+	}
+	float value = clamp(lower * upper, 0.0, 1.0);
+	return p.w >= 0.5 ? 1.0 - value : value;
+}
+
 float ad_reg(float values[AUTHOR_DISP_MAX_INSTRUCTIONS], int index, int current) {
 	if (index < 0 || index >= current || index >= AUTHOR_DISP_MAX_INSTRUCTIONS) return 0.0;
 	return values[index];
@@ -86,6 +102,7 @@ float author_displacement_height_with_sculpt(vec3 direction, float base_height_m
 		else if (op == 24) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float channel = clamp(1.0 - abs(field), 0.0, 1.0); v = a - channel * channel * channel * p.y; }
 		else if (op == 25) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0); v = a + deposit * deposit * p.y; }
 		else if (op == 26) v = sculpt_delta_m;
+		else if (op == 27) v = ad_latitude_mask(direction, p);
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];
