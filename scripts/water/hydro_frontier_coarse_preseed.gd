@@ -17,7 +17,9 @@ extends Node
 ## A committed preseed remains *provisional* until the activation pipeline calls
 ## finalize_tile(). If a later edge handoff/connectivity step fails, restore_tile()
 ## returns the exact committed surface/channel categories to coarse storage while
-## the hidden/released sparse bytes cease to be authoritative.
+## the hidden/released sparse bytes cease to be authoritative. A restore that is
+## temporarily blocked by another pending promotion is retained and retried as soon
+## as the ownership store has no unresolved reservations.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -34,6 +36,7 @@ var _initialized := false
 var _next_request_id := 1
 var _pending_by_seed_request: Dictionary = {} # seed request -> request dictionary
 var _committed_by_tile: Dictionary = {} # tile id -> committed transfer awaiting activation finalization
+var _restore_requested: Dictionary = {} # tile id -> true; retry when store reservations drain
 
 
 func initialize(p_store: PlanetHydrologyOwnershipStore,
@@ -71,6 +74,10 @@ func pending_count() -> int:
 
 func provisional_commit_count() -> int:
 	return _committed_by_tile.size()
+
+
+func deferred_restore_count() -> int:
+	return _restore_requested.size()
 
 
 func has_provisional_tile(tile_id: int) -> bool:
@@ -155,15 +162,20 @@ func suggested_volume_m3(key: HydroTileKey) -> float:
 ## Activation/connectivity succeeded: the fine tile is now authoritative and the
 ## committed transfer no longer needs rollback metadata.
 func finalize_tile(tile_id: int) -> bool:
+	_restore_requested.erase(tile_id)
 	return _committed_by_tile.erase(tile_id)
 
 
 ## Activation/handoff failed after coarse commit. Return the exact categories that
-## commit_promotion() removed. The caller must ensure the fine tile is unpublished.
+## commit_promotion() removed. If another coarse reservation is still outstanding,
+## remember the request rather than dropping it; a later seed completion/failure
+## retries once the store barrier is clear.
 func restore_tile(tile_id: int) -> Dictionary:
 	var value: Variant = _committed_by_tile.get(tile_id, null)
 	if not (value is Dictionary) or store == null:
+		_restore_requested.erase(tile_id)
 		return {"error": ERR_DOES_NOT_EXIST, "tile_id": tile_id}
+	_restore_requested[tile_id] = true
 	var committed: Dictionary = value
 	var cell := int(committed.get("cell", -1))
 	var surface := float(committed.get("reserved_surface_volume_m3", 0.0))
@@ -171,6 +183,7 @@ func restore_tile(tile_id: int) -> Dictionary:
 	var result := store.accept_demotion(cell, surface, channel)
 	if int(result.get("error", FAILED)) == OK:
 		_committed_by_tile.erase(tile_id)
+		_restore_requested.erase(tile_id)
 	return result
 
 
@@ -189,11 +202,17 @@ func _on_seed_recorded(seed_request_id: int, slot: int,
 	if slot != expected_slot or absf(represented_volume_m3 - expected_volume) \
 			> maxf(1.0e-7, absf(expected_volume) * 1.0e-7):
 		store.rollback_promotion(transaction_id)
+		_retry_requested_restores()
 		preseed_failed.emit(request_id, tile_id, expected_slot,
 			ERR_INVALID_DATA, "seed_ack")
 		return
 	var committed := store.commit_promotion(transaction_id)
 	if int(committed.get("error", FAILED)) != OK:
+		# commit_promotion() keeps a rejected transaction pending. Release that
+		# reservation explicitly so the coarse store cannot remain globally blocked.
+		if not store.promotion_transaction(transaction_id).is_empty():
+			store.rollback_promotion(transaction_id)
+		_retry_requested_restores()
 		preseed_failed.emit(request_id, tile_id, expected_slot,
 			int(committed.get("error", ERR_INVALID_DATA)), "coarse_commit")
 		return
@@ -206,6 +225,7 @@ func _on_seed_recorded(seed_request_id: int, slot: int,
 	# Keep enough information to reverse the coarse debit until sparse activation
 	# and connectivity have both succeeded.
 	_committed_by_tile[tile_id] = report.duplicate(true)
+	_retry_requested_restores()
 	preseed_completed.emit(request_id, tile_id, expected_slot, report)
 
 
@@ -216,11 +236,29 @@ func _on_seed_failed(seed_request_id: int, error: Error) -> void:
 	var pending: Dictionary = value
 	_pending_by_seed_request.erase(seed_request_id)
 	var transaction_id := int(pending.get("transaction_id", -1))
-	if transaction_id >= 0:
+	if transaction_id >= 0 and not store.promotion_transaction(transaction_id).is_empty():
 		store.rollback_promotion(transaction_id)
+	_retry_requested_restores()
 	preseed_failed.emit(int(pending.get("request_id", -1)),
 		int(pending.get("tile_id", -1)), int(pending.get("slot", -1)),
 		error, "seed")
+
+
+func _retry_requested_restores() -> void:
+	if store == null or store.pending_promotion_count() > 0 \
+			or _restore_requested.is_empty():
+		return
+	var requested := _restore_requested.keys()
+	for tile_variant: Variant in requested:
+		var tile_id := int(tile_variant)
+		if not _committed_by_tile.has(tile_id):
+			_restore_requested.erase(tile_id)
+			continue
+		var result := restore_tile(tile_id)
+		var error := int(result.get("error", FAILED))
+		if error != OK and error != ERR_BUSY:
+			push_error("HydroFrontierCoarsePreseed: deferred restore failed for tile %d (%d)." % [
+				tile_id, error])
 
 
 static func _tile_center_dir(key: HydroTileKey) -> Vector3:
@@ -245,15 +283,20 @@ func release() -> void:
 	for value: Variant in _pending_by_seed_request.values():
 		if value is Dictionary:
 			var transaction_id := int((value as Dictionary).get("transaction_id", -1))
-			if transaction_id >= 0 and store != null:
+			if transaction_id >= 0 and store != null \
+					and not store.promotion_transaction(transaction_id).is_empty():
 				store.rollback_promotion(transaction_id)
 	_pending_by_seed_request.clear()
 	# Any committed-but-unfinalized seed still belongs to an unpublished/failed
-	# frontier tile. Return it to coarse before this coordinator disappears.
+	# frontier tile. With all reservations released, every demotion can complete now.
 	var committed_ids := _committed_by_tile.keys()
 	for tile_variant: Variant in committed_ids:
-		restore_tile(int(tile_variant))
+		var result := restore_tile(int(tile_variant))
+		if int(result.get("error", FAILED)) != OK:
+			push_error("HydroFrontierCoarsePreseed: release restore failed for tile %d (%d)." % [
+				int(tile_variant), int(result.get("error", FAILED))])
 	_committed_by_tile.clear()
+	_restore_requested.clear()
 	if seeder != null and is_instance_valid(seeder):
 		seeder.release()
 		seeder.queue_free()
