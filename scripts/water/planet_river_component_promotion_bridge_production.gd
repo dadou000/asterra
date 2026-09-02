@@ -44,8 +44,23 @@ func _fail(error: Error, stage: String) -> void:
 
 func _published_report() -> Dictionary:
 	var report := super._published_report()
-	# Preserve the existing river promotion signal convention: component events use
-	# the downstream outlet as their representative coarse cell while retaining the
-	# full `cells` array and `component_id` in the report.
-	report["cell"] = int(report.get("downstream_outlet_cell", -1))
+	# Preserve the existing single-reach promotion signal convention. The component
+	# outlet is the representative cell and its first member supplies a representative
+	# tile/slot; complete component identity remains available in the graph fields.
+	var outlet_cell := int(report.get("downstream_outlet_cell", -1))
+	report["cell"] = outlet_cell
+	var reach_reports_value: Variant = report.get("reach_reports", null)
+	if reach_reports_value is Array:
+		for value: Variant in reach_reports_value:
+			if not (value is Dictionary):
+				continue
+			var reach := value as Dictionary
+			if int(reach.get("cell", -1)) != outlet_cell:
+				continue
+			var members_value: Variant = reach.get("members", null)
+			if members_value is Array and not (members_value as Array).is_empty():
+				var member := (members_value as Array)[0] as Dictionary
+				report["tile_id"] = int(member.get("tile_id", -1))
+				report["slot"] = int(member.get("slot", -1))
+			break
 	return report
