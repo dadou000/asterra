@@ -8,11 +8,13 @@ on:
       - "scripts/world_authoring/terrain_displacement_runtime*.gd"
       - "scripts/world_authoring/model/terrain_*.gd"
       - "scripts/world_authoring/validate_production_geomorph_equivalence_ci.gd"
+      - "scripts/world_authoring/validate_native_production_stage_graph_ci.gd"
       - "shaders/gpu_geomorph.gdshaderinc"
       - "shaders/spherical_geometry_clipmap_cached_surface.gdshader"
       - "tests/validate_terrain_program_transaction_phase33.gd"
       - "tests/validate_terrain_program_transaction_phase33.tscn"
       - "tests/validate_production_geomorph_equivalence_ci.tscn"
+      - "tests/validate_native_production_stage_graph_ci.tscn"
       - ".github/workflows/terrain-program-transaction-validate.yml"
   workflow_dispatch:
 
@@ -112,6 +114,21 @@ jobs:
           grep -q "PRODUCTION_GEOMORPH_EQUIVALENCE_OK" /tmp/production-geomorph-equivalence.log
           ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|PRODUCTION_GEOMORPH_EQUIVALENCE_FAILED" /tmp/production-geomorph-equivalence.log
 
+      - name: Validate native production stage graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-transaction-ci
+          set +e
+          timeout 20 "$GODOT" --headless --path "$TEST_PROJECT" res://tests/validate_native_production_stage_graph_ci.tscn > /tmp/native-production-stage-graph.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/native-production-stage-graph.log
+          [ "$status" -eq 0 ]
+          grep -q "NATIVE_PRODUCTION_STAGE_GRAPH_OK" /tmp/native-production-stage-graph.log
+          ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|NATIVE_PRODUCTION_STAGE_GRAPH_FAILED" /tmp/native-production-stage-graph.log
+
       - name: Upload validation logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -121,5 +138,6 @@ jobs:
             /tmp/terrain-transaction-import.log
             /tmp/terrain-transaction.log
             /tmp/production-geomorph-equivalence.log
+            /tmp/native-production-stage-graph.log
           if-no-files-found: ignore
           retention-days: 7
