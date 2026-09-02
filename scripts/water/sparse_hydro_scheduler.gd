@@ -2,9 +2,9 @@ class_name SparseHydroScheduler
 extends RefCounted
 ## Phase 3 CPU-side policy layer for sparse hydrology activity.
 ##
-## GPU kernels will eventually produce the activity/boundary summaries consumed
-## here. This scheduler owns representation policy only: which stable tile IDs
-## deserve transient slots, when neighbors wake, and when quiet dry tiles recycle.
+## GPU kernels produce compact activity/boundary summaries; this scheduler owns
+## representation policy only: which stable tile IDs deserve transient slots,
+## when exact cube-sphere neighbors wake, and when quiet tiles recycle/freeze.
 
 signal tile_woken(tile_id: int, slot: int, reason: String)
 signal tile_settling(tile_id: int)
@@ -12,10 +12,10 @@ signal tile_slept(tile_id: int, released_slot: int)
 signal tile_frozen(tile_id: int)
 signal allocation_failed(tile_id: int, reason: String)
 
-const DIR_WEST := 0
-const DIR_EAST := 1
-const DIR_SOUTH := 2
-const DIR_NORTH := 3
+const DIR_WEST := HydroTileTopology.DIR_WEST
+const DIR_EAST := HydroTileTopology.DIR_EAST
+const DIR_SOUTH := HydroTileTopology.DIR_SOUTH
+const DIR_NORTH := HydroTileTopology.DIR_NORTH
 
 var pool: HydroTilePool
 var wake_flux_threshold_m3s := 0.01
@@ -49,7 +49,7 @@ func wake(key: HydroTileKey, physical_lod: int = 0, reason: String = "frontier")
 	return slot
 
 
-## Called with compact per-tile reductions from the GPU. quiet_dt_s is the elapsed
+## Called with compact per-tile reductions from the GPU. quiet_dt_s is elapsed
 ## physical simulation time represented by this report, not wall-clock time.
 func report_activity(key: HydroTileKey, max_depth_m: float,
 		max_velocity_mps: float, max_outgoing_flux_m3s: float,
@@ -88,23 +88,34 @@ func report_activity(key: HydroTileKey, max_depth_m: float,
 		tile_frozen.emit(key.packed())
 
 
-## Wake a same-face neighbor only when an outgoing boundary flux is both large
-## enough and topologically reachable. Cube-face seam routing is intentionally
-## delegated to the future planetary neighbor mapper rather than guessed here.
+## Resolve the destination from Asterra's exact cube-sphere topology, including
+## cross-face seams. Reachability remains explicit: topology says *which* tile is
+## adjacent; terrain/banks/structures decide whether flux can actually enter it.
 func report_boundary_flux(key: HydroTileKey, direction: int, flux_m3s: float,
 		reachable: bool, neighbor_lod: int = -1) -> int:
-	if key == null or not reachable or flux_m3s <= wake_flux_threshold_m3s:
+	if key == null:
 		return -1
-	var delta := _direction_delta(direction)
-	if delta == Vector2i.ZERO:
+	var link := HydroTileTopology.neighbor(key, direction)
+	if link.is_empty():
 		return -1
-	var neighbor := key.same_face_neighbor(delta.x, delta.y)
-	if neighbor == null:
+	return report_resolved_boundary_flux(key, link["key"], flux_m3s,
+		reachable, neighbor_lod)
+
+
+## Explicit destination variant used by the compact GPU frontier resolver. It is
+## also the future entry point for coarse/fine topology where the destination may
+## not be the same quadtree level as the source.
+func report_resolved_boundary_flux(source: HydroTileKey, destination: HydroTileKey,
+		flux_m3s: float, reachable: bool, neighbor_lod: int = -1) -> int:
+	if source == null or destination == null or not reachable \
+			or flux_m3s <= wake_flux_threshold_m3s:
 		return -1
-	var source_record := pool.record(key)
+	var source_record := pool.record(source)
+	if source_record.is_empty():
+		return -1
 	var inherited_lod := int(source_record.get("physical_lod", 0))
 	var physical_lod := inherited_lod if neighbor_lod < 0 else maxi(neighbor_lod, 0)
-	return wake(neighbor, physical_lod, "boundary_flux")
+	return wake(destination, physical_lod, "boundary_flux")
 
 
 func thaw(key: HydroTileKey, reason: String = "disturbance") -> int:
@@ -112,8 +123,7 @@ func thaw(key: HydroTileKey, reason: String = "disturbance") -> int:
 		return -1
 	if not pool.contains(key):
 		# No previous transient record exists, so the caller must decide the desired
-		# physical representation. The default is the finest local level (0), not
-		# the quadtree address depth.
+		# physical representation. Default is finest local level 0, never key.level.
 		return wake(key, 0, reason)
 	pool.set_state(key, HydroTilePool.TileState.ACTIVE, reason)
 	pool.reset_quiet_time(key)
@@ -133,12 +143,3 @@ func stats() -> Dictionary:
 	result["settle_time_s"] = settle_time_s
 	result["sleep_time_s"] = sleep_time_s
 	return result
-
-
-func _direction_delta(direction: int) -> Vector2i:
-	match direction:
-		DIR_WEST: return Vector2i(-1, 0)
-		DIR_EAST: return Vector2i(1, 0)
-		DIR_SOUTH: return Vector2i(0, -1)
-		DIR_NORTH: return Vector2i(0, 1)
-	return Vector2i.ZERO
