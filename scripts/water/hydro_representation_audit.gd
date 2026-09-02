@@ -180,7 +180,7 @@ func _on_sparse_volume_ready(request_id: int, fine_volume_m3: float) -> void:
 	var environmental_residual := combined_storage - expected_owned_after_outlet
 	var net_promoted := promoted - demoted
 	var fine_minus_net_promoted := fine_volume_m3 - net_promoted
-	var scale := maxf(absf(external_budget_before_outlet), absf(combined_storage), 1.0)
+	var scale := maxf(maxf(absf(external_budget_before_outlet), absf(combined_storage)), 1.0)
 	var tolerance := maxf(_abs_tolerance_m3, scale * _relative_tolerance)
 	var strict_testable := fine_ledger_complete or _expect_closed_external_balance
 	var strict_pass := absf(environmental_residual) <= tolerance
