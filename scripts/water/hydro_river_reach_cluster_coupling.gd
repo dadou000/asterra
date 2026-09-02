@@ -2,11 +2,23 @@ class_name HydroRiverReachClusterCoupling
 extends HydroRiverReachCouplingCollapse
 ## Continuous 1D <-> sparse-2D coupling for ordered multi-tile river clusters.
 ##
-## A cluster is one coarse refined reach with N sparse members:
-##   1D -> [member 0] -> [member 1] -> ... -> [member N-1] -> residual 1D
+## One coarse reach normally exchanges at its first/last sparse members:
+##   1D -> [member 0] -> ... -> [member N-1] -> residual 1D
 ##
-## Only member 0 owns the upstream exchange mouth. Only the final member owns the
-## downstream exchange mouth. Internal boundaries are normal sparse SWE interfaces.
+## A validated cross-reach component may instead bypass internal coarse mouths:
+##   external/local coarse queues -> fine branches -> shared fine component -> 1D
+##
+## Component mode is conservative and opportunistic. It activates only when the
+## CPU component contract proves every internal upstream reach is fully represented,
+## has no residual coarse parcel, and the corresponding sparse boundary members are
+## cardinally connected. Otherwise the existing per-reach exchange remains active.
+
+var _pending_component_count := 0
+var _pending_component_fallback_count := 0
+var _pending_component_boundary_records := 0
+var _pending_component_injection_records := 0
+var _pending_component_external_mouths := 0
+var _last_component_fallback_reason := ""
 
 
 func register_promoted_reach(report: Dictionary) -> Error:
@@ -78,25 +90,76 @@ func _on_runtime_cycle_completed(_cycle_id: int, report: Dictionary) -> void:
 	var dt := maxf(float(report.get("advanced_dt_s", 0.0)), 0.0)
 	if dt <= 0.0:
 		return
+	_reset_pending_component_context()
+
 	var exchange_records: Array[Dictionary] = []
-	for cell_value: Variant in _records.keys():
-		var cell := int(cell_value)
-		var rec := _records[cell] as Dictionary
-		var members := _record_members(rec)
-		if members.is_empty() or not _members_are_resident_and_connected(members):
-			_fail_closed(ERR_CANT_ACQUIRE_RESOURCE, "cluster_member_identity")
+	var handled: Dictionary = {}
+	var ordered_cells: Array[int] = []
+	for value: Variant in _records.keys():
+		ordered_cells.append(int(value))
+	ordered_cells.sort()
+	var cluster_store := store as PlanetHydrologyRiverClusterStore
+
+	for cell in ordered_cells:
+		if handled.has(cell):
+			continue
+		var component_id := cluster_store.refined_component_id_for_cell(cell)
+		if component_id >= 0:
+			var component := cluster_store.refined_component(component_id)
+			var component_cells := component.get("cells", PackedInt32Array()) as PackedInt32Array
+			var all_registered := not component_cells.is_empty()
+			for raw_component_cell in component_cells:
+				var component_cell := int(raw_component_cell)
+				if not _records.has(component_cell):
+					all_registered = false
+					continue
+				var members := _record_members(_records[component_cell] as Dictionary)
+				if members.is_empty() or not _members_are_resident_and_connected(members):
+					_fail_closed(ERR_CANT_ACQUIRE_RESOURCE, "component_cluster_member_identity")
+					return
+
+			if all_registered:
+				var component_plan := HydroRiverComponentExchangePlanner.plan(
+					cluster_store, component_id, _records, dt, mouth_cells,
+					runtime.atlas.cell_size_m)
+				if int(component_plan.get("error", FAILED)) == OK:
+					var planned_records := component_plan.get("exchange_records", []) as Array
+					for planned: Variant in planned_records:
+						if planned is Dictionary:
+							exchange_records.append((planned as Dictionary).duplicate(true))
+					for raw_component_cell in component_cells:
+						handled[int(raw_component_cell)] = true
+					_pending_component_count += 1
+					_pending_component_boundary_records += int(component_plan.get(
+						"boundary_record_count", 0))
+					_pending_component_injection_records += int(component_plan.get(
+						"injection_record_count", 0))
+					_pending_component_external_mouths += int(component_plan.get(
+						"external_upstream_mouth_count", 0))
+					continue
+				_last_component_fallback_reason = String(component_plan.get(
+					"reason", "component_contract_not_ready"))
+			else:
+				_last_component_fallback_reason = "component_coupling_record_missing"
+
+			# A logical component that is not yet physically/ownership continuous keeps
+			# the proven per-reach mouth semantics. This is a conservative fallback, not
+			# an error: pending water remains associated with its original coarse parcel.
+			_pending_component_fallback_count += 1
+			for raw_component_cell in component_cells:
+				var component_cell := int(raw_component_cell)
+				handled[component_cell] = true
+				if _records.has(component_cell):
+					if not _append_legacy_exchange_records(component_cell, dt, exchange_records):
+						return
+			continue
+
+		handled[cell] = true
+		if not _append_legacy_exchange_records(cell, dt, exchange_records):
 			return
-		var pending_volume := store.refined_inflow_available_m3(cell)
-		var rate := store.refined_inflow_rate(cell)
-		var add_volume := minf(pending_volume, maxf(rate, 0.0) * dt)
-		var first := members[0]
-		var last := members[members.size() - 1]
-		exchange_records.append(_exchange_record(cell, first, add_volume, dt,
-			true, members.size() == 1))
-		if members.size() > 1:
-			exchange_records.append(_exchange_record(cell, last, 0.0, dt,
-				false, true))
+
 	if exchange_records.is_empty():
+		_reset_pending_component_context()
 		return
 
 	_runtime_was_enabled = runtime.enabled
@@ -107,6 +170,28 @@ func _on_runtime_cycle_completed(_cycle_id: int, report: Dictionary) -> void:
 	_pending_request_id = exchange_gpu.exchange(exchange_records)
 	if _pending_request_id < 0:
 		_fail_closed(ERR_BUSY, "cluster_exchange_submit")
+
+
+func _append_legacy_exchange_records(cell: int, dt: float,
+		exchange_records: Array[Dictionary]) -> bool:
+	if not _records.has(cell):
+		return true
+	var rec := _records[cell] as Dictionary
+	var members := _record_members(rec)
+	if members.is_empty() or not _members_are_resident_and_connected(members):
+		_fail_closed(ERR_CANT_ACQUIRE_RESOURCE, "cluster_member_identity")
+		return false
+	var pending_volume := store.refined_inflow_available_m3(cell)
+	var rate := store.refined_inflow_rate(cell)
+	var add_volume := minf(pending_volume, maxf(rate, 0.0) * dt)
+	var first := members[0]
+	var last := members[members.size() - 1]
+	exchange_records.append(_exchange_record(cell, first, add_volume, dt,
+		true, members.size() == 1))
+	if members.size() > 1:
+		exchange_records.append(_exchange_record(cell, last, 0.0, dt,
+			false, true))
+	return true
 
 
 func _on_exchange_ready(request_id: int, results: Array[Dictionary]) -> void:
@@ -158,6 +243,11 @@ func _on_exchange_ready(request_id: int, results: Array[Dictionary]) -> void:
 
 	var completed := _pending_request_id
 	_pending_request_id = -1
+	var component_count := _pending_component_count
+	var fallback_count := _pending_component_fallback_count
+	var component_boundary_records := _pending_component_boundary_records
+	var component_injection_records := _pending_component_injection_records
+	var component_external_mouths := _pending_component_external_mouths
 	var exchange_report := {
 		"request_id": completed,
 		"advanced_dt_s": _pending_advanced_dt_s,
@@ -168,8 +258,15 @@ func _on_exchange_ready(request_id: int, results: Array[Dictionary]) -> void:
 		"max_measured_downstream_q_m3s": max_q,
 		"invalid_record_status": invalid_status,
 		"cluster_boundary_exchange": true,
+		"component_multi_mouth_exchange": component_count > 0,
+		"component_count": component_count,
+		"component_fallback_count": fallback_count,
+		"component_boundary_record_count": component_boundary_records,
+		"component_injection_record_count": component_injection_records,
+		"component_external_upstream_mouth_count": component_external_mouths,
 	}
 	_pending_advanced_dt_s = 0.0
+	_reset_pending_component_context()
 	if invalid_status:
 		_fail_closed(ERR_INVALID_DATA, "cluster_exchange_record_status")
 		return
@@ -177,6 +274,17 @@ func _on_exchange_ready(request_id: int, results: Array[Dictionary]) -> void:
 	exchange_completed.emit(completed, exchange_report)
 	if _release_requested:
 		_finish_release()
+
+
+## Individual suspension would break a component-wide fine topology while leaving
+## the other component mouths live. Until component-level collapse lands, require
+## callers to dissolve the component first rather than creating a partial suspend.
+func suspend_reach(cell: int) -> Dictionary:
+	if store is PlanetHydrologyRiverClusterStore:
+		var cluster_store := store as PlanetHydrologyRiverClusterStore
+		if cluster_store.refined_component_id_for_cell(cell) >= 0:
+			return {"error": ERR_BUSY, "reason": "reach_belongs_to_refined_component"}
+	return super.suspend_reach(cell)
 
 
 func resume_suspended_reach(cell: int) -> Error:
@@ -278,4 +386,39 @@ func stats() -> Dictionary:
 		member_count += members.size()
 	out["multi_tile_clusters"] = cluster_count
 	out["cluster_members"] = member_count
+	out["component_multi_mouth_coupling"] = true
+	out["last_component_fallback_reason"] = _last_component_fallback_reason
+	if store is PlanetHydrologyRiverClusterStore:
+		var cluster_store := store as PlanetHydrologyRiverClusterStore
+		var seen_components: Dictionary = {}
+		var ready_components := 0
+		for cell_value: Variant in _records.keys():
+			var component_id := cluster_store.refined_component_id_for_cell(int(cell_value))
+			if component_id < 0 or seen_components.has(component_id):
+				continue
+			seen_components[component_id] = true
+			var contract := HydroRiverComponentCouplingContract.evaluate(cluster_store, component_id)
+			if int(contract.get("error", FAILED)) == OK and bool(contract.get("ready", false)):
+				ready_components += 1
+		out["registered_refined_components"] = seen_components.size()
+		out["coupling_ready_refined_components"] = ready_components
 	return out
+
+
+func _fail_closed(error: Error, stage: String) -> void:
+	_reset_pending_component_context()
+	super._fail_closed(error, stage)
+
+
+func _reset_pending_component_context() -> void:
+	_pending_component_count = 0
+	_pending_component_fallback_count = 0
+	_pending_component_boundary_records = 0
+	_pending_component_injection_records = 0
+	_pending_component_external_mouths = 0
+
+
+func _finish_release() -> void:
+	_reset_pending_component_context()
+	_last_component_fallback_reason = ""
+	super._finish_release()
