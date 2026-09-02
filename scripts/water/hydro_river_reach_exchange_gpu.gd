@@ -2,9 +2,10 @@ class_name HydroRiverReachExchangeGPU
 extends Node
 ## Compact operator-split river exchange dispatcher.
 ##
-## One 64-byte record describes one already-resident sparse river corridor. The GPU
-## edits canonical A+B at the two corridor mouths and asynchronously returns one
-## 16-byte result per reach. No full water-grid readback and no float atomics.
+## One 64-byte record describes one resident sparse river member. Boundary flags
+## select whether that member owns the external upstream and/or downstream mouth.
+## Multi-tile clusters therefore exchange only at their two outer ends while normal
+## sparse SWE carries water across internal member interfaces.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -15,6 +16,8 @@ signal released
 const RECORD_BYTES := 64
 const RESULT_BYTES := 16
 const PARAM_BYTES := 32
+const FLAG_UPSTREAM := 1
+const FLAG_DOWNSTREAM := 2
 
 var max_records := 256
 
@@ -60,7 +63,8 @@ func pending() -> bool:
 
 ## Record contract:
 ## {cell, slot, center_cell:Vector2, direction_cell:Vector2, half_width_m,
-##  add_volume_m3, exchange_dt_s, mouth_cells, add_velocity:Vector2}
+##  add_volume_m3, exchange_dt_s, mouth_cells, add_velocity:Vector2,
+##  upstream_enabled=true, downstream_enabled=true}
 func exchange(records: Array[Dictionary]) -> int:
 	if not _initialized or _exchange_pending or records.is_empty() \
 			or records.size() > max_records:
@@ -80,10 +84,15 @@ func exchange(records: Array[Dictionary]) -> int:
 		if direction.length_squared() <= 1.0e-12:
 			return -1
 		direction = direction.normalized()
+		var flags := 0
+		if bool(rec.get("upstream_enabled", true)):
+			flags |= FLAG_UPSTREAM
+		if bool(rec.get("downstream_enabled", true)):
+			flags |= FLAG_DOWNSTREAM
 		_pending_cells[i] = cell
 		var o := i * RECORD_BYTES
 		bytes.encode_u32(o + 0, slot)
-		bytes.encode_u32(o + 4, 0); bytes.encode_u32(o + 8, 0); bytes.encode_u32(o + 12, 0)
+		bytes.encode_u32(o + 4, flags); bytes.encode_u32(o + 8, 0); bytes.encode_u32(o + 12, 0)
 		bytes.encode_float(o + 16, center.x); bytes.encode_float(o + 20, center.y)
 		bytes.encode_float(o + 24, direction.x); bytes.encode_float(o + 28, direction.y)
 		bytes.encode_float(o + 32, maxf(float(rec.get("half_width_m", 0.0)), 0.0))
