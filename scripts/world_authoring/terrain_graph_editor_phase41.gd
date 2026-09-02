@@ -12,7 +12,7 @@ const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
 
 func _build_ui() -> void:
 	super._build_ui()
-	_add_phase41_latitude_picker_entry()
+	_sync_phase41_latitude_picker_entry()
 	if _status != null and _latitude_mask_available_here():
 		_status.text = "Live authored displacement: Latitude Mask uses planet-space degrees and the same CPU/contact + GPU bytecode definition. Invalid edits keep the last valid terrain active."
 
@@ -46,45 +46,45 @@ func _on_add_node() -> void:
 	_request_rebuild()
 
 
-func _add_phase41_latitude_picker_entry() -> void:
-	if _node_type_picker == null or not _latitude_mask_available_here():
+func _sync_phase41_latitude_picker_entry() -> void:
+	if _node_type_picker == null:
 		return
+	var existing_index: int = -1
 	for index: int in _node_type_picker.item_count:
 		if String(_node_type_picker.get_item_metadata(index)) == LATITUDE_MASK_TYPE:
-			return
-	_node_type_picker.add_item("Mask  ·  Latitude Band")
-	_node_type_picker.set_item_metadata(
-		_node_type_picker.item_count - 1, LATITUDE_MASK_TYPE)
+			existing_index = index
+			break
+
+	# LATITUDE_MASK is now part of the canonical displacement schema, so inherited
+	# picker construction can see it. Resident Base Terrain is deliberately one step
+	# behind: remove the entry there until native stage provenance can carry a spatial
+	# factor through render, warm cache and physical/contact evaluation identically.
+	if not _latitude_mask_available_here():
+		if existing_index >= 0:
+			_node_type_picker.remove_item(existing_index)
+		return
+
+	if existing_index < 0:
+		_node_type_picker.add_item("Masks  ·  Latitude Band")
+		existing_index = _node_type_picker.item_count - 1
+		_node_type_picker.set_item_metadata(existing_index, LATITUDE_MASK_TYPE)
+	else:
+		_node_type_picker.set_item_text(existing_index, "Masks  ·  Latitude Band")
 	_node_type_picker.tooltip_text = "Latitude Band outputs 0 to 1 from normalized planet-space latitude. Use it with Multiply or Mix in an authored displacement flow."
 
 
 func _latitude_mask_available_here() -> bool:
-	return _graph != null and int(_graph.get(&"domain")) == 0 \
+	return _graph != null and int(_graph.get(&"domain")) == GRAPH_SCRIPT.Domain.DISPLACEMENT \
 		and not _is_native_branch_graph()
 
 
 func _append_latitude_mask_node(position: Vector2) -> void:
 	if _graph == null:
 		return
-	var serial: int = int(Time.get_ticks_usec() % 2147483647)
-	var node_id: String = "latitude_mask_%d" % serial
-	while bool(_graph.call("has_node", node_id)):
-		serial += 1
-		node_id = "latitude_mask_%d" % serial
-	var next_nodes: Array = (_graph.get(&"nodes") as Array).duplicate(true)
-	next_nodes.append({
-		"id":node_id,
-		"type":LATITUDE_MASK_TYPE,
-		"position":position,
-		"parameters":{
-			"south_deg":-30.0,
-			"north_deg":30.0,
-			"feather_deg":5.0,
-			"invert":false,
-		},
-	})
-	_graph.set(&"nodes", next_nodes)
-	_graph.set(&"revision", int(_graph.get(&"revision")) + 1)
+	# Creation now goes through the same canonical schema path as every other node.
+	# Defaults, IDs and revision accounting therefore survive clone/migration/catalog
+	# operations without an editor-only raw-dictionary exception.
+	_graph.call("add_node", LATITUDE_MASK_TYPE, position, {})
 
 
 func _create_latitude_mask_node(node_data: Dictionary) -> void:
