@@ -115,14 +115,16 @@ func reconstruct(anchor_dir: Vector3, anchor_right: Vector3, anchor_up: Vector3,
 	var request_id := _next_request_id
 	_next_request_id += 1
 	_dispatch_pending = true
+	var normalized_dir := anchor_dir.normalized()
+	var normalized_right := anchor_right.normalized()
+	var normalized_up := anchor_up.normalized()
 	var values := PackedFloat32Array([
 		float(_atlas.capacity), float(_atlas.tile_resolution), float(_hydro_level),
 		float(_hash_size - 1),
 		_planet_radius_m, _dry_eps, float(_target_resolution), _target_half_extent_m,
-		anchor_dir.normalized().x, anchor_dir.normalized().y, anchor_dir.normalized().z, 0.0,
-		anchor_right.normalized().x, anchor_right.normalized().y,
-		anchor_right.normalized().z, 0.0,
-		anchor_up.normalized().x, anchor_up.normalized().y, anchor_up.normalized().z, 0.0,
+		normalized_dir.x, normalized_dir.y, normalized_dir.z, 0.0,
+		normalized_right.x, normalized_right.y, normalized_right.z, 0.0,
+		normalized_up.x, normalized_up.y, normalized_up.z, 0.0,
 		target_center_plane.x, target_center_plane.y, maxf(activity_gain, 0.0), 0.0,
 	])
 	RenderingServer.call_on_render_thread(Callable(self, &"_reconstruct_render_thread").bind(
@@ -274,7 +276,7 @@ func _next_power_of_two(value: int) -> int:
 	var out := 1
 	var target := maxi(value, 1)
 	while out < target:
-		out <<= 1
+		out = out << 1
 	return out
 
 
