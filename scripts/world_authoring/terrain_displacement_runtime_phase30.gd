@@ -13,27 +13,58 @@ const PRODUCTION_SHAPE_SLOT_ID := "production-terrain-shape"
 
 
 func compile_from_terrain(terrain: Resource) -> Dictionary:
-	# Keep the visible default graph free. Its generated+sculpt Add is exactly what
-	# the mature renderer already does, so entering the bytecode interpreter would
-	# only waste GPU time. The moment topology/source selection changes, this test is
-	# false and the graph compiles normally.
+	# The visible default graph is an identity view of generated+sculpt terrain and
+	# therefore does not need bytecode. Previous revisions temporarily disabled that
+	# slot on the LIVE authoring Resource while compiling. Interactive editing makes
+	# that unsafe: observers can see the temporary state and stale callbacks can race
+	# it. Build a detached profile instead; the source document is never mutated.
 	if terrain == null:
 		return super.compile_from_terrain(terrain)
-	var skipped: Array[Resource] = []
-	var slots_value: Variant = terrain.get(&"displacement_slots")
+	var source_fingerprint: String = profile_fingerprint(terrain)
+	var compile_profile: Resource = _detached_compile_profile(terrain)
+	if compile_profile == null:
+		return super.compile_from_terrain(terrain)
+
+	var slots_value: Variant = compile_profile.get(&"displacement_slots")
 	if slots_value is Array:
 		for slot_value: Variant in slots_value as Array:
 			var slot: Resource = slot_value as Resource
 			if slot != null and bool(slot.get(&"enabled")) and _is_identity_shape_slot(slot):
 				slot.set(&"enabled", false)
-				skipped.append(slot)
-	var stats: Dictionary = super.compile_from_terrain(terrain)
-	for slot: Resource in skipped:
-		slot.set(&"enabled", true)
-	# super compiled a temporary view with the identity slot disabled. Store the
-	# fingerprint of the restored profile so the runtime does not recompile forever.
-	_fingerprint = profile_fingerprint(terrain)
-	return stats
+
+	var result: Dictionary = super.compile_from_terrain(compile_profile)
+	# The candidate was compiled from the detached view, but polling must compare
+	# against the real authoring document. Retagging changes metadata only; it never
+	# changes bytecode or a material binding.
+	retag_current_profile(source_fingerprint)
+	return stats()
+
+
+func _detached_compile_profile(terrain: Resource) -> Resource:
+	var detached: Resource = terrain.duplicate(false)
+	if detached == null:
+		return null
+	var slots_value: Variant = terrain.get(&"displacement_slots")
+	if not (slots_value is Array):
+		return detached
+	var detached_slots: Array[Resource] = []
+	for slot_value: Variant in slots_value as Array:
+		var source_slot: Resource = slot_value as Resource
+		if source_slot == null:
+			detached_slots.append(null)
+			continue
+		var detached_slot: Resource = source_slot.duplicate(false)
+		if detached_slot == null:
+			return null
+		var source_graph: Resource = source_slot.get(&"graph") as Resource
+		if source_graph != null:
+			var detached_graph: Resource = source_graph.duplicate(true)
+			if detached_graph == null:
+				return null
+			detached_slot.set(&"graph", detached_graph)
+		detached_slots.append(detached_slot)
+	detached.set(&"displacement_slots", detached_slots)
+	return detached
 
 
 func _is_identity_shape_slot(slot: Resource) -> bool:
