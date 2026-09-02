@@ -1,5 +1,5 @@
 extends "res://scripts/world_authoring/terrain_material_runtime_phase31.gd"
-## Phase 32: production surface stage controls.
+## Phase 32/33: production surface stage controls.
 ##
 ## Settings nodes do not run through the per-fragment bytecode interpreter. They
 ## bind the same uniforms/samplers consumed by the existing classifier,
@@ -15,6 +15,10 @@ const CONTROL_TYPES: Array[String] = [
 	"PRODUCTION_ROCK_PBR_SETTINGS",
 	"PRODUCTION_SCAN_PBR_SETTINGS",
 	"PRODUCTION_SCAN_TEXTURES",
+]
+const DETAIL_WRAP_M: float = 4096.0
+const SAFE_PERIODIC_CELLS: Array[float] = [
+	1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0,
 ]
 
 var _production_controls: Dictionary = {}
@@ -79,6 +83,22 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	var antitile: Dictionary = _control("PRODUCTION_ANTITILE_SETTINGS")
 	material.set_shader_parameter("u_pbr_antitile_strength",
 		maxf(float(antitile.get("strength", 1.0)), 0.0))
+	var coarse_cell: float = _snap_periodic_cell(float(antitile.get("coarse_cell_m", 32.0)))
+	var fine_cell: float = _snap_periodic_cell(float(antitile.get("fine_cell_m", 8.0)))
+	material.set_shader_parameter("u_pbr_antitile_coarse_cell_m", coarse_cell)
+	material.set_shader_parameter("u_pbr_antitile_fine_cell_m", fine_cell)
+	material.set_shader_parameter("u_pbr_antitile_coarse_period",
+		maxi(1, int(round(DETAIL_WRAP_M / coarse_cell))))
+	material.set_shader_parameter("u_pbr_antitile_fine_period",
+		maxi(1, int(round(DETAIL_WRAP_M / fine_cell))))
+	material.set_shader_parameter("u_pbr_antitile_coarse_offset_m",
+		maxf(float(antitile.get("coarse_offset_m", 0.58)), 0.0))
+	material.set_shader_parameter("u_pbr_antitile_fine_offset_m",
+		maxf(float(antitile.get("fine_offset_m", 0.14)), 0.0))
+	material.set_shader_parameter("u_pbr_antitile_coarse_seed",
+		maxi(1, int(antitile.get("coarse_seed", 29093))))
+	material.set_shader_parameter("u_pbr_antitile_fine_seed",
+		maxi(1, int(antitile.get("fine_seed", 46141))))
 
 	var rock: Dictionary = _control("PRODUCTION_ROCK_PBR_SETTINGS")
 	material.set_shader_parameter("u_rock_pbr_enabled", 1.0 if bool(rock.get("enabled", true)) else 0.0)
@@ -91,7 +111,6 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 
 	var scan: Dictionary = _control("PRODUCTION_SCAN_PBR_SETTINGS")
 	material.set_shader_parameter("u_pbr_enabled", 1.0 if bool(scan.get("enabled", true)) else 0.0)
-	# Phase 32 shader uniforms replace the old fixed 2/2/1/2 metre scan periods.
 	material.set_shader_parameter("u_pbr_ground_metres",
 		maxf(float(scan.get("ground_metres", 2.0)), 0.001))
 	material.set_shader_parameter("u_pbr_grass_metres",
@@ -100,7 +119,47 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 		maxf(float(scan.get("mud_metres", 1.0)), 0.001))
 	material.set_shader_parameter("u_pbr_forest_metres",
 		maxf(float(scan.get("forest_metres", 2.0)), 0.001))
+	material.set_shader_parameter("u_pbr_triplanar_sharpness",
+		maxf(float(scan.get("triplanar_sharpness", 5.0)), 0.01))
+	material.set_shader_parameter("u_pbr_transfer_strength",
+		maxf(float(scan.get("transfer_strength", 0.60)), 0.0))
+	material.set_shader_parameter("u_pbr_transfer_min",
+		maxf(float(scan.get("transfer_min", 0.48)), 0.0))
+	material.set_shader_parameter("u_pbr_transfer_max",
+		maxf(float(scan.get("transfer_max", 1.72)), 0.0))
+	_bind_nonnegative(material, "u_pbr_surface_fade_near_m", scan, "surface_fade_near_m", 900.0)
+	_bind_nonnegative(material, "u_pbr_surface_fade_far_m", scan, "surface_fade_far_m", 3200.0)
+	_bind_nonnegative(material, "u_pbr_normal_fade_near_m", scan, "normal_fade_near_m", 120.0)
+	_bind_nonnegative(material, "u_pbr_normal_fade_far_m", scan, "normal_fade_far_m", 520.0)
+	_bind_nonnegative(material, "u_pbr_loose_threshold", scan, "loose_threshold", 0.015)
+	_bind_nonnegative(material, "u_pbr_loose_albedo_strength", scan, "loose_albedo_strength", 0.72)
+	_bind_nonnegative(material, "u_pbr_loose_roughness_strength", scan, "loose_roughness_strength", 0.70)
+	_bind_nonnegative(material, "u_pbr_loose_normal_mix", scan, "loose_normal_mix", 0.42)
+	_bind_nonnegative(material, "u_pbr_loose_normal_weight", scan, "loose_normal_weight", 0.48)
+	_bind_nonnegative(material, "u_pbr_special_threshold", scan, "special_threshold", 0.015)
+	_bind_nonnegative(material, "u_pbr_special_albedo_strength", scan, "special_albedo_strength", 0.88)
+	_bind_nonnegative(material, "u_pbr_special_roughness_strength", scan, "special_roughness_strength", 0.82)
+	_bind_nonnegative(material, "u_pbr_special_normal_mix", scan, "special_normal_mix", 0.58)
+	_bind_nonnegative(material, "u_pbr_special_normal_weight", scan, "special_normal_weight", 0.72)
 	_bind_scan_textures(material, _control("PRODUCTION_SCAN_TEXTURES"))
+
+
+func _bind_nonnegative(material: ShaderMaterial, uniform_name: String, controls: Dictionary,
+		key: String, fallback: float) -> void:
+	material.set_shader_parameter(uniform_name,
+		maxf(float(controls.get(key, fallback)), 0.0))
+
+
+func _snap_periodic_cell(requested: float) -> float:
+	var target: float = maxf(requested, 1.0)
+	var best: float = SAFE_PERIODIC_CELLS[0]
+	var best_error: float = absf(target - best)
+	for candidate: float in SAFE_PERIODIC_CELLS:
+		var error: float = absf(target - candidate)
+		if error < best_error:
+			best = candidate
+			best_error = error
+	return best
 
 
 func _default_controls() -> Dictionary:
