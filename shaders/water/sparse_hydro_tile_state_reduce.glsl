@@ -45,8 +45,11 @@ void main() {
     if (slot < capacity && occupied[slot] != 0 && local_index < cells_per_tile) {
         uint i = slot * cells_per_tile + local_index;
         vec4 s = cells[i];
-        float h = max(s.x, 0.0);
-        value = vec4(h * area, s.y * area, s.z * area, h);
+        bool finite_state = !any(isnan(s.xyz)) && !any(isinf(s.xyz));
+        float h = finite_state ? max(s.x, 0.0) : 0.0;
+        // Dry cells contribute no momentum even if recycled/corrupt bytes remain.
+        vec2 q = (finite_state && h > 0.0) ? s.yz : vec2(0.0);
+        value = vec4(h * area, q * area, h);
     }
     scratch[lane] = value;
     barrier();
