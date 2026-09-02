@@ -1,4 +1,4 @@
-extends "res://scripts/world_authoring/terrain_displacement_runtime.gd"
+extends "res://scripts/world_authoring/terrain_displacement_runtime_safe.gd"
 ## Phase 29 displacement compiler bridge.
 ##
 ## Legacy authored graphs produce additive displacement deltas. The canonical
@@ -46,19 +46,18 @@ func _compile_graph(graph: Resource, graph_seed_index: int) -> int:
 			input_sources["%s:%d" % [to_id, to_port]] = from_id
 
 	var output_source: String = String(input_sources.get("%s:0" % output_id, ""))
-	var value_index: int = -1
 	if output_source.is_empty():
-		# For an absolute production graph, disconnecting Final Terrain really means
-		# zero height. For a legacy delta graph the same disconnected output remains
-		# the historical zero-delta behaviour.
-		value_index = _append_instruction(OP_CONST, -1, -1, -1, Vector4.ZERO)
-	else:
-		var memo: Dictionary = {}
-		var visiting: Dictionary = {}
-		var graph_seed: int = abs(String(graph.get(&"graph_id")).hash() \
-			^ (graph_seed_index * 97531)) & 0x7fffffff
-		value_index = _compile_node(output_source, nodes_by_id, input_sources,
-			memo, visiting, graph_seed)
+		# Interactive editing frequently leaves Final Terrain disconnected for a few
+		# frames. Never turn that transient state into a real zero-height program.
+		_warnings.append("Final Terrain is disconnected; candidate rejected.")
+		return -1
+
+	var memo: Dictionary = {}
+	var visiting: Dictionary = {}
+	var graph_seed: int = abs(String(graph.get(&"graph_id")).hash() \
+		^ (graph_seed_index * 97531)) & 0x7fffffff
+	var value_index: int = _compile_node(output_source, nodes_by_id, input_sources,
+		memo, visiting, graph_seed)
 	if value_index < 0:
 		return -1
 
