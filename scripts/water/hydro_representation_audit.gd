@@ -5,13 +5,14 @@ extends Node
 ## A coherent audit requires the CPU coarse store and GPU sparse atlas to refer to
 ## the same instant. request_audit() therefore accepts work only while sparse SWE is
 ## idle and no ownership transaction is pending, temporarily disables both runtime
-## owners, snapshots the coarse ledger, requests the four-byte occupied sparse
-## volume reduction, then restores the exact previous enabled states.
+## owners, snapshots the coarse/environmental ledgers, requests the four-byte
+## occupied sparse volume reduction, then restores the exact previous enabled
+## states.
 ##
-## Fine atmospheric/gameplay source terms do not yet have cumulative ledgers. The
-## report therefore ALWAYS exposes combined ownership volume, but only treats the
-## environmental balance as a strict pass/fail invariant when the caller explicitly
-## states that no untracked fine external flux has occurred.
+## SparseHydroStepGPU now exposes exact gross fine additions and sink-clipped
+## removals in its normal diagnostics. HydroFineExternalFluxLedger accumulates those
+## values across sparse runtime generations, allowing strict environmental closure
+## during normal production forcing rather than only no-source tests.
 
 signal audit_started(audit_id: int, sparse_volume_request_id: int)
 signal audit_ready(audit_id: int, report: Dictionary)
@@ -22,6 +23,7 @@ var store: PlanetHydrologyOwnershipStore
 var runtime: SparseHydrologyRuntime
 var diagnostic: SparseHydroVolumeDiagnosticsGPU
 var coarse_owner: Node
+var fine_flux_ledger: Node
 
 var _initialized := false
 var _pending := false
@@ -39,7 +41,8 @@ var _coarse_was_enabled := false
 func initialize(p_store: PlanetHydrologyOwnershipStore,
 		p_runtime: SparseHydrologyRuntime,
 		p_diagnostic: SparseHydroVolumeDiagnosticsGPU,
-		p_coarse_owner: Node) -> Error:
+		p_coarse_owner: Node,
+		p_fine_flux_ledger: Node = null) -> Error:
 	if _initialized or _pending:
 		return ERR_BUSY
 	if p_store == null or not p_store.initialized \
@@ -53,6 +56,9 @@ func initialize(p_store: PlanetHydrologyOwnershipStore,
 	runtime = p_runtime
 	diagnostic = p_diagnostic
 	coarse_owner = p_coarse_owner
+	fine_flux_ledger = p_fine_flux_ledger
+	if fine_flux_ledger == null:
+		fine_flux_ledger = get_node_or_null("/root/HydroFineExternalFluxLedger")
 	diagnostic.volume_ready.connect(_on_sparse_volume_ready)
 	diagnostic.readback_failed.connect(_on_sparse_volume_failed)
 	_initialized = true
@@ -67,22 +73,17 @@ func pending() -> bool:
 	return _pending
 
 
-## When expect_no_untracked_fine_flux=true, the report evaluates the strict global
-## balance:
-##
-##   coarse storage + active fine storage + outlet
-##     == initial + coarse precipitation + climatology
-##
-## This is valid for promotion/demotion tests with fine external forcing disabled.
-## Production currently leaves this false because fine atmospheric/gameplay source
-## terms do not yet expose cumulative source/sink ledgers.
+## `expect_no_untracked_fine_flux` remains for controlled fixtures that intentionally
+## have no fine forcing and do not instantiate the production ledger. In production,
+## a complete HydroFineExternalFluxLedger makes strict balance testable automatically.
 func request_audit(expect_no_untracked_fine_flux: bool = false,
 		abs_tolerance_m3: float = 0.01,
 		relative_tolerance: float = 1.0e-6) -> int:
 	if not _initialized or _pending or store == null or runtime == null \
 			or diagnostic == null or coarse_owner == null:
 		return -1
-	if runtime.busy() or diagnostic.pending() or store.pending_promotion_count() > 0:
+	if runtime.busy() or diagnostic.pending() \
+			or store.pending_ownership_transaction_count() > 0:
 		return -1
 	if not is_finite(abs_tolerance_m3) or abs_tolerance_m3 < 0.0 \
 			or not is_finite(relative_tolerance) or relative_tolerance < 0.0:
@@ -97,9 +98,6 @@ func request_audit(expect_no_untracked_fine_flux: bool = false,
 
 	_runtime_was_enabled = runtime.enabled
 	_coarse_was_enabled = bool(coarse_owner.get("enabled"))
-	# The call is made on the main thread at a sparse-idle boundary. Coarse stepping
-	# is also main-thread CPU work, so disabling both here creates one stable snapshot
-	# until the asynchronous four-byte readback completes.
 	runtime.enabled = false
 	coarse_owner.set("enabled", false)
 	_coarse_snapshot = _capture_coarse_snapshot()
@@ -116,8 +114,27 @@ func request_audit(expect_no_untracked_fine_flux: bool = false,
 
 
 func _capture_coarse_snapshot() -> Dictionary:
-	if store == null or not store.initialized or store.pending_promotion_count() > 0:
+	if store == null or not store.initialized \
+			or store.pending_ownership_transaction_count() > 0:
 		return {}
+	var fine_added := 0.0
+	var fine_removed := 0.0
+	var fine_complete := false
+	var fine_generation := -1
+	if fine_flux_ledger != null and is_instance_valid(fine_flux_ledger):
+		if fine_flux_ledger.has_method("complete"):
+			fine_complete = bool(fine_flux_ledger.call("complete"))
+		if fine_flux_ledger.has_method("cumulative_added_m3"):
+			fine_added = float(fine_flux_ledger.call("cumulative_added_m3"))
+		if fine_flux_ledger.has_method("cumulative_removed_m3"):
+			fine_removed = float(fine_flux_ledger.call("cumulative_removed_m3"))
+		if fine_flux_ledger.has_method("generation"):
+			fine_generation = int(fine_flux_ledger.call("generation"))
+	if not is_finite(fine_added) or not is_finite(fine_removed) \
+			or fine_added < 0.0 or fine_removed < 0.0:
+		fine_complete = false
+		fine_added = 0.0
+		fine_removed = 0.0
 	return {
 		"coarse_storage_m3": store.total_storage_m3(),
 		"initial_storage_m3": store.initial_storage_m3,
@@ -126,6 +143,11 @@ func _capture_coarse_snapshot() -> Dictionary:
 		"outlet_export_m3": store.cumulative_outlet_m3,
 		"promoted_to_fine_m3": store.cumulative_promoted_to_fine_m3,
 		"demoted_from_fine_m3": store.cumulative_demoted_from_fine_m3,
+		"fine_external_added_m3": fine_added,
+		"fine_external_removed_m3": fine_removed,
+		"fine_external_net_m3": fine_added - fine_removed,
+		"fine_external_ledger_complete": fine_complete,
+		"fine_external_ledger_generation": fine_generation,
 		"coarse_mass_error_m3": store.mass_error_m3(),
 		"coarse_mass_relative_error": store.mass_relative_error(),
 		"coarse_step_count": store.step_count,
@@ -147,14 +169,20 @@ func _on_sparse_volume_ready(request_id: int, fine_volume_m3: float) -> void:
 	var outlet := float(_coarse_snapshot.get("outlet_export_m3", 0.0))
 	var promoted := float(_coarse_snapshot.get("promoted_to_fine_m3", 0.0))
 	var demoted := float(_coarse_snapshot.get("demoted_from_fine_m3", 0.0))
+	var fine_added := float(_coarse_snapshot.get("fine_external_added_m3", 0.0))
+	var fine_removed := float(_coarse_snapshot.get("fine_external_removed_m3", 0.0))
+	var fine_ledger_complete := bool(
+		_coarse_snapshot.get("fine_external_ledger_complete", false))
 	var combined_storage := coarse_storage + fine_volume_m3
-	var external_budget_before_outlet := initial + precip + climatology
+	var external_budget_before_outlet := initial + precip + climatology \
+		+ fine_added - fine_removed
 	var expected_owned_after_outlet := external_budget_before_outlet - outlet
 	var environmental_residual := combined_storage - expected_owned_after_outlet
 	var net_promoted := promoted - demoted
 	var fine_minus_net_promoted := fine_volume_m3 - net_promoted
 	var scale := maxf(absf(external_budget_before_outlet), absf(combined_storage), 1.0)
 	var tolerance := maxf(_abs_tolerance_m3, scale * _relative_tolerance)
+	var strict_testable := fine_ledger_complete or _expect_closed_external_balance
 	var strict_pass := absf(environmental_residual) <= tolerance
 
 	var report := _coarse_snapshot.duplicate(true)
@@ -168,10 +196,9 @@ func _on_sparse_volume_ready(request_id: int, fine_volume_m3: float) -> void:
 	report["net_promoted_to_fine_m3"] = net_promoted
 	report["fine_minus_net_promoted_m3"] = fine_minus_net_promoted
 	report["strict_environmental_balance_requested"] = _expect_closed_external_balance
-	report["strict_environmental_balance_testable"] = _expect_closed_external_balance
-	report["strict_environmental_balance_pass"] = strict_pass \
-		if _expect_closed_external_balance else false
-	report["untracked_fine_external_flux_possible"] = not _expect_closed_external_balance
+	report["strict_environmental_balance_testable"] = strict_testable
+	report["strict_environmental_balance_pass"] = strict_pass if strict_testable else false
+	report["untracked_fine_external_flux_possible"] = not strict_testable
 	report["tolerance_m3"] = tolerance
 	report["ownership_transaction_pending"] = false
 
@@ -231,6 +258,7 @@ func release() -> void:
 	runtime = null
 	diagnostic = null
 	coarse_owner = null
+	fine_flux_ledger = null
 	_initialized = false
 	released.emit()
 
