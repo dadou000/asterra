@@ -9,7 +9,8 @@ Branch: `water/0.1.0`
 - `project.godot` reports 0.1.0.
 - `WaterSystem` autoload added after the legacy `OceanSystem`.
 - `PersistentHydrologySystem` is autoloaded after `WeatherSystem`.
-- `HydroAutomaticSurfacePromotion` is autoloaded after coarse/fine weather ownership.
+- `HydroAutomaticSurfacePromotion` and `HydroAutomaticSurfaceDemotion` are
+  autoloaded after coarse/fine weather ownership.
 - Full architecture plan lives in `docs/WATER_HYDROLOGY_0.1.0_IMPLEMENTATION_PLAN.md`.
 
 ### Phase 1 — rendering/physics ownership split: implemented, runtime validation pending
@@ -116,7 +117,7 @@ only the four-byte GPU volume diagnostic at checkpoints. The initial release gat
 is `relative drift <= 1e-4 OR absolute drift <= 0.08 m3`; tighten it from measured
 results rather than broadening it to hide numerical errors.
 
-### Phase 3 — sparse active hydrology: ownership-safe promotion policy installed, runtime validation pending
+### Phase 3 — sparse active hydrology: bidirectional surface ownership installed, runtime validation pending
 
 #### Sparse GPU runtime
 
@@ -149,49 +150,63 @@ Implemented:
   - maintains a local committed weather-snapshot revision rather than pretending
     an asynchronous CPU snapshot is the newest native solver revision;
   - retains the latest **unmasked** native precipitation snapshot and reapplies
-    spatial coarse/fine authority immediately when ownership fractions change, so
-    the coarse store cannot run one interval with stale full-authority rainfall.
+    spatial coarse/fine authority immediately when ownership fractions change.
 
-#### Transactional coarse <-> fine ownership
-
-Implemented:
+#### Transactional coarse -> fine ownership
 
 - `scripts/water/planet_hydrology_ownership_store.gd`
   - two-phase `prepare_promotion()` / `commit_promotion()`;
   - prepare reserves water but does not debit physical coarse storage;
   - rollback releases reservation with no physical state change;
   - over-reservation and duplicate commit fail closed;
-  - coarse stepping pauses with `ERR_BUSY` while ownership is unresolved;
-  - unresolved transactions are never serialized and block snapshots;
-  - promotion/demotion have explicit representation-transfer ledger terms;
-  - `accept_demotion()` returns conserved fine water to coarse storage.
+  - unresolved ownership blocks coarse stepping and snapshots.
 - `scripts/water/hydro_coarse_seed_gpu.gd`
 - `shaders/water/hydro_coarse_seed.glsl`
   - exact one-shot seed into an unpublished sparse tile;
   - writes identical depth/momentum parcel to state A and B;
-  - leaves bed unchanged;
-  - `plan_volume()` quantizes depth to the exact FP32 value sent to the GPU and
-    reports the corresponding represented volume so CPU ownership debits the same
-    parcel the GPU actually receives.
+  - `plan_volume()` quantizes to the exact FP32 depth represented on the GPU.
 - `scripts/water/planet_hydro_promotion_bridge.gd`
-  - sequences coarse reservation -> sparse reserve -> terrain stage -> exact seed
-    -> coarse commit -> sparse activation/connectivity;
-  - temporarily pauses the sparse runtime during the ownership handoff;
-  - promotes only into a new unpublished tile for now;
-  - restores coarse ownership and unpublishes/releases the fine tile if an
-    activation/connectivity failure occurs after commit;
-  - exposes a flood-oriented suggested parcel based on
-    `coarse_surface_depth * one_fine_tile_area`, never the entire macro-cell volume.
+  - coarse reserve -> sparse reserve -> terrain stage -> exact seed -> coarse commit
+    -> sparse publication/connectivity;
+  - promotes only into a new unpublished tile;
+  - flood-oriented default parcel is `coarse_surface_depth * one_fine_tile_area`.
 
-Detailed contract:
+#### Transactional fine -> coarse ownership
+
+Implemented:
+
+- `PlanetHydrologyOwnershipStore.prepare_demotion()` / `commit_demotion()` /
+  `rollback_demotion()`;
+  - incoming fine parcels are validated without changing coarse physical storage;
+  - pending demotion blocks coarse stepping and snapshots;
+  - promotion and demotion transactions are mutually exclusive;
+  - `accept_demotion()` remains a synchronous compatibility wrapper around the
+    two-phase incoming transaction.
+- `shaders/water/sparse_hydro_tile_mass_reduce.glsl`
+- `scripts/water/sparse_hydro_tile_volume_diagnostics_gpu.gd`
+  - reduces one occupied canonical atlas-A tile to one four-byte FP32 volume;
+  - no full h/hu/hv/bed readback is required.
+- `scripts/water/planet_hydro_demotion_bridge.gd`
+  - pause sparse runtime -> reduce exact fine tile -> prepare incoming coarse parcel
+    -> unpublish fine tile -> connectivity sync -> coarse commit;
+  - positive measured volume is transactional by default; the dry threshold is zero,
+    so tiny positive parcels are not intentionally discarded;
+  - if fine publication must be restored after a late failure, the just-freed slot
+    is reacquired while its raw GPU state is still intact;
+  - if fine restoration itself fails after unpublication, the already-validated
+    coarse incoming transaction is committed as the conservative fallback.
+- `WaterSystem.demote_fine_surface_cell(cell)` exposes the explicit reverse path and
+  production promotion/demotion calls are single-flight against each other.
+
+Detailed ownership contract:
 
 ```text
 docs/WATER_PHASE3_PERSISTENT_OWNERSHIP.md
 ```
 
-#### Frontier/rebuild failure hardening
+#### Frontier/rebuild/runtime-failure hardening
 
-The sparse frontier path now distinguishes reversible and irreversible ownership:
+The frontier path distinguishes reversible and irreversible ownership:
 
 ```text
 no successful edge handoff
@@ -207,51 +222,76 @@ one or more successful edge handoffs
 
 Additional hardening:
 
-- coarse-store rebuild is a hard sparse-generation boundary; the old atlas and
-  helpers are destroyed before anything binds to the replacement store;
-- a failed sparse runtime is torn down as one generation so an asynchronous hidden
-  destination cannot activate after its coarse parcel was restored;
-- multi-destination frontier failure cleanup is intrinsic to the activation
-  pipeline rather than depending on a later `WaterSystem` teardown;
-- failed preseed rollback can defer and retry a coarse restoration blocked by an
-  unrelated ownership transaction;
-- provisional coarse state is finalized only after the destination is actually
-  published by the scheduler.
+- precipitation authority changes reapply immediately to the retained unmasked
+  native weather snapshot;
+- failed preseed rollback can defer/retry a coarse restoration blocked by another
+  ownership transaction;
+- provisional coarse frontier state is finalized only after destination publication;
+- multi-destination frontier failure cleanup is intrinsic to the activation pipeline;
+- **failed sparse generations that still have allocated fine tiles are preserved in
+  place rather than automatically destroying their atlas**. This prevents a runtime
+  failure from becoming a representation-mass deletion;
+- an in-flight fine->coarse demotion is allowed to finish before failed-generation
+  teardown can proceed;
+- an empty failed generation may still be torn down automatically.
 
-`WaterSystem.gpu_stats()` exposes pending/provisional/deferred preseed counts for
-these failure paths.
+`WaterSystem.gpu_stats()` reports the promotion/demotion bridges, frontier preseed
+state, compact diagnostics, and `failed_generation_preserved`.
 
-#### Automatic surface/flood promotion policy — implemented, production switch OFF
+#### Automatic surface/flood promotion — installed, production switch OFF
 
 - `scripts/water/hydro_automatic_surface_promotion.gd`
 - autoload: `HydroAutomaticSurfacePromotion`
-- controlling switch remains:
+- switch:
 
 ```gdscript
 WaterSystem.automatic_coarse_promotion_enabled = false
 ```
 
-Policy behavior:
+Policy:
 
-- scans at low cadence (3 s default);
-- uses only coarse **surface-storage depth** for eligibility; discharge is given an
-  effectively unreachable threshold so channel-only anomalies cannot enter;
-- defaults to 5 cm enter / 2.5 cm exit hysteresis;
-- starts at most one promotion transaction per scan;
-- refuses to start while any coarse ownership transaction is unresolved;
-- maps each coarse cell to its exact sparse tile and suppresses any tile already
-  present in `HydroTilePool`, including allocating/active/settling/frozen states;
-- caps the requested parcel to current coarse surface storage, so the automatic
-  path cannot borrow channel storage;
-- seeds zero initial tangent velocity until the coarse model owns a trustworthy 2D
-  local flood-velocity field;
-- clears policy-local latches/identity on coarse-store rebuild;
-- exposes counters/reasons through `HydroAutomaticSurfacePromotion.stats()`;
-- exposes deterministic `scan_once()` plus a pre-tree dependency-injection seam so
-  the renderer gate exercises the same production policy logic rather than a copy.
+- 3 s scan cadence;
+- 5 cm enter / 2.5 cm exit surface-depth hysteresis;
+- channel-only anomalies cannot enter;
+- at most one transaction per scan;
+- already resident/allocating/settling/frozen mapped tiles are suppressed;
+- automatic parcel is capped by coarse **surface** storage and cannot borrow channel
+  storage;
+- zero initial tangent velocity until coarse hydrology has a trustworthy 2D flow
+  direction/velocity representation;
+- successful policy-owned tiles are explicitly registered with the automatic
+  demotion policy; manual/frontier/source tiles are never registered through this
+  path.
 
-Channel-only automatic promotion remains explicitly disabled until the river/reach
-representation exists.
+#### Automatic quiet surface demotion — installed, production switch OFF
+
+- `scripts/water/hydro_automatic_surface_demotion.gd`
+- autoload: `HydroAutomaticSurfaceDemotion`
+- switch:
+
+```gdscript
+WaterSystem.automatic_fine_demotion_enabled = false
+```
+
+Initial policy is deliberately restrictive:
+
+- only tiles created by `HydroAutomaticSurfacePromotion` are eligible;
+- 5 s scan cadence;
+- only `SETTLING` or `FROZEN_WATER` records;
+- default minimum quiet time: 20 s;
+- default maximum fine depth: 0.15 m;
+- default maximum velocity: 0.004 m/s;
+- default maximum outgoing flux: 0.002 m3/s;
+- default maximum disturbance energy: 2.5e-5;
+- any resident cardinal neighbor suppresses collapse, including a neighbor across a
+  cube-face seam;
+- at most one fine->coarse transaction per scan;
+- failed attempts receive a scan-count retry delay;
+- world/sparse-generation identity changes clear the policy registry.
+
+This intentionally does **not** collapse connected fine flood networks, river/source
+regions, manual fine domains or arbitrary scheduler tiles. Cluster-aware collapse is
+a later representation policy.
 
 #### Phase 3 conservation and policy gates
 
@@ -259,14 +299,17 @@ CPU/headless:
 
 ```text
 tests/water/PlanetHydrologyStoreTests.tscn
+tests/water/PlanetHydroDemotionTransactions.tscn
 tests/water/HydroFrontierFailurePolicyTests.tscn
 tests/water/HydroPrecipitationOwnershipTests.tscn
 tests/water/HydroAutomaticSurfacePromotionTests.tscn
+tests/water/HydroAutomaticSurfaceDemotionTests.tscn
 ```
 
-The automatic-promotion policy gate checks threshold hysteresis and proves the
-requested automatic parcel is bounded by surface storage rather than channel water.
-The frontier failure-policy gate locks the reversible/irreversible classification.
+The demotion transaction gate checks prepare/rollback/commit, step/save blocking,
+mutual exclusion with promotion and duplicate-commit rejection. The automatic
+collapse policy gate locks quiet/activity limits and checks cardinal-neighbor
+suppression across a cube-face seam.
 
 Renderer-mode:
 
@@ -274,21 +317,25 @@ Renderer-mode:
 tests/water/HydroCoarseSeedGPUSmoke.tscn
 tests/water/PlanetHydroPromotionBridgeTests.tscn
 tests/water/HydroAutomaticSurfacePromotionGPU.tscn
+tests/water/PlanetHydroDemotionBridgeTests.tscn
+tests/water/HydroAutomaticSurfaceDemotionGPU.tscn
 tests/water/HydroRepresentationAuditTests.tscn
 tests/water/SparseHydroFrontierHandoff.tscn
 ```
 
-`HydroAutomaticSurfacePromotionGPU.tscn` constructs a known flooded coarse cell,
-runs the real policy + real transactional promotion bridge, reduces authoritative
-occupied sparse volume on GPU, and checks:
+`PlanetHydroDemotionBridgeTests.tscn` performs a complete exact-volume
+coarse->fine->coarse round trip and checks final occupied sparse volume is zero.
+
+`HydroAutomaticSurfaceDemotionGPU.tscn` performs a real coarse->fine promotion,
+marks the policy-owned scheduler record as a quiet shallow settling tile, runs the
+actual automatic-collapse policy, and verifies:
 
 ```text
-coarse_before
-    == coarse_after_commit + GPU_seeded_fine_volume
+coarse_final == coarse_initial
+fine_authoritative_final == 0
+cumulative_promoted_to_fine == cumulative_demoted_from_fine
+mass_error == 0
 ```
-
-It also verifies channel storage is unchanged and a second scan cannot duplicate the
-promotion because the mapped fine tile is already resident.
 
 ## Validation status
 
@@ -303,9 +350,11 @@ Suggested local runs:
 godot --headless --path . tests/water/HydroReferenceTests.tscn
 godot --headless --path . tests/water/Phase1WaterSmoke.tscn
 godot --headless --path . tests/water/PlanetHydrologyStoreTests.tscn
+godot --headless --path . tests/water/PlanetHydroDemotionTransactions.tscn
 godot --headless --path . tests/water/HydroFrontierFailurePolicyTests.tscn
 godot --headless --path . tests/water/HydroPrecipitationOwnershipTests.tscn
 godot --headless --path . tests/water/HydroAutomaticSurfacePromotionTests.tscn
+godot --headless --path . tests/water/HydroAutomaticSurfaceDemotionTests.tscn
 godot --path . tests/water/FixedHydroGPUSmoke.tscn
 godot --path . tests/water/HydroGPUParityTests.tscn
 godot --path . tests/water/HydroSurfaceReconstructionSmoke.tscn
@@ -313,6 +362,8 @@ godot --path . tests/water/HydroGPUSoak.tscn
 godot --path . tests/water/HydroCoarseSeedGPUSmoke.tscn
 godot --path . tests/water/PlanetHydroPromotionBridgeTests.tscn
 godot --path . tests/water/HydroAutomaticSurfacePromotionGPU.tscn
+godot --path . tests/water/PlanetHydroDemotionBridgeTests.tscn
+godot --path . tests/water/HydroAutomaticSurfaceDemotionGPU.tscn
 godot --path . tests/water/HydroRepresentationAuditTests.tscn
 godot --path . tests/water/SparseHydroFrontierHandoff.tscn
 ```
@@ -327,18 +378,20 @@ Use the executable name/path appropriate for the local Godot 4.7 build.
 
 ## Next gates
 
-1. Run the new headless ownership/failure/promotion-policy gates and the renderer
-   automatic-promotion conservation gate locally; fix actual parser/API/numerical
-   failures without evidence-free tolerance changes.
-2. Extend the automatic-promotion smoke through a genuinely conservative
-   fine->coarse collapse/demotion path before installing automatic deactivation.
-3. Complete the representation-wide conservation ledger for fine external source
-   terms (rain/gameplay) so coarse + fine + exported outlet volume can be audited
-   during normal production simulation, not only controlled no-source gates.
+1. Run the new bidirectional ownership and automatic-policy gates locally; fix real
+   parser/API/numerical failures without broadening tolerances speculatively.
+2. Add cumulative ledgers for fine external source terms (atmospheric precipitation
+   and gameplay/world sources) so representation-wide audits close during normal
+   production forcing rather than only controlled no-source tests.
+3. Add cluster-aware fine->coarse collapse for connected quiet surface domains;
+   isolated-tile automatic demotion must remain the only automatic reverse policy
+   until that conservative multi-tile transaction exists.
 4. Replace uniform promotion seeding with terrain-aware conservative prolongation
    while preserving the exact-volume transaction/acknowledgement interface.
 5. Build the persistent 1D river/reach representation; only then allow channel-only
-   anomalies to promote automatically into sparse 2D SWE.
-6. Separately run the Phase 2 GPU parity/reconstruction/soak gates and exercise the
+   anomalies to promote/collapse automatically between 1D and sparse 2D SWE.
+6. Add explicit save/world-transition ownership flushing instead of relying on world
+   rebuild teardown when fine gameplay state must persist across a transition.
+7. Separately run the Phase 2 GPU parity/reconstruction/soak gates and exercise the
    reconstructed coat in a normal playable coast scene before dynamic hydrology
    rendering is enabled by default.
