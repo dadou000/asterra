@@ -3,13 +3,13 @@
 
 // Reconstructs the fixed-domain conservative SWE state into the shared visible
 // water cache. The solver stores absolute hydraulic state; the render cache stores
-// a surface-height residual relative to an equilibrium/reference surface.
+// a surface-height value relative to the configured datum plus physical depth.
 //
 // Output RGBA:
 //   R = eta - reference_surface [m]
 //   G = tangent velocity X [m/s]
 //   B = tangent velocity Y [m/s]
-//   A = activity/foam hint [0..1]
+//   A = physical water depth [m]
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) readonly buffer HydroState {
 layout(rgba32f, set = 0, binding = 1) uniform writeonly image2D surface_out;
 layout(set = 0, binding = 2, std430) readonly buffer Params {
     vec4 source_grid;   // width, height, dx, dry_eps
-    vec4 source_frame;  // source center plane x/y, reference surface, activity gain
+    vec4 source_frame;  // source center plane x/y, reference surface, reserved
     vec4 target_frame;  // target resolution, half extent, target center x/y
 } params;
 
@@ -81,12 +81,9 @@ void main() {
 
     float eta = s.w + h;
     float reference_surface = params.source_frame.z;
-    float residual = (eta - reference_surface) * wet;
+    float surface_height = (eta - reference_surface) * wet;
     vec2 velocity = s.yz / max(h, dry_eps());
     velocity *= wet;
-
-    float activity_gain = max(params.source_frame.w, 0.0);
-    float speed = length(velocity);
-    float activity = clamp((abs(residual) * 0.35 + speed * 0.10) * activity_gain, 0.0, 1.0) * wet;
-    imageStore(surface_out, pixel, vec4(residual, velocity, activity));
+    float depth = h * wet;
+    imageStore(surface_out, pixel, vec4(surface_height, velocity, depth));
 }
