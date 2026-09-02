@@ -1,6 +1,6 @@
 extends Node
 ## Phase 31+ regression: production displacement is visible as the real native
-## geomorph stage chain, ordered bypasses stay on the resident GPU implementation,
+## contribution graph, exact bypasses stay on the resident GPU implementation,
 ## PBR sources remain ordinary categorized graph nodes, and raw classifier vectors
 ## can still be split/recombined by the live material compiler.
 
@@ -50,7 +50,7 @@ func _run() -> void:
 	await _frames(5)
 
 	for required_title: String in [
-		"PRODUCTION · GEOMORPH START",
+		"PRODUCTION · WORLD CONTEXT",
 		"PRODUCTION · BROAD RELIEF",
 		"PRODUCTION · MOUNTAINS",
 		"PRODUCTION · MID RELIEF",
@@ -59,6 +59,7 @@ func _run() -> void:
 		"PRODUCTION · FINE DETAIL",
 		"PRODUCTION · DUNES",
 		"PRODUCTION · MICRO RELIEF",
+		"PRODUCTION · NATIVE DETAIL MERGE",
 		"PRODUCTION · GLACIAL SHAPING",
 		"PRODUCTION · MACRO + DETAIL",
 		"SCULPT / EDIT DELTA",
@@ -82,10 +83,13 @@ func _run() -> void:
 
 	var shape_graph: Resource = shape_slot.get(&"graph") as Resource
 	if not NATIVE.is_canonical_structural_graph(shape_graph):
-		_fail("Phase 31 Shape graph did not migrate to the canonical native production-stage chain.")
+		_fail("Phase 31 Shape graph did not migrate to canonical native contribution/merge topology.")
 		return
 	if _has_node_type(shape_graph, NATIVE.LEGACY_GENERATED_TYPE):
 		_fail("Opaque PRODUCTION_GENERATED_HEIGHT survived native production migration.")
+		return
+	if not _has_node_type(shape_graph, NATIVE.MERGE_TYPE):
+		_fail("Phase 31 Shape graph is missing Native Detail Merge.")
 		return
 	for stage_id: String in NATIVE.SCHEMA.ordered_stage_ids():
 		if not _has_node_type(shape_graph, NATIVE.stage_node_type(stage_id)):
@@ -101,25 +105,22 @@ func _run() -> void:
 		_fail("Canonical native production Shape graph should remain GPU-resident and bytecode-neutral.")
 		return
 
-	# Exercise the structural operation exposed by the current editor/runtime: skip
-	# Channels while retaining Deposition. This must remain zero-bytecode and lower
-	# only incision strength because Deposition reuses the resident channel sample.
-	var mid_id: String = _node_id(shape_graph, NATIVE.stage_node_type("mid"))
+	# Disconnect only Channels from its dedicated merge input. Deposition stays on
+	# its own branch and must therefore remain active without rerouting height.
+	var merge_id: String = _node_id(shape_graph, NATIVE.MERGE_TYPE)
 	var channel_id: String = _node_id(shape_graph, NATIVE.stage_node_type("channel"))
-	var deposit_id: String = _node_id(shape_graph, NATIVE.stage_node_type("deposit"))
-	if mid_id.is_empty() or channel_id.is_empty() or deposit_id.is_empty():
-		_fail("Phase 31 ordered-bypass fixture is missing native stages.")
+	var channel_port: int = NATIVE.merge_port_for_stage("channel")
+	if merge_id.is_empty() or channel_id.is_empty() or channel_port < 0:
+		_fail("Phase 31 contribution-bypass fixture is incomplete.")
 		return
-	if not bool(shape_graph.call("disconnect_nodes", mid_id, 0, channel_id, 0)) \
-			or not bool(shape_graph.call("disconnect_nodes", channel_id, 0, deposit_id, 0)) \
-			or not bool(shape_graph.call("connect_nodes", mid_id, 0, deposit_id, 0)):
-		_fail("Phase 31 could not construct a production-order Channel bypass.")
+	if not bool(shape_graph.call("disconnect_nodes", channel_id, 0, merge_id, channel_port)):
+		_fail("Phase 31 could not disconnect the Channel contribution.")
 		return
 	var bypass_stats: Dictionary = disp_runtime.call("compile_from_terrain", terrain)
 	if not bool(bypass_stats.get("candidate_valid", false)) \
 			or bool(bypass_stats.get("active", true)) \
 			or int(bypass_stats.get("instructions", -1)) != 0:
-		_fail("Phase 31 ordered native bypass escaped the resident zero-bytecode production path.")
+		_fail("Phase 31 native contribution bypass escaped the resident zero-bytecode production path.")
 		return
 	var bypass_controls: Dictionary = bypass_stats.get("production_geomorph_controls", {}) as Dictionary
 	if not is_zero_approx(float(bypass_controls.get("channel_strength", -1.0))) \
@@ -191,7 +192,7 @@ func _run() -> void:
 			_fail("Phase 31 material compiler warning: %s" % warning)
 			return
 
-	print("PLANET_STUDIO_PHASE31_LAUNCH_OK: native production geomorph stages, ordered bypass lowering and editable PBR graph launch cleanly")
+	print("PLANET_STUDIO_PHASE31_LAUNCH_OK: native contribution merge, exact bypass lowering and editable PBR graph launch cleanly")
 	mat_runtime.queue_free()
 	disp_runtime.queue_free()
 	editor.queue_free()
