@@ -2,8 +2,8 @@ extends "res://scripts/world_authoring/terrain_material_runtime_phase30.gd"
 ## Phase 31: production-stage Surface graph compiler.
 ##
 ## The mature renderer remains the source of truth for its production PBR result,
-## but that result and its classifier outputs are now explicit graph nodes. Phase
-## 32 adds unconnected production settings nodes; those describe/bind renderer
+## but that result and its classifier outputs are now explicit graph nodes. Later
+## phases add unconnected production settings nodes; those describe/bind renderer
 ## stages and do not make the canonical surface pass-through bytecode-active.
 
 # Keep in lock-step with terrain_author_material_bytecode.gdshaderinc.
@@ -17,6 +17,8 @@ const OP_ONE_MINUS := 67
 
 const PRODUCTION_SETTING_TYPES: Array[String] = [
 	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_CLASSIFIER_THRESHOLDS",
+	"PRODUCTION_SURFACE_PALETTE",
 	"PRODUCTION_MICRORELIEF_SETTINGS",
 	"PRODUCTION_ANTITILE_SETTINGS",
 	"PRODUCTION_ROCK_PBR_SETTINGS",
@@ -54,8 +56,12 @@ func _is_identity_surface_slot(slot: Resource) -> bool:
 	var graph: Resource = slot.get(&"graph") as Resource
 	if graph == null:
 		return false
-	var nodes: Array = graph.get(&"nodes") as Array
-	var links: Array = graph.get(&"links") as Array
+	var nodes_value: Variant = graph.get(&"nodes")
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
+		return false
+	var nodes: Array = nodes_value as Array
+	var links: Array = links_value as Array
 	if links.size() != 6:
 		return false
 	var output_id: String = ""
