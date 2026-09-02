@@ -1,17 +1,21 @@
 class_name HydroFrontierResolver
 extends RefCounted
-## Transitional compact-queue -> world-topology bridge for Phase 3.
+## Compact GPU frontier queue -> stable world-topology bridge.
 ##
 ## GPU snapshots source slot + (face, level, x, y) + edge direction + outgoing Q.
-## The resolver first verifies that the transient slot still belongs to that exact
-## stable tile, then resolves Asterra's cube-sphere neighbor and asks an explicit
-## terrain/structure reachability callback before wake policy is allowed to run.
+## The resolver verifies that the transient slot still belongs to that exact stable
+## tile, resolves Asterra's cube-sphere neighbor and asks an explicit
+## terrain/structure reachability callback before policy can allocate anything.
 ##
 ## Reachability callable contract:
 ##   bool(source_key, source_direction, destination_key, flux_m3s, topology_link)
 ##
 ## An absent/invalid callback FAILS CLOSED. Topological adjacency is not evidence
 ## that a cliff, levee, building or dry high boundary can actually be inundated.
+##
+## defer_activation=true reserves a destination slot in ALLOCATING state. That is
+## the production frontier-handoff path: initialize/seed state first, then call
+## scheduler.activate_reserved() only after the GPU handoff has been recorded.
 
 var scheduler: SparseHydroScheduler
 
@@ -21,7 +25,7 @@ func _init(p_scheduler: SparseHydroScheduler) -> void:
 
 
 func resolve_candidates(candidates: Array[Dictionary],
-		reachability: Callable = Callable()) -> Array[Dictionary]:
+		reachability: Callable = Callable(), defer_activation: bool = false) -> Array[Dictionary]:
 	var resolved: Array[Dictionary] = []
 	if scheduler == null or scheduler.pool == null:
 		return resolved
@@ -35,6 +39,8 @@ func resolve_candidates(candidates: Array[Dictionary],
 			"direction": direction,
 			"flux_m3s": flux_m3s,
 			"accepted": false,
+			"reserved": false,
+			"needs_handoff": false,
 			"reachable": false,
 			"source_tile_id": -1,
 			"destination_tile_id": -1,
@@ -99,11 +105,26 @@ func resolve_candidates(candidates: Array[Dictionary],
 			resolved.append(result)
 			continue
 
-		var destination_slot := scheduler.report_resolved_boundary_flux(
-			source, destination, flux_m3s, true)
+		var destination_slot: int
+		if defer_activation:
+			destination_slot = scheduler.reserve_resolved_boundary_flux(
+				source, destination, flux_m3s, true)
+		else:
+			destination_slot = scheduler.report_resolved_boundary_flux(
+				source, destination, flux_m3s, true)
 		result["destination_slot"] = destination_slot
 		result["accepted"] = destination_slot >= 0
-		result["reason"] = "woken" if destination_slot >= 0 else "allocation_or_policy_rejected"
+		if destination_slot < 0:
+			result["reason"] = "allocation_or_policy_rejected"
+		elif defer_activation:
+			var record := scheduler.pool.record(destination)
+			var is_allocating := int(record.get("state", HydroTilePool.TileState.ACTIVE)) \
+				== HydroTilePool.TileState.ALLOCATING
+			result["reserved"] = is_allocating
+			result["needs_handoff"] = is_allocating
+			result["reason"] = "reserved" if is_allocating else "already_resident"
+		else:
+			result["reason"] = "woken"
 		resolved.append(result)
 
 	return resolved
