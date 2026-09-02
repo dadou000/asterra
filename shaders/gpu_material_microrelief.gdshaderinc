@@ -1,9 +1,19 @@
 // Material-dependent geometric microrelief for the dense near-field patch.
 // Visible relief uses continuous physical context; biome IDs are retained only in
 // the interface for compatibility/debug and never create hard geometric borders.
+// Phase 33 exposes the final per-material relief contributions while retaining the
+// historical values as 1.0 multipliers.
 
 uniform float u_microrelief_enabled = 1.0;
 uniform float u_microrelief_strength : hint_range(0.0, 2.0) = 1.0;
+uniform float u_microrelief_rock_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_soil_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_sand_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_mud_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_snow_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_gravel_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_scree_scale : hint_range(0.0, 4.0) = 1.0;
+uniform float u_microrelief_base_noise_scale : hint_range(0.0, 4.0) = 1.0;
 
 float mmr_scalar(vec3 v) {
 	return dot(v, vec3(0.577350269, 0.577350269, 0.577350269));
@@ -110,9 +120,14 @@ float mmr_height(vec3 detail_position, float rock_id, float biome,
 	float gravel_h = (pow(clamp(mmr_ridge(n1), 0.0, 1.0), 3.0) - 0.42) * 0.070 + n2 * 0.018;
 	float scree_h = (pow(clamp(mmr_ridge(n2), 0.0, 1.0), 2.2) - 0.45) * 0.105 + n4 * 0.025;
 
-	float weighted = rock_h * rock_w + soil_h * soil_w + sand_h * sand_w
-		+ mud_h * mud_w + snow_h * snow_w + gravel_h * gravel_w + scree_h * scree_w;
+	float weighted = rock_h * rock_w * u_microrelief_rock_scale
+		+ soil_h * soil_w * u_microrelief_soil_scale
+		+ sand_h * sand_w * u_microrelief_sand_scale
+		+ mud_h * mud_w * u_microrelief_mud_scale
+		+ snow_h * snow_w * u_microrelief_snow_scale
+		+ gravel_h * gravel_w * u_microrelief_gravel_scale
+		+ scree_h * scree_w * u_microrelief_scree_scale;
 	float total = max(rock_w + soil_w + sand_w + mud_w + snow_w + gravel_w + scree_w, 1.0);
-	weighted = weighted / total + n8 * 0.010;
+	weighted = weighted / total + n8 * 0.010 * u_microrelief_base_noise_scale;
 	return weighted * u_microrelief_strength;
 }
