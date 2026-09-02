@@ -3,11 +3,9 @@ extends RefCounted
 ## Builds one compact GPU exchange batch for a physically continuous refined river
 ## component while preserving coarse ownership per macro reach.
 ##
-## Every coarse reach keeps its own pending-inflow queue, so every component member
-## may still need an upstream injection record for local/external coarse-owned water.
-## Only the component outlet owns a downstream 2D->1D removal mouth. Internal
-## downstream mouths are omitted because normal sparse SWE crosses the validated
-## fine/fine links between reaches.
+## Every coarse reach keeps its own pending-inflow queue. Only the component outlet
+## owns a downstream 2D->1D removal mouth. Junction-member injections are centered
+## on the seeded junction core because a branched node has no unique upstream edge.
 
 
 static func plan(store: PlanetHydrologyRiverClusterStore, component_id: int,
@@ -30,6 +28,7 @@ static func plan(store: PlanetHydrologyRiverClusterStore, component_id: int,
 
 	var exchange_records: Array[Dictionary] = []
 	var injection_records := 0
+	var junction_injection_records := 0
 	var requested_add_m3 := 0.0
 	var downstream_records := 0
 	for raw_cell in cells:
@@ -56,19 +55,18 @@ static func plan(store: PlanetHydrologyRiverClusterStore, component_id: int,
 		var first := members[0]
 		var last := members[members.size() - 1]
 
-		# Coarse-owned local/external inflow is injected into that reach's first fine
-		# member. This is independent of whether the reach is a topological root.
 		if add_volume > 0.0:
 			var combined_downstream := is_outlet and members.size() == 1
-			exchange_records.append(_record(cell, first, add_volume, dt_s,
-				mouth_cells, cell_size_m, true, combined_downstream))
+			var injection := _record(cell, first, add_volume, dt_s,
+				mouth_cells, cell_size_m, true, combined_downstream)
+			exchange_records.append(injection)
 			injection_records += 1
+			if bool(injection.get("upstream_centered", false)):
+				junction_injection_records += 1
 			requested_add_m3 += add_volume
 			if combined_downstream:
 				downstream_records += 1
 
-		# Only the final coarse reach exports fine water back into 1D. If the outlet
-		# is one tile and already has an injection record, both flags share one record.
 		if is_outlet and not (add_volume > 0.0 and members.size() == 1):
 			exchange_records.append(_record(cell, last, 0.0, dt_s,
 				mouth_cells, cell_size_m, false, true))
@@ -88,6 +86,7 @@ static func plan(store: PlanetHydrologyRiverClusterStore, component_id: int,
 		"exchange_records": exchange_records,
 		"boundary_record_count": exchange_records.size(),
 		"injection_record_count": injection_records,
+		"junction_injection_record_count": junction_injection_records,
 		"downstream_record_count": downstream_records,
 		"requested_add_m3": requested_add_m3,
 		"external_upstream_mouth_count": int(contract.get("upstream_mouth_count", 0)),
@@ -138,4 +137,5 @@ static func _record(cell: int, member: Dictionary, add_volume: float, dt_s: floa
 		"add_velocity": velocity,
 		"upstream_enabled": upstream,
 		"downstream_enabled": downstream,
+		"upstream_centered": upstream and bool(member.get("junction", false)),
 	}
