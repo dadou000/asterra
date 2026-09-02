@@ -2,10 +2,10 @@ class_name HydroFrontierResolver
 extends RefCounted
 ## Transitional compact-queue -> world-topology bridge for Phase 3.
 ##
-## GPU emits only source slot, edge direction and outgoing Q. This resolver maps
-## the transient source slot back to its stable HydroTileKey, resolves the exact
-## cube-sphere neighbor, asks an explicit terrain/structure reachability callback,
-## then delegates wake policy to SparseHydroScheduler.
+## GPU snapshots source slot + (face, level, x, y) + edge direction + outgoing Q.
+## The resolver first verifies that the transient slot still belongs to that exact
+## stable tile, then resolves Asterra's cube-sphere neighbor and asks an explicit
+## terrain/structure reachability callback before wake policy is allowed to run.
 ##
 ## Reachability callable contract:
 ##   bool(source_key, source_direction, destination_key, flux_m3s, topology_link)
@@ -51,6 +51,21 @@ func resolve_candidates(candidates: Array[Dictionary],
 			result["reason"] = "stale_source_slot"
 			resolved.append(result)
 			continue
+
+		# New GPU queues snapshot stable identity at generation time. Keep legacy
+		# manually-built test candidates usable when the four metadata fields are
+		# absent, but whenever they are present they are mandatory consistency data.
+		if _candidate_has_identity(candidate):
+			var snapshot := HydroTileKey.new(
+				int(candidate["face"]), int(candidate["level"]),
+				int(candidate["x"]), int(candidate["y"]))
+			result["snapshot_tile_id"] = snapshot.packed()
+			if snapshot.packed() != source_id:
+				result["source_tile_id"] = source_id
+				result["reason"] = "stale_source_identity"
+				resolved.append(result)
+				continue
+
 		if direction < HydroTileTopology.DIR_WEST or direction > HydroTileTopology.DIR_NORTH:
 			result["reason"] = "invalid_direction"
 			resolved.append(result)
@@ -92,3 +107,8 @@ func resolve_candidates(candidates: Array[Dictionary],
 		resolved.append(result)
 
 	return resolved
+
+
+func _candidate_has_identity(candidate: Dictionary) -> bool:
+	return candidate.has("face") and candidate.has("level") \
+		and candidate.has("x") and candidate.has("y")
