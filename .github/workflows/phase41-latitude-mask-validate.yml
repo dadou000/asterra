@@ -12,6 +12,8 @@ on:
       - "scripts/world_authoring/validate_latitude_mask_phase41_ui_ci.gd"
       - "scripts/world_authoring/validate_longitude_mask_phase41_ci.gd"
       - "scripts/world_authoring/validate_longitude_mask_phase41_ui_ci.gd"
+      - "scripts/world_authoring/validate_geographic_region_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_geographic_region_mask_phase41_ui_ci.gd"
       - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
       - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
       - "scenes/world_authoring/PlanetStudio.tscn"
@@ -19,6 +21,8 @@ on:
       - "scenes/world_authoring/ValidateLatitudeMaskPhase41UI.tscn"
       - "scenes/world_authoring/ValidateLongitudeMaskPhase41CI.tscn"
       - "scenes/world_authoring/ValidateLongitudeMaskPhase41UI.tscn"
+      - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41UI.tscn"
       - ".github/workflows/phase41-latitude-mask-validate.yml"
   pull_request:
     paths:
@@ -29,6 +33,8 @@ on:
       - "scripts/world_authoring/validate_latitude_mask_phase41_ui_ci.gd"
       - "scripts/world_authoring/validate_longitude_mask_phase41_ci.gd"
       - "scripts/world_authoring/validate_longitude_mask_phase41_ui_ci.gd"
+      - "scripts/world_authoring/validate_geographic_region_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_geographic_region_mask_phase41_ui_ci.gd"
       - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
       - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
       - "scenes/world_authoring/PlanetStudio.tscn"
@@ -36,13 +42,15 @@ on:
       - "scenes/world_authoring/ValidateLatitudeMaskPhase41UI.tscn"
       - "scenes/world_authoring/ValidateLongitudeMaskPhase41CI.tscn"
       - "scenes/world_authoring/ValidateLongitudeMaskPhase41UI.tscn"
+      - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41UI.tscn"
       - ".github/workflows/phase41-latitude-mask-validate.yml"
   workflow_dispatch:
 
 jobs:
   spatial-mask:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -212,5 +220,53 @@ jobs:
           fi
           if grep -Eq "LONGITUDE_MASK_PHASE41_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase41-longitude-mask-ui.log; then
             echo "Phase 41 Longitude Band UI regression reported a failure."
+            exit 1
+          fi
+
+      - name: Validate deterministic Geographic Region mask
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateGeographicRegionMaskPhase41CI.tscn > /tmp/phase41-geographic-region.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-geographic-region.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Geographic Region validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "GEOGRAPHIC_REGION_MASK_PHASE41_OK" /tmp/phase41-geographic-region.log; then
+            echo "Phase 41 Geographic Region completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "GEOGRAPHIC_REGION_MASK_PHASE41_FAILED|SCRIPT ERROR|Parse Error|FATAL" /tmp/phase41-geographic-region.log; then
+            echo "Phase 41 Geographic Region regression reported a failure."
+            exit 1
+          fi
+
+      - name: Validate Geographic Region editor workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateGeographicRegionMaskPhase41UI.tscn > /tmp/phase41-geographic-region-ui.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-geographic-region-ui.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Geographic Region UI validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "GEOGRAPHIC_REGION_MASK_PHASE41_UI_OK" /tmp/phase41-geographic-region-ui.log; then
+            echo "Phase 41 Geographic Region UI completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "GEOGRAPHIC_REGION_MASK_PHASE41_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase41-geographic-region-ui.log; then
+            echo "Phase 41 Geographic Region UI regression reported a failure."
             exit 1
           fi
