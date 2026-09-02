@@ -1,15 +1,16 @@
 extends "res://scripts/world_authoring/terrain_material_runtime_phase31.gd"
-## Phase 32/33: production surface stage controls.
+## Phase 32-34: production surface stage controls.
 ##
-## Settings nodes do not run through the per-fragment bytecode interpreter. They
-## bind the same uniforms/samplers consumed by the existing classifier,
-## microrelief, anti-tiling, rock PBR and scanned-PBR stages. The canonical
-## production Surface graph therefore remains a zero-bytecode pass-through.
+## Settings nodes bind the exact uniforms/samplers consumed by the existing
+## classifier, microrelief, anti-tiling, rock PBR and scanned-PBR stages. The
+## canonical production Surface graph therefore remains a zero-bytecode pass-through.
 
 const GRAPH_SCRIPT := preload(
 	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
 const CONTROL_TYPES: Array[String] = [
 	"PRODUCTION_CLASSIFIER_SETTINGS",
+	"PRODUCTION_CLASSIFIER_THRESHOLDS",
+	"PRODUCTION_SURFACE_PALETTE",
 	"PRODUCTION_MICRORELIEF_SETTINGS",
 	"PRODUCTION_ANTITILE_SETTINGS",
 	"PRODUCTION_ROCK_PBR_SETTINGS",
@@ -20,6 +21,105 @@ const DETAIL_WRAP_M: float = 4096.0
 const SAFE_PERIODIC_CELLS: Array[float] = [
 	1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0,
 ]
+
+const CLASSIFIER_THRESHOLD_BINDINGS: Dictionary = {
+	"soil_repose_dry_deg":"u_sc_soil_repose_dry_deg",
+	"soil_repose_wet_deg":"u_sc_soil_repose_wet_deg",
+	"loose_margin_low_deg":"u_sc_loose_margin_low_deg",
+	"loose_margin_high_deg":"u_sc_loose_margin_high_deg",
+	"sand_slope_start_deg":"u_sc_sand_slope_start_deg",
+	"sand_slope_end_deg":"u_sc_sand_slope_end_deg",
+	"vegetation_slope_start_deg":"u_sc_vegetation_slope_start_deg",
+	"vegetation_slope_end_deg":"u_sc_vegetation_slope_end_deg",
+	"thin_soil_start_m":"u_sc_thin_soil_start_m",
+	"thin_soil_end_m":"u_sc_thin_soil_end_m",
+	"rock_slope_start_deg":"u_sc_rock_slope_start_deg",
+	"rock_slope_end_deg":"u_sc_rock_slope_end_deg",
+	"mountain_rock_slope_start_deg":"u_sc_mountain_rock_slope_start_deg",
+	"mountain_rock_slope_end_deg":"u_sc_mountain_rock_slope_end_deg",
+	"arid_bare_start":"u_sc_arid_bare_start",
+	"arid_bare_end":"u_sc_arid_bare_end",
+	"bare_precip_start_mm":"u_sc_bare_precip_start_mm",
+	"bare_precip_end_mm":"u_sc_bare_precip_end_mm",
+	"bare_temp_start_c":"u_sc_bare_temp_start_c",
+	"bare_temp_end_c":"u_sc_bare_temp_end_c",
+	"dune_arid_start":"u_sc_dune_arid_start",
+	"dune_arid_end":"u_sc_dune_arid_end",
+	"dune_precip_start_mm":"u_sc_dune_precip_start_mm",
+	"dune_precip_end_mm":"u_sc_dune_precip_end_mm",
+	"thermal_growth_start_c":"u_sc_thermal_growth_start_c",
+	"thermal_growth_end_c":"u_sc_thermal_growth_end_c",
+	"vegetation_depth_start_m":"u_sc_vegetation_depth_start_m",
+	"vegetation_depth_end_m":"u_sc_vegetation_depth_end_m",
+	"soil_depth_start_m":"u_sc_soil_depth_start_m",
+	"soil_depth_end_m":"u_sc_soil_depth_end_m",
+	"mud_slope_start_deg":"u_sc_mud_slope_start_deg",
+	"mud_slope_end_deg":"u_sc_mud_slope_end_deg",
+	"saturated_wet_start":"u_sc_saturated_wet_start",
+	"saturated_wet_end":"u_sc_saturated_wet_end",
+	"saturated_precip_start_mm":"u_sc_saturated_precip_start_mm",
+	"saturated_precip_end_mm":"u_sc_saturated_precip_end_mm",
+	"snow_temp_start_c":"u_sc_snow_temp_start_c",
+	"snow_temp_end_c":"u_sc_snow_temp_end_c",
+	"snow_slope_start_deg":"u_sc_snow_slope_start_deg",
+	"snow_slope_end_deg":"u_sc_snow_slope_end_deg",
+	"marginal_snow_temp_start_c":"u_sc_marginal_snow_temp_start_c",
+	"marginal_snow_temp_end_c":"u_sc_marginal_snow_temp_end_c",
+	"snow_precip_start_mm":"u_sc_snow_precip_start_mm",
+	"snow_precip_end_mm":"u_sc_snow_precip_end_mm",
+	"scree_slope_start_deg":"u_sc_scree_slope_start_deg",
+	"scree_slope_full_deg":"u_sc_scree_slope_full_deg",
+	"scree_slope_fade_deg":"u_sc_scree_slope_fade_deg",
+	"scree_slope_end_deg":"u_sc_scree_slope_end_deg",
+	"gravel_slope_start_deg":"u_sc_gravel_slope_start_deg",
+	"gravel_slope_end_deg":"u_sc_gravel_slope_end_deg",
+}
+
+const PALETTE_COLOR_BINDINGS: Dictionary = {
+	"rock_granite":"u_sc_rock_granite",
+	"rock_basalt":"u_sc_rock_basalt",
+	"rock_gabbro":"u_sc_rock_gabbro",
+	"rock_gneiss":"u_sc_rock_gneiss",
+	"rock_schist":"u_sc_rock_schist",
+	"rock_sandstone":"u_sc_rock_sandstone",
+	"rock_shale":"u_sc_rock_shale",
+	"rock_limestone":"u_sc_rock_limestone",
+	"rock_dolomite":"u_sc_rock_dolomite",
+	"rock_conglomerate":"u_sc_rock_conglomerate",
+	"rock_quartzite":"u_sc_rock_quartzite",
+	"rock_tuff":"u_sc_rock_tuff",
+	"rock_serpentinite":"u_sc_rock_serpentinite",
+	"soil_sandy":"u_sc_soil_sandy",
+	"soil_silty":"u_sc_soil_silty",
+	"soil_clayey":"u_sc_soil_clayey",
+	"soil_humus":"u_sc_soil_humus",
+	"vegetation_dry":"u_sc_vegetation_dry",
+	"vegetation_grass":"u_sc_vegetation_grass",
+	"vegetation_wet":"u_sc_vegetation_wet",
+	"vegetation_lush":"u_sc_vegetation_lush",
+	"vegetation_cold":"u_sc_vegetation_cold",
+	"sand_low":"u_sc_sand_low",
+	"sand_high":"u_sc_sand_high",
+	"mud_tint":"u_sc_mud_tint",
+	"snow":"u_sc_snow_color",
+	"gravel":"u_sc_gravel_color",
+}
+
+const PALETTE_FLOAT_BINDINGS: Dictionary = {
+	"scree_rock_mix":"u_sc_scree_rock_mix",
+	"scree_add":"u_sc_scree_add",
+	"gravel_rock_mix":"u_sc_gravel_rock_mix",
+	"roughness_fallback":"u_sc_roughness_fallback",
+	"roughness_rock":"u_sc_roughness_rock",
+	"roughness_soil":"u_sc_roughness_soil",
+	"roughness_vegetation":"u_sc_roughness_vegetation",
+	"roughness_sand":"u_sc_roughness_sand",
+	"roughness_mud_dry":"u_sc_roughness_mud_dry",
+	"roughness_mud_wet":"u_sc_roughness_mud_wet",
+	"roughness_snow":"u_sc_roughness_snow",
+	"roughness_scree":"u_sc_roughness_scree",
+	"roughness_gravel":"u_sc_roughness_gravel",
+}
 
 var _production_controls: Dictionary = {}
 var _production_texture_cache: Dictionary = {}
@@ -49,6 +149,17 @@ func bind_material(material: ShaderMaterial) -> void:
 func bind_production_controls(material: ShaderMaterial) -> void:
 	if material == null:
 		return
+	_bind_classifier(material)
+	_bind_classifier_thresholds(material)
+	_bind_surface_palette(material)
+	_bind_microrelief(material)
+	_bind_antitile(material)
+	_bind_rock(material)
+	_bind_scanned_pbr(material)
+	_bind_scan_textures(material, _control("PRODUCTION_SCAN_TEXTURES"))
+
+
+func _bind_classifier(material: ShaderMaterial) -> void:
 	var classifier: Dictionary = _control("PRODUCTION_CLASSIFIER_SETTINGS")
 	material.set_shader_parameter("u_classifier_primary_scale", Vector4(
 		maxf(float(classifier.get("rock_scale", 1.0)), 0.0),
@@ -75,59 +186,68 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_classifier_roughness_max",
 		clampf(float(classifier.get("roughness_max", 0.98)), 0.0, 1.0))
 
+
+func _bind_classifier_thresholds(material: ShaderMaterial) -> void:
+	var controls: Dictionary = _control("PRODUCTION_CLASSIFIER_THRESHOLDS")
+	for key: Variant in CLASSIFIER_THRESHOLD_BINDINGS.keys():
+		if controls.has(key):
+			material.set_shader_parameter(String(CLASSIFIER_THRESHOLD_BINDINGS[key]), float(controls[key]))
+
+
+func _bind_surface_palette(material: ShaderMaterial) -> void:
+	var controls: Dictionary = _control("PRODUCTION_SURFACE_PALETTE")
+	var defaults: Dictionary = GRAPH_SCRIPT.production_control_defaults("PRODUCTION_SURFACE_PALETTE")
+	for key: Variant in PALETTE_COLOR_BINDINGS.keys():
+		var fallback: Color = defaults.get(key, Color.WHITE) as Color
+		var value: Variant = controls.get(key, fallback)
+		var color: Color = value as Color if value is Color else fallback
+		material.set_shader_parameter(String(PALETTE_COLOR_BINDINGS[key]),
+			Vector3(color.r, color.g, color.b))
+	for key: Variant in PALETTE_FLOAT_BINDINGS.keys():
+		if controls.has(key):
+			material.set_shader_parameter(String(PALETTE_FLOAT_BINDINGS[key]), float(controls[key]))
+
+
+func _bind_microrelief(material: ShaderMaterial) -> void:
 	var micro: Dictionary = _control("PRODUCTION_MICRORELIEF_SETTINGS")
 	material.set_shader_parameter("u_microrelief_enabled", 1.0 if bool(micro.get("enabled", true)) else 0.0)
-	material.set_shader_parameter("u_microrelief_strength",
-		maxf(float(micro.get("strength", 1.0)), 0.0))
+	material.set_shader_parameter("u_microrelief_strength", maxf(float(micro.get("strength", 1.0)), 0.0))
 	for binding: Array in [
-		["u_microrelief_rock_scale", "rock_scale"],
-		["u_microrelief_soil_scale", "soil_scale"],
-		["u_microrelief_sand_scale", "sand_scale"],
-		["u_microrelief_mud_scale", "mud_scale"],
-		["u_microrelief_snow_scale", "snow_scale"],
-		["u_microrelief_gravel_scale", "gravel_scale"],
-		["u_microrelief_scree_scale", "scree_scale"],
-		["u_microrelief_base_noise_scale", "base_noise_scale"],
+		["u_microrelief_rock_scale", "rock_scale"], ["u_microrelief_soil_scale", "soil_scale"],
+		["u_microrelief_sand_scale", "sand_scale"], ["u_microrelief_mud_scale", "mud_scale"],
+		["u_microrelief_snow_scale", "snow_scale"], ["u_microrelief_gravel_scale", "gravel_scale"],
+		["u_microrelief_scree_scale", "scree_scale"], ["u_microrelief_base_noise_scale", "base_noise_scale"],
 	]:
-		material.set_shader_parameter(String(binding[0]),
-			maxf(float(micro.get(String(binding[1]), 1.0)), 0.0))
+		material.set_shader_parameter(String(binding[0]), maxf(float(micro.get(String(binding[1]), 1.0)), 0.0))
 
+
+func _bind_antitile(material: ShaderMaterial) -> void:
 	var antitile: Dictionary = _control("PRODUCTION_ANTITILE_SETTINGS")
-	material.set_shader_parameter("u_pbr_antitile_strength",
-		maxf(float(antitile.get("strength", 1.0)), 0.0))
+	material.set_shader_parameter("u_pbr_antitile_strength", maxf(float(antitile.get("strength", 1.0)), 0.0))
 	var coarse_cell: float = _snap_periodic_cell(float(antitile.get("coarse_cell_m", 32.0)))
 	var fine_cell: float = _snap_periodic_cell(float(antitile.get("fine_cell_m", 8.0)))
 	material.set_shader_parameter("u_pbr_antitile_coarse_cell_m", coarse_cell)
 	material.set_shader_parameter("u_pbr_antitile_fine_cell_m", fine_cell)
-	material.set_shader_parameter("u_pbr_antitile_coarse_period",
-		maxi(1, int(round(DETAIL_WRAP_M / coarse_cell))))
-	material.set_shader_parameter("u_pbr_antitile_fine_period",
-		maxi(1, int(round(DETAIL_WRAP_M / fine_cell))))
-	material.set_shader_parameter("u_pbr_antitile_coarse_offset_m",
-		maxf(float(antitile.get("coarse_offset_m", 0.58)), 0.0))
-	material.set_shader_parameter("u_pbr_antitile_fine_offset_m",
-		maxf(float(antitile.get("fine_offset_m", 0.14)), 0.0))
-	material.set_shader_parameter("u_pbr_antitile_coarse_seed",
-		maxi(1, int(antitile.get("coarse_seed", 29093))))
-	material.set_shader_parameter("u_pbr_antitile_fine_seed",
-		maxi(1, int(antitile.get("fine_seed", 46141))))
+	material.set_shader_parameter("u_pbr_antitile_coarse_period", maxi(1, int(round(DETAIL_WRAP_M / coarse_cell))))
+	material.set_shader_parameter("u_pbr_antitile_fine_period", maxi(1, int(round(DETAIL_WRAP_M / fine_cell))))
+	material.set_shader_parameter("u_pbr_antitile_coarse_offset_m", maxf(float(antitile.get("coarse_offset_m", 0.58)), 0.0))
+	material.set_shader_parameter("u_pbr_antitile_fine_offset_m", maxf(float(antitile.get("fine_offset_m", 0.14)), 0.0))
+	material.set_shader_parameter("u_pbr_antitile_coarse_seed", maxi(1, int(antitile.get("coarse_seed", 29093))))
+	material.set_shader_parameter("u_pbr_antitile_fine_seed", maxi(1, int(antitile.get("fine_seed", 46141))))
 
+
+func _bind_rock(material: ShaderMaterial) -> void:
 	var rock: Dictionary = _control("PRODUCTION_ROCK_PBR_SETTINGS")
 	material.set_shader_parameter("u_rock_pbr_enabled", 1.0 if bool(rock.get("enabled", true)) else 0.0)
-	material.set_shader_parameter("u_rock_detail_strength",
-		maxf(float(rock.get("detail_strength", 1.0)), 0.0))
-	material.set_shader_parameter("u_rock_normal_strength",
-		maxf(float(rock.get("normal_strength", 1.0)), 0.0))
-	material.set_shader_parameter("u_rock_color_strength",
-		maxf(float(rock.get("color_strength", 1.0)), 0.0))
+	material.set_shader_parameter("u_rock_detail_strength", maxf(float(rock.get("detail_strength", 1.0)), 0.0))
+	material.set_shader_parameter("u_rock_normal_strength", maxf(float(rock.get("normal_strength", 1.0)), 0.0))
+	material.set_shader_parameter("u_rock_color_strength", maxf(float(rock.get("color_strength", 1.0)), 0.0))
 	var rock_coarse_cell: float = _snap_periodic_cell(float(rock.get("coarse_cell_m", 4.0)))
 	var rock_fine_cell: float = _snap_periodic_cell(float(rock.get("fine_cell_m", 1.0)))
 	material.set_shader_parameter("u_rock_coarse_cell_m", rock_coarse_cell)
 	material.set_shader_parameter("u_rock_fine_cell_m", rock_fine_cell)
-	material.set_shader_parameter("u_rock_coarse_period",
-		maxi(1, int(round(DETAIL_WRAP_M / rock_coarse_cell))))
-	material.set_shader_parameter("u_rock_fine_period",
-		maxi(1, int(round(DETAIL_WRAP_M / rock_fine_cell))))
+	material.set_shader_parameter("u_rock_coarse_period", maxi(1, int(round(DETAIL_WRAP_M / rock_coarse_cell))))
+	material.set_shader_parameter("u_rock_fine_period", maxi(1, int(round(DETAIL_WRAP_M / rock_fine_cell))))
 	material.set_shader_parameter("u_rock_coarse_seed", maxi(1, int(rock.get("coarse_seed", 11665))))
 	material.set_shader_parameter("u_rock_fine_seed", maxi(1, int(rock.get("fine_seed", 35415))))
 	_bind_nonnegative(material, "u_rock_coarse_fade_near_m", rock, "coarse_fade_near_m", 850.0)
@@ -136,41 +256,29 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	_bind_nonnegative(material, "u_rock_fine_fade_far_m", rock, "fine_fade_far_m", 920.0)
 	_bind_nonnegative(material, "u_rock_normal_fade_near_m", rock, "normal_fade_near_m", 90.0)
 	_bind_nonnegative(material, "u_rock_normal_fade_far_m", rock, "normal_fade_far_m", 620.0)
-	material.set_shader_parameter("u_rock_weatherability_pivot",
-		clampf(float(rock.get("weatherability_pivot", 0.45)), 0.0, 1.0))
-	material.set_shader_parameter("u_rock_weatherability_roughness",
-		float(rock.get("weatherability_roughness", 0.055)))
-	material.set_shader_parameter("u_rock_family_roughness_min",
-		clampf(float(rock.get("family_roughness_min", 0.48)), 0.0, 1.0))
-	material.set_shader_parameter("u_rock_family_roughness_max",
-		clampf(float(rock.get("family_roughness_max", 0.97)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_weatherability_pivot", clampf(float(rock.get("weatherability_pivot", 0.45)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_weatherability_roughness", float(rock.get("weatherability_roughness", 0.055)))
+	material.set_shader_parameter("u_rock_family_roughness_min", clampf(float(rock.get("family_roughness_min", 0.48)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_family_roughness_max", clampf(float(rock.get("family_roughness_max", 0.97)), 0.0, 1.0))
 	_bind_nonnegative(material, "u_rock_fracture_color_base", rock, "fracture_color_base", 0.09)
 	_bind_nonnegative(material, "u_rock_fracture_color_fault", rock, "fracture_color_fault", 0.15)
 	_bind_nonnegative(material, "u_rock_fracture_roughness", rock, "fracture_roughness", 0.040)
 	_bind_nonnegative(material, "u_rock_normal_fracture_mix", rock, "normal_fracture_mix", 0.55)
-	material.set_shader_parameter("u_rock_output_roughness_min",
-		clampf(float(rock.get("output_roughness_min", 0.45)), 0.0, 1.0))
-	material.set_shader_parameter("u_rock_output_roughness_max",
-		clampf(float(rock.get("output_roughness_max", 0.98)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_output_roughness_min", clampf(float(rock.get("output_roughness_min", 0.45)), 0.0, 1.0))
+	material.set_shader_parameter("u_rock_output_roughness_max", clampf(float(rock.get("output_roughness_max", 0.98)), 0.0, 1.0))
 
+
+func _bind_scanned_pbr(material: ShaderMaterial) -> void:
 	var scan: Dictionary = _control("PRODUCTION_SCAN_PBR_SETTINGS")
 	material.set_shader_parameter("u_pbr_enabled", 1.0 if bool(scan.get("enabled", true)) else 0.0)
-	material.set_shader_parameter("u_pbr_ground_metres",
-		maxf(float(scan.get("ground_metres", 2.0)), 0.001))
-	material.set_shader_parameter("u_pbr_grass_metres",
-		maxf(float(scan.get("grass_metres", 2.0)), 0.001))
-	material.set_shader_parameter("u_pbr_mud_metres",
-		maxf(float(scan.get("mud_metres", 1.0)), 0.001))
-	material.set_shader_parameter("u_pbr_forest_metres",
-		maxf(float(scan.get("forest_metres", 2.0)), 0.001))
-	material.set_shader_parameter("u_pbr_triplanar_sharpness",
-		maxf(float(scan.get("triplanar_sharpness", 5.0)), 0.01))
-	material.set_shader_parameter("u_pbr_transfer_strength",
-		maxf(float(scan.get("transfer_strength", 0.60)), 0.0))
-	material.set_shader_parameter("u_pbr_transfer_min",
-		maxf(float(scan.get("transfer_min", 0.48)), 0.0))
-	material.set_shader_parameter("u_pbr_transfer_max",
-		maxf(float(scan.get("transfer_max", 1.72)), 0.0))
+	material.set_shader_parameter("u_pbr_ground_metres", maxf(float(scan.get("ground_metres", 2.0)), 0.001))
+	material.set_shader_parameter("u_pbr_grass_metres", maxf(float(scan.get("grass_metres", 2.0)), 0.001))
+	material.set_shader_parameter("u_pbr_mud_metres", maxf(float(scan.get("mud_metres", 1.0)), 0.001))
+	material.set_shader_parameter("u_pbr_forest_metres", maxf(float(scan.get("forest_metres", 2.0)), 0.001))
+	material.set_shader_parameter("u_pbr_triplanar_sharpness", maxf(float(scan.get("triplanar_sharpness", 5.0)), 0.01))
+	material.set_shader_parameter("u_pbr_transfer_strength", maxf(float(scan.get("transfer_strength", 0.60)), 0.0))
+	material.set_shader_parameter("u_pbr_transfer_min", maxf(float(scan.get("transfer_min", 0.48)), 0.0))
+	material.set_shader_parameter("u_pbr_transfer_max", maxf(float(scan.get("transfer_max", 1.72)), 0.0))
 	_bind_nonnegative(material, "u_pbr_surface_fade_near_m", scan, "surface_fade_near_m", 900.0)
 	_bind_nonnegative(material, "u_pbr_surface_fade_far_m", scan, "surface_fade_far_m", 3200.0)
 	_bind_nonnegative(material, "u_pbr_normal_fade_near_m", scan, "normal_fade_near_m", 120.0)
@@ -185,13 +293,11 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	_bind_nonnegative(material, "u_pbr_special_roughness_strength", scan, "special_roughness_strength", 0.82)
 	_bind_nonnegative(material, "u_pbr_special_normal_mix", scan, "special_normal_mix", 0.58)
 	_bind_nonnegative(material, "u_pbr_special_normal_weight", scan, "special_normal_weight", 0.72)
-	_bind_scan_textures(material, _control("PRODUCTION_SCAN_TEXTURES"))
 
 
 func _bind_nonnegative(material: ShaderMaterial, uniform_name: String, controls: Dictionary,
 		key: String, fallback: float) -> void:
-	material.set_shader_parameter(uniform_name,
-		maxf(float(controls.get(key, fallback)), 0.0))
+	material.set_shader_parameter(uniform_name, maxf(float(controls.get(key, fallback)), 0.0))
 
 
 func _snap_periodic_cell(requested: float) -> float:
@@ -233,7 +339,10 @@ func _extract_production_controls(terrain: Resource) -> Dictionary:
 		var graph: Resource = slot.get(&"graph") as Resource
 		if graph == null:
 			continue
-		for node_value: Variant in graph.get(&"nodes") as Array:
+		var graph_nodes_value: Variant = graph.get(&"nodes")
+		if not (graph_nodes_value is Array):
+			continue
+		for node_value: Variant in graph_nodes_value as Array:
 			if not (node_value is Dictionary):
 				continue
 			var node: Dictionary = node_value as Dictionary
@@ -250,18 +359,12 @@ func _extract_production_controls(terrain: Resource) -> Dictionary:
 
 func _bind_scan_textures(material: ShaderMaterial, controls: Dictionary) -> void:
 	var mapping: Dictionary = {
-		"ground_albedo": "u_pbr_ground_albedo",
-		"ground_normal": "u_pbr_ground_normal",
-		"ground_roughness": "u_pbr_ground_roughness",
-		"grass_albedo": "u_pbr_grass_albedo",
-		"grass_normal": "u_pbr_grass_normal",
-		"grass_roughness": "u_pbr_grass_roughness",
-		"mud_albedo": "u_pbr_mud_albedo",
-		"mud_normal": "u_pbr_mud_normal",
-		"mud_roughness": "u_pbr_mud_roughness",
-		"forest_albedo": "u_pbr_forest_albedo",
-		"forest_normal": "u_pbr_forest_normal",
-		"forest_roughness": "u_pbr_forest_roughness",
+		"ground_albedo":"u_pbr_ground_albedo", "ground_normal":"u_pbr_ground_normal",
+		"ground_roughness":"u_pbr_ground_roughness", "grass_albedo":"u_pbr_grass_albedo",
+		"grass_normal":"u_pbr_grass_normal", "grass_roughness":"u_pbr_grass_roughness",
+		"mud_albedo":"u_pbr_mud_albedo", "mud_normal":"u_pbr_mud_normal",
+		"mud_roughness":"u_pbr_mud_roughness", "forest_albedo":"u_pbr_forest_albedo",
+		"forest_normal":"u_pbr_forest_normal", "forest_roughness":"u_pbr_forest_roughness",
 	}
 	for key: Variant in mapping.keys():
 		var path: String = String(controls.get(key, "")).strip_edges()
@@ -292,7 +395,7 @@ func _production_texture(path: String) -> Texture2D:
 
 
 func _is_identity_surface_slot(slot: Resource) -> bool:
-	if String(slot.get(&"slot_id")) != PRODUCTION_SURFACE_SLOT_ID:
+	if slot == null or String(slot.get(&"slot_id")) != PRODUCTION_SURFACE_SLOT_ID:
 		return false
 	if int(slot.get(&"domain")) != 1 or int(slot.get(&"blend_mode")) != 5:
 		return false
@@ -301,8 +404,12 @@ func _is_identity_surface_slot(slot: Resource) -> bool:
 	var graph: Resource = slot.get(&"graph") as Resource
 	if graph == null:
 		return false
-	var nodes: Array = graph.get(&"nodes") as Array
-	var links: Array = graph.get(&"links") as Array
+	var nodes_value: Variant = graph.get(&"nodes")
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
+		return false
+	var nodes: Array = nodes_value as Array
+	var links: Array = links_value as Array
 	if links.size() != 6:
 		return false
 	var output_id: String = ""
