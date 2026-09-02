@@ -9,6 +9,26 @@ extends PlanetRiverReachCollapseBridge
 var _production_release_requested := false
 
 
+func eligible(cell: int) -> bool:
+	if not _initialized or _busy or coupling == null or coupling.pending() \
+			or runtime == null or runtime.busy() or store == null \
+			or store.pending_ownership_transaction_count() > 0:
+		return false
+	var rec := coupling.registered_reach(cell)
+	if rec.is_empty():
+		return false
+	var key := HydroTileKey.unpack(int(rec.get("tile_id", -1)))
+	if key == null or scheduler == null or scheduler.pool == null \
+			or not scheduler.pool.contains(key):
+		return false
+	var pool_record := scheduler.pool.record(key)
+	if pool_record.is_empty() or scheduler.pool.slot_for(key) != int(rec.get("slot", -1)):
+		return false
+	return HydroRiverCollapsePolicy.eligible_record(pool_record,
+		minimum_quiet_time_s, maximum_velocity_mps, maximum_outgoing_flux_m3s,
+		maximum_disturbance_energy, require_settling_state)
+
+
 func release() -> void:
 	if _production_release_requested:
 		return
