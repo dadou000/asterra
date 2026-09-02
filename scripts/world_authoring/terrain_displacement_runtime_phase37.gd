@@ -1,12 +1,11 @@
 extends "res://scripts/world_authoring/terrain_displacement_runtime_phase36.gd"
-## Phase 37: exact commutative native-stage reordering.
+## Phase 37/38: exact native contribution topology.
 ##
-## Broad through Micro are independent additive/subtractive contributions in the
-## resident production shader. Their visual graph order may therefore change without
-## changing terrain: the lowering plan records the authored order, normalizes actual
-## execution to the shader's production order, and applies only exact bypass controls.
-## Glacial remains terminal because it transforms the accumulated height. Branching
-## remains transactional-reject until contribution/merge semantics are explicit.
+## Saved Phase 37 linear chains remain readable. The active graph may also expose
+## Broad through Micro as independent sources feeding Native Detail Merge, followed
+## by the optional terminal Glacial transform. Both representations normalize to the
+## resident production shader and apply only exact bypass controls; invalid topology
+## remains candidate-only and cannot replace the last-known-good terrain snapshot.
 
 const NATIVE_REORDER_LOWERING := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_lowering.gd")
@@ -51,8 +50,8 @@ func _native_topology_validation_issue(graph: Resource) -> String:
 	var plan: Dictionary = NATIVE_REORDER_LOWERING.commutative_reorder_plan(graph)
 	if bool(plan.get("valid", false)):
 		return ""
-	var reason: String = String(plan.get("reason", "invalid native-stage chain"))
-	return "Base Terrain native-stage topology is unsupported: %s. Broad through Micro may be reordered/bypassed; Glacial must remain terminal; branching is not executable yet. Keeping the last valid terrain." % reason
+	var reason: String = String(plan.get("reason", "invalid native terrain graph"))
+	return "Base Terrain native topology is unsupported: %s. Broad through Micro must feed their matching Native Detail Merge inputs; Glacial may follow Merge as the terminal height transform or be bypassed. Keeping the last valid terrain." % reason
 
 
 func _extract_reorder_plan(terrain: Resource) -> Dictionary:
@@ -77,5 +76,6 @@ func _extract_reorder_plan(terrain: Resource) -> Dictionary:
 func stats() -> Dictionary:
 	var out: Dictionary = super.stats()
 	out["native_commutative_reorder_lowering"] = true
+	out["native_contribution_merge_lowering"] = true
 	out["native_reorder_plan"] = _last_native_reorder_plan.duplicate(true)
 	return out
