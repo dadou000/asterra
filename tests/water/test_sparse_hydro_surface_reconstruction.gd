@@ -133,24 +133,26 @@ func _verify_texture(bytes: PackedByteArray) -> void:
 	var min_nonzero_height := INF
 	var max_height := -INF
 	var max_speed := 0.0
-	var max_activity := 0.0
+	var min_depth := INF
+	var max_depth := 0.0
 	var nonzero := 0
 	for i in res * res:
 		var o := i * 16
 		var eta := bytes.decode_float(o)
 		var vx := bytes.decode_float(o + 4)
 		var vy := bytes.decode_float(o + 8)
-		var activity := bytes.decode_float(o + 12)
-		_require(is_finite(eta) and is_finite(vx) and is_finite(vy) and is_finite(activity),
+		var depth := bytes.decode_float(o + 12)
+		_require(is_finite(eta) and is_finite(vx) and is_finite(vy) and is_finite(depth),
 			"non-finite texel %d" % i)
 		if _finished:
 			return
-		if absf(eta) > 1.0e-4 or absf(vx) > 1.0e-4 or absf(vy) > 1.0e-4:
+		if depth > 1.0e-4:
 			nonzero += 1
 			min_nonzero_height = minf(min_nonzero_height, eta)
 			max_height = maxf(max_height, eta)
 			max_speed = maxf(max_speed, Vector2(vx, vy).length())
-			max_activity = maxf(max_activity, activity)
+			min_depth = minf(min_depth, depth)
+			max_depth = maxf(max_depth, depth)
 
 	_require(nonzero > 16 and nonzero < res * res / 3,
 		"resident-footprint masking failed nonzero=%d" % nonzero)
@@ -162,15 +164,17 @@ func _verify_texture(bytes: PackedByteArray) -> void:
 		"stale unoccupied slot leaked into render cache max=%.6f" % max_height)
 	_require(max_speed > 0.9 and max_speed < 2.0,
 		"velocity transform magnitude unexpected %.6f" % max_speed)
-	_require(max_activity > 0.1 and max_activity <= 1.0,
-		"activity channel invalid %.6f" % max_activity)
+	_require(min_depth > 4.8 and min_depth < 5.2,
+		"source physical depth missing/incorrect %.6f" % min_depth)
+	_require(max_depth > 6.8 and max_depth < 7.2,
+		"east physical depth missing/incorrect %.6f" % max_depth)
 	if _finished:
 		return
 
 	_finished = true
 	print("SPARSE_HYDRO_SURFACE_RECONSTRUCTION: PASS nonzero=", nonzero,
-		" eta=[", min_nonzero_height, ",", max_height, "] speed=", max_speed,
-		" activity=", max_activity, " hash=", _recon.hash_size())
+		" eta=[", min_nonzero_height, ",", max_height, "] depth=[", min_depth,
+		",", max_depth, "] speed=", max_speed, " hash=", _recon.hash_size())
 	_cleanup()
 	get_tree().quit(0)
 
