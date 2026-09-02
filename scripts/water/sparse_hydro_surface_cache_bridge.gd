@@ -146,10 +146,12 @@ func _align_cache_to_ocean(force: bool) -> void:
 
 	var current := WaterSystem.dynamic_surface_anchor_frame()
 	var current_value: Variant = current.get("dir", Vector3.RIGHT)
-	var current_dir := current_value as Vector3 if current_value is Vector3 \
-		else Vector3.RIGHT
-	var radius := maxf(Planet.cfg.planet_radius, 1.0) if Planet.ready_state \
-		and Planet.cfg != null else 1.0
+	var current_dir := Vector3.RIGHT
+	if current_value is Vector3:
+		current_dir = current_value as Vector3
+	var radius := 1.0
+	if Planet.ready_state and Planet.cfg != null:
+		radius = maxf(Planet.cfg.planet_radius, 1.0)
 	var arc_m := acos(clampf(current_dir.normalized().dot(center_dir), -1.0, 1.0)) * radius
 	var threshold := WaterSystem.surface_resources().field_half_extent_m() \
 		* clampf(reanchor_fraction, 0.05, 0.90)
