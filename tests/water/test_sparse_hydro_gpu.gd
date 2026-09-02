@@ -1,6 +1,6 @@
 extends Node
 ## Renderer-mode Phase 3 smoke test for sparse slot storage, compact GPU
-## summaries, stable slot metadata and the summary -> active-frontier queue.
+## summaries, stable slot metadata and predictive summary -> frontier queue.
 
 const CAPACITY := 4
 const TILE_RES := 8
@@ -96,8 +96,11 @@ func _on_summaries_ready(_request_id: int, summaries: Array[Dictionary]) -> void
 	_require_close(float(s0["max_depth_m"]), 2.0, 1.0e-5, "slot0 depth")
 	_require_close(float(s0["max_velocity_mps"]), 0.5, 1.0e-5, "slot0 velocity")
 	_require_close(float(s0["kinetic_energy_proxy"]), 64.0, 2.0e-4, "slot0 energy")
-	_require_close(float(s0["flux_east_m3s"]), 16.0, 2.0e-4, "slot0 east flux")
-	_require_close(float(s0["flux_west_m3s"]), 0.0, 1.0e-6, "slot0 west flux")
+	_require_close(float(s0["flux_east_m3s"]), 16.0, 2.0e-4, "slot0 actual east flux")
+	_require_close(float(s0["flux_west_m3s"]), 0.0, 1.0e-6, "slot0 actual west flux")
+	_require(float(s0["wetting_west_m3s"]) > 0.5
+		and float(s0["wetting_east_m3s"]) > 16.0,
+		"slot0 predictive wetting flux missing")
 	_require(int(s0["wet_cells"]) == TILE_RES * TILE_RES, "slot0 wet count")
 	_require(int(s0["invalid_cells"]) == 0, "slot0 invalid cells")
 
@@ -105,22 +108,26 @@ func _on_summaries_ready(_request_id: int, summaries: Array[Dictionary]) -> void
 	_require(not bool(s1["active"]), "unoccupied slot 1 reported active")
 	_require_close(float(s1["max_depth_m"]), 0.0, 1.0e-6, "inactive slot depth")
 	_require(int(s1["wet_cells"]) == 0, "inactive slot wet count")
+	_require_close(float(s1["wetting_east_m3s"]), 0.0, 1.0e-6,
+		"inactive slot predictive flux")
 
 	var s2 := summaries[2]
 	_require(bool(s2["active"]), "slot 2 should be active")
 	_require_close(float(s2["max_depth_m"]), 1.0, 1.0e-5, "slot2 depth")
 	_require_close(float(s2["max_velocity_mps"]), 0.25, 1.0e-5, "slot2 velocity")
-	_require_close(float(s2["flux_south_m3s"]), 4.0, 2.0e-4, "slot2 south flux")
-	_require_close(float(s2["flux_north_m3s"]), 0.0, 1.0e-6, "slot2 north flux")
+	_require_close(float(s2["flux_south_m3s"]), 4.0, 2.0e-4, "slot2 actual south flux")
+	_require_close(float(s2["flux_north_m3s"]), 0.0, 1.0e-6, "slot2 actual north flux")
+	_require(float(s2["wetting_north_m3s"]) > 0.5,
+		"stationary/inward edge did not expose predictive wetting potential")
 
 	var s3 := summaries[3]
 	_require(bool(s3["active"]), "occupied dry slot should still report active ownership")
 	_require(int(s3["wet_cells"]) == 0, "dry slot wet count")
 	_require_close(float(s3["max_depth_m"]), 0.0, 1.0e-6, "dry slot depth")
+	_require_close(float(s3["wetting_west_m3s"]), 0.0, 1.0e-6, "dry wetting flux")
 	if _finished:
 		return
 
-	# The frontier stage consumes GPU summary + metadata RIDs directly.
 	_frontier = HydroFrontierCandidatesGPU.new()
 	add_child(_frontier)
 	_frontier.initialized.connect(_on_frontier_initialized)
@@ -143,20 +150,24 @@ func _on_frontier_initialized() -> void:
 func _on_candidates_ready(_request_id: int, candidates: Array[Dictionary],
 		overflow: bool) -> void:
 	_require(not overflow, "frontier queue overflowed")
-	_require(candidates.size() == 2,
-		"expected exactly 2 frontier candidates, got %d: %s" % [
+	# Both wet occupied tiles have hydrostatic head at all four unresolved edges,
+	# therefore the predictive queue emits four candidates per tile. Reachability
+	# later decides which neighboring terrain tiles are actually allowed to wake.
+	_require(candidates.size() == 8,
+		"expected 8 predictive frontier candidates, got %d: %s" % [
 			candidates.size(), str(candidates)])
 	if _finished:
 		return
 
-	var found_east := false
-	var found_south := false
+	var directions_by_slot := {0: {}, 2: {}}
 	for c in candidates:
 		var slot := int(c.get("slot", -1))
 		var direction := int(c.get("direction", -1))
 		var flux := float(c.get("flux_m3s", NAN))
-		_require(slot != 1, "inactive stale slot generated a frontier candidate")
-		_require(slot != 3, "dry occupied slot generated a frontier candidate")
+		_require(slot == 0 or slot == 2,
+			"inactive/dry slot generated frontier candidate: %s" % str(c))
+		_require(direction >= 0 and direction < 4 and is_finite(flux) and flux > 0.5,
+			"invalid predictive frontier entry: %s" % str(c))
 		var key := _keys[slot]
 		_require(int(c.get("face", -1)) == key.face
 			and int(c.get("level", -1)) == key.level
@@ -164,22 +175,19 @@ func _on_candidates_ready(_request_id: int, candidates: Array[Dictionary],
 			and int(c.get("y", -1)) == key.y,
 			"frontier stable identity mismatch slot=%d candidate=%s expected=%s" % [
 				slot, str(c), str(key)])
-		if slot == 0 and direction == SparseHydroScheduler.DIR_EAST:
-			_require_close(flux, 16.0, 2.0e-4, "frontier slot0 east flux")
-			found_east = true
-		elif slot == 2 and direction == SparseHydroScheduler.DIR_SOUTH:
-			_require_close(flux, 4.0, 2.0e-4, "frontier slot2 south flux")
-			found_south = true
-		else:
-			_fail("unexpected frontier candidate: %s" % str(c))
-			return
+		_require(bool(c.get("predictive_wetting", false)),
+			"predictive term should dominate this uniform wet-tile fixture")
+		(directions_by_slot[slot] as Dictionary)[direction] = true
 
-	_require(found_east, "missing slot0 east frontier candidate")
-	_require(found_south, "missing slot2 south frontier candidate")
+	for slot in [0, 2]:
+		var seen := directions_by_slot[slot] as Dictionary
+		_require(seen.size() == 4,
+			"slot %d did not generate all four predictive frontier directions: %s" % [
+				slot, str(seen)])
 	if _finished:
 		return
 	_finished = true
-	print("SPARSE_HYDRO_GPU: PASS frontier=", candidates)
+	print("SPARSE_HYDRO_GPU: PASS predictive_frontier=", candidates)
 	_cleanup()
 	get_tree().quit(0)
 
