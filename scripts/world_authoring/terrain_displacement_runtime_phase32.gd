@@ -1,10 +1,15 @@
 extends "res://scripts/world_authoring/terrain_displacement_runtime_phase31.gd"
-## Phase 32/33: bind serialized production geomorph settings directly into the
+## Phase 32/42: bind serialized production geomorph settings directly into the
 ## authoritative cached terrain shader. The visible production Shape graph remains
 ## bytecode-free while it is an identity graph; settings are ordinary uniforms.
+##
+## Phase 42 centralizes all safety clamps/defaults in TerrainGeomorphGPUContract so
+## the visible analytic shader and warm cache consume the same normalized snapshot.
 
 const GRAPH_SCRIPT := preload(
 	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
+const GEOMORPH_CONTRACT := preload(
+	"res://scripts/world_authoring/model/terrain_geomorph_gpu_contract.gd")
 const GEOMORPH_SETTINGS := "PRODUCTION_GEOMORPH_SETTINGS"
 
 var _production_controls: Dictionary = GRAPH_SCRIPT.production_control_defaults(GEOMORPH_SETTINGS)
@@ -30,30 +35,30 @@ func bind_material(material: ShaderMaterial) -> void:
 func bind_production_controls(material: ShaderMaterial) -> void:
 	if material == null:
 		return
-	var c: Dictionary = _production_controls
+	var c: Dictionary = GEOMORPH_CONTRACT.normalized_controls(_production_controls)
 	material.set_shader_parameter("u_detail_strength",
-		maxf(float(c.get("detail_strength", 1.0)), 0.0))
+		float(c.get("detail_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_warp_strength",
-		maxf(float(c.get("warp_strength", 1.0)), 0.0))
+		float(c.get("warp_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_broad_strength",
-		maxf(float(c.get("broad_strength", 1.0)), 0.0))
+		float(c.get("broad_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_mountain_strength",
-		maxf(float(c.get("mountain_strength", 1.0)), 0.0))
+		float(c.get("mountain_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_mid_strength",
-		maxf(float(c.get("mid_strength", 1.0)), 0.0))
+		float(c.get("mid_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_channel_strength",
-		maxf(float(c.get("channel_strength", 1.0)), 0.0))
+		float(c.get("channel_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_deposit_strength",
-		maxf(float(c.get("deposit_strength", 1.0)), 0.0))
+		float(c.get("deposit_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_fine_strength",
-		maxf(float(c.get("fine_strength", 1.0)), 0.0))
+		float(c.get("fine_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_dune_strength",
-		maxf(float(c.get("dune_strength", 1.0)), 0.0))
+		float(c.get("dune_strength", 1.0)))
 	material.set_shader_parameter("u_geomorph_glacial_strength",
-		maxf(float(c.get("glacial_strength", 1.0)), 0.0))
+		float(c.get("glacial_strength", 1.0)))
 
-	# Physical geometry of the production bands. Missing keys intentionally use
-	# the old shader constants so existing serialized Phase 32 graphs are identical.
+	# Physical geometry of the production bands. Every value is already normalized
+	# by the shared contract; helpers remain for readable uniform mapping only.
 	_bind_positive(material, "u_geomorph_broad_wavelength_m", c, "broad_wavelength_m", 16000.0, 0.001)
 	_bind_nonnegative(material, "u_geomorph_broad_low_amplitude_m", c, "broad_low_amplitude_m", 24.0)
 	_bind_nonnegative(material, "u_geomorph_broad_mountain_amplitude_m", c, "broad_mountain_amplitude_m", 125.0)
@@ -63,7 +68,7 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	_bind_nonnegative(material, "u_geomorph_mountain_warp", c, "mountain_warp", 1.1)
 	_bind_positive(material, "u_geomorph_mountain_ridge_scale", c, "mountain_ridge_scale", 1.55, 0.001)
 	material.set_shader_parameter("u_geomorph_mountain_cell_mix",
-		clampf(float(c.get("mountain_cell_mix", 0.58)), 0.0, 1.0))
+		float(c.get("mountain_cell_mix", 0.58)))
 	_bind_positive(material, "u_geomorph_mid_wavelength_m", c, "mid_wavelength_m", 1400.0, 0.001)
 	_bind_nonnegative(material, "u_geomorph_mid_ridge_amplitude_m", c, "mid_ridge_amplitude_m", 72.0)
 	_bind_nonnegative(material, "u_geomorph_mid_noise_amplitude_m", c, "mid_noise_amplitude_m", 24.0)
@@ -94,7 +99,7 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	_bind_nonnegative(material, "u_geomorph_glacial_mix", c, "glacial_mix", 0.72)
 
 	if bool(c.get("override_seed", false)):
-		material.set_shader_parameter("u_detail_seed", maxi(1, int(c.get("detail_seed", 1337))))
+		material.set_shader_parameter("u_detail_seed", int(c.get("detail_seed", 1337)))
 
 
 func _bind_positive(material: ShaderMaterial, uniform_name: String, controls: Dictionary,
@@ -188,4 +193,5 @@ func _is_identity_shape_slot(slot: Resource) -> bool:
 func stats() -> Dictionary:
 	var out: Dictionary = super.stats()
 	out["production_geomorph_controls"] = _production_controls.duplicate(true)
+	out["production_geomorph_contract_version"] = GEOMORPH_CONTRACT.CONTRACT_VERSION
 	return out
