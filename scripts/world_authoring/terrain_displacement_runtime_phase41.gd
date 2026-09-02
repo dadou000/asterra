@@ -1,5 +1,5 @@
 extends "res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd"
-## Phase 41: deterministic planet-space latitude/longitude masks for authored displacement.
+## Phase 41: deterministic planet-space spatial masks for authored displacement.
 ##
 ## Spatial masks are deliberately implemented in the same bytecode VM used by the
 ## rendered terrain and the CPU/contact reference evaluator. They are NOT accepted
@@ -7,13 +7,16 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd"
 ## constant-only until native stage provenance can carry spatial factors exactly.
 ##
 ## Opcode 27 remains backward compatible with the original Latitude Mask contract.
-## The fourth parameter encodes axis + invert:
+## The fourth parameter encodes axis + invert for single-axis bands:
 ##   0 latitude, 1 latitude inverted, 2 longitude, 3 longitude inverted.
+## Geographic Region is not a new GPU opcode: one serialized node lowers to a
+## latitude opcode, a longitude opcode and Multiply. Invert adds 1 - intersection.
 
 const OP_LATITUDE_MASK: int = 27
 const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
 const MASK_AXIS_LATITUDE := "latitude"
 const MASK_AXIS_LONGITUDE := "longitude"
+const MASK_AXIS_REGION := "region"
 
 
 func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
@@ -25,6 +28,12 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 		if String(node.get("type", "")) == LATITUDE_MASK_TYPE:
 			var parameters: Dictionary = node.get("parameters", {}) as Dictionary
 			var axis: String = String(parameters.get("axis", MASK_AXIS_LATITUDE)).to_lower()
+			if axis == MASK_AXIS_REGION:
+				var region_instruction: int = _compile_geographic_region(parameters)
+				if region_instruction >= 0:
+					memo[node_id] = region_instruction
+				return region_instruction
+
 			var edge_a_deg: float = float(parameters.get("south_deg", -30.0))
 			var edge_b_deg: float = float(parameters.get("north_deg", 30.0))
 			var feather_deg: float = float(parameters.get("feather_deg", 5.0))
@@ -36,24 +45,14 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 			var axis_code: float = 0.0
 			match axis:
 				MASK_AXIS_LATITUDE:
-					if edge_a_deg < -90.0 or edge_a_deg > 90.0 \
-							or edge_b_deg < -90.0 or edge_b_deg > 90.0:
-						_warnings.append("Latitude Mask limits must stay between -90 and +90 degrees; candidate rejected.")
-						return -1
-					if feather_deg < 0.0 or feather_deg > 90.0:
-						_warnings.append("Latitude Mask feather must stay between 0 and 90 degrees; candidate rejected.")
+					if not _valid_latitude_band(edge_a_deg, edge_b_deg, feather_deg):
 						return -1
 				MASK_AXIS_LONGITUDE:
-					if edge_a_deg < -180.0 or edge_a_deg > 180.0 \
-							or edge_b_deg < -180.0 or edge_b_deg > 180.0:
-						_warnings.append("Longitude Mask limits must stay between -180 and +180 degrees; candidate rejected.")
-						return -1
-					if feather_deg < 0.0 or feather_deg > 180.0:
-						_warnings.append("Longitude Mask feather must stay between 0 and 180 degrees; candidate rejected.")
+					if not _valid_longitude_band(edge_a_deg, edge_b_deg, feather_deg):
 						return -1
 					axis_code = 2.0
 				_:
-					_warnings.append("Spatial Band axis must be latitude or longitude; candidate rejected.")
+					_warnings.append("Spatial Band axis must be latitude, longitude or region; candidate rejected.")
 					return -1
 			var flags: float = axis_code + (1.0 if invert_mask else 0.0)
 			var instruction: int = _append_instruction(OP_LATITUDE_MASK, -1, -1, -1,
@@ -61,6 +60,73 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 			memo[node_id] = instruction
 			return instruction
 	return super._compile_node(node_id, nodes, inputs, memo, visiting, graph_seed)
+
+
+func _compile_geographic_region(parameters: Dictionary) -> int:
+	var south_deg: float = float(parameters.get("south_deg", -30.0))
+	var north_deg: float = float(parameters.get("north_deg", 30.0))
+	var latitude_feather_deg: float = float(parameters.get("feather_deg", 5.0))
+	var west_deg: float = float(parameters.get("west_deg", -45.0))
+	var east_deg: float = float(parameters.get("east_deg", 45.0))
+	var longitude_feather_deg: float = float(parameters.get("longitude_feather_deg", 5.0))
+	var invert_mask: bool = bool(parameters.get("invert", false))
+
+	if not is_finite(south_deg) or not is_finite(north_deg) \
+			or not is_finite(latitude_feather_deg) or not is_finite(west_deg) \
+			or not is_finite(east_deg) or not is_finite(longitude_feather_deg):
+		_warnings.append("Geographic Region contains a non-finite setting; candidate rejected.")
+		return -1
+	if not _valid_latitude_band(south_deg, north_deg, latitude_feather_deg):
+		return -1
+	if not _valid_longitude_band(west_deg, east_deg, longitude_feather_deg):
+		return -1
+
+	# Deliberately reuse the exact two GPU/CPU spatial primitives already validated
+	# for the individual editor nodes. No geographic-region shader implementation is
+	# allowed to drift from those definitions.
+	var latitude_instruction: int = _append_instruction(OP_LATITUDE_MASK, -1, -1, -1,
+		Vector4(south_deg, north_deg, latitude_feather_deg, 0.0))
+	if latitude_instruction < 0:
+		return -1
+	var longitude_instruction: int = _append_instruction(OP_LATITUDE_MASK, -1, -1, -1,
+		Vector4(west_deg, east_deg, longitude_feather_deg, 2.0))
+	if longitude_instruction < 0:
+		return -1
+	var intersection_instruction: int = _append_instruction(OP_MUL,
+		latitude_instruction, longitude_instruction, -1, Vector4.ZERO)
+	if intersection_instruction < 0:
+		return -1
+	if not invert_mask:
+		return intersection_instruction
+
+	var one_instruction: int = _append_instruction(OP_CONST, -1, -1, -1,
+		Vector4(1.0, 0.0, 0.0, 0.0))
+	if one_instruction < 0:
+		return -1
+	return _append_instruction(OP_SUB, one_instruction, intersection_instruction, -1,
+		Vector4.ZERO)
+
+
+func _valid_latitude_band(south_deg: float, north_deg: float, feather_deg: float) -> bool:
+	if south_deg < -90.0 or south_deg > 90.0 \
+			or north_deg < -90.0 or north_deg > 90.0:
+		_warnings.append("Latitude Mask limits must stay between -90 and +90 degrees; candidate rejected.")
+		return false
+	if feather_deg < 0.0 or feather_deg > 90.0:
+		_warnings.append("Latitude Mask feather must stay between 0 and 90 degrees; candidate rejected.")
+		return false
+	return true
+
+
+func _valid_longitude_band(west_deg: float, east_deg: float, feather_deg: float) -> bool:
+	if west_deg < -180.0 or west_deg > 180.0 \
+			or east_deg < -180.0 or east_deg > 180.0:
+		_warnings.append("Longitude Mask limits must stay between -180 and +180 degrees; candidate rejected.")
+		return false
+	if feather_deg < 0.0 or feather_deg > 180.0:
+		_warnings.append("Longitude Mask feather must stay between 0 and 180 degrees; candidate rejected.")
+		return false
+	return true
 
 
 func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
@@ -179,7 +245,7 @@ func _compiled_program_bounds() -> Dictionary:
 			OP_LATITUDE_MASK:
 				# Spatial localization is deliberately NOT used to shrink culling bounds.
 				# Only the scalar range is propagated, preserving one global conservative
-				# displacement envelope across every cube face and planet-space band.
+				# displacement envelope across every cube face and planet-space mask.
 				out = _bound(0.0, 1.0)
 			OP_ADD:
 				out = _add_bounds(a, b, 1.0)
@@ -314,4 +380,6 @@ func stats() -> Dictionary:
 	out["latitude_mask_opcode"] = OP_LATITUDE_MASK
 	out["spatial_latitude_mask"] = true
 	out["spatial_longitude_mask"] = true
+	out["spatial_geographic_region_mask"] = true
+	out["geographic_region_lowering"] = "latitude*longitude; invert=1-region"
 	return out
