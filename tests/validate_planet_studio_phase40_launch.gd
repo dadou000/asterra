@@ -1,12 +1,14 @@
 extends Node
 ## Phase 40 semantic smoke test through the current PlanetStudio activation path.
 ##
-## Phase 41 is a strict successor wrapper. This regression continues to prove that
-## the beginner-readable Phase 40 resident linear-composition graph remains intact
-## and bytecode-neutral after newer graph/runtime capabilities are activated.
+## Phase 45 is the current successor wrapper. This regression still proves that the
+## beginner-readable Phase 40 resident linear-composition graph remains intact and
+## bytecode-neutral after the simplified UI, spatial masks and terrain presets are
+## activated. The test explicitly enters Advanced before inspecting graph nodes,
+## because the current product correctly opens Terrain in Simple mode.
 
 const PLANET_STUDIO_SCENE := preload("res://scenes/world_authoring/PlanetStudio.tscn")
-const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase41.gd"
+const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase45.gd"
 const NATIVE := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
 const LOWERING := preload(
@@ -44,7 +46,7 @@ func _run() -> void:
 		return
 	var script: Script = editor.get_script() as Script
 	if script == null or script.resource_path != EXPECTED_EDITOR_PATH:
-		_fail("PlanetStudio.tscn is not using the current Phase 41 live editor wrapper.")
+		_fail("PlanetStudio.tscn is not using the current Phase 45 live editor wrapper.")
 		return
 	editor.call("bind_world", world)
 	layer.add_child(editor)
@@ -67,7 +69,7 @@ func _run() -> void:
 		return
 
 	# Build a single-stage Scale path. The saved node types stay generic, while the
-	# Phase 40 editor presentation inherited by Phase 41 uses terrain-language controls.
+	# inherited Phase 40 advanced presentation uses terrain-language controls.
 	var merge_id: String = _node_id(graph, NATIVE.MERGE_TYPE)
 	var mountain_id: String = _node_id(graph, NATIVE.stage_node_type("mountain"))
 	var mountain_port: int = NATIVE.merge_port_for_stage("mountain")
@@ -106,8 +108,12 @@ func _run() -> void:
 		_fail("Phase 40 Scale/Blend fixture is not recognized by exact symbolic lowering.")
 		return
 
-	# Re-focus the same serialized graph so the current UI rebuilds from the newly
-	# added generic node records and retains the contextual Phase 40 presentation.
+	# The current editor intentionally opens Terrain in Simple mode. Enter Advanced
+	# before inspecting the exact resident graph; this should reveal the same Resource
+	# rather than translating or rebuilding it into another terrain representation.
+	editor.set("_phase43_advanced_terrain", true)
+	editor.call("_refresh_current_category")
+	await _frames(5)
 	editor.call("_phase28_focus_existing_slot", shape_slot)
 	await _frames(5)
 	for required_title: String in [
@@ -126,14 +132,14 @@ func _run() -> void:
 			_fail("Native Detail Merge is missing Custom Group %d." % (group_index + 1))
 			return
 
-	# Phase 41 must not introduce a second program for native production stages.
+	# Newer wrappers must not introduce a second program for native production stages.
 	var runtime: Node = RUNTIME.new() as Node
 	add_child(runtime)
 	var compiled: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
 	if not bool(compiled.get("candidate_valid", false)) \
 			or bool(compiled.get("active", true)) \
 			or int(compiled.get("instructions", -1)) != 0:
-		_fail("Phase 41 changed Phase 40 resident Scale/Blend into authored bytecode.")
+		_fail("Current activation changed Phase 40 resident Scale/Blend into authored bytecode.")
 		return
 	var controls: Dictionary = compiled.get("production_geomorph_controls", {}) as Dictionary
 	if not is_equal_approx(float(controls.get("mountain_strength", 0.0)), 0.5):
@@ -144,7 +150,7 @@ func _run() -> void:
 		_fail("Blend Contributions did not reduce to the expected resident coefficients.")
 		return
 
-	print("PLANET_STUDIO_PHASE40_LAUNCH_OK: Phase 41 activation preserves Phase 40 friendly Scale/Blend graph as resident zero-bytecode terrain")
+	print("PLANET_STUDIO_PHASE40_LAUNCH_OK: Phase 45 activation preserves Phase 40 friendly Scale/Blend graph as resident zero-bytecode terrain")
 	runtime.queue_free()
 	editor.queue_free()
 	await _frames(2)
