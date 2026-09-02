@@ -6,7 +6,7 @@ extends "res://scripts/water/persistent_hydrology_system.gd"
 func _rebuild_store() -> void:
 	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
 		return
-	var next_store := PlanetHydrologyRiverPromotionStore.new()
+	var next_store := PlanetHydrologyRiverCoupledStore.new()
 	var err := next_store.initialize(Planet.fields)
 	if err != OK:
 		push_error("PersistentHydrologySystem: reach store initialization failed (%d)." % int(err))
