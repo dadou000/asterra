@@ -4,8 +4,12 @@ extends "res://scripts/world_authoring/world_authoring_editor_live_phase44.gd"
 ## Presets are creation recipes only. Each generated item is still an ordinary
 ## full-LOD guided displacement slot, editable through Simple or the exact Node Graph.
 
+const PHASE45_RAW_DISPLACEMENT_EDITOR := preload(
+	"res://scripts/world_authoring/terrain_graph_editor_phase41.gd")
 const PHASE45_FEATURE_EDITOR := preload(
 	"res://scripts/world_authoring/terrain_graph_editor_phase43.gd")
+const PHASE45_SURFACE_EDITOR := preload(
+	"res://scripts/world_authoring/terrain_graph_editor_phase44.gd")
 const PHASE45_GUIDED := preload(
 	"res://scripts/world_authoring/model/terrain_guided_feature_graph.gd")
 const TERRAIN_PRESETS := preload(
@@ -163,3 +167,34 @@ func _phase45_create_preset(terrain: Resource, preset_id: String) -> void:
 	if not created_box.is_empty():
 		_phase43_selected_feature_id = String(created_box[0].get(&"slot_id"))
 	_refresh_current_category()
+
+
+func _phase29_build_graph_editor(slot: Resource) -> void:
+	# Advanced is a raw-document view, but each document should still use the editor
+	# phase that owns its semantics. Do not wrap everything in the newest subclass:
+	# that obscures the Phase 41 spatial-mask boundary and makes old raw-graph tools
+	# unable to identify the editor contract they intentionally requested.
+	var graph: Resource = slot.get(&"graph") as Resource if slot != null else null
+	var graph_editor: Control
+	if slot != null and int(slot.get(&"domain")) == SHADER_SLOT_MODEL.Domain.MATERIAL:
+		graph_editor = PHASE45_SURFACE_EDITOR.new() as Control
+	elif graph != null and PHASE45_GUIDED.is_guided_graph(graph):
+		graph_editor = PHASE45_FEATURE_EDITOR.new() as Control
+	else:
+		graph_editor = PHASE45_RAW_DISPLACEMENT_EDITOR.new() as Control
+
+	graph_editor.custom_minimum_size = Vector2(1180.0, 760.0)
+	_workspace.add_child(graph_editor)
+	graph_editor.call_deferred("setup", _session, slot,
+		Callable(self, "_refresh_current_category"))
+
+	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if slot != null and int(slot.get(&"domain")) == SHADER_SLOT_MODEL.Domain.MATERIAL:
+		hint.text = "Advanced Surface exposes the complete production PBR outputs, classifier thresholds, palette/materials, microrelief, anti-tiling, procedural rock PBR, scanned PBR, textures, world fields and graph math."
+	elif graph != null and PHASE45_GUIDED.is_guided_graph(graph):
+		hint.text = "This guided feature is still an ordinary displacement graph. Simple and Node Graph edit the same document; custom routing can be added here without introducing a preset-only runtime."
+	else:
+		hint.text = "Raw displacement graphs use the Phase 41 spatial editor contract directly. Base Terrain retains the safe native Phase 40 lowering boundary; custom displacement graphs retain Latitude, Longitude, Region, Radial and Ring masks with identical render/contact bytecode."
+	hint.modulate = Color(0.58, 0.69, 0.78)
+	_workspace.add_child(hint)
