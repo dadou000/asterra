@@ -1,0 +1,92 @@
+name: Terrain program transaction validation
+
+on:
+  push:
+    branches:
+      - "terrain/**"
+    paths:
+      - "scripts/world_authoring/terrain_displacement_runtime*.gd"
+      - "scripts/world_authoring/model/terrain_*.gd"
+      - "tests/validate_terrain_program_transaction_phase33.gd"
+      - "tests/validate_terrain_program_transaction_phase33.tscn"
+      - ".github/workflows/terrain-program-transaction-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  transaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+
+      - name: Build isolated transaction project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-terrain-transaction-ci
+          mkdir -p /tmp/asterra-terrain-transaction-ci/scripts /tmp/asterra-terrain-transaction-ci/tests
+          cp -R scripts/. /tmp/asterra-terrain-transaction-ci/scripts/
+          cp -R tests/. /tmp/asterra-terrain-transaction-ci/tests/
+          cp world.tres /tmp/asterra-terrain-transaction-ci/world.tres
+          cat > /tmp/asterra-terrain-transaction-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Terrain Transaction CI"
+
+          [autoload]
+          Frames="*res://tests/ci_autoload_frames.gd"
+          Planet="*res://tests/ci_autoload_planet.gd"
+          Deltas="*res://scripts/terrain/terrain_deltas.gd"
+          TerrainHeightQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          RenderedTerrainContactQuery="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          TerrainDeformationQueryGPU="*res://tests/ci_autoload_terrain_runtime_stub.gd"
+          GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
+          GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import transaction dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-transaction-ci
+          set +e
+          timeout 60 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/terrain-transaction-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 180 /tmp/terrain-transaction-import.log || true
+          [ "$status" -eq 0 ]
+          ! grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference" /tmp/terrain-transaction-import.log
+
+      - name: Validate terrain transaction invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-transaction-ci
+          set +e
+          timeout 20 "$GODOT" --headless --path "$TEST_PROJECT" res://tests/validate_terrain_program_transaction_phase33.tscn > /tmp/terrain-transaction.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/terrain-transaction.log
+          [ "$status" -eq 0 ]
+          grep -q "TERRAIN_PROGRAM_PHASE33_OK" /tmp/terrain-transaction.log
+          ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|TERRAIN_PROGRAM_PHASE33_FAILED" /tmp/terrain-transaction.log
