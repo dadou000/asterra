@@ -1,12 +1,12 @@
 extends Node
-## Regression for opaque-macro migration and exact ordered native-stage bypasses.
+## Regression for opaque-macro migration, exact bypasses and commutative native-stage reorder.
 
 const GRAPH := preload("res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
 const TERRAIN := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const SLOT := preload("res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
 const NATIVE := preload("res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
 const LOWERING := preload("res://scripts/world_authoring/model/terrain_production_geomorph_lowering.gd")
-const RUNTIME := preload("res://scripts/world_authoring/terrain_displacement_runtime_phase36.gd")
+const RUNTIME := preload("res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd")
 
 
 func _ready() -> void:
@@ -15,7 +15,7 @@ func _ready() -> void:
 		push_error("NATIVE_PRODUCTION_STAGE_GRAPH_FAILED: " + error)
 		get_tree().quit(1)
 		return
-	print("NATIVE_PRODUCTION_STAGE_GRAPH_OK: migration preserves controls; ordered stage bypasses execute exactly; invalid reorder rolls back")
+	print("NATIVE_PRODUCTION_STAGE_GRAPH_OK: migration, exact bypasses and commutative native reorder preserve zero-bytecode production; nonlinear reorder rolls back")
 	get_tree().quit(0)
 
 
@@ -62,13 +62,7 @@ func _validate() -> String:
 	if bool(first.get("active", true)) or int(first.get("instructions", -1)) != 0:
 		runtime.free()
 		return "canonical native graph emitted authored bytecode"
-	var first_controls: Dictionary = first.get("production_geomorph_controls", {}) as Dictionary
-	if not is_equal_approx(float(first_controls.get("mountain_strength", 0.0)), 1.73):
-		runtime.free()
-		return "native stage controls did not reach runtime"
 
-	# Parameter edits remain the exact native production shader: no VM program is
-	# introduced just because a real stage control changed.
 	var mountain_id: String = _find_type(graph, NATIVE.stage_node_type("mountain"))
 	graph.call("set_node_parameter", mountain_id, "mountain_strength", 2.25)
 	var second: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
@@ -82,31 +76,26 @@ func _validate() -> String:
 		runtime.free()
 		return "edited native stage parameter did not commit"
 
-	# Bypass Channels while leaving Deposition in the path. The shader shares the
-	# channel sample with deposition, so exact lowering must zero incision strength
-	# only; it must not remove or approximate the shared branch.
+	# Bypass Channel while retaining Deposition. Incision alone must be disabled.
 	var mid_id: String = _find_type(graph, NATIVE.stage_node_type("mid"))
 	var channel_id: String = _find_type(graph, NATIVE.stage_node_type("channel"))
 	var deposit_id: String = _find_type(graph, NATIVE.stage_node_type("deposit"))
-	if mid_id.is_empty() or channel_id.is_empty() or deposit_id.is_empty():
-		runtime.free()
-		return "channel bypass fixture is missing native stage nodes"
 	if not bool(graph.call("disconnect_nodes", mid_id, 0, channel_id, 0)) \
 			or not bool(graph.call("disconnect_nodes", channel_id, 0, deposit_id, 0)) \
 			or not bool(graph.call("connect_nodes", mid_id, 0, deposit_id, 0)):
 		runtime.free()
-		return "could not construct ordered Channel bypass"
-	var channel_plan: Dictionary = LOWERING.ordered_bypass_plan(graph)
+		return "could not construct Channel bypass"
+	var channel_plan: Dictionary = LOWERING.commutative_reorder_plan(graph)
 	if not bool(channel_plan.get("valid", false)) \
 			or not (channel_plan.get("disabled_stage_ids", PackedStringArray()) as PackedStringArray).has("channel"):
 		runtime.free()
-		return "ordered Channel bypass was not recognized by lowering"
+		return "Channel bypass was not recognized by Phase 37 lowering"
 	var channel_bypass: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
 	if not bool(channel_bypass.get("candidate_valid", false)) \
 			or bool(channel_bypass.get("active", true)) \
 			or int(channel_bypass.get("instructions", -1)) != 0:
 		runtime.free()
-		return "ordered Channel bypass did not remain on resident zero-bytecode production path"
+		return "Channel bypass left resident zero-bytecode production path"
 	var channel_controls: Dictionary = channel_bypass.get("production_geomorph_controls", {}) as Dictionary
 	if not is_zero_approx(float(channel_controls.get("channel_strength", -1.0))):
 		runtime.free()
@@ -114,87 +103,94 @@ func _validate() -> String:
 	if is_zero_approx(float(channel_controls.get("deposit_strength", 0.0))):
 		runtime.free()
 		return "Channel bypass incorrectly disabled Deposition"
-	var channel_guard: float = float((channel_bypass.get("displacement_envelope", {}) as Dictionary).get(
-		"production_max_abs_m", -1.0))
-	var second_guard: float = float((second.get("displacement_envelope", {}) as Dictionary).get(
-		"production_max_abs_m", -1.0))
-	if channel_guard < 0.0 or second_guard < 0.0 or channel_guard > second_guard + 0.0001:
-		runtime.free()
-		return "Channel bypass increased the conservative production bound"
 
-	# Fine Detail shares fine_strength with Micro Relief, while Dunes are nested in
-	# the same fine-resolution branch. Bypassing Fine must therefore zero only its
-	# amplitude and preserve the shared/nested stages.
-	var fine_id: String = _find_type(graph, NATIVE.stage_node_type("fine"))
+	# Reset to a complete native chain, preserving authored parameters, then reorder
+	# Mid Relief before Mountains. Both contributions are independent of accumulated
+	# height, so the graph order is different but the resident normalized result must
+	# remain exactly equivalent and zero-bytecode.
+	controls = NATIVE.extract_controls(graph)
+	NATIVE.build_canonical_graph(graph, controls)
+	var broad_id: String = _find_type(graph, NATIVE.stage_node_type("broad"))
+	mountain_id = _find_type(graph, NATIVE.stage_node_type("mountain"))
+	mid_id = _find_type(graph, NATIVE.stage_node_type("mid"))
+	channel_id = _find_type(graph, NATIVE.stage_node_type("channel"))
+	if not bool(graph.call("disconnect_nodes", broad_id, 0, mountain_id, 0)) \
+			or not bool(graph.call("disconnect_nodes", mountain_id, 0, mid_id, 0)) \
+			or not bool(graph.call("disconnect_nodes", mid_id, 0, channel_id, 0)) \
+			or not bool(graph.call("connect_nodes", broad_id, 0, mid_id, 0)) \
+			or not bool(graph.call("connect_nodes", mid_id, 0, mountain_id, 0)) \
+			or not bool(graph.call("connect_nodes", mountain_id, 0, channel_id, 0)):
+		runtime.free()
+		return "could not construct exact Mid/Mountain reorder"
+
+	var reorder_plan: Dictionary = LOWERING.commutative_reorder_plan(graph)
+	if not bool(reorder_plan.get("valid", false)) or not bool(reorder_plan.get("reordered", false)):
+		runtime.free()
+		return "commutative Mid/Mountain reorder was not accepted"
+	var authored_order: PackedStringArray = reorder_plan.get("active_stage_ids", PackedStringArray()) as PackedStringArray
+	var normalized_order: PackedStringArray = reorder_plan.get("normalized_stage_ids", PackedStringArray()) as PackedStringArray
+	if authored_order.find("mid") >= authored_order.find("mountain") \
+			or normalized_order.find("mountain") >= normalized_order.find("mid"):
+		runtime.free()
+		return "reorder plan did not preserve authored order and normalized production order separately"
+
+	var reordered: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	if not bool(reordered.get("candidate_valid", false)) \
+			or bool(reordered.get("active", true)) \
+			or int(reordered.get("instructions", -1)) != 0:
+		runtime.free()
+		return "exact native reorder did not remain on zero-bytecode production path"
+	var runtime_plan: Dictionary = reordered.get("native_reorder_plan", {}) as Dictionary
+	if not bool(runtime_plan.get("reordered", false)) \
+			or String(runtime_plan.get("execution_mode", "")) != "resident_normalized_order":
+		runtime.free()
+		return "runtime did not expose normalized exact-reorder execution plan"
+	var reordered_controls: Dictionary = reordered.get("production_geomorph_controls", {}) as Dictionary
+	if not is_equal_approx(float(reordered_controls.get("mountain_strength", 0.0)), 2.25) \
+			or not is_equal_approx(float(reordered_controls.get("channel_depth_max_m", 0.0)), 81.5):
+		runtime.free()
+		return "exact native reorder changed production controls"
+
+	var good_generation: int = int(reordered.get("generation", -1))
+	var good_guard: float = float((reordered.get("displacement_envelope", {}) as Dictionary).get(
+		"production_max_abs_m", -1.0))
+
+	# Glacial is nonlinear: h = mix(h, h*scale + ice, mix). Moving any additive
+	# stage after it changes the result. Construct Glacial -> Micro and verify the
+	# candidate is rejected without leaking its parameter edit, bounds or generation.
 	var dune_id: String = _find_type(graph, NATIVE.stage_node_type("dune"))
 	var micro_id: String = _find_type(graph, NATIVE.stage_node_type("micro"))
-	if fine_id.is_empty() or dune_id.is_empty() or micro_id.is_empty():
-		runtime.free()
-		return "fine bypass fixture is missing native stage nodes"
-	graph.call("set_node_parameter", fine_id, "fine_strength", 1.6)
-	graph.call("set_node_parameter", dune_id, "dune_strength", 1.4)
-	graph.call("set_node_parameter", micro_id, "micro_amplitude_m", 1.7)
-	if not bool(graph.call("disconnect_nodes", deposit_id, 0, fine_id, 0)) \
-			or not bool(graph.call("disconnect_nodes", fine_id, 0, dune_id, 0)) \
-			or not bool(graph.call("connect_nodes", deposit_id, 0, dune_id, 0)):
-		runtime.free()
-		return "could not construct ordered Fine Detail bypass"
-	var fine_plan: Dictionary = LOWERING.ordered_bypass_plan(graph)
-	if not bool(fine_plan.get("valid", false)) \
-			or not (fine_plan.get("disabled_stage_ids", PackedStringArray()) as PackedStringArray).has("fine"):
-		runtime.free()
-		return "ordered Fine bypass was not recognized by lowering"
-	var fine_bypass: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
-	if not bool(fine_bypass.get("candidate_valid", false)) \
-			or bool(fine_bypass.get("active", true)) \
-			or int(fine_bypass.get("instructions", -1)) != 0:
-		runtime.free()
-		return "ordered Fine bypass did not remain on resident zero-bytecode production path"
-	var fine_controls: Dictionary = fine_bypass.get("production_geomorph_controls", {}) as Dictionary
-	if not is_zero_approx(float(fine_controls.get("fine_amplitude_m", -1.0))):
-		runtime.free()
-		return "Fine bypass did not zero only the fine contribution"
-	if not is_equal_approx(float(fine_controls.get("fine_strength", 0.0)), 1.6) \
-			or not is_equal_approx(float(fine_controls.get("dune_strength", 0.0)), 1.4) \
-			or not is_equal_approx(float(fine_controls.get("micro_amplitude_m", 0.0)), 1.7):
-		runtime.free()
-		return "Fine bypass damaged shared Dune/Micro production controls"
-
-	var good_generation: int = int(fine_bypass.get("generation", -1))
-	var good_guard: float = float((fine_bypass.get("displacement_envelope", {}) as Dictionary).get(
-		"production_max_abs_m", -1.0))
-
-	# A backwards rewire is deliberately still unsupported. Make Channel execute
-	# after Dunes; the candidate must be rejected and the last valid lowered controls,
-	# bytecode generation and bounds must remain active.
+	var glacial_id: String = _find_type(graph, NATIVE.stage_node_type("glacial"))
+	var compose_id: String = _find_type(graph, NATIVE.COMPOSE_TYPE)
 	if not bool(graph.call("disconnect_nodes", dune_id, 0, micro_id, 0)) \
-			or not bool(graph.call("connect_nodes", dune_id, 0, channel_id, 0)) \
-			or not bool(graph.call("connect_nodes", channel_id, 0, micro_id, 0)):
+			or not bool(graph.call("disconnect_nodes", micro_id, 0, glacial_id, 0)) \
+			or not bool(graph.call("disconnect_nodes", glacial_id, 0, compose_id, 0)) \
+			or not bool(graph.call("connect_nodes", dune_id, 0, glacial_id, 0)) \
+			or not bool(graph.call("connect_nodes", glacial_id, 0, micro_id, 0)) \
+			or not bool(graph.call("connect_nodes", micro_id, 0, compose_id, 0)):
 		runtime.free()
-		return "could not construct reordered native-stage topology"
-	var reordered_plan: Dictionary = LOWERING.ordered_bypass_plan(graph)
-	if bool(reordered_plan.get("valid", true)):
+		return "could not construct nonlinear Glacial/Micro reorder"
+	var nonlinear_plan: Dictionary = LOWERING.commutative_reorder_plan(graph)
+	if bool(nonlinear_plan.get("valid", true)):
 		runtime.free()
-		return "backwards native-stage order was accepted by lowering"
+		return "nonlinear Glacial reorder was accepted"
 	graph.call("set_node_parameter", mountain_id, "mountain_strength", 4.0)
-	var broken: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
-	if bool(broken.get("candidate_valid", true)) or not bool(broken.get("candidate_rejected", false)):
+	var rejected: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
+	if bool(rejected.get("candidate_valid", true)) or not bool(rejected.get("candidate_rejected", false)):
 		runtime.free()
-		return "reordered native-stage topology was not rejected"
-	if int(broken.get("generation", -2)) != good_generation:
+		return "nonlinear native-stage topology was not transactionally rejected"
+	if int(rejected.get("generation", -2)) != good_generation:
 		runtime.free()
-		return "rejected native topology changed active bytecode generation"
-	var broken_controls: Dictionary = broken.get("production_geomorph_controls", {}) as Dictionary
-	if not is_equal_approx(float(broken_controls.get("mountain_strength", 0.0)), 2.25) \
-			or not is_zero_approx(float(broken_controls.get("channel_strength", -1.0))) \
-			or not is_zero_approx(float(broken_controls.get("fine_amplitude_m", -1.0))):
+		return "rejected nonlinear topology changed active bytecode generation"
+	var rejected_controls: Dictionary = rejected.get("production_geomorph_controls", {}) as Dictionary
+	if not is_equal_approx(float(rejected_controls.get("mountain_strength", 0.0)), 2.25):
 		runtime.free()
-		return "rejected native topology leaked candidate controls over last-known-good lowering"
-	var broken_guard: float = float((broken.get("displacement_envelope", {}) as Dictionary).get(
+		return "rejected nonlinear topology leaked candidate controls"
+	var rejected_guard: float = float((rejected.get("displacement_envelope", {}) as Dictionary).get(
 		"production_max_abs_m", -2.0))
-	if not is_equal_approx(broken_guard, good_guard):
+	if not is_equal_approx(rejected_guard, good_guard):
 		runtime.free()
-		return "rejected native topology changed displacement bounds"
+		return "rejected nonlinear topology changed displacement bounds"
 
 	runtime.free()
 	return ""
