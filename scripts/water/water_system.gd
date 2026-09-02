@@ -1,14 +1,17 @@
 extends "res://scripts/water/water_system_base.gd"
-## Production facade extending the stable 0.1.0 water coordinator with the
-## transactional planet-coarse -> sparse-SWE ownership bridge.
+## Production facade extending the stable 0.1.0 water coordinator with
+## transactional planet-coarse <-> sparse-SWE ownership bridges and diagnostics.
 ##
-## Automatic promotion deliberately remains OFF. The public methods below expose
-## explicit/manual promotion while the conservation gates are being validated.
+## Automatic coarse candidate promotion deliberately remains OFF. Explicit/manual
+## promotion and frontier-driven expansion are ownership-safe, but automatic policy
+## is enabled only after the new conservation/partition gates are run locally.
 
 signal planet_promotion_bridge_state_changed(state: String)
 signal planet_promotion_bridge_ready
 signal planet_promotion_completed(report: Dictionary)
 signal planet_promotion_failed(error: Error, stage: String)
+signal frontier_coarse_preseed_ready
+signal frontier_coarse_preseed_failed(error: Error)
 signal active_sparse_volume_ready(request_id: int, volume_m3: float)
 signal active_sparse_volume_failed(request_id: int, error: Error)
 signal representation_audit_ready(audit_id: int, report: Dictionary)
@@ -20,6 +23,7 @@ var automatic_coarse_promotion_enabled := false
 
 var _planet_promotion_bridge: PlanetHydroPromotionBridge
 var _planet_promotion_state := "offline"
+var _frontier_coarse_preseed: HydroFrontierCoarsePreseed
 var _sparse_volume_diagnostic: SparseHydroVolumeDiagnosticsGPU
 var _representation_audit: HydroRepresentationAudit
 
@@ -35,6 +39,7 @@ func _ready() -> void:
 		PersistentHydrologySystem.store_rebuilt.connect(
 			_on_persistent_hydrology_store_rebuilt)
 	call_deferred(&"_try_bind_sparse_volume_diagnostic")
+	call_deferred(&"_try_bind_frontier_coarse_preseed")
 	call_deferred(&"_try_bind_planet_promotion_bridge")
 
 
@@ -50,6 +55,11 @@ func planet_promotion_bridge_state() -> String:
 
 func planet_promotion_bridge() -> PlanetHydroPromotionBridge:
 	return _planet_promotion_bridge
+
+
+func frontier_coarse_preseed_available() -> bool:
+	return _frontier_coarse_preseed != null \
+		and _frontier_coarse_preseed.initialized_ok()
 
 
 func active_sparse_volume_diagnostic_available() -> bool:
@@ -123,6 +133,13 @@ func gpu_stats() -> Dictionary:
 		"automatic_enabled": automatic_coarse_promotion_enabled,
 		"coarse_store_available": PersistentHydrologySystem.available(),
 	}
+	out["frontier_coarse_preseed"] = {
+		"available": frontier_coarse_preseed_available(),
+		"pending": 0 if _frontier_coarse_preseed == null \
+			else _frontier_coarse_preseed.pending_count(),
+		"provisional_commits": 0 if _frontier_coarse_preseed == null \
+			else _frontier_coarse_preseed.provisional_commit_count(),
+	}
 	out["active_sparse_volume_diagnostic"] = {} if _sparse_volume_diagnostic == null \
 		else _sparse_volume_diagnostic.stats()
 	out["representation_audit"] = {
@@ -135,19 +152,23 @@ func gpu_stats() -> Dictionary:
 
 func _on_sparse_runtime_ready_for_promotion() -> void:
 	_try_bind_sparse_volume_diagnostic()
+	_try_bind_frontier_coarse_preseed()
 	_try_bind_planet_promotion_bridge()
 
 
 func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 	if state == "ready":
 		_try_bind_sparse_volume_diagnostic()
+		_try_bind_frontier_coarse_preseed()
 		_try_bind_planet_promotion_bridge()
 		return
 	# Defensive path in addition to _release_sparse_runtime() override: even if a
 	# future base implementation changes bootstrap sequencing, no diagnostic or
-	# bridge may retain references to sparse resources once runtime leaves READY.
+	# ownership helper may retain references to sparse resources once runtime leaves
+	# READY.
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
+	_release_frontier_coarse_preseed()
 	if _planet_promotion_bridge != null:
 		_release_planet_promotion_bridge()
 	if state == "disabled":
@@ -159,11 +180,12 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 
 
 func _on_persistent_hydrology_store_rebuilt() -> void:
-	# A rebuilt planet store invalidates both the audit's coarse reference and the
-	# bridge's ownership-store reference.
+	# A rebuilt planet store invalidates every helper retaining the old coarse state.
 	_release_representation_audit()
+	_release_frontier_coarse_preseed()
 	_release_planet_promotion_bridge()
 	call_deferred(&"_try_bind_representation_audit")
+	call_deferred(&"_try_bind_frontier_coarse_preseed")
 	call_deferred(&"_try_bind_planet_promotion_bridge")
 
 
@@ -230,6 +252,43 @@ func _try_bind_representation_audit() -> void:
 	if err != OK:
 		representation_audit_failed.emit(-1, err, "audit_initialize")
 		_release_representation_audit()
+
+
+func _try_bind_frontier_coarse_preseed() -> void:
+	if _frontier_coarse_preseed != null or not sparse_runtime_available() \
+			or not PersistentHydrologySystem.available():
+		return
+	var runtime := sparse_runtime()
+	if runtime == null or runtime.atlas == null or runtime.activation == null \
+			or not runtime.activation.initialized_ok():
+		return
+	var coordinator := HydroFrontierCoarsePreseed.new()
+	coordinator.name = "HydroFrontierCoarsePreseed"
+	_frontier_coarse_preseed = coordinator
+	add_child(coordinator)
+	coordinator.initialized.connect(
+		func():
+			if coordinator != _frontier_coarse_preseed:
+				return
+			var current := sparse_runtime()
+			if current == null or current != runtime or current.activation == null:
+				_release_frontier_coarse_preseed()
+				return
+			var attach_error := current.activation.set_coarse_preseed(coordinator)
+			if attach_error != OK:
+				frontier_coarse_preseed_failed.emit(attach_error)
+				_release_frontier_coarse_preseed()
+				return
+			frontier_coarse_preseed_ready.emit())
+	coordinator.initialization_failed.connect(
+		func(error: Error):
+			if coordinator == _frontier_coarse_preseed:
+				frontier_coarse_preseed_failed.emit(error)
+				_release_frontier_coarse_preseed())
+	var err := coordinator.initialize(PersistentHydrologySystem.store(), runtime.atlas)
+	if err != OK:
+		frontier_coarse_preseed_failed.emit(err)
+		_release_frontier_coarse_preseed()
 
 
 func _try_bind_planet_promotion_bridge() -> void:
@@ -316,6 +375,19 @@ func _release_sparse_volume_diagnostic() -> void:
 		diagnostic.queue_free()
 
 
+func _release_frontier_coarse_preseed() -> void:
+	var coordinator := _frontier_coarse_preseed
+	_frontier_coarse_preseed = null
+	var runtime := sparse_runtime()
+	if runtime != null and runtime.activation != null \
+			and runtime.activation.coarse_preseed == coordinator \
+			and not runtime.activation.busy():
+		runtime.activation.set_coarse_preseed(null)
+	if coordinator != null and is_instance_valid(coordinator):
+		coordinator.release()
+		coordinator.queue_free()
+
+
 func _release_planet_promotion_bridge() -> void:
 	var bridge := _planet_promotion_bridge
 	_planet_promotion_bridge = null
@@ -331,5 +403,6 @@ func _release_planet_promotion_bridge() -> void:
 func _release_sparse_runtime() -> void:
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
+	_release_frontier_coarse_preseed()
 	_release_planet_promotion_bridge()
 	super._release_sparse_runtime()
