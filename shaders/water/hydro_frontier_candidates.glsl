@@ -9,9 +9,9 @@
 // separate in the summary. The queue uses the larger value for activation; entry
 // flag bit0 records whether the predictive term dominated.
 //
-// When canonical state is supplied, only the emitting source edge is scanned to
-// attach max(h + bed) to the candidate. This gives CPU reachability a compact
-// hydraulic-head gate without reading boundary cell grids back from the GPU.
+// Tile summaries carry full-FP32 max(h+bed) for W/E/S/N. An optional direct state
+// scan can cross-check that edge head when callers provide state+tile_resolution;
+// ordinary runtime use needs only the compact summary buffer.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct FrontierEntry {
@@ -21,7 +21,7 @@ struct FrontierEntry {
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer Summaries {
-    vec4 summary[]; // 4 vec4 per slot
+    vec4 summary[]; // 5 vec4 per slot
 };
 layout(set = 0, binding = 1, std430) readonly buffer TileMetadata {
     uvec4 tile_meta[]; // face, level, x, y; face=0xffffffff means unbound
@@ -34,17 +34,17 @@ layout(set = 0, binding = 2, std430) buffer Queue {
     FrontierEntry entries[];
 } queue_out;
 layout(set = 0, binding = 3, std430) readonly buffer Params {
-    vec4 config; // capacity, threshold_m3s, max_candidates, tile_resolution
+    vec4 config; // capacity, threshold_m3s, max_candidates, optional tile_resolution
 } params;
 layout(set = 0, binding = 4, std430) readonly buffer State {
-    vec4 cells[]; // canonical h,hu,hv,bed; may alias summary when tile_res=0
+    vec4 cells[]; // optional canonical h,hu,hv,bed; may alias summary when tile_res=0
 };
 
-float source_edge_max_eta(uint slot, uint direction) {
+float source_edge_max_eta(uint slot, uint direction, float summarized_eta) {
     uint r = uint(max(params.config.w, 0.0) + 0.5);
-    if (r == 0u) return -3.402823e38;
+    if (r == 0u) return summarized_eta;
     uint base = slot * r * r;
-    float eta = -3.402823e38;
+    float eta = summarized_eta;
     for (uint k = 0u; k < r; ++k) {
         uint local_i;
         if (direction == 0u) local_i = k * r;
@@ -59,7 +59,7 @@ float source_edge_max_eta(uint slot, uint direction) {
 }
 
 void emit_candidate(uint slot, uint direction, float actual_flux,
-        float wetting_flux, uvec4 meta, uint max_candidates) {
+        float wetting_flux, float summarized_eta, uvec4 meta, uint max_candidates) {
     float effective_flux = max(actual_flux, wetting_flux);
     uint index = atomicAdd(queue_out.count, 1u);
     if (index >= max_candidates) {
@@ -71,13 +71,15 @@ void emit_candidate(uint slot, uint direction, float actual_flux,
         slot, direction, floatBitsToUint(effective_flux), meta.x);
     queue_out.entries[index].b = uvec4(meta.y, meta.z, meta.w, flags);
     queue_out.entries[index].c = uvec4(
-        floatBitsToUint(source_edge_max_eta(slot, direction)), 0u, 0u, 0u);
+        floatBitsToUint(source_edge_max_eta(slot, direction, summarized_eta)),
+        0u, 0u, 0u);
 }
 
 void maybe_emit(uint slot, uint direction, float actual_flux, float wetting_flux,
-        float threshold, uvec4 meta, uint max_candidates) {
+        float edge_eta, float threshold, uvec4 meta, uint max_candidates) {
     if (max(actual_flux, wetting_flux) > threshold)
-        emit_candidate(slot, direction, actual_flux, wetting_flux, meta, max_candidates);
+        emit_candidate(slot, direction, actual_flux, wetting_flux,
+            edge_eta, meta, max_candidates);
 }
 
 void main() {
@@ -86,17 +88,18 @@ void main() {
     uint max_candidates = max(uint(params.config.z + 0.5), 1u);
     if (slot >= capacity) return;
 
-    uint o = slot * 4u;
+    uint o = slot * 5u;
     vec4 health = summary[o + 0u];
     vec4 edges = summary[o + 1u];
     vec4 ownership = summary[o + 2u];
     vec4 wetting = summary[o + 3u];
+    vec4 edge_eta = summary[o + 4u];
     uvec4 meta = tile_meta[slot];
     if (ownership.y < 0.5 || health.w > 0.5 || meta.x == 0xffffffffu) return;
 
     float threshold = max(params.config.y, 0.0);
-    maybe_emit(slot, 0u, edges.x, wetting.x, threshold, meta, max_candidates);
-    maybe_emit(slot, 1u, edges.y, wetting.y, threshold, meta, max_candidates);
-    maybe_emit(slot, 2u, edges.z, wetting.z, threshold, meta, max_candidates);
-    maybe_emit(slot, 3u, edges.w, wetting.w, threshold, meta, max_candidates);
+    maybe_emit(slot, 0u, edges.x, wetting.x, edge_eta.x, threshold, meta, max_candidates);
+    maybe_emit(slot, 1u, edges.y, wetting.y, edge_eta.y, threshold, meta, max_candidates);
+    maybe_emit(slot, 2u, edges.z, wetting.z, edge_eta.z, threshold, meta, max_candidates);
+    maybe_emit(slot, 3u, edges.w, wetting.w, edge_eta.w, threshold, meta, max_candidates);
 }
