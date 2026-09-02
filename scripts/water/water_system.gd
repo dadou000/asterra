@@ -192,6 +192,10 @@ func gpu_stats() -> Dictionary:
 		"pending": _representation_audit != null and _representation_audit.pending(),
 		"fine_external_flux_ledger_complete": false,
 	}
+	var runtime := sparse_runtime()
+	out["failed_generation_preserved"] = sparse_runtime_state() == "failed" \
+		and runtime != null and runtime.scheduler != null \
+		and runtime.scheduler.pool != null and runtime.scheduler.pool.allocated_count() > 0
 	return out
 
 
@@ -212,16 +216,15 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 		_try_bind_planet_demotion_bridge()
 		return
 
-	# A runtime can fail while HydroFrontierActivationPipeline still owns an
-	# asynchronous coarse preseed/handoff batch. Releasing the preseed coordinator
-	# alone would restore its provisional coarse debit while the hidden GPU tile could
-	# still finish activation, creating duplicate ownership. Keep that coordinator
-	# attached until one synchronous sparse-runtime teardown destroys the entire old
-	# atlas generation.
+	# A failed generation may still own real fine water. Destroying its atlas would
+	# silently delete that representation. Release nonessential readers/forward
+	# promotion, but let an in-flight demotion finish and preserve the failed atlas
+	# whenever any tile remains allocated.
 	if state == "failed":
 		_release_representation_audit()
 		_release_sparse_volume_diagnostic()
-		_release_planet_demotion_bridge()
+		if _planet_demotion_bridge != null and not _planet_demotion_bridge.busy():
+			_release_planet_demotion_bridge()
 		if _planet_promotion_bridge != null:
 			_release_planet_promotion_bridge()
 		_set_planet_promotion_state("failed")
@@ -252,12 +255,27 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 
 
 func _teardown_failed_sparse_runtime() -> void:
-	_failed_runtime_teardown_queued = false
 	if sparse_runtime_state() != "failed":
+		_failed_runtime_teardown_queued = false
 		return
-	# Leave the public state as FAILED for diagnosis. Only remove the stale runtime
-	# generation and its helpers so no queued activation can publish after failure.
+	if _planet_demotion_bridge != null and _planet_demotion_bridge.busy():
+		# Its compact GPU readback/ownership transfer still needs the current atlas.
+		# The completion/failure callback will schedule this check again.
+		return
+	var runtime := sparse_runtime()
+	if runtime != null and runtime.scheduler != null and runtime.scheduler.pool != null \
+			and runtime.scheduler.pool.allocated_count() > 0:
+		# Freeze failed-but-authoritative fine state in place. Recovery/demotion may
+		# inspect it later; deleting it here would violate representation conservation.
+		_failed_runtime_teardown_queued = false
+		return
+	_failed_runtime_teardown_queued = false
 	_release_sparse_runtime()
+
+
+func _resume_failed_teardown_after_demotion() -> void:
+	if _failed_runtime_teardown_queued and sparse_runtime_state() == "failed":
+		call_deferred(&"_teardown_failed_sparse_runtime")
 
 
 func _on_persistent_hydrology_store_rebuilt() -> void:
@@ -266,6 +284,8 @@ func _on_persistent_hydrology_store_rebuilt() -> void:
 	# alive can make a mid-flight provisional seed belong to both generations. Treat
 	# every store rebuild as a hard generation boundary: synchronously invalidate the
 	# complete sparse runtime, then bootstrap a fresh atlas against the new store.
+	# Save/world-transition ownership collapse is a separate gate; normal store
+	# rebuilds should only occur when no gameplay fine state is being preserved.
 	_failed_runtime_teardown_queued = false
 	_release_sparse_runtime()
 	_set_sparse_state("recycling_coarse_store")
@@ -443,11 +463,13 @@ func _try_bind_planet_demotion_bridge() -> void:
 	bridge.demotion_completed.connect(
 		func(_request_id: int, report: Dictionary):
 			if bridge == _planet_demotion_bridge:
-				planet_demotion_completed.emit(report.duplicate(true)))
+				planet_demotion_completed.emit(report.duplicate(true))
+				_resume_failed_teardown_after_demotion())
 	bridge.demotion_failed.connect(
 		func(_request_id: int, error: Error, stage: String):
 			if bridge == _planet_demotion_bridge:
-				planet_demotion_failed.emit(error, stage))
+				planet_demotion_failed.emit(error, stage)
+				_resume_failed_teardown_after_demotion())
 
 	_set_planet_demotion_state("initializing")
 	var err := bridge.initialize(PersistentHydrologySystem.store(),
