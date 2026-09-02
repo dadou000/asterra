@@ -101,13 +101,20 @@ func report_boundary_flux(key: HydroTileKey, direction: int, flux_m3s: float,
 	var neighbor := key.same_face_neighbor(delta.x, delta.y)
 	if neighbor == null:
 		return -1
-	var lod := key.level if neighbor_lod < 0 else neighbor_lod
-	return wake(neighbor, lod, "boundary_flux")
+	var source_record := pool.record(key)
+	var inherited_lod := int(source_record.get("physical_lod", 0))
+	var physical_lod := inherited_lod if neighbor_lod < 0 else maxi(neighbor_lod, 0)
+	return wake(neighbor, physical_lod, "boundary_flux")
 
 
 func thaw(key: HydroTileKey, reason: String = "disturbance") -> int:
-	if key == null or not pool.contains(key):
-		return wake(key, key.level if key != null else 0, reason)
+	if key == null:
+		return -1
+	if not pool.contains(key):
+		# No previous transient record exists, so the caller must decide the desired
+		# physical representation. The default is the finest local level (0), not
+		# the quadtree address depth.
+		return wake(key, 0, reason)
 	pool.set_state(key, HydroTilePool.TileState.ACTIVE, reason)
 	pool.reset_quiet_time(key)
 	return pool.slot_for(key)
