@@ -22,6 +22,8 @@ func _ready() -> void:
 	super._ready()
 	if not sparse_runtime_ready.is_connected(_on_sparse_runtime_ready_for_promotion):
 		sparse_runtime_ready.connect(_on_sparse_runtime_ready_for_promotion)
+	if not sparse_runtime_state_changed.is_connected(_on_sparse_runtime_state_for_promotion):
+		sparse_runtime_state_changed.connect(_on_sparse_runtime_state_for_promotion)
 	if not PersistentHydrologySystem.store_rebuilt.is_connected(
 			_on_persistent_hydrology_store_rebuilt):
 		PersistentHydrologySystem.store_rebuilt.connect(
@@ -87,6 +89,23 @@ func gpu_stats() -> Dictionary:
 
 func _on_sparse_runtime_ready_for_promotion() -> void:
 	_try_bind_planet_promotion_bridge()
+
+
+func _on_sparse_runtime_state_for_promotion(state: String) -> void:
+	if state == "ready":
+		_try_bind_planet_promotion_bridge()
+		return
+	# Defensive path in addition to _release_sparse_runtime() override: even if a
+	# future base implementation changes bootstrap sequencing, no bridge may retain
+	# references to sparse resources once the runtime leaves READY.
+	if _planet_promotion_bridge != null:
+		_release_planet_promotion_bridge()
+	if state == "disabled":
+		_set_planet_promotion_state("disabled")
+	elif state == "unavailable_no_rendering_device":
+		_set_planet_promotion_state("unavailable")
+	else:
+		_set_planet_promotion_state("waiting_for_sparse_runtime")
 
 
 func _on_persistent_hydrology_store_rebuilt() -> void:
@@ -178,13 +197,3 @@ func _release_planet_promotion_bridge() -> void:
 func _release_sparse_runtime() -> void:
 	_release_planet_promotion_bridge()
 	super._release_sparse_runtime()
-
-
-func _exit_tree() -> void:
-	if PersistentHydrologySystem.store_rebuilt.is_connected(
-			_on_persistent_hydrology_store_rebuilt):
-		PersistentHydrologySystem.store_rebuilt.disconnect(
-			_on_persistent_hydrology_store_rebuilt)
-	if sparse_runtime_ready.is_connected(_on_sparse_runtime_ready_for_promotion):
-		sparse_runtime_ready.disconnect(_on_sparse_runtime_ready_for_promotion)
-	super._exit_tree()
