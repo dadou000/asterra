@@ -9,18 +9,15 @@ signal river_reach_collapse_failed(error: Error, stage: String)
 var automatic_channel_demotion_enabled := false
 var _river_reach_collapse_bridge: PlanetRiverReachCollapseBridgeProduction
 var _deferred_sparse_release_for_river_collapse := false
-var _deferred_store_rebuild_for_river_collapse := false
 
 
 func _ready() -> void:
 	super._ready()
-	# Replace the inherited direct store-rebuild handler so collapse can finish its
-	# compact readback/ownership transaction before coupling/store generation teardown.
+	# The base WaterSystem coarse-store handler already calls _release_sparse_runtime()
+	# virtually, so it automatically enters the collapse-aware deferral below. Remove
+	# only the older coupling-specific store handler to avoid a second teardown path.
 	if PersistentHydrologySystem.store_rebuilt.is_connected(_on_coupled_store_rebuilt):
 		PersistentHydrologySystem.store_rebuilt.disconnect(_on_coupled_store_rebuilt)
-	if not PersistentHydrologySystem.store_rebuilt.is_connected(
-			_on_store_rebuilt_for_river_collapse):
-		PersistentHydrologySystem.store_rebuilt.connect(_on_store_rebuilt_for_river_collapse)
 	if not river_reach_coupling_ready.is_connected(_try_bind_river_reach_collapse_bridge):
 		river_reach_coupling_ready.connect(_try_bind_river_reach_collapse_bridge)
 	if not sparse_runtime_ready.is_connected(_try_bind_river_reach_collapse_bridge):
@@ -119,10 +116,7 @@ func _try_bind_river_reach_collapse_bridge() -> void:
 	bridge.released.connect(func():
 		if bridge == _river_reach_collapse_bridge:
 			_river_reach_collapse_bridge = null
-		if _deferred_store_rebuild_for_river_collapse:
-			_deferred_store_rebuild_for_river_collapse = false
-			call_deferred(&"_continue_store_rebuild_after_river_collapse")
-		elif _deferred_sparse_release_for_river_collapse:
+		if _deferred_sparse_release_for_river_collapse:
 			_deferred_sparse_release_for_river_collapse = false
 			call_deferred(&"_continue_sparse_release_after_river_collapse"))
 	var err := bridge.initialize(
@@ -142,22 +136,6 @@ func _release_river_reach_collapse_bridge() -> void:
 		_river_reach_collapse_bridge = null
 		if is_instance_valid(bridge):
 			bridge.queue_free()
-
-
-func _on_store_rebuilt_for_river_collapse() -> void:
-	if _river_reach_collapse_bridge != null and _river_reach_collapse_bridge.busy():
-		_deferred_store_rebuild_for_river_collapse = true
-		_river_reach_collapse_bridge.release()
-		return
-	_release_river_reach_collapse_bridge()
-	_on_coupled_store_rebuilt()
-	call_deferred(&"_try_bind_river_reach_collapse_bridge")
-
-
-func _continue_store_rebuild_after_river_collapse() -> void:
-	_release_river_reach_collapse_bridge()
-	_on_coupled_store_rebuilt()
-	call_deferred(&"_try_bind_river_reach_collapse_bridge")
 
 
 func _release_sparse_runtime() -> void:
