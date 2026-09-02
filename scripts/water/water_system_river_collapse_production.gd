@@ -15,7 +15,7 @@ func _ready() -> void:
 
 func gpu_stats() -> Dictionary:
 	var out := super.gpu_stats()
-	var policy := get_node_or_null("/root/HydroAutomaticChannelRefinement")
+	var policy := get_node_or_null("/root/HydroChannelRefinement")
 	out["automatic_channel_refinement"] = {} if policy == null \
 		else policy.stats()
 	return out
