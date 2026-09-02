@@ -83,19 +83,19 @@ static func specs(preset_id: String, seed_salt: int = 0) -> Array[Dictionary]:
 				"amount_m":-320.0,
 				"center_latitude_deg":0.0,
 				"center_longitude_deg":0.0,
-				"radius_deg":6.5,
-				"radial_feather_deg":1.6,
+				"radius_deg":5.0,
+				"radial_feather_deg":1.0,
 				"seed":_seed(29411, seed_salt, 0),
 			}))
 			out.append(_spec("Crater Rim", {
 				"effect_kind":GUIDED.EFFECT_HEIGHT,
 				"area_kind":GUIDED.AREA_RING,
-				"amount_m":145.0,
+				"amount_m":220.0,
 				"center_latitude_deg":0.0,
 				"center_longitude_deg":0.0,
-				"inner_radius_deg":5.7,
-				"outer_radius_deg":7.5,
-				"radial_feather_deg":1.2,
+				"inner_radius_deg":5.2,
+				"outer_radius_deg":7.0,
+				"radial_feather_deg":1.0,
 				"seed":_seed(29411, seed_salt, 1),
 			}))
 		PLATEAU:
