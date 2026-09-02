@@ -10,7 +10,12 @@ extends Node
 ## The coarse store intentionally runs much slower than fine SWE. Fine resident
 ## tiles get current weather directly through HydroWeatherCoupling; this background
 ## representation preserves rainfall/runoff/channel state everywhere else and is
-## the source of future promotion requests.
+## the source of promotion requests.
+##
+## Coarse -> fine ownership transfer is transactional. prepare_promotion() only
+## reserves water. The caller must seed a fine representation and acknowledge it
+## with commit_promotion(); failures call rollback_promotion(). The coarse store
+## never debits water merely because a tile allocation was attempted.
 
 signal store_ready
 signal store_rebuilt
@@ -19,6 +24,10 @@ signal store_rebuilt
 ## that native revision.
 signal weather_snapshot_updated(weather_revision: int)
 signal coarse_step_completed(report: Dictionary)
+signal promotion_prepared(transaction: Dictionary)
+signal promotion_committed(transaction: Dictionary)
+signal promotion_rolled_back(transaction: Dictionary)
+signal demotion_accepted(transfer: Dictionary)
 
 const WEATHER_CHANNELS := 4
 const WEATHER_PRECIP_CHANNEL := 2
@@ -32,7 +41,7 @@ var weather_sample_interval_sim_s := 300.0
 var maximum_precipitation_mm_h := 30.0
 var weather_gain := 1.0
 
-var _store: PlanetHydrologyStore
+var _store: PlanetHydrologyOwnershipStore
 var _precipitation_snapshot_mps := PackedFloat64Array()
 var _time_debt_s := 0.0
 var _last_simulation_seconds := 0.0
@@ -64,7 +73,7 @@ func available() -> bool:
 	return _store != null and _store.initialized
 
 
-func store() -> PlanetHydrologyStore:
+func store() -> PlanetHydrologyOwnershipStore:
 	return _store
 
 
@@ -83,6 +92,51 @@ func promotion_candidates(max_count: int = 64,
 		return []
 	return _store.promotion_candidates(max_count,
 		surface_depth_threshold_m, discharge_ratio_threshold)
+
+
+## Reserve free coarse water without changing physical storage. The returned
+## transaction is the seed contract for the fine representation.
+func prepare_promotion(cell: int, requested_volume_m3: float) -> Dictionary:
+	if _store == null:
+		return {"error": ERR_UNCONFIGURED, "reason": "store_unconfigured"}
+	var result := _store.prepare_promotion(cell, requested_volume_m3)
+	if int(result.get("error", FAILED)) == OK:
+		promotion_prepared.emit(result.duplicate(true))
+	return result
+
+
+## Acknowledge that the fine side accepted the exact reserved seed volume. This
+## is the only path that removes the transaction's water from coarse storage.
+func commit_promotion(transaction_id: int) -> Dictionary:
+	if _store == null:
+		return {"error": ERR_UNCONFIGURED, "reason": "store_unconfigured"}
+	var result := _store.commit_promotion(transaction_id)
+	if int(result.get("error", FAILED)) == OK:
+		promotion_committed.emit(result.duplicate(true))
+	return result
+
+
+## Cancel a failed fine allocation/seed. Because prepare never debits coarse
+## storage, rollback only releases the reservation.
+func rollback_promotion(transaction_id: int) -> Dictionary:
+	if _store == null:
+		return {"error": ERR_UNCONFIGURED, "reason": "store_unconfigured"}
+	var result := _store.rollback_promotion(transaction_id)
+	if int(result.get("error", FAILED)) == OK:
+		promotion_rolled_back.emit(result.duplicate(true))
+	return result
+
+
+## Symmetric fine -> coarse ownership return. The fine caller must remove/reduce
+## this exact volume first; this method only accepts the already-conserved parcel.
+func accept_demotion(cell: int, surface_volume_m3: float,
+		channel_volume_m3: float = 0.0) -> Dictionary:
+	if _store == null:
+		return {"error": ERR_UNCONFIGURED, "reason": "store_unconfigured"}
+	var result := _store.accept_demotion(cell, surface_volume_m3, channel_volume_m3)
+	if int(result.get("error", FAILED)) == OK:
+		demotion_accepted.emit(result.duplicate(true))
+	return result
 
 
 func snapshot() -> Dictionary:
@@ -152,7 +206,7 @@ func _on_weather_native_failed(_reason: String) -> void:
 func _rebuild_store() -> void:
 	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
 		return
-	var next_store := PlanetHydrologyStore.new()
+	var next_store := PlanetHydrologyOwnershipStore.new()
 	var err := next_store.initialize(Planet.fields)
 	if err != OK:
 		push_error("PersistentHydrologySystem: store initialization failed (%d)." % int(err))
@@ -248,8 +302,13 @@ func _drain_time_debt() -> void:
 		dt = minf(dt, maximum_step)
 		dt = minf(dt, _time_debt_s)
 		var report := _store.step(dt)
-		if int(report.get("error", FAILED)) != OK:
-			push_warning("PersistentHydrologySystem: coarse step rejected.")
+		var error := int(report.get("error", FAILED))
+		if error != OK:
+			# ERR_BUSY is an intentional ownership barrier while a coarse -> fine
+			# transaction is awaiting seed acknowledgement. Keep time debt intact and
+			# catch up after commit/rollback rather than advancing reserved water.
+			if error != ERR_BUSY:
+				push_warning("PersistentHydrologySystem: coarse step rejected.")
 			break
 		_time_debt_s = maxf(_time_debt_s - dt, 0.0)
 		_coarse_steps += 1
