@@ -68,9 +68,6 @@ static func plan(store: PlanetHydrologyRiverPromotionStore,
 
 		var local_direction := geometry["direction_cell"] as Vector2
 		var direction := _dominant_cardinal(local_direction)
-		# Never immediately leave through the same edge we entered. If curvature or
-		# numerical projection makes that component dominant, choose the strongest
-		# remaining downstream component instead.
 		if direction == upstream_edge:
 			direction = _alternate_downstream_cardinal(local_direction, upstream_edge)
 		var parameter := _edge_crossing_parameter(
@@ -102,7 +99,6 @@ static func plan(store: PlanetHydrologyRiverPromotionStore,
 
 	if members.is_empty():
 		return {"error": ERR_CANT_RESOLVE, "reason": "empty_cluster"}
-	# Backfill reciprocal edge metadata now that the member sequence is complete.
 	for i in range(1, members.size()):
 		var previous := members[i - 1]
 		var current := members[i]
@@ -170,10 +166,10 @@ static func _orient_geometry_inward(geometry: Dictionary, entry_edge: int) -> vo
 
 static func _inward_normal(edge: int) -> Vector2:
 	match edge:
-		HydroTileTopology.DIR_WEST: return Vector2.RIGHT
-		HydroTileTopology.DIR_EAST: return Vector2.LEFT
-		HydroTileTopology.DIR_SOUTH: return Vector2.UP
-		HydroTileTopology.DIR_NORTH: return Vector2.DOWN
+		HydroTileTopology.DIR_WEST: return Vector2(1.0, 0.0)
+		HydroTileTopology.DIR_EAST: return Vector2(-1.0, 0.0)
+		HydroTileTopology.DIR_SOUTH: return Vector2(0.0, 1.0)
+		HydroTileTopology.DIR_NORTH: return Vector2(0.0, -1.0)
 	return Vector2.ZERO
 
 
@@ -203,7 +199,7 @@ static func _alternate_downstream_cardinal(direction: Vector2, forbidden: int) -
 static func _edge_crossing_parameter(center: Vector2, direction: Vector2,
 		edge: int, resolution: int) -> float:
 	var r := float(resolution)
-	var t := NAN
+	var t := INF
 	match edge:
 		HydroTileTopology.DIR_WEST:
 			if absf(direction.x) > EDGE_EPS:
@@ -218,7 +214,7 @@ static func _edge_crossing_parameter(center: Vector2, direction: Vector2,
 			if absf(direction.y) > EDGE_EPS:
 				t = (r - center.y) / direction.y
 	if not is_finite(t) or t < -EDGE_EPS:
-		return NAN
+		return INF
 	var point := center + direction * t
 	if edge in [HydroTileTopology.DIR_WEST, HydroTileTopology.DIR_EAST]:
 		return clampf(point.y / r, 0.0, 1.0)
