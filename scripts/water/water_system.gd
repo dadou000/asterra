@@ -2,14 +2,18 @@ extends "res://scripts/water/water_system_base.gd"
 ## Production facade extending the stable 0.1.0 water coordinator with
 ## transactional planet-coarse <-> sparse-SWE ownership bridges and diagnostics.
 ##
-## Automatic coarse candidate promotion deliberately remains OFF. Explicit/manual
-## promotion and frontier-driven expansion are ownership-safe, but automatic policy
-## is enabled only after the new conservation/partition gates are run locally.
+## Automatic surface/flood promotion exists but deliberately remains OFF until its
+## conservation gates run on the project Godot build/GPU. Automatic deactivation is
+## not installed yet; fine->coarse collapse is explicit through the demotion bridge.
 
 signal planet_promotion_bridge_state_changed(state: String)
 signal planet_promotion_bridge_ready
 signal planet_promotion_completed(report: Dictionary)
 signal planet_promotion_failed(error: Error, stage: String)
+signal planet_demotion_bridge_state_changed(state: String)
+signal planet_demotion_bridge_ready
+signal planet_demotion_completed(report: Dictionary)
+signal planet_demotion_failed(error: Error, stage: String)
 signal frontier_coarse_preseed_ready
 signal frontier_coarse_preseed_failed(error: Error)
 signal active_sparse_volume_ready(request_id: int, volume_m3: float)
@@ -17,12 +21,14 @@ signal active_sparse_volume_failed(request_id: int, error: Error)
 signal representation_audit_ready(audit_id: int, report: Dictionary)
 signal representation_audit_failed(audit_id: int, error: Error, stage: String)
 
-## Policy switch only. No automatic candidate loop is installed yet; keeping this
-## false makes the absence of automatic promotion explicit in production stats.
+## Policy switch consumed by HydroAutomaticSurfacePromotion. It remains false in
+## production until the automatic promotion renderer conservation gate is run.
 var automatic_coarse_promotion_enabled := false
 
 var _planet_promotion_bridge: PlanetHydroPromotionBridge
 var _planet_promotion_state := "offline"
+var _planet_demotion_bridge: PlanetHydroDemotionBridge
+var _planet_demotion_state := "offline"
 var _frontier_coarse_preseed: HydroFrontierCoarsePreseed
 var _sparse_volume_diagnostic: SparseHydroVolumeDiagnosticsGPU
 var _representation_audit: HydroRepresentationAudit
@@ -42,6 +48,7 @@ func _ready() -> void:
 	call_deferred(&"_try_bind_sparse_volume_diagnostic")
 	call_deferred(&"_try_bind_frontier_coarse_preseed")
 	call_deferred(&"_try_bind_planet_promotion_bridge")
+	call_deferred(&"_try_bind_planet_demotion_bridge")
 
 
 func planet_promotion_bridge_available() -> bool:
@@ -56,6 +63,20 @@ func planet_promotion_bridge_state() -> String:
 
 func planet_promotion_bridge() -> PlanetHydroPromotionBridge:
 	return _planet_promotion_bridge
+
+
+func planet_demotion_bridge_available() -> bool:
+	return _planet_demotion_state == "ready" \
+		and _planet_demotion_bridge != null \
+		and _planet_demotion_bridge.initialized_ok()
+
+
+func planet_demotion_bridge_state() -> String:
+	return _planet_demotion_state
+
+
+func planet_demotion_bridge() -> PlanetHydroDemotionBridge:
+	return _planet_demotion_bridge
 
 
 func frontier_coarse_preseed_available() -> bool:
@@ -117,12 +138,25 @@ func promote_coarse_surface_cell(cell: int, requested_volume_m3: float = -1.0,
 		local_velocity: Vector2 = Vector2.ZERO) -> int:
 	if not planet_promotion_bridge_available() or _planet_promotion_bridge.busy():
 		return -1
+	if _planet_demotion_bridge != null and _planet_demotion_bridge.busy():
+		return -1
 	var volume := requested_volume_m3
 	if volume < 0.0:
 		volume = _planet_promotion_bridge.suggested_surface_volume_m3(cell)
 	if not is_finite(volume) or volume <= 0.0:
 		return -1
 	return _planet_promotion_bridge.promote_cell(cell, volume, local_velocity)
+
+
+## Explicit fine -> coarse surface collapse. This initial reverse path is only for a
+## tile that maps back to the supplied coarse cell; all reduced fine water returns
+## to coarse surface storage. Automatic deactivation remains disabled.
+func demote_fine_surface_cell(cell: int) -> int:
+	if not planet_demotion_bridge_available() or _planet_demotion_bridge.busy():
+		return -1
+	if _planet_promotion_bridge != null and _planet_promotion_bridge.busy():
+		return -1
+	return _planet_demotion_bridge.demote_cell(cell)
 
 
 func gpu_stats() -> Dictionary:
@@ -133,6 +167,13 @@ func gpu_stats() -> Dictionary:
 		"busy": _planet_promotion_bridge != null and _planet_promotion_bridge.busy(),
 		"automatic_enabled": automatic_coarse_promotion_enabled,
 		"coarse_store_available": PersistentHydrologySystem.available(),
+	}
+	out["planet_demotion"] = {
+		"state": _planet_demotion_state,
+		"available": planet_demotion_bridge_available(),
+		"busy": _planet_demotion_bridge != null and _planet_demotion_bridge.busy(),
+		"automatic_enabled": false,
+		"surface_only": true,
 	}
 	out["frontier_coarse_preseed"] = {
 		"available": frontier_coarse_preseed_available(),
@@ -158,6 +199,7 @@ func _on_sparse_runtime_ready_for_promotion() -> void:
 	_try_bind_sparse_volume_diagnostic()
 	_try_bind_frontier_coarse_preseed()
 	_try_bind_planet_promotion_bridge()
+	_try_bind_planet_demotion_bridge()
 
 
 func _on_sparse_runtime_state_for_promotion(state: String) -> void:
@@ -166,6 +208,7 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 		_try_bind_sparse_volume_diagnostic()
 		_try_bind_frontier_coarse_preseed()
 		_try_bind_planet_promotion_bridge()
+		_try_bind_planet_demotion_bridge()
 		return
 
 	# A runtime can fail while HydroFrontierActivationPipeline still owns an
@@ -177,9 +220,11 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 	if state == "failed":
 		_release_representation_audit()
 		_release_sparse_volume_diagnostic()
+		_release_planet_demotion_bridge()
 		if _planet_promotion_bridge != null:
 			_release_planet_promotion_bridge()
 		_set_planet_promotion_state("failed")
+		_set_planet_demotion_state("failed")
 		if not _failed_runtime_teardown_queued:
 			_failed_runtime_teardown_queued = true
 			call_deferred(&"_teardown_failed_sparse_runtime")
@@ -191,14 +236,18 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
 	_release_frontier_coarse_preseed()
+	_release_planet_demotion_bridge()
 	if _planet_promotion_bridge != null:
 		_release_planet_promotion_bridge()
 	if state == "disabled":
 		_set_planet_promotion_state("disabled")
+		_set_planet_demotion_state("disabled")
 	elif state == "unavailable_no_rendering_device":
 		_set_planet_promotion_state("unavailable")
+		_set_planet_demotion_state("unavailable")
 	else:
 		_set_planet_promotion_state("waiting_for_sparse_runtime")
+		_set_planet_demotion_state("waiting_for_sparse_runtime")
 
 
 func _teardown_failed_sparse_runtime() -> void:
@@ -366,6 +415,47 @@ func _try_bind_planet_promotion_bridge() -> void:
 		_on_planet_promotion_bridge_initialization_failed(bridge, err)
 
 
+func _try_bind_planet_demotion_bridge() -> void:
+	if _planet_demotion_bridge != null:
+		return
+	if not sparse_runtime_available():
+		_set_planet_demotion_state("waiting_for_sparse_runtime")
+		return
+	if not PersistentHydrologySystem.available():
+		_set_planet_demotion_state("waiting_for_coarse_store")
+		return
+	var runtime := sparse_runtime()
+	if runtime == null or runtime.scheduler == null or runtime.atlas == null \
+			or runtime.connectivity == null or runtime.identity_bridge == null:
+		_set_planet_demotion_state("waiting_for_sparse_runtime")
+		return
+
+	var bridge := PlanetHydroDemotionBridge.new()
+	bridge.name = "PlanetHydroDemotionBridge"
+	_planet_demotion_bridge = bridge
+	add_child(bridge)
+	bridge.initialized.connect(
+		func(): _on_planet_demotion_bridge_initialized(bridge))
+	bridge.initialization_failed.connect(
+		func(error: Error): _on_planet_demotion_bridge_initialization_failed(
+			bridge, error))
+	bridge.demotion_completed.connect(
+		func(_request_id: int, report: Dictionary):
+			if bridge == _planet_demotion_bridge:
+				planet_demotion_completed.emit(report.duplicate(true)))
+	bridge.demotion_failed.connect(
+		func(_request_id: int, error: Error, stage: String):
+			if bridge == _planet_demotion_bridge:
+				planet_demotion_failed.emit(error, stage))
+
+	_set_planet_demotion_state("initializing")
+	var err := bridge.initialize(PersistentHydrologySystem.store(),
+		runtime.scheduler, runtime.atlas, runtime.connectivity,
+		runtime.identity_bridge, runtime)
+	if err != OK:
+		_on_planet_demotion_bridge_initialization_failed(bridge, err)
+
+
 func _on_planet_promotion_bridge_initialized(
 		bridge: PlanetHydroPromotionBridge) -> void:
 	if bridge != _planet_promotion_bridge:
@@ -385,11 +475,37 @@ func _on_planet_promotion_bridge_initialization_failed(
 	_planet_promotion_bridge = null
 
 
+func _on_planet_demotion_bridge_initialized(
+		bridge: PlanetHydroDemotionBridge) -> void:
+	if bridge != _planet_demotion_bridge:
+		return
+	_set_planet_demotion_state("ready")
+	planet_demotion_bridge_ready.emit()
+
+
+func _on_planet_demotion_bridge_initialization_failed(
+		bridge: PlanetHydroDemotionBridge, error: Error) -> void:
+	if bridge != _planet_demotion_bridge:
+		return
+	_set_planet_demotion_state("failed")
+	planet_demotion_failed.emit(error, "bridge_initialize")
+	bridge.release()
+	bridge.queue_free()
+	_planet_demotion_bridge = null
+
+
 func _set_planet_promotion_state(state: String) -> void:
 	if _planet_promotion_state == state:
 		return
 	_planet_promotion_state = state
 	planet_promotion_bridge_state_changed.emit(state)
+
+
+func _set_planet_demotion_state(state: String) -> void:
+	if _planet_demotion_state == state:
+		return
+	_planet_demotion_state = state
+	planet_demotion_bridge_state_changed.emit(state)
 
 
 func _release_representation_audit() -> void:
@@ -430,12 +546,22 @@ func _release_planet_promotion_bridge() -> void:
 	_set_planet_promotion_state("offline")
 
 
+func _release_planet_demotion_bridge() -> void:
+	var bridge := _planet_demotion_bridge
+	_planet_demotion_bridge = null
+	if bridge != null and is_instance_valid(bridge):
+		bridge.release()
+		bridge.queue_free()
+	_set_planet_demotion_state("offline")
+
+
 ## Parent bootstrap calls this whenever a world/runtime is recycled. Release all
 ## uniform sets/ownership helpers first so their externally-owned sparse RIDs are
-## still valid while cleanup and transaction rollback run.
+## still valid while cleanup and transaction rollback/commit recovery run.
 func _release_sparse_runtime() -> void:
 	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
 	_release_frontier_coarse_preseed()
+	_release_planet_demotion_bridge()
 	_release_planet_promotion_bridge()
 	super._release_sparse_runtime()
