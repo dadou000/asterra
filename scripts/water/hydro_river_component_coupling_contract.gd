@@ -3,23 +3,28 @@ extends RefCounted
 ## Pure CPU validation for switching a logical refined river component from the
 ## legacy per-reach 1D<->2D mouths to one physically continuous fine component.
 ##
-## The component registry itself is metadata-only. Bypassing an internal coarse
-## boundary is conservative only when:
+## Bypassing an internal coarse boundary is conservative only when:
 ##   1. the upstream coarse reach has no residual 1D length left;
-##   2. no residual coarse channel parcel is waiting in that reach; and
+##   2. no residual coarse channel parcel is waiting in that reach;
 ##   3. the upstream cluster's final sparse member is cardinally adjacent to the
-##      receiver cluster's first sparse member.
+##      receiver cluster's first sparse member; and
+##   4. their actual seeded corridor centerlines cross that shared edge continuously.
 ##
-## If any condition is false, callers must keep the existing per-reach coupling.
+## A true multi-root confluence additionally requires branched junction geometry in
+## the receiver tile. The current straight-corridor seeder cannot prove that shape,
+## so multi-root components remain on legacy per-reach coupling until a dedicated
+## junction builder publishes `fine_junction_verified` metadata.
 
 const LENGTH_REL_TOL := 1.0e-6
 const LENGTH_ABS_TOL_M := 1.0e-4
 const VOLUME_REL_TOL := 1.0e-9
 const VOLUME_ABS_TOL_M3 := 1.0e-7
+const EDGE_EPS := 1.0e-8
 
 
 static func evaluate(store: PlanetHydrologyRiverClusterStore,
-		component_id: int) -> Dictionary:
+		component_id: int, tile_resolution: int = -1,
+		cell_size_m: float = -1.0) -> Dictionary:
 	if store == null or not store.initialized or component_id < 0:
 		return _error(ERR_INVALID_PARAMETER, "invalid_component_contract_request")
 	var component := store.refined_component(component_id)
@@ -29,6 +34,13 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 	var cells := component.get("cells", PackedInt32Array()) as PackedInt32Array
 	if cells.size() < 2:
 		return _error(ERR_INVALID_DATA, "component_requires_multiple_reaches")
+	var upstream_mouth_count := int(component.get("upstream_mouth_count", 0))
+	if upstream_mouth_count > 1 and not bool(component.get("fine_junction_verified", false)):
+		var junction := _error(ERR_BUSY, "component_fine_junction_not_verified")
+		junction["upstream_mouth_count"] = upstream_mouth_count
+		junction["requires_branched_junction_seeding"] = true
+		return junction
+
 	for raw_cell in cells:
 		var cell := int(raw_cell)
 		if not store.is_refined_reach(cell):
@@ -94,6 +106,21 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 			gap["from_tile_id"] = int(from_last.get("tile_id", -1))
 			gap["to_tile_id"] = int(to_first.get("tile_id", -1))
 			return gap
+
+		var continuity := {
+			"error": OK,
+			"source_parameter": -1.0,
+			"destination_parameter": -1.0,
+			"parameter_delta_cells": 0.0,
+		}
+		if tile_resolution > 0:
+			continuity = _corridor_continuity(from_last, to_first, link,
+				tile_resolution, cell_size_m)
+			if int(continuity.get("error", FAILED)) != OK:
+				continuity["from_cell"] = from_cell
+				continuity["to_cell"] = to_cell
+				return continuity
+
 		physical_links.append({
 			"from_cell": from_cell,
 			"to_cell": to_cell,
@@ -103,6 +130,9 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 			"destination_direction": int(link.get("destination_direction", -1)),
 			"edge_orientation": int(link.get("edge_orientation", 1)),
 			"crossed_face": bool(link.get("crossed_face", false)),
+			"source_edge_parameter": float(continuity.get("source_parameter", -1.0)),
+			"destination_edge_parameter": float(continuity.get("destination_parameter", -1.0)),
+			"corridor_parameter_delta_cells": float(continuity.get("parameter_delta_cells", 0.0)),
 		})
 
 	var out := component.duplicate(true)
@@ -114,7 +144,91 @@ static func evaluate(store: PlanetHydrologyRiverClusterStore,
 	out["ownership_changed"] = false
 	out["requires_full_internal_reaches"] = true
 	out["requires_cardinal_fine_links"] = true
+	out["corridor_continuity_verified"] = tile_resolution > 0
 	return out
+
+
+static func _corridor_continuity(from_member: Dictionary, to_member: Dictionary,
+		link: Dictionary, resolution: int, cell_size_m: float) -> Dictionary:
+	var source_edge := int(link.get("source_direction", -1))
+	var destination_edge := int(link.get("destination_direction", -1))
+	var source_hit := _line_edge_hit(from_member, source_edge, resolution)
+	var destination_hit := _line_edge_hit(to_member, destination_edge, resolution)
+	if int(source_hit.get("error", FAILED)) != OK \
+			or int(destination_hit.get("error", FAILED)) != OK:
+		return _error(ERR_CANT_RESOLVE, "component_internal_corridor_edge_miss")
+
+	# The upstream centerline must travel forward to the shared edge. The receiver
+	# centerline must reach that same entry edge when traced backward.
+	if float(source_hit.get("t", -INF)) < -EDGE_EPS \
+			or float(destination_hit.get("t", INF)) > EDGE_EPS:
+		return _error(ERR_CANT_RESOLVE, "component_internal_corridor_wrong_orientation")
+
+	var source_parameter := float(source_hit.get("parameter", -1.0))
+	var destination_parameter := float(destination_hit.get("parameter", -1.0))
+	var expected_destination := source_parameter if int(link.get("edge_orientation", 1)) >= 0 \
+		else 1.0 - source_parameter
+	var delta_cells := absf(destination_parameter - expected_destination) * float(resolution)
+	var tolerance_cells := 1.5
+	if is_finite(cell_size_m) and cell_size_m > 0.0:
+		var from_half := maxf(float(from_member.get("half_width_m", 0.0)), 0.0)
+		var to_half := maxf(float(to_member.get("half_width_m", 0.0)), 0.0)
+		tolerance_cells = maxf(1.0, (from_half + to_half) / cell_size_m + 0.5)
+	if delta_cells > tolerance_cells:
+		var gap := _error(ERR_CANT_RESOLVE, "component_internal_corridor_gap")
+		gap["source_parameter"] = source_parameter
+		gap["destination_parameter"] = destination_parameter
+		gap["expected_destination_parameter"] = expected_destination
+		gap["parameter_delta_cells"] = delta_cells
+		gap["tolerance_cells"] = tolerance_cells
+		return gap
+	return {
+		"error": OK,
+		"source_parameter": source_parameter,
+		"destination_parameter": destination_parameter,
+		"parameter_delta_cells": delta_cells,
+		"tolerance_cells": tolerance_cells,
+	}
+
+
+static func _line_edge_hit(member: Dictionary, edge: int, resolution: int) -> Dictionary:
+	var center_value: Variant = member.get("center_cell", null)
+	var direction_value: Variant = member.get("direction_cell", null)
+	if not (center_value is Vector2) or not (direction_value is Vector2) or resolution <= 0:
+		return {"error": ERR_INVALID_DATA}
+	var center := center_value as Vector2
+	var direction := direction_value as Vector2
+	if direction.length_squared() <= 1.0e-12:
+		return {"error": ERR_INVALID_DATA}
+	direction = direction.normalized()
+	var r := float(resolution)
+	var t := INF
+	match edge:
+		HydroTileTopology.DIR_WEST:
+			if absf(direction.x) > EDGE_EPS:
+				t = (0.0 - center.x) / direction.x
+		HydroTileTopology.DIR_EAST:
+			if absf(direction.x) > EDGE_EPS:
+				t = (r - center.x) / direction.x
+		HydroTileTopology.DIR_SOUTH:
+			if absf(direction.y) > EDGE_EPS:
+				t = (0.0 - center.y) / direction.y
+		HydroTileTopology.DIR_NORTH:
+			if absf(direction.y) > EDGE_EPS:
+				t = (r - center.y) / direction.y
+	if not is_finite(t):
+		return {"error": ERR_CANT_RESOLVE}
+	var point := center + direction * t
+	var parameter := 0.0
+	if edge in [HydroTileTopology.DIR_WEST, HydroTileTopology.DIR_EAST]:
+		if point.y < -EDGE_EPS or point.y > r + EDGE_EPS:
+			return {"error": ERR_CANT_RESOLVE}
+		parameter = clampf(point.y / r, 0.0, 1.0)
+	else:
+		if point.x < -EDGE_EPS or point.x > r + EDGE_EPS:
+			return {"error": ERR_CANT_RESOLVE}
+		parameter = clampf(point.x / r, 0.0, 1.0)
+	return {"error": OK, "t": t, "parameter": parameter}
 
 
 static func _cardinal_link(source: HydroTileKey, destination: HydroTileKey) -> Dictionary:
