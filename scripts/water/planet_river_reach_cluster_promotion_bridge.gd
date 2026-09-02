@@ -4,8 +4,9 @@ extends Node
 ##
 ## One coarse ownership transaction covers every fine member. All members remain
 ## ALLOCATING/occupancy=0 through terrain staging and corridor seeding. The coarse
-## channel debit commits once, then the full chain is batch-published and sparse
-## connectivity is rebuilt once so internal fine<->fine edges appear atomically.
+## channel debit commits once, then the full chain is batch-published, connectivity
+## is rebuilt, optional coarse/fine coupling registration is acknowledged, and only
+## then may the sparse runtime resume.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -24,6 +25,7 @@ var identity_bridge: SparseHydroIdentityBridge
 var terrain_bed: HydroTerrainBedGPU
 var runtime: SparseHydrologyRuntime
 var seeder: HydroRiverCorridorProlongationGPU
+var registration_callback := Callable()
 
 var _initialized := false
 var _busy := false
@@ -38,6 +40,13 @@ var _staged := 0
 var _seeded := 0
 var _represented_total_m3 := 0.0
 var _runtime_was_enabled := true
+
+
+func set_registration_callback(callback: Callable) -> Error:
+	if _busy:
+		return ERR_BUSY
+	registration_callback = callback
+	return OK
 
 
 func initialize(p_store: PlanetHydrologyRiverClusterStore,
@@ -266,6 +275,12 @@ func _commit_and_publish() -> void:
 			* atlas.cell_size_m,
 		"representation": "sparse_2d_river_cluster",
 	}
+	if registration_callback.is_valid():
+		var value: Variant = registration_callback.call(report)
+		var registration_error := int(value) if value is int else ERR_INVALID_DATA
+		if registration_error != OK:
+			_fail(registration_error, "cluster_registration", false)
+			return
 	_complete(report)
 
 
@@ -337,6 +352,7 @@ func _clear_refs() -> void:
 	identity_bridge = null
 	terrain_bed = null
 	runtime = null
+	registration_callback = Callable()
 
 
 func release() -> void:
