@@ -14,6 +14,8 @@ on:
       - "scripts/world_authoring/validate_longitude_mask_phase41_ui_ci.gd"
       - "scripts/world_authoring/validate_geographic_region_mask_phase41_ci.gd"
       - "scripts/world_authoring/validate_geographic_region_mask_phase41_ui_ci.gd"
+      - "scripts/world_authoring/validate_radial_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_radial_mask_phase41_ui_ci.gd"
       - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
       - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
       - "scenes/world_authoring/PlanetStudio.tscn"
@@ -23,6 +25,8 @@ on:
       - "scenes/world_authoring/ValidateLongitudeMaskPhase41UI.tscn"
       - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41CI.tscn"
       - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41UI.tscn"
+      - "scenes/world_authoring/ValidateRadialMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateRadialMaskPhase41UI.tscn"
       - ".github/workflows/phase41-latitude-mask-validate.yml"
   pull_request:
     paths:
@@ -35,6 +39,8 @@ on:
       - "scripts/world_authoring/validate_longitude_mask_phase41_ui_ci.gd"
       - "scripts/world_authoring/validate_geographic_region_mask_phase41_ci.gd"
       - "scripts/world_authoring/validate_geographic_region_mask_phase41_ui_ci.gd"
+      - "scripts/world_authoring/validate_radial_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_radial_mask_phase41_ui_ci.gd"
       - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
       - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
       - "scenes/world_authoring/PlanetStudio.tscn"
@@ -44,6 +50,8 @@ on:
       - "scenes/world_authoring/ValidateLongitudeMaskPhase41UI.tscn"
       - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41CI.tscn"
       - "scenes/world_authoring/ValidateGeographicRegionMaskPhase41UI.tscn"
+      - "scenes/world_authoring/ValidateRadialMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateRadialMaskPhase41UI.tscn"
       - ".github/workflows/phase41-latitude-mask-validate.yml"
   workflow_dispatch:
 
@@ -268,5 +276,53 @@ jobs:
           fi
           if grep -Eq "GEOGRAPHIC_REGION_MASK_PHASE41_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase41-geographic-region-ui.log; then
             echo "Phase 41 Geographic Region UI regression reported a failure."
+            exit 1
+          fi
+
+      - name: Validate deterministic Radial Area mask
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateRadialMaskPhase41CI.tscn > /tmp/phase41-radial-mask.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-radial-mask.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Radial Area validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "RADIAL_MASK_PHASE41_OK" /tmp/phase41-radial-mask.log; then
+            echo "Phase 41 Radial Area completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "RADIAL_MASK_PHASE41_FAILED|SCRIPT ERROR|Parse Error|FATAL" /tmp/phase41-radial-mask.log; then
+            echo "Phase 41 Radial Area regression reported a failure."
+            exit 1
+          fi
+
+      - name: Validate Radial Area editor workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateRadialMaskPhase41UI.tscn > /tmp/phase41-radial-mask-ui.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-radial-mask-ui.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Radial Area UI validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "RADIAL_MASK_PHASE41_UI_OK" /tmp/phase41-radial-mask-ui.log; then
+            echo "Phase 41 Radial Area UI completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "RADIAL_MASK_PHASE41_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase41-radial-mask-ui.log; then
+            echo "Phase 41 Radial Area UI regression reported a failure."
             exit 1
           fi
