@@ -70,6 +70,15 @@ func promote_coarse_surface_cell(cell: int, requested_volume_m3: float = -1.0,
 func demote_fine_surface_cell(cell: int) -> int:
 	if _river_reach_collapse_bridge != null and _river_reach_collapse_bridge.busy():
 		return -1
+	# A refined river tile has a live 1D<->2D coupling record and potentially
+	# coarse-owned pending confluence inflow. It must use the river-collapse bridge;
+	# generic surface collapse would leave stale coupling metadata and misclassify
+	# channel water as floodplain storage.
+	if PersistentHydrologySystem.available() \
+			and PersistentHydrologySystem.store() is PlanetHydrologyRiverCoupledStore \
+			and (PersistentHydrologySystem.store() as PlanetHydrologyRiverCoupledStore) \
+				.is_refined_reach(cell):
+		return -1
 	return super.demote_fine_surface_cell(cell)
 
 
