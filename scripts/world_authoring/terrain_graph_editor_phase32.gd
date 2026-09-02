@@ -1,6 +1,6 @@
 extends "res://scripts/world_authoring/terrain_graph_editor_phase31.gd"
-## Phase 32 graph UX for the renderer stages that were still locked inside shader
-## includes. These are serialized settings nodes, not a second rendering system.
+## Phase 32/33 graph UX for the renderer stages that were still locked inside
+## shader includes. These are serialized settings nodes, not a second renderer.
 
 const PHASE32_CONTROL_TYPES: Array[String] = [
 	"PRODUCTION_GEOMORPH_SETTINGS",
@@ -56,6 +56,44 @@ func _create_graph_node(node_data: Dictionary) -> void:
 			_add_float_setting(graph_node, node_id, parameters, "Glacial shaping", "glacial_strength", 1.0, 0.0, 4.0, 0.01)
 			_add_bool_setting(graph_node, node_id, parameters, "Override detail seed", "override_seed", false)
 			_add_float_setting(graph_node, node_id, parameters, "Detail seed", "detail_seed", 1337.0, 1.0, 2147483000.0, 1.0)
+			_add_settings_note(graph_node, "Physical production band geometry. Defaults below are the original renderer constants.")
+			_add_float_setting(graph_node, node_id, parameters, "Broad wavelength (m)", "broad_wavelength_m", 16000.0, 1.0, 100000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Broad low amp (m)", "broad_low_amplitude_m", 24.0, 0.0, 2000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Broad mountain amp (m)", "broad_mountain_amplitude_m", 125.0, 0.0, 4000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Broad warp", "broad_warp", 0.8, 0.0, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Mountain wavelength (m)", "mountain_wavelength_m", 6000.0, 1.0, 100000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Mountain amp (m)", "mountain_amplitude_m", 210.0, 0.0, 4000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Mountain warp", "mountain_warp", 1.1, 0.0, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Mountain ridge scale", "mountain_ridge_scale", 1.55, 0.05, 8.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Mountain cellular mix", "mountain_cell_mix", 0.58, 0.0, 1.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Mid wavelength (m)", "mid_wavelength_m", 1400.0, 1.0, 50000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Mid ridge amp (m)", "mid_ridge_amplitude_m", 72.0, 0.0, 2000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Mid noise amp (m)", "mid_noise_amplitude_m", 24.0, 0.0, 1000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Mid warp", "mid_warp", 0.72, 0.0, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Mid ridge scale", "mid_ridge_scale", 1.25, 0.05, 8.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Mid detail scale", "mid_detail_scale", 2.1, 0.05, 8.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Channel wavelength (m)", "channel_wavelength_m", 420.0, 1.0, 10000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Channel min depth (m)", "channel_depth_min_m", 2.0, 0.0, 1000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Channel max depth (m)", "channel_depth_max_m", 34.0, 0.0, 2000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Channel warp", "channel_warp", 0.55, 0.0, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Channel power", "channel_power", 4.6, 0.1, 12.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Flow along scale", "flow_along_scale", 0.42, 0.01, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Flow across scale", "flow_across_scale", 1.45, 0.01, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Deposit min amp (m)", "deposit_amplitude_min_m", 1.0, 0.0, 500.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Deposit max amp (m)", "deposit_amplitude_max_m", 12.0, 0.0, 1000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Deposit scale", "deposit_scale", 0.48, 0.01, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Deposit power", "deposit_power", 2.2, 0.1, 8.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Fine wavelength (m)", "fine_wavelength_m", 120.0, 0.5, 5000.0, 0.5)
+			_add_float_setting(graph_node, node_id, parameters, "Fine amp (m)", "fine_amplitude_m", 4.5, 0.0, 250.0, 0.05)
+			_add_float_setting(graph_node, node_id, parameters, "Dune wavelength (m)", "dune_wavelength_m", 180.0, 0.5, 5000.0, 0.5)
+			_add_float_setting(graph_node, node_id, parameters, "Dune amp (m)", "dune_amplitude_m", 9.0, 0.0, 500.0, 0.05)
+			_add_float_setting(graph_node, node_id, parameters, "Dune warp", "dune_warp", 0.45, 0.0, 4.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Micro wavelength (m)", "micro_wavelength_m", 24.0, 0.25, 1000.0, 0.25)
+			_add_float_setting(graph_node, node_id, parameters, "Micro amp (m)", "micro_amplitude_m", 0.9, 0.0, 100.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Glacial wavelength (m)", "glacial_wavelength_m", 2600.0, 1.0, 50000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Glacial amp (m)", "glacial_amplitude_m", 52.0, 0.0, 2000.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Glacial base scale", "glacial_base_scale", 0.62, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Glacial mix", "glacial_mix", 0.72, 0.0, 2.0, 0.01)
 		"PRODUCTION_CLASSIFIER_SETTINGS":
 			_add_float_setting(graph_node, node_id, parameters, "Rock weight", "rock_scale", 1.0, 0.0, 4.0, 0.01)
 			_add_float_setting(graph_node, node_id, parameters, "Soil weight", "soil_scale", 1.0, 0.0, 4.0, 0.01)
@@ -77,6 +115,13 @@ func _create_graph_node(node_data: Dictionary) -> void:
 			_add_float_setting(graph_node, node_id, parameters, "Strength", "strength", 1.0, 0.0, 4.0, 0.01)
 		"PRODUCTION_ANTITILE_SETTINGS":
 			_add_float_setting(graph_node, node_id, parameters, "Strength", "strength", 1.0, 0.0, 4.0, 0.01)
+			_add_settings_note(graph_node, "Cell sizes are snapped to exact divisors of the 4096 m floating-origin wrap.")
+			_add_float_setting(graph_node, node_id, parameters, "Coarse cell (m)", "coarse_cell_m", 32.0, 1.0, 512.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Fine cell (m)", "fine_cell_m", 8.0, 1.0, 512.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Coarse offset (m)", "coarse_offset_m", 0.58, 0.0, 8.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Fine offset (m)", "fine_offset_m", 0.14, 0.0, 8.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Coarse seed", "coarse_seed", 29093.0, 1.0, 2147483000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Fine seed", "fine_seed", 46141.0, 1.0, 2147483000.0, 1.0)
 		"PRODUCTION_ROCK_PBR_SETTINGS":
 			_add_bool_setting(graph_node, node_id, parameters, "Enabled", "enabled", true)
 			_add_float_setting(graph_node, node_id, parameters, "Detail", "detail_strength", 1.0, 0.0, 4.0, 0.01)
@@ -88,6 +133,25 @@ func _create_graph_node(node_data: Dictionary) -> void:
 			_add_float_setting(graph_node, node_id, parameters, "Grass tile (m)", "grass_metres", 2.0, 0.02, 1024.0, 0.01)
 			_add_float_setting(graph_node, node_id, parameters, "Mud tile (m)", "mud_metres", 1.0, 0.02, 1024.0, 0.01)
 			_add_float_setting(graph_node, node_id, parameters, "Forest tile (m)", "forest_metres", 2.0, 0.02, 1024.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Triplanar sharpness", "triplanar_sharpness", 5.0, 0.1, 16.0, 0.1)
+			_add_float_setting(graph_node, node_id, parameters, "Detail colour transfer", "transfer_strength", 0.60, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Transfer minimum", "transfer_min", 0.48, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Transfer maximum", "transfer_max", 1.72, 0.0, 4.0, 0.01)
+			_add_settings_note(graph_node, "Distance / LOD controls for the scanned PBR detail stage.")
+			_add_float_setting(graph_node, node_id, parameters, "Surface fade near (m)", "surface_fade_near_m", 900.0, 0.0, 20000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Surface fade far (m)", "surface_fade_far_m", 3200.0, 0.0, 50000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Normal fade near (m)", "normal_fade_near_m", 120.0, 0.0, 10000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Normal fade far (m)", "normal_fade_far_m", 520.0, 0.0, 20000.0, 1.0)
+			_add_float_setting(graph_node, node_id, parameters, "Loose threshold", "loose_threshold", 0.015, 0.0, 1.0, 0.001)
+			_add_float_setting(graph_node, node_id, parameters, "Loose albedo", "loose_albedo_strength", 0.72, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Loose roughness", "loose_roughness_strength", 0.70, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Loose normal mix", "loose_normal_mix", 0.42, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Loose normal weight", "loose_normal_weight", 0.48, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Special threshold", "special_threshold", 0.015, 0.0, 1.0, 0.001)
+			_add_float_setting(graph_node, node_id, parameters, "Special albedo", "special_albedo_strength", 0.88, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Special roughness", "special_roughness_strength", 0.82, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Special normal mix", "special_normal_mix", 0.58, 0.0, 2.0, 0.01)
+			_add_float_setting(graph_node, node_id, parameters, "Special normal weight", "special_normal_weight", 0.72, 0.0, 2.0, 0.01)
 		"PRODUCTION_SCAN_TEXTURES":
 			for key: String in [
 				"ground_albedo", "ground_normal", "ground_roughness",
@@ -106,7 +170,7 @@ func _settings_note(node: String) -> String:
 		"PRODUCTION_MICRORELIEF_SETTINGS": return "Controls the existing sub-metre material microrelief stage."
 		"PRODUCTION_ANTITILE_SETTINGS": return "Controls the production stochastic anti-tiling layer."
 		"PRODUCTION_ROCK_PBR_SETTINGS": return "Controls geology-specific procedural rock response."
-		"PRODUCTION_SCAN_PBR_SETTINGS": return "Controls scanned triplanar PBR and its physical texture scale."
+		"PRODUCTION_SCAN_PBR_SETTINGS": return "Controls scanned triplanar PBR, physical texture scale, fades and channel gains."
 		"PRODUCTION_SCAN_TEXTURES": return "The exact production ground/grass/mud/forest texture sets."
 	return "Production renderer setting."
 
