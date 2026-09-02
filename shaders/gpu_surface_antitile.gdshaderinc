@@ -3,22 +3,22 @@
 // Full stochastic texture bombing would multiply the already expensive
 // triplanar albedo/roughness/normal sample count. Instead we continuously warp
 // the shared precision-safe detail position with periodic vector value noise.
-// That breaks long straight repetitions and repeated landmark alignment without
-// adding any texture fetches.
 //
-// Both lattice periods divide the 4096 m floating-origin detail wrap exactly.
-// Therefore a rebase changes the input by an integer noise period and cannot
-// cause the material phase to jump.
-//
-// gpu_geomorph.gdshaderinc must be included before this file; we reuse gm_hash().
+// Phase 33 makes the cells, offsets and seeds graph-configurable. The runtime
+// snaps cell sizes to exact divisors of the 4096 m detail wrap and supplies the
+// matching integer periods, preserving floating-origin phase continuity.
 
 uniform float u_pbr_antitile_strength : hint_range(0.0, 1.5) = 1.0;
+uniform float u_pbr_antitile_coarse_cell_m : hint_range(1.0, 512.0) = 32.0;
+uniform float u_pbr_antitile_fine_cell_m : hint_range(1.0, 512.0) = 8.0;
+uniform int u_pbr_antitile_coarse_period = 128;
+uniform int u_pbr_antitile_fine_period = 512;
+uniform float u_pbr_antitile_coarse_offset_m : hint_range(0.0, 8.0) = 0.58;
+uniform float u_pbr_antitile_fine_offset_m : hint_range(0.0, 8.0) = 0.14;
+uniform int u_pbr_antitile_coarse_seed = 29093;
+uniform int u_pbr_antitile_fine_seed = 46141;
 
 const float SPAT_WRAP_M = 4096.0;
-const float SPAT_COARSE_CELL_M = 32.0;
-const float SPAT_FINE_CELL_M = 8.0;
-const int SPAT_COARSE_PERIOD = 128; // 4096 / 32
-const int SPAT_FINE_PERIOD = 512;   // 4096 / 8
 
 int spat_posmod(int value, int period) {
 	int m = value % period;
@@ -26,10 +26,11 @@ int spat_posmod(int value, int period) {
 }
 
 ivec3 spat_wrap_cell(ivec3 cell, int period) {
+	int safe_period = max(period, 1);
 	return ivec3(
-		spat_posmod(cell.x, period),
-		spat_posmod(cell.y, period),
-		spat_posmod(cell.z, period));
+		spat_posmod(cell.x, safe_period),
+		spat_posmod(cell.y, safe_period),
+		spat_posmod(cell.z, safe_period));
 }
 
 vec3 spat_rand3(ivec3 cell, int period, uint seed) {
@@ -66,16 +67,16 @@ vec3 spat_periodic_value(vec3 p, int period, uint seed) {
 vec3 spbr_antitile_position(vec3 detail_position) {
 	if (u_pbr_antitile_strength <= 0.001) return detail_position;
 
+	float coarse_cell = max(u_pbr_antitile_coarse_cell_m, 0.001);
+	float fine_cell = max(u_pbr_antitile_fine_cell_m, 0.001);
 	vec3 coarse = spat_periodic_value(
-		detail_position / SPAT_COARSE_CELL_M,
-		SPAT_COARSE_PERIOD, 0x71a5u);
+		detail_position / coarse_cell,
+		max(u_pbr_antitile_coarse_period, 1), uint(max(u_pbr_antitile_coarse_seed, 1)));
 	vec3 fine = spat_periodic_value(
-		detail_position / SPAT_FINE_CELL_M,
-		SPAT_FINE_PERIOD, 0xb43du);
+		detail_position / fine_cell,
+		max(u_pbr_antitile_fine_period, 1), uint(max(u_pbr_antitile_fine_seed, 1)));
 
-	// The coarse field moves the phase by a substantial fraction of a 1-2 m scan
-	// tile while changing only slowly in world space. The smaller field prevents
-	// the resulting bend from becoming recognisable at walking distance.
-	vec3 offset_m = coarse * 0.58 + fine * 0.14;
+	vec3 offset_m = coarse * u_pbr_antitile_coarse_offset_m
+		+ fine * u_pbr_antitile_fine_offset_m;
 	return detail_position + offset_m * u_pbr_antitile_strength;
 }
