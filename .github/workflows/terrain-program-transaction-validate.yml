@@ -7,8 +7,12 @@ on:
     paths:
       - "scripts/world_authoring/terrain_displacement_runtime*.gd"
       - "scripts/world_authoring/model/terrain_*.gd"
+      - "scripts/world_authoring/validate_production_geomorph_equivalence_ci.gd"
+      - "shaders/gpu_geomorph.gdshaderinc"
+      - "shaders/spherical_geometry_clipmap_cached_surface.gdshader"
       - "tests/validate_terrain_program_transaction_phase33.gd"
       - "tests/validate_terrain_program_transaction_phase33.tscn"
+      - "tests/validate_production_geomorph_equivalence_ci.tscn"
       - ".github/workflows/terrain-program-transaction-validate.yml"
   workflow_dispatch:
 
@@ -36,9 +40,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf /tmp/asterra-terrain-transaction-ci
-          mkdir -p /tmp/asterra-terrain-transaction-ci/scripts /tmp/asterra-terrain-transaction-ci/tests
+          mkdir -p /tmp/asterra-terrain-transaction-ci/scripts /tmp/asterra-terrain-transaction-ci/tests /tmp/asterra-terrain-transaction-ci/shaders
           cp -R scripts/. /tmp/asterra-terrain-transaction-ci/scripts/
           cp -R tests/. /tmp/asterra-terrain-transaction-ci/tests/
+          cp shaders/gpu_geomorph.gdshaderinc /tmp/asterra-terrain-transaction-ci/shaders/
+          cp shaders/spherical_geometry_clipmap_cached_surface.gdshader /tmp/asterra-terrain-transaction-ci/shaders/
           cp world.tres /tmp/asterra-terrain-transaction-ci/world.tres
           cat > /tmp/asterra-terrain-transaction-ci/project.godot <<'EOF'
           config_version=5
@@ -90,3 +96,18 @@ jobs:
           [ "$status" -eq 0 ]
           grep -q "TERRAIN_PROGRAM_PHASE33_OK" /tmp/terrain-transaction.log
           ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|TERRAIN_PROGRAM_PHASE33_FAILED" /tmp/terrain-transaction.log
+
+      - name: Validate production geomorph equivalence
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-terrain-transaction-ci
+          set +e
+          timeout 20 "$GODOT" --headless --path "$TEST_PROJECT" res://tests/validate_production_geomorph_equivalence_ci.tscn > /tmp/production-geomorph-equivalence.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/production-geomorph-equivalence.log
+          [ "$status" -eq 0 ]
+          grep -q "PRODUCTION_GEOMORPH_EQUIVALENCE_OK" /tmp/production-geomorph-equivalence.log
+          ! grep -Eiq "SCRIPT ERROR|CRASH|FATAL|PRODUCTION_GEOMORPH_EQUIVALENCE_FAILED" /tmp/production-geomorph-equivalence.log
