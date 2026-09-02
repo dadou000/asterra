@@ -13,6 +13,11 @@ extends Node
 ## the GPU seed dispatch is recorded. The normal frontier edge handoff is separate
 ## and runs afterwards. If there is no coarse surface water, request_preseed()
 ## returns 0 (synchronous no-op).
+##
+## A committed preseed remains *provisional* until the activation pipeline calls
+## finalize_tile(). If a later edge handoff/connectivity step fails, restore_tile()
+## returns the exact committed surface/channel categories to coarse storage while
+## the hidden/released sparse bytes cease to be authoritative.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -28,6 +33,7 @@ var seeder: HydroCoarseSeedGPU
 var _initialized := false
 var _next_request_id := 1
 var _pending_by_seed_request: Dictionary = {} # seed request -> request dictionary
+var _committed_by_tile: Dictionary = {} # tile id -> committed transfer awaiting activation finalization
 
 
 func initialize(p_store: PlanetHydrologyOwnershipStore,
@@ -63,6 +69,10 @@ func pending_count() -> int:
 	return _pending_by_seed_request.size()
 
 
+func provisional_commit_count() -> int:
+	return _committed_by_tile.size()
+
+
 ## Returns:
 ##   >0 asynchronous preseed request ID
 ##    0 no coarse surface water overlaps this fine footprint
@@ -70,7 +80,8 @@ func pending_count() -> int:
 func request_preseed(key: HydroTileKey, slot: int,
 		local_velocity: Vector2 = Vector2.ZERO) -> int:
 	if not _initialized or key == null or slot < 0 or slot >= atlas.capacity \
-			or not is_finite(local_velocity.x) or not is_finite(local_velocity.y):
+			or not is_finite(local_velocity.x) or not is_finite(local_velocity.y) \
+			or _committed_by_tile.has(key.packed()):
 		return -1
 	var cell := coarse_cell_for_tile(key)
 	if cell < 0:
@@ -137,6 +148,28 @@ func suggested_volume_m3(key: HydroTileKey) -> float:
 		store.available_promotion_volume_m3(cell))
 
 
+## Activation/connectivity succeeded: the fine tile is now authoritative and the
+## committed transfer no longer needs rollback metadata.
+func finalize_tile(tile_id: int) -> bool:
+	return _committed_by_tile.erase(tile_id)
+
+
+## Activation/handoff failed after coarse commit. Return the exact categories that
+## commit_promotion() removed. The caller must ensure the fine tile is unpublished.
+func restore_tile(tile_id: int) -> Dictionary:
+	var value: Variant = _committed_by_tile.get(tile_id, null)
+	if not (value is Dictionary) or store == null:
+		return {"error": ERR_DOES_NOT_EXIST, "tile_id": tile_id}
+	var committed: Dictionary = value
+	var cell := int(committed.get("cell", -1))
+	var surface := float(committed.get("reserved_surface_volume_m3", 0.0))
+	var channel := float(committed.get("reserved_channel_volume_m3", 0.0))
+	var result := store.accept_demotion(cell, surface, channel)
+	if int(result.get("error", FAILED)) == OK:
+		_committed_by_tile.erase(tile_id)
+	return result
+
+
 func _on_seed_recorded(seed_request_id: int, slot: int,
 		represented_volume_m3: float) -> void:
 	var value: Variant = _pending_by_seed_request.get(seed_request_id, null)
@@ -166,6 +199,9 @@ func _on_seed_recorded(seed_request_id: int, slot: int,
 	report["slot"] = expected_slot
 	report["represented_volume_m3"] = expected_volume
 	report["seed_depth_m"] = float(pending.get("seed_depth_m", 0.0))
+	# Keep enough information to reverse the coarse debit until sparse activation
+	# and connectivity have both succeeded.
+	_committed_by_tile[tile_id] = report.duplicate(true)
 	preseed_completed.emit(request_id, tile_id, expected_slot, report)
 
 
@@ -201,15 +237,19 @@ func _on_seeder_initialization_failed(error: Error) -> void:
 
 
 func release() -> void:
-	# Pending requests have already queued GPU writes into unpublished destinations.
-	# Roll back only coarse reservations here; callers must release/cancel those
-	# sparse destinations before tearing down the atlas.
+	# Roll back unresolved coarse reservations first.
 	for value: Variant in _pending_by_seed_request.values():
 		if value is Dictionary:
 			var transaction_id := int((value as Dictionary).get("transaction_id", -1))
 			if transaction_id >= 0 and store != null:
 				store.rollback_promotion(transaction_id)
 	_pending_by_seed_request.clear()
+	# Any committed-but-unfinalized seed still belongs to an unpublished/failed
+	# frontier tile. Return it to coarse before this coordinator disappears.
+	var committed_ids := _committed_by_tile.keys()
+	for tile_variant: Variant in committed_ids:
+		restore_tile(int(tile_variant))
+	_committed_by_tile.clear()
 	if seeder != null and is_instance_valid(seeder):
 		seeder.release()
 		seeder.queue_free()
