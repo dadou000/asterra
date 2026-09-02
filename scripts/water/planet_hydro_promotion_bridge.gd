@@ -5,10 +5,10 @@ extends Node
 ##
 ## The sparse runtime is paused only while this short ownership handoff is in
 ## flight. The destination remains ALLOCATING/occupancy=0 through terrain staging
-## and exact-volume seeding. Coarse storage is debited only after the seed dispatch
-## is recorded; only then is the tile activated and published.
+## and terrain-aware exact-volume prolongation. Coarse storage is debited only after
+## the GPU seed dispatch is recorded; only then is the tile activated and published.
 ##
-## This initial bridge promotes into a *new* tile. Adding water to an already-live
+## This bridge promotes into a *new* tile. Adding water to an already-live sparse
 ## tile belongs at an idle solver/source boundary and is intentionally rejected.
 
 signal initialized
@@ -25,7 +25,7 @@ var connectivity: SparseHydroConnectivityGPU
 var identity_bridge: SparseHydroIdentityBridge
 var terrain_bed: HydroTerrainBedGPU
 var runtime: SparseHydrologyRuntime
-var seeder: HydroCoarseSeedGPU
+var seeder: HydroCoarseProlongationGPU
 
 var _initialized := false
 var _busy := false
@@ -37,7 +37,7 @@ var _key: HydroTileKey
 var _slot := -1
 var _terrain_request_id := -1
 var _seed_request_id := -1
-var _seed_depth_m := 0.0
+var _seed_equivalent_depth_m := 0.0
 var _represented_volume_m3 := 0.0
 var _local_velocity := Vector2.ZERO
 var _runtime_was_enabled := true
@@ -70,8 +70,8 @@ func initialize(p_store: PlanetHydrologyOwnershipStore,
 	terrain_bed.stage_recorded.connect(_on_terrain_stage_recorded)
 	terrain_bed.stage_failed.connect(_on_terrain_stage_failed)
 
-	seeder = HydroCoarseSeedGPU.new()
-	seeder.name = "HydroCoarseSeedGPU"
+	seeder = HydroCoarseProlongationGPU.new()
+	seeder.name = "HydroCoarseProlongationGPU"
 	add_child(seeder)
 	seeder.initialized.connect(_on_seeder_initialized)
 	seeder.initialization_failed.connect(_on_seeder_initialization_failed)
@@ -129,18 +129,17 @@ func suggested_surface_volume_m3(cell: int) -> float:
 	return minf(surface_depth * fine_area, store.available_promotion_volume_m3(cell))
 
 
-## Start one coarse -> fine ownership transaction. Returns bridge request ID or -1.
-## requested_volume_m3 must be a physical parcel, typically
-## suggested_surface_volume_m3(cell) for flood promotion.
+## Start one coarse -> fine ownership transaction. The physical parcel is quantized
+## directly to a non-increasing FP32 target, then distributed after terrain staging
+## as a level free surface rather than uniform depth.
 func promote_cell(cell: int, requested_volume_m3: float,
 		local_velocity: Vector2 = Vector2.ZERO,
 		target_key: HydroTileKey = null) -> int:
 	if not _initialized or _busy or not is_finite(requested_volume_m3) \
 			or requested_volume_m3 <= 0.0:
 		return -1
-	if runtime != null:
-		if not runtime.initialized_ok() or runtime.busy():
-			return -1
+	if runtime != null and (not runtime.initialized_ok() or runtime.busy()):
+		return -1
 	if not is_finite(local_velocity.x) or not is_finite(local_velocity.y):
 		return -1
 	var key := target_key if target_key != null else tile_key_for_cell(cell)
@@ -151,7 +150,7 @@ func promote_cell(cell: int, requested_volume_m3: float,
 	if int(plan.get("error", FAILED)) != OK:
 		return -1
 	var represented := float(plan.get("represented_volume_m3", 0.0))
-	var depth := float(plan.get("depth_m", 0.0))
+	var equivalent_depth := float(plan.get("equivalent_uniform_depth_m", 0.0))
 	var prepared := store.prepare_promotion(cell, represented)
 	if int(prepared.get("error", FAILED)) != OK:
 		return -1
@@ -168,7 +167,7 @@ func promote_cell(cell: int, requested_volume_m3: float,
 	_cell = cell
 	_key = key
 	_slot = slot
-	_seed_depth_m = depth
+	_seed_equivalent_depth_m = equivalent_depth
 	_represented_volume_m3 = represented
 	_local_velocity = local_velocity
 	if runtime != null:
@@ -188,9 +187,10 @@ func _on_terrain_stage_recorded(request_id: int, tile_id: int, slot: int) -> voi
 	if not _busy or request_id != _terrain_request_id or _key == null \
 			or tile_id != _key.packed() or slot != _slot:
 		return
-	_seed_request_id = seeder.seed_reserved(_slot, _seed_depth_m, _local_velocity)
+	_seed_request_id = seeder.seed_reserved(
+		_slot, _represented_volume_m3, _local_velocity)
 	if _seed_request_id < 0:
-		_fail(ERR_BUSY, "seed_submit")
+		_fail(ERR_BUSY, "prolongation_submit")
 
 
 func _on_terrain_stage_failed(request_id: int, error: Error) -> void:
@@ -204,7 +204,7 @@ func _on_seed_recorded(request_id: int, slot: int,
 		return
 	var tolerance := maxf(1.0e-7, absf(_represented_volume_m3) * 1.0e-7)
 	if absf(represented_volume_m3 - _represented_volume_m3) > tolerance:
-		_fail(ERR_INVALID_DATA, "seed_volume_ack")
+		_fail(ERR_INVALID_DATA, "prolongation_volume_ack")
 		return
 
 	# The hidden fine slot now owns the parcel. Commit the coarse debit before
@@ -215,7 +215,7 @@ func _on_seed_recorded(request_id: int, slot: int,
 		_fail(int(committed.get("error", ERR_INVALID_DATA)), "coarse_commit")
 		return
 
-	var activated_slot := scheduler.activate_reserved(_key, "planet_coarse_seeded")
+	var activated_slot := scheduler.activate_reserved(_key, "planet_coarse_prolongated")
 	if activated_slot != _slot:
 		_restore_after_committed_failure(committed, "activate")
 		return
@@ -229,7 +229,10 @@ func _on_seed_recorded(request_id: int, slot: int,
 	report["request_id"] = _request_id
 	report["tile_id"] = _key.packed()
 	report["slot"] = _slot
-	report["seed_depth_m"] = _seed_depth_m
+	# Kept for compatibility/debug comparison; this is no longer the actual depth
+	# written to every cell. Terrain-aware h varies while the free surface is level.
+	report["seed_depth_m"] = _seed_equivalent_depth_m
+	report["seed_strategy"] = "level_free_surface"
 	report["represented_volume_m3"] = _represented_volume_m3
 	var completed_id := _request_id
 	_finish_request()
@@ -238,13 +241,10 @@ func _on_seed_recorded(request_id: int, slot: int,
 
 func _on_seed_failed(request_id: int, error: Error) -> void:
 	if _busy and request_id == _seed_request_id:
-		_fail(error, "seed")
+		_fail(error, "prolongation")
 
 
 func _restore_after_committed_failure(committed: Dictionary, stage: String) -> void:
-	# The destination is either still hidden or has just been unpublished. Restore
-	# exactly the categories that commit_promotion removed; stale GPU bytes remain
-	# unreachable and will be overwritten before slot reuse.
 	var surface := float(committed.get("reserved_surface_volume_m3", 0.0))
 	var channel := float(committed.get("reserved_channel_volume_m3", 0.0))
 	var restore := store.accept_demotion(_cell, surface, channel)
@@ -275,7 +275,7 @@ func _finish_request() -> void:
 	_slot = -1
 	_terrain_request_id = -1
 	_seed_request_id = -1
-	_seed_depth_m = 0.0
+	_seed_equivalent_depth_m = 0.0
 	_represented_volume_m3 = 0.0
 	_local_velocity = Vector2.ZERO
 
