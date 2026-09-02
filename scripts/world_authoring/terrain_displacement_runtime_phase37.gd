@@ -42,7 +42,14 @@ func _is_identity_shape_slot(slot: Resource) -> bool:
 func _extract_geomorph_controls(terrain: Resource) -> Dictionary:
 	var out: Dictionary = super._extract_geomorph_controls(terrain)
 	var plan: Dictionary = _extract_reorder_plan(terrain)
-	if bool(plan.get("valid", false)):
+	if not bool(plan.get("valid", false)):
+		return out
+	# Phase 36 already recognizes every merge-based branch graph through
+	# ordered_bypass_plan(), which delegates to contribution_merge_plan(). Applying
+	# the same plan again was harmless for zero-valued bypass controls but would square
+	# scale factors (0.5 -> 0.25). Only legacy reordered linear graphs need the Phase
+	# 37 pass because Phase 36 intentionally rejects their reordered serialization.
+	if not bool(plan.get("branching", false)):
 		out = NATIVE_REORDER_LOWERING.apply_bypass_controls(out, plan)
 	return out
 
