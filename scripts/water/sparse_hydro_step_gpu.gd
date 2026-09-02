@@ -9,6 +9,12 @@ extends Node
 ##
 ## Atlas A remains authoritative after every candidate iteration so the existing
 ## activity/frontier/reconstruction pipeline never tracks ping-pong parity.
+##
+## Source composition has two independent layers:
+##   atlas.source_rid()        = persistent gameplay/world point sources
+##   atmospheric_source_rid() = distributed weather/surface forcing
+## They are summed by sparse_hydro_step.glsl at read time, preventing one source
+## producer from clearing or overwriting another producer's field.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -23,6 +29,7 @@ const COMMIT_LOCAL_X := 256
 const PARAM_FLOATS := 12
 const COMMIT_PARAM_INTS := 4
 const CONTROL_BYTES := 96
+const SOURCE_FLOATS := 4
 const MAX_GPU_SUBSTEPS := 32
 
 var gravity := 9.81
@@ -47,6 +54,7 @@ var _prepare_pipeline := RID()
 var _params := RID()
 var _commit_params := RID()
 var _control := RID()
+var _atmospheric_sources := RID()
 var _step_set := RID()
 var _commit_set := RID()
 var _reduce_set := RID()
@@ -117,8 +125,21 @@ func control_buffer_rid() -> RID:
 	return _control if _initialized else RID()
 
 
-## Compatibility entry point used by the earlier connected-boundary tests.
-## It remains CFL-safe: an unsafe requested dt is under-advanced rather than forced.
+## Distributed forcing layer. External writers own no lifetime for this RID and
+## must stop using it before this solver is released/reinitialized.
+func atmospheric_source_rid() -> RID:
+	return _atmospheric_sources if _initialized else RID()
+
+
+func clear_atmospheric_sources() -> Error:
+	if not _initialized or not _atmospheric_sources.is_valid() or _atlas == null:
+		return ERR_UNAVAILABLE
+	RenderingServer.call_on_render_thread(
+		Callable(self, &"_clear_atmospheric_sources_render_thread"))
+	return OK
+
+
+## Compatibility entry point used by earlier connected-boundary tests.
 func substep(dt_s: float) -> int:
 	return advance(dt_s, 1, false)
 
@@ -153,7 +174,10 @@ func latest_diagnostics() -> Dictionary:
 
 
 func gpu_bytes_estimate() -> int:
-	return PARAM_FLOATS * 4 + COMMIT_PARAM_INTS * 4 + CONTROL_BYTES
+	var forcing_bytes := 0
+	if _atlas != null:
+		forcing_bytes = _atlas.total_cell_count() * SOURCE_FLOATS * 4
+	return PARAM_FLOATS * 4 + COMMIT_PARAM_INTS * 4 + CONTROL_BYTES + forcing_bytes
 
 
 func stats() -> Dictionary:
@@ -168,6 +192,7 @@ func stats() -> Dictionary:
 		"cfl": cfl,
 		"max_gpu_substeps": MAX_GPU_SUBSTEPS,
 		"canonical_state": "atlas_A",
+		"atmospheric_source_layer": _atmospheric_sources.is_valid(),
 		"gpu_bytes_owned": gpu_bytes_estimate(),
 		"latest_diagnostics": latest_diagnostics(),
 	}
@@ -201,18 +226,23 @@ func _init_render_thread(spirv: Dictionary) -> void:
 	zero_params.resize(PARAM_FLOATS * 4)
 	var zero_control := PackedByteArray()
 	zero_control.resize(CONTROL_BYTES)
+	var zero_atmospheric := PackedByteArray()
+	zero_atmospheric.resize(_atlas.total_cell_count() * SOURCE_FLOATS * 4)
 	var commit_values := PackedInt32Array([
 		_atlas.total_cell_count(), _atlas.cells_per_tile(), _atlas.capacity, 0,
 	])
 	var params := rd.storage_buffer_create(zero_params.size(), zero_params)
 	var control := rd.storage_buffer_create(zero_control.size(), zero_control)
+	var atmospheric_sources := rd.storage_buffer_create(
+		zero_atmospheric.size(), zero_atmospheric)
 	var commit_params := rd.storage_buffer_create(
 		commit_values.to_byte_array().size(), commit_values.to_byte_array())
-	if not params.is_valid() or not control.is_valid() or not commit_params.is_valid():
-		_free_many(rd, resources + [params, control, commit_params])
+	if not params.is_valid() or not control.is_valid() \
+			or not atmospheric_sources.is_valid() or not commit_params.is_valid():
+		_free_many(rd, resources + [params, control, atmospheric_sources, commit_params])
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
 		return
-	resources.append_array([params, control, commit_params])
+	resources.append_array([params, control, atmospheric_sources, commit_params])
 
 	var step_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_a_rid()),
@@ -223,6 +253,7 @@ func _init_render_thread(spirv: Dictionary) -> void:
 		_storage_uniform(5, _connectivity.neighbor_links_rid()),
 		_storage_uniform(6, params),
 		_storage_uniform(7, control),
+		_storage_uniform(8, atmospheric_sources),
 	], bundle.step_shader, 0)
 	var commit_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_b_rid()),
@@ -253,6 +284,7 @@ func _init_render_thread(spirv: Dictionary) -> void:
 
 	bundle["params"] = params
 	bundle["control"] = control
+	bundle["atmospheric_sources"] = atmospheric_sources
 	bundle["commit_params"] = commit_params
 	bundle["step_set"] = step_set
 	bundle["commit_set"] = commit_set
@@ -273,7 +305,9 @@ func _finish_init(error: Error, bundle: Dictionary) -> void:
 	_reduce_shader = bundle.reduce_shader; _reduce_pipeline = bundle.reduce_pipeline
 	_reset_shader = bundle.reset_shader; _reset_pipeline = bundle.reset_pipeline
 	_prepare_shader = bundle.prepare_shader; _prepare_pipeline = bundle.prepare_pipeline
-	_params = bundle.params; _control = bundle.control; _commit_params = bundle.commit_params
+	_params = bundle.params; _control = bundle.control
+	_atmospheric_sources = bundle.atmospheric_sources
+	_commit_params = bundle.commit_params
 	_step_set = bundle.step_set; _commit_set = bundle.commit_set
 	_reduce_set = bundle.reduce_set; _reset_set = bundle.reset_set
 	_prepare_set = bundle.prepare_set
@@ -321,14 +355,11 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		rd.compute_list_dispatch(compute, groups_x, groups_y, _atlas.capacity)
 		rd.compute_list_add_barrier(compute)
 
-		# Canonicalize every candidate iteration. After the active prefix ends B and
-		# A are already identical, so the remaining commits are harmless copies.
 		rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
 		rd.compute_list_dispatch(compute, commit_groups, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
-	# Final-state diagnostics always inspect canonical atlas A.
 	rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _reduce_set, 0)
 	_set_u32_push(rd, compute, 1)
@@ -341,6 +372,16 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		if err != OK:
 			call_deferred("_diagnostics_failed", step_id, err)
 	call_deferred("_finish_advance", step_id, true, request_diagnostics)
+
+
+func _clear_atmospheric_sources_render_thread() -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null or not _atmospheric_sources.is_valid() or _atlas == null:
+		return
+	var bytes := _atlas.total_cell_count() * SOURCE_FLOATS * 4
+	var err := rd.buffer_clear(_atmospheric_sources, 0, bytes)
+	if err != OK:
+		push_warning("SparseHydroStepGPU: atmospheric source clear failed (%d)." % int(err))
 
 
 func _finish_advance(step_id: int, success: bool, request_diagnostics: bool) -> void:
@@ -404,6 +445,7 @@ func _all_runtime_rids_valid() -> bool:
 		and _reduce_pipeline.is_valid() and _reset_pipeline.is_valid() \
 		and _prepare_pipeline.is_valid() and _params.is_valid() \
 		and _commit_params.is_valid() and _control.is_valid() \
+		and _atmospheric_sources.is_valid() \
 		and _step_set.is_valid() and _commit_set.is_valid() \
 		and _reduce_set.is_valid() and _reset_set.is_valid() \
 		and _prepare_set.is_valid()
@@ -430,7 +472,7 @@ func release() -> void:
 		return
 	var rids := [
 		_step_set, _commit_set, _reduce_set, _reset_set, _prepare_set,
-		_params, _commit_params, _control,
+		_params, _commit_params, _control, _atmospheric_sources,
 		_step_pipeline, _commit_pipeline, _reduce_pipeline, _reset_pipeline,
 		_prepare_pipeline, _step_shader, _commit_shader, _reduce_shader,
 		_reset_shader, _prepare_shader,
@@ -442,6 +484,7 @@ func release() -> void:
 	_step_set = RID(); _commit_set = RID(); _reduce_set = RID()
 	_reset_set = RID(); _prepare_set = RID()
 	_params = RID(); _commit_params = RID(); _control = RID()
+	_atmospheric_sources = RID()
 	_step_pipeline = RID(); _commit_pipeline = RID(); _reduce_pipeline = RID()
 	_reset_pipeline = RID(); _prepare_pipeline = RID()
 	_step_shader = RID(); _commit_shader = RID(); _reduce_shader = RID()
