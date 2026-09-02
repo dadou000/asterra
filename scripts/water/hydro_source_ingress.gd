@@ -79,12 +79,14 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 	default_tile_level = int(_metric_contract.get("level", 0))
 	var metric_error := float(_metric_contract.get("relative_error", 0.0))
 	if metric_error > 0.05:
-		push_warning("HydroSourceIngress: atlas dx %.6f m does not exactly match cube-sphere "
+		var warning_text := (
+			"HydroSourceIngress: atlas dx %.6f m does not exactly match cube-sphere "
 			+ "level %d (compatible %.6f m, %.1f%% mismatch). Production bootstrap should "
-			+ "initialize the atlas with HydroMetricGrid.compatible_cell_size_m()." % [
+			+ "initialize the atlas with HydroMetricGrid.compatible_cell_size_m().") % [
 				atlas.cell_size_m, default_tile_level,
 				float(_metric_contract.get("compatible_cell_size_m", atlas.cell_size_m)),
-				metric_error * 100.0])
+				metric_error * 100.0]
+		push_warning(warning_text)
 
 	writer = HydroSourceTermsGPU.new()
 	writer.name = "HydroSourceTermsGPU"
@@ -170,8 +172,6 @@ func set_source_enabled(source_id: String, enabled: bool) -> bool:
 	return true
 
 
-## Apply all pending source-definition changes. Call only at a hydrology runtime
-## phase boundary; this method may allocate/initialize new sparse tiles.
 func flush() -> int:
 	if not _initialized or _busy:
 		return -1
@@ -314,7 +314,6 @@ func _rebuild_gpu_terms() -> void:
 		var key := resolved["key"] as HydroTileKey
 		var slot := scheduler.pool.slot_for(key)
 		if slot < 0:
-			# Negative-only sinks on absent dry tiles are intentionally ignored.
 			continue
 		var record := scheduler.pool.record(key)
 		if int(record.get("state", HydroTilePool.TileState.ALLOCATING)) \
@@ -410,7 +409,6 @@ func _on_writer_update_recorded(_request_id: int, entry_count: int) -> void:
 	var completed_id := _flush_id
 	var source_total := _sources.size()
 	_busy = false
-	# Do not erase a source edit that arrived while this GPU rebuild was in flight.
 	_dirty = _revision != _flush_revision
 	_reset_flush_state()
 	flush_completed.emit(completed_id, source_total, entry_count)
