@@ -1,0 +1,14 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/rendering/procedural_sky.gd" id="2_sky"]
+[ext_resource type="Script" path="res://tests/water/test_hydro_coast_clipmap_stability.gd" id="3_test"]
+
+[node name="HydroCoastClipmapStability" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="ProceduralSky" type="Node3D" parent="."]
+script = ExtResource("2_sky")
+
+[node name="HydroCoastClipmapHarness" type="Node" parent="."]
+script = ExtResource("3_test")
