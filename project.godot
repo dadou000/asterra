@@ -3,8 +3,8 @@
 ; since the parameters that go here are not all obvious.
 ;
 ; Format:
-;   [section] ; section goes between []
-;   param=value ; assign values to parameters
+;   [section]
+;   param=value
 
 config_version=5
 
@@ -30,6 +30,7 @@ GroundTerrainPrefetcher="*res://scripts/terrain/ground_prefetcher_gpu_visual.gd"
 CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
 OceanSystem="*res://scripts/terrain/ocean_geometry_clipmap.gd"
 WaterSystem="*res://scripts/water/water_system.gd"
+SparseHydroSurfaceCache="*res://scripts/water/sparse_hydro_surface_cache_bridge.gd"
 MaterialClipmap="*res://scripts/terrain/material_clipmap.gd"
 GroundGeometryClipmap="*res://scripts/terrain/spherical_geometry_clipmap_global.gd"
 AppSettings="*res://scripts/core/app_settings.gd"
@@ -91,7 +92,7 @@ dig={
 }
 fill={
 "deadzone": 0.5,
-"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"pressed":false,"double_click":false,"script":null)
+"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null), Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"pressed":false,"double_click":false,"script":null)
 ]
 }
 
