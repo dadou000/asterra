@@ -86,16 +86,25 @@ func refined_cluster_size(cell: int) -> int:
 	return refined_cluster_members(cell).size()
 
 
+## O(number of refined reaches), used by low-cadence capacity policy. Do not route
+## this through stats(), whose parent currently aggregates some values over all
+## planetary coarse cells.
+func refined_sparse_member_count() -> int:
+	var members := 0
+	for value: Variant in _refined_records.values():
+		if not (value is Dictionary):
+			continue
+		members += maxi(int((value as Dictionary).get("member_count", 1)), 1)
+	return members
+
+
 func stats() -> Dictionary:
 	var out := super.stats()
 	var clusters := 0
-	var members := 0
 	for value: Variant in _refined_records.values():
 		var record := value as Dictionary
-		var count := int(record.get("member_count", 1))
-		if count > 1:
+		if int(record.get("member_count", 1)) > 1:
 			clusters += 1
-		members += maxi(count, 1)
 	out["multi_tile_river_clusters"] = clusters
-	out["refined_sparse_members"] = members
+	out["refined_sparse_members"] = refined_sparse_member_count()
 	return out
