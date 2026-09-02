@@ -6,6 +6,8 @@ extends Node
 ##   resolve candidates with defer_activation=true
 ##   -> reserve destination slots (ALLOCATING, GPU occupancy still 0)
 ##   -> stage each destination's own dry terrain state into A+B exactly once
+##   -> optional transactional coarse-surface preseed into hidden A+B
+##   -> wait for every preseed acknowledgement/coarse debit
 ##   -> perform one or more conservative source-edge handoffs into that destination
 ##   -> activate_reserved() only after the final seed
 ##   -> identity bridge publishes metadata/occupancy
@@ -22,13 +24,14 @@ extends Node
 ##   { "queued": true, "error": OK, "request_id": ... }
 ##
 ## A queued GPU initializer must record its RenderingDevice work through
-## RenderingServer.call_on_render_thread(). The handoff is queued afterwards, so
-## render-thread FIFO ordering keeps terrain staging ahead of conservative seeding.
-## Missing/invalid initialization FAILS CLOSED and releases the reservation.
+## RenderingServer.call_on_render_thread(). Coarse preseed and edge handoff are
+## queued afterwards, so render-thread FIFO ordering preserves stage -> seed ->
+## handoff. Missing/invalid initialization FAILS CLOSED and releases reservation.
 
 signal initialized
 signal initialization_failed(error: Error)
 signal batch_started(batch_id: int, reserved_destinations: int, handoffs: int)
+signal destination_coarse_seeded(batch_id: int, tile_id: int, slot: int, volume_m3: float)
 signal destination_activated(batch_id: int, tile_id: int, slot: int)
 signal destination_cancelled(batch_id: int, tile_id: int, slot: int, reason: String)
 signal batch_completed(batch_id: int, results: Array[Dictionary])
@@ -41,6 +44,9 @@ var connectivity: SparseHydroConnectivityGPU
 var identity_bridge: SparseHydroIdentityBridge
 var resolver: HydroFrontierResolver
 var handoff: HydroFrontierHandoffGPU
+## Externally owned. WaterSystem binds this only when the persistent coarse store
+## and sparse runtime refer to the same generated world.
+var coarse_preseed: HydroFrontierCoarsePreseed
 
 var _initialized := false
 var _busy := false
@@ -49,6 +55,7 @@ var _batch_id := -1
 var _results: Array[Dictionary] = []
 var _jobs: Array[Dictionary] = []
 var _job_index := 0
+var _pending_preseeds: Dictionary = {} # request id -> {destination_id, slot}
 var _seed_dt_s := 0.02
 var _max_seed_fraction := 0.12
 var _gravity := 9.81
@@ -96,9 +103,24 @@ func busy() -> bool:
 	return _busy
 
 
+func set_coarse_preseed(provider: HydroFrontierCoarsePreseed) -> Error:
+	if _busy:
+		return ERR_BUSY
+	_disconnect_coarse_preseed()
+	if provider == null:
+		return OK
+	if not provider.initialized_ok():
+		return ERR_UNCONFIGURED
+	coarse_preseed = provider
+	coarse_preseed.preseed_completed.connect(_on_coarse_preseed_completed)
+	coarse_preseed.preseed_failed.connect(_on_coarse_preseed_failed)
+	return OK
+
+
 ## Returns batch ID, or -1 when rejected. Multiple candidates targeting the same
-## new tile are grouped: destination state is staged once, every incoming edge can
-## contribute a conservative parcel, and activation occurs after the final seed.
+## new tile are grouped: destination state is staged once, optional coarse state is
+## transactionally seeded once, every incoming edge can then contribute a
+## conservative parcel, and activation occurs after the final edge seed.
 func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 		destination_state_provider: Callable, seed_dt_s: float = 0.02,
 		max_seed_fraction: float = 0.12, gravity: float = 9.81) -> int:
@@ -124,6 +146,7 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 		(groups[destination_id] as Array).append(result)
 
 	var jobs: Array[Dictionary] = []
+	var pending_preseeds: Dictionary = {}
 	var reserved_destinations := 0
 	for destination_variant in groups.keys():
 		var destination_id := int(destination_variant)
@@ -144,6 +167,21 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 				"destination_stage_failed", resolved)
 			continue
 
+		# The terrain stage has now been queued. Any coarse preseed records after it
+		# and before edge handoff. request 0 is a valid no-op (no coarse surface water).
+		if coarse_preseed != null:
+			var preseed_request := coarse_preseed.request_preseed(
+				destination, destination_slot)
+			if preseed_request < 0:
+				_cancel_group(batch_id, destination, destination_slot,
+					"coarse_preseed_rejected", resolved)
+				continue
+			if preseed_request > 0:
+				pending_preseeds[preseed_request] = {
+					"destination_id": destination_id,
+					"slot": destination_slot,
+				}
+
 		reserved_destinations += 1
 		for i in incoming.size():
 			var r := (incoming[i] as Dictionary).duplicate(true)
@@ -153,13 +191,19 @@ func process_candidates(candidates: Array[Dictionary], reachability: Callable,
 	_results = resolved
 	_jobs = jobs
 	_job_index = 0
+	_pending_preseeds = pending_preseeds
 	_batch_id = batch_id
 	_seed_dt_s = seed_dt_s
 	_max_seed_fraction = clampf(max_seed_fraction, 0.0, 0.5)
 	_gravity = maxf(gravity, 1.0e-4)
-	_busy = not jobs.is_empty()
+	_busy = not jobs.is_empty() or not _pending_preseeds.is_empty()
 	batch_started.emit(batch_id, reserved_destinations, jobs.size())
 
+	if not _pending_preseeds.is_empty():
+		# Do not queue edge handoffs until the coarse owner has acknowledged every
+		# preseed, otherwise a tile could activate while its macro parcel is still
+		# authoritative in both representations.
+		return batch_id
 	if jobs.is_empty():
 		call_deferred("_finish_batch")
 	else:
@@ -199,9 +243,72 @@ func _cancel_group(batch_id: int, destination: HydroTileKey, slot: int,
 	destination_cancelled.emit(batch_id, destination_id, slot, reason)
 
 
-func _start_current_job() -> void:
-	if not _busy or _job_index < 0 or _job_index >= _jobs.size():
+func _on_coarse_preseed_completed(request_id: int, tile_id: int, slot: int,
+		report: Dictionary) -> void:
+	if not _busy or not _pending_preseeds.has(request_id):
+		return
+	var expected: Dictionary = _pending_preseeds[request_id]
+	if int(expected.get("destination_id", -1)) != tile_id \
+			or int(expected.get("slot", -1)) != slot:
+		_on_coarse_preseed_failed(request_id, tile_id, slot,
+			ERR_INVALID_DATA, "preseed_ack_identity")
+		return
+	_pending_preseeds.erase(request_id)
+	var volume := float(report.get("represented_volume_m3", 0.0))
+	_mark_preseed_result(tile_id, volume)
+	destination_coarse_seeded.emit(_batch_id, tile_id, slot, volume)
+	_maybe_start_jobs_after_preseed()
+
+
+func _on_coarse_preseed_failed(request_id: int, tile_id: int, slot: int,
+		_error: Error, stage: String) -> void:
+	if not _busy or not _pending_preseeds.has(request_id):
+		return
+	var expected: Dictionary = _pending_preseeds[request_id]
+	var destination_id := int(expected.get("destination_id", tile_id))
+	var destination_slot := int(expected.get("slot", slot))
+	_pending_preseeds.erase(request_id)
+	var destination := HydroTileKey.unpack(destination_id)
+	if destination != null:
+		scheduler.cancel_reserved(destination, "coarse_preseed_" + stage)
+		_mark_destination_result(destination_id, "coarse_preseed_" + stage)
+		destination_cancelled.emit(_batch_id, destination_id, destination_slot,
+			"coarse_preseed_" + stage)
+	_remove_jobs_for_destination(destination_id)
+	_maybe_start_jobs_after_preseed()
+
+
+func _maybe_start_jobs_after_preseed() -> void:
+	if not _pending_preseeds.is_empty():
+		return
+	if _jobs.is_empty():
 		_finish_batch()
+	else:
+		_job_index = clampi(_job_index, 0, _jobs.size() - 1)
+		_start_current_job()
+
+
+func _remove_jobs_for_destination(destination_id: int) -> void:
+	var kept: Array[Dictionary] = []
+	for job in _jobs:
+		if int(job.get("destination_tile_id", -1)) != destination_id:
+			kept.append(job)
+	_jobs = kept
+	_job_index = 0
+
+
+func _mark_preseed_result(destination_id: int, volume_m3: float) -> void:
+	for result in _results:
+		if int(result.get("destination_tile_id", -1)) == destination_id:
+			result["coarse_preseed_volume_m3"] = volume_m3
+			result["coarse_preseed_committed"] = true
+
+
+func _start_current_job() -> void:
+	if not _busy or not _pending_preseeds.is_empty() \
+			or _job_index < 0 or _job_index >= _jobs.size():
+		if _pending_preseeds.is_empty():
+			_finish_batch()
 		return
 	var job := _jobs[_job_index]
 	var request_id := handoff.seed(
@@ -285,6 +392,7 @@ func _reset_batch_state() -> void:
 	_results = []
 	_jobs = []
 	_job_index = 0
+	_pending_preseeds.clear()
 
 
 func _on_handoff_initialized() -> void:
@@ -297,7 +405,17 @@ func _on_handoff_initialization_failed(error: Error) -> void:
 	initialization_failed.emit(error)
 
 
+func _disconnect_coarse_preseed() -> void:
+	if coarse_preseed != null:
+		if coarse_preseed.preseed_completed.is_connected(_on_coarse_preseed_completed):
+			coarse_preseed.preseed_completed.disconnect(_on_coarse_preseed_completed)
+		if coarse_preseed.preseed_failed.is_connected(_on_coarse_preseed_failed):
+			coarse_preseed.preseed_failed.disconnect(_on_coarse_preseed_failed)
+	coarse_preseed = null
+
+
 func release() -> void:
+	_disconnect_coarse_preseed()
 	if handoff != null and is_instance_valid(handoff):
 		handoff.release()
 		handoff.queue_free()
