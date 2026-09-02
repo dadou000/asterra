@@ -4,8 +4,8 @@ extends "res://scripts/world_authoring/world_authoring_editor_live_phase44.gd"
 ## Presets are creation recipes only. Each generated item is still an ordinary
 ## full-LOD guided displacement slot, editable through Simple or the exact Node Graph.
 
-const PHASE45_GRAPH_EDITOR := preload(
-	"res://scripts/world_authoring/terrain_graph_editor_phase44.gd")
+const PHASE45_FEATURE_EDITOR := preload(
+	"res://scripts/world_authoring/terrain_graph_editor_phase43.gd")
 const PHASE45_GUIDED := preload(
 	"res://scripts/world_authoring/model/terrain_guided_feature_graph.gd")
 const TERRAIN_PRESETS := preload(
@@ -64,7 +64,7 @@ func _phase43_build_local_features(terrain: Resource) -> void:
 	_workspace.add_child(separator)
 	_section("Edit Feature")
 	_phase43_build_feature_header(selected)
-	var editor := PHASE45_GRAPH_EDITOR.new()
+	var editor := PHASE45_FEATURE_EDITOR.new()
 	editor.name = "SimpleLocalFeatureEditor"
 	editor.custom_minimum_size = Vector2(1120.0, 700.0)
 	_workspace.add_child(editor)
