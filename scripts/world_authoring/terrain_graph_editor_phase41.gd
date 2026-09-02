@@ -8,6 +8,7 @@ extends "res://scripts/world_authoring/terrain_graph_editor_phase40.gd"
 ## transactionally by the Phase 40 lowering/runtime.
 
 const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
+const LATITUDE_MASK_PICKER_LABEL := "Mask  ·  Latitude Band"
 
 
 func _build_ui() -> void:
@@ -65,11 +66,11 @@ func _sync_phase41_latitude_picker_entry() -> void:
 		return
 
 	if existing_index < 0:
-		_node_type_picker.add_item("Masks  ·  Latitude Band")
+		_node_type_picker.add_item(LATITUDE_MASK_PICKER_LABEL)
 		existing_index = _node_type_picker.item_count - 1
 		_node_type_picker.set_item_metadata(existing_index, LATITUDE_MASK_TYPE)
 	else:
-		_node_type_picker.set_item_text(existing_index, "Masks  ·  Latitude Band")
+		_node_type_picker.set_item_text(existing_index, LATITUDE_MASK_PICKER_LABEL)
 	_node_type_picker.tooltip_text = "Latitude Band outputs 0 to 1 from normalized planet-space latitude. Use it with Multiply or Mix in an authored displacement flow."
 
 
