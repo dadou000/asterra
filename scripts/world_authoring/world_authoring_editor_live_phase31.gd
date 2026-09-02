@@ -1,11 +1,12 @@
 extends "res://scripts/world_authoring/world_authoring_editor_live_phase30.gd"
-## Phase 31/36: renderer-owned terrain stages are explicit graph sources and
+## Phase 31/37: renderer-owned terrain stages are explicit graph sources and
 ## production controls. Untouched older identity graphs are upgraded once; custom
-## graph topology is never replaced. Phase 36 adds Simple/Detailed/Node Graph views
-## plus staged Preview / Applied Original A/B controls over that same document.
+## graph topology is never replaced. Phase 37 keeps Simple/Detailed/Node Graph plus
+## staged Preview / Applied Original controls while exposing the resident production
+## geomorph stages structurally.
 
 const ACTIVE_GRAPH_EDITOR := preload(
-	"res://scripts/world_authoring/terrain_graph_editor_phase36.gd")
+	"res://scripts/world_authoring/terrain_graph_editor_phase37.gd")
 
 
 func _phase29_create_production_slot(terrain: Resource, domain: int,
@@ -226,7 +227,7 @@ func _phase29_build_graph_editor(slot: Resource) -> void:
 	var hint := Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _phase28_domain == SHADER_SLOT_MODEL.Domain.DISPLACEMENT:
-		hint.text = "SIMPLE and DETAILED edit the same production terrain parameters as NODE GRAPH. PREVIEW shows staged edits through the authoritative render/contact path; HOLD ORIGINAL switches back to the last applied snapshot without discarding work. APPLY TO WORLD commits the staged system. Invalid graph candidates keep the last valid terrain active."
+		hint.text = "SIMPLE and DETAILED edit the same exact production-stage parameters as NODE GRAPH. PREVIEW shows staged edits through the authoritative render/contact path; HOLD ORIGINAL switches back to the last applied snapshot without discarding work. Canonical production stages stay on the resident zero-bytecode shader path; incomplete structural rewires are rejected and keep the last valid terrain active."
 	else:
 		hint.text = "The existing production surface is exposed through PBR outputs plus classifier, classifier thresholds, palette/materials, microrelief, anti-tiling, geology rock PBR, scanned PBR, exact scan textures, raw world fields and graph math/texture nodes. Reset Flow restores the current production defaults."
 	hint.modulate = Color(0.58, 0.69, 0.78)
