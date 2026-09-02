@@ -50,6 +50,10 @@ var maximum_precipitation_mm_h := 30.0
 var weather_gain := 1.0
 
 var _store: PlanetHydrologyOwnershipStore
+## Latest native distributed-precipitation sample before coarse/fine spatial
+## authority is applied. Keeping this separate lets an authority handoff alter the
+## coarse forcing synchronously, without waiting for another weather resample.
+var _precipitation_native_snapshot_mps := PackedFloat64Array()
 var _precipitation_snapshot_mps := PackedFloat64Array()
 ## Fraction [0,1] of each macro cell whose distributed native precipitation remains
 ## coarse-owned. Default is 1 everywhere. This is forcing authority only; it does
@@ -113,6 +117,10 @@ func set_precipitation_authority_fractions(fractions: PackedFloat64Array) -> Err
 			affected += 1
 			fine_area += (1.0 - value) * maxf(_store.area_m2[c], 0.0)
 	_precipitation_authority_fractions = next
+	# Apply the handoff immediately to the latest native snapshot. Merely requesting
+	# a future weather refresh leaves the coarse store using its old full-authority
+	# field for one process interval while fine forcing may already be queued.
+	_apply_authority_to_native_snapshot()
 	request_weather_snapshot()
 	precipitation_authority_changed.emit(affected, fine_area)
 	return OK
@@ -124,6 +132,9 @@ func clear_precipitation_authority_fractions() -> void:
 		return
 	_precipitation_authority_fractions.resize(_store.cell_count())
 	_precipitation_authority_fractions.fill(1.0)
+	# Restore the same current native sample synchronously before fine forcing is
+	# cleared. This avoids an artificial rainfall gap during authority return.
+	_apply_authority_to_native_snapshot()
 	request_weather_snapshot()
 	precipitation_authority_changed.emit(0, 0.0)
 
@@ -275,6 +286,9 @@ func _rebuild_store() -> void:
 		push_error("PersistentHydrologySystem: store initialization failed (%d)." % int(err))
 		return
 	_store = next_store
+	_precipitation_native_snapshot_mps = PackedFloat64Array()
+	_precipitation_native_snapshot_mps.resize(Planet.grid.cell_count)
+	_precipitation_native_snapshot_mps.fill(0.0)
 	_precipitation_snapshot_mps = PackedFloat64Array()
 	_precipitation_snapshot_mps.resize(Planet.grid.cell_count)
 	_precipitation_snapshot_mps.fill(0.0)
@@ -306,12 +320,15 @@ func _refresh_weather_snapshot(simulation_seconds: float) -> void:
 	if not available():
 		return
 	var n := _store.cell_count()
+	if _precipitation_native_snapshot_mps.size() != n:
+		_precipitation_native_snapshot_mps.resize(n)
 	if _precipitation_snapshot_mps.size() != n:
 		_precipitation_snapshot_mps.resize(n)
 	_ensure_authority_size()
 
 	_weather_native_revision_upper_bound = int(WeatherSystem.global_state_revision)
 	if not WeatherSystem.native_available:
+		_precipitation_native_snapshot_mps.fill(0.0)
 		_precipitation_snapshot_mps.fill(0.0)
 		_store.set_precipitation_field_mps(_precipitation_snapshot_mps)
 		_store.set_climatology_fallback_enabled(true)
@@ -341,12 +358,28 @@ func _refresh_weather_snapshot(simulation_seconds: float) -> void:
 		var d: Vector3 = _store.grid.cell_dir(c)
 		var normalized_precip := _sample_weather_channel_bilinear(
 			values, width, height, d, WEATHER_PRECIP_CHANNEL)
-		_precipitation_snapshot_mps[c] = clampf(normalized_precip, 0.0, 1.0) \
-			* scale_mps * _precipitation_authority_fractions[c]
-	_store.set_precipitation_field_mps(_precipitation_snapshot_mps)
+		_precipitation_native_snapshot_mps[c] = \
+			clampf(normalized_precip, 0.0, 1.0) * scale_mps
+	_apply_authority_to_native_snapshot()
 	_store.set_climatology_fallback_enabled(false)
 	_weather_snapshot_valid = true
 	_commit_weather_snapshot(simulation_seconds)
+
+
+func _apply_authority_to_native_snapshot() -> void:
+	if not available():
+		return
+	var n := _store.cell_count()
+	_ensure_authority_size()
+	if _precipitation_native_snapshot_mps.size() != n:
+		_precipitation_native_snapshot_mps.resize(n)
+		_precipitation_native_snapshot_mps.fill(0.0)
+	if _precipitation_snapshot_mps.size() != n:
+		_precipitation_snapshot_mps.resize(n)
+	for c in n:
+		_precipitation_snapshot_mps[c] = _precipitation_native_snapshot_mps[c] \
+			* _precipitation_authority_fractions[c]
+	_store.set_precipitation_field_mps(_precipitation_snapshot_mps)
 
 
 func _commit_weather_snapshot(simulation_seconds: float) -> void:
@@ -453,4 +486,6 @@ func _exit_tree() -> void:
 	if WeatherSystem.native_failed.is_connected(_on_weather_native_failed):
 		WeatherSystem.native_failed.disconnect(_on_weather_native_failed)
 	_store = null
+	_precipitation_native_snapshot_mps = PackedFloat64Array()
+	_precipitation_snapshot_mps = PackedFloat64Array()
 	_precipitation_authority_fractions = PackedFloat64Array()
