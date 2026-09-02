@@ -2,10 +2,9 @@ class_name HydroFrontierCandidatesGPU
 extends Node
 ## GPU-generated compact active-frontier queue.
 ##
-## Reads HydroTileActivityGPU summaries and emits only source-slot/direction/flux
-## candidates above the wake threshold. Persistent topology/reachability remains a
-## separate policy layer. The queue RID is intended to stay GPU-resident; async
-## readback exists for tests and transitional diagnostics only.
+## Reads HydroTileActivityGPU summaries and SparseHydroAtlasGPU metadata. Every
+## candidate snapshots stable (face, level, x, y) identity beside the transient
+## source slot, allowing delayed readbacks to detect slot recycling safely.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -15,10 +14,11 @@ signal queue_failed(request_id: int, error: Error)
 signal released
 
 const HEADER_BYTES := 16
-const ENTRY_BYTES := 16
+const ENTRY_BYTES := 32
 const LOCAL_X := 64
 
 var _summary := RID()
+var _metadata := RID()
 var _shader := RID()
 var _pipeline := RID()
 var _queue := RID()
@@ -34,10 +34,11 @@ var _readback_pending := false
 var _next_request_id := 1
 
 
-func initialize(summary_rid: RID, capacity: int, threshold_m3s: float = 0.01) -> Error:
+func initialize(summary_rid: RID, metadata_rid: RID, capacity: int,
+		threshold_m3s: float = 0.01) -> Error:
 	if _init_pending or _initialized or _dispatch_pending or _readback_pending:
 		return ERR_BUSY
-	if not summary_rid.is_valid() or capacity <= 0:
+	if not summary_rid.is_valid() or not metadata_rid.is_valid() or capacity <= 0:
 		return ERR_INVALID_PARAMETER
 	if RenderingServer.get_rendering_device() == null:
 		return ERR_UNAVAILABLE
@@ -49,6 +50,7 @@ func initialize(summary_rid: RID, capacity: int, threshold_m3s: float = 0.01) ->
 		return ERR_CANT_CREATE
 
 	_summary = summary_rid
+	_metadata = metadata_rid
 	_capacity = capacity
 	_max_candidates = capacity * 4
 	_threshold_m3s = maxf(threshold_m3s, 0.0)
@@ -109,8 +111,10 @@ func _init_render_thread(spirv: RDShaderSPIRV) -> void:
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
 		return
 	var set_rid := rd.uniform_set_create([
-		_storage_uniform(0, _summary), _storage_uniform(1, queue),
-		_storage_uniform(2, params),
+		_storage_uniform(0, _summary),
+		_storage_uniform(1, _metadata),
+		_storage_uniform(2, queue),
+		_storage_uniform(3, params),
 	], shader, 0)
 	if not set_rid.is_valid():
 		_free_many(rd, [queue, params, pipeline, shader])
@@ -188,6 +192,10 @@ func _on_queue_bytes(bytes: PackedByteArray, request_id: int) -> void:
 			"slot": int(bytes.decode_u32(o + 0)),
 			"direction": int(bytes.decode_u32(o + 4)),
 			"flux_m3s": bytes.decode_float(o + 8),
+			"face": int(bytes.decode_u32(o + 12)),
+			"level": int(bytes.decode_u32(o + 16)),
+			"x": int(bytes.decode_u32(o + 20)),
+			"y": int(bytes.decode_u32(o + 24)),
 		})
 	call_deferred("_publish_candidates", request_id, candidates, overflow)
 
@@ -227,6 +235,7 @@ func release() -> void:
 	_readback_pending = false
 	_uniform_set = RID(); _queue = RID(); _params = RID()
 	_pipeline = RID(); _shader = RID()
+	_summary = RID(); _metadata = RID()
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_release_render_thread").bind(rids))
 	released.emit()
