@@ -1,11 +1,13 @@
 extends Node
-## CPU/headless policy gate for automatic channel refinement thresholds and ranking.
+## CPU/headless policy gate for automatic channel refinement thresholds, ranking,
+## and multi-tile sparse capacity reservation.
 
 
 func _ready() -> void:
 	_test_hysteresis()
 	_test_priority()
 	_test_collapse_exit()
+	_test_member_capacity()
 	print("HYDRO_AUTOMATIC_CHANNEL_REFINEMENT: PASS")
 	get_tree().quit(0)
 
@@ -55,6 +57,28 @@ func _test_collapse_exit() -> void:
 	_require(not HydroAutomaticChannelRefinement.collapse_hysteresis_clear(
 		1.10, 0.70, 1.35, 0.60),
 		"high residual bank stage allowed collapse")
+
+
+func _test_member_capacity() -> void:
+	# A three-tile cluster fits exactly into the available scheduler slots.
+	_require(HydroAutomaticChannelRefinementClusterCapacity.member_capacity_available(
+		6, 3, 24, 3),
+		"exact-fit three-member cluster was rejected")
+	# The coarse river budget may have room, but two physical sparse slots cannot
+	# satisfy an atomic three-member request.
+	_require(not HydroAutomaticChannelRefinementClusterCapacity.member_capacity_available(
+		6, 3, 24, 2),
+		"cluster was allowed with insufficient sparse free slots")
+	# Manual and automatic refined members share the same river-member budget.
+	_require(not HydroAutomaticChannelRefinementClusterCapacity.member_capacity_available(
+		22, 3, 24, 16),
+		"cluster exceeded configured refined-member budget")
+	_require(HydroAutomaticChannelRefinementClusterCapacity.member_capacity_available(
+		21, 3, 24, 16),
+		"cluster exactly fitting refined-member budget was rejected")
+	_require(not HydroAutomaticChannelRefinementClusterCapacity.member_capacity_available(
+		0, 0, 24, 24),
+		"zero-member request was accepted")
 
 
 func _require(condition: bool, message: String) -> void:
