@@ -140,6 +140,8 @@ func gpu_stats() -> Dictionary:
 			else _frontier_coarse_preseed.pending_count(),
 		"provisional_commits": 0 if _frontier_coarse_preseed == null \
 			else _frontier_coarse_preseed.provisional_commit_count(),
+		"deferred_restores": 0 if _frontier_coarse_preseed == null \
+			else _frontier_coarse_preseed.deferred_restore_count(),
 	}
 	out["active_sparse_volume_diagnostic"] = {} if _sparse_volume_diagnostic == null \
 		else _sparse_volume_diagnostic.stats()
