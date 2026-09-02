@@ -2,17 +2,64 @@ class_name TerrainProductionGeomorphLowering
 extends RefCounted
 ## Exact structural lowering for the resident production geomorph pipeline.
 ##
-## The first executable topology operation is intentionally narrow: a graph may
-## bypass any production stage while preserving the shader's original relative
-## order. Skipped stages are lowered to exact resident shader controls rather than
-## approximated with author bytecode. Reordering, branching, duplicate stages and
-## partial tail rewires remain invalid candidates.
+## Broad through Micro are additive/subtractive contributions that do not read the
+## accumulated geomorph height. Their graph order is therefore commutative: the
+## editor may reorder or bypass them while the runtime normalizes execution back to
+## the resident shader's production order with exactly the same result. Glacial is
+## different: it transforms the accumulated height and must remain the terminal
+## native stage when enabled. Branching, duplicate stages and partial tail rewires
+## remain invalid until contribution/merge semantics are explicit.
 
 const NATIVE := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
 
+const NONLINEAR_TERMINAL_STAGE := "glacial"
+
 
 static func ordered_bypass_plan(graph: Resource) -> Dictionary:
+	# Compatibility contract used by Phase 36. This remains intentionally strict.
+	return _linear_native_plan(graph, false)
+
+
+static func commutative_reorder_plan(graph: Resource) -> Dictionary:
+	# Phase 37 contract. Any permutation of the additive/subtractive stages is exact;
+	# Glacial may be bypassed, but when present it must be the final native stage.
+	return _linear_native_plan(graph, true)
+
+
+static func apply_bypass_controls(controls: Dictionary, plan: Dictionary) -> Dictionary:
+	var out: Dictionary = controls.duplicate(true)
+	if not bool(plan.get("valid", false)):
+		return out
+	var disabled_value: Variant = plan.get("disabled_stage_ids", PackedStringArray())
+	if not (disabled_value is PackedStringArray):
+		return out
+	for stage_id: String in disabled_value as PackedStringArray:
+		var overrides: Dictionary = disabled_control_overrides(stage_id)
+		for key_value: Variant in overrides.keys():
+			out[key_value] = overrides[key_value]
+	return out
+
+
+static func disabled_control_overrides(stage_id: String) -> Dictionary:
+	# These controls are chosen from the exact resident shader equations. In
+	# particular, Fine uses amplitude rather than fine_strength because Micro Relief
+	# also intentionally consumes fine_strength; Channel keeps its shared sample alive
+	# so Deposition can remain enabled when incision itself is bypassed.
+	match stage_id:
+		"broad": return {"broad_strength": 0.0}
+		"mountain": return {"mountain_strength": 0.0}
+		"mid": return {"mid_strength": 0.0}
+		"channel": return {"channel_strength": 0.0}
+		"deposit": return {"deposit_strength": 0.0}
+		"fine": return {"fine_amplitude_m": 0.0}
+		"dune": return {"dune_strength": 0.0}
+		"micro": return {"micro_amplitude_m": 0.0}
+		"glacial": return {"glacial_strength": 0.0}
+	return {}
+
+
+static func _linear_native_plan(graph: Resource, allow_commutative_reorder: bool) -> Dictionary:
 	if graph == null:
 		return _invalid("native production graph is unavailable")
 	if int(graph.get(&"displacement_output_mode")) != NATIVE.OUTPUT_MODE_ABSOLUTE:
@@ -101,8 +148,12 @@ static func ordered_bypass_plan(graph: Resource) -> Dictionary:
 		var stage_index: int = ordered_ids.find(stage_id)
 		if stage_index < 0:
 			return _invalid("native stage flow reached non-stage node %s before composition" % next_type)
-		if stage_index <= previous_stage_index:
+		if active_stage_ids.has(stage_id):
+			return _invalid("native production stage %s appears more than once in the flow" % stage_id)
+		if not allow_commutative_reorder and stage_index <= previous_stage_index:
 			return _invalid("native production stages may be bypassed but not reordered")
+		if allow_commutative_reorder and active_stage_ids.has(NONLINEAR_TERMINAL_STAGE):
+			return _invalid("Glacial Shaping is nonlinear and must remain the final enabled native stage")
 		previous_stage_index = stage_index
 		active_stage_ids.append(stage_id)
 		used_links[_link_key(current_id, 0, next_id, 0)] = true
@@ -128,57 +179,46 @@ static func ordered_bypass_plan(graph: Resource) -> Dictionary:
 		return _invalid("native production graph contains a branch or unsupported extra connection")
 
 	var disabled_stage_ids := PackedStringArray()
+	var normalized_stage_ids := PackedStringArray()
 	for stage_id: String in ordered_ids:
-		if not active_stage_ids.has(stage_id):
+		if active_stage_ids.has(stage_id):
+			normalized_stage_ids.append(stage_id)
+		else:
 			disabled_stage_ids.append(stage_id)
 
+	var reordered: bool = not _packed_strings_equal(active_stage_ids, normalized_stage_ids)
 	return {
 		"valid": true,
-		"canonical": disabled_stage_ids.is_empty(),
+		"canonical": disabled_stage_ids.is_empty() and not reordered,
+		"exact_equivalent": true,
+		"reordered": reordered,
 		"active_stage_ids": active_stage_ids,
+		"normalized_stage_ids": normalized_stage_ids,
 		"disabled_stage_ids": disabled_stage_ids,
+		"execution_mode": "resident_normalized_order",
 		"reason": "",
 	}
 
 
-static func apply_bypass_controls(controls: Dictionary, plan: Dictionary) -> Dictionary:
-	var out: Dictionary = controls.duplicate(true)
-	if not bool(plan.get("valid", false)):
-		return out
-	var disabled_value: Variant = plan.get("disabled_stage_ids", PackedStringArray())
-	if not (disabled_value is PackedStringArray):
-		return out
-	for stage_id: String in disabled_value as PackedStringArray:
-		var overrides: Dictionary = disabled_control_overrides(stage_id)
-		for key_value: Variant in overrides.keys():
-			out[key_value] = overrides[key_value]
-	return out
-
-
-static func disabled_control_overrides(stage_id: String) -> Dictionary:
-	# These controls are chosen from the exact resident shader equations. In
-	# particular, Fine uses amplitude rather than fine_strength because Micro Relief
-	# also intentionally consumes fine_strength; Channel keeps its shared sample alive
-	# so Deposition can remain enabled when incision itself is bypassed.
-	match stage_id:
-		"broad": return {"broad_strength": 0.0}
-		"mountain": return {"mountain_strength": 0.0}
-		"mid": return {"mid_strength": 0.0}
-		"channel": return {"channel_strength": 0.0}
-		"deposit": return {"deposit_strength": 0.0}
-		"fine": return {"fine_amplitude_m": 0.0}
-		"dune": return {"dune_strength": 0.0}
-		"micro": return {"micro_amplitude_m": 0.0}
-		"glacial": return {"glacial_strength": 0.0}
-	return {}
+static func _packed_strings_equal(a: PackedStringArray, b: PackedStringArray) -> bool:
+	if a.size() != b.size():
+		return false
+	for index: int in a.size():
+		if a[index] != b[index]:
+			return false
+	return true
 
 
 static func _invalid(reason: String) -> Dictionary:
 	return {
 		"valid": false,
 		"canonical": false,
+		"exact_equivalent": false,
+		"reordered": false,
 		"active_stage_ids": PackedStringArray(),
+		"normalized_stage_ids": PackedStringArray(),
 		"disabled_stage_ids": PackedStringArray(),
+		"execution_mode": "rejected",
 		"reason": reason,
 	}
 
