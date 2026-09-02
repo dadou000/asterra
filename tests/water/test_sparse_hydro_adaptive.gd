@@ -35,13 +35,13 @@ func _ready() -> void:
 	_pool = HydroTilePool.new(CAPACITY)
 	var key := HydroTileKey.new(CubeSphere.FACE_PZ, 5, 12, 12)
 	_require(_pool.allocate(key, 0) == 0, "live tile did not receive slot 0")
+	_pool.set_state(key, HydroTilePool.TileState.ACTIVE, "test_bootstrap")
 	if _finished:
 		return
 
 	var state := PackedFloat32Array()
 	state.resize(CAPACITY * TILE_RES * TILE_RES * 4)
 	_fill_uniform_tile(state, 0, 4.0, Vector2.ZERO, 0.0)
-	# If occupancy filtering is broken this stale slot would dominate CFL.
 	_fill_uniform_tile(state, 1, 100.0, Vector2(500.0, -300.0), -100.0)
 	_initial_mass = float(TILE_RES * TILE_RES) * 4.0
 
@@ -156,8 +156,6 @@ func _on_state_ready(_request_id: int, state: PackedFloat32Array) -> void:
 	_require(absf(live_mass - _initial_mass) <= MASS_TOLERANCE,
 		"adaptive closed tile changed water mass initial=%.9g final=%.9g" % [
 			_initial_mass, live_mass])
-	# Commit pass clears nonresident/recycled scratch, so stale slot must not become
-	# authoritative after any adaptive iteration.
 	var stale_depth_sum := 0.0
 	var stale_base := TILE_RES * TILE_RES
 	for i in TILE_RES * TILE_RES:
