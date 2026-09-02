@@ -22,6 +22,23 @@ func river_cluster_promotion_available() -> bool:
 	return _river_cluster_promotion != null and _river_cluster_promotion.initialized_ok()
 
 
+func river_cluster_default_member_count() -> int:
+	return maxi(default_river_cluster_tiles, 1)
+
+
+func river_cluster_free_member_slots() -> int:
+	var runtime := sparse_runtime()
+	if runtime == null or runtime.scheduler == null or runtime.scheduler.pool == null:
+		return 0
+	return runtime.scheduler.pool.free_count()
+
+
+func river_cluster_member_capacity_available(required_members: int = -1) -> bool:
+	var required := river_cluster_default_member_count() if required_members < 0 \
+		else maxi(required_members, 1)
+	return river_cluster_free_member_slots() >= required
+
+
 func suggested_river_reach_promotion_volume_m3(cell: int) -> float:
 	if river_cluster_promotion_available():
 		return _river_cluster_promotion.suggested_cluster_volume_m3(
@@ -36,6 +53,8 @@ func promote_coarse_river_reach(cell: int, requested_volume_m3: float = -1.0) ->
 			and (_river_reach_coupling.pending() or _river_reach_coupling.failed()):
 		return -1
 	if river_cluster_promotion_available() and not _river_cluster_promotion.busy():
+		if not river_cluster_member_capacity_available(default_river_cluster_tiles):
+			return -1
 		return _river_cluster_promotion.promote_cluster(
 			cell, default_river_cluster_tiles, requested_volume_m3)
 	return super.promote_coarse_river_reach(cell, requested_volume_m3)
@@ -47,6 +66,8 @@ func gpu_stats() -> Dictionary:
 		"available": river_cluster_promotion_available(),
 		"busy": _river_cluster_promotion != null and _river_cluster_promotion.busy(),
 		"default_tiles": default_river_cluster_tiles,
+		"free_member_slots": river_cluster_free_member_slots(),
+		"capacity_available": river_cluster_member_capacity_available(),
 		"fallback": "single_tile_river_promotion",
 	}
 	return out
