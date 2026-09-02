@@ -14,7 +14,12 @@ extends Node
 ##   atlas.source_rid()        = persistent gameplay/world point sources
 ##   atmospheric_source_rid() = distributed weather/surface forcing
 ## They are summed by sparse_hydro_step.glsl at read time, preventing one source
-## producer from clearing or overwriting another producer's field.
+## producer from clearing or overwriting another producer's source field.
+##
+## Each macro advance also clears a per-cell external-flux ledger. The SWE shader
+## accumulates exact gross source addition and sink-clipped removal in physical m^3.
+## Two GPU reductions write those totals into reserved words of the existing
+## 96-byte diagnostics block, so production accounting requires no extra readback.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -26,10 +31,12 @@ signal released
 const LOCAL_X := 8
 const LOCAL_Y := 8
 const COMMIT_LOCAL_X := 256
+const EXTERNAL_REDUCE_LOCAL_X := 256
 const PARAM_FLOATS := 12
 const COMMIT_PARAM_INTS := 4
 const CONTROL_BYTES := 96
 const SOURCE_FLOATS := 4
+const EXTERNAL_LEDGER_FLOATS := 2
 const MAX_GPU_SUBSTEPS := 32
 
 var gravity := 9.81
@@ -50,16 +57,24 @@ var _reset_shader := RID()
 var _reset_pipeline := RID()
 var _prepare_shader := RID()
 var _prepare_pipeline := RID()
+var _external_reduce_shader := RID()
+var _external_reduce_pipeline := RID()
+var _external_finalize_shader := RID()
+var _external_finalize_pipeline := RID()
 
 var _params := RID()
 var _commit_params := RID()
 var _control := RID()
 var _atmospheric_sources := RID()
+var _external_flux_ledger := RID()
+var _external_flux_partials := RID()
 var _step_set := RID()
 var _commit_set := RID()
 var _reduce_set := RID()
 var _reset_set := RID()
 var _prepare_set := RID()
+var _external_reduce_set := RID()
+var _external_finalize_set := RID()
 
 var _initialized := false
 var _init_pending := false
@@ -87,6 +102,10 @@ func initialize(atlas: SparseHydroAtlasGPU,
 		"reduce": _load_spirv("res://shaders/water/sparse_hydro_reduce.glsl"),
 		"reset": _load_spirv("res://shaders/water/hydro_reset_reduction.glsl"),
 		"prepare": _load_spirv("res://shaders/water/sparse_hydro_prepare_step.glsl"),
+		"external_reduce": _load_spirv(
+			"res://shaders/water/sparse_hydro_external_flux_reduce.glsl"),
+		"external_finalize": _load_spirv(
+			"res://shaders/water/sparse_hydro_external_flux_finalize.glsl"),
 	}
 	for value in spirv.values():
 		if value == null:
@@ -175,9 +194,15 @@ func latest_diagnostics() -> Dictionary:
 
 func gpu_bytes_estimate() -> int:
 	var forcing_bytes := 0
+	var ledger_bytes := 0
 	if _atlas != null:
 		forcing_bytes = _atlas.total_cell_count() * SOURCE_FLOATS * 4
-	return PARAM_FLOATS * 4 + COMMIT_PARAM_INTS * 4 + CONTROL_BYTES + forcing_bytes
+		ledger_bytes = _atlas.total_cell_count() * EXTERNAL_LEDGER_FLOATS * 4
+		var partial_count := int(ceil(float(_atlas.total_cell_count()) \
+			/ float(EXTERNAL_REDUCE_LOCAL_X)))
+		ledger_bytes += maxi(partial_count, 1) * EXTERNAL_LEDGER_FLOATS * 4
+	return PARAM_FLOATS * 4 + COMMIT_PARAM_INTS * 4 + CONTROL_BYTES \
+		+ forcing_bytes + ledger_bytes
 
 
 func stats() -> Dictionary:
@@ -193,6 +218,7 @@ func stats() -> Dictionary:
 		"max_gpu_substeps": MAX_GPU_SUBSTEPS,
 		"canonical_state": "atlas_A",
 		"atmospheric_source_layer": _atmospheric_sources.is_valid(),
+		"exact_external_flux_ledger": _external_flux_ledger.is_valid(),
 		"gpu_bytes_owned": gpu_bytes_estimate(),
 		"latest_diagnostics": latest_diagnostics(),
 	}
@@ -206,7 +232,8 @@ func _init_render_thread(spirv: Dictionary) -> void:
 
 	var resources: Array = []
 	var bundle := {}
-	for key in ["step", "commit", "reduce", "reset", "prepare"]:
+	for key in ["step", "commit", "reduce", "reset", "prepare",
+			"external_reduce", "external_finalize"]:
 		var shader := rd.shader_create_from_spirv(spirv[key])
 		if not shader.is_valid():
 			_free_many(rd, resources)
@@ -222,27 +249,41 @@ func _init_render_thread(spirv: Dictionary) -> void:
 		bundle[key + "_shader"] = shader
 		bundle[key + "_pipeline"] = pipeline
 
+	var total_cells := _atlas.total_cell_count()
+	var partial_count := maxi(int(ceil(float(total_cells) \
+		/ float(EXTERNAL_REDUCE_LOCAL_X))), 1)
 	var zero_params := PackedByteArray()
 	zero_params.resize(PARAM_FLOATS * 4)
 	var zero_control := PackedByteArray()
 	zero_control.resize(CONTROL_BYTES)
 	var zero_atmospheric := PackedByteArray()
-	zero_atmospheric.resize(_atlas.total_cell_count() * SOURCE_FLOATS * 4)
+	zero_atmospheric.resize(total_cells * SOURCE_FLOATS * 4)
+	var zero_external_ledger := PackedByteArray()
+	zero_external_ledger.resize(total_cells * EXTERNAL_LEDGER_FLOATS * 4)
+	var zero_external_partials := PackedByteArray()
+	zero_external_partials.resize(partial_count * EXTERNAL_LEDGER_FLOATS * 4)
 	var commit_values := PackedInt32Array([
-		_atlas.total_cell_count(), _atlas.cells_per_tile(), _atlas.capacity, 0,
+		total_cells, _atlas.cells_per_tile(), _atlas.capacity, partial_count,
 	])
 	var params := rd.storage_buffer_create(zero_params.size(), zero_params)
 	var control := rd.storage_buffer_create(zero_control.size(), zero_control)
 	var atmospheric_sources := rd.storage_buffer_create(
 		zero_atmospheric.size(), zero_atmospheric)
+	var external_flux_ledger := rd.storage_buffer_create(
+		zero_external_ledger.size(), zero_external_ledger)
+	var external_flux_partials := rd.storage_buffer_create(
+		zero_external_partials.size(), zero_external_partials)
 	var commit_params := rd.storage_buffer_create(
 		commit_values.to_byte_array().size(), commit_values.to_byte_array())
 	if not params.is_valid() or not control.is_valid() \
-			or not atmospheric_sources.is_valid() or not commit_params.is_valid():
-		_free_many(rd, resources + [params, control, atmospheric_sources, commit_params])
+			or not atmospheric_sources.is_valid() or not commit_params.is_valid() \
+			or not external_flux_ledger.is_valid() or not external_flux_partials.is_valid():
+		_free_many(rd, resources + [params, control, atmospheric_sources,
+			external_flux_ledger, external_flux_partials, commit_params])
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
 		return
-	resources.append_array([params, control, atmospheric_sources, commit_params])
+	resources.append_array([params, control, atmospheric_sources,
+		external_flux_ledger, external_flux_partials, commit_params])
 
 	var step_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_a_rid()),
@@ -254,6 +295,7 @@ func _init_render_thread(spirv: Dictionary) -> void:
 		_storage_uniform(6, params),
 		_storage_uniform(7, control),
 		_storage_uniform(8, atmospheric_sources),
+		_storage_uniform(9, external_flux_ledger),
 	], bundle.step_shader, 0)
 	var commit_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_b_rid()),
@@ -274,7 +316,18 @@ func _init_render_thread(spirv: Dictionary) -> void:
 		_storage_uniform(0, control),
 		_storage_uniform(1, params),
 	], bundle.prepare_shader, 0)
-	var sets := [step_set, commit_set, reduce_set, reset_set, prepare_set]
+	var external_reduce_set := rd.uniform_set_create([
+		_storage_uniform(0, external_flux_ledger),
+		_storage_uniform(1, external_flux_partials),
+		_storage_uniform(2, commit_params),
+	], bundle.external_reduce_shader, 0)
+	var external_finalize_set := rd.uniform_set_create([
+		_storage_uniform(0, external_flux_partials),
+		_storage_uniform(1, control),
+		_storage_uniform(2, commit_params),
+	], bundle.external_finalize_shader, 0)
+	var sets := [step_set, commit_set, reduce_set, reset_set, prepare_set,
+		external_reduce_set, external_finalize_set]
 	for set_rid in sets:
 		if not set_rid.is_valid():
 			_free_many(rd, resources + sets)
@@ -285,12 +338,16 @@ func _init_render_thread(spirv: Dictionary) -> void:
 	bundle["params"] = params
 	bundle["control"] = control
 	bundle["atmospheric_sources"] = atmospheric_sources
+	bundle["external_flux_ledger"] = external_flux_ledger
+	bundle["external_flux_partials"] = external_flux_partials
 	bundle["commit_params"] = commit_params
 	bundle["step_set"] = step_set
 	bundle["commit_set"] = commit_set
 	bundle["reduce_set"] = reduce_set
 	bundle["reset_set"] = reset_set
 	bundle["prepare_set"] = prepare_set
+	bundle["external_reduce_set"] = external_reduce_set
+	bundle["external_finalize_set"] = external_finalize_set
 	call_deferred("_finish_init", OK, bundle)
 
 
@@ -305,12 +362,20 @@ func _finish_init(error: Error, bundle: Dictionary) -> void:
 	_reduce_shader = bundle.reduce_shader; _reduce_pipeline = bundle.reduce_pipeline
 	_reset_shader = bundle.reset_shader; _reset_pipeline = bundle.reset_pipeline
 	_prepare_shader = bundle.prepare_shader; _prepare_pipeline = bundle.prepare_pipeline
+	_external_reduce_shader = bundle.external_reduce_shader
+	_external_reduce_pipeline = bundle.external_reduce_pipeline
+	_external_finalize_shader = bundle.external_finalize_shader
+	_external_finalize_pipeline = bundle.external_finalize_pipeline
 	_params = bundle.params; _control = bundle.control
 	_atmospheric_sources = bundle.atmospheric_sources
+	_external_flux_ledger = bundle.external_flux_ledger
+	_external_flux_partials = bundle.external_flux_partials
 	_commit_params = bundle.commit_params
 	_step_set = bundle.step_set; _commit_set = bundle.commit_set
 	_reduce_set = bundle.reduce_set; _reset_set = bundle.reset_set
 	_prepare_set = bundle.prepare_set
+	_external_reduce_set = bundle.external_reduce_set
+	_external_finalize_set = bundle.external_finalize_set
 	_initialized = true
 	initialized.emit()
 
@@ -322,13 +387,17 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		call_deferred("_finish_advance", step_id, false, request_diagnostics)
 		return
 	var err := rd.buffer_update(_params, 0, param_bytes.size(), param_bytes)
-	if err != OK or rd.buffer_clear(_control, 0, CONTROL_BYTES) != OK:
+	var external_ledger_bytes := _atlas.total_cell_count() * EXTERNAL_LEDGER_FLOATS * 4
+	if err != OK or rd.buffer_clear(_control, 0, CONTROL_BYTES) != OK \
+			or rd.buffer_clear(_external_flux_ledger, 0, external_ledger_bytes) != OK:
 		call_deferred("_finish_advance", step_id, false, request_diagnostics)
 		return
 
 	var groups_x := int(ceil(float(_atlas.tile_resolution) / float(LOCAL_X)))
 	var groups_y := int(ceil(float(_atlas.tile_resolution) / float(LOCAL_Y)))
 	var commit_groups := int(ceil(float(_atlas.total_cell_count()) / float(COMMIT_LOCAL_X)))
+	var external_groups := int(ceil(float(_atlas.total_cell_count()) \
+		/ float(EXTERNAL_REDUCE_LOCAL_X)))
 	var compute := rd.compute_list_begin()
 
 	for iteration in cap:
@@ -360,10 +429,21 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		rd.compute_list_dispatch(compute, commit_groups, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
+	# Final physical-state health reduction.
 	rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _reduce_set, 0)
 	_set_u32_push(rd, compute, 1)
 	rd.compute_list_dispatch(compute, groups_x, groups_y, _atlas.capacity)
+	rd.compute_list_add_barrier(compute)
+
+	# Exact external source ledger -> two reserved control words.
+	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _external_reduce_set, 0)
+	rd.compute_list_dispatch(compute, external_groups, 1, 1)
+	rd.compute_list_add_barrier(compute)
+	rd.compute_list_bind_compute_pipeline(compute, _external_finalize_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _external_finalize_set, 0)
+	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_end()
 
 	if request_diagnostics:
@@ -400,6 +480,8 @@ func _on_diagnostics_bytes(bytes: PackedByteArray, step_id: int) -> void:
 		call_deferred("_diagnostics_failed", step_id, ERR_INVALID_DATA)
 		return
 	var steps := int(bytes.decode_u32(56))
+	var added_m3 := maxf(bytes.decode_float(88), 0.0)
+	var removed_m3 := maxf(bytes.decode_float(92), 0.0)
 	var diagnostics := {
 		"pre_max_speed_mps": bytes.decode_float(0),
 		"pre_max_depth_m": bytes.decode_float(4),
@@ -419,6 +501,10 @@ func _on_diagnostics_bytes(bytes: PackedByteArray, step_id: int) -> void:
 		"substeps": steps,
 		"max_substeps": int(bytes.decode_u32(60)),
 		"cfl_clamped": bytes.decode_u32(64) != 0,
+		"external_added_m3": added_m3,
+		"external_removed_m3": removed_m3,
+		"external_net_m3": added_m3 - removed_m3,
+		"external_sink_clipping_exact": true,
 	}
 	call_deferred("_publish_diagnostics", step_id, diagnostics)
 
@@ -443,12 +529,15 @@ func _set_u32_push(rd: RenderingDevice, compute: int, value: int) -> void:
 func _all_runtime_rids_valid() -> bool:
 	return _step_pipeline.is_valid() and _commit_pipeline.is_valid() \
 		and _reduce_pipeline.is_valid() and _reset_pipeline.is_valid() \
-		and _prepare_pipeline.is_valid() and _params.is_valid() \
+		and _prepare_pipeline.is_valid() and _external_reduce_pipeline.is_valid() \
+		and _external_finalize_pipeline.is_valid() and _params.is_valid() \
 		and _commit_params.is_valid() and _control.is_valid() \
-		and _atmospheric_sources.is_valid() \
+		and _atmospheric_sources.is_valid() and _external_flux_ledger.is_valid() \
+		and _external_flux_partials.is_valid() \
 		and _step_set.is_valid() and _commit_set.is_valid() \
 		and _reduce_set.is_valid() and _reset_set.is_valid() \
-		and _prepare_set.is_valid()
+		and _prepare_set.is_valid() and _external_reduce_set.is_valid() \
+		and _external_finalize_set.is_valid()
 
 
 func _storage_uniform(binding: int, rid: RID) -> RDUniform:
@@ -472,10 +561,13 @@ func release() -> void:
 		return
 	var rids := [
 		_step_set, _commit_set, _reduce_set, _reset_set, _prepare_set,
+		_external_reduce_set, _external_finalize_set,
 		_params, _commit_params, _control, _atmospheric_sources,
+		_external_flux_ledger, _external_flux_partials,
 		_step_pipeline, _commit_pipeline, _reduce_pipeline, _reset_pipeline,
-		_prepare_pipeline, _step_shader, _commit_shader, _reduce_shader,
-		_reset_shader, _prepare_shader,
+		_prepare_pipeline, _external_reduce_pipeline, _external_finalize_pipeline,
+		_step_shader, _commit_shader, _reduce_shader, _reset_shader, _prepare_shader,
+		_external_reduce_shader, _external_finalize_shader,
 	]
 	_initialized = false
 	_init_pending = false
@@ -483,12 +575,16 @@ func release() -> void:
 	_diagnostics_pending = false
 	_step_set = RID(); _commit_set = RID(); _reduce_set = RID()
 	_reset_set = RID(); _prepare_set = RID()
+	_external_reduce_set = RID(); _external_finalize_set = RID()
 	_params = RID(); _commit_params = RID(); _control = RID()
-	_atmospheric_sources = RID()
+	_atmospheric_sources = RID(); _external_flux_ledger = RID()
+	_external_flux_partials = RID()
 	_step_pipeline = RID(); _commit_pipeline = RID(); _reduce_pipeline = RID()
 	_reset_pipeline = RID(); _prepare_pipeline = RID()
+	_external_reduce_pipeline = RID(); _external_finalize_pipeline = RID()
 	_step_shader = RID(); _commit_shader = RID(); _reduce_shader = RID()
 	_reset_shader = RID(); _prepare_shader = RID()
+	_external_reduce_shader = RID(); _external_finalize_shader = RID()
 	_atlas = null
 	_connectivity = null
 	RenderingServer.call_on_render_thread(
