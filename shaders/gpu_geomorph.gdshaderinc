@@ -1,8 +1,9 @@
 // GPU geomorph synthesis primitives.
 // The caller includes gpu_planet_context.gdshaderinc first.
 //
-// Phase 32 exposes the production bands in Planet Studio. Every new multiplier
-// defaults to 1.0, preserving the previous renderer exactly until edited.
+// Phase 33 exposes both production band gains and their physical geometry. Every
+// new control defaults to the exact historical constant so untouched terrain is
+// render-identical while Planet Studio can change wavelengths/amplitudes directly.
 
 uniform float u_geomorph_warp_strength : hint_range(0.0, 3.0) = 1.0;
 uniform float u_geomorph_broad_strength : hint_range(0.0, 3.0) = 1.0;
@@ -13,6 +14,44 @@ uniform float u_geomorph_deposit_strength : hint_range(0.0, 3.0) = 1.0;
 uniform float u_geomorph_fine_strength : hint_range(0.0, 3.0) = 1.0;
 uniform float u_geomorph_dune_strength : hint_range(0.0, 3.0) = 1.0;
 uniform float u_geomorph_glacial_strength : hint_range(0.0, 3.0) = 1.0;
+
+uniform float u_geomorph_broad_wavelength_m : hint_range(1.0, 100000.0) = 16000.0;
+uniform float u_geomorph_broad_low_amplitude_m : hint_range(0.0, 2000.0) = 24.0;
+uniform float u_geomorph_broad_mountain_amplitude_m : hint_range(0.0, 4000.0) = 125.0;
+uniform float u_geomorph_broad_warp : hint_range(0.0, 4.0) = 0.8;
+uniform float u_geomorph_mountain_wavelength_m : hint_range(1.0, 100000.0) = 6000.0;
+uniform float u_geomorph_mountain_amplitude_m : hint_range(0.0, 4000.0) = 210.0;
+uniform float u_geomorph_mountain_warp : hint_range(0.0, 4.0) = 1.1;
+uniform float u_geomorph_mountain_ridge_scale : hint_range(0.05, 8.0) = 1.55;
+uniform float u_geomorph_mountain_cell_mix : hint_range(0.0, 1.0) = 0.58;
+uniform float u_geomorph_mid_wavelength_m : hint_range(1.0, 50000.0) = 1400.0;
+uniform float u_geomorph_mid_ridge_amplitude_m : hint_range(0.0, 2000.0) = 72.0;
+uniform float u_geomorph_mid_noise_amplitude_m : hint_range(0.0, 1000.0) = 24.0;
+uniform float u_geomorph_mid_warp : hint_range(0.0, 4.0) = 0.72;
+uniform float u_geomorph_mid_ridge_scale : hint_range(0.05, 8.0) = 1.25;
+uniform float u_geomorph_mid_detail_scale : hint_range(0.05, 8.0) = 2.1;
+uniform float u_geomorph_channel_wavelength_m : hint_range(1.0, 10000.0) = 420.0;
+uniform float u_geomorph_channel_depth_min_m : hint_range(0.0, 1000.0) = 2.0;
+uniform float u_geomorph_channel_depth_max_m : hint_range(0.0, 2000.0) = 34.0;
+uniform float u_geomorph_channel_warp : hint_range(0.0, 4.0) = 0.55;
+uniform float u_geomorph_channel_power : hint_range(0.1, 12.0) = 4.6;
+uniform float u_geomorph_flow_along_scale : hint_range(0.01, 4.0) = 0.42;
+uniform float u_geomorph_flow_across_scale : hint_range(0.01, 4.0) = 1.45;
+uniform float u_geomorph_deposit_amplitude_min_m : hint_range(0.0, 500.0) = 1.0;
+uniform float u_geomorph_deposit_amplitude_max_m : hint_range(0.0, 1000.0) = 12.0;
+uniform float u_geomorph_deposit_scale : hint_range(0.01, 4.0) = 0.48;
+uniform float u_geomorph_deposit_power : hint_range(0.1, 8.0) = 2.2;
+uniform float u_geomorph_fine_wavelength_m : hint_range(0.5, 5000.0) = 120.0;
+uniform float u_geomorph_fine_amplitude_m : hint_range(0.0, 250.0) = 4.5;
+uniform float u_geomorph_dune_wavelength_m : hint_range(0.5, 5000.0) = 180.0;
+uniform float u_geomorph_dune_amplitude_m : hint_range(0.0, 500.0) = 9.0;
+uniform float u_geomorph_dune_warp : hint_range(0.0, 4.0) = 0.45;
+uniform float u_geomorph_micro_wavelength_m : hint_range(0.25, 1000.0) = 24.0;
+uniform float u_geomorph_micro_amplitude_m : hint_range(0.0, 100.0) = 0.9;
+uniform float u_geomorph_glacial_wavelength_m : hint_range(1.0, 50000.0) = 2600.0;
+uniform float u_geomorph_glacial_amplitude_m : hint_range(0.0, 2000.0) = 52.0;
+uniform float u_geomorph_glacial_base_scale : hint_range(0.0, 2.0) = 0.62;
+uniform float u_geomorph_glacial_mix : hint_range(0.0, 2.0) = 0.72;
 
 uint gm_hash(ivec3 p, uint seed) {
 	uint h = uint(p.x) * 0x8da6b343u;
@@ -179,34 +218,39 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 	float hardness = 1.20 - geology.r * 0.48;
 	float h = 0.0;
 
-	float w16k = gm_band_weight(16000.0, spacing_m);
+	float broad_wavelength = max(u_geomorph_broad_wavelength_m, 0.001);
+	float w16k = gm_band_weight(broad_wavelength, spacing_m);
 	if (w16k > 0.001) {
-		vec3 p = gm_domain_warp(world_m / 16000.0, seed + 11u, 0.8);
+		vec3 p = gm_domain_warp(world_m / broad_wavelength, seed + 11u, u_geomorph_broad_warp);
 		float broad = gm_fbm(p, seed + 13u);
-		h += broad * mix(24.0, 125.0, mountain) * w16k * u_geomorph_broad_strength;
+		h += broad * mix(u_geomorph_broad_low_amplitude_m,
+			u_geomorph_broad_mountain_amplitude_m, mountain) * w16k * u_geomorph_broad_strength;
 	}
 
-	float w6k = gm_band_weight(6000.0, spacing_m);
+	float mountain_wavelength = max(u_geomorph_mountain_wavelength_m, 0.001);
+	float w6k = gm_band_weight(mountain_wavelength, spacing_m);
 	float mountain_gate = smoothstep(0.04, 0.08, mountain);
 	if (w6k > 0.001 && mountain > 0.04) {
-		vec3 p = gm_domain_warp(world_m / 6000.0, seed + 31u, 1.1);
+		vec3 p = gm_domain_warp(world_m / mountain_wavelength, seed + 31u, u_geomorph_mountain_warp);
 		float cells = gm_cellular_ridge(p, seed + 37u);
-		float ridge = gm_ridged(p * 1.55, seed + 41u);
-		float skeleton = mix(ridge, cells, 0.58);
-		h += (skeleton * 2.0 - 1.0) * 210.0 * mountain * mountain_gate
+		float ridge = gm_ridged(p * max(u_geomorph_mountain_ridge_scale, 0.001), seed + 41u);
+		float skeleton = mix(ridge, cells, clamp(u_geomorph_mountain_cell_mix, 0.0, 1.0));
+		h += (skeleton * 2.0 - 1.0) * u_geomorph_mountain_amplitude_m * mountain * mountain_gate
 			* hardness * w6k * u_geomorph_mountain_strength;
 	}
 
-	float w1400 = gm_band_weight(1400.0, spacing_m);
+	float mid_wavelength = max(u_geomorph_mid_wavelength_m, 0.001);
+	float w1400 = gm_band_weight(mid_wavelength, spacing_m);
 	if (w1400 > 0.001) {
-		vec3 p = gm_domain_warp(world_m / 1400.0, seed + 53u, 0.72);
-		float ridge = gm_ridged(p * 1.25, seed + 59u);
-		float detail = gm_fbm(p * 2.1, seed + 61u);
-		h += ((ridge * 2.0 - 1.0) * 72.0 * mountain + detail * 24.0)
-			* w1400 * u_geomorph_mid_strength;
+		vec3 p = gm_domain_warp(world_m / mid_wavelength, seed + 53u, u_geomorph_mid_warp);
+		float ridge = gm_ridged(p * max(u_geomorph_mid_ridge_scale, 0.001), seed + 59u);
+		float detail = gm_fbm(p * max(u_geomorph_mid_detail_scale, 0.001), seed + 61u);
+		h += ((ridge * 2.0 - 1.0) * u_geomorph_mid_ridge_amplitude_m * mountain
+			+ detail * u_geomorph_mid_noise_amplitude_m) * w1400 * u_geomorph_mid_strength;
 	}
 
-	float w420 = gm_band_weight(420.0, spacing_m);
+	float channel_wavelength = max(u_geomorph_channel_wavelength_m, 0.001);
+	float w420 = gm_band_weight(channel_wavelength, spacing_m);
 	if (w420 > 0.001) {
 		vec2 raw_flow = asterra_ctx_flow(hydro);
 		float flow_mag = length(raw_flow);
@@ -217,44 +261,56 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 			float along_q = dot(world_m, flow);
 			vec3 along = flow * along_q;
 			vec3 across = world_m - along;
-			vec3 warped_m = along * 0.42 + across * 1.45;
+			vec3 warped_m = along * u_geomorph_flow_along_scale + across * u_geomorph_flow_across_scale;
 			sample_m = mix(world_m, warped_m, flow_gate);
 		}
-		vec3 p = gm_domain_warp(sample_m / 420.0, seed + 71u, 0.55);
-		float channel = pow(gm_ridged(p, seed + 73u), 4.6);
-		float incision = channel * mix(2.0, 34.0, hydro.b) * (1.0 - depositional * 0.78);
+		vec3 p = gm_domain_warp(sample_m / channel_wavelength, seed + 71u, u_geomorph_channel_warp);
+		float channel = pow(gm_ridged(p, seed + 73u), max(u_geomorph_channel_power, 0.01));
+		float incision = channel * mix(u_geomorph_channel_depth_min_m,
+			u_geomorph_channel_depth_max_m, hydro.b) * (1.0 - depositional * 0.78);
 		h -= incision * w420 * u_geomorph_channel_strength;
 		float depositional_gate = smoothstep(0.0, 0.03, depositional);
 		if (depositional > 0.0) {
-			float fan = pow(gm_ridged(p * 0.48 + vec3(9.0), seed + 79u), 2.2);
-			h += fan * depositional * depositional_gate * mix(1.0, 12.0, surface.a)
+			float fan = pow(gm_ridged(p * u_geomorph_deposit_scale + vec3(9.0), seed + 79u),
+				max(u_geomorph_deposit_power, 0.01));
+			h += fan * depositional * depositional_gate
+				* mix(u_geomorph_deposit_amplitude_min_m, u_geomorph_deposit_amplitude_max_m, surface.a)
 				* w420 * u_geomorph_deposit_strength;
 		}
 	}
 
-	float w120 = gm_band_weight(120.0, spacing_m);
+	float fine_wavelength = max(u_geomorph_fine_wavelength_m, 0.001);
+	float w120 = gm_band_weight(fine_wavelength, spacing_m);
 	if (w120 > 0.001) {
-		float n = gm_fbm(world_m / 120.0, seed + 89u);
-		h += n * 4.5 * (1.0 - glacial * 0.6) * w120 * u_geomorph_fine_strength;
+		float n = gm_fbm(world_m / fine_wavelength, seed + 89u);
+		h += n * u_geomorph_fine_amplitude_m * (1.0 - glacial * 0.6)
+			* w120 * u_geomorph_fine_strength;
 		float dune_weight = arid * soil.r;
 		float dune_gate = smoothstep(0.0, 0.03, dune_weight);
 		if (dune_weight > 0.0) {
-			float dune = gm_ridged(gm_domain_warp(world_m / 180.0, seed + 97u, 0.45), seed + 101u);
-			h += (dune * 2.0 - 1.0) * 9.0 * dune_weight * dune_gate * w120
-				* u_geomorph_dune_strength;
+			float dune_wavelength = max(u_geomorph_dune_wavelength_m, 0.001);
+			float dune = gm_ridged(gm_domain_warp(world_m / dune_wavelength,
+				seed + 97u, u_geomorph_dune_warp), seed + 101u);
+			h += (dune * 2.0 - 1.0) * u_geomorph_dune_amplitude_m * dune_weight
+				* dune_gate * w120 * u_geomorph_dune_strength;
 		}
 	}
 
-	float w24 = gm_band_weight(24.0, spacing_m);
+	float micro_wavelength = max(u_geomorph_micro_wavelength_m, 0.001);
+	float w24 = gm_band_weight(micro_wavelength, spacing_m);
 	if (w24 > 0.001) {
-		h += gm_value(world_m / 24.0, seed + 109u) * 0.9 * w24 * u_geomorph_fine_strength;
+		h += gm_value(world_m / micro_wavelength, seed + 109u)
+			* u_geomorph_micro_amplitude_m * w24 * u_geomorph_fine_strength;
 	}
 
 	float glacial_gate = smoothstep(0.0, 0.05, glacial);
 	if (glacial > 0.0) {
-		float ice = gm_fbm(world_m / 2600.0 + vec3(2.0, -7.0, 5.0), seed + 127u);
-		float glacial_mix = clamp(glacial * glacial_gate * 0.72 * u_geomorph_glacial_strength, 0.0, 1.0);
-		h = mix(h, h * 0.62 + ice * 52.0 * u_geomorph_glacial_strength, glacial_mix);
+		float glacial_wavelength = max(u_geomorph_glacial_wavelength_m, 0.001);
+		float ice = gm_fbm(world_m / glacial_wavelength + vec3(2.0, -7.0, 5.0), seed + 127u);
+		float glacial_mix = clamp(glacial * glacial_gate * u_geomorph_glacial_mix
+			* u_geomorph_glacial_strength, 0.0, 1.0);
+		h = mix(h, h * u_geomorph_glacial_base_scale
+			+ ice * u_geomorph_glacial_amplitude_m * u_geomorph_glacial_strength, glacial_mix);
 	}
 
 	return h;
