@@ -7,10 +7,11 @@
 // meta.y flags:
 //   bit 0 = upstream 1D->2D mouth enabled
 //   bit 1 = downstream 2D->1D mouth enabled
+//   bit 2 = upstream injection centered on rec.corridor.xy
 //
-// A one-tile reach enables both bits. A multi-tile cluster enables upstream only
-// on its first member and downstream only on its final member; internal mouths are
-// connected by the normal sparse SWE interfaces.
+// Centered upstream injection is used for branched junction tiles: the junction
+// core has no unique upstream edge, while its downstream removal remains aligned to
+// the outgoing corridor direction.
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -46,6 +47,7 @@ void main() {
     uint slot = rec.meta.x;
     bool upstream_enabled = (rec.meta.y & 1u) != 0u;
     bool downstream_enabled = (rec.meta.y & 2u) != 0u;
+    bool upstream_centered = (rec.meta.y & 4u) != 0u;
     int r = int(params.dims.y);
     if (slot >= params.dims.z || occupied[slot] == 0 || r <= 0) {
         results[ri] = vec4(0.0, 0.0, 0.0, -1.0);
@@ -65,6 +67,7 @@ void main() {
     float half_width = max(rec.transfer.x, 0.5 * dx);
     float dt = max(rec.transfer.z, 0.0);
     float mouth_thickness_cells = clamp(rec.transfer.w, 0.75, 3.0);
+    float centered_radius_m = max(half_width, mouth_thickness_cells * dx);
 
     float min_s = 3.402823466e38;
     float max_s = -3.402823466e38;
@@ -93,11 +96,17 @@ void main() {
             vec2 p = vec2(float(x) + 0.5, float(y) + 0.5);
             vec2 rel = p - center;
             float cross_m = abs(dot(rel, normal)) * dx;
-            if (cross_m > half_width) continue;
+            bool in_corridor = cross_m <= half_width;
             float s = dot(rel, dir);
-            if (upstream_enabled && s <= min_s + mouth_thickness_cells)
-                upstream_count++;
-            if (downstream_enabled && s >= max_s - mouth_thickness_cells) {
+            bool in_center = length(rel) * dx <= centered_radius_m;
+            if (upstream_enabled) {
+                if (upstream_centered) {
+                    if (in_center) upstream_count++;
+                } else if (in_corridor && s <= min_s + mouth_thickness_cells) {
+                    upstream_count++;
+                }
+            }
+            if (downstream_enabled && in_corridor && s >= max_s - mouth_thickness_cells) {
                 vec4 q = state_a[index_for(slot, x, y)];
                 if (q.x > 0.0) measured_q += max(dot(q.yz, dir), 0.0) * dx;
             }
@@ -117,19 +126,24 @@ void main() {
             vec2 p = vec2(float(x) + 0.5, float(y) + 0.5);
             vec2 rel = p - center;
             float cross_m = abs(dot(rel, normal)) * dx;
-            if (cross_m > half_width) continue;
+            bool in_corridor = cross_m <= half_width;
             float s = dot(rel, dir);
+            bool in_center = length(rel) * dx <= centered_radius_m;
+            bool upstream_cell = upstream_enabled && (
+                (upstream_centered && in_center) ||
+                (!upstream_centered && in_corridor && s <= min_s + mouth_thickness_cells));
+            bool downstream_cell = downstream_enabled && in_corridor &&
+                s >= max_s - mouth_thickness_cells;
+            if (!upstream_cell && !downstream_cell) continue;
+
             int idx = index_for(slot, x, y);
             vec4 q = state_a[idx];
-
-            if (upstream_enabled && s <= min_s + mouth_thickness_cells && add_depth > 0.0) {
+            if (upstream_cell && add_depth > 0.0) {
                 q.x += add_depth;
                 q.yz += add_depth * add_velocity;
                 actual_add += add_depth * cell_area;
             }
-
-            if (downstream_enabled && s >= max_s - mouth_thickness_cells
-                    && dt > 0.0 && q.x > 0.0) {
+            if (downstream_cell && dt > 0.0 && q.x > 0.0) {
                 float qn = max(dot(q.yz, dir), 0.0);
                 float requested_remove_h = qn * dt / dx;
                 float remove_h = min(max(requested_remove_h, 0.0), q.x);
@@ -141,14 +155,11 @@ void main() {
                     actual_remove += remove_h * cell_area;
                 }
             }
-
             state_a[idx] = q;
             state_b[idx] = q;
         }
     }
 
-    // w >= 0 means a valid record. For an upstream-disabled member zero mouth cells
-    // are expected and are not an error.
     results[ri] = vec4(actual_add, actual_remove, measured_q,
         upstream_enabled ? float(upstream_count) : 0.0);
 }
