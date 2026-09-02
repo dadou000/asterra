@@ -13,12 +13,13 @@ extends Node
 ## was released/recycled during the cycle cannot carry its former owner's weather
 ## value into the next solve.
 ##
-## Precipitation authority is spatially exclusive. Once at least one fine forcing
-## dispatch has actually been recorded, every solver-visible fine tile owns rainfall
-## over its SWE footprint and PersistentHydrologySystem relinquishes that area from
-## the containing macro cell. Until then (or whenever this coupling is disabled,
-## native weather fails, or sparse runtime tears down) coarse authority is restored
-## to 100% before fine forcing is cleared.
+## Precipitation authority is spatially exclusive. Before the first fine forcing
+## dispatch is submitted, PersistentHydrologySystem synchronously relinquishes each
+## solver-visible fine footprint from coarse native precipitation. Only after that
+## ownership handoff succeeds is the GPU update queued. If the first update fails,
+## coarse authority is restored. Later refresh failures keep authority because the
+## previously published fine forcing buffer remains valid. Disable/native failure/
+## runtime teardown always return coarse authority before clearing fine forcing.
 
 signal coupling_ready
 signal coupling_updated(request_id: int)
@@ -39,6 +40,10 @@ var _ownership_map: HydroCoarseFineOwnershipMap
 var _refresh_accum := 999.0
 var _ready_coupling := false
 var _forcing_published_once := false
+## True once coarse has relinquished the mapped fine footprints. This may become
+## true immediately before the first GPU forcing dispatch is recorded; that brief
+## reservation closes the submit/callback race without double-injecting rainfall.
+var _authority_claimed := false
 var _last_authority_active := false
 var _update_requested := true
 var _updates_recorded := 0
@@ -68,11 +73,11 @@ func available() -> bool:
 		and _runtime != null and _runtime.initialized_ok()
 
 
-## True only after fine forcing has actually been recorded into the current sparse
-## atmospheric buffer. Initialization alone is not enough to take rainfall authority
-## away from the coarse representation.
+## True when coarse distributed precipitation has relinquished the current fine
+## footprints. During the first update this becomes true immediately before the
+## fine GPU forcing dispatch is queued, rather than waiting for its async callback.
 func fine_precipitation_authority_active() -> bool:
-	return enabled and available() and _forcing_published_once \
+	return enabled and available() and _authority_claimed \
 		and bool(WeatherSystem.native_available) and _ownership_map != null \
 		and _ownership_map.initialized_ok()
 
@@ -87,6 +92,7 @@ func set_enabled(value: bool) -> void:
 		return
 	enabled = value
 	_forcing_published_once = false
+	_authority_claimed = false
 	if not enabled:
 		# Coarse must reclaim rainfall before the fine atmospheric buffer is cleared.
 		_sync_precipitation_authority()
@@ -101,6 +107,7 @@ func stats() -> Dictionary:
 		"available": available(),
 		"enabled": enabled,
 		"fine_precipitation_authority": fine_precipitation_authority_active(),
+		"authority_claimed": _authority_claimed,
 		"forcing_published_once": _forcing_published_once,
 		"refresh_interval_s": refresh_interval_s,
 		"updates_recorded": _updates_recorded,
@@ -143,6 +150,7 @@ func _on_weather_native_ready() -> void:
 
 func _on_weather_native_failed(_reason: String) -> void:
 	_forcing_published_once = false
+	_authority_claimed = false
 	# Reclaim authority before removing the fine atmospheric contribution.
 	_sync_precipitation_authority()
 	_clear_runtime_forcing()
@@ -150,9 +158,11 @@ func _on_weather_native_failed(_reason: String) -> void:
 
 
 func _on_coarse_store_rebuilt() -> void:
-	_release_ownership_map()
-	_try_bind_ownership_map()
-	_sync_precipitation_authority()
+	# WaterSystem treats a coarse-store rebuild as a sparse generation boundary.
+	# Tear down this coupling immediately as well, so no old atlas can claim forcing
+	# authority from the replacement coarse store while the runtime is recycling.
+	_teardown()
+	call_deferred("_try_bind")
 
 
 func _on_runtime_cycle_completed(_cycle_id: int, _report: Dictionary) -> void:
@@ -163,12 +173,31 @@ func _try_refresh_now(force_cycle_refresh: bool = false) -> void:
 	if not enabled or not bool(WeatherSystem.native_available) \
 			or not available() or _forcing.pending() or _runtime.busy():
 		return
+	if _ownership_map == null or not _ownership_map.initialized_ok() \
+			or not PersistentHydrologySystem.available():
+		# Fine forcing cannot become authoritative until the matching coarse owner can
+		# relinquish the same spatial footprint.
+		return
 	if not force_cycle_refresh and not _update_requested \
 			and _refresh_accum < maxf(refresh_interval_s, 0.01):
 		return
 	_apply_policy()
+
+	var claimed_for_first_submit := false
+	if not _forcing_published_once and not _authority_claimed:
+		_authority_claimed = true
+		var authority_error := _sync_precipitation_authority()
+		if authority_error != OK:
+			_authority_claimed = false
+			_sync_precipitation_authority()
+			return
+		claimed_for_first_submit = true
+
 	var request_id := _forcing.request_update()
 	if request_id < 0:
+		if claimed_for_first_submit:
+			_authority_claimed = false
+			_sync_precipitation_authority()
 		return
 	_last_request_id = request_id
 	_update_requested = false
@@ -223,7 +252,8 @@ func _try_bind_ownership_map() -> void:
 		return
 	_ownership_map = ownership
 	_ownership_map.fractions_changed.connect(_on_ownership_fractions_changed)
-	_sync_precipitation_authority()
+	if _authority_claimed:
+		_sync_precipitation_authority()
 
 
 func _apply_policy() -> void:
@@ -240,6 +270,7 @@ func _apply_policy() -> void:
 func _on_forcing_initialized() -> void:
 	_ready_coupling = true
 	_forcing_published_once = false
+	_authority_claimed = false
 	_try_bind_ownership_map()
 	_sync_precipitation_authority()
 	request_refresh()
@@ -253,37 +284,50 @@ func _on_forcing_init_failed(error: Error) -> void:
 
 func _on_forcing_update_recorded(request_id: int) -> void:
 	_updates_recorded += 1
-	var became_authoritative := not _forcing_published_once
 	_forcing_published_once = true
-	if became_authoritative:
+	# Defensive recovery only: the first submit path claims coarse authority before
+	# queuing the GPU dispatch, so a recorded update should never arrive unclaimed.
+	if not _authority_claimed:
+		_authority_claimed = true
 		_sync_precipitation_authority()
 	coupling_updated.emit(request_id)
 
 
 func _on_forcing_update_failed(_request_id: int, error: Error) -> void:
+	# If no forcing snapshot has ever succeeded, the fine side owns nothing usable;
+	# return the pre-submit authority reservation. Once a snapshot has succeeded,
+	# keep authority because the previous atmospheric buffer remains authoritative.
+	if not _forcing_published_once and _authority_claimed:
+		_authority_claimed = false
+		_sync_precipitation_authority()
 	coupling_failed.emit(error)
 	push_warning("HydroWeatherCoupling: precipitation update failed (%d)." % int(error))
 	_update_requested = true
 
 
 func _on_ownership_fractions_changed(_fractions: PackedFloat64Array) -> void:
-	_sync_precipitation_authority()
+	if _authority_claimed:
+		_sync_precipitation_authority()
 
 
-func _sync_precipitation_authority() -> void:
+func _sync_precipitation_authority() -> Error:
 	var active := fine_precipitation_authority_active()
+	var result := OK
 	if PersistentHydrologySystem.available():
 		if active:
-			var err := PersistentHydrologySystem.set_precipitation_authority_fractions(
+			result = PersistentHydrologySystem.set_precipitation_authority_fractions(
 				_ownership_map.coarse_precipitation_fractions())
-			if err != OK:
-				coupling_failed.emit(err)
-				push_warning("HydroWeatherCoupling: coarse authority update failed (%d)." % int(err))
+			if result != OK:
+				coupling_failed.emit(result)
+				push_warning("HydroWeatherCoupling: coarse authority update failed (%d)." % int(result))
 		else:
 			PersistentHydrologySystem.clear_precipitation_authority_fractions()
+	elif active:
+		result = ERR_UNCONFIGURED
 	if active != _last_authority_active:
 		_last_authority_active = active
 		fine_precipitation_authority_changed.emit(active)
+	return result
 
 
 func _clear_runtime_forcing() -> void:
@@ -311,6 +355,7 @@ func _teardown() -> void:
 	# Ordering matters: coarse takes rainfall authority back before fine forcing is
 	# cleared and before the ownership map loses the footprint information.
 	_forcing_published_once = false
+	_authority_claimed = false
 	_sync_precipitation_authority()
 	_ready_coupling = false
 	_clear_runtime_forcing()
