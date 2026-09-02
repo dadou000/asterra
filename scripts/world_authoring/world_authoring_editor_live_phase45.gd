@@ -29,8 +29,8 @@ func _phase43_build_local_features(terrain: Resource) -> void:
 	header.add_child(count)
 	var add := Button.new()
 	add.name = "AddBlankTerrainFeature"
-	add.text = "+ Blank Feature"
-	add.custom_minimum_size = Vector2(190.0, 42.0)
+	add.text = "+ Add Terrain Feature"
+	add.custom_minimum_size = Vector2(205.0, 42.0)
 	add.tooltip_text = "Create one blank full-LOD WHAT × WHERE displacement feature"
 	add.pressed.connect(_phase43_create_feature.bind(terrain))
 	header.add_child(add)
