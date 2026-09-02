@@ -38,7 +38,9 @@ func _process(_delta: float) -> void:
 func _begin() -> void:
 	WaterSystem.set_dynamic_surface_render_enabled(false)
 	var side := 1 << LEVEL
-	_source_key = HydroTileKey.new(CubeSphere.FACE_PX, LEVEL, side / 2 + 7, side / 2 - 5)
+	var half_side := side >> 1
+	_source_key = HydroTileKey.new(CubeSphere.FACE_PX, LEVEL,
+		half_side + 7, half_side - 5)
 	var east := HydroTileTopology.neighbor(_source_key, HydroTileTopology.DIR_EAST)
 	_require(not east.is_empty(), "east neighbor did not resolve")
 	if _finished:
