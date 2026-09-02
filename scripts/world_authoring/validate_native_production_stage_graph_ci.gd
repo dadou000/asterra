@@ -192,6 +192,9 @@ func _validate() -> String:
 			runtime.free()
 			return "could not wire saved Phase 37 stage %s" % stage_id
 		previous_id = stage_id_node
+	# Canonical branch construction leaves Glacial -> Compose behind when Merge is
+	# removed. Delete that surviving edge before closing the synthetic linear chain.
+	graph.call("disconnect_nodes", previous_id, 0, compose_id, 0)
 	if not bool(graph.call("connect_nodes", previous_id, 0, compose_id, 0)):
 		runtime.free()
 		return "could not close saved Phase 37 chain"
