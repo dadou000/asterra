@@ -10,10 +10,11 @@
 //   1: actual outward advective Q on W/E/S/N [m3/s]
 //   2: wet cell count, active ownership, reserved, reserved
 //   3: one-sided dry-neighbor Rusanov wetting Q on W/E/S/N [m3/s]
+//   4: max free-surface elevation eta=(bed+h) on W/E/S/N [m]
 //
 // The predictive wetting value is intentionally separate from actual discharge.
 // It allows stationary water with hydrostatic head to request an adjacent dry tile;
-// terrain/structure reachability still decides whether that request is permitted.
+// terrain/structure reachability then compares edge eta to the destination crest.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer State {
@@ -23,7 +24,7 @@ layout(set = 0, binding = 1, std430) readonly buffer Occupancy {
     uint active[];
 };
 layout(set = 0, binding = 2, std430) writeonly buffer Summaries {
-    vec4 summary[]; // 4 vec4 per slot
+    vec4 summary[]; // 5 vec4 per slot
 };
 layout(set = 0, binding = 3, std430) readonly buffer Params {
     vec4 grid;    // tile_res, capacity, dx, dry_eps
@@ -41,8 +42,14 @@ shared float s_wet_west[64];
 shared float s_wet_east[64];
 shared float s_wet_south[64];
 shared float s_wet_north[64];
+shared float s_eta_west[64];
+shared float s_eta_east[64];
+shared float s_eta_south[64];
+shared float s_eta_north[64];
 shared uint s_invalid[64];
 shared uint s_wet[64];
+
+const float NEG_FLT_MAX = -3.402823e38;
 
 bool invalid_state(vec4 v) {
     return any(isnan(v)) || any(isinf(v));
@@ -78,6 +85,10 @@ void main() {
     float wet_east = 0.0;
     float wet_south = 0.0;
     float wet_north = 0.0;
+    float eta_west = NEG_FLT_MAX;
+    float eta_east = NEG_FLT_MAX;
+    float eta_south = NEG_FLT_MAX;
+    float eta_north = NEG_FLT_MAX;
     uint invalid_count = 0u;
     uint wet_count = 0u;
 
@@ -99,6 +110,7 @@ void main() {
             float speed = length(velocity);
             max_velocity = max(max_velocity, speed);
             energy += 0.5 * h * dot(velocity, velocity) * dx * dx;
+            float eta = q.w + h;
 
             uint x = local_i % tile_res;
             uint y = local_i / tile_res;
@@ -108,21 +120,25 @@ void main() {
                 float m = -q.y;
                 west_flux += max(m, 0.0) * dx;
                 wet_west += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_west = max(eta_west, eta);
             }
             if (x + 1u == tile_res) {
                 float m = q.y;
                 east_flux += max(m, 0.0) * dx;
                 wet_east += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_east = max(eta_east, eta);
             }
             if (y == 0u) {
                 float m = -q.z;
                 south_flux += max(m, 0.0) * dx;
                 wet_south += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_south = max(eta_south, eta);
             }
             if (y + 1u == tile_res) {
                 float m = q.z;
                 north_flux += max(m, 0.0) * dx;
                 wet_north += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_north = max(eta_north, eta);
             }
         }
     }
@@ -138,6 +154,10 @@ void main() {
     s_wet_east[lane] = wet_east;
     s_wet_south[lane] = wet_south;
     s_wet_north[lane] = wet_north;
+    s_eta_west[lane] = eta_west;
+    s_eta_east[lane] = eta_east;
+    s_eta_south[lane] = eta_south;
+    s_eta_north[lane] = eta_north;
     s_invalid[lane] = invalid_count;
     s_wet[lane] = wet_count;
     barrier();
@@ -155,6 +175,10 @@ void main() {
             s_wet_east[lane] += s_wet_east[lane + stride];
             s_wet_south[lane] += s_wet_south[lane + stride];
             s_wet_north[lane] += s_wet_north[lane + stride];
+            s_eta_west[lane] = max(s_eta_west[lane], s_eta_west[lane + stride]);
+            s_eta_east[lane] = max(s_eta_east[lane], s_eta_east[lane + stride]);
+            s_eta_south[lane] = max(s_eta_south[lane], s_eta_south[lane + stride]);
+            s_eta_north[lane] = max(s_eta_north[lane], s_eta_north[lane + stride]);
             s_invalid[lane] += s_invalid[lane + stride];
             s_wet[lane] += s_wet[lane + stride];
         }
@@ -162,12 +186,13 @@ void main() {
     }
 
     if (lane == 0u && slot < capacity) {
-        uint o = slot * 4u;
+        uint o = slot * 5u;
         if (!slot_active) {
             summary[o + 0u] = vec4(0.0);
             summary[o + 1u] = vec4(0.0);
             summary[o + 2u] = vec4(0.0);
             summary[o + 3u] = vec4(0.0);
+            summary[o + 4u] = vec4(NEG_FLT_MAX);
             return;
         }
         summary[o + 0u] = vec4(
@@ -177,5 +202,7 @@ void main() {
         summary[o + 2u] = vec4(float(s_wet[0]), 1.0, 0.0, 0.0);
         summary[o + 3u] = vec4(
             s_wet_west[0], s_wet_east[0], s_wet_south[0], s_wet_north[0]);
+        summary[o + 4u] = vec4(
+            s_eta_west[0], s_eta_east[0], s_eta_south[0], s_eta_north[0]);
     }
 }
