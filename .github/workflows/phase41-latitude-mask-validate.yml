@@ -6,18 +6,28 @@ on:
       - "terrain/**"
     paths:
       - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase41.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase41.gd"
       - "scripts/world_authoring/validate_latitude_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_latitude_mask_phase41_ui_ci.gd"
       - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
       - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
+      - "scenes/world_authoring/PlanetStudio.tscn"
       - "scenes/world_authoring/ValidateLatitudeMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateLatitudeMaskPhase41UI.tscn"
       - ".github/workflows/phase41-latitude-mask-validate.yml"
   pull_request:
     paths:
       - "scripts/world_authoring/terrain_displacement_runtime_phase41.gd"
+      - "scripts/world_authoring/terrain_graph_editor_phase41.gd"
+      - "scripts/world_authoring/world_authoring_editor_live_phase41.gd"
       - "scripts/world_authoring/validate_latitude_mask_phase41_ci.gd"
+      - "scripts/world_authoring/validate_latitude_mask_phase41_ui_ci.gd"
       - "scripts/terrain/spherical_geometry_clipmap_phase31.gd"
       - "shaders/terrain_author_displacement_bytecode.gdshaderinc"
+      - "scenes/world_authoring/PlanetStudio.tscn"
       - "scenes/world_authoring/ValidateLatitudeMaskPhase41CI.tscn"
+      - "scenes/world_authoring/ValidateLatitudeMaskPhase41UI.tscn"
       - ".github/workflows/phase41-latitude-mask-validate.yml"
   workflow_dispatch:
 
@@ -72,6 +82,10 @@ jobs:
           GroundHeightStore="*res://scripts/terrain/global_height_store.gd"
           GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.gd"
 
+          [display]
+          window/size/viewport_width=1600
+          window/size/viewport_height=900
+
           [rendering]
           renderer/rendering_method="gl_compatibility"
           renderer/rendering_method.mobile="gl_compatibility"
@@ -118,5 +132,29 @@ jobs:
           fi
           if grep -Eq "LATITUDE_MASK_PHASE41_FAILED|SCRIPT ERROR|Parse Error|FATAL" /tmp/phase41-latitude-mask.log; then
             echo "Phase 41 latitude-mask regression reported a failure."
+            exit 1
+          fi
+
+      - name: Validate Latitude Band editor workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-phase41-ci
+          set +e
+          timeout 90 "$GODOT" --headless --path "$TEST_PROJECT" res://scenes/world_authoring/ValidateLatitudeMaskPhase41UI.tscn > /tmp/phase41-latitude-mask-ui.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/phase41-latitude-mask-ui.log
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 41 Latitude Band UI validation exited with status $status"
+            exit "$status"
+          fi
+          if ! grep -q "LATITUDE_MASK_PHASE41_UI_OK" /tmp/phase41-latitude-mask-ui.log; then
+            echo "Phase 41 Latitude Band UI completion marker was not emitted."
+            exit 1
+          fi
+          if grep -Eq "LATITUDE_MASK_PHASE41_UI_FAILED|SCRIPT ERROR|Parse Error|CRASH|FATAL" /tmp/phase41-latitude-mask-ui.log; then
+            echo "Phase 41 Latitude Band UI regression reported a failure."
             exit 1
           fi
