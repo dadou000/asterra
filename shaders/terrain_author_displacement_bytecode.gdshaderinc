@@ -91,6 +91,27 @@ float ad_longitude_mask(vec3 direction, vec4 p) {
 	return mod(round(p.w), 2.0) >= 0.5 ? 1.0 - value : value;
 }
 
+vec3 ad_direction_from_latlon(float latitude_deg, float longitude_deg) {
+	float latitude_rad = latitude_deg * 0.017453292519943295;
+	float longitude_rad = longitude_deg * 0.017453292519943295;
+	float cos_latitude = cos(latitude_rad);
+	return vec3(
+		sin(longitude_rad) * cos_latitude,
+		sin(latitude_rad),
+		cos(longitude_rad) * cos_latitude);
+}
+
+float ad_radial_mask(vec3 direction, vec4 p) {
+	vec3 d = normalize(direction);
+	vec3 center_direction = ad_direction_from_latlon(p.x, p.y);
+	float angle_deg = acos(clamp(dot(d, center_direction), -1.0, 1.0)) * 57.29577951308232;
+	float radius_deg = max(p.z, 0.0);
+	float feather_deg = max(p.w, 0.0);
+	if (radius_deg >= 180.0 - 1e-6 || angle_deg <= radius_deg) return 1.0;
+	if (feather_deg <= 1e-6) return 0.0;
+	return clamp(1.0 - smoothstep(radius_deg, radius_deg + feather_deg, angle_deg), 0.0, 1.0);
+}
+
 float ad_reg(float values[AUTHOR_DISP_MAX_INSTRUCTIONS], int index, int current) {
 	if (index < 0 || index >= current || index >= AUTHOR_DISP_MAX_INSTRUCTIONS) return 0.0;
 	return values[index];
@@ -139,6 +160,7 @@ float author_displacement_height_with_sculpt(vec3 direction, float base_height_m
 		else if (op == 25) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), int(round(p.z))); float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0); v = a + deposit * deposit * p.y; }
 		else if (op == 26) v = sculpt_delta_m;
 		else if (op == 27) v = round(p.w) >= 2.0 ? ad_longitude_mask(direction, p) : ad_latitude_mask(direction, p);
+		else if (op == 28) v = ad_radial_mask(direction, p);
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];
