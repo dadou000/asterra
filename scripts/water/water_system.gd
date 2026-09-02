@@ -9,6 +9,8 @@ signal planet_promotion_bridge_state_changed(state: String)
 signal planet_promotion_bridge_ready
 signal planet_promotion_completed(report: Dictionary)
 signal planet_promotion_failed(error: Error, stage: String)
+signal active_sparse_volume_ready(request_id: int, volume_m3: float)
+signal active_sparse_volume_failed(request_id: int, error: Error)
 
 ## Policy switch only. No automatic candidate loop is installed yet; keeping this
 ## false makes the absence of automatic promotion explicit in production stats.
@@ -16,6 +18,7 @@ var automatic_coarse_promotion_enabled := false
 
 var _planet_promotion_bridge: PlanetHydroPromotionBridge
 var _planet_promotion_state := "offline"
+var _sparse_volume_diagnostic: SparseHydroVolumeDiagnosticsGPU
 
 
 func _ready() -> void:
@@ -28,6 +31,7 @@ func _ready() -> void:
 			_on_persistent_hydrology_store_rebuilt):
 		PersistentHydrologySystem.store_rebuilt.connect(
 			_on_persistent_hydrology_store_rebuilt)
+	call_deferred(&"_try_bind_sparse_volume_diagnostic")
 	call_deferred(&"_try_bind_planet_promotion_bridge")
 
 
@@ -43,6 +47,21 @@ func planet_promotion_bridge_state() -> String:
 
 func planet_promotion_bridge() -> PlanetHydroPromotionBridge:
 	return _planet_promotion_bridge
+
+
+func active_sparse_volume_diagnostic_available() -> bool:
+	return _sparse_volume_diagnostic != null \
+		and _sparse_volume_diagnostic.initialized_ok()
+
+
+func request_active_sparse_volume() -> int:
+	if not active_sparse_volume_diagnostic_available() \
+			or _sparse_volume_diagnostic.pending():
+		return -1
+	var runtime := sparse_runtime()
+	if runtime == null or runtime.busy():
+		return -1
+	return _sparse_volume_diagnostic.request_volume()
 
 
 func coarse_promotion_candidates(max_count: int = 64,
@@ -84,20 +103,25 @@ func gpu_stats() -> Dictionary:
 		"automatic_enabled": automatic_coarse_promotion_enabled,
 		"coarse_store_available": PersistentHydrologySystem.available(),
 	}
+	out["active_sparse_volume_diagnostic"] = {} if _sparse_volume_diagnostic == null \
+		else _sparse_volume_diagnostic.stats()
 	return out
 
 
 func _on_sparse_runtime_ready_for_promotion() -> void:
+	_try_bind_sparse_volume_diagnostic()
 	_try_bind_planet_promotion_bridge()
 
 
 func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 	if state == "ready":
+		_try_bind_sparse_volume_diagnostic()
 		_try_bind_planet_promotion_bridge()
 		return
 	# Defensive path in addition to _release_sparse_runtime() override: even if a
-	# future base implementation changes bootstrap sequencing, no bridge may retain
-	# references to sparse resources once the runtime leaves READY.
+	# future base implementation changes bootstrap sequencing, no diagnostic or
+	# bridge may retain references to sparse resources once runtime leaves READY.
+	_release_sparse_volume_diagnostic()
 	if _planet_promotion_bridge != null:
 		_release_planet_promotion_bridge()
 	if state == "disabled":
@@ -112,6 +136,38 @@ func _on_persistent_hydrology_store_rebuilt() -> void:
 	# A rebuilt planet store invalidates the bridge's old coarse-state reference.
 	_release_planet_promotion_bridge()
 	call_deferred(&"_try_bind_planet_promotion_bridge")
+
+
+func _try_bind_sparse_volume_diagnostic() -> void:
+	if _sparse_volume_diagnostic != null or not sparse_runtime_available():
+		return
+	var runtime := sparse_runtime()
+	if runtime == null or runtime.atlas == null or runtime.solver == null \
+			or not runtime.solver.initialized_ok():
+		return
+	var diagnostic := SparseHydroVolumeDiagnosticsGPU.new()
+	diagnostic.name = "SparseHydroVolumeDiagnosticsGPU"
+	_sparse_volume_diagnostic = diagnostic
+	add_child(diagnostic)
+	diagnostic.initialization_failed.connect(
+		func(error: Error):
+			if diagnostic == _sparse_volume_diagnostic:
+				active_sparse_volume_failed.emit(-1, error)
+				_release_sparse_volume_diagnostic())
+	diagnostic.volume_ready.connect(
+		func(request_id: int, volume_m3: float):
+			if diagnostic == _sparse_volume_diagnostic:
+				active_sparse_volume_ready.emit(request_id, volume_m3))
+	diagnostic.readback_failed.connect(
+		func(request_id: int, error: Error):
+			if diagnostic == _sparse_volume_diagnostic:
+				active_sparse_volume_failed.emit(request_id, error))
+	var err := diagnostic.initialize(runtime.solver.canonical_state_rid(),
+		runtime.atlas.occupancy_rid(), runtime.atlas.capacity,
+		runtime.atlas.tile_resolution, runtime.atlas.cell_size_m)
+	if err != OK:
+		active_sparse_volume_failed.emit(-1, err)
+		_release_sparse_volume_diagnostic()
 
 
 func _try_bind_planet_promotion_bridge() -> void:
@@ -182,6 +238,14 @@ func _set_planet_promotion_state(state: String) -> void:
 	planet_promotion_bridge_state_changed.emit(state)
 
 
+func _release_sparse_volume_diagnostic() -> void:
+	var diagnostic := _sparse_volume_diagnostic
+	_sparse_volume_diagnostic = null
+	if diagnostic != null and is_instance_valid(diagnostic):
+		diagnostic.release()
+		diagnostic.queue_free()
+
+
 func _release_planet_promotion_bridge() -> void:
 	var bridge := _planet_promotion_bridge
 	_planet_promotion_bridge = null
@@ -191,9 +255,10 @@ func _release_planet_promotion_bridge() -> void:
 	_set_planet_promotion_state("offline")
 
 
-## Parent bootstrap calls this whenever a world/runtime is recycled. Releasing the
-## ownership bridge first guarantees an in-flight reservation is rolled back while
-## both its coarse store and sparse scheduler are still valid.
+## Parent bootstrap calls this whenever a world/runtime is recycled. Release all
+## uniform sets/ownership helpers first so their externally-owned sparse RIDs are
+## still valid while cleanup and transaction rollback run.
 func _release_sparse_runtime() -> void:
+	_release_sparse_volume_diagnostic()
 	_release_planet_promotion_bridge()
 	super._release_sparse_runtime()
