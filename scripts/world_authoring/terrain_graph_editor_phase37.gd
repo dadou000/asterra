@@ -1,15 +1,15 @@
 extends "res://scripts/world_authoring/terrain_graph_editor_phase36.gd"
-## Phase 37: structurally expose the existing production geomorph shader.
+## Phase 37/38: structurally expose the existing production geomorph shader.
 ##
-## The opaque PRODUCTION_GENERATED_HEIGHT identity is migrated, only when untouched,
-## into native stage nodes backed by TerrainProductionGeomorphSchema. These are a
-## presentation/parameter view over the resident production GPU shader: canonical
-## topology still emits zero authored bytecode. Rewiring an intrinsic stage is
-## visible in the editor but the Phase 35 runtime rejects it until exact structural
-## lowering exists, so the rendered planet remains last-known-good.
+## Broad through Micro are now shown as the independent contributions they are in
+## the resident shader. They fan into Native Detail Merge; Glacial remains the one
+## accumulated-height transform. Saved valid Phase 37 linear graphs migrate without
+## losing parameters or bypassed stages. Unsupported topology is never rewritten.
 
 const NATIVE_GRAPH := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
+const NATIVE_LOWERING := preload(
+	"res://scripts/world_authoring/model/terrain_production_geomorph_lowering.gd")
 const PRODUCTION_SCHEMA := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_schema.gd")
 const GUIDED_CATALOG := preload(
@@ -67,20 +67,38 @@ const PARAM_RANGES: Dictionary = {
 func setup(session: RefCounted, slot: Resource,
 		rebuild_requested: Callable = Callable()) -> void:
 	var graph: Resource = slot.get(&"graph") as Resource if slot != null else null
-	if slot != null and String(slot.get(&"slot_id")) == NATIVE_GRAPH.PRODUCTION_SHAPE_SLOT_ID \
-			and NATIVE_GRAPH.is_legacy_identity_graph(graph):
-		if session != null and session.has_method("stage_action"):
-			session.call("stage_action", "Expose production geomorph stages", func() -> void:
+	if slot != null and String(slot.get(&"slot_id")) == NATIVE_GRAPH.PRODUCTION_SHAPE_SLOT_ID:
+		if NATIVE_GRAPH.is_legacy_identity_graph(graph):
+			if session != null and session.has_method("stage_action"):
+				session.call("stage_action", "Expose production terrain contributions", func() -> void:
+					NATIVE_GRAPH.migrate_legacy_identity(graph)
+				, 2)
+			else:
 				NATIVE_GRAPH.migrate_legacy_identity(graph)
-			, 2)
-		else:
-			NATIVE_GRAPH.migrate_legacy_identity(graph)
+		elif graph != null and NATIVE_GRAPH.has_structural_nodes(graph) \
+				and not NATIVE_GRAPH.has_merge_node(graph):
+			# Only a structurally valid Phase 37 chain is migrated. Invalid/custom topology
+			# stays untouched so the last-known-good runtime can continue protecting it.
+			var legacy_plan: Dictionary = NATIVE_LOWERING.commutative_reorder_plan(graph)
+			if bool(legacy_plan.get("valid", false)):
+				var controls: Dictionary = NATIVE_GRAPH.extract_controls(graph)
+				var enabled: PackedStringArray = legacy_plan.get(
+					"active_stage_ids", PackedStringArray()) as PackedStringArray
+				if session != null and session.has_method("stage_action"):
+					session.call("stage_action", "Upgrade terrain to contribution merge", func() -> void:
+						NATIVE_GRAPH.build_branch_graph(graph, controls, enabled)
+					, 2)
+				else:
+					NATIVE_GRAPH.build_branch_graph(graph, controls, enabled)
 	super.setup(session, slot, rebuild_requested)
 
 
 func _graph_node_title(node_type: String, node_data: Dictionary) -> String:
 	if node_type == NATIVE_GRAPH.START_TYPE:
-		return "PRODUCTION · GEOMORPH START"
+		return "PRODUCTION · WORLD CONTEXT" if NATIVE_GRAPH.has_merge_node(_graph) \
+			else "PRODUCTION · GEOMORPH START"
+	if node_type == NATIVE_GRAPH.MERGE_TYPE:
+		return "PRODUCTION · NATIVE DETAIL MERGE"
 	if node_type == NATIVE_GRAPH.COMPOSE_TYPE:
 		return "PRODUCTION · MACRO + DETAIL"
 	if node_type == NATIVE_GRAPH.SETTINGS_TYPE and _graph != null \
@@ -94,6 +112,19 @@ func _graph_node_title(node_type: String, node_data: Dictionary) -> String:
 
 func _create_graph_node(node_data: Dictionary) -> void:
 	var node_type: String = String(node_data.get("type", ""))
+	var branch_graph: bool = _graph != null and NATIVE_GRAPH.has_merge_node(_graph)
+	if branch_graph and node_type == NATIVE_GRAPH.START_TYPE:
+		_create_context_node(node_data)
+		return
+	if branch_graph and node_type == NATIVE_GRAPH.MERGE_TYPE:
+		_create_merge_node(node_data)
+		return
+	if branch_graph and node_type.begins_with(NATIVE_GRAPH.STAGE_PREFIX):
+		var stage_id: String = NATIVE_GRAPH.stage_id_for_node_type(node_type)
+		if NATIVE_GRAPH.contribution_stage_ids().has(stage_id):
+			_create_contribution_node(node_data)
+			return
+
 	var structural: bool = _graph != null and NATIVE_GRAPH.has_structural_nodes(_graph)
 	if not structural or (node_type != NATIVE_GRAPH.START_TYPE \
 			and node_type != NATIVE_GRAPH.COMPOSE_TYPE \
@@ -126,7 +157,7 @@ func _create_graph_node(node_data: Dictionary) -> void:
 		return
 	if node_type == NATIVE_GRAPH.SETTINGS_TYPE:
 		_add_settings_note(graph_node,
-			"Global context shared by the native stages. Stage-specific controls now live on the stage that actually uses them.")
+			"Global context shared by the native stages. Stage-specific controls live on the stage that actually uses them.")
 		_add_float_setting(graph_node, node_id, parameters,
 			"Overall detail", "detail_strength", 1.0, 0.0, 4.0, 0.01)
 		_add_float_setting(graph_node, node_id, parameters,
@@ -145,14 +176,76 @@ func _create_graph_node(node_data: Dictionary) -> void:
 		_add_native_parameter(graph_node, node_id, parameters, key)
 
 
+func _create_context_node(node_data: Dictionary) -> void:
+	var node_id: String = String(node_data.get("id", ""))
+	if node_id.is_empty():
+		return
+	var graph_node := GraphNode.new()
+	graph_node.name = node_id
+	graph_node.title = _graph_node_title(NATIVE_GRAPH.START_TYPE, node_data)
+	graph_node.position_offset = Vector2(node_data.get("position", Vector2.ZERO))
+	graph_node.resizable = false
+	graph_node.ignore_invalid_connection_type = true
+	_graph_edit.add_child(graph_node)
+	_add_settings_note(graph_node,
+		"Renderer-owned production context: world position, macro terrain, geology, climate, hydrology and biome fields. It is intentionally not a height wire.")
+
+
+func _create_merge_node(node_data: Dictionary) -> void:
+	var node_id: String = String(node_data.get("id", ""))
+	if node_id.is_empty():
+		return
+	var graph_node := GraphNode.new()
+	graph_node.name = node_id
+	graph_node.title = _graph_node_title(NATIVE_GRAPH.MERGE_TYPE, node_data)
+	graph_node.position_offset = Vector2(node_data.get("position", Vector2.ZERO))
+	graph_node.resizable = false
+	graph_node.ignore_invalid_connection_type = true
+	_graph_edit.add_child(graph_node)
+	for stage_id: String in NATIVE_GRAPH.contribution_stage_ids():
+		var stage_title: String = NATIVE_GRAPH.stage_title_for_node_type(
+			NATIVE_GRAPH.stage_node_type(stage_id))
+		_add_port_row(graph_node, stage_title + " contribution", true, false)
+	_add_port_row(graph_node, "Merged native detail", false, true)
+	_add_settings_note(graph_node,
+		"Each socket is one independent production terrain contribution. Disconnect a socket to disable only that contribution; reconnect it to the matching socket to restore it.")
+
+
+func _create_contribution_node(node_data: Dictionary) -> void:
+	var node_id: String = String(node_data.get("id", ""))
+	var node_type: String = String(node_data.get("type", ""))
+	if node_id.is_empty():
+		return
+	var graph_node := GraphNode.new()
+	graph_node.name = node_id
+	graph_node.title = _graph_node_title(node_type, node_data)
+	graph_node.position_offset = Vector2(node_data.get("position", Vector2.ZERO))
+	graph_node.resizable = false
+	graph_node.ignore_invalid_connection_type = true
+	_graph_edit.add_child(graph_node)
+	_add_port_row(graph_node, "Terrain contribution", false, true)
+	var spec: Dictionary = NATIVE_GRAPH.stage_spec_for_node_type(node_type)
+	_add_settings_note(graph_node, _stage_semantic_note(spec))
+	var parameters: Dictionary = node_data.get("parameters", {}) as Dictionary
+	for key_value: Variant in spec.get("parameters", []) as Array:
+		var key: String = String(key_value)
+		_add_native_parameter(graph_node, node_id, parameters, key)
+
+
 func _stage_semantic_note(spec: Dictionary) -> String:
 	var operation: String = String(spec.get("operation", ""))
 	var note: String = "Exact resident shader stage. "
 	match operation:
-		"subtract_positive": note += "Subtracts positive incision from accumulated detail."
-		"add_positive": note += "Adds positive deposition to accumulated detail."
-		"mix_accumulated": note += "Terminal mix that reshapes the accumulated detail; it is not an additive layer."
-		_: note += "Adds a signed production contribution to accumulated detail."
+		"subtract_positive":
+			note += "Produces the channel-incision contribution subtracted by the production merge."
+		"add_positive":
+			note += "Produces the positive deposition contribution added by the production merge."
+		"mix_accumulated":
+			note += "Terminal transform that reshapes the merged accumulated detail; it is not a contribution layer."
+		_:
+			note += "Produces an independent signed terrain contribution for Native Detail Merge."
+	if operation != "mix_accumulated":
+		note += " Disconnecting its Merge wire disables this stage without rerouting base height."
 	var parent: String = String(spec.get("parent_stage", ""))
 	if not parent.is_empty():
 		note += " Shares the %s production branch/sample." % parent.capitalize()
@@ -181,9 +274,8 @@ func _parameter_label(key: String) -> String:
 
 
 func _add_guided_control(spec: Dictionary, _parameters: Dictionary) -> void:
-	# Simple/Detailed are still alternate views of this same graph. Resolve every
-	# key to its new owning native stage so guided edits cannot create a shadow copy
-	# of stage parameters inside the global settings node.
+	# Simple/Detailed are alternate views of this same graph. Resolve every key to
+	# its owning native stage so guided edits never create a shadow parameter copy.
 	var key: String = String(spec.get("key", ""))
 	var owner_type: String = NATIVE_GRAPH.owner_node_type_for_control(key)
 	var owner_id: String = _find_node_of_type(owner_type)
