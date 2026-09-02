@@ -11,6 +11,8 @@ signal planet_promotion_completed(report: Dictionary)
 signal planet_promotion_failed(error: Error, stage: String)
 signal active_sparse_volume_ready(request_id: int, volume_m3: float)
 signal active_sparse_volume_failed(request_id: int, error: Error)
+signal representation_audit_ready(audit_id: int, report: Dictionary)
+signal representation_audit_failed(audit_id: int, error: Error, stage: String)
 
 ## Policy switch only. No automatic candidate loop is installed yet; keeping this
 ## false makes the absence of automatic promotion explicit in production stats.
@@ -19,6 +21,7 @@ var automatic_coarse_promotion_enabled := false
 var _planet_promotion_bridge: PlanetHydroPromotionBridge
 var _planet_promotion_state := "offline"
 var _sparse_volume_diagnostic: SparseHydroVolumeDiagnosticsGPU
+var _representation_audit: HydroRepresentationAudit
 
 
 func _ready() -> void:
@@ -64,6 +67,23 @@ func request_active_sparse_volume() -> int:
 	return _sparse_volume_diagnostic.request_volume()
 
 
+func representation_audit_available() -> bool:
+	return _representation_audit != null \
+		and _representation_audit.initialized_ok()
+
+
+## Coordinated coarse+fine snapshot. Set expect_no_untracked_fine_flux=true only
+## for controlled gates where atmospheric/gameplay fine sources are known disabled;
+## production fine-source cumulative ledgers are not implemented yet.
+func request_representation_audit(expect_no_untracked_fine_flux: bool = false,
+		abs_tolerance_m3: float = 0.01,
+		relative_tolerance: float = 1.0e-6) -> int:
+	if not representation_audit_available() or _representation_audit.pending():
+		return -1
+	return _representation_audit.request_audit(expect_no_untracked_fine_flux,
+		abs_tolerance_m3, relative_tolerance)
+
+
 func coarse_promotion_candidates(max_count: int = 64,
 		surface_depth_threshold_m: float = 0.025,
 		discharge_ratio_threshold: float = 2.0) -> Array[Dictionary]:
@@ -105,6 +125,11 @@ func gpu_stats() -> Dictionary:
 	}
 	out["active_sparse_volume_diagnostic"] = {} if _sparse_volume_diagnostic == null \
 		else _sparse_volume_diagnostic.stats()
+	out["representation_audit"] = {
+		"available": representation_audit_available(),
+		"pending": _representation_audit != null and _representation_audit.pending(),
+		"fine_external_flux_ledger_complete": false,
+	}
 	return out
 
 
@@ -121,6 +146,7 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 	# Defensive path in addition to _release_sparse_runtime() override: even if a
 	# future base implementation changes bootstrap sequencing, no diagnostic or
 	# bridge may retain references to sparse resources once runtime leaves READY.
+	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
 	if _planet_promotion_bridge != null:
 		_release_planet_promotion_bridge()
@@ -133,8 +159,11 @@ func _on_sparse_runtime_state_for_promotion(state: String) -> void:
 
 
 func _on_persistent_hydrology_store_rebuilt() -> void:
-	# A rebuilt planet store invalidates the bridge's old coarse-state reference.
+	# A rebuilt planet store invalidates both the audit's coarse reference and the
+	# bridge's ownership-store reference.
+	_release_representation_audit()
 	_release_planet_promotion_bridge()
+	call_deferred(&"_try_bind_representation_audit")
 	call_deferred(&"_try_bind_planet_promotion_bridge")
 
 
@@ -149,10 +178,15 @@ func _try_bind_sparse_volume_diagnostic() -> void:
 	diagnostic.name = "SparseHydroVolumeDiagnosticsGPU"
 	_sparse_volume_diagnostic = diagnostic
 	add_child(diagnostic)
+	diagnostic.initialized.connect(
+		func():
+			if diagnostic == _sparse_volume_diagnostic:
+				_try_bind_representation_audit())
 	diagnostic.initialization_failed.connect(
 		func(error: Error):
 			if diagnostic == _sparse_volume_diagnostic:
 				active_sparse_volume_failed.emit(-1, error)
+				_release_representation_audit()
 				_release_sparse_volume_diagnostic())
 	diagnostic.volume_ready.connect(
 		func(request_id: int, volume_m3: float):
@@ -168,6 +202,34 @@ func _try_bind_sparse_volume_diagnostic() -> void:
 	if err != OK:
 		active_sparse_volume_failed.emit(-1, err)
 		_release_sparse_volume_diagnostic()
+
+
+func _try_bind_representation_audit() -> void:
+	if _representation_audit != null \
+			or not active_sparse_volume_diagnostic_available() \
+			or not PersistentHydrologySystem.available() \
+			or not sparse_runtime_available():
+		return
+	var runtime := sparse_runtime()
+	if runtime == null:
+		return
+	var audit := HydroRepresentationAudit.new()
+	audit.name = "HydroRepresentationAudit"
+	_representation_audit = audit
+	add_child(audit)
+	audit.audit_ready.connect(
+		func(audit_id: int, report: Dictionary):
+			if audit == _representation_audit:
+				representation_audit_ready.emit(audit_id, report.duplicate(true)))
+	audit.audit_failed.connect(
+		func(audit_id: int, error: Error, stage: String):
+			if audit == _representation_audit:
+				representation_audit_failed.emit(audit_id, error, stage))
+	var err := audit.initialize(PersistentHydrologySystem.store(), runtime,
+		_sparse_volume_diagnostic, PersistentHydrologySystem)
+	if err != OK:
+		representation_audit_failed.emit(-1, err, "audit_initialize")
+		_release_representation_audit()
 
 
 func _try_bind_planet_promotion_bridge() -> void:
@@ -238,6 +300,14 @@ func _set_planet_promotion_state(state: String) -> void:
 	planet_promotion_bridge_state_changed.emit(state)
 
 
+func _release_representation_audit() -> void:
+	var audit := _representation_audit
+	_representation_audit = null
+	if audit != null and is_instance_valid(audit):
+		audit.release()
+		audit.queue_free()
+
+
 func _release_sparse_volume_diagnostic() -> void:
 	var diagnostic := _sparse_volume_diagnostic
 	_sparse_volume_diagnostic = null
@@ -259,6 +329,7 @@ func _release_planet_promotion_bridge() -> void:
 ## uniform sets/ownership helpers first so their externally-owned sparse RIDs are
 ## still valid while cleanup and transaction rollback run.
 func _release_sparse_runtime() -> void:
+	_release_representation_audit()
 	_release_sparse_volume_diagnostic()
 	_release_planet_promotion_bridge()
 	super._release_sparse_runtime()
