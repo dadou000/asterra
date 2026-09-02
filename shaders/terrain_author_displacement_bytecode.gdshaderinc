@@ -78,13 +78,9 @@ float ad_longitude_mask(vec3 direction, vec4 p) {
 		// Equal edges intentionally mean a full 360 degree band, not an empty mask.
 		value = 1.0;
 	} else if (along_deg <= span_deg) {
+		// Match Latitude Band: the requested interior remains fully selected and
+		// feather only softens the exterior of either circular edge.
 		value = 1.0;
-		if (feather_deg > 1e-6) {
-			float from_west = along_deg;
-			float from_east = span_deg - along_deg;
-			value = min(smoothstep(0.0, feather_deg, from_west),
-					smoothstep(0.0, feather_deg, from_east));
-		}
 	} else if (feather_deg > 1e-6) {
 		float after_east = along_deg - span_deg;
 		float before_west = 360.0 - along_deg;
