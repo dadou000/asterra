@@ -1,10 +1,11 @@
 extends "res://scripts/world_authoring/world_authoring_editor_live_phase30.gd"
-## Phase 31/34: renderer-owned terrain stages are explicit graph sources and
+## Phase 31/35: renderer-owned terrain stages are explicit graph sources and
 ## production controls. Untouched older identity graphs are upgraded once; custom
-## graph topology is never replaced.
+## graph topology is never replaced. Phase 35 adds Simple/Detailed/Node Graph views
+## over that same document.
 
 const ACTIVE_GRAPH_EDITOR := preload(
-	"res://scripts/world_authoring/terrain_graph_editor_phase34.gd")
+	"res://scripts/world_authoring/terrain_graph_editor_phase35.gd")
 
 
 func _phase29_create_production_slot(terrain: Resource, domain: int,
@@ -225,7 +226,7 @@ func _phase29_build_graph_editor(slot: Resource) -> void:
 	var hint := Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _phase28_domain == SHADER_SLOT_MODEL.Domain.DISPLACEMENT:
-		hint.text = "GENERATED TERRAIN exposes the existing macro + geomorph surface, with physical band wavelengths, amplitudes and shaping beside it. SCULPT / EDIT DELTA remains explicit. Defaults reproduce the current renderer; edits change the authoritative render/contact terrain in place."
+		hint.text = "Start in SIMPLE: edit mountains, valleys and terrain detail with ordinary controls. DETAILED exposes physical feature sizes and shaping. NODE GRAPH reveals the exact same production graph for structural editing. All three modes edit the authoritative render/contact terrain; invalid graph candidates keep the last valid terrain active."
 	else:
 		hint.text = "The existing production surface is exposed through PBR outputs plus classifier, classifier thresholds, palette/materials, microrelief, anti-tiling, geology rock PBR, scanned PBR, exact scan textures, raw world fields and graph math/texture nodes. Reset Flow restores the current production defaults."
 	hint.modulate = Color(0.58, 0.69, 0.78)
