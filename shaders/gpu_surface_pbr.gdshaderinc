@@ -29,6 +29,24 @@ uniform float u_pbr_ground_metres : hint_range(0.02, 1024.0) = 2.0;
 uniform float u_pbr_grass_metres : hint_range(0.02, 1024.0) = 2.0;
 uniform float u_pbr_mud_metres : hint_range(0.02, 1024.0) = 1.0;
 uniform float u_pbr_forest_metres : hint_range(0.02, 1024.0) = 2.0;
+uniform float u_pbr_triplanar_sharpness : hint_range(1.0, 16.0) = 5.0;
+uniform float u_pbr_transfer_strength : hint_range(0.0, 2.0) = 0.60;
+uniform float u_pbr_transfer_min : hint_range(0.0, 2.0) = 0.48;
+uniform float u_pbr_transfer_max : hint_range(0.0, 4.0) = 1.72;
+uniform float u_pbr_surface_fade_near_m : hint_range(0.0, 20000.0) = 900.0;
+uniform float u_pbr_surface_fade_far_m : hint_range(0.0, 50000.0) = 3200.0;
+uniform float u_pbr_normal_fade_near_m : hint_range(0.0, 10000.0) = 120.0;
+uniform float u_pbr_normal_fade_far_m : hint_range(0.0, 20000.0) = 520.0;
+uniform float u_pbr_loose_threshold : hint_range(0.0, 1.0) = 0.015;
+uniform float u_pbr_loose_albedo_strength : hint_range(0.0, 2.0) = 0.72;
+uniform float u_pbr_loose_roughness_strength : hint_range(0.0, 2.0) = 0.70;
+uniform float u_pbr_loose_normal_mix : hint_range(0.0, 2.0) = 0.42;
+uniform float u_pbr_loose_normal_weight : hint_range(0.0, 2.0) = 0.48;
+uniform float u_pbr_special_threshold : hint_range(0.0, 1.0) = 0.015;
+uniform float u_pbr_special_albedo_strength : hint_range(0.0, 2.0) = 0.88;
+uniform float u_pbr_special_roughness_strength : hint_range(0.0, 2.0) = 0.82;
+uniform float u_pbr_special_normal_mix : hint_range(0.0, 2.0) = 0.58;
+uniform float u_pbr_special_normal_weight : hint_range(0.0, 2.0) = 0.72;
 
 #define SPBR_GROUND_M u_pbr_ground_metres
 #define SPBR_GRASS_M u_pbr_grass_metres
@@ -36,7 +54,7 @@ uniform float u_pbr_forest_metres : hint_range(0.02, 1024.0) = 2.0;
 #define SPBR_FOREST_M u_pbr_forest_metres
 
 vec3 spbr_weights(vec3 n) {
-	vec3 w = pow(abs(n), vec3(5.0));
+	vec3 w = pow(abs(n), vec3(max(u_pbr_triplanar_sharpness, 0.01)));
 	return w / max(w.x + w.y + w.z, 1e-5);
 }
 
@@ -275,8 +293,10 @@ float spbr_forest_biome(float biome) {
 
 vec3 spbr_transfer_detail(vec3 base, vec3 scan) {
 	float lum = max(dot(scan, vec3(0.2126, 0.7152, 0.0722)), 0.035);
-	vec3 relative = clamp(scan / lum, vec3(0.48), vec3(1.72));
-	return max(base * mix(vec3(1.0), relative, 0.60), vec3(0.006));
+	float relative_min = min(u_pbr_transfer_min, u_pbr_transfer_max);
+	float relative_max = max(u_pbr_transfer_min, u_pbr_transfer_max);
+	vec3 relative = clamp(scan / lum, vec3(relative_min), vec3(relative_max));
+	return max(base * mix(vec3(1.0), relative, u_pbr_transfer_strength), vec3(0.006));
 }
 
 void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_dist,
@@ -289,25 +309,30 @@ void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_
 	pbr_normal_w = 0.0;
 	if (u_pbr_enabled < 0.5) return;
 
-	float surface_detail_w = 1.0 - smoothstep(900.0, 3200.0, camera_dist);
+	float surface_near = min(u_pbr_surface_fade_near_m, u_pbr_surface_fade_far_m);
+	float surface_far = max(u_pbr_surface_fade_near_m, u_pbr_surface_fade_far_m);
+	float normal_near = min(u_pbr_normal_fade_near_m, u_pbr_normal_fade_far_m);
+	float normal_far = max(u_pbr_normal_fade_near_m, u_pbr_normal_fade_far_m);
+	float surface_detail_w = 1.0 - smoothstep(surface_near, max(surface_far, surface_near + 0.001), camera_dist);
 	if (surface_detail_w <= 0.002) return;
-	float normal_detail_w = 1.0 - smoothstep(120.0, 520.0, camera_dist);
+	float normal_detail_w = 1.0 - smoothstep(normal_near, max(normal_far, normal_near + 0.001), camera_dist);
 
 	float snow = secondary.g;
 	float rock = primary.r;
 	float loose = clamp(primary.g + primary.a * 0.82 + secondary.b * 0.68 + secondary.a * 0.78,
 		0.0, 1.0) * (1.0 - snow) * (1.0 - rock * 0.88);
 
-	if (loose > 0.015) {
+	if (loose > u_pbr_loose_threshold) {
 		vec3 scan = spbr_tri_albedo_ground(dpos, dpdx, dpdy, geom_n);
 		float scan_r = spbr_tri_rough_ground(dpos, dpdx, dpdy, geom_n);
-		float w = loose * surface_detail_w * 0.72;
-		albedo = mix(albedo, spbr_transfer_detail(albedo, scan), w);
-		roughness = mix(roughness, scan_r, w * 0.70);
+		float w = loose * surface_detail_w * u_pbr_loose_albedo_strength;
+		albedo = mix(albedo, spbr_transfer_detail(albedo, scan), clamp(w, 0.0, 1.0));
+		roughness = mix(roughness, scan_r, clamp(w * u_pbr_loose_roughness_strength, 0.0, 1.0));
 		if (normal_detail_w > 0.002) {
 			vec3 sn = spbr_tri_normal_ground(dpos, dpdx, dpdy, geom_n);
-			pbr_normal = normalize(mix(pbr_normal, sn, loose * 0.42));
-			pbr_normal_w = max(pbr_normal_w, loose * normal_detail_w * 0.48);
+			pbr_normal = normalize(mix(pbr_normal, sn, clamp(loose * u_pbr_loose_normal_mix, 0.0, 1.0)));
+			pbr_normal_w = max(pbr_normal_w,
+				clamp(loose * normal_detail_w * u_pbr_loose_normal_weight, 0.0, 1.0));
 		}
 	}
 
@@ -316,7 +341,7 @@ void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_
 	float grass = primary.b * (1.0 - forest_biome) * (1.0 - snow);
 	float mud = secondary.r * (1.0 - snow);
 	float special = max(max(grass, forest), mud);
-	if (special > 0.015) {
+	if (special > u_pbr_special_threshold) {
 		vec3 scan;
 		float scan_r;
 		vec3 scan_n = geom_n;
@@ -333,12 +358,14 @@ void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_
 			scan_r = spbr_tri_rough_grass(dpos, dpdx, dpdy, geom_n);
 			if (normal_detail_w > 0.002) scan_n = spbr_tri_normal_grass(dpos, dpdx, dpdy, geom_n);
 		}
-		float w = special * surface_detail_w * 0.88;
-		albedo = mix(albedo, spbr_transfer_detail(albedo, scan), w);
-		roughness = mix(roughness, scan_r, w * 0.82);
+		float w = special * surface_detail_w * u_pbr_special_albedo_strength;
+		albedo = mix(albedo, spbr_transfer_detail(albedo, scan), clamp(w, 0.0, 1.0));
+		roughness = mix(roughness, scan_r, clamp(w * u_pbr_special_roughness_strength, 0.0, 1.0));
 		if (normal_detail_w > 0.002) {
-			pbr_normal = normalize(mix(pbr_normal, scan_n, special * 0.58));
-			pbr_normal_w = max(pbr_normal_w, special * normal_detail_w * 0.72);
+			pbr_normal = normalize(mix(pbr_normal, scan_n,
+				clamp(special * u_pbr_special_normal_mix, 0.0, 1.0)));
+			pbr_normal_w = max(pbr_normal_w,
+				clamp(special * normal_detail_w * u_pbr_special_normal_weight, 0.0, 1.0));
 		}
 	}
 }
