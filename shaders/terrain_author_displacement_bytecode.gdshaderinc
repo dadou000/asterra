@@ -65,8 +65,6 @@ float ad_latitude_mask(vec3 direction, vec4 p) {
 
 float ad_longitude_mask(vec3 direction, vec4 p) {
 	vec3 d = normalize(direction);
-	// 0 degrees is +Z, +90 degrees is +X. Work in a positive eastward arc so
-	// west > east naturally represents a band crossing the +/-180 degree seam.
 	float longitude_deg = atan(d.x, d.z) * 57.29577951308232;
 	float west_deg = ad_wrap_degrees(p.x);
 	float east_deg = ad_wrap_degrees(p.y);
@@ -75,11 +73,8 @@ float ad_longitude_mask(vec3 direction, vec4 p) {
 	float along_deg = ad_positive_arc_degrees(west_deg, longitude_deg);
 	float value = 0.0;
 	if (span_deg <= 1e-6) {
-		// Equal edges intentionally mean a full 360 degree band, not an empty mask.
 		value = 1.0;
 	} else if (along_deg <= span_deg) {
-		// Match Latitude Band: the requested interior remains fully selected and
-		// feather only softens the exterior of either circular edge.
 		value = 1.0;
 	} else if (feather_deg > 1e-6) {
 		float after_east = along_deg - span_deg;
@@ -106,10 +101,12 @@ float ad_radial_mask(vec3 direction, vec4 p) {
 	vec3 center_direction = ad_direction_from_latlon(p.x, p.y);
 	float angle_deg = acos(clamp(dot(d, center_direction), -1.0, 1.0)) * 57.29577951308232;
 	float radius_deg = max(p.z, 0.0);
-	float feather_deg = abs(p.w);
-	if (p.w < 0.0) {
+	bool inner_mode = p.w <= -181.0;
+	float feather_deg = inner_mode ? max(-p.w - 181.0, 0.0) : max(p.w, 0.0);
+	if (inner_mode) {
 		// Private Ring Area inner-edge mode: select at/outside the radius and put
-		// the feather only inside the excluded center hole.
+		// the feather only inside the excluded center hole. The -181 offset makes
+		// an authored zero feather distinct from ordinary +0 radial mode.
 		if (angle_deg >= radius_deg) return 1.0;
 		if (feather_deg <= 1e-6) return 0.0;
 		return clamp(smoothstep(radius_deg - feather_deg, radius_deg, angle_deg), 0.0, 1.0);
@@ -173,7 +170,6 @@ float author_displacement_height_with_sculpt(vec3 direction, float base_height_m
 	return values[clamp(u_author_disp_output, 0, count - 1)];
 }
 
-// Backward-compatible entry point for Blank terrain and older shader callers.
 float author_displacement_height(vec3 direction, float base_height_m, float biome_id,
 		int clipmap_level, float time_s) {
 	return author_displacement_height_with_sculpt(direction, base_height_m, biome_id,
