@@ -9,6 +9,7 @@ Branch: `water/0.1.0`
 - `project.godot` reports 0.1.0.
 - `WaterSystem` autoload added after the legacy `OceanSystem`.
 - `PersistentHydrologySystem` is autoloaded after `WeatherSystem`.
+- `HydroAutomaticSurfacePromotion` is autoloaded after coarse/fine weather ownership.
 - Full architecture plan lives in `docs/WATER_HYDROLOGY_0.1.0_IMPLEMENTATION_PLAN.md`.
 
 ### Phase 1 — rendering/physics ownership split: implemented, runtime validation pending
@@ -115,7 +116,7 @@ only the four-byte GPU volume diagnostic at checkpoints. The initial release gat
 is `relative drift <= 1e-4 OR absolute drift <= 0.08 m3`; tighten it from measured
 results rather than broadening it to hide numerical errors.
 
-### Phase 3 — sparse active hydrology: implemented through persistent ownership gate, runtime validation pending
+### Phase 3 — sparse active hydrology: ownership-safe promotion policy installed, runtime validation pending
 
 #### Sparse GPU runtime
 
@@ -146,7 +147,10 @@ Implemented:
   - samples the CPU weather publication without GPU readback;
   - applies the same `WeatherSystem.simulation_weight` used by fine GPU forcing;
   - maintains a local committed weather-snapshot revision rather than pretending
-    an asynchronous CPU snapshot is the newest native solver revision.
+    an asynchronous CPU snapshot is the newest native solver revision;
+  - retains the latest **unmasked** native precipitation snapshot and reapplies
+    spatial coarse/fine authority immediately when ownership fractions change, so
+    the coarse store cannot run one interval with stale full-authority rainfall.
 
 #### Transactional coarse <-> fine ownership
 
@@ -185,37 +189,102 @@ Detailed contract:
 docs/WATER_PHASE3_PERSISTENT_OWNERSHIP.md
 ```
 
-#### Phase 3 conservation gates
+#### Frontier/rebuild failure hardening
 
-CPU-only:
+The sparse frontier path now distinguishes reversible and irreversible ownership:
+
+```text
+no successful edge handoff
+    -> coarse-only preseed is reversible
+    -> restore coarse parcel
+    -> release hidden destination
+
+one or more successful edge handoffs
+    -> source fine tile has already been debited
+    -> destination owns irreversible transferred water
+    -> publish/preserve destination
+```
+
+Additional hardening:
+
+- coarse-store rebuild is a hard sparse-generation boundary; the old atlas and
+  helpers are destroyed before anything binds to the replacement store;
+- a failed sparse runtime is torn down as one generation so an asynchronous hidden
+  destination cannot activate after its coarse parcel was restored;
+- multi-destination frontier failure cleanup is intrinsic to the activation
+  pipeline rather than depending on a later `WaterSystem` teardown;
+- failed preseed rollback can defer and retry a coarse restoration blocked by an
+  unrelated ownership transaction;
+- provisional coarse state is finalized only after the destination is actually
+  published by the scheduler.
+
+`WaterSystem.gpu_stats()` exposes pending/provisional/deferred preseed counts for
+these failure paths.
+
+#### Automatic surface/flood promotion policy — implemented, production switch OFF
+
+- `scripts/water/hydro_automatic_surface_promotion.gd`
+- autoload: `HydroAutomaticSurfacePromotion`
+- controlling switch remains:
+
+```gdscript
+WaterSystem.automatic_coarse_promotion_enabled = false
+```
+
+Policy behavior:
+
+- scans at low cadence (3 s default);
+- uses only coarse **surface-storage depth** for eligibility; discharge is given an
+  effectively unreachable threshold so channel-only anomalies cannot enter;
+- defaults to 5 cm enter / 2.5 cm exit hysteresis;
+- starts at most one promotion transaction per scan;
+- refuses to start while any coarse ownership transaction is unresolved;
+- maps each coarse cell to its exact sparse tile and suppresses any tile already
+  present in `HydroTilePool`, including allocating/active/settling/frozen states;
+- caps the requested parcel to current coarse surface storage, so the automatic
+  path cannot borrow channel storage;
+- seeds zero initial tangent velocity until the coarse model owns a trustworthy 2D
+  local flood-velocity field;
+- clears policy-local latches/identity on coarse-store rebuild;
+- exposes counters/reasons through `HydroAutomaticSurfacePromotion.stats()`.
+
+Channel-only automatic promotion remains explicitly disabled until the river/reach
+representation exists.
+
+#### Phase 3 conservation and policy gates
+
+CPU/headless:
 
 ```text
 tests/water/PlanetHydrologyStoreTests.tscn
-tests/water/test_planet_hydrology_store.gd
+tests/water/HydroFrontierFailurePolicyTests.tscn
+tests/water/HydroPrecipitationOwnershipTests.tscn
+tests/water/HydroAutomaticSurfacePromotionTests.tscn
 ```
 
-Checks closed conservation, exact precipitation accounting, snapshot round-trip,
-reservation/rollback/commit behavior, snapshot fail-closed behavior, duplicate
-commit rejection and promotion/demotion mass accounting using the real cube-sphere
-`PlanetGrid`/`PlanetFields` constructors.
+The automatic-promotion policy gate checks threshold hysteresis and proves the
+requested automatic parcel is bounded by surface storage rather than channel water.
+The frontier failure-policy gate locks the reversible/irreversible classification.
 
-Renderer-mode exact-seed gate:
+Renderer-mode:
 
 ```text
 tests/water/HydroCoarseSeedGPUSmoke.tscn
-tests/water/test_hydro_coarse_seed_gpu.gd
+tests/water/PlanetHydroPromotionBridgeTests.tscn
+tests/water/HydroRepresentationAuditTests.tscn
+tests/water/SparseHydroFrontierHandoff.tscn
 ```
 
-Creates a one-slot sparse atlas, plans a known parcel, seeds both A and B, then
-uses two independent GPU volume reducers to verify both ping-pong states contain
-the planned represented volume.
+The exact-seed gate creates a one-slot sparse atlas, plans a known parcel, seeds both
+A and B, then uses independent GPU volume reducers to verify both ping-pong states
+contain the planned represented volume.
 
 ## Validation status
 
 The current ChatGPT execution environment does not contain the project Godot 4.7
-binary, so Godot scenes have **not** been executed here. Static review and Godot
-4.7 API matching have been performed; runtime success must not be inferred until
-the scenes run on the project build/GPU.
+binary, so Godot scenes have **not** been executed here. Static review and API/path
+matching have been performed; runtime success must not be inferred until the scenes
+run on the project build/GPU.
 
 Suggested local runs:
 
@@ -223,11 +292,17 @@ Suggested local runs:
 godot --headless --path . tests/water/HydroReferenceTests.tscn
 godot --headless --path . tests/water/Phase1WaterSmoke.tscn
 godot --headless --path . tests/water/PlanetHydrologyStoreTests.tscn
+godot --headless --path . tests/water/HydroFrontierFailurePolicyTests.tscn
+godot --headless --path . tests/water/HydroPrecipitationOwnershipTests.tscn
+godot --headless --path . tests/water/HydroAutomaticSurfacePromotionTests.tscn
 godot --path . tests/water/FixedHydroGPUSmoke.tscn
 godot --path . tests/water/HydroGPUParityTests.tscn
 godot --path . tests/water/HydroSurfaceReconstructionSmoke.tscn
 godot --path . tests/water/HydroGPUSoak.tscn
 godot --path . tests/water/HydroCoarseSeedGPUSmoke.tscn
+godot --path . tests/water/PlanetHydroPromotionBridgeTests.tscn
+godot --path . tests/water/HydroRepresentationAuditTests.tscn
+godot --path . tests/water/SparseHydroFrontierHandoff.tscn
 ```
 
 Shorter development soak example:
@@ -240,24 +315,26 @@ Use the executable name/path appropriate for the local Godot 4.7 build.
 
 ## Next gates
 
-1. Run the CPU persistent-store gate and the renderer-mode exact-seed gate locally;
-   fix actual parser/API/numerical failures without evidence-free tolerance changes.
-2. Expose `PlanetHydroPromotionBridge` from `WaterSystem` only when both the sparse
-   runtime and `PersistentHydrologySystem` store are ready.
-3. Add an end-to-end promotion smoke scene that verifies:
+1. Run the new headless ownership/failure/promotion-policy gates locally and fix
+   actual parser/API failures without evidence-free tolerance changes.
+2. Add a renderer-mode **automatic surface promotion** smoke that constructs known
+   coarse surface storage, enables the policy, and proves exactly one non-resident
+   tile is promoted with:
 
 ```text
 coarse_before
     == coarse_after_commit + GPU_seeded_fine_volume
 ```
 
-and the inverse after demotion.
-4. Add low-cadence automatic promotion for **surface/flood** candidates only.
-   Channel-only promotion stays explicit until river/reach reconstruction exists.
-5. Add representation-wide conservation diagnostics combining coarse storage,
-   GPU-reduced active sparse water and exported outlet volume.
-6. Replace uniform tile seeding with terrain-aware conservative prolongation while
-   preserving the same exact-volume transaction/acknowledgement interface.
-7. Separately run the existing Phase 2 GPU parity/reconstruction/soak gates and
-   exercise the reconstructed coat in a normal playable coast scene before turning
-   dynamic hydrology rendering on by default.
+3. Extend the same smoke through conservative fine->coarse collapse/demotion before
+   installing an automatic deactivation policy.
+4. Complete the representation-wide conservation ledger for fine external source
+   terms (rain/gameplay) so coarse + fine + exported outlet volume can be audited
+   during normal production simulation, not only controlled no-source gates.
+5. Replace uniform promotion seeding with terrain-aware conservative prolongation
+   while preserving the exact-volume transaction/acknowledgement interface.
+6. Build the persistent 1D river/reach representation; only then allow channel-only
+   anomalies to promote automatically into sparse 2D SWE.
+7. Separately run the Phase 2 GPU parity/reconstruction/soak gates and exercise the
+   reconstructed coat in a normal playable coast scene before dynamic hydrology
+   rendering is enabled by default.
