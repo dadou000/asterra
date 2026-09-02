@@ -1,4 +1,4 @@
-class_name HydroAutomaticSurfacePromotion
+class_name HydroAutomaticSurfacePromotionPolicy
 extends Node
 ## Low-cadence policy for promoting persistent coarse *surface flood* water into
 ## sparse SWE. This node never promotes channel-only anomalies. It delegates every
