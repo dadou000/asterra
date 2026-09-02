@@ -81,7 +81,6 @@ func _validate() -> String:
 			runtime.free()
 			return "latitude %.1f expected %.3f m, got %.6f m" % [latitude, expected, actual]
 
-	# Direction magnitude must never affect the planet-space mask.
 	var normalized_sample: float = float(runtime.call("evaluate_height",
 		_direction_at_latitude(35.0), 0.0, 0, 0, 0.0, 0.0))
 	var scaled_sample: float = float(runtime.call("evaluate_height",
@@ -90,8 +89,6 @@ func _validate() -> String:
 		runtime.free()
 		return "mask changed when the same planet direction was non-unit length"
 
-	# Reverse limits are intentionally normalized to the same band, avoiding a
-	# surprising empty mask when a beginner swaps North/South fields.
 	graph.call("set_node_parameter", mask_node_id, "south_deg", 30.0)
 	graph.call("set_node_parameter", mask_node_id, "north_deg", -30.0)
 	var reversed: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
@@ -104,7 +101,6 @@ func _validate() -> String:
 		runtime.free()
 		return "reversed latitude limits changed the intended band"
 
-	# Inversion is part of the same opcode, not a second graph implementation.
 	graph.call("set_node_parameter", mask_node_id, "south_deg", -30.0)
 	graph.call("set_node_parameter", mask_node_id, "north_deg", 30.0)
 	graph.call("set_node_parameter", mask_node_id, "invert", true)
@@ -121,7 +117,6 @@ func _validate() -> String:
 		runtime.free()
 		return "inverted mask did not complement the original [0,1] mask"
 
-	# Invalid staged settings must preserve the exact last-known-good bytecode.
 	var good_generation: int = int(inverted.get("generation", -1))
 	var good_high_lat: float = inverted_high_lat
 	graph.call("set_node_parameter", mask_node_id, "feather_deg", 120.0)
@@ -132,7 +127,7 @@ func _validate() -> String:
 		runtime.free()
 		return "invalid latitude mask replaced the last-known-good program"
 	var preserved_high_lat: float = float(runtime.call("evaluate_height",
-		_direction_at_latitude(60.0), 0.0, 0, 0, 0.0, 0.0))
+		_direction_at_latitude(60.0), 0.0, 0, 0.0, 0.0))
 	if not is_equal_approx(preserved_high_lat, good_high_lat):
 		runtime.free()
 		return "invalid latitude mask changed the active terrain result"
@@ -162,8 +157,7 @@ func _validate_schema_contract() -> String:
 
 	var graph: Resource = GRAPH.new()
 	graph.set(&"domain", GRAPH.Domain.DISPLACEMENT)
-	graph.set(&"nodes", [])
-	graph.set(&"links", [])
+	_clear_graph(graph)
 	var node_id: String = String(graph.call("add_node", "LATITUDE_MASK", Vector2(12.0, 34.0), {}))
 	if node_id.is_empty():
 		return "canonical add_node returned an empty Latitude Mask ID"
@@ -188,8 +182,7 @@ func _validate_schema_contract() -> String:
 
 func _install_mask_graph(graph: Resource, invert_mask: bool, feather_deg: float) -> String:
 	graph.set(&"domain", GRAPH.Domain.DISPLACEMENT)
-	graph.set(&"nodes", [])
-	graph.set(&"links", [])
+	_clear_graph(graph)
 	var height_id: String = String(graph.call("add_node", "CONSTANT_FLOAT",
 		Vector2(80.0, 100.0), {"value":100.0}))
 	var mask_id: String = String(graph.call("add_node", "LATITUDE_MASK",
@@ -207,6 +200,13 @@ func _install_mask_graph(graph: Resource, invert_mask: bool, feather_deg: float)
 			or not bool(graph.call("connect_nodes", multiply_id, 0, output_id, 0)):
 		return ""
 	return mask_id
+
+
+func _clear_graph(graph: Resource) -> void:
+	var empty_nodes: Array[Dictionary] = []
+	var empty_links: Array[Dictionary] = []
+	graph.set(&"nodes", empty_nodes)
+	graph.set(&"links", empty_links)
 
 
 func _node_by_id(graph: Resource, node_id: String) -> Dictionary:
