@@ -1,6 +1,6 @@
 extends "res://scripts/water/water_system_river_coupled.gd"
-## Select the teardown-hardened coupling implementation without duplicating the
-## WaterSystem river ownership/public API layer.
+## Select the teardown-hardened, suspendable coupling implementation without
+## duplicating the WaterSystem river ownership/public API layer.
 
 
 func _try_bind_river_reach_coupling() -> void:
@@ -11,7 +11,7 @@ func _try_bind_river_reach_coupling() -> void:
 	var runtime := sparse_runtime()
 	if runtime == null or not runtime.initialized_ok():
 		return
-	var coupling := HydroRiverReachCouplingProduction.new()
+	var coupling := HydroRiverReachCouplingCollapse.new()
 	coupling.name = "HydroRiverReachCoupling"
 	_river_reach_coupling = coupling
 	add_child(coupling)
