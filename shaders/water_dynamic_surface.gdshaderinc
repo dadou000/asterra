@@ -4,6 +4,10 @@
 // It is intentionally a local tangent-plane cache, not persistent world state.
 // Production sparse hydrology will repopulate/recenter this representation.
 //
+// IMPORTANT: the field owns its own planet-space tangent frame. It must never be
+// sampled in the toroidal clipmap's temporary anchor coordinates; otherwise an
+// ocean reanchor would move an already-simulated disturbance.
+//
 // RGBA channels:
 //   R = dynamic surface-height residual [m]
 //   G = tangent velocity X [m/s]
@@ -14,6 +18,9 @@ uniform sampler2D u_dynamic_surface_field : filter_linear, repeat_disable;
 uniform float u_dynamic_surface_enabled = 0.0;
 uniform vec2 u_dynamic_surface_center_plane = vec2(0.0);
 uniform float u_dynamic_surface_half_extent_m = 2048.0;
+uniform vec3 u_dynamic_surface_anchor_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 u_dynamic_surface_anchor_right = vec3(0.0, 0.0, -1.0);
+uniform vec3 u_dynamic_surface_anchor_up = vec3(0.0, 1.0, 0.0);
 
 struct WaterDynamicSurfaceSample {
 	float height;
@@ -29,6 +36,25 @@ WaterDynamicSurfaceSample water_dynamic_surface_empty() {
 	sample_value.activity = 0.0;
 	sample_value.valid = 0.0;
 	return sample_value;
+}
+
+// Azimuthal-equidistant map around the field's persistent world anchor. For the
+// current ~kilometre-scale cache this is effectively distortion free, while also
+// remaining correct if the visible ocean clipmap changes anchor/recenters.
+vec2 water_dynamic_surface_planet_to_plane(vec3 surface_dir, float planet_radius) {
+	vec3 a = normalize(u_dynamic_surface_anchor_dir);
+	vec3 d = normalize(surface_dir);
+	float mu = clamp(dot(a, d), -1.0, 1.0);
+	float theta = acos(mu);
+	if (theta <= 1e-7) return vec2(0.0);
+	vec3 tangent = d - a * mu;
+	float tangent_len = length(tangent);
+	if (tangent_len <= 1e-8) return vec2(0.0);
+	tangent /= tangent_len;
+	float arc_m = theta * max(planet_radius, 1.0);
+	return vec2(
+		dot(tangent, normalize(u_dynamic_surface_anchor_right)),
+		dot(tangent, normalize(u_dynamic_surface_anchor_up))) * arc_m;
 }
 
 WaterDynamicSurfaceSample water_dynamic_surface_sample(vec2 plane_m) {
@@ -49,9 +75,15 @@ WaterDynamicSurfaceSample water_dynamic_surface_sample(vec2 plane_m) {
 	return sample_value;
 }
 
-// Central difference in the same tangent-plane metric used by the ocean clipmap.
-// The dominant hydrology normal therefore comes from the exact same reconstructed
-// height field as vertex displacement instead of from an unrelated normal texture.
+WaterDynamicSurfaceSample water_dynamic_surface_sample_planet(
+		vec3 surface_dir, float planet_radius) {
+	return water_dynamic_surface_sample(
+		water_dynamic_surface_planet_to_plane(surface_dir, planet_radius));
+}
+
+// Central difference in the field's own metric tangent plane. The dominant
+// hydrology normal therefore comes from the exact same reconstructed height field
+// as vertex displacement instead of from an unrelated normal texture.
 vec2 water_dynamic_surface_gradient(vec2 plane_m) {
 	if (u_dynamic_surface_enabled < 0.5) return vec2(0.0);
 	ivec2 tex_size_i = textureSize(u_dynamic_surface_field, 0);
@@ -72,4 +104,9 @@ vec2 water_dynamic_surface_gradient(vec2 plane_m) {
 	return vec2(
 		(hx1 - hx0) / max(2.0 * texel_m.x, 1e-4),
 		(hy1 - hy0) / max(2.0 * texel_m.y, 1e-4));
+}
+
+vec2 water_dynamic_surface_gradient_planet(vec3 surface_dir, float planet_radius) {
+	return water_dynamic_surface_gradient(
+		water_dynamic_surface_planet_to_plane(surface_dir, planet_radius));
 }
