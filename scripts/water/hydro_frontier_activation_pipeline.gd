@@ -30,8 +30,11 @@ extends Node
 ##
 ## Once a hidden destination has received any physical parcel, later failures may
 ## no longer discard it. A late handoff failure therefore activates/preserves the
-## partially seeded destination before reporting batch failure. This keeps water
-## ownership conservative even when the runtime subsequently stops for diagnosis.
+## partially seeded destination before reporting batch failure. Other destinations
+## in that same batch are cleaned deterministically: already-active/edge-seeded
+## destinations remain fine-owned, while untouched ALLOCATING destinations restore
+## any provisional coarse parcel and release their slot. The pipeline therefore does
+## not rely on WaterSystem teardown to close representation ownership.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -405,9 +408,90 @@ func _fail_current_job(error: Error) -> void:
 
 func _fail_batch_preserving_state(error: Error) -> void:
 	var failed_batch := _batch_id
+	var cleanup_error := _cleanup_unfinished_destinations()
+	if cleanup_error != OK:
+		push_error("HydroFrontierActivationPipeline: batch %d cleanup failed (%d) after error %d." % [
+			failed_batch, int(cleanup_error), int(error)])
 	_busy = false
 	batch_failed.emit(failed_batch, error)
 	_reset_batch_state()
+
+
+## Close every destination that was reserved for this batch but never reached a
+## normal terminal state. Jobs begin only after all asynchronous coarse preseeds
+## have resolved, so at a handoff/connectivity failure there is no seed callback
+## still capable of racing this cleanup.
+func _cleanup_unfinished_destinations() -> Error:
+	if scheduler == null or scheduler.pool == null:
+		return ERR_UNCONFIGURED
+	var destinations: Dictionary = {} # tile id -> slot
+	for job in _jobs:
+		var destination_id := int(job.get("destination_tile_id", -1))
+		if destination_id >= 0 and not destinations.has(destination_id):
+			destinations[destination_id] = int(job.get("destination_slot", -1))
+
+	var cleanup_error := OK
+	var connectivity_dirty := false
+	for destination_variant: Variant in destinations.keys():
+		var destination_id := int(destination_variant)
+		var destination := HydroTileKey.unpack(destination_id)
+		if destination == null:
+			continue
+		var record := scheduler.pool.record(destination)
+		if record.is_empty():
+			# A current-job failure may already have cancelled this tile. If bookkeeping
+			# still contains a provisional coarse debit, request its restoration.
+			_restore_coarse_preseed(destination_id)
+			continue
+		var slot := int(record.get("slot", int(destinations[destination_id])))
+		var state := int(record.get("state", HydroTilePool.TileState.ALLOCATING))
+		var successful_handoffs := int(_handoff_success_by_destination.get(
+			destination_id, 0))
+
+		if state != HydroTilePool.TileState.ALLOCATING:
+			# Already solver-visible: its fine bytes are authoritative and any coarse
+			# preseed must stay debited.
+			_finalize_coarse_preseed(destination_id)
+			continue
+
+		if successful_handoffs > 0:
+			# At least one conservative edge transfer has already reduced a source tile.
+			# Publishing the partially constructed destination is the only operation that
+			# preserves that transferred water without inventing a reverse GPU handoff.
+			var activated := scheduler.activate_reserved(destination,
+				"frontier_batch_failure_preserve")
+			if activated < 0:
+				cleanup_error = ERR_CANT_ACQUIRE_RESOURCE
+				continue
+			_finalize_coarse_preseed(destination_id)
+			_mark_destination_result(destination_id,
+				"activated_after_batch_failure_cleanup")
+			destination_activated.emit(_batch_id, destination_id, activated)
+			connectivity_dirty = true
+			continue
+
+		# No edge parcel ever arrived. A provisional coarse seed can be returned
+		# exactly, after which the hidden dry/seeded slot may be released safely.
+		if coarse_preseed != null and coarse_preseed.has_provisional_tile(destination_id):
+			var restore := coarse_preseed.restore_tile(destination_id)
+			var restore_error := int(restore.get("error", FAILED))
+			if restore_error != OK and restore_error != ERR_BUSY:
+				if cleanup_error == OK:
+					cleanup_error = restore_error
+				continue
+		if scheduler.cancel_reserved(destination, "frontier_batch_failure_cleanup"):
+			_mark_destination_result(destination_id, "cancelled_after_batch_failure")
+			destination_cancelled.emit(_batch_id, destination_id, slot,
+				"frontier_batch_failure_cleanup")
+		else:
+			if cleanup_error == OK:
+				cleanup_error = ERR_CANT_ACQUIRE_RESOURCE
+
+	if connectivity_dirty and connectivity != null:
+		var conn_error := connectivity.sync_pool(scheduler.pool)
+		if conn_error != OK and cleanup_error == OK:
+			cleanup_error = conn_error
+	return cleanup_error
 
 
 func _finalize_coarse_preseed(destination_id: int) -> void:
