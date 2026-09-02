@@ -36,6 +36,8 @@ func _ready() -> void:
 	_require(east != null, "failed to construct same-face east neighbor")
 	_require(_pool.allocate(west, 0) == 0, "west tile did not receive slot 0")
 	_require(_pool.allocate(east, 0) == 1, "east tile did not receive slot 1")
+	_pool.set_state(west, HydroTilePool.TileState.ACTIVE, "test_bootstrap")
+	_pool.set_state(east, HydroTilePool.TileState.ACTIVE, "test_bootstrap")
 	if _finished:
 		return
 
@@ -82,7 +84,6 @@ func _on_connectivity_initialized() -> void:
 	if _finished:
 		return
 
-	# CPU-side sanity gate: slot 0 east and slot 1 west must point at each other.
 	var arrays := SparseHydroConnectivityGPU.build_arrays(_pool)
 	var slots := arrays["neighbor_slots"] as PackedInt32Array
 	_require(slots[0 * 4 + HydroTileTopology.DIR_EAST] == 1,
@@ -137,8 +138,6 @@ func _on_state_ready(_request_id: int, state: PackedFloat32Array) -> void:
 	_require(east_west_depth > 1.0,
 		"east tile did not receive water across resident west boundary (h=%.9g)" % east_west_depth)
 
-	# A cell away from the interface has equal states on all of its interfaces and
-	# should remain unchanged after this single local step.
 	var west_interior := _depth(state, 0, 2, MID)
 	var east_interior := _depth(state, 1, TILE_RES - 3, MID)
 	_require(absf(west_interior - 2.0) <= 1.0e-6,
