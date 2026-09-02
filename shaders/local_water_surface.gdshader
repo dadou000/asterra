@@ -17,6 +17,8 @@ uniform float u_surface_bias_m = 0.012;
 uniform float u_edge_feather_m = 0.10;
 uniform float u_ripple_strength = 0.035;
 uniform float u_ripple_scale_m = 3.2;
+uniform float u_ocean_handoff_low_m = 0.30;
+uniform float u_ocean_handoff_high_m = 0.55;
 
 uniform vec3 u_shallow : source_color = vec3(0.075, 0.31, 0.31);
 uniform vec3 u_shelf : source_color = vec3(0.025, 0.145, 0.225);
@@ -26,17 +28,15 @@ uniform vec3 u_foam : source_color = vec3(0.90, 0.94, 0.96);
 varying vec2 v_field_plane_m;
 varying vec3 v_surface_dir;
 varying vec3 v_planet;
-varying float v_vertex_depth;
 
 vec3 local_water_direction(vec2 field_plane_m) {
 	vec3 a = normalize(u_dynamic_surface_anchor_dir);
-	vec2 offset_m = field_plane_m;
-	float arc_m = length(offset_m);
+	float arc_m = length(field_plane_m);
 	if (arc_m <= 1e-7) return a;
 	float theta = arc_m / max(u_planet_radius, 1.0);
 	vec3 tangent = normalize(
-		u_dynamic_surface_anchor_right * offset_m.x
-		+ u_dynamic_surface_anchor_up * offset_m.y);
+		u_dynamic_surface_anchor_right * field_plane_m.x
+		+ u_dynamic_surface_anchor_up * field_plane_m.y);
 	return normalize(a * cos(theta) + tangent * sin(theta));
 }
 
@@ -68,15 +68,14 @@ vec4 local_water_raw(vec2 field_plane_m) {
 // A dry vertex adjacent to a wet texel is lifted to the neighboring water level.
 // The fragment wet mask still cuts the exact shoreline, but this prevents a wet
 // triangle from ramping down toward datum zero merely because one corner is dry.
-float local_water_vertex_eta(vec2 field_plane_m, out float depth) {
+float local_water_vertex_eta(vec2 field_plane_m) {
 	vec4 c = local_water_raw(field_plane_m);
-	depth = max(c.a, 0.0);
-	if (depth > u_min_depth_m) return c.r;
+	if (c.a > u_min_depth_m) return c.r;
 
 	ivec2 ts = textureSize(u_dynamic_surface_field, 0);
 	vec2 texel_m = 2.0 * max(u_dynamic_surface_half_extent_m, 1.0)
 		/ max(vec2(ts), vec2(1.0));
-	float best_depth = depth;
+	float best_depth = c.a;
 	float best_eta = c.r;
 	vec4 sx0 = local_water_raw(field_plane_m - vec2(texel_m.x, 0.0));
 	vec4 sx1 = local_water_raw(field_plane_m + vec2(texel_m.x, 0.0));
@@ -89,8 +88,7 @@ float local_water_vertex_eta(vec2 field_plane_m, out float depth) {
 	return best_depth > u_min_depth_m ? best_eta : 0.0;
 }
 
-vec2 local_water_height_gradient(vec2 field_plane_m, float center_height,
-		float center_depth) {
+vec2 local_water_height_gradient(vec2 field_plane_m, float center_height) {
 	ivec2 ts = textureSize(u_dynamic_surface_field, 0);
 	vec2 texel_m = 2.0 * max(u_dynamic_surface_half_extent_m, 1.0)
 		/ max(vec2(ts), vec2(1.0));
@@ -116,22 +114,19 @@ vec2 local_water_ripple_gradient(vec2 p, vec2 flow, float wind_speed) {
 	float k1 = 6.2831853 / (scale * 0.47);
 	float a = u_ripple_strength * mix(0.35, 1.0, smoothstep(0.0, 12.0, wind_speed));
 	float ph0 = dot(p, flow_dir) * k0 - t * (1.0 + length(flow) * 0.35);
-	float ph1 = dot(p, normalize(flow_dir * 0.55 + cross_dir * 0.84)) * k1 - t * 1.65;
-	return flow_dir * (a * cos(ph0))
-		+ normalize(flow_dir * 0.55 + cross_dir * 0.84) * (a * 0.55 * cos(ph1));
+	vec2 secondary = normalize(flow_dir * 0.55 + cross_dir * 0.84);
+	float ph1 = dot(p, secondary) * k1 - t * 1.65;
+	return flow_dir * (a * cos(ph0)) + secondary * (a * 0.55 * cos(ph1));
 }
 
 void vertex() {
-	vec2 local01 = UV;
 	vec2 field_plane_m = u_dynamic_surface_center_plane
-		+ (local01 * 2.0 - vec2(1.0)) * u_dynamic_surface_half_extent_m;
-	float vertex_depth;
-	float eta = local_water_vertex_eta(field_plane_m, vertex_depth);
+		+ (UV * 2.0 - vec2(1.0)) * u_dynamic_surface_half_extent_m;
+	float eta = local_water_vertex_eta(field_plane_m);
 	vec3 d = local_water_direction(field_plane_m);
 
 	v_field_plane_m = field_plane_m;
 	v_surface_dir = d;
-	v_vertex_depth = vertex_depth;
 	v_planet = d * (u_planet_radius + eta + u_surface_bias_m);
 	VERTEX = u_anchor_render
 		+ local_water_render_offset(field_plane_m, eta + u_surface_bias_m);
@@ -142,6 +137,14 @@ void fragment() {
 	WaterDynamicSurfaceSample water = water_dynamic_surface_sample_field(v_field_plane_m);
 	float depth = water.depth;
 	if (depth <= u_min_depth_m) discard;
+
+	// Because A stores physical h, bed is available exactly as eta-h without a
+	// second terrain lookup. Blend this coat in above the ocean shader's near-zero
+	// terrain handoff to avoid rendering both surfaces over open sea.
+	float bed = water.height - depth;
+	float land_handoff = smoothstep(u_ocean_handoff_low_m,
+		max(u_ocean_handoff_high_m, u_ocean_handoff_low_m + 1e-4), bed);
+	if (land_handoff <= 0.001) discard;
 
 	float wet_alpha = smoothstep(u_min_depth_m,
 		max(u_min_depth_m + u_edge_feather_m, u_min_depth_m * 2.0), depth);
@@ -156,8 +159,7 @@ void fragment() {
 	vec3 ty = normalize(cross(up, tx));
 	if (dot(ty, u_dynamic_surface_anchor_up) < 0.0) ty = -ty;
 
-	vec2 physical_grad = local_water_height_gradient(
-		v_field_plane_m, water.height, depth);
+	vec2 physical_grad = local_water_height_gradient(v_field_plane_m, water.height);
 	float wind_speed = water_wind_speed(up);
 	vec2 ripple_grad = local_water_ripple_gradient(
 		v_field_plane_m, water.velocity, wind_speed);
@@ -190,6 +192,6 @@ void fragment() {
 	// Thin flood water remains transparent enough to show terrain; deep local water
 	// becomes substantially opaque while Fresnel raises grazing reflectance.
 	float optical = 1.0 - exp(-depth * 0.32);
-	ALPHA = clamp((0.18 + optical * 0.62 + fres * 0.20) * wet_alpha,
-		0.02, 0.96);
+	ALPHA = clamp((0.18 + optical * 0.62 + fres * 0.20)
+		* wet_alpha * land_handoff, 0.02, 0.96);
 }
