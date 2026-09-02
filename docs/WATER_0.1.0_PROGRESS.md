@@ -246,7 +246,9 @@ Policy behavior:
 - seeds zero initial tangent velocity until the coarse model owns a trustworthy 2D
   local flood-velocity field;
 - clears policy-local latches/identity on coarse-store rebuild;
-- exposes counters/reasons through `HydroAutomaticSurfacePromotion.stats()`.
+- exposes counters/reasons through `HydroAutomaticSurfacePromotion.stats()`;
+- exposes deterministic `scan_once()` plus a pre-tree dependency-injection seam so
+  the renderer gate exercises the same production policy logic rather than a copy.
 
 Channel-only automatic promotion remains explicitly disabled until the river/reach
 representation exists.
@@ -271,13 +273,22 @@ Renderer-mode:
 ```text
 tests/water/HydroCoarseSeedGPUSmoke.tscn
 tests/water/PlanetHydroPromotionBridgeTests.tscn
+tests/water/HydroAutomaticSurfacePromotionGPU.tscn
 tests/water/HydroRepresentationAuditTests.tscn
 tests/water/SparseHydroFrontierHandoff.tscn
 ```
 
-The exact-seed gate creates a one-slot sparse atlas, plans a known parcel, seeds both
-A and B, then uses independent GPU volume reducers to verify both ping-pong states
-contain the planned represented volume.
+`HydroAutomaticSurfacePromotionGPU.tscn` constructs a known flooded coarse cell,
+runs the real policy + real transactional promotion bridge, reduces authoritative
+occupied sparse volume on GPU, and checks:
+
+```text
+coarse_before
+    == coarse_after_commit + GPU_seeded_fine_volume
+```
+
+It also verifies channel storage is unchanged and a second scan cannot duplicate the
+promotion because the mapped fine tile is already resident.
 
 ## Validation status
 
@@ -301,6 +312,7 @@ godot --path . tests/water/HydroSurfaceReconstructionSmoke.tscn
 godot --path . tests/water/HydroGPUSoak.tscn
 godot --path . tests/water/HydroCoarseSeedGPUSmoke.tscn
 godot --path . tests/water/PlanetHydroPromotionBridgeTests.tscn
+godot --path . tests/water/HydroAutomaticSurfacePromotionGPU.tscn
 godot --path . tests/water/HydroRepresentationAuditTests.tscn
 godot --path . tests/water/SparseHydroFrontierHandoff.tscn
 ```
@@ -315,26 +327,18 @@ Use the executable name/path appropriate for the local Godot 4.7 build.
 
 ## Next gates
 
-1. Run the new headless ownership/failure/promotion-policy gates locally and fix
-   actual parser/API failures without evidence-free tolerance changes.
-2. Add a renderer-mode **automatic surface promotion** smoke that constructs known
-   coarse surface storage, enables the policy, and proves exactly one non-resident
-   tile is promoted with:
-
-```text
-coarse_before
-    == coarse_after_commit + GPU_seeded_fine_volume
-```
-
-3. Extend the same smoke through conservative fine->coarse collapse/demotion before
-   installing an automatic deactivation policy.
-4. Complete the representation-wide conservation ledger for fine external source
+1. Run the new headless ownership/failure/promotion-policy gates and the renderer
+   automatic-promotion conservation gate locally; fix actual parser/API/numerical
+   failures without evidence-free tolerance changes.
+2. Extend the automatic-promotion smoke through a genuinely conservative
+   fine->coarse collapse/demotion path before installing automatic deactivation.
+3. Complete the representation-wide conservation ledger for fine external source
    terms (rain/gameplay) so coarse + fine + exported outlet volume can be audited
    during normal production simulation, not only controlled no-source gates.
-5. Replace uniform promotion seeding with terrain-aware conservative prolongation
+4. Replace uniform promotion seeding with terrain-aware conservative prolongation
    while preserving the exact-volume transaction/acknowledgement interface.
-6. Build the persistent 1D river/reach representation; only then allow channel-only
+5. Build the persistent 1D river/reach representation; only then allow channel-only
    anomalies to promote automatically into sparse 2D SWE.
-7. Separately run the Phase 2 GPU parity/reconstruction/soak gates and exercise the
+6. Separately run the Phase 2 GPU parity/reconstruction/soak gates and exercise the
    reconstructed coat in a normal playable coast scene before dynamic hydrology
    rendering is enabled by default.
