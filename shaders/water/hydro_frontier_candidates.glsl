@@ -8,11 +8,16 @@
 // Actual advective discharge and predictive dry-neighbor wetting discharge are
 // separate in the summary. The queue uses the larger value for activation; entry
 // flag bit0 records whether the predictive term dominated.
+//
+// When canonical state is supplied, only the emitting source edge is scanned to
+// attach max(h + bed) to the candidate. This gives CPU reachability a compact
+// hydraulic-head gate without reading boundary cell grids back from the GPU.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct FrontierEntry {
     uvec4 a; // slot, direction, floatBitsToUint(effective_flux), face
     uvec4 b; // level, x, y, flags(bit0=predicted dominated)
+    uvec4 c; // floatBitsToUint(source_edge_max_eta), reserved...
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer Summaries {
@@ -29,8 +34,29 @@ layout(set = 0, binding = 2, std430) buffer Queue {
     FrontierEntry entries[];
 } queue_out;
 layout(set = 0, binding = 3, std430) readonly buffer Params {
-    vec4 config; // capacity, threshold_m3s, max_candidates, reserved
+    vec4 config; // capacity, threshold_m3s, max_candidates, tile_resolution
 } params;
+layout(set = 0, binding = 4, std430) readonly buffer State {
+    vec4 cells[]; // canonical h,hu,hv,bed; may alias summary when tile_res=0
+};
+
+float source_edge_max_eta(uint slot, uint direction) {
+    uint r = uint(max(params.config.w, 0.0) + 0.5);
+    if (r == 0u) return -3.402823e38;
+    uint base = slot * r * r;
+    float eta = -3.402823e38;
+    for (uint k = 0u; k < r; ++k) {
+        uint local_i;
+        if (direction == 0u) local_i = k * r;
+        else if (direction == 1u) local_i = k * r + (r - 1u);
+        else if (direction == 2u) local_i = k;
+        else local_i = (r - 1u) * r + k;
+        vec4 q = cells[base + local_i];
+        if (any(isnan(q)) || any(isinf(q))) continue;
+        eta = max(eta, max(q.x, 0.0) + q.w);
+    }
+    return eta;
+}
 
 void emit_candidate(uint slot, uint direction, float actual_flux,
         float wetting_flux, uvec4 meta, uint max_candidates) {
@@ -44,6 +70,8 @@ void emit_candidate(uint slot, uint direction, float actual_flux,
     queue_out.entries[index].a = uvec4(
         slot, direction, floatBitsToUint(effective_flux), meta.x);
     queue_out.entries[index].b = uvec4(meta.y, meta.z, meta.w, flags);
+    queue_out.entries[index].c = uvec4(
+        floatBitsToUint(source_edge_max_eta(slot, direction)), 0u, 0u, 0u);
 }
 
 void maybe_emit(uint slot, uint direction, float actual_flux, float wetting_flux,
