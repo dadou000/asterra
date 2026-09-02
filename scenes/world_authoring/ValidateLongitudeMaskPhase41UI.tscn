@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/world_authoring/validate_longitude_mask_phase41_ui_ci.gd" id="1_phase41_longitude_ui"]
+
+[node name="ValidateLongitudeMaskPhase41UI" type="Node"]
+script = ExtResource("1_phase41_longitude_ui")
