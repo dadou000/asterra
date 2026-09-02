@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/world_authoring/validate_simplified_terrain_features_phase43_ci.gd" id="1"]
+
+[node name="ValidateSimplifiedTerrainFeaturesPhase43CI" type="Node"]
+script = ExtResource("1")
