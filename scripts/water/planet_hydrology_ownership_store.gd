@@ -144,12 +144,15 @@ func prepare_promotion(cell: int, requested_volume_m3: float) -> Dictionary:
 	var transaction_id := _next_promotion_transaction_id
 	_next_promotion_transaction_id += 1
 	var area := maxf(area_m2[cell], 1.0)
+	var direction := grid.cell_dir(cell)
 	var transaction := {
 		"error": OK,
 		"transaction_id": transaction_id,
-		"direction": "coarse_to_fine",
+		"transfer_direction": "coarse_to_fine",
+		# Compatibility: existing callers expect `direction` to be the cell Vector3.
+		"direction": direction,
 		"cell": cell,
-		"cell_direction": grid.cell_dir(cell),
+		"cell_direction": direction,
 		"cell_area_m2": area,
 		"reserved_volume_m3": requested_volume_m3,
 		"reserved_surface_volume_m3": surface_reserved,
@@ -229,12 +232,14 @@ func prepare_demotion(cell: int, surface_volume_m3: float,
 
 	var transaction_id := _next_demotion_transaction_id
 	_next_demotion_transaction_id += 1
+	var direction := grid.cell_dir(cell)
 	var transaction := {
 		"error": OK,
 		"transaction_id": transaction_id,
-		"direction": "fine_to_coarse",
+		"transfer_direction": "fine_to_coarse",
+		"direction": direction,
 		"cell": cell,
-		"cell_direction": grid.cell_dir(cell),
+		"cell_direction": direction,
 		"cell_area_m2": maxf(area_m2[cell], 1.0),
 		"incoming_volume_m3": total,
 		"incoming_surface_volume_m3": surface_volume_m3,
