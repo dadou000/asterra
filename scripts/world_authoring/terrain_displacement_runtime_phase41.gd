@@ -11,9 +11,10 @@ extends "res://scripts/world_authoring/terrain_displacement_runtime_phase37.gd"
 ##   0 latitude, 1 latitude inverted, 2 longitude, 3 longitude inverted.
 ## Geographic Region is not a new GPU opcode: one serialized node lowers to a
 ## latitude opcode, a longitude opcode and Multiply. Invert adds 1 - intersection.
-## Opcode 28 is the spherical Radial Area primitive. It stores center latitude,
-## center longitude, angular radius and exterior feather in one vec4. Inversion is
-## lowered with the existing Const/Sub opcodes instead of being hidden in its ABI.
+## Opcode 28 is the spherical Radial Area primitive. Positive p.w is an ordinary
+## cap with exterior feather. Negative p.w is an internal outside-cap selector with
+## inward feather; Ring Area multiplies that inner selector by an ordinary outer cap.
+## Direct Radial Area authoring never emits a negative feather.
 
 const OP_LATITUDE_MASK: int = 27
 const OP_RADIAL_MASK: int = 28
@@ -22,6 +23,7 @@ const MASK_AXIS_LATITUDE := "latitude"
 const MASK_AXIS_LONGITUDE := "longitude"
 const MASK_AXIS_REGION := "region"
 const MASK_AXIS_RADIAL := "radial"
+const MASK_AXIS_RING := "ring"
 
 
 func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
@@ -43,6 +45,11 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 				if radial_instruction >= 0:
 					memo[node_id] = radial_instruction
 				return radial_instruction
+			if axis == MASK_AXIS_RING:
+				var ring_instruction: int = _compile_ring_area(parameters)
+				if ring_instruction >= 0:
+					memo[node_id] = ring_instruction
+				return ring_instruction
 
 			var edge_a_deg: float = float(parameters.get("south_deg", -30.0))
 			var edge_b_deg: float = float(parameters.get("north_deg", 30.0))
@@ -62,7 +69,7 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 						return -1
 					axis_code = 2.0
 				_:
-					_warnings.append("Spatial Mask axis must be latitude, longitude, region or radial; candidate rejected.")
+					_warnings.append("Spatial Mask axis must be latitude, longitude, region, radial or ring; candidate rejected.")
 					return -1
 			var flags: float = axis_code + (1.0 if invert_mask else 0.0)
 			var instruction: int = _append_instruction(OP_LATITUDE_MASK, -1, -1, -1,
@@ -91,9 +98,6 @@ func _compile_geographic_region(parameters: Dictionary) -> int:
 	if not _valid_longitude_band(west_deg, east_deg, longitude_feather_deg):
 		return -1
 
-	# Deliberately reuse the exact two GPU/CPU spatial primitives already validated
-	# for the individual editor nodes. No geographic-region shader implementation is
-	# allowed to drift from those definitions.
 	var latitude_instruction: int = _append_instruction(OP_LATITUDE_MASK, -1, -1, -1,
 		Vector4(south_deg, north_deg, latitude_feather_deg, 0.0))
 	if latitude_instruction < 0:
@@ -143,6 +147,46 @@ func _compile_radial_area(parameters: Dictionary) -> int:
 		Vector4.ZERO)
 
 
+func _compile_ring_area(parameters: Dictionary) -> int:
+	var center_latitude_deg: float = float(parameters.get("center_latitude_deg", 0.0))
+	var center_longitude_deg: float = float(parameters.get("center_longitude_deg", 0.0))
+	var inner_radius_deg: float = float(parameters.get("inner_radius_deg", 10.0))
+	var outer_radius_deg: float = float(parameters.get("outer_radius_deg", 20.0))
+	var feather_deg: float = float(parameters.get("feather_deg", 5.0))
+	var invert_mask: bool = bool(parameters.get("invert", false))
+	if not is_finite(center_latitude_deg) or not is_finite(center_longitude_deg) \
+			or not is_finite(inner_radius_deg) or not is_finite(outer_radius_deg) \
+			or not is_finite(feather_deg):
+		_warnings.append("Ring Area contains a non-finite setting; candidate rejected.")
+		return -1
+	if not _valid_ring_area(center_latitude_deg, center_longitude_deg,
+			inner_radius_deg, outer_radius_deg, feather_deg):
+		return -1
+
+	# The inner selector uses opcode 28's private negative-feather mode: it is 1 at
+	# and beyond the inner radius, with its fade occurring inward into the center
+	# hole. The outer selector is the ordinary Radial Area cap. Multiplication gives
+	# an exact spherical annulus while keeping both requested boundaries fully 1.0.
+	var inner_instruction: int = _append_instruction(OP_RADIAL_MASK, -1, -1, -1,
+		Vector4(center_latitude_deg, center_longitude_deg, inner_radius_deg, -feather_deg))
+	if inner_instruction < 0:
+		return -1
+	var outer_instruction: int = _append_instruction(OP_RADIAL_MASK, -1, -1, -1,
+		Vector4(center_latitude_deg, center_longitude_deg, outer_radius_deg, feather_deg))
+	if outer_instruction < 0:
+		return -1
+	var ring_instruction: int = _append_instruction(OP_MUL,
+		inner_instruction, outer_instruction, -1, Vector4.ZERO)
+	if ring_instruction < 0 or not invert_mask:
+		return ring_instruction
+	var one_instruction: int = _append_instruction(OP_CONST, -1, -1, -1,
+		Vector4(1.0, 0.0, 0.0, 0.0))
+	if one_instruction < 0:
+		return -1
+	return _append_instruction(OP_SUB, one_instruction, ring_instruction, -1,
+		Vector4.ZERO)
+
+
 func _valid_latitude_band(south_deg: float, north_deg: float, feather_deg: float) -> bool:
 	if south_deg < -90.0 or south_deg > 90.0 \
 			or north_deg < -90.0 or north_deg > 90.0:
@@ -178,6 +222,20 @@ func _valid_radial_area(center_latitude_deg: float, center_longitude_deg: float,
 		return false
 	if feather_deg < 0.0 or feather_deg > 180.0:
 		_warnings.append("Radial Area feather must stay between 0 and 180 degrees; candidate rejected.")
+		return false
+	return true
+
+
+func _valid_ring_area(center_latitude_deg: float, center_longitude_deg: float,
+		inner_radius_deg: float, outer_radius_deg: float, feather_deg: float) -> bool:
+	if not _valid_radial_area(center_latitude_deg, center_longitude_deg,
+			outer_radius_deg, feather_deg):
+		return false
+	if inner_radius_deg < 0.0 or inner_radius_deg > 180.0:
+		_warnings.append("Ring Area inner radius must stay between 0 and 180 degrees; candidate rejected.")
+		return false
+	if inner_radius_deg > outer_radius_deg:
+		_warnings.append("Ring Area inner radius cannot exceed outer radius; candidate rejected.")
 		return false
 	return true
 
@@ -403,11 +461,8 @@ static func _longitude_mask_value(direction_normalized: Vector3, parameters: Vec
 	var along_deg: float = fposmod(longitude_deg - west_deg, 360.0)
 	var value: float = 0.0
 	if span_deg <= 1e-6:
-		# Equal edges intentionally mean the entire circumference.
 		value = 1.0
 	elif along_deg <= span_deg:
-		# Match Latitude Band semantics: the requested band is fully selected and
-		# feather only softens the exterior, never the interior.
 		value = 1.0
 	elif feather_deg > 1e-6:
 		var after_east: float = along_deg - span_deg
@@ -439,7 +494,19 @@ static func _radial_mask_value(direction_normalized: Vector3, parameters: Vector
 	var angle_deg: float = rad_to_deg(acos(clampf(
 		direction_normalized.dot(center_direction), -1.0, 1.0)))
 	var radius_deg: float = maxf(parameters.z, 0.0)
-	var feather_deg: float = maxf(parameters.w, 0.0)
+	var signed_feather_deg: float = parameters.w
+	var feather_deg: float = absf(signed_feather_deg)
+
+	if signed_feather_deg < 0.0:
+		# Internal Ring Area inner-edge mode. The selected side is outside the cap,
+		# including the exact radius. Feather lies only inside the excluded hole.
+		if angle_deg >= radius_deg:
+			return 1.0
+		if feather_deg <= 1e-6:
+			return 0.0
+		return clampf(_smoothstep_static(radius_deg - feather_deg,
+			radius_deg, angle_deg), 0.0, 1.0)
+
 	if radius_deg >= 180.0 - 1e-6 or angle_deg <= radius_deg:
 		return 1.0
 	if feather_deg <= 1e-6:
@@ -467,6 +534,8 @@ func stats() -> Dictionary:
 	out["spatial_longitude_mask"] = true
 	out["spatial_geographic_region_mask"] = true
 	out["spatial_radial_mask"] = true
+	out["spatial_ring_mask"] = true
 	out["geographic_region_lowering"] = "latitude*longitude; invert=1-region"
 	out["radial_mask_metric"] = "great_circle_angle"
+	out["ring_mask_lowering"] = "inner_outside_radial*outer_radial; invert=1-ring"
 	return out
