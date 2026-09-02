@@ -3,9 +3,8 @@ extends Node
 ## Compact GPU summary pass for SparseHydroAtlasGPU.
 ##
 ## Production policy can consume summary_rid() without reading cell grids. The
-## async readback parser exists for tests/debug. Actual advective boundary Q and
-## predictive dry-neighbor wetting Q are kept separate so diagnostics remain
-## physically interpretable while the frontier can still wake from hydrostatic head.
+## async readback parser exists for tests/debug. Actual advective boundary Q,
+## predictive dry-neighbor wetting Q and edge free-surface head are kept separate.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -14,7 +13,7 @@ signal summaries_ready(request_id: int, summaries: Array[Dictionary])
 signal classification_failed(request_id: int, error: Error)
 signal released
 
-const SUMMARY_VEC4S := 4
+const SUMMARY_VEC4S := 5
 const SUMMARY_BYTES_PER_TILE := SUMMARY_VEC4S * 16
 const PARAM_BYTES := 32
 
@@ -202,6 +201,10 @@ func _on_summary_bytes(bytes: PackedByteArray, request_id: int) -> void:
 			"wetting_east_m3s": bytes.decode_float(o + 52),
 			"wetting_south_m3s": bytes.decode_float(o + 56),
 			"wetting_north_m3s": bytes.decode_float(o + 60),
+			"surface_west_m": bytes.decode_float(o + 64),
+			"surface_east_m": bytes.decode_float(o + 68),
+			"surface_south_m": bytes.decode_float(o + 72),
+			"surface_north_m": bytes.decode_float(o + 76),
 		})
 	call_deferred("_publish_summaries", request_id, out)
 
