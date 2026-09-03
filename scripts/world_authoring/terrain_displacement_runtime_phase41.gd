@@ -327,10 +327,6 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 				var terrace: float = floor((terrace_field * 0.5 + 0.5) * terrace_steps) \
 					/ maxf(terrace_steps - 1.0, 1.0)
 				out = a + (terrace * 2.0 - 1.0) * p.y
-			OP_BILLOW_NOISE:
-				out = a + _terrain_billow_fbm(d, p.x, int(round(p.w)), int(round(p.z))) * p.y
-			OP_VORONOI_RIDGES:
-				out = a + _terrain_worley_ridge(d, p.x, int(round(p.w)), int(round(p.z))) * p.y
 			_: out = 0.0
 		values[index] = out if is_finite(out) else 0.0
 	return float(values[_output_index]) if _output_index < values.size() else 0.0

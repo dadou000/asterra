@@ -30,20 +30,35 @@ const PHASE47_BIOME_TAB: int = 1
 # element is an ordinary serialized displacement node, so the profile keeps the
 # exact all-ring CPU/GPU bytecode path of every other terrain edit.
 const PHASE47_BIOME_BASE_TYPES: PackedStringArray = [
-	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF", "BILLOW_NOISE", "VORONOI_RIDGES",
+	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF",
 ]
 const PHASE47_BIOME_BASE_LABELS: PackedStringArray = [
 	"Soft hills (FBM noise)", "Ridged peaks", "Terraced relief",
-	"Billow noise (rounded)", "Voronoi ridges (cellular)",
 ]
 const PHASE47_EROSION_TYPE := "EROSION_CHANNELS"
 const PHASE47_SEDIMENT_TYPE := "SEDIMENT_DEPOSIT"
 # Superset used only when reading an existing graph, so a profile authored before
 # the chain layout still resolves its base shape.
 const PHASE47_BIOME_PROFILE_TYPES: PackedStringArray = [
-	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF", "BILLOW_NOISE", "VORONOI_RIDGES",
+	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF",
 	"EROSION_CHANNELS", "SEDIMENT_DEPOSIT",
 ]
+# Every node type a valid biome-profile graph may contain. Anything else (e.g. a
+# retired BILLOW_NOISE node left in a saved profile) makes the shared displacement
+# compiler reject the whole terrain program, so such graphs are auto-repaired.
+const PHASE47_BIOME_GRAPH_NODE_TYPES: PackedStringArray = [
+	"CONSTANT_FLOAT", "OUTPUT_DISPLACEMENT",
+	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF",
+	"EROSION_CHANNELS", "SEDIMENT_DEPOSIT",
+]
+const PHASE47_BIOME_LEGACY_TYPE_MAP: Dictionary = {
+	"BILLOW_NOISE": "NOISE_LAYER",
+	"VORONOI_RIDGES": "RIDGED_MOUNTAINS",
+}
+# The 15-clipmap-ring bytecode VM has 32 instructions. Every enabled biome profile
+# costs ~4-6, so only this many customised profiles are kept compiled at once; the
+# rest are turned off (never deleted) and can be re-enabled from their tab.
+const PHASE47_MAX_ACTIVE_BIOME_PROFILES: int = 4
 
 # Ported per-biome terrain character. The renderer already varies its geomorph
 # landform weights by climate/soil and the surface shader already colours every
@@ -68,13 +83,13 @@ const PHASE47_BIOME_TERRAIN_DEFAULTS: Dictionary = {
 	8:  {"base_type":"NOISE_LAYER", "scale":7.0, "amount":30.0, "passes":4, "erosion":26.0, "sedimentation":16.0},
 	9:  {"base_type":"RIDGED_MOUNTAINS", "scale":6.0, "amount":42.0, "passes":3, "erosion":12.0, "sedimentation":6.0},
 	10: {"base_type":"NOISE_LAYER", "scale":3.5, "amount":12.0, "passes":2, "erosion":3.0, "sedimentation":9.0},
-	11: {"base_type":"BILLOW_NOISE", "scale":5.0, "amount":34.0, "passes":2, "erosion":0.0, "sedimentation":18.0},
+	11: {"base_type":"NOISE_LAYER", "scale":5.0, "amount":34.0, "passes":2, "erosion":0.0, "sedimentation":18.0},
 	12: {"base_type":"NOISE_LAYER", "scale":4.0, "amount":16.0, "passes":2, "erosion":5.0, "sedimentation":12.0},
 	13: {"base_type":"NOISE_LAYER", "scale":6.0, "amount":24.0, "passes":3, "erosion":18.0, "sedimentation":14.0},
 	14: {"base_type":"NOISE_LAYER", "scale":7.0, "amount":30.0, "passes":4, "erosion":34.0, "sedimentation":20.0},
 	15: {"base_type":"NOISE_LAYER", "scale":2.5, "amount":3.0, "passes":1, "erosion":0.0, "sedimentation":26.0},
 	16: {"base_type":"TERRACE_RELIEF", "scale":5.0, "amount":72.0, "steps":6, "erosion":20.0, "sedimentation":4.0},
-	17: {"base_type":"VORONOI_RIDGES", "scale":8.0, "amount":70.0, "passes":4, "erosion":14.0, "sedimentation":0.0},
+	17: {"base_type":"RIDGED_MOUNTAINS", "scale":8.0, "amount":70.0, "passes":4, "erosion":14.0, "sedimentation":0.0},
 }
 
 const PHASE47_PRESETS: Array[Dictionary] = [
@@ -104,6 +119,7 @@ const PHASE47_PRESETS: Array[Dictionary] = [
 var _phase47_editor_tab: int = PHASE47_GLOBAL_TAB
 var _phase47_profile_blend_source: int = 6
 var _phase47_profile_blend_amount: float = 0.5
+var _phase47_diag_probe_cache: Dictionary = {}
 
 
 func _build_shell() -> void:
@@ -143,6 +159,15 @@ func _build_terrain_page() -> void:
 	if not _phase47_has_production_controls(graph):
 		_phase47_build_repair_panel(graph)
 		return
+
+	# Runs on every Terrain-page build. Repairs retired nodes and keeps the enabled
+	# biome-profile set to what the shared displacement VM can compile. Away from
+	# the Biome Terrain tab every profile is disabled, so simply opening the editor
+	# never triggers an authored-shader recompile from a stale multi-biome profile;
+	# a profile is enabled only while you are looking at that biome.
+	_phase47_migrate_biome_slots(terrain,
+		clampi(_phase28_biome_id, 0, BIOME_NAMES.size() - 1)
+		if _phase47_editor_tab == PHASE47_BIOME_TAB else -1)
 
 	_phase47_build_all_rings_notice()
 	_phase47_build_editor_tabs()
@@ -314,6 +339,286 @@ func _phase47_build_biome_editor(terrain: Resource) -> void:
 		return
 
 	_phase47_build_biome_profile_controls(terrain, slot, biome_id)
+	_phase47_build_biome_diagnostics(terrain, biome_id)
+
+
+## Keep the compiled biome-profile set small and legal. Everything here mutates the
+## staged slots in place and marks dirty ONCE at the end -- it must never call
+## stage_action / remove_terrain_shader_slot per slot, each of which deep-copies
+## and re-serialises the whole staged system (that froze the tab).
+##  - repair graphs that still contain a retired node type (BILLOW_NOISE, ...);
+##  - migrate old "strength 0" turn-offs to a disabled slot;
+##  - keep only the selected biome + up to N edited biomes enabled; the 15-ring
+##    32-instruction VM cannot compile more. Nothing is deleted, only disabled.
+func _phase47_migrate_biome_slots(terrain: Resource, selected_biome: int) -> void:
+	if terrain == null:
+		return
+	var changed: bool = false
+	var enabled_customised: Array[Resource] = []
+	for value: Variant in terrain.get(&"displacement_slots") as Array:
+		var slot: Resource = value as Resource
+		if slot == null:
+			continue
+		var sid: String = String(slot.get(&"slot_id"))
+		if not sid.begins_with(PHASE47_BIOME_PROFILE_PREFIX):
+			continue
+		var biome_id: int = sid.trim_prefix(PHASE47_BIOME_PROFILE_PREFIX).to_int()
+		var graph: Resource = slot.get(&"graph") as Resource
+
+		if graph != null and _phase47_graph_has_unsupported_node(graph):
+			_phase47_rebuild_biome_profile(graph, _phase47_biome_profile(graph))
+			changed = true
+
+		if bool(slot.get(&"enabled")) and is_equal_approx(float(slot.get(&"strength")), 0.0):
+			slot.set(&"enabled", false)
+			slot.set(&"strength", 1.0)
+			changed = true
+
+		if not bool(slot.get(&"enabled")):
+			continue
+		var at_default: bool = _phase47_biome_profile_is_default(slot, biome_id)
+		if biome_id == selected_biome:
+			continue
+		if at_default:
+			# Auto-provisioned, never edited: disable it so only the biome you are
+			# actually looking at carries its default character.
+			slot.set(&"enabled", false)
+			changed = true
+		else:
+			enabled_customised.append(slot)
+
+	if enabled_customised.size() > PHASE47_MAX_ACTIVE_BIOME_PROFILES:
+		for i: int in range(PHASE47_MAX_ACTIVE_BIOME_PROFILES, enabled_customised.size()):
+			enabled_customised[i].set(&"enabled", false)
+			changed = true
+
+	if changed:
+		terrain.call("ensure_valid")
+		_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+
+
+func _phase47_graph_has_unsupported_node(graph: Resource) -> bool:
+	if graph == null:
+		return false
+	for value: Variant in graph.get(&"nodes") as Array:
+		if value is Dictionary:
+			if not PHASE47_BIOME_GRAPH_NODE_TYPES.has(
+					String((value as Dictionary).get("type", ""))):
+				return true
+	return false
+
+
+func _phase47_biome_profile_is_default(slot: Resource, biome_id: int) -> bool:
+	if slot == null:
+		return false
+	if not is_equal_approx(float(slot.get(&"strength")), 1.0):
+		return false
+	if int(slot.get(&"blend_mode")) != SHADER_SLOT_MODEL.BlendMode.ADD:
+		return false
+	return _phase47_biome_profile_is_default_graph(slot.get(&"graph") as Resource, biome_id)
+
+
+func _phase47_biome_profile_is_default_graph(graph: Resource, biome_id: int) -> bool:
+	if graph == null:
+		return false
+	var got: Dictionary = _phase47_biome_profile(graph)
+	var want: Dictionary = _phase47_biome_terrain_defaults(biome_id)
+	for key: String in ["scale", "amount", "passes", "steps", "erosion", "sedimentation"]:
+		if not is_equal_approx(float(got.get(key, 0.0)), float(want.get(key, 0.0))):
+			return false
+	return String(got.get("base_type", "")) == String(want.get("base_type", ""))
+
+
+func _phase47_build_biome_diagnostics(terrain: Resource, biome_id: int) -> void:
+	var panel := PanelContainer.new()
+	panel.name = "BiomeTerrainDiagnostics"
+	_workspace.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "Live render diagnostics — updates ~2×/s"
+	title.add_theme_font_size_override("font_size", 15)
+	box.add_child(title)
+	var readout := Label.new()
+	readout.name = "BiomeTerrainDiagReadout"
+	readout.add_theme_font_size_override("font_size", 12)
+	readout.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	readout.custom_minimum_size = Vector2(520.0, 0.0)
+	box.add_child(readout)
+	readout.text = _phase47_biome_diag_text(terrain, biome_id)
+	var timer := Timer.new()
+	timer.wait_time = 1.0
+	timer.autostart = true
+	timer.timeout.connect(func() -> void:
+		if is_instance_valid(readout):
+			readout.text = _phase47_biome_diag_text(terrain, biome_id)
+	)
+	panel.add_child(timer)
+
+
+func _phase47_biome_diag_text(terrain: Resource, biome_id: int) -> String:
+	var lines: PackedStringArray = PackedStringArray()
+
+	var all_ids := PackedStringArray()
+	for sv: Variant in terrain.get(&"displacement_slots") as Array:
+		if sv is Resource:
+			all_ids.append(String((sv as Resource).get(&"slot_id")))
+	lines.append("[0] displacement_slots: %s" % str(all_ids))
+
+	var slot: Resource = _phase47_biome_profile_slot(terrain, biome_id)
+	var graph: Resource = slot.get(&"graph") as Resource if slot != null else null
+	var node_types := PackedStringArray()
+	var output_node_id := ""
+	var link_count := 0
+	if graph != null:
+		for value: Variant in graph.get(&"nodes") as Array:
+			if value is Dictionary:
+				var nd: Dictionary = value as Dictionary
+				node_types.append(String(nd.get("type", "?")))
+				if String(nd.get("type", "")) == "OUTPUT_DISPLACEMENT":
+					output_node_id = String(nd.get("id", ""))
+		link_count = (graph.get(&"links") as Array).size()
+	var output_wired := false
+	if graph != null and not output_node_id.is_empty():
+		for lv: Variant in graph.get(&"links") as Array:
+			if lv is Dictionary and String((lv as Dictionary).get("to", "")) == output_node_id:
+				output_wired = true
+	lines.append("[1] slot '%s%d': %s  strength=%s  blend=%s  mask_mode=%s  biome_ids=%s" % [
+		PHASE47_BIOME_PROFILE_PREFIX, biome_id,
+		("FOUND enabled=%s" % slot.get(&"enabled")) if slot != null else "MISSING",
+		("%.2f" % float(slot.get(&"strength"))) if slot != null else "-",
+		int(slot.get(&"blend_mode")) if slot != null else -1,
+		int(slot.get(&"biome_mask_mode")) if slot != null else -1,
+		str(slot.get(&"biome_ids")) if slot != null else "-"])
+	lines.append("    graph: %d nodes %s, %d links, output_mode=%s | OUTPUT node=%s, output wired=%s | rev=%s" % [
+		node_types.size(), str(node_types), link_count,
+		int(graph.get(&"displacement_output_mode")) if graph != null else -1,
+		("yes" if not output_node_id.is_empty() else "MISSING"), output_wired,
+		int(graph.get(&"revision")) if graph != null else -1])
+
+	var renderer: Node = get_tree().root.get_node_or_null("/root/GroundGeometryClipmap")
+	if renderer == null:
+		lines.append("[2] renderer /root/GroundGeometryClipmap: NOT FOUND")
+		return "\n".join(lines)
+	var rt: Resource = null
+	if renderer.has_method("_active_authoring_terrain"):
+		rt = renderer.call("_active_authoring_terrain") as Resource
+	lines.append("[2] renderer authoring terrain: %s   editor-staged match: %s" % [
+		"present" if rt != null else "NULL", rt == terrain])
+	lines.append("    blank_backend=%s  blank_shader=%s  authored_shader_active=%s  fp=%s" % [
+		renderer.call("_blank_backend") if renderer.has_method("_blank_backend") else "?",
+		renderer.get("_blank_shader_active"), renderer.get("_authored_shader_active"),
+		str(renderer.get("_displacement_fingerprint")).substr(0, 40)])
+
+	var mat: ShaderMaterial = renderer.get("_material") as ShaderMaterial
+	if mat != null and mat.shader != null:
+		var code: String = mat.shader.code
+		lines.append("[3] material shader: name='%s'  has author_procedural_sample=%s  has #define=%s" % [
+			mat.shader.resource_name,
+			code.find("author_procedural_sample") >= 0,
+			code.find("#define ASTERRA_AUTHORED_TERRAIN") >= 0])
+		lines.append("    u_author_disp_ready=%s  count=%s  output=%s  u_ctx_ready=%s  cache_ready=%s  stable_disp=%s  height_enabled=%s" % [
+			mat.get_shader_parameter("u_author_disp_ready"),
+			mat.get_shader_parameter("u_author_disp_count"),
+			mat.get_shader_parameter("u_author_disp_output"),
+			mat.get_shader_parameter("u_ctx_ready"),
+			mat.get_shader_parameter("u_terrain_cache_ready"),
+			mat.get_shader_parameter("u_stable_displacement"),
+			mat.get_shader_parameter("u_height_enabled")])
+	else:
+		lines.append("[3] material shader: NULL")
+
+	var disp: Node = get_tree().get_first_node_in_group(&"terrain_displacement_runtime")
+	if disp != null and disp.has_method("stats"):
+		var st: Dictionary = disp.call("stats")
+		lines.append("[4] disp runtime %s: active=%s  instructions=%s  output_index=%s" % [
+			(disp.get_script() as Script).resource_path.get_file(),
+			st.get("active"), st.get("instructions", st.get("instruction_count", -1)),
+			st.get("output_index", "?")])
+		lines.append("    compile warnings: %s" % str(st.get("warnings", [])))
+		lines.append("    candidate_valid=%s  rejected_candidates=%s" % [
+			st.get("candidate_valid", "?"), st.get("rejected_candidates", "?")])
+		lines.append("    REJECT REASON: %s" % str(st.get("candidate_warnings", [])))
+		lines.append("    active_fp=%s" % str(st.get("active_fingerprint", "?")).substr(0, 120))
+		lines.append("    attempt_fp=%s" % str(st.get("attempt_fingerprint", "?")).substr(0, 120))
+	else:
+		lines.append("[4] disp runtime: NOT in group 'terrain_displacement_runtime'")
+
+	var probe: Vector3 = _phase47_biome_probe_dir(biome_id) if _phase47_diag_can_sample() else Vector3.ZERO
+	if probe != Vector3.ZERO and disp != null and disp.has_method("evaluate_height"):
+		var on_b: float = float(disp.call("evaluate_height", probe, 0.0, 0, biome_id, NAN, 0.0))
+		var other: int = (biome_id + 3) % BIOME_NAMES.size()
+		var off_b: float = float(disp.call("evaluate_height", probe, 0.0, 0, other, NAN, 0.0))
+		lines.append("[5] CPU evaluate_height on a %s point: this-biome=%.2f m  other-biome=%.2f m" % [
+			BIOME_NAMES[biome_id], on_b, off_b])
+		lines.append("    (this-biome must be non-zero AND the shader flags above must be true for the render to move)")
+	else:
+		lines.append("[5] CPU eval: no %s land point found near you — fly over that biome" % BIOME_NAMES[biome_id])
+
+	var pdir: Vector3 = _phase47_diag_player_dir()
+	if pdir != Vector3.ZERO and _phase47_diag_can_sample():
+		var info: Dictionary = Planet.call("sample_info", pdir)
+		var here: int = int(info.get("biome", -1))
+		lines.append("[6] you are on: %s (%d) — %s" % [
+			str(info.get("biome_name", "?")), here,
+			"SELECTED biome, edits show here" if here == biome_id
+			else "NOT selected; pick '%s' or fly to a %s area" % [
+				str(info.get("biome_name", "?")), BIOME_NAMES[biome_id]]])
+	return "\n".join(lines)
+
+
+func _phase47_diag_player_dir() -> Vector3:
+	if _player == null and _world_host != null:
+		_player = _world_host.get("player") as Node
+	if _player == null:
+		return Vector3.ZERO
+	if _player.has_method("up_dir"):
+		var d: Variant = _player.call("up_dir")
+		if d is Vector3 and (d as Vector3).length_squared() > 0.5:
+			return (d as Vector3).normalized()
+	var wp: Variant = _player.get("world_pos")
+	if wp != null and wp.has_method("normalized"):
+		var n: Variant = wp.normalized()
+		if n is Object and n.has_method("to_v3"):
+			return n.to_v3()
+	return Vector3.ZERO
+
+
+func _phase47_diag_can_sample() -> bool:
+	return Planet != null and bool(Planet.get("ready_state")) \
+		and Planet.get("fields") != null and Planet.has_method("sample_info")
+
+
+func _phase47_biome_probe_dir(biome_id: int) -> Vector3:
+	if _phase47_diag_probe_cache.has(biome_id):
+		return _phase47_diag_probe_cache[biome_id]
+	if not _phase47_diag_can_sample():
+		return Vector3.ZERO
+	# Prefer somewhere near the player, then fall back to a bounded global scan.
+	var candidates: Array[Vector3] = []
+	var here: Vector3 = _phase47_diag_player_dir()
+	if here != Vector3.ZERO:
+		var basis: Array = CubeSphere.tangent_basis(here)
+		var east: Vector3 = basis[0]
+		var north: Vector3 = basis[1]
+		for i: int in 24:
+			var ang: float = TAU * float(i) / 24.0
+			for r: float in [0.02, 0.06, 0.14]:
+				candidates.append((here + (east * cos(ang) + north * sin(ang)) * r).normalized())
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1234 + biome_id
+	for _i: int in 120:
+		candidates.append(Vector3(rng.randfn(), rng.randfn(), rng.randfn()).normalized())
+	for d: Vector3 in candidates:
+		if d.length_squared() < 0.5:
+			continue
+		var info: Dictionary = Planet.call("sample_info", d)
+		if int(info.get("biome", -1)) == biome_id:
+			_phase47_diag_probe_cache[biome_id] = d
+			return d
+	_phase47_diag_probe_cache[biome_id] = Vector3.ZERO
+	return Vector3.ZERO
 
 
 func _phase47_pick_biome_under_cursor() -> void:
@@ -345,8 +650,18 @@ func _phase47_ensure_biome_profile(terrain: Resource, biome_id: int) -> Resource
 	# a button press. It is a normal scoped displacement slot, so it travels the
 	# identical all-ring cache / contact path as the Global Terrain edit.
 	var slot: Resource = _phase47_biome_profile_slot(terrain, biome_id)
-	if slot != null or terrain == null:
+	if slot != null:
+		# A prior migration disables an untouched profile whenever it is not the
+		# biome being viewed. Re-enable it now that this is the selected biome, so
+		# its default character is live again (a profile the user deliberately
+		# turned off is left off).
+		if not bool(slot.get(&"enabled")) and _phase47_biome_profile_is_default_graph(
+				slot.get(&"graph") as Resource, biome_id):
+			slot.set(&"enabled", true)
+			_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
 		return slot
+	if terrain == null:
+		return null
 	slot = terrain.call("create_shader_slot", SHADER_SLOT_MODEL.Domain.DISPLACEMENT,
 		"%s Terrain" % BIOME_NAMES[biome_id]) as Resource
 	if slot == null:
@@ -394,6 +709,8 @@ func _phase47_biome_profile(graph: Resource) -> Dictionary:
 			continue
 		var node: Dictionary = value as Dictionary
 		var node_type: String = String(node.get("type", ""))
+		if PHASE47_BIOME_LEGACY_TYPE_MAP.has(node_type):
+			node_type = String(PHASE47_BIOME_LEGACY_TYPE_MAP[node_type])
 		var parameters: Dictionary = node.get("parameters", {}) as Dictionary
 		if PHASE47_BIOME_BASE_TYPES.has(node_type):
 			result["base_type"] = node_type
@@ -565,16 +882,35 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 		_refresh_current_category()
 	)
 	box.add_child(reset)
+	var enabled_now: bool = bool(slot.get(&"enabled"))
 	var disable := Button.new()
 	disable.name = "DisableBiomeTerrainProfile"
-	disable.text = "Turn Off %s Terrain" % BIOME_NAMES[biome_id]
-	disable.tooltip_text = "Set this biome profile's strength to zero without deleting it."
+	disable.text = ("Turn Off %s Terrain" % BIOME_NAMES[biome_id]) if enabled_now \
+		else ("Turn On %s Terrain" % BIOME_NAMES[biome_id])
+	disable.tooltip_text = "A disabled profile keeps its settings but is not compiled, freeing terrain budget for other biomes."
 	disable.pressed.connect(func() -> void:
-		_session.stage_set(slot, &"strength", 0.0, WorldAuthoringSession.ApplyScope.GRAPH,
-			"Turn off biome terrain profile")
+		_session.stage_set(slot, &"enabled", not enabled_now, WorldAuthoringSession.ApplyScope.GRAPH,
+			"Toggle biome terrain profile")
 		_refresh_current_category()
 	)
 	box.add_child(disable)
+	var budget := Label.new()
+	budget.text = "Compiled biome profiles: %d / %d" % [
+		_phase47_active_biome_profile_count(terrain), PHASE47_MAX_ACTIVE_BIOME_PROFILES]
+	budget.modulate = Color(0.58, 0.68, 0.76)
+	box.add_child(budget)
+
+
+func _phase47_active_biome_profile_count(terrain: Resource) -> int:
+	var count: int = 0
+	for value: Variant in terrain.get(&"displacement_slots") as Array:
+		var slot: Resource = value as Resource
+		if slot == null:
+			continue
+		if String(slot.get(&"slot_id")).begins_with(PHASE47_BIOME_PROFILE_PREFIX) \
+				and bool(slot.get(&"enabled")):
+			count += 1
+	return count
 
 
 func _phase47_add_biome_number(parent: VBoxContainer, label_text: String, profile: Dictionary,

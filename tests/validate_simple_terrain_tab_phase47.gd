@@ -133,32 +133,6 @@ func _run() -> void:
 		return
 	runtime.queue_free()
 
-	# The alternate base noise types lower to their own shared opcodes (30 billow,
-	# 31 voronoi ridges) on the same CPU/GPU bytecode path. Re-query the picker:
-	# the terrace edit above rebuilt the page and freed the old control.
-	var shape_again: OptionButton = _find_named(editor, "BiomeTerrainShape") as OptionButton
-	if shape_again == null:
-		_fail("Base-shape picker went missing after a shape change")
-		return
-	shape_again.select(4) # Voronoi ridges (cellular)
-	shape_again.emit_signal("item_selected", 4)
-	await _frames(3)
-	if not _graph_has_node_type(biome_slot.get(&"graph") as Resource, "VORONOI_RIDGES"):
-		_fail("Voronoi ridges did not serialize into the terrain graph")
-		return
-	var noise_runtime: Node = RUNTIME.new()
-	add_child(noise_runtime)
-	var noise_compiled: Dictionary = noise_runtime.call("compile_from_terrain", terrain) as Dictionary
-	if not bool(noise_compiled.get("active", false)) or not _runtime_has_opcode(noise_runtime, 31):
-		_fail("Voronoi ridges did not compile into the shared terrain bytecode")
-		return
-	var noise_height: float = float(noise_runtime.call("evaluate_height",
-		Vector3(0.2, 0.6, 0.3).normalized(), 0.0, 0, 11, 0.0))
-	if not is_finite(noise_height):
-		_fail("Voronoi ridge evaluation produced a non-finite height")
-		return
-	noise_runtime.queue_free()
-
 	print("SIMPLE_TERRAIN_TAB_PHASE47_OK: Terrain controls update production geomorph, all rings, no shader/node UI")
 	editor.queue_free()
 	await _frames(2)

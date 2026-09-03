@@ -157,8 +157,6 @@ const DISPLACEMENT_ONLY_NODES: Array[String] = [
 	"EROSION_CHANNELS",
 	"SEDIMENT_DEPOSIT",
 	"TERRACE_RELIEF",
-	"BILLOW_NOISE",
-	"VORONOI_RIDGES",
 	"OUTPUT_DISPLACEMENT",
 ]
 
@@ -252,8 +250,6 @@ const NODE_TYPES: Array[String] = [
 	"EROSION_CHANNELS",
 	"SEDIMENT_DEPOSIT",
 	"TERRACE_RELIEF",
-	"BILLOW_NOISE",
-	"VORONOI_RIDGES",
 	"TRIPLANAR",
 	"OUTPUT_DISPLACEMENT",
 	"OUTPUT_MATERIAL",
@@ -289,8 +285,6 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"EROSION_CHANNELS": CATEGORY_GEOMORPH,
 	"SEDIMENT_DEPOSIT": CATEGORY_GEOMORPH,
 	"TERRACE_RELIEF": CATEGORY_GEOMORPH,
-	"BILLOW_NOISE": CATEGORY_GEOMORPH,
-	"VORONOI_RIDGES": CATEGORY_GEOMORPH,
 	"TEXTURE_2D": CATEGORY_TEXTURES,
 	"TRIPLANAR": CATEGORY_TEXTURES,
 	"NORMAL_BLEND": CATEGORY_SURFACE_PBR,
@@ -568,20 +562,6 @@ static func node_parameter_defaults(node_type: String) -> Dictionary:
 			"scale":6.0,
 			"amount":80.0,
 			"steps":6,
-			"seed":1337,
-		}
-	if node_type == "BILLOW_NOISE":
-		return {
-			"scale":6.0,
-			"amount":100.0,
-			"passes":3,
-			"seed":1337,
-		}
-	if node_type == "VORONOI_RIDGES":
-		return {
-			"scale":6.0,
-			"amount":200.0,
-			"passes":3,
 			"seed":1337,
 		}
 	return {}

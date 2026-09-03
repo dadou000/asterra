@@ -45,10 +45,6 @@ const OP_SEDIMENT_DEPOSIT := 25
 ## Kept after the existing generic terrain operations so saved bytecode remains
 ## compatible.  The fourth parameter is the pattern seed; z is terrace count.
 const OP_TERRACE_RELIEF := 29
-## Alternate base noise characters. x scale, y amount, z passes, w seed -- the
-## same packing as OP_NOISE_LAYER / OP_RIDGED_MOUNTAINS.
-const OP_BILLOW_NOISE := 30
-const OP_VORONOI_RIDGES := 31
 
 var _headers := PackedVector4Array()
 var _params := PackedVector4Array()
@@ -139,18 +135,26 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 
 		# Clipmap and biome masks are part of the authoritative expression, so the
 		# CPU contact evaluator sees exactly the same inclusion rules as the GPU.
-		value_index = _append_instruction(OP_LEVEL_MASK, value_index, -1, -1,
-			Vector4(float(int(slot.get(&"clipmap_level_mask"))), 0.0, 0.0, 0.0))
-		var biome_mask: int = 0
-		var biome_ids_value: Variant = slot.get(&"biome_ids")
-		if biome_ids_value is PackedInt32Array:
-			for biome_id: int in biome_ids_value as PackedInt32Array:
-				if biome_id >= 0 and biome_id < BIOME_COUNT:
-					biome_mask |= 1 << biome_id
-		value_index = _append_instruction(OP_BIOME_MASK, value_index, -1, -1,
-			Vector4(float(int(slot.get(&"biome_mask_mode"))), float(biome_mask), 0.0, 0.0))
-		value_index = _append_instruction(OP_SCALE, value_index, -1, -1,
-			Vector4(float(slot.get(&"strength")), 0.0, 0.0, 0.0))
+		# Masks/scale that are the identity are skipped so slots that apply to every
+		# ring at unit strength (the common biome-profile case) stay within the
+		# 32-instruction VM budget.
+		var level_mask: int = int(slot.get(&"clipmap_level_mask"))
+		if (level_mask & 0x7fff) != 0x7fff:
+			value_index = _append_instruction(OP_LEVEL_MASK, value_index, -1, -1,
+				Vector4(float(level_mask), 0.0, 0.0, 0.0))
+		var biome_mode: int = int(slot.get(&"biome_mask_mode"))
+		if biome_mode != 0:
+			var biome_mask: int = 0
+			var biome_ids_value: Variant = slot.get(&"biome_ids")
+			if biome_ids_value is PackedInt32Array:
+				for biome_id: int in biome_ids_value as PackedInt32Array:
+					if biome_id >= 0 and biome_id < BIOME_COUNT:
+						biome_mask |= 1 << biome_id
+			value_index = _append_instruction(OP_BIOME_MASK, value_index, -1, -1,
+				Vector4(float(biome_mode), float(biome_mask), 0.0, 0.0))
+		if not is_equal_approx(float(slot.get(&"strength")), 1.0):
+			value_index = _append_instruction(OP_SCALE, value_index, -1, -1,
+				Vector4(float(slot.get(&"strength")), 0.0, 0.0, 0.0))
 		if value_index < 0:
 			break
 
@@ -261,8 +265,7 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 			result = _append_instruction(OP_NOISE, -1, -1, -1,
 				Vector4(maxf(absf(float(parameters.get("scale", 1.0))), 0.000001),
 					float(int(parameters.get("seed", graph_seed)) & 0x7fffffff), 0.0, 0.0))
-		"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT", \
-				"TERRACE_RELIEF", "BILLOW_NOISE", "VORONOI_RIDGES":
+		"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT", "TERRACE_RELIEF":
 			var terrain_input: int = _compile_input(node_id, 0, nodes, inputs,
 				memo, visiting, graph_seed)
 			var operation: int = OP_NOISE_LAYER
@@ -271,8 +274,6 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 				"EROSION_CHANNELS": operation = OP_EROSION_CHANNELS
 				"SEDIMENT_DEPOSIT": operation = OP_SEDIMENT_DEPOSIT
 				"TERRACE_RELIEF": operation = OP_TERRACE_RELIEF
-				"BILLOW_NOISE": operation = OP_BILLOW_NOISE
-				"VORONOI_RIDGES": operation = OP_VORONOI_RIDGES
 			var default_amount: float = 100.0 if node_type == "NOISE_LAYER" else 250.0
 			if node_type == "EROSION_CHANNELS":
 				default_amount = 40.0
@@ -280,10 +281,6 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 				default_amount = 25.0
 			elif node_type == "TERRACE_RELIEF":
 				default_amount = 80.0
-			elif node_type == "BILLOW_NOISE":
-				default_amount = 100.0
-			elif node_type == "VORONOI_RIDGES":
-				default_amount = 200.0
 			var detail_count: int = clampi(int(parameters.get("passes", 3)), 1, 4)
 			if node_type == "TERRACE_RELIEF":
 				detail_count = clampi(int(parameters.get("steps", 6)), 2, 24)
@@ -462,10 +459,6 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 				var terrace: float = floor((terrace_field * 0.5 + 0.5) * terrace_steps) \
 					/ maxf(terrace_steps - 1.0, 1.0)
 				out = a + (terrace * 2.0 - 1.0) * p.y
-			OP_BILLOW_NOISE:
-				out = a + _terrain_billow_fbm(d, p.x, int(round(p.w)), int(round(p.z))) * p.y
-			OP_VORONOI_RIDGES:
-				out = a + _terrain_worley_ridge(d, p.x, int(round(p.w)), int(round(p.z))) * p.y
 			_: out = 0.0
 		values[index] = out if is_finite(out) else 0.0
 	return float(values[_output_index]) if _output_index < values.size() else 0.0
@@ -521,70 +514,6 @@ func _terrain_fbm(direction: Vector3, scale: float, seed: int, passes: int) -> f
 		frequency *= 2.0
 		amplitude *= 0.5
 	return total / normalizer if normalizer > 0.0 else 0.0
-
-
-## Billow noise: each octave is folded to |n| and re-centred, giving rounded,
-## puffy lobes. Signed output, so it layers like OP_NOISE_LAYER.
-func _terrain_billow_fbm(direction: Vector3, scale: float, seed: int, passes: int) -> float:
-	var total: float = 0.0
-	var normalizer: float = 0.0
-	var amplitude: float = 1.0
-	var frequency: float = maxf(absf(scale), 0.000001)
-	for octave: int in clampi(passes, 1, 4):
-		var sample: float = _value_noise_3d(direction * frequency, seed + octave * 1013)
-		total += (2.0 * absf(sample) - 1.0) * amplitude
-		normalizer += amplitude
-		frequency *= 2.0
-		amplitude *= 0.5
-	return total / normalizer if normalizer > 0.0 else 0.0
-
-
-## Worley F2 - F1 ridge field in [0, 1]: sharp cellular crests along the cell
-## walls. Positive output, so it layers like OP_RIDGED_MOUNTAINS.
-func _terrain_worley_ridge(direction: Vector3, scale: float, seed: int, passes: int) -> float:
-	var total: float = 0.0
-	var normalizer: float = 0.0
-	var amplitude: float = 1.0
-	var frequency: float = maxf(absf(scale), 0.000001)
-	for octave: int in clampi(passes, 1, 4):
-		var f: Vector2 = _worley_f1f2_3d(direction * frequency, seed + octave * 1013)
-		total += clampf(sqrt(f.y) - sqrt(f.x), 0.0, 1.0) * amplitude
-		normalizer += amplitude
-		frequency *= 2.0
-		amplitude *= 0.5
-	return total / normalizer if normalizer > 0.0 else 0.0
-
-
-## Squared distances to the nearest (x) and second-nearest (y) feature points,
-## one jittered point per integer cell. Mirrors ad_worley_f1f2 on the GPU.
-func _worley_f1f2_3d(position: Vector3, seed: int) -> Vector2:
-	var ix: int = floori(position.x)
-	var iy: int = floori(position.y)
-	var iz: int = floori(position.z)
-	var fx: float = position.x - float(ix)
-	var fy: float = position.y - float(iy)
-	var fz: float = position.z - float(iz)
-	var f1: float = 9.0
-	var f2: float = 9.0
-	for gz: int in range(-1, 2):
-		for gy: int in range(-1, 2):
-			for gx: int in range(-1, 2):
-				var cx: int = ix + gx
-				var cy: int = iy + gy
-				var cz: int = iz + gz
-				var ox: float = _noise_hash(cx, cy, cz, seed) * 0.5 + 0.5
-				var oy: float = _noise_hash(cx, cy, cz, seed + 1301) * 0.5 + 0.5
-				var oz: float = _noise_hash(cx, cy, cz, seed + 2609) * 0.5 + 0.5
-				var dx: float = float(gx) + ox - fx
-				var dy: float = float(gy) + oy - fy
-				var dz: float = float(gz) + oz - fz
-				var d2: float = dx * dx + dy * dy + dz * dz
-				if d2 < f1:
-					f2 = f1
-					f1 = d2
-				elif d2 < f2:
-					f2 = d2
-	return Vector2(f1, f2)
 
 
 func _noise_hash(x: int, y: int, z: int, seed: int) -> float:
