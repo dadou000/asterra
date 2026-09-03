@@ -10,22 +10,25 @@ extends RefCounted
 ## Reachability callable contract:
 ##   bool(source_key, source_direction, destination_key, flux_m3s, topology_link)
 ##
-## topology_link is enriched with compact hydraulic metadata when present:
-##   source_surface_m   = GPU max(h+bed) on the emitting source edge
-##   predictive_wetting = true when dry-neighbor Rusanov Q dominated actual Q
-##
-## An absent/invalid callback FAILS CLOSED. Topological adjacency is not evidence
-## that a cliff, levee, building or dry high boundary can actually be inundated.
+## boundary_ownership_provider is an optional representation hook. It is called as:
+##   bool(source_key, source_direction, topology_link)
+## When true, another conservative representation already owns that physical edge
+## (for example a 2:1 HydroLOD interface), so frontier allocation is suppressed.
 ##
 ## defer_activation=true reserves a destination slot in ALLOCATING state. That is
 ## the production frontier-handoff path: initialize/seed state first, then call
 ## scheduler.activate_reserved() only after the GPU handoff has been recorded.
 
 var scheduler: SparseHydroScheduler
+var boundary_ownership_provider := Callable()
 
 
 func _init(p_scheduler: SparseHydroScheduler) -> void:
 	scheduler = p_scheduler
+
+
+func set_boundary_ownership_provider(provider: Callable) -> void:
+	boundary_ownership_provider = provider
 
 
 func resolve_candidates(candidates: Array[Dictionary],
@@ -66,9 +69,6 @@ func resolve_candidates(candidates: Array[Dictionary],
 			resolved.append(result)
 			continue
 
-		# New GPU queues snapshot stable identity at generation time. Keep legacy
-		# manually-built test candidates usable when the four metadata fields are
-		# absent, but whenever they are present they are mandatory consistency data.
 		if _candidate_has_identity(candidate):
 			var snapshot := HydroTileKey.new(
 				int(candidate["face"]), int(candidate["level"]),
@@ -102,8 +102,16 @@ func resolve_candidates(candidates: Array[Dictionary],
 		result["edge_orientation"] = int(link["edge_orientation"])
 		result["crossed_face"] = bool(link["crossed_face"])
 
-		# Preserve the established callback signature while carrying hydraulic data
-		# beside the geometric topology record.
+		# Representation ownership is checked before reachability or allocation. A
+		# claimed edge is already physically connected by another conservative path.
+		if boundary_ownership_provider.is_valid():
+			var claimed: Variant = boundary_ownership_provider.call(source, direction, link)
+			if bool(claimed):
+				result["reachable"] = true
+				result["reason"] = "represented_boundary"
+				resolved.append(result)
+				continue
+
 		var policy_link := link.duplicate(true)
 		if candidate.has("source_surface_m"):
 			policy_link["source_surface_m"] = float(candidate["source_surface_m"])
