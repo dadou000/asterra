@@ -2,11 +2,12 @@ class_name SparseHydrologyRuntimeSubcycled
 extends SparseHydrologyRuntimeLOD
 ## Phase-4 runtime with binary temporal HydroLOD subcycling and automatic physical LOD.
 ##
-## Spatial ownership/interface behavior is inherited unchanged. This layer swaps in
-## the enlarged-control subcycled solver, fine-clock schedule, flux-register
-## interface implementation and one-transition-per-cycle automatic HydroLOD policy.
+## Spatial ownership/interface behavior is inherited unchanged. This layer selects
+## the due-queue temporal solver, persistent per-tile CFL cache, fine-clock schedule,
+## flux-register interface implementation and automatic physical LOD policy.
 
 var lod_temporal: HydroLODTemporalScheduleGPU
+var cfl_cache: HydroLODCFLCacheGPU
 var automatic_lod_policy: HydroAutomaticPhysicalLODPolicy
 var _automatic_lod_focus_provider := Callable()
 
@@ -52,6 +53,7 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 	_phase = Phase.INITIALIZING
 	_component_ready = {
 		"solver": false,
+		"cfl_cache": false,
 		"activity": false,
 		"frontier": false,
 		"activation": false,
@@ -62,7 +64,7 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 		"hydrolod": not _using_internal_terrain_provider,
 	}
 
-	var subcycled_solver := SparseHydroStepGPUSubcycled.new()
+	var subcycled_solver := SparseHydroStepGPUSubcycledCached.new()
 	subcycled_solver.name = "SparseHydroStepGPU"
 	subcycled_solver.gravity = gravity
 	subcycled_solver.maximum_physical_lod = maximum_physical_lod
@@ -124,8 +126,9 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 
 func hydrolod_available() -> bool:
 	return super.hydrolod_available() and lod_temporal != null \
-		and lod_temporal.initialized_ok() \
-		and solver is SparseHydroStepGPUSubcycled
+		and lod_temporal.initialized_ok() and cfl_cache != null \
+		and cfl_cache.initialized_ok() \
+		and solver is SparseHydroStepGPUSubcycledCached
 
 
 func set_automatic_hydrolod_enabled(value: bool) -> Error:
@@ -171,6 +174,8 @@ func stats() -> Dictionary:
 	physical["fine_clock_cfl_normalization"] = true
 	physical["coarse_fine_flux_registers"] = lod_interfaces \
 		is HydroLODInterfaceFluxSubcycledGPU
+	physical["cached_cfl_reduction"] = cfl_cache != null and cfl_cache.initialized_ok()
+	physical["cfl_cache"] = {} if cfl_cache == null else cfl_cache.stats()
 	physical["temporal"] = {} if lod_temporal == null else lod_temporal.stats()
 	physical["automatic_policy"] = {} if automatic_lod_policy == null \
 		else automatic_lod_policy.stats()
@@ -178,8 +183,54 @@ func stats() -> Dictionary:
 	return out
 
 
+## Publish sparse topology generation before the inherited LOD pump can enqueue a
+## solver advance. Stable revisions retain cached coarse summaries across advances.
+func _pump() -> void:
+	if _phase == Phase.IDLE and solver is SparseHydroStepGPUSubcycledCached \
+			and scheduler != null and scheduler.pool != null:
+		(solver as SparseHydroStepGPUSubcycledCached) \
+			.set_cfl_cache_topology_revision(scheduler.pool.topology_revision)
+	super._pump()
+
+
 func _on_solver_initialized() -> void:
+	_try_initialize_cfl_cache()
+
+
+func _try_initialize_cfl_cache() -> void:
+	if cfl_cache != null:
+		return
+	if not (solver is SparseHydroStepGPUSubcycledCached) or not solver.initialized_ok():
+		_fail_initialization(ERR_UNCONFIGURED, "hydrolod_cfl_cache_solver")
+		return
+	var cached_solver := solver as SparseHydroStepGPUSubcycledCached
+	var cache := HydroLODCFLCacheGPU.new()
+	cache.name = "HydroLODCFLCacheGPU"
+	cfl_cache = cache
+	add_child(cache)
+	cache.initialized.connect(_on_cfl_cache_initialized)
+	cache.initialization_failed.connect(func(error: Error):
+		if cache == cfl_cache:
+			_fail_initialization(error, "hydrolod_cfl_cache"))
+	var err := cache.initialize(atlas, cached_solver.control_buffer_rid(),
+		cached_solver.params_buffer_rid(), cached_solver.due_slots_rid(),
+		cached_solver.due_indirect_rid())
+	if err != OK:
+		_fail_initialization(err, "hydrolod_cfl_cache")
+
+
+func _on_cfl_cache_initialized() -> void:
+	if not (solver is SparseHydroStepGPUSubcycledCached) or cfl_cache == null:
+		_fail_initialization(ERR_UNCONFIGURED, "hydrolod_cfl_cache_bind")
+		return
+	var cached_solver := solver as SparseHydroStepGPUSubcycledCached
+	var err := cached_solver.set_cfl_cache(cfl_cache)
+	if err != OK:
+		_fail_initialization(err, "hydrolod_cfl_cache_bind")
+		return
+	cached_solver.set_cfl_cache_topology_revision(scheduler.pool.topology_revision)
 	_component_ready["solver"] = true
+	_component_ready["cfl_cache"] = true
 	_try_initialize_temporal_schedule()
 	_try_initialize_lod_interfaces()
 	_try_initialize_lod_manager()
@@ -299,6 +350,7 @@ func release() -> void:
 		_lod_release_requested = true
 		lod_manager.release()
 		return
+	_release_cfl_cache_now()
 	_release_temporal_now()
 	_automatic_lod_focus_provider = Callable()
 	automatic_lod_policy = null
@@ -308,10 +360,21 @@ func release() -> void:
 func _on_lod_manager_released() -> void:
 	if not _lod_release_requested:
 		return
+	_release_cfl_cache_now()
 	_release_temporal_now()
 	_automatic_lod_focus_provider = Callable()
 	automatic_lod_policy = null
 	super._on_lod_manager_released()
+
+
+func _release_cfl_cache_now() -> void:
+	if solver is SparseHydroStepGPUSubcycledCached:
+		(solver as SparseHydroStepGPUSubcycledCached).set_cfl_cache(null)
+	var cache := cfl_cache
+	cfl_cache = null
+	if cache != null and is_instance_valid(cache):
+		cache.release()
+		cache.queue_free()
 
 
 func _release_temporal_now() -> void:
