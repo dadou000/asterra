@@ -2,9 +2,10 @@ class_name HydroTilePool
 extends RefCounted
 ## Bounded ownership layer between persistent tile IDs and transient GPU slots.
 ##
-## The current implementation manages slot identity/state only; Phase 3 GPU atlas
-## buffers attach to these slots next. Releasing a tile never changes its stable
-## HydroTileKey ID.
+## Releasing a tile never changes its stable HydroTileKey ID. topology_revision is
+## incremented whenever solver-visible ownership can change, allowing dependent GPU
+## topology mirrors (same-level connectivity, HydroLOD interfaces, etc.) to rebuild
+## lazily but deterministically before the next physical step.
 
 enum TileState {
 	SLEEPING_DRY,
@@ -15,6 +16,7 @@ enum TileState {
 }
 
 var capacity: int
+var topology_revision := 0
 var _free_slots: Array[int] = []
 var _slot_to_id: PackedInt64Array
 var _records: Dictionary = {} # packed tile id -> Dictionary
@@ -54,6 +56,7 @@ func allocate(key: HydroTileKey, physical_lod: int = 0) -> int:
 		"quiet_time_s": 0.0,
 		"last_reason": "allocate",
 	}
+	topology_revision += 1
 	return slot
 
 
@@ -67,6 +70,7 @@ func release(key_or_id: Variant) -> bool:
 	if slot >= 0 and slot < capacity:
 		_slot_to_id[slot] = -1
 		_free_slots.append(slot)
+	topology_revision += 1
 	return true
 
 
@@ -103,10 +107,15 @@ func set_state(key_or_id: Variant, state: TileState, reason: String = "") -> boo
 	if not _records.has(id):
 		return false
 	var r: Dictionary = _records[id]
+	var previous_state := int(r.get("state", TileState.ALLOCATING))
 	r["state"] = int(state)
 	if not reason.is_empty():
 		r["last_reason"] = reason
 	_records[id] = r
+	# ALLOCATING is deliberately GPU-invisible. Crossing that boundary changes the
+	# solver topology even though the stable slot allocation itself did not change.
+	if (previous_state == TileState.ALLOCATING) != (int(state) == TileState.ALLOCATING):
+		topology_revision += 1
 	return true
 
 
@@ -157,12 +166,15 @@ func full() -> bool:
 
 
 func clear() -> void:
+	var changed := not _records.is_empty()
 	_records.clear()
 	_free_slots.clear()
 	for i in capacity:
 		_slot_to_id[i] = -1
 	for i in range(capacity - 1, -1, -1):
 		_free_slots.append(i)
+	if changed:
+		topology_revision += 1
 
 
 func stats() -> Dictionary:
@@ -186,6 +198,7 @@ func stats() -> Dictionary:
 		"capacity": capacity,
 		"allocated": allocated_count(),
 		"free": free_count(),
+		"topology_revision": topology_revision,
 		"states": counts,
 	}
 
