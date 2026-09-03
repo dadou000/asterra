@@ -1,30 +1,17 @@
 #[compute]
 #version 450
 
-// Same-level sparse-tile shallow-water update.
+// Sparse-tile shallow-water update with physical metrics derived from stable tile
+// quadtree level. Same-level resident interfaces retain the Phase-3 conservative
+// path; Phase-4 cross-LOD interfaces are supplied separately by the LOD flux layer.
 //
 // State layout is one contiguous tile after another, each cell storing:
 //   h, hu, hv, bed elevation
 // where hu/hv are momentum in the tile's local +u/+v tangent frame.
 //
-// Interior interfaces read the same tile. A resident boundary reads the exact
-// neighboring tile edge described by SparseHydroConnectivityGPU. Across cube
-// seams the edge index may reverse and the neighbor momentum is rotated into the
-// source tile frame before the Riemann problem is solved. A nonresident boundary
-// is temporarily reflective; the separate frontier queue is responsible for
-// allocating/waking the destination tile.
-//
-// dt is supplied by the GPU adaptive-CFL control block. Candidate iterations after
-// the requested macro time is consumed are strict no-ops.
-//
-// Source layers are intentionally independent. `sources` is rebuilt by persistent
-// gameplay/world emitters; `atmospheric_sources` is owned by distributed weather
-// forcing. The solver composes them at read time so one producer never clears or
-// overwrites another producer's source field.
-//
-// `external_flux_m3` is cleared once per macro advance. Every cell invocation owns
-// exactly one ledger element and accumulates gross water added/actually removed by
-// the composed external source term across CFL substeps. No float atomics are used.
+// Source layers are independent. `sources` is rebuilt by persistent gameplay/world
+// emitters; `atmospheric_sources` is owned by distributed weather forcing. The
+// external ledger records physical m^3 using the owning tile's local cell area.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -35,22 +22,21 @@ layout(set = 0, binding = 1, std430) writeonly buffer StateOut {
     vec4 cells_out[];
 };
 layout(set = 0, binding = 2, std430) readonly buffer Sources {
-    // add depth m/s, remove depth m/s, injected hu rate, injected hv rate.
-    vec4 sources[];
+    vec4 sources[]; // add depth m/s, remove depth m/s, injected hu/hv rate
 };
 layout(set = 0, binding = 3, std430) readonly buffer Occupancy {
     int occupied[];
 };
 layout(set = 0, binding = 4, std430) readonly buffer NeighborSlots {
-    int neighbor_slots[]; // slot*4 + W/E/S/N -> resident slot or -1
+    int neighbor_slots[];
 };
 layout(set = 0, binding = 5, std430) readonly buffer NeighborLinks {
-    int neighbor_links[]; // destination edge[0..3] | reversed<<2, or -1
+    int neighbor_links[];
 };
 layout(set = 0, binding = 6, std430) readonly buffer Params {
-    vec4 grid_dt;  // tile_resolution, capacity, cell_size_m, requested macro dt
+    vec4 grid_dt;  // tile_resolution, capacity, H0 cell size, requested macro dt
     vec4 physics;  // gravity, dry_eps, Manning n, CFL
-    vec4 schedule; // max substeps, reserved...
+    vec4 schedule; // max substeps, H0 tile level, HydroLOD enabled, reserved
 } params;
 layout(set = 0, binding = 7, std430) readonly buffer Control {
     uint pre_max_speed_bits;
@@ -82,14 +68,18 @@ layout(set = 0, binding = 7, std430) readonly buffer Control {
     uint iter_invalid_count;
     uint reserved0;
     uint reserved1;
+
+    uint iter_max_cfl_rate_bits;
+    uint reserved2;
 } control;
 layout(set = 0, binding = 8, std430) readonly buffer AtmosphericSources {
-    // Same units/layout as Sources. Written by weather/surface forcing passes.
     vec4 atmospheric_sources[];
 };
 layout(set = 0, binding = 9, std430) buffer ExternalFluxLedger {
-    // Gross applied volume for this macro advance: x=added, y=removed [m^3].
-    vec2 external_flux_m3[];
+    vec2 external_flux_m3[]; // x=added, y=removed
+};
+layout(set = 0, binding = 10, std430) readonly buffer TileMetadata {
+    ivec4 tile_metadata[]; // face, quadtree level, x, y
 };
 
 layout(push_constant, std430) uniform StepPush {
@@ -113,11 +103,19 @@ struct HydroInterface {
 
 int tile_res() { return max(int(params.grid_dt.x + 0.5), 1); }
 int capacity() { return max(int(params.grid_dt.y + 0.5), 1); }
-float dx() { return max(params.grid_dt.z, 1e-4); }
 float dt() { return max(control.current_dt, 0.0); }
 float grav() { return max(params.physics.x, 1e-4); }
 float dry_eps() { return max(params.physics.y, 1e-8); }
 float manning_n() { return max(params.physics.z, 0.0); }
+
+float slot_dx(int slot) {
+    float base_dx = max(params.grid_dt.z, 1e-4);
+    if (params.schedule.z < 0.5) return base_dx;
+    int base_level = int(params.schedule.y + 0.5);
+    int level = tile_metadata[slot].y;
+    if (level < 0) return base_dx;
+    return base_dx * exp2(float(base_level - level));
+}
 
 int cells_per_tile() {
     int r = tile_res();
@@ -269,14 +267,8 @@ vec3 apply_friction(vec3 q, float step_dt) {
 vec3 apply_sources(vec3 q, vec4 source, float step_dt) {
     float add_h = max(source.x, 0.0) * step_dt;
     float remove_h = max(source.y, 0.0) * step_dt;
-
-    // Added water carries explicit local-frame momentum supplied by the emitter.
     q.x += add_h;
     q.yz += source.zw * step_dt;
-
-    // A sink removes the local fluid parcel, not just scalar depth. Scaling the
-    // existing momentum with remaining depth keeps velocity finite and prevents a
-    // drain/infiltration term from manufacturing kinetic energy.
     if (remove_h > 0.0 && q.x > 0.0) {
         float kept_h = max(q.x - remove_h, 0.0);
         float keep_fraction = kept_h / max(q.x, 1e-12);
@@ -317,7 +309,8 @@ void main() {
     HydroInterface fs = interface_y(packed_s.xyz, packed_s.w, c, zc);
     HydroInterface fn = interface_y(c, zc, packed_n.xyz, packed_n.w);
 
-    float scale = dt() / dx();
+    float local_dx = slot_dx(slot);
+    float scale = dt() / local_dx;
     vec3 updated = c
         - (fe.flux - fw.flux) * scale
         - (fn.flux - fs.flux) * scale;
@@ -332,7 +325,7 @@ void main() {
     float requested_remove_h = max(source.y, 0.0) * dt();
     float available_after_add = max(updated.x + add_h, 0.0);
     float actual_remove_h = min(requested_remove_h, available_after_add);
-    float cell_area_m2 = dx() * dx();
+    float cell_area_m2 = local_dx * local_dx;
     external_flux_m3[i] += vec2(add_h, actual_remove_h) * cell_area_m2;
     updated = apply_sources(updated, source, dt());
 
