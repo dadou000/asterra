@@ -5,12 +5,17 @@ extends SparseHydroStepGPULOD
 ## The first 104 control bytes retain the existing diagnostics/CFL ABI. This solver
 ## upgrades only its own control buffer to 184 bytes, appending fine-clock schedule
 ## state. Existing Phase-3 and spatial-only Phase-4 solvers remain unchanged.
+##
+## Temporal bandwidth rule: atlas A remains authoritative for a level until that
+## level is due. Non-due slots neither copy A->B in the SWE pass nor B->A in the
+## canonical commit pass.
 
 const SUBCYCLED_CONTROL_BYTES := 184
 const BASE_CONTROL_BYTES := 104
 
 var maximum_physical_lod := 4
 var temporal_schedule: HydroLODTemporalScheduleGPU
+var _selective_commit_spirv: RDShaderSPIRV
 
 
 func initialize(atlas: SparseHydroAtlasGPU,
@@ -25,6 +30,14 @@ func initialize(atlas: SparseHydroAtlasGPU,
 	if RenderingServer.get_rendering_device() == null:
 		return ERR_UNAVAILABLE
 
+	_selective_commit_spirv = _load_spirv(
+		"res://shaders/water/sparse_hydro_commit_subcycled.glsl")
+	if _selective_commit_spirv == null:
+		return ERR_CANT_OPEN
+
+	# Base initialization still creates the legacy commit resources so its common
+	# resource builder remains untouched. _upgrade_control_render_thread replaces
+	# that commit shader/pipeline/set atomically before initialized() is published.
 	var spirv := {
 		"step": _load_spirv("res://shaders/water/sparse_hydro_step_subcycled.glsl"),
 		"commit": _load_spirv("res://shaders/water/sparse_hydro_commit.glsl"),
@@ -96,14 +109,19 @@ func stats() -> Dictionary:
 	out["fine_clock_cfl_normalization"] = true
 	out["synchronizes_on_advance_end"] = true
 	out["control_bytes"] = SUBCYCLED_CONTROL_BYTES
+	out["due_only_swe_state_writes"] = true
+	out["due_only_canonical_commit"] = true
+	out["non_due_state_copy_eliminated"] = true
+	out["canonical_non_due_owner"] = "atlas_A_untouched"
 	out["temporal_schedule"] = {} if temporal_schedule == null \
 		else temporal_schedule.stats()
 	return out
 
 
-## Base initialization intentionally creates its normal 104-byte control block.
-## Before publishing initialized(), replace only that block and the uniform sets
-## which reference it. All expensive pipelines/atlas resources are retained.
+## Base initialization intentionally creates its normal 104-byte control block and
+## legacy commit resources. Before publishing initialized(), replace the control
+## block, every set which references it, and the commit pipeline/set with the
+## due-only temporal variant. All other expensive pipelines/atlas resources stay.
 func _finish_init(error: Error, bundle: Dictionary) -> void:
 	if error != OK:
 		_init_pending = false
@@ -116,13 +134,27 @@ func _finish_init(error: Error, bundle: Dictionary) -> void:
 
 func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 	var rd := RenderingServer.get_rendering_device()
-	if rd == null:
+	if rd == null or _selective_commit_spirv == null:
 		call_deferred(&"_finish_subcycled_init", ERR_UNAVAILABLE, {})
 		return
+
+	var selective_commit_shader := rd.shader_create_from_spirv(_selective_commit_spirv)
+	if not selective_commit_shader.is_valid():
+		_free_init_bundle(rd, bundle)
+		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
+		return
+	var selective_commit_pipeline := rd.compute_pipeline_create(selective_commit_shader)
+	if not selective_commit_pipeline.is_valid():
+		rd.free_rid(selective_commit_shader)
+		_free_init_bundle(rd, bundle)
+		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
+		return
+
 	var zero := PackedByteArray()
 	zero.resize(SUBCYCLED_CONTROL_BYTES)
 	var control := rd.storage_buffer_create(zero.size(), zero)
 	if not control.is_valid():
+		_free_many(rd, [selective_commit_pipeline, selective_commit_shader])
 		_free_init_bundle(rd, bundle)
 		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
 		return
@@ -140,6 +172,15 @@ func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 		_storage_uniform(9, bundle["external_flux_ledger"]),
 		_storage_uniform(10, _atlas.tile_metadata_rid()),
 	], bundle["step_shader"], 0)
+	var commit_set := rd.uniform_set_create([
+		_storage_uniform(0, _atlas.state_b_rid()),
+		_storage_uniform(1, _atlas.state_a_rid()),
+		_storage_uniform(2, _atlas.occupancy_rid()),
+		_storage_uniform(3, bundle["commit_params"]),
+		_storage_uniform(4, control),
+		_storage_uniform(5, _atlas.tile_metadata_rid()),
+		_storage_uniform(6, bundle["params"]),
+	], selective_commit_shader, 0)
 	var reduce_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_a_rid()),
 		_storage_uniform(1, _atlas.occupancy_rid()),
@@ -159,18 +200,28 @@ func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 		_storage_uniform(1, control),
 		_storage_uniform(2, bundle["commit_params"]),
 	], bundle["external_finalize_shader"], 0)
-	var replacements := [step_set, reduce_set, reset_set, prepare_set, external_finalize_set]
+	var replacements := [step_set, commit_set, reduce_set, reset_set,
+		prepare_set, external_finalize_set]
 	for rid in replacements:
 		if not (rid is RID) or not (rid as RID).is_valid():
-			_free_many(rd, replacements + [control])
+			_free_many(rd, replacements + [control,
+				selective_commit_pipeline, selective_commit_shader])
 			_free_init_bundle(rd, bundle)
 			call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
 			return
 
-	_free_many(rd, [bundle["step_set"], bundle["reduce_set"], bundle["reset_set"],
-		bundle["prepare_set"], bundle["external_finalize_set"], bundle["control"]])
+	# The legacy commit shader/pipeline/set were built only to preserve the common
+	# initializer contract. They are retired here together with the old control sets.
+	_free_many(rd, [
+		bundle["step_set"], bundle["commit_set"], bundle["reduce_set"],
+		bundle["reset_set"], bundle["prepare_set"], bundle["external_finalize_set"],
+		bundle["control"], bundle["commit_pipeline"], bundle["commit_shader"],
+	])
 	bundle["control"] = control
 	bundle["step_set"] = step_set
+	bundle["commit_shader"] = selective_commit_shader
+	bundle["commit_pipeline"] = selective_commit_pipeline
+	bundle["commit_set"] = commit_set
 	bundle["reduce_set"] = reduce_set
 	bundle["reset_set"] = reset_set
 	bundle["prepare_set"] = prepare_set
@@ -284,6 +335,8 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		if lod_interface_flux != null:
 			lod_interface_flux.record_corrections(rd, compute)
 
+		# The subcycled commit shader touches only slots whose temporal_stepN is > 0.
+		# Non-due A remains canonical and B is deliberately allowed to stay stale.
 		rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
 		rd.compute_list_dispatch(compute, commit_groups, 1, 1)
@@ -316,4 +369,5 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 
 func release() -> void:
 	temporal_schedule = null
+	_selective_commit_spirv = null
 	super.release()
