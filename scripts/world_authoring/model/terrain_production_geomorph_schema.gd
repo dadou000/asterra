@@ -15,6 +15,9 @@ const GLOBAL_CONTROLS: PackedStringArray = [
 	"override_seed",
 	"detail_seed",
 	"warp_strength",
+	"base_elevation_continental",
+	"base_elevation_regional",
+	"base_elevation_local",
 ]
 
 const CONTROL_DEFAULTS: Dictionary = {
@@ -67,6 +70,9 @@ const CONTROL_DEFAULTS: Dictionary = {
 	"glacial_amplitude_m": 52.0,
 	"glacial_base_scale": 0.62,
 	"glacial_mix": 0.72,
+	"base_elevation_continental": 1.0,
+	"base_elevation_regional": 1.0,
+	"base_elevation_local": 1.0,
 }
 
 # The order here is part of the production contract. `parent_stage` describes a
@@ -209,16 +215,24 @@ static func parameter_owner_map() -> Dictionary:
 	return owners
 
 
+const CACHED_SURFACE_CONTROLS: PackedStringArray = [
+	"detail_seed", "detail_strength",
+	"base_elevation_continental", "base_elevation_regional", "base_elevation_local",
+]
+
+
 static func uniform_for_control(key: String) -> String:
 	match key:
 		"override_seed": return ""
 		"detail_seed": return "u_detail_seed"
 		"detail_strength": return "u_detail_strength"
+		"base_elevation_continental", "base_elevation_regional", "base_elevation_local":
+			return "u_" + key
 		_: return "u_geomorph_" + key
 
 
 static func shader_source_for_control(key: String) -> String:
-	return "cached_surface" if key in ["detail_seed", "detail_strength"] else "geomorph"
+	return "cached_surface" if key in CACHED_SURFACE_CONTROLS else "geomorph"
 
 
 static func validate_schema() -> PackedStringArray:

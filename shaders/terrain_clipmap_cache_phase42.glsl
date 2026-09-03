@@ -12,11 +12,11 @@ layout(set = 0, binding = 5) uniform sampler2DArray climate_tex;
 layout(set = 0, binding = 6) uniform sampler2DArray hydrology_tex;
 layout(rgba32f, set = 0, binding = 7) uniform writeonly image2DArray cache_image;
 
-// terrain_geomorph_gpu_contract.gd ABI v1. Twelve std430 vec4 values are shared
+// terrain_geomorph_gpu_contract.gd ABI v2. Thirteen std430 vec4 values are shared
 // by every warm-cache dispatch; the visible analytic shader receives the same
 // normalized dictionary through ordinary material uniforms.
 layout(std430, set = 0, binding = 8) readonly buffer GeomorphControls {
-    vec4 value[12];
+    vec4 value[13];
 } gc;
 
 layout(push_constant, std430) uniform Params {
@@ -75,6 +75,9 @@ layout(push_constant, std430) uniform Params {
 #define GC_GLACIAL_AMPLITUDE_M          (gc.value[11].x)
 #define GC_GLACIAL_BASE_SCALE           (gc.value[11].y)
 #define GC_GLACIAL_MIX                  (gc.value[11].z)
+#define GC_BASE_ELEV_CONTINENTAL        (gc.value[11].w)
+#define GC_BASE_ELEV_REGIONAL          (gc.value[12].x)
+#define GC_BASE_ELEV_LOCAL             (gc.value[12].y)
 
 const float PI = 3.14159265358979323846;
 const float TANGENT_FAST_MAX_ARC_M = 70000.0;
@@ -431,8 +434,15 @@ float macro_height(vec3 dir, float spacing_m) {
     int mip1=min(mip0+1,MACRO_MAX_MIP);
     float t=fract(lod);
     float h0=macro_bicubic_mip(coord,mip0);
-    if(mip0==mip1||t<=0.001) return h0;
-    return mix(h0,macro_bicubic_mip(coord,mip1),smootherstep01(t));
+    float base=(mip0==mip1||t<=0.001)?h0:mix(h0,macro_bicubic_mip(coord,mip1),smootherstep01(t));
+    // Base-elevation EQ: split the sampled field into continental / regional /
+    // local bands. All gains 1.0 => `base` unchanged; all 0.0 => flat sphere.
+    float continental=macro_bicubic_mip(coord,MACRO_MAX_MIP);
+    int regional_mip=clamp(MACRO_MAX_MIP-2,mip0,MACRO_MAX_MIP);
+    float regional_ref=macro_bicubic_mip(coord,regional_mip);
+    return continental*GC_BASE_ELEV_CONTINENTAL
+        +(regional_ref-continental)*GC_BASE_ELEV_REGIONAL
+        +(base-regional_ref)*GC_BASE_ELEV_LOCAL;
 }
 
 float projected_theta(float arc,float radius) {

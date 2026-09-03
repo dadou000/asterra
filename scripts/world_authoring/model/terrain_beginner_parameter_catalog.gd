@@ -64,6 +64,16 @@ static func _all_controls() -> Array[Dictionary]:
 			"Controls the very broad rises and depressions visible across many kilometres.",
 			"Overall Shape", 1.0, 0.0, 2.5, 0.01),
 
+		_control("base_elevation_continental", "Base: Continental",
+			"EQ band over the planet's own resident elevation: whole-continent rise and fall. 1x is the untouched planet, 0x removes the land/ocean height difference.",
+			"Overall Shape", 1.0, 0.0, 2.0, 0.01, "x"),
+		_control("base_elevation_regional", "Base: Regional",
+			"EQ band over the planet's own resident elevation: plateau, basin and mountain-range-scale shape. Set every Base band to 0 for an almost-flat world that follows the coarse grid.",
+			"Overall Shape", 1.0, 0.0, 2.0, 0.01, "x"),
+		_control("base_elevation_local", "Base: Local",
+			"EQ band over the planet's own resident elevation: the finest structure already present in the base field.",
+			"Overall Shape", 1.0, 0.0, 2.0, 0.01, "x"),
+
 		_control("mountain_strength", "Mountain Amount",
 			"Controls how strongly mountain ranges contribute to this terrain.",
 			"Mountains & Hills", 1.0, 0.0, 2.5, 0.01),

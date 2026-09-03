@@ -89,9 +89,9 @@ func _fixture() -> Dictionary:
 
 
 func _validate_contract() -> String:
-	if CONTRACT.PACKED_KEYS.size() != 48 or CONTRACT.VEC4_COUNT != 12 \
-			or CONTRACT.BYTE_SIZE != 192:
-		return "std430 production-control ABI is not exactly 12 vec4 / 192 bytes"
+	if CONTRACT.PACKED_KEYS.size() != 52 or CONTRACT.VEC4_COUNT != 13 \
+			or CONTRACT.BYTE_SIZE != 208:
+		return "std430 production-control ABI is not exactly 13 vec4 / 208 bytes"
 	var fixture: Dictionary = _fixture()
 	var normalized: Dictionary = CONTRACT.normalized_controls(fixture)
 	var packed: PackedByteArray = CONTRACT.pack_controls(fixture)

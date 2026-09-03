@@ -9,11 +9,15 @@ extends RefCounted
 const GRAPH_SCRIPT := preload(
 	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
 const GEOMORPH_SETTINGS := "PRODUCTION_GEOMORPH_SETTINGS"
-const CONTRACT_VERSION: int = 1
-const VEC4_COUNT: int = 12
+const CONTRACT_VERSION: int = 2
+const VEC4_COUNT: int = 13
 const BYTE_SIZE: int = VEC4_COUNT * 16
 
 # Order is ABI. Keep shader binding comments synchronized with this table.
+# The three base_elevation_* gains are a "graphic EQ" over the resident macro
+# elevation field: continental (coarsest mip), regional (mid mips) and local
+# (finest). All 1.0 reconstructs the original planet exactly; all 0.0 collapses to
+# a smooth sphere that follows the coarse clipmap grid.
 const PACKED_KEYS: Array[String] = [
 	"detail_strength", "warp_strength", "broad_strength", "mountain_strength",
 	"mid_strength", "channel_strength", "deposit_strength", "fine_strength",
@@ -26,7 +30,8 @@ const PACKED_KEYS: Array[String] = [
 	"deposit_amplitude_min_m", "deposit_amplitude_max_m", "deposit_scale", "deposit_power",
 	"fine_wavelength_m", "fine_amplitude_m", "dune_wavelength_m", "dune_amplitude_m",
 	"dune_warp", "micro_wavelength_m", "micro_amplitude_m", "glacial_wavelength_m",
-	"glacial_amplitude_m", "glacial_base_scale", "glacial_mix", "reserved_0",
+	"glacial_amplitude_m", "glacial_base_scale", "glacial_mix", "base_elevation_continental",
+	"base_elevation_regional", "base_elevation_local", "reserved_0", "reserved_1",
 ]
 
 
@@ -91,7 +96,12 @@ static func normalized_controls(source: Dictionary) -> Dictionary:
 
 	out["override_seed"] = bool(merged.get("override_seed", false))
 	out["detail_seed"] = maxi(1, int(merged.get("detail_seed", 1337)))
+	# Base-elevation EQ gains. Absent -> 1.0 so existing worlds render unchanged.
+	out["base_elevation_continental"] = _nonnegative(merged, "base_elevation_continental", 1.0)
+	out["base_elevation_regional"] = _nonnegative(merged, "base_elevation_regional", 1.0)
+	out["base_elevation_local"] = _nonnegative(merged, "base_elevation_local", 1.0)
 	out["reserved_0"] = 0.0
+	out["reserved_1"] = 0.0
 	return out
 
 

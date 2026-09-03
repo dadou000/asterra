@@ -41,6 +41,11 @@ uniform float u_detail_strength = 1.0;
 uniform float u_debug_side_cut = 0.0;
 uniform float u_stable_displacement = 1.0;
 uniform int u_debug_geomorph_mode = 0;
+// Base-elevation EQ gains (continental / regional / local mip bands). 1.0 = the
+// planet's resident macro elevation unchanged; 0.0 = that band removed.
+uniform float u_base_elevation_continental = 1.0;
+uniform float u_base_elevation_regional = 1.0;
+uniform float u_base_elevation_local = 1.0;
 
 varying vec3 v_planet;
 varying vec3 v_render;
@@ -203,7 +208,17 @@ float macro_cubic_trilinear(vec3 coord, float lod) {
 
 float macro_height(vec3 d, int level) {
 	if (u_macro_ready < 0.5 || u_macro_face_res <= 0.5) return 0.0;
-	return macro_cubic_trilinear(macro_array_coord(d), macro_lod_for_spacing(ring_spacing(level)));
+	vec3 coord = macro_array_coord(d);
+	float lod = macro_lod_for_spacing(ring_spacing(level));
+	float base = macro_cubic_trilinear(coord, lod);
+	// Base-elevation EQ, matched to terrain_clipmap_cache_phase42.glsl. All gains
+	// 1.0 leaves `base` untouched; all 0.0 flattens to the coarse grid.
+	int mip0 = clamp(int(floor(lod)), 0, MACRO_MAX_MIP);
+	float continental = macro_bicubic_mip(coord, MACRO_MAX_MIP);
+	float regional_ref = macro_bicubic_mip(coord, clamp(MACRO_MAX_MIP - 2, mip0, MACRO_MAX_MIP));
+	return continental * u_base_elevation_continental
+		+ (regional_ref - continental) * u_base_elevation_regional
+		+ (base - regional_ref) * u_base_elevation_local;
 }
 
 float procedural_detail(vec3 d, int level, float macro_h) {
