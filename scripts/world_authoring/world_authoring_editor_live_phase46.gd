@@ -24,12 +24,58 @@ const PHASE47_BIOME_PROFILE_PREFIX := "simple-biome-terrain-"
 const PHASE47_ALL_RINGS_MASK: int = (1 << 15) - 1
 const PHASE47_GLOBAL_TAB: int = 0
 const PHASE47_BIOME_TAB: int = 1
+
+# A biome terrain profile is a short displacement chain: one base shape, then an
+# optional water-erosion pass and an optional sediment-deposition pass. Every
+# element is an ordinary serialized displacement node, so the profile keeps the
+# exact all-ring CPU/GPU bytecode path of every other terrain edit.
+const PHASE47_BIOME_BASE_TYPES: PackedStringArray = [
+	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF", "BILLOW_NOISE", "VORONOI_RIDGES",
+]
+const PHASE47_BIOME_BASE_LABELS: PackedStringArray = [
+	"Soft hills (FBM noise)", "Ridged peaks", "Terraced relief",
+	"Billow noise (rounded)", "Voronoi ridges (cellular)",
+]
+const PHASE47_EROSION_TYPE := "EROSION_CHANNELS"
+const PHASE47_SEDIMENT_TYPE := "SEDIMENT_DEPOSIT"
+# Superset used only when reading an existing graph, so a profile authored before
+# the chain layout still resolves its base shape.
 const PHASE47_BIOME_PROFILE_TYPES: PackedStringArray = [
-	"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT", "TERRACE_RELIEF",
+	"NOISE_LAYER", "RIDGED_MOUNTAINS", "TERRACE_RELIEF", "BILLOW_NOISE", "VORONOI_RIDGES",
+	"EROSION_CHANNELS", "SEDIMENT_DEPOSIT",
 ]
-const PHASE47_BIOME_PROFILE_LABELS: PackedStringArray = [
-	"Soft Noise", "Ridged Peaks", "Eroded Channels", "Sediment Fans", "Terraced Relief",
-]
+
+# Ported per-biome terrain character. The renderer already varies its geomorph
+# landform weights by climate/soil and the surface shader already colours every
+# biome; these defaults give the matching *physical detail* so a freshly
+# provisioned biome profile reads as that biome instead of a flat placeholder.
+#   base_type      - base shape node type
+#   scale          - feature frequency (higher = smaller, more frequent)
+#   amount         - base feature height in metres, before the blend strength
+#   passes         - FBM octaves for the noise / ridged bases (1-4)
+#   steps          - plateau count for the terraced base (2-24)
+#   erosion        - water-erosion channel depth in metres (0 disables the pass)
+#   sedimentation  - valley / basin infill height in metres (0 disables the pass)
+const PHASE47_BIOME_TERRAIN_DEFAULTS: Dictionary = {
+	0:  {"base_type":"NOISE_LAYER", "scale":4.0, "amount":6.0, "passes":2, "erosion":0.0, "sedimentation":4.0},
+	1:  {"base_type":"NOISE_LAYER", "scale":4.0, "amount":5.0, "passes":2, "erosion":0.0, "sedimentation":6.0},
+	2:  {"base_type":"TERRACE_RELIEF", "scale":2.6, "amount":16.0, "steps":5, "erosion":0.0, "sedimentation":24.0},
+	3:  {"base_type":"NOISE_LAYER", "scale":5.0, "amount":18.0, "passes":3, "erosion":4.0, "sedimentation":14.0},
+	4:  {"base_type":"NOISE_LAYER", "scale":6.0, "amount":24.0, "passes":3, "erosion":10.0, "sedimentation":10.0},
+	5:  {"base_type":"NOISE_LAYER", "scale":5.0, "amount":22.0, "passes":3, "erosion":3.0, "sedimentation":8.0},
+	6:  {"base_type":"NOISE_LAYER", "scale":4.0, "amount":16.0, "passes":2, "erosion":6.0, "sedimentation":10.0},
+	7:  {"base_type":"NOISE_LAYER", "scale":6.0, "amount":26.0, "passes":3, "erosion":14.0, "sedimentation":12.0},
+	8:  {"base_type":"NOISE_LAYER", "scale":7.0, "amount":30.0, "passes":4, "erosion":26.0, "sedimentation":16.0},
+	9:  {"base_type":"RIDGED_MOUNTAINS", "scale":6.0, "amount":42.0, "passes":3, "erosion":12.0, "sedimentation":6.0},
+	10: {"base_type":"NOISE_LAYER", "scale":3.5, "amount":12.0, "passes":2, "erosion":3.0, "sedimentation":9.0},
+	11: {"base_type":"BILLOW_NOISE", "scale":5.0, "amount":34.0, "passes":2, "erosion":0.0, "sedimentation":18.0},
+	12: {"base_type":"NOISE_LAYER", "scale":4.0, "amount":16.0, "passes":2, "erosion":5.0, "sedimentation":12.0},
+	13: {"base_type":"NOISE_LAYER", "scale":6.0, "amount":24.0, "passes":3, "erosion":18.0, "sedimentation":14.0},
+	14: {"base_type":"NOISE_LAYER", "scale":7.0, "amount":30.0, "passes":4, "erosion":34.0, "sedimentation":20.0},
+	15: {"base_type":"NOISE_LAYER", "scale":2.5, "amount":3.0, "passes":1, "erosion":0.0, "sedimentation":26.0},
+	16: {"base_type":"TERRACE_RELIEF", "scale":5.0, "amount":72.0, "steps":6, "erosion":20.0, "sedimentation":4.0},
+	17: {"base_type":"VORONOI_RIDGES", "scale":8.0, "amount":70.0, "passes":4, "erosion":14.0, "sedimentation":0.0},
+}
 
 const PHASE47_PRESETS: Array[Dictionary] = [
 	{"id":"natural", "label":"Natural", "tip":"Balanced production terrain.", "values":{}},
@@ -237,7 +283,7 @@ func _phase47_build_biome_note() -> void:
 
 func _phase47_build_biome_editor(terrain: Resource) -> void:
 	_section("Biome terrain")
-	_add_note("A biome profile is a small terrain layer that applies to the selected biome on every distance ring. It composes after the shared Global Terrain, so you can make deserts dune-like, mountains sharper or wetlands flatter without maintaining LOD copies.")
+	_add_note("Every biome already has a terrain profile. It is a small displacement layer — a base shape plus optional water-erosion and sediment passes — limited to that biome on every distance ring and composed after the shared Global Terrain. Editing it never adds a shader or an LOD copy; it starts from the character that biome already has.")
 	var pick_row := HBoxContainer.new()
 	pick_row.name = "BiomeTerrainSelection"
 	pick_row.add_theme_constant_override("separation", 8)
@@ -262,14 +308,9 @@ func _phase47_build_biome_editor(terrain: Resource) -> void:
 	pick_row.add_child(pick)
 
 	var biome_id: int = clampi(_phase28_biome_id, 0, BIOME_NAMES.size() - 1)
-	var slot: Resource = _phase47_biome_profile_slot(terrain, biome_id)
+	var slot: Resource = _phase47_ensure_biome_profile(terrain, biome_id)
 	if slot == null:
-		var create := Button.new()
-		create.name = "CreateBiomeTerrainProfile"
-		create.text = "Create %s Terrain Profile" % BIOME_NAMES[biome_id]
-		create.tooltip_text = "Create a safe all-ring terrain layer limited to this biome."
-		create.pressed.connect(_phase47_create_biome_profile.bind(terrain, biome_id))
-		_workspace.add_child(create)
+		_add_note("This body's terrain profile could not be provisioned.")
 		return
 
 	_phase47_build_biome_profile_controls(terrain, slot, biome_id)
@@ -299,30 +340,49 @@ func _phase47_biome_profile_slot(terrain: Resource, biome_id: int) -> Resource:
 	return null
 
 
-func _phase47_create_biome_profile(terrain: Resource, biome_id: int) -> void:
-	if terrain == null or _phase47_biome_profile_slot(terrain, biome_id) != null:
-		return
-	_session.stage_action("Create %s terrain profile" % BIOME_NAMES[biome_id], func() -> void:
-		var slot: Resource = terrain.call("create_shader_slot", SHADER_SLOT_MODEL.Domain.DISPLACEMENT,
-			"%s Terrain" % BIOME_NAMES[biome_id]) as Resource
-		if slot == null:
-			return
-		slot.set(&"slot_id", "%s%d" % [PHASE47_BIOME_PROFILE_PREFIX, biome_id])
-		slot.set(&"display_name", "%s Terrain" % BIOME_NAMES[biome_id])
-		slot.set(&"enabled", true)
-		slot.set(&"clipmap_level_mask", PHASE47_ALL_RINGS_MASK)
-		slot.set(&"biome_mask_mode", SHADER_SLOT_MODEL.BiomeMaskMode.ONLY)
-		slot.set(&"biome_ids", PackedInt32Array([biome_id]))
-		slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
-		slot.set(&"strength", 1.0)
-		var graph: Resource = slot.get(&"graph") as Resource
-		_phase47_rebuild_biome_profile(graph, _phase47_default_biome_profile())
-	, WorldAuthoringSession.ApplyScope.GRAPH)
-	_refresh_current_category()
+func _phase47_ensure_biome_profile(terrain: Resource, biome_id: int) -> Resource:
+	# The profile for every biome is provisioned on demand rather than created by
+	# a button press. It is a normal scoped displacement slot, so it travels the
+	# identical all-ring cache / contact path as the Global Terrain edit.
+	var slot: Resource = _phase47_biome_profile_slot(terrain, biome_id)
+	if slot != null or terrain == null:
+		return slot
+	slot = terrain.call("create_shader_slot", SHADER_SLOT_MODEL.Domain.DISPLACEMENT,
+		"%s Terrain" % BIOME_NAMES[biome_id]) as Resource
+	if slot == null:
+		return null
+	slot.set(&"slot_id", "%s%d" % [PHASE47_BIOME_PROFILE_PREFIX, biome_id])
+	slot.set(&"display_name", "%s Terrain" % BIOME_NAMES[biome_id])
+	slot.set(&"enabled", true)
+	slot.set(&"clipmap_level_mask", PHASE47_ALL_RINGS_MASK)
+	slot.set(&"biome_mask_mode", SHADER_SLOT_MODEL.BiomeMaskMode.ONLY)
+	slot.set(&"biome_ids", PackedInt32Array([biome_id]))
+	slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
+	slot.set(&"strength", 1.0)
+	_phase47_rebuild_biome_profile(slot.get(&"graph") as Resource,
+		_phase47_biome_terrain_defaults(biome_id))
+	terrain.call("ensure_valid")
+	_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+	return slot
 
 
 func _phase47_default_biome_profile() -> Dictionary:
-	return {"type":"NOISE_LAYER", "scale":6.0, "amount":35.0, "passes":3, "seed":1337, "steps":6}
+	return {
+		"base_type":"NOISE_LAYER", "scale":6.0, "amount":35.0, "passes":3, "steps":6,
+		"seed":1337, "erosion":0.0, "erosion_scale":8.0,
+		"sedimentation":0.0, "sediment_scale":3.0,
+	}
+
+
+func _phase47_biome_terrain_defaults(biome_id: int) -> Dictionary:
+	var profile: Dictionary = _phase47_default_biome_profile()
+	profile["seed"] = 1337 + biome_id * 101
+	var ported: Dictionary = PHASE47_BIOME_TERRAIN_DEFAULTS.get(biome_id, {}) as Dictionary
+	for key: String in ["base_type", "scale", "amount", "passes", "steps",
+			"erosion", "sedimentation"]:
+		if ported.has(key):
+			profile[key] = ported[key]
+	return profile
 
 
 func _phase47_biome_profile(graph: Resource) -> Dictionary:
@@ -334,21 +394,29 @@ func _phase47_biome_profile(graph: Resource) -> Dictionary:
 			continue
 		var node: Dictionary = value as Dictionary
 		var node_type: String = String(node.get("type", ""))
-		if not PHASE47_BIOME_PROFILE_TYPES.has(node_type):
-			continue
-		result["type"] = node_type
-		for key_value: Variant in (node.get("parameters", {}) as Dictionary).keys():
-			result[String(key_value)] = (node.get("parameters", {}) as Dictionary)[key_value]
-		return result
+		var parameters: Dictionary = node.get("parameters", {}) as Dictionary
+		if PHASE47_BIOME_BASE_TYPES.has(node_type):
+			result["base_type"] = node_type
+			result["scale"] = float(parameters.get("scale", result["scale"]))
+			result["amount"] = float(parameters.get("amount", result["amount"]))
+			result["passes"] = int(parameters.get("passes", result["passes"]))
+			result["steps"] = int(parameters.get("steps", result["steps"]))
+			result["seed"] = int(parameters.get("seed", result["seed"]))
+		elif node_type == PHASE47_EROSION_TYPE:
+			result["erosion"] = float(parameters.get("amount", 0.0))
+			result["erosion_scale"] = float(parameters.get("scale", result["erosion_scale"]))
+		elif node_type == PHASE47_SEDIMENT_TYPE:
+			result["sedimentation"] = float(parameters.get("amount", 0.0))
+			result["sediment_scale"] = float(parameters.get("scale", result["sediment_scale"]))
 	return result
 
 
 func _phase47_rebuild_biome_profile(graph: Resource, profile: Dictionary) -> void:
 	if graph == null:
 		return
-	var type: String = String(profile.get("type", "NOISE_LAYER"))
-	if not PHASE47_BIOME_PROFILE_TYPES.has(type):
-		type = "NOISE_LAYER"
+	var base_type: String = String(profile.get("base_type", "NOISE_LAYER"))
+	if not PHASE47_BIOME_BASE_TYPES.has(base_type):
+		base_type = "NOISE_LAYER"
 	graph.call("create_default_graph", SHADER_SLOT_MODEL.Domain.DISPLACEMENT)
 	var output_id: String = ""
 	for value: Variant in graph.get(&"nodes") as Array:
@@ -358,18 +426,39 @@ func _phase47_rebuild_biome_profile(graph: Resource, profile: Dictionary) -> voi
 			break
 	if output_id.is_empty():
 		return
-	var base_id: String = String(graph.call("add_node", "CONSTANT_FLOAT", Vector2(70.0, 180.0),
+	var seed: int = int(profile.get("seed", 1337))
+	var cursor: String = String(graph.call("add_node", "CONSTANT_FLOAT", Vector2(70.0, 180.0),
 		{"value":0.0}))
-	var parameters := {
-		"scale":float(profile.get("scale", 6.0)),
-		"amount":float(profile.get("amount", 35.0)),
+	var base_id: String = String(graph.call("add_node", base_type, Vector2(360.0, 180.0), {
+		"scale":maxf(0.1, float(profile.get("scale", 6.0))),
+		"amount":maxf(0.0, float(profile.get("amount", 35.0))),
 		"passes":clampi(int(profile.get("passes", 3)), 1, 4),
-		"seed":int(profile.get("seed", 1337)),
+		"seed":seed,
 		"steps":clampi(int(profile.get("steps", 6)), 2, 24),
-	}
-	var profile_id: String = String(graph.call("add_node", type, Vector2(360.0, 180.0), parameters))
-	graph.call("connect_nodes", base_id, 0, profile_id, 0)
-	graph.call("connect_nodes", profile_id, 0, output_id, 0)
+	}))
+	graph.call("connect_nodes", cursor, 0, base_id, 0)
+	cursor = base_id
+	var column: float = 640.0
+	var erosion: float = maxf(0.0, float(profile.get("erosion", 0.0)))
+	if erosion > 0.0:
+		var erosion_id: String = String(graph.call("add_node", PHASE47_EROSION_TYPE,
+			Vector2(column, 180.0), {
+				"scale":maxf(0.1, float(profile.get("erosion_scale", 8.0))),
+				"amount":erosion, "passes":3, "seed":seed + 7919,
+			}))
+		graph.call("connect_nodes", cursor, 0, erosion_id, 0)
+		cursor = erosion_id
+		column += 280.0
+	var sedimentation: float = maxf(0.0, float(profile.get("sedimentation", 0.0)))
+	if sedimentation > 0.0:
+		var sediment_id: String = String(graph.call("add_node", PHASE47_SEDIMENT_TYPE,
+			Vector2(column, 180.0), {
+				"scale":maxf(0.1, float(profile.get("sediment_scale", 3.0))),
+				"amount":sedimentation, "passes":3, "seed":seed + 104729,
+			}))
+		graph.call("connect_nodes", cursor, 0, sediment_id, 0)
+		cursor = sediment_id
+	graph.call("connect_nodes", cursor, 0, output_id, 0)
 
 
 func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
@@ -390,18 +479,18 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 	var type_row := HBoxContainer.new()
 	box.add_child(type_row)
 	var type_label := Label.new()
-	type_label.text = "Terrain shape"
+	type_label.text = "Base shape / noise type"
 	type_label.custom_minimum_size.x = 220.0
 	type_row.add_child(type_label)
 	var type_picker := OptionButton.new()
 	type_picker.name = "BiomeTerrainShape"
-	for index: int in PHASE47_BIOME_PROFILE_TYPES.size():
-		type_picker.add_item(PHASE47_BIOME_PROFILE_LABELS[index])
-		type_picker.set_item_metadata(index, PHASE47_BIOME_PROFILE_TYPES[index])
-		if PHASE47_BIOME_PROFILE_TYPES[index] == String(profile["type"]):
+	for index: int in PHASE47_BIOME_BASE_TYPES.size():
+		type_picker.add_item(PHASE47_BIOME_BASE_LABELS[index])
+		type_picker.set_item_metadata(index, PHASE47_BIOME_BASE_TYPES[index])
+		if PHASE47_BIOME_BASE_TYPES[index] == String(profile["base_type"]):
 			type_picker.select(index)
 	type_picker.item_selected.connect(func(index: int) -> void:
-		profile["type"] = String(type_picker.get_item_metadata(index))
+		profile["base_type"] = String(type_picker.get_item_metadata(index))
 		_phase47_stage_biome_profile(graph, profile, "Change biome terrain shape")
 	)
 	type_row.add_child(type_picker)
@@ -409,8 +498,8 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 	_phase47_add_biome_number(box, "Feature size", profile, "scale", 0.1, 100.0, 0.1,
 		"Higher values make the pattern smaller and more frequent.", graph)
 	_phase47_add_biome_number(box, "Feature height", profile, "amount", 0.0, 1000.0, 1.0,
-		"Maximum terrain change before the profile blend strength.", graph)
-	if String(profile["type"]) == "TERRACE_RELIEF":
+		"Height of the base shape in metres, before the profile blend strength.", graph)
+	if String(profile["base_type"]) == "TERRACE_RELIEF":
 		_phase47_add_biome_number(box, "Terrace steps", profile, "steps", 2.0, 24.0, 1.0,
 			"More steps makes smaller terraces; fewer steps makes bold plateaus.", graph)
 	else:
@@ -418,6 +507,19 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 			"More passes adds finer nested structure.", graph)
 	_phase47_add_biome_number(box, "Pattern seed", profile, "seed", 0.0, 999999.0, 1.0,
 		"Changes the pattern without changing the biome boundary.", graph)
+
+	var process_label := Label.new()
+	process_label.text = "Surface processes"
+	process_label.add_theme_font_size_override("font_size", 16)
+	box.add_child(process_label)
+	_phase47_add_biome_number(box, "Water erosion", profile, "erosion", 0.0, 400.0, 1.0,
+		"Carves branching drainage channels into this biome, in metres. 0 disables the erosion pass.", graph)
+	_phase47_add_biome_number(box, "Erosion feature size", profile, "erosion_scale", 0.1, 100.0, 0.1,
+		"Spacing of the erosion channel network. Higher values make a finer, denser network.", graph)
+	_phase47_add_biome_number(box, "Sedimentation", profile, "sedimentation", 0.0, 400.0, 1.0,
+		"Fills valley floors and basins with deposited material, in metres. 0 disables the sediment pass.", graph)
+	_phase47_add_biome_number(box, "Sediment feature size", profile, "sediment_scale", 0.1, 100.0, 0.1,
+		"Spacing of the sediment fans. Higher values make smaller, more frequent deposits.", graph)
 
 	var blend_row := HBoxContainer.new()
 	box.add_child(blend_row)
@@ -449,13 +551,30 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 	blend_row.add_child(strength)
 
 	_phase47_build_profile_blend(box, terrain, graph, profile, biome_id)
-	var remove := Button.new()
-	remove.text = "Remove %s Profile" % BIOME_NAMES[biome_id]
-	remove.pressed.connect(func() -> void:
-		_session.remove_terrain_shader_slot(String(slot.get(&"slot_id")))
+	var reset := Button.new()
+	reset.name = "ResetBiomeTerrainProfile"
+	reset.text = "Reset %s Terrain to Default" % BIOME_NAMES[biome_id]
+	reset.tooltip_text = "Restore this biome's ported terrain character and its Add / 1× composition."
+	reset.pressed.connect(func() -> void:
+		_session.stage_action("Reset %s terrain profile" % BIOME_NAMES[biome_id], func() -> void:
+			slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
+			slot.set(&"strength", 1.0)
+			_phase47_rebuild_biome_profile(slot.get(&"graph") as Resource,
+				_phase47_biome_terrain_defaults(biome_id))
+		, WorldAuthoringSession.ApplyScope.GRAPH)
 		_refresh_current_category()
 	)
-	box.add_child(remove)
+	box.add_child(reset)
+	var disable := Button.new()
+	disable.name = "DisableBiomeTerrainProfile"
+	disable.text = "Turn Off %s Terrain" % BIOME_NAMES[biome_id]
+	disable.tooltip_text = "Set this biome profile's strength to zero without deleting it."
+	disable.pressed.connect(func() -> void:
+		_session.stage_set(slot, &"strength", 0.0, WorldAuthoringSession.ApplyScope.GRAPH,
+			"Turn off biome terrain profile")
+		_refresh_current_category()
+	)
+	box.add_child(disable)
 
 
 func _phase47_add_biome_number(parent: VBoxContainer, label_text: String, profile: Dictionary,
@@ -538,11 +657,12 @@ func _phase47_build_profile_blend(parent: VBoxContainer, terrain: Resource, grap
 			return
 		var source_profile := _phase47_biome_profile(source_slot.get(&"graph") as Resource)
 		var mixed := profile.duplicate(true)
-		for key: String in ["scale", "amount", "passes", "steps"]:
+		for key: String in ["scale", "amount", "passes", "steps",
+				"erosion", "erosion_scale", "sedimentation", "sediment_scale"]:
 			mixed[key] = lerpf(float(profile.get(key, 0.0)), float(source_profile.get(key, 0.0)),
 				_phase47_profile_blend_amount)
-		mixed["type"] = source_profile.get("type", profile.get("type", "NOISE_LAYER")) \
-			if _phase47_profile_blend_amount >= 0.5 else profile.get("type", "NOISE_LAYER")
+		mixed["base_type"] = source_profile.get("base_type", profile.get("base_type", "NOISE_LAYER")) \
+			if _phase47_profile_blend_amount >= 0.5 else profile.get("base_type", "NOISE_LAYER")
 		_phase47_stage_biome_profile(graph, mixed, "Blend biome terrain profiles")
 	)
 	row.add_child(apply)

@@ -96,26 +96,30 @@ func _run() -> void:
 	biome_picker.select(11)
 	biome_picker.emit_signal("item_selected", 11)
 	await _frames(3)
-	var create: Button = _find_named(editor, "CreateBiomeTerrainProfile") as Button
-	if create == null:
-		_fail("Biome Terrain editor cannot create a selected-biome profile")
+	# The profile is provisioned automatically from the biome's ported terrain
+	# character -- no create step -- and is still an ordinary scoped displacement
+	# slot with the all-ring / only-this-biome mask.
+	if _find_named(editor, "CreateBiomeTerrainProfile") != null:
+		_fail("Biome Terrain editor still requires a manual create step")
 		return
-	create.emit_signal("pressed")
-	await _frames(3)
 	var biome_slot: Resource = terrain.call("find_shader_slot", "simple-biome-terrain-11") as Resource
 	if biome_slot == null:
-		_fail("Biome Terrain editor did not create its scoped terrain slot")
+		_fail("Biome Terrain editor did not auto-provision its scoped terrain slot")
 		return
 	if int(biome_slot.get(&"clipmap_level_mask")) != ((1 << 15) - 1) \
 			or int(biome_slot.get(&"biome_mask_mode")) != 1:
 		_fail("Biome terrain profile is not constrained to the selected biome on every ring")
 		return
+	var biome_seed_graph: Resource = biome_slot.get(&"graph") as Resource
+	if not _graph_has_node_type(biome_seed_graph, "SEDIMENT_DEPOSIT"):
+		_fail("Provisioned Hot desert profile did not port its sedimentation pass")
+		return
 	var shape: OptionButton = _find_named(editor, "BiomeTerrainShape") as OptionButton
 	if shape == null:
-		_fail("Biome terrain profile has no terrain-shape picker")
+		_fail("Biome terrain profile has no base-shape / noise-type picker")
 		return
-	shape.select(4) # Terraced Relief
-	shape.emit_signal("item_selected", 4)
+	shape.select(2) # Terraced relief
+	shape.emit_signal("item_selected", 2)
 	await _frames(3)
 	var biome_graph: Resource = biome_slot.get(&"graph") as Resource
 	if not _graph_has_node_type(biome_graph, "TERRACE_RELIEF"):
@@ -128,6 +132,33 @@ func _run() -> void:
 		_fail("Terraced Relief did not compile into the shared terrain bytecode")
 		return
 	runtime.queue_free()
+
+	# The alternate base noise types lower to their own shared opcodes (30 billow,
+	# 31 voronoi ridges) on the same CPU/GPU bytecode path. Re-query the picker:
+	# the terrace edit above rebuilt the page and freed the old control.
+	var shape_again: OptionButton = _find_named(editor, "BiomeTerrainShape") as OptionButton
+	if shape_again == null:
+		_fail("Base-shape picker went missing after a shape change")
+		return
+	shape_again.select(4) # Voronoi ridges (cellular)
+	shape_again.emit_signal("item_selected", 4)
+	await _frames(3)
+	if not _graph_has_node_type(biome_slot.get(&"graph") as Resource, "VORONOI_RIDGES"):
+		_fail("Voronoi ridges did not serialize into the terrain graph")
+		return
+	var noise_runtime: Node = RUNTIME.new()
+	add_child(noise_runtime)
+	var noise_compiled: Dictionary = noise_runtime.call("compile_from_terrain", terrain) as Dictionary
+	if not bool(noise_compiled.get("active", false)) or not _runtime_has_opcode(noise_runtime, 31):
+		_fail("Voronoi ridges did not compile into the shared terrain bytecode")
+		return
+	var noise_height: float = float(noise_runtime.call("evaluate_height",
+		Vector3(0.2, 0.6, 0.3).normalized(), 0.0, 0, 11, 0.0))
+	if not is_finite(noise_height):
+		_fail("Voronoi ridge evaluation produced a non-finite height")
+		return
+	noise_runtime.queue_free()
+
 	print("SIMPLE_TERRAIN_TAB_PHASE47_OK: Terrain controls update production geomorph, all rings, no shader/node UI")
 	editor.queue_free()
 	await _frames(2)

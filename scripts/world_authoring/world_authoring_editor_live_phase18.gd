@@ -576,10 +576,9 @@ func _apply_runtime_shader_state(target_id: String, material: ShaderMaterial) ->
 
 
 func _runtime_material_map() -> Dictionary:
+	# TARGET_TERRAIN is intentionally excluded: the renderer owns the terrain
+	# material's shader now (see _runtime_material).
 	var result: Dictionary = {}
-	var terrain_material := _runtime_material(TARGET_TERRAIN)
-	if terrain_material != null:
-		result[TARGET_TERRAIN] = terrain_material
 	var ocean_local := _runtime_material(TARGET_OCEAN_LOCAL)
 	if ocean_local != null:
 		result[TARGET_OCEAN_LOCAL] = ocean_local
@@ -607,8 +606,15 @@ func _runtime_material_map() -> Dictionary:
 func _runtime_material(target_id: String) -> ShaderMaterial:
 	match target_id:
 		TARGET_TERRAIN:
-			var node := get_node_or_null("/root/GroundGeometryClipmap")
-			return node.get("_material") as ShaderMaterial if node != null else null
+			# The live terrain-shader-source lab was retired with the SHADERS
+			# category. GroundGeometryClipmap (blankaware) now owns its own
+			# `_material.shader`: it swaps in a path-less authored-terrain variant
+			# whenever a scoped author graph (biome profile, spatial mask, preset)
+			# is active. This inspector must never touch that material, or its
+			# per-frame "restore base shader" pass strips authored displacement
+			# from the render every frame while the CPU/contact path still applies
+			# it (terrain looks unchanged, AGL drifts).
+			return null
 		TARGET_OCEAN_LOCAL:
 			var node := get_node_or_null("/root/OceanSystem")
 			return node.get("_material") as ShaderMaterial if node != null else null

@@ -176,7 +176,15 @@ func _sync_authoring_shader_variant(force: bool) -> void:
 		return
 	var authored: bool = _runtime_program_active(_displacement_runtime) \
 		or _runtime_program_active(_material_runtime)
-	if not force and authored == _authored_shader_active:
+	# Trusting `_authored_shader_active` alone is not enough: another node can
+	# reassign this same `_material.shader` every frame (the retired runtime-shader
+	# inspector force-restores the base shader whenever the material carries a
+	# path-less runtime variant). Detect when the material is not actually carrying
+	# the variant the flag claims and reinstall, so authored displacement is not
+	# silently stripped for the rest of the session.
+	var installed_variant: bool = _material.shader != null \
+		and String(_material.shader.resource_name).begins_with("AsterraAuthoredTerrain")
+	if not force and authored == _authored_shader_active and authored == installed_variant:
 		return
 	_install_backend_shader(_blank_backend(), authored)
 

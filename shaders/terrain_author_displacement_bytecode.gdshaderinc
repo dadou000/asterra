@@ -39,6 +39,64 @@ float ad_terrain_fbm(vec3 direction, float scale, int seed, int passes) {
 	return normalizer > 0.0 ? total / normalizer : 0.0;
 }
 
+// Billow fbm: rounded, puffy lobes. Signed, layers like op 22.
+float ad_terrain_billow(vec3 direction, float scale, int seed, int passes) {
+	float total = 0.0;
+	float normalizer = 0.0;
+	float amplitude = 1.0;
+	float frequency = max(abs(scale), 0.000001);
+	for (int octave = 0; octave < 4; octave++) {
+		if (octave >= clamp(passes, 1, 4)) break;
+		float sample_value = ad_noise(direction * frequency, seed + octave * 1013);
+		total += (2.0 * abs(sample_value) - 1.0) * amplitude;
+		normalizer += amplitude;
+		frequency *= 2.0;
+		amplitude *= 0.5;
+	}
+	return normalizer > 0.0 ? total / normalizer : 0.0;
+}
+
+// Squared distances to nearest (x) and second-nearest (y) jittered cell points.
+vec2 ad_worley_f1f2(vec3 pos, int seed) {
+	ivec3 ip = ivec3(floor(pos));
+	vec3 fp = fract(pos);
+	float f1 = 9.0;
+	float f2 = 9.0;
+	for (int gz = -1; gz <= 1; gz++) {
+		for (int gy = -1; gy <= 1; gy++) {
+			for (int gx = -1; gx <= 1; gx++) {
+				ivec3 cell = ip + ivec3(gx, gy, gz);
+				vec3 o = vec3(
+					ad_hash(cell, seed) * 0.5 + 0.5,
+					ad_hash(cell, seed + 1301) * 0.5 + 0.5,
+					ad_hash(cell, seed + 2609) * 0.5 + 0.5);
+				vec3 diff = vec3(float(gx), float(gy), float(gz)) + o - fp;
+				float d2 = dot(diff, diff);
+				if (d2 < f1) { f2 = f1; f1 = d2; }
+				else if (d2 < f2) { f2 = d2; }
+			}
+		}
+	}
+	return vec2(f1, f2);
+}
+
+// Worley F2 - F1 ridge field in [0, 1]: sharp cellular crests. Layers like op 23.
+float ad_terrain_worley_ridge(vec3 direction, float scale, int seed, int passes) {
+	float total = 0.0;
+	float normalizer = 0.0;
+	float amplitude = 1.0;
+	float frequency = max(abs(scale), 0.000001);
+	for (int octave = 0; octave < 4; octave++) {
+		if (octave >= clamp(passes, 1, 4)) break;
+		vec2 f = ad_worley_f1f2(direction * frequency, seed + octave * 1013);
+		total += clamp(sqrt(f.y) - sqrt(f.x), 0.0, 1.0) * amplitude;
+		normalizer += amplitude;
+		frequency *= 2.0;
+		amplitude *= 0.5;
+	}
+	return normalizer > 0.0 ? total / normalizer : 0.0;
+}
+
 float ad_wrap_degrees(float degrees) {
 	return mod(degrees + 180.0, 360.0) - 180.0;
 }
@@ -166,6 +224,8 @@ float author_displacement_height_with_sculpt(vec3 direction, float base_height_m
 		else if (op == 27) v = round(p.w) >= 2.0 ? ad_longitude_mask(direction, p) : ad_latitude_mask(direction, p);
 		else if (op == 28) v = ad_radial_mask(direction, p);
 		else if (op == 29) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), 1); float steps = float(clamp(int(round(p.z)), 2, 24)); float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0); v = a + (terrace * 2.0 - 1.0) * p.y; }
+		else if (op == 30) v = a + ad_terrain_billow(normalize(direction), p.x, int(round(p.w)), int(round(p.z))) * p.y;
+		else if (op == 31) v = a + ad_terrain_worley_ridge(normalize(direction), p.x, int(round(p.w)), int(round(p.z))) * p.y;
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];
