@@ -409,7 +409,10 @@ void vertex() {
 				macro_h, soil, surface, geology, structure, climate, hydro);
 			float micro_h = mmr_height(render_p + u_detail_origin, rock_id, biome,
 				soil, surface, geology, structure, climate, hydro, landform);
-			height += micro_h * micro_w;
+			// Near-camera microrelief is per-material (sand ripples in a desert,
+			// scree on rock...), so the "vary terrain by biome" control fades it
+			// with the geomorph landform weighting.
+			height += micro_h * micro_w * u_geomorph_biome_terrain_variation;
 			altitude_m = height + u_surface_bias;
 			p = d * (u_planet_radius + altitude_m);
 			render_p = stable_displacement
