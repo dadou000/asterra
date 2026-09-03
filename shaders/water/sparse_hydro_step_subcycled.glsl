@@ -3,9 +3,9 @@
 
 // Sparse shallow-water update with temporal HydroLOD subcycling.
 // H0 advances on every fine-clock CFL tick; Hn advances only when its accumulated
-// 2^n-tick interval is due. Non-due slots leave scratch B untouched; canonical A
-// remains authoritative and the due-only commit pass therefore performs no state
-// traffic for those levels.
+// 2^n-tick interval is due. A GPU due-slot queue compacts only the occupied levels
+// scheduled for this tick, and indirect dispatch makes gl_GlobalInvocationID.z an
+// index into that queue rather than an atlas slot. Non-due slots launch no SWE work.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -42,6 +42,9 @@ layout(set = 0, binding = 9, std430) buffer ExternalFluxLedger {
 };
 layout(set = 0, binding = 10, std430) readonly buffer TileMetadata {
     ivec4 tile_metadata[];
+};
+layout(set = 0, binding = 11, std430) readonly buffer DueSlots {
+    uint due_slots[];
 };
 
 layout(push_constant, std430) uniform StepPush {
@@ -207,13 +210,18 @@ vec3 apply_sources(vec3 q, vec4 source, float step_dt) {
 void main() {
     if (pc.step_index >= control.steps_taken || control.iteration_active == 0u
             || control.current_dt <= 0.0) return;
-    ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
-    int slot = gid.z; int r = tile_res();
-    if (slot >= capacity() || gid.x >= r || gid.y >= r) return;
 
-    // Hidden/unoccupied and non-due slots deliberately perform no scratch write.
-    // A is the persistent canonical owner until this level actually advances.
-    if (occupied[slot] == 0) return;
+    ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
+    int r = tile_res();
+    if (gid.x >= r || gid.y >= r) return;
+
+    uint queue_index = uint(gid.z);
+    if (queue_index >= uint(capacity())) return;
+    int slot = int(due_slots[queue_index]);
+    if (slot < 0 || slot >= capacity() || occupied[slot] == 0) return;
+
+    // The queue already guarantees this slot is due. Keep the dt guard as a
+    // fail-closed cross-check against a stale/corrupt indirect queue.
     float step_dt = scheduled_dt(slot);
     if (step_dt <= 0.0) return;
 
