@@ -1,11 +1,20 @@
 class_name SparseHydroAtlasGPU
 extends Node
-## Phase 3 GPU storage for transient hydrology tiles.
+## GPU storage for transient hydrology tiles.
 ##
 ## Slots are fixed-size contiguous ranges in SSBOs. Stable HydroTileKey identity
 ## is mirrored into a portable uvec4-style metadata buffer as (face, level, x, y);
 ## the packed 64-bit Morton ID remains a CPU/save identity and is not required by
 ## shaders. Recycling a slot never changes world identity outside this binding.
+##
+## `cell_size_m` is the H0/base-level metric. Phase 4 may place coarser quadtree
+## levels in the same atlas; their physical cell size is derived from metadata:
+##
+##   dx(level) = H0_dx * 2^(base_tile_level - level)
+##
+## This keeps one bounded atlas/pool while making physical metrics representation-
+## aware. Standalone legacy tests may leave base_tile_level unset and retain the
+## old single-dx behavior.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -18,6 +27,7 @@ const METADATA_INTS := 4
 var capacity := 0
 var tile_resolution := 0
 var cell_size_m := 1.0
+var base_tile_level := -1
 
 var _state_a := RID()
 var _state_b := RID()
@@ -78,6 +88,51 @@ func initialized_ok() -> bool:
 	return _initialized
 
 
+## Production sets this immediately after atlas creation and before any solver or
+## source layer is initialized. H0 is the finest physical level owned by this atlas.
+func set_base_tile_level(level: int) -> Error:
+	if level < 0 or level > HydroTileKey.MAX_LEVEL:
+		return ERR_INVALID_PARAMETER
+	if _initialized:
+		# Changing the metric while any published slot exists would reinterpret water
+		# volume. It is only safe before allocation/publication.
+		var empty := true
+		# Occupancy is GPU-resident, so use the invariant that production calls this
+		# before scheduler binding. Re-setting the same value remains idempotent.
+		if base_tile_level >= 0 and base_tile_level != level:
+			empty = false
+		if not empty:
+			return ERR_BUSY
+	base_tile_level = level
+	return OK
+
+
+func hydrolod_enabled() -> bool:
+	return base_tile_level >= 0
+
+
+func physical_lod_for_level(level: int) -> int:
+	if base_tile_level < 0:
+		return 0
+	return maxi(base_tile_level - clampi(level, 0, HydroTileKey.MAX_LEVEL), 0)
+
+
+func cell_size_for_level(level: int) -> float:
+	if base_tile_level < 0:
+		return cell_size_m
+	var delta := base_tile_level - clampi(level, 0, HydroTileKey.MAX_LEVEL)
+	return cell_size_m * pow(2.0, float(delta))
+
+
+func cell_area_for_level(level: int) -> float:
+	var dx := cell_size_for_level(level)
+	return dx * dx
+
+
+func tile_width_for_level(level: int) -> float:
+	return cell_size_for_level(level) * float(maxi(tile_resolution, 1))
+
+
 func total_cell_count() -> int:
 	return capacity * tile_resolution * tile_resolution
 
@@ -118,6 +173,8 @@ func stats() -> Dictionary:
 		"capacity": capacity,
 		"tile_resolution": tile_resolution,
 		"cell_size_m": cell_size_m,
+		"base_tile_level": base_tile_level,
+		"hydrolod_metrics": hydrolod_enabled(),
 		"cells_per_tile": cells_per_tile(),
 		"total_cells": total_cell_count(),
 		"gpu_bytes": gpu_bytes_estimate(),
@@ -141,10 +198,6 @@ func debug_upload_slot(slot: int, values: PackedFloat32Array) -> Error:
 ## Initialize an ALLOCATING slot while it is still unpublished. Both A and B are
 ## written so no stale state from the prior owner can leak into later ping-pong or
 ## diagnostics. The values normally contain dry h/hu/hv plus the destination bed.
-##
-## This is a bootstrap interface for the frontier pipeline. The future terrain GPU
-## reconstruction pass can write the same two SSBO ranges directly without a CPU
-## upload; the lifecycle contract remains identical.
 func stage_slot_state(slot: int, values: PackedFloat32Array) -> Error:
 	if not _initialized or slot < 0 or slot >= capacity:
 		return ERR_INVALID_PARAMETER
@@ -353,6 +406,7 @@ func release() -> void:
 	_initialized = false
 	_state_a = RID(); _state_b = RID(); _sources = RID()
 	_occupancy = RID(); _tile_metadata = RID()
+	base_tile_level = -1
 	RenderingServer.call_on_render_thread(Callable(self, &"_release_render_thread").bind(rids))
 	released.emit()
 
