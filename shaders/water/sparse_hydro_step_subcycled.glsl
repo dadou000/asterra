@@ -3,8 +3,9 @@
 
 // Sparse shallow-water update with temporal HydroLOD subcycling.
 // H0 advances on every fine-clock CFL tick; Hn advances only when its accumulated
-// 2^n-tick interval is due. Non-due slots copy A->B unchanged so the established
-// canonical commit path remains valid.
+// 2^n-tick interval is due. Non-due slots leave scratch B untouched; canonical A
+// remains authoritative and the due-only commit pass therefore performs no state
+// traffic for those levels.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -209,12 +210,14 @@ void main() {
     ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
     int slot = gid.z; int r = tile_res();
     if (slot >= capacity() || gid.x >= r || gid.y >= r) return;
-    ivec2 p = gid.xy; int i = idx(slot, p);
-    if (occupied[slot] == 0) { cells_out[i] = vec4(0.0); return; }
 
+    // Hidden/unoccupied and non-due slots deliberately perform no scratch write.
+    // A is the persistent canonical owner until this level actually advances.
+    if (occupied[slot] == 0) return;
     float step_dt = scheduled_dt(slot);
-    if (step_dt <= 0.0) { cells_out[i] = cells_in[i]; return; }
+    if (step_dt <= 0.0) return;
 
+    ivec2 p = gid.xy; int i = idx(slot, p);
     vec4 packed_c = cells_in[i]; vec3 c = packed_c.xyz; float zc = packed_c.w;
     vec4 packed_w = neighbor_at(slot, p + ivec2(-1,0), DIR_WEST, p.y, packed_c);
     vec4 packed_e = neighbor_at(slot, p + ivec2(1,0), DIR_EAST, p.y, packed_c);
