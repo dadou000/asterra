@@ -3,7 +3,8 @@ extends HydroLODInterfaceFluxGPU
 ## Temporal-subcycling extension of the 2:1 interface operator.
 ##
 ## Fine updates write equal/opposite coarse increments into a GPU flux register.
-## The register is consumed when the coarse level reaches its synchronization tick.
+## Registers are indexed by authoritative atlas cell rather than interface lane so
+## two mixed edges meeting at one coarse corner share the same water reservation.
 
 var _flux_register := RID()
 var _flux_register_bytes := 0
@@ -30,7 +31,7 @@ func initialize(p_atlas: SparseHydroAtlasGPU, control_rid: RID,
 	gravity = maxf(p_gravity, 1.0e-4)
 	dry_eps = maxf(p_dry_eps, 1.0e-8)
 	_max_descriptors = maxi(atlas.capacity * 4, 1)
-	_flux_register_bytes = _max_descriptors * atlas.tile_resolution * 16
+	_flux_register_bytes = atlas.total_cell_count() * 16
 	_init_pending = true
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_init_render_thread").bind(spirv))
@@ -49,6 +50,8 @@ func clear_flux_register(rd: RenderingDevice) -> Error:
 func stats() -> Dictionary:
 	var out := super.stats()
 	out["temporal_flux_registers"] = true
+	out["register_scope"] = "atlas_cell"
+	out["shared_corner_reservations"] = true
 	out["flux_register_bytes"] = _flux_register_bytes
 	out["fine_flux_accumulates_until_coarse_sync"] = true
 	out["gpu_bytes"] = int(out.get("gpu_bytes", 0)) + _flux_register_bytes
