@@ -93,22 +93,40 @@ func _run() -> void:
 	if features.size() != 2:
 		_fail("Impact Crater did not create its two ordinary guided features")
 		return
-	var basin: Resource = _feature_named(features, "Crater Basin")
-	var rim: Resource = _feature_named(features, "Crater Rim")
-	if basin == null or rim == null:
-		_fail("Crater Basin/Rim are missing after preset creation")
-		return
 
-	# Phase 46 should transiently group both freshly-created parts for one-click
-	# placement, but should not serialize a new group runtime object.
+	# Phase 46 should transiently group exactly the newly-created ordinary slots.
+	# Phase 45's dedicated UI regression owns the exact display-name contract; this
+	# regression resolves parts from the placement IDs and their authoritative graph
+	# semantics so it tests Phase 46 rather than duplicating Phase 45 assertions.
 	if int(editor.get("_placement_mode")) != PLACE_MODE:
 		_fail("multi-part crater was not automatically armed for viewport placement")
 		return
 	var place_ids: Array = editor.get("_phase46_place_slot_ids") as Array
-	if place_ids.size() != 2 \
-			or not place_ids.has(String(basin.get(&"slot_id"))) \
-			or not place_ids.has(String(rim.get(&"slot_id"))):
-		_fail("crater viewport placement group does not contain both ordinary slots")
+	if place_ids.size() != 2:
+		_fail("crater viewport placement group does not contain exactly two ordinary slots")
+		return
+	var basin: Resource = null
+	var rim: Resource = null
+	for id_value: Variant in place_ids:
+		var grouped_slot: Resource = terrain.call("find_shader_slot", String(id_value)) as Resource
+		if grouped_slot == null or not features.has(grouped_slot):
+			_fail("crater placement group contains a slot outside the newly-created feature stack")
+			return
+		var grouped_graph: Resource = grouped_slot.get(&"graph") as Resource
+		if not GUIDED.is_guided_graph(grouped_graph):
+			_fail("crater placement group contains a non-guided graph")
+			return
+		var grouped_config: Dictionary = GUIDED.config_from_graph(grouped_graph)
+		match String(grouped_config.get("area_kind", "")):
+			GUIDED.AREA_RADIAL:
+				basin = grouped_slot
+			GUIDED.AREA_RING:
+				rim = grouped_slot
+	if basin == null or rim == null:
+		_fail("crater placement group is not the expected Radial basin + Ring rim")
+		return
+	if String(editor.get("_phase43_selected_feature_id")) != String(basin.get(&"slot_id")):
+		_fail("Impact Crater did not leave its first Radial part selected for editing")
 		return
 	var place_button: Button = _find_named(editor, "PlaceFeatureInViewport") as Button
 	if place_button == null or place_button.disabled or not place_button.text.contains("PLACING"):
@@ -197,13 +215,6 @@ func _features(terrain: Resource) -> Array[Resource]:
 		if slot != null and String(slot.get(&"slot_id")) != NATIVE.PRODUCTION_SHAPE_SLOT_ID:
 			out.append(slot)
 	return out
-
-
-func _feature_named(features: Array[Resource], display_name: String) -> Resource:
-	for slot: Resource in features:
-		if String(slot.get(&"display_name")) == display_name:
-			return slot
-	return null
 
 
 func _find_named(root: Node, node_name: String) -> Node:
