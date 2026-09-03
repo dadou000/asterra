@@ -101,6 +101,8 @@ func bind_production_controls(material: ShaderMaterial) -> void:
 	_bind_nonnegative(material, "u_base_elevation_continental", c, "base_elevation_continental", 1.0)
 	_bind_nonnegative(material, "u_base_elevation_regional", c, "base_elevation_regional", 1.0)
 	_bind_nonnegative(material, "u_base_elevation_local", c, "base_elevation_local", 1.0)
+	material.set_shader_parameter("u_geomorph_biome_terrain_variation",
+		clampf(float(c.get("biome_terrain_variation", 1.0)), 0.0, 1.0))
 
 	if bool(c.get("override_seed", false)):
 		material.set_shader_parameter("u_detail_seed", int(c.get("detail_seed", 1337)))

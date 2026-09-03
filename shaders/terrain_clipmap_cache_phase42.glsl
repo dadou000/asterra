@@ -78,6 +78,7 @@ layout(push_constant, std430) uniform Params {
 #define GC_BASE_ELEV_CONTINENTAL        (gc.value[11].w)
 #define GC_BASE_ELEV_REGIONAL          (gc.value[12].x)
 #define GC_BASE_ELEV_LOCAL             (gc.value[12].y)
+#define GC_BIOME_VARIATION            (gc.value[12].z)
 
 const float PI = 3.14159265358979323846;
 const float TANGENT_FAST_MAX_ARC_M = 70000.0;
@@ -287,6 +288,9 @@ float geomorph(vec3 dir, float spacing_m, float macro_h) {
     vec4 climate = ctx_climate(dir);
     vec4 hydro = ctx_hydro(dir);
     vec4 weights = landform_weights(macro_h, soil, surface, geology, structure, climate, hydro);
+    // Height-synthesis only: fade per-biome landform weighting toward neutral so
+    // the Global Terrain can be made uniform. Material path is untouched.
+    weights = mix(vec4(0.0), weights, GC_BIOME_VARIATION);
     float mountain = weights.r;
     float arid = weights.g;
     float glacial = weights.b;

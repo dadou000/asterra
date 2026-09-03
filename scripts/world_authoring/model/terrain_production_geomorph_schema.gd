@@ -18,6 +18,7 @@ const GLOBAL_CONTROLS: PackedStringArray = [
 	"base_elevation_continental",
 	"base_elevation_regional",
 	"base_elevation_local",
+	"biome_terrain_variation",
 ]
 
 const CONTROL_DEFAULTS: Dictionary = {
@@ -73,6 +74,7 @@ const CONTROL_DEFAULTS: Dictionary = {
 	"base_elevation_continental": 1.0,
 	"base_elevation_regional": 1.0,
 	"base_elevation_local": 1.0,
+	"biome_terrain_variation": 1.0,
 }
 
 # The order here is part of the production contract. `parent_stage` describes a

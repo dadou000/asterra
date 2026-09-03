@@ -73,6 +73,9 @@ static func _all_controls() -> Array[Dictionary]:
 		_control("base_elevation_local", "Base: Local",
 			"EQ band over the planet's own resident elevation: the finest structure already present in the base field.",
 			"Overall Shape", 1.0, 0.0, 2.0, 0.01, "x"),
+		_control("biome_terrain_variation", "Vary Terrain by Biome",
+			"1x lets the shared terrain add its own per-biome relief (mountains where it's tectonic, dunes where it's arid, glacial shaping where it's cold). 0x makes the Global Terrain uniform everywhere so all per-biome relief comes from the Biome Terrain tab. Surface materials and colours are unaffected.",
+			"Overall Shape", 1.0, 0.0, 1.0, 0.01, "x"),
 
 		_control("mountain_strength", "Mountain Amount",
 			"Controls how strongly mountain ranges contribute to this terrain.",

@@ -31,7 +31,7 @@ const PACKED_KEYS: Array[String] = [
 	"fine_wavelength_m", "fine_amplitude_m", "dune_wavelength_m", "dune_amplitude_m",
 	"dune_warp", "micro_wavelength_m", "micro_amplitude_m", "glacial_wavelength_m",
 	"glacial_amplitude_m", "glacial_base_scale", "glacial_mix", "base_elevation_continental",
-	"base_elevation_regional", "base_elevation_local", "reserved_0", "reserved_1",
+	"base_elevation_regional", "base_elevation_local", "biome_terrain_variation", "reserved_1",
 ]
 
 
@@ -100,7 +100,12 @@ static func normalized_controls(source: Dictionary) -> Dictionary:
 	out["base_elevation_continental"] = _nonnegative(merged, "base_elevation_continental", 1.0)
 	out["base_elevation_regional"] = _nonnegative(merged, "base_elevation_regional", 1.0)
 	out["base_elevation_local"] = _nonnegative(merged, "base_elevation_local", 1.0)
-	out["reserved_0"] = 0.0
+	# 1.0 keeps the climate/soil-driven per-biome landform weighting in the geomorph
+	# height synthesis (mountains, dunes, glacial, deposition). 0.0 makes the Global
+	# Terrain uniform everywhere so per-biome relief comes only from Biome Terrain.
+	# Material classification is unaffected.
+	out["biome_terrain_variation"] = clampf(
+		float(merged.get("biome_terrain_variation", 1.0)), 0.0, 1.0)
 	out["reserved_1"] = 0.0
 	return out
 

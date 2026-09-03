@@ -6,6 +6,7 @@
 // render-identical while Planet Studio can change wavelengths/amplitudes directly.
 
 uniform float u_geomorph_warp_strength : hint_range(0.0, 3.0) = 1.0;
+uniform float u_geomorph_biome_terrain_variation : hint_range(0.0, 1.0) = 1.0;
 uniform float u_geomorph_broad_strength : hint_range(0.0, 3.0) = 1.0;
 uniform float u_geomorph_mountain_strength : hint_range(0.0, 3.0) = 1.0;
 uniform float u_geomorph_mid_strength : hint_range(0.0, 3.0) = 1.0;
@@ -210,6 +211,10 @@ float gm_geomorph_height(vec3 dir, float planet_radius, float spacing_m,
 	vec4 hydro = asterra_ctx_hydrology(dir);
 	vec4 weights = gm_landform_weights_from_context(
 		macro_h, soil, surface, geology, structure, climate, hydro);
+	// Height-synthesis only: fade the per-biome landform weighting toward neutral
+	// so Global Terrain can be made uniform everywhere. Material classification
+	// calls gm_landform_weights_from_context directly and is not affected.
+	weights = mix(vec4(0.0), weights, u_geomorph_biome_terrain_variation);
 
 	float mountain = weights.r;
 	float arid = weights.g;

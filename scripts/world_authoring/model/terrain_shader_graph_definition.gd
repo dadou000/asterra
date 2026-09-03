@@ -435,7 +435,7 @@ static func production_control_defaults(node_type: String) -> Dictionary:
 				"glacial_wavelength_m":2600.0, "glacial_amplitude_m":52.0,
 				"glacial_base_scale":0.62, "glacial_mix":0.72,
 				"base_elevation_continental":1.0, "base_elevation_regional":1.0,
-				"base_elevation_local":1.0,
+				"base_elevation_local":1.0, "biome_terrain_variation":1.0,
 			}
 		"PRODUCTION_CLASSIFIER_SETTINGS":
 			return {
