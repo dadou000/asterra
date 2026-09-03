@@ -59,6 +59,9 @@ func gpu_stats() -> Dictionary:
 	var out := super.gpu_stats()
 	var physical: Dictionary = out.get("physical_hydrolod", {})
 	var subcycled := _sparse_runtime is SparseHydrologyRuntimeSubcycled
+	var cached_cfl := subcycled \
+		and (_sparse_runtime as SparseHydrologyRuntimeSubcycled).cfl_cache != null \
+		and (_sparse_runtime as SparseHydrologyRuntimeSubcycled).cfl_cache.initialized_ok()
 	physical["temporal_subcycling"] = subcycled
 	physical["binary_ratios"] = "H0:1,H1:2,H2:4,H3:8,H4:16"
 	physical["fine_clock_cfl_normalization"] = true
@@ -70,6 +73,10 @@ func gpu_stats() -> Dictionary:
 	physical["cpu_due_count_readback"] = false
 	physical["non_due_state_copy_eliminated"] = true
 	physical["non_due_per_cell_invocations_eliminated"] = true
+	physical["cached_cfl_tile_summaries"] = cached_cfl
+	physical["fine_tick_cfl_full_cell_scan"] = not cached_cfl
+	physical["cfl_cache_topology_revision_invalidation"] = cached_cfl
+	physical["cfl_cache_due_only_refresh"] = cached_cfl
 	physical["automatic_policy_enabled"] = automatic_physical_hydrolod_active()
 	physical["automatic_policy_configured"] = automatic_physical_hydrolod_enabled
 	physical["automatic_focus_source"] = _automatic_hydrolod_focus_source
