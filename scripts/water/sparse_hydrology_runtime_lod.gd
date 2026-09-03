@@ -1,21 +1,28 @@
 class_name SparseHydrologyRuntimeLOD
 extends SparseHydrologyRuntime
-## Phase-4 production runtime foundation.
+## Phase-4 production runtime.
 ##
-## Reuses the proven Phase-3 cycle orchestration while binding per-level metrics,
-## HydroLOD-aware ingress/frontier policy and an atomic conservative parent/children
-## transition manager. Cross-LOD live interfaces remain disabled until the reflux
-## layer is initialized, so no unsupported mixed boundary can enter the solver.
+## Reuses the Phase-3 orchestration while adding:
+##   - per-level physical metrics;
+##   - HydroLOD-aware ingress/frontier policy;
+##   - conservative parent<->children transfer;
+##   - live 2:1 coarse/fine interface reflux on every CFL substep.
+##
+## The mixed interface registry is a first-class topology mirror. Pool revisions are
+## synchronized before any new physical step and after activity policy changes, so
+## source/frontier/river/LOD ownership changes cannot leave stale cross-LOD fluxes.
 
 signal hydrolod_ready
 signal hydrolod_transition_completed(report: Dictionary)
 signal hydrolod_transition_failed(error: Error, stage: String, recovery: String)
 
 var maximum_physical_lod := 4
-var lod_manager: HydroPhysicalLODManager
+var lod_manager: HydroPhysicalLODManagerInterfaces
+var lod_interfaces: HydroLODInterfaceFluxGPU
 
 var _lod_previous_enabled := true
 var _lod_release_requested := false
+var _hydrolod_ready_emitted := false
 
 
 func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
@@ -57,10 +64,11 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 		"activation": false,
 		"terrain": not _using_internal_terrain_provider,
 		"sources": not _using_internal_terrain_provider,
+		"interfaces": false,
 		"hydrolod": not _using_internal_terrain_provider,
 	}
 
-	solver = SparseHydroStepGPU.new()
+	solver = SparseHydroStepGPULOD.new()
 	solver.name = "SparseHydroStepGPU"
 	solver.gravity = gravity
 	add_child(solver)
@@ -119,7 +127,9 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 
 
 func hydrolod_available() -> bool:
-	return lod_manager != null and lod_manager.initialized_ok()
+	return lod_manager != null and lod_manager.initialized_ok() \
+		and lod_manager.cross_lod_interfaces_enabled \
+		and lod_interfaces != null and lod_interfaces.initialized_ok()
 
 
 func hydrolod_coarsen_eligibility(parent: HydroTileKey) -> Dictionary:
@@ -176,16 +186,51 @@ func stats() -> Dictionary:
 		"base_tile_level": -1 if atlas == null else atlas.base_tile_level,
 		"mixed_metric_solver": true,
 		"conservative_transfer": true,
-		"cross_lod_interfaces_enabled": false if lod_manager == null \
-			else lod_manager.cross_lod_interfaces_enabled,
+		"cross_lod_interfaces_enabled": hydrolod_available(),
+		"same_step_reflux": lod_interfaces != null and lod_interfaces.initialized_ok(),
+		"interfaces": {} if lod_interfaces == null else lod_interfaces.stats(),
 		"manager": {} if lod_manager == null else lod_manager.stats(),
 	}
 	return out
 
 
+## Before the base pump can enqueue another RenderingDevice step, synchronize any
+## pool revision produced by sources/frontier/river bridges outside the LOD manager.
+func _pump() -> void:
+	if _phase == Phase.IDLE and lod_interfaces != null \
+			and lod_interfaces.initialized_ok() \
+			and lod_interfaces.needs_sync(scheduler.pool):
+		var sync_error := _sync_lod_interfaces()
+		if sync_error != OK:
+			_fail_runtime(sync_error, "hydrolod_interface_sync")
+			return
+	super._pump()
+
+
+## Activity policy can release quiet tiles before the already-submitted frontier
+## queue returns. Refresh CPU edge claims immediately so that queue is resolved
+## against the topology that will actually survive this cycle.
+func _apply_activity_policy(summaries: Array[Dictionary]) -> void:
+	super._apply_activity_policy(summaries)
+	if _phase == Phase.FAILED or lod_interfaces == null \
+			or not lod_interfaces.initialized_ok() \
+			or not lod_interfaces.needs_sync(scheduler.pool):
+		return
+	var err := _sync_lod_interfaces()
+	if err != OK:
+		_fail_runtime(err, "hydrolod_interface_after_activity")
+
+
 func _on_solver_initialized() -> void:
 	_component_ready["solver"] = true
+	_try_initialize_lod_interfaces()
 	_try_initialize_lod_manager()
+	_try_finish_initialization()
+
+
+func _on_activation_initialized() -> void:
+	_component_ready["activation"] = true
+	_bind_frontier_interface_claims()
 	_try_finish_initialization()
 
 
@@ -210,12 +255,57 @@ func _on_terrain_initialized() -> void:
 	_try_finish_initialization()
 
 
+func _try_initialize_lod_interfaces() -> void:
+	if lod_interfaces != null or solver == null or not solver.initialized_ok():
+		return
+	var interfaces := HydroLODInterfaceFluxGPU.new()
+	interfaces.name = "HydroLODInterfaceFluxGPU"
+	interfaces.maximum_physical_lod = maximum_physical_lod
+	lod_interfaces = interfaces
+	add_child(interfaces)
+	interfaces.initialized.connect(_on_lod_interfaces_initialized)
+	interfaces.initialization_failed.connect(func(error: Error):
+		if interfaces == lod_interfaces:
+			_fail_initialization(error, "hydrolod_interfaces"))
+	var err := interfaces.initialize(atlas, solver.control_buffer_rid(),
+		solver.gravity, solver.dry_eps)
+	if err != OK:
+		_fail_initialization(err, "hydrolod_interfaces")
+
+
+func _on_lod_interfaces_initialized() -> void:
+	var err := _sync_lod_interfaces()
+	if err != OK:
+		_fail_initialization(err, "hydrolod_interface_topology")
+		return
+	if not (solver is SparseHydroStepGPULOD):
+		_fail_initialization(ERR_UNCONFIGURED, "hydrolod_solver_type")
+		return
+	err = (solver as SparseHydroStepGPULOD).set_lod_interface_flux(lod_interfaces)
+	if err != OK:
+		_fail_initialization(err, "hydrolod_solver_bind")
+		return
+	_component_ready["interfaces"] = true
+	_bind_frontier_interface_claims()
+	_try_bind_manager_interface_sync()
+	_try_finish_initialization()
+
+
+func _bind_frontier_interface_claims() -> void:
+	if lod_interfaces == null or not lod_interfaces.initialized_ok() \
+			or not (activation is HydroFrontierActivationPipelineLOD) \
+			or activation.resolver == null:
+		return
+	activation.resolver.set_boundary_ownership_provider(
+		Callable(lod_interfaces, &"owns_edge"))
+
+
 func _try_initialize_lod_manager() -> void:
 	if not _using_internal_terrain_provider or lod_manager != null \
 			or terrain_bed == null or not terrain_bed.initialized_ok() \
 			or solver == null or not solver.initialized_ok():
 		return
-	var manager := HydroPhysicalLODManager.new()
+	var manager := HydroPhysicalLODManagerInterfaces.new()
 	manager.name = "HydroPhysicalLODManager"
 	manager.maximum_physical_lod = maximum_physical_lod
 	lod_manager = manager
@@ -234,9 +324,29 @@ func _try_initialize_lod_manager() -> void:
 
 
 func _on_lod_manager_initialized() -> void:
-	_component_ready["hydrolod"] = true
-	hydrolod_ready.emit()
+	_try_bind_manager_interface_sync()
 	_try_finish_initialization()
+
+
+func _try_bind_manager_interface_sync() -> void:
+	if lod_manager == null or not lod_manager.initialized_ok() \
+			or lod_interfaces == null or not lod_interfaces.initialized_ok():
+		return
+	var err := lod_manager.set_interface_sync(Callable(self, &"_sync_lod_interfaces"))
+	if err != OK:
+		_fail_initialization(err, "hydrolod_interface_bind")
+		return
+	_component_ready["hydrolod"] = true
+	if not _hydrolod_ready_emitted:
+		_hydrolod_ready_emitted = true
+		hydrolod_ready.emit()
+
+
+func _sync_lod_interfaces() -> Error:
+	if lod_interfaces == null or not lod_interfaces.initialized_ok() \
+			or scheduler == null or scheduler.pool == null:
+		return ERR_UNCONFIGURED
+	return lod_interfaces.sync_pool(scheduler.pool)
 
 
 func _on_lod_transition_completed(_request_id: int, report: Dictionary) -> void:
@@ -254,8 +364,6 @@ func _on_lod_transition_failed(_request_id: int, error: Error, stage: String,
 		(source_ingress as HydroSourceIngressLOD).request_rebuild()
 	enabled = _lod_previous_enabled
 	hydrolod_transition_failed.emit(error, stage, recovery)
-	# Manager failure paths preserve either the original or the conservative target
-	# representation. Continue only after a coherent recovery result was reported.
 	if recovery.is_empty():
 		_fail_runtime(error, "hydrolod_" + stage)
 	elif enabled:
@@ -271,6 +379,7 @@ func release() -> void:
 		lod_manager.release()
 		return
 	_release_lod_manager_now()
+	_release_lod_interfaces_now()
 	super.release()
 
 
@@ -282,6 +391,7 @@ func _on_lod_manager_released() -> void:
 	_lod_release_requested = false
 	if manager != null and is_instance_valid(manager):
 		manager.queue_free()
+	_release_lod_interfaces_now()
 	super.release()
 
 
@@ -291,3 +401,16 @@ func _release_lod_manager_now() -> void:
 	if manager != null and is_instance_valid(manager):
 		manager.release()
 		manager.queue_free()
+
+
+func _release_lod_interfaces_now() -> void:
+	if solver is SparseHydroStepGPULOD:
+		(solver as SparseHydroStepGPULOD).set_lod_interface_flux(null)
+	if activation != null and activation.resolver != null:
+		activation.resolver.set_boundary_ownership_provider(Callable())
+	var interfaces := lod_interfaces
+	lod_interfaces = null
+	if interfaces != null and is_instance_valid(interfaces):
+		interfaces.release()
+		interfaces.queue_free()
+	_hydrolod_ready_emitted = false
