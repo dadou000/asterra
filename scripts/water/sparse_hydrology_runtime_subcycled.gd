@@ -203,14 +203,8 @@ func release() -> void:
 func _on_lod_manager_released() -> void:
 	if not _lod_release_requested:
 		return
-	var manager := lod_manager
-	lod_manager = null
-	_lod_release_requested = false
-	if manager != null and is_instance_valid(manager):
-		manager.queue_free()
 	_release_temporal_now()
-	_release_lod_interfaces_now()
-	SparseHydrologyRuntime.release(self)
+	super._on_lod_manager_released()
 
 
 func _release_temporal_now() -> void:
