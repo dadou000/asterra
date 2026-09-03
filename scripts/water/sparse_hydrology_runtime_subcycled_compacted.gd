@@ -51,6 +51,8 @@ func _on_cfl_cache_initialized() -> void:
 	var old_activity := activity
 	activity = null
 	if old_activity != null and is_instance_valid(old_activity):
+		if old_activity.get_parent() == self:
+			remove_child(old_activity)
 		old_activity.release()
 		old_activity.queue_free()
 
