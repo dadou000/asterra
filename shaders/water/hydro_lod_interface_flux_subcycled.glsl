@@ -3,9 +3,9 @@
 
 // Conservative 2:1 interface coupling for temporal HydroLOD subcycling.
 // Fine-side updates are applied whenever the fine level is due. Equal/opposite
-// coarse increments accumulate in a per-interface flux register. When the coarse
-// level reaches its synchronization tick, the accumulated register replaces the
-// represented fraction of the coarse reflective wall contribution in one commit.
+// coarse increments accumulate in a per-coarse-cell flux register in local h/hu/hv
+// coordinates. Sharing the register by atlas cell prevents two mixed edges meeting
+// at a coarse corner from reserving the same water independently.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -31,7 +31,7 @@ layout(set = 0, binding = 5, std430) readonly buffer Control {
 } control;
 layout(set = 0, binding = 6, std430) readonly buffer TileMetadata { ivec4 tile_metadata[]; };
 layout(set = 0, binding = 7, std430) buffer FluxRegisters {
-    vec4 coarse_delta_nt[]; // depth, normal momentum, tangent momentum, reserved
+    vec4 coarse_delta_local[];
 };
 
 layout(push_constant, std430) uniform InterfacePush {
@@ -151,8 +151,7 @@ void main() {
     float coarse_qn = dot(coarse_before.yz, nc); float coarse_qt = dot(coarse_before.yz, tc);
     vec4 coarse_nt = vec4(coarse_h, coarse_qn, coarse_qt, coarse_before.w);
 
-    uint register_i = pc.interface_index * r + lane;
-    vec3 accumulated = coarse_delta_nt[register_i].xyz;
+    vec3 accumulated_local = coarse_delta_local[coarse_i].xyz;
     float represented_fraction = 0.0;
 
     if (fine_dt > 0.0) {
@@ -181,19 +180,22 @@ void main() {
                 float fine_available = max(fine_after.x, 0.0) * fine_area;
                 limiter = min(1.0, fine_available / max(-segment_volume, 1e-20));
             } else if (segment_volume > 0.0) {
-                float coarse_reserved_h = accumulated.x;
-                float coarse_available = max(coarse_h + coarse_reserved_h, 0.0) * coarse_area;
+                float base_available_h = coarse_dt > 0.0
+                    ? max(cells_out[coarse_i].x, 0.0) : coarse_h;
+                float coarse_available = max(base_available_h + accumulated_local.x, 0.0)
+                    * coarse_area;
                 limiter = min(1.0, coarse_available / max(segment_volume, 1e-20));
             }
             float actual_volume = segment_volume * limiter;
 
             float coarse_scale = fine_dt * fine_dx / coarse_area;
-            vec3 coarse_delta = vec3(
+            vec3 coarse_delta_nt = vec3(
                 -flux.x * coarse_scale,
                 (-flux.y + 0.5 * grav() * hc * hc) * coarse_scale,
                 -flux.z * coarse_scale) * limiter;
-            coarse_delta.x = -actual_volume / coarse_area;
-            accumulated += coarse_delta;
+            coarse_delta_nt.x = -actual_volume / coarse_area;
+            vec2 coarse_momentum_local = nc * coarse_delta_nt.y + tc * coarse_delta_nt.z;
+            accumulated_local += vec3(coarse_delta_nt.x, coarse_momentum_local);
 
             float fine_scale = fine_dt / fine_dx;
             vec2 desired_common = nc * ((flux.y - 0.5 * grav() * hf * hf) * fine_scale)
@@ -215,9 +217,6 @@ void main() {
             cells_out[fi] = fine_after;
         }
     } else {
-        // Needed only to compute the represented coarse-wall fraction on a coarse
-        // synchronization tick. Under the binary schedule coarse due implies fine
-        // due, but keeping this path makes forced/recovery synchronization robust.
         uint first_global = lane * 2u;
         for (uint sub = 0u; sub < 2u; ++sub) {
             uint destination_global = reversed ? (2u * r - 1u - (first_global + sub)) : first_global + sub;
@@ -231,16 +230,15 @@ void main() {
         if (any(isnan(coarse_after)) || any(isinf(coarse_after))) return;
         if (coarse_h > dry_eps()) {
             float wall_qn_delta = -(coarse_qn * coarse_qn / coarse_h) * coarse_dt / coarse_dx;
-            accumulated.y -= wall_qn_delta * represented_fraction;
+            accumulated_local.yz += nc * (-wall_qn_delta * represented_fraction);
         }
-        coarse_after.x += accumulated.x;
-        coarse_after.yz += nc * accumulated.y + tc * accumulated.z;
+        coarse_after.xyz += accumulated_local;
         if (coarse_after.x >= 0.0 && coarse_after.x <= dry_eps()) {
             coarse_after.x = 0.0; coarse_after.yz = vec2(0.0);
         }
         cells_out[coarse_i] = coarse_after;
-        accumulated = vec3(0.0);
+        accumulated_local = vec3(0.0);
     }
 
-    coarse_delta_nt[register_i] = vec4(accumulated, 0.0);
+    coarse_delta_local[coarse_i] = vec4(accumulated_local, 0.0);
 }
