@@ -2,9 +2,10 @@ class_name HydroTileActivityGPU
 extends Node
 ## Compact GPU summary pass for SparseHydroAtlasGPU.
 ##
-## Production policy can consume summary_rid() without reading cell grids. The
-## async readback parser exists for tests/debug. Actual advective boundary Q,
-## predictive dry-neighbor wetting Q and edge free-surface head are kept separate.
+## Physical boundary Q, predictive wetting Q and kinetic activity use each slot's
+## quadtree-derived cell metric when tile metadata is supplied. The optional metadata
+## arguments preserve the old single-resolution initialization contract for isolated
+## callers while production binds the atlas metadata directly.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -19,6 +20,8 @@ const PARAM_BYTES := 32
 
 var _state := RID()
 var _occupancy := RID()
+var _metadata := RID()
+var _fallback_metadata := RID()
 var _shader := RID()
 var _pipeline := RID()
 var _summary := RID()
@@ -27,6 +30,7 @@ var _uniform_set := RID()
 var _capacity := 0
 var _tile_resolution := 0
 var _cell_size_m := 1.0
+var _base_tile_level := -1
 var _dry_eps := 1.0e-5
 var _gravity := 9.81
 var _initialized := false
@@ -38,7 +42,8 @@ var _next_request_id := 1
 
 func initialize(state_rid: RID, occupancy_rid: RID, capacity: int,
 		tile_resolution: int, cell_size_m: float, dry_eps: float = 1.0e-5,
-		gravity: float = 9.81) -> Error:
+		gravity: float = 9.81, metadata_rid: RID = RID(),
+		base_tile_level: int = -1) -> Error:
 	if _init_pending or _dispatch_pending or _readback_pending or _initialized:
 		return ERR_BUSY
 	if not state_rid.is_valid() or not occupancy_rid.is_valid() \
@@ -55,9 +60,11 @@ func initialize(state_rid: RID, occupancy_rid: RID, capacity: int,
 
 	_state = state_rid
 	_occupancy = occupancy_rid
+	_metadata = metadata_rid
 	_capacity = capacity
 	_tile_resolution = tile_resolution
 	_cell_size_m = cell_size_m
+	_base_tile_level = base_tile_level if metadata_rid.is_valid() else -1
 	_dry_eps = maxf(dry_eps, 1.0e-8)
 	_gravity = maxf(gravity, 1.0e-4)
 	_init_pending = true
@@ -107,14 +114,22 @@ func _init_render_thread(spirv: RDShaderSPIRV) -> void:
 
 	var summary_bytes := PackedByteArray()
 	summary_bytes.resize(_capacity * SUMMARY_BYTES_PER_TILE)
+	var lod_enabled := 1.0 if _metadata.is_valid() and _base_tile_level >= 0 else 0.0
 	var param_values := PackedFloat32Array([
 		float(_tile_resolution), float(_capacity), _cell_size_m, _dry_eps,
-		_gravity, 0.0, 0.0, 0.0,
+		_gravity, float(maxi(_base_tile_level, 0)), lod_enabled, 0.0,
 	])
 	var summary := rd.storage_buffer_create(summary_bytes.size(), summary_bytes)
 	var params := rd.storage_buffer_create(PARAM_BYTES, param_values.to_byte_array())
-	if not summary.is_valid() or not params.is_valid():
-		_free_many(rd, [summary, params, pipeline, shader])
+	var metadata := _metadata
+	var fallback := RID()
+	if not metadata.is_valid():
+		var fallback_bytes := PackedByteArray()
+		fallback_bytes.resize(_capacity * SparseHydroAtlasGPU.METADATA_INTS * 4)
+		fallback = rd.storage_buffer_create(fallback_bytes.size(), fallback_bytes)
+		metadata = fallback
+	if not summary.is_valid() or not params.is_valid() or not metadata.is_valid():
+		_free_many(rd, [fallback, summary, params, pipeline, shader])
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
 		return
 
@@ -123,14 +138,15 @@ func _init_render_thread(spirv: RDShaderSPIRV) -> void:
 		_storage_uniform(1, _occupancy),
 		_storage_uniform(2, summary),
 		_storage_uniform(3, params),
+		_storage_uniform(4, metadata),
 	], shader, 0)
 	if not set_rid.is_valid():
-		_free_many(rd, [summary, params, pipeline, shader])
+		_free_many(rd, [fallback, summary, params, pipeline, shader])
 		call_deferred("_finish_init", ERR_CANT_CREATE, {})
 		return
 	call_deferred("_finish_init", OK, {
 		"shader": shader, "pipeline": pipeline, "summary": summary,
-		"params": params, "set": set_rid,
+		"params": params, "set": set_rid, "fallback_metadata": fallback,
 	})
 
 
@@ -144,6 +160,7 @@ func _finish_init(error: Error, bundle: Dictionary) -> void:
 	_summary = bundle["summary"]
 	_params = bundle["params"]
 	_uniform_set = bundle["set"]
+	_fallback_metadata = bundle["fallback_metadata"]
 	_initialized = true
 	initialized.emit()
 
@@ -238,12 +255,14 @@ func _free_many(rd: RenderingDevice, values: Array) -> void:
 func release() -> void:
 	if not _initialized and not _shader.is_valid():
 		return
-	var rids := [_uniform_set, _summary, _params, _pipeline, _shader]
+	var rids := [_uniform_set, _summary, _params, _fallback_metadata,
+		_pipeline, _shader]
 	_initialized = false
 	_dispatch_pending = false
 	_readback_pending = false
 	_uniform_set = RID(); _summary = RID(); _params = RID()
-	_pipeline = RID(); _shader = RID()
+	_fallback_metadata = RID(); _pipeline = RID(); _shader = RID()
+	_metadata = RID(); _state = RID(); _occupancy = RID()
 	RenderingServer.call_on_render_thread(
 		Callable(self, &"_release_render_thread").bind(rids))
 	released.emit()
