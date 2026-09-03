@@ -6,6 +6,11 @@ extends HydroSourceIngress
 ## must use the resolved tile's physical cell area, not the H0 atlas area.
 
 
+func request_rebuild() -> void:
+	_revision += 1
+	_dirty = true
+
+
 func _rebuild_gpu_terms() -> void:
 	var aggregated: Dictionary = {}
 	for source_variant: Variant in _sources.values():
