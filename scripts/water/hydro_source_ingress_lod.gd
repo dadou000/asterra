@@ -7,6 +7,8 @@ extends HydroSourceIngress
 ## region is represented by an H1/H2 parent. Signed rates remain volumetric [m3/s]
 ## and are converted with the resolved owner's physical cell area.
 
+var minimum_tile_level := 0
+
 
 func request_rebuild() -> void:
 	_revision += 1
@@ -23,8 +25,9 @@ func _resolve_source(source: Dictionary) -> Dictionary:
 	var face := int(mapped[0])
 	var u := clampf(float(mapped[1]), -1.0, 1.0)
 	var v := clampf(float(mapped[2]), -1.0, 1.0)
+	var min_level := clampi(minimum_tile_level, 0, atlas.base_tile_level)
 	var requested_level := clampi(int(source.get("tile_level", default_tile_level)),
-		0, atlas.base_tile_level)
+		min_level, atlas.base_tile_level)
 	var requested_key := _key_at(face, u, v, requested_level)
 	var resolved_key := requested_key
 
