@@ -78,6 +78,9 @@ func gpu_stats() -> Dictionary:
 	physical["fine_tick_cfl_full_cell_scan"] = not cached_cfl
 	physical["cfl_cache_topology_revision_invalidation"] = cached_cfl
 	physical["cfl_cache_due_only_refresh"] = cached_cfl
+	physical["cfl_persistent_live_slot_queue"] = cached_cfl
+	physical["cfl_live_slot_indirect_reduction"] = cached_cfl
+	physical["cfl_fine_tick_capacity_scan"] = not cached_cfl
 	physical["fused_activity_summary_refresh"] = cached_cfl
 	physical["activity_summary_reuses_cfl_cell_scan"] = cached_cfl
 	physical["post_solve_activity_compute_dispatch"] = not cached_cfl
