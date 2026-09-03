@@ -41,14 +41,18 @@ layout(set = 0, binding = 5, std430) buffer DispatchArgs {
 
 int physical_lod(uint slot) {
     if (params.schedule.z < 0.5) return 0;
+    int level = tile_metadata[slot].y;
+    if (level < 0) return -1;
     int base_level = int(params.schedule.y + 0.5);
-    return max(base_level - tile_metadata[slot].y, 0);
+    return max(base_level - level, 0);
 }
 
 float scheduled_dt(uint slot) {
     if (control.temporal_enabled == 0u) return max(control.current_dt, 0.0);
+    int physical = physical_lod(slot);
+    if (physical < 0) return 0.0;
     uint max_lod = min(control.temporal_max_lod, 7u);
-    uint lod = uint(clamp(physical_lod(slot), 0, int(max_lod)));
+    uint lod = uint(clamp(physical, 0, int(max_lod)));
     if (lod == 0u) return control.temporal_step0;
     if (lod == 1u) return control.temporal_step1;
     if (lod == 2u) return control.temporal_step2;
