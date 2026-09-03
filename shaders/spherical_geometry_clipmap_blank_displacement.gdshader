@@ -113,6 +113,7 @@ vec3 biome_color(float biome) {
 	return 0.34 + 0.24 * cos(6.28318530718 * (vec3(phase) + vec3(0.00, 0.33, 0.67)));
 }
 
+#define ASTERRA_BIOME_ID_AT(p) authored_biome_id(p)
 #include "res://shaders/terrain_biome_profile.gdshaderinc"
 
 void vertex() {

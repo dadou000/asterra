@@ -232,8 +232,9 @@ float ring_handoff_weight(vec2 cell, int level, float is_ring) {
 	return 1.0 - smootherstep_range(RING_INNER_Q, RING_HANDOFF_Q, q);
 }
 
-// Per-biome terrain profiles. Always compiled (small, no local arrays); one
-// branch and free whenever u_biome_profile_count is 0.
+// Per-biome terrain layers + km-scale biome blending. Always compiled (small, no
+// local arrays); one branch and free whenever u_biome_layer_count is 0.
+#define ASTERRA_BIOME_ID_AT(p) asterra_ctx_biome_id(p)
 #include "res://shaders/terrain_biome_profile.gdshaderinc"
 #include "res://shaders/terrain_clipmap_cache_sampling.gdshaderinc"
 

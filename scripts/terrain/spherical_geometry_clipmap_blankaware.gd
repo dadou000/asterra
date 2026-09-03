@@ -143,26 +143,23 @@ func _sync_authoring_displacement(force: bool) -> void:
 
 
 func _sync_biome_profile_uniforms(force: bool) -> void:
-	# Per-biome terrain profiles (Biome Terrain sub-tab) are pushed as plain
-	# uniforms consumed by shaders/terrain_biome_profile.gdshaderinc. They never
-	# enter the displacement bytecode VM and never trigger the authored-shader
-	# variant swap, so editing one can no longer force a device-losing recompile.
+	# Per-biome terrain (Biome Terrain sub-tab) is pushed as plain uniforms
+	# consumed by shaders/terrain_biome_profile.gdshaderinc: a stack of layers plus
+	# a per-biome km-scale blend width. It never enters the displacement bytecode
+	# VM and never triggers the authored-shader variant swap, so editing it can no
+	# longer force a device-losing recompile.
 	if _material == null or _displacement_runtime == null \
 			or not is_instance_valid(_displacement_runtime) \
 			or not _displacement_runtime.has_method("biome_profile_uniforms"):
 		return
 	var packed: Dictionary = _displacement_runtime.call("biome_profile_uniforms")
 	var count: int = int(packed.get("count", 0))
-	if not force and count == _biome_profile_count_applied:
-		# Count unchanged is the common idle case; arrays only change on recompile,
-		# which always passes force = true from _sync_authoring_displacement.
-		return
 	_biome_profile_count_applied = count
-	_material.set_shader_parameter("u_biome_profile_count", count)
+	_material.set_shader_parameter("u_biome_layer_count", count)
+	_material.set_shader_parameter("u_biome_blend_m", packed.get("blend"))
 	if count > 0:
-		_material.set_shader_parameter("u_biome_profile_a", packed.get("a"))
-		_material.set_shader_parameter("u_biome_profile_b", packed.get("b"))
-		_material.set_shader_parameter("u_biome_profile_c", packed.get("c"))
+		_material.set_shader_parameter("u_biome_layer_a", packed.get("a"))
+		_material.set_shader_parameter("u_biome_layer_b", packed.get("b"))
 
 
 func _sync_authoring_material(force: bool) -> void:

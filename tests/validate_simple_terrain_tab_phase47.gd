@@ -114,16 +114,45 @@ func _run() -> void:
 	if not _graph_has_node_type(biome_seed_graph, "SEDIMENT_DEPOSIT"):
 		_fail("Provisioned Hot desert profile did not port its sedimentation pass")
 		return
-	var shape: OptionButton = _find_named(editor, "BiomeTerrainShape") as OptionButton
-	if shape == null:
-		_fail("Biome terrain profile has no base-shape / noise-type picker")
+	# The profile is an ordered stack of layer cards, not a single shape dropdown.
+	var layer0: OptionButton = _find_named(editor, "BiomeTerrainLayerType_0") as OptionButton
+	if layer0 == null:
+		_fail("Biome terrain profile has no layer-type picker")
 		return
-	shape.select(2) # Terraced relief
-	shape.emit_signal("item_selected", 2)
+	layer0.select(2) # Terraced relief
+	layer0.emit_signal("item_selected", 2)
 	await _frames(3)
 	var biome_graph: Resource = biome_slot.get(&"graph") as Resource
 	if not _graph_has_node_type(biome_graph, "TERRACE_RELIEF"):
 		_fail("Terraced Relief did not serialize into the terrain graph")
+		return
+	# Its sediment layer must survive the first layer changing type.
+	if not _graph_has_node_type(biome_graph, "SEDIMENT_DEPOSIT"):
+		_fail("Changing a layer type dropped the rest of the stack")
+		return
+	# Add a second layer and prove the stack grows.
+	var add_layer: Button = _find_named(editor, "AddBiomeTerrainLayer") as Button
+	if add_layer == null:
+		_fail("Biome terrain stack has no Add layer button")
+		return
+	add_layer.emit_signal("pressed")
+	await _frames(3)
+	var stack_after: Dictionary = editor.call("_phase47_biome_stack",
+		biome_slot.get(&"graph")) as Dictionary
+	if int((stack_after.get("layers", []) as Array).size()) < 3:
+		_fail("Add layer did not extend the biome terrain stack")
+		return
+	# The km biome-blend control must serialize onto the output node.
+	var blend_km: SpinBox = _find_named(editor, "BiomeTerrainBlendKm") as SpinBox
+	if blend_km == null:
+		_fail("Biome terrain profile has no kilometre blend control")
+		return
+	blend_km.value = 7.5
+	blend_km.emit_signal("value_changed", 7.5)
+	await _frames(3)
+	if not is_equal_approx(float((editor.call("_phase47_biome_stack",
+			biome_slot.get(&"graph")) as Dictionary).get("blend_km", 0.0)), 7.5):
+		_fail("Biome blend distance did not serialize")
 		return
 	# A biome profile is deliberately kept OUT of the displacement bytecode VM: a
 	# compiled program makes the renderer swap in the authored-terrain shader

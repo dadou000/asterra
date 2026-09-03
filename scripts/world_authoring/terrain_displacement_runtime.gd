@@ -15,18 +15,27 @@ extends Node
 const MAX_INSTRUCTIONS: int = 32
 const BIOME_COUNT: int = 18
 
-# Per-biome terrain profiles (the "Biome Terrain" sub-tab) are deliberately kept
-# out of the displacement bytecode VM. Enabling one used to compile a program,
-# which made the renderer swap in the authored-terrain shader variant -- a large
-# surface-shader recompile that triggers Vulkan device loss on current NVIDIA
-# drivers. Instead these slots lower to a handful of uniforms consumed by
-# shaders/terrain_biome_profile.gdshaderinc (always compiled, no local arrays) and
-# are mirrored here for contact/AGL queries. The math matches OP_NOISE_LAYER /
-# OP_RIDGED_MOUNTAINS / OP_EROSION_CHANNELS / OP_SEDIMENT_DEPOSIT / OP_TERRACE_RELIEF.
+# Per-biome terrain (the "Biome Terrain" sub-tab) is deliberately kept out of the
+# displacement bytecode VM. Enabling one used to compile a program, which made the
+# renderer swap in the authored-terrain shader variant -- a large surface-shader
+# recompile that triggers Vulkan device loss on current NVIDIA drivers. Instead a
+# biome slot lowers to a stack of layer uniforms + a per-biome blend width,
+# consumed by shaders/terrain_biome_profile.gdshaderinc (always compiled, no local
+# arrays) and mirrored here for contact/AGL queries. The per-layer math matches
+# OP_NOISE_LAYER / OP_RIDGED_MOUNTAINS / OP_EROSION_CHANNELS / OP_SEDIMENT_DEPOSIT
+# / OP_TERRACE_RELIEF.
 const BIOME_PROFILE_SLOT_PREFIX := "simple-biome-terrain-"
-const BIOME_PROFILE_MAX: int = 6
-const BIOME_PROFILE_EROSION_SEED_OFFSET: int = 7919
-const BIOME_PROFILE_SEDIMENT_SEED_OFFSET: int = 104729
+# layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion, 4 sediment.
+const BIOME_LAYER_MAX: int = 16
+const BIOME_LAYER_TYPE_BY_NODE: Dictionary = {
+	"NOISE_LAYER": 0, "BILLOW_NOISE": 0,
+	"RIDGED_MOUNTAINS": 1, "VORONOI_RIDGES": 1,
+	"TERRACE_RELIEF": 2,
+	"EROSION_CHANNELS": 3,
+	"SEDIMENT_DEPOSIT": 4,
+}
+# Output-node parameter that carries the km-scale biome boundary softness.
+const BIOME_BLEND_PARAM := "biome_blend_km"
 
 # Keep these opcodes in lock-step with terrain_author_displacement_bytecode.gdshaderinc.
 const OP_CONST := 0
@@ -68,11 +77,20 @@ var _warnings: PackedStringArray = PackedStringArray()
 var _fingerprint: String = ""
 var _compile_generation: int = 0
 var _biome_preview: Node
-# Parsed per-biome terrain profiles, newest compile. Each entry:
-#   {biome_id, base_type (0 fbm / 1 ridged / 2 terraced), scale, amount,
-#    base_param (passes 1-4 or terrace steps 2-24), seed,
-#    erosion, erosion_scale, sedimentation, sediment_scale, strength}
+# Parsed per-biome terrain layers, newest compile, packed grouped by biome_id.
+# Each entry: {biome_id, layer_type, scale, amount, param, seed}
+#   layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion, 4 sediment.
+#   param: fbm passes (1-4) or terrace steps (2-24). amount already folds in the
+#   slot blend strength and may be negative to carve.
 var _biome_profiles: Array = []
+# Per-biome boundary softness in metres (index = biome id, 0 = hard edge).
+var _biome_blend_m: PackedFloat32Array = _zeroed_blend()
+
+
+static func _zeroed_blend() -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(BIOME_COUNT)
+	return out
 
 
 func _ready() -> void:
@@ -89,6 +107,7 @@ func clear() -> void:
 	_code_texture = null
 	_compile_generation += 1
 	_biome_profiles = []
+	_biome_blend_m = _zeroed_blend()
 
 
 func profile_fingerprint(terrain: Resource) -> String:
@@ -127,6 +146,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	_fingerprint = profile_fingerprint(terrain)
 	_compile_generation += 1
 	_biome_profiles = []
+	_biome_blend_m = _zeroed_blend()
 	if terrain == null:
 		_publish_texture()
 		return stats()
@@ -144,11 +164,14 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 			slot_index += 1
 			continue
 		if String(slot.get(&"slot_id")).begins_with(BIOME_PROFILE_SLOT_PREFIX):
-			# Biome Terrain profiles never enter the VM (see BIOME_PROFILE_* notes).
-			if _biome_profiles.size() < BIOME_PROFILE_MAX:
-				var parsed: Dictionary = _parse_biome_profile_slot(slot)
-				if not parsed.is_empty():
-					_biome_profiles.append(parsed)
+			# Biome Terrain never enters the VM (see BIOME_LAYER_* notes).
+			var parsed: Dictionary = _parse_biome_layer_slot(slot)
+			var parsed_biome: int = int(parsed.get("biome_id", -1))
+			if parsed_biome >= 0 and parsed_biome < BIOME_COUNT:
+				_biome_blend_m[parsed_biome] = float(parsed.get("blend_m", 0.0))
+				for layer_value: Variant in parsed.get("layers", []) as Array:
+					if _biome_profiles.size() < BIOME_LAYER_MAX:
+						_biome_profiles.append(layer_value)
 			slot_index += 1
 			continue
 		var graph: Resource = slot.get(&"graph") as Resource
@@ -560,136 +583,172 @@ func _noise_hash(x: int, y: int, z: int, seed: int) -> float:
 	return float(h & 0x00ffffff) / 16777215.0 * 2.0 - 1.0
 
 
-func _parse_biome_profile_slot(slot: Resource) -> Dictionary:
+func _parse_biome_layer_slot(slot: Resource) -> Dictionary:
 	var graph: Resource = slot.get(&"graph") as Resource
 	if graph == null:
 		return {}
 	var nodes_value: Variant = graph.get(&"nodes")
-	if not (nodes_value is Array):
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
 		return {}
 	var biome_id: int = 0
 	var ids_value: Variant = slot.get(&"biome_ids")
 	if ids_value is PackedInt32Array and (ids_value as PackedInt32Array).size() > 0:
 		biome_id = clampi(int((ids_value as PackedInt32Array)[0]), 0, BIOME_COUNT - 1)
-	var profile: Dictionary = {
-		"biome_id": biome_id,
-		"base_type": 0,
-		"scale": 6.0,
-		"amount": 0.0,
-		"base_param": 3.0,
-		"seed": 1337,
-		"erosion": 0.0,
-		"erosion_scale": 8.0,
-		"sedimentation": 0.0,
-		"sediment_scale": 3.0,
-		"strength": float(slot.get(&"strength")),
-	}
-	var found_base: bool = false
+	var strength: float = float(slot.get(&"strength"))
+	# Walk the graph as an ordered chain from OUTPUT_DISPLACEMENT back through its
+	# single input, so layers apply in the authored order and a stray disconnected
+	# node is ignored.
+	var by_id: Dictionary = {}
+	var output_id: String = ""
+	var blend_km: float = 0.0
 	for value: Variant in nodes_value as Array:
 		if not (value is Dictionary):
 			continue
 		var node: Dictionary = value as Dictionary
-		var node_type: String = String(node.get("type", ""))
-		var parameters: Dictionary = node.get("parameters", {}) as Dictionary
-		match node_type:
-			"NOISE_LAYER", "BILLOW_NOISE":
-				profile["base_type"] = 0
-				profile["scale"] = float(parameters.get("scale", profile["scale"]))
-				profile["amount"] = float(parameters.get("amount", profile["amount"]))
-				profile["base_param"] = float(clampi(int(parameters.get("passes", 3)), 1, 4))
-				profile["seed"] = int(parameters.get("seed", profile["seed"]))
-				found_base = true
-			"RIDGED_MOUNTAINS", "VORONOI_RIDGES":
-				profile["base_type"] = 1
-				profile["scale"] = float(parameters.get("scale", profile["scale"]))
-				profile["amount"] = float(parameters.get("amount", profile["amount"]))
-				profile["base_param"] = float(clampi(int(parameters.get("passes", 3)), 1, 4))
-				profile["seed"] = int(parameters.get("seed", profile["seed"]))
-				found_base = true
-			"TERRACE_RELIEF":
-				profile["base_type"] = 2
-				profile["scale"] = float(parameters.get("scale", profile["scale"]))
-				profile["amount"] = float(parameters.get("amount", profile["amount"]))
-				profile["base_param"] = float(clampi(int(parameters.get("steps", 6)), 2, 24))
-				profile["seed"] = int(parameters.get("seed", profile["seed"]))
-				found_base = true
-			"EROSION_CHANNELS":
-				profile["erosion"] = maxf(0.0, float(parameters.get("amount", 0.0)))
-				profile["erosion_scale"] = float(parameters.get("scale", profile["erosion_scale"]))
-			"SEDIMENT_DEPOSIT":
-				profile["sedimentation"] = maxf(0.0, float(parameters.get("amount", 0.0)))
-				profile["sediment_scale"] = float(parameters.get("scale", profile["sediment_scale"]))
-	if not found_base and profile["erosion"] <= 0.0 and profile["sedimentation"] <= 0.0:
+		by_id[String(node.get("id", ""))] = node
+		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String(node.get("id", ""))
+			blend_km = maxf(0.0, float((node.get("parameters", {}) as Dictionary).get(
+				BIOME_BLEND_PARAM, 0.0)))
+	var input_of: Dictionary = {}
+	for link_value: Variant in links_value as Array:
+		if not (link_value is Dictionary):
+			continue
+		var link: Dictionary = link_value as Dictionary
+		if int(link.get("to_port", 0)) == 0:
+			input_of[String(link.get("to", ""))] = String(link.get("from", ""))
+	var ordered: Array = []
+	var cursor: String = String(input_of.get(output_id, ""))
+	var guard: int = 0
+	while not cursor.is_empty() and by_id.has(cursor) and guard < 64:
+		guard += 1
+		ordered.push_front(by_id[cursor])
+		cursor = String(input_of.get(cursor, ""))
+	var layers: Array = []
+	for node_value: Variant in ordered:
+		var node: Dictionary = node_value as Dictionary
+		var layer: Dictionary = _biome_layer_from_node(biome_id, strength,
+			String(node.get("type", "")), node.get("parameters", {}) as Dictionary)
+		if not layer.is_empty():
+			layers.append(layer)
+	return {"biome_id": biome_id, "blend_m": blend_km * 1000.0, "layers": layers}
+
+
+func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
+		parameters: Dictionary) -> Dictionary:
+	if not BIOME_LAYER_TYPE_BY_NODE.has(node_type):
 		return {}
-	return profile
+	var layer_type: int = int(BIOME_LAYER_TYPE_BY_NODE[node_type])
+	var param: int = clampi(int(parameters.get("passes", 3)), 1, 4)
+	if layer_type == 2:
+		param = clampi(int(parameters.get("steps", 6)), 2, 24)
+	elif layer_type == 3 or layer_type == 4:
+		param = 3
+	var amount: float = float(parameters.get("amount", 0.0)) * strength
+	if is_zero_approx(amount):
+		return {}
+	return {
+		"biome_id": biome_id,
+		"layer_type": layer_type,
+		"scale": maxf(0.0001, absf(float(parameters.get("scale", 6.0)))),
+		"amount": amount,
+		"param": param,
+		"seed": int(parameters.get("seed", 1337 + biome_id * 101)),
+	}
 
 
-# Metres this profile set adds at `direction` for `biome_id`. Mirrors
-# shaders/terrain_biome_profile.gdshaderinc exactly so contact/AGL matches render.
+func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
+	var layer_type: int = int(layer.get("layer_type", 0))
+	var scale: float = float(layer.get("scale", 6.0))
+	var amount: float = float(layer.get("amount", 0.0))
+	var seed: int = int(layer.get("seed", 1337))
+	var param: int = int(layer.get("param", 3))
+	match layer_type:
+		1:
+			var ridge: float = 1.0 - absf(_terrain_fbm(d, scale, seed, param))
+			return ridge * ridge * amount
+		2:
+			var field: float = _terrain_fbm(d, scale, seed, 1)
+			var steps: float = float(clampi(param, 2, 24))
+			var terrace: float = floor((field * 0.5 + 0.5) * steps) / maxf(steps - 1.0, 1.0)
+			return (terrace * 2.0 - 1.0) * amount
+		3:
+			var field: float = _terrain_fbm(d, scale, seed, 3)
+			var channel: float = clampf(1.0 - absf(field), 0.0, 1.0)
+			return -(channel * channel * channel) * amount
+		4:
+			var field: float = _terrain_fbm(d, scale, seed, 3)
+			var deposit: float = clampf(1.0 - absf(field * 1.65), 0.0, 1.0)
+			return deposit * deposit * amount
+		_:
+			return _terrain_fbm(d, scale, seed, param) * amount
+
+
+# 0..1 fraction of a small tangent-plane kernel (centre + 8 ring taps at the
+# biome's blend half-width) that resolves to `biome`. Mirrors bp_biome_coverage.
+func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
+		centre_biome: int) -> float:
+	var centre: float = 1.0 if centre_biome == biome else 0.0
+	var half_m: float = _biome_blend_m[clampi(biome, 0, BIOME_COUNT - 1)]
+	if half_m <= 1.0:
+		return centre
+	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0
+	var ang: float = half_m / radius
+	var hits: float = centre * 2.0
+	var total: float = 2.0
+	for k: int in 8:
+		var theta: float = float(k) * 0.7853981634
+		var sample_dir: Vector3 = (d + (tx * cos(theta) + ty * sin(theta)) * ang).normalized()
+		hits += 1.0 if _sample_authored_biome(sample_dir) == biome else 0.0
+		total += 1.0
+	return hits / total if total > 0.0 else centre
+
+
+# Metres the biome layer stack adds at `direction`. `biome_id` is the resolved
+# biome under the point. Mirrors shaders/terrain_biome_profile.gdshaderinc so
+# contact/AGL matches the render.
 func _biome_profiles_height(direction: Vector3, biome_id: int) -> float:
 	if _biome_profiles.is_empty():
 		return 0.0
 	var d: Vector3 = direction.normalized()
-	var here: int = clampi(biome_id, 0, BIOME_COUNT - 1)
+	var centre_biome: int = clampi(biome_id, 0, BIOME_COUNT - 1)
+	var ref: Vector3 = Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT
+	var tx: Vector3 = ref.cross(d).normalized()
+	var ty: Vector3 = d.cross(tx)
 	var total: float = 0.0
+	var cached_biome: int = -1
+	var cached_coverage: float = 0.0
 	for entry_value: Variant in _biome_profiles:
 		var entry: Dictionary = entry_value as Dictionary
-		if int(entry.get("biome_id", -1)) != here:
+		var layer_biome: int = int(entry.get("biome_id", -1))
+		if layer_biome != cached_biome:
+			cached_biome = layer_biome
+			cached_coverage = _biome_coverage(d, tx, ty, layer_biome, centre_biome)
+		if cached_coverage <= 0.0:
 			continue
-		var seed: int = int(entry.get("seed", 1337))
-		var scale: float = float(entry.get("scale", 6.0))
-		var amount: float = float(entry.get("amount", 0.0))
-		var base_param: int = int(round(float(entry.get("base_param", 3.0))))
-		var base_type: int = int(entry.get("base_type", 0))
-		var h: float = 0.0
-		if base_type == 1:
-			var ridge: float = 1.0 - absf(_terrain_fbm(d, scale, seed, base_param))
-			h = ridge * ridge * amount
-		elif base_type == 2:
-			var field: float = _terrain_fbm(d, scale, seed, 1)
-			var steps: float = float(clampi(base_param, 2, 24))
-			var terrace: float = floor((field * 0.5 + 0.5) * steps) / maxf(steps - 1.0, 1.0)
-			h = (terrace * 2.0 - 1.0) * amount
-		else:
-			h = _terrain_fbm(d, scale, seed, base_param) * amount
-		var erosion: float = float(entry.get("erosion", 0.0))
-		if erosion > 0.0:
-			var e_field: float = _terrain_fbm(d, float(entry.get("erosion_scale", 8.0)),
-				seed + BIOME_PROFILE_EROSION_SEED_OFFSET, 3)
-			var channel: float = clampf(1.0 - absf(e_field), 0.0, 1.0)
-			h -= channel * channel * channel * erosion
-		var sedimentation: float = float(entry.get("sedimentation", 0.0))
-		if sedimentation > 0.0:
-			var s_field: float = _terrain_fbm(d, float(entry.get("sediment_scale", 3.0)),
-				seed + BIOME_PROFILE_SEDIMENT_SEED_OFFSET, 3)
-			var deposit: float = clampf(1.0 - absf(s_field * 1.65), 0.0, 1.0)
-			h += deposit * deposit * sedimentation
-		total += h * float(entry.get("strength", 1.0))
+		total += _biome_layer_value(d, entry) * cached_coverage
 	return total
 
 
-# {count, a, b, c} packed for shaders/terrain_biome_profile.gdshaderinc.
+# {count, a, b, blend} packed for shaders/terrain_biome_profile.gdshaderinc.
 func biome_profile_uniforms() -> Dictionary:
-	var count: int = mini(_biome_profiles.size(), BIOME_PROFILE_MAX)
+	var count: int = mini(_biome_profiles.size(), BIOME_LAYER_MAX)
 	var a := PackedVector4Array()
 	var b := PackedVector4Array()
-	var c := PackedVector4Array()
-	a.resize(BIOME_PROFILE_MAX)
-	b.resize(BIOME_PROFILE_MAX)
-	c.resize(BIOME_PROFILE_MAX)
+	a.resize(BIOME_LAYER_MAX)
+	b.resize(BIOME_LAYER_MAX)
 	for i: int in count:
 		var entry: Dictionary = _biome_profiles[i] as Dictionary
-		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("base_type", 0))),
+		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("layer_type", 0))),
 			float(entry.get("scale", 6.0)), float(entry.get("amount", 0.0)))
-		b[i] = Vector4(float(entry.get("base_param", 3.0)), float(int(entry.get("seed", 1337))),
-			float(entry.get("erosion", 0.0)), float(entry.get("erosion_scale", 8.0)))
-		c[i] = Vector4(float(entry.get("sedimentation", 0.0)), float(entry.get("sediment_scale", 3.0)),
-			float(entry.get("strength", 1.0)), 0.0)
-	return {"count": count, "a": a, "b": b, "c": c}
+		b[i] = Vector4(float(int(entry.get("param", 3))), float(int(entry.get("seed", 1337))),
+			0.0, 0.0)
+	return {"count": count, "a": a, "b": b, "blend": _biome_blend_m.duplicate()}
 
 
 func biome_profile_count() -> int:
-	return mini(_biome_profiles.size(), BIOME_PROFILE_MAX)
+	return mini(_biome_profiles.size(), BIOME_LAYER_MAX)
 
 
 func _sample_authored_biome(direction: Vector3) -> int:
