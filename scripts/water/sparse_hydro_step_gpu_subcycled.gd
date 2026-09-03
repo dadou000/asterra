@@ -19,6 +19,7 @@ const DUE_QUEUE_LOCAL_X := 64
 
 var maximum_physical_lod := 4
 var temporal_schedule: HydroLODTemporalScheduleGPU
+var _queued_step_spirv: RDShaderSPIRV
 var _selective_commit_spirv: RDShaderSPIRV
 var _due_queue_reset_spirv: RDShaderSPIRV
 var _due_queue_build_spirv: RDShaderSPIRV
@@ -45,21 +46,24 @@ func initialize(atlas: SparseHydroAtlasGPU,
 	if RenderingServer.get_rendering_device() == null:
 		return ERR_UNAVAILABLE
 
+	_queued_step_spirv = _load_spirv(
+		"res://shaders/water/sparse_hydro_step_subcycled.glsl")
 	_selective_commit_spirv = _load_spirv(
 		"res://shaders/water/sparse_hydro_commit_subcycled.glsl")
 	_due_queue_reset_spirv = _load_spirv(
 		"res://shaders/water/hydro_lod_due_queue_reset.glsl")
 	_due_queue_build_spirv = _load_spirv(
 		"res://shaders/water/hydro_lod_due_queue_build.glsl")
-	if _selective_commit_spirv == null or _due_queue_reset_spirv == null \
-			or _due_queue_build_spirv == null:
+	if _queued_step_spirv == null or _selective_commit_spirv == null \
+			or _due_queue_reset_spirv == null or _due_queue_build_spirv == null:
 		return ERR_CANT_OPEN
 
-	# Base initialization still creates the legacy commit resources so its common
-	# resource builder remains untouched. _upgrade_control_render_thread replaces
-	# that commit shader/pipeline/set atomically before initialized() is published.
+	# The inherited initializer first builds a complete legacy-compatible resource
+	# bundle. Both step and commit are placeholders here; before initialized() is
+	# published, _upgrade_control_render_thread replaces them with the queued temporal
+	# shaders and the enlarged 184-byte control buffer.
 	var spirv := {
-		"step": _load_spirv("res://shaders/water/sparse_hydro_step_subcycled.glsl"),
+		"step": _load_spirv("res://shaders/water/sparse_hydro_step.glsl"),
 		"commit": _load_spirv("res://shaders/water/sparse_hydro_commit.glsl"),
 		"reduce": _load_spirv("res://shaders/water/sparse_hydro_reduce_subcycled.glsl"),
 		"reset": _load_spirv("res://shaders/water/sparse_hydro_reset_reduction.glsl"),
@@ -149,9 +153,8 @@ func stats() -> Dictionary:
 
 
 ## Base initialization intentionally creates its normal 104-byte control block and
-## legacy commit resources. Before publishing initialized(), replace the control
-## block, every set which references it, the commit pipeline/set, and create the
-## GPU-resident due-slot queue/indirect command resources.
+## legacy step/commit resources. Before publishing initialized(), replace the control
+## block, step and commit pipelines/sets, and create the GPU-resident due-slot queue.
 func _finish_init(error: Error, bundle: Dictionary) -> void:
 	if error != OK:
 		_init_pending = false
@@ -164,28 +167,32 @@ func _finish_init(error: Error, bundle: Dictionary) -> void:
 
 func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 	var rd := RenderingServer.get_rendering_device()
-	if rd == null or _selective_commit_spirv == null \
+	if rd == null or _queued_step_spirv == null or _selective_commit_spirv == null \
 			or _due_queue_reset_spirv == null or _due_queue_build_spirv == null:
 		call_deferred(&"_finish_subcycled_init", ERR_UNAVAILABLE, {})
 		return
 
+	var queued_step_shader := rd.shader_create_from_spirv(_queued_step_spirv)
 	var selective_commit_shader := rd.shader_create_from_spirv(_selective_commit_spirv)
 	var due_queue_reset_shader := rd.shader_create_from_spirv(_due_queue_reset_spirv)
 	var due_queue_build_shader := rd.shader_create_from_spirv(_due_queue_build_spirv)
-	if not selective_commit_shader.is_valid() or not due_queue_reset_shader.is_valid() \
-			or not due_queue_build_shader.is_valid():
-		_free_many(rd, [selective_commit_shader, due_queue_reset_shader, due_queue_build_shader])
+	if not queued_step_shader.is_valid() or not selective_commit_shader.is_valid() \
+			or not due_queue_reset_shader.is_valid() or not due_queue_build_shader.is_valid():
+		_free_many(rd, [queued_step_shader, selective_commit_shader,
+			due_queue_reset_shader, due_queue_build_shader])
 		_free_init_bundle(rd, bundle)
 		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
 		return
 
+	var queued_step_pipeline := rd.compute_pipeline_create(queued_step_shader)
 	var selective_commit_pipeline := rd.compute_pipeline_create(selective_commit_shader)
 	var due_queue_reset_pipeline := rd.compute_pipeline_create(due_queue_reset_shader)
 	var due_queue_build_pipeline := rd.compute_pipeline_create(due_queue_build_shader)
-	if not selective_commit_pipeline.is_valid() or not due_queue_reset_pipeline.is_valid() \
-			or not due_queue_build_pipeline.is_valid():
-		_free_many(rd, [selective_commit_pipeline, due_queue_reset_pipeline,
-			due_queue_build_pipeline, selective_commit_shader,
+	if not queued_step_pipeline.is_valid() or not selective_commit_pipeline.is_valid() \
+			or not due_queue_reset_pipeline.is_valid() or not due_queue_build_pipeline.is_valid():
+		_free_many(rd, [queued_step_pipeline, selective_commit_pipeline,
+			due_queue_reset_pipeline, due_queue_build_pipeline,
+			queued_step_shader, selective_commit_shader,
 			due_queue_reset_shader, due_queue_build_shader])
 		_free_init_bundle(rd, bundle)
 		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
@@ -203,8 +210,10 @@ func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 		indirect_bytes, RenderingDevice.STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT)
 	if not control.is_valid() or not due_slots.is_valid() or not due_indirect.is_valid():
 		_free_many(rd, [control, due_slots, due_indirect,
-			selective_commit_pipeline, due_queue_reset_pipeline, due_queue_build_pipeline,
-			selective_commit_shader, due_queue_reset_shader, due_queue_build_shader])
+			queued_step_pipeline, selective_commit_pipeline,
+			due_queue_reset_pipeline, due_queue_build_pipeline,
+			queued_step_shader, selective_commit_shader,
+			due_queue_reset_shader, due_queue_build_shader])
 		_free_init_bundle(rd, bundle)
 		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
 		return
@@ -222,7 +231,7 @@ func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 		_storage_uniform(9, bundle["external_flux_ledger"]),
 		_storage_uniform(10, _atlas.tile_metadata_rid()),
 		_storage_uniform(11, due_slots),
-	], bundle["step_shader"], 0)
+	], queued_step_shader, 0)
 	var commit_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_b_rid()),
 		_storage_uniform(1, _atlas.state_a_rid()),
@@ -265,20 +274,25 @@ func _upgrade_control_render_thread(bundle: Dictionary) -> void:
 	for rid in replacements:
 		if not (rid is RID) or not (rid as RID).is_valid():
 			_free_many(rd, replacements + [control, due_slots, due_indirect,
-				selective_commit_pipeline, due_queue_reset_pipeline, due_queue_build_pipeline,
-				selective_commit_shader, due_queue_reset_shader, due_queue_build_shader])
+				queued_step_pipeline, selective_commit_pipeline,
+				due_queue_reset_pipeline, due_queue_build_pipeline,
+				queued_step_shader, selective_commit_shader,
+				due_queue_reset_shader, due_queue_build_shader])
 			_free_init_bundle(rd, bundle)
 			call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
 			return
 
-	# The legacy commit shader/pipeline/set were built only to preserve the common
-	# initializer contract. They are retired here together with the old control sets.
+	# The inherited step/commit shader/pipeline/sets were temporary bootstrap
+	# resources. Retire them together with every set tied to the old control block.
 	_free_many(rd, [
 		bundle["step_set"], bundle["commit_set"], bundle["reduce_set"],
 		bundle["reset_set"], bundle["prepare_set"], bundle["external_finalize_set"],
-		bundle["control"], bundle["commit_pipeline"], bundle["commit_shader"],
+		bundle["control"], bundle["step_pipeline"], bundle["step_shader"],
+		bundle["commit_pipeline"], bundle["commit_shader"],
 	])
 	bundle["control"] = control
+	bundle["step_shader"] = queued_step_shader
+	bundle["step_pipeline"] = queued_step_pipeline
 	bundle["step_set"] = step_set
 	bundle["commit_shader"] = selective_commit_shader
 	bundle["commit_pipeline"] = selective_commit_pipeline
@@ -465,6 +479,7 @@ func _due_queue_rids_valid() -> bool:
 
 func release() -> void:
 	temporal_schedule = null
+	_queued_step_spirv = null
 	_selective_commit_spirv = null
 	_due_queue_reset_spirv = null
 	_due_queue_build_spirv = null
@@ -478,7 +493,6 @@ func release() -> void:
 	_due_queue_slots = RID(); _due_queue_indirect = RID()
 	_due_queue_reset_pipeline = RID(); _due_queue_build_pipeline = RID()
 	_due_queue_reset_shader = RID(); _due_queue_build_shader = RID()
-	if not queue_rids.is_empty():
-		RenderingServer.call_on_render_thread(
-			Callable(self, &"_release_render_thread").bind(queue_rids))
+	RenderingServer.call_on_render_thread(
+		Callable(self, &"_release_render_thread").bind(queue_rids))
 	super.release()
