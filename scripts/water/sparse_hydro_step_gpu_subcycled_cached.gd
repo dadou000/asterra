@@ -4,8 +4,8 @@ extends SparseHydroStepGPUSubcycled
 ##
 ## The underlying subcycled solver still owns all SWE, due-queue and interface
 ## resources. This layer changes only reduction scheduling:
-##   topology change -> one full tile-summary rebuild;
-##   every fine tick -> reduce cached tile summaries;
+##   topology change -> one full tile-summary + live-slot queue rebuild;
+##   every fine tick -> reduce cached summaries over resident live slots only;
 ##   after commit -> refresh only the due slots.
 
 var cfl_cache: HydroLODCFLCacheGPU
@@ -53,7 +53,9 @@ func stats() -> Dictionary:
 	out["cfl_cache_topology_revision"] = _cfl_topology_revision
 	out["full_cell_cfl_scan_each_fine_tick"] = false
 	out["full_cell_cache_rebuild_on_topology_change"] = true
-	out["fine_tick_cfl_reduction_scope"] = "tile_summaries"
+	out["fine_tick_cfl_reduction_scope"] = "persistent_live_slots"
+	out["fine_tick_cfl_capacity_scan"] = false
+	out["cfl_live_slot_indirect_dispatch"] = true
 	out["post_commit_cache_refresh_scope"] = "due_slots"
 	out["cfl_cache"] = {} if cfl_cache == null else cfl_cache.stats()
 	return out
@@ -87,8 +89,6 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 			call_deferred("_finish_advance", step_id, false, request_diagnostics)
 			return
 
-	var groups_x := int(ceil(float(_atlas.tile_resolution) / float(LOCAL_X)))
-	var groups_y := int(ceil(float(_atlas.tile_resolution) / float(LOCAL_Y)))
 	var due_queue_groups := maxi(int(ceil(float(_atlas.capacity) \
 		/ float(DUE_QUEUE_LOCAL_X))), 1)
 	var external_groups := int(ceil(float(_atlas.total_cell_count()) \
@@ -105,8 +105,8 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		rd.compute_list_dispatch(compute, 1, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
-		# CFL preparation consumes cached summaries. This is O(atlas capacity) small
-		# records instead of O(capacity * tile_resolution^2) state-cell reads.
+		# CFL preparation consumes persistent cached summaries through the live-slot
+		# queue. This is O(resident slots), with no atlas-capacity scan on fine ticks.
 		cfl_cache.record_reduce(rd, compute, 0)
 
 		rd.compute_list_bind_compute_pipeline(compute, _prepare_pipeline)
@@ -149,8 +149,8 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		cfl_cache.record_refresh_due(rd, compute)
 		temporal_schedule.record_commit(rd, compute)
 
-	# Final health diagnostics are also a tile-summary reduction; the forced final
-	# temporal synchronization has refreshed every level that advanced at the edge.
+	# Final health diagnostics use the same live-slot summary reduction; the forced
+	# final temporal synchronization has refreshed every level that advanced at edge.
 	cfl_cache.record_reduce(rd, compute, 1)
 
 	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
