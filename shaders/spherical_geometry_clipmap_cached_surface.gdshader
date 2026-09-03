@@ -232,6 +232,9 @@ float ring_handoff_weight(vec2 cell, int level, float is_ring) {
 	return 1.0 - smootherstep_range(RING_INNER_Q, RING_HANDOFF_Q, q);
 }
 
+// Per-biome terrain profiles. Always compiled (small, no local arrays); one
+// branch and free whenever u_biome_profile_count is 0.
+#include "res://shaders/terrain_biome_profile.gdshaderinc"
 #include "res://shaders/terrain_clipmap_cache_sampling.gdshaderinc"
 
 vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
@@ -350,6 +353,7 @@ void vertex() {
 
 	float edit_h = terrain_edit_delta(d, u_planet_radius);
 	h += edit_h;
+	h += asterra_biome_profile_height(d, asterra_ctx_biome_id(d));
 
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
 		RING_HANDOFF_BIAS_MIN_M, RING_HANDOFF_BIAS_MAX_M) * handoff_w;

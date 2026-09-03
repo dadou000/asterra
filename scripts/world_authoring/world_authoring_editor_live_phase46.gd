@@ -651,13 +651,13 @@ func _phase47_ensure_biome_profile(terrain: Resource, biome_id: int) -> Resource
 	# identical all-ring cache / contact path as the Global Terrain edit.
 	var slot: Resource = _phase47_biome_profile_slot(terrain, biome_id)
 	if slot != null:
-		# A prior migration disables an untouched profile whenever it is not the
-		# biome being viewed. Re-enable it now that this is the selected biome, so
-		# its default character is live again (a profile the user deliberately
-		# turned off is left off).
-		if not bool(slot.get(&"enabled")) and _phase47_biome_profile_is_default_graph(
-				slot.get(&"graph") as Resource, biome_id):
+		# The recovery loader and the away-from-tab migration both disable biome
+		# profiles to keep the shared displacement VM compilable. The profile you
+		# are actually viewing must be live so edits reload the terrain, so always
+		# re-enable the selected biome's slot here.
+		if not bool(slot.get(&"enabled")):
 			slot.set(&"enabled", true)
+			terrain.call("ensure_valid")
 			_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
 		return slot
 	if terrain == null:
@@ -882,21 +882,12 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 		_refresh_current_category()
 	)
 	box.add_child(reset)
-	var enabled_now: bool = bool(slot.get(&"enabled"))
-	var disable := Button.new()
-	disable.name = "DisableBiomeTerrainProfile"
-	disable.text = ("Turn Off %s Terrain" % BIOME_NAMES[biome_id]) if enabled_now \
-		else ("Turn On %s Terrain" % BIOME_NAMES[biome_id])
-	disable.tooltip_text = "A disabled profile keeps its settings but is not compiled, freeing terrain budget for other biomes."
-	disable.pressed.connect(func() -> void:
-		_session.stage_set(slot, &"enabled", not enabled_now, WorldAuthoringSession.ApplyScope.GRAPH,
-			"Toggle biome terrain profile")
-		_refresh_current_category()
-	)
-	box.add_child(disable)
 	var budget := Label.new()
-	budget.text = "Compiled biome profiles: %d / %d" % [
-		_phase47_active_biome_profile_count(terrain), PHASE47_MAX_ACTIVE_BIOME_PROFILES]
+	budget.text = "Live biome profiles: %d / %d (the biome you edit is always live; " \
+		% [_phase47_active_biome_profile_count(terrain), PHASE47_MAX_ACTIVE_BIOME_PROFILES + 1] \
+		+ "extra customised biomes past the limit stop rendering until you visit them). " \
+		+ "Use Reset to Default to give a biome plain terrain again."
+	budget.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	budget.modulate = Color(0.58, 0.68, 0.76)
 	box.add_child(budget)
 

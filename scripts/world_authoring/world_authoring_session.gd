@@ -31,6 +31,18 @@ enum ApplyScope {
 const RECOVERY_PATH := "user://world_authoring/recovery.tres"
 const DEFAULT_PRESET_PATH := "user://world_authoring/presets/last_preset.tres"
 
+# Planet Studio's "Biome Terrain" profiles are ordinary scoped displacement slots
+# (slot_id "simple-biome-terrain-<n>"). A recovery/preset file written by an older
+# build can hold retired node types or more enabled profiles than the shared
+# 32-instruction displacement VM can compile, which makes the whole terrain
+# program get rejected on load (frozen editor). Loaded systems are repaired here
+# before they become the staged/applied state.
+const BIOME_TERRAIN_SLOT_PREFIX := "simple-biome-terrain-"
+const RETIRED_DISPLACEMENT_NODE_MAP: Dictionary = {
+	"BILLOW_NOISE": "NOISE_LAYER",
+	"VORONOI_RIDGES": "RIDGED_MOUNTAINS",
+}
+
 var applied_system: Resource
 var staged_system: Resource
 var dirty: bool = false
@@ -59,12 +71,17 @@ func _bootstrap_from_recovery() -> bool:
 		error_reported.emit("Planet Studio recovery is invalid; starting from the current world: %s" % path)
 		return false
 	loaded.call("ensure_valid")
+	var repaired: bool = _sanitize_biome_terrain_slots(loaded)
 	applied_system = loaded.duplicate(true)
 	staged_system = loaded.duplicate(true)
 	dirty = false
 	apply_scope = ApplyScope.NONE
 	_undo_stack.clear()
 	_redo_stack.clear()
+	# Heal the on-disk recovery so a repaired biome-terrain save cannot re-freeze
+	# the editor on the next launch.
+	if repaired:
+		_autosave_recovery()
 	changed.emit(dirty, apply_scope)
 	return true
 
@@ -359,6 +376,7 @@ func load_preset(path: String = DEFAULT_PRESET_PATH) -> Error:
 	_redo_stack.clear()
 	staged_system = loaded.duplicate(true)
 	staged_system.call("ensure_valid")
+	_sanitize_biome_terrain_slots(staged_system)
 	dirty = true
 	apply_scope = ApplyScope.FULL_REBUILD
 	_autosave_recovery()
@@ -426,6 +444,59 @@ func _autosave_recovery() -> void:
 func _recovery_path() -> String:
 	var override: String = OS.get_environment("ASTERRA_AUTHORING_RECOVERY_PATH").strip_edges()
 	return override if override.begins_with("user://") else RECOVERY_PATH
+
+
+## Repair biome-terrain profiles in a just-loaded system so the shared displacement
+## VM always has a compilable program:
+##  - rewrite retired displacement node types to their supported equivalents;
+##  - disable every biome-terrain profile. Planet Studio's Biome Terrain tab
+##    re-enables the profile for whichever biome is being viewed, so no authored
+##    terrain shader is compiled merely by loading a stale multi-biome save.
+func _sanitize_biome_terrain_slots(system: Resource) -> bool:
+	if system == null:
+		return false
+	var changed: bool = false
+	var bodies_value: Variant = system.get(&"bodies")
+	if not (bodies_value is Array):
+		return false
+	for body_value: Variant in bodies_value as Array:
+		var body: Resource = body_value as Resource
+		if body == null:
+			continue
+		var profile: Resource = body.get(&"planet_profile") as Resource
+		var terrain: Resource = profile.get(&"terrain") as Resource if profile != null else null
+		if terrain == null:
+			continue
+		var slots_value: Variant = terrain.get(&"displacement_slots")
+		if not (slots_value is Array):
+			continue
+		for slot_value: Variant in slots_value as Array:
+			var slot: Resource = slot_value as Resource
+			if slot == null:
+				continue
+			if not String(slot.get(&"slot_id")).begins_with(BIOME_TERRAIN_SLOT_PREFIX):
+				continue
+			var graph: Resource = slot.get(&"graph") as Resource
+			if graph != null:
+				var nodes_value: Variant = graph.get(&"nodes")
+				if nodes_value is Array:
+					var mutated: bool = false
+					for node_value: Variant in nodes_value as Array:
+						if not (node_value is Dictionary):
+							continue
+						var node: Dictionary = node_value as Dictionary
+						var node_type: String = String(node.get("type", ""))
+						if RETIRED_DISPLACEMENT_NODE_MAP.has(node_type):
+							node["type"] = RETIRED_DISPLACEMENT_NODE_MAP[node_type]
+							mutated = true
+					if mutated:
+						graph.set(&"nodes", nodes_value)
+						graph.set(&"revision", int(graph.get(&"revision")) + 1)
+						changed = true
+			if bool(slot.get(&"enabled")):
+				slot.set(&"enabled", false)
+				changed = true
+	return changed
 
 func _ensure_parent_directory(path: String) -> void:
 	var absolute := ProjectSettings.globalize_path(path.get_base_dir())

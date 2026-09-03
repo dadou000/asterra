@@ -173,6 +173,10 @@ func _validate_candidate(terrain: Resource) -> PackedStringArray:
 		var slot: Resource = slot_value as Resource
 		if slot == null or not bool(slot.get(&"enabled")) or int(slot.get(&"domain")) != 0:
 			continue
+		if String(slot.get(&"slot_id")).begins_with(BIOME_PROFILE_SLOT_PREFIX):
+			# Biome Terrain profiles never enter the VM, so a malformed one must not
+			# reject the shared terrain program. The runtime parser tolerates them.
+			continue
 		var graph: Resource = slot.get(&"graph") as Resource
 		var label: String = String(slot.get(&"display_name"))
 		if label.is_empty():

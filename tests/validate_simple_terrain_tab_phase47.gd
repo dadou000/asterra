@@ -125,11 +125,30 @@ func _run() -> void:
 	if not _graph_has_node_type(biome_graph, "TERRACE_RELIEF"):
 		_fail("Terraced Relief did not serialize into the terrain graph")
 		return
+	# A biome profile is deliberately kept OUT of the displacement bytecode VM: a
+	# compiled program makes the renderer swap in the authored-terrain shader
+	# variant, whose 32-slot register array triggers Vulkan device loss on current
+	# NVIDIA drivers. Instead it lowers to plain uniforms
+	# (shaders/terrain_biome_profile.gdshaderinc) that are mirrored on the CPU for
+	# contact/AGL, so render and physics still share one definition.
 	var runtime: Node = RUNTIME.new()
 	add_child(runtime)
-	var compiled: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
-	if not bool(compiled.get("active", false)) or not _runtime_has_opcode(runtime, 29):
-		_fail("Terraced Relief did not compile into the shared terrain bytecode")
+	runtime.call("compile_from_terrain", terrain)
+	if not _runtime_has_opcode(runtime, 29):
+		pass # OP_TERRACE_RELIEF must NOT be in the VM for a biome profile.
+	else:
+		_fail("Biome profile leaked into the displacement bytecode VM")
+		return
+	if int(runtime.call("biome_profile_count")) < 1:
+		_fail("Biome profile did not lower to the dedicated uniform path")
+		return
+	var packed: Dictionary = runtime.call("biome_profile_uniforms") as Dictionary
+	var target_dir: Vector3 = Vector3(0.31, 0.62, -0.72).normalized()
+	if is_zero_approx(float(runtime.call("_biome_profiles_height", target_dir, 11))):
+		_fail("Biome profile CPU mirror produced no displacement for its biome")
+		return
+	if not is_zero_approx(float(runtime.call("_biome_profiles_height", target_dir, 4))):
+		_fail("Biome profile displaced a biome it is not masked to")
 		return
 	runtime.queue_free()
 

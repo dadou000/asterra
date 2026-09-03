@@ -243,12 +243,15 @@ func _valid_ring_area(center_latitude_deg: float, center_longitude_deg: float,
 func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 		clipmap_level: int = 0, biome_id: int = -1, time_s: float = NAN,
 		sculpt_delta_m: float = 0.0) -> float:
-	if not _active or _output_index < 0 or direction.length_squared() <= 1e-12:
+	if direction.length_squared() <= 1e-12:
 		return 0.0
 	var d: Vector3 = direction.normalized()
 	var resolved_biome: int = biome_id
 	if resolved_biome < 0:
 		resolved_biome = _sample_authored_biome(d)
+	var biome_term: float = _biome_profiles_height(d, resolved_biome)
+	if not _active or _output_index < 0:
+		return biome_term
 	var resolved_time: float = time_s
 	if is_nan(resolved_time):
 		resolved_time = fmod(float(Time.get_ticks_msec()) * 0.001, 3600.0)
@@ -329,7 +332,8 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 				out = a + (terrace * 2.0 - 1.0) * p.y
 			_: out = 0.0
 		values[index] = out if is_finite(out) else 0.0
-	return float(values[_output_index]) if _output_index < values.size() else 0.0
+	var vm_result: float = float(values[_output_index]) if _output_index < values.size() else 0.0
+	return vm_result + biome_term
 
 
 func _compiled_program_bounds() -> Dictionary:

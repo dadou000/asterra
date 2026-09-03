@@ -27,6 +27,7 @@ var _blank_shader_active: bool = false
 var _authored_shader_active: bool = false
 var _displacement_runtime: Node
 var _displacement_fingerprint: String = ""
+var _biome_profile_count_applied: int = -1
 var _material_runtime: Node
 var _material_fingerprint: String = ""
 
@@ -129,14 +130,39 @@ func _sync_authoring_displacement(force: bool) -> void:
 			_displacement_runtime.call("clear")
 			if _material != null:
 				_material.set_shader_parameter("u_author_disp_ready", 0.0)
+			_sync_biome_profile_uniforms(true)
 		return
 	var fingerprint: String = String(
 		_displacement_runtime.call("profile_fingerprint", terrain))
 	if force or fingerprint != _displacement_fingerprint:
 		_displacement_fingerprint = fingerprint
 		_displacement_runtime.call("compile_from_terrain", terrain)
+		_sync_biome_profile_uniforms(true)
 	if _material != null and _displacement_runtime.has_method("bind_material"):
 		_displacement_runtime.call("bind_material", _material)
+
+
+func _sync_biome_profile_uniforms(force: bool) -> void:
+	# Per-biome terrain profiles (Biome Terrain sub-tab) are pushed as plain
+	# uniforms consumed by shaders/terrain_biome_profile.gdshaderinc. They never
+	# enter the displacement bytecode VM and never trigger the authored-shader
+	# variant swap, so editing one can no longer force a device-losing recompile.
+	if _material == null or _displacement_runtime == null \
+			or not is_instance_valid(_displacement_runtime) \
+			or not _displacement_runtime.has_method("biome_profile_uniforms"):
+		return
+	var packed: Dictionary = _displacement_runtime.call("biome_profile_uniforms")
+	var count: int = int(packed.get("count", 0))
+	if not force and count == _biome_profile_count_applied:
+		# Count unchanged is the common idle case; arrays only change on recompile,
+		# which always passes force = true from _sync_authoring_displacement.
+		return
+	_biome_profile_count_applied = count
+	_material.set_shader_parameter("u_biome_profile_count", count)
+	if count > 0:
+		_material.set_shader_parameter("u_biome_profile_a", packed.get("a"))
+		_material.set_shader_parameter("u_biome_profile_b", packed.get("b"))
+		_material.set_shader_parameter("u_biome_profile_c", packed.get("c"))
 
 
 func _sync_authoring_material(force: bool) -> void:

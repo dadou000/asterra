@@ -113,6 +113,8 @@ vec3 biome_color(float biome) {
 	return 0.34 + 0.24 * cos(6.28318530718 * (vec3(phase) + vec3(0.00, 0.33, 0.67)));
 }
 
+#include "res://shaders/terrain_biome_profile.gdshaderinc"
+
 void vertex() {
 	int level = clamp(int(round(INSTANCE_CUSTOM.x)), 0, 14);
 	float is_ring = INSTANCE_CUSTOM.z;
@@ -131,6 +133,7 @@ void vertex() {
 		? author_displacement_height(direction, generated_height, biome, level, TIME)
 		: 0.0;
 	#endif
+	shader_height += asterra_biome_profile_height(direction, biome);
 	float sink = is_ring > 0.5
 		? clamp(spacing * 0.001 * max(u_sink_scale, 0.0), 0.004, 0.025)
 		: 0.0;
