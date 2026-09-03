@@ -113,12 +113,21 @@ void main() {
     int lod = physical_lod(slot);
     if (lod < 0) {
         if (lane == 0u) {
-            write_empty(slot);
             uint cfl_base = slot * 8u;
+            summary_words[cfl_base + 0u] = 0u;
+            summary_words[cfl_base + 1u] = 0u;
+            summary_words[cfl_base + 2u] = 0u;
+            summary_words[cfl_base + 3u] = 0u;
             summary_words[cfl_base + 4u] = 1u;
+            summary_words[cfl_base + 5u] = 0u;
+            summary_words[cfl_base + 6u] = 0u;
+            summary_words[cfl_base + 7u] = 0u;
             uint a = slot * 5u;
-            activity_summary[a + 0u].w = 1.0;
-            activity_summary[a + 2u].y = 1.0;
+            activity_summary[a + 0u] = vec4(0.0, 0.0, 0.0, 1.0);
+            activity_summary[a + 1u] = vec4(0.0);
+            activity_summary[a + 2u] = vec4(0.0, 1.0, 0.0, 0.0);
+            activity_summary[a + 3u] = vec4(0.0);
+            activity_summary[a + 4u] = vec4(NEG_FLT_MAX);
         }
         return;
     }
