@@ -1,12 +1,14 @@
 class_name SparseHydrologyRuntimeSubcycled
 extends SparseHydrologyRuntimeLOD
-## Phase-4 runtime with binary temporal HydroLOD subcycling.
+## Phase-4 runtime with binary temporal HydroLOD subcycling and automatic physical LOD.
 ##
 ## Spatial ownership/interface behavior is inherited unchanged. This layer swaps in
-## the enlarged-control subcycled solver, fine-clock schedule, and flux-register
-## interface implementation.
+## the enlarged-control subcycled solver, fine-clock schedule, flux-register
+## interface implementation and one-transition-per-cycle automatic HydroLOD policy.
 
 var lod_temporal: HydroLODTemporalScheduleGPU
+var automatic_lod_policy: HydroAutomaticPhysicalLODPolicy
+var _automatic_lod_focus_provider := Callable()
 
 
 func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
@@ -39,6 +41,13 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 	_using_internal_terrain_provider = not _destination_provider.is_valid()
 	if disable_placeholder_wet_freeze:
 		scheduler.freeze_wet_tiles = false
+
+	automatic_lod_policy = HydroAutomaticPhysicalLODPolicy.new()
+	var policy_error := automatic_lod_policy.initialize(
+		scheduler, atlas, maximum_physical_lod)
+	if policy_error != OK:
+		automatic_lod_policy = null
+		return policy_error
 
 	_phase = Phase.INITIALIZING
 	_component_ready = {
@@ -119,6 +128,40 @@ func hydrolod_available() -> bool:
 		and solver is SparseHydroStepGPUSubcycled
 
 
+func set_automatic_hydrolod_enabled(value: bool) -> Error:
+	if automatic_lod_policy == null:
+		return ERR_UNCONFIGURED
+	automatic_lod_policy.enabled = value
+	return OK
+
+
+func automatic_hydrolod_enabled() -> bool:
+	return automatic_lod_policy != null and automatic_lod_policy.enabled
+
+
+## Provider contract:
+##   Dictionary { direction: Vector3 body-fixed unit direction,
+##                planet_radius_m: float }
+## A Vector3 result is also accepted and uses Frames.planet_radius as fallback.
+func set_automatic_hydrolod_focus_provider(provider: Callable) -> Error:
+	if _phase == Phase.OFFLINE:
+		return ERR_UNCONFIGURED
+	_automatic_lod_focus_provider = provider
+	return OK
+
+
+func request_automatic_hydrolod_detail(tile_id: int, target_lod: int = 0,
+		hold_s: float = 5.0) -> Error:
+	if automatic_lod_policy == null:
+		return ERR_UNCONFIGURED
+	return automatic_lod_policy.request_detail(tile_id, target_lod, hold_s)
+
+
+func clear_automatic_hydrolod_detail(tile_id: int) -> bool:
+	return automatic_lod_policy != null \
+		and automatic_lod_policy.clear_detail_request(tile_id)
+
+
 func stats() -> Dictionary:
 	var out := super.stats()
 	var physical: Dictionary = out.get("physical_hydrolod", {})
@@ -129,6 +172,8 @@ func stats() -> Dictionary:
 	physical["coarse_fine_flux_registers"] = lod_interfaces \
 		is HydroLODInterfaceFluxSubcycledGPU
 	physical["temporal"] = {} if lod_temporal == null else lod_temporal.stats()
+	physical["automatic_policy"] = {} if automatic_lod_policy == null \
+		else automatic_lod_policy.stats()
 	out["physical_hydrolod"] = physical
 	return out
 
@@ -188,6 +233,64 @@ func _try_initialize_lod_interfaces() -> void:
 		_fail_initialization(err, "hydrolod_interfaces")
 
 
+## Run policy only after the ordinary activity/frontier cycle is fully committed.
+## super._finish_cycle() returns the runtime to IDLE and queues the normal pump; if
+## an automatic transaction starts here it disables the runtime before that deferred
+## pump can enqueue another solver advance.
+func _finish_cycle(activation_results: Array[Dictionary]) -> void:
+	var policy_summaries := _cycle_summaries.duplicate(true)
+	var policy_dt := _cycle_advanced_dt_s
+	super._finish_cycle(activation_results)
+	_run_automatic_lod_policy(policy_summaries, policy_dt)
+
+
+func _run_automatic_lod_policy(summaries: Array[Dictionary], advanced_dt_s: float) -> void:
+	if _phase != Phase.IDLE or automatic_lod_policy == null \
+			or not automatic_lod_policy.enabled or not hydrolod_available() or busy():
+		return
+	var focus_context := _automatic_focus_context()
+	var action := automatic_lod_policy.choose_action(summaries, advanced_dt_s,
+		focus_context, Callable(self, &"hydrolod_refine_eligibility"),
+		Callable(self, &"hydrolod_coarsen_eligibility"))
+	if action.is_empty():
+		return
+	var parent := action.get("parent") as HydroTileKey
+	if parent == null:
+		return
+	var request_id := -1
+	match String(action.get("mode", "")):
+		"refine": request_id = refine_hydrolod(parent)
+		"coarsen": request_id = coarsen_hydrolod(parent)
+	if request_id >= 0:
+		automatic_lod_policy.note_action_started(action)
+
+
+func _automatic_focus_context() -> Dictionary:
+	var context: Dictionary = {}
+	if _automatic_lod_focus_provider.is_valid():
+		var value: Variant = _automatic_lod_focus_provider.call()
+		if value is Dictionary:
+			context = (value as Dictionary).duplicate(true)
+		elif value is Vector3:
+			context["direction"] = value
+	if not context.has("planet_radius_m"):
+		context["planet_radius_m"] = Frames.planet_radius
+	return context
+
+
+func _on_lod_transition_completed(request_id: int, report: Dictionary) -> void:
+	if automatic_lod_policy != null:
+		automatic_lod_policy.note_transition_completed(report)
+	super._on_lod_transition_completed(request_id, report)
+
+
+func _on_lod_transition_failed(request_id: int, error: Error, stage: String,
+		recovery: String) -> void:
+	if automatic_lod_policy != null:
+		automatic_lod_policy.note_transition_failed(error, stage, recovery)
+	super._on_lod_transition_failed(request_id, error, stage, recovery)
+
+
 func release() -> void:
 	if _phase == Phase.OFFLINE:
 		return
@@ -197,6 +300,8 @@ func release() -> void:
 		lod_manager.release()
 		return
 	_release_temporal_now()
+	_automatic_lod_focus_provider = Callable()
+	automatic_lod_policy = null
 	super.release()
 
 
@@ -204,6 +309,8 @@ func _on_lod_manager_released() -> void:
 	if not _lod_release_requested:
 		return
 	_release_temporal_now()
+	_automatic_lod_focus_provider = Callable()
+	automatic_lod_policy = null
 	super._on_lod_manager_released()
 
 
