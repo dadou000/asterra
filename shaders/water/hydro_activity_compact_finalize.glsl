@@ -2,7 +2,9 @@
 #version 450
 
 // Convert the compact activity count into VkDispatchIndirectCommand form for
-// downstream active-slot consumers such as frontier generation.
+// downstream active-slot consumers such as frontier generation. Keep one no-op
+// group when the queue is empty so drivers never see a zero-sized indirect launch;
+// the frontier shader immediately rejects compact_index >= active_count.
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -18,7 +20,7 @@ layout(set = 0, binding = 2, std430) readonly buffer Params {
 
 void main() {
     uint count = min(words[0], max(params.config.y, 1u));
-    args[0] = (count + 63u) / 64u;
+    args[0] = max((count + 63u) / 64u, 1u);
     args[1] = 1u;
     args[2] = 1u;
     args[3] = 0u;
