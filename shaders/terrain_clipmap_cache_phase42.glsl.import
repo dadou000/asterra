@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c84dlumvl5mgv"
+path="res://.godot/imported/terrain_clipmap_cache_phase42.glsl-169d9b5f90e8e3d2a45ee81d7d412b9a.res"
+
+[deps]
+
+source_file="res://shaders/terrain_clipmap_cache_phase42.glsl"
+dest_files=["res://.godot/imported/terrain_clipmap_cache_phase42.glsl-169d9b5f90e8e3d2a45ee81d7d412b9a.res"]
+
+[params]
+

@@ -81,7 +81,7 @@ func _build_feature_simple_panel() -> void:
 	outer.add_child(heading)
 
 	var intro := Label.new()
-	intro.text = "Choose what this layer does and where it happens. Planet Studio builds the node graph for you; rendered terrain and contact/physics still use the same authoritative graph."
+	intro.text = "Choose what happens and where. This feature automatically works from close-up detail to the far horizon; Planet Studio handles every terrain distance layer for you."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.modulate = Color(0.66, 0.76, 0.83)
 	outer.add_child(intro)
@@ -305,6 +305,10 @@ func _add_guided_number(parent: VBoxContainer, label_text: String, key: String,
 func _set_guided_value(key: String, value: Variant) -> void:
 	if _session == null or _graph == null or not GUIDED.is_guided_graph(_graph):
 		return
+	var candidate: Dictionary = GUIDED.config_from_graph(_graph)
+	candidate[key] = value
+	if not _guided_candidate_fits_vertex_program(candidate):
+		return
 	_session.call("stage_action", "Change simplified terrain feature", func() -> void:
 		GUIDED.set_config_value(_graph, key, value)
 	, 2)
@@ -333,10 +337,40 @@ func _rebuild_guided_kind(key: String, value: String) -> void:
 			GUIDED.EFFECT_DEPOSIT:
 				config["amount_m"] = 25.0
 				config["scale"] = 10.0
+	if not _guided_candidate_fits_vertex_program(config):
+		return
 	_session.call("stage_action", "Change simplified terrain feature type", func() -> void:
 		GUIDED.rebuild(_graph, config)
 	, 2)
 	_request_rebuild()
+
+
+func _guided_candidate_fits_vertex_program(candidate_config: Dictionary) -> bool:
+	if _session == null or _slot == null:
+		return false
+	var terrain: Resource = _session.call("active_terrain_profile") as Resource
+	if terrain == null:
+		return false
+	var used: int = 0
+	var enabled_count: int = 0
+	for value: Variant in terrain.get(&"displacement_slots") as Array:
+		var slot: Resource = value as Resource
+		if slot == null or not bool(slot.get(&"enabled")):
+			continue
+		var graph: Resource = slot.get(&"graph") as Resource
+		var cost: int = GUIDED.estimated_vertex_instruction_cost_from_config(candidate_config) \
+			if slot == _slot else GUIDED.estimated_vertex_instruction_cost(graph)
+		if cost < 0:
+			if _status != null:
+				_status.text = "This terrain contains custom graph work. Manage its capacity in Node Graph before changing this Simple feature."
+			return false
+		used += cost + (1 if enabled_count > 0 else 0)
+		enabled_count += 1
+	if used > GUIDED.VERTEX_PROGRAM_MAX_INSTRUCTIONS:
+		if _status != null:
+			_status.text = "That change would exceed the terrain feature capacity (%d / %d). Disable or delete another feature first." % [used, GUIDED.VERTEX_PROGRAM_MAX_INSTRUCTIONS]
+		return false
+	return true
 
 
 func _apply_feature_mode() -> void:

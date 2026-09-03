@@ -21,6 +21,10 @@ var _displacement_guard_m: float = LOD_SURFACE_GUARD_M
 var _displacement_guard_fallback: bool = false
 var _displacement_guard_reason: String = ""
 var _cache_geomorph_snapshot_changes: int = 0
+var _cache_geomorph_snapshot_syncs: int = 0
+var _cache_geomorph_source_revision: int = -1
+var _cache_geomorph_snapshot: Dictionary = {}
+var _cache_geomorph_bound_revisions: Dictionary = {}
 
 
 func _ensure_displacement_runtime() -> void:
@@ -51,13 +55,31 @@ func _sync_cache_production_controls(cache: Node) -> void:
 			or not cache.has_method("set_production_controls"):
 		return
 	if _displacement_runtime == null or not is_instance_valid(_displacement_runtime) \
-			or not _displacement_runtime.has_method("active_production_controls"):
+			or not _displacement_runtime.has_method("active_production_controls") \
+			or not _displacement_runtime.has_method("active_production_controls_revision"):
 		return
-	var controls_value: Variant = _displacement_runtime.call("active_production_controls")
-	if not (controls_value is Dictionary):
+
+	# Do not normalize, pack and hash the same 48 controls for both cache roles on
+	# every render frame. The Phase 42 runtime advances this revision only after a
+	# successful authoring transaction changes the active terrain controls.
+	var source_revision: int = int(
+		_displacement_runtime.call("active_production_controls_revision"))
+	var cache_id: int = cache.get_instance_id()
+	if int(_cache_geomorph_bound_revisions.get(cache_id, -1)) == source_revision:
 		return
-	if bool(cache.call("set_production_controls", controls_value as Dictionary)):
+	if source_revision != _cache_geomorph_source_revision:
+		var controls_value: Variant = _displacement_runtime.call("active_production_controls")
+		if not (controls_value is Dictionary):
+			return
+		_cache_geomorph_snapshot = (controls_value as Dictionary).duplicate(true)
+		_cache_geomorph_source_revision = source_revision
+
+	# New active/staging cache instances need one initial snapshot even when the
+	# terrain itself has not changed. Existing roles receive it once per revision.
+	if bool(cache.call("set_production_controls", _cache_geomorph_snapshot)):
 		_cache_geomorph_snapshot_changes += 1
+	_cache_geomorph_snapshot_syncs += 1
+	_cache_geomorph_bound_revisions[cache_id] = source_revision
 
 
 func _active_authoring_terrain() -> Resource:
@@ -188,6 +210,8 @@ func gpu_stream_stats() -> Dictionary:
 	out["terrain_displacement_guard_fallback"] = _displacement_guard_fallback
 	out["terrain_displacement_guard_reason"] = _displacement_guard_reason
 	out["terrain_cache_geomorph_snapshot_changes"] = _cache_geomorph_snapshot_changes
+	out["terrain_cache_geomorph_snapshot_syncs"] = _cache_geomorph_snapshot_syncs
+	out["terrain_cache_geomorph_control_revision"] = _cache_geomorph_source_revision
 	if _displacement_runtime != null and is_instance_valid(_displacement_runtime) \
 			and _displacement_runtime.has_method("displacement_envelope"):
 		out["terrain_displacement_envelope"] = _displacement_runtime.call("displacement_envelope")

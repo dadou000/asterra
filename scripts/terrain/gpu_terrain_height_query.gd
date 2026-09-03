@@ -51,6 +51,26 @@ func _ready() -> void:
 		call_deferred("_try_initialize")
 
 
+func _exit_tree() -> void:
+	var rids: Array[RID] = []
+	for rid: RID in _slot_uniform_sets:
+		rids.append(rid)
+	_slot_uniform_sets.clear()
+	for rid: RID in _slot_param_buffers:
+		rids.append(rid)
+	_slot_param_buffers.clear()
+	for rid: RID in _slot_result_buffers:
+		rids.append(rid)
+	_slot_result_buffers.clear()
+	for rid: RID in [_rd_sampler, _rd_pipeline, _rd_shader]:
+		rids.append(rid)
+	_rd_sampler = RID()
+	_rd_pipeline = RID()
+	_rd_shader = RID()
+	if not rids.is_empty():
+		RenderingServer.call_on_render_thread(_render_free_rids.bind(rids))
+
+
 func _process(_dt: float) -> void:
 	if _is_blank_backend():
 		_pending.clear()
@@ -373,10 +393,23 @@ func _on_uniform_sets_built(success: bool, generation: int, macro_rid: RID, sets
 	if not success:
 		_bindings_ready = false
 		return
+	var replaced_sets: Array[RID] = []
+	replaced_sets.assign(_slot_uniform_sets)
 	_slot_uniform_sets.assign(sets)
+	if not replaced_sets.is_empty():
+		RenderingServer.call_on_render_thread(_render_free_rids.bind(replaced_sets))
 	_binding_generation = generation
 	_binding_macro_rid = macro_rid
 	_bindings_ready = true
+
+
+func _render_free_rids(rids: Array) -> void:
+	var rd: RenderingDevice = RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	for rid: RID in rids:
+		if rid.is_valid():
+			rd.free_rid(rid)
 
 
 func _dispatch_pending() -> void:

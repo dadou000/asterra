@@ -58,6 +58,10 @@ func _run() -> void:
 	var local_tab: Button = _find_button(editor, "LOCAL FEATURES")
 	local_tab.emit_signal("pressed")
 	await _frames(6)
+	if _find_named(editor, "SimpleTerrainAllDistanceNotice") == null \
+			or _find_named(editor, "SimpleTerrainFeatureCapacity") == null:
+		_fail("Simple Local Features page does not explain all-distance application and capacity")
+		return
 	var add_feature: Button = _find_button(editor, "+ Add Terrain Feature")
 	if add_feature == null:
 		_fail("Local Features page has no guided feature creation action")

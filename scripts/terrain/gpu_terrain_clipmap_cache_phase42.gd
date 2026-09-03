@@ -47,7 +47,7 @@ func set_production_controls(source: Dictionary) -> bool:
 	# Cache keys carry the anchor generation. Advancing it before any dispatch makes
 	# every texel synthesized from the previous control snapshot unreadable at once;
 	# the renderer uses its exact analytic fallback until replacement texels arrive.
-	_invalidate_anchor()
+	_invalidate_anchor("terrain_edit")
 	if _rd_geomorph_controls.is_valid():
 		RenderingServer.call_on_render_thread(_render_update_geomorph_controls.bind(
 			_rd_geomorph_controls, _geomorph_control_bytes.duplicate()))

@@ -196,6 +196,16 @@ func _validate_runtime_snapshot() -> String:
 			!= CONTRACT.fingerprint(fixture, 17):
 		runtime.free()
 		return "runtime and cache contract use different fingerprint semantics"
+	var revision_before: int = int(runtime.call("active_production_controls_revision"))
+	runtime.call("_record_active_production_controls_revision")
+	var revision_after: int = int(runtime.call("active_production_controls_revision"))
+	if revision_after <= revision_before:
+		runtime.free()
+		return "changed active controls did not advance the runtime revision"
+	runtime.call("_record_active_production_controls_revision")
+	if int(runtime.call("active_production_controls_revision")) != revision_after:
+		runtime.free()
+		return "unchanged active controls advanced the runtime revision"
 	runtime.free()
 	return ""
 

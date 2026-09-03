@@ -46,6 +46,8 @@ func _validate() -> String:
 		return "guided summary does not describe effect and area"
 	if int(graph.get(&"displacement_output_mode")) != 0:
 		return "guided feature is not an additive displacement delta graph"
+	if GUIDED.estimated_vertex_instruction_cost(graph) != 6:
+		return "Simple radial height feature cost no longer matches its vertex-program lowering"
 
 	var runtime: Node = RUNTIME.new() as Node
 	var compiled: Dictionary = runtime.call("compile_from_terrain", terrain) as Dictionary
@@ -105,6 +107,9 @@ func _validate() -> String:
 	config["outer_radius_deg"] = 20.0
 	config["radial_feather_deg"] = 0.0
 	GUIDED.rebuild(graph, config)
+	if GUIDED.estimated_vertex_instruction_cost(graph) != 8:
+		runtime.free()
+		return "Simple Ring Area cost no longer accounts for both spherical mask edges"
 	compiled = runtime.call("compile_from_terrain", terrain) as Dictionary
 	if not bool(compiled.get("candidate_valid", false)):
 		runtime.free()

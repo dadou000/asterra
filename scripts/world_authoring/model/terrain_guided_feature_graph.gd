@@ -45,6 +45,33 @@ const AREAS: Array[String] = [
 	AREA_RING,
 ]
 
+# The shared CPU/contact and vertex-shader VM deliberately keeps this small: a
+# larger per-vertex register array can destabilize current Vulkan drivers.  Keep
+# the beginner UI honest about that finite resource instead of letting an author
+# discover it only after a feature silently stays on the last valid program.
+const VERTEX_PROGRAM_MAX_INSTRUCTIONS: int = 32
+
+
+static func estimated_vertex_instruction_cost_from_config(source_config: Dictionary) -> int:
+	# Guided graphs have one deliberately fixed topology. This is therefore an
+	# exact count of the instructions emitted by the current lowering, including
+	# the per-slot all-distance/biome/strength wrappers but excluding the one
+	# accumulator instruction used between enabled feature slots.
+	var config: Dictionary = normalized_config(source_config)
+	var effect_cost: int = 1 if String(config.get("effect_kind", EFFECT_HEIGHT)) == EFFECT_HEIGHT else 2
+	var mask_cost: int = 1
+	match String(config.get("area_kind", AREA_RADIAL)):
+		AREA_REGION, AREA_RING:
+			# Region = latitude * longitude; Ring = inner-cap * outer-cap.
+			mask_cost = 3
+	return effect_cost + mask_cost + 1 + 3 # combine + level + biome + strength
+
+
+static func estimated_vertex_instruction_cost(graph: Resource) -> int:
+	if not is_guided_graph(graph):
+		return -1
+	return estimated_vertex_instruction_cost_from_config(config_from_graph(graph))
+
 
 static func default_config() -> Dictionary:
 	return {

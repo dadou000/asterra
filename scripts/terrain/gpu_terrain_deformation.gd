@@ -71,6 +71,28 @@ func _ready() -> void:
 		call_deferred("_try_initialize")
 
 
+func _exit_tree() -> void:
+	var rids: Array[RID] = []
+	for rid: RID in _uniform_sets:
+		rids.append(rid)
+	_uniform_sets.clear()
+	for wrapper: Texture2DRD in _textures:
+		wrapper.texture_rd_rid = RID()
+	_textures.clear()
+	for rid: RID in _rd_textures:
+		rids.append(rid)
+	_rd_textures.clear()
+	for rid: RID in [_rd_contact_buffer, _rd_param_buffer, _rd_pipeline, _rd_shader]:
+		rids.append(rid)
+	_rd_contact_buffer = RID()
+	_rd_param_buffer = RID()
+	_rd_pipeline = RID()
+	_rd_shader = RID()
+	texture = null
+	if not rids.is_empty():
+		RenderingServer.call_on_render_thread(_render_free_rids.bind(rids))
+
+
 func _process(dt: float) -> void:
 	if not supported or failed:
 		_sync_renderer_binding()
@@ -167,9 +189,10 @@ func clear_active() -> void:
 	if _textures.size() == 2:
 		texture = _textures[0]
 	if ready_state and _rd_textures.size() == 2:
-		var zero := PackedByteArray()
-		zero.resize(RESOLUTION * RESOLUTION * BYTES_PER_TEXEL)
-		RenderingServer.call_on_render_thread(_render_clear.bind(_rd_textures, zero))
+		# These are compute-owned images. Clearing them on the render thread avoids
+		# requiring the incompatible CAN_UPDATE texture capability just to upload a
+		# CPU-built zero buffer during a reset.
+		RenderingServer.call_on_render_thread(_render_clear.bind(_rd_textures))
 
 
 func sample_params() -> Dictionary:
@@ -366,6 +389,12 @@ func _on_readback_failed() -> void:
 func _try_initialize() -> void:
 	if _init_requested or ready_state or failed or not supported:
 		return
+	# Headless/CPU-only runs have no RenderingDevice. Deformation remains available
+	# through the existing CPU service, so this is an expected capability choice,
+	# not an initialization error worth reporting to players or CI.
+	if RenderingServer.get_rendering_device() == null:
+		supported = false
+		return
 	var resource: Resource = load(SHADER_PATH)
 	if resource == null or not (resource is RDShaderFile):
 		return
@@ -381,28 +410,29 @@ func _try_initialize() -> void:
 func _render_initialize(spirv: RDShaderSPIRV) -> void:
 	var rd: RenderingDevice = RenderingServer.get_rendering_device()
 	if rd == null:
-		call_deferred("_on_initialized", false, RID(), RID(), [], RID(), RID(), [])
+		call_deferred("_on_initialized", false, "no RenderingDevice", RID(), RID(), [], RID(), RID(), [])
 		return
 	var shader: RID = rd.shader_create_from_spirv(spirv, "Asterra active terrain deformation")
 	if not shader.is_valid():
-		call_deferred("_on_initialized", false, RID(), RID(), [], RID(), RID(), [])
+		call_deferred("_on_initialized", false, "compute shader creation failed", RID(), RID(), [], RID(), RID(), [])
 		return
 	var pipeline: RID = rd.compute_pipeline_create(shader)
 	if not pipeline.is_valid() or not rd.compute_pipeline_is_valid(pipeline):
 		rd.free_rid(shader)
-		call_deferred("_on_initialized", false, RID(), RID(), [], RID(), RID(), [])
+		call_deferred("_on_initialized", false, "compute pipeline creation failed", RID(), RID(), [], RID(), RID(), [])
 		return
 
 	var usage_bits: int = (
 		RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT |
 		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT |
-		RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT |
+		RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT |
 		RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT)
 	if not rd.texture_is_format_supported_for_usage(
 			RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, usage_bits):
 		rd.free_rid(pipeline)
 		rd.free_rid(shader)
-		call_deferred("_on_initialized", false, RID(), RID(), [], RID(), RID(), [])
+		call_deferred("_on_initialized", false,
+			"RGBA32F storage/copy texture format is unsupported", RID(), RID(), [], RID(), RID(), [])
 		return
 	var format := RDTextureFormat.new()
 	format.width = RESOLUTION
@@ -415,13 +445,9 @@ func _render_initialize(spirv: RDShaderSPIRV) -> void:
 	format.samples = RenderingDevice.TEXTURE_SAMPLES_1
 	format.usage_bits = usage_bits
 	var view := RDTextureView.new()
-	var zero_texture := PackedByteArray()
-	zero_texture.resize(RESOLUTION * RESOLUTION * BYTES_PER_TEXEL)
-	var initial_data: Array[PackedByteArray] = []
-	initial_data.append(zero_texture)
 	var rd_textures: Array[RID] = []
 	for _index in 2:
-		rd_textures.append(rd.texture_create(format, view, initial_data))
+		rd_textures.append(rd.texture_create(format, view, []))
 	var zero_contacts := PackedByteArray()
 	zero_contacts.resize(CONTACT_BUFFER_BYTES)
 	var zero_params := PackedByteArray()
@@ -431,6 +457,9 @@ func _render_initialize(spirv: RDShaderSPIRV) -> void:
 	var ok: bool = contact_buffer.is_valid() and param_buffer.is_valid()
 	for rid: RID in rd_textures:
 		ok = ok and rid.is_valid()
+	if ok:
+		for rid: RID in rd_textures:
+			rd.texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0, 1)
 	var sets: Array[RID] = []
 	if ok:
 		for source_index in 2:
@@ -461,15 +490,16 @@ func _render_initialize(spirv: RDShaderSPIRV) -> void:
 				ok = false
 				break
 			sets.append(uniform_set)
-	call_deferred("_on_initialized", ok, shader, pipeline, rd_textures,
+	var failure_reason: String = "GPU texture, buffer or uniform-set creation failed" if not ok else ""
+	call_deferred("_on_initialized", ok, failure_reason, shader, pipeline, rd_textures,
 		contact_buffer, param_buffer, sets)
 
 
-func _on_initialized(success: bool, shader: RID, pipeline: RID, rd_textures: Array,
+func _on_initialized(success: bool, failure_reason: String, shader: RID, pipeline: RID, rd_textures: Array,
 		contact_buffer: RID, param_buffer: RID, sets: Array) -> void:
 	if not success:
 		failed = true
-		push_error("GPU terrain deformation initialization failed; CPU fallback remains active.")
+		push_error("GPU terrain deformation initialization failed (%s); CPU fallback remains active." % failure_reason)
 		return
 	_rd_shader = shader
 	_rd_pipeline = pipeline
@@ -490,7 +520,7 @@ func _on_initialized(success: bool, shader: RID, pipeline: RID, rd_textures: Arr
 	failed = false
 
 
-func _render_clear(rd_textures: Array, zero: PackedByteArray) -> void:
+func _render_clear(rd_textures: Array) -> void:
 	var rd: RenderingDevice = RenderingServer.get_rendering_device()
 	if rd == null:
 		return
@@ -498,7 +528,16 @@ func _render_clear(rd_textures: Array, zero: PackedByteArray) -> void:
 		if value is RID:
 			var rid: RID = value
 			if rid.is_valid():
-				rd.texture_update(rid, 0, zero)
+				rd.texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0, 1)
+
+
+func _render_free_rids(rids: Array) -> void:
+	var rd: RenderingDevice = RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	for rid: RID in rids:
+		if rid.is_valid():
+			rd.free_rid(rid)
 
 
 func _sync_renderer_binding() -> void:

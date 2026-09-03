@@ -254,3 +254,10 @@ func _exit_tree() -> void:
 	_slots.clear()
 	_free_rid(_pipeline)
 	_free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()
+	# This is a locally-created RenderingDevice, unlike the render-thread devices
+	# used by the terrain services. Releasing its RIDs is not enough: the device
+	# object itself owns a Vulkan context and must be freed explicitly at shutdown.
+	_rd.free()
+	_rd = null

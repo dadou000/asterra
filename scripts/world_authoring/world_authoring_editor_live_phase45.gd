@@ -31,6 +31,7 @@ func _phase43_build_local_features(terrain: Resource) -> void:
 	_phase45_build_preset_shelf(terrain)
 
 	var features: Array[Resource] = _phase43_feature_slots(terrain)
+	_phase43_build_distance_and_capacity_note(terrain, features)
 	var header := HBoxContainer.new()
 	header.name = "LocalFeatureHeader"
 	header.add_theme_constant_override("separation", 8)
@@ -44,7 +45,10 @@ func _phase43_build_local_features(terrain: Resource) -> void:
 	add.name = "AddBlankTerrainFeature"
 	add.text = "+ Add Terrain Feature"
 	add.custom_minimum_size = Vector2(205.0, 42.0)
-	add.tooltip_text = "Create one blank full-LOD WHAT × WHERE displacement feature"
+	var add_budget: Dictionary = _phase43_feature_budget(terrain, [PHASE45_GUIDED.default_config()])
+	add.disabled = not bool(add_budget.get("fits", false))
+	add.tooltip_text = "Create one feature that automatically applies to all terrain distance layers." if not add.disabled \
+		else String(add_budget.get("message", "This terrain program is full."))
 	add.pressed.connect(_phase43_create_feature.bind(terrain))
 	header.add_child(add)
 
@@ -124,7 +128,10 @@ func _phase45_build_preset_shelf(terrain: Resource) -> void:
 		]
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.custom_minimum_size = Vector2(280.0, 34.0)
-		button.tooltip_text = TERRAIN_PRESETS.description(preset_id)
+		var preset_budget: Dictionary = _phase43_feature_budget(terrain, _phase45_preset_configs(preset_id))
+		button.disabled = not bool(preset_budget.get("fits", false))
+		button.tooltip_text = TERRAIN_PRESETS.description(preset_id) if not button.disabled \
+			else String(preset_budget.get("message", "This terrain program is full."))
 		button.pressed.connect(_phase45_create_preset.bind(terrain, preset_id))
 		card.add_child(button)
 		var description := Label.new()
@@ -141,6 +148,10 @@ func _phase45_create_preset(terrain: Resource, preset_id: String) -> void:
 	var salt: int = _phase43_feature_slots(terrain).size() + 1
 	var specs: Array[Dictionary] = TERRAIN_PRESETS.specs(preset_id, salt)
 	if specs.is_empty():
+		return
+	var budget: Dictionary = _phase43_feature_budget(terrain, _phase45_preset_configs(preset_id, salt))
+	if not bool(budget.get("fits", false)):
+		_set_status(String(budget.get("message", "This terrain program is full. Disable or delete a feature first.")))
 		return
 	var created_box: Array[Resource] = []
 	_session.stage_action("Create %s terrain preset" % TERRAIN_PRESETS.label(preset_id), func() -> void:
@@ -167,6 +178,15 @@ func _phase45_create_preset(terrain: Resource, preset_id: String) -> void:
 	if not created_box.is_empty():
 		_phase43_selected_feature_id = String(created_box[0].get(&"slot_id"))
 	_refresh_current_category()
+
+
+func _phase45_preset_configs(preset_id: String, seed_salt: int = 0) -> Array[Dictionary]:
+	var configs: Array[Dictionary] = []
+	for spec: Dictionary in TERRAIN_PRESETS.specs(preset_id, seed_salt):
+		var config: Variant = spec.get("config", {})
+		if config is Dictionary:
+			configs.append(config as Dictionary)
+	return configs
 
 
 func _phase29_build_graph_editor(slot: Resource) -> void:

@@ -71,6 +71,24 @@ func _ready() -> void:
 		call_deferred("_try_initialize")
 
 
+func _exit_tree() -> void:
+	var rids: Array[RID] = []
+	for rid: RID in _uniform_sets:
+		rids.append(rid)
+	_uniform_sets.clear()
+	for rid: RID in [_rd_query_buffer, _rd_result_buffer, _rd_param_buffer,
+			_rd_sampler, _rd_pipeline, _rd_shader]:
+		rids.append(rid)
+	_rd_query_buffer = RID()
+	_rd_result_buffer = RID()
+	_rd_param_buffer = RID()
+	_rd_sampler = RID()
+	_rd_pipeline = RID()
+	_rd_shader = RID()
+	if not rids.is_empty():
+		RenderingServer.call_on_render_thread(_render_free_rids.bind(rids))
+
+
 func _process(_dt: float) -> void:
 	if not supported or failed:
 		return
@@ -368,11 +386,24 @@ func _on_uniform_sets_built(success: bool, cache_server_rid: RID,
 	if not success:
 		_bindings_ready = false
 		return
+	var replaced_sets: Array[RID] = []
+	replaced_sets.assign(_uniform_sets)
 	_uniform_sets.assign(sets)
+	if not replaced_sets.is_empty():
+		RenderingServer.call_on_render_thread(_render_free_rids.bind(replaced_sets))
 	_bound_cache_server_rid = cache_server_rid
 	_bound_edit_server_rid = edit_server_rid
 	_bound_active_rids.assign(active_rids)
 	_bindings_ready = _uniform_sets.size() == 2
+
+
+func _render_free_rids(rids: Array) -> void:
+	var rd: RenderingDevice = RenderingServer.get_rendering_device()
+	if rd == null:
+		return
+	for rid: RID in rids:
+		if rid.is_valid():
+			rd.free_rid(rid)
 
 
 func _dispatch_pending(snapshot: Dictionary) -> void:

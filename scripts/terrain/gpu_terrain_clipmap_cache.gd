@@ -66,6 +66,7 @@ var _last_frame_jobs := 0
 var _anchor_resets := 0
 var _strip_updates := 0
 var _full_fills := 0
+var _invalidation_reasons: Dictionary = {}
 
 
 func _ready() -> void:
@@ -133,7 +134,7 @@ func update_cache(anchor_dir: Vector3, anchor_right: Vector3, anchor_up: Vector3
 		_anchor_right = anchor_right.normalized()
 		_anchor_up = anchor_up.normalized()
 		_anchor_initialized = true
-		_invalidate_anchor()
+		_invalidate_anchor("anchor")
 
 	_center_plane = center_plane
 	_base_spacing = maxf(base_spacing, 1e-6)
@@ -152,13 +153,13 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 	_binding_generation = -1
 	_binding_macro_rid = RID()
 	_anchor_initialized = false
-	_invalidate_anchor()
+	_invalidate_anchor("world_data")
 
 
 func _on_coast_profile_changed() -> void:
 	# Coast edits alter the macro/detail handoff even if the underlying texture RID
 	# remains stable. Advance the generation so every old cache key becomes invalid.
-	_invalidate_anchor()
+	_invalidate_anchor("coast_profile")
 
 
 func _try_initialize() -> void:
@@ -313,14 +314,15 @@ func _on_uniform_set_built(success: bool, generation: int,
 	_binding_macro_rid = macro_rid
 	_bindings_ready = true
 	# Input data changed; old synthesized keys must not survive a context rebuild.
-	_invalidate_anchor()
+	_invalidate_anchor("bindings")
 
 
-func _invalidate_anchor() -> void:
+func _invalidate_anchor(reason: String = "unknown") -> void:
 	_anchor_generation += 1
+	_anchor_resets += 1
+	_invalidation_reasons[reason] = int(_invalidation_reasons.get(reason, 0)) + 1
 	if _anchor_generation > 1000000:
 		_anchor_generation = 1
-	_anchor_resets += 1
 	for level: int in LEVEL_COUNT:
 		_window_known[level] = false
 		(_urgent_jobs[level] as Array).clear()
@@ -606,6 +608,7 @@ func stats() -> Dictionary:
 		"anchor_resets": _anchor_resets,
 		"strip_updates": _strip_updates,
 		"full_fills": _full_fills,
+		"invalidation_reasons": _invalidation_reasons.duplicate(true),
 		"sample_budget": FRAME_SAMPLE_BUDGET,
 		"toroidal": true,
 		"staggered": true,

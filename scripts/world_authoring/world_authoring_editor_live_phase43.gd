@@ -11,6 +11,7 @@ const GUIDED_FEATURE := preload(
 	"res://scripts/world_authoring/model/terrain_guided_feature_graph.gd")
 
 const PHASE43_ALL_LEVELS_MASK: int = (1 << 15) - 1
+const PHASE43_DISTANCE_LAYER_COUNT: int = 15
 const SIMPLE_TAB_BASE: int = 0
 const SIMPLE_TAB_FEATURES: int = 1
 
@@ -124,9 +125,10 @@ func _phase43_build_base_landscape(terrain: Resource) -> void:
 
 func _phase43_build_local_features(terrain: Resource) -> void:
 	_section("Local Features")
-	_add_note("A feature is simply WHAT happens × WHERE it happens. New Simple features automatically apply through every terrain LOD so they do not disappear with distance.")
+	_add_note("A feature is simply WHAT happens × WHERE it happens. Every Simple feature automatically works from close-up detail to the far horizon — no terrain-layer setup needed.")
 
 	var features: Array[Resource] = _phase43_feature_slots(terrain)
+	_phase43_build_distance_and_capacity_note(terrain, features)
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 8)
 	_workspace.add_child(header)
@@ -138,7 +140,10 @@ func _phase43_build_local_features(terrain: Resource) -> void:
 	var add := Button.new()
 	add.text = "+ Add Terrain Feature"
 	add.custom_minimum_size = Vector2(220.0, 42.0)
-	add.tooltip_text = "Create a full-LOD guided displacement feature"
+	var add_budget: Dictionary = _phase43_feature_budget(terrain, [GUIDED_FEATURE.default_config()])
+	add.disabled = not bool(add_budget.get("fits", false))
+	add.tooltip_text = "Create one feature that automatically applies to all %d terrain distance layers." % PHASE43_DISTANCE_LAYER_COUNT if not add.disabled \
+		else String(add_budget.get("message", "This terrain program is full."))
 	add.pressed.connect(_phase43_create_feature.bind(terrain))
 	header.add_child(add)
 
@@ -203,6 +208,9 @@ func _phase43_build_feature_row(terrain: Resource, slot: Resource, selected: boo
 	enabled.text = "On"
 	enabled.button_pressed = bool(slot.get(&"enabled"))
 	enabled.toggled.connect(func(value: bool) -> void:
+		if value and not _phase43_can_enable_feature(terrain, slot):
+			enabled.set_pressed_no_signal(false)
+			return
 		_session.stage_set(slot, &"enabled", value,
 			WorldAuthoringSession.ApplyScope.GRAPH, "Toggle terrain feature")
 	)
@@ -288,6 +296,10 @@ func _phase43_build_feature_header(slot: Resource) -> void:
 func _phase43_create_feature(terrain: Resource) -> void:
 	if terrain == null or _session == null:
 		return
+	var budget: Dictionary = _phase43_feature_budget(terrain, [GUIDED_FEATURE.default_config()])
+	if not bool(budget.get("fits", false)):
+		_set_status(String(budget.get("message", "This terrain program is full. Disable or remove a feature first.")))
+		return
 	var created_box: Array[Resource] = [null]
 	_session.stage_action("Create simplified terrain feature", func() -> void:
 		var index: int = _phase43_feature_slots(terrain).size() + 1
@@ -310,6 +322,71 @@ func _phase43_create_feature(terrain: Resource) -> void:
 	if created != null:
 		_phase43_selected_feature_id = String(created.get(&"slot_id"))
 	_refresh_current_category()
+
+
+func _phase43_build_distance_and_capacity_note(terrain: Resource,
+		features: Array[Resource]) -> void:
+	var note := Label.new()
+	note.name = "SimpleTerrainAllDistanceNotice"
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.modulate = Color(0.58, 0.72, 0.66)
+	note.text = "✓ Automatically applied to all %d terrain distance layers. The near, middle and far rings use the same feature, so it stays continuous while you travel." % PHASE43_DISTANCE_LAYER_COUNT
+	_workspace.add_child(note)
+
+	var budget: Dictionary = _phase43_feature_budget(terrain)
+	var capacity := Label.new()
+	capacity.name = "SimpleTerrainFeatureCapacity"
+	capacity.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	capacity.modulate = Color(0.70, 0.76, 0.55) if bool(budget.get("fits", false)) else Color(0.95, 0.68, 0.32)
+	capacity.text = String(budget.get("message", "Feature capacity unavailable."))
+	_workspace.add_child(capacity)
+
+
+func _phase43_feature_budget(terrain: Resource,
+		extra_configs: Array[Dictionary] = []) -> Dictionary:
+	var used: int = 0
+	var enabled_count: int = 0
+	if terrain == null:
+		return {"fits":false, "message":"Terrain feature capacity is unavailable."}
+	for slot: Resource in _phase43_feature_slots(terrain):
+		if slot == null or not bool(slot.get(&"enabled")):
+			continue
+		var graph: Resource = slot.get(&"graph") as Resource
+		var cost: int = GUIDED_FEATURE.estimated_vertex_instruction_cost(graph)
+		if cost < 0:
+			return {"fits":false, "message":"This terrain has a custom feature. Manage its capacity in Advanced / Node System before adding Simple features."}
+		used += cost + (1 if enabled_count > 0 else 0)
+		enabled_count += 1
+	for config: Dictionary in extra_configs:
+		var cost: int = GUIDED_FEATURE.estimated_vertex_instruction_cost_from_config(config)
+		used += cost + (1 if enabled_count > 0 else 0)
+		enabled_count += 1
+	var maximum: int = GUIDED_FEATURE.VERTEX_PROGRAM_MAX_INSTRUCTIONS
+	var fits: bool = used <= maximum
+	return {
+		"fits":fits,
+		"used":used,
+		"maximum":maximum,
+		"remaining":maxi(maximum - used, 0),
+		"message":"Feature capacity: %d / %d. %s" % [used, maximum,
+			"You can add more." if fits else "Full — disable or delete a feature before adding another."],
+	}
+
+
+func _phase43_can_enable_feature(terrain: Resource, slot: Resource) -> bool:
+	if slot == null:
+		return false
+	var graph: Resource = slot.get(&"graph") as Resource
+	var cost: int = GUIDED_FEATURE.estimated_vertex_instruction_cost(graph)
+	if cost < 0:
+		_set_status("This is a custom graph. Enable it from Advanced / Node System, where its program capacity can be managed.")
+		return false
+	var config: Dictionary = GUIDED_FEATURE.config_from_graph(graph)
+	var budget: Dictionary = _phase43_feature_budget(terrain, [config])
+	if not bool(budget.get("fits", false)):
+		_set_status(String(budget.get("message", "This terrain program is full. Disable or delete another feature first.")))
+		return false
+	return true
 
 
 func _phase29_build_graph_editor(slot: Resource) -> void:
