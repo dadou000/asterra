@@ -4,13 +4,13 @@ extends Node
 ## A generic authored displacement flow must expose Latitude Band, create the exact
 ## serialized LATITUDE_MASK node, and route its controls through the normal staged
 ## graph-edit path. Resident Base Terrain must deliberately keep the option hidden
-## until spatial native-stage lowering exists. Phase 45 is the current top-level
+## until spatial native-stage lowering exists. Phase 46 is the current top-level
 ## Planet Studio wrapper; raw displacement graphs must still use exact Phase 41.
 
 const PLANET_STUDIO_SCENE := preload("res://scenes/world_authoring/PlanetStudio.tscn")
 const SLOT := preload("res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
 const NATIVE := preload("res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
-const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase45.gd"
+const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase46.gd"
 const GRAPH_EDITOR_PATH := "res://scripts/world_authoring/terrain_graph_editor_phase41.gd"
 const LATITUDE_MASK_TYPE := "LATITUDE_MASK"
 
@@ -46,7 +46,7 @@ func _run() -> void:
 		return
 	var editor_script: Script = editor.get_script() as Script
 	if editor_script == null or editor_script.resource_path != EXPECTED_EDITOR_PATH:
-		_fail("PlanetStudio.tscn is not using the current Phase 45 live editor wrapper.")
+		_fail("PlanetStudio.tscn is not using the current Phase 46 live editor wrapper.")
 		return
 	editor.call("bind_world", world)
 	layer.add_child(editor)
@@ -57,12 +57,12 @@ func _run() -> void:
 	var session: Object = editor.get("_session") as Object
 	var terrain: Resource = session.call("active_terrain_profile") as Resource if session != null else null
 	if terrain == null:
-		_fail("Phase 45 Planet Studio has no active terrain profile.")
+		_fail("Phase 46 Planet Studio has no active terrain profile.")
 		return
 	var shape_slot: Resource = terrain.call("find_shader_slot",
 		NATIVE.PRODUCTION_SHAPE_SLOT_ID) as Resource
 	if shape_slot == null:
-		_fail("Phase 45 Planet Studio has no resident Base Terrain Shape slot.")
+		_fail("Phase 46 Planet Studio has no resident Base Terrain Shape slot.")
 		return
 
 	# Create an ordinary authored displacement layer. This is the bytecode path where
@@ -154,7 +154,7 @@ func _run() -> void:
 		_fail("Resident Base Terrain incorrectly exposes Latitude Band before native spatial lowering exists.")
 		return
 
-	print("LATITUDE_MASK_PHASE41_UI_OK: Phase 45 routes generic displacement through exact Phase 41; Latitude Band edits correctly and resident Base Terrain keeps unsupported spatial masking hidden")
+	print("LATITUDE_MASK_PHASE41_UI_OK: Phase 46 routes generic displacement through exact Phase 41; Latitude Band edits correctly and resident Base Terrain keeps unsupported spatial masking hidden")
 	editor.queue_free()
 	await _frames(2)
 	get_tree().quit(0)
