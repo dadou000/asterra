@@ -1,10 +1,10 @@
 extends "res://scripts/water/water_system_river_cluster_production.gd"
-## Phase-4 production facade: conservative physical HydroLOD foundation layered on
-## top of the complete Phase-3 river/component stack.
+## Phase-4 production facade: conservative physical HydroLOD layered on top of the
+## complete Phase-3 river/component stack.
 ##
-## This slice enables mixed-level physical metrics and atomic parent/children
-## restriction/prolongation. Live 2:1 boundaries remain fail-closed until the
-## dedicated face-flux/reflux/subcycling layer is attached.
+## Mixed-resolution physical metrics, conservative parent/children transfers and
+## live 2:1 interface reflux are active. The runtime enforces a strict 2:1 balance;
+## unsupported >2:1 boundaries remain fail-closed until temporal subcycling exists.
 
 signal physical_hydrolod_ready
 signal physical_hydrolod_transition_completed(report: Dictionary)
@@ -71,12 +71,15 @@ func gpu_stats() -> Dictionary:
 		"cfl_uses_local_dx": true,
 		"source_volume_uses_local_area": true,
 		"activity_flux_uses_local_dx": true,
+		"point_sources_follow_active_lod_owner": true,
 		"conservative_restriction": true,
 		"terrain_aware_conservative_prolongation": true,
 		"atomic_hierarchy_swap": true,
 		"river_member_transition_guard": true,
-		"cross_lod_interface_reflux": false,
-		"mixed_boundary_transitions_fail_closed": true,
+		"cross_lod_interface_reflux": true,
+		"cross_lod_frontier_claims": true,
+		"two_to_one_balance_enforced": true,
+		"temporal_subcycling": false,
 		"runtime": {} if not (_sparse_runtime is SparseHydrologyRuntimeLOD) \
 			else (_sparse_runtime as SparseHydrologyRuntimeLOD).stats().get(
 				"physical_hydrolod", {}),
