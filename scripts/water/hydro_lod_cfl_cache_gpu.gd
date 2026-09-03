@@ -1,0 +1,307 @@
+class_name HydroLODCFLCacheGPU
+extends Node
+## GPU-resident per-tile CFL/health summary cache for temporal HydroLOD.
+##
+## A slot summary is refreshed only when that slot's canonical state changes. The
+## entire cache is rebuilt when sparse topology_revision changes because activation
+## and conservative LOD transfers may rewrite atlas slots outside the timestep loop.
+
+signal initialized
+signal initialization_failed(error: Error)
+signal released
+
+const SUMMARY_UINTS := 8
+const SUMMARY_BYTES_PER_SLOT := SUMMARY_UINTS * 4
+const REFRESH_LOCAL_X := 8
+const REFRESH_LOCAL_Y := 8
+const REDUCE_LOCAL_X := 256
+
+var atlas: SparseHydroAtlasGPU
+
+var _control := RID()
+var _params := RID()
+var _due_slots := RID()
+var _due_indirect := RID()
+var _summaries := RID()
+
+var _refresh_shader := RID()
+var _refresh_pipeline := RID()
+var _zero_due_shader := RID()
+var _zero_due_pipeline := RID()
+var _reduce_shader := RID()
+var _reduce_pipeline := RID()
+var _refresh_set := RID()
+var _zero_due_set := RID()
+var _reduce_set := RID()
+
+var _initialized := false
+var _init_pending := false
+var _synced_topology_revision := -1
+
+
+func initialize(p_atlas: SparseHydroAtlasGPU, control_rid: RID, params_rid: RID,
+		due_slots_rid: RID, due_indirect_rid: RID) -> Error:
+	if _initialized or _init_pending:
+		return ERR_BUSY
+	if p_atlas == null or not p_atlas.initialized_ok() \
+			or not control_rid.is_valid() or not params_rid.is_valid() \
+			or not due_slots_rid.is_valid() or not due_indirect_rid.is_valid():
+		return ERR_INVALID_PARAMETER
+	if RenderingServer.get_rendering_device() == null:
+		return ERR_UNAVAILABLE
+
+	var refresh_file: RDShaderFile = load(
+		"res://shaders/water/hydro_lod_cfl_cache_refresh.glsl")
+	var zero_file: RDShaderFile = load(
+		"res://shaders/water/hydro_lod_cfl_cache_zero_due.glsl")
+	var reduce_file: RDShaderFile = load(
+		"res://shaders/water/hydro_lod_cfl_cache_reduce.glsl")
+	if refresh_file == null or zero_file == null or reduce_file == null:
+		return ERR_CANT_OPEN
+	var refresh_spirv := refresh_file.get_spirv()
+	var zero_spirv := zero_file.get_spirv()
+	var reduce_spirv := reduce_file.get_spirv()
+	if refresh_spirv == null or zero_spirv == null or reduce_spirv == null:
+		return ERR_CANT_CREATE
+
+	atlas = p_atlas
+	_control = control_rid
+	_params = params_rid
+	_due_slots = due_slots_rid
+	_due_indirect = due_indirect_rid
+	_init_pending = true
+	RenderingServer.call_on_render_thread(Callable(self, &"_init_render_thread").bind(
+		refresh_spirv, zero_spirv, reduce_spirv))
+	return OK
+
+
+func initialized_ok() -> bool:
+	return _initialized
+
+
+func needs_rebuild(topology_revision: int) -> bool:
+	return not _initialized or topology_revision < 0 \
+		or topology_revision != _synced_topology_revision
+
+
+## Render-thread only. Must be called before compute_list_begin().
+func clear_for_full_rebuild(rd: RenderingDevice) -> Error:
+	if not _initialized or not _summaries.is_valid():
+		return ERR_UNAVAILABLE
+	return rd.buffer_clear(_summaries, 0, atlas.capacity * SUMMARY_BYTES_PER_SLOT)
+
+
+## Render-thread only. State A -> all occupied tile summaries.
+func record_full_refresh(rd: RenderingDevice, compute: int) -> void:
+	if not _initialized:
+		return
+	var gx := maxi(int(ceil(float(atlas.tile_resolution) / float(REFRESH_LOCAL_X))), 1)
+	var gy := maxi(int(ceil(float(atlas.tile_resolution) / float(REFRESH_LOCAL_Y))), 1)
+	rd.compute_list_bind_compute_pipeline(compute, _refresh_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _refresh_set, 0)
+	_set_push(rd, compute, 0)
+	rd.compute_list_dispatch(compute, gx, gy, atlas.capacity)
+	rd.compute_list_add_barrier(compute)
+
+
+func mark_topology_synced(topology_revision: int) -> void:
+	_synced_topology_revision = topology_revision
+
+
+## Render-thread only. Clear summaries for the exact due queue before those states
+## are advanced. Reuses the SWE indirect command; only one X/Y group per Z acts.
+func record_zero_due(rd: RenderingDevice, compute: int) -> void:
+	if not _initialized:
+		return
+	rd.compute_list_bind_compute_pipeline(compute, _zero_due_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _zero_due_set, 0)
+	rd.compute_list_dispatch_indirect(compute, _due_indirect, 0)
+	rd.compute_list_add_barrier(compute)
+
+
+## Render-thread only. Recompute only tiles whose canonical state was just committed.
+func record_refresh_due(rd: RenderingDevice, compute: int) -> void:
+	if not _initialized:
+		return
+	rd.compute_list_bind_compute_pipeline(compute, _refresh_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _refresh_set, 0)
+	_set_push(rd, compute, 1)
+	rd.compute_list_dispatch_indirect(compute, _due_indirect, 0)
+	rd.compute_list_add_barrier(compute)
+
+
+## Render-thread only. mode 0 -> CFL iteration scratch, mode 1 -> post diagnostics.
+func record_reduce(rd: RenderingDevice, compute: int, mode: int) -> void:
+	if not _initialized:
+		return
+	var groups := maxi(int(ceil(float(atlas.capacity) / float(REDUCE_LOCAL_X))), 1)
+	rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _reduce_set, 0)
+	_set_push(rd, compute, mode)
+	rd.compute_list_dispatch(compute, groups, 1, 1)
+	rd.compute_list_add_barrier(compute)
+
+
+func invalidate() -> void:
+	_synced_topology_revision = -1
+
+
+func gpu_bytes_estimate() -> int:
+	return 0 if atlas == null else atlas.capacity * SUMMARY_BYTES_PER_SLOT
+
+
+func stats() -> Dictionary:
+	return {
+		"initialized": _initialized,
+		"synced_topology_revision": _synced_topology_revision,
+		"summary_bytes_per_slot": SUMMARY_BYTES_PER_SLOT,
+		"gpu_bytes": gpu_bytes_estimate(),
+		"per_tile_characteristic_rate_cache": true,
+		"due_only_refresh": true,
+		"full_rebuild_on_topology_revision": true,
+		"cpu_summary_readback": false,
+	}
+
+
+func _init_render_thread(refresh_spirv: RDShaderSPIRV, zero_spirv: RDShaderSPIRV,
+		reduce_spirv: RDShaderSPIRV) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		call_deferred(&"_finish_init", ERR_UNAVAILABLE, {})
+		return
+
+	var refresh_shader := rd.shader_create_from_spirv(refresh_spirv)
+	var zero_shader := rd.shader_create_from_spirv(zero_spirv)
+	var reduce_shader := rd.shader_create_from_spirv(reduce_spirv)
+	if not refresh_shader.is_valid() or not zero_shader.is_valid() \
+			or not reduce_shader.is_valid():
+		_free_many(rd, [reduce_shader, zero_shader, refresh_shader])
+		call_deferred(&"_finish_init", ERR_CANT_CREATE, {})
+		return
+	var refresh_pipeline := rd.compute_pipeline_create(refresh_shader)
+	var zero_pipeline := rd.compute_pipeline_create(zero_shader)
+	var reduce_pipeline := rd.compute_pipeline_create(reduce_shader)
+	if not refresh_pipeline.is_valid() or not zero_pipeline.is_valid() \
+			or not reduce_pipeline.is_valid():
+		_free_many(rd, [reduce_pipeline, zero_pipeline, refresh_pipeline,
+			reduce_shader, zero_shader, refresh_shader])
+		call_deferred(&"_finish_init", ERR_CANT_CREATE, {})
+		return
+
+	var zero_bytes := PackedByteArray()
+	zero_bytes.resize(atlas.capacity * SUMMARY_BYTES_PER_SLOT)
+	var summaries := rd.storage_buffer_create(zero_bytes.size(), zero_bytes)
+	if not summaries.is_valid():
+		_free_many(rd, [reduce_pipeline, zero_pipeline, refresh_pipeline,
+			reduce_shader, zero_shader, refresh_shader])
+		call_deferred(&"_finish_init", ERR_CANT_CREATE, {})
+		return
+
+	var refresh_set := rd.uniform_set_create([
+		_storage_uniform(0, atlas.state_a_rid()),
+		_storage_uniform(1, atlas.occupancy_rid()),
+		_storage_uniform(2, atlas.tile_metadata_rid()),
+		_storage_uniform(3, _params),
+		_storage_uniform(4, _due_slots),
+		_storage_uniform(5, summaries),
+	], refresh_shader, 0)
+	var zero_set := rd.uniform_set_create([
+		_storage_uniform(0, _due_slots),
+		_storage_uniform(1, summaries),
+		_storage_uniform(2, _params),
+	], zero_shader, 0)
+	var reduce_set := rd.uniform_set_create([
+		_storage_uniform(0, summaries),
+		_storage_uniform(1, atlas.occupancy_rid()),
+		_storage_uniform(2, _control),
+		_storage_uniform(3, _params),
+	], reduce_shader, 0)
+	if not refresh_set.is_valid() or not zero_set.is_valid() or not reduce_set.is_valid():
+		_free_many(rd, [reduce_set, zero_set, refresh_set, summaries,
+			reduce_pipeline, zero_pipeline, refresh_pipeline,
+			reduce_shader, zero_shader, refresh_shader])
+		call_deferred(&"_finish_init", ERR_CANT_CREATE, {})
+		return
+
+	call_deferred(&"_finish_init", OK, {
+		"refresh_shader": refresh_shader,
+		"refresh_pipeline": refresh_pipeline,
+		"zero_shader": zero_shader,
+		"zero_pipeline": zero_pipeline,
+		"reduce_shader": reduce_shader,
+		"reduce_pipeline": reduce_pipeline,
+		"summaries": summaries,
+		"refresh_set": refresh_set,
+		"zero_set": zero_set,
+		"reduce_set": reduce_set,
+	})
+
+
+func _finish_init(error: Error, bundle: Dictionary) -> void:
+	_init_pending = false
+	if error != OK:
+		initialization_failed.emit(error)
+		return
+	_refresh_shader = bundle["refresh_shader"]
+	_refresh_pipeline = bundle["refresh_pipeline"]
+	_zero_due_shader = bundle["zero_shader"]
+	_zero_due_pipeline = bundle["zero_pipeline"]
+	_reduce_shader = bundle["reduce_shader"]
+	_reduce_pipeline = bundle["reduce_pipeline"]
+	_summaries = bundle["summaries"]
+	_refresh_set = bundle["refresh_set"]
+	_zero_due_set = bundle["zero_set"]
+	_reduce_set = bundle["reduce_set"]
+	_initialized = true
+	initialized.emit()
+
+
+func _set_push(rd: RenderingDevice, compute: int, value: int) -> void:
+	var push := PackedInt32Array([value, 0, 0, 0]).to_byte_array()
+	rd.compute_list_set_push_constant(compute, push, push.size())
+
+
+func _storage_uniform(binding: int, rid: RID) -> RDUniform:
+	var uniform := RDUniform.new()
+	uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	uniform.binding = binding
+	uniform.add_id(rid)
+	return uniform
+
+
+func _free_many(rd: RenderingDevice, values: Array) -> void:
+	for value in values:
+		if value is RID:
+			var rid: RID = value
+			if rid.is_valid():
+				rd.free_rid(rid)
+
+
+func release() -> void:
+	if not _initialized and not _refresh_shader.is_valid():
+		return
+	var rids := [_reduce_set, _zero_due_set, _refresh_set, _summaries,
+		_reduce_pipeline, _zero_due_pipeline, _refresh_pipeline,
+		_reduce_shader, _zero_due_shader, _refresh_shader]
+	_initialized = false
+	_init_pending = false
+	_synced_topology_revision = -1
+	_reduce_set = RID(); _zero_due_set = RID(); _refresh_set = RID()
+	_summaries = RID()
+	_reduce_pipeline = RID(); _zero_due_pipeline = RID(); _refresh_pipeline = RID()
+	_reduce_shader = RID(); _zero_due_shader = RID(); _refresh_shader = RID()
+	_control = RID(); _params = RID(); _due_slots = RID(); _due_indirect = RID()
+	atlas = null
+	RenderingServer.call_on_render_thread(
+		Callable(self, &"_release_render_thread").bind(rids))
+	released.emit()
+
+
+func _release_render_thread(rids: Array) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd != null:
+		_free_many(rd, rids)
+
+
+func _exit_tree() -> void:
+	release()
