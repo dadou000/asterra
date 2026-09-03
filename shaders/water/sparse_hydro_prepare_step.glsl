@@ -1,9 +1,9 @@
 #[compute]
 #version 450
 
-// Converts the occupied-atlas characteristic-speed reduction into one CFL-safe
-// sparse substep. Recomputed before every candidate iteration; simulated time is
-// deliberately under-advanced rather than violating CFL when the cap is reached.
+// Converts the occupied-atlas characteristic-rate reduction into one CFL-safe
+// sparse substep. For mixed HydroLODs the reduction supplies max((|u|+c)/dx_local),
+// so one common step is stable for every occupied physical resolution.
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -37,11 +37,14 @@ layout(set = 0, binding = 0, std430) buffer Control {
     uint iter_invalid_count;
     uint reserved0;
     uint reserved1;
+
+    uint iter_max_cfl_rate_bits;
+    uint reserved2;
 } control;
 layout(set = 0, binding = 1, std430) readonly buffer Params {
-    vec4 grid_dt;  // tile_resolution, capacity, dx, requested macro dt
+    vec4 grid_dt;  // tile_resolution, capacity, H0 dx, requested macro dt
     vec4 physics;  // gravity, dry eps, Manning n, CFL
-    vec4 schedule; // max substeps, reserved...
+    vec4 schedule; // max substeps, H0 tile level, HydroLOD enabled, reserved
 } params;
 
 layout(push_constant, std430) uniform PreparePush {
@@ -76,11 +79,10 @@ void main() {
     control.current_dt = 0.0;
     if (control.remaining_dt <= 1e-7 || pc.iteration >= cap) return;
 
-    float dx = max(params.grid_dt.z, 1e-4);
     float cfl = clamp(params.physics.w, 0.01, 0.95);
-    float max_speed = uintBitsToFloat(control.iter_max_speed_bits);
+    float max_cfl_rate = uintBitsToFloat(control.iter_max_cfl_rate_bits);
     float safe_dt = control.remaining_dt;
-    if (max_speed > 1e-7) safe_dt = cfl * dx / max_speed;
+    if (max_cfl_rate > 1e-7) safe_dt = cfl / max_cfl_rate;
     safe_dt = max(safe_dt, 1e-7);
 
     float step_dt = min(control.remaining_dt, safe_dt);
