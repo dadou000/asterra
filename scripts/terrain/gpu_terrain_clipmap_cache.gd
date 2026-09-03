@@ -94,7 +94,32 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _cache_texture != null:
 		_cache_texture.texture_rd_rid = RID()
-	var rids: Array[RID] = [_rd_uniform_set, _rd_sampler, _rd_cache, _rd_pipeline, _rd_shader]
+	# Claim the RIDs and clear the members before scheduling the free so a second
+	# _exit_tree (hot reload, reparent) cannot queue the same free twice -- a
+	# double free surfaces later as "Attempted to free invalid ID" on the render
+	# thread.
+	var rids: Array[RID] = []
+	for rid: RID in [_rd_uniform_set, _rd_sampler, _rd_cache, _rd_pipeline, _rd_shader]:
+		if rid.is_valid():
+			rids.append(rid)
+	_rd_uniform_set = RID()
+	_rd_sampler = RID()
+	_rd_cache = RID()
+	_rd_pipeline = RID()
+	_rd_shader = RID()
+	_bindings_ready = false
+	_free_rids_on_teardown(rids)
+
+
+# A deliberate live removal (the staging cache is queue_free()d after a handoff)
+# must return its GPU resources now. Whole-tree destruction on application quit is
+# different: RenderingDevice finalization reclaims every resident resource before
+# a queued render-thread callback would run, so an explicit free then just prints
+# "Attempted to free invalid ID". is_queued_for_deletion() is true only for the
+# former.
+func _free_rids_on_teardown(rids: Array) -> void:
+	if rids.is_empty() or not is_queued_for_deletion():
+		return
 	RenderingServer.call_on_render_thread(_render_free.bind(rids))
 
 

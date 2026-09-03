@@ -23,8 +23,10 @@ var _geomorph_buffer_updates: int = 0
 func _exit_tree() -> void:
 	var control_buffer: RID = _rd_geomorph_controls
 	_rd_geomorph_controls = RID()
+	# See base _free_rids_on_teardown: free for a deliberate live removal, let RD
+	# finalization handle whole-tree destruction on quit.
 	if control_buffer.is_valid():
-		RenderingServer.call_on_render_thread(_render_free.bind([control_buffer]))
+		_free_rids_on_teardown([control_buffer])
 	super._exit_tree()
 
 
