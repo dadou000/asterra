@@ -7,8 +7,6 @@ extends "res://tests/validate_secondary_terrain_scripts.gd"
 ## while the previous bytecode, production controls, displacement envelope and
 ## evaluated terrain remain untouched.
 
-const TERRAIN_PROFILE := preload(
-	"res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const SLOT_MODEL := preload(
 	"res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
 const SAFE_RUNTIME := preload(

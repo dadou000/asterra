@@ -42,6 +42,9 @@ const OP_NOISE_LAYER := 22
 const OP_RIDGED_MOUNTAINS := 23
 const OP_EROSION_CHANNELS := 24
 const OP_SEDIMENT_DEPOSIT := 25
+## Kept after the existing generic terrain operations so saved bytecode remains
+## compatible.  The fourth parameter is the pattern seed; z is terrace count.
+const OP_TERRACE_RELIEF := 29
 
 var _headers := PackedVector4Array()
 var _params := PackedVector4Array()
@@ -254,7 +257,7 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 			result = _append_instruction(OP_NOISE, -1, -1, -1,
 				Vector4(maxf(absf(float(parameters.get("scale", 1.0))), 0.000001),
 					float(int(parameters.get("seed", graph_seed)) & 0x7fffffff), 0.0, 0.0))
-		"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT":
+		"NOISE_LAYER", "RIDGED_MOUNTAINS", "EROSION_CHANNELS", "SEDIMENT_DEPOSIT", "TERRACE_RELIEF":
 			var terrain_input: int = _compile_input(node_id, 0, nodes, inputs,
 				memo, visiting, graph_seed)
 			var operation: int = OP_NOISE_LAYER
@@ -262,15 +265,21 @@ func _compile_node(node_id: String, nodes: Dictionary, inputs: Dictionary,
 				"RIDGED_MOUNTAINS": operation = OP_RIDGED_MOUNTAINS
 				"EROSION_CHANNELS": operation = OP_EROSION_CHANNELS
 				"SEDIMENT_DEPOSIT": operation = OP_SEDIMENT_DEPOSIT
+				"TERRACE_RELIEF": operation = OP_TERRACE_RELIEF
 			var default_amount: float = 100.0 if node_type == "NOISE_LAYER" else 250.0
 			if node_type == "EROSION_CHANNELS":
 				default_amount = 40.0
 			elif node_type == "SEDIMENT_DEPOSIT":
 				default_amount = 25.0
+			elif node_type == "TERRACE_RELIEF":
+				default_amount = 80.0
+			var detail_count: int = clampi(int(parameters.get("passes", 3)), 1, 4)
+			if node_type == "TERRACE_RELIEF":
+				detail_count = clampi(int(parameters.get("steps", 6)), 2, 24)
 			result = _append_instruction(operation, terrain_input, -1, -1, Vector4(
 				maxf(absf(float(parameters.get("scale", 6.0))), 0.000001),
 				float(parameters.get("amount", default_amount)),
-				float(clampi(int(parameters.get("passes", 3)), 1, 4)),
+				float(detail_count),
 				float(int(parameters.get("seed", graph_seed)) & 0x000fffff)))
 		"ABS":
 			result = _append_instruction(OP_ABS,
@@ -436,6 +445,12 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 					d, p.x, int(round(p.w)), int(round(p.z)))
 				var deposit: float = clampf(1.0 - absf(sediment_field * 1.65), 0.0, 1.0)
 				out = a + deposit * deposit * p.y
+			OP_TERRACE_RELIEF:
+				var terrace_field: float = _terrain_fbm(d, p.x, int(round(p.w)), 1)
+				var terrace_steps: float = float(clampi(int(round(p.z)), 2, 24))
+				var terrace: float = floor((terrace_field * 0.5 + 0.5) * terrace_steps) \
+					/ maxf(terrace_steps - 1.0, 1.0)
+				out = a + (terrace * 2.0 - 1.0) * p.y
 			_: out = 0.0
 		values[index] = out if is_finite(out) else 0.0
 	return float(values[_output_index]) if _output_index < values.size() else 0.0

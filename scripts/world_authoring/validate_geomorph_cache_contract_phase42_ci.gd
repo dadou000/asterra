@@ -21,7 +21,7 @@ func _ready() -> void:
 func _run() -> void:
 	var error: String = _validate_contract()
 	if error.is_empty():
-		error = _validate_cache_invalidation()
+		error = await _validate_cache_invalidation()
 	if error.is_empty():
 		error = _validate_runtime_snapshot()
 	if error.is_empty():

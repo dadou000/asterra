@@ -165,6 +165,7 @@ float author_displacement_height_with_sculpt(vec3 direction, float base_height_m
 		else if (op == 26) v = sculpt_delta_m;
 		else if (op == 27) v = round(p.w) >= 2.0 ? ad_longitude_mask(direction, p) : ad_latitude_mask(direction, p);
 		else if (op == 28) v = ad_radial_mask(direction, p);
+		else if (op == 29) { float field = ad_terrain_fbm(normalize(direction), p.x, int(round(p.w)), 1); float steps = float(clamp(int(round(p.z)), 2, 24)); float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0); v = a + (terrace * 2.0 - 1.0) * p.y; }
 		values[i] = v;
 	}
 	return values[clamp(u_author_disp_output, 0, count - 1)];

@@ -197,7 +197,7 @@ func _build_lake(feature: Resource, body_radius: float) -> Dictionary:
 	return {
 		"mesh": mesh,
 		"anchor": anchor,
-		"triangles": vertices.size() / 3,
+		"triangles": int(float(vertices.size()) / 3.0),
 	}
 
 
@@ -224,7 +224,7 @@ func _append_lake_triangle(a: Vector3, b: Vector3, c: Vector3,
 	_append_surface_vertex(c, surface_radius, anchor, depth_m, 0.0, 0.0, vertices, normals, uvs, uv2s)
 
 
-func _build_river(feature: Resource, body_radius: float) -> Dictionary:
+func _build_river(feature: Resource, _body_radius: float) -> Dictionary:
 	var segment_count: int = int(feature.call("river_segment_count"))
 	if segment_count <= 0:
 		return {}
@@ -308,7 +308,7 @@ func _build_river(feature: Resource, body_radius: float) -> Dictionary:
 	return {
 		"mesh": mesh,
 		"anchor": anchor,
-		"triangles": vertices.size() / 3,
+		"triangles": int(float(vertices.size()) / 3.0),
 	}
 
 
@@ -416,17 +416,17 @@ func _sample_params(path: NodePath) -> Dictionary:
 
 func _bind_edit_params(material: ShaderMaterial, params: Dictionary, active: bool) -> void:
 	if active:
-		var ready: bool = bool(params.get("ready", false))
+		var is_ready: bool = bool(params.get("ready", false))
 		material.set_shader_parameter("u_active_deform", params.get("texture"))
-		material.set_shader_parameter("u_active_deform_ready", 1.0 if ready else 0.0)
+		material.set_shader_parameter("u_active_deform_ready", 1.0 if is_ready else 0.0)
 		material.set_shader_parameter("u_active_deform_center_dir", params.get("center_dir", Vector3.RIGHT))
 		material.set_shader_parameter("u_active_deform_center_right", params.get("center_right", Vector3.BACK))
 		material.set_shader_parameter("u_active_deform_center_up", params.get("center_up", Vector3.UP))
 		material.set_shader_parameter("u_active_deform_half_extent_m", float(params.get("half_extent_m", 32.0)))
 		return
-	var ready: bool = bool(params.get("ready", false))
+	var is_ready: bool = bool(params.get("ready", false))
 	material.set_shader_parameter("u_edit_delta", params.get("texture"))
-	material.set_shader_parameter("u_edit_ready", 1.0 if ready else 0.0)
+	material.set_shader_parameter("u_edit_ready", 1.0 if is_ready else 0.0)
 	material.set_shader_parameter("u_edit_center_dir", params.get("center_dir", Vector3.RIGHT))
 	material.set_shader_parameter("u_edit_center_right", params.get("center_right", Vector3.BACK))
 	material.set_shader_parameter("u_edit_center_up", params.get("center_up", Vector3.UP))

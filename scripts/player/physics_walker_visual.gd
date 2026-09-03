@@ -95,7 +95,8 @@ func _load_character() -> void:
 func _apply_ragdoll_pose() -> void:
 	var torso_rel := ragdoll.relative_rotation("torso")
 	_set_pose_delta("spine", Quaternion.IDENTITY.slerp(torso_rel, 0.44))
-	_set_pose_delta("chest", Quaternion.IDENTITY.slerp(torso_rel, 0.56))
+	if int(_bones.get("chest", -1)) != int(_bones.get("spine", -1)):
+		_set_pose_delta("chest", Quaternion.IDENTITY.slerp(torso_rel, 0.56))
 
 	var head_rel := ragdoll.relative_rotation("head")
 	_set_pose_delta("neck", Quaternion.IDENTITY.slerp(head_rel, 0.42))
@@ -264,6 +265,10 @@ func _resolve_geometry_fallbacks() -> void:
 		_bones["spine"] = _guess_central_above(pelvis, false)
 	if int(_bones.get("chest", -1)) < 0 and pelvis >= 0:
 		_bones["chest"] = _guess_central_above(pelvis, true)
+	# Some valid humanoid rigs expose only one torso bone. Reuse it for the chest
+	# role instead of reporting a broken ragdoll map for an otherwise usable rig.
+	if int(_bones.get("chest", -1)) < 0:
+		_bones["chest"] = int(_bones.get("spine", -1))
 
 	var spine := int(_bones.get("spine", -1))
 	var chest := int(_bones.get("chest", -1))

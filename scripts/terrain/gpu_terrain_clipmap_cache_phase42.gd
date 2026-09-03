@@ -160,6 +160,7 @@ func _render_build_uniform_set(generation: int, macro_rid: RID,
 		u.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 		u.binding = binding
 		u.add_id(sampler)
+		u.add_id(rd_tex)
 		uniforms.append(u)
 
 	var output := RDUniform.new()

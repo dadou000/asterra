@@ -321,6 +321,12 @@ func evaluate_height(direction: Vector3, base_height_m: float = 0.0,
 					d, p.x, int(round(p.w)), int(round(p.z)))
 				var deposit: float = clampf(1.0 - absf(sediment_field * 1.65), 0.0, 1.0)
 				out = a + deposit * deposit * p.y
+			OP_TERRACE_RELIEF:
+				var terrace_field: float = _terrain_fbm(d, p.x, int(round(p.w)), 1)
+				var terrace_steps: float = float(clampi(int(round(p.z)), 2, 24))
+				var terrace: float = floor((terrace_field * 0.5 + 0.5) * terrace_steps) \
+					/ maxf(terrace_steps - 1.0, 1.0)
+				out = a + (terrace * 2.0 - 1.0) * p.y
 			_: out = 0.0
 		values[index] = out if is_finite(out) else 0.0
 	return float(values[_output_index]) if _output_index < values.size() else 0.0
@@ -395,6 +401,8 @@ func _compiled_program_bounds() -> Dictionary:
 				out = _add_interval_to_affine(a, minf(-float(p.y), 0.0), maxf(-float(p.y), 0.0))
 			OP_SEDIMENT_DEPOSIT:
 				out = _add_interval_to_affine(a, minf(0.0, float(p.y)), maxf(0.0, float(p.y)))
+			OP_TERRACE_RELIEF:
+				out = _add_interval_to_affine(a, -absf(float(p.y)), absf(float(p.y)))
 			_:
 				out = _unknown_bound("opcode %d has no conservative bound rule" % op)
 		registers.append(out)

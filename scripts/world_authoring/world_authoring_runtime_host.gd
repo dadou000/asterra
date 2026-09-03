@@ -9,7 +9,10 @@ extends Node
 ## terrain/ocean/contact stack may represent one root terrestrial body at system
 ## origin; orbital bodies stay lightweight until that stack is body-centre-aware.
 
-const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase31.gd")
+# Main.tscn instantiates the editor through this host rather than PlanetStudio.tscn.
+# Keep the live game on the public Phase 46 entry point so its Terrain tab matches
+# the simplified no-code authoring UI instead of the retired shader composer.
+const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase46.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 const CELESTIAL_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/celestial_body_preview_runtime.gd")
 const APPLY_PLANNER_SCRIPT := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")

@@ -156,6 +156,7 @@ const DISPLACEMENT_ONLY_NODES: Array[String] = [
 	"RIDGED_MOUNTAINS",
 	"EROSION_CHANNELS",
 	"SEDIMENT_DEPOSIT",
+	"TERRACE_RELIEF",
 	"OUTPUT_DISPLACEMENT",
 ]
 
@@ -248,6 +249,7 @@ const NODE_TYPES: Array[String] = [
 	"RIDGED_MOUNTAINS",
 	"EROSION_CHANNELS",
 	"SEDIMENT_DEPOSIT",
+	"TERRACE_RELIEF",
 	"TRIPLANAR",
 	"OUTPUT_DISPLACEMENT",
 	"OUTPUT_MATERIAL",
@@ -282,6 +284,7 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"RIDGED_MOUNTAINS": CATEGORY_GEOMORPH,
 	"EROSION_CHANNELS": CATEGORY_GEOMORPH,
 	"SEDIMENT_DEPOSIT": CATEGORY_GEOMORPH,
+	"TERRACE_RELIEF": CATEGORY_GEOMORPH,
 	"TEXTURE_2D": CATEGORY_TEXTURES,
 	"TRIPLANAR": CATEGORY_TEXTURES,
 	"NORMAL_BLEND": CATEGORY_SURFACE_PBR,
@@ -553,6 +556,13 @@ static func node_parameter_defaults(node_type: String) -> Dictionary:
 			"north_deg":30.0,
 			"feather_deg":5.0,
 			"invert":false,
+		}
+	if node_type == "TERRACE_RELIEF":
+		return {
+			"scale":6.0,
+			"amount":80.0,
+			"steps":6,
+			"seed":1337,
 		}
 	return {}
 
