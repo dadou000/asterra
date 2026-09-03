@@ -2,15 +2,18 @@
 #version 450
 
 // Reduce cached per-tile CFL/health summaries into the established solver control ABI.
+// The dispatch walks a persistent compact live-slot queue rather than atlas capacity.
 // mode 0 writes the per-iteration scratch used by CFL preparation.
 // mode 1 writes final post-step health diagnostics.
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer TileSummaries {
-    uint summary_words[]; // 8 uints per slot
+    uint summary_words[]; // 8 uints per atlas slot
 };
-layout(set = 0, binding = 1, std430) readonly buffer Occupancy { int occupied[]; };
+layout(set = 0, binding = 1, std430) readonly buffer LiveQueue {
+    uint live_words[]; // count, overflow, reserved, reserved, then atlas slot ids
+};
 layout(set = 0, binding = 2, std430) buffer Control {
     uint pre_max_speed_bits; uint pre_max_depth_bits; uint pre_wet_count; uint pre_invalid_count;
     uint post_max_speed_bits; uint post_max_depth_bits; uint post_wet_count; uint post_invalid_count;
@@ -51,15 +54,22 @@ void main() {
     }
     barrier();
 
-    uint slot = gl_GlobalInvocationID.x;
     uint capacity = max(uint(params.grid_dt.y + 0.5), 1u);
-    if (slot < capacity && occupied[slot] != 0) {
-        uint base = slot * 8u;
-        atomicMax(group_max_speed_bits, summary_words[base + 0u]);
-        atomicMax(group_max_depth_bits, summary_words[base + 1u]);
-        atomicMax(group_max_cfl_rate_bits, summary_words[base + 2u]);
-        atomicAdd(group_wet_count, summary_words[base + 3u]);
-        atomicAdd(group_invalid_count, summary_words[base + 4u]);
+    uint live_count = min(live_words[0], capacity);
+    uint live_index = gl_GlobalInvocationID.x;
+    if (live_index < live_count) {
+        uint slot = live_words[4u + live_index];
+        if (slot < capacity) {
+            uint base = slot * 8u;
+            atomicMax(group_max_speed_bits, summary_words[base + 0u]);
+            atomicMax(group_max_depth_bits, summary_words[base + 1u]);
+            atomicMax(group_max_cfl_rate_bits, summary_words[base + 2u]);
+            atomicAdd(group_wet_count, summary_words[base + 3u]);
+            atomicAdd(group_invalid_count, summary_words[base + 4u]);
+        } else {
+            // A corrupt persistent queue must surface as a solver health failure.
+            atomicAdd(group_invalid_count, 1u);
+        }
     }
 
     barrier();
