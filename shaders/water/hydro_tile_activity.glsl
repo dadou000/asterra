@@ -1,9 +1,9 @@
 #[compute]
 #version 450
 
-// One workgroup summarizes one sparse hydrology slot. Each of 64 lanes walks a
-// strided subset of the tile, then shared-memory reduction emits compact activity
-// and boundary data. The water grid never needs to be read to CPU.
+// One workgroup summarizes one sparse hydrology slot. Physical Q, kinetic proxy
+// and predictive wetting use the owning tile's quadtree-derived cell size so policy
+// thresholds remain meaningful across 2:1 HydroLODs.
 //
 // summary layout per slot:
 //   0: max depth, max velocity, kinetic proxy, invalid count
@@ -11,25 +11,24 @@
 //   2: wet cell count, active ownership, reserved, reserved
 //   3: one-sided dry-neighbor Rusanov wetting Q on W/E/S/N [m3/s]
 //   4: max free-surface elevation eta=(bed+h) on W/E/S/N [m]
-//
-// The predictive wetting value is intentionally separate from actual discharge.
-// It allows stationary water with hydrostatic head to request an adjacent dry tile;
-// terrain/structure reachability then compares edge eta to the destination crest.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer State {
-    vec4 cells[]; // h, hu, hv, bed; slots are contiguous
+    vec4 cells[];
 };
 layout(set = 0, binding = 1, std430) readonly buffer Occupancy {
     uint active[];
 };
 layout(set = 0, binding = 2, std430) writeonly buffer Summaries {
-    vec4 summary[]; // 5 vec4 per slot
+    vec4 summary[];
 };
 layout(set = 0, binding = 3, std430) readonly buffer Params {
-    vec4 grid;    // tile_res, capacity, dx, dry_eps
-    vec4 physics; // gravity, reserved...
+    vec4 grid;    // tile_res, capacity, H0 dx, dry_eps
+    vec4 physics; // gravity, H0 tile level, HydroLOD enabled, reserved
 } params;
+layout(set = 0, binding = 4, std430) readonly buffer TileMetadata {
+    ivec4 tile_metadata[]; // face, quadtree level, x, y
+};
 
 shared float s_max_depth[64];
 shared float s_max_velocity[64];
@@ -55,12 +54,19 @@ bool invalid_state(vec4 v) {
     return any(isnan(v)) || any(isinf(v));
 }
 
+float slot_dx(uint slot) {
+    float base_dx = max(params.grid.z, 1e-4);
+    if (params.physics.z < 0.5) return base_dx;
+    int base_level = int(params.physics.y + 0.5);
+    int level = tile_metadata[slot].y;
+    if (level < 0) return base_dx;
+    return base_dx * exp2(float(base_level - level));
+}
+
 float predicted_dry_flux_per_width(float h, float outward_momentum, float gravity) {
     if (h <= max(params.grid.w, 1e-8)) return 0.0;
     float u = outward_momentum / h;
     float a = abs(u) + sqrt(max(gravity, 1e-4) * h);
-    // Rusanov mass flux between the wet source state and a dry zero state in an
-    // outward-oriented 1D frame: 0.5*(m + a*h).
     return max(0.5 * (outward_momentum + a * h), 0.0);
 }
 
@@ -69,10 +75,10 @@ void main() {
     uint lane = gl_LocalInvocationIndex;
     uint tile_res = max(uint(params.grid.x + 0.5), 1u);
     uint capacity = max(uint(params.grid.y + 0.5), 1u);
-    float dx = max(params.grid.z, 1e-4);
     float dry_eps = max(params.grid.w, 1e-8);
     float gravity = max(params.physics.x, 1e-4);
     uint tile_cells = tile_res * tile_res;
+    float dx = slot < capacity ? slot_dx(slot) : max(params.grid.z, 1e-4);
 
     float max_depth = 0.0;
     float max_velocity = 0.0;
@@ -114,8 +120,6 @@ void main() {
 
             uint x = local_i % tile_res;
             uint y = local_i / tile_res;
-            // hu/hv are discharge per unit width [m2/s]. Integrating over the
-            // boundary face width dx gives m3/s. Positive values are outward.
             if (x == 0u) {
                 float m = -q.y;
                 west_flux += max(m, 0.0) * dx;
