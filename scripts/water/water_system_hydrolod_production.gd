@@ -165,8 +165,9 @@ func _on_sparse_runtime_initialized(generation: int,
 
 
 ## River/component sparse members have independent coarse/fine ownership contracts;
-## a generic HydroLOD swap must never move those tiles behind their bridges. The
-## guard scans only refined records, not planetary coarse cells.
+## a generic HydroLOD swap must never move those tiles behind their bridges. This
+## reads the already-existing refined record registry; no parallel ownership table
+## is introduced for the guard.
 func _hydrolod_transition_guard(_mode: String, parent: HydroTileKey,
 		children: Array[HydroTileKey]) -> Dictionary:
 	if parent == null:
@@ -179,14 +180,29 @@ func _hydrolod_transition_guard(_mode: String, parent: HydroTileKey,
 		if child != null:
 			involved[child.packed()] = true
 	var store := PersistentHydrologySystem.store() as PlanetHydrologyRiverClusterStore
-	for tile_id in store.refined_sparse_tile_ids():
-		if involved.has(int(tile_id)):
-			return {
-				"error": ERR_BUSY,
-				"allowed": false,
-				"reason": "river_refinement_tile_pinned",
-				"tile_id": int(tile_id),
-			}
+	var records_value: Variant = store.get("_refined_records")
+	if not (records_value is Dictionary):
+		# An ownership registry we cannot inspect is not permission to move water.
+		return {"error": ERR_INVALID_DATA, "allowed": false,
+			"reason": "river_refinement_registry_unavailable"}
+	for record_value: Variant in (records_value as Dictionary).values():
+		if not (record_value is Dictionary):
+			continue
+		var record := record_value as Dictionary
+		var members_value: Variant = record.get("members", null)
+		if members_value is Array and not (members_value as Array).is_empty():
+			for member_value: Variant in members_value:
+				if not (member_value is Dictionary):
+					continue
+				var tile_id := int((member_value as Dictionary).get("tile_id", -1))
+				if involved.has(tile_id):
+					return {"error": ERR_BUSY, "allowed": false,
+						"reason": "river_refinement_tile_pinned", "tile_id": tile_id}
+		else:
+			var tile_id := int(record.get("tile_id", -1))
+			if involved.has(tile_id):
+				return {"error": ERR_BUSY, "allowed": false,
+					"reason": "river_refinement_tile_pinned", "tile_id": tile_id}
 	return {"error": OK, "allowed": true}
 
 
