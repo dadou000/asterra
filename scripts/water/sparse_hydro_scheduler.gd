@@ -1,16 +1,15 @@
 class_name SparseHydroScheduler
 extends RefCounted
-## Phase 3 CPU-side policy layer for sparse hydrology activity.
-##
-## GPU kernels produce compact activity/boundary summaries; this scheduler owns
-## representation policy only: which stable tile IDs deserve transient slots,
-## when exact cube-sphere neighbors wake, and when quiet tiles recycle/freeze.
+## CPU-side policy layer for sparse hydrology activity and physical representation.
 ##
 ## Frontier expansion uses a two-stage lifecycle:
 ##   reserve() -> ALLOCATING (CPU slot owned, GPU occupancy still unpublished)
-##   activate_reserved() -> ACTIVE (tile_woken signal publishes GPU identity)
-## This gives conservative reconstruction/handoff a safe window before a new tile
-## participates in the connected SWE domain.
+##   activate_reserved() -> ACTIVE (tile_woken publishes GPU identity)
+##
+## Phase 4 additionally enforces quadtree ownership: an ordinary allocation cannot
+## overlap an already-resident ancestor/descendant. Atomic LOD transitions use the
+## dedicated reserve_for_lod_transition() escape hatch, which names the exact owners
+## it is replacing while still rejecting every unrelated overlap.
 
 signal tile_reserved(tile_id: int, slot: int, reason: String)
 signal tile_woken(tile_id: int, slot: int, reason: String)
@@ -40,14 +39,33 @@ func _init(capacity: int = 1024) -> void:
 
 
 ## Reserve transient ownership without publishing the tile as active. Existing
-## tiles retain their current representation and simply return their slot.
+## exact tiles retain their current representation and simply return their slot.
 func reserve(key: HydroTileKey, physical_lod: int = 0,
 		reason: String = "reserve") -> int:
+	return _reserve_internal(key, physical_lod, reason, PackedInt64Array())
+
+
+## Hidden allocation used only by an atomic parent<->children transfer. The caller
+## supplies the stable IDs that will be removed at commit. No other overlapping
+## owner is allowed, preventing a transition from masking an unrelated descendant.
+func reserve_for_lod_transition(key: HydroTileKey, physical_lod: int,
+		replacing_ids: PackedInt64Array,
+		reason: String = "hydrolod_transition") -> int:
+	return _reserve_internal(key, physical_lod, reason, replacing_ids)
+
+
+func _reserve_internal(key: HydroTileKey, physical_lod: int, reason: String,
+		ignored_overlap_ids: PackedInt64Array) -> int:
 	if key == null:
 		return -1
 	var existing := pool.slot_for(key)
 	if existing >= 0:
 		return existing
+	var conflict := HydroLODHierarchy.representation_conflict(
+		pool, key, ignored_overlap_ids)
+	if bool(conflict.get("conflict", true)):
+		allocation_failed.emit(key.packed(), String(conflict.get("reason", reason)))
+		return -1
 	var slot := pool.allocate(key, physical_lod)
 	if slot < 0:
 		allocation_failed.emit(key.packed(), reason)
@@ -59,8 +77,6 @@ func reserve(key: HydroTileKey, physical_lod: int = 0,
 
 
 ## Promote an already reserved tile after its GPU state has been initialized.
-## tile_woken is intentionally emitted only here, because SparseHydroIdentityBridge
-## treats that signal as permission to publish metadata + occupancy to the GPU.
 func activate_reserved(key: HydroTileKey, reason: String = "activate") -> int:
 	if key == null or not pool.contains(key):
 		return -1
@@ -91,8 +107,6 @@ func wake(key: HydroTileKey, physical_lod: int = 0, reason: String = "frontier")
 	return activate_reserved(key, reason)
 
 
-## Called with compact per-tile reductions from the GPU. quiet_dt_s is elapsed
-## physical simulation time represented by this report, not wall-clock time.
 func report_activity(key: HydroTileKey, max_depth_m: float,
 		max_velocity_mps: float, max_outgoing_flux_m3s: float,
 		disturbance_energy: float, quiet_dt_s: float) -> void:
@@ -101,8 +115,6 @@ func report_activity(key: HydroTileKey, max_depth_m: float,
 	var record_before := pool.record(key)
 	if int(record_before.get("state", HydroTilePool.TileState.ALLOCATING)) \
 			== HydroTilePool.TileState.ALLOCATING:
-		# An unpublished tile must not age into settling/sleep while its handoff is
-		# being constructed.
 		return
 	var active := max_velocity_mps > active_velocity_threshold_mps \
 		or max_outgoing_flux_m3s > wake_flux_threshold_m3s \
@@ -138,9 +150,6 @@ func report_activity(key: HydroTileKey, max_depth_m: float,
 		tile_frozen.emit(key.packed())
 
 
-## Resolve the destination from Asterra's exact cube-sphere topology, including
-## cross-face seams. Reachability remains explicit: topology says *which* tile is
-## adjacent; terrain/banks/structures decide whether flux can actually enter it.
 func report_boundary_flux(key: HydroTileKey, direction: int, flux_m3s: float,
 		reachable: bool, neighbor_lod: int = -1) -> int:
 	if key == null:
@@ -152,7 +161,6 @@ func report_boundary_flux(key: HydroTileKey, direction: int, flux_m3s: float,
 		reachable, neighbor_lod)
 
 
-## Immediate legacy/front-end path: reserve then activate in the same call.
 func report_resolved_boundary_flux(source: HydroTileKey, destination: HydroTileKey,
 		flux_m3s: float, reachable: bool, neighbor_lod: int = -1) -> int:
 	var slot := reserve_resolved_boundary_flux(source, destination, flux_m3s,
@@ -166,8 +174,6 @@ func report_resolved_boundary_flux(source: HydroTileKey, destination: HydroTileK
 	return slot
 
 
-## Conservative frontier path: ownership is reserved but the destination remains
-## ALLOCATING and invisible to GPU occupancy until handoff/reconstruction completes.
 func reserve_resolved_boundary_flux(source: HydroTileKey,
 		destination: HydroTileKey, flux_m3s: float, reachable: bool,
 		neighbor_lod: int = -1) -> int:
@@ -201,8 +207,6 @@ func thaw(key: HydroTileKey, reason: String = "disturbance") -> int:
 	if key == null:
 		return -1
 	if not pool.contains(key):
-		# No previous transient record exists, so the caller must decide the desired
-		# physical representation. Default is finest local level 0, never key.level.
 		return wake(key, 0, reason)
 	var record := pool.record(key)
 	if int(record.get("state", HydroTilePool.TileState.ACTIVE)) \
@@ -232,4 +236,5 @@ func stats() -> Dictionary:
 	result["dry_depth_threshold_m"] = dry_depth_threshold_m
 	result["settle_time_s"] = settle_time_s
 	result["sleep_time_s"] = sleep_time_s
+	result["hierarchy_overlap_guard"] = true
 	return result
