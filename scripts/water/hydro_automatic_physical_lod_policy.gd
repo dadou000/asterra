@@ -123,13 +123,18 @@ func choose_action(summaries: Array[Dictionary], advanced_dt_s: float,
 
 	var summary_by_id := _summary_map(summaries)
 	_update_quiet_timers(summary_by_id, cycle_dt)
-	_last_pressure = clampf(scheduler.capacity_pressure(), 0.0, 1.0)
+	_last_pressure = float(scheduler.pool.allocated_count()) \
+		/ float(maxi(scheduler.pool.capacity, 1))
+	_last_pressure = clampf(_last_pressure, 0.0, 1.0)
 	_last_candidate_counts = {"refine": 0, "coarsen": 0}
 	if not enabled:
 		_last_reason = "disabled"
 		return {}
 
-	var focus_direction := focus_context.get("direction", Vector3.ZERO) as Vector3
+	var focus_direction := Vector3.ZERO
+	var focus_value: Variant = focus_context.get("direction", Vector3.ZERO)
+	if focus_value is Vector3:
+		focus_direction = focus_value
 	if focus_direction.length_squared() > 1.0e-12:
 		focus_direction = focus_direction.normalized()
 	else:
@@ -219,7 +224,7 @@ func stats() -> Dictionary:
 		"last_candidate_counts": _last_candidate_counts.duplicate(true),
 		"last_reason": _last_reason,
 		"last_action": _last_action.duplicate(true),
-		"player_focus_camera_independent": true,
+		"player_focus_geodesic": true,
 		"one_transition_per_cycle": true,
 		"uses_transactional_manager": true,
 		"two_to_one_balance_propagation": true,
@@ -242,7 +247,7 @@ func _best_refinement(summary_by_id: Dictionary, focus_direction: Vector3,
 		if owner == null:
 			continue
 		var owner_lod := atlas.physical_lod_for_level(owner.level)
-		var forced: Dictionary = _forced_targets[requested_id]
+		var forced := _forced_targets[requested_id] as Dictionary
 		var target := clampi(int(forced.get("target_lod", 0)), 0, maximum_physical_lod)
 		if owner_lod <= target:
 			continue
@@ -603,7 +608,8 @@ func _forced_detail_blocks_coarsen(parent: HydroTileKey) -> bool:
 		var requested_id := int(requested_id_value)
 		var requested := HydroTileKey.unpack(requested_id)
 		if requested != null and HydroLODHierarchy.overlaps(parent, requested):
-			var target := int((_forced_targets[requested_id] as Dictionary).get("target_lod", 0))
+			var request := _forced_targets[requested_id] as Dictionary
+			var target := int(request.get("target_lod", 0))
 			if atlas.physical_lod_for_level(parent.level) > target:
 				return true
 	return false
