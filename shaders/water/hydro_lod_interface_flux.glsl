@@ -6,8 +6,8 @@
 // The ordinary sparse SWE pass sees no same-level neighbor at a mixed-resolution
 // edge, so it advances that edge as reflective. This pass runs immediately after
 // A->B SWE and before B->A canonicalization. It reads the same pre-step A state,
-// removes the reflective contribution already present in B, and substitutes one
-// physical coarse/fine flux integrated over the two fine edge segments.
+// removes only the represented fraction of the reflective contribution in B, and
+// substitutes one physical coarse/fine flux over each resident fine edge segment.
 //
 // One coarse edge cell maps to two fine edge cells. Integrated mass transfer is
 // identical and opposite. Momentum is transformed through edge normal/tangent
@@ -21,16 +21,16 @@
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer StateIn {
-    vec4 cells_in[]; // canonical pre-step A: h, hu, hv, bed
+    vec4 cells_in[];
 };
 layout(set = 0, binding = 1, std430) buffer StateOut {
-    vec4 cells_out[]; // ordinary post-step B, corrected in-place
+    vec4 cells_out[];
 };
 layout(set = 0, binding = 2, std430) readonly buffer Occupancy {
     int occupied[];
 };
 layout(set = 0, binding = 3, std430) readonly buffer Interfaces {
-    uvec4 interface_words[]; // two uvec4 rows per descriptor
+    uvec4 interface_words[];
 };
 layout(set = 0, binding = 4, std430) readonly buffer Params {
     uvec4 grid;    // tile_res, capacity, interface_count, H0 tile level
@@ -41,32 +41,26 @@ layout(set = 0, binding = 5, std430) readonly buffer Control {
     uint pre_max_depth_bits;
     uint pre_wet_count;
     uint pre_invalid_count;
-
     uint post_max_speed_bits;
     uint post_max_depth_bits;
     uint post_wet_count;
     uint post_invalid_count;
-
     float requested_dt;
     float remaining_dt;
     float current_dt;
     float advanced_dt;
-
     float min_cfl_dt;
     float last_cfl_dt;
     uint steps_taken;
     uint max_substeps;
-
     uint cfl_clamped;
     uint iteration_active;
     uint iter_max_speed_bits;
     uint iter_max_depth_bits;
-
     uint iter_wet_count;
     uint iter_invalid_count;
     uint reserved0;
     uint reserved1;
-
     uint iter_max_cfl_rate_bits;
     uint reserved2;
 } control;
@@ -119,8 +113,6 @@ uvec2 edge_cell(uint direction, uint k) {
     return uvec2(k, r - 1u);
 }
 
-// Destination local (+u,+v) -> source local (+u,+v) for the same physical tangent
-// vector. Outward normals oppose each other; edge tangents may reverse at a seam.
 vec2 destination_to_source(vec2 q_dest, uint source_direction,
         uint destination_direction, bool reversed) {
     vec2 ns = edge_normal(source_direction);
@@ -133,7 +125,6 @@ vec2 destination_to_source(vec2 q_dest, uint source_direction,
     return (-qn) * ns + (orientation * qt) * ts;
 }
 
-// Source local (+u,+v) -> destination local (+u,+v) for the same physical vector.
 vec2 source_to_destination(vec2 q_source, uint source_direction,
         uint destination_direction, bool reversed) {
     vec2 ns = edge_normal(source_direction);
@@ -152,7 +143,6 @@ vec3 reconstruct(vec3 q, float reconstructed_h) {
     return vec3(reconstructed_h, q.yz * scale);
 }
 
-// q = (h, q_normal, q_tangent) in the coarse outward-normal frame.
 vec3 normal_flux(vec3 q) {
     if (q.x <= dry_eps()) return vec3(0.0);
     float un = q.y / q.x;
@@ -217,8 +207,7 @@ void main() {
     float fine_area = fine_dx * fine_dx;
     float dt = control.current_dt;
 
-    uvec2 coarse_p = edge_cell(coarse_direction, lane);
-    uint coarse_i = idx(coarse_slot, coarse_p);
+    uint coarse_i = idx(coarse_slot, edge_cell(coarse_direction, lane));
     vec4 coarse_before = cells_in[coarse_i];
     vec4 coarse_after = cells_out[coarse_i];
     if (any(isnan(coarse_before)) || any(isinf(coarse_before))
@@ -231,20 +220,18 @@ void main() {
     float coarse_qt = dot(coarse_before.yz, tc);
     vec4 coarse_nt = vec4(coarse_h, coarse_qn, coarse_qt, coarse_before.w);
 
-    // Per fine segment data. Integrated volume is positive coarse -> fine.
     bool valid[2];
     uint fine_index[2];
-    uint fine_slot_for_segment[2];
     float volume_m3[2];
     float scale_segment[2];
     vec3 coarse_desired_delta_nt[2];
     vec2 fine_desired_delta_local[2];
     vec2 fine_wall_delta_local[2];
+    float represented_fraction = 0.0;
 
     for (uint sub = 0u; sub < 2u; ++sub) {
         valid[sub] = false;
         fine_index[sub] = 0u;
-        fine_slot_for_segment[sub] = INVALID_SLOT;
         volume_m3[sub] = 0.0;
         scale_segment[sub] = 1.0;
         coarse_desired_delta_nt[sub] = vec3(0.0);
@@ -281,7 +268,7 @@ void main() {
             (-flux.y + 0.5 * grav() * hc * hc) * coarse_scale,
             -flux.z * coarse_scale);
 
-        float fine_scale = dt * fine_dx / fine_area; // == dt/fine_dx
+        float fine_scale = dt * fine_dx / fine_area;
         vec2 desired_common_local = nc
             * ((flux.y - 0.5 * grav() * hf * hf) * fine_scale)
             + tc * (flux.z * fine_scale);
@@ -297,12 +284,13 @@ void main() {
 
         valid[sub] = true;
         fine_index[sub] = fi;
-        fine_slot_for_segment[sub] = fine_slot;
+        represented_fraction += 0.5;
     }
 
-    // First limit any fine -> coarse segment independently by that fine donor's
-    // post-wall water. Then let actual incoming fine volume augment what the coarse
-    // donor may send outward over its positive segments.
+    // This coarse edge cell may lie in the unrepresented half of a partial sparse
+    // boundary. In that case its ordinary reflective result is already correct.
+    if (represented_fraction <= 0.0) return;
+
     float incoming_to_coarse = 0.0;
     float outgoing_from_coarse = 0.0;
     for (uint sub = 0u; sub < 2u; ++sub) {
@@ -327,13 +315,11 @@ void main() {
         }
     }
 
-    // Remove the full reflective wall impulse already recorded for this coarse edge
-    // cell. The two physical segment contributions then replace it.
     vec3 coarse_correction_nt = vec3(0.0);
     if (coarse_h > dry_eps()) {
         float coarse_wall_qn_delta = -(coarse_qn * coarse_qn / coarse_h)
             * dt / coarse_dx;
-        coarse_correction_nt.y -= coarse_wall_qn_delta;
+        coarse_correction_nt.y -= coarse_wall_qn_delta * represented_fraction;
     }
 
     for (uint sub = 0u; sub < 2u; ++sub) {
@@ -341,8 +327,6 @@ void main() {
         float s = scale_segment[sub];
         float actual_volume = volume_m3[sub] * s;
         vec3 desired_coarse = coarse_desired_delta_nt[sub] * s;
-        // Derive mass from the shared integrated parcel rather than separately
-        // rounded flux expressions on each side.
         desired_coarse.x = -actual_volume / coarse_area;
         coarse_correction_nt += desired_coarse;
 
