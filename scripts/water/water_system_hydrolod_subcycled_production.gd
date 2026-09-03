@@ -58,11 +58,18 @@ func clear_physical_hydrolod_detail(tile_id: int) -> bool:
 func gpu_stats() -> Dictionary:
 	var out := super.gpu_stats()
 	var physical: Dictionary = out.get("physical_hydrolod", {})
-	physical["temporal_subcycling"] = _sparse_runtime is SparseHydrologyRuntimeSubcycled
+	var subcycled := _sparse_runtime is SparseHydrologyRuntimeSubcycled
+	physical["temporal_subcycling"] = subcycled
 	physical["binary_ratios"] = "H0:1,H1:2,H2:4,H3:8,H4:16"
 	physical["fine_clock_cfl_normalization"] = true
 	physical["coarse_fine_flux_registers"] = true
 	physical["synchronizes_at_advance_boundary"] = true
+	physical["gpu_due_slot_queue"] = subcycled
+	physical["indirect_swe_dispatch"] = subcycled
+	physical["indirect_commit_dispatch"] = subcycled
+	physical["cpu_due_count_readback"] = false
+	physical["non_due_state_copy_eliminated"] = true
+	physical["non_due_per_cell_invocations_eliminated"] = true
 	physical["automatic_policy_enabled"] = automatic_physical_hydrolod_active()
 	physical["automatic_policy_configured"] = automatic_physical_hydrolod_enabled
 	physical["automatic_focus_source"] = _automatic_hydrolod_focus_source
