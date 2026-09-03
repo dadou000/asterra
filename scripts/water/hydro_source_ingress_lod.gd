@@ -3,12 +3,32 @@ extends HydroSourceIngress
 ## Production point-source ingress for a mixed physical-HydroLOD atlas.
 ##
 ## Signed source rates are volumetric [m3/s]. Converting them to solver depth rate
-## must use the resolved tile's physical cell area, not the H0 atlas area.
+## uses the resolved tile's physical cell area. A source nominally addressed at H0
+## also resolves through an already-active coarser ancestor, so a successful LOD
+## coarsening is not immediately undone by source synchronization.
 
 
 func request_rebuild() -> void:
 	_revision += 1
 	_dirty = true
+
+
+func _resolve_source(source: Dictionary) -> Dictionary:
+	var resolved := super._resolve_source(source)
+	if resolved.is_empty() or scheduler == null or scheduler.pool == null:
+		return resolved
+	var key := resolved.get("key") as HydroTileKey
+	if key == null or scheduler.pool.contains(key):
+		return resolved
+	var covering := HydroLODHierarchy.covering_record(scheduler.pool, key)
+	if covering.is_empty():
+		return resolved
+	var covering_key := covering.get("key") as HydroTileKey
+	if covering_key == null:
+		return resolved
+	var adjusted := source.duplicate(true)
+	adjusted["tile_level"] = covering_key.level
+	return super._resolve_source(adjusted)
 
 
 func _rebuild_gpu_terms() -> void:
