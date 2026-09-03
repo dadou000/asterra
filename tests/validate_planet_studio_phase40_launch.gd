@@ -1,14 +1,14 @@
 extends Node
 ## Phase 40 semantic smoke test through the current PlanetStudio activation path.
 ##
-## Phase 45 is the current successor wrapper. This regression still proves that the
+## Phase 46 is the current successor wrapper. This regression still proves that the
 ## beginner-readable Phase 40 resident linear-composition graph remains intact and
-## bytecode-neutral after the simplified UI, spatial masks and terrain presets are
-## activated. The test explicitly enters Advanced before inspecting graph nodes,
-## because the current product correctly opens Terrain in Simple mode.
+## bytecode-neutral after the simplified UI, spatial masks, terrain presets and live
+## feature viewport tools are activated. The test explicitly enters Advanced before
+## inspecting graph nodes, because the current product correctly opens Terrain in Simple mode.
 
 const PLANET_STUDIO_SCENE := preload("res://scenes/world_authoring/PlanetStudio.tscn")
-const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase45.gd"
+const EXPECTED_EDITOR_PATH := "res://scripts/world_authoring/world_authoring_editor_live_phase46.gd"
 const NATIVE := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_graph.gd")
 const LOWERING := preload(
@@ -46,7 +46,7 @@ func _run() -> void:
 		return
 	var script: Script = editor.get_script() as Script
 	if script == null or script.resource_path != EXPECTED_EDITOR_PATH:
-		_fail("PlanetStudio.tscn is not using the current Phase 45 live editor wrapper.")
+		_fail("PlanetStudio.tscn is not using the current Phase 46 live editor wrapper.")
 		return
 	editor.call("bind_world", world)
 	layer.add_child(editor)
@@ -150,7 +150,7 @@ func _run() -> void:
 		_fail("Blend Contributions did not reduce to the expected resident coefficients.")
 		return
 
-	print("PLANET_STUDIO_PHASE40_LAUNCH_OK: Phase 45 activation preserves Phase 40 friendly Scale/Blend graph as resident zero-bytecode terrain")
+	print("PLANET_STUDIO_PHASE40_LAUNCH_OK: Phase 46 activation preserves Phase 40 friendly Scale/Blend graph as resident zero-bytecode terrain")
 	runtime.queue_free()
 	editor.queue_free()
 	await _frames(2)
