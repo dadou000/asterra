@@ -28,8 +28,10 @@ layout(set = 0, binding = 7, std430) readonly buffer Control {
     uint iter_wet_count; uint iter_invalid_count; uint reserved0; uint reserved1;
     uint iter_max_cfl_rate_bits; uint reserved2;
     uint temporal_enabled; uint temporal_max_lod; uint temporal_fine_tick; uint temporal_force_sync;
-    vec4 temporal_accum_0_3; vec4 temporal_accum_4_7;
-    vec4 temporal_step_0_3; vec4 temporal_step_4_7;
+    float temporal_accum0; float temporal_accum1; float temporal_accum2; float temporal_accum3;
+    float temporal_accum4; float temporal_accum5; float temporal_accum6; float temporal_accum7;
+    float temporal_step0; float temporal_step1; float temporal_step2; float temporal_step3;
+    float temporal_step4; float temporal_step5; float temporal_step6; float temporal_step7;
 } control;
 layout(set = 0, binding = 8, std430) readonly buffer AtmosphericSources {
     vec4 atmospheric_sources[];
@@ -68,8 +70,14 @@ int physical_lod(int slot) {
 float scheduled_dt(int slot) {
     if (control.temporal_enabled == 0u) return max(control.current_dt, 0.0);
     int lod = clamp(physical_lod(slot), 0, int(min(control.temporal_max_lod, 7u)));
-    if (lod < 4) return control.temporal_step_0_3[lod];
-    return control.temporal_step_4_7[lod - 4];
+    if (lod == 0) return control.temporal_step0;
+    if (lod == 1) return control.temporal_step1;
+    if (lod == 2) return control.temporal_step2;
+    if (lod == 3) return control.temporal_step3;
+    if (lod == 4) return control.temporal_step4;
+    if (lod == 5) return control.temporal_step5;
+    if (lod == 6) return control.temporal_step6;
+    return control.temporal_step7;
 }
 
 float slot_dx(int slot) {
