@@ -96,9 +96,8 @@ func _run() -> void:
 	biome_picker.select(11)
 	biome_picker.emit_signal("item_selected", 11)
 	await _frames(3)
-	# The profile is provisioned automatically from the biome's ported terrain
-	# character -- no create step -- and is still an ordinary scoped displacement
-	# slot with the all-ring / only-this-biome mask.
+	# The scoped slot is provisioned on selection (no create step) but starts
+	# EMPTY -- a biome has no terrain character of its own until you compose one.
 	if _find_named(editor, "CreateBiomeTerrainProfile") != null:
 		_fail("Biome Terrain editor still requires a manual create step")
 		return
@@ -110,9 +109,24 @@ func _run() -> void:
 			or int(biome_slot.get(&"biome_mask_mode")) != 1:
 		_fail("Biome terrain profile is not constrained to the selected biome on every ring")
 		return
+	var fresh_layers: Array = (editor.call("_phase47_biome_stack",
+		biome_slot.get(&"graph")) as Dictionary).get("layers", []) as Array
+	if not fresh_layers.is_empty():
+		_fail("Freshly provisioned biome profile is not empty")
+		return
+	if _find_named(editor, "BiomeTerrainLayerType_0") != null:
+		_fail("Empty biome profile still renders layer cards")
+		return
+	# Opt in to the ported character, then compose on top of it.
+	var load_default: Button = _find_named(editor, "ResetBiomeTerrainProfile") as Button
+	if load_default == null:
+		_fail("Biome terrain editor has no ported-character button")
+		return
+	load_default.emit_signal("pressed")
+	await _frames(3)
 	var biome_seed_graph: Resource = biome_slot.get(&"graph") as Resource
 	if not _graph_has_node_type(biome_seed_graph, "SEDIMENT_DEPOSIT"):
-		_fail("Provisioned Hot desert profile did not port its sedimentation pass")
+		_fail("Loading the Hot desert ported character did not add its sedimentation pass")
 		return
 	# The profile is an ordered stack of layer cards, not a single shape dropdown.
 	var layer0: OptionButton = _find_named(editor, "BiomeTerrainLayerType_0") as OptionButton

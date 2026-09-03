@@ -309,7 +309,7 @@ func _phase47_build_biome_note() -> void:
 
 func _phase47_build_biome_editor(terrain: Resource) -> void:
 	_section("Biome terrain")
-	_add_note("Every biome already has a terrain profile: a stack of displacement layers (noises, ridges, terraces, water erosion, sediment) limited to that biome on every distance ring and composed after the shared Global Terrain. Stack as many layers as you need, and set a kilometre-scale blend so the biome's terrain fades smoothly into its neighbours instead of stopping at a hard edge. Editing it never adds a shader or an LOD copy.")
+	_add_note("Each biome starts with no terrain of its own — you compose it here from a stack of displacement layers (noises, ridges, terraces, water erosion, sediment), limited to that biome on every distance ring and composed after the shared Global Terrain. An empty stack means the biome shows only the Global Terrain. Set a kilometre-scale blend so a biome's terrain fades smoothly into its neighbours instead of stopping at a hard edge. Editing it never adds a shader or an LOD copy.")
 	var pick_row := HBoxContainer.new()
 	pick_row.name = "BiomeTerrainSelection"
 	pick_row.add_theme_constant_override("separation", 8)
@@ -332,6 +332,12 @@ func _phase47_build_biome_editor(terrain: Resource) -> void:
 	pick.tooltip_text = "Use the live terrain point under the mouse to select its procedural biome."
 	pick.pressed.connect(_phase47_pick_biome_under_cursor)
 	pick_row.add_child(pick)
+	var clear_all := Button.new()
+	clear_all.name = "ClearAllBiomeTerrain"
+	clear_all.text = "Clear every biome"
+	clear_all.tooltip_text = "Empty every biome's terrain stack so you can compose from scratch. Global Terrain is untouched."
+	clear_all.pressed.connect(_phase47_clear_all_biome_terrain.bind(terrain))
+	pick_row.add_child(clear_all)
 
 	var biome_id: int = clampi(_phase28_biome_id, 0, BIOME_NAMES.size() - 1)
 	var slot: Resource = _phase47_ensure_biome_profile(terrain, biome_id)
@@ -409,36 +415,36 @@ func _phase47_graph_has_unsupported_node(graph: Resource) -> bool:
 	return false
 
 
-func _phase47_biome_profile_is_default(slot: Resource, biome_id: int) -> bool:
+## A biome profile with no layers contributes nothing. Such a slot is safe to
+## disable when you are not looking at it (it keeps the compiled biome set small)
+## and is what a freshly provisioned biome looks like.
+func _phase47_biome_profile_is_default(slot: Resource, _biome_id: int) -> bool:
 	if slot == null:
 		return false
-	if not is_equal_approx(float(slot.get(&"strength")), 1.0):
-		return false
-	if int(slot.get(&"blend_mode")) != SHADER_SLOT_MODEL.BlendMode.ADD:
-		return false
-	return _phase47_biome_profile_is_default_graph(slot.get(&"graph") as Resource, biome_id)
+	return _phase47_biome_profile_is_empty(slot.get(&"graph") as Resource)
 
 
-func _phase47_biome_profile_is_default_graph(graph: Resource, biome_id: int) -> bool:
+func _phase47_biome_profile_is_empty(graph: Resource) -> bool:
 	if graph == null:
-		return false
-	var got: Dictionary = _phase47_biome_stack(graph)
-	var want: Dictionary = _phase47_biome_terrain_defaults(biome_id)
-	if not is_equal_approx(float(got.get("blend_km", -1.0)), float(want.get("blend_km", 2.0))):
-		return false
-	var got_layers: Array = got.get("layers", []) as Array
-	var want_layers: Array = want.get("layers", []) as Array
-	if got_layers.size() != want_layers.size():
-		return false
-	for i: int in got_layers.size():
-		var a: Dictionary = got_layers[i] as Dictionary
-		var b: Dictionary = want_layers[i] as Dictionary
-		if String(a.get("type", "")) != String(b.get("type", "")):
-			return false
-		for key: String in ["scale", "amount", "param"]:
-			if not is_equal_approx(float(a.get(key, 0.0)), float(b.get(key, 0.0))):
-				return false
-	return true
+		return true
+	return (_phase47_biome_stack(graph).get("layers", []) as Array).is_empty()
+
+
+## Empty every biome's terrain stack in one action. Non-biome displacement slots
+## and the Global Terrain are untouched.
+func _phase47_clear_all_biome_terrain(terrain: Resource) -> void:
+	_session.stage_action("Clear all biome terrain", func() -> void:
+		for value: Variant in terrain.get(&"displacement_slots") as Array:
+			var slot: Resource = value as Resource
+			if slot == null \
+					or not String(slot.get(&"slot_id")).begins_with(PHASE47_BIOME_PROFILE_PREFIX):
+				continue
+			slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
+			slot.set(&"strength", 1.0)
+			_phase47_rebuild_biome_profile(slot.get(&"graph") as Resource,
+				{"blend_km": 0.0, "layers": []})
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+	_refresh_current_category()
 
 
 func _phase47_build_biome_diagnostics(terrain: Resource, biome_id: int) -> void:
@@ -686,8 +692,10 @@ func _phase47_ensure_biome_profile(terrain: Resource, biome_id: int) -> Resource
 	slot.set(&"biome_ids", PackedInt32Array([biome_id]))
 	slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
 	slot.set(&"strength", 1.0)
+	# Start with nothing. A biome has no terrain character of its own until you
+	# add layers here; the ported defaults are opt-in from the editor.
 	_phase47_rebuild_biome_profile(slot.get(&"graph") as Resource,
-		_phase47_biome_terrain_defaults(biome_id))
+		{"blend_km": 0.0, "layers": []})
 	terrain.call("ensure_valid")
 	_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
 	return slot
@@ -736,7 +744,7 @@ func _phase47_layer_type_index(node_type: String) -> int:
 # Walk the OUTPUT_DISPLACEMENT chain back through its single input so the layer
 # order matches the authored stack; the OUTPUT node carries the km blend width.
 func _phase47_biome_stack(graph: Resource) -> Dictionary:
-	var result: Dictionary = {"blend_km": 2.0, "layers": []}
+	var result: Dictionary = {"blend_km": 0.0, "layers": []}
 	if graph == null:
 		return result
 	var nodes_value: Variant = graph.get(&"nodes")
@@ -753,7 +761,7 @@ func _phase47_biome_stack(graph: Resource) -> Dictionary:
 		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
 			output_id = String(node.get("id", ""))
 			result["blend_km"] = maxf(0.0, float((node.get("parameters", {}) as Dictionary).get(
-				"biome_blend_km", 2.0)))
+				"biome_blend_km", 0.0)))
 	var input_of: Dictionary = {}
 	for link_value: Variant in links_value as Array:
 		if link_value is Dictionary and int((link_value as Dictionary).get("to_port", 0)) == 0:
@@ -794,7 +802,7 @@ func _phase47_rebuild_biome_profile(graph: Resource, stack: Dictionary) -> void:
 	if output_id.is_empty():
 		return
 	graph.call("set_node_parameter", output_id, "biome_blend_km",
-		maxf(0.0, float(stack.get("blend_km", 2.0))))
+		maxf(0.0, float(stack.get("blend_km", 0.0))))
 	var cursor: String = String(graph.call("add_node", "CONSTANT_FLOAT", Vector2(70.0, 180.0),
 		{"value": 0.0}))
 	var column: float = 360.0
@@ -844,7 +852,7 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 	blend_km.max_value = 50.0
 	blend_km.step = 0.1
 	blend_km.suffix = " km"
-	blend_km.value = clampf(float(stack.get("blend_km", 2.0)), 0.0, 50.0)
+	blend_km.value = clampf(float(stack.get("blend_km", 0.0)), 0.0, 50.0)
 	blend_km.tooltip_text = blend_label.tooltip_text
 	blend_km.value_changed.connect(func(value: float) -> void:
 		stack["blend_km"] = value
@@ -864,7 +872,7 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 	box.add_child(layers_title)
 	if layers.is_empty():
 		var empty := Label.new()
-		empty.text = "This biome has no extra terrain layers — it uses the Global Terrain only. Add a layer to give it its own character."
+		empty.text = "Empty — this biome adds no terrain of its own; it shows the Global Terrain only. Add a layer to compose its character, or load this biome's ported default below."
 		empty.modulate = Color(0.58, 0.68, 0.76)
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(empty)
@@ -910,12 +918,30 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 	)
 	compose_row.add_child(strength)
 
-	var reset := Button.new()
-	reset.name = "ResetBiomeTerrainProfile"
-	reset.text = "Reset %s Terrain to Default" % BIOME_NAMES[biome_id]
-	reset.tooltip_text = "Restore this biome's ported terrain character (its default layer stack) and Add / 1× composition."
-	reset.pressed.connect(func() -> void:
-		_session.stage_action("Reset %s terrain profile" % BIOME_NAMES[biome_id], func() -> void:
+	var button_row := HBoxContainer.new()
+	button_row.add_theme_constant_override("separation", 8)
+	box.add_child(button_row)
+	var clear := Button.new()
+	clear.name = "ClearBiomeTerrainProfile"
+	clear.text = "Clear all layers"
+	clear.tooltip_text = "Remove every layer so this biome adds no terrain of its own."
+	clear.disabled = layers.is_empty()
+	clear.pressed.connect(func() -> void:
+		_session.stage_action("Clear %s terrain profile" % BIOME_NAMES[biome_id], func() -> void:
+			slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
+			slot.set(&"strength", 1.0)
+			_phase47_rebuild_biome_profile(slot.get(&"graph") as Resource,
+				{"blend_km": 0.0, "layers": []})
+		, WorldAuthoringSession.ApplyScope.GRAPH)
+		_refresh_current_category()
+	)
+	button_row.add_child(clear)
+	var load_default := Button.new()
+	load_default.name = "ResetBiomeTerrainProfile"
+	load_default.text = "Load %s ported character" % BIOME_NAMES[biome_id]
+	load_default.tooltip_text = "Replace the stack with this biome's ported terrain character (base shape + its erosion / sediment passes)."
+	load_default.pressed.connect(func() -> void:
+		_session.stage_action("Load %s ported terrain" % BIOME_NAMES[biome_id], func() -> void:
 			slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
 			slot.set(&"strength", 1.0)
 			_phase47_rebuild_biome_profile(slot.get(&"graph") as Resource,
@@ -923,7 +949,7 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 		, WorldAuthoringSession.ApplyScope.GRAPH)
 		_refresh_current_category()
 	)
-	box.add_child(reset)
+	button_row.add_child(load_default)
 	var budget := Label.new()
 	budget.text = "Live biome profiles: %d / %d — the biome you are editing is always live; " \
 		% [_phase47_active_biome_profile_count(terrain), PHASE47_MAX_ACTIVE_BIOME_PROFILES + 1] \
