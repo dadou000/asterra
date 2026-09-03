@@ -3,8 +3,8 @@ extends SparseHydrologyRuntimeLOD
 ## Phase-4 runtime with binary temporal HydroLOD subcycling and automatic physical LOD.
 ##
 ## Spatial ownership/interface behavior is inherited unchanged. This layer selects
-## the due-queue temporal solver, persistent per-tile CFL cache, fine-clock schedule,
-## flux-register interface implementation and automatic physical LOD policy.
+## the due-queue temporal solver, persistent fused CFL/activity tile cache, fine-clock
+## schedule, flux-register interface implementation and automatic physical LOD policy.
 
 var lod_temporal: HydroLODTemporalScheduleGPU
 var cfl_cache: HydroLODCFLCacheGPU
@@ -75,8 +75,11 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 		func(error: Error): _fail_initialization(error, "solver"))
 	solver.diagnostics_ready.connect(_on_solver_diagnostics)
 
-	activity = HydroTileActivityGPU.new()
-	activity.name = "HydroTileActivityGPU"
+	# Temporal production does not run a second activity compute pass. The cache
+	# creates the established 80-byte summary in the same scan that refreshes CFL.
+	var cached_activity := HydroTileActivityCachedGPU.new()
+	cached_activity.name = "HydroTileActivityGPU"
+	activity = cached_activity
 	add_child(activity)
 	activity.initialized.connect(_on_activity_initialized)
 	activity.initialization_failed.connect(
@@ -106,12 +109,8 @@ func initialize(p_scheduler: SparseHydroScheduler, p_atlas: SparseHydroAtlasGPU,
 	if err != OK:
 		_fail_initialization(err, "solver")
 		return err
-	err = activity.initialize(atlas.state_a_rid(), atlas.occupancy_rid(),
-		atlas.capacity, atlas.tile_resolution, atlas.cell_size_m, solver.dry_eps,
-		gravity, atlas.tile_metadata_rid(), atlas.base_tile_level)
-	if err != OK:
-		_fail_initialization(err, "activity")
-		return err
+	# Cached activity initialization is deferred until the fused cache owns a valid
+	# activity summary RID. This intentionally replaces activity.initialize(...).
 	err = activation.initialize(scheduler, atlas, connectivity, identity_bridge)
 	if err != OK:
 		_fail_initialization(err, "activation")
@@ -128,7 +127,8 @@ func hydrolod_available() -> bool:
 	return super.hydrolod_available() and lod_temporal != null \
 		and lod_temporal.initialized_ok() and cfl_cache != null \
 		and cfl_cache.initialized_ok() \
-		and solver is SparseHydroStepGPUSubcycledCached
+		and solver is SparseHydroStepGPUSubcycledCached \
+		and activity is HydroTileActivityCachedGPU and activity.initialized_ok()
 
 
 func set_automatic_hydrolod_enabled(value: bool) -> Error:
@@ -175,6 +175,12 @@ func stats() -> Dictionary:
 	physical["coarse_fine_flux_registers"] = lod_interfaces \
 		is HydroLODInterfaceFluxSubcycledGPU
 	physical["cached_cfl_reduction"] = cfl_cache != null and cfl_cache.initialized_ok()
+	physical["fused_activity_summary_refresh"] = cfl_cache != null \
+		and cfl_cache.initialized_ok() and activity is HydroTileActivityCachedGPU
+	physical["post_solve_activity_compute_dispatch"] = false
+	physical["activity_summary_reuses_cfl_cell_scan"] = true
+	physical["activity"] = {} if not (activity is HydroTileActivityCachedGPU) \
+		else (activity as HydroTileActivityCachedGPU).cached_stats()
 	physical["cfl_cache"] = {} if cfl_cache == null else cfl_cache.stats()
 	physical["temporal"] = {} if lod_temporal == null else lod_temporal.stats()
 	physical["automatic_policy"] = {} if automatic_lod_policy == null \
@@ -231,6 +237,16 @@ func _on_cfl_cache_initialized() -> void:
 	cached_solver.set_cfl_cache_topology_revision(scheduler.pool.topology_revision)
 	_component_ready["solver"] = true
 	_component_ready["cfl_cache"] = true
+
+	if not (activity is HydroTileActivityCachedGPU):
+		_fail_initialization(ERR_UNCONFIGURED, "hydrolod_cached_activity_type")
+		return
+	err = (activity as HydroTileActivityCachedGPU).initialize_cached(
+		cfl_cache.activity_summary_rid(), atlas.capacity)
+	if err != OK:
+		_fail_initialization(err, "hydrolod_cached_activity_bind")
+		return
+
 	_try_initialize_temporal_schedule()
 	_try_initialize_lod_interfaces()
 	_try_initialize_lod_manager()
@@ -350,6 +366,7 @@ func release() -> void:
 		_lod_release_requested = true
 		lod_manager.release()
 		return
+	_release_cached_activity_consumers_now()
 	_release_cfl_cache_now()
 	_release_temporal_now()
 	_automatic_lod_focus_provider = Callable()
@@ -360,11 +377,27 @@ func release() -> void:
 func _on_lod_manager_released() -> void:
 	if not _lod_release_requested:
 		return
+	_release_cached_activity_consumers_now()
 	_release_cfl_cache_now()
 	_release_temporal_now()
 	_automatic_lod_focus_provider = Callable()
 	automatic_lod_policy = null
 	super._on_lod_manager_released()
+
+
+## Frontier owns a uniform set referencing the fused activity buffer, so it must be
+## retired before HydroLODCFLCacheGPU queues that buffer for destruction.
+func _release_cached_activity_consumers_now() -> void:
+	var frontier_node := frontier
+	frontier = null
+	if frontier_node != null and is_instance_valid(frontier_node):
+		frontier_node.release()
+		frontier_node.queue_free()
+	var activity_node := activity
+	activity = null
+	if activity_node != null and is_instance_valid(activity_node):
+		activity_node.release()
+		activity_node.queue_free()
 
 
 func _release_cfl_cache_now() -> void:
