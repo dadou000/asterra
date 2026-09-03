@@ -2,8 +2,8 @@ extends "res://scripts/water/water_system_hydrolod_production.gd"
 ## Final Phase-4 production facade with temporal + automatic physical HydroLOD.
 ##
 ## All river/component ownership, spatial HydroLOD transfer and 2:1 topology logic
-## remain inherited. This layer selects SparseHydrologyRuntimeSubcycled and supplies
-## a body-fixed local-player focus to its automatic refinement/coarsening policy.
+## remain inherited. This layer selects SparseHydrologyRuntimeSubcycledCompacted and
+## supplies a body-fixed local-player focus to automatic refinement/coarsening policy.
 
 var automatic_physical_hydrolod_enabled := true
 var _automatic_hydrolod_focus_override := Vector3.ZERO
@@ -59,6 +59,7 @@ func gpu_stats() -> Dictionary:
 	var out := super.gpu_stats()
 	var physical: Dictionary = out.get("physical_hydrolod", {})
 	var subcycled := _sparse_runtime is SparseHydrologyRuntimeSubcycled
+	var compacted := _sparse_runtime is SparseHydrologyRuntimeSubcycledCompacted
 	var cached_cfl := subcycled \
 		and (_sparse_runtime as SparseHydrologyRuntimeSubcycled).cfl_cache != null \
 		and (_sparse_runtime as SparseHydrologyRuntimeSubcycled).cfl_cache.initialized_ok()
@@ -80,6 +81,11 @@ func gpu_stats() -> Dictionary:
 	physical["fused_activity_summary_refresh"] = cached_cfl
 	physical["activity_summary_reuses_cfl_cell_scan"] = cached_cfl
 	physical["post_solve_activity_compute_dispatch"] = not cached_cfl
+	physical["activity_cpu_readback_compacted"] = compacted
+	physical["full_capacity_activity_readback"] = not compacted
+	physical["frontier_active_record_indirect_dispatch"] = compacted
+	physical["frontier_full_capacity_summary_scan"] = not compacted
+	physical["frontier_exact_candidate_readback"] = compacted
 	physical["automatic_policy_enabled"] = automatic_physical_hydrolod_active()
 	physical["automatic_policy_configured"] = automatic_physical_hydrolod_enabled
 	physical["automatic_focus_source"] = _automatic_hydrolod_focus_source
@@ -106,7 +112,7 @@ func _on_sparse_connectivity_initialized(generation: int,
 	if _structure_crest_provider.is_valid():
 		_sparse_reachability.set_structure_crest_provider(_structure_crest_provider)
 
-	var runtime := SparseHydrologyRuntimeSubcycled.new()
+	var runtime := SparseHydrologyRuntimeSubcycledCompacted.new()
 	runtime.name = "SparseHydrologyRuntime"
 	runtime.process_priority = 12
 	runtime.auto_run = true
