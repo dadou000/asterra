@@ -1,25 +1,16 @@
 class_name SparseHydroStepGPU
 extends Node
-## Connected same-level sparse SWE dispatcher with GPU-driven adaptive CFL.
+## Connected sparse SWE dispatcher with GPU-driven adaptive CFL.
 ##
 ## Every macro advance records this loop entirely on the global RenderingDevice:
 ##   reduce occupied atlas A -> prepare safe dt -> A->B SWE -> B->A canonicalize
 ## and repeats until the requested macro time is consumed or the substep cap is
-## reached. CFL is recomputed from the exact state produced by the previous step.
+## reached. Phase 4 derives dx from each occupied tile's quadtree level; the CFL
+## reduction therefore uses max(characteristic_speed / local_dx).
 ##
-## Atlas A remains authoritative after every candidate iteration so the existing
-## activity/frontier/reconstruction pipeline never tracks ping-pong parity.
-##
-## Source composition has two independent layers:
-##   atlas.source_rid()        = persistent gameplay/world point sources
-##   atmospheric_source_rid() = distributed weather/surface forcing
-## They are summed by sparse_hydro_step.glsl at read time, preventing one source
-## producer from clearing or overwriting another producer's source field.
-##
-## Each macro advance also clears a per-cell external-flux ledger. The SWE shader
-## accumulates exact gross source addition and sink-clipped removal in physical m^3.
-## Two GPU reductions write those totals into reserved words of the existing
-## 96-byte diagnostics block, so production accounting requires no extra readback.
+## Atlas A remains authoritative after every candidate iteration. Source composition
+## keeps independent gameplay/world and atmospheric layers, and the external ledger
+## records physical m3 using each tile's own cell area.
 
 signal initialized
 signal initialization_failed(error: Error)
@@ -34,7 +25,9 @@ const COMMIT_LOCAL_X := 256
 const EXTERNAL_REDUCE_LOCAL_X := 256
 const PARAM_FLOATS := 12
 const COMMIT_PARAM_INTS := 4
-const CONTROL_BYTES := 96
+# First 96 bytes retain the established diagnostics ABI. The final 8 bytes are
+# sparse-only per-iteration HydroLOD CFL scratch.
+const CONTROL_BYTES := 104
 const SOURCE_FLOATS := 4
 const EXTERNAL_LEDGER_FLOATS := 2
 const MAX_GPU_SUBSTEPS := 32
@@ -100,7 +93,7 @@ func initialize(atlas: SparseHydroAtlasGPU,
 		"step": _load_spirv("res://shaders/water/sparse_hydro_step.glsl"),
 		"commit": _load_spirv("res://shaders/water/sparse_hydro_commit.glsl"),
 		"reduce": _load_spirv("res://shaders/water/sparse_hydro_reduce.glsl"),
-		"reset": _load_spirv("res://shaders/water/hydro_reset_reduction.glsl"),
+		"reset": _load_spirv("res://shaders/water/sparse_hydro_reset_reduction.glsl"),
 		"prepare": _load_spirv("res://shaders/water/sparse_hydro_prepare_step.glsl"),
 		"external_reduce": _load_spirv(
 			"res://shaders/water/sparse_hydro_external_flux_reduce.glsl"),
@@ -177,11 +170,13 @@ func advance(dt_s: float, max_substeps: int = 16,
 	_next_step_id += 1
 	_advance_pending = true
 	_diagnostics_pending = request_diagnostics
+	var lod_enabled := 1.0 if _atlas.hydrolod_enabled() else 0.0
+	var base_level := float(maxi(_atlas.base_tile_level, 0))
 	var params := PackedFloat32Array([
 		float(_atlas.tile_resolution), float(_atlas.capacity),
 		_atlas.cell_size_m, dt_s,
 		gravity, dry_eps, manning_n, clampf(cfl, 0.01, 0.95),
-		float(cap), 0.0, 0.0, 0.0,
+		float(cap), base_level, lod_enabled, 0.0,
 	])
 	RenderingServer.call_on_render_thread(Callable(self, &"_advance_render_thread").bind(
 		step_id, cap, request_diagnostics, params.to_byte_array()))
@@ -217,6 +212,8 @@ func stats() -> Dictionary:
 		"cfl": cfl,
 		"max_gpu_substeps": MAX_GPU_SUBSTEPS,
 		"canonical_state": "atlas_A",
+		"hydrolod_metrics": _atlas != null and _atlas.hydrolod_enabled(),
+		"hydrolod_cfl_rate_reduction": true,
 		"atmospheric_source_layer": _atmospheric_sources.is_valid(),
 		"exact_external_flux_ledger": _external_flux_ledger.is_valid(),
 		"gpu_bytes_owned": gpu_bytes_estimate(),
@@ -296,6 +293,7 @@ func _init_render_thread(spirv: Dictionary) -> void:
 		_storage_uniform(7, control),
 		_storage_uniform(8, atmospheric_sources),
 		_storage_uniform(9, external_flux_ledger),
+		_storage_uniform(10, _atlas.tile_metadata_rid()),
 	], bundle.step_shader, 0)
 	var commit_set := rd.uniform_set_create([
 		_storage_uniform(0, _atlas.state_b_rid()),
@@ -308,6 +306,7 @@ func _init_render_thread(spirv: Dictionary) -> void:
 		_storage_uniform(1, _atlas.occupancy_rid()),
 		_storage_uniform(2, control),
 		_storage_uniform(3, params),
+		_storage_uniform(4, _atlas.tile_metadata_rid()),
 	], bundle.reduce_shader, 0)
 	var reset_set := rd.uniform_set_create([
 		_storage_uniform(0, control),
@@ -436,7 +435,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 	rd.compute_list_dispatch(compute, groups_x, groups_y, _atlas.capacity)
 	rd.compute_list_add_barrier(compute)
 
-	# Exact external source ledger -> two reserved control words.
+	# Exact external source ledger -> the established words at bytes 88/92.
 	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_reduce_set, 0)
 	rd.compute_list_dispatch(compute, external_groups, 1, 1)
@@ -505,6 +504,7 @@ func _on_diagnostics_bytes(bytes: PackedByteArray, step_id: int) -> void:
 		"external_removed_m3": removed_m3,
 		"external_net_m3": added_m3 - removed_m3,
 		"external_sink_clipping_exact": true,
+		"hydrolod_cfl": _atlas != null and _atlas.hydrolod_enabled(),
 	}
 	call_deferred("_publish_diagnostics", step_id, diagnostics)
 
