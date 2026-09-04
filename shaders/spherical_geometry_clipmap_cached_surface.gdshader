@@ -424,11 +424,14 @@ void vertex() {
 	}
 
 	if (u_height_enabled > 0.5 && stable_displacement) {
+		// The neighbour samples inside this come from the cache only. Feed it the
+		// cache height at the centre too (not h, which now also carries the sculpt
+		// delta and biome layers) -- otherwise a flat authored offset looks like a
+		// bump/pit to the cross-product and the whole patch brightens or darkens.
 		v_smooth_normal = terrain_cached_surface_normal(
-			d, normal_level, normal_morph, h, anchor_offset_m);
-		// The cache normal never saw the sculpt delta or the biome layers, so where
-		// either displaces the mesh, lean on the geometry (screen-space derivative)
-		// normal instead -- same treatment sculpt edits already get.
+			d, normal_level, normal_morph, h - edit_h - biome_h, anchor_offset_m);
+		// Where the sculpt delta or biome layers displace the mesh, lean on the
+		// geometry (screen-space derivative) normal, which does see them.
 		v_geom_normal_weight = max(normal_level <= 1 ? 0.28 : 0.10,
 			(abs(edit_h) > 0.001 || abs(biome_h) > 0.05) ? 0.90 : 0.0);
 	} else {
