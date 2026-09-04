@@ -66,10 +66,12 @@ const PHASE47_BIOME_MAX_LAYERS: int = 6
 # Biome terrain no longer uses the displacement bytecode VM (it lowers to
 # uniforms), but the uniform arrays are bounded: keep the live layer total within
 # what terrain_biome_profile.gdshaderinc / TerrainDisplacementRuntime accept.
+# Every biome slot with real content is always live now (see
+# _phase47_migrate_biome_slots and compile_from_terrain's own comments) -- this
+# is the one real limit, a fixed-size GPU uniform array shared across all of
+# them, silently enforced by dropping layers past it (a warning surfaces when
+# that happens).
 const PHASE47_BIOME_TOTAL_LAYER_BUDGET: int = 16
-# Only this many customised biomes stay live at once (plus the one being edited);
-# the rest are turned off (never deleted) and re-enable when you visit them.
-const PHASE47_MAX_ACTIVE_BIOME_PROFILES: int = 4
 
 # Ported per-biome terrain character. The renderer already varies its geomorph
 # landform weights by climate/soil and the surface shader already colours every
@@ -423,11 +425,27 @@ func _phase47_build_biome_editor(terrain: Resource) -> void:
 ##  - migrate old "strength 0" turn-offs to a disabled slot;
 ##  - keep only the selected biome + up to N edited biomes enabled; the 15-ring
 ##    32-instruction VM cannot compile more. Nothing is deleted, only disabled.
-func _phase47_migrate_biome_slots(terrain: Resource, selected_biome: int) -> void:
+## Repairs biome profile slots regardless of which one you're currently
+## viewing. This used to ALSO disable every customised biome except the one
+## on screen (and cap total *enabled slots* at
+## PHASE47_MAX_ACTIVE_BIOME_PROFILES), on the theory that keeping the
+## shared-VM compile small mattered -- but Biome Terrain never enters the VM
+## (see the file header), and the actual hard limit is the fixed-size GPU
+## uniform array (BIOME_LAYER_MAX = PHASE47_BIOME_TOTAL_LAYER_BUDGET, both
+## 16), which compile_from_terrain already enforces directly by simply not
+## packing layers past the 16th regardless of how many slots are enabled.
+## Disabling whole slots on top of that was redundant *and* the actual bug:
+## `slot.enabled` is a persisted resource field nothing else ever turns back
+## on (see _phase47_ensure_biome_profile's comment), so a biome disabled here
+## while you were looking at a different tab stayed invisible -- in the
+## editor's own preview and in the actual game -- until you happened to
+## revisit that exact biome's tab. A biome you have put layers into should
+## just always render, in the editor and in the game, with no tab-visit
+## side effect required.
+func _phase47_migrate_biome_slots(terrain: Resource, _selected_biome: int) -> void:
 	if terrain == null:
 		return
 	var changed: bool = false
-	var enabled_customised: Array[Resource] = []
 	for value: Variant in terrain.get(&"displacement_slots") as Array:
 		var slot: Resource = value as Resource
 		if slot == null:
@@ -447,22 +465,16 @@ func _phase47_migrate_biome_slots(terrain: Resource, selected_biome: int) -> voi
 			slot.set(&"strength", 1.0)
 			changed = true
 
-		if not bool(slot.get(&"enabled")):
-			continue
-		var at_default: bool = _phase47_biome_profile_is_default(slot, biome_id)
-		if biome_id == selected_biome:
-			continue
-		if at_default:
-			# Auto-provisioned, never edited: disable it so only the biome you are
-			# actually looking at carries its default character.
+		# An empty, never-edited profile contributes zero layers either way;
+		# disabling it is a harmless bookkeeping tidy-up, not a rendering
+		# decision, so it's fine for this one case to stay tab-independent.
+		if bool(slot.get(&"enabled")) and _phase47_biome_profile_is_default(slot, biome_id):
 			slot.set(&"enabled", false)
 			changed = true
-		else:
-			enabled_customised.append(slot)
-
-	if enabled_customised.size() > PHASE47_MAX_ACTIVE_BIOME_PROFILES:
-		for i: int in range(PHASE47_MAX_ACTIVE_BIOME_PROFILES, enabled_customised.size()):
-			enabled_customised[i].set(&"enabled", false)
+		elif not bool(slot.get(&"enabled")) and not _phase47_biome_profile_is_default(slot, biome_id):
+			# Anything with real authored content should simply be live,
+			# regardless of which tab produced this rebuild.
+			slot.set(&"enabled", true)
 			changed = true
 
 	if changed:
@@ -1046,13 +1058,13 @@ func _phase47_build_biome_profile_controls(terrain: Resource, slot: Resource,
 		_refresh_current_category()
 	)
 	button_row.add_child(load_default)
+	var total_layers: int = _phase47_total_biome_layer_count(terrain)
 	var budget := Label.new()
-	budget.text = "Live biome profiles: %d / %d — the biome you are editing is always live; " \
-		% [_phase47_active_biome_profile_count(terrain), PHASE47_MAX_ACTIVE_BIOME_PROFILES + 1] \
-		+ "extra customised biomes past the limit stop rendering until you visit them. " \
-		+ "Total layers across live biomes are capped at %d." % PHASE47_BIOME_TOTAL_LAYER_BUDGET
+	budget.text = "Biome terrain layers in use: %d / %d, shared across every biome you've composed — each one always renders once it has layers, with no need to revisit its tab. Going over budget silently drops the lowest-priority layers past the limit (a warning appears); remove a layer from a less-important biome to fit." \
+		% [total_layers, PHASE47_BIOME_TOTAL_LAYER_BUDGET]
 	budget.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	budget.modulate = Color(0.58, 0.68, 0.76)
+	budget.modulate = Color(0.58, 0.68, 0.76) if total_layers <= PHASE47_BIOME_TOTAL_LAYER_BUDGET \
+		else Color(0.86, 0.62, 0.30)
 	box.add_child(budget)
 
 
@@ -1181,15 +1193,19 @@ func _phase47_add_biome_layer_number(parent: VBoxContainer, graph: Resource, sta
 	row.add_child(help)
 
 
-func _phase47_active_biome_profile_count(terrain: Resource) -> int:
+## Total biome terrain layers across every biome slot with real content
+## (mirrors compile_from_terrain's own counting -- `enabled` no longer gates
+## a biome slot there, see its comment, so it's not checked here either).
+func _phase47_total_biome_layer_count(terrain: Resource) -> int:
 	var count: int = 0
 	for value: Variant in terrain.get(&"displacement_slots") as Array:
 		var slot: Resource = value as Resource
 		if slot == null:
 			continue
-		if String(slot.get(&"slot_id")).begins_with(PHASE47_BIOME_PROFILE_PREFIX) \
-				and bool(slot.get(&"enabled")):
-			count += 1
+		if not String(slot.get(&"slot_id")).begins_with(PHASE47_BIOME_PROFILE_PREFIX):
+			continue
+		var graph: Resource = slot.get(&"graph") as Resource
+		count += (_phase47_biome_stack(graph).get("layers", []) as Array).size()
 	return count
 
 

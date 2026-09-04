@@ -165,13 +165,24 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 
 	var accumulator: int = -1
 	var slot_index: int = 0
+	var biome_layers_dropped: int = 0
 	for slot_value: Variant in slots_value as Array:
 		var slot: Resource = slot_value as Resource
-		if slot == null or not bool(slot.get(&"enabled")) or int(slot.get(&"domain")) != 0:
+		if slot == null or int(slot.get(&"domain")) != 0:
 			slot_index += 1
 			continue
 		if String(slot.get(&"slot_id")).begins_with(BIOME_PROFILE_SLOT_PREFIX):
-			# Biome Terrain never enters the VM (see BIOME_LAYER_* notes).
+			# Biome Terrain never enters the VM (see BIOME_LAYER_* notes), and
+			# deliberately ignores `enabled` here: that field is a legacy
+			# editor-only "only the biome you're currently viewing in Planet
+			# Studio is live" gate (see world_authoring_editor_live_phase46.gd's
+			# _phase47_migrate_biome_slots) that left customised biomes
+			# invisible -- in the editor's own preview and in the actual game
+			# -- until you happened to revisit that exact biome's tab. An
+			# empty/unauthored biome slot already contributes zero layers on
+			# its own, and BIOME_LAYER_MAX below already caps the real
+			# constraint (the fixed-size GPU uniform array), so there is
+			# nothing left for `enabled` to usefully gate.
 			var parsed: Dictionary = _parse_biome_layer_slot(slot)
 			var parsed_biome: int = int(parsed.get("biome_id", -1))
 			if parsed_biome >= 0 and parsed_biome < BIOME_COUNT:
@@ -179,6 +190,11 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 				for layer_value: Variant in parsed.get("layers", []) as Array:
 					if _biome_profiles.size() < BIOME_LAYER_MAX:
 						_biome_profiles.append(layer_value)
+					else:
+						biome_layers_dropped += 1
+			slot_index += 1
+			continue
+		if not bool(slot.get(&"enabled")):
 			slot_index += 1
 			continue
 		var graph: Resource = slot.get(&"graph") as Resource
@@ -239,6 +255,10 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 
 	_output_index = accumulator
 	_active = _output_index >= 0 and not _headers.is_empty()
+	if biome_layers_dropped > 0:
+		_warnings.append(
+			"%d biome terrain layer(s) did not fit in the %d-layer budget shared across all biomes and are not rendering. Remove a layer from a less-important biome to fit within it."
+			% [biome_layers_dropped, BIOME_LAYER_MAX])
 	_publish_texture()
 	return stats()
 
