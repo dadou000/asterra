@@ -171,7 +171,13 @@ void vertex() {
 		? author_displacement_height(direction, generated_height, biome, level, TIME)
 		: 0.0;
 	#endif
-	shader_height += asterra_biome_profile_height(direction, biome);
+	// Bounded, world-locked position for the biome layer noise (see
+	// terrain_biome_profile.gdshaderinc); the pre-biome altitude is close enough,
+	// it only sets noise phase.
+	vec3 biome_sample_p = u_anchor_render + stable_surface_offset(u_anchor_dir,
+		u_anchor_right, u_anchor_up, anchor_offset_m,
+		generated_height + shader_height + u_surface_bias) + u_biome_detail_origin;
+	shader_height += asterra_biome_profile_height(direction, biome_sample_p);
 	float sink = is_ring > 0.5
 		? clamp(spacing * 0.001 * max(u_sink_scale, 0.0), 0.004, 0.025)
 		: 0.0;

@@ -37,8 +37,21 @@ uniform int u_biome_layer_count = 0;
 uniform vec4 u_biome_layer_a[BIOME_LAYER_MAX];
 uniform vec4 u_biome_layer_b[BIOME_LAYER_MAX];
 uniform float u_biome_blend_m[18];
+// Floating-origin offset (Frames.origin wrapped modulo BP_ORIGIN_WRAP_M) so the
+// high-frequency layer noise can be sampled from a bounded world position and
+// stay locked to the world without float32 aliasing. Pushed per frame by the
+// renderer; 0 = sample straight off the unit direction (legacy).
+uniform vec3 u_biome_detail_origin = vec3(0.0);
+
+const float BP_ORIGIN_WRAP_M = 4096.0;
+// Lattice wrap for the value-noise hash. Keeps floor()/fract() inputs small so
+// they stay precise at very high frequency; the noise tiles every BP_LATTICE
+// cells, which for the frequencies this path is used at is far outside any view.
+const float BP_LATTICE = 65536.0;
+const int BP_LATTICE_I = 65536;
 
 float bp_hash(ivec3 p, int seed) {
+	p = ((p % BP_LATTICE_I) + BP_LATTICE_I) % BP_LATTICE_I;
 	uint h = uint(p.x) * 374761393u + uint(p.y) * 668265263u + uint(p.z) * 2147483647u + uint(seed) * 1274126177u;
 	h = (h ^ (h >> 13u)) * 1274126177u;
 	h ^= h >> 16u;
@@ -46,6 +59,7 @@ float bp_hash(ivec3 p, int seed) {
 }
 
 float bp_noise(vec3 p, int seed) {
+	p -= floor(p / BP_LATTICE) * BP_LATTICE;
 	ivec3 i = ivec3(floor(p));
 	vec3 f = fract(p);
 	f = f * f * (vec3(3.0) - 2.0 * f);
@@ -56,14 +70,30 @@ float bp_noise(vec3 p, int seed) {
 	return mix(mix(a0, a1, f.y), mix(b0, b1, f.y), f.z);
 }
 
-float bp_fbm(vec3 direction, float scale, int seed, int passes) {
+// `direction` is the unit surface direction; `sample_p` is a bounded world
+// position (render-space + wrapped detail origin). For coarse octaves the unit
+// direction is precise enough and never seams, so it is used directly. For fine
+// octaves the frequency is snapped so an origin rebase (a multiple of
+// BP_ORIGIN_WRAP_M) shifts the noise coordinate by a whole number of lattice
+// cells -- seamless once bp_noise wraps -- and the bounded sample_p keeps full
+// float precision.
+float bp_fbm(vec3 direction, vec3 sample_p, float scale, int seed, int passes) {
 	float total = 0.0;
 	float normalizer = 0.0;
 	float amplitude = 1.0;
 	float frequency = max(abs(scale), 0.000001);
+	float radius = max(u_planet_radius, 1.0);
 	for (int octave = 0; octave < 4; octave++) {
 		if (octave >= clamp(passes, 1, 4)) break;
-		total += bp_noise(direction * frequency, seed + octave * 1013) * amplitude;
+		vec3 q;
+		if (frequency > 256.0) {
+			float snap = max(1.0, floor(frequency * BP_ORIGIN_WRAP_M / radius + 0.5))
+				* radius / BP_ORIGIN_WRAP_M;
+			q = (sample_p / radius) * snap;
+		} else {
+			q = direction * frequency;
+		}
+		total += bp_noise(q, seed + octave * 1013) * amplitude;
 		normalizer += amplitude;
 		frequency *= 2.0;
 		amplitude *= 0.5;
@@ -72,30 +102,30 @@ float bp_fbm(vec3 direction, float scale, int seed, int passes) {
 }
 
 // Metres this one layer contributes at `d`, before the biome boundary weight.
-float bp_layer_value(vec3 d, vec4 a, vec4 b) {
+float bp_layer_value(vec3 d, vec3 sample_p, vec4 a, vec4 b) {
 	int layer_type = int(floor(a.y + 0.5));
 	float scale = a.z;
 	float amount = a.w;
 	int seed = int(floor(b.y + 0.5));
 	int param = int(floor(b.x + 0.5));
 	if (layer_type == 1) {
-		float ridge = 1.0 - abs(bp_fbm(d, scale, seed, param));
+		float ridge = 1.0 - abs(bp_fbm(d, sample_p, scale, seed, param));
 		return ridge * ridge * amount;
 	} else if (layer_type == 2) {
-		float field = bp_fbm(d, scale, seed, 1);
+		float field = bp_fbm(d, sample_p, scale, seed, 1);
 		float steps = clamp(float(param), 2.0, 24.0);
 		float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0);
 		return (terrace * 2.0 - 1.0) * amount;
 	} else if (layer_type == 3) {
-		float field = bp_fbm(d, scale, seed, 3);
+		float field = bp_fbm(d, sample_p, scale, seed, 3);
 		float channel = clamp(1.0 - abs(field), 0.0, 1.0);
 		return -(channel * channel * channel) * amount;
 	} else if (layer_type == 4) {
-		float field = bp_fbm(d, scale, seed, 3);
+		float field = bp_fbm(d, sample_p, scale, seed, 3);
 		float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0);
 		return deposit * deposit * amount;
 	}
-	return bp_fbm(d, scale, seed, param) * amount;
+	return bp_fbm(d, sample_p, scale, seed, param) * amount;
 }
 
 // Branchless orthonormal tangent basis for a unit vector (Duff et al. 2017),
@@ -136,10 +166,14 @@ float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 	return smoothstep(0.18, 0.82, acc / wsum);
 }
 
-// Metres to add to the surface at `dir`. `biome_id_hint` is accepted for call-site
-// compatibility; the boundary kernel resolves the biome itself. Zero-cost when no
-// layer is bound.
-float asterra_biome_profile_height(vec3 dir, float biome_id_hint) {
+// Metres to add to the surface at `dir`. `world_sample_p` is a bounded,
+// world-locked position (render-space position + the wrapped floating-origin
+// offset) that high-frequency layers sample from instead of `dir * frequency`,
+// so very small features stay precise instead of aliasing. It only affects
+// noise phase, not the resulting height's correctness, so an approximate
+// (pre-displacement) position is fine. The boundary kernel resolves the biome
+// itself. Zero-cost when no layer is bound.
+float asterra_biome_profile_height(vec3 dir, vec3 world_sample_p) {
 	if (u_biome_layer_count <= 0) {
 		return 0.0;
 	}
@@ -163,7 +197,7 @@ float asterra_biome_profile_height(vec3 dir, float biome_id_hint) {
 		if (cov <= 0.0) {
 			continue;
 		}
-		total += bp_layer_value(d, a, u_biome_layer_b[i]) * cov;
+		total += bp_layer_value(d, world_sample_p, a, u_biome_layer_b[i]) * cov;
 	}
 	return total;
 }

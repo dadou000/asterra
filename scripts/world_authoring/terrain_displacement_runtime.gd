@@ -27,6 +27,13 @@ const BIOME_COUNT: int = 18
 const BIOME_PROFILE_SLOT_PREFIX := "simple-biome-terrain-"
 # layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion, 4 sediment.
 const BIOME_LAYER_MAX: int = 16
+# Mirrors terrain_biome_profile.gdshaderinc's floating-origin sampling: high
+# frequency layers sample a bounded world position (Frames.origin wrapped to this
+# many metres) instead of direction * frequency, which loses float32 precision on
+# the GPU at high frequency. CPU is float64 so it never needed this for precision,
+# but must reproduce it for contact/AGL to land on the same noise coordinate.
+const BIOME_ORIGIN_WRAP_M: float = 4096.0
+const BIOME_LATTICE: float = 65536.0
 const BIOME_LAYER_TYPE_BY_NODE: Dictionary = {
 	"NOISE_LAYER": 0, "BILLOW_NOISE": 0,
 	"RIDGED_MOUNTAINS": 1, "VORONOI_RIDGES": 1,
@@ -658,7 +665,7 @@ func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
 	}
 
 
-func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
+func _biome_layer_value(d: Vector3, sample_p: Vector3, layer: Dictionary) -> float:
 	var layer_type: int = int(layer.get("layer_type", 0))
 	var scale: float = float(layer.get("scale", 6.0))
 	var amount: float = float(layer.get("amount", 0.0))
@@ -666,23 +673,98 @@ func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
 	var param: int = int(layer.get("param", 3))
 	match layer_type:
 		1:
-			var ridge: float = 1.0 - absf(_terrain_fbm(d, scale, seed, param))
+			var ridge: float = 1.0 - absf(_biome_fbm(d, sample_p, scale, seed, param))
 			return ridge * ridge * amount
 		2:
-			var field: float = _terrain_fbm(d, scale, seed, 1)
+			var field: float = _biome_fbm(d, sample_p, scale, seed, 1)
 			var steps: float = float(clampi(param, 2, 24))
 			var terrace: float = floor((field * 0.5 + 0.5) * steps) / maxf(steps - 1.0, 1.0)
 			return (terrace * 2.0 - 1.0) * amount
 		3:
-			var field: float = _terrain_fbm(d, scale, seed, 3)
+			var field: float = _biome_fbm(d, sample_p, scale, seed, 3)
 			var channel: float = clampf(1.0 - absf(field), 0.0, 1.0)
 			return -(channel * channel * channel) * amount
 		4:
-			var field: float = _terrain_fbm(d, scale, seed, 3)
+			var field: float = _biome_fbm(d, sample_p, scale, seed, 3)
 			var deposit: float = clampf(1.0 - absf(field * 1.65), 0.0, 1.0)
 			return deposit * deposit * amount
 		_:
-			return _terrain_fbm(d, scale, seed, param) * amount
+			return _biome_fbm(d, sample_p, scale, seed, param) * amount
+
+
+# Mirrors bp_fbm. `sample_p` is used (frequency-snapped) for octaves above the
+# precision-safe threshold; low frequency stays on the unit direction, which is
+# already precise and never seams.
+func _biome_fbm(direction: Vector3, sample_p: Vector3, scale: float, seed: int,
+		passes: int) -> float:
+	var total: float = 0.0
+	var normalizer: float = 0.0
+	var amplitude: float = 1.0
+	var frequency: float = maxf(absf(scale), 0.000001)
+	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1000000.0
+	for octave: int in clampi(passes, 1, 4):
+		var q: Vector3
+		if frequency > 256.0:
+			var snap: float = maxf(1.0, floor(frequency * BIOME_ORIGIN_WRAP_M / radius + 0.5)) \
+				* radius / BIOME_ORIGIN_WRAP_M
+			q = (sample_p / radius) * snap
+		else:
+			q = direction * frequency
+		total += _biome_value_noise_3d(q, seed + octave * 1013) * amplitude
+		normalizer += amplitude
+		frequency *= 2.0
+		amplitude *= 0.5
+	return total / normalizer if normalizer > 0.0 else 0.0
+
+
+func _biome_value_noise_3d(position: Vector3, seed: int) -> float:
+	var wrapped: Vector3 = position - Vector3(
+		floor(position.x / BIOME_LATTICE), floor(position.y / BIOME_LATTICE),
+		floor(position.z / BIOME_LATTICE)) * BIOME_LATTICE
+	var ix: int = floori(wrapped.x)
+	var iy: int = floori(wrapped.y)
+	var iz: int = floori(wrapped.z)
+	var fx: float = wrapped.x - float(ix)
+	var fy: float = wrapped.y - float(iy)
+	var fz: float = wrapped.z - float(iz)
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fy = fy * fy * (3.0 - 2.0 * fy)
+	fz = fz * fz * (3.0 - 2.0 * fz)
+	var c000 := _biome_hash_wrapped(ix, iy, iz, seed)
+	var c100 := _biome_hash_wrapped(ix + 1, iy, iz, seed)
+	var c010 := _biome_hash_wrapped(ix, iy + 1, iz, seed)
+	var c110 := _biome_hash_wrapped(ix + 1, iy + 1, iz, seed)
+	var c001 := _biome_hash_wrapped(ix, iy, iz + 1, seed)
+	var c101 := _biome_hash_wrapped(ix + 1, iy, iz + 1, seed)
+	var c011 := _biome_hash_wrapped(ix, iy + 1, iz + 1, seed)
+	var c111 := _biome_hash_wrapped(ix + 1, iy + 1, iz + 1, seed)
+	var x00 := lerpf(c000, c100, fx)
+	var x10 := lerpf(c010, c110, fx)
+	var x01 := lerpf(c001, c101, fx)
+	var x11 := lerpf(c011, c111, fx)
+	return lerpf(lerpf(x00, x10, fy), lerpf(x01, x11, fy), fz)
+
+
+func _biome_hash_wrapped(x: int, y: int, z: int, seed: int) -> float:
+	var lattice: int = int(BIOME_LATTICE)
+	return _noise_hash(((x % lattice) + lattice) % lattice,
+		((y % lattice) + lattice) % lattice, ((z % lattice) + lattice) % lattice, seed)
+
+
+# Bounded, world-locked position for biome layer noise. Mirrors the GPU's
+# render_p + wrapped(Frames.origin): world_pos - Frames.origin rebased to the same
+# BIOME_ORIGIN_WRAP_M grid, so both land on the same noise-lattice cell.
+func _biome_sample_position(direction: Vector3) -> Vector3:
+	var radius: float = float(Planet.cfg.planet_radius) if Planet.cfg != null else 1000000.0
+	var world_pos: Vector3 = direction.normalized() * radius
+	var origin_x: float = float(Frames.origin.x)
+	var origin_y: float = float(Frames.origin.y)
+	var origin_z: float = float(Frames.origin.z)
+	var wrap_origin := Vector3(
+		BIOME_ORIGIN_WRAP_M * floor(origin_x / BIOME_ORIGIN_WRAP_M),
+		BIOME_ORIGIN_WRAP_M * floor(origin_y / BIOME_ORIGIN_WRAP_M),
+		BIOME_ORIGIN_WRAP_M * floor(origin_z / BIOME_ORIGIN_WRAP_M))
+	return world_pos - wrap_origin
 
 
 # Branchless orthonormal tangent basis (Duff et al. 2017); mirrors bp_tangent_basis.
@@ -753,6 +835,7 @@ func _biome_profiles_height(direction: Vector3, biome_id: int) -> float:
 	var basis: Array = _biome_tangent_basis(d)
 	var tx: Vector3 = basis[0]
 	var ty: Vector3 = basis[1]
+	var sample_p: Vector3 = _biome_sample_position(d)
 	var total: float = 0.0
 	var cached_biome: int = -1
 	var cached_coverage: float = 0.0
@@ -764,7 +847,7 @@ func _biome_profiles_height(direction: Vector3, biome_id: int) -> float:
 			cached_coverage = _biome_coverage(d, tx, ty, layer_biome, centre_biome)
 		if cached_coverage <= 0.0:
 			continue
-		total += _biome_layer_value(d, entry) * cached_coverage
+		total += _biome_layer_value(d, sample_p, entry) * cached_coverage
 	return total
 
 
