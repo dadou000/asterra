@@ -718,20 +718,23 @@ func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
 		return centre
 	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0
 	var step_ang: float = (half_m * 0.5) / radius
+	# Spatially smooth kernel shift, mirrors bp_biome_coverage: dissolves the
+	# fixed-grid quantisation into a ramp without per-vertex spikes.
+	var jitter_p: Vector3 = d * (radius / 12.0)
+	var shift := Vector2(
+		_value_noise_3d(jitter_p, 40009), _value_noise_3d(jitter_p, 80021)) * 0.75
 	var acc: float = 0.0
 	var wsum: float = 0.0
 	for j: int in range(-2, 3):
 		for i: int in range(-2, 3):
-			var w: float = exp(-float(i * i + j * j) * 0.45)
-			var hit: float
-			if i == 0 and j == 0:
-				hit = centre
-			else:
-				var sd: Vector3 = (d + (tx * float(i) + ty * float(j)) * step_ang).normalized()
-				hit = 1.0 if _biome_id_at(sd) == biome else 0.0
+			var ox: float = float(i) + shift.x
+			var oy: float = float(j) + shift.y
+			var w: float = exp(-(ox * ox + oy * oy) * 0.45)
+			var sd: Vector3 = (d + (tx * ox + ty * oy) * step_ang).normalized()
+			var hit: float = 1.0 if _biome_id_at(sd) == biome else 0.0
 			acc += w * hit
 			wsum += w
-	return smoothstep(0.15, 0.85, acc / maxf(wsum, 1e-6))
+	return smoothstep(0.20, 0.80, acc / maxf(wsum, 1e-6))
 
 
 # Metres the biome layer stack adds at `direction`, resolving the boundary blend

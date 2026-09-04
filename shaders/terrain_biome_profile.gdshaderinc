@@ -103,11 +103,15 @@ void bp_tangent_basis(vec3 n, out vec3 tx, out vec3 ty) {
 }
 
 // 0..1 smooth membership of `biome` in a tangent-plane Gaussian disc reaching out
-// to the biome's blend half-width. The 5x5 grid is FIXED (no per-vertex jitter):
-// neighbouring vertices then sample almost the same texels with the same weights,
-// so coverage varies smoothly across the surface. Jittering the kernel instead
-// turns the discrete biome-id map into per-vertex noise -- visible as spikes in
-// the mesh. With a 0 half-width this collapses to the hard centre sample.
+// to the biome's blend half-width.
+//
+// The 5x5 grid is FIXED per vertex (per-vertex jitter turns the discrete
+// biome-id map into per-vertex noise -- mesh spikes). Sampling a discrete field
+// on a fixed grid instead quantises the coverage into ~1/N steps, which read as
+// terraces across the blend band. To dissolve those without reintroducing
+// spikes, the whole kernel is shifted by a SPATIALLY SMOOTH offset (~12 m value
+// noise): adjacent vertices get almost the same shift, but across the band the
+// shift sweeps far enough to smear each step into a ramp.
 float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 	float here = (int(floor(ASTERRA_BIOME_ID_AT(d) + 0.5)) == biome) ? 1.0 : 0.0;
 	float half_m = u_biome_blend_m[clamp(biome, 0, 17)];
@@ -115,20 +119,20 @@ float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 		return here;
 	}
 	float step_ang = (half_m * 0.5) / max(u_planet_radius, 1.0);
+	vec3 jitter_p = d * (u_planet_radius / 12.0);
+	vec2 shift = vec2(bp_noise(jitter_p, 40009), bp_noise(jitter_p, 80021)) * 0.75;
 	float acc = 0.0;
 	float wsum = 0.0;
 	for (int j = -2; j <= 2; j++) {
 		for (int i = -2; i <= 2; i++) {
-			vec2 o = vec2(float(i), float(j));
+			vec2 o = vec2(float(i), float(j)) + shift;
 			float w = exp(-dot(o, o) * 0.45);
-			vec3 sd = (i == 0 && j == 0)
-				? d
-				: normalize(d + (tx * o.x + ty * o.y) * step_ang);
+			vec3 sd = normalize(d + (tx * o.x + ty * o.y) * step_ang);
 			acc += w * ((int(floor(ASTERRA_BIOME_ID_AT(sd) + 0.5)) == biome) ? 1.0 : 0.0);
 			wsum += w;
 		}
 	}
-	return smoothstep(0.15, 0.85, acc / max(wsum, 1e-6));
+	return smoothstep(0.20, 0.80, acc / max(wsum, 1e-6));
 }
 
 // Metres to add to the surface at `dir`. `biome_id_hint` is accepted for call-site
