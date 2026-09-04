@@ -213,6 +213,12 @@ func _run_one(op: Dictionary) -> void:
 				AppSettings.graphics_quality)
 			get_viewport().fsr_sharpness = float(op.get("value", 0.18))
 			_log.append("fsr_sharpness %.2f" % get_viewport().fsr_sharpness)
+		"erode":
+			var result: Dictionary = ErosionRegionBake.bake(_site, float(op.get("radius_m", 150.0)),
+				int(op.get("res", 192)), float(op.get("hardness", 0.6)),
+				{"droplet_count": int(op.get("droplets", 20000)),
+					"seed": int(op.get("seed", 1337))})
+			_log.append("erode %s" % JSON.stringify(result))
 		"stats":
 			await _watch_stats(float(op.get("secs", 8.0)))
 		"quit":
