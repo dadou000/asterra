@@ -493,9 +493,11 @@ void main() {
     vec2 offset_m=vec2(world_cell)*spacing;
     vec3 dir=direction_for_anchor_offset(offset_m);
     float macro_h=macro_height(dir,spacing);
-    float coast_guard=mix(0.38,1.0,
-        smootherstep01((abs(macro_h)-45.0)/(320.0-45.0)));
-    float final_h=macro_h+geomorph(dir,spacing,macro_h)*coast_guard*GC_DETAIL_STRENGTH;
+    // Terrain height is the coarse elevation map alone (shaped by the base-
+    // elevation EQ inside macro_height). All finer terrain shape is composed on
+    // top per biome by the Biome Terrain authoring path. The synthesised geomorph
+    // bands no longer contribute height.
+    float final_h=macro_h;
     int mask=cache_res-1;
     ivec2 physical=ivec2(world_cell.x&mask,world_cell.y&mask);
     float key=float(cache_key(world_cell,level,pc.meta.z));

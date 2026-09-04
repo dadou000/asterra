@@ -175,7 +175,6 @@ func _build_terrain_page() -> void:
 	if _phase47_editor_tab == PHASE47_BIOME_TAB:
 		_phase47_build_biome_editor(terrain)
 	else:
-		_phase47_build_preset_shelf(graph)
 		_phase47_build_controls(graph)
 		_phase47_build_biome_note()
 
@@ -241,16 +240,9 @@ func _phase47_build_preset_shelf(graph: Resource) -> void:
 
 
 func _phase47_build_controls(graph: Resource) -> void:
-	_section("Fine-tune the landscape")
-	_add_note("Use the sliders to change the terrain shader safely. You do not need to know nodes, LODs or shader code.")
+	_section("Coarse elevation")
+	_add_note("Global Terrain is just the coarse elevation map now — its continent-scale height. Everything finer (mountains, hills, valleys, dunes, ground detail) is composed per biome in the Biome Terrain tab.")
 	var controls: Array[Dictionary] = PHASE47_CATALOG.controls_for_mode(PHASE47_CATALOG.MODE_SIMPLE)
-	# Deposition is a visible part of the production terrain but was omitted from the
-	# original short catalog. Keep it alongside valley carving rather than hiding it.
-	controls.append({
-		"key":"deposit_strength", "title":"Valley Sediment", "category":"Valleys",
-		"description":"Controls material deposited around drainage and valley floors.",
-		"min":0.0, "max":2.5, "step":0.01, "unit":"",
-	})
 	for category: String in PHASE47_CATALOG.simple_categories():
 		var category_controls: Array[Dictionary] = []
 		for control: Dictionary in controls:

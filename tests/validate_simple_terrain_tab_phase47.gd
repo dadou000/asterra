@@ -48,9 +48,15 @@ func _run() -> void:
 	if _first_graph_edit(editor) != null:
 		_fail("Terrain tab still exposes a node graph canvas")
 		return
-	var mountain: SpinBox = _find_named(editor, "TerrainControl_mountain_strength") as SpinBox
-	if mountain == null:
-		_fail("Terrain tab is missing Mountain Amount")
+	# Global Terrain no longer synthesises geomorph relief. It is now just the
+	# coarse-elevation EQ; all finer shape is composed per biome.
+	var coarse: SpinBox = _find_named(editor, "TerrainControl_base_elevation_regional") as SpinBox
+	if coarse == null:
+		_fail("Global Terrain is missing the coarse-elevation controls")
+		return
+	if _find_named(editor, "TerrainControl_mountain_strength") != null \
+			or _find_named(editor, "TerrainLook_desert") != null:
+		_fail("Retired geomorph sliders / look presets are still shown")
 		return
 	var session: Object = editor.get("_session") as Object
 	var terrain: Resource = session.call("active_terrain_profile") as Resource if session != null else null
@@ -59,30 +65,19 @@ func _run() -> void:
 	if graph == null:
 		_fail("Terrain tab has no production graph")
 		return
-	mountain.emit_signal("value_changed", 1.73)
+	coarse.emit_signal("value_changed", 0.42)
 	await _frames(2)
-	if not is_equal_approx(float(NATIVE.extract_controls(graph).get("mountain_strength", 0.0)), 1.73):
-		_fail("Mountain Amount did not update the production graph")
+	if not is_equal_approx(float(NATIVE.extract_controls(graph).get("base_elevation_regional", 0.0)), 0.42):
+		_fail("Coarse-elevation control did not update the production graph")
 		return
-	# The warm terrain cache must see the same value -- if the runtime's active
-	# production controls stay at the default, that band renders unmodifiable.
+	# The warm terrain cache must see the same value.
 	var probe_rt: Node = RUNTIME.new()
 	probe_rt.call("compile_from_terrain", terrain)
-	var active_mtn: float = float((probe_rt.call("active_production_controls")
-		as Dictionary).get("mountain_strength", -1.0))
+	var active_coarse: float = float((probe_rt.call("active_production_controls")
+		as Dictionary).get("base_elevation_regional", -1.0))
 	probe_rt.free()
-	if not is_equal_approx(active_mtn, 1.73):
-		_fail("Cache-facing production controls ignored the slider: mountain_strength=%.3f" % active_mtn)
-		return
-	var desert: Button = _find_named(editor, "TerrainLook_desert") as Button
-	if desert == null:
-		_fail("Terrain look presets are missing")
-		return
-	desert.emit_signal("pressed")
-	await _frames(3)
-	var controls: Dictionary = NATIVE.extract_controls(graph)
-	if float(controls.get("dune_strength", 0.0)) < 1.8 or float(controls.get("glacial_strength", 1.0)) != 0.0:
-		_fail("Desert look did not update production controls")
+	if not is_equal_approx(active_coarse, 0.42):
+		_fail("Cache-facing production controls ignored the slider: base_elevation_regional=%.3f" % active_coarse)
 		return
 
 	# A biome profile is intentionally an ordinary, scoped displacement slot. This

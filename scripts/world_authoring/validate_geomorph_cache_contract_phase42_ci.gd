@@ -230,7 +230,7 @@ func _validate_compute_shader_contract() -> String:
 		"GC_MOUNTAIN_WAVELENGTH_M",
 		"GC_MOUNTAIN_AMPLITUDE_M",
 		"GC_GLACIAL_MIX",
-		"geomorph(dir,spacing,macro_h)*coast_guard*GC_DETAIL_STRENGTH",
+		"float final_h=macro_h;",
 	]:
 		if source.find(token) < 0:
 			return "compute shader is missing shared-contract token: %s" % token

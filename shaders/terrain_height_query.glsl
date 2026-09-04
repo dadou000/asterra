@@ -143,7 +143,8 @@ float geomorph(vec3 dir,float mh){
 }
 
 void main(){
-    vec3 d=normalize(params.direction_radius.xyz); float mh=macro_height(d);
-    float coast=mix(0.38,1.0,smoothstep(45.0,320.0,abs(mh)));
-    result.value=vec4(mh+geomorph(d,mh)*coast,0.0,0.0,1.0);
+    // Contact height mirrors the render: the coarse elevation map only. Authored
+    // biome displacement is added on the CPU side by the contact query wrapper.
+    vec3 d=normalize(params.direction_radius.xyz);
+    result.value=vec4(macro_height(d),0.0,0.0,1.0);
 }

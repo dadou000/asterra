@@ -230,8 +230,11 @@ float procedural_detail(vec3 d, int level, float macro_h) {
 }
 
 vec2 terrain_sample_for_level(vec3 d, int level) {
+	// Height = the coarse elevation map only (base-elevation EQ applied inside
+	// macro_height). Finer shape is composed per biome on top; the synthesised
+	// geomorph bands (procedural_detail) no longer contribute terrain height.
 	float macro_h = macro_height(d, level);
-	return vec2(macro_h, macro_h + procedural_detail(d, level, macro_h));
+	return vec2(macro_h, macro_h);
 }
 
 float fine_morph_weight(vec2 cell) {
