@@ -255,6 +255,10 @@ float ring_handoff_weight(vec2 cell, int level, float is_ring) {
 #define ASTERRA_BIOME_ID_AT(p) asterra_ctx_biome_id(p)
 #define ASTERRA_BIOME_MEMBERSHIP(p, b) asterra_ctx_biome_membership(p, b)
 #include "res://shaders/terrain_biome_profile.gdshaderinc"
+// Per-biome surface look (height/slope colour + texture bands). Uses
+// gpu_surface_pbr.gdshaderinc's triplanar materials (included above), so it
+// must come after that include.
+#include "res://shaders/terrain_biome_texture.gdshaderinc"
 #include "res://shaders/terrain_clipmap_cache_sampling.gdshaderinc"
 
 vec3 terrain_debug_color(int mode, vec4 landform, vec4 primary, vec4 secondary,
@@ -583,6 +587,17 @@ void fragment() {
 				scan_normal_w *= mix(1.0, 0.78, v_micro_layer);
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
 			}
+
+			// Per-biome authored surface look: height/slope colour + texture
+			// bands (see terrain_biome_texture.gdshaderinc). height_m mirrors
+			// terrain_author_material_post_cached.gdshaderinc's own
+			// length(v_planet) - u_planet_radius; slope_deg turns the
+			// shading normal's angle from local "up" into degrees for a more
+			// intuitive authoring control than a raw dot product.
+			float biome_tex_height_m = length(v_planet) - u_planet_radius;
+			float biome_tex_slope_deg = degrees(acos(clamp(dot(wn, up), -1.0, 1.0)));
+			asterra_biome_texture_apply(up, int(round(biome)), biome_tex_height_m,
+				biome_tex_slope_deg, dpos, dFdx(dpos), dFdy(dpos), wn, albedo, roughness);
 
 			float authored_metallic = 0.0;
 			float authored_ao = 1.0;

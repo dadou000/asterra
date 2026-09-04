@@ -157,6 +157,7 @@ const DISPLACEMENT_ONLY_NODES: Array[String] = [
 	"EROSION_CHANNELS",
 	"SEDIMENT_DEPOSIT",
 	"TERRACE_RELIEF",
+	"TEXTURE_BAND",
 	"OUTPUT_DISPLACEMENT",
 ]
 
@@ -250,6 +251,7 @@ const NODE_TYPES: Array[String] = [
 	"EROSION_CHANNELS",
 	"SEDIMENT_DEPOSIT",
 	"TERRACE_RELIEF",
+	"TEXTURE_BAND",
 	"TRIPLANAR",
 	"OUTPUT_DISPLACEMENT",
 	"OUTPUT_MATERIAL",
@@ -285,6 +287,13 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"EROSION_CHANNELS": CATEGORY_GEOMORPH,
 	"SEDIMENT_DEPOSIT": CATEGORY_GEOMORPH,
 	"TERRACE_RELIEF": CATEGORY_GEOMORPH,
+	# Biome Texture's one layer type (see terrain_biome_texture.gdshaderinc):
+	# lives in a DISPLACEMENT-domain slot purely for plumbing reuse (the same
+	# displacement_slots array/compile loop Biome Terrain uses), not because
+	# it is conceptually a height/displacement node -- see
+	# TerrainDisplacementRuntime.BIOME_TEXTURE_SLOT_PREFIX and
+	# world_authoring_editor_live_phase46.gd's _phase47_build_texture_editor.
+	"TEXTURE_BAND": CATEGORY_TEXTURES,
 	"TEXTURE_2D": CATEGORY_TEXTURES,
 	"TRIPLANAR": CATEGORY_TEXTURES,
 	"NORMAL_BLEND": CATEGORY_SURFACE_PBR,

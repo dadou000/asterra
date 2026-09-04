@@ -24,14 +24,7 @@ const PHASE47_BIOME_PROFILE_PREFIX := "simple-biome-terrain-"
 const PHASE47_ALL_RINGS_MASK: int = (1 << 15) - 1
 const PHASE47_GLOBAL_TAB: int = 0
 const PHASE47_BIOME_TAB: int = 1
-const PHASE47_EROSION_TAB: int = 2
-
-# Placement mode for the Erosion Bake region picker (see _place_current_hit /
-# _update_preview overrides below). 102 is clear of every other placement
-# mode constant used across the world_authoring_editor_live_* chain (checked:
-# the base PlacementMode enum runs 0-5, phase-local sculpt modes run 6-9, and
-# the other phase46_core / phase5 / phase6 "place/edit/move" modes use 100/101).
-const EROSION_BAKE_MODE: int = 102
+const PHASE47_TEXTURE_TAB: int = 2
 
 # Base-shape layer types a provisioned profile may start from (index-aligned so a
 # ported default's "base_type" string resolves to a valid stack layer).
@@ -63,6 +56,13 @@ const PHASE47_BIOME_LAYER_LABELS: PackedStringArray = [
 	"Water erosion (carves)", "Sediment deposit (fills)",
 ]
 const PHASE47_BIOME_MAX_LAYERS: int = 6
+# Per-biome cap on Biome Texture bands, purely a UI/authoring convenience
+# (mirrors PHASE47_BIOME_MAX_LAYERS) -- the real, shared-across-all-biomes
+# limit is TerrainDisplacementRuntime.BIOME_TEX_LAYER_MAX.
+const PHASE47_TEXTURE_MAX_LAYERS_PER_BIOME: int = 8
+const PHASE47_TEXTURE_CHOICE_LABELS: PackedStringArray = [
+	"Flat colour", "Ground", "Grass", "Mud", "Forest",
+]
 # Biome terrain no longer uses the displacement bytecode VM (it lowers to
 # uniforms), but the uniform arrays are bounded: keep the live layer total within
 # what terrain_biome_profile.gdshaderinc / TerrainDisplacementRuntime accept.
@@ -132,16 +132,6 @@ const PHASE47_PRESETS: Array[Dictionary] = [
 var _phase47_editor_tab: int = PHASE47_GLOBAL_TAB
 var _phase47_diag_probe_cache: Dictionary = {}
 
-# Erosion Bake region parameters (see _phase47_build_erosion_editor). Baking
-# writes into Deltas, the project's existing sparse terrain-edit lattice --
-# see erosion_region_bake.gd -- not into the terrain profile resource, so
-# these live as plain editor state rather than staged/undo-tracked fields.
-var _erosion_radius_m: float = 150.0
-var _erosion_resolution: int = 192
-var _erosion_droplets: int = 20000
-var _erosion_hardness: float = 0.6
-var _erosion_seed: int = 1337
-
 
 func _build_shell() -> void:
 	super._build_shell()
@@ -194,8 +184,8 @@ func _build_terrain_page() -> void:
 	_phase47_build_editor_tabs()
 	if _phase47_editor_tab == PHASE47_BIOME_TAB:
 		_phase47_build_biome_editor(terrain)
-	elif _phase47_editor_tab == PHASE47_EROSION_TAB:
-		_phase47_build_erosion_editor()
+	elif _phase47_editor_tab == PHASE47_TEXTURE_TAB:
+		_phase47_build_texture_editor(terrain)
 	else:
 		_phase47_build_controls(graph)
 		_phase47_build_biome_note()
@@ -209,7 +199,7 @@ func _phase47_build_editor_tabs() -> void:
 	for item: Dictionary in [
 		{"tab":PHASE47_GLOBAL_TAB, "label":"GLOBAL TERRAIN", "tip":"The shared terrain character for the whole planet."},
 		{"tab":PHASE47_BIOME_TAB, "label":"BIOME TERRAIN", "tip":"Add a terrain profile that only applies inside one biome."},
-		{"tab":PHASE47_EROSION_TAB, "label":"EROSION BAKE", "tip":"Simulate real hydraulic erosion over one region and bake the result into the terrain."},
+		{"tab":PHASE47_TEXTURE_TAB, "label":"BIOME TEXTURE", "tip":"Compose the surface look for one biome: height/slope colour bands, textures, and random variation."},
 	]:
 		var button := Button.new()
 		button.text = String(item["label"])
@@ -225,57 +215,394 @@ func _phase47_build_editor_tabs() -> void:
 		tabs.add_child(button)
 
 
-## Real (not faked) droplet-based hydraulic erosion, baked once over an
-## authored region -- see scripts/world_authoring/hydraulic_erosion_baker.gd
-## and erosion_region_bake.gd for why this has to be a bake rather than a
-## live per-vertex layer like the rest of Biome Terrain (it needs the whole
-## local height field as shared, mutable state while droplets simulate across
-## it, which a per-vertex shader fundamentally can't hold). A bake writes
-## directly into Deltas, the same sparse edit lattice a sculpt-tool stroke
-## uses, so it shows up in the render and in contact/AGL immediately and
-## persists with the rest of the world's edits -- there is no separate
-## Apply/staging step here the way the profile-resource controls above have.
-func _phase47_build_erosion_editor() -> void:
-	_section("Erosion bake")
-	_add_note("Simulates real water droplets flowing downhill across one region -- picking up sediment on steep ground, dropping it where the flow slows -- and bakes the result permanently into the terrain there. This is a real (if simplified) physical simulation, not the fast per-vertex Erosion Channels / Sediment Deposit look in Biome Terrain, which fakes the same look live because a real simulation needs the whole region's height field as shared state while it runs. A bake can take a few seconds for a modest region and longer for a large one; there is no live preview of the result, only of the region you are about to bake.")
+## Biome Texture: the surface-LOOK counterpart to Biome Terrain's height
+## layers -- see shaders/terrain_biome_texture.gdshaderinc's header for why it
+## is a separate, VM-free system rather than the pre-existing (bytecode-VM,
+## device-loss-risking) authored material graph. Purely visual: it has no
+## Apply/staging concern beyond the normal graph-edit history, and no
+## contact/physics implication at all.
+func _phase47_build_texture_editor(terrain: Resource) -> void:
+	_section("Biome texture")
+	_add_note("Compose this biome's surface look as a stack of height/slope colour bands -- the same idea as Biome Terrain's height layers, but for what the ground looks like instead of its shape. Each band can be a flat colour, or one of the game's existing tiled ground materials (Ground/Grass/Mud/Forest) optionally tinted by your colour, and can be given some randomness so its edge reads as scattered and natural instead of a surveyed line. This never touches contact or physics -- it is purely how the surface looks.")
 
-	var mode_row := HBoxContainer.new()
-	mode_row.add_theme_constant_override("separation", 8)
-	_workspace.add_child(mode_row)
-	var place_button := Button.new()
-	place_button.name = "ArmErosionBakeRegion"
-	place_button.text = "STOP PLACING" if _placement_mode == EROSION_BAKE_MODE else "PLACE BAKE REGION"
-	place_button.tooltip_text = "Aim anywhere on the live terrain -- a ring previews the bake region -- then click to bake there."
-	place_button.pressed.connect(func() -> void:
-		_set_placement_mode(PlacementMode.NONE if _placement_mode == EROSION_BAKE_MODE else EROSION_BAKE_MODE)
+	var pick_row := HBoxContainer.new()
+	pick_row.name = "BiomeTextureSelection"
+	pick_row.add_theme_constant_override("separation", 8)
+	_workspace.add_child(pick_row)
+	var biome_picker := OptionButton.new()
+	biome_picker.name = "BiomeTexturePicker"
+	biome_picker.custom_minimum_size.x = 250.0
+	for biome_id: int in BIOME_NAMES.size():
+		biome_picker.add_item(BIOME_NAMES[biome_id])
+		biome_picker.set_item_metadata(biome_id, biome_id)
+	biome_picker.select(clampi(_phase28_biome_id, 0, BIOME_NAMES.size() - 1))
+	biome_picker.item_selected.connect(func(index: int) -> void:
+		_phase28_biome_id = int(biome_picker.get_item_metadata(index))
 		_refresh_current_category()
 	)
-	mode_row.add_child(place_button)
-	var info := Label.new()
-	info.text = "the ring follows your cursor once armed -- one click bakes at the aimed point"
-	info.modulate = Color(0.64, 0.76, 0.86)
-	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mode_row.add_child(info)
+	pick_row.add_child(biome_picker)
+	var clear_all := Button.new()
+	clear_all.name = "ClearAllBiomeTexture"
+	clear_all.text = "Clear every biome"
+	clear_all.tooltip_text = "Empty every biome's texture stack so you can compose from scratch."
+	clear_all.pressed.connect(_phase47_clear_all_biome_texture.bind(terrain))
+	pick_row.add_child(clear_all)
 
-	_add_number_field("Region radius", _erosion_radius_m, 10.0, 2000.0, 1.0, " m", func(value: float) -> void:
-		_erosion_radius_m = clampf(value, 10.0, 2000.0)
-		_update_preview()
+	var biome_id: int = clampi(_phase28_biome_id, 0, BIOME_NAMES.size() - 1)
+	var slot: Resource = _phase47_ensure_biome_texture_slot(terrain, biome_id)
+	if slot == null:
+		_add_note("This body's terrain profile could not be provisioned.")
+		return
+	_phase47_build_biome_texture_controls(terrain, slot, biome_id)
+
+
+func _phase47_biome_texture_slot(terrain: Resource, biome_id: int) -> Resource:
+	if terrain == null:
+		return null
+	var expected_id := "%s%d" % [TerrainDisplacementRuntime.BIOME_TEXTURE_SLOT_PREFIX, biome_id]
+	for value: Variant in terrain.get(&"displacement_slots") as Array:
+		var slot: Resource = value as Resource
+		if slot != null and String(slot.get(&"slot_id")) == expected_id:
+			return slot
+	return null
+
+
+func _phase47_ensure_biome_texture_slot(terrain: Resource, biome_id: int) -> Resource:
+	var slot: Resource = _phase47_biome_texture_slot(terrain, biome_id)
+	if slot != null:
+		if not bool(slot.get(&"enabled")):
+			slot.set(&"enabled", true)
+			terrain.call("ensure_valid")
+			_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+		return slot
+	if terrain == null:
+		return null
+	slot = terrain.call("create_shader_slot", SHADER_SLOT_MODEL.Domain.DISPLACEMENT,
+		"%s Texture" % BIOME_NAMES[biome_id]) as Resource
+	if slot == null:
+		return null
+	slot.set(&"slot_id", "%s%d" % [TerrainDisplacementRuntime.BIOME_TEXTURE_SLOT_PREFIX, biome_id])
+	slot.set(&"display_name", "%s Texture" % BIOME_NAMES[biome_id])
+	slot.set(&"enabled", true)
+	slot.set(&"clipmap_level_mask", PHASE47_ALL_RINGS_MASK)
+	slot.set(&"biome_mask_mode", SHADER_SLOT_MODEL.BiomeMaskMode.ONLY)
+	slot.set(&"biome_ids", PackedInt32Array([biome_id]))
+	slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
+	slot.set(&"strength", 1.0)
+	_phase47_rebuild_biome_texture(slot.get(&"graph") as Resource, [])
+	terrain.call("ensure_valid")
+	_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+	return slot
+
+
+func _phase47_default_texture_layer(seed: int = -1) -> Dictionary:
+	return {
+		"texture_choice": 0, "color": Color(0.4, 0.35, 0.28),
+		"height_min": -1000000.0, "height_max": 1000000.0,
+		"slope_min": 0.0, "slope_max": 180.0,
+		"softness": 20.0, "opacity": 1.0,
+		"noise_scale": 0.0, "noise_strength": 0.0, "tint_strength": 0.0,
+		"seed": seed if seed >= 0 else (randi() % 900000),
+	}
+
+
+## Reads this graph's TEXTURE_BAND node chain into a plain layer-dict array,
+## mirroring _phase47_biome_stack's shape/traversal for Biome Terrain.
+func _phase47_texture_stack(graph: Resource) -> Array:
+	var layers: Array = []
+	if graph == null:
+		return layers
+	var nodes_value: Variant = graph.get(&"nodes")
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
+		return layers
+	var by_id: Dictionary = {}
+	var output_id: String = ""
+	for value: Variant in nodes_value as Array:
+		if not (value is Dictionary):
+			continue
+		var node: Dictionary = value as Dictionary
+		by_id[String(node.get("id", ""))] = node
+		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String(node.get("id", ""))
+	var input_of: Dictionary = {}
+	for link_value: Variant in links_value as Array:
+		if link_value is Dictionary and int((link_value as Dictionary).get("to_port", 0)) == 0:
+			input_of[String((link_value as Dictionary).get("to", ""))] = \
+				String((link_value as Dictionary).get("from", ""))
+	var ordered: Array = []
+	var cursor: String = String(input_of.get(output_id, ""))
+	var guard: int = 0
+	while not cursor.is_empty() and by_id.has(cursor) and guard < 64:
+		guard += 1
+		ordered.push_front(by_id[cursor])
+		cursor = String(input_of.get(cursor, ""))
+	for node_value: Variant in ordered:
+		var node: Dictionary = node_value as Dictionary
+		if String(node.get("type", "")) != "TEXTURE_BAND":
+			continue
+		var p: Dictionary = node.get("parameters", {}) as Dictionary
+		var color := Color(0.4, 0.35, 0.28)
+		var color_value: Variant = p.get("color", null)
+		if color_value is Color:
+			color = color_value
+		elif color_value is Array and (color_value as Array).size() >= 3:
+			var ca: Array = color_value
+			color = Color(float(ca[0]), float(ca[1]), float(ca[2]))
+		layers.append({
+			"texture_choice": clampi(int(p.get("texture_choice", 0)), 0, 4),
+			"color": color,
+			"height_min": float(p.get("height_min", -1000000.0)),
+			"height_max": float(p.get("height_max", 1000000.0)),
+			"slope_min": clampf(float(p.get("slope_min", 0.0)), 0.0, 180.0),
+			"slope_max": clampf(float(p.get("slope_max", 180.0)), 0.0, 180.0),
+			"softness": maxf(float(p.get("softness", 20.0)), 0.0),
+			"opacity": clampf(float(p.get("opacity", 1.0)), 0.0, 1.0),
+			"noise_scale": maxf(float(p.get("noise_scale", 0.0)), 0.0),
+			"noise_strength": clampf(float(p.get("noise_strength", 0.0)), 0.0, 1.0),
+			"tint_strength": clampf(float(p.get("tint_strength", 0.0)), 0.0, 1.0),
+			"seed": int(p.get("seed", 1337)),
+		})
+	return layers
+
+
+## Writes a layer-dict array back as a fresh TEXTURE_BAND chain, mirroring
+## _phase47_rebuild_biome_profile.
+func _phase47_rebuild_biome_texture(graph: Resource, layers: Array) -> void:
+	if graph == null:
+		return
+	graph.call("create_default_graph", SHADER_SLOT_MODEL.Domain.DISPLACEMENT)
+	var output_id: String = ""
+	for value: Variant in graph.get(&"nodes") as Array:
+		if String((value as Dictionary).get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String((value as Dictionary).get("id", ""))
+			break
+	if output_id.is_empty():
+		return
+	var cursor: String = String(graph.call("add_node", "CONSTANT_FLOAT", Vector2(70.0, 180.0),
+		{"value": 0.0}))
+	var column: float = 360.0
+	for layer_value: Variant in layers:
+		var layer: Dictionary = layer_value as Dictionary
+		var color: Color = layer.get("color", Color(0.4, 0.35, 0.28)) as Color
+		var node_id: String = String(graph.call("add_node", "TEXTURE_BAND", Vector2(column, 180.0), {
+			"texture_choice": clampi(int(layer.get("texture_choice", 0)), 0, 4),
+			"color": [color.r, color.g, color.b],
+			"height_min": float(layer.get("height_min", -1000000.0)),
+			"height_max": float(layer.get("height_max", 1000000.0)),
+			"slope_min": clampf(float(layer.get("slope_min", 0.0)), 0.0, 180.0),
+			"slope_max": clampf(float(layer.get("slope_max", 180.0)), 0.0, 180.0),
+			"softness": maxf(float(layer.get("softness", 20.0)), 0.0),
+			"opacity": clampf(float(layer.get("opacity", 1.0)), 0.0, 1.0),
+			"noise_scale": maxf(float(layer.get("noise_scale", 0.0)), 0.0),
+			"noise_strength": clampf(float(layer.get("noise_strength", 0.0)), 0.0, 1.0),
+			"tint_strength": clampf(float(layer.get("tint_strength", 0.0)), 0.0, 1.0),
+			"seed": int(layer.get("seed", 1337)),
+		}))
+		graph.call("connect_nodes", cursor, 0, node_id, 0)
+		cursor = node_id
+		column += 280.0
+	graph.call("connect_nodes", cursor, 0, output_id, 0)
+
+
+func _phase47_stage_biome_texture(graph: Resource, layers: Array, action: String) -> void:
+	_session.stage_action(action, func() -> void:
+		_phase47_rebuild_biome_texture(graph, layers)
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+	_refresh_current_category()
+
+
+func _phase47_clear_all_biome_texture(terrain: Resource) -> void:
+	_session.stage_action("Clear all biome textures", func() -> void:
+		for value: Variant in terrain.get(&"displacement_slots") as Array:
+			var slot: Resource = value as Resource
+			if slot == null or not String(slot.get(&"slot_id")).begins_with(
+					TerrainDisplacementRuntime.BIOME_TEXTURE_SLOT_PREFIX):
+				continue
+			_phase47_rebuild_biome_texture(slot.get(&"graph") as Resource, [])
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+	_refresh_current_category()
+
+
+func _phase47_move_texture_layer(graph: Resource, layers: Array, index: int, direction: int) -> void:
+	var target: int = index + direction
+	if target < 0 or target >= layers.size():
+		return
+	var moved: Variant = layers[index]
+	layers.remove_at(index)
+	layers.insert(target, moved)
+	_phase47_stage_biome_texture(graph, layers, "Reorder biome texture layers")
+
+
+func _phase47_build_biome_texture_controls(terrain: Resource, slot: Resource, biome_id: int) -> void:
+	var graph: Resource = slot.get(&"graph") as Resource
+	var layers: Array = _phase47_texture_stack(graph)
+	var panel := PanelContainer.new()
+	panel.name = "BiomeTextureProfile"
+	_workspace.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "%s texture — band stack" % BIOME_NAMES[biome_id]
+	title.add_theme_font_size_override("font_size", 18)
+	box.add_child(title)
+
+	var layers_title := Label.new()
+	layers_title.text = "Texture bands (top to bottom = painted in order, later bands on top)"
+	layers_title.add_theme_font_size_override("font_size", 16)
+	box.add_child(layers_title)
+	if layers.is_empty():
+		var empty := Label.new()
+		empty.text = "Empty — this biome shows only its normal procedural material. Add a band to start composing a custom look."
+		empty.modulate = Color(0.58, 0.68, 0.76)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(empty)
+	for index: int in layers.size():
+		_phase47_build_texture_layer_card(box, graph, layers, index)
+
+	if layers.size() < PHASE47_TEXTURE_MAX_LAYERS_PER_BIOME:
+		var add := Button.new()
+		add.name = "AddBiomeTextureLayer"
+		add.text = "+ Add texture band"
+		add.pressed.connect(func() -> void:
+			layers.append(_phase47_default_texture_layer())
+			_phase47_stage_biome_texture(graph, layers, "Add biome texture band")
+		)
+		box.add_child(add)
+
+	var budget := Label.new()
+	budget.text = "Texture bands in use across every biome you've composed: %d / %d, sharing one budget the same way Biome Terrain's height layers do." \
+		% [_phase47_total_biome_texture_count(terrain), TerrainDisplacementRuntime.BIOME_TEX_LAYER_MAX]
+	budget.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	budget.modulate = Color(0.58, 0.68, 0.76)
+	box.add_child(budget)
+
+
+func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
+		layers: Array, index: int) -> void:
+	var layer: Dictionary = layers[index] as Dictionary
+	var card := PanelContainer.new()
+	card.name = "BiomeTextureLayer_%d" % index
+	parent.add_child(card)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	card.add_child(box)
+
+	var header := HBoxContainer.new()
+	box.add_child(header)
+	var name_label := Label.new()
+	name_label.text = "Band %d" % (index + 1)
+	name_label.add_theme_font_size_override("font_size", 15)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(name_label)
+	var up := Button.new()
+	up.text = "↑"
+	up.disabled = index == 0
+	up.pressed.connect(_phase47_move_texture_layer.bind(graph, layers, index, -1))
+	header.add_child(up)
+	var down := Button.new()
+	down.text = "↓"
+	down.disabled = index >= layers.size() - 1
+	down.pressed.connect(_phase47_move_texture_layer.bind(graph, layers, index, 1))
+	header.add_child(down)
+	var remove := Button.new()
+	remove.name = "RemoveBiomeTextureLayer_%d" % index
+	remove.text = "Remove"
+	remove.pressed.connect(func() -> void:
+		layers.remove_at(index)
+		_phase47_stage_biome_texture(graph, layers, "Remove biome texture band")
 	)
-	_add_number_field("Simulation resolution", float(_erosion_resolution), 32.0, 512.0, 1.0, " cells", func(value: float) -> void:
-		_erosion_resolution = clampi(int(round(value)), 32, 512)
+	header.add_child(remove)
+
+	var appearance_row := HBoxContainer.new()
+	appearance_row.add_theme_constant_override("separation", 10)
+	box.add_child(appearance_row)
+	var appearance_label := Label.new()
+	appearance_label.text = "Appearance"
+	appearance_label.custom_minimum_size.x = 210.0
+	appearance_row.add_child(appearance_label)
+	var choice_picker := OptionButton.new()
+	choice_picker.name = "BiomeTextureLayerChoice_%d" % index
+	choice_picker.custom_minimum_size.x = 150.0
+	for option: int in PHASE47_TEXTURE_CHOICE_LABELS.size():
+		choice_picker.add_item(PHASE47_TEXTURE_CHOICE_LABELS[option])
+	choice_picker.select(clampi(int(layer.get("texture_choice", 0)), 0, PHASE47_TEXTURE_CHOICE_LABELS.size() - 1))
+	choice_picker.item_selected.connect(func(picked: int) -> void:
+		layer["texture_choice"] = picked
+		_phase47_stage_biome_texture(graph, layers, "Change biome texture band appearance")
 	)
-	_add_number_field("Droplets", float(_erosion_droplets), 500.0, 300000.0, 500.0, "", func(value: float) -> void:
-		_erosion_droplets = clampi(int(round(value)), 500, 300000)
+	appearance_row.add_child(choice_picker)
+	var color_button := ColorPickerButton.new()
+	color_button.name = "BiomeTextureLayerColor_%d" % index
+	color_button.custom_minimum_size = Vector2(80.0, 32.0)
+	color_button.color = layer.get("color", Color(0.4, 0.35, 0.28)) as Color
+	color_button.tooltip_text = "Used directly for a flat colour band, or to tint the chosen texture (see the tint slider below)."
+	color_button.color_changed.connect(func(value: Color) -> void:
+		layer["color"] = value
+		_phase47_stage_biome_texture(graph, layers, "Change biome texture band colour")
 	)
-	_add_number_field("Edge softness", _erosion_hardness, 0.0, 0.95, 0.01, "", func(value: float) -> void:
-		_erosion_hardness = clampf(value, 0.0, 0.95)
-		_update_preview()
+	appearance_row.add_child(color_button)
+	var appearance_help := Label.new()
+	appearance_help.text = "A flat colour, or one of the game's tiled ground materials (optionally tinted by the colour)."
+	appearance_help.modulate = Color(0.58, 0.68, 0.76)
+	appearance_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	appearance_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	appearance_row.add_child(appearance_help)
+	if int(layer.get("texture_choice", 0)) != 0:
+		_phase47_add_texture_layer_number(box, graph, layers, layer, "Colour tint strength", "tint_strength",
+			0.0, 1.0, 0.01, "0 = pure texture, 1 = the colour above replaces it entirely.")
+
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: from", "height_min",
+		-1000000.0, 1000000.0, 1.0, "This band starts fading in above this elevation (metres above sea level). Very low/high values effectively disable this edge.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: to", "height_max",
+		-1000000.0, 1000000.0, 1.0, "This band fades out above this elevation.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Slope range: from", "slope_min",
+		0.0, 180.0, 1.0, "Degrees from flat (0°) to vertical (90°+). Combine with height to make, for example, rock only appear on steep ground.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Slope range: to", "slope_max",
+		0.0, 180.0, 1.0, "Upper edge of the slope range.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Edge softness", "softness",
+		0.0, 2000.0, 1.0, "How gradually the band fades in/out at its height and slope edges, in metres/degrees. Higher = softer, more gradual transitions.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Opacity", "opacity",
+		0.0, 1.0, 0.01, "Overall strength of this band where it is active.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Random spread", "noise_strength",
+		0.0, 1.0, 0.01, "0 = a clean band edge. Higher breaks it up into scattered, natural-looking patches instead of a hard line -- e.g. rock outcrops dappled across a grassy slope rather than a surveyed boundary.")
+	if float(layer.get("noise_strength", 0.0)) > 0.0:
+		_phase47_add_texture_layer_number(box, graph, layers, layer, "Spread patch size", "noise_scale",
+			1.0, 200000.0, 1.0, "Higher makes the random patches smaller and more frequent.")
+		_phase47_add_texture_layer_number(box, graph, layers, layer, "Spread seed", "seed",
+			0.0, 9999999.0, 1.0, "Changes the random pattern without moving the band's height/slope edges.")
+
+
+func _phase47_add_texture_layer_number(parent: VBoxContainer, graph: Resource, layers: Array,
+		layer: Dictionary, label_text: String, key: String, minimum: float, maximum: float,
+		step: float, help_text: String) -> void:
+	var row := HBoxContainer.new()
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size.x = 210.0
+	label.tooltip_text = help_text
+	row.add_child(label)
+	var spin := SpinBox.new()
+	spin.name = "BiomeTextureLayerField_%s" % key
+	spin.min_value = minimum
+	spin.max_value = maximum
+	spin.step = step
+	spin.allow_greater = true
+	spin.allow_lesser = true
+	spin.value = float(layer.get(key, 0.0))
+	spin.value_changed.connect(func(value: float) -> void:
+		layer[key] = roundi(value) if step >= 1.0 else value
+		_phase47_stage_biome_texture(graph, layers, "Tune biome texture band: %s" % key)
 	)
-	_add_number_field("Random seed", float(_erosion_seed), 0.0, 999999.0, 1.0, "", func(value: float) -> void:
-		_erosion_seed = int(round(value))
-	)
-	_add_note("Region radius and simulation resolution together decide how many native terrain-edit points get written (roughly (2 * radius / native spacing)^2) -- a large radius with a fine resolution can take a while and will block the editor while it bakes. Keep the radius modest (tens to a few hundred metres) for a quick iteration; droplet count controls how much the terrain actually changes (more droplets = more erosion/deposit) and simulation resolution controls how much fine detail the eroded shape can show, independent of how far it reaches.")
+	row.add_child(spin)
+	var help := Label.new()
+	help.text = help_text
+	help.modulate = Color(0.58, 0.68, 0.76)
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(help)
 
 
 func _phase47_build_all_rings_notice() -> void:
@@ -1209,6 +1536,19 @@ func _phase47_total_biome_layer_count(terrain: Resource) -> int:
 	return count
 
 
+## Total Biome Texture bands across every biome slot with real content.
+func _phase47_total_biome_texture_count(terrain: Resource) -> int:
+	var count: int = 0
+	for value: Variant in terrain.get(&"displacement_slots") as Array:
+		var slot: Resource = value as Resource
+		if slot == null:
+			continue
+		if not String(slot.get(&"slot_id")).begins_with(TerrainDisplacementRuntime.BIOME_TEXTURE_SLOT_PREFIX):
+			continue
+		count += _phase47_texture_stack(slot.get(&"graph") as Resource).size()
+	return count
+
+
 func _phase47_stage_biome_profile(graph: Resource, stack: Dictionary, action: String) -> void:
 	_session.stage_action(action, func() -> void:
 		_phase47_rebuild_biome_profile(graph, stack)
@@ -1374,65 +1714,3 @@ func _phase46_handle_directions(config: Dictionary) -> Dictionary:
 	return out
 
 
-# ------------------------------------------------------------ erosion bake ---
-# Placement-mode overrides for EROSION_BAKE_MODE. Single-click only (never
-# added to _continuous_drag_mode): a bake is one expensive, synchronous
-# action, not something to run on every mouse-move the way a sculpt drag
-# does. The base _process (world_authoring_editor_live.gd) already samples
-# the cursor and calls _update_preview() every frame while any placement mode
-# is armed, so the region ring below follows the mouse for free.
-
-func _placement_status_text() -> String:
-	if _placement_mode == EROSION_BAKE_MODE:
-		return "EROSION BAKE ARMED — aim at terrain, left click to bake • RMB/Esc stop • TAB navigate"
-	return super._placement_status_text()
-
-
-func _place_current_hit(continuous: bool) -> void:
-	if _placement_mode != EROSION_BAKE_MODE:
-		super._place_current_hit(continuous)
-		return
-	if continuous:
-		return
-	if _last_hit.is_empty():
-		_set_status("Viewport pick did not intersect terrain.")
-		return
-	var direction: Vector3 = Vector3(_last_hit.get("dir", Vector3.ZERO))
-	if direction.length_squared() < 0.99:
-		return
-	_set_status("Baking erosion over a %.0f m region — this blocks the editor for a few seconds…"
-		% _erosion_radius_m)
-	var result: Dictionary = ErosionRegionBake.bake(direction, _erosion_radius_m,
-		_erosion_resolution, _erosion_hardness,
-		{"droplet_count": _erosion_droplets, "seed": _erosion_seed})
-	if not bool(result.get("ok", false)):
-		_set_status("Erosion bake failed: %s" % String(result.get("error", "unknown error")))
-	else:
-		_set_status("Erosion bake done: %d terrain points touched, %.2f m to %.2f m change (mean %.3f m)."
-			% [int(result.get("native_points_written", 0)),
-				float(result.get("sim_min_delta_m", 0.0)),
-				float(result.get("sim_max_delta_m", 0.0)),
-				float(result.get("sim_mean_delta_m", 0.0))])
-	# One bake per arm, matching PHASE46_PLACE_FEATURE's placement flow —
-	# re-arm to bake another region rather than accidentally re-baking the
-	# same spot (with the terrain it just changed as the new starting point)
-	# on a stray click.
-	_set_placement_mode(PlacementMode.NONE)
-	_refresh_current_category()
-
-
-func _update_preview() -> void:
-	if _placement_mode != EROSION_BAKE_MODE:
-		super._update_preview()
-		return
-	if _preview_mesh == null:
-		return
-	_preview_mesh.clear_surfaces()
-	if _navigation_active or _last_hit.is_empty():
-		return
-	var direction: Vector3 = Vector3(_last_hit.get("dir", Vector3.ZERO))
-	var height: float = float(_last_hit.get("height", 0.0))
-	_draw_surface_ring(direction, height, _erosion_radius_m, Color(0.36, 0.68, 0.92, 1.0))
-	if _erosion_hardness > 0.02:
-		_draw_surface_ring(direction, height,
-			maxf(0.1, _erosion_radius_m * _erosion_hardness), Color(0.62, 0.80, 0.94, 0.85))

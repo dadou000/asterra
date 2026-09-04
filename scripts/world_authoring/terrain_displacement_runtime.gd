@@ -27,6 +27,14 @@ const BIOME_COUNT: int = 18
 const BIOME_PROFILE_SLOT_PREFIX := "simple-biome-terrain-"
 # layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion, 4 sediment.
 const BIOME_LAYER_MAX: int = 16
+
+# Biome Texture (surface look) mirrors Biome Terrain's own VM-avoidance --
+# see terrain_biome_texture.gdshaderinc's header. One node type ("TEXTURE_BAND")
+# covers every layer; its parameters (height/slope range, colour, texture
+# choice, noise) differentiate them, since unlike height layers there is no
+# separate "shape" per layer type.
+const BIOME_TEXTURE_SLOT_PREFIX := "simple-biome-texture-"
+const BIOME_TEX_LAYER_MAX: int = 16
 # Mirrors terrain_biome_profile.gdshaderinc's BP_MAX_FREQUENCY. The CPU's
 # double precision never needs this for its own accuracy, but
 # _biome_erosion_channels/_biome_sediment_deposit derive secondary
@@ -92,6 +100,11 @@ var _biome_preview: Node
 var _biome_profiles: Array = []
 # Per-biome boundary softness in metres (index = biome id, 0 = hard edge).
 var _biome_blend_m: PackedFloat32Array = _zeroed_blend()
+# Parsed per-biome surface-look (texture) layers, newest compile -- see
+# terrain_biome_texture.gdshaderinc's packing comment for the field meanings.
+# Purely visual: no CPU-side evaluation function, since surface look doesn't
+# feed contact/AGL the way _biome_profiles' height does.
+var _biome_textures: Array = []
 
 
 static func _zeroed_blend() -> PackedFloat32Array:
@@ -115,6 +128,7 @@ func clear() -> void:
 	_compile_generation += 1
 	_biome_profiles = []
 	_biome_blend_m = _zeroed_blend()
+	_biome_textures = []
 
 
 func profile_fingerprint(terrain: Resource) -> String:
@@ -154,6 +168,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	_compile_generation += 1
 	_biome_profiles = []
 	_biome_blend_m = _zeroed_blend()
+	_biome_textures = []
 	if terrain == null:
 		_publish_texture()
 		return stats()
@@ -166,6 +181,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	var accumulator: int = -1
 	var slot_index: int = 0
 	var biome_layers_dropped: int = 0
+	var biome_texture_layers_dropped: int = 0
 	for slot_value: Variant in slots_value as Array:
 		var slot: Resource = slot_value as Resource
 		if slot == null or int(slot.get(&"domain")) != 0:
@@ -192,6 +208,17 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 						_biome_profiles.append(layer_value)
 					else:
 						biome_layers_dropped += 1
+			slot_index += 1
+			continue
+		if String(slot.get(&"slot_id")).begins_with(BIOME_TEXTURE_SLOT_PREFIX):
+			# Biome Texture: same reasoning as Biome Terrain just above --
+			# never the VM, `enabled` not checked for the same reason.
+			var parsed_tex: Array = _parse_biome_texture_slot(slot)
+			for layer_value: Variant in parsed_tex:
+				if _biome_textures.size() < BIOME_TEX_LAYER_MAX:
+					_biome_textures.append(layer_value)
+				else:
+					biome_texture_layers_dropped += 1
 			slot_index += 1
 			continue
 		if not bool(slot.get(&"enabled")):
@@ -259,6 +286,10 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 		_warnings.append(
 			"%d biome terrain layer(s) did not fit in the %d-layer budget shared across all biomes and are not rendering. Remove a layer from a less-important biome to fit within it."
 			% [biome_layers_dropped, BIOME_LAYER_MAX])
+	if biome_texture_layers_dropped > 0:
+		_warnings.append(
+			"%d biome texture layer(s) did not fit in the %d-layer budget shared across all biomes and are not rendering. Remove a layer from a less-important biome to fit within it."
+			% [biome_texture_layers_dropped, BIOME_TEX_LAYER_MAX])
 	_publish_texture()
 	return stats()
 
@@ -662,6 +693,77 @@ func _parse_biome_layer_slot(slot: Resource) -> Dictionary:
 	return {"biome_id": biome_id, "blend_m": blend_km * 1000.0, "layers": layers}
 
 
+## Mirrors _parse_biome_layer_slot's OUTPUT_DISPLACEMENT chain-walk, but every
+## Biome Texture layer is the same node type ("TEXTURE_BAND") -- its
+## parameters (height/slope range, colour, texture choice, noise), not a
+## distinct node type, are what differentiate one layer from another, since
+## there is no separate "shape" the way EROSION_CHANNELS vs RIDGED_MOUNTAINS
+## is for height. Returns a flat Array of layer dicts (no wrapping
+## {biome_id, layers} dict -- callers just extend _biome_textures with it).
+func _parse_biome_texture_slot(slot: Resource) -> Array:
+	var graph: Resource = slot.get(&"graph") as Resource
+	if graph == null:
+		return []
+	var nodes_value: Variant = graph.get(&"nodes")
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
+		return []
+	var biome_id: int = 0
+	var ids_value: Variant = slot.get(&"biome_ids")
+	if ids_value is PackedInt32Array and (ids_value as PackedInt32Array).size() > 0:
+		biome_id = clampi(int((ids_value as PackedInt32Array)[0]), 0, BIOME_COUNT - 1)
+	var by_id: Dictionary = {}
+	var output_id: String = ""
+	for value: Variant in nodes_value as Array:
+		if not (value is Dictionary):
+			continue
+		var node: Dictionary = value as Dictionary
+		by_id[String(node.get("id", ""))] = node
+		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String(node.get("id", ""))
+	var input_of: Dictionary = {}
+	for link_value: Variant in links_value as Array:
+		if link_value is Dictionary and int((link_value as Dictionary).get("to_port", 0)) == 0:
+			input_of[String((link_value as Dictionary).get("to", ""))] = \
+				String((link_value as Dictionary).get("from", ""))
+	var ordered: Array = []
+	var cursor: String = String(input_of.get(output_id, ""))
+	var guard: int = 0
+	while not cursor.is_empty() and by_id.has(cursor) and guard < 64:
+		guard += 1
+		ordered.push_front(by_id[cursor])
+		cursor = String(input_of.get(cursor, ""))
+	var layers: Array = []
+	for node_value: Variant in ordered:
+		var node: Dictionary = node_value as Dictionary
+		if String(node.get("type", "")) != "TEXTURE_BAND":
+			continue
+		var p: Dictionary = node.get("parameters", {}) as Dictionary
+		var color := Color(0.5, 0.5, 0.5)
+		var color_value: Variant = p.get("color", null)
+		if color_value is Color:
+			color = color_value
+		elif color_value is Array and (color_value as Array).size() >= 3:
+			var ca: Array = color_value
+			color = Color(float(ca[0]), float(ca[1]), float(ca[2]))
+		layers.append({
+			"biome_id": biome_id,
+			"texture_choice": clampi(int(p.get("texture_choice", 0)), 0, 4),
+			"height_min": float(p.get("height_min", -1000000.0)),
+			"height_max": float(p.get("height_max", 1000000.0)),
+			"slope_min": clampf(float(p.get("slope_min", 0.0)), 0.0, 180.0),
+			"slope_max": clampf(float(p.get("slope_max", 180.0)), 0.0, 180.0),
+			"softness": maxf(float(p.get("softness", 5.0)), 0.0),
+			"seed": int(p.get("seed", 1337)),
+			"color": color,
+			"opacity": clampf(float(p.get("opacity", 1.0)), 0.0, 1.0),
+			"noise_scale": maxf(float(p.get("noise_scale", 0.0)), 0.0),
+			"noise_strength": clampf(float(p.get("noise_strength", 0.0)), 0.0, 1.0),
+			"tint_strength": clampf(float(p.get("tint_strength", 0.0)), 0.0, 1.0),
+		})
+	return layers
+
+
 func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
 		parameters: Dictionary) -> Dictionary:
 	if not BIOME_LAYER_TYPE_BY_NODE.has(node_type):
@@ -930,6 +1032,34 @@ func biome_profile_uniforms() -> Dictionary:
 
 func biome_profile_count() -> int:
 	return mini(_biome_profiles.size(), BIOME_LAYER_MAX)
+
+
+# {count, a, b, c, d} packed for shaders/terrain_biome_texture.gdshaderinc.
+func biome_texture_uniforms() -> Dictionary:
+	var count: int = mini(_biome_textures.size(), BIOME_TEX_LAYER_MAX)
+	var a := PackedVector4Array()
+	var b := PackedVector4Array()
+	var c := PackedVector4Array()
+	var d := PackedVector4Array()
+	a.resize(BIOME_TEX_LAYER_MAX)
+	b.resize(BIOME_TEX_LAYER_MAX)
+	c.resize(BIOME_TEX_LAYER_MAX)
+	d.resize(BIOME_TEX_LAYER_MAX)
+	for i: int in count:
+		var entry: Dictionary = _biome_textures[i] as Dictionary
+		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("texture_choice", 0))),
+			float(entry.get("height_min", -1000000.0)), float(entry.get("height_max", 1000000.0)))
+		b[i] = Vector4(float(entry.get("slope_min", 0.0)), float(entry.get("slope_max", 180.0)),
+			float(entry.get("softness", 5.0)), float(int(entry.get("seed", 1337))))
+		var col: Color = entry.get("color", Color(0.5, 0.5, 0.5)) as Color
+		c[i] = Vector4(col.r, col.g, col.b, float(entry.get("opacity", 1.0)))
+		d[i] = Vector4(float(entry.get("noise_scale", 0.0)), float(entry.get("noise_strength", 0.0)),
+			float(entry.get("tint_strength", 0.0)), 0.0)
+	return {"count": count, "a": a, "b": b, "c": c, "d": d}
+
+
+func biome_texture_count() -> int:
+	return mini(_biome_textures.size(), BIOME_TEX_LAYER_MAX)
 
 
 func _sample_authored_biome(direction: Vector3) -> int:

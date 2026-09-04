@@ -131,6 +131,7 @@ func _sync_authoring_displacement(force: bool) -> void:
 			if _material != null:
 				_material.set_shader_parameter("u_author_disp_ready", 0.0)
 			_sync_biome_profile_uniforms(true)
+			_sync_biome_texture_uniforms(true)
 		return
 	var fingerprint: String = String(
 		_displacement_runtime.call("profile_fingerprint", terrain))
@@ -138,6 +139,7 @@ func _sync_authoring_displacement(force: bool) -> void:
 		_displacement_fingerprint = fingerprint
 		_displacement_runtime.call("compile_from_terrain", terrain)
 		_sync_biome_profile_uniforms(true)
+		_sync_biome_texture_uniforms(true)
 	if _material != null and _displacement_runtime.has_method("bind_material"):
 		_displacement_runtime.call("bind_material", _material)
 
@@ -160,6 +162,24 @@ func _sync_biome_profile_uniforms(force: bool) -> void:
 	if count > 0:
 		_material.set_shader_parameter("u_biome_layer_a", packed.get("a"))
 		_material.set_shader_parameter("u_biome_layer_b", packed.get("b"))
+
+
+func _sync_biome_texture_uniforms(_force: bool) -> void:
+	# Per-biome surface look (Biome Texture sub-tab) -- same reasoning as
+	# _sync_biome_profile_uniforms above, consumed by
+	# shaders/terrain_biome_texture.gdshaderinc.
+	if _material == null or _displacement_runtime == null \
+			or not is_instance_valid(_displacement_runtime) \
+			or not _displacement_runtime.has_method("biome_texture_uniforms"):
+		return
+	var tex_packed: Dictionary = _displacement_runtime.call("biome_texture_uniforms")
+	var tex_count: int = int(tex_packed.get("count", 0))
+	_material.set_shader_parameter("u_biome_tex_layer_count", tex_count)
+	if tex_count > 0:
+		_material.set_shader_parameter("u_biome_tex_layer_a", tex_packed.get("a"))
+		_material.set_shader_parameter("u_biome_tex_layer_b", tex_packed.get("b"))
+		_material.set_shader_parameter("u_biome_tex_layer_c", tex_packed.get("c"))
+		_material.set_shader_parameter("u_biome_tex_layer_d", tex_packed.get("d"))
 
 
 func _sync_authoring_material(force: bool) -> void:
