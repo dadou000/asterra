@@ -12,7 +12,8 @@
 //
 // Packing per layer (mirrored by TerrainDisplacementRuntime on the CPU):
 //   a = (biome_id, layer_type, scale, amount_m)
-//   b = (param [fbm passes 1-4, terrace steps 2-24], seed, 0, 0)
+//   b = (param [fbm passes 1-4, terrace steps 2-24], seed,
+//        angle_deg [layer_type 3/4 only -- flow/ridge orientation], 0)
 // layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion (subtractive,
 //             domain-warped ridged channels -- see bp_erosion_channels), 4
 //             sediment deposit (additive, slope-biased talus -- see
@@ -130,6 +131,22 @@ void bp_tangent_basis(vec3 n, out vec3 tx, out vec3 ty) {
 	ty = vec3(b, s + n.y * n.y * a, -n.y);
 }
 
+// Rotates an orthonormal tangent-plane basis by an authored angle. The raw
+// bp_tangent_basis frame (Duff et al.) is picked for numerical stability, not
+// for any particular "north" -- combined with the noise lattice's own
+// (unavoidably slightly anisotropic, since the hash weights x/y/z
+// differently) structure, that leaves erosion channels / sediment flow with a
+// fixed default orientation. Rotating the basis before it is used for flow
+// direction rotates the resulting ridge/valley orientation with it, and
+// costs nothing extra when angle_deg is 0.
+void bp_rotate_basis(vec3 tx, vec3 ty, float angle_deg, out vec3 rtx, out vec3 rty) {
+	float a = radians(angle_deg);
+	float ca = cos(a);
+	float sa = sin(a);
+	rtx = tx * ca + ty * sa;
+	rty = ty * ca - tx * sa;
+}
+
 // Fake hydraulic erosion: warps the noise-sample direction by lower-frequency
 // noise before evaluating a ridged pattern, so channels bend and branch the
 // way water-carved valleys do instead of the isotropic blobs a plain ridged
@@ -141,10 +158,14 @@ void bp_tangent_basis(vec3 n, out vec3 tx, out vec3 ty) {
 // decorrelated per-octave noise); each octave then adds its own smaller warp
 // on top for branching detail at that octave's scale, echoing how a real
 // drainage network's tributaries are self-similar at every scale.
-float bp_erosion_channels(vec3 d, float scale, int seed, int passes) {
+// `angle_deg` rotates the flow/channel orientation (see bp_rotate_basis).
+float bp_erosion_channels(vec3 d, float scale, int seed, int passes, float angle_deg) {
+	vec3 tx0;
+	vec3 ty0;
+	bp_tangent_basis(d, tx0, ty0);
 	vec3 tx;
 	vec3 ty;
-	bp_tangent_basis(d, tx, ty);
+	bp_rotate_basis(tx0, ty0, angle_deg, tx, ty);
 	// Clamped up front, not just where each derived frequency is used: an
 	// unclamped base_frequency pushed far enough past BP_MAX_FREQUENCY can
 	// still put flow_frequency (0.12x base_frequency) AT the ceiling instead
@@ -203,11 +224,15 @@ float bp_erosion_channels(vec3 d, float scale, int seed, int passes) {
 // direction of anything, just a spatially coherent "which way debris tends to
 // have slid around here" look -- true hydraulic/talus physics needs the whole
 // height field's flow at once (global state a per-vertex shader doesn't have)
-// no matter which of these two techniques picks the direction.
-float bp_sediment_deposit(vec3 d, float scale, int seed, int passes) {
+// no matter which of these two techniques picks the direction. `angle_deg`
+// rotates the bias direction (see bp_rotate_basis).
+float bp_sediment_deposit(vec3 d, float scale, int seed, int passes, float angle_deg) {
+	vec3 tx0;
+	vec3 ty0;
+	bp_tangent_basis(d, tx0, ty0);
 	vec3 tx;
 	vec3 ty;
-	bp_tangent_basis(d, tx, ty);
+	bp_rotate_basis(tx0, ty0, angle_deg, tx, ty);
 	float base_frequency = min(max(abs(scale), 0.000001), BP_MAX_FREQUENCY);
 	// Both the steepness estimate and the bias direction work off a much
 	// lower frequency than the deposit texture itself -- a landslide responds
@@ -279,10 +304,10 @@ float bp_layer_value(vec3 d, vec4 a, vec4 b) {
 		float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0);
 		return (terrace * 2.0 - 1.0) * amount;
 	} else if (layer_type == 3) {
-		float channel = bp_erosion_channels(d, scale, seed, param);
+		float channel = bp_erosion_channels(d, scale, seed, param, b.z);
 		return -channel * amount;
 	} else if (layer_type == 4) {
-		float deposit = bp_sediment_deposit(d, scale, seed, param);
+		float deposit = bp_sediment_deposit(d, scale, seed, param, b.z);
 		return deposit * amount;
 	}
 	return bp_fbm(d, scale, seed, param) * amount;

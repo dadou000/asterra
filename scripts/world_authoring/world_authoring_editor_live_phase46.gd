@@ -796,6 +796,7 @@ func _phase47_default_biome_layer(seed: int = -1) -> Dictionary:
 	return {
 		"type": "NOISE_LAYER", "scale": 6.0, "amount": 20.0, "param": 3,
 		"seed": seed if seed >= 0 else (randi() % 900000),
+		"angle_deg": 90.0,
 	}
 
 
@@ -818,10 +819,12 @@ func _phase47_biome_terrain_defaults(biome_id: int) -> Dictionary:
 	}]
 	if float(ported.get("erosion", 0.0)) > 0.0:
 		layers.append({"type": PHASE47_EROSION_TYPE, "scale": 8.0,
-			"amount": float(ported["erosion"]), "param": 3, "seed": seed + 7919})
+			"amount": float(ported["erosion"]), "param": 3, "seed": seed + 7919,
+			"angle_deg": 90.0})
 	if float(ported.get("sedimentation", 0.0)) > 0.0:
 		layers.append({"type": PHASE47_SEDIMENT_TYPE, "scale": 3.0,
-			"amount": float(ported["sedimentation"]), "param": 3, "seed": seed + 104729})
+			"amount": float(ported["sedimentation"]), "param": 3, "seed": seed + 104729,
+			"angle_deg": 90.0})
 	return {"blend_km": 2.0, "layers": layers}
 
 
@@ -875,6 +878,7 @@ func _phase47_biome_stack(graph: Resource) -> Dictionary:
 				"param": clampi(int(parameters.get("steps", 6)), 2, 24) if is_terrace \
 					else clampi(int(parameters.get("passes", 3)), 1, 4),
 				"seed": int(parameters.get("seed", 1337)),
+				"angle_deg": fposmod(float(parameters.get("angle_deg", 90.0)), 360.0),
 			})
 		cursor = String(input_of.get(cursor, ""))
 	result["layers"] = layers
@@ -908,6 +912,7 @@ func _phase47_rebuild_biome_profile(graph: Resource, stack: Dictionary) -> void:
 			"passes": clampi(int(layer.get("param", 3)), 1, 4),
 			"steps": clampi(int(layer.get("param", 6)), 2, 24),
 			"seed": int(layer.get("seed", 1337)),
+			"angle_deg": fposmod(float(layer.get("angle_deg", 90.0)), 360.0),
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -1126,6 +1131,10 @@ func _phase47_build_biome_layer_card(parent: VBoxContainer, graph: Resource,
 			1.0, 4.0, 1.0, "More passes adds finer nested structure.")
 	_phase47_add_biome_layer_number(box, graph, stack, layer, "Pattern seed", "seed",
 		0.0, 9999999.0, 1.0, "Changes the pattern without moving the biome boundary.")
+	if layer_type == "EROSION_CHANNELS" or layer_type == "SEDIMENT_DEPOSIT":
+		_phase47_add_biome_layer_number(box, graph, stack, layer, "Ridge angle", "angle_deg",
+			0.0, 360.0, 1.0,
+			"Rotates the channel/flow direction. 90° is the default and usually reads best; try other angles if the channels look too aligned with one axis.")
 
 
 func _phase47_move_biome_layer(graph: Resource, stack: Dictionary, index: int,

@@ -662,6 +662,7 @@ func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
 		"amount": amount,
 		"param": param,
 		"seed": int(parameters.get("seed", 1337 + biome_id * 101)),
+		"angle_deg": float(parameters.get("angle_deg", 90.0)),
 	}
 
 
@@ -690,10 +691,12 @@ func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
 			var terrace: float = floor((field * 0.5 + 0.5) * steps) / maxf(steps - 1.0, 1.0)
 			return (terrace * 2.0 - 1.0) * amount
 		3:
-			var channel: float = _biome_erosion_channels(d, scale, seed, param)
+			var angle_deg: float = float(layer.get("angle_deg", 90.0))
+			var channel: float = _biome_erosion_channels(d, scale, seed, param, angle_deg)
 			return -channel * amount
 		4:
-			var deposit: float = _biome_sediment_deposit(d, scale, seed, param)
+			var angle_deg2: float = float(layer.get("angle_deg", 90.0))
+			var deposit: float = _biome_sediment_deposit(d, scale, seed, param, angle_deg2)
 			return deposit * amount
 		_:
 			return _terrain_fbm(d, scale, seed, param) * amount
@@ -710,16 +713,30 @@ func _biome_tangent_basis(n: Vector3) -> Array:
 	]
 
 
+# Mirrors bp_rotate_basis: rotates an orthonormal tangent-plane basis by an
+# authored angle, so a layer's flow/ridge orientation is a controllable
+# parameter instead of whatever the raw (numerically-stable-but-arbitrary)
+# tangent basis + the noise lattice's own slight anisotropy happen to give.
+func _biome_rotate_basis(tx: Vector3, ty: Vector3, angle_deg: float) -> Array:
+	var a: float = deg_to_rad(angle_deg)
+	var ca: float = cos(a)
+	var sa: float = sin(a)
+	return [tx * ca + ty * sa, ty * ca - tx * sa]
+
+
 # Mirrors bp_erosion_channels: domain-warped ridged noise so channels bend and
 # branch like water-carved valleys instead of the isotropic blobs a plain
 # ridged field gives. See the shader comment for why (a real flow-accumulation
 # simulation needs the whole height field at once, which neither side has
 # per-vertex/per-sample). Double precision means no bp_noise-style FMA
 # correction is needed here -- direction * frequency is already exact.
-func _biome_erosion_channels(d: Vector3, scale: float, seed: int, passes: int) -> float:
-	var basis: Array = _biome_tangent_basis(d)
-	var tx: Vector3 = basis[0]
-	var ty: Vector3 = basis[1]
+# `angle_deg` rotates the flow/channel orientation (see _biome_rotate_basis).
+func _biome_erosion_channels(d: Vector3, scale: float, seed: int, passes: int,
+		angle_deg: float) -> float:
+	var basis0: Array = _biome_tangent_basis(d)
+	var rotated: Array = _biome_rotate_basis(basis0[0], basis0[1], angle_deg)
+	var tx: Vector3 = rotated[0]
+	var ty: Vector3 = rotated[1]
 	# Mirrors the shader's base_frequency clamp for parity, not precision --
 	# see BIOME_MAX_FREQUENCY.
 	var base_frequency: float = minf(maxf(absf(scale), 0.000001), BIOME_MAX_FREQUENCY)
@@ -751,11 +768,14 @@ func _biome_erosion_channels(d: Vector3, scale: float, seed: int, passes: int) -
 # coherent "downhill bias" direction (two independent low-frequency noise
 # fields, NOT a finite-difference gradient -- see the shader comment for why
 # a gradient direction spikes here) and weighted by a steepness estimate so it
-# tapers to nothing on flat ground.
-func _biome_sediment_deposit(d: Vector3, scale: float, seed: int, passes: int) -> float:
-	var basis: Array = _biome_tangent_basis(d)
-	var tx: Vector3 = basis[0]
-	var ty: Vector3 = basis[1]
+# tapers to nothing on flat ground. `angle_deg` rotates the bias direction
+# (see _biome_rotate_basis).
+func _biome_sediment_deposit(d: Vector3, scale: float, seed: int, passes: int,
+		angle_deg: float) -> float:
+	var basis0: Array = _biome_tangent_basis(d)
+	var rotated: Array = _biome_rotate_basis(basis0[0], basis0[1], angle_deg)
+	var tx: Vector3 = rotated[0]
+	var ty: Vector3 = rotated[1]
 	# Mirrors the shader's base_frequency clamp for parity, not precision --
 	# see BIOME_MAX_FREQUENCY.
 	var base_frequency: float = minf(maxf(absf(scale), 0.000001), BIOME_MAX_FREQUENCY)
@@ -884,7 +904,7 @@ func biome_profile_uniforms() -> Dictionary:
 		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("layer_type", 0))),
 			float(entry.get("scale", 6.0)), float(entry.get("amount", 0.0)))
 		b[i] = Vector4(float(int(entry.get("param", 3))), float(int(entry.get("seed", 1337))),
-			0.0, 0.0)
+			float(entry.get("angle_deg", 90.0)), 0.0)
 	return {"count": count, "a": a, "b": b, "blend": _biome_blend_m.duplicate()}
 
 
