@@ -373,7 +373,7 @@ void vertex() {
 
 	float edit_h = terrain_edit_delta(d, u_planet_radius);
 	h += edit_h;
-	float biome_h = asterra_biome_profile_height(d, anchor_offset_m);
+	float biome_h = asterra_biome_profile_height(d);
 	h += biome_h;
 
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),

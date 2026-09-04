@@ -658,16 +658,15 @@ func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
 	}
 
 
-# GDScript's float is double precision, so unlike the GPU's float32 GLSL,
-# `direction * frequency` never aliases here even at extreme frequency -- no
-# bounded/anchor-relative sample position is needed on the CPU. (The GPU side,
-# shaders/terrain_biome_profile.gdshaderinc, samples fine octaves off the
-# clipmap's stable tangent-plane offset instead for exactly that reason; the two
-# paths diverge in phase for very high-frequency layers, but contact/AGL is
-# already an approximation elsewhere in this file, and the alternative --
-# reintroducing a Frames.origin-keyed sample position here -- reintroduces the
-# popping that fix was for, since Frames.origin rebases don't correlate with the
-# clipmap's own re-anchoring.)
+# GDScript's float is double precision, so `direction * frequency` never
+# aliases here even at extreme frequency -- no bounded/anchor-relative sample
+# position, wrapping, or reference frame is needed on the CPU. The GPU side
+# (shaders/terrain_biome_profile.gdshaderinc's bp_noise) samples the same
+# `direction * frequency` coordinate, just recovers the precision a single
+# float32 multiply would lose via an FMA-based float32-pair correction instead
+# of double math -- so the two sides agree on phase again (unlike an earlier
+# version of this fix, which sampled the GPU side off a moving reference frame
+# and just relocated the popping to whenever that frame reset).
 func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
 	var layer_type: int = int(layer.get("layer_type", 0))
 	var scale: float = float(layer.get("scale", 6.0))

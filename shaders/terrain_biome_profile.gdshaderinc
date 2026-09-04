@@ -45,9 +45,31 @@ float bp_hash(ivec3 p, int seed) {
 	return float(h & 0x00ffffffu) / 16777215.0 * 2.0 - 1.0;
 }
 
-float bp_noise(vec3 p, int seed) {
+// Value noise sampled at `direction * frequency`, computed at float32-pair
+// ("double-single") precision rather than a single lossy float32 multiply.
+// `direction * frequency` alone rounds to ~24 total mantissa bits, so above
+// roughly 256x the fractional part is quantised to a handful of steps and
+// neighbouring vertices alias into a visibly stepped/spiky surface -- and any
+// fix that instead samples from a bounded coordinate relative to some moving
+// reference frame (Frames.origin's floating-origin rebase, the clipmap's own
+// stable-anchor re-anchor) just relocates the discontinuity to fire whenever
+// that frame resets, which is still a visible pop, just a rarer one.
+// `fma(a, b, -a*b)` recovers the *exact* rounding error of one float32
+// multiply (Dekker's TwoProduct via FMA, exact on IEEE754 hardware), so
+// `fract(p) + e` restores the low bits the single multiply rounded away,
+// before a final fract() brings it back into [0, 1). This needs no reference
+// frame at all -- `direction` alone is already precise near the observer (see
+// spherical_geometry_clipmap.gd's anchor-relative direction reconstruction),
+// so this is exact at any frequency across every rebase and every re-anchor,
+// not just the common one.
+float bp_noise(vec3 direction, float frequency, int seed) {
+	vec3 p = direction * frequency;
+	vec3 e = vec3(
+		fma(direction.x, frequency, -p.x),
+		fma(direction.y, frequency, -p.y),
+		fma(direction.z, frequency, -p.z));
 	ivec3 i = ivec3(floor(p));
-	vec3 f = fract(p);
+	vec3 f = fract(fract(p) + e);
 	f = f * f * (vec3(3.0) - 2.0 * f);
 	float a0 = mix(bp_hash(i, seed), bp_hash(i + ivec3(1, 0, 0), seed), f.x);
 	float a1 = mix(bp_hash(i + ivec3(0, 1, 0), seed), bp_hash(i + ivec3(1, 1, 0), seed), f.x);
@@ -56,27 +78,14 @@ float bp_noise(vec3 p, int seed) {
 	return mix(mix(a0, a1, f.y), mix(b0, b1, f.y), f.z);
 }
 
-// `direction` is the unit surface direction -- precise enough for coarse octaves,
-// and never pops (it does not depend on Frames.origin or the clipmap's stable
-// anchor at all). `anchor_offset_m` is the vertex's position in metres on the
-// clipmap's own stable local tangent plane (u_anchor_right/u_anchor_up, already
-// computed by the including shader for its own re-anchoring); fine octaves
-// sample noise from it instead of `direction * frequency` so they keep full
-// float32 precision at high frequency. u_anchor_right/up only move when the
-// clipmap re-anchors (every REANCHOR_M = 65536m of travel), never at a
-// Frames.origin rebase (~4096m) -- so this stays continuous across the rebases
-// that were popping the terrain, at the cost of a much rarer pop every 65km.
-float bp_fbm(vec3 direction, vec2 anchor_offset_m, float scale, int seed, int passes) {
+float bp_fbm(vec3 direction, float scale, int seed, int passes) {
 	float total = 0.0;
 	float normalizer = 0.0;
 	float amplitude = 1.0;
 	float frequency = max(abs(scale), 0.000001);
-	float radius = max(u_planet_radius, 1.0);
-	vec3 local_p = u_anchor_right * anchor_offset_m.x + u_anchor_up * anchor_offset_m.y;
 	for (int octave = 0; octave < 4; octave++) {
 		if (octave >= clamp(passes, 1, 4)) break;
-		vec3 q = frequency > 256.0 ? (local_p / radius) * frequency : direction * frequency;
-		total += bp_noise(q, seed + octave * 1013) * amplitude;
+		total += bp_noise(direction, frequency, seed + octave * 1013) * amplitude;
 		normalizer += amplitude;
 		frequency *= 2.0;
 		amplitude *= 0.5;
@@ -85,30 +94,30 @@ float bp_fbm(vec3 direction, vec2 anchor_offset_m, float scale, int seed, int pa
 }
 
 // Metres this one layer contributes at `d`, before the biome boundary weight.
-float bp_layer_value(vec3 d, vec2 anchor_offset_m, vec4 a, vec4 b) {
+float bp_layer_value(vec3 d, vec4 a, vec4 b) {
 	int layer_type = int(floor(a.y + 0.5));
 	float scale = a.z;
 	float amount = a.w;
 	int seed = int(floor(b.y + 0.5));
 	int param = int(floor(b.x + 0.5));
 	if (layer_type == 1) {
-		float ridge = 1.0 - abs(bp_fbm(d, anchor_offset_m, scale, seed, param));
+		float ridge = 1.0 - abs(bp_fbm(d, scale, seed, param));
 		return ridge * ridge * amount;
 	} else if (layer_type == 2) {
-		float field = bp_fbm(d, anchor_offset_m, scale, seed, 1);
+		float field = bp_fbm(d, scale, seed, 1);
 		float steps = clamp(float(param), 2.0, 24.0);
 		float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0);
 		return (terrace * 2.0 - 1.0) * amount;
 	} else if (layer_type == 3) {
-		float field = bp_fbm(d, anchor_offset_m, scale, seed, 3);
+		float field = bp_fbm(d, scale, seed, 3);
 		float channel = clamp(1.0 - abs(field), 0.0, 1.0);
 		return -(channel * channel * channel) * amount;
 	} else if (layer_type == 4) {
-		float field = bp_fbm(d, anchor_offset_m, scale, seed, 3);
+		float field = bp_fbm(d, scale, seed, 3);
 		float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0);
 		return deposit * deposit * amount;
 	}
-	return bp_fbm(d, anchor_offset_m, scale, seed, param) * amount;
+	return bp_fbm(d, scale, seed, param) * amount;
 }
 
 // Branchless orthonormal tangent basis for a unit vector (Duff et al. 2017),
@@ -149,13 +158,8 @@ float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 	return smoothstep(0.18, 0.82, acc / wsum);
 }
 
-// Metres to add to the surface at `dir`. `anchor_offset_m` is the vertex's
-// position in metres on the clipmap's stable local tangent plane (see bp_fbm);
-// high-frequency layers sample from it instead of `dir * frequency` so very
-// small features stay precise instead of aliasing. It only affects noise phase,
-// not the resulting height's correctness. The boundary kernel resolves the
-// biome itself. Zero-cost when no layer is bound.
-float asterra_biome_profile_height(vec3 dir, vec2 anchor_offset_m) {
+// Metres to add to the surface at `dir`. Zero-cost when no layer is bound.
+float asterra_biome_profile_height(vec3 dir) {
 	if (u_biome_layer_count <= 0) {
 		return 0.0;
 	}
@@ -179,7 +183,7 @@ float asterra_biome_profile_height(vec3 dir, vec2 anchor_offset_m) {
 		if (cov <= 0.0) {
 			continue;
 		}
-		total += bp_layer_value(d, anchor_offset_m, a, u_biome_layer_b[i]) * cov;
+		total += bp_layer_value(d, a, u_biome_layer_b[i]) * cov;
 	}
 	return total;
 }
