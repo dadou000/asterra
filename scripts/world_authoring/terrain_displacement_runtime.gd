@@ -719,10 +719,12 @@ func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
 	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0
 	var step_ang: float = (half_m * 0.5) / radius
 	# Spatially smooth kernel shift, mirrors bp_biome_coverage: dissolves the
-	# fixed-grid quantisation into a ramp without per-vertex spikes.
-	var jitter_p: Vector3 = d * (radius / 12.0)
+	# fixed-grid quantisation into a ramp without per-vertex spikes. Frequency is
+	# kept small so the noise stays smooth (see the shader comment).
+	var shift_freq: float = clampf(radius / maxf(half_m * 3.0, 1.0), 8.0, 256.0)
+	var jitter_p: Vector3 = d * shift_freq
 	var shift := Vector2(
-		_value_noise_3d(jitter_p, 40009), _value_noise_3d(jitter_p, 80021)) * 0.75
+		_value_noise_3d(jitter_p, 40009), _value_noise_3d(jitter_p, 80021)) * 0.85
 	var acc: float = 0.0
 	var wsum: float = 0.0
 	for j: int in range(-2, 3):

@@ -119,8 +119,13 @@ float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 		return here;
 	}
 	float step_ang = (half_m * 0.5) / max(u_planet_radius, 1.0);
-	vec3 jitter_p = d * (u_planet_radius / 12.0);
-	vec2 shift = vec2(bp_noise(jitter_p, 40009), bp_noise(jitter_p, 80021)) * 0.75;
+	// Kernel shift frequency must stay small enough that d * freq keeps full
+	// float32 precision (roughly < 300) -- a large multiplier makes fract() step,
+	// and a stepped shift is exactly the per-vertex noise that spikes the mesh.
+	// It still tracks the band so the shift sweeps a step's worth across it.
+	float shift_freq = clamp(u_planet_radius / max(half_m * 3.0, 1.0), 8.0, 256.0);
+	vec3 jitter_p = d * shift_freq;
+	vec2 shift = vec2(bp_noise(jitter_p, 40009), bp_noise(jitter_p, 80021)) * 0.85;
 	float acc = 0.0;
 	float wsum = 0.0;
 	for (int j = -2; j <= 2; j++) {
