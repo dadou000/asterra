@@ -168,6 +168,16 @@ func _run() -> void:
 			biome_slot.get(&"graph")) as Dictionary).get("blend_km", 0.0)), 7.5):
 		_fail("Biome blend distance did not serialize")
 		return
+	# Back to a hard edge so the CPU-mirror check below does not depend on a live
+	# biome field for the blend kernel's neighbour taps (absent in this headless
+	# harness). The panel rebuilt after the last edit, so re-find the control.
+	var blend_km2: SpinBox = _find_named(editor, "BiomeTerrainBlendKm") as SpinBox
+	if blend_km2 == null:
+		_fail("Biome blend control missing after panel refresh")
+		return
+	blend_km2.value = 0.0
+	blend_km2.emit_signal("value_changed", 0.0)
+	await _frames(3)
 	# A biome profile is deliberately kept OUT of the displacement bytecode VM: a
 	# compiled program makes the renderer swap in the authored-terrain shader
 	# variant, whose 32-slot register array triggers Vulkan device loss on current

@@ -696,11 +696,6 @@ func _biome_tangent_basis(n: Vector3) -> Array:
 	]
 
 
-func _biome_kernel_rotation(d: Vector3) -> float:
-	var t: float = sin(d.x * 127.1 + d.y * 311.7 + d.z * 74.7) * 43758.5453
-	return (t - floor(t)) * TAU
-
-
 # Best available biome id at a direction, matching what the render samples:
 # the procedural context field when the planet is ready, else the authoring
 # biome-preview image.
@@ -711,11 +706,10 @@ func _biome_id_at(direction: Vector3) -> int:
 	return _sample_authored_biome(direction)
 
 
-# 0..1 smooth fraction of a rotated tangent-plane disc that resolves to `biome`.
-# Mirrors bp_biome_coverage (the float64 sin makes the per-point rotation differ
-# slightly from the GPU, so blend-band heights are close but not bit-identical;
-# outside the band and at a 0 half-width they agree exactly). `centre_biome` is the
-# caller's already-resolved biome under `d`; only the offset taps are sampled here.
+# 0..1 smooth membership of `biome` in a fixed tangent-plane Gaussian disc.
+# Mirrors bp_biome_coverage. `centre_biome` is the caller's already-resolved biome
+# under `d`; the offset taps are sampled here. Outside the band and at a 0
+# half-width this agrees exactly with the render.
 func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
 		centre_biome: int) -> float:
 	var centre: float = 1.0 if centre_biome == biome else 0.0
@@ -723,19 +717,21 @@ func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
 	if half_m <= 1.0:
 		return centre
 	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0
-	var ang: float = half_m / radius
-	var rot: float = _biome_kernel_rotation(d)
-	var acc: float = centre * 1.5
-	var wsum: float = 1.5
-	for ring: int in 2:
-		var ring_radius: float = lerpf(0.55, 1.0, float(ring))
-		var ring_w: float = lerpf(1.0, 0.6, float(ring))
-		for k: int in 6:
-			var theta: float = rot + float(k) * 1.04719755 + float(ring) * 0.5235988
-			var sd: Vector3 = (d + (tx * cos(theta) + ty * sin(theta)) * (ang * ring_radius)).normalized()
-			acc += ring_w * (1.0 if _biome_id_at(sd) == biome else 0.0)
-			wsum += ring_w
-	return smoothstep(0.10, 0.90, acc / wsum)
+	var step_ang: float = (half_m * 0.5) / radius
+	var acc: float = 0.0
+	var wsum: float = 0.0
+	for j: int in range(-2, 3):
+		for i: int in range(-2, 3):
+			var w: float = exp(-float(i * i + j * j) * 0.45)
+			var hit: float
+			if i == 0 and j == 0:
+				hit = centre
+			else:
+				var sd: Vector3 = (d + (tx * float(i) + ty * float(j)) * step_ang).normalized()
+				hit = 1.0 if _biome_id_at(sd) == biome else 0.0
+			acc += w * hit
+			wsum += w
+	return smoothstep(0.15, 0.85, acc / maxf(wsum, 1e-6))
 
 
 # Metres the biome layer stack adds at `direction`, resolving the boundary blend

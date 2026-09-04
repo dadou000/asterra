@@ -369,8 +369,7 @@ void vertex() {
 
 	float edit_h = terrain_edit_delta(d, u_planet_radius);
 	h += edit_h;
-	vec3 biome_tilt;
-	float biome_h = asterra_biome_profile_height_grad(d, biome_tilt);
+	float biome_h = asterra_biome_profile_height(d, asterra_ctx_biome_id(d));
 	h += biome_h;
 
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
@@ -427,15 +426,15 @@ void vertex() {
 	if (u_height_enabled > 0.5 && stable_displacement) {
 		v_smooth_normal = terrain_cached_surface_normal(
 			d, normal_level, normal_morph, h, anchor_offset_m);
+		// The cache normal never saw the sculpt delta or the biome layers, so where
+		// either displaces the mesh, lean on the geometry (screen-space derivative)
+		// normal instead -- same treatment sculpt edits already get.
 		v_geom_normal_weight = max(normal_level <= 1 ? 0.28 : 0.10,
-			abs(edit_h) > 0.001 ? 0.90 : 0.0);
+			(abs(edit_h) > 0.001 || abs(biome_h) > 0.05) ? 0.90 : 0.0);
 	} else {
 		v_smooth_normal = d;
 		v_geom_normal_weight = 0.65;
 	}
-	// Tilt the smooth normal by the analytic biome-layer slope so biome terrain is
-	// shaded, not left reading off the cache normal that never saw it.
-	v_smooth_normal = normalize(v_smooth_normal + biome_tilt);
 
 	v_planet = p;
 	v_render = render_p;
