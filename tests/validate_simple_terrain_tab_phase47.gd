@@ -210,6 +210,44 @@ func _run() -> void:
 		return
 	runtime.queue_free()
 
+	# Response curve: a flat curve (y=1 everywhere) makes a TERRACE_RELIEF
+	# layer's shaped output exactly equal `amount`, independent of the
+	# underlying noise field -- the cleanest way to prove the curve is wired
+	# into the CPU path (the same _biome_layer_value AGL/contact use) without
+	# hand-computing FBM/terracing.
+	var curve_field: CurveFieldControl = _find_named(editor, "BiomeTerrainLayerCurve_0") as CurveFieldControl
+	if curve_field == null:
+		_fail("Biome terrain layer is missing its response curve editor")
+		return
+	curve_field.set_points(PackedFloat32Array([0.0, 1.0, 1.0, 1.0]))
+	curve_field.curve_changed.emit(curve_field.get_points())
+	await _frames(3)
+	var curved_layers: Array = (editor.call("_phase47_biome_stack",
+		biome_slot.get(&"graph")) as Dictionary).get("layers", []) as Array
+	var curved_layer_0: Dictionary = curved_layers[0] as Dictionary
+	var curve_points: PackedFloat32Array = curved_layer_0.get("response_curve", PackedFloat32Array()) as PackedFloat32Array
+	if CurveFieldData.point_count(curve_points) != 2 or not is_equal_approx(CurveFieldData.get_point(curve_points, 0).y, 1.0) \
+			or not is_equal_approx(CurveFieldData.get_point(curve_points, 1).y, 1.0):
+		_fail("Response curve did not round-trip through the UI (curve=%s)" % [curve_points])
+		return
+	var expected_amount: float = float(curved_layer_0.get("amount", 0.0))
+	if is_zero_approx(expected_amount):
+		_fail("Test setup produced a zero-amount layer -- the response curve check would be meaningless")
+		return
+	var layer_for_cpu: Dictionary = {
+		"biome_id": 11, "layer_type": 2, "scale": float(curved_layer_0.get("scale", 6.0)),
+		"amount": expected_amount, "param": int(curved_layer_0.get("param", 6)),
+		"seed": int(curved_layer_0.get("seed", 1337)), "angle_deg": 90.0,
+		"response_curve": curve_points,
+	}
+	var curve_runtime: Node = RUNTIME.new()
+	var curved_value: float = float(curve_runtime.call("_biome_layer_value", target_dir, layer_for_cpu))
+	curve_runtime.free()
+	if not is_equal_approx(curved_value, expected_amount):
+		_fail("Response curve did not reshape the CPU layer value as expected (got %.4f, wanted amount=%.4f)"
+			% [curved_value, expected_amount])
+		return
+
 	print("SIMPLE_TERRAIN_TAB_PHASE47_OK: Terrain controls update production geomorph, all rings, no shader/node UI")
 	editor.queue_free()
 	await _frames(2)

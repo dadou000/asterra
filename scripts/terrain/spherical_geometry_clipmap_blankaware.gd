@@ -162,6 +162,8 @@ func _sync_biome_profile_uniforms(force: bool) -> void:
 	if count > 0:
 		_material.set_shader_parameter("u_biome_layer_a", packed.get("a"))
 		_material.set_shader_parameter("u_biome_layer_b", packed.get("b"))
+		_material.set_shader_parameter("u_biome_layer_c", packed.get("c"))
+		_material.set_shader_parameter("u_biome_layer_d", packed.get("d"))
 
 
 func _sync_biome_texture_uniforms(_force: bool) -> void:
@@ -184,6 +186,8 @@ func _sync_biome_texture_uniforms(_force: bool) -> void:
 		_material.set_shader_parameter("u_biome_tex_layer_f", tex_packed.get("f"))
 		_material.set_shader_parameter("u_biome_tex_layer_g", tex_packed.get("g"))
 		_material.set_shader_parameter("u_biome_tex_layer_h", tex_packed.get("h"))
+		_material.set_shader_parameter("u_biome_tex_layer_curve_ab", tex_packed.get("curve_ab"))
+		_material.set_shader_parameter("u_biome_tex_layer_curve_cd", tex_packed.get("curve_cd"))
 	var custom_count: int = int(tex_packed.get("custom_count", 0))
 	_material.set_shader_parameter("u_biome_tex_custom_count", custom_count)
 	if custom_count > 0:

@@ -200,6 +200,19 @@ func _run() -> void:
 	gradient_spin.emit_signal("value_changed", 0.75)
 	await _frames(3)
 
+	# A flat curve at y=1 makes the distribution curve's effect on the packed
+	# grad_t fully deterministic (always 1.0, no matter which x it's given),
+	# so this proves the curve is wired end to end without needing to
+	# hand-compute the real smoothstep shape.
+	var gradient_curve_field: CurveFieldControl = _find_named(editor,
+		"BiomeTextureLayerGradientCurve_0") as CurveFieldControl
+	if gradient_curve_field == null:
+		_fail("Texture band is missing the gradient distribution curve editor")
+		return
+	gradient_curve_field.set_points(PackedFloat32Array([0.0, 1.0, 1.0, 1.0]))
+	gradient_curve_field.curve_changed.emit(gradient_curve_field.get_points())
+	await _frames(3)
+
 	var roughness_toggle: CheckButton = _find_named(editor, "BiomeTextureLayerField_roughness_enabled") as CheckButton
 	var roughness_spin: SpinBox = _find_named(editor, "BiomeTextureLayerField_roughness_value") as SpinBox
 	if roughness_toggle == null or roughness_spin == null:
@@ -302,6 +315,12 @@ func _run() -> void:
 	if not bool(final_band.get("height_relative", false)):
 		_fail("Height reference mode did not round-trip to relative")
 		return
+	var final_gradient_curve: PackedFloat32Array = final_band.get("gradient_curve", PackedFloat32Array()) as PackedFloat32Array
+	if CurveFieldData.point_count(final_gradient_curve) != 2 \
+			or not is_equal_approx(CurveFieldData.get_point(final_gradient_curve, 0).y, 1.0) \
+			or not is_equal_approx(CurveFieldData.get_point(final_gradient_curve, 1).y, 1.0):
+		_fail("Gradient distribution curve did not round-trip through the UI (curve=%s)" % [final_gradient_curve])
+		return
 
 	# --- Full CPU-runtime pack of the final state, matching what the GPU sees. ---
 	var final_rt: Node = RUNTIME.new()
@@ -329,6 +348,16 @@ func _run() -> void:
 	var h: PackedVector4Array = final_packed.get("h") as PackedVector4Array
 	if h.is_empty() or not is_equal_approx(h[0].x, -0.4) or not is_equal_approx(h[0].y, 0.5):
 		_fail("Packed cavity range does not match what was authored (h[0]=%s)" % [h[0] if not h.is_empty() else "n/a"])
+		final_rt.free()
+		return
+	if int(round(h[0].z)) != 2:
+		_fail("Packed gradient curve point count does not match what was authored (h[0].z=%.1f)" % h[0].z)
+		final_rt.free()
+		return
+	var curve_ab: PackedVector4Array = final_packed.get("curve_ab") as PackedVector4Array
+	if curve_ab.is_empty() or not is_equal_approx(curve_ab[0].y, 1.0) or not is_equal_approx(curve_ab[0].w, 1.0):
+		_fail("Packed gradient curve does not evaluate to a flat y=1 (curve_ab[0]=%s)"
+			% [curve_ab[0] if not curve_ab.is_empty() else "n/a"])
 		final_rt.free()
 		return
 	var d: PackedVector4Array = final_packed.get("d") as PackedVector4Array

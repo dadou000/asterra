@@ -833,8 +833,28 @@ func _parse_biome_texture_slot(slot: Resource) -> Array:
 			"height_relative": bool(p.get("height_relative", false)),
 			"cavity_min": clampf(float(p.get("cavity_min", -1.0)), -1.0, 1.0),
 			"cavity_max": clampf(float(p.get("cavity_max", 1.0)), -1.0, 1.0),
+			"gradient_curve": _curve_from_parameter(p.get("gradient_curve", null)),
 		})
 	return layers
+
+
+## Reads a curve parameter (a plain Array of floats -- node parameters use
+## plain Arrays throughout, e.g. colours as [r,g,b], for the same
+## Dictionary/resource-persistence reasons) back into the PackedFloat32Array
+## CurveFieldData expects, falling back to the identity curve for anything
+## missing or malformed (too few points, odd length) rather than failing the
+## whole layer.
+static func _curve_from_parameter(value: Variant) -> PackedFloat32Array:
+	if value is PackedFloat32Array and (value as PackedFloat32Array).size() >= CurveFieldData.MIN_POINTS * 2 \
+			and (value as PackedFloat32Array).size() % 2 == 0:
+		return (value as PackedFloat32Array).duplicate()
+	if value is Array and (value as Array).size() >= CurveFieldData.MIN_POINTS * 2 \
+			and (value as Array).size() % 2 == 0:
+		var result := PackedFloat32Array()
+		for component: Variant in value as Array:
+			result.append(float(component))
+		return result
+	return CurveFieldData.identity()
 
 
 ## Parses the single dedicated "biome-texture-library" slot's CUSTOM_TEXTURE
@@ -1004,6 +1024,7 @@ func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
 		"param": param,
 		"seed": int(parameters.get("seed", 1337 + biome_id * 101)),
 		"angle_deg": float(parameters.get("angle_deg", 90.0)),
+		"response_curve": _curve_from_parameter(parameters.get("response_curve", null)),
 	}
 
 
@@ -1022,25 +1043,30 @@ func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
 	var amount: float = float(layer.get("amount", 0.0))
 	var seed: int = int(layer.get("seed", 1337))
 	var param: int = int(layer.get("param", 3))
+	var curve: PackedFloat32Array = layer.get("response_curve", CurveFieldData.identity()) as PackedFloat32Array
 	match layer_type:
 		1:
 			var ridge: float = 1.0 - absf(_terrain_fbm(d, scale, seed, param))
-			return ridge * ridge * amount
+			var shape01: float = ridge * ridge
+			return CurveFieldData.evaluate(curve, shape01) * amount
 		2:
 			var field: float = _terrain_fbm(d, scale, seed, 1)
 			var steps: float = float(clampi(param, 2, 24))
 			var terrace: float = floor((field * 0.5 + 0.5) * steps) / maxf(steps - 1.0, 1.0)
-			return (terrace * 2.0 - 1.0) * amount
+			var curved: float = CurveFieldData.evaluate(curve, terrace)
+			return (curved * 2.0 - 1.0) * amount
 		3:
 			var angle_deg: float = float(layer.get("angle_deg", 90.0))
 			var channel: float = _biome_erosion_channels(d, scale, seed, param, angle_deg)
-			return -channel * amount
+			return -CurveFieldData.evaluate(curve, channel) * amount
 		4:
 			var angle_deg2: float = float(layer.get("angle_deg", 90.0))
 			var deposit: float = _biome_sediment_deposit(d, scale, seed, param, angle_deg2)
-			return deposit * amount
+			return CurveFieldData.evaluate(curve, deposit) * amount
 		_:
-			return _terrain_fbm(d, scale, seed, param) * amount
+			var fbm: float = _terrain_fbm(d, scale, seed, param)
+			var curved0: float = CurveFieldData.evaluate(curve, fbm * 0.5 + 0.5)
+			return (curved0 * 2.0 - 1.0) * amount
 
 
 # Branchless orthonormal tangent basis (Duff et al. 2017); mirrors bp_tangent_basis.
@@ -1238,15 +1264,23 @@ func biome_profile_uniforms() -> Dictionary:
 	var count: int = mini(_biome_profiles.size(), BIOME_LAYER_MAX)
 	var a := PackedVector4Array()
 	var b := PackedVector4Array()
+	var c := PackedVector4Array()
+	var d := PackedVector4Array()
 	a.resize(BIOME_LAYER_MAX)
 	b.resize(BIOME_LAYER_MAX)
+	c.resize(BIOME_LAYER_MAX)
+	d.resize(BIOME_LAYER_MAX)
 	for i: int in count:
 		var entry: Dictionary = _biome_profiles[i] as Dictionary
 		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("layer_type", 0))),
 			float(entry.get("scale", 6.0)), float(entry.get("amount", 0.0)))
+		var curve: PackedFloat32Array = entry.get("response_curve", CurveFieldData.identity()) as PackedFloat32Array
 		b[i] = Vector4(float(int(entry.get("param", 3))), float(int(entry.get("seed", 1337))),
-			float(entry.get("angle_deg", 90.0)), 0.0)
-	return {"count": count, "a": a, "b": b, "blend": _biome_blend_m.duplicate()}
+			float(entry.get("angle_deg", 90.0)), float(CurveFieldData.point_count(curve)))
+		var curve_pair: Array = CurveFieldData.pack_to_vec4_pair(curve)
+		c[i] = curve_pair[0] as Vector4
+		d[i] = curve_pair[1] as Vector4
+	return {"count": count, "a": a, "b": b, "c": c, "d": d, "blend": _biome_blend_m.duplicate()}
 
 
 func biome_profile_count() -> int:
@@ -1265,6 +1299,8 @@ func biome_texture_uniforms() -> Dictionary:
 	var f := PackedVector4Array()
 	var g := PackedVector4Array()
 	var h := PackedVector4Array()
+	var curve_ab := PackedVector4Array()
+	var curve_cd := PackedVector4Array()
 	a.resize(BIOME_TEX_LAYER_MAX)
 	b.resize(BIOME_TEX_LAYER_MAX)
 	c.resize(BIOME_TEX_LAYER_MAX)
@@ -1273,6 +1309,8 @@ func biome_texture_uniforms() -> Dictionary:
 	f.resize(BIOME_TEX_LAYER_MAX)
 	g.resize(BIOME_TEX_LAYER_MAX)
 	h.resize(BIOME_TEX_LAYER_MAX)
+	curve_ab.resize(BIOME_TEX_LAYER_MAX)
+	curve_cd.resize(BIOME_TEX_LAYER_MAX)
 	for i: int in count:
 		var entry: Dictionary = _biome_textures[i] as Dictionary
 		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("texture_choice", 0))),
@@ -1301,9 +1339,15 @@ func biome_texture_uniforms() -> Dictionary:
 		var emission_color: Color = entry.get("emission_color", Color(0.0, 0.0, 0.0)) as Color
 		g[i] = Vector4(emission_color.r, emission_color.g, emission_color.b,
 			float(entry.get("emission_strength", 0.0)))
-		h[i] = Vector4(float(entry.get("cavity_min", -1.0)), float(entry.get("cavity_max", 1.0)), 0.0, 0.0)
+		var gradient_curve: PackedFloat32Array = entry.get("gradient_curve", CurveFieldData.identity()) as PackedFloat32Array
+		h[i] = Vector4(float(entry.get("cavity_min", -1.0)), float(entry.get("cavity_max", 1.0)),
+			float(CurveFieldData.point_count(gradient_curve)), 0.0)
+		var curve_pair: Array = CurveFieldData.pack_to_vec4_pair(gradient_curve)
+		curve_ab[i] = curve_pair[0] as Vector4
+		curve_cd[i] = curve_pair[1] as Vector4
 	return {
 		"count": count, "a": a, "b": b, "c": c, "d": d, "e": e, "f": f, "g": g, "h": h,
+		"curve_ab": curve_ab, "curve_cd": curve_cd,
 		"custom_count": _biome_tex_custom_names.size(),
 		"custom_names": _biome_tex_custom_names,
 		"custom_tile_m": _biome_tex_custom_tile_m,

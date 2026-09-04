@@ -110,6 +110,11 @@
 // rather than forcing every band to also flatten roughness just to recolour
 // something. enable_flags bit 4 = height range is relative to the local
 // terrain trend rather than absolute sea level (see "Height reference" above).
+// h.z is the gradient distribution curve's point count (2-4): the raw
+// height fraction that gradient_strength scales is reshaped by this curve
+// FIRST (see btex_curve_eval below and CurveFieldData on the CPU side) --
+// e.g. an S-curve holds colour_a longer before transitioning, instead of a
+// plain linear sweep. The identity curve ([0,0],[1,1]) is a precise no-op.
 
 const int BIOME_TEX_LAYER_MAX = 16;
 uniform int u_biome_tex_layer_count = 0;
@@ -121,12 +126,51 @@ uniform vec4 u_biome_tex_layer_e[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_f[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_g[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_h[BIOME_TEX_LAYER_MAX];
+uniform vec4 u_biome_tex_layer_curve_ab[BIOME_TEX_LAYER_MAX];
+uniform vec4 u_biome_tex_layer_curve_cd[BIOME_TEX_LAYER_MAX];
 
 // Screen-space curvature-to-cavity conversion -- see the "Cavity/convexity"
 // header comment. Tuned by eye against typical terrain crease/ridge scales,
 // not physically derived; if bands feel like they trigger too easily or not
 // enough, this is the one number to retune.
 const float BTEX_CAVITY_SCALE = 4.0;
+
+// Piecewise-smoothstep response curve -- identical maths to
+// terrain_biome_profile.gdshaderinc's bp_curve_eval and
+// CurveFieldData.evaluate on the CPU, deliberately duplicated (not shared
+// via #include) for the same reason btex_hash duplicates bp_hash just below:
+// neither biome shaderinc has an include guard, and both end up included
+// together in the same fragment shader.
+float btex_curve_eval(vec4 curve_ab, vec4 curve_cd, int count, float x) {
+	x = clamp(x, 0.0, 1.0);
+	int n = clamp(count, 2, 4);
+	vec2 p0 = curve_ab.xy;
+	vec2 p1 = curve_ab.zw;
+	vec2 p2 = (n >= 3) ? curve_cd.xy : p1;
+	vec2 p3 = (n >= 4) ? curve_cd.zw : p2;
+	vec2 a;
+	vec2 b;
+	if (n == 2) {
+		a = p0;
+		b = p1;
+	} else if (n == 3) {
+		a = (x <= p1.x) ? p0 : p1;
+		b = (x <= p1.x) ? p1 : p2;
+	} else {
+		if (x <= p1.x) {
+			a = p0;
+			b = p1;
+		} else if (x <= p2.x) {
+			a = p1;
+			b = p2;
+		} else {
+			a = p2;
+			b = p3;
+		}
+	}
+	float t = clamp((x - a.x) / max(b.x - a.x, 1e-5), 0.0, 1.0);
+	return mix(a.y, b.y, smoothstep(0.0, 1.0, t));
+}
 
 // User-imported PBR textures (albedo + optional roughness + optional normal
 // map), built once by TerrainDisplacementRuntime from embedded PNG bytes
@@ -356,10 +400,15 @@ void asterra_biome_texture_apply(vec3 dir, int biome, float height_m, float loca
 		// "Height dependent colour map": a plain lerp from colour_a to
 		// colour_b across the band's OWN [height_min, height_max] range
 		// (clamped, so it also behaves sanely on a slope-only band whose
-		// height range is the wide-open sentinel). gradient_strength (e.a)
-		// scales how much of that sweep applies -- 0 keeps a flat colour_a,
-		// 1 is the full gradient, in between blends toward it.
-		float grad_t = clamp((effective_height_m - a.z) / max(a.w - a.z, 1e-4), 0.0, 1.0);
+		// height range is the wide-open sentinel), its shape reworked by the
+		// gradient distribution curve (h.z point count -- an identity curve
+		// leaves this a plain linear lerp, unchanged from before the curve
+		// existed). gradient_strength (e.a) then scales how much of that
+		// (curved) sweep applies -- 0 keeps a flat colour_a, 1 is the full
+		// gradient, in between blends toward it.
+		float grad_raw = clamp((effective_height_m - a.z) / max(a.w - a.z, 1e-4), 0.0, 1.0);
+		float grad_t = btex_curve_eval(u_biome_tex_layer_curve_ab[i], u_biome_tex_layer_curve_cd[i],
+			int(round(h.z)), grad_raw);
 		vec3 layer_color = mix(c.rgb, e.rgb, grad_t * clamp(e.a, 0.0, 1.0));
 
 		int choice = int(floor(a.y + 0.5));

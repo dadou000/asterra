@@ -346,6 +346,7 @@ func _phase47_default_texture_layer(seed: int = -1) -> Dictionary:
 		# matching height/slope's own "wide open ignores this axis" sentinel.
 		"height_relative": false,
 		"cavity_min": -1.0, "cavity_max": 1.0,
+		"gradient_curve": CurveFieldData.identity(),
 	}
 
 
@@ -435,6 +436,8 @@ func _phase47_texture_stack(graph: Resource) -> Array:
 			"height_relative": bool(p.get("height_relative", false)),
 			"cavity_min": clampf(float(p.get("cavity_min", -1.0)), -1.0, 1.0),
 			"cavity_max": clampf(float(p.get("cavity_max", 1.0)), -1.0, 1.0),
+			"gradient_curve": TerrainDisplacementRuntime._curve_from_parameter(
+				p.get("gradient_curve", null)),
 		})
 	return layers
 
@@ -489,6 +492,7 @@ func _phase47_rebuild_biome_texture(graph: Resource, layers: Array) -> void:
 			"height_relative": bool(layer.get("height_relative", false)),
 			"cavity_min": clampf(float(layer.get("cavity_min", -1.0)), -1.0, 1.0),
 			"cavity_max": clampf(float(layer.get("cavity_max", 1.0)), -1.0, 1.0),
+			"gradient_curve": Array(layer.get("gradient_curve", CurveFieldData.identity()) as PackedFloat32Array),
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -996,7 +1000,10 @@ func _phase47_preview_color_at(layers: Array, custom_entries: Array, height_m: f
 
 		var color: Color = layer.get("color", Color(0.4, 0.35, 0.28)) as Color
 		var color_b: Color = layer.get("color_b", color) as Color
-		var grad_t: float = clampf((height_m - lo) / maxf(hi - lo, 0.0001), 0.0, 1.0)
+		var grad_raw: float = clampf((height_m - lo) / maxf(hi - lo, 0.0001), 0.0, 1.0)
+		var gradient_curve: PackedFloat32Array = layer.get("gradient_curve",
+			CurveFieldData.identity()) as PackedFloat32Array
+		var grad_t: float = CurveFieldData.evaluate(gradient_curve, grad_raw)
 		var gradient_strength: float = clampf(float(layer.get("gradient_strength", 0.0)), 0.0, 1.0)
 		var layer_color: Color = color.lerp(color_b, grad_t * gradient_strength)
 
@@ -1185,6 +1192,11 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 	gradient_row.add_child(gradient_help)
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Gradient strength", "gradient_strength",
 		0.0, 1.0, 0.01, "0 = flat colour (gradient off). 1 = fully fades across the height range into the gradient end colour above.")
+	_phase47_add_curve_field(box, "BiomeTextureLayerGradientCurve_%d" % index,
+		"Gradient distribution — reshapes WHERE across the height range the colour transitions (e.g. hold the low colour longer, then transition quickly). Flat diagonal = plain linear fade.",
+		layer, "gradient_curve", func() -> void:
+			_phase47_stage_biome_texture(graph, layers, "Tune biome texture gradient distribution")
+	)
 
 	var height_ref_row := HBoxContainer.new()
 	height_ref_row.add_theme_constant_override("separation", 10)
@@ -1972,6 +1984,8 @@ func _phase47_biome_stack(graph: Resource) -> Dictionary:
 					else clampi(int(parameters.get("passes", 3)), 1, 4),
 				"seed": int(parameters.get("seed", 1337)),
 				"angle_deg": fposmod(float(parameters.get("angle_deg", 90.0)), 360.0),
+				"response_curve": TerrainDisplacementRuntime._curve_from_parameter(
+					parameters.get("response_curve", null)),
 			})
 		cursor = String(input_of.get(cursor, ""))
 	result["layers"] = layers
@@ -1999,6 +2013,8 @@ func _phase47_rebuild_biome_profile(graph: Resource, stack: Dictionary) -> void:
 		var layer_type: String = String(layer.get("type", "NOISE_LAYER"))
 		if not PHASE47_BIOME_LAYER_TYPES.has(layer_type):
 			layer_type = "NOISE_LAYER"
+		var response_curve: PackedFloat32Array = layer.get("response_curve",
+			CurveFieldData.identity()) as PackedFloat32Array
 		var node_id: String = String(graph.call("add_node", layer_type, Vector2(column, 180.0), {
 			"scale": maxf(0.0001, absf(float(layer.get("scale", 6.0)))),
 			"amount": float(layer.get("amount", 20.0)),
@@ -2006,6 +2022,7 @@ func _phase47_rebuild_biome_profile(graph: Resource, stack: Dictionary) -> void:
 			"steps": clampi(int(layer.get("param", 6)), 2, 24),
 			"seed": int(layer.get("seed", 1337)),
 			"angle_deg": fposmod(float(layer.get("angle_deg", 90.0)), 360.0),
+			"response_curve": Array(response_curve),
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -2229,6 +2246,12 @@ func _phase47_build_biome_layer_card(parent: VBoxContainer, graph: Resource,
 			0.0, 360.0, 1.0,
 			"Rotates the channel/flow direction. 90° is the default and usually reads best; try other angles if the channels look too aligned with one axis.")
 
+	_phase47_add_curve_field(box, "BiomeTerrainLayerCurve_%d" % index,
+		"Response curve — reshapes this layer's own natural 0..1 intensity before it's scaled by Feature height (e.g. sharpen ridge peaks, flatten valleys, bias terrace steps). Flat diagonal = no change.",
+		layer, "response_curve", func() -> void:
+			_phase47_stage_biome_profile(graph, stack, "Tune biome terrain layer response curve")
+	)
+
 
 func _phase47_move_biome_layer(graph: Resource, stack: Dictionary, index: int,
 		direction: int) -> void:
@@ -2272,6 +2295,30 @@ func _phase47_add_biome_layer_number(parent: VBoxContainer, graph: Resource, sta
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(help)
+
+
+## A labeled CurveFieldControl bound to `data[key]` (a PackedFloat32Array --
+## see CurveFieldData) -- shared by Biome Terrain's response curve and Biome
+## Texture's gradient distribution curve, since both are the same "reshape a
+## normalized [0,1] value" authoring problem.
+func _phase47_add_curve_field(parent: VBoxContainer, control_name: String,
+		label_text: String, data: Dictionary, key: String, on_change: Callable) -> void:
+	var wrap := VBoxContainer.new()
+	wrap.add_theme_constant_override("separation", 2)
+	parent.add_child(wrap)
+	var label := Label.new()
+	label.text = label_text
+	label.modulate = Color(0.58, 0.68, 0.76)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	wrap.add_child(label)
+	var curve_field := CurveFieldControl.new()
+	curve_field.name = control_name
+	curve_field.set_points(data.get(key, CurveFieldData.identity()) as PackedFloat32Array)
+	curve_field.curve_changed.connect(func(points: PackedFloat32Array) -> void:
+		data[key] = points
+		on_change.call()
+	)
+	wrap.add_child(curve_field)
 
 
 ## Total biome terrain layers across every biome slot with real content
