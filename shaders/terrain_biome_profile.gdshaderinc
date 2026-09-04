@@ -92,9 +92,17 @@ float bp_layer_value(vec3 d, vec4 a, vec4 b) {
 	return bp_fbm(d, scale, seed, param) * amount;
 }
 
-// 0..1 fraction of a small tangent-plane kernel (centre + 8 ring taps at the
-// biome's blend half-width) that resolves to `biome`. With a 0 half-width this is
-// just the hard centre sample.
+// Deterministic 0..2pi rotation for the sample kernel, matched by the CPU mirror
+// so blend-band heights agree for contact.
+float bp_kernel_rotation(vec3 d) {
+	return fract(sin(d.x * 127.1 + d.y * 311.7 + d.z * 74.7) * 43758.5453) * 6.28318530718;
+}
+
+// 0..1 smooth fraction of a rotated tangent-plane disc (centre + two jittered
+// rings out to the biome's blend half-width) that resolves to `biome`. The
+// per-vertex rotation dithers the discrete biome-id map so the boundary reads as
+// a soft gradient rather than the fixed-angle radial banding a static kernel
+// produces. With a 0 half-width this is just the hard centre sample.
 float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 	float centre = (int(floor(ASTERRA_BIOME_ID_AT(d) + 0.5)) == biome) ? 1.0 : 0.0;
 	float half_m = u_biome_blend_m[clamp(biome, 0, 17)];
@@ -102,45 +110,78 @@ float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 		return centre;
 	}
 	float ang = half_m / max(u_planet_radius, 1.0);
-	float hits = centre * 2.0;
-	float total = 2.0;
-	for (int k = 0; k < 8; k++) {
-		float theta = float(k) * 0.7853981634;
-		vec3 sample_dir = normalize(d + (tx * cos(theta) + ty * sin(theta)) * ang);
-		hits += (int(floor(ASTERRA_BIOME_ID_AT(sample_dir) + 0.5)) == biome) ? 1.0 : 0.0;
-		total += 1.0;
+	float rot = bp_kernel_rotation(d);
+	float acc = centre * 1.5;
+	float wsum = 1.5;
+	for (int ring = 0; ring < 2; ring++) {
+		float radius = mix(0.55, 1.0, float(ring));
+		float ring_w = mix(1.0, 0.6, float(ring));
+		for (int k = 0; k < 6; k++) {
+			float theta = rot + float(k) * 1.04719755 + float(ring) * 0.5235988;
+			vec3 sd = normalize(d + (tx * cos(theta) + ty * sin(theta)) * (ang * radius));
+			acc += ring_w * ((int(floor(ASTERRA_BIOME_ID_AT(sd) + 0.5)) == biome) ? 1.0 : 0.0);
+			wsum += ring_w;
+		}
 	}
-	return total > 0.0 ? hits / total : centre;
+	return smoothstep(0.10, 0.90, acc / wsum);
 }
 
-// Metres to add to the surface at `dir`. `biome_id_hint` is accepted for call-site
-// compatibility but the boundary kernel resolves the biome itself. Zero-cost when
-// no layer is bound.
-float asterra_biome_profile_height(vec3 dir, float biome_id_hint) {
+// Branchless orthonormal tangent basis for a unit vector (Duff et al. 2017),
+// smooth everywhere except n.z == -1 -- so the kernel has no seam.
+void bp_tangent_basis(vec3 n, out vec3 tx, out vec3 ty) {
+	float s = n.z >= 0.0 ? 1.0 : -1.0;
+	float a = -1.0 / (s + n.z);
+	float b = n.x * n.y * a;
+	tx = vec3(1.0 + s * n.x * n.x * a, s * b, -s * n.x);
+	ty = vec3(b, s + n.y * n.y * a, -n.y);
+}
+
+// Metres to add to the surface at `dir`, plus a tangent-plane tilt (downslope
+// vector) so the vertex shader can correct the shading normal for the biome
+// displacement without a faceted screen-space derivative. `biome_id_hint` is
+// accepted for call-site compatibility; the boundary kernel resolves the biome
+// itself. Zero-cost when no layer is bound.
+float asterra_biome_profile_height_grad(vec3 dir, out vec3 tilt) {
+	tilt = vec3(0.0);
 	if (u_biome_layer_count <= 0) {
 		return 0.0;
 	}
 	vec3 d = normalize(dir);
-	vec3 ref = abs(d.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-	vec3 tx = normalize(cross(ref, d));
-	vec3 ty = cross(d, tx);
-	float total = 0.0;
+	vec3 tx;
+	vec3 ty;
+	bp_tangent_basis(d, tx, ty);
+	float eps_m = 2.0;
+	float eps_ang = eps_m / max(u_planet_radius, 1.0);
+	vec3 dx = normalize(d + tx * eps_ang);
+	vec3 dy = normalize(d + ty * eps_ang);
+	float h0 = 0.0;
+	float hx = 0.0;
+	float hy = 0.0;
 	int cached_biome = -1;
-	float cached_coverage = 0.0;
+	float cov = 0.0;
 	for (int i = 0; i < BIOME_LAYER_MAX; i++) {
 		if (i >= u_biome_layer_count) {
 			break;
 		}
 		vec4 a = u_biome_layer_a[i];
+		vec4 b = u_biome_layer_b[i];
 		int layer_biome = int(floor(a.x + 0.5));
 		if (layer_biome != cached_biome) {
 			cached_biome = layer_biome;
-			cached_coverage = bp_biome_coverage(d, tx, ty, layer_biome);
+			cov = bp_biome_coverage(d, tx, ty, layer_biome);
 		}
-		if (cached_coverage <= 0.0) {
+		if (cov <= 0.0) {
 			continue;
 		}
-		total += bp_layer_value(d, a, u_biome_layer_b[i]) * cached_coverage;
+		h0 += bp_layer_value(d, a, b) * cov;
+		hx += bp_layer_value(dx, a, b) * cov;
+		hy += bp_layer_value(dy, a, b) * cov;
 	}
-	return total;
+	tilt = -tx * ((hx - h0) / eps_m) - ty * ((hy - h0) / eps_m);
+	return h0;
+}
+
+float asterra_biome_profile_height(vec3 dir, float biome_id_hint) {
+	vec3 unused_tilt;
+	return asterra_biome_profile_height_grad(dir, unused_tilt);
 }

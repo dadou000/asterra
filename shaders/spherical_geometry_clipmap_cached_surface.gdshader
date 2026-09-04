@@ -369,7 +369,9 @@ void vertex() {
 
 	float edit_h = terrain_edit_delta(d, u_planet_radius);
 	h += edit_h;
-	h += asterra_biome_profile_height(d, asterra_ctx_biome_id(d));
+	vec3 biome_tilt;
+	float biome_h = asterra_biome_profile_height_grad(d, biome_tilt);
+	h += biome_h;
 
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
 		RING_HANDOFF_BIAS_MIN_M, RING_HANDOFF_BIAS_MAX_M) * handoff_w;
@@ -431,6 +433,9 @@ void vertex() {
 		v_smooth_normal = d;
 		v_geom_normal_weight = 0.65;
 	}
+	// Tilt the smooth normal by the analytic biome-layer slope so biome terrain is
+	// shaded, not left reading off the cache normal that never saw it.
+	v_smooth_normal = normalize(v_smooth_normal + biome_tilt);
 
 	v_planet = p;
 	v_render = render_p;

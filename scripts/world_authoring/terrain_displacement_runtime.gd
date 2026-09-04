@@ -685,8 +685,37 @@ func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
 			return _terrain_fbm(d, scale, seed, param) * amount
 
 
-# 0..1 fraction of a small tangent-plane kernel (centre + 8 ring taps at the
-# biome's blend half-width) that resolves to `biome`. Mirrors bp_biome_coverage.
+# Branchless orthonormal tangent basis (Duff et al. 2017); mirrors bp_tangent_basis.
+func _biome_tangent_basis(n: Vector3) -> Array:
+	var s: float = 1.0 if n.z >= 0.0 else -1.0
+	var a: float = -1.0 / (s + n.z)
+	var b: float = n.x * n.y * a
+	return [
+		Vector3(1.0 + s * n.x * n.x * a, s * b, -s * n.x),
+		Vector3(b, s + n.y * n.y * a, -n.y),
+	]
+
+
+func _biome_kernel_rotation(d: Vector3) -> float:
+	var t: float = sin(d.x * 127.1 + d.y * 311.7 + d.z * 74.7) * 43758.5453
+	return (t - floor(t)) * TAU
+
+
+# Best available biome id at a direction, matching what the render samples:
+# the procedural context field when the planet is ready, else the authoring
+# biome-preview image.
+func _biome_id_at(direction: Vector3) -> int:
+	if Planet.get("ready_state") and Planet.has_method("sample_info"):
+		var info: Dictionary = Planet.call("sample_info", direction) as Dictionary
+		return clampi(int(info.get("biome", 0)), 0, BIOME_COUNT - 1)
+	return _sample_authored_biome(direction)
+
+
+# 0..1 smooth fraction of a rotated tangent-plane disc that resolves to `biome`.
+# Mirrors bp_biome_coverage (the float64 sin makes the per-point rotation differ
+# slightly from the GPU, so blend-band heights are close but not bit-identical;
+# outside the band and at a 0 half-width they agree exactly). `centre_biome` is the
+# caller's already-resolved biome under `d`; only the offset taps are sampled here.
 func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
 		centre_biome: int) -> float:
 	var centre: float = 1.0 if centre_biome == biome else 0.0
@@ -695,27 +724,34 @@ func _biome_coverage(d: Vector3, tx: Vector3, ty: Vector3, biome: int,
 		return centre
 	var radius: float = maxf(float(Planet.cfg.planet_radius), 1.0) if Planet.cfg != null else 1.0
 	var ang: float = half_m / radius
-	var hits: float = centre * 2.0
-	var total: float = 2.0
-	for k: int in 8:
-		var theta: float = float(k) * 0.7853981634
-		var sample_dir: Vector3 = (d + (tx * cos(theta) + ty * sin(theta)) * ang).normalized()
-		hits += 1.0 if _sample_authored_biome(sample_dir) == biome else 0.0
-		total += 1.0
-	return hits / total if total > 0.0 else centre
+	var rot: float = _biome_kernel_rotation(d)
+	var acc: float = centre * 1.5
+	var wsum: float = 1.5
+	for ring: int in 2:
+		var ring_radius: float = lerpf(0.55, 1.0, float(ring))
+		var ring_w: float = lerpf(1.0, 0.6, float(ring))
+		for k: int in 6:
+			var theta: float = rot + float(k) * 1.04719755 + float(ring) * 0.5235988
+			var sd: Vector3 = (d + (tx * cos(theta) + ty * sin(theta)) * (ang * ring_radius)).normalized()
+			acc += ring_w * (1.0 if _biome_id_at(sd) == biome else 0.0)
+			wsum += ring_w
+	return smoothstep(0.10, 0.90, acc / wsum)
 
 
-# Metres the biome layer stack adds at `direction`. `biome_id` is the resolved
-# biome under the point. Mirrors shaders/terrain_biome_profile.gdshaderinc so
-# contact/AGL matches the render.
+# Metres the biome layer stack adds at `direction`, resolving the boundary blend
+# itself. Mirrors shaders/terrain_biome_profile.gdshaderinc so contact/AGL tracks
+# the render.
 func _biome_profiles_height(direction: Vector3, biome_id: int) -> float:
 	if _biome_profiles.is_empty():
 		return 0.0
 	var d: Vector3 = direction.normalized()
-	var centre_biome: int = clampi(biome_id, 0, BIOME_COUNT - 1)
-	var ref: Vector3 = Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT
-	var tx: Vector3 = ref.cross(d).normalized()
-	var ty: Vector3 = d.cross(tx)
+	var centre_biome: int = biome_id
+	if centre_biome < 0:
+		centre_biome = _biome_id_at(d)
+	centre_biome = clampi(centre_biome, 0, BIOME_COUNT - 1)
+	var basis: Array = _biome_tangent_basis(d)
+	var tx: Vector3 = basis[0]
+	var ty: Vector3 = basis[1]
 	var total: float = 0.0
 	var cached_biome: int = -1
 	var cached_coverage: float = 0.0
