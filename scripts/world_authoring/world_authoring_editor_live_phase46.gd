@@ -24,6 +24,14 @@ const PHASE47_BIOME_PROFILE_PREFIX := "simple-biome-terrain-"
 const PHASE47_ALL_RINGS_MASK: int = (1 << 15) - 1
 const PHASE47_GLOBAL_TAB: int = 0
 const PHASE47_BIOME_TAB: int = 1
+const PHASE47_EROSION_TAB: int = 2
+
+# Placement mode for the Erosion Bake region picker (see _place_current_hit /
+# _update_preview overrides below). 102 is clear of every other placement
+# mode constant used across the world_authoring_editor_live_* chain (checked:
+# the base PlacementMode enum runs 0-5, phase-local sculpt modes run 6-9, and
+# the other phase46_core / phase5 / phase6 "place/edit/move" modes use 100/101).
+const EROSION_BAKE_MODE: int = 102
 
 # Base-shape layer types a provisioned profile may start from (index-aligned so a
 # ported default's "base_type" string resolves to a valid stack layer).
@@ -122,6 +130,16 @@ const PHASE47_PRESETS: Array[Dictionary] = [
 var _phase47_editor_tab: int = PHASE47_GLOBAL_TAB
 var _phase47_diag_probe_cache: Dictionary = {}
 
+# Erosion Bake region parameters (see _phase47_build_erosion_editor). Baking
+# writes into Deltas, the project's existing sparse terrain-edit lattice --
+# see erosion_region_bake.gd -- not into the terrain profile resource, so
+# these live as plain editor state rather than staged/undo-tracked fields.
+var _erosion_radius_m: float = 150.0
+var _erosion_resolution: int = 192
+var _erosion_droplets: int = 20000
+var _erosion_hardness: float = 0.6
+var _erosion_seed: int = 1337
+
 
 func _build_shell() -> void:
 	super._build_shell()
@@ -174,6 +192,8 @@ func _build_terrain_page() -> void:
 	_phase47_build_editor_tabs()
 	if _phase47_editor_tab == PHASE47_BIOME_TAB:
 		_phase47_build_biome_editor(terrain)
+	elif _phase47_editor_tab == PHASE47_EROSION_TAB:
+		_phase47_build_erosion_editor()
 	else:
 		_phase47_build_controls(graph)
 		_phase47_build_biome_note()
@@ -187,6 +207,7 @@ func _phase47_build_editor_tabs() -> void:
 	for item: Dictionary in [
 		{"tab":PHASE47_GLOBAL_TAB, "label":"GLOBAL TERRAIN", "tip":"The shared terrain character for the whole planet."},
 		{"tab":PHASE47_BIOME_TAB, "label":"BIOME TERRAIN", "tip":"Add a terrain profile that only applies inside one biome."},
+		{"tab":PHASE47_EROSION_TAB, "label":"EROSION BAKE", "tip":"Simulate real hydraulic erosion over one region and bake the result into the terrain."},
 	]:
 		var button := Button.new()
 		button.text = String(item["label"])
@@ -200,6 +221,59 @@ func _phase47_build_editor_tabs() -> void:
 			_refresh_current_category()
 		)
 		tabs.add_child(button)
+
+
+## Real (not faked) droplet-based hydraulic erosion, baked once over an
+## authored region -- see scripts/world_authoring/hydraulic_erosion_baker.gd
+## and erosion_region_bake.gd for why this has to be a bake rather than a
+## live per-vertex layer like the rest of Biome Terrain (it needs the whole
+## local height field as shared, mutable state while droplets simulate across
+## it, which a per-vertex shader fundamentally can't hold). A bake writes
+## directly into Deltas, the same sparse edit lattice a sculpt-tool stroke
+## uses, so it shows up in the render and in contact/AGL immediately and
+## persists with the rest of the world's edits -- there is no separate
+## Apply/staging step here the way the profile-resource controls above have.
+func _phase47_build_erosion_editor() -> void:
+	_section("Erosion bake")
+	_add_note("Simulates real water droplets flowing downhill across one region -- picking up sediment on steep ground, dropping it where the flow slows -- and bakes the result permanently into the terrain there. This is a real (if simplified) physical simulation, not the fast per-vertex Erosion Channels / Sediment Deposit look in Biome Terrain, which fakes the same look live because a real simulation needs the whole region's height field as shared state while it runs. A bake can take a few seconds for a modest region and longer for a large one; there is no live preview of the result, only of the region you are about to bake.")
+
+	var mode_row := HBoxContainer.new()
+	mode_row.add_theme_constant_override("separation", 8)
+	_workspace.add_child(mode_row)
+	var place_button := Button.new()
+	place_button.name = "ArmErosionBakeRegion"
+	place_button.text = "STOP PLACING" if _placement_mode == EROSION_BAKE_MODE else "PLACE BAKE REGION"
+	place_button.tooltip_text = "Aim anywhere on the live terrain -- a ring previews the bake region -- then click to bake there."
+	place_button.pressed.connect(func() -> void:
+		_set_placement_mode(PlacementMode.NONE if _placement_mode == EROSION_BAKE_MODE else EROSION_BAKE_MODE)
+		_refresh_current_category()
+	)
+	mode_row.add_child(place_button)
+	var info := Label.new()
+	info.text = "the ring follows your cursor once armed -- one click bakes at the aimed point"
+	info.modulate = Color(0.64, 0.76, 0.86)
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_row.add_child(info)
+
+	_add_number_field("Region radius", _erosion_radius_m, 10.0, 2000.0, 1.0, " m", func(value: float) -> void:
+		_erosion_radius_m = clampf(value, 10.0, 2000.0)
+		_update_preview()
+	)
+	_add_number_field("Simulation resolution", float(_erosion_resolution), 32.0, 512.0, 1.0, " cells", func(value: float) -> void:
+		_erosion_resolution = clampi(int(round(value)), 32, 512)
+	)
+	_add_number_field("Droplets", float(_erosion_droplets), 500.0, 300000.0, 500.0, "", func(value: float) -> void:
+		_erosion_droplets = clampi(int(round(value)), 500, 300000)
+	)
+	_add_number_field("Edge softness", _erosion_hardness, 0.0, 0.95, 0.01, "", func(value: float) -> void:
+		_erosion_hardness = clampf(value, 0.0, 0.95)
+		_update_preview()
+	)
+	_add_number_field("Random seed", float(_erosion_seed), 0.0, 999999.0, 1.0, "", func(value: float) -> void:
+		_erosion_seed = int(round(value))
+	)
+	_add_note("Region radius and simulation resolution together decide how many native terrain-edit points get written (roughly (2 * radius / native spacing)^2) -- a large radius with a fine resolution can take a while and will block the editor while it bakes. Keep the radius modest (tens to a few hundred metres) for a quick iteration; droplet count controls how much the terrain actually changes (more droplets = more erosion/deposit) and simulation resolution controls how much fine detail the eroded shape can show, independent of how far it reaches.")
 
 
 func _phase47_build_all_rings_notice() -> void:
@@ -1273,3 +1347,67 @@ func _phase46_handle_directions(config: Dictionary) -> Dictionary:
 			out["west"] = _phase46_direction_from_lat_lon(facing.x, west)
 			out["east"] = _phase46_direction_from_lat_lon(facing.x, east)
 	return out
+
+
+# ------------------------------------------------------------ erosion bake ---
+# Placement-mode overrides for EROSION_BAKE_MODE. Single-click only (never
+# added to _continuous_drag_mode): a bake is one expensive, synchronous
+# action, not something to run on every mouse-move the way a sculpt drag
+# does. The base _process (world_authoring_editor_live.gd) already samples
+# the cursor and calls _update_preview() every frame while any placement mode
+# is armed, so the region ring below follows the mouse for free.
+
+func _placement_status_text() -> String:
+	if _placement_mode == EROSION_BAKE_MODE:
+		return "EROSION BAKE ARMED — aim at terrain, left click to bake • RMB/Esc stop • TAB navigate"
+	return super._placement_status_text()
+
+
+func _place_current_hit(continuous: bool) -> void:
+	if _placement_mode != EROSION_BAKE_MODE:
+		super._place_current_hit(continuous)
+		return
+	if continuous:
+		return
+	if _last_hit.is_empty():
+		_set_status("Viewport pick did not intersect terrain.")
+		return
+	var direction: Vector3 = Vector3(_last_hit.get("dir", Vector3.ZERO))
+	if direction.length_squared() < 0.99:
+		return
+	_set_status("Baking erosion over a %.0f m region — this blocks the editor for a few seconds…"
+		% _erosion_radius_m)
+	var result: Dictionary = ErosionRegionBake.bake(direction, _erosion_radius_m,
+		_erosion_resolution, _erosion_hardness,
+		{"droplet_count": _erosion_droplets, "seed": _erosion_seed})
+	if not bool(result.get("ok", false)):
+		_set_status("Erosion bake failed: %s" % String(result.get("error", "unknown error")))
+	else:
+		_set_status("Erosion bake done: %d terrain points touched, %.2f m to %.2f m change (mean %.3f m)."
+			% [int(result.get("native_points_written", 0)),
+				float(result.get("sim_min_delta_m", 0.0)),
+				float(result.get("sim_max_delta_m", 0.0)),
+				float(result.get("sim_mean_delta_m", 0.0))])
+	# One bake per arm, matching PHASE46_PLACE_FEATURE's placement flow —
+	# re-arm to bake another region rather than accidentally re-baking the
+	# same spot (with the terrain it just changed as the new starting point)
+	# on a stray click.
+	_set_placement_mode(PlacementMode.NONE)
+	_refresh_current_category()
+
+
+func _update_preview() -> void:
+	if _placement_mode != EROSION_BAKE_MODE:
+		super._update_preview()
+		return
+	if _preview_mesh == null:
+		return
+	_preview_mesh.clear_surfaces()
+	if _navigation_active or _last_hit.is_empty():
+		return
+	var direction: Vector3 = Vector3(_last_hit.get("dir", Vector3.ZERO))
+	var height: float = float(_last_hit.get("height", 0.0))
+	_draw_surface_ring(direction, height, _erosion_radius_m, Color(0.36, 0.68, 0.92, 1.0))
+	if _erosion_hardness > 0.02:
+		_draw_surface_ring(direction, height,
+			maxf(0.1, _erosion_radius_m * _erosion_hardness), Color(0.62, 0.80, 0.94, 0.85))
