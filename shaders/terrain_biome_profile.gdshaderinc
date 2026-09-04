@@ -116,14 +116,17 @@ const float BP_MAX_FREQUENCY = 1500000.0;
 // voxels"/crystalline aliasing an extreme Feature Size setting produces,
 // since scale is no longer capped to what any mesh could resolve now that
 // BP_MAX_FREQUENCY allows it up to float32's own limit. Ramping to zero over
-// [1, 3] vertices-per-wavelength (rather than a hard cutoff at 1) avoids a
-// visible seam where the fade kicks in.
+// [2, 8] vertices-per-wavelength (rather than a hard cutoff at 1) avoids a
+// visible seam where the fade kicks in, and leaves real margin: a mesh can
+// technically resolve a signal down to ~1 vertex/wavelength (Nyquist), but a
+// noise octave right at that limit still looks noticeably faceted, not
+// smooth, since only its coarsest shape (not its curvature) survives.
 float bp_octave_fade(float frequency, float spacing_m) {
 	if (spacing_m <= 0.0) {
 		return 1.0;
 	}
 	float wavelength_m = u_planet_radius / max(frequency, 0.000001);
-	return smoothstep(spacing_m, spacing_m * 3.0, wavelength_m);
+	return smoothstep(spacing_m * 2.0, spacing_m * 8.0, wavelength_m);
 }
 
 // `spacing_m` is the current vertex-to-vertex spacing (0 to disable the
