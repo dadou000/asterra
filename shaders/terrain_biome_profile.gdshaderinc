@@ -56,20 +56,31 @@ float bp_hash(ivec3 p, int seed) {
 // that frame resets, which is still a visible pop, just a rarer one.
 // `fma(a, b, -a*b)` recovers the *exact* rounding error of one float32
 // multiply (Dekker's TwoProduct via FMA, exact on IEEE754 hardware), so
-// `fract(p) + e` restores the low bits the single multiply rounded away,
-// before a final fract() brings it back into [0, 1). This needs no reference
-// frame at all -- `direction` alone is already precise near the observer (see
-// spherical_geometry_clipmap.gd's anchor-relative direction reconstruction),
-// so this is exact at any frequency across every rebase and every re-anchor,
-// not just the common one.
+// `fract(p) + e` restores the low bits the single multiply rounded away.
+// This needs no reference frame at all -- `direction` alone is already
+// precise near the observer (see spherical_geometry_clipmap.gd's
+// anchor-relative direction reconstruction), so this is exact at any
+// frequency across every rebase and every re-anchor, not just the common one.
 float bp_noise(vec3 direction, float frequency, int seed) {
 	vec3 p = direction * frequency;
 	vec3 e = vec3(
 		fma(direction.x, frequency, -p.x),
 		fma(direction.y, frequency, -p.y),
 		fma(direction.z, frequency, -p.z));
-	ivec3 i = ivec3(floor(p));
-	vec3 f = fract(fract(p) + e);
+	// e is the low bits the p = direction * frequency rounding threw away --
+	// at high frequency it is NOT negligible (it can be a sizeable fraction
+	// of one whole lattice cell), so fract(p) + e routinely lands outside
+	// [0, 1). A plain fract() would wrap that back in without telling the
+	// integer lattice index below, so the vertex would hash against the
+	// WRONG cell -- uncorrelated with its neighbours, i.e. an isolated spike.
+	// floor() on the raw sum gives the correct carry into the cell index
+	// instead, so every vertex's hash lookup stays consistent with its
+	// neighbours'.
+	vec3 pf = floor(p);
+	vec3 raw = (p - pf) + e;
+	vec3 carry = floor(raw);
+	vec3 f = raw - carry;
+	ivec3 i = ivec3(pf + carry);
 	f = f * f * (vec3(3.0) - 2.0 * f);
 	float a0 = mix(bp_hash(i, seed), bp_hash(i + ivec3(1, 0, 0), seed), f.x);
 	float a1 = mix(bp_hash(i + ivec3(0, 1, 0), seed), bp_hash(i + ivec3(1, 1, 0), seed), f.x);
@@ -78,6 +89,16 @@ float bp_noise(vec3 direction, float frequency, int seed) {
 	return mix(mix(a0, a1, f.y), mix(b0, b1, f.y), f.z);
 }
 
+// bp_noise's FMA correction keeps direction * frequency exact (tested clean up
+// to this) because that product still lands well under float32's exact-integer
+// ceiling (2^24 = 16,777,216 -- above roughly 2^23 even the recovered value
+// starts landing on the same quantised integer for neighbouring vertices, and
+// no single-correction-term trick fixes that; it would need a true
+// double-single pair carried through the whole computation). Clamping here
+// means an extreme scale setting degrades to "as fine as float32 supports"
+// instead of spiking again above this frequency.
+const float BP_MAX_FREQUENCY = 4000000.0;
+
 float bp_fbm(vec3 direction, float scale, int seed, int passes) {
 	float total = 0.0;
 	float normalizer = 0.0;
@@ -85,7 +106,7 @@ float bp_fbm(vec3 direction, float scale, int seed, int passes) {
 	float frequency = max(abs(scale), 0.000001);
 	for (int octave = 0; octave < 4; octave++) {
 		if (octave >= clamp(passes, 1, 4)) break;
-		total += bp_noise(direction, frequency, seed + octave * 1013) * amplitude;
+		total += bp_noise(direction, min(frequency, BP_MAX_FREQUENCY), seed + octave * 1013) * amplitude;
 		normalizer += amplitude;
 		frequency *= 2.0;
 		amplitude *= 0.5;
