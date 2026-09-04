@@ -106,15 +106,42 @@ float bp_noise(vec3 direction, float frequency, int seed) {
 // "as fine as float32 supports" instead of spiking again above this frequency.
 const float BP_MAX_FREQUENCY = 1500000.0;
 
-float bp_fbm(vec3 direction, float scale, int seed, int passes) {
+// Fades out an octave whose spatial wavelength the current mesh cannot
+// represent without aliasing. One full noise cycle of `direction * frequency`
+// spans roughly `u_planet_radius / frequency` metres of world arc length; once
+// that wavelength approaches the local vertex spacing, neighbouring vertices
+// sample effectively uncorrelated parts of the noise field no matter how
+// precise the math is (bp_noise's FMA correction fixes float32 precision, not
+// the mesh's own triangle density) -- this is exactly the "individual
+// voxels"/crystalline aliasing an extreme Feature Size setting produces,
+// since scale is no longer capped to what any mesh could resolve now that
+// BP_MAX_FREQUENCY allows it up to float32's own limit. Ramping to zero over
+// [1, 3] vertices-per-wavelength (rather than a hard cutoff at 1) avoids a
+// visible seam where the fade kicks in.
+float bp_octave_fade(float frequency, float spacing_m) {
+	if (spacing_m <= 0.0) {
+		return 1.0;
+	}
+	float wavelength_m = u_planet_radius / max(frequency, 0.000001);
+	return smoothstep(spacing_m, spacing_m * 3.0, wavelength_m);
+}
+
+// `spacing_m` is the current vertex-to-vertex spacing (0 to disable the
+// fade), used to apply bp_octave_fade to every octave's own amplitude AND to
+// the normalizer -- so a faded-out fine octave does not just dim the whole
+// result, the remaining (resolvable) octaves are renormalised to their own
+// full relative weight, the way fbm naturally looks at any zoom level.
+float bp_fbm(vec3 direction, float scale, int seed, int passes, float spacing_m) {
 	float total = 0.0;
 	float normalizer = 0.0;
 	float amplitude = 1.0;
 	float frequency = max(abs(scale), 0.000001);
 	for (int octave = 0; octave < 4; octave++) {
 		if (octave >= clamp(passes, 1, 4)) break;
-		total += bp_noise(direction, min(frequency, BP_MAX_FREQUENCY), seed + octave * 1013) * amplitude;
-		normalizer += amplitude;
+		float f = min(frequency, BP_MAX_FREQUENCY);
+		float w = bp_octave_fade(f, spacing_m) * amplitude;
+		total += bp_noise(direction, f, seed + octave * 1013) * w;
+		normalizer += w;
 		frequency *= 2.0;
 		amplitude *= 0.5;
 	}
@@ -159,7 +186,10 @@ void bp_rotate_basis(vec3 tx, vec3 ty, float angle_deg, out vec3 rtx, out vec3 r
 // on top for branching detail at that octave's scale, echoing how a real
 // drainage network's tributaries are self-similar at every scale.
 // `angle_deg` rotates the flow/channel orientation (see bp_rotate_basis).
-float bp_erosion_channels(vec3 d, float scale, int seed, int passes, float angle_deg) {
+// `spacing_m` fades unresolvable octaves the same way bp_fbm does (see
+// bp_octave_fade) -- 0 disables the fade.
+float bp_erosion_channels(vec3 d, float scale, int seed, int passes, float angle_deg,
+		float spacing_m) {
 	vec3 tx0;
 	vec3 ty0;
 	bp_tangent_basis(d, tx0, ty0);
@@ -195,8 +225,9 @@ float bp_erosion_channels(vec3 d, float scale, int seed, int passes, float angle
 			+ ty * (flow_y * 1.4 + branch_y * 0.5)) * warp_scale);
 		float ridge = 1.0 - abs(bp_noise(warped, f, seed + octave * 1013));
 		float channel = ridge * ridge * ridge;
-		total += channel * amplitude;
-		normalizer += amplitude;
+		float w = bp_octave_fade(f, spacing_m) * amplitude;
+		total += channel * w;
+		normalizer += w;
 		frequency *= 2.0;
 		amplitude *= 0.5;
 	}
@@ -225,8 +256,11 @@ float bp_erosion_channels(vec3 d, float scale, int seed, int passes, float angle
 // have slid around here" look -- true hydraulic/talus physics needs the whole
 // height field's flow at once (global state a per-vertex shader doesn't have)
 // no matter which of these two techniques picks the direction. `angle_deg`
-// rotates the bias direction (see bp_rotate_basis).
-float bp_sediment_deposit(vec3 d, float scale, int seed, int passes, float angle_deg) {
+// rotates the bias direction (see bp_rotate_basis). `spacing_m` fades
+// unresolvable octaves the same way bp_fbm does (see bp_octave_fade) -- 0
+// disables the fade.
+float bp_sediment_deposit(vec3 d, float scale, int seed, int passes, float angle_deg,
+		float spacing_m) {
 	vec3 tx0;
 	vec3 ty0;
 	bp_tangent_basis(d, tx0, ty0);
@@ -280,8 +314,9 @@ float bp_sediment_deposit(vec3 d, float scale, int seed, int passes, float angle
 		vec3 shifted = normalize(d - (tx * shift.x + ty * shift.y));
 		float field = bp_noise(shifted, f, seed + octave * 1013);
 		float deposit = clamp(1.0 - abs(field * 1.65), 0.0, 1.0);
-		total += deposit * deposit * amplitude;
-		normalizer += amplitude;
+		float w = bp_octave_fade(f, spacing_m) * amplitude;
+		total += deposit * deposit * w;
+		normalizer += w;
 		frequency *= 2.0;
 		amplitude *= 0.5;
 	}
@@ -289,28 +324,29 @@ float bp_sediment_deposit(vec3 d, float scale, int seed, int passes, float angle
 }
 
 // Metres this one layer contributes at `d`, before the biome boundary weight.
-float bp_layer_value(vec3 d, vec4 a, vec4 b) {
+// `spacing_m` is the current vertex spacing, for bp_octave_fade.
+float bp_layer_value(vec3 d, vec4 a, vec4 b, float spacing_m) {
 	int layer_type = int(floor(a.y + 0.5));
 	float scale = a.z;
 	float amount = a.w;
 	int seed = int(floor(b.y + 0.5));
 	int param = int(floor(b.x + 0.5));
 	if (layer_type == 1) {
-		float ridge = 1.0 - abs(bp_fbm(d, scale, seed, param));
+		float ridge = 1.0 - abs(bp_fbm(d, scale, seed, param, spacing_m));
 		return ridge * ridge * amount;
 	} else if (layer_type == 2) {
-		float field = bp_fbm(d, scale, seed, 1);
+		float field = bp_fbm(d, scale, seed, 1, spacing_m);
 		float steps = clamp(float(param), 2.0, 24.0);
 		float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0);
 		return (terrace * 2.0 - 1.0) * amount;
 	} else if (layer_type == 3) {
-		float channel = bp_erosion_channels(d, scale, seed, param, b.z);
+		float channel = bp_erosion_channels(d, scale, seed, param, b.z, spacing_m);
 		return -channel * amount;
 	} else if (layer_type == 4) {
-		float deposit = bp_sediment_deposit(d, scale, seed, param, b.z);
+		float deposit = bp_sediment_deposit(d, scale, seed, param, b.z, spacing_m);
 		return deposit * amount;
 	}
-	return bp_fbm(d, scale, seed, param) * amount;
+	return bp_fbm(d, scale, seed, param, spacing_m) * amount;
 }
 
 // 0..1 boundary coverage of `biome`.
@@ -341,8 +377,14 @@ float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
 	return smoothstep(0.18, 0.82, acc / wsum);
 }
 
-// Metres to add to the surface at `dir`. Zero-cost when no layer is bound.
-float asterra_biome_profile_height(vec3 dir) {
+// Metres to add to the surface at `dir`. `spacing_m` is the current
+// vertex-to-vertex spacing in metres (pass 0 to disable the geometric
+// anti-aliasing fade -- see bp_octave_fade); every layer type fades its own
+// unresolvable octaves toward zero rather than aliasing into a crystalline,
+// "individual voxels visible" look once its Feature Size setting produces a
+// wavelength finer than the mesh can represent. Zero-cost when no layer is
+// bound.
+float asterra_biome_profile_height(vec3 dir, float spacing_m) {
 	if (u_biome_layer_count <= 0) {
 		return 0.0;
 	}
@@ -366,7 +408,7 @@ float asterra_biome_profile_height(vec3 dir) {
 		if (cov <= 0.0) {
 			continue;
 		}
-		total += bp_layer_value(d, a, u_biome_layer_b[i]) * cov;
+		total += bp_layer_value(d, a, u_biome_layer_b[i], spacing_m) * cov;
 	}
 	return total;
 }

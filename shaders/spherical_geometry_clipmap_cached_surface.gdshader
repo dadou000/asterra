@@ -373,7 +373,7 @@ void vertex() {
 
 	float edit_h = terrain_edit_delta(d, u_planet_radius);
 	h += edit_h;
-	float biome_h = asterra_biome_profile_height(d);
+	float biome_h = asterra_biome_profile_height(d, spacing);
 	h += biome_h;
 
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),
@@ -434,10 +434,29 @@ void vertex() {
 		// bump/pit to the cross-product and the whole patch brightens or darkens.
 		v_smooth_normal = terrain_cached_surface_normal(
 			d, normal_level, normal_morph, h - edit_h - biome_h, anchor_offset_m);
-		// Where the sculpt delta or biome layers displace the mesh, lean on the
-		// geometry (screen-space derivative) normal, which does see them.
+		// Sculpt edits are typically small, sharp, deliberate stamps -- lean
+		// hard on the geometry (screen-space derivative) normal so the
+		// bump/pit reads clearly; that normal does see edit_h/biome_h, unlike
+		// the cache-only smooth normal above.
+		//
+		// Biome layers are different: since terrain height became "coarse
+		// elevation + biome authoring" (terrain_biome_profile.gdshaderinc)
+		// they are the PRIMARY, CONTINUOUS terrain shape -- often several
+		// metres of relief across perfectly ordinary rolling ground, not an
+		// occasional small detail on top -- so a fixed `abs(biome_h) > 0.05m`
+		// threshold snapping straight to a 0.90 flat-normal weight was true
+		// almost everywhere biome terrain is active. A screen-space-derivative
+		// normal is literally one flat normal per triangle, so at typical
+		// clipmap ring density that reads as a low-poly "faceted"/blocky look
+		// across the whole visible terrain, not just wherever a real
+		// discontinuity needed revealing. Ramp gently by biome_h magnitude
+		// instead, capped well below fully flat, so ordinary biome relief
+		// stays smoothly shaded and only unusually sharp, large biome
+		// features pick up a moderate (not dominant) flat-normal blend.
+		float edit_flat_w = abs(edit_h) > 0.001 ? 0.90 : 0.0;
+		float biome_flat_w = smoothstep(0.3, 6.0, abs(biome_h)) * 0.35;
 		v_geom_normal_weight = max(normal_level <= 1 ? 0.28 : 0.10,
-			(abs(edit_h) > 0.001 || abs(biome_h) > 0.05) ? 0.90 : 0.0);
+			max(edit_flat_w, biome_flat_w));
 	} else {
 		v_smooth_normal = d;
 		v_geom_normal_weight = 0.65;
