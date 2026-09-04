@@ -64,6 +64,16 @@ func _run() -> void:
 	if not is_equal_approx(float(NATIVE.extract_controls(graph).get("mountain_strength", 0.0)), 1.73):
 		_fail("Mountain Amount did not update the production graph")
 		return
+	# The warm terrain cache must see the same value -- if the runtime's active
+	# production controls stay at the default, that band renders unmodifiable.
+	var probe_rt: Node = RUNTIME.new()
+	probe_rt.call("compile_from_terrain", terrain)
+	var active_mtn: float = float((probe_rt.call("active_production_controls")
+		as Dictionary).get("mountain_strength", -1.0))
+	probe_rt.free()
+	if not is_equal_approx(active_mtn, 1.73):
+		_fail("Cache-facing production controls ignored the slider: mountain_strength=%.3f" % active_mtn)
+		return
 	var desert: Button = _find_named(editor, "TerrainLook_desert") as Button
 	if desert == null:
 		_fail("Terrain look presets are missing")

@@ -547,7 +547,32 @@ func _phase47_biome_diag_text(terrain: Resource, biome_id: int) -> String:
 	else:
 		lines.append("[3] material shader: NULL")
 
+	if mat != null:
+		lines.append("[3b] live geomorph uniforms the cache/shader use — nonzero here = terrain that this control still produces:")
+		var geo_keys: Array = [
+			"u_geomorph_broad_strength", "u_geomorph_mountain_strength",
+			"u_geomorph_mid_strength", "u_geomorph_channel_strength",
+			"u_geomorph_deposit_strength", "u_geomorph_fine_strength",
+			"u_geomorph_dune_strength", "u_geomorph_glacial_strength",
+			"u_detail_strength", "u_geomorph_biome_terrain_variation",
+			"u_base_elevation_continental", "u_base_elevation_regional",
+			"u_base_elevation_local"]
+		var geo_line := "    "
+		for gk: String in geo_keys:
+			geo_line += "%s=%s  " % [String(gk).trim_prefix("u_geomorph_").trim_prefix("u_"),
+				mat.get_shader_parameter(gk)]
+		lines.append(geo_line)
+
 	var disp: Node = get_tree().get_first_node_in_group(&"terrain_displacement_runtime")
+	if disp != null and disp.has_method("active_production_controls"):
+		var apc: Dictionary = disp.call("active_production_controls")
+		var apc_line := "[4a] runtime active_production_controls: "
+		for ak: String in ["broad_strength", "mountain_strength", "mid_strength",
+				"channel_strength", "deposit_strength", "fine_strength", "dune_strength",
+				"glacial_strength", "detail_strength", "biome_terrain_variation",
+				"base_elevation_continental", "base_elevation_regional", "base_elevation_local"]:
+			apc_line += "%s=%s " % [ak, apc.get(ak, "?")]
+		lines.append(apc_line)
 	if disp != null and disp.has_method("stats"):
 		var st: Dictionary = disp.call("stats")
 		lines.append("[4] disp runtime %s: active=%s  instructions=%s  output_index=%s" % [
