@@ -27,6 +27,13 @@ const BIOME_COUNT: int = 18
 const BIOME_PROFILE_SLOT_PREFIX := "simple-biome-terrain-"
 # layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion, 4 sediment.
 const BIOME_LAYER_MAX: int = 16
+# Mirrors terrain_biome_profile.gdshaderinc's BP_MAX_FREQUENCY. The CPU's
+# double precision never needs this for its own accuracy, but
+# _biome_erosion_channels/_biome_sediment_deposit derive secondary
+# frequencies (a "flow"/slope frequency) from the layer's base frequency, and
+# an unclamped base frequency would put those secondary frequencies at
+# different values here than on the (clamped) GPU side at extreme settings.
+const BIOME_MAX_FREQUENCY: float = 1500000.0
 const BIOME_LAYER_TYPE_BY_NODE: Dictionary = {
 	"NOISE_LAYER": 0, "BILLOW_NOISE": 0,
 	"RIDGED_MOUNTAINS": 1, "VORONOI_RIDGES": 1,
@@ -683,13 +690,11 @@ func _biome_layer_value(d: Vector3, layer: Dictionary) -> float:
 			var terrace: float = floor((field * 0.5 + 0.5) * steps) / maxf(steps - 1.0, 1.0)
 			return (terrace * 2.0 - 1.0) * amount
 		3:
-			var field: float = _terrain_fbm(d, scale, seed, 3)
-			var channel: float = clampf(1.0 - absf(field), 0.0, 1.0)
-			return -(channel * channel * channel) * amount
+			var channel: float = _biome_erosion_channels(d, scale, seed, param)
+			return -channel * amount
 		4:
-			var field: float = _terrain_fbm(d, scale, seed, 3)
-			var deposit: float = clampf(1.0 - absf(field * 1.65), 0.0, 1.0)
-			return deposit * deposit * amount
+			var deposit: float = _biome_sediment_deposit(d, scale, seed, param)
+			return deposit * amount
 		_:
 			return _terrain_fbm(d, scale, seed, param) * amount
 
@@ -703,6 +708,96 @@ func _biome_tangent_basis(n: Vector3) -> Array:
 		Vector3(1.0 + s * n.x * n.x * a, s * b, -s * n.x),
 		Vector3(b, s + n.y * n.y * a, -n.y),
 	]
+
+
+# Mirrors bp_erosion_channels: domain-warped ridged noise so channels bend and
+# branch like water-carved valleys instead of the isotropic blobs a plain
+# ridged field gives. See the shader comment for why (a real flow-accumulation
+# simulation needs the whole height field at once, which neither side has
+# per-vertex/per-sample). Double precision means no bp_noise-style FMA
+# correction is needed here -- direction * frequency is already exact.
+func _biome_erosion_channels(d: Vector3, scale: float, seed: int, passes: int) -> float:
+	var basis: Array = _biome_tangent_basis(d)
+	var tx: Vector3 = basis[0]
+	var ty: Vector3 = basis[1]
+	# Mirrors the shader's base_frequency clamp for parity, not precision --
+	# see BIOME_MAX_FREQUENCY.
+	var base_frequency: float = minf(maxf(absf(scale), 0.000001), BIOME_MAX_FREQUENCY)
+	var flow_frequency: float = base_frequency * 0.12
+	var flow_x: float = _value_noise_3d(d * flow_frequency, seed + 5101)
+	var flow_y: float = _value_noise_3d(d * flow_frequency, seed + 7247)
+	var total: float = 0.0
+	var normalizer: float = 0.0
+	var amplitude: float = 1.0
+	var frequency: float = base_frequency
+	for octave: int in clampi(passes, 1, 4):
+		var f: float = frequency
+		var branch_x: float = _value_noise_3d(d * f, seed + octave * 733 + 11)
+		var branch_y: float = _value_noise_3d(d * f, seed + octave * 733 + 19)
+		# Mirrors the shader's float32-vanishing floor on warp_scale.
+		var warp_scale: float = maxf(1.0 / maxf(f, 1.0), 3.0e-6)
+		var warped: Vector3 = (d + (tx * (flow_x * 1.4 + branch_x * 0.5)
+			+ ty * (flow_y * 1.4 + branch_y * 0.5)) * warp_scale).normalized()
+		var ridge: float = 1.0 - absf(_value_noise_3d(warped * f, seed + octave * 1013))
+		var channel: float = ridge * ridge * ridge
+		total += channel * amplitude
+		normalizer += amplitude
+		frequency *= 2.0
+		amplitude *= 0.5
+	return clampf(total / normalizer, 0.0, 1.0) if normalizer > 0.0 else 0.0
+
+
+# Mirrors bp_sediment_deposit: landslide-style talus, shifted toward a locally
+# coherent "downhill bias" direction (two independent low-frequency noise
+# fields, NOT a finite-difference gradient -- see the shader comment for why
+# a gradient direction spikes here) and weighted by a steepness estimate so it
+# tapers to nothing on flat ground.
+func _biome_sediment_deposit(d: Vector3, scale: float, seed: int, passes: int) -> float:
+	var basis: Array = _biome_tangent_basis(d)
+	var tx: Vector3 = basis[0]
+	var ty: Vector3 = basis[1]
+	# Mirrors the shader's base_frequency clamp for parity, not precision --
+	# see BIOME_MAX_FREQUENCY.
+	var base_frequency: float = minf(maxf(absf(scale), 0.000001), BIOME_MAX_FREQUENCY)
+	# Mirrors the shader: both the steepness estimate and the bias direction
+	# work off a much lower frequency than the deposit texture itself (a
+	# landslide responds to the broad slope, not noise-level bumps).
+	var slope_frequency: float = maxf(base_frequency * 0.15, 0.000001)
+	# Mirrors the shader's float32-vanishing floor on step_ang (see its
+	# comment) so both sides estimate the same steepness even though the CPU's
+	# double precision would not itself need the floor.
+	var step_ang: float = maxf(0.6 / maxf(slope_frequency, 1.0), 3.0e-6)
+	var h0: float = 1.0 - absf(_value_noise_3d(d * slope_frequency, seed + 9001))
+	var dx: Vector3 = (d + tx * step_ang).normalized()
+	var dy: Vector3 = (d + ty * step_ang).normalized()
+	var hx: float = 1.0 - absf(_value_noise_3d(dx * slope_frequency, seed + 9001))
+	var hy: float = 1.0 - absf(_value_noise_3d(dy * slope_frequency, seed + 9001))
+	# Used only as a scalar blend weight below, never as a direction -- see the
+	# shader comment on why that split matters.
+	var steepness: float = Vector2(hx - h0, hy - h0).length()
+	var slope_w: float = smoothstep(0.02, 0.35, steepness)
+
+	var flow_x: float = _value_noise_3d(d * slope_frequency, seed + 5101)
+	var flow_y: float = _value_noise_3d(d * slope_frequency, seed + 7247)
+	var shift_scale: float = maxf(1.6 / maxf(slope_frequency, 1.0), 8.0e-6)
+	# One shared downhill-bias shift for every octave -- see the shader comment.
+	var shift: Vector2 = Vector2(flow_x, flow_y) * shift_scale
+
+	var total: float = 0.0
+	var normalizer: float = 0.0
+	var amplitude: float = 1.0
+	var frequency: float = base_frequency
+	for octave: int in clampi(passes, 1, 4):
+		var f: float = frequency
+		var shifted: Vector3 = (d - (tx * shift.x + ty * shift.y)).normalized()
+		var field: float = _value_noise_3d(shifted * f, seed + octave * 1013)
+		var deposit: float = clampf(1.0 - absf(field * 1.65), 0.0, 1.0)
+		total += deposit * deposit * amplitude
+		normalizer += amplitude
+		frequency *= 2.0
+		amplitude *= 0.5
+	var avg: float = clampf(total / normalizer, 0.0, 1.0) if normalizer > 0.0 else 0.0
+	return avg * slope_w
 
 
 # Best available biome id at a direction, matching what the render samples:
