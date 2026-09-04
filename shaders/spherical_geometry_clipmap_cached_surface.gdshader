@@ -373,16 +373,7 @@ void vertex() {
 
 	float edit_h = terrain_edit_delta(d, u_planet_radius);
 	h += edit_h;
-	// A bounded, world-locked position for the biome layer noise: the render
-	// position (precise to float32 near the camera, and stable across floating-
-	// origin rebases once wrapped) rather than dir * frequency, which loses
-	// precision at high frequency. The pre-biome height is close enough -- this
-	// only sets noise phase, not the resulting displacement.
-	vec3 biome_sample_p = (stable_displacement
-		? u_anchor_render + stable_surface_offset(u_anchor_dir, u_anchor_right,
-			u_anchor_up, anchor_offset_m, h + u_surface_bias)
-		: d * (u_planet_radius + h + u_surface_bias) - u_origin) + u_biome_detail_origin;
-	float biome_h = asterra_biome_profile_height(d, biome_sample_p);
+	float biome_h = asterra_biome_profile_height(d, anchor_offset_m);
 	h += biome_h;
 
 	float handoff_bias_m = clamp(spacing * RING_HANDOFF_BIAS_SPACING * max(u_sink_scale, 0.0),

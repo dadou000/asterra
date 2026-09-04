@@ -315,18 +315,6 @@ func _sync_uniforms(origin: Vector3) -> void:
 	super._sync_uniforms(origin)
 	if _blank_backend():
 		_apply_blank_material_state()
-	if _material != null:
-		# Biome Terrain's high-frequency layers sample a bounded, world-locked
-		# position (render position + this) instead of dir * frequency, which
-		# loses float32 precision at high frequency. Frames.origin is wrapped to
-		# BP_ORIGIN_WRAP_M (4096, matched in terrain_biome_profile.gdshaderinc) so
-		# a rebase shifts the sample position by a whole number of noise-lattice
-		# cells and stays seamless.
-		const WRAP_M := 4096.0
-		_material.set_shader_parameter("u_biome_detail_origin", Vector3(
-			fposmod(float(Frames.origin.x), WRAP_M),
-			fposmod(float(Frames.origin.y), WRAP_M),
-			fposmod(float(Frames.origin.z), WRAP_M)))
 	_sync_authoring_displacement(false)
 	_sync_authoring_material(false)
 	_sync_authoring_shader_variant(false)
