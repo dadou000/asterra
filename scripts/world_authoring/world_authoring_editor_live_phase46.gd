@@ -71,6 +71,19 @@ const PHASE47_TEXTURE_LIBRARY_SLOT_DISPLAY := "Texture Library"
 const PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS: PackedStringArray = [
 	"*.png,*.jpg,*.jpeg,*.bmp,*.tga,*.webp;Images",
 ]
+# Same asset paths spherical_geometry_clipmap_global_gpu.gd binds to the
+# built-in triplanar materials, duplicated rather than cross-referenced (this
+# UI script has no reason to depend on the terrain renderer script) -- used
+# only to derive one representative colour per material for the height-sweep
+# preview swatch below, never for real rendering.
+const PHASE47_BUILTIN_TEXTURE_ALBEDO_PATHS: PackedStringArray = [
+	"res://assets/textures/terrain/ground003_color_2k.jpg",
+	"res://assets/textures/terrain/leafy_grass_diff_2k.jpg",
+	"res://assets/textures/terrain/brown_mud_diff_2k.jpg",
+	"res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg",
+]
+const PHASE47_TEXTURE_PREVIEW_WIDTH: int = 256
+const PHASE47_TEXTURE_PREVIEW_HEIGHT: int = 28
 # Biome terrain no longer uses the displacement bytecode VM (it lowers to
 # uniforms), but the uniform arrays are bounded: keep the live layer total within
 # what terrain_biome_profile.gdshaderinc / TerrainDisplacementRuntime accept.
@@ -139,6 +152,9 @@ const PHASE47_PRESETS: Array[Dictionary] = [
 
 var _phase47_editor_tab: int = PHASE47_GLOBAL_TAB
 var _phase47_diag_probe_cache: Dictionary = {}
+# Decoding a 2k jpg per built-in material is only worth doing once per Planet
+# Studio session -- see _phase47_builtin_average_color.
+var _phase47_builtin_average_color_cache: Dictionary = {}
 
 
 func _build_shell() -> void:
@@ -326,6 +342,10 @@ func _phase47_default_texture_layer(seed: int = -1) -> Dictionary:
 		"emission_color": Color(1.0, 0.6, 0.2), "emission_strength": 1.0,
 		"emission_enabled": false,
 		"custom_texture_index": -1,
+		# Absolute sea-level height by default; cavity wide open (no effect),
+		# matching height/slope's own "wide open ignores this axis" sentinel.
+		"height_relative": false,
+		"cavity_min": -1.0, "cavity_max": 1.0,
 	}
 
 
@@ -412,6 +432,9 @@ func _phase47_texture_stack(graph: Resource) -> Array:
 			"emission_enabled": bool(p.get("emission_enabled", false)),
 			"custom_texture_index": clampi(int(p.get("custom_texture_index", -1)), -1,
 				TerrainDisplacementRuntime.BIOME_TEX_CUSTOM_MAX - 1),
+			"height_relative": bool(p.get("height_relative", false)),
+			"cavity_min": clampf(float(p.get("cavity_min", -1.0)), -1.0, 1.0),
+			"cavity_max": clampf(float(p.get("cavity_max", 1.0)), -1.0, 1.0),
 		})
 	return layers
 
@@ -463,6 +486,9 @@ func _phase47_rebuild_biome_texture(graph: Resource, layers: Array) -> void:
 			"emission_enabled": bool(layer.get("emission_enabled", false)),
 			"custom_texture_index": clampi(int(layer.get("custom_texture_index", -1)), -1,
 				TerrainDisplacementRuntime.BIOME_TEX_CUSTOM_MAX - 1),
+			"height_relative": bool(layer.get("height_relative", false)),
+			"cavity_min": clampf(float(layer.get("cavity_min", -1.0)), -1.0, 1.0),
+			"cavity_max": clampf(float(layer.get("cavity_max", 1.0)), -1.0, 1.0),
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -587,6 +613,7 @@ func _phase47_custom_texture_stack(graph: Resource) -> Array:
 			"tile_m": maxf(float(p.get("tile_m", 8.0)), 0.01),
 			"albedo_png": p.get("albedo_png", PackedByteArray()) as PackedByteArray,
 			"roughness_png": p.get("roughness_png", PackedByteArray()) as PackedByteArray,
+			"normal_png": p.get("normal_png", PackedByteArray()) as PackedByteArray,
 		})
 	return entries
 
@@ -614,6 +641,7 @@ func _phase47_rebuild_texture_library(graph: Resource, entries: Array) -> void:
 			"tile_m": maxf(float(entry.get("tile_m", 8.0)), 0.01),
 			"albedo_png": entry.get("albedo_png", PackedByteArray()) as PackedByteArray,
 			"roughness_png": entry.get("roughness_png", PackedByteArray()) as PackedByteArray,
+			"normal_png": entry.get("normal_png", PackedByteArray()) as PackedByteArray,
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -660,7 +688,7 @@ func _phase47_build_texture_library_section(terrain: Resource) -> void:
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 	var note := Label.new()
-	note.text = "Import your own PBR ground textures here, then pick them by name from any band's Appearance list below. Each texture needs an albedo (colour) image; roughness is optional (a flat default is used when it's left out). Normal maps aren't supported yet, so imported textures read as flat-shaded up close."
+	note.text = "Import your own PBR ground textures here, then pick them by name from any band's Appearance list below. Each texture needs an albedo (colour) image; roughness and a normal map are both optional (a flat default is used for either one left out)."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.modulate = Color(0.58, 0.68, 0.76)
 	box.add_child(note)
@@ -691,6 +719,7 @@ func _phase47_build_texture_library_section(terrain: Resource) -> void:
 				"tile_m": 8.0,
 				"albedo_png": albedo_png,
 				"roughness_png": PackedByteArray(),
+				"normal_png": PackedByteArray(),
 			})
 			_phase47_stage_texture_library(graph, entries, "Import texture")
 		)
@@ -763,6 +792,7 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 	row.add_child(tile_spin)
 
 	var replace_albedo_dialog := FileDialog.new()
+	replace_albedo_dialog.name = "ReplaceCustomTextureAlbedoDialog_%d" % index
 	replace_albedo_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	replace_albedo_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	replace_albedo_dialog.filters = PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS
@@ -777,6 +807,7 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_texture_library(graph, entries, "Replace imported texture albedo")
 	)
 	var replace_albedo := Button.new()
+	replace_albedo.name = "ReplaceCustomTextureAlbedo_%d" % index
 	replace_albedo.text = "Replace albedo..."
 	replace_albedo.pressed.connect(func() -> void:
 		replace_albedo_dialog.popup_centered()
@@ -785,6 +816,7 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 
 	var has_roughness: bool = not (entry.get("roughness_png", PackedByteArray()) as PackedByteArray).is_empty()
 	var roughness_dialog := FileDialog.new()
+	roughness_dialog.name = "ImportCustomTextureRoughnessDialog_%d" % index
 	roughness_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	roughness_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	roughness_dialog.filters = PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS
@@ -799,6 +831,7 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_texture_library(graph, entries, "Import imported texture roughness")
 	)
 	var roughness_button := Button.new()
+	roughness_button.name = "ImportCustomTextureRoughness_%d" % index
 	roughness_button.text = "Replace roughness..." if has_roughness else "Import roughness..."
 	roughness_button.tooltip_text = "Optional. Grayscale, white = fully rough, black = smooth/glossy. Left unset, this texture defaults to a uniform rough (0.9) finish."
 	roughness_button.pressed.connect(func() -> void:
@@ -807,12 +840,47 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 	row.add_child(roughness_button)
 	if has_roughness:
 		var clear_roughness := Button.new()
+		clear_roughness.name = "ClearCustomTextureRoughness_%d" % index
 		clear_roughness.text = "Clear roughness"
 		clear_roughness.pressed.connect(func() -> void:
 			entry["roughness_png"] = PackedByteArray()
 			_phase47_stage_texture_library(graph, entries, "Clear imported texture roughness")
 		)
 		row.add_child(clear_roughness)
+
+	var has_normal: bool = not (entry.get("normal_png", PackedByteArray()) as PackedByteArray).is_empty()
+	var normal_dialog := FileDialog.new()
+	normal_dialog.name = "ImportCustomTextureNormalDialog_%d" % index
+	normal_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	normal_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	normal_dialog.filters = PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS
+	normal_dialog.title = "Import normal map"
+	normal_dialog.size = Vector2i(760, 520)
+	card.add_child(normal_dialog)
+	normal_dialog.file_selected.connect(func(path: String) -> void:
+		var png: PackedByteArray = _phase47_load_image_as_png(path)
+		if png.is_empty():
+			return
+		entry["normal_png"] = png
+		_phase47_stage_texture_library(graph, entries, "Import imported texture normal map")
+	)
+	var normal_button := Button.new()
+	normal_button.name = "ImportCustomTextureNormal_%d" % index
+	normal_button.text = "Replace normal map..." if has_normal else "Import normal map..."
+	normal_button.tooltip_text = "Optional. A standard tangent-space normal map (blue-ish, RGB = XYZ). Left unset, this texture reads as unperturbed/flat-shaded."
+	normal_button.pressed.connect(func() -> void:
+		normal_dialog.popup_centered()
+	)
+	row.add_child(normal_button)
+	if has_normal:
+		var clear_normal := Button.new()
+		clear_normal.name = "ClearCustomTextureNormal_%d" % index
+		clear_normal.text = "Clear normal map"
+		clear_normal.pressed.connect(func() -> void:
+			entry["normal_png"] = PackedByteArray()
+			_phase47_stage_texture_library(graph, entries, "Clear imported texture normal map")
+		)
+		row.add_child(clear_normal)
 
 	var remove := Button.new()
 	remove.name = "RemoveCustomTexture_%d" % index
@@ -825,14 +893,142 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 	row.add_child(remove)
 
 
+## A cheap representative colour for a built-in texture-choice (1=Ground,
+## 2=Grass, 3=Mud, 4=Forest), for the height-sweep preview swatch only --
+## btex_material_albedo's real triplanar sampling is what actually renders
+## in-game. Decoded once per session and cached, since these are large (2k)
+## compressed textures not worth re-decoding on every panel rebuild.
+func _phase47_builtin_average_color(choice: int) -> Color:
+	if _phase47_builtin_average_color_cache.has(choice):
+		return _phase47_builtin_average_color_cache[choice] as Color
+	var color := Color(0.5, 0.45, 0.38)
+	var path_index: int = choice - 1
+	if path_index >= 0 and path_index < PHASE47_BUILTIN_TEXTURE_ALBEDO_PATHS.size():
+		var path: String = PHASE47_BUILTIN_TEXTURE_ALBEDO_PATHS[path_index]
+		if ResourceLoader.exists(path, "Texture2D"):
+			var resource: Resource = load(path)
+			var texture: Texture2D = resource as Texture2D if resource is Texture2D else null
+			if texture != null:
+				var image: Image = texture.get_image()
+				if image != null:
+					if image.is_compressed():
+						image.decompress()
+					image.resize(1, 1, Image.INTERPOLATE_LANCZOS)
+					color = image.get_pixel(0, 0)
+	_phase47_builtin_average_color_cache[choice] = color
+	return color
+
+
+func _phase47_custom_texture_average_color(albedo_png: PackedByteArray) -> Color:
+	if albedo_png.is_empty():
+		return Color(0.5, 0.45, 0.38)
+	var image := Image.new()
+	if image.load_png_from_buffer(albedo_png) != OK:
+		return Color(0.5, 0.45, 0.38)
+	image.resize(1, 1, Image.INTERPOLATE_LANCZOS)
+	return image.get_pixel(0, 0)
+
+
+## A quick, unlit height-sweep preview of this biome's composed band stack --
+## an authoring aid, not a render: it is evaluated at slope=0°/cavity=0 with
+## no random patchiness, a band in relative-height mode is previewed as if
+## the local terrain baseline were 0, and each built-in or imported texture
+## is approximated by one representative colour rather than its real tiled
+## detail. Good enough to check gradients, tinting, and band ordering at a
+## glance without booting into the game; not a substitute for the real
+## in-game look.
+func _phase47_build_texture_preview(layers: Array, custom_entries: Array) -> Control:
+	var wrap := VBoxContainer.new()
+	wrap.name = "BiomeTexturePreviewWrap"
+	wrap.add_theme_constant_override("separation", 2)
+
+	var found_lo := 1e18
+	var found_hi := -1e18
+	for layer_value: Variant in layers:
+		var layer: Dictionary = layer_value as Dictionary
+		var lo: float = float(layer.get("height_min", -1000000.0))
+		var hi: float = float(layer.get("height_max", 1000000.0))
+		if lo > -900000.0:
+			found_lo = minf(found_lo, lo)
+		if hi < 900000.0:
+			found_hi = maxf(found_hi, hi)
+	var height_lo: float = found_lo if found_lo < 1e17 else -50.0
+	var height_hi: float = found_hi if found_hi > -1e17 else 200.0
+	if height_hi - height_lo < 1.0:
+		height_hi = height_lo + 1.0
+
+	var strip := Image.create(PHASE47_TEXTURE_PREVIEW_WIDTH, 1, false, Image.FORMAT_RGB8)
+	for x: int in PHASE47_TEXTURE_PREVIEW_WIDTH:
+		var t: float = float(x) / float(PHASE47_TEXTURE_PREVIEW_WIDTH - 1)
+		var height_m: float = lerpf(height_lo, height_hi, t)
+		strip.set_pixel(x, 0, _phase47_preview_color_at(layers, custom_entries, height_m))
+	strip.resize(PHASE47_TEXTURE_PREVIEW_WIDTH, PHASE47_TEXTURE_PREVIEW_HEIGHT, Image.INTERPOLATE_NEAREST)
+
+	var swatch := TextureRect.new()
+	swatch.name = "BiomeTexturePreview"
+	swatch.custom_minimum_size = Vector2(float(PHASE47_TEXTURE_PREVIEW_WIDTH), float(PHASE47_TEXTURE_PREVIEW_HEIGHT))
+	swatch.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	swatch.texture = ImageTexture.create_from_image(strip)
+	wrap.add_child(swatch)
+
+	var caption := Label.new()
+	caption.text = "Preview: height sweep %.0fm → %.0fm at 0° slope, no patchiness -- an authoring aid, not final lighting." \
+		% [height_lo, height_hi]
+	caption.modulate = Color(0.58, 0.68, 0.76)
+	caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	wrap.add_child(caption)
+	return wrap
+
+
+## CPU mirror of asterra_biome_texture_apply's albedo blend (height axis
+## only -- see _phase47_build_texture_preview for what's deliberately
+## omitted), evaluated over this biome's own layer stack in authored order.
+func _phase47_preview_color_at(layers: Array, custom_entries: Array, height_m: float) -> Color:
+	var result := Color(0.5, 0.45, 0.38)
+	for layer_value: Variant in layers:
+		var layer: Dictionary = layer_value as Dictionary
+		var lo: float = float(layer.get("height_min", -1000000.0))
+		var hi: float = float(layer.get("height_max", 1000000.0))
+		var softness: float = maxf(float(layer.get("softness", 20.0)), 0.0001)
+		var w: float = smoothstep(lo - softness, lo, height_m) * (1.0 - smoothstep(hi, hi + softness, height_m))
+		if w <= 0.0001:
+			continue
+
+		var color: Color = layer.get("color", Color(0.4, 0.35, 0.28)) as Color
+		var color_b: Color = layer.get("color_b", color) as Color
+		var grad_t: float = clampf((height_m - lo) / maxf(hi - lo, 0.0001), 0.0, 1.0)
+		var gradient_strength: float = clampf(float(layer.get("gradient_strength", 0.0)), 0.0, 1.0)
+		var layer_color: Color = color.lerp(color_b, grad_t * gradient_strength)
+
+		var choice: int = int(layer.get("texture_choice", 0))
+		var tint: float = clampf(float(layer.get("tint_strength", 0.0)), 0.0, 1.0)
+		var material_color: Color
+		if choice == 0:
+			material_color = layer_color
+		elif choice == 5:
+			var custom_index: int = int(layer.get("custom_texture_index", -1))
+			var albedo_png := PackedByteArray()
+			if custom_index >= 0 and custom_index < custom_entries.size():
+				albedo_png = (custom_entries[custom_index] as Dictionary).get("albedo_png", PackedByteArray()) as PackedByteArray
+			material_color = _phase47_custom_texture_average_color(albedo_png).lerp(layer_color, tint)
+		else:
+			material_color = _phase47_builtin_average_color(choice).lerp(layer_color, tint)
+
+		var opacity: float = clampf(float(layer.get("opacity", 1.0)), 0.0, 1.0) * w
+		result = result.lerp(material_color, opacity)
+	return result
+
+
 func _phase47_build_biome_texture_controls(terrain: Resource, slot: Resource, biome_id: int) -> void:
 	var graph: Resource = slot.get(&"graph") as Resource
 	var layers: Array = _phase47_texture_stack(graph)
 	var library_slot: Resource = _phase47_texture_library_slot(terrain)
-	var custom_names := PackedStringArray()
+	var custom_entries: Array = []
 	if library_slot != null:
-		for entry_value: Variant in _phase47_custom_texture_stack(library_slot.get(&"graph") as Resource):
-			custom_names.append(String((entry_value as Dictionary).get("name", "")))
+		custom_entries = _phase47_custom_texture_stack(library_slot.get(&"graph") as Resource)
+	var custom_names := PackedStringArray()
+	for entry_value: Variant in custom_entries:
+		custom_names.append(String((entry_value as Dictionary).get("name", "")))
 	var panel := PanelContainer.new()
 	panel.name = "BiomeTextureProfile"
 	_workspace.add_child(panel)
@@ -843,6 +1039,9 @@ func _phase47_build_biome_texture_controls(terrain: Resource, slot: Resource, bi
 	title.text = "%s texture — band stack" % BIOME_NAMES[biome_id]
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
+
+	if not layers.is_empty():
+		box.add_child(_phase47_build_texture_preview(layers, custom_entries))
 
 	var layers_title := Label.new()
 	layers_title.text = "Texture bands (top to bottom = painted in order, later bands on top)"
@@ -987,14 +1186,42 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Gradient strength", "gradient_strength",
 		0.0, 1.0, 0.01, "0 = flat colour (gradient off). 1 = fully fades across the height range into the gradient end colour above.")
 
+	var height_ref_row := HBoxContainer.new()
+	height_ref_row.add_theme_constant_override("separation", 10)
+	box.add_child(height_ref_row)
+	var height_ref_label := Label.new()
+	height_ref_label.text = "Height reference"
+	height_ref_label.custom_minimum_size.x = 210.0
+	height_ref_row.add_child(height_ref_label)
+	var height_ref_picker := OptionButton.new()
+	height_ref_picker.name = "BiomeTextureLayerHeightRelative_%d" % index
+	height_ref_picker.add_item("Sea level (absolute)")
+	height_ref_picker.add_item("Local terrain (relative)")
+	height_ref_picker.select(1 if bool(layer.get("height_relative", false)) else 0)
+	height_ref_picker.item_selected.connect(func(picked: int) -> void:
+		layer["height_relative"] = picked == 1
+		_phase47_stage_biome_texture(graph, layers, "Change biome texture band height reference")
+	)
+	height_ref_row.add_child(height_ref_picker)
+	var height_ref_help := Label.new()
+	height_ref_help.text = "Absolute: height range below is metres above sea level. Relative: it's metres above/below this spot's own broad terrain trend -- e.g. \"top 50m of whatever hill this is,\" wherever that hill happens to sit."
+	height_ref_help.modulate = Color(0.58, 0.68, 0.76)
+	height_ref_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	height_ref_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	height_ref_row.add_child(height_ref_help)
+
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: from", "height_min",
-		-1000000.0, 1000000.0, 1.0, "This band starts fading in above this elevation (metres above sea level). Very low/high values effectively disable this edge.")
+		-1000000.0, 1000000.0, 1.0, "This band starts fading in above this elevation. Very low/high values effectively disable this edge.")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: to", "height_max",
 		-1000000.0, 1000000.0, 1.0, "This band fades out above this elevation.")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Slope range: from", "slope_min",
 		0.0, 180.0, 1.0, "Degrees from flat (0°) to vertical (90°+). Combine with height to make, for example, rock only appear on steep ground.")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Slope range: to", "slope_max",
 		0.0, 180.0, 1.0, "Upper edge of the slope range.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Cavity range: from", "cavity_min",
+		-1.0, 1.0, 0.01, "-1 = sharp convex ridges/edges, 0 = flat, +1 = sharp concave creases/cracks. Left wide open (-1 to 1, the default) has no effect. An approximation from the surface's own curvature, not a physical measurement -- treat it as a rough dial, not an exact one.")
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Cavity range: to", "cavity_max",
+		-1.0, 1.0, 0.01, "Upper edge of the cavity range.")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Edge softness", "softness",
 		0.0, 2000.0, 1.0, "How gradually the band fades in/out at its height and slope edges, in metres/degrees. Higher = softer, more gradual transitions.")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Opacity", "opacity",

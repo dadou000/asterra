@@ -116,6 +116,38 @@ func _run() -> void:
 		return
 	probe_rt.free()
 
+	# --- Import a normal map for that same texture through the real
+	#     per-entry Import-normal-map button/dialog. ---
+	var normal_button: Button = _find_named(editor, "ImportCustomTextureNormal_0") as Button
+	if normal_button == null:
+		_fail("Custom texture card is missing its Import normal map button")
+		return
+	var normal_dialog: FileDialog = _find_named(editor, "ImportCustomTextureNormalDialog_0") as FileDialog
+	if normal_dialog == null:
+		_fail("Custom texture card is missing its normal-map import FileDialog")
+		return
+	var normal_png_path: String = "user://phase48_probe_normal.png"
+	var normal_image := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	normal_image.fill(Color(0.5, 0.5, 1.0))
+	normal_image.save_png(normal_png_path)
+	normal_dialog.emit_signal("file_selected", ProjectSettings.globalize_path(normal_png_path))
+	await _frames(3)
+
+	var entries_with_normal: Array = editor.call("_phase47_custom_texture_stack", library_graph) as Array
+	if (entries_with_normal[0] as Dictionary).get("normal_png", PackedByteArray()).is_empty():
+		_fail("Imported normal map did not serialize into the CUSTOM_TEXTURE node")
+		return
+
+	var normal_rt: Node = RUNTIME.new()
+	normal_rt.call("compile_from_terrain", terrain)
+	var normal_packed: Dictionary = normal_rt.call("biome_texture_uniforms") as Dictionary
+	var custom_normal: Variant = normal_packed.get("custom_normal")
+	if custom_normal == null or not (custom_normal is Texture2DArray):
+		_fail("biome_texture_uniforms did not build a custom normal Texture2DArray")
+		normal_rt.free()
+		return
+	normal_rt.free()
+
 	# --- Now compose a band that uses gradients, the imported texture, and
 	#     every new material override. ---
 	var biome_picker: OptionButton = _find_named(editor, "BiomeTexturePicker") as OptionButton
@@ -220,6 +252,31 @@ func _run() -> void:
 	emission_spin.emit_signal("value_changed", 3.5)
 	await _frames(3)
 
+	var height_ref_picker: OptionButton = _find_named(editor, "BiomeTextureLayerHeightRelative_0") as OptionButton
+	if height_ref_picker == null:
+		_fail("Texture band is missing the height-reference dropdown")
+		return
+	height_ref_picker.select(1) # Local terrain (relative)
+	height_ref_picker.emit_signal("item_selected", 1)
+	await _frames(3)
+
+	var cavity_min_spin: SpinBox = _find_named(editor, "BiomeTextureLayerField_cavity_min") as SpinBox
+	var cavity_max_spin: SpinBox = _find_named(editor, "BiomeTextureLayerField_cavity_max") as SpinBox
+	if cavity_min_spin == null or cavity_max_spin == null:
+		_fail("Texture band is missing the cavity range controls")
+		return
+	cavity_min_spin.value = -0.4
+	cavity_min_spin.emit_signal("value_changed", -0.4)
+	await _frames(3)
+	cavity_max_spin = _find_named(editor, "BiomeTextureLayerField_cavity_max") as SpinBox
+	cavity_max_spin.value = 0.5
+	cavity_max_spin.emit_signal("value_changed", 0.5)
+	await _frames(3)
+
+	if _find_named(editor, "BiomeTexturePreview") == null:
+		_fail("Biome Texture editor is missing the height-sweep preview swatch")
+		return
+
 	var final_layers: Array = editor.call("_phase47_texture_stack", texture_graph) as Array
 	var final_band: Dictionary = final_layers[0] as Dictionary
 	var checks := {
@@ -228,6 +285,8 @@ func _run() -> void:
 		"metallic_value": [float(final_band.get("metallic_value", -1.0)), 0.9],
 		"anisotropy_value": [float(final_band.get("anisotropy_value", -1.0)), 0.6],
 		"emission_strength": [float(final_band.get("emission_strength", -1.0)), 3.5],
+		"cavity_min": [float(final_band.get("cavity_min", 99.0)), -0.4],
+		"cavity_max": [float(final_band.get("cavity_max", -99.0)), 0.5],
 	}
 	for key: String in checks:
 		var pair: Array = checks[key]
@@ -239,6 +298,9 @@ func _run() -> void:
 			or not bool(final_band.get("anisotropy_enabled", false)) \
 			or not bool(final_band.get("emission_enabled", false)):
 		_fail("One of the material override enable flags did not round-trip")
+		return
+	if not bool(final_band.get("height_relative", false)):
+		_fail("Height reference mode did not round-trip to relative")
 		return
 
 	# --- Full CPU-runtime pack of the final state, matching what the GPU sees. ---
@@ -255,9 +317,18 @@ func _run() -> void:
 		_fail("Packed enable_flags did not include all four overrides (flags=%d)" % flags)
 		final_rt.free()
 		return
+	if (flags & 16) == 0:
+		_fail("Packed enable_flags did not include the height-relative bit (flags=%d)" % flags)
+		final_rt.free()
+		return
 	if not is_equal_approx(f[0].x, 0.2) or not is_equal_approx(f[0].y, 0.9) \
 			or not is_equal_approx(f[0].z, 0.6):
 		_fail("Packed roughness/metallic/anisotropy values do not match what was authored")
+		final_rt.free()
+		return
+	var h: PackedVector4Array = final_packed.get("h") as PackedVector4Array
+	if h.is_empty() or not is_equal_approx(h[0].x, -0.4) or not is_equal_approx(h[0].y, 0.5):
+		_fail("Packed cavity range does not match what was authored (h[0]=%s)" % [h[0] if not h.is_empty() else "n/a"])
 		final_rt.free()
 		return
 	var d: PackedVector4Array = final_packed.get("d") as PackedVector4Array

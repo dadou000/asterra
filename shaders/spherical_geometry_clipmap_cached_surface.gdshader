@@ -588,21 +588,30 @@ void fragment() {
 				wn = normalize(mix(wn, scan_n, scan_normal_w));
 			}
 
-			// Per-biome authored surface look: height/slope colour + texture
-			// bands, full PBR control (roughness/metallic/anisotropy/
-			// emission), see terrain_biome_texture.gdshaderinc. height_m
-			// mirrors terrain_author_material_post_cached.gdshaderinc's own
-			// length(v_planet) - u_planet_radius; slope_deg turns the
-			// shading normal's angle from local "up" into degrees for a more
-			// intuitive authoring control than a raw dot product.
+			// Per-biome authored surface look: height/slope/cavity colour +
+			// texture bands, full PBR control (roughness/metallic/
+			// anisotropy/emission/normal), see terrain_biome_texture.gdshaderinc.
+			// height_m mirrors terrain_author_material_post_cached.gdshaderinc's
+			// own length(v_planet) - u_planet_radius; v_macro_h is the
+			// terrain's own broad-scale trend at this point (see that
+			// varying's own declaration), used by any layer in relative-
+			// height mode; slope_deg turns the shading normal's angle from
+			// local "up" into degrees for a more intuitive authoring control
+			// than a raw dot product. dpdx/dpdy/cavity are derived from `wn`
+			// BEFORE the call, since asterra_biome_texture_apply mutates
+			// `wn` in place as layers blend in their own material's normal
+			// -- see that function's own header comment for why.
+			vec3 biome_tex_dpdx = dFdx(dpos);
+			vec3 biome_tex_dpdy = dFdy(dpos);
+			float biome_tex_cavity = btex_cavity_value(dFdx(wn), dFdy(wn), biome_tex_dpdx, biome_tex_dpdy);
 			float biome_tex_height_m = length(v_planet) - u_planet_radius;
 			float biome_tex_slope_deg = degrees(acos(clamp(dot(wn, up), -1.0, 1.0)));
 			float biome_tex_metallic = 0.0;
 			float biome_tex_anisotropy = 0.0;
 			vec3 biome_tex_emission = vec3(0.0);
-			asterra_biome_texture_apply(up, int(round(biome)), biome_tex_height_m,
-				biome_tex_slope_deg, dpos, dFdx(dpos), dFdy(dpos), wn, albedo, roughness,
-				biome_tex_metallic, biome_tex_anisotropy, biome_tex_emission);
+			asterra_biome_texture_apply(up, int(round(biome)), biome_tex_height_m, v_macro_h,
+				biome_tex_slope_deg, biome_tex_cavity, dpos, biome_tex_dpdx, biome_tex_dpdy, wn,
+				albedo, roughness, biome_tex_metallic, biome_tex_anisotropy, biome_tex_emission);
 			if (abs(biome_tex_anisotropy) > 0.001) {
 				// No authored tangent data exists for this procedural terrain
 				// mesh to derive a "grain direction" from, so this is a fixed,

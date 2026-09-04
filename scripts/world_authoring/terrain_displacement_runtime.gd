@@ -122,6 +122,7 @@ var _biome_tex_custom_names: PackedStringArray = PackedStringArray()
 var _biome_tex_custom_tile_m: PackedFloat32Array = PackedFloat32Array()
 var _biome_tex_custom_albedo_texture: Texture2DArray = null
 var _biome_tex_custom_roughness_texture: Texture2DArray = null
+var _biome_tex_custom_normal_texture: Texture2DArray = null
 
 
 static func _zeroed_blend() -> PackedFloat32Array:
@@ -150,6 +151,7 @@ func clear() -> void:
 	_biome_tex_custom_tile_m = PackedFloat32Array()
 	_biome_tex_custom_albedo_texture = null
 	_biome_tex_custom_roughness_texture = null
+	_biome_tex_custom_normal_texture = null
 
 
 func profile_fingerprint(terrain: Resource) -> String:
@@ -194,6 +196,7 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	_biome_tex_custom_tile_m = PackedFloat32Array()
 	_biome_tex_custom_albedo_texture = null
 	_biome_tex_custom_roughness_texture = null
+	_biome_tex_custom_normal_texture = null
 	if terrain == null:
 		_publish_texture()
 		return stats()
@@ -827,6 +830,9 @@ func _parse_biome_texture_slot(slot: Resource) -> Array:
 			"emission_strength": maxf(float(p.get("emission_strength", 0.0)), 0.0),
 			"emission_enabled": bool(p.get("emission_enabled", false)),
 			"custom_texture_index": clampi(int(p.get("custom_texture_index", -1)), -1, BIOME_TEX_CUSTOM_MAX - 1),
+			"height_relative": bool(p.get("height_relative", false)),
+			"cavity_min": clampf(float(p.get("cavity_min", -1.0)), -1.0, 1.0),
+			"cavity_max": clampf(float(p.get("cavity_max", 1.0)), -1.0, 1.0),
 		})
 	return layers
 
@@ -890,29 +896,39 @@ func _parse_biome_texture_library(slot: Resource) -> Array:
 			var candidate := Image.new()
 			if candidate.load_png_from_buffer(roughness_bytes) == OK:
 				roughness_image = candidate
+		var normal_image: Image = null
+		var normal_bytes: PackedByteArray = p.get("normal_png", PackedByteArray()) as PackedByteArray
+		if not normal_bytes.is_empty():
+			var normal_candidate := Image.new()
+			if normal_candidate.load_png_from_buffer(normal_bytes) == OK:
+				normal_image = normal_candidate
 		entries.append({
 			"name": String(p.get("name", "Texture %d" % (entries.size() + 1))),
 			"tile_m": maxf(float(p.get("tile_m", 8.0)), 0.01),
 			"albedo_image": albedo_image,
 			"roughness_image": roughness_image,
+			"normal_image": normal_image,
 		})
 	return entries
 
 
 ## Resizes every entry's images to BIOME_TEX_CUSTOM_RESOLUTION (Texture2DArray
-## layers must all share one resolution) and builds the two GPU-ready arrays,
-## populating _biome_tex_custom_*. A missing roughness image gets a flat
-## default fill rather than reusing the albedo image, so an unauthored
-## roughness channel doesn't silently pick up albedo colour variation.
+## layers must all share one resolution) and builds the three GPU-ready
+## arrays, populating _biome_tex_custom_*. A missing roughness/normal image
+## gets a flat default fill (0.9 grey / tangent-space "up") rather than
+## reusing the albedo image, so an unauthored channel doesn't silently pick
+## up albedo colour variation.
 func _build_custom_texture_library(entries: Array) -> void:
 	_biome_tex_custom_names = PackedStringArray()
 	_biome_tex_custom_tile_m = PackedFloat32Array()
 	_biome_tex_custom_albedo_texture = null
 	_biome_tex_custom_roughness_texture = null
+	_biome_tex_custom_normal_texture = null
 	if entries.is_empty():
 		return
 	var albedo_images: Array[Image] = []
 	var roughness_images: Array[Image] = []
+	var normal_images: Array[Image] = []
 	for entry_value: Variant in entries:
 		var entry: Dictionary = entry_value as Dictionary
 		var albedo_image: Image = (entry.get("albedo_image") as Image).duplicate() as Image
@@ -933,6 +949,20 @@ func _build_custom_texture_library(entries: Array) -> void:
 		roughness_image.generate_mipmaps()
 		roughness_images.append(roughness_image)
 
+		var normal_source: Image = entry.get("normal_image") as Image
+		var normal_image: Image
+		if normal_source != null:
+			normal_image = normal_source.duplicate() as Image
+			normal_image.convert(Image.FORMAT_RGBA8)
+			normal_image.resize(BIOME_TEX_CUSTOM_RESOLUTION, BIOME_TEX_CUSTOM_RESOLUTION, Image.INTERPOLATE_LANCZOS)
+		else:
+			# Flat tangent-space "up" (0, 0, 1) encoded the standard normal-map
+			# way (*0.5 + 0.5) -- sampling this is a no-op in btex_custom_normal.
+			normal_image = Image.create(BIOME_TEX_CUSTOM_RESOLUTION, BIOME_TEX_CUSTOM_RESOLUTION, false, Image.FORMAT_RGBA8)
+			normal_image.fill(Color(0.5, 0.5, 1.0))
+		normal_image.generate_mipmaps()
+		normal_images.append(normal_image)
+
 		_biome_tex_custom_names.append(String(entry.get("name", "")))
 		_biome_tex_custom_tile_m.append(float(entry.get("tile_m", 8.0)))
 
@@ -942,6 +972,9 @@ func _build_custom_texture_library(entries: Array) -> void:
 	var roughness_array := Texture2DArray.new()
 	if roughness_array.create_from_images(roughness_images) == OK:
 		_biome_tex_custom_roughness_texture = roughness_array
+	var normal_array := Texture2DArray.new()
+	if normal_array.create_from_images(normal_images) == OK:
+		_biome_tex_custom_normal_texture = normal_array
 	# The shader's u_biome_tex_custom_tile_m is a fixed-size array uniform
 	# (float[BIOME_TEX_CUSTOM_MAX]) -- pad unused slots so the array always
 	# matches that declared size, same convention as the fixed-size layer
@@ -1231,6 +1264,7 @@ func biome_texture_uniforms() -> Dictionary:
 	var e := PackedVector4Array()
 	var f := PackedVector4Array()
 	var g := PackedVector4Array()
+	var h := PackedVector4Array()
 	a.resize(BIOME_TEX_LAYER_MAX)
 	b.resize(BIOME_TEX_LAYER_MAX)
 	c.resize(BIOME_TEX_LAYER_MAX)
@@ -1238,6 +1272,7 @@ func biome_texture_uniforms() -> Dictionary:
 	e.resize(BIOME_TEX_LAYER_MAX)
 	f.resize(BIOME_TEX_LAYER_MAX)
 	g.resize(BIOME_TEX_LAYER_MAX)
+	h.resize(BIOME_TEX_LAYER_MAX)
 	for i: int in count:
 		var entry: Dictionary = _biome_textures[i] as Dictionary
 		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("texture_choice", 0))),
@@ -1259,18 +1294,22 @@ func biome_texture_uniforms() -> Dictionary:
 			flags |= 4
 		if bool(entry.get("emission_enabled", false)):
 			flags |= 8
+		if bool(entry.get("height_relative", false)):
+			flags |= 16
 		f[i] = Vector4(float(entry.get("roughness_value", 0.9)), float(entry.get("metallic_value", 0.0)),
 			float(entry.get("anisotropy_value", 0.0)), float(flags))
 		var emission_color: Color = entry.get("emission_color", Color(0.0, 0.0, 0.0)) as Color
 		g[i] = Vector4(emission_color.r, emission_color.g, emission_color.b,
 			float(entry.get("emission_strength", 0.0)))
+		h[i] = Vector4(float(entry.get("cavity_min", -1.0)), float(entry.get("cavity_max", 1.0)), 0.0, 0.0)
 	return {
-		"count": count, "a": a, "b": b, "c": c, "d": d, "e": e, "f": f, "g": g,
+		"count": count, "a": a, "b": b, "c": c, "d": d, "e": e, "f": f, "g": g, "h": h,
 		"custom_count": _biome_tex_custom_names.size(),
 		"custom_names": _biome_tex_custom_names,
 		"custom_tile_m": _biome_tex_custom_tile_m,
 		"custom_albedo": _biome_tex_custom_albedo_texture,
 		"custom_roughness": _biome_tex_custom_roughness_texture,
+		"custom_normal": _biome_tex_custom_normal_texture,
 	}
 
 
