@@ -95,6 +95,35 @@ float asterra_ctx_biome_id(vec3 dir) {
 	return asterra_author_biome_id(dir, asterra_generated_biome_id(dir));
 }
 
+// Bilinearly-filtered 0..1 membership of `biome` in the generated biome field.
+// The id texture is filter_nearest, so this reads the four surrounding texels,
+// maps each to a hard 0/1, and blends with the sub-texel fraction -- a genuinely
+// C0-continuous ramp about one context texel wide, with no terracing. Inside an
+// active authored biome override the edge is deliberately hard, so fall back to
+// the categorical id there.
+float asterra_ctx_biome_membership(vec3 dir, int biome) {
+	float generated_here = asterra_generated_biome_id(dir);
+	if (u_author_biome_ready > 0.5
+			&& asterra_author_biome_id(dir, generated_here) != generated_here) {
+		return (int(asterra_author_biome_id(dir, generated_here)) == biome) ? 1.0 : 0.0;
+	}
+	if (u_ctx_ready < 0.5) {
+		return (7 == biome) ? 1.0 : 0.0;
+	}
+	vec3 coord = asterra_context_coord(dir);
+	ivec3 size3 = textureSize(u_ctx_biome, 0);
+	int layer = int(coord.z + 0.5);
+	vec2 p = coord.xy * vec2(size3.xy) - vec2(0.5);
+	vec2 f = fract(p);
+	ivec2 b = ivec2(floor(p));
+	ivec2 hi = size3.xy - ivec2(1);
+	float m00 = (int(floor(texelFetch(u_ctx_biome, ivec3(clamp(b, ivec2(0), hi), layer), 0).r * 19.0 + 0.5)) == biome) ? 1.0 : 0.0;
+	float m10 = (int(floor(texelFetch(u_ctx_biome, ivec3(clamp(b + ivec2(1, 0), ivec2(0), hi), layer), 0).r * 19.0 + 0.5)) == biome) ? 1.0 : 0.0;
+	float m01 = (int(floor(texelFetch(u_ctx_biome, ivec3(clamp(b + ivec2(0, 1), ivec2(0), hi), layer), 0).r * 19.0 + 0.5)) == biome) ? 1.0 : 0.0;
+	float m11 = (int(floor(texelFetch(u_ctx_biome, ivec3(clamp(b + ivec2(1, 1), ivec2(0), hi), layer), 0).r * 19.0 + 0.5)) == biome) ? 1.0 : 0.0;
+	return mix(mix(m00, m10, f.x), mix(m01, m11, f.x), f.y);
+}
+
 float asterra_ctx_soil_depth_m(vec4 surface) {
 	return surface.r * 14.0;
 }

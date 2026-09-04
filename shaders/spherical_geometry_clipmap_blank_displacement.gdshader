@@ -107,6 +107,42 @@ float authored_biome_id(vec3 direction) {
 	return sample_value.g > 0.5 ? clamp(round(sample_value.r * 19.0), 0.0, 17.0) : 0.0;
 }
 
+float _authored_texel_membership(ivec2 texel, int biome) {
+	vec4 t = texelFetch(u_author_biome_override, texel, 0);
+	int id = t.g > 0.5 ? int(clamp(round(t.r * 19.0), 0.0, 17.0)) : 0;
+	return (id == biome) ? 1.0 : 0.0;
+}
+
+// Bilinearly-filtered 0..1 membership of `biome` -- a C0-continuous ramp about one
+// override texel wide instead of the categorical id's hard step.
+float authored_biome_membership(vec3 direction, int biome) {
+	if (u_author_biome_ready < 0.5) {
+		return (biome == 0) ? 1.0 : 0.0;
+	}
+	float denom = dot(direction, u_author_biome_center);
+	if (denom <= 0.01) {
+		return (biome == 0) ? 1.0 : 0.0;
+	}
+	float radius = max(u_author_biome_planet_radius, 1.0);
+	vec2 plane = vec2(dot(direction, u_author_biome_right), dot(direction, u_author_biome_up))
+		* (radius / denom);
+	float extent = max(u_author_biome_half_extent_m, 0.001);
+	if (abs(plane.x) > extent || abs(plane.y) > extent) {
+		return (biome == 0) ? 1.0 : 0.0;
+	}
+	vec2 uv = vec2(plane.x / (extent * 2.0) + 0.5, 0.5 - plane.y / (extent * 2.0));
+	ivec2 size2 = textureSize(u_author_biome_override, 0);
+	vec2 p = uv * vec2(size2) - vec2(0.5);
+	vec2 f = fract(p);
+	ivec2 b = ivec2(floor(p));
+	ivec2 hi = size2 - ivec2(1);
+	float m00 = _authored_texel_membership(clamp(b, ivec2(0), hi), biome);
+	float m10 = _authored_texel_membership(clamp(b + ivec2(1, 0), ivec2(0), hi), biome);
+	float m01 = _authored_texel_membership(clamp(b + ivec2(0, 1), ivec2(0), hi), biome);
+	float m11 = _authored_texel_membership(clamp(b + ivec2(1, 1), ivec2(0), hi), biome);
+	return mix(mix(m00, m10, f.x), mix(m01, m11, f.x), f.y);
+}
+
 vec3 biome_color(float biome) {
 	if (biome < 0.5) return vec3(0.34, 0.35, 0.36);
 	float phase = biome * 0.61803398875;
@@ -114,6 +150,7 @@ vec3 biome_color(float biome) {
 }
 
 #define ASTERRA_BIOME_ID_AT(p) authored_biome_id(p)
+#define ASTERRA_BIOME_MEMBERSHIP(p, b) authored_biome_membership(p, b)
 #include "res://shaders/terrain_biome_profile.gdshaderinc"
 
 void vertex() {

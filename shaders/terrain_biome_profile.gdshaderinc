@@ -25,6 +25,12 @@
 #ifndef ASTERRA_BIOME_ID_AT
 #define ASTERRA_BIOME_ID_AT(p) (0.0)
 #endif
+// Bilinearly-filtered 0..1 biome membership from the including shader; already a
+// smooth ramp about one context texel wide. Falls back to a hard test on the
+// categorical id when the including shader does not provide it.
+#ifndef ASTERRA_BIOME_MEMBERSHIP
+#define ASTERRA_BIOME_MEMBERSHIP(p, b) ((int(floor(ASTERRA_BIOME_ID_AT(p) + 0.5)) == (b)) ? 1.0 : 0.0)
+#endif
 
 const int BIOME_LAYER_MAX = 16;
 uniform int u_biome_layer_count = 0;
@@ -102,42 +108,32 @@ void bp_tangent_basis(vec3 n, out vec3 tx, out vec3 ty) {
 	ty = vec3(b, s + n.y * n.y * a, -n.y);
 }
 
-// 0..1 smooth membership of `biome` in a tangent-plane Gaussian disc reaching out
-// to the biome's blend half-width.
+// 0..1 boundary coverage of `biome`.
 //
-// The 5x5 grid is FIXED per vertex (per-vertex jitter turns the discrete
-// biome-id map into per-vertex noise -- mesh spikes). Sampling a discrete field
-// on a fixed grid instead quantises the coverage into ~1/N steps, which read as
-// terraces across the blend band. To dissolve those without reintroducing
-// spikes, the whole kernel is shifted by a SPATIALLY SMOOTH offset (~12 m value
-// noise): adjacent vertices get almost the same shift, but across the band the
-// shift sweeps far enough to smear each step into a ramp.
+// The earlier passes sampled the HARD categorical biome id on a kernel and tried
+// to smooth the result -- a fixed grid terraces, a jittered grid spikes, a
+// high-frequency dither loses float precision and spikes. The fix is to sample a
+// signal that is already continuous: ASTERRA_BIOME_MEMBERSHIP is a bilinearly
+// filtered membership, a C0 ramp ~one context texel wide. A small ring of
+// continuous-offset taps then widens that ramp toward the blend half-width;
+// every input is smooth and moves continuously with `d`, so nothing terraces.
 float bp_biome_coverage(vec3 d, vec3 tx, vec3 ty, int biome) {
-	float here = (int(floor(ASTERRA_BIOME_ID_AT(d) + 0.5)) == biome) ? 1.0 : 0.0;
 	float half_m = u_biome_blend_m[clamp(biome, 0, 17)];
 	if (half_m <= 1.0) {
-		return here;
+		return (int(floor(ASTERRA_BIOME_ID_AT(d) + 0.5)) == biome) ? 1.0 : 0.0;
 	}
-	float step_ang = (half_m * 0.5) / max(u_planet_radius, 1.0);
-	// Kernel shift frequency must stay small enough that d * freq keeps full
-	// float32 precision (roughly < 300) -- a large multiplier makes fract() step,
-	// and a stepped shift is exactly the per-vertex noise that spikes the mesh.
-	// It still tracks the band so the shift sweeps a step's worth across it.
-	float shift_freq = clamp(u_planet_radius / max(half_m * 3.0, 1.0), 8.0, 256.0);
-	vec3 jitter_p = d * shift_freq;
-	vec2 shift = vec2(bp_noise(jitter_p, 40009), bp_noise(jitter_p, 80021)) * 0.85;
-	float acc = 0.0;
-	float wsum = 0.0;
-	for (int j = -2; j <= 2; j++) {
-		for (int i = -2; i <= 2; i++) {
-			vec2 o = vec2(float(i), float(j)) + shift;
-			float w = exp(-dot(o, o) * 0.45);
-			vec3 sd = normalize(d + (tx * o.x + ty * o.y) * step_ang);
-			acc += w * ((int(floor(ASTERRA_BIOME_ID_AT(sd) + 0.5)) == biome) ? 1.0 : 0.0);
-			wsum += w;
-		}
+	float ang = half_m / max(u_planet_radius, 1.0);
+	float acc = ASTERRA_BIOME_MEMBERSHIP(d, biome) * 1.6;
+	float wsum = 1.6;
+	for (int k = 0; k < 6; k++) {
+		float theta = float(k) * 1.04719755;
+		vec3 inner = normalize(d + (tx * cos(theta) + ty * sin(theta)) * (ang * 0.5));
+		vec3 outer = normalize(d + (tx * cos(theta) + ty * sin(theta)) * ang);
+		acc += 0.8 * ASTERRA_BIOME_MEMBERSHIP(inner, biome);
+		acc += 0.45 * ASTERRA_BIOME_MEMBERSHIP(outer, biome);
+		wsum += 1.25;
 	}
-	return smoothstep(0.20, 0.80, acc / max(wsum, 1e-6));
+	return smoothstep(0.18, 0.82, acc / wsum);
 }
 
 // Metres to add to the surface at `dir`. `biome_id_hint` is accepted for call-site
