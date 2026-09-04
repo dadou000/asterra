@@ -158,6 +158,7 @@ const DISPLACEMENT_ONLY_NODES: Array[String] = [
 	"SEDIMENT_DEPOSIT",
 	"TERRACE_RELIEF",
 	"TEXTURE_BAND",
+	"CUSTOM_TEXTURE",
 	"OUTPUT_DISPLACEMENT",
 ]
 
@@ -252,6 +253,7 @@ const NODE_TYPES: Array[String] = [
 	"SEDIMENT_DEPOSIT",
 	"TERRACE_RELIEF",
 	"TEXTURE_BAND",
+	"CUSTOM_TEXTURE",
 	"TRIPLANAR",
 	"OUTPUT_DISPLACEMENT",
 	"OUTPUT_MATERIAL",
@@ -294,6 +296,11 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	# TerrainDisplacementRuntime.BIOME_TEXTURE_SLOT_PREFIX and
 	# world_authoring_editor_live_phase46.gd's _phase47_build_texture_editor.
 	"TEXTURE_BAND": CATEGORY_TEXTURES,
+	# Same plumbing-reuse reasoning as TEXTURE_BAND just above, but for the
+	# single dedicated library slot (TerrainDisplacementRuntime
+	# .BIOME_TEXTURE_LIBRARY_SLOT_ID) holding the user-imported PBR textures
+	# TEXTURE_BAND layers can select via custom_texture_index.
+	"CUSTOM_TEXTURE": CATEGORY_TEXTURES,
 	"TEXTURE_2D": CATEGORY_TEXTURES,
 	"TRIPLANAR": CATEGORY_TEXTURES,
 	"NORMAL_BLEND": CATEGORY_SURFACE_PBR,

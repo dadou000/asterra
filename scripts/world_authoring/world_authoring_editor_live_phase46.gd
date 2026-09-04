@@ -63,6 +63,14 @@ const PHASE47_TEXTURE_MAX_LAYERS_PER_BIOME: int = 8
 const PHASE47_TEXTURE_CHOICE_LABELS: PackedStringArray = [
 	"Flat colour", "Ground", "Grass", "Mud", "Forest",
 ]
+# Every imported texture's images are resized to this before being combined
+# into the shared Texture2DArray -- see TerrainDisplacementRuntime
+# .BIOME_TEX_CUSTOM_RESOLUTION (kept in sync manually since this UI script and
+# the runtime script don't share a common constants module).
+const PHASE47_TEXTURE_LIBRARY_SLOT_DISPLAY := "Texture Library"
+const PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS: PackedStringArray = [
+	"*.png,*.jpg,*.jpeg,*.bmp,*.tga,*.webp;Images",
+]
 # Biome terrain no longer uses the displacement bytecode VM (it lowers to
 # uniforms), but the uniform arrays are bounded: keep the live layer total within
 # what terrain_biome_profile.gdshaderinc / TerrainDisplacementRuntime accept.
@@ -223,7 +231,9 @@ func _phase47_build_editor_tabs() -> void:
 ## contact/physics implication at all.
 func _phase47_build_texture_editor(terrain: Resource) -> void:
 	_section("Biome texture")
-	_add_note("Compose this biome's surface look as a stack of height/slope colour bands -- the same idea as Biome Terrain's height layers, but for what the ground looks like instead of its shape. Each band can be a flat colour, or one of the game's existing tiled ground materials (Ground/Grass/Mud/Forest) optionally tinted by your colour, and can be given some randomness so its edge reads as scattered and natural instead of a surveyed line. This never touches contact or physics -- it is purely how the surface looks.")
+	_add_note("Compose this biome's surface look as a stack of height/slope bands -- the same idea as Biome Terrain's height layers, but for what the ground looks like instead of its shape. Each band can be a flat colour (optionally a gradient across its height range), one of the game's existing tiled ground materials (Ground/Grass/Mud/Forest), or one of your own imported textures, optionally tinted by your colour, with some randomness so its edge reads as scattered and natural instead of a surveyed line. Bands can also override roughness, metallic, anisotropy, and add self-emission (for lava, glowing crystal, etc.) on top of whichever material they use. This never touches contact or physics -- it is purely how the surface looks.")
+
+	_phase47_build_texture_library_section(terrain)
 
 	var pick_row := HBoxContainer.new()
 	pick_row.name = "BiomeTextureSelection"
@@ -303,6 +313,19 @@ func _phase47_default_texture_layer(seed: int = -1) -> Dictionary:
 		"softness": 20.0, "opacity": 1.0,
 		"noise_scale": 0.0, "noise_strength": 0.0, "tint_strength": 0.0,
 		"seed": seed if seed >= 0 else (randi() % 900000),
+		# Gradient end colour starts equal to the flat colour, and
+		# gradient_strength starts at 0, so a fresh band is a flat colour
+		# until the user opts into a gradient.
+		"color_b": Color(0.4, 0.35, 0.28), "gradient_strength": 0.0,
+		# Roughness/metallic/anisotropy/emission all start disabled -- the
+		# band uses whichever material (flat colour or a tiled texture) it
+		# already picked, unmodified, until the user opts one in.
+		"roughness_value": 0.9, "roughness_enabled": false,
+		"metallic_value": 0.0, "metallic_enabled": false,
+		"anisotropy_value": 0.0, "anisotropy_enabled": false,
+		"emission_color": Color(1.0, 0.6, 0.2), "emission_strength": 1.0,
+		"emission_enabled": false,
+		"custom_texture_index": -1,
 	}
 
 
@@ -349,8 +372,22 @@ func _phase47_texture_stack(graph: Resource) -> Array:
 		elif color_value is Array and (color_value as Array).size() >= 3:
 			var ca: Array = color_value
 			color = Color(float(ca[0]), float(ca[1]), float(ca[2]))
+		var color_b := color
+		var color_b_value: Variant = p.get("color_b", null)
+		if color_b_value is Color:
+			color_b = color_b_value
+		elif color_b_value is Array and (color_b_value as Array).size() >= 3:
+			var cb: Array = color_b_value
+			color_b = Color(float(cb[0]), float(cb[1]), float(cb[2]))
+		var emission_color := Color(1.0, 0.6, 0.2)
+		var emission_value: Variant = p.get("emission_color", null)
+		if emission_value is Color:
+			emission_color = emission_value
+		elif emission_value is Array and (emission_value as Array).size() >= 3:
+			var ea: Array = emission_value
+			emission_color = Color(float(ea[0]), float(ea[1]), float(ea[2]))
 		layers.append({
-			"texture_choice": clampi(int(p.get("texture_choice", 0)), 0, 4),
+			"texture_choice": clampi(int(p.get("texture_choice", 0)), 0, 5),
 			"color": color,
 			"height_min": float(p.get("height_min", -1000000.0)),
 			"height_max": float(p.get("height_max", 1000000.0)),
@@ -362,6 +399,19 @@ func _phase47_texture_stack(graph: Resource) -> Array:
 			"noise_strength": clampf(float(p.get("noise_strength", 0.0)), 0.0, 1.0),
 			"tint_strength": clampf(float(p.get("tint_strength", 0.0)), 0.0, 1.0),
 			"seed": int(p.get("seed", 1337)),
+			"color_b": color_b,
+			"gradient_strength": clampf(float(p.get("gradient_strength", 0.0)), 0.0, 1.0),
+			"roughness_value": clampf(float(p.get("roughness_value", 0.9)), 0.0, 1.0),
+			"roughness_enabled": bool(p.get("roughness_enabled", false)),
+			"metallic_value": clampf(float(p.get("metallic_value", 0.0)), 0.0, 1.0),
+			"metallic_enabled": bool(p.get("metallic_enabled", false)),
+			"anisotropy_value": clampf(float(p.get("anisotropy_value", 0.0)), -1.0, 1.0),
+			"anisotropy_enabled": bool(p.get("anisotropy_enabled", false)),
+			"emission_color": emission_color,
+			"emission_strength": maxf(float(p.get("emission_strength", 0.0)), 0.0),
+			"emission_enabled": bool(p.get("emission_enabled", false)),
+			"custom_texture_index": clampi(int(p.get("custom_texture_index", -1)), -1,
+				TerrainDisplacementRuntime.BIOME_TEX_CUSTOM_MAX - 1),
 		})
 	return layers
 
@@ -385,8 +435,10 @@ func _phase47_rebuild_biome_texture(graph: Resource, layers: Array) -> void:
 	for layer_value: Variant in layers:
 		var layer: Dictionary = layer_value as Dictionary
 		var color: Color = layer.get("color", Color(0.4, 0.35, 0.28)) as Color
+		var color_b: Color = layer.get("color_b", color) as Color
+		var emission_color: Color = layer.get("emission_color", Color(1.0, 0.6, 0.2)) as Color
 		var node_id: String = String(graph.call("add_node", "TEXTURE_BAND", Vector2(column, 180.0), {
-			"texture_choice": clampi(int(layer.get("texture_choice", 0)), 0, 4),
+			"texture_choice": clampi(int(layer.get("texture_choice", 0)), 0, 5),
 			"color": [color.r, color.g, color.b],
 			"height_min": float(layer.get("height_min", -1000000.0)),
 			"height_max": float(layer.get("height_max", 1000000.0)),
@@ -398,6 +450,19 @@ func _phase47_rebuild_biome_texture(graph: Resource, layers: Array) -> void:
 			"noise_strength": clampf(float(layer.get("noise_strength", 0.0)), 0.0, 1.0),
 			"tint_strength": clampf(float(layer.get("tint_strength", 0.0)), 0.0, 1.0),
 			"seed": int(layer.get("seed", 1337)),
+			"color_b": [color_b.r, color_b.g, color_b.b],
+			"gradient_strength": clampf(float(layer.get("gradient_strength", 0.0)), 0.0, 1.0),
+			"roughness_value": clampf(float(layer.get("roughness_value", 0.9)), 0.0, 1.0),
+			"roughness_enabled": bool(layer.get("roughness_enabled", false)),
+			"metallic_value": clampf(float(layer.get("metallic_value", 0.0)), 0.0, 1.0),
+			"metallic_enabled": bool(layer.get("metallic_enabled", false)),
+			"anisotropy_value": clampf(float(layer.get("anisotropy_value", 0.0)), -1.0, 1.0),
+			"anisotropy_enabled": bool(layer.get("anisotropy_enabled", false)),
+			"emission_color": [emission_color.r, emission_color.g, emission_color.b],
+			"emission_strength": maxf(float(layer.get("emission_strength", 0.0)), 0.0),
+			"emission_enabled": bool(layer.get("emission_enabled", false)),
+			"custom_texture_index": clampi(int(layer.get("custom_texture_index", -1)), -1,
+				TerrainDisplacementRuntime.BIOME_TEX_CUSTOM_MAX - 1),
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -434,9 +499,340 @@ func _phase47_move_texture_layer(graph: Resource, layers: Array, index: int, dir
 	_phase47_stage_biome_texture(graph, layers, "Reorder biome texture layers")
 
 
+## The user-imported PBR texture library lives in one dedicated, non-biome-
+## specific slot (TerrainDisplacementRuntime.BIOME_TEXTURE_LIBRARY_SLOT_ID),
+## shared by every biome's texture bands via custom_texture_index -- mirrors
+## _phase47_biome_texture_slot/_phase47_ensure_biome_texture_slot above, just
+## for a single fixed slot id instead of one per biome.
+func _phase47_texture_library_slot(terrain: Resource) -> Resource:
+	if terrain == null:
+		return null
+	for value: Variant in terrain.get(&"displacement_slots") as Array:
+		var slot: Resource = value as Resource
+		if slot != null and String(slot.get(&"slot_id")) \
+				== TerrainDisplacementRuntime.BIOME_TEXTURE_LIBRARY_SLOT_ID:
+			return slot
+	return null
+
+
+func _phase47_ensure_texture_library_slot(terrain: Resource) -> Resource:
+	var slot: Resource = _phase47_texture_library_slot(terrain)
+	if slot != null:
+		if not bool(slot.get(&"enabled")):
+			slot.set(&"enabled", true)
+			terrain.call("ensure_valid")
+			_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+		return slot
+	if terrain == null:
+		return null
+	slot = terrain.call("create_shader_slot", SHADER_SLOT_MODEL.Domain.DISPLACEMENT,
+		PHASE47_TEXTURE_LIBRARY_SLOT_DISPLAY) as Resource
+	if slot == null:
+		return null
+	slot.set(&"slot_id", TerrainDisplacementRuntime.BIOME_TEXTURE_LIBRARY_SLOT_ID)
+	slot.set(&"display_name", PHASE47_TEXTURE_LIBRARY_SLOT_DISPLAY)
+	slot.set(&"enabled", true)
+	slot.set(&"clipmap_level_mask", PHASE47_ALL_RINGS_MASK)
+	slot.set(&"biome_mask_mode", SHADER_SLOT_MODEL.BiomeMaskMode.ALL)
+	slot.set(&"blend_mode", SHADER_SLOT_MODEL.BlendMode.ADD)
+	slot.set(&"strength", 1.0)
+	_phase47_rebuild_texture_library(slot.get(&"graph") as Resource, [])
+	terrain.call("ensure_valid")
+	_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+	return slot
+
+
+## Reads the library's CUSTOM_TEXTURE node chain into {name, tile_m,
+## albedo_png, roughness_png} dicts -- mirrors _phase47_texture_stack /
+## TerrainDisplacementRuntime._parse_biome_texture_library's traversal.
+## Images stay as raw PNG bytes here (not decoded) since most callers only
+## need name/tile_m; _phase47_build_custom_texture_card decodes on demand
+## for the thumbnail.
+func _phase47_custom_texture_stack(graph: Resource) -> Array:
+	var entries: Array = []
+	if graph == null:
+		return entries
+	var nodes_value: Variant = graph.get(&"nodes")
+	var links_value: Variant = graph.get(&"links")
+	if not (nodes_value is Array) or not (links_value is Array):
+		return entries
+	var by_id: Dictionary = {}
+	var output_id: String = ""
+	for value: Variant in nodes_value as Array:
+		if not (value is Dictionary):
+			continue
+		var node: Dictionary = value as Dictionary
+		by_id[String(node.get("id", ""))] = node
+		if String(node.get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String(node.get("id", ""))
+	var input_of: Dictionary = {}
+	for link_value: Variant in links_value as Array:
+		if link_value is Dictionary and int((link_value as Dictionary).get("to_port", 0)) == 0:
+			input_of[String((link_value as Dictionary).get("to", ""))] = \
+				String((link_value as Dictionary).get("from", ""))
+	var ordered: Array = []
+	var cursor: String = String(input_of.get(output_id, ""))
+	var guard: int = 0
+	while not cursor.is_empty() and by_id.has(cursor) and guard < 64:
+		guard += 1
+		ordered.push_front(by_id[cursor])
+		cursor = String(input_of.get(cursor, ""))
+	for node_value: Variant in ordered:
+		var node: Dictionary = node_value as Dictionary
+		if String(node.get("type", "")) != "CUSTOM_TEXTURE":
+			continue
+		var p: Dictionary = node.get("parameters", {}) as Dictionary
+		entries.append({
+			"name": String(p.get("name", "Texture %d" % (entries.size() + 1))),
+			"tile_m": maxf(float(p.get("tile_m", 8.0)), 0.01),
+			"albedo_png": p.get("albedo_png", PackedByteArray()) as PackedByteArray,
+			"roughness_png": p.get("roughness_png", PackedByteArray()) as PackedByteArray,
+		})
+	return entries
+
+
+## Writes an entry-dict array back as a fresh CUSTOM_TEXTURE chain, mirroring
+## _phase47_rebuild_biome_texture.
+func _phase47_rebuild_texture_library(graph: Resource, entries: Array) -> void:
+	if graph == null:
+		return
+	graph.call("create_default_graph", SHADER_SLOT_MODEL.Domain.DISPLACEMENT)
+	var output_id: String = ""
+	for value: Variant in graph.get(&"nodes") as Array:
+		if String((value as Dictionary).get("type", "")) == "OUTPUT_DISPLACEMENT":
+			output_id = String((value as Dictionary).get("id", ""))
+			break
+	if output_id.is_empty():
+		return
+	var cursor: String = String(graph.call("add_node", "CONSTANT_FLOAT", Vector2(70.0, 180.0),
+		{"value": 0.0}))
+	var column: float = 360.0
+	for entry_value: Variant in entries:
+		var entry: Dictionary = entry_value as Dictionary
+		var node_id: String = String(graph.call("add_node", "CUSTOM_TEXTURE", Vector2(column, 180.0), {
+			"name": String(entry.get("name", "Texture")),
+			"tile_m": maxf(float(entry.get("tile_m", 8.0)), 0.01),
+			"albedo_png": entry.get("albedo_png", PackedByteArray()) as PackedByteArray,
+			"roughness_png": entry.get("roughness_png", PackedByteArray()) as PackedByteArray,
+		}))
+		graph.call("connect_nodes", cursor, 0, node_id, 0)
+		cursor = node_id
+		column += 280.0
+	graph.call("connect_nodes", cursor, 0, output_id, 0)
+
+
+func _phase47_stage_texture_library(graph: Resource, entries: Array, action: String) -> void:
+	_session.stage_action(action, func() -> void:
+		_phase47_rebuild_texture_library(graph, entries)
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+	_refresh_current_category()
+
+
+## Loads an image file from disk (any format Godot's Image can decode) and
+## re-encodes it as PNG bytes for embedding in a CUSTOM_TEXTURE node's
+## parameters -- see BIOME_TEXTURE_LIBRARY_SLOT_ID's declaration for why
+## embedding beats storing a path. Returns an empty PackedByteArray on
+## failure (caller should leave the existing value alone in that case).
+func _phase47_load_image_as_png(path: String) -> PackedByteArray:
+	var image := Image.new()
+	if image.load(path) != OK:
+		return PackedByteArray()
+	if image.is_compressed():
+		image.decompress()
+	return image.save_png_to_buffer()
+
+
+func _phase47_build_texture_library_section(terrain: Resource) -> void:
+	var slot: Resource = _phase47_ensure_texture_library_slot(terrain)
+	if slot == null:
+		return
+	var graph: Resource = slot.get(&"graph") as Resource
+	var entries: Array = _phase47_custom_texture_stack(graph)
+
+	var panel := PanelContainer.new()
+	panel.name = "BiomeTextureLibrary"
+	_workspace.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "Imported textures"
+	title.add_theme_font_size_override("font_size", 18)
+	box.add_child(title)
+	var note := Label.new()
+	note.text = "Import your own PBR ground textures here, then pick them by name from any band's Appearance list below. Each texture needs an albedo (colour) image; roughness is optional (a flat default is used when it's left out). Normal maps aren't supported yet, so imported textures read as flat-shaded up close."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.modulate = Color(0.58, 0.68, 0.76)
+	box.add_child(note)
+
+	if entries.is_empty():
+		var empty := Label.new()
+		empty.text = "No imported textures yet."
+		empty.modulate = Color(0.58, 0.68, 0.76)
+		box.add_child(empty)
+	for index: int in entries.size():
+		_phase47_build_custom_texture_card(box, graph, entries, index)
+
+	if entries.size() < TerrainDisplacementRuntime.BIOME_TEX_CUSTOM_MAX:
+		var import_dialog := FileDialog.new()
+		import_dialog.name = "ImportCustomTextureDialog"
+		import_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		import_dialog.filters = PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS
+		import_dialog.title = "Import albedo texture"
+		import_dialog.size = Vector2i(760, 520)
+		box.add_child(import_dialog)
+		import_dialog.file_selected.connect(func(path: String) -> void:
+			var albedo_png: PackedByteArray = _phase47_load_image_as_png(path)
+			if albedo_png.is_empty():
+				return
+			entries.append({
+				"name": path.get_file().get_basename(),
+				"tile_m": 8.0,
+				"albedo_png": albedo_png,
+				"roughness_png": PackedByteArray(),
+			})
+			_phase47_stage_texture_library(graph, entries, "Import texture")
+		)
+		var add := Button.new()
+		add.name = "AddCustomTexture"
+		add.text = "+ Import texture..."
+		add.pressed.connect(func() -> void:
+			import_dialog.popup_centered()
+		)
+		box.add_child(add)
+
+	var budget := Label.new()
+	budget.text = "Imported textures: %d / %d." \
+		% [entries.size(), TerrainDisplacementRuntime.BIOME_TEX_CUSTOM_MAX]
+	budget.modulate = Color(0.58, 0.68, 0.76)
+	box.add_child(budget)
+
+
+func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
+		entries: Array, index: int) -> void:
+	var entry: Dictionary = entries[index] as Dictionary
+	var card := PanelContainer.new()
+	card.name = "CustomTexture_%d" % index
+	parent.add_child(card)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	card.add_child(row)
+
+	var albedo_png: PackedByteArray = entry.get("albedo_png", PackedByteArray()) as PackedByteArray
+	var thumb := TextureRect.new()
+	thumb.custom_minimum_size = Vector2(48.0, 48.0)
+	thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	thumb.stretch_mode = TextureRect.STRETCH_SCALE
+	if not albedo_png.is_empty():
+		var image := Image.new()
+		if image.load_png_from_buffer(albedo_png) == OK:
+			thumb.texture = ImageTexture.create_from_image(image)
+	row.add_child(thumb)
+
+	var name_field := LineEdit.new()
+	name_field.name = "CustomTextureName_%d" % index
+	name_field.text = String(entry.get("name", "Texture"))
+	name_field.custom_minimum_size.x = 160.0
+	name_field.tooltip_text = "Shown in every band's Appearance list."
+	name_field.text_submitted.connect(func(value: String) -> void:
+		entry["name"] = value
+		_phase47_stage_texture_library(graph, entries, "Rename imported texture")
+	)
+	name_field.focus_exited.connect(func() -> void:
+		entry["name"] = name_field.text
+		_phase47_stage_texture_library(graph, entries, "Rename imported texture")
+	)
+	row.add_child(name_field)
+
+	var tile_label := Label.new()
+	tile_label.text = "Tile size (m)"
+	tile_label.tooltip_text = "World-space size of one texture repeat, in metres. Smaller = more visible tiling detail up close."
+	row.add_child(tile_label)
+	var tile_spin := SpinBox.new()
+	tile_spin.name = "CustomTextureTile_%d" % index
+	tile_spin.min_value = 0.1
+	tile_spin.max_value = 100000.0
+	tile_spin.step = 0.1
+	tile_spin.allow_greater = true
+	tile_spin.value = float(entry.get("tile_m", 8.0))
+	tile_spin.value_changed.connect(func(value: float) -> void:
+		entry["tile_m"] = value
+		_phase47_stage_texture_library(graph, entries, "Tune imported texture tile size")
+	)
+	row.add_child(tile_spin)
+
+	var replace_albedo_dialog := FileDialog.new()
+	replace_albedo_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	replace_albedo_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	replace_albedo_dialog.filters = PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS
+	replace_albedo_dialog.title = "Replace albedo texture"
+	replace_albedo_dialog.size = Vector2i(760, 520)
+	card.add_child(replace_albedo_dialog)
+	replace_albedo_dialog.file_selected.connect(func(path: String) -> void:
+		var png: PackedByteArray = _phase47_load_image_as_png(path)
+		if png.is_empty():
+			return
+		entry["albedo_png"] = png
+		_phase47_stage_texture_library(graph, entries, "Replace imported texture albedo")
+	)
+	var replace_albedo := Button.new()
+	replace_albedo.text = "Replace albedo..."
+	replace_albedo.pressed.connect(func() -> void:
+		replace_albedo_dialog.popup_centered()
+	)
+	row.add_child(replace_albedo)
+
+	var has_roughness: bool = not (entry.get("roughness_png", PackedByteArray()) as PackedByteArray).is_empty()
+	var roughness_dialog := FileDialog.new()
+	roughness_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	roughness_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	roughness_dialog.filters = PHASE47_CUSTOM_TEXTURE_IMPORT_FILTERS
+	roughness_dialog.title = "Import roughness texture"
+	roughness_dialog.size = Vector2i(760, 520)
+	card.add_child(roughness_dialog)
+	roughness_dialog.file_selected.connect(func(path: String) -> void:
+		var png: PackedByteArray = _phase47_load_image_as_png(path)
+		if png.is_empty():
+			return
+		entry["roughness_png"] = png
+		_phase47_stage_texture_library(graph, entries, "Import imported texture roughness")
+	)
+	var roughness_button := Button.new()
+	roughness_button.text = "Replace roughness..." if has_roughness else "Import roughness..."
+	roughness_button.tooltip_text = "Optional. Grayscale, white = fully rough, black = smooth/glossy. Left unset, this texture defaults to a uniform rough (0.9) finish."
+	roughness_button.pressed.connect(func() -> void:
+		roughness_dialog.popup_centered()
+	)
+	row.add_child(roughness_button)
+	if has_roughness:
+		var clear_roughness := Button.new()
+		clear_roughness.text = "Clear roughness"
+		clear_roughness.pressed.connect(func() -> void:
+			entry["roughness_png"] = PackedByteArray()
+			_phase47_stage_texture_library(graph, entries, "Clear imported texture roughness")
+		)
+		row.add_child(clear_roughness)
+
+	var remove := Button.new()
+	remove.name = "RemoveCustomTexture_%d" % index
+	remove.text = "Remove"
+	remove.tooltip_text = "Any band currently using this texture will fall back to its flat colour."
+	remove.pressed.connect(func() -> void:
+		entries.remove_at(index)
+		_phase47_stage_texture_library(graph, entries, "Remove imported texture")
+	)
+	row.add_child(remove)
+
+
 func _phase47_build_biome_texture_controls(terrain: Resource, slot: Resource, biome_id: int) -> void:
 	var graph: Resource = slot.get(&"graph") as Resource
 	var layers: Array = _phase47_texture_stack(graph)
+	var library_slot: Resource = _phase47_texture_library_slot(terrain)
+	var custom_names := PackedStringArray()
+	if library_slot != null:
+		for entry_value: Variant in _phase47_custom_texture_stack(library_slot.get(&"graph") as Resource):
+			custom_names.append(String((entry_value as Dictionary).get("name", "")))
 	var panel := PanelContainer.new()
 	panel.name = "BiomeTextureProfile"
 	_workspace.add_child(panel)
@@ -459,7 +855,7 @@ func _phase47_build_biome_texture_controls(terrain: Resource, slot: Resource, bi
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(empty)
 	for index: int in layers.size():
-		_phase47_build_texture_layer_card(box, graph, layers, index)
+		_phase47_build_texture_layer_card(box, graph, layers, index, custom_names)
 
 	if layers.size() < PHASE47_TEXTURE_MAX_LAYERS_PER_BIOME:
 		var add := Button.new()
@@ -480,7 +876,7 @@ func _phase47_build_biome_texture_controls(terrain: Resource, slot: Resource, bi
 
 
 func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
-		layers: Array, index: int) -> void:
+		layers: Array, index: int, custom_names: PackedStringArray) -> void:
 	var layer: Dictionary = layers[index] as Dictionary
 	var card := PanelContainer.new()
 	card.name = "BiomeTextureLayer_%d" % index
@@ -527,9 +923,21 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 	choice_picker.custom_minimum_size.x = 150.0
 	for option: int in PHASE47_TEXTURE_CHOICE_LABELS.size():
 		choice_picker.add_item(PHASE47_TEXTURE_CHOICE_LABELS[option])
-	choice_picker.select(clampi(int(layer.get("texture_choice", 0)), 0, PHASE47_TEXTURE_CHOICE_LABELS.size() - 1))
+	for custom_index: int in custom_names.size():
+		choice_picker.add_item("Imported: %s" % custom_names[custom_index])
+	var texture_choice: int = int(layer.get("texture_choice", 0))
+	var custom_texture_index: int = int(layer.get("custom_texture_index", -1))
+	if texture_choice == 5 and custom_texture_index >= 0 and custom_texture_index < custom_names.size():
+		choice_picker.select(PHASE47_TEXTURE_CHOICE_LABELS.size() + custom_texture_index)
+	else:
+		choice_picker.select(clampi(texture_choice, 0, PHASE47_TEXTURE_CHOICE_LABELS.size() - 1))
 	choice_picker.item_selected.connect(func(picked: int) -> void:
-		layer["texture_choice"] = picked
+		if picked >= PHASE47_TEXTURE_CHOICE_LABELS.size():
+			layer["texture_choice"] = 5
+			layer["custom_texture_index"] = picked - PHASE47_TEXTURE_CHOICE_LABELS.size()
+		else:
+			layer["texture_choice"] = picked
+			layer["custom_texture_index"] = -1
 		_phase47_stage_biome_texture(graph, layers, "Change biome texture band appearance")
 	)
 	appearance_row.add_child(choice_picker)
@@ -553,6 +961,32 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 		_phase47_add_texture_layer_number(box, graph, layers, layer, "Colour tint strength", "tint_strength",
 			0.0, 1.0, 0.01, "0 = pure texture, 1 = the colour above replaces it entirely.")
 
+	var gradient_row := HBoxContainer.new()
+	gradient_row.add_theme_constant_override("separation", 10)
+	box.add_child(gradient_row)
+	var gradient_label := Label.new()
+	gradient_label.text = "Gradient end colour"
+	gradient_label.custom_minimum_size.x = 210.0
+	gradient_row.add_child(gradient_label)
+	var gradient_color_button := ColorPickerButton.new()
+	gradient_color_button.name = "BiomeTextureLayerColorB_%d" % index
+	gradient_color_button.custom_minimum_size = Vector2(80.0, 32.0)
+	gradient_color_button.color = layer.get("color_b", layer.get("color", Color(0.4, 0.35, 0.28))) as Color
+	gradient_color_button.tooltip_text = "The colour above fades toward this one across the band's height range, controlled by the strength slider below."
+	gradient_color_button.color_changed.connect(func(value: Color) -> void:
+		layer["color_b"] = value
+		_phase47_stage_biome_texture(graph, layers, "Change biome texture band gradient colour")
+	)
+	gradient_row.add_child(gradient_color_button)
+	var gradient_help := Label.new()
+	gradient_help.text = "Blends from the colour above (at the low end of the height range) to this one (at the high end)."
+	gradient_help.modulate = Color(0.58, 0.68, 0.76)
+	gradient_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	gradient_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gradient_row.add_child(gradient_help)
+	_phase47_add_texture_layer_number(box, graph, layers, layer, "Gradient strength", "gradient_strength",
+		0.0, 1.0, 0.01, "0 = flat colour (gradient off). 1 = fully fades across the height range into the gradient end colour above.")
+
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: from", "height_min",
 		-1000000.0, 1000000.0, 1.0, "This band starts fading in above this elevation (metres above sea level). Very low/high values effectively disable this edge.")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: to", "height_max",
@@ -572,6 +1006,99 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 			1.0, 200000.0, 1.0, "Higher makes the random patches smaller and more frequent.")
 		_phase47_add_texture_layer_number(box, graph, layers, layer, "Spread seed", "seed",
 			0.0, 9999999.0, 1.0, "Changes the random pattern without moving the band's height/slope edges.")
+
+	var material_title := Label.new()
+	material_title.text = "Material overrides"
+	material_title.add_theme_font_size_override("font_size", 14)
+	box.add_child(material_title)
+	var material_note := Label.new()
+	material_note.text = "Off by default, so a band uses whichever material it picked above unmodified. Turn one on to override just that property where this band is active."
+	material_note.modulate = Color(0.58, 0.68, 0.76)
+	material_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(material_note)
+	_phase47_add_texture_layer_toggle_number(box, graph, layers, layer, "Roughness", "roughness_enabled",
+		"roughness_value", 0.0, 1.0, 0.01, "0 = mirror-smooth, 1 = fully matte/rough.")
+	_phase47_add_texture_layer_toggle_number(box, graph, layers, layer, "Metallic", "metallic_enabled",
+		"metallic_value", 0.0, 1.0, 0.01, "0 = non-metal (dielectric), 1 = fully metallic.")
+	_phase47_add_texture_layer_toggle_number(box, graph, layers, layer, "Anisotropy", "anisotropy_enabled",
+		"anisotropy_value", -1.0, 1.0, 0.01, "Stretches specular highlights along the surface tangent -- useful for brushed metal or fine grooved rock. 0 = off (round highlights), positive/negative stretch it one way or the other.")
+
+	var emission_row := HBoxContainer.new()
+	emission_row.add_theme_constant_override("separation", 10)
+	box.add_child(emission_row)
+	var emission_toggle := CheckButton.new()
+	emission_toggle.name = "BiomeTextureLayerEmissionEnabled_%d" % index
+	emission_toggle.button_pressed = bool(layer.get("emission_enabled", false))
+	emission_row.add_child(emission_toggle)
+	var emission_label := Label.new()
+	emission_label.text = "Emission (self-lit glow)"
+	emission_label.custom_minimum_size.x = 195.0
+	emission_row.add_child(emission_label)
+	var emission_color_button := ColorPickerButton.new()
+	emission_color_button.name = "BiomeTextureLayerEmissionColor_%d" % index
+	emission_color_button.custom_minimum_size = Vector2(80.0, 32.0)
+	emission_color_button.color = layer.get("emission_color", Color(1.0, 0.6, 0.2)) as Color
+	emission_color_button.disabled = not emission_toggle.button_pressed
+	emission_color_button.color_changed.connect(func(value: Color) -> void:
+		layer["emission_color"] = value
+		_phase47_stage_biome_texture(graph, layers, "Change biome texture band emission colour")
+	)
+	emission_row.add_child(emission_color_button)
+	var emission_help := Label.new()
+	emission_help.text = "Adds a self-lit glow on top of normal lighting -- lava, glowing crystal, lit windows. Stacks additively, doesn't replace the band's lit appearance."
+	emission_help.modulate = Color(0.58, 0.68, 0.76)
+	emission_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	emission_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	emission_row.add_child(emission_help)
+	emission_toggle.toggled.connect(func(pressed: bool) -> void:
+		layer["emission_enabled"] = pressed
+		emission_color_button.disabled = not pressed
+		_phase47_stage_biome_texture(graph, layers, "Toggle biome texture band emission")
+	)
+	if bool(layer.get("emission_enabled", false)):
+		_phase47_add_texture_layer_number(box, graph, layers, layer, "Emission strength", "emission_strength",
+			0.0, 50.0, 0.1, "How bright the glow is. Values above 1 read as genuinely light-emitting rather than just a bright colour.")
+
+
+func _phase47_add_texture_layer_toggle_number(parent: VBoxContainer, graph: Resource, layers: Array,
+		layer: Dictionary, label_text: String, enabled_key: String, value_key: String,
+		minimum: float, maximum: float, step: float, help_text: String) -> void:
+	var row := HBoxContainer.new()
+	parent.add_child(row)
+	var toggle := CheckButton.new()
+	toggle.name = "BiomeTextureLayerField_%s" % enabled_key
+	toggle.button_pressed = bool(layer.get(enabled_key, false))
+	row.add_child(toggle)
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size.x = 195.0
+	label.tooltip_text = help_text
+	row.add_child(label)
+	var spin := SpinBox.new()
+	spin.name = "BiomeTextureLayerField_%s" % value_key
+	spin.min_value = minimum
+	spin.max_value = maximum
+	spin.step = step
+	spin.allow_greater = true
+	spin.allow_lesser = true
+	spin.value = float(layer.get(value_key, 0.0))
+	spin.editable = toggle.button_pressed
+	spin.value_changed.connect(func(value: float) -> void:
+		layer[value_key] = value
+		_phase47_stage_biome_texture(graph, layers, "Tune biome texture band: %s" % value_key)
+	)
+	row.add_child(spin)
+	toggle.toggled.connect(func(pressed: bool) -> void:
+		layer[enabled_key] = pressed
+		spin.editable = pressed
+		_phase47_stage_biome_texture(graph, layers, "Toggle biome texture band: %s" % enabled_key)
+	)
+	var help := Label.new()
+	help.text = help_text
+	help.modulate = Color(0.58, 0.68, 0.76)
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(help)
 
 
 func _phase47_add_texture_layer_number(parent: VBoxContainer, graph: Resource, layers: Array,

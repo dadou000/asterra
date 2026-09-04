@@ -589,17 +589,31 @@ void fragment() {
 			}
 
 			// Per-biome authored surface look: height/slope colour + texture
-			// bands (see terrain_biome_texture.gdshaderinc). height_m mirrors
-			// terrain_author_material_post_cached.gdshaderinc's own
+			// bands, full PBR control (roughness/metallic/anisotropy/
+			// emission), see terrain_biome_texture.gdshaderinc. height_m
+			// mirrors terrain_author_material_post_cached.gdshaderinc's own
 			// length(v_planet) - u_planet_radius; slope_deg turns the
 			// shading normal's angle from local "up" into degrees for a more
 			// intuitive authoring control than a raw dot product.
 			float biome_tex_height_m = length(v_planet) - u_planet_radius;
 			float biome_tex_slope_deg = degrees(acos(clamp(dot(wn, up), -1.0, 1.0)));
+			float biome_tex_metallic = 0.0;
+			float biome_tex_anisotropy = 0.0;
+			vec3 biome_tex_emission = vec3(0.0);
 			asterra_biome_texture_apply(up, int(round(biome)), biome_tex_height_m,
-				biome_tex_slope_deg, dpos, dFdx(dpos), dFdy(dpos), wn, albedo, roughness);
+				biome_tex_slope_deg, dpos, dFdx(dpos), dFdy(dpos), wn, albedo, roughness,
+				biome_tex_metallic, biome_tex_anisotropy, biome_tex_emission);
+			if (abs(biome_tex_anisotropy) > 0.001) {
+				// No authored tangent data exists for this procedural terrain
+				// mesh to derive a "grain direction" from, so this is a fixed,
+				// plausible default (streaks along the local shading tangent)
+				// rather than a computed flow -- a reasonable approximation
+				// for a rock/metal-vein look, not physically derived.
+				ANISOTROPY = biome_tex_anisotropy;
+				ANISOTROPY_FLOW = vec2(1.0, 0.0);
+			}
 
-			float authored_metallic = 0.0;
+			float authored_metallic = biome_tex_metallic;
 			float authored_ao = 1.0;
 			#ifdef ASTERRA_AUTHORED_TERRAIN
 			author_cached_material_post(
@@ -618,7 +632,7 @@ void fragment() {
 			vec3 skylight = planet_sky_irradiance(v_planet, sun_dir, u_planet_radius);
 			float sky_facing = clamp(dot(wn, up), 0.0, 1.0);
 			float sky_exposure = mix(0.32, 1.0, pow(sky_facing, 0.72));
-			EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l;
+			EMISSION = albedo * skylight * sky_exposure * v_atmo_t + v_atmo_l + biome_tex_emission;
 		}
 	}
 }

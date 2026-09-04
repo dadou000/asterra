@@ -180,6 +180,15 @@ func _sync_biome_texture_uniforms(_force: bool) -> void:
 		_material.set_shader_parameter("u_biome_tex_layer_b", tex_packed.get("b"))
 		_material.set_shader_parameter("u_biome_tex_layer_c", tex_packed.get("c"))
 		_material.set_shader_parameter("u_biome_tex_layer_d", tex_packed.get("d"))
+		_material.set_shader_parameter("u_biome_tex_layer_e", tex_packed.get("e"))
+		_material.set_shader_parameter("u_biome_tex_layer_f", tex_packed.get("f"))
+		_material.set_shader_parameter("u_biome_tex_layer_g", tex_packed.get("g"))
+	var custom_count: int = int(tex_packed.get("custom_count", 0))
+	_material.set_shader_parameter("u_biome_tex_custom_count", custom_count)
+	if custom_count > 0:
+		_material.set_shader_parameter("u_biome_tex_custom_albedo", tex_packed.get("custom_albedo"))
+		_material.set_shader_parameter("u_biome_tex_custom_roughness", tex_packed.get("custom_roughness"))
+		_material.set_shader_parameter("u_biome_tex_custom_tile_m", tex_packed.get("custom_tile_m"))
 
 
 func _sync_authoring_material(force: bool) -> void:
