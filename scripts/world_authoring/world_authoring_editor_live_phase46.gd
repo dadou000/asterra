@@ -829,7 +829,7 @@ func _phase47_rebuild_biome_profile(graph: Resource, stack: Dictionary) -> void:
 		if not PHASE47_BIOME_LAYER_TYPES.has(layer_type):
 			layer_type = "NOISE_LAYER"
 		var node_id: String = String(graph.call("add_node", layer_type, Vector2(column, 180.0), {
-			"scale": maxf(0.01, absf(float(layer.get("scale", 6.0)))),
+			"scale": maxf(0.0001, absf(float(layer.get("scale", 6.0)))),
 			"amount": float(layer.get("amount", 20.0)),
 			"passes": clampi(int(layer.get("param", 3)), 1, 4),
 			"steps": clampi(int(layer.get("param", 6)), 2, 24),
@@ -1040,9 +1040,10 @@ func _phase47_build_biome_layer_card(parent: VBoxContainer, graph: Resource,
 	elif layer_type == "SEDIMENT_DEPOSIT":
 		height_help = "Fill height in metres added to valley floors and basins."
 	_phase47_add_biome_layer_number(box, graph, stack, layer, "Feature size", "scale",
-		0.1, 200.0, 0.1, "Higher makes the pattern smaller and more frequent.")
+		0.001, 1000000.0, 0.1,
+		"Higher makes the pattern smaller and more frequent. Very large values eventually alias (float precision) into stepped noise.")
 	_phase47_add_biome_layer_number(box, graph, stack, layer, "Feature height", "amount",
-		-1000.0, 1000.0, 1.0, height_help)
+		-1000000.0, 1000000.0, 0.1, height_help)
 	if layer_type == "TERRACE_RELIEF":
 		_phase47_add_biome_layer_number(box, graph, stack, layer, "Terrace steps", "param",
 			2.0, 24.0, 1.0, "More steps = smaller terraces; fewer = bold plateaus.")
@@ -1050,7 +1051,7 @@ func _phase47_build_biome_layer_card(parent: VBoxContainer, graph: Resource,
 		_phase47_add_biome_layer_number(box, graph, stack, layer, "Detail passes", "param",
 			1.0, 4.0, 1.0, "More passes adds finer nested structure.")
 	_phase47_add_biome_layer_number(box, graph, stack, layer, "Pattern seed", "seed",
-		0.0, 999999.0, 1.0, "Changes the pattern without moving the biome boundary.")
+		0.0, 9999999.0, 1.0, "Changes the pattern without moving the biome boundary.")
 
 
 func _phase47_move_biome_layer(graph: Resource, stack: Dictionary, index: int,
@@ -1080,7 +1081,10 @@ func _phase47_add_biome_layer_number(parent: VBoxContainer, graph: Resource, sta
 	spin.min_value = minimum
 	spin.max_value = maximum
 	spin.step = step
-	spin.value = clampf(float(layer.get(key, 0.0)), minimum, maximum)
+	# The range only seeds the slider; biome layer values are otherwise unbounded.
+	spin.allow_greater = true
+	spin.allow_lesser = true
+	spin.value = float(layer.get(key, 0.0))
 	spin.value_changed.connect(func(value: float) -> void:
 		layer[key] = roundi(value) if step >= 1.0 else value
 		_phase47_stage_biome_profile(graph, stack, "Tune biome terrain layer: %s" % key)
