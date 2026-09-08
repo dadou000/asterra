@@ -44,8 +44,9 @@ func bind(model: GasGiantModel, haze_color: Color, rotation_period_s: float = 86
 	_outer_approach_m = maxf(_cloud_top_m * OUTER_APPROACH_FRAC, OUTER_APPROACH_FLOOR_M)
 	_rot_period_s = maxf(absf(rotation_period_s), 1.0)
 
-	var cov_seed: int = int(model.rho_top() * 1.0e7) ^ int(model.cloud_top_radius_m)
-	_coverage_tex = _build_coverage_texture(cov_seed, int(model.decks()[1].get("band_count", 6)))
+	_coverage_tex = ImageTexture.create_from_image(
+		GAS_GIANT_MODEL.build_coverage_image(model.coverage_seed(), model.band_hint(),
+			COVERAGE_W, COVERAGE_H))
 
 	# Jool's green is the ATMOSPHERE (G-dominant Rayleigh), not the clouds. Keep the
 	# per-body hue but bias it green-dominant and desaturate a touch.
@@ -148,69 +149,3 @@ func suppresses_far_lod() -> bool:
 	return _below_cloud_tops
 
 
-## Procedural equirect cloud-coverage map, generated once per gas giant (seeded):
-##   R = large-scale coverage: irregular latitudinal bands + domain-warped swirls
-##   G = mid-scale detail for erosion
-##   B = storm/spot mask (bright ovals)
-## Sampled in the shader by (longitude, latitude) with an animated flow offset.
-func _build_coverage_texture(seed_v: int, band_hint: int) -> ImageTexture:
-	var img := Image.create(COVERAGE_W, COVERAGE_H, false, Image.FORMAT_RGBA8)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = seed_v
-
-	var warp := FastNoiseLite.new()
-	warp.seed = seed_v ^ 0x11
-	warp.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	warp.frequency = 0.9
-	warp.fractal_octaves = 2
-	var swirl := FastNoiseLite.new()
-	swirl.seed = seed_v ^ 0x22
-	swirl.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	swirl.frequency = 1.8
-	swirl.fractal_octaves = 4
-	var detail := FastNoiseLite.new()
-	detail.seed = seed_v ^ 0x33
-	detail.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	detail.frequency = 5.5
-	detail.fractal_octaves = 3
-
-	# Irregular bands: a few latitude sinusoids of different rate / phase.
-	var nb: int = maxi(band_hint, 4) + (rng.randi() % 3)
-	var amp := PackedFloat32Array()
-	var frq := PackedFloat32Array()
-	var phs := PackedFloat32Array()
-	for _i in nb:
-		amp.append(rng.randf_range(0.4, 1.0))
-		frq.append(rng.randf_range(2.0, 4.5) * float(2 + (rng.randi() % 4)))
-		phs.append(rng.randf() * TAU)
-	var band_amp: float = rng.randf_range(0.5, 0.75)
-	var swirl_amp: float = rng.randf_range(0.35, 0.55)
-	var lo: float = rng.randf_range(0.32, 0.42)
-	var hi: float = lo + rng.randf_range(0.24, 0.34)
-
-	for y in COVERAGE_H:
-		var lat: float = (float(y) / float(COVERAGE_H - 1) - 0.5) * PI
-		var slat: float = sin(lat)
-		var clat: float = cos(lat)
-		for x in COVERAGE_W:
-			var lon: float = float(x) / float(COVERAGE_W) * TAU
-			var p := Vector3(clat * cos(lon), slat, clat * sin(lon))
-			var wv := Vector3(
-				warp.get_noise_3d(p.x * 1.7 + 3.0, p.y * 1.7, p.z * 1.7),
-				warp.get_noise_3d(p.x * 1.7, p.y * 1.7 + 5.0, p.z * 1.7),
-				warp.get_noise_3d(p.x * 1.7, p.y * 1.7, p.z * 1.7 + 7.0)) * 0.4
-			var wl: float = slat + wv.y * 0.55
-			var band: float = 0.0
-			for i in nb:
-				band += amp[i] * sin(wl * frq[i] + phs[i])
-			band /= float(nb)
-			var s: float = swirl.get_noise_3d(p.x + wv.x, p.y + wv.y, p.z + wv.z)
-			var cov: float = 0.5 + band_amp * band + swirl_amp * s
-			cov = smoothstep(lo, hi, clampf(cov, 0.0, 1.0))
-			var det: float = 0.5 + 0.5 * detail.get_noise_3d(
-				p.x + wv.x * 0.5, p.y + wv.y * 0.5, p.z + wv.z * 0.5)
-			var storm: float = clampf((swirl.get_noise_3d(
-				p.x * 0.55 + 11.0, p.y * 0.55, p.z * 0.55) - 0.62) * 3.0, 0.0, 1.0)
-			img.set_pixel(x, y, Color(cov, det, storm, 1.0))
-
-	return ImageTexture.create_from_image(img)

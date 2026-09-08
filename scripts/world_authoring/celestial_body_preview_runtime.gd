@@ -37,6 +37,13 @@ var _caller_hidden: Dictionary = {}
 ## light every far body's own terminator.
 var _star_world: Vec3D = Vec3D.new()
 
+const GAS_GIANT_MODEL := preload("res://scripts/gen/gas_giant_model.gd")
+const GENERATOR := preload("res://scripts/world_authoring/celestial_system_generator.gd")
+## body_id -> {tex, spin_rad_s, phase} for gas giants: the far-LOD sphere shows
+## the real band pattern (GasGiantModel.build_coverage_image) rotating on the
+## body's sidereal day, not a flat tan disc.
+var _band_by_body: Dictionary = {}
+
 var _system: Resource
 var _selected_body_id: String = ""
 var _detailed_body_id: String = ""
@@ -63,10 +70,24 @@ func _ready() -> void:
 	set_process(true)
 
 
-func _process(_delta: float) -> void:
-	if visible:
-		_sync_floating_origin()
-		_sync_camera_clip()
+func _process(delta: float) -> void:
+	if not visible:
+		return
+	_sync_floating_origin()
+	_sync_camera_clip()
+	_advance_bands(delta)
+
+
+## Spin each gas giant's far-LOD band pattern on its own sidereal day.
+func _advance_bands(delta: float) -> void:
+	for body_id: Variant in _band_by_body:
+		var b: Dictionary = _band_by_body[body_id]
+		b["phase"] = wrapf(float(b["phase"]) + float(b["spin_rad_s"]) * delta, 0.0, TAU)
+		var record: Dictionary = _records.get(body_id, {}) as Dictionary
+		var surface: MeshInstance3D = record.get("surface") as MeshInstance3D
+		if surface != null and surface.material_override is ShaderMaterial:
+			(surface.material_override as ShaderMaterial).set_shader_parameter(
+				&"u_band_phase", float(b["phase"]))
 
 
 func show_system(system: Resource, selected_body_id: String,
@@ -285,6 +306,44 @@ func _create_body_record(body: Resource, world: Vec3D,
 	}
 
 
+## Feed the far-LOD gas-giant sphere its real band pattern: reconstruct the
+## GasGiantModel, build the shared equirect coverage map (small, this is a distant
+## sphere), a seeded belt/zone palette, and register it for per-frame rotation.
+func _apply_gas_giant_bands(body: Resource, body_id: String, material: ShaderMaterial) -> void:
+	var model: Object = GENERATOR.gas_giant_model_for(body)
+	if model == null:
+		return
+	var tex: ImageTexture = _band_by_body.get(body_id, {}).get("tex", null) as ImageTexture \
+		if _band_by_body.has(body_id) else null
+	if tex == null:
+		tex = ImageTexture.create_from_image(
+			GAS_GIANT_MODEL.build_coverage_image(
+				model.coverage_seed(), model.band_hint(), 256, 128))
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = String(body_id).hash()
+	var roll: float = rng.randf()
+	var hue: float = 0.30 if roll < 0.55 else (0.09 if roll < 0.85 else 0.55)   # green / tan / pale blue
+	var zone := Color.from_hsv(fposmod(hue + rng.randf_range(-0.03, 0.03), 1.0),
+		rng.randf_range(0.30, 0.5), rng.randf_range(0.62, 0.78))
+	var belt := Color.from_hsv(fposmod(hue - 0.04, 1.0),
+		clampf(zone.s + 0.18, 0.0, 1.0), zone.v * 0.42)
+
+	material.set_shader_parameter(&"u_band_tex", tex)
+	material.set_shader_parameter(&"u_band_ready", 1.0)
+	material.set_shader_parameter(&"u_band_zone", zone)
+	material.set_shader_parameter(&"u_band_belt", belt)
+	material.set_shader_parameter(&"u_atmo_color", zone.lightened(0.15))
+
+	var period: float = absf(float(body.get(&"sidereal_rotation_period_s")))
+	_band_by_body[body_id] = {
+		"tex": tex,
+		"spin_rad_s": (TAU / period) if period > 1.0 else 7.3e-5,
+		"phase": _band_by_body.get(body_id, {}).get("phase", 0.0),
+	}
+	material.set_shader_parameter(&"u_band_phase", float(_band_by_body[body_id]["phase"]))
+
+
 ## Lit far-LOD sphere with its own terminator, per-body tint, optional atmosphere
 ## rim and -- when a relief elevation texture is fed -- real relief shading.
 func _configure_solid_body(body: Resource, body_id: String, body_type: int,
@@ -316,14 +375,17 @@ func _configure_solid_body(body: Resource, body_id: String, body_type: int,
 			atmo_strength = 0.35
 			atmo_color = Color(0.62, 0.78, 0.95)
 		&"gas_giant":
-			color = Color(0.78, 0.62, 0.42)
-			atmo_strength = 1.4
-			atmo_color = Color(0.86, 0.70, 0.48)
+			color = Color(0.72, 0.70, 0.50)
+			atmo_strength = 1.1
+			atmo_color = Color(0.62, 0.80, 0.48)
+			ambient_floor = 0.12
 		&"terran":
 			color = Color(0.26, 0.52, 0.72)
 
+	var is_gas_giant: bool = StringName(body.get(&"archetype")) == &"gas_giant"
+
 	var profile: Resource = body.get(&"planet_profile") as Resource
-	if profile != null:
+	if profile != null and not is_gas_giant:
 		var atmosphere: Resource = profile.get(&"atmosphere") as Resource
 		if atmosphere != null and bool(atmosphere.get(&"enabled")):
 			atmo_strength = maxf(atmo_strength, 0.6)
@@ -338,6 +400,10 @@ func _configure_solid_body(body: Resource, body_id: String, body_type: int,
 	material.set_shader_parameter(&"u_atmo_color", atmo_color)
 	material.set_shader_parameter(&"u_ambient_floor", ambient_floor)
 	material.set_shader_parameter(&"u_relief_ready", 0.0)
+	material.set_shader_parameter(&"u_band_ready", 0.0)
+
+	if is_gas_giant:
+		_apply_gas_giant_bands(body, body_id, material)
 
 	if body_id == _detailed_body_id and _relief_by_body.get(body_id) == null:
 		_auto_feed_detailed_relief(body_id)
@@ -636,6 +702,10 @@ func _clear_records() -> void:
 		if root != null and is_instance_valid(root):
 			root.queue_free()
 	_records.clear()
+	# Keep band phases (a rebuild re-registers the same ids) but drop textures for
+	# bodies no longer present so a big system does not pin every gas giant's map.
+	for id: Variant in _band_by_body.keys():
+		_band_by_body[id]["tex"] = null
 
 
 static func frame_distance_for_radius(radius_m: float, vertical_fov_deg: float,

@@ -118,26 +118,6 @@ func falloff_k() -> float:
 	return _falloff_k
 
 
-## Jool-style vertical schedule: a few thin cloud DECKS concentrated near the
-## cloud tops (where banding actually reads) over a smooth haze base that runs all
-## the way to the core. The volumetric renderer streams these in one at a time as
-## the observer sinks (gas_giant_shell.gd); GG3 gives the `"cloud"` decks Worley
-## noise + coverage while `"haze"` stays smooth.
-##
-## Each entry (ordered outer -> inner): {
-##   outer_m, inner_m   : radial band this deck occupies
-##   kind               : "cloud" (banded, GG3 noise) | "haze" (smooth)
-##   steps              : primary raymarch steps for its (bounded) span
-##   density_mul        : multiplies the analytic density_at inside this band
-##   tint_hue_shift     : deck tint = base haze colour hue nudged by this
-##   -- "cloud" only (GG3): --
-##   band_count         : latitudinal stripe count (Jool-style horizontal bands)
-##   band_contrast      : how sharp the light/dark banding is (0..1)
-##   noise_freq         : turbulence cells around the sphere (swirl scale)
-##   warp               : domain-warp strength for the swirls
-##   coverage           : cloud fill fraction (higher -> cloudier)
-##   edge_hardness      : 0 soft billows .. ~1 hard-edged decks
-##   rot_speed_mul      : this deck's spin rate vs the body's (wind shear)
 ## The volumetric envelope as TWO ordered (outer -> inner) decks:
 ##   [0] "atmo"  : core -> just above the cloud tops. Cheap analytic march, green
 ##                 Rayleigh-ish tint; always closes the view (no seams / no stars),
@@ -177,6 +157,84 @@ func decks() -> Array:
 			"rot_speed_mul": 1.0 + rng.randf() * 0.2,
 		},
 	]
+
+
+## Deterministic seed for this body's cloud-coverage map (same for the volumetric
+## shell and the far-LOD sphere so a descent never sees the pattern change).
+func coverage_seed() -> int:
+	return int(_rho_top * 1.0e7) ^ int(cloud_top_radius_m)
+
+
+func band_hint() -> int:
+	return 5 + (coverage_seed() & 3) + 1
+
+
+## Procedural equirect cloud map shared by the volumetric shell (as coverage) and
+## the far-LOD sphere (as the band pattern): irregular latitudinal bands +
+## domain-warped swirls + storm ovals, deterministic from `seed_v`.
+##   R = zone value      0 = dark belt .. 1 = bright zone
+##   G = mid detail      (erosion / relief)
+##   B = storm mask      bright ovals
+static func build_coverage_image(seed_v: int, band_hint_v: int,
+		w: int = 512, h: int = 256) -> Image:
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_v
+
+	var warp := FastNoiseLite.new()
+	warp.seed = seed_v ^ 0x11
+	warp.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	warp.frequency = 0.9
+	warp.fractal_octaves = 2
+	var swirl := FastNoiseLite.new()
+	swirl.seed = seed_v ^ 0x22
+	swirl.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	swirl.frequency = 1.8
+	swirl.fractal_octaves = 4
+	var detail := FastNoiseLite.new()
+	detail.seed = seed_v ^ 0x33
+	detail.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	detail.frequency = 5.5
+	detail.fractal_octaves = 3
+
+	var nb: int = maxi(band_hint_v, 4) + (rng.randi() % 3)
+	var amp := PackedFloat32Array()
+	var frq := PackedFloat32Array()
+	var phs := PackedFloat32Array()
+	for _i in nb:
+		amp.append(rng.randf_range(0.4, 1.0))
+		frq.append(rng.randf_range(2.0, 4.5) * float(2 + (rng.randi() % 4)))
+		phs.append(rng.randf() * TAU)
+	var band_amp: float = rng.randf_range(0.5, 0.75)
+	var swirl_amp: float = rng.randf_range(0.35, 0.55)
+	var lo: float = rng.randf_range(0.32, 0.42)
+	var hi: float = lo + rng.randf_range(0.24, 0.34)
+
+	for y in h:
+		var lat: float = (float(y) / float(h - 1) - 0.5) * PI
+		var slat: float = sin(lat)
+		var clat: float = cos(lat)
+		for x in w:
+			var lon: float = float(x) / float(w) * TAU
+			var p := Vector3(clat * cos(lon), slat, clat * sin(lon))
+			var wv := Vector3(
+				warp.get_noise_3d(p.x * 1.7 + 3.0, p.y * 1.7, p.z * 1.7),
+				warp.get_noise_3d(p.x * 1.7, p.y * 1.7 + 5.0, p.z * 1.7),
+				warp.get_noise_3d(p.x * 1.7, p.y * 1.7, p.z * 1.7 + 7.0)) * 0.4
+			var wl: float = slat + wv.y * 0.55
+			var band: float = 0.0
+			for i in nb:
+				band += amp[i] * sin(wl * frq[i] + phs[i])
+			band /= float(nb)
+			var s: float = swirl.get_noise_3d(p.x + wv.x, p.y + wv.y, p.z + wv.z)
+			var cov: float = 0.5 + band_amp * band + swirl_amp * s
+			cov = smoothstep(lo, hi, clampf(cov, 0.0, 1.0))
+			var det: float = 0.5 + 0.5 * detail.get_noise_3d(
+				p.x + wv.x * 0.5, p.y + wv.y * 0.5, p.z + wv.z * 0.5)
+			var storm: float = clampf((swirl.get_noise_3d(
+				p.x * 0.55 + 11.0, p.y * 0.55, p.z * 0.55) - 0.62) * 3.0, 0.0, 1.0)
+			img.set_pixel(x, y, Color(cov, det, storm, 1.0))
+	return img
 
 
 func describe() -> String:
