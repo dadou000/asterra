@@ -45,16 +45,22 @@ func bind(model: GasGiantModel, haze_color: Color, rotation_period_s: float = 86
 	var sphere := SphereMesh.new()
 	sphere.radius = 1.0
 	sphere.height = 2.0
-	sphere.radial_segments = 48
-	sphere.rings = 24
+	sphere.radial_segments = 64
+	sphere.rings = 32
+
+	# Deep-envelope tint: the haze hue, more saturated and very dark, so the march
+	# fades from lit haze at the tops to near-black near the core.
+	var deep := Color.from_hsv(haze_color.h, minf(haze_color.s + 0.12, 1.0),
+		haze_color.v * 0.10)
 
 	var decks: Array = model.decks()
 	for i in decks.size():
 		var d: Dictionary = decks[i]
 		var outer: float = float(d["outer_m"])
 		var inner: float = float(d["inner_m"])
+		var kind: String = String(d.get("kind", "envelope"))
 		var mi := MeshInstance3D.new()
-		mi.name = "Deck%d_%s" % [i, d.get("kind", "haze")]
+		mi.name = "Deck%d_%s" % [i, kind]
 		mi.mesh = sphere
 		mi.scale = Vector3.ONE * outer
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -69,23 +75,22 @@ func bind(model: GasGiantModel, haze_color: Color, rotation_period_s: float = 86
 		mat.set_shader_parameter(&"u_falloff_k", model.falloff_k())
 		mat.set_shader_parameter(&"u_layer_inner", inner)
 		mat.set_shader_parameter(&"u_layer_outer", outer)
-		mat.set_shader_parameter(&"u_steps", int(d.get("steps", 14)))
+		mat.set_shader_parameter(&"u_steps", int(d.get("steps", 40)))
 		mat.set_shader_parameter(&"u_density_mul", float(d.get("density_mul", 1.0)))
 		mat.set_shader_parameter(&"u_haze_color", _shift_hue(haze_color, float(d.get("tint_hue_shift", 0.0))))
-		var is_cloud: bool = String(d.get("kind", "haze")) == "cloud"
-		mat.set_shader_parameter(&"u_is_cloud", 1.0 if is_cloud else 0.0)
-		if is_cloud:
-			mat.set_shader_parameter(&"u_band_count", float(d.get("band_count", 6)))
-			mat.set_shader_parameter(&"u_band_contrast", float(d.get("band_contrast", 0.5)))
-			mat.set_shader_parameter(&"u_noise_freq", float(d.get("noise_freq", 9.0)))
-			mat.set_shader_parameter(&"u_warp", float(d.get("warp", 0.3)))
-			mat.set_shader_parameter(&"u_coverage", float(d.get("coverage", 0.5)))
-			mat.set_shader_parameter(&"u_edge_hardness", float(d.get("edge_hardness", 0.5)))
+		mat.set_shader_parameter(&"u_deep_color", deep)
+		mat.set_shader_parameter(&"u_is_cloud", 1.0 if kind == "cloud" else 0.0)
+		mat.set_shader_parameter(&"u_band_count", float(d.get("band_count", 7)))
+		mat.set_shader_parameter(&"u_band_contrast", float(d.get("band_contrast", 0.6)))
+		mat.set_shader_parameter(&"u_noise_freq", float(d.get("noise_freq", 46.0)))
+		mat.set_shader_parameter(&"u_warp", float(d.get("warp", 0.6)))
+		mat.set_shader_parameter(&"u_detail", float(d.get("detail", 0.8)))
+		mat.set_shader_parameter(&"u_coverage", float(d.get("coverage", 0.5)))
 		mi.material_override = mat
 		add_child(mi)
 		_layers.append({
 			"mesh": mi, "mat": mat, "inner": inner, "outer": outer,
-			"outermost": i == 0, "is_cloud": is_cloud,
+			"outermost": i == 0,
 			"rot_speed": float(d.get("rot_speed_mul", 1.0))})
 
 
@@ -117,9 +122,7 @@ func sync(center_render: Vector3, sun_dir: Vector3, observer_render: Vector3,
 			var mat: ShaderMaterial = layer["mat"]
 			mat.set_shader_parameter(&"u_body_center", center_render)
 			mat.set_shader_parameter(&"u_sun_dir", sun_dir)
-			if bool(layer["is_cloud"]):
-				mat.set_shader_parameter(&"u_cloud_phase",
-					day_phase * float(layer["rot_speed"]))
+			mat.set_shader_parameter(&"u_cloud_phase", day_phase * float(layer["rot_speed"]))
 
 
 ## Decks currently raymarching this frame (for the FPS-budget test / HUD).

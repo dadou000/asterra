@@ -379,6 +379,26 @@ func _sync_gas_giant_shells() -> void:
 	for id: String in _gas_shells.keys():
 		if not want.has(id):
 			_drop_gas_shell(id)
+	_sync_gas_giant_sky()
+
+
+## GG5 look pass: when the resident body is a gas giant, tell the shared sky
+## compositor to occlude the background against the CLOUD-TOP sphere (not the tiny
+## core datum in u_planet_radius) -- so the starfield / galaxy / scatter vanish
+## once the camera is inside the envelope and the raymarched shell owns the view.
+## Reset to 0 (fall back to u_planet_radius) on every non-gas body.
+func _sync_gas_giant_sky() -> void:
+	if sky_mat == null:
+		return
+	var occ := 0.0
+	var obs := 0.0
+	var active_id := String(Bodies.active.id) if Bodies.active != null else ""
+	var shell: Object = _gas_shells.get(active_id)
+	if shell != null and is_instance_valid(shell) and player != null:
+		occ = Bodies.active.radius_m                     # cloud tops
+		obs = maxf(player.world_pos.length(), 1.0)
+	sky_mat.set_shader_parameter("u_occluder_radius", occ)
+	sky_mat.set_shader_parameter("u_observer_radius", obs)
 
 
 func _drop_gas_shell(id: String) -> void:
@@ -436,11 +456,26 @@ func _on_active_body_changed(runtime: Object, player_world_pos: Vec3D) -> void:
 			Planet.cfg.planet_radius + Planet.cfg.atmosphere_height)
 	# Re-anchor the far-LOD preview on the new resident body so its own lightweight
 	# duplicate is hidden and the body we just left is drawn as a far sphere again.
+	# A gas giant is NOT passed as the "detailed" id: its detailed runtime is the
+	# invisible core deep inside the envelope, so its cloud-top far-LOD sphere must
+	# stay visible from orbit (the shell + _sync_concurrent_preview hide it only
+	# once the camera drops below the cloud tops).
 	if _celestial_preview != null and _system != null:
 		var new_id := String(runtime.id)
-		_celestial_preview.call("show_system", _system, new_id, new_id)
+		_celestial_preview.call("show_system", _system, new_id, _preview_detailed_id(new_id))
 	if hud != null:
 		hud.notify("Arrived at %s" % String(runtime.id))
+
+
+## The id to pass as `show_system`'s "detailed" body -- "" for a gas giant so its
+## cloud-top far-LOD sphere is not permanently hidden (its clipmap is the tiny
+## core). Everything else: the body itself.
+func _preview_detailed_id(body_id: String) -> String:
+	if _system != null:
+		var b: Resource = _system.call("find_body", body_id)
+		if b != null and bool(b.call("is_gas_giant")):
+			return ""
+	return body_id
 
 
 func _push_orbit_surface_textures() -> void:

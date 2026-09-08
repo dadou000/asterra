@@ -1,8 +1,9 @@
 extends Node
-## GG2 (headless): the layered GasGiantShell builds its concentric band meshes +
-## raymarch materials from a GasGiantModel, only lights up the band(s) near the
-## observer, and the generator can reconstruct the model for any gas-giant body.
-## Rendering itself is checked by the windowed gg2_shell_probe.
+## GG2/GG3 (headless): the GasGiantShell builds a cheap full-envelope "fog" deck
+## + a bounded detailed "cloud" slab from a GasGiantModel, raymarches them only
+## near/inside the cloud tops, carries the Jool band / swirl params, rotates with
+## the sim clock, and the generator reconstructs the model for any gas-giant body.
+## Rendering is checked by the windowed gg2_shell_probe / gg_look_4k probes.
 ##   godot --headless --path . res://tests/validate_gas_giant_shell.tscn
 
 const GENERATOR := preload("res://scripts/world_authoring/celestial_system_generator.gd")
@@ -23,7 +24,6 @@ func _process(_dt: float) -> void:
 func _ready() -> void:
 	await get_tree().process_frame
 
-	# --- Model reconstruction is deterministic + gas-only -----------------
 	var system: CelestialSystemDefinition = GENERATOR.generate(8571)
 	var colossus: Resource = system.find_body("colossus")
 	var rime: Resource = system.find_body("rime")
@@ -34,80 +34,64 @@ func _ready() -> void:
 			and is_equal_approx(model.cloud_top_radius_m, float(colossus.get(&"radius_m"))),
 		"the reconstructed model matches the radii stamped on the body")
 
-	# --- The shell builds concentric band meshes + raymarch materials ----
 	var shell: GasGiantShell = GAS_GIANT_SHELL.new()
 	add_child(shell)
 	shell.bind(model, Color(0.5, 0.6, 0.35))
 
+	# --- fog deck (whole envelope, cheap) + cloud slab (bounded, detailed) ---
 	var decks: Array = model.decks()
-	_assert(decks.size() >= 3, "the envelope has several decks (%d)" % decks.size())
-	_assert(shell.band_count() == decks.size(), "the shell builds one mesh per deck")
-	var bands: Array = shell.get_children()
-	var prev_outer: float = INF
-	var rho_top: float = 0.0
-	var k: float = 0.0
-	var kinds: Array = []
-	for i in bands.size():
-		var mi: MeshInstance3D = bands[i]
-		_assert(mi.mesh is SphereMesh, "deck %d mesh is a sphere" % i)
-		_assert(not mi.visible, "deck %d starts hidden (dormant until the observer nears it)" % i)
-		var mat: ShaderMaterial = mi.material_override as ShaderMaterial
-		_assert(mat != null and mat.shader != null
-				and mat.shader.resource_path.ends_with("gas_giant_shell.gdshader"),
-			"deck %d runs the raymarch shader" % i)
-		var inner: float = float(mat.get_shader_parameter(&"u_layer_inner"))
-		var outer: float = float(mat.get_shader_parameter(&"u_layer_outer"))
-		_assert(outer > inner and inner >= model.core_radius_m - 1.0,
-			"deck %d covers a radial slice down to at least the core [%.0f, %.0f] km" % [i, inner / 1000.0, outer / 1000.0])
-		_assert(outer <= prev_outer + 1.0, "decks are ordered outer -> inner")
-		_assert(is_equal_approx(mi.scale.x, outer), "deck %d mesh is scaled to its outer radius" % i)
-		_assert(int(mat.get_shader_parameter(&"u_steps")) >= 4
-				and int(mat.get_shader_parameter(&"u_steps")) <= 24,
-			"deck %d carries a bounded step count" % i)
-		_assert(float(mat.get_shader_parameter(&"u_density_mul")) >= 1.0,
-			"deck %d density multiplier is >= the smooth base" % i)
-		prev_outer = outer
-		rho_top = float(mat.get_shader_parameter(&"u_rho_top"))
-		k = float(mat.get_shader_parameter(&"u_falloff_k"))
-		kinds.append(mi.name)
-	# The deck stack reaches from a thin band near the cloud tops down to the core,
-	# and includes at least one banded "cloud" deck and the smooth "haze" base.
-	var last_mat: ShaderMaterial = (bands[bands.size() - 1] as MeshInstance3D).material_override
-	_assert(is_equal_approx(float(last_mat.get_shader_parameter(&"u_layer_inner")), model.core_radius_m),
-		"the innermost deck's floor is the core")
-	var joined := ",".join(PackedStringArray(kinds))
-	_assert(joined.contains("cloud") and joined.contains("haze"),
-		"the stack has both banded cloud decks and the smooth haze base (%s)" % joined)
+	_assert(decks.size() == 2, "the envelope is a fog deck + a cloud slab (%d)" % decks.size())
+	_assert(String(decks[0].get("kind")) == "fog" and String(decks[1].get("kind")) == "cloud",
+		"deck 0 is the fog deck, deck 1 the cloud slab")
+	_assert(shell.band_count() == 2, "the shell builds one mesh per deck")
 
-	# --- GG3: cloud decks carry Jool-style band + swirl params; haze stays flat --
-	var cloud_seen := 0
-	for i in bands.size():
-		var mat: ShaderMaterial = (bands[i] as MeshInstance3D).material_override
-		var is_cloud: bool = String((bands[i] as MeshInstance3D).name).contains("cloud")
-		var flag: float = float(mat.get_shader_parameter(&"u_is_cloud"))
-		_assert(is_cloud == (flag > 0.5), "deck %d u_is_cloud matches its kind" % i)
-		if is_cloud:
-			cloud_seen += 1
-			_assert(float(mat.get_shader_parameter(&"u_band_count")) >= 3.0
-					and float(mat.get_shader_parameter(&"u_coverage")) > 0.0
-					and float(mat.get_shader_parameter(&"u_noise_freq")) > 0.0,
-				"cloud deck %d carries band/coverage/noise params" % i)
-	_assert(cloud_seen >= 1, "at least one cloud deck")
+	var fog: MeshInstance3D = shell.get_child(0)
+	var cloud: MeshInstance3D = shell.get_child(1)
+	var fog_mat: ShaderMaterial = fog.material_override
+	var cloud_mat: ShaderMaterial = cloud.material_override
+	for m: ShaderMaterial in [fog_mat, cloud_mat]:
+		_assert(m != null and m.shader != null
+				and m.shader.resource_path.ends_with("gas_giant_shell.gdshader"),
+			"the deck runs the raymarch shader")
+	_assert(not fog.visible and not cloud.visible, "both decks start hidden (dormant above the tops)")
+
+	# The fog deck spans the whole gas body down to the core -> a ray inside the
+	# envelope is never left transparent (no black seams / no stars).
+	_assert(is_equal_approx(float(fog_mat.get_shader_parameter(&"u_layer_inner")), model.core_radius_m),
+		"the fog deck floor is the solid core")
+	_assert(float(fog_mat.get_shader_parameter(&"u_layer_outer")) >= model.cloud_top_radius_m,
+		"the fog deck ceiling is at/above the cloud tops")
+	_assert(is_zero_approx(float(fog_mat.get_shader_parameter(&"u_is_cloud"))),
+		"the fog deck runs the cheap no-noise path (u_is_cloud 0)")
+
+	# The cloud slab is a bounded slice in the UPPER envelope.
+	var slab_inner: float = float(cloud_mat.get_shader_parameter(&"u_layer_inner"))
+	var slab_outer: float = float(cloud_mat.get_shader_parameter(&"u_layer_outer"))
+	_assert(slab_inner > model.core_radius_m and slab_inner < model.cloud_top_radius_m,
+		"the cloud slab floor is well above the core (%.0f km)" % (slab_inner / 1000.0))
+	_assert(slab_outer >= model.cloud_top_radius_m and slab_outer - slab_inner < model.cloud_top_radius_m - model.core_radius_m,
+		"the cloud slab is a bounded slice, not the whole envelope")
+	_assert(float(cloud_mat.get_shader_parameter(&"u_is_cloud")) > 0.5,
+		"the cloud slab runs the detailed noise path (u_is_cloud 1)")
+	_assert(float(cloud_mat.get_shader_parameter(&"u_band_count")) >= 3.0
+			and float(cloud_mat.get_shader_parameter(&"u_band_contrast")) > 0.0
+			and float(cloud_mat.get_shader_parameter(&"u_noise_freq")) > 1.0
+			and float(cloud_mat.get_shader_parameter(&"u_warp")) > 0.0,
+		"the cloud slab carries band / swirl / warp params")
+
+	var rho_top: float = float(fog_mat.get_shader_parameter(&"u_rho_top"))
+	var k: float = float(fog_mat.get_shader_parameter(&"u_falloff_k"))
 
 	# Two different gas giants get visibly different cloud structure.
 	var m2: GasGiantModel = GAS_GIANT_MODEL.from_body(52_000_000.0, 5.0e15, 424242)
-	var d_a: Array = model.decks()
-	var d_b: Array = m2.decks()
-	var diff := false
-	for x in mini(d_a.size(), d_b.size()):
-		if String(d_a[x].get("kind")) == "cloud" and String(d_b[x].get("kind")) == "cloud":
-			if not is_equal_approx(float(d_a[x].get("band_count")), float(d_b[x].get("band_count"))) \
-					or not is_equal_approx(float(d_a[x].get("coverage")), float(d_b[x].get("coverage"))):
-				diff = true
-	_assert(diff, "two gas giants have distinct cloud decks (band count / coverage)")
+	var a: Dictionary = model.decks()[1]
+	var b: Dictionary = m2.decks()[1]
+	_assert(not is_equal_approx(float(a.get("noise_freq")), float(b.get("noise_freq")))
+			or not is_equal_approx(float(a.get("coverage")), float(b.get("coverage")))
+			or not is_equal_approx(float(a.get("band_count")), float(b.get("band_count"))),
+		"two gas giants get distinct cloud-slab parameters")
 
-	# --- The analytic density (rho_top * exp(k*(cloud_top - r))) reproduces
-	#     GasGiantModel.density_at across the shell -----------------------
+	# --- The analytic density reproduces GasGiantModel.density_at ---------
 	_assert(rho_top > 0.0 and rho_top < 1.0 and k > 0.0, "the density profile constants are sane")
 	for i in 33:
 		var f: float = float(i) / 32.0
@@ -118,45 +102,32 @@ func _ready() -> void:
 	_assert(absf(rho_top * exp(k * (model.cloud_top_radius_m - model.core_radius_m)) - GAS_GIANT_MODEL.WATER_DENSITY) < 2.0,
 		"the profile reaches liquid-water density exactly at the core")
 
-	# --- Only the band(s) near the observer light up -------------------
+	# --- Dormant from orbit; near the tops both decks; deep only the fog ----
 	var center := Vector3(1234.0, -56.0, 789.0)
 	var sun := Vector3(0.3, 0.6, -0.74).normalized()
 
-	# Far above the cloud tops: the whole envelope is dormant (far-LOD covers it).
 	shell.sync(center, sun, center + Vector3(0, model.cloud_top_radius_m * 2.5, 0))
-	_assert(shell.active_band_count() == 0, "no band raymarches from orbit")
+	_assert(shell.active_band_count() == 0, "both decks dormant from orbit (far-LOD carries it)")
+	_assert(not shell.suppresses_far_lod(), "far-LOD is NOT suppressed above the cloud tops")
 
-	# Just under the cloud tops: only the top band or two.
 	shell.sync(center, sun, center + Vector3(0, model.cloud_top_radius_m - 20_000.0, 0), 12_345.0)
-	var top_active := shell.active_band_count()
-	_assert(top_active >= 1 and top_active <= 2,
-		"near the cloud tops 1-2 bands raymarch, not the whole envelope (%d)" % top_active)
-	_assert((shell.get_child(0) as MeshInstance3D).visible, "the outermost band is one of them")
+	_assert(shell.active_band_count() == 2, "near the cloud tops the fog deck + cloud slab raymarch")
+	_assert(shell.suppresses_far_lod(), "far-LOD IS suppressed once below the cloud tops")
+	_assert(fog.visible, "the fog deck is active inside the tops")
 
-	# Deep, near the core: still only a bounded number of bands, and a DIFFERENT
-	# set than at the top.
-	var deep_obs := center + Vector3(0, model.core_radius_m + 30_000.0, 0)
-	shell.sync(center, sun, deep_obs)
-	var deep_active := shell.active_band_count()
-	_assert(deep_active >= 1 and deep_active <= 3,
-		"deep in the envelope only a bounded number of bands raymarch (%d)" % deep_active)
-	_assert(not (shell.get_child(0) as MeshInstance3D).visible,
-		"the outermost band is dormant once the camera is near the core")
+	shell.sync(center, sun, center + Vector3(0, model.core_radius_m + 30_000.0, 0))
+	_assert(shell.active_band_count() == 1, "deep near the core ONLY the cheap fog deck raymarches")
+	_assert(fog.visible and not cloud.visible, "deep, the fog deck is the one still active")
 
-	# sync() fed the per-frame uniforms on the active band(s), and rotated the
-	# cloud decks by the sim clock.
+	# sync() fed the per-frame uniforms and rotated the cloud slab with the sim clock.
 	shell.sync(center, sun, center + Vector3(0, model.cloud_top_radius_m - 20_000.0, 0), 50_000.0)
-	for mi2: Node in shell.get_children():
-		if (mi2 as MeshInstance3D).visible:
-			var mm: ShaderMaterial = (mi2 as MeshInstance3D).material_override
-			var bc: Vector3 = mm.get_shader_parameter(&"u_body_center")
-			var sd: Vector3 = mm.get_shader_parameter(&"u_sun_dir")
-			_assert(bc.is_equal_approx(center), "sync() pushed the body centre to an active band")
-			_assert(sd.is_finite() and is_equal_approx(sd.length(), 1.0),
-				"sync() pushed a unit sun direction to an active band")
-			if String((mi2 as MeshInstance3D).name).contains("cloud"):
-				_assert(absf(float(mm.get_shader_parameter(&"u_cloud_phase"))) > 1.0e-4,
-					"the cloud deck rotated with the sim clock")
+	_assert((cloud_mat.get_shader_parameter(&"u_body_center") as Vector3).is_equal_approx(center),
+		"sync() pushed the body centre to the cloud slab")
+	var sd: Vector3 = cloud_mat.get_shader_parameter(&"u_sun_dir")
+	_assert(sd.is_finite() and is_equal_approx(sd.length(), 1.0),
+		"sync() pushed a unit sun direction")
+	_assert(absf(float(cloud_mat.get_shader_parameter(&"u_cloud_phase"))) > 1.0e-4,
+		"the cloud slab bands rotate with the sim clock")
 	_assert(shell.global_position.is_equal_approx(center), "the shell sits at the body centre")
 
 	shell.queue_free()
@@ -164,9 +135,8 @@ func _ready() -> void:
 	if _failed:
 		get_tree().quit(1)
 		return
-	print("GAS_GIANT_SHELL_OK  (%d bands; top %d active, deep %d active; core %.1f kg/m^3)"
-		% [shell.band_count(), top_active, deep_active,
-			rho_top * exp(k * (model.cloud_top_radius_m - model.core_radius_m))])
+	print("GAS_GIANT_SHELL_OK  (fog deck + cloud slab; core %.1f kg/m^3)"
+		% [rho_top * exp(k * (model.cloud_top_radius_m - model.core_radius_m))])
 	get_tree().quit(0)
 
 

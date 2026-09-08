@@ -138,45 +138,41 @@ func falloff_k() -> float:
 ##   coverage           : cloud fill fraction (higher -> cloudier)
 ##   edge_hardness      : 0 soft billows .. ~1 hard-edged decks
 ##   rot_speed_mul      : this deck's spin rate vs the body's (wind shear)
+## The volumetric envelope as TWO ordered (outer -> inner) decks:
+##   [0] "fog"   : core -> just above the cloud tops. Cheap smooth analytic march
+##                 (no noise); always closes the view, no seams / no stars.
+##   [1] "cloud" : a bounded slab in the upper envelope carrying the Jool bands +
+##                 3D swirls. Detailed march, but only over its own radial slice.
+## Fields: outer_m/inner_m radial span; kind; steps; density_mul; tint_hue_shift;
+## band_count (latitude band pairs); band_contrast; noise_freq (swirl cells per
+## body radius); warp; detail; coverage (erosion threshold); rot_speed_mul.
 func decks() -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(_rho_top * 1.0e7) ^ int(cloud_top_radius_m)
 	var top: float = cloud_top_radius_m
 	var sh: float = _shell_thickness_m
-	var pad: float = sh * (0.010 + rng.randf() * 0.02)          ## storm tops above the datum
-	var t_storm: float = sh * (0.012 + rng.randf() * 0.02)
-	var t_deck: float = t_storm + sh * (0.05 + rng.randf() * 0.09)
-	var t_haze: float = maxf(t_deck + sh * 0.05, sh * (0.40 + rng.randf() * 0.12))
-	var bands: int = 4 + (rng.randi() % 6)                      ## 4..9 latitudinal bands
-	var out: Array = []
-	# High storm tops straddling the cloud tops (sometimes absent) -- fast, wispy.
-	if rng.randf() < 0.8:
-		out.append({
-			"outer_m": top + pad, "inner_m": top - t_storm, "kind": "cloud",
-			"steps": 12, "density_mul": 2.0 + rng.randf() * 2.4,
-			"tint_hue_shift": -0.02 + rng.randf() * 0.04,
-			"band_count": bands, "band_contrast": 0.35 + rng.randf() * 0.25,
-			"noise_freq": 9.0 + rng.randf() * 9.0, "warp": 0.30 + rng.randf() * 0.30,
-			"coverage": 0.40 + rng.randf() * 0.18, "edge_hardness": 0.15 + rng.randf() * 0.25,
-			"rot_speed_mul": 1.05 + rng.randf() * 0.25})
-	# The main visible banded deck just under the tops -- the Jool swirls.
-	out.append({
-		"outer_m": top - t_storm, "inner_m": top - t_deck, "kind": "cloud",
-		"steps": 16, "density_mul": 1.6 + rng.randf() * 1.6,
-		"tint_hue_shift": -0.03 + rng.randf() * 0.05,
-		"band_count": bands, "band_contrast": 0.5 + rng.randf() * 0.3,
-		"noise_freq": 6.0 + rng.randf() * 8.0, "warp": 0.25 + rng.randf() * 0.30,
-		"coverage": 0.46 + rng.randf() * 0.20, "edge_hardness": 0.45 + rng.randf() * 0.40,
-		"rot_speed_mul": 0.9 + rng.randf() * 0.2})
-	# Smooth upper-atmosphere haze.
-	out.append({
-		"outer_m": top - t_deck, "inner_m": top - t_haze, "kind": "haze",
-		"steps": 12, "density_mul": 1.0, "tint_hue_shift": 0.0})
-	# Deep murk to the core -- sparse but goes opaque fast on the way down.
-	out.append({
-		"outer_m": top - t_haze, "inner_m": core_radius_m, "kind": "haze",
-		"steps": 10, "density_mul": 1.0, "tint_hue_shift": 0.02})
-	return out
+	var bands: int = 5 + (rng.randi() % 5)              ## 5..9 band pairs
+	return [
+		{
+			"outer_m": top + sh * 0.04, "inner_m": core_radius_m,
+			"kind": "fog", "steps": 7, "density_mul": 1.0, "tint_hue_shift": 0.0,
+			"band_count": bands, "band_contrast": 0.0, "noise_freq": 1.0,
+			"warp": 0.0, "detail": 0.0, "coverage": 0.5, "rot_speed_mul": 1.0,
+		},
+		{
+			"outer_m": top + sh * 0.03,
+			"inner_m": top - sh * (0.34 + rng.randf() * 0.12),
+			"kind": "cloud", "steps": 22, "density_mul": 1.0,
+			"tint_hue_shift": -0.02 + rng.randf() * 0.05,
+			"band_count": bands,
+			"band_contrast": 0.48 + rng.randf() * 0.30,
+			"noise_freq": 38.0 + rng.randf() * 22.0,    ## 38..60 swirl cells / radius
+			"warp": 0.45 + rng.randf() * 0.35,
+			"detail": 0.62 + rng.randf() * 0.30,
+			"coverage": 0.42 + rng.randf() * 0.16,
+			"rot_speed_mul": 1.0 + rng.randf() * 0.2,
+		},
+	]
 
 
 func describe() -> String:

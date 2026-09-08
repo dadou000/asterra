@@ -61,10 +61,10 @@ func _ready() -> void:
 	var shell: Node = main.get_node_or_null("GasGiantShell_colossus")
 	_assert(shell != null, "the GasGiantShell node exists while colossus is resident")
 	if shell != null:
-		_assert(int(shell.call("band_count")) >= 3,
-			"the envelope is split into bands (%d)" % int(shell.call("band_count")))
+		_assert(int(shell.call("band_count")) == 2,
+			"the shell has a fog deck + a cloud slab (%d)" % int(shell.call("band_count")))
 		_assert(int(shell.call("active_band_count")) <= 2,
-			"only 1-2 bands raymarch at any depth (%d active)" % int(shell.call("active_band_count")))
+			"at most the fog deck + cloud slab raymarch (%d active)" % int(shell.call("active_band_count")))
 
 	# Near the cloud tops the shell is a thick, colour-dominated haze filling the
 	# view (not a bare black sky). Deeper views vary with sun angle / core shadow.
@@ -91,7 +91,7 @@ func _ready() -> void:
 		max_active = maxi(max_active, na)
 		worst_fps = mini(worst_fps, fps)
 		print("  depth %.0f%%: %d fps, %d band(s) active" % [frac2 * 100.0, fps, na])
-	_assert(max_active <= 2, "never more than 2 envelope bands raymarch at once (%d)" % max_active)
+	_assert(max_active <= 2, "at most the fog deck + cloud slab raymarch (%d)" % max_active)
 	# Absolute fps in an unfocused automated window is noisy; the real win is that
 	# only one thin band ever raymarches, so cost is bounded no matter the envelope
 	# thickness or how many gas giants are resident.

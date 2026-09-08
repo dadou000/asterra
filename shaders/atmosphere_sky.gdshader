@@ -7,6 +7,14 @@ uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
+// Gas-giant override (GG5 look pass): the resident body's altitude datum is its
+// tiny core, but its VISUAL body is the cloud-top sphere the camera flies inside.
+// When these are > 0 the background occlusion uses them instead of
+// u_planet_radius / (u_planet_radius + u_camera_height): inside the cloud-top
+// sphere (u_observer_radius < u_occluder_radius) every background contribution is
+// killed, so the gas-giant shell -- not this compositor -- owns the view.
+uniform float u_occluder_radius = 0.0;
+uniform float u_observer_radius = 0.0;
 uniform vec3 u_rayleigh_coeff = vec3(5.5e-6, 13.0e-6, 22.4e-6);
 uniform float u_mie_coeff = 21e-6;
 uniform float u_rayleigh_scale_height = 8000.0;
@@ -43,8 +51,12 @@ vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
 // streamed and does not necessarily provide geometry behind every downward ray,
 // so sky occlusion cannot rely on the depth buffer alone.
 float planet_sky_visibility(vec3 dir, vec3 up) {
-	float radius = max(u_planet_radius, 1.0);
-	float observer_radius = max(radius + max(u_camera_height, 0.01), radius + 0.01);
+	float radius = u_occluder_radius > 0.0 ? u_occluder_radius : max(u_planet_radius, 1.0);
+	float observer_radius = u_observer_radius > 0.0
+		? u_observer_radius
+		: max(u_planet_radius + max(u_camera_height, 0.01), u_planet_radius + 0.01);
+	// Inside the occluder (a gas giant's cloud-top sphere): no sky at all.
+	if (observer_radius <= radius) { return 0.0; }
 	float radius_ratio = clamp(radius / observer_radius, 0.0, 1.0);
 	float tangent_mu = -sqrt(max(1.0 - radius_ratio * radius_ratio, 0.0));
 	float view_mu = dot(normalize(dir), normalize(up));
@@ -225,8 +237,10 @@ void sky() {
 			u_cloud_primary_steps,
 			u_cloud_light_steps
 		);
-		COLOR = cloud.rgb;
-		ALPHA = cloud.a;
+		// Inside a gas giant's envelope (planet_visibility == 0) the shared cloud
+		// layer must not bleed in -- the gas-giant shell owns the view.
+		COLOR = cloud.rgb * planet_visibility;
+		ALPHA = mix(1.0, cloud.a, planet_visibility);
 	} else {
 		vec3 col = scatter(dir, origin, sun_dir);
 		col += deep_sky(dir, up);
