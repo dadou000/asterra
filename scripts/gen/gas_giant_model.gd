@@ -139,37 +139,41 @@ func falloff_k() -> float:
 ##   edge_hardness      : 0 soft billows .. ~1 hard-edged decks
 ##   rot_speed_mul      : this deck's spin rate vs the body's (wind shear)
 ## The volumetric envelope as TWO ordered (outer -> inner) decks:
-##   [0] "fog"   : core -> just above the cloud tops. Cheap smooth analytic march
-##                 (no noise); always closes the view, no seams / no stars.
-##   [1] "cloud" : a bounded slab in the upper envelope carrying the Jool bands +
-##                 3D swirls. Detailed march, but only over its own radial slice.
-## Fields: outer_m/inner_m radial span; kind; steps; density_mul; tint_hue_shift;
-## band_count (latitude band pairs); band_contrast; noise_freq (swirl cells per
-## body radius); warp; detail; coverage (erosion threshold); rot_speed_mul.
+##   [0] "atmo"  : core -> just above the cloud tops. Cheap analytic march, green
+##                 Rayleigh-ish tint; always closes the view (no seams / no stars),
+##                 stays a visible glowing haze deep instead of going black.
+##   [1] "cloud" : a bounded deck near the tops. Grey clouds; coverage from a
+##                 procedural equirect texture (built in gas_giant_shell.gd) sampled
+##                 with an animated flow -- crisp bands that swirl, one texture
+##                 fetch per step instead of a stack of FBM octaves.
+## Fields: outer_m/inner_m radial span; kind; steps; density_mul; band_count
+## (feeds the coverage texture); deck_altitude/deck_width (shell-fraction centre +
+## half-width of the cloud concentration); detail (erosion strength); flow (uv
+## flow speed); rot_speed_mul.
 func decks() -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(_rho_top * 1.0e7) ^ int(cloud_top_radius_m)
 	var top: float = cloud_top_radius_m
 	var sh: float = _shell_thickness_m
-	var bands: int = 5 + (rng.randi() % 5)              ## 5..9 band pairs
+	var bands: int = 5 + (rng.randi() % 5)              ## 5..9 bands
+	var deck_alt: float = 0.87 + rng.randf() * 0.06     ## shell fraction of the deck
+	var deck_w: float = 0.09 + rng.randf() * 0.06
 	return [
 		{
 			"outer_m": top + sh * 0.04, "inner_m": core_radius_m,
-			"kind": "fog", "steps": 7, "density_mul": 1.0, "tint_hue_shift": 0.0,
-			"band_count": bands, "band_contrast": 0.0, "noise_freq": 1.0,
-			"warp": 0.0, "detail": 0.0, "coverage": 0.5, "rot_speed_mul": 1.0,
+			"kind": "atmo", "steps": 14, "density_mul": 1.0,
+			"band_count": bands, "detail": 0.0,
+			"deck_altitude": deck_alt, "deck_width": deck_w, "flow": 0.0,
+			"rot_speed_mul": 1.0,
 		},
 		{
 			"outer_m": top + sh * 0.03,
-			"inner_m": top - sh * (0.34 + rng.randf() * 0.12),
-			"kind": "cloud", "steps": 22, "density_mul": 1.0,
-			"tint_hue_shift": -0.02 + rng.randf() * 0.05,
+			"inner_m": maxf(top - sh * (deck_w * 3.2 + 0.05), core_radius_m),
+			"kind": "cloud", "steps": 24, "density_mul": 1.0,
 			"band_count": bands,
-			"band_contrast": 0.48 + rng.randf() * 0.30,
-			"noise_freq": 38.0 + rng.randf() * 22.0,    ## 38..60 swirl cells / radius
-			"warp": 0.45 + rng.randf() * 0.35,
-			"detail": 0.62 + rng.randf() * 0.30,
-			"coverage": 0.42 + rng.randf() * 0.16,
+			"detail": 0.55 + rng.randf() * 0.30,
+			"deck_altitude": deck_alt, "deck_width": deck_w,
+			"flow": 0.02 + rng.randf() * 0.03,
 			"rot_speed_mul": 1.0 + rng.randf() * 0.2,
 		},
 	]
