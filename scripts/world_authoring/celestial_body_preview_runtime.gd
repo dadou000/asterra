@@ -325,15 +325,18 @@ func _apply_gas_giant_bands(body: Resource, body_id: String, material: ShaderMat
 	var roll: float = rng.randf()
 	var hue: float = 0.30 if roll < 0.55 else (0.09 if roll < 0.85 else 0.55)   # green / tan / pale blue
 	var zone := Color.from_hsv(fposmod(hue + rng.randf_range(-0.03, 0.03), 1.0),
-		rng.randf_range(0.30, 0.5), rng.randf_range(0.62, 0.78))
-	var belt := Color.from_hsv(fposmod(hue - 0.04, 1.0),
-		clampf(zone.s + 0.18, 0.0, 1.0), zone.v * 0.42)
+		rng.randf_range(0.32, 0.5), rng.randf_range(0.64, 0.80))
+	# Belts a bit darker + slightly warmer, but a gentle contrast (Jool is subtle).
+	var belt := Color.from_hsv(fposmod(hue - 0.03, 1.0),
+		clampf(zone.s + 0.10, 0.0, 1.0), zone.v * 0.74)
 
 	material.set_shader_parameter(&"u_band_tex", tex)
 	material.set_shader_parameter(&"u_band_ready", 1.0)
 	material.set_shader_parameter(&"u_band_zone", zone)
 	material.set_shader_parameter(&"u_band_belt", belt)
-	material.set_shader_parameter(&"u_atmo_color", zone.lightened(0.15))
+	material.set_shader_parameter(&"u_atmo_color", zone.lightened(0.35))
+	material.set_shader_parameter(&"u_atmo_strength", 1.7)
+	material.set_shader_parameter(&"u_ambient_floor", 0.16)
 
 	var period: float = absf(float(body.get(&"sidereal_rotation_period_s")))
 	_band_by_body[body_id] = {

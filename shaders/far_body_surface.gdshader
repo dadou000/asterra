@@ -92,10 +92,11 @@ void fragment() {
 		vec3 bd = rot_y(d, u_band_phase);
 		vec2 uv = equirect(bd);
 		vec4 bt = texture(u_band_tex, uv);
-		// Keep the sharp belt edges the map already has (only a touch of AA).
-		vec3 zone = mix(u_band_belt, u_band_zone, smoothstep(0.38, 0.62, bt.r));
-		zone = mix(zone, min(zone * 1.7 + 0.10, vec3(1.0)), bt.b * 0.7);   // storm ovals proud
-		zone *= 0.94 + 0.12 * bt.g;                                        // fine variation
+		// Belts and zones blend at their boundary (Jool bands are gradients), with
+		// festoon detail from the map's own swirl already baked into R.
+		vec3 zone = mix(u_band_belt, u_band_zone, smoothstep(0.24, 0.76, bt.r));
+		zone = mix(zone, zone * 0.55, bt.b * 0.8);       // storm ovals: darker spots
+		zone *= 0.93 + 0.14 * bt.g;                      // fine variation
 		base = zone;
 	} else if (u_relief_ready > 0.5) {
 		float relief_ao = clamp(0.85 + rel_h * (0.00035), 0.6, 1.15);

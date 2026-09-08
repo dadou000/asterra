@@ -149,7 +149,7 @@ func decks() -> Array:
 		{
 			"outer_m": top + sh * 0.03,
 			"inner_m": maxf(top - sh * (deck_w * 3.2 + 0.05), core_radius_m),
-			"kind": "cloud", "steps": 24, "density_mul": 1.0,
+			"kind": "cloud", "steps": 18, "density_mul": 1.0,
 			"band_count": bands,
 			"detail": 0.55 + rng.randf() * 0.30,
 			"deck_altitude": deck_alt, "deck_width": deck_w,
@@ -200,18 +200,26 @@ static func build_coverage_image(seed_v: int, band_hint_v: int,
 	# A clean primary stripe rate + two smaller harmonics for irregular spacing;
 	# NOT a sum of many random sinusoids (that lumps into blobs, not belts).
 	var nb: int = clampi(band_hint_v, 5, 11)
-	var f0: float = float(nb) * 1.5                      # ~15-25 belts across the disc
+	var f0: float = float(nb) * 2.2                      # ~22-40 thin belts across the disc
 	var f1: float = f0 * (2.1 + rng.randf() * 0.7)
 	var f2: float = f0 * (0.45 + rng.randf() * 0.2)
 	var p0: float = rng.randf() * TAU
 	var p1: float = rng.randf() * TAU
 	var p2: float = rng.randf() * TAU
-	# Bands stay HORIZONTAL: only a tiny latitude wobble, and the swirl shifts the
-	# belt EDGE a little rather than adding to the coverage value.
-	var lat_wobble: float = 0.02 + rng.randf() * 0.03
-	var edge_shift: float = 0.03 + rng.randf() * 0.03
-	# SHARP threshold: a narrow smoothstep centred on 0.5.
-	var edge_w: float = 0.035 + rng.randf() * 0.03
+	# Bands stay HORIZONTAL and THIN. The displacement of the belt edge must be
+	# small vs the band spacing (~1/f0) or the boundary folds into lobes -- so the
+	# festoon look comes from a FINE wobble of the band VALUE near its zero
+	# crossing, not a big latitude shift.
+	var lat_wobble: float = 0.015 + rng.randf() * 0.02
+	var festoon_amp: float = 0.07 + rng.randf() * 0.05
+	# Soft threshold: belts and zones blend at their boundary (Jool bands are
+	# gradients, not hard stripes).
+	var edge_w: float = 0.10 + rng.randf() * 0.05
+	var swirl2 := FastNoiseLite.new()
+	swirl2.seed = seed_v ^ 0x44
+	swirl2.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	swirl2.frequency = 1.6
+	swirl2.fractal_octaves = 3
 
 	for y in h:
 		var lat: float = (float(y) / float(h - 1) - 0.5) * PI
@@ -227,15 +235,17 @@ static func build_coverage_image(seed_v: int, band_hint_v: int,
 			var wl: float = slat * (1.0 + wv.y * lat_wobble)
 			var band: float = (0.52 * sin(wl * f0 * PI + p0)
 				+ 0.33 * sin(wl * f1 * PI + p1)
-				+ 0.15 * sin(wl * f2 * PI + p2))       # -1..1, several belt rates
-			var s: float = swirl.get_noise_3d(p.x + wv.x, p.y + wv.y, p.z + wv.z)
-			# Belt-edge turbulence: nudge the stripe boundary along longitude.
-			var band_v: float = 0.5 + 0.5 * band + s * edge_shift
+				+ 0.15 * sin(wl * f2 * PI + p2))       # -1..1, several thin belt rates
+			# Fine festoon wobble of the band value (finer than a band -> curly
+			# edges, not folded lobes).
+			var festoon: float = (swirl.get_noise_3d(p.x * 2.2 + wv.x, p.y * 2.2, p.z * 2.2 + wv.z)
+				+ 0.5 * swirl2.get_noise_3d(p.x * 1.3, p.y * 1.3, p.z * 1.3)) * festoon_amp
+			var band_v: float = 0.5 + 0.5 * band + festoon
 			var cov: float = smoothstep(0.5 - edge_w, 0.5 + edge_w, band_v)
 			var det: float = 0.5 + 0.5 * detail.get_noise_3d(
 				p.x + wv.x * 0.5, p.y + wv.y * 0.5, p.z + wv.z * 0.5)
-			var storm: float = clampf((swirl.get_noise_3d(
-				p.x * 0.55 + 11.0, p.y * 0.55, p.z * 0.55) - 0.62) * 3.0, 0.0, 1.0)
+			var storm: float = clampf((swirl2.get_noise_3d(
+				p.x * 0.9 + 31.0, p.y * 0.9 + 7.0, p.z * 0.9) - 0.5) * 3.5, 0.0, 1.0)
 			img.set_pixel(x, y, Color(cov, det, storm, 1.0))
 	return img
 

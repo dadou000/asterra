@@ -77,10 +77,37 @@ vec2 lonlat_uv(vec3 d) {
 	return vec2(atan(d.z, d.x) / TAU + 0.5, asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5);
 }
 
-// Grey-cloud density at a point inside the cloud deck: the procedural coverage
-// texture x an analytic altitude bump x erosion. Sampled twice -- once equirect,
-// once at a rotated 2x scale -- and averaged, so a near-tangent view does not
-// smear one stretched latitude strip across the screen.
+// --- cheap 3D value noise for the near cloud billows ------------------------
+float h13(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
+}
+float vn(vec3 x) {
+	vec3 i = floor(x);
+	vec3 f = fract(x);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(mix(h13(i), h13(i + vec3(1, 0, 0)), f.x), mix(h13(i + vec3(0, 1, 0)), h13(i + vec3(1, 1, 0)), f.x), f.y),
+		mix(mix(h13(i + vec3(0, 0, 1)), h13(i + vec3(1, 0, 1)), f.x), mix(h13(i + vec3(0, 1, 1)), h13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+// Ridged/billow FBM -> cauliflower cloud tops.
+float billow(vec3 p, int oct) {
+	float v = 0.0;
+	float a = 0.6;
+	float tot = 0.0;
+	for (int i = 0; i < 3; i++) {
+		if (i >= oct) { break; }
+		v += a * abs(vn(p) * 2.0 - 1.0);
+		tot += a;
+		p = p * 2.13 + vec3(7.0, 3.0, 5.0);
+		a *= 0.5;
+	}
+	return 1.0 - v / max(tot, 1.0e-3);   // 0..1, high where the cells crest
+}
+
+// Grey-cloud density at a point inside the cloud deck: the procedural equirect
+// coverage map (belts + swirls, painted by GasGiantModel) carved into puffy 3D
+// billows by ridged value noise, so a near view reads as a real cloudscape.
 float cloud_density(vec3 p, float r) {
 	float shell01 = shell01_of(r);
 	float alt = exp(-pow((shell01 - u_deck_altitude) / max(u_deck_width, 1.0e-3), 2.0));
@@ -88,22 +115,23 @@ float cloud_density(vec3 p, float r) {
 	vec3 d = normalize(rotate_y(p, u_cloud_phase * 0.02));
 	vec2 scroll = vec2(u_cloud_phase * u_flow * 0.02, 0.0);
 	vec4 a = texture(u_coverage_tex, lonlat_uv(d) + scroll);
-	// A second tap at a rotated 3x scale adds detail and breaks the tangent-view
-	// streak without washing the primary bands out.
 	vec4 b = texture(u_coverage_tex, lonlat_uv(rotate_y(d.zxy, 2.3)) * 3.0 - scroll * 1.7);
-	// The map's R is a SHARP belt mask (for the far-LOD sphere). For the volumetric
-	// deck soften it back toward a gradient with the detail octaves so clouds read
-	// as wispy billows inside the belt, not one opaque wall.
-	float belt = a.r * 0.55 + 0.45 * (a.g * 0.6 + b.r * 0.4);
-	float cov = belt * mix(0.6, 1.15, b.g) * alt;
-	cov -= (1.0 - cov) * a.g * u_detail * 0.55;     // erode into wisps
-	cov -= (1.0 - cov) * b.g * u_detail * 0.30;     // fine erosion
-	cov += a.b * alt * 0.5;                         // storm ovals sit proud
+	// Belt coverage (softened from the sharp far-LOD mask) + storm ovals.
+	float belt = a.r * 0.6 + 0.4 * (a.g * 0.6 + b.r * 0.4) + a.b * 0.45;
+	// Puffy 3D structure: ridged noise at a few km scale, flowing with the deck.
+	// Flatten the sample point toward the shell (kill most of the radial component)
+	// so a near-tangent ray does not smear one noise column down the screen.
+	vec3 rad = p / max(r, 1.0);
+	vec3 fp = p - rad * (dot(p, rad) - u_cloud_top_radius * u_deck_altitude) * 0.92;
+	vec3 np = (fp / (u_cloud_top_radius * 0.0055)) + vec3(u_cloud_phase * 0.4, 0.0, 0.0);
+	float puff = billow(np, 3);
+	float cov = belt * mix(0.12, 1.4, puff) * alt;
+	cov -= (1.0 - cov) * (1.0 - puff) * (0.35 + 0.45 * u_detail);   // carve deep gaps
 	cov = clamp(cov, 0.0, 1.0);
-	return base_rho(r) * pow(cov, 1.1) * 3.0;
+	return base_rho(r) * pow(cov, 1.05) * 4.2;
 }
 
-// Smooth-density sun occlusion (cheap): the terminator shape, not per-cloud.
+// Smooth-density sun occlusion: the terminator shape.
 float sun_transmit(vec3 p) {
 	vec2 top = sphere_hit(p, u_sun_dir, u_cloud_top_radius);
 	float march = max(min(top.y, u_cloud_top_radius * 0.4), 0.0);
@@ -114,6 +142,15 @@ float sun_transmit(vec3 p) {
 		od += base_rho(length(p + u_sun_dir * (float(i) + 0.5) * dt)) * dt;
 	}
 	return exp(-od * u_extinction * 1.3);
+}
+
+// Cheap cloud self-shadow: one ridged-noise tap a short way toward the sun --
+// where the neighbour cell crests, this puff sits in its shadow. No extra march.
+float cloud_light(vec3 p) {
+	vec3 np = (p / (u_cloud_top_radius * 0.0055))
+		+ u_sun_dir * 1.4 + vec3(u_cloud_phase * 0.4, 0.0, 0.0);
+	float shade = billow(np, 2);            // 0..1, high at a crest ahead -> shadowed
+	return sun_transmit(p) * (1.0 - 0.78 * smoothstep(0.3, 0.9, shade));
 }
 
 void fragment() {
@@ -144,7 +181,7 @@ void fragment() {
 		float shell_span = max(u_cloud_top_radius - u_core_radius, 1.0);
 		float max_dt = shell_span * (clouds ? 0.03 : 0.16);
 		float jitter = clouds
-			? fract(sin(dot(FRAGCOORD.xy, vec2(12.9898, 78.233))) * 43758.5453) * 0.6
+			? fract(sin(dot(FRAGCOORD.xy, vec2(12.9898, 78.233))) * 43758.5453) * 0.4
 			: 0.0;
 		float t = t0 + jitter * min(span / float(steps), max_dt);
 		float phase = 0.24 + 0.55 * max(mu, 0.0) * max(mu, 0.0) + 0.14 * max(-mu, 0.0);
@@ -164,12 +201,16 @@ void fragment() {
 				float rho = cloud_density(p, r);
 				if (rho <= 1.0e-8) { continue; }
 				float seg = exp(-min(rho * u_extinction * dt, 4.0));
-				// Grey cloud, direct sun + forward scatter, tinted by the green
-				// atmosphere as skylight; self-shadowed by sv.
-				vec3 lit = u_cloud_color * (u_sun_intensity * 0.95 * sv * phase * day);
-				vec3 sky = u_atmo_beta * u_cloud_color * (u_ambient * 1.2 * (0.35 + 0.65 * day));
-				vec3 lum = (lit + sky) * mix(1.0, 0.55, depth01 * depth01);
-				acc += T * min(lum, vec3(1.1)) * (1.0 - seg);
+				// Grey cloud: direct sun through the self-shadow march (puff relief)
+				// + forward scatter, plus green-atmosphere skylight fill.
+				float cl = cloud_light(p);
+				// Strong direct term (bright crests) + a modest green-sky fill so the
+				// shadowed sides stay readable but the puffs keep 3D relief.
+				vec3 lit = u_cloud_color * (u_sun_intensity * 1.9 * pow(cl, 1.4) * phase * day);
+				vec3 sky = mix(u_atmo_beta, vec3(1.0), 0.35) * u_cloud_color
+					* (u_ambient * 0.75 * (0.25 + 0.75 * day) * mix(0.4, 1.0, sv));
+				vec3 lum = (lit + sky) * mix(1.0, 0.5, depth01 * depth01);
+				acc += T * min(lum, vec3(1.4)) * (1.0 - seg);
 				T *= seg;
 			} else {
 				// Atmosphere: green Rayleigh-ish in-scatter along the ray. Extinction
