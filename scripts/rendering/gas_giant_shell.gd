@@ -14,8 +14,9 @@ const LAYER_SHADER := preload("res://shaders/gas_giant_shell.gdshader")
 const GAS_GIANT_MODEL := preload("res://scripts/gen/gas_giant_model.gd")
 
 ## The outermost deck renders from this far ABOVE its top so the atmosphere fades
-## in on a descent approach (m).
-const OUTER_APPROACH_M := 450_000.0
+## in on a descent approach. Scaled to the body in bind() -- 450 km is a floor.
+const OUTER_APPROACH_FLOOR_M := 450_000.0
+const OUTER_APPROACH_FRAC := 0.06
 ## Fixed transition margins -- start a deck this far before the camera crosses its
 ## outer edge, keep it this far after the camera drops below its inner edge. NOT
 ## scaled by deck thickness (deep decks span tens of thousands of km). Keep >
@@ -24,14 +25,22 @@ const APPROACH_M := 300_000.0
 const KEEP_M := 600_000.0
 const HYSTERESIS_M := 250_000.0
 
-var _layers: Array = []   ## each: {mesh, mat, inner, outer, outermost}
+var _layers: Array = []   ## each: {mesh, mat, inner, outer, outermost, is_cloud, rot_speed}
 var _cloud_top_m: float = 1.0
 var _core_m: float = 1.0
+var _outer_approach_m: float = OUTER_APPROACH_FLOOR_M
+var _rot_period_s: float = 86_400.0   ## body sidereal day; drives cloud rotation
+## True once the camera has sunk below the cloud tops -- the far-LOD sphere (which
+## draws AT the cloud tops) should be suppressed only then, not merely because the
+## shell node exists (a gas giant seen from orbit must still show its cloud-top ball).
+var _below_cloud_tops: bool = false
 
 
-func bind(model: GasGiantModel, haze_color: Color) -> void:
+func bind(model: GasGiantModel, haze_color: Color, rotation_period_s: float = 86_400.0) -> void:
 	_cloud_top_m = model.cloud_top_radius_m
 	_core_m = model.core_radius_m
+	_outer_approach_m = maxf(_cloud_top_m * OUTER_APPROACH_FRAC, OUTER_APPROACH_FLOOR_M)
+	_rot_period_s = maxf(absf(rotation_period_s), 1.0)
 
 	var sphere := SphereMesh.new()
 	sphere.radius = 1.0
@@ -63,18 +72,32 @@ func bind(model: GasGiantModel, haze_color: Color) -> void:
 		mat.set_shader_parameter(&"u_steps", int(d.get("steps", 14)))
 		mat.set_shader_parameter(&"u_density_mul", float(d.get("density_mul", 1.0)))
 		mat.set_shader_parameter(&"u_haze_color", _shift_hue(haze_color, float(d.get("tint_hue_shift", 0.0))))
+		var is_cloud: bool = String(d.get("kind", "haze")) == "cloud"
+		mat.set_shader_parameter(&"u_is_cloud", 1.0 if is_cloud else 0.0)
+		if is_cloud:
+			mat.set_shader_parameter(&"u_band_count", float(d.get("band_count", 6)))
+			mat.set_shader_parameter(&"u_band_contrast", float(d.get("band_contrast", 0.5)))
+			mat.set_shader_parameter(&"u_noise_freq", float(d.get("noise_freq", 9.0)))
+			mat.set_shader_parameter(&"u_warp", float(d.get("warp", 0.3)))
+			mat.set_shader_parameter(&"u_coverage", float(d.get("coverage", 0.5)))
+			mat.set_shader_parameter(&"u_edge_hardness", float(d.get("edge_hardness", 0.5)))
 		mi.material_override = mat
 		add_child(mi)
 		_layers.append({
 			"mesh": mi, "mat": mat, "inner": inner, "outer": outer,
-			"outermost": i == 0})
+			"outermost": i == 0, "is_cloud": is_cloud,
+			"rot_speed": float(d.get("rot_speed_mul", 1.0))})
 
 
 ## `center_render` = the body centre in the current render frame; `sun_dir` unit
-## toward the star; `observer_render` = the camera position in the render frame.
-func sync(center_render: Vector3, sun_dir: Vector3, observer_render: Vector3) -> void:
+## toward the star; `observer_render` = the camera position in the render frame;
+## `time_s` = the sim clock (Frames.system_time_s) so the cloud decks rotate.
+func sync(center_render: Vector3, sun_dir: Vector3, observer_render: Vector3,
+		time_s: float = 0.0) -> void:
 	global_position = center_render
 	var cam_r: float = (observer_render - center_render).length()
+	_below_cloud_tops = cam_r < _cloud_top_m
+	var day_phase: float = TAU * (time_s / _rot_period_s)
 
 	for layer: Dictionary in _layers:
 		var mi: MeshInstance3D = layer["mesh"]
@@ -82,7 +105,7 @@ func sync(center_render: Vector3, sun_dir: Vector3, observer_render: Vector3) ->
 		var outer: float = layer["outer"]
 		var was_active: bool = mi.visible
 
-		var above: float = OUTER_APPROACH_M if bool(layer["outermost"]) else APPROACH_M
+		var above: float = _outer_approach_m if bool(layer["outermost"]) else APPROACH_M
 		var below: float = KEEP_M
 		if was_active:
 			above += HYSTERESIS_M
@@ -94,6 +117,9 @@ func sync(center_render: Vector3, sun_dir: Vector3, observer_render: Vector3) ->
 			var mat: ShaderMaterial = layer["mat"]
 			mat.set_shader_parameter(&"u_body_center", center_render)
 			mat.set_shader_parameter(&"u_sun_dir", sun_dir)
+			if bool(layer["is_cloud"]):
+				mat.set_shader_parameter(&"u_cloud_phase",
+					day_phase * float(layer["rot_speed"]))
 
 
 ## Decks currently raymarching this frame (for the FPS-budget test / HUD).
@@ -107,6 +133,12 @@ func active_band_count() -> int:
 
 func band_count() -> int:
 	return _layers.size()
+
+
+## The far-LOD cloud-top sphere should be hidden only once the camera is inside
+## the envelope; above the cloud tops the gas giant is still that sphere.
+func suppresses_far_lod() -> bool:
+	return _below_cloud_tops
 
 
 static func _shift_hue(c: Color, dh: float) -> Color:

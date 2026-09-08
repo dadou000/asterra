@@ -97,8 +97,15 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 	var lines := PackedStringArray()
 	lines.append("[b]ASTERRA[/b]  seed %d   %s" % [Planet.cfg.world_seed,
 		"WALK" if player.mode == AsterraPlayer.Mode.WALK else "FLY"])
-	lines.append("lat %6.2f°  lon %7.2f°   alt %s   AGL %s" % [
-		s["lat_deg"], s["lon_deg"], _m(player.altitude()), _m(player.height_above_ground())])
+	var gg_readout: String = player.gas_giant_readout()
+	if gg_readout != "":
+		# On a gas giant `player.altitude()` is measured from the solid core; name it.
+		lines.append("lat %6.2f°  lon %7.2f°   alt %s above core   AGL %s" % [
+			s["lat_deg"], s["lon_deg"], _m(player.altitude()), _m(player.height_above_ground())])
+		lines.append("[color=#9cf]GAS GIANT[/color] %s" % gg_readout)
+	else:
+		lines.append("lat %6.2f°  lon %7.2f°   alt %s   AGL %s" % [
+			s["lat_deg"], s["lon_deg"], _m(player.altitude()), _m(player.height_above_ground())])
 	lines.append("")
 	lines.append("[color=#9fd]TERRAIN[/color] %s   macro %s   relief %s" % [
 		_m(player.ground_height()), _m(s["macro_elevation"]), _m(s["relief"])])

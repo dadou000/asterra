@@ -55,16 +55,27 @@ const SPINE := [
 	{"id": "colossus", "name": "Colossus", "arch": &"gas_giant", "au": 5.7, "r": 68_000_000.0, "tilt": 3.2, "moons": 4},
 ]
 
+## Test spine (GenConfig.minimal_system): exactly one body per archetype style, no
+## RNG filler. Home keeps a rock moon; the ice world keeps an ice moon; the pulsar
+## is still added. So every style -- hot_rock, terran, ice, gas_giant, moon_rock,
+## moon_ice, pulsar -- is one hop away and quick to check.
+const MINIMAL_SPINE := [
+	{"id": "cinder", "name": "Cinder", "arch": &"hot_rock", "au": 0.5, "r": 420_000.0, "tilt": 4.0, "moons": 0},
+	{"id": "asterra", "name": "Asterra", "arch": &"terran", "au": 1.00, "r": 1_000_000.0, "tilt": -1.0, "moons": 1, "home": true, "moon_styles": [&"moon_rock"]},
+	{"id": "rime", "name": "Rime", "arch": &"ice", "au": 3.15, "r": 720_000.0, "tilt": 26.0, "moons": 1, "moon_styles": [&"moon_ice"]},
+	{"id": "colossus", "name": "Colossus", "arch": &"gas_giant", "au": 5.7, "r": 68_000_000.0, "tilt": 3.2, "moons": 0},
+]
+
 ## Build a full system from `system_seed`. Deterministic: two calls with the same
 ## seed produce identical bodies. The archetype spine is fixed; `system_seed` +
 ## `body_scale` vary radii jitter, orbit phases, moon counts and the number of
 ## outer filler planets. The runtime pool budget bounds what is ever resident, so
 ## a dense system costs the same as a sparse one.
 static func generate(system_seed: int, home_axial_tilt_deg: float = 21.4,
-		body_scale: float = 1.0) -> CelestialSystemDefinition:
+		body_scale: float = 1.0, minimal: bool = false) -> CelestialSystemDefinition:
 	var system: CelestialSystemDefinition = SYSTEM_SCRIPT.new()
 	system.system_id = "gen-%d" % system_seed
-	system.display_name = "System %d" % (system_seed & 0xffff)
+	system.display_name = "System %d%s" % [system_seed & 0xffff, " (minimal)" if minimal else ""]
 
 	system.add_body(_make_star())
 
@@ -72,26 +83,29 @@ static func generate(system_seed: int, home_axial_tilt_deg: float = 21.4,
 	rng.seed = system_seed
 
 	# --- Archetype spine -------------------------------------------------
-	for spec_v: Variant in SPINE:
+	var spine: Array = MINIMAL_SPINE if minimal else SPINE
+	for spec_v: Variant in spine:
 		var spec: Dictionary = spec_v
 		var is_home: bool = bool(spec.get("home", false))
 		var tilt: float = home_axial_tilt_deg if is_home else maxf(float(spec["tilt"]), 0.0)
 		var planet := _make_planet(rng, String(spec["id"]), String(spec["name"]),
 			spec["arch"], float(spec["au"]), float(spec["r"]), tilt, is_home)
 		system.add_body(planet)
-		_add_moons(system, rng, planet, int(spec["moons"]), body_scale)
+		_add_moons(system, rng, planet, int(spec["moons"]), body_scale,
+			spec.get("moon_styles", []) as Array)
 
-	# --- Outer filler planets past the gas giant -----------------------
-	var filler: int = clampi(int(round((2 + (absi(system_seed) % 5)) * body_scale)), 0, 40)
-	var a: float = 8.5
-	for i in filler:
-		a *= rng.randf_range(1.35, 1.9)
-		var arch: StringName = _weighted_filler_archetype(rng, a)
-		var r: float = _radius_for_archetype(rng, arch)
-		var planet := _make_planet(rng, "outer-%d" % (i + 1), "Outer %d" % (i + 1),
-			arch, a, r, rng.randf_range(0.0, 34.0), false)
-		system.add_body(planet)
-		_add_moons(system, rng, planet, (1 if arch == &"gas_giant" else 0), body_scale)
+	# --- Outer filler planets past the gas giant (skipped in minimal) --
+	if not minimal:
+		var filler: int = clampi(int(round((2 + (absi(system_seed) % 5)) * body_scale)), 0, 40)
+		var a: float = 8.5
+		for i in filler:
+			a *= rng.randf_range(1.35, 1.9)
+			var arch: StringName = _weighted_filler_archetype(rng, a)
+			var r: float = _radius_for_archetype(rng, arch)
+			var planet := _make_planet(rng, "outer-%d" % (i + 1), "Outer %d" % (i + 1),
+				arch, a, r, rng.randf_range(0.0, 34.0), false)
+			system.add_body(planet)
+			_add_moons(system, rng, planet, (1 if arch == &"gas_giant" else 0), body_scale)
 
 	# --- Distant pulsar companion ------------------------------------
 	system.add_body(_make_pulsar(rng, 120.0 + rng.randf_range(0.0, 90.0)))
@@ -149,7 +163,8 @@ static func _make_planet(rng: RandomNumberGenerator, id: String, name: String,
 
 
 static func _add_moons(system: CelestialSystemDefinition, rng: RandomNumberGenerator,
-		parent: CelestialBodyDefinition, base_count: int, body_scale: float) -> void:
+		parent: CelestialBodyDefinition, base_count: int, body_scale: float,
+		moon_styles: Array = []) -> void:
 	var count: int = clampi(base_count + int(round(float(rng.randi() % 3) * (body_scale - 1.0))), 0, 6)
 	var icy_parent: bool = parent.archetype == &"ice"
 	for m in count:
@@ -157,7 +172,10 @@ static func _add_moons(system: CelestialSystemDefinition, rng: RandomNumberGener
 		moon.body_id = "%s-moon-%d" % [parent.body_id, m + 1]
 		moon.display_name = "%s %s" % [parent.display_name, char(0x41 + m)]
 		moon.body_type = BODY_SCRIPT.BodyType.MOON
-		moon.archetype = &"moon_ice" if (icy_parent or rng.randf() < 0.4) else &"moon_rock"
+		if m < moon_styles.size():
+			moon.archetype = moon_styles[m]
+		else:
+			moon.archetype = &"moon_ice" if (icy_parent or rng.randf() < 0.4) else &"moon_rock"
 		moon.parent_body_id = parent.body_id
 		moon.ensure_children()
 		var moon_r: float = rng.randf_range(80_000.0, 430_000.0)

@@ -7,6 +7,8 @@ extends Resource
 ## Non-zero => Planet Studio / the game build a whole CelestialSystemGenerator
 ## system (archetype spine) instead of a single Asterra. Mirrors GenConfig.system_seed.
 @export var system_seed: int = 0
+## Mirrors GenConfig.minimal_system: one body of each archetype style only.
+@export var minimal_system: bool = false
 @export var planet_radius: float = 1000000.0
 @export var face_res: int = 192
 

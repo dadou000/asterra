@@ -79,6 +79,33 @@ func _ready() -> void:
 	_assert(joined.contains("cloud") and joined.contains("haze"),
 		"the stack has both banded cloud decks and the smooth haze base (%s)" % joined)
 
+	# --- GG3: cloud decks carry Jool-style band + swirl params; haze stays flat --
+	var cloud_seen := 0
+	for i in bands.size():
+		var mat: ShaderMaterial = (bands[i] as MeshInstance3D).material_override
+		var is_cloud: bool = String((bands[i] as MeshInstance3D).name).contains("cloud")
+		var flag: float = float(mat.get_shader_parameter(&"u_is_cloud"))
+		_assert(is_cloud == (flag > 0.5), "deck %d u_is_cloud matches its kind" % i)
+		if is_cloud:
+			cloud_seen += 1
+			_assert(float(mat.get_shader_parameter(&"u_band_count")) >= 3.0
+					and float(mat.get_shader_parameter(&"u_coverage")) > 0.0
+					and float(mat.get_shader_parameter(&"u_noise_freq")) > 0.0,
+				"cloud deck %d carries band/coverage/noise params" % i)
+	_assert(cloud_seen >= 1, "at least one cloud deck")
+
+	# Two different gas giants get visibly different cloud structure.
+	var m2: GasGiantModel = GAS_GIANT_MODEL.from_body(52_000_000.0, 5.0e15, 424242)
+	var d_a: Array = model.decks()
+	var d_b: Array = m2.decks()
+	var diff := false
+	for x in mini(d_a.size(), d_b.size()):
+		if String(d_a[x].get("kind")) == "cloud" and String(d_b[x].get("kind")) == "cloud":
+			if not is_equal_approx(float(d_a[x].get("band_count")), float(d_b[x].get("band_count"))) \
+					or not is_equal_approx(float(d_a[x].get("coverage")), float(d_b[x].get("coverage"))):
+				diff = true
+	_assert(diff, "two gas giants have distinct cloud decks (band count / coverage)")
+
 	# --- The analytic density (rho_top * exp(k*(cloud_top - r))) reproduces
 	#     GasGiantModel.density_at across the shell -----------------------
 	_assert(rho_top > 0.0 and rho_top < 1.0 and k > 0.0, "the density profile constants are sane")
@@ -100,7 +127,7 @@ func _ready() -> void:
 	_assert(shell.active_band_count() == 0, "no band raymarches from orbit")
 
 	# Just under the cloud tops: only the top band or two.
-	shell.sync(center, sun, center + Vector3(0, model.cloud_top_radius_m - 20_000.0, 0))
+	shell.sync(center, sun, center + Vector3(0, model.cloud_top_radius_m - 20_000.0, 0), 12_345.0)
 	var top_active := shell.active_band_count()
 	_assert(top_active >= 1 and top_active <= 2,
 		"near the cloud tops 1-2 bands raymarch, not the whole envelope (%d)" % top_active)
@@ -116,15 +143,20 @@ func _ready() -> void:
 	_assert(not (shell.get_child(0) as MeshInstance3D).visible,
 		"the outermost band is dormant once the camera is near the core")
 
-	# sync() fed the per-frame uniforms on the active band(s).
+	# sync() fed the per-frame uniforms on the active band(s), and rotated the
+	# cloud decks by the sim clock.
+	shell.sync(center, sun, center + Vector3(0, model.cloud_top_radius_m - 20_000.0, 0), 50_000.0)
 	for mi2: Node in shell.get_children():
 		if (mi2 as MeshInstance3D).visible:
-			var m2: ShaderMaterial = (mi2 as MeshInstance3D).material_override
-			var bc: Vector3 = m2.get_shader_parameter(&"u_body_center")
-			var sd: Vector3 = m2.get_shader_parameter(&"u_sun_dir")
+			var mm: ShaderMaterial = (mi2 as MeshInstance3D).material_override
+			var bc: Vector3 = mm.get_shader_parameter(&"u_body_center")
+			var sd: Vector3 = mm.get_shader_parameter(&"u_sun_dir")
 			_assert(bc.is_equal_approx(center), "sync() pushed the body centre to an active band")
 			_assert(sd.is_finite() and is_equal_approx(sd.length(), 1.0),
 				"sync() pushed a unit sun direction to an active band")
+			if String((mi2 as MeshInstance3D).name).contains("cloud"):
+				_assert(absf(float(mm.get_shader_parameter(&"u_cloud_phase"))) > 1.0e-4,
+					"the cloud deck rotated with the sim clock")
 	_assert(shell.global_position.is_equal_approx(center), "the shell sits at the body centre")
 
 	shell.queue_free()

@@ -141,6 +141,61 @@ func _ready() -> void:
 	session.bootstrap_from_generated_system(gap)
 	_assert(session.staged_system != null, "session built the staged archetype system")
 
+	# --- GG5: the gas giant's surface datum + altitude readout, game/studio parity -
+	var gg_id := &"colossus"
+	var rt_gg: BodyRuntime = Bodies.slot(gg_id)
+	_assert(rt_gg != null, "the spine gas giant has a pool slot")
+	var gg_body: Resource = system.find_body(String(gg_id))
+	var gg_core: float = float(gg_body.get(&"core_radius_m"))
+	var gg_tops: float = float(gg_body.get(&"radius_m"))
+	_assert(gg_core > 0.0 and gg_core < gg_tops, "colossus carries a solid core below its cloud tops")
+
+	# The pool slot keeps the reference (cloud-top) radius and the smaller core datum
+	# side by side; register_body / gen_config_for set them (GG0).
+	_assert(is_equal_approx(rt_gg.radius_m, gg_tops)
+			and is_equal_approx(rt_gg.surface_radius(), gg_core),
+		"the studio slot keeps radius_m == cloud tops and surface_radius() == the core")
+	_assert(is_equal_approx(Frames.body_radius(gg_id), gg_tops)
+			and is_equal_approx(Frames.body_surface_radius(gg_id), gg_core),
+		"Frames keeps the reference radius AND the core surface datum for colossus")
+
+	# Switch the studio's resident authoring target to the gas giant: the resident
+	# terrain / altitude datum is the CORE, while the far-LOD / camera-framing radius
+	# stays the cloud tops.
+	Bodies.load_active(gg_id, Vec3D.new(0.0, gg_tops * 4.0, 0.0))
+	_assert(String(Bodies.active.id) == String(gg_id), "colossus is the resident authoring body")
+	_assert(is_equal_approx(Frames.planet_radius, gg_core),
+		"Frames.planet_radius follows the gas giant's CORE while resident (%.0f km)"
+			% (Frames.planet_radius / 1000.0))
+	_assert(is_equal_approx(float(Planet.cfg.planet_radius), gg_core),
+		"the resident Planet config is the core radius, not the cloud tops")
+	_assert(is_equal_approx(Frames.body_radius(gg_id), gg_tops),
+		"the cloud-top reference radius is untouched by the swap (far-LOD / camera framing)")
+
+	# PARITY: the GasGiantModel the studio reconstructs for colossus is byte-identical
+	# to the one the standalone game builds (same seed formula, same stamped radii).
+	var game_model: GasGiantModel = GENERATOR.gas_giant_model_for(gg_body)
+	var studio_model: GasGiantModel = GENERATOR.gas_giant_model_for(
+		session.staged_system.call("find_body", String(gg_id)))
+	_assert(game_model != null and studio_model != null, "both paths reconstruct a GasGiantModel")
+	_assert(is_equal_approx(game_model.core_radius_m, studio_model.core_radius_m)
+			and is_equal_approx(game_model.deadly_radius_m, studio_model.deadly_radius_m)
+			and is_equal_approx(game_model.rho_top(), studio_model.rho_top())
+			and is_equal_approx(game_model.falloff_k(), studio_model.falloff_k()),
+		"studio and game GasGiantModel envelopes match (core/deadly/rho_top/falloff)")
+	_assert(is_equal_approx(game_model.core_radius_m, gg_core)
+			and is_equal_approx(float(GENERATOR.gen_config_for(system, String(gg_id), baseline)
+				.get(&"planet_radius")), gg_core),
+		"the model core == gen_config_for('colossus').planet_radius == the studio slot datum")
+
+	# The shared altitude readout phrases above / inside the envelope coherently.
+	var above := studio_model.readout_at(gg_tops + 5.0e6)
+	var inside := studio_model.readout_at((gg_core + gg_tops) * 0.5)
+	_assert(above.contains("cloud tops") and not above.contains("above core"),
+		"above the cloud tops the readout is a plain altitude tagged '(cloud tops)': %s" % above)
+	_assert(inside.contains("above core") and inside.contains("bar") and inside.contains("kg/m"),
+		"inside the envelope the readout adds depth / pressure / density: %s" % inside)
+
 	var host: Node = RUNTIME_HOST.new()
 	add_child(host)
 	host.set(&"_authoring_session", session)

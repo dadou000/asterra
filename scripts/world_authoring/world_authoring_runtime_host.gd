@@ -783,6 +783,15 @@ func _adopt_pool_detailed_runtime(body: Resource, force_rebake: bool) -> bool:
 	if not baking:
 		_set_editor_status("Activated %s — resident detailed terrain (cached, no rebake)." \
 			% String(body.get(&"display_name")))
+	# GG5: a gas giant frames its cloud tops but the resident terrain / altitude
+	# datum is the solid core -- say so, with the envelope structure from the model.
+	if bool(body.call("is_gas_giant")):
+		var model: GasGiantModel = CelestialSystemGenerator.gas_giant_model_for(body)
+		if model != null:
+			var note := ("%s is a gas giant — camera frames the cloud tops; "
+				+ "altitude / sculpt measure from the solid core %.0f km down. %s")
+			_set_editor_status(note % [String(body.get(&"display_name")),
+				model.shell_thickness_m() / 1000.0, model.describe()])
 	return true
 
 func _set_ground_generated_height_enabled(enabled: bool) -> void:

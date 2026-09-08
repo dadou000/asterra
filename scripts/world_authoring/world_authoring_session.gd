@@ -92,8 +92,10 @@ func bootstrap_from_current_world() -> void:
 ## body carrying its own archetype-tuned generation profile, so the celestial map
 ## shows them all and switching the authoring target picks up that body's terrain.
 func bootstrap_from_generated_system(baseline: Resource) -> void:
+	var minimal: bool = bool(baseline.get(&"minimal_system")) \
+		or OS.get_environment("ASTERRA_MINIMAL_SYSTEM") == "1"
 	var system: Resource = CELESTIAL_SYSTEM_GENERATOR.generate(
-		int(baseline.get(&"system_seed")), float(baseline.get(&"axial_tilt_deg")))
+		int(baseline.get(&"system_seed")), float(baseline.get(&"axial_tilt_deg")), 1.0, minimal)
 	CELESTIAL_SYSTEM_GENERATOR.apply_archetype_profiles(system, baseline)
 	system.set(&"active_body_id", CELESTIAL_SYSTEM_GENERATOR.HOME_BODY_ID)
 	system.call("ensure_valid")

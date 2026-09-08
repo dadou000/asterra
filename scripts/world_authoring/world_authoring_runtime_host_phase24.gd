@@ -30,12 +30,17 @@ func _flush_active_body_preview() -> void:
 	_preview_body_id = body_id
 	_selected_radius_m = maxf(float(body.get(&"radius_m")), 1.0)
 
-	# Switching the active authoring target to another primary terrestrial body
+	# Switching the active authoring TARGET to another primary terrestrial body
 	# hands the single resident detailed stack to it via the Bodies pool -- one
 	# body baked at a time, cache-first so a return to a body baked earlier this
 	# session is instant. Non-primary bodies (moons) stay on the lightweight
 	# preview; a STAR is skipped entirely.
-	if body_id != _detailed_runtime_body_id \
+	#
+	# Only on a real selection change: this flush also fires on world_ready /
+	# biome / water dirty, and running the swap then would fight a swap already in
+	# flight (e.g. re-adopt the previous body when the pool just moved on).
+	if body_changed \
+			and body_id != _detailed_runtime_body_id \
 			and int(body.get(&"body_type")) != BODY_DEFINITION_SCRIPT.BodyType.STAR \
 			and _is_primary_terrestrial(system, body) \
 			and _pool_hosts_body(body):
@@ -57,8 +62,15 @@ func _flush_active_body_preview() -> void:
 
 	var family_radius_m: float = _selected_radius_m
 	if _celestial_preview != null:
+		# A gas giant's "detailed runtime" is its tiny rocky core, deep inside the
+		# envelope -- hiding its far-LOD cloud-top sphere would leave only that
+		# core on screen. Keep the sphere; the raymarched deck shell (main._sync_
+		# gas_giant_shells) draws on top when the camera is close, and the sphere
+		# self-culls (cull_back) once the camera is inside it.
+		var det_body: Resource = system.call("find_body", _detailed_runtime_body_id) as Resource
+		var det_is_gas: bool = det_body != null and bool(det_body.call("is_gas_giant"))
 		var hidden_detailed_id: String = _detailed_runtime_body_id \
-			if detailed_available else ""
+			if (detailed_available and not det_is_gas) else ""
 		_celestial_preview.call("show_system", system, body_id, hidden_detailed_id)
 		_selected_center_world = _celestial_preview.call("selected_center_world") as Vec3D
 		family_radius_m = maxf(

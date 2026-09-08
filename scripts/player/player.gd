@@ -47,6 +47,15 @@ var physics_visual: PhysicsWalkerVisual
 var _mouse_captured := false
 var input_enabled := true
 
+# GG4: the gas the player is moving through. Vacuum (no effect) everywhere except
+# inside a gas giant's envelope, where it applies drag / buoyancy / a crush floor.
+const ATMOSPHERE_MEDIUM := preload("res://scripts/physics/atmosphere_medium.gd")
+var _medium := ATMOSPHERE_MEDIUM.new()
+var _atmosphere_system: Resource = null
+## Displaced-volume / mass for buoyancy. Swappable by future gear (a balloon).
+var buoyancy_vm: float = ATMOSPHERE_MEDIUM.PERSON_BUOYANCY
+signal crush_zone(depth_m: float)   ## emitted while below the gas-giant deadly boundary
+
 
 func _ready() -> void:
 	camera = Camera3D.new()
@@ -115,6 +124,21 @@ func _gravity_mps2() -> float:
 		if contact != null:
 			return float(contact.surface_gravity())
 	return GRAVITY
+
+
+## The generated system, for AtmosphereMedium to resolve the contact body. Set by
+## main._activate_system; null in the single-planet game (medium stays vacuum).
+func set_atmosphere_system(system: Resource) -> void:
+	_atmosphere_system = system
+
+
+## GG5: a one-line "alt X km above core • depth Y • P Z bar • ρ W" readout when
+## the body under the player is a gas giant, "" otherwise. Self-refreshes the
+## medium so the HUD gets a live value even when `_physics_process` is gated
+## (Planet Studio preview / probes run with input disabled).
+func gas_giant_readout() -> String:
+	_medium.refresh(get_node_or_null(^"/root/Bodies"), _atmosphere_system)
+	return _medium.readout(world_pos) if _medium.active() else ""
 
 
 func up_dir() -> Vector3:
@@ -228,10 +252,16 @@ func _physics_process(dt: float) -> void:
 	if Input.is_action_pressed("move_right"): wish += right
 	if Input.is_action_pressed("move_left"): wish -= right
 
+	_medium.refresh(get_node_or_null(^"/root/Bodies"), _atmosphere_system)
+	var medium_alt := _medium.altitude_of(world_pos) if _medium.active() else 0.0
+
 	if mode == Mode.FLY:
 		var alt := maxf(height_above_ground(), 1.0)
 		var speed := clampf(alt * 0.55, 8.0, 90000.0)
 		if Input.is_action_pressed("sprint"): speed *= 6.0
+		# Thick gas resists you -- the kinematic controller has no velocity to
+		# apply real drag to, so scale the reachable speed by the local density.
+		speed *= _medium.speed_factor(medium_alt)
 		if Input.is_action_pressed("move_up"): wish += up
 		if Input.is_action_pressed("move_down"): wish -= up
 		if wish.length() > 0.001:
@@ -252,6 +282,15 @@ func _physics_process(dt: float) -> void:
 		vertical_speed -= _gravity_mps2() * dt
 		if Input.is_action_just_pressed("move_up") and grounded:
 			vertical_speed = JUMP_SPEED
+		# GG4: quadratic drag toward a terminal velocity + buoyancy inside a gas
+		# giant, and a crush floor that shoves you back up at the deadly boundary.
+		if _medium.active():
+			vertical_speed += _medium.buoyancy_accel(medium_alt, buoyancy_vm) * dt
+			vertical_speed -= signf(vertical_speed) \
+				* _medium.drag_decel(absf(vertical_speed), medium_alt) * dt
+			if _medium.lethal(medium_alt):
+				vertical_speed = maxf(vertical_speed, 14.0)
+				crush_zone.emit(_medium.lethal_altitude() - medium_alt)
 		r += vertical_speed * dt
 		if r <= target_r:
 			r = target_r

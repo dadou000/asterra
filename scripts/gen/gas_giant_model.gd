@@ -130,7 +130,14 @@ func falloff_k() -> float:
 ##   steps              : primary raymarch steps for its (bounded) span
 ##   density_mul        : multiplies the analytic density_at inside this band
 ##   tint_hue_shift     : deck tint = base haze colour hue nudged by this
-## }
+##   -- "cloud" only (GG3): --
+##   band_count         : latitudinal stripe count (Jool-style horizontal bands)
+##   band_contrast      : how sharp the light/dark banding is (0..1)
+##   noise_freq         : turbulence cells around the sphere (swirl scale)
+##   warp               : domain-warp strength for the swirls
+##   coverage           : cloud fill fraction (higher -> cloudier)
+##   edge_hardness      : 0 soft billows .. ~1 hard-edged decks
+##   rot_speed_mul      : this deck's spin rate vs the body's (wind shear)
 func decks() -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(_rho_top * 1.0e7) ^ int(cloud_top_radius_m)
@@ -140,18 +147,27 @@ func decks() -> Array:
 	var t_storm: float = sh * (0.012 + rng.randf() * 0.02)
 	var t_deck: float = t_storm + sh * (0.05 + rng.randf() * 0.09)
 	var t_haze: float = maxf(t_deck + sh * 0.05, sh * (0.40 + rng.randf() * 0.12))
+	var bands: int = 4 + (rng.randi() % 6)                      ## 4..9 latitudinal bands
 	var out: Array = []
-	# High storm tops straddling the cloud tops (sometimes absent).
+	# High storm tops straddling the cloud tops (sometimes absent) -- fast, wispy.
 	if rng.randf() < 0.8:
 		out.append({
 			"outer_m": top + pad, "inner_m": top - t_storm, "kind": "cloud",
-			"steps": 12, "density_mul": 2.2 + rng.randf() * 2.5,
-			"tint_hue_shift": -0.02 + rng.randf() * 0.04})
-	# The main visible banded deck just under the tops.
+			"steps": 12, "density_mul": 2.0 + rng.randf() * 2.4,
+			"tint_hue_shift": -0.02 + rng.randf() * 0.04,
+			"band_count": bands, "band_contrast": 0.35 + rng.randf() * 0.25,
+			"noise_freq": 9.0 + rng.randf() * 9.0, "warp": 0.30 + rng.randf() * 0.30,
+			"coverage": 0.40 + rng.randf() * 0.18, "edge_hardness": 0.15 + rng.randf() * 0.25,
+			"rot_speed_mul": 1.05 + rng.randf() * 0.25})
+	# The main visible banded deck just under the tops -- the Jool swirls.
 	out.append({
 		"outer_m": top - t_storm, "inner_m": top - t_deck, "kind": "cloud",
-		"steps": 16, "density_mul": 1.6 + rng.randf() * 1.8,
-		"tint_hue_shift": -0.03 + rng.randf() * 0.05})
+		"steps": 16, "density_mul": 1.6 + rng.randf() * 1.6,
+		"tint_hue_shift": -0.03 + rng.randf() * 0.05,
+		"band_count": bands, "band_contrast": 0.5 + rng.randf() * 0.3,
+		"noise_freq": 6.0 + rng.randf() * 8.0, "warp": 0.25 + rng.randf() * 0.30,
+		"coverage": 0.46 + rng.randf() * 0.20, "edge_hardness": 0.45 + rng.randf() * 0.40,
+		"rot_speed_mul": 0.9 + rng.randf() * 0.2})
 	# Smooth upper-atmosphere haze.
 	out.append({
 		"outer_m": top - t_deck, "inner_m": top - t_haze, "kind": "haze",
@@ -167,3 +183,33 @@ func describe() -> String:
 	return "GasGiantModel(cloud_top=%.0f km, 1bar=%.0f km, deadly=%.0f km, core=%.0f km, shell=%.0f km)" % [
 		cloud_top_radius_m / 1000.0, one_bar_radius_m / 1000.0,
 		deadly_radius_m / 1000.0, core_radius_m / 1000.0, _shell_thickness_m / 1000.0]
+
+
+## One-line HUD / status readout for an observer `r_from_center_m` from the body
+## centre (GG5). Above the cloud tops it is a plain altitude tagged "(cloud tops)";
+## inside the envelope it adds depth below the tops, height above the solid core,
+## pressure and density from the analytic profile. Shared by the game HUD and the
+## Planet Studio status line so both phrase a gas giant the same way.
+func readout_at(r_from_center_m: float) -> String:
+	var above_tops: float = r_from_center_m - cloud_top_radius_m
+	if above_tops >= 0.0:
+		return "alt %s (cloud tops)" % _fmt_len(above_tops)
+	var above_core: float = maxf(r_from_center_m - core_radius_m, 0.0)
+	var p_bar: float = pressure_at(r_from_center_m) / 1.0e5
+	return "alt %s above core • depth %s • P %s bar • ρ %.1f kg/m³" % [
+		_fmt_len(above_core), _fmt_len(-above_tops), _fmt_bar(p_bar),
+		density_at(r_from_center_m)]
+
+
+static func _fmt_len(m: float) -> String:
+	if absf(m) >= 1000.0:
+		return "%.1f km" % (m / 1000.0)
+	return "%.0f m" % m
+
+
+static func _fmt_bar(bar: float) -> String:
+	if bar >= 100.0:
+		return "%.0f" % bar
+	if bar >= 1.0:
+		return "%.1f" % bar
+	return "%.3f" % bar

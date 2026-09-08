@@ -13,6 +13,10 @@ world_seed = 4707684752384786688
 ; archetype system (inner hot rocks, this terran home, an ice world, a gas giant
 ; + moons, a distant pulsar) around this Asterra. Set to 0 for the single planet.
 system_seed = 8571
+; TEMP test mode: one body of each archetype style only (hot rock, terran home,
+; ice, gas giant, rock moon, ice moon, pulsar) -- no spine duplicates / RNG
+; filler. Set to false (or delete) to restore the full system.
+minimal_system = true
 planet_radius = 1000000.0
 face_res = 192
 ocean_fraction = 0.62

@@ -40,10 +40,19 @@ func _ready() -> void:
 	await get_tree().process_frame
 	if String(Bodies.active.id) != "colossus":
 		return _fail("colossus did not become the resident body")
+	# Let the core clipmap finish its first build so the shots are not captured
+	# mid-mesh (which reads as a black frame at 2 fps).
+	var settle_deadline := Time.get_ticks_msec() + 40000
+	while Time.get_ticks_msec() < settle_deadline:
+		await get_tree().process_frame
+		var st: Dictionary = main.terrain.stats()
+		if int(st.get("in_flight", 1)) == 0 and int(st.get("chunks", 0)) > 0 \
+				and Engine.get_frames_per_second() > 45:
+			break
 
 	var brights: Array[float] = []
 	# depth fractions below the cloud tops: shallow -> deep.
-	for spec: Array in [["gg2_a_top", 0.03], ["gg2_b_mid", 0.45], ["gg2_c_deep", 0.9]]:
+	for spec: Array in [["gg2_a_top", 0.03], ["gg2_b_mid", 0.45], ["gg2_c_deep", 0.7]]:
 		var frac: float = float(spec[1])
 		var r: float = lerpf(cloud_top, core + 8_000.0, frac)
 		var b: float = await _shot(String(spec[0]), r)

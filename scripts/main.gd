@@ -98,7 +98,10 @@ func _resolve_home_config(baseline: GenConfig) -> GenConfig:
 		baseline.system_seed = env_seed.to_int()
 	if baseline.system_seed == 0:
 		return baseline
-	_system = CELESTIAL_SYSTEM_GENERATOR.generate(baseline.system_seed, baseline.axial_tilt_deg)
+	var minimal := baseline.minimal_system \
+		or OS.get_environment("ASTERRA_MINIMAL_SYSTEM") == "1"
+	_system = CELESTIAL_SYSTEM_GENERATOR.generate(
+		baseline.system_seed, baseline.axial_tilt_deg, 1.0, minimal)
 	return CELESTIAL_SYSTEM_GENERATOR.gen_config_for(
 		_system, CELESTIAL_SYSTEM_GENERATOR.HOME_BODY_ID, baseline) as GenConfig
 
@@ -292,6 +295,10 @@ func _activate_system() -> void:
 	var count := CELESTIAL_SYSTEM_GENERATOR.populate_pool(
 		_system, _baseline_cfg, Bodies, Frames, Frames.system_time_s)
 	Bodies.concurrent_parent = self   # live second clipmaps parent under Main (M5b)
+	if player != null:
+		player.set_atmosphere_system(_system)          # GG4: gas-giant drag / buoyancy
+		if not player.crush_zone.is_connected(_on_player_crush_zone):
+			player.crush_zone.connect(_on_player_crush_zone)
 	var home_center: Vec3D = ORBIT_MATH.system_position(
 		_system, CELESTIAL_SYSTEM_GENERATOR.HOME_BODY_ID, Frames.system_time_s)
 	Bodies.primary().center_system = home_center
@@ -305,6 +312,19 @@ func _activate_system() -> void:
 			count, CELESTIAL_SYSTEM_GENERATOR.HOME_BODY_ID])
 	hud.notify("System %s — %d other worlds you can fly to" % [_system.display_name, count])
 
+
+var _crush_warn_accum: float = 999.0
+
+## GG4: the player is below a gas giant's crush/heat boundary -- warn on the HUD
+## (rate-limited; the player controller already shoves them back up).
+func _on_player_crush_zone(depth_m: float) -> void:
+	_crush_warn_accum += get_process_delta_time()
+	if _crush_warn_accum < 3.0:
+		return
+	_crush_warn_accum = 0.0
+	if hud != null:
+		hud.notify("CRUSHING PRESSURE — %.0f km below the safe limit, ascend" % (depth_m / 1000.0))
+
 ## A body with a live concurrent clipmap (M5b) is rendering its real terrain, so
 ## suppress its far-LOD preview sphere; restore it when the concurrent clipmap is
 ## torn down.
@@ -314,8 +334,11 @@ func _sync_concurrent_preview() -> void:
 	for rt: BodyRuntime in Bodies.slots:
 		if rt.is_primary:
 			continue
+		var gg: Object = _gas_shells.get(String(rt.id))
+		var gg_hides: bool = gg != null and is_instance_valid(gg) \
+			and bool(gg.call("suppresses_far_lod"))
 		_celestial_preview.call("set_body_render_hidden", String(rt.id),
-			rt.is_concurrent() or _gas_shells.has(String(rt.id)))
+			rt.is_concurrent() or gg_hides)
 
 
 ## GG2: give a gas giant that is the resident body (or a concurrently-rendered
@@ -343,14 +366,16 @@ func _sync_gas_giant_shells() -> void:
 			shell = GAS_GIANT_SHELL.new()
 			shell.name = "GasGiantShell_%s" % rt.id
 			add_child(shell)
-			shell.bind(model, _gas_haze_color(body))
+			shell.bind(model, _gas_haze_color(body),
+				float(body.get(&"sidereal_rotation_period_s")))
 			_gas_shells[String(rt.id)] = shell
 		var canon: Vec3D = Vec3D.new() if rt == Bodies.active \
 			else Frames.body_center_canonical(rt.id)
 		# The observer position drives which envelope bands raymarch this frame.
 		var observer_render: Vector3 = Frames.to_render(player.world_pos) \
 			if player != null else Vector3.ZERO
-		shell.sync(Frames.to_render(canon), Frames.helion_dir.normalized(), observer_render)
+		shell.sync(Frames.to_render(canon), Frames.helion_dir.normalized(),
+			observer_render, float(Frames.system_time_s))
 	for id: String in _gas_shells.keys():
 		if not want.has(id):
 			_drop_gas_shell(id)

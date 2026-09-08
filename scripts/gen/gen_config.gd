@@ -15,6 +15,11 @@ const PIPELINE_VERSION := 12
 ## other body is reachable by seamless travel. Zero => single legacy planet.
 ## Deliberately NOT part of cache_key() -- per-body `world_seed` owns bake identity.
 @export var system_seed: int = 0
+## Test mode: with a `system_seed` set, generate only ONE body of each archetype
+## style (a hot rock, the terran home, an ice world, a gas giant, a rock moon, an
+## ice moon, the pulsar) instead of the full spine + RNG filler -- so each style
+## can be reached and checked fast. Not part of cache_key(); no bake impact.
+@export var minimal_system: bool = false
 @export var planet_radius: float = 1000000.0        ## metres
 @export var face_res: int = 192                    ## macro grid cells per cube face edge
 
