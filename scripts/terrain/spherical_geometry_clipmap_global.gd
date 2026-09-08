@@ -18,8 +18,8 @@ func _ready() -> void:
 func _bind_gpu_resources(force: bool) -> void:
 	if _material == null:
 		return
-	var macro: Texture2DArray = Planet.global_height_texture if Planet.ready_state else null
-	var macro_res: int = Planet.global_height_face_res if Planet.ready_state else 0
+	var macro: Texture2DArray = _planet().global_height_texture if _planet().ready_state else null
+	var macro_res: int = _planet().global_height_face_res if _planet().ready_state else 0
 	if force or macro != _bound_orbit:
 		_bound_orbit = macro
 		_material.set_shader_parameter("u_macro_elevation", macro)
@@ -35,9 +35,9 @@ func _bind_gpu_resources(force: bool) -> void:
 func _sync_material_control() -> void:
 	if _material == null:
 		return
-	var texture: Texture2DArray = Planet.global_material_texture \
-		if Planet.ready_state and Planet.global_material_texture != null else null
-	var face_res: int = Planet.global_material_face_res if Planet.ready_state else 0
+	var texture: Texture2DArray = _planet().global_material_texture \
+		if _planet().ready_state and _planet().global_material_texture != null else null
+	var face_res: int = _planet().global_material_face_res if _planet().ready_state else 0
 	if texture != _bound_global_material:
 		_bound_global_material = texture
 		_material.set_shader_parameter("u_material_global", texture)
@@ -52,9 +52,9 @@ func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
 	out["coverage_ready"] = _bound_orbit != null
 	out["global_heightmap"] = true
-	out["global_face_res"] = Planet.global_height_face_res if Planet.ready_state else 0
+	out["global_face_res"] = _planet().global_height_face_res if _planet().ready_state else 0
 	out["global_materialmap"] = true
-	out["global_material_face_res"] = Planet.global_material_face_res if Planet.ready_state else 0
+	out["global_material_face_res"] = _planet().global_material_face_res if _planet().ready_state else 0
 	out["material_streaming"] = false
 	out["terrain_streaming"] = false
 	out["visual_pages"] = false

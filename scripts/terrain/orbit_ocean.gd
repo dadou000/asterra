@@ -17,22 +17,41 @@ const PROCEDURAL_DETAIL_STRENGTH: float = 1.0
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
 
+## Multi-body seam (see the seamless-multi-planet design). Null on the autoload
+## instance -> `_planet()` resolves to the `Planet` autoload, behaviour unchanged.
+## A non-primary BodyRuntime (M5) calls `bind_runtime(rt)` before `_ready`.
+var _body_runtime: Object = null
+var _planet_node_cache: Node = null
+
+
+func _planet() -> Variant:
+	if _body_runtime != null:
+		return _body_runtime.sampler
+	if _planet_node_cache == null or not is_instance_valid(_planet_node_cache):
+		_planet_node_cache = get_node_or_null(^"/root/Planet")
+	return _planet_node_cache
+
+
+func bind_runtime(runtime: Object) -> void:
+	_body_runtime = runtime
+	_planet_node_cache = null
+
 
 func _ready() -> void:
 	process_priority = 11
 	Frames.origin_shifted.connect(_on_origin_shifted)
-	Planet.world_ready.connect(_on_world_ready)
-	if Planet.ready_state:
+	_planet().world_ready.connect(_on_world_ready)
+	if _planet().ready_state:
 		_refresh()
 
 
 func _process(_dt: float) -> void:
 	var show_orbit_ocean := false
-	if Planet.ready_state and Planet.cfg != null:
+	if _planet().ready_state and _planet().cfg != null:
 		var camera: Camera3D = get_viewport().get_camera_3d()
 		if camera != null:
 			var world_pos: Vec3D = Frames.to_world(camera.global_position)
-			show_orbit_ocean = world_pos.length() - Planet.cfg.planet_radius >= VISUAL_LOCK_ALTITUDE_M
+			show_orbit_ocean = world_pos.length() - _planet().cfg.planet_radius >= VISUAL_LOCK_ALTITUDE_M
 	if _mesh_instance != null:
 		_mesh_instance.visible = show_orbit_ocean
 	if not show_orbit_ocean:
@@ -55,7 +74,7 @@ func refresh_surface() -> void:
 
 
 func _refresh() -> void:
-	if not Planet.ready_state or Planet.orbit_elevation_texture == null:
+	if not _planet().ready_state or _planet().orbit_elevation_texture == null:
 		return
 
 	if _mesh_instance == null:
@@ -64,7 +83,7 @@ func _refresh() -> void:
 		_mesh_instance.visible = false
 		add_child(_mesh_instance)
 
-		var radius: float = Planet.cfg.planet_radius + SHELL_OFFSET_M
+		var radius: float = _planet().cfg.planet_radius + SHELL_OFFSET_M
 		var sphere := SphereMesh.new()
 		sphere.radius = radius
 		sphere.height = radius * 2.0
@@ -77,20 +96,20 @@ func _refresh() -> void:
 		_material.shader = load("res://shaders/orbit_ocean.gdshader")
 		_mesh_instance.material_override = _material
 
-	var base_spacing: float = PI * 0.5 * Planet.cfg.planet_radius \
-		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
-	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+	var base_spacing: float = PI * 0.5 * _planet().cfg.planet_radius \
+		/ (float(_planet().cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	var detail_seed: int = _planet().cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 
-	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
-	_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
+	_material.set_shader_parameter("u_planet_radius", _planet().cfg.planet_radius)
+	_material.set_shader_parameter("u_atmosphere_height", _planet().cfg.atmosphere_height)
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
-	_material.set_shader_parameter("u_macro_elevation", Planet.orbit_elevation_texture)
-	_material.set_shader_parameter("u_macro_face_res", float(Planet.orbit_texture_face_res))
+	_material.set_shader_parameter("u_macro_elevation", _planet().orbit_elevation_texture)
+	_material.set_shader_parameter("u_macro_face_res", float(_planet().orbit_texture_face_res))
 	_material.set_shader_parameter("u_macro_ready", 1.0)
 	_material.set_shader_parameter("u_base_spacing", base_spacing)
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
-		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
+		* maxf(0.05, _planet().cfg.detail_amplitude / 260.0))
 	_material.set_shader_parameter("u_orbit_start_altitude", VISUAL_LOCK_ALTITUDE_M)
 	_sync_origin()
 

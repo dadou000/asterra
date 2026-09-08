@@ -1266,10 +1266,14 @@ func biome_profile_uniforms() -> Dictionary:
 	var b := PackedVector4Array()
 	var c := PackedVector4Array()
 	var d := PackedVector4Array()
+	var e := PackedVector4Array()
+	var f := PackedVector4Array()
 	a.resize(BIOME_LAYER_MAX)
 	b.resize(BIOME_LAYER_MAX)
 	c.resize(BIOME_LAYER_MAX)
 	d.resize(BIOME_LAYER_MAX)
+	e.resize(BIOME_LAYER_MAX)
+	f.resize(BIOME_LAYER_MAX)
 	for i: int in count:
 		var entry: Dictionary = _biome_profiles[i] as Dictionary
 		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("layer_type", 0))),
@@ -1277,10 +1281,13 @@ func biome_profile_uniforms() -> Dictionary:
 		var curve: PackedFloat32Array = entry.get("response_curve", CurveFieldData.identity()) as PackedFloat32Array
 		b[i] = Vector4(float(int(entry.get("param", 3))), float(int(entry.get("seed", 1337))),
 			float(entry.get("angle_deg", 90.0)), float(CurveFieldData.point_count(curve)))
-		var curve_pair: Array = CurveFieldData.pack_to_vec4_pair(curve)
-		c[i] = curve_pair[0] as Vector4
-		d[i] = curve_pair[1] as Vector4
-	return {"count": count, "a": a, "b": b, "c": c, "d": d, "blend": _biome_blend_m.duplicate()}
+		var curve_quad: Array = CurveFieldData.pack_to_vec4s(curve)
+		c[i] = curve_quad[0] as Vector4
+		d[i] = curve_quad[1] as Vector4
+		e[i] = curve_quad[2] as Vector4
+		f[i] = curve_quad[3] as Vector4
+	return {"count": count, "a": a, "b": b, "c": c, "d": d, "e": e, "f": f,
+		"blend": _biome_blend_m.duplicate()}
 
 
 func biome_profile_count() -> int:
@@ -1301,6 +1308,8 @@ func biome_texture_uniforms() -> Dictionary:
 	var h := PackedVector4Array()
 	var curve_ab := PackedVector4Array()
 	var curve_cd := PackedVector4Array()
+	var curve_ef := PackedVector4Array()
+	var curve_gh := PackedVector4Array()
 	a.resize(BIOME_TEX_LAYER_MAX)
 	b.resize(BIOME_TEX_LAYER_MAX)
 	c.resize(BIOME_TEX_LAYER_MAX)
@@ -1311,6 +1320,8 @@ func biome_texture_uniforms() -> Dictionary:
 	h.resize(BIOME_TEX_LAYER_MAX)
 	curve_ab.resize(BIOME_TEX_LAYER_MAX)
 	curve_cd.resize(BIOME_TEX_LAYER_MAX)
+	curve_ef.resize(BIOME_TEX_LAYER_MAX)
+	curve_gh.resize(BIOME_TEX_LAYER_MAX)
 	for i: int in count:
 		var entry: Dictionary = _biome_textures[i] as Dictionary
 		a[i] = Vector4(float(int(entry.get("biome_id", 0))), float(int(entry.get("texture_choice", 0))),
@@ -1342,12 +1353,14 @@ func biome_texture_uniforms() -> Dictionary:
 		var gradient_curve: PackedFloat32Array = entry.get("gradient_curve", CurveFieldData.identity()) as PackedFloat32Array
 		h[i] = Vector4(float(entry.get("cavity_min", -1.0)), float(entry.get("cavity_max", 1.0)),
 			float(CurveFieldData.point_count(gradient_curve)), 0.0)
-		var curve_pair: Array = CurveFieldData.pack_to_vec4_pair(gradient_curve)
-		curve_ab[i] = curve_pair[0] as Vector4
-		curve_cd[i] = curve_pair[1] as Vector4
+		var curve_quad: Array = CurveFieldData.pack_to_vec4s(gradient_curve)
+		curve_ab[i] = curve_quad[0] as Vector4
+		curve_cd[i] = curve_quad[1] as Vector4
+		curve_ef[i] = curve_quad[2] as Vector4
+		curve_gh[i] = curve_quad[3] as Vector4
 	return {
 		"count": count, "a": a, "b": b, "c": c, "d": d, "e": e, "f": f, "g": g, "h": h,
-		"curve_ab": curve_ab, "curve_cd": curve_cd,
+		"curve_ab": curve_ab, "curve_cd": curve_cd, "curve_ef": curve_ef, "curve_gh": curve_gh,
 		"custom_count": _biome_tex_custom_names.size(),
 		"custom_names": _biome_tex_custom_names,
 		"custom_tile_m": _biome_tex_custom_tile_m,

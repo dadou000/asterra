@@ -14,17 +14,19 @@
 //   a = (biome_id, layer_type, scale, amount_m)
 //   b = (param [fbm passes 1-4, terrace steps 2-24], seed,
 //        angle_deg [layer_type 3/4 only -- flow/ridge orientation],
-//        response_curve_point_count)
+//        response_curve_point_count [2-8])
 //   c = (curve_x0, curve_y0, curve_x1, curve_y1)
 //   d = (curve_x2, curve_y2, curve_x3, curve_y3)
+//   e = (curve_x4, curve_y4, curve_x5, curve_y5)
+//   f = (curve_x6, curve_y6, curve_x7, curve_y7)
 // layer_type: 0 fbm noise, 1 ridged, 2 terraced, 3 water erosion (subtractive,
 //             domain-warped ridged channels -- see bp_erosion_channels), 4
 //             sediment deposit (additive, slope-biased talus -- see
 //             bp_sediment_deposit). amount_m may be negative to carve.
 // Every layer type first computes its own natural [0,1] intensity ("how
 // ridge-like", "which terrace step", "how deep an erosion channel", etc.)
-// before scaling by amount_m -- the optional response curve (c/d, 2-4 (x,y)
-// points, see CurveFieldData/bp_curve_eval below) reshapes THAT [0,1]
+// before scaling by amount_m -- the optional response curve (c/d/e/f, 2-8
+// (x,y) points, see CurveFieldData/bp_curve_eval below) reshapes THAT [0,1]
 // value, so e.g. a ridged layer's peaks can be sharpened/flattened or a
 // terrace layer's step distribution skewed, without changing amount_m or
 // scale. The identity curve ([0,0],[1,1]) is a precise no-op, so this is
@@ -52,47 +54,53 @@ uniform vec4 u_biome_layer_a[BIOME_LAYER_MAX];
 uniform vec4 u_biome_layer_b[BIOME_LAYER_MAX];
 uniform vec4 u_biome_layer_c[BIOME_LAYER_MAX];
 uniform vec4 u_biome_layer_d[BIOME_LAYER_MAX];
+uniform vec4 u_biome_layer_e[BIOME_LAYER_MAX];
+uniform vec4 u_biome_layer_f[BIOME_LAYER_MAX];
 uniform float u_biome_blend_m[18];
 
-// Piecewise-smoothstep response curve, 2-4 (x,y) control points packed two
+// Piecewise-smoothstep response curve, 2-8 (x,y) control points packed two
 // per vec4 -- mirrors CurveFieldData.evaluate on the CPU exactly (same
-// smoothstep rule, same point layout), which is what the CPU AGL/contact
-// mirror (TerrainDisplacementRuntime._biome_layer_value) uses, so a curved
-// layer displaces identically for rendering and for gameplay. Duplicated
-// (rather than shared via #include) in terrain_biome_texture.gdshaderinc,
-// following this codebase's existing convention for code needed by both
-// biome shaderincs: neither has an include guard, and both end up included
-// together in the same fragment shader, so a shared #include would
-// double-declare it.
-float bp_curve_eval(vec4 curve_ab, vec4 curve_cd, int count, float x) {
+// segment search, same smoothstep rule, same point layout), which is what the
+// CPU AGL/contact mirror (TerrainDisplacementRuntime._biome_layer_value)
+// uses, so a curved layer displaces identically for rendering and for
+// gameplay. Duplicated (rather than shared via #include) in
+// terrain_biome_texture.gdshaderinc, following this codebase's existing
+// convention for code needed by both biome shaderincs: neither has an include
+// guard, and both end up included together in the same fragment shader, so a
+// shared #include would double-declare it.
+//
+// The fixed 8-slot local (`pts`) is unrelated to the "no local arrays"
+// caution in this file's header: that is about the authored-displacement
+// bytecode VM's 32-register dynamic file (the thing that provoked NVIDIA
+// device loss on shader recompile). A small, fixed-size function local like
+// this lowers to ordinary SSA temporaries and is always safe to compile.
+float bp_curve_eval(vec4 ab, vec4 cd, vec4 ef, vec4 gh, int count, float x) {
 	x = clamp(x, 0.0, 1.0);
-	int n = clamp(count, 2, 4);
-	vec2 p0 = curve_ab.xy;
-	vec2 p1 = curve_ab.zw;
-	vec2 p2 = (n >= 3) ? curve_cd.xy : p1;
-	vec2 p3 = (n >= 4) ? curve_cd.zw : p2;
-	vec2 a;
-	vec2 b;
-	if (n == 2) {
-		a = p0;
-		b = p1;
-	} else if (n == 3) {
-		a = (x <= p1.x) ? p0 : p1;
-		b = (x <= p1.x) ? p1 : p2;
-	} else {
-		if (x <= p1.x) {
-			a = p0;
-			b = p1;
-		} else if (x <= p2.x) {
-			a = p1;
-			b = p2;
-		} else {
-			a = p2;
-			b = p3;
+	int n = clamp(count, 2, 8);
+	vec2 pts[8];
+	pts[0] = ab.xy;
+	pts[1] = ab.zw;
+	pts[2] = cd.xy;
+	pts[3] = cd.zw;
+	pts[4] = ef.xy;
+	pts[5] = ef.zw;
+	pts[6] = gh.xy;
+	pts[7] = gh.zw;
+	float result = pts[0].y;
+	for (int i = 0; i < 7; i++) {
+		if (i > n - 2) {
+			break;
+		}
+		vec2 a = pts[i];
+		vec2 b = pts[i + 1];
+		result = b.y;
+		if (x <= b.x || i == n - 2) {
+			float t = clamp((x - a.x) / max(b.x - a.x, 1e-5), 0.0, 1.0);
+			result = mix(a.y, b.y, smoothstep(0.0, 1.0, t));
+			break;
 		}
 	}
-	float t = clamp((x - a.x) / max(b.x - a.x, 1e-5), 0.0, 1.0);
-	return mix(a.y, b.y, smoothstep(0.0, 1.0, t));
+	return result;
 }
 
 float bp_hash(ivec3 p, int seed) {
@@ -386,7 +394,7 @@ float bp_sediment_deposit(vec3 d, float scale, int seed, int passes, float angle
 // through the layer's own response curve (a precise no-op at the identity
 // curve), THEN scales/re-centres and multiplies by amount -- see the header
 // comment's "Every layer type first computes..." paragraph.
-float bp_layer_value(vec3 d, vec4 a, vec4 b, vec4 c, vec4 cd, float spacing_m) {
+float bp_layer_value(vec3 d, vec4 a, vec4 b, vec4 cc, vec4 cd, vec4 ce, vec4 cf, float spacing_m) {
 	int layer_type = int(floor(a.y + 0.5));
 	float scale = a.z;
 	float amount = a.w;
@@ -396,22 +404,22 @@ float bp_layer_value(vec3 d, vec4 a, vec4 b, vec4 c, vec4 cd, float spacing_m) {
 	if (layer_type == 1) {
 		float ridge = 1.0 - abs(bp_fbm(d, scale, seed, param, spacing_m));
 		float shape01 = ridge * ridge;
-		return bp_curve_eval(c, cd, curve_count, shape01) * amount;
+		return bp_curve_eval(cc, cd, ce, cf, curve_count, shape01) * amount;
 	} else if (layer_type == 2) {
 		float field = bp_fbm(d, scale, seed, 1, spacing_m);
 		float steps = clamp(float(param), 2.0, 24.0);
 		float terrace = floor((field * 0.5 + 0.5) * steps) / max(steps - 1.0, 1.0);
-		float curved = bp_curve_eval(c, cd, curve_count, terrace);
+		float curved = bp_curve_eval(cc, cd, ce, cf, curve_count, terrace);
 		return (curved * 2.0 - 1.0) * amount;
 	} else if (layer_type == 3) {
 		float channel = bp_erosion_channels(d, scale, seed, param, b.z, spacing_m);
-		return -bp_curve_eval(c, cd, curve_count, channel) * amount;
+		return -bp_curve_eval(cc, cd, ce, cf, curve_count, channel) * amount;
 	} else if (layer_type == 4) {
 		float deposit = bp_sediment_deposit(d, scale, seed, param, b.z, spacing_m);
-		return bp_curve_eval(c, cd, curve_count, deposit) * amount;
+		return bp_curve_eval(cc, cd, ce, cf, curve_count, deposit) * amount;
 	}
 	float fbm = bp_fbm(d, scale, seed, param, spacing_m);
-	float curved0 = bp_curve_eval(c, cd, curve_count, fbm * 0.5 + 0.5);
+	float curved0 = bp_curve_eval(cc, cd, ce, cf, curve_count, fbm * 0.5 + 0.5);
 	return (curved0 * 2.0 - 1.0) * amount;
 }
 
@@ -474,7 +482,8 @@ float asterra_biome_profile_height(vec3 dir, float spacing_m) {
 		if (cov <= 0.0) {
 			continue;
 		}
-		total += bp_layer_value(d, a, u_biome_layer_b[i], u_biome_layer_c[i], u_biome_layer_d[i], spacing_m) * cov;
+		total += bp_layer_value(d, a, u_biome_layer_b[i], u_biome_layer_c[i], u_biome_layer_d[i],
+			u_biome_layer_e[i], u_biome_layer_f[i], spacing_m) * cov;
 	}
 	return total;
 }

@@ -221,7 +221,7 @@ func _update_visible_cap(observer_radius: float, planet_radius: float) -> void:
 
 
 func _request_visible_pages() -> void:
-	if not _have_anchor or Planet.cfg == null:
+	if not _have_anchor or _planet().cfg == null:
 		return
 	var now: int = Time.get_ticks_msec()
 	if now - _last_visible_request_msec < MIN_VISIBLE_REQUEST_INTERVAL_MS:
@@ -242,7 +242,7 @@ func _request_visible_pages() -> void:
 		priorities.resize(directions.size())
 		for i: int in directions.size():
 			var angular_distance: float = acos(clampf(_center_dir.dot(directions[i]), -1.0, 1.0))
-			var distance_m: float = angular_distance * Planet.cfg.planet_radius
+			var distance_m: float = angular_distance * _planet().cfg.planet_radius
 			var radial_q: float = clampf(distance_m / level_half, 0.0, 1.0)
 			priorities[i] = base_priority + radial_q * REQUEST_RADIAL_PRIORITY_SPAN
 
@@ -275,7 +275,7 @@ func _request_directions_for_level(level: int) -> Array[Vector3]:
 			if offset.length() > radial_limit:
 				continue
 			result.append(_direction_for_offset(_center_dir, _center_right, _center_up,
-				offset, Planet.cfg.planet_radius))
+				offset, _planet().cfg.planet_radius))
 	return result
 
 

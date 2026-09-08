@@ -92,6 +92,12 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 	_bindings_ready = false
 	_binding_generation = -1
 	_binding_macro_rid = RID()
+	# The PlanetContext macro texture these uniform sets reference is freed as part
+	# of this same adopt, and RenderingDevice auto-frees any uniform set whose
+	# resources go with it. Drop our handles WITHOUT queuing a free -- the deferred
+	# _render_free_rids would otherwise double-free them ("Attempted to free
+	# invalid ID", a race storm on a seamless active-body swap).
+	_slot_uniform_sets.clear()
 	_pending.clear()
 	_samples.clear()
 	for i in SLOT_COUNT:

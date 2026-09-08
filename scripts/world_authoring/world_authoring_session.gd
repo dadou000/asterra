@@ -31,6 +31,20 @@ enum ApplyScope {
 const RECOVERY_PATH := "user://world_authoring/recovery.tres"
 const DEFAULT_PRESET_PATH := "user://world_authoring/presets/last_preset.tres"
 
+# Helion is Asterra's star and the root of the system frame (see Frames.gd --
+# these mirror helion_radius_m / helion_distance_m and the Sol-like GM the climate
+# model assumes). Every Planet Studio system carries it as the parentless root
+# STAR, and the primary terrestrial body orbits it at ~1 AU.
+const HELION_BODY_ID := "helion"
+const HELION_RADIUS_M := 696_340_000.0
+const HELION_DISTANCE_M := 149_597_870_700.0
+const HELION_MASS_KG := 1.988_416e30
+const HELION_GM_M3_S2 := 1.327_124_400_18e20
+const HELION_SURFACE_GRAVITY_M_S2 := 274.0
+const HELION_SIDEREAL_ROTATION_S := 25.05 * 86_400.0
+const HELION_AXIAL_TILT_DEG := 7.25
+const PRIMARY_ORBIT_ECCENTRICITY := 0.0167
+
 # Planet Studio's "Biome Terrain" profiles are ordinary scoped displacement slots
 # (slot_id "simple-biome-terrain-<n>"). A recovery/preset file written by an older
 # build can hold retired node types or more enabled profiles than the shared
@@ -51,15 +65,44 @@ var apply_scope: int = ApplyScope.NONE
 var _undo_stack: Array[Dictionary] = []
 var _redo_stack: Array[Dictionary] = []
 
+const CELESTIAL_SYSTEM_GENERATOR := preload("res://scripts/world_authoring/celestial_system_generator.gd")
+
 func bootstrap_from_current_world() -> void:
-	if _bootstrap_from_recovery():
-		return
 	var generation: Resource = GENERATION_PROFILE_SCRIPT.new()
 	if ResourceLoader.exists("res://world.tres"):
 		var loaded: Resource = ResourceLoader.load("res://world.tres")
 		if loaded != null:
 			generation.call("import_from_resource", loaded)
+	var env_seed := OS.get_environment("ASTERRA_SYSTEM_SEED")
+	if env_seed != "" and env_seed.is_valid_int() and env_seed.to_int() != 0:
+		generation.set(&"system_seed", env_seed.to_int())
+
+	# A seeded multi-planet system is deterministic, so regenerate it fresh each
+	# open rather than restoring a stale recovery snapshot.
+	if int(generation.get(&"system_seed")) != 0:
+		bootstrap_from_generated_system(generation)
+		return
+	if _bootstrap_from_recovery():
+		return
 	bootstrap_from_generation_profile(generation)
+
+
+## Build the full CelestialSystemGenerator archetype system (inner hot rocks, the
+## terran home, an ice world, a gas giant + moons, a distant pulsar) with every
+## body carrying its own archetype-tuned generation profile, so the celestial map
+## shows them all and switching the authoring target picks up that body's terrain.
+func bootstrap_from_generated_system(baseline: Resource) -> void:
+	var system: Resource = CELESTIAL_SYSTEM_GENERATOR.generate(
+		int(baseline.get(&"system_seed")), float(baseline.get(&"axial_tilt_deg")))
+	CELESTIAL_SYSTEM_GENERATOR.apply_archetype_profiles(system, baseline)
+	system.set(&"active_body_id", CELESTIAL_SYSTEM_GENERATOR.HOME_BODY_ID)
+	system.call("ensure_valid")
+	applied_system = system
+	staged_system = system.duplicate(true)
+	dirty = false
+	apply_scope = ApplyScope.NONE
+	_undo_stack.clear()
+	_redo_stack.clear()
 
 
 func _bootstrap_from_recovery() -> bool:
@@ -71,7 +114,9 @@ func _bootstrap_from_recovery() -> bool:
 		error_reported.emit("Planet Studio recovery is invalid; starting from the current world: %s" % path)
 		return false
 	loaded.call("ensure_valid")
+	var added_star: bool = _ensure_helion_root_star(loaded)
 	var repaired: bool = _sanitize_biome_terrain_slots(loaded)
+	repaired = repaired or added_star
 	applied_system = loaded.duplicate(true)
 	staged_system = loaded.duplicate(true)
 	dirty = false
@@ -118,6 +163,7 @@ func bootstrap_from_generation_profile(generation: Resource) -> void:
 	body_array.append(body)
 	system.set(&"bodies", body_array)
 	system.set(&"active_body_id", String(body.get(&"body_id")))
+	_ensure_helion_root_star(system)
 	system.call("ensure_valid")
 
 	applied_system = system
@@ -128,6 +174,109 @@ func bootstrap_from_generation_profile(generation: Resource) -> void:
 	_redo_stack.clear()
 	_autosave_recovery()
 	changed.emit(dirty, apply_scope)
+
+
+## Guarantees the system has Helion as a parentless root STAR AND that every
+## parentless terrestrial body orbits it (~1 AU by default). Returns true when it
+## changed the system, so callers can re-persist / migrate a legacy save.
+##
+## The detailed terrain/ocean/contact renderer is body-centre-aware
+## (OrbitalMotionRuntime keeps Frames anchored to the selected body), so a
+## terrestrial body being a child of Helion no longer disables it.
+func _ensure_helion_root_star(system: Resource) -> bool:
+	if system == null:
+		return false
+	var bodies: Array = system.get(&"bodies")
+	var changed: bool = false
+
+	var star: Resource = _find_root_star(bodies)
+	if star == null:
+		star = _make_helion_body()
+		system.call("add_body", star)
+		bodies = system.get(&"bodies")
+		changed = true
+
+	var star_id: String = String(star.get(&"body_id"))
+	for body_value: Variant in bodies:
+		var body: Resource = body_value as Resource
+		if body == null or body == star:
+			continue
+		if int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+			continue
+		var parent_id: String = String(body.get(&"parent_body_id"))
+		if parent_id.is_empty():
+			body.set(&"parent_body_id", star_id)
+			_seed_primary_orbit(body)
+			changed = true
+		elif parent_id == star_id and _seed_primary_orbit(body):
+			# Already a direct child of the star (migrated by an earlier build) but
+			# missing the day-0 sun-direction calibration -- apply it now.
+			changed = true
+
+	if changed:
+		system.call("ensure_valid")
+	return changed
+
+
+func _find_root_star(bodies: Array) -> Resource:
+	for body_value: Variant in bodies:
+		var body: Resource = body_value as Resource
+		if body != null and int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR \
+				and String(body.get(&"parent_body_id")).is_empty():
+			return body
+	return null
+
+
+## Ensure the primary body has a real ~1 AU orbit AND that system_time_s == 0
+## reproduces the historical fixed sun direction, so the planet's day-0 look is
+## unchanged and only scrubbing the clock moves the sun. Returns true if it
+## changed anything (idempotent -- a calibrated / authored orbit is left alone).
+func _seed_primary_orbit(body: Resource) -> bool:
+	var orbit: Resource = body.get(&"orbit") as Resource
+	if orbit == null:
+		body.call("ensure_children")
+		orbit = body.get(&"orbit") as Resource
+	if orbit == null:
+		return false
+	var changed: bool = false
+	if float(orbit.get(&"semi_major_axis_m")) <= 0.0:
+		orbit.set(&"semi_major_axis_m", HELION_DISTANCE_M)
+		orbit.set(&"eccentricity", PRIMARY_ORBIT_ECCENTRICITY)
+		orbit.set(&"mean_anomaly_at_epoch_deg", 0.0)
+		changed = true
+	# Calibrate the day-0 sun direction only when the phase is still untouched.
+	if is_equal_approx(float(orbit.get(&"argument_periapsis_deg")), 0.0) \
+			and is_equal_approx(float(orbit.get(&"mean_anomaly_at_epoch_deg")), 0.0) \
+			and is_equal_approx(float(body.get(&"rotation_phase_at_epoch_deg")), 0.0):
+		var ORBIT_MATH := preload("res://scripts/world_authoring/model/orbit_math.gd")
+		var align: Dictionary = ORBIT_MATH.epoch_alignment_for(
+			ORBIT_MATH.LEGACY_SUNWARD, float(body.get(&"axial_tilt_deg")))
+		orbit.set(&"argument_periapsis_deg", float(align["argp_deg"]))
+		body.set(&"rotation_phase_at_epoch_deg", float(align["rotation_phase0_deg"]))
+		changed = true
+	return changed
+
+
+func _make_helion_body() -> Resource:
+	var star: Resource = BODY_SCRIPT.new()
+	star.set(&"body_id", HELION_BODY_ID)
+	star.set(&"display_name", "Helion")
+	star.set(&"body_type", BODY_SCRIPT.BodyType.STAR)
+	star.set(&"parent_body_id", "")
+	star.set(&"radius_m", HELION_RADIUS_M)
+	star.set(&"mass_kg", HELION_MASS_KG)
+	star.set(&"gravitational_parameter_m3_s2", HELION_GM_M3_S2)
+	star.set(&"surface_gravity_m_s2", HELION_SURFACE_GRAVITY_M_S2)
+	star.set(&"sidereal_rotation_period_s", HELION_SIDEREAL_ROTATION_S)
+	star.set(&"axial_tilt_deg", HELION_AXIAL_TILT_DEG)
+	star.call("ensure_children")
+	# Star profile defaults are already Sol/G-class (5772 K, 1 L_sun, 0.27 deg
+	# apparent radius), which is exactly Helion -- only re-validate.
+	var star_profile: Resource = star.get(&"star_profile") as Resource
+	if star_profile != null and star_profile.has_method("ensure_valid"):
+		star_profile.call("ensure_valid")
+	return star
+
 
 func active_body() -> Resource:
 	if staged_system == null:
@@ -376,6 +525,7 @@ func load_preset(path: String = DEFAULT_PRESET_PATH) -> Error:
 	_redo_stack.clear()
 	staged_system = loaded.duplicate(true)
 	staged_system.call("ensure_valid")
+	_ensure_helion_root_star(staged_system)
 	_sanitize_biome_terrain_slots(staged_system)
 	dirty = true
 	apply_scope = ApplyScope.FULL_REBUILD

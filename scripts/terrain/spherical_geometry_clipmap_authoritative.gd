@@ -138,7 +138,7 @@ func set_contact_overlay(_direction: Vector3, _enabled: bool) -> void:
 ## RenderedTerrainContactQuery remains diagnostic; rigid contact uses the stable
 ## world-space physical query rather than camera-dependent LOD state.
 func rendered_contact_sample_params() -> Dictionary:
-	if Planet.cfg == null or _terrain_cache_active == null \
+	if _planet().cfg == null or _terrain_cache_active == null \
 			or not is_instance_valid(_terrain_cache_active):
 		return {}
 	var cache_texture: Variant = _terrain_cache_active.call("texture")
@@ -171,13 +171,13 @@ func rendered_contact_sample_params() -> Dictionary:
 ## The dense L0 micro lattice is preferred while it is the visible centre surface;
 ## otherwise the finest active clipmap level that contains the target is used.
 func debug_closest_rendered_vertex(target_direction: Vector3) -> Dictionary:
-	if Planet.cfg == null or not _have_anchor or target_direction.length_squared() <= 1e-12:
+	if _planet().cfg == null or not _have_anchor or target_direction.length_squared() <= 1e-12:
 		return {}
 	var d: Vector3 = target_direction.normalized()
 	var denom: float = d.dot(_anchor_dir)
 	if denom <= 0.01:
 		return {}
-	var radius: float = Planet.cfg.planet_radius
+	var radius: float = _planet().cfg.planet_radius
 	var target_plane := Vector2(d.dot(_anchor_right), d.dot(_anchor_up)) \
 		/ denom * radius
 

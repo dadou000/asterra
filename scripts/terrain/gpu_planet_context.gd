@@ -32,11 +32,41 @@ var hydrology_texture: Texture2DArray
 var rock_texture: Texture2DArray
 var biome_texture: Texture2DArray
 
+## Multi-body seam (see the seamless-multi-planet design). The autoload
+## `PlanetContext` leaves this null and follows the `Planet` autoload exactly as
+## before. A non-primary body's context (built by BodyRuntime, M1+) is pointed at
+## that body's own sampler via `bind_sampler()` before it enters the tree, so its
+## `generation` counter and texture set are fully independent. Duck-typed to a
+## node exposing a `world_ready` signal plus `ready_state` / `fields`; the string
+## signal API is used because the concrete sampler type has no `class_name`.
+var _sampler: Node = null
+
+
+## Follow `sampler` instead of the `Planet` autoload. Call before `_ready` (or any
+## time after -- it (re)connects and rebuilds from the current fields if ready).
+func bind_sampler(sampler: Node) -> void:
+	if _sampler == sampler:
+		return
+	if _sampler != null and is_instance_valid(_sampler) \
+			and _sampler.is_connected(&"world_ready", _on_world_ready):
+		_sampler.disconnect(&"world_ready", _on_world_ready)
+	_sampler = sampler
+	_bind_current_sampler()
+
+
 func _ready() -> void:
-	if not Planet.world_ready.is_connected(_on_world_ready):
-		Planet.world_ready.connect(_on_world_ready)
-	if Planet.ready_state and Planet.fields != null:
-		build_from_fields(Planet.fields)
+	if _sampler == null:
+		_sampler = get_node_or_null(^"/root/Planet")
+	_bind_current_sampler()
+
+
+func _bind_current_sampler() -> void:
+	if _sampler == null:
+		return
+	if not _sampler.is_connected(&"world_ready", _on_world_ready):
+		_sampler.connect(&"world_ready", _on_world_ready)
+	if bool(_sampler.get(&"ready_state")) and _sampler.get(&"fields") != null:
+		build_from_fields(_sampler.get(&"fields"))
 
 func _on_world_ready(fields: PlanetFields) -> void:
 	build_from_fields(fields)

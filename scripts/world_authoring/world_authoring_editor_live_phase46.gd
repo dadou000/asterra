@@ -1157,12 +1157,7 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_biome_texture(graph, layers, "Change biome texture band colour")
 	)
 	appearance_row.add_child(color_button)
-	var appearance_help := Label.new()
-	appearance_help.text = "A flat colour, or one of the game's tiled ground materials (optionally tinted by the colour)."
-	appearance_help.modulate = Color(0.58, 0.68, 0.76)
-	appearance_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	appearance_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	appearance_row.add_child(appearance_help)
+	_phase47_add_help_label(box, "A flat colour, or one of the game's tiled ground materials (optionally tinted by the colour).")
 	if int(layer.get("texture_choice", 0)) != 0:
 		_phase47_add_texture_layer_number(box, graph, layers, layer, "Colour tint strength", "tint_strength",
 			0.0, 1.0, 0.01, "0 = pure texture, 1 = the colour above replaces it entirely.")
@@ -1184,19 +1179,14 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_biome_texture(graph, layers, "Change biome texture band gradient colour")
 	)
 	gradient_row.add_child(gradient_color_button)
-	var gradient_help := Label.new()
-	gradient_help.text = "Blends from the colour above (at the low end of the height range) to this one (at the high end)."
-	gradient_help.modulate = Color(0.58, 0.68, 0.76)
-	gradient_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	gradient_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	gradient_row.add_child(gradient_help)
+	_phase47_add_help_label(box, "Blends from the colour above (at the low end of the height range) to this one (at the high end).")
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Gradient strength", "gradient_strength",
 		0.0, 1.0, 0.01, "0 = flat colour (gradient off). 1 = fully fades across the height range into the gradient end colour above.")
+	var restage_gradient_curve := func() -> void:
+		_phase47_stage_biome_texture(graph, layers, "Tune biome texture gradient distribution")
 	_phase47_add_curve_field(box, "BiomeTextureLayerGradientCurve_%d" % index,
 		"Gradient distribution — reshapes WHERE across the height range the colour transitions (e.g. hold the low colour longer, then transition quickly). Flat diagonal = plain linear fade.",
-		layer, "gradient_curve", func() -> void:
-			_phase47_stage_biome_texture(graph, layers, "Tune biome texture gradient distribution")
-	)
+		layer, "gradient_curve", restage_gradient_curve, "Custom gradient distribution curve")
 
 	var height_ref_row := HBoxContainer.new()
 	height_ref_row.add_theme_constant_override("separation", 10)
@@ -1215,12 +1205,7 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_biome_texture(graph, layers, "Change biome texture band height reference")
 	)
 	height_ref_row.add_child(height_ref_picker)
-	var height_ref_help := Label.new()
-	height_ref_help.text = "Absolute: height range below is metres above sea level. Relative: it's metres above/below this spot's own broad terrain trend -- e.g. \"top 50m of whatever hill this is,\" wherever that hill happens to sit."
-	height_ref_help.modulate = Color(0.58, 0.68, 0.76)
-	height_ref_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	height_ref_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	height_ref_row.add_child(height_ref_help)
+	_phase47_add_help_label(box, "Absolute: height range below is metres above sea level. Relative: it's metres above/below this spot's own broad terrain trend -- e.g. \"top 50m of whatever hill this is,\" wherever that hill happens to sit.")
 
 	_phase47_add_texture_layer_number(box, graph, layers, layer, "Height range: from", "height_min",
 		-1000000.0, 1000000.0, 1.0, "This band starts fading in above this elevation. Very low/high values effectively disable this edge.")
@@ -1283,12 +1268,7 @@ func _phase47_build_texture_layer_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_biome_texture(graph, layers, "Change biome texture band emission colour")
 	)
 	emission_row.add_child(emission_color_button)
-	var emission_help := Label.new()
-	emission_help.text = "Adds a self-lit glow on top of normal lighting -- lava, glowing crystal, lit windows. Stacks additively, doesn't replace the band's lit appearance."
-	emission_help.modulate = Color(0.58, 0.68, 0.76)
-	emission_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	emission_help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	emission_row.add_child(emission_help)
+	_phase47_add_help_label(box, "Adds a self-lit glow on top of normal lighting -- lava, glowing crystal, lit windows. Stacks additively, doesn't replace the band's lit appearance.")
 	emission_toggle.toggled.connect(func(pressed: bool) -> void:
 		layer["emission_enabled"] = pressed
 		emission_color_button.disabled = not pressed
@@ -1332,12 +1312,7 @@ func _phase47_add_texture_layer_toggle_number(parent: VBoxContainer, graph: Reso
 		spin.editable = pressed
 		_phase47_stage_biome_texture(graph, layers, "Toggle biome texture band: %s" % enabled_key)
 	)
-	var help := Label.new()
-	help.text = help_text
-	help.modulate = Color(0.58, 0.68, 0.76)
-	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(help)
+	_phase47_add_help_label(parent, help_text)
 
 
 func _phase47_add_texture_layer_number(parent: VBoxContainer, graph: Resource, layers: Array,
@@ -1363,12 +1338,7 @@ func _phase47_add_texture_layer_number(parent: VBoxContainer, graph: Resource, l
 		_phase47_stage_biome_texture(graph, layers, "Tune biome texture band: %s" % key)
 	)
 	row.add_child(spin)
-	var help := Label.new()
-	help.text = help_text
-	help.modulate = Color(0.58, 0.68, 0.76)
-	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(help)
+	_phase47_add_help_label(parent, help_text)
 
 
 func _phase47_build_all_rings_notice() -> void:
@@ -1396,7 +1366,7 @@ func _phase47_build_preset_shelf(graph: Resource) -> void:
 		button.name = "TerrainLook_%s" % String(preset["id"])
 		button.text = String(preset["label"])
 		button.tooltip_text = String(preset["tip"])
-		button.custom_minimum_size = Vector2(185.0, 38.0)
+		button.custom_minimum_size = Vector2(176.0, 38.0)
 		button.pressed.connect(_phase47_apply_preset.bind(graph, preset))
 		grid.add_child(button)
 	var reset := Button.new()
@@ -1455,12 +1425,7 @@ func _phase47_add_control(parent: VBoxContainer, graph: Resource,
 	spin.tooltip_text = String(control.get("description", ""))
 	spin.value_changed.connect(_phase47_set_control.bind(graph, key))
 	row.add_child(spin)
-	var help := Label.new()
-	help.text = String(control.get("description", ""))
-	help.modulate = Color(0.58, 0.68, 0.76)
-	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(help)
+	_phase47_add_help_label(parent, String(control.get("description", "")))
 
 
 func _phase47_build_biome_note() -> void:
@@ -1633,7 +1598,7 @@ func _phase47_build_biome_diagnostics(terrain: Resource, biome_id: int) -> void:
 	readout.name = "BiomeTerrainDiagReadout"
 	readout.add_theme_font_size_override("font_size", 12)
 	readout.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	readout.custom_minimum_size = Vector2(520.0, 0.0)
+	readout.custom_minimum_size = Vector2(460.0, 0.0)
 	box.add_child(readout)
 	readout.text = _phase47_biome_diag_text(terrain, biome_id)
 	var timer := Timer.new()
@@ -2246,11 +2211,11 @@ func _phase47_build_biome_layer_card(parent: VBoxContainer, graph: Resource,
 			0.0, 360.0, 1.0,
 			"Rotates the channel/flow direction. 90° is the default and usually reads best; try other angles if the channels look too aligned with one axis.")
 
+	var restage_response_curve := func() -> void:
+		_phase47_stage_biome_profile(graph, stack, "Tune biome terrain layer response curve")
 	_phase47_add_curve_field(box, "BiomeTerrainLayerCurve_%d" % index,
 		"Response curve — reshapes this layer's own natural 0..1 intensity before it's scaled by Feature height (e.g. sharpen ridge peaks, flatten valleys, bias terrace steps). Flat diagonal = no change.",
-		layer, "response_curve", func() -> void:
-			_phase47_stage_biome_profile(graph, stack, "Tune biome terrain layer response curve")
-	)
+		layer, "response_curve", restage_response_curve, "Custom response curve")
 
 
 func _phase47_move_biome_layer(graph: Resource, stack: Dictionary, index: int,
@@ -2289,36 +2254,102 @@ func _phase47_add_biome_layer_number(parent: VBoxContainer, graph: Resource, sta
 		_phase47_stage_biome_profile(graph, stack, "Tune biome terrain layer: %s" % key)
 	)
 	row.add_child(spin)
+	_phase47_add_help_label(parent, help_text)
+
+
+## Full-width help text placed under a control row rather than inside the
+## row's own HBoxContainer. An autowrapping Label in an HBox is measured at
+## its full single-line width before the container hands it a real width, so
+## it forces the row wider than the workspace and then gets clipped -- which
+## is what made the Biome Terrain / Biome Texture panels overflow and threw
+## off the response-curve pointer maths. On its own line it just wraps.
+func _phase47_add_help_label(parent: VBoxContainer, text: String) -> void:
+	if text.is_empty():
+		return
 	var help := Label.new()
-	help.text = help_text
+	help.text = text
 	help.modulate = Color(0.58, 0.68, 0.76)
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(help)
+	parent.add_child(help)
 
 
 ## A labeled CurveFieldControl bound to `data[key]` (a PackedFloat32Array --
 ## see CurveFieldData) -- shared by Biome Terrain's response curve and Biome
 ## Texture's gradient distribution curve, since both are the same "reshape a
 ## normalized [0,1] value" authoring problem.
+##
+## The curve is opt-in: a CheckButton gates it, and while it is off the widget
+## is collapsed and `data[key]` is pinned to the identity curve (a precise
+## no-op on both the GPU and the CPU/contact mirror). An already-authored
+## non-identity curve loads with the toggle on. "Add point" and "Reset" sit
+## next to the toggle so extending the curve past its two endpoints is
+## discoverable without knowing the double-click gesture.
 func _phase47_add_curve_field(parent: VBoxContainer, control_name: String,
-		label_text: String, data: Dictionary, key: String, on_change: Callable) -> void:
+		label_text: String, data: Dictionary, key: String, on_change: Callable,
+		toggle_label: String = "Custom curve") -> void:
 	var wrap := VBoxContainer.new()
-	wrap.add_theme_constant_override("separation", 2)
+	wrap.add_theme_constant_override("separation", 3)
 	parent.add_child(wrap)
+
+	var curve_field := CurveFieldControl.new()
+	curve_field.name = control_name
+	curve_field.set_points(data.get(key, CurveFieldData.identity()) as PackedFloat32Array)
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 3)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	wrap.add_child(header)
+	var toggle := CheckButton.new()
+	toggle.name = "%s_Enabled" % control_name
+	toggle.text = toggle_label
+	toggle.button_pressed = not CurveFieldData.is_identity(curve_field.get_points())
+	header.add_child(toggle)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+	var add_point := Button.new()
+	add_point.name = "%s_AddPoint" % control_name
+	add_point.text = "Add point"
+	add_point.tooltip_text = "Insert another control point in the widest gap (up to %d), without changing the current shape." % CurveFieldData.MAX_POINTS
+	add_point.pressed.connect(curve_field.add_midpoint)
+	header.add_child(add_point)
+	var reset := Button.new()
+	reset.name = "%s_Reset" % control_name
+	reset.text = "Reset"
+	reset.tooltip_text = "Return to a flat diagonal (no reshaping)."
+	reset.pressed.connect(curve_field.reset_to_identity)
+	header.add_child(reset)
+
+	wrap.add_child(content)
 	var label := Label.new()
 	label.text = label_text
 	label.modulate = Color(0.58, 0.68, 0.76)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	wrap.add_child(label)
-	var curve_field := CurveFieldControl.new()
-	curve_field.name = control_name
-	curve_field.set_points(data.get(key, CurveFieldData.identity()) as PackedFloat32Array)
-	curve_field.curve_changed.connect(func(points: PackedFloat32Array) -> void:
-		data[key] = points
+	content.add_child(label)
+	content.add_child(curve_field)
+
+	var apply_enabled := func(enabled: bool) -> void:
+		content.visible = enabled
+		add_point.disabled = not enabled
+		reset.disabled = not enabled
+	apply_enabled.call(toggle.button_pressed)
+
+	curve_field.curve_changed.connect(func(pts: PackedFloat32Array) -> void:
+		data[key] = pts
+		if not toggle.button_pressed and not CurveFieldData.is_identity(pts):
+			toggle.set_pressed_no_signal(true)
+			apply_enabled.call(true)
 		on_change.call()
 	)
-	wrap.add_child(curve_field)
+	toggle.toggled.connect(func(pressed: bool) -> void:
+		apply_enabled.call(pressed)
+		if not pressed:
+			curve_field.set_points(CurveFieldData.identity())
+			data[key] = CurveFieldData.identity()
+		on_change.call()
+	)
 
 
 ## Total biome terrain layers across every biome slot with real content

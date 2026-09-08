@@ -132,7 +132,7 @@ func _update_active_levels() -> void:
 
 func _update_screen_space_min_level() -> void:
 	var camera: Camera3D = get_viewport().get_camera_3d()
-	if camera == null or Planet.cfg == null:
+	if camera == null or _planet().cfg == null:
 		_active_min_level = 0
 		_active_min_initialized = false
 		return
@@ -144,7 +144,7 @@ func _update_screen_space_min_level() -> void:
 	if camera.keep_aspect == Camera3D.KEEP_WIDTH:
 		vertical_fov = 2.0 * atan(tan(vertical_fov * 0.5) / maxf(aspect, 1e-6))
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	var planet_pos: Vector3 = camera.global_position + origin
 	var observer_radius: float = planet_pos.length()
 	if observer_radius <= 1.0:
@@ -156,9 +156,9 @@ func _update_screen_space_min_level() -> void:
 	# One C2 macro lookup per frame is deliberately conservative and tiny compared
 	# with keeping an unnecessary 400x400 L0 on the GPU. Fine procedural relief is
 	# covered by LOD_SURFACE_GUARD_M.
-	var local_macro_h: float = Planet.macro_height(observer_dir)
+	var local_macro_h: float = _planet().macro_height(observer_dir)
 	_screen_space_surface_distance_m = maxf(
-		observer_radius - (Planet.cfg.planet_radius + local_macro_h) - LOD_SURFACE_GUARD_M,
+		observer_radius - (_planet().cfg.planet_radius + local_macro_h) - LOD_SURFACE_GUARD_M,
 		0.0)
 	_screen_space_metres_per_pixel = 2.0 * _screen_space_surface_distance_m \
 		* tan(vertical_fov * 0.5) / viewport_h
@@ -395,7 +395,7 @@ func debug_ring_indicator_enabled() -> bool:
 
 
 func _update_ring_labels(dt: float) -> void:
-	if not _debug_ring_indicator or not Planet.ready_state or Planet.cfg == null:
+	if not _debug_ring_indicator or not _planet().ready_state or _planet().cfg == null:
 		return
 
 	_ring_label_refresh_left -= dt
@@ -407,7 +407,7 @@ func _update_ring_labels(dt: float) -> void:
 		_ring_label_last_max = _active_max_level
 		_refresh_ring_label_planet_positions()
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	for level: int in _ring_labels.size():
 		var label: Label3D = _ring_labels[level]
 		var active: bool = level >= _active_min_level and level <= _active_max_level
@@ -417,7 +417,7 @@ func _update_ring_labels(dt: float) -> void:
 
 
 func _refresh_ring_label_planet_positions() -> void:
-	var radius: float = Planet.cfg.planet_radius
+	var radius: float = _planet().cfg.planet_radius
 	var marker_axis := Vector2(cos(RING_LABEL_AZIMUTH_RAD), sin(RING_LABEL_AZIMUTH_RAD))
 	for level: int in _ring_labels.size():
 		if level < _active_min_level or level > _active_max_level:
@@ -437,7 +437,7 @@ func _refresh_ring_label_planet_positions() -> void:
 		var offset_m: Vector2 = marker_axis * marker_radius_m
 		var dir: Vector3 = _direction_for_offset(
 			_center_dir, _center_right, _center_up, offset_m, radius)
-		var macro_h: float = Planet.macro_height(dir)
+		var macro_h: float = _planet().macro_height(dir)
 		var lift_m: float = clampf(spacing * 0.20, 4.0, 160.0)
 		_ring_label_planet_positions[level] = dir * (radius + macro_h + lift_m)
 

@@ -130,6 +130,12 @@ func _build_shell() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Never scroll the workspace sideways: force every row to the panel's width
+	# so autowrapping help text actually wraps (instead of being laid out at its
+	# full single-line width and clipped) and so widgets that map the pointer
+	# through their own `size` -- the response-curve editor -- match what is on
+	# screen.
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	content.add_child(scroll)
 	_workspace = VBoxContainer.new()
 	_workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL

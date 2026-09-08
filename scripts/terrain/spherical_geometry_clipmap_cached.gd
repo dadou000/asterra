@@ -87,7 +87,16 @@ func _process(dt: float) -> void:
 
 	super._process(dt)
 
-	if _material == null or Planet.cfg == null or not Planet.ready_state:
+	if _material == null or _planet().cfg == null or not _planet().ready_state:
+		return
+
+	# A concurrently-rendered non-active body (M5b) runs the base LOD/anchor/uniform
+	# path above but never dispatches the geomorph compute cache or plans a
+	# hand-off: it is always far, where the shared cache would only contend for the
+	# RenderingDevice while contributing sub-pixel detail. The cached surface shader
+	# falls back to orbit-elevation + biome colouring when u_terrain_cache_ready is 0.
+	if _concurrent_far_only:
+		_material.set_shader_parameter("u_terrain_cache_ready", 0.0)
 		return
 
 	var observer_state: Dictionary = _observer_surface_state()
@@ -111,9 +120,9 @@ func _process(dt: float) -> void:
 
 func _observer_surface_state() -> Dictionary:
 	var camera: Camera3D = get_viewport().get_camera_3d()
-	if camera == null or Planet.cfg == null:
+	if camera == null or _planet().cfg == null:
 		return {}
-	var observer_world: Vec3D = Frames.to_world(camera.global_position)
+	var observer_world: Vec3D = _obs_world(camera)
 	var observer_radius: float = observer_world.length()
 	if observer_radius <= 1.0:
 		return {}
@@ -121,18 +130,18 @@ func _observer_surface_state() -> Dictionary:
 	return {
 		"observer_radius": observer_radius,
 		"observer_dir": observer_unit.to_v3(),
-		"surface_world": observer_unit.mul(Planet.cfg.planet_radius),
+		"surface_world": observer_unit.mul(_planet().cfg.planet_radius),
 	}
 
 
 func _project_surface_to_active_anchor(surface_world: Vec3D) -> Vector2:
 	return _project_surface_gnomonic(
-		surface_world, _anchor_dir, _anchor_right, _anchor_up, Planet.cfg.planet_radius)
+		surface_world, _anchor_dir, _anchor_right, _anchor_up, _planet().cfg.planet_radius)
 
 
 func _project_surface_to_pending_anchor(surface_world: Vec3D) -> Vector2:
 	return _project_surface_gnomonic(surface_world, _pending_anchor_dir,
-		_pending_anchor_right, _pending_anchor_up, Planet.cfg.planet_radius)
+		_pending_anchor_right, _pending_anchor_up, _planet().cfg.planet_radius)
 
 
 func _resolve_parent_reanchor(previous_dir: Vector3, previous_world: Vec3D,
@@ -178,7 +187,7 @@ func _project_surface_to_anchor(surface_world: Vec3D, _anchor_world: Vec3D,
 	var right: Vector3 = tangent[0]
 	var up: Vector3 = tangent[1]
 	return _project_surface_gnomonic(
-		surface_world, anchor_dir, right, up, Planet.cfg.planet_radius)
+		surface_world, anchor_dir, right, up, _planet().cfg.planet_radius)
 
 
 func _republish_anchor_state(observer_state: Dictionary) -> void:
@@ -189,10 +198,10 @@ func _republish_anchor_state(observer_state: Dictionary) -> void:
 		round(offset.x / _base_spacing) * _base_spacing,
 		round(offset.y / _base_spacing) * _base_spacing)
 	_update_center_basis()
-	_update_visible_cap(observer_radius, Planet.cfg.planet_radius)
+	_update_visible_cap(observer_radius, _planet().cfg.planet_radius)
 	_update_active_levels()
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	_sync_uniforms(origin)
 	_sync_material_control()
 	if _terrain_visible:
@@ -203,7 +212,7 @@ func _republish_anchor_state(observer_state: Dictionary) -> void:
 
 
 func _plan_handoff(plane_offset: Vector2) -> void:
-	if _debug_freeze or Planet.cfg == null:
+	if _debug_freeze or _planet().cfg == null:
 		return
 
 	var motion := Vector2.ZERO
@@ -267,7 +276,7 @@ func _predict_handoff_target(plane_offset: Vector2, heading: Vector2) -> Vector2
 
 
 func _start_handoff(target_offset: Vector2, retarget: bool) -> void:
-	if Planet.cfg == null:
+	if _planet().cfg == null:
 		return
 	if retarget:
 		_handoff_retargets += 1
@@ -281,7 +290,7 @@ func _start_handoff(target_offset: Vector2, retarget: bool) -> void:
 	# system as the visible lattice. Use the exact inverse of that mapping; the old
 	# sqrt(R^2-|t|^2) orthographic inverse was paired with R*sin(theta) and was the
 	# second half of the centre-drift bug.
-	var radius: float = Planet.cfg.planet_radius
+	var radius: float = _planet().cfg.planet_radius
 	_pending_anchor_dir = _gnomonic_direction_for_offset(
 		_anchor_dir, _anchor_right, _anchor_up, target_offset, radius)
 	var tangent: Array = CubeSphere.tangent_basis(_pending_anchor_dir)
@@ -330,7 +339,7 @@ func _force_cache_rebind() -> void:
 
 func _update_terrain_caches() -> void:
 	if _terrain_cache_active == null or not is_instance_valid(_terrain_cache_active) \
-			or _material == null or Planet.cfg == null or not Planet.ready_state:
+			or _material == null or _planet().cfg == null or not _planet().ready_state:
 		return
 
 	# The visible cache follows the final anchor selected for this frame.

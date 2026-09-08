@@ -18,12 +18,26 @@ enum BodyType {
 @export var body_id: String = ""
 @export var display_name: String = "Untitled Body"
 @export_enum("Star", "Planet", "Moon", "Dwarf", "Other") var body_type: int = BodyType.PLANET
+## Coarse classification that drives procedural terrain climate + the far-LOD tint
+## (CelestialSystemGenerator). Free-form; known values: terran, hot_rock, ice,
+## gas_giant, pulsar, moon_rock, moon_ice. Default keeps hand-authored bodies as
+## Asterra-like.
+@export var archetype: StringName = &"terran"
 @export var parent_body_id: String = ""
 
 @export var radius_m: float = 1000000.0
 @export var mass_kg: float = 0.0
 @export var gravitational_parameter_m3_s2: float = 0.0
 @export var surface_gravity_m_s2: float = 9.81
+
+## Gas-giant vertical structure (GasGiantModel, filled by CelestialSystemGenerator
+## for `archetype == "gas_giant"`; 0 for every other body). `radius_m` stays the
+## visible cloud-top / 1-bar level -- what orbits, far-LOD and camera framing use.
+## `core_radius_m` is the rho ~= 1000 kg/m^3 solid surface the terrain bake,
+## collision and altitude datum key off; the shell between the two is volumetric.
+@export var core_radius_m: float = 0.0
+@export var one_bar_radius_m: float = 0.0
+@export var deadly_radius_m: float = 0.0
 
 @export var sidereal_rotation_period_s: float = 86400.0
 @export var axial_tilt_deg: float = 0.0
@@ -50,6 +64,17 @@ func ensure_children() -> void:
 		if planet_profile == null:
 			planet_profile = PLANET_PROFILE_SCRIPT.new()
 		planet_profile.call("ensure_children")
+
+func is_gas_giant() -> bool:
+	return archetype == &"gas_giant"
+
+## The radius the terrain stack bakes / collides / measures altitude against. For a
+## gas giant that is its solid rocky core, NOT the cloud tops; everything else
+## bakes at its own `radius_m`.
+func surface_reference_radius_m() -> float:
+	if is_gas_giant() and core_radius_m > 0.0:
+		return core_radius_m
+	return radius_m
 
 func hours_per_day() -> float:
 	return sidereal_rotation_period_s / 3600.0

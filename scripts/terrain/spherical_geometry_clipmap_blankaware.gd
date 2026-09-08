@@ -164,6 +164,8 @@ func _sync_biome_profile_uniforms(force: bool) -> void:
 		_material.set_shader_parameter("u_biome_layer_b", packed.get("b"))
 		_material.set_shader_parameter("u_biome_layer_c", packed.get("c"))
 		_material.set_shader_parameter("u_biome_layer_d", packed.get("d"))
+		_material.set_shader_parameter("u_biome_layer_e", packed.get("e"))
+		_material.set_shader_parameter("u_biome_layer_f", packed.get("f"))
 
 
 func _sync_biome_texture_uniforms(_force: bool) -> void:
@@ -188,6 +190,8 @@ func _sync_biome_texture_uniforms(_force: bool) -> void:
 		_material.set_shader_parameter("u_biome_tex_layer_h", tex_packed.get("h"))
 		_material.set_shader_parameter("u_biome_tex_layer_curve_ab", tex_packed.get("curve_ab"))
 		_material.set_shader_parameter("u_biome_tex_layer_curve_cd", tex_packed.get("curve_cd"))
+		_material.set_shader_parameter("u_biome_tex_layer_curve_ef", tex_packed.get("curve_ef"))
+		_material.set_shader_parameter("u_biome_tex_layer_curve_gh", tex_packed.get("curve_gh"))
 	var custom_count: int = int(tex_packed.get("custom_count", 0))
 	_material.set_shader_parameter("u_biome_tex_custom_count", custom_count)
 	if custom_count > 0:
@@ -412,4 +416,4 @@ func gpu_stream_stats() -> Dictionary:
 
 
 func _blank_backend() -> bool:
-	return bool(Planet.get("blank_mode"))
+	return bool(_planet().get("blank_mode"))

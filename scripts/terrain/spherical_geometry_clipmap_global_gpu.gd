@@ -125,14 +125,14 @@ func _restore_dynamic_ring_window() -> void:
 
 
 func _update_sector_visibility() -> void:
-	if not _terrain_visible or Planet.cfg == null:
+	if not _terrain_visible or _planet().cfg == null:
 		return
 
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null:
 		return
 
-	var observer_world_d: Vec3D = Frames.to_world(camera.global_position)
+	var observer_world_d: Vec3D = _obs_world(camera)
 	var observer_world: Vector3 = observer_world_d.to_v3()
 	var observer_radius: float = observer_world.length()
 	if observer_radius <= 1.0:
@@ -155,7 +155,7 @@ func _update_sector_visibility() -> void:
 	# Precise below-ground rejection uses the asynchronous GPU terrain query. Never
 	# use the coarse macro surface for this decision: procedural valleys/ridges can
 	# differ from it by hundreds of metres.
-	var macro_h: float = Planet.macro_height(observer_dir)
+	var macro_h: float = _planet().macro_height(observer_dir)
 	var local_surface_h: float = macro_h
 	var precise_surface := false
 	var query: Node = get_node_or_null("/root/TerrainHeightQuery")
@@ -163,7 +163,7 @@ func _update_sector_visibility() -> void:
 			and bool(query.call("has_fresh_height", observer_dir)):
 		local_surface_h = float(query.call("height_for_direction", observer_dir, macro_h))
 		precise_surface = true
-	var agl_m: float = observer_radius - (Planet.cfg.planet_radius + local_surface_h)
+	var agl_m: float = observer_radius - (_planet().cfg.planet_radius + local_surface_h)
 	if precise_surface and agl_m < -UNDERGROUND_CULL_DEPTH_M:
 		_hide_surface_for_view("underground")
 		return
@@ -247,7 +247,7 @@ func _sync_uniforms(origin: Vector3) -> void:
 	if _material == null:
 		return
 	_material.set_shader_parameter("u_detail_origin", _wrapped_detail_origin())
-	_material.set_shader_parameter("u_terrain_atmosphere_height", Planet.cfg.atmosphere_height)
+	_material.set_shader_parameter("u_terrain_atmosphere_height", _planet().cfg.atmosphere_height)
 	_material.set_shader_parameter("u_terrain_aerial_strength", _aerial_strength)
 	_material.set_shader_parameter("u_debug_geomorph_mode", _debug_geomorph_mode)
 	_material.set_shader_parameter("u_pbr_enabled", 1.0 if _debug_pbr_enabled and _pbr_bound else 0.0)
@@ -256,16 +256,17 @@ func _sync_uniforms(origin: Vector3) -> void:
 func _wrapped_detail_origin() -> Vector3:
 	# Modulo before converting the double-precision floating origin to Vector3.
 	# All scan periods divide 4096 m, so wrap crossings do not change texture phase.
+	var eo := _effective_origin()
 	return Vector3(
-		fposmod(float(Frames.origin.x), DETAIL_ORIGIN_WRAP_M),
-		fposmod(float(Frames.origin.y), DETAIL_ORIGIN_WRAP_M),
-		fposmod(float(Frames.origin.z), DETAIL_ORIGIN_WRAP_M))
+		fposmod(eo.x, DETAIL_ORIGIN_WRAP_M),
+		fposmod(eo.y, DETAIL_ORIGIN_WRAP_M),
+		fposmod(eo.z, DETAIL_ORIGIN_WRAP_M))
 
 
 func _bind_gpu_context(force: bool) -> void:
 	if _material == null:
 		return
-	var context: Node = get_node_or_null("/root/PlanetContext")
+	var context: Node = _planet_ctx()
 	if context == null or not bool(context.get("ready_state")):
 		_material.set_shader_parameter("u_ctx_ready", 0.0)
 		return
@@ -365,7 +366,7 @@ func set_debug_manual_ring_count(value: int) -> void:
 
 
 func _refresh_manual_ring_window() -> void:
-	if not Planet.ready_state or Planet.cfg == null:
+	if not _planet().ready_state or _planet().cfg == null:
 		return
 	_update_active_levels()
 	if _terrain_visible:
@@ -398,7 +399,7 @@ func aerial_strength() -> float:
 
 func gpu_stream_stats() -> Dictionary:
 	var out: Dictionary = super.gpu_stream_stats()
-	var context: Node = get_node_or_null("/root/PlanetContext")
+	var context: Node = _planet_ctx()
 	out["gpu_geomorph_latest_clipmap_base"] = true
 	out["gpu_context_ready"] = context != null and bool(context.get("ready_state"))
 	out["gpu_context_generation"] = _gpu_ctx_generation

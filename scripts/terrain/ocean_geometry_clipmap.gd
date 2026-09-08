@@ -49,6 +49,26 @@ var _bound_macro: Texture2DArray
 var _bound_macro_res: int = -1
 var _physics: OceanGPUPhysics
 
+## Multi-body seam (see the seamless-multi-planet design). Null on the autoload
+## instance -> `_planet()` resolves to the `Planet` autoload and behaviour is
+## unchanged. A non-primary BodyRuntime (M5) calls `bind_runtime(rt)` before
+## `_ready` so this ocean follows that body's sampler instead. Duck-typed.
+var _body_runtime: Object = null
+var _planet_node_cache: Node = null
+
+
+func _planet() -> Variant:
+	if _body_runtime != null:
+		return _body_runtime.sampler
+	if _planet_node_cache == null or not is_instance_valid(_planet_node_cache):
+		_planet_node_cache = get_node_or_null(^"/root/Planet")
+	return _planet_node_cache
+
+
+func bind_runtime(runtime: Object) -> void:
+	_body_runtime = runtime
+	_planet_node_cache = null
+
 
 func _ready() -> void:
 	process_priority = 10
@@ -57,19 +77,19 @@ func _ready() -> void:
 	_build_batches()
 	_set_visible(false)
 
-	Planet.world_ready.connect(_on_world_ready)
-	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
+	_planet().world_ready.connect(_on_world_ready)
+	_planet().coast_profile_changed.connect(_on_coast_profile_changed)
 
 	_physics = OceanGPUPhysics.new()
 	_physics.name = "OceanGPUPhysics"
 	add_child(_physics)
 
-	if Planet.ready_state and Planet.cfg != null:
+	if _planet().ready_state and _planet().cfg != null:
 		_configure_world()
 
 
 func _process(_dt: float) -> void:
-	if not Planet.ready_state or Planet.cfg == null:
+	if not _planet().ready_state or _planet().cfg == null:
 		_set_visible(false)
 		return
 
@@ -84,7 +104,7 @@ func _process(_dt: float) -> void:
 		_set_visible(false)
 		return
 
-	var radius: float = Planet.cfg.planet_radius
+	var radius: float = _planet().cfg.planet_radius
 	var camera_alt: float = observer_radius - radius
 	if camera_alt >= ORBIT_HANDOFF_ALTITUDE_M:
 		_set_visible(false)
@@ -126,8 +146,8 @@ func _process(_dt: float) -> void:
 
 
 func _configure_world() -> void:
-	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius \
-		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	_base_spacing = PI * 0.5 * _planet().cfg.planet_radius \
+		/ (float(_planet().cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
 	_have_anchor = false
 	_bound_macro = null
 	_bound_macro_res = -1
@@ -158,7 +178,7 @@ func _reset_anchor(observer_dir: Vector3) -> void:
 
 func _update_center_basis() -> void:
 	_center_dir = _direction_for_offset(_anchor_dir, _anchor_right, _anchor_up,
-		_center_plane, Planet.cfg.planet_radius)
+		_center_plane, _planet().cfg.planet_radius)
 	var tangent: Array = CubeSphere.tangent_basis(_center_dir)
 	_center_right = tangent[0]
 	_center_up = tangent[1]
@@ -196,10 +216,10 @@ func _update_active_levels() -> void:
 
 
 func _bind_gpu_terrain(force: bool) -> void:
-	if _material == null or not Planet.ready_state:
+	if _material == null or not _planet().ready_state:
 		return
-	var macro: Texture2DArray = Planet.orbit_elevation_texture
-	var macro_res: int = Planet.orbit_texture_face_res
+	var macro: Texture2DArray = _planet().orbit_elevation_texture
+	var macro_res: int = _planet().orbit_texture_face_res
 	if force or macro != _bound_macro:
 		_bound_macro = macro
 		_material.set_shader_parameter("u_macro_elevation", macro)
@@ -216,15 +236,15 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_anchor_right", _anchor_right)
 	_material.set_shader_parameter("u_anchor_up", _anchor_up)
 	_material.set_shader_parameter("u_lattice_center_plane", _center_plane)
-	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
-	_material.set_shader_parameter("u_atmosphere_height", Planet.cfg.atmosphere_height)
+	_material.set_shader_parameter("u_planet_radius", _planet().cfg.planet_radius)
+	_material.set_shader_parameter("u_atmosphere_height", _planet().cfg.atmosphere_height)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
 	_material.set_shader_parameter("u_center_up", _center_up)
 	_material.set_shader_parameter("u_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
 	_material.set_shader_parameter("u_visible_cap_angle",
-		minf(_visible_cap_arc_m / Planet.cfg.planet_radius * 1.03, PI * 0.5))
+		minf(_visible_cap_arc_m / _planet().cfg.planet_radius * 1.03, PI * 0.5))
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	_material.set_shader_parameter("u_orbit_handoff_altitude", ORBIT_HANDOFF_ALTITUDE_M)
@@ -232,10 +252,10 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_stable_displacement",
 		1.0 if _debug_stable_displacement else 0.0)
 
-	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+	var detail_seed: int = _planet().cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
-		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
+		* maxf(0.05, _planet().cfg.detail_amplitude / 260.0))
 
 
 func _build_batches() -> void:

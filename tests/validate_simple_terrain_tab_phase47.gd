@@ -248,6 +248,48 @@ func _run() -> void:
 			% [curved_value, expected_amount])
 		return
 
+	# The curve now allows up to CurveFieldData.MAX_POINTS (8). Author a
+	# 6-point curve and confirm it round-trips through the UI and that every
+	# slot survives the GPU packing (c/d/e/f, not just the old c/d pair) --
+	# otherwise the CPU contact mirror (which reads all 6 via
+	# CurveFieldData.evaluate) and the shader would silently disagree past
+	# point 4.
+	# Staging rebuilds the panel, so the earlier curve_field reference is stale
+	# by now -- re-find the live control.
+	var curve_field_2: CurveFieldControl = _find_named(editor, "BiomeTerrainLayerCurve_0") as CurveFieldControl
+	if curve_field_2 == null:
+		_fail("Response curve editor vanished after staging")
+		return
+	var six := PackedFloat32Array([0.0, 0.0, 0.2, 0.6, 0.4, 0.15, 0.6, 0.9, 0.8, 0.35, 1.0, 1.0])
+	curve_field_2.set_points(six)
+	curve_field_2.curve_changed.emit(curve_field_2.get_points())
+	await _frames(3)
+	var six_layers: Array = (editor.call("_phase47_biome_stack",
+		biome_slot.get(&"graph")) as Dictionary).get("layers", []) as Array
+	var six_curve: PackedFloat32Array = (six_layers[0] as Dictionary).get("response_curve",
+		PackedFloat32Array()) as PackedFloat32Array
+	if CurveFieldData.point_count(six_curve) != 6:
+		_fail("6-point response curve did not round-trip through the UI (curve=%s)" % [six_curve])
+		return
+	var six_runtime: Node = RUNTIME.new()
+	add_child(six_runtime)
+	six_runtime.call("compile_from_terrain", terrain)
+	var six_packed: Dictionary = six_runtime.call("biome_profile_uniforms") as Dictionary
+	six_runtime.queue_free()
+	var quad: Array = CurveFieldData.pack_to_vec4s(six_curve)
+	var packed_curve := [
+		(six_packed.get("c") as PackedVector4Array)[0], (six_packed.get("d") as PackedVector4Array)[0],
+		(six_packed.get("e") as PackedVector4Array)[0], (six_packed.get("f") as PackedVector4Array)[0],
+	]
+	for slot_i: int in 4:
+		if not (packed_curve[slot_i] as Vector4).is_equal_approx(quad[slot_i] as Vector4):
+			_fail("GPU packing dropped curve slot %d (packed=%s authored=%s)"
+				% [slot_i, packed_curve[slot_i], quad[slot_i]])
+			return
+	if not is_equal_approx(float((six_packed.get("b") as PackedVector4Array)[0].w), 6.0):
+		_fail("Packed curve point count is not 6 (b[0].w=%.1f)" % (six_packed.get("b") as PackedVector4Array)[0].w)
+		return
+
 	print("SIMPLE_TERRAIN_TAB_PHASE47_OK: Terrain controls update production geomorph, all rings, no shader/node UI")
 	editor.queue_free()
 	await _frames(2)

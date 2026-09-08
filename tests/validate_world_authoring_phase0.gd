@@ -14,9 +14,15 @@ func _init() -> void:
 	_assert(session.staged_system != null, "staged system missing")
 	_assert(session.applied_system != null, "applied system missing")
 	var bodies: Array = session.staged_system.get(&"bodies")
-	_assert(bodies.size() == 1, "bootstrap must import exactly the current Asterra body")
+	# Bootstrap now also seeds the root star Helion alongside the Asterra body.
+	_assert(bodies.size() == 2, "bootstrap must import the Asterra body plus the root star Helion")
+	var helion: Resource = session.staged_system.call("find_body", "helion") as Resource
+	_assert(helion != null and int(helion.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR \
+		and String(helion.get(&"parent_body_id")).is_empty(),
+		"bootstrap must seed Helion as a parentless root STAR")
 	var body: Resource = session.active_body()
 	_assert(body != null, "active body missing")
+	_assert(String(body.get(&"body_id")) != "helion", "active body must be Asterra, not the star")
 	_assert(is_equal_approx(float(body.get(&"radius_m")), 1000000.0), "Planet Studio did not import Asterra radius")
 
 	var planet_profile: Resource = body.get(&"planet_profile") as Resource
@@ -138,20 +144,21 @@ func _init() -> void:
 	var created: Resource = session.create_body("CI Moon", BODY_SCRIPT.BodyType.MOON, asterra_id)
 	_assert(created != null, "create body failed")
 	bodies = session.staged_system.get(&"bodies")
-	_assert(bodies.size() == 2, "created body missing from system")
+	_assert(bodies.size() == 3, "created body missing from system (Asterra + Helion + moon)")
 	var moon_id: String = String(created.get(&"body_id"))
 	_assert(String(session.active_body().get(&"body_id")) == moon_id, "created body was not selected")
 	_assert(String(created.get(&"parent_body_id")) == asterra_id, "moon parent was not stored")
 	session.select_body(asterra_id)
 	_assert(not session.set_active_body_parent(moon_id), "celestial hierarchy accepted a parent cycle")
-	_assert(String(session.active_body().get(&"parent_body_id")).is_empty(), "cycle rejection mutated the parent")
+	# Asterra now orbits Helion; a rejected cycle must leave that parent untouched.
+	_assert(String(session.active_body().get(&"parent_body_id")) == "helion", "cycle rejection mutated the parent")
 
 	var preset_path := "user://world_authoring/tests/phase1_roundtrip.tres"
 	_assert(session.save_preset(preset_path) == OK, "preset save failed")
 	session.revert()
 	_assert(session.load_preset(preset_path) == OK, "preset load failed")
 	bodies = session.staged_system.get(&"bodies")
-	_assert(bodies.size() == 2, "preset did not round-trip body list")
+	_assert(bodies.size() == 3, "preset did not round-trip body list (Asterra + Helion + moon)")
 	session.select_body(asterra_id)
 	terrain = session.active_terrain_profile()
 	water = session.active_water_profile()

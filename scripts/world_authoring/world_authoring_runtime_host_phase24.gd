@@ -30,6 +30,17 @@ func _flush_active_body_preview() -> void:
 	_preview_body_id = body_id
 	_selected_radius_m = maxf(float(body.get(&"radius_m")), 1.0)
 
+	# Switching the active authoring target to another primary terrestrial body
+	# hands the single resident detailed stack to it via the Bodies pool -- one
+	# body baked at a time, cache-first so a return to a body baked earlier this
+	# session is instant. Non-primary bodies (moons) stay on the lightweight
+	# preview; a STAR is skipped entirely.
+	if body_id != _detailed_runtime_body_id \
+			and int(body.get(&"body_type")) != BODY_DEFINITION_SCRIPT.BodyType.STAR \
+			and _is_primary_terrestrial(system, body) \
+			and _pool_hosts_body(body):
+		_adopt_pool_detailed_runtime(body, false)
+
 	var rebaking: bool = bool(_main.get("_rebaking"))
 	var detailed_available: bool = detailed_runtime_should_be_visible(system, rebaking)
 	_selected_uses_detailed_surface = detailed_available \
@@ -53,6 +64,9 @@ func _flush_active_body_preview() -> void:
 		family_radius_m = maxf(
 			_selected_radius_m,
 			float(_celestial_preview.call("family_frame_radius_m")))
+	if _orbital_motion != null:
+		_orbital_motion.call("set_anchor",
+			_detailed_runtime_body_id if detailed_available else body_id)
 	if _selected_center_world == null:
 		_selected_center_world = Vec3D.new()
 

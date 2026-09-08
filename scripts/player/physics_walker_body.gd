@@ -10,6 +10,19 @@ extends RigidBody3D
 const GRAVITY_MPS2 := 9.62
 const MIN_NORMAL_DOT := 0.05
 
+
+## Radial gravity magnitude for the body owning contact this frame. Via
+## /root/Bodies (not the bare identifier) so the isolated script CI parses this.
+## The support-force tuning coefficients below deliberately stay on the constant --
+## per-body suspension response is a later (M5b) concern.
+func _gravity_mps2() -> float:
+	var bodies: Node = get_node_or_null(^"/root/Bodies")
+	if bodies != null:
+		var contact: Variant = bodies.get(&"contact_body")
+		if contact != null:
+			return float(contact.surface_gravity())
+	return GRAVITY_MPS2
+
 @export_group("Body")
 @export var body_mass := 72.0
 @export var pelvis_mass := 18.5
@@ -182,7 +195,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 
 	# Only the pelvis mass belongs to this body. ActiveRagdollRig applies radial
 	# gravity independently to every other physical segment.
-	state.apply_central_force(-radial_up * mass * GRAVITY_MPS2)
+	state.apply_central_force(-radial_up * mass * _gravity_mps2())
 
 	var use_ragdoll_feet := ragdoll != null and ragdoll.active
 	var left: Dictionary = {}
@@ -220,7 +233,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	last_surface_normal = support_surface_normal
 	last_support_force = total_support
 	last_slope_deg = rad_to_deg(acos(clampf(support_surface_normal.dot(radial_up), -1.0, 1.0)))
-	grounded = total_support > body_mass * GRAVITY_MPS2 * 0.16 and _jump_cooldown <= 0.0
+	grounded = total_support > body_mass * _gravity_mps2() * 0.16 and _jump_cooldown <= 0.0
 
 	# Jump is a whole-body impulse delivered through the pelvis. The articulated
 	# joints distribute it to the other masses. Release physical feet briefly so the

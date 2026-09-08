@@ -8,20 +8,48 @@ extends Node3D
 ## while parents, moons and siblings remain at their staged orbital positions.
 
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
+const FAR_BODY_SHADER := preload("res://shaders/far_body_surface.gdshader")
 
 const PREVIEW_RADIAL_SEGMENTS: int = 72
 const PREVIEW_RINGS: int = 48
 const MIN_RADIUS_M: float = 1.0
 const FAMILY_FRAME_DISTANCE_RATIO: float = 40.0
-const FALLBACK_ORBIT_PARENT_RADII: float = 4.0
-const FALLBACK_ORBIT_CHILD_RADII: float = 3.0
-const FALLBACK_ANOMALY_DEG: float = 35.0
+## Near-camera clip planes to restore when the player is on/near a surface (M7).
+## Mirrors the standalone game's player camera defaults.
+const SURFACE_CAMERA_NEAR_M: float = 0.25
+const SURFACE_CAMERA_FAR_M: float = 400_000.0
+# Fallback-orbit shaping constants moved to OrbitMath (single source of truth).
+
+## Per-body relief elevation feed (see M2 of the seamless-multi-planet design).
+## body_id -> { "tex": Texture2DArray, "face_res": float, "amplitude": float }.
+## The detailed body is auto-fed from Planet.orbit_elevation_texture; other
+## bodies stay smooth lit spheres until a caller (M4/M5) pushes a per-body cache.
+var _relief_by_body: Dictionary = {}
+## LRU order of `_relief_by_body` keys (most-recent last). Bounded so a dozens-of-
+## bodies system never keeps more than MAX_RELIEF_FEEDS relief texture arrays
+## resident (M9); the detailed body is exempt.
+var _relief_lru: Array[String] = []
+const MAX_RELIEF_FEEDS := 3
+## body_id -> true for bodies a caller (M5b: those with a live concurrent clipmap)
+## wants hidden here so they are not drawn twice.
+var _caller_hidden: Dictionary = {}
+## Absolute system position of the root star (root body at the origin). Used to
+## light every far body's own terminator.
+var _star_world: Vec3D = Vec3D.new()
 
 var _system: Resource
 var _selected_body_id: String = ""
 var _detailed_body_id: String = ""
 var _records: Dictionary = {}
+## Absolute system positions, root body at the origin. Kept absolute so
+## body_system_position() can report them; everything the renderer / camera sees
+## is these minus `_anchor_world` (see _anchor_id / _rebuild_system_preview).
 var _world_positions: Dictionary = {}
+## Absolute position of the anchor body -- the detailed-runtime body when there is
+## one, else the selected body. All rendered / reported positions are relative to
+## this, so the anchor sits at the Frames origin and its orbital position never
+## reaches the anchor-centred terrain/ocean stack.
+var _anchor_world: Vec3D = Vec3D.new()
 var _selected_visual_radius_m: float = 1.0
 var _family_frame_radius_m: float = 1.0
 var _system_extent_m: float = 1.0
@@ -66,12 +94,15 @@ func show_body(body: Resource) -> void:
 	_selected_body_id = String(body.get(&"body_id")) if body != null else ""
 	_detailed_body_id = ""
 	_world_positions.clear()
+	_anchor_world = Vec3D.new()
 	if body == null:
 		hide_preview()
 		return
 	var world := Vec3D.new()
 	_world_positions[_selected_body_id] = world
-	var record: Dictionary = _create_body_record(body, world, world, true)
+	_star_world = Vec3D.new()
+	var record: Dictionary = _create_body_record(body, world, world, true,
+		Frames.helion_dir)
 	_records[_selected_body_id] = record
 	_selected_visual_radius_m = float(record.get("visual_radius_m", 1.0))
 	_family_frame_radius_m = _selected_visual_radius_m
@@ -83,6 +114,19 @@ func show_body(body: Resource) -> void:
 
 func hide_preview() -> void:
 	visible = false
+
+
+## Hide/show a body's far-LOD sphere on the caller's behalf (M5b: the body has a
+## live concurrent clipmap rendering its real terrain -- don't draw it twice).
+func set_body_render_hidden(body_id: String, hidden: bool) -> void:
+	if hidden:
+		_caller_hidden[body_id] = true
+	else:
+		_caller_hidden.erase(body_id)
+	var record: Dictionary = _records.get(body_id, {}) as Dictionary
+	var root: Node3D = record.get("root") as Node3D
+	if root != null and is_instance_valid(root):
+		root.visible = (body_id != _detailed_body_id) and not hidden
 
 
 func body_id() -> String:
@@ -109,14 +153,33 @@ func preview_body_count() -> int:
 	return _records.size()
 
 
+## Anchor-relative centre of the selected body (0 when the selected body IS the
+## anchor). This is what the runtime host feeds Frames.rebase / camera framing.
 func selected_center_world() -> Vec3D:
-	var center: Vec3D = _world_positions.get(_selected_body_id) as Vec3D
-	return center.dup() if center != null else Vec3D.new()
+	return _anchor_relative(_selected_body_id)
 
 
+## Anchor-relative position of any body.
 func body_world_position(body_id: String) -> Vec3D:
+	return _anchor_relative(body_id)
+
+
+## Absolute system position (root body at the origin), for callers that need the
+## real ephemeris rather than the anchor-relative view.
+func body_system_position(body_id: String) -> Vec3D:
 	var center: Vec3D = _world_positions.get(body_id) as Vec3D
 	return center.dup() if center != null else Vec3D.new()
+
+
+func _anchor_id() -> String:
+	return _detailed_body_id if not _detailed_body_id.is_empty() else _selected_body_id
+
+
+func _anchor_relative(body_id: String) -> Vec3D:
+	var center: Vec3D = _world_positions.get(body_id) as Vec3D
+	if center == null:
+		return Vec3D.new()
+	return center.sub(_anchor_world)
 
 
 func _build_shared_meshes() -> void:
@@ -139,6 +202,13 @@ func _rebuild_system_preview() -> void:
 	var selected_world: Vec3D = _world_positions.get(_selected_body_id) as Vec3D
 	if selected_world == null:
 		selected_world = Vec3D.new()
+	# Everything the preview renders / reports is relative to the anchor body, so
+	# an orbiting anchor still sits at the Frames origin next to its terrain.
+	_anchor_world = _world_positions.get(_anchor_id()) as Vec3D
+	if _anchor_world == null:
+		_anchor_world = Vec3D.new()
+
+	_star_world = _resolve_star_world()
 
 	_selected_visual_radius_m = 1.0
 	_family_frame_radius_m = 1.0
@@ -152,16 +222,18 @@ func _rebuild_system_preview() -> void:
 		var absolute_world: Vec3D = _world_positions.get(body_id) as Vec3D
 		if absolute_world == null:
 			absolute_world = Vec3D.new()
+		var anchor_relative_world: Vec3D = absolute_world.sub(_anchor_world)
 		var offset_from_selected: Vec3D = absolute_world.sub(selected_world)
 		# The detailed terrain/ocean renderer already represents this body. Hide only
 		# its lightweight duplicate; selecting another body must not hide the detailed
 		# body itself or move its centre.
-		var body_visible: bool = body_id != _detailed_body_id
+		var body_visible: bool = body_id != _detailed_body_id and not _caller_hidden.has(body_id)
 		var record: Dictionary = _create_body_record(
-			body, absolute_world, offset_from_selected, body_visible)
+			body, anchor_relative_world, offset_from_selected, body_visible,
+			_sun_dir_for(absolute_world))
 		_records[body_id] = record
 		var visual_radius: float = float(record.get("visual_radius_m", 1.0))
-		_system_extent_m = maxf(_system_extent_m, absolute_world.length() + visual_radius)
+		_system_extent_m = maxf(_system_extent_m, anchor_relative_world.length() + visual_radius)
 		if body_id == _selected_body_id:
 			_selected_visual_radius_m = visual_radius
 
@@ -169,7 +241,8 @@ func _rebuild_system_preview() -> void:
 
 
 func _create_body_record(body: Resource, world: Vec3D,
-		offset_from_selected: Vec3D, body_visible: bool) -> Dictionary:
+		offset_from_selected: Vec3D, body_visible: bool,
+		sun_dir: Vector3) -> Dictionary:
 	body.call("ensure_children")
 	var body_id: String = String(body.get(&"body_id"))
 	var body_type: int = int(body.get(&"body_type"))
@@ -185,17 +258,19 @@ func _create_body_record(body: Resource, world: Vec3D,
 	surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(surface)
 
-	var surface_material := StandardMaterial3D.new()
-	surface_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	surface_material.cull_mode = BaseMaterial3D.CULL_BACK
-	surface.material_override = surface_material
-
 	var corona: MeshInstance3D = null
 	var visual_radius: float = radius_m
 	if body_type == BODY_SCRIPT.BodyType.STAR:
-		visual_radius = _configure_star(body, radius_m, root, surface_material)
+		var star_material := StandardMaterial3D.new()
+		star_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		star_material.cull_mode = BaseMaterial3D.CULL_BACK
+		surface.material_override = star_material
+		visual_radius = _configure_star(body, radius_m, root, star_material)
 	else:
-		_configure_solid_body(body_type, surface_material)
+		var solid_material := ShaderMaterial.new()
+		solid_material.shader = FAR_BODY_SHADER
+		surface.material_override = solid_material
+		_configure_solid_body(body, body_id, body_type, radius_m, solid_material, sun_dir)
 
 	root.visible = body_visible
 	return {
@@ -206,22 +281,67 @@ func _create_body_record(body: Resource, world: Vec3D,
 		"surface": surface,
 		"corona": corona,
 		"visual_radius_m": visual_radius,
+		"sun_dir": sun_dir,
 	}
 
 
-func _configure_solid_body(body_type: int, material: StandardMaterial3D) -> void:
-	var color := Color(0.30, 0.56, 0.78, 1.0)
+## Lit far-LOD sphere with its own terminator, per-body tint, optional atmosphere
+## rim and -- when a relief elevation texture is fed -- real relief shading.
+func _configure_solid_body(body: Resource, body_id: String, body_type: int,
+		radius_m: float, material: ShaderMaterial, sun_dir: Vector3) -> void:
+	var color := Color(0.30, 0.56, 0.78)
 	match body_type:
 		BODY_SCRIPT.BodyType.MOON:
-			color = Color(0.58, 0.60, 0.64, 1.0)
+			color = Color(0.56, 0.58, 0.62)
 		BODY_SCRIPT.BodyType.DWARF:
-			color = Color(0.56, 0.43, 0.32, 1.0)
+			color = Color(0.56, 0.43, 0.32)
 		BODY_SCRIPT.BodyType.OTHER:
-			color = Color(0.48, 0.42, 0.58, 1.0)
+			color = Color(0.48, 0.42, 0.58)
 		_:
 			pass
-	material.albedo_color = color
-	material.emission_enabled = false
+
+	var atmo_strength: float = 0.0
+	var atmo_color := Color(0.35, 0.52, 0.92)
+	var ambient_floor := 0.05
+	# Archetype (CelestialSystemGenerator) overrides the tint so a scorched rock,
+	# a frozen world and a gas giant read differently from far away.
+	match StringName(body.get(&"archetype")):
+		&"hot_rock", &"moon_rock":
+			color = Color(0.40, 0.19, 0.15)
+			atmo_strength = 0.12
+			atmo_color = Color(0.55, 0.28, 0.18)
+		&"ice", &"moon_ice":
+			color = Color(0.80, 0.88, 0.96)
+			ambient_floor = 0.14
+			atmo_strength = 0.35
+			atmo_color = Color(0.62, 0.78, 0.95)
+		&"gas_giant":
+			color = Color(0.78, 0.62, 0.42)
+			atmo_strength = 1.4
+			atmo_color = Color(0.86, 0.70, 0.48)
+		&"terran":
+			color = Color(0.26, 0.52, 0.72)
+
+	var profile: Resource = body.get(&"planet_profile") as Resource
+	if profile != null:
+		var atmosphere: Resource = profile.get(&"atmosphere") as Resource
+		if atmosphere != null and bool(atmosphere.get(&"enabled")):
+			atmo_strength = maxf(atmo_strength, 0.6)
+			var tint: Variant = atmosphere.get(&"sky_tint")
+			if tint is Color:
+				atmo_color = tint
+
+	material.set_shader_parameter(&"u_albedo", color)
+	material.set_shader_parameter(&"u_body_radius_m", maxf(radius_m, MIN_RADIUS_M))
+	material.set_shader_parameter(&"u_sun_dir", sun_dir)
+	material.set_shader_parameter(&"u_atmo_strength", atmo_strength)
+	material.set_shader_parameter(&"u_atmo_color", atmo_color)
+	material.set_shader_parameter(&"u_ambient_floor", ambient_floor)
+	material.set_shader_parameter(&"u_relief_ready", 0.0)
+
+	if body_id == _detailed_body_id and _relief_by_body.get(body_id) == null:
+		_auto_feed_detailed_relief(body_id)
+	_apply_body_relief(body_id, material)
 
 
 func _configure_star(body: Resource, radius_m: float, root: Node3D,
@@ -265,6 +385,123 @@ func _configure_star(body: Resource, radius_m: float, root: Node3D,
 	return radius_m * corona_extent
 
 
+## Absolute world position of the system's root star (the parentless STAR body),
+## or the origin when there is none.
+func _resolve_star_world() -> Vec3D:
+	if _system == null:
+		return Vec3D.new()
+	var bodies: Array = _system.get(&"bodies")
+	for body_value: Variant in bodies:
+		var body: Resource = body_value as Resource
+		if body == null:
+			continue
+		if int(body.get(&"body_type")) != BODY_SCRIPT.BodyType.STAR:
+			continue
+		if not String(body.get(&"parent_body_id")).is_empty():
+			continue
+		var world: Vec3D = _world_positions.get(String(body.get(&"body_id"))) as Vec3D
+		return world.dup() if world != null else Vec3D.new()
+	return Vec3D.new()
+
+
+## Unit direction from a body at `body_absolute_world` toward the root star.
+## Falls back to the anchor body's shipped sun direction.
+func _sun_dir_for(body_absolute_world: Vec3D) -> Vector3:
+	var to_star: Vec3D = _star_world.sub(body_absolute_world)
+	var length: float = to_star.length()
+	if length > 1.0:
+		return to_star.to_v3() / length
+	return Frames.helion_dir
+
+
+## Feed a body its own orbit-relief elevation texture. `tex` is a FORMAT_RF cube
+## Texture2DArray (as built by OrbitSurfaceCache); `face_res` its per-face
+## resolution; `amplitude` a shading exaggeration (1.0 = physical). Passing
+## tex == null clears the feed. Survives preview rebuilds.
+func set_body_relief(body_id: String, tex: Texture2DArray, face_res: float,
+		amplitude: float = 1.0) -> void:
+	if tex == null:
+		_relief_by_body.erase(body_id)
+		_relief_lru.erase(body_id)
+	else:
+		_relief_by_body[body_id] = {
+			"tex": tex, "face_res": face_res, "amplitude": maxf(amplitude, 0.01),
+		}
+		_touch_relief(body_id)
+	var record: Dictionary = _records.get(body_id, {}) as Dictionary
+	var surface: MeshInstance3D = record.get("surface") as MeshInstance3D
+	if surface != null and surface.material_override is ShaderMaterial:
+		_apply_body_relief(body_id, surface.material_override as ShaderMaterial)
+
+
+## Move `body_id` to the front of the relief LRU and evict the oldest feed beyond
+## MAX_RELIEF_FEEDS (the current detailed body is never evicted).
+func _touch_relief(body_id: String) -> void:
+	_relief_lru.erase(body_id)
+	_relief_lru.append(body_id)
+	while _relief_lru.size() > MAX_RELIEF_FEEDS:
+		var victim := ""
+		for candidate in _relief_lru:
+			if candidate != _detailed_body_id:
+				victim = candidate
+				break
+		if victim.is_empty():
+			break
+		_relief_lru.erase(victim)
+		_relief_by_body.erase(victim)
+		var rec: Dictionary = _records.get(victim, {}) as Dictionary
+		var surf: MeshInstance3D = rec.get("surface") as MeshInstance3D
+		if surf != null and surf.material_override is ShaderMaterial:
+			(surf.material_override as ShaderMaterial).set_shader_parameter(&"u_relief_ready", 0.0)
+
+
+## The resident detailed body already has an orbit-relief texture on the Planet
+## autoload; reuse it so its far-LOD duplicate isn't a smooth sphere.
+func _auto_feed_detailed_relief(body_id: String) -> void:
+	var planet: Node = get_node_or_null(^"/root/Planet")
+	if planet == null:
+		return
+	var tex: Variant = planet.get(&"orbit_elevation_texture")
+	if tex is Texture2DArray:
+		_relief_by_body[body_id] = {
+			"tex": tex,
+			"face_res": float(planet.get(&"orbit_texture_face_res")),
+			"amplitude": 1.0,
+		}
+		_touch_relief(body_id)
+
+
+func _apply_body_relief(body_id: String, material: ShaderMaterial) -> void:
+	var feed: Dictionary = _relief_by_body.get(body_id, {}) as Dictionary
+	var tex: Variant = feed.get("tex")
+	if tex is Texture2DArray and float(feed.get("face_res", 0.0)) > 0.5:
+		material.set_shader_parameter(&"u_relief_tex", tex)
+		material.set_shader_parameter(&"u_relief_face_res", float(feed.get("face_res")))
+		material.set_shader_parameter(&"u_relief_shade_gain", 2.2 * float(feed.get("amplitude", 1.0)))
+		material.set_shader_parameter(&"u_relief_ready", 1.0)
+	else:
+		material.set_shader_parameter(&"u_relief_ready", 0.0)
+
+
+## Re-evaluate every far body's terminator against the current schematic
+## positions. Cheap; call after a clock scrub.
+func refresh_lighting() -> void:
+	if _system == null:
+		return
+	_star_world = _resolve_star_world()
+	for key: Variant in _records:
+		var record: Dictionary = _records[key] as Dictionary
+		var surface: MeshInstance3D = record.get("surface") as MeshInstance3D
+		if surface == null or not (surface.material_override is ShaderMaterial):
+			continue
+		var absolute_world: Vec3D = _world_positions.get(String(key)) as Vec3D
+		if absolute_world == null:
+			continue
+		var sun_dir: Vector3 = _sun_dir_for(absolute_world)
+		record["sun_dir"] = sun_dir
+		(surface.material_override as ShaderMaterial).set_shader_parameter(&"u_sun_dir", sun_dir)
+
+
 func _compute_world_positions(system: Resource) -> Dictionary:
 	var result: Dictionary = {}
 	if system == null:
@@ -304,49 +541,15 @@ func _compute_world_positions(system: Resource) -> Dictionary:
 	return result
 
 
+## Parent-centred offset for `body`, evaluated at the shared Frames sim clock so
+## the schematic and OrbitalMotionRuntime always agree on where bodies are. The
+## Kepler math lives in OrbitMath.
 func _orbit_offset(body: Resource, parent: Resource) -> Vec3D:
-	var orbit: Resource = body.get(&"orbit") as Resource
-	var parent_radius: float = maxf(float(parent.get(&"radius_m")), MIN_RADIUS_M) if parent != null else MIN_RADIUS_M
+	var parent_radius: float = maxf(float(parent.get(&"radius_m")), MIN_RADIUS_M) \
+		if parent != null else MIN_RADIUS_M
 	var child_radius: float = maxf(float(body.get(&"radius_m")), MIN_RADIUS_M)
-	var semi_major_axis: float = float(orbit.get(&"semi_major_axis_m")) if orbit != null else 0.0
-	var fallback_orbit: bool = semi_major_axis <= 0.0
-	if fallback_orbit:
-		semi_major_axis = maxf(
-			parent_radius * FALLBACK_ORBIT_PARENT_RADII,
-			parent_radius + child_radius * FALLBACK_ORBIT_CHILD_RADII)
-
-	var eccentricity: float = clampf(float(orbit.get(&"eccentricity")) if orbit != null else 0.0,
-		0.0, 0.999999)
-	var mean_anomaly_deg: float = float(orbit.get(&"mean_anomaly_at_epoch_deg")) if orbit != null else 0.0
-	if fallback_orbit and absf(mean_anomaly_deg) <= 1e-6:
-		mean_anomaly_deg = FALLBACK_ANOMALY_DEG
-	var mean_anomaly: float = deg_to_rad(mean_anomaly_deg)
-	var eccentric_anomaly: float = mean_anomaly
-	for _iteration: int in 8:
-		var f: float = eccentric_anomaly - eccentricity * sin(eccentric_anomaly) - mean_anomaly
-		var fp: float = maxf(1.0 - eccentricity * cos(eccentric_anomaly), 1e-8)
-		eccentric_anomaly -= f / fp
-
-	var orbital_x: float = semi_major_axis * (cos(eccentric_anomaly) - eccentricity)
-	var orbital_z: float = semi_major_axis * sqrt(maxf(1.0 - eccentricity * eccentricity, 0.0)) \
-		* sin(eccentric_anomaly)
-	var inclination: float = deg_to_rad(float(orbit.get(&"inclination_deg")) if orbit != null else 0.0)
-	var ascending_node: float = deg_to_rad(float(orbit.get(&"longitude_ascending_node_deg")) if orbit != null else 0.0)
-	var periapsis: float = deg_to_rad(float(orbit.get(&"argument_periapsis_deg")) if orbit != null else 0.0)
-
-	# Standard Keplerian orientation expressed in Asterra's Y-up render convention.
-	var cos_o: float = cos(ascending_node)
-	var sin_o: float = sin(ascending_node)
-	var cos_w: float = cos(periapsis)
-	var sin_w: float = sin(periapsis)
-	var cos_i: float = cos(inclination)
-	var sin_i: float = sin(inclination)
-	var x: float = (cos_o * cos_w - sin_o * sin_w * cos_i) * orbital_x \
-		+ (-cos_o * sin_w - sin_o * cos_w * cos_i) * orbital_z
-	var y: float = (sin_w * sin_i) * orbital_x + (cos_w * sin_i) * orbital_z
-	var z: float = (sin_o * cos_w + cos_o * sin_w * cos_i) * orbital_x \
-		+ (-sin_o * sin_w + cos_o * cos_w * cos_i) * orbital_z
-	return Vec3D.new(x, y, z)
+	return OrbitMath.orbit_offset(body.get(&"orbit") as Resource,
+		parent_radius, child_radius, OrbitMath.body_mu(parent), Frames.system_time_s)
 
 
 func _compute_family_frame_radius() -> float:
@@ -384,8 +587,16 @@ func _sync_floating_origin() -> void:
 		var record: Dictionary = _records[key] as Dictionary
 		var root: Node3D = record.get("root") as Node3D
 		var world: Vec3D = record.get("world") as Vec3D
-		if root != null and world != null:
-			root.position = Frames.to_render(world)
+		if root == null or world == null:
+			continue
+		# System-scale compression (M7): pull a far body in along its own line of
+		# sight and shrink it by the same factor, so its angular size is unchanged
+		# but the scene bounds -- and the near camera's far plane -- stay bounded.
+		var render_pos: Vector3 = Frames.to_render(world)
+		var d: float = render_pos.length()
+		var mul: float = SystemScaleView.scale_for(d)
+		root.position = render_pos * mul
+		root.scale = Vector3.ONE * mul
 
 
 func _sync_camera_clip() -> void:
@@ -395,16 +606,27 @@ func _sync_camera_clip() -> void:
 	var camera: Camera3D = viewport.get_camera_3d()
 	if camera == null:
 		return
-	var selected_world: Vec3D = _world_positions.get(_selected_body_id) as Vec3D
-	if selected_world == null:
-		selected_world = Vec3D.new()
-	var selected_center_render: Vector3 = Frames.to_render(selected_world)
+	var selected_center_render: Vector3 = Frames.to_render(_anchor_relative(_selected_body_id))
 	var center_distance: float = selected_center_render.distance_to(camera.global_position)
-	# Never expand depth precision to the entire solar system. Only the selected
-	# body's direct family is part of this close 3D framing pass; remote planets and
-	# stars use their own future system-scale representation.
-	camera.far = maxf(camera.far,
-		center_distance + _family_frame_radius_m * 1.15)
+	# The near camera covers only the active body's direct family (near planet + a
+	# concurrent moon). Every remote planet and the star are distance-compressed by
+	# SystemScaleView into a fixed budget so they never reach AU scale here. (M7)
+	var family_need: float = center_distance + _family_frame_radius_m * 1.15
+	if center_distance <= SystemScaleView.NEAR_M:
+		# On or near a surface: only cover the immediate family (a concurrent moon).
+		# Resets `far` after a cruise so it does not stay stuck at system scale.
+		# The near plane rises slightly with `far` so the far/near ratio stays out
+		# of the light-culler's precision-failure range; on a bare surface it is the
+		# shipped 0.25 m.
+		camera.far = maxf(family_need, SURFACE_CAMERA_FAR_M)
+		camera.near = clampf(camera.far * 1.5e-7, SURFACE_CAMERA_NEAR_M, 2.0)
+	else:
+		# In deep space / high orbit: pull the far plane out to the system budget so
+		# every compressed remote body is in view, and raise the near plane to keep
+		# the far/near ratio out of the light-culler's precision-failure range
+		# (nothing is within tens of metres of the camera out here anyway).
+		camera.far = maxf(family_need, SystemScaleView.VIEW_FAR_M)
+		camera.near = clampf(camera.far * 8.0e-7, 1.0, 40.0)
 
 
 func _clear_records() -> void:

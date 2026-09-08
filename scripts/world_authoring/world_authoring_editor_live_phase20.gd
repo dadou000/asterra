@@ -13,6 +13,12 @@ const TERRAIN_MODE_PROFILE_SCRIPT := preload(
 const STAR_PROFILE_SCRIPT := preload(
 	"res://scripts/world_authoring/model/star_authoring_profile.gd")
 
+const AU_M := 149597870700.0
+
+# "Orbit & seasons" live readout label, refreshed from _process while the
+# Celestials page is showing. Not persisted; it just reflects Frames' sim clock.
+var _orbit_readout: Label = null
+
 
 func _build_planet_page() -> void:
 	var body: Resource = _session.active_body()
@@ -46,6 +52,136 @@ func _build_celestials_page() -> void:
 	row.add_child(add_star)
 	_add_note("Stars persist in the same celestial hierarchy as planets and moons. Their photosphere, spectrum, activity, corona and emitted light are independently authorable.")
 
+	_build_orbit_seasons_controls()
+
+
+func _process(delta: float) -> void:
+	super._process(delta)
+	if _orbit_readout != null and is_instance_valid(_orbit_readout):
+		_orbit_readout.text = _orbit_readout_text()
+
+
+func _orbit_readout_text() -> String:
+	var year_s: float = maxf(Frames.year_seconds(), 1.0)
+	var year_index: int = int(floor(Frames.system_time_s / year_s))
+	var doy: float = Frames.day_of_year()
+	var year_days: float = maxf(Frames.year_days, 1.0)
+	var season_names: PackedStringArray = ["early spring", "spring", "summer", "late summer",
+		"autumn", "autumn", "winter", "winter"]
+	var season: String = season_names[clampi(int(doy / year_days * 8.0), 0, 7)]
+	var sub_solar_deg: float = rad_to_deg(Frames.sub_solar_latitude_rad())
+	var au: float = Frames.helion_distance_m / AU_M
+	return "Year %d, day %.1f / %.1f  (%s)\nsub-solar latitude %+.1f deg   Helion %.4f AU   irradiance x%.3f   %s" % [
+		year_index, doy, year_days, season, sub_solar_deg, au,
+		Frames.solar_distance_scale(), ("PLAYING x%g" % Frames.time_scale) if Frames.playing else "paused"]
+
+
+func _build_orbit_seasons_controls() -> void:
+	_section("Orbit & seasons")
+	_add_note("Asterra's simulated date. Scrub or play the clock to see seasons, the analemma and the perihelion/aphelion brightness swing. Only the epoch the world opens at and the playback speed are saved; the live scrub position is not.")
+
+	_orbit_readout = Label.new()
+	_orbit_readout.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_orbit_readout.modulate = Color(0.62, 0.78, 0.72)
+	_orbit_readout.text = _orbit_readout_text()
+	_workspace.add_child(_orbit_readout)
+
+	_add_number_field("Day of year", Frames.day_of_year(), 0.0, maxf(Frames.year_days, 1.0), 0.1, "",
+		func(value: float) -> void: _scrub_day_of_year(value))
+	_add_number_field("Time of day", fposmod(Frames.day_of_year(), 1.0) * 24.0, 0.0, 24.0, 0.05, " h",
+		func(value: float) -> void: _scrub_time_of_day(value))
+
+	var transport := HBoxContainer.new()
+	transport.add_theme_constant_override("separation", 6)
+	_workspace.add_child(transport)
+	var play := _toolbar_button("Play" if not Frames.playing else "Pause")
+	play.pressed.connect(func() -> void:
+		Frames.playing = not Frames.playing
+		_refresh_current_category())
+	transport.add_child(play)
+	for spec: Array in [["1x", 1.0], ["1 h/s", 3600.0], ["1 day/s", Frames.day_seconds], ["10 day/s", Frames.day_seconds * 10.0]]:
+		var b := _toolbar_button(String(spec[0]))
+		var rate: float = float(spec[1])
+		b.pressed.connect(func() -> void:
+			Frames.time_scale = rate
+			_refresh_current_category())
+		transport.add_child(b)
+	_add_number_field("Time scale", Frames.time_scale, 0.0, 1.0e7, 1.0, " x",
+		func(value: float) -> void: Frames.time_scale = maxf(value, 0.0))
+
+	_build_orbit_element_fields()
+
+
+func _scrub_day_of_year(new_doy: float) -> void:
+	var year_s: float = maxf(Frames.year_seconds(), 1.0)
+	var years: float = floor(Frames.system_time_s / year_s)
+	var intraday: float = fposmod(Frames.day_of_year(), 1.0)
+	Frames.system_time_s = years * year_s + (floor(new_doy) + intraday) * Frames.day_seconds
+
+
+func _scrub_time_of_day(hours: float) -> void:
+	var year_s: float = maxf(Frames.year_seconds(), 1.0)
+	var years: float = floor(Frames.system_time_s / year_s)
+	var whole_day: float = floor(Frames.day_of_year())
+	Frames.system_time_s = years * year_s + (whole_day + clampf(hours, 0.0, 24.0) / 24.0) * Frames.day_seconds
+
+
+func _build_orbit_element_fields() -> void:
+	var body: Resource = _session.active_body()
+	if body == null or int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		return
+	var orbit: Resource = body.get(&"orbit") as Resource
+	if orbit == null:
+		return
+	_section("Orbit elements — %s" % String(body.get(&"display_name")))
+	_add_number_field("Semi-major axis", float(orbit.get(&"semi_major_axis_m")) / 1000.0,
+		1.0, 1.0e12, 1000.0, " km", func(value: float) -> void:
+			_session.stage_set(orbit, &"semi_major_axis_m", value * 1000.0,
+				SESSION_SCRIPT.ApplyScope.HOT, "Change semi-major axis"))
+	_add_number_field("Eccentricity", float(orbit.get(&"eccentricity")),
+		0.0, 0.95, 0.001, "", func(value: float) -> void:
+			_session.stage_set(orbit, &"eccentricity", clampf(value, 0.0, 0.999999),
+				SESSION_SCRIPT.ApplyScope.HOT, "Change eccentricity"))
+	_add_number_field("Inclination", float(orbit.get(&"inclination_deg")),
+		-180.0, 180.0, 0.1, "°", func(value: float) -> void:
+			_session.stage_set(orbit, &"inclination_deg", value,
+				SESSION_SCRIPT.ApplyScope.HOT, "Change inclination"))
+	_add_number_field("Ascending node", float(orbit.get(&"longitude_ascending_node_deg")),
+		-360.0, 360.0, 0.1, "°", func(value: float) -> void:
+			_session.stage_set(orbit, &"longitude_ascending_node_deg", value,
+				SESSION_SCRIPT.ApplyScope.HOT, "Change ascending node"))
+	_add_number_field("Argument of periapsis", float(orbit.get(&"argument_periapsis_deg")),
+		-360.0, 360.0, 0.1, "°", func(value: float) -> void:
+			_session.stage_set(orbit, &"argument_periapsis_deg", value,
+				SESSION_SCRIPT.ApplyScope.HOT, "Change argument of periapsis"))
+	_add_number_field("Mean anomaly at epoch", float(orbit.get(&"mean_anomaly_at_epoch_deg")),
+		-3600.0, 3600.0, 0.1, "°", func(value: float) -> void:
+			_session.stage_set(orbit, &"mean_anomaly_at_epoch_deg", value,
+				SESSION_SCRIPT.ApplyScope.HOT, "Change mean anomaly"))
+	_add_number_field("Axial tilt", float(body.get(&"axial_tilt_deg")),
+		-180.0, 180.0, 0.1, "°", func(value: float) -> void:
+			_session.stage_set(body, &"axial_tilt_deg", value,
+				SESSION_SCRIPT.ApplyScope.FULL_REBUILD, "Change axial tilt"))
+
+	var presets := HBoxContainer.new()
+	presets.add_theme_constant_override("separation", 6)
+	_workspace.add_child(presets)
+	for spec: Array in [
+			["Circular", 0.0, -1.0],
+			["Earth-like", 0.0167, 23.4],
+			["Extreme tilt", 0.0167, 82.0],
+			["High eccentricity", 0.4, -1.0]]:
+		var b := _toolbar_button(String(spec[0]))
+		var e: float = float(spec[1])
+		var tilt: float = float(spec[2])
+		b.pressed.connect(func() -> void:
+			_session.stage_set(orbit, &"eccentricity", e, SESSION_SCRIPT.ApplyScope.HOT, "Orbit preset")
+			if tilt >= 0.0:
+				_session.stage_set(body, &"axial_tilt_deg", tilt,
+					SESSION_SCRIPT.ApplyScope.FULL_REBUILD, "Orbit preset tilt")
+			_refresh_current_category())
+		presets.add_child(b)
+
 
 func _build_terrain_backend_selector() -> void:
 	var terrain: Resource = _session.active_terrain_profile()
@@ -57,10 +193,12 @@ func _build_terrain_backend_selector() -> void:
 	_workspace.add_child(row)
 	var label := Label.new()
 	label.text = "Surface source"
-	label.custom_minimum_size.x = 260.0
+	label.custom_minimum_size.x = 150.0
+	label.clip_text = true
 	row.add_child(label)
 	var selector := OptionButton.new()
-	selector.custom_minimum_size.x = 260.0
+	selector.custom_minimum_size.x = 150.0
+	selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	selector.add_item("Procedural", TERRAIN_MODE_PROFILE_SCRIPT.GenerationMode.PROCEDURAL)
 	selector.add_item("Blank — shader-authored", TERRAIN_MODE_PROFILE_SCRIPT.GenerationMode.BLANK)
 	selector.select(1 if int(terrain.get(&"generation_mode")) \
@@ -251,10 +389,12 @@ func _add_star_spectral_selector(star: Resource) -> void:
 	_workspace.add_child(row)
 	var label := Label.new()
 	label.text = "Spectral class"
-	label.custom_minimum_size.x = 260.0
+	label.custom_minimum_size.x = 150.0
+	label.clip_text = true
 	row.add_child(label)
 	var selector := OptionButton.new()
-	selector.custom_minimum_size.x = 240.0
+	selector.custom_minimum_size.x = 120.0
+	selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for name: String in ["O", "B", "A", "F", "G", "K", "M", "Custom"]:
 		selector.add_item(name)
 	selector.select(clampi(int(star.get(&"spectral_class")), 0, 7))
@@ -270,11 +410,13 @@ func _add_star_color_field(label_text: String, value: Color, callback: Callable)
 	_workspace.add_child(row)
 	var label := Label.new()
 	label.text = label_text
-	label.custom_minimum_size.x = 260.0
+	label.custom_minimum_size.x = 150.0
+	label.clip_text = true
 	row.add_child(label)
 	var picker := ColorPickerButton.new()
 	picker.color = value
-	picker.custom_minimum_size = Vector2(240.0, 30.0)
+	picker.custom_minimum_size = Vector2(120.0, 30.0)
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	picker.color_changed.connect(func(next_color: Color) -> void: callback.call(next_color))
 	row.add_child(picker)
 

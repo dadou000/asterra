@@ -54,7 +54,7 @@ func _process(dt: float) -> void:
 	super._process(dt)
 	if _occlusion_effect == null or not _occlusion_effect.is_ready():
 		return
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	_occlusion_effect.set_floating_origin(origin)
 	_update_occlusion_candidates(origin)
 
@@ -91,7 +91,7 @@ func _try_install_occlusion_effect(world_environment: WorldEnvironment) -> void:
 
 
 func _update_occlusion_candidates(origin: Vector3) -> void:
-	if Planet.cfg == null or not Planet.ready_state or not _have_anchor:
+	if _planet().cfg == null or not _planet().ready_state or not _have_anchor:
 		return
 
 	var changed: bool = _occlusion_last_min_level != _active_min_level \
@@ -166,7 +166,7 @@ func _build_ring_sector_sphere(level: int, sector: int) -> Vector4:
 	var angle1: float = float(sector + 1) * TAU / float(SECTOR_COUNT)
 	var angle_mid: float = (angle0 + angle1) * 0.5
 
-	var cfg: GenConfig = Planet.cfg
+	var cfg: GenConfig = _planet().cfg
 	var relief_guard: float = OCCLUSION_ALTITUDE_GUARD_M \
 		+ absf(cfg.detail_amplitude) * 2.0
 	var min_altitude: float = cfg.abyssal_depth - relief_guard
@@ -196,7 +196,7 @@ func _build_ring_sector_sphere(level: int, sector: int) -> Vector4:
 
 
 func _occlusion_surface_world(offset_m: Vector2, altitude_m: float) -> Vector3:
-	var radius: float = maxf(Planet.cfg.planet_radius, 1.0)
+	var radius: float = maxf(_planet().cfg.planet_radius, 1.0)
 	var arc: float = offset_m.length()
 	var direction: Vector3
 	if arc <= 1e-5:
@@ -248,7 +248,7 @@ func _refresh_occlusion_results(camera: Camera3D) -> void:
 		return
 
 	var sampled_world: Vector3 = snapshot.get("camera_world", Vector3.ZERO)
-	var current_world: Vector3 = Frames.to_world(camera.global_position).to_v3()
+	var current_world: Vector3 = _obs_world(camera).to_v3()
 	var sampled_forward: Vector3 = snapshot.get("camera_forward", Vector3.ZERO)
 	var current_forward: Vector3 = -camera.global_transform.basis.z.normalized()
 	if sampled_world.distance_to(current_world) > OCCLUSION_MAX_CAMERA_DELTA_M \

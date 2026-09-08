@@ -613,13 +613,18 @@ void fragment() {
 				biome_tex_slope_deg, biome_tex_cavity, dpos, biome_tex_dpdx, biome_tex_dpdy, wn,
 				albedo, roughness, biome_tex_metallic, biome_tex_anisotropy, biome_tex_emission);
 			if (abs(biome_tex_anisotropy) > 0.001) {
-				// No authored tangent data exists for this procedural terrain
-				// mesh to derive a "grain direction" from, so this is a fixed,
-				// plausible default (streaks along the local shading tangent)
-				// rather than a computed flow -- a reasonable approximation
-				// for a rock/metal-vein look, not physically derived.
-				ANISOTROPY = biome_tex_anisotropy;
-				ANISOTROPY_FLOW = vec2(1.0, 0.0);
+				// Godot evaluates ANISOTROPY only with a real tangent basis, and
+				// this GPU-driven clipmap ships a topology-only template mesh with
+				// no ARRAY_TANGENT -- so writing ANISOTROPY here did nothing
+				// visible AND set uses_tangent on the shader, which made the
+				// renderer log "shader requires tangents" for every clipmap
+				// surface every frame (multi-GB godot.log, wasted per-draw setup).
+				// Approximate the authored directional sheen by tightening
+				// roughness instead; that needs no tangent frame. If true
+				// anisotropic terrain is wanted later, give _build_strip_mesh an
+				// ARRAY_TANGENT and write TANGENT/BINORMAL from the sphere frame
+				// in vertex(), then restore ANISOTROPY here.
+				roughness *= clamp(1.0 - abs(biome_tex_anisotropy) * 0.5, 0.25, 1.0);
 			}
 
 			float authored_metallic = biome_tex_metallic;

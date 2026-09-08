@@ -330,6 +330,15 @@ func _validate_celestial_multi_preview() -> bool:
 		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: bootstrap has no parent planet")
 		return false
 	var parent_id: String = String(parent.get(&"body_id"))
+	# The primary terrestrial body now ORBITS the root star Helion (was a sibling).
+	var helion: Resource = session.staged_system.call("find_body", "helion") as Resource
+	if helion == null or String(parent.get(&"parent_body_id")) != "helion":
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: primary body is not a Helion child")
+		return false
+	var primary_orbit: Resource = parent.get(&"orbit") as Resource
+	if primary_orbit == null or float(primary_orbit.get(&"semi_major_axis_m")) < 1.0e11:
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: primary body has no ~1 AU orbit around Helion")
+		return false
 	var moon: Resource = session.create_body("CI Moon", BODY_SCRIPT.BodyType.MOON, parent_id)
 	if moon == null:
 		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon creation failed")
@@ -344,18 +353,30 @@ func _validate_celestial_multi_preview() -> bool:
 	if preview == null:
 		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: preview runtime did not instantiate")
 		return false
+	# Bootstrap now also carries the root star (Helion), so the expected count is
+	# every staged body, not a hard-coded 2.
+	var expected_body_count: int = int((session.staged_system.get(&"bodies") as Array).size())
 	add_child(preview)
 	preview.call("show_system", session.staged_system, parent_id, parent_id)
-	if int(preview.call("preview_body_count")) != 2:
+	if int(preview.call("preview_body_count")) != expected_body_count:
 		preview.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: parent selection did not retain both bodies")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: parent selection did not retain every body")
 		return false
+	# Positions are anchor-relative: the detailed body (Asterra) sits at the Frames
+	# origin even though it orbits Helion ~1 AU out, and Helion is offset by -1 AU.
 	var parent_world: Vec3D = preview.call("body_world_position", parent_id) as Vec3D
 	var parent_selected_center: Vec3D = preview.call("selected_center_world") as Vec3D
 	if parent_world == null or parent_world.length_sq() > 1.0e-6 \
 			or parent_selected_center == null or parent_selected_center.length_sq() > 1.0e-6:
 		preview.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: root planet moved away from system origin")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: anchor body is not at the Frames origin")
+		return false
+	var helion_rel: Vec3D = preview.call("body_world_position", "helion") as Vec3D
+	var helion_abs: Vec3D = preview.call("body_system_position", "helion") as Vec3D
+	if helion_rel == null or helion_rel.length() < 1.0e11 \
+			or helion_abs == null or helion_abs.length_sq() > 1.0e-6:
+		preview.free()
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: root star must be at the system origin and ~1 AU from the anchor")
 		return false
 	if float(preview.call("family_frame_radius_m")) <= float(parent.get(&"radius_m")):
 		preview.free()
@@ -364,22 +385,24 @@ func _validate_celestial_multi_preview() -> bool:
 
 	var moon_id: String = String(moon.get(&"body_id"))
 	preview.call("show_system", session.staged_system, moon_id, parent_id)
-	if int(preview.call("preview_body_count")) != 2:
+	if int(preview.call("preview_body_count")) != expected_body_count:
 		preview.free()
 		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon selection discarded its parent planet")
 		return false
+	# The anchor is still the detailed body (Asterra), so it stays at the origin;
+	# the moon is offset from it by its own orbit and selected_center matches.
 	var parent_after_select: Vec3D = preview.call("body_world_position", parent_id) as Vec3D
 	var moon_world: Vec3D = preview.call("body_world_position", moon_id) as Vec3D
 	var moon_selected_center: Vec3D = preview.call("selected_center_world") as Vec3D
 	if parent_after_select == null or parent_after_select.length_sq() > 1.0e-6:
 		preview.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: selecting moon re-centred the parent planet")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: selecting the moon moved the anchor body off the origin")
 		return false
 	if moon_world == null or moon_world.length() <= minimum_separation \
 			or moon_selected_center == null \
 			or moon_selected_center.sub(moon_world).length() > 0.001:
 		preview.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon did not retain its absolute orbital centre")
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: moon lost its orbit offset from the anchor body")
 		return false
 	if float(preview.call("family_frame_radius_m")) <= float(moon.get(&"radius_m")):
 		preview.free()
@@ -407,24 +430,18 @@ func _validate_celestial_multi_preview() -> bool:
 	phase24_host.free()
 	preview.free()
 
-	# Applying an orbital child must never redirect the singleton root PlanetBake to
-	# that child's radius at system origin. Authoring state can apply, but runtime
-	# generation remains untouched until non-zero body centres are supported.
-	var fake_main := FakeRuntimeMain.new()
-	fake_main.cfg = GENERATION_PROFILE.new()
-	var host: Node = RUNTIME_HOST.new()
-	host.set("_main", fake_main)
-	host.set("_runtime_applied_snapshot", session.applied_system.duplicate(true))
-	host.set("_pending_apply_scope", WorldAuthoringSession.ApplyScope.FULL_REBUILD)
-	host.call("_on_runtime_apply_requested", session.staged_system)
-	if fake_main.rebake_calls != 0:
-		host.free()
-		fake_main.free()
-		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: orbital moon Apply invoked root PlanetBake")
+	# The renderer is now body-centre-aware: the detailed runtime is usable for a
+	# terrestrial body that ORBITS its star, not only for a parentless one. (This
+	# inverts the pre-orbit rule that hid the detailed stack for any orbital body.)
+	var gate_host: Node = RUNTIME_HOST.new()
+	gate_host.set("_detailed_runtime_body_id", parent_id)
+	var gate_ok: bool = bool(gate_host.call("_detailed_runtime_is_root_usable", session.staged_system))
+	gate_host.free()
+	if not gate_ok:
+		_fail("CELESTIAL_SYSTEM_FRAME_FAILED: detailed runtime rejected the Helion-child primary body")
 		return false
-	host.free()
-	fake_main.free()
-	print("CELESTIAL_SYSTEM_FRAME_OK: absolute centres + persistent root detail/atmosphere + safe orbital Apply")
+
+	print("CELESTIAL_SYSTEM_FRAME_OK: anchor-relative centres + persistent root detail/atmosphere + body-centre-aware gate")
 	return true
 
 

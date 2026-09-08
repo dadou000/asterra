@@ -29,12 +29,12 @@ var _l0_center_projection_corrections: int = 0
 
 func _gnomonic_offset_from_dir(surface_dir: Vector3, anchor_dir: Vector3,
 		right: Vector3, up: Vector3) -> Vector2:
-	if Planet.cfg == null:
+	if _planet().cfg == null:
 		return Vector2.ZERO
 	var denom: float = surface_dir.dot(anchor_dir)
 	if not is_finite(denom) or denom <= GNOMONIC_DENOM_MIN:
 		return Vector2.ZERO
-	var scale: float = Planet.cfg.planet_radius / denom
+	var scale: float = _planet().cfg.planet_radius / denom
 	return Vector2(surface_dir.dot(right) * scale, surface_dir.dot(up) * scale)
 
 
@@ -61,11 +61,11 @@ func _project_surface_to_anchor(surface_world: Vec3D, _anchor_world: Vec3D,
 
 
 func _update_center_basis() -> void:
-	if Planet.cfg == null:
+	if _planet().cfg == null:
 		return
 	# Exact inverse of the shader's near-field direction_for_basis_offset():
 	# normalize(anchor + right*x/R + up*y/R).
-	var radius: float = maxf(Planet.cfg.planet_radius, 1.0)
+	var radius: float = maxf(_planet().cfg.planet_radius, 1.0)
 	_center_dir = (_anchor_dir
 		+ _anchor_right * (_center_plane.x / radius)
 		+ _anchor_up * (_center_plane.y / radius)).normalized()
@@ -75,7 +75,7 @@ func _update_center_basis() -> void:
 
 
 func _correct_l0_center_to_observer() -> void:
-	if _debug_freeze or Planet.cfg == null or not Planet.ready_state:
+	if _debug_freeze or _planet().cfg == null or not _planet().ready_state:
 		return
 	var state: Dictionary = _observer_surface_state()
 	if state.is_empty():
@@ -95,7 +95,7 @@ func _correct_l0_center_to_observer() -> void:
 	# The parent has already published uniforms earlier in this frame. Republish only
 	# the position-dependent terrain uniforms after correcting the centre; rendering
 	# and the cache update below will therefore consume one coherent coordinate frame.
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	_sync_uniforms(origin)
 
 
@@ -111,9 +111,9 @@ func _parent_reanchor_metric(plane_offset: Vector2) -> float:
 	# procedural.gd currently detects reanchor from the tangent component of the
 	# surface chord. Convert our exact gnomonic coordinate back to that quantity so
 	# the staging target lands exactly where the parent will actually reset.
-	if Planet.cfg == null:
+	if _planet().cfg == null:
 		return 0.0
-	var radius: float = maxf(Planet.cfg.planet_radius, 1.0)
+	var radius: float = maxf(_planet().cfg.planet_radius, 1.0)
 	var inv_root: float = 1.0 / sqrt(1.0 + plane_offset.length_squared() / (radius * radius))
 	return maxf(absf(plane_offset.x), absf(plane_offset.y)) * inv_root
 
@@ -151,7 +151,7 @@ func _predict_handoff_target(plane_offset: Vector2, heading: Vector2) -> Vector2
 
 
 func _start_handoff(target_offset: Vector2, retarget: bool) -> void:
-	if Planet.cfg == null:
+	if _planet().cfg == null:
 		return
 	if retarget:
 		_handoff_retargets += 1
@@ -162,7 +162,7 @@ func _start_handoff(target_offset: Vector2, retarget: bool) -> void:
 	_pending_target_offset = target_offset
 
 	# Exact inverse of the shader/CPU gnomonic mapping.
-	var radius: float = maxf(Planet.cfg.planet_radius, 1.0)
+	var radius: float = maxf(_planet().cfg.planet_radius, 1.0)
 	_pending_anchor_dir = (_anchor_dir
 		+ _anchor_right * (target_offset.x / radius)
 		+ _anchor_up * (target_offset.y / radius)).normalized()

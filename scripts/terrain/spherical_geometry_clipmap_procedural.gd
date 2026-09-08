@@ -30,7 +30,7 @@ func _ready() -> void:
 
 
 func _process(_dt: float) -> void:
-	if not Planet.ready_state or Planet.cfg == null:
+	if not _planet().ready_state or _planet().cfg == null:
 		_set_visible(false)
 		return
 
@@ -39,13 +39,13 @@ func _process(_dt: float) -> void:
 		_set_visible(false)
 		return
 
-	var observer_world: Vec3D = Frames.to_world(camera.global_position)
+	var observer_world: Vec3D = _obs_world(camera)
 	var observer_radius: float = observer_world.length()
 	if observer_radius <= 1.0:
 		_set_visible(false)
 		return
 
-	var radius: float = Planet.cfg.planet_radius
+	var radius: float = _planet().cfg.planet_radius
 	var observer_unit_world: Vec3D = observer_world.normalized()
 	var observer_dir: Vector3 = observer_unit_world.to_v3()
 	if not _have_anchor:
@@ -84,7 +84,7 @@ func _process(_dt: float) -> void:
 		_update_visible_cap(observer_radius, radius)
 		_update_active_levels()
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	_bind_gpu_resources(false)
 	_sync_uniforms(origin)
 	_sync_material_control()
@@ -99,8 +99,8 @@ func _process(_dt: float) -> void:
 func _bind_gpu_resources(force: bool) -> void:
 	if _material == null:
 		return
-	var macro: Texture2DArray = Planet.orbit_elevation_texture if Planet.ready_state else null
-	var macro_res: int = Planet.orbit_texture_face_res if Planet.ready_state else 0
+	var macro: Texture2DArray = _planet().orbit_elevation_texture if _planet().ready_state else null
+	var macro_res: int = _planet().orbit_texture_face_res if _planet().ready_state else 0
 	if force or macro != _bound_orbit:
 		_bound_orbit = macro
 		_material.set_shader_parameter("u_macro_elevation", macro)
@@ -112,19 +112,19 @@ func _bind_gpu_resources(force: bool) -> void:
 
 func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_origin", origin)
-	_material.set_shader_parameter("u_anchor_render", Frames.to_render(_stable_anchor_world))
+	_material.set_shader_parameter("u_anchor_render", _render_effective(_stable_anchor_world))
 	_material.set_shader_parameter("u_anchor_dir", _anchor_dir)
 	_material.set_shader_parameter("u_anchor_right", _anchor_right)
 	_material.set_shader_parameter("u_anchor_up", _anchor_up)
 	_material.set_shader_parameter("u_lattice_center_plane", _center_plane)
-	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+	_material.set_shader_parameter("u_planet_radius", _planet().cfg.planet_radius)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
 	_material.set_shader_parameter("u_center_up", _center_up)
 	_material.set_shader_parameter("u_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
 	_material.set_shader_parameter("u_visible_cap_angle",
-		minf(_visible_cap_arc_m / Planet.cfg.planet_radius * 1.03, PI * 0.5))
+		minf(_visible_cap_arc_m / _planet().cfg.planet_radius * 1.03, PI * 0.5))
 	_material.set_shader_parameter("u_height_enabled", 1.0 if _height_enabled else 0.0)
 	_material.set_shader_parameter("u_macro_ready", 1.0 if _bound_orbit != null else 0.0)
 	_sync_detail_seed()
@@ -132,12 +132,12 @@ func _sync_uniforms(origin: Vector3) -> void:
 
 
 func _sync_detail_seed() -> void:
-	if _material == null or Planet.cfg == null:
+	if _material == null or _planet().cfg == null:
 		return
-	var detail_seed: int = Planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+	var detail_seed: int = _planet().cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
-		* maxf(0.05, Planet.cfg.detail_amplitude / 260.0))
+		* maxf(0.05, _planet().cfg.detail_amplitude / 260.0))
 
 
 func _sync_debug_uniforms() -> void:
@@ -182,7 +182,7 @@ func _update_center_basis() -> void:
 	# lattice is gnomonic, so its CPU culling/centre basis must use the exact same
 	# inverse or the clipmap disc visibly walks away from the camera between anchors.
 	_center_dir = _gnomonic_direction_for_offset(
-		_anchor_dir, _anchor_right, _anchor_up, _center_plane, Planet.cfg.planet_radius)
+		_anchor_dir, _anchor_right, _anchor_up, _center_plane, _planet().cfg.planet_radius)
 	var tangent: Array = CubeSphere.tangent_basis(_center_dir)
 	_center_right = tangent[0]
 	_center_up = tangent[1]

@@ -87,6 +87,36 @@ func spawn_at(dir: Vector3, spawn_altitude: float) -> void:
 	moved.emit(world_pos)
 
 
+## Re-seat the player after a seamless active-body swap (Bodies.set_active). Unlike
+## spawn_at this takes the player's position already re-expressed about the new
+## body's centre and does NOT force an altitude -- continuity of the flight is the
+## whole point. Velocity is preserved by default (the legacy controller carries
+## none between frames; the physics walker keeps its own).
+func reseat_to_active_body(new_world_pos: Vec3D, _keep_velocity: bool = true) -> void:
+	world_pos = new_world_pos
+	Frames.rebase(world_pos)
+	_sync_transform()
+	var d := up_dir()
+	TerrainContactSampler.request_height(d)
+	TerrainContactSampler.request_contact_height(d)
+	TerrainContactSampler.request_surface(d)
+	moved.emit(world_pos)
+
+
+## Radial gravity magnitude for the body the player is currently in contact with.
+## Reached via /root/Bodies (never the bare autoload identifier) so the isolated
+## script CI, which has no `Bodies` autoload, still parses this file. Returns the
+## historical constant when the pool is absent or its contact body carries no
+## authored surface gravity.
+func _gravity_mps2() -> float:
+	var bodies: Node = get_node_or_null(^"/root/Bodies")
+	if bodies != null:
+		var contact: Variant = bodies.get(&"contact_body")
+		if contact != null:
+			return float(contact.surface_gravity())
+	return GRAVITY
+
+
 func up_dir() -> Vector3:
 	return world_pos.normalized().to_v3()
 
@@ -219,7 +249,7 @@ func _physics_process(dt: float) -> void:
 		var gh: float = TerrainContactSampler.contact_height(up, broad_height)
 		var target_r := Planet.cfg.planet_radius + gh + EYE_HEIGHT
 		var r := world_pos.length()
-		vertical_speed -= GRAVITY * dt
+		vertical_speed -= _gravity_mps2() * dt
 		if Input.is_action_just_pressed("move_up") and grounded:
 			vertical_speed = JUMP_SPEED
 		r += vertical_speed * dt

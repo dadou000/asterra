@@ -236,7 +236,17 @@ void sky() {
 			float sun_radius = sun_diameter * 0.5;
 			float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.92), cos_angle);
 			float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
-			col += disc * visible * LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
+			// planet_direct_sun_visibility only cuts the disc in the last fraction of
+			// a degree at the geometric limb. Between there and a high sun it was
+			// still added at full LIGHT0_ENERGY*4 with no air-mass extinction, so a
+			// near-horizon sun blazed and bloomed over every foreground ridge at
+			// night. Dim and gate it with the same air-mass model deep_sky uses.
+			float sun_elev = dot(sun_dir, up);
+			float sun_air_mass = 1.0 / max(sun_elev, 0.07);
+			float sun_extinction = exp(-0.085 * max(sun_air_mass - 1.0, 0.0));
+			float horizon_fade = smoothstep(-0.02, 0.06, sun_elev);
+			col += disc * visible * horizon_fade * sun_extinction
+				* LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
 		}
 
 		vec4 cloud = HALF_RES_COLOR;

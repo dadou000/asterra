@@ -367,6 +367,45 @@ func _run() -> void:
 		return
 	final_rt.free()
 
+	# The gradient distribution curve now allows up to CurveFieldData.MAX_POINTS
+	# (8). Author a 6-point curve and confirm every slot survives the GPU pack
+	# (curve_ab/cd/ef/gh), so the shader sees the same shape CurveFieldData
+	# evaluates on the CPU past point 4.
+	var six := PackedFloat32Array([0.0, 0.0, 0.2, 0.6, 0.4, 0.15, 0.6, 0.9, 0.8, 0.35, 1.0, 1.0])
+	# Staging rebuilt the panel earlier -- re-find the live control.
+	var gradient_curve_field_2: CurveFieldControl = _find_named(editor,
+		"BiomeTextureLayerGradientCurve_0") as CurveFieldControl
+	if gradient_curve_field_2 == null:
+		_fail("Gradient distribution curve editor vanished after staging")
+		return
+	gradient_curve_field_2.set_points(six)
+	gradient_curve_field_2.curve_changed.emit(gradient_curve_field_2.get_points())
+	await _frames(3)
+	var six_rt: Node = RUNTIME.new()
+	six_rt.call("compile_from_terrain", terrain)
+	var six_packed: Dictionary = six_rt.call("biome_texture_uniforms") as Dictionary
+	six_rt.free()
+	var six_stack: Array = editor.call("_phase47_texture_stack", texture_graph) as Array
+	var six_curve: PackedFloat32Array = (six_stack[0] as Dictionary).get("gradient_curve",
+		PackedFloat32Array()) as PackedFloat32Array
+	if CurveFieldData.point_count(six_curve) != 6:
+		_fail("6-point gradient curve did not round-trip through the UI (curve=%s)" % [six_curve])
+		return
+	var quad: Array = CurveFieldData.pack_to_vec4s(six_curve)
+	var packed_curve := [
+		(six_packed.get("curve_ab") as PackedVector4Array)[0], (six_packed.get("curve_cd") as PackedVector4Array)[0],
+		(six_packed.get("curve_ef") as PackedVector4Array)[0], (six_packed.get("curve_gh") as PackedVector4Array)[0],
+	]
+	for slot_i: int in 4:
+		if not (packed_curve[slot_i] as Vector4).is_equal_approx(quad[slot_i] as Vector4):
+			_fail("GPU packing dropped gradient curve slot %d (packed=%s authored=%s)"
+				% [slot_i, packed_curve[slot_i], quad[slot_i]])
+			return
+	if int(round((six_packed.get("h") as PackedVector4Array)[0].z)) != 6:
+		_fail("Packed gradient curve point count is not 6 (h[0].z=%.1f)"
+			% (six_packed.get("h") as PackedVector4Array)[0].z)
+		return
+
 	print("BIOME_TEXTURE_PBR_PHASE48_OK: gradients, material overrides, and PBR texture import round-trip through the real UI and CPU runtime")
 	editor.queue_free()
 	await _frames(2)

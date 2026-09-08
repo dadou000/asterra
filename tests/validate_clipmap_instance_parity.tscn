@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/validate_clipmap_instance_parity.gd" id="1"]
+
+[node name="ValidateClipmapInstanceParity" type="Node"]
+script = ExtResource("1")

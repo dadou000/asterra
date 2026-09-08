@@ -20,11 +20,23 @@ const MAX_FACE_RES := 768
 const COAST_DETAIL_BAND_M := 600.0
 
 ## CPU-only stage. Returns Image resources but does not create a GPU texture.
+## Uses the resident `Planet` autoload.
 static func build_images() -> Dictionary:
-	if not Planet.ready_state or Planet.grid == null:
+	return build_images_from(Engine.get_main_loop().root.get_node_or_null(^"Planet"))
+
+
+## CPU-only stage for an arbitrary sampler (any planet_sampler_gpu_runtime
+## instance -- e.g. a non-resident body's, see M2+ of the seamless-multi-planet
+## design). `sampler` must expose `ready_state` / `grid` / `make_detail()` /
+## `macro_height()` / `coast_profile_offset()` / `pristine_height()`.
+static func build_images_from(sampler: Object) -> Dictionary:
+	if sampler == null or not bool(sampler.get(&"ready_state")):
+		return {}
+	var grid: Object = sampler.get(&"grid")
+	if grid == null:
 		return {}
 
-	var res: int = mini(Planet.grid.res * UPSAMPLE, MAX_FACE_RES)
+	var res: int = mini(int(grid.get(&"res")) * UPSAMPLE, MAX_FACE_RES)
 	var tex_res: int = res + 2
 	var started := Time.get_ticks_msec()
 
@@ -35,7 +47,7 @@ static func build_images() -> Dictionary:
 	var faces: Array[Image] = []
 	faces.resize(6)
 	var build_face := func(face: int) -> void:
-		faces[face] = _build_face(face, res, tex_res)
+		faces[face] = _build_face_from(sampler, face, res, tex_res)
 	var group := WorkerThreadPool.add_group_task(build_face, 6, -1, false,
 		"asterra_orbit_face")
 	WorkerThreadPool.wait_for_group_task_completion(group)
@@ -54,8 +66,12 @@ static func build_images() -> Dictionary:
 	}
 
 static func _build_face(face: int, res: int, tex_res: int) -> Image:
+	return _build_face_from(
+		Engine.get_main_loop().root.get_node_or_null(^"Planet"), face, res, tex_res)
+
+static func _build_face_from(sampler: Object, face: int, res: int, tex_res: int) -> Image:
 	var cell_step: float = 2.0 / float(res)
-	var detail: TerrainDetail = Planet.make_detail()
+	var detail: TerrainDetail = sampler.make_detail()
 	var img := Image.create(tex_res, tex_res, false, Image.FORMAT_RF)
 	for y in tex_res:
 		var j: int = y - 1
@@ -64,8 +80,8 @@ static func _build_face(face: int, res: int, tex_res: int) -> Image:
 			var i: int = x - 1
 			var u: float = (float(i) + 0.5) * cell_step - 1.0
 			var d: Vector3 = CubeSphere.face_uv_to_dir(face, u, v)
-			var macro_h: float = Planet.macro_height(d)
-			var h: float = macro_h + Planet.coast_profile_offset(d, macro_h)
+			var macro_h: float = sampler.macro_height(d)
+			var h: float = macro_h + sampler.coast_profile_offset(d, macro_h)
 			# Land carries the real runtime surface, not the macro field.
 			# Bilinear interpolation of 8 km cells is smooth by construction, so a
 			# texture built from it describes a planet with no mountains on it --
@@ -75,7 +91,7 @@ static func _build_face(face: int, res: int, tex_res: int) -> Image:
 			# nothing reads its shape except the depth gradient, and it is more
 			# than half the sphere.
 			if macro_h > -COAST_DETAIL_BAND_M:
-				h = Planet.pristine_height(d, detail)
+				h = sampler.pristine_height(d, detail)
 			img.set_pixel(x, y, Color(h, 0.0, 0.0, 1.0))
 	return img
 

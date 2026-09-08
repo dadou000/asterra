@@ -110,7 +110,7 @@
 // rather than forcing every band to also flatten roughness just to recolour
 // something. enable_flags bit 4 = height range is relative to the local
 // terrain trend rather than absolute sea level (see "Height reference" above).
-// h.z is the gradient distribution curve's point count (2-4): the raw
+// h.z is the gradient distribution curve's point count (2-8): the raw
 // height fraction that gradient_strength scales is reshaped by this curve
 // FIRST (see btex_curve_eval below and CurveFieldData on the CPU side) --
 // e.g. an S-curve holds colour_a longer before transitioning, instead of a
@@ -128,6 +128,8 @@ uniform vec4 u_biome_tex_layer_g[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_h[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_curve_ab[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_curve_cd[BIOME_TEX_LAYER_MAX];
+uniform vec4 u_biome_tex_layer_curve_ef[BIOME_TEX_LAYER_MAX];
+uniform vec4 u_biome_tex_layer_curve_gh[BIOME_TEX_LAYER_MAX];
 
 // Screen-space curvature-to-cavity conversion -- see the "Cavity/convexity"
 // header comment. Tuned by eye against typical terrain crease/ridge scales,
@@ -141,35 +143,33 @@ const float BTEX_CAVITY_SCALE = 4.0;
 // via #include) for the same reason btex_hash duplicates bp_hash just below:
 // neither biome shaderinc has an include guard, and both end up included
 // together in the same fragment shader.
-float btex_curve_eval(vec4 curve_ab, vec4 curve_cd, int count, float x) {
+float btex_curve_eval(vec4 ab, vec4 cd, vec4 ef, vec4 gh, int count, float x) {
 	x = clamp(x, 0.0, 1.0);
-	int n = clamp(count, 2, 4);
-	vec2 p0 = curve_ab.xy;
-	vec2 p1 = curve_ab.zw;
-	vec2 p2 = (n >= 3) ? curve_cd.xy : p1;
-	vec2 p3 = (n >= 4) ? curve_cd.zw : p2;
-	vec2 a;
-	vec2 b;
-	if (n == 2) {
-		a = p0;
-		b = p1;
-	} else if (n == 3) {
-		a = (x <= p1.x) ? p0 : p1;
-		b = (x <= p1.x) ? p1 : p2;
-	} else {
-		if (x <= p1.x) {
-			a = p0;
-			b = p1;
-		} else if (x <= p2.x) {
-			a = p1;
-			b = p2;
-		} else {
-			a = p2;
-			b = p3;
+	int n = clamp(count, 2, 8);
+	vec2 pts[8];
+	pts[0] = ab.xy;
+	pts[1] = ab.zw;
+	pts[2] = cd.xy;
+	pts[3] = cd.zw;
+	pts[4] = ef.xy;
+	pts[5] = ef.zw;
+	pts[6] = gh.xy;
+	pts[7] = gh.zw;
+	float result = pts[0].y;
+	for (int i = 0; i < 7; i++) {
+		if (i > n - 2) {
+			break;
+		}
+		vec2 a = pts[i];
+		vec2 b = pts[i + 1];
+		result = b.y;
+		if (x <= b.x || i == n - 2) {
+			float t = clamp((x - a.x) / max(b.x - a.x, 1e-5), 0.0, 1.0);
+			result = mix(a.y, b.y, smoothstep(0.0, 1.0, t));
+			break;
 		}
 	}
-	float t = clamp((x - a.x) / max(b.x - a.x, 1e-5), 0.0, 1.0);
-	return mix(a.y, b.y, smoothstep(0.0, 1.0, t));
+	return result;
 }
 
 // User-imported PBR textures (albedo + optional roughness + optional normal
@@ -408,7 +408,7 @@ void asterra_biome_texture_apply(vec3 dir, int biome, float height_m, float loca
 		// gradient, in between blends toward it.
 		float grad_raw = clamp((effective_height_m - a.z) / max(a.w - a.z, 1e-4), 0.0, 1.0);
 		float grad_t = btex_curve_eval(u_biome_tex_layer_curve_ab[i], u_biome_tex_layer_curve_cd[i],
-			int(round(h.z)), grad_raw);
+			u_biome_tex_layer_curve_ef[i], u_biome_tex_layer_curve_gh[i], int(round(h.z)), grad_raw);
 		vec3 layer_color = mix(c.rgb, e.rgb, grad_t * clamp(e.a, 0.0, 1.0));
 
 		int choice = int(floor(a.y + 0.5));

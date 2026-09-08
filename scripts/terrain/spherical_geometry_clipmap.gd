@@ -62,6 +62,90 @@ var _bound_orbit: Texture2DArray
 var _bound_orbit_res: int = -1
 var _last_material_control: Texture2DArray
 
+## Multi-body seam (see the seamless-multi-planet design). The autoload instance
+## leaves `_body_runtime` null and every `_planet()` / `_planet_ctx()` call
+## resolves to the `Planet` / `PlanetContext` autoloads -- i.e. behaviour is
+## exactly as before this seam existed. A non-primary BodyRuntime (M5) calls
+## `bind_runtime(rt)` before `_ready`, and the same code then drives that body's
+## own sampler + GPU context instead. `_body_runtime` is duck-typed (fields
+## `sampler` / `context`) so this file never has to load `BodyRuntime`.
+var _body_runtime: Object = null
+var _planet_node_cache: Node = null
+var _planet_ctx_cache: Node = null
+
+
+## The sampler this clipmap reads its world from: the bound BodyRuntime's, else
+## the `Planet` autoload. Never null once the scene tree exists. Deliberately
+## returns an untyped value so the many `.cfg` / `.ready_state` / `.world_ready`
+## members resolve dynamically, exactly as they did against the `Planet` autoload.
+func _planet() -> Variant:
+	if _body_runtime != null:
+		return _body_runtime.sampler
+	if _planet_node_cache == null or not is_instance_valid(_planet_node_cache):
+		_planet_node_cache = get_node_or_null(^"/root/Planet")
+	return _planet_node_cache
+
+
+## The coarse GPU context (GPUPlanetContext) for this body: the bound
+## BodyRuntime's, else the `PlanetContext` autoload. May be null very early.
+func _planet_ctx() -> Variant:
+	if _body_runtime != null:
+		return _body_runtime.context
+	if _planet_ctx_cache == null or not is_instance_valid(_planet_ctx_cache):
+		_planet_ctx_cache = get_node_or_null(^"/root/PlanetContext")
+	return _planet_ctx_cache
+
+
+## When true this instance renders a NON-active body's terrain concurrently with
+## the active one (M5b). It runs the base LOD/anchor/uniform path (which is
+## `_effective_origin()`-aware) but skips the geomorph compute cache + the
+## geomorph hand-off -- a body you are not standing on is always far away, where
+## orbit-elevation + biome colouring is the correct LOD and the cache would only
+## fight the shared RenderingDevice. Set via `bind_runtime` / a direct assign
+## before `_ready`.
+var _concurrent_far_only: bool = false
+
+
+## Point this clipmap at a non-primary body's stack. Call before `_ready`.
+## `far_only` brings up the concurrent-render path (M5b).
+func bind_runtime(runtime: Object, far_only: bool = false) -> void:
+	_body_runtime = runtime
+	_concurrent_far_only = far_only
+	_planet_node_cache = null
+	_planet_ctx_cache = null
+
+
+## This clipmap's body centre expressed in the CURRENT canonical frame (active
+## body at the origin). Zero for the active/primary body.
+func _canonical_offset() -> Vec3D:
+	if _body_runtime != null and not _body_runtime.is_primary \
+			and Frames.has_body_frame(_body_runtime.id):
+		return Frames.body_center_canonical(_body_runtime.id)
+	return Vec3D.new()
+
+
+## Render-frame origin for THIS clipmap's body. For the active body this is
+## exactly `Frames.origin` (the float32 rebase point) -- byte-identical to before
+## this seam. For a concurrently-rendered non-active body the shader reconstructs
+## `VERTEX = planet_point - u_origin` with `planet_point` in that body's own
+## centred frame; subtracting the body's canonical-frame offset here places its
+## geometry correctly in the shared render frame with no shader-source change.
+func _effective_origin() -> Vector3:
+	var o := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var c: Vec3D = _canonical_offset()
+	return o - Vector3(float(c.x), float(c.y), float(c.z))
+
+
+## Camera position as a world point in THIS body's centred frame.
+func _obs_world(cam: Camera3D) -> Vec3D:
+	return Frames.to_world(cam.global_position).sub(_canonical_offset())
+
+
+## Vec3D in this body's centred frame -> render-space position.
+func _render_effective(v: Vec3D) -> Vector3:
+	var e := _effective_origin()
+	return Vector3(float(v.x) - e.x, float(v.y) - e.y, float(v.z) - e.z)
+
 
 func _ready() -> void:
 	process_priority = 9
@@ -70,17 +154,17 @@ func _ready() -> void:
 	_build_batches()
 	_set_visible(false)
 
-	Planet.world_ready.connect(_on_world_ready)
-	Planet.coast_profile_changed.connect(_on_coast_profile_changed)
+	_planet().world_ready.connect(_on_world_ready)
+	_planet().coast_profile_changed.connect(_on_coast_profile_changed)
 	Frames.origin_shifted.connect(_on_origin_shifted)
 	Deltas.region_changed.connect(_on_region_changed)
 
-	if Planet.ready_state and Planet.cfg != null:
+	if _planet().ready_state and _planet().cfg != null:
 		_configure_world()
 
 
 func _process(dt: float) -> void:
-	if not Planet.ready_state or Planet.cfg == null:
+	if not _planet().ready_state or _planet().cfg == null:
 		_set_visible(false)
 		return
 
@@ -89,13 +173,13 @@ func _process(dt: float) -> void:
 		_set_visible(false)
 		return
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	var planet_pos: Vector3 = camera.global_position + origin
 	if planet_pos.length_squared() <= 1.0:
 		_set_visible(false)
 		return
 
-	var radius: float = Planet.cfg.planet_radius
+	var radius: float = _planet().cfg.planet_radius
 	var observer_dir: Vector3 = planet_pos.normalized()
 	if not _have_anchor:
 		_reset_anchor(observer_dir)
@@ -135,8 +219,8 @@ func _process(dt: float) -> void:
 
 
 func _configure_world() -> void:
-	_base_spacing = PI * 0.5 * Planet.cfg.planet_radius \
-		/ (float(Planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	_base_spacing = PI * 0.5 * _planet().cfg.planet_radius \
+		/ (float(_planet().cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
 	_have_anchor = false
 	_request_left = 0.0
 	_bound_atlas = null
@@ -161,7 +245,7 @@ func _reset_anchor(observer_dir: Vector3) -> void:
 
 func _update_center_basis() -> void:
 	_center_dir = _direction_for_offset(_anchor_dir, _anchor_right, _anchor_up,
-		_center_plane, Planet.cfg.planet_radius)
+		_center_plane, _planet().cfg.planet_radius)
 	var tangent: Array = CubeSphere.tangent_basis(_center_dir)
 	_center_right = tangent[0]
 	_center_up = tangent[1]
@@ -199,8 +283,8 @@ func _bind_gpu_resources(force: bool) -> void:
 		_bound_table = table
 		_material.set_shader_parameter("u_height_page_table", table)
 
-	var orbit: Texture2DArray = Planet.orbit_elevation_texture
-	var orbit_res: int = Planet.orbit_texture_face_res
+	var orbit: Texture2DArray = _planet().orbit_elevation_texture
+	var orbit_res: int = _planet().orbit_texture_face_res
 	if force or orbit != _bound_orbit:
 		_bound_orbit = orbit
 		_material.set_shader_parameter("u_orbit_elevation", orbit)
@@ -211,14 +295,14 @@ func _bind_gpu_resources(force: bool) -> void:
 
 func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_origin", origin)
-	_material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+	_material.set_shader_parameter("u_planet_radius", _planet().cfg.planet_radius)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
 	_material.set_shader_parameter("u_center_up", _center_up)
 	_material.set_shader_parameter("u_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
 	_material.set_shader_parameter("u_visible_cap_angle",
-		minf(_visible_cap_arc_m / Planet.cfg.planet_radius * 1.03, PI * 0.5))
+		minf(_visible_cap_arc_m / _planet().cfg.planet_radius * 1.03, PI * 0.5))
 	_material.set_shader_parameter("u_height_enabled", 1.0 if _height_enabled else 0.0)
 
 	_material.set_shader_parameter("u_page_atlas_ready",
@@ -261,7 +345,7 @@ func _sync_material_control() -> void:
 
 
 func _request_visible_pages() -> void:
-	if not _have_anchor or Planet.cfg == null:
+	if not _have_anchor or _planet().cfg == null:
 		return
 	var request_max: int = mini(_active_max_level + 1, MAX_LEVEL)
 	for level: int in range(0, request_max + 1):
@@ -288,7 +372,7 @@ func _request_directions_for_level(level: int) -> Array[Vector3]:
 			if offset.length() > radial_limit:
 				continue
 			result.append(_direction_for_offset(_center_dir, _center_right, _center_up,
-				offset, Planet.cfg.planet_radius))
+				offset, _planet().cfg.planet_radius))
 	return result
 
 

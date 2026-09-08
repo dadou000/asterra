@@ -85,7 +85,12 @@ func _build_shell() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_child(scroll)
 	_workspace = VBoxContainer.new()
-	_workspace.custom_minimum_size = Vector2(760.0, 0.0)
+	# Only a floor wide enough for "label + a usable field". The old 760 min forced
+	# the whole page wider than any narrow side panel the live editor docks it in,
+	# which spilled every row past the visible edge and -- because CurveFieldControl
+	# maps the pointer through its own width -- made the response-curve drags land
+	# at the wrong fraction. EXPAND_FILL still lets it fill a wide layout.
+	_workspace.custom_minimum_size = Vector2(280.0, 0.0)
 	_workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_workspace.add_theme_constant_override("separation", 10)
 	scroll.add_child(_workspace)
@@ -401,7 +406,8 @@ func _add_text_field(label_text: String, value: String, callback: Callable) -> v
 	_workspace.add_child(row)
 	var label := Label.new()
 	label.text = label_text
-	label.custom_minimum_size.x = 260.0
+	label.custom_minimum_size.x = 150.0
+	label.clip_text = true
 	row.add_child(label)
 	var edit := LineEdit.new()
 	edit.text = value
@@ -415,7 +421,8 @@ func _add_number_field(label_text: String, value: float, min_value: float, max_v
 	_workspace.add_child(row)
 	var label := Label.new()
 	label.text = label_text
-	label.custom_minimum_size.x = 260.0
+	label.custom_minimum_size.x = 150.0
+	label.clip_text = true
 	row.add_child(label)
 	var spin := SpinBox.new()
 	spin.min_value = min_value
@@ -423,7 +430,8 @@ func _add_number_field(label_text: String, value: float, min_value: float, max_v
 	spin.step = step
 	spin.suffix = suffix
 	spin.value = clampf(value, min_value, max_value)
-	spin.custom_minimum_size.x = 240.0
+	spin.custom_minimum_size.x = 96.0
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spin.value_changed.connect(func(next_value: float) -> void: callback.call(next_value))
 	row.add_child(spin)
 

@@ -154,7 +154,7 @@ func _update_visible_cap(observer_radius: float, planet_radius: float) -> void:
 
 func _update_screen_space_min_level() -> void:
 	var camera: Camera3D = get_viewport().get_camera_3d()
-	if camera == null or Planet.cfg == null:
+	if camera == null or _planet().cfg == null:
 		_active_min_level = 0
 		_active_min_initialized = false
 		return
@@ -166,7 +166,7 @@ func _update_screen_space_min_level() -> void:
 	if camera.keep_aspect == Camera3D.KEEP_WIDTH:
 		vertical_fov = 2.0 * atan(tan(vertical_fov * 0.5) / maxf(aspect, 1e-6))
 
-	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
+	var origin := _effective_origin()
 	var planet_pos: Vector3 = camera.global_position + origin
 	var observer_radius: float = planet_pos.length()
 	if observer_radius <= 1.0:
@@ -175,10 +175,10 @@ func _update_screen_space_min_level() -> void:
 		return
 
 	var observer_dir: Vector3 = planet_pos / observer_radius
-	var local_macro_h: float = Planet.macro_height(observer_dir)
+	var local_macro_h: float = _planet().macro_height(observer_dir)
 	var displacement_guard: float = _current_displacement_guard_m()
 	_screen_space_surface_distance_m = maxf(
-		observer_radius - (Planet.cfg.planet_radius + local_macro_h) - displacement_guard,
+		observer_radius - (_planet().cfg.planet_radius + local_macro_h) - displacement_guard,
 		0.0)
 	_screen_space_metres_per_pixel = 2.0 * _screen_space_surface_distance_m \
 		* tan(vertical_fov * 0.5) / viewport_h

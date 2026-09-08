@@ -15,9 +15,11 @@ extends Node
 const LIVE_EDITOR_SCRIPT := preload("res://scripts/world_authoring/world_authoring_editor_live_phase46.gd")
 const BIOME_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/biome_authoring_preview.gd")
 const CELESTIAL_PREVIEW_SCRIPT := preload("res://scripts/world_authoring/celestial_body_preview_runtime.gd")
+const ORBITAL_MOTION_SCRIPT := preload("res://scripts/world_authoring/orbital_motion_runtime.gd")
 const APPLY_PLANNER_SCRIPT := preload("res://scripts/world_authoring/world_authoring_apply_planner.gd")
 const TERRAIN_PROFILE_SCRIPT := preload("res://scripts/world_authoring/model/terrain_authoring_profile.gd")
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
+const GEN_CONFIG_SCRIPT := preload("res://scripts/gen/gen_config.gd")
 const AUTHORED_WATER_RUNTIME_SPATIAL_PATH := "res://scripts/world_authoring/authored_water_runtime_spatial.gd"
 const AUTHORED_WATER_RUNTIME_QUERY_PATH := "res://scripts/world_authoring/authored_water_runtime_query.gd"
 const AUTHORED_WATER_RUNTIME_BASE_PATH := "res://scripts/world_authoring/authored_water_runtime.gd"
@@ -36,6 +38,7 @@ var _editor: Control
 var _biome_preview: Node
 var _authored_water_runtime: Node
 var _celestial_preview: Node3D
+var _orbital_motion: Node
 var _authoring_session: WorldAuthoringSession
 var _preview_player: Node
 var _runtime_applied_snapshot: Resource
@@ -100,6 +103,11 @@ func _open_live_editor(player: Node) -> void:
 		if session.applied_system != null:
 			_runtime_applied_snapshot = session.applied_system.duplicate(true)
 			_detailed_runtime_body_id = String(session.applied_system.get(&"active_body_id"))
+			# Recover from a bad earlier Apply that pointed the single resident
+			# terrain runtime at a moon / sub-body: snap it back to the primary.
+			if not _is_primary_terrestrial(session.applied_system,
+					session.applied_system.call("find_body", _detailed_runtime_body_id)):
+				_detailed_runtime_body_id = _primary_terrestrial_id(session.applied_system)
 		if not session.changed.is_connected(_on_authoring_session_changed):
 			session.changed.connect(_on_authoring_session_changed)
 
@@ -108,6 +116,18 @@ func _open_live_editor(player: Node) -> void:
 			celestial_preview.name = "PlanetStudioCelestialSystemPreview"
 			_main.add_child(celestial_preview)
 			_celestial_preview = celestial_preview
+
+		var orbital_motion: Node = ORBITAL_MOTION_SCRIPT.new()
+		orbital_motion.name = "PlanetStudioOrbitalMotion"
+		orbital_motion.call("bind", session, _main)
+		add_child(orbital_motion)
+		_orbital_motion = orbital_motion
+		# Seed the sim clock from the persisted system epoch (dormant until played).
+		var staged: Resource = session.staged_system as Resource
+		if staged != null:
+			Frames.system_time_s = float(staged.get(&"sim_start_epoch_s"))
+			Frames.time_scale = maxf(float(staged.get(&"sim_time_scale")), 0.0)
+			Frames.playing = false
 
 		var biome_preview: Node = BIOME_PREVIEW_SCRIPT.new()
 		biome_preview.name = "PlanetStudioBiomePreview"
@@ -196,6 +216,9 @@ func _flush_active_body_preview() -> void:
 		_celestial_preview.call("show_system", _authoring_session.staged_system,
 			body_id, hidden_detailed_id)
 		_selected_center_world = _celestial_preview.call("selected_center_world") as Vec3D
+	if _orbital_motion != null:
+		_orbital_motion.call("set_anchor",
+			_detailed_runtime_body_id if detailed_available else body_id)
 	if _selected_center_world == null:
 		_selected_center_world = Vec3D.new()
 
@@ -222,17 +245,59 @@ func _detailed_runtime_is_root_usable(system: Resource) -> bool:
 	var detailed: Resource = system.call("find_body", _detailed_runtime_body_id) as Resource
 	if detailed == null:
 		return false
-	if int(detailed.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
-		return false
-	# Current terrain/contact/ocean shaders are root-body centred. If authoring puts
-	# that body into orbit, hide the detailed stack instead of drawing its pieces at
-	# the wrong world position.
-	return String(detailed.get(&"parent_body_id")).is_empty()
+	# The single resident terrain/contact/ocean stack is centred on ONE body, which
+	# OrbitalMotionRuntime keeps at the Frames origin. That body may ORBIT the
+	# system's root star (a planet around Helion) -- its position never reaches the
+	# terrain stack -- but it cannot sit under another planet/moon, which would need
+	# a second detailed runtime that does not exist.
+	return _is_primary_terrestrial(system, detailed)
 
+## Can `body` be (re)bound as the single resident detailed terrain runtime?
+## Only the body that already owns it (re-applying rebakes it in place), or -- when
+## there is no valid resident body -- a top-level terrestrial body. Never STEALS a
+## still-valid resident runtime, which would rebake it with the wrong config and
+## break both bodies' previews.
 func _body_can_own_detailed_runtime(body: Resource) -> bool:
 	if body == null or int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
 		return false
-	return String(body.get(&"parent_body_id")).is_empty()
+	if String(body.get(&"body_id")) == _detailed_runtime_body_id:
+		return true
+	var system: Resource = _authoring_session.staged_system as Resource \
+		if _authoring_session != null else null
+	# The Bodies pool owns a per-body detailed stack: swapping to `body` bakes it
+	# cache-first (instant on a revisit) and drops the previous owner to a cached
+	# FAR slot, so a *primary* terrestrial body may take the detailed runtime over
+	# from another one without corrupting either -- routed via _adopt_pool_detailed_runtime.
+	if _pool_hosts_body(body):
+		return _is_primary_terrestrial(system, body)
+	# No pool slot (single-planet project): never steal a still-valid resident,
+	# which would rebake it with the wrong config and break both bodies' previews.
+	if system != null and system.call("find_body", _detailed_runtime_body_id) != null:
+		return false
+	return _is_primary_terrestrial(system, body)
+
+## A "primary" terrestrial body: parentless, or whose only parent is the system's
+## parentless root STAR.
+func _is_primary_terrestrial(system: Resource, body: Resource) -> bool:
+	if body == null or int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		return false
+	var parent_id: String = String(body.get(&"parent_body_id"))
+	if parent_id.is_empty():
+		return true
+	if system == null:
+		return false
+	var parent: Resource = system.call("find_body", parent_id) as Resource
+	return parent != null and int(parent.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR \
+		and String(parent.get(&"parent_body_id")).is_empty()
+
+func _primary_terrestrial_id(system: Resource) -> String:
+	if system == null:
+		return ""
+	for body_value: Variant in system.get(&"bodies"):
+		var body: Resource = body_value as Resource
+		if _is_primary_terrestrial(system, body):
+			return String(body.get(&"body_id"))
+	return ""
 
 func _focus_camera_on_body(body: Resource) -> void:
 	if _preview_player == null or body == null:
@@ -476,6 +541,14 @@ func _on_runtime_apply_requested(system: Resource) -> void:
 		_apply_sculpt_state(terrain_profile)
 
 	if bool(plan.get("full_rebuild", false)):
+		# A pool-hosted (non-primary) body swaps the single resident detailed stack
+		# through the Bodies pool: cache-first bake, exactly one body resident, an
+		# instant return to any previously-baked body. The primary body keeps the
+		# in-place rebake path below (its stack IS the resident autoload set).
+		if _adopt_pool_detailed_runtime(body, true):
+			_runtime_applied_snapshot = system.duplicate(true)
+			_schedule_active_body_preview(true)
+			return
 		_detailed_runtime_body_id = body_id
 		_apply_full_rebuild(plan, body, atmosphere, generation, cfg)
 		_runtime_applied_snapshot = system.duplicate(true)
@@ -574,6 +647,144 @@ func _apply_sculpt_state(terrain_profile: Resource) -> void:
 	if sculpt_value is Dictionary:
 		Deltas.deserialize(sculpt_value as Dictionary)
 
+## The Bodies pool autoload, resolved via the main loop so it works even when this
+## host node is not (yet) inside the scene tree (some headless tests drive it
+## detached). Absolute get_node paths would error from an out-of-tree node.
+func _bodies_pool() -> Node:
+	var loop := Engine.get_main_loop()
+	if loop is SceneTree and (loop as SceneTree).root != null:
+		return (loop as SceneTree).root.get_node_or_null(^"Bodies")
+	return null
+
+## True when the Bodies pool has a runtime slot for `body` (the seeded celestial
+## system was populated -- Planet Studio + the game share one generator/seed).
+func _pool_hosts_body(body: Resource) -> bool:
+	if body == null:
+		return false
+	var bodies: Node = _bodies_pool()
+	if bodies == null:
+		return false
+	return bodies.call(&"slot", StringName(String(body.get(&"body_id")))) != null
+
+## A body-local observer position handed to Bodies.load_active. The editor's
+## _focus_camera_on_body reframes the preview camera on the deferred flush, so the
+## exact value only needs to be a sane point above the surface.
+func _pool_swap_player_world(body: Resource) -> Vec3D:
+	var r: float = maxf(float(body.get(&"radius_m")), 1.0)
+	return Vec3D.new(0.0, r * 4.0, 0.0)
+
+## Route the single resident detailed terrain/ocean/contact stack onto `body`
+## through the Bodies pool. Exactly one body is ever baked/resident -- the active
+## authoring target -- and a return to any body baked earlier this session (or
+## cached on disk from a previous one) is instant (BodyRuntime.warm ->
+## PlanetBake.bake(_, true) is cache-first). Returns true when the pool owns the
+## swap; false (no pool slot) leaves the caller on its legacy in-place path.
+##
+## PARITY WITH THE GAME: the pool slot's `gen_config` was registered by the same
+## `CelestialSystemGenerator.populate_pool()` the standalone game runs, so an
+## unedited switch bakes byte-for-byte what the game bakes for that body. Only a
+## deliberate generation Apply (`force_rebake`) pulls the authored edits into the
+## slot's config and drops its cached fields so warm() re-bakes; PlanetBake's
+## cache key covers those params, so an unedited revisit still hits the cache.
+func _adopt_pool_detailed_runtime(body: Resource, force_rebake: bool) -> bool:
+	if body == null or int(body.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR:
+		return false
+	var bodies: Node = _bodies_pool()
+	if bodies == null:
+		return false
+	var body_id := StringName(String(body.get(&"body_id")))
+	var rt: Object = bodies.call(&"slot", body_id)
+	if rt == null:
+		return false
+	_detailed_runtime_body_id = String(body_id)
+	if bodies.get(&"active") == rt:
+		return true
+
+	var is_primary: bool = bool(rt.get(&"is_primary"))
+	var profile: Resource = body.get(&"planet_profile") as Resource
+	var terrain_profile: Resource = profile.get(&"terrain") as Resource \
+		if profile != null else null
+	var atmosphere: Resource = profile.get(&"atmosphere") as Resource \
+		if profile != null else null
+
+	if not is_primary:
+		if _main != null and _main.get("_rebaking") == true:
+			_set_editor_status("A generator rebuild is already running; this switch was not started.")
+			return true
+		# Only a deliberate generation Apply diverges this body from the shared
+		# generator output; a plain switch leaves populate_pool's config intact.
+		if force_rebake:
+			var generation: Resource = terrain_profile.get(&"generation_profile") as Resource \
+				if terrain_profile != null else null
+			if generation == null:
+				return false
+			var gc: Resource = rt.get(&"gen_config") as Resource
+			if gc == null:
+				gc = GEN_CONFIG_SCRIPT.new()
+				rt.set(&"gen_config", gc)
+			generation.call("copy_to_resource", gc)
+			# A gas giant bakes its solid core, not the cloud tops (parity with the
+			# game's gen_config_for). surface_reference_radius_m() == radius_m else.
+			var bake_radius: float = float(body.get(&"radius_m"))
+			if body.has_method("surface_reference_radius_m"):
+				bake_radius = float(body.call("surface_reference_radius_m"))
+			gc.set(&"planet_radius", maxf(1.0, bake_radius))
+			gc.set(&"axial_tilt_deg", float(body.get(&"axial_tilt_deg")))
+			if atmosphere != null:
+				gc.set(&"atmosphere_height",
+					maxf(1.0, float(atmosphere.get(&"atmosphere_height_m"))))
+			gc.set(&"system_seed", 0)
+			rt.set(&"fields", null)
+		var slot_cfg: Resource = rt.get(&"gen_config") as Resource
+		if slot_cfg != null:
+			# The bake config's radius is the SURFACE datum (a gas giant's core);
+			# radius_m stays the reference / cloud-top radius from register_body.
+			rt.set(&"surface_radius_m", float(slot_cfg.get(&"planet_radius")))
+			if float(body.get(&"radius_m")) > 1.0:
+				rt.set(&"radius_m", float(body.get(&"radius_m")))
+		Planet.call("set_blank_mode", false)
+		_set_ground_generated_height_enabled(true)
+
+	var baking: bool = (not is_primary) and (rt.get(&"fields") == null)
+	if baking:
+		_set_editor_status("Baking %s — one-time; a later return to it is instant." \
+			% String(body.get(&"display_name")))
+
+	# Re-place the preview observer onto the new body BEFORE the pool re-origins
+	# the canonical frame, so main._process / _on_active_body_changed never read a
+	# stale (previous-body, or star-framing ~1 AU) world_pos against the new
+	# radius datum -- that mismatch is what spiked the on-screen altitude and
+	# collapsed the free-fly camera speed when switching bodies. The deferred
+	# _flush_active_body_preview -> _focus_camera_on_body then frames it exactly.
+	var swap_pos: Vec3D = _pool_swap_player_world(body)
+	var observer: Node = _preview_player if _preview_player != null \
+		else _main.get("player") as Node
+	if observer != null:
+		observer.set("world_pos", swap_pos)
+
+	# Cache-first activation: warm() loads the cached bake (instant) or bakes once
+	# and caches it; only this one body becomes resident. load_active emits
+	# active_changed -> main._on_active_body_changed, the SAME post-swap refresh
+	# (build_roots / orbit textures / ocean / editor) the game runs on arrival.
+	bodies.call(&"load_active", body_id, swap_pos)
+	_detailed_runtime_body_id = String(body_id)
+	if observer != null:
+		observer.set("world_pos", swap_pos)
+		if observer.has_signal("moved"):
+			observer.emit_signal("moved", swap_pos)
+
+	# Frames diurnal/tilt datum for the now-resident body (Planet.adopt already set
+	# the radius). The game gets these from OrbitalMotionRuntime per body.
+	if Planet.cfg != null:
+		_sync_frames(body, Planet.cfg)
+	if terrain_profile != null:
+		_apply_sculpt_state(terrain_profile)
+
+	if not baking:
+		_set_editor_status("Activated %s — resident detailed terrain (cached, no rebake)." \
+			% String(body.get(&"display_name")))
+	return true
+
 func _set_ground_generated_height_enabled(enabled: bool) -> void:
 	var ground: Node = get_node_or_null("/root/GroundGeometryClipmap")
 	if ground != null and ground.has_method("set_heightmap_enabled"):
@@ -592,6 +803,11 @@ func _sync_frames(body: Resource, cfg: Resource) -> void:
 	Frames.axial_tilt_deg = float(body.get(&"axial_tilt_deg"))
 	Frames.day_seconds = maxf(0.001,
 		absf(float(body.get(&"sidereal_rotation_period_s"))))
+	# Anchor identity + diurnal phase. helion_dir / helion_distance_m stay owned by
+	# OrbitalMotionRuntime, which overwrites these every frame anyway; this just
+	# keeps a coherent value between an Apply and the next runtime tick.
+	Frames.anchor_body_id = String(body.get(&"body_id"))
+	Frames._rotation_phase0_deg = float(body.get(&"rotation_phase_at_epoch_deg"))
 
 func _refresh_clipmap_without_bake() -> void:
 	var terrain_node: Node = _main.get("terrain") as Node

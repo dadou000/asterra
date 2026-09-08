@@ -9,6 +9,12 @@ const HASH_RNG := preload("res://scripts/core/hash_rng.gd")
 const PIPELINE_VERSION := 12
 
 @export var world_seed: int = 0x4153544552524100   # "ASTERRA"
+## Multi-planet system seed (M4). Non-zero => main.gd generates a whole
+## CelestialSystemDefinition (star + planets + moons) via CelestialSystemGenerator
+## and bakes the home planet with a per-body config derived from this one; every
+## other body is reachable by seamless travel. Zero => single legacy planet.
+## Deliberately NOT part of cache_key() -- per-body `world_seed` owns bake identity.
+@export var system_seed: int = 0
 @export var planet_radius: float = 1000000.0        ## metres
 @export var face_res: int = 192                    ## macro grid cells per cube face edge
 
@@ -71,6 +77,17 @@ const PIPELINE_VERSION := 12
 @export var base_precip: float = 950.0
 @export var orographic_gain: float = 2.4
 @export var axial_tilt_deg: float = 21.4
+
+## --- Orbit around Helion (runtime lighting only; NOT in cache_key) ---
+## Drives the seasonal/diurnal sun direction and the inverse-square brightness in
+## the standalone game the same way OrbitalMotionRuntime does in Planet Studio.
+@export var orbit_semi_major_axis_m: float = 1.495978707e11  ## 1 AU
+@export_range(0.0, 0.95, 0.0001) var orbit_eccentricity: float = 0.0167
+@export var orbit_mean_anomaly_at_epoch_deg: float = 0.0
+@export var orbit_argument_periapsis_deg: float = 0.0
+@export var parent_gm_m3_s2: float = 1.32712440018e20       ## Helion (Sol-mass)
+@export var sidereal_day_seconds: float = 86400.0
+@export var year_days: float = 402.0                        ## fallback calendar only
 
 ## --- Runtime terrain detail ---
 @export var detail_amplitude: float = 260.0

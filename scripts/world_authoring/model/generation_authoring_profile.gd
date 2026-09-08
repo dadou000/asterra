@@ -4,8 +4,20 @@ extends Resource
 ## persistence layer does not depend on the generator's global class registry.
 
 @export var world_seed: int = 0x4153544552524100
+## Non-zero => Planet Studio / the game build a whole CelestialSystemGenerator
+## system (archetype spine) instead of a single Asterra. Mirrors GenConfig.system_seed.
+@export var system_seed: int = 0
 @export var planet_radius: float = 1000000.0
 @export var face_res: int = 192
+
+## Gas-giant vertical structure mirrored from the CelestialBodyDefinition so a
+## Planet Studio bake rebuilt from this profile alone stays at parity with the
+## game. 0 for every non-gas body. `planet_radius` for a gas giant IS its
+## `core_radius_m` (the walkable surface); these are the envelope reference radii.
+@export var core_radius_m: float = 0.0
+@export var one_bar_radius_m: float = 0.0
+@export var deadly_radius_m: float = 0.0
+@export var cloud_top_radius_m: float = 0.0
 
 @export var plate_count: int = 22
 @export var ocean_fraction: float = 0.62

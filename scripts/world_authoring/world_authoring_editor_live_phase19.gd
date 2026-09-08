@@ -26,6 +26,23 @@ func _process(delta: float) -> void:
 	super._process(delta)
 	_update_text_input_movement_gate()
 	_update_editor_free_fly(delta)
+	_resync_camera_basis()
+
+
+## Planet Studio disables the player's own _physics_process (input_enabled =
+## false), so nothing rebuilds the camera from yaw/pitch/world_pos unless the
+## author is actively mouse-looking (_rotate_camera) or free-flying
+## (_update_editor_free_fly). Re-sync every frame so any *other* writer of those
+## fields -- a scripted "focus on feature" move, a screenshot/test probe, a
+## future cinematic tween -- is reflected without needing a movement nudge.
+## _sync_transform is pure math on existing state, so calling it again in the
+## same frame the other two paths already did is a harmless no-op.
+func _resync_camera_basis() -> void:
+	if _player == null or not _player.has_method("_sync_transform"):
+		return
+	if bool(_player.get("input_enabled")):
+		return
+	_player.call("_sync_transform")
 
 
 func _unhandled_input(event: InputEvent) -> void:

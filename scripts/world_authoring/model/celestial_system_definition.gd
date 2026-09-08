@@ -3,7 +3,8 @@ extends Resource
 ## Versioned top-level object saved by Planet Studio.
 
 const BODY_SCRIPT := preload("res://scripts/world_authoring/model/celestial_body_definition.gd")
-const SCHEMA_VERSION: int = 2
+## v3: primary terrestrial body orbits the root star (was a sibling); + sim clock.
+const SCHEMA_VERSION: int = 3
 const DEFAULT_CHILD_ORBIT_PARENT_RADII: float = 4.0
 const DEFAULT_CHILD_ORBIT_CHILD_RADII: float = 3.0
 const DEFAULT_CHILD_ORBIT_ANOMALY_DEG: float = 35.0
@@ -14,8 +15,14 @@ const DEFAULT_CHILD_ORBIT_ANOMALY_DEG: float = 35.0
 @export var bodies: Array[Resource] = []
 @export var active_body_id: String = ""
 
+## Simulated-time state for the "Orbit & seasons" panel. The live scrub position
+## is NOT persisted; only the epoch the session opens at and the playback speed.
+@export var sim_start_epoch_s: float = 0.0
+@export var sim_time_scale: float = 1.0
+
 func ensure_valid() -> void:
 	schema_version = maxi(schema_version, SCHEMA_VERSION)
+	sim_time_scale = maxf(sim_time_scale, 0.0)
 	for body: Resource in bodies:
 		if body != null and body.has_method("ensure_children"):
 			body.call("ensure_children")

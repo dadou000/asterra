@@ -17,7 +17,7 @@ extends Control
 signal curve_changed(points: PackedFloat32Array)
 
 const POINT_RADIUS: float = 6.0
-const HIT_RADIUS: float = 12.0
+const HIT_RADIUS: float = 14.0
 const MARGIN: float = 10.0
 const SAMPLES: int = 48
 
@@ -27,18 +27,47 @@ var _hover_index: int = -1
 
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(240.0, 120.0)
+	custom_minimum_size = Vector2(240.0, 150.0)
+	# Fill the width the parent gives us (and no more): the drag/hit maths maps
+	# the pointer through `size`, so the control's box has to match what the
+	# author actually sees. An earlier version left the default FILL flag, which
+	# combined with a horizontally-overflowing workspace made `size.x` larger
+	# than the visible plot and every drag landed at the wrong fraction.
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	queue_redraw()
 
 
 func set_points(new_points: PackedFloat32Array) -> void:
 	points = new_points.duplicate()
+	_dragging_index = -1
+	_hover_index = -1
 	queue_redraw()
 
 
 func get_points() -> PackedFloat32Array:
 	return points.duplicate()
+
+
+## Adds a control point in the widest gap without changing the curve's shape
+## (see CurveFieldData.insert_point_auto) and notifies listeners. No-op at the
+## point cap. Driven by the "Add point" button next to the widget.
+func add_midpoint() -> void:
+	if not CurveFieldData.can_add_point(points):
+		return
+	points = CurveFieldData.insert_point_auto(points)
+	curve_changed.emit(points)
+	queue_redraw()
+
+
+## Restores the flat diagonal (a precise no-op curve) and notifies listeners.
+func reset_to_identity() -> void:
+	points = CurveFieldData.identity()
+	_dragging_index = -1
+	_hover_index = -1
+	curve_changed.emit(points)
+	queue_redraw()
 
 
 func _plot_rect() -> Rect2:
@@ -91,6 +120,15 @@ func _draw() -> void:
 		if is_endpoint:
 			draw_arc(screen_p, POINT_RADIUS + 2.0, 0.0, TAU, 16, Color(0.4, 0.46, 0.55, 0.9), 1.0)
 
+	# One-line usage hint + live point budget, so "how do I add another point"
+	# is answerable from the widget itself rather than a tooltip.
+	var font: Font = get_theme_default_font()
+	var font_size: int = 11
+	var hint: String = "%d/%d points  ·  double-click to add  ·  right-click a point to remove" \
+		% [count, CurveFieldData.MAX_POINTS]
+	draw_string(font, Vector2(plot.position.x + 4.0, plot.end.y - 5.0), hint,
+		HORIZONTAL_ALIGNMENT_LEFT, plot.size.x - 8.0, font_size, Color(0.55, 0.62, 0.7, 0.85))
+
 
 func _point_index_at(screen_pos: Vector2, plot: Rect2) -> int:
 	var count: int = CurveFieldData.point_count(points)
@@ -105,20 +143,27 @@ func _point_index_at(screen_pos: Vector2, plot: Rect2) -> int:
 	return best_index
 
 
+func _apply_drag(local_pos: Vector2) -> void:
+	if _dragging_index < 0:
+		return
+	var value: Vector2 = _from_screen(local_pos, _plot_rect())
+	points = CurveFieldData.move_point(points, _dragging_index, value.x, value.y)
+	curve_changed.emit(points)
+	queue_redraw()
+
+
 func _gui_input(event: InputEvent) -> void:
 	var plot: Rect2 = _plot_rect()
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		if _dragging_index >= 0:
-			var value: Vector2 = _from_screen(motion.position, plot)
-			points = CurveFieldData.move_point(points, _dragging_index, value.x, value.y)
-			curve_changed.emit(points)
+			# Handled in _input() instead, so the point keeps following the
+			# pointer even when it leaves the widget's rect mid-drag.
+			return
+		var hover: int = _point_index_at(motion.position, plot)
+		if hover != _hover_index:
+			_hover_index = hover
 			queue_redraw()
-		else:
-			var hover: int = _point_index_at(motion.position, plot)
-			if hover != _hover_index:
-				_hover_index = hover
-				queue_redraw()
 		accept_event()
 		return
 
@@ -145,3 +190,23 @@ func _gui_input(event: InputEvent) -> void:
 				curve_changed.emit(points)
 				queue_redraw()
 			accept_event()
+
+
+## While a point is held, the pointer routinely leaves the widget's rect
+## (the plot is small and the author flicks past its edges). _gui_input stops
+## delivering motion once that happens, so the drag is finished here off the
+## global pointer position instead -- mapped back through this control's own
+## transform so it stays correct under any UI scale or scroll offset.
+func _input(event: InputEvent) -> void:
+	if _dragging_index < 0:
+		return
+	if event is InputEventMouseMotion:
+		_apply_drag(get_local_mouse_position())
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		var button := event as InputEventMouseButton
+		if button.button_index == MOUSE_BUTTON_LEFT and not button.pressed:
+			_apply_drag(get_local_mouse_position())
+			_dragging_index = -1
+			queue_redraw()
+			get_viewport().set_input_as_handled()

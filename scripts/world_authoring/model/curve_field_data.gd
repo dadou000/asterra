@@ -17,13 +17,14 @@ class_name CurveFieldData
 ## smoothstep() are the same curve, so the GPU and CPU sides need no
 ## correction term the way e.g. bp_noise's FMA fix does for raw multiplication.
 ##
-## Capped at MAX_POINTS (4) rather than an arbitrary spline point count: two
-## endpoints plus up to two interior shape points already covers the
-## practical range for "gradient distribution" and "noise response" (an
-## S-curve, a plateau, a sharpened peak) while keeping the GPU packing small
-## (2 vec4 uniforms per curve) and the CPU/GPU parity trivial to keep exact.
+## Capped at MAX_POINTS (8) rather than an arbitrary spline point count: two
+## endpoints plus up to six interior shape points covers the practical range
+## for "gradient distribution" and "noise response" (an S-curve, a plateau, a
+## sharpened peak, a multi-step ramp) while keeping the GPU packing small
+## (4 vec4 uniforms per curve, see pack_to_vec4s) and the CPU/GPU parity
+## trivial to keep exact.
 
-const MAX_POINTS: int = 4
+const MAX_POINTS: int = 8
 const MIN_POINTS: int = 2
 
 
@@ -65,20 +66,24 @@ static func is_identity(points: PackedFloat32Array) -> bool:
 		and is_equal_approx(get_point(points, 1).x, 1.0) and is_equal_approx(get_point(points, 1).y, 1.0)
 
 
-## Packs into the two vec4 uniforms terrain_biome_profile.gdshaderinc /
-## terrain_biome_texture.gdshaderinc's asterra_curve_eval expects: (x0,y0,x1,y1)
-## and (x2,y2,x3,y3), padding unused trailing slots by repeating the last
-## authored point (never read past `point_count`, but keeps every array
-## element defined rather than relying on driver-dependent uninitialized
-## uniform behaviour).
-static func pack_to_vec4_pair(points: PackedFloat32Array) -> Array:
-	var padded: PackedFloat32Array = points.duplicate()
+## Packs into the four vec4 uniforms terrain_biome_profile.gdshaderinc /
+## terrain_biome_texture.gdshaderinc's *_curve_eval expects: (x0,y0,x1,y1),
+## (x2,y2,x3,y3), (x4,y4,x5,y5), (x6,y6,x7,y7). Trailing slots past
+## `point_count` are padded by repeating the last authored point (the shader
+## never reads past the count, but every array element stays defined rather
+## than relying on driver-dependent uninitialized uniform behaviour). A curve
+## with more than MAX_POINTS points (shouldn't happen -- CurveFieldControl
+## enforces the cap) is truncated to the first MAX_POINTS.
+static func pack_to_vec4s(points: PackedFloat32Array) -> Array:
+	var padded: PackedFloat32Array = points.slice(0, MAX_POINTS * 2)
 	while padded.size() < MAX_POINTS * 2:
 		padded.append(padded[padded.size() - 2])
 		padded.append(padded[padded.size() - 1])
 	return [
 		Vector4(padded[0], padded[1], padded[2], padded[3]),
 		Vector4(padded[4], padded[5], padded[6], padded[7]),
+		Vector4(padded[8], padded[9], padded[10], padded[11]),
+		Vector4(padded[12], padded[13], padded[14], padded[15]),
 	]
 
 
@@ -99,6 +104,26 @@ static func insert_point(points: PackedFloat32Array, x: float, y: float) -> Pack
 	result.insert(insert_index * 2, y)
 	result.insert(insert_index * 2, x)
 	return result
+
+
+## Inserts one control point in the middle of the widest x-gap, with its y
+## placed on the curve's current shape there so adding a point never changes
+## what the curve evaluates to -- it only gives the author another handle.
+## Returns the array unchanged when already at MAX_POINTS.
+static func insert_point_auto(points: PackedFloat32Array) -> PackedFloat32Array:
+	var count: int = point_count(points)
+	if count >= MAX_POINTS or count < MIN_POINTS:
+		return points.duplicate()
+	var gap_start: float = 0.0
+	var widest: float = -1.0
+	for i: int in count - 1:
+		var a: Vector2 = get_point(points, i)
+		var b: Vector2 = get_point(points, i + 1)
+		var span: float = b.x - a.x
+		if span > widest:
+			widest = span
+			gap_start = a.x + span * 0.5
+	return insert_point(points, gap_start, evaluate(points, gap_start))
 
 
 static func remove_point(points: PackedFloat32Array, index: int) -> PackedFloat32Array:

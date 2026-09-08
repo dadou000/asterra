@@ -37,7 +37,20 @@ const SUN_LIGHT_ENERGY := 1.6
 ## reads as a pale wash over everything past a few kilometres, and no amount of
 ## work on surface colour survives it.
 static func solar_irradiance() -> float:
-	return SUN_LIGHT_ENERGY * PI
+	return SUN_LIGHT_ENERGY * PI * solar_distance_scale()
+
+
+## Inverse-square brightness factor for the current Asterra-Helion distance
+## (1.0 at REFERENCE_HELION_DISTANCE_M). The surface (`sun.light_energy`) and the
+## scattering (this) MUST scale by the same number -- see the docstring above.
+## Reads the Frames autoload when it exists; returns 1.0 in isolated/headless CI.
+static func solar_distance_scale() -> float:
+	var loop := Engine.get_main_loop()
+	if loop is SceneTree:
+		var frames := (loop as SceneTree).root.get_node_or_null(^"Frames")
+		if frames != null and frames.has_method(&"solar_distance_scale"):
+			return float(frames.call(&"solar_distance_scale"))
+	return 1.0
 
 
 static func sanitize(preset: int) -> int:
