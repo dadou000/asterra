@@ -197,18 +197,21 @@ static func build_coverage_image(seed_v: int, band_hint_v: int,
 	detail.frequency = 5.5
 	detail.fractal_octaves = 3
 
-	var nb: int = maxi(band_hint_v, 4) + (rng.randi() % 3)
-	var amp := PackedFloat32Array()
-	var frq := PackedFloat32Array()
-	var phs := PackedFloat32Array()
-	for _i in nb:
-		amp.append(rng.randf_range(0.4, 1.0))
-		frq.append(rng.randf_range(2.0, 4.5) * float(2 + (rng.randi() % 4)))
-		phs.append(rng.randf() * TAU)
-	var band_amp: float = rng.randf_range(0.5, 0.75)
-	var swirl_amp: float = rng.randf_range(0.35, 0.55)
-	var lo: float = rng.randf_range(0.32, 0.42)
-	var hi: float = lo + rng.randf_range(0.24, 0.34)
+	# A clean primary stripe rate + two smaller harmonics for irregular spacing;
+	# NOT a sum of many random sinusoids (that lumps into blobs, not belts).
+	var nb: int = clampi(band_hint_v, 5, 11)
+	var f0: float = float(nb) * 1.5                      # ~15-25 belts across the disc
+	var f1: float = f0 * (2.1 + rng.randf() * 0.7)
+	var f2: float = f0 * (0.45 + rng.randf() * 0.2)
+	var p0: float = rng.randf() * TAU
+	var p1: float = rng.randf() * TAU
+	var p2: float = rng.randf() * TAU
+	# Bands stay HORIZONTAL: only a tiny latitude wobble, and the swirl shifts the
+	# belt EDGE a little rather than adding to the coverage value.
+	var lat_wobble: float = 0.02 + rng.randf() * 0.03
+	var edge_shift: float = 0.03 + rng.randf() * 0.03
+	# SHARP threshold: a narrow smoothstep centred on 0.5.
+	var edge_w: float = 0.035 + rng.randf() * 0.03
 
 	for y in h:
 		var lat: float = (float(y) / float(h - 1) - 0.5) * PI
@@ -221,14 +224,14 @@ static func build_coverage_image(seed_v: int, band_hint_v: int,
 				warp.get_noise_3d(p.x * 1.7 + 3.0, p.y * 1.7, p.z * 1.7),
 				warp.get_noise_3d(p.x * 1.7, p.y * 1.7 + 5.0, p.z * 1.7),
 				warp.get_noise_3d(p.x * 1.7, p.y * 1.7, p.z * 1.7 + 7.0)) * 0.4
-			var wl: float = slat + wv.y * 0.55
-			var band: float = 0.0
-			for i in nb:
-				band += amp[i] * sin(wl * frq[i] + phs[i])
-			band /= float(nb)
+			var wl: float = slat * (1.0 + wv.y * lat_wobble)
+			var band: float = (0.52 * sin(wl * f0 * PI + p0)
+				+ 0.33 * sin(wl * f1 * PI + p1)
+				+ 0.15 * sin(wl * f2 * PI + p2))       # -1..1, several belt rates
 			var s: float = swirl.get_noise_3d(p.x + wv.x, p.y + wv.y, p.z + wv.z)
-			var cov: float = 0.5 + band_amp * band + swirl_amp * s
-			cov = smoothstep(lo, hi, clampf(cov, 0.0, 1.0))
+			# Belt-edge turbulence: nudge the stripe boundary along longitude.
+			var band_v: float = 0.5 + 0.5 * band + s * edge_shift
+			var cov: float = smoothstep(0.5 - edge_w, 0.5 + edge_w, band_v)
 			var det: float = 0.5 + 0.5 * detail.get_noise_3d(
 				p.x + wv.x * 0.5, p.y + wv.y * 0.5, p.z + wv.z * 0.5)
 			var storm: float = clampf((swirl.get_noise_3d(

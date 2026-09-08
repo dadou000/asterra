@@ -91,12 +91,16 @@ float cloud_density(vec3 p, float r) {
 	// A second tap at a rotated 3x scale adds detail and breaks the tangent-view
 	// streak without washing the primary bands out.
 	vec4 b = texture(u_coverage_tex, lonlat_uv(rotate_y(d.zxy, 2.3)) * 3.0 - scroll * 1.7);
-	float cov = a.r * mix(1.0, 0.45 + 1.1 * b.r, 0.4) * alt;
-	cov -= (1.0 - cov) * a.g * u_detail * 0.5;      // erode primary edges into wisps
-	cov -= (1.0 - cov) * b.g * u_detail * 0.25;     // fine erosion
-	cov += a.b * alt * 0.55;                        // storm ovals sit proud
+	// The map's R is a SHARP belt mask (for the far-LOD sphere). For the volumetric
+	// deck soften it back toward a gradient with the detail octaves so clouds read
+	// as wispy billows inside the belt, not one opaque wall.
+	float belt = a.r * 0.55 + 0.45 * (a.g * 0.6 + b.r * 0.4);
+	float cov = belt * mix(0.6, 1.15, b.g) * alt;
+	cov -= (1.0 - cov) * a.g * u_detail * 0.55;     // erode into wisps
+	cov -= (1.0 - cov) * b.g * u_detail * 0.30;     // fine erosion
+	cov += a.b * alt * 0.5;                         // storm ovals sit proud
 	cov = clamp(cov, 0.0, 1.0);
-	return base_rho(r) * pow(cov, 0.85) * 3.6;
+	return base_rho(r) * pow(cov, 1.1) * 3.0;
 }
 
 // Smooth-density sun occlusion (cheap): the terminator shape, not per-cloud.

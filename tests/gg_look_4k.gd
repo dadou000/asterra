@@ -77,8 +77,11 @@ func _shot(shot_name: String, radius: float, look: String) -> void:
 	var sun: Vector3 = Frames.helion_dir.normalized()
 	if not sun.is_normalized():
 		sun = Vector3(1, 0, 0)
-	# Vantage on the sunlit side.
-	var d := (sun + Vector3(0.2, 0.5, 0.15)).normalized()
+	# Vantage on the sunlit side. "at"/"in"/"out" look at the body -> sit closer to
+	# the sun line so the disc shows a fuller lit face; "tangent" stays off to the side.
+	var off := Vector3(0.2, 0.5, 0.15) if look == "tangent" else Vector3(0.12, 0.28, 0.1)
+	var sun_w := 1.0 if look == "tangent" else 2.4
+	var d := (sun * sun_w + off).normalized()
 	p.world_pos = Vec3D.new(d.x * radius, d.y * radius, d.z * radius)
 	Frames.rebase(p.world_pos)
 	# "at": look at the body centre (from orbit). "in": look inward/down toward the

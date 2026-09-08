@@ -92,9 +92,10 @@ void fragment() {
 		vec3 bd = rot_y(d, u_band_phase);
 		vec2 uv = equirect(bd);
 		vec4 bt = texture(u_band_tex, uv);
-		vec3 zone = mix(u_band_belt, u_band_zone, smoothstep(0.2, 0.82, bt.r));
+		// Keep the sharp belt edges the map already has (only a touch of AA).
+		vec3 zone = mix(u_band_belt, u_band_zone, smoothstep(0.38, 0.62, bt.r));
 		zone = mix(zone, min(zone * 1.7 + 0.10, vec3(1.0)), bt.b * 0.7);   // storm ovals proud
-		zone *= 0.92 + 0.16 * bt.g;                                        // fine variation
+		zone *= 0.94 + 0.12 * bt.g;                                        // fine variation
 		base = zone;
 	} else if (u_relief_ready > 0.5) {
 		float relief_ao = clamp(0.85 + rel_h * (0.00035), 0.6, 1.15);
