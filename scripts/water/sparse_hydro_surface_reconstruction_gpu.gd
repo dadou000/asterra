@@ -291,7 +291,11 @@ func _free_many(rd: RenderingDevice, values: Array) -> void:
 func release() -> void:
 	if not _initialized and not _hash_shader.is_valid():
 		return
-	var rids := [_hash_set, _recon_set, _hash_table, _params,
+	# Uniform sets (_hash_set, _recon_set) are not freed explicitly: the
+	# RenderingDevice cascade-frees them when a backing resource is freed
+	# (_hash_table / _params here, plus the atlas buffers they bind). Freeing
+	# them here too double-frees when the atlas tears down first.
+	var rids := [_hash_table, _params,
 		_hash_pipeline, _recon_pipeline, _hash_shader, _recon_shader]
 	_initialized = false
 	_init_pending = false

@@ -559,9 +559,12 @@ func _free_many(rd: RenderingDevice, values: Array) -> void:
 func release() -> void:
 	if not _initialized and not _step_shader.is_valid():
 		return
+	# Uniform sets (_step_set .. _external_finalize_set) are not freed explicitly:
+	# the RenderingDevice cascade-frees each one when any backing resource is
+	# freed - the owned buffers below, and the atlas/connectivity buffers they
+	# bind. Freeing them here as well double-freed them whenever the atlas or
+	# connectivity tore down first ("Attempted to free invalid ID").
 	var rids := [
-		_step_set, _commit_set, _reduce_set, _reset_set, _prepare_set,
-		_external_reduce_set, _external_finalize_set,
 		_params, _commit_params, _control, _atmospheric_sources,
 		_external_flux_ledger, _external_flux_partials,
 		_step_pipeline, _commit_pipeline, _reduce_pipeline, _reset_pipeline,

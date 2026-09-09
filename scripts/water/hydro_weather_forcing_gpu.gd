@@ -223,7 +223,11 @@ func _free_many(rd: RenderingDevice, values: Array) -> void:
 func release() -> void:
 	if not _initialized and not _shader.is_valid():
 		return
-	var rids := [_uniform_set, _params, _sampler, _pipeline, _shader]
+	# The uniform set is not freed explicitly: RenderingDevice cascade-frees it
+	# when a backing resource (here _params, and the atlas buffers it also binds)
+	# is freed. Freeing it here as well double-frees when the atlas tears down
+	# first -> "Attempted to free invalid ID".
+	var rids := [_params, _sampler, _pipeline, _shader]
 	_initialized = false
 	_init_pending = false
 	_update_pending = false
