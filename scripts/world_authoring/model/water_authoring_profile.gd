@@ -1,8 +1,9 @@
 class_name WaterAuthoringProfile
 extends Resource
-## Shared authoring parameters for ocean, authored lakes and authored rivers.
+## Shared authoring parameters for ocean, authored lakes/rivers and point sources.
 
 const WATER_FEATURE_SCRIPT := preload("res://scripts/world_authoring/model/water_feature_definition.gd")
+const POINT_SOURCE_SCRIPT := preload("res://scripts/world_authoring/model/water_point_source_definition.gd")
 const SHADER_SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain_shader_slot_definition.gd")
 
 @export var ocean_enabled: bool = true
@@ -14,6 +15,7 @@ const SHADER_SLOT_SCRIPT := preload("res://scripts/world_authoring/model/terrain
 @export var absorption_scale: float = 1.0
 @export var scattering_scale: float = 1.0
 @export var authored_features: Array[Resource] = []
+@export var point_sources: Array[Resource] = []
 @export var material_slots: Array[Resource] = []
 
 func ensure_valid() -> void:
@@ -26,6 +28,9 @@ func ensure_valid() -> void:
 	for feature: Resource in authored_features:
 		if feature != null and feature.has_method("ensure_valid"):
 			feature.call("ensure_valid")
+	for source: Resource in point_sources:
+		if source != null and source.has_method("ensure_valid"):
+			source.call("ensure_valid")
 	for slot: Resource in material_slots:
 		if slot != null and slot.has_method("ensure_valid"):
 			slot.set(&"domain", SHADER_SLOT_SCRIPT.Domain.MATERIAL)
@@ -50,6 +55,27 @@ func remove_feature(feature_id: String) -> bool:
 		var feature: Resource = authored_features[index]
 		if feature != null and String(feature.get(&"feature_id")) == feature_id:
 			authored_features.remove_at(index)
+			return true
+	return false
+
+func create_point_source(display_name: String = "Water Source") -> Resource:
+	var source: Resource = POINT_SOURCE_SCRIPT.new()
+	source.set(&"display_name", display_name)
+	source.call("ensure_valid")
+	point_sources.append(source)
+	return source
+
+func find_point_source(source_id: String) -> Resource:
+	for source: Resource in point_sources:
+		if source != null and String(source.get(&"source_id")) == source_id:
+			return source
+	return null
+
+func remove_point_source(source_id: String) -> bool:
+	for index: int in point_sources.size():
+		var source: Resource = point_sources[index]
+		if source != null and String(source.get(&"source_id")) == source_id:
+			point_sources.remove_at(index)
 			return true
 	return false
 
