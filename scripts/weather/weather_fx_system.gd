@@ -29,6 +29,9 @@ var _precip := 0.0
 var _pressure := 0.5
 var _wetness := 0.0
 var _flash := 0.0
+var _observer_speed_mps := 0.0
+var _last_observer_planet_pos := Vector3.ZERO
+var _have_observer_motion_sample := false
 
 
 func _ready() -> void:
@@ -44,6 +47,7 @@ func _process(delta: float) -> void:
 	if _observer == null or not is_instance_valid(_observer):
 		return
 	_ensure_fx_nodes()
+	_update_observer_motion(delta)
 	if _sample_accum >= SAMPLE_INTERVAL:
 		_sample_accum = fmod(_sample_accum, SAMPLE_INTERVAL)
 		_sample_weather_center()
@@ -70,6 +74,8 @@ func _try_bind_observer() -> void:
 		return
 	_observer = _find_player(scene)
 	if _observer != null:
+		_have_observer_motion_sample = false
+		_observer_speed_mps = 0.0
 		_rebuild_fx_root(scene)
 
 
@@ -109,6 +115,20 @@ func _ensure_fx_nodes() -> void:
 			_rebuild_fx_root(scene)
 	if _fx_root != null:
 		_fx_root.global_position = _observer.global_position
+
+
+func _update_observer_motion(delta: float) -> void:
+	var current := _planet_position()
+	if not _have_observer_motion_sample:
+		_last_observer_planet_pos = current
+		_have_observer_motion_sample = true
+		_observer_speed_mps = 0.0
+		return
+	var dt := maxf(delta, 1.0e-4)
+	var instantaneous := clampf((current - _last_observer_planet_pos).length() / dt, 0.0, 500.0)
+	var smoothing := 1.0 - exp(-dt * 10.0)
+	_observer_speed_mps = lerpf(_observer_speed_mps, instantaneous, smoothing)
+	_last_observer_planet_pos = current
 
 
 func _make_precip(snow: bool) -> GPUParticles3D:
@@ -214,7 +234,7 @@ func _update_droplets() -> void:
 		return
 	_droplet_material.set_shader_parameter("u_rain", _precip)
 	_droplet_material.set_shader_parameter("u_wetness", _wetness)
-	_droplet_material.set_shader_parameter("u_speed", _observer.velocity.length() if _observer != null else 0.0)
+	_droplet_material.set_shader_parameter("u_speed", _observer_speed_mps)
 	_droplet_material.set_shader_parameter("u_lightning_flash", _flash)
 	_droplet_material.set_shader_parameter("u_time", _clock)
 	if _droplet_rect != null:
