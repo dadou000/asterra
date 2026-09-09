@@ -24,6 +24,8 @@ uniform vec3 u_atmo_beta : source_color = vec3(0.30, 1.0, 0.42);
 uniform vec3 u_cloud_color : source_color = vec3(0.86, 0.86, 0.84);
 uniform vec3 u_deep_color : source_color = vec3(0.04, 0.05, 0.03);
 uniform sampler2D u_coverage_tex : source_color, filter_linear, repeat_enable;
+uniform sampler3D u_noise3d : filter_linear, repeat_enable;   // R,G Worley  B detail
+uniform float u_jitter = 0.0;   // per-frame R2 offset; FSR2's temporal pass resolves it
 uniform float u_core_radius = 1.0;
 uniform float u_cloud_top_radius = 2.0;
 uniform float u_layer_inner = 1.0;
@@ -44,8 +46,8 @@ uniform float u_detail = 0.6;          // erosion strength
 uniform float u_flow = 0.03;           // uv flow speed
 uniform float u_cloud_phase = 0.0;
 
-const int MAX_STEPS = 28;
-const int SUN_STEPS = 3;
+const int MAX_STEPS = 24;
+const int SUN_STEPS = 2;
 
 vec2 sphere_hit(vec3 ro, vec3 rd, float radius) {
 	float b = dot(rd, ro);
@@ -77,37 +79,23 @@ vec2 lonlat_uv(vec3 d) {
 	return vec2(atan(d.z, d.x) / TAU + 0.5, asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5);
 }
 
-// --- cheap 3D value noise for the near cloud billows ------------------------
-float h13(vec3 p) {
-	p = fract(p * 0.1031);
-	p += dot(p, p.yzx + 33.33);
-	return fract((p.x + p.y) * p.z);
-}
-float vn(vec3 x) {
-	vec3 i = floor(x);
-	vec3 f = fract(x);
-	f = f * f * (3.0 - 2.0 * f);
-	return mix(mix(mix(h13(i), h13(i + vec3(1, 0, 0)), f.x), mix(h13(i + vec3(0, 1, 0)), h13(i + vec3(1, 1, 0)), f.x), f.y),
-		mix(mix(h13(i + vec3(0, 0, 1)), h13(i + vec3(1, 0, 1)), f.x), mix(h13(i + vec3(0, 1, 1)), h13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
-}
-// Ridged/billow FBM -> cauliflower cloud tops.
-float billow(vec3 p, int oct) {
-	float v = 0.0;
-	float a = 0.6;
-	float tot = 0.0;
-	for (int i = 0; i < 3; i++) {
-		if (i >= oct) { break; }
-		v += a * abs(vn(p) * 2.0 - 1.0);
-		tot += a;
-		p = p * 2.13 + vec3(7.0, 3.0, 5.0);
-		a *= 0.5;
-	}
-	return 1.0 - v / max(tot, 1.0e-3);   // 0..1, high where the cells crest
+// Worley cloud shape from the baked tileable 3D volume -- three octaves at
+// incommensurate frequencies (tiled dense enough that the repeat reads as texture,
+// not a pattern). R/G are inverted Worley F1 (dense at cell cores -> puffs), B is
+// simplex detail for erosion. `wp` is pre-flattened toward the shell by the caller.
+float cloud_shape(vec3 wp, out float ero) {
+	vec3 f = wp * (1.0 / (u_cloud_top_radius * 0.006));
+	vec3 flow = vec3(u_cloud_phase * 0.06, u_cloud_phase * 0.015, 0.0);
+	float n0 = texture(u_noise3d, f + flow).r;
+	float n1 = texture(u_noise3d, f * 2.9 - flow * 1.9).g;
+	float n2 = texture(u_noise3d, f * 8.3 + flow * 3.7).b;
+	ero = n2;
+	return clamp(n0 * 0.58 + n1 * 0.30 + n2 * 0.12, 0.0, 1.0);
 }
 
-// Grey-cloud density at a point inside the cloud deck: the procedural equirect
-// coverage map (belts + swirls, painted by GasGiantModel) carved into puffy 3D
-// billows by ridged value noise, so a near view reads as a real cloudscape.
+// Grey-cloud density inside the cloud deck: the painted equirect coverage map
+// (belts + swirls + storms) carved into puffy 3D billows by the baked Worley
+// volume, so a near view reads as a real cloudscape.
 float cloud_density(vec3 p, float r) {
 	float shell01 = shell01_of(r);
 	float alt = exp(-pow((shell01 - u_deck_altitude) / max(u_deck_width, 1.0e-3), 2.0));
@@ -116,19 +104,19 @@ float cloud_density(vec3 p, float r) {
 	vec2 scroll = vec2(u_cloud_phase * u_flow * 0.02, 0.0);
 	vec4 a = texture(u_coverage_tex, lonlat_uv(d) + scroll);
 	vec4 b = texture(u_coverage_tex, lonlat_uv(rotate_y(d.zxy, 2.3)) * 3.0 - scroll * 1.7);
-	// Belt coverage (softened from the sharp far-LOD mask) + storm ovals.
 	float belt = a.r * 0.6 + 0.4 * (a.g * 0.6 + b.r * 0.4) + a.b * 0.45;
-	// Puffy 3D structure: ridged noise at a few km scale, flowing with the deck.
-	// Flatten the sample point toward the shell (kill most of the radial component)
-	// so a near-tangent ray does not smear one noise column down the screen.
+
+	// Flatten the sample point almost fully onto the deck shell so a near-tangent
+	// ray samples the noise field laterally (no vertical smear), then carve with
+	// the Worley volume.
 	vec3 rad = p / max(r, 1.0);
-	vec3 fp = p - rad * (dot(p, rad) - u_cloud_top_radius * u_deck_altitude) * 0.92;
-	vec3 np = (fp / (u_cloud_top_radius * 0.0055)) + vec3(u_cloud_phase * 0.4, 0.0, 0.0);
-	float puff = billow(np, 3);
-	float cov = belt * mix(0.12, 1.4, puff) * alt;
-	cov -= (1.0 - cov) * (1.0 - puff) * (0.35 + 0.45 * u_detail);   // carve deep gaps
+	vec3 fp = p - rad * (dot(p, rad) - u_cloud_top_radius * u_deck_altitude) * 0.985;
+	float ero;
+	float puff = cloud_shape(fp, ero);
+	float cov = belt * mix(0.02, 1.7, puff) * alt;
+	cov -= (1.0 - cov) * (1.0 - ero) * (0.5 + 0.4 * u_detail);   // erode wispy edges
 	cov = clamp(cov, 0.0, 1.0);
-	return base_rho(r) * pow(cov, 1.05) * 4.2;
+	return base_rho(r) * pow(cov, 0.9) * 5.4;
 }
 
 // Smooth-density sun occlusion: the terminator shape.
@@ -144,13 +132,14 @@ float sun_transmit(vec3 p) {
 	return exp(-od * u_extinction * 1.3);
 }
 
-// Cheap cloud self-shadow: one ridged-noise tap a short way toward the sun --
-// where the neighbour cell crests, this puff sits in its shadow. No extra march.
+// Cloud self-shadow: two Worley taps toward the sun (texture fetches, cheap) ->
+// puffs cast shadow on the gas behind them.
 float cloud_light(vec3 p) {
-	vec3 np = (p / (u_cloud_top_radius * 0.0055))
-		+ u_sun_dir * 1.4 + vec3(u_cloud_phase * 0.4, 0.0, 0.0);
-	float shade = billow(np, 2);            // 0..1, high at a crest ahead -> shadowed
-	return sun_transmit(p) * (1.0 - 0.78 * smoothstep(0.3, 0.9, shade));
+	float step = (u_cloud_top_radius - u_core_radius) * 0.03;
+	float e;
+	float occ = cloud_shape(p + u_sun_dir * (0.6 + u_jitter) * step, e)
+		+ cloud_shape(p + u_sun_dir * 2.4 * step, e) * 0.5;
+	return sun_transmit(p) * exp(-occ * 3.0);
 }
 
 void fragment() {
@@ -180,10 +169,9 @@ void fragment() {
 		float span = t1 - t0;
 		float shell_span = max(u_cloud_top_radius - u_core_radius, 1.0);
 		float max_dt = shell_span * (clouds ? 0.03 : 0.16);
-		float jitter = clouds
-			? fract(sin(dot(FRAGCOORD.xy, vec2(12.9898, 78.233))) * 43758.5453) * 0.4
-			: 0.0;
-		float t = t0 + jitter * min(span / float(steps), max_dt);
+		// Per-FRAME jitter (not per-pixel): FSR2's temporal pass integrates it, so
+		// a handful of steps resolves to a clean image over a few frames.
+		float t = t0 + (clouds ? u_jitter : 0.0) * min(span / float(steps), max_dt);
 		float phase = 0.24 + 0.55 * max(mu, 0.0) * max(mu, 0.0) + 0.14 * max(-mu, 0.0);
 		float T = 1.0;
 		vec3 acc = vec3(0.0);
@@ -204,13 +192,12 @@ void fragment() {
 				// Grey cloud: direct sun through the self-shadow march (puff relief)
 				// + forward scatter, plus green-atmosphere skylight fill.
 				float cl = cloud_light(p);
-				// Strong direct term (bright crests) + a modest green-sky fill so the
-				// shadowed sides stay readable but the puffs keep 3D relief.
-				vec3 lit = u_cloud_color * (u_sun_intensity * 1.9 * pow(cl, 1.4) * phase * day);
-				vec3 sky = mix(u_atmo_beta, vec3(1.0), 0.35) * u_cloud_color
-					* (u_ambient * 0.75 * (0.25 + 0.75 * day) * mix(0.4, 1.0, sv));
+				// Bright sunlit crests, deep self-shadow, a modest green-sky fill.
+				vec3 lit = u_cloud_color * (u_sun_intensity * 2.4 * cl * phase * day);
+				vec3 sky = mix(u_atmo_beta, vec3(1.0), 0.45) * u_cloud_color
+					* (u_ambient * 0.85 * (0.2 + 0.8 * day) * mix(0.35, 1.0, sv));
 				vec3 lum = (lit + sky) * mix(1.0, 0.5, depth01 * depth01);
-				acc += T * min(lum, vec3(1.4)) * (1.0 - seg);
+				acc += T * min(lum, vec3(1.5)) * (1.0 - seg);
 				T *= seg;
 			} else {
 				// Atmosphere: green Rayleigh-ish in-scatter along the ray. Extinction

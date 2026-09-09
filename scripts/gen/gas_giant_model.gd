@@ -149,7 +149,7 @@ func decks() -> Array:
 		{
 			"outer_m": top + sh * 0.03,
 			"inner_m": maxf(top - sh * (deck_w * 3.2 + 0.05), core_radius_m),
-			"kind": "cloud", "steps": 18, "density_mul": 1.0,
+			"kind": "cloud", "steps": 20, "density_mul": 1.0,
 			"band_count": bands,
 			"detail": 0.55 + rng.randf() * 0.30,
 			"deck_altitude": deck_alt, "deck_width": deck_w,
