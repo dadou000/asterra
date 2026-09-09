@@ -77,15 +77,15 @@ float cloud_shadow_density_at(vec3 p,float radius) {
     if(alt<=u_cloud_shadow_base||alt>=u_cloud_shadow_top) return 0.0;
     vec4 wx=cloud_shadow_weather(normalize(p)*radius,radius);
     float coverage=clamp(wx.r,0.0,1.0), storm=clamp(wx.g,0.0,1.0), precip=clamp(wx.b,0.0,1.0);
-    float lowp=clamp((.5-wx.a)*3.0,0.0,1.0);
+    float low_pressure=clamp((.5-wx.a)*3.0,0.0,1.0);
     float type=clamp(storm*1.18+precip*.10+max(coverage-.62,0.0)*.18,0.0,1.0);
     float fair_cov=mix(smoothstep(.035,.72,coverage),smoothstep(.020,.58,coverage),type);
     float fair=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale),fair_cov,
         mix(.90,.97,smoothstep(.08,.35,type)));
     fair*=cloud_shadow_band(alt,mix(1100.0,1000.0,type),cloud_shadow_fair_top(type),180.0,mix(600.0,1050.0,type));
     fair=smoothstep(.006,.24,fair)*mix(.50,1.05,type);
-    float deep=smoothstep(.42,.82,max(storm,precip*.70+lowp*.22));
-    float sc=clamp(coverage*.72+storm*.46+lowp*.12,0.0,1.0);
+    float deep=smoothstep(.42,.82,max(storm,precip*.70+low_pressure*.22));
+    float sc=clamp(coverage*.72+storm*.46+low_pressure*.12,0.0,1.0);
     float core=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale*.77),sc,.96)
         *cloud_shadow_band(alt,1150.0,u_cloud_shadow_top,220.0,1050.0);
     float edge=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale*.58),sc*.88,.96)
