@@ -4,6 +4,7 @@ extends VolumetricCloudController
 ## light-volume lighting, surface shadow registration and near-camera weather FX.
 
 const WEATHER_FX_SCRIPT := preload("res://scripts/weather/weather_fx_system.gd")
+const CLOUD_NOISE_GENERATOR := preload("res://scripts/rendering/cloud_noise_generator.gd")
 const WEATHER_CLOUD_BASE_M := 800.0
 const WEATHER_CLOUD_TOP_M := 14500.0
 const FALLBACK_CLOUD_COVERAGE := 0.28
@@ -52,40 +53,11 @@ func _sync_depth_effect() -> void:
 func _ensure_noise_volumes() -> void:
 	if _shape_texture != null and _detail_texture != null:
 		return
-	var shape_noise := FastNoiseLite.new()
-	shape_noise.seed = _seed32(_world_seed, 0x43A51)
-	shape_noise.noise_type = FastNoiseLite.TYPE_CELLULAR
-	shape_noise.frequency = 0.055
-	shape_noise.fractal_type = FastNoiseLite.FRACTAL_NONE
-	shape_noise.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
-	shape_noise.cellular_return_type = FastNoiseLite.RETURN_DISTANCE
-	shape_noise.cellular_jitter = 1.0
-	shape_noise.domain_warp_enabled = false
-	_shape_texture = NoiseTexture3D.new()
-	_shape_texture.width = 96
-	_shape_texture.height = 96
-	_shape_texture.depth = 96
-	_shape_texture.seamless = true
-	_shape_texture.seamless_blend_skirt = 0.12
-	_shape_texture.normalize = true
-	_shape_texture.noise = shape_noise
 
-	var detail_noise := FastNoiseLite.new()
-	detail_noise.seed = _seed32(_world_seed, 0x7D19B)
-	detail_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	detail_noise.frequency = 0.085
-	detail_noise.fractal_type = FastNoiseLite.FRACTAL_RIDGED
-	detail_noise.fractal_octaves = 4
-	detail_noise.fractal_gain = 0.53
-	detail_noise.fractal_lacunarity = 2.11
-	_detail_texture = NoiseTexture3D.new()
-	_detail_texture.width = 64
-	_detail_texture.height = 64
-	_detail_texture.depth = 64
-	_detail_texture.seamless = true
-	_detail_texture.seamless_blend_skirt = 0.14
-	_detail_texture.normalize = true
-	_detail_texture.noise = detail_noise
+	# Generate both cloud volumes from the authoritative world seed. No texture is
+	# loaded from docs/reference/volumetric-clouds; that tree is documentation only.
+	_shape_texture = CLOUD_NOISE_GENERATOR.create_shape_volume(_world_seed)
+	_detail_texture = CLOUD_NOISE_GENERATOR.create_detail_volume(_world_seed)
 
 
 func _sync_shadow_receiver(material: ShaderMaterial) -> void:
