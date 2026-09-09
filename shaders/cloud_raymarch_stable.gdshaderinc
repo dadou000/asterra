@@ -39,7 +39,8 @@ vec4 raymarch_clouds_stable(
 	float transmittance = 1.0;
 	vec3 radiance = vec3(0.0);
 	float mu = dot(dir, sun_dir);
-	float phase = cloud_phase(mu);
+	float phase_single = cloud_phase_single(mu);
+	float phase_multiple = cloud_phase_multiple(mu);
 
 	for (int i = 0; i < CLOUD_MAX_PRIMARY_STEPS; i++) {
 		if (i >= steps || transmittance < 0.012 || t >= segment.y) {
@@ -68,7 +69,7 @@ vec4 raymarch_clouds_stable(
 				p, sun_dir, requested_light_steps);
 
 			float powder = 1.0 - exp(-density * u_cloud_extinction * step_len * 2.2);
-			vec3 direct = sunset_tint * sun_color * sun_irradiance * phase
+			vec3 direct = sunset_tint * sun_color * sun_irradiance * phase_single
 				* light_trans * planet_vis * sun_air * mix(0.58, 1.03, powder);
 
 			float day = smoothstep(-0.16, 0.12, sun_mu);
@@ -76,8 +77,10 @@ vec4 raymarch_clouds_stable(
 				vec3(0.0025, 0.0045, 0.010),
 				vec3(0.050, 0.071, 0.102),
 				day);
+			float ms_energy = (0.010 + 0.030 * (1.0 - light_trans))
+				* (0.55 + 0.45 * powder);
 			vec3 multiple = sunset_tint * sun_color * sun_irradiance
-				* (0.010 + 0.030 * (1.0 - light_trans)) * planet_vis * day;
+				* phase_multiple * ms_energy * planet_vis * day;
 			vec3 lighting = direct + ambient + multiple;
 
 			radiance += transmittance * sample_alpha * lighting;
