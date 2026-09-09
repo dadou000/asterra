@@ -1,0 +1,67 @@
+name: Fix strict GDScript Variant inference
+
+on:
+  push:
+    branches:
+      - pre/0.1.0
+    paths:
+      - .github/workflows/fix-strict-gdscript-types.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: pre/0.1.0
+          fetch-depth: 0
+
+      - name: Patch strict typing roots
+        shell: python
+        run: |
+          from pathlib import Path
+
+          replacements = {
+              "scripts/terrain/ocean_geometry_clipmap.gd": [
+                  ("\tvar planet := _planet()", "\tvar planet: Variant = _planet()", 6),
+              ],
+              "scripts/water/hydro_tile_pool.gd": [
+                  ("\tvar slot := _free_slots.pop_back()", "\tvar slot: int = int(_free_slots.pop_back())", 1),
+              ],
+              "scripts/water/planet_hydrology_river_cluster_store.gd": [
+                  ("\t\tvar cell := queue.pop_front()", "\t\tvar cell: int = int(queue.pop_front())", 1),
+              ],
+              "scripts/water/hydro_river_component_planner.gd": [
+                  ("\t\tvar cell := queue.pop_front()", "\t\tvar cell: int = int(queue.pop_front())", 1),
+                  ("\t\tvar current_rec := open.pop_front()", "\t\tvar current_rec: Dictionary = open.pop_front() as Dictionary", 1),
+              ],
+          }
+
+          for filename, edits in replacements.items():
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+              for old, new, expected in edits:
+                  count = text.count(old)
+                  if count != expected:
+                      raise SystemExit(f"{filename}: expected {expected} occurrence(s) of {old!r}, found {count}")
+                  text = text.replace(old, new)
+              path.write_text(text, encoding="utf-8")
+              print(f"patched {filename}")
+
+      - name: Remove temporary workflow from target branch
+        run: rm .github/workflows/fix-strict-gdscript-types.yml
+
+      - name: Commit fixes
+        run: |
+          git config user.name "Asterra integration bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add scripts/terrain/ocean_geometry_clipmap.gd \
+                  scripts/water/hydro_tile_pool.gd \
+                  scripts/water/planet_hydrology_river_cluster_store.gd \
+                  scripts/water/hydro_river_component_planner.gd \
+                  .github/workflows/fix-strict-gdscript-types.yml
+          git commit -m "Fix strict GDScript Variant inference errors"
+          git push origin HEAD:pre/0.1.0
