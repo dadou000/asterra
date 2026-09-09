@@ -219,6 +219,25 @@ vec3 terrain_cached_surface_normal(vec3 d, int level, float morph,
 	float hyp = terrain_cached_or_macro_with_morph(dyp, level, morph, offset_yp).y;
 	float hyn = terrain_cached_or_macro_with_morph(dyn, level, morph, offset_yn).y;
 
+	// The visible surface composes deformation and per-biome terrain after the
+	// cache sample. Include those same terms in the smooth normal so shading and
+	// slope classification no longer need the triangle-face normal to reveal them.
+	// Both branches are controlled by uniforms and collapse to zero work when the
+	// corresponding feature is inactive.
+	if (u_edit_ready > 0.5 || u_active_deform_ready > 0.5) {
+		hxp += terrain_edit_delta(dxp, u_planet_radius);
+		hxn += terrain_edit_delta(dxn, u_planet_radius);
+		hyp += terrain_edit_delta(dyp, u_planet_radius);
+		hyn += terrain_edit_delta(dyn, u_planet_radius);
+	}
+	if (u_biome_layer_count > 0) {
+		float biome_spacing_m = ring_spacing(level);
+		hxp += asterra_biome_profile_height(dxp, biome_spacing_m);
+		hxn += asterra_biome_profile_height(dxn, biome_spacing_m);
+		hyp += asterra_biome_profile_height(dyp, biome_spacing_m);
+		hyn += asterra_biome_profile_height(dyn, biome_spacing_m);
+	}
+
 	vec3 pxp = dxp * (u_planet_radius + hxp);
 	vec3 pxn = dxn * (u_planet_radius + hxn);
 	vec3 pyp = dyp * (u_planet_radius + hyp);

@@ -457,10 +457,16 @@ void vertex() {
 		// instead, capped well below fully flat, so ordinary biome relief
 		// stays smoothly shaded and only unusually sharp, large biome
 		// features pick up a moderate (not dominant) flat-normal blend.
-		float edit_flat_w = abs(edit_h) > 0.001 ? 0.90 : 0.0;
-		float biome_flat_w = smoothstep(0.3, 6.0, abs(biome_h)) * 0.35;
-		v_geom_normal_weight = max(normal_level <= 1 ? 0.28 : 0.10,
-			max(edit_flat_w, biome_flat_w));
+		// Ordinary terrain must not inherit a triangle-diagonal normal. The clipmap
+		// lattice is deliberately re-centred during handoff, so a persistent blend
+		// with dFdx/dFdy geometry normals makes one side of the surface change
+		// shading whenever that tessellation phase changes. Smooth cached normals
+		// are the production normal; retain only a small geometric contribution for
+		// genuinely sharp live edits and the dense micro-relief patch.
+		float edit_geom_w = abs(edit_h) > 0.001 ? 0.20 : 0.0;
+		float biome_geom_w = smoothstep(1.5, 10.0, abs(biome_h)) * 0.06;
+		float micro_geom_w = micro_layer > 0.5 ? 0.10 : 0.0;
+		v_geom_normal_weight = max(micro_geom_w, max(edit_geom_w, biome_geom_w));
 	} else {
 		v_smooth_normal = d;
 		v_geom_normal_weight = 0.65;
@@ -509,9 +515,9 @@ void fragment() {
 	vec3 geom_raw = cross(dFdx(v_render), dFdy(v_render));
 	vec3 geom_n = dot(geom_raw, geom_raw) > 1e-12 ? normalize(geom_raw) : smooth_n;
 	if (dot(geom_n, up) < 0.0) geom_n = -geom_n;
-	float geom_shading_w = max(
-		(1.0 - smoothstep(2.0, 5.0, v_level)) * mix(0.04, 0.18, v_micro_layer),
-		v_geom_normal_weight);
+	// Triangle derivatives are a fallback/detail signal only. They must not be a
+	// level-dependent baseline because the triangle diagonal is clipmap-relative.
+	float geom_shading_w = clamp(v_geom_normal_weight, 0.0, 1.0);
 	vec3 wn = normalize(mix(smooth_n, geom_n, geom_shading_w));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
@@ -534,7 +540,7 @@ void fragment() {
 		float biome = asterra_ctx_biome_id(up);
 		vec4 landform = gm_landform_weights_from_context(v_macro_h,
 			soil, surface, geology, structure, climate, hydro);
-		float slope_deg = acos(clamp(dot(geom_n, up), 0.0, 1.0)) * 57.2957795131;
+		float slope_deg = acos(clamp(dot(wn, up), 0.0, 1.0)) * 57.2957795131;
 		vec4 primary = sc_primary_weights(
 			soil, surface, geology, structure, climate, hydro, landform, biome, slope_deg);
 		vec4 secondary = sc_secondary_weights(
@@ -631,7 +637,7 @@ void fragment() {
 			float authored_ao = 1.0;
 			#ifdef ASTERRA_AUTHORED_TERRAIN
 			author_cached_material_post(
-				biome, camera_dist, geom_n,
+				biome, camera_dist, wn,
 				soil, surface, geology, structure, climate, hydro, landform,
 				primary, secondary, rock_id, rock_mix_w, v_micro_layer,
 				albedo, wn, roughness, material_specular, authored_metallic, authored_ao);
