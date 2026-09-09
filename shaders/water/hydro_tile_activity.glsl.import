@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://da0f78ft82ayg"
+path="res://.godot/imported/hydro_tile_activity.glsl-46353b18ef55beb5ba1225b0823eaaa5.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_tile_activity.glsl"
+dest_files=["res://.godot/imported/hydro_tile_activity.glsl-46353b18ef55beb5ba1225b0823eaaa5.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cyib73pmeau6o"
+path="res://.godot/imported/hydro_finalize.glsl-95b184152488e3fc53bb5bbbe8c2b032.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_finalize.glsl"
+dest_files=["res://.godot/imported/hydro_finalize.glsl-95b184152488e3fc53bb5bbbe8c2b032.res"]
+
+[params]
+

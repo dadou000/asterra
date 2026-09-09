@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b2ypaj8iuv1t4"
+path="res://.godot/imported/sparse_hydro_tile_state_finalize.glsl-08778610e0557a276d359ae08772f761.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_tile_state_finalize.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_tile_state_finalize.glsl-08778610e0557a276d359ae08772f761.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c0w56icvluaos"
+path="res://.godot/imported/hydro_lod_interface_flux_subcycled.glsl-8ad1051294d14a29cd79b6425cc0d6f9.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_interface_flux_subcycled.glsl"
+dest_files=["res://.godot/imported/hydro_lod_interface_flux_subcycled.glsl-8ad1051294d14a29cd79b6425cc0d6f9.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bjihesbumeh2p"
+path="res://.godot/imported/sparse_hydro_tile_mass_reduce.glsl-f90f344bfe7ffaaeecb2c3d94f48e2a5.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_tile_mass_reduce.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_tile_mass_reduce.glsl-f90f344bfe7ffaaeecb2c3d94f48e2a5.res"]
+
+[params]
+

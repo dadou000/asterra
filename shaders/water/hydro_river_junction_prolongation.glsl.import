@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ifq5xpt42p5v"
+path="res://.godot/imported/hydro_river_junction_prolongation.glsl-78e0c5ab19c4645b8e923a2cbc004ad4.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_river_junction_prolongation.glsl"
+dest_files=["res://.godot/imported/hydro_river_junction_prolongation.glsl-78e0c5ab19c4645b8e923a2cbc004ad4.res"]
+
+[params]
+

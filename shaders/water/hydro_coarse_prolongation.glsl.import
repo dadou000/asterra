@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cu0p5pdsty58n"
+path="res://.godot/imported/hydro_coarse_prolongation.glsl-2e8d48819bb283527079f78280b529eb.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_coarse_prolongation.glsl"
+dest_files=["res://.godot/imported/hydro_coarse_prolongation.glsl-2e8d48819bb283527079f78280b529eb.res"]
+
+[params]
+

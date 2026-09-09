@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cjsr8pmr2av5w"
+path="res://.godot/imported/sparse_hydro_reset_reduction.glsl-4684250f976186fab8095d647aeb9a70.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_reset_reduction.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_reset_reduction.glsl-4684250f976186fab8095d647aeb9a70.res"]
+
+[params]
+

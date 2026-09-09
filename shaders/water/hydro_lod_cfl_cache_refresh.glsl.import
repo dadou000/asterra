@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b0l2xmcwdmn18"
+path="res://.godot/imported/hydro_lod_cfl_cache_refresh.glsl-d7472b78037cc5ffac4f2c987494e6d3.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_cfl_cache_refresh.glsl"
+dest_files=["res://.godot/imported/hydro_lod_cfl_cache_refresh.glsl-d7472b78037cc5ffac4f2c987494e6d3.res"]
+
+[params]
+

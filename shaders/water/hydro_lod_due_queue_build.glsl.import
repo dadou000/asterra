@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://22efrq01lml5"
+path="res://.godot/imported/hydro_lod_due_queue_build.glsl-c9da67cdc2bcd9bfe6e11a765a92a316.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_due_queue_build.glsl"
+dest_files=["res://.godot/imported/hydro_lod_due_queue_build.glsl-c9da67cdc2bcd9bfe6e11a765a92a316.res"]
+
+[params]
+

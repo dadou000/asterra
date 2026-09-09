@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://28u4tv14ijl6"
+path="res://.godot/imported/hydro_river_reach_exchange.glsl-2ebfe76b11befefbf6faad04a14a249a.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_river_reach_exchange.glsl"
+dest_files=["res://.godot/imported/hydro_river_reach_exchange.glsl-2ebfe76b11befefbf6faad04a14a249a.res"]
+
+[params]
+

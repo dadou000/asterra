@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dfvjfblnkwb8n"
+path="res://.godot/imported/sparse_hydro_commit.glsl-11d62271485f772bff0d39d9ee8ebf96.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_commit.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_commit.glsl-11d62271485f772bff0d39d9ee8ebf96.res"]
+
+[params]
+

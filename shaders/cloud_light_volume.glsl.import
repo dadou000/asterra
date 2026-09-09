@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://3m4l0el1rda4"
+path="res://.godot/imported/cloud_light_volume.glsl-0fe010add22c794cfd10bdcbb308f8cf.res"
+
+[deps]
+
+source_file="res://shaders/cloud_light_volume.glsl"
+dest_files=["res://.godot/imported/cloud_light_volume.glsl-0fe010add22c794cfd10bdcbb308f8cf.res"]
+
+[params]
+

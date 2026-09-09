@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bof5nqylx0li4"
+path="res://.godot/imported/hydro_lod_interface_flux.glsl-0c9e7297bfcbf3f644f211da5df9fb5a.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_interface_flux.glsl"
+dest_files=["res://.godot/imported/hydro_lod_interface_flux.glsl-0c9e7297bfcbf3f644f211da5df9fb5a.res"]
+
+[params]
+
