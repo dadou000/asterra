@@ -82,8 +82,8 @@ jobs:
             echo "Hydrology class import failed with status $status"
             exit "$status"
           fi
-          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference" /tmp/water-import.log; then
-            echo "Hydrology import reported a script parse/load failure."
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference|Warning treated as error" /tmp/water-import.log; then
+            echo "Hydrology import reported a script parse/load or strict-warning failure."
             exit 1
           fi
 
@@ -186,8 +186,8 @@ jobs:
           TEST_PROJECT=/tmp/asterra-water-gpu-ci
           timeout 120 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/water-gpu-import.log 2>&1
           tail -n 240 /tmp/water-gpu-import.log || true
-          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference" /tmp/water-gpu-import.log; then
-            echo "Hydrology GPU import reported a script parse/load failure."
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference|Warning treated as error" /tmp/water-gpu-import.log; then
+            echo "Hydrology GPU import reported a script parse/load or strict-warning failure."
             exit 1
           fi
 
