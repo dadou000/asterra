@@ -85,7 +85,7 @@ func _ready() -> void:
 	_material.set_shader_parameter("u_interaction_range_m", INTERACTION_RANGE_M)
 	_material.set_shader_parameter("u_interaction_vertex_level", INTERACTION_VERTEX_LEVEL)
 
-	var planet := _planet()
+	var planet: Variant = _planet()
 	if planet != null:
 		planet.world_ready.connect(_on_world_ready)
 		planet.coast_profile_changed.connect(_on_coast_profile_changed)
@@ -99,7 +99,7 @@ func _ready() -> void:
 
 
 func _process(_dt: float) -> void:
-	var planet := _planet()
+	var planet: Variant = _planet()
 	if planet == null or not planet.ready_state or planet.cfg == null:
 		_set_visible(false)
 		return
@@ -187,7 +187,7 @@ func clear_visual_interactions() -> void:
 
 
 func _configure_world() -> void:
-	var planet := _planet()
+	var planet: Variant = _planet()
 	if planet == null or planet.cfg == null:
 		return
 	_terrain_base_spacing = PI * 0.5 * planet.cfg.planet_radius \
@@ -220,7 +220,7 @@ func _reset_anchor(observer_dir: Vector3) -> void:
 
 
 func _update_center_basis() -> void:
-	var planet := _planet()
+	var planet: Variant = _planet()
 	if planet == null or planet.cfg == null:
 		return
 	_center_dir = _direction_for_offset(_anchor_dir, _anchor_right, _anchor_up,
@@ -262,7 +262,7 @@ func _update_active_levels() -> void:
 
 
 func _bind_gpu_terrain(force: bool) -> void:
-	var planet := _planet()
+	var planet: Variant = _planet()
 	if _material == null or planet == null or not planet.ready_state:
 		return
 	var macro: Texture2DArray = planet.orbit_elevation_texture
@@ -277,7 +277,7 @@ func _bind_gpu_terrain(force: bool) -> void:
 
 
 func _sync_uniforms(origin: Vector3) -> void:
-	var planet := _planet()
+	var planet: Variant = _planet()
 	if planet == null or planet.cfg == null:
 		return
 	_material.set_shader_parameter("u_origin", origin)

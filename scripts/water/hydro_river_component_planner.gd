@@ -218,7 +218,7 @@ static func _topology(store: PlanetHydrologyRiverClusterStore,
 	var queue: Array[int] = roots.duplicate()
 	var ordered: Array[int] = []
 	while not queue.is_empty():
-		var cell := queue.pop_front()
+		var cell: int = int(queue.pop_front())
 		ordered.append(cell)
 		var receiver := int(store.receiver[cell])
 		if membership.has(receiver):
@@ -367,7 +367,7 @@ static func _shortest_cardinal_path(start: HydroTileKey, goal: HydroTileKey,
 	while not open.is_empty() and visited < MAX_PATH_VISITS:
 		open.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 			return float(a["f"]) < float(b["f"]))
-		var current_rec := open.pop_front()
+		var current_rec: Dictionary = open.pop_front() as Dictionary
 		var current := current_rec["key"] as HydroTileKey
 		var current_id := current.packed()
 		var current_g := float(current_rec["g"])

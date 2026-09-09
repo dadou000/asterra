@@ -42,7 +42,7 @@ func allocate(key: HydroTileKey, physical_lod: int = 0) -> int:
 		return int((existing as Dictionary).get("slot", -1))
 	if _free_slots.is_empty():
 		return -1
-	var slot := _free_slots.pop_back()
+	var slot: int = int(_free_slots.pop_back())
 	_slot_to_id[slot] = id
 	_records[id] = {
 		"key": key,

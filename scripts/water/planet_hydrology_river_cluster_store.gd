@@ -562,7 +562,7 @@ func _build_component_topology(cells: Array[int]) -> Dictionary:
 	var queue: Array[int] = roots.duplicate()
 	var ordered: Array[int] = []
 	while not queue.is_empty():
-		var cell := queue.pop_front()
+		var cell: int = int(queue.pop_front())
 		ordered.append(cell)
 		var downstream := int(receiver[cell])
 		if membership.has(downstream):
