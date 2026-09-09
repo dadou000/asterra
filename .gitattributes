@@ -28,3 +28,6 @@ assets/scatter/runtime/**/*.png filter=lfs diff=lfs merge=lfs -text
 assets/scatter/runtime/**/*.jpg filter=lfs diff=lfs merge=lfs -text
 assets/scatter/runtime/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
 assets/scatter/runtime/**/*.webp filter=lfs diff=lfs merge=lfs -text
+
+# Third-party volumetric-cloud reference primitives (see docs/reference/volumetric-clouds/README.md)
+docs/reference/volumetric-clouds/textures/** binary

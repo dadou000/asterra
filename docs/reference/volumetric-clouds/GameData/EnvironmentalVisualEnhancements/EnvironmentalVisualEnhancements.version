@@ -1,0 +1,31 @@
+{
+	"NAME": "Environmental Visual Enhancements - Redux",
+	"URL": "https://github.com/LGhassen/EnvironmentalVisualEnhancements/blob/raymarched-volumetrics/ContentEVE/GameData/EnvironmentalVisualEnhancements/EnvironmentalVisualEnhancements.version",
+	"DOWNLOAD" : "https://www.patreon.com/blackrack",
+	"GITHUB": {
+		"USERNAME": "LGhassen",
+		"REPOSITORY": "EnvironmentalVisualEnhancements",
+		"ALLOW_PRE_RELEASE": false
+	},
+	"VERSION": {
+		"MAJOR": 3,
+		"MINOR": 1,
+		"PATCH": 0,
+		"BUILD": 0
+	},
+	"KSP_VERSION": {
+		"MAJOR": 1,
+		"MINOR": 12,
+		"PATCH": 5
+	},
+	"KSP_VERSION_MIN": {
+		"MAJOR": 1,
+		"MINOR": 12,
+		"PATCH": 0
+	},
+	"KSP_VERSION_MAX": {
+		"MAJOR": 1,
+		"MINOR": 12,
+		"PATCH": 99
+	}
+}
