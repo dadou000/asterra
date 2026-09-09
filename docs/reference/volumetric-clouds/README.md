@@ -18,6 +18,11 @@ instead of static painted maps.
 - The engine is Unity/HLSL; none of it runs in Godot. Treat the `.cfg` files as
   a parameter spec and the `Documentation.txt` as the design rationale.
 
+**[ARCHITECTURE.md](ARCHITECTURE.md)** is the detailed text schematic of how the
+raymarcher works end to end (density field, lighting, light volume, atmosphere
+composite, scaled-space handoff) and how each config key maps to a stage, with
+a port plan for Asterra.
+
 ## What's here
 
 ```
