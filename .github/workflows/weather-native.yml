@@ -4,14 +4,18 @@ on:
   push:
     branches:
       - weather/0.0.5
+      - pre/0.1.0
+      - 0.1.0
     paths:
       - native/weather/**
       - tools/build_weather_avx2_windows.ps1
+      - tools/rebuild_weather_avx2_windows.bat
       - .github/workflows/weather-native.yml
   pull_request:
     paths:
       - native/weather/**
       - tools/build_weather_avx2_windows.ps1
+      - tools/rebuild_weather_avx2_windows.bat
       - .github/workflows/weather-native.yml
 
 jobs:
