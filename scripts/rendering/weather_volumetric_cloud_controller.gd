@@ -1,28 +1,31 @@
 extends VolumetricCloudController
 ## Weather-aware specialization of the existing cloud controller.
-##
-## The normal visible path is the resolved-depth compositor. WeatherSystem owns
-## horizontal cloud placement; this class supplies the Kerbin/EVE-inspired
-## procedural Worley volumes and keeps cloud, surface-shadow and fallback-sky
-## coordinates synchronized.
+## WeatherSystem owns cloud placement; the renderer owns EVE-style morphology,
+## light-volume lighting, surface shadow registration and near-camera weather FX.
 
+const WEATHER_FX_SCRIPT := preload("res://scripts/weather/weather_fx_system.gd")
 const WEATHER_CLOUD_BASE_M := 800.0
 const WEATHER_CLOUD_TOP_M := 14500.0
 const FALLBACK_CLOUD_COVERAGE := 0.28
-
-# Adapted from the Kerbin base-layer tuning. Horizontal dimensions are enlarged
-# by Asterra/Kerbin radius (1000/600) while vertical heights remain terrestrial.
 const EVE_SHAPE_SCALE := 0.000052
 const EVE_DETAIL_SCALE := 0.00042
 const EVE_DETAIL_EROSION := 0.65
 const EVE_EXTINCTION := 0.0010
 const EVE_UPWARD_SPEED_MPS := 5.0
 
+var _weather_fx: WeatherFXSystem
+
+
+func _ready() -> void:
+	super._ready()
+	_weather_fx = WEATHER_FX_SCRIPT.new() as WeatherFXSystem
+	if _weather_fx != null:
+		_weather_fx.name = "WeatherFXSystem"
+		add_child(_weather_fx)
+
 
 func configure(material: ShaderMaterial, world_seed: int, quality: int) -> void:
 	super.configure(material, world_seed, quality)
-	# The depth compositor is the normal weather renderer. If it cannot initialize,
-	# keep an EVE-tuned procedural fallback rather than the older synthetic preset.
 	if material != null:
 		material.set_shader_parameter("u_cloud_base", WEATHER_CLOUD_BASE_M)
 		material.set_shader_parameter("u_cloud_top", WEATHER_CLOUD_TOP_M)
@@ -49,11 +52,6 @@ func _sync_depth_effect() -> void:
 func _ensure_noise_volumes() -> void:
 	if _shape_texture != null and _detail_texture != null:
 		return
-
-	# EVE's base mass is spherical Worley fBm. Godot generates one seamless
-	# cellular-distance primitive here; the shaders invert and combine two octaves
-	# explicitly with Kerbin's 0.57 persistence. This keeps the resource generic and
-	# deterministic rather than shipping any reference-pack texture.
 	var shape_noise := FastNoiseLite.new()
 	shape_noise.seed = _seed32(_world_seed, 0x43A51)
 	shape_noise.noise_type = FastNoiseLite.TYPE_CELLULAR
@@ -63,7 +61,6 @@ func _ensure_noise_volumes() -> void:
 	shape_noise.cellular_return_type = FastNoiseLite.RETURN_DISTANCE
 	shape_noise.cellular_jitter = 1.0
 	shape_noise.domain_warp_enabled = false
-
 	_shape_texture = NoiseTexture3D.new()
 	_shape_texture.width = 96
 	_shape_texture.height = 96
@@ -73,9 +70,6 @@ func _ensure_noise_volumes() -> void:
 	_shape_texture.normalize = true
 	_shape_texture.noise = shape_noise
 
-	# The high-frequency resource is only an erosion primitive. The cloud shaders
-	# apply the Kerbin erosionDepth=0.65 at the density boundary, so dense interiors
-	# remain solid while only fringes become ragged.
 	var detail_noise := FastNoiseLite.new()
 	detail_noise.seed = _seed32(_world_seed, 0x7D19B)
 	detail_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -84,7 +78,6 @@ func _ensure_noise_volumes() -> void:
 	detail_noise.fractal_octaves = 4
 	detail_noise.fractal_gain = 0.53
 	detail_noise.fractal_lacunarity = 2.11
-
 	_detail_texture = NoiseTexture3D.new()
 	_detail_texture.width = 64
 	_detail_texture.height = 64
@@ -115,8 +108,6 @@ func _sync_shadow_receiver(material: ShaderMaterial) -> void:
 
 
 func _process(delta: float) -> void:
-	# Kerbin base-layer upwardsCloudSpeed = 5 m/s. Add that development coordinate
-	# before the parent synchronizes compositor and shadow uniforms this frame.
 	_wind_offset.y += EVE_UPWARD_SPEED_MPS * delta
 	super._process(delta)
 	_bind_weather_to_depth_effect()

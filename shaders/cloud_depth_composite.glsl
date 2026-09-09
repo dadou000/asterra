@@ -2,69 +2,54 @@
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
 layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D depth_texture;
 layout(set = 0, binding = 2) uniform sampler3D shape_noise;
 layout(set = 0, binding = 3) uniform sampler3D detail_noise;
 layout(set = 0, binding = 4) uniform sampler2D global_weather;
 layout(set = 0, binding = 5) uniform sampler2D local_weather;
+layout(set = 0, binding = 6) uniform sampler3D light_volume;
 
-// Exactly 128 bytes. Keep this layout in sync with CloudDepthCompositorEffect.
 layout(push_constant, std430) uniform Params {
     vec4 camera_planet_radius;
     vec4 sun_dir_intensity;
-    // xyz = wind metres, w = integer primary steps + fractional Helion angular radius.
     vec4 wind_steps;
+    // xyz local weather/light-volume centre. abs(w)=span; w<0 means volume warmup.
     vec4 weather_center_span;
     mat4 inv_world_projection;
 } params;
 
 const float PI = 3.14159265358979323846;
 const float ATMOSPHERE_TOP = 60000.0;
-
-// EVE/Kerbin-derived cloud-domain tuning, adapted to Asterra.
-// Asterra is 1000 km radius versus Kerbin's 600 km. Horizontal cell dimensions
-// and march distances are scaled by 5/3 so the same structures subtend similar
-// angles. Vertical cloud heights remain terrestrial and are driven by Asterra's
-// live weather simulation rather than scaled with planet radius.
-const float CLOUD_SHELL_BASE = 0.0;
 const float CLOUD_TOP = 14500.0;
 const float CLOUD_FAIR_BASE = 1100.0;
 const float CLOUD_STORM_BASE = 900.0;
-const float CLOUD_DENSITY = 1.0;
-const float CLOUD_SHAPE_SCALE = 0.0000520;     // ~3.8 km base Worley cell
+const float CLOUD_SHAPE_SCALE = 0.0000520;
 const float CLOUD_DETAIL_SCALE = 0.00042;
-const float CLOUD_DETAIL_EROSION = 0.65;       // Kerbin erosionDepth
+const float CLOUD_DETAIL_EROSION = 0.65;
 const float CLOUD_EXTINCTION = 0.0010;
-const float CLOUD_WORLEY_PERSISTENCE = 0.57;   // Kerbin worley.persistence
-const float CLOUD_BASE_STEP = 125.0;           // Kerbin 75 m * 5/3
-const float CLOUD_ADAPTIVE_FACTOR = 0.006;
-const float CLOUD_MAX_STEP = 2500.0;            // Kerbin 1500 m * 5/3
-const float CLOUD_LIGHT_DISTANCE = 2000.0;      // Kerbin 1200 m * 5/3
-const float CLOUD_UV_WARP_METRES = 200.0;       // ~Kerbin _UVNoiseStrength angular scale
-const int CLOUD_MAX_PRIMARY_STEPS = 28;
-const int CLOUD_MAX_LIGHT_STEPS = 4;
+const float WORLEY_PERSISTENCE = 0.57;
+const float BASE_STEP = 125.0;
+const float ADAPTIVE_FACTOR = 0.006;
+const float MAX_STEP = 2500.0;
+const float LIGHT_DISTANCE = 2000.0;
+const float ORBIT_FADE_START = 200000.0;
+const float ORBIT_FADE_END = 260000.0;
+const int MAX_PRIMARY_STEPS = 28;
+const int MAX_LIGHT_STEPS = 4;
+const int GODRAY_STEPS = 6;
 const int AIR_STEPS = 4;
 
-vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
-    float b = dot(dir, origin);
-    float c = dot(origin, origin) - radius * radius;
-    float disc = b * b - c;
-    if (disc < 0.0) return vec2(1e30, -1e30);
-    float s = sqrt(disc);
+vec2 sphere_hit(vec3 o, vec3 d, float r) {
+    float b = dot(d, o);
+    float c = dot(o, o) - r * r;
+    float q = b * b - c;
+    if (q < 0.0) return vec2(1e30, -1e30);
+    float s = sqrt(q);
     return vec2(-b - s, -b + s);
 }
 
-float remap01(float v, float a, float b) {
-    return clamp((v - a) / max(b - a, 1e-5), 0.0, 1.0);
-}
-
-float hash13(vec3 p) {
-    return fract(sin(dot(p, vec3(91.17, 37.53, 141.73))) * 43758.5453);
-}
-
-vec2 global_weather_uv(vec3 d) {
+vec2 global_uv(vec3 d) {
     d = normalize(d);
     float lon = atan(d.z, d.x);
     if (lon < 0.0) lon += 2.0 * PI;
@@ -72,475 +57,298 @@ vec2 global_weather_uv(vec3 d) {
     return vec2(lon / (2.0 * PI), (PI * 0.5 - lat) / PI);
 }
 
-// WeatherSystem packing:
-// R cloud fraction, G organised convection/storm, B precipitation,
-// A lower-atmosphere pressure anomaly encoded around 0.5.
-vec4 weather_state(vec3 surface_p, float radius) {
-    vec3 d = normalize(surface_p);
-    vec4 g = textureLod(global_weather, global_weather_uv(d), 0.0);
-    vec3 center = normalize(params.weather_center_span.xyz);
+void local_basis(out vec3 center, out vec3 east, out vec3 north) {
+    center = normalize(params.weather_center_span.xyz);
     vec3 pole = abs(center.y) > 0.92 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
-    vec3 east = normalize(cross(pole, center));
-    vec3 north = normalize(cross(center, east));
-    vec3 tangent_delta = d * radius - center * radius;
-    float span = max(params.weather_center_span.w, 1000.0);
-    vec2 luv = vec2(dot(tangent_delta, east), dot(tangent_delta, north)) / span + vec2(0.5);
-    float edge = max(abs(luv.x - 0.5), abs(luv.y - 0.5));
-    float local_weight = 1.0 - smoothstep(0.42, 0.50, edge);
-    vec4 l = textureLod(local_weather, clamp(luv, vec2(0.0), vec2(1.0)), 0.0);
-    return mix(g, l, local_weight);
+    east = normalize(cross(pole, center));
+    north = normalize(cross(center, east));
 }
 
-float low_pressure_weight(vec4 wx) {
-    return clamp((0.5 - wx.a) * 3.0, 0.0, 1.0);
+vec4 weather_state(vec3 d, float radius) {
+    d = normalize(d);
+    vec4 g = textureLod(global_weather, global_uv(d), 0.0);
+    vec3 center, east, north;
+    local_basis(center, east, north);
+    vec3 delta = d * radius - center * radius;
+    float span = max(abs(params.weather_center_span.w), 1000.0);
+    vec2 uv = vec2(dot(delta, east), dot(delta, north)) / span + vec2(0.5);
+    float edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
+    float blend = 1.0 - smoothstep(0.42, 0.50, edge);
+    vec4 l = textureLod(local_weather, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+    return mix(g, l, blend);
 }
 
-// NoiseTexture3D is generated as cellular distance. Invert it to get the rounded
-// "puff" masses used by the EVE/Nubis-style Worley construction.
-float worley_puff(vec3 uv) {
-    return 1.0 - textureLod(shape_noise, uv, 0.0).r;
-}
-
+float worley(vec3 uv) { return 1.0 - textureLod(shape_noise, uv, 0.0).r; }
 float worley_fbm(vec3 p, float scale, vec3 wind) {
     vec3 uv = (p + wind) * scale;
-    float n0 = worley_puff(uv);
-    float n1 = worley_puff(uv * 2.03 + vec3(0.19, 0.61, 0.43));
-    return (n0 + CLOUD_WORLEY_PERSISTENCE * n1) / (1.0 + CLOUD_WORLEY_PERSISTENCE);
+    float a = worley(uv);
+    float b = worley(uv * 2.03 + vec3(0.19, 0.61, 0.43));
+    return (a + WORLEY_PERSISTENCE * b) / (1.0 + WORLEY_PERSISTENCE);
 }
 
-// Cheap 3-axis domain warp corresponding to EVE's uvnoise1. It is intentionally
-// low frequency and only displaces the macro field by a few hundred metres.
-vec3 cloud_domain_warp(vec3 surface_p, vec3 wind) {
+vec3 domain_warp(vec3 surface_p, vec3 wind) {
     vec3 uv = (surface_p + wind * 0.16) * (CLOUD_SHAPE_SCALE * 0.12);
     vec3 q = vec3(
-        textureLod(shape_noise, uv + vec3(0.13, 0.47, 0.81), 0.0).r,
-        textureLod(shape_noise, uv + vec3(0.71, 0.23, 0.37), 0.0).r,
-        textureLod(shape_noise, uv + vec3(0.41, 0.89, 0.17), 0.0).r);
-    return (q * 2.0 - 1.0) * CLOUD_UV_WARP_METRES;
+        textureLod(shape_noise, uv + vec3(0.13,0.47,0.81), 0.0).r,
+        textureLod(shape_noise, uv + vec3(0.71,0.23,0.37), 0.0).r,
+        textureLod(shape_noise, uv + vec3(0.41,0.89,0.17), 0.0).r);
+    return (q * 2.0 - 1.0) * 200.0;
 }
 
-float coverage_remap(float coverage, float convective) {
-    // WeatherSystem already provides physical cloud fraction, unlike EVE's
-    // art-authored AlphaMap. Preserve that meaning while applying the sharp
-    // onset characteristic of the Kerbin coverage curves.
-    float stratus_curve = smoothstep(0.035, 0.72, coverage);
-    float cumulus_curve = smoothstep(0.020, 0.58, coverage);
-    return mix(stratus_curve, cumulus_curve, clamp(convective, 0.0, 1.0));
+float band(float h, float lo, float hi, float bs, float ts) {
+    if (h <= lo || h >= hi) return 0.0;
+    return smoothstep(lo, lo + bs, h) * (1.0 - smoothstep(hi - ts, hi, h));
 }
-
-float edge_width_from_hardness(float hardness) {
-    return mix(0.23, 0.045, clamp(hardness, 0.0, 1.0));
+float coverage_curve(float c, float conv) {
+    return mix(smoothstep(0.035,0.72,c), smoothstep(0.020,0.58,c), conv);
 }
-
-float shaped_worley(float macro, float coverage, float hardness) {
-    float threshold = 1.0 - clamp(coverage, 0.0, 1.0) * 0.76;
-    float width = edge_width_from_hardness(hardness);
-    return smoothstep(threshold, min(threshold + width, 0.999), macro);
+float shape_from(float n, float c, float hardness) {
+    float threshold = 1.0 - clamp(c,0.0,1.0) * 0.76;
+    float width = mix(0.23, 0.045, hardness);
+    return smoothstep(threshold, min(threshold + width, 0.999), n);
 }
-
-float band_profile(float altitude, float base_alt, float top_alt, float bottom_soft, float top_soft) {
-    if (altitude <= base_alt || altitude >= top_alt) return 0.0;
-    float bottom = smoothstep(base_alt, base_alt + bottom_soft, altitude);
-    float top = 1.0 - smoothstep(top_alt - top_soft, top_alt, altitude);
-    return bottom * top;
-}
-
-float fair_cloud_top(float t) {
-    // Kerbin cloudTypes adapted to Asterra's terrestrial-height atmosphere:
-    // Stratus 3.45 km, Cumulus 4.45 km, then progressively taller Congestus.
-    if (t < 0.20) return mix(3450.0, 4450.0, t / 0.20);
-    if (t < 0.40) return mix(4450.0, 5450.0, (t - 0.20) / 0.20);
-    if (t < 0.60) return mix(5450.0, 6450.0, (t - 0.40) / 0.20);
-    if (t < 0.80) return mix(6450.0, 7450.0, (t - 0.60) / 0.20);
-    return mix(7450.0, 9300.0, (t - 0.80) / 0.20);
-}
-
-float fair_density(vec3 p, float altitude, vec4 wx, vec3 wind, bool with_detail, float detail_weight) {
-    float coverage = clamp(wx.r, 0.0, 1.0);
-    float storm = clamp(wx.g, 0.0, 1.0);
-    float precip = clamp(wx.b, 0.0, 1.0);
-    float type = clamp(storm * 1.18 + precip * 0.10 + max(coverage - 0.62, 0.0) * 0.18, 0.0, 1.0);
-    float effective_coverage = coverage_remap(coverage, type);
-    float hardness = mix(0.90, 0.97, smoothstep(0.08, 0.35, type));
-    float top = fair_cloud_top(type);
-    float base_alt = mix(CLOUD_FAIR_BASE, 1000.0, type);
-    float profile = band_profile(altitude, base_alt, top, 180.0, mix(600.0, 1050.0, type));
-    if (profile <= 0.0 || effective_coverage <= 0.001) return 0.0;
-
-    vec3 surface_p = normalize(p) * (length(p) - altitude);
-    vec3 warped_p = p + cloud_domain_warp(surface_p, wind);
-    float macro = worley_fbm(warped_p, CLOUD_SHAPE_SCALE, wind);
-    float body = shaped_worley(macro, effective_coverage, hardness) * profile;
-
-    if (with_detail && detail_weight > 0.001 && body > 0.006) {
-        vec3 detail_p = (p + wind * 1.31) * CLOUD_DETAIL_SCALE;
-        float detail = textureLod(detail_noise, detail_p + vec3(0.41, 0.17, 0.83), 0.0).r;
-        float edge = 1.0 - smoothstep(0.24, 0.88, body);
-        body = max(body - (1.0 - detail) * CLOUD_DETAIL_EROSION
-            * detail_weight * (0.18 + 0.82 * edge) * (1.0 - body), 0.0);
-    }
-
-    // Preserve EVE's much lower Stratus optical density relative to Cumulus,
-    // without importing its engine-specific raw density units directly.
-    float optical_scale = mix(0.50, 1.05, smoothstep(0.08, 0.34, type));
-    return smoothstep(0.006, 0.24, body) * optical_scale;
-}
-
-float storm_density(vec3 p, float altitude, vec4 wx, vec3 wind, bool with_detail, float detail_weight) {
-    float coverage = clamp(wx.r, 0.0, 1.0);
-    float storm = clamp(wx.g, 0.0, 1.0);
-    float precip = clamp(wx.b, 0.0, 1.0);
-    float lowp = low_pressure_weight(wx);
-    float deep = smoothstep(0.42, 0.82, max(storm, precip * 0.70 + lowp * 0.22));
-    if (deep <= 0.001 || altitude <= CLOUD_STORM_BASE || altitude >= CLOUD_TOP) return 0.0;
-
-    float storm_coverage = clamp(coverage * 0.72 + storm * 0.46 + lowp * 0.12, 0.0, 1.0);
-    vec3 surface_p = normalize(p) * (length(p) - altitude);
-    vec3 warped_p = p + cloud_domain_warp(surface_p, wind);
-
-    // Kerbin Cb "core": 3 km tiling -> ~5 km adapted horizontal cell, hard edge.
-    float core_macro = worley_fbm(warped_p, CLOUD_SHAPE_SCALE * 0.77, wind);
-    float core = shaped_worley(core_macro, storm_coverage, 0.96);
-    float core_profile = band_profile(altitude, 1150.0, CLOUD_TOP, 220.0, 1050.0);
-    core *= core_profile;
-
-    // Kerbin Cb "edge": 4 km tiling -> ~6.7 km adapted horizontal cell.
-    float edge_macro = worley_fbm(warped_p, CLOUD_SHAPE_SCALE * 0.58, wind);
-    float edge_mass = shaped_worley(edge_macro, clamp(storm_coverage * 0.88, 0.0, 1.0), 0.96);
-    edge_mass *= band_profile(altitude, 1000.0, 13200.0, 260.0, 1500.0);
-
-    // Kerbin Cb "trail": very large (~50 km) cells and soft edge. This becomes
-    // the broad anvil/pressure-system shield around the convective core.
-    float trail_macro = worley_fbm(warped_p, CLOUD_SHAPE_SCALE * 0.045, wind * 0.35);
-    float trail = shaped_worley(trail_macro, clamp(storm_coverage * 0.72, 0.0, 1.0), 0.50);
-    float anvil_profile = exp(-pow((altitude - 11250.0) / 2100.0, 2.0));
-    trail *= anvil_profile * smoothstep(0.48, 0.78, deep);
-
-    if (with_detail && detail_weight > 0.001) {
-        vec3 detail_p = (p + wind * 1.31) * CLOUD_DETAIL_SCALE;
-        float detail = textureLod(detail_noise, detail_p + vec3(0.17, 0.73, 0.49), 0.0).r;
-        float body_for_edge = max(core, edge_mass);
-        float erosion_edge = 1.0 - smoothstep(0.28, 0.90, body_for_edge);
-        float erosion = (1.0 - detail) * CLOUD_DETAIL_EROSION * detail_weight
-            * (0.12 + 0.88 * erosion_edge) * (1.0 - body_for_edge);
-        core = max(core - erosion, 0.0);
-        edge_mass = max(edge_mass - erosion * 0.72, 0.0);
-    }
-
-    float developed = max(core, edge_mass * 0.72);
-    float body = max(developed, trail * 0.48);
-    return smoothstep(0.005, 0.22, body) * deep * (0.85 + 0.45 * storm);
-}
-
-float rain_haze_density(vec3 p, float altitude, vec4 wx, vec3 wind) {
-    float precip = clamp(wx.b, 0.0, 1.0);
-    if (precip < 0.05 || altitude < 0.0 || altitude > 2300.0) return 0.0;
-    float profile = smoothstep(0.0, 180.0, altitude)
-        * (1.0 - smoothstep(1500.0, 2300.0, altitude));
-    float macro = worley_fbm(p, CLOUD_SHAPE_SCALE * 0.13, wind * 0.55);
-    return precip * profile * mix(0.035, 0.14, macro);
-}
-
-float density_field(vec3 p, float radius, vec3 wind, bool with_detail, float detail_weight) {
-    float altitude = length(p) - radius;
-    if (altitude < CLOUD_SHELL_BASE || altitude >= CLOUD_TOP) return 0.0;
-    vec4 wx = weather_state(normalize(p) * radius, radius);
-    float fair = fair_density(p, altitude, wx, wind, with_detail, detail_weight);
-    float storm = storm_density(p, altitude, wx, wind, with_detail, detail_weight);
-    float haze = rain_haze_density(p, altitude, wx, wind);
-    return (fair + storm + haze) * CLOUD_DENSITY;
-}
-
-float density_coarse(vec3 p, float radius, vec3 wind) {
-    // Lighting needs optical mass, not edge detail. Keep this path deliberately
-    // cheap because it is evaluated four times for every lit visible sample.
-    float altitude = length(p) - radius;
-    if (altitude < CLOUD_SHELL_BASE || altitude >= CLOUD_TOP) return 0.0;
-    vec4 wx = weather_state(normalize(p) * radius, radius);
-    float coverage = clamp(wx.r, 0.0, 1.0);
-    float storm = clamp(wx.g, 0.0, 1.0);
-    float precip = clamp(wx.b, 0.0, 1.0);
-    float lowp = low_pressure_weight(wx);
-
-    float type = clamp(storm * 1.18 + precip * 0.10, 0.0, 1.0);
-    float fair_cov = coverage_remap(coverage, type);
-    float fair_profile = band_profile(altitude, mix(CLOUD_FAIR_BASE, 1000.0, type),
-        fair_cloud_top(type), 180.0, mix(600.0, 1050.0, type));
-    float fair_macro = worley_puff((p + wind) * CLOUD_SHAPE_SCALE);
-    float fair = shaped_worley(fair_macro, fair_cov,
-        mix(0.90, 0.97, smoothstep(0.08, 0.35, type))) * fair_profile;
-    fair *= mix(0.50, 1.05, smoothstep(0.08, 0.34, type));
-
-    float deep = smoothstep(0.42, 0.82,
-        max(storm, precip * 0.70 + lowp * 0.22));
-    float storm_cov = clamp(coverage * 0.72 + storm * 0.46 + lowp * 0.12, 0.0, 1.0);
-    float core_macro = worley_puff((p + wind) * (CLOUD_SHAPE_SCALE * 0.70));
-    float developed = shaped_worley(core_macro, storm_cov, 0.96)
-        * band_profile(altitude, 1100.0, CLOUD_TOP, 220.0, 1200.0)
-        * deep * (0.85 + 0.45 * storm);
-
-    float haze = rain_haze_density(p, altitude, wx, wind);
-    return (fair + developed + haze) * CLOUD_DENSITY;
+float fair_top(float t) {
+    if (t < .2) return mix(3450.0,4450.0,t/.2);
+    if (t < .4) return mix(4450.0,5450.0,(t-.2)/.2);
+    if (t < .6) return mix(5450.0,6450.0,(t-.4)/.2);
+    if (t < .8) return mix(6450.0,7450.0,(t-.6)/.2);
+    return mix(7450.0,9300.0,(t-.8)/.2);
 }
 
 float density_at(vec3 p, float radius, vec3 wind, float detail_weight) {
-    return density_field(p, radius, wind, true, detail_weight);
-}
+    float alt = length(p) - radius;
+    if (alt <= 0.0 || alt >= CLOUD_TOP) return 0.0;
+    vec4 wx = weather_state(normalize(p), radius);
+    float coverage = clamp(wx.r,0.0,1.0);
+    float storm = clamp(wx.g,0.0,1.0);
+    float precip = clamp(wx.b,0.0,1.0);
+    float lowp = clamp((0.5 - wx.a) * 3.0,0.0,1.0);
+    float type = clamp(storm*1.18 + precip*.10 + max(coverage-.62,0.0)*.18,0.0,1.0);
+    vec3 surface_p = normalize(p) * radius;
+    vec3 pp = p + domain_warp(surface_p, wind);
 
-float hg(float mu, float g) {
-    float gg = g * g;
-    return (1.0 - gg) / (4.0 * PI
-        * pow(max(1.0 + gg - 2.0 * g * mu, 1e-4), 1.5));
-}
+    float fair_cov = coverage_curve(coverage,type);
+    float fair_macro = worley_fbm(pp,CLOUD_SHAPE_SCALE,wind);
+    float fair_body = shape_from(fair_macro,fair_cov,mix(.90,.97,smoothstep(.08,.35,type)));
+    fair_body *= band(alt,mix(CLOUD_FAIR_BASE,1000.0,type),fair_top(type),180.0,mix(600.0,1050.0,type));
 
-// EVE Kerbin phaseFunctions:
-// singleScattering1 = (0.95, 0.10), singleScattering2 = (0.8, 0.20).
-// The exact forward spike is capped because Asterra evaluates one screen sample
-// rather than EVE's full light-volume reconstruction.
-float cloud_phase_single(float mu) {
-    float p = (hg(mu, 0.95) * 0.10 + hg(mu, 0.80) * 0.20) / 0.30;
-    return min(p, 3.5);
-}
+    float deep = smoothstep(.42,.82,max(storm,precip*.70+lowp*.22));
+    float sc = clamp(coverage*.72 + storm*.46 + lowp*.12,0.0,1.0);
+    float core = shape_from(worley_fbm(pp,CLOUD_SHAPE_SCALE*.77,wind),sc,.96)
+        * band(alt,1150.0,CLOUD_TOP,220.0,1050.0);
+    float edge = shape_from(worley_fbm(pp,CLOUD_SHAPE_SCALE*.58,wind),sc*.88,.96)
+        * band(alt,1000.0,13200.0,260.0,1500.0);
+    float trail = shape_from(worley_fbm(pp,CLOUD_SHAPE_SCALE*.045,wind*.35),sc*.72,.50)
+        * exp(-pow((alt-11250.0)/2100.0,2.0)) * smoothstep(.48,.78,deep);
+    float storm_body = max(max(core,edge*.72),trail*.48) * deep;
 
-// EVE base-layer multiple-scattering lobes (0.2,3.0) and (-0.4,0.3).
-float cloud_phase_multiple(float mu) {
-    return (hg(mu, 0.20) * 3.0 + hg(mu, -0.40) * 0.30) / 3.30;
-}
-
-float planet_horizon_cosine(float sample_radius, float planet_radius) {
-    float r = max(sample_radius, planet_radius + 0.01);
-    float ratio = clamp(planet_radius / r, 0.0, 1.0);
-    return -sqrt(max(1.0 - ratio * ratio, 0.0));
-}
-
-float planet_solar_clearance(vec3 p, vec3 sun_dir, float planet_radius) {
-    float r = max(length(p), planet_radius + 0.01);
-    vec3 up = p / r;
-    float horizon_zenith = acos(clamp(
-        planet_horizon_cosine(r, planet_radius), -1.0, 1.0));
-    float sun_zenith = acos(clamp(dot(up, normalize(sun_dir)), -1.0, 1.0));
-    return horizon_zenith - sun_zenith;
-}
-
-float helion_angular_radius() {
-    return max(fract(params.wind_steps.w), 1e-7);
-}
-
-// Fraction of Helion's physical disc above the local curved-planet horizon.
-float planet_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
-    float clearance = planet_solar_clearance(p, sun_dir, planet_radius);
-    float angular_radius = helion_angular_radius();
-    if (clearance <= -angular_radius) return 0.0;
-    if (clearance >= angular_radius) return 1.0;
-    float x = clamp(clearance / angular_radius, -1.0, 1.0);
-    float root = sqrt(max(1.0 - x * x, 0.0));
-    return (acos(-x) + x * root) / PI;
-}
-
-float cloud_twilight_weight(float solar_clearance) {
-    float rise = smoothstep(-0.035, 0.004, solar_clearance);
-    float fall = 1.0 - smoothstep(0.018, 0.12, solar_clearance);
-    return rise * fall;
-}
-
-float sun_transmittance(vec3 p, vec3 sun_dir, float radius,
-        vec3 wind, int light_steps) {
-    int steps = clamp(light_steps, 1, CLOUD_MAX_LIGHT_STEPS);
-    float step_len = CLOUD_LIGHT_DISTANCE / float(steps);
-    float optical_depth = 0.0;
-    for (int j = 0; j < CLOUD_MAX_LIGHT_STEPS; j++) {
-        if (j >= steps) break;
-        // Kerbin's four-step light march is intentionally short/local.
-        float f = (float(j) + 0.55) / float(steps);
-        float shaped = f * f * 0.65 + f * 0.35;
-        vec3 light_p = p + sun_dir * (shaped * CLOUD_LIGHT_DISTANCE);
-        optical_depth += density_coarse(light_p, radius, wind) * step_len;
-        if (optical_depth * CLOUD_EXTINCTION > 9.0) break;
+    float body = max(fair_body,storm_body);
+    if (detail_weight > .001 && body > .006) {
+        float det = textureLod(detail_noise,(p+wind*1.31)*CLOUD_DETAIL_SCALE
+            + vec3(.41,.17,.83),0.0).r;
+        float boundary = 1.0 - smoothstep(.25,.88,body);
+        body = max(body - (1.0-det)*CLOUD_DETAIL_EROSION*detail_weight
+            * (.18+.82*boundary)*(1.0-body),0.0);
     }
-    return exp(-optical_depth * CLOUD_EXTINCTION * 0.82);
-}
 
-vec2 cloud_segment(vec3 origin, vec3 dir, float radius, float scene_distance) {
-    float inner_radius = radius + CLOUD_SHELL_BASE;
-    float outer_radius = radius + CLOUD_TOP;
-    vec2 outer_hit = sphere_intersect(origin, dir, outer_radius);
-    if (outer_hit.y <= 0.0) return vec2(1e30, -1e30);
-    float camera_radius = length(origin);
-    float ray_start = max(outer_hit.x, 0.0);
-    float ray_end = min(outer_hit.y, scene_distance);
-    vec2 inner_hit = sphere_intersect(origin, dir, inner_radius);
-    if (camera_radius < inner_radius) {
-        ray_start = max(ray_start, inner_hit.y);
-    } else if (camera_radius < outer_radius) {
-        ray_start = 0.0;
-        if (inner_hit.x > 0.0 && inner_hit.x < ray_end) ray_end = inner_hit.x;
-    } else if (inner_hit.x > ray_start && inner_hit.x < ray_end) {
-        ray_end = inner_hit.x;
+    float rain_haze = 0.0;
+    if (precip > .05 && alt < 2300.0) {
+        rain_haze = smoothstep(0.0,180.0,alt)
+            * (1.0-smoothstep(1800.0,2300.0,alt)) * precip * .24;
     }
-    vec2 ground_hit = sphere_intersect(origin, dir, radius);
-    if (ground_hit.x > 0.0) ray_end = min(ray_end, ground_hit.x);
-    if (ray_end <= ray_start) return vec2(1e30, -1e30);
-    return vec2(ray_start, ray_end);
+    return (smoothstep(.006,.24,body)*(mix(.50,1.05,type)+deep*.35) + rain_haze);
 }
 
-// Preserve EVE's adaptive-step behavior while fitting Asterra's existing
-// full-resolution compositor budget. The mapping covers the entire segment, but
-// allocates more samples near the camera and wider samples toward the horizon.
-float adaptive_distance(float f, float span) {
-    float span_factor = max(CLOUD_ADAPTIVE_FACTOR * span / CLOUD_BASE_STEP, 0.0);
-    float k = min(log(1.0 + span_factor), log(CLOUD_MAX_STEP / CLOUD_BASE_STEP));
-    if (k < 1e-4) return f * span;
-    return span * (exp(k * f) - 1.0) / max(exp(k) - 1.0, 1e-5);
+float coarse_density(vec3 p,float radius,vec3 wind) {
+    return density_at(p,radius,wind,0.0);
 }
 
-vec4 raymarch_clouds(vec3 origin, vec3 dir, float radius, float scene_distance,
-        vec3 sun_dir, float sun_irradiance, vec3 wind, int requested_steps,
-        out float first_cloud_distance) {
-    first_cloud_distance = -1.0;
-    vec2 segment = cloud_segment(origin, dir, radius, scene_distance);
-    if (segment.x > segment.y) return vec4(0.0, 0.0, 0.0, 1.0);
+float hg(float mu,float g) {
+    float gg=g*g;
+    return (1.0-gg)/(4.0*PI*pow(max(1.0+gg-2.0*g*mu,1e-4),1.5));
+}
+float phase_single(float mu) { return hg(mu,.95)*.10 + hg(mu,.80)*.20; }
+float phase_multiple(float mu) { return hg(mu,.20)*3.0 + hg(mu,-.40)*.30; }
 
-    int steps = clamp(requested_steps, 6, CLOUD_MAX_PRIMARY_STEPS);
-    int light_steps = CLOUD_MAX_LIGHT_STEPS;
-    float span = segment.y - segment.x;
-    float jitter = hash13(dir * 173.0);
-    float transmittance = 1.0;
-    vec3 radiance = vec3(0.0);
-    float mu = dot(dir, sun_dir);
-    float phase_single = cloud_phase_single(mu);
-    float phase_multiple = cloud_phase_multiple(mu);
+float planet_sun_visibility(vec3 p,vec3 sun_dir,float radius) {
+    vec2 h=sphere_hit(p,sun_dir,radius);
+    return h.y > 0.0 && h.x > 0.001 ? 0.0 : 1.0;
+}
 
-    for (int i = 0; i < CLOUD_MAX_PRIMARY_STEPS; i++) {
-        if (i >= steps || transmittance < 0.012) break;
-        float f0 = float(i) / float(steps);
-        float f1 = float(i + 1) / float(steps);
-        float t0 = segment.x + adaptive_distance(f0, span);
-        float t1 = segment.x + adaptive_distance(f1, span);
-        float step_len = max(t1 - t0, 1.0);
-        float t = mix(t0, t1, mix(0.28, 0.72, jitter));
-        vec3 p = origin + dir * t;
-        float detail_weight = 1.0 - smoothstep(42000.0, 115000.0, t);
-        float density = density_at(p, radius, wind, detail_weight);
-        if (density <= 0.006) continue;
-
-        if (first_cloud_distance < 0.0) first_cloud_distance = t0;
-        float sample_alpha = 1.0 - exp(-density * CLOUD_EXTINCTION * step_len);
-        float planet_vis = planet_sun_visibility(p, sun_dir, radius);
-        float solar_clearance = planet_solar_clearance(p, sun_dir, radius);
-        float sun_air = mix(0.025, 1.0, smoothstep(-0.004, 0.28, solar_clearance));
-        vec3 sunset_tint = mix(vec3(1.00, 0.34, 0.10),
-            vec3(1.00, 0.98, 0.94),
-            smoothstep(0.0, 0.24, solar_clearance));
-        float light_trans = planet_vis > 0.001
-            ? sun_transmittance(p, sun_dir, radius, wind, light_steps)
-            : 0.0;
-
-        // Beer-powder edge brightening from the Kerbin/Nubis path.
-        float powder = 1.0 - exp(-density * CLOUD_EXTINCTION * step_len * 2.2);
-        vec3 direct = sunset_tint * sun_irradiance * phase_single
-            * light_trans * planet_vis * sun_air * mix(0.58, 1.03, powder);
-
-        float day = smoothstep(-0.002, 0.18, solar_clearance) * planet_vis;
-        float twilight = cloud_twilight_weight(solar_clearance);
-        vec3 ambient = vec3(0.00018, 0.00030, 0.00065);
-        ambient += vec3(0.0045, 0.0065, 0.0120) * twilight;
-        ambient += vec3(0.050, 0.071, 0.102) * day; // Kerbin skylightMultiplier ~1
-
-        // Analytic stand-in for EVE's time-sliced light volume. It uses the same
-        // multiple-scattering phase pair but avoids a new 224^3 resource in this
-        // first integration.
-        float ms_energy = (0.010 + 0.032 * (1.0 - light_trans))
-            * (0.55 + 0.45 * powder);
-        vec3 multiple = sunset_tint * sun_irradiance * phase_multiple
-            * ms_energy * planet_vis * day;
-
-        radiance += transmittance * sample_alpha * (direct + ambient + multiple);
-        transmittance *= 1.0 - sample_alpha;
+float sun_transmittance(vec3 p,vec3 sun_dir,float radius,vec3 wind,int steps) {
+    steps=clamp(steps,1,MAX_LIGHT_STEPS);
+    float dl=LIGHT_DISTANCE/float(steps);
+    float od=0.0;
+    for(int i=0;i<MAX_LIGHT_STEPS;i++) {
+        if(i>=steps) break;
+        float f=(float(i)+.55)/float(steps);
+        float shaped=mix(f,f*f,.65);
+        od += coarse_density(p+sun_dir*(shaped*LIGHT_DISTANCE),radius,wind)*dl;
     }
-    return vec4(radiance, clamp(transmittance, 0.0, 1.0));
+    return exp(-od*CLOUD_EXTINCTION*.90);
 }
 
-vec2 foreground_air_segment(vec3 camera_pos, vec3 dir, float first_t,
-        float planet_radius) {
-    vec2 hit = sphere_intersect(camera_pos, dir, planet_radius + ATMOSPHERE_TOP);
-    if (hit.y <= 0.0) return vec2(1e30, -1e30);
-    float ray_start = max(hit.x, 0.0);
-    float ray_end = min(hit.y, first_t);
-    if (ray_end <= ray_start) return vec2(1e30, -1e30);
-    return vec2(ray_start, ray_end);
-}
-
-float foreground_air_transmittance(vec3 camera_pos, vec3 dir, float first_t,
-        float planet_radius) {
-    if (first_t <= 0.0) return 1.0;
-    vec2 segment = foreground_air_segment(camera_pos, dir, first_t, planet_radius);
-    if (segment.x > segment.y) return 1.0;
-    float step_len = (segment.y - segment.x) / float(AIR_STEPS);
-    float optical_length = 0.0;
-    for (int i = 0; i < AIR_STEPS; i++) {
-        float t = segment.x + (float(i) + 0.5) * step_len;
-        float altitude = max(length(camera_pos + dir * t) - planet_radius, 0.0);
-        float rayleigh = exp(-altitude / 8000.0);
-        float mie = exp(-altitude / 1200.0);
-        optical_length += (0.72 * rayleigh + 0.28 * mie) * step_len;
+bool sample_light_volume(vec3 p,float radius,out vec4 lv) {
+    lv=vec4(1.0,0.0,.05,0.0);
+    if(params.weather_center_span.w >= 0.0) {
+        vec3 center,east,north; local_basis(center,east,north);
+        vec3 d=normalize(p);
+        vec3 delta=d*radius-center*radius;
+        float span=max(abs(params.weather_center_span.w),1000.0);
+        vec2 uv=vec2(dot(delta,east),dot(delta,north))/span+vec2(.5);
+        float alt=length(p)-radius;
+        vec3 uvw=vec3(uv,alt/CLOUD_TOP);
+        if(all(greaterThanEqual(uvw,vec3(0.0))) && all(lessThanEqual(uvw,vec3(1.0)))) {
+            lv=textureLod(light_volume,uvw,0.0);
+            return true;
+        }
     }
-    return exp(-optical_length * 1.55e-5);
+    return false;
 }
 
-vec3 foreground_atmosphere_restore(vec3 camera_pos, vec3 dir, float first_t,
-        float cloud_transmittance, float air_transmittance,
-        vec3 sun_dir, float planet_radius) {
-    if (first_t <= 0.0 || cloud_transmittance > 0.999) return vec3(0.0);
-    vec2 air_segment = foreground_air_segment(camera_pos, dir, first_t, planet_radius);
-    if (air_segment.x > air_segment.y) return vec3(0.0);
-    float air_mid_t = (air_segment.x + air_segment.y) * 0.5;
-    vec3 mid_p = camera_pos + dir * air_mid_t;
-    float solar_vis = planet_sun_visibility(mid_p, sun_dir, planet_radius);
-    float solar_clearance = planet_solar_clearance(mid_p, sun_dir, planet_radius);
-    float day = smoothstep(-0.002, 0.18, solar_clearance) * solar_vis;
-    float twilight = cloud_twilight_weight(solar_clearance);
-    vec3 local_up = normalize(mid_p);
-    float elevation = clamp(dot(dir, local_up), -0.15, 1.0);
-    vec3 day_haze = mix(vec3(0.30, 0.34, 0.38), vec3(0.19, 0.36, 0.52),
-        smoothstep(-0.08, 0.25, elevation));
-    vec3 dusk_haze = vec3(0.035, 0.013, 0.005);
-    vec3 night_haze = vec3(0.00012, 0.00020, 0.00045);
-    vec3 haze_color = night_haze + dusk_haze * twilight + day_haze * day;
-    return haze_color * (1.0 - air_transmittance)
-        * (1.0 - cloud_transmittance) * 0.55;
+vec2 cloud_segment(vec3 o,vec3 d,float radius,float scene_dist) {
+    vec2 outer=sphere_hit(o,d,radius+CLOUD_TOP);
+    if(outer.y<=0.0) return vec2(1e30,-1e30);
+    float start=max(outer.x,0.0), end=min(outer.y,scene_dist);
+    vec2 ground=sphere_hit(o,d,radius);
+    if(ground.x>0.0) end=min(end,ground.x);
+    if(end<=start) return vec2(1e30,-1e30);
+    return vec2(start,end);
+}
+
+vec4 detailed_clouds(vec3 o,vec3 d,float radius,float scene_dist,vec3 sun_dir,
+        float irradiance,vec3 wind,int requested_steps,out float first_t) {
+    first_t=-1.0;
+    vec2 seg=cloud_segment(o,d,radius,scene_dist);
+    if(seg.x>seg.y) return vec4(0.0,0.0,0.0,1.0);
+    int budget=clamp(requested_steps,6,MAX_PRIMARY_STEPS);
+    float t=seg.x + BASE_STEP*(.35+.55*fract(sin(dot(d,vec3(91.17,37.53,141.73)))*43758.5));
+    float trans=1.0;
+    vec3 radiance=vec3(0.0);
+    float mu=dot(d,sun_dir);
+    float ps=phase_single(mu), pm=phase_multiple(mu);
+    int used=0;
+    while(t<seg.y && used<budget && trans>.012) {
+        float step_len=min(BASE_STEP*(1.0+t*ADAPTIVE_FACTOR),MAX_STEP);
+        step_len=min(step_len,seg.y-t);
+        vec3 p=o+d*(t+.5*step_len);
+        float detail=1.0-smoothstep(42000.0,115000.0,t);
+        float den=density_at(p,radius,wind,detail);
+        if(den>.006) {
+            if(first_t<0.0) first_t=t;
+            float a=1.0-exp(-den*CLOUD_EXTINCTION*step_len);
+            float pv=planet_sun_visibility(p,sun_dir,radius);
+            int ls=clamp(2+budget/10,2,MAX_LIGHT_STEPS);
+            float lt=sun_transmittance(p,sun_dir,radius,wind,ls)*pv;
+            vec4 lv; bool have_lv=sample_light_volume(p,radius,lv);
+            if(have_lv) lt=mix(lt,lv.r*pv,.30);
+            float powder=1.0-exp(-den*CLOUD_EXTINCTION*step_len*2.2);
+            float sun_elev=dot(normalize(p),sun_dir);
+            vec3 tint=mix(vec3(1.0,.34,.10),vec3(1.0,.98,.94),smoothstep(-.02,.28,sun_elev));
+            vec3 direct=tint*irradiance*ps*lt*mix(.58,1.03,powder);
+            float day=smoothstep(-.12,.15,sun_elev)*pv;
+            float ms=have_lv ? lv.g : (0.010+0.032*(1.0-lt))*(.55+.45*powder);
+            float sky=have_lv ? lv.b : mix(.008,.065,day);
+            vec3 multiple=tint*irradiance*pm*ms*day;
+            vec3 ambient=vec3(.45,.62,.90)*sky*mix(.18,1.0,day);
+            radiance += trans*a*(direct+multiple+ambient);
+            trans *= 1.0-a;
+        }
+        t += step_len;
+        used++;
+    }
+    return vec4(radiance,clamp(trans,0.0,1.0));
+}
+
+vec4 orbital_clouds(vec3 o,vec3 d,float radius,float scene_dist,vec3 sun_dir,float irradiance,vec3 wind) {
+    float shell=radius+6500.0;
+    vec2 h=sphere_hit(o,d,shell);
+    float t=h.x>0.0?h.x:h.y;
+    if(t<=0.0 || t>=scene_dist) return vec4(0.0,0.0,0.0,1.0);
+    vec3 p=o+d*t;
+    vec4 wx=weather_state(normalize(p),radius);
+    float cov=coverage_curve(clamp(wx.r,0.0,1.0),clamp(wx.g,0.0,1.0));
+    float macro=worley_fbm(p,CLOUD_SHAPE_SCALE*.18,wind*.25);
+    float body=shape_from(macro,cov,mix(.75,.92,wx.g));
+    float storm=clamp(wx.g*.8+wx.b*.3,0.0,1.0);
+    body=max(body,shape_from(worley_fbm(p,CLOUD_SHAPE_SCALE*.045,wind*.2),cov*.72,.5)*storm*.75);
+    float alpha=clamp(body*(.62+.28*storm),0.0,.94);
+    if(alpha<.003) return vec4(0.0,0.0,0.0,1.0);
+    float ndl=max(dot(normalize(p),sun_dir),0.0);
+    vec3 c=mix(vec3(.08,.10,.14),vec3(.72,.78,.86),sqrt(ndl))*irradiance*.12;
+    return vec4(c*alpha,1.0-alpha);
+}
+
+vec3 god_rays(vec3 o,vec3 d,float radius,float max_t,vec3 sun_dir,float irradiance) {
+    if(params.weather_center_span.w < 0.0) return vec3(0.0);
+    float camera_alt=length(o)-radius;
+    if(camera_alt>ATMOSPHERE_TOP) return vec3(0.0);
+    float forward=pow(max(dot(d,sun_dir),0.0),8.0);
+    if(forward<.002) return vec3(0.0);
+    vec2 ah=sphere_hit(o,d,radius+ATMOSPHERE_TOP);
+    float end=min(max_t,ah.y);
+    if(end<=0.0) return vec3(0.0);
+    end=min(end,50000.0);
+    float dl=end/float(GODRAY_STEPS);
+    float accum=0.0;
+    for(int i=0;i<GODRAY_STEPS;i++) {
+        float t=(float(i)+.5)*dl;
+        vec3 p=o+d*t;
+        float alt=max(length(p)-radius,0.0);
+        float air=exp(-alt/8000.0)*.72+exp(-alt/1200.0)*.28;
+        vec4 lv;
+        if(sample_light_volume(p,radius,lv)) accum += air*lv.r*dl;
+    }
+    float strength=(1.0-exp(-accum*2.2e-5))*forward;
+    return vec3(1.0,.86,.67)*strength*irradiance*.035;
+}
+
+float foreground_air_t(vec3 o,vec3 d,float first_t,float radius) {
+    if(first_t<=0.0) return 1.0;
+    vec2 h=sphere_hit(o,d,radius+ATMOSPHERE_TOP);
+    float start=max(h.x,0.0),end=min(h.y,first_t);
+    if(end<=start) return 1.0;
+    float dl=(end-start)/float(AIR_STEPS),od=0.0;
+    for(int i=0;i<AIR_STEPS;i++) {
+        float t=start+(float(i)+.5)*dl;
+        float alt=max(length(o+d*t)-radius,0.0);
+        od += (.72*exp(-alt/8000.0)+.28*exp(-alt/1200.0))*dl;
+    }
+    return exp(-od*1.55e-5);
 }
 
 void main() {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(color_image);
-    if (pixel.x >= size.x || pixel.y >= size.y) return;
-    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(size);
-    float depth = textureLod(depth_texture, uv, 0.0).r;
-    vec3 ndc = vec3(uv * 2.0 - 1.0, depth);
-    vec4 world_h = params.inv_world_projection * vec4(ndc, 1.0);
-    vec3 world_offset = world_h.xyz / max(abs(world_h.w), 1e-8) * sign(world_h.w);
-    float scene_distance = depth <= 1e-6 ? 1e30 : length(world_offset);
-    if (!(scene_distance > 0.0)) return;
-    vec3 ray_world = normalize(world_offset);
-    vec3 camera_planet = params.camera_planet_radius.xyz;
-    float planet_radius = params.camera_planet_radius.w;
-    vec3 sun_dir = normalize(params.sun_dir_intensity.xyz);
-    float sun_irradiance = params.sun_dir_intensity.w;
-    vec3 wind = params.wind_steps.xyz;
-    int steps = int(clamp(floor(params.wind_steps.w), 6.0,
-        float(CLOUD_MAX_PRIMARY_STEPS)));
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(color_image);
+    if(any(greaterThanEqual(pixel,size))) return;
+    vec2 uv=(vec2(pixel)+vec2(.5))/vec2(size);
+    float depth=textureLod(depth_texture,uv,0.0).r;
+    vec3 ndc=vec3(uv*2.0-1.0,depth);
+    vec4 wh=params.inv_world_projection*vec4(ndc,1.0);
+    vec3 world_offset=wh.xyz/max(abs(wh.w),1e-8)*sign(wh.w);
+    float scene_dist=depth<=1e-6?1e30:length(world_offset);
+    if(!(scene_dist>0.0)) return;
+    vec3 ray=normalize(world_offset);
+    vec3 camera=params.camera_planet_radius.xyz;
+    float radius=params.camera_planet_radius.w;
+    vec3 sun=normalize(params.sun_dir_intensity.xyz);
+    float irradiance=params.sun_dir_intensity.w;
+    vec3 wind=params.wind_steps.xyz;
+    int steps=int(clamp(floor(params.wind_steps.w),6.0,float(MAX_PRIMARY_STEPS)));
+    float camera_alt=length(camera)-radius;
+    float orbital_w=smoothstep(ORBIT_FADE_START,ORBIT_FADE_END,camera_alt);
 
-    float first_cloud_distance;
-    vec4 cloud = raymarch_clouds(camera_planet, ray_world, planet_radius,
-        max(scene_distance - 0.5, 0.0), sun_dir, sun_irradiance, wind, steps,
-        first_cloud_distance);
-    if (cloud.a > 0.9999) return;
+    float first_t=-1.0;
+    vec4 detailed=vec4(0.0,0.0,0.0,1.0);
+    if(orbital_w<.999) detailed=detailed_clouds(camera,ray,radius,max(scene_dist-.5,0.0),sun,irradiance,wind,steps,first_t);
+    vec4 orbital=vec4(0.0,0.0,0.0,1.0);
+    if(orbital_w>.001) orbital=orbital_clouds(camera,ray,radius,max(scene_dist-.5,0.0),sun,irradiance,wind);
+    vec4 cloud=mix(detailed,orbital,orbital_w);
 
-    vec4 base = imageLoad(color_image, pixel);
-    float air_t = foreground_air_transmittance(camera_planet, ray_world,
-        first_cloud_distance, planet_radius);
-    vec3 result = cloud.rgb * air_t + base.rgb * cloud.a;
-    result += foreground_atmosphere_restore(camera_planet, ray_world,
-        first_cloud_distance, cloud.a, air_t, sun_dir, planet_radius);
-    imageStore(color_image, pixel, vec4(result, base.a));
+    vec4 base=imageLoad(color_image,pixel);
+    float air_t=foreground_air_t(camera,ray,first_t,radius);
+    vec3 result=cloud.rgb*air_t+base.rgb*cloud.a;
+    float ray_end=first_t>0.0?first_t:min(scene_dist,50000.0);
+    result += god_rays(camera,ray,radius,ray_end,sun,irradiance)*(1.0-cloud.a*.45);
+    imageStore(color_image,pixel,vec4(result,base.a));
 }
