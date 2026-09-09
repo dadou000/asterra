@@ -14,15 +14,17 @@ func _init() -> void:
 	_assert(session.staged_system != null, "staged system missing")
 	_assert(session.applied_system != null, "applied system missing")
 	var bodies: Array = session.staged_system.get(&"bodies")
-	# Bootstrap now also seeds the root star Helion alongside the Asterra body.
-	_assert(bodies.size() == 2, "bootstrap must import the Asterra body plus the root star Helion")
+	# A seeded world now expands to the deterministic multi-body system. Phase 0
+	# must validate the stable home/star contract rather than a historical body count.
+	_assert(bodies.size() >= 2, "bootstrap must include at least Asterra and the root star Helion")
+	var initial_body_count: int = bodies.size()
 	var helion: Resource = session.staged_system.call("find_body", "helion") as Resource
 	_assert(helion != null and int(helion.get(&"body_type")) == BODY_SCRIPT.BodyType.STAR \
 		and String(helion.get(&"parent_body_id")).is_empty(),
 		"bootstrap must seed Helion as a parentless root STAR")
 	var body: Resource = session.active_body()
 	_assert(body != null, "active body missing")
-	_assert(String(body.get(&"body_id")) != "helion", "active body must be Asterra, not the star")
+	_assert(String(body.get(&"body_id")) == "asterra", "active body must be the generated Asterra home world")
 	_assert(is_equal_approx(float(body.get(&"radius_m")), 1000000.0), "Planet Studio did not import Asterra radius")
 
 	var planet_profile: Resource = body.get(&"planet_profile") as Resource
@@ -87,8 +89,11 @@ func _init() -> void:
 	var graph_links: Array = graph.get(&"links")
 	_assert(graph_links.size() == 1, "graph link was not stored")
 
+	# Seeded multi-body startup deliberately regenerates the deterministic system
+	# and bypasses recovery. Exercise the recovery loader directly so this test
+	# still validates authoring crash recovery without contradicting that contract.
 	var restored_session: RefCounted = SESSION_SCRIPT.new()
-	restored_session.bootstrap_from_current_world()
+	_assert(bool(restored_session.call("_bootstrap_from_recovery")), "recovery snapshot was not restored")
 	var restored_terrain: Resource = restored_session.active_terrain_profile()
 	var restored_displacement_slots: Array = restored_terrain.get(&"displacement_slots")
 	_assert(restored_displacement_slots.size() == 1, "recovery startup lost the authored displacement graph")
@@ -144,13 +149,13 @@ func _init() -> void:
 	var created: Resource = session.create_body("CI Moon", BODY_SCRIPT.BodyType.MOON, asterra_id)
 	_assert(created != null, "create body failed")
 	bodies = session.staged_system.get(&"bodies")
-	_assert(bodies.size() == 3, "created body missing from system (Asterra + Helion + moon)")
+	_assert(bodies.size() == initial_body_count + 1, "created body missing from generated system")
 	var moon_id: String = String(created.get(&"body_id"))
 	_assert(String(session.active_body().get(&"body_id")) == moon_id, "created body was not selected")
 	_assert(String(created.get(&"parent_body_id")) == asterra_id, "moon parent was not stored")
 	session.select_body(asterra_id)
 	_assert(not session.set_active_body_parent(moon_id), "celestial hierarchy accepted a parent cycle")
-	# Asterra now orbits Helion; a rejected cycle must leave that parent untouched.
+	# Asterra orbits Helion; a rejected cycle must leave that parent untouched.
 	_assert(String(session.active_body().get(&"parent_body_id")) == "helion", "cycle rejection mutated the parent")
 
 	var preset_path := "user://world_authoring/tests/phase1_roundtrip.tres"
@@ -158,7 +163,7 @@ func _init() -> void:
 	session.revert()
 	_assert(session.load_preset(preset_path) == OK, "preset load failed")
 	bodies = session.staged_system.get(&"bodies")
-	_assert(bodies.size() == 3, "preset did not round-trip body list (Asterra + Helion + moon)")
+	_assert(bodies.size() == initial_body_count + 1, "preset did not round-trip generated body list plus authored moon")
 	session.select_body(asterra_id)
 	terrain = session.active_terrain_profile()
 	water = session.active_water_profile()
