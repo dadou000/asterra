@@ -1,7 +1,7 @@
 extends VolumetricCloudController
-## Weather-aware specialization of the existing cloud controller.
-## WeatherSystem owns cloud placement; the renderer owns EVE-style morphology,
-## light-volume lighting, surface shadow registration and near-camera weather FX.
+## Weather-aware specialization of Asterra's production volumetric cloud renderer.
+## WeatherSystem owns cloud placement; this controller binds the canonical density
+## field, light volume, surface shadows, quality budgets and volumetric lightning.
 
 const WEATHER_FX_SCRIPT := preload("res://scripts/weather/weather_fx_system.gd")
 const CLOUD_NOISE_GENERATOR := preload("res://scripts/rendering/cloud_noise_generator.gd")
@@ -10,7 +10,7 @@ const WEATHER_CLOUD_TOP_M := 14500.0
 const FALLBACK_CLOUD_COVERAGE := 0.28
 const EVE_SHAPE_SCALE := 0.000052
 const EVE_DETAIL_SCALE := 0.00042
-const EVE_DETAIL_EROSION := 0.65
+const EVE_DETAIL_EROSION := 0.50
 const EVE_EXTINCTION := 0.0010
 const EVE_UPWARD_SPEED_MPS := 5.0
 
@@ -53,9 +53,6 @@ func _sync_depth_effect() -> void:
 func _ensure_noise_volumes() -> void:
 	if _shape_texture != null and _detail_texture != null:
 		return
-
-	# Generate both cloud volumes from the authoritative world seed. No texture is
-	# loaded from docs/reference/volumetric-clouds; that tree is documentation only.
 	_shape_texture = CLOUD_NOISE_GENERATOR.create_shape_volume(_world_seed)
 	_detail_texture = CLOUD_NOISE_GENERATOR.create_detail_volume(_world_seed)
 
@@ -99,6 +96,10 @@ func _bind_weather_to_depth_effect() -> void:
 		WeatherSystem.local_east,
 		WeatherSystem.local_north,
 		WeatherSystem.local_span_m)
+	if _weather_fx != null:
+		var lightning_texture := _weather_fx.get_lightning_event_texture()
+		if lightning_texture != null:
+			_depth_effect.set_lightning_texture(lightning_texture)
 
 
 func _sync_all_weather_receivers() -> void:
@@ -115,3 +116,65 @@ func _sync_all_weather_receivers() -> void:
 			material.set_shader_parameter("u_cloud_weather_global", WeatherSystem.global_weather_texture)
 		if WeatherSystem.local_weather_texture != null:
 			material.set_shader_parameter("u_cloud_weather_local", WeatherSystem.local_weather_texture)
+
+
+# Production budgets. Empty-air probes are counted separately in the compute
+# shader, so these values represent actual occupied-cloud integration work.
+func _compositor_steps(quality: int) -> int:
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 20
+		GraphicsQuality.Preset.BALANCED:
+			return 32
+		GraphicsQuality.Preset.ULTRA:
+			return 72
+		_:
+			return 48
+
+
+func _primary_steps(quality: int) -> int:
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 24
+		GraphicsQuality.Preset.BALANCED:
+			return 36
+		GraphicsQuality.Preset.ULTRA:
+			return 64
+		_:
+			return 48
+
+
+func _light_steps(quality: int) -> int:
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 3
+		GraphicsQuality.Preset.BALANCED:
+			return 5
+		GraphicsQuality.Preset.ULTRA:
+			return 8
+		_:
+			return 6
+
+
+func _shadow_steps(quality: int) -> int:
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 4
+		GraphicsQuality.Preset.BALANCED:
+			return 6
+		GraphicsQuality.Preset.ULTRA:
+			return 12
+		_:
+			return 8
+
+
+func _shadow_disc_samples(quality: int) -> int:
+	match GraphicsQuality.sanitize(quality):
+		GraphicsQuality.Preset.PERFORMANCE:
+			return 1
+		GraphicsQuality.Preset.BALANCED:
+			return 3
+		GraphicsQuality.Preset.ULTRA:
+			return 7
+		_:
+			return 5

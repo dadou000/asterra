@@ -1,16 +1,34 @@
 class_name WeatherFXSystem
 extends Node
-## Near-camera weather effects driven by the same local WeatherSystem texture used
-## by volumetric clouds. No EVE art/audio is shipped: all particles and droplets are
-## procedural and all state comes from Asterra's native meteorology.
+## Near-camera weather effects and authoritative transient lightning events.
+## Cloud placement remains owned by WeatherSystem. Lightning events are exported
+## as a tiny HDR texture so the volumetric cloud compositor can scatter them from
+## inside the same 3D density field instead of faking a screen-space flash.
 
 const SAMPLE_INTERVAL := 0.20
 const RAIN_FALL_SPEED := 12.0
 const SNOW_FALL_SPEED := 0.75
-const THUNDER_MAX_HZ := 0.05
+const THUNDER_MAX_HZ := 0.12
 const WET_ACCUM_RATE := 0.085
 const WET_DRY_RATE := 0.0045
+const MAX_LIGHTNING_EVENTS := 4
+const LIGHTNING_CANDIDATES := 16
+const LIGHTNING_MIN_SCORE := 0.14
 const DROPLET_SHADER := preload("res://shaders/weather_droplets.gdshader")
+
+class LightningEvent:
+	var position_planet := Vector3.ZERO
+	var age := 0.0
+	var duration := 0.50
+	var peak := 1.0
+	var secondary_time := 0.18
+
+	func strength() -> float:
+		var primary := exp(-pow((age - 0.025) / 0.018, 2.0))
+		var secondary := 0.68 * exp(-pow((age - secondary_time) / 0.040, 2.0))
+		var tail := 0.16 * exp(-age * 6.5)
+		return clampf((maxf(primary, secondary) + tail) * peak, 0.0, 1.0)
+
 
 var _observer: AsterraPlayer
 var _fx_root: Node3D
@@ -27,16 +45,22 @@ var _cloud := 0.0
 var _storm := 0.0
 var _precip := 0.0
 var _pressure := 0.5
+var _storm_activity := 0.0
 var _wetness := 0.0
 var _flash := 0.0
 var _observer_speed_mps := 0.0
 var _last_observer_planet_pos := Vector3.ZERO
 var _have_observer_motion_sample := false
+var _weather_image: Image
+var _lightning_events: Array[LightningEvent] = []
+var _lightning_event_image: Image
+var _lightning_event_texture: ImageTexture
 
 
 func _ready() -> void:
 	var world := load("res://world.tres")
 	_rng.seed = int(world.world_seed) ^ 0x4C494748544E494E if world is GenConfig else 0x41535445525241
+	_create_lightning_event_texture()
 	set_process(true)
 
 
@@ -45,6 +69,7 @@ func _process(delta: float) -> void:
 	_sample_accum += delta
 	_try_bind_observer()
 	if _observer == null or not is_instance_valid(_observer):
+		_update_lightning_events(delta)
 		return
 	_ensure_fx_nodes()
 	_update_observer_motion(delta)
@@ -61,9 +86,19 @@ func _process(delta: float) -> void:
 
 	_update_precipitation(fx_precip, snow_fraction)
 	_update_wetness(delta, fx_precip)
-	_update_lightning(delta, altitude)
+	_update_lightning_events(delta)
 	_update_droplets()
 	_sync_surface_wetness()
+
+
+func get_lightning_event_texture() -> Texture2D:
+	return _lightning_event_texture
+
+
+func _create_lightning_event_texture() -> void:
+	_lightning_event_image = Image.create(MAX_LIGHTNING_EVENTS, 1, false, Image.FORMAT_RGBAF)
+	_lightning_event_image.fill(Color(0.0, 0.0, 0.0, 0.0))
+	_lightning_event_texture = ImageTexture.create_from_image(_lightning_event_image)
 
 
 func _try_bind_observer() -> void:
@@ -102,7 +137,7 @@ func _rebuild_fx_root(scene: Node) -> void:
 	_lightning = OmniLight3D.new()
 	_lightning.name = "WeatherLightningFlash"
 	_lightning.light_energy = 0.0
-	_lightning.omni_range = 1800.0
+	_lightning.omni_range = 6000.0
 	_lightning.shadow_enabled = false
 	_fx_root.add_child(_lightning)
 	_create_droplet_overlay(scene)
@@ -187,11 +222,22 @@ func _sample_weather_center() -> void:
 	var image := WeatherSystem.local_weather_texture.get_image()
 	if image == null or image.is_empty():
 		return
+	_weather_image = image
 	var c := image.get_pixel(image.get_width() / 2, image.get_height() / 2)
 	_cloud = clampf(c.r, 0.0, 1.0)
 	_storm = clampf(c.g, 0.0, 1.0)
 	_precip = clampf(c.b, 0.0, 1.0)
 	_pressure = clampf(c.a, 0.0, 1.0)
+
+	_storm_activity = 0.0
+	var sx := maxi(image.get_width() / 12, 1)
+	var sy := maxi(image.get_height() / 12, 1)
+	for y in range(0, image.get_height(), sy):
+		for x in range(0, image.get_width(), sx):
+			var wx := image.get_pixel(x, y)
+			var score := pow(clampf(wx.g, 0.0, 1.0), 1.7) \
+				* smoothstep(0.035, 0.50, clampf(wx.b, 0.0, 1.0))
+			_storm_activity = maxf(_storm_activity, score)
 
 
 func _update_precipitation(intensity: float, snow_fraction: float) -> void:
@@ -214,19 +260,117 @@ func _update_wetness(delta: float, rain_intensity: float) -> void:
 		_wetness = maxf(0.0, _wetness - WET_DRY_RATE * delta)
 
 
-func _update_lightning(delta: float, altitude: float) -> void:
-	_flash = maxf(0.0, _flash - delta * 6.5)
-	if altitude < 18000.0 and _storm > 0.58 and _precip > 0.08:
-		var rate := THUNDER_MAX_HZ * pow(_storm, 2.4) * smoothstep(0.08, 0.55, _precip)
+func _update_lightning_events(delta: float) -> void:
+	for i in range(_lightning_events.size() - 1, -1, -1):
+		var event := _lightning_events[i]
+		event.age += delta
+		if event.age >= event.duration:
+			_lightning_events.remove_at(i)
+
+	if _weather_image != null and not _weather_image.is_empty() \
+			and _lightning_events.size() < MAX_LIGHTNING_EVENTS:
+		var activity := maxf(_storm_activity,
+			pow(_storm, 1.7) * smoothstep(0.035, 0.50, _precip))
+		var rate := THUNDER_MAX_HZ * activity * activity
 		if _rng.randf() < rate * delta:
-			_flash = 1.0
-			if _lightning != null:
-				var horizontal := Vector3(_rng.randf_range(-1.0, 1.0), 0.0,
-					_rng.randf_range(-1.0, 1.0)).normalized() * _rng.randf_range(120.0, 700.0)
-				_lightning.global_position = _observer.global_position \
-					+ WeatherSystem.local_center.normalized() * _rng.randf_range(250.0, 900.0) + horizontal
-	if _lightning != null:
-		_lightning.light_energy = _flash * 18.0
+			_spawn_lightning_event()
+
+	_flash = 0.0
+	for event in _lightning_events:
+		_flash = maxf(_flash, event.strength())
+	_update_lightning_event_texture()
+	_update_local_lightning_omni()
+
+
+func _spawn_lightning_event() -> void:
+	if _weather_image == null or _weather_image.is_empty():
+		return
+	var best_score := 0.0
+	var best_uv := Vector2(0.5, 0.5)
+	var best_weather := Color(_cloud, _storm, _precip, _pressure)
+	var w := _weather_image.get_width()
+	var h := _weather_image.get_height()
+	for _i in range(LIGHTNING_CANDIDATES):
+		var uv := Vector2(_rng.randf_range(0.06, 0.94), _rng.randf_range(0.06, 0.94))
+		var px := clampi(int(uv.x * float(w - 1)), 0, w - 1)
+		var py := clampi(int(uv.y * float(h - 1)), 0, h - 1)
+		var wx := _weather_image.get_pixel(px, py)
+		var score := pow(clampf(wx.g, 0.0, 1.0), 1.7) \
+			* smoothstep(0.035, 0.50, clampf(wx.b, 0.0, 1.0))
+		if score > best_score:
+			best_score = score
+			best_uv = uv
+			best_weather = wx
+	if best_score < LIGHTNING_MIN_SCORE:
+		return
+
+	var radius := _planet_radius()
+	var span := maxf(WeatherSystem.local_span_m, 1000.0)
+	var center := WeatherSystem.local_center.normalized()
+	var east := WeatherSystem.local_east.normalized()
+	var north := WeatherSystem.local_north.normalized()
+	var direction := (center
+		+ east * ((best_uv.x - 0.5) * span / radius)
+		+ north * ((best_uv.y - 0.5) * span / radius)).normalized()
+
+	var coverage := clampf(best_weather.r, 0.0, 1.0)
+	var storm := clampf(best_weather.g, 0.0, 1.0)
+	var precip := clampf(best_weather.b, 0.0, 1.0)
+	var low_pressure := clampf((0.5 - best_weather.a) * 3.0, 0.0, 1.0)
+	var convection := smoothstep(0.12, 0.86,
+		maxf(storm, precip * 0.76 + low_pressure * 0.20))
+	var base_alt := lerpf(1450.0, 720.0, convection) - low_pressure * 90.0
+	var fair_top := lerpf(3500.0, 6200.0, smoothstep(0.16, 0.82, coverage))
+	var top_alt := lerpf(fair_top, 14500.0, pow(convection, 0.68))
+	var lower := base_alt + 350.0
+	var upper := maxf(lower + 400.0, lerpf(base_alt, top_alt, 0.72))
+	var event_alt := lerpf(lower, upper, _rng.randf_range(0.30, 0.72))
+
+	var event := LightningEvent.new()
+	event.position_planet = direction * (radius + event_alt)
+	event.duration = _rng.randf_range(0.42, 0.68)
+	event.peak = _rng.randf_range(0.72, 1.0) * smoothstep(0.45, 0.95, storm)
+	event.secondary_time = _rng.randf_range(0.13, 0.27)
+	_lightning_events.append(event)
+
+
+func _update_lightning_event_texture() -> void:
+	if _lightning_event_image == null or _lightning_event_texture == null:
+		return
+	for i in range(MAX_LIGHTNING_EVENTS):
+		if i < _lightning_events.size():
+			var event := _lightning_events[i]
+			var p := event.position_planet
+			_lightning_event_image.set_pixel(i, 0, Color(p.x, p.y, p.z, event.strength()))
+		else:
+			_lightning_event_image.set_pixel(i, 0, Color(0.0, 0.0, 0.0, 0.0))
+	_lightning_event_texture.update(_lightning_event_image)
+
+
+func _update_local_lightning_omni() -> void:
+	if _lightning == null or _observer == null:
+		return
+	var observer_planet := _planet_position()
+	var best_event: LightningEvent
+	var best_score := 0.0
+	for event in _lightning_events:
+		var strength := event.strength()
+		var distance := (event.position_planet - observer_planet).length()
+		if distance > 18000.0:
+			continue
+		var score := strength / (1.0 + distance / 3500.0)
+		if score > best_score:
+			best_score = score
+			best_event = event
+	if best_event == null:
+		_lightning.light_energy = 0.0
+		return
+	var strength := best_event.strength()
+	var origin := Frames.origin
+	var origin_v3 := Vector3(float(origin.x), float(origin.y), float(origin.z))
+	_lightning.global_position = best_event.position_planet - origin_v3
+	_lightning.light_energy = strength * 22.0
+	_lightning.omni_range = lerpf(2600.0, 8200.0, sqrt(strength))
 
 
 func _update_droplets() -> void:

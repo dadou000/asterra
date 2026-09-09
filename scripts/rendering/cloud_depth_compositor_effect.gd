@@ -1,8 +1,8 @@
 class_name CloudDepthCompositorEffect
 extends CompositorEffect
-## Depth-aware EVE-style cloud compositor plus a time-sliced local light volume.
-## WeatherSystem owns horizontal weather; the light volume amortises indirect cloud
-## lighting over 12 frames, matching the Kerbin reference update cadence.
+## Depth-aware planetary volumetric cloud compositor plus a time-sliced local
+## light volume. WeatherSystem owns horizontal weather. The camera march, lighting
+## cache, cloud lightning and surface shadows all consume the same cloud field.
 
 const SHADER_PATH := "res://shaders/cloud_depth_composite.glsl"
 const LIGHT_VOLUME_SHADER_PATH := "res://shaders/cloud_light_volume.glsl"
@@ -29,6 +29,7 @@ var _shape_texture_rs := RID()
 var _detail_texture_rs := RID()
 var _global_weather_rs := RID()
 var _local_weather_rs := RID()
+var _lightning_events_rs := RID()
 
 var _state_mutex := Mutex.new()
 var _floating_origin := Vector3.ZERO
@@ -36,7 +37,7 @@ var _planet_radius := 1000000.0
 var _sun_dir := Vector3(1.0, 0.0, 0.0)
 var _sun_intensity := 5.0265
 var _wind_offset := Vector3.ZERO
-var _primary_steps := 16
+var _primary_steps := 48
 var _helion_angular_radius_rad := 0.00465475
 var _weather_center := Vector3.UP
 var _weather_span_m := 422400.0
@@ -170,10 +171,23 @@ func set_weather_textures(global_weather: Texture2D, local_weather: Texture2D) -
 	_local_weather_rs = local_weather.get_rid() if local_weather != null else RID()
 
 
+func set_lightning_texture(lightning_events: Texture2D) -> void:
+	_lightning_events_rs = lightning_events.get_rid() if lightning_events != null else RID()
+
+
 func set_weather_basis(center: Vector3, _east: Vector3, _north: Vector3, span_m: float) -> void:
+	var new_center := center.normalized()
+	var new_span := maxf(span_m, 1000.0)
 	_state_mutex.lock()
-	_weather_center = center.normalized()
-	_weather_span_m = maxf(span_m, 1000.0)
+	var angular_delta := acos(clampf(_weather_center.dot(new_center), -1.0, 1.0))
+	var patch_shift_m := angular_delta * _planet_radius
+	var span_change := absf(new_span - _weather_span_m)
+	if patch_shift_m > maxf(_weather_span_m * 0.12, 12000.0) \
+			or span_change > maxf(_weather_span_m * 0.10, 12000.0):
+		_light_volume_updates = 0
+		_light_volume_phase = 0
+	_weather_center = new_center
+	_weather_span_m = new_span
 	_state_mutex.unlock()
 
 
@@ -186,7 +200,7 @@ func set_runtime_state(floating_origin: Vector3, planet_radius: float,
 	_sun_dir = sun_dir.normalized()
 	_sun_intensity = sun_intensity
 	_wind_offset = wind_offset
-	_primary_steps = clampi(primary_steps, 6, 28)
+	_primary_steps = clampi(primary_steps, 12, 96)
 	_helion_angular_radius_rad = maxf(helion_angular_radius_rad, 1.0e-7)
 	_state_mutex.unlock()
 
@@ -195,7 +209,8 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT or not is_ready():
 		return
 	if not _shape_texture_rs.is_valid() or not _detail_texture_rs.is_valid() \
-			or not _global_weather_rs.is_valid() or not _local_weather_rs.is_valid():
+			or not _global_weather_rs.is_valid() or not _local_weather_rs.is_valid() \
+			or not _lightning_events_rs.is_valid():
 		return
 
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
@@ -210,8 +225,10 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var detail_rd := RenderingServer.texture_get_rd_texture(_detail_texture_rs)
 	var global_weather_rd := RenderingServer.texture_get_rd_texture(_global_weather_rs)
 	var local_weather_rd := RenderingServer.texture_get_rd_texture(_local_weather_rs)
+	var lightning_events_rd := RenderingServer.texture_get_rd_texture(_lightning_events_rs)
 	if not shape_rd.is_valid() or not detail_rd.is_valid() \
-			or not global_weather_rd.is_valid() or not local_weather_rd.is_valid():
+			or not global_weather_rd.is_valid() or not local_weather_rd.is_valid() \
+			or not lightning_events_rd.is_valid():
 		return
 
 	_state_mutex.lock()
@@ -249,6 +266,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		uniforms.append(_sampled_uniform(4, _linear_clamp_sampler, global_weather_rd))
 		uniforms.append(_sampled_uniform(5, _linear_clamp_sampler, local_weather_rd))
 		uniforms.append(_sampled_uniform(6, _linear_clamp_sampler, _light_volume))
+		uniforms.append(_sampled_uniform(7, _linear_clamp_sampler, lightning_events_rd))
 
 		var uniform_set := UniformSetCacheRD.get_cache(_shader, 0, uniforms)
 		if not uniform_set.is_valid():
@@ -263,8 +281,6 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 			+ clampf(helion_angular_radius_rad, 1.0e-7, 0.499999)
 		_append_vec4(push, Vector4(wind_offset.x, wind_offset.y, wind_offset.z,
 			packed_steps_helion))
-		# Negative span means the volume is still warming up; the shader uses the
-		# analytic path until all 12 time slices have been written at least once.
 		var signed_span := weather_span_m if _light_volume_updates >= LIGHT_VOLUME_TIME_SLICES \
 			else -weather_span_m
 		_append_vec4(push, Vector4(weather_center.x, weather_center.y,
