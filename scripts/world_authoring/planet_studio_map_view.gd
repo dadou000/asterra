@@ -96,8 +96,8 @@ func set_sculpt_snapshots(staged: Dictionary, applied: Dictionary) -> void:
 func _process(_delta: float) -> void:
 	if _render_y >= H or _image == null or not Planet.ready_state or Planet.fields == null or Planet.grid == null:
 		return
-	var fields := Planet.fields as PlanetFields
-	var grid := Planet.grid as PlanetGrid
+	var fields: Variant = Planet.fields
+	var grid: Variant = Planet.grid
 	if fields == null or grid == null:
 		return
 	var end_y := mini(H, _render_y + RENDER_ROWS_PER_FRAME)
@@ -236,7 +236,6 @@ func _draw_biome_overlays() -> void:
 
 
 func _draw_water_overlays() -> void:
-	# Overridden by PlanetStudioMapViewSchema for the current authored_features schema.
 	pass
 
 
