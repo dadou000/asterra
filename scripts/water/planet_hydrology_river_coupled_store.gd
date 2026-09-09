@@ -150,7 +150,11 @@ func total_storage_m3() -> float:
 	var total := super.total_storage_m3()
 	if not initialized:
 		return total
-	for c in cell_count():
+	# A base-class initialize() calls this through virtual dispatch before this
+	# subclass has sized refined_mask (it is filled after super.initialize()
+	# returns). No reach is refined yet in that window, so contribute nothing.
+	var refined_n := mini(refined_mask.size(), refined_pending_inflow_m3.size())
+	for c in refined_n:
 		if refined_mask[c] != 0:
 			total += maxf(refined_pending_inflow_m3[c], 0.0)
 	return total
