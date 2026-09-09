@@ -1,10 +1,10 @@
 class_name OceanGeometryClipmap
 extends Node3D
-## GPU-first local/regional ocean renderer.
+## Merged pre-0.1.0 ocean renderer.
 ##
-## A fixed concentric grid follows the observer. The CPU only updates uniforms
-## and sector visibility; shoreline height is evaluated by the same procedural
-## GPU terrain function as GroundGeometryClipmap.
+## Keeps the terrain/world branch multi-body sampler seam while using the newer
+## water/0.1.0 nested-square spectral renderer, reactive wakes/impacts and dynamic
+## hydrology coat. Authoritative buoyancy remains in OceanGPUPhysics.
 
 const TARGET_FINE_DEPTH: int = 16
 const MAX_LEVEL: int = 14
@@ -24,6 +24,11 @@ const SECTOR_HALF_ANGLE: float = 0.2617993877991494
 const SECTOR_CULL_MARGIN_RAD: float = 0.3490658503988659
 const SECTOR_SHOW_ALL_RADIAL_DOT: float = 0.65
 
+const INTERACTION_BUDGET := 32
+const INTERACTION_LIFETIME_S := 45.0
+const INTERACTION_RANGE_M := 2000.0
+const INTERACTION_VERTEX_LEVEL := 4
+
 var _material: ShaderMaterial
 var _center_batch: MultiMeshInstance3D
 var _sector_batches: Array[MultiMeshInstance3D] = []
@@ -37,6 +42,7 @@ var _center_up := Vector3(0.0, 1.0, 0.0)
 var _center_plane := Vector2.ZERO
 var _have_anchor := false
 var _base_spacing: float = 0.75
+var _terrain_base_spacing: float = 0.75
 
 var _active_max_level: int = 0
 var _visible_cap_arc_m: float = 0.0
@@ -48,11 +54,11 @@ var _stable_anchor_world: Vec3D = Vec3D.new()
 var _bound_macro: Texture2DArray
 var _bound_macro_res: int = -1
 var _physics: OceanGPUPhysics
+var _interactions := OceanVisualInteractions.new()
 
-## Multi-body seam (see the seamless-multi-planet design). Null on the autoload
-## instance -> `_planet()` resolves to the `Planet` autoload and behaviour is
-## unchanged. A non-primary BodyRuntime (M5) calls `bind_runtime(rt)` before
-## `_ready` so this ocean follows that body's sampler instead. Duck-typed.
+## Multi-body seam from the authoritative terrain/world branch. Null on the
+## autoload instance means the primary Planet sampler. Secondary BodyRuntime
+## instances bind their own sampler before _ready().
 var _body_runtime: Object = null
 var _planet_node_cache: Node = null
 
@@ -76,20 +82,25 @@ func _ready() -> void:
 	_material.shader = load("res://shaders/ocean_geometry_clipmap.gdshader")
 	_build_batches()
 	_set_visible(false)
+	_material.set_shader_parameter("u_interaction_range_m", INTERACTION_RANGE_M)
+	_material.set_shader_parameter("u_interaction_vertex_level", INTERACTION_VERTEX_LEVEL)
 
-	_planet().world_ready.connect(_on_world_ready)
-	_planet().coast_profile_changed.connect(_on_coast_profile_changed)
+	var planet := _planet()
+	if planet != null:
+		planet.world_ready.connect(_on_world_ready)
+		planet.coast_profile_changed.connect(_on_coast_profile_changed)
 
 	_physics = OceanGPUPhysics.new()
 	_physics.name = "OceanGPUPhysics"
 	add_child(_physics)
 
-	if _planet().ready_state and _planet().cfg != null:
+	if planet != null and planet.ready_state and planet.cfg != null:
 		_configure_world()
 
 
 func _process(_dt: float) -> void:
-	if not _planet().ready_state or _planet().cfg == null:
+	var planet := _planet()
+	if planet == null or not planet.ready_state or planet.cfg == null:
 		_set_visible(false)
 		return
 
@@ -104,7 +115,7 @@ func _process(_dt: float) -> void:
 		_set_visible(false)
 		return
 
-	var radius: float = _planet().cfg.planet_radius
+	var radius: float = planet.cfg.planet_radius
 	var camera_alt: float = observer_radius - radius
 	if camera_alt >= ORBIT_HANDOFF_ALTITUDE_M:
 		_set_visible(false)
@@ -138,6 +149,7 @@ func _process(_dt: float) -> void:
 	_update_visible_cap(observer_radius, radius)
 	_update_active_levels()
 	_bind_gpu_terrain(false)
+	_sync_interactions()
 	var origin := Vector3(float(Frames.origin.x), float(Frames.origin.y), float(Frames.origin.z))
 	_sync_uniforms(origin)
 	_set_visible(_bound_macro != null)
@@ -145,9 +157,42 @@ func _process(_dt: float) -> void:
 		_update_sector_visibility()
 
 
+func _sync_interactions() -> void:
+	if _material == null:
+		return
+	var now_s := float(Time.get_ticks_usec()) / 1000000.0
+	_interactions.prune(now_s, INTERACTION_LIFETIME_S, INTERACTION_BUDGET)
+	_material.set_shader_parameter("u_interaction_tex", _interactions.sync_texture())
+	_material.set_shader_parameter("u_interaction_count", _interactions.event_count())
+
+
+## Visual-only impact. Physical water state remains owned by WaterSystem.
+func add_impact(world_position: Vec3D, amplitude_m: float, radius_m: float,
+		wavelength_m := 5.0, propagation_speed_mps := 8.0, foam := 0.35) -> void:
+	_interactions.add_impact(world_position, amplitude_m, radius_m,
+		wavelength_m, propagation_speed_mps, foam)
+
+
+## Visual-only Kelvin-like wake history for hulls and large moving objects.
+func add_wake(world_position: Vec3D, travel_direction: Vector3, amplitude_m: float,
+		beam_m: float, wavelength_m := 12.0, propagation_speed_mps := 10.0,
+		foam := 0.7) -> void:
+	_interactions.add_wake(world_position, travel_direction, amplitude_m, beam_m,
+		wavelength_m, propagation_speed_mps, foam)
+
+
+func clear_visual_interactions() -> void:
+	_interactions.clear()
+	_sync_interactions()
+
+
 func _configure_world() -> void:
-	_base_spacing = PI * 0.5 * _planet().cfg.planet_radius \
-		/ (float(_planet().cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	var planet := _planet()
+	if planet == null or planet.cfg == null:
+		return
+	_terrain_base_spacing = PI * 0.5 * planet.cfg.planet_radius \
+		/ (float(planet.cfg.chunk_grid) * pow(2.0, float(TARGET_FINE_DEPTH)))
+	_base_spacing = _terrain_base_spacing
 	_have_anchor = false
 	_bound_macro = null
 	_bound_macro_res = -1
@@ -159,8 +204,6 @@ func _on_world_ready(_fields: PlanetFields) -> void:
 
 
 func _on_coast_profile_changed() -> void:
-	# The macro texture is the authoritative low-frequency source for both terrain
-	# and ocean. A rebake will refresh this binding through Planet/world_ready.
 	_bind_gpu_terrain(true)
 
 
@@ -177,8 +220,11 @@ func _reset_anchor(observer_dir: Vector3) -> void:
 
 
 func _update_center_basis() -> void:
+	var planet := _planet()
+	if planet == null or planet.cfg == null:
+		return
 	_center_dir = _direction_for_offset(_anchor_dir, _anchor_right, _anchor_up,
-		_center_plane, _planet().cfg.planet_radius)
+		_center_plane, planet.cfg.planet_radius)
 	var tangent: Array = CubeSphere.tangent_basis(_center_dir)
 	_center_right = tangent[0]
 	_center_up = tangent[1]
@@ -216,10 +262,11 @@ func _update_active_levels() -> void:
 
 
 func _bind_gpu_terrain(force: bool) -> void:
-	if _material == null or not _planet().ready_state:
+	var planet := _planet()
+	if _material == null or planet == null or not planet.ready_state:
 		return
-	var macro: Texture2DArray = _planet().orbit_elevation_texture
-	var macro_res: int = _planet().orbit_texture_face_res
+	var macro: Texture2DArray = planet.orbit_elevation_texture
+	var macro_res: int = planet.orbit_texture_face_res
 	if force or macro != _bound_macro:
 		_bound_macro = macro
 		_material.set_shader_parameter("u_macro_elevation", macro)
@@ -230,32 +277,39 @@ func _bind_gpu_terrain(force: bool) -> void:
 
 
 func _sync_uniforms(origin: Vector3) -> void:
+	var planet := _planet()
+	if planet == null or planet.cfg == null:
+		return
 	_material.set_shader_parameter("u_origin", origin)
 	_material.set_shader_parameter("u_anchor_render", Frames.to_render(_stable_anchor_world))
 	_material.set_shader_parameter("u_anchor_dir", _anchor_dir)
 	_material.set_shader_parameter("u_anchor_right", _anchor_right)
 	_material.set_shader_parameter("u_anchor_up", _anchor_up)
 	_material.set_shader_parameter("u_lattice_center_plane", _center_plane)
-	_material.set_shader_parameter("u_planet_radius", _planet().cfg.planet_radius)
-	_material.set_shader_parameter("u_atmosphere_height", _planet().cfg.atmosphere_height)
+	_material.set_shader_parameter("u_planet_radius", planet.cfg.planet_radius)
+	_material.set_shader_parameter("u_atmosphere_height", planet.cfg.atmosphere_height)
 	_material.set_shader_parameter("u_center_dir", _center_dir)
 	_material.set_shader_parameter("u_center_right", _center_right)
 	_material.set_shader_parameter("u_center_up", _center_up)
-	_material.set_shader_parameter("u_base_spacing", _base_spacing)
+	# Terrain LOD and ocean topology keep separate metric uniforms. They are equal
+	# in this merged default, but the split preserves water/0.1.0 quality semantics.
+	_material.set_shader_parameter("u_base_spacing", _terrain_base_spacing)
+	_material.set_shader_parameter("u_ocean_base_spacing", _base_spacing)
 	_material.set_shader_parameter("u_grid_cells", float(GRID_CELLS))
 	_material.set_shader_parameter("u_visible_cap_angle",
-		minf(_visible_cap_arc_m / _planet().cfg.planet_radius * 1.03, PI * 0.5))
+		minf(_visible_cap_arc_m / planet.cfg.planet_radius * 1.03, PI * 0.5))
 	_material.set_shader_parameter("u_sun_dir", Frames.helion_dir)
 	_material.set_shader_parameter("u_sun_intensity", GraphicsQuality.solar_irradiance())
 	_material.set_shader_parameter("u_orbit_handoff_altitude", ORBIT_HANDOFF_ALTITUDE_M)
 	_material.set_shader_parameter("u_wave_scale", debug_wave_scale())
 	_material.set_shader_parameter("u_stable_displacement",
 		1.0 if _debug_stable_displacement else 0.0)
+	_material.set_shader_parameter("u_time_s", float(Time.get_ticks_usec()) / 1000000.0)
 
-	var detail_seed: int = _planet().cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
+	var detail_seed: int = planet.cfg.stream_seed("gpu_visual_detail") & 0x00ffffff
 	_material.set_shader_parameter("u_detail_seed", maxi(detail_seed, 1))
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
-		* maxf(0.05, _planet().cfg.detail_amplitude / 260.0))
+		* maxf(0.05, planet.cfg.detail_amplitude / 260.0))
 
 
 func _build_batches() -> void:
@@ -326,56 +380,74 @@ func _capture_stable_anchor(surface_world: Vec3D) -> void:
 	_stable_anchor_world = surface_world.dup()
 
 
+## Nested 2:1 square clipmap from water/0.1.0. Logical grid coordinates are
+## explicit UVs; child/parent boundaries share the same Cartesian lattice.
 static func _build_center_mesh() -> ArrayMesh:
-	var vertices := PackedVector3Array()
-	vertices.resize(GRID_VERTS * GRID_VERTS)
-	var indices := PackedInt32Array()
-	var outer_sq := float(HALF_CELLS * HALF_CELLS)
+	var vertices: Array[Vector3] = []
+	var uvs: Array[Vector2] = []
+	var indices: Array[int] = []
+	var remap: Dictionary = {}
 	for y in GRID_CELLS:
-		var cy := float(y) + 0.5 - float(HALF_CELLS)
 		for x in GRID_CELLS:
-			var cx := float(x) + 0.5 - float(HALF_CELLS)
-			if cx * cx + cy * cy <= outer_sq:
-				_append_cell(indices, x, y)
-	return _mesh_from_indices(vertices, indices)
+			_append_compact_cell(remap, vertices, uvs, indices, x, y)
+	return _mesh_from_compact(vertices, uvs, indices)
 
 
 static func _build_sector_mesh(sector_index: int) -> ArrayMesh:
-	var vertices := PackedVector3Array()
-	vertices.resize(GRID_VERTS * GRID_VERTS)
-	var indices := PackedInt32Array()
-	var outer_sq := float(HALF_CELLS * HALF_CELLS)
-	var inner_sq := float(RING_INNER_HALF_CELLS * RING_INNER_HALF_CELLS)
+	var vertices: Array[Vector3] = []
+	var uvs: Array[Vector2] = []
+	var indices: Array[int] = []
+	var remap: Dictionary = {}
+	var inner := float(RING_INNER_HALF_CELLS)
 	for y in GRID_CELLS:
 		var cy := float(y) + 0.5 - float(HALF_CELLS)
 		for x in GRID_CELLS:
 			var cx := float(x) + 0.5 - float(HALF_CELLS)
-			var r_sq := cx * cx + cy * cy
-			if r_sq > outer_sq or r_sq < inner_sq:
+			if maxf(absf(cx), absf(cy)) < inner:
 				continue
 			var angle := atan2(cy, cx)
 			if angle < 0.0:
 				angle += TAU
-			var owner := clampi(int(floor(angle / TAU * float(SECTOR_COUNT))), 0, SECTOR_COUNT - 1)
-			if owner == sector_index:
-				_append_cell(indices, x, y)
-	return _mesh_from_indices(vertices, indices)
+			var owner := clampi(int(floor(angle / TAU * float(SECTOR_COUNT))),
+				0, SECTOR_COUNT - 1)
+			if owner != sector_index:
+				continue
+			_append_compact_cell(remap, vertices, uvs, indices, x, y)
+	return _mesh_from_compact(vertices, uvs, indices)
 
 
-static func _append_cell(indices: PackedInt32Array, x: int, y: int) -> void:
-	var i00 := y * GRID_VERTS + x
-	var i10 := i00 + 1
-	var i01 := (y + 1) * GRID_VERTS + x
-	var i11 := i01 + 1
+static func _append_compact_cell(remap: Dictionary, vertices: Array[Vector3],
+		uvs: Array[Vector2], indices: Array[int], x: int, y: int) -> void:
+	var i00 := _compact_vertex(remap, vertices, uvs, x, y)
+	var i10 := _compact_vertex(remap, vertices, uvs, x + 1, y)
+	var i01 := _compact_vertex(remap, vertices, uvs, x, y + 1)
+	var i11 := _compact_vertex(remap, vertices, uvs, x + 1, y + 1)
 	indices.append_array([i00, i10, i11, i00, i11, i01])
 
 
-static func _mesh_from_indices(vertices: PackedVector3Array, indices: PackedInt32Array) -> ArrayMesh:
+static func _compact_vertex(remap: Dictionary, vertices: Array[Vector3],
+		uvs: Array[Vector2], gx: int, gy: int) -> int:
+	var logical_index := gy * GRID_VERTS + gx
+	var existing: Variant = remap.get(logical_index, null)
+	if existing != null:
+		return int(existing)
+	var local_index := vertices.size()
+	remap[logical_index] = local_index
+	vertices.append(Vector3.ZERO)
+	uvs.append(Vector2(float(gx), float(gy)))
+	return local_index
+
+
+static func _mesh_from_compact(vertices: Array[Vector3], uvs: Array[Vector2],
+		indices: Array[int]) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	if indices.is_empty():
+		return mesh
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array(indices)
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
@@ -435,9 +507,13 @@ func gpu_stats() -> Dictionary:
 		"active_levels": _active_max_level + 1,
 		"visible_sectors": _visible_sector_count,
 		"grid_cells": GRID_CELLS,
+		"base_spacing_m": _base_spacing,
+		"terrain_base_spacing_m": _terrain_base_spacing,
 		"gpu_waves": not _debug_waves_disabled,
 		"stable_displacement": _debug_stable_displacement,
 		"gpu_coast_height": true,
 		"gpu_buoyancy_queries": _physics != null,
+		"visual_interactions": _interactions.event_count(),
+		"interaction_budget": INTERACTION_BUDGET,
 		"orbit_handoff_m": ORBIT_HANDOFF_ALTITUDE_M,
 	}
