@@ -56,7 +56,6 @@ uniform vec3 u_foam : source_color = vec3(0.88, 0.93, 0.96);
 uniform vec3 u_scatter : source_color = vec3(0.055, 0.34, 0.30);
 
 varying vec3 v_planet;
-varying vec3 v_render;
 varying vec3 v_slope;
 varying vec2 v_micro_plane;
 varying vec3 v_surface_dir;
@@ -68,7 +67,6 @@ varying float v_compression;
 varying float v_diffraction;
 varying float v_interaction_foam;
 varying float v_cloud_shadow;
-varying float v_level;
 varying float v_wave_spacing;
 varying vec2 v_dynamic_velocity;
 varying float v_dynamic_activity;
@@ -617,7 +615,8 @@ void vertex() {
 	float render_radial_h = radial_h - seam_underlay;
 
 	v_planet = displaced;
-	v_render = stable_displacement
+	// Local only: consumed via VERTEX below, never read in fragment()/light().
+	vec3 v_render = stable_displacement
 		? u_anchor_render + ocean_stable_surface_offset(u_anchor_dir, u_anchor_right,
 			u_anchor_up, sample_anchor_m, render_radial_h) + tangential_displacement
 		: d * (u_planet_radius + render_radial_h) + tangential_displacement - u_origin;
@@ -630,7 +629,6 @@ void vertex() {
 	v_compression = wave.compression;
 	v_diffraction = max(diffract_a, diffract_b);
 	v_interaction_foam = max(interaction_foam, dynamic_surface.activity);
-	v_level = float(level);
 	v_wave_spacing = wave_spacing;
 	v_dynamic_velocity = dynamic_surface.velocity;
 	v_dynamic_activity = dynamic_surface.activity;
