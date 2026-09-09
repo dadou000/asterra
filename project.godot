@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Asterra"
 config/description="Systems-first open-world simulation. Phase 1: procedural planet."
-config/version="0.0.5"
+config/version="0.1.0-pre"
 run/main_scene="res://scenes/StartMenu.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
@@ -20,6 +20,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Frames="*res://scripts/core/frames.gd"
+CelestialSystem="*res://scripts/core/weather_celestial_clock_adapter.gd"
 Planet="*res://scripts/gen/planet_sampler_gpu_runtime.gd"
 PlanetContext="*res://scripts/terrain/gpu_planet_context.gd"
 TerrainHeightQuery="*res://scripts/terrain/gpu_terrain_height_query_contact_phase30.gd"
@@ -33,6 +34,9 @@ GroundHeightPageAtlas="*res://scripts/terrain/ground_height_page_atlas_disabled.
 GroundTerrainPrefetcher="*res://scripts/terrain/ground_prefetcher_gpu_visual.gd"
 CoastlineClipmap="*res://scripts/terrain/coastline_clipmap.gd"
 OceanSystem="*res://scripts/terrain/ocean_geometry_clipmap.gd"
+WaterSystem="*res://scripts/water/water_system_hydrolod_subcycled_production.gd"
+SparseHydroSurfaceCache="*res://scripts/water/sparse_hydro_surface_cache_bridge.gd"
+LocalWaterSurface="*res://scripts/water/local_water_surface.gd"
 GroundGeometryClipmap="*res://scripts/terrain/spherical_geometry_clipmap_phase31.gd"
 Bodies="*res://scripts/core/body_runtime_pool.gd"
 RenderedTerrainContactQuery="*res://scripts/terrain/gpu_rendered_terrain_contact_query_stable.gd"
@@ -41,7 +45,18 @@ TerrainHeightDebugOverlay="*res://scripts/terrain/terrain_height_debug_overlay.g
 TerrainDeformationExperiment="*res://scripts/terrain/terrain_deformation_experiment_gpu_safe.gd"
 AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
-VolumetricClouds="*res://scripts/rendering/volumetric_cloud_controller.gd"
+WeatherNativeBootstrap="*res://scripts/weather/weather_native_bootstrap.gd"
+WeatherSystem="*res://scripts/weather/weather_system.gd"
+PersistentHydrologySystem="*res://scripts/water/persistent_hydrology_reach_system.gd"
+HydroWeatherCoupling="*res://scripts/water/hydro_weather_coupling.gd"
+HydroAutomaticSurfacePromotion="*res://scripts/water/hydro_automatic_surface_promotion.gd"
+HydroAutomaticSurfaceDemotion="*res://scripts/water/hydro_automatic_surface_demotion.gd"
+HydroChannelRefinement="*res://scripts/water/hydro_automatic_channel_refinement_cluster_capacity.gd"
+HydroFineExternalFluxLedger="*res://scripts/water/hydro_fine_external_flux_ledger.gd"
+WeatherRefinement="*res://scripts/weather/weather_refinement_manager_v2.gd"
+SurfaceEnergy="*res://scripts/weather/surface_energy_bridge.gd"
+WeatherMap="*res://scripts/ui/weather_map.gd"
+VolumetricClouds="*res://scripts/rendering/weather_volumetric_cloud_controller.gd"
 RenderDebug="*res://scripts/rendering/render_debug_controller.gd"
 RingCountDebug="*res://scripts/terrain/ring_count_debug_controller.gd"
 VehicleTests="*res://scripts/vehicles/vehicle_test_harness.gd"
@@ -96,7 +111,7 @@ dig={
 }
 fill={
 "deadzone": 0.5,
-"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"pressed":false,"double_click":false,"script":null)
+"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"script":null)
 ]
 }
 

@@ -1,22 +1,24 @@
 class_name CloudDepthCompositorEffect
 extends CompositorEffect
-## Post-transparent volumetric-cloud compositor.
-##
-## Visible clouds cannot live in a Sky shader if they must pass in front of distant
-## terrain: sky is background by definition. This effect reruns the cloud volume
-## after scene rendering, reads the resolved depth buffer, and clips each cloud ray
-## against the actual scene surface before compositing.
+## Depth-aware volumetric-cloud compositor shared by the current renderer and
+## the native weather simulation. Weather supplies horizontal cloud/storm state;
+## the terrain-head renderer retains physical Helion disc/horizon lighting.
 
 const SHADER_PATH := "res://shaders/cloud_depth_composite.glsl"
+const PUSH_CONSTANT_FLOATS := 32
+const PUSH_CONSTANT_BYTES := PUSH_CONSTANT_FLOATS * 4
 
 var _rd: RenderingDevice
 var _shader := RID()
 var _pipeline := RID()
 var _linear_repeat_sampler := RID()
+var _linear_clamp_sampler := RID()
 var _depth_sampler := RID()
 
 var _shape_texture_rs := RID()
 var _detail_texture_rs := RID()
+var _global_weather_rs := RID()
+var _local_weather_rs := RID()
 
 var _state_mutex := Mutex.new()
 var _floating_origin := Vector3.ZERO
@@ -26,6 +28,8 @@ var _sun_intensity := 5.0265
 var _wind_offset := Vector3.ZERO
 var _primary_steps := 16
 var _helion_angular_radius_rad := 0.00465475
+var _weather_center := Vector3.UP
+var _weather_span_m := 422400.0
 
 
 func _init() -> void:
@@ -59,6 +63,14 @@ func _init() -> void:
 	repeat_state.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
 	_linear_repeat_sampler = _rd.sampler_create(repeat_state)
 
+	var clamp_state := RDSamplerState.new()
+	clamp_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	clamp_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	clamp_state.mip_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	clamp_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+	clamp_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+	_linear_clamp_sampler = _rd.sampler_create(clamp_state)
+
 	var depth_state := RDSamplerState.new()
 	depth_state.mag_filter = RenderingDevice.SAMPLER_FILTER_NEAREST
 	depth_state.min_filter = RenderingDevice.SAMPLER_FILTER_NEAREST
@@ -70,26 +82,33 @@ func _init() -> void:
 
 func is_ready() -> bool:
 	return _rd != null and _shader.is_valid() and _pipeline.is_valid() \
-		and _linear_repeat_sampler.is_valid() and _depth_sampler.is_valid()
+		and _linear_repeat_sampler.is_valid() and _linear_clamp_sampler.is_valid() \
+		and _depth_sampler.is_valid()
 
 
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_PREDELETE or _rd == null:
 		return
-	if _shader.is_valid():
-		_rd.free_rid(_shader)
-	if _linear_repeat_sampler.is_valid():
-		_rd.free_rid(_linear_repeat_sampler)
-	if _depth_sampler.is_valid():
-		_rd.free_rid(_depth_sampler)
+	for rid in [_shader, _linear_repeat_sampler, _linear_clamp_sampler, _depth_sampler]:
+		if rid.is_valid():
+			_rd.free_rid(rid)
 
 
 func set_cloud_textures(shape_texture: Texture3D, detail_texture: Texture3D) -> void:
-	# Keep RenderingServer RIDs. NoiseTexture3D populates asynchronously; resolving
-	# to its current RD texture inside the render callback follows that resource
-	# without touching the Resource object from the rendering thread.
 	_shape_texture_rs = shape_texture.get_rid() if shape_texture != null else RID()
 	_detail_texture_rs = detail_texture.get_rid() if detail_texture != null else RID()
+
+
+func set_weather_textures(global_weather: Texture2D, local_weather: Texture2D) -> void:
+	_global_weather_rs = global_weather.get_rid() if global_weather != null else RID()
+	_local_weather_rs = local_weather.get_rid() if local_weather != null else RID()
+
+
+func set_weather_basis(center: Vector3, _east: Vector3, _north: Vector3, span_m: float) -> void:
+	_state_mutex.lock()
+	_weather_center = center.normalized()
+	_weather_span_m = maxf(span_m, 1000.0)
+	_state_mutex.unlock()
 
 
 func set_runtime_state(floating_origin: Vector3, planet_radius: float,
@@ -107,11 +126,14 @@ func set_runtime_state(floating_origin: Vector3, planet_radius: float,
 
 
 func _render_callback(callback_type: int, render_data: RenderData) -> void:
-	if callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT:
-		return
-	if not is_ready():
+	if callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT or not is_ready():
 		return
 	if not _shape_texture_rs.is_valid() or not _detail_texture_rs.is_valid():
+		return
+	# The weather-aware specialization normally binds these. Until WeatherSystem
+	# publishes its fallback textures, leave the scene untouched rather than
+	# sampling invalid RIDs from the render thread.
+	if not _global_weather_rs.is_valid() or not _local_weather_rs.is_valid():
 		return
 
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
@@ -124,7 +146,10 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 
 	var shape_rd := RenderingServer.texture_get_rd_texture(_shape_texture_rs)
 	var detail_rd := RenderingServer.texture_get_rd_texture(_detail_texture_rs)
-	if not shape_rd.is_valid() or not detail_rd.is_valid():
+	var global_weather_rd := RenderingServer.texture_get_rd_texture(_global_weather_rs)
+	var local_weather_rd := RenderingServer.texture_get_rd_texture(_local_weather_rs)
+	if not shape_rd.is_valid() or not detail_rd.is_valid() \
+			or not global_weather_rd.is_valid() or not local_weather_rd.is_valid():
 		return
 
 	_state_mutex.lock()
@@ -135,13 +160,13 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var wind_offset := _wind_offset
 	var primary_steps := _primary_steps
 	var helion_angular_radius_rad := _helion_angular_radius_rad
+	var weather_center := _weather_center
+	var weather_span_m := _weather_span_m
 	_state_mutex.unlock()
 
 	var cam_transform: Transform3D = scene_data.get_cam_transform()
 	var camera_planet := cam_transform.origin + floating_origin
-	var camera_q: Quaternion = cam_transform.basis.get_rotation_quaternion()
 	var view_count := buffers.get_view_count()
-	# Same ceil-to-workgroup calculation used by Godot's compositor examples.
 	var x_groups := (size.x - 1) / 8 + 1
 	var y_groups := (size.y - 1) / 8 + 1
 
@@ -151,31 +176,43 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		if not color_rid.is_valid() or not depth_rid.is_valid():
 			continue
 
+		var uniforms: Array[RDUniform] = []
 		var color_uniform := RDUniform.new()
 		color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 		color_uniform.binding = 0
 		color_uniform.add_id(color_rid)
+		uniforms.append(color_uniform)
 
 		var depth_uniform := RDUniform.new()
 		depth_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 		depth_uniform.binding = 1
 		depth_uniform.add_id(_depth_sampler)
 		depth_uniform.add_id(depth_rid)
+		uniforms.append(depth_uniform)
 
 		var shape_uniform := RDUniform.new()
 		shape_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 		shape_uniform.binding = 2
 		shape_uniform.add_id(_linear_repeat_sampler)
 		shape_uniform.add_id(shape_rd)
+		uniforms.append(shape_uniform)
 
 		var detail_uniform := RDUniform.new()
 		detail_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 		detail_uniform.binding = 3
 		detail_uniform.add_id(_linear_repeat_sampler)
 		detail_uniform.add_id(detail_rd)
+		uniforms.append(detail_uniform)
 
-		var uniform_set := UniformSetCacheRD.get_cache(_shader, 0,
-			[color_uniform, depth_uniform, shape_uniform, detail_uniform])
+		for binding_and_rid in [[4, global_weather_rd], [5, local_weather_rd]]:
+			var u := RDUniform.new()
+			u.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			u.binding = int(binding_and_rid[0])
+			u.add_id(_linear_clamp_sampler)
+			u.add_id(binding_and_rid[1] as RID)
+			uniforms.append(u)
+
+		var uniform_set := UniformSetCacheRD.get_cache(_shader, 0, uniforms)
 		if not uniform_set.is_valid():
 			continue
 
@@ -183,26 +220,30 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		var push := PackedFloat32Array()
 		_append_vec4(push, Vector4(camera_planet.x, camera_planet.y,
 			camera_planet.z, planet_radius))
-		_append_vec4(push, Vector4(camera_q.x, camera_q.y, camera_q.z, camera_q.w))
 		_append_vec4(push, Vector4(sun_dir.x, sun_dir.y, sun_dir.z, sun_intensity))
-
-		# Godot caps push constants at 128 bytes for broad compatibility. Keep the
-		# four vec4 + mat4 layout exactly at that limit by packing the integer step
-		# count in the whole-number part and Helion's (< 0.5 rad) angular radius in
-		# the fractional part. GLSL recovers them with floor() and fract().
+		# 128-byte push-constant compatibility: steps occupy the integer part and
+		# Helion's (<0.5 rad) physical angular radius occupies the fraction.
 		var packed_steps_helion := float(primary_steps) \
 			+ clampf(helion_angular_radius_rad, 1.0e-7, 0.499999)
 		_append_vec4(push, Vector4(wind_offset.x, wind_offset.y, wind_offset.z,
 			packed_steps_helion))
-		_append_vec4(push, inv_projection.x)
-		_append_vec4(push, inv_projection.y)
-		_append_vec4(push, inv_projection.z)
-		_append_vec4(push, inv_projection.w)
+		_append_vec4(push, Vector4(weather_center.x, weather_center.y,
+			weather_center.z, weather_span_m))
+		# Rotate inverse-projection columns on the CPU. This frees the old camera
+		# quaternion vec4 for the weather basis while retaining the 128-byte layout.
+		_append_rotated_projection_column(push, inv_projection.x, cam_transform.basis)
+		_append_rotated_projection_column(push, inv_projection.y, cam_transform.basis)
+		_append_rotated_projection_column(push, inv_projection.z, cam_transform.basis)
+		_append_rotated_projection_column(push, inv_projection.w, cam_transform.basis)
+		if push.size() != PUSH_CONSTANT_FLOATS:
+			push_error("CloudDepthCompositorEffect: invalid push-constant layout (%d bytes)" %
+				(push.size() * 4))
+			continue
 
 		var compute_list := _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipeline)
 		_rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
-		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), 128)
+		_rd.compute_list_set_push_constant(compute_list, push.to_byte_array(), PUSH_CONSTANT_BYTES)
 		_rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
 		_rd.compute_list_end()
 
@@ -212,3 +253,9 @@ static func _append_vec4(array: PackedFloat32Array, value: Vector4) -> void:
 	array.append(value.y)
 	array.append(value.z)
 	array.append(value.w)
+
+
+static func _append_rotated_projection_column(array: PackedFloat32Array,
+		column: Vector4, camera_basis: Basis) -> void:
+	var rotated := camera_basis * Vector3(column.x, column.y, column.z)
+	_append_vec4(array, Vector4(rotated.x, rotated.y, rotated.z, column.w))
