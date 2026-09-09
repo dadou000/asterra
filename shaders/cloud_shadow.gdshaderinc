@@ -1,4 +1,7 @@
-/// Weather-driven EVE-style cloud shadows plus accumulated wet-surface response.
+/// Weather-driven volumetric cloud shadows plus accumulated wet-surface response.
+/// IMPORTANT: macro morphology mirrors cloud_depth_composite.glsl and
+/// cloud_light_volume.glsl. Surface shadows are an optical-depth projection of the
+/// same continuous 3D body, not an independently-shaped cloud layer.
 uniform sampler3D u_cloud_shadow_shape_noise : repeat_enable, filter_linear;
 uniform sampler2D u_cloud_weather_global : filter_linear;
 uniform sampler2D u_cloud_weather_local : filter_linear;
@@ -28,115 +31,218 @@ const int CLOUD_SHADOW_MAX_DISC_SAMPLES = 7;
 const float CLOUD_SHADOW_GOLDEN_ANGLE = 2.399963229728653;
 const float CLOUD_SHADOW_WORLEY_PERSISTENCE = 0.57;
 
+float cloud_shadow_saturate(float x) { return clamp(x, 0.0, 1.0); }
+
 vec2 cloud_shadow_sphere_hit(vec3 o, vec3 d, float r) {
-    float b=dot(d,o), c=dot(o,o)-r*r, q=b*b-c;
-    if(q<0.0) return vec2(1e9,-1e9);
-    float s=sqrt(q); return vec2(-b-s,-b+s);
+    float b = dot(d, o);
+    float c = dot(o, o) - r * r;
+    float q = b * b - c;
+    if (q < 0.0) return vec2(1e9, -1e9);
+    float s = sqrt(q);
+    return vec2(-b - s, -b + s);
 }
+
 vec2 cloud_shadow_global_uv(vec3 d) {
-    d=normalize(d); float lon=atan(d.z,d.x); if(lon<0.0) lon+=TAU;
-    float lat=asin(clamp(d.y,-1.0,1.0)); return vec2(lon/TAU,(PI*.5-lat)/PI);
+    d = normalize(d);
+    float lon = atan(d.z, d.x);
+    if (lon < 0.0) lon += TAU;
+    float lat = asin(clamp(d.y, -1.0, 1.0));
+    return vec2(lon / TAU, (PI * 0.5 - lat) / PI);
 }
-vec4 cloud_shadow_weather(vec3 surface_p,float radius) {
-    vec3 d=normalize(surface_p);
-    vec4 g=textureLod(u_cloud_weather_global,cloud_shadow_global_uv(d),0.0);
-    vec3 center=normalize(u_cloud_weather_center);
-    vec3 delta=d*radius-center*radius;
-    vec2 uv=vec2(dot(delta,normalize(u_cloud_weather_east)),dot(delta,normalize(u_cloud_weather_north)))
-        /max(u_cloud_weather_local_span,1000.0)+vec2(.5);
-    float edge=max(abs(uv.x-.5),abs(uv.y-.5));
-    float blend=1.0-smoothstep(.42,.50,edge);
-    vec4 l=textureLod(u_cloud_weather_local,clamp(uv,vec2(0.0),vec2(1.0)),0.0);
-    return mix(g,l,blend);
+
+void cloud_shadow_local_basis(out vec3 center, out vec3 east, out vec3 north) {
+    // Reconstruct exactly the basis used by both compute shaders. The old path
+    // used separate WeatherSystem east/north uniforms and could rotate the local
+    // weather patch relative to the visible cloud field.
+    center = normalize(u_cloud_weather_center);
+    vec3 pole = abs(center.y) > 0.92 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    east = normalize(cross(pole, center));
+    north = normalize(cross(center, east));
 }
-float cloud_shadow_worley(vec3 uv) { return 1.0-textureLod(u_cloud_shadow_shape_noise,uv,0.0).r; }
-float cloud_shadow_fbm(vec3 p,float scale) {
-    vec3 uv=(p+u_cloud_shadow_wind_offset)*scale;
-    float a=cloud_shadow_worley(uv);
-    float b=cloud_shadow_worley(uv*2.03+vec3(.19,.61,.43));
-    return (a+CLOUD_SHADOW_WORLEY_PERSISTENCE*b)/(1.0+CLOUD_SHADOW_WORLEY_PERSISTENCE);
+
+vec4 cloud_shadow_weather(vec3 surface_p, float radius) {
+    vec3 d = normalize(surface_p);
+    vec4 g = textureLod(u_cloud_weather_global, cloud_shadow_global_uv(d), 0.0);
+    vec3 center, east, north;
+    cloud_shadow_local_basis(center, east, north);
+    vec3 delta = d * radius - center * radius;
+    vec2 uv = vec2(dot(delta, east), dot(delta, north))
+        / max(u_cloud_weather_local_span, 1000.0) + vec2(0.5);
+    float edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
+    float blend = 1.0 - smoothstep(0.42, 0.50, edge);
+    vec4 l = textureLod(u_cloud_weather_local,
+        clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+    return mix(g, l, blend);
 }
-float cloud_shadow_shape(float n,float coverage,float hardness) {
-    float t=1.0-clamp(coverage,0.0,1.0)*.76;
-    float w=mix(.23,.045,hardness);
-    return smoothstep(t,min(t+w,.999),n);
+
+float cloud_shadow_cell(vec3 uv) {
+    return 1.0 - textureLod(u_cloud_shadow_shape_noise, uv, 0.0).r;
 }
-float cloud_shadow_band(float h,float lo,float hi,float bs,float ts) {
-    if(h<=lo||h>=hi) return 0.0;
-    return smoothstep(lo,lo+bs,h)*(1.0-smoothstep(hi-ts,hi,h));
+
+float cloud_shadow_fbm(vec3 p, float scale, vec3 advect) {
+    vec3 uv = (p + advect) * scale;
+    float n0 = cloud_shadow_cell(uv);
+    float n1 = cloud_shadow_cell(uv * 2.03 + vec3(0.19, 0.61, 0.43));
+    float n2 = cloud_shadow_cell(uv * 4.11 + vec3(0.73, 0.31, 0.11));
+    float p1 = CLOUD_SHADOW_WORLEY_PERSISTENCE;
+    float p2 = p1 * p1;
+    return (n0 + p1 * n1 + p2 * n2) / (1.0 + p1 + p2);
 }
-float cloud_shadow_fair_top(float t) {
-    if(t<.2) return mix(3450.0,4450.0,t/.2);
-    if(t<.4) return mix(4450.0,5450.0,(t-.2)/.2);
-    if(t<.6) return mix(5450.0,6450.0,(t-.4)/.2);
-    if(t<.8) return mix(6450.0,7450.0,(t-.6)/.2);
-    return mix(7450.0,9300.0,(t-.8)/.2);
+
+vec3 cloud_shadow_domain_warp(vec3 surface_p, float convection) {
+    vec3 uv = (surface_p + u_cloud_shadow_wind_offset * 0.18)
+        * (u_cloud_shadow_shape_scale * 0.16);
+    vec3 q = vec3(
+        cloud_shadow_cell(uv + vec3(0.13, 0.47, 0.81)),
+        cloud_shadow_cell(uv + vec3(0.71, 0.23, 0.37)),
+        cloud_shadow_cell(uv + vec3(0.41, 0.89, 0.17)));
+    float metres = mix(720.0, 1650.0, convection);
+    return (q * 2.0 - 1.0) * metres;
 }
-float cloud_shadow_density_at(vec3 p,float radius) {
-    float alt=length(p)-radius;
-    if(alt<=u_cloud_shadow_base||alt>=u_cloud_shadow_top) return 0.0;
-    vec4 wx=cloud_shadow_weather(normalize(p)*radius,radius);
-    float coverage=clamp(wx.r,0.0,1.0), storm=clamp(wx.g,0.0,1.0), precip=clamp(wx.b,0.0,1.0);
-    float low_pressure=clamp((.5-wx.a)*3.0,0.0,1.0);
-    float type=clamp(storm*1.18+precip*.10+max(coverage-.62,0.0)*.18,0.0,1.0);
-    float fair_cov=mix(smoothstep(.035,.72,coverage),smoothstep(.020,.58,coverage),type);
-    float fair=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale),fair_cov,
-        mix(.90,.97,smoothstep(.08,.35,type)));
-    fair*=cloud_shadow_band(alt,mix(1100.0,1000.0,type),cloud_shadow_fair_top(type),180.0,mix(600.0,1050.0,type));
-    fair=smoothstep(.006,.24,fair)*mix(.50,1.05,type);
-    float deep=smoothstep(.42,.82,max(storm,precip*.70+low_pressure*.22));
-    float sc=clamp(coverage*.72+storm*.46+low_pressure*.12,0.0,1.0);
-    float core=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale*.77),sc,.96)
-        *cloud_shadow_band(alt,1150.0,u_cloud_shadow_top,220.0,1050.0);
-    float edge=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale*.58),sc*.88,.96)
-        *cloud_shadow_band(alt,1000.0,13200.0,260.0,1500.0);
-    float trail=cloud_shadow_shape(cloud_shadow_fbm(p,u_cloud_shadow_shape_scale*.045),sc*.72,.50)
-        *exp(-pow((alt-11250.0)/2100.0,2.0))*smoothstep(.48,.78,deep);
-    float conv=smoothstep(.005,.22,max(max(core,edge*.72),trail*.48))*deep*(.85+.45*storm);
-    return (fair+conv)*u_cloud_shadow_density;
+
+float cloud_shadow_density_at(vec3 p, float radius) {
+    float altitude = length(p) - radius;
+    if (altitude <= 0.0 || altitude >= u_cloud_shadow_top) return 0.0;
+
+    vec3 radial = normalize(p);
+    vec3 surface_p = radial * radius;
+    vec4 wx = cloud_shadow_weather(surface_p, radius);
+    float coverage = cloud_shadow_saturate(wx.r);
+    float storm = cloud_shadow_saturate(wx.g);
+    float precip = cloud_shadow_saturate(wx.b);
+    float low_pressure = cloud_shadow_saturate((0.5 - wx.a) * 3.0);
+    float convection = smoothstep(0.12, 0.86,
+        max(storm, precip * 0.76 + low_pressure * 0.20));
+
+    float base_alt = mix(1450.0, 720.0, convection) - low_pressure * 90.0;
+    float fair_top = mix(3500.0, 6200.0, smoothstep(0.16, 0.82, coverage));
+    float nominal_top = mix(fair_top, u_cloud_shadow_top, pow(convection, 0.68));
+
+    vec3 warped_surface = surface_p + cloud_shadow_domain_warp(surface_p, convection);
+    float top_noise = cloud_shadow_fbm(warped_surface,
+        u_cloud_shadow_shape_scale * 0.13, u_cloud_shadow_wind_offset * 0.22);
+    float top_scale = mix(0.84, 1.10, top_noise);
+    float top_alt = min(u_cloud_shadow_top,
+        base_alt + (nominal_top - base_alt) * top_scale);
+    if (altitude <= base_alt || altitude >= top_alt) return 0.0;
+
+    float h = cloud_shadow_saturate((altitude - base_alt)
+        / max(top_alt - base_alt, 1.0));
+    float bottom = smoothstep(0.0, mix(0.085, 0.035, convection), h);
+    float top_fade = 1.0 - smoothstep(mix(0.72, 0.84, convection), 1.0, h);
+    float vertical = bottom * top_fade;
+
+    float effective_coverage = cloud_shadow_saturate(coverage * 0.90 + convection * 0.14);
+    float anvil_zone = pow(convection, 1.7)
+        * smoothstep(0.68, 0.84, h)
+        * (1.0 - smoothstep(0.965, 1.0, h));
+    float footprint_noise = cloud_shadow_fbm(warped_surface,
+        u_cloud_shadow_shape_scale * 0.34, u_cloud_shadow_wind_offset * 0.36);
+    float footprint_threshold = 1.0 - effective_coverage * 0.75 - anvil_zone * 0.12;
+    float footprint = smoothstep(footprint_threshold,
+        min(footprint_threshold + 0.12, 0.999), footprint_noise);
+
+    float vertical_noise_scale = mix(0.50, 0.23, convection);
+    vec3 volume_p = warped_surface + radial * (altitude * vertical_noise_scale);
+    float meso = cloud_shadow_fbm(volume_p, u_cloud_shadow_shape_scale,
+        u_cloud_shadow_wind_offset);
+    float meso_body = smoothstep(0.34, 0.74, meso);
+    float body = footprint * vertical * mix(0.46, 1.18, meso_body);
+
+    float tower_profile = convection
+        * smoothstep(0.08, 0.28, h)
+        * (1.0 - smoothstep(0.83, 0.98, h));
+    float tower_noise = cloud_shadow_fbm(
+        warped_surface + radial * altitude * 0.17,
+        u_cloud_shadow_shape_scale * 0.67,
+        u_cloud_shadow_wind_offset * 0.82);
+    float tower = footprint * tower_profile * smoothstep(0.33, 0.69, tower_noise);
+    body = max(body, tower * (0.80 + 0.42 * convection));
+
+    float anvil_footprint = smoothstep(footprint_threshold - 0.10,
+        min(footprint_threshold + 0.05, 0.999), footprint_noise);
+    float anvil_texture = cloud_shadow_fbm(
+        warped_surface + radial * altitude * 0.11,
+        u_cloud_shadow_shape_scale * 0.48,
+        u_cloud_shadow_wind_offset * 0.70);
+    float anvil = anvil_footprint * anvil_zone
+        * mix(0.58, 1.08, smoothstep(0.28, 0.72, anvil_texture));
+    body = max(body, anvil);
+
+    float upper_weight = smoothstep(0.52, 0.93, h) * vertical;
+    float upper_cells = cloud_shadow_fbm(
+        volume_p + vec3(1730.0, -410.0, 920.0),
+        u_cloud_shadow_shape_scale * 1.82,
+        u_cloud_shadow_wind_offset * 1.12);
+    body *= mix(0.82, 1.18, upper_cells * upper_weight);
+
+    float density_gain = mix(0.82, 1.32, convection);
+    return smoothstep(0.035, 0.72, max(body, 0.0))
+        * density_gain * u_cloud_shadow_density;
 }
-vec2 cloud_shadow_layer_segment(vec3 o,vec3 d,float radius) {
-    vec2 outer=cloud_shadow_sphere_hit(o,d,radius+u_cloud_shadow_top);
-    if(outer.y<=0.0) return vec2(1e9,-1e9);
-    float start=max(outer.x,0.0),end=outer.y;
-    vec2 ground=cloud_shadow_sphere_hit(o,d,radius);
-    if(ground.x>0.0) end=min(end,ground.x);
-    if(end<=start) return vec2(1e9,-1e9); return vec2(start,end);
+
+vec2 cloud_shadow_layer_segment(vec3 o, vec3 d, float radius) {
+    vec2 outer = cloud_shadow_sphere_hit(o, d, radius + u_cloud_shadow_top);
+    if (outer.y <= 0.0) return vec2(1e9, -1e9);
+    float start = max(outer.x, 0.0);
+    float end = outer.y;
+    vec2 ground = cloud_shadow_sphere_hit(o, d, radius);
+    if (ground.x > 0.0) end = min(end, ground.x);
+    if (end <= start) return vec2(1e9, -1e9);
+    return vec2(start, end);
 }
-float cloud_shadow_ray_transmittance(vec3 receiver,vec3 ray_dir,float radius) {
-    vec2 seg=cloud_shadow_layer_segment(receiver,ray_dir,radius);
-    if(seg.x>seg.y) return 1.0;
-    int steps=clamp(u_cloud_shadow_steps,2,CLOUD_SHADOW_MAX_STEPS);
-    float dl=(seg.y-seg.x)/float(steps),od=0.0;
-    for(int i=0;i<CLOUD_SHADOW_MAX_STEPS;i++) {
-        if(i>=steps) break;
-        od+=cloud_shadow_density_at(receiver+ray_dir*(seg.x+(float(i)+.5)*dl),radius)*dl;
-        if(od*u_cloud_shadow_extinction>9.0) return .00012;
+
+float cloud_shadow_ray_transmittance(vec3 receiver, vec3 ray_dir, float radius) {
+    vec2 seg = cloud_shadow_layer_segment(receiver, ray_dir, radius);
+    if (seg.x > seg.y) return 1.0;
+
+    int steps = clamp(u_cloud_shadow_steps, 2, CLOUD_SHADOW_MAX_STEPS);
+    float dl = (seg.y - seg.x) / float(steps);
+    float optical_depth = 0.0;
+    for (int i = 0; i < CLOUD_SHADOW_MAX_STEPS; ++i) {
+        if (i >= steps) break;
+        vec3 p = receiver + ray_dir * (seg.x + (float(i) + 0.5) * dl);
+        optical_depth += cloud_shadow_density_at(p, radius) * dl;
+        if (optical_depth * u_cloud_shadow_extinction > 9.0) return 0.00012;
     }
-    return exp(-od*u_cloud_shadow_extinction);
+    return exp(-optical_depth * u_cloud_shadow_extinction);
 }
+
 float cloud_shadow_wet_response(float transmittance) {
-    // Accumulated precipitation darkens the diffuse/direct terrain response. The
-    // screen-space droplet pass supplies the near-camera specular/refraction cue.
-    return transmittance*mix(1.0,.86,clamp(u_weather_surface_wetness,0.0,1.0));
+    return transmittance * mix(1.0, 0.86,
+        clamp(u_weather_surface_wetness, 0.0, 1.0));
 }
-float cloud_shadow_transmittance(vec3 receiver,vec3 sun_dir,float radius) {
-    if(u_cloud_shadow_enabled<.5) return cloud_shadow_wet_response(1.0);
-    vec3 s=normalize(sun_dir);
-    int count=clamp(u_cloud_shadow_disc_samples,1,CLOUD_SHADOW_MAX_DISC_SAMPLES);
-    if(count<=1) return cloud_shadow_wet_response(cloud_shadow_ray_transmittance(receiver,s,radius));
-    float ratio=clamp(u_cloud_shadow_helion_radius_m/max(u_cloud_shadow_helion_distance_m,1.0),0.0,.999999);
-    float slope=tan(asin(ratio));
-    if(slope<1e-7) return cloud_shadow_wet_response(cloud_shadow_ray_transmittance(receiver,s,radius));
-    vec3 axis=abs(s.z)<.999?vec3(0,0,1):vec3(0,1,0);
-    vec3 tangent=normalize(cross(axis,s)),bitangent=normalize(cross(s,tangent));
-    float sum=0.0;
-    for(int j=0;j<CLOUD_SHADOW_MAX_DISC_SAMPLES;j++) {
-        if(j>=count) break;
-        float k=float(j)+.5, radial=sqrt(k/float(count)), phi=k*CLOUD_SHADOW_GOLDEN_ANGLE;
-        vec2 q=vec2(cos(phi),sin(phi))*radial;
-        vec3 rd=normalize(s+(tangent*q.x+bitangent*q.y)*slope);
-        sum+=cloud_shadow_ray_transmittance(receiver,rd,radius);
+
+float cloud_shadow_transmittance(vec3 receiver, vec3 sun_dir, float radius) {
+    if (u_cloud_shadow_enabled < 0.5) return cloud_shadow_wet_response(1.0);
+
+    vec3 s = normalize(sun_dir);
+    int count = clamp(u_cloud_shadow_disc_samples, 1, CLOUD_SHADOW_MAX_DISC_SAMPLES);
+    if (count <= 1) {
+        return cloud_shadow_wet_response(
+            cloud_shadow_ray_transmittance(receiver, s, radius));
     }
-    return cloud_shadow_wet_response(sum/float(count));
+
+    float ratio = clamp(u_cloud_shadow_helion_radius_m
+        / max(u_cloud_shadow_helion_distance_m, 1.0), 0.0, 0.999999);
+    float slope = tan(asin(ratio));
+    if (slope < 1e-7) {
+        return cloud_shadow_wet_response(
+            cloud_shadow_ray_transmittance(receiver, s, radius));
+    }
+
+    vec3 axis = abs(s.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(axis, s));
+    vec3 bitangent = normalize(cross(s, tangent));
+    float sum = 0.0;
+    for (int j = 0; j < CLOUD_SHADOW_MAX_DISC_SAMPLES; ++j) {
+        if (j >= count) break;
+        float k = float(j) + 0.5;
+        float radial = sqrt(k / float(count));
+        float phi = k * CLOUD_SHADOW_GOLDEN_ANGLE;
+        vec2 q = vec2(cos(phi), sin(phi)) * radial;
+        vec3 rd = normalize(s + (tangent * q.x + bitangent * q.y) * slope);
+        sum += cloud_shadow_ray_transmittance(receiver, rd, radius);
+    }
+    return cloud_shadow_wet_response(sum / float(count));
 }

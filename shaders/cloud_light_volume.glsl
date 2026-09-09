@@ -2,20 +2,15 @@
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
 layout(rgba16f, set = 0, binding = 0) uniform writeonly image3D light_volume;
 layout(set = 0, binding = 1) uniform sampler3D shape_noise;
 layout(set = 0, binding = 2) uniform sampler2D global_weather;
 layout(set = 0, binding = 3) uniform sampler2D local_weather;
 
 layout(push_constant, std430) uniform Params {
-    // xyz local weather centre unit vector, w local tangent span in metres.
     vec4 center_span;
-    // xyz Helion direction, w irradiance scale.
     vec4 sun_intensity;
-    // xyz cloud noise wind offset, w planet radius.
     vec4 wind_radius;
-    // xyz texture dimensions, w current time-slice phase [0,11].
     vec4 resolution_phase;
 } params;
 
@@ -24,8 +19,11 @@ const float CLOUD_TOP = 14500.0;
 const float CLOUD_SHAPE_SCALE = 0.0000520;
 const float CLOUD_EXTINCTION = 0.0010;
 const float WORLEY_PERSISTENCE = 0.57;
-const int LIGHT_STEPS = 4;
+const float LIGHT_DISTANCE = 12000.0;
+const int LIGHT_STEPS = 8;
 const int TIME_SLICES = 12;
+
+float saturate1(float x) { return clamp(x, 0.0, 1.0); }
 
 vec2 global_uv(vec3 d) {
     d = normalize(d);
@@ -43,10 +41,11 @@ void local_basis(out vec3 center, out vec3 east, out vec3 north) {
 }
 
 vec4 weather_at(vec3 direction, float radius) {
+    direction = normalize(direction);
     vec4 g = textureLod(global_weather, global_uv(direction), 0.0);
     vec3 center, east, north;
     local_basis(center, east, north);
-    vec3 delta = normalize(direction) * radius - center * radius;
+    vec3 delta = direction * radius - center * radius;
     float span = max(params.center_span.w, 1000.0);
     vec2 uv = vec2(dot(delta, east), dot(delta, north)) / span + vec2(0.5);
     float edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
@@ -55,56 +54,118 @@ vec4 weather_at(vec3 direction, float radius) {
     return mix(g, l, blend);
 }
 
-float worley(vec3 uv) {
+// Keep this morphology in lock-step with cloud_depth_composite.glsl and
+// cloud_shadow.gdshaderinc. This volume is a lower-frequency lighting cache for
+// the same physical cloud body, not a second cloud representation.
+float cloud_cell(vec3 uv) {
     return 1.0 - textureLod(shape_noise, uv, 0.0).r;
 }
 
-float worley_fbm(vec3 p, vec3 wind) {
-    vec3 uv = (p + wind) * CLOUD_SHAPE_SCALE;
-    float n0 = worley(uv);
-    float n1 = worley(uv * 2.03 + vec3(0.19, 0.61, 0.43));
-    return (n0 + WORLEY_PERSISTENCE * n1) / (1.0 + WORLEY_PERSISTENCE);
+float cloud_fbm(vec3 p, float scale, vec3 advect) {
+    vec3 uv = (p + advect) * scale;
+    float n0 = cloud_cell(uv);
+    float n1 = cloud_cell(uv * 2.03 + vec3(0.19, 0.61, 0.43));
+    float n2 = cloud_cell(uv * 4.11 + vec3(0.73, 0.31, 0.11));
+    float p1 = WORLEY_PERSISTENCE;
+    float p2 = p1 * p1;
+    return (n0 + p1 * n1 + p2 * n2) / (1.0 + p1 + p2);
 }
 
-float vertical_profile(float altitude, float storm) {
-    float base_alt = mix(1100.0, 900.0, storm);
-    float top_alt = mix(4200.0, CLOUD_TOP, smoothstep(0.25, 0.85, storm));
-    if (altitude <= base_alt || altitude >= top_alt) return 0.0;
-    float bottom = smoothstep(base_alt, base_alt + 220.0, altitude);
-    float top = 1.0 - smoothstep(top_alt - mix(750.0, 1500.0, storm), top_alt, altitude);
-    float anvil = smoothstep(0.50, 0.78, storm)
-        * exp(-pow((altitude - 11250.0) / 2200.0, 2.0));
-    return max(bottom * top, anvil * 0.72);
+vec3 cloud_domain_warp(vec3 surface_p, vec3 wind, float convection) {
+    vec3 uv = (surface_p + wind * 0.18) * (CLOUD_SHAPE_SCALE * 0.16);
+    vec3 q = vec3(
+        cloud_cell(uv + vec3(0.13, 0.47, 0.81)),
+        cloud_cell(uv + vec3(0.71, 0.23, 0.37)),
+        cloud_cell(uv + vec3(0.41, 0.89, 0.17)));
+    float metres = mix(720.0, 1650.0, convection);
+    return (q * 2.0 - 1.0) * metres;
 }
 
-float coarse_density(vec3 p, float radius, vec3 wind) {
+float canonical_coarse_density(vec3 p, float radius, vec3 wind) {
     float altitude = length(p) - radius;
     if (altitude <= 0.0 || altitude >= CLOUD_TOP) return 0.0;
-    vec4 wx = weather_at(normalize(p), radius);
-    float coverage = clamp(wx.r, 0.0, 1.0);
-    float storm = clamp(wx.g, 0.0, 1.0);
-    float precip = clamp(wx.b, 0.0, 1.0);
-    float lowp = clamp((0.5 - wx.a) * 3.0, 0.0, 1.0);
-    float conv = clamp(max(storm, precip * 0.72 + lowp * 0.18), 0.0, 1.0);
-    float effective = mix(smoothstep(0.04, 0.72, coverage),
-        smoothstep(0.02, 0.55, coverage), conv);
-    float threshold = 1.0 - effective * 0.76;
-    float macro = worley_fbm(p, wind);
-    float hardness = mix(0.11, 0.045, conv);
-    float body = smoothstep(threshold, min(threshold + hardness, 0.999), macro);
-    return body * vertical_profile(altitude, conv) * (0.55 + 0.75 * conv);
+
+    vec3 radial = normalize(p);
+    vec3 surface_p = radial * radius;
+    vec4 wx = weather_at(radial, radius);
+    float coverage = saturate1(wx.r);
+    float storm = saturate1(wx.g);
+    float precip = saturate1(wx.b);
+    float low_pressure = saturate1((0.5 - wx.a) * 3.0);
+    float convection = smoothstep(0.12, 0.86,
+        max(storm, precip * 0.76 + low_pressure * 0.20));
+
+    float base_alt = mix(1450.0, 720.0, convection) - low_pressure * 90.0;
+    float fair_top = mix(3500.0, 6200.0, smoothstep(0.16, 0.82, coverage));
+    float nominal_top = mix(fair_top, CLOUD_TOP, pow(convection, 0.68));
+
+    vec3 warped_surface = surface_p + cloud_domain_warp(surface_p, wind, convection);
+    float top_noise = cloud_fbm(warped_surface, CLOUD_SHAPE_SCALE * 0.13, wind * 0.22);
+    float top_scale = mix(0.84, 1.10, top_noise);
+    float top_alt = min(CLOUD_TOP, base_alt + (nominal_top - base_alt) * top_scale);
+    if (altitude <= base_alt || altitude >= top_alt) return 0.0;
+
+    float h = saturate1((altitude - base_alt) / max(top_alt - base_alt, 1.0));
+    float bottom = smoothstep(0.0, mix(0.085, 0.035, convection), h);
+    float top_fade = 1.0 - smoothstep(mix(0.72, 0.84, convection), 1.0, h);
+    float vertical = bottom * top_fade;
+
+    float effective_coverage = saturate1(coverage * 0.90 + convection * 0.14);
+    float anvil_zone = pow(convection, 1.7)
+        * smoothstep(0.68, 0.84, h)
+        * (1.0 - smoothstep(0.965, 1.0, h));
+    float footprint_noise = cloud_fbm(warped_surface,
+        CLOUD_SHAPE_SCALE * 0.34, wind * 0.36);
+    float footprint_threshold = 1.0 - effective_coverage * 0.75 - anvil_zone * 0.12;
+    float footprint = smoothstep(footprint_threshold,
+        min(footprint_threshold + 0.12, 0.999), footprint_noise);
+
+    float vertical_noise_scale = mix(0.50, 0.23, convection);
+    vec3 volume_p = warped_surface + radial * (altitude * vertical_noise_scale);
+    float meso = cloud_fbm(volume_p, CLOUD_SHAPE_SCALE, wind);
+    float meso_body = smoothstep(0.34, 0.74, meso);
+    float body = footprint * vertical * mix(0.46, 1.18, meso_body);
+
+    float tower_profile = convection
+        * smoothstep(0.08, 0.28, h)
+        * (1.0 - smoothstep(0.83, 0.98, h));
+    float tower_noise = cloud_fbm(
+        warped_surface + radial * altitude * 0.17,
+        CLOUD_SHAPE_SCALE * 0.67, wind * 0.82);
+    float tower = footprint * tower_profile * smoothstep(0.33, 0.69, tower_noise);
+    body = max(body, tower * (0.80 + 0.42 * convection));
+
+    float anvil_footprint = smoothstep(footprint_threshold - 0.10,
+        min(footprint_threshold + 0.05, 0.999), footprint_noise);
+    float anvil_texture = cloud_fbm(
+        warped_surface + radial * altitude * 0.11,
+        CLOUD_SHAPE_SCALE * 0.48, wind * 0.70);
+    float anvil = anvil_footprint * anvil_zone
+        * mix(0.58, 1.08, smoothstep(0.28, 0.72, anvil_texture));
+    body = max(body, anvil);
+
+    float upper_weight = smoothstep(0.52, 0.93, h) * vertical;
+    float upper_cells = cloud_fbm(volume_p + vec3(1730.0, -410.0, 920.0),
+        CLOUD_SHAPE_SCALE * 1.82, wind * 1.12);
+    body *= mix(0.82, 1.18, upper_cells * upper_weight);
+
+    float density_gain = mix(0.82, 1.32, convection);
+    return smoothstep(0.035, 0.72, max(body, 0.0)) * density_gain;
 }
 
 float sun_transmittance(vec3 p, float radius, vec3 sun_dir, vec3 wind) {
-    float step_len = 2000.0 / float(LIGHT_STEPS);
     float optical_depth = 0.0;
+    float previous_distance = 0.0;
     for (int i = 0; i < LIGHT_STEPS; ++i) {
-        float f = (float(i) + 0.55) / float(LIGHT_STEPS);
-        float shaped = mix(f, f * f, 0.65);
-        optical_depth += coarse_density(p + sun_dir * shaped * 2000.0,
-            radius, wind) * step_len;
+        float f = float(i + 1) / float(LIGHT_STEPS);
+        float distance_m = LIGHT_DISTANCE * (exp2(f * 3.0) - 1.0) / 7.0;
+        float dl = distance_m - previous_distance;
+        float mid = previous_distance + dl * 0.5;
+        optical_depth += canonical_coarse_density(p + sun_dir * mid,
+            radius, wind) * dl;
+        previous_distance = distance_m;
     }
-    return exp(-optical_depth * CLOUD_EXTINCTION * 0.90);
+    return exp(-optical_depth * CLOUD_EXTINCTION);
 }
 
 void main() {
@@ -128,17 +189,18 @@ void main() {
     for (int z = phase; z < size3.z; z += TIME_SLICES) {
         float altitude = (float(z) + 0.5) / float(size3.z) * CLOUD_TOP;
         vec3 p = surface_dir * (radius + altitude);
-        float density = coarse_density(p, radius, wind);
+        float density = canonical_coarse_density(p, radius, wind);
         float direct_t = density > 0.002
             ? sun_transmittance(p, radius, sun_dir, wind)
             : 1.0;
 
-        // EVE's volume primarily amortises indirect cloud lighting. R keeps a
-        // slowly varying direct term; G stores the multiple-scatter reservoir;
-        // B stores sky fill and A the coarse density used for confidence/weight.
+        // Approximate multiple scattering from the same optical field. A deep
+        // cloud keeps some diffuse energy instead of collapsing to black.
         float trapped = (1.0 - direct_t) * density;
-        float multiple = (0.020 + trapped * 0.13) * (0.35 + 0.65 * density);
-        float skylight = mix(0.065, 0.025, density) + trapped * 0.025;
+        float multiple = (0.018 + trapped * 0.17)
+            * (0.30 + 0.70 * smoothstep(0.0, 0.9, density));
+        float skylight = mix(0.075, 0.022, smoothstep(0.0, 1.1, density))
+            + trapped * 0.030;
         imageStore(light_volume, ivec3(xy, z),
             vec4(direct_t, multiple, skylight, density));
     }
