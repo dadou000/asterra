@@ -57,32 +57,47 @@ func _init() -> void:
 	_create_light_volume()
 
 
-func _create_main_pipeline() -> void:
-	var shader_file := load(SHADER_PATH) as RDShaderFile
+func _validated_compute_spirv(shader_file: RDShaderFile, label: String) -> RDShaderSPIRV:
 	if shader_file == null:
-		push_error("CloudDepthCompositorEffect: failed to load %s" % SHADER_PATH)
-		return
+		push_error("CloudDepthCompositorEffect: failed to load %s" % label)
+		return null
 	var spirv: RDShaderSPIRV = shader_file.get_spirv()
 	if spirv == null:
-		push_error("CloudDepthCompositorEffect: main shader has no SPIR-V")
+		push_error("CloudDepthCompositorEffect: %s has no SPIR-V" % label)
+		return null
+	var compile_error := spirv.get_stage_compile_error(RenderingDevice.SHADER_STAGE_COMPUTE)
+	if not compile_error.is_empty():
+		push_error("CloudDepthCompositorEffect: %s compute compile error:\n%s" % [label, compile_error])
+		return null
+	var bytecode := spirv.get_stage_bytecode(RenderingDevice.SHADER_STAGE_COMPUTE)
+	if bytecode.is_empty():
+		push_error("CloudDepthCompositorEffect: %s produced empty compute bytecode" % label)
+		return null
+	return spirv
+
+
+func _create_main_pipeline() -> void:
+	var shader_file := load(SHADER_PATH) as RDShaderFile
+	var spirv := _validated_compute_spirv(shader_file, SHADER_PATH)
+	if spirv == null:
 		return
 	_shader = _rd.shader_create_from_spirv(spirv)
 	if _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
+	else:
+		push_error("CloudDepthCompositorEffect: RenderingDevice rejected %s" % SHADER_PATH)
 
 
 func _create_light_pipeline() -> void:
 	var shader_file := load(LIGHT_VOLUME_SHADER_PATH) as RDShaderFile
-	if shader_file == null:
-		push_error("CloudDepthCompositorEffect: failed to load %s" % LIGHT_VOLUME_SHADER_PATH)
-		return
-	var spirv: RDShaderSPIRV = shader_file.get_spirv()
+	var spirv := _validated_compute_spirv(shader_file, LIGHT_VOLUME_SHADER_PATH)
 	if spirv == null:
-		push_error("CloudDepthCompositorEffect: light-volume shader has no SPIR-V")
 		return
 	_light_shader = _rd.shader_create_from_spirv(spirv)
 	if _light_shader.is_valid():
 		_light_pipeline = _rd.compute_pipeline_create(_light_shader)
+	else:
+		push_error("CloudDepthCompositorEffect: RenderingDevice rejected %s" % LIGHT_VOLUME_SHADER_PATH)
 
 
 func _create_samplers() -> void:
