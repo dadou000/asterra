@@ -122,8 +122,8 @@ func _begin_render(which: int) -> void:
 	_render_layer = which
 	_render_y = 0
 	_render_image = Image.create(W, H, false, Image.FORMAT_RGB8)
-	_render_fields = Planet.fields
-	_render_grid = Planet.grid
+	_render_fields = Planet.fields as PlanetFields
+	_render_grid = Planet.grid as PlanetGrid
 
 func _render_row(y: int) -> void:
 	if _render_fields == null or _render_grid == null:
@@ -140,8 +140,8 @@ func _render(which: int) -> Image:
 	if not Planet.ready_state or Planet.fields == null or Planet.grid == null:
 		return Image.create(1, 1, false, Image.FORMAT_RGB8)
 	var image: Image = Image.create(W, H, false, Image.FORMAT_RGB8)
-	var fields: PlanetFields = Planet.fields
-	var grid: PlanetGrid = Planet.grid
+	var fields: PlanetFields = Planet.fields as PlanetFields
+	var grid: PlanetGrid = Planet.grid as PlanetGrid
 	for y in H:
 		var lat: float = (0.5 - float(y) / float(H)) * PI
 		for x in W:
@@ -191,8 +191,6 @@ func _color_for(which: int, f: PlanetFields, c: int) -> Color:
 
 		Layer.LANDMARKS:
 			var background := Color(0.025, 0.04, 0.065) if sea else Color(0.10, 0.105, 0.10)
-			# Low-intensity margin context makes it obvious why chains occur where
-			# they do without turning the landmark layer into a second plate map.
 			if f.plate_boundary[c] > 0.20:
 				var bt2: int = f.plate_boundary_type[c]
 				background = background.lerp(
@@ -267,8 +265,6 @@ func _color_for(which: int, f: PlanetFields, c: int) -> Color:
 				clampf(f.soil_clay[c], 0, 1)) * clampf(0.25 + f.soil_depth[c] / 3.0, 0.25, 1.0)
 
 		Layer.BIOMES:
-			# Deliberately no river/lake overlay here. This is the ecological base
-			# layer; inspect Hydrology to see surface-water attributes.
 			return PlanetFields.BIOME_COLORS[f.biome[c]]
 
 		Layer.SUITABILITY:
