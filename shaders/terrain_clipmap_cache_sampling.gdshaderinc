@@ -193,18 +193,39 @@ vec3 terrain_cached_surface_normal(vec3 d, int level, float morph,
 		float center_height, vec2 anchor_offset_m) {
 	float sample_m = max(NORMAL_SAMPLE_MIN_M,
 		ring_spacing(level) * NORMAL_SAMPLE_SPACING_MULT);
-	vec2 offset_x = anchor_offset_m + vec2(sample_m, 0.0);
-	vec2 offset_y = anchor_offset_m + vec2(0.0, sample_m);
-	vec3 dx = direction_for_basis_offset(
-		u_anchor_dir, u_anchor_right, u_anchor_up, offset_x);
-	vec3 dy = direction_for_basis_offset(
-		u_anchor_dir, u_anchor_right, u_anchor_up, offset_y);
-	float hx = terrain_cached_or_macro_with_morph(dx, level, morph, offset_x).y;
-	float hy = terrain_cached_or_macro_with_morph(dy, level, morph, offset_y).y;
-	vec3 p0 = d * (u_planet_radius + center_height);
-	vec3 px = dx * (u_planet_radius + hx);
-	vec3 py = dy * (u_planet_radius + hy);
-	vec3 n_raw = cross(px - p0, py - p0);
+
+	// Central differences are intentional here. The old implementation sampled
+	// only +anchor-right and +anchor-up. That produces a first-order normal bias
+	// tied to the current clipmap tangent frame; when a terrain/floating-origin
+	// handoff changes the anchor basis or lattice phase, the biased bright/dark side
+	// moves with it. Symmetric +/- samples make the estimate translation-neutral
+	// and remove that rebase-dependent directional shading term.
+	vec2 offset_xp = anchor_offset_m + vec2(sample_m, 0.0);
+	vec2 offset_xn = anchor_offset_m - vec2(sample_m, 0.0);
+	vec2 offset_yp = anchor_offset_m + vec2(0.0, sample_m);
+	vec2 offset_yn = anchor_offset_m - vec2(0.0, sample_m);
+
+	vec3 dxp = direction_for_basis_offset(
+		u_anchor_dir, u_anchor_right, u_anchor_up, offset_xp);
+	vec3 dxn = direction_for_basis_offset(
+		u_anchor_dir, u_anchor_right, u_anchor_up, offset_xn);
+	vec3 dyp = direction_for_basis_offset(
+		u_anchor_dir, u_anchor_right, u_anchor_up, offset_yp);
+	vec3 dyn = direction_for_basis_offset(
+		u_anchor_dir, u_anchor_right, u_anchor_up, offset_yn);
+
+	float hxp = terrain_cached_or_macro_with_morph(dxp, level, morph, offset_xp).y;
+	float hxn = terrain_cached_or_macro_with_morph(dxn, level, morph, offset_xn).y;
+	float hyp = terrain_cached_or_macro_with_morph(dyp, level, morph, offset_yp).y;
+	float hyn = terrain_cached_or_macro_with_morph(dyn, level, morph, offset_yn).y;
+
+	vec3 pxp = dxp * (u_planet_radius + hxp);
+	vec3 pxn = dxn * (u_planet_radius + hxn);
+	vec3 pyp = dyp * (u_planet_radius + hyp);
+	vec3 pyn = dyn * (u_planet_radius + hyn);
+	vec3 tangent_x = pxp - pxn;
+	vec3 tangent_y = pyp - pyn;
+	vec3 n_raw = cross(tangent_x, tangent_y);
 	vec3 n = length(n_raw) > 1e-8 ? normalize(n_raw) : d;
 	if (dot(n, d) < 0.0) n = -n;
 	return n;
