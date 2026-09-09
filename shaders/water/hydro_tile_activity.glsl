@@ -1,0 +1,212 @@
+#[compute]
+#version 450
+
+// One workgroup summarizes one sparse hydrology slot. Physical Q, kinetic proxy
+// and predictive wetting use the owning tile's quadtree-derived cell size so policy
+// thresholds remain meaningful across 2:1 HydroLODs.
+//
+// summary layout per slot:
+//   0: max depth, max velocity, kinetic proxy, invalid count
+//   1: actual outward advective Q on W/E/S/N [m3/s]
+//   2: wet cell count, active ownership, reserved, reserved
+//   3: one-sided dry-neighbor Rusanov wetting Q on W/E/S/N [m3/s]
+//   4: max free-surface elevation eta=(bed+h) on W/E/S/N [m]
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer State {
+    vec4 cells[];
+};
+layout(set = 0, binding = 1, std430) readonly buffer Occupancy {
+    uint active[];
+};
+layout(set = 0, binding = 2, std430) writeonly buffer Summaries {
+    vec4 summary[];
+};
+layout(set = 0, binding = 3, std430) readonly buffer Params {
+    vec4 grid;    // tile_res, capacity, H0 dx, dry_eps
+    vec4 physics; // gravity, H0 tile level, HydroLOD enabled, reserved
+} params;
+layout(set = 0, binding = 4, std430) readonly buffer TileMetadata {
+    ivec4 tile_metadata[]; // face, quadtree level, x, y
+};
+
+shared float s_max_depth[64];
+shared float s_max_velocity[64];
+shared float s_energy[64];
+shared float s_west[64];
+shared float s_east[64];
+shared float s_south[64];
+shared float s_north[64];
+shared float s_wet_west[64];
+shared float s_wet_east[64];
+shared float s_wet_south[64];
+shared float s_wet_north[64];
+shared float s_eta_west[64];
+shared float s_eta_east[64];
+shared float s_eta_south[64];
+shared float s_eta_north[64];
+shared uint s_invalid[64];
+shared uint s_wet[64];
+
+const float NEG_FLT_MAX = -3.402823e38;
+
+bool invalid_state(vec4 v) {
+    return any(isnan(v)) || any(isinf(v));
+}
+
+float slot_dx(uint slot) {
+    float base_dx = max(params.grid.z, 1e-4);
+    if (params.physics.z < 0.5) return base_dx;
+    int base_level = int(params.physics.y + 0.5);
+    int level = tile_metadata[slot].y;
+    if (level < 0) return base_dx;
+    return base_dx * exp2(float(base_level - level));
+}
+
+float predicted_dry_flux_per_width(float h, float outward_momentum, float gravity) {
+    if (h <= max(params.grid.w, 1e-8)) return 0.0;
+    float u = outward_momentum / h;
+    float a = abs(u) + sqrt(max(gravity, 1e-4) * h);
+    return max(0.5 * (outward_momentum + a * h), 0.0);
+}
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationIndex;
+    uint tile_res = max(uint(params.grid.x + 0.5), 1u);
+    uint capacity = max(uint(params.grid.y + 0.5), 1u);
+    float dry_eps = max(params.grid.w, 1e-8);
+    float gravity = max(params.physics.x, 1e-4);
+    uint tile_cells = tile_res * tile_res;
+    float dx = slot < capacity ? slot_dx(slot) : max(params.grid.z, 1e-4);
+
+    float max_depth = 0.0;
+    float max_velocity = 0.0;
+    float energy = 0.0;
+    float west_flux = 0.0;
+    float east_flux = 0.0;
+    float south_flux = 0.0;
+    float north_flux = 0.0;
+    float wet_west = 0.0;
+    float wet_east = 0.0;
+    float wet_south = 0.0;
+    float wet_north = 0.0;
+    float eta_west = NEG_FLT_MAX;
+    float eta_east = NEG_FLT_MAX;
+    float eta_south = NEG_FLT_MAX;
+    float eta_north = NEG_FLT_MAX;
+    uint invalid_count = 0u;
+    uint wet_count = 0u;
+
+    bool slot_active = slot < capacity && active[slot] != 0u;
+    if (slot_active) {
+        uint base = slot * tile_cells;
+        for (uint local_i = lane; local_i < tile_cells; local_i += 64u) {
+            vec4 q = cells[base + local_i];
+            if (invalid_state(q)) {
+                invalid_count += 1u;
+                continue;
+            }
+            float h = max(q.x, 0.0);
+            max_depth = max(max_depth, h);
+            if (h <= dry_eps) continue;
+
+            wet_count += 1u;
+            vec2 velocity = q.yz / h;
+            float speed = length(velocity);
+            max_velocity = max(max_velocity, speed);
+            energy += 0.5 * h * dot(velocity, velocity) * dx * dx;
+            float eta = q.w + h;
+
+            uint x = local_i % tile_res;
+            uint y = local_i / tile_res;
+            if (x == 0u) {
+                float m = -q.y;
+                west_flux += max(m, 0.0) * dx;
+                wet_west += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_west = max(eta_west, eta);
+            }
+            if (x + 1u == tile_res) {
+                float m = q.y;
+                east_flux += max(m, 0.0) * dx;
+                wet_east += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_east = max(eta_east, eta);
+            }
+            if (y == 0u) {
+                float m = -q.z;
+                south_flux += max(m, 0.0) * dx;
+                wet_south += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_south = max(eta_south, eta);
+            }
+            if (y + 1u == tile_res) {
+                float m = q.z;
+                north_flux += max(m, 0.0) * dx;
+                wet_north += predicted_dry_flux_per_width(h, m, gravity) * dx;
+                eta_north = max(eta_north, eta);
+            }
+        }
+    }
+
+    s_max_depth[lane] = max_depth;
+    s_max_velocity[lane] = max_velocity;
+    s_energy[lane] = energy;
+    s_west[lane] = west_flux;
+    s_east[lane] = east_flux;
+    s_south[lane] = south_flux;
+    s_north[lane] = north_flux;
+    s_wet_west[lane] = wet_west;
+    s_wet_east[lane] = wet_east;
+    s_wet_south[lane] = wet_south;
+    s_wet_north[lane] = wet_north;
+    s_eta_west[lane] = eta_west;
+    s_eta_east[lane] = eta_east;
+    s_eta_south[lane] = eta_south;
+    s_eta_north[lane] = eta_north;
+    s_invalid[lane] = invalid_count;
+    s_wet[lane] = wet_count;
+    barrier();
+
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+            s_max_depth[lane] = max(s_max_depth[lane], s_max_depth[lane + stride]);
+            s_max_velocity[lane] = max(s_max_velocity[lane], s_max_velocity[lane + stride]);
+            s_energy[lane] += s_energy[lane + stride];
+            s_west[lane] += s_west[lane + stride];
+            s_east[lane] += s_east[lane + stride];
+            s_south[lane] += s_south[lane + stride];
+            s_north[lane] += s_north[lane + stride];
+            s_wet_west[lane] += s_wet_west[lane + stride];
+            s_wet_east[lane] += s_wet_east[lane + stride];
+            s_wet_south[lane] += s_wet_south[lane + stride];
+            s_wet_north[lane] += s_wet_north[lane + stride];
+            s_eta_west[lane] = max(s_eta_west[lane], s_eta_west[lane + stride]);
+            s_eta_east[lane] = max(s_eta_east[lane], s_eta_east[lane + stride]);
+            s_eta_south[lane] = max(s_eta_south[lane], s_eta_south[lane + stride]);
+            s_eta_north[lane] = max(s_eta_north[lane], s_eta_north[lane + stride]);
+            s_invalid[lane] += s_invalid[lane + stride];
+            s_wet[lane] += s_wet[lane + stride];
+        }
+        barrier();
+    }
+
+    if (lane == 0u && slot < capacity) {
+        uint o = slot * 5u;
+        if (!slot_active) {
+            summary[o + 0u] = vec4(0.0);
+            summary[o + 1u] = vec4(0.0);
+            summary[o + 2u] = vec4(0.0);
+            summary[o + 3u] = vec4(0.0);
+            summary[o + 4u] = vec4(NEG_FLT_MAX);
+            return;
+        }
+        summary[o + 0u] = vec4(
+            s_max_depth[0], s_max_velocity[0], s_energy[0], float(s_invalid[0]));
+        summary[o + 1u] = vec4(
+            s_west[0], s_east[0], s_south[0], s_north[0]);
+        summary[o + 2u] = vec4(float(s_wet[0]), 1.0, 0.0, 0.0);
+        summary[o + 3u] = vec4(
+            s_wet_west[0], s_wet_east[0], s_wet_south[0], s_wet_north[0]);
+        summary[o + 4u] = vec4(
+            s_eta_west[0], s_eta_east[0], s_eta_south[0], s_eta_north[0]);
+    }
+}

@@ -1,0 +1,764 @@
+extends Node
+## Runtime bridge between the AVX2 native meteorology core and GPU/cloud/UI consumers.
+## The native class is resolved dynamically so an unbuilt DLL never prevents the
+## project from parsing or booting.
+
+const GLOBAL_W := 1024
+const GLOBAL_H := 512
+const LOCAL_W := 192
+const LOCAL_H := 192
+const LAYERS := 30
+const WEATHER_VISUAL_MIN_INTERVAL := 0.20
+const ANALYSIS_PHASE_MIN_INTERVAL := 0.05
+const ANALYSIS_MAX_LAG_REVISIONS := 4
+const CENTER_UPDATE_INTERVAL := 1.0
+const GLOBAL_SIM_DT := 90.0
+const LOCAL_SIM_DT := 20.0
+const SIMULATION_SPEED_MIN := 0.0
+const SIMULATION_SPEED_MAX := 8192.0
+const SIMULATION_SPEED_DEFAULT := 1.0
+const HIGH_WARP_LOCAL_THRESHOLD := 256.0
+const MAX_GLOBAL_STEPS_PER_JOB := 4
+const MAX_LOCAL_STEPS_PER_JOB := 4
+const SIMULATION_WEIGHT_MIN := 0.0
+const SIMULATION_WEIGHT_MAX := 2.0
+const SIMULATION_WEIGHT_DEFAULT := 1.0
+const NEUTRAL_CLOUD := 0.16
+const TUNING_WEIGHT_MIN := 0.0
+const TUNING_WEIGHT_MAX := 2.0
+const TUNING_WEIGHT_DEFAULT := 1.0
+const TUNING_KEYS := [
+	&"circulation",
+	&"temperature",
+	&"humidity",
+	&"cloud_microphysics",
+	&"convection",
+	&"precipitation",
+]
+const DEFAULT_LAYER_WEIGHTS := [0.700583, 0.685757, 0.859964, 1.018795, 1.159806, 1.281069, 1.381213, 1.459443, 1.515535, 1.549812, 1.563101, 1.556674, 1.532182, 1.491570, 1.437001, 1.370766, 1.264000, 1.129507, 1.009324, 0.901929, 0.805962, 0.720205, 0.643574, 0.575096, 0.513904, 0.459223, 0.410361, 0.366697, 0.327680, 0.309267]
+const REQUIRED_NATIVE_METHODS := [
+	&"initialize",
+	&"step_global",
+	&"set_local_center",
+	&"step_local",
+	&"reset_local_from_global",
+	&"get_global_weather_rgba",
+	&"get_local_weather_rgba",
+	&"get_global_diagnostics_rgba",
+	&"get_local_diagnostics_rgba",
+	&"get_global_products_rgba",
+	&"get_local_products_rgba",
+	&"set_tuning_weight",
+	&"get_tuning_weight",
+	&"reset_tuning_weights",
+	&"set_layer_weight",
+	&"get_layer_weights",
+	&"get_layer_count",
+	&"get_global_width",
+	&"get_global_height",
+	&"get_layer_height_m",
+	&"get_local_center",
+	&"get_local_east",
+	&"get_local_north",
+	&"get_local_span_m",
+]
+
+signal simulation_weight_changed(weight: float)
+signal simulation_speed_changed(speed: float)
+signal tuning_weight_changed(name: StringName, weight: float)
+signal layer_weight_changed(layer: int, weight: float)
+signal physics_tuning_reset
+signal global_state_advanced(revision: int)
+signal local_state_advanced(revision: int)
+
+var global_weather_texture: ImageTexture
+var local_weather_texture: ImageTexture
+var global_diagnostics_texture: ImageTexture
+var local_diagnostics_texture: ImageTexture
+var global_products_texture: ImageTexture
+var local_products_texture: ImageTexture
+var global_weather_values := PackedFloat32Array()
+var global_diagnostics_values := PackedFloat32Array()
+var global_products_values := PackedFloat32Array()
+var global_convective_values := PackedFloat32Array()
+var global_state_revision: int = 0
+var local_state_revision: int = 0
+var analysis_revision: int = -1
+var local_center := Vector3.UP
+var local_east := Vector3.RIGHT
+var local_north := Vector3.FORWARD
+var local_span_m := 422400.0
+var layer_count := LAYERS
+
+var native_available := false
+var backend_error := ""
+var simulation_weight := SIMULATION_WEIGHT_DEFAULT
+var simulation_speed := SIMULATION_SPEED_DEFAULT
+var warped_ahead_seconds := 0.0
+var tuning_weights := {
+	&"circulation": TUNING_WEIGHT_DEFAULT,
+	&"temperature": TUNING_WEIGHT_DEFAULT,
+	&"humidity": TUNING_WEIGHT_DEFAULT,
+	&"cloud_microphysics": TUNING_WEIGHT_DEFAULT,
+	&"convection": TUNING_WEIGHT_DEFAULT,
+	&"precipitation": TUNING_WEIGHT_DEFAULT,
+}
+var layer_weights := PackedFloat32Array(DEFAULT_LAYER_WEIGHTS)
+
+var _native: Object = null
+var _observer: AsterraPlayer
+var _global_sim_accum := 0.0
+var _local_sim_accum := 0.0
+var _last_celestial_seconds := 0.0
+var _weather_task_id: int = -1
+var _weather_task_global_steps: int = 0
+var _weather_task_local_steps: int = 0
+var _weather_task_touched_local: bool = false
+var _weather_task_reset_local: bool = false
+var _weather_publish_accum: float = 999.0
+var _analysis_publish_accum: float = 999.0
+var _center_update_accum: float = 999.0
+var _global_weather_dirty: bool = true
+var _local_weather_dirty: bool = true
+var _global_analysis_dirty: bool = true
+var _local_analysis_dirty: bool = true
+var _global_analysis_phase: int = 0
+var _pending_native_controls: bool = false
+var _pending_local_reset: bool = false
+var _map_was_open: bool = false
+var _worker_schedule_deferred: bool = false
+var _heavy_publication_frame: int = -1
+
+
+func _ready() -> void:
+	_last_celestial_seconds = CelestialSystem.simulation_seconds
+	CelestialSystem.set_time_scale(simulation_speed)
+	_create_textures()
+	_try_create_native_backend()
+	_publish_fallback_weather()
+	if native_available:
+		_mark_all_outputs_dirty()
+
+
+func _try_create_native_backend() -> void:
+	if not ClassDB.class_exists(&"WeatherNative"):
+		backend_error = "AVX2 weather extension is not loaded; build native/weather first"
+		push_warning("WeatherSystem: %s" % backend_error)
+		return
+	var instance: Variant = ClassDB.instantiate(&"WeatherNative")
+	if not (instance is Object):
+		backend_error = "WeatherNative registered but could not be instantiated"
+		push_error("WeatherSystem: %s" % backend_error)
+		return
+	var missing_methods := PackedStringArray()
+	for method: StringName in REQUIRED_NATIVE_METHODS:
+		if not instance.has_method(method):
+			missing_methods.append(String(method))
+	if not missing_methods.is_empty():
+		backend_error = (
+			"WeatherNative binary is out of date; rebuild native/weather and restart Godot. "
+			+ "Missing methods: %s" % ", ".join(missing_methods)
+		)
+		push_warning("WeatherSystem: %s" % backend_error)
+		return
+	var native_w := int(instance.call(&"get_global_width"))
+	var native_h := int(instance.call(&"get_global_height"))
+	var native_layers := int(instance.call(&"get_layer_count"))
+	if native_w != GLOBAL_W or native_h != GLOBAL_H or native_layers != LAYERS:
+		backend_error = "WeatherNative grid mismatch: DLL reports %dx%dx%d, project expects %dx%dx%d; rebuild native/weather" % [native_w, native_h, native_layers, GLOBAL_W, GLOBAL_H, LAYERS]
+		push_warning("WeatherSystem: %s" % backend_error)
+		return
+	_native = instance
+	for tuning_key: StringName in TUNING_KEYS:
+		_native.call(&"set_tuning_weight", tuning_key, float(tuning_weights[tuning_key]))
+	for layer in LAYERS:
+		_native.call(&"set_layer_weight", layer, layer_weights[layer])
+	var world := load("res://world.tres")
+	var seed := 1
+	if world is GenConfig:
+		seed = int(world.world_seed)
+	_native.call(&"initialize", seed)
+	var layers_result: Variant = _native.call(&"get_layer_count")
+	if layers_result is int:
+		layer_count = int(layers_result)
+	native_available = true
+	backend_error = ""
+
+
+func _process(delta: float) -> void:
+	_try_bind_observer()
+	var celestial_now := CelestialSystem.simulation_seconds
+	var simulated_delta := celestial_now - _last_celestial_seconds
+	_last_celestial_seconds = celestial_now
+	if simulated_delta < 0.0:
+		_global_sim_accum = 0.0
+		_local_sim_accum = 0.0
+		simulated_delta = 0.0
+	warped_ahead_seconds += maxf(simulated_delta - delta, 0.0)
+
+	if not native_available or _native == null:
+		if _observer != null and is_instance_valid(_observer):
+			_update_fallback_basis(_observer.up_dir())
+		_sync_weather_map_material()
+		return
+
+	_global_sim_accum += simulated_delta
+	if _observer != null and is_instance_valid(_observer):
+		_local_sim_accum += simulated_delta
+	else:
+		_local_sim_accum = 0.0
+	_center_update_accum += delta
+
+	_poll_weather_worker()
+	if not native_worker_busy():
+		_apply_pending_native_controls()
+
+	# Completed native state gets an idle main-thread publication window before
+	# another solver job is launched. This prevents high warp from starving
+	# cloud/map/surface uploads indefinitely.
+	_service_weather_publication(delta)
+	if not _has_blocking_weather_publication():
+		_request_weather_worker_schedule()
+	_sync_weather_map_material()
+
+
+func _run_weather_worker(global_steps: int, global_dt: float, touch_local: bool,
+		center: Vector3, local_steps: int, local_dt: float, reset_local: bool) -> void:
+	var native: Object = _native
+	if native == null:
+		return
+	for _i in global_steps:
+		native.call(&"step_global", global_dt)
+	if touch_local:
+		native.call(&"set_local_center", center)
+	if reset_local:
+		native.call(&"reset_local_from_global")
+	for _i in local_steps:
+		native.call(&"step_local", local_dt)
+
+
+func native_worker_busy() -> bool:
+	if _weather_task_id < 0:
+		return false
+	return not WorkerThreadPool.is_task_completed(_weather_task_id)
+
+
+func _poll_weather_worker() -> void:
+	if _weather_task_id < 0 or not WorkerThreadPool.is_task_completed(_weather_task_id):
+		return
+	WorkerThreadPool.wait_for_task_completion(_weather_task_id)
+	_weather_task_id = -1
+
+	if _weather_task_global_steps > 0:
+		global_state_revision += _weather_task_global_steps
+		_global_weather_dirty = true
+		_global_analysis_dirty = true
+		_global_analysis_phase = 0
+		analysis_revision = mini(analysis_revision, global_state_revision - 1)
+		global_state_advanced.emit(global_state_revision)
+
+	if _weather_task_touched_local and _native != null:
+		local_center = _native.call(&"get_local_center")
+		local_east = _native.call(&"get_local_east")
+		local_north = _native.call(&"get_local_north")
+		local_span_m = float(_native.call(&"get_local_span_m"))
+		_local_weather_dirty = true
+		if _weather_task_local_steps > 0 or _weather_task_reset_local:
+			local_state_revision += maxi(_weather_task_local_steps, 1)
+			_local_analysis_dirty = true
+			local_state_advanced.emit(local_state_revision)
+
+	_weather_task_global_steps = 0
+	_weather_task_local_steps = 0
+	_weather_task_touched_local = false
+	_weather_task_reset_local = false
+
+
+func _request_weather_worker_schedule() -> void:
+	if _worker_schedule_deferred or _weather_task_id >= 0 or _native == null:
+		return
+	_worker_schedule_deferred = true
+	call_deferred("_schedule_weather_worker_deferred")
+
+
+func _schedule_weather_worker_deferred() -> void:
+	_worker_schedule_deferred = false
+	if _native == null or native_worker_busy() or _has_blocking_weather_publication():
+		return
+	_apply_pending_native_controls()
+	_schedule_weather_worker()
+
+
+func heavy_publication_this_frame() -> bool:
+	return _heavy_publication_frame == Engine.get_process_frames()
+
+
+func claim_heavy_publication() -> bool:
+	var frame := Engine.get_process_frames()
+	if _heavy_publication_frame == frame:
+		return false
+	_heavy_publication_frame = frame
+	return true
+
+
+func _has_pending_weather_publication() -> bool:
+	return _global_weather_dirty or _local_weather_dirty or _global_analysis_dirty \
+		or (_weather_map_open() and _local_analysis_dirty)
+
+
+func _has_blocking_weather_publication() -> bool:
+	# The physics worker must not race the native object while a world-facing
+	# weather texture is being reduced. Analysis products, however, are debug/
+	# refinement outputs and must not become a barrier around every physics job.
+	if _global_weather_dirty or _local_weather_dirty:
+		return true
+	# Do force an analysis catch-up occasionally so refinement cannot run on a
+	# permanently stale diagnostic snapshot during long high-warp spin-up.
+	if _global_analysis_dirty and global_state_revision - analysis_revision >= ANALYSIS_MAX_LAG_REVISIONS:
+		return true
+	return false
+
+
+func _schedule_weather_worker() -> void:
+	if _weather_task_id >= 0 or _native == null:
+		return
+
+	var available_global_steps: int = int(_global_sim_accum / GLOBAL_SIM_DT)
+	var global_job_limit: int = 1
+	# Keep the globe responsive while it is being inspected. With the viewer
+	# closed, larger high-warp batches recover throughput without making a single
+	# background job excessively long.
+	if not _weather_map_open():
+		if simulation_speed >= 1024.0:
+			global_job_limit = MAX_GLOBAL_STEPS_PER_JOB
+		elif simulation_speed >= 128.0:
+			global_job_limit = mini(2, MAX_GLOBAL_STEPS_PER_JOB)
+	var global_steps: int = mini(available_global_steps, global_job_limit)
+	var local_dt: float = 40.0 if simulation_speed >= 32.0 else LOCAL_SIM_DT
+	var local_steps: int = 0
+	var has_observer: bool = _observer != null and is_instance_valid(_observer)
+	if simulation_speed > HIGH_WARP_LOCAL_THRESHOLD:
+		_local_sim_accum = 0.0
+	elif has_observer:
+		local_steps = mini(int(_local_sim_accum / local_dt), MAX_LOCAL_STEPS_PER_JOB)
+
+	var reset_local: bool = _pending_local_reset and has_observer
+	var touch_local: bool = has_observer and (
+		local_steps > 0 or reset_local or _center_update_accum >= CENTER_UPDATE_INTERVAL)
+	if global_steps <= 0 and local_steps <= 0 and not touch_local:
+		return
+
+	_global_sim_accum -= float(global_steps) * GLOBAL_SIM_DT
+	_local_sim_accum -= float(local_steps) * local_dt
+	var center := _observer.up_dir() if has_observer else Vector3.ZERO
+	if touch_local:
+		_center_update_accum = 0.0
+	if reset_local:
+		_pending_local_reset = false
+
+	_weather_task_global_steps = global_steps
+	_weather_task_local_steps = local_steps
+	_weather_task_touched_local = touch_local
+	_weather_task_reset_local = reset_local
+	_weather_task_id = WorkerThreadPool.add_task(
+		_run_weather_worker.bind(global_steps, GLOBAL_SIM_DT, touch_local,
+			center, local_steps, local_dt, reset_local),
+		false, "asterra_weather_solver")
+
+
+func _apply_pending_native_controls() -> void:
+	if not _pending_native_controls or _native == null:
+		return
+	for tuning_key: StringName in TUNING_KEYS:
+		_native.call(&"set_tuning_weight", tuning_key, float(tuning_weights[tuning_key]))
+	for layer in LAYERS:
+		_native.call(&"set_layer_weight", layer, layer_weights[layer])
+	_pending_native_controls = false
+
+
+func _weather_map_open() -> bool:
+	var weather_map := get_node_or_null("/root/WeatherMap")
+	return weather_map != null and weather_map.visible
+
+
+func _mark_all_outputs_dirty() -> void:
+	_global_weather_dirty = true
+	_local_weather_dirty = true
+	_global_analysis_dirty = true
+	_local_analysis_dirty = true
+	_global_analysis_phase = 0
+	_weather_publish_accum = 999.0
+	_analysis_publish_accum = 999.0
+
+
+func _service_weather_publication(delta: float) -> void:
+	_weather_publish_accum += delta
+	_analysis_publish_accum += delta
+	if _native == null or native_worker_busy():
+		return
+
+	var map_open: bool = _weather_map_open()
+	if map_open and not _map_was_open:
+		_global_analysis_dirty = true
+		_local_analysis_dirty = true
+		_global_analysis_phase = 0
+	_map_was_open = map_open
+
+	# World-facing fields get first refusal. A skipped heavy-publication claim is
+	# NOT completion: keep the dirty bit set and retry next frame.
+	if _global_weather_dirty:
+		if _weather_publish_accum >= WEATHER_VISUAL_MIN_INTERVAL and _publish_global_weather():
+			_global_weather_dirty = false
+			_weather_publish_accum = 0.0
+		return
+	if _local_weather_dirty:
+		if _weather_publish_accum >= WEATHER_VISUAL_MIN_INTERVAL and _publish_local_weather():
+			_local_weather_dirty = false
+			_weather_publish_accum = 0.0
+		return
+
+	# Diagnostics are intentionally staggered and may lag physics by a few
+	# revisions. They are coalesced to the newest completed native state.
+	if _global_analysis_dirty and _analysis_publish_accum >= ANALYSIS_PHASE_MIN_INTERVAL:
+		var published: bool = false
+		match _global_analysis_phase:
+			0:
+				published = _publish_global_diagnostics(map_open)
+			1:
+				published = _publish_global_products(map_open)
+			_:
+				published = _publish_global_convective()
+		if published:
+			_global_analysis_phase += 1
+			_analysis_publish_accum = 0.0
+			if _global_analysis_phase >= 3:
+				_global_analysis_dirty = false
+				analysis_revision = global_state_revision
+		return
+
+	if map_open and _local_analysis_dirty and _analysis_publish_accum >= ANALYSIS_PHASE_MIN_INTERVAL:
+		if _publish_local_analysis():
+			_local_analysis_dirty = false
+			_analysis_publish_accum = 0.0
+
+
+func _try_bind_observer() -> void:
+	if _observer != null and is_instance_valid(_observer):
+		return
+	var root: Node = get_tree().current_scene
+	if root == null:
+		return
+	_observer = _find_observer_recursive(root)
+
+
+func _find_observer_recursive(node: Node) -> AsterraPlayer:
+	if node is AsterraPlayer:
+		return node as AsterraPlayer
+	for child: Node in node.get_children():
+		var found: AsterraPlayer = _find_observer_recursive(child)
+		if found != null:
+			return found
+	return null
+
+
+func _update_fallback_basis(direction: Vector3) -> void:
+	local_center = direction.normalized()
+	var pole := Vector3.RIGHT if absf(local_center.y) > 0.92 else Vector3.UP
+	local_east = pole.cross(local_center).normalized()
+	local_north = local_center.cross(local_east).normalized()
+
+
+func _create_textures() -> void:
+	global_weather_texture = ImageTexture.create_from_image(
+		Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF))
+	local_weather_texture = ImageTexture.create_from_image(
+		Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF))
+	global_diagnostics_texture = ImageTexture.create_from_image(
+		Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF))
+	local_diagnostics_texture = ImageTexture.create_from_image(
+		Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF))
+	global_products_texture = ImageTexture.create_from_image(
+		Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF))
+	local_products_texture = ImageTexture.create_from_image(
+		Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF))
+
+
+func _publish_fallback_weather() -> void:
+	var global_image := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	global_image.fill(Color(NEUTRAL_CLOUD, 0.0, 0.0, 0.5))
+	global_weather_texture.update(global_image)
+	global_weather_values = global_image.get_data().to_float32_array()
+	var local_image := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+	local_image.fill(Color(NEUTRAL_CLOUD, 0.0, 0.0, 0.5))
+	local_weather_texture.update(local_image)
+	var global_diag := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	global_diag.fill(Color(0.5, 0.5, 0.5, 0.0))
+	global_diagnostics_texture.update(global_diag)
+	global_diagnostics_values = global_diag.get_data().to_float32_array()
+	var local_diag := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+	local_diag.fill(Color(0.5, 0.5, 0.5, 0.0))
+	local_diagnostics_texture.update(local_diag)
+	var global_products := Image.create(GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF)
+	global_products.fill(Color(0.68, -1.0, 0.0, 0.0))
+	global_products_texture.update(global_products)
+	global_products_values = global_products.get_data().to_float32_array()
+	var local_products := Image.create(LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF)
+	local_products.fill(Color(0.68, -1.0, 0.0, 0.0))
+	local_products_texture.update(local_products)
+
+
+func _publish_weather_textures() -> void:
+	# Compatibility entry point for debug controls: publishing is now deferred
+	# and staggered instead of doing six large native reductions in one frame.
+	_mark_all_outputs_dirty()
+
+
+func _publish_global_weather() -> bool:
+	if not claim_heavy_publication():
+		return false
+	var result: Variant = _native.call(&"get_global_weather_rgba")
+	if not (result is PackedFloat32Array):
+		return false
+	global_weather_values = result
+	var values: PackedFloat32Array = _apply_simulation_weight(global_weather_values)
+	if values.size() != GLOBAL_W * GLOBAL_H * 4:
+		return false
+	global_weather_texture.update(Image.create_from_data(
+		GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array()))
+	return true
+
+
+func _publish_local_weather() -> bool:
+	var result: Variant = _native.call(&"get_local_weather_rgba")
+	if not (result is PackedFloat32Array):
+		return false
+	var values: PackedFloat32Array = _apply_simulation_weight(result)
+	if values.size() != LOCAL_W * LOCAL_H * 4:
+		return false
+	local_weather_texture.update(Image.create_from_data(
+		LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array()))
+	return true
+
+
+func _publish_global_diagnostics(update_gpu: bool) -> bool:
+	if not claim_heavy_publication():
+		return false
+	var result: Variant = _native.call(&"get_global_diagnostics_rgba")
+	if not (result is PackedFloat32Array):
+		return false
+	global_diagnostics_values = result
+	if not update_gpu:
+		return true
+	var values: PackedFloat32Array = _apply_diagnostic_weight(global_diagnostics_values)
+	if values.size() != GLOBAL_W * GLOBAL_H * 4:
+		return false
+	global_diagnostics_texture.update(Image.create_from_data(
+		GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF, values.to_byte_array()))
+	return true
+
+
+func _publish_global_products(update_gpu: bool) -> bool:
+	if not claim_heavy_publication():
+		return false
+	var result: Variant = _native.call(&"get_global_products_rgba")
+	if not (result is PackedFloat32Array):
+		return false
+	global_products_values = result
+	if not update_gpu:
+		return true
+	if global_products_values.size() != GLOBAL_W * GLOBAL_H * 4:
+		return false
+	global_products_texture.update(Image.create_from_data(
+		GLOBAL_W, GLOBAL_H, false, Image.FORMAT_RGBAF,
+		global_products_values.to_byte_array()))
+	return true
+
+
+func _publish_global_convective() -> bool:
+	if not claim_heavy_publication():
+		return false
+	if not _native.has_method(&"get_global_convective_rgba"):
+		global_convective_values = PackedFloat32Array()
+		return true
+	var result: Variant = _native.call(&"get_global_convective_rgba")
+	if not (result is PackedFloat32Array):
+		return false
+	global_convective_values = result
+	return true
+
+
+func _publish_local_analysis() -> bool:
+	var diag_result: Variant = _native.call(&"get_local_diagnostics_rgba")
+	if not (diag_result is PackedFloat32Array):
+		return false
+	var diag_values: PackedFloat32Array = _apply_diagnostic_weight(diag_result)
+	if diag_values.size() != LOCAL_W * LOCAL_H * 4:
+		return false
+	local_diagnostics_texture.update(Image.create_from_data(
+		LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, diag_values.to_byte_array()))
+	var products_result: Variant = _native.call(&"get_local_products_rgba")
+	if not (products_result is PackedFloat32Array):
+		return false
+	var products_values: PackedFloat32Array = products_result
+	if products_values.size() != LOCAL_W * LOCAL_H * 4:
+		return false
+	local_products_texture.update(Image.create_from_data(
+		LOCAL_W, LOCAL_H, false, Image.FORMAT_RGBAF, products_values.to_byte_array()))
+	return true
+
+
+func set_simulation_weight(value: float) -> void:
+	var sanitized := clampf(value, SIMULATION_WEIGHT_MIN, SIMULATION_WEIGHT_MAX)
+	if is_equal_approx(simulation_weight, sanitized):
+		return
+	simulation_weight = sanitized
+	if native_available:
+		_mark_all_outputs_dirty()
+	else:
+		_publish_fallback_weather()
+	_sync_weather_map_material()
+	simulation_weight_changed.emit(simulation_weight)
+
+
+func reset_simulation_weight() -> void:
+	set_simulation_weight(SIMULATION_WEIGHT_DEFAULT)
+
+
+func set_simulation_speed(value: float) -> void:
+	var sanitized := clampf(value, SIMULATION_SPEED_MIN, SIMULATION_SPEED_MAX)
+	if is_equal_approx(simulation_speed, sanitized) and is_equal_approx(CelestialSystem.time_scale, sanitized):
+		return
+	var was_high_warp := simulation_speed > HIGH_WARP_LOCAL_THRESHOLD
+	simulation_speed = sanitized
+	CelestialSystem.set_time_scale(simulation_speed)
+	if was_high_warp and simulation_speed <= HIGH_WARP_LOCAL_THRESHOLD \
+			and native_available and _native != null:
+		_local_sim_accum = 0.0
+		_pending_local_reset = true
+	simulation_speed_changed.emit(simulation_speed)
+
+
+func reset_simulation_speed() -> void:
+	set_simulation_speed(SIMULATION_SPEED_DEFAULT)
+
+
+func set_tuning_weight(name: StringName, value: float) -> void:
+	if not tuning_weights.has(name):
+		return
+	var sanitized := clampf(value, TUNING_WEIGHT_MIN, TUNING_WEIGHT_MAX)
+	if is_equal_approx(float(tuning_weights[name]), sanitized):
+		return
+	tuning_weights[name] = sanitized
+	if native_available and _native != null:
+		if native_worker_busy():
+			_pending_native_controls = true
+		else:
+			_native.call(&"set_tuning_weight", name, sanitized)
+	tuning_weight_changed.emit(name, sanitized)
+
+
+func set_layer_weight(layer: int, value: float) -> void:
+	if layer < 0 or layer >= layer_weights.size():
+		return
+	var sanitized := clampf(value, TUNING_WEIGHT_MIN, TUNING_WEIGHT_MAX)
+	if is_equal_approx(layer_weights[layer], sanitized):
+		return
+	layer_weights[layer] = sanitized
+	if native_available and _native != null:
+		if native_worker_busy():
+			_pending_native_controls = true
+		else:
+			_native.call(&"set_layer_weight", layer, sanitized)
+		_mark_all_outputs_dirty()
+	layer_weight_changed.emit(layer, sanitized)
+
+
+func reset_physics_tuning() -> void:
+	for tuning_key: StringName in TUNING_KEYS:
+		tuning_weights[tuning_key] = TUNING_WEIGHT_DEFAULT
+	layer_weights = PackedFloat32Array(DEFAULT_LAYER_WEIGHTS)
+	if native_available and _native != null:
+		if native_worker_busy():
+			_pending_native_controls = true
+		else:
+			_native.call(&"reset_tuning_weights")
+		_mark_all_outputs_dirty()
+	physics_tuning_reset.emit()
+
+
+func _apply_simulation_weight(values: PackedFloat32Array) -> PackedFloat32Array:
+	if is_equal_approx(simulation_weight, 1.0):
+		return values
+	var weighted := values.duplicate()
+	for i in int(weighted.size() / 4):
+		var offset := i * 4
+		weighted[offset] = clampf(
+			NEUTRAL_CLOUD + (weighted[offset] - NEUTRAL_CLOUD) * simulation_weight, 0.0, 1.0)
+		weighted[offset + 1] = clampf(weighted[offset + 1] * simulation_weight, 0.0, 1.0)
+		weighted[offset + 2] = clampf(weighted[offset + 2] * simulation_weight, 0.0, 1.0)
+		weighted[offset + 3] = clampf(
+			0.5 + (weighted[offset + 3] - 0.5) * simulation_weight, 0.0, 1.0)
+	return weighted
+
+
+func _apply_diagnostic_weight(values: PackedFloat32Array) -> PackedFloat32Array:
+	if is_equal_approx(simulation_weight, 1.0):
+		return values
+	var weighted := values.duplicate()
+	for i in int(weighted.size() / 4):
+		var offset := i * 4
+		for channel in 3:
+			weighted[offset + channel] = clampf(
+				0.5 + (weighted[offset + channel] - 0.5) * simulation_weight, 0.0, 1.0)
+		weighted[offset + 3] = clampf(weighted[offset + 3] * simulation_weight, 0.0, 1.0)
+	return weighted
+
+
+func _sync_weather_map_material() -> void:
+	var weather_map := get_node_or_null("/root/WeatherMap")
+	if weather_map == null or not weather_map.visible:
+		return
+	if weather_map.has_method(&"_sync_from_weather_system"):
+		weather_map.call(&"_sync_from_weather_system")
+		return
+	var material_value: Variant = weather_map.get("_material")
+	if not (material_value is ShaderMaterial):
+		return
+	var material := material_value as ShaderMaterial
+	if global_weather_texture != null:
+		material.set_shader_parameter("u_weather", global_weather_texture)
+	if local_weather_texture != null:
+		material.set_shader_parameter("u_local_weather", local_weather_texture)
+	if global_diagnostics_texture != null:
+		material.set_shader_parameter("u_diagnostics", global_diagnostics_texture)
+	if local_diagnostics_texture != null:
+		material.set_shader_parameter("u_local_diagnostics", local_diagnostics_texture)
+	if global_products_texture != null:
+		material.set_shader_parameter("u_products", global_products_texture)
+	if local_products_texture != null:
+		material.set_shader_parameter("u_local_products", local_products_texture)
+	material.set_shader_parameter("u_local_center", local_center)
+	material.set_shader_parameter("u_local_east", local_east)
+	material.set_shader_parameter("u_local_north", local_north)
+	material.set_shader_parameter(
+		"u_local_span_m", 0.0 if simulation_speed > HIGH_WARP_LOCAL_THRESHOLD else local_span_m)
+	if Planet.cfg != null:
+		material.set_shader_parameter("u_planet_radius", Planet.cfg.planet_radius)
+
+
+func global_texture() -> Texture2D:
+	return global_weather_texture
+
+
+func local_texture() -> Texture2D:
+	return local_weather_texture
+
+
+func solver_backlog_seconds() -> float:
+	return maxf(_global_sim_accum - GLOBAL_SIM_DT, 0.0)
+
+
+func _exit_tree() -> void:
+	if _weather_task_id >= 0:
+		WorkerThreadPool.wait_for_task_completion(_weather_task_id)
+		_weather_task_id = -1

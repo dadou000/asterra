@@ -1,0 +1,227 @@
+#pragma once
+
+#include "geodesic_voronoi_grid.h"
+#include "spherical_latlon_sampler.h"
+#include "voronoi_dry_core.h"
+#include "voronoi_dry_hydrostatic.h"
+#include "voronoi_moist_energy.h"
+#include "voronoi_moist_reference.h"
+#include "voronoi_moist_thermodynamics.h"
+#include "voronoi_precipitation.h"
+#include "voronoi_surface_exchange.h"
+
+#include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/vector3.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+namespace godot {
+
+// Runtime-facing Godot bridge for the replacement 30-level atmosphere.
+// Dynamics live entirely on the geodesic Voronoi C-grid. Moisture uses five
+// conservative water tracers (vapor/cloud liquid/cloud ice/rain/snow), feeds
+// full-pressure/virtual-temperature momentum, and owns a persistent liquid+ice
+// surface reservoir. Prescribed surface exchange and precipitation sedimentation
+// use the actual accepted atmosphere timestep and are part of one rollback
+// transaction. The 1024x512 products are presentation-only resamples.
+class WeatherDryCoreNative : public RefCounted {
+	GDCLASS(WeatherDryCoreNative, RefCounted)
+
+public:
+	static constexpr int DISPLAY_W = 1024;
+	static constexpr int DISPLAY_H = 512;
+	static constexpr double PLANET_RADIUS_M = 3500000.0;
+	static constexpr double GRAVITY_MPS2 = 9.80665;
+	static constexpr double ROTATION_PERIOD_S = 11.5 * 3600.0;
+	static constexpr double ROTATION_RATE_RAD_S =
+		2.0 * 3.141592653589793238462643383279502884 / ROTATION_PERIOD_S;
+	static constexpr double TOP_PRESSURE_PA = 7500.0;
+
+private:
+	std::unique_ptr<asterra::weather::GeodesicVoronoiGrid> grid_;
+	std::unique_ptr<asterra::weather::VoronoiDryCore> dynamics_;
+	asterra::weather::VoronoiDryCore::State state_;
+	asterra::weather::VoronoiDryCore::StepDiagnostics last_step_;
+	asterra::weather::VoronoiMoistThermodynamics::AdjustmentDiagnostics last_moist_adjustment_;
+	asterra::weather::VoronoiSurfaceExchange::SurfaceState surface_exchange_state_;
+	asterra::weather::VoronoiSurfaceExchange::Diagnostics last_surface_exchange_;
+	asterra::weather::VoronoiPrecipitation::Diagnostics last_precipitation_;
+	std::vector<double> evaporation_flux_kg_m2_s_;
+	std::vector<double> sensible_heat_flux_w_m2_;
+	std::vector<int> display_cell_lookup_;
+	std::vector<double> surface_height_m_;
+
+	double initial_dry_mass_kg_ = 0.0;
+	double initial_theta_mass_kg_k_ = 0.0;
+	// Active dynamical energy baseline: dry in dry mode, moist total in moist mode.
+	double initial_dry_energy_j_ = 0.0;
+	// Active axial-AAM baseline: dry mass in dry mode, total suspended mass in moist mode.
+	double initial_absolute_aam_kg_m2_s_ = 0.0;
+	double initial_total_water_kg_ = 0.0;
+	double initial_surface_system_water_kg_ = 0.0;
+	double initial_surface_system_energy_j_ = 0.0;
+	double simulation_seconds_ = 0.0;
+	double rain_fall_speed_mps_ = 7.0;
+	double snow_fall_speed_mps_ = 1.0;
+	int64_t rejected_steps_total_ = 0;
+	int frequency_ = 0;
+
+	// Exact lifecycle metadata for automatic dry-reference -> moist-reference
+	// conversion. This avoids inferring "freshness" from zero wind, which can
+	// also occur in a legitimately evolved atmosphere.
+	bool pristine_isothermal_reference_ = false;
+	double pristine_reference_surface_pressure_pa_ = 0.0;
+	double pristine_reference_temperature_k_ = 0.0;
+
+	struct MoistureRuntimeFlag {
+		std::unique_ptr<asterra::weather::VoronoiDryCore> *dynamics = nullptr;
+		bool value = false;
+
+		explicit MoistureRuntimeFlag(
+				std::unique_ptr<asterra::weather::VoronoiDryCore> *owner)
+			: dynamics(owner) {}
+
+		MoistureRuntimeFlag &operator=(bool enabled) {
+			value = enabled;
+			if (dynamics && dynamics->get()) {
+				(*dynamics)->set_moist_pressure_feedback(enabled);
+			}
+			return *this;
+		}
+
+		operator bool() const { return value; }
+	};
+
+	MoistureRuntimeFlag moisture_enabled_{&dynamics_};
+	bool surface_exchange_enabled_ = false;
+	bool precipitation_enabled_ = false;
+
+	static asterra::weather::Vec3d to_vec3d(const Vector3 &v);
+	int nearest_cell_hill_climb(const asterra::weather::Vec3d &direction, int seed) const;
+	void rebuild_display_lookup();
+	void reset_budget_baseline();
+	void reset_moisture_baseline();
+	void reset_surface_exchange_baseline();
+	double current_total_water_kg() const;
+	double current_surface_system_water_kg() const;
+	double current_surface_system_energy_j() const;
+	void refresh_state_extrema();
+	void on_static_surface_changed();
+	void clear_surface_exchange_state();
+	void ensure_zero_surface_reservoir();
+	void clear_moisture_state();
+	void mark_pristine_reference(double reference_surface_pressure_pa,
+		double temperature_k);
+	void clear_pristine_reference();
+	bool ready() const { return bool(grid_) && bool(dynamics_); }
+
+protected:
+	static void _bind_methods();
+
+public:
+	WeatherDryCoreNative() = default;
+	~WeatherDryCoreNative() override = default;
+
+	void initialize(int p_frequency = 32,
+		double p_surface_pressure_pa = 110000.0,
+		double p_temperature_k = 288.0);
+
+	// Runtime transaction order:
+	//   conservative dynamics/remap with moist pressure feedback
+	//   -> optional prescribed surface exchange using accepted_dt_s
+	//   -> precipitation sedimentation subcycled over the complete accepted_dt_s
+	//   -> reversible saturation adjustment.
+	// Any source failure restores atmosphere, liquid/frozen surface reservoirs and
+	// all source diagnostics to the complete pre-step snapshot.
+	double step(double requested_dt_s, double target_cfl = 0.28);
+	void reset_isothermal(double surface_pressure_pa = 110000.0,
+		double temperature_k = 288.0);
+	void reset_terrain_balanced_isothermal(
+		double reference_surface_pressure_pa = 110000.0,
+		double temperature_k = 288.0);
+	void reset_moist_terrain_balanced_isothermal(
+		double reference_surface_pressure_pa = 110000.0,
+		double temperature_k = 288.0,
+		double relative_humidity = 0.65);
+
+	// Moisture tracer slots 0..4 are vapor/cloud-liquid/cloud-ice/rain/snow.
+	// For RH <= 1, a pristine dry isothermal reference is rebuilt through the
+	// moist terrain-balanced solver so adding vapor cannot inject a startup
+	// pressure imbalance. Arbitrary/evolved states keep their existing dry
+	// mass/theta and receive only tracer initialization. Deliberately
+	// supersaturated RH > 1 also uses that general path before saturation adjust.
+	bool initialize_moisture(double relative_humidity = 0.65,
+		bool perform_saturation_adjustment = true);
+	void disable_moisture(bool clear_water = true);
+	bool saturation_adjust_moisture();
+	bool is_moisture_enabled() const { return moisture_enabled_; }
+
+	// Conservative surface-reservoir bridge. initialize_surface_exchange resets
+	// liquid water/energy and clears surface ice intentionally. Disabling the
+	// prescribed flux operator does not disable precipitation; when clear_reservoir
+	// is true the persistent moisture surface reservoir is reset to zero.
+	bool initialize_surface_exchange(double water_kg_m2 = 20.0,
+		double energy_j_m2 = 0.0);
+	void disable_surface_exchange(bool clear_reservoir = true);
+	bool set_surface_fluxes_cells(const PackedFloat32Array &evaporation_kg_m2_s,
+		const PackedFloat32Array &sensible_heat_w_m2);
+	void clear_surface_fluxes();
+	bool is_surface_exchange_enabled() const { return surface_exchange_enabled_; }
+	PackedFloat32Array get_surface_water_cells() const;
+	PackedFloat32Array get_surface_ice_cells() const;
+	PackedFloat32Array get_surface_energy_cells() const;
+
+	void set_precipitation_enabled(bool enabled);
+	bool is_precipitation_enabled() const { return precipitation_enabled_; }
+	bool set_precipitation_fall_speeds(double rain_mps, double snow_mps);
+
+	// Static atmospheric lower-boundary geometry.
+	bool set_surface_height_cells(const PackedFloat32Array &height_m);
+	bool set_surface_height_map(const PackedFloat32Array &height_m,
+		int width, int height);
+	void clear_surface_height();
+	PackedFloat32Array get_surface_height_cells() const;
+
+	bool add_pressure_perturbation(const Vector3 &center_direction,
+		double fractional_amplitude, double angular_radius_rad);
+
+	// In moist mode temperature/surface pressure come from the canonical full-
+	// pressure thermodynamic diagnosis; in dry mode they use the dry diagnosis.
+	PackedFloat32Array get_global_dry_rgba(int layer = 0) const;
+
+	// R/G/B = vapor/cloud-liquid/cloud-ice mixing ratio; A = RH. RH and T use the
+	// same full mechanical pressure as saturation and moist momentum.
+	PackedFloat32Array get_global_moist_rgba(int layer = 0) const;
+
+	PackedFloat32Array get_runtime_diagnostics() const;
+	// Keeps the legacy 10-value layout; energy and AAM automatically select the
+	// dry or coherent total-moist diagnostic according to the active mode.
+	PackedFloat64Array get_global_budget_diagnostics() const;
+	PackedFloat64Array get_moisture_diagnostics() const;
+	PackedFloat64Array get_surface_exchange_diagnostics() const;
+
+	// [enabled, requested_dt, accepted_dt, max_courant, substeps, rejected,
+	//  water_error, energy_error, rain_before, rain_after, snow_before, snow_after,
+	//  deposited_rain, deposited_snow, max_surface_flux]
+	PackedFloat64Array get_precipitation_diagnostics() const;
+
+	int get_frequency() const { return frequency_; }
+	int get_cell_count() const { return grid_ ? grid_->cell_count() : 0; }
+	int get_edge_count() const { return grid_ ? grid_->edge_count() : 0; }
+	int get_layer_count() const { return asterra::weather::VoronoiDryCore::LEVELS; }
+	int get_display_width() const { return DISPLAY_W; }
+	int get_display_height() const { return DISPLAY_H; }
+	double get_simulation_seconds() const { return simulation_seconds_; }
+	double get_top_pressure_pa() const { return TOP_PRESSURE_PA; }
+	double get_layer_height_m(int layer) const {
+		return layer >= 0 && layer < asterra::weather::VoronoiDryHydrostatic::LEVELS
+			? asterra::weather::VoronoiDryHydrostatic::NOMINAL_HEIGHT_M[static_cast<size_t>(layer)]
+			: 0.0;
+	}
+};
+
+} // namespace godot
