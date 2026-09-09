@@ -152,7 +152,7 @@ func _step(dt: float) -> void:
 			var fe := _iface_x(c, zc, e, ze)
 			var fs := _iface_y(so, zs, c, zc)
 			var fn := _iface_y(c, zc, n, zn)
-			var u := c - (fe[0] - fw[0]) * s - (fn[0] - fs[0]) * s
+			var u: Vector3 = c - (fe[0] - fw[0]) * s - (fn[0] - fs[0]) * s
 
 			# Well-balanced hydrostatic pressure correction.
 			u.y += 0.5 * G * s * (float(fe[1]) * float(fe[1]) - float(fw[2]) * float(fw[2]))
