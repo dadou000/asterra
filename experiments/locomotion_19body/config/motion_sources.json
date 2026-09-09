@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "primary_source": "CMU Graphics Lab Motion Capture Database",
+  "license_summary": "CMU states the motion data may be copied, modified, or redistributed and may be included in commercially sold products, but may not be resold directly as the data itself.",
+  "source_url": "https://mocap.cs.cmu.edu/",
+  "acquisition": "manual_download",
+  "source_fps": 120,
+  "walk_core": [
+    {"subject": 7, "trials": [1,2,3,4,5,6,7,8,9,10,11,12], "role": "normal_slow_brisk_walk"},
+    {"subject": 8, "trials": [1,2,3,4,5,6,7,8,9,10,11], "role": "normal_slow_stride_walk"}
+  ],
+  "walk_style_validation": [
+    {"subject": 17, "trials": [1,2,3,4,5,6,7,8,9], "role": "style_generalization"}
+  ],
+  "future_curriculum": [
+    {"subject": 16, "trials": "select_walk_and_run_only", "role": "walk_run_transition"},
+    {"subject": 69, "trials": [1,2,3,4,5,6,7,8,9,10,11], "role": "forward_walk_and_turns"}
+  ],
+  "excluded_for_first_walk_policy": [
+    "subject_17_trial_10_boxing",
+    "running",
+    "jumping",
+    "stairs",
+    "obstacle locomotion"
+  ]
+}

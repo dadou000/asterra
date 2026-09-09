@@ -1,0 +1,1847 @@
+{
+  "schema_version": 1,
+  "source_manifest": "C:\\Users\\david\\Documents\\GitHub\\asterra\\experiments\\locomotion_19body\\generated\\asterrahuman_skeleton_manifest.json",
+  "canonical_character": "res://assets/character/asterrahuman.glb",
+  "body_count": 19,
+  "complete": true,
+  "explicit_overrides": {
+    "pelvis": "root",
+    "spine": "spine05",
+    "chest": "spine01",
+    "neck": "neck01",
+    "head": "head",
+    "left_clavicle": "clavicle.L",
+    "right_clavicle": "clavicle.R",
+    "left_upper_arm": "upperarm01.L",
+    "right_upper_arm": "upperarm01.R",
+    "left_forearm": "lowerarm01.L",
+    "right_forearm": "lowerarm01.R",
+    "left_hand": "wrist.L",
+    "right_hand": "wrist.R",
+    "left_thigh": "upperleg01.L",
+    "right_thigh": "upperleg01.R",
+    "left_shin": "lowerleg01.L",
+    "right_shin": "lowerleg01.R",
+    "left_foot": "foot.L",
+    "right_foot": "foot.R"
+  },
+  "skin_landmarks": {
+    "pelvis": {
+      "bone_index": 0,
+      "bone_name": "root",
+      "global_rest_origin": [
+        0.0,
+        0.91293865442276,
+        -0.0673980414867401
+      ]
+    },
+    "spine": {
+      "bone_index": 41,
+      "bone_name": "spine05",
+      "global_rest_origin": [
+        0.0,
+        0.923302888870239,
+        0.0032745897769928
+      ]
+    },
+    "chest": {
+      "bone_index": 47,
+      "bone_name": "spine01",
+      "global_rest_origin": [
+        0.0,
+        1.27613687515259,
+        -0.0493022203445435
+      ]
+    },
+    "neck": {
+      "bone_index": 100,
+      "bone_name": "neck01",
+      "global_rest_origin": [
+        0.0,
+        1.48248183727264,
+        0.0114533938467503
+      ]
+    },
+    "head": {
+      "bone_index": 103,
+      "bone_name": "head",
+      "global_rest_origin": [
+        1.62981450557709e-09,
+        1.5793514251709,
+        0.0469954274594784
+      ]
+    },
+    "left_clavicle": {
+      "bone_index": 48,
+      "bone_name": "clavicle.L",
+      "global_rest_origin": [
+        0.0228502973914146,
+        1.40809488296509,
+        0.0232776328921318
+      ]
+    },
+    "right_clavicle": {
+      "bone_index": 74,
+      "bone_name": "clavicle.R",
+      "global_rest_origin": [
+        -0.0228502973914146,
+        1.40809488296509,
+        0.0232776328921318
+      ]
+    },
+    "left_upper_arm": {
+      "bone_index": 50,
+      "bone_name": "upperarm01.L",
+      "global_rest_origin": [
+        0.18612177670002,
+        1.37865376472473,
+        0.0177706647664309
+      ]
+    },
+    "right_upper_arm": {
+      "bone_index": 76,
+      "bone_name": "upperarm01.R",
+      "global_rest_origin": [
+        -0.18612177670002,
+        1.37865376472473,
+        0.0177706647664309
+      ]
+    },
+    "left_forearm": {
+      "bone_index": 52,
+      "bone_name": "lowerarm01.L",
+      "global_rest_origin": [
+        0.351433455944061,
+        1.18909645080566,
+        0.0155907981097698
+      ]
+    },
+    "right_forearm": {
+      "bone_index": 78,
+      "bone_name": "lowerarm01.R",
+      "global_rest_origin": [
+        -0.351433455944061,
+        1.18909645080566,
+        0.0155907981097698
+      ]
+    },
+    "left_hand": {
+      "bone_index": 54,
+      "bone_name": "wrist.L",
+      "global_rest_origin": [
+        0.485750883817673,
+        1.06090080738068,
+        0.206991881132126
+      ]
+    },
+    "right_hand": {
+      "bone_index": 80,
+      "bone_name": "wrist.R",
+      "global_rest_origin": [
+        -0.485750883817673,
+        1.06090080738068,
+        0.206991881132126
+      ]
+    },
+    "left_thigh": {
+      "bone_index": 2,
+      "bone_name": "upperleg01.L",
+      "global_rest_origin": [
+        0.108535148203373,
+        0.917940199375153,
+        -0.00723746325820684
+      ]
+    },
+    "right_thigh": {
+      "bone_index": 22,
+      "bone_name": "upperleg01.R",
+      "global_rest_origin": [
+        -0.108535148203373,
+        0.917940199375153,
+        -0.00723746325820684
+      ]
+    },
+    "left_shin": {
+      "bone_index": 4,
+      "bone_name": "lowerleg01.L",
+      "global_rest_origin": [
+        0.151444897055626,
+        0.503914773464203,
+        0.026984516531229
+      ]
+    },
+    "right_shin": {
+      "bone_index": 24,
+      "bone_name": "lowerleg01.R",
+      "global_rest_origin": [
+        -0.151444897055626,
+        0.503914773464203,
+        0.026984516531229
+      ]
+    },
+    "left_foot": {
+      "bone_index": 6,
+      "bone_name": "foot.L",
+      "global_rest_origin": [
+        0.198192313313484,
+        0.0714974999427795,
+        0.0148930083960295
+      ]
+    },
+    "right_foot": {
+      "bone_index": 26,
+      "bone_name": "foot.R",
+      "global_rest_origin": [
+        -0.198192313313484,
+        0.0714974999427795,
+        0.0148930083960295
+      ]
+    }
+  },
+  "candidates": {
+    "pelvis": [
+      {
+        "index": 0,
+        "name": "root",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.91293865442276,
+          -0.0673980414867401
+        ]
+      },
+      {
+        "index": 1,
+        "name": "pelvis.L",
+        "score": 112.0,
+        "reasons": [
+          "semantic:pelvis"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.923302888870239,
+          0.0032745897769928
+        ]
+      },
+      {
+        "index": 21,
+        "name": "pelvis.R",
+        "score": 112.0,
+        "reasons": [
+          "semantic:pelvis"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.923302888870239,
+          0.0032745897769928
+        ]
+      },
+      {
+        "index": 0,
+        "name": "root",
+        "score": 108.0,
+        "reasons": [
+          "semantic:root"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.91293865442276,
+          -0.0673980414867401
+        ]
+      },
+      {
+        "index": 2,
+        "name": "upperleg01.L",
+        "score": -120.0,
+        "reasons": [],
+        "global_rest_origin": [
+          0.108535148203373,
+          0.917940199375153,
+          -0.00723746325820684
+        ]
+      },
+      {
+        "index": 3,
+        "name": "upperleg02.L",
+        "score": -120.0,
+        "reasons": [],
+        "global_rest_origin": [
+          0.120823413133621,
+          0.836313486099243,
+          0.0179762430489063
+        ]
+      }
+    ],
+    "spine": [
+      {
+        "index": 41,
+        "name": "spine05",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.923302888870239,
+          0.0032745897769928
+        ]
+      },
+      {
+        "index": 41,
+        "name": "spine05",
+        "score": 165.0,
+        "reasons": [
+          "semantic:spine",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.923302888870239,
+          0.0032745897769928
+        ]
+      },
+      {
+        "index": 42,
+        "name": "spine04",
+        "score": 165.0,
+        "reasons": [
+          "semantic:spine",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.00990355014801,
+          -0.0284630358219147
+        ]
+      },
+      {
+        "index": 43,
+        "name": "spine03",
+        "score": 165.0,
+        "reasons": [
+          "semantic:spine",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.079705119133,
+          -0.0191939696669579
+        ]
+      },
+      {
+        "index": 44,
+        "name": "spine02",
+        "score": 165.0,
+        "reasons": [
+          "semantic:spine",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.14025723934174,
+          -0.0274730026721954
+        ]
+      },
+      {
+        "index": 47,
+        "name": "spine01",
+        "score": 165.0,
+        "reasons": [
+          "semantic:spine",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.27613687515259,
+          -0.0493022203445435
+        ]
+      }
+    ],
+    "chest": [
+      {
+        "index": 47,
+        "name": "spine01",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.27613687515259,
+          -0.0493022203445435
+        ]
+      },
+      {
+        "index": 42,
+        "name": "spine04",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.00990355014801,
+          -0.0284630358219147
+        ]
+      },
+      {
+        "index": 43,
+        "name": "spine03",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.079705119133,
+          -0.0191939696669579
+        ]
+      },
+      {
+        "index": 44,
+        "name": "spine02",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.14025723934174,
+          -0.0274730026721954
+        ]
+      },
+      {
+        "index": 45,
+        "name": "breast.L",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.27613687515259,
+          -0.0493022203445435
+        ]
+      },
+      {
+        "index": 46,
+        "name": "breast.R",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.27613687515259,
+          -0.0493022203445435
+        ]
+      }
+    ],
+    "neck": [
+      {
+        "index": 100,
+        "name": "neck01",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.48248183727264,
+          0.0114533938467503
+        ]
+      },
+      {
+        "index": 100,
+        "name": "neck01",
+        "score": 163.0,
+        "reasons": [
+          "semantic:neck",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.48248183727264,
+          0.0114533938467503
+        ]
+      },
+      {
+        "index": 101,
+        "name": "neck02",
+        "score": 163.0,
+        "reasons": [
+          "semantic:neck",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.000189997808774933,
+          1.50437068939209,
+          0.0158951375633478
+        ]
+      },
+      {
+        "index": 102,
+        "name": "neck03",
+        "score": 163.0,
+        "reasons": [
+          "semantic:neck",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.00224629160948098,
+          1.54386210441589,
+          0.030720517039299
+        ]
+      },
+      {
+        "index": 48,
+        "name": "clavicle.L",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0228502973914146,
+          1.40809488296509,
+          0.0232776328921318
+        ]
+      },
+      {
+        "index": 49,
+        "name": "shoulder01.L",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.108981378376484,
+          1.42219114303589,
+          0.0227453839033842
+        ]
+      }
+    ],
+    "head": [
+      {
+        "index": 103,
+        "name": "head",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          1.62981450557709e-09,
+          1.5793514251709,
+          0.0469954274594784
+        ]
+      },
+      {
+        "index": 103,
+        "name": "head",
+        "score": 163.0,
+        "reasons": [
+          "semantic:head",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          1.62981450557709e-09,
+          1.5793514251709,
+          0.0469954274594784
+        ]
+      },
+      {
+        "index": 101,
+        "name": "neck02",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.000189997808774933,
+          1.50437068939209,
+          0.0158951375633478
+        ]
+      },
+      {
+        "index": 102,
+        "name": "neck03",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.00224629160948098,
+          1.54386210441589,
+          0.030720517039299
+        ]
+      },
+      {
+        "index": 104,
+        "name": "jaw",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          1.13129594581096e-09,
+          1.58714354038239,
+          0.0588515885174274
+        ]
+      },
+      {
+        "index": 105,
+        "name": "special04",
+        "score": -65.0,
+        "reasons": [
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          1.17566412161096e-09,
+          1.50101721286774,
+          0.11632876843214
+        ]
+      }
+    ],
+    "left_clavicle": [
+      {
+        "index": 48,
+        "name": "clavicle.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.0228502973914146,
+          1.40809488296509,
+          0.0232776328921318
+        ]
+      },
+      {
+        "index": 48,
+        "name": "clavicle.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:clavicle",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0228502973914146,
+          1.40809488296509,
+          0.0232776328921318
+        ]
+      },
+      {
+        "index": 49,
+        "name": "shoulder01.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:shoulder",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.108981378376484,
+          1.42219114303589,
+          0.0227453839033842
+        ]
+      },
+      {
+        "index": 50,
+        "name": "upperarm01.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.18612177670002,
+          1.37865376472473,
+          0.0177706647664309
+        ]
+      },
+      {
+        "index": 51,
+        "name": "upperarm02.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.227910757064819,
+          1.32278537750244,
+          0.0186424795538187
+        ]
+      },
+      {
+        "index": 52,
+        "name": "lowerarm01.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      }
+    ],
+    "right_clavicle": [
+      {
+        "index": 74,
+        "name": "clavicle.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.0228502973914146,
+          1.40809488296509,
+          0.0232776328921318
+        ]
+      },
+      {
+        "index": 74,
+        "name": "clavicle.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:clavicle",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.0228502973914146,
+          1.40809488296509,
+          0.0232776328921318
+        ]
+      },
+      {
+        "index": 75,
+        "name": "shoulder01.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:shoulder",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.108981378376484,
+          1.42219114303589,
+          0.0227453839033842
+        ]
+      },
+      {
+        "index": 76,
+        "name": "upperarm01.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.18612177670002,
+          1.37865376472473,
+          0.0177706647664309
+        ]
+      },
+      {
+        "index": 77,
+        "name": "upperarm02.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.227910757064819,
+          1.32278537750244,
+          0.0186424795538187
+        ]
+      },
+      {
+        "index": 78,
+        "name": "lowerarm01.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      }
+    ],
+    "left_upper_arm": [
+      {
+        "index": 50,
+        "name": "upperarm01.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.18612177670002,
+          1.37865376472473,
+          0.0177706647664309
+        ]
+      },
+      {
+        "index": 50,
+        "name": "upperarm01.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperarm,arm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.18612177670002,
+          1.37865376472473,
+          0.0177706647664309
+        ]
+      },
+      {
+        "index": 51,
+        "name": "upperarm02.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperarm,arm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.227910757064819,
+          1.32278537750244,
+          0.0186424795538187
+        ]
+      },
+      {
+        "index": 52,
+        "name": "lowerarm01.L",
+        "score": 121.0,
+        "reasons": [
+          "semantic:arm",
+          "excluded:lower",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      },
+      {
+        "index": 53,
+        "name": "lowerarm02.L",
+        "score": 121.0,
+        "reasons": [
+          "semantic:arm",
+          "excluded:lower",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.41959023475647,
+          1.12604010105133,
+          0.112392485141754
+        ]
+      },
+      {
+        "index": 55,
+        "name": "finger1-1.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.48664578795433,
+          1.0540896654129,
+          0.255489468574524
+        ]
+      }
+    ],
+    "right_upper_arm": [
+      {
+        "index": 76,
+        "name": "upperarm01.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.18612177670002,
+          1.37865376472473,
+          0.0177706647664309
+        ]
+      },
+      {
+        "index": 76,
+        "name": "upperarm01.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperarm,arm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.18612177670002,
+          1.37865376472473,
+          0.0177706647664309
+        ]
+      },
+      {
+        "index": 77,
+        "name": "upperarm02.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperarm,arm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.227910757064819,
+          1.32278537750244,
+          0.0186424795538187
+        ]
+      },
+      {
+        "index": 78,
+        "name": "lowerarm01.R",
+        "score": 121.0,
+        "reasons": [
+          "semantic:arm",
+          "excluded:lower",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      },
+      {
+        "index": 79,
+        "name": "lowerarm02.R",
+        "score": 121.0,
+        "reasons": [
+          "semantic:arm",
+          "excluded:lower",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.41959023475647,
+          1.12604010105133,
+          0.112392485141754
+        ]
+      },
+      {
+        "index": 81,
+        "name": "finger1-1.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.48664578795433,
+          1.0540896654129,
+          0.255489468574524
+        ]
+      }
+    ],
+    "left_forearm": [
+      {
+        "index": 52,
+        "name": "lowerarm01.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      },
+      {
+        "index": 52,
+        "name": "lowerarm01.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerarm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      },
+      {
+        "index": 53,
+        "name": "lowerarm02.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerarm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.41959023475647,
+          1.12604010105133,
+          0.112392485141754
+        ]
+      },
+      {
+        "index": 55,
+        "name": "finger1-1.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.48664578795433,
+          1.0540896654129,
+          0.255489468574524
+        ]
+      },
+      {
+        "index": 56,
+        "name": "finger1-2.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.464105695486069,
+          1.04560983181,
+          0.278819501399994
+        ]
+      },
+      {
+        "index": 57,
+        "name": "finger1-3.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.450523465871811,
+          1.03164720535278,
+          0.313576251268387
+        ]
+      }
+    ],
+    "right_forearm": [
+      {
+        "index": 78,
+        "name": "lowerarm01.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      },
+      {
+        "index": 78,
+        "name": "lowerarm01.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerarm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.351433455944061,
+          1.18909645080566,
+          0.0155907981097698
+        ]
+      },
+      {
+        "index": 79,
+        "name": "lowerarm02.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerarm",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.41959023475647,
+          1.12604010105133,
+          0.112392485141754
+        ]
+      },
+      {
+        "index": 81,
+        "name": "finger1-1.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.48664578795433,
+          1.0540896654129,
+          0.255489468574524
+        ]
+      },
+      {
+        "index": 82,
+        "name": "finger1-2.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.464105695486069,
+          1.04560983181,
+          0.278819501399994
+        ]
+      },
+      {
+        "index": 83,
+        "name": "finger1-3.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.450523465871811,
+          1.03164720535278,
+          0.313576251268387
+        ]
+      }
+    ],
+    "left_hand": [
+      {
+        "index": 54,
+        "name": "wrist.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.485750883817673,
+          1.06090080738068,
+          0.206991881132126
+        ]
+      },
+      {
+        "index": 54,
+        "name": "wrist.L",
+        "score": 225.0,
+        "reasons": [
+          "semantic:wrist",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.485750883817673,
+          1.06090080738068,
+          0.206991881132126
+        ]
+      },
+      {
+        "index": 53,
+        "name": "lowerarm02.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.41959023475647,
+          1.12604010105133,
+          0.112392485141754
+        ]
+      },
+      {
+        "index": 55,
+        "name": "finger1-1.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.48664578795433,
+          1.0540896654129,
+          0.255489468574524
+        ]
+      },
+      {
+        "index": 56,
+        "name": "finger1-2.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.464105695486069,
+          1.04560983181,
+          0.278819501399994
+        ]
+      },
+      {
+        "index": 57,
+        "name": "finger1-3.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.450523465871811,
+          1.03164720535278,
+          0.313576251268387
+        ]
+      }
+    ],
+    "right_hand": [
+      {
+        "index": 80,
+        "name": "wrist.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.485750883817673,
+          1.06090080738068,
+          0.206991881132126
+        ]
+      },
+      {
+        "index": 80,
+        "name": "wrist.R",
+        "score": 225.0,
+        "reasons": [
+          "semantic:wrist",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.485750883817673,
+          1.06090080738068,
+          0.206991881132126
+        ]
+      },
+      {
+        "index": 79,
+        "name": "lowerarm02.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.41959023475647,
+          1.12604010105133,
+          0.112392485141754
+        ]
+      },
+      {
+        "index": 81,
+        "name": "finger1-1.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.48664578795433,
+          1.0540896654129,
+          0.255489468574524
+        ]
+      },
+      {
+        "index": 82,
+        "name": "finger1-2.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.464105695486069,
+          1.04560983181,
+          0.278819501399994
+        ]
+      },
+      {
+        "index": 83,
+        "name": "finger1-3.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.450523465871811,
+          1.03164720535278,
+          0.313576251268387
+        ]
+      }
+    ],
+    "left_thigh": [
+      {
+        "index": 2,
+        "name": "upperleg01.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.108535148203373,
+          0.917940199375153,
+          -0.00723746325820684
+        ]
+      },
+      {
+        "index": 2,
+        "name": "upperleg01.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.108535148203373,
+          0.917940199375153,
+          -0.00723746325820684
+        ]
+      },
+      {
+        "index": 3,
+        "name": "upperleg02.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.120823413133621,
+          0.836313486099243,
+          0.0179762430489063
+        ]
+      },
+      {
+        "index": 1,
+        "name": "pelvis.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.923302888870239,
+          0.0032745897769928
+        ]
+      },
+      {
+        "index": 45,
+        "name": "breast.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.27613687515259,
+          -0.0493022203445435
+        ]
+      },
+      {
+        "index": 49,
+        "name": "shoulder01.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.108981378376484,
+          1.42219114303589,
+          0.0227453839033842
+        ]
+      }
+    ],
+    "right_thigh": [
+      {
+        "index": 22,
+        "name": "upperleg01.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.108535148203373,
+          0.917940199375153,
+          -0.00723746325820684
+        ]
+      },
+      {
+        "index": 22,
+        "name": "upperleg01.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.108535148203373,
+          0.917940199375153,
+          -0.00723746325820684
+        ]
+      },
+      {
+        "index": 23,
+        "name": "upperleg02.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:upperleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.120823413133621,
+          0.836313486099243,
+          0.0179762430489063
+        ]
+      },
+      {
+        "index": 21,
+        "name": "pelvis.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          0.923302888870239,
+          0.0032745897769928
+        ]
+      },
+      {
+        "index": 46,
+        "name": "breast.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.0,
+          1.27613687515259,
+          -0.0493022203445435
+        ]
+      },
+      {
+        "index": 75,
+        "name": "shoulder01.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.108981378376484,
+          1.42219114303589,
+          0.0227453839033842
+        ]
+      }
+    ],
+    "left_shin": [
+      {
+        "index": 4,
+        "name": "lowerleg01.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.151444897055626,
+          0.503914773464203,
+          0.026984516531229
+        ]
+      },
+      {
+        "index": 4,
+        "name": "lowerleg01.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.151444897055626,
+          0.503914773464203,
+          0.026984516531229
+        ]
+      },
+      {
+        "index": 5,
+        "name": "lowerleg02.L",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.176324620842934,
+          0.293424367904663,
+          0.020765233784914
+        ]
+      },
+      {
+        "index": 3,
+        "name": "upperleg02.L",
+        "score": -105.0,
+        "reasons": [
+          "excluded:upper",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.120823413133621,
+          0.836313486099243,
+          0.0179762430489063
+        ]
+      },
+      {
+        "index": 6,
+        "name": "foot.L",
+        "score": -105.0,
+        "reasons": [
+          "excluded:foot",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.198192313313484,
+          0.0714974999427795,
+          0.0148930083960295
+        ]
+      },
+      {
+        "index": 7,
+        "name": "toe1-1.L",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.171139225363731,
+          0.0325752720236778,
+          0.15498061478138
+        ]
+      }
+    ],
+    "right_shin": [
+      {
+        "index": 24,
+        "name": "lowerleg01.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.151444897055626,
+          0.503914773464203,
+          0.026984516531229
+        ]
+      },
+      {
+        "index": 24,
+        "name": "lowerleg01.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.151444897055626,
+          0.503914773464203,
+          0.026984516531229
+        ]
+      },
+      {
+        "index": 25,
+        "name": "lowerleg02.R",
+        "score": 231.0,
+        "reasons": [
+          "semantic:lowerleg",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.176324620842934,
+          0.293424367904663,
+          0.020765233784914
+        ]
+      },
+      {
+        "index": 23,
+        "name": "upperleg02.R",
+        "score": -105.0,
+        "reasons": [
+          "excluded:upper",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.120823413133621,
+          0.836313486099243,
+          0.0179762430489063
+        ]
+      },
+      {
+        "index": 26,
+        "name": "foot.R",
+        "score": -105.0,
+        "reasons": [
+          "excluded:foot",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.198192313313484,
+          0.0714974999427795,
+          0.0148930083960295
+        ]
+      },
+      {
+        "index": 27,
+        "name": "toe1-1.R",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.171139225363731,
+          0.0325752720236778,
+          0.15498061478138
+        ]
+      }
+    ],
+    "left_foot": [
+      {
+        "index": 6,
+        "name": "foot.L",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          0.198192313313484,
+          0.0714974999427795,
+          0.0148930083960295
+        ]
+      },
+      {
+        "index": 6,
+        "name": "foot.L",
+        "score": 223.0,
+        "reasons": [
+          "semantic:foot",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.198192313313484,
+          0.0714974999427795,
+          0.0148930083960295
+        ]
+      },
+      {
+        "index": 5,
+        "name": "lowerleg02.L",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.176324620842934,
+          0.293424367904663,
+          0.020765233784914
+        ]
+      },
+      {
+        "index": 7,
+        "name": "toe1-1.L",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.171139225363731,
+          0.0325752720236778,
+          0.15498061478138
+        ]
+      },
+      {
+        "index": 8,
+        "name": "toe1-2.L",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.173409625887871,
+          0.0251309294253588,
+          0.181657940149307
+        ]
+      },
+      {
+        "index": 9,
+        "name": "toe2-1.L",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          0.195400819182396,
+          0.0292587280273438,
+          0.158050790429115
+        ]
+      }
+    ],
+    "right_foot": [
+      {
+        "index": 26,
+        "name": "foot.R",
+        "score": null,
+        "reasons": [
+          "explicit-override"
+        ],
+        "global_rest_origin": [
+          -0.198192313313484,
+          0.0714974999427795,
+          0.0148930083960295
+        ]
+      },
+      {
+        "index": 26,
+        "name": "foot.R",
+        "score": 223.0,
+        "reasons": [
+          "semantic:foot",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.198192313313484,
+          0.0714974999427795,
+          0.0148930083960295
+        ]
+      },
+      {
+        "index": 25,
+        "name": "lowerleg02.R",
+        "score": -5.0,
+        "reasons": [
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.176324620842934,
+          0.293424367904663,
+          0.020765233784914
+        ]
+      },
+      {
+        "index": 27,
+        "name": "toe1-1.R",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.171139225363731,
+          0.0325752720236778,
+          0.15498061478138
+        ]
+      },
+      {
+        "index": 28,
+        "name": "toe1-2.R",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.173409625887871,
+          0.0251309294253588,
+          0.181657940149307
+        ]
+      },
+      {
+        "index": 29,
+        "name": "toe2-1.R",
+        "score": -105.0,
+        "reasons": [
+          "excluded:toe",
+          "explicit-side",
+          "hierarchy"
+        ],
+        "global_rest_origin": [
+          -0.195400819182396,
+          0.0292587280273438,
+          0.158050790429115
+        ]
+      }
+    ]
+  },
+  "errors": [],
+  "notes": [
+    "This maps the full skin skeleton to 19 physics landmarks; it does not remove skin bones.",
+    "If complete is false, inspect candidates and add an explicit override instead of lowering confidence thresholds blindly."
+  ]
+}
