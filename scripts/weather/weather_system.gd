@@ -70,6 +70,11 @@ signal layer_weight_changed(layer: int, weight: float)
 signal physics_tuning_reset
 signal global_state_advanced(revision: int)
 signal local_state_advanced(revision: int)
+## Emitted once the native AVX2 weather backend has been created and initialized.
+signal native_ready
+## Emitted when the native backend is unavailable or rejected; `reason` mirrors
+## `backend_error`. Consumers fall back to the published climatology field.
+signal native_failed(reason: String)
 
 var global_weather_texture: ImageTexture
 var local_weather_texture: ImageTexture
@@ -138,6 +143,17 @@ func _ready() -> void:
 	_publish_fallback_weather()
 	if native_available:
 		_mark_all_outputs_dirty()
+	# Autoloads that consume weather (PersistentHydrologySystem, HydroWeatherCoupling)
+	# are initialized after this one and connect in their own _ready(). Defer the
+	# announcement so it lands after they have subscribed.
+	call_deferred("_announce_native_state")
+
+
+func _announce_native_state() -> void:
+	if native_available:
+		native_ready.emit()
+	else:
+		native_failed.emit(backend_error)
 
 
 func _try_create_native_backend() -> void:

@@ -460,8 +460,8 @@ func _sample_weather_channel_bilinear(values: PackedFloat32Array,
 	var fy := (PI * 0.5 - lat) / PI * float(height) - 0.5
 	var x0 := int(floor(fx))
 	var y0 := int(floor(fy))
-	var tx := fx - floor(fx)
-	var ty := fy - floor(fy)
+	var tx: float = fx - floor(fx)
+	var ty: float = fy - floor(fy)
 	var x1 := x0 + 1
 	var y1 := y0 + 1
 	x0 = posmod(x0, width)
