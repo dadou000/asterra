@@ -23,6 +23,14 @@ uniform float u_asset_scale_max = 1.18;
 uniform float u_asset_height_m = 1.0;
 uniform float u_wind_strength = 0.0;
 uniform float u_wind_speed = 1.25;
+uniform int u_asset_biome_count = 0;
+uniform int u_asset_biome_ids[18];
+uniform float u_asset_slope_min_deg = 0.0;
+uniform float u_asset_slope_max_deg = 90.0;
+// Authoring override for deliberate biome composition. Zero keeps the fully
+// procedural ecological classifier; a small floor prevents one locally dry or
+// low-biomass context texel from erasing a curated biome's entire asset layer.
+uniform float u_asset_environment_floor = 0.0;
 
 // Transform from the imported mesh node into the normalized asset root. Keeping
 // it explicit avoids a CPU mesh rebake and preserves Blender/glTF child layouts.
@@ -135,6 +143,20 @@ float ecology_suitability(float terrain_h, vec4 soil, vec4 surface,
 		* (1.0 - smoothstep(18.0, 31.0, slope)) * above_water, 0.0, 1.0);
 }
 
+float ecology_asset_gate(float biome, float slope) {
+	float biome_gate = u_asset_biome_count == 0 ? 1.0 : 0.0;
+	for (int index = 0; index < 18; index++) {
+		if (index < u_asset_biome_count && abs(biome - float(u_asset_biome_ids[index])) < 0.55) {
+			biome_gate = 1.0;
+		}
+	}
+	float slope_gate = smoothstep(u_asset_slope_min_deg - 2.0,
+		u_asset_slope_min_deg + 1.0, slope);
+	slope_gate *= 1.0 - smoothstep(u_asset_slope_max_deg - 2.0,
+		u_asset_slope_max_deg + 1.0, slope);
+	return biome_gate * slope_gate;
+}
+
 void vertex() {
 	vec3 source_vertex = ecology_asset_point(VERTEX);
 	vec3 source_normal = ecology_asset_direction(NORMAL);
@@ -159,6 +181,11 @@ void vertex() {
 		macro_h, soil, surface, geology, structure, climate, hydro);
 	float suitability = ecology_suitability(
 		terrain_h, soil, surface, geology, structure, climate, hydro, landform, biome);
+	suitability = max(suitability, u_asset_environment_floor);
+	float asset_slope = sg_slope_proxy_deg(surface, structure, landform);
+	suitability *= ecology_asset_gate(biome, asset_slope);
+	suitability *= sg_gate_weight(biome, d, terrain_h, macro_h,
+		asset_slope);
 	v_alive = sg_acceptance(suitability, h, INSTANCE_ID);
 
 	vec3 right;

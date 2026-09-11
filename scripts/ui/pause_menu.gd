@@ -377,11 +377,6 @@ func _build_settings_menu() -> void:
 	advanced_controls.add_theme_constant_override("separation", 10)
 	column.add_child(advanced_controls)
 
-	_add_advanced_slider(
-		advanced_controls, "3D render scale",
-		"Internal 3D resolution. UI remains full resolution.",
-		0.50, 1.00, 0.05, AppSettings.advanced_render_scale,
-		AppSettings.KEY_RENDER_SCALE, 100.0, 0, "%")
 	_add_advanced_toggle(
 		advanced_controls, "SDFGI",
 		"Dynamic global illumination. The largest cost while moving over terrain.",
@@ -453,6 +448,9 @@ func _build_settings_menu() -> void:
 	)
 	if AppSettings.graphics_advanced_enabled:
 		graphics_hint.text = "Custom per-feature overrides are active."
+
+	_build_upscaler_section(column)
+	_build_motion_blur_section(column)
 
 	column.add_child(HSeparator.new())
 	column.add_child(_section_title("RENDER DIAGNOSTICS"))
@@ -612,6 +610,153 @@ func _build_settings_menu() -> void:
 	back.custom_minimum_size.y = 44.0
 	back.pressed.connect(_show_pause_menu)
 	column.add_child(back)
+
+
+func _build_upscaler_section(column: VBoxContainer) -> void:
+	column.add_child(HSeparator.new())
+	column.add_child(_section_title("UPSCALING & ANTI-ALIASING"))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	column.add_child(row)
+	var text_column := VBoxContainer.new()
+	text_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_column.add_theme_constant_override("separation", 3)
+	row.add_child(text_column)
+	var label := Label.new()
+	label.text = "Upscaler"
+	label.add_theme_font_size_override("font_size", 17)
+	text_column.add_child(label)
+	var hint := Label.new()
+	hint.text = GraphicsQuality.upscale_mode_description(AppSettings.upscale_mode)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.modulate = Color(0.62, 0.69, 0.75)
+	hint.add_theme_font_size_override("font_size", 13)
+	text_column.add_child(hint)
+	var option := OptionButton.new()
+	option.custom_minimum_size = Vector2(150.0, 42.0)
+	for mode: int in range(GraphicsQuality.UpscaleMode.BILINEAR, GraphicsQuality.UpscaleMode.TAA + 1):
+		option.add_item(GraphicsQuality.upscale_mode_name(mode), mode)
+	_select_option_id(option, AppSettings.upscale_mode)
+	row.add_child(option)
+
+	var controls := VBoxContainer.new()
+	controls.add_theme_constant_override("separation", 10)
+	column.add_child(controls)
+
+	var scale_slider := _add_advanced_slider(
+		controls, "3D render scale",
+		"Internal 3D resolution before the upscaler. UI stays full resolution.",
+		0.50, 1.00, 0.05, AppSettings.advanced_render_scale,
+		AppSettings.KEY_RENDER_SCALE, 100.0, 0, "%")
+
+	var sharp_block := VBoxContainer.new()
+	sharp_block.add_theme_constant_override("separation", 3)
+	controls.add_child(sharp_block)
+	var sharp_header := HBoxContainer.new()
+	sharp_block.add_child(sharp_header)
+	var sharp_title := Label.new()
+	sharp_title.text = "Sharpness"
+	sharp_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sharp_title.add_theme_font_size_override("font_size", 15)
+	sharp_header.add_child(sharp_title)
+	var sharp_value := Label.new()
+	sharp_value.custom_minimum_size.x = 80.0
+	sharp_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	sharp_value.text = "%.2f" % AppSettings.upscale_sharpness
+	sharp_header.add_child(sharp_value)
+	var sharp_desc := Label.new()
+	sharp_desc.text = "FSR edge sharpening. Only affects FSR 1.0 / FSR 2.0."
+	sharp_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sharp_desc.modulate = Color(0.55, 0.63, 0.70)
+	sharp_desc.add_theme_font_size_override("font_size", 12)
+	sharp_block.add_child(sharp_desc)
+	var sharp_slider := HSlider.new()
+	sharp_slider.min_value = 0.0
+	sharp_slider.max_value = 2.0
+	sharp_slider.step = 0.05
+	sharp_slider.value = AppSettings.upscale_sharpness
+	sharp_slider.value_changed.connect(func(value: float) -> void:
+		sharp_value.text = "%.2f" % value
+		AppSettings.set_upscale_sharpness(value)
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+	sharp_block.add_child(sharp_slider)
+
+	var sync_availability := func(mode: int) -> void:
+		var scale_ok := GraphicsQuality.supports_render_scale(mode)
+		var sharp_ok := GraphicsQuality.supports_sharpness(mode)
+		scale_slider.editable = scale_ok
+		scale_slider.modulate = Color(1, 1, 1, 1) if scale_ok else Color(1, 1, 1, 0.4)
+		sharp_slider.editable = sharp_ok
+		sharp_slider.modulate = Color(1, 1, 1, 1) if sharp_ok else Color(1, 1, 1, 0.4)
+	sync_availability.call(AppSettings.upscale_mode)
+
+	option.item_selected.connect(func(index: int) -> void:
+		var mode: int = option.get_item_id(index)
+		AppSettings.set_upscale_mode(mode)
+		hint.text = GraphicsQuality.upscale_mode_description(mode)
+		sync_availability.call(mode)
+		_apply_graphics_quality(AppSettings.graphics_quality)
+	)
+
+
+func _build_motion_blur_section(column: VBoxContainer) -> void:
+	column.add_child(HSeparator.new())
+	column.add_child(_section_title("MOTION BLUR"))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	column.add_child(row)
+	var text_column := VBoxContainer.new()
+	text_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(text_column)
+	var label := Label.new()
+	label.text = "Camera motion blur"
+	label.add_theme_font_size_override("font_size", 17)
+	text_column.add_child(label)
+	var hint := Label.new()
+	hint.text = "Blurs fast camera movement and rotation using the resolved depth buffer."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.modulate = Color(0.62, 0.69, 0.75)
+	hint.add_theme_font_size_override("font_size", 13)
+	text_column.add_child(hint)
+	var toggle := CheckButton.new()
+	toggle.button_pressed = AppSettings.motion_blur_enabled
+	row.add_child(toggle)
+
+	var controls := VBoxContainer.new()
+	controls.visible = AppSettings.motion_blur_enabled
+	controls.add_theme_constant_override("separation", 3)
+	column.add_child(controls)
+
+	var strength_header := HBoxContainer.new()
+	controls.add_child(strength_header)
+	var strength_title := Label.new()
+	strength_title.text = "Strength"
+	strength_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	strength_title.add_theme_font_size_override("font_size", 15)
+	strength_header.add_child(strength_title)
+	var strength_value := Label.new()
+	strength_value.custom_minimum_size.x = 80.0
+	strength_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	strength_value.text = "%.2f" % AppSettings.motion_blur_strength
+	strength_header.add_child(strength_value)
+	var strength_slider := HSlider.new()
+	strength_slider.min_value = 0.0
+	strength_slider.max_value = 2.0
+	strength_slider.step = 0.05
+	strength_slider.value = AppSettings.motion_blur_strength
+	strength_slider.value_changed.connect(func(value: float) -> void:
+		strength_value.text = "%.2f" % value
+		AppSettings.set_motion_blur_strength(value)
+	)
+	controls.add_child(strength_slider)
+
+	toggle.toggled.connect(func(value: bool) -> void:
+		AppSettings.set_motion_blur_enabled(value)
+		controls.visible = value
+	)
 
 
 func _apply_graphics_quality(_preset: int) -> void:

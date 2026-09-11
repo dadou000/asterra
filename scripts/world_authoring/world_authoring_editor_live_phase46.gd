@@ -27,8 +27,12 @@ const PHASE47_CATALOG := preload(
 # is pure UI: no new data model, no new shader work.
 const PHASE47_SURFACE_CATALOG := preload(
 	"res://scripts/world_authoring/model/terrain_beginner_surface_catalog.gd")
+const PHASE47_GRAPH_SCRIPT := preload(
+	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
+const PHASE47_SCATTER_CATALOG := preload(
+	"res://scripts/terrain/scatter_ecology_catalog.gd")
 const PHASE47_SURFACE_CATEGORY_ORDER: PackedStringArray = [
-	"Surface Detail", "Material Balance", "Visual Character", "Key Colors", "Classification Rules",
+	"Surface Detail", "Scatter", "Material Balance", "Visual Character", "Key Colors", "Classification Rules",
 ]
 
 const PHASE47_BIOME_PROFILE_PREFIX := "simple-biome-terrain-"
@@ -36,6 +40,8 @@ const PHASE47_ALL_RINGS_MASK: int = (1 << 15) - 1
 const PHASE47_GLOBAL_TAB: int = 0
 const PHASE47_BIOME_TAB: int = 1
 const PHASE47_TEXTURE_TAB: int = 2
+const PHASE47_SCATTER_TAB: int = 3
+var _phase47_scatter_message: String = ""
 
 # Base-shape layer types a provisioned profile may start from (index-aligned so a
 # ported default's "base_type" string resolves to a valid stack layer).
@@ -221,6 +227,8 @@ func _build_terrain_page() -> void:
 		_phase47_build_biome_editor(terrain)
 	elif _phase47_editor_tab == PHASE47_TEXTURE_TAB:
 		_phase47_build_texture_editor(terrain)
+	elif _phase47_editor_tab == PHASE47_SCATTER_TAB:
+		_phase47_build_scatter_library()
 	else:
 		_phase47_build_controls(graph)
 		_phase47_build_surface_detail_controls(terrain)
@@ -236,19 +244,214 @@ func _phase47_build_editor_tabs() -> void:
 		{"tab":PHASE47_GLOBAL_TAB, "label":"GLOBAL TERRAIN", "tip":"The shared terrain character for the whole planet."},
 		{"tab":PHASE47_BIOME_TAB, "label":"BIOME TERRAIN", "tip":"Add a terrain profile that only applies inside one biome."},
 		{"tab":PHASE47_TEXTURE_TAB, "label":"BIOME TEXTURE", "tip":"Compose the surface look for one biome: height/slope colour bands, textures, and random variation."},
+		{"tab":PHASE47_SCATTER_TAB, "label":"SCATTER LIBRARY", "tip":"Curate, fetch, optimize and hot-reload real CC0 vegetation and geology assets."},
 	]:
 		var button := Button.new()
 		button.text = String(item["label"])
 		button.toggle_mode = true
 		button.button_pressed = _phase47_editor_tab == int(item["tab"])
 		button.tooltip_text = String(item["tip"])
-		button.custom_minimum_size = Vector2(210.0, 40.0)
+		button.custom_minimum_size = Vector2(150.0, 40.0)
 		var tab_value: int = int(item["tab"])
 		button.pressed.connect(func() -> void:
 			_phase47_editor_tab = tab_value
 			_refresh_current_category()
 		)
 		tabs.add_child(button)
+
+
+func _phase47_build_scatter_library() -> void:
+	_section("Scatter asset library")
+	_add_note("Project-level CC0 ecology library. Add a Poly Haven model slug, assign its ecological role and biome, fetch the source, build budgeted LODs, then hot-reload the live scatter renderer. Every field is exposed through studio_ui/studio_control for MCP automation.")
+	var assets: Array[Dictionary] = PHASE47_SCATTER_CATALOG.all_assets()
+	var summary := Label.new()
+	summary.name = "ScatterLibraryStatus"
+	summary.text = "%d catalog assets • %s" % [assets.size(),
+		_phase47_scatter_message if not _phase47_scatter_message.is_empty() else "ready"]
+	_workspace.add_child(summary)
+
+	var add_panel := PanelContainer.new()
+	add_panel.name = "ScatterLibraryAddAsset"
+	_workspace.add_child(add_panel)
+	var add_box := VBoxContainer.new()
+	add_box.add_theme_constant_override("separation", 7)
+	add_panel.add_child(add_box)
+	var add_title := Label.new()
+	add_title.text = "Add verified Poly Haven CC0 model"
+	add_box.add_child(add_title)
+	var slug_row := HBoxContainer.new()
+	slug_row.add_theme_constant_override("separation", 8)
+	add_box.add_child(slug_row)
+	var slug := LineEdit.new()
+	slug.name = "ScatterAssetSlug"
+	slug.placeholder_text = "Poly Haven slug, e.g. fern_02"
+	slug.custom_minimum_size.x = 245.0
+	slug_row.add_child(slug)
+	var kind := OptionButton.new()
+	kind.name = "ScatterAssetKind"
+	var default_kind_index := 0
+	for kind_name: Variant in PHASE47_SCATTER_CATALOG.KIND_DEFAULTS.keys():
+		kind.add_item(String(kind_name))
+		if String(kind_name) == "groundcover":
+			default_kind_index = kind.item_count - 1
+	kind.select(default_kind_index)
+	slug_row.add_child(kind)
+	var biome := OptionButton.new()
+	biome.name = "ScatterAssetBiome"
+	for biome_name: String in BIOME_NAMES:
+		biome.add_item(biome_name)
+	biome.select(clampi(_phase28_biome_id, 0, BIOME_NAMES.size() - 1))
+	slug_row.add_child(biome)
+	var add_button := Button.new()
+	add_button.name = "ScatterAssetAdd"
+	add_button.text = "Add to library"
+	add_button.pressed.connect(func() -> void:
+		var asset_id := slug.text.strip_edges()
+		var biome_key := biome.get_item_text(biome.selected).to_upper().replace(" ", "_")
+		var result: Dictionary = PHASE47_SCATTER_CATALOG.upsert_asset({
+			"id":asset_id, "kind":kind.get_item_text(kind.selected), "resolution":"1k",
+			"priority":"core", "biomes":[biome_key], "enabled":true,
+			"url":"https://polyhaven.com/a/%s" % asset_id,
+			"authoring":{"density":0.55, "scale_min":0.82, "scale_max":1.18,
+				"slope_min_deg":0.0, "slope_max_deg":55.0}
+		})
+		_phase47_scatter_message = String(result.get("error", "Added %s" % asset_id))
+		_refresh_current_category()
+	)
+	slug_row.add_child(add_button)
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	_workspace.add_child(actions)
+	var validate_button := Button.new()
+	validate_button.name = "ScatterLibraryValidate"
+	validate_button.text = "Validate catalog"
+	validate_button.pressed.connect(func() -> void:
+		var errors: PackedStringArray = PHASE47_SCATTER_CATALOG.validation_errors()
+		_phase47_scatter_message = "Catalog valid" if errors.is_empty() else "; ".join(errors)
+		_refresh_current_category()
+	)
+	actions.add_child(validate_button)
+	var reload_button := Button.new()
+	reload_button.name = "ScatterLibraryReload"
+	reload_button.text = "Hot-reload runtime"
+	reload_button.pressed.connect(func() -> void:
+		PHASE47_SCATTER_CATALOG.clear_cache()
+		var scatter: Node = get_node_or_null("/root/TerrainScatter")
+		var result: Dictionary = scatter.call("reload_ecology_assets") if scatter != null \
+				and scatter.has_method("reload_ecology_assets") else {"error":"TerrainScatter is unavailable."}
+		_phase47_scatter_message = JSON.stringify(result)
+		_refresh_current_category()
+	)
+	actions.add_child(reload_button)
+
+	if assets.is_empty():
+		_add_note("No real scatter assets are registered yet. Add a CC0 model above; the procedural fallback can remain disabled while the real library is built.")
+		return
+	for asset: Dictionary in assets:
+		_phase47_build_scatter_asset_card(asset)
+
+
+func _phase47_build_scatter_asset_card(asset: Dictionary) -> void:
+	var asset_id := String(asset.get("id", "asset"))
+	var authored: Dictionary = asset.get("authoring", {}) as Dictionary
+	var defaults: Dictionary = PHASE47_SCATTER_CATALOG.render_defaults_for(asset)
+	var status: Dictionary = PHASE47_SCATTER_CATALOG.runtime_status(asset)
+	var panel := PanelContainer.new()
+	panel.name = "ScatterAsset_%s" % asset_id
+	_workspace.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "%s  •  %s  •  %s" % [asset_id, String(asset.get("kind", "unknown")),
+		"runtime ready" if bool(status.get("runtime_ready", false)) else "source/build required"]
+	box.add_child(title)
+	var biome_label := Label.new()
+	biome_label.text = "Biomes: %s" % ", ".join(asset.get("biomes", []) as Array)
+	box.add_child(biome_label)
+	var enabled := CheckBox.new()
+	enabled.name = "ScatterAsset_%s_enabled" % asset_id
+	enabled.text = "Enabled"
+	enabled.button_pressed = bool(asset.get("enabled", true))
+	enabled.toggled.connect(func(value: bool) -> void:
+		var next := asset.duplicate(true)
+		next["enabled"] = value
+		_phase47_commit_scatter_asset(next, "Updated %s" % asset_id)
+	)
+	box.add_child(enabled)
+	_phase47_add_scatter_asset_number(box, asset, "density", "Density", 0.0, 3.0, 0.01,
+		float(authored.get("density", asset.get("density", 0.55))))
+	_phase47_add_scatter_asset_number(box, asset, "environment_floor", "Minimum ecological fit",
+		0.0, 1.0, 0.01, float(authored.get("environment_floor", 0.0)))
+	_phase47_add_scatter_asset_number(box, asset, "spacing_m", "Spacing", 0.25, 250.0, 0.25,
+		float(authored.get("spacing_m", defaults.get("spacing_m", 4.0))), "m")
+	_phase47_add_scatter_asset_number(box, asset, "grid", "Candidate grid per side", 1.0, 16.0, 1.0,
+		float(authored.get("grid", 5.0)))
+	_phase47_add_scatter_asset_number(box, asset, "scale_min", "Minimum scale", 0.05, 8.0, 0.01,
+		float(authored.get("scale_min", 0.82)))
+	_phase47_add_scatter_asset_number(box, asset, "scale_max", "Maximum scale", 0.05, 8.0, 0.01,
+		float(authored.get("scale_max", 1.18)))
+	_phase47_add_scatter_asset_number(box, asset, "slope_min_deg", "Minimum slope", 0.0, 89.0, 0.5,
+		float(authored.get("slope_min_deg", 0.0)), "°")
+	_phase47_add_scatter_asset_number(box, asset, "slope_max_deg", "Maximum slope", 0.0, 89.0, 0.5,
+		float(authored.get("slope_max_deg", 55.0)), "°")
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	box.add_child(buttons)
+	for action_name: String in ["fetch", "optimize"]:
+		var pipeline := Button.new()
+		pipeline.name = "ScatterAsset_%s_%s" % [asset_id, action_name]
+		pipeline.text = "Fetch CC0 source" if action_name == "fetch" else "Build optimized LODs"
+		pipeline.pressed.connect(func() -> void:
+			var result: Dictionary = PHASE47_SCATTER_CATALOG.start_pipeline(action_name, asset_id)
+			_phase47_scatter_message = JSON.stringify(result)
+			_refresh_current_category()
+		)
+		buttons.add_child(pipeline)
+	var remove := Button.new()
+	remove.name = "ScatterAsset_%s_remove" % asset_id
+	remove.text = "Remove"
+	remove.pressed.connect(func() -> void:
+		var result: Dictionary = PHASE47_SCATTER_CATALOG.remove_asset(asset_id)
+		_phase47_scatter_message = JSON.stringify(result)
+		_refresh_current_category()
+	)
+	buttons.add_child(remove)
+
+
+func _phase47_add_scatter_asset_number(parent: VBoxContainer, asset: Dictionary,
+		key: String, title: String, minimum: float, maximum: float, step: float,
+		value: float, suffix: String = "") -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = title
+	label.custom_minimum_size.x = 230.0
+	row.add_child(label)
+	var spin := SpinBox.new()
+	spin.name = "ScatterAsset_%s_%s" % [String(asset.get("id", "asset")), key]
+	spin.min_value = minimum
+	spin.max_value = maximum
+	spin.step = step
+	spin.suffix = suffix
+	spin.value = clampf(value, minimum, maximum)
+	spin.custom_minimum_size.x = 170.0
+	spin.value_changed.connect(func(next_value: float) -> void:
+		var next := asset.duplicate(true)
+		var authored: Dictionary = (next.get("authoring", {}) as Dictionary).duplicate(true)
+		authored[key] = next_value
+		next["authoring"] = authored
+		_phase47_commit_scatter_asset(next, "Updated %s" % String(asset.get("id", "asset")))
+	)
+	row.add_child(spin)
+
+
+func _phase47_commit_scatter_asset(asset: Dictionary, success_message: String) -> void:
+	var result: Dictionary = PHASE47_SCATTER_CATALOG.upsert_asset(asset)
+	_phase47_scatter_message = String(result.get("error", success_message))
+	_refresh_current_category()
 
 
 ## Biome Texture: the surface-LOOK counterpart to Biome Terrain's height
@@ -631,12 +834,21 @@ func _phase47_custom_texture_stack(graph: Resource) -> Array:
 		if String(node.get("type", "")) != "CUSTOM_TEXTURE":
 			continue
 		var p: Dictionary = node.get("parameters", {}) as Dictionary
+		var tint_value: Variant = p.get("albedo_tint", null)
+		var albedo_tint := Color(1.0, 1.0, 1.0)
+		if tint_value is Color:
+			albedo_tint = tint_value
+		elif tint_value is Array and (tint_value as Array).size() >= 3:
+			var ta: Array = tint_value
+			albedo_tint = Color(float(ta[0]), float(ta[1]), float(ta[2]))
 		entries.append({
 			"name": String(p.get("name", "Texture %d" % (entries.size() + 1))),
 			"tile_m": maxf(float(p.get("tile_m", 8.0)), 0.01),
 			"albedo_png": p.get("albedo_png", PackedByteArray()) as PackedByteArray,
 			"roughness_png": p.get("roughness_png", PackedByteArray()) as PackedByteArray,
 			"normal_png": p.get("normal_png", PackedByteArray()) as PackedByteArray,
+			"notile_strength": clampf(float(p.get("notile_strength", 0.0)), 0.0, 1.0),
+			"albedo_tint": albedo_tint,
 		})
 	return entries
 
@@ -659,12 +871,15 @@ func _phase47_rebuild_texture_library(graph: Resource, entries: Array) -> void:
 	var column: float = 360.0
 	for entry_value: Variant in entries:
 		var entry: Dictionary = entry_value as Dictionary
+		var albedo_tint: Color = entry.get("albedo_tint", Color(1.0, 1.0, 1.0)) as Color
 		var node_id: String = String(graph.call("add_node", "CUSTOM_TEXTURE", Vector2(column, 180.0), {
 			"name": String(entry.get("name", "Texture")),
 			"tile_m": maxf(float(entry.get("tile_m", 8.0)), 0.01),
 			"albedo_png": entry.get("albedo_png", PackedByteArray()) as PackedByteArray,
 			"roughness_png": entry.get("roughness_png", PackedByteArray()) as PackedByteArray,
 			"normal_png": entry.get("normal_png", PackedByteArray()) as PackedByteArray,
+			"notile_strength": clampf(float(entry.get("notile_strength", 0.0)), 0.0, 1.0),
+			"albedo_tint": albedo_tint,
 		}))
 		graph.call("connect_nodes", cursor, 0, node_id, 0)
 		cursor = node_id
@@ -743,6 +958,8 @@ func _phase47_build_texture_library_section(terrain: Resource) -> void:
 				"albedo_png": albedo_png,
 				"roughness_png": PackedByteArray(),
 				"normal_png": PackedByteArray(),
+				"notile_strength": 0.0,
+				"albedo_tint": Color(1.0, 1.0, 1.0),
 			})
 			_phase47_stage_texture_library(graph, entries, "Import texture")
 		)
@@ -813,6 +1030,36 @@ func _phase47_build_custom_texture_card(parent: VBoxContainer, graph: Resource,
 		_phase47_stage_texture_library(graph, entries, "Tune imported texture tile size")
 	)
 	row.add_child(tile_spin)
+
+	var tint_label := Label.new()
+	tint_label.text = "Albedo tint"
+	tint_label.tooltip_text = "Multiplies the imported texture's own colour -- white leaves it unchanged. Recolours without flattening detail the way a band's own tint blend does."
+	row.add_child(tint_label)
+	var tint_button := ColorPickerButton.new()
+	tint_button.name = "CustomTextureTint_%d" % index
+	tint_button.color = entry.get("albedo_tint", Color(1.0, 1.0, 1.0)) as Color
+	tint_button.custom_minimum_size = Vector2(60.0, 32.0)
+	tint_button.color_changed.connect(func(value: Color) -> void:
+		entry["albedo_tint"] = value
+		_phase47_stage_texture_library(graph, entries, "Tune imported texture albedo tint")
+	)
+	row.add_child(tint_button)
+
+	var notile_label := Label.new()
+	notile_label.text = "Organic tiling"
+	notile_label.tooltip_text = "Breaks up visible tile-edge repetition for this texture by blending randomly offset/flipped neighbouring tiles. 0 = plain tiling; raise it if the tile size above is small enough to show a repeating grid."
+	row.add_child(notile_label)
+	var notile_spin := SpinBox.new()
+	notile_spin.name = "CustomTextureNotile_%d" % index
+	notile_spin.min_value = 0.0
+	notile_spin.max_value = 1.0
+	notile_spin.step = 0.05
+	notile_spin.value = clampf(float(entry.get("notile_strength", 0.0)), 0.0, 1.0)
+	notile_spin.value_changed.connect(func(value: float) -> void:
+		entry["notile_strength"] = value
+		_phase47_stage_texture_library(graph, entries, "Tune imported texture organic tiling")
+	)
+	row.add_child(notile_spin)
 
 	var replace_albedo_dialog := FileDialog.new()
 	replace_albedo_dialog.name = "ReplaceCustomTextureAlbedoDialog_%d" % index
@@ -1034,9 +1281,13 @@ func _phase47_preview_color_at(layers: Array, custom_entries: Array, height_m: f
 		elif choice == 5:
 			var custom_index: int = int(layer.get("custom_texture_index", -1))
 			var albedo_png := PackedByteArray()
+			var albedo_tint := Color(1.0, 1.0, 1.0)
 			if custom_index >= 0 and custom_index < custom_entries.size():
-				albedo_png = (custom_entries[custom_index] as Dictionary).get("albedo_png", PackedByteArray()) as PackedByteArray
-			material_color = _phase47_custom_texture_average_color(albedo_png).lerp(layer_color, tint)
+				var custom_entry: Dictionary = custom_entries[custom_index] as Dictionary
+				albedo_png = custom_entry.get("albedo_png", PackedByteArray()) as PackedByteArray
+				albedo_tint = custom_entry.get("albedo_tint", albedo_tint) as Color
+			var custom_average: Color = _phase47_custom_texture_average_color(albedo_png) * albedo_tint
+			material_color = custom_average.lerp(layer_color, tint)
 		else:
 			material_color = _phase47_builtin_average_color(choice).lerp(layer_color, tint)
 
@@ -1447,6 +1698,44 @@ func _phase47_add_control(parent: VBoxContainer, graph: Resource,
 	_phase47_add_help_label(parent, String(control.get("description", "")))
 
 
+## Ports terrain_graph_editor_phase34.gd's "_migrate_missing_production_controls"
+## (non-destructive: only ever APPENDS a missing node, never replaces/reorders
+## existing ones) into the live path -- that logic exists in this codebase
+## already, but only inside the retired node-graph editor chain, unreachable
+## from here (see docs/mcp/features.md's "retired UI" note). Without this, a
+## production-terrain-surface graph created before a new PRODUCTION_* control
+## type existed (e.g. this session's own Scatter controls, added to an
+## existing planet) would silently have nothing to read/write for it: unlike
+## the terrain material runtime's _control() getter (which already falls back
+## to defaults for a missing node type), _phase47_surface_node_id finds no
+## node at all, so every setter for that type would early-return and the
+## control would look present but do nothing.
+func _phase29_ensure_production_graphs(terrain: Resource) -> void:
+	super._phase29_ensure_production_graphs(terrain)
+	var surface: Resource = terrain.call("find_shader_slot", PRODUCTION_SURFACE_SLOT_ID) as Resource
+	var graph: Resource = surface.get(&"graph") as Resource if surface != null else null
+	if graph == null or int(graph.get(&"domain")) != SHADER_SLOT_MODEL.Domain.MATERIAL:
+		return
+	var existing: Dictionary = {}
+	for node_value: Variant in graph.get(&"nodes") as Array:
+		if node_value is Dictionary:
+			existing[String((node_value as Dictionary).get("type", ""))] = true
+	if not existing.has("PRODUCTION_ALBEDO"):
+		# Not a production-stage surface graph at all (e.g. a fully custom
+		# authored replacement) -- adding control nodes with nothing wired to
+		# them would just be inert clutter.
+		return
+	var added: bool = false
+	for control_type: String in PHASE47_GRAPH_SCRIPT.PRODUCTION_CONTROL_NODES:
+		if PHASE47_GRAPH_SCRIPT.DISPLACEMENT_ONLY_NODES.has(control_type) or existing.has(control_type):
+			continue
+		graph.call("add_node", control_type, Vector2(1200.0, 1400.0),
+			PHASE47_GRAPH_SCRIPT.production_control_defaults(control_type))
+		added = true
+	if added:
+		_session.call("_mark_dirty", WorldAuthoringSession.ApplyScope.GRAPH)
+
+
 ## Surface Detail / Material Balance / Visual Character / Key Colors /
 ## Classification Rules -- see PHASE47_SURFACE_CATALOG's declaration comment.
 ## Unlike Coarse Elevation's single always-present PRODUCTION_GEOMORPH_SETTINGS
@@ -1532,6 +1821,16 @@ func _phase47_set_surface_toggle(pressed: bool, graph: Resource, node_type: Stri
 	, WorldAuthoringSession.ApplyScope.GRAPH)
 
 
+func _phase47_set_surface_select(index: int, graph: Resource, node_type: String,
+		key: String) -> void:
+	var node_id: String = _phase47_surface_node_id(graph, node_type)
+	if node_id.is_empty() or int(_phase47_surface_value(graph, node_type, key, index)) == index:
+		return
+	_session.stage_action("Tune surface: %s" % key, func() -> void:
+		graph.call("set_node_parameter", node_id, key, index)
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+
+
 func _phase47_set_surface_color(color: Color, graph: Resource, node_type: String,
 		key: String) -> void:
 	var node_id: String = _phase47_surface_node_id(graph, node_type)
@@ -1549,6 +1848,8 @@ func _phase47_add_surface_control(parent: VBoxContainer, graph: Resource,
 			_phase47_add_surface_toggle(parent, graph, control)
 		"color":
 			_phase47_add_surface_color(parent, graph, control)
+		"select":
+			_phase47_add_surface_select(parent, graph, control)
 		_:
 			_phase47_add_surface_number(parent, graph, control)
 
@@ -1598,6 +1899,33 @@ func _phase47_add_surface_toggle(parent: VBoxContainer, graph: Resource,
 	check.tooltip_text = String(control.get("description", ""))
 	check.toggled.connect(_phase47_set_surface_toggle.bind(graph, node_type, key))
 	row.add_child(check)
+	_phase47_add_help_label(parent, String(control.get("description", "")))
+
+
+func _phase47_add_surface_select(parent: VBoxContainer, graph: Resource,
+		control: Dictionary) -> void:
+	var node_type: String = String(control.get("node_type", ""))
+	var key: String = String(control.get("key", ""))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = String(control.get("title", key))
+	label.tooltip_text = String(control.get("description", ""))
+	label.custom_minimum_size.x = 230.0
+	row.add_child(label)
+	var options: PackedStringArray = control.get("options", PackedStringArray()) as PackedStringArray
+	var option_button := OptionButton.new()
+	option_button.name = "SurfaceControl_%s_%s" % [node_type, key]
+	for option_text: String in options:
+		option_button.add_item(option_text)
+	var current_index: int = clampi(int(_phase47_surface_value(graph, node_type, key, control.get("default", 0))),
+		0, maxi(options.size() - 1, 0))
+	option_button.select(current_index)
+	option_button.custom_minimum_size.x = 170.0
+	option_button.tooltip_text = String(control.get("description", ""))
+	option_button.item_selected.connect(_phase47_set_surface_select.bind(graph, node_type, key))
+	row.add_child(option_button)
 	_phase47_add_help_label(parent, String(control.get("description", "")))
 
 
@@ -2741,5 +3069,3 @@ func _phase46_handle_directions(config: Dictionary) -> Dictionary:
 			out["west"] = _phase46_direction_from_lat_lon(facing.x, west)
 			out["east"] = _phase46_direction_from_lat_lon(facing.x, east)
 	return out
-
-

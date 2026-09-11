@@ -106,8 +106,9 @@ func _build_orbit_seasons_controls() -> void:
 			Frames.time_scale = rate
 			_refresh_current_category())
 		transport.add_child(b)
-	_add_number_field("Time scale", Frames.time_scale, 0.0, 1.0e7, 1.0, " x",
-		func(value: float) -> void: Frames.time_scale = maxf(value, 0.0))
+	_add_number_field("Time scale", Frames.time_scale, -1.0e7, 1.0e7, 1.0, " x",
+		func(value: float) -> void: Frames.time_scale = value)
+	_add_note("Negative rates rewind the celestial clock. Water, weather and physics are not replayed backwards.")
 
 	_build_orbit_element_fields()
 

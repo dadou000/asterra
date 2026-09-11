@@ -19,6 +19,7 @@ layout(set = 0, binding = 6, std430) readonly buffer Params {
     vec4 grid_dt;
     vec4 physics;
     vec4 schedule; // max substeps, H0 tile level, HydroLOD enabled, temporal max+1
+    vec4 coast;    // sea_level_m, coast_drain_rate_per_s, reserved, reserved
 } params;
 layout(set = 0, binding = 7, std430) readonly buffer Control {
     uint pre_max_speed_bits; uint pre_max_depth_bits; uint pre_wet_count; uint pre_invalid_count;
@@ -249,6 +250,24 @@ void main() {
     float cell_area_m2 = local_dx * local_dx;
     external_flux_m3[i] += vec2(add_h, actual_remove_h) * cell_area_m2;
     updated = apply_sources(updated, source, step_dt);
+
+    // Coastal open-outflow boundary: a cell whose bed lies below mean sea level
+    // is part of the sea floor -- it cannot pond water above sea level, that
+    // water discharges into the ocean. Relax its free surface toward sea level
+    // and book the removed volume as external outflow so mass accounting stays
+    // exact. Without this a below-sea carved channel mouth fills without bound.
+    float coast_drain = params.coast.y;
+    if (coast_drain > 0.0 && zc < params.coast.x) {
+        float excess = (updated.x + zc) - params.coast.x;
+        if (excess > 0.0) {
+            float removed = min(excess, updated.x)
+                * clamp(coast_drain * step_dt, 0.0, 1.0);
+            float keep = max(updated.x - removed, 0.0) / max(updated.x, 1e-12);
+            updated.yz *= keep;
+            updated.x -= removed;
+            external_flux_m3[i] += vec2(0.0, removed) * cell_area_m2;
+        }
+    }
 
     if (updated.x <= dry_eps() || any(isnan(updated)) || any(isinf(updated))) updated = vec3(0.0);
     else updated = apply_friction(updated, step_dt);

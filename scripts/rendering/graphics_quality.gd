@@ -14,6 +14,18 @@ enum Preset {
 
 const DEFAULT_PRESET := Preset.HIGH
 
+## Upscaler / temporal anti-aliasing choice. Independent of Preset: any preset can
+## be paired with any of these, though FSR2 is the recommended default (see
+## configure_viewport's note on not stacking a second temporal pass on top of it).
+enum UpscaleMode {
+	BILINEAR, ## No upscale filtering, no temporal AA. Cheapest, aliased below 1.0 scale.
+	FSR1,     ## Spatial-only sharpening upscale. No temporal stability.
+	FSR2,     ## Temporal upscale + anti-aliasing.
+	TAA,      ## Godot's native temporal AA at full (1.0) resolution. No upscaling.
+}
+
+const DEFAULT_UPSCALE_MODE := UpscaleMode.FSR2
+
 ## Sun brightness as Godot light energy. Everything else solar is derived from
 ## this, so the scattering and the surface can never disagree about how bright
 ## the star is.
@@ -171,7 +183,85 @@ static func advanced_defaults(preset: int) -> Dictionary:
 static func apply_advanced_viewport(viewport: Viewport, options: Dictionary) -> void:
 	if viewport == null:
 		return
-	viewport.scaling_3d_scale = clampf(float(options.get("render_scale", 0.77)), 0.50, 1.00)
+	# Render scale is applied by apply_upscaler() instead, which also owns
+	# scaling_3d_mode/fsr_sharpness/use_taa and must be the single writer of all
+	# four so they never fall out of sync with each other.
+	pass
+
+
+static func sanitize_upscale_mode(mode: int) -> int:
+	return clampi(mode, UpscaleMode.BILINEAR, UpscaleMode.TAA)
+
+
+static func upscale_mode_name(mode: int) -> String:
+	match sanitize_upscale_mode(mode):
+		UpscaleMode.BILINEAR:
+			return "Bilinear"
+		UpscaleMode.FSR1:
+			return "FSR 1.0"
+		UpscaleMode.TAA:
+			return "Native TAA"
+		_:
+			return "FSR 2.0"
+
+
+static func upscale_mode_description(mode: int) -> String:
+	match sanitize_upscale_mode(mode):
+		UpscaleMode.BILINEAR:
+			return "Cheapest. No temporal anti-aliasing; render scale below 100% looks soft and aliased."
+		UpscaleMode.FSR1:
+			return "Spatial sharpening upscale. Cheaper than FSR 2.0 but has no temporal anti-aliasing."
+		UpscaleMode.TAA:
+			return "Godot's native temporal anti-aliasing at full resolution. No upscaling."
+		_:
+			return "Temporal upscale and anti-aliasing. Recommended -- stays sharp and stable below 100% scale."
+
+
+## Only Bilinear/FSR1/FSR2 render at less than full resolution; Native TAA always
+## runs at scale 1.0 (apply_upscaler enforces this regardless of the input value).
+static func supports_render_scale(mode: int) -> bool:
+	return sanitize_upscale_mode(mode) != UpscaleMode.TAA
+
+
+## Only FSR1/FSR2 have an edge-sharpening pass to tune.
+static func supports_sharpness(mode: int) -> bool:
+	var sanitized := sanitize_upscale_mode(mode)
+	return sanitized == UpscaleMode.FSR1 or sanitized == UpscaleMode.FSR2
+
+
+## Single writer of scaling_3d_mode / scaling_3d_scale / fsr_sharpness / use_taa.
+## Called after configure_viewport()/apply_advanced_viewport() so an explicit user
+## upscaler choice always wins over the preset's default. Godot's FSR2 already is a
+## temporal pass, so use_taa only ever turns on for UpscaleMode.TAA -- stacking a
+## second temporal accumulation on top of FSR2 would cost more and soften the image.
+static func apply_upscaler(viewport: Viewport, mode: int, render_scale: float,
+		sharpness: float) -> void:
+	if viewport == null:
+		return
+	var sanitized_mode := sanitize_upscale_mode(mode)
+	var scale := clampf(render_scale, 0.50, 1.00)
+	var sharp := clampf(sharpness, 0.0, 2.0)
+	viewport.msaa_3d = Viewport.MSAA_DISABLED
+	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+	match sanitized_mode:
+		UpscaleMode.TAA:
+			viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+			viewport.scaling_3d_scale = 1.0
+			viewport.use_taa = true
+		UpscaleMode.BILINEAR:
+			viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+			viewport.scaling_3d_scale = scale
+			viewport.use_taa = false
+		UpscaleMode.FSR1:
+			viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR
+			viewport.scaling_3d_scale = scale
+			viewport.fsr_sharpness = sharp
+			viewport.use_taa = false
+		_:
+			viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR2
+			viewport.scaling_3d_scale = scale
+			viewport.fsr_sharpness = sharp
+			viewport.use_taa = false
 
 
 static func apply_advanced_world_environment(environment: Environment,

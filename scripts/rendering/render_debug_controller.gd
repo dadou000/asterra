@@ -26,6 +26,7 @@ var _state := {
 	"sky_background": true,
 	"sun": true,
 	"sun_shadows": true,
+	"motion_blur": true,
 }
 
 var _menu: DebugMenu
@@ -183,6 +184,10 @@ func _install_into_menu(menu: DebugMenu) -> void:
 	_add_toggle(box, "sun", "Sun directional light", "Direct scene lighting from Helion directional lights.")
 	_add_toggle(box, "sun_shadows", "Sun shadow maps", "Directional shadow cascades only; direct sunlight remains enabled.")
 
+	box.add_child(HSeparator.new())
+	box.add_child(_section_title("Post-processing"))
+	_add_toggle(box, "motion_blur", "Motion blur", "Camera-reprojection motion blur (MotionBlurCompositorEffect).")
+
 	_refresh_status()
 	_apply_all_states()
 
@@ -316,13 +321,16 @@ func _apply_state(key: String) -> void:
 			_apply_sky_background(bool(_state[key]))
 		"sun", "sun_shadows":
 			_apply_sun_state()
+		"motion_blur":
+			MotionBlur.set_enabled(bool(_state[key]))
 
 
 func _apply_all_states() -> void:
 	for key_value: Variant in [
 		"terrain", "scatter", "micro", "pbr", "aerial",
 		"local_ocean", "orbit_ocean", "ocean_waves",
-		"clouds", "cloud_shadows", "sky_background", "sun", "sun_shadows"
+		"clouds", "cloud_shadows", "sky_background", "sun", "sun_shadows",
+		"motion_blur"
 	]:
 		_apply_state(String(key_value))
 
@@ -464,6 +472,7 @@ func _sync_state_from_runtime() -> void:
 	_state["local_ocean"] = OceanSystem.is_processing()
 	if OceanSystem.has_method("debug_waves_disabled"):
 		_state["ocean_waves"] = not bool(OceanSystem.call("debug_waves_disabled"))
+	_state["motion_blur"] = MotionBlur.is_enabled()
 
 
 func _preset_restore_all() -> void:

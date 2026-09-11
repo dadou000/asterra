@@ -3,6 +3,12 @@
 *.FCBak
 export_presets.cfg
 
+# Godot copies each GDExtension DLL to a "~"-prefixed temp file on load (and to
+# random ~*.TMP names when that copy is contended by a second editor instance).
+# These are runtime scratch, never source.
+bin/~*.dll
+bin/*.TMP
+
 # Poly Haven source scans are an authoring cache. Optimized game-ready assets
 # belong in assets/scatter/runtime/ and are committed separately.
 /assets/scatter/source/
@@ -10,3 +16,6 @@ export_presets.cfg
 # Local CMake/Visual Studio output. Native sources live beside this directory;
 # only the generated build tree must stay out of Git history.
 /native/weather/build/
+
+# Local MCP server config (contains a private loopback token)
+.mcp.json

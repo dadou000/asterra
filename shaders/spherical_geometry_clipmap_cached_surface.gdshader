@@ -584,7 +584,11 @@ void fragment() {
 				rock_albedo, rock_roughness, albedo, roughness, scan_n, scan_normal_w);
 			float orbit_palette_w = smootherstep_range(12000.0, 90000.0, camera_dist);
 			if (orbit_palette_w > 0.001) {
-				float edge_sharpness = mix(1.35, 3.20, orbit_palette_w);
+				// Sharpness > ~2 turns the 192-cell biome grid into a hard
+				// staircase from orbit (the blocky-coastline look). Keep the
+				// transition crisper than linear for a map-like read, but wide
+				// enough to ramp across a fraction of a texel.
+				float edge_sharpness = mix(1.15, 1.80, orbit_palette_w);
 				vec3 map_palette = terrain_biome_palette(up, edge_sharpness);
 				vec3 palette_anchor = mix(albedo, map_palette, 0.38);
 				albedo = mix(albedo, palette_anchor, orbit_palette_w);

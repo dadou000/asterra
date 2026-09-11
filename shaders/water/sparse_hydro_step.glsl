@@ -37,6 +37,7 @@ layout(set = 0, binding = 6, std430) readonly buffer Params {
     vec4 grid_dt;  // tile_resolution, capacity, H0 cell size, requested macro dt
     vec4 physics;  // gravity, dry_eps, Manning n, CFL
     vec4 schedule; // max substeps, H0 tile level, HydroLOD enabled, reserved
+    vec4 coast;    // sea_level_m, coast_drain_rate_per_s, reserved, reserved
 } params;
 layout(set = 0, binding = 7, std430) readonly buffer Control {
     uint pre_max_speed_bits;
@@ -328,6 +329,20 @@ void main() {
     float cell_area_m2 = local_dx * local_dx;
     external_flux_m3[i] += vec2(add_h, actual_remove_h) * cell_area_m2;
     updated = apply_sources(updated, source, dt());
+
+    // Coastal open-outflow boundary -- see sparse_hydro_step_subcycled.glsl.
+    float coast_drain = params.coast.y;
+    if (coast_drain > 0.0 && zc < params.coast.x) {
+        float excess = (updated.x + zc) - params.coast.x;
+        if (excess > 0.0) {
+            float removed = min(excess, updated.x)
+                * clamp(coast_drain * dt(), 0.0, 1.0);
+            float keep = max(updated.x - removed, 0.0) / max(updated.x, 1e-12);
+            updated.yz *= keep;
+            updated.x -= removed;
+            external_flux_m3[i] += vec2(0.0, removed) * cell_area_m2;
+        }
+    }
 
     if (updated.x <= dry_eps()
             || any(isnan(updated)) || any(isinf(updated))) {

@@ -14,12 +14,21 @@ extends Node
 
 const MAX_BYTES := 8 * 1024 * 1024
 const MAX_CLIENTS := 8
+const SCATTER_CATALOG := preload("res://scripts/terrain/scatter_ecology_catalog.gd")
 var _server := TCPServer.new()
 var _clients: Array[Dictionary] = []
 var _editor: Control
 var _token: String
 var _dispatching: bool = false
 var _vision: Node
+
+## Rolling per-frame timing ring buffer for studio_perf, sampled every _process()
+## regardless of whether any MCP client is connected -- so the first studio_perf
+## call after a stretch of play already has real history instead of one sample.
+const PERF_WINDOW := 300
+var _perf_frame_ms := PackedFloat32Array()
+var _perf_index: int = 0
+var _perf_filled: bool = false
 
 func _ready() -> void:
 	if OS.get_environment("ASTERRA_MCP_ENABLED") != "1":
@@ -61,7 +70,8 @@ func _exit_tree() -> void:
 	for client: Dictionary in _clients:
 		client.peer.disconnect_from_host()
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_record_perf_sample(delta)
 	while _server.is_connection_available():
 		var peer := _server.take_connection()
 		if _clients.size() >= MAX_CLIENTS:
@@ -111,6 +121,7 @@ func _handle(client: Dictionary) -> void:
 
 const EDITOR_ONLY_TOOLS: PackedStringArray = [
 	"studio_category", "studio_control", "studio_session", "studio_inspect", "studio_texture_stack",
+	"studio_imported_textures", "studio_surface_settings",
 ]
 const TEXTURE_BAND_COLOR_KEYS: PackedStringArray = ["color", "color_b", "emission_color"]
 
@@ -140,6 +151,10 @@ func dispatch(tool: String, args: Dictionary) -> Dictionary:
 		"studio_session": result = _session_action(args)
 		"studio_inspect": result = _inspect(args)
 		"studio_texture_stack": result = _texture_stack(args)
+		"studio_imported_textures": result = _imported_textures(args)
+		"studio_surface_settings": result = _surface_settings(args)
+		"studio_scatter_library": result = _scatter_library(args)
+		"studio_perf": result = _perf(args)
 		"studio_input": result = await _input_events(args)
 		"studio_camera": result = await _vision.camera_command(args)
 		"studio_time": result = _vision.time_command(args)
@@ -152,6 +167,34 @@ func dispatch(tool: String, args: Dictionary) -> Dictionary:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	return result
+
+
+func _scatter_library(args: Dictionary) -> Dictionary:
+	var action := String(args.get("action", "list"))
+	match action:
+		"list":
+			SCATTER_CATALOG.clear_cache()
+			var assets: Array[Dictionary] = SCATTER_CATALOG.all_assets()
+			var statuses: Array[Dictionary] = []
+			for asset: Dictionary in assets:
+				statuses.append(SCATTER_CATALOG.runtime_status(asset))
+			return {"assets":assets, "statuses":statuses,
+				"validation_errors":Array(SCATTER_CATALOG.validation_errors())}
+		"upsert":
+			var asset_value: Variant = args.get("asset", {})
+			if not (asset_value is Dictionary):
+				return {"error":"asset must be an object."}
+			return SCATTER_CATALOG.upsert_asset(asset_value as Dictionary)
+		"remove":
+			return SCATTER_CATALOG.remove_asset(String(args.get("asset_id", "")))
+		"fetch", "optimize":
+			return SCATTER_CATALOG.start_pipeline(action, String(args.get("asset_id", "")))
+		"reload":
+			var scatter: Node = get_node_or_null("/root/TerrainScatter")
+			if scatter == null or not scatter.has_method("reload_ecology_assets"):
+				return {"error":"TerrainScatter does not support live ecology reload."}
+			return scatter.call("reload_ecology_assets") as Dictionary
+	return {"error":"Unknown scatter library action."}
 
 func _status() -> Dictionary:
 	if _editor == null:
@@ -166,6 +209,106 @@ func _status() -> Dictionary:
 		"can_redo": session.call("can_redo"), "active_body_id": session.get("staged_system").get("active_body_id"),
 		"status": label.text if label != null else "", "viewport_size": _encode(_editor.get_viewport_rect().size, 0),
 		"live_world": _editor.get("_world_host") != null if "_world_host" in _editor else false}
+
+func _record_perf_sample(delta: float) -> void:
+	var ms := delta * 1000.0
+	if _perf_frame_ms.size() < PERF_WINDOW:
+		_perf_frame_ms.append(ms)
+	else:
+		_perf_frame_ms[_perf_index] = ms
+		_perf_filled = true
+	_perf_index = (_perf_index + 1) % PERF_WINDOW
+
+
+func _recent_perf_samples(window: int) -> PackedFloat32Array:
+	var available := PERF_WINDOW if _perf_filled else _perf_index
+	var count := mini(window, available)
+	var out := PackedFloat32Array()
+	out.resize(count)
+	for i: int in count:
+		var idx := (_perf_index - 1 - i + PERF_WINDOW) % PERF_WINDOW
+		out[i] = _perf_frame_ms[idx]
+	return out
+
+
+func _fps_stats(samples: PackedFloat32Array) -> Dictionary:
+	if samples.is_empty():
+		return {"samples": 0, "current": Performance.get_monitor(Performance.TIME_FPS)}
+	var sorted_ms := samples.duplicate()
+	sorted_ms.sort()
+	var total_ms := 0.0
+	var worst_ms := 0.0
+	for v: float in samples:
+		total_ms += v
+		worst_ms = maxf(worst_ms, v)
+	var avg_ms := total_ms / samples.size()
+	# The slowest 1% of frames -- i.e. the 99th percentile of frame TIME -- read as
+	# "1% low FPS", the number that tracks stutter/hitching far better than an
+	# average, which a handful of spikes barely move.
+	var p99_index := clampi(int(ceil(samples.size() * 0.99)) - 1, 0, sorted_ms.size() - 1)
+	var p99_ms: float = sorted_ms[p99_index]
+	return {
+		"samples": samples.size(),
+		"current": Performance.get_monitor(Performance.TIME_FPS),
+		"avg": 1000.0 / maxf(avg_ms, 0.001),
+		"one_percent_low": 1000.0 / maxf(p99_ms, 0.001),
+		"frame_ms_avg": avg_ms,
+		"frame_ms_p99": p99_ms,
+		"frame_ms_max": worst_ms,
+	}
+
+
+func _perf_subsystems() -> Dictionary:
+	var out := {}
+	var terrain: Node = get_node_or_null(^"/root/GroundGeometryClipmap")
+	if terrain != null and terrain.has_method("gpu_stream_stats"):
+		out["terrain"] = terrain.call("gpu_stream_stats")
+	var ocean: Node = get_node_or_null(^"/root/OceanSystem")
+	if ocean != null and ocean.has_method("gpu_stats"):
+		out["ocean"] = ocean.call("gpu_stats")
+	var scatter: Node = get_node_or_null(^"/root/TerrainScatter")
+	if scatter != null and scatter.has_method("debug_enabled"):
+		out["scatter_enabled"] = scatter.call("debug_enabled")
+	var motion_blur: Node = get_node_or_null(^"/root/MotionBlur")
+	if motion_blur != null and motion_blur.has_method("is_enabled"):
+		out["motion_blur_enabled"] = motion_blur.call("is_enabled")
+	return out
+
+
+func _perf(args: Dictionary) -> Dictionary:
+	var window: int = clampi(int(args.get("window_frames", PERF_WINDOW)), 1, PERF_WINDOW)
+	var viewport := get_viewport()
+	return {
+		"fps": _fps_stats(_recent_perf_samples(window)),
+		"cpu": {
+			"process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+			"physics_process_ms": Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+		},
+		"render": {
+			"draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+			"primitives": Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME),
+			"objects_in_frame": Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME),
+			"video_mem_mb": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0,
+			"texture_mem_mb": Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED) / 1048576.0,
+			"buffer_mem_mb": Performance.get_monitor(Performance.RENDER_BUFFER_MEM_USED) / 1048576.0,
+		},
+		"memory": {
+			"static_mb": Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0,
+			"object_count": Performance.get_monitor(Performance.OBJECT_COUNT),
+			"node_count": Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
+			"resource_count": Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT),
+		},
+		"viewport": {
+			"size": _encode(viewport.get_visible_rect().size, 0),
+			"scaling_3d_mode": viewport.scaling_3d_mode,
+			"scaling_3d_scale": viewport.scaling_3d_scale,
+			"fsr_sharpness": viewport.fsr_sharpness,
+			"use_taa": viewport.use_taa,
+			"msaa_3d": viewport.msaa_3d,
+		},
+		"subsystems": _perf_subsystems(),
+	}
+
 
 func _walk(node: Node, rows: Array, include_hidden: bool, root: Node = null) -> void:
 	if node == self or node.is_queued_for_deletion():
@@ -411,6 +554,84 @@ func _texture_stack_get(terrain: Resource, biome_id: int) -> Dictionary:
 		"texture_choice_labels": ["Flat colour", "Ground", "Grass", "Mud", "Forest", "Imported"],
 		"imported_textures": _encode(custom_entries, 4),
 	}
+
+
+## Compact tuning API for the imported PBR library. Image payloads stay intact in
+## the staged graph while MCP callers adjust the small authoring fields that are
+## otherwise buried in a very large studio_ui response.
+func _imported_textures(args: Dictionary) -> Dictionary:
+	var session: RefCounted = _editor.get("_session")
+	var terrain: Resource = session.call("active_terrain_profile")
+	if terrain == null:
+		return {"error": "The selected body has no terrestrial terrain profile."}
+	var library_slot: Resource = _editor.call("_phase47_texture_library_slot", terrain) as Resource
+	if library_slot == null:
+		return {"error": "The selected terrain has no imported texture library slot."}
+	var graph: Resource = library_slot.get(&"graph") as Resource
+	var entries: Array = _editor.call("_phase47_custom_texture_stack", graph)
+	var action := String(args.get("action", "get"))
+	if action == "get":
+		return {"textures": _encode(entries, 4)}
+	if action != "set":
+		return {"error": "Unknown action. Use get or set."}
+	var index := int(args.get("index", -1))
+	if index < 0 or index >= entries.size():
+		return {"error": "index must identify an imported texture in [0, %d)." % entries.size()}
+	var entry: Dictionary = (entries[index] as Dictionary).duplicate(true)
+	if args.has("name"):
+		entry["name"] = String(args["name"]).strip_edges()
+	if args.has("tile_m"):
+		entry["tile_m"] = maxf(float(args["tile_m"]), 0.1)
+	if args.has("notile_strength"):
+		entry["notile_strength"] = clampf(float(args["notile_strength"]), 0.0, 1.0)
+	if args.has("albedo_tint"):
+		var tint_value: Variant = args["albedo_tint"]
+		if not _numbers(tint_value, 3) and not _numbers(tint_value, 4):
+			return {"error": "albedo_tint must be [r,g,b] or [r,g,b,a]."}
+		var tint: Array = tint_value
+		entry["albedo_tint"] = Color(tint[0], tint[1], tint[2], tint[3] if tint.size() > 3 else 1.0)
+	entries[index] = entry
+	_editor.call("_phase47_stage_texture_library", graph, entries, "Tune imported texture through MCP")
+	return {"ok": true, "index": index, "texture": _encode(entry, 4)}
+
+
+## Targeted access to production surface graph parameters. This complements
+## studio_control for automation: callers do not need to enumerate thousands of
+## off-screen controls just to tune one known material setting.
+func _surface_settings(args: Dictionary) -> Dictionary:
+	var session: RefCounted = _editor.get("_session")
+	var terrain: Resource = session.call("active_terrain_profile")
+	var graph: Resource = _editor.call("_phase47_surface_graph", terrain) as Resource
+	if graph == null:
+		return {"error": "The selected terrain has no production surface graph."}
+	var node_type := String(args.get("node_type", ""))
+	var key := String(args.get("key", ""))
+	var node_id: String = _editor.call("_phase47_surface_node_id", graph, node_type)
+	if node_id.is_empty():
+		return {"error": "Unknown production surface node type: %s" % node_type}
+	var sentinel := "__ASTERRA_MISSING_SURFACE_PARAMETER__"
+	var current: Variant = _editor.call("_phase47_surface_value", graph, node_type, key, sentinel)
+	if current == sentinel:
+		return {"error": "Unknown surface parameter %s.%s" % [node_type, key]}
+	if String(args.get("action", "get")) == "get":
+		return {"node_type": node_type, "key": key, "value": _encode(current, 2)}
+	if String(args.get("action", "get")) != "set" or not args.has("value"):
+		return {"error": "Use action=get or action=set with value."}
+	var value: Variant = args["value"]
+	if current is bool:
+		_editor.call("_phase47_set_surface_toggle", bool(value), graph, node_type, key)
+	elif current is int:
+		_editor.call("_phase47_set_surface_select", int(value), graph, node_type, key)
+	elif current is float:
+		_editor.call("_phase47_set_surface_number", float(value), graph, node_type, key)
+	elif current is Color:
+		if not _numbers(value, 3) and not _numbers(value, 4):
+			return {"error": "Color value must be [r,g,b] or [r,g,b,a]."}
+		var c: Array = value
+		_editor.call("_phase47_set_surface_color", Color(c[0], c[1], c[2], c[3] if c.size() > 3 else 1.0), graph, node_type, key)
+	else:
+		return {"error": "This parameter type is not editable through studio_surface_settings."}
+	return {"ok": true, "node_type": node_type, "key": key, "value": _encode(value, 2)}
 
 
 func _texture_stack_set(terrain: Resource, biome_id: int, args: Dictionary) -> Dictionary:

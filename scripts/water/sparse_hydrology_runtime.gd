@@ -337,8 +337,12 @@ func _on_activity_initialized() -> void:
 		func(error: Error): _fail_initialization(error, "frontier"))
 	frontier.candidates_ready.connect(_on_frontier_candidates)
 	frontier.queue_failed.connect(_on_frontier_failed)
+	# Canonical state + tile resolution let the frontier snapshot the source-edge
+	# free surface AND the bed under it, so terrain reachability can compare on the
+	# shared macro datum instead of eta-vs-smooth-crest.
 	var err := frontier.initialize(activity.summary_rid(), atlas.tile_metadata_rid(),
-		atlas.capacity, scheduler.wake_flux_threshold_m3s)
+		atlas.capacity, scheduler.wake_flux_threshold_m3s,
+		atlas.state_a_rid(), atlas.tile_resolution)
 	if err != OK:
 		_fail_initialization(err, "frontier")
 

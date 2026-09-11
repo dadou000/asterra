@@ -140,11 +140,11 @@ func _build_batches() -> void:
 	var grass_mesh: ArrayMesh = _build_grass_clump_mesh()
 	var stone_mesh: ArrayMesh = _build_stone_mesh()
 	_grass_batch = _make_batch("TerrainScatterGrass", grass_mesh, _grass_material,
-		GRASS_GRID * GRASS_GRID, false)
+		GRASS_GRID * GRASS_GRID, true)
 	_geo_stone_batch = _make_batch("TerrainScatterGeologicStone", stone_mesh, _geo_stone_material,
-		GEO_STONE_GRID * GEO_STONE_GRID, false)
+		GEO_STONE_GRID * GEO_STONE_GRID, true)
 	_river_stone_batch = _make_batch("TerrainScatterRiverStone", stone_mesh, _river_stone_material,
-		RIVER_STONE_GRID * RIVER_STONE_GRID, false)
+		RIVER_STONE_GRID * RIVER_STONE_GRID, true)
 	add_child(_grass_batch)
 	add_child(_geo_stone_batch)
 	add_child(_river_stone_batch)

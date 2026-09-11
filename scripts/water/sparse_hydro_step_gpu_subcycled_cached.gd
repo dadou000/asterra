@@ -102,6 +102,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 	for iteration in cap:
 		rd.compute_list_bind_compute_pipeline(compute, _reset_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _reset_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, 1, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
@@ -119,10 +120,12 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 
 		rd.compute_list_bind_compute_pipeline(compute, _due_queue_reset_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _due_queue_reset_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, 1, 1, 1)
 		rd.compute_list_add_barrier(compute)
 		rd.compute_list_bind_compute_pipeline(compute, _due_queue_build_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _due_queue_build_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, due_queue_groups, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
@@ -141,6 +144,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 
 		rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch_indirect(compute, _due_queue_indirect, 0)
 		rd.compute_list_add_barrier(compute)
 
@@ -155,10 +159,12 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 
 	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_reduce_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, external_groups, 1, 1)
 	rd.compute_list_add_barrier(compute)
 	rd.compute_list_bind_compute_pipeline(compute, _external_finalize_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_finalize_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_end()
 

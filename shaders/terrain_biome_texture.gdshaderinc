@@ -116,14 +116,15 @@
 // e.g. an S-curve holds colour_a longer before transitioning, instead of a
 // plain linear sweep. The identity curve ([0,0],[1,1]) is a precise no-op.
 
-const int BIOME_TEX_LAYER_MAX = 16;
-uniform int u_biome_tex_layer_count = 0;
-uniform vec4 u_biome_tex_layer_a[BIOME_TEX_LAYER_MAX];
-uniform vec4 u_biome_tex_layer_b[BIOME_TEX_LAYER_MAX];
+// BIOME_TEX_LAYER_MAX, u_biome_tex_layer_count/a/b/d/f, and the height/slope/
+// noise gating helpers (btex_hash/btex_noise/btex_band) now live in
+// terrain_biome_texture_mask.gdshaderinc -- split out so scatter (and any
+// other system) can read the SAME authored band data to gate placement
+// without pulling in this file's full triplanar material sampling. See that
+// file's header for why (vertex-shader-safe, no gpu_surface_pbr dependency).
+#include "res://shaders/terrain_biome_texture_mask.gdshaderinc"
 uniform vec4 u_biome_tex_layer_c[BIOME_TEX_LAYER_MAX];
-uniform vec4 u_biome_tex_layer_d[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_e[BIOME_TEX_LAYER_MAX];
-uniform vec4 u_biome_tex_layer_f[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_g[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_h[BIOME_TEX_LAYER_MAX];
 uniform vec4 u_biome_tex_layer_curve_ab[BIOME_TEX_LAYER_MAX];
@@ -140,9 +141,10 @@ const float BTEX_CAVITY_SCALE = 4.0;
 // Piecewise-smoothstep response curve -- identical maths to
 // terrain_biome_profile.gdshaderinc's bp_curve_eval and
 // CurveFieldData.evaluate on the CPU, deliberately duplicated (not shared
-// via #include) for the same reason btex_hash duplicates bp_hash just below:
-// neither biome shaderinc has an include guard, and both end up included
-// together in the same fragment shader.
+// via #include): neither biome shaderinc has an include guard, and both end
+// up included together in the same fragment shader (the same reason
+// terrain_biome_texture_mask.gdshaderinc's btex_hash duplicates bp_hash
+// rather than sharing it).
 float btex_curve_eval(vec4 ab, vec4 cd, vec4 ef, vec4 gh, int count, float x) {
 	x = clamp(x, 0.0, 1.0);
 	int n = clamp(count, 2, 8);
@@ -184,35 +186,19 @@ uniform sampler2DArray u_biome_tex_custom_albedo : source_color, filter_linear_m
 uniform sampler2DArray u_biome_tex_custom_roughness : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2DArray u_biome_tex_custom_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float u_biome_tex_custom_tile_m[BIOME_TEX_CUSTOM_MAX];
+// Per-imported-texture "organic tiling" strength (see gpu_surface_antitile
+// .gdshaderinc's spat_notile_array header comment) and a direct albedo
+// multiply-tint -- both properties of the imported ASSET, not of any one
+// band using it, so every band sharing this slot recolours/de-tiles
+// consistently. Defaults (0 strength, white tint) exactly reproduce the
+// plain single-sample, untinted behaviour every existing authored profile
+// already has.
+uniform float u_biome_tex_custom_notile[BIOME_TEX_CUSTOM_MAX];
+uniform vec3 u_biome_tex_custom_albedo_tint[BIOME_TEX_CUSTOM_MAX];
 
-// Identical hash to terrain_biome_profile.gdshaderinc's bp_hash, deliberately
-// duplicated rather than shared: that file is not #included here (both end
-// up included together in the same fragment shader, and neither has an
-// include guard, so a shared #include would double-declare every uniform and
-// function in it and fail to compile).
-float btex_hash(ivec3 p, int seed) {
-	uint h = uint(p.x) * 374761393u + uint(p.y) * 668265263u + uint(p.z) * 2147483647u + uint(seed) * 1274126177u;
-	h = (h ^ (h >> 13u)) * 1274126177u;
-	h ^= h >> 16u;
-	return float(h & 0x00ffffffu) / 16777215.0 * 2.0 - 1.0;
-}
-
-// Cosmetic patchiness only, never a height -- unlike bp_noise this skips the
-// FMA precision correction and lattice-wrap carry fix those needed to avoid
-// spiking displaced GEOMETRY at high frequency. Worst case here a coarse
-// fract() step mildly stipples a texture-choice boundary; nothing like that
-// is at stake for a colour/material blend weight.
-float btex_noise(vec3 direction, float frequency, int seed) {
-	vec3 p = direction * frequency;
-	ivec3 i = ivec3(floor(p));
-	vec3 f = fract(p);
-	f = f * f * (vec3(3.0) - 2.0 * f);
-	float a0 = mix(btex_hash(i, seed), btex_hash(i + ivec3(1, 0, 0), seed), f.x);
-	float a1 = mix(btex_hash(i + ivec3(0, 1, 0), seed), btex_hash(i + ivec3(1, 1, 0), seed), f.x);
-	float b0 = mix(btex_hash(i + ivec3(0, 0, 1), seed), btex_hash(i + ivec3(1, 0, 1), seed), f.x);
-	float b1 = mix(btex_hash(i + ivec3(0, 1, 1), seed), btex_hash(i + ivec3(1, 1, 1), seed), f.x);
-	return mix(mix(a0, a1, f.y), mix(b0, b1, f.y), f.z);
-}
+// btex_hash/btex_noise moved to terrain_biome_texture_mask.gdshaderinc
+// (#included above) so scatter's placement gating can reuse the identical
+// patchiness noise a band's own material blend uses -- unchanged otherwise.
 
 vec3 btex_material_albedo(int choice, vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 n) {
 	if (choice == 1) return spbr_tri_albedo_ground(dpos, dpdx, dpdy, n);
@@ -251,15 +237,17 @@ vec3 btex_custom_albedo(int idx, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n) {
 		return vec3(1.0);
 	}
 	float tile_m = u_biome_tex_custom_tile_m[idx];
+	float notile = u_biome_tex_custom_notile[idx];
 	float layer = float(idx);
 	vec3 w = spbr_weights(n);
 	vec3 s = spbr_axis_sign(n);
-	return textureGrad(u_biome_tex_custom_albedo, vec3(spbr_uv_x(p, tile_m, s.x), layer),
-			spbr_grad_x(dpdx, tile_m, s.x), spbr_grad_x(dpdy, tile_m, s.x)).rgb * w.x
-		+ textureGrad(u_biome_tex_custom_albedo, vec3(spbr_uv_y(p, tile_m, s.y), layer),
-			spbr_grad_y(dpdx, tile_m, s.y), spbr_grad_y(dpdy, tile_m, s.y)).rgb * w.y
-		+ textureGrad(u_biome_tex_custom_albedo, vec3(spbr_uv_z(p, tile_m, s.z), layer),
-			spbr_grad_z(dpdx, tile_m, s.z), spbr_grad_z(dpdy, tile_m, s.z)).rgb * w.z;
+	vec3 sampled = spat_notile_array(u_biome_tex_custom_albedo, spbr_uv_x(p, tile_m, s.x),
+				spbr_grad_x(dpdx, tile_m, s.x), spbr_grad_x(dpdy, tile_m, s.x), layer, notile).rgb * w.x
+		+ spat_notile_array(u_biome_tex_custom_albedo, spbr_uv_y(p, tile_m, s.y),
+				spbr_grad_y(dpdx, tile_m, s.y), spbr_grad_y(dpdy, tile_m, s.y), layer, notile).rgb * w.y
+		+ spat_notile_array(u_biome_tex_custom_albedo, spbr_uv_z(p, tile_m, s.z),
+				spbr_grad_z(dpdx, tile_m, s.z), spbr_grad_z(dpdy, tile_m, s.z), layer, notile).rgb * w.z;
+	return sampled * u_biome_tex_custom_albedo_tint[idx];
 }
 
 float btex_custom_rough(int idx, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n) {
@@ -267,15 +255,16 @@ float btex_custom_rough(int idx, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n) {
 		return 0.9;
 	}
 	float tile_m = u_biome_tex_custom_tile_m[idx];
+	float notile = u_biome_tex_custom_notile[idx];
 	float layer = float(idx);
 	vec3 w = spbr_weights(n);
 	vec3 s = spbr_axis_sign(n);
-	return textureGrad(u_biome_tex_custom_roughness, vec3(spbr_uv_x(p, tile_m, s.x), layer),
-			spbr_grad_x(dpdx, tile_m, s.x), spbr_grad_x(dpdy, tile_m, s.x)).r * w.x
-		+ textureGrad(u_biome_tex_custom_roughness, vec3(spbr_uv_y(p, tile_m, s.y), layer),
-			spbr_grad_y(dpdx, tile_m, s.y), spbr_grad_y(dpdy, tile_m, s.y)).r * w.y
-		+ textureGrad(u_biome_tex_custom_roughness, vec3(spbr_uv_z(p, tile_m, s.z), layer),
-			spbr_grad_z(dpdx, tile_m, s.z), spbr_grad_z(dpdy, tile_m, s.z)).r * w.z;
+	return spat_notile_array(u_biome_tex_custom_roughness, spbr_uv_x(p, tile_m, s.x),
+				spbr_grad_x(dpdx, tile_m, s.x), spbr_grad_x(dpdy, tile_m, s.x), layer, notile).r * w.x
+		+ spat_notile_array(u_biome_tex_custom_roughness, spbr_uv_y(p, tile_m, s.y),
+				spbr_grad_y(dpdx, tile_m, s.y), spbr_grad_y(dpdy, tile_m, s.y), layer, notile).r * w.y
+		+ spat_notile_array(u_biome_tex_custom_roughness, spbr_uv_z(p, tile_m, s.z),
+				spbr_grad_z(dpdx, tile_m, s.z), spbr_grad_z(dpdy, tile_m, s.z), layer, notile).r * w.z;
 }
 
 // Same triplanar pattern as spbr_tri_normal_ground/grass/mud/forest in
@@ -291,15 +280,16 @@ vec3 btex_custom_normal(int idx, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n) {
 		return n;
 	}
 	float tile_m = u_biome_tex_custom_tile_m[idx];
+	float notile = u_biome_tex_custom_notile[idx];
 	float layer = float(idx);
 	vec3 w = spbr_weights(n);
 	vec3 s = spbr_axis_sign(n);
-	vec3 nx = textureGrad(u_biome_tex_custom_normal, vec3(spbr_uv_x(p, tile_m, s.x), layer),
-			spbr_grad_x(dpdx, tile_m, s.x), spbr_grad_x(dpdy, tile_m, s.x)).rgb * 2.0 - 1.0;
-	vec3 ny = textureGrad(u_biome_tex_custom_normal, vec3(spbr_uv_y(p, tile_m, s.y), layer),
-			spbr_grad_y(dpdx, tile_m, s.y), spbr_grad_y(dpdy, tile_m, s.y)).rgb * 2.0 - 1.0;
-	vec3 nz = textureGrad(u_biome_tex_custom_normal, vec3(spbr_uv_z(p, tile_m, s.z), layer),
-			spbr_grad_z(dpdx, tile_m, s.z), spbr_grad_z(dpdy, tile_m, s.z)).rgb * 2.0 - 1.0;
+	vec3 nx = spat_notile_array(u_biome_tex_custom_normal, spbr_uv_x(p, tile_m, s.x),
+			spbr_grad_x(dpdx, tile_m, s.x), spbr_grad_x(dpdy, tile_m, s.x), layer, notile).rgb * 2.0 - 1.0;
+	vec3 ny = spat_notile_array(u_biome_tex_custom_normal, spbr_uv_y(p, tile_m, s.y),
+			spbr_grad_y(dpdx, tile_m, s.y), spbr_grad_y(dpdy, tile_m, s.y), layer, notile).rgb * 2.0 - 1.0;
+	vec3 nz = spat_notile_array(u_biome_tex_custom_normal, spbr_uv_z(p, tile_m, s.z),
+			spbr_grad_z(dpdx, tile_m, s.z), spbr_grad_z(dpdy, tile_m, s.z), layer, notile).rgb * 2.0 - 1.0;
 	return normalize(spbr_normal_world(nx, 0, s.x) * w.x
 		+ spbr_normal_world(ny, 1, s.y) * w.y
 		+ spbr_normal_world(nz, 2, s.z) * w.z);
@@ -325,12 +315,7 @@ float btex_cavity_value(vec3 dndx, vec3 dndy, vec3 dpdx, vec3 dpdy) {
 	return clamp(raw * BTEX_CAVITY_SCALE, -1.0, 1.0);
 }
 
-// Smooth membership of `value` in [lo, hi], softened by `softness` on both
-// edges so a band never reads as a surveyed, hard-edged line.
-float btex_band(float value, float lo, float hi, float softness) {
-	float s = max(softness, 1e-4);
-	return smoothstep(lo - s, lo, value) * (1.0 - smoothstep(hi, hi + s, value));
-}
+// btex_band also moved to terrain_biome_texture_mask.gdshaderinc.
 
 // Composes every layer bound to `biome` on top of the terrain's existing,
 // already-classified/textured material, each blended in by its own

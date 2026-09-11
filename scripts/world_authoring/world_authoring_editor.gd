@@ -35,6 +35,10 @@ func _ready() -> void:
 	_build_shell()
 	_build_file_dialogs()
 	_refresh_all()
+	# The MCP bridge is a boot autoload now (see project.godot,
+	# scripts/world_authoring/mcp/planet_studio_bridge.gd) so it is listening
+	# from the very first frame, independent of whether Planet Studio has been
+	# opened yet -- it finds this Control dynamically once it exists.
 
 func _build_shell() -> void:
 	var background := ColorRect.new()

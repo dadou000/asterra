@@ -8,6 +8,9 @@ extends "res://scripts/world_authoring/terrain_material_runtime_phase31.gd"
 const GRAPH_SCRIPT := preload(
 	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
 const CONTROL_TYPES: Array[String] = [
+	"PRODUCTION_SCATTER_GRASS_SETTINGS",
+	"PRODUCTION_SCATTER_GEOSTONE_SETTINGS",
+	"PRODUCTION_SCATTER_RIVERSTONE_SETTINGS",
 	"PRODUCTION_CLASSIFIER_SETTINGS",
 	"PRODUCTION_CLASSIFIER_THRESHOLDS",
 	"PRODUCTION_SURFACE_PALETTE",
@@ -144,6 +147,19 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 func bind_material(material: ShaderMaterial) -> void:
 	super.bind_material(material)
 	bind_production_controls(material)
+
+
+## Scatter (gpu_terrain_scatter*.gd) is a separate autoload with its own
+## ShaderMaterials, not the terrain's own -- it has no bind_production_controls
+## call site to hook into, so it polls this getter itself (see
+## spherical_geometry_clipmap_phase30.gd's scatter_production_controls()
+## forwarder) instead of being pushed to like the terrain material is.
+func scatter_controls() -> Dictionary:
+	return {
+		"grass": _control("PRODUCTION_SCATTER_GRASS_SETTINGS"),
+		"geo_stone": _control("PRODUCTION_SCATTER_GEOSTONE_SETTINGS"),
+		"river_stone": _control("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS"),
+	}
 
 
 func bind_production_controls(material: ShaderMaterial) -> void:

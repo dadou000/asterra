@@ -11,6 +11,269 @@ Status key: `OPEN` · `FIX-UNVERIFIED` (fix landed, needs confirmation) · `RESO
 
 ## Open
 
+### P-012 — Center L0 quadtree ring offset causes bind-camera-culling terrain disappearance; scatter placement offset in the air; scatter casts no shadows; scatter lit side not aligned with light source
+- **Status:** OPEN, partially fixed. Symptom 3 (no shadows) fixed and verified.
+  Symptom 2 (floating) root-caused to a specific mechanism, not yet fixed.
+  Symptoms 1 and 4 still not investigated. The four symptoms do **not** appear
+  to share one root cause after this pass — see below.
+- **Found:** 2026-09-11, reported by user, not yet investigated at filing time.
+- **Symptom 3 (no shadows) — FIXED, verified 2026-09-11:** `scripts/terrain/
+  gpu_terrain_scatter.gd::_build_batches()` passed a hardcoded `false` for
+  `cast_shadows` to all three `_make_batch()` calls (grass, geologic stone,
+  river stone) regardless of any setting — shadow casting was unconditionally
+  disabled for every scatter instance in the game, not a subtle bug. Changed
+  all three to `true`. Verified: `--headless --import` clean (no parse
+  errors), fresh windowed 4K launch, live in `Main` (not Planet Studio).
+  Not yet re-screenshotted with a visible cast shadow on the ground because
+  the same live session hit symptom 2 at the test site (floating instances
+  have nothing under them to shadow) — RECHECK at a site where scatter sits
+  on solid, fully-streamed ground.
+- **Symptom 2 (floating) — root-caused, not fixed:** Confirmed live via
+  `studio_screenshot` (F9-loaded save `phase1`, lat 38.27 lon 61.17): several
+  geologic-stone instances render clearly detached above the ground, and the
+  debug HUD reads `GPU scatter global 2048²×6 STABLE FALLBACK` continuously
+  while `spherical L0-L10 ... sectors 5/12` never advances past 5/12. Waited
+  8 s and re-screenshotted at the same camera pose — **pixel-identical**
+  output (same rock positions, same `STABLE FALLBACK`, same `sectors 5/12`),
+  ruling out "still streaming in, will settle" as the explanation. This is a
+  persistent stall at this location, not a load transient.
+  `shaders/gpu_scatter_common.gdshaderinc::sg_terrain_sample()` has two paths:
+  the primary one reads the actual rendered L0 height cache
+  (`sg_rendered_l0_sample`, exact match to what's drawn) and a fallback that
+  reconstructs height from `sg_macro_height() + gm_geomorph_height(...)` when
+  the cache read fails — the HUD's "STABLE FALLBACK" label corresponds to this
+  fallback branch being active. The fallback's reconstruction evidently does
+  not exactly match the real rendered terrain surface, which is the floating.
+  **Not yet found:** why `sg_rendered_l0_sample` fails persistently at this
+  site (vs. clearing after a frame or two elsewhere) — needs tracing into why
+  `sectors 5/12` itself stalls (terrain streaming, not just the scatter cache)
+  in `spherical_geometry_clipmap_*.gd` / the GPU height page atlas.
+  **Correction: "STABLE FALLBACK" is not a live signal at all.**
+  `gpu_terrain_scatter_global.gd:12` — `const STABLE_FALLBACK_ONLY := true` is
+  a hardcoded, permanent flag (the GPU-compute classification path is force-
+  disabled project-wide); the HUD always shows "STABLE FALLBACK" regardless of
+  per-frame cache state. My first-pass reasoning that it indicated a stalled
+  cache was wrong. Got a working ground-facing camera this time (see method
+  note below) and re-tested at the `T` good site (lat 37.93 lon 39.37,
+  `sectors 12/12`, fully streamed, non-coastal Temperate forest): floating
+  rocks/trees still clearly visible, **and** a new HUD field I added
+  (`scripts/ui/hud.gd`, next to the scatter line) reads
+  `terrain cache BOUND gen 5` — the authoritative rendered-terrain cache
+  scatter reads from is bound and ready. So it is not "cache never
+  populates" either.
+- **Root cause found, confirmed by direct code inspection (not yet fixed):**
+  `shaders/terrain_clipmap_cache.glsl:91` — the compute shader that fills the
+  cache scatter reads (`sg_rendered_l0_sample` in `gpu_scatter_common.
+  gdshaderinc`) computes `final_h = macro_h + geomorph(dir, spacing, macro_h)
+  * coast_guard * ...` — i.e. macro elevation plus the multi-octave procedural
+  landform shape only (`geomorph()`'s finest band is 24 m wavelength noise).
+  It does **not** call anything from `shaders/gpu_material_microrelief.
+  gdshaderinc`. That include *is* used by the actual terrain surface shaders
+  (`spherical_geometry_clipmap_cached_surface.gdshader`,
+  `spherical_geometry_clipmap_global_surface.gdshader`) to add a dense,
+  near-camera-only displacement layer on top ("Near-field geometric
+  microrelief" in the debug menu, ON by default). So: the cache scatter
+  places itself against is the terrain height **before** microrelief: the
+  visually rendered ground (with microrelief) and the height scatter reads
+  are two different surfaces near the camera, and the gap between them is the
+  floating.
+- **Why not fixed yet:** the correct fix (evaluate microrelief inside
+  `terrain_clipmap_cache.glsl` too) means porting a near-field-only, camera-
+  proximity-gated displacement into a background cache-population compute
+  pass that currently has no notion of camera distance and runs over a much
+  wider area — a real architecture change to a shared, perf-sensitive shader,
+  not a narrow fix. A cheap mitigation exists (`u_scatter_surface_bias`,
+  already plumbed into both scatter shaders) but it is one constant and
+  microrelief is spatially varying, so it would reduce but not eliminate the
+  float, and could equally make some instances sink instead. Left for a
+  deliberate follow-up rather than guessed at with the budget remaining this
+  session — matches this file's own precedent on P-011 (fix scoped narrowly,
+  not the shared generation pipeline, when blast radius is high).
+- **Method note for next time:** getting a ground-facing screenshot needs
+  `studio_input` mouse `motion` events with `_mouse_captured` already true
+  (true by default once spawned in `Main`) — **positive** `relative.y` pitches
+  down (`pitch = pitch - relative.y * MOUSE_SENS`, `player.gd:164`), negative
+  pitches up. A single huge-delta event did not register reliably; several
+  smaller incremental motion events (e.g. 8-13x `relative.y: ±60-80`) did.
+- **Attempted the real fix 2026-09-11: landed, verified safe, did NOT resolve
+  the visible floating.** Ported `gpu_material_microrelief.gdshaderinc`'s pure
+  math (`mmr_height` + its `spat_periodic_value` noise dependency from
+  `gpu_surface_antitile.gdshaderinc`) directly into `shaders/
+  terrain_clipmap_cache.glsl`, applied for `level == 0` cache cells only,
+  matching the real surface shaders' own gate. Could not `#include` the
+  original files as-is: their `uniform float u_microrelief_*` declarations
+  are Godot ShaderMaterial-style bindings with no meaning in a raw
+  `#[compute]` RDShaderFile, so the math was duplicated with every
+  `u_microrelief_*_scale` baked to its 1.0 default. Deliberately used the
+  already-local `offset_m`/`final_h` as the noise-domain position instead of
+  the planet-absolute `dir*radius` `geomorph()` uses a few lines above:
+  microrelief's finest noise cell is 1 m, and `dir*radius` is planet-radius
+  magnitude (millions of metres) — at that scale float32 does not have enough
+  precision left for 1 m cells (the same class of bug as the
+  [[authored-displacement-cpu-gpu-split]] memory note's "float32 `fract()`
+  spikes"), whereas `geomorph`'s finest band (24 m) tolerates it. `rock_id`
+  and `biome` are approximated as `0.0`/unused (matches
+  `gpu_material_microrelief.gdshaderinc`'s own note that `biome` is accepted
+  but never read; `rock_id` only reshapes the rock sub-pattern, not the
+  overall material weighting). `--headless --import` compiled clean both
+  times. **Live result:** re-tested at the identical `T` good site, ground-
+  facing pose — the screenshot is **pixel-identical** to the pre-fix one,
+  same rocks floating in the same positions. Reading the ported math's
+  coefficients (e.g. `mmr_rock_height`'s dominant terms are ~0.12/0.055/0.022
+  m magnitude before the ~1.0-1.2x rock-type multiplier), the real
+  contribution here is sub-metre — too small to account for what looks like a
+  1-3 m gap in the screenshots. **Conclusion: the microrelief omission was
+  real and is now fixed (kept, it's a genuine correctness improvement and
+  measured safe), but it is not the dominant cause of the visible floating.**
+  Something larger-magnitude is still unaccounted for. Candidates not yet
+  checked: whether `pc.context_detail.z` (this compute shader's geomorph
+  amplitude multiplier) actually equals whatever the real surface shaders
+  bind `u_geomorph_biome_terrain_variation` to (both default-looked
+  consistent by inspection, not verified by value); the "stable displacement
+  lattice"'s per-LOD vertex snapping (debug menu confirms it's ON) doing
+  something to rendered height beyond the cache's plain
+  macro+geomorph(+now-microrelief); or a bias/units mismatch in
+  `u_scatter_surface_bias` / `sg_terrain_sample`'s edit-delta addition
+  specific to this exact spot.
+- **Stable-displacement-lattice snapping candidate — traced, likely ruled
+  out.** Read `stable_surface_offset()` (`spherical_geometry_clipmap_cached_
+  surface.gdshader:123`): it is a numerically-stable reformulation of
+  `dir*(radius+altitude)` for float32 precision near a planet-scale sphere,
+  not an approximation that moves the sampled point. The actual "snapping"
+  is `level_center_m = round(u_lattice_center_plane / spacing) * spacing`
+  (`:344`) -- since `cell_offset_m` is also an exact multiple of `spacing`,
+  every rendered vertex sits on a fixed `spacing`-aligned grid, which is
+  expected clipmap behaviour, not drift. Compared against the cache-writing
+  side: `gpu_terrain_clipmap_cache.gd::_update_level_window` computes
+  `int(round(_center_plane.x/spacing))` -- the **same** `round()` convention,
+  same `spacing`, same `_center_plane` source that gets passed into
+  `update_cache()` from `spherical_geometry_clipmap_cached.gd::
+  _update_terrain_caches()`. The two grids line up structurally: same
+  anchor, same snapping, same spacing per level. Did not verify they are
+  never one frame apart in practice (`_center_plane` could in principle lag
+  between the cache dispatch and the render bind within the same frame), but
+  found no static mismatch. **This mechanism is probably not the cause of
+  the multi-metre floating** -- deprioritize it below the other two
+  candidates (`context_detail.z` amplitude-value mismatch,
+  `u_scatter_surface_bias`/edit-delta) unless something else rules those out
+  first.
+- **`context_detail.z` amplitude mismatch — traced, strongest lead so far,
+  not yet fixed.** The cache's geomorph strength and the actual render's
+  geomorph strength come from two independent systems with no wiring between
+  them: `gpu_terrain_clipmap_cache.gd:548` sets `context_detail.z = maxf(0.05,
+  Planet.cfg.detail_amplitude / 260.0)` (a world-gen-time config baked once
+  at world creation, `gen_config.gd:98`, default `260.0` so default
+  `detail_strength = 1.0`); the actual rendered terrain's `u_detail_strength`
+  is instead set by `scripts/world_authoring/
+  terrain_displacement_runtime_phase32.gd:39-40` from
+  `GEOMORPH_CONTRACT.normalized_controls(_production_controls).
+  get("detail_strength", 1.0)` -- a **live, Planet-Studio-authored** control
+  (`terrain_production_geomorph_schema.gd`), unrelated to `Planet.cfg.
+  detail_amplitude`. Both default to `1.0`, so an untouched world shows no
+  symptom -- consistent with this bug being invisible until someone actually
+  authors terrain (this branch has a lot of uncommitted terrain-authoring
+  WIP). At the 24 m geomorph band alone (~4.5 m amplitude in `geomorph()`),
+  a strength mismatch is easily large enough to explain a multi-metre float.
+  **Not yet confirmed live** -- did not verify the *actual current* value of
+  `_production_controls.detail_strength` in this session/world (would need
+  Planet Studio open, which the live test session was not in; the live-read
+  path is `studio_surface_settings` with the node_type `_phase47_surface_
+  node_id` resolves for the geomorph production node -- exact node_type
+  string not yet looked up) or of `Planet.cfg.detail_amplitude`.
+  **RECHECK / next fix:** (1) confirm live whether the two values actually
+  differ right now before touching code; (2) if so, the correct fix is almost
+  certainly making `gpu_terrain_clipmap_cache.gd` read the same
+  `_production_controls`-derived `detail_strength` the render shader uses
+  (passed in alongside the other terrain args already threaded into
+  `update_cache()`/`_update_terrain_caches()`) instead of independently
+  recomputing it from `Planet.cfg.detail_amplitude` -- not the other way
+  around, since the production controls are the live-authored source of
+  truth and `detail_amplitude` is a generation-time seed value.
+- **CORRECTION, 2026-09-11: the last two entries (stable-displacement-lattice
+  ruling-out, and the `context_detail.z` mismatch) and the microrelief fix
+  earlier were all investigated/applied against `shaders/
+  terrain_clipmap_cache.glsl` / `scripts/terrain/gpu_terrain_clipmap_cache.gd`
+  -- which is NOT the shader `GroundGeometryClipmap` actually uses.** Traced
+  the real inheritance chain (`spherical_geometry_clipmap_phase31.gd` ->
+  ... -> `_phase29.gd` -> `_cache_contract_phase42.gd` -> ... ->
+  `_cached.gd`): `_cached.gd`'s `_ready()` first creates the base
+  `GPUTerrainClipmapCacheScript` (the file I'd been editing), then
+  `_cache_contract_phase42.gd`'s `_ready()` immediately calls
+  `_replace_initial_active_cache()` and swaps `_terrain_cache_active` to a
+  `Phase42TerrainClipmapCacheScript` (`gpu_terrain_clipmap_cache_phase42_
+  final.gd` -> `..._phase42_active.gd`, which loads a **separate** shader,
+  `shaders/terrain_clipmap_cache_phase42.glsl`). The base class/shader is
+  created and discarded within the same startup and never touches anything
+  scatter or the renderer actually read from. This explains why the
+  microrelief fix produced a pixel-identical screenshot (never ran) --
+  **not** because the effect was too small, though it likely also was;
+  separately explains an intermittent (non-deterministic: absent in one
+  launch, present in two later launches of the identical, unmodified code)
+  `ERROR: GPU terrain clipmap cache shader is invalid.` at boot from the base
+  class's shader load -- almost certainly environmental (this session killed
+  and relaunched the process many times back-to-back; plausibly leftover GPU
+  resource contention from the previous process rather than a real bug), and
+  harmless either way since the class is discarded regardless. Left the dead
+  edit in place rather than spend remaining budget reverting it -- it affects
+  nothing live.
+  **The `context_detail.z` lead is very likely also moot for the same
+  reason:** the real `terrain_clipmap_cache_phase42.glsl` does not use a
+  loose push-constant float for detail strength at all -- it reads
+  `GC_DETAIL_STRENGTH` (`gc.value[0].x`) from a dedicated `std430` storage
+  buffer (`GeomorphControls`, binding 8, "ABI v2") that the shader's own
+  comment states is "shared by every warm-cache dispatch; the visible
+  analytic shader receives the same normalized dictionary through ordinary
+  material uniforms" -- i.e. this was deliberately engineered as a single
+  shared source of truth precisely to prevent a cache/render amplitude
+  mismatch. Did not verify the GDScript binding actually keeps this promise,
+  but the design intent argues against this being the bug.
+- **New, much more significant finding from reading the real
+  `terrain_clipmap_cache_phase42.glsl`'s actual `main()`:** it does not call
+  geomorph OR microrelief AT ALL. Line 500, verbatim: `float final_h=macro_h;`
+  with the shader's own comment above it: "Terrain height is the coarse
+  elevation map alone... All finer terrain shape is composed on top per
+  biome by the Biome Terrain authoring path. The synthesised geomorph bands
+  no longer contribute height." **The cache scatter reads from contains
+  nothing but raw macro/continental elevation** -- not geomorph, not
+  microrelief, not whatever the Biome Terrain authoring system (the newer
+  graph-based per-biome displacement system mentioned in this project's own
+  memory notes on the authored-displacement CPU/GPU split) adds on top,
+  which is almost certainly several metres at many biomes given the terrain
+  debug menu's own description ("Alpine/Bare rock ridged and tall"). This is
+  a far more complete explanation for a 1-3 m float than anything
+  investigated so far, and a materially bigger fix: it would mean threading
+  the Biome Terrain authoring displacement (not yet located in this
+  investigation -- likely `terrain_biome_profile.gdshaderinc` per existing
+  project memory) into this compute shader, not one self-contained function
+  like microrelief was. **Not attempted this session** -- out of budget for
+  a change of this scope with adequate verification. This supersedes the
+  microrelief-in-cache work above as the priority next step; redoing that
+  fix in the *correct* file is still worth doing but is now expected to be a
+  minor contribution next to Biome Terrain authoring, not the main fix.
+- **Symptoms 1 and 4 — still not investigated** this pass. Original
+  hypothesis (shared root cause across all four) is weakened: symptom 3 had
+  its own, unrelated, purely-CPU-side cause (a hardcoded literal), unconnected
+  to height sampling or culling.
+- **Symptoms:**
+  1. The center L0 ring gets offset from its expected position, and terrain
+     disappears because bind-camera culling then treats visible terrain as
+     out of frustum/range.
+  2. Terrain scatter placement is offset — instances appear floating in the
+     air rather than sitting on the terrain surface.
+  3. Scatter instances do not cast shadows onto the ground.
+  4. Scatter's lit side does not match the actual light/sun direction.
+- **Suspect areas:** `scripts/terrain/spherical_geometry_clipmap_blankaware.gd`,
+  `scripts/terrain/spherical_geometry_clipmap_occlusion.gd`,
+  `scripts/terrain/gpu_terrain_scatter_global.gd`,
+  `scripts/terrain/gpu_terrain_scatter_authoring_empty.gd` — check whether
+  scatter transform sampling uses the same rebased/offset coordinate frame as
+  the L0 ring culling, and whether the scatter shader receives the current
+  light direction and is registered in the shadow pass.
+- **RECHECK:** Reproduce in-game with wireframe + camera frustum visualization
+  at a rebase boundary to confirm the L0 offset and correlate its timing with
+  the scatter floating; separately verify light-direction wiring and
+  shadow-caster flags on scatter mesh/MultiMesh instances.
+
 ### P-009 — Weather WorkerThreadPool jobs degrade frame time ~25-30x; the "fps" HUD grossly overstates it as "1"
 - **Status:** OPEN — real, modest degradation confirmed; earlier "fps collapses
   to 1 / hangs" framing in this entry was **wrong**, corrected below with
@@ -95,8 +358,27 @@ Status key: `OPEN` · `FIX-UNVERIFIED` (fix landed, needs confirmation) · `RESO
   teleports/rebases in a few seconds — most likely that location was simply on
   the **night side** (the user's own read the first time: "you were on the
   nightside") compounded by something in that test spot's state never being
-  reconfirmed with full_bright at the *later*, fixed-clamp altitude. Do not
-  reopen this as a general pipeline bug without a fresh, low-churn repro.
+  reconfirmed with full_bright at the *later*, fixed-clamp altitude.
+- **Re-confirmed 2026-09-11 (second session), decisively this time:** reproduced the
+  identical black screen at the exact same spot on a **fresh boot**, a **single** `T`
+  "teleport to a good site" press, `chunks 0 / GPU height PENDING async` as always —
+  including with `full_bright` enabled, which is what made it look like new evidence
+  against the night-side explanation (logged as a reopen, since retracted below). The
+  user's suggestion to test with time-of-day/timewarp settled it: `studio_time advance
+  seconds:40000` (then `+10000` more) turned the screen from solid black to a lit,
+  visibly-grained ground with a normal sky gradient at the horizon, with `chunks`
+  still reading `0` the whole time. Enabling `studio_view terrain_debug wireframe`
+  at the same spot, in daylight, showed a real, dense wireframe mesh with actual
+  triangle detail (plus the sink-radius circle from `sink_scale`) -- definitive proof
+  real geometry was rendering. **`chunks 0` is confirmed a stale/misleading counter,
+  not a live signal of missing geometry** -- do not trust it, even alongside
+  `full_bright`, as proof terrain isn't rendering. **`full_bright` is NOT a reliable
+  way to rule out night-side blackness either** -- it stayed black under full_bright
+  at this spot until the clock was actually advanced, meaning something in the
+  night-side render path (likely aerial/atmospheric compositing or a sun-visibility
+  term) still zeroes the image even in the "unshaded" debug view. Do not reopen this
+  as a pipeline bug from a `full_bright`-still-black observation alone -- advance the
+  clock and/or check wireframe first.
 
 ### P-007 — Biome terrain composition needs per-biome visual verification
 - **Status:** FIX-UNVERIFIED
@@ -167,6 +449,65 @@ Status key: `OPEN` · `FIX-UNVERIFIED` (fix landed, needs confirmation) · `RESO
 ---
 
 ## Resolved
+
+### P-011 — Scatter never rendered on Asterra land; root cause was a `find_spawn()`/renderer height desync, not the scatter suitability code
+- **Status:** RESOLVED
+- **Found:** 2026-09-11, while adding biome/texture-mask/global placement
+  gating to the three procedural scatter families (this session's new
+  `PRODUCTION_SCATTER_*_SETTINGS` controls / `sg_gate_weight` in
+  `shaders/gpu_scatter_common.gdshaderinc`).
+- **Original (wrong) hypothesis:** `sg_grass_suitability`/
+  `sg_geologic_stone_suitability`/`sg_river_stone_suitability`'s "land" gate
+  (`smoothstep` windows centred within ~2 m of `terrain_h = 0`) looked
+  miscalibrated, since every test site read `TERRAIN` around -196 to -220 m
+  despite plausible land-like climate/soil/geology stats.
+- **Investigated properly instead of just recalibrating the thresholds** (the
+  user's call, since patching the smoothstep windows would have papered over
+  whatever the real cause was): confirmed via `scripts/gen/pass_macro.gd`'s
+  hypsometric remap, `scripts/gen/pass_erosion.gd`'s 0-referenced boundary
+  conditions, and `scripts/gen/planet_sampler.gd`'s ocean surface (literally
+  `0.0`) that **`terrain_h = 0` is the CORRECT sea-level datum by design** --
+  recalibrating the scatter thresholds would have been the wrong fix.
+- **Real root cause:** `scripts/gen/pass_biome.gd` (`PassBiome`) and
+  `scripts/main.gd`'s `find_spawn()` both correctly read the same canonical
+  baked field, `Planet.fields.elev` (post-erosion, pre-render) -- so a cell
+  `find_spawn()` approves as "> 5 m of land" really is a land biome by that
+  field. But the actual RENDERED terrain (and therefore the water mask,
+  contact height, and everything scatter/visual/physical) comes from a
+  SEPARATE, DERIVED field: `PlanetSampler._build_smoothed_macro_elevation()`
+  duplicates `fields.elev` once at world load and runs it through two
+  Gaussian smoothing passes (0.5 strength) before clamping -- never
+  reconciled back into `fields.elev` or biome classification. Near almost any
+  coastline, that smoothing can drag a barely-positive land cell's RENDERED
+  height (`Planet.macro_height(dir)`) far negative by averaging it with much
+  deeper ocean/shelf neighbours, so a cell that is correctly "land" by
+  `fields.elev` and biome can still render/behave as if 100-200+ m
+  underwater -- exactly what every test site hit, because `find_spawn()`
+  never checked the rendered height, only the canonical one.
+- **Fix:** `scripts/main.gd`'s `find_spawn()` now also requires
+  `Planet.macro_height(dir) > 5.0` (the same rendered-height quantity scatter,
+  water and contact all already agree on) alongside the existing
+  `f.elev[c] > 5.0` check, so a fresh spawn/teleport site is guaranteed to
+  actually render as land, not just be classified as land. Scoped narrowly to
+  spawn-site selection rather than touching the generation/smoothing pipeline
+  itself (which shapes every coastline on the planet and carries much higher
+  blast radius for a fix aimed at "stop teleporting me underwater").
+- **Verified live:** fresh boot, `T` teleport landed on a genuinely different,
+  positively-elevated site (`TERRAIN 149.9 m`, real river `Strahler 6`,
+  `Temperate forest`, `vegetation 0.34`) instead of the old -200 m coastal
+  site. Grass (dark blade billboards) and geologic stone (light diamond
+  billboards) both visibly rendered close to the ground for the first time.
+  Confirmed the new gating feature itself works end-to-end: set grass's gate
+  to Biome + a biome that did NOT match the current site -> grass disappeared
+  completely (stone, ungated, stayed); set the biome back to the actual
+  current biome -> grass reappeared. Reset grass back to Global afterward.
+- **Not fixed / out of scope:** the underlying `fields.elev` vs
+  `_macro_elev` desync itself (why coastal cells can diverge this much) is
+  still there for any OTHER code path that reads `fields.elev` expecting it to
+  match the renderer -- this fix only covers `find_spawn()`. The "ecology"
+  10-real-asset scatter layer is still suppressed (`TerrainScatterEmpty`)
+  pending real asset verification, separate from the two procedural families
+  fixed here.
 
 ### P-010 — Micro/macro terrain texture blend: shader done + live, editor/MCP UI not wired to the live game
 - **Status:** RESOLVED

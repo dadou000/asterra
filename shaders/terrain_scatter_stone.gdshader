@@ -40,6 +40,8 @@ void vertex() {
 			terrain_h, soil, surface, geology, structure, climate, hydro, landform, biome)
 		: sg_river_stone_suitability(
 			terrain_h, soil, surface, geology, structure, climate, hydro, landform, biome);
+	suitability *= sg_gate_weight(biome, d, terrain_h, macro_h,
+		sg_slope_proxy_deg(surface, structure, landform));
 	v_alive = sg_acceptance(suitability, h, INSTANCE_ID);
 
 	vec3 right;

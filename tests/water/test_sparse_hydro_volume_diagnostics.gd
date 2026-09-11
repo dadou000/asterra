@@ -28,7 +28,7 @@ func _ready() -> void:
 	var state := PackedFloat32Array()
 	state.resize(CAPACITY * cells_per_tile * SparseHydroAtlasGPU.STATE_FLOATS)
 	for slot in CAPACITY:
-		var depth := [0.5, 99.0, 1.25][slot]
+		var depth: float = [0.5, 99.0, 1.25][slot]
 		for local_i in cells_per_tile:
 			var o := (slot * cells_per_tile + local_i) * SparseHydroAtlasGPU.STATE_FLOATS
 			state[o] = depth

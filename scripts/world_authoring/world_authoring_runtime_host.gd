@@ -126,7 +126,7 @@ func _open_live_editor(player: Node) -> void:
 		var staged: Resource = session.staged_system as Resource
 		if staged != null:
 			Frames.system_time_s = float(staged.get(&"sim_start_epoch_s"))
-			Frames.time_scale = maxf(float(staged.get(&"sim_time_scale")), 0.0)
+			Frames.time_scale = clampf(float(staged.get(&"sim_time_scale")), -1.0e7, 1.0e7)
 			Frames.playing = false
 
 		var biome_preview: Node = BIOME_PREVIEW_SCRIPT.new()

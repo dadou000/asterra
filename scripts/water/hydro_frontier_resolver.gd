@@ -56,6 +56,8 @@ func resolve_candidates(candidates: Array[Dictionary],
 		}
 		if candidate.has("source_surface_m"):
 			result["source_surface_m"] = float(candidate["source_surface_m"])
+		if candidate.has("source_bed_m"):
+			result["source_bed_m"] = float(candidate["source_bed_m"])
 		if candidate.has("predictive_wetting"):
 			result["predictive_wetting"] = bool(candidate["predictive_wetting"])
 
@@ -115,6 +117,8 @@ func resolve_candidates(candidates: Array[Dictionary],
 		var policy_link := link.duplicate(true)
 		if candidate.has("source_surface_m"):
 			policy_link["source_surface_m"] = float(candidate["source_surface_m"])
+		if candidate.has("source_bed_m"):
+			policy_link["source_bed_m"] = float(candidate["source_bed_m"])
 		if candidate.has("predictive_wetting"):
 			policy_link["predictive_wetting"] = bool(candidate["predictive_wetting"])
 

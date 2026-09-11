@@ -68,6 +68,7 @@ func record_commit(rd: RenderingDevice, compute: int) -> void:
 		return
 	rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_add_barrier(compute)
 

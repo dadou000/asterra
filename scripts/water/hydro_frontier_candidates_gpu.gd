@@ -212,6 +212,7 @@ func _on_queue_bytes(bytes: PackedByteArray, request_id: int) -> void:
 			"y": int(bytes.decode_u32(o + 24)),
 			"predictive_wetting": (flags & 1) != 0,
 			"source_surface_m": bytes.decode_float(o + 32),
+			"source_bed_m": bytes.decode_float(o + 36),
 		})
 	call_deferred("_publish_candidates", request_id, candidates, overflow)
 

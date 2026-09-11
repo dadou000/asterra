@@ -95,6 +95,11 @@ def validate(data: dict[str, Any], online: bool) -> list[str]:
     if allow_empty_catalog and assets:
         errors.append("allow_empty_catalog=true requires assets to be an empty array")
 
+    allow_partial_catalog = data.get("allow_partial_catalog", False)
+    if not isinstance(allow_partial_catalog, bool):
+        errors.append("allow_partial_catalog must be a boolean when present")
+        allow_partial_catalog = False
+
     runtime_root_value = data.get("runtime_root")
     if not isinstance(runtime_root_value, str) or not runtime_root_value:
         errors.append("runtime_root must be a non-empty string")
@@ -157,16 +162,16 @@ def validate(data: dict[str, Any], online: bool) -> list[str]:
             except Exception as exc:
                 errors.append(f"{asset_id}: online verification failed: {exc}")
 
-    # Empty catalogs are permitted only when explicitly declared. Otherwise the
-    # normal coverage invariant remains strict: every non-ocean macro biome needs
-    # at least one concrete model assignment.
-    if not allow_empty_catalog:
+    # A focused authoring catalog can deliberately target one biome while it is
+    # being composed. Production-wide catalogs retain the strict coverage check.
+    if not allow_empty_catalog and not allow_partial_catalog:
         for biome, count in coverage.items():
             if biome != "OCEAN" and count == 0:
                 errors.append(f"no model coverage for biome: {biome}")
 
     print(f"assets: {len(assets)}")
     print(f"intentional_empty_catalog: {allow_empty_catalog}")
+    print(f"partial_catalog: {allow_partial_catalog}")
     print("coverage:")
     for biome in VALID_BIOMES:
         print(f"  {biome:28} {coverage[biome]:2d}")

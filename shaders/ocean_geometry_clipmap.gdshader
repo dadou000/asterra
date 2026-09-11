@@ -5,6 +5,7 @@ render_mode cull_disabled, depth_draw_opaque, diffuse_burley, specular_schlick_g
 #include "res://shaders/cloud_shadow.gdshaderinc"
 #include "res://shaders/planet_surface_lookup.gdshaderinc"
 #include "res://shaders/gpu_terrain_height.gdshaderinc"
+#include "res://shaders/terrain_edit_delta.gdshaderinc"
 #include "res://shaders/water_surface.gdshaderinc"
 #include "res://shaders/ocean_waves.gdshaderinc"
 
@@ -205,7 +206,12 @@ float ocean_visible_ground_height(vec3 d, float arc_m) {
 	int terrain_level;
 	float terrain_morph;
 	ocean_visible_terrain_lod(arc_m, terrain_level, terrain_morph);
-	return gpu_terrain_height_with_morph(d, terrain_level, terrain_morph);
+	// Compose the persistent terrain edit lattice (Deltas). A river channel or
+	// harbour carved below sea level lowers the ground here, so the ocean floods
+	// it and its surf/bathymetry follow the cut -- otherwise the sea stops at the
+	// un-edited macro coastline and leaves a dry gap around the river mouth.
+	return gpu_terrain_height_with_morph(d, terrain_level, terrain_morph)
+		+ terrain_edit_delta(d, u_planet_radius);
 }
 
 void ocean_bathymetry(vec3 d, float arc_m, float sample_m,

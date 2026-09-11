@@ -3,25 +3,31 @@ extends "res://scripts/terrain/gpu_terrain_scatter_compact.gd"
 ##
 ## The indirect RenderingDevice compaction path is still disabled because the real
 ## runtime previously reported invalid/stale indirect buffers. Until that backend
-## is repaired, scanned assets are a sparse accent layer over the cheap procedural
-## grass/stones. Every scatter material is now fed the active rendered-terrain cache
-## so placement uses the same L0 height surface as GroundGeometryClipmap.
+## is repaired, scanned assets use the proven vertex-placement path. The inherited
+## procedural grass/stone batches are intentionally kept hidden: Planet Studio's
+## manifest is the single source of truth for authored scatter. Every scatter
+## material is fed the active rendered-terrain cache so placement uses the same L0
+## height surface as GroundGeometryClipmap.
 
 const STABLE_FALLBACK_ONLY := true
 const ECOLOGY_SHADER_PATH := "res://shaders/terrain_scatter_ecology.gdshader"
 const ECOLOGY_RUNTIME_ROOT := "res://assets/scatter/runtime"
+const ECOLOGY_CATALOG := preload("res://scripts/terrain/scatter_ecology_catalog.gd")
 
 # Vertex-fallback classification is evaluated once per mesh vertex, not once per
 # instance. A permissive 200k-triangle source-mesh guard therefore turns a tiny
 # candidate lattice into millions of expensive terrain/context evaluations. Keep
 # only genuinely light source/LOD meshes in this path; heavier library assets stay
 # available for the future transform-compute/impostor renderer.
-const ECOLOGY_MAX_SELECTED_LOD_TRIANGLES := 12000
+# The authoring library now separates candidate count from source complexity.
+# Canopy/sapling assets are deliberately very sparse (typically a 2x2/3x3
+# lattice), so a single photogrammetry-derived foliage mesh may use a larger
+# vertex budget than dense groundcover without multiplying into runaway work.
+const ECOLOGY_MAX_SELECTED_LOD_TRIANGLES := 500000
 const FALLBACK_SCATTER_MAX_ALTITUDE_M := 1200.0
 
-# Preserve roughly the same physical coverage as the first integration while
-# reducing the number of scanned-mesh candidates. Procedural grass/stones still
-# provide dense ground coverage beneath these real-asset accents.
+# Historical bootstrap defaults retained only as documentation/migration context.
+# Runtime ecology definitions are generated from the authoring manifest below.
 const ECOLOGY_ASSETS := [
 	{"id":"grass_bermuda_01", "lod":0, "grid":12, "spacing":5.3, "density":0.72, "kind":0, "salt":1201, "scale_min":0.82, "scale_max":1.18, "wind":0.045, "shadows":false},
 	{"id":"fern_02", "lod":0, "grid":5, "spacing":17.5, "density":0.54, "kind":1, "salt":1213, "scale_min":0.76, "scale_max":1.24, "wind":0.025, "shadows":false},
@@ -56,6 +62,7 @@ var _ecology_batches: Array[Dictionary] = []
 var _ecology_loaded_asset_ids: PackedStringArray = PackedStringArray()
 var _ecology_selected_triangles: int = 0
 var _ecology_candidate_instances: int = 0
+var _ecology_materials: Array[ShaderMaterial] = []
 
 
 func _ready() -> void:
@@ -99,6 +106,8 @@ func _process(dt: float) -> void:
 	# so check its cheap signature every frame. Shader uniforms are touched only when
 	# the active cache, generation or tangent anchor actually changes.
 	_bind_authoritative_terrain_cache(false)
+	_bind_scatter_gates(false)
+	_bind_biome_texture_mask(false)
 
 	if _ecology_batches.is_empty():
 		return
@@ -270,6 +279,73 @@ func _bind_authoritative_terrain_cache(force: bool) -> void:
 	_bound_terrain_cache_base_spacing = base_spacing
 
 
+## Author-level per-family gating (enabled/density/biome/texture-mask), read
+## from Planet Studio's Surface Detail -> Scatter controls via the terrain's
+## material runtime -- see spherical_geometry_clipmap_phase30.gd's
+## scatter_production_controls() and terrain_material_runtime_phase32.gd's
+## scatter_controls(). Cheap per-frame signature check, same pattern as
+## _bind_authoritative_terrain_cache just above; only touches uniforms when
+## the authored settings actually changed.
+var _bound_scatter_gate_signature: String = ""
+
+func _bind_scatter_gates(force: bool) -> void:
+	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	var controls: Dictionary = {}
+	if terrain != null and terrain.has_method("scatter_production_controls"):
+		controls = terrain.call("scatter_production_controls")
+	var grass: Dictionary = controls.get("grass", {}) as Dictionary
+	var geo_stone: Dictionary = controls.get("geo_stone", {}) as Dictionary
+	var river_stone: Dictionary = controls.get("river_stone", {}) as Dictionary
+	var signature: String = "%s|%s|%s" % [JSON.stringify(grass), JSON.stringify(geo_stone), JSON.stringify(river_stone)]
+	if not force and signature == _bound_scatter_gate_signature:
+		return
+	_bound_scatter_gate_signature = signature
+	_apply_scatter_gate(_grass_material, grass)
+	_apply_scatter_gate(_geo_stone_material, geo_stone)
+	_apply_scatter_gate(_river_stone_material, river_stone)
+
+
+## The authored Biome Texture band data scatter's TEXTURE_MASK gate reads
+## (asterra_biome_texture_mask_weight) -- pushed onto scatter's OWN materials
+## since it is a separate autoload from the terrain's, mirroring
+## _bind_authoritative_terrain_cache's cross-autoload pattern. Gated on the
+## displacement profile's fingerprint (cheap to poll every frame) since the
+## source dict itself is rebuilt from scratch on every call.
+var _bound_biome_texture_mask_fingerprint: String = ""
+
+func _bind_biome_texture_mask(force: bool) -> void:
+	var terrain: Node = get_node_or_null("/root/GroundGeometryClipmap")
+	if terrain == null or not terrain.has_method("displacement_profile_fingerprint"):
+		return
+	var fingerprint: String = String(terrain.call("displacement_profile_fingerprint"))
+	if not force and fingerprint == _bound_biome_texture_mask_fingerprint:
+		return
+	_bound_biome_texture_mask_fingerprint = fingerprint
+	if not terrain.has_method("scatter_biome_texture_mask_uniforms"):
+		return
+	var packed: Dictionary = terrain.call("scatter_biome_texture_mask_uniforms")
+	var count: int = int(packed.get("count", 0))
+	for material: ShaderMaterial in _materials:
+		material.set_shader_parameter("u_biome_tex_layer_count", count)
+		if count > 0:
+			material.set_shader_parameter("u_biome_tex_layer_a", packed.get("a"))
+			material.set_shader_parameter("u_biome_tex_layer_b", packed.get("b"))
+			material.set_shader_parameter("u_biome_tex_layer_d", packed.get("d"))
+			material.set_shader_parameter("u_biome_tex_layer_f", packed.get("f"))
+
+
+func _apply_scatter_gate(material: ShaderMaterial, controls: Dictionary) -> void:
+	if material == null:
+		return
+	material.set_shader_parameter("u_scatter_author_enabled", 1.0 if bool(controls.get("enabled", true)) else 0.0)
+	material.set_shader_parameter("u_scatter_author_density", maxf(float(controls.get("density", 1.0)), 0.0))
+	material.set_shader_parameter("u_scatter_gate_mode", int(controls.get("gate_mode", 0)))
+	material.set_shader_parameter("u_scatter_gate_biome", int(controls.get("biome_id", 0)))
+	material.set_shader_parameter("u_scatter_gate_layer_index", int(controls.get("texture_band_index", 0)))
+	material.set_shader_parameter("u_scatter_slope_min_deg", float(controls.get("slope_min_deg", 0.0)))
+	material.set_shader_parameter("u_scatter_slope_max_deg", float(controls.get("slope_max_deg", 180.0)))
+
+
 func _disable_authoritative_terrain_cache(force: bool) -> void:
 	if not force and not _bound_terrain_cache_ready and _bound_terrain_cache_texture == null:
 		return
@@ -291,11 +367,101 @@ func _build_ecology_batches() -> void:
 		push_error("Terrain ecology scatter shader could not be loaded")
 		return
 
-	for definition_value: Variant in ECOLOGY_ASSETS:
+	for definition_value: Variant in _ecology_definitions():
 		if not (definition_value is Dictionary):
 			continue
 		var definition: Dictionary = definition_value
 		_build_ecology_asset(definition)
+
+
+func _ecology_definitions() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for asset: Dictionary in ECOLOGY_CATALOG.all_assets():
+		if not bool(asset.get("enabled", true)):
+			continue
+		var defaults: Dictionary = ECOLOGY_CATALOG.render_defaults_for(asset)
+		if defaults.is_empty():
+			continue
+		var tier: String = String(defaults.get("tier", "ground"))
+		var grid_by_tier := {"micro":8, "ground":5, "major":3, "canopy":3}
+		var kind: String = String(asset.get("kind", ""))
+		var authored: Dictionary = asset.get("authoring", {}) as Dictionary
+		var definition := {
+			"id":String(asset.get("id", "")),
+			"lod":int(authored.get("lod", asset.get("runtime_lod", 0))),
+			"grid":int(authored.get("grid", grid_by_tier.get(tier, 4))),
+			"spacing":float(authored.get("spacing_m", defaults.get("spacing_m", 4.0))),
+			"density":float(authored.get("density", asset.get("density", 0.55))),
+			"kind":_ecology_shader_kind(kind),
+			"salt":int(authored.get("seed", abs(String(asset.get("id", "")).hash()) % 32749 + 1)),
+			"scale_min":float(authored.get("scale_min", 0.82)),
+			"scale_max":float(authored.get("scale_max", 1.18)),
+			"wind":float(authored.get("wind", defaults.get("wind", 0.0))) * 0.05,
+			# Shadow casting defaults on for every tier now, matching the reference
+			# forest demo's philosophy. The per-tier cost this used to avoid (dense
+			# micro/ground foliage casting shadows at any distance) is handled by
+			# the distance-thinned instances degenerating in the shadow pass too
+			# (same vertex() reruns for shadow rendering), not by excluding tiers here.
+			"shadows":bool(authored.get("shadows", true)),
+			"biome_ids":_manifest_biome_ids(asset.get("biomes", [])),
+			"slope_min_deg":float(authored.get("slope_min_deg", 0.0)),
+			"slope_max_deg":float(authored.get("slope_max_deg", 48.0 if tier == "canopy" else 70.0)),
+			"environment_floor":clampf(float(authored.get("environment_floor", 0.0)), 0.0, 1.0),
+		}
+		result.append(definition)
+	return result
+
+
+func _ecology_shader_kind(kind: String) -> int:
+	if kind in ["fern", "moss"]:
+		return 1
+	if kind in ["shrub", "sapling", "conifer_tree", "broadleaf_tree", "windswept_tree"]:
+		return 2
+	if kind in ["dry_shrub", "succulent", "succulent_shrub", "dry_debris"]:
+		return 3
+	if kind in ["stone", "stone_set", "mossy_stone_set", "boulder", "desert_boulder", "coastal_rocks"]:
+		return 4
+	if kind in ["deadwood", "dry_deadwood", "stump", "root"]:
+		return 5
+	if kind in ["tropical_groundcover", "tropical_shrub"]:
+		return 6
+	if kind == "desert_tree":
+		return 7
+	return 0
+
+
+func _manifest_biome_ids(raw: Variant) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	if not (raw is Array):
+		return result
+	for value: Variant in raw:
+		var wanted: String = String(value)
+		for biome_id: int in PlanetFields.BIOME_NAMES.size():
+			if String(PlanetFields.BIOME_NAMES[biome_id]).to_upper().replace(" ", "_") == wanted:
+				result.append(biome_id)
+				break
+	return result
+
+
+func reload_ecology_assets() -> Dictionary:
+	for batch_data: Dictionary in _ecology_batches:
+		var instance: MultiMeshInstance3D = batch_data.get("instance") as MultiMeshInstance3D
+		if instance != null:
+			instance.queue_free()
+	for material: ShaderMaterial in _ecology_materials:
+		_materials.erase(material)
+	_ecology_batches.clear()
+	_ecology_materials.clear()
+	_ecology_loaded_asset_ids = PackedStringArray()
+	_ecology_selected_triangles = 0
+	_ecology_candidate_instances = 0
+	ECOLOGY_CATALOG.clear_cache()
+	_build_ecology_batches()
+	_static_scatter_bound = false
+	if Planet.ready_state and Planet.cfg != null:
+		_bind_gpu_resources(true)
+	return {"ok":true, "loaded":Array(_ecology_loaded_asset_ids),
+		"mesh_batches":_ecology_batches.size(), "triangles":_ecology_selected_triangles}
 
 
 func _build_ecology_asset(definition: Dictionary) -> void:
@@ -307,6 +473,9 @@ func _build_ecology_asset(definition: Dictionary) -> void:
 	if metadata.is_empty():
 		return
 	var selected_triangles: int = _metadata_lod_triangles(metadata, lod_index)
+	if selected_triangles <= 0 or selected_triangles > ECOLOGY_MAX_SELECTED_LOD_TRIANGLES:
+		lod_index = _metadata_best_lod(metadata)
+		selected_triangles = _metadata_lod_triangles(metadata, lod_index)
 	if selected_triangles <= 0 or selected_triangles > ECOLOGY_MAX_SELECTED_LOD_TRIANGLES:
 		push_warning("Skipping ecology asset %s LOD%d (%d triangles; fallback cap %d)" % [
 			asset_id, lod_index, selected_triangles, ECOLOGY_MAX_SELECTED_LOD_TRIANGLES])
@@ -358,6 +527,7 @@ func _collect_ecology_meshes(node: Node, parent_transform: Transform3D,
 					surface_materials.append(material)
 					asset_materials.append(material)
 					_materials.append(material)
+					_ecology_materials.append(material)
 
 				var grid: int = int(definition.get("grid", 1))
 				var batch := _make_ecology_batch(
@@ -391,6 +561,17 @@ func _make_ecology_material(source_material: Material, definition: Dictionary,
 	material.set_shader_parameter("u_asset_scale_max", float(definition.get("scale_max", 1.18)))
 	material.set_shader_parameter("u_asset_height_m", maxf(height_m, 0.05))
 	material.set_shader_parameter("u_wind_strength", float(definition.get("wind", 0.0)))
+	var biome_ids: PackedInt32Array = definition.get("biome_ids", PackedInt32Array()) as PackedInt32Array
+	var padded_biomes := PackedInt32Array()
+	padded_biomes.resize(18)
+	padded_biomes.fill(-1)
+	for biome_index: int in mini(biome_ids.size(), padded_biomes.size()):
+		padded_biomes[biome_index] = biome_ids[biome_index]
+	material.set_shader_parameter("u_asset_biome_count", mini(biome_ids.size(), padded_biomes.size()))
+	material.set_shader_parameter("u_asset_biome_ids", padded_biomes)
+	material.set_shader_parameter("u_asset_slope_min_deg", float(definition.get("slope_min_deg", 0.0)))
+	material.set_shader_parameter("u_asset_slope_max_deg", float(definition.get("slope_max_deg", 90.0)))
+	material.set_shader_parameter("u_asset_environment_floor", float(definition.get("environment_floor", 0.0)))
 	material.set_shader_parameter("u_asset_axis_x", asset_transform.basis.x)
 	material.set_shader_parameter("u_asset_axis_y", asset_transform.basis.y)
 	material.set_shader_parameter("u_asset_axis_z", asset_transform.basis.z)
@@ -486,6 +667,24 @@ func _metadata_lod_triangles(metadata: Dictionary, lod_index: int) -> int:
 	return 0
 
 
+func _metadata_best_lod(metadata: Dictionary) -> int:
+	var best_lod := -1
+	var best_triangles := 0
+	var lods_value: Variant = metadata.get("lods", [])
+	if not (lods_value is Array):
+		return best_lod
+	for record_value: Variant in lods_value:
+		if not (record_value is Dictionary):
+			continue
+		var record: Dictionary = record_value
+		var triangles := int(record.get("triangles", 0))
+		if triangles > 0 and triangles <= ECOLOGY_MAX_SELECTED_LOD_TRIANGLES \
+				and (best_lod < 0 or triangles > best_triangles):
+			best_lod = int(record.get("lod", -1))
+			best_triangles = triangles
+	return best_lod
+
+
 func _metadata_height_m(metadata: Dictionary) -> float:
 	var bounds_value: Variant = metadata.get("bounds_size_m", [])
 	if bounds_value is Array:
@@ -496,7 +695,17 @@ func _metadata_height_m(metadata: Dictionary) -> float:
 
 
 func _set_visible(value: bool) -> void:
-	super._set_visible(value)
+	# The superclass calls this virtual method from its placement loop. Never let
+	# that call resurrect the old procedural blades/stones underneath the curated
+	# library: those shapes were useful as a renderer smoke test, but are not valid
+	# authored biome content. Compact equivalents are hidden for the same reason.
+	if _grass_batch != null:
+		_grass_batch.visible = false
+	if _geo_stone_batch != null:
+		_geo_stone_batch.visible = false
+	if _river_stone_batch != null:
+		_river_stone_batch.visible = false
+	_hide_compact_batches()
 	for batch_data: Dictionary in _ecology_batches:
 		var instance: MultiMeshInstance3D = batch_data.get("instance") as MultiMeshInstance3D
 		if instance != null:

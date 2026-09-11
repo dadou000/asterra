@@ -36,8 +36,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(self.request("tools/list")["error"]["code"], -32002)
         self.initialize()
         tools = self.request("tools/list")["result"]["tools"]
-        self.assertEqual(len(tools), 12)
-        self.assertEqual(len({item["name"] for item in tools}), 12)
+        self.assertEqual(len(tools), 17)
+        self.assertEqual(len({item["name"] for item in tools}), 17)
         self.assertEqual(self.request("ping")["result"], {})
 
     def test_unknown_and_malformed_requests(self):
@@ -95,7 +95,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(replies), 3)
         self.assertEqual(replies[0]["error"]["code"], -32700)
         self.assertEqual(replies[1]["id"], "init")
-        self.assertEqual(len(replies[2]["result"]["tools"]), 12)
+        self.assertEqual(len(replies[2]["result"]["tools"]), 17)
         self.assertEqual(result.stderr, b"")
 
     def test_socket_fragmented_response_and_authentication(self):

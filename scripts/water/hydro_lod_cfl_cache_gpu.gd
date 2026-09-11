@@ -158,12 +158,14 @@ func record_full_refresh(rd: RenderingDevice, compute: int) -> void:
 
 	rd.compute_list_bind_compute_pipeline(compute, _live_build_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _live_build_set, 0)
+	HydroPushState.clear(rd, compute)
 	var live_groups := maxi(int(ceil(float(atlas.capacity) / float(LIVE_BUILD_LOCAL_X))), 1)
 	rd.compute_list_dispatch(compute, live_groups, 1, 1)
 	rd.compute_list_add_barrier(compute)
 
 	rd.compute_list_bind_compute_pipeline(compute, _live_finalize_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _live_finalize_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_add_barrier(compute)
 
@@ -181,11 +183,13 @@ func record_zero_due(rd: RenderingDevice, compute: int) -> void:
 		return
 	rd.compute_list_bind_compute_pipeline(compute, _summary_indirect_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _summary_indirect_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_add_barrier(compute)
 
 	rd.compute_list_bind_compute_pipeline(compute, _zero_due_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _zero_due_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch_indirect(compute, _summary_indirect, 0)
 	rd.compute_list_add_barrier(compute)
 

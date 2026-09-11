@@ -6,6 +6,8 @@ signal debug_brow_lod_controls_changed(enabled: bool)
 signal debug_forced_brow_lod_changed(lod: int)
 signal graphics_quality_changed(preset: int)
 signal advanced_graphics_changed
+signal upscaler_changed
+signal motion_blur_changed
 
 const SETTINGS_PATH := "user://settings.cfg"
 const SECTION_DEBUG := "debug"
@@ -25,6 +27,10 @@ const KEY_SSR_ENABLED := "ssr_enabled"
 const KEY_GLOW_ENABLED := "glow_enabled"
 const KEY_SHADOW_SPLITS := "shadow_splits"
 const KEY_CLOUD_QUALITY := "cloud_quality"
+const KEY_UPSCALE_MODE := "upscale_mode"
+const KEY_UPSCALE_SHARPNESS := "upscale_sharpness"
+const KEY_MOTION_BLUR_ENABLED := "motion_blur_enabled"
+const KEY_MOTION_BLUR_STRENGTH := "motion_blur_strength"
 
 ## -1 = automatic distance-based selection, 0/1/2 = force that brow LOD.
 var debug_closest_character_distance: bool = false
@@ -42,6 +48,12 @@ var advanced_ssr_enabled := true
 var advanced_glow_enabled := true
 var advanced_shadow_splits := 4
 var advanced_cloud_quality: int = GraphicsQuality.Preset.HIGH
+## Upscaler/render-scale/motion blur are top-level settings, not gated behind
+## graphics_advanced_enabled -- always applied regardless of preset vs. advanced.
+var upscale_mode: int = GraphicsQuality.DEFAULT_UPSCALE_MODE
+var upscale_sharpness: float = 0.18
+var motion_blur_enabled: bool = true
+var motion_blur_strength: float = 0.55
 
 func _ready() -> void:
 	_load_settings()
@@ -138,10 +150,58 @@ func advanced_graphics() -> Dictionary:
 func effective_cloud_quality() -> int:
 	return advanced_cloud_quality if graphics_advanced_enabled else graphics_quality
 
+func set_upscale_mode(mode: int) -> void:
+	var sanitized := GraphicsQuality.sanitize_upscale_mode(mode)
+	if upscale_mode == sanitized:
+		return
+	upscale_mode = sanitized
+	_save_settings()
+	upscaler_changed.emit()
+
+func set_upscale_sharpness(value: float) -> void:
+	var sanitized := clampf(value, 0.0, 2.0)
+	if is_equal_approx(upscale_sharpness, sanitized):
+		return
+	upscale_sharpness = sanitized
+	_save_settings()
+	upscaler_changed.emit()
+
+func set_motion_blur_enabled(value: bool) -> void:
+	if motion_blur_enabled == value:
+		return
+	motion_blur_enabled = value
+	_save_settings()
+	_apply_motion_blur_runtime()
+	motion_blur_changed.emit()
+
+func set_motion_blur_strength(value: float) -> void:
+	var sanitized := clampf(value, 0.0, 2.0)
+	if is_equal_approx(motion_blur_strength, sanitized):
+		return
+	motion_blur_strength = sanitized
+	_save_settings()
+	_apply_motion_blur_runtime()
+	motion_blur_changed.emit()
+
+## MotionBlurController pulls its own initial state from this AppSettings autoload
+## on its _ready() (safe: this autoload is declared earlier in project.godot and is
+## always ready first). This push path only matters for later, user-driven changes,
+## by which point every autoload already exists -- hence the defensive lookup
+## instead of a hard MotionBlur singleton reference.
+func _apply_motion_blur_runtime() -> void:
+	var motion_blur := get_node_or_null(^"/root/MotionBlur")
+	if motion_blur == null:
+		return
+	motion_blur.set_enabled(motion_blur_enabled)
+	motion_blur.set_strength(motion_blur_strength)
+
 func apply_viewport(viewport: Viewport) -> void:
 	GraphicsQuality.configure_viewport(viewport, graphics_quality)
 	if graphics_advanced_enabled:
 		GraphicsQuality.apply_advanced_viewport(viewport, advanced_graphics())
+	# Always applied regardless of preset/advanced -- the upscaler is a top-level
+	# choice, and must run last so it is the final writer of the properties it owns.
+	GraphicsQuality.apply_upscaler(viewport, upscale_mode, advanced_render_scale, upscale_sharpness)
 
 func apply_world_environment(environment: Environment) -> void:
 	GraphicsQuality.configure_world_environment(environment, graphics_quality)
@@ -206,6 +266,14 @@ func _load_settings() -> void:
 		advanced_shadow_splits = 4
 	advanced_cloud_quality = GraphicsQuality.sanitize(int(config.get_value(
 		SECTION_GRAPHICS, KEY_CLOUD_QUALITY, advanced_cloud_quality)))
+	upscale_mode = GraphicsQuality.sanitize_upscale_mode(int(config.get_value(
+		SECTION_GRAPHICS, KEY_UPSCALE_MODE, upscale_mode)))
+	upscale_sharpness = clampf(float(config.get_value(
+		SECTION_GRAPHICS, KEY_UPSCALE_SHARPNESS, upscale_sharpness)), 0.0, 2.0)
+	motion_blur_enabled = bool(config.get_value(
+		SECTION_GRAPHICS, KEY_MOTION_BLUR_ENABLED, motion_blur_enabled))
+	motion_blur_strength = clampf(float(config.get_value(
+		SECTION_GRAPHICS, KEY_MOTION_BLUR_STRENGTH, motion_blur_strength)), 0.0, 2.0)
 
 func _save_settings() -> void:
 	var config := ConfigFile.new()
@@ -238,6 +306,10 @@ func _save_settings() -> void:
 	config.set_value(SECTION_GRAPHICS, KEY_GLOW_ENABLED, advanced_glow_enabled)
 	config.set_value(SECTION_GRAPHICS, KEY_SHADOW_SPLITS, advanced_shadow_splits)
 	config.set_value(SECTION_GRAPHICS, KEY_CLOUD_QUALITY, advanced_cloud_quality)
+	config.set_value(SECTION_GRAPHICS, KEY_UPSCALE_MODE, upscale_mode)
+	config.set_value(SECTION_GRAPHICS, KEY_UPSCALE_SHARPNESS, upscale_sharpness)
+	config.set_value(SECTION_GRAPHICS, KEY_MOTION_BLUR_ENABLED, motion_blur_enabled)
+	config.set_value(SECTION_GRAPHICS, KEY_MOTION_BLUR_STRENGTH, motion_blur_strength)
 	var err := config.save(SETTINGS_PATH)
 	if err != OK:
 		push_warning("Could not save Asterra settings: %s" % error_string(err))

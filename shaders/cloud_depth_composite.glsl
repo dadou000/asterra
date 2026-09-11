@@ -162,6 +162,14 @@ float canonical_coarse_density(vec3 p, float radius, vec3 wind) {
         - convection * 0.075;
     float synoptic = smoothstep(synoptic_threshold,
         min(synoptic_threshold + 0.095, 0.995), synoptic_noise);
+    // footprint/tower/anvil below are each multiplied by synoptic, so synoptic ==
+    // 0 forces the final density to exactly 0 no matter what the remaining five
+    // noise octaves evaluate to -- an exact equivalence, not an approximation.
+    // This function runs as the empty-space probe in detailed_clouds() up to
+    // MAX_EMPTY_PROBES times per pixel, so skipping them here (the common case
+    // over clear sky, by design -- see the coverage comment above) is the
+    // dominant cost of a cloudless view.
+    if (synoptic <= 0.0) return 0.0;
 
     float anvil_zone = pow(convection, 1.7)
         * smoothstep(0.67, 0.84, h)

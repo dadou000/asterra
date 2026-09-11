@@ -6,7 +6,9 @@ import argparse
 import json
 import math
 import os
+from pathlib import Path
 import socket
+import subprocess
 import sys
 from typing import Any
 
@@ -82,8 +84,93 @@ TOOLS = [
     tool("studio_texture_stack", "Read or replace one biome's BIOME TEXTURE band stack as structured JSON, instead of reconstructing it field-by-field from studio_inspect's raw graph nodes/links or driving each field through a separate studio_control call. get returns {layers, imported_textures, texture_choice_labels} where each layer is the same dict shape the editor itself uses (texture_choice 0-5 per texture_choice_labels, color/color_b/emission_color as [r,g,b] or [r,g,b,a], gradient_curve as a flattened [x,y,...] point list, height/slope/cavity ranges, softness, opacity, noise, tint_strength, roughness/metallic/anisotropy value+enabled, emission color/strength/enabled, custom_texture_index, height_relative). set replaces the ENTIRE stack (up to 8 bands) in one staged action -- omitted fields on a band fall back to the same defaults '+ Add texture band' uses. Round-trip get, edit the JSON, then set for the cheapest way to author bands via MCP.",
          obj({"action": enum("get", "set"), "biome_id": {"type": "integer", "minimum": 0},
               "layers": {"type": "array", "items": {"type": "object"}, "maxItems": 8}}, ("action", "biome_id"))),
+    tool("studio_imported_textures", "Read or tune the compact authoring fields of an imported terrain PBR texture without returning or replacing its embedded image payloads. set preserves albedo/normal/roughness bytes and changes only the supplied name, tile size, organic anti-tiling strength, or albedo multiplier.",
+         obj({"action": enum("get", "set"), "index": {"type": "integer", "minimum": 0},
+              "name": STRING, "tile_m": {"type": "number", "minimum": 0.1},
+              "notile_strength": {"type": "number", "minimum": 0, "maximum": 1},
+              "albedo_tint": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 4}}, ("action",))),
+    tool("studio_surface_settings", "Read or set one known production surface graph parameter without enumerating the full Planet Studio UI. Use the node_type and key shown in control paths/tooltips, for example PRODUCTION_SCAN_PBR_SETTINGS.macro_strength or PRODUCTION_ANTITILE_SETTINGS.strength. Numeric, toggle, select-index and color values are supported.",
+         obj({"action": enum("get", "set"), "node_type": STRING, "key": STRING,
+              "value": {}}, ("action", "node_type", "key"))),
+    tool("studio_scatter_library", "Manage the real-asset ecology library used by Planet Studio and the live terrain scatter renderer. list reports manifest entries, source/build readiness and validation. upsert adds or replaces a CC0 model record (id, kind, resolution, priority, biomes, enabled and optional authoring density/spacing/scale/slope/LOD settings). remove deletes a catalog record but preserves downloaded files. fetch launches the bounded Poly Haven CC0 downloader; optimize launches the Blender LOD builder; reload hot-reloads completed runtime assets without restarting the game.",
+         obj({"action": enum("list", "upsert", "remove", "fetch", "optimize", "reload"),
+              "asset_id": STRING, "asset": {"type": "object"}}, ("action",))),
+    tool("studio_perf", "Read live performance: rolling FPS/frame-time stats over the last up to 300 sampled frames (current, average, 1%-low, worst frame), Godot's built-in render/CPU/memory Performance monitors (draw calls, primitives, video/texture/buffer memory, process time, node/object counts), the active viewport upscaler configuration, and per-subsystem stats already computed by the terrain/ocean/scatter/motion-blur systems (LOD levels, physical ring/batch counts, visible sectors). window_frames caps how many recent samples to aggregate (default/max 300, roughly 5 seconds at 60fps). Works as soon as the game is running with MCP enabled -- Planet Studio's editor UI does not need to be open.",
+         obj({"window_frames": {"type": "integer", "minimum": 1, "maximum": 300}}), True),
 ]
 TOOL_MAP = {item["name"]: item for item in TOOLS}
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCATTER_MANIFEST = REPO_ROOT / "assets" / "scatter" / "asset_manifest.json"
+
+
+def scatter_library(arguments: dict) -> dict:
+    action = arguments.get("action", "list")
+    with SCATTER_MANIFEST.open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    assets = manifest.get("assets", [])
+    if not isinstance(assets, list):
+        raise ValueError("Scatter manifest assets must be an array")
+
+    def status(asset: dict) -> dict:
+        asset_id = str(asset.get("id", ""))
+        source_meta = REPO_ROOT / "assets" / "scatter" / "source" / asset_id / "source.json"
+        runtime_dir = REPO_ROOT / "assets" / "scatter" / "runtime" / asset_id
+        runtime_meta = runtime_dir / "metadata.json"
+        lods = []
+        if runtime_meta.exists():
+            try:
+                lods = json.loads(runtime_meta.read_text(encoding="utf-8")).get("lods", [])
+            except (OSError, ValueError):
+                pass
+        return {"id": asset_id, "source_ready": source_meta.exists(),
+                "runtime_ready": bool(lods), "lods": lods,
+                "runtime_root": str(runtime_dir)}
+
+    if action == "list":
+        return {"assets": assets, "statuses": [status(a) for a in assets if isinstance(a, dict)]}
+    if action == "upsert":
+        asset = arguments.get("asset")
+        if not isinstance(asset, dict):
+            raise ValueError("asset must be an object")
+        asset_id = str(asset.get("id", "")).strip()
+        if not asset_id or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in asset_id.lower()):
+            raise ValueError("asset.id must be a filesystem-safe slug")
+        if not isinstance(asset.get("biomes"), list) or not asset["biomes"]:
+            raise ValueError("asset.biomes must contain at least one biome key")
+        next_asset = dict(asset)
+        next_asset.setdefault("resolution", "1k")
+        next_asset.setdefault("priority", "core")
+        next_asset.setdefault("enabled", True)
+        next_asset.setdefault("url", f"https://polyhaven.com/a/{asset_id}")
+        replaced = False
+        for index, current in enumerate(assets):
+            if isinstance(current, dict) and current.get("id") == asset_id:
+                assets[index] = next_asset
+                replaced = True
+                break
+        if not replaced:
+            assets.append(next_asset)
+        manifest["allow_empty_catalog"] = False
+        SCATTER_MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        return {"ok": True, "asset_id": asset_id, "created": not replaced, "asset_count": len(assets)}
+    asset_id = str(arguments.get("asset_id", "")).strip()
+    if not asset_id:
+        raise ValueError("asset_id is required")
+    if action == "remove":
+        remaining = [a for a in assets if not (isinstance(a, dict) and a.get("id") == asset_id)]
+        manifest["assets"] = remaining
+        manifest["allow_empty_catalog"] = not remaining
+        SCATTER_MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        return {"ok": True, "asset_id": asset_id, "removed": len(remaining) != len(assets),
+                "asset_count": len(remaining)}
+    if action in ("fetch", "optimize"):
+        script = REPO_ROOT / "tools" / ("fetch_scatter_assets.py" if action == "fetch" else "optimize_scatter_assets.py")
+        completed = subprocess.run([sys.executable, str(script), "--asset", asset_id],
+                                   cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+        return {"ok": completed.returncode == 0, "action": action, "asset_id": asset_id,
+                "returncode": completed.returncode, "stdout": completed.stdout[-12000:],
+                "stderr": completed.stderr[-12000:], "status": status({"id": asset_id})}
+    raise ValueError(f"Unsupported local scatter action: {action}")
 
 
 def validate(value: Any, schema: dict, path="arguments") -> None:
@@ -189,7 +276,10 @@ class Server:
             arguments = params.get("arguments", {})
             try:
                 validate(arguments, TOOL_MAP[name]["inputSchema"])
-                reply = self.bridge.call(name, arguments)
+                if name == "studio_scatter_library" and arguments.get("action") != "reload":
+                    reply = scatter_library(arguments)
+                else:
+                    reply = self.bridge.call(name, arguments)
                 if "image" in reply:
                     result = {"content": [{"type": "image", "data": reply["image"], "mimeType": reply["mimeType"]}]}
                     metadata = {key: value for key, value in reply.items() if key not in ("image", "mimeType")}

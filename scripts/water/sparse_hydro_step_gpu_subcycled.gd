@@ -115,6 +115,7 @@ func advance(dt_s: float, max_substeps: int = 16,
 		_atlas.cell_size_m, dt_s,
 		gravity, dry_eps, manning_n, clampf(cfl, 0.01, 0.95),
 		float(cap), base_level, lod_enabled, temporal_encoded,
+		sea_level_m, maxf(coast_drain_rate_per_s, 0.0), 0.0, 0.0,
 	])
 	RenderingServer.call_on_render_thread(Callable(self, &"_advance_render_thread").bind(
 		step_id, cap, request_diagnostics, params.to_byte_array()))
@@ -401,6 +402,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 	for iteration in cap:
 		rd.compute_list_bind_compute_pipeline(compute, _reset_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _reset_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, 1, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
@@ -422,10 +424,12 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		# resulting indirect command is {tile_groups_x, tile_groups_y, due_count}.
 		rd.compute_list_bind_compute_pipeline(compute, _due_queue_reset_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _due_queue_reset_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, 1, 1, 1)
 		rd.compute_list_add_barrier(compute)
 		rd.compute_list_bind_compute_pipeline(compute, _due_queue_build_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _due_queue_build_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, due_queue_groups, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
@@ -442,6 +446,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 		# canonicalizes exactly the slots that wrote B and nothing else.
 		rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch_indirect(compute, _due_queue_indirect, 0)
 		rd.compute_list_add_barrier(compute)
 
@@ -455,10 +460,12 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 
 	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_reduce_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, external_groups, 1, 1)
 	rd.compute_list_add_barrier(compute)
 	rd.compute_list_bind_compute_pipeline(compute, _external_finalize_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_finalize_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_end()
 

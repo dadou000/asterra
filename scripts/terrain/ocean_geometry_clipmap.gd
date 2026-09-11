@@ -311,6 +311,30 @@ func _sync_uniforms(origin: Vector3) -> void:
 	_material.set_shader_parameter("u_detail_strength", PROCEDURAL_DETAIL_STRENGTH
 		* maxf(0.05, planet.cfg.detail_amplitude / 260.0))
 
+	_sync_edit_delta_uniforms()
+
+
+## Mirror the persistent terrain-edit lattice window (Deltas) onto the ocean
+## material so ocean_visible_ground_height() sees carved channels/harbours and
+## floods them -- see gpu_terrain_edit_delta.gd, which otherwise binds these only
+## to the ground clipmap material.
+func _sync_edit_delta_uniforms() -> void:
+	var node: Node = get_node_or_null("/root/TerrainEditDeltaGPU")
+	if node == null or not node.has_method("sample_params"):
+		_material.set_shader_parameter("u_edit_ready", 0.0)
+		return
+	var p: Dictionary = node.sample_params()
+	var tex: Variant = p.get("texture")
+	if tex == null or not bool(p.get("ready", false)):
+		_material.set_shader_parameter("u_edit_ready", 0.0)
+		return
+	_material.set_shader_parameter("u_edit_delta", tex)
+	_material.set_shader_parameter("u_edit_ready", 1.0)
+	_material.set_shader_parameter("u_edit_center_dir", p.get("center_dir", Vector3.RIGHT))
+	_material.set_shader_parameter("u_edit_center_right", p.get("center_right", Vector3(0, 0, -1)))
+	_material.set_shader_parameter("u_edit_center_up", p.get("center_up", Vector3.UP))
+	_material.set_shader_parameter("u_edit_half_extent_m", float(p.get("half_extent_m", 256.0)))
+
 
 func _build_batches() -> void:
 	_sector_batches.clear()

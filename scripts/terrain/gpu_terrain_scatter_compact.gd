@@ -155,7 +155,7 @@ func _build_compact_batches() -> void:
 		batch.name = names[family]
 		batch.multimesh = mm
 		batch.material_override = _compact_materials[family]
-		batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		batch.visible = false
 		add_child(batch)
 		_compact_batches.append(batch)

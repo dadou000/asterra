@@ -115,7 +115,7 @@ func _on_sparse_connectivity_initialized(generation: int,
 	if _structure_crest_provider.is_valid():
 		_sparse_reachability.set_structure_crest_provider(_structure_crest_provider)
 
-	var runtime := SparseHydrologyRuntimeSubcycledCompacted.new()
+	var runtime := SparseHydrologyRuntimeSubcycled.new()  # TEMP: non-compacted frontier path (compacted candidate marshalling produces garbage tile identity)
 	runtime.name = "SparseHydrologyRuntime"
 	runtime.process_priority = 12
 	runtime.auto_run = true

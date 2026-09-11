@@ -19,7 +19,31 @@ const SIMULATION_SPEED_MAX := 8192.0
 const SIMULATION_SPEED_DEFAULT := 1.0
 const HIGH_WARP_LOCAL_THRESHOLD := 256.0
 const MAX_GLOBAL_STEPS_PER_JOB := 4
+## One-time background spin-up at world load. The native core's initial condition
+## is near-dry and `step_global` is ~0.7 s, so without this the atmosphere barely
+## evolves for the first ~20-30 minutes of real play (the in-frame job/publication
+## cadence only advances it a few steps/second). ~220 steps of 90 s each moves it
+## roughly 5.5 simulated hours in ~2.5 min of worker time -- enough for weather to
+## start developing. It does NOT block `native_ready`: consumers keep reading the
+## published climatology field until it lands. 0 disables.
+const PRESPIN_GLOBAL_STEPS := 220
 const MAX_LOCAL_STEPS_PER_JOB := 4
+## Hard ceiling on the un-drained backlog, independent of simulation_speed/job
+## scaling below. Each native step_global call costs real wall-clock time
+## (~0.7 s, see _run_native_prespin) and a job drains at most
+## MAX_GLOBAL/LOCAL_STEPS_PER_JOB steps, so the sustainable drain rate is
+## bounded (~130 simulated s/real s at the highest job-limit tier). Any
+## inflow (celestial-clock advance per frame) sustained above that --
+## reachable well below Frames.time_scale's own ceiling, and easiest to hit
+## through studio_time's MCP `rate`, which sets Frames.time_scale directly and
+## does not go through set_simulation_speed() so the job-limit scaling below
+## never engages -- otherwise grows the accumulator forever: the scheduler
+## never idles and the whole game settles at ~1 fps with no recovery on its
+## own. Capping trades weather fidelity during extreme/sustained warp for
+## guaranteed responsiveness instead of an unrecoverable hang.
+## See planning/PROBLEMS.md P-009.
+const MAX_GLOBAL_SIM_BACKLOG_S := GLOBAL_SIM_DT * MAX_GLOBAL_STEPS_PER_JOB * 25.0
+const MAX_LOCAL_SIM_BACKLOG_S := LOCAL_SIM_DT * MAX_LOCAL_STEPS_PER_JOB * 25.0
 const SIMULATION_WEIGHT_MIN := 0.0
 const SIMULATION_WEIGHT_MAX := 2.0
 const SIMULATION_WEIGHT_DEFAULT := 1.0
@@ -133,6 +157,8 @@ var _pending_local_reset: bool = false
 var _map_was_open: bool = false
 var _worker_schedule_deferred: bool = false
 var _heavy_publication_frame: int = -1
+var _prespin_pending: bool = false
+var _prespin_elapsed_ms: int = 0
 
 
 func _ready() -> void:
@@ -143,6 +169,7 @@ func _ready() -> void:
 	_publish_fallback_weather()
 	if native_available:
 		_mark_all_outputs_dirty()
+		_start_native_prespin()
 	# Autoloads that consume weather (PersistentHydrologySystem, HydroWeatherCoupling)
 	# are initialized after this one and connect in their own _ready(). Defer the
 	# announcement so it lands after they have subscribed.
@@ -201,6 +228,62 @@ func _try_create_native_backend() -> void:
 	backend_error = ""
 
 
+## Kick a one-time background spin-up so the sky is not cloudless for the first
+## half hour. Reuses the ordinary `_weather_task_id` slot, so `native_worker_busy()`
+## keeps every other `_native` consumer (publication, scheduling, tuning setters,
+## SurfaceEnergy) off it for the ~minutes it runs; `_poll_weather_worker()` then
+## folds the result in through the normal path. `native_ready` is NOT delayed.
+func _start_native_prespin() -> void:
+	if PRESPIN_GLOBAL_STEPS <= 0 or _native == null or _weather_task_id >= 0:
+		return
+	if DisplayServer.get_name() == "headless":
+		return
+	print("[WeatherSystem] native pre-spin: %d global steps starting on worker" % PRESPIN_GLOBAL_STEPS)
+	_weather_task_global_steps = PRESPIN_GLOBAL_STEPS
+	_weather_task_local_steps = 0
+	_weather_task_touched_local = false
+	_weather_task_reset_local = false
+	_prespin_pending = true
+	_weather_task_id = WorkerThreadPool.add_task(
+		_run_native_prespin, false, "asterra_weather_prespin")
+
+
+func _run_native_prespin() -> void:
+	var native: Object = _native
+	if native == null:
+		return
+	# Lower the fair-weather cloud onset and hold more condensate while spinning up,
+	# then restore the shipped calibration. Shaves the time to a visible field.
+	native.call(&"set_tuning_weight", &"convection", 2.0)
+	native.call(&"set_tuning_weight", &"precipitation", 1.6)
+	var t0 := Time.get_ticks_msec()
+	for _i in PRESPIN_GLOBAL_STEPS:
+		native.call(&"step_global", GLOBAL_SIM_DT)
+	_prespin_elapsed_ms = Time.get_ticks_msec() - t0
+	native.call(&"set_tuning_weight", &"convection", float(tuning_weights[&"convection"]))
+	native.call(&"set_tuning_weight", &"precipitation", float(tuning_weights[&"precipitation"]))
+
+
+## True while the one-time load-time spin-up worker is still running.
+func weather_prespin_active() -> bool:
+	return _prespin_pending
+
+
+## Call after anything sets the celestial clock to an arbitrary absolute value
+## (time-scrub UI, Planet Studio's studio_time seek/date/advance, a preset/save
+## load) rather than letting it run forward continuously. A backward jump
+## already zeroes the accumulators below via the `simulated_delta < 0.0` branch;
+## a big FORWARD jump silently passed that branch and instead handed
+## _global_sim_accum a multi-year backlog. `_schedule_weather_worker` only
+## drains a few GLOBAL_SIM_DT steps per job, so that backlog never finishes --
+## the scheduler stays permanently busy and the whole game settles at ~1 fps
+## and does not recover on its own. See planning/PROBLEMS.md P-009.
+func notify_time_jump() -> void:
+	_global_sim_accum = 0.0
+	_local_sim_accum = 0.0
+	_last_celestial_seconds = CelestialSystem.simulation_seconds
+
+
 func _process(delta: float) -> void:
 	_try_bind_observer()
 	var celestial_now := CelestialSystem.simulation_seconds
@@ -218,9 +301,9 @@ func _process(delta: float) -> void:
 		_sync_weather_map_material()
 		return
 
-	_global_sim_accum += simulated_delta
+	_global_sim_accum = minf(_global_sim_accum + simulated_delta, MAX_GLOBAL_SIM_BACKLOG_S)
 	if _observer != null and is_instance_valid(_observer):
-		_local_sim_accum += simulated_delta
+		_local_sim_accum = minf(_local_sim_accum + simulated_delta, MAX_LOCAL_SIM_BACKLOG_S)
 	else:
 		_local_sim_accum = 0.0
 	_center_update_accum += delta
@@ -264,6 +347,13 @@ func _poll_weather_worker() -> void:
 		return
 	WorkerThreadPool.wait_for_task_completion(_weather_task_id)
 	_weather_task_id = -1
+
+	if _prespin_pending:
+		_prespin_pending = false
+		_pending_native_controls = true  # re-push tuning/layer weights the worker touched
+		print("[WeatherSystem] native pre-spin: %d steps done in %.1f s (state rev -> %d)" % [
+			PRESPIN_GLOBAL_STEPS, _prespin_elapsed_ms / 1000.0,
+			global_state_revision + _weather_task_global_steps])
 
 	if _weather_task_global_steps > 0:
 		global_state_revision += _weather_task_global_steps

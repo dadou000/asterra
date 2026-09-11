@@ -16,7 +16,7 @@ func _ready() -> void:
 func _test_tile_key_roundtrip() -> void:
 	for face in 6:
 		for level in [0, 1, 4, 9, 16, HydroTileKey.MAX_LEVEL]:
-			var side := 1 << level
+			var side: int = 1 << level
 			var samples: Array[Vector2i] = [
 				Vector2i.ZERO,
 				Vector2i(side - 1, side - 1),

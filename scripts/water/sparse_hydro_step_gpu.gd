@@ -23,7 +23,7 @@ const LOCAL_X := 8
 const LOCAL_Y := 8
 const COMMIT_LOCAL_X := 256
 const EXTERNAL_REDUCE_LOCAL_X := 256
-const PARAM_FLOATS := 12
+const PARAM_FLOATS := 16
 const COMMIT_PARAM_INTS := 4
 # First 96 bytes retain the established diagnostics ABI. The final 8 bytes are
 # sparse-only per-iteration HydroLOD CFL scratch.
@@ -36,6 +36,13 @@ var gravity := 9.81
 var dry_eps := 1.0e-5
 var manning_n := 0.025
 var cfl := 0.42
+## Coastal open-outflow sink. A sparse cell whose bed sits below `sea_level_m`
+## (the mean-sea datum shared with terrain_height == 0) cannot hold water above
+## sea level -- it spills into the ocean. Each SWE step relaxes such a cell's free
+## surface toward sea level at `coast_drain_rate_per_s` (fraction/second), logging
+## the removed volume as external outflow. 0 disables (legacy behaviour).
+var sea_level_m := 0.0
+var coast_drain_rate_per_s := 0.0
 
 var _atlas: SparseHydroAtlasGPU
 var _connectivity: SparseHydroConnectivityGPU
@@ -177,6 +184,7 @@ func advance(dt_s: float, max_substeps: int = 16,
 		_atlas.cell_size_m, dt_s,
 		gravity, dry_eps, manning_n, clampf(cfl, 0.01, 0.95),
 		float(cap), base_level, lod_enabled, 0.0,
+		sea_level_m, maxf(coast_drain_rate_per_s, 0.0), 0.0, 0.0,
 	])
 	RenderingServer.call_on_render_thread(Callable(self, &"_advance_render_thread").bind(
 		step_id, cap, request_diagnostics, params.to_byte_array()))
@@ -402,6 +410,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 	for iteration in cap:
 		rd.compute_list_bind_compute_pipeline(compute, _reset_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _reset_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, 1, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
@@ -425,6 +434,7 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 
 		rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
 		rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
+		HydroPushState.clear(rd, compute)
 		rd.compute_list_dispatch(compute, commit_groups, 1, 1)
 		rd.compute_list_add_barrier(compute)
 
@@ -438,10 +448,12 @@ func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
 	# Exact external source ledger -> the established words at bytes 88/92.
 	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_reduce_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, external_groups, 1, 1)
 	rd.compute_list_add_barrier(compute)
 	rd.compute_list_bind_compute_pipeline(compute, _external_finalize_pipeline)
 	rd.compute_list_bind_uniform_set(compute, _external_finalize_set, 0)
+	HydroPushState.clear(rd, compute)
 	rd.compute_list_dispatch(compute, 1, 1, 1)
 	rd.compute_list_end()
 

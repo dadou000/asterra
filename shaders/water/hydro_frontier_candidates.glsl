@@ -17,7 +17,9 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 struct FrontierEntry {
     uvec4 a; // slot, direction, floatBitsToUint(effective_flux), face
     uvec4 b; // level, x, y, flags(bit0=predicted dominated)
-    uvec4 c; // floatBitsToUint(source_edge_max_eta), reserved...
+    uvec4 c; // floatBitsToUint(source_edge_max_eta),
+             // floatBitsToUint(source_edge_bed_at_max) [-1e30 when no state scan],
+             // reserved...
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer Summaries {
@@ -40,11 +42,19 @@ layout(set = 0, binding = 4, std430) readonly buffer State {
     vec4 cells[]; // optional canonical h,hu,hv,bed; may alias summary when tile_res=0
 };
 
-float source_edge_max_eta(uint slot, uint direction, float summarized_eta) {
+// Returns max(h+bed) over the emitting edge. Also reports, via out_bed, the raw
+// bed elevation of the cell that produced that maximum free surface, or -1e30 when
+// no canonical state scan is available (r == 0) or the edge held no finite cell.
+// Reachability subtracts (out_bed - smooth_macro_at_source) to strip the procedural
+// detail spectrum the macro crest sampler cannot see, comparing like-for-like.
+float source_edge_max_eta(uint slot, uint direction, float summarized_eta,
+        out float out_bed) {
+    out_bed = -1.0e30;
     uint r = uint(max(params.config.w, 0.0) + 0.5);
     if (r == 0u) return summarized_eta;
     uint base = slot * r * r;
     float eta = summarized_eta;
+    float best_e = -1.0e30;
     for (uint k = 0u; k < r; ++k) {
         uint local_i;
         if (direction == 0u) local_i = k * r;
@@ -53,7 +63,9 @@ float source_edge_max_eta(uint slot, uint direction, float summarized_eta) {
         else local_i = (r - 1u) * r + k;
         vec4 q = cells[base + local_i];
         if (any(isnan(q)) || any(isinf(q))) continue;
-        eta = max(eta, max(q.x, 0.0) + q.w);
+        float e = max(q.x, 0.0) + q.w;
+        eta = max(eta, e);
+        if (e > best_e) { best_e = e; out_bed = q.w; }
     }
     return eta;
 }
@@ -67,12 +79,14 @@ void emit_candidate(uint slot, uint direction, float actual_flux,
         return;
     }
     uint flags = wetting_flux > actual_flux ? 1u : 0u;
+    float source_bed;
+    float source_eta = source_edge_max_eta(
+        slot, direction, summarized_eta, source_bed);
     queue_out.entries[index].a = uvec4(
         slot, direction, floatBitsToUint(effective_flux), meta.x);
     queue_out.entries[index].b = uvec4(meta.y, meta.z, meta.w, flags);
     queue_out.entries[index].c = uvec4(
-        floatBitsToUint(source_edge_max_eta(slot, direction, summarized_eta)),
-        0u, 0u, 0u);
+        floatBitsToUint(source_eta), floatBitsToUint(source_bed), 0u, 0u);
 }
 
 void maybe_emit(uint slot, uint direction, float actual_flux, float wetting_flux,

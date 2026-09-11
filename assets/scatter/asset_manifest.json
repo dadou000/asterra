@@ -1,19 +1,20 @@
 {
-  "schema_version": 1,
+  "schema_version": 1.0,
   "provider": "Poly Haven",
   "provider_license": "CC0-1.0",
   "provider_url": "https://polyhaven.com",
   "source_cache": "assets/scatter/source",
   "runtime_root": "assets/scatter/runtime",
-  "allow_empty_catalog": true,
+  "allow_empty_catalog": false,
+  "allow_partial_catalog": true,
   "selection_policy": {
     "max_source_package_mib": 100.0,
     "max_runtime_file_mib": 100.0,
-    "max_runtime_lod0_triangles": 750000,
-    "preferred_runtime_lod0_triangles": 250000,
-    "notes": "Budgets remain defined for future assets even while the catalog is intentionally empty."
+    "max_runtime_lod0_triangles": 750000.0,
+    "preferred_runtime_lod0_triangles": 250000.0,
+    "notes": "Hard acquisition and runtime budgets for the curated scatter library."
   },
-  "notes": "Scatter asset library intentionally empty as of 2026-09-01. Foliage and geology will be reintroduced gradually with replacement assets.",
+  "notes": "Focused CC0 temperate-forest library. Other biome coverage remains intentionally deferred while allow_partial_catalog is true.",
   "biome_plan": {
     "OCEAN": "No runtime scatter assets currently assigned.",
     "SHELF_SEA": "No runtime scatter assets currently assigned.",
@@ -22,7 +23,7 @@
     "TAIGA": "No runtime scatter assets currently assigned.",
     "COLD_DESERT": "No runtime scatter assets currently assigned.",
     "TEMPERATE_GRASSLAND": "No runtime scatter assets currently assigned.",
-    "TEMPERATE_FOREST": "No runtime scatter assets currently assigned.",
+    "TEMPERATE_FOREST": "CC0 fern, shrub, moss, grass, fir, boulder, mossy rock, deadwood and stump layers.",
     "TEMPERATE_RAINFOREST": "No runtime scatter assets currently assigned.",
     "MEDITERRANEAN": "No runtime scatter assets currently assigned.",
     "STEPPE": "No runtime scatter assets currently assigned.",
@@ -34,5 +35,278 @@
     "ALPINE": "No runtime scatter assets currently assigned.",
     "BARE_ROCK": "No runtime scatter assets currently assigned."
   },
-  "assets": []
+  "assets": [
+    {
+      "id": "fern_02",
+      "kind": "fern",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/fern_02",
+      "authoring": {
+        "density": 0.9,
+        "environment_floor": 0.36,
+        "spacing_m": 3.0,
+        "grid": 8.0,
+        "scale_min": 0.65,
+        "scale_max": 1.25,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 30.0,
+        "lod": 0.0
+      }
+    },
+    {
+      "id": "shrub_03",
+      "kind": "shrub",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/shrub_03",
+      "authoring": {
+        "density": 0.72,
+        "environment_floor": 0.32,
+        "spacing_m": 5.5,
+        "grid": 6.0,
+        "scale_min": 0.75,
+        "scale_max": 1.4,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 34.0,
+        "lod": 0.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "moss_01",
+      "kind": "moss",
+      "resolution": "1k",
+      "priority": "secondary",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": false,
+      "url": "https://polyhaven.com/a/moss_01",
+      "authoring": {
+        "density": 0.85,
+        "environment_floor": 0.42,
+        "spacing_m": 2.0,
+        "grid": 10.0,
+        "scale_min": 0.7,
+        "scale_max": 1.5,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 40.0,
+        "lod": 0.0
+      }
+    },
+    {
+      "id": "rock_moss_set_01",
+      "kind": "mossy_stone_set",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/rock_moss_set_01",
+      "authoring": {
+        "density": 0.5,
+        "environment_floor": 0.25,
+        "spacing_m": 8.0,
+        "grid": 5.0,
+        "scale_min": 0.5,
+        "scale_max": 1.5,
+        "slope_min_deg": 2.0,
+        "slope_max_deg": 52.0,
+        "lod": 2.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "boulder_01",
+      "kind": "boulder",
+      "resolution": "1k",
+      "priority": "secondary",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/boulder_01",
+      "authoring": {
+        "density": 0.35,
+        "environment_floor": 0.22,
+        "spacing_m": 18.0,
+        "grid": 4.0,
+        "scale_min": 0.7,
+        "scale_max": 1.8,
+        "slope_min_deg": 5.0,
+        "slope_max_deg": 58.0,
+        "lod": 2.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "dead_tree_trunk",
+      "kind": "deadwood",
+      "resolution": "1k",
+      "priority": "secondary",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/dead_tree_trunk",
+      "authoring": {
+        "density": 0.3,
+        "environment_floor": 0.28,
+        "spacing_m": 15.0,
+        "grid": 4.0,
+        "scale_min": 0.75,
+        "scale_max": 1.3,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 32.0,
+        "lod": 2.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "tree_stump_01",
+      "kind": "stump",
+      "resolution": "1k",
+      "priority": "secondary",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/tree_stump_01",
+      "authoring": {
+        "density": 0.35,
+        "environment_floor": 0.3,
+        "spacing_m": 12.0,
+        "grid": 4.0,
+        "scale_min": 0.75,
+        "scale_max": 1.35,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 34.0,
+        "lod": 2.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "fir_sapling",
+      "kind": "sapling",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/fir_sapling",
+      "authoring": {
+        "density": 0.98,
+        "environment_floor": 0.62,
+        "spacing_m": 18.0,
+        "grid": 2.0,
+        "scale_min": 7.0,
+        "scale_max": 10.0,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 36.0,
+        "lod": 0.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "grass_bermuda_01",
+      "kind": "grass",
+      "resolution": "1k",
+      "priority": "secondary",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": false,
+      "url": "https://polyhaven.com/a/grass_bermuda_01",
+      "authoring": {
+        "density": 0.9,
+        "environment_floor": 0.42,
+        "spacing_m": 1.15,
+        "grid": 12.0,
+        "scale_min": 0.65,
+        "scale_max": 1.05,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 28.0,
+        "lod": 0.0
+      }
+    },
+    {
+      "id": "shrub_sorrel_01",
+      "kind": "wildflower",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": false,
+      "url": "https://polyhaven.com/a/shrub_sorrel_01",
+      "authoring": {
+        "density": 0.8,
+        "environment_floor": 0.4,
+        "spacing_m": 2.2,
+        "grid": 8.0,
+        "scale_min": 0.7,
+        "scale_max": 1.3,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 28.0,
+        "lod": 0.0
+      }
+    },
+    {
+      "id": "shrub_02",
+      "kind": "shrub",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/shrub_02",
+      "authoring": {
+        "density": 0.68,
+        "environment_floor": 0.35,
+        "spacing_m": 6.5,
+        "grid": 6.0,
+        "scale_min": 0.55,
+        "scale_max": 1.05,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 34.0,
+        "lod": 1.0,
+        "shadows": true
+      }
+    },
+    {
+      "id": "pine_sapling_small",
+      "kind": "sapling",
+      "resolution": "1k",
+      "priority": "core",
+      "biomes": [
+        "TEMPERATE_FOREST"
+      ],
+      "enabled": true,
+      "url": "https://polyhaven.com/a/pine_sapling_small",
+      "authoring": {
+        "density": 0.95,
+        "environment_floor": 0.6,
+        "spacing_m": 15.0,
+        "grid": 2.0,
+        "scale_min": 5.0,
+        "scale_max": 8.0,
+        "slope_min_deg": 0.0,
+        "slope_max_deg": 36.0,
+        "lod": 0.0,
+        "shadows": true
+      }
+    }
+  ]
 }
