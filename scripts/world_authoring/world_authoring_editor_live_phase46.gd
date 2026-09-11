@@ -19,6 +19,17 @@ const PHASE47_SCHEMA := preload(
 	"res://scripts/world_authoring/model/terrain_production_geomorph_schema.gd")
 const PHASE47_CATALOG := preload(
 	"res://scripts/world_authoring/model/terrain_beginner_parameter_catalog.gd")
+# Surface Detail / Material Balance / Visual Character / Key Colors / Classification
+# Rules all describe the SAME live "production-terrain-surface" MATERIAL-domain graph
+# _phase29_ensure_production_graphs already keeps provisioned with every one of these
+# node types (see create_production_stage_graph's MATERIAL branch) -- this catalog
+# used to be readable only through the retired SHADERS node-canvas. Wiring it in here
+# is pure UI: no new data model, no new shader work.
+const PHASE47_SURFACE_CATALOG := preload(
+	"res://scripts/world_authoring/model/terrain_beginner_surface_catalog.gd")
+const PHASE47_SURFACE_CATEGORY_ORDER: PackedStringArray = [
+	"Surface Detail", "Material Balance", "Visual Character", "Key Colors", "Classification Rules",
+]
 
 const PHASE47_BIOME_PROFILE_PREFIX := "simple-biome-terrain-"
 const PHASE47_ALL_RINGS_MASK: int = (1 << 15) - 1
@@ -212,6 +223,7 @@ func _build_terrain_page() -> void:
 		_phase47_build_texture_editor(terrain)
 	else:
 		_phase47_build_controls(graph)
+		_phase47_build_surface_detail_controls(terrain)
 		_phase47_build_biome_note()
 
 
@@ -280,6 +292,13 @@ func _phase47_build_texture_editor(terrain: Resource) -> void:
 		_add_note("This body's terrain profile could not be provisioned.")
 		return
 	_phase47_build_biome_texture_controls(terrain, slot, biome_id)
+
+
+## Lets the MCP bridge bound-check a caller-supplied biome_id without reaching
+## into the BIOME_NAMES constant directly (Object.get() does not resolve
+## script constants the way it resolves member variables).
+func _phase47_biome_count() -> int:
+	return BIOME_NAMES.size()
 
 
 func _phase47_biome_texture_slot(terrain: Resource, biome_id: int) -> Resource:
@@ -1425,6 +1444,184 @@ func _phase47_add_control(parent: VBoxContainer, graph: Resource,
 	spin.tooltip_text = String(control.get("description", ""))
 	spin.value_changed.connect(_phase47_set_control.bind(graph, key))
 	row.add_child(spin)
+	_phase47_add_help_label(parent, String(control.get("description", "")))
+
+
+## Surface Detail / Material Balance / Visual Character / Key Colors /
+## Classification Rules -- see PHASE47_SURFACE_CATALOG's declaration comment.
+## Unlike Coarse Elevation's single always-present PRODUCTION_GEOMORPH_SETTINGS
+## node, these controls live across several node types on the MATERIAL-domain
+## "production-terrain-surface" graph, so lookups are by (node_type, key)
+## rather than by key alone.
+func _phase47_build_surface_detail_controls(terrain: Resource) -> void:
+	var graph: Resource = _phase47_surface_graph(terrain)
+	if graph == null:
+		return
+	var controls: Array[Dictionary] = PHASE47_SURFACE_CATALOG.controls_for_mode(
+		PHASE47_SURFACE_CATALOG.MODE_DETAILED)
+	for category: String in PHASE47_SURFACE_CATEGORY_ORDER:
+		var category_controls: Array[Dictionary] = []
+		for control: Dictionary in controls:
+			if String(control.get("category", "")) == category:
+				category_controls.append(control)
+		if category_controls.is_empty():
+			continue
+		var panel := PanelContainer.new()
+		panel.name = "SurfaceControls_%s" % category.replace(" ", "")
+		_workspace.add_child(panel)
+		var box := VBoxContainer.new()
+		box.add_theme_constant_override("separation", 6)
+		panel.add_child(box)
+		var title := Label.new()
+		title.text = category
+		title.add_theme_font_size_override("font_size", 16)
+		box.add_child(title)
+		for control: Dictionary in category_controls:
+			_phase47_add_surface_control(box, graph, control)
+
+
+func _phase47_surface_graph(terrain: Resource) -> Resource:
+	if terrain == null:
+		return null
+	var slot: Resource = terrain.call("find_shader_slot", PRODUCTION_SURFACE_SLOT_ID) as Resource
+	return slot.get(&"graph") as Resource if slot != null else null
+
+
+func _phase47_surface_node_index(graph: Resource, node_type: String) -> int:
+	var nodes: Array = graph.get(&"nodes") as Array
+	for index: int in nodes.size():
+		if String((nodes[index] as Dictionary).get("type", "")) == node_type:
+			return index
+	return -1
+
+
+func _phase47_surface_node_id(graph: Resource, node_type: String) -> String:
+	var index: int = _phase47_surface_node_index(graph, node_type)
+	if index < 0:
+		return ""
+	return String(((graph.get(&"nodes") as Array)[index] as Dictionary).get("id", ""))
+
+
+func _phase47_surface_value(graph: Resource, node_type: String, key: String,
+		default_value: Variant) -> Variant:
+	var index: int = _phase47_surface_node_index(graph, node_type)
+	if index < 0:
+		return default_value
+	var node: Dictionary = (graph.get(&"nodes") as Array)[index] as Dictionary
+	return (node.get("parameters", {}) as Dictionary).get(key, default_value)
+
+
+func _phase47_set_surface_number(next_value: float, graph: Resource, node_type: String,
+		key: String) -> void:
+	var node_id: String = _phase47_surface_node_id(graph, node_type)
+	if node_id.is_empty() \
+			or is_equal_approx(float(_phase47_surface_value(graph, node_type, key, next_value)), next_value):
+		return
+	_session.stage_action("Tune surface: %s" % key, func() -> void:
+		graph.call("set_node_parameter", node_id, key, next_value)
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+
+
+func _phase47_set_surface_toggle(pressed: bool, graph: Resource, node_type: String,
+		key: String) -> void:
+	var node_id: String = _phase47_surface_node_id(graph, node_type)
+	if node_id.is_empty() or bool(_phase47_surface_value(graph, node_type, key, pressed)) == pressed:
+		return
+	_session.stage_action("Tune surface: %s" % key, func() -> void:
+		graph.call("set_node_parameter", node_id, key, pressed)
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+
+
+func _phase47_set_surface_color(color: Color, graph: Resource, node_type: String,
+		key: String) -> void:
+	var node_id: String = _phase47_surface_node_id(graph, node_type)
+	if node_id.is_empty():
+		return
+	_session.stage_action("Tune surface: %s" % key, func() -> void:
+		graph.call("set_node_parameter", node_id, key, color)
+	, WorldAuthoringSession.ApplyScope.GRAPH)
+
+
+func _phase47_add_surface_control(parent: VBoxContainer, graph: Resource,
+		control: Dictionary) -> void:
+	match String(control.get("kind", "number")):
+		"toggle":
+			_phase47_add_surface_toggle(parent, graph, control)
+		"color":
+			_phase47_add_surface_color(parent, graph, control)
+		_:
+			_phase47_add_surface_number(parent, graph, control)
+
+
+func _phase47_add_surface_number(parent: VBoxContainer, graph: Resource,
+		control: Dictionary) -> void:
+	var node_type: String = String(control.get("node_type", ""))
+	var key: String = String(control.get("key", ""))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = String(control.get("title", key))
+	label.tooltip_text = String(control.get("description", ""))
+	label.custom_minimum_size.x = 230.0
+	row.add_child(label)
+	var spin := SpinBox.new()
+	spin.name = "SurfaceControl_%s_%s" % [node_type, key]
+	spin.min_value = float(control.get("min", 0.0))
+	spin.max_value = float(control.get("max", 1.0))
+	spin.step = float(control.get("step", 0.01))
+	spin.suffix = String(control.get("unit", ""))
+	spin.value = clampf(float(_phase47_surface_value(graph, node_type, key, control.get("default", 0.0))),
+		spin.min_value, spin.max_value)
+	spin.custom_minimum_size.x = 170.0
+	spin.tooltip_text = String(control.get("description", ""))
+	spin.value_changed.connect(_phase47_set_surface_number.bind(graph, node_type, key))
+	row.add_child(spin)
+	_phase47_add_help_label(parent, String(control.get("description", "")))
+
+
+func _phase47_add_surface_toggle(parent: VBoxContainer, graph: Resource,
+		control: Dictionary) -> void:
+	var node_type: String = String(control.get("node_type", ""))
+	var key: String = String(control.get("key", ""))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = String(control.get("title", key))
+	label.tooltip_text = String(control.get("description", ""))
+	label.custom_minimum_size.x = 230.0
+	row.add_child(label)
+	var check := CheckButton.new()
+	check.name = "SurfaceControl_%s_%s" % [node_type, key]
+	check.button_pressed = bool(_phase47_surface_value(graph, node_type, key, control.get("default", false)))
+	check.tooltip_text = String(control.get("description", ""))
+	check.toggled.connect(_phase47_set_surface_toggle.bind(graph, node_type, key))
+	row.add_child(check)
+	_phase47_add_help_label(parent, String(control.get("description", "")))
+
+
+func _phase47_add_surface_color(parent: VBoxContainer, graph: Resource,
+		control: Dictionary) -> void:
+	var node_type: String = String(control.get("node_type", ""))
+	var key: String = String(control.get("key", ""))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = String(control.get("title", key))
+	label.tooltip_text = String(control.get("description", ""))
+	label.custom_minimum_size.x = 230.0
+	row.add_child(label)
+	var picker := ColorPickerButton.new()
+	picker.name = "SurfaceControl_%s_%s" % [node_type, key]
+	var default_color: Color = control.get("default", Color.WHITE) as Color
+	var raw_value: Variant = _phase47_surface_value(graph, node_type, key, default_color)
+	picker.color = raw_value as Color if raw_value is Color else default_color
+	picker.custom_minimum_size = Vector2(80.0, 28.0)
+	picker.tooltip_text = String(control.get("description", ""))
+	picker.color_changed.connect(_phase47_set_surface_color.bind(graph, node_type, key))
+	row.add_child(picker)
 	_phase47_add_help_label(parent, String(control.get("description", "")))
 
 

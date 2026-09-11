@@ -61,6 +61,7 @@ VolumetricClouds="*res://scripts/rendering/weather_volumetric_cloud_controller.g
 RenderDebug="*res://scripts/rendering/render_debug_controller.gd"
 RingCountDebug="*res://scripts/terrain/ring_count_debug_controller.gd"
 VehicleTests="*res://scripts/vehicles/vehicle_test_harness.gd"
+PlanetStudioMCP="*res://scripts/world_authoring/mcp/planet_studio_bridge.gd"
 
 [display]
 

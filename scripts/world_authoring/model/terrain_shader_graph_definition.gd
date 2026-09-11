@@ -549,6 +549,10 @@ static func production_control_defaults(node_type: String) -> Dictionary:
 				"loose_normal_weight":0.48, "special_threshold":0.015,
 				"special_albedo_strength":0.88, "special_roughness_strength":0.82,
 				"special_normal_mix":0.58, "special_normal_weight":0.72,
+				"ground_macro_metres":16.0, "grass_macro_metres":14.0,
+				"mud_macro_metres":10.0, "forest_macro_metres":18.0,
+				"micro_macro_near_m":4.0, "micro_macro_far_m":60.0,
+				"macro_strength":1.0,
 			}
 		"PRODUCTION_SCAN_TEXTURES":
 			return {

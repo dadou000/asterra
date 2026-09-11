@@ -201,7 +201,13 @@ vec4 sc_primary_weights(vec4 soil, vec4 surface, vec4 geology, vec4 structure,
 	vegetation *= sc_range(u_sc_vegetation_depth_start_m, u_sc_vegetation_depth_end_m, soil_depth)
 		* thermal_growth;
 
-	float mineral_soil = loose_stable * (1.0 - rock) * (1.0 - sand * 0.72);
+	// Dense vegetation cover hides the mineral soil beneath canopy and litter, the
+	// same way `rock` above is knocked down by veg_potential. Without this a fully
+	// vegetated biome (temperate forest, veg ~0.7, deep moist soil) composed ~60%
+	// bare sandy-soil colour, which `sc_grade_albedo`'s chroma boost then drove to
+	// a saturated mustard instead of a forest green-brown.
+	float mineral_soil = loose_stable * (1.0 - rock) * (1.0 - sand * 0.72)
+		* (1.0 - veg_potential * 0.7);
 	mineral_soil *= sc_range(u_sc_soil_depth_start_m, u_sc_soil_depth_end_m, soil_depth);
 	return clamp(vec4(rock, mineral_soil, vegetation, sand) * u_classifier_primary_scale,
 		vec4(0.0), vec4(1.0));
