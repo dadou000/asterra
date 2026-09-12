@@ -1,0 +1,20 @@
+name: Orbit Windows
+
+on:
+  push:
+    branches: [orbit]
+  pull_request:
+    branches: [orbit]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build --config Release

@@ -1,4 +1,27 @@
-.godot/
+# Orbit build output
+/build/
+/out/
+/.vs/
+.vscode/
+.idea/
+
+# CMake
+CMakeUserPresets.json
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Native build artifacts
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+
+# Temporary files
 *.tmp
+*.log
 *.FCBak
-export_presets.cfg
