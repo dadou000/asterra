@@ -593,6 +593,10 @@ public:
                 "Orbit terrain preview observer must be above the planet surface.");
         }
 
+        stats_.generatedSamplesLastUpdate = 0;
+        stats_.refreshedRegionsLastUpdate = 0;
+        stats_.levelsTouchedLastUpdate = 0;
+
         observer_ = observer;
         observerFrame_ =
             world::MakeSurfaceFrame(
@@ -614,11 +618,43 @@ public:
                     levels_.size());
              ++levelIndex)
         {
+            const auto& levelUpdate =
+                residencyUpdate_.levels[
+                    levelIndex];
+
+            if (!levelUpdate.
+                    refreshRegions.empty())
+            {
+                ++stats_.
+                    levelsTouchedLastUpdate;
+            }
+
+            stats_.
+                refreshedRegionsLastUpdate +=
+                    static_cast<u32>(
+                        levelUpdate.
+                            refreshRegions.size());
+
+            for (const auto& region :
+                 levelUpdate.refreshRegions)
+            {
+                stats_.
+                    generatedSamplesLastUpdate +=
+                        static_cast<u64>(
+                            region.width) *
+                        static_cast<u64>(
+                            region.height);
+            }
+
             RefreshLevel(
                 levelIndex,
-                residencyUpdate_.
-                    levels[levelIndex]);
+                levelUpdate);
         }
+
+        stats_.
+            cumulativeGeneratedSamples +=
+                stats_.
+                    generatedSamplesLastUpdate;
     }
 
     void Draw(
@@ -627,6 +663,9 @@ public:
         const u32 targetWidth,
         const u32 targetHeight)
     {
+        stats_.uploadedBytesLastFrame = 0;
+        stats_.drawCallsLastFrame = 0;
+
         if (frameIndex >=
             config_.framesInFlight)
         {
@@ -701,9 +740,10 @@ public:
                     levels_.size());
              ++levelIndex)
         {
-            PrepareLevelFrame(
-                levelIndex,
-                frameIndex);
+            stats_.uploadedBytesLastFrame +=
+                PrepareLevelFrame(
+                    levelIndex,
+                    frameIndex);
 
             const terrain_view::ClipmapLevel&
                 level =
@@ -757,6 +797,8 @@ public:
                 commandList.
                     DrawIndexed(
                         centerIndexCount_);
+
+                ++stats_.drawCallsLastFrame;
             }
             else
             {
@@ -769,8 +811,13 @@ public:
                 commandList.
                     DrawIndexed(
                         ringIndexCount_);
+
+                ++stats_.drawCallsLastFrame;
             }
         }
+
+        stats_.cumulativeUploadedBytes +=
+            stats_.uploadedBytesLastFrame;
     }
 
     [[nodiscard]] u32 VertexCount() const noexcept
@@ -812,6 +859,12 @@ public:
                 total,
                 std::numeric_limits<u32>::
                     max()));
+    }
+
+    [[nodiscard]] const TerrainStreamingStats&
+    StreamingStats() const noexcept
+    {
+        return stats_;
     }
 
 private:
@@ -1146,7 +1199,7 @@ private:
         });
     }
 
-    void PrepareLevelFrame(
+    [[nodiscard]] u64 PrepareLevelFrame(
         const u32 levelIndex,
         const u32 frameIndex)
     {
@@ -1160,7 +1213,7 @@ private:
         if (frameSerial ==
             state.currentSerial)
         {
-            return;
+            return 0;
         }
 
         rhi::Buffer& buffer =
@@ -1173,6 +1226,8 @@ private:
         auto* destination =
             reinterpret_cast<f32*>(
                 mapped);
+
+        u64 uploadedBytes = 0;
 
         const u32 resolution =
             config_.clipmap.
@@ -1201,13 +1256,20 @@ private:
                             resolution +
                         region.x;
 
+                    const std::size_t rowBytes =
+                        static_cast<std::size_t>(
+                            region.width) *
+                        sizeof(f32);
+
                     std::memcpy(
                         destination + offset,
                         state.cpuHeights.data() +
                             offset,
-                        static_cast<std::size_t>(
-                            region.width) *
-                            sizeof(f32));
+                        rowBytes);
+
+                    uploadedBytes +=
+                        static_cast<u64>(
+                            rowBytes);
                 }
             }
         }
@@ -1218,6 +1280,8 @@ private:
             state.currentSerial;
 
         PruneDirtyHistory(state);
+
+        return uploadedBytes;
     }
 
     static void PruneDirtyHistory(
@@ -1275,6 +1339,8 @@ private:
         residencyUpdate_;
 
     f32 observerRadiusMeters_{0.0F};
+
+    TerrainStreamingStats stats_{};
 
     u32 centerIndexCount_{0};
     u32 ringIndexCount_{0};
@@ -1340,5 +1406,12 @@ u32 TerrainPreviewRenderer::
 IndexCount() const noexcept
 {
     return impl_->IndexCount();
+}
+
+const TerrainStreamingStats&
+TerrainPreviewRenderer::
+StreamingStats() const noexcept
+{
+    return impl_->StreamingStats();
 }
 } // namespace orbit::terrain_render

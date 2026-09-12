@@ -164,6 +164,9 @@ int main()
         auto previousFrameTime =
             FrameClock::now();
 
+        auto previousStatsTime =
+            previousFrameTime;
+
         while (window->PumpEvents())
         {
             const auto currentFrameTime =
@@ -376,6 +379,37 @@ int main()
 
             frameFenceValues[frameIndex] =
                 signalValue;
+
+            if (moved &&
+                currentFrameTime -
+                    previousStatsTime >=
+                    std::chrono::seconds(1))
+            {
+                const auto& stats =
+                    terrainPreview.
+                        StreamingStats();
+
+                orbit::log::Info(
+                    std::format(
+                        "Terrain stream | generated {} samples across {} levels / {} regions | uploaded {} bytes | {} draws | totals: {} samples, {} bytes",
+                        stats.
+                            generatedSamplesLastUpdate,
+                        stats.
+                            levelsTouchedLastUpdate,
+                        stats.
+                            refreshedRegionsLastUpdate,
+                        stats.
+                            uploadedBytesLastFrame,
+                        stats.
+                            drawCallsLastFrame,
+                        stats.
+                            cumulativeGeneratedSamples,
+                        stats.
+                            cumulativeUploadedBytes));
+
+                previousStatsTime =
+                    currentFrameTime;
+            }
         }
 
         const orbit::u64 shutdownFence =

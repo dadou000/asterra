@@ -13,6 +13,19 @@
 
 namespace orbit::terrain_render
 {
+struct TerrainStreamingStats
+{
+    u64 generatedSamplesLastUpdate{0};
+    u32 refreshedRegionsLastUpdate{0};
+    u32 levelsTouchedLastUpdate{0};
+
+    u64 uploadedBytesLastFrame{0};
+    u32 drawCallsLastFrame{0};
+
+    u64 cumulativeGeneratedSamples{0};
+    u64 cumulativeUploadedBytes{0};
+};
+
 struct TerrainPreviewConfig
 {
     terrain_view::ClipmapConfig clipmap{
@@ -63,6 +76,9 @@ public:
 
     [[nodiscard]] u32 VertexCount() const noexcept;
     [[nodiscard]] u32 IndexCount() const noexcept;
+
+    [[nodiscard]] const TerrainStreamingStats&
+    StreamingStats() const noexcept;
 
 private:
     class Impl;
