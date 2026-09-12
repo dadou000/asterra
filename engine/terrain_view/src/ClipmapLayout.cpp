@@ -185,10 +185,10 @@ ClipmapConfig ClipmapConfigForTier(
     return result;
 }
 
-u32 SelectAdaptiveClipmapTier(
+u32 SelectAdaptiveClipmapTierForHalfExtent(
     const ClipmapConfig& baseConfig,
     const AdaptiveClipmapCoverageConfig& adaptiveConfig,
-    const f64 altitudeMeters,
+    const f64 demandedHalfExtentMeters,
     const u32 currentTier)
 {
     static_cast<void>(
@@ -200,14 +200,9 @@ u32 SelectAdaptiveClipmapTier(
         return 0;
     }
 
-    if (!std::isfinite(altitudeMeters) ||
-        altitudeMeters < 0.0 ||
-        !std::isfinite(
-            adaptiveConfig.
-                altitudeToHalfExtentScale) ||
-        adaptiveConfig.
-                altitudeToHalfExtentScale <=
-            0.0 ||
+    if (!std::isfinite(
+            demandedHalfExtentMeters) ||
+        demandedHalfExtentMeters < 0.0 ||
         !std::isfinite(
             adaptiveConfig.growThreshold) ||
         !std::isfinite(
@@ -221,11 +216,6 @@ u32 SelectAdaptiveClipmapTier(
         throw std::invalid_argument(
             "Orbit adaptive terrain clipmap coverage configuration is invalid.");
     }
-
-    const f64 demandedHalfExtent =
-        altitudeMeters *
-        adaptiveConfig.
-            altitudeToHalfExtentScale;
 
     u32 tier =
         std::min(
@@ -241,7 +231,7 @@ u32 SelectAdaptiveClipmapTier(
                     baseConfig,
                     tier));
 
-        if (demandedHalfExtent <=
+        if (demandedHalfExtentMeters <=
             currentExtent *
                 adaptiveConfig.
                     growThreshold)
@@ -260,7 +250,7 @@ u32 SelectAdaptiveClipmapTier(
                     baseConfig,
                     tier - 1U));
 
-        if (demandedHalfExtent >=
+        if (demandedHalfExtentMeters >=
             finerExtent *
                 adaptiveConfig.
                     shrinkThreshold)
@@ -272,6 +262,34 @@ u32 SelectAdaptiveClipmapTier(
     }
 
     return tier;
+}
+
+u32 SelectAdaptiveClipmapTier(
+    const ClipmapConfig& baseConfig,
+    const AdaptiveClipmapCoverageConfig& adaptiveConfig,
+    const f64 altitudeMeters,
+    const u32 currentTier)
+{
+    if (!std::isfinite(altitudeMeters) ||
+        altitudeMeters < 0.0 ||
+        !std::isfinite(
+            adaptiveConfig.
+                altitudeToHalfExtentScale) ||
+        adaptiveConfig.
+                altitudeToHalfExtentScale <=
+            0.0)
+    {
+        throw std::invalid_argument(
+            "Orbit adaptive terrain clipmap altitude mapping is invalid.");
+    }
+
+    return SelectAdaptiveClipmapTierForHalfExtent(
+        baseConfig,
+        adaptiveConfig,
+        altitudeMeters *
+            adaptiveConfig.
+                altitudeToHalfExtentScale,
+        currentTier);
 }
 
 f64 LodMorphFactor(
