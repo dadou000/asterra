@@ -262,7 +262,7 @@ int main()
                             seaLevelMeters,
                     .minimumRadiusMeters = 25.0,
                     .maximumRadiusMeters =
-                        3'000'000.0,
+                        12'000'000.0,
                     .waveAmplitudeScale = 1.0F,
                     .verticalFovRadians =
                         terrainPreviewConfig.
