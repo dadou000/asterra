@@ -1,5 +1,6 @@
 add_library(OrbitTerrainRegion STATIC
     src/DerivedTerrainRegion.cpp
+    src/DerivedTerrainRegionCache.cpp
 )
 
 add_library(Orbit::TerrainRegion ALIAS OrbitTerrainRegion)
@@ -12,6 +13,7 @@ target_include_directories(OrbitTerrainRegion
 target_link_libraries(OrbitTerrainRegion
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
         Orbit::Terrain
         Orbit::TerrainHydrology
         Orbit::TerrainErosion

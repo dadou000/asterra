@@ -279,3 +279,21 @@ add_test(
     NAME Orbit.DerivedTerrainRegion
     COMMAND OrbitDerivedTerrainRegionTests
 )
+
+
+add_executable(OrbitDerivedTerrainRegionCacheTests
+    DerivedTerrainRegionCacheTests.cpp
+)
+
+target_link_libraries(OrbitDerivedTerrainRegionCacheTests
+    PRIVATE
+        Orbit::TerrainRegion
+)
+
+target_compile_features(OrbitDerivedTerrainRegionCacheTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitDerivedTerrainRegionCacheTests)
+
+add_test(
+    NAME Orbit.DerivedTerrainRegionCache
+    COMMAND OrbitDerivedTerrainRegionCacheTests
+)
