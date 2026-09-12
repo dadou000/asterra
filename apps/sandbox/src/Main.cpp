@@ -652,7 +652,7 @@ int main()
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw | water rivers {} lakes {} upload {} B",
+                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw | water rivers {} lakes {} upload {} B",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -663,6 +663,13 @@ int main()
                             uploadedBytesLastFrame,
                         stats.
                             drawCallsLastFrame,
+                        stats.
+                            adaptiveCoverageTier,
+                        stats.
+                            activeBaseSpacingMeters,
+                        stats.
+                            activeOuterHalfExtentMeters /
+                            1000.0,
                         static_cast<orbit::f64>(
                             pageCacheStats.
                                 residentBytes) /
