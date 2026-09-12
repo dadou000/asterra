@@ -9,6 +9,7 @@
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
 #include <orbit/terrain_erosion/HydrologyRefinement.hpp>
+#include <orbit/terrain_erosion/RegionalElevationDelta.hpp>
 #include <orbit/terrain_erosion/RiverCarvedTerrainSource.hpp>
 #include <orbit/terrain_erosion/RiverCarving.hpp>
 #include <orbit/terrain_hydrology/HydrologyGrid.hpp>
@@ -168,6 +169,40 @@ int main()
             hydrologyRefinement.
                 hydrology;
 
+        auto regionalDeltaField =
+            orbit::terrain_erosion::
+                BuildRegionalElevationDeltaField(
+                    regionalHydrology,
+                    hydrologyRefinement.
+                        cumulativeElevationDeltaMeters);
+
+        std::vector<
+            orbit::terrain_erosion::
+                RegionalElevationDeltaField>
+            regionalDeltaFields;
+
+        regionalDeltaFields.push_back(
+            std::move(
+                regionalDeltaField));
+
+        const auto regionallyErodedTerrain =
+            std::make_shared<
+                orbit::terrain_erosion::
+                    RegionalElevationDeltaTerrainSource>(
+                        planet,
+                        authoritativeTerrain,
+                        std::move(
+                            regionalDeltaFields),
+                        orbit::terrain_erosion::
+                            RegionalElevationDeltaConfig{
+                                .regionEdgeFadeMeters =
+                                    25'000.0,
+                                .fullDetailFootprintScale =
+                                    0.5,
+                                .fadeOutFootprintScale =
+                                    4.0
+                            });
+
         const auto riverGraph =
             orbit::terrain_hydrology::
                 BuildRiverGraph(
@@ -238,7 +273,7 @@ int main()
                 orbit::terrain_erosion::
                     RiverCarvedTerrainSource>(
                         planet,
-                        authoritativeTerrain,
+                        regionallyErodedTerrain,
                         std::move(
                             carvingFields));
 
