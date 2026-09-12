@@ -15,6 +15,9 @@ struct RiverCarvedTerrainConfig
     f64 fullDetailFootprintRatio{0.20};
     f64 fadeOutFootprintRatio{1.25};
 
+    // Fades regional erosion to zero before the generated region boundary.
+    f64 regionEdgeFadeMeters{20'000.0};
+
     // Adds a wetland tendency near active channels for semantic/material use.
     f32 maximumWetlandBlend{0.55F};
 };

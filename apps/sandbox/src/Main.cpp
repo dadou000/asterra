@@ -8,6 +8,10 @@
 #include <orbit/shader/d3d/D3DShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
+#include <orbit/terrain_erosion/RiverCarvedTerrainSource.hpp>
+#include <orbit/terrain_erosion/RiverCarving.hpp>
+#include <orbit/terrain_hydrology/HydrologyGrid.hpp>
+#include <orbit/terrain_hydrology/RiverGraph.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/world/Planet.hpp>
@@ -18,6 +22,7 @@
 #include <exception>
 #include <format>
 #include <memory>
+#include <utility>
 #include <vector>
 
 int main()
@@ -102,6 +107,19 @@ int main()
             .radiusMeters = 6'000'000.0
         };
 
+        const orbit::math::Double3 observerDirection =
+            orbit::math::Normalize(
+                orbit::math::Double3{
+                    0.65,
+                    0.35,
+                    0.68
+                });
+
+        const orbit::world::SurfaceFrame
+            initialSurfaceFrame =
+                orbit::world::MakeSurfaceFrame(
+                    observerDirection);
+
         const auto authoritativeTerrain =
             std::make_shared<
                 orbit::terrain::AnalyticTerrainSource>(
@@ -115,12 +133,103 @@ int main()
                         .detailOctaves = 8
                     });
 
+        const orbit::terrain_hydrology::HydrologyGrid
+            regionalHydrology =
+                orbit::terrain_hydrology::
+                    BuildHydrologyGrid(
+                        planet,
+                        *authoritativeTerrain,
+                        initialSurfaceFrame,
+                        {
+                            .resolution = 129,
+                            .halfExtentMeters =
+                                250'000.0,
+                            .footprintMeters = 0.0,
+                            .useCoarseElevation =
+                                false,
+                            .conditionDepressions =
+                                true,
+                            .minimumDrainageDropMeters =
+                                0.25
+                        });
+
+        const auto riverGraph =
+            orbit::terrain_hydrology::
+                BuildRiverGraph(
+                    regionalHydrology,
+                    400'000'000.0);
+
+        auto carvingField =
+            orbit::terrain_erosion::
+                BuildRiverCarvingField(
+                    regionalHydrology,
+                    riverGraph,
+                    {
+                        .referenceDrainageAreaSquareMeters =
+                            1'000'000'000.0,
+                        .baseChannelHalfWidthMeters =
+                            20.0,
+                        .minimumChannelHalfWidthMeters =
+                            5.0,
+                        .maximumChannelHalfWidthMeters =
+                            180.0,
+                        .widthExponent =
+                            0.30,
+                        .baseDepthMeters =
+                            8.0,
+                        .minimumDepthMeters =
+                            2.0,
+                        .maximumDepthMeters =
+                            80.0,
+                        .depthExponent =
+                            0.18,
+                        .valleyWidthMultiplier =
+                            8.0,
+                        .minimumBedSlope =
+                            0.00008,
+                        .maximumIncisionMeters =
+                            250.0,
+                        .spatialIndexResolution =
+                            64
+                    });
+
+        orbit::log::Info(
+            std::format(
+                "Regional terrain | hydrology {}x{} | river nodes {} segments {} | erosion index refs {}",
+                regionalHydrology.
+                    config.resolution,
+                regionalHydrology.
+                    config.resolution,
+                riverGraph.nodes.size(),
+                riverGraph.segments.size(),
+                carvingField.
+                    spatialSegmentIndices.
+                    size()));
+
+        std::vector<
+            orbit::terrain_erosion::
+                RiverCarvingField>
+            carvingFields;
+
+        carvingFields.push_back(
+            std::move(
+                carvingField));
+
+        const auto carvedTerrain =
+            std::make_shared<
+                orbit::terrain_erosion::
+                    RiverCarvedTerrainSource>(
+                        planet,
+                        authoritativeTerrain,
+                        std::move(
+                            carvingFields));
+
         orbit::jobs::JobSystem jobSystem;
 
         orbit::terrain_cache::CachedTerrainSource
             terrain(
                 planet,
-                authoritativeTerrain,
+                carvedTerrain,
                 jobSystem,
                 {
                     .pageResolution = 33,
@@ -143,13 +252,6 @@ int main()
                 "Terrain workers: {}",
                 jobSystem.WorkerCount()));
 
-        const orbit::math::Double3 observerDirection =
-            orbit::math::Normalize(orbit::math::Double3{
-                0.65,
-                0.35,
-                0.68
-            });
-
         orbit::world::WorldPosition observer{
             .meters =
                 observerDirection *
@@ -158,8 +260,7 @@ int main()
 
         orbit::world::SurfaceFrame
             observerTravelFrame =
-                orbit::world::MakeSurfaceFrame(
-                    observerDirection);
+                initialSurfaceFrame;
 
         const orbit::shader::d3d::D3DShaderCompiler
             shaderCompiler;

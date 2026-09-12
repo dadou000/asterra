@@ -105,6 +105,8 @@ RiverCarvedTerrainSource(
         config_.fadeOutFootprintRatio <=
             config_.
                 fullDetailFootprintRatio ||
+        config_.regionEdgeFadeMeters <
+            0.0 ||
         config_.maximumWetlandBlend <
             0.0F ||
         config_.maximumWetlandBlend >
@@ -176,12 +178,30 @@ RiverCarvedTerrainSource::Sample(
             continue;
         }
 
+        const f64 edgeDistance =
+            field.halfExtentMeters -
+            std::max(
+                std::abs(
+                    offset.x),
+                std::abs(
+                    offset.y));
+
+        const f64 edgeWeight =
+            config_.regionEdgeFadeMeters >
+                    0.0
+                ? SmoothStep01(
+                    edgeDistance /
+                    config_.
+                        regionEdgeFadeMeters)
+                : 1.0;
+
         const f64 lodWeight =
             FootprintWeight(
                 query.footprintMeters,
                 carving.
                     valleyHalfWidthMeters,
-                config_);
+                config_) *
+            edgeWeight;
 
         if (lodWeight <= 0.0)
         {

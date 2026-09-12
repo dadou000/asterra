@@ -299,7 +299,11 @@ int main()
             carvedSource(
                 planet,
                 flatSource,
-                {field});
+                {field},
+                {
+                    .regionEdgeFadeMeters =
+                        500.0
+                });
 
     const auto carvedFine =
         carvedSource.Sample({
