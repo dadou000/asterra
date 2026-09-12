@@ -173,7 +173,7 @@ int main()
 
     constexpr orbit::f32 nearPlane = 10.0F;
     constexpr orbit::f32 farPlane =
-        3'000'000.0F;
+        12'000'000.0F;
 
     const orbit::math::Mat4 reverseProjection =
         orbit::math::PerspectiveReverseZLH(
