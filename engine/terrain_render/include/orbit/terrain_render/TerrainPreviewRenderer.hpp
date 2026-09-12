@@ -31,6 +31,12 @@ struct TerrainStreamingStats
     u64 supersededBatches{0};
     u64 revisionInvalidations{0};
     u64 staleRevisionBatches{0};
+    u64 coverageTierChanges{0};
+
+    u32 adaptiveCoverageTier{0};
+    f64 activeBaseSpacingMeters{0.0};
+    f64 activeOuterHalfExtentMeters{0.0};
+
     bool updatePending{false};
 };
 
@@ -49,6 +55,9 @@ struct TerrainPreviewConfig
         .levelScale = 2.0,
         .overlapCells = 6
     };
+
+    terrain_view::AdaptiveClipmapCoverageConfig
+        adaptiveCoverage{};
 
     f32 verticalFovRadians{1.22173048F};
     f32 nearPlaneMeters{10.0F};
