@@ -65,3 +65,20 @@ add_test(
     NAME Orbit.TerrainView
     COMMAND OrbitTerrainViewTests
 )
+
+add_executable(OrbitTerrainCacheTests
+    TerrainCacheTests.cpp
+)
+
+target_link_libraries(OrbitTerrainCacheTests
+    PRIVATE
+        Orbit::TerrainCache
+)
+
+target_compile_features(OrbitTerrainCacheTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainCacheTests)
+
+add_test(
+    NAME Orbit.TerrainCache
+    COMMAND OrbitTerrainCacheTests
+)

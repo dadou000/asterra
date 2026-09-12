@@ -21,6 +21,13 @@ struct CubeCoordinate
     math::Double2 uv{};
 };
 
+struct CubeBounds
+{
+    CubeFace face{CubeFace::PositiveX};
+    math::Double2 minimumUv{};
+    math::Double2 maximumUv{};
+};
+
 struct PlanetTileId
 {
     CubeFace face{CubeFace::PositiveX};
@@ -55,6 +62,9 @@ struct SurfaceFrame
     u8 level) noexcept;
 
 [[nodiscard]] CubeCoordinate TileCenter(
+    const PlanetTileId& tile) noexcept;
+
+[[nodiscard]] CubeBounds TileBounds(
     const PlanetTileId& tile) noexcept;
 
 [[nodiscard]] f64 ApproximateTileWidthMeters(

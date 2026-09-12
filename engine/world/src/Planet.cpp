@@ -165,6 +165,19 @@ PlanetTileId TileForDirection(
 
 CubeCoordinate TileCenter(const PlanetTileId& tile) noexcept
 {
+    const CubeBounds bounds = TileBounds(tile);
+
+    return {
+        .face = bounds.face,
+        .uv = {
+            (bounds.minimumUv.x + bounds.maximumUv.x) * 0.5,
+            (bounds.minimumUv.y + bounds.maximumUv.y) * 0.5
+        }
+    };
+}
+
+CubeBounds TileBounds(const PlanetTileId& tile) noexcept
+{
     const u8 safeLevel = std::min<u8>(tile.level, 30);
     const u32 count = TileCount(safeLevel);
 
@@ -175,9 +188,13 @@ CubeCoordinate TileCenter(const PlanetTileId& tile) noexcept
 
     return {
         .face = tile.face,
-        .uv = {
-            (static_cast<f64>(x) + 0.5) * inverseCount * 2.0 - 1.0,
-            (static_cast<f64>(y) + 0.5) * inverseCount * 2.0 - 1.0
+        .minimumUv = {
+            static_cast<f64>(x) * inverseCount * 2.0 - 1.0,
+            static_cast<f64>(y) * inverseCount * 2.0 - 1.0
+        },
+        .maximumUv = {
+            static_cast<f64>(x + 1U) * inverseCount * 2.0 - 1.0,
+            static_cast<f64>(y + 1U) * inverseCount * 2.0 - 1.0
         }
     };
 }
@@ -186,28 +203,18 @@ f64 ApproximateTileWidthMeters(
     const PlanetDefinition& planet,
     const PlanetTileId& tile) noexcept
 {
-    const u8 safeLevel = std::min<u8>(tile.level, 30);
-    const u32 count = TileCount(safeLevel);
-    const u32 x = std::min(tile.x, count - 1);
-    const u32 y = std::min(tile.y, count - 1);
-
-    const f64 inverseCount = 1.0 / static_cast<f64>(count);
+    const CubeBounds bounds = TileBounds(tile);
     const f64 v =
-        (static_cast<f64>(y) + 0.5) * inverseCount * 2.0 - 1.0;
-
-    const f64 u0 =
-        static_cast<f64>(x) * inverseCount * 2.0 - 1.0;
-    const f64 u1 =
-        static_cast<f64>(x + 1U) * inverseCount * 2.0 - 1.0;
+        (bounds.minimumUv.y + bounds.maximumUv.y) * 0.5;
 
     const math::Double3 left = CubeToUnitDirection({
-        .face = tile.face,
-        .uv = {u0, v}
+        .face = bounds.face,
+        .uv = {bounds.minimumUv.x, v}
     });
 
     const math::Double3 right = CubeToUnitDirection({
-        .face = tile.face,
-        .uv = {u1, v}
+        .face = bounds.face,
+        .uv = {bounds.maximumUv.x, v}
     });
 
     const f64 cosine = std::clamp(
