@@ -153,3 +153,21 @@ add_test(
     NAME Orbit.Camera
     COMMAND OrbitCameraTests
 )
+
+
+add_executable(OrbitTerrainFieldsTests
+    TerrainFieldsTests.cpp
+)
+
+target_link_libraries(OrbitTerrainFieldsTests
+    PRIVATE
+        Orbit::Terrain
+)
+
+target_compile_features(OrbitTerrainFieldsTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainFieldsTests)
+
+add_test(
+    NAME Orbit.TerrainFields
+    COMMAND OrbitTerrainFieldsTests
+)

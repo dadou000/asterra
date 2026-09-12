@@ -1,5 +1,7 @@
 add_library(OrbitTerrain STATIC
     src/AnalyticTerrainSource.cpp
+    src/GlobalTerrainFields.cpp
+    src/TerrainFields.cpp
 )
 
 add_library(Orbit::Terrain ALIAS OrbitTerrain)

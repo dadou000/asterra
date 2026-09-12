@@ -112,7 +112,11 @@ int main()
             .macroWavelengthMeters = 1'000'000.0,
             .detailAmplitudeMeters = 100.0,
             .detailWavelengthMeters = 1'000.0,
-            .detailOctaves = 1
+            .detailOctaves = 1,
+            .global = {
+                .continentalAmplitudeMeters = 0.0,
+                .mountainAmplitudeMeters = 0.0
+            }
         });
 
     const Double3 terrainDirection =
