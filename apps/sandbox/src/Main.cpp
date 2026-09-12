@@ -295,7 +295,10 @@ int main()
                     .minimumTileLevel = 0,
                     .maximumTileLevel = 24,
                     .cache = {
-                        .maxEntries = 256
+                        .budgetBytes =
+                            256ULL * 1024ULL * 1024ULL,
+                        .softEntryLimit =
+                            4096
                     }
                 });
 

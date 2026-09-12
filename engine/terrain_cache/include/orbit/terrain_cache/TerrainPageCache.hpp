@@ -13,7 +13,12 @@ namespace orbit::terrain_cache
 {
 struct TerrainPageCacheConfig
 {
-    std::size_t maxEntries{256};
+    static constexpr std::size_t DefaultBudgetBytes =
+        256ULL * 1024ULL * 1024ULL;
+
+    std::size_t budgetBytes{DefaultBudgetBytes};
+    std::size_t softEntryLimit{4096};
+
 };
 
 struct TerrainPageCacheStats
@@ -24,6 +29,9 @@ struct TerrainPageCacheStats
     u64 misses{0};
     u64 evictions{0};
     u64 capacityRejects{0};
+    std::size_t residentBytes{0};
+    std::size_t budgetBytes{0};
+    std::size_t peakResidentBytes{0};
     std::size_t entries{0};
 };
 
