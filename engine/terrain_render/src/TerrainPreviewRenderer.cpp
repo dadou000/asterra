@@ -1684,18 +1684,31 @@ private:
                     generation !=
                         desiredGeneration_;
 
-                CommitCandidate(
-                    std::move(candidate),
-                    results);
+                const bool obsoleteCoverageTier =
+                    superseded &&
+                    candidate.coverageTier !=
+                        desiredCoverageTier_;
 
-                committedGeneration_ =
-                    generation;
-
-                ++stats_.committedBatches;
-
-                if (superseded)
+                if (obsoleteCoverageTier)
                 {
+                    ResetCommitStats();
                     ++stats_.supersededBatches;
+                }
+                else
+                {
+                    CommitCandidate(
+                        std::move(candidate),
+                        results);
+
+                    committedGeneration_ =
+                        generation;
+
+                    ++stats_.committedBatches;
+
+                    if (superseded)
+                    {
+                        ++stats_.supersededBatches;
+                    }
                 }
             }
         }
