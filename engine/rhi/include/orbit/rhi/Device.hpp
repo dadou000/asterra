@@ -3,6 +3,7 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Fence.hpp>
+#include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/rhi/Swapchain.hpp>
 
@@ -48,6 +49,9 @@ public:
 
     [[nodiscard]] virtual std::unique_ptr<Buffer> CreateBuffer(
         const BufferDesc& desc) = 0;
+
+    [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
+        const GraphicsPipelineDesc& desc) = 0;
 
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,

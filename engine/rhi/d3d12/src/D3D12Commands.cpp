@@ -64,7 +64,8 @@ ID3D12Resource* D3D12Texture::Native() const noexcept
     return nativeResource_.Get();
 }
 
-D3D12_CPU_DESCRIPTOR_HANDLE D3D12Texture::RenderTargetView() const noexcept
+D3D12_CPU_DESCRIPTOR_HANDLE
+D3D12Texture::RenderTargetView() const noexcept
 {
     return renderTargetView_;
 }
@@ -91,7 +92,8 @@ void D3D12CommandAllocator::Reset()
     }
 }
 
-ID3D12CommandAllocator* D3D12CommandAllocator::Native() const noexcept
+ID3D12CommandAllocator*
+D3D12CommandAllocator::Native() const noexcept
 {
     return nativeAllocator_.Get();
 }
@@ -128,6 +130,8 @@ void D3D12CommandList::Reset(CommandAllocator& allocator)
         throw std::runtime_error(
             "Orbit failed to reset a D3D12 command list.");
     }
+
+    activePipeline_ = nullptr;
 }
 
 void D3D12CommandList::Transition(
@@ -140,7 +144,9 @@ void D3D12CommandList::Transition(
         return;
     }
 
-    auto* d3dTexture = dynamic_cast<D3D12Texture*>(&texture);
+    auto* d3dTexture =
+        dynamic_cast<D3D12Texture*>(&texture);
+
     if (d3dTexture == nullptr)
     {
         throw std::runtime_error(
@@ -148,9 +154,11 @@ void D3D12CommandList::Transition(
     }
 
     D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Type =
+        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.Transition.pResource = d3dTexture->Native();
+    barrier.Transition.pResource =
+        d3dTexture->Native();
     barrier.Transition.Subresource =
         D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barrier.Transition.StateBefore =
@@ -165,7 +173,9 @@ void D3D12CommandList::ClearColorTarget(
     Texture& texture,
     const ClearColor& color)
 {
-    auto* d3dTexture = dynamic_cast<D3D12Texture*>(&texture);
+    auto* d3dTexture =
+        dynamic_cast<D3D12Texture*>(&texture);
+
     if (d3dTexture == nullptr)
     {
         throw std::runtime_error(
@@ -186,6 +196,189 @@ void D3D12CommandList::ClearColorTarget(
         nullptr);
 }
 
+void D3D12CommandList::SetRenderTarget(
+    Texture& texture)
+{
+    auto* d3dTexture =
+        dynamic_cast<D3D12Texture*>(&texture);
+
+    if (d3dTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a texture from another backend.");
+    }
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE handle =
+        d3dTexture->RenderTargetView();
+
+    nativeCommandList_->OMSetRenderTargets(
+        1,
+        &handle,
+        FALSE,
+        nullptr);
+}
+
+void D3D12CommandList::SetViewport(
+    const Viewport& viewport)
+{
+    const D3D12_VIEWPORT nativeViewport{
+        viewport.x,
+        viewport.y,
+        viewport.width,
+        viewport.height,
+        viewport.minDepth,
+        viewport.maxDepth
+    };
+
+    nativeCommandList_->RSSetViewports(
+        1,
+        &nativeViewport);
+}
+
+void D3D12CommandList::SetScissor(
+    const ScissorRect& rect)
+{
+    const D3D12_RECT nativeRect{
+        static_cast<LONG>(rect.left),
+        static_cast<LONG>(rect.top),
+        static_cast<LONG>(rect.right),
+        static_cast<LONG>(rect.bottom)
+    };
+
+    nativeCommandList_->RSSetScissorRects(
+        1,
+        &nativeRect);
+}
+
+void D3D12CommandList::SetGraphicsPipeline(
+    GraphicsPipeline& pipeline)
+{
+    auto* d3dPipeline =
+        dynamic_cast<D3D12GraphicsPipeline*>(&pipeline);
+
+    if (d3dPipeline == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a graphics pipeline from another backend.");
+    }
+
+    nativeCommandList_->SetPipelineState(
+        d3dPipeline->NativePipelineState());
+
+    nativeCommandList_->SetGraphicsRootSignature(
+        d3dPipeline->NativeRootSignature());
+
+    nativeCommandList_->IASetPrimitiveTopology(
+        d3dPipeline->NativeTopology());
+
+    activePipeline_ = d3dPipeline;
+}
+
+void D3D12CommandList::SetGraphicsConstants(
+    const std::span<const u32> dwords)
+{
+    if (activePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind graphics constants without an active pipeline.");
+    }
+
+    if (dwords.empty())
+    {
+        return;
+    }
+
+    if (dwords.size() >
+        activePipeline_->PushConstantDwords())
+    {
+        throw std::runtime_error(
+            "Orbit graphics constants exceed the active pipeline root constant range.");
+    }
+
+    nativeCommandList_->SetGraphicsRoot32BitConstants(
+        0,
+        static_cast<UINT>(dwords.size()),
+        dwords.data(),
+        0);
+}
+
+void D3D12CommandList::SetVertexBuffer(
+    Buffer& buffer,
+    const u32 strideBytes)
+{
+    auto* d3dBuffer =
+        dynamic_cast<D3D12Buffer*>(&buffer);
+
+    if (d3dBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a vertex buffer from another backend.");
+    }
+
+    if (strideBytes == 0)
+    {
+        throw std::invalid_argument(
+            "Orbit vertex buffer stride cannot be zero.");
+    }
+
+    D3D12_VERTEX_BUFFER_VIEW view{};
+    view.BufferLocation =
+        d3dBuffer->Native()->GetGPUVirtualAddress();
+    view.SizeInBytes =
+        static_cast<UINT>(d3dBuffer->SizeBytes());
+    view.StrideInBytes = strideBytes;
+
+    nativeCommandList_->IASetVertexBuffers(
+        0,
+        1,
+        &view);
+}
+
+void D3D12CommandList::SetIndexBuffer(
+    Buffer& buffer,
+    const IndexFormat format)
+{
+    auto* d3dBuffer =
+        dynamic_cast<D3D12Buffer*>(&buffer);
+
+    if (d3dBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received an index buffer from another backend.");
+    }
+
+    D3D12_INDEX_BUFFER_VIEW view{};
+    view.BufferLocation =
+        d3dBuffer->Native()->GetGPUVirtualAddress();
+    view.SizeInBytes =
+        static_cast<UINT>(d3dBuffer->SizeBytes());
+
+    switch (format)
+    {
+    case IndexFormat::UInt16:
+        view.Format = DXGI_FORMAT_R16_UINT;
+        break;
+    case IndexFormat::UInt32:
+        view.Format = DXGI_FORMAT_R32_UINT;
+        break;
+    }
+
+    nativeCommandList_->IASetIndexBuffer(&view);
+}
+
+void D3D12CommandList::DrawIndexed(
+    const u32 indexCount,
+    const u32 firstIndex,
+    const i32 vertexOffset)
+{
+    nativeCommandList_->DrawIndexedInstanced(
+        indexCount,
+        1,
+        firstIndex,
+        vertexOffset,
+        0);
+}
+
 void D3D12CommandList::Close()
 {
     if (FAILED(nativeCommandList_->Close()))
@@ -195,7 +388,8 @@ void D3D12CommandList::Close()
     }
 }
 
-ID3D12GraphicsCommandList* D3D12CommandList::Native() const noexcept
+ID3D12GraphicsCommandList*
+D3D12CommandList::Native() const noexcept
 {
     return nativeCommandList_.Get();
 }

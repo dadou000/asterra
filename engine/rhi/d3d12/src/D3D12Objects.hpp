@@ -97,6 +97,29 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE renderTargetView_{};
 };
 
+class D3D12GraphicsPipeline final : public GraphicsPipeline
+{
+public:
+    D3D12GraphicsPipeline(
+        ComPtr<ID3D12PipelineState> pipelineState,
+        ComPtr<ID3D12RootSignature> rootSignature,
+        u32 pushConstantDwords,
+        PrimitiveTopology topology);
+
+    [[nodiscard]] u32 PushConstantDwords() const noexcept override;
+    [[nodiscard]] PrimitiveTopology Topology() const noexcept override;
+
+    [[nodiscard]] ID3D12PipelineState* NativePipelineState() const noexcept;
+    [[nodiscard]] ID3D12RootSignature* NativeRootSignature() const noexcept;
+    [[nodiscard]] D3D12_PRIMITIVE_TOPOLOGY NativeTopology() const noexcept;
+
+private:
+    ComPtr<ID3D12PipelineState> pipelineState_;
+    ComPtr<ID3D12RootSignature> rootSignature_;
+    u32 pushConstantDwords_{0};
+    PrimitiveTopology topology_{PrimitiveTopology::TriangleList};
+};
+
 class D3D12CommandAllocator final : public CommandAllocator
 {
 public:
@@ -128,7 +151,28 @@ public:
         Texture& texture,
         ResourceState before,
         ResourceState after) override;
-    void ClearColorTarget(Texture& texture, const ClearColor& color) override;
+    void ClearColorTarget(
+        Texture& texture,
+        const ClearColor& color) override;
+
+    void SetRenderTarget(Texture& texture) override;
+    void SetViewport(const Viewport& viewport) override;
+    void SetScissor(const ScissorRect& rect) override;
+    void SetGraphicsPipeline(
+        GraphicsPipeline& pipeline) override;
+    void SetGraphicsConstants(
+        std::span<const u32> dwords) override;
+    void SetVertexBuffer(
+        Buffer& buffer,
+        u32 strideBytes) override;
+    void SetIndexBuffer(
+        Buffer& buffer,
+        IndexFormat format) override;
+    void DrawIndexed(
+        u32 indexCount,
+        u32 firstIndex,
+        i32 vertexOffset) override;
+
     void Close() override;
 
     [[nodiscard]] ID3D12GraphicsCommandList* Native() const noexcept;
@@ -136,6 +180,7 @@ public:
 private:
     QueueType type_;
     ComPtr<ID3D12GraphicsCommandList> nativeCommandList_;
+    D3D12GraphicsPipeline* activePipeline_{nullptr};
 };
 
 class D3D12Swapchain final : public Swapchain
@@ -186,6 +231,8 @@ public:
         CommandAllocator& allocator) override;
     [[nodiscard]] std::unique_ptr<Buffer> CreateBuffer(
         const BufferDesc& desc) override;
+    [[nodiscard]] std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
+        const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) override;
