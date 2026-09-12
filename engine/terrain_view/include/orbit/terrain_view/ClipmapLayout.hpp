@@ -58,6 +58,12 @@ struct ClipmapLayout
     const ClipmapConfig& baseConfig,
     u32 tier);
 
+[[nodiscard]] u32 SelectAdaptiveClipmapTierForHalfExtent(
+    const ClipmapConfig& baseConfig,
+    const AdaptiveClipmapCoverageConfig& adaptiveConfig,
+    f64 demandedHalfExtentMeters,
+    u32 currentTier);
+
 [[nodiscard]] u32 SelectAdaptiveClipmapTier(
     const ClipmapConfig& baseConfig,
     const AdaptiveClipmapCoverageConfig& adaptiveConfig,
