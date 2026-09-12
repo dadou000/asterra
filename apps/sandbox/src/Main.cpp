@@ -15,6 +15,7 @@
 #include <orbit/terrain_region/DerivedTerrainRegionStreamer.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
+#include <orbit/water_render/RiverWaterRenderer.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <algorithm>
@@ -240,6 +241,32 @@ int main()
                 observer,
                 terrainPreviewConfig);
 
+        orbit::water_render::RiverWaterRenderer
+            riverWater(
+                *device,
+                shaderCompiler,
+                planet,
+                regionCache,
+                observer,
+                {
+                    .framesInFlight =
+                        swapchain->BufferCount(),
+                    .maximumSegments = 16'384,
+                    .verticalFovRadians =
+                        terrainPreviewConfig.
+                            verticalFovRadians,
+                    .nearPlaneMeters =
+                        terrainPreviewConfig.
+                            nearPlaneMeters,
+                    .farPlaneMeters =
+                        terrainPreviewConfig.
+                            farPlaneMeters,
+                    .maximumDrawDistanceMeters =
+                        180'000.0,
+                    .surfaceOffsetMeters =
+                        0.08
+                });
+
         orbit::log::Info(std::format(
             "Terrain preview: {} vertices, {} indices",
             terrainPreview.VertexCount(),
@@ -436,6 +463,9 @@ int main()
 
                 terrainPreview.UpdateObserver(
                     observer);
+
+                riverWater.UpdateObserver(
+                    observer);
             }
 
             regionStreamer.Update(
@@ -500,6 +530,20 @@ int main()
                 swapchain->Height(),
                 camera);
 
+            riverWater.Draw(
+                *commandList,
+                backBuffer,
+                *depthTarget,
+                frameIndex,
+                swapchain->Width(),
+                swapchain->Height(),
+                {
+                    .forward =
+                        camera.forward,
+                    .up =
+                        camera.up
+                });
+
             versionOverlay.Draw(
                 *commandList,
                 backBuffer,
@@ -546,12 +590,15 @@ int main()
                 const auto& regionStreamStats =
                     regionStreamer.Stats();
 
+                const auto& waterStats =
+                    riverWater.Stats();
+
                 constexpr orbit::f64 bytesPerMiB =
                     1024.0 * 1024.0;
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {}",
+                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | water segments {} upload {} B",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -583,7 +630,11 @@ int main()
                         stats.
                             revisionInvalidations,
                         stats.
-                            staleRevisionBatches));
+                            staleRevisionBatches,
+                        waterStats.
+                            visibleSegmentsLastFrame,
+                        waterStats.
+                            uploadedBytesLastFrame));
 
                 previousStatsTime =
                     currentFrameTime;
