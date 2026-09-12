@@ -659,7 +659,11 @@ int main()
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw {:.0f} km | water rivers {} lakes {} upload {} B",
+                        "Terrain stream | alt {:.0f} km | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw {:.0f} km | water rivers {} lakes {} upload {} B",
+                        (orbit::math::Length(
+                            observer.meters) -
+                         planet.radiusMeters) /
+                            1000.0,
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
