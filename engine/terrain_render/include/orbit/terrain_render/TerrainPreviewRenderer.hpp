@@ -51,6 +51,9 @@ public:
     TerrainPreviewRenderer& operator=(
         TerrainPreviewRenderer&&) noexcept;
 
+    void UpdateObserver(
+        const world::WorldPosition& observer);
+
     void Draw(
         rhi::CommandList& commandList,
         u32 targetWidth,

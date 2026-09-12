@@ -2,6 +2,7 @@
 
 #include <orbit/math/Matrix.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/terrain_stream/ToroidalResidency.hpp>
 #include <orbit/terrain_view/ClipmapTracker.hpp>
 
 #include <algorithm>
@@ -19,32 +20,170 @@ namespace orbit::terrain_render
 {
 namespace
 {
-struct TerrainGridVertex
+[[nodiscard]] u32 WrapIndex(
+    const i64 value,
+    const u32 size) noexcept
 {
-    f32 x{};
-    f32 y{};
-};
+    const i64 modulus =
+        static_cast<i64>(size);
 
-[[nodiscard]] f64 Lerp(
-    const f64 a,
-    const f64 b,
-    const f64 t) noexcept
-{
-    return a + (b - a) * t;
+    i64 wrapped =
+        value % modulus;
+
+    if (wrapped < 0)
+    {
+        wrapped += modulus;
+    }
+
+    return static_cast<u32>(wrapped);
 }
 
-[[nodiscard]] math::Double2 Lerp(
-    const math::Double2& a,
-    const math::Double2& b,
-    const f64 t) noexcept
+void AppendCell(
+    std::vector<u32>& indices,
+    const u32 resolution,
+    const u32 x,
+    const u32 y)
+{
+    const u32 row0 =
+        y * resolution;
+
+    const u32 row1 =
+        (y + 1U) * resolution;
+
+    const u32 v00 = row0 + x;
+    const u32 v10 = row0 + x + 1U;
+    const u32 v01 = row1 + x;
+    const u32 v11 = row1 + x + 1U;
+
+    indices.push_back(v00);
+    indices.push_back(v01);
+    indices.push_back(v10);
+
+    indices.push_back(v10);
+    indices.push_back(v01);
+    indices.push_back(v11);
+}
+
+[[nodiscard]] std::vector<u32> BuildCenterIndices(
+    const u32 resolution)
+{
+    std::vector<u32> indices;
+
+    const u32 cells =
+        resolution - 1U;
+
+    indices.reserve(
+        static_cast<std::size_t>(cells) *
+        static_cast<std::size_t>(cells) *
+        6U);
+
+    for (u32 y = 0; y < cells; ++y)
+    {
+        for (u32 x = 0; x < cells; ++x)
+        {
+            AppendCell(
+                indices,
+                resolution,
+                x,
+                y);
+        }
+    }
+
+    return indices;
+}
+
+[[nodiscard]] std::vector<u32> BuildRingIndices(
+    const terrain_view::ClipmapLevel& ringLevel)
+{
+    std::vector<u32> indices;
+
+    const u32 resolution =
+        ringLevel.gridResolution;
+
+    const u32 cells =
+        resolution - 1U;
+
+    const f64 halfCells =
+        static_cast<f64>(cells) * 0.5;
+
+    indices.reserve(
+        static_cast<std::size_t>(cells) *
+        static_cast<std::size_t>(cells) *
+        6U);
+
+    for (u32 y = 0; y < cells; ++y)
+    {
+        const f64 centerY =
+            (static_cast<f64>(y) +
+             0.5 -
+             halfCells) *
+            ringLevel.sampleSpacingMeters;
+
+        for (u32 x = 0; x < cells; ++x)
+        {
+            const f64 centerX =
+                (static_cast<f64>(x) +
+                 0.5 -
+                 halfCells) *
+                ringLevel.sampleSpacingMeters;
+
+            const bool insideHole =
+                std::abs(centerX) <
+                    ringLevel.innerHoleHalfExtentMeters &&
+                std::abs(centerY) <
+                    ringLevel.innerHoleHalfExtentMeters;
+
+            if (!insideHole)
+            {
+                AppendCell(
+                    indices,
+                    resolution,
+                    x,
+                    y);
+            }
+        }
+    }
+
+    return indices;
+}
+
+void UploadBuffer(
+    rhi::Buffer& buffer,
+    const void* source,
+    const std::size_t bytes)
+{
+    std::byte* destination =
+        buffer.Map();
+
+    std::memcpy(
+        destination,
+        source,
+        bytes);
+
+    buffer.Unmap();
+}
+
+[[nodiscard]] math::Float3 ToObserverLocal(
+    const math::Double3& vector,
+    const world::SurfaceFrame& observerFrame) noexcept
 {
     return {
-        Lerp(a.x, b.x, t),
-        Lerp(a.y, b.y, t)
+        static_cast<f32>(
+            math::Dot(
+                vector,
+                observerFrame.east)),
+        static_cast<f32>(
+            math::Dot(
+                vector,
+                observerFrame.up)),
+        static_cast<f32>(
+            math::Dot(
+                vector,
+                observerFrame.north))
     };
 }
 
-[[nodiscard]] f64 SampleElevation(
+[[nodiscard]] f32 SampleElevation(
     const world::PlanetDefinition& planet,
     const terrain::TerrainSource& terrainSource,
     const world::SurfaceFrame& frame,
@@ -57,173 +196,24 @@ struct TerrainGridVertex
             frame,
             offsetMeters);
 
-    return terrainSource.Sample({
-        .unitDirection = direction,
-        .footprintMeters = footprintMeters
-    }).elevationMeters;
+    return static_cast<f32>(
+        terrainSource.Sample({
+            .unitDirection = direction,
+            .footprintMeters = footprintMeters
+        }).elevationMeters);
 }
 
-struct VertexSample
-{
-    TerrainGridVertex vertex{};
-    f32 elevationMeters{};
-};
-
-[[nodiscard]] VertexSample MakeVertexSample(
-    const world::PlanetDefinition& planet,
-    const terrain::TerrainSource& terrainSource,
-    const terrain_view::ClipmapLevel& level,
-    const world::SurfaceFrame& levelFrame,
-    const terrain_view::ClipmapLevel* coarserLevel,
-    const math::Double2& fineOffsetMeters)
-{
-    const f64 edgeDistance =
-        std::max(
-            std::abs(fineOffsetMeters.x),
-            std::abs(fineOffsetMeters.y));
-
-    const f64 morph =
-        coarserLevel != nullptr
-            ? terrain_view::LodMorphFactor(
-                level,
-                edgeDistance)
-            : 0.0;
-
-    math::Double2 finalOffset =
-        fineOffsetMeters;
-
-    f64 elevation =
-        SampleElevation(
-            planet,
-            terrainSource,
-            levelFrame,
-            fineOffsetMeters,
-            level.terrainFootprintMeters);
-
-    if (morph > 0.0 &&
-        coarserLevel != nullptr)
-    {
-        const f64 coarseSpacing =
-            coarserLevel->sampleSpacingMeters;
-
-        const math::Double2 coarseOffset{
-            std::round(
-                fineOffsetMeters.x /
-                coarseSpacing) *
-                coarseSpacing,
-            std::round(
-                fineOffsetMeters.y /
-                coarseSpacing) *
-                coarseSpacing
-        };
-
-        const f64 coarseElevation =
-            SampleElevation(
-                planet,
-                terrainSource,
-                levelFrame,
-                coarseOffset,
-                coarserLevel->
-                    terrainFootprintMeters);
-
-        finalOffset =
-            Lerp(
-                fineOffsetMeters,
-                coarseOffset,
-                morph);
-
-        elevation =
-            Lerp(
-                elevation,
-                coarseElevation,
-                morph);
-    }
-
-    return {
-        .vertex = {
-            .x = static_cast<f32>(
-                finalOffset.x),
-            .y = static_cast<f32>(
-                finalOffset.y)
-        },
-        .elevationMeters =
-            static_cast<f32>(elevation)
-    };
-}
-
-void AppendLevelIndices(
-    const terrain_view::ClipmapLevel& level,
-    const u32 vertexBase,
-    std::vector<u32>& indices)
-{
-    const u32 resolution =
-        level.gridResolution;
-
-    const u32 cells =
-        resolution - 1U;
-
-    const f64 halfCells =
-        static_cast<f64>(cells) * 0.5;
-
-    for (u32 y = 0; y < cells; ++y)
-    {
-        const f64 centerY =
-            (static_cast<f64>(y) +
-             0.5 -
-             halfCells) *
-            level.sampleSpacingMeters;
-
-        for (u32 x = 0; x < cells; ++x)
-        {
-            const f64 centerX =
-                (static_cast<f64>(x) +
-                 0.5 -
-                 halfCells) *
-                level.sampleSpacingMeters;
-
-            const bool insideHole =
-                level.index > 0 &&
-                std::abs(centerX) <
-                    level.innerHoleHalfExtentMeters &&
-                std::abs(centerY) <
-                    level.innerHoleHalfExtentMeters;
-
-            if (insideHole)
-            {
-                continue;
-            }
-
-            const u32 row0 =
-                vertexBase +
-                y * resolution;
-
-            const u32 row1 =
-                vertexBase +
-                (y + 1U) * resolution;
-
-            const u32 v00 = row0 + x;
-            const u32 v10 = row0 + x + 1U;
-            const u32 v01 = row1 + x;
-            const u32 v11 = row1 + x + 1U;
-
-            indices.push_back(v00);
-            indices.push_back(v01);
-            indices.push_back(v10);
-
-            indices.push_back(v10);
-            indices.push_back(v01);
-            indices.push_back(v11);
-        }
-    }
-}
-
-[[nodiscard]] std::array<u32, 18>
-DrawConstants(
+[[nodiscard]] std::array<u32, 36> BuildDrawConstants(
     const math::Mat4& matrix,
     const f32 planetRadiusMeters,
-    const f32 cameraAltitudeMeters) noexcept
+    const f32 observerRadiusMeters,
+    const terrain_view::ClipmapLevel& level,
+    const terrain_view::ClipmapLevel* coarserLevel,
+    const terrain_view::ClipmapLevelMotion& motion,
+    const terrain_stream::LevelResidencyUpdate& residency,
+    const world::SurfaceFrame& observerFrame) noexcept
 {
-    std::array<u32, 18> result{};
+    std::array<u32, 36> result{};
 
     static_assert(
         sizeof(matrix.values) ==
@@ -234,13 +224,84 @@ DrawConstants(
         matrix.values.data(),
         sizeof(matrix.values));
 
-    result[16] =
-        std::bit_cast<u32>(
-            planetRadiusMeters);
+    const math::Float3 centerUp =
+        ToObserverLocal(
+            motion.surfaceFrame.up,
+            observerFrame);
 
-    result[17] =
-        std::bit_cast<u32>(
-            cameraAltitudeMeters);
+    const math::Float3 centerEast =
+        ToObserverLocal(
+            motion.surfaceFrame.east,
+            observerFrame);
+
+    const math::Float3 centerNorth =
+        ToObserverLocal(
+            motion.surfaceFrame.north,
+            observerFrame);
+
+    const f32 coarseSpacing =
+        coarserLevel != nullptr
+            ? static_cast<f32>(
+                coarserLevel->
+                    sampleSpacingMeters)
+            : static_cast<f32>(
+                level.sampleSpacingMeters);
+
+    const auto store =
+        [&result](
+            const u32 index,
+            const f32 value)
+        {
+            result[index] =
+                std::bit_cast<u32>(value);
+        };
+
+    store(16, planetRadiusMeters);
+    store(17, observerRadiusMeters);
+    store(
+        18,
+        static_cast<f32>(
+            level.sampleSpacingMeters));
+    store(
+        19,
+        static_cast<f32>(
+            level.gridResolution));
+
+    store(20, centerUp.x);
+    store(21, centerUp.y);
+    store(22, centerUp.z);
+    store(
+        23,
+        static_cast<f32>(
+            residency.originX));
+
+    store(24, centerEast.x);
+    store(25, centerEast.y);
+    store(26, centerEast.z);
+    store(
+        27,
+        static_cast<f32>(
+            residency.originY));
+
+    store(28, centerNorth.x);
+    store(29, centerNorth.y);
+    store(30, centerNorth.z);
+    store(
+        31,
+        static_cast<f32>(
+            level.morphStartHalfExtentMeters));
+
+    store(
+        32,
+        static_cast<f32>(
+            level.morphEndHalfExtentMeters));
+    store(33, coarseSpacing);
+    store(
+        34,
+        coarserLevel != nullptr
+            ? 1.0F
+            : 0.0F);
+    store(35, 0.0F);
 
     return result;
 }
@@ -249,17 +310,15 @@ constexpr const char* kVertexShader = R"(
 cbuffer DrawConstants : register(b0)
 {
     row_major float4x4 g_mvp;
-    float g_planetRadius;
-    float g_cameraAltitude;
+
+    float4 g_planet;
+    float4 g_centerUpAndOriginX;
+    float4 g_centerEastAndOriginY;
+    float4 g_centerNorthAndMorphStart;
+    float4 g_morph;
 };
 
 ByteAddressBuffer g_heights : register(t0);
-
-struct VSInput
-{
-    float2 offsetMeters : TEXCOORD0;
-    uint vertexId : SV_VertexID;
-};
 
 struct VSOutput
 {
@@ -267,29 +326,128 @@ struct VSOutput
     float elevation : TEXCOORD0;
 };
 
-VSOutput main(VSInput input)
+VSOutput main(uint vertexId : SV_VertexID)
 {
+    const float planetRadius =
+        g_planet.x;
+
+    const float observerRadius =
+        g_planet.y;
+
+    const float spacing =
+        g_planet.z;
+
+    const uint resolution =
+        (uint)round(g_planet.w);
+
+    const uint logicalX =
+        vertexId % resolution;
+
+    const uint logicalY =
+        vertexId / resolution;
+
+    const uint originX =
+        (uint)round(
+            g_centerUpAndOriginX.w);
+
+    const uint originY =
+        (uint)round(
+            g_centerEastAndOriginY.w);
+
+    const uint physicalX =
+        (logicalX + originX) %
+        resolution;
+
+    const uint physicalY =
+        (logicalY + originY) %
+        resolution;
+
+    const uint physicalIndex =
+        physicalY * resolution +
+        physicalX;
+
     const float elevation =
         asfloat(
             g_heights.Load(
-                input.vertexId * 4));
+                physicalIndex * 4));
+
+    const float halfCells =
+        ((float)resolution - 1.0) *
+        0.5;
+
+    float2 offsetMeters =
+        (float2(
+            (float)logicalX,
+            (float)logicalY) -
+         halfCells) *
+        spacing;
+
+    const float morphStart =
+        g_centerNorthAndMorphStart.w;
+
+    const float morphEnd =
+        g_morph.x;
+
+    const float coarseSpacing =
+        g_morph.y;
+
+    const float hasCoarser =
+        g_morph.z;
+
+    if (hasCoarser > 0.5)
+    {
+        const float edgeDistance =
+            max(
+                abs(offsetMeters.x),
+                abs(offsetMeters.y));
+
+        const float normalized =
+            saturate(
+                (edgeDistance -
+                 morphStart) /
+                max(
+                    morphEnd -
+                        morphStart,
+                    0.0001));
+
+        const float morph =
+            normalized *
+            normalized *
+            (3.0 -
+             2.0 * normalized);
+
+        const float2 coarseOffset =
+            round(
+                offsetMeters /
+                coarseSpacing) *
+            coarseSpacing;
+
+        offsetMeters =
+            lerp(
+                offsetMeters,
+                coarseOffset,
+                morph);
+    }
 
     const float distanceMeters =
-        length(input.offsetMeters);
+        length(offsetMeters);
 
-    float2 tangentDirection =
-        float2(0.0, 0.0);
+    float3 tangentDirection =
+        float3(0.0, 0.0, 0.0);
 
     if (distanceMeters > 0.0001)
     {
         tangentDirection =
-            input.offsetMeters /
-            distanceMeters;
+            normalize(
+                g_centerEastAndOriginY.xyz *
+                    offsetMeters.x +
+                g_centerNorthAndMorphStart.xyz *
+                    offsetMeters.y);
     }
 
     const float angle =
         distanceMeters /
-        g_planetRadius;
+        planetRadius;
 
     const float sinAngle =
         sin(angle);
@@ -297,29 +455,31 @@ VSOutput main(VSInput input)
     const float cosAngle =
         cos(angle);
 
+    float3 surfaceDirection =
+        g_centerUpAndOriginX.xyz *
+        cosAngle;
+
+    if (distanceMeters > 0.0001)
+    {
+        surfaceDirection +=
+            tangentDirection *
+            sinAngle;
+    }
+
     const float displacedRadius =
-        g_planetRadius +
+        planetRadius +
         elevation;
 
-    const float horizontalMeters =
-        sinAngle *
-        displacedRadius;
-
-    const float verticalMeters =
-        cosAngle *
-            displacedRadius -
-        (g_planetRadius +
-         g_cameraAltitude);
-
     const float3 localPosition =
+        surfaceDirection *
+            displacedRadius -
         float3(
-            tangentDirection.x *
-                horizontalMeters,
-            verticalMeters,
-            tangentDirection.y *
-                horizontalMeters);
+            0.0,
+            observerRadius,
+            0.0);
 
     VSOutput output;
+
     output.position =
         mul(
             float4(
@@ -381,353 +541,77 @@ public:
         const terrain::TerrainSource& terrainSource,
         const world::WorldPosition& observer,
         TerrainPreviewConfig config)
-        : config_(std::move(config)),
-          planetRadiusMeters_(
-              static_cast<f32>(
-                  planet.radiusMeters)),
-          cameraAltitudeMeters_(
-              static_cast<f32>(
-                  math::Length(
-                      observer.meters) -
-                  planet.radiusMeters))
+        : device_(device),
+          planet_(planet),
+          terrainSource_(terrainSource),
+          config_(std::move(config)),
+          layout_(
+              terrain_view::BuildClipmapLayout(
+                  config_.clipmap,
+                  observer)),
+          tracker_(
+              planet_,
+              config_.clipmap),
+          residency_(
+              config_.clipmap),
+          levels_(
+              config_.clipmap.levelCount)
     {
-        if (math::Length(
-                observer.meters) <=
-            planet.radiusMeters)
+        if (math::Length(observer.meters) <=
+            planet_.radiusMeters)
         {
             throw std::invalid_argument(
                 "Orbit terrain preview observer must be above the planet surface.");
         }
 
-        const terrain_view::ClipmapLayout
-            layout =
-                terrain_view::
-                    BuildClipmapLayout(
-                        config_.clipmap,
-                        observer);
+        CreateSharedTopology();
+        CreateLevelBuffers();
+        CreatePipeline(
+            shaderCompiler);
 
-        terrain_view::ClipmapTracker tracker(
-            planet,
-            config_.clipmap);
+        UpdateObserver(observer);
+    }
 
-        const terrain_view::
-            ClipmapMotionUpdate motion =
-                tracker.Update(observer);
+    void UpdateObserver(
+        const world::WorldPosition& observer)
+    {
+        const f64 observerRadius =
+            math::Length(
+                observer.meters);
 
-        std::vector<TerrainGridVertex>
-            vertices;
-
-        std::vector<f32> heights;
-        std::vector<u32> indices;
-
-        std::size_t totalVertexCount = 0;
-
-        for (const auto& level :
-             layout.levels)
+        if (observerRadius <=
+            planet_.radiusMeters)
         {
-            const std::size_t resolution =
-                static_cast<std::size_t>(
-                    level.gridResolution);
-
-            totalVertexCount +=
-                resolution *
-                resolution;
+            throw std::invalid_argument(
+                "Orbit terrain preview observer must be above the planet surface.");
         }
 
-        if (totalVertexCount >
-            static_cast<std::size_t>(
-                std::numeric_limits<u32>::
-                    max()))
-        {
-            throw std::overflow_error(
-                "Orbit terrain preview vertex count exceeds 32-bit indexing.");
-        }
+        observer_ = observer;
+        observerFrame_ =
+            world::MakeSurfaceFrame(
+                observer.meters);
 
-        vertices.reserve(
-            totalVertexCount);
+        observerRadiusMeters_ =
+            static_cast<f32>(
+                observerRadius);
 
-        heights.reserve(
-            totalVertexCount);
+        motion_ =
+            tracker_.Update(observer);
+
+        residencyUpdate_ =
+            residency_.Apply(motion_);
 
         for (u32 levelIndex = 0;
              levelIndex <
                 static_cast<u32>(
-                    layout.levels.size());
+                    levels_.size());
              ++levelIndex)
         {
-            const terrain_view::
-                ClipmapLevel& level =
-                    layout.levels[
-                        levelIndex];
-
-            const terrain_view::
-                ClipmapLevel*
-                coarserLevel =
-                    levelIndex + 1U <
-                        static_cast<u32>(
-                            layout.levels.
-                                size())
-                        ? &layout.levels[
-                            levelIndex +
-                            1U]
-                        : nullptr;
-
-            const u32 vertexBase =
-                static_cast<u32>(
-                    vertices.size());
-
-            const u32 cells =
-                level.gridResolution -
-                1U;
-
-            const f64 halfCells =
-                static_cast<f64>(
-                    cells) *
-                0.5;
-
-            for (u32 y = 0;
-                 y <
-                    level.
-                        gridResolution;
-                 ++y)
-            {
-                for (u32 x = 0;
-                     x <
-                        level.
-                            gridResolution;
-                     ++x)
-                {
-                    const math::
-                        Double2
-                        offsetMeters{
-                            (static_cast<f64>(
-                                 x) -
-                             halfCells) *
-                                level.
-                                    sampleSpacingMeters,
-                            (static_cast<f64>(
-                                 y) -
-                             halfCells) *
-                                level.
-                                    sampleSpacingMeters
-                        };
-
-                    const VertexSample
-                        sample =
-                            MakeVertexSample(
-                                planet,
-                                terrainSource,
-                                level,
-                                motion.levels[
-                                    levelIndex].
-                                    surfaceFrame,
-                                coarserLevel,
-                                offsetMeters);
-
-                    vertices.push_back(
-                        sample.vertex);
-
-                    heights.push_back(
-                        sample.
-                            elevationMeters);
-                }
-            }
-
-            AppendLevelIndices(
-                level,
-                vertexBase,
-                indices);
+            RefreshLevel(
+                levelIndex,
+                residencyUpdate_.
+                    levels[levelIndex]);
         }
-
-        if (indices.size() >
-            static_cast<std::size_t>(
-                std::numeric_limits<u32>::
-                    max()))
-        {
-            throw std::overflow_error(
-                "Orbit terrain preview index count exceeds 32-bit draw limits.");
-        }
-
-        vertexCount_ =
-            static_cast<u32>(
-                vertices.size());
-
-        indexCount_ =
-            static_cast<u32>(
-                indices.size());
-
-        const u64 vertexBytes =
-            static_cast<u64>(
-                vertices.size()) *
-            static_cast<u64>(
-                sizeof(
-                    TerrainGridVertex));
-
-        const u64 heightBytes =
-            static_cast<u64>(
-                heights.size()) *
-            static_cast<u64>(
-                sizeof(f32));
-
-        const u64 indexBytes =
-            static_cast<u64>(
-                indices.size()) *
-            static_cast<u64>(
-                sizeof(u32));
-
-        vertexBuffer_ =
-            device.CreateBuffer({
-                .sizeBytes =
-                    vertexBytes,
-                .usage =
-                    rhi::BufferUsage::
-                        Vertex,
-                .memory =
-                    rhi::MemoryUsage::
-                        HostVisible,
-                .initialState =
-                    rhi::ResourceState::
-                        VertexOrConstantBuffer
-            });
-
-        heightBuffer_ =
-            device.CreateBuffer({
-                .sizeBytes =
-                    heightBytes,
-                .usage =
-                    rhi::BufferUsage::
-                        Structured,
-                .memory =
-                    rhi::MemoryUsage::
-                        HostVisible,
-                .initialState =
-                    rhi::ResourceState::
-                        ShaderResource
-            });
-
-        indexBuffer_ =
-            device.CreateBuffer({
-                .sizeBytes =
-                    indexBytes,
-                .usage =
-                    rhi::BufferUsage::
-                        Index,
-                .memory =
-                    rhi::MemoryUsage::
-                        HostVisible,
-                .initialState =
-                    rhi::ResourceState::
-                        IndexBuffer
-            });
-
-        Upload(
-            *vertexBuffer_,
-            vertices.data(),
-            static_cast<std::size_t>(
-                vertexBytes));
-
-        Upload(
-            *heightBuffer_,
-            heights.data(),
-            static_cast<std::size_t>(
-                heightBytes));
-
-        Upload(
-            *indexBuffer_,
-            indices.data(),
-            static_cast<std::size_t>(
-                indexBytes));
-
-        const shader::Binary
-            vertexShader =
-                shaderCompiler.Compile({
-                    .source =
-                        kVertexShader,
-                    .entryPoint =
-                        "main",
-                    .stage =
-                        shader::Stage::
-                            Vertex,
-                    .debug = false
-                });
-
-        const shader::Binary
-            pixelShader =
-                shaderCompiler.Compile({
-                    .source =
-                        kPixelShader,
-                    .entryPoint =
-                        "main",
-                    .stage =
-                        shader::Stage::
-                            Pixel,
-                    .debug = false
-                });
-
-        const std::array<
-            rhi::VertexAttribute,
-            1>
-            attributes{{
-                {
-                    .location = 0,
-                    .format =
-                        rhi::VertexFormat::
-                            Float2,
-                    .offsetBytes = 0
-                }
-            }};
-
-        pipeline_ =
-            device.
-                CreateGraphicsPipeline({
-                    .vertexShader = {
-                        .data =
-                            vertexShader.
-                                bytecode.
-                                data(),
-                        .size =
-                            vertexShader.
-                                bytecode.
-                                size()
-                    },
-                    .pixelShader = {
-                        .data =
-                            pixelShader.
-                                bytecode.
-                                data(),
-                        .size =
-                            pixelShader.
-                                bytecode.
-                                size()
-                    },
-                    .vertexAttributes =
-                        attributes,
-                    .vertexStrideBytes =
-                        static_cast<u32>(
-                            sizeof(
-                                TerrainGridVertex)),
-                    .pushConstantDwords =
-                        18,
-                    .shaderResourceBuffers =
-                        1,
-                    .topology =
-                        rhi::
-                            PrimitiveTopology::
-                                TriangleList,
-                    .fillMode =
-                        config_.wireframe
-                            ? rhi::
-                                FillMode::
-                                    Wireframe
-                            : rhi::
-                                FillMode::
-                                    Solid,
-                    .cullMode =
-                        rhi::CullMode::
-                            None,
-                    .depthTest = true,
-                    .depthWrite = true
-                });
     }
 
     void Draw(
@@ -768,12 +652,6 @@ public:
                 view,
                 projection);
 
-        const auto constants =
-            DrawConstants(
-                mvp,
-                planetRadiusMeters_,
-                cameraAltitudeMeters_);
-
         commandList.SetViewport({
             .x = 0.0F,
             .y = 0.0F,
@@ -802,79 +680,455 @@ public:
             SetGraphicsPipeline(
                 *pipeline_);
 
-        commandList.
-            SetGraphicsConstants(
-                constants);
+        for (u32 levelIndex = 0;
+             levelIndex <
+                static_cast<u32>(
+                    levels_.size());
+             ++levelIndex)
+        {
+            const terrain_view::ClipmapLevel&
+                level =
+                    layout_.levels[
+                        levelIndex];
 
-        commandList.
-            SetGraphicsBuffer(
-                0,
-                *heightBuffer_);
+            const terrain_view::ClipmapLevel*
+                coarserLevel =
+                    levelIndex + 1U <
+                        static_cast<u32>(
+                            levels_.size())
+                        ? &layout_.levels[
+                            levelIndex +
+                            1U]
+                        : nullptr;
 
-        commandList.SetVertexBuffer(
-            *vertexBuffer_,
-            static_cast<u32>(
-                sizeof(
-                    TerrainGridVertex)));
+            const auto constants =
+                BuildDrawConstants(
+                    mvp,
+                    static_cast<f32>(
+                        planet_.
+                            radiusMeters),
+                    observerRadiusMeters_,
+                    level,
+                    coarserLevel,
+                    motion_.levels[
+                        levelIndex],
+                    residencyUpdate_.levels[
+                        levelIndex],
+                    observerFrame_);
 
-        commandList.SetIndexBuffer(
-            *indexBuffer_,
-            rhi::IndexFormat::
-                UInt32);
+            commandList.
+                SetGraphicsConstants(
+                    constants);
 
-        commandList.DrawIndexed(
-            indexCount_);
+            commandList.
+                SetGraphicsBuffer(
+                    0,
+                    *levels_[levelIndex].
+                        heightBuffer);
+
+            if (levelIndex == 0)
+            {
+                commandList.
+                    SetIndexBuffer(
+                        *centerIndexBuffer_,
+                        rhi::IndexFormat::
+                            UInt32);
+
+                commandList.
+                    DrawIndexed(
+                        centerIndexCount_);
+            }
+            else
+            {
+                commandList.
+                    SetIndexBuffer(
+                        *ringIndexBuffer_,
+                        rhi::IndexFormat::
+                            UInt32);
+
+                commandList.
+                    DrawIndexed(
+                        ringIndexCount_);
+            }
+        }
     }
 
-    [[nodiscard]] u32
-    VertexCount() const noexcept
+    [[nodiscard]] u32 VertexCount() const noexcept
     {
-        return vertexCount_;
+        const u64 perLevel =
+            static_cast<u64>(
+                config_.clipmap.
+                    gridResolution) *
+            static_cast<u64>(
+                config_.clipmap.
+                    gridResolution);
+
+        const u64 total =
+            perLevel *
+            static_cast<u64>(
+                config_.clipmap.
+                    levelCount);
+
+        return static_cast<u32>(
+            std::min<u64>(
+                total,
+                std::numeric_limits<u32>::
+                    max()));
     }
 
-    [[nodiscard]] u32
-    IndexCount() const noexcept
+    [[nodiscard]] u32 IndexCount() const noexcept
     {
-        return indexCount_;
+        const u64 total =
+            static_cast<u64>(
+                centerIndexCount_) +
+            static_cast<u64>(
+                ringIndexCount_) *
+            static_cast<u64>(
+                config_.clipmap.
+                    levelCount - 1U);
+
+        return static_cast<u32>(
+            std::min<u64>(
+                total,
+                std::numeric_limits<u32>::
+                    max()));
     }
 
 private:
-    static void Upload(
-        rhi::Buffer& buffer,
-        const void* source,
-        const std::size_t bytes)
+    struct LevelGpuState
     {
-        std::byte* destination =
+        std::unique_ptr<rhi::Buffer>
+            heightBuffer;
+    };
+
+    void CreateSharedTopology()
+    {
+        const std::vector<u32>
+            centerIndices =
+                BuildCenterIndices(
+                    config_.clipmap.
+                        gridResolution);
+
+        centerIndexCount_ =
+            static_cast<u32>(
+                centerIndices.size());
+
+        const u64 centerBytes =
+            static_cast<u64>(
+                centerIndices.size()) *
+            sizeof(u32);
+
+        centerIndexBuffer_ =
+            device_.CreateBuffer({
+                .sizeBytes = centerBytes,
+                .usage =
+                    rhi::BufferUsage::
+                        Index,
+                .memory =
+                    rhi::MemoryUsage::
+                        HostVisible,
+                .initialState =
+                    rhi::ResourceState::
+                        IndexBuffer
+            });
+
+        UploadBuffer(
+            *centerIndexBuffer_,
+            centerIndices.data(),
+            static_cast<std::size_t>(
+                centerBytes));
+
+        if (config_.clipmap.levelCount > 1)
+        {
+            const std::vector<u32>
+                ringIndices =
+                    BuildRingIndices(
+                        layout_.levels[1]);
+
+            ringIndexCount_ =
+                static_cast<u32>(
+                    ringIndices.size());
+
+            const u64 ringBytes =
+                static_cast<u64>(
+                    ringIndices.size()) *
+                sizeof(u32);
+
+            ringIndexBuffer_ =
+                device_.CreateBuffer({
+                    .sizeBytes =
+                        ringBytes,
+                    .usage =
+                        rhi::BufferUsage::
+                            Index,
+                    .memory =
+                        rhi::MemoryUsage::
+                            HostVisible,
+                    .initialState =
+                        rhi::ResourceState::
+                            IndexBuffer
+                });
+
+            UploadBuffer(
+                *ringIndexBuffer_,
+                ringIndices.data(),
+                static_cast<std::size_t>(
+                    ringBytes));
+        }
+    }
+
+    void CreateLevelBuffers()
+    {
+        const u64 sampleCount =
+            static_cast<u64>(
+                config_.clipmap.
+                    gridResolution) *
+            static_cast<u64>(
+                config_.clipmap.
+                    gridResolution);
+
+        const u64 bytes =
+            sampleCount *
+            sizeof(f32);
+
+        for (LevelGpuState& level :
+             levels_)
+        {
+            level.heightBuffer =
+                device_.CreateBuffer({
+                    .sizeBytes = bytes,
+                    .usage =
+                        rhi::BufferUsage::
+                            Structured,
+                    .memory =
+                        rhi::MemoryUsage::
+                            HostVisible,
+                    .initialState =
+                        rhi::ResourceState::
+                            ShaderResource
+                });
+        }
+    }
+
+    void CreatePipeline(
+        const shader::Compiler& shaderCompiler)
+    {
+        const shader::Binary
+            vertexShader =
+                shaderCompiler.Compile({
+                    .source =
+                        kVertexShader,
+                    .entryPoint =
+                        "main",
+                    .stage =
+                        shader::Stage::
+                            Vertex,
+                    .debug = false
+                });
+
+        const shader::Binary
+            pixelShader =
+                shaderCompiler.Compile({
+                    .source =
+                        kPixelShader,
+                    .entryPoint =
+                        "main",
+                    .stage =
+                        shader::Stage::
+                            Pixel,
+                    .debug = false
+                });
+
+        pipeline_ =
+            device_.
+                CreateGraphicsPipeline({
+                    .vertexShader = {
+                        .data =
+                            vertexShader.
+                                bytecode.
+                                data(),
+                        .size =
+                            vertexShader.
+                                bytecode.
+                                size()
+                    },
+                    .pixelShader = {
+                        .data =
+                            pixelShader.
+                                bytecode.
+                                data(),
+                        .size =
+                            pixelShader.
+                                bytecode.
+                                size()
+                    },
+                    .vertexAttributes = {},
+                    .vertexStrideBytes = 0,
+                    .pushConstantDwords = 36,
+                    .shaderResourceBuffers = 1,
+                    .topology =
+                        rhi::
+                            PrimitiveTopology::
+                                TriangleList,
+                    .fillMode =
+                        config_.wireframe
+                            ? rhi::
+                                FillMode::
+                                    Wireframe
+                            : rhi::
+                                FillMode::
+                                    Solid,
+                    .cullMode =
+                        rhi::CullMode::
+                            None,
+                    .depthTest = true,
+                    .depthWrite = true
+                });
+    }
+
+    void RefreshLevel(
+        const u32 levelIndex,
+        const terrain_stream::
+            LevelResidencyUpdate& update)
+    {
+        if (update.refreshRegions.empty())
+        {
+            return;
+        }
+
+        const terrain_view::ClipmapLevel&
+            level =
+                layout_.levels[
+                    levelIndex];
+
+        const terrain_view::
+            ClipmapLevelMotion&
+            movement =
+                motion_.levels[
+                    levelIndex];
+
+        const u32 resolution =
+            level.gridResolution;
+
+        const f64 halfCells =
+            static_cast<f64>(
+                resolution - 1U) *
+            0.5;
+
+        rhi::Buffer& buffer =
+            *levels_[levelIndex].
+                heightBuffer;
+
+        std::byte* mapped =
             buffer.Map();
 
-        std::memcpy(
-            destination,
-            source,
-            bytes);
+        auto* heights =
+            reinterpret_cast<f32*>(
+                mapped);
+
+        for (const terrain_stream::
+                 PhysicalRegion& region :
+             update.refreshRegions)
+        {
+            for (u32 localY = 0;
+                 localY < region.height;
+                 ++localY)
+            {
+                const u32 physicalY =
+                    region.y + localY;
+
+                const u32 logicalY =
+                    WrapIndex(
+                        static_cast<i64>(
+                            physicalY) -
+                        static_cast<i64>(
+                            update.originY),
+                        resolution);
+
+                for (u32 localX = 0;
+                     localX < region.width;
+                     ++localX)
+                {
+                    const u32 physicalX =
+                        region.x + localX;
+
+                    const u32 logicalX =
+                        WrapIndex(
+                            static_cast<i64>(
+                                physicalX) -
+                            static_cast<i64>(
+                                update.originX),
+                            resolution);
+
+                    const math::Double2
+                        offsetMeters{
+                            (static_cast<f64>(
+                                 logicalX) -
+                             halfCells) *
+                                level.
+                                    sampleSpacingMeters,
+                            (static_cast<f64>(
+                                 logicalY) -
+                             halfCells) *
+                                level.
+                                    sampleSpacingMeters
+                        };
+
+                    heights[
+                        physicalY *
+                            resolution +
+                        physicalX] =
+                            SampleElevation(
+                                planet_,
+                                terrainSource_,
+                                movement.
+                                    surfaceFrame,
+                                offsetMeters,
+                                level.
+                                    terrainFootprintMeters);
+                }
+            }
+        }
 
         buffer.Unmap();
     }
 
+    rhi::Device& device_;
+    world::PlanetDefinition planet_;
+    const terrain::TerrainSource&
+        terrainSource_;
+
     TerrainPreviewConfig config_;
+    terrain_view::ClipmapLayout layout_;
+    terrain_view::ClipmapTracker tracker_;
+    terrain_stream::ToroidalResidency
+        residency_;
+
+    std::vector<LevelGpuState> levels_;
 
     std::unique_ptr<rhi::Buffer>
-        vertexBuffer_;
+        centerIndexBuffer_;
 
     std::unique_ptr<rhi::Buffer>
-        heightBuffer_;
-
-    std::unique_ptr<rhi::Buffer>
-        indexBuffer_;
+        ringIndexBuffer_;
 
     std::unique_ptr<
         rhi::GraphicsPipeline>
         pipeline_;
 
-    f32 planetRadiusMeters_{0.0F};
-    f32 cameraAltitudeMeters_{0.0F};
+    world::WorldPosition observer_{};
+    world::SurfaceFrame observerFrame_{};
 
-    u32 vertexCount_{0};
-    u32 indexCount_{0};
+    terrain_view::ClipmapMotionUpdate
+        motion_;
+
+    terrain_stream::ResidencyUpdate
+        residencyUpdate_;
+
+    f32 observerRadiusMeters_{0.0F};
+
+    u32 centerIndexCount_{0};
+    u32 ringIndexCount_{0};
 };
 
 TerrainPreviewRenderer::
@@ -907,6 +1161,12 @@ TerrainPreviewRenderer&
 TerrainPreviewRenderer::operator=(
     TerrainPreviewRenderer&&) noexcept =
     default;
+
+void TerrainPreviewRenderer::UpdateObserver(
+    const world::WorldPosition& observer)
+{
+    impl_->UpdateObserver(observer);
+}
 
 void TerrainPreviewRenderer::Draw(
     rhi::CommandList& commandList,

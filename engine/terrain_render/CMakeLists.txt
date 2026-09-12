@@ -15,6 +15,7 @@ target_link_libraries(OrbitTerrainRender
         Orbit::RHI
         Orbit::Shader
         Orbit::Terrain
+        Orbit::TerrainStream
         Orbit::TerrainView
         Orbit::World
 )
