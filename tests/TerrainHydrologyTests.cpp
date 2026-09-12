@@ -40,6 +40,8 @@ int main()
                         static_cast<orbit::i32>(y) -
                         2));
 
+            cell.drainageElevationMeters =
+                cell.elevationMeters;
             cell.runoffWeight = 1.0F;
             cell.oceanWeight = 0.0F;
         }
@@ -166,6 +168,138 @@ int main()
     {
         std::cerr
             << "River graph does not connect drainage into the basin outlet.\n";
+        return 1;
+    }
+
+    orbit::terrain_hydrology::HydrologyGrid
+        depressionGrid{};
+
+    depressionGrid.config = {
+        .resolution = 5,
+        .halfExtentMeters = 2.0,
+        .footprintMeters = 1.0,
+        .useCoarseElevation = true,
+        .conditionDepressions = true,
+        .minimumDrainageDropMeters = 0.1
+    };
+
+    depressionGrid.spacingMeters = 1.0;
+    depressionGrid.cells.resize(25);
+
+    for (orbit::u32 y = 0;
+         y < 5;
+         ++y)
+    {
+        for (orbit::u32 x = 0;
+             x < 5;
+             ++x)
+        {
+            auto& cell =
+                depressionGrid.At(
+                    x,
+                    y);
+
+            const bool boundary =
+                x == 0 ||
+                y == 0 ||
+                x == 4 ||
+                y == 4;
+
+            cell.elevationMeters =
+                boundary
+                    ? 10.0F
+                    : 0.0F;
+
+            cell.drainageElevationMeters =
+                cell.elevationMeters;
+
+            cell.runoffWeight = 1.0F;
+        }
+    }
+
+    depressionGrid.At(
+        2,
+        0).
+        elevationMeters = 2.0F;
+
+    depressionGrid.At(
+        2,
+        0).
+        drainageElevationMeters = 2.0F;
+
+    orbit::terrain_hydrology::
+        ConditionDepressions(
+            depressionGrid);
+
+    orbit::terrain_hydrology::
+        RouteHydrology(
+            depressionGrid);
+
+    const auto& conditionedCenter =
+        depressionGrid.At(
+            2,
+            2);
+
+    if (conditionedCenter.elevationMeters !=
+            0.0F ||
+        conditionedCenter.
+            depressionFillMeters <=
+            0.0F ||
+        conditionedCenter.
+            drainageElevationMeters <=
+            conditionedCenter.
+                elevationMeters)
+    {
+        std::cerr
+            << "Priority-flood conditioning did not preserve raw terrain while filling the drainage surface.\n";
+        return 1;
+    }
+
+    orbit::u32 traceX = 2;
+    orbit::u32 traceY = 2;
+    bool reachedBoundary = false;
+
+    for (orbit::u32 step = 0;
+         step < 25;
+         ++step)
+    {
+        if (traceX == 0 ||
+            traceY == 0 ||
+            traceX == 4 ||
+            traceY == 4)
+        {
+            reachedBoundary = true;
+            break;
+        }
+
+        const auto& cell =
+            depressionGrid.At(
+                traceX,
+                traceY);
+
+        if (cell.flowDx == 0 &&
+            cell.flowDy == 0)
+        {
+            break;
+        }
+
+        traceX =
+            static_cast<orbit::u32>(
+                static_cast<orbit::i32>(
+                    traceX) +
+                cell.flowDx);
+
+        traceY =
+            static_cast<orbit::u32>(
+                static_cast<orbit::i32>(
+                    traceY) +
+                cell.flowDy);
+    }
+
+    if (!reachedBoundary)
+    {
+        std::cerr
+            << "Priority-flood drainage did not create an outlet path from the enclosed basin.\n";
         return 1;
     }
 

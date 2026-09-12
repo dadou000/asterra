@@ -6,7 +6,9 @@
 #include <array>
 #include <cmath>
 #include <numeric>
+#include <queue>
 #include <stdexcept>
+#include <vector>
 
 namespace orbit::terrain_hydrology
 {
@@ -31,6 +33,24 @@ constexpr std::array<NeighborOffset, 8>
         {1, 1, 1.4142135623730951}
     }};
 
+struct FloodNode
+{
+    u32 index{0};
+    f64 elevationMeters{0.0};
+};
+
+struct FloodNodeGreater
+{
+    [[nodiscard]] bool operator()(
+        const FloodNode& a,
+        const FloodNode& b) const noexcept
+    {
+        return
+            a.elevationMeters >
+            b.elevationMeters;
+    }
+};
+
 [[nodiscard]] std::size_t CellIndex(
     const u32 resolution,
     const u32 x,
@@ -51,6 +71,37 @@ constexpr std::array<NeighborOffset, 8>
         coordinate <
             static_cast<i32>(
                 resolution);
+}
+
+[[nodiscard]] bool IsBoundary(
+    const u32 x,
+    const u32 y,
+    const u32 resolution) noexcept
+{
+    return
+        x == 0 ||
+        y == 0 ||
+        x + 1U == resolution ||
+        y + 1U == resolution;
+}
+
+void ValidateGrid(
+    const HydrologyGrid& grid,
+    const char* message)
+{
+    const u32 resolution =
+        grid.config.resolution;
+
+    if (resolution < 3 ||
+        grid.cells.size() !=
+            static_cast<std::size_t>(
+                resolution) *
+            resolution ||
+        grid.spacingMeters <= 0.0)
+    {
+        throw std::invalid_argument(
+            message);
+    }
 }
 } // namespace
 
@@ -140,6 +191,12 @@ HydrologyGrid BuildHydrologyGrid(
             "Orbit hydrology region extent must be positive.");
     }
 
+    if (config.minimumDrainageDropMeters < 0.0)
+    {
+        throw std::invalid_argument(
+            "Orbit hydrology minimum drainage drop cannot be negative.");
+    }
+
     HydrologyGrid grid{};
     grid.config = config;
     grid.surfaceFrame = surfaceFrame;
@@ -216,6 +273,9 @@ HydrologyGrid BuildHydrologyGrid(
                 static_cast<f32>(
                     elevation);
 
+            cell.drainageElevationMeters =
+                cell.elevationMeters;
+
             cell.oceanWeight =
                 std::clamp(
                     sample.biomes.ocean,
@@ -235,26 +295,197 @@ HydrologyGrid BuildHydrologyGrid(
         }
     }
 
+    if (config.conditionDepressions)
+    {
+        ConditionDepressions(
+            grid);
+    }
+
     RouteHydrology(grid);
     return grid;
+}
+
+void ConditionDepressions(
+    HydrologyGrid& grid)
+{
+    ValidateGrid(
+        grid,
+        "Orbit depression conditioning requires a valid populated hydrology grid.");
+
+    const u32 resolution =
+        grid.config.resolution;
+
+    std::vector<u8> visited(
+        grid.cells.size(),
+        0U);
+
+    std::priority_queue<
+        FloodNode,
+        std::vector<FloodNode>,
+        FloodNodeGreater>
+        frontier;
+
+    const auto seed =
+        [&grid,
+         &visited,
+         &frontier](
+            const u32 index)
+        {
+            if (visited[index] != 0U)
+            {
+                return;
+            }
+
+            visited[index] = 1U;
+
+            HydrologyCell& cell =
+                grid.cells[index];
+
+            cell.drainageElevationMeters =
+                cell.elevationMeters;
+
+            cell.depressionFillMeters =
+                0.0F;
+
+            frontier.push({
+                .index = index,
+                .elevationMeters =
+                    static_cast<f64>(
+                        cell.
+                            drainageElevationMeters)
+            });
+        };
+
+    for (u32 y = 0;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0;
+             x < resolution;
+             ++x)
+        {
+            const u32 index =
+                static_cast<u32>(
+                    CellIndex(
+                        resolution,
+                        x,
+                        y));
+
+            const HydrologyCell& cell =
+                grid.cells[index];
+
+            if (IsBoundary(
+                    x,
+                    y,
+                    resolution) ||
+                cell.oceanWeight >=
+                    0.5F)
+            {
+                seed(index);
+            }
+        }
+    }
+
+    while (!frontier.empty())
+    {
+        const FloodNode current =
+            frontier.top();
+
+        frontier.pop();
+
+        const u32 currentX =
+            current.index %
+            resolution;
+
+        const u32 currentY =
+            current.index /
+            resolution;
+
+        for (const NeighborOffset& neighbor :
+             kNeighbors)
+        {
+            const i32 nx =
+                static_cast<i32>(
+                    currentX) +
+                neighbor.dx;
+
+            const i32 ny =
+                static_cast<i32>(
+                    currentY) +
+                neighbor.dy;
+
+            if (!IsInside(
+                    nx,
+                    resolution) ||
+                !IsInside(
+                    ny,
+                    resolution))
+            {
+                continue;
+            }
+
+            const u32 neighborIndex =
+                static_cast<u32>(
+                    CellIndex(
+                        resolution,
+                        static_cast<u32>(nx),
+                        static_cast<u32>(ny)));
+
+            if (visited[
+                    neighborIndex] != 0U)
+            {
+                continue;
+            }
+
+            visited[
+                neighborIndex] = 1U;
+
+            HydrologyCell& target =
+                grid.cells[
+                    neighborIndex];
+
+            const f64 minimumTargetElevation =
+                current.elevationMeters +
+                grid.config.
+                    minimumDrainageDropMeters *
+                neighbor.distanceScale;
+
+            const f64 conditionedElevation =
+                std::max(
+                    static_cast<f64>(
+                        target.elevationMeters),
+                    minimumTargetElevation);
+
+            target.drainageElevationMeters =
+                static_cast<f32>(
+                    conditionedElevation);
+
+            target.depressionFillMeters =
+                static_cast<f32>(
+                    std::max(
+                        conditionedElevation -
+                        static_cast<f64>(
+                            target.elevationMeters),
+                        0.0));
+
+            frontier.push({
+                .index = neighborIndex,
+                .elevationMeters =
+                    conditionedElevation
+            });
+        }
+    }
 }
 
 void RouteHydrology(
     HydrologyGrid& grid)
 {
+    ValidateGrid(
+        grid,
+        "Orbit hydrology routing requires a valid populated grid.");
+
     const u32 resolution =
         grid.config.resolution;
-
-    if (resolution < 3 ||
-        grid.cells.size() !=
-            static_cast<std::size_t>(
-                resolution) *
-            resolution ||
-        grid.spacingMeters <= 0.0)
-    {
-        throw std::invalid_argument(
-            "Orbit hydrology routing requires a valid populated grid.");
-    }
 
     for (HydrologyCell& cell :
          grid.cells)
@@ -281,7 +512,8 @@ void RouteHydrology(
                     x,
                     y);
 
-            if (cell.oceanWeight >= 0.5F)
+            if (cell.oceanWeight >=
+                0.5F)
             {
                 continue;
             }
@@ -318,9 +550,11 @@ void RouteHydrology(
 
                 const f64 drop =
                     static_cast<f64>(
-                        cell.elevationMeters) -
+                        cell.
+                            drainageElevationMeters) -
                     static_cast<f64>(
-                        target.elevationMeters);
+                        target.
+                            drainageElevationMeters);
 
                 if (drop <= 0.0)
                 {
@@ -332,7 +566,8 @@ void RouteHydrology(
                     (grid.spacingMeters *
                      neighbor.distanceScale);
 
-                if (slope > bestSlope)
+                if (slope >
+                    bestSlope)
                 {
                     bestSlope = slope;
                     bestDx = neighbor.dx;
@@ -362,9 +597,9 @@ void RouteHydrology(
         {
             return
                 grid.cells[a].
-                    elevationMeters >
+                    drainageElevationMeters >
                 grid.cells[b].
-                    elevationMeters;
+                    drainageElevationMeters;
         });
 
     for (const u32 index :
@@ -441,7 +676,8 @@ std::vector<u32> ExtractRiverCells(
         const HydrologyCell& cell =
             grid.cells[index];
 
-        if (cell.oceanWeight >= 0.5F)
+        if (cell.oceanWeight >=
+            0.5F)
         {
             continue;
         }

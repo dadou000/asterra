@@ -14,11 +14,22 @@ struct HydrologyGridConfig
     f64 halfExtentMeters{250'000.0};
     f64 footprintMeters{0.0};
     bool useCoarseElevation{true};
+
+    // Removes enclosed sinks from the routing surface while keeping
+    // the sampled terrain elevation unchanged for later erosion.
+    bool conditionDepressions{true};
+    f64 minimumDrainageDropMeters{0.01};
 };
 
 struct HydrologyCell
 {
+    // Authoritative sampled surface used for terrain/erosion.
     f32 elevationMeters{0.0F};
+
+    // Derived monotonically drainable surface used only for routing.
+    f32 drainageElevationMeters{0.0F};
+    f32 depressionFillMeters{0.0F};
+
     f32 runoffWeight{1.0F};
     f32 flowAccumulation{0.0F};
     f32 oceanWeight{0.0F};
@@ -52,6 +63,11 @@ struct HydrologyGrid
     const terrain::TerrainSource& source,
     const world::SurfaceFrame& surfaceFrame,
     HydrologyGridConfig config = {});
+
+// Priority-flood conditioning. Boundary and ocean cells are outlets.
+// Raw sampled elevation remains untouched.
+void ConditionDepressions(
+    HydrologyGrid& grid);
 
 void RouteHydrology(
     HydrologyGrid& grid);
