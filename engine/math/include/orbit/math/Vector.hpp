@@ -89,6 +89,18 @@ template <typename T>
 }
 
 template <typename T>
+[[nodiscard]] constexpr Vec3<T> Cross(
+    const Vec3<T>& a,
+    const Vec3<T>& b) noexcept
+{
+    return {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+template <typename T>
 [[nodiscard]] constexpr T LengthSquared(const Vec3<T>& value) noexcept
 {
     return Dot(value, value);

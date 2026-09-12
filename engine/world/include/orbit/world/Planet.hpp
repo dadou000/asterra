@@ -37,6 +37,13 @@ struct PlanetDefinition
     f64 radiusMeters{6'000'000.0};
 };
 
+struct SurfaceFrame
+{
+    math::Double3 east{};
+    math::Double3 north{};
+    math::Double3 up{};
+};
+
 [[nodiscard]] math::Double3 CubeToUnitDirection(
     const CubeCoordinate& coordinate) noexcept;
 
@@ -53,4 +60,12 @@ struct PlanetDefinition
 [[nodiscard]] f64 ApproximateTileWidthMeters(
     const PlanetDefinition& planet,
     const PlanetTileId& tile) noexcept;
+
+[[nodiscard]] SurfaceFrame MakeSurfaceFrame(
+    const math::Double3& upDirection) noexcept;
+
+[[nodiscard]] math::Double3 DirectionAtSurfaceOffset(
+    const PlanetDefinition& planet,
+    const SurfaceFrame& frame,
+    const math::Double2& offsetMeters) noexcept;
 } // namespace orbit::world

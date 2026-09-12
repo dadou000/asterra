@@ -217,4 +217,57 @@ f64 ApproximateTileWidthMeters(
 
     return std::acos(cosine) * planet.radiusMeters;
 }
+
+SurfaceFrame MakeSurfaceFrame(
+    const math::Double3& upDirection) noexcept
+{
+    math::Double3 up = math::Normalize(upDirection);
+
+    if (math::LengthSquared(up) <= 0.0)
+    {
+        up = {0.0, 0.0, 1.0};
+    }
+
+    const math::Double3 reference =
+        std::abs(up.y) < 0.95
+            ? math::Double3{0.0, 1.0, 0.0}
+            : math::Double3{1.0, 0.0, 0.0};
+
+    const math::Double3 east =
+        math::Normalize(math::Cross(reference, up));
+
+    const math::Double3 north =
+        math::Normalize(math::Cross(up, east));
+
+    return {
+        .east = east,
+        .north = north,
+        .up = up
+    };
+}
+
+math::Double3 DirectionAtSurfaceOffset(
+    const PlanetDefinition& planet,
+    const SurfaceFrame& frame,
+    const math::Double2& offsetMeters) noexcept
+{
+    const math::Double3 tangent =
+        frame.east * offsetMeters.x +
+        frame.north * offsetMeters.y;
+
+    const f64 distance = math::Length(tangent);
+
+    if (distance <= 0.0 ||
+        planet.radiusMeters <= 0.0)
+    {
+        return math::Normalize(frame.up);
+    }
+
+    const f64 angle = distance / planet.radiusMeters;
+    const math::Double3 tangentDirection = tangent / distance;
+
+    return math::Normalize(
+        frame.up * std::cos(angle) +
+        tangentDirection * std::sin(angle));
+}
 } // namespace orbit::world

@@ -48,3 +48,20 @@ add_test(
     NAME Orbit.PlanetTerrain
     COMMAND OrbitPlanetTerrainTests
 )
+
+add_executable(OrbitTerrainViewTests
+    TerrainViewTests.cpp
+)
+
+target_link_libraries(OrbitTerrainViewTests
+    PRIVATE
+        Orbit::TerrainView
+)
+
+target_compile_features(OrbitTerrainViewTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainViewTests)
+
+add_test(
+    NAME Orbit.TerrainView
+    COMMAND OrbitTerrainViewTests
+)
