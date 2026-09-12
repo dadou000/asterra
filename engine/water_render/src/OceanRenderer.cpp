@@ -652,7 +652,7 @@ public:
                 cameraUp);
 
         const math::Mat4 projection =
-            math::PerspectiveLH(
+            math::PerspectiveReverseZLH(
                 config_.verticalFovRadians,
                 aspect,
                 config_.nearPlaneMeters,
@@ -821,6 +821,8 @@ private:
                         rhi::FillMode::Solid,
                     .cullMode =
                         rhi::CullMode::None,
+                    .depthCompare =
+                        rhi::DepthCompare::GreaterEqual,
                     .depthTest = true,
                     .depthWrite = true
                 });
