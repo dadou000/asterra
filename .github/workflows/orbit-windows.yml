@@ -21,3 +21,48 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package Windows build
+        shell: pwsh
+        run: |
+          $package = "dist/Orbit-Windows-Release"
+          $symbols = "$package/symbols"
+
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          New-Item -ItemType Directory -Force -Path $symbols | Out-Null
+
+          Copy-Item "build/apps/launcher/Release/OrbitLauncher.exe" "$package/OrbitLauncher.exe"
+          Copy-Item "build/apps/sandbox/Release/OrbitSandbox.exe" "$package/OrbitSandbox.exe"
+
+          if (Test-Path "build/apps/launcher/Release/OrbitLauncher.pdb") {
+            Copy-Item "build/apps/launcher/Release/OrbitLauncher.pdb" "$symbols/OrbitLauncher.pdb"
+          }
+
+          if (Test-Path "build/apps/sandbox/Release/OrbitSandbox.pdb") {
+            Copy-Item "build/apps/sandbox/Release/OrbitSandbox.pdb" "$symbols/OrbitSandbox.pdb"
+          }
+
+          @"
+          Orbit Windows Release
+          =====================
+
+          Start Orbit with:
+              OrbitLauncher.exe
+
+          The launcher starts OrbitSandbox.exe and writes runtime logs to:
+              logs/
+
+          On an unhandled crash, Orbit writes:
+              *-crash-*.log
+              *-crash-*.dmp
+
+          Keep the symbols/ directory when investigating crash dumps.
+          "@ | Set-Content -Encoding UTF8 "$package/README.txt"
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Orbit-Windows-Release
+          path: dist/Orbit-Windows-Release
+          if-no-files-found: error
+          retention-days: 14
