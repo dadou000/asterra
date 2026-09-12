@@ -296,3 +296,21 @@ add_test(
     NAME Orbit.PlanetTileNeighborhood
     COMMAND OrbitPlanetTileNeighborhoodTests
 )
+
+
+add_executable(OrbitDerivedTerrainStreamingTests
+    DerivedTerrainStreamingTests.cpp
+)
+
+target_link_libraries(OrbitDerivedTerrainStreamingTests
+    PRIVATE
+        Orbit::TerrainRegion
+)
+
+target_compile_features(OrbitDerivedTerrainStreamingTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitDerivedTerrainStreamingTests)
+
+add_test(
+    NAME Orbit.DerivedTerrainStreaming
+    COMMAND OrbitDerivedTerrainStreamingTests
+)
