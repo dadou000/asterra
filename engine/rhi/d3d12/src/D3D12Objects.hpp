@@ -166,6 +166,18 @@ public:
         ResourceState before,
         ResourceState after) override;
 
+    void Transition(
+        Buffer& buffer,
+        ResourceState before,
+        ResourceState after) override;
+
+    void CopyBuffer(
+        Buffer& source,
+        u64 sourceOffsetBytes,
+        Buffer& destination,
+        u64 destinationOffsetBytes,
+        u64 sizeBytes) override;
+
     void ClearColorTarget(
         Texture& texture,
         const ClearColor& color) override;

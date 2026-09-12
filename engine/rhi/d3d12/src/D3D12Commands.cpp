@@ -141,6 +141,92 @@ void D3D12CommandList::Transition(
         &barrier);
 }
 
+void D3D12CommandList::Transition(
+    Buffer& buffer,
+    const ResourceState before,
+    const ResourceState after)
+{
+    if (before == after)
+    {
+        return;
+    }
+
+    auto* d3dBuffer =
+        dynamic_cast<D3D12Buffer*>(&buffer);
+
+    if (d3dBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a buffer from another backend.");
+    }
+
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type =
+        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags =
+        D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource =
+        d3dBuffer->Native();
+    barrier.Transition.Subresource =
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore =
+        ToNativeResourceState(before);
+    barrier.Transition.StateAfter =
+        ToNativeResourceState(after);
+
+    nativeCommandList_->ResourceBarrier(
+        1,
+        &barrier);
+}
+
+void D3D12CommandList::CopyBuffer(
+    Buffer& source,
+    const u64 sourceOffsetBytes,
+    Buffer& destination,
+    const u64 destinationOffsetBytes,
+    const u64 sizeBytes)
+{
+    auto* d3dSource =
+        dynamic_cast<D3D12Buffer*>(&source);
+
+    auto* d3dDestination =
+        dynamic_cast<D3D12Buffer*>(&destination);
+
+    if (d3dSource == nullptr ||
+        d3dDestination == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a buffer from another backend.");
+    }
+
+    if (sizeBytes == 0)
+    {
+        return;
+    }
+
+    if (sourceOffsetBytes >
+            source.SizeBytes() ||
+        sizeBytes >
+            source.SizeBytes() -
+                sourceOffsetBytes ||
+        destinationOffsetBytes >
+            destination.SizeBytes() ||
+        sizeBytes >
+            destination.SizeBytes() -
+                destinationOffsetBytes)
+    {
+        throw std::out_of_range(
+            "Orbit buffer copy exceeds source or destination bounds.");
+    }
+
+    nativeCommandList_->CopyBufferRegion(
+        d3dDestination->Native(),
+        destinationOffsetBytes,
+        d3dSource->Native(),
+        sourceOffsetBytes,
+        sizeBytes);
+}
+
 void D3D12CommandList::ClearColorTarget(
     Texture& texture,
     const ClearColor& color)

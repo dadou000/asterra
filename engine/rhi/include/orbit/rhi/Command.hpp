@@ -73,6 +73,18 @@ public:
         ResourceState before,
         ResourceState after) = 0;
 
+    virtual void Transition(
+        Buffer& buffer,
+        ResourceState before,
+        ResourceState after) = 0;
+
+    virtual void CopyBuffer(
+        Buffer& source,
+        u64 sourceOffsetBytes,
+        Buffer& destination,
+        u64 destinationOffsetBytes,
+        u64 sizeBytes) = 0;
+
     virtual void ClearColorTarget(
         Texture& texture,
         const ClearColor& color) = 0;
