@@ -12,7 +12,14 @@ struct RiverNode
 {
     u32 sourceCellIndex{0};
     math::Double2 offsetMeters{};
+
+    // Raw sampled terrain elevation.
     f32 elevationMeters{0.0F};
+
+    // Hydrologically conditioned routing elevation.
+    f32 drainageElevationMeters{0.0F};
+    f32 depressionFillMeters{0.0F};
+
     f64 drainageAreaSquareMeters{0.0};
     f32 oceanWeight{0.0F};
 };

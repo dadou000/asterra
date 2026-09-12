@@ -102,6 +102,10 @@ RiverGraph BuildRiverGraph(
                 },
                 .elevationMeters =
                     cell.elevationMeters,
+                .drainageElevationMeters =
+                    cell.drainageElevationMeters,
+                .depressionFillMeters =
+                    cell.depressionFillMeters,
                 .drainageAreaSquareMeters =
                     static_cast<f64>(
                         cell.
