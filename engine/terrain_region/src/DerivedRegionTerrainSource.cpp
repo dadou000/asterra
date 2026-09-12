@@ -201,41 +201,13 @@ DerivedRegionTerrainSource::Sample(
         return result;
     }
 
-    f64 totalWeight = 0.0;
-
-    for (const auto& region :
-         *regions)
-    {
-        if (!region ||
-            region->id.sourceRevision !=
-                sourceRevision)
-        {
-            continue;
-        }
-
-        const math::Double2 offset =
-            world::SurfaceOffsetBetweenDirections(
-                planet_,
-                region->elevationDelta.surfaceFrame,
-                direction);
-
-        totalWeight +=
-            RegionInfluence(
-                *region,
-                offset);
-    }
-
-    if (totalWeight <= 0.0)
-    {
-        return result;
-    }
-
     const f64 baseElevation =
         result.elevationMeters;
 
-    f64 regionalDelta = 0.0;
-    f64 carveDelta = 0.0;
-    f64 wetlandInfluence = 0.0;
+    f64 totalWeight = 0.0;
+    f64 weightedRegionalDelta = 0.0;
+    f64 weightedCarveDelta = 0.0;
+    f64 weightedWetlandInfluence = 0.0;
 
     for (const auto& region :
          *regions)
@@ -263,9 +235,8 @@ DerivedRegionTerrainSource::Sample(
             continue;
         }
 
-        const f64 normalizedWeight =
-            regionWeight /
-            totalWeight;
+        totalWeight +=
+            regionWeight;
 
         const f64 lodWeight =
             FootprintWeight(
@@ -286,10 +257,13 @@ DerivedRegionTerrainSource::Sample(
                 SampleOffset(
                     offset);
 
-        regionalDelta +=
-            localRegionalDelta *
-            normalizedWeight *
+        const f64 weightedInfluence =
+            regionWeight *
             lodWeight;
+
+        weightedRegionalDelta +=
+            localRegionalDelta *
+            weightedInfluence;
 
         const auto carving =
             terrain_erosion::
@@ -312,16 +286,35 @@ DerivedRegionTerrainSource::Sample(
                     localShapedElevation,
                 0.0);
 
-        carveDelta +=
+        weightedCarveDelta +=
             localCarveDelta *
-            normalizedWeight *
-            lodWeight;
+            weightedInfluence;
 
-        wetlandInfluence +=
+        weightedWetlandInfluence +=
             carving.influence *
-            normalizedWeight *
-            lodWeight;
+            weightedInfluence;
     }
+
+    if (totalWeight <= 0.0)
+    {
+        return result;
+    }
+
+    const f64 inverseTotalWeight =
+        1.0 /
+        totalWeight;
+
+    const f64 regionalDelta =
+        weightedRegionalDelta *
+        inverseTotalWeight;
+
+    const f64 carveDelta =
+        weightedCarveDelta *
+        inverseTotalWeight;
+
+    const f64 wetlandInfluence =
+        weightedWetlandInfluence *
+        inverseTotalWeight;
 
     result.elevationMeters =
         baseElevation +
