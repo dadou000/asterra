@@ -21,7 +21,19 @@ public:
     {
         return {
             .elevationMeters =
-                query.footprintMeters
+                query.footprintMeters,
+            .coarseElevationMeters =
+                query.footprintMeters,
+            .biomes = {
+                .ocean = 0.0F,
+                .desert = 1.0F,
+                .grassland = 0.0F,
+                .temperateForest = 0.0F,
+                .borealForest = 0.0F,
+                .tundra = 0.0F,
+                .alpine = 0.0F,
+                .wetland = 0.0F
+            }
         };
     }
 };
@@ -155,6 +167,15 @@ int main()
             {
                 std::cerr
                     << "Terrain sample streamer returned the wrong fine elevation.\n";
+                return 1;
+            }
+
+            if (sample.biomeWeights0 !=
+                    0x0000FF00U ||
+                sample.biomeWeights1 != 0U)
+            {
+                std::cerr
+                    << "Terrain sample streamer did not pack biome weights correctly.\n";
                 return 1;
             }
         }

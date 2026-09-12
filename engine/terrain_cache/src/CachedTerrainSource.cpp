@@ -92,13 +92,8 @@ public:
                     1,
                     std::memory_order_relaxed);
 
-                return {
-                    .elevationMeters =
-                        static_cast<f64>(
-                            page->SampleDirection(
-                                query.
-                                    unitDirection))
-                };
+                return page->SampleDirection(
+                    query.unitDirection);
             }
 
             bool shouldRequest = false;
@@ -144,6 +139,11 @@ public:
                 std::memory_order_relaxed);
 
         return source_->Sample(query);
+    }
+
+    u64 Revision() const noexcept
+    {
+        return source_->Revision();
     }
 
     CachedTerrainSourceStats Stats() const noexcept
@@ -208,7 +208,8 @@ private:
                         pageResolution -
                     1U);
 
-            if (spacing <= footprint)
+            if (spacing <=
+                footprint)
             {
                 break;
             }
@@ -217,11 +218,14 @@ private:
         return {
             .tile = selected,
             .resolution =
-                config_.pageResolution
+                config_.pageResolution,
+            .sourceRevision =
+                source_->Revision()
         };
     }
 
     world::PlanetDefinition planet_;
+
     std::shared_ptr<const terrain::TerrainSource>
         source_;
 
@@ -268,6 +272,11 @@ CachedTerrainSource::Sample(
     const terrain::TerrainQuery& query) const noexcept
 {
     return impl_->Sample(query);
+}
+
+u64 CachedTerrainSource::Revision() const noexcept
+{
+    return impl_->Revision();
 }
 
 CachedTerrainSourceStats

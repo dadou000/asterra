@@ -7,6 +7,7 @@
 #include <orbit/rhi/d3d12/D3D12Backend.hpp>
 #include <orbit/shader/d3d/D3DShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain_cache/CachedTerrainSource.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/world/Planet.hpp>
@@ -101,18 +102,35 @@ int main()
             .radiusMeters = 6'000'000.0
         };
 
-        const orbit::terrain::AnalyticTerrainSource terrain(
-            planet,
-            {
-                .seed = 0xA57E22AULL,
-                .macroAmplitudeMeters = 4'000.0,
-                .macroWavelengthMeters = 800'000.0,
-                .detailAmplitudeMeters = 1'100.0,
-                .detailWavelengthMeters = 90'000.0,
-                .detailOctaves = 8
-            });
+        const auto authoritativeTerrain =
+            std::make_shared<
+                orbit::terrain::AnalyticTerrainSource>(
+                    planet,
+                    orbit::terrain::AnalyticTerrainDesc{
+                        .seed = 0xA57E22AULL,
+                        .macroAmplitudeMeters = 4'000.0,
+                        .macroWavelengthMeters = 800'000.0,
+                        .detailAmplitudeMeters = 1'100.0,
+                        .detailWavelengthMeters = 90'000.0,
+                        .detailOctaves = 8
+                    });
 
         orbit::jobs::JobSystem jobSystem;
+
+        orbit::terrain_cache::CachedTerrainSource
+            terrain(
+                planet,
+                authoritativeTerrain,
+                jobSystem,
+                {
+                    .pageResolution = 33,
+                    .requestMissThreshold = 24,
+                    .minimumTileLevel = 0,
+                    .maximumTileLevel = 24,
+                    .cache = {
+                        .maxEntries = 256
+                    }
+                });
 
         orbit::terrain_stream::TerrainSampleStreamer
             terrainSampleStreamer(
@@ -436,9 +454,15 @@ int main()
                     terrainPreview.
                         StreamingStats();
 
+                const auto cacheStats =
+                    terrain.Stats();
+
+                const auto pageCacheStats =
+                    terrain.PageCacheStats();
+
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | generated {} samples across {} levels / {} regions | uploaded {} bytes | {} draws | totals: {} samples, {} bytes",
+                        "Terrain stream | generated {} samples across {} levels / {} regions | uploaded {} bytes | {} draws | cache hits {} fallback {} requests {} resident {} evictions {} rejects {}",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -449,10 +473,14 @@ int main()
                             uploadedBytesLastFrame,
                         stats.
                             drawCallsLastFrame,
-                        stats.
-                            cumulativeGeneratedSamples,
-                        stats.
-                            cumulativeUploadedBytes));
+                        cacheStats.pageHits,
+                        cacheStats.
+                            directFallbackSamples,
+                        cacheStats.pageRequests,
+                        pageCacheStats.entries,
+                        pageCacheStats.evictions,
+                        pageCacheStats.
+                            capacityRejects));
 
                 previousStatsTime =
                     currentFrameTime;

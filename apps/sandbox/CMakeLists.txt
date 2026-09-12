@@ -12,6 +12,7 @@ target_link_libraries(OrbitSandbox
         Orbit::RhiD3D12
         Orbit::ShaderD3D
         Orbit::Terrain
+        Orbit::TerrainCache
         Orbit::TerrainRender
         Orbit::TerrainStream
         Orbit::World

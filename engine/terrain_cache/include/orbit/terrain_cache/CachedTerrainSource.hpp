@@ -44,6 +44,8 @@ public:
     [[nodiscard]] terrain::TerrainSample Sample(
         const terrain::TerrainQuery& query) const noexcept override;
 
+    [[nodiscard]] u64 Revision() const noexcept override;
+
     [[nodiscard]] CachedTerrainSourceStats Stats() const noexcept;
     [[nodiscard]] TerrainPageCacheStats PageCacheStats() const noexcept;
 

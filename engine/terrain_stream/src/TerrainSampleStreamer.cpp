@@ -20,6 +20,53 @@ struct TerrainSampleBatchState
 
 namespace
 {
+[[nodiscard]] u32 PackUnorm8(
+    const f32 a,
+    const f32 b,
+    const f32 c,
+    const f32 d) noexcept
+{
+    const auto quantize =
+        [](const f32 value) noexcept -> u32
+        {
+            return static_cast<u32>(
+                std::lround(
+                    std::clamp(
+                        value,
+                        0.0F,
+                        1.0F) *
+                    255.0F));
+        };
+
+    return
+        quantize(a) |
+        (quantize(b) << 8U) |
+        (quantize(c) << 16U) |
+        (quantize(d) << 24U);
+}
+
+[[nodiscard]] std::pair<u32, u32>
+PackBiomeWeights(
+    const terrain::BiomeWeights& weights) noexcept
+{
+    const terrain::BiomeWeights normalized =
+        terrain::NormalizeBiomeWeights(
+            weights);
+
+    return {
+        PackUnorm8(
+            normalized.ocean,
+            normalized.desert,
+            normalized.grassland,
+            normalized.temperateForest),
+        PackUnorm8(
+            normalized.borealForest,
+            normalized.tundra,
+            normalized.alpine,
+            normalized.wetland)
+    };
+}
+
 [[nodiscard]] u32 WrapIndex(
     const i64 value,
     const u32 size) noexcept
@@ -351,14 +398,14 @@ TerrainSampleStreamer::GeneratePatch(
                     request.surfaceFrame,
                     offsetMeters);
 
-            f64 elevation =
+            terrain::TerrainSample sample =
                 terrainSource_.Sample({
                     .unitDirection =
                         direction,
                     .footprintMeters =
                         request.
                             footprintMeters
-                }).elevationMeters;
+                });
 
             math::Double2 morphTarget =
                 offsetMeters;
@@ -434,22 +481,27 @@ TerrainSampleStreamer::GeneratePatch(
 
                 if (morph > 0.0)
                 {
-                    const f64 coarseElevation =
-                        terrainSource_.Sample({
-                            .unitDirection =
-                                coarseDirection,
-                            .footprintMeters =
-                                request.
-                                    coarseFootprintMeters
-                        }).elevationMeters;
+                    const terrain::TerrainSample
+                        coarseSample =
+                            terrainSource_.Sample({
+                                .unitDirection =
+                                    coarseDirection,
+                                .footprintMeters =
+                                    request.
+                                        coarseFootprintMeters
+                            });
 
-                    elevation =
-                        elevation *
-                            (1.0 - morph) +
-                        coarseElevation *
-                            morph;
+                    sample =
+                        terrain::LerpTerrainSample(
+                            sample,
+                            coarseSample,
+                            morph);
                 }
             }
+
+            const auto packedBiomes =
+                PackBiomeWeights(
+                    sample.biomes);
 
             patch.samples[
                 static_cast<std::size_t>(
@@ -458,13 +510,18 @@ TerrainSampleStreamer::GeneratePatch(
                 localX] = {
                     .elevationMeters =
                         static_cast<f32>(
-                            elevation),
+                            sample.
+                                elevationMeters),
                     .morphTargetXMeters =
                         static_cast<f32>(
                             morphTarget.x),
                     .morphTargetYMeters =
                         static_cast<f32>(
-                            morphTarget.y)
+                            morphTarget.y),
+                    .biomeWeights0 =
+                        packedBiomes.first,
+                    .biomeWeights1 =
+                        packedBiomes.second
                 };
         }
     }

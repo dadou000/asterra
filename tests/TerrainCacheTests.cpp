@@ -25,7 +25,24 @@ public:
             std::memory_order_relaxed);
 
         return {
-            .elevationMeters = 123.0
+            .elevationMeters = 123.0,
+            .coarseElevationMeters = 100.0,
+            .climate = {
+                .temperatureC = 27.0F,
+                .humidity = 0.18F,
+                .precipitation = 0.12F,
+                .continentality = 0.82F
+            },
+            .biomes = {
+                .ocean = 0.0F,
+                .desert = 1.0F,
+                .grassland = 0.0F,
+                .temperateForest = 0.0F,
+                .borealForest = 0.0F,
+                .tundra = 0.0F,
+                .alpine = 0.0F,
+                .wetland = 0.0F
+            }
         };
     }
 
@@ -83,8 +100,8 @@ int main()
         static_cast<std::size_t>(resolution) *
         static_cast<std::size_t>(resolution);
 
-    if (positiveX.elevationMeters.size() != expectedCount ||
-        negativeZ.elevationMeters.size() != expectedCount)
+    if (positiveX.samples.size() != expectedCount ||
+        negativeZ.samples.size() != expectedCount)
     {
         std::cerr << "Terrain page sample count is wrong.\n";
         return 1;
@@ -157,7 +174,7 @@ int main()
     }
 
     if (readyPage->desc != asyncDesc ||
-        readyPage->elevationMeters.size() !=
+        readyPage->samples.size() !=
             static_cast<std::size_t>(asyncDesc.resolution) *
             static_cast<std::size_t>(asyncDesc.resolution))
     {
@@ -346,12 +363,21 @@ int main()
             cachedQuery);
 
     if (warm.elevationMeters != 123.0 ||
+        std::abs(
+            warm.coarseElevationMeters -
+            100.0) >
+            1.0e-4 ||
+        std::abs(
+            warm.climate.temperatureC -
+            27.0F) >
+            1.0e-4F ||
+        warm.biomes.desert < 0.99F ||
         countingSource->calls.load(
             std::memory_order_relaxed) !=
             callsAfterWarmup)
     {
         std::cerr
-            << "Warm terrain page did not eliminate authoritative source sampling.\n";
+            << "Warm terrain page did not preserve the full semantic sample or eliminate authoritative sampling.\n";
         return 1;
     }
 

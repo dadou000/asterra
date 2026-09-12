@@ -288,7 +288,19 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float elevation : TEXCOORD0;
+    float4 biome0 : TEXCOORD1;
+    float4 biome1 : TEXCOORD2;
 };
+
+float4 UnpackUnorm4x8(uint packed)
+{
+    return float4(
+        (packed & 0xFFu),
+        ((packed >> 8u) & 0xFFu),
+        ((packed >> 16u) & 0xFFu),
+        ((packed >> 24u) & 0xFFu)) /
+        255.0;
+}
 
 VSOutput main(uint vertexId : SV_VertexID)
 {
@@ -331,7 +343,7 @@ VSOutput main(uint vertexId : SV_VertexID)
         physicalX;
 
     const uint sampleByteOffset =
-        physicalIndex * 12;
+        physicalIndex * 20;
 
     const float elevation =
         asfloat(
@@ -342,6 +354,14 @@ VSOutput main(uint vertexId : SV_VertexID)
         asfloat(
             g_samples.Load2(
                 sampleByteOffset + 4));
+
+    const uint packedBiome0 =
+        g_samples.Load(
+            sampleByteOffset + 12);
+
+    const uint packedBiome1 =
+        g_samples.Load(
+            sampleByteOffset + 16);
 
     const float halfCells =
         ((float)resolution - 1.0) *
@@ -456,6 +476,14 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.elevation =
         elevation;
 
+    output.biome0 =
+        UnpackUnorm4x8(
+            packedBiome0);
+
+    output.biome1 =
+        UnpackUnorm4x8(
+            packedBiome1);
+
     return output;
 }
 )";
@@ -465,33 +493,119 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float elevation : TEXCOORD0;
+    float4 biome0 : TEXCOORD1;
+    float4 biome1 : TEXCOORD2;
 };
 
 float4 main(VSOutput input) : SV_Target0
 {
-    const float normalizedHeight =
-        saturate(
-            input.elevation /
-                6000.0 +
-            0.35);
+    float4 biome0 =
+        max(
+            input.biome0,
+            0.0);
 
-    const float3 lowColor =
+    float4 biome1 =
+        max(
+            input.biome1,
+            0.0);
+
+    const float weightSum =
+        biome0.x +
+        biome0.y +
+        biome0.z +
+        biome0.w +
+        biome1.x +
+        biome1.y +
+        biome1.z +
+        biome1.w;
+
+    const float inverseWeight =
+        1.0 /
+        max(
+            weightSum,
+            0.0001);
+
+    biome0 *= inverseWeight;
+    biome1 *= inverseWeight;
+
+    const float3 oceanColor =
         float3(
-            0.08,
-            0.18,
-            0.12);
+            0.025,
+            0.11,
+            0.24);
 
-    const float3 highColor =
+    const float3 desertColor =
         float3(
             0.72,
-            0.78,
-            0.72);
+            0.56,
+            0.31);
+
+    const float3 grasslandColor =
+        float3(
+            0.26,
+            0.42,
+            0.16);
+
+    const float3 temperateForestColor =
+        float3(
+            0.075,
+            0.25,
+            0.11);
+
+    const float3 borealForestColor =
+        float3(
+            0.08,
+            0.20,
+            0.16);
+
+    const float3 tundraColor =
+        float3(
+            0.43,
+            0.48,
+            0.42);
+
+    const float3 alpineColor =
+        float3(
+            0.58,
+            0.59,
+            0.57);
+
+    const float3 wetlandColor =
+        float3(
+            0.09,
+            0.27,
+            0.22);
+
+    float3 color =
+        oceanColor *
+            biome0.x +
+        desertColor *
+            biome0.y +
+        grasslandColor *
+            biome0.z +
+        temperateForestColor *
+            biome0.w +
+        borealForestColor *
+            biome1.x +
+        tundraColor *
+            biome1.y +
+        alpineColor *
+            biome1.z +
+        wetlandColor *
+            biome1.w;
+
+    const float elevationLight =
+        saturate(
+            input.elevation /
+                8000.0);
+
+    color *=
+        0.88 +
+        elevationLight *
+            0.22;
 
     return float4(
-        lerp(
-            lowColor,
-            highColor,
-            normalizedHeight),
+        color,
         1.0);
 }
 )";

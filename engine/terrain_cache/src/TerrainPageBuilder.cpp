@@ -29,10 +29,13 @@ std::size_t TerrainPageDescHash::operator()(
     combine(desc.tile.x);
     combine(desc.tile.y);
     combine(desc.resolution);
+    combine(desc.sourceRevision);
+
     return hash;
 }
 
-f32 TerrainPage::At(
+const terrain::TerrainSample&
+TerrainPage::SampleAt(
     const u32 x,
     const u32 y) const
 {
@@ -49,20 +52,32 @@ f32 TerrainPage::At(
                 desc.resolution) +
         static_cast<std::size_t>(x);
 
-    return elevationMeters[index];
+    return samples[index];
 }
 
-f32 TerrainPage::SampleDirection(
+f32 TerrainPage::At(
+    const u32 x,
+    const u32 y) const
+{
+    return static_cast<f32>(
+        SampleAt(
+            x,
+            y).
+            elevationMeters);
+}
+
+terrain::TerrainSample
+TerrainPage::SampleDirection(
     const math::Double3& unitDirection) const noexcept
 {
     if (desc.resolution < 2 ||
-        elevationMeters.size() !=
+        samples.size() !=
             static_cast<std::size_t>(
                 desc.resolution) *
             static_cast<std::size_t>(
                 desc.resolution))
     {
-        return 0.0F;
+        return {};
     }
 
     const world::CubeCoordinate cube =
@@ -71,7 +86,7 @@ f32 TerrainPage::SampleDirection(
 
     if (cube.face != desc.tile.face)
     {
-        return 0.0F;
+        return {};
     }
 
     const world::CubeBounds bounds =
@@ -89,7 +104,7 @@ f32 TerrainPage::SampleDirection(
     if (widthU <= 0.0 ||
         widthV <= 0.0)
     {
-        return 0.0F;
+        return {};
     }
 
     const f64 sampleMaximum =
@@ -140,40 +155,38 @@ f32 TerrainPage::SampleDirection(
         sampleY -
         static_cast<f64>(y0);
 
-    const std::size_t resolution =
-        static_cast<std::size_t>(
-            desc.resolution);
+    const terrain::TerrainSample top =
+        terrain::LerpTerrainSample(
+            samples[
+                static_cast<std::size_t>(
+                    y0) *
+                    desc.resolution +
+                x0],
+            samples[
+                static_cast<std::size_t>(
+                    y0) *
+                    desc.resolution +
+                x1],
+            tx);
 
-    const auto sample =
-        [this, resolution](
-            const u32 x,
-            const u32 y) noexcept
-        {
-            return elevationMeters[
-                static_cast<std::size_t>(y) *
-                    resolution +
-                x];
-        };
+    const terrain::TerrainSample bottom =
+        terrain::LerpTerrainSample(
+            samples[
+                static_cast<std::size_t>(
+                    y1) *
+                    desc.resolution +
+                x0],
+            samples[
+                static_cast<std::size_t>(
+                    y1) *
+                    desc.resolution +
+                x1],
+            tx);
 
-    const f64 top =
-        static_cast<f64>(
-            sample(x0, y0)) *
-            (1.0 - tx) +
-        static_cast<f64>(
-            sample(x1, y0)) *
-            tx;
-
-    const f64 bottom =
-        static_cast<f64>(
-            sample(x0, y1)) *
-            (1.0 - tx) +
-        static_cast<f64>(
-            sample(x1, y1)) *
-            tx;
-
-    return static_cast<f32>(
-        top * (1.0 - ty) +
-        bottom * ty);
+    return terrain::LerpTerrainSample(
+        top,
+        bottom,
+        ty);
 }
 
 TerrainPage BuildTerrainPage(
@@ -201,10 +214,12 @@ TerrainPage BuildTerrainPage(
     }
 
     const std::size_t sampleCount =
-        resolution * resolution;
+        resolution *
+        resolution;
 
     TerrainPage page{};
     page.desc = desc;
+
     page.approximateSampleSpacingMeters =
         world::ApproximateTileWidthMeters(
             planet,
@@ -212,7 +227,7 @@ TerrainPage BuildTerrainPage(
         static_cast<f64>(
             desc.resolution - 1U);
 
-    page.elevationMeters.resize(
+    page.samples.resize(
         sampleCount);
 
     const world::CubeBounds bounds =
@@ -257,25 +272,19 @@ TerrainPage BuildTerrainPage(
                     .uv = {u, v}
                 });
 
-            const terrain::TerrainSample
-                sampleValue =
-                    source.Sample({
-                        .unitDirection =
-                            direction,
-                        .footprintMeters =
-                            page.
-                                approximateSampleSpacingMeters
-                    });
-
             const std::size_t index =
                 static_cast<std::size_t>(y) *
                     resolution +
                 static_cast<std::size_t>(x);
 
-            page.elevationMeters[index] =
-                static_cast<f32>(
-                    sampleValue.
-                        elevationMeters);
+            page.samples[index] =
+                source.Sample({
+                    .unitDirection =
+                        direction,
+                    .footprintMeters =
+                        page.
+                            approximateSampleSpacingMeters
+                });
         }
     }
 

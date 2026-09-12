@@ -38,11 +38,15 @@ struct TerrainSampleValue
     f32 elevationMeters{0.0F};
     f32 morphTargetXMeters{0.0F};
     f32 morphTargetYMeters{0.0F};
+
+    // Eight normalized biome weights packed as RGBA8 + RGBA8.
+    u32 biomeWeights0{0};
+    u32 biomeWeights1{0};
 };
 
 static_assert(
     sizeof(TerrainSampleValue) ==
-    3U * sizeof(f32));
+    5U * sizeof(u32));
 
 struct TerrainSamplePatch
 {
