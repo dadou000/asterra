@@ -261,3 +261,21 @@ add_test(
     NAME Orbit.RegionalElevationDelta
     COMMAND OrbitRegionalElevationDeltaTests
 )
+
+
+add_executable(OrbitPlanetTileNeighborhoodTests
+    PlanetTileNeighborhoodTests.cpp
+)
+
+target_link_libraries(OrbitPlanetTileNeighborhoodTests
+    PRIVATE
+        Orbit::World
+)
+
+target_compile_features(OrbitPlanetTileNeighborhoodTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitPlanetTileNeighborhoodTests)
+
+add_test(
+    NAME Orbit.PlanetTileNeighborhood
+    COMMAND OrbitPlanetTileNeighborhoodTests
+)

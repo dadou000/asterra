@@ -1,5 +1,6 @@
 add_library(OrbitWorld STATIC
     src/Planet.cpp
+    src/PlanetTileNeighborhood.cpp
 )
 
 add_library(Orbit::World ALIAS OrbitWorld)
