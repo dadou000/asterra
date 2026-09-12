@@ -1,4 +1,5 @@
 add_library(OrbitTerrainStream STATIC
+    src/TerrainSampleStreamer.cpp
     src/ToroidalResidency.cpp
 )
 
@@ -12,7 +13,10 @@ target_include_directories(OrbitTerrainStream
 target_link_libraries(OrbitTerrainStream
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
+        Orbit::Terrain
         Orbit::TerrainView
+        Orbit::World
 )
 
 target_compile_features(OrbitTerrainStream PUBLIC cxx_std_23)

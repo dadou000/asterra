@@ -117,3 +117,21 @@ add_test(
     NAME Orbit.TerrainStream
     COMMAND OrbitTerrainStreamTests
 )
+
+
+add_executable(OrbitTerrainSampleStreamerTests
+    TerrainSampleStreamerTests.cpp
+)
+
+target_link_libraries(OrbitTerrainSampleStreamerTests
+    PRIVATE
+        Orbit::TerrainStream
+)
+
+target_compile_features(OrbitTerrainSampleStreamerTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainSampleStreamerTests)
+
+add_test(
+    NAME Orbit.TerrainSampleStreamer
+    COMMAND OrbitTerrainSampleStreamerTests
+)
