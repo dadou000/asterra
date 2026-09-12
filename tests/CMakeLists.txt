@@ -243,3 +243,21 @@ add_test(
     NAME Orbit.HydrologyRefinement
     COMMAND OrbitHydrologyRefinementTests
 )
+
+
+add_executable(OrbitRegionalElevationDeltaTests
+    RegionalElevationDeltaTests.cpp
+)
+
+target_link_libraries(OrbitRegionalElevationDeltaTests
+    PRIVATE
+        Orbit::TerrainErosion
+)
+
+target_compile_features(OrbitRegionalElevationDeltaTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRegionalElevationDeltaTests)
+
+add_test(
+    NAME Orbit.RegionalElevationDelta
+    COMMAND OrbitRegionalElevationDeltaTests
+)

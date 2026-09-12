@@ -4,6 +4,8 @@
 #include <orbit/terrain_erosion/SedimentTransport.hpp>
 #include <orbit/terrain_hydrology/HydrologyGrid.hpp>
 
+#include <vector>
+
 namespace orbit::terrain_erosion
 {
 struct HydrologyRefinementConfig
@@ -20,6 +22,9 @@ struct HydrologyRefinementResult
 {
     terrain_hydrology::HydrologyGrid hydrology{};
     SedimentTransportGrid lastSediment{};
+
+    // Sum of the applied erosion/deposition elevation deltas.
+    std::vector<f32> cumulativeElevationDeltaMeters;
 };
 
 [[nodiscard]] HydrologyRefinementResult

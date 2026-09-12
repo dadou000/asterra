@@ -112,6 +112,10 @@ int main()
     if (refined.hydrology.cells.size() !=
             hydrology.cells.size() ||
         refined.lastSediment.cells.size() !=
+            hydrology.cells.size() ||
+        refined.
+            cumulativeElevationDeltaMeters.
+            size() !=
             hydrology.cells.size())
     {
         std::cerr
@@ -130,6 +134,30 @@ int main()
     {
         std::cerr
             << "Hydrology refinement did not erode the upstream terrain.\n";
+        return 1;
+    }
+
+    const orbit::f64 upstreamDelta =
+        static_cast<orbit::f64>(
+            refined.hydrology.At(
+                0,
+                2).
+                elevationMeters) -
+        static_cast<orbit::f64>(
+            hydrology.At(
+                0,
+                2).
+                elevationMeters);
+
+    if (std::abs(
+            upstreamDelta -
+            refined.
+                cumulativeElevationDeltaMeters[
+                    2U * 5U]) >
+        1.0e-4)
+    {
+        std::cerr
+            << "Hydrology refinement cumulative delta does not match the applied elevation change.\n";
         return 1;
     }
 

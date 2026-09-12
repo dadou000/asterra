@@ -12,12 +12,20 @@ RefineHydrologyWithSediment(
     terrain_hydrology::HydrologyGrid hydrology,
     const HydrologyRefinementConfig config)
 {
+    std::vector<f32>
+        cumulativeElevationDeltaMeters(
+            hydrology.cells.size(),
+            0.0F);
+
     if (config.iterations == 0)
     {
         return {
             .hydrology =
                 std::move(hydrology),
-            .lastSediment = {}
+            .lastSediment = {},
+            .cumulativeElevationDeltaMeters =
+                std::move(
+                    cumulativeElevationDeltaMeters)
         };
     }
 
@@ -67,6 +75,11 @@ RefineHydrologyWithSediment(
                 config.
                     elevationDeltaScale;
 
+            cumulativeElevationDeltaMeters[
+                index] +=
+                    static_cast<f32>(
+                        delta);
+
             const f64 refinedElevation =
                 static_cast<f64>(
                     hydroCell.
@@ -103,7 +116,10 @@ RefineHydrologyWithSediment(
         .hydrology =
             std::move(hydrology),
         .lastSediment =
-            std::move(lastSediment)
+            std::move(lastSediment),
+        .cumulativeElevationDeltaMeters =
+            std::move(
+                cumulativeElevationDeltaMeters)
     };
 }
 } // namespace orbit::terrain_erosion
