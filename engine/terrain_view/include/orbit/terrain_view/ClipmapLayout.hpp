@@ -17,6 +17,15 @@ struct ClipmapConfig
     u32 overlapCells{8};
 };
 
+struct AdaptiveClipmapCoverageConfig
+{
+    bool enabled{true};
+    f64 altitudeToHalfExtentScale{4.0};
+    f64 growThreshold{0.85};
+    f64 shrinkThreshold{0.65};
+    u32 maximumTier{3};
+};
+
 struct ClipmapLevel
 {
     u32 index{0};
@@ -41,6 +50,19 @@ struct ClipmapLayout
 [[nodiscard]] ClipmapLayout BuildClipmapLayout(
     const ClipmapConfig& config,
     const world::WorldPosition& observer);
+
+[[nodiscard]] f64 ClipmapOuterHalfExtentMeters(
+    const ClipmapConfig& config);
+
+[[nodiscard]] ClipmapConfig ClipmapConfigForTier(
+    const ClipmapConfig& baseConfig,
+    u32 tier);
+
+[[nodiscard]] u32 SelectAdaptiveClipmapTier(
+    const ClipmapConfig& baseConfig,
+    const AdaptiveClipmapCoverageConfig& adaptiveConfig,
+    f64 altitudeMeters,
+    u32 currentTier);
 
 [[nodiscard]] f64 LodMorphFactor(
     const ClipmapLevel& level,
