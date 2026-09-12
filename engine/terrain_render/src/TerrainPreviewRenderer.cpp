@@ -582,6 +582,9 @@ public:
             return;
         }
 
+        PrepareSharedTopology(
+            commandList);
+
         const f32 aspect =
             static_cast<f32>(
                 targetWidth) /
@@ -829,17 +832,34 @@ private:
                         Index,
                 .memory =
                     rhi::MemoryUsage::
+                        GpuOnly,
+                .initialState =
+                    rhi::ResourceState::
+                        CopyDestination
+            });
+
+        centerIndexUploadBuffer_ =
+            device_.CreateBuffer({
+                .sizeBytes = centerBytes,
+                .usage =
+                    rhi::BufferUsage::
+                        Generic,
+                .memory =
+                    rhi::MemoryUsage::
                         HostVisible,
                 .initialState =
                     rhi::ResourceState::
-                        IndexBuffer
+                        CopySource
             });
 
         UploadBuffer(
-            *centerIndexBuffer_,
+            *centerIndexUploadBuffer_,
             centerIndices.data(),
             static_cast<std::size_t>(
                 centerBytes));
+
+        centerIndexBytes_ =
+            centerBytes;
 
         if (config_.clipmap.levelCount > 1)
         {
@@ -866,18 +886,78 @@ private:
                             Index,
                     .memory =
                         rhi::MemoryUsage::
+                            GpuOnly,
+                    .initialState =
+                        rhi::ResourceState::
+                            CopyDestination
+                });
+
+            ringIndexUploadBuffer_ =
+                device_.CreateBuffer({
+                    .sizeBytes =
+                        ringBytes,
+                    .usage =
+                        rhi::BufferUsage::
+                            Generic,
+                    .memory =
+                        rhi::MemoryUsage::
                             HostVisible,
                     .initialState =
                         rhi::ResourceState::
-                            IndexBuffer
+                            CopySource
                 });
 
             UploadBuffer(
-                *ringIndexBuffer_,
+                *ringIndexUploadBuffer_,
                 ringIndices.data(),
                 static_cast<std::size_t>(
                     ringBytes));
+
+            ringIndexBytes_ =
+                ringBytes;
         }
+    }
+
+    void PrepareSharedTopology(
+        rhi::CommandList& commandList)
+    {
+        if (!topologyUploadPending_)
+        {
+            return;
+        }
+
+        commandList.CopyBuffer(
+            *centerIndexUploadBuffer_,
+            0,
+            *centerIndexBuffer_,
+            0,
+            centerIndexBytes_);
+
+        commandList.Transition(
+            *centerIndexBuffer_,
+            rhi::ResourceState::
+                CopyDestination,
+            rhi::ResourceState::
+                IndexBuffer);
+
+        if (ringIndexBuffer_ != nullptr)
+        {
+            commandList.CopyBuffer(
+                *ringIndexUploadBuffer_,
+                0,
+                *ringIndexBuffer_,
+                0,
+                ringIndexBytes_);
+
+            commandList.Transition(
+                *ringIndexBuffer_,
+                rhi::ResourceState::
+                    CopyDestination,
+                rhi::ResourceState::
+                    IndexBuffer);
+        }
+
+        topologyUploadPending_ = false;
     }
 
     void CreateLevelBuffers()
@@ -1537,7 +1617,13 @@ private:
         centerIndexBuffer_;
 
     std::unique_ptr<rhi::Buffer>
+        centerIndexUploadBuffer_;
+
+    std::unique_ptr<rhi::Buffer>
         ringIndexBuffer_;
+
+    std::unique_ptr<rhi::Buffer>
+        ringIndexUploadBuffer_;
 
     std::unique_ptr<
         rhi::GraphicsPipeline>
@@ -1561,6 +1647,10 @@ private:
     f32 observerRadiusMeters_{0.0F};
 
     TerrainStreamingStats stats_{};
+
+    u64 centerIndexBytes_{0};
+    u64 ringIndexBytes_{0};
+    bool topologyUploadPending_{true};
 
     u32 centerIndexCount_{0};
     u32 ringIndexCount_{0};
