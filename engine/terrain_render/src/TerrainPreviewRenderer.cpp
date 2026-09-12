@@ -675,7 +675,7 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.horizonClip =
         surfaceDirection.y -
         horizonCosine +
-        0.0025 +
+        0.000002 +
         positiveReliefPadding;
 
     return output;
