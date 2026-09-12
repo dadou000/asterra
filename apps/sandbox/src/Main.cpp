@@ -1,6 +1,11 @@
 #include <orbit/core/Log.hpp>
+#include <orbit/math/Vector.hpp>
 #include <orbit/platform/Window.hpp>
 #include <orbit/rhi/d3d12/D3D12Backend.hpp>
+#include <orbit/shader/d3d/D3DShaderCompiler.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
+#include <orbit/world/Planet.hpp>
 
 #include <exception>
 #include <format>
@@ -43,19 +48,73 @@ int main()
         ));
 
         auto graphicsQueue =
-            device->CreateQueue(orbit::rhi::QueueType::Graphics);
+            device->CreateQueue(
+                orbit::rhi::QueueType::Graphics);
 
-        auto swapchain = device->CreateSwapchain(*graphicsQueue, {
-            .nativeWindow = window->NativeHandle(),
-            .width = window->Width(),
-            .height = window->Height(),
-            .bufferCount = 3,
-            .allowTearing = true
-        });
+        auto swapchain =
+            device->CreateSwapchain(
+                *graphicsQueue,
+                {
+                    .nativeWindow =
+                        window->NativeHandle(),
+                    .width = window->Width(),
+                    .height = window->Height(),
+                    .bufferCount = 3,
+                    .allowTearing = true
+                });
 
-        std::vector<std::unique_ptr<orbit::rhi::CommandAllocator>>
+        const orbit::world::PlanetDefinition planet{
+            .radiusMeters = 6'000'000.0
+        };
+
+        const orbit::terrain::AnalyticTerrainSource terrain(
+            planet,
+            {
+                .seed = 0xA57E22AULL,
+                .macroAmplitudeMeters = 4'000.0,
+                .macroWavelengthMeters = 800'000.0,
+                .detailAmplitudeMeters = 1'100.0,
+                .detailWavelengthMeters = 90'000.0,
+                .detailOctaves = 8
+            });
+
+        const orbit::math::Double3 observerDirection =
+            orbit::math::Normalize({
+                0.65,
+                0.35,
+                0.68
+            });
+
+        const orbit::world::WorldPosition observer{
+            .meters =
+                observerDirection *
+                (planet.radiusMeters + 3'500.0)
+        };
+
+        const orbit::shader::d3d::D3DShaderCompiler
+            shaderCompiler;
+
+        orbit::terrain_render::TerrainPreviewRenderer
+            terrainPreview(
+                *device,
+                shaderCompiler,
+                planet,
+                terrain,
+                observer);
+
+        orbit::log::Info(std::format(
+            "Terrain preview: {} vertices, {} indices",
+            terrainPreview.VertexCount(),
+            terrainPreview.IndexCount()
+        ));
+
+        std::vector<
+            std::unique_ptr<
+                orbit::rhi::CommandAllocator>>
             frameAllocators;
-        frameAllocators.reserve(swapchain->BufferCount());
+
+        frameAllocators.reserve(
+            swapchain->BufferCount());
 
         for (orbit::u32 index = 0;
              index < swapchain->BufferCount();
@@ -67,9 +126,12 @@ int main()
         }
 
         auto commandList =
-            device->CreateCommandList(*frameAllocators.front());
+            device->CreateCommandList(
+                *frameAllocators.front());
 
-        auto frameFence = device->CreateFence(0);
+        auto frameFence =
+            device->CreateFence(0);
+
         std::vector<orbit::u64> frameFenceValues(
             swapchain->BufferCount(),
             0);
@@ -89,23 +151,35 @@ int main()
                 frameFence->Wait(pendingFence);
             }
 
-            auto& allocator = *frameAllocators[frameIndex];
+            auto& allocator =
+                *frameAllocators[frameIndex];
+
             allocator.Reset();
             commandList->Reset(allocator);
 
-            auto& backBuffer = swapchain->CurrentBackBuffer();
+            auto& backBuffer =
+                swapchain->CurrentBackBuffer();
 
             commandList->Transition(
                 backBuffer,
                 orbit::rhi::ResourceState::Present,
                 orbit::rhi::ResourceState::RenderTarget);
 
-            commandList->ClearColorTarget(backBuffer, {
-                .red = 0.008F,
-                .green = 0.012F,
-                .blue = 0.020F,
-                .alpha = 1.0F
-            });
+            commandList->ClearColorTarget(
+                backBuffer,
+                {
+                    .red = 0.008F,
+                    .green = 0.012F,
+                    .blue = 0.020F,
+                    .alpha = 1.0F
+                });
+
+            commandList->SetRenderTarget(backBuffer);
+
+            terrainPreview.Draw(
+                *commandList,
+                swapchain->Width(),
+                swapchain->Height());
 
             commandList->Transition(
                 backBuffer,
@@ -117,13 +191,24 @@ int main()
 
             swapchain->Present(true);
 
-            const orbit::u64 signalValue = nextFenceValue++;
-            graphicsQueue->Signal(*frameFence, signalValue);
-            frameFenceValues[frameIndex] = signalValue;
+            const orbit::u64 signalValue =
+                nextFenceValue++;
+
+            graphicsQueue->Signal(
+                *frameFence,
+                signalValue);
+
+            frameFenceValues[frameIndex] =
+                signalValue;
         }
 
-        const orbit::u64 shutdownFence = nextFenceValue++;
-        graphicsQueue->Signal(*frameFence, shutdownFence);
+        const orbit::u64 shutdownFence =
+            nextFenceValue++;
+
+        graphicsQueue->Signal(
+            *frameFence,
+            shutdownFence);
+
         frameFence->Wait(shutdownFence);
 
         orbit::log::Info("Orbit shutdown.");

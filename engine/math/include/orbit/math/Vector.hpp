@@ -106,9 +106,26 @@ template <typename T>
     return Dot(value, value);
 }
 
+[[nodiscard]] inline f32 Length(const Float3& value) noexcept
+{
+    return std::sqrt(LengthSquared(value));
+}
+
 [[nodiscard]] inline f64 Length(const Double3& value) noexcept
 {
     return std::sqrt(LengthSquared(value));
+}
+
+[[nodiscard]] inline Float3 Normalize(const Float3& value) noexcept
+{
+    const f32 length = Length(value);
+
+    if (length <= 0.0F)
+    {
+        return {};
+    }
+
+    return value / length;
 }
 
 [[nodiscard]] inline Double3 Normalize(const Double3& value) noexcept
