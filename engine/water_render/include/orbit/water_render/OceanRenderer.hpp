@@ -25,7 +25,8 @@ struct OceanRendererConfig
 
     f64 seaLevelMeters{0.0};
     f64 minimumRadiusMeters{25.0};
-    f64 maximumRadiusMeters{240'000.0};
+    f64 maximumRadiusMeters{3'000'000.0};
+    f64 horizonOverscan{1.08};
 
     f32 waveAmplitudeScale{1.0F};
 
@@ -39,6 +40,7 @@ struct OceanRenderStats
     u32 vertices{0};
     u32 indices{0};
     u32 drawCallsLastFrame{0};
+    f64 effectiveRadiusMeters{0.0};
 };
 
 class OceanRenderer
