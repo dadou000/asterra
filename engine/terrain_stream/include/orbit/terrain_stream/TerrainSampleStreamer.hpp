@@ -84,6 +84,7 @@ public:
 
     [[nodiscard]] bool IsComplete() const noexcept;
     [[nodiscard]] bool IsValid() const noexcept;
+    [[nodiscard]] u64 SourceRevision() const noexcept;
 
 private:
     jobs::JobGroup group_;
@@ -118,6 +119,8 @@ public:
     GenerateBlocking(
         std::span<
             const TerrainSampleRequest> requests);
+
+    [[nodiscard]] u64 SourceRevision() const noexcept;
 
 private:
     [[nodiscard]] TerrainSamplePatch GeneratePatch(

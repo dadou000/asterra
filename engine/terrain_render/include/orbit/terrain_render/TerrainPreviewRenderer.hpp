@@ -29,6 +29,8 @@ struct TerrainStreamingStats
     u64 submittedBatches{0};
     u64 committedBatches{0};
     u64 supersededBatches{0};
+    u64 revisionInvalidations{0};
+    u64 staleRevisionBatches{0};
     bool updatePending{false};
 };
 

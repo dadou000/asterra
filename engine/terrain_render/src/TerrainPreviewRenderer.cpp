@@ -624,6 +624,8 @@ public:
         : device_(device),
           planet_(planet),
           sampleStreamer_(sampleStreamer),
+          observedSourceRevision_(
+              sampleStreamer.SourceRevision()),
           config_(std::move(config)),
           layout_(
               terrain_view::BuildClipmapLayout(
@@ -1420,23 +1422,65 @@ private:
         desiredObserver_ = observer;
         desiredGeneration_ = 1;
 
-        CandidateState candidate =
-            BuildCandidate(observer);
+        for (;;)
+        {
+            CandidateState candidate =
+                BuildCandidate(observer);
 
-        const auto results =
-            sampleStreamer_.
-                GenerateBlocking(
+            auto batch =
+                sampleStreamer_.Submit(
                     candidate.requests);
 
-        CommitCandidate(
-            std::move(candidate),
-            results);
+            const u64 sourceRevision =
+                batch.SourceRevision();
 
-        committedGeneration_ =
-            desiredGeneration_;
+            auto results =
+                sampleStreamer_.WaitCollect(
+                    batch);
 
-        ++stats_.committedBatches;
-        stats_.updatePending = false;
+            if (sourceRevision !=
+                sampleStreamer_.SourceRevision())
+            {
+                DetectSourceRevisionChange();
+                ++stats_.staleRevisionBatches;
+                continue;
+            }
+
+            observedSourceRevision_ =
+                sourceRevision;
+
+            CommitCandidate(
+                std::move(candidate),
+                results);
+
+            committedGeneration_ =
+                desiredGeneration_;
+
+            ++stats_.committedBatches;
+            stats_.updatePending = false;
+            break;
+        }
+    }
+
+    void DetectSourceRevisionChange()
+    {
+        const u64 currentRevision =
+            sampleStreamer_.SourceRevision();
+
+        if (currentRevision ==
+            observedSourceRevision_)
+        {
+            return;
+        }
+
+        observedSourceRevision_ =
+            currentRevision;
+
+        tracker_.Reset();
+        residency_.Reset();
+
+        ++desiredGeneration_;
+        ++stats_.revisionInvalidations;
     }
 
     void LaunchLatestUpdate()
@@ -1486,6 +1530,8 @@ private:
 
     void ServiceStreaming()
     {
+        DetectSourceRevisionChange();
+
         if (pendingUpdate_.has_value())
         {
             if (!pendingUpdate_->
@@ -1494,6 +1540,10 @@ private:
                 stats_.updatePending = true;
                 return;
             }
+
+            const u64 batchSourceRevision =
+                pendingUpdate_->
+                    batch.SourceRevision();
 
             std::vector<
                 terrain_stream::
@@ -1508,6 +1558,8 @@ private:
                 return;
             }
 
+            DetectSourceRevisionChange();
+
             const u64 generation =
                 pendingUpdate_->generation;
 
@@ -1519,22 +1571,34 @@ private:
             pendingUpdate_.reset();
             stats_.updatePending = false;
 
-            const bool superseded =
-                generation !=
-                    desiredGeneration_;
+            const bool staleRevision =
+                batchSourceRevision !=
+                    observedSourceRevision_;
 
-            CommitCandidate(
-                std::move(candidate),
-                results);
-
-            committedGeneration_ =
-                generation;
-
-            ++stats_.committedBatches;
-
-            if (superseded)
+            if (staleRevision)
             {
-                ++stats_.supersededBatches;
+                ResetCommitStats();
+                ++stats_.staleRevisionBatches;
+            }
+            else
+            {
+                const bool superseded =
+                    generation !=
+                        desiredGeneration_;
+
+                CommitCandidate(
+                    std::move(candidate),
+                    results);
+
+                committedGeneration_ =
+                    generation;
+
+                ++stats_.committedBatches;
+
+                if (superseded)
+                {
+                    ++stats_.supersededBatches;
+                }
             }
         }
 
@@ -1807,6 +1871,8 @@ private:
     world::PlanetDefinition planet_;
     terrain_stream::TerrainSampleStreamer&
         sampleStreamer_;
+
+    u64 observedSourceRevision_{0};
 
     TerrainPreviewConfig config_;
     terrain_view::ClipmapLayout layout_;

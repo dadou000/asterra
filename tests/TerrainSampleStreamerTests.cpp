@@ -4,12 +4,50 @@
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <iostream>
 #include <vector>
 
 namespace
 {
+class MutableTerrainSource final :
+    public orbit::terrain::TerrainSource
+{
+public:
+    explicit MutableTerrainSource(
+        const orbit::u64 revision) noexcept
+        : revision_(revision)
+    {
+    }
+
+    [[nodiscard]] orbit::terrain::TerrainSample
+    Sample(
+        const orbit::terrain::TerrainQuery&)
+        const noexcept override
+    {
+        return {};
+    }
+
+    [[nodiscard]] orbit::u64 Revision()
+        const noexcept override
+    {
+        return revision_.load(
+            std::memory_order_acquire);
+    }
+
+    void SetRevision(
+        const orbit::u64 revision) noexcept
+    {
+        revision_.store(
+            revision,
+            std::memory_order_release);
+    }
+
+private:
+    std::atomic<orbit::u64> revision_;
+};
+
 class ConstantTerrainSource final :
     public orbit::terrain::TerrainSource
 {
@@ -61,6 +99,66 @@ int main()
             jobs,
             planet,
             source);
+
+    MutableTerrainSource mutableSource(7);
+
+    orbit::terrain_stream::TerrainSampleStreamer
+        revisionStreamer(
+            jobs,
+            planet,
+            mutableSource);
+
+    if (revisionStreamer.SourceRevision() != 7)
+    {
+        std::cerr
+            << "Terrain sample streamer did not expose the initial source revision.\n";
+        return 1;
+    }
+
+    const std::vector<
+        orbit::terrain_stream::TerrainSampleRequest>
+        noRequests;
+
+    auto revisionBatch =
+        revisionStreamer.Submit(
+            noRequests);
+
+    if (revisionBatch.SourceRevision() != 7)
+    {
+        std::cerr
+            << "Terrain sample batch did not snapshot its source revision.\n";
+        return 1;
+    }
+
+    mutableSource.SetRevision(8);
+
+    if (revisionStreamer.SourceRevision() != 8)
+    {
+        std::cerr
+            << "Terrain sample streamer did not reflect the changed source revision.\n";
+        return 1;
+    }
+
+    if (revisionBatch.SourceRevision() != 7)
+    {
+        std::cerr
+            << "Terrain sample batch source revision changed after submission.\n";
+        return 1;
+    }
+
+    std::vector<
+        orbit::terrain_stream::TerrainSampleResult>
+        revisionResults;
+
+    if (!revisionStreamer.TryCollect(
+            revisionBatch,
+            revisionResults) ||
+        !revisionResults.empty())
+    {
+        std::cerr
+            << "Terrain sample empty revision batch did not collect cleanly.\n";
+        return 1;
+    }
 
     const orbit::world::SurfaceFrame frame =
         orbit::world::MakeSurfaceFrame(

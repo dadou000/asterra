@@ -13,6 +13,7 @@ namespace detail
 {
 struct TerrainSampleBatchState
 {
+    u64 sourceRevision{0};
     std::vector<TerrainSampleRequest> requests;
     std::vector<TerrainSampleResult> results;
 };
@@ -170,6 +171,13 @@ bool TerrainSampleBatch::IsValid() const noexcept
     return state_ != nullptr;
 }
 
+u64 TerrainSampleBatch::SourceRevision() const noexcept
+{
+    return state_ != nullptr
+        ? state_->sourceRevision
+        : 0;
+}
+
 TerrainSampleStreamer::TerrainSampleStreamer(
     jobs::JobSystem& jobSystem,
     const world::PlanetDefinition planet,
@@ -185,6 +193,11 @@ TerrainSampleStreamer::TerrainSampleStreamer(
     }
 }
 
+u64 TerrainSampleStreamer::SourceRevision() const noexcept
+{
+    return terrainSource_.Revision();
+}
+
 TerrainSampleBatch TerrainSampleStreamer::Submit(
     const std::span<
         const TerrainSampleRequest> requests)
@@ -194,6 +207,9 @@ TerrainSampleBatch TerrainSampleStreamer::Submit(
     batch.state_ =
         std::make_shared<
             detail::TerrainSampleBatchState>();
+
+    batch.state_->sourceRevision =
+        SourceRevision();
 
     batch.state_->requests.assign(
         requests.begin(),
@@ -326,10 +342,23 @@ TerrainSampleStreamer::GenerateBlocking(
     const std::span<
         const TerrainSampleRequest> requests)
 {
-    TerrainSampleBatch batch =
-        Submit(requests);
+    for (;;)
+    {
+        TerrainSampleBatch batch =
+            Submit(requests);
 
-    return WaitCollect(batch);
+        const u64 sourceRevision =
+            batch.SourceRevision();
+
+        auto results =
+            WaitCollect(batch);
+
+        if (sourceRevision ==
+            SourceRevision())
+        {
+            return results;
+        }
+    }
 }
 
 TerrainSamplePatch
