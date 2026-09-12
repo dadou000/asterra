@@ -31,3 +31,20 @@ add_test(
     NAME Orbit.JobSystem
     COMMAND OrbitJobsTests
 )
+
+add_executable(OrbitPlanetTerrainTests
+    PlanetTerrainTests.cpp
+)
+
+target_link_libraries(OrbitPlanetTerrainTests
+    PRIVATE
+        Orbit::Terrain
+)
+
+target_compile_features(OrbitPlanetTerrainTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitPlanetTerrainTests)
+
+add_test(
+    NAME Orbit.PlanetTerrain
+    COMMAND OrbitPlanetTerrainTests
+)
