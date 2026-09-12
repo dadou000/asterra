@@ -106,6 +106,174 @@ ClipmapLayout BuildClipmapLayout(
     return layout;
 }
 
+f64 ClipmapOuterHalfExtentMeters(
+    const ClipmapConfig& config)
+{
+    if (config.levelCount == 0)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap coverage requires at least one level.");
+    }
+
+    if (config.gridResolution < 9 ||
+        (config.gridResolution % 2U) == 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap coverage requires an odd grid resolution of at least 9.");
+    }
+
+    if (config.baseSpacingMeters <= 0.0 ||
+        !std::isfinite(config.baseSpacingMeters))
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap coverage requires a finite positive base spacing.");
+    }
+
+    if (config.levelScale <= 1.0 ||
+        !std::isfinite(config.levelScale))
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap coverage requires a finite level scale greater than one.");
+    }
+
+    const u32 halfCells =
+        (config.gridResolution - 1U) / 2U;
+
+    const f64 coarsestSpacing =
+        config.baseSpacingMeters *
+        std::pow(
+            config.levelScale,
+            static_cast<f64>(
+                config.levelCount - 1U));
+
+    const f64 extent =
+        static_cast<f64>(halfCells) *
+        coarsestSpacing;
+
+    if (!std::isfinite(extent))
+    {
+        throw std::overflow_error(
+            "Orbit terrain clipmap coverage exceeds finite range.");
+    }
+
+    return extent;
+}
+
+ClipmapConfig ClipmapConfigForTier(
+    const ClipmapConfig& baseConfig,
+    const u32 tier)
+{
+    static_cast<void>(
+        ClipmapOuterHalfExtentMeters(
+            baseConfig));
+
+    ClipmapConfig result =
+        baseConfig;
+
+    result.baseSpacingMeters *=
+        std::pow(
+            baseConfig.levelScale,
+            static_cast<f64>(tier));
+
+    if (!std::isfinite(
+            result.baseSpacingMeters))
+    {
+        throw std::overflow_error(
+            "Orbit adaptive terrain clipmap spacing exceeds finite range.");
+    }
+
+    return result;
+}
+
+u32 SelectAdaptiveClipmapTier(
+    const ClipmapConfig& baseConfig,
+    const AdaptiveClipmapCoverageConfig& adaptiveConfig,
+    const f64 altitudeMeters,
+    const u32 currentTier)
+{
+    static_cast<void>(
+        ClipmapOuterHalfExtentMeters(
+            baseConfig));
+
+    if (!adaptiveConfig.enabled)
+    {
+        return 0;
+    }
+
+    if (!std::isfinite(altitudeMeters) ||
+        altitudeMeters < 0.0 ||
+        !std::isfinite(
+            adaptiveConfig.
+                altitudeToHalfExtentScale) ||
+        adaptiveConfig.
+                altitudeToHalfExtentScale <=
+            0.0 ||
+        !std::isfinite(
+            adaptiveConfig.growThreshold) ||
+        !std::isfinite(
+            adaptiveConfig.shrinkThreshold) ||
+        adaptiveConfig.shrinkThreshold <=
+            0.0 ||
+        adaptiveConfig.growThreshold <=
+            adaptiveConfig.shrinkThreshold ||
+        adaptiveConfig.growThreshold > 1.0)
+    {
+        throw std::invalid_argument(
+            "Orbit adaptive terrain clipmap coverage configuration is invalid.");
+    }
+
+    const f64 demandedHalfExtent =
+        altitudeMeters *
+        adaptiveConfig.
+            altitudeToHalfExtentScale;
+
+    u32 tier =
+        std::min(
+            currentTier,
+            adaptiveConfig.maximumTier);
+
+    while (tier <
+           adaptiveConfig.maximumTier)
+    {
+        const f64 currentExtent =
+            ClipmapOuterHalfExtentMeters(
+                ClipmapConfigForTier(
+                    baseConfig,
+                    tier));
+
+        if (demandedHalfExtent <=
+            currentExtent *
+                adaptiveConfig.
+                    growThreshold)
+        {
+            break;
+        }
+
+        ++tier;
+    }
+
+    while (tier > 0)
+    {
+        const f64 finerExtent =
+            ClipmapOuterHalfExtentMeters(
+                ClipmapConfigForTier(
+                    baseConfig,
+                    tier - 1U));
+
+        if (demandedHalfExtent >=
+            finerExtent *
+                adaptiveConfig.
+                    shrinkThreshold)
+        {
+            break;
+        }
+
+        --tier;
+    }
+
+    return tier;
+}
+
 f64 LodMorphFactor(
     const ClipmapLevel& level,
     const f64 maxAbsOffsetMeters) noexcept
