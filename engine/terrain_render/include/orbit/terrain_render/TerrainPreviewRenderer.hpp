@@ -49,7 +49,7 @@ struct TerrainPreviewCamera
 struct TerrainPreviewConfig
 {
     terrain_view::ClipmapConfig clipmap{
-        .levelCount = 7,
+        .levelCount = 12,
         .gridResolution = 65,
         .baseSpacingMeters = 20.0,
         .levelScale = 2.0,
