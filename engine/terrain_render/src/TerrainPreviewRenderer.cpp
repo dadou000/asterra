@@ -627,6 +627,8 @@ public:
           observedSourceRevision_(
               sampleStreamer.SourceRevision()),
           config_(std::move(config)),
+          baseClipmapConfig_(
+              config_.clipmap),
           layout_(
               terrain_view::BuildClipmapLayout(
                   config_.clipmap,
@@ -685,6 +687,12 @@ public:
         SetObserverView(observer);
 
         desiredObserver_ = observer;
+
+        desiredCoverageTier_ =
+            SelectCoverageTier(
+                observer,
+                desiredCoverageTier_);
+
         ++desiredGeneration_;
 
         ServiceStreaming();
@@ -946,6 +954,9 @@ public:
 private:
     struct CandidateState
     {
+        u32 coverageTier{0};
+        terrain_view::ClipmapConfig clipmapConfig{};
+        terrain_view::ClipmapLayout layout;
         terrain_view::ClipmapTracker tracker;
         terrain_stream::ToroidalResidency residency;
         terrain_view::ClipmapMotionUpdate motion;
@@ -1249,12 +1260,62 @@ private:
                 observerRadius);
     }
 
+    [[nodiscard]] u32 SelectCoverageTier(
+        const world::WorldPosition& observer,
+        const u32 currentTier) const
+    {
+        const f64 altitudeMeters =
+            std::max(
+                0.0,
+                math::Length(
+                    observer.meters) -
+                    planet_.radiusMeters);
+
+        return terrain_view::
+            SelectAdaptiveClipmapTier(
+                baseClipmapConfig_,
+                config_.adaptiveCoverage,
+                altitudeMeters,
+                currentTier);
+    }
+
     [[nodiscard]] CandidateState BuildCandidate(
         const world::WorldPosition& observer)
     {
+        const terrain_view::ClipmapConfig
+            candidateConfig =
+                terrain_view::
+                    ClipmapConfigForTier(
+                        baseClipmapConfig_,
+                        desiredCoverageTier_);
+
+        const bool reuseCommittedState =
+            desiredCoverageTier_ ==
+                activeCoverageTier_;
+
         CandidateState candidate{
-            .tracker = tracker_,
-            .residency = residency_
+            .coverageTier =
+                desiredCoverageTier_,
+            .clipmapConfig =
+                candidateConfig,
+            .layout =
+                terrain_view::
+                    BuildClipmapLayout(
+                        candidateConfig,
+                        observer),
+            .tracker =
+                reuseCommittedState
+                    ? tracker_
+                    : terrain_view::
+                        ClipmapTracker(
+                            planet_,
+                            candidateConfig),
+            .residency =
+                reuseCommittedState
+                    ? residency_
+                    : terrain_stream::
+                        ToroidalResidency(
+                            candidateConfig)
         };
 
         candidate.motion =
@@ -1285,7 +1346,7 @@ private:
             }
 
             const auto& level =
-                layout_.levels[
+                candidate.layout.levels[
                     levelIndex];
 
             const bool hasCoarser =
@@ -1296,7 +1357,7 @@ private:
             const terrain_view::ClipmapLevel*
                 coarserLevel =
                     hasCoarser
-                        ? &layout_.levels[
+                        ? &candidate.layout.levels[
                             levelIndex + 1U]
                         : nullptr;
 
@@ -1369,6 +1430,20 @@ private:
     {
         ResetCommitStats();
 
+        const bool coverageTierChanged =
+            candidate.coverageTier !=
+                activeCoverageTier_;
+
+        config_.clipmap =
+            candidate.clipmapConfig;
+
+        layout_ =
+            std::move(
+                candidate.layout);
+
+        activeCoverageTier_ =
+            candidate.coverageTier;
+
         tracker_ =
             std::move(
                 candidate.tracker);
@@ -1412,6 +1487,23 @@ private:
             cumulativeGeneratedSamples +=
                 stats_.
                     generatedSamplesLastUpdate;
+
+        if (coverageTierChanged)
+        {
+            ++stats_.coverageTierChanges;
+        }
+
+        stats_.adaptiveCoverageTier =
+            activeCoverageTier_;
+
+        stats_.activeBaseSpacingMeters =
+            config_.clipmap.
+                baseSpacingMeters;
+
+        stats_.activeOuterHalfExtentMeters =
+            terrain_view::
+                ClipmapOuterHalfExtentMeters(
+                    config_.clipmap);
     }
 
     void InitializeBlocking(
@@ -1420,6 +1512,12 @@ private:
         SetObserverView(observer);
 
         desiredObserver_ = observer;
+
+        desiredCoverageTier_ =
+            SelectCoverageTier(
+                observer,
+                activeCoverageTier_);
+
         desiredGeneration_ = 1;
 
         for (;;)
@@ -1875,6 +1973,8 @@ private:
     u64 observedSourceRevision_{0};
 
     TerrainPreviewConfig config_;
+    terrain_view::ClipmapConfig
+        baseClipmapConfig_{};
     terrain_view::ClipmapLayout layout_;
     terrain_view::ClipmapTracker tracker_;
     terrain_stream::ToroidalResidency
@@ -1907,6 +2007,9 @@ private:
 
     u64 desiredGeneration_{0};
     u64 committedGeneration_{0};
+
+    u32 activeCoverageTier_{0};
+    u32 desiredCoverageTier_{0};
 
     std::optional<PendingUpdate>
         pendingUpdate_;
