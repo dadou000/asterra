@@ -290,6 +290,8 @@ struct VSOutput
     float elevation : TEXCOORD0;
     float4 biome0 : TEXCOORD1;
     float4 biome1 : TEXCOORD2;
+    float3 terrainNormal : TEXCOORD3;
+    float3 surfaceDirection : TEXCOORD4;
 };
 
 float4 UnpackUnorm4x8(uint packed)
@@ -300,6 +302,77 @@ float4 UnpackUnorm4x8(uint packed)
         ((packed >> 16u) & 0xFFu),
         ((packed >> 24u) & 0xFFu)) /
         255.0;
+}
+
+uint PhysicalSampleIndex(
+    uint logicalX,
+    uint logicalY,
+    uint resolution,
+    uint originX,
+    uint originY)
+{
+    const uint physicalX =
+        (logicalX + originX) %
+        resolution;
+
+    const uint physicalY =
+        (logicalY + originY) %
+        resolution;
+
+    return
+        physicalY * resolution +
+        physicalX;
+}
+
+float LoadElevation(
+    uint logicalX,
+    uint logicalY,
+    uint resolution,
+    uint originX,
+    uint originY)
+{
+    const uint sampleIndex =
+        PhysicalSampleIndex(
+            logicalX,
+            logicalY,
+            resolution,
+            originX,
+            originY);
+
+    return asfloat(
+        g_samples.Load(
+            sampleIndex * 20u));
+}
+
+float3 SurfaceDirectionForOffset(
+    float2 offsetMeters,
+    float planetRadius)
+{
+    const float distanceMeters =
+        length(offsetMeters);
+
+    if (distanceMeters <= 0.0001)
+    {
+        return
+            g_centerUpAndOriginX.xyz;
+    }
+
+    const float3 tangentDirection =
+        normalize(
+            g_centerEastAndOriginY.xyz *
+                offsetMeters.x +
+            g_centerNorthAndMorphStart.xyz *
+                offsetMeters.y);
+
+    const float angle =
+        distanceMeters /
+        planetRadius;
+
+    return normalize(
+        g_centerUpAndOriginX.xyz *
+            cos(angle) +
+        tangentDirection *
+            sin(angle));
 }
 
 VSOutput main(uint vertexId : SV_VertexID)
@@ -330,20 +403,16 @@ VSOutput main(uint vertexId : SV_VertexID)
         (uint)round(
             g_centerEastAndOriginY.w);
 
-    const uint physicalX =
-        (logicalX + originX) %
-        resolution;
-
-    const uint physicalY =
-        (logicalY + originY) %
-        resolution;
-
     const uint physicalIndex =
-        physicalY * resolution +
-        physicalX;
+        PhysicalSampleIndex(
+            logicalX,
+            logicalY,
+            resolution,
+            originX,
+            originY);
 
     const uint sampleByteOffset =
-        physicalIndex * 20;
+        physicalIndex * 20u;
 
     const float elevation =
         asfloat(
@@ -353,15 +422,15 @@ VSOutput main(uint vertexId : SV_VertexID)
     const float2 morphTargetOffset =
         asfloat(
             g_samples.Load2(
-                sampleByteOffset + 4));
+                sampleByteOffset + 4u));
 
     const uint packedBiome0 =
         g_samples.Load(
-            sampleByteOffset + 12);
+            sampleByteOffset + 12u);
 
     const uint packedBiome1 =
         g_samples.Load(
-            sampleByteOffset + 16);
+            sampleByteOffset + 16u);
 
     const float halfCells =
         ((float)resolution - 1.0) *
@@ -379,9 +448,6 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     const float morphEnd =
         g_morph.x;
-
-    const float coarseSpacing =
-        g_morph.y;
 
     const float hasCoarser =
         g_morph.z;
@@ -415,42 +481,10 @@ VSOutput main(uint vertexId : SV_VertexID)
                 morph);
     }
 
-    const float distanceMeters =
-        length(offsetMeters);
-
-    float3 tangentDirection =
-        float3(0.0, 0.0, 0.0);
-
-    if (distanceMeters > 0.0001)
-    {
-        tangentDirection =
-            normalize(
-                g_centerEastAndOriginY.xyz *
-                    offsetMeters.x +
-                g_centerNorthAndMorphStart.xyz *
-                    offsetMeters.y);
-    }
-
-    const float angle =
-        distanceMeters /
-        planetRadius;
-
-    const float sinAngle =
-        sin(angle);
-
-    const float cosAngle =
-        cos(angle);
-
-    float3 surfaceDirection =
-        g_centerUpAndOriginX.xyz *
-        cosAngle;
-
-    if (distanceMeters > 0.0001)
-    {
-        surfaceDirection +=
-            tangentDirection *
-            sinAngle;
-    }
+    const float3 surfaceDirection =
+        SurfaceDirectionForOffset(
+            offsetMeters,
+            planetRadius);
 
     const float displacedRadius =
         planetRadius +
@@ -463,6 +497,142 @@ VSOutput main(uint vertexId : SV_VertexID)
             0.0,
             observerRadius,
             0.0);
+
+    const uint leftX =
+        logicalX > 0u
+            ? logicalX - 1u
+            : logicalX;
+
+    const uint rightX =
+        logicalX + 1u < resolution
+            ? logicalX + 1u
+            : logicalX;
+
+    const uint downY =
+        logicalY > 0u
+            ? logicalY - 1u
+            : logicalY;
+
+    const uint upY =
+        logicalY + 1u < resolution
+            ? logicalY + 1u
+            : logicalY;
+
+    const float elevationLeft =
+        LoadElevation(
+            leftX,
+            logicalY,
+            resolution,
+            originX,
+            originY);
+
+    const float elevationRight =
+        LoadElevation(
+            rightX,
+            logicalY,
+            resolution,
+            originX,
+            originY);
+
+    const float elevationDown =
+        LoadElevation(
+            logicalX,
+            downY,
+            resolution,
+            originX,
+            originY);
+
+    const float elevationUp =
+        LoadElevation(
+            logicalX,
+            upY,
+            resolution,
+            originX,
+            originY);
+
+    const float xDistance =
+        max(
+            (float)(rightX - leftX) *
+                spacing,
+            0.0001);
+
+    const float yDistance =
+        max(
+            (float)(upY - downY) *
+                spacing,
+            0.0001);
+
+    const float slopeEast =
+        (elevationRight -
+         elevationLeft) /
+        xDistance;
+
+    const float slopeNorth =
+        (elevationUp -
+         elevationDown) /
+        yDistance;
+
+    float3 tangentEast =
+        g_centerEastAndOriginY.xyz -
+        surfaceDirection *
+            dot(
+                g_centerEastAndOriginY.xyz,
+                surfaceDirection);
+
+    const float tangentEastLength =
+        length(tangentEast);
+
+    if (tangentEastLength > 0.0001)
+    {
+        tangentEast /=
+            tangentEastLength;
+    }
+    else
+    {
+        tangentEast =
+            float3(
+                1.0,
+                0.0,
+                0.0);
+    }
+
+    float3 tangentNorth =
+        g_centerNorthAndMorphStart.xyz -
+        surfaceDirection *
+            dot(
+                g_centerNorthAndMorphStart.xyz,
+                surfaceDirection);
+
+    tangentNorth -=
+        tangentEast *
+        dot(
+            tangentNorth,
+            tangentEast);
+
+    const float tangentNorthLength =
+        length(tangentNorth);
+
+    if (tangentNorthLength > 0.0001)
+    {
+        tangentNorth /=
+            tangentNorthLength;
+    }
+    else
+    {
+        tangentNorth =
+            float3(
+                0.0,
+                0.0,
+                1.0);
+    }
+
+    const float3 terrainNormal =
+        normalize(
+            surfaceDirection -
+            tangentEast *
+                slopeEast -
+            tangentNorth *
+                slopeNorth);
 
     VSOutput output;
 
@@ -484,6 +654,12 @@ VSOutput main(uint vertexId : SV_VertexID)
         UnpackUnorm4x8(
             packedBiome1);
 
+    output.terrainNormal =
+        terrainNormal;
+
+    output.surfaceDirection =
+        surfaceDirection;
+
     return output;
 }
 )";
@@ -495,6 +671,8 @@ struct VSOutput
     float elevation : TEXCOORD0;
     float4 biome0 : TEXCOORD1;
     float4 biome1 : TEXCOORD2;
+    float3 terrainNormal : TEXCOORD3;
+    float3 surfaceDirection : TEXCOORD4;
 };
 
 float4 main(VSOutput input) : SV_Target0
@@ -594,21 +772,88 @@ float4 main(VSOutput input) : SV_Target0
         wetlandColor *
             biome1.w;
 
+    const float3 terrainNormal =
+        normalize(
+            input.terrainNormal);
+
+    const float3 surfaceDirection =
+        normalize(
+            input.surfaceDirection);
+
+    const float slopeCosine =
+        saturate(
+            dot(
+                terrainNormal,
+                surfaceDirection));
+
+    const float slopeStrength =
+        1.0 -
+        slopeCosine;
+
+    const float landWeight =
+        saturate(
+            1.0 -
+            biome0.x);
+
+    const float rockBlend =
+        smoothstep(
+            0.06,
+            0.34,
+            slopeStrength) *
+        landWeight *
+        0.72;
+
+    const float3 rockColor =
+        float3(
+            0.30,
+            0.295,
+            0.285);
+
+    color =
+        lerp(
+            color,
+            rockColor,
+            rockBlend);
+
+    const float3 previewLightDirection =
+        normalize(
+            float3(
+                -0.42,
+                0.78,
+                0.46));
+
+    const float diffuse =
+        saturate(
+            dot(
+                terrainNormal,
+                previewLightDirection));
+
+    const float hemispheric =
+        0.58 +
+        0.42 *
+        slopeCosine;
+
+    const float lighting =
+        (0.36 +
+         diffuse * 0.64) *
+        hemispheric;
+
     const float elevationLight =
         saturate(
             input.elevation /
                 8000.0);
 
     color *=
-        0.88 +
-        elevationLight *
-            0.22;
+        lighting *
+        (0.92 +
+         elevationLight *
+            0.15);
 
     return float4(
         color,
         1.0);
 }
-)";
+)"
 } // namespace
 
 class TerrainPreviewRenderer::Impl
