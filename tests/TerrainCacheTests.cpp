@@ -1,8 +1,11 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/TerrainPageBuilder.hpp>
+#include <orbit/terrain_cache/TerrainPageCache.hpp>
 
 #include <cmath>
 #include <iostream>
+#include <memory>
 
 int main()
 {
@@ -10,22 +13,23 @@ int main()
         .radiusMeters = 6'000'000.0
     };
 
-    const orbit::terrain::AnalyticTerrainSource terrain(
-        planet,
-        {
-            .seed = 0xA57E22AULL,
-            .macroAmplitudeMeters = 3'000.0,
-            .macroWavelengthMeters = 800'000.0,
-            .detailAmplitudeMeters = 500.0,
-            .detailWavelengthMeters = 80'000.0,
-            .detailOctaves = 5
-        });
+    const auto terrain =
+        std::make_shared<orbit::terrain::AnalyticTerrainSource>(
+            planet,
+            orbit::terrain::AnalyticTerrainDesc{
+                .seed = 0xA57E22AULL,
+                .macroAmplitudeMeters = 3'000.0,
+                .macroWavelengthMeters = 800'000.0,
+                .detailAmplitudeMeters = 500.0,
+                .detailWavelengthMeters = 80'000.0,
+                .detailOctaves = 5
+            });
 
     constexpr orbit::u32 resolution = 33;
 
     const auto positiveX = orbit::terrain_cache::BuildTerrainPage(
         planet,
-        terrain,
+        *terrain,
         {
             .tile = {
                 .face = orbit::world::CubeFace::PositiveX,
@@ -38,7 +42,7 @@ int main()
 
     const auto negativeZ = orbit::terrain_cache::BuildTerrainPage(
         planet,
-        terrain,
+        *terrain,
         {
             .tile = {
                 .face = orbit::world::CubeFace::NegativeZ,
@@ -80,6 +84,65 @@ int main()
                 << "Terrain cache seam mismatch between +X and -Z.\n";
             return 1;
         }
+    }
+
+    orbit::jobs::JobSystem jobs(4);
+    orbit::terrain_cache::TerrainPageCache cache(
+        planet,
+        terrain,
+        jobs);
+
+    const orbit::terrain_cache::TerrainPageDesc asyncDesc{
+        .tile = {
+            .face = orbit::world::CubeFace::PositiveY,
+            .level = 5,
+            .x = 11,
+            .y = 19
+        },
+        .resolution = 65
+    };
+
+    if (!cache.Request(asyncDesc))
+    {
+        std::cerr << "Initial terrain cache request was rejected.\n";
+        return 1;
+    }
+
+    if (cache.Request(asyncDesc))
+    {
+        std::cerr << "Duplicate terrain cache request was not deduplicated.\n";
+        return 1;
+    }
+
+    if (cache.EntryCount() != 1)
+    {
+        std::cerr << "Terrain cache entry count is wrong.\n";
+        return 1;
+    }
+
+    cache.WaitAll();
+
+    const auto readyPage = cache.TryGet(asyncDesc);
+
+    if (!readyPage)
+    {
+        std::cerr << "Asynchronous terrain page never became ready.\n";
+        return 1;
+    }
+
+    if (readyPage->desc != asyncDesc ||
+        readyPage->elevationMeters.size() !=
+            static_cast<std::size_t>(asyncDesc.resolution) *
+            static_cast<std::size_t>(asyncDesc.resolution))
+    {
+        std::cerr << "Asynchronous terrain page contents are invalid.\n";
+        return 1;
+    }
+
+    if (cache.IsPending(asyncDesc))
+    {
+        std::cerr << "Ready terrain page is still marked pending.\n";
+        return 1;
     }
 
     return 0;

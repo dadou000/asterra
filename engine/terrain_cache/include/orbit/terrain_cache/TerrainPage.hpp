@@ -11,6 +11,9 @@ struct TerrainPageDesc
 {
     world::PlanetTileId tile{};
     u32 resolution{65};
+
+    [[nodiscard]] constexpr bool operator==(
+        const TerrainPageDesc&) const noexcept = default;
 };
 
 struct TerrainPage

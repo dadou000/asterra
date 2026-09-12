@@ -1,5 +1,6 @@
 add_library(OrbitTerrainCache STATIC
     src/TerrainPageBuilder.cpp
+    src/TerrainPageCache.cpp
 )
 
 add_library(Orbit::TerrainCache ALIAS OrbitTerrainCache)
@@ -12,6 +13,7 @@ target_include_directories(OrbitTerrainCache
 target_link_libraries(OrbitTerrainCache
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
         Orbit::Terrain
         Orbit::World
 )
