@@ -8,6 +8,7 @@
 #include <orbit/shader/d3d/D3DShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
+#include <orbit/terrain_erosion/HydrologyRefinement.hpp>
 #include <orbit/terrain_erosion/RiverCarvedTerrainSource.hpp>
 #include <orbit/terrain_erosion/RiverCarving.hpp>
 #include <orbit/terrain_hydrology/HydrologyGrid.hpp>
@@ -133,25 +134,39 @@ int main()
                         .detailOctaves = 8
                     });
 
-        const orbit::terrain_hydrology::HydrologyGrid
-            regionalHydrology =
-                orbit::terrain_hydrology::
-                    BuildHydrologyGrid(
-                        planet,
-                        *authoritativeTerrain,
-                        initialSurfaceFrame,
-                        {
-                            .resolution = 129,
-                            .halfExtentMeters =
-                                250'000.0,
-                            .footprintMeters = 0.0,
-                            .useCoarseElevation =
-                                false,
-                            .conditionDepressions =
-                                true,
-                            .minimumDrainageDropMeters =
-                                0.25
-                        });
+        auto initialHydrology =
+            orbit::terrain_hydrology::
+                BuildHydrologyGrid(
+                    planet,
+                    *authoritativeTerrain,
+                    initialSurfaceFrame,
+                    {
+                        .resolution = 129,
+                        .halfExtentMeters =
+                            250'000.0,
+                        .footprintMeters = 0.0,
+                        .useCoarseElevation =
+                            false,
+                        .conditionDepressions =
+                            true,
+                        .minimumDrainageDropMeters =
+                            0.25
+                    });
+
+        const auto hydrologyRefinement =
+            orbit::terrain_erosion::
+                RefineHydrologyWithSediment(
+                    std::move(
+                        initialHydrology),
+                    {
+                        .iterations = 2,
+                        .elevationDeltaScale =
+                            0.35
+                    });
+
+        const auto& regionalHydrology =
+            hydrologyRefinement.
+                hydrology;
 
         const auto riverGraph =
             orbit::terrain_hydrology::
@@ -195,7 +210,7 @@ int main()
 
         orbit::log::Info(
             std::format(
-                "Regional terrain | hydrology {}x{} | river nodes {} segments {} | erosion index refs {}",
+                "Regional terrain | hydrology {}x{} | river nodes {} segments {} | erosion index refs {} | exported sediment {:.2f}",
                 regionalHydrology.
                     config.resolution,
                 regionalHydrology.
@@ -204,7 +219,10 @@ int main()
                 riverGraph.segments.size(),
                 carvingField.
                     spatialSegmentIndices.
-                    size()));
+                    size(),
+                hydrologyRefinement.
+                    lastSediment.
+                    exportedSediment));
 
         std::vector<
             orbit::terrain_erosion::
