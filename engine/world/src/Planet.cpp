@@ -239,6 +239,30 @@ f64 ApproximateTileWidthMeters(
     return std::acos(cosine) * planet.radiusMeters;
 }
 
+f64 HorizonArcDistanceMeters(
+    const f64 sphereRadiusMeters,
+    const f64 observerRadiusMeters) noexcept
+{
+    if (sphereRadiusMeters <= 0.0 ||
+        observerRadiusMeters <=
+            sphereRadiusMeters)
+    {
+        return 0.0;
+    }
+
+    const f64 cosine =
+        std::clamp(
+            sphereRadiusMeters /
+                observerRadiusMeters,
+            0.0,
+            1.0);
+
+    return
+        sphereRadiusMeters *
+        std::acos(cosine);
+}
+
+
 SurfaceFrame MakeSurfaceFrame(
     const math::Double3& upDirection) noexcept
 {
