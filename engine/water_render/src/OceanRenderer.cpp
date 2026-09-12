@@ -457,7 +457,7 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.horizonClip =
         localSurfaceDirection.y -
         horizonCosine +
-        0.0015;
+        0.000002;
 
     return output;
 }
