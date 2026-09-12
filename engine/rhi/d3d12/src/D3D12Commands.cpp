@@ -334,6 +334,37 @@ void D3D12CommandList::SetGraphicsConstants(
             0);
 }
 
+void D3D12CommandList::SetGraphicsBuffer(
+    const u32 slot,
+    Buffer& buffer)
+{
+    if (activePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind a graphics buffer without an active pipeline.");
+    }
+
+    auto* d3dBuffer =
+        dynamic_cast<D3D12Buffer*>(
+            &buffer);
+
+    if (d3dBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a shader buffer from another backend.");
+    }
+
+    const u32 rootParameter =
+        activePipeline_->
+            RootSrvParameterIndex(slot);
+
+    nativeCommandList_->
+        SetGraphicsRootShaderResourceView(
+            rootParameter,
+            d3dBuffer->Native()->
+                GetGPUVirtualAddress());
+}
+
 void D3D12CommandList::SetVertexBuffer(
     Buffer& buffer,
     const u32 strideBytes)

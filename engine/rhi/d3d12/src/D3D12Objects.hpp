@@ -112,19 +112,25 @@ public:
         ComPtr<ID3D12PipelineState> pipelineState,
         ComPtr<ID3D12RootSignature> rootSignature,
         u32 pushConstantDwords,
+        u32 shaderResourceBuffers,
+        u32 rootSrvBaseParameter,
         PrimitiveTopology topology);
 
     [[nodiscard]] u32 PushConstantDwords() const noexcept override;
+    [[nodiscard]] u32 ShaderResourceBuffers() const noexcept override;
     [[nodiscard]] PrimitiveTopology Topology() const noexcept override;
 
     [[nodiscard]] ID3D12PipelineState* NativePipelineState() const noexcept;
     [[nodiscard]] ID3D12RootSignature* NativeRootSignature() const noexcept;
     [[nodiscard]] D3D12_PRIMITIVE_TOPOLOGY NativeTopology() const noexcept;
+    [[nodiscard]] u32 RootSrvParameterIndex(u32 slot) const;
 
 private:
     ComPtr<ID3D12PipelineState> pipelineState_;
     ComPtr<ID3D12RootSignature> rootSignature_;
     u32 pushConstantDwords_{0};
+    u32 shaderResourceBuffers_{0};
+    u32 rootSrvBaseParameter_{0};
     PrimitiveTopology topology_{PrimitiveTopology::TriangleList};
 };
 
@@ -182,6 +188,10 @@ public:
 
     void SetGraphicsConstants(
         std::span<const u32> dwords) override;
+
+    void SetGraphicsBuffer(
+        u32 slot,
+        Buffer& buffer) override;
 
     void SetVertexBuffer(
         Buffer& buffer,

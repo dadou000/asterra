@@ -53,6 +53,7 @@ struct GraphicsPipelineDesc
     std::span<const VertexAttribute> vertexAttributes{};
     u32 vertexStrideBytes{0};
     u32 pushConstantDwords{0};
+    u32 shaderResourceBuffers{0};
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     FillMode fillMode{FillMode::Solid};
     CullMode cullMode{CullMode::Back};
@@ -69,6 +70,7 @@ public:
     GraphicsPipeline& operator=(const GraphicsPipeline&) = delete;
 
     [[nodiscard]] virtual u32 PushConstantDwords() const noexcept = 0;
+    [[nodiscard]] virtual u32 ShaderResourceBuffers() const noexcept = 0;
     [[nodiscard]] virtual PrimitiveTopology Topology() const noexcept = 0;
 
 protected:

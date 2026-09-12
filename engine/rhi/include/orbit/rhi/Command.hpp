@@ -96,6 +96,10 @@ public:
     virtual void SetGraphicsConstants(
         std::span<const u32> dwords) = 0;
 
+    virtual void SetGraphicsBuffer(
+        u32 slot,
+        Buffer& buffer) = 0;
+
     virtual void SetVertexBuffer(
         Buffer& buffer,
         u32 strideBytes) = 0;

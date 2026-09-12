@@ -97,45 +97,61 @@ D3D12GraphicsPipeline::D3D12GraphicsPipeline(
     ComPtr<ID3D12PipelineState> pipelineState,
     ComPtr<ID3D12RootSignature> rootSignature,
     const u32 pushConstantDwords,
+    const u32 shaderResourceBuffers,
+    const u32 rootSrvBaseParameter,
     const PrimitiveTopology topology)
     : pipelineState_(std::move(pipelineState)),
       rootSignature_(std::move(rootSignature)),
       pushConstantDwords_(pushConstantDwords),
+      shaderResourceBuffers_(shaderResourceBuffers),
+      rootSrvBaseParameter_(rootSrvBaseParameter),
       topology_(topology)
 {
 }
 
-u32 D3D12GraphicsPipeline::
-PushConstantDwords() const noexcept
+u32 D3D12GraphicsPipeline::PushConstantDwords() const noexcept
 {
     return pushConstantDwords_;
 }
 
-PrimitiveTopology
-D3D12GraphicsPipeline::Topology() const noexcept
+u32 D3D12GraphicsPipeline::ShaderResourceBuffers() const noexcept
+{
+    return shaderResourceBuffers_;
+}
+
+PrimitiveTopology D3D12GraphicsPipeline::Topology() const noexcept
 {
     return topology_;
 }
 
 ID3D12PipelineState*
-D3D12GraphicsPipeline::
-NativePipelineState() const noexcept
+D3D12GraphicsPipeline::NativePipelineState() const noexcept
 {
     return pipelineState_.Get();
 }
 
 ID3D12RootSignature*
-D3D12GraphicsPipeline::
-NativeRootSignature() const noexcept
+D3D12GraphicsPipeline::NativeRootSignature() const noexcept
 {
     return rootSignature_.Get();
 }
 
 D3D12_PRIMITIVE_TOPOLOGY
-D3D12GraphicsPipeline::
-NativeTopology() const noexcept
+D3D12GraphicsPipeline::NativeTopology() const noexcept
 {
     return ToNativeTopology(topology_);
+}
+
+u32 D3D12GraphicsPipeline::RootSrvParameterIndex(
+    const u32 slot) const
+{
+    if (slot >= shaderResourceBuffers_)
+    {
+        throw std::out_of_range(
+            "Orbit graphics SRV slot exceeds the active pipeline layout.");
+    }
+
+    return rootSrvBaseParameter_ + slot;
 }
 
 std::unique_ptr<GraphicsPipeline>
@@ -151,24 +167,60 @@ D3D12Device::CreateGraphicsPipeline(
             "Orbit graphics pipelines require vertex and pixel shader bytecode.");
     }
 
-    D3D12_ROOT_PARAMETER rootParameter{};
-    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    const bool hasConstants =
+        desc.pushConstantDwords > 0;
 
-    if (desc.pushConstantDwords > 0)
+    const u32 rootSrvBase =
+        hasConstants ? 1U : 0U;
+
+    const u32 rootParameterCount =
+        rootSrvBase +
+        desc.shaderResourceBuffers;
+
+    std::vector<D3D12_ROOT_PARAMETER>
+        rootParameters(
+            rootParameterCount);
+
+    if (hasConstants)
     {
-        rootParameter.ParameterType =
-            D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        rootParameter.Constants.ShaderRegister = 0;
-        rootParameter.Constants.RegisterSpace = 0;
-        rootParameter.Constants.Num32BitValues =
-            desc.pushConstantDwords;
-        rootParameter.ShaderVisibility =
-            D3D12_SHADER_VISIBILITY_ALL;
+        auto& constants =
+            rootParameters[0];
 
-        rootDesc.NumParameters = 1;
-        rootDesc.pParameters = &rootParameter;
+        constants.ParameterType =
+            D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        constants.Constants.ShaderRegister = 0;
+        constants.Constants.RegisterSpace = 0;
+        constants.Constants.Num32BitValues =
+            desc.pushConstantDwords;
+        constants.ShaderVisibility =
+            D3D12_SHADER_VISIBILITY_ALL;
     }
 
+    for (u32 slot = 0;
+         slot < desc.shaderResourceBuffers;
+         ++slot)
+    {
+        auto& parameter =
+            rootParameters[
+                rootSrvBase + slot];
+
+        parameter.ParameterType =
+            D3D12_ROOT_PARAMETER_TYPE_SRV;
+        parameter.Descriptor.ShaderRegister =
+            slot;
+        parameter.Descriptor.RegisterSpace = 0;
+        parameter.ShaderVisibility =
+            D3D12_SHADER_VISIBILITY_ALL;
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters =
+        static_cast<UINT>(
+            rootParameters.size());
+    rootDesc.pParameters =
+        rootParameters.empty()
+            ? nullptr
+            : rootParameters.data();
     rootDesc.NumStaticSamplers = 0;
     rootDesc.pStaticSamplers = nullptr;
     rootDesc.Flags =
@@ -340,6 +392,8 @@ D3D12Device::CreateGraphicsPipeline(
             std::move(pipelineState),
             std::move(rootSignature),
             desc.pushConstantDwords,
+            desc.shaderResourceBuffers,
+            rootSrvBase,
             desc.topology);
 }
 } // namespace orbit::rhi::d3d12::detail
