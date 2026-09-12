@@ -20,6 +20,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Frames="*res://scripts/core/frames.gd"
+PlanetLighting="*res://scripts/rendering/planet_lighting_service.gd"
 CelestialSystem="*res://scripts/core/weather_celestial_clock_adapter.gd"
 Planet="*res://scripts/gen/planet_sampler_gpu_runtime.gd"
 PlanetContext="*res://scripts/terrain/gpu_planet_context.gd"
@@ -61,7 +62,6 @@ RingCountDebug="*res://scripts/terrain/ring_count_debug_controller.gd"
 VehicleTests="*res://scripts/vehicles/vehicle_test_harness.gd"
 PlanetStudioMCP="*res://scripts/world_authoring/mcp/planet_studio_bridge.gd"
 GlobalWindDriver="*res://scripts/rendering/global_wind_driver.gd"
-PlanetLighting="*res://scripts/rendering/planet_lighting_service.gd"
 
 [display]
 
