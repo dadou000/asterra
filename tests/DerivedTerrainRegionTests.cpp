@@ -114,7 +114,15 @@ private:
         a.water.segments.size() !=
             b.water.segments.size() ||
         a.water.coreHalfExtentMeters !=
-            b.water.coreHalfExtentMeters)
+            b.water.coreHalfExtentMeters ||
+        a.lakes.cells.size() !=
+            b.lakes.cells.size() ||
+        a.lakes.basins.size() !=
+            b.lakes.basins.size() ||
+        a.lakes.cellSpacingMeters !=
+            b.lakes.cellSpacingMeters ||
+        a.lakes.coreHalfExtentMeters !=
+            b.lakes.coreHalfExtentMeters)
     {
         return false;
     }
@@ -273,6 +281,58 @@ private:
                 right.slope ||
             left.velocityMetersPerSecond !=
                 right.velocityMetersPerSecond)
+        {
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < a.lakes.cells.size();
+         ++index)
+    {
+        const auto& left =
+            a.lakes.cells[index];
+        const auto& right =
+            b.lakes.cells[index];
+
+        if (left.sourceCellIndex !=
+                right.sourceCellIndex ||
+            left.offsetMeters.x !=
+                right.offsetMeters.x ||
+            left.offsetMeters.y !=
+                right.offsetMeters.y ||
+            left.terrainElevationMeters !=
+                right.terrainElevationMeters ||
+            left.surfaceElevationMeters !=
+                right.surfaceElevationMeters ||
+            left.depthMeters !=
+                right.depthMeters ||
+            left.basinIndex !=
+                right.basinIndex)
+        {
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < a.lakes.basins.size();
+         ++index)
+    {
+        const auto& left =
+            a.lakes.basins[index];
+        const auto& right =
+            b.lakes.basins[index];
+
+        if (left.surfaceElevationMeters !=
+                right.surfaceElevationMeters ||
+            left.maximumDepthMeters !=
+                right.maximumDepthMeters ||
+            left.areaSquareMeters !=
+                right.areaSquareMeters ||
+            left.firstCell !=
+                right.firstCell ||
+            left.cellCount !=
+                right.cellCount)
         {
             return false;
         }

@@ -196,6 +196,14 @@ DerivedTerrainRegion BuildDerivedTerrainRegion(
                     0.5,
                 config.water);
 
+    auto lakes =
+        terrain_water::
+            BuildLakeWaterField(
+                refinement.hydrology,
+                approximateTileWidthMeters *
+                    0.5,
+                config.lakes);
+
     RejectStaleSource(
         source,
         id,
@@ -221,7 +229,10 @@ DerivedTerrainRegion BuildDerivedTerrainRegion(
                 carving),
         .water =
             std::move(
-                water)
+                water),
+        .lakes =
+            std::move(
+                lakes)
     };
 }
 } // namespace orbit::terrain_region

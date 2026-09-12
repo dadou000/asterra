@@ -1,4 +1,5 @@
 add_library(OrbitTerrainWater STATIC
+    src/LakeWater.cpp
     src/RiverWater.cpp
 )
 

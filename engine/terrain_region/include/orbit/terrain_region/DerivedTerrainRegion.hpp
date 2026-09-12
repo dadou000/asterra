@@ -7,6 +7,7 @@
 #include <orbit/terrain_erosion/RiverCarving.hpp>
 #include <orbit/terrain_hydrology/HydrologyGrid.hpp>
 #include <orbit/terrain_hydrology/RiverGraph.hpp>
+#include <orbit/terrain_water/LakeWater.hpp>
 #include <orbit/terrain_water/RiverWater.hpp>
 #include <orbit/world/Planet.hpp>
 
@@ -71,6 +72,7 @@ struct DerivedTerrainRegionConfig
     };
 
     terrain_water::RiverWaterConfig water{};
+    terrain_water::LakeWaterConfig lakes{};
 };
 
 struct DerivedTerrainRegion
@@ -85,6 +87,7 @@ struct DerivedTerrainRegion
     terrain_hydrology::RiverGraph rivers{};
     terrain_erosion::RiverCarvingField carving{};
     terrain_water::RiverWaterNetwork water{};
+    terrain_water::LakeWaterField lakes{};
 };
 
 [[nodiscard]] DerivedTerrainRegion BuildDerivedTerrainRegion(

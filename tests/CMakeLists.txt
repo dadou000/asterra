@@ -332,3 +332,21 @@ add_test(
     NAME Orbit.RiverWater
     COMMAND OrbitRiverWaterTests
 )
+
+
+add_executable(OrbitLakeWaterTests
+    LakeWaterTests.cpp
+)
+
+target_link_libraries(OrbitLakeWaterTests
+    PRIVATE
+        Orbit::TerrainWater
+)
+
+target_compile_features(OrbitLakeWaterTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitLakeWaterTests)
+
+add_test(
+    NAME Orbit.LakeWater
+    COMMAND OrbitLakeWaterTests
+)
