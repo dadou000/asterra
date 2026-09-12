@@ -8,6 +8,7 @@
 #include <cmath>
 #include <iostream>
 #include <memory>
+#include <thread>
 
 namespace
 {
@@ -47,6 +48,52 @@ public:
     }
 
     mutable std::atomic<orbit::u64> calls{0};
+};
+
+class BlockingTerrainSource final :
+    public orbit::terrain::TerrainSource
+{
+public:
+    [[nodiscard]] orbit::terrain::TerrainSample
+    Sample(
+        const orbit::terrain::TerrainQuery&)
+        const noexcept override
+    {
+        entered.store(
+            true,
+            std::memory_order_release);
+
+        while (!released.load(
+            std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+
+        return {
+            .elevationMeters = 321.0,
+            .coarseElevationMeters = 300.0
+        };
+    }
+
+    void WaitUntilEntered() const noexcept
+    {
+        while (!entered.load(
+            std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+    }
+
+    void Release() const noexcept
+    {
+        released.store(
+            true,
+            std::memory_order_release);
+    }
+
+private:
+    mutable std::atomic<bool> entered{false};
+    mutable std::atomic<bool> released{false};
 };
 } // namespace
 
@@ -188,13 +235,26 @@ int main()
         return 1;
     }
 
+    constexpr std::size_t
+        lruResolution = 17;
+
+    const std::size_t pageBytesEstimate =
+        sizeof(orbit::terrain_cache::TerrainPage) +
+        lruResolution *
+            lruResolution *
+            sizeof(orbit::terrain::TerrainSample);
+
     orbit::terrain_cache::TerrainPageCache
         limitedCache(
             planet,
             terrain,
             jobs,
             {
-                .maxEntries = 2
+                .budgetBytes =
+                    pageBytesEstimate *
+                    5U /
+                    2U,
+                .softEntryLimit = 0
             });
 
     const orbit::terrain_cache::TerrainPageDesc
@@ -270,7 +330,7 @@ int main()
     if (limitedCache.EntryCount() != 2)
     {
         std::cerr
-            << "Limited terrain cache exceeded its entry budget.\n";
+            << "Limited terrain cache did not converge to the byte-budgeted residency set.\n";
         return 1;
     }
 
@@ -283,10 +343,107 @@ int main()
         return 1;
     }
 
-    if (limitedCache.Stats().evictions == 0)
+    const auto limitedStats =
+        limitedCache.Stats();
+
+    if (limitedStats.evictions == 0)
     {
         std::cerr
             << "Terrain cache did not report its ready-page eviction.\n";
+        return 1;
+    }
+
+    if (limitedStats.residentBytes >
+            limitedStats.budgetBytes ||
+        limitedStats.peakResidentBytes >
+            limitedStats.budgetBytes ||
+        limitedStats.budgetBytes !=
+            pageBytesEstimate *
+                5U /
+                2U)
+    {
+        std::cerr
+            << "Terrain cache byte accounting exceeded its configured budget.\n";
+        return 1;
+    }
+
+    const auto blockingSource =
+        std::make_shared<
+            BlockingTerrainSource>();
+
+    orbit::terrain_cache::TerrainPageCache
+        pendingCache(
+            planet,
+            blockingSource,
+            jobs,
+            {
+                .budgetBytes =
+                    pageBytesEstimate *
+                    3U /
+                    2U,
+                .softEntryLimit = 0
+            });
+
+    if (!pendingCache.Request(pageA))
+    {
+        std::cerr
+            << "Pending-protection cache rejected its first page.\n";
+        return 1;
+    }
+
+    blockingSource->WaitUntilEntered();
+
+    if (pendingCache.Request(pageB))
+    {
+        blockingSource->Release();
+        pendingCache.WaitAll();
+
+        std::cerr
+            << "Terrain cache evicted or overcommitted a pending page.\n";
+        return 1;
+    }
+
+    if (!pendingCache.IsPending(pageA) ||
+        pendingCache.EntryCount() != 1)
+    {
+        blockingSource->Release();
+        pendingCache.WaitAll();
+
+        std::cerr
+            << "Pending terrain page did not remain resident under pressure.\n";
+        return 1;
+    }
+
+    if (pendingCache.Stats().capacityRejects == 0)
+    {
+        blockingSource->Release();
+        pendingCache.WaitAll();
+
+        std::cerr
+            << "Terrain cache did not report pending-page budget pressure.\n";
+        return 1;
+    }
+
+    blockingSource->Release();
+    pendingCache.WaitAll();
+
+    if (!pendingCache.TryGet(pageA))
+    {
+        std::cerr
+            << "Pending terrain page failed to become ready after release.\n";
+        return 1;
+    }
+
+    const auto pendingStats =
+        pendingCache.Stats();
+
+    if (pendingStats.residentBytes >
+            pendingStats.budgetBytes ||
+        pendingStats.peakResidentBytes >
+            pendingStats.budgetBytes)
+    {
+        std::cerr
+            << "Pending cache exceeded its hard byte budget.\n";
         return 1;
     }
 
@@ -305,7 +462,7 @@ int main()
                 .minimumTileLevel = 6,
                 .maximumTileLevel = 6,
                 .cache = {
-                    .maxEntries = 8
+                    .softEntryLimit = 0
                 }
             });
 
