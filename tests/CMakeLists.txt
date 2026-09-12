@@ -261,3 +261,21 @@ add_test(
     NAME Orbit.RegionalElevationDelta
     COMMAND OrbitRegionalElevationDeltaTests
 )
+
+
+add_executable(OrbitDerivedTerrainRegionTests
+    DerivedTerrainRegionTests.cpp
+)
+
+target_link_libraries(OrbitDerivedTerrainRegionTests
+    PRIVATE
+        Orbit::TerrainRegion
+)
+
+target_compile_features(OrbitDerivedTerrainRegionTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitDerivedTerrainRegionTests)
+
+add_test(
+    NAME Orbit.DerivedTerrainRegion
+    COMMAND OrbitDerivedTerrainRegionTests
+)
