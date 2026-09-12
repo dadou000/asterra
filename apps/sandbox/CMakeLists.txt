@@ -5,12 +5,14 @@ add_executable(OrbitSandbox
 target_link_libraries(OrbitSandbox
     PRIVATE
         Orbit::Core
+        Orbit::Jobs
         Orbit::Math
         Orbit::Platform
         Orbit::RhiD3D12
         Orbit::ShaderD3D
         Orbit::Terrain
         Orbit::TerrainRender
+        Orbit::TerrainStream
         Orbit::World
 )
 

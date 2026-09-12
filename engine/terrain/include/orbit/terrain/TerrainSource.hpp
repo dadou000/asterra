@@ -24,6 +24,8 @@ public:
     TerrainSource(const TerrainSource&) = delete;
     TerrainSource& operator=(const TerrainSource&) = delete;
 
+    // Streaming workers may call Sample concurrently.
+    // Implementations must keep concurrent const sampling thread-safe.
     [[nodiscard]] virtual TerrainSample Sample(
         const TerrainQuery& query) const noexcept = 0;
 

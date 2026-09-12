@@ -21,24 +21,6 @@ namespace orbit::terrain_render
 {
 namespace
 {
-[[nodiscard]] u32 WrapIndex(
-    const i64 value,
-    const u32 size) noexcept
-{
-    const i64 modulus =
-        static_cast<i64>(size);
-
-    i64 wrapped =
-        value % modulus;
-
-    if (wrapped < 0)
-    {
-        wrapped += modulus;
-    }
-
-    return static_cast<u32>(wrapped);
-}
-
 void AppendCell(
     std::vector<u32>& indices,
     const u32 resolution,
@@ -182,26 +164,6 @@ void UploadBuffer(
                 vector,
                 observerFrame.north))
     };
-}
-
-[[nodiscard]] f32 SampleElevation(
-    const world::PlanetDefinition& planet,
-    const terrain::TerrainSource& terrainSource,
-    const world::SurfaceFrame& frame,
-    const math::Double2& offsetMeters,
-    const f64 footprintMeters)
-{
-    const math::Double3 direction =
-        world::DirectionAtSurfaceOffset(
-            planet,
-            frame,
-            offsetMeters);
-
-    return static_cast<f32>(
-        terrainSource.Sample({
-            .unitDirection = direction,
-            .footprintMeters = footprintMeters
-        }).elevationMeters);
 }
 
 [[nodiscard]] std::array<u32, 36> BuildDrawConstants(
@@ -539,12 +501,12 @@ public:
         rhi::Device& device,
         const shader::Compiler& shaderCompiler,
         const world::PlanetDefinition& planet,
-        const terrain::TerrainSource& terrainSource,
+        terrain_stream::TerrainSampleStreamer& sampleStreamer,
         const world::WorldPosition& observer,
         TerrainPreviewConfig config)
         : device_(device),
           planet_(planet),
-          terrainSource_(terrainSource),
+          sampleStreamer_(sampleStreamer),
           config_(std::move(config)),
           layout_(
               terrain_view::BuildClipmapLayout(
@@ -612,6 +574,13 @@ public:
         residencyUpdate_ =
             residency_.Apply(motion_);
 
+        std::vector<
+            terrain_stream::TerrainSampleRequest>
+            sampleRequests;
+
+        sampleRequests.reserve(
+            levels_.size());
+
         for (u32 levelIndex = 0;
              levelIndex <
                 static_cast<u32>(
@@ -622,33 +591,64 @@ public:
                 residencyUpdate_.levels[
                     levelIndex];
 
-            if (!levelUpdate.
+            if (levelUpdate.
                     refreshRegions.empty())
             {
-                ++stats_.
-                    levelsTouchedLastUpdate;
+                continue;
             }
+
+            const auto& level =
+                layout_.levels[
+                    levelIndex];
+
+            sampleRequests.push_back({
+                .levelIndex = levelIndex,
+                .resolution =
+                    level.gridResolution,
+                .spacingMeters =
+                    level.sampleSpacingMeters,
+                .footprintMeters =
+                    level.terrainFootprintMeters,
+                .surfaceFrame =
+                    motion_.levels[
+                        levelIndex].
+                        surfaceFrame,
+                .originX =
+                    levelUpdate.originX,
+                .originY =
+                    levelUpdate.originY,
+                .regions =
+                    levelUpdate.
+                        refreshRegions
+            });
+        }
+
+        const auto sampleResults =
+            sampleStreamer_.
+                GenerateBlocking(
+                    sampleRequests);
+
+        for (const auto& result :
+             sampleResults)
+        {
+            if (result.patches.empty())
+            {
+                continue;
+            }
+
+            ++stats_.
+                levelsTouchedLastUpdate;
 
             stats_.
                 refreshedRegionsLastUpdate +=
                     static_cast<u32>(
-                        levelUpdate.
-                            refreshRegions.size());
+                        result.patches.size());
 
-            for (const auto& region :
-                 levelUpdate.refreshRegions)
-            {
-                stats_.
-                    generatedSamplesLastUpdate +=
-                        static_cast<u64>(
-                            region.width) *
-                        static_cast<u64>(
-                            region.height);
-            }
+            stats_.
+                generatedSamplesLastUpdate +=
+                    result.sampleCount;
 
-            RefreshLevel(
-                levelIndex,
-                levelUpdate);
+            ApplySampleResult(result);
         }
 
         stats_.
@@ -1091,111 +1091,82 @@ private:
                 });
     }
 
-    void RefreshLevel(
-        const u32 levelIndex,
+    void ApplySampleResult(
         const terrain_stream::
-            LevelResidencyUpdate& update)
+            TerrainSampleResult& result)
     {
-        if (update.refreshRegions.empty())
+        if (result.levelIndex >=
+            levels_.size())
         {
-            return;
+            throw std::out_of_range(
+                "Orbit terrain sample result references an invalid clipmap level.");
         }
 
-        const terrain_view::ClipmapLevel&
-            level =
-                layout_.levels[
-                    levelIndex];
-
-        const terrain_view::
-            ClipmapLevelMotion&
-            movement =
-                motion_.levels[
-                    levelIndex];
+        LevelGpuState& state =
+            levels_[result.levelIndex];
 
         const u32 resolution =
-            level.gridResolution;
+            config_.clipmap.
+                gridResolution;
 
-        const f64 halfCells =
-            static_cast<f64>(
-                resolution - 1U) *
-            0.5;
+        std::vector<
+            terrain_stream::PhysicalRegion>
+            dirtyRegions;
 
-        LevelGpuState& state =
-            levels_[levelIndex];
+        dirtyRegions.reserve(
+            result.patches.size());
 
-        std::vector<f32>& heights =
-            state.cpuHeights;
-
-        for (const terrain_stream::
-                 PhysicalRegion& region :
-             update.refreshRegions)
+        for (const auto& patch :
+             result.patches)
         {
-            for (u32 localY = 0;
-                 localY < region.height;
-                 ++localY)
+            const std::size_t expectedSamples =
+                static_cast<std::size_t>(
+                    patch.region.width) *
+                patch.region.height;
+
+            if (patch.elevations.size() !=
+                expectedSamples)
             {
-                const u32 physicalY =
-                    region.y + localY;
-
-                const u32 logicalY =
-                    WrapIndex(
-                        static_cast<i64>(
-                            physicalY) -
-                        static_cast<i64>(
-                            update.originY),
-                        resolution);
-
-                for (u32 localX = 0;
-                     localX < region.width;
-                     ++localX)
-                {
-                    const u32 physicalX =
-                        region.x + localX;
-
-                    const u32 logicalX =
-                        WrapIndex(
-                            static_cast<i64>(
-                                physicalX) -
-                            static_cast<i64>(
-                                update.originX),
-                            resolution);
-
-                    const math::Double2
-                        offsetMeters{
-                            (static_cast<f64>(
-                                 logicalX) -
-                             halfCells) *
-                                level.
-                                    sampleSpacingMeters,
-                            (static_cast<f64>(
-                                 logicalY) -
-                             halfCells) *
-                                level.
-                                    sampleSpacingMeters
-                        };
-
-                    heights[
-                        static_cast<std::size_t>(
-                            physicalY) *
-                            resolution +
-                        physicalX] =
-                            SampleElevation(
-                                planet_,
-                                terrainSource_,
-                                movement.
-                                    surfaceFrame,
-                                offsetMeters,
-                                level.
-                                    terrainFootprintMeters);
-                }
+                throw std::runtime_error(
+                    "Orbit terrain sample patch size does not match its physical region.");
             }
+
+            for (u32 row = 0;
+                 row < patch.region.height;
+                 ++row)
+            {
+                const std::size_t destinationOffset =
+                    static_cast<std::size_t>(
+                        patch.region.y + row) *
+                        resolution +
+                    patch.region.x;
+
+                const std::size_t sourceOffset =
+                    static_cast<std::size_t>(
+                        row) *
+                    patch.region.width;
+
+                std::memcpy(
+                    state.cpuHeights.data() +
+                        destinationOffset,
+                    patch.elevations.data() +
+                        sourceOffset,
+                    static_cast<std::size_t>(
+                        patch.region.width) *
+                        sizeof(f32));
+            }
+
+            dirtyRegions.push_back(
+                patch.region);
         }
 
         ++state.currentSerial;
 
         state.dirtyUpdates.push_back({
-            .serial = state.currentSerial,
-            .regions = update.refreshRegions
+            .serial =
+                state.currentSerial,
+            .regions =
+                std::move(dirtyRegions)
         });
     }
 
@@ -1308,8 +1279,8 @@ private:
 
     rhi::Device& device_;
     world::PlanetDefinition planet_;
-    const terrain::TerrainSource&
-        terrainSource_;
+    terrain_stream::TerrainSampleStreamer&
+        sampleStreamer_;
 
     TerrainPreviewConfig config_;
     terrain_view::ClipmapLayout layout_;
@@ -1351,14 +1322,14 @@ TerrainPreviewRenderer(
     rhi::Device& device,
     const shader::Compiler& shaderCompiler,
     const world::PlanetDefinition& planet,
-    const terrain::TerrainSource& terrainSource,
+    terrain_stream::TerrainSampleStreamer& sampleStreamer,
     const world::WorldPosition& observer,
     TerrainPreviewConfig config)
     : impl_(std::make_unique<Impl>(
         device,
         shaderCompiler,
         planet,
-        terrainSource,
+        sampleStreamer,
         observer,
         std::move(config)))
 {

@@ -1,10 +1,12 @@
 #include <orbit/core/Log.hpp>
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/platform/Window.hpp>
 #include <orbit/rhi/d3d12/D3D12Backend.hpp>
 #include <orbit/shader/d3d/D3DShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
+#include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <algorithm>
@@ -91,6 +93,19 @@ int main()
                 .detailOctaves = 8
             });
 
+        orbit::jobs::JobSystem jobSystem;
+
+        orbit::terrain_stream::TerrainSampleStreamer
+            terrainSampleStreamer(
+                jobSystem,
+                planet,
+                terrain);
+
+        orbit::log::Info(
+            std::format(
+                "Terrain workers: {}",
+                jobSystem.WorkerCount()));
+
         const orbit::math::Double3 observerDirection =
             orbit::math::Normalize(orbit::math::Double3{
                 0.65,
@@ -118,7 +133,7 @@ int main()
                 *device,
                 shaderCompiler,
                 planet,
-                terrain,
+                terrainSampleStreamer,
                 observer,
                 terrainPreviewConfig);
 

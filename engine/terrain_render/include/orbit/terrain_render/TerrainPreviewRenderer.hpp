@@ -4,7 +4,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
-#include <orbit/terrain/TerrainSource.hpp>
+#include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/terrain_view/ClipmapLayout.hpp>
 #include <orbit/world/Planet.hpp>
 #include <orbit/world/WorldPosition.hpp>
@@ -50,7 +50,7 @@ public:
         rhi::Device& device,
         const shader::Compiler& shaderCompiler,
         const world::PlanetDefinition& planet,
-        const terrain::TerrainSource& terrainSource,
+        terrain_stream::TerrainSampleStreamer& sampleStreamer,
         const world::WorldPosition& observer,
         TerrainPreviewConfig config = {});
 
