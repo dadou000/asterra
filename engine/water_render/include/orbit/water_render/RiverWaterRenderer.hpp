@@ -27,7 +27,7 @@ struct RiverWaterRendererConfig
 
     f32 verticalFovRadians{1.22173048F};
     f32 nearPlaneMeters{10.0F};
-    f32 farPlaneMeters{3'000'000.0F};
+    f32 farPlaneMeters{12'000'000.0F};
 
     f64 maximumDrawDistanceMeters{180'000.0};
     f64 surfaceOffsetMeters{0.08};
