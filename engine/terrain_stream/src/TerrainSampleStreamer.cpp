@@ -3,9 +3,19 @@
 #include <orbit/math/Vector.hpp>
 
 #include <stdexcept>
+#include <utility>
 
 namespace orbit::terrain_stream
 {
+namespace detail
+{
+struct TerrainSampleBatchState
+{
+    std::vector<TerrainSampleRequest> requests;
+    std::vector<TerrainSampleResult> results;
+};
+} // namespace detail
+
 namespace
 {
 [[nodiscard]] u32 WrapIndex(
@@ -76,6 +86,24 @@ void ValidateRequest(
 }
 } // namespace
 
+TerrainSampleBatch::TerrainSampleBatch() = default;
+TerrainSampleBatch::~TerrainSampleBatch() = default;
+TerrainSampleBatch::TerrainSampleBatch(
+    TerrainSampleBatch&&) noexcept = default;
+TerrainSampleBatch&
+TerrainSampleBatch::operator=(
+    TerrainSampleBatch&&) noexcept = default;
+
+bool TerrainSampleBatch::IsComplete() const noexcept
+{
+    return group_.IsComplete();
+}
+
+bool TerrainSampleBatch::IsValid() const noexcept
+{
+    return state_ != nullptr;
+}
+
 TerrainSampleStreamer::TerrainSampleStreamer(
     jobs::JobSystem& jobSystem,
     const world::PlanetDefinition planet,
@@ -91,27 +119,37 @@ TerrainSampleStreamer::TerrainSampleStreamer(
     }
 }
 
-std::vector<TerrainSampleResult>
-TerrainSampleStreamer::GenerateBlocking(
+TerrainSampleBatch TerrainSampleStreamer::Submit(
     const std::span<
         const TerrainSampleRequest> requests)
 {
-    std::vector<TerrainSampleResult> results(
+    TerrainSampleBatch batch;
+
+    batch.state_ =
+        std::make_shared<
+            detail::TerrainSampleBatchState>();
+
+    batch.state_->requests.assign(
+        requests.begin(),
+        requests.end());
+
+    batch.state_->results.resize(
         requests.size());
 
-    std::size_t taskCount = 0;
-
     for (std::size_t requestIndex = 0;
-         requestIndex < requests.size();
+         requestIndex <
+            batch.state_->requests.size();
          ++requestIndex)
     {
         const TerrainSampleRequest& request =
-            requests[requestIndex];
+            batch.state_->requests[
+                requestIndex];
 
         ValidateRequest(request);
 
         TerrainSampleResult& result =
-            results[requestIndex];
+            batch.state_->results[
+                requestIndex];
 
         result.levelIndex =
             request.levelIndex;
@@ -128,79 +166,103 @@ TerrainSampleStreamer::GenerateBlocking(
                 static_cast<u64>(
                     region.height);
         }
-
-        taskCount +=
-            request.regions.size();
     }
 
-    if (taskCount == 0)
-    {
-        return results;
-    }
-
-    if (taskCount == 1)
-    {
-        for (std::size_t requestIndex = 0;
-             requestIndex < requests.size();
-             ++requestIndex)
-        {
-            const TerrainSampleRequest& request =
-                requests[requestIndex];
-
-            TerrainSampleResult& result =
-                results[requestIndex];
-
-            for (std::size_t regionIndex = 0;
-                 regionIndex <
-                    request.regions.size();
-                 ++regionIndex)
-            {
-                result.patches[regionIndex] =
-                    GeneratePatch(
-                        request,
-                        request.regions[
-                            regionIndex]);
-            }
-        }
-
-        return results;
-    }
-
-    jobs::JobGroup group;
+    const auto state =
+        batch.state_;
 
     for (std::size_t requestIndex = 0;
-         requestIndex < requests.size();
+         requestIndex <
+            state->requests.size();
          ++requestIndex)
     {
-        const TerrainSampleRequest* request =
-            &requests[requestIndex];
-
-        TerrainSampleResult* result =
-            &results[requestIndex];
+        const TerrainSampleRequest& request =
+            state->requests[
+                requestIndex];
 
         for (std::size_t regionIndex = 0;
              regionIndex <
-                request->regions.size();
+                request.regions.size();
              ++regionIndex)
         {
             jobSystem_.Submit(
-                group,
+                batch.group_,
                 [this,
-                 request,
-                 result,
+                 state,
+                 requestIndex,
                  regionIndex]
                 {
-                    result->patches[regionIndex] =
-                        GeneratePatch(
-                            *request,
-                            request->regions[
-                                regionIndex]);
+                    const TerrainSampleRequest&
+                        localRequest =
+                            state->requests[
+                                requestIndex];
+
+                    state->results[
+                        requestIndex].
+                        patches[
+                            regionIndex] =
+                                GeneratePatch(
+                                    localRequest,
+                                    localRequest.
+                                        regions[
+                                            regionIndex]);
                 });
         }
     }
 
-    jobSystem_.Wait(group);
+    return batch;
+}
+
+bool TerrainSampleStreamer::TryCollect(
+    TerrainSampleBatch& batch,
+    std::vector<TerrainSampleResult>& results)
+{
+    if (!batch.IsValid() ||
+        !batch.IsComplete())
+    {
+        return false;
+    }
+
+    jobSystem_.Wait(
+        batch.group_);
+
+    results =
+        std::move(
+            batch.state_->results);
+
+    batch.state_.reset();
+    return true;
+}
+
+std::vector<TerrainSampleResult>
+TerrainSampleStreamer::WaitCollect(
+    TerrainSampleBatch& batch)
+{
+    if (!batch.IsValid())
+    {
+        return {};
+    }
+
+    jobSystem_.Wait(
+        batch.group_);
+
+    std::vector<TerrainSampleResult> results =
+        std::move(
+            batch.state_->results);
+
+    batch.state_.reset();
     return results;
+}
+
+std::vector<TerrainSampleResult>
+TerrainSampleStreamer::GenerateBlocking(
+    const std::span<
+        const TerrainSampleRequest> requests)
+{
+    TerrainSampleBatch batch =
+        Submit(requests);
+
+    return WaitCollect(batch);
 }
 
 TerrainSamplePatch

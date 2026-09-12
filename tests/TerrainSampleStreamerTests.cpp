@@ -173,5 +173,64 @@ int main()
         }
     }
 
+    auto submitted =
+        streamer.Submit(
+            requests);
+
+    if (!submitted.IsValid())
+    {
+        std::cerr
+            << "Terrain sample async batch is unexpectedly invalid.\n";
+        return 1;
+    }
+
+    auto movedBatch =
+        std::move(submitted);
+
+    if (submitted.IsValid())
+    {
+        std::cerr
+            << "Moved-from terrain sample batch still owns state.\n";
+        return 1;
+    }
+
+    jobs.WaitIdle();
+
+    if (!movedBatch.IsComplete())
+    {
+        std::cerr
+            << "Terrain sample async batch did not report completion.\n";
+        return 1;
+    }
+
+    std::vector<
+        orbit::terrain_stream::TerrainSampleResult>
+        asyncResults;
+
+    if (!streamer.TryCollect(
+            movedBatch,
+            asyncResults))
+    {
+        std::cerr
+            << "Terrain sample async results could not be collected.\n";
+        return 1;
+    }
+
+    if (movedBatch.IsValid())
+    {
+        std::cerr
+            << "Collected terrain sample batch still owns result state.\n";
+        return 1;
+    }
+
+    if (asyncResults.size() != 2 ||
+        asyncResults[0].sampleCount != 36 ||
+        asyncResults[1].sampleCount != 9)
+    {
+        std::cerr
+            << "Terrain sample async results do not match blocking results.\n";
+        return 1;
+    }
+
     return 0;
 }

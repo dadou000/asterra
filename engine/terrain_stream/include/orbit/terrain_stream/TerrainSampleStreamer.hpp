@@ -6,6 +6,7 @@
 #include <orbit/terrain_stream/ToroidalResidency.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -36,6 +37,39 @@ struct TerrainSampleResult
     u64 sampleCount{0};
 };
 
+namespace detail
+{
+struct TerrainSampleBatchState;
+}
+
+class TerrainSampleBatch
+{
+public:
+    TerrainSampleBatch();
+    ~TerrainSampleBatch();
+
+    TerrainSampleBatch(
+        const TerrainSampleBatch&) = delete;
+    TerrainSampleBatch& operator=(
+        const TerrainSampleBatch&) = delete;
+
+    TerrainSampleBatch(
+        TerrainSampleBatch&&) noexcept;
+    TerrainSampleBatch& operator=(
+        TerrainSampleBatch&&) noexcept;
+
+    [[nodiscard]] bool IsComplete() const noexcept;
+    [[nodiscard]] bool IsValid() const noexcept;
+
+private:
+    jobs::JobGroup group_;
+    std::shared_ptr<
+        detail::TerrainSampleBatchState>
+        state_;
+
+    friend class TerrainSampleStreamer;
+};
+
 class TerrainSampleStreamer
 {
 public:
@@ -44,9 +78,22 @@ public:
         world::PlanetDefinition planet,
         const terrain::TerrainSource& terrainSource);
 
+    [[nodiscard]] TerrainSampleBatch Submit(
+        std::span<
+            const TerrainSampleRequest> requests);
+
+    [[nodiscard]] bool TryCollect(
+        TerrainSampleBatch& batch,
+        std::vector<TerrainSampleResult>& results);
+
+    [[nodiscard]] std::vector<TerrainSampleResult>
+    WaitCollect(
+        TerrainSampleBatch& batch);
+
     [[nodiscard]] std::vector<TerrainSampleResult>
     GenerateBlocking(
-        std::span<const TerrainSampleRequest> requests);
+        std::span<
+            const TerrainSampleRequest> requests);
 
 private:
     [[nodiscard]] TerrainSamplePatch GeneratePatch(
