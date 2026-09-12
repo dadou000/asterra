@@ -1,5 +1,7 @@
 #include <orbit/camera/FreeCamera.hpp>
+#include <orbit/core/BuildInfo.hpp>
 #include <orbit/core/Log.hpp>
+#include <orbit/debug_render/VersionOverlayRenderer.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/platform/CrashHandler.hpp>
@@ -43,7 +45,10 @@ int main()
                 "Orbit crash handler could not be installed.");
         }
 
-        orbit::log::Info("Orbit M0 boot.");
+        orbit::log::Info(
+            std::format(
+                "Orbit M0 boot | {}",
+                orbit::build::DisplayVersion));
 
         auto window = orbit::platform::MakeWindow({
             .title = "Orbit - Asterra Engine",
@@ -318,6 +323,12 @@ int main()
         const orbit::shader::d3d::D3DShaderCompiler
             shaderCompiler;
 
+        orbit::debug_render::VersionOverlayRenderer
+            versionOverlay(
+                *device,
+                shaderCompiler,
+                orbit::build::DisplayVersion);
+
         orbit::terrain_render::TerrainPreviewConfig
             terrainPreviewConfig{};
 
@@ -578,6 +589,12 @@ int main()
                 swapchain->Width(),
                 swapchain->Height(),
                 camera);
+
+            versionOverlay.Draw(
+                *commandList,
+                backBuffer,
+                swapchain->Width(),
+                swapchain->Height());
 
             commandList->Transition(
                 backBuffer,

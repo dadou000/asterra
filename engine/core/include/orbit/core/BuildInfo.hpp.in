@@ -1,0 +1,15 @@
+#pragma once
+
+#include <string_view>
+
+namespace orbit::build
+{
+inline constexpr std::string_view Version =
+    "@PROJECT_VERSION@";
+
+inline constexpr std::string_view GitCommit =
+    "@ORBIT_GIT_SHA@";
+
+inline constexpr std::string_view DisplayVersion =
+    "ORBIT @PROJECT_VERSION@ @ORBIT_GIT_SHA@";
+} // namespace orbit::build
