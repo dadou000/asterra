@@ -292,6 +292,7 @@ struct VSOutput
     float4 biome1 : TEXCOORD2;
     float3 terrainNormal : TEXCOORD3;
     float3 surfaceDirection : TEXCOORD4;
+    float horizonClip : SV_ClipDistance0;
 };
 
 float4 UnpackUnorm4x8(uint packed)
@@ -660,6 +661,23 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.surfaceDirection =
         surfaceDirection;
 
+    const float horizonCosine =
+        saturate(
+            planetRadius /
+            observerRadius);
+
+    const float positiveReliefPadding =
+        max(
+            elevation,
+            0.0) /
+        planetRadius;
+
+    output.horizonClip =
+        surfaceDirection.y -
+        horizonCosine +
+        0.0025 +
+        positiveReliefPadding;
+
     return output;
 }
 )";
@@ -673,6 +691,7 @@ struct VSOutput
     float4 biome1 : TEXCOORD2;
     float3 terrainNormal : TEXCOORD3;
     float3 surfaceDirection : TEXCOORD4;
+    float horizonClip : SV_ClipDistance0;
 };
 
 float4 main(VSOutput input) : SV_Target0
