@@ -1,4 +1,5 @@
 #include <orbit/terrain_hydrology/HydrologyGrid.hpp>
+#include <orbit/terrain_hydrology/RiverGraph.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -106,6 +107,65 @@ int main()
     {
         std::cerr
             << "Hydrology river extraction did not isolate the basin outlet.\n";
+        return 1;
+    }
+
+    const auto graph =
+        orbit::terrain_hydrology::
+            BuildRiverGraph(
+                grid,
+                3.0);
+
+    if (graph.nodes.empty() ||
+        graph.segments.empty())
+    {
+        std::cerr
+            << "Hydrology river graph is unexpectedly empty.\n";
+        return 1;
+    }
+
+    bool reachesCenter = false;
+
+    for (const auto& segment :
+         graph.segments)
+    {
+        if (segment.upstreamNode >=
+                graph.nodes.size() ||
+            segment.downstreamNode >=
+                graph.nodes.size())
+        {
+            std::cerr
+                << "River graph contains an invalid node reference.\n";
+            return 1;
+        }
+
+        const auto& upstream =
+            graph.nodes[
+                segment.upstreamNode];
+
+        const auto& downstream =
+            graph.nodes[
+                segment.downstreamNode];
+
+        if (downstream.elevationMeters >
+            upstream.elevationMeters)
+        {
+            std::cerr
+                << "River graph contains an uphill segment.\n";
+            return 1;
+        }
+
+        if (downstream.sourceCellIndex ==
+            2U + 2U * 5U)
+        {
+            reachesCenter = true;
+        }
+    }
+
+    if (!reachesCenter)
+    {
+        std::cerr
+            << "River graph does not connect drainage into the basin outlet.\n";
         return 1;
     }
 

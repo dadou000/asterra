@@ -1,5 +1,6 @@
 add_library(OrbitTerrainHydrology STATIC
     src/HydrologyGrid.cpp
+    src/RiverGraph.cpp
 )
 
 add_library(Orbit::TerrainHydrology ALIAS OrbitTerrainHydrology)
