@@ -25,3 +25,7 @@ compile_commands.json
 *.tmp
 *.log
 *.FCBak
+
+# Runtime diagnostics
+/logs/
+*.dmp

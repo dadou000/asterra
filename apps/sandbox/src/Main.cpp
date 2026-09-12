@@ -1,6 +1,7 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/platform/CrashHandler.hpp>
 #include <orbit/platform/Window.hpp>
 #include <orbit/rhi/d3d12/D3D12Backend.hpp>
 #include <orbit/shader/d3d/D3DShaderCompiler.hpp>
@@ -19,8 +20,20 @@
 
 int main()
 {
+    const bool crashHandlerInstalled =
+        orbit::platform::InstallCrashHandler({
+            .applicationName = "OrbitSandbox",
+            .writeMiniDump = true
+        });
+
     try
     {
+        if (!crashHandlerInstalled)
+        {
+            orbit::log::Warning(
+                "Orbit crash handler could not be installed.");
+        }
+
         orbit::log::Info("Orbit M0 boot.");
 
         auto window = orbit::platform::MakeWindow({
