@@ -53,6 +53,28 @@ private:
     ComPtr<ID3D12CommandQueue> nativeQueue_;
 };
 
+class D3D12Buffer final : public Buffer
+{
+public:
+    D3D12Buffer(
+        ComPtr<ID3D12Resource> nativeResource,
+        BufferDesc desc);
+
+    [[nodiscard]] u64 SizeBytes() const noexcept override;
+    [[nodiscard]] BufferUsage Usage() const noexcept override;
+    [[nodiscard]] MemoryUsage Memory() const noexcept override;
+
+    [[nodiscard]] std::byte* Map() override;
+    void Unmap() override;
+
+    [[nodiscard]] ID3D12Resource* Native() const noexcept;
+
+private:
+    ComPtr<ID3D12Resource> nativeResource_;
+    BufferDesc desc_{};
+    bool mapped_{false};
+};
+
 class D3D12Texture final : public Texture
 {
 public:
@@ -162,6 +184,8 @@ public:
         QueueType type) override;
     [[nodiscard]] std::unique_ptr<CommandList> CreateCommandList(
         CommandAllocator& allocator) override;
+    [[nodiscard]] std::unique_ptr<Buffer> CreateBuffer(
+        const BufferDesc& desc) override;
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) override;

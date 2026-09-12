@@ -9,6 +9,8 @@ D3D12_RESOURCE_STATES ToNativeResourceState(const ResourceState state)
 {
     switch (state)
     {
+    case ResourceState::Common:
+        return D3D12_RESOURCE_STATE_COMMON;
     case ResourceState::Present:
         return D3D12_RESOURCE_STATE_PRESENT;
     case ResourceState::RenderTarget:
@@ -17,6 +19,10 @@ D3D12_RESOURCE_STATES ToNativeResourceState(const ResourceState state)
         return D3D12_RESOURCE_STATE_DEPTH_WRITE;
     case ResourceState::DepthRead:
         return D3D12_RESOURCE_STATE_DEPTH_READ;
+    case ResourceState::VertexOrConstantBuffer:
+        return D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+    case ResourceState::IndexBuffer:
+        return D3D12_RESOURCE_STATE_INDEX_BUFFER;
     case ResourceState::ShaderResource:
         return D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
     case ResourceState::UnorderedAccess:

@@ -45,6 +45,10 @@ public:
         QueueType type) = 0;
     [[nodiscard]] virtual std::unique_ptr<CommandList> CreateCommandList(
         CommandAllocator& allocator) = 0;
+
+    [[nodiscard]] virtual std::unique_ptr<Buffer> CreateBuffer(
+        const BufferDesc& desc) = 0;
+
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) = 0;
