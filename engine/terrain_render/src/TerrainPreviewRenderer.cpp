@@ -578,7 +578,8 @@ public:
         rhi::CommandList& commandList,
         const u32 frameIndex,
         const u32 targetWidth,
-        const u32 targetHeight)
+        const u32 targetHeight,
+        const TerrainPreviewCamera& camera)
     {
         ServiceStreaming();
 
@@ -604,11 +605,50 @@ public:
             static_cast<f32>(
                 targetHeight);
 
+        math::Float3 cameraForward =
+            math::Normalize(
+                camera.forward);
+
+        if (math::LengthSquared(
+                cameraForward) <=
+            1.0e-8F)
+        {
+            cameraForward = {
+                0.0F,
+                -0.28F,
+                1.0F
+            };
+
+            cameraForward =
+                math::Normalize(
+                    cameraForward);
+        }
+
+        math::Float3 cameraUp =
+            math::Normalize(
+                camera.up);
+
+        if (math::LengthSquared(
+                cameraUp) <=
+            1.0e-8F ||
+            math::LengthSquared(
+                math::Cross(
+                    cameraUp,
+                    cameraForward)) <=
+                1.0e-8F)
+        {
+            cameraUp = {
+                0.0F,
+                1.0F,
+                0.0F
+            };
+        }
+
         const math::Mat4 view =
             math::LookAtLH(
                 {0.0F, 0.0F, 0.0F},
-                {0.0F, -0.28F, 1.0F},
-                {0.0F, 1.0F, 0.0F});
+                cameraForward,
+                cameraUp);
 
         const math::Mat4 projection =
             math::PerspectiveLH(
@@ -1738,13 +1778,15 @@ void TerrainPreviewRenderer::Draw(
     rhi::CommandList& commandList,
     const u32 frameIndex,
     const u32 targetWidth,
-    const u32 targetHeight)
+    const u32 targetHeight,
+    const TerrainPreviewCamera& camera)
 {
     impl_->Draw(
         commandList,
         frameIndex,
         targetWidth,
-        targetHeight);
+        targetHeight,
+        camera);
 }
 
 u32 TerrainPreviewRenderer::

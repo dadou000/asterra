@@ -19,6 +19,12 @@ enum class Key : u8
     Escape
 };
 
+struct MouseDelta
+{
+    i32 x{0};
+    i32 y{0};
+};
+
 struct WindowDesc
 {
     std::string_view title{"Orbit"};
@@ -38,6 +44,13 @@ public:
 
     [[nodiscard]] virtual bool KeyDown(
         Key key) const = 0;
+
+    virtual void SetRelativeMouseMode(
+        bool enabled) = 0;
+
+    [[nodiscard]] virtual bool RelativeMouseMode() const noexcept = 0;
+
+    [[nodiscard]] virtual MouseDelta ConsumeMouseDelta() = 0;
 
     [[nodiscard]] virtual void* NativeHandle() const = 0;
     [[nodiscard]] virtual u32 Width() const = 0;

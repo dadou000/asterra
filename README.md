@@ -50,4 +50,18 @@ cmake --build build --config Debug
 
 You can still launch `OrbitSandbox.exe` directly while developing; its crash handler falls back to a local `logs` directory when it is not started by the launcher.
 
+
+
+### Sandbox camera controls
+
+The terrain sandbox uses a free camera:
+
+- `W/A/S/D` — move relative to camera heading
+- Mouse — yaw/pitch look
+- `Q/E` — move down/up
+- `Left Shift` — movement boost
+- `Esc` — quit
+
+Mouse capture is released automatically when the window loses focus.
+
 Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) before adding engine systems.

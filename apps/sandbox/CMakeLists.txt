@@ -4,6 +4,7 @@ add_executable(OrbitSandbox
 
 target_link_libraries(OrbitSandbox
     PRIVATE
+        Orbit::Camera
         Orbit::Core
         Orbit::Jobs
         Orbit::Math

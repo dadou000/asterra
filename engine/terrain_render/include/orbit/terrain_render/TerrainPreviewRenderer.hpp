@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/math/Vector.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -29,6 +30,12 @@ struct TerrainStreamingStats
     u64 committedBatches{0};
     u64 supersededBatches{0};
     bool updatePending{false};
+};
+
+struct TerrainPreviewCamera
+{
+    math::Float3 forward{0.0F, -0.28F, 1.0F};
+    math::Float3 up{0.0F, 1.0F, 0.0F};
 };
 
 struct TerrainPreviewConfig
@@ -77,7 +84,8 @@ public:
         rhi::CommandList& commandList,
         u32 frameIndex,
         u32 targetWidth,
-        u32 targetHeight);
+        u32 targetHeight,
+        const TerrainPreviewCamera& camera);
 
     [[nodiscard]] u32 VertexCount() const noexcept;
     [[nodiscard]] u32 IndexCount() const noexcept;

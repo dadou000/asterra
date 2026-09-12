@@ -1,3 +1,4 @@
+#include <orbit/camera/FreeCamera.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
@@ -41,6 +42,11 @@ int main()
             .width = 1600,
             .height = 900
         });
+
+        window->SetRelativeMouseMode(true);
+
+        orbit::log::Info(
+            "Camera controls: WASD move, mouse look, Q/E down/up, Shift boost, Esc quit.");
 
 #if defined(NDEBUG)
         constexpr bool enableValidation = false;
@@ -200,6 +206,9 @@ int main()
         auto previousStatsTime =
             previousFrameTime;
 
+        orbit::camera::FreeCamera
+            freeCamera;
+
         while (window->PumpEvents())
         {
             const auto currentFrameTime =
@@ -224,75 +233,75 @@ int main()
                 break;
             }
 
-            orbit::f64 eastInput = 0.0;
-            orbit::f64 northInput = 0.0;
-            orbit::f64 altitudeInput = 0.0;
+            const orbit::platform::MouseDelta
+                mouseDelta =
+                    window->ConsumeMouseDelta();
+
+            orbit::f64 moveRight = 0.0;
+            orbit::f64 moveForward = 0.0;
+            orbit::f64 moveUp = 0.0;
 
             if (window->KeyDown(
                     orbit::platform::Key::D))
             {
-                eastInput += 1.0;
+                moveRight += 1.0;
             }
 
             if (window->KeyDown(
                     orbit::platform::Key::A))
             {
-                eastInput -= 1.0;
+                moveRight -= 1.0;
             }
 
             if (window->KeyDown(
                     orbit::platform::Key::W))
             {
-                northInput += 1.0;
+                moveForward += 1.0;
             }
 
             if (window->KeyDown(
                     orbit::platform::Key::S))
             {
-                northInput -= 1.0;
+                moveForward -= 1.0;
             }
 
             if (window->KeyDown(
                     orbit::platform::Key::E))
             {
-                altitudeInput += 1.0;
+                moveUp += 1.0;
             }
 
             if (window->KeyDown(
                     orbit::platform::Key::Q))
             {
-                altitudeInput -= 1.0;
+                moveUp -= 1.0;
             }
 
-            const orbit::f64 planarLength =
-                std::sqrt(
-                    eastInput * eastInput +
-                    northInput * northInput);
-
-            if (planarLength > 1.0)
-            {
-                eastInput /= planarLength;
-                northInput /= planarLength;
-            }
-
-            const bool accelerated =
-                window->KeyDown(
-                    orbit::platform::Key::LeftShift);
-
-            const orbit::f64 surfaceSpeed =
-                accelerated
-                    ? 4'000.0
-                    : 400.0;
-
-            const orbit::f64 verticalSpeed =
-                accelerated
-                    ? 2'000.0
-                    : 200.0;
+            const orbit::camera::FreeCameraUpdate
+                cameraUpdate =
+                    freeCamera.Update({
+                        .deltaSeconds =
+                            deltaSeconds,
+                        .mouseDeltaX =
+                            static_cast<orbit::f64>(
+                                mouseDelta.x),
+                        .mouseDeltaY =
+                            static_cast<orbit::f64>(
+                                mouseDelta.y),
+                        .moveRight =
+                            moveRight,
+                        .moveForward =
+                            moveForward,
+                        .moveUp =
+                            moveUp,
+                        .boost =
+                            window->KeyDown(
+                                orbit::platform::
+                                    Key::LeftShift)
+                    });
 
             const bool moved =
-                eastInput != 0.0 ||
-                northInput != 0.0 ||
-                altitudeInput != 0.0;
+                cameraUpdate.moved;
 
             if (moved)
             {
@@ -304,22 +313,20 @@ int main()
                     orbit::math::Normalize(
                         observer.meters);
 
-                if (eastInput != 0.0 ||
-                    northInput != 0.0)
+                if (cameraUpdate.
+                        tangentMotionMeters.x !=
+                        0.0 ||
+                    cameraUpdate.
+                        tangentMotionMeters.y !=
+                        0.0)
                 {
                     observerTravelFrame =
                         orbit::world::
                             SurfaceFrameAtOffset(
                                 planet,
                                 observerTravelFrame,
-                                {
-                                    eastInput *
-                                        surfaceSpeed *
-                                        deltaSeconds,
-                                    northInput *
-                                        surfaceSpeed *
-                                        deltaSeconds
-                                });
+                                cameraUpdate.
+                                    tangentMotionMeters);
 
                     direction =
                         observerTravelFrame.up;
@@ -329,9 +336,8 @@ int main()
                     std::clamp(
                         radius -
                             planet.radiusMeters +
-                            altitudeInput *
-                                verticalSpeed *
-                                deltaSeconds,
+                            cameraUpdate.
+                                verticalMotionMeters,
                         250.0,
                         100'000.0);
 
@@ -343,6 +349,14 @@ int main()
                 terrainPreview.UpdateObserver(
                     observer);
             }
+
+            const orbit::terrain_render::
+                TerrainPreviewCamera camera{
+                    .forward =
+                        cameraUpdate.forward,
+                    .up =
+                        cameraUpdate.up
+                };
 
             const orbit::u32 frameIndex =
                 swapchain->CurrentBackBufferIndex();
@@ -390,7 +404,8 @@ int main()
                 *commandList,
                 frameIndex,
                 swapchain->Width(),
-                swapchain->Height());
+                swapchain->Height(),
+                camera);
 
             commandList->Transition(
                 backBuffer,

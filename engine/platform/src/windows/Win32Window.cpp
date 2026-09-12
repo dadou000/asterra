@@ -163,6 +163,8 @@ public:
 
     ~Win32Window() override
     {
+        SetRelativeMouseMode(false);
+
         if (hwnd_ != nullptr &&
             IsWindow(hwnd_) != FALSE)
         {
@@ -194,6 +196,7 @@ public:
                 &message);
         }
 
+        UpdateRelativeMouseCapture();
         return true;
     }
 
@@ -210,6 +213,80 @@ public:
             GetAsyncKeyState(
                 ToVirtualKey(key)) &
             0x8000) != 0;
+    }
+
+    void SetRelativeMouseMode(
+        const bool enabled) override
+    {
+        relativeMouseMode_ =
+            enabled;
+
+        UpdateRelativeMouseCapture();
+    }
+
+    [[nodiscard]] bool
+    RelativeMouseMode() const noexcept override
+    {
+        return relativeMouseMode_;
+    }
+
+    [[nodiscard]] MouseDelta
+    ConsumeMouseDelta() override
+    {
+        UpdateRelativeMouseCapture();
+
+        if (!relativeMouseCaptured_)
+        {
+            return {};
+        }
+
+        RECT clientRect{};
+
+        if (GetClientRect(
+                hwnd_,
+                &clientRect) == FALSE)
+        {
+            return {};
+        }
+
+        POINT center{
+            (clientRect.right -
+             clientRect.left) /
+                2,
+            (clientRect.bottom -
+             clientRect.top) /
+                2
+        };
+
+        if (ClientToScreen(
+                hwnd_,
+                &center) == FALSE)
+        {
+            return {};
+        }
+
+        POINT cursor{};
+
+        if (GetCursorPos(
+                &cursor) == FALSE)
+        {
+            return {};
+        }
+
+        const MouseDelta delta{
+            .x =
+                static_cast<i32>(
+                    cursor.x -
+                    center.x),
+            .y =
+                static_cast<i32>(
+                    cursor.y -
+                    center.y)
+        };
+
+        CenterAndClipCursor();
+
+        return delta;
     }
 
     [[nodiscard]] void*
@@ -231,9 +308,113 @@ public:
     }
 
 private:
+    void UpdateRelativeMouseCapture()
+    {
+        const bool shouldCapture =
+            relativeMouseMode_ &&
+            hwnd_ != nullptr &&
+            IsWindow(hwnd_) != FALSE &&
+            GetForegroundWindow() ==
+                hwnd_;
+
+        if (shouldCapture ==
+            relativeMouseCaptured_)
+        {
+            return;
+        }
+
+        relativeMouseCaptured_ =
+            shouldCapture;
+
+        if (relativeMouseCaptured_)
+        {
+            while (ShowCursor(FALSE) >= 0)
+            {
+            }
+
+            CenterAndClipCursor();
+        }
+        else
+        {
+            ClipCursor(nullptr);
+
+            while (ShowCursor(TRUE) < 0)
+            {
+            }
+        }
+    }
+
+    void CenterAndClipCursor()
+    {
+        if (hwnd_ == nullptr ||
+            IsWindow(hwnd_) == FALSE)
+        {
+            return;
+        }
+
+        RECT clientRect{};
+
+        if (GetClientRect(
+                hwnd_,
+                &clientRect) == FALSE)
+        {
+            return;
+        }
+
+        POINT topLeft{
+            clientRect.left,
+            clientRect.top
+        };
+
+        POINT bottomRight{
+            clientRect.right,
+            clientRect.bottom
+        };
+
+        if (ClientToScreen(
+                hwnd_,
+                &topLeft) == FALSE ||
+            ClientToScreen(
+                hwnd_,
+                &bottomRight) == FALSE)
+        {
+            return;
+        }
+
+        const RECT clipRect{
+            topLeft.x,
+            topLeft.y,
+            bottomRight.x,
+            bottomRight.y
+        };
+
+        static_cast<void>(
+            ClipCursor(
+                &clipRect));
+
+        const int centerX =
+            topLeft.x +
+            (bottomRight.x -
+             topLeft.x) /
+                2;
+
+        const int centerY =
+            topLeft.y +
+            (bottomRight.y -
+             topLeft.y) /
+                2;
+
+        static_cast<void>(
+            SetCursorPos(
+                centerX,
+                centerY));
+    }
+
     HWND hwnd_{nullptr};
     u32 width_{};
     u32 height_{};
+    bool relativeMouseMode_{false};
+    bool relativeMouseCaptured_{false};
 };
 } // namespace
 

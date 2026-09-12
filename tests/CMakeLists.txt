@@ -135,3 +135,21 @@ add_test(
     NAME Orbit.TerrainSampleStreamer
     COMMAND OrbitTerrainSampleStreamerTests
 )
+
+
+add_executable(OrbitCameraTests
+    CameraTests.cpp
+)
+
+target_link_libraries(OrbitCameraTests
+    PRIVATE
+        Orbit::Camera
+)
+
+target_compile_features(OrbitCameraTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitCameraTests)
+
+add_test(
+    NAME Orbit.Camera
+    COMMAND OrbitCameraTests
+)
