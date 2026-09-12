@@ -1,5 +1,6 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain_view/ClipmapLayout.hpp>
+#include <orbit/terrain_view/ClipmapTracker.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <algorithm>
@@ -48,15 +49,15 @@ int main()
 
     constexpr orbit::f64 eastOffset = 25'000.0;
 
-    const orbit::math::Double3 offsetDirection =
-        orbit::world::DirectionAtSurfaceOffset(
+    const orbit::world::SurfaceFrame movedFrame =
+        orbit::world::SurfaceFrameAtOffset(
             planet,
             frame,
             {eastOffset, 0.0});
 
     const orbit::f64 angularDistance = std::acos(
         std::clamp(
-            orbit::math::Dot(frame.up, offsetDirection),
+            orbit::math::Dot(frame.up, movedFrame.up),
             -1.0,
             1.0));
 
@@ -72,6 +73,19 @@ int main()
         return 1;
     }
 
+    const orbit::math::Double2 inverseOffset =
+        orbit::world::SurfaceOffsetBetweenDirections(
+            planet,
+            frame,
+            movedFrame.up);
+
+    if (!NearlyEqual(inverseOffset.x, eastOffset, 1.0e-6) ||
+        !NearlyEqual(inverseOffset.y, 0.0, 1.0e-6))
+    {
+        std::cerr << "Spherical log map did not invert surface motion.\n";
+        return 1;
+    }
+
     const orbit::world::WorldPosition observer{
         .meters = seamDirection * (planet.radiusMeters + 1'000.0)
     };
@@ -79,7 +93,7 @@ int main()
     const orbit::terrain_view::ClipmapConfig config{
         .levelCount = 8,
         .gridResolution = 129,
-        .baseSpacingMeters = 2.0,
+        .baseSpacingMeters = 100.0,
         .levelScale = 2.0,
         .overlapCells = 8
     };
@@ -158,6 +172,95 @@ int main()
                 return 1;
             }
         }
+    }
+
+    orbit::terrain_view::ClipmapTracker tracker(
+        planet,
+        config);
+
+    const auto initial = tracker.Update(observer);
+
+    for (const auto& level : initial.levels)
+    {
+        if (!level.fullRefresh ||
+            level.cellShiftX != 0 ||
+            level.cellShiftY != 0)
+        {
+            std::cerr << "Initial clipmap fill is invalid.\n";
+            return 1;
+        }
+    }
+
+    const orbit::world::SurfaceFrame startFrame =
+        initial.levels.front().surfaceFrame;
+
+    const auto makeObserver =
+        [&planet, &startFrame](const orbit::f64 eastMeters)
+        {
+            const orbit::math::Double3 direction =
+                orbit::world::DirectionAtSurfaceOffset(
+                    planet,
+                    startFrame,
+                    {eastMeters, 0.0});
+
+            return orbit::world::WorldPosition{
+                .meters =
+                    direction * (planet.radiusMeters + 1'000.0)
+            };
+        };
+
+    const auto subCell = tracker.Update(makeObserver(49.0));
+
+    if (subCell.levels.front().cellShiftX != 0 ||
+        subCell.levels.front().cellShiftY != 0)
+    {
+        std::cerr << "Sub-cell observer motion moved the clipmap.\n";
+        return 1;
+    }
+
+    const auto oneCell = tracker.Update(makeObserver(51.0));
+
+    if (oneCell.levels[0].cellShiftX != 1 ||
+        oneCell.levels[0].cellShiftY != 0 ||
+        oneCell.levels[0].fullRefresh)
+    {
+        std::cerr << "Fine clipmap did not snap by one cell.\n";
+        return 1;
+    }
+
+    if (oneCell.levels[1].cellShiftX != 0)
+    {
+        std::cerr << "Coarser clipmap moved too early.\n";
+        return 1;
+    }
+
+    const orbit::math::Double2 observerFromSnappedCenter =
+        orbit::world::SurfaceOffsetBetweenDirections(
+            planet,
+            oneCell.levels[0].surfaceFrame,
+            orbit::math::Normalize(makeObserver(51.0).meters));
+
+    if (std::abs(observerFromSnappedCenter.x) > 50.0 + 1.0e-6)
+    {
+        std::cerr << "Clipmap snap did not keep observer within half a cell.\n";
+        return 1;
+    }
+
+    const auto multiCell = tracker.Update(makeObserver(451.0));
+
+    if (std::abs(multiCell.levels[0].cellShiftX) < 3)
+    {
+        std::cerr << "Multi-cell clipmap jump was not detected.\n";
+        return 1;
+    }
+
+    tracker.Reset();
+    const auto reset = tracker.Update(observer);
+
+    if (!reset.levels.front().fullRefresh)
+    {
+        std::cerr << "Clipmap reset did not force a full refresh.\n";
+        return 1;
     }
 
     return 0;

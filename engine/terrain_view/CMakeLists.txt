@@ -1,5 +1,6 @@
 add_library(OrbitTerrainView STATIC
     src/ClipmapLayout.cpp
+    src/ClipmapTracker.cpp
 )
 
 add_library(Orbit::TerrainView ALIAS OrbitTerrainView)

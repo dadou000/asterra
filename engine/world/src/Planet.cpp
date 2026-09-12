@@ -33,6 +33,20 @@ namespace
     return static_cast<u32>(
         normalized * static_cast<f64>(tileCount));
 }
+
+[[nodiscard]] math::Double3 RotateAroundAxis(
+    const math::Double3& value,
+    const math::Double3& axis,
+    const f64 angle) noexcept
+{
+    const f64 cosine = std::cos(angle);
+    const f64 sine = std::sin(angle);
+
+    return
+        value * cosine +
+        math::Cross(axis, value) * sine +
+        axis * (math::Dot(axis, value) * (1.0 - cosine));
+}
 } // namespace
 
 math::Double3 CubeToUnitDirection(
@@ -258,6 +272,17 @@ math::Double3 DirectionAtSurfaceOffset(
     const SurfaceFrame& frame,
     const math::Double2& offsetMeters) noexcept
 {
+    return SurfaceFrameAtOffset(
+        planet,
+        frame,
+        offsetMeters).up;
+}
+
+SurfaceFrame SurfaceFrameAtOffset(
+    const PlanetDefinition& planet,
+    const SurfaceFrame& frame,
+    const math::Double2& offsetMeters) noexcept
+{
     const math::Double3 tangent =
         frame.east * offsetMeters.x +
         frame.north * offsetMeters.y;
@@ -267,14 +292,77 @@ math::Double3 DirectionAtSurfaceOffset(
     if (distance <= 0.0 ||
         planet.radiusMeters <= 0.0)
     {
-        return math::Normalize(frame.up);
+        return {
+            .east = math::Normalize(frame.east),
+            .north = math::Normalize(frame.north),
+            .up = math::Normalize(frame.up)
+        };
     }
 
     const f64 angle = distance / planet.radiusMeters;
     const math::Double3 tangentDirection = tangent / distance;
+    const math::Double3 axis =
+        math::Normalize(math::Cross(frame.up, tangentDirection));
 
-    return math::Normalize(
-        frame.up * std::cos(angle) +
-        tangentDirection * std::sin(angle));
+    const math::Double3 newUp =
+        math::Normalize(RotateAroundAxis(frame.up, axis, angle));
+
+    const math::Double3 newEast =
+        math::Normalize(RotateAroundAxis(frame.east, axis, angle));
+
+    const math::Double3 newNorth =
+        math::Normalize(RotateAroundAxis(frame.north, axis, angle));
+
+    return {
+        .east = newEast,
+        .north = newNorth,
+        .up = newUp
+    };
+}
+
+math::Double2 SurfaceOffsetBetweenDirections(
+    const PlanetDefinition& planet,
+    const SurfaceFrame& fromFrame,
+    const math::Double3& toDirection) noexcept
+{
+    if (planet.radiusMeters <= 0.0)
+    {
+        return {};
+    }
+
+    const math::Double3 from = math::Normalize(fromFrame.up);
+    const math::Double3 to = math::Normalize(toDirection);
+
+    const f64 cosine = std::clamp(
+        math::Dot(from, to),
+        -1.0,
+        1.0);
+
+    const f64 angle = std::acos(cosine);
+
+    if (angle <= 1.0e-15)
+    {
+        return {};
+    }
+
+    const math::Double3 tangent =
+        to - from * cosine;
+
+    const f64 tangentLength = math::Length(tangent);
+
+    if (tangentLength <= 1.0e-15)
+    {
+        return {};
+    }
+
+    const math::Double3 tangentDirection =
+        tangent / tangentLength;
+
+    const f64 distance = angle * planet.radiusMeters;
+
+    return {
+        math::Dot(tangentDirection, fromFrame.east) * distance,
+        math::Dot(tangentDirection, fromFrame.north) * distance
+    };
 }
 } // namespace orbit::world

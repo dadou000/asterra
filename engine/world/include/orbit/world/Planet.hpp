@@ -78,4 +78,14 @@ struct SurfaceFrame
     const PlanetDefinition& planet,
     const SurfaceFrame& frame,
     const math::Double2& offsetMeters) noexcept;
+
+[[nodiscard]] SurfaceFrame SurfaceFrameAtOffset(
+    const PlanetDefinition& planet,
+    const SurfaceFrame& frame,
+    const math::Double2& offsetMeters) noexcept;
+
+[[nodiscard]] math::Double2 SurfaceOffsetBetweenDirections(
+    const PlanetDefinition& planet,
+    const SurfaceFrame& fromFrame,
+    const math::Double3& toDirection) noexcept;
 } // namespace orbit::world
