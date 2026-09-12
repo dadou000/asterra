@@ -661,6 +661,7 @@ public:
         {
             stats_.uploadedBytesLastFrame +=
                 PrepareLevelFrame(
+                    commandList,
                     levelIndex,
                     frameIndex);
 
@@ -702,7 +703,7 @@ public:
                 SetGraphicsBuffer(
                     0,
                     *levels_[levelIndex].
-                        frameSampleBuffers[
+                        frameGpuSampleBuffers[
                             frameIndex]);
 
             if (levelIndex == 0)
@@ -821,7 +822,11 @@ private:
 
         std::vector<
             std::unique_ptr<rhi::Buffer>>
-            frameSampleBuffers;
+            frameGpuSampleBuffers;
+
+        std::vector<
+            std::unique_ptr<rhi::Buffer>>
+            frameUploadBuffers;
 
         std::vector<u64> frameSerials;
         std::deque<DirtyUpdate> dirtyUpdates;
@@ -931,7 +936,10 @@ private:
                 config_.framesInFlight,
                 0);
 
-            level.frameSampleBuffers.reserve(
+            level.frameGpuSampleBuffers.reserve(
+                config_.framesInFlight);
+
+            level.frameUploadBuffers.reserve(
                 config_.framesInFlight);
 
             for (u32 frameIndex = 0;
@@ -939,7 +947,21 @@ private:
                     config_.framesInFlight;
                  ++frameIndex)
             {
-                level.frameSampleBuffers.push_back(
+                level.frameGpuSampleBuffers.push_back(
+                    device_.CreateBuffer({
+                        .sizeBytes = bytes,
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                GpuOnly,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource
+                    }));
+
+                level.frameUploadBuffers.push_back(
                     device_.CreateBuffer({
                         .sizeBytes = bytes,
                         .usage =
@@ -950,7 +972,7 @@ private:
                                 HostVisible,
                         .initialState =
                             rhi::ResourceState::
-                                ShaderResource
+                                CopySource
                     }));
             }
         }
@@ -1437,6 +1459,7 @@ private:
     }
 
     [[nodiscard]] u64 PrepareLevelFrame(
+        rhi::CommandList& commandList,
         const u32 levelIndex,
         const u32 frameIndex)
     {
@@ -1453,12 +1476,16 @@ private:
             return 0;
         }
 
-        rhi::Buffer& buffer =
-            *state.frameSampleBuffers[
+        rhi::Buffer& gpuBuffer =
+            *state.frameGpuSampleBuffers[
+                frameIndex];
+
+        rhi::Buffer& uploadBuffer =
+            *state.frameUploadBuffers[
                 frameIndex];
 
         std::byte* mapped =
-            buffer.Map();
+            uploadBuffer.Map();
 
         auto* destination =
             reinterpret_cast<
@@ -1515,7 +1542,67 @@ private:
             }
         }
 
-        buffer.Unmap();
+        uploadBuffer.Unmap();
+
+        commandList.Transition(
+            gpuBuffer,
+            rhi::ResourceState::
+                ShaderResource,
+            rhi::ResourceState::
+                CopyDestination);
+
+        for (const DirtyUpdate& update :
+             state.dirtyUpdates)
+        {
+            if (update.serial <=
+                frameSerial)
+            {
+                continue;
+            }
+
+            for (const terrain_stream::
+                     PhysicalRegion& region :
+                 update.regions)
+            {
+                for (u32 row = 0;
+                     row < region.height;
+                     ++row)
+                {
+                    const u64 elementOffset =
+                        static_cast<u64>(
+                            region.y + row) *
+                            resolution +
+                        region.x;
+
+                    const u64 byteOffset =
+                        elementOffset *
+                        sizeof(
+                            terrain_stream::
+                                TerrainSampleValue);
+
+                    const u64 rowBytes =
+                        static_cast<u64>(
+                            region.width) *
+                        sizeof(
+                            terrain_stream::
+                                TerrainSampleValue);
+
+                    commandList.CopyBuffer(
+                        uploadBuffer,
+                        byteOffset,
+                        gpuBuffer,
+                        byteOffset,
+                        rowBytes);
+                }
+            }
+        }
+
+        commandList.Transition(
+            gpuBuffer,
+            rhi::ResourceState::
+                CopyDestination,
+            rhi::ResourceState::
+                ShaderResource);
 
         frameSerial =
             state.currentSerial;
