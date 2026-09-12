@@ -1,5 +1,6 @@
 add_library(OrbitTerrainErosion STATIC
     src/RiverCarving.cpp
+    src/RiverCarvedTerrainSource.cpp
 )
 
 add_library(Orbit::TerrainErosion ALIAS OrbitTerrainErosion)
@@ -13,7 +14,9 @@ target_link_libraries(OrbitTerrainErosion
     PUBLIC
         Orbit::Core
         Orbit::Math
+        Orbit::Terrain
         Orbit::TerrainHydrology
+        Orbit::World
 )
 
 target_compile_features(OrbitTerrainErosion PUBLIC cxx_std_23)

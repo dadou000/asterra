@@ -90,6 +90,36 @@ namespace
             t;
 }
 
+[[nodiscard]] u32 SpatialCoordinate(
+    const f64 coordinate,
+    const f64 halfExtent,
+    const f64 cellSize,
+    const u32 resolution) noexcept
+{
+    if (resolution == 0 ||
+        cellSize <= 0.0)
+    {
+        return 0;
+    }
+
+    const f64 normalized =
+        (coordinate +
+         halfExtent) /
+        cellSize;
+
+    const i64 raw =
+        static_cast<i64>(
+            std::floor(
+                normalized));
+
+    return static_cast<u32>(
+        std::clamp<i64>(
+            raw,
+            0,
+            static_cast<i64>(
+                resolution - 1U)));
+}
+
 void ValidateConfig(
     const RiverCarvingConfig& config)
 {
@@ -114,10 +144,344 @@ void ValidateConfig(
         config.minimumBedSlope <
             0.0 ||
         config.maximumIncisionMeters <=
-            0.0)
+            0.0 ||
+        config.spatialIndexResolution == 0)
     {
         throw std::invalid_argument(
             "Orbit river carving configuration is invalid.");
+    }
+}
+
+[[nodiscard]] RiverCarvingSample
+SampleSegment(
+    const RiverCarvingField& field,
+    const RiverCarvingSegment& segment,
+    const math::Double2& offsetMeters) noexcept
+{
+    if (segment.upstreamNode >=
+            field.nodes.size() ||
+        segment.downstreamNode >=
+            field.nodes.size())
+    {
+        return {};
+    }
+
+    const RiverCarvingNode& upstream =
+        field.nodes[
+            segment.upstreamNode];
+
+    const RiverCarvingNode& downstream =
+        field.nodes[
+            segment.downstreamNode];
+
+    const math::Double2 direction =
+        Subtract(
+            downstream.
+                offsetMeters,
+            upstream.
+                offsetMeters);
+
+    const f64 lengthSquared =
+        Dot(
+            direction,
+            direction);
+
+    if (lengthSquared <=
+        1.0e-12)
+    {
+        return {};
+    }
+
+    const math::Double2 fromUpstream =
+        Subtract(
+            offsetMeters,
+            upstream.
+                offsetMeters);
+
+    const f64 t =
+        Clamp01(
+            Dot(
+                fromUpstream,
+                direction) /
+            lengthSquared);
+
+    const math::Double2 nearest =
+        AddScaled(
+            upstream.
+                offsetMeters,
+            direction,
+            t);
+
+    const f64 distance =
+        Distance(
+            offsetMeters,
+            nearest);
+
+    const f64 channelHalfWidth =
+        Lerp(
+            upstream.
+                channelHalfWidthMeters,
+            downstream.
+                channelHalfWidthMeters,
+            t);
+
+    const f64 valleyHalfWidth =
+        Lerp(
+            upstream.
+                valleyHalfWidthMeters,
+            downstream.
+                valleyHalfWidthMeters,
+            t);
+
+    if (distance >
+        valleyHalfWidth)
+    {
+        return {};
+    }
+
+    const f64 bedElevation =
+        Lerp(
+            upstream.
+                bedElevationMeters,
+            downstream.
+                bedElevationMeters,
+            t);
+
+    const f64 sourceElevation =
+        Lerp(
+            upstream.
+                sourceElevationMeters,
+            downstream.
+                sourceElevationMeters,
+            t);
+
+    const f64 bankWidth =
+        std::max(
+            valleyHalfWidth -
+                channelHalfWidth,
+            1.0e-6);
+
+    const f64 bankT =
+        (distance -
+         channelHalfWidth) /
+        bankWidth;
+
+    const f64 bankBlend =
+        SmoothStep01(
+            bankT);
+
+    return {
+        .active = true,
+        .targetElevationMeters =
+            Lerp(
+                bedElevation,
+                sourceElevation,
+                bankBlend),
+        .distanceToCenterMeters =
+            distance,
+        .influence =
+            1.0 -
+            bankBlend,
+        .channelHalfWidthMeters =
+            channelHalfWidth,
+        .valleyHalfWidthMeters =
+            valleyHalfWidth
+    };
+}
+
+void BuildSpatialIndex(
+    RiverCarvingField& field,
+    const u32 resolution)
+{
+    field.spatialResolution =
+        resolution;
+
+    f64 maximumValleyHalfWidth =
+        0.0;
+
+    for (const RiverCarvingNode& node :
+         field.nodes)
+    {
+        maximumValleyHalfWidth =
+            std::max(
+                maximumValleyHalfWidth,
+                static_cast<f64>(
+                    node.
+                        valleyHalfWidthMeters));
+    }
+
+    field.spatialHalfExtentMeters =
+        field.halfExtentMeters +
+        maximumValleyHalfWidth;
+
+    field.spatialCellSizeMeters =
+        field.spatialHalfExtentMeters *
+        2.0 /
+        static_cast<f64>(
+            resolution);
+
+    const std::size_t cellCount =
+        static_cast<std::size_t>(
+            resolution) *
+        resolution;
+
+    std::vector<
+        std::vector<u32>>
+        cells(
+            cellCount);
+
+    for (u32 segmentIndex = 0;
+         segmentIndex <
+            static_cast<u32>(
+                field.segments.size());
+         ++segmentIndex)
+    {
+        const RiverCarvingSegment& segment =
+            field.segments[
+                segmentIndex];
+
+        if (segment.upstreamNode >=
+                field.nodes.size() ||
+            segment.downstreamNode >=
+                field.nodes.size())
+        {
+            continue;
+        }
+
+        const RiverCarvingNode& upstream =
+            field.nodes[
+                segment.upstreamNode];
+
+        const RiverCarvingNode& downstream =
+            field.nodes[
+                segment.downstreamNode];
+
+        const f64 envelope =
+            std::max(
+                static_cast<f64>(
+                    upstream.
+                        valleyHalfWidthMeters),
+                static_cast<f64>(
+                    downstream.
+                        valleyHalfWidthMeters));
+
+        const f64 minimumX =
+            std::min(
+                upstream.offsetMeters.x,
+                downstream.offsetMeters.x) -
+            envelope;
+
+        const f64 maximumX =
+            std::max(
+                upstream.offsetMeters.x,
+                downstream.offsetMeters.x) +
+            envelope;
+
+        const f64 minimumY =
+            std::min(
+                upstream.offsetMeters.y,
+                downstream.offsetMeters.y) -
+            envelope;
+
+        const f64 maximumY =
+            std::max(
+                upstream.offsetMeters.y,
+                downstream.offsetMeters.y) +
+            envelope;
+
+        const u32 minX =
+            SpatialCoordinate(
+                minimumX,
+                field.
+                    spatialHalfExtentMeters,
+                field.
+                    spatialCellSizeMeters,
+                resolution);
+
+        const u32 maxX =
+            SpatialCoordinate(
+                maximumX,
+                field.
+                    spatialHalfExtentMeters,
+                field.
+                    spatialCellSizeMeters,
+                resolution);
+
+        const u32 minY =
+            SpatialCoordinate(
+                minimumY,
+                field.
+                    spatialHalfExtentMeters,
+                field.
+                    spatialCellSizeMeters,
+                resolution);
+
+        const u32 maxY =
+            SpatialCoordinate(
+                maximumY,
+                field.
+                    spatialHalfExtentMeters,
+                field.
+                    spatialCellSizeMeters,
+                resolution);
+
+        for (u32 y = minY;
+             y <= maxY;
+             ++y)
+        {
+            for (u32 x = minX;
+                 x <= maxX;
+                 ++x)
+            {
+                cells[
+                    static_cast<std::size_t>(
+                        y) *
+                        resolution +
+                    x].
+                    push_back(
+                        segmentIndex);
+            }
+        }
+    }
+
+    field.spatialCellOffsets.resize(
+        cellCount + 1U);
+
+    std::size_t totalIndices = 0;
+
+    for (std::size_t cellIndex = 0;
+         cellIndex < cellCount;
+         ++cellIndex)
+    {
+        field.spatialCellOffsets[
+            cellIndex] =
+                static_cast<u32>(
+                    totalIndices);
+
+        totalIndices +=
+            cells[cellIndex].
+                size();
+    }
+
+    field.spatialCellOffsets[
+        cellCount] =
+            static_cast<u32>(
+                totalIndices);
+
+    field.spatialSegmentIndices.
+        reserve(
+            totalIndices);
+
+    for (const auto& cell :
+         cells)
+    {
+        field.spatialSegmentIndices.
+            insert(
+                field.
+                    spatialSegmentIndices.
+                    end(),
+                cell.begin(),
+                cell.end());
     }
 }
 } // namespace
@@ -346,6 +710,11 @@ RiverCarvingField BuildRiverCarvingField(
         }
     }
 
+    BuildSpatialIndex(
+        field,
+        config.
+            spatialIndexResolution);
+
     return field;
 }
 
@@ -354,151 +723,114 @@ RiverCarvingSample SampleRiverCarving(
     const math::Double2& offsetMeters) noexcept
 {
     RiverCarvingSample best{};
-
     f64 bestTargetElevation = 0.0;
 
-    for (const RiverCarvingSegment& segment :
-         field.segments)
+    if (field.spatialResolution == 0 ||
+        field.spatialCellSizeMeters <=
+            0.0 ||
+        field.spatialCellOffsets.size() !=
+            static_cast<std::size_t>(
+                field.
+                    spatialResolution) *
+                field.
+                    spatialResolution +
+            1U)
     {
-        if (segment.upstreamNode >=
-                field.nodes.size() ||
-            segment.downstreamNode >=
-                field.nodes.size())
+        return best;
+    }
+
+    if (std::abs(
+            offsetMeters.x) >
+            field.
+                spatialHalfExtentMeters ||
+        std::abs(
+            offsetMeters.y) >
+            field.
+                spatialHalfExtentMeters)
+    {
+        return best;
+    }
+
+    const u32 cellX =
+        SpatialCoordinate(
+            offsetMeters.x,
+            field.
+                spatialHalfExtentMeters,
+            field.
+                spatialCellSizeMeters,
+            field.
+                spatialResolution);
+
+    const u32 cellY =
+        SpatialCoordinate(
+            offsetMeters.y,
+            field.
+                spatialHalfExtentMeters,
+            field.
+                spatialCellSizeMeters,
+            field.
+                spatialResolution);
+
+    const std::size_t cellIndex =
+        static_cast<std::size_t>(
+            cellY) *
+            field.
+                spatialResolution +
+        cellX;
+
+    const u32 begin =
+        field.spatialCellOffsets[
+            cellIndex];
+
+    const u32 end =
+        field.spatialCellOffsets[
+            cellIndex + 1U];
+
+    if (begin > end ||
+        end >
+            field.
+                spatialSegmentIndices.
+                size())
+    {
+        return best;
+    }
+
+    for (u32 candidate = begin;
+         candidate < end;
+         ++candidate)
+    {
+        const u32 segmentIndex =
+            field.spatialSegmentIndices[
+                candidate];
+
+        if (segmentIndex >=
+            field.segments.size())
         {
             continue;
         }
 
-        const RiverCarvingNode& upstream =
-            field.nodes[
-                segment.upstreamNode];
+        const RiverCarvingSample sample =
+            SampleSegment(
+                field,
+                field.segments[
+                    segmentIndex],
+                offsetMeters);
 
-        const RiverCarvingNode& downstream =
-            field.nodes[
-                segment.downstreamNode];
-
-        const math::Double2 direction =
-            Subtract(
-                downstream.
-                    offsetMeters,
-                upstream.
-                    offsetMeters);
-
-        const f64 lengthSquared =
-            Dot(
-                direction,
-                direction);
-
-        if (lengthSquared <=
-            1.0e-12)
+        if (!sample.active)
         {
             continue;
         }
-
-        const math::Double2 fromUpstream =
-            Subtract(
-                offsetMeters,
-                upstream.
-                    offsetMeters);
-
-        const f64 t =
-            Clamp01(
-                Dot(
-                    fromUpstream,
-                    direction) /
-                lengthSquared);
-
-        const math::Double2 nearest =
-            AddScaled(
-                upstream.
-                    offsetMeters,
-                direction,
-                t);
-
-        const f64 distance =
-            Distance(
-                offsetMeters,
-                nearest);
-
-        const f64 channelHalfWidth =
-            Lerp(
-                upstream.
-                    channelHalfWidthMeters,
-                downstream.
-                    channelHalfWidthMeters,
-                t);
-
-        const f64 valleyHalfWidth =
-            Lerp(
-                upstream.
-                    valleyHalfWidthMeters,
-                downstream.
-                    valleyHalfWidthMeters,
-                t);
-
-        if (distance >
-            valleyHalfWidth)
-        {
-            continue;
-        }
-
-        const f64 bedElevation =
-            Lerp(
-                upstream.
-                    bedElevationMeters,
-                downstream.
-                    bedElevationMeters,
-                t);
-
-        const f64 sourceElevation =
-            Lerp(
-                upstream.
-                    sourceElevationMeters,
-                downstream.
-                    sourceElevationMeters,
-                t);
-
-        const f64 bankWidth =
-            std::max(
-                valleyHalfWidth -
-                    channelHalfWidth,
-                1.0e-6);
-
-        const f64 bankT =
-            (distance -
-             channelHalfWidth) /
-            bankWidth;
-
-        const f64 bankBlend =
-            SmoothStep01(
-                bankT);
-
-        const f64 targetElevation =
-            Lerp(
-                bedElevation,
-                sourceElevation,
-                bankBlend);
-
-        const f64 influence =
-            1.0 -
-            bankBlend;
 
         if (!best.active ||
-            targetElevation <
+            sample.
+                targetElevationMeters <
                 bestTargetElevation)
         {
-            best.active = true;
-
-            best.targetElevationMeters =
-                targetElevation;
-
-            best.distanceToCenterMeters =
-                distance;
-
-            best.influence =
-                influence;
+            best = sample;
 
             bestTargetElevation =
-                targetElevation;
+                sample.
+                    targetElevationMeters;
         }
     }
 

@@ -1,10 +1,38 @@
+#include <orbit/terrain_erosion/RiverCarvedTerrainSource.hpp>
 #include <orbit/terrain_erosion/RiverCarving.hpp>
+#include <orbit/world/Planet.hpp>
 
 #include <cmath>
 #include <iostream>
+#include <memory>
 
 namespace
 {
+class FlatTerrainSource final :
+    public orbit::terrain::TerrainSource
+{
+public:
+    [[nodiscard]] orbit::terrain::TerrainSample
+    Sample(
+        const orbit::terrain::TerrainQuery&)
+        const noexcept override
+    {
+        return {
+            .elevationMeters = 120.0,
+            .coarseElevationMeters = 120.0,
+            .climate = {
+                .temperatureC = 18.0F,
+                .humidity = 0.55F,
+                .precipitation = 0.55F,
+                .continentality = 0.45F
+            },
+            .biomes = {
+                .grassland = 1.0F
+            }
+        };
+    }
+};
+
 bool NearlyEqual(
     const orbit::f64 a,
     const orbit::f64 b,
@@ -27,6 +55,13 @@ int main()
     };
 
     hydrology.spacingMeters = 1'000.0;
+
+    hydrology.surfaceFrame =
+        orbit::world::MakeSurfaceFrame({
+            1.0,
+            0.0,
+            0.0
+        });
 
     orbit::terrain_hydrology::RiverGraph
         rivers{};
@@ -248,6 +283,58 @@ int main()
     {
         std::cerr
             << "River carving affected terrain outside the valley width.\n";
+        return 1;
+    }
+
+    const orbit::world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0
+    };
+
+    auto flatSource =
+        std::make_shared<
+            FlatTerrainSource>();
+
+    orbit::terrain_erosion::
+        RiverCarvedTerrainSource
+            carvedSource(
+                planet,
+                flatSource,
+                {field});
+
+    const auto carvedFine =
+        carvedSource.Sample({
+            .unitDirection =
+                hydrology.
+                    surfaceFrame.up,
+            .footprintMeters = 1.0
+        });
+
+    if (!(carvedFine.elevationMeters <
+          120.0) ||
+        carvedFine.biomes.wetland <=
+            0.0F)
+    {
+        std::cerr
+            << "River-carved terrain source did not apply fine-detail carving semantics.\n";
+        return 1;
+    }
+
+    const auto carvedCoarse =
+        carvedSource.Sample({
+            .unitDirection =
+                hydrology.
+                    surfaceFrame.up,
+            .footprintMeters =
+                1'000'000.0
+        });
+
+    if (!NearlyEqual(
+            carvedCoarse.elevationMeters,
+            120.0,
+            1.0e-6))
+    {
+        std::cerr
+            << "River-carved terrain did not fade out at coarse footprints.\n";
         return 1;
     }
 

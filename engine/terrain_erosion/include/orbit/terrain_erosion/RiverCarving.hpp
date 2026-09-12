@@ -27,6 +27,8 @@ struct RiverCarvingConfig
     f64 valleyWidthMultiplier{4.0};
     f64 minimumBedSlope{0.00015};
     f64 maximumIncisionMeters{180.0};
+
+    u32 spatialIndexResolution{64};
 };
 
 struct RiverCarvingNode
@@ -57,6 +59,13 @@ struct RiverCarvingField
 
     std::vector<RiverCarvingNode> nodes;
     std::vector<RiverCarvingSegment> segments;
+
+    // Immutable CSR-style uniform spatial index.
+    u32 spatialResolution{0};
+    f64 spatialHalfExtentMeters{0.0};
+    f64 spatialCellSizeMeters{0.0};
+    std::vector<u32> spatialCellOffsets;
+    std::vector<u32> spatialSegmentIndices;
 };
 
 struct RiverCarvingSample
@@ -66,6 +75,9 @@ struct RiverCarvingSample
     f64 targetElevationMeters{0.0};
     f64 distanceToCenterMeters{0.0};
     f64 influence{0.0};
+
+    f64 channelHalfWidthMeters{0.0};
+    f64 valleyHalfWidthMeters{0.0};
 };
 
 [[nodiscard]] RiverCarvingField BuildRiverCarvingField(
