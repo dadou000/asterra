@@ -2,6 +2,7 @@
 
 #include <orbit/math/Matrix.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
