@@ -5,7 +5,9 @@
 #include <orbit/terrain/TerrainFields.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace orbit::terrain_cache
@@ -26,13 +28,35 @@ struct TerrainPageDescHash
         const TerrainPageDesc& desc) const noexcept;
 };
 
+// Storage-only, lossy-compressed form of terrain::TerrainSample: 32
+// bytes instead of 64. Elevations only need single-precision at page
+// scale (a handful of km across at most, so f32's ~7 significant
+// digits keep sub-millimeter error), and biome weights are a
+// normalized blend so 8-bit quantization (1/255 steps) is well below
+// visible/gameplay-relevant precision. This halves the resident
+// bytes per cached page, which is what the page cache's byte budget
+// is actually rationing -- see TerrainPageCache.
+struct CachedTerrainSample
+{
+    f32 elevationMeters{0.0F};
+    f32 coarseElevationMeters{0.0F};
+    terrain::TerrainClimate climate{};
+    std::array<u8, 8> quantizedBiomeWeights{};
+};
+
+[[nodiscard]] CachedTerrainSample ToCachedSample(
+    const terrain::TerrainSample& sample) noexcept;
+
+[[nodiscard]] terrain::TerrainSample FromCachedSample(
+    const CachedTerrainSample& sample) noexcept;
+
 struct TerrainPage
 {
     TerrainPageDesc desc{};
     f64 approximateSampleSpacingMeters{0.0};
-    std::vector<terrain::TerrainSample> samples;
+    std::vector<CachedTerrainSample> samples;
 
-    [[nodiscard]] const terrain::TerrainSample& SampleAt(
+    [[nodiscard]] terrain::TerrainSample SampleAt(
         u32 x,
         u32 y) const;
 

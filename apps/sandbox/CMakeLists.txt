@@ -7,6 +7,7 @@ target_link_libraries(OrbitSandbox
         Orbit::Camera
         Orbit::Core
         Orbit::DebugRender
+        Orbit::DevServer
         Orbit::Jobs
         Orbit::Math
         Orbit::Platform

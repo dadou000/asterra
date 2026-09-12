@@ -25,6 +25,8 @@ compile_commands.json
 *.tmp
 *.log
 *.FCBak
+__pycache__/
+*.pyc
 
 # Runtime diagnostics
 /logs/

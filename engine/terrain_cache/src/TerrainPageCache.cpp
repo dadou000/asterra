@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <exception>
 #include <limits>
 #include <mutex>
@@ -57,7 +58,7 @@ struct CacheEntry
         resolution;
 
     constexpr std::size_t sampleBytes =
-        sizeof(terrain::TerrainSample);
+        sizeof(CachedTerrainSample);
 
     if (sampleCount >
         (std::numeric_limits<
@@ -78,7 +79,7 @@ struct CacheEntry
     const TerrainPage& page)
 {
     constexpr std::size_t sampleBytes =
-        sizeof(terrain::TerrainSample);
+        sizeof(CachedTerrainSample);
 
     if (page.samples.capacity() >
         (std::numeric_limits<
@@ -404,6 +405,150 @@ public:
     void WaitAll()
     {
         jobs_.Wait(group_);
+    }
+
+    void PruneFarPages(
+        const math::Double3&
+            observerDirection,
+        const f64
+            keepRadiusTileWidths)
+    {
+        const math::Double3 direction =
+            math::LengthSquared(
+                observerDirection) >
+                0.0
+                ? math::Normalize(
+                    observerDirection)
+                : math::Double3{
+                    0.0,
+                    0.0,
+                    1.0};
+
+        std::scoped_lock lock(
+            entriesMutex_);
+
+        for (auto iterator =
+                 entries_.begin();
+             iterator !=
+                 entries_.end();)
+        {
+            EntryState state =
+                EntryState::Pending;
+
+            {
+                std::scoped_lock
+                    entryLock(
+                        iterator->
+                            second->
+                            mutex);
+
+                state =
+                    iterator->second->
+                        state;
+            }
+
+            if (state !=
+                EntryState::Ready)
+            {
+                // Pending/failed entries own their own lifecycle
+                // (Request / ReclaimFailedLocked); leave them be.
+                ++iterator;
+                continue;
+            }
+
+            const world::PlanetTileId&
+                tile =
+                    iterator->
+                        first.
+                        tile;
+
+            const math::Double3
+                tileCenterDirection =
+                    world::
+                        CubeToUnitDirection(
+                            world::
+                                TileCenter(
+                                    tile));
+
+            const f64 cosAngle =
+                std::clamp(
+                    math::Dot(
+                        direction,
+                        tileCenterDirection),
+                    -1.0,
+                    1.0);
+
+            const f64 arcMeters =
+                std::acos(cosAngle) *
+                planet_.radiusMeters;
+
+            const f64
+                tileWidthMeters =
+                    world::
+                        ApproximateTileWidthMeters(
+                            planet_,
+                            tile);
+
+            if (arcMeters >
+                tileWidthMeters *
+                    keepRadiusTileWidths)
+            {
+                iterator =
+                    RemoveEntryLocked(
+                        iterator);
+
+                evictions_.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+            }
+            else
+            {
+                ++iterator;
+            }
+        }
+    }
+
+    std::array<
+        std::pair<u64, std::size_t>,
+        31>
+        EntriesByLevel() const
+    {
+        std::array<
+            std::pair<u64, std::size_t>,
+            31>
+            result{};
+
+        std::scoped_lock lock(
+            entriesMutex_);
+
+        for (const auto& [desc, entry] :
+             entries_)
+        {
+            const std::size_t level =
+                (std::min)(
+                    static_cast<std::size_t>(
+                        desc.tile.level),
+                    result.size() - 1);
+
+            std::size_t bytes = 0;
+
+            {
+                std::scoped_lock entryLock(
+                    entry->mutex);
+
+                bytes =
+                    entry->state ==
+                            EntryState::Ready
+                        ? entry->residentBytes
+                        : entry->
+                            reservedBytes;
+            }
+
+            result[level].first += 1;
+            result[level].second += bytes;
+        }
+
+        return result;
     }
 
 private:
@@ -850,5 +995,22 @@ TerrainPageCache::Stats() const noexcept
 void TerrainPageCache::WaitAll()
 {
     impl_->WaitAll();
+}
+
+void TerrainPageCache::PruneFarPages(
+    const math::Double3& observerDirection,
+    const f64 keepRadiusTileWidths)
+{
+    impl_->PruneFarPages(
+        observerDirection,
+        keepRadiusTileWidths);
+}
+
+std::array<
+    std::pair<u64, std::size_t>,
+    31>
+TerrainPageCache::EntriesByLevel() const
+{
+    return impl_->EntriesByLevel();
 }
 } // namespace orbit::terrain_cache

@@ -349,31 +349,34 @@ float3 SurfaceDirectionForOffset(
     float2 offsetMeters,
     float planetRadius)
 {
+    float3 direction =
+        g_centerUpAndOriginX.xyz;
+
     const float distanceMeters =
         length(offsetMeters);
 
-    if (distanceMeters <= 0.0001)
+    if (distanceMeters > 0.0001)
     {
-        return
-            g_centerUpAndOriginX.xyz;
+        const float3 tangentDirection =
+            normalize(
+                g_centerEastAndOriginY.xyz *
+                    offsetMeters.x +
+                g_centerNorthAndMorphStart.xyz *
+                    offsetMeters.y);
+
+        const float angle =
+            distanceMeters /
+            planetRadius;
+
+        direction =
+            normalize(
+                g_centerUpAndOriginX.xyz *
+                    cos(angle) +
+                tangentDirection *
+                    sin(angle));
     }
 
-    const float3 tangentDirection =
-        normalize(
-            g_centerEastAndOriginY.xyz *
-                offsetMeters.x +
-            g_centerNorthAndMorphStart.xyz *
-                offsetMeters.y);
-
-    const float angle =
-        distanceMeters /
-        planetRadius;
-
-    return normalize(
-        g_centerUpAndOriginX.xyz *
-            cos(angle) +
-        tangentDirection *
-            sin(angle));
+    return direction;
 }
 
 VSOutput main(uint vertexId : SV_VertexID)

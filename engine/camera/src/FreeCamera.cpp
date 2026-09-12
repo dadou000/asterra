@@ -76,7 +76,8 @@ FreeCameraUpdate FreeCamera::Update(
         std::max(
             input.deltaSeconds,
             0.0),
-        input.boost);
+        input.boost,
+        input.altitudeMeters);
 }
 
 FreeCameraUpdate FreeCamera::Current() const noexcept
@@ -86,7 +87,8 @@ FreeCameraUpdate FreeCamera::Current() const noexcept
         0.0,
         0.0,
         0.0,
-        false);
+        false,
+        0.0);
 }
 
 f64 FreeCamera::YawRadians() const noexcept
@@ -104,7 +106,8 @@ FreeCameraUpdate FreeCamera::BuildUpdate(
     const f64 moveForward,
     const f64 moveUp,
     const f64 deltaSeconds,
-    const bool boost) const noexcept
+    const bool boost,
+    const f64 altitudeMeters) const noexcept
 {
     const f64 sinYaw =
         std::sin(yawRadians_);
@@ -141,22 +144,62 @@ FreeCameraUpdate FreeCamera::BuildUpdate(
                 forward,
                 right));
 
-    const f64 speedMultiplier =
+    const f64 clampedAltitude =
+        std::clamp(
+            altitudeMeters,
+            config_.minAltitudeMeters,
+            config_.maxAltitudeMeters);
+
+    const f64 logMinAltitude =
+        std::log(
+            config_.minAltitudeMeters);
+
+    const f64 logMaxAltitude =
+        std::log(
+            config_.maxAltitudeMeters);
+
+    const f64 altitudeFraction =
+        logMaxAltitude >
+                logMinAltitude
+            ? (std::log(
+                   clampedAltitude) -
+               logMinAltitude) /
+                (logMaxAltitude -
+                 logMinAltitude)
+            : 0.0;
+
+    const f64 baseSpeed =
+        std::exp(
+            std::lerp(
+                std::log(
+                    config_.
+                        groundSpeedMetersPerSecond),
+                std::log(
+                    config_.
+                        orbitSpeedMetersPerSecond),
+                altitudeFraction));
+
+    const f64 boostSpeed =
+        std::exp(
+            std::lerp(
+                std::log(
+                    config_.
+                        groundBoostSpeedMetersPerSecond),
+                std::log(
+                    config_.
+                        orbitBoostSpeedMetersPerSecond),
+                altitudeFraction));
+
+    const f64 speed =
         boost
-            ? config_.boostMultiplier
-            : 1.0;
+            ? boostSpeed
+            : baseSpeed;
 
     const f64 planarDistance =
-        config_.
-            moveSpeedMetersPerSecond *
-        speedMultiplier *
-        deltaSeconds;
+        speed * deltaSeconds;
 
     const f64 verticalDistance =
-        config_.
-            verticalSpeedMetersPerSecond *
-        speedMultiplier *
-        deltaSeconds;
+        speed * deltaSeconds;
 
     const f64 eastMotion =
         (moveRight * cosYaw +

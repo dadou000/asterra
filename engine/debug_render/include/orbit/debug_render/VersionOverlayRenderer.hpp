@@ -19,11 +19,24 @@ class Compiler;
 
 namespace orbit::debug_render
 {
+enum class OverlayAnchor
+{
+    BottomRight,
+    TopLeft
+};
+
 struct VersionOverlayConfig
 {
     u32 pixelScale{2};
     u32 paddingPixels{6};
     u32 marginPixels{10};
+
+    // Added to the vertical margin on top of `marginPixels`, used to
+    // stack several overlay lines (e.g. the F3 debug HUD) without
+    // overlapping.
+    u32 extraTopMarginPixels{0};
+
+    OverlayAnchor anchor{OverlayAnchor::BottomRight};
 };
 
 class VersionOverlayRenderer
@@ -50,6 +63,10 @@ public:
         u32 targetHeight);
 
     [[nodiscard]] std::string_view Text() const noexcept;
+
+    // Replaces the displayed text. Sanitized and truncated the same
+    // way as the constructor argument. Safe to call every frame.
+    void SetText(std::string_view text);
 
 private:
     class Impl;

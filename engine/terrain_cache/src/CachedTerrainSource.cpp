@@ -166,9 +166,28 @@ public:
         return cache_.Stats();
     }
 
+    std::array<
+        std::pair<u64, std::size_t>,
+        31>
+        PageCacheEntriesByLevel() const
+    {
+        return cache_.EntriesByLevel();
+    }
+
     void WaitAll()
     {
         cache_.WaitAll();
+    }
+
+    void PruneFarPages(
+        const math::Double3&
+            observerDirection,
+        const f64
+            keepRadiusTileWidths)
+    {
+        cache_.PruneFarPages(
+            observerDirection,
+            keepRadiusTileWidths);
     }
 
 private:
@@ -294,5 +313,24 @@ CachedTerrainSource::PageCacheStats() const noexcept
 void CachedTerrainSource::WaitAll()
 {
     impl_->WaitAll();
+}
+
+void CachedTerrainSource::PruneFarPages(
+    const math::Double3& observerDirection,
+    const f64 keepRadiusTileWidths)
+{
+    impl_->PruneFarPages(
+        observerDirection,
+        keepRadiusTileWidths);
+}
+
+std::array<
+    std::pair<u64, std::size_t>,
+    31>
+CachedTerrainSource::
+    PageCacheEntriesByLevel() const
+{
+    return impl_->
+        PageCacheEntriesByLevel();
 }
 } // namespace orbit::terrain_cache

@@ -7,6 +7,97 @@
 
 namespace orbit::terrain_cache
 {
+namespace
+{
+[[nodiscard]] u8 QuantizeWeight(
+    const f32 weight) noexcept
+{
+    return static_cast<u8>(
+        std::clamp(
+            weight,
+            0.0F,
+            1.0F) *
+            255.0F +
+        0.5F);
+}
+
+[[nodiscard]] f32 DequantizeWeight(
+    const u8 weight) noexcept
+{
+    return static_cast<f32>(weight) /
+           255.0F;
+}
+} // namespace
+
+CachedTerrainSample ToCachedSample(
+    const terrain::TerrainSample& sample)
+    noexcept
+{
+    const terrain::BiomeWeights&
+        biomes = sample.biomes;
+
+    return {
+        .elevationMeters =
+            static_cast<f32>(
+                sample.elevationMeters),
+        .coarseElevationMeters =
+            static_cast<f32>(
+                sample.
+                    coarseElevationMeters),
+        .climate = sample.climate,
+        .quantizedBiomeWeights = {
+            QuantizeWeight(biomes.ocean),
+            QuantizeWeight(biomes.desert),
+            QuantizeWeight(
+                biomes.grassland),
+            QuantizeWeight(
+                biomes.temperateForest),
+            QuantizeWeight(
+                biomes.borealForest),
+            QuantizeWeight(biomes.tundra),
+            QuantizeWeight(biomes.alpine),
+            QuantizeWeight(biomes.wetland)
+        }
+    };
+}
+
+terrain::TerrainSample FromCachedSample(
+    const CachedTerrainSample& sample)
+    noexcept
+{
+    const auto& q =
+        sample.quantizedBiomeWeights;
+
+    return {
+        .elevationMeters =
+            static_cast<f64>(
+                sample.elevationMeters),
+        .coarseElevationMeters =
+            static_cast<f64>(
+                sample.
+                    coarseElevationMeters),
+        .climate = sample.climate,
+        .biomes = {
+            .ocean =
+                DequantizeWeight(q[0]),
+            .desert =
+                DequantizeWeight(q[1]),
+            .grassland =
+                DequantizeWeight(q[2]),
+            .temperateForest =
+                DequantizeWeight(q[3]),
+            .borealForest =
+                DequantizeWeight(q[4]),
+            .tundra =
+                DequantizeWeight(q[5]),
+            .alpine =
+                DequantizeWeight(q[6]),
+            .wetland =
+                DequantizeWeight(q[7])
+        }
+    };
+}
+
 std::size_t TerrainPageDescHash::operator()(
     const TerrainPageDesc& desc) const noexcept
 {
@@ -34,7 +125,7 @@ std::size_t TerrainPageDescHash::operator()(
     return hash;
 }
 
-const terrain::TerrainSample&
+terrain::TerrainSample
 TerrainPage::SampleAt(
     const u32 x,
     const u32 y) const
@@ -52,7 +143,8 @@ TerrainPage::SampleAt(
                 desc.resolution) +
         static_cast<std::size_t>(x);
 
-    return samples[index];
+    return FromCachedSample(
+        samples[index]);
 }
 
 f32 TerrainPage::At(
@@ -157,30 +249,38 @@ TerrainPage::SampleDirection(
 
     const terrain::TerrainSample top =
         terrain::LerpTerrainSample(
-            samples[
-                static_cast<std::size_t>(
-                    y0) *
-                    desc.resolution +
-                x0],
-            samples[
-                static_cast<std::size_t>(
-                    y0) *
-                    desc.resolution +
-                x1],
+            FromCachedSample(
+                samples[
+                    static_cast<
+                        std::size_t>(
+                        y0) *
+                        desc.resolution +
+                    x0]),
+            FromCachedSample(
+                samples[
+                    static_cast<
+                        std::size_t>(
+                        y0) *
+                        desc.resolution +
+                    x1]),
             tx);
 
     const terrain::TerrainSample bottom =
         terrain::LerpTerrainSample(
-            samples[
-                static_cast<std::size_t>(
-                    y1) *
-                    desc.resolution +
-                x0],
-            samples[
-                static_cast<std::size_t>(
-                    y1) *
-                    desc.resolution +
-                x1],
+            FromCachedSample(
+                samples[
+                    static_cast<
+                        std::size_t>(
+                        y1) *
+                        desc.resolution +
+                    x0]),
+            FromCachedSample(
+                samples[
+                    static_cast<
+                        std::size_t>(
+                        y1) *
+                        desc.resolution +
+                    x1]),
             tx);
 
     return terrain::LerpTerrainSample(
@@ -278,13 +378,14 @@ TerrainPage BuildTerrainPage(
                 static_cast<std::size_t>(x);
 
             page.samples[index] =
-                source.Sample({
-                    .unitDirection =
-                        direction,
-                    .footprintMeters =
-                        page.
-                            approximateSampleSpacingMeters
-                });
+                ToCachedSample(
+                    source.Sample({
+                        .unitDirection =
+                            direction,
+                        .footprintMeters =
+                            page.
+                                approximateSampleSpacingMeters
+                    }));
         }
     }
 

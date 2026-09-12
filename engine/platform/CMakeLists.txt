@@ -16,6 +16,7 @@ target_link_libraries(OrbitPlatform
     PRIVATE
         dbghelp
         user32
+        gdi32
 )
 
 target_compile_features(OrbitPlatform PUBLIC cxx_std_23)

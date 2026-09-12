@@ -2,6 +2,7 @@
 #include <orbit/core/BuildInfo.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/debug_render/VersionOverlayRenderer.hpp>
+#include <orbit/dev_server/DevServer.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/platform/CrashHandler.hpp>
@@ -191,9 +192,9 @@ int main()
                     .maximumTileLevel = 24,
                     .cache = {
                         .budgetBytes =
-                            256ULL * 1024ULL * 1024ULL,
+                            512ULL * 1024ULL * 1024ULL,
                         .softEntryLimit =
-                            4096
+                            16384
                     }
                 });
 
@@ -221,6 +222,44 @@ int main()
         orbit::math::Double3
             lastSurfaceTravelDirection{};
 
+        // Height above the ground sampled after the previous
+        // frame's move; feeds this frame's altitude-based speed
+        // curve (one frame of lag, imperceptible).
+        orbit::f64
+            lastAltitudeAboveGroundMeters =
+                8'000.0;
+
+        // A screenshot must be captured from a *later* frame than
+        // the one that raised the window, since raising it cannot
+        // itself force a fresh present through an occluded
+        // swapchain -- see Window::RaiseToTop.
+        struct PendingScreenshot
+        {
+            bool active{false};
+            std::string path;
+            int framesRemaining{0};
+        };
+
+        PendingScreenshot pendingScreenshot;
+
+        // A smooth multi-second flight to a target point, driven by
+        // the dev server (SLEW) rather than the keyboard, so a test
+        // harness can watch the clipmap actually stream and morph
+        // while moving instead of only ever seeing instantaneous
+        // teleport jumps.
+        struct SlewState
+        {
+            bool active{false};
+            orbit::math::Double3 fromDirection{};
+            orbit::math::Double3 toDirection{};
+            orbit::f64 fromAltitudeMeters{0.0};
+            orbit::f64 toAltitudeMeters{0.0};
+            orbit::f64 elapsedSeconds{0.0};
+            orbit::f64 durationSeconds{1.0};
+        };
+
+        SlewState slewState;
+
         const orbit::shader::d3d::D3DShaderCompiler
             shaderCompiler;
 
@@ -229,6 +268,53 @@ int main()
                 *device,
                 shaderCompiler,
                 orbit::build::DisplayVersion);
+
+        // F3 debug HUD: a stack of small text panels pinned to the
+        // top-left corner, updated live and toggled at runtime.
+        constexpr orbit::u32
+            kDebugOverlayLineCount = 5;
+
+        std::vector<
+            std::unique_ptr<
+                orbit::debug_render::
+                    VersionOverlayRenderer>>
+            debugOverlayLines;
+
+        debugOverlayLines.reserve(
+            kDebugOverlayLineCount);
+
+        for (orbit::u32 lineIndex = 0;
+             lineIndex <
+                kDebugOverlayLineCount;
+             ++lineIndex)
+        {
+            orbit::debug_render::
+                VersionOverlayConfig
+                    lineConfig{};
+
+            lineConfig.anchor =
+                orbit::debug_render::
+                    OverlayAnchor::TopLeft;
+
+            constexpr orbit::u32
+                lineHeight = 28;
+
+            lineConfig.extraTopMarginPixels =
+                lineIndex * lineHeight;
+
+            debugOverlayLines.push_back(
+                std::make_unique<
+                    orbit::debug_render::
+                        VersionOverlayRenderer>(
+                    *device,
+                    shaderCompiler,
+                    "ORBIT",
+                    lineConfig));
+        }
+
+        bool debugOverlayVisible = false;
+        bool f3PressedLastFrame = false;
+        std::string lastStatsLine;
 
         orbit::terrain_render::TerrainPreviewConfig
             terrainPreviewConfig{};
@@ -308,6 +394,327 @@ int main()
             terrainPreview.IndexCount()
         ));
 
+        // Places the observer along `direction` at `desiredAltitudeMeters`
+        // above the base sphere, clamped so it never sinks through the
+        // actual sampled terrain, and propagates the new position to
+        // every renderer that tracks it. Shared by keyboard movement,
+        // TELEPORT, and SLEW so the ground-collision rule can't drift
+        // out of sync between them.
+        const auto applyObserverPosition =
+            [&observer,
+             &planet,
+             authoritativeTerrain,
+             &lastAltitudeAboveGroundMeters,
+             &terrainPreview,
+             &ocean,
+             &riverWater](
+                const orbit::math::Double3&
+                    direction,
+                const orbit::f64
+                    desiredAltitudeMeters)
+        {
+            const orbit::terrain::TerrainSample
+                groundSample =
+                    authoritativeTerrain->
+                        Sample({
+                            .unitDirection =
+                                direction,
+                            .footprintMeters =
+                                10.0
+                        });
+
+            constexpr orbit::f64
+                minClearanceMeters = 2.0;
+
+            const orbit::f64
+                minAltitudeMeters =
+                    groundSample.
+                        elevationMeters +
+                    minClearanceMeters;
+
+            const orbit::f64 altitude =
+                std::clamp(
+                    desiredAltitudeMeters,
+                    minAltitudeMeters,
+                    2'000'000.0);
+
+            observer.meters =
+                direction *
+                (planet.radiusMeters +
+                 altitude);
+
+            lastAltitudeAboveGroundMeters =
+                altitude -
+                groundSample.
+                    elevationMeters;
+
+            terrainPreview.UpdateObserver(
+                observer);
+
+            ocean.UpdateObserver(
+                observer);
+
+            riverWater.UpdateObserver(
+                observer);
+        };
+
+        // Loopback-only test/automation hook: lets an external
+        // harness (e.g. an MCP bridge) inspect and drive a running
+        // Orbit process -- read stats, grab a screenshot, teleport
+        // the observer, request a clean shutdown.
+        bool remoteQuitRequested = false;
+
+        orbit::dev_server::DevServer
+            devServer({.port = 4319});
+
+        devServer.RegisterCommand(
+            "CACHE_LEVELS",
+            [&terrain](const auto&)
+            {
+                const auto byLevel =
+                    terrain.
+                        PageCacheEntriesByLevel();
+
+                std::string line;
+
+                for (std::size_t level = 0;
+                     level <
+                        byLevel.size();
+                     ++level)
+                {
+                    const auto& [count, bytes] =
+                        byLevel[level];
+
+                    if (count == 0)
+                    {
+                        continue;
+                    }
+
+                    line +=
+                        std::format(
+                            "L{}={}({}KiB) ",
+                            level,
+                            count,
+                            bytes /
+                                1024);
+                }
+
+                return line.empty()
+                    ? std::string(
+                        "ERR no cache entries")
+                    : line;
+            });
+
+        devServer.RegisterCommand(
+            "PING",
+            [](const auto&)
+            {
+                return std::string("PONG");
+            });
+
+        devServer.RegisterCommand(
+            "STATS",
+            [&lastStatsLine](const auto&)
+            {
+                return lastStatsLine.empty()
+                    ? std::string(
+                        "ERR no stats yet")
+                    : lastStatsLine;
+            });
+
+        devServer.RegisterCommand(
+            "SCREENSHOT",
+            [&window,
+             &pendingScreenshot](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.empty())
+                {
+                    return std::string(
+                        "ERR usage: SCREENSHOT <path.bmp>");
+                }
+
+                window->RaiseToTop();
+
+                // Give the render loop a few more presented frames
+                // while raised before reading pixels back -- see
+                // Window::RaiseToTop.
+                pendingScreenshot.active =
+                    true;
+
+                pendingScreenshot.path =
+                    arguments.front();
+
+                pendingScreenshot.
+                    framesRemaining = 5;
+
+                return std::string(
+                    "OK pending, ~100ms");
+            });
+
+        devServer.RegisterCommand(
+            "SLEW",
+            [&slewState,
+             &observer,
+             &planet](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() != 5)
+                {
+                    return std::string(
+                        "ERR usage: SLEW <dirX> <dirY> <dirZ> <altitudeMeters> <durationSeconds>");
+                }
+
+                const orbit::math::Double3
+                    rawDirection{
+                        std::stod(
+                            arguments[0]),
+                        std::stod(
+                            arguments[1]),
+                        std::stod(
+                            arguments[2])
+                    };
+
+                if (orbit::math::Length(
+                        rawDirection) <=
+                    0.0)
+                {
+                    return std::string(
+                        "ERR direction must be non-zero");
+                }
+
+                slewState.fromDirection =
+                    orbit::math::Normalize(
+                        observer.meters);
+
+                slewState.
+                    fromAltitudeMeters =
+                        orbit::math::Length(
+                            observer.meters) -
+                        planet.radiusMeters;
+
+                slewState.toDirection =
+                    orbit::math::Normalize(
+                        rawDirection);
+
+                slewState.
+                    toAltitudeMeters =
+                        std::stod(
+                            arguments[3]);
+
+                slewState.durationSeconds =
+                    (std::max)(
+                        std::stod(
+                            arguments[4]),
+                        0.01);
+
+                slewState.elapsedSeconds =
+                    0.0;
+
+                slewState.active = true;
+
+                return std::string("OK");
+            });
+
+        devServer.RegisterCommand(
+            "TELEPORT",
+            [&observerTravelFrame,
+             applyObserverPosition](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() != 4)
+                {
+                    return std::string(
+                        "ERR usage: TELEPORT <dirX> <dirY> <dirZ> <altitudeMeters>");
+                }
+
+                const orbit::math::Double3
+                    rawDirection{
+                        std::stod(
+                            arguments[0]),
+                        std::stod(
+                            arguments[1]),
+                        std::stod(
+                            arguments[2])
+                    };
+
+                if (orbit::math::Length(
+                        rawDirection) <=
+                    0.0)
+                {
+                    return std::string(
+                        "ERR direction must be non-zero");
+                }
+
+                const orbit::math::Double3
+                    direction =
+                        orbit::math::Normalize(
+                            rawDirection);
+
+                applyObserverPosition(
+                    direction,
+                    std::stod(
+                        arguments[3]));
+
+                observerTravelFrame =
+                    orbit::world::
+                        MakeSurfaceFrame(
+                            direction);
+
+                return std::string("OK");
+            });
+
+        devServer.RegisterCommand(
+            "QUIT",
+            [&remoteQuitRequested](
+                const auto&)
+            {
+                remoteQuitRequested = true;
+                return std::string("OK");
+            });
+
+        devServer.RegisterCommand(
+            "DEBUG_OVERLAY",
+            [&debugOverlayVisible](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() !=
+                    1)
+                {
+                    return std::string(
+                        "ERR usage: DEBUG_OVERLAY <ON|OFF>");
+                }
+
+                if (arguments[0] ==
+                    "ON")
+                {
+                    debugOverlayVisible =
+                        true;
+                }
+                else if (
+                    arguments[0] ==
+                    "OFF")
+                {
+                    debugOverlayVisible =
+                        false;
+                }
+                else
+                {
+                    return std::string(
+                        "ERR usage: DEBUG_OVERLAY <ON|OFF>");
+                }
+
+                return std::string("OK");
+            });
+
         std::vector<
             std::unique_ptr<
                 orbit::rhi::CommandAllocator>>
@@ -348,14 +755,7 @@ int main()
             previousFrameTime;
 
         orbit::camera::FreeCamera
-            freeCamera({
-                .moveSpeedMetersPerSecond =
-                    400.0,
-                .verticalSpeedMetersPerSecond =
-                    200.0,
-                .boostMultiplier =
-                    100.0
-            });
+            freeCamera;
 
         while (window->PumpEvents())
         {
@@ -375,11 +775,31 @@ int main()
             previousFrameTime =
                 currentFrameTime;
 
+            devServer.Poll();
+
+            if (remoteQuitRequested)
+            {
+                break;
+            }
+
             if (window->KeyDown(
                     orbit::platform::Key::Escape))
             {
                 break;
             }
+
+            const bool f3Down =
+                window->KeyDown(
+                    orbit::platform::Key::F3);
+
+            if (f3Down &&
+                !f3PressedLastFrame)
+            {
+                debugOverlayVisible =
+                    !debugOverlayVisible;
+            }
+
+            f3PressedLastFrame = f3Down;
 
             const orbit::platform::MouseDelta
                 mouseDelta =
@@ -445,11 +865,14 @@ int main()
                         .boost =
                             window->KeyDown(
                                 orbit::platform::
-                                    Key::LeftShift)
+                                    Key::LeftShift),
+                        .altitudeMeters =
+                            lastAltitudeAboveGroundMeters
                     });
 
             const bool moved =
-                cameraUpdate.moved;
+                cameraUpdate.moved &&
+                !slewState.active;
 
             if (moved)
             {
@@ -489,34 +912,137 @@ int main()
                         observerTravelFrame.up;
                 }
 
-                const orbit::f64 altitude =
+                applyObserverPosition(
+                    direction,
+                    radius -
+                        planet.radiusMeters +
+                        cameraUpdate.
+                            verticalMotionMeters);
+            }
+
+            if (slewState.active)
+            {
+                slewState.elapsedSeconds +=
+                    deltaSeconds;
+
+                const orbit::f64 t =
                     std::clamp(
-                        radius -
-                            planet.radiusMeters +
-                            cameraUpdate.
-                                verticalMotionMeters,
-                        250.0,
-                        2'000'000.0);
+                        slewState.
+                                elapsedSeconds /
+                            slewState.
+                                durationSeconds,
+                        0.0,
+                        1.0);
 
-                observer.meters =
-                    direction *
-                    (planet.radiusMeters +
-                     altitude);
+                // Spherical linear interpolation between the two
+                // surface directions so a long slew arcs across the
+                // planet instead of cutting a straight line through
+                // it.
+                const orbit::f64 cosAngle =
+                    std::clamp(
+                        orbit::math::Dot(
+                            slewState.
+                                fromDirection,
+                            slewState.
+                                toDirection),
+                        -1.0,
+                        1.0);
 
-                terrainPreview.UpdateObserver(
-                    observer);
+                const orbit::f64 angle =
+                    std::acos(cosAngle);
 
-                ocean.UpdateObserver(
-                    observer);
+                orbit::math::Double3
+                    slewDirection{};
 
-                riverWater.UpdateObserver(
-                    observer);
+                if (angle < 1e-9)
+                {
+                    slewDirection =
+                        slewState.
+                            toDirection;
+                }
+                else
+                {
+                    const orbit::f64
+                        sinAngle =
+                            std::sin(angle);
+
+                    slewDirection =
+                        orbit::math::
+                            Normalize(
+                                slewState.
+                                        fromDirection *
+                                    (std::sin(
+                                         (1.0 -
+                                          t) *
+                                         angle) /
+                                     sinAngle) +
+                                slewState.
+                                        toDirection *
+                                    (std::sin(
+                                         t *
+                                         angle) /
+                                     sinAngle));
+                }
+
+                const orbit::f64
+                    slewAltitude =
+                        std::lerp(
+                            slewState.
+                                fromAltitudeMeters,
+                            slewState.
+                                toAltitudeMeters,
+                            t);
+
+                applyObserverPosition(
+                    slewDirection,
+                    slewAltitude);
+
+                observerTravelFrame =
+                    orbit::world::
+                        MakeSurfaceFrame(
+                            slewDirection);
+
+                lastSurfaceTravelDirection =
+                    slewState.toDirection;
+
+                if (t >= 1.0)
+                {
+                    slewState.active = false;
+                }
             }
 
             regionStreamer.Update(
                 orbit::math::Normalize(
                     observer.meters),
                 lastSurfaceTravelDirection);
+
+            if (debugOverlayVisible)
+            {
+                const orbit::f64 fps =
+                    deltaSeconds > 0.0
+                        ? 1.0 / deltaSeconds
+                        : 0.0;
+
+                const orbit::f64
+                    altitudeMeters =
+                        orbit::math::Length(
+                            observer.meters) -
+                        planet.radiusMeters;
+
+                debugOverlayLines[0]->
+                    SetText(
+                        std::format(
+                            "FPS {:.0f} MS {:.1f}",
+                            fps,
+                            deltaSeconds *
+                                1000.0));
+
+                debugOverlayLines[1]->
+                    SetText(
+                        std::format(
+                            "ALT {:.0f}M",
+                            altitudeMeters));
+            }
 
             const orbit::terrain_render::
                 TerrainPreviewCamera camera{
@@ -608,6 +1134,19 @@ int main()
                 swapchain->Width(),
                 swapchain->Height());
 
+            if (debugOverlayVisible)
+            {
+                for (const auto& line :
+                     debugOverlayLines)
+                {
+                    line->Draw(
+                        *commandList,
+                        backBuffer,
+                        swapchain->Width(),
+                        swapchain->Height());
+                }
+            }
+
             commandList->Transition(
                 backBuffer,
                 orbit::rhi::ResourceState::RenderTarget,
@@ -628,10 +1167,45 @@ int main()
             frameFenceValues[frameIndex] =
                 signalValue;
 
+            if (pendingScreenshot.active)
+            {
+                // Wait for a handful of frames to actually present
+                // while the window is raised before reading the
+                // screen back -- see Window::RaiseToTop.
+                if (--pendingScreenshot.
+                        framesRemaining <=
+                    0)
+                {
+                    if (!window->
+                            CaptureScreenshotBmp(
+                                pendingScreenshot.
+                                    path))
+                    {
+                        orbit::log::Warning(
+                            std::format(
+                                "Orbit dev server screenshot to '{}' failed.",
+                                pendingScreenshot.
+                                    path));
+                    }
+
+                    pendingScreenshot.active =
+                        false;
+                }
+            }
+
             if (currentFrameTime -
                     previousStatsTime >=
                 std::chrono::seconds(1))
             {
+                // Drop cached pages that have fallen far behind the
+                // observer instead of only ever evicting once the
+                // byte budget is already full -- see
+                // TerrainPageCache::PruneFarPages. Once a second is
+                // plenty; this walks every resident entry.
+                terrain.PruneFarPages(
+                    orbit::math::Normalize(
+                        observer.meters));
+
                 const auto& stats =
                     terrainPreview.
                         StreamingStats();
@@ -656,6 +1230,107 @@ int main()
 
                 constexpr orbit::f64 bytesPerMiB =
                     1024.0 * 1024.0;
+
+                lastStatsLine =
+                    std::format(
+                        "alt_km={:.0f} samples={} levels={} regions={} upload_b={} draws={} clip_tier={} spacing_m={:.0f} radius_km={:.0f} page_mib={:.1f}/{:.0f} entries={} evict={} reject={} derived_ready={} pending={} desired={} requests={} revisions={} stale={} ocean_v={} ocean_i={} ocean_draws={} ocean_km={:.0f} rivers={} lakes={} water_upload_b={}",
+                        (orbit::math::Length(
+                            observer.meters) -
+                         planet.radiusMeters) /
+                            1000.0,
+                        stats.
+                            generatedSamplesLastUpdate,
+                        stats.
+                            levelsTouchedLastUpdate,
+                        stats.
+                            refreshedRegionsLastUpdate,
+                        stats.
+                            uploadedBytesLastFrame,
+                        stats.
+                            drawCallsLastFrame,
+                        stats.
+                            adaptiveCoverageTier,
+                        stats.
+                            activeBaseSpacingMeters,
+                        stats.
+                            activeOuterHalfExtentMeters /
+                            1000.0,
+                        static_cast<orbit::f64>(
+                            pageCacheStats.
+                                residentBytes) /
+                            bytesPerMiB,
+                        static_cast<orbit::f64>(
+                            pageCacheStats.
+                                budgetBytes) /
+                            bytesPerMiB,
+                        pageCacheStats.entries,
+                        pageCacheStats.evictions,
+                        pageCacheStats.
+                            capacityRejects,
+                        regionStats.readyEntries,
+                        regionStats.pendingEntries,
+                        regionStreamStats.
+                            desiredRegions,
+                        regionStats.
+                            acceptedRequests,
+                        stats.
+                            revisionInvalidations,
+                        stats.
+                            staleRevisionBatches,
+                        oceanStats.vertices,
+                        oceanStats.indices,
+                        oceanStats.
+                            drawCallsLastFrame,
+                        oceanStats.
+                            effectiveRadiusMeters /
+                            1000.0,
+                        waterStats.
+                            visibleSegmentsLastFrame,
+                        waterStats.
+                            visibleLakeCellsLastFrame,
+                        waterStats.
+                            uploadedBytesLastFrame);
+
+                if (debugOverlayVisible)
+                {
+                    debugOverlayLines[2]->
+                        SetText(
+                            std::format(
+                                "SAMP {} LVL {} DRAW {}",
+                                stats.
+                                    generatedSamplesLastUpdate,
+                                stats.
+                                    levelsTouchedLastUpdate,
+                                stats.
+                                    drawCallsLastFrame));
+
+                    debugOverlayLines[3]->
+                        SetText(
+                            std::format(
+                                "PAGE {:.0f}M CAP {:.0f}M EV {}",
+                                static_cast<
+                                    orbit::f64>(
+                                    pageCacheStats.
+                                        residentBytes) /
+                                    bytesPerMiB,
+                                static_cast<
+                                    orbit::f64>(
+                                    pageCacheStats.
+                                        budgetBytes) /
+                                    bytesPerMiB,
+                                pageCacheStats.
+                                    evictions));
+
+                    debugOverlayLines[4]->
+                        SetText(
+                            std::format(
+                                "OCEAN {}V RIV {} LK {}",
+                                oceanStats.vertices,
+                                waterStats.
+                                    visibleSegmentsLastFrame,
+                                waterStats.
+                                    visibleLakeCellsLastFrame));
+                }
 
                 orbit::log::Info(
                     std::format(

@@ -141,7 +141,8 @@ BuildConstants(
         config.marginPixels;
 
     result[5] =
-        config.marginPixels;
+        config.marginPixels +
+        config.extraTopMarginPixels;
 
     result[6] =
         config.paddingPixels;
@@ -152,6 +153,12 @@ BuildConstants(
     result[8] =
         static_cast<u32>(
             text.size());
+
+    result[9] =
+        config.anchor ==
+                OverlayAnchor::TopLeft
+            ? 1U
+            : 0U;
 
     for (u32 index = 0;
          index <
@@ -217,10 +224,15 @@ VSOutput main(uint vertexId : SV_VertexID)
             (float)g_metrics1.x,
             (float)g_metrics1.y);
 
+    const bool anchorTopLeft =
+        g_metrics2.y != 0u;
+
     const float2 panelTopLeft =
-        targetSize -
-        panelSize -
-        margin;
+        anchorTopLeft
+            ? margin
+            : targetSize -
+                panelSize -
+                margin;
 
     const float2 local =
         corners[vertexId] *
@@ -278,14 +290,15 @@ struct VSOutput
 
 uint PackedTextWord(uint index)
 {
-    if (index == 0u) return g_text0.x;
-    if (index == 1u) return g_text0.y;
-    if (index == 2u) return g_text0.z;
-    if (index == 3u) return g_text0.w;
-    if (index == 4u) return g_text1.x;
-    if (index == 5u) return g_text1.y;
-    if (index == 6u) return g_text1.z;
-    return g_text1.w;
+    uint word = g_text1.w;
+    if (index == 0u) word = g_text0.x;
+    else if (index == 1u) word = g_text0.y;
+    else if (index == 2u) word = g_text0.z;
+    else if (index == 3u) word = g_text0.w;
+    else if (index == 4u) word = g_text1.x;
+    else if (index == 5u) word = g_text1.y;
+    else if (index == 6u) word = g_text1.z;
+    return word;
 }
 
 uint CharacterAt(uint index)
@@ -305,58 +318,51 @@ uint CharacterAt(uint index)
 
 uint Glyph(uint character)
 {
-    if (character >= 48u &&
-        character <= 57u)
-    {
-        switch (character)
-        {
-        case 48u: return 0x699996u;
-        case 49u: return 0x722262u;
-        case 50u: return 0xF42196u;
-        case 51u: return 0x69161Eu;
-        case 52u: return 0x22FA62u;
-        case 53u: return 0x691E8Fu;
-        case 54u: return 0x699E86u;
-        case 55u: return 0x44421Fu;
-        case 56u: return 0x699696u;
-        case 57u: return 0x617996u;
-        }
-    }
+    uint bits = 0u;
 
-    switch (character)
-    {
-    case 65u: return 0x99F996u;
-    case 66u: return 0xE99E9Eu;
-    case 67u: return 0x788887u;
-    case 68u: return 0xE9999Eu;
-    case 69u: return 0xF88E8Fu;
-    case 70u: return 0x888E8Fu;
-    case 71u: return 0x799B87u;
-    case 72u: return 0x999F99u;
-    case 73u: return 0xF2222Fu;
-    case 74u: return 0x699111u;
-    case 75u: return 0x99ACA9u;
-    case 76u: return 0xF88888u;
-    case 77u: return 0x999FF9u;
-    case 78u: return 0x999BD9u;
-    case 79u: return 0x699996u;
-    case 80u: return 0x88E99Eu;
-    case 81u: return 0x7B9996u;
-    case 82u: return 0x9AE99Eu;
-    case 83u: return 0xE11687u;
-    case 84u: return 0x22222Fu;
-    case 85u: return 0x699999u;
-    case 86u: return 0x669999u;
-    case 87u: return 0x9FF999u;
-    case 88u: return 0x996699u;
-    case 89u: return 0x222699u;
-    case 90u: return 0xF8421Fu;
+    if (character == 48u) bits = 0x699996u;
+    else if (character == 49u) bits = 0x722262u;
+    else if (character == 50u) bits = 0xF42196u;
+    else if (character == 51u) bits = 0x69161Eu;
+    else if (character == 52u) bits = 0x22FA62u;
+    else if (character == 53u) bits = 0x691E8Fu;
+    else if (character == 54u) bits = 0x699E86u;
+    else if (character == 55u) bits = 0x44421Fu;
+    else if (character == 56u) bits = 0x699696u;
+    else if (character == 57u) bits = 0x617996u;
 
-    case 46u: return 0x200000u;
-    case 45u: return 0x000F00u;
-    case 58u: return 0x020020u;
-    default: return 0u;
-    }
+    else if (character == 65u) bits = 0x99F996u;
+    else if (character == 66u) bits = 0xE99E9Eu;
+    else if (character == 67u) bits = 0x788887u;
+    else if (character == 68u) bits = 0xE9999Eu;
+    else if (character == 69u) bits = 0xF88E8Fu;
+    else if (character == 70u) bits = 0x888E8Fu;
+    else if (character == 71u) bits = 0x799B87u;
+    else if (character == 72u) bits = 0x999F99u;
+    else if (character == 73u) bits = 0xF2222Fu;
+    else if (character == 74u) bits = 0x699111u;
+    else if (character == 75u) bits = 0x99ACA9u;
+    else if (character == 76u) bits = 0xF88888u;
+    else if (character == 77u) bits = 0x999FF9u;
+    else if (character == 78u) bits = 0x999BD9u;
+    else if (character == 79u) bits = 0x699996u;
+    else if (character == 80u) bits = 0x88E99Eu;
+    else if (character == 81u) bits = 0x7B9996u;
+    else if (character == 82u) bits = 0x9AE99Eu;
+    else if (character == 83u) bits = 0xE11687u;
+    else if (character == 84u) bits = 0x22222Fu;
+    else if (character == 85u) bits = 0x699999u;
+    else if (character == 86u) bits = 0x669999u;
+    else if (character == 87u) bits = 0x9FF999u;
+    else if (character == 88u) bits = 0x996699u;
+    else if (character == 89u) bits = 0x222699u;
+    else if (character == 90u) bits = 0xF8421Fu;
+
+    else if (character == 46u) bits = 0x200000u;
+    else if (character == 45u) bits = 0x000F00u;
+    else if (character == 58u) bits = 0x020020u;
+
+    return bits;
 }
 
 bool GlyphPixel(
@@ -364,27 +370,28 @@ bool GlyphPixel(
     uint column,
     uint row)
 {
-    if (column >= 4u ||
-        row >= 6u)
+    bool lit = false;
+
+    if (column < 4u &&
+        row < 6u)
     {
-        return false;
+        const uint glyph =
+            Glyph(
+                character);
+
+        const uint rowBits =
+            (glyph >>
+             (row * 4u)) &
+            0xFu;
+
+        const uint mask =
+            1u <<
+            (3u - column);
+
+        lit = (rowBits & mask) != 0u;
     }
 
-    const uint glyph =
-        Glyph(
-            character);
-
-    const uint rowBits =
-        (glyph >>
-         (row * 4u)) &
-        0xFu;
-
-    const uint mask =
-        1u <<
-        (3u - column);
-
-    return
-        (rowBits & mask) != 0u;
+    return lit;
 }
 
 float4 main(VSOutput input) : SV_Target0
@@ -698,6 +705,12 @@ public:
         return text_;
     }
 
+    void SetText(
+        const std::string_view text)
+    {
+        text_ = SanitizeText(text);
+    }
+
 private:
     std::string text_;
     VersionOverlayConfig config_{};
@@ -745,5 +758,11 @@ VersionOverlayRenderer::Text()
     const noexcept
 {
     return impl_->Text();
+}
+
+void VersionOverlayRenderer::SetText(
+    const std::string_view text)
+{
+    impl_->SetText(text);
 }
 } // namespace orbit::debug_render

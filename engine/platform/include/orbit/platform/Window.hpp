@@ -16,7 +16,8 @@ enum class Key : u8
     Q,
     E,
     LeftShift,
-    Escape
+    Escape,
+    F3
 };
 
 struct MouseDelta
@@ -55,6 +56,25 @@ public:
     [[nodiscard]] virtual void* NativeHandle() const = 0;
     [[nodiscard]] virtual u32 Width() const = 0;
     [[nodiscard]] virtual u32 Height() const = 0;
+
+    // Captures the current window client area to an uncompressed
+    // BMP file. Used by the dev server to hand screenshots to
+    // external tooling (e.g. an MCP client) for visual testing.
+    // Pure screen readback -- does not change window Z-order or
+    // wait for anything, so call it only once the window is known
+    // to be unoccluded and to have actually presented a fresh
+    // frame (see RaiseToTop).
+    [[nodiscard]] virtual bool CaptureScreenshotBmp(
+        std::string_view path) const = 0;
+
+    // Raises the window above other normal (non-topmost) windows
+    // without taking input focus. Screen capture only sees what is
+    // actually on top on screen; since presenting to an occluded
+    // D3D swapchain is typically skipped by the compositor, the
+    // caller must let at least one more frame render and present
+    // *after* calling this before capturing, or the capture will
+    // read a stale pre-occlusion frame.
+    virtual void RaiseToTop() const = 0;
 
 protected:
     Window() = default;

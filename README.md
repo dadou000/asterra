@@ -60,8 +60,39 @@ The terrain sandbox uses a free camera:
 - Mouse — yaw/pitch look
 - `Q/E` — move down/up
 - `Left Shift` — movement boost
+- `F3` — toggle the debug HUD (FPS, altitude, terrain/cache/ocean stats)
 - `Esc` — quit
 
 Mouse capture is released automatically when the window loses focus.
+
+### Testing over MCP
+
+While `OrbitSandbox` is running, it listens on a loopback-only TCP
+dev server at `127.0.0.1:4319` (see `engine/dev_server`) that accepts
+line-based commands: `PING`, `STATS`, `SCREENSHOT <path>`,
+`TELEPORT <dirX> <dirY> <dirZ> <altitudeMeters>`,
+`SLEW <dirX> <dirY> <dirZ> <altitudeMeters> <durationSeconds>`,
+`DEBUG_OVERLAY <ON|OFF>`, `QUIT`.
+
+`TELEPORT` jumps instantly, which is fine for reading stats but
+leaves a stale, not-yet-restreamed frame on screen if you screenshot
+right after -- use `SLEW` instead to fly there smoothly over real
+frames when you actually need to see the clipmap streaming/morphing
+while moving, e.g. across several `SCREENSHOT` calls spaced a second
+or so apart during the flight.
+
+`tools/mcp_server/orbit_mcp_server.py` exposes those as MCP tools so
+an MCP client (Claude Code, Claude Desktop, ...) can drive and
+inspect a running Orbit process for automated testing:
+
+```powershell
+pip install -r tools/mcp_server/requirements.txt
+claude mcp add orbit -- python C:\path\to\asterra\tools\mcp_server\orbit_mcp_server.py
+```
+
+Launch `OrbitSandbox` separately first (the bridge only talks to an
+already-running process, it doesn't launch one). Screenshots read
+real desktop pixels, so the dev server briefly raises the Orbit
+window's Z-order before capturing to make sure it isn't occluded.
 
 Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) before adding engine systems.

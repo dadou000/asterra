@@ -38,10 +38,226 @@ constexpr const char* kWindowClassName =
         return VK_LSHIFT;
     case Key::Escape:
         return VK_ESCAPE;
+    case Key::F3:
+        return VK_F3;
     }
 
     throw std::invalid_argument(
         "Orbit received an invalid platform key.");
+}
+
+[[nodiscard]] bool WriteWindowBmp(
+    const HWND hwnd,
+    const std::string_view path)
+{
+    if (hwnd == nullptr ||
+        IsWindow(hwnd) == FALSE)
+    {
+        return false;
+    }
+
+    RECT clientRect{};
+
+    if (GetClientRect(
+            hwnd,
+            &clientRect) == FALSE)
+    {
+        return false;
+    }
+
+    const LONG width =
+        clientRect.right -
+        clientRect.left;
+
+    const LONG height =
+        clientRect.bottom -
+        clientRect.top;
+
+    if (width <= 0 ||
+        height <= 0)
+    {
+        return false;
+    }
+
+    // Orbit presents through a D3D12 flip-model swapchain, which
+    // never draws through GDI -- BitBlt'ing from GetDC(hwnd) reads
+    // whatever stale/foreign content happens to sit in the window's
+    // own (unused) GDI surface, not what's on screen. Capturing from
+    // the desktop DC at the window's screen position instead reads
+    // the real, DWM-composited pixels.
+    POINT topLeft{
+        clientRect.left,
+        clientRect.top
+    };
+
+    if (ClientToScreen(
+            hwnd,
+            &topLeft) == FALSE)
+    {
+        return false;
+    }
+
+    const HDC windowDc =
+        GetDC(nullptr);
+
+    if (windowDc == nullptr)
+    {
+        return false;
+    }
+
+    const HDC memoryDc =
+        CreateCompatibleDC(
+            windowDc);
+
+    const HBITMAP bitmap =
+        CreateCompatibleBitmap(
+            windowDc,
+            width,
+            height);
+
+    bool succeeded = false;
+
+    if (memoryDc != nullptr &&
+        bitmap != nullptr)
+    {
+        const HGDIOBJ previousObject =
+            SelectObject(
+                memoryDc,
+                bitmap);
+
+        if (BitBlt(
+                memoryDc,
+                0,
+                0,
+                width,
+                height,
+                windowDc,
+                topLeft.x,
+                topLeft.y,
+                SRCCOPY) != FALSE)
+        {
+            BITMAPINFOHEADER infoHeader{};
+            infoHeader.biSize =
+                sizeof(infoHeader);
+            infoHeader.biWidth = width;
+            infoHeader.biHeight = height;
+            infoHeader.biPlanes = 1;
+            infoHeader.biBitCount = 24;
+            infoHeader.biCompression = BI_RGB;
+
+            const DWORD rowStrideBytes =
+                (static_cast<DWORD>(
+                     width) *
+                     3U +
+                 3U) &
+                ~3U;
+
+            const DWORD pixelBytes =
+                rowStrideBytes *
+                static_cast<DWORD>(
+                    height);
+
+            std::string pixels(
+                pixelBytes,
+                '\0');
+
+            if (GetDIBits(
+                    memoryDc,
+                    bitmap,
+                    0,
+                    static_cast<UINT>(
+                        height),
+                    pixels.data(),
+                    reinterpret_cast<
+                        BITMAPINFO*>(
+                        &infoHeader),
+                    DIB_RGB_COLORS) != 0)
+            {
+                BITMAPFILEHEADER
+                    fileHeader{};
+                fileHeader.bfType =
+                    0x4D42;
+                fileHeader.bfOffBits =
+                    sizeof(fileHeader) +
+                    sizeof(infoHeader);
+                fileHeader.bfSize =
+                    fileHeader.bfOffBits +
+                    pixelBytes;
+
+                const HANDLE file =
+                    CreateFileA(
+                        std::string(
+                            path)
+                            .c_str(),
+                        GENERIC_WRITE,
+                        0,
+                        nullptr,
+                        CREATE_ALWAYS,
+                        FILE_ATTRIBUTE_NORMAL,
+                        nullptr);
+
+                if (file !=
+                    INVALID_HANDLE_VALUE)
+                {
+                    DWORD written = 0;
+
+                    const bool wroteFileHeader =
+                        WriteFile(
+                            file,
+                            &fileHeader,
+                            sizeof(
+                                fileHeader),
+                            &written,
+                            nullptr) !=
+                        FALSE;
+
+                    const bool wroteInfoHeader =
+                        WriteFile(
+                            file,
+                            &infoHeader,
+                            sizeof(
+                                infoHeader),
+                            &written,
+                            nullptr) !=
+                        FALSE;
+
+                    const bool wrotePixels =
+                        WriteFile(
+                            file,
+                            pixels.data(),
+                            pixelBytes,
+                            &written,
+                            nullptr) !=
+                        FALSE;
+
+                    succeeded =
+                        wroteFileHeader &&
+                        wroteInfoHeader &&
+                        wrotePixels;
+
+                    CloseHandle(file);
+                }
+            }
+        }
+
+        SelectObject(
+            memoryDc,
+            previousObject);
+    }
+
+    if (bitmap != nullptr)
+    {
+        DeleteObject(bitmap);
+    }
+
+    if (memoryDc != nullptr)
+    {
+        DeleteDC(memoryDc);
+    }
+
+    ReleaseDC(nullptr, windowDc);
+
+    return succeeded;
 }
 
 LRESULT CALLBACK OrbitWindowProc(
@@ -305,6 +521,65 @@ public:
     Height() const override
     {
         return height_;
+    }
+
+    [[nodiscard]] bool
+    CaptureScreenshotBmp(
+        const std::string_view path)
+        const override
+    {
+        return WriteWindowBmp(
+            hwnd_,
+            path);
+    }
+
+    void RaiseToTop() const override
+    {
+        // Screen-capture reads real desktop pixels, so anything
+        // this window doesn't sit above on screen wins the shot.
+        // SetForegroundWindow cannot help here -- Windows' foreground
+        // lock timeout blocks it even for a window's own owning
+        // process when that process didn't just receive user input.
+        // Raising the Z-order does not need that permission, so use
+        // that instead: briefly toggle topmost to guarantee it beats
+        // even another already-topmost window, then release
+        // topmost so it behaves like a normal window afterwards.
+        //
+        // This cannot itself force a fresh frame onto the screen --
+        // presenting to an occluded swapchain is typically skipped
+        // by the compositor -- so the caller must let the render
+        // loop actually draw and present at least once more (from a
+        // *later* frame, not synchronously here: blocking this
+        // thread would block that same render loop) before it reads
+        // pixels back.
+        if (IsIconic(hwnd_) != FALSE)
+        {
+            ShowWindow(
+                hwnd_,
+                SW_RESTORE);
+        }
+
+        SetWindowPos(
+            hwnd_,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE |
+                SWP_NOSIZE |
+                SWP_NOACTIVATE);
+
+        SetWindowPos(
+            hwnd_,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE |
+                SWP_NOSIZE |
+                SWP_NOACTIVATE);
     }
 
 private:
