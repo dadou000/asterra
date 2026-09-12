@@ -1281,21 +1281,22 @@ private:
             pendingUpdate_.reset();
             stats_.updatePending = false;
 
-            if (generation ==
-                desiredGeneration_)
-            {
-                CommitCandidate(
-                    std::move(candidate),
-                    results);
+            const bool superseded =
+                generation !=
+                    desiredGeneration_;
 
-                committedGeneration_ =
-                    generation;
+            CommitCandidate(
+                std::move(candidate),
+                results);
 
-                ++stats_.committedBatches;
-            }
-            else
+            committedGeneration_ =
+                generation;
+
+            ++stats_.committedBatches;
+
+            if (superseded)
             {
-                ++stats_.discardedBatches;
+                ++stats_.supersededBatches;
             }
         }
 
