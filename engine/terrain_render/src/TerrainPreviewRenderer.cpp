@@ -815,7 +815,9 @@ private:
 
     struct LevelGpuState
     {
-        std::vector<f32> cpuSamples;
+        std::vector<
+            terrain_stream::TerrainSampleValue>
+            cpuSamples;
 
         std::vector<
             std::unique_ptr<rhi::Buffer>>
