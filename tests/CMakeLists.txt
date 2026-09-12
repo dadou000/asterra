@@ -314,3 +314,21 @@ add_test(
     NAME Orbit.DerivedTerrainStreaming
     COMMAND OrbitDerivedTerrainStreamingTests
 )
+
+
+add_executable(OrbitRiverWaterTests
+    RiverWaterTests.cpp
+)
+
+target_link_libraries(OrbitRiverWaterTests
+    PRIVATE
+        Orbit::TerrainWater
+)
+
+target_compile_features(OrbitRiverWaterTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRiverWaterTests)
+
+add_test(
+    NAME Orbit.RiverWater
+    COMMAND OrbitRiverWaterTests
+)

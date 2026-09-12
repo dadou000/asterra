@@ -108,7 +108,13 @@ private:
         a.carving.spatialCellOffsets !=
             b.carving.spatialCellOffsets ||
         a.carving.spatialSegmentIndices !=
-            b.carving.spatialSegmentIndices)
+            b.carving.spatialSegmentIndices ||
+        a.water.nodes.size() !=
+            b.water.nodes.size() ||
+        a.water.segments.size() !=
+            b.water.segments.size() ||
+        a.water.coreHalfExtentMeters !=
+            b.water.coreHalfExtentMeters)
     {
         return false;
     }
@@ -215,6 +221,58 @@ private:
                 right.upstreamNode ||
             left.downstreamNode !=
                 right.downstreamNode)
+        {
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < a.water.nodes.size();
+         ++index)
+    {
+        const auto& left =
+            a.water.nodes[index];
+        const auto& right =
+            b.water.nodes[index];
+
+        if (left.sourceRiverNode !=
+                right.sourceRiverNode ||
+            left.offsetMeters.x !=
+                right.offsetMeters.x ||
+            left.offsetMeters.y !=
+                right.offsetMeters.y ||
+            left.bedElevationMeters !=
+                right.bedElevationMeters ||
+            left.surfaceElevationMeters !=
+                right.surfaceElevationMeters ||
+            left.halfWidthMeters !=
+                right.halfWidthMeters ||
+            left.depthMeters !=
+                right.depthMeters ||
+            left.drainageAreaSquareMeters !=
+                right.drainageAreaSquareMeters)
+        {
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < a.water.segments.size();
+         ++index)
+    {
+        const auto& left =
+            a.water.segments[index];
+        const auto& right =
+            b.water.segments[index];
+
+        if (left.upstreamNode !=
+                right.upstreamNode ||
+            left.downstreamNode !=
+                right.downstreamNode ||
+            left.slope !=
+                right.slope ||
+            left.velocityMetersPerSecond !=
+                right.velocityMetersPerSecond)
         {
             return false;
         }

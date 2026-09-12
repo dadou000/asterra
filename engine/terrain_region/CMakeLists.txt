@@ -20,6 +20,7 @@ target_link_libraries(OrbitTerrainRegion
         Orbit::Terrain
         Orbit::TerrainHydrology
         Orbit::TerrainErosion
+        Orbit::TerrainWater
         Orbit::World
 )
 

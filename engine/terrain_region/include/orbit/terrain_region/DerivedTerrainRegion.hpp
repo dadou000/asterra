@@ -7,6 +7,7 @@
 #include <orbit/terrain_erosion/RiverCarving.hpp>
 #include <orbit/terrain_hydrology/HydrologyGrid.hpp>
 #include <orbit/terrain_hydrology/RiverGraph.hpp>
+#include <orbit/terrain_water/RiverWater.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <cstddef>
@@ -68,6 +69,8 @@ struct DerivedTerrainRegionConfig
         .maximumIncisionMeters = 250.0,
         .spatialIndexResolution = 64
     };
+
+    terrain_water::RiverWaterConfig water{};
 };
 
 struct DerivedTerrainRegion
@@ -81,6 +84,7 @@ struct DerivedTerrainRegion
     terrain_erosion::RegionalElevationDeltaField elevationDelta{};
     terrain_hydrology::RiverGraph rivers{};
     terrain_erosion::RiverCarvingField carving{};
+    terrain_water::RiverWaterNetwork water{};
 };
 
 [[nodiscard]] DerivedTerrainRegion BuildDerivedTerrainRegion(

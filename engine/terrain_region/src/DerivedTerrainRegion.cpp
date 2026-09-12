@@ -186,6 +186,16 @@ DerivedTerrainRegion BuildDerivedTerrainRegion(
                 rivers,
                 config.carving);
 
+    auto water =
+        terrain_water::
+            BuildRiverWaterNetwork(
+                refinement.hydrology,
+                rivers,
+                carving,
+                approximateTileWidthMeters *
+                    0.5,
+                config.water);
+
     RejectStaleSource(
         source,
         id,
@@ -208,7 +218,10 @@ DerivedTerrainRegion BuildDerivedTerrainRegion(
                 rivers),
         .carving =
             std::move(
-                carving)
+                carving),
+        .water =
+            std::move(
+                water)
     };
 }
 } // namespace orbit::terrain_region
