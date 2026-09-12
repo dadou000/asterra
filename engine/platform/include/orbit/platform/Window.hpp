@@ -31,5 +31,5 @@ protected:
     Window() = default;
 };
 
-[[nodiscard]] std::unique_ptr<Window> CreateWindow(const WindowDesc& desc);
+[[nodiscard]] std::unique_ptr<Window> MakeWindow(const WindowDesc& desc);
 } // namespace orbit::platform

@@ -148,7 +148,7 @@ private:
 };
 } // namespace
 
-std::unique_ptr<Window> CreateWindow(const WindowDesc& desc)
+std::unique_ptr<Window> MakeWindow(const WindowDesc& desc)
 {
     return std::make_unique<Win32Window>(desc);
 }
