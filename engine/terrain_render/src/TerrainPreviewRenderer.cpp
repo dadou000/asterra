@@ -12,7 +12,6 @@
 #include <cstring>
 #include <deque>
 #include <limits>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -539,23 +538,123 @@ public:
         CreatePipeline(
             shaderCompiler);
 
-        InitializeBlocking(observer);
+        UpdateObserver(observer);
     }
 
     void UpdateObserver(
         const world::WorldPosition& observer)
     {
-        UpdateViewObserver(observer);
+        const f64 observerRadius =
+            math::Length(
+                observer.meters);
 
-        targetObserver_ = observer;
-        targetObserverDirty_ = true;
-
-        PollPendingUpdate();
-
-        if (!pendingUpdate_.has_value())
+        if (observerRadius <=
+            planet_.radiusMeters)
         {
-            StartPendingUpdate();
+            throw std::invalid_argument(
+                "Orbit terrain preview observer must be above the planet surface.");
         }
+
+        stats_.generatedSamplesLastUpdate = 0;
+        stats_.refreshedRegionsLastUpdate = 0;
+        stats_.levelsTouchedLastUpdate = 0;
+
+        observer_ = observer;
+        observerFrame_ =
+            world::MakeSurfaceFrame(
+                observer.meters);
+
+        observerRadiusMeters_ =
+            static_cast<f32>(
+                observerRadius);
+
+        motion_ =
+            tracker_.Update(observer);
+
+        residencyUpdate_ =
+            residency_.Apply(motion_);
+
+        std::vector<
+            terrain_stream::TerrainSampleRequest>
+            sampleRequests;
+
+        sampleRequests.reserve(
+            levels_.size());
+
+        for (u32 levelIndex = 0;
+             levelIndex <
+                static_cast<u32>(
+                    levels_.size());
+             ++levelIndex)
+        {
+            const auto& levelUpdate =
+                residencyUpdate_.levels[
+                    levelIndex];
+
+            if (levelUpdate.
+                    refreshRegions.empty())
+            {
+                continue;
+            }
+
+            const auto& level =
+                layout_.levels[
+                    levelIndex];
+
+            sampleRequests.push_back({
+                .levelIndex = levelIndex,
+                .resolution =
+                    level.gridResolution,
+                .spacingMeters =
+                    level.sampleSpacingMeters,
+                .footprintMeters =
+                    level.terrainFootprintMeters,
+                .surfaceFrame =
+                    motion_.levels[
+                        levelIndex].
+                        surfaceFrame,
+                .originX =
+                    levelUpdate.originX,
+                .originY =
+                    levelUpdate.originY,
+                .regions =
+                    levelUpdate.
+                        refreshRegions
+            });
+        }
+
+        const auto sampleResults =
+            sampleStreamer_.
+                GenerateBlocking(
+                    sampleRequests);
+
+        for (const auto& result :
+             sampleResults)
+        {
+            if (result.patches.empty())
+            {
+                continue;
+            }
+
+            ++stats_.
+                levelsTouchedLastUpdate;
+
+            stats_.
+                refreshedRegionsLastUpdate +=
+                    static_cast<u32>(
+                        result.patches.size());
+
+            stats_.
+                generatedSamplesLastUpdate +=
+                    result.sampleCount;
+
+            ApplySampleResult(result);
+        }
+
+        stats_.
+            cumulativeGeneratedSamples +=
+                stats_.
+                    generatedSamplesLastUpdate;
     }
 
     void Draw(
@@ -564,8 +663,6 @@ public:
         const u32 targetWidth,
         const u32 targetHeight)
     {
-        PollPendingUpdate();
-
         stats_.uploadedBytesLastFrame = 0;
         stats_.drawCallsLastFrame = 0;
 
@@ -581,9 +678,6 @@ public:
         {
             return;
         }
-
-        PrepareSharedTopology(
-            commandList);
 
         const f32 aspect =
             static_cast<f32>(
@@ -648,7 +742,6 @@ public:
         {
             stats_.uploadedBytesLastFrame +=
                 PrepareLevelFrame(
-                    commandList,
                     levelIndex,
                     frameIndex);
 
@@ -775,13 +868,6 @@ public:
     }
 
 private:
-    struct PendingTerrainUpdate
-    {
-        terrain_view::ClipmapMotionUpdate motion;
-        terrain_stream::ResidencyUpdate residency;
-        terrain_stream::TerrainSampleBatch batch;
-    };
-
     struct DirtyUpdate
     {
         u64 serial{0};
@@ -797,10 +883,6 @@ private:
         std::vector<
             std::unique_ptr<rhi::Buffer>>
             frameHeightBuffers;
-
-        std::vector<
-            std::unique_ptr<rhi::Buffer>>
-            frameUploadBuffers;
 
         std::vector<u64> frameSerials;
         std::deque<DirtyUpdate> dirtyUpdates;
@@ -832,34 +914,17 @@ private:
                         Index,
                 .memory =
                     rhi::MemoryUsage::
-                        GpuOnly,
-                .initialState =
-                    rhi::ResourceState::
-                        CopyDestination
-            });
-
-        centerIndexUploadBuffer_ =
-            device_.CreateBuffer({
-                .sizeBytes = centerBytes,
-                .usage =
-                    rhi::BufferUsage::
-                        Generic,
-                .memory =
-                    rhi::MemoryUsage::
                         HostVisible,
                 .initialState =
                     rhi::ResourceState::
-                        CopySource
+                        IndexBuffer
             });
 
         UploadBuffer(
-            *centerIndexUploadBuffer_,
+            *centerIndexBuffer_,
             centerIndices.data(),
             static_cast<std::size_t>(
                 centerBytes));
-
-        centerIndexBytes_ =
-            centerBytes;
 
         if (config_.clipmap.levelCount > 1)
         {
@@ -886,78 +951,18 @@ private:
                             Index,
                     .memory =
                         rhi::MemoryUsage::
-                            GpuOnly,
-                    .initialState =
-                        rhi::ResourceState::
-                            CopyDestination
-                });
-
-            ringIndexUploadBuffer_ =
-                device_.CreateBuffer({
-                    .sizeBytes =
-                        ringBytes,
-                    .usage =
-                        rhi::BufferUsage::
-                            Generic,
-                    .memory =
-                        rhi::MemoryUsage::
                             HostVisible,
                     .initialState =
                         rhi::ResourceState::
-                            CopySource
+                            IndexBuffer
                 });
 
             UploadBuffer(
-                *ringIndexUploadBuffer_,
+                *ringIndexBuffer_,
                 ringIndices.data(),
                 static_cast<std::size_t>(
                     ringBytes));
-
-            ringIndexBytes_ =
-                ringBytes;
         }
-    }
-
-    void PrepareSharedTopology(
-        rhi::CommandList& commandList)
-    {
-        if (!topologyUploadPending_)
-        {
-            return;
-        }
-
-        commandList.CopyBuffer(
-            *centerIndexUploadBuffer_,
-            0,
-            *centerIndexBuffer_,
-            0,
-            centerIndexBytes_);
-
-        commandList.Transition(
-            *centerIndexBuffer_,
-            rhi::ResourceState::
-                CopyDestination,
-            rhi::ResourceState::
-                IndexBuffer);
-
-        if (ringIndexBuffer_ != nullptr)
-        {
-            commandList.CopyBuffer(
-                *ringIndexUploadBuffer_,
-                0,
-                *ringIndexBuffer_,
-                0,
-                ringIndexBytes_);
-
-            commandList.Transition(
-                *ringIndexBuffer_,
-                rhi::ResourceState::
-                    CopyDestination,
-                rhi::ResourceState::
-                    IndexBuffer);
-        }
-
-        topologyUploadPending_ = false;
     }
 
     void CreateLevelBuffers()
@@ -988,9 +993,6 @@ private:
             level.frameHeightBuffers.reserve(
                 config_.framesInFlight);
 
-            level.frameUploadBuffers.reserve(
-                config_.framesInFlight);
-
             for (u32 frameIndex = 0;
                  frameIndex <
                     config_.framesInFlight;
@@ -1004,24 +1006,10 @@ private:
                                 Structured,
                         .memory =
                             rhi::MemoryUsage::
-                                GpuOnly,
-                        .initialState =
-                            rhi::ResourceState::
-                                ShaderResource
-                    }));
-
-                level.frameUploadBuffers.push_back(
-                    device_.CreateBuffer({
-                        .sizeBytes = bytes,
-                        .usage =
-                            rhi::BufferUsage::
-                                Generic,
-                        .memory =
-                            rhi::MemoryUsage::
                                 HostVisible,
                         .initialState =
                             rhi::ResourceState::
-                                CopySource
+                                ShaderResource
                     }));
             }
         }
@@ -1101,256 +1089,6 @@ private:
                     .depthTest = true,
                     .depthWrite = true
                 });
-    }
-
-    void UpdateViewObserver(
-        const world::WorldPosition& observer)
-    {
-        const f64 observerRadius =
-            math::Length(
-                observer.meters);
-
-        if (observerRadius <=
-            planet_.radiusMeters)
-        {
-            throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
-        }
-
-        observer_ = observer;
-        observerFrame_ =
-            world::MakeSurfaceFrame(
-                observer.meters);
-
-        observerRadiusMeters_ =
-            static_cast<f32>(
-                observerRadius);
-    }
-
-    [[nodiscard]] std::vector<
-        terrain_stream::TerrainSampleRequest>
-    BuildSampleRequests(
-        const terrain_view::ClipmapMotionUpdate& motion,
-        const terrain_stream::ResidencyUpdate& residency)
-        const
-    {
-        std::vector<
-            terrain_stream::TerrainSampleRequest>
-            requests;
-
-        requests.reserve(
-            levels_.size());
-
-        for (u32 levelIndex = 0;
-             levelIndex <
-                static_cast<u32>(
-                    levels_.size());
-             ++levelIndex)
-        {
-            const auto& levelUpdate =
-                residency.levels[
-                    levelIndex];
-
-            if (levelUpdate.
-                    refreshRegions.empty())
-            {
-                continue;
-            }
-
-            const auto& level =
-                layout_.levels[
-                    levelIndex];
-
-            requests.push_back({
-                .levelIndex = levelIndex,
-                .resolution =
-                    level.gridResolution,
-                .spacingMeters =
-                    level.sampleSpacingMeters,
-                .footprintMeters =
-                    level.terrainFootprintMeters,
-                .surfaceFrame =
-                    motion.levels[
-                        levelIndex].
-                        surfaceFrame,
-                .originX =
-                    levelUpdate.originX,
-                .originY =
-                    levelUpdate.originY,
-                .regions =
-                    levelUpdate.
-                        refreshRegions
-            });
-        }
-
-        return requests;
-    }
-
-    void ResetCompletedUpdateStats() noexcept
-    {
-        stats_.generatedSamplesLastUpdate = 0;
-        stats_.refreshedRegionsLastUpdate = 0;
-        stats_.levelsTouchedLastUpdate = 0;
-    }
-
-    void ApplySampleResults(
-        const std::vector<
-            terrain_stream::TerrainSampleResult>& results)
-    {
-        ResetCompletedUpdateStats();
-
-        for (const auto& result :
-             results)
-        {
-            if (result.patches.empty())
-            {
-                continue;
-            }
-
-            ++stats_.
-                levelsTouchedLastUpdate;
-
-            stats_.
-                refreshedRegionsLastUpdate +=
-                    static_cast<u32>(
-                        result.patches.size());
-
-            stats_.
-                generatedSamplesLastUpdate +=
-                    result.sampleCount;
-
-            ApplySampleResult(result);
-        }
-
-        stats_.
-            cumulativeGeneratedSamples +=
-                stats_.
-                    generatedSamplesLastUpdate;
-    }
-
-    void InitializeBlocking(
-        const world::WorldPosition& observer)
-    {
-        UpdateViewObserver(observer);
-
-        targetObserver_ = observer;
-        targetObserverDirty_ = false;
-
-        terrain_view::ClipmapMotionUpdate initialMotion =
-            tracker_.Update(observer);
-
-        terrain_stream::ResidencyUpdate initialResidency =
-            residency_.Apply(
-                initialMotion);
-
-        const auto requests =
-            BuildSampleRequests(
-                initialMotion,
-                initialResidency);
-
-        const auto results =
-            sampleStreamer_.
-                GenerateBlocking(
-                    requests);
-
-        ApplySampleResults(results);
-
-        motion_ =
-            std::move(
-                initialMotion);
-
-        residencyUpdate_ =
-            std::move(
-                initialResidency);
-    }
-
-    void StartPendingUpdate()
-    {
-        if (pendingUpdate_.has_value() ||
-            !targetObserverDirty_)
-        {
-            return;
-        }
-
-        terrain_view::ClipmapMotionUpdate nextMotion =
-            tracker_.Update(
-                targetObserver_);
-
-        terrain_stream::ResidencyUpdate nextResidency =
-            residency_.Apply(
-                nextMotion);
-
-        auto requests =
-            BuildSampleRequests(
-                nextMotion,
-                nextResidency);
-
-        targetObserverDirty_ = false;
-
-        if (requests.empty())
-        {
-            motion_ =
-                std::move(
-                    nextMotion);
-
-            residencyUpdate_ =
-                std::move(
-                    nextResidency);
-
-            return;
-        }
-
-        PendingTerrainUpdate pending{};
-        pending.motion =
-            std::move(
-                nextMotion);
-        pending.residency =
-            std::move(
-                nextResidency);
-        pending.batch =
-            sampleStreamer_.
-                Submit(
-                    requests);
-
-        pendingUpdate_ =
-            std::move(
-                pending);
-    }
-
-    void PollPendingUpdate()
-    {
-        if (!pendingUpdate_.has_value())
-        {
-            return;
-        }
-
-        std::vector<
-            terrain_stream::TerrainSampleResult>
-            results;
-
-        if (!sampleStreamer_.TryCollect(
-                pendingUpdate_->batch,
-                results))
-        {
-            return;
-        }
-
-        ApplySampleResults(results);
-
-        motion_ =
-            std::move(
-                pendingUpdate_->motion);
-
-        residencyUpdate_ =
-            std::move(
-                pendingUpdate_->residency);
-
-        pendingUpdate_.reset();
-
-        if (targetObserverDirty_)
-        {
-            StartPendingUpdate();
-        }
     }
 
     void ApplySampleResult(
@@ -1433,7 +1171,6 @@ private:
     }
 
     [[nodiscard]] u64 PrepareLevelFrame(
-        rhi::CommandList& commandList,
         const u32 levelIndex,
         const u32 frameIndex)
     {
@@ -1450,16 +1187,12 @@ private:
             return 0;
         }
 
-        rhi::Buffer& residentBuffer =
+        rhi::Buffer& buffer =
             *state.frameHeightBuffers[
                 frameIndex];
 
-        rhi::Buffer& uploadBuffer =
-            *state.frameUploadBuffers[
-                frameIndex];
-
         std::byte* mapped =
-            uploadBuffer.Map();
+            buffer.Map();
 
         auto* destination =
             reinterpret_cast<f32*>(
@@ -1488,7 +1221,7 @@ private:
                      row < region.height;
                      ++row)
                 {
-                    const std::size_t sampleOffset =
+                    const std::size_t offset =
                         static_cast<std::size_t>(
                             region.y + row) *
                             resolution +
@@ -1500,9 +1233,9 @@ private:
                         sizeof(f32);
 
                     std::memcpy(
-                        destination + sampleOffset,
+                        destination + offset,
                         state.cpuHeights.data() +
-                            sampleOffset,
+                            offset,
                         rowBytes);
 
                     uploadedBytes +=
@@ -1512,63 +1245,7 @@ private:
             }
         }
 
-        uploadBuffer.Unmap();
-
-        commandList.Transition(
-            residentBuffer,
-            rhi::ResourceState::
-                ShaderResource,
-            rhi::ResourceState::
-                CopyDestination);
-
-        for (const DirtyUpdate& update :
-             state.dirtyUpdates)
-        {
-            if (update.serial <=
-                frameSerial)
-            {
-                continue;
-            }
-
-            for (const terrain_stream::
-                     PhysicalRegion& region :
-                 update.regions)
-            {
-                for (u32 row = 0;
-                     row < region.height;
-                     ++row)
-                {
-                    const u64 sampleOffset =
-                        static_cast<u64>(
-                            region.y + row) *
-                            resolution +
-                        region.x;
-
-                    const u64 byteOffset =
-                        sampleOffset *
-                        sizeof(f32);
-
-                    const u64 rowBytes =
-                        static_cast<u64>(
-                            region.width) *
-                        sizeof(f32);
-
-                    commandList.CopyBuffer(
-                        uploadBuffer,
-                        byteOffset,
-                        residentBuffer,
-                        byteOffset,
-                        rowBytes);
-                }
-            }
-        }
-
-        commandList.Transition(
-            residentBuffer,
-            rhi::ResourceState::
-                CopyDestination,
-            rhi::ResourceState::
-                ShaderResource);
+        buffer.Unmap();
 
         frameSerial =
             state.currentSerial;
@@ -1617,13 +1294,7 @@ private:
         centerIndexBuffer_;
 
     std::unique_ptr<rhi::Buffer>
-        centerIndexUploadBuffer_;
-
-    std::unique_ptr<rhi::Buffer>
         ringIndexBuffer_;
-
-    std::unique_ptr<rhi::Buffer>
-        ringIndexUploadBuffer_;
 
     std::unique_ptr<
         rhi::GraphicsPipeline>
@@ -1631,12 +1302,6 @@ private:
 
     world::WorldPosition observer_{};
     world::SurfaceFrame observerFrame_{};
-
-    world::WorldPosition targetObserver_{};
-    bool targetObserverDirty_{false};
-
-    std::optional<PendingTerrainUpdate>
-        pendingUpdate_;
 
     terrain_view::ClipmapMotionUpdate
         motion_;
@@ -1647,10 +1312,6 @@ private:
     f32 observerRadiusMeters_{0.0F};
 
     TerrainStreamingStats stats_{};
-
-    u64 centerIndexBytes_{0};
-    u64 ringIndexBytes_{0};
-    bool topologyUploadPending_{true};
 
     u32 centerIndexCount_{0};
     u32 ringIndexCount_{0};
