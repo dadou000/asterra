@@ -1,3 +1,4 @@
+#include <orbit/world/Planet.hpp>
 #include <orbit/world/WorldPosition.hpp>
 
 #include <cmath>
@@ -51,6 +52,45 @@ int main()
     if (std::fabs(actualDistanceSquared - expectedDistanceSquared) > 1.0e-9)
     {
         std::cerr << "World-space distance calculation failed.\n";
+        return 1;
+    }
+
+    constexpr orbit::f64 sphereRadius =
+        6'000'000.0;
+
+    constexpr orbit::f64 observerRadius =
+        8'000'000.0;
+
+    const orbit::f64 horizonArc =
+        orbit::world::HorizonArcDistanceMeters(
+            sphereRadius,
+            observerRadius);
+
+    const orbit::f64 expectedHorizonArc =
+        sphereRadius *
+        std::acos(
+            sphereRadius /
+            observerRadius);
+
+    if (std::abs(
+            horizonArc -
+            expectedHorizonArc) >
+            1.0e-9)
+    {
+        std::cerr
+            << "Spherical horizon arc distance is incorrect.\n";
+        return 1;
+    }
+
+    if (orbit::world::HorizonArcDistanceMeters(
+            sphereRadius,
+            sphereRadius) != 0.0 ||
+        orbit::world::HorizonArcDistanceMeters(
+            sphereRadius,
+            sphereRadius - 1.0) != 0.0)
+    {
+        std::cerr
+            << "Spherical horizon arc accepted an observer inside the surface.\n";
         return 1;
     }
 
