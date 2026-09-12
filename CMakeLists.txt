@@ -18,6 +18,11 @@ option(ORBIT_WARNINGS_AS_ERRORS "Treat Orbit warnings as errors" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(OrbitWarnings)
+include(CTest)
 
 add_subdirectory(engine)
 add_subdirectory(apps/sandbox)
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

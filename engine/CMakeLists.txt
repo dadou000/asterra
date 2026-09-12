@@ -1,4 +1,6 @@
 add_subdirectory(core)
+add_subdirectory(math)
 add_subdirectory(platform)
 add_subdirectory(rhi)
 add_subdirectory(rhi/d3d12)
+add_subdirectory(world)
