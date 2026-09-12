@@ -60,6 +60,22 @@ namespace
         "Orbit received an invalid cull mode.");
 }
 
+[[nodiscard]] D3D12_COMPARISON_FUNC
+ToNativeDepthCompare(
+    const DepthCompare compare)
+{
+    switch (compare)
+    {
+    case DepthCompare::LessEqual:
+        return D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    case DepthCompare::GreaterEqual:
+        return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+    }
+
+    throw std::invalid_argument(
+        "Orbit received an invalid depth comparison mode.");
+}
+
 [[nodiscard]] D3D12_PRIMITIVE_TOPOLOGY_TYPE
 ToNativeTopologyType(
     const PrimitiveTopology topology)
@@ -346,7 +362,8 @@ D3D12Device::CreateGraphicsPipeline(
             : D3D12_DEPTH_WRITE_MASK_ZERO;
 
     pipelineDesc.DepthStencilState.DepthFunc =
-        D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        ToNativeDepthCompare(
+            desc.depthCompare);
 
     pipelineDesc.DepthStencilState.
         StencilEnable = FALSE;
