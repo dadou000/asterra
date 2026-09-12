@@ -262,7 +262,7 @@ int main()
                             seaLevelMeters,
                     .minimumRadiusMeters = 25.0,
                     .maximumRadiusMeters =
-                        240'000.0,
+                        3'000'000.0,
                     .waveAmplitudeScale = 1.0F,
                     .verticalFovRadians =
                         terrainPreviewConfig.
@@ -652,7 +652,7 @@ int main()
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw | water rivers {} lakes {} upload {} B",
+                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw {:.0f} km | water rivers {} lakes {} upload {} B",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -696,6 +696,9 @@ int main()
                         oceanStats.indices,
                         oceanStats.
                             drawCallsLastFrame,
+                        oceanStats.
+                            effectiveRadiusMeters /
+                            1000.0,
                         waterStats.
                             visibleSegmentsLastFrame,
                         waterStats.
