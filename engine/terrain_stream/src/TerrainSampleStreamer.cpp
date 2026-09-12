@@ -2,6 +2,8 @@
 
 #include <orbit/math/Vector.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -55,6 +57,23 @@ void ValidateRequest(
     {
         throw std::invalid_argument(
             "Orbit terrain sampling footprint must be positive.");
+    }
+
+    if (request.morphToCoarser)
+    {
+        if (request.coarseSpacingMeters <= 0.0 ||
+            request.coarseFootprintMeters <= 0.0)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain coarse morph sampling requires positive coarse spacing and footprint.");
+        }
+
+        if (request.morphEndHalfExtentMeters <=
+            request.morphStartHalfExtentMeters)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain coarse morph range must have positive width.");
+        }
     }
 
     if (request.originX >= request.resolution ||
@@ -273,7 +292,7 @@ TerrainSampleStreamer::GeneratePatch(
     TerrainSamplePatch patch{};
     patch.region = region;
 
-    patch.elevations.resize(
+    patch.samples.resize(
         static_cast<std::size_t>(
             region.width) *
         static_cast<std::size_t>(
@@ -331,22 +350,121 @@ TerrainSampleStreamer::GeneratePatch(
                     request.surfaceFrame,
                     offsetMeters);
 
-            const f32 elevation =
-                static_cast<f32>(
-                    terrainSource_.Sample({
-                        .unitDirection =
-                            direction,
-                        .footprintMeters =
-                            request.
-                                footprintMeters
-                    }).elevationMeters);
+            f64 elevation =
+                terrainSource_.Sample({
+                    .unitDirection =
+                        direction,
+                    .footprintMeters =
+                        request.
+                            footprintMeters
+                }).elevationMeters;
 
-            patch.elevations[
+            math::Double2 morphTarget =
+                offsetMeters;
+
+            if (request.morphToCoarser)
+            {
+                const math::Double2
+                    coarseLocalOffset =
+                        world::
+                            SurfaceOffsetBetweenDirections(
+                                planet_,
+                                request.
+                                    coarseSurfaceFrame,
+                                direction);
+
+                const math::Double2
+                    snappedCoarseOffset{
+                        std::round(
+                            coarseLocalOffset.x /
+                            request.
+                                coarseSpacingMeters) *
+                            request.
+                                coarseSpacingMeters,
+                        std::round(
+                            coarseLocalOffset.y /
+                            request.
+                                coarseSpacingMeters) *
+                            request.
+                                coarseSpacingMeters
+                    };
+
+                const math::Double3
+                    coarseDirection =
+                        world::
+                            DirectionAtSurfaceOffset(
+                                planet_,
+                                request.
+                                    coarseSurfaceFrame,
+                                snappedCoarseOffset);
+
+                morphTarget =
+                    world::
+                        SurfaceOffsetBetweenDirections(
+                            planet_,
+                            request.
+                                surfaceFrame,
+                            coarseDirection);
+
+                const f64 edgeDistance =
+                    std::max(
+                        std::abs(
+                            offsetMeters.x),
+                        std::abs(
+                            offsetMeters.y));
+
+                const f64 normalized =
+                    std::clamp(
+                        (edgeDistance -
+                         request.
+                            morphStartHalfExtentMeters) /
+                            (request.
+                                morphEndHalfExtentMeters -
+                             request.
+                                morphStartHalfExtentMeters),
+                        0.0,
+                        1.0);
+
+                const f64 morph =
+                    normalized *
+                    normalized *
+                    (3.0 -
+                     2.0 * normalized);
+
+                if (morph > 0.0)
+                {
+                    const f64 coarseElevation =
+                        terrainSource_.Sample({
+                            .unitDirection =
+                                coarseDirection,
+                            .footprintMeters =
+                                request.
+                                    coarseFootprintMeters
+                        }).elevationMeters;
+
+                    elevation =
+                        elevation *
+                            (1.0 - morph) +
+                        coarseElevation *
+                            morph;
+                }
+            }
+
+            patch.samples[
                 static_cast<std::size_t>(
                     localY) *
                     region.width +
-                localX] =
-                    elevation;
+                localX] = {
+                    .elevationMeters =
+                        static_cast<f32>(
+                            elevation),
+                    .morphTargetXMeters =
+                        static_cast<f32>(
+                            morphTarget.x),
+                    .morphTargetYMeters =
+                        static_cast<f32>(
+                            morphTarget.y)
+                };
         }
     }
 

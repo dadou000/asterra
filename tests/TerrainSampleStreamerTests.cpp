@@ -136,7 +136,7 @@ int main()
     for (const auto& patch :
          results[0].patches)
     {
-        if (patch.elevations.size() !=
+        if (patch.samples.size() !=
             static_cast<std::size_t>(
                 patch.region.width) *
             patch.region.height)
@@ -146,11 +146,11 @@ int main()
             return 1;
         }
 
-        for (const orbit::f32 elevation :
-             patch.elevations)
+        for (const auto& sample :
+             patch.samples)
         {
             if (!NearlyEqual(
-                    elevation,
+                    sample.elevationMeters,
                     5.0F))
             {
                 std::cerr
@@ -160,11 +160,11 @@ int main()
         }
     }
 
-    for (const orbit::f32 elevation :
-         results[1].patches[0].elevations)
+    for (const auto& sample :
+         results[1].patches[0].samples)
     {
         if (!NearlyEqual(
-                elevation,
+                sample.elevationMeters,
                 20.0F))
         {
             std::cerr
@@ -229,6 +229,129 @@ int main()
     {
         std::cerr
             << "Terrain sample async results do not match blocking results.\n";
+        return 1;
+    }
+
+    const orbit::world::SurfaceFrame
+        fineFrame =
+            orbit::world::SurfaceFrameAtOffset(
+                planet,
+                frame,
+                {20.0, 0.0});
+
+    const std::vector<
+        orbit::terrain_stream::TerrainSampleRequest>
+        morphRequests{
+            {
+                .levelIndex = 0,
+                .resolution = 9,
+                .spacingMeters = 10.0,
+                .footprintMeters = 5.0,
+                .morphToCoarser = true,
+                .morphStartHalfExtentMeters = 20.0,
+                .morphEndHalfExtentMeters = 40.0,
+                .coarseSpacingMeters = 40.0,
+                .coarseFootprintMeters = 20.0,
+                .surfaceFrame = fineFrame,
+                .coarseSurfaceFrame = frame,
+                .originX = 0,
+                .originY = 0,
+                .regions = {
+                    {
+                        .x = 0,
+                        .y = 0,
+                        .width = 9,
+                        .height = 9
+                    }
+                }
+            }
+        };
+
+    const auto morphResults =
+        streamer.GenerateBlocking(
+            morphRequests);
+
+    const auto& morphSamples =
+        morphResults[0].
+            patches[0].
+            samples;
+
+    if (!NearlyEqual(
+            morphSamples[4U * 9U + 4U].
+                elevationMeters,
+            5.0F))
+    {
+        std::cerr
+            << "Terrain LOD morph changed the unmorphed center height.\n";
+        return 1;
+    }
+
+    const auto& transitionSample =
+        morphSamples[
+            4U * 9U + 7U];
+
+    if (!NearlyEqual(
+            transitionSample.
+                elevationMeters,
+            12.5F))
+    {
+        std::cerr
+            << "Terrain LOD morph did not blend transition height.\n";
+        return 1;
+    }
+
+    const orbit::math::Double3
+        transitionTargetDirection =
+            orbit::world::
+                DirectionAtSurfaceOffset(
+                    planet,
+                    fineFrame,
+                    {
+                        transitionSample.
+                            morphTargetXMeters,
+                        transitionSample.
+                            morphTargetYMeters
+                    });
+
+    const orbit::math::Double2
+        transitionInCoarseFrame =
+            orbit::world::
+                SurfaceOffsetBetweenDirections(
+                    planet,
+                    frame,
+                    transitionTargetDirection);
+
+    const orbit::f64 coarseXCells =
+        transitionInCoarseFrame.x /
+        40.0;
+
+    const orbit::f64 coarseYCells =
+        transitionInCoarseFrame.y /
+        40.0;
+
+    if (std::abs(
+            coarseXCells -
+            std::round(coarseXCells)) >
+            1.0e-3 ||
+        std::abs(
+            coarseYCells -
+            std::round(coarseYCells)) >
+            1.0e-3)
+    {
+        std::cerr
+            << "Terrain LOD morph target is not aligned to the coarser ring lattice.\n";
+        return 1;
+    }
+
+    const auto& edgeSample =
+        morphSamples[0];
+
+    if (!NearlyEqual(
+            edgeSample.elevationMeters,
+            20.0F))
+    {
+        std::cerr
+            << "Terrain LOD morph did not reach the coarse edge height.\n";
         return 1;
     }
 

@@ -18,16 +18,36 @@ struct TerrainSampleRequest
     u32 resolution{0};
     f64 spacingMeters{0.0};
     f64 footprintMeters{0.0};
+
+    bool morphToCoarser{false};
+    f64 morphStartHalfExtentMeters{0.0};
+    f64 morphEndHalfExtentMeters{0.0};
+    f64 coarseSpacingMeters{0.0};
+    f64 coarseFootprintMeters{0.0};
+
     world::SurfaceFrame surfaceFrame{};
+    world::SurfaceFrame coarseSurfaceFrame{};
+
     u32 originX{0};
     u32 originY{0};
     std::vector<PhysicalRegion> regions;
 };
 
+struct TerrainSampleValue
+{
+    f32 elevationMeters{0.0F};
+    f32 morphTargetXMeters{0.0F};
+    f32 morphTargetYMeters{0.0F};
+};
+
+static_assert(
+    sizeof(TerrainSampleValue) ==
+    3U * sizeof(f32));
+
 struct TerrainSamplePatch
 {
     PhysicalRegion region{};
-    std::vector<f32> elevations;
+    std::vector<TerrainSampleValue> samples;
 };
 
 struct TerrainSampleResult

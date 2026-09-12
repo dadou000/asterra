@@ -282,7 +282,7 @@ cbuffer DrawConstants : register(b0)
     float4 g_morph;
 };
 
-ByteAddressBuffer g_heights : register(t0);
+ByteAddressBuffer g_samples : register(t0);
 
 struct VSOutput
 {
@@ -330,10 +330,18 @@ VSOutput main(uint vertexId : SV_VertexID)
         physicalY * resolution +
         physicalX;
 
+    const uint sampleByteOffset =
+        physicalIndex * 12;
+
     const float elevation =
         asfloat(
-            g_heights.Load(
-                physicalIndex * 4));
+            g_samples.Load(
+                sampleByteOffset));
+
+    const float2 morphTargetOffset =
+        asfloat(
+            g_samples.Load2(
+                sampleByteOffset + 4));
 
     const float halfCells =
         ((float)resolution - 1.0) *
@@ -380,16 +388,10 @@ VSOutput main(uint vertexId : SV_VertexID)
             (3.0 -
              2.0 * normalized);
 
-        const float2 coarseOffset =
-            round(
-                offsetMeters /
-                coarseSpacing) *
-            coarseSpacing;
-
         offsetMeters =
             lerp(
                 offsetMeters,
-                coarseOffset,
+                morphTargetOffset,
                 morph);
     }
 
@@ -700,7 +702,7 @@ public:
                 SetGraphicsBuffer(
                     0,
                     *levels_[levelIndex].
-                        frameHeightBuffers[
+                        frameSampleBuffers[
                             frameIndex]);
 
             if (levelIndex == 0)
@@ -813,11 +815,11 @@ private:
 
     struct LevelGpuState
     {
-        std::vector<f32> cpuHeights;
+        std::vector<f32> cpuSamples;
 
         std::vector<
             std::unique_ptr<rhi::Buffer>>
-            frameHeightBuffers;
+            frameSampleBuffers;
 
         std::vector<u64> frameSerials;
         std::deque<DirtyUpdate> dirtyUpdates;
@@ -912,12 +914,14 @@ private:
 
         const u64 bytes =
             sampleCount *
-            sizeof(f32);
+            sizeof(
+                terrain_stream::
+                    TerrainSampleValue);
 
         for (LevelGpuState& level :
              levels_)
         {
-            level.cpuHeights.resize(
+            level.cpuSamples.resize(
                 static_cast<std::size_t>(
                     sampleCount));
 
@@ -925,7 +929,7 @@ private:
                 config_.framesInFlight,
                 0);
 
-            level.frameHeightBuffers.reserve(
+            level.frameSampleBuffers.reserve(
                 config_.framesInFlight);
 
             for (u32 frameIndex = 0;
@@ -933,7 +937,7 @@ private:
                     config_.framesInFlight;
                  ++frameIndex)
             {
-                level.frameHeightBuffers.push_back(
+                level.frameSampleBuffers.push_back(
                     device_.CreateBuffer({
                         .sizeBytes = bytes,
                         .usage =
@@ -1089,6 +1093,18 @@ private:
                 layout_.levels[
                     levelIndex];
 
+            const bool hasCoarser =
+                levelIndex + 1U <
+                static_cast<u32>(
+                    levels_.size());
+
+            const terrain_view::ClipmapLevel*
+                coarserLevel =
+                    hasCoarser
+                        ? &layout_.levels[
+                            levelIndex + 1U]
+                        : nullptr;
+
             candidate.requests.push_back({
                 .levelIndex = levelIndex,
                 .resolution =
@@ -1097,10 +1113,39 @@ private:
                     level.sampleSpacingMeters,
                 .footprintMeters =
                     level.terrainFootprintMeters,
+                .morphToCoarser =
+                    hasCoarser,
+                .morphStartHalfExtentMeters =
+                    level.
+                        morphStartHalfExtentMeters,
+                .morphEndHalfExtentMeters =
+                    level.
+                        morphEndHalfExtentMeters,
+                .coarseSpacingMeters =
+                    coarserLevel != nullptr
+                        ? coarserLevel->
+                            sampleSpacingMeters
+                        : 0.0,
+                .coarseFootprintMeters =
+                    coarserLevel != nullptr
+                        ? coarserLevel->
+                            terrainFootprintMeters
+                        : 0.0,
                 .surfaceFrame =
                     candidate.motion.levels[
                         levelIndex].
                         surfaceFrame,
+                .coarseSurfaceFrame =
+                    hasCoarser
+                        ? candidate.motion.
+                            levels[
+                                levelIndex +
+                                1U].
+                            surfaceFrame
+                        : candidate.motion.
+                            levels[
+                                levelIndex].
+                            surfaceFrame,
                 .originX =
                     levelUpdate.originX,
                 .originY =
@@ -1341,7 +1386,7 @@ private:
                     patch.region.width) *
                 patch.region.height;
 
-            if (patch.elevations.size() !=
+            if (patch.samples.size() !=
                 expectedSamples)
             {
                 throw std::runtime_error(
@@ -1364,13 +1409,15 @@ private:
                     patch.region.width;
 
                 std::memcpy(
-                    state.cpuHeights.data() +
+                    state.cpuSamples.data() +
                         destinationOffset,
-                    patch.elevations.data() +
+                    patch.samples.data() +
                         sourceOffset,
                     static_cast<std::size_t>(
                         patch.region.width) *
-                        sizeof(f32));
+                        sizeof(
+                            terrain_stream::
+                                TerrainSampleValue));
             }
 
             dirtyRegions.push_back(
@@ -1405,15 +1452,17 @@ private:
         }
 
         rhi::Buffer& buffer =
-            *state.frameHeightBuffers[
+            *state.frameSampleBuffers[
                 frameIndex];
 
         std::byte* mapped =
             buffer.Map();
 
         auto* destination =
-            reinterpret_cast<f32*>(
-                mapped);
+            reinterpret_cast<
+                terrain_stream::
+                    TerrainSampleValue*>(
+                        mapped);
 
         u64 uploadedBytes = 0;
 
@@ -1447,11 +1496,13 @@ private:
                     const std::size_t rowBytes =
                         static_cast<std::size_t>(
                             region.width) *
-                        sizeof(f32);
+                        sizeof(
+                            terrain_stream::
+                                TerrainSampleValue);
 
                     std::memcpy(
                         destination + offset,
-                        state.cpuHeights.data() +
+                        state.cpuSamples.data() +
                             offset,
                         rowBytes);
 
