@@ -14,3 +14,20 @@ add_test(
     NAME Orbit.WorldCoordinates
     COMMAND OrbitWorldTests
 )
+
+add_executable(OrbitJobsTests
+    JobSystemTests.cpp
+)
+
+target_link_libraries(OrbitJobsTests
+    PRIVATE
+        Orbit::Jobs
+)
+
+target_compile_features(OrbitJobsTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitJobsTests)
+
+add_test(
+    NAME Orbit.JobSystem
+    COMMAND OrbitJobsTests
+)
