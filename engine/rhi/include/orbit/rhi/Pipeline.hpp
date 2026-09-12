@@ -46,6 +46,12 @@ enum class CullMode : u8
     Back
 };
 
+enum class DepthCompare : u8
+{
+    LessEqual,
+    GreaterEqual
+};
+
 struct GraphicsPipelineDesc
 {
     ShaderBytecodeView vertexShader{};
@@ -57,6 +63,7 @@ struct GraphicsPipelineDesc
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     FillMode fillMode{FillMode::Solid};
     CullMode cullMode{CullMode::Back};
+    DepthCompare depthCompare{DepthCompare::LessEqual};
     bool depthTest{false};
     bool depthWrite{false};
 };
