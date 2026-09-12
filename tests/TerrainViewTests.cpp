@@ -174,6 +174,105 @@ int main()
         }
     }
 
+    const orbit::f64 baseOuterExtent =
+        orbit::terrain_view::
+            ClipmapOuterHalfExtentMeters(
+                config);
+
+    const auto tierTwoConfig =
+        orbit::terrain_view::
+            ClipmapConfigForTier(
+                config,
+                2);
+
+    if (!NearlyEqual(
+            tierTwoConfig.baseSpacingMeters,
+            config.baseSpacingMeters * 4.0,
+            1.0e-12) ||
+        !NearlyEqual(
+            orbit::terrain_view::
+                ClipmapOuterHalfExtentMeters(
+                    tierTwoConfig),
+            baseOuterExtent * 4.0,
+            1.0e-6))
+    {
+        std::cerr
+            << "Adaptive clipmap tier scaling is incorrect.\n";
+        return 1;
+    }
+
+    const orbit::terrain_view::
+        AdaptiveClipmapCoverageConfig
+        adaptiveCoverage{
+            .enabled = true,
+            .altitudeToHalfExtentScale = 1.0,
+            .growThreshold = 0.85,
+            .shrinkThreshold = 0.65,
+            .maximumTier = 3
+        };
+
+    const orbit::u32 grownTier =
+        orbit::terrain_view::
+            SelectAdaptiveClipmapTier(
+                config,
+                adaptiveCoverage,
+                baseOuterExtent * 0.90,
+                0);
+
+    if (grownTier != 1)
+    {
+        std::cerr
+            << "Adaptive clipmap coverage did not grow before exhausting the active tier.\n";
+        return 1;
+    }
+
+    const orbit::u32 heldTier =
+        orbit::terrain_view::
+            SelectAdaptiveClipmapTier(
+                config,
+                adaptiveCoverage,
+                baseOuterExtent * 0.70,
+                grownTier);
+
+    if (heldTier != 1)
+    {
+        std::cerr
+            << "Adaptive clipmap coverage hysteresis did not hold the current tier.\n";
+        return 1;
+    }
+
+    const orbit::u32 shrunkTier =
+        orbit::terrain_view::
+            SelectAdaptiveClipmapTier(
+                config,
+                adaptiveCoverage,
+                baseOuterExtent * 0.50,
+                heldTier);
+
+    if (shrunkTier != 0)
+    {
+        std::cerr
+            << "Adaptive clipmap coverage did not shrink after crossing the hysteresis band.\n";
+        return 1;
+    }
+
+    auto disabledCoverage =
+        adaptiveCoverage;
+
+    disabledCoverage.enabled = false;
+
+    if (orbit::terrain_view::
+            SelectAdaptiveClipmapTier(
+                config,
+                disabledCoverage,
+                baseOuterExtent * 100.0,
+                3) != 0)
+    {
+        std::cerr
+            << "Disabled adaptive clipmap coverage did not return the base tier.\n";
+        return 1;
+    }
+
     orbit::terrain_view::ClipmapTracker tracker(
         planet,
         config);
