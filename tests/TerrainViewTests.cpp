@@ -165,6 +165,16 @@ int main()
                 return 1;
             }
 
+            if (!NearlyEqual(
+                    level.innerHoleHalfExtentMeters,
+                    finer.morphStartHalfExtentMeters,
+                    1.0e-9))
+            {
+                std::cerr
+                    << "Coarse clipmap ring does not begin at the finer morph band.\n";
+                return 1;
+            }
+
             if (!(level.outerHalfExtentMeters >
                   finer.outerHalfExtentMeters))
             {
