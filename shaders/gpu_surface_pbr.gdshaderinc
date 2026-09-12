@@ -9,22 +9,6 @@
 // so implicit derivatives inside those branches are not reliable. The caller
 // computes dFdx/dFdy of the precision-safe detail position before branching and
 // passes them through this file for explicit anisotropic mip selection.
-//
-// Micro/macro blend (spbr_apply_grad only -- the global default terrain path;
-// terrain_biome_texture.gdshaderinc's per-biome authored bands intentionally
-// keep calling the original single-scale spbr_tri_* functions below unchanged,
-// so a custom-authored band's look never shifts under this): each material is
-// sampled twice, once at its existing small "micro" tile size (the original
-// u_pbr_*_metres, unchanged defaults) and once at a new, much larger "macro"
-// tile size, both against the SAME texture asset -- no new imports needed, and
-// "the texture is too small to read" is fixed by literally reading it at a
-// bigger period. The two scans cross-fade by camera distance
-// (u_pbr_micro_macro_near_m/far_m): micro alone up close where its detail is
-// still resolvable, smoothly toward macro alone by u_pbr_micro_macro_far_m,
-// where the pattern is coarse enough to stay readable instead of mip-blurring
-// to a flat wash. This sits entirely inside the existing overall
-// u_pbr_surface_fade_near_m/far_m envelope, which still fades detail out to
-// the flat classifier colour beyond that -- unchanged.
 
 uniform sampler2D u_pbr_ground_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D u_pbr_ground_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -45,24 +29,19 @@ uniform float u_pbr_ground_metres : hint_range(0.02, 1024.0) = 2.0;
 uniform float u_pbr_grass_metres : hint_range(0.02, 1024.0) = 2.0;
 uniform float u_pbr_mud_metres : hint_range(0.02, 1024.0) = 1.0;
 uniform float u_pbr_forest_metres : hint_range(0.02, 1024.0) = 2.0;
-// Macro tier: the SAME four textures above, resampled at a much larger period
-// so their pattern stays readable past the point where the micro tile has
-// mip-blurred into a flat average colour. Independent per material because a
-// forest floor's readable ground-litter scale differs from a bare mineral
-// slope's. Defaults picked as "a few paces to tens of metres" -- large enough
-// to survive minification at typical walking/low-flight altitude, small
-// enough to still look tiled rather than a single wall-sized image.
 uniform float u_pbr_ground_macro_metres : hint_range(1.0, 256.0) = 16.0;
 uniform float u_pbr_grass_macro_metres : hint_range(1.0, 256.0) = 14.0;
 uniform float u_pbr_mud_macro_metres : hint_range(1.0, 256.0) = 10.0;
 uniform float u_pbr_forest_macro_metres : hint_range(1.0, 256.0) = 18.0;
-// Crossfade zone: below near_m the macro scan is not sampled at all (pure
-// micro, zero extra cost); above far_m the micro scan is not sampled at all
-// (pure macro). Both fully sampled only inside [near_m, far_m].
 uniform float u_pbr_micro_macro_near_m : hint_range(0.0, 500.0) = 4.0;
 uniform float u_pbr_micro_macro_far_m : hint_range(0.0, 2000.0) = 60.0;
 uniform float u_pbr_macro_strength : hint_range(0.0, 2.0) = 1.0;
 uniform float u_pbr_triplanar_sharpness : hint_range(1.0, 16.0) = 5.0;
+// Optimization controls. Dominant surfaces use one projection; blended surfaces
+// use the two strongest projections. The discarded axis was already contributing
+// the least and weights are renormalized, preserving the triplanar transition
+// while cutting one to two textureGrad calls per property.
+uniform float u_pbr_triplanar_single_axis_threshold : hint_range(0.50, 0.999) = 0.92;
 uniform float u_pbr_transfer_strength : hint_range(0.0, 2.0) = 0.60;
 uniform float u_pbr_transfer_min : hint_range(0.0, 2.0) = 0.48;
 uniform float u_pbr_transfer_max : hint_range(0.0, 4.0) = 1.72;
@@ -120,35 +99,24 @@ vec2 spbr_grad_z(vec3 dp, float metres, float sz) {
 	return vec2(sz * dp.x, dp.y) / metres;
 }
 
-// -- Core triplanar samplers, parameterised over tile size --------------------
-// Kept separate from the original SPBR_*_M-only functions below (rather than
-// changing those signatures) so every existing caller -- this file's own
-// spbr_apply_grad AND terrain_biome_texture.gdshaderinc's authored-band
-// texture choices -- keeps compiling and behaving exactly as before. Only
-// spbr_apply_grad's new macro scan below calls these directly with the macro
-// tile size; the original spbr_tri_* wrappers call them with the micro tile
-// size, matching the old behaviour bit-for-bit.
-
-vec3 spbr_tri_albedo_at(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n, float metres) {
-	vec3 w = spbr_weights(n);
-	vec3 s = spbr_axis_sign(n);
-	return textureGrad(tex, spbr_uv_x(p, metres, s.x),
-			spbr_grad_x(dpdx, metres, s.x), spbr_grad_x(dpdy, metres, s.x)).rgb * w.x
-		+ textureGrad(tex, spbr_uv_y(p, metres, s.y),
-			spbr_grad_y(dpdx, metres, s.y), spbr_grad_y(dpdy, metres, s.y)).rgb * w.y
-		+ textureGrad(tex, spbr_uv_z(p, metres, s.z),
-			spbr_grad_z(dpdx, metres, s.z), spbr_grad_z(dpdy, metres, s.z)).rgb * w.z;
+vec3 spbr_sample_albedo_axis(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy,
+		float metres, vec3 s, int axis) {
+	if (axis == 0) return textureGrad(tex, spbr_uv_x(p, metres, s.x),
+		spbr_grad_x(dpdx, metres, s.x), spbr_grad_x(dpdy, metres, s.x)).rgb;
+	if (axis == 1) return textureGrad(tex, spbr_uv_y(p, metres, s.y),
+		spbr_grad_y(dpdx, metres, s.y), spbr_grad_y(dpdy, metres, s.y)).rgb;
+	return textureGrad(tex, spbr_uv_z(p, metres, s.z),
+		spbr_grad_z(dpdx, metres, s.z), spbr_grad_z(dpdy, metres, s.z)).rgb;
 }
 
-float spbr_tri_rough_at(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n, float metres) {
-	vec3 w = spbr_weights(n);
-	vec3 s = spbr_axis_sign(n);
-	return textureGrad(tex, spbr_uv_x(p, metres, s.x),
-			spbr_grad_x(dpdx, metres, s.x), spbr_grad_x(dpdy, metres, s.x)).r * w.x
-		+ textureGrad(tex, spbr_uv_y(p, metres, s.y),
-			spbr_grad_y(dpdx, metres, s.y), spbr_grad_y(dpdy, metres, s.y)).r * w.y
-		+ textureGrad(tex, spbr_uv_z(p, metres, s.z),
-			spbr_grad_z(dpdx, metres, s.z), spbr_grad_z(dpdy, metres, s.z)).r * w.z;
+float spbr_sample_rough_axis(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy,
+		float metres, vec3 s, int axis) {
+	if (axis == 0) return textureGrad(tex, spbr_uv_x(p, metres, s.x),
+		spbr_grad_x(dpdx, metres, s.x), spbr_grad_x(dpdy, metres, s.x)).r;
+	if (axis == 1) return textureGrad(tex, spbr_uv_y(p, metres, s.y),
+		spbr_grad_y(dpdx, metres, s.y), spbr_grad_y(dpdy, metres, s.y)).r;
+	return textureGrad(tex, spbr_uv_z(p, metres, s.z),
+		spbr_grad_z(dpdx, metres, s.z), spbr_grad_z(dpdy, metres, s.z)).r;
 }
 
 vec3 spbr_normal_world(vec3 nts, int axis, float sign_axis) {
@@ -170,18 +138,85 @@ vec3 spbr_normal_world(vec3 nts, int axis, float sign_axis) {
 	return normalize(t * nts.x + b * nts.y + nn * nts.z);
 }
 
+vec3 spbr_sample_normal_axis(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy,
+		float metres, vec3 s, int axis) {
+	vec3 nts;
+	if (axis == 0) {
+		nts = textureGrad(tex, spbr_uv_x(p, metres, s.x),
+			spbr_grad_x(dpdx, metres, s.x), spbr_grad_x(dpdy, metres, s.x)).xyz * 2.0 - 1.0;
+		return spbr_normal_world(nts, 0, s.x);
+	}
+	if (axis == 1) {
+		nts = textureGrad(tex, spbr_uv_y(p, metres, s.y),
+			spbr_grad_y(dpdx, metres, s.y), spbr_grad_y(dpdy, metres, s.y)).xyz * 2.0 - 1.0;
+		return spbr_normal_world(nts, 1, s.y);
+	}
+	nts = textureGrad(tex, spbr_uv_z(p, metres, s.z),
+		spbr_grad_z(dpdx, metres, s.z), spbr_grad_z(dpdy, metres, s.z)).xyz * 2.0 - 1.0;
+	return spbr_normal_world(nts, 2, s.z);
+}
+
+void spbr_top_two_axes(vec3 w, out int a, out int b, out float wa, out float wb) {
+	if (w.x >= w.y && w.x >= w.z) {
+		a = 0;
+		if (w.y >= w.z) { b = 1; wa = w.x; wb = w.y; }
+		else { b = 2; wa = w.x; wb = w.z; }
+	} else if (w.y >= w.z) {
+		a = 1;
+		if (w.x >= w.z) { b = 0; wa = w.y; wb = w.x; }
+		else { b = 2; wa = w.y; wb = w.z; }
+	} else {
+		a = 2;
+		if (w.x >= w.y) { b = 0; wa = w.z; wb = w.x; }
+		else { b = 1; wa = w.z; wb = w.y; }
+	}
+	float inv_sum = 1.0 / max(wa + wb, 1e-5);
+	wa *= inv_sum;
+	wb *= inv_sum;
+}
+
+vec3 spbr_tri_albedo_at(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n, float metres) {
+	vec3 w = spbr_weights(n);
+	vec3 s = spbr_axis_sign(n);
+	int a;
+	int b;
+	float wa;
+	float wb;
+	spbr_top_two_axes(w, a, b, wa, wb);
+	if (wa >= u_pbr_triplanar_single_axis_threshold) {
+		return spbr_sample_albedo_axis(tex, p, dpdx, dpdy, metres, s, a);
+	}
+	return spbr_sample_albedo_axis(tex, p, dpdx, dpdy, metres, s, a) * wa
+		+ spbr_sample_albedo_axis(tex, p, dpdx, dpdy, metres, s, b) * wb;
+}
+
+float spbr_tri_rough_at(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n, float metres) {
+	vec3 w = spbr_weights(n);
+	vec3 s = spbr_axis_sign(n);
+	int a;
+	int b;
+	float wa;
+	float wb;
+	spbr_top_two_axes(w, a, b, wa, wb);
+	if (wa >= u_pbr_triplanar_single_axis_threshold) {
+		return spbr_sample_rough_axis(tex, p, dpdx, dpdy, metres, s, a);
+	}
+	return spbr_sample_rough_axis(tex, p, dpdx, dpdy, metres, s, a) * wa
+		+ spbr_sample_rough_axis(tex, p, dpdx, dpdy, metres, s, b) * wb;
+}
+
 vec3 spbr_tri_normal_at(sampler2D tex, vec3 p, vec3 dpdx, vec3 dpdy, vec3 n, float metres) {
 	vec3 w = spbr_weights(n);
 	vec3 s = spbr_axis_sign(n);
-	vec3 nx = textureGrad(tex, spbr_uv_x(p, metres, s.x),
-		spbr_grad_x(dpdx, metres, s.x), spbr_grad_x(dpdy, metres, s.x)).xyz * 2.0 - 1.0;
-	vec3 ny = textureGrad(tex, spbr_uv_y(p, metres, s.y),
-		spbr_grad_y(dpdx, metres, s.y), spbr_grad_y(dpdy, metres, s.y)).xyz * 2.0 - 1.0;
-	vec3 nz = textureGrad(tex, spbr_uv_z(p, metres, s.z),
-		spbr_grad_z(dpdx, metres, s.z), spbr_grad_z(dpdy, metres, s.z)).xyz * 2.0 - 1.0;
-	return normalize(spbr_normal_world(nx, 0, s.x) * w.x
-		+ spbr_normal_world(ny, 1, s.y) * w.y
-		+ spbr_normal_world(nz, 2, s.z) * w.z);
+	int a;
+	int b;
+	float wa;
+	float wb;
+	spbr_top_two_axes(w, a, b, wa, wb);
+	vec3 na = spbr_sample_normal_axis(tex, p, dpdx, dpdy, metres, s, a);
+	if (wa >= u_pbr_triplanar_single_axis_threshold) return normalize(na);
+	vec3 nb = spbr_sample_normal_axis(tex, p, dpdx, dpdy, metres, s, b);
+	return normalize(na * wa + nb * wb);
 }
 
 vec3 spbr_tri_albedo_ground(vec3 p, vec3 dpdx, vec3 dpdy, vec3 n) {
@@ -245,13 +280,6 @@ vec3 spbr_transfer_detail(vec3 base, vec3 scan) {
 	return max(base * mix(vec3(1.0), relative, u_pbr_transfer_strength), vec3(0.006));
 }
 
-// Micro/macro-blended scan for one material: samples the micro tile (unless
-// the crossfade has moved fully past it), the macro tile (unless the
-// crossfade has not reached it yet), and lerps by camera distance. Returns
-// the blended albedo/roughness; normal is handled by the _normal sibling
-// below so callers that do not need normal detail (normal_detail_w <= 0)
-// skip that extra pair of triplanar reads entirely, matching the existing
-// normal_detail_w gating pattern in spbr_apply_grad.
 void spbr_scan_material(sampler2D albedo_tex, sampler2D rough_tex,
 		vec3 p, vec3 dpdx, vec3 dpdy, vec3 n, float micro_m, float macro_m, float macro_w,
 		out vec3 albedo, out float roughness) {
@@ -265,12 +293,6 @@ void spbr_scan_material(sampler2D albedo_tex, sampler2D rough_tex,
 	if (macro_w > 0.002) {
 		vec3 macro_albedo = spbr_tri_albedo_at(albedo_tex, p, dpdx, dpdy, n, macro_m);
 		float macro_rough = spbr_tri_rough_at(rough_tex, p, dpdx, dpdy, n, macro_m);
-		// u_pbr_macro_strength: 0 flattens the macro tier to its own average
-		// luminance (no visible large-scale pattern, just tone), 1 is the scan
-		// unmodified, up to 2 exaggerates its contrast. Independent of
-		// u_pbr_transfer_strength below, which instead controls how much of the
-		// FINAL combined (micro+macro) pattern overrides the classifier's flat
-		// base colour.
 		vec3 macro_flat = vec3(dot(macro_albedo, vec3(0.333333)));
 		albedo += mix(macro_flat, macro_albedo, u_pbr_macro_strength) * macro_w;
 		roughness += macro_rough * macro_w;
@@ -304,9 +326,6 @@ void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_
 	if (surface_detail_w <= 0.002) return;
 	float normal_detail_w = 1.0 - smoothstep(normal_near, max(normal_far, normal_near + 0.001), camera_dist);
 
-	// Where this fragment sits in the micro -> macro crossfade, independent of
-	// (and evaluated before) the overall surface_detail_w fade above: 0 = pure
-	// micro tile, 1 = pure macro tile.
 	float blend_near = min(u_pbr_micro_macro_near_m, u_pbr_micro_macro_far_m);
 	float blend_far = max(u_pbr_micro_macro_near_m, u_pbr_micro_macro_far_m);
 	float macro_w = smoothstep(blend_near, max(blend_far, blend_near + 0.001), camera_dist);
@@ -370,8 +389,6 @@ void spbr_apply_grad(vec3 dpos, vec3 dpdx, vec3 dpdy, vec3 geom_n, float camera_
 	}
 }
 
-// Compatibility entry point used by the active terrain shader. dFdx/dFdy are
-// evaluated here before any material-dependent branch in spbr_apply_grad().
 void spbr_apply(vec3 dpos, vec3 geom_n, float camera_dist,
 		vec4 primary, vec4 secondary, float biome,
 		vec3 base_albedo, float base_roughness,
