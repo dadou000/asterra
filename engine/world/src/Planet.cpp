@@ -267,6 +267,91 @@ SurfaceFrame MakeSurfaceFrame(
     };
 }
 
+SurfaceFrame TransportSurfaceFrameToDirection(
+    const SurfaceFrame& frame,
+    const math::Double3& targetUpDirection) noexcept
+{
+    const math::Double3 from =
+        math::Normalize(frame.up);
+
+    const math::Double3 to =
+        math::Normalize(targetUpDirection);
+
+    if (math::LengthSquared(to) <= 0.0)
+    {
+        return {
+            .east = math::Normalize(frame.east),
+            .north = math::Normalize(frame.north),
+            .up = from
+        };
+    }
+
+    if (math::LengthSquared(from) <= 0.0)
+    {
+        return MakeSurfaceFrame(to);
+    }
+
+    const f64 cosine =
+        std::clamp(
+            math::Dot(from, to),
+            -1.0,
+            1.0);
+
+    const math::Double3 cross =
+        math::Cross(from, to);
+
+    const f64 sine =
+        math::Length(cross);
+
+    if (sine <= 1.0e-15)
+    {
+        if (cosine >= 0.0)
+        {
+            const math::Double3 east =
+                math::Normalize(frame.east);
+
+            return {
+                .east = east,
+                .north =
+                    math::Normalize(
+                        math::Cross(
+                            to,
+                            east)),
+                .up = to
+            };
+        }
+
+        return MakeSurfaceFrame(to);
+    }
+
+    const math::Double3 axis =
+        cross / sine;
+
+    const f64 angle =
+        std::atan2(
+            sine,
+            cosine);
+
+    const math::Double3 east =
+        math::Normalize(
+            RotateAroundAxis(
+                frame.east,
+                axis,
+                angle));
+
+    const math::Double3 north =
+        math::Normalize(
+            math::Cross(
+                to,
+                east));
+
+    return {
+        .east = east,
+        .north = north,
+        .up = to
+    };
+}
+
 math::Double3 DirectionAtSurfaceOffset(
     const PlanetDefinition& planet,
     const SurfaceFrame& frame,

@@ -1069,9 +1069,24 @@ private:
         }
 
         observer_ = observer;
-        observerFrame_ =
-            world::MakeSurfaceFrame(
-                observer.meters);
+
+        if (!observerFrameInitialized_)
+        {
+            observerFrame_ =
+                world::MakeSurfaceFrame(
+                    observer.meters);
+
+            observerFrameInitialized_ =
+                true;
+        }
+        else
+        {
+            observerFrame_ =
+                world::
+                    TransportSurfaceFrameToDirection(
+                        observerFrame_,
+                        observer.meters);
+        }
 
         observerRadiusMeters_ =
             static_cast<f32>(
@@ -1660,6 +1675,7 @@ private:
     world::WorldPosition observer_{};
     world::WorldPosition desiredObserver_{};
     world::SurfaceFrame observerFrame_{};
+    bool observerFrameInitialized_{false};
 
     terrain_view::ClipmapMotionUpdate
         motion_;

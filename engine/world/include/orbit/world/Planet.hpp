@@ -74,6 +74,10 @@ struct SurfaceFrame
 [[nodiscard]] SurfaceFrame MakeSurfaceFrame(
     const math::Double3& upDirection) noexcept;
 
+[[nodiscard]] SurfaceFrame TransportSurfaceFrameToDirection(
+    const SurfaceFrame& frame,
+    const math::Double3& targetUpDirection) noexcept;
+
 [[nodiscard]] math::Double3 DirectionAtSurfaceOffset(
     const PlanetDefinition& planet,
     const SurfaceFrame& frame,

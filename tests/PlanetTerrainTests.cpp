@@ -151,5 +151,78 @@ int main()
         return 1;
     }
 
+    const orbit::world::SurfaceFrame
+        transportStart =
+            orbit::world::MakeSurfaceFrame(
+                orbit::math::Normalize(
+                    Double3{
+                        std::sqrt(
+                            1.0 -
+                            0.94 * 0.94),
+                        0.94,
+                        0.0
+                    }));
+
+    const orbit::world::SurfaceFrame
+        expectedTransport =
+            orbit::world::SurfaceFrameAtOffset(
+                planet,
+                transportStart,
+                {1'500.0, 2'500.0});
+
+    const orbit::world::SurfaceFrame
+        transported =
+            orbit::world::
+                TransportSurfaceFrameToDirection(
+                    transportStart,
+                    expectedTransport.up);
+
+    if (!DirectionNearlyEqual(
+            transported.up,
+            expectedTransport.up,
+            1.0e-12) ||
+        !DirectionNearlyEqual(
+            transported.east,
+            expectedTransport.east,
+            1.0e-10) ||
+        !DirectionNearlyEqual(
+            transported.north,
+            expectedTransport.north,
+            1.0e-10))
+    {
+        std::cerr
+            << "Surface-frame parallel transport does not match geodesic offset transport.\n";
+        return 1;
+    }
+
+    const Double3 thresholdTarget{
+        std::sqrt(
+            1.0 -
+            0.96 * 0.96),
+        0.96,
+        0.0
+    };
+
+    const orbit::world::SurfaceFrame
+        thresholdTransport =
+            orbit::world::
+                TransportSurfaceFrameToDirection(
+                    transportStart,
+                    thresholdTarget);
+
+    if (!DirectionNearlyEqual(
+            thresholdTransport.up,
+            thresholdTarget,
+            1.0e-12) ||
+        orbit::math::Dot(
+            thresholdTransport.east,
+            transportStart.east) <
+            0.99)
+    {
+        std::cerr
+            << "Surface-frame transport is discontinuous across the reference-axis threshold.\n";
+        return 1;
+    }
+
     return 0;
 }

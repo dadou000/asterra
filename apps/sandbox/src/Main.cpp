@@ -119,6 +119,11 @@ int main()
                 (planet.radiusMeters + 8'000.0)
         };
 
+        orbit::world::SurfaceFrame
+            observerTravelFrame =
+                orbit::world::MakeSurfaceFrame(
+                    observerDirection);
+
         const orbit::shader::d3d::D3DShaderCompiler
             shaderCompiler;
 
@@ -289,23 +294,22 @@ int main()
                 if (eastInput != 0.0 ||
                     northInput != 0.0)
                 {
-                    const orbit::world::SurfaceFrame
-                        frame =
-                            orbit::world::MakeSurfaceFrame(
-                                direction);
+                    observerTravelFrame =
+                        orbit::world::
+                            SurfaceFrameAtOffset(
+                                planet,
+                                observerTravelFrame,
+                                {
+                                    eastInput *
+                                        surfaceSpeed *
+                                        deltaSeconds,
+                                    northInput *
+                                        surfaceSpeed *
+                                        deltaSeconds
+                                });
 
                     direction =
-                        orbit::world::DirectionAtSurfaceOffset(
-                            planet,
-                            frame,
-                            {
-                                eastInput *
-                                    surfaceSpeed *
-                                    deltaSeconds,
-                                northInput *
-                                    surfaceSpeed *
-                                    deltaSeconds
-                            });
+                        observerTravelFrame.up;
                 }
 
                 const orbit::f64 altitude =
