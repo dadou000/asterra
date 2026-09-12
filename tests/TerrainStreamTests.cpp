@@ -185,5 +185,77 @@ int main()
         return 1;
     }
 
+    residency.Reset();
+
+    static_cast<void>(
+        residency.Apply(
+            MakeMotion(0, 0, true)));
+
+    const auto diagonal =
+        residency.Apply(
+            MakeMotion(2, 3, false));
+
+    if (diagonal.levels[0].originX != 2 ||
+        diagonal.levels[0].originY != 3)
+    {
+        std::cerr
+            << "Diagonal toroidal shift produced the wrong origin.\n";
+        return 1;
+    }
+
+    constexpr orbit::u32 resolution = 9;
+    constexpr orbit::u32 expectedCells =
+        2U * resolution +
+        (resolution - 2U) * 3U;
+
+    orbit::u32 refreshedCells = 0;
+    bool touched[
+        resolution *
+        resolution]{};
+
+    for (const auto& region :
+         diagonal.levels[0].refreshRegions)
+    {
+        if (region.x + region.width >
+                resolution ||
+            region.y + region.height >
+                resolution)
+        {
+            std::cerr
+                << "Diagonal toroidal refresh escaped the physical window.\n";
+            return 1;
+        }
+
+        for (orbit::u32 y = region.y;
+             y < region.y + region.height;
+             ++y)
+        {
+            for (orbit::u32 x = region.x;
+                 x < region.x + region.width;
+                 ++x)
+            {
+                const orbit::u32 index =
+                    y * resolution + x;
+
+                if (touched[index])
+                {
+                    std::cerr
+                        << "Diagonal toroidal refresh sampled a physical cell twice.\n";
+                    return 1;
+                }
+
+                touched[index] = true;
+                ++refreshedCells;
+            }
+        }
+    }
+
+    if (refreshedCells != expectedCells)
+    {
+        std::cerr
+            << "Diagonal toroidal refresh did not cover the minimal exposed area.\n";
+        return 1;
+    }
+
     return 0;
 }
