@@ -59,8 +59,6 @@ ClipmapLayout BuildClipmapLayout(
         world::MakeSurfaceFrame(observer.meters);
     layout.levels.reserve(config.levelCount);
 
-    f64 previousOuterHalfExtent = 0.0;
-
     for (u32 levelIndex = 0;
          levelIndex < config.levelCount;
          ++levelIndex)
@@ -80,9 +78,8 @@ ClipmapLayout BuildClipmapLayout(
         const f64 innerHoleHalfExtent =
             levelIndex == 0
                 ? 0.0
-                : std::max(
-                    0.0,
-                    previousOuterHalfExtent - overlapWidth);
+                : layout.levels.back().
+                    morphStartHalfExtentMeters;
 
         const f64 morphStart =
             std::max(
@@ -99,8 +96,6 @@ ClipmapLayout BuildClipmapLayout(
             .morphStartHalfExtentMeters = morphStart,
             .morphEndHalfExtentMeters = outerHalfExtent
         });
-
-        previousOuterHalfExtent = outerHalfExtent;
     }
 
     return layout;
