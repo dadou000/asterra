@@ -82,3 +82,20 @@ add_test(
     NAME Orbit.TerrainCache
     COMMAND OrbitTerrainCacheTests
 )
+
+add_executable(OrbitShaderCompilerTests
+    ShaderCompilerTests.cpp
+)
+
+target_link_libraries(OrbitShaderCompilerTests
+    PRIVATE
+        Orbit::ShaderD3D
+)
+
+target_compile_features(OrbitShaderCompilerTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitShaderCompilerTests)
+
+add_test(
+    NAME Orbit.ShaderCompiler
+    COMMAND OrbitShaderCompilerTests
+)
