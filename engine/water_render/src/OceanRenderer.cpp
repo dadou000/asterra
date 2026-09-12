@@ -50,22 +50,10 @@ void UploadBuffer(
         math::Length(
             observer.meters);
 
-    if (seaRadius <= 0.0 ||
-        observerRadius <= seaRadius)
-    {
-        return config.minimumRadiusMeters;
-    }
-
-    const f64 cosine =
-        std::clamp(
-            seaRadius /
-                observerRadius,
-            0.0,
-            1.0);
-
     const f64 horizonArcMeters =
-        seaRadius *
-        std::acos(cosine);
+        world::HorizonArcDistanceMeters(
+            seaRadius,
+            observerRadius);
 
     return std::clamp(
         horizonArcMeters *
