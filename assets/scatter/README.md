@@ -4,46 +4,45 @@ This directory is the authoring/runtime boundary for Asterra terrain scatter.
 
 ## Current baseline
 
-The runtime scatter asset library is intentionally **empty** as of 2026-09-01.
-The previous foliage, deadwood and geological assets have all been removed so the
-library can be rebuilt deliberately from a clean baseline.
+The previous scatter catalog was removed and replaced by a deliberately curated
+CC0 temperate-forest library sourced through the Poly Haven API. The manifest is
+the source of truth for runtime binding and authoring controls.
 
 The production `TerrainScatter` autoload uses
-`gpu_terrain_scatter_authoring_empty.gd`:
+`gpu_terrain_scatter_authoring_empty.gd` (the compatibility autoload name):
 
-- file-backed foliage assets: **none**;
-- file-backed geological assets: **none**;
+- file-backed foliage, grass, moss, trees and deadwood: loaded from the manifest;
+- file-backed rocks and boulders: loaded from the manifest;
 - built-in procedural grass fallback: **disabled**;
 - built-in procedural stone fallbacks: **disabled**;
-- terrain/scatter placement infrastructure: **kept intact**.
+- terrain/scatter placement infrastructure: **active**.
 
-`assets/scatter/runtime/` currently has no tracked files, so Git does not retain the
-empty directory. Asset tooling will recreate it when new runtime assets are built.
+`assets/scatter/runtime/` contains game-ready GLB LODs and textures produced by
+the optimizer. Provider downloads remain in the gitignored `source/` cache.
 
 ## Layout
 
 ```text
 assets/scatter/
-  asset_manifest.json       # intentionally empty curated runtime catalog
+  asset_manifest.json       # curated runtime catalog and placement settings
   external_candidates.json # replacement candidate list; intentionally empty
   source/                   # optional downloaded authoring cache (gitignored)
   runtime/                  # created when replacement runtime assets are built
 ```
 
-## Adding replacement assets
+## Authoring assets
 
-Reintroduce foliage or geology deliberately rather than restoring the old catalog:
+Use the in-game **Terrain > Scatter Library** tab or the
+`studio_scatter_library` MCP tool to:
 
-1. Set `allow_empty_catalog` to `false` when the first replacement asset is ready.
-2. Add the asset to `asset_manifest.json` with source, license, biome use,
-   resolution and priority.
-3. Validate with `python tools/validate_scatter_manifest.py`.
-4. Fetch/import the source and optimize it into `runtime/<asset-id>/`.
-5. Add it to the active runtime scatter binding only after LOD, material,
-   collision and performance behavior have been reviewed.
+1. Add a Poly Haven model slug and assign its biome and scatter kind.
+2. Fetch the checksum-verified CC0 source package.
+3. Build optimized game-ready LODs.
+4. Tune density, spacing, scale and slope constraints.
+5. Hot-reload the runtime and review it in the viewport.
 
-While `allow_empty_catalog=true`, validation requires both `assets: []` and an
-empty runtime asset tree. This prevents accidental partial reintroduction.
+`allow_partial_catalog=true` permits focused work on one biome without pretending
+that every global biome is complete. Clear it before production-wide validation.
 
 The existing acquisition/optimization tools remain available:
 
@@ -75,6 +74,5 @@ should normally be substantially cheaper and use appropriate LODs/impostors.
 
 ## License
 
-There are currently no third-party runtime scatter assets in the catalog. Every
-replacement asset must have its license and redistribution/game-use terms checked
-and recorded before it is added.
+Runtime assets in this catalog come from Poly Haven under CC0 1.0. The manifest
+records the provider and direct source page for each asset.

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://h0anypw8qca4"
+path="res://.godot/imported/hydro_frontier_candidates_compact.glsl-db0f7b8cf1bc266feedcae5a5ad817d5.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_frontier_candidates_compact.glsl"
+dest_files=["res://.godot/imported/hydro_frontier_candidates_compact.glsl-db0f7b8cf1bc266feedcae5a5ad817d5.res"]
+
+[params]
+

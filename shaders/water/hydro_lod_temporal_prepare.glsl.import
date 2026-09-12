@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://wilsi7dyaqlb"
+path="res://.godot/imported/hydro_lod_temporal_prepare.glsl-0a741f04487261617f43940d9916be3a.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_temporal_prepare.glsl"
+dest_files=["res://.godot/imported/hydro_lod_temporal_prepare.glsl-0a741f04487261617f43940d9916be3a.res"]
+
+[params]
+

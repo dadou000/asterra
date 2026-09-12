@@ -3,6 +3,14 @@ extends Node3D
 
 const AUTOSAVE := "phase1"
 const HUD_UPDATE_INTERVAL_S := 0.20
+## Directional-shadow cascade reach. The ground value covers the near/mid band that
+## terrain_sun_occlusion.gdshaderinc skips; _sync_shadow_distance() scales it up to
+## roughly the geometric horizon distance for the current altitude so the last
+## cascade always reaches past the visible terrain and no hard shadow/no-shadow
+## terminator crosses an airborne frame (the "camera-locked triangular wedge").
+const SHADOW_MAX_DISTANCE_GROUND_M := 9000.0
+const SHADOW_MAX_DISTANCE_CAP_M := 200000.0
+const SHADOW_HORIZON_MARGIN := 1.15
 
 var cfg: GenConfig
 var bake: PlanetBake
@@ -135,7 +143,10 @@ func _setup_environment() -> void:
 	# 2500 m left that caster outside every cascade, so low-sun terrain cast no
 	# shadow at all. Cover the kilometre-scale near/mid band that
 	# terrain_sun_occlusion.gdshaderinc deliberately skips (< ~900 m).
-	sun.directional_shadow_max_distance = 9000.0
+	# This is the ground-level floor; _sync_shadow_distance() raises it with camera
+	# altitude so an airborne view does not get a hard cascade-edge terminator
+	# (the "camera-locked triangular wedge" defect) where the last split ends.
+	sun.directional_shadow_max_distance = SHADOW_MAX_DISTANCE_GROUND_M
 	# Pancaking (default size 20 m) collapses the shadow depth range and flattens
 	# any caster taller than ~20 m toward the light, which on dune/mountain relief
 	# both drops real shadows and smears a spurious one that tracks the camera.
@@ -160,6 +171,25 @@ func _sync_sun_direction(force: bool = false) -> void:
 	_last_sun_dir = next_dir
 	_sun_dir_initialized = true
 	sun.look_at_from_position(Vector3.ZERO, next_dir * -1.0, Vector3(0, 1, 0))
+
+## Keep the last PSSM cascade reaching past the terrain the camera can actually
+## see. A fixed 9 km reach put a hard shadow/no-shadow boundary straight across
+## every airborne frame (a camera-locked triangular wedge on near-edge-on ground,
+## worst at a grazing sun). Updated only on a meaningful altitude change so it
+## does not churn the shadow atlas every frame.
+func _sync_shadow_distance() -> void:
+	if sun == null or player == null:
+		return
+	var alt: float = maxf(player.altitude(), 0.0)
+	# Geometric horizon distance for a sphere of radius R at height h: sqrt(2Rh + h^2).
+	var r: float = Planet.cfg.planet_radius if (Planet.ready_state and Planet.cfg != null) else Frames.planet_radius
+	var horizon: float = sqrt(2.0 * r * alt + alt * alt)
+	var want: float = clampf(
+		maxf(SHADOW_MAX_DISTANCE_GROUND_M, horizon * SHADOW_HORIZON_MARGIN),
+		SHADOW_MAX_DISTANCE_GROUND_M, SHADOW_MAX_DISTANCE_CAP_M)
+	if absf(want - sun.directional_shadow_max_distance) < 0.08 * want:
+		return
+	sun.directional_shadow_max_distance = want
 
 ## Inverse-square solar brightness. The Godot sun energy and the sky/scattering
 ## u_sun_intensity must scale by the exact same factor as the planet moves toward
@@ -492,12 +522,38 @@ func _push_orbit_surface_textures() -> void:
 func find_spawn() -> Vector3:
 	var f := Planet.fields
 	var g := Planet.grid
+	var sun := Frames.helion_dir.normalized()
 	var best := -1.0
 	var best_c := 0
+	# Prefer the best-scoring site that is currently sunlit, so a fresh "teleport to
+	# a good site" never drops the player on the night side, where the same spot
+	# would look like broken rendering (chunks/geometry are fine either way -- see
+	# planning/PROBLEMS.md P-008 -- it is just genuinely too dark to see). Falls
+	# back to the plain best score if literally nothing scoreable is sunlit right now.
+	var best_lit := -1.0
+	var best_lit_c := -1
 	for c in g.cell_count:
 		if f.elev[c] <= 5.0 or f.elev[c] > 1400.0:
 			continue
 		if f.temp_mean[c] < 2.0 or f.temp_mean[c] > 24.0:
+			continue
+		var dir := g.cell_dir(c)
+		# f.elev is the canonical BAKED elevation biome classification also uses
+		# (PassBiome), so f.elev[c] > 5.0 above is a genuinely correct "this is
+		# land" check on that field. But the actual RENDERED terrain -- and
+		# therefore the water mask, contact height and scatter suitability the
+		# player will actually see/stand on -- comes from a SEPARATELY smoothed
+		# macro elevation field (PlanetSampler._build_smoothed_macro_elevation,
+		# two Gaussian passes at 0.5 strength, built once at world load and never
+		# reconciled back into f.elev or biome classification). Near almost any
+		# coastline that smoothing can drag a barely-positive land cell's
+		# RENDERED height far negative by averaging it with much deeper
+		# ocean/shelf neighbours -- so a cell f.elev approves as "5m of land"
+		# can still render/behave as if 100+ m underwater. Filtering on the
+		# rendered height too keeps a fresh spawn from ever landing somewhere
+		# that looks and behaves submerged despite being correctly biome-
+		# classified as land.
+		if Planet.macro_height(dir) <= 5.0:
 			continue
 		var river := clampf(f.discharge[c] / 260.0, 0.0, 1.0)
 		var score: float = f.corridor[c] * f.suitability[c] * (0.35 + river)
@@ -505,7 +561,10 @@ func find_spawn() -> Vector3:
 		if score > best:
 			best = score
 			best_c = c
-	return g.cell_dir(best_c)
+		if score > best_lit and dir.dot(sun) > 0.0:
+			best_lit = score
+			best_lit_c = c
+	return g.cell_dir(best_lit_c if best_lit_c >= 0 else best_c)
 
 func _process(dt: float) -> void:
 	if not _started:
@@ -531,6 +590,7 @@ func _process(dt: float) -> void:
 	_advance_orbit()
 	_sync_sun_direction()
 	_sync_solar_brightness()
+	_sync_shadow_distance()
 	_aim = player.aim()
 	map.set_player_dir(player.up_dir())
 	sky_mat.set_shader_parameter("u_up", player.up_dir())
@@ -684,6 +744,11 @@ func _collect() -> void:
 
 func _teleport() -> void:
 	player.spawn_at(find_spawn(), 40.0)
+	# Planet Studio's orbital body-focus camera hardcodes player.pitch to look
+	# straight down (-PI/2) when framing a body from outside, and nothing resets
+	# it afterward -- so without this, teleporting here can silently inherit that
+	# leftover pose and stare straight at the ground instead of the horizon.
+	player.pitch = 0.0
 	hud.notify("Moved to the best transport corridor site")
 
 func _save() -> void:

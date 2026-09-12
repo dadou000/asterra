@@ -38,6 +38,9 @@ var _interest_radius_m: float = INTEREST_MIN_RADIUS_M
 var _interest_family_radius_m: float = INTEREST_MIN_RADIUS_M
 var _interest_uses_detailed_surface: bool = true
 var _clip_sync_pending: bool = false
+var _editor_frame := preload("res://scripts/world_authoring/editor_camera_frame.gd").new()
+var _editor_roll: float = 0.0
+var _camera_command_active: bool = false
 
 
 func _ready() -> void:
@@ -84,8 +87,6 @@ func _process(delta: float) -> void:
 	super._process(delta)
 	if _world_host == null or not _interest_enabled:
 		return
-	if _navigation_active:
-		_update_interest_navigation(delta)
 	# Authoritative every-frame projection write. In particular, this allows far to
 	# SHRINK again after returning from a system/family view to a surface view.
 	_sync_interest_camera_clip()
@@ -112,9 +113,6 @@ func _set_navigation(enabled: bool) -> void:
 
 
 func _rotate_camera(relative: Vector2) -> void:
-	if not _interest_enabled:
-		super._rotate_camera(relative)
-		return
 	if _player == null:
 		return
 	var next_yaw: float = float(_player.get("yaw")) + relative.x * CAMERA_LOOK_SENS
@@ -129,13 +127,23 @@ func _rotate_camera(relative: Vector2) -> void:
 	_update_preview()
 
 
+func _resync_camera_basis() -> void:
+	# Never let the gameplay transform overwrite the transported editor frame.
+	_sync_interest_camera_transform()
+
+
+func _update_editor_free_fly(delta: float) -> void:
+	if _editor_navigation_enabled and not _camera_command_active:
+		_update_interest_navigation(delta)
+
+
 func _update_interest_navigation(delta: float) -> void:
 	if _player == null:
 		return
 	var world_pos: Vec3D = _player.get("world_pos") as Vec3D
 	if world_pos == null:
 		return
-	var radial: Vec3D = world_pos.sub(_interest_center_world)
+	var radial: Vec3D = world_pos.sub(_interest_center_world if _interest_enabled else Vec3D.new())
 	var up: Vector3 = radial.normalized().to_v3() if radial.length_sq() > 1.0 \
 		else Vector3.UP
 	var basis: Array = _interest_basis(up)
@@ -146,6 +154,10 @@ func _update_interest_navigation(delta: float) -> void:
 	var camera_right: Vector3 = look.cross(up).normalized()
 	if camera_right.length_squared() < 1.0e-8:
 		camera_right = flat_right
+	if _camera != null:
+		_sync_interest_camera_transform()
+		look = -_camera.global_basis.z
+		camera_right = _camera.global_basis.x
 
 	# Free-fly editor semantics: W/S follow the actual camera aim, not the tangent
 	# plane. After Focus Selected sets pitch downward, W therefore flies directly
@@ -166,7 +178,7 @@ func _update_interest_navigation(delta: float) -> void:
 	if wish.length_squared() <= 1.0e-8:
 		return
 
-	var altitude_m: float = maxf(radial.length() - _interest_radius_m, 1.0)
+	var altitude_m: float = maxf(radial.length() - (_interest_radius_m if _interest_enabled else Frames.planet_radius), 1.0)
 	var speed: float = clampf(
 		altitude_m * INTEREST_SPEED_ALTITUDE_SCALE,
 		INTEREST_MIN_SPEED_M_S,
@@ -181,19 +193,12 @@ func _update_interest_navigation(delta: float) -> void:
 
 
 func _interest_basis(up: Vector3) -> Array:
-	var reference := Vector3.UP
-	if absf(up.dot(reference)) > 0.995:
-		reference = Vector3.RIGHT
-	var east: Vector3 = reference.cross(up).normalized()
-	var north: Vector3 = up.cross(east).normalized()
 	var yaw: float = float(_player.get("yaw")) if _player != null else 0.0
-	var forward: Vector3 = (north * cos(yaw) + east * sin(yaw)).normalized()
-	var right: Vector3 = forward.cross(up).normalized()
-	return [forward, right]
+	return _editor_frame.tangent(up, yaw)
 
 
 func _sync_interest_camera_transform() -> void:
-	if not _interest_enabled or _player == null:
+	if _player == null:
 		return
 	if _camera == null:
 		_camera = _player.get("camera") as Camera3D
@@ -203,7 +208,7 @@ func _sync_interest_camera_transform() -> void:
 	if world_pos == null:
 		return
 	_player.position = Frames.to_render(world_pos)
-	var radial: Vec3D = world_pos.sub(_interest_center_world)
+	var radial: Vec3D = world_pos.sub(_interest_center_world if _interest_enabled else Vec3D.new())
 	var up: Vector3 = radial.normalized().to_v3() if radial.length_sq() > 1.0 \
 		else Vector3.UP
 	var basis: Array = _interest_basis(up)
@@ -215,7 +220,7 @@ func _sync_interest_camera_transform() -> void:
 	if camera_right.length_squared() < 1.0e-8:
 		camera_right = flat_right
 	var true_up: Vector3 = camera_right.cross(look).normalized()
-	_camera.transform.basis = Basis(camera_right, true_up, -look)
+	_camera.global_basis = Basis(camera_right, true_up, -look) * Basis(Vector3.BACK, _editor_roll)
 	_camera.position = Vector3.ZERO
 	_schedule_interest_camera_clip()
 

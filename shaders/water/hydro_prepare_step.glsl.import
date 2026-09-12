@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://siraxaddhgye"
+path="res://.godot/imported/hydro_prepare_step.glsl-f6290af773f7d4799a4dffdd3cb373f6.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_prepare_step.glsl"
+dest_files=["res://.godot/imported/hydro_prepare_step.glsl-f6290af773f7d4799a4dffdd3cb373f6.res"]
+
+[params]
+

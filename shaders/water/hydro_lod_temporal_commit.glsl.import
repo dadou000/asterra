@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://y41n5pcisx2o"
+path="res://.godot/imported/hydro_lod_temporal_commit.glsl-ae97a4df4f243381142f458c98923881.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_temporal_commit.glsl"
+dest_files=["res://.godot/imported/hydro_lod_temporal_commit.glsl-ae97a4df4f243381142f458c98923881.res"]
+
+[params]
+

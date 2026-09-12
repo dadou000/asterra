@@ -168,6 +168,30 @@ func _sync_biome_profile_uniforms(force: bool) -> void:
 		_material.set_shader_parameter("u_biome_layer_f", packed.get("f"))
 
 
+## Lets scatter (a separate autoload/materials) know whether it is worth
+## re-fetching/re-pushing scatter_biome_texture_mask_uniforms() below --
+## biome_texture_uniforms() rebuilds its packed arrays from scratch on every
+## call, so scatter should only pay that cost when this fingerprint actually
+## changes, the same way this file's own _sync_biome_texture_uniforms only
+## re-pushes to the terrain material on a fingerprint change (see
+## _sync_authoring_material above).
+func displacement_profile_fingerprint() -> String:
+	return _displacement_fingerprint
+
+
+## Same authored per-biome texture-band data _sync_biome_texture_uniforms
+## pushes onto the terrain's own material, for scatter's placement-mask gate
+## (asterra_biome_texture_mask_weight, terrain_biome_texture_mask.gdshaderinc)
+## to read from ITS OWN materials -- scatter is a separate autoload with
+## separate ShaderMaterials, so it cannot see uniforms bound only on this
+## node's _material.
+func scatter_biome_texture_mask_uniforms() -> Dictionary:
+	if _displacement_runtime == null or not is_instance_valid(_displacement_runtime) \
+			or not _displacement_runtime.has_method("biome_texture_uniforms"):
+		return {}
+	return _displacement_runtime.call("biome_texture_uniforms")
+
+
 func _sync_biome_texture_uniforms(_force: bool) -> void:
 	# Per-biome surface look (Biome Texture sub-tab) -- same reasoning as
 	# _sync_biome_profile_uniforms above, consumed by
@@ -199,6 +223,8 @@ func _sync_biome_texture_uniforms(_force: bool) -> void:
 		_material.set_shader_parameter("u_biome_tex_custom_roughness", tex_packed.get("custom_roughness"))
 		_material.set_shader_parameter("u_biome_tex_custom_normal", tex_packed.get("custom_normal"))
 		_material.set_shader_parameter("u_biome_tex_custom_tile_m", tex_packed.get("custom_tile_m"))
+		_material.set_shader_parameter("u_biome_tex_custom_notile", tex_packed.get("custom_notile"))
+		_material.set_shader_parameter("u_biome_tex_custom_albedo_tint", tex_packed.get("custom_albedo_tint"))
 
 
 func _sync_authoring_material(force: bool) -> void:

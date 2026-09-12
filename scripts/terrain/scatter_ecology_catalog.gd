@@ -84,6 +84,102 @@ static func clear_cache() -> void:
 	_manifest_cache.clear()
 
 
+static func save_manifest(data: Dictionary) -> Dictionary:
+	var next: Dictionary = data.duplicate(true)
+	var assets_value: Variant = next.get("assets", [])
+	if not (assets_value is Array):
+		return {"error":"Manifest assets must be an array."}
+	next["allow_empty_catalog"] = (assets_value as Array).is_empty()
+	var file := FileAccess.open(MANIFEST_PATH, FileAccess.WRITE)
+	if file == null:
+		return {"error":"Could not write %s (error %d)." % [MANIFEST_PATH, FileAccess.get_open_error()]}
+	file.store_string(JSON.stringify(next, "  ", false) + "\n")
+	file.close()
+	_manifest_cache = next
+	return {"ok":true, "asset_count":(assets_value as Array).size()}
+
+
+static func upsert_asset(asset: Dictionary) -> Dictionary:
+	var asset_id: String = String(asset.get("id", "")).strip_edges()
+	if asset_id.is_empty() or not asset_id.is_valid_filename():
+		return {"error":"Asset id must be a non-empty filesystem-safe slug."}
+	var kind: String = String(asset.get("kind", ""))
+	if not KIND_DEFAULTS.has(kind):
+		return {"error":"Unknown scatter kind: %s" % kind}
+	var biomes: Array = asset.get("biomes", []) as Array
+	if biomes.is_empty():
+		return {"error":"At least one biome assignment is required."}
+	var next_asset: Dictionary = asset.duplicate(true)
+	next_asset["id"] = asset_id
+	next_asset["kind"] = kind
+	next_asset["resolution"] = String(asset.get("resolution", "1k"))
+	next_asset["priority"] = String(asset.get("priority", "core"))
+	next_asset["url"] = String(asset.get("url", "https://polyhaven.com/a/%s" % asset_id))
+	next_asset["enabled"] = bool(asset.get("enabled", true))
+	var data: Dictionary = manifest().duplicate(true)
+	var assets: Array = (data.get("assets", []) as Array).duplicate(true)
+	var replaced := false
+	for index: int in assets.size():
+		if assets[index] is Dictionary and String((assets[index] as Dictionary).get("id", "")) == asset_id:
+			assets[index] = next_asset
+			replaced = true
+			break
+	if not replaced:
+		assets.append(next_asset)
+	data["assets"] = assets
+	var result := save_manifest(data)
+	result["asset_id"] = asset_id
+	result["created"] = not replaced
+	return result
+
+
+static func remove_asset(asset_id: String) -> Dictionary:
+	var data: Dictionary = manifest().duplicate(true)
+	var assets: Array = (data.get("assets", []) as Array).duplicate(true)
+	var removed := false
+	for index: int in range(assets.size() - 1, -1, -1):
+		if assets[index] is Dictionary and String((assets[index] as Dictionary).get("id", "")) == asset_id:
+			assets.remove_at(index)
+			removed = true
+	data["assets"] = assets
+	var result := save_manifest(data)
+	result["asset_id"] = asset_id
+	result["removed"] = removed
+	return result
+
+
+static func runtime_status(asset: Dictionary) -> Dictionary:
+	var asset_id: String = String(asset.get("id", ""))
+	var root := runtime_asset_root(asset)
+	var metadata_path := "%s/metadata.json" % root
+	var lods: Array = []
+	if FileAccess.file_exists(metadata_path):
+		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(metadata_path))
+		if parsed is Dictionary and (parsed as Dictionary).get("lods", []) is Array:
+			lods = (parsed as Dictionary).get("lods", []) as Array
+	return {
+		"id":asset_id,
+		"source_ready":FileAccess.file_exists("res://assets/scatter/source/%s/source.json" % asset_id),
+		"runtime_ready":not lods.is_empty(),
+		"runtime_root":root,
+		"lods":lods,
+	}
+
+
+static func start_pipeline(action: String, asset_id: String) -> Dictionary:
+	if action not in ["fetch", "optimize"]:
+		return {"error":"Unknown scatter pipeline action."}
+	var script_name := "fetch_scatter_assets.py" if action == "fetch" else "optimize_scatter_assets.py"
+	var script_path := ProjectSettings.globalize_path("res://tools/%s" % script_name)
+	var project_path := ProjectSettings.globalize_path("res://")
+	var arguments := PackedStringArray([script_path, "--asset", asset_id])
+	var pid := OS.create_process("python", arguments, false)
+	if pid <= 0:
+		return {"error":"Could not launch %s for %s." % [action, asset_id]}
+	return {"ok":true, "action":action, "asset_id":asset_id, "pid":pid,
+		"project_path":project_path}
+
+
 static func all_assets() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var raw_assets: Variant = manifest().get("assets", [])

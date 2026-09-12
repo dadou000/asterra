@@ -22,7 +22,7 @@ const DEFAULT_CHILD_ORBIT_ANOMALY_DEG: float = 35.0
 
 func ensure_valid() -> void:
 	schema_version = maxi(schema_version, SCHEMA_VERSION)
-	sim_time_scale = maxf(sim_time_scale, 0.0)
+	sim_time_scale = clampf(sim_time_scale, -1.0e7, 1.0e7) if is_finite(sim_time_scale) else 1.0
 	for body: Resource in bodies:
 		if body != null and body.has_method("ensure_children"):
 			body.call("ensure_children")

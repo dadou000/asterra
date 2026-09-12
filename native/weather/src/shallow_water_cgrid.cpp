@@ -1,0 +1,526 @@
+#include "shallow_water_cgrid.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
+namespace asterra::weather {
+
+static double gc_distance_m(const Vec3d &a, const Vec3d &b, double radius_m) {
+	const double angle = std::atan2(length(cross(a, b)), std::clamp(dot(a, b), -1.0, 1.0));
+	return angle * radius_m;
+}
+
+ShallowWaterCGrid::ShallowWaterCGrid(const CubedSphereGrid &grid,
+		double gravity_mps2, double rotation_rate_rad_s, Vec3d rotation_axis)
+	: grid_(&grid), topology_(grid), gravity_mps2_(gravity_mps2),
+	  rotation_rate_rad_s_(rotation_rate_rad_s), rotation_axis_(normalized(rotation_axis)) {
+	if (!(gravity_mps2_ > 0.0) || !std::isfinite(gravity_mps2_)) {
+		throw std::invalid_argument("ShallowWaterCGrid gravity must be finite and positive");
+	}
+	if (!std::isfinite(rotation_rate_rad_s_)) {
+		throw std::invalid_argument("ShallowWaterCGrid rotation rate must be finite");
+	}
+
+	const size_t edge_count = topology_.shared_edges().size();
+	edge_center_distance_m_.resize(edge_count);
+	edge_normal_separation_m_.resize(edge_count);
+	edge_tangential_offset_m_.resize(edge_count);
+	edge_tangent_direction_.resize(edge_count);
+	cell_shared_edge_index_.resize(static_cast<size_t>(grid.cell_count()));
+	cell_shared_edge_sign_.resize(static_cast<size_t>(grid.cell_count()));
+	for (auto &indices : cell_shared_edge_index_) indices.fill(-1);
+	for (auto &signs : cell_shared_edge_sign_) signs.fill(0.0);
+
+	for (size_t e = 0; e < edge_count; ++e) {
+		const auto &edge = topology_.shared_edges()[e];
+		const auto &cell_a = grid.cell(edge.cell_a);
+		const auto &cell_b = grid.cell(edge.cell_b);
+		const double distance = gc_distance_m(cell_a.center, cell_b.center, grid.radius_m());
+		if (!(distance > 0.0) || !std::isfinite(distance)) {
+			throw std::runtime_error("ShallowWaterCGrid encountered a degenerate dual edge");
+		}
+		edge_center_distance_m_[e] = distance;
+
+		const Vec3d radial = edge.midpoint;
+		const Vec3d tangent_along_edge = normalized(cross(radial, edge.normal_a_to_b));
+		edge_tangent_direction_[e] = tangent_along_edge;
+
+		Vec3d connector = cell_b.center - cell_a.center;
+		connector = connector - radial * dot(connector, radial);
+		if (!(length(connector) > 0.0)) {
+			throw std::runtime_error("ShallowWaterCGrid dual connector is degenerate");
+		}
+		const Vec3d connector_direction = normalized(connector);
+		const Vec3d displacement = connector_direction * distance;
+		const double normal_separation = dot(displacement, edge.normal_a_to_b);
+		const double tangential_offset = dot(displacement, tangent_along_edge);
+		if (!(normal_separation > 0.0) || !std::isfinite(normal_separation)
+				|| !std::isfinite(tangential_offset)) {
+			throw std::runtime_error("ShallowWaterCGrid invalid nonorthogonal edge metric");
+		}
+		edge_normal_separation_m_[e] = normal_separation;
+		edge_tangential_offset_m_[e] = tangential_offset;
+
+		cell_shared_edge_index_[edge.cell_a][edge.edge_a] = static_cast<int>(e);
+		cell_shared_edge_sign_[edge.cell_a][edge.edge_a] = 1.0;
+		cell_shared_edge_index_[edge.cell_b][edge.edge_b] = static_cast<int>(e);
+		cell_shared_edge_sign_[edge.cell_b][edge.edge_b] = -1.0;
+	}
+	for (int c = 0; c < grid.cell_count(); ++c) {
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			if (cell_shared_edge_index_[c][local_edge] < 0
+					|| cell_shared_edge_sign_[c][local_edge] == 0.0) {
+				throw std::runtime_error("ShallowWaterCGrid cell is missing a shared edge mapping");
+			}
+		}
+	}
+}
+
+ShallowWaterCGrid::State ShallowWaterCGrid::make_uniform_state(double depth_m) const {
+	if (!(depth_m > 0.0) || !std::isfinite(depth_m)) {
+		throw std::invalid_argument("Uniform shallow-water depth must be finite and positive");
+	}
+	State state;
+	state.depth_m.assign(static_cast<size_t>(grid_->cell_count()), depth_m);
+	state.edge_normal_mps.assign(topology_.shared_edges().size(), 0.0);
+	return state;
+}
+
+void ShallowWaterCGrid::validate_shape(const State &state) const {
+	if (state.depth_m.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Shallow-water depth array has the wrong size");
+	}
+	if (state.edge_normal_mps.size() != topology_.shared_edges().size()) {
+		throw std::invalid_argument("Shallow-water edge velocity array has the wrong size");
+	}
+}
+
+bool ShallowWaterCGrid::validate_finite_positive(const State &state) const {
+	for (double h : state.depth_m) {
+		if (!(h > 0.0) || !std::isfinite(h)) return false;
+	}
+	for (double u : state.edge_normal_mps) {
+		if (!std::isfinite(u)) return false;
+	}
+	return true;
+}
+
+bool ShallowWaterCGrid::is_exact_rest_state(const State &state) const {
+	if (state.depth_m.empty()) return false;
+	const double h0 = state.depth_m.front();
+	for (double h : state.depth_m) {
+		if (h != h0) return false;
+	}
+	for (double u : state.edge_normal_mps) {
+		if (u != 0.0) return false;
+	}
+	return true;
+}
+
+double ShallowWaterCGrid::total_volume_m3(const State &state) const {
+	validate_shape(state);
+	long double total = 0.0L;
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double h = state.depth_m[c];
+		if (!std::isfinite(h)) throw std::runtime_error("Shallow-water depth contains NaN/Inf");
+		total += static_cast<long double>(h)
+			* static_cast<long double>(grid_->cell(c).area_m2);
+	}
+	return static_cast<double>(total);
+}
+
+double ShallowWaterCGrid::total_energy(const State &state) const {
+	validate_shape(state);
+	const auto velocity = reconstruct_cell_velocity(state);
+	long double total = 0.0L;
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double h = state.depth_m[c];
+		const double speed2 = dot(velocity[c], velocity[c]);
+		if (!(h > 0.0) || !std::isfinite(h) || !std::isfinite(speed2)) {
+			throw std::runtime_error("Shallow-water energy received invalid state");
+		}
+		const long double energy_density = 0.5L * static_cast<long double>(gravity_mps2_)
+			* static_cast<long double>(h) * static_cast<long double>(h)
+			+ 0.5L * static_cast<long double>(h) * static_cast<long double>(speed2);
+		total += energy_density * static_cast<long double>(grid_->cell(c).area_m2);
+	}
+	return static_cast<double>(total);
+}
+
+double ShallowWaterCGrid::max_wave_courant(const State &state, double dt_s) const {
+	validate_shape(state);
+	if (!(dt_s >= 0.0) || !std::isfinite(dt_s)) {
+		throw std::invalid_argument("Shallow-water CFL timestep must be finite and non-negative");
+	}
+	double max_rate = 0.0;
+	for (size_t e = 0; e < topology_.shared_edges().size(); ++e) {
+		const auto &edge = topology_.shared_edges()[e];
+		const double h = std::max(state.depth_m[edge.cell_a], state.depth_m[edge.cell_b]);
+		if (!(h > 0.0) || !std::isfinite(h) || !std::isfinite(state.edge_normal_mps[e])) {
+			return std::numeric_limits<double>::infinity();
+		}
+		const double characteristic_speed = std::abs(state.edge_normal_mps[e])
+			+ std::sqrt(gravity_mps2_ * h);
+		max_rate = std::max(max_rate, characteristic_speed / edge_center_distance_m_[e]);
+	}
+	const double gravity_wave_cfl = dt_s * max_rate * std::sqrt(2.0);
+	const double inertial_cfl = dt_s * 2.0 * std::abs(rotation_rate_rad_s_);
+	return std::max(gravity_wave_cfl, inertial_cfl);
+}
+
+double ShallowWaterCGrid::stable_dt(const State &state, double target_cfl,
+		double maximum_dt_s) const {
+	if (!(target_cfl > 0.0) || !std::isfinite(target_cfl)) {
+		throw std::invalid_argument("Shallow-water target CFL must be finite and positive");
+	}
+	if (!(maximum_dt_s > 0.0) || !std::isfinite(maximum_dt_s)) {
+		throw std::invalid_argument("Shallow-water maximum timestep must be finite and positive");
+	}
+	const double unit_cfl = max_wave_courant(state, 1.0);
+	if (!std::isfinite(unit_cfl) || !(unit_cfl > 0.0)) {
+		throw std::runtime_error("Shallow-water state has invalid characteristic speed");
+	}
+	return std::min(maximum_dt_s, target_cfl / unit_cfl);
+}
+
+std::vector<Vec3d> ShallowWaterCGrid::reconstruct_cell_velocity(const State &state) const {
+	validate_shape(state);
+	std::vector<Vec3d> velocity(static_cast<size_t>(grid_->cell_count()));
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const auto &geom = grid_->cell(c);
+		double a00 = 0.0;
+		double a01 = 0.0;
+		double a11 = 0.0;
+		double b0 = 0.0;
+		double b1 = 0.0;
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			const int shared_index = cell_shared_edge_index_[c][local_edge];
+			const double sign = cell_shared_edge_sign_[c][local_edge];
+			const auto &shared = topology_.shared_edges()[static_cast<size_t>(shared_index)];
+			const Vec3d outward = shared.normal_a_to_b * sign;
+			const double measured_outward = state.edge_normal_mps[shared_index] * sign;
+			const double nx = dot(outward, geom.tangent_u);
+			const double ny = dot(outward, geom.tangent_v);
+			a00 += nx * nx;
+			a01 += nx * ny;
+			a11 += ny * ny;
+			b0 += nx * measured_outward;
+			b1 += ny * measured_outward;
+		}
+		const double determinant = a00 * a11 - a01 * a01;
+		if (!(std::abs(determinant) > 1.0e-12) || !std::isfinite(determinant)) {
+			throw std::runtime_error("C-grid tangent velocity reconstruction is singular");
+		}
+		const double u = (b0 * a11 - b1 * a01) / determinant;
+		const double v = (b1 * a00 - b0 * a01) / determinant;
+		velocity[c] = geom.tangent_u * u + geom.tangent_v * v;
+		if (!std::isfinite(velocity[c].x) || !std::isfinite(velocity[c].y)
+				|| !std::isfinite(velocity[c].z)) {
+			throw std::runtime_error("C-grid tangent velocity reconstruction produced NaN/Inf");
+		}
+	}
+	return velocity;
+}
+
+std::vector<Vec3d> ShallowWaterCGrid::reconstruct_cell_scalar_gradient(
+		const std::vector<double> &scalar) const {
+	if (scalar.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Scalar gradient array has the wrong size");
+	}
+	std::vector<Vec3d> gradient(static_cast<size_t>(grid_->cell_count()));
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const auto &geom = grid_->cell(c);
+		double a00 = 0.0;
+		double a01 = 0.0;
+		double a11 = 0.0;
+		double b0 = 0.0;
+		double b1 = 0.0;
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			const int n = geom.neighbour[local_edge].cell;
+			const auto &ng = grid_->cell(n);
+			const double distance = gc_distance_m(geom.center, ng.center, grid_->radius_m());
+			Vec3d toward = ng.center - geom.center * dot(ng.center, geom.center);
+			toward = normalized(toward) * distance;
+			const double dx = dot(toward, geom.tangent_u);
+			const double dy = dot(toward, geom.tangent_v);
+			const double ds = scalar[n] - scalar[c];
+			a00 += dx * dx;
+			a01 += dx * dy;
+			a11 += dy * dy;
+			b0 += dx * ds;
+			b1 += dy * ds;
+		}
+		const double determinant = a00 * a11 - a01 * a01;
+		if (!(std::abs(determinant) > 1.0e-6) || !std::isfinite(determinant)) {
+			throw std::runtime_error("C-grid scalar-gradient reconstruction is singular");
+		}
+		const double gu = (b0 * a11 - b1 * a01) / determinant;
+		const double gv = (b1 * a00 - b0 * a01) / determinant;
+		gradient[c] = geom.tangent_u * gu + geom.tangent_v * gv;
+		if (!std::isfinite(gradient[c].x) || !std::isfinite(gradient[c].y)
+				|| !std::isfinite(gradient[c].z)) {
+			throw std::runtime_error("C-grid scalar-gradient reconstruction produced NaN/Inf");
+		}
+	}
+	return gradient;
+}
+
+double ShallowWaterCGrid::corrected_edge_normal_gradient(
+		const std::vector<double> &scalar,
+		const std::vector<Vec3d> &cell_gradient,
+		size_t edge_index) const {
+	const auto &edge = topology_.shared_edges().at(edge_index);
+	const Vec3d radial = edge.midpoint;
+	Vec3d grad_edge = (cell_gradient[edge.cell_a] + cell_gradient[edge.cell_b]) * 0.5;
+	grad_edge = grad_edge - radial * dot(grad_edge, radial);
+	const double grad_t = dot(grad_edge, edge_tangent_direction_[edge_index]);
+	const double ds = scalar[edge.cell_b] - scalar[edge.cell_a];
+	return (ds - grad_t * edge_tangential_offset_m_[edge_index])
+		/ edge_normal_separation_m_[edge_index];
+}
+
+std::vector<double> ShallowWaterCGrid::reconstruct_cell_relative_vorticity(
+		const State &state, const std::vector<Vec3d> &cell_velocity) const {
+	validate_shape(state);
+	if (cell_velocity.size() != static_cast<size_t>(grid_->cell_count())) {
+		throw std::invalid_argument("Cell velocity array has the wrong size for vorticity");
+	}
+	std::vector<double> vorticity(static_cast<size_t>(grid_->cell_count()), 0.0);
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		long double circulation = 0.0L;
+		for (int local_edge = 0; local_edge < CubedSphereGrid::EDGE_COUNT; ++local_edge) {
+			const int shared_index = cell_shared_edge_index_[c][local_edge];
+			const double sign = cell_shared_edge_sign_[c][local_edge];
+			const auto &edge = topology_.shared_edges()[static_cast<size_t>(shared_index)];
+			const int other = edge.cell_a == c ? edge.cell_b : edge.cell_a;
+			const Vec3d radial = edge.midpoint;
+			const Vec3d outward = edge.normal_a_to_b * sign;
+			const Vec3d tangent_ccw = normalized(cross(radial, outward));
+			Vec3d u_edge = (cell_velocity[c] + cell_velocity[other]) * 0.5;
+			u_edge = u_edge - radial * dot(u_edge, radial);
+			circulation += static_cast<long double>(dot(u_edge, tangent_ccw))
+				* static_cast<long double>(edge.length_m);
+		}
+		vorticity[c] = static_cast<double>(circulation
+			/ static_cast<long double>(grid_->cell(c).area_m2));
+		if (!std::isfinite(vorticity[c])) {
+			throw std::runtime_error("C-grid circulation produced non-finite vorticity");
+		}
+	}
+	return vorticity;
+}
+
+std::vector<double> ShallowWaterCGrid::reconstruct_cell_relative_vorticity(
+		const State &state) const {
+	return reconstruct_cell_relative_vorticity(state, reconstruct_cell_velocity(state));
+}
+
+ShallowWaterCGrid::StageDiagnostics ShallowWaterCGrid::euler_stage(
+		const State &input, State &output, double dt_s) const {
+	validate_shape(input);
+	if (!(dt_s > 0.0) || !std::isfinite(dt_s)) {
+		throw std::invalid_argument("Shallow-water Euler timestep must be finite and positive");
+	}
+	if (!validate_finite_positive(input)) {
+		throw std::runtime_error("Shallow-water Euler stage received an invalid state");
+	}
+
+	StageDiagnostics diagnostics;
+	const size_t cell_count = static_cast<size_t>(grid_->cell_count());
+	const size_t edge_count = topology_.shared_edges().size();
+	output.depth_m.resize(cell_count);
+	output.edge_normal_mps.resize(edge_count);
+
+	std::vector<double> raw_volume_rate(edge_count, 0.0);
+	std::vector<double> outgoing_rate(cell_count, 0.0);
+	for (size_t e = 0; e < edge_count; ++e) {
+		const auto &edge = topology_.shared_edges()[e];
+		const double u = input.edge_normal_mps[e];
+		if (u == 0.0) continue;
+		const int donor = u > 0.0 ? edge.cell_a : edge.cell_b;
+		const double h_face = 0.5 * (input.depth_m[edge.cell_a] + input.depth_m[edge.cell_b]);
+		const double flux = u * edge.length_m * h_face;
+		raw_volume_rate[e] = flux;
+		outgoing_rate[donor] += std::abs(flux);
+	}
+
+	std::vector<double> donor_scale(cell_count, 1.0);
+	constexpr double RESERVE = 128.0 * std::numeric_limits<double>::epsilon();
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double available = input.depth_m[c] * grid_->cell(c).area_m2;
+		const double requested = outgoing_rate[c] * dt_s;
+		if (requested > available * (1.0 - RESERVE) && requested > 0.0) {
+			donor_scale[c] = std::max(available * (1.0 - RESERVE), 0.0) / requested;
+			++diagnostics.positivity_limiter_activations;
+		}
+	}
+
+	std::vector<double> delta_volume(cell_count, 0.0);
+	for (size_t e = 0; e < edge_count; ++e) {
+		const auto &edge = topology_.shared_edges()[e];
+		const double raw = raw_volume_rate[e];
+		if (raw == 0.0) continue;
+		const int donor = raw > 0.0 ? edge.cell_a : edge.cell_b;
+		const double transfer = raw * donor_scale[donor] * dt_s;
+		delta_volume[edge.cell_a] -= transfer;
+		delta_volume[edge.cell_b] += transfer;
+	}
+
+	for (int c = 0; c < grid_->cell_count(); ++c) {
+		const double volume = input.depth_m[c] * grid_->cell(c).area_m2 + delta_volume[c];
+		if (!(volume > 0.0) || !std::isfinite(volume)) {
+			throw std::runtime_error("Shallow-water continuity produced non-positive volume");
+		}
+		output.depth_m[c] = volume / grid_->cell(c).area_m2;
+	}
+
+	const std::vector<Vec3d> cell_velocity = reconstruct_cell_velocity(input);
+	const std::vector<double> relative_vorticity =
+		reconstruct_cell_relative_vorticity(input, cell_velocity);
+	std::vector<double> kinetic_energy(cell_count, 0.0);
+	for (size_t c = 0; c < cell_count; ++c) {
+		kinetic_energy[c] = 0.5 * dot(cell_velocity[c], cell_velocity[c]);
+	}
+	const std::vector<Vec3d> depth_gradient = reconstruct_cell_scalar_gradient(input.depth_m);
+	const std::vector<Vec3d> kinetic_gradient = reconstruct_cell_scalar_gradient(kinetic_energy);
+
+	// Full vector-invariant shallow-water momentum equation:
+	// du/dt = -(zeta+f) k x u - grad(g h + K).
+	// Relative vorticity comes from a paired circulation sum around each cell;
+	// each shared-edge contribution is equal/opposite in the two neighbouring
+	// cells, so the global integral of relative vorticity closes by construction.
+	for (size_t e = 0; e < edge_count; ++e) {
+		const auto &edge = topology_.shared_edges()[e];
+		const Vec3d radial = edge.midpoint;
+		const double grad_h = corrected_edge_normal_gradient(input.depth_m, depth_gradient, e);
+		const double grad_k = corrected_edge_normal_gradient(kinetic_energy, kinetic_gradient, e);
+		double acceleration = -gravity_mps2_ * grad_h - grad_k;
+
+		Vec3d u_edge = (cell_velocity[edge.cell_a] + cell_velocity[edge.cell_b]) * 0.5;
+		u_edge = u_edge - radial * dot(u_edge, radial);
+		const double zeta_edge = 0.5 * (relative_vorticity[edge.cell_a]
+			+ relative_vorticity[edge.cell_b]);
+		const double f = 2.0 * rotation_rate_rad_s_ * dot(rotation_axis_, radial);
+		const double absolute_vorticity = zeta_edge + f;
+		const Vec3d rotational = cross(radial, u_edge) * (-absolute_vorticity);
+		acceleration += dot(rotational, edge.normal_a_to_b);
+
+		output.edge_normal_mps[e] = input.edge_normal_mps[e] + acceleration * dt_s;
+		if (!std::isfinite(output.edge_normal_mps[e])) {
+			throw std::runtime_error("Shallow-water momentum produced NaN/Inf");
+		}
+	}
+	return diagnostics;
+}
+
+bool ShallowWaterCGrid::ssprk3_attempt(const State &initial, State &candidate, double dt_s,
+		std::size_t &positivity_limiter_activations) const {
+	try {
+		State s1, euler2, s2, euler3;
+		positivity_limiter_activations = 0;
+		positivity_limiter_activations += euler_stage(initial, s1, dt_s).positivity_limiter_activations;
+		positivity_limiter_activations += euler_stage(s1, euler2, dt_s).positivity_limiter_activations;
+
+		s2.depth_m.resize(initial.depth_m.size());
+		s2.edge_normal_mps.resize(initial.edge_normal_mps.size());
+		for (size_t c = 0; c < initial.depth_m.size(); ++c) {
+			s2.depth_m[c] = 0.75 * initial.depth_m[c] + 0.25 * euler2.depth_m[c];
+		}
+		for (size_t e = 0; e < initial.edge_normal_mps.size(); ++e) {
+			s2.edge_normal_mps[e] = 0.75 * initial.edge_normal_mps[e]
+				+ 0.25 * euler2.edge_normal_mps[e];
+		}
+		if (!validate_finite_positive(s2)) return false;
+
+		positivity_limiter_activations += euler_stage(s2, euler3, dt_s).positivity_limiter_activations;
+		candidate.depth_m.resize(initial.depth_m.size());
+		candidate.edge_normal_mps.resize(initial.edge_normal_mps.size());
+		for (size_t c = 0; c < initial.depth_m.size(); ++c) {
+			candidate.depth_m[c] = (1.0 / 3.0) * initial.depth_m[c]
+				+ (2.0 / 3.0) * euler3.depth_m[c];
+		}
+		for (size_t e = 0; e < initial.edge_normal_mps.size(); ++e) {
+			candidate.edge_normal_mps[e] = (1.0 / 3.0) * initial.edge_normal_mps[e]
+				+ (2.0 / 3.0) * euler3.edge_normal_mps[e];
+		}
+		return validate_finite_positive(candidate);
+	} catch (const std::exception &) {
+		return false;
+	}
+}
+
+ShallowWaterCGrid::StepDiagnostics ShallowWaterCGrid::step(
+		State &state, double requested_dt_s, double target_cfl, int max_retries) const {
+	validate_shape(state);
+	if (!(requested_dt_s > 0.0) || !std::isfinite(requested_dt_s)) {
+		throw std::invalid_argument("Shallow-water requested timestep must be finite and positive");
+	}
+	if (!(target_cfl > 0.0) || target_cfl > 0.9 || !std::isfinite(target_cfl)) {
+		throw std::invalid_argument("Shallow-water target CFL must be in (0, 0.9]");
+	}
+	if (max_retries < 0) throw std::invalid_argument("Shallow-water max_retries must be non-negative");
+	if (!validate_finite_positive(state)) {
+		throw std::runtime_error("Shallow-water step received an invalid state");
+	}
+
+	StepDiagnostics diag;
+	diag.requested_dt_s = requested_dt_s;
+	diag.mass_before_m3 = total_volume_m3(state);
+	const State initial = state;
+	const double first_dt = stable_dt(initial, target_cfl, requested_dt_s);
+
+	if (is_exact_rest_state(initial)) {
+		diag.accepted_dt_s = first_dt;
+		diag.max_wave_courant = max_wave_courant(initial, first_dt);
+		diag.mass_after_m3 = diag.mass_before_m3;
+		diag.relative_mass_error = 0.0;
+		diag.min_depth_m = initial.depth_m.front();
+		diag.max_depth_m = initial.depth_m.front();
+		diag.max_speed_mps = 0.0;
+		return diag;
+	}
+
+	double trial_dt = first_dt;
+	State candidate;
+	std::size_t limiter_count = 0;
+	bool accepted = false;
+	for (int attempt = 0; attempt <= max_retries; ++attempt) {
+		if (ssprk3_attempt(initial, candidate, trial_dt, limiter_count)) {
+			const double trial_cfl = max_wave_courant(candidate, trial_dt);
+			if (std::isfinite(trial_cfl) && trial_cfl <= target_cfl * 1.05) {
+				accepted = true;
+				break;
+			}
+		}
+		++diag.rejected_steps;
+		trial_dt *= 0.5;
+		if (!(trial_dt > 1.0e-6)) break;
+	}
+	if (!accepted) {
+		state = initial;
+		throw std::runtime_error("Shallow-water timestep failed invariants after rollback retries");
+	}
+
+	state = std::move(candidate);
+	diag.accepted_dt_s = trial_dt;
+	diag.max_wave_courant = max_wave_courant(state, trial_dt);
+	diag.positivity_limiter_activations = limiter_count;
+	diag.mass_after_m3 = total_volume_m3(state);
+	diag.relative_mass_error = std::abs(diag.mass_after_m3 - diag.mass_before_m3)
+		/ std::max(std::abs(diag.mass_before_m3), 1.0);
+	diag.min_depth_m = std::numeric_limits<double>::infinity();
+	diag.max_depth_m = -std::numeric_limits<double>::infinity();
+	diag.max_speed_mps = 0.0;
+	for (double h : state.depth_m) {
+		diag.min_depth_m = std::min(diag.min_depth_m, h);
+		diag.max_depth_m = std::max(diag.max_depth_m, h);
+	}
+	for (double u : state.edge_normal_mps) {
+		diag.max_speed_mps = std::max(diag.max_speed_mps, std::abs(u));
+	}
+	return diag;
+}
+
+} // namespace asterra::weather

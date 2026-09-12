@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://byadgco2m2ict"
+path="res://.godot/imported/hydro_mass_reduce.glsl-e4a55ebcfdb67bc63a216bae894aeccc.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_mass_reduce.glsl"
+dest_files=["res://.godot/imported/hydro_mass_reduce.glsl-e4a55ebcfdb67bc63a216bae894aeccc.res"]
+
+[params]
+

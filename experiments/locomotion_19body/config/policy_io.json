@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "policy_name": "asterra_walk_v0",
+  "runtime_rate_hz": 60,
+  "physics_rate_hz": 120,
+  "input_order": [
+    "root_height",
+    "root_orientation_tangent_normal_6",
+    "root_local_linear_velocity_3",
+    "root_local_angular_velocity_3",
+    "joint_positions_N",
+    "joint_velocities_N",
+    "key_body_positions_root_space_15",
+    "foot_contacts_2",
+    "command_velocity_xy_yaw_3",
+    "phase_sin_cos_2",
+    "previous_action_N"
+  ],
+  "output": "normalized_joint_position_targets_N",
+  "N": "resolved_from_final_19body_articulation",
+  "runtime_notes": [
+    "Run neural inference at 60 Hz.",
+    "Hold or smoothly interpolate joint targets across the 120 Hz Jolt physics steps.",
+    "Apply target positions through bounded PD/impedance motors; do not teleport rigid bodies.",
+    "Use the exact observation normalization exported with the policy."
+  ]
+}

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/water/test_sparse_hydro_seam_step.gd" id="1_test"]
+
+[node name="SparseHydroSeamStepSmoke" type="Node"]
+script = ExtResource("1_test")

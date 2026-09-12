@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bwamyftpi7phg"
+path="res://.godot/imported/sparse_hydro_frontier_handoff.glsl-221bdc783c7a921a2aa40d1286fa68b2.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_frontier_handoff.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_frontier_handoff.glsl-221bdc783c7a921a2aa40d1286fa68b2.res"]
+
+[params]
+

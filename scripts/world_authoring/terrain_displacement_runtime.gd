@@ -120,6 +120,10 @@ var _biome_textures: Array = []
 # changes (part of the same fingerprint as everything else), not every frame.
 var _biome_tex_custom_names: PackedStringArray = PackedStringArray()
 var _biome_tex_custom_tile_m: PackedFloat32Array = PackedFloat32Array()
+# Per-imported-texture "organic tiling" strength and albedo multiply-tint --
+# see gpu_surface_antitile.gdshaderinc's spat_notile_array header comment.
+var _biome_tex_custom_notile: PackedFloat32Array = PackedFloat32Array()
+var _biome_tex_custom_albedo_tint: PackedVector3Array = PackedVector3Array()
 var _biome_tex_custom_albedo_texture: Texture2DArray = null
 var _biome_tex_custom_roughness_texture: Texture2DArray = null
 var _biome_tex_custom_normal_texture: Texture2DArray = null
@@ -149,6 +153,8 @@ func clear() -> void:
 	_biome_textures = []
 	_biome_tex_custom_names = PackedStringArray()
 	_biome_tex_custom_tile_m = PackedFloat32Array()
+	_biome_tex_custom_notile = PackedFloat32Array()
+	_biome_tex_custom_albedo_tint = PackedVector3Array()
 	_biome_tex_custom_albedo_texture = null
 	_biome_tex_custom_roughness_texture = null
 	_biome_tex_custom_normal_texture = null
@@ -194,6 +200,8 @@ func compile_from_terrain(terrain: Resource) -> Dictionary:
 	_biome_textures = []
 	_biome_tex_custom_names = PackedStringArray()
 	_biome_tex_custom_tile_m = PackedFloat32Array()
+	_biome_tex_custom_notile = PackedFloat32Array()
+	_biome_tex_custom_albedo_tint = PackedVector3Array()
 	_biome_tex_custom_albedo_texture = null
 	_biome_tex_custom_roughness_texture = null
 	_biome_tex_custom_normal_texture = null
@@ -922,12 +930,21 @@ func _parse_biome_texture_library(slot: Resource) -> Array:
 			var normal_candidate := Image.new()
 			if normal_candidate.load_png_from_buffer(normal_bytes) == OK:
 				normal_image = normal_candidate
+		var tint_value: Variant = p.get("albedo_tint", null)
+		var albedo_tint := Color(1.0, 1.0, 1.0)
+		if tint_value is Color:
+			albedo_tint = tint_value
+		elif tint_value is Array and (tint_value as Array).size() >= 3:
+			var ta: Array = tint_value
+			albedo_tint = Color(float(ta[0]), float(ta[1]), float(ta[2]))
 		entries.append({
 			"name": String(p.get("name", "Texture %d" % (entries.size() + 1))),
 			"tile_m": maxf(float(p.get("tile_m", 8.0)), 0.01),
 			"albedo_image": albedo_image,
 			"roughness_image": roughness_image,
 			"normal_image": normal_image,
+			"notile_strength": clampf(float(p.get("notile_strength", 0.0)), 0.0, 1.0),
+			"albedo_tint": albedo_tint,
 		})
 	return entries
 
@@ -941,6 +958,8 @@ func _parse_biome_texture_library(slot: Resource) -> Array:
 func _build_custom_texture_library(entries: Array) -> void:
 	_biome_tex_custom_names = PackedStringArray()
 	_biome_tex_custom_tile_m = PackedFloat32Array()
+	_biome_tex_custom_notile = PackedFloat32Array()
+	_biome_tex_custom_albedo_tint = PackedVector3Array()
 	_biome_tex_custom_albedo_texture = null
 	_biome_tex_custom_roughness_texture = null
 	_biome_tex_custom_normal_texture = null
@@ -985,6 +1004,9 @@ func _build_custom_texture_library(entries: Array) -> void:
 
 		_biome_tex_custom_names.append(String(entry.get("name", "")))
 		_biome_tex_custom_tile_m.append(float(entry.get("tile_m", 8.0)))
+		_biome_tex_custom_notile.append(clampf(float(entry.get("notile_strength", 0.0)), 0.0, 1.0))
+		var albedo_tint: Color = entry.get("albedo_tint", Color(1.0, 1.0, 1.0)) as Color
+		_biome_tex_custom_albedo_tint.append(Vector3(albedo_tint.r, albedo_tint.g, albedo_tint.b))
 
 	var albedo_array := Texture2DArray.new()
 	if albedo_array.create_from_images(albedo_images) == OK:
@@ -1001,6 +1023,10 @@ func _build_custom_texture_library(entries: Array) -> void:
 	# uniform arrays below.
 	while _biome_tex_custom_tile_m.size() < BIOME_TEX_CUSTOM_MAX:
 		_biome_tex_custom_tile_m.append(8.0)
+	while _biome_tex_custom_notile.size() < BIOME_TEX_CUSTOM_MAX:
+		_biome_tex_custom_notile.append(0.0)
+	while _biome_tex_custom_albedo_tint.size() < BIOME_TEX_CUSTOM_MAX:
+		_biome_tex_custom_albedo_tint.append(Vector3(1.0, 1.0, 1.0))
 
 
 func _biome_layer_from_node(biome_id: int, strength: float, node_type: String,
@@ -1364,6 +1390,8 @@ func biome_texture_uniforms() -> Dictionary:
 		"custom_count": _biome_tex_custom_names.size(),
 		"custom_names": _biome_tex_custom_names,
 		"custom_tile_m": _biome_tex_custom_tile_m,
+		"custom_notile": _biome_tex_custom_notile,
+		"custom_albedo_tint": _biome_tex_custom_albedo_tint,
 		"custom_albedo": _biome_tex_custom_albedo_texture,
 		"custom_roughness": _biome_tex_custom_roughness_texture,
 		"custom_normal": _biome_tex_custom_normal_texture,

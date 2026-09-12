@@ -1,0 +1,4 @@
+# This directory is reference material only.
+# Godot must not import the extracted DDS/raw textures as project resources.
+# Runtime cloud noise is generated procedurally by:
+# res://scripts/rendering/cloud_noise_generator.gd

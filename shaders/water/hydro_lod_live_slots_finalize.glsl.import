@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cscpnodly37yi"
+path="res://.godot/imported/hydro_lod_live_slots_finalize.glsl-0ebf45ead4ab8a99596f0b0fe8f44a4e.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_live_slots_finalize.glsl"
+dest_files=["res://.godot/imported/hydro_lod_live_slots_finalize.glsl-0ebf45ead4ab8a99596f0b0fe8f44a4e.res"]
+
+[params]
+

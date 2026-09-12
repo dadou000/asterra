@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dg8fxds3w65t8"
+path="res://.godot/imported/hydro_activity_compact.glsl-096184441b742b010e6ce5bae51ca9ec.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_activity_compact.glsl"
+dest_files=["res://.godot/imported/hydro_activity_compact.glsl-096184441b742b010e6ce5bae51ca9ec.res"]
+
+[params]
+

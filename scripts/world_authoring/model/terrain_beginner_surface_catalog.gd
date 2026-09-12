@@ -53,6 +53,16 @@ static func _color(node_type: String, key: String, title: String, description: S
 	}
 
 
+static func _select(node_type: String, key: String, title: String, description: String,
+		category: String, options: PackedStringArray, default_index: int,
+		minimum_mode: int = MODE_SIMPLE) -> Dictionary:
+	return {
+		"kind":"select", "node_type":node_type, "key":key, "title":title,
+		"description":description, "category":category, "options":options,
+		"default":default_index, "minimum_mode":minimum_mode,
+	}
+
+
 static func _controls() -> Array[Dictionary]:
 	return [
 		_number("PRODUCTION_CLASSIFIER_SETTINGS", "rock_scale", "Rock amount",
@@ -107,6 +117,20 @@ static func _controls() -> Array[Dictionary]:
 			"World-space size of the mud scan texture projection.", "Surface Detail", 1.0, 0.1, 20.0, 0.1, "m", MODE_DETAILED),
 		_number("PRODUCTION_SCAN_PBR_SETTINGS", "forest_metres", "Forest texture size",
 			"World-space size of the forest-floor scan texture projection.", "Surface Detail", 2.0, 0.1, 20.0, 0.1, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "ground_macro_metres", "Ground macro texture size",
+			"World-space size of the SAME ground scan texture resampled larger, so its pattern stays readable past where the small tile above has blurred flat.", "Surface Detail", 16.0, 1.0, 256.0, 0.5, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "grass_macro_metres", "Grass macro texture size",
+			"World-space size of the SAME grass scan texture resampled larger, so its pattern stays readable past where the small tile above has blurred flat.", "Surface Detail", 14.0, 1.0, 256.0, 0.5, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "mud_macro_metres", "Mud macro texture size",
+			"World-space size of the SAME mud scan texture resampled larger, so its pattern stays readable past where the small tile above has blurred flat.", "Surface Detail", 10.0, 1.0, 256.0, 0.5, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "forest_macro_metres", "Forest macro texture size",
+			"World-space size of the SAME forest-floor scan texture resampled larger, so its pattern stays readable past where the small tile above has blurred flat.", "Surface Detail", 18.0, 1.0, 256.0, 0.5, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "micro_macro_near_m", "Micro/macro blend start",
+			"Camera distance where the crossfade from the small (micro) to the large (macro) texture size begins. Below this, pure micro.", "Surface Detail", 4.0, 0.0, 500.0, 1.0, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "micro_macro_far_m", "Micro/macro blend end",
+			"Camera distance where the crossfade finishes; beyond this, pure macro texture size (still subject to the overall scanned-PBR fade distance above).", "Surface Detail", 60.0, 0.0, 2000.0, 1.0, "m", MODE_DETAILED),
+		_number("PRODUCTION_SCAN_PBR_SETTINGS", "macro_strength", "Macro texture contrast",
+			"How strongly the large-scale texture's own pattern shows once blended in; 0 flattens it to a single tone, 1 is the scan unmodified.", "Surface Detail", 1.0, 0.0, 2.0, 0.01, "", MODE_DETAILED),
 
 		_color("PRODUCTION_SURFACE_PALETTE", "rock_granite", "Granite",
 			"Base granite color used by the production geology palette.", "Key Colors", Color(0.335,0.305,0.275), MODE_DETAILED),
@@ -139,4 +163,68 @@ static func _controls() -> Array[Dictionary]:
 			"Temperature where snow classification starts transitioning.", "Classification Rules", -8.0, -40.0, 20.0, 0.5, "°C", MODE_DETAILED),
 		_number("PRODUCTION_CLASSIFIER_THRESHOLDS", "snow_temp_end_c", "Snow temperature end",
 			"Warmer end of the main snow transition.", "Classification Rules", 2.0, -40.0, 20.0, 0.5, "°C", MODE_DETAILED),
+
+		# Scatter: which of the three self-contained procedural families
+		# (grass clump / geologic stone / river stone -- gpu_terrain_scatter.gd,
+		# no external asset files) place where. "Global" is the classifier's own
+		# continuous suitability, unrestricted; "Biome" additionally requires
+		# the authored biome id; "Texture mask" further requires a specific
+		# BIOME TEXTURE band (within that biome) to be active at that point --
+		# see gpu_scatter_common.gdshaderinc's sg_gate_weight. biome_id/
+		# texture_band_index are bare 0-based indices (same convention Biome
+		# Texture's own custom_texture_index already uses), not name pickers,
+		# to keep this data-only catalog independent of BIOME_NAMES/the band
+		# list's live contents. The larger 26-kind catalog with per-biome
+		# density multipliers in scripts/terrain/scatter_ecology_catalog.gd is
+		# a forward-looking data model for the (still-suppressed) real-asset
+		# ecology layer -- these three families predate and are simpler than
+		# that; wiring them together is a natural follow-up once ecology
+		# assets are reintroduced.
+		_toggle("PRODUCTION_SCATTER_GRASS_SETTINGS", "enabled", "Grass enabled",
+			"Enables the procedural grass-clump scatter family.", "Scatter", true),
+		_number("PRODUCTION_SCATTER_GRASS_SETTINGS", "density", "Grass density",
+			"Scales how much of the classifier-suitable ground actually grows grass.", "Scatter", 1.0, 0.0, 3.0, 0.01),
+		_select("PRODUCTION_SCATTER_GRASS_SETTINGS", "gate_mode", "Grass placement",
+			"Global: anywhere the classifier allows grass. Biome: only inside one authored biome. Texture mask: further restricted to wherever a specific Biome Texture band (in that biome) is painted.",
+			"Scatter", ["Global", "Biome", "Texture mask"], 0),
+		_number("PRODUCTION_SCATTER_GRASS_SETTINGS", "biome_id", "Grass biome",
+			"Biome index this family is restricted to when placement is Biome or Texture mask (see the BIOME TERRAIN/BIOME TEXTURE biome picker for names/order).", "Scatter", 0.0, 0.0, 17.0, 1.0, "", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_GRASS_SETTINGS", "texture_band_index", "Grass texture band",
+			"Which band (top to bottom, 0-based) of the selected biome's BIOME TEXTURE stack to scatter along, when placement is Texture mask.", "Scatter", 0.0, 0.0, 15.0, 1.0, "", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_GRASS_SETTINGS", "slope_min_deg", "Grass min slope",
+			"Excludes ground flatter than this, independent of placement mode above. 0 = no lower limit.", "Scatter", 0.0, 0.0, 89.0, 0.5, "°", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_GRASS_SETTINGS", "slope_max_deg", "Grass max slope",
+			"Excludes ground steeper than this, independent of placement mode above. 180 = no upper limit.", "Scatter", 180.0, 0.0, 180.0, 0.5, "°", MODE_DETAILED),
+
+		_toggle("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "enabled", "Geologic stone enabled",
+			"Enables the procedural geologic/scree stone scatter family.", "Scatter", true),
+		_number("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "density", "Geologic stone density",
+			"Scales how much of the classifier-suitable ground actually gets loose rock.", "Scatter", 1.0, 0.0, 3.0, 0.01),
+		_select("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "gate_mode", "Geologic stone placement",
+			"Global: anywhere the classifier allows exposed rock. Biome: only inside one authored biome. Texture mask: further restricted to wherever a specific Biome Texture band (in that biome) is painted.",
+			"Scatter", ["Global", "Biome", "Texture mask"], 0),
+		_number("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "biome_id", "Geologic stone biome",
+			"Biome index this family is restricted to when placement is Biome or Texture mask.", "Scatter", 0.0, 0.0, 17.0, 1.0, "", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "texture_band_index", "Geologic stone texture band",
+			"Which band (top to bottom, 0-based) of the selected biome's BIOME TEXTURE stack to scatter along, when placement is Texture mask.", "Scatter", 0.0, 0.0, 15.0, 1.0, "", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "slope_min_deg", "Geologic stone min slope",
+			"Excludes ground flatter than this, independent of placement mode above. 0 = no lower limit. Raise this to keep loose rock on steep faces only.", "Scatter", 0.0, 0.0, 89.0, 0.5, "°", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "slope_max_deg", "Geologic stone max slope",
+			"Excludes ground steeper than this, independent of placement mode above. 180 = no upper limit.", "Scatter", 180.0, 0.0, 180.0, 0.5, "°", MODE_DETAILED),
+
+		_toggle("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "enabled", "River stone enabled",
+			"Enables the procedural river/depositional stone scatter family.", "Scatter", true),
+		_number("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "density", "River stone density",
+			"Scales how much of the classifier-suitable ground actually gets water-worn stone.", "Scatter", 1.0, 0.0, 3.0, 0.01),
+		_select("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "gate_mode", "River stone placement",
+			"Global: anywhere the classifier allows gravel/channel deposits. Biome: only inside one authored biome. Texture mask: further restricted to wherever a specific Biome Texture band (in that biome) is painted.",
+			"Scatter", ["Global", "Biome", "Texture mask"], 0),
+		_number("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "biome_id", "River stone biome",
+			"Biome index this family is restricted to when placement is Biome or Texture mask.", "Scatter", 0.0, 0.0, 17.0, 1.0, "", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "texture_band_index", "River stone texture band",
+			"Which band (top to bottom, 0-based) of the selected biome's BIOME TEXTURE stack to scatter along, when placement is Texture mask.", "Scatter", 0.0, 0.0, 15.0, 1.0, "", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "slope_min_deg", "River stone min slope",
+			"Excludes ground flatter than this, independent of placement mode above. 0 = no lower limit.", "Scatter", 0.0, 0.0, 89.0, 0.5, "°", MODE_DETAILED),
+		_number("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", "slope_max_deg", "River stone max slope",
+			"Excludes ground steeper than this, independent of placement mode above. 180 = no upper limit.", "Scatter", 180.0, 0.0, 180.0, 0.5, "°", MODE_DETAILED),
 	]

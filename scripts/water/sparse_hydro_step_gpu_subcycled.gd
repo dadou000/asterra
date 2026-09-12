@@ -1,0 +1,505 @@
+class_name SparseHydroStepGPUSubcycled
+extends SparseHydroStepGPULOD
+## Phase-4 temporal HydroLOD solver.
+##
+## The first 104 control bytes retain the existing diagnostics/CFL ABI. This solver
+## upgrades only its own control buffer to 184 bytes, appending fine-clock schedule
+## state. Existing Phase-3 and spatial-only Phase-4 solvers remain unchanged.
+##
+## Temporal bandwidth rule: atlas A remains authoritative for a level until that
+## level is due. A GPU-resident due-slot queue compacts occupied scheduled tiles and
+## drives both SWE and canonicalization through indirect dispatch, so non-due H1-H4
+## slots launch no per-cell work at all.
+
+const SUBCYCLED_CONTROL_BYTES := 184
+const BASE_CONTROL_BYTES := 104
+const DUE_QUEUE_SLOT_BYTES := 4
+const DUE_QUEUE_INDIRECT_BYTES := 16
+const DUE_QUEUE_LOCAL_X := 64
+
+var maximum_physical_lod := 4
+var temporal_schedule: HydroLODTemporalScheduleGPU
+var _queued_step_spirv: RDShaderSPIRV
+var _selective_commit_spirv: RDShaderSPIRV
+var _due_queue_reset_spirv: RDShaderSPIRV
+var _due_queue_build_spirv: RDShaderSPIRV
+
+var _due_queue_reset_shader := RID()
+var _due_queue_reset_pipeline := RID()
+var _due_queue_build_shader := RID()
+var _due_queue_build_pipeline := RID()
+var _due_queue_slots := RID()
+var _due_queue_indirect := RID()
+var _due_queue_reset_set := RID()
+var _due_queue_build_set := RID()
+
+
+func initialize(atlas: SparseHydroAtlasGPU,
+		connectivity: SparseHydroConnectivityGPU) -> Error:
+	if _initialized or _init_pending or _advance_pending or _diagnostics_pending:
+		return ERR_BUSY
+	if atlas == null or connectivity == null \
+			or not atlas.initialized_ok() or not connectivity.initialized_ok():
+		return ERR_INVALID_PARAMETER
+	if atlas.capacity != connectivity.capacity:
+		return ERR_INVALID_PARAMETER
+	if RenderingServer.get_rendering_device() == null:
+		return ERR_UNAVAILABLE
+
+	_queued_step_spirv = _load_spirv(
+		"res://shaders/water/sparse_hydro_step_subcycled.glsl")
+	_selective_commit_spirv = _load_spirv(
+		"res://shaders/water/sparse_hydro_commit_subcycled.glsl")
+	_due_queue_reset_spirv = _load_spirv(
+		"res://shaders/water/hydro_lod_due_queue_reset.glsl")
+	_due_queue_build_spirv = _load_spirv(
+		"res://shaders/water/hydro_lod_due_queue_build.glsl")
+	if _queued_step_spirv == null or _selective_commit_spirv == null \
+			or _due_queue_reset_spirv == null or _due_queue_build_spirv == null:
+		return ERR_CANT_OPEN
+
+	# The inherited initializer first builds a complete legacy-compatible resource
+	# bundle. Both step and commit are placeholders here; before initialized() is
+	# published, _upgrade_control_render_thread replaces them with the queued temporal
+	# shaders and the enlarged 184-byte control buffer.
+	var spirv := {
+		"step": _load_spirv("res://shaders/water/sparse_hydro_step.glsl"),
+		"commit": _load_spirv("res://shaders/water/sparse_hydro_commit.glsl"),
+		"reduce": _load_spirv("res://shaders/water/sparse_hydro_reduce_subcycled.glsl"),
+		"reset": _load_spirv("res://shaders/water/sparse_hydro_reset_reduction.glsl"),
+		"prepare": _load_spirv("res://shaders/water/sparse_hydro_prepare_step.glsl"),
+		"external_reduce": _load_spirv(
+			"res://shaders/water/sparse_hydro_external_flux_reduce.glsl"),
+		"external_finalize": _load_spirv(
+			"res://shaders/water/sparse_hydro_external_flux_finalize.glsl"),
+	}
+	for value in spirv.values():
+		if value == null:
+			return ERR_CANT_OPEN
+	_atlas = atlas
+	_connectivity = connectivity
+	_init_pending = true
+	RenderingServer.call_on_render_thread(
+		Callable(self, &"_init_render_thread").bind(spirv))
+	return OK
+
+
+func set_temporal_schedule(provider: HydroLODTemporalScheduleGPU) -> Error:
+	if step_pending() or diagnostics_pending():
+		return ERR_BUSY
+	if provider != null and not provider.initialized_ok():
+		return ERR_UNCONFIGURED
+	temporal_schedule = provider
+	return OK
+
+
+func advance(dt_s: float, max_substeps: int = 16,
+		request_diagnostics: bool = true) -> int:
+	if not _initialized or _advance_pending or _diagnostics_pending \
+			or not is_finite(dt_s) or dt_s <= 0.0:
+		return -1
+	if _atlas == null or _connectivity == null \
+			or not _atlas.initialized_ok() or not _connectivity.initialized_ok() \
+			or temporal_schedule == null or not temporal_schedule.initialized_ok():
+		return -1
+	var cap := clampi(max_substeps, 1, MAX_GPU_SUBSTEPS)
+	var step_id := _next_step_id
+	_next_step_id += 1
+	_advance_pending = true
+	_diagnostics_pending = request_diagnostics
+	var lod_enabled := 1.0 if _atlas.hydrolod_enabled() else 0.0
+	var base_level := float(maxi(_atlas.base_tile_level, 0))
+	var temporal_encoded := float(clampi(maximum_physical_lod, 0, 7) + 1)
+	var params := PackedFloat32Array([
+		float(_atlas.tile_resolution), float(_atlas.capacity),
+		_atlas.cell_size_m, dt_s,
+		gravity, dry_eps, manning_n, clampf(cfl, 0.01, 0.95),
+		float(cap), base_level, lod_enabled, temporal_encoded,
+		sea_level_m, maxf(coast_drain_rate_per_s, 0.0), 0.0, 0.0,
+	])
+	RenderingServer.call_on_render_thread(Callable(self, &"_advance_render_thread").bind(
+		step_id, cap, request_diagnostics, params.to_byte_array()))
+	return step_id
+
+
+func gpu_bytes_estimate() -> int:
+	var queue_bytes := DUE_QUEUE_INDIRECT_BYTES
+	if _atlas != null:
+		queue_bytes += _atlas.capacity * DUE_QUEUE_SLOT_BYTES
+	return super.gpu_bytes_estimate() + (SUBCYCLED_CONTROL_BYTES - BASE_CONTROL_BYTES) \
+		+ queue_bytes
+
+
+func stats() -> Dictionary:
+	var out := super.stats()
+	out["temporal_subcycling"] = temporal_schedule != null \
+		and temporal_schedule.initialized_ok()
+	out["maximum_physical_lod"] = maximum_physical_lod
+	out["fine_clock_cfl_normalization"] = true
+	out["synchronizes_on_advance_end"] = true
+	out["control_bytes"] = SUBCYCLED_CONTROL_BYTES
+	out["due_only_swe_state_writes"] = true
+	out["due_only_canonical_commit"] = true
+	out["non_due_state_copy_eliminated"] = true
+	out["canonical_non_due_owner"] = "atlas_A_untouched"
+	out["gpu_due_slot_queue"] = _due_queue_rids_valid()
+	out["gpu_due_slot_queue_capacity"] = 0 if _atlas == null else _atlas.capacity
+	out["indirect_swe_dispatch"] = _due_queue_rids_valid()
+	out["indirect_commit_dispatch"] = _due_queue_rids_valid()
+	out["cpu_due_count_readback"] = false
+	out["non_due_per_cell_invocations_eliminated"] = true
+	out["temporal_schedule"] = {} if temporal_schedule == null \
+		else temporal_schedule.stats()
+	return out
+
+
+## Base initialization intentionally creates its normal 104-byte control block and
+## legacy step/commit resources. Before publishing initialized(), replace the control
+## block, step and commit pipelines/sets, and create the GPU-resident due-slot queue.
+func _finish_init(error: Error, bundle: Dictionary) -> void:
+	if error != OK:
+		_init_pending = false
+		_initialized = false
+		initialization_failed.emit(error)
+		return
+	RenderingServer.call_on_render_thread(
+		Callable(self, &"_upgrade_control_render_thread").bind(bundle))
+
+
+func _upgrade_control_render_thread(bundle: Dictionary) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null or _queued_step_spirv == null or _selective_commit_spirv == null \
+			or _due_queue_reset_spirv == null or _due_queue_build_spirv == null:
+		call_deferred(&"_finish_subcycled_init", ERR_UNAVAILABLE, {})
+		return
+
+	var queued_step_shader := rd.shader_create_from_spirv(_queued_step_spirv)
+	var selective_commit_shader := rd.shader_create_from_spirv(_selective_commit_spirv)
+	var due_queue_reset_shader := rd.shader_create_from_spirv(_due_queue_reset_spirv)
+	var due_queue_build_shader := rd.shader_create_from_spirv(_due_queue_build_spirv)
+	if not queued_step_shader.is_valid() or not selective_commit_shader.is_valid() \
+			or not due_queue_reset_shader.is_valid() or not due_queue_build_shader.is_valid():
+		_free_many(rd, [queued_step_shader, selective_commit_shader,
+			due_queue_reset_shader, due_queue_build_shader])
+		_free_init_bundle(rd, bundle)
+		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
+		return
+
+	var queued_step_pipeline := rd.compute_pipeline_create(queued_step_shader)
+	var selective_commit_pipeline := rd.compute_pipeline_create(selective_commit_shader)
+	var due_queue_reset_pipeline := rd.compute_pipeline_create(due_queue_reset_shader)
+	var due_queue_build_pipeline := rd.compute_pipeline_create(due_queue_build_shader)
+	if not queued_step_pipeline.is_valid() or not selective_commit_pipeline.is_valid() \
+			or not due_queue_reset_pipeline.is_valid() or not due_queue_build_pipeline.is_valid():
+		_free_many(rd, [queued_step_pipeline, selective_commit_pipeline,
+			due_queue_reset_pipeline, due_queue_build_pipeline,
+			queued_step_shader, selective_commit_shader,
+			due_queue_reset_shader, due_queue_build_shader])
+		_free_init_bundle(rd, bundle)
+		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
+		return
+
+	var zero := PackedByteArray()
+	zero.resize(SUBCYCLED_CONTROL_BYTES)
+	var control := rd.storage_buffer_create(zero.size(), zero)
+	var due_slot_bytes := PackedByteArray()
+	due_slot_bytes.resize(_atlas.capacity * DUE_QUEUE_SLOT_BYTES)
+	var due_slots := rd.storage_buffer_create(due_slot_bytes.size(), due_slot_bytes)
+	var indirect_bytes := PackedByteArray()
+	indirect_bytes.resize(DUE_QUEUE_INDIRECT_BYTES)
+	var due_indirect := rd.storage_buffer_create(DUE_QUEUE_INDIRECT_BYTES,
+		indirect_bytes, RenderingDevice.STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT)
+	if not control.is_valid() or not due_slots.is_valid() or not due_indirect.is_valid():
+		_free_many(rd, [control, due_slots, due_indirect,
+			queued_step_pipeline, selective_commit_pipeline,
+			due_queue_reset_pipeline, due_queue_build_pipeline,
+			queued_step_shader, selective_commit_shader,
+			due_queue_reset_shader, due_queue_build_shader])
+		_free_init_bundle(rd, bundle)
+		call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
+		return
+
+	var step_set := rd.uniform_set_create([
+		_storage_uniform(0, _atlas.state_a_rid()),
+		_storage_uniform(1, _atlas.state_b_rid()),
+		_storage_uniform(2, _atlas.source_rid()),
+		_storage_uniform(3, _atlas.occupancy_rid()),
+		_storage_uniform(4, _connectivity.neighbor_slots_rid()),
+		_storage_uniform(5, _connectivity.neighbor_links_rid()),
+		_storage_uniform(6, bundle["params"]),
+		_storage_uniform(7, control),
+		_storage_uniform(8, bundle["atmospheric_sources"]),
+		_storage_uniform(9, bundle["external_flux_ledger"]),
+		_storage_uniform(10, _atlas.tile_metadata_rid()),
+		_storage_uniform(11, due_slots),
+	], queued_step_shader, 0)
+	var commit_set := rd.uniform_set_create([
+		_storage_uniform(0, _atlas.state_b_rid()),
+		_storage_uniform(1, _atlas.state_a_rid()),
+		_storage_uniform(2, bundle["commit_params"]),
+		_storage_uniform(3, due_slots),
+	], selective_commit_shader, 0)
+	var due_queue_reset_set := rd.uniform_set_create([
+		_storage_uniform(0, due_indirect),
+		_storage_uniform(1, bundle["params"]),
+	], due_queue_reset_shader, 0)
+	var due_queue_build_set := rd.uniform_set_create([
+		_storage_uniform(0, _atlas.occupancy_rid()),
+		_storage_uniform(1, _atlas.tile_metadata_rid()),
+		_storage_uniform(2, control),
+		_storage_uniform(3, bundle["params"]),
+		_storage_uniform(4, due_slots),
+		_storage_uniform(5, due_indirect),
+	], due_queue_build_shader, 0)
+	var reduce_set := rd.uniform_set_create([
+		_storage_uniform(0, _atlas.state_a_rid()),
+		_storage_uniform(1, _atlas.occupancy_rid()),
+		_storage_uniform(2, control),
+		_storage_uniform(3, bundle["params"]),
+		_storage_uniform(4, _atlas.tile_metadata_rid()),
+	], bundle["reduce_shader"], 0)
+	var reset_set := rd.uniform_set_create([
+		_storage_uniform(0, control),
+	], bundle["reset_shader"], 0)
+	var prepare_set := rd.uniform_set_create([
+		_storage_uniform(0, control),
+		_storage_uniform(1, bundle["params"]),
+	], bundle["prepare_shader"], 0)
+	var external_finalize_set := rd.uniform_set_create([
+		_storage_uniform(0, bundle["external_flux_partials"]),
+		_storage_uniform(1, control),
+		_storage_uniform(2, bundle["commit_params"]),
+	], bundle["external_finalize_shader"], 0)
+	var replacements := [step_set, commit_set, due_queue_reset_set, due_queue_build_set,
+		reduce_set, reset_set, prepare_set, external_finalize_set]
+	for rid in replacements:
+		if not (rid is RID) or not (rid as RID).is_valid():
+			_free_many(rd, replacements + [control, due_slots, due_indirect,
+				queued_step_pipeline, selective_commit_pipeline,
+				due_queue_reset_pipeline, due_queue_build_pipeline,
+				queued_step_shader, selective_commit_shader,
+				due_queue_reset_shader, due_queue_build_shader])
+			_free_init_bundle(rd, bundle)
+			call_deferred(&"_finish_subcycled_init", ERR_CANT_CREATE, {})
+			return
+
+	# The inherited step/commit shader/pipeline/sets were temporary bootstrap
+	# resources. Retire them together with every set tied to the old control block.
+	_free_many(rd, [
+		bundle["step_set"], bundle["commit_set"], bundle["reduce_set"],
+		bundle["reset_set"], bundle["prepare_set"], bundle["external_finalize_set"],
+		bundle["control"], bundle["step_pipeline"], bundle["step_shader"],
+		bundle["commit_pipeline"], bundle["commit_shader"],
+	])
+	bundle["control"] = control
+	bundle["step_shader"] = queued_step_shader
+	bundle["step_pipeline"] = queued_step_pipeline
+	bundle["step_set"] = step_set
+	bundle["commit_shader"] = selective_commit_shader
+	bundle["commit_pipeline"] = selective_commit_pipeline
+	bundle["commit_set"] = commit_set
+	bundle["reduce_set"] = reduce_set
+	bundle["reset_set"] = reset_set
+	bundle["prepare_set"] = prepare_set
+	bundle["external_finalize_set"] = external_finalize_set
+	bundle["due_queue_reset_shader"] = due_queue_reset_shader
+	bundle["due_queue_reset_pipeline"] = due_queue_reset_pipeline
+	bundle["due_queue_build_shader"] = due_queue_build_shader
+	bundle["due_queue_build_pipeline"] = due_queue_build_pipeline
+	bundle["due_queue_slots"] = due_slots
+	bundle["due_queue_indirect"] = due_indirect
+	bundle["due_queue_reset_set"] = due_queue_reset_set
+	bundle["due_queue_build_set"] = due_queue_build_set
+	call_deferred(&"_finish_subcycled_init", OK, bundle)
+
+
+func _finish_subcycled_init(error: Error, bundle: Dictionary) -> void:
+	_init_pending = false
+	if error != OK:
+		_initialized = false
+		initialization_failed.emit(error)
+		return
+	_step_shader = bundle["step_shader"]; _step_pipeline = bundle["step_pipeline"]
+	_commit_shader = bundle["commit_shader"]; _commit_pipeline = bundle["commit_pipeline"]
+	_reduce_shader = bundle["reduce_shader"]; _reduce_pipeline = bundle["reduce_pipeline"]
+	_reset_shader = bundle["reset_shader"]; _reset_pipeline = bundle["reset_pipeline"]
+	_prepare_shader = bundle["prepare_shader"]; _prepare_pipeline = bundle["prepare_pipeline"]
+	_external_reduce_shader = bundle["external_reduce_shader"]
+	_external_reduce_pipeline = bundle["external_reduce_pipeline"]
+	_external_finalize_shader = bundle["external_finalize_shader"]
+	_external_finalize_pipeline = bundle["external_finalize_pipeline"]
+	_params = bundle["params"]; _control = bundle["control"]
+	_atmospheric_sources = bundle["atmospheric_sources"]
+	_external_flux_ledger = bundle["external_flux_ledger"]
+	_external_flux_partials = bundle["external_flux_partials"]
+	_commit_params = bundle["commit_params"]
+	_step_set = bundle["step_set"]; _commit_set = bundle["commit_set"]
+	_reduce_set = bundle["reduce_set"]; _reset_set = bundle["reset_set"]
+	_prepare_set = bundle["prepare_set"]
+	_external_reduce_set = bundle["external_reduce_set"]
+	_external_finalize_set = bundle["external_finalize_set"]
+	_due_queue_reset_shader = bundle["due_queue_reset_shader"]
+	_due_queue_reset_pipeline = bundle["due_queue_reset_pipeline"]
+	_due_queue_build_shader = bundle["due_queue_build_shader"]
+	_due_queue_build_pipeline = bundle["due_queue_build_pipeline"]
+	_due_queue_slots = bundle["due_queue_slots"]
+	_due_queue_indirect = bundle["due_queue_indirect"]
+	_due_queue_reset_set = bundle["due_queue_reset_set"]
+	_due_queue_build_set = bundle["due_queue_build_set"]
+	_initialized = true
+	initialized.emit()
+
+
+func _free_init_bundle(rd: RenderingDevice, bundle: Dictionary) -> void:
+	var keys := [
+		"step_set", "commit_set", "reduce_set", "reset_set", "prepare_set",
+		"external_reduce_set", "external_finalize_set",
+		"params", "control", "atmospheric_sources", "external_flux_ledger",
+		"external_flux_partials", "commit_params",
+		"step_pipeline", "commit_pipeline", "reduce_pipeline", "reset_pipeline",
+		"prepare_pipeline", "external_reduce_pipeline", "external_finalize_pipeline",
+		"step_shader", "commit_shader", "reduce_shader", "reset_shader",
+		"prepare_shader", "external_reduce_shader", "external_finalize_shader",
+	]
+	var values: Array = []
+	for key in keys:
+		if bundle.has(key):
+			values.append(bundle[key])
+	_free_many(rd, values)
+
+
+func _advance_render_thread(step_id: int, cap: int, request_diagnostics: bool,
+		param_bytes: PackedByteArray) -> void:
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null or not _all_runtime_rids_valid() or not _due_queue_rids_valid() \
+			or temporal_schedule == null or not temporal_schedule.initialized_ok():
+		call_deferred("_finish_advance", step_id, false, request_diagnostics)
+		return
+	if lod_interface_flux != null and not lod_interface_flux.initialized_ok():
+		call_deferred("_finish_advance", step_id, false, request_diagnostics)
+		return
+	var err := rd.buffer_update(_params, 0, param_bytes.size(), param_bytes)
+	var external_ledger_bytes := _atlas.total_cell_count() * EXTERNAL_LEDGER_FLOATS * 4
+	if err != OK or rd.buffer_clear(_control, 0, SUBCYCLED_CONTROL_BYTES) != OK \
+			or rd.buffer_clear(_external_flux_ledger, 0, external_ledger_bytes) != OK:
+		call_deferred("_finish_advance", step_id, false, request_diagnostics)
+		return
+	if lod_interface_flux is HydroLODInterfaceFluxSubcycledGPU:
+		err = (lod_interface_flux as HydroLODInterfaceFluxSubcycledGPU) \
+			.clear_flux_register(rd)
+		if err != OK:
+			call_deferred("_finish_advance", step_id, false, request_diagnostics)
+			return
+
+	var groups_x := int(ceil(float(_atlas.tile_resolution) / float(LOCAL_X)))
+	var groups_y := int(ceil(float(_atlas.tile_resolution) / float(LOCAL_Y)))
+	var due_queue_groups := maxi(int(ceil(float(_atlas.capacity) \
+		/ float(DUE_QUEUE_LOCAL_X))), 1)
+	var external_groups := int(ceil(float(_atlas.total_cell_count()) \
+		/ float(EXTERNAL_REDUCE_LOCAL_X)))
+	var compute := rd.compute_list_begin()
+
+	for iteration in cap:
+		rd.compute_list_bind_compute_pipeline(compute, _reset_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _reset_set, 0)
+		HydroPushState.clear(rd, compute)
+		rd.compute_list_dispatch(compute, 1, 1, 1)
+		rd.compute_list_add_barrier(compute)
+
+		rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _reduce_set, 0)
+		_set_u32_push(rd, compute, 0)
+		rd.compute_list_dispatch(compute, groups_x, groups_y, _atlas.capacity)
+		rd.compute_list_add_barrier(compute)
+
+		rd.compute_list_bind_compute_pipeline(compute, _prepare_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _prepare_set, 0)
+		_set_u32_push(rd, compute, iteration)
+		rd.compute_list_dispatch(compute, 1, 1, 1)
+		rd.compute_list_add_barrier(compute)
+
+		temporal_schedule.record_prepare(rd, compute, iteration)
+
+		# Reset and compact the occupied slots due on this fine-clock tick. The
+		# resulting indirect command is {tile_groups_x, tile_groups_y, due_count}.
+		rd.compute_list_bind_compute_pipeline(compute, _due_queue_reset_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _due_queue_reset_set, 0)
+		HydroPushState.clear(rd, compute)
+		rd.compute_list_dispatch(compute, 1, 1, 1)
+		rd.compute_list_add_barrier(compute)
+		rd.compute_list_bind_compute_pipeline(compute, _due_queue_build_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _due_queue_build_set, 0)
+		HydroPushState.clear(rd, compute)
+		rd.compute_list_dispatch(compute, due_queue_groups, 1, 1)
+		rd.compute_list_add_barrier(compute)
+
+		rd.compute_list_bind_compute_pipeline(compute, _step_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _step_set, 0)
+		_set_u32_push(rd, compute, iteration)
+		rd.compute_list_dispatch_indirect(compute, _due_queue_indirect, 0)
+		rd.compute_list_add_barrier(compute)
+
+		if lod_interface_flux != null:
+			lod_interface_flux.record_corrections(rd, compute)
+
+		# SWE and commit share an 8x8x1 local footprint, so the same indirect command
+		# canonicalizes exactly the slots that wrote B and nothing else.
+		rd.compute_list_bind_compute_pipeline(compute, _commit_pipeline)
+		rd.compute_list_bind_uniform_set(compute, _commit_set, 0)
+		HydroPushState.clear(rd, compute)
+		rd.compute_list_dispatch_indirect(compute, _due_queue_indirect, 0)
+		rd.compute_list_add_barrier(compute)
+
+		temporal_schedule.record_commit(rd, compute)
+
+	rd.compute_list_bind_compute_pipeline(compute, _reduce_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _reduce_set, 0)
+	_set_u32_push(rd, compute, 1)
+	rd.compute_list_dispatch(compute, groups_x, groups_y, _atlas.capacity)
+	rd.compute_list_add_barrier(compute)
+
+	rd.compute_list_bind_compute_pipeline(compute, _external_reduce_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _external_reduce_set, 0)
+	HydroPushState.clear(rd, compute)
+	rd.compute_list_dispatch(compute, external_groups, 1, 1)
+	rd.compute_list_add_barrier(compute)
+	rd.compute_list_bind_compute_pipeline(compute, _external_finalize_pipeline)
+	rd.compute_list_bind_uniform_set(compute, _external_finalize_set, 0)
+	HydroPushState.clear(rd, compute)
+	rd.compute_list_dispatch(compute, 1, 1, 1)
+	rd.compute_list_end()
+
+	if request_diagnostics:
+		var callback := Callable(self, &"_on_diagnostics_bytes").bind(step_id)
+		err = rd.buffer_get_data_async(_control, callback, 0, SUBCYCLED_CONTROL_BYTES)
+		if err != OK:
+			call_deferred("_diagnostics_failed", step_id, err)
+	call_deferred("_finish_advance", step_id, true, request_diagnostics)
+
+
+func _due_queue_rids_valid() -> bool:
+	return _due_queue_reset_shader.is_valid() and _due_queue_reset_pipeline.is_valid() \
+		and _due_queue_build_shader.is_valid() and _due_queue_build_pipeline.is_valid() \
+		and _due_queue_slots.is_valid() and _due_queue_indirect.is_valid() \
+		and _due_queue_reset_set.is_valid() and _due_queue_build_set.is_valid()
+
+
+func release() -> void:
+	temporal_schedule = null
+	_queued_step_spirv = null
+	_selective_commit_spirv = null
+	_due_queue_reset_spirv = null
+	_due_queue_build_spirv = null
+	var queue_rids := [
+		_due_queue_reset_set, _due_queue_build_set,
+		_due_queue_slots, _due_queue_indirect,
+		_due_queue_reset_pipeline, _due_queue_build_pipeline,
+		_due_queue_reset_shader, _due_queue_build_shader,
+	]
+	_due_queue_reset_set = RID(); _due_queue_build_set = RID()
+	_due_queue_slots = RID(); _due_queue_indirect = RID()
+	_due_queue_reset_pipeline = RID(); _due_queue_build_pipeline = RID()
+	_due_queue_reset_shader = RID(); _due_queue_build_shader = RID()
+	RenderingServer.call_on_render_thread(
+		Callable(self, &"_release_render_thread").bind(queue_rids))
+	super.release()

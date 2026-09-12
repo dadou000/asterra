@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c0xykstljgvdu"
+path="res://.godot/imported/sparse_hydro_external_flux_finalize.glsl-2d6514928bef52fa838dd264190c1887.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_external_flux_finalize.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_external_flux_finalize.glsl-2d6514928bef52fa838dd264190c1887.res"]
+
+[params]
+

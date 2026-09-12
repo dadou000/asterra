@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource path="res://tests/water/test_fixed_hydro_gpu.gd" type="Script" id="1"]
+
+[node name="FixedHydroGPUSmoke" type="Node"]
+script = ExtResource("1")

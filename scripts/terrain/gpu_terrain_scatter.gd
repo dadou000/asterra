@@ -140,11 +140,11 @@ func _build_batches() -> void:
 	var grass_mesh: ArrayMesh = _build_grass_clump_mesh()
 	var stone_mesh: ArrayMesh = _build_stone_mesh()
 	_grass_batch = _make_batch("TerrainScatterGrass", grass_mesh, _grass_material,
-		GRASS_GRID * GRASS_GRID, false)
+		GRASS_GRID * GRASS_GRID, true)
 	_geo_stone_batch = _make_batch("TerrainScatterGeologicStone", stone_mesh, _geo_stone_material,
-		GEO_STONE_GRID * GEO_STONE_GRID, false)
+		GEO_STONE_GRID * GEO_STONE_GRID, true)
 	_river_stone_batch = _make_batch("TerrainScatterRiverStone", stone_mesh, _river_stone_material,
-		RIVER_STONE_GRID * RIVER_STONE_GRID, false)
+		RIVER_STONE_GRID * RIVER_STONE_GRID, true)
 	add_child(_grass_batch)
 	add_child(_geo_stone_batch)
 	add_child(_river_stone_batch)
@@ -229,6 +229,14 @@ func _sync_material_window(material: ShaderMaterial, grid: int, spacing: float,
 	material.set_shader_parameter("u_scatter_anchor_up", _anchor_up)
 	material.set_shader_parameter("u_scatter_planet_radius", Planet.cfg.planet_radius)
 	material.set_shader_parameter("u_scatter_origin", origin)
+	# Distance-thinning reference point (sg_distance_lod_weight). Candidates are
+	# built in this same origin-relative space (VERTEX before MODEL_MATRIX), so
+	# this must be the camera's own origin-relative position, not a raw planet-
+	# centered one -- see the comment on u_scatter_camera_pos in
+	# gpu_scatter_common.gdshaderinc.
+	var camera: Camera3D = get_viewport().get_camera_3d()
+	if camera != null:
+		material.set_shader_parameter("u_scatter_camera_pos", camera.global_position)
 
 
 static func _build_grass_clump_mesh() -> ArrayMesh:

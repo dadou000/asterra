@@ -26,6 +26,7 @@ const CATEGORY_CLASSIFICATION := "Classification"
 const CATEGORY_PALETTE := "Palette / materials"
 const CATEGORY_MICRODETAIL := "Microdetail"
 const CATEGORY_SURFACE_PBR := "Surface / PBR"
+const CATEGORY_SCATTER := "Scatter"
 const CATEGORY_TEXTURES := "Textures"
 const CATEGORY_MATH := "Math"
 const CATEGORY_UTILITY := "Utility"
@@ -163,6 +164,9 @@ const DISPLACEMENT_ONLY_NODES: Array[String] = [
 ]
 
 const MATERIAL_ONLY_NODES: Array[String] = [
+	"PRODUCTION_SCATTER_GRASS_SETTINGS",
+	"PRODUCTION_SCATTER_GEOSTONE_SETTINGS",
+	"PRODUCTION_SCATTER_RIVERSTONE_SETTINGS",
 	"PRODUCTION_ALBEDO",
 	"PRODUCTION_NORMAL",
 	"PRODUCTION_ROUGHNESS",
@@ -190,6 +194,9 @@ const MATERIAL_ONLY_NODES: Array[String] = [
 ]
 
 const PRODUCTION_CONTROL_NODES: Array[String] = [
+	"PRODUCTION_SCATTER_GRASS_SETTINGS",
+	"PRODUCTION_SCATTER_GEOSTONE_SETTINGS",
+	"PRODUCTION_SCATTER_RIVERSTONE_SETTINGS",
 	"PRODUCTION_GEOMORPH_SETTINGS",
 	"PRODUCTION_CLASSIFIER_SETTINGS",
 	"PRODUCTION_CLASSIFIER_THRESHOLDS",
@@ -202,6 +209,9 @@ const PRODUCTION_CONTROL_NODES: Array[String] = [
 ]
 
 const NODE_TYPES: Array[String] = [
+	"PRODUCTION_SCATTER_GRASS_SETTINGS",
+	"PRODUCTION_SCATTER_GEOSTONE_SETTINGS",
+	"PRODUCTION_SCATTER_RIVERSTONE_SETTINGS",
 	"PRODUCTION_GENERATED_HEIGHT",
 	"PRODUCTION_GEOMORPH_SETTINGS",
 	"PRODUCTION_SCULPT_DELTA",
@@ -279,6 +289,9 @@ const NODE_CATEGORY_BY_TYPE: Dictionary = {
 	"PRODUCTION_ROCK_PBR_SETTINGS": CATEGORY_SURFACE_PBR,
 	"PRODUCTION_SCAN_PBR_SETTINGS": CATEGORY_SURFACE_PBR,
 	"PRODUCTION_SCAN_TEXTURES": CATEGORY_TEXTURES,
+	"PRODUCTION_SCATTER_GRASS_SETTINGS": CATEGORY_SCATTER,
+	"PRODUCTION_SCATTER_GEOSTONE_SETTINGS": CATEGORY_SCATTER,
+	"PRODUCTION_SCATTER_RIVERSTONE_SETTINGS": CATEGORY_SCATTER,
 	"CLASSIFIER_PRIMARY": CATEGORY_CLASSIFICATION,
 	"CLASSIFIER_SECONDARY": CATEGORY_CLASSIFICATION,
 	"GAME_INPUT": CATEGORY_WORLD_DATA,
@@ -423,6 +436,12 @@ func create_production_stage_graph(next_domain: int) -> void:
 			production_control_defaults("PRODUCTION_SCAN_PBR_SETTINGS"))
 		add_node("PRODUCTION_SCAN_TEXTURES", Vector2(2520.0, 30.0),
 			production_control_defaults("PRODUCTION_SCAN_TEXTURES"))
+		add_node("PRODUCTION_SCATTER_GRASS_SETTINGS", Vector2(2880.0, 30.0),
+			production_control_defaults("PRODUCTION_SCATTER_GRASS_SETTINGS"))
+		add_node("PRODUCTION_SCATTER_GEOSTONE_SETTINGS", Vector2(2880.0, 370.0),
+			production_control_defaults("PRODUCTION_SCATTER_GEOSTONE_SETTINGS"))
+		add_node("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS", Vector2(2880.0, 710.0),
+			production_control_defaults("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS"))
 	revision += 1
 
 static func production_control_defaults(node_type: String) -> Dictionary:
@@ -549,6 +568,10 @@ static func production_control_defaults(node_type: String) -> Dictionary:
 				"loose_normal_weight":0.48, "special_threshold":0.015,
 				"special_albedo_strength":0.88, "special_roughness_strength":0.82,
 				"special_normal_mix":0.58, "special_normal_weight":0.72,
+				"ground_macro_metres":16.0, "grass_macro_metres":14.0,
+				"mud_macro_metres":10.0, "forest_macro_metres":18.0,
+				"micro_macro_near_m":4.0, "micro_macro_far_m":60.0,
+				"macro_strength":1.0,
 			}
 		"PRODUCTION_SCAN_TEXTURES":
 			return {
@@ -564,6 +587,21 @@ static func production_control_defaults(node_type: String) -> Dictionary:
 				"forest_albedo":"res://assets/textures/terrain/forrest_ground_01_diff_2k.jpg",
 				"forest_normal":"res://assets/textures/terrain/forrest_ground_01_nor_gl_2k.jpg",
 				"forest_roughness":"res://assets/textures/terrain/forrest_ground_01_rough_2k.jpg",
+			}
+		"PRODUCTION_SCATTER_GRASS_SETTINGS", "PRODUCTION_SCATTER_GEOSTONE_SETTINGS", "PRODUCTION_SCATTER_RIVERSTONE_SETTINGS":
+			# gate_mode: 0 global (everywhere the classifier suitability alone
+			# allows), 1 biome (restricted to biome_id), 2 texture mask
+			# (further restricted to wherever texture_band_index's own band, in
+			# that biome's Biome Texture stack, is active -- see
+			# gpu_scatter_common.gdshaderinc's sg_gate_weight). texture_band_index
+			# is a plain position into that biome's authored band list, same
+			# convention custom_texture_index already uses for the imported-
+			# texture library -- reordering/removing bands can leave a stale
+			# reference pointing at a different band, same caveat as that field.
+			return {
+				"enabled":true, "density":1.0, "gate_mode":0,
+				"biome_id":0, "texture_band_index":0,
+				"slope_min_deg":0.0, "slope_max_deg":180.0,
 			}
 	return {}
 

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cs3jybkedpqg4"
+path="res://.godot/imported/hydro_lod_restrict.glsl-5ad9edaed78b2018cc25fc190c3bf1c2.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_restrict.glsl"
+dest_files=["res://.godot/imported/hydro_lod_restrict.glsl-5ad9edaed78b2018cc25fc190c3bf1c2.res"]
+
+[params]
+

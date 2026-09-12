@@ -193,8 +193,14 @@ func update_info(player: AsterraPlayer, terrain: PlanetTerrain, carry: MaterialS
 		var scatter_state := "STABLE FALLBACK" if bool(ss.get("stable_gpu_fallback", false)) else (
 			"COMPUTE READY" if bool(ss.get("compute_ready", false)) else (
 				"FALLBACK" if not bool(ss.get("compute_failed", false)) else "FAILED"))
-		lines.append("[color=#666]GPU scatter global %d²×6  %s  CPU classify OFF[/color]" % [
-			int(ss.get("global_height_face_res", 0)), scatter_state])
+		# "STABLE FALLBACK" above is just the (permanently true) STABLE_FALLBACK_ONLY
+		# constant, not a live signal. The real question for P-012's floating-scatter
+		# bug is whether the per-instance shader read of the authoritative rendered-
+		# terrain cache is actually bound and ready -- surface that directly.
+		lines.append("[color=#666]GPU scatter global %d²×6  %s  terrain cache %s gen %d  CPU classify OFF[/color]" % [
+			int(ss.get("global_height_face_res", 0)), scatter_state,
+			"BOUND" if bool(ss.get("authoritative_terrain_cache_bound", false)) else "UNBOUND",
+			int(ss.get("authoritative_terrain_cache_generation", -1))])
 
 	lines.append("[color=#666]horizon %.1f°  %.0f km[/color]" % [st["horizon_deg"], st["horizon_km"]])
 	lines.append("[color=#666]fps %d[/color]" % Engine.get_frames_per_second())

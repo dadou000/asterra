@@ -75,9 +75,25 @@ func _scan_occlusion_node(node: Node) -> void:
 		_scan_occlusion_node(child)
 
 
+const ATMOSPHERE_SHADER_PATH := "res://shaders/atmosphere_sky.gdshader"
+
+
 func _try_install_occlusion_effect(world_environment: WorldEnvironment) -> void:
 	if world_environment == null or _occlusion_effect == null \
 			or not _occlusion_effect.is_ready():
+		return
+	# Only the validated Asterra atmosphere environment gets this pass. Without this
+	# guard the effect was also appended to unrelated WorldEnvironments (e.g. the
+	# weather map's BG_COLOR SubViewport), leaving one CompositorEffect instance
+	# owned by two Compositors -- a multi-reference that breaks deterministic
+	# teardown. Mirrors VolumetricCloudController._try_bind_environment.
+	var environment: Environment = world_environment.environment
+	if environment == null or environment.sky == null \
+			or not (environment.sky.sky_material is ShaderMaterial):
+		return
+	var sky_material := environment.sky.sky_material as ShaderMaterial
+	if sky_material.shader == null \
+			or sky_material.shader.resource_path != ATMOSPHERE_SHADER_PATH:
 		return
 	var compositor: Compositor = world_environment.compositor
 	if compositor == null:
@@ -94,11 +110,20 @@ func _update_occlusion_candidates(origin: Vector3) -> void:
 	if _planet().cfg == null or not _planet().ready_state or not _have_anchor:
 		return
 
-	var changed: bool = _occlusion_last_min_level != _active_min_level \
+	# A "topology" change moves the candidate <-> (sector, level) index mapping or
+	# the anchor frame the spheres are built in: the confirmed history is then
+	# meaningless and must be dropped. A bare level-centre re-snap (same active
+	# levels, same anchor) only slides each sphere by <= 1 cell -- far inside the
+	# sphere inflation -- so the existing confirmed suffix is still valid. Clearing
+	# it there made every occluded far-terrain ring pop back to full for a few
+	# frames on each ~km of travel (co-incident with the 4 km floating-origin
+	# rebase), which read as a one-frame view lurch.
+	var topology_changed: bool = _occlusion_last_min_level != _active_min_level \
 		or _occlusion_last_max_level != _active_max_level \
 		or _occlusion_last_anchor_dir.distance_squared_to(_anchor_dir) > 1e-12
 
 	var next_centers: Dictionary = {}
+	var centers_shifted: bool = false
 	var first_level: int = maxi(OCCLUSION_MIN_LEVEL, _active_min_level + 1)
 	for level: int in range(first_level, _active_max_level + 1):
 		var spacing: float = _base_spacing * pow(2.0, float(level))
@@ -109,24 +134,25 @@ func _update_occlusion_candidates(origin: Vector3) -> void:
 		if not _occlusion_level_centers.has(level) \
 				or (next_centers[level] as Vector2).distance_squared_to(
 					_occlusion_level_centers[level]) > 1e-6:
-			changed = true
+			centers_shifted = true
 
 	if next_centers.size() != _occlusion_level_centers.size():
-		changed = true
-	if not changed:
+		topology_changed = true
+	if not topology_changed and not centers_shifted:
 		return
 
-	_occlusion_generation += 1
 	_occlusion_candidate_rebuilds += 1
 	_occlusion_last_anchor_dir = _anchor_dir
 	_occlusion_last_min_level = _active_min_level
 	_occlusion_last_max_level = _active_max_level
 	_occlusion_level_centers = next_centers
-	_clear_occlusion_history()
-	# Candidate state changes after the parent visibility pass has already run this
-	# frame. Restore the full production prefix immediately so an old confirmed
-	# suffix can never survive for one stale frame after a snap/reanchor.
-	_restore_full_ring_prefixes()
+	if topology_changed:
+		# Bump the generation so any in-flight GPU result built against the old
+		# index mapping is rejected on arrival, and restore the full production
+		# prefix immediately so no stale confirmed suffix survives the reanchor.
+		_occlusion_generation += 1
+		_clear_occlusion_history()
+		_restore_full_ring_prefixes()
 
 	var spheres := PackedFloat32Array()
 	spheres.resize(OCCLUSION_CANDIDATE_COUNT * 4)

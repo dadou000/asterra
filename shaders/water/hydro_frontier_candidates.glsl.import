@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cbi3relqyvapi"
+path="res://.godot/imported/hydro_frontier_candidates.glsl-7ff39123764fe2f60efbdd5be50742de.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_frontier_candidates.glsl"
+dest_files=["res://.godot/imported/hydro_frontier_candidates.glsl-7ff39123764fe2f60efbdd5be50742de.res"]
+
+[params]
+

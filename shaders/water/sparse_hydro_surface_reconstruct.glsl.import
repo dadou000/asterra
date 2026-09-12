@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://m61x7he0onol"
+path="res://.godot/imported/sparse_hydro_surface_reconstruct.glsl-381cfae0bd41bfcd1526151b7cec3ebc.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_surface_reconstruct.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_surface_reconstruct.glsl-381cfae0bd41bfcd1526151b7cec3ebc.res"]
+
+[params]
+

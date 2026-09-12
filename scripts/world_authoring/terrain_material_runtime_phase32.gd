@@ -8,6 +8,9 @@ extends "res://scripts/world_authoring/terrain_material_runtime_phase31.gd"
 const GRAPH_SCRIPT := preload(
 	"res://scripts/world_authoring/model/terrain_shader_graph_definition.gd")
 const CONTROL_TYPES: Array[String] = [
+	"PRODUCTION_SCATTER_GRASS_SETTINGS",
+	"PRODUCTION_SCATTER_GEOSTONE_SETTINGS",
+	"PRODUCTION_SCATTER_RIVERSTONE_SETTINGS",
 	"PRODUCTION_CLASSIFIER_SETTINGS",
 	"PRODUCTION_CLASSIFIER_THRESHOLDS",
 	"PRODUCTION_SURFACE_PALETTE",
@@ -146,6 +149,19 @@ func bind_material(material: ShaderMaterial) -> void:
 	bind_production_controls(material)
 
 
+## Scatter (gpu_terrain_scatter*.gd) is a separate autoload with its own
+## ShaderMaterials, not the terrain's own -- it has no bind_production_controls
+## call site to hook into, so it polls this getter itself (see
+## spherical_geometry_clipmap_phase30.gd's scatter_production_controls()
+## forwarder) instead of being pushed to like the terrain material is.
+func scatter_controls() -> Dictionary:
+	return {
+		"grass": _control("PRODUCTION_SCATTER_GRASS_SETTINGS"),
+		"geo_stone": _control("PRODUCTION_SCATTER_GEOSTONE_SETTINGS"),
+		"river_stone": _control("PRODUCTION_SCATTER_RIVERSTONE_SETTINGS"),
+	}
+
+
 func bind_production_controls(material: ShaderMaterial) -> void:
 	if material == null:
 		return
@@ -275,6 +291,13 @@ func _bind_scanned_pbr(material: ShaderMaterial) -> void:
 	material.set_shader_parameter("u_pbr_grass_metres", maxf(float(scan.get("grass_metres", 2.0)), 0.001))
 	material.set_shader_parameter("u_pbr_mud_metres", maxf(float(scan.get("mud_metres", 1.0)), 0.001))
 	material.set_shader_parameter("u_pbr_forest_metres", maxf(float(scan.get("forest_metres", 2.0)), 0.001))
+	material.set_shader_parameter("u_pbr_ground_macro_metres", maxf(float(scan.get("ground_macro_metres", 16.0)), 0.001))
+	material.set_shader_parameter("u_pbr_grass_macro_metres", maxf(float(scan.get("grass_macro_metres", 14.0)), 0.001))
+	material.set_shader_parameter("u_pbr_mud_macro_metres", maxf(float(scan.get("mud_macro_metres", 10.0)), 0.001))
+	material.set_shader_parameter("u_pbr_forest_macro_metres", maxf(float(scan.get("forest_macro_metres", 18.0)), 0.001))
+	_bind_nonnegative(material, "u_pbr_micro_macro_near_m", scan, "micro_macro_near_m", 4.0)
+	_bind_nonnegative(material, "u_pbr_micro_macro_far_m", scan, "micro_macro_far_m", 60.0)
+	material.set_shader_parameter("u_pbr_macro_strength", maxf(float(scan.get("macro_strength", 1.0)), 0.0))
 	material.set_shader_parameter("u_pbr_triplanar_sharpness", maxf(float(scan.get("triplanar_sharpness", 5.0)), 0.01))
 	material.set_shader_parameter("u_pbr_transfer_strength", maxf(float(scan.get("transfer_strength", 0.60)), 0.0))
 	material.set_shader_parameter("u_pbr_transfer_min", maxf(float(scan.get("transfer_min", 0.48)), 0.0))

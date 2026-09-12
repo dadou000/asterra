@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b3u114x7lcwn2"
+path="res://.godot/imported/hydro_coarse_seed.glsl-199531a1136bb86e181b122c6119da2c.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_coarse_seed.glsl"
+dest_files=["res://.godot/imported/hydro_coarse_seed.glsl-199531a1136bb86e181b122c6119da2c.res"]
+
+[params]
+

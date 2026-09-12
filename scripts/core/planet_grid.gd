@@ -154,12 +154,20 @@ static func _bspline_weights(t: float) -> Vector4:
 		t3 / 6.0)
 
 func _safe(field: PackedFloat32Array, face: int, i: int, j: int) -> float:
+	if field.is_empty():
+		return 0.0
+	var index: int
 	if i >= 0 and i < res and j >= 0 and j < res:
-		return field[idx(face, i, j)]
-	var s := 2.0 / float(res)
-	var u := (float(i) + 0.5) * s - 1.0
-	var v := (float(j) + 0.5) * s - 1.0
-	return field[dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))]
+		index = idx(face, i, j)
+	else:
+		var s := 2.0 / float(res)
+		var u := (float(i) + 0.5) * s - 1.0
+		var v := (float(j) + 0.5) * s - 1.0
+		index = dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))
+	# A caller can hand us a field not yet rebuilt for the current grid
+	# resolution (multi-body swap, first frame). Clamp rather than read out of
+	# bounds; the sample is transient until the field catches up.
+	return field[clampi(index, 0, field.size() - 1)]
 
 ## Bilinearly sampled colour field. Same border handling as `sample_bilinear` --
 ## a per-cell palette lookup sampled this way is what keeps the 8 km macro
@@ -178,12 +186,20 @@ func sample_color_bilinear(field: PackedColorArray, d: Vector3) -> Color:
 	return c0.lerp(c1, ty)
 
 func _safe_color(field: PackedColorArray, face: int, i: int, j: int) -> Color:
+	if field.is_empty():
+		return Color(0, 0, 0, 0)
+	var index: int
 	if i >= 0 and i < res and j >= 0 and j < res:
-		return field[idx(face, i, j)]
-	var s := 2.0 / float(res)
-	var u := (float(i) + 0.5) * s - 1.0
-	var v := (float(j) + 0.5) * s - 1.0
-	return field[dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))]
+		index = idx(face, i, j)
+	else:
+		var s := 2.0 / float(res)
+		var u := (float(i) + 0.5) * s - 1.0
+		var v := (float(j) + 0.5) * s - 1.0
+		index = dir_to_index(CubeSphere.face_uv_to_dir(face, u, v))
+	# A caller can hand us a field not yet rebuilt for the current grid
+	# resolution (multi-body swap, first frame). Clamp rather than read out of
+	# bounds; the sample is transient until the field catches up.
+	return field[clampi(index, 0, field.size() - 1)]
 
 ## Nearest-cell integer field lookup.
 func sample_int(field: PackedByteArray, d: Vector3) -> int:

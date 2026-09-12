@@ -46,6 +46,17 @@ func _ensure_material_runtime() -> void:
 	_material_fingerprint = ""
 
 
+## Scatter (the separate TerrainScatter autoload) polls this each time it
+## re-binds its own materials, mirroring how it already reaches into this
+## autoload for rendered_contact_sample_params() -- see
+## gpu_terrain_scatter_global.gd's _bind_authoritative_terrain_cache.
+func scatter_production_controls() -> Dictionary:
+	if _material_runtime != null and is_instance_valid(_material_runtime) \
+			and _material_runtime.has_method("scatter_controls"):
+		return _material_runtime.call("scatter_controls")
+	return {}
+
+
 func _bind_production_graph_controls() -> void:
 	if _material == null:
 		return

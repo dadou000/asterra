@@ -22,7 +22,14 @@ uniform float u_asset_scale_min = 0.82;
 uniform float u_asset_scale_max = 1.18;
 uniform float u_asset_height_m = 1.0;
 uniform float u_wind_strength = 0.0;
-uniform float u_wind_speed = 1.25;
+uniform int u_asset_biome_count = 0;
+uniform int u_asset_biome_ids[18];
+uniform float u_asset_slope_min_deg = 0.0;
+uniform float u_asset_slope_max_deg = 90.0;
+// Authoring override for deliberate biome composition. Zero keeps the fully
+// procedural ecological classifier; a small floor prevents one locally dry or
+// low-biomass context texel from erasing a curated biome's entire asset layer.
+uniform float u_asset_environment_floor = 0.0;
 
 // Transform from the imported mesh node into the normalized asset root. Keeping
 // it explicit avoids a CPU mesh rebake and preserves Blender/glTF child layouts.
@@ -135,6 +142,20 @@ float ecology_suitability(float terrain_h, vec4 soil, vec4 surface,
 		* (1.0 - smoothstep(18.0, 31.0, slope)) * above_water, 0.0, 1.0);
 }
 
+float ecology_asset_gate(float biome, float slope) {
+	float biome_gate = u_asset_biome_count == 0 ? 1.0 : 0.0;
+	for (int index = 0; index < 18; index++) {
+		if (index < u_asset_biome_count && abs(biome - float(u_asset_biome_ids[index])) < 0.55) {
+			biome_gate = 1.0;
+		}
+	}
+	float slope_gate = smoothstep(u_asset_slope_min_deg - 2.0,
+		u_asset_slope_min_deg + 1.0, slope);
+	slope_gate *= 1.0 - smoothstep(u_asset_slope_max_deg - 2.0,
+		u_asset_slope_max_deg + 1.0, slope);
+	return biome_gate * slope_gate;
+}
+
 void vertex() {
 	vec3 source_vertex = ecology_asset_point(VERTEX);
 	vec3 source_normal = ecology_asset_direction(NORMAL);
@@ -159,6 +180,13 @@ void vertex() {
 		macro_h, soil, surface, geology, structure, climate, hydro);
 	float suitability = ecology_suitability(
 		terrain_h, soil, surface, geology, structure, climate, hydro, landform, biome);
+	suitability = max(suitability, u_asset_environment_floor);
+	float asset_slope = sg_slope_proxy_deg(surface, structure, landform);
+	suitability *= ecology_asset_gate(biome, asset_slope);
+	suitability *= sg_gate_weight(biome, d, terrain_h, macro_h,
+		asset_slope);
+	vec3 candidate_pos_local = d * (u_scatter_planet_radius + terrain_h) - u_scatter_origin;
+	suitability *= sg_distance_lod_weight(candidate_pos_local);
 	v_alive = sg_acceptance(suitability, h, INSTANCE_ID);
 
 	vec3 right;
@@ -179,16 +207,16 @@ void vertex() {
 			scaled.y,
 			scaled.x * sa + scaled.z * ca);
 
-		float tip = clamp(source_vertex.y / max(u_asset_height_m, 0.05), 0.0, 1.0);
-		float phase = float(absolute_cell.x) * 0.233 + float(absolute_cell.y) * 0.371 + r2 * TAU;
-		float wind = sin(TIME * u_wind_speed + phase) * u_wind_strength * tip * tip;
-		local_rotated.x += wind;
+		float height01 = clamp(source_vertex.y / max(u_asset_height_m, 0.05), 0.0, 1.0);
+		vec3 wind_offset = sg_wind_offset(right, north, vec2(absolute_cell), r2 * TAU,
+			u_wind_strength, height01, 0.05);
 
 		vec3 base = d * (u_scatter_planet_radius + terrain_h + u_scatter_surface_bias);
 		VERTEX = base - u_scatter_origin
 			+ right * local_rotated.x
 			+ d * local_rotated.y
-			+ north * local_rotated.z;
+			+ north * local_rotated.z
+			+ wind_offset;
 
 		vec3 n_rotated = vec3(
 			source_normal.x * ca - source_normal.z * sa,

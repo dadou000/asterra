@@ -1,0 +1,39 @@
+name: Patch Voronoi TRiSK Dynamics
+
+on:
+  push:
+    branches: [weather/0.0.5]
+    paths: [.github/workflows/patch-voronoi-trisk.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: weather/0.0.5
+      - name: Match MPAS PV-flux sign
+        shell: python
+        run: |
+          import pathlib
+          p = pathlib.Path('native/weather/src/voronoi_shallow_water.cpp')
+          s = p.read_text()
+          old = 't.edge_velocity_dt[static_cast<size_t>(e)] -= q_flux_perp;'
+          new = 't.edge_velocity_dt[static_cast<size_t>(e)] += q_flux_perp;'
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new)
+          s = s.replace(
+              '// TRiSK PV flux. weightsOnEdge reconstructs the positive tangential\n\t// component k x F at the target edge. The momentum equation contains\n\t// -q(h u^perp). Symmetric pairwise q averaging preserves the metric-\n\t// skew work cancellation of the Thuburn/Ringler edge operator.',
+              '// TRiSK PV flux, matching MPAS sw_compute_tend exactly: the MPAS\n\t// weightsOnEdge orientation makes the PV-flux contribution positive in the\n\t// normal momentum tendency. Symmetric pairwise PV averaging preserves the\n\t// metric-skew work cancellation of the Thuburn/Ringler edge operator.'
+          )
+          p.write_text(s)
+      - name: Commit patch
+        run: |
+          git config user.name "Asterra Weather CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add native/weather/src/voronoi_shallow_water.cpp
+          git commit -m "Match MPAS TRiSK PV flux sign"
+          git push

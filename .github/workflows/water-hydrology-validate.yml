@@ -1,0 +1,256 @@
+name: Water hydrology integration validation
+
+on:
+  push:
+    branches:
+      - "pre/0.1.0"
+    paths:
+      - "scripts/water/**"
+      - "shaders/water/**"
+      - "tests/water/**"
+      - "scripts/weather/**"
+      - "scripts/terrain/ocean_*.gd"
+      - "shaders/ocean_*.gdshader"
+      - "shaders/ocean_*.gdshaderinc"
+      - "project.godot"
+      - ".github/workflows/water-hydrology-validate.yml"
+  pull_request:
+    paths:
+      - "scripts/water/**"
+      - "shaders/water/**"
+      - "tests/water/**"
+      - "scripts/weather/**"
+      - "scripts/terrain/ocean_*.gd"
+      - "shaders/ocean_*.gdshader"
+      - "shaders/ocean_*.gdshaderinc"
+      - "project.godot"
+      - ".github/workflows/water-hydrology-validate.yml"
+  workflow_dispatch:
+
+jobs:
+  water-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 --version
+
+      - name: Build isolated hydrology test project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-water-ci
+          mkdir -p /tmp/asterra-water-ci/scripts /tmp/asterra-water-ci/shaders /tmp/asterra-water-ci/tests/water
+          cp -R scripts/. /tmp/asterra-water-ci/scripts/
+          cp -R shaders/. /tmp/asterra-water-ci/shaders/
+          cp -R tests/water/. /tmp/asterra-water-ci/tests/water/
+          cat > /tmp/asterra-water-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Water Integration CI"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import hydrology classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-water-ci
+          set +e
+          timeout 120 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/water-import.log 2>&1
+          status=$?
+          set -e
+          tail -n 240 /tmp/water-import.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "Hydrology class import failed with status $status"
+            exit "$status"
+          fi
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference|Warning treated as error" /tmp/water-import.log; then
+            echo "Hydrology import reported a script parse/load or strict-warning failure."
+            exit 1
+          fi
+
+      - name: Run hydrology model and ownership gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-water-ci
+          tests=(
+            HydroReferenceTests.tscn
+            HydroMetricGridTests.tscn
+            HydroTileTopologyTests.tscn
+            HydroFrontierResolverTests.tscn
+            HydroAutomaticSurfacePromotionTests.tscn
+            HydroAutomaticSurfaceDemotionTests.tscn
+            HydroAutomaticChannelRefinementTests.tscn
+            HydroPrecipitationOwnershipTests.tscn
+            PlanetHydrologyStoreTests.tscn
+            PlanetRiverClusterStoreTests.tscn
+            PlanetRiverRefinedCouplingTests.tscn
+          )
+          for scene in "${tests[@]}"; do
+            echo "===== $scene ====="
+            log="/tmp/${scene%.tscn}.log"
+            set +e
+            timeout 120 "$GODOT" --headless --path "$TEST_PROJECT" --rendering-method gl_compatibility \
+              "res://tests/water/$scene" > "$log" 2>&1
+            status=$?
+            set -e
+            cat "$log"
+            if [ "$status" -ne 0 ]; then
+              echo "$scene failed with status $status"
+              exit "$status"
+            fi
+            if ! grep -q "PASS" "$log"; then
+              echo "$scene did not emit a PASS marker"
+              exit 1
+            fi
+          done
+
+  water-vulkan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Vulkan software device and Xvfb
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools xvfb xauth
+          LVP_ICD="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' | head -n 1)"
+          if [ -z "$LVP_ICD" ]; then
+            echo "Lavapipe Vulkan ICD not found"
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$LVP_ICD" >> "$GITHUB_ENV"
+          echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
+          VK_ICD_FILENAMES="$LVP_ICD" vulkaninfo --summary
+
+      - name: Install Godot 4.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          echo "c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+
+      - name: Build isolated Vulkan hydrology project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/asterra-water-gpu-ci
+          mkdir -p /tmp/asterra-water-gpu-ci/scripts /tmp/asterra-water-gpu-ci/shaders /tmp/asterra-water-gpu-ci/tests/water
+          cp -R scripts/. /tmp/asterra-water-gpu-ci/scripts/
+          cp -R shaders/. /tmp/asterra-water-gpu-ci/shaders/
+          cp -R tests/water/. /tmp/asterra-water-gpu-ci/tests/water/
+          cat > /tmp/asterra-water-gpu-ci/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Asterra Water Vulkan CI"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          EOF
+
+      - name: Import hydrology classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-water-gpu-ci
+          timeout 120 "$GODOT" --headless --path "$TEST_PROJECT" --import > /tmp/water-gpu-import.log 2>&1
+          tail -n 240 /tmp/water-gpu-import.log || true
+          if grep -Eiq "SCRIPT ERROR: Parse Error|Could not resolve script|Failed to load script|Cyclic reference|Warning treated as error" /tmp/water-gpu-import.log; then
+            echo "Hydrology GPU import reported a script parse/load or strict-warning failure."
+            exit 1
+          fi
+
+      - name: Verify Godot Vulkan RenderingDevice
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-water-gpu-ci
+          # A GPU smoke scene is used as the probe because every renderer-mode
+          # hydrology test prints SKIP when the global RenderingDevice is absent.
+          set +e
+          xvfb-run -a timeout 120 "$GODOT" --path "$TEST_PROJECT" \
+            --rendering-method forward_plus --rendering-driver vulkan \
+            res://tests/water/FixedHydroGPUSmoke.tscn > /tmp/fixed-hydro-gpu.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/fixed-hydro-gpu.log
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          if grep -q "SKIP" /tmp/fixed-hydro-gpu.log; then
+            echo "Godot did not expose a Vulkan RenderingDevice; refusing a false-green GPU gate."
+            exit 1
+          fi
+          if ! grep -q "PASS" /tmp/fixed-hydro-gpu.log; then
+            echo "FixedHydroGPUSmoke did not emit a PASS marker"
+            exit 1
+          fi
+
+      - name: Run hydrology Vulkan integration gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT=/tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          TEST_PROJECT=/tmp/asterra-water-gpu-ci
+          tests=(
+            HydroGPUParityTests.tscn
+            SparseHydroGPUSmoke.tscn
+            HydroWeatherForcingSmoke.tscn
+            HydroTerrainBedGPUSmoke.tscn
+            LocalWaterSurfaceSmoke.tscn
+          )
+          for scene in "${tests[@]}"; do
+            echo "===== $scene ====="
+            log="/tmp/${scene%.tscn}.log"
+            set +e
+            xvfb-run -a timeout 180 "$GODOT" --path "$TEST_PROJECT" \
+              --rendering-method forward_plus --rendering-driver vulkan \
+              "res://tests/water/$scene" > "$log" 2>&1
+            status=$?
+            set -e
+            cat "$log"
+            if [ "$status" -ne 0 ]; then
+              echo "$scene failed with status $status"
+              exit "$status"
+            fi
+            if grep -q "SKIP" "$log"; then
+              echo "$scene skipped instead of exercising the GPU path"
+              exit 1
+            fi
+            if ! grep -q "PASS" "$log"; then
+              echo "$scene did not emit a PASS marker"
+              exit 1
+            fi
+          done

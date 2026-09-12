@@ -15,6 +15,10 @@ generator plus the streaming, editing and persistence needed to stand on it.
 
 ## Running it
 
+Planet Studio supports opt-in MCP control for editor automation. See the
+[Planet Studio MCP documentation](docs/mcp/README.md) for setup, tools, examples,
+feature coverage and tests.
+
 Open the folder in Godot 4.7.1 and press **F5**, or:
 
 ```

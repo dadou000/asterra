@@ -7,12 +7,6 @@ uniform vec3 u_up = vec3(0.0, 1.0, 0.0);
 uniform float u_camera_height = 0.0;
 uniform float u_planet_radius = 1000000.0;
 uniform float u_atmosphere_radius = 1060000.0;
-// Gas-giant override (GG5 look pass): the resident body's altitude datum is its
-// tiny core, but its VISUAL body is the cloud-top sphere the camera flies inside.
-// When these are > 0 the background occlusion uses them instead of
-// u_planet_radius / (u_planet_radius + u_camera_height): inside the cloud-top
-// sphere (u_observer_radius < u_occluder_radius) every background contribution is
-// killed, so the gas-giant shell -- not this compositor -- owns the view.
 uniform float u_occluder_radius = 0.0;
 uniform float u_observer_radius = 0.0;
 uniform vec3 u_rayleigh_coeff = vec3(5.5e-6, 13.0e-6, 22.4e-6);
@@ -24,9 +18,6 @@ uniform vec3 u_ozone_coeff = vec3(0.650e-6, 1.881e-6, 0.085e-6);
 uniform float u_ozone_centre = 25000.0;
 uniform float u_ozone_width = 15000.0;
 uniform float u_sun_intensity = 5.0265;
-
-// Manual debug controls only. Defaults preserve the calibrated fixed radiances;
-// none of these values are driven by sun altitude or exposure.
 uniform float u_deep_sky_scale : hint_range(0.0, 2.0) = 1.0;
 uniform float u_galaxy_scale : hint_range(0.0, 2.0) = 1.0;
 uniform float u_nebula_scale : hint_range(0.0, 2.0) = 1.0;
@@ -36,7 +27,6 @@ uniform float u_nebula_scale : hint_range(0.0, 2.0) = 1.0;
 #include "res://shaders/cloud_raymarch_stable.gdshaderinc"
 
 const int PRIMARY_STEPS = 6;
-const int LIGHT_STEPS = 2;
 
 vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
 	float b = dot(dir, origin);
@@ -47,16 +37,12 @@ vec2 sphere_intersect(vec3 origin, vec3 dir, float radius) {
 	return vec2(-b - s, -b + s);
 }
 
-// Analytic spherical limb used for the background itself. The terrain system is
-// streamed and does not necessarily provide geometry behind every downward ray,
-// so sky occlusion cannot rely on the depth buffer alone.
 float planet_sky_visibility(vec3 dir, vec3 up) {
 	float radius = u_occluder_radius > 0.0 ? u_occluder_radius : max(u_planet_radius, 1.0);
 	float observer_radius = u_observer_radius > 0.0
 		? u_observer_radius
 		: max(u_planet_radius + max(u_camera_height, 0.01), u_planet_radius + 0.01);
-	// Inside the occluder (a gas giant's cloud-top sphere): no sky at all.
-	if (observer_radius <= radius) { return 0.0; }
+	if (observer_radius <= radius) return 0.0;
 	float radius_ratio = clamp(radius / observer_radius, 0.0, 1.0);
 	float tangent_mu = -sqrt(max(1.0 - radius_ratio * radius_ratio, 0.0));
 	float view_mu = dot(normalize(dir), normalize(up));
@@ -83,19 +69,16 @@ float value_noise(vec3 p) {
 	vec3 i = floor(p);
 	vec3 f = fract(p);
 	f = f * f * (3.0 - 2.0 * f);
-	float n000 = hash31(i + vec3(0.0, 0.0, 0.0));
+	float n000 = hash31(i + vec3(0.0));
 	float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
 	float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
 	float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
 	float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
 	float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
 	float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
-	float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
-	return mix(
-		mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
-		mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
-		f.z
-	);
+	float n111 = hash31(i + vec3(1.0));
+	return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+		mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
 }
 
 float fbm(vec3 p) {
@@ -117,11 +100,9 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float ray_end = ground_hit.x > 0.0 ? min(atmo_hit.y, ground_hit.x) : atmo_hit.y;
 	if (ray_end <= ray_start) return vec3(0.0);
 	float step_len = (ray_end - ray_start) / float(PRIMARY_STEPS);
-
 	float mu = dot(dir, sun_dir);
 	float phase_rlh = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
 	float phase_mie = mie_phase(mu, u_mie_g);
-
 	vec3 total_rlh = vec3(0.0);
 	vec3 total_mie = vec3(0.0);
 	float od_rlh = 0.0;
@@ -129,6 +110,7 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 	float od_ozo = 0.0;
 	float t = ray_start;
 	float sample_phase = stable_primary_phase(dir);
+	float atmosphere_height = max(u_atmosphere_radius - u_planet_radius, 1.0);
 
 	for (int i = 0; i < PRIMARY_STEPS; i++) {
 		float sample_t = t + step_len * sample_phase;
@@ -140,33 +122,17 @@ vec3 scatter(vec3 dir, vec3 origin, vec3 sun_dir) {
 		od_mie += step_mie;
 		od_ozo += ozone_density(height) * step_len;
 
-		float planet_vis = planet_direct_sun_visibility(pos, sun_dir, u_planet_radius);
-		if (planet_vis > 0.001) {
-			vec2 light_hit = sphere_intersect(pos, sun_dir, u_atmosphere_radius);
-			float light_step_len = max(light_hit.y, 0.0) / float(LIGHT_STEPS);
-			float light_od_rlh = 0.0;
-			float light_od_mie = 0.0;
-			float light_od_ozo = 0.0;
-			float lt = 0.0;
-			for (int j = 0; j < LIGHT_STEPS; j++) {
-				vec3 light_pos = pos + sun_dir * (lt + light_step_len * 0.5);
-				float light_height = max(length(light_pos) - u_planet_radius, 0.0);
-				light_od_rlh += exp(-light_height / u_rayleigh_scale_height) * light_step_len;
-				light_od_mie += exp(-light_height / u_mie_scale_height) * light_step_len;
-				light_od_ozo += ozone_density(light_height) * light_step_len;
-				lt += light_step_len;
-			}
-
-			vec3 attn = exp(-(u_mie_coeff * (od_mie + light_od_mie)
-				+ u_rayleigh_coeff * (od_rlh + light_od_rlh)
-				+ u_ozone_coeff * (od_ozo + light_od_ozo)));
-			attn *= planet_vis;
+		vec3 sun_transmittance = planet_solar_transmittance(
+			pos, sun_dir, u_planet_radius, atmosphere_height);
+		if (dot(sun_transmittance, vec3(1.0)) > 1e-5) {
+			vec3 view_attn = exp(-(u_mie_coeff * od_mie
+				+ u_rayleigh_coeff * od_rlh + u_ozone_coeff * od_ozo));
+			vec3 attn = view_attn * sun_transmittance;
 			total_rlh += step_rlh * attn;
 			total_mie += step_mie * attn;
 		}
 		t += step_len;
 	}
-
 	return u_sun_intensity * (phase_rlh * u_rayleigh_coeff * total_rlh
 		+ phase_mie * u_mie_coeff * total_mie);
 }
@@ -184,11 +150,9 @@ vec3 deep_sky(vec3 dir, vec3 up) {
 	float dust_lane = exp(-pow(abs(lat + 0.018 * sin(lon * 11.0)) / 0.030, 1.35));
 	float dust = mix(1.0, 0.32, dust_lane * smoothstep(0.35, 0.72, dust_noise));
 	float core = exp(-pow(length(vec2(lat * 2.8, lon - 0.18)) / 0.48, 1.35));
-
 	vec3 galaxy = vec3(0.76, 0.80, 0.86) * (band * structure * dust * 0.0058);
 	galaxy += vec3(0.92, 0.83, 0.68) * core * band * dust * 0.0030;
 	galaxy += vec3(0.58, 0.66, 0.78) * broad * 0.0016;
-
 	vec3 n1 = normalize(vec3(0.48, 0.22, -0.85));
 	vec3 n2 = normalize(vec3(-0.62, 0.72, 0.31));
 	vec3 n3 = normalize(vec3(0.14, -0.36, 0.92));
@@ -200,19 +164,14 @@ vec3 deep_sky(vec3 dir, vec3 up) {
 	nebula += vec3(0.15, 0.24, 0.34) * exp(-pow(d2 / 0.095, 1.8)) * 0.0012;
 	nebula += vec3(0.30, 0.16, 0.27) * exp(-pow(d3 / 0.060, 1.6)) * 0.0010;
 	nebula *= neb_noise;
-
 	float atmosphere_height = max(u_atmosphere_radius - u_planet_radius, 1.0);
-	float atmosphere_presence = 1.0 - smoothstep(
-		atmosphere_height * 0.72,
-		atmosphere_height * 1.08,
-		u_camera_height
-	);
+	float atmosphere_presence = 1.0 - smoothstep(atmosphere_height * 0.72,
+		atmosphere_height * 1.08, u_camera_height);
 	float elevation = dot(dir, up);
 	float horizon = smoothstep(-0.02, 0.12, elevation);
 	float air_mass = 1.0 / max(elevation, 0.07);
 	float extinction = exp(-0.085 * max(air_mass - 1.0, 0.0));
 	float atmospheric_transmittance = mix(1.0, horizon * extinction, atmosphere_presence);
-
 	vec3 deep = galaxy * clamp(u_galaxy_scale, 0.0, 2.0)
 		+ nebula * clamp(u_nebula_scale, 0.0, 2.0);
 	deep *= clamp(u_deep_sky_scale, 0.0, 2.0);
@@ -225,20 +184,10 @@ void sky() {
 	vec3 dir = normalize(EYEDIR);
 	vec3 sun_dir = normalize(LIGHT0_DIRECTION);
 	float planet_visibility = planet_sky_visibility(dir, up);
-
 	if (AT_HALF_RES_PASS) {
 		vec3 sun_color = LIGHT0_ENABLED ? LIGHT0_COLOR : vec3(1.0);
-		vec4 cloud = raymarch_clouds_stable(
-			origin,
-			dir,
-			sun_dir,
-			sun_color,
-			u_sun_intensity,
-			u_cloud_primary_steps,
-			u_cloud_light_steps
-		);
-		// Inside a gas giant's envelope (planet_visibility == 0) the shared cloud
-		// layer must not bleed in -- the gas-giant shell owns the view.
+		vec4 cloud = raymarch_clouds_stable(origin, dir, sun_dir, sun_color,
+			u_sun_intensity, u_cloud_primary_steps, u_cloud_light_steps);
 		COLOR = cloud.rgb * planet_visibility;
 		ALPHA = mix(1.0, cloud.a, planet_visibility);
 	} else {
@@ -250,11 +199,6 @@ void sky() {
 			float sun_radius = sun_diameter * 0.5;
 			float disc = smoothstep(cos(sun_radius), cos(sun_radius * 0.92), cos_angle);
 			float visible = planet_direct_sun_visibility(origin, sun_dir, u_planet_radius);
-			// planet_direct_sun_visibility only cuts the disc in the last fraction of
-			// a degree at the geometric limb. Between there and a high sun it was
-			// still added at full LIGHT0_ENERGY*4 with no air-mass extinction, so a
-			// near-horizon sun blazed and bloomed over every foreground ridge at
-			// night. Dim and gate it with the same air-mass model deep_sky uses.
 			float sun_elev = dot(sun_dir, up);
 			float sun_air_mass = 1.0 / max(sun_elev, 0.07);
 			float sun_extinction = exp(-0.085 * max(sun_air_mass - 1.0, 0.0));
@@ -262,13 +206,8 @@ void sky() {
 			col += disc * visible * horizon_fade * sun_extinction
 				* LIGHT0_COLOR * LIGHT0_ENERGY * 4.0;
 		}
-
 		vec4 cloud = HALF_RES_COLOR;
 		col = cloud.rgb + col * cloud.a;
-
-		// The planet itself is not a sky object. If the view ray intersects the
-		// analytic sphere, suppress every background contribution (atmosphere,
-		// clouds, galaxy and sun) so missing streamed geometry can never expose sky.
 		col *= planet_visibility;
 		COLOR = 1.0 - exp(-col);
 		ALPHA = 1.0;

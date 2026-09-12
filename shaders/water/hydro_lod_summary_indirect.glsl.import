@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c51qj66iech63"
+path="res://.godot/imported/hydro_lod_summary_indirect.glsl-7ef4cbe7462dfd9c9ea5660f895817b2.res"
+
+[deps]
+
+source_file="res://shaders/water/hydro_lod_summary_indirect.glsl"
+dest_files=["res://.godot/imported/hydro_lod_summary_indirect.glsl-7ef4cbe7462dfd9c9ea5660f895817b2.res"]
+
+[params]
+

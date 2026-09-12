@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dp7b0j8h6yrju"
+path="res://.godot/imported/sparse_hydro_step_subcycled.glsl-8d3e4655a9f4e889fbc169a63b4c3ef3.res"
+
+[deps]
+
+source_file="res://shaders/water/sparse_hydro_step_subcycled.glsl"
+dest_files=["res://.godot/imported/sparse_hydro_step_subcycled.glsl-8d3e4655a9f4e889fbc169a63b4c3ef3.res"]
+
+[params]
+
