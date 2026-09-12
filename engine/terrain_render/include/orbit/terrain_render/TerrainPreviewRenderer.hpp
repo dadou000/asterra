@@ -61,7 +61,7 @@ struct TerrainPreviewConfig
 
     f32 verticalFovRadians{1.22173048F};
     f32 nearPlaneMeters{10.0F};
-    f32 farPlaneMeters{250'000.0F};
+    f32 farPlaneMeters{3'000'000.0F};
     bool wireframe{false};
     u32 framesInFlight{3};
 };
