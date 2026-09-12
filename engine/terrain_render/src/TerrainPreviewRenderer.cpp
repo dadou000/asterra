@@ -12,6 +12,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -538,123 +539,23 @@ public:
         CreatePipeline(
             shaderCompiler);
 
-        UpdateObserver(observer);
+        InitializeBlocking(observer);
     }
 
     void UpdateObserver(
         const world::WorldPosition& observer)
     {
-        const f64 observerRadius =
-            math::Length(
-                observer.meters);
+        UpdateViewObserver(observer);
 
-        if (observerRadius <=
-            planet_.radiusMeters)
+        targetObserver_ = observer;
+        targetObserverDirty_ = true;
+
+        PollPendingUpdate();
+
+        if (!pendingUpdate_.has_value())
         {
-            throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
+            StartPendingUpdate();
         }
-
-        stats_.generatedSamplesLastUpdate = 0;
-        stats_.refreshedRegionsLastUpdate = 0;
-        stats_.levelsTouchedLastUpdate = 0;
-
-        observer_ = observer;
-        observerFrame_ =
-            world::MakeSurfaceFrame(
-                observer.meters);
-
-        observerRadiusMeters_ =
-            static_cast<f32>(
-                observerRadius);
-
-        motion_ =
-            tracker_.Update(observer);
-
-        residencyUpdate_ =
-            residency_.Apply(motion_);
-
-        std::vector<
-            terrain_stream::TerrainSampleRequest>
-            sampleRequests;
-
-        sampleRequests.reserve(
-            levels_.size());
-
-        for (u32 levelIndex = 0;
-             levelIndex <
-                static_cast<u32>(
-                    levels_.size());
-             ++levelIndex)
-        {
-            const auto& levelUpdate =
-                residencyUpdate_.levels[
-                    levelIndex];
-
-            if (levelUpdate.
-                    refreshRegions.empty())
-            {
-                continue;
-            }
-
-            const auto& level =
-                layout_.levels[
-                    levelIndex];
-
-            sampleRequests.push_back({
-                .levelIndex = levelIndex,
-                .resolution =
-                    level.gridResolution,
-                .spacingMeters =
-                    level.sampleSpacingMeters,
-                .footprintMeters =
-                    level.terrainFootprintMeters,
-                .surfaceFrame =
-                    motion_.levels[
-                        levelIndex].
-                        surfaceFrame,
-                .originX =
-                    levelUpdate.originX,
-                .originY =
-                    levelUpdate.originY,
-                .regions =
-                    levelUpdate.
-                        refreshRegions
-            });
-        }
-
-        const auto sampleResults =
-            sampleStreamer_.
-                GenerateBlocking(
-                    sampleRequests);
-
-        for (const auto& result :
-             sampleResults)
-        {
-            if (result.patches.empty())
-            {
-                continue;
-            }
-
-            ++stats_.
-                levelsTouchedLastUpdate;
-
-            stats_.
-                refreshedRegionsLastUpdate +=
-                    static_cast<u32>(
-                        result.patches.size());
-
-            stats_.
-                generatedSamplesLastUpdate +=
-                    result.sampleCount;
-
-            ApplySampleResult(result);
-        }
-
-        stats_.
-            cumulativeGeneratedSamples +=
-                stats_.
-                    generatedSamplesLastUpdate;
     }
 
     void Draw(
@@ -663,6 +564,8 @@ public:
         const u32 targetWidth,
         const u32 targetHeight)
     {
+        PollPendingUpdate();
+
         stats_.uploadedBytesLastFrame = 0;
         stats_.drawCallsLastFrame = 0;
 
@@ -868,6 +771,13 @@ public:
     }
 
 private:
+    struct PendingTerrainUpdate
+    {
+        terrain_view::ClipmapMotionUpdate motion;
+        terrain_stream::ResidencyUpdate residency;
+        terrain_stream::TerrainSampleBatch batch;
+    };
+
     struct DirtyUpdate
     {
         u64 serial{0};
@@ -1091,6 +1001,256 @@ private:
                 });
     }
 
+    void UpdateViewObserver(
+        const world::WorldPosition& observer)
+    {
+        const f64 observerRadius =
+            math::Length(
+                observer.meters);
+
+        if (observerRadius <=
+            planet_.radiusMeters)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain preview observer must be above the planet surface.");
+        }
+
+        observer_ = observer;
+        observerFrame_ =
+            world::MakeSurfaceFrame(
+                observer.meters);
+
+        observerRadiusMeters_ =
+            static_cast<f32>(
+                observerRadius);
+    }
+
+    [[nodiscard]] std::vector<
+        terrain_stream::TerrainSampleRequest>
+    BuildSampleRequests(
+        const terrain_view::ClipmapMotionUpdate& motion,
+        const terrain_stream::ResidencyUpdate& residency)
+        const
+    {
+        std::vector<
+            terrain_stream::TerrainSampleRequest>
+            requests;
+
+        requests.reserve(
+            levels_.size());
+
+        for (u32 levelIndex = 0;
+             levelIndex <
+                static_cast<u32>(
+                    levels_.size());
+             ++levelIndex)
+        {
+            const auto& levelUpdate =
+                residency.levels[
+                    levelIndex];
+
+            if (levelUpdate.
+                    refreshRegions.empty())
+            {
+                continue;
+            }
+
+            const auto& level =
+                layout_.levels[
+                    levelIndex];
+
+            requests.push_back({
+                .levelIndex = levelIndex,
+                .resolution =
+                    level.gridResolution,
+                .spacingMeters =
+                    level.sampleSpacingMeters,
+                .footprintMeters =
+                    level.terrainFootprintMeters,
+                .surfaceFrame =
+                    motion.levels[
+                        levelIndex].
+                        surfaceFrame,
+                .originX =
+                    levelUpdate.originX,
+                .originY =
+                    levelUpdate.originY,
+                .regions =
+                    levelUpdate.
+                        refreshRegions
+            });
+        }
+
+        return requests;
+    }
+
+    void ResetCompletedUpdateStats() noexcept
+    {
+        stats_.generatedSamplesLastUpdate = 0;
+        stats_.refreshedRegionsLastUpdate = 0;
+        stats_.levelsTouchedLastUpdate = 0;
+    }
+
+    void ApplySampleResults(
+        const std::vector<
+            terrain_stream::TerrainSampleResult>& results)
+    {
+        ResetCompletedUpdateStats();
+
+        for (const auto& result :
+             results)
+        {
+            if (result.patches.empty())
+            {
+                continue;
+            }
+
+            ++stats_.
+                levelsTouchedLastUpdate;
+
+            stats_.
+                refreshedRegionsLastUpdate +=
+                    static_cast<u32>(
+                        result.patches.size());
+
+            stats_.
+                generatedSamplesLastUpdate +=
+                    result.sampleCount;
+
+            ApplySampleResult(result);
+        }
+
+        stats_.
+            cumulativeGeneratedSamples +=
+                stats_.
+                    generatedSamplesLastUpdate;
+    }
+
+    void InitializeBlocking(
+        const world::WorldPosition& observer)
+    {
+        UpdateViewObserver(observer);
+
+        targetObserver_ = observer;
+        targetObserverDirty_ = false;
+
+        terrain_view::ClipmapMotionUpdate initialMotion =
+            tracker_.Update(observer);
+
+        terrain_stream::ResidencyUpdate initialResidency =
+            residency_.Apply(
+                initialMotion);
+
+        const auto requests =
+            BuildSampleRequests(
+                initialMotion,
+                initialResidency);
+
+        const auto results =
+            sampleStreamer_.
+                GenerateBlocking(
+                    requests);
+
+        ApplySampleResults(results);
+
+        motion_ =
+            std::move(
+                initialMotion);
+
+        residencyUpdate_ =
+            std::move(
+                initialResidency);
+    }
+
+    void StartPendingUpdate()
+    {
+        if (pendingUpdate_.has_value() ||
+            !targetObserverDirty_)
+        {
+            return;
+        }
+
+        terrain_view::ClipmapMotionUpdate nextMotion =
+            tracker_.Update(
+                targetObserver_);
+
+        terrain_stream::ResidencyUpdate nextResidency =
+            residency_.Apply(
+                nextMotion);
+
+        auto requests =
+            BuildSampleRequests(
+                nextMotion,
+                nextResidency);
+
+        targetObserverDirty_ = false;
+
+        if (requests.empty())
+        {
+            motion_ =
+                std::move(
+                    nextMotion);
+
+            residencyUpdate_ =
+                std::move(
+                    nextResidency);
+
+            return;
+        }
+
+        PendingTerrainUpdate pending{};
+        pending.motion =
+            std::move(
+                nextMotion);
+        pending.residency =
+            std::move(
+                nextResidency);
+        pending.batch =
+            sampleStreamer_.
+                Submit(
+                    requests);
+
+        pendingUpdate_ =
+            std::move(
+                pending);
+    }
+
+    void PollPendingUpdate()
+    {
+        if (!pendingUpdate_.has_value())
+        {
+            return;
+        }
+
+        std::vector<
+            terrain_stream::TerrainSampleResult>
+            results;
+
+        if (!sampleStreamer_.TryCollect(
+                pendingUpdate_->batch,
+                results))
+        {
+            return;
+        }
+
+        ApplySampleResults(results);
+
+        motion_ =
+            std::move(
+                pendingUpdate_->motion);
+
+        residencyUpdate_ =
+            std::move(
+                pendingUpdate_->residency);
+
+        pendingUpdate_.reset();
+
+        if (targetObserverDirty_)
+        {
+            StartPendingUpdate();
+        }
+    }
+
     void ApplySampleResult(
         const terrain_stream::
             TerrainSampleResult& result)
@@ -1302,6 +1462,12 @@ private:
 
     world::WorldPosition observer_{};
     world::SurfaceFrame observerFrame_{};
+
+    world::WorldPosition targetObserver_{};
+    bool targetObserverDirty_{false};
+
+    std::optional<PendingTerrainUpdate>
+        pendingUpdate_;
 
     terrain_view::ClipmapMotionUpdate
         motion_;
