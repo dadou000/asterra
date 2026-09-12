@@ -3,6 +3,7 @@
 #include <atomic>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 int main()
 {
@@ -112,6 +113,84 @@ int main()
     if (fireAndForget.load(std::memory_order_relaxed) != 1'000)
     {
         std::cerr << "Orbit WaitIdle returned too early.\n";
+        return 1;
+    }
+
+    orbit::jobs::JobSystem priorityJobs(1);
+
+    std::atomic<bool> blockerStarted{false};
+    std::atomic<bool> releaseBlocker{false};
+
+    priorityJobs.Submit(
+        orbit::jobs::JobPriority::Normal,
+        [&blockerStarted, &releaseBlocker]
+        {
+            blockerStarted.store(
+                true,
+                std::memory_order_release);
+
+            while (!releaseBlocker.load(
+                std::memory_order_acquire))
+            {
+                std::this_thread::yield();
+            }
+        });
+
+    while (!blockerStarted.load(
+        std::memory_order_acquire))
+    {
+        std::this_thread::yield();
+    }
+
+    orbit::jobs::JobGroup priorityGroup;
+
+    std::atomic<orbit::u32>
+        executionOrder{0};
+
+    std::atomic<orbit::u32>
+        highOrder{99};
+
+    std::atomic<orbit::u32>
+        lowOrder{99};
+
+    priorityJobs.Submit(
+        priorityGroup,
+        orbit::jobs::JobPriority::Low,
+        [&executionOrder, &lowOrder]
+        {
+            lowOrder.store(
+                executionOrder.fetch_add(
+                    1,
+                    std::memory_order_relaxed),
+                std::memory_order_relaxed);
+        });
+
+    priorityJobs.Submit(
+        priorityGroup,
+        orbit::jobs::JobPriority::High,
+        [&executionOrder, &highOrder]
+        {
+            highOrder.store(
+                executionOrder.fetch_add(
+                    1,
+                    std::memory_order_relaxed),
+                std::memory_order_relaxed);
+        });
+
+    releaseBlocker.store(
+        true,
+        std::memory_order_release);
+
+    priorityJobs.Wait(priorityGroup);
+    priorityJobs.WaitIdle();
+
+    if (highOrder.load(
+            std::memory_order_relaxed) != 0 ||
+        lowOrder.load(
+            std::memory_order_relaxed) != 1)
+    {
+        std::cerr
+            << "Orbit job priorities were not respected.\n";
         return 1;
     }
 

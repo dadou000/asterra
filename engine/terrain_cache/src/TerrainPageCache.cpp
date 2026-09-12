@@ -173,6 +173,7 @@ public:
 
         jobs_.Submit(
             group_,
+            jobs::JobPriority::Low,
             [
                 planet,
                 source,

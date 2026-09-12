@@ -206,6 +206,7 @@ TerrainSampleBatch TerrainSampleStreamer::Submit(
         {
             jobSystem_.Submit(
                 batch.group_,
+                jobs::JobPriority::High,
                 [this,
                  state,
                  requestIndex,
