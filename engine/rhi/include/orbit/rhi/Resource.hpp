@@ -44,6 +44,20 @@ struct BufferDesc
     ResourceState initialState{ResourceState::Common};
 };
 
+enum class TextureFormat : u8
+{
+    RGBA8_UNorm,
+    D32_Float
+};
+
+struct TextureDesc
+{
+    u32 width{0};
+    u32 height{0};
+    TextureFormat format{TextureFormat::RGBA8_UNorm};
+    ResourceState initialState{ResourceState::Common};
+};
+
 class Buffer
 {
 public:
@@ -73,6 +87,7 @@ public:
 
     [[nodiscard]] virtual u32 Width() const noexcept = 0;
     [[nodiscard]] virtual u32 Height() const noexcept = 0;
+    [[nodiscard]] virtual TextureFormat Format() const noexcept = 0;
 
 protected:
     Texture() = default;

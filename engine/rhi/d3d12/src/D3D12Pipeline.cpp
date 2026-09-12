@@ -2,7 +2,6 @@
 
 #include <d3d12.h>
 
-#include <array>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -62,7 +61,8 @@ namespace
 }
 
 [[nodiscard]] D3D12_PRIMITIVE_TOPOLOGY_TYPE
-ToNativeTopologyType(const PrimitiveTopology topology)
+ToNativeTopologyType(
+    const PrimitiveTopology topology)
 {
     switch (topology)
     {
@@ -77,7 +77,8 @@ ToNativeTopologyType(const PrimitiveTopology topology)
 }
 
 [[nodiscard]] D3D12_PRIMITIVE_TOPOLOGY
-ToNativeTopology(const PrimitiveTopology topology)
+ToNativeTopology(
+    const PrimitiveTopology topology)
 {
     switch (topology)
     {
@@ -104,30 +105,35 @@ D3D12GraphicsPipeline::D3D12GraphicsPipeline(
 {
 }
 
-u32 D3D12GraphicsPipeline::PushConstantDwords() const noexcept
+u32 D3D12GraphicsPipeline::
+PushConstantDwords() const noexcept
 {
     return pushConstantDwords_;
 }
 
-PrimitiveTopology D3D12GraphicsPipeline::Topology() const noexcept
+PrimitiveTopology
+D3D12GraphicsPipeline::Topology() const noexcept
 {
     return topology_;
 }
 
 ID3D12PipelineState*
-D3D12GraphicsPipeline::NativePipelineState() const noexcept
+D3D12GraphicsPipeline::
+NativePipelineState() const noexcept
 {
     return pipelineState_.Get();
 }
 
 ID3D12RootSignature*
-D3D12GraphicsPipeline::NativeRootSignature() const noexcept
+D3D12GraphicsPipeline::
+NativeRootSignature() const noexcept
 {
     return rootSignature_.Get();
 }
 
 D3D12_PRIMITIVE_TOPOLOGY
-D3D12GraphicsPipeline::NativeTopology() const noexcept
+D3D12GraphicsPipeline::
+NativeTopology() const noexcept
 {
     return ToNativeTopology(topology_);
 }
@@ -171,14 +177,11 @@ D3D12Device::CreateGraphicsPipeline(
     ComPtr<ID3DBlob> serializedRootSignature;
     ComPtr<ID3DBlob> rootSignatureError;
 
-    const HRESULT serializeResult =
-        D3D12SerializeRootSignature(
+    if (FAILED(D3D12SerializeRootSignature(
             &rootDesc,
             D3D_ROOT_SIGNATURE_VERSION_1,
             &serializedRootSignature,
-            &rootSignatureError);
-
-    if (FAILED(serializeResult))
+            &rootSignatureError)))
     {
         throw std::runtime_error(
             "Orbit failed to serialize a D3D12 root signature.");
@@ -188,34 +191,47 @@ D3D12Device::CreateGraphicsPipeline(
 
     if (FAILED(nativeDevice_->CreateRootSignature(
             0,
-            serializedRootSignature->GetBufferPointer(),
-            serializedRootSignature->GetBufferSize(),
+            serializedRootSignature->
+                GetBufferPointer(),
+            serializedRootSignature->
+                GetBufferSize(),
             IID_PPV_ARGS(&rootSignature))))
     {
         throw std::runtime_error(
             "Orbit failed to create a D3D12 root signature.");
     }
 
-    std::vector<D3D12_INPUT_ELEMENT_DESC> inputElements;
-    inputElements.reserve(desc.vertexAttributes.size());
+    std::vector<D3D12_INPUT_ELEMENT_DESC>
+        inputElements;
+
+    inputElements.reserve(
+        desc.vertexAttributes.size());
 
     for (const VertexAttribute& attribute :
          desc.vertexAttributes)
     {
         D3D12_INPUT_ELEMENT_DESC element{};
         element.SemanticName = "TEXCOORD";
-        element.SemanticIndex = attribute.location;
-        element.Format = ToNativeVertexFormat(attribute.format);
+        element.SemanticIndex =
+            attribute.location;
+        element.Format =
+            ToNativeVertexFormat(
+                attribute.format);
         element.InputSlot = 0;
-        element.AlignedByteOffset = attribute.offsetBytes;
+        element.AlignedByteOffset =
+            attribute.offsetBytes;
         element.InputSlotClass =
             D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
         element.InstanceDataStepRate = 0;
+
         inputElements.push_back(element);
     }
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC pipelineDesc{};
-    pipelineDesc.pRootSignature = rootSignature.Get();
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC
+        pipelineDesc{};
+
+    pipelineDesc.pRootSignature =
+        rootSignature.Get();
 
     pipelineDesc.VS = {
         desc.vertexShader.data,
@@ -227,11 +243,14 @@ D3D12Device::CreateGraphicsPipeline(
         desc.pixelShader.size
     };
 
-    pipelineDesc.BlendState.AlphaToCoverageEnable = FALSE;
-    pipelineDesc.BlendState.IndependentBlendEnable = FALSE;
+    pipelineDesc.BlendState.
+        AlphaToCoverageEnable = FALSE;
+    pipelineDesc.BlendState.
+        IndependentBlendEnable = FALSE;
 
     auto& renderTargetBlend =
         pipelineDesc.BlendState.RenderTarget[0];
+
     renderTargetBlend.BlendEnable = FALSE;
     renderTargetBlend.LogicOpEnable = FALSE;
     renderTargetBlend.RenderTargetWriteMask =
@@ -244,53 +263,83 @@ D3D12Device::CreateGraphicsPipeline(
         ToNativeFillMode(desc.fillMode);
     pipelineDesc.RasterizerState.CullMode =
         ToNativeCullMode(desc.cullMode);
-    pipelineDesc.RasterizerState.FrontCounterClockwise =
-        FALSE;
+    pipelineDesc.RasterizerState.
+        FrontCounterClockwise = FALSE;
     pipelineDesc.RasterizerState.DepthBias =
         D3D12_DEFAULT_DEPTH_BIAS;
-    pipelineDesc.RasterizerState.DepthBiasClamp =
-        D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
-    pipelineDesc.RasterizerState.SlopeScaledDepthBias =
-        D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
-    pipelineDesc.RasterizerState.DepthClipEnable = TRUE;
-    pipelineDesc.RasterizerState.MultisampleEnable = FALSE;
-    pipelineDesc.RasterizerState.AntialiasedLineEnable = FALSE;
-    pipelineDesc.RasterizerState.ForcedSampleCount = 0;
-    pipelineDesc.RasterizerState.ConservativeRaster =
-        D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+    pipelineDesc.RasterizerState.
+        DepthBiasClamp =
+            D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+    pipelineDesc.RasterizerState.
+        SlopeScaledDepthBias =
+            D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+    pipelineDesc.RasterizerState.
+        DepthClipEnable = TRUE;
+    pipelineDesc.RasterizerState.
+        MultisampleEnable = FALSE;
+    pipelineDesc.RasterizerState.
+        AntialiasedLineEnable = FALSE;
+    pipelineDesc.RasterizerState.
+        ForcedSampleCount = 0;
+    pipelineDesc.RasterizerState.
+        ConservativeRaster =
+            D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
-    pipelineDesc.DepthStencilState.DepthEnable = FALSE;
-    pipelineDesc.DepthStencilState.StencilEnable = FALSE;
+    pipelineDesc.DepthStencilState.DepthEnable =
+        desc.depthTest ? TRUE : FALSE;
+
+    pipelineDesc.DepthStencilState.DepthWriteMask =
+        desc.depthWrite
+            ? D3D12_DEPTH_WRITE_MASK_ALL
+            : D3D12_DEPTH_WRITE_MASK_ZERO;
+
+    pipelineDesc.DepthStencilState.DepthFunc =
+        D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+    pipelineDesc.DepthStencilState.
+        StencilEnable = FALSE;
 
     pipelineDesc.InputLayout = {
         inputElements.data(),
-        static_cast<UINT>(inputElements.size())
+        static_cast<UINT>(
+            inputElements.size())
     };
 
     pipelineDesc.PrimitiveTopologyType =
-        ToNativeTopologyType(desc.topology);
+        ToNativeTopologyType(
+            desc.topology);
 
     pipelineDesc.NumRenderTargets = 1;
     pipelineDesc.RTVFormats[0] =
         DXGI_FORMAT_R8G8B8A8_UNORM;
 
+    pipelineDesc.DSVFormat =
+        (desc.depthTest || desc.depthWrite)
+            ? DXGI_FORMAT_D32_FLOAT
+            : DXGI_FORMAT_UNKNOWN;
+
     pipelineDesc.SampleDesc.Count = 1;
     pipelineDesc.SampleDesc.Quality = 0;
 
-    ComPtr<ID3D12PipelineState> pipelineState;
+    ComPtr<ID3D12PipelineState>
+        pipelineState;
 
-    if (FAILED(nativeDevice_->CreateGraphicsPipelineState(
-            &pipelineDesc,
-            IID_PPV_ARGS(&pipelineState))))
+    if (FAILED(
+            nativeDevice_->
+                CreateGraphicsPipelineState(
+                    &pipelineDesc,
+                    IID_PPV_ARGS(
+                        &pipelineState))))
     {
         throw std::runtime_error(
             "Orbit failed to create a D3D12 graphics pipeline.");
     }
 
-    return std::make_unique<D3D12GraphicsPipeline>(
-        std::move(pipelineState),
-        std::move(rootSignature),
-        desc.pushConstantDwords,
-        desc.topology);
+    return std::make_unique<
+        D3D12GraphicsPipeline>(
+            std::move(pipelineState),
+            std::move(rootSignature),
+            desc.pushConstantDwords,
+            desc.topology);
 }
 } // namespace orbit::rhi::d3d12::detail

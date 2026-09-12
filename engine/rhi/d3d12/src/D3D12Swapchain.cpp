@@ -17,13 +17,17 @@ D3D12Swapchain::D3D12Swapchain(
       tearingEnabled_(tearingEnabled)
 {
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    heapDesc.NumDescriptors = bufferCount_;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    heapDesc.Type =
+        D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    heapDesc.NumDescriptors =
+        bufferCount_;
+    heapDesc.Flags =
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
     if (FAILED(device.CreateDescriptorHeap(
             &heapDesc,
-            IID_PPV_ARGS(&renderTargetHeap_))))
+            IID_PPV_ARGS(
+                &renderTargetHeap_))))
     {
         throw std::runtime_error(
             "Orbit failed to create the swapchain RTV descriptor heap.");
@@ -34,13 +38,17 @@ D3D12Swapchain::D3D12Swapchain(
             D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle =
-        renderTargetHeap_->GetCPUDescriptorHandleForHeapStart();
+        renderTargetHeap_->
+            GetCPUDescriptorHandleForHeapStart();
 
     backBuffers_.reserve(bufferCount_);
 
-    for (u32 index = 0; index < bufferCount_; ++index)
+    for (u32 index = 0;
+         index < bufferCount_;
+         ++index)
     {
         ComPtr<ID3D12Resource> resource;
+
         if (FAILED(nativeSwapchain_->GetBuffer(
                 index,
                 IID_PPV_ARGS(&resource))))
@@ -55,19 +63,24 @@ D3D12Swapchain::D3D12Swapchain(
             handle);
 
         backBuffers_.push_back(
-            std::make_unique<D3D12Texture>(
-                std::move(resource),
-                width_,
-                height_,
-                handle));
+            std::make_unique<
+                D3D12Texture>(
+                    std::move(resource),
+                    width_,
+                    height_,
+                    TextureFormat::RGBA8_UNorm,
+                    handle));
 
         handle.ptr += descriptorSize;
     }
 }
 
-void D3D12Swapchain::Present(const bool verticalSync)
+void D3D12Swapchain::Present(
+    const bool verticalSync)
 {
-    const UINT syncInterval = verticalSync ? 1U : 0U;
+    const UINT syncInterval =
+        verticalSync ? 1U : 0U;
+
     const UINT flags =
         (!verticalSync && tearingEnabled_)
             ? DXGI_PRESENT_ALLOW_TEARING
@@ -92,18 +105,24 @@ u32 D3D12Swapchain::Height() const noexcept
     return height_;
 }
 
-u32 D3D12Swapchain::BufferCount() const noexcept
+u32 D3D12Swapchain::
+BufferCount() const noexcept
 {
     return bufferCount_;
 }
 
-u32 D3D12Swapchain::CurrentBackBufferIndex() const noexcept
+u32 D3D12Swapchain::
+CurrentBackBufferIndex() const noexcept
 {
-    return nativeSwapchain_->GetCurrentBackBufferIndex();
+    return nativeSwapchain_->
+        GetCurrentBackBufferIndex();
 }
 
-Texture& D3D12Swapchain::CurrentBackBuffer() noexcept
+Texture&
+D3D12Swapchain::
+CurrentBackBuffer() noexcept
 {
-    return *backBuffers_[CurrentBackBufferIndex()];
+    return *backBuffers_[
+        CurrentBackBufferIndex()];
 }
 } // namespace orbit::rhi::d3d12::detail

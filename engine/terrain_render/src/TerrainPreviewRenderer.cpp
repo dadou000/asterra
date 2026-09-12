@@ -473,7 +473,9 @@ public:
                     config_.wireframe
                         ? rhi::FillMode::Wireframe
                         : rhi::FillMode::Solid,
-                .cullMode = rhi::CullMode::None
+                .cullMode = rhi::CullMode::None,
+                .depthTest = true,
+                .depthWrite = true
             });
     }
 

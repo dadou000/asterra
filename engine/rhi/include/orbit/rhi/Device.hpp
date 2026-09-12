@@ -50,6 +50,9 @@ public:
     [[nodiscard]] virtual std::unique_ptr<Buffer> CreateBuffer(
         const BufferDesc& desc) = 0;
 
+    [[nodiscard]] virtual std::unique_ptr<Texture> CreateTexture(
+        const TextureDesc& desc) = 0;
+
     [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         const GraphicsPipelineDesc& desc) = 0;
 

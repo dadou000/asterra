@@ -56,6 +56,8 @@ struct GraphicsPipelineDesc
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     FillMode fillMode{FillMode::Solid};
     CullMode cullMode{CullMode::Back};
+    bool depthTest{false};
+    bool depthWrite{false};
 };
 
 class GraphicsPipeline

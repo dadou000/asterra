@@ -82,19 +82,27 @@ public:
         ComPtr<ID3D12Resource> nativeResource,
         u32 width,
         u32 height,
-        D3D12_CPU_DESCRIPTOR_HANDLE renderTargetView);
+        TextureFormat format,
+        D3D12_CPU_DESCRIPTOR_HANDLE renderTargetView = {},
+        D3D12_CPU_DESCRIPTOR_HANDLE depthStencilView = {},
+        ComPtr<ID3D12DescriptorHeap> ownedDescriptorHeap = {});
 
     [[nodiscard]] u32 Width() const noexcept override;
     [[nodiscard]] u32 Height() const noexcept override;
+    [[nodiscard]] TextureFormat Format() const noexcept override;
 
     [[nodiscard]] ID3D12Resource* Native() const noexcept;
     [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetView() const noexcept;
+    [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const noexcept;
 
 private:
     ComPtr<ID3D12Resource> nativeResource_;
+    ComPtr<ID3D12DescriptorHeap> ownedDescriptorHeap_;
     u32 width_{};
     u32 height_{};
+    TextureFormat format_{TextureFormat::RGBA8_UNorm};
     D3D12_CPU_DESCRIPTOR_HANDLE renderTargetView_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE depthStencilView_{};
 };
 
 class D3D12GraphicsPipeline final : public GraphicsPipeline
@@ -151,23 +159,38 @@ public:
         Texture& texture,
         ResourceState before,
         ResourceState after) override;
+
     void ClearColorTarget(
         Texture& texture,
         const ClearColor& color) override;
 
+    void ClearDepthTarget(
+        Texture& texture,
+        f32 depth) override;
+
     void SetRenderTarget(Texture& texture) override;
+
+    void SetRenderTargets(
+        Texture& color,
+        Texture& depth) override;
+
     void SetViewport(const Viewport& viewport) override;
     void SetScissor(const ScissorRect& rect) override;
+
     void SetGraphicsPipeline(
         GraphicsPipeline& pipeline) override;
+
     void SetGraphicsConstants(
         std::span<const u32> dwords) override;
+
     void SetVertexBuffer(
         Buffer& buffer,
         u32 strideBytes) override;
+
     void SetIndexBuffer(
         Buffer& buffer,
         IndexFormat format) override;
+
     void DrawIndexed(
         u32 indexCount,
         u32 firstIndex,
@@ -229,10 +252,16 @@ public:
         QueueType type) override;
     [[nodiscard]] std::unique_ptr<CommandList> CreateCommandList(
         CommandAllocator& allocator) override;
+
     [[nodiscard]] std::unique_ptr<Buffer> CreateBuffer(
         const BufferDesc& desc) override;
+
+    [[nodiscard]] std::unique_ptr<Texture> CreateTexture(
+        const TextureDesc& desc) override;
+
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         const GraphicsPipelineDesc& desc) override;
+
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) override;

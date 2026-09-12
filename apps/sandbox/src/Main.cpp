@@ -63,6 +63,16 @@ int main()
                     .allowTearing = true
                 });
 
+        auto depthTarget =
+            device->CreateTexture({
+                .width = swapchain->Width(),
+                .height = swapchain->Height(),
+                .format =
+                    orbit::rhi::TextureFormat::D32_Float,
+                .initialState =
+                    orbit::rhi::ResourceState::DepthWrite
+            });
+
         const orbit::world::PlanetDefinition planet{
             .radiusMeters = 6'000'000.0
         };
@@ -174,7 +184,13 @@ int main()
                     .alpha = 1.0F
                 });
 
-            commandList->SetRenderTarget(backBuffer);
+            commandList->ClearDepthTarget(
+                *depthTarget,
+                1.0F);
+
+            commandList->SetRenderTargets(
+                backBuffer,
+                *depthTarget);
 
             terrainPreview.Draw(
                 *commandList,

@@ -77,7 +77,16 @@ public:
         Texture& texture,
         const ClearColor& color) = 0;
 
+    virtual void ClearDepthTarget(
+        Texture& texture,
+        f32 depth) = 0;
+
     virtual void SetRenderTarget(Texture& texture) = 0;
+
+    virtual void SetRenderTargets(
+        Texture& color,
+        Texture& depth) = 0;
+
     virtual void SetViewport(const Viewport& viewport) = 0;
     virtual void SetScissor(const ScissorRect& rect) = 0;
 

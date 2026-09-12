@@ -1,11 +1,11 @@
 #include "D3D12Objects.hpp"
 
 #include <stdexcept>
-#include <utility>
 
 namespace orbit::rhi::d3d12::detail
 {
-D3D12_RESOURCE_STATES ToNativeResourceState(const ResourceState state)
+D3D12_RESOURCE_STATES ToNativeResourceState(
+    const ResourceState state)
 {
     switch (state)
     {
@@ -35,39 +35,6 @@ D3D12_RESOURCE_STATES ToNativeResourceState(const ResourceState state)
 
     throw std::runtime_error(
         "Orbit received an invalid RHI resource state.");
-}
-
-D3D12Texture::D3D12Texture(
-    ComPtr<ID3D12Resource> nativeResource,
-    const u32 width,
-    const u32 height,
-    const D3D12_CPU_DESCRIPTOR_HANDLE renderTargetView)
-    : nativeResource_(std::move(nativeResource)),
-      width_(width),
-      height_(height),
-      renderTargetView_(renderTargetView)
-{
-}
-
-u32 D3D12Texture::Width() const noexcept
-{
-    return width_;
-}
-
-u32 D3D12Texture::Height() const noexcept
-{
-    return height_;
-}
-
-ID3D12Resource* D3D12Texture::Native() const noexcept
-{
-    return nativeResource_.Get();
-}
-
-D3D12_CPU_DESCRIPTOR_HANDLE
-D3D12Texture::RenderTargetView() const noexcept
-{
-    return renderTargetView_;
 }
 
 D3D12CommandAllocator::D3D12CommandAllocator(
@@ -111,10 +78,12 @@ QueueType D3D12CommandList::Type() const noexcept
     return type_;
 }
 
-void D3D12CommandList::Reset(CommandAllocator& allocator)
+void D3D12CommandList::Reset(
+    CommandAllocator& allocator)
 {
     auto* d3dAllocator =
-        dynamic_cast<D3D12CommandAllocator*>(&allocator);
+        dynamic_cast<D3D12CommandAllocator*>(
+            &allocator);
 
     if (d3dAllocator == nullptr ||
         d3dAllocator->Type() != type_)
@@ -156,7 +125,8 @@ void D3D12CommandList::Transition(
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type =
         D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Flags =
+        D3D12_RESOURCE_BARRIER_FLAG_NONE;
     barrier.Transition.pResource =
         d3dTexture->Native();
     barrier.Transition.Subresource =
@@ -166,7 +136,9 @@ void D3D12CommandList::Transition(
     barrier.Transition.StateAfter =
         ToNativeResourceState(after);
 
-    nativeCommandList_->ResourceBarrier(1, &barrier);
+    nativeCommandList_->ResourceBarrier(
+        1,
+        &barrier);
 }
 
 void D3D12CommandList::ClearColorTarget(
@@ -176,10 +148,11 @@ void D3D12CommandList::ClearColorTarget(
     auto* d3dTexture =
         dynamic_cast<D3D12Texture*>(&texture);
 
-    if (d3dTexture == nullptr)
+    if (d3dTexture == nullptr ||
+        d3dTexture->RenderTargetView().ptr == 0)
     {
         throw std::runtime_error(
-            "Orbit D3D12 received a texture from another backend.");
+            "Orbit D3D12 received a texture without a render-target view.");
     }
 
     const FLOAT clearColor[4] = {
@@ -196,16 +169,40 @@ void D3D12CommandList::ClearColorTarget(
         nullptr);
 }
 
+void D3D12CommandList::ClearDepthTarget(
+    Texture& texture,
+    const f32 depth)
+{
+    auto* d3dTexture =
+        dynamic_cast<D3D12Texture*>(&texture);
+
+    if (d3dTexture == nullptr ||
+        d3dTexture->DepthStencilView().ptr == 0)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received a texture without a depth-stencil view.");
+    }
+
+    nativeCommandList_->ClearDepthStencilView(
+        d3dTexture->DepthStencilView(),
+        D3D12_CLEAR_FLAG_DEPTH,
+        depth,
+        0,
+        0,
+        nullptr);
+}
+
 void D3D12CommandList::SetRenderTarget(
     Texture& texture)
 {
     auto* d3dTexture =
         dynamic_cast<D3D12Texture*>(&texture);
 
-    if (d3dTexture == nullptr)
+    if (d3dTexture == nullptr ||
+        d3dTexture->RenderTargetView().ptr == 0)
     {
         throw std::runtime_error(
-            "Orbit D3D12 received a texture from another backend.");
+            "Orbit D3D12 received a texture without a render-target view.");
     }
 
     const D3D12_CPU_DESCRIPTOR_HANDLE handle =
@@ -216,6 +213,38 @@ void D3D12CommandList::SetRenderTarget(
         &handle,
         FALSE,
         nullptr);
+}
+
+void D3D12CommandList::SetRenderTargets(
+    Texture& color,
+    Texture& depth)
+{
+    auto* d3dColor =
+        dynamic_cast<D3D12Texture*>(&color);
+
+    auto* d3dDepth =
+        dynamic_cast<D3D12Texture*>(&depth);
+
+    if (d3dColor == nullptr ||
+        d3dDepth == nullptr ||
+        d3dColor->RenderTargetView().ptr == 0 ||
+        d3dDepth->DepthStencilView().ptr == 0)
+    {
+        throw std::runtime_error(
+            "Orbit D3D12 received incompatible color/depth render targets.");
+    }
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE colorHandle =
+        d3dColor->RenderTargetView();
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE depthHandle =
+        d3dDepth->DepthStencilView();
+
+    nativeCommandList_->OMSetRenderTargets(
+        1,
+        &colorHandle,
+        FALSE,
+        &depthHandle);
 }
 
 void D3D12CommandList::SetViewport(
@@ -254,7 +283,8 @@ void D3D12CommandList::SetGraphicsPipeline(
     GraphicsPipeline& pipeline)
 {
     auto* d3dPipeline =
-        dynamic_cast<D3D12GraphicsPipeline*>(&pipeline);
+        dynamic_cast<D3D12GraphicsPipeline*>(
+            &pipeline);
 
     if (d3dPipeline == nullptr)
     {
@@ -295,11 +325,13 @@ void D3D12CommandList::SetGraphicsConstants(
             "Orbit graphics constants exceed the active pipeline root constant range.");
     }
 
-    nativeCommandList_->SetGraphicsRoot32BitConstants(
-        0,
-        static_cast<UINT>(dwords.size()),
-        dwords.data(),
-        0);
+    nativeCommandList_->
+        SetGraphicsRoot32BitConstants(
+            0,
+            static_cast<UINT>(
+                dwords.size()),
+            dwords.data(),
+            0);
 }
 
 void D3D12CommandList::SetVertexBuffer(
@@ -307,7 +339,8 @@ void D3D12CommandList::SetVertexBuffer(
     const u32 strideBytes)
 {
     auto* d3dBuffer =
-        dynamic_cast<D3D12Buffer*>(&buffer);
+        dynamic_cast<D3D12Buffer*>(
+            &buffer);
 
     if (d3dBuffer == nullptr)
     {
@@ -323,10 +356,13 @@ void D3D12CommandList::SetVertexBuffer(
 
     D3D12_VERTEX_BUFFER_VIEW view{};
     view.BufferLocation =
-        d3dBuffer->Native()->GetGPUVirtualAddress();
+        d3dBuffer->Native()->
+            GetGPUVirtualAddress();
     view.SizeInBytes =
-        static_cast<UINT>(d3dBuffer->SizeBytes());
-    view.StrideInBytes = strideBytes;
+        static_cast<UINT>(
+            d3dBuffer->SizeBytes());
+    view.StrideInBytes =
+        strideBytes;
 
     nativeCommandList_->IASetVertexBuffers(
         0,
@@ -339,7 +375,8 @@ void D3D12CommandList::SetIndexBuffer(
     const IndexFormat format)
 {
     auto* d3dBuffer =
-        dynamic_cast<D3D12Buffer*>(&buffer);
+        dynamic_cast<D3D12Buffer*>(
+            &buffer);
 
     if (d3dBuffer == nullptr)
     {
@@ -349,9 +386,11 @@ void D3D12CommandList::SetIndexBuffer(
 
     D3D12_INDEX_BUFFER_VIEW view{};
     view.BufferLocation =
-        d3dBuffer->Native()->GetGPUVirtualAddress();
+        d3dBuffer->Native()->
+            GetGPUVirtualAddress();
     view.SizeInBytes =
-        static_cast<UINT>(d3dBuffer->SizeBytes());
+        static_cast<UINT>(
+            d3dBuffer->SizeBytes());
 
     switch (format)
     {
@@ -363,7 +402,8 @@ void D3D12CommandList::SetIndexBuffer(
         break;
     }
 
-    nativeCommandList_->IASetIndexBuffer(&view);
+    nativeCommandList_->
+        IASetIndexBuffer(&view);
 }
 
 void D3D12CommandList::DrawIndexed(
@@ -371,12 +411,13 @@ void D3D12CommandList::DrawIndexed(
     const u32 firstIndex,
     const i32 vertexOffset)
 {
-    nativeCommandList_->DrawIndexedInstanced(
-        indexCount,
-        1,
-        firstIndex,
-        vertexOffset,
-        0);
+    nativeCommandList_->
+        DrawIndexedInstanced(
+            indexCount,
+            1,
+            firstIndex,
+            vertexOffset,
+            0);
 }
 
 void D3D12CommandList::Close()
