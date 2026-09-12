@@ -555,7 +555,7 @@ int main()
 
             commandList->ClearDepthTarget(
                 *depthTarget,
-                1.0F);
+                0.0F);
 
             commandList->SetRenderTargets(
                 backBuffer,
