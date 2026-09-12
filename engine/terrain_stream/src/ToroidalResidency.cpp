@@ -215,35 +215,75 @@ ResidencyUpdate ToroidalResidency::Apply(
                 static_cast<u32>(
                     std::abs(shiftY));
 
-            const u32 logicalStart =
+            const u32 logicalYStart =
                 shiftY > 0
                     ? resolution - height
                     : 0;
 
-            const u32 physicalStart =
+            const u32 physicalYStart =
                 WrapIndex(
                     static_cast<i64>(
-                        logicalStart) +
+                        logicalYStart) +
                     static_cast<i64>(
                         state.originY),
                     resolution);
 
+            // When both axes move, the newly exposed X strip already
+            // refreshes the diagonal corner. Refresh only the logical X
+            // complement for the Y strip so expensive terrain sampling is
+            // never scheduled twice for the same physical cell.
+            const u32 xRefreshWidth =
+                shiftX != 0
+                    ? static_cast<u32>(
+                        std::abs(shiftX))
+                    : 0U;
+
+            const u32 logicalXStart =
+                shiftX < 0
+                    ? xRefreshWidth
+                    : 0U;
+
+            const u32 logicalXLength =
+                resolution -
+                xRefreshWidth;
+
+            const u32 physicalXStart =
+                WrapIndex(
+                    static_cast<i64>(
+                        logicalXStart) +
+                    static_cast<i64>(
+                        state.originX),
+                    resolution);
+
             EmitWrappedSpan(
-                physicalStart,
+                physicalYStart,
                 height,
                 resolution,
-                [&levelUpdate, resolution](
-                    const u32 start,
-                    const u32 span)
+                [&levelUpdate,
+                 resolution,
+                 physicalXStart,
+                 logicalXLength](
+                    const u32 yStart,
+                    const u32 ySpan)
                 {
-                    levelUpdate.
-                        refreshRegions.
-                        push_back({
-                            .x = 0,
-                            .y = start,
-                            .width =
-                                resolution,
-                            .height = span
+                    EmitWrappedSpan(
+                        physicalXStart,
+                        logicalXLength,
+                        resolution,
+                        [&levelUpdate,
+                         yStart,
+                         ySpan](
+                            const u32 xStart,
+                            const u32 xSpan)
+                        {
+                            levelUpdate.
+                                refreshRegions.
+                                push_back({
+                                    .x = xStart,
+                                    .y = yStart,
+                                    .width = xSpan,
+                                    .height = ySpan
+                                });
                         });
                 });
         }
