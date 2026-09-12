@@ -11,13 +11,30 @@
 
 namespace orbit::terrain_cache
 {
+struct TerrainPageCacheConfig
+{
+    std::size_t maxEntries{256};
+};
+
+struct TerrainPageCacheStats
+{
+    u64 acceptedRequests{0};
+    u64 duplicateRequests{0};
+    u64 readyHits{0};
+    u64 misses{0};
+    u64 evictions{0};
+    u64 capacityRejects{0};
+    std::size_t entries{0};
+};
+
 class TerrainPageCache
 {
 public:
     TerrainPageCache(
         world::PlanetDefinition planet,
         std::shared_ptr<const terrain::TerrainSource> source,
-        jobs::JobSystem& jobs);
+        jobs::JobSystem& jobs,
+        TerrainPageCacheConfig config = {});
 
     ~TerrainPageCache();
 
@@ -35,6 +52,8 @@ public:
         const TerrainPageDesc& desc) const;
 
     [[nodiscard]] std::size_t EntryCount() const;
+
+    [[nodiscard]] TerrainPageCacheStats Stats() const noexcept;
 
     void WaitAll();
 

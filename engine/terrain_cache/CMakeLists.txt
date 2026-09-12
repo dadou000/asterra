@@ -1,4 +1,5 @@
 add_library(OrbitTerrainCache STATIC
+    src/CachedTerrainSource.cpp
     src/TerrainPageBuilder.cpp
     src/TerrainPageCache.cpp
 )

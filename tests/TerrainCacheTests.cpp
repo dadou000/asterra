@@ -1,11 +1,37 @@
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain_cache/CachedTerrainSource.hpp>
 #include <orbit/terrain_cache/TerrainPageBuilder.hpp>
 #include <orbit/terrain_cache/TerrainPageCache.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <iostream>
 #include <memory>
+
+namespace
+{
+class CountingTerrainSource final :
+    public orbit::terrain::TerrainSource
+{
+public:
+    [[nodiscard]] orbit::terrain::TerrainSample
+    Sample(
+        const orbit::terrain::TerrainQuery&)
+        const noexcept override
+    {
+        calls.fetch_add(
+            1,
+            std::memory_order_relaxed);
+
+        return {
+            .elevationMeters = 123.0
+        };
+    }
+
+    mutable std::atomic<orbit::u64> calls{0};
+};
+} // namespace
 
 int main()
 {
@@ -142,6 +168,202 @@ int main()
     if (cache.IsPending(asyncDesc))
     {
         std::cerr << "Ready terrain page is still marked pending.\n";
+        return 1;
+    }
+
+    orbit::terrain_cache::TerrainPageCache
+        limitedCache(
+            planet,
+            terrain,
+            jobs,
+            {
+                .maxEntries = 2
+            });
+
+    const orbit::terrain_cache::TerrainPageDesc
+        pageA{
+            .tile = {
+                .face =
+                    orbit::world::CubeFace::PositiveX,
+                .level = 4,
+                .x = 5,
+                .y = 5
+            },
+            .resolution = 17
+        };
+
+    const orbit::terrain_cache::TerrainPageDesc
+        pageB{
+            .tile = {
+                .face =
+                    orbit::world::CubeFace::PositiveX,
+                .level = 4,
+                .x = 6,
+                .y = 5
+            },
+            .resolution = 17
+        };
+
+    const orbit::terrain_cache::TerrainPageDesc
+        pageC{
+            .tile = {
+                .face =
+                    orbit::world::CubeFace::PositiveX,
+                .level = 4,
+                .x = 7,
+                .y = 5
+            },
+            .resolution = 17
+        };
+
+    if (!limitedCache.Request(pageA))
+    {
+        std::cerr
+            << "Limited cache rejected page A.\n";
+        return 1;
+    }
+
+    limitedCache.WaitAll();
+
+    if (!limitedCache.Request(pageB))
+    {
+        std::cerr
+            << "Limited cache rejected page B.\n";
+        return 1;
+    }
+
+    limitedCache.WaitAll();
+
+    if (!limitedCache.TryGet(pageA))
+    {
+        std::cerr
+            << "Limited cache could not refresh page A LRU state.\n";
+        return 1;
+    }
+
+    if (!limitedCache.Request(pageC))
+    {
+        std::cerr
+            << "Limited cache rejected page C after ready-page eviction.\n";
+        return 1;
+    }
+
+    limitedCache.WaitAll();
+
+    if (limitedCache.EntryCount() != 2)
+    {
+        std::cerr
+            << "Limited terrain cache exceeded its entry budget.\n";
+        return 1;
+    }
+
+    if (!limitedCache.TryGet(pageA) ||
+        !limitedCache.TryGet(pageC) ||
+        limitedCache.TryGet(pageB))
+    {
+        std::cerr
+            << "Terrain cache LRU eviction selected the wrong page.\n";
+        return 1;
+    }
+
+    if (limitedCache.Stats().evictions == 0)
+    {
+        std::cerr
+            << "Terrain cache did not report its ready-page eviction.\n";
+        return 1;
+    }
+
+    const auto countingSource =
+        std::make_shared<
+            CountingTerrainSource>();
+
+    orbit::terrain_cache::CachedTerrainSource
+        cachedSource(
+            planet,
+            countingSource,
+            jobs,
+            {
+                .pageResolution = 9,
+                .requestMissThreshold = 2,
+                .minimumTileLevel = 6,
+                .maximumTileLevel = 6,
+                .cache = {
+                    .maxEntries = 8
+                }
+            });
+
+    const orbit::terrain::TerrainQuery
+        cachedQuery{
+            .unitDirection =
+                orbit::math::Normalize(
+                    orbit::math::Double3{
+                        1.0,
+                        0.1,
+                        0.2
+                    }),
+            .footprintMeters = 1'000.0
+        };
+
+    const auto coldA =
+        cachedSource.Sample(
+            cachedQuery);
+
+    if (countingSource->calls.load(
+            std::memory_order_relaxed) != 1)
+    {
+        std::cerr
+            << "Cached terrain source did not use direct fallback on first miss.\n";
+        return 1;
+    }
+
+    const auto coldB =
+        cachedSource.Sample(
+            cachedQuery);
+
+    if (coldA.elevationMeters != 123.0 ||
+        coldB.elevationMeters != 123.0)
+    {
+        std::cerr
+            << "Cached terrain direct fallback changed source data.\n";
+        return 1;
+    }
+
+    cachedSource.WaitAll();
+
+    const orbit::u64 callsAfterWarmup =
+        countingSource->calls.load(
+            std::memory_order_relaxed);
+
+    if (callsAfterWarmup <= 2)
+    {
+        std::cerr
+            << "Cached terrain page was not generated after the miss threshold.\n";
+        return 1;
+    }
+
+    const auto warm =
+        cachedSource.Sample(
+            cachedQuery);
+
+    if (warm.elevationMeters != 123.0 ||
+        countingSource->calls.load(
+            std::memory_order_relaxed) !=
+            callsAfterWarmup)
+    {
+        std::cerr
+            << "Warm terrain page did not eliminate authoritative source sampling.\n";
+        return 1;
+    }
+
+    const auto cachedStats =
+        cachedSource.Stats();
+
+    if (cachedStats.pageHits == 0 ||
+        cachedStats.pageRequests == 0 ||
+        cachedStats.directFallbackSamples < 2)
+    {
+        std::cerr
+            << "Cached terrain source telemetry is inconsistent.\n";
         return 1;
     }
 
