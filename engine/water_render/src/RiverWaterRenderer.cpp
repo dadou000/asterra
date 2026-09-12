@@ -1,6 +1,7 @@
 #include <orbit/water_render/RiverWaterRenderer.hpp>
 
 #include <orbit/math/Matrix.hpp>
+#include <orbit/terrain_water/LakeWater.hpp>
 #include <orbit/terrain_water/RiverWater.hpp>
 
 #include <algorithm>
@@ -230,7 +231,8 @@ public:
 
         if (planet_.radiusMeters <= 0.0 ||
             config_.framesInFlight == 0 ||
-            config_.maximumSegments == 0 ||
+            (config_.maximumSegments == 0 &&
+             config_.maximumLakeCells == 0) ||
             config_.nearPlaneMeters <= 0.0F ||
             config_.farPlaneMeters <=
                 config_.nearPlaneMeters ||
@@ -247,8 +249,10 @@ public:
         CreateBuffers();
 
         scratchVertices_.reserve(
-            static_cast<std::size_t>(
-                config_.maximumSegments) *
+            (static_cast<std::size_t>(
+                 config_.maximumSegments) +
+             static_cast<std::size_t>(
+                 config_.maximumLakeCells)) *
             4U);
     }
 
@@ -408,8 +412,10 @@ public:
             rhi::IndexFormat::UInt32);
 
         commandList.DrawIndexed(
-            stats_.
-                visibleSegmentsLastFrame *
+            (stats_.
+                 visibleSegmentsLastFrame +
+             stats_.
+                 visibleLakeCellsLastFrame) *
             6U);
 
         stats_.drawCallsLastFrame = 1;
@@ -526,9 +532,14 @@ private:
 
     void CreateBuffers()
     {
-        const u64 vertexBytes =
+        const u64 maximumQuads =
             static_cast<u64>(
-                config_.maximumSegments) *
+                config_.maximumSegments) +
+            static_cast<u64>(
+                config_.maximumLakeCells);
+
+        const u64 vertexBytes =
+            maximumQuads *
             4ULL *
             sizeof(WaterVertex);
 
@@ -558,20 +569,21 @@ private:
         std::vector<u32> indices;
         indices.resize(
             static_cast<std::size_t>(
-                config_.maximumSegments) *
+                maximumQuads) *
             6U);
 
-        for (u32 segment = 0;
-             segment <
-                config_.maximumSegments;
-             ++segment)
+        for (u32 quad = 0;
+             quad <
+                static_cast<u32>(
+                    maximumQuads);
+             ++quad)
         {
             const u32 vertex =
-                segment * 4U;
+                quad * 4U;
 
             const std::size_t index =
                 static_cast<std::size_t>(
-                    segment) *
+                    quad) *
                 6U;
 
             indices[index + 0U] =
@@ -824,6 +836,114 @@ private:
 
                 ++stats_.
                     visibleSegmentsLastFrame;
+            }
+
+            const auto& lakes =
+                region->lakes;
+
+            for (const auto& cell :
+                 lakes.cells)
+            {
+                if (stats_.
+                        visibleLakeCellsLastFrame >=
+                    config_.maximumLakeCells)
+                {
+                    ++stats_.
+                        truncatedLakeCellsLastFrame;
+                    continue;
+                }
+
+                const f64 halfCell =
+                    lakes.cellSpacingMeters *
+                    0.5;
+
+                const math::Double3 centerDirection =
+                    world::DirectionAtSurfaceOffset(
+                        planet_,
+                        lakes.surfaceFrame,
+                        cell.offsetMeters);
+
+                const math::Double3 centerWorld =
+                    centerDirection *
+                    (planet_.radiusMeters +
+                     static_cast<f64>(
+                         cell.
+                             surfaceElevationMeters) +
+                     config_.
+                         surfaceOffsetMeters);
+
+                if (math::Length(
+                        centerWorld -
+                        observer_.meters) >
+                    config_.
+                        maximumDrawDistanceMeters)
+                {
+                    continue;
+                }
+
+                const std::array<
+                    math::Double2,
+                    4>
+                    offsets{{
+                        {
+                            cell.offsetMeters.x -
+                                halfCell,
+                            cell.offsetMeters.y -
+                                halfCell
+                        },
+                        {
+                            cell.offsetMeters.x +
+                                halfCell,
+                            cell.offsetMeters.y -
+                                halfCell
+                        },
+                        {
+                            cell.offsetMeters.x -
+                                halfCell,
+                            cell.offsetMeters.y +
+                                halfCell
+                        },
+                        {
+                            cell.offsetMeters.x +
+                                halfCell,
+                            cell.offsetMeters.y +
+                                halfCell
+                        }
+                    }};
+
+                for (const auto& offset :
+                     offsets)
+                {
+                    const math::Double3 direction =
+                        world::DirectionAtSurfaceOffset(
+                            planet_,
+                            lakes.surfaceFrame,
+                            offset);
+
+                    const math::Double3 worldPosition =
+                        direction *
+                        (planet_.radiusMeters +
+                         static_cast<f64>(
+                             cell.
+                                 surfaceElevationMeters) +
+                         config_.
+                             surfaceOffsetMeters);
+
+                    scratchVertices_.push_back({
+                        .position =
+                            ToObserverLocal(
+                                worldPosition,
+                                observer_,
+                                observerFrame_),
+                        .water = {
+                            0.5F,
+                            0.0F
+                        }
+                    });
+                }
+
+                ++stats_.
+                    visibleLakeCellsLastFrame;
             }
         }
     }

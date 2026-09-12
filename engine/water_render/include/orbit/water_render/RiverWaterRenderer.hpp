@@ -23,6 +23,7 @@ struct RiverWaterRendererConfig
 {
     u32 framesInFlight{3};
     u32 maximumSegments{16'384};
+    u32 maximumLakeCells{8'192};
 
     f32 verticalFovRadians{1.22173048F};
     f32 nearPlaneMeters{10.0F};
@@ -36,7 +37,10 @@ struct RiverWaterRenderStats
 {
     u32 readyRegionsLastFrame{0};
     u32 visibleSegmentsLastFrame{0};
+    u32 visibleLakeCellsLastFrame{0};
+
     u32 truncatedSegmentsLastFrame{0};
+    u32 truncatedLakeCellsLastFrame{0};
 
     u64 uploadedBytesLastFrame{0};
     u32 drawCallsLastFrame{0};

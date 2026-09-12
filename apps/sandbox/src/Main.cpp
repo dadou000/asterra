@@ -252,6 +252,7 @@ int main()
                     .framesInFlight =
                         swapchain->BufferCount(),
                     .maximumSegments = 16'384,
+                    .maximumLakeCells = 8'192,
                     .verticalFovRadians =
                         terrainPreviewConfig.
                             verticalFovRadians,
@@ -598,7 +599,7 @@ int main()
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | water segments {} upload {} B",
+                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | water rivers {} lakes {} upload {} B",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -633,6 +634,8 @@ int main()
                             staleRevisionBatches,
                         waterStats.
                             visibleSegmentsLastFrame,
+                        waterStats.
+                            visibleLakeCellsLastFrame,
                         waterStats.
                             uploadedBytesLastFrame));
 
