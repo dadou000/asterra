@@ -1,4 +1,5 @@
 #include <orbit/camera/FreeCamera.hpp>
+#include <orbit/math/Matrix.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -12,6 +13,23 @@ bool NearlyEqual(
     const orbit::f64 epsilon = 1.0e-6)
 {
     return std::abs(a - b) <= epsilon;
+}
+
+orbit::f32 ProjectDepth(
+    const orbit::math::Mat4& projection,
+    const orbit::f32 viewZ)
+{
+    const orbit::f32 clipZ =
+        viewZ *
+            projection.At(2, 2) +
+        projection.At(3, 2);
+
+    const orbit::f32 clipW =
+        viewZ *
+            projection.At(2, 3) +
+        projection.At(3, 3);
+
+    return clipZ / clipW;
 }
 } // namespace
 
@@ -150,6 +168,50 @@ int main()
     {
         std::cerr
             << "Free camera negative pitch clamp failed.\n";
+        return 1;
+    }
+
+    constexpr orbit::f32 nearPlane = 10.0F;
+    constexpr orbit::f32 farPlane =
+        3'000'000.0F;
+
+    const orbit::math::Mat4 reverseProjection =
+        orbit::math::PerspectiveReverseZLH(
+            1.22173048F,
+            16.0F / 9.0F,
+            nearPlane,
+            farPlane);
+
+    const orbit::f32 nearDepth =
+        ProjectDepth(
+            reverseProjection,
+            nearPlane);
+
+    const orbit::f32 midDepth =
+        ProjectDepth(
+            reverseProjection,
+            100'000.0F);
+
+    const orbit::f32 farDepth =
+        ProjectDepth(
+            reverseProjection,
+            farPlane);
+
+    if (!NearlyEqual(
+            nearDepth,
+            1.0,
+            1.0e-6) ||
+        !NearlyEqual(
+            farDepth,
+            0.0,
+            1.0e-6) ||
+        !(nearDepth >
+          midDepth &&
+          midDepth >
+          farDepth))
+    {
+        std::cerr
+            << "Reversed-Z projection depth mapping is invalid.\n";
         return 1;
     }
 
