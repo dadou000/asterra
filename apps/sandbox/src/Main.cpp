@@ -348,7 +348,14 @@ int main()
             previousFrameTime;
 
         orbit::camera::FreeCamera
-            freeCamera;
+            freeCamera({
+                .moveSpeedMetersPerSecond =
+                    400.0,
+                .verticalSpeedMetersPerSecond =
+                    200.0,
+                .boostMultiplier =
+                    100.0
+            });
 
         while (window->PumpEvents())
         {
@@ -489,7 +496,7 @@ int main()
                             cameraUpdate.
                                 verticalMotionMeters,
                         250.0,
-                        100'000.0);
+                        2'000'000.0);
 
                 observer.meters =
                     direction *
