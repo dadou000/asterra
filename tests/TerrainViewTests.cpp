@@ -25,7 +25,7 @@ int main()
     };
 
     const orbit::math::Double3 seamDirection =
-        orbit::math::Normalize({1.0, 0.2, 1.0});
+        orbit::math::Normalize(orbit::math::Double3{1.0, 0.2, 1.0});
 
     const orbit::world::SurfaceFrame frame =
         orbit::world::MakeSurfaceFrame(seamDirection);

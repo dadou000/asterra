@@ -79,7 +79,7 @@ int main()
             });
 
         const orbit::math::Double3 observerDirection =
-            orbit::math::Normalize({
+            orbit::math::Normalize(orbit::math::Double3{
                 0.65,
                 0.35,
                 0.68

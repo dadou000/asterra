@@ -116,7 +116,7 @@ int main()
         });
 
     const Double3 terrainDirection =
-        orbit::math::Normalize({0.37, 0.81, -0.45});
+        orbit::math::Normalize(orbit::math::Double3{0.37, 0.81, -0.45});
 
     const auto fine = terrain.Sample({
         .unitDirection = terrainDirection,
