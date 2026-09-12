@@ -225,3 +225,21 @@ add_test(
     NAME Orbit.TerrainSediment
     COMMAND OrbitTerrainSedimentTests
 )
+
+
+add_executable(OrbitHydrologyRefinementTests
+    HydrologyRefinementTests.cpp
+)
+
+target_link_libraries(OrbitHydrologyRefinementTests
+    PRIVATE
+        Orbit::TerrainErosion
+)
+
+target_compile_features(OrbitHydrologyRefinementTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitHydrologyRefinementTests)
+
+add_test(
+    NAME Orbit.HydrologyRefinement
+    COMMAND OrbitHydrologyRefinementTests
+)

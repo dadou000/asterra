@@ -1,4 +1,5 @@
 add_library(OrbitTerrainErosion STATIC
+    src/HydrologyRefinement.cpp
     src/RiverCarving.cpp
     src/RiverCarvedTerrainSource.cpp
     src/SedimentTransport.cpp
