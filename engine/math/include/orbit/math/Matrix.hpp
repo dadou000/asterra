@@ -95,6 +95,44 @@ struct Mat4
     return result;
 }
 
+[[nodiscard]] inline Mat4 PerspectiveReverseZLH(
+    const f32 verticalFovRadians,
+    const f32 aspectRatio,
+    const f32 nearPlane,
+    const f32 farPlane) noexcept
+{
+    Mat4 result{};
+
+    if (verticalFovRadians <= 0.0F ||
+        aspectRatio <= 0.0F ||
+        nearPlane <= 0.0F ||
+        farPlane <= nearPlane)
+    {
+        return result;
+    }
+
+    const f32 yScale =
+        1.0F / std::tan(verticalFovRadians * 0.5F);
+    const f32 xScale = yScale / aspectRatio;
+
+    // D3D depth range [0, 1], reversed so near -> 1 and far -> 0.
+    // Keeping this finite rather than infinite preserves an explicit
+    // culling horizon while retaining float-depth precision near the eye.
+    const f32 inverseRange =
+        1.0F / (farPlane - nearPlane);
+
+    result.At(0, 0) = xScale;
+    result.At(1, 1) = yScale;
+    result.At(2, 2) = -nearPlane * inverseRange;
+    result.At(2, 3) = 1.0F;
+    result.At(3, 2) =
+        nearPlane *
+        farPlane *
+        inverseRange;
+
+    return result;
+}
+
 [[nodiscard]] inline Mat4 LookAtLH(
     const Float3& eye,
     const Float3& target,
