@@ -115,6 +115,7 @@ int main()
             .detailOctaves = 1,
             .global = {
                 .continentalAmplitudeMeters = 0.0,
+                .continentalBiasMeters = 0.0,
                 .mountainAmplitudeMeters = 0.0
             }
         });
