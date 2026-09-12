@@ -1,5 +1,8 @@
 add_library(OrbitRhiD3D12 STATIC
     src/D3D12Device.cpp
+    src/D3D12Queue.cpp
+    src/D3D12Commands.cpp
+    src/D3D12Swapchain.cpp
 )
 
 add_library(Orbit::RhiD3D12 ALIAS OrbitRhiD3D12)

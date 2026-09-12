@@ -4,6 +4,9 @@
 
 namespace orbit::rhi
 {
+class CommandList;
+class Fence;
+
 enum class QueueType : u8
 {
     Graphics,
@@ -20,6 +23,9 @@ public:
     Queue& operator=(const Queue&) = delete;
 
     [[nodiscard]] virtual QueueType Type() const noexcept = 0;
+
+    virtual void Submit(CommandList& commandList) = 0;
+    virtual void Signal(Fence& fence, u64 value) = 0;
 
 protected:
     Queue() = default;

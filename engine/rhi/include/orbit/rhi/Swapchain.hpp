@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/rhi/Resource.hpp>
 
 namespace orbit::rhi
 {
@@ -26,6 +27,8 @@ public:
     [[nodiscard]] virtual u32 Width() const noexcept = 0;
     [[nodiscard]] virtual u32 Height() const noexcept = 0;
     [[nodiscard]] virtual u32 BufferCount() const noexcept = 0;
+    [[nodiscard]] virtual u32 CurrentBackBufferIndex() const noexcept = 0;
+    [[nodiscard]] virtual Texture& CurrentBackBuffer() noexcept = 0;
 
 protected:
     Swapchain() = default;

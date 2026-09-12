@@ -1,6 +1,8 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/rhi/Command.hpp>
+#include <orbit/rhi/Fence.hpp>
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/rhi/Swapchain.hpp>
 
@@ -38,6 +40,11 @@ public:
     [[nodiscard]] virtual const DeviceCapabilities& Capabilities() const noexcept = 0;
 
     [[nodiscard]] virtual std::unique_ptr<Queue> CreateQueue(QueueType type) = 0;
+    [[nodiscard]] virtual std::unique_ptr<Fence> CreateFence(u64 initialValue) = 0;
+    [[nodiscard]] virtual std::unique_ptr<CommandAllocator> CreateCommandAllocator(
+        QueueType type) = 0;
+    [[nodiscard]] virtual std::unique_ptr<CommandList> CreateCommandList(
+        CommandAllocator& allocator) = 0;
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) = 0;
