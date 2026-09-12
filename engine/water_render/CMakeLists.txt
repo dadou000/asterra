@@ -1,4 +1,6 @@
 add_library(OrbitWaterRender STATIC
+    src/OceanMesh.cpp
+    src/OceanRenderer.cpp
     src/RiverWaterRenderer.cpp
 )
 

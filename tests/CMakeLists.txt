@@ -350,3 +350,21 @@ add_test(
     NAME Orbit.LakeWater
     COMMAND OrbitLakeWaterTests
 )
+
+
+add_executable(OrbitOceanMeshTests
+    OceanMeshTests.cpp
+)
+
+target_link_libraries(OrbitOceanMeshTests
+    PRIVATE
+        Orbit::WaterRender
+)
+
+target_compile_features(OrbitOceanMeshTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitOceanMeshTests)
+
+add_test(
+    NAME Orbit.OceanMesh
+    COMMAND OrbitOceanMeshTests
+)

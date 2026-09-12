@@ -15,6 +15,7 @@
 #include <orbit/terrain_region/DerivedTerrainRegionStreamer.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
+#include <orbit/water_render/OceanRenderer.hpp>
 #include <orbit/water_render/RiverWaterRenderer.hpp>
 #include <orbit/world/Planet.hpp>
 
@@ -124,18 +125,21 @@ int main()
                 orbit::world::MakeSurfaceFrame(
                     observerDirection);
 
+        const orbit::terrain::AnalyticTerrainDesc
+            terrainDescription{
+                .seed = 0xA57E22AULL,
+                .macroAmplitudeMeters = 4'000.0,
+                .macroWavelengthMeters = 800'000.0,
+                .detailAmplitudeMeters = 1'100.0,
+                .detailWavelengthMeters = 90'000.0,
+                .detailOctaves = 8
+            };
+
         const auto authoritativeTerrain =
             std::make_shared<
                 orbit::terrain::AnalyticTerrainSource>(
                     planet,
-                    orbit::terrain::AnalyticTerrainDesc{
-                        .seed = 0xA57E22AULL,
-                        .macroAmplitudeMeters = 4'000.0,
-                        .macroWavelengthMeters = 800'000.0,
-                        .detailAmplitudeMeters = 1'100.0,
-                        .detailWavelengthMeters = 90'000.0,
-                        .detailOctaves = 8
-                    });
+                    terrainDescription);
 
         orbit::jobs::JobSystem jobSystem;
 
@@ -240,6 +244,36 @@ int main()
                 terrainSampleStreamer,
                 observer,
                 terrainPreviewConfig);
+
+        orbit::water_render::OceanRenderer
+            ocean(
+                *device,
+                shaderCompiler,
+                planet,
+                observer,
+                {
+                    .mesh = {
+                        .radialRings = 112,
+                        .angularSegments = 128
+                    },
+                    .seaLevelMeters =
+                        terrainDescription.
+                            global.
+                            seaLevelMeters,
+                    .minimumRadiusMeters = 25.0,
+                    .maximumRadiusMeters =
+                        240'000.0,
+                    .waveAmplitudeScale = 1.0F,
+                    .verticalFovRadians =
+                        terrainPreviewConfig.
+                            verticalFovRadians,
+                    .nearPlaneMeters =
+                        terrainPreviewConfig.
+                            nearPlaneMeters,
+                    .farPlaneMeters =
+                        terrainPreviewConfig.
+                            farPlaneMeters
+                });
 
         orbit::water_render::RiverWaterRenderer
             riverWater(
@@ -465,6 +499,9 @@ int main()
                 terrainPreview.UpdateObserver(
                     observer);
 
+                ocean.UpdateObserver(
+                    observer);
+
                 riverWater.UpdateObserver(
                     observer);
             }
@@ -531,6 +568,19 @@ int main()
                 swapchain->Height(),
                 camera);
 
+            ocean.Draw(
+                *commandList,
+                backBuffer,
+                *depthTarget,
+                swapchain->Width(),
+                swapchain->Height(),
+                {
+                    .forward =
+                        camera.forward,
+                    .up =
+                        camera.up
+                });
+
             riverWater.Draw(
                 *commandList,
                 backBuffer,
@@ -591,6 +641,9 @@ int main()
                 const auto& regionStreamStats =
                     regionStreamer.Stats();
 
+                const auto& oceanStats =
+                    ocean.Stats();
+
                 const auto& waterStats =
                     riverWater.Stats();
 
@@ -599,7 +652,7 @@ int main()
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | water rivers {} lakes {} upload {} B",
+                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw | water rivers {} lakes {} upload {} B",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -632,6 +685,10 @@ int main()
                             revisionInvalidations,
                         stats.
                             staleRevisionBatches,
+                        oceanStats.vertices,
+                        oceanStats.indices,
+                        oceanStats.
+                            drawCallsLastFrame,
                         waterStats.
                             visibleSegmentsLastFrame,
                         waterStats.
