@@ -1,8 +1,11 @@
 /// Planet-scale lighting helpers shared by terrain, ocean and sky.
 ///
 /// Godot's DirectionalLight3D is intentionally unaware of a spherical planet.
-/// These functions provide the missing astronomical visibility test so direct
-/// sunlight cannot reach a point through Asterra itself.
+/// These functions provide astronomical visibility and the shared atmospheric
+/// solar transmittance lookup used by all planetary render paths.
+
+global uniform sampler2D asterra_transmittance_lut;
+global uniform vec3 asterra_sun_dir;
 
 /// Apparent angular radius of Helion in radians. Runtime code derives this from
 /// the physical stellar radius and Asterra-Helion distance. The default is a
@@ -16,21 +19,14 @@ float planet_horizon_cosine(float radius, float planet_radius) {
 }
 
 /// Visible fraction of Helion's finite stellar disc at Asterra's geometric
-/// horizon. Unlike the old arbitrary smoothstep, this uses the actual source
-/// angular radius. The circle-segment expression approximates the planetary limb
-/// as a straight line across the tiny apparent stellar disc, which is effectively
-/// exact at stellar angular scales.
+/// horizon. The circle-segment expression approximates the planetary limb as a
+/// straight line across the tiny apparent stellar disc.
 float planet_direct_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	vec3 s = normalize(sun_dir);
 	float r = length(p);
 	if (r < 1.0) return 0.0;
 	vec3 up = p / r;
-
-	// Lift points that numerically sit a few centimetres inside the reference
-	// sphere. This avoids a false below-horizon classification at sea level.
-	if (r <= planet_radius + 0.5) {
-		r = planet_radius + 0.5;
-	}
+	if (r <= planet_radius + 0.5) r = planet_radius + 0.5;
 
 	float horizon_cos = planet_horizon_cosine(r, planet_radius);
 	float mu = clamp(dot(up, s), -1.0, 1.0);
@@ -38,7 +34,6 @@ float planet_direct_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	float sun_zenith = acos(mu);
 	float clearance = horizon_zenith - sun_zenith;
 	float angular_radius = max(u_helion_angular_radius_rad, 1e-7);
-
 	if (clearance <= -angular_radius) return 0.0;
 	if (clearance >= angular_radius) return 1.0;
 
@@ -47,16 +42,24 @@ float planet_direct_sun_visibility(vec3 p, vec3 sun_dir, float planet_radius) {
 	return (acos(-x) + x * root) / PI;
 }
 
+/// Shared atmosphere-to-space transmittance. X is solar zenith cosine and Y is
+/// altitude. The LUT is generated once per resident body's radius/atmosphere,
+/// so per-pixel secondary solar ray marches collapse to one filtered fetch.
+vec3 planet_solar_transmittance(vec3 p, vec3 sun_dir, float planet_radius,
+		float atmosphere_height) {
+	float radius = length(p);
+	float height = clamp(radius - planet_radius, 0.0, atmosphere_height);
+	vec3 up = p / max(radius, 1.0);
+	float mu = clamp(dot(up, normalize(sun_dir)), -1.0, 1.0);
+	vec2 uv = vec2(mu * 0.5 + 0.5,
+		height / max(atmosphere_height, 1.0));
+	return texture(asterra_transmittance_lut, uv).rgb
+		* planet_direct_sun_visibility(p, sun_dir, planet_radius);
+}
+
 /// Cheap local hemispherical sky irradiance. This replaces global Godot ambient
 /// on planetary materials with a local term that follows the terminator and
 /// leaves night genuinely dark.
-///
-/// The magnitude matters more than the colour. On a clear day the diffuse sky
-/// delivers roughly a tenth of what the direct sun does; at anything
-/// approaching parity it stops reading as skylight and becomes a flat fill that
-/// cancels the terrain's own shading. That is the difference between a
-/// landscape and a pastel painting of one, so this is deliberately kept to
-/// about 12% of the direct term rather than tuned by eye for brightness.
 vec3 planet_sky_irradiance(vec3 p, vec3 sun_dir, float planet_radius) {
 	vec3 up = normalize(p);
 	float mu = dot(up, normalize(sun_dir));
