@@ -12,6 +12,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -538,123 +539,37 @@ public:
         CreatePipeline(
             shaderCompiler);
 
-        UpdateObserver(observer);
+        InitializeBlocking(observer);
+    }
+
+    ~Impl()
+    {
+        if (pendingUpdate_.has_value() &&
+            pendingUpdate_->batch.IsValid())
+        {
+            try
+            {
+                static_cast<void>(
+                    sampleStreamer_.
+                        WaitCollect(
+                            pendingUpdate_->
+                                batch));
+            }
+            catch (...)
+            {
+            }
+        }
     }
 
     void UpdateObserver(
         const world::WorldPosition& observer)
     {
-        const f64 observerRadius =
-            math::Length(
-                observer.meters);
+        SetObserverView(observer);
 
-        if (observerRadius <=
-            planet_.radiusMeters)
-        {
-            throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
-        }
+        desiredObserver_ = observer;
+        ++desiredGeneration_;
 
-        stats_.generatedSamplesLastUpdate = 0;
-        stats_.refreshedRegionsLastUpdate = 0;
-        stats_.levelsTouchedLastUpdate = 0;
-
-        observer_ = observer;
-        observerFrame_ =
-            world::MakeSurfaceFrame(
-                observer.meters);
-
-        observerRadiusMeters_ =
-            static_cast<f32>(
-                observerRadius);
-
-        motion_ =
-            tracker_.Update(observer);
-
-        residencyUpdate_ =
-            residency_.Apply(motion_);
-
-        std::vector<
-            terrain_stream::TerrainSampleRequest>
-            sampleRequests;
-
-        sampleRequests.reserve(
-            levels_.size());
-
-        for (u32 levelIndex = 0;
-             levelIndex <
-                static_cast<u32>(
-                    levels_.size());
-             ++levelIndex)
-        {
-            const auto& levelUpdate =
-                residencyUpdate_.levels[
-                    levelIndex];
-
-            if (levelUpdate.
-                    refreshRegions.empty())
-            {
-                continue;
-            }
-
-            const auto& level =
-                layout_.levels[
-                    levelIndex];
-
-            sampleRequests.push_back({
-                .levelIndex = levelIndex,
-                .resolution =
-                    level.gridResolution,
-                .spacingMeters =
-                    level.sampleSpacingMeters,
-                .footprintMeters =
-                    level.terrainFootprintMeters,
-                .surfaceFrame =
-                    motion_.levels[
-                        levelIndex].
-                        surfaceFrame,
-                .originX =
-                    levelUpdate.originX,
-                .originY =
-                    levelUpdate.originY,
-                .regions =
-                    levelUpdate.
-                        refreshRegions
-            });
-        }
-
-        const auto sampleResults =
-            sampleStreamer_.
-                GenerateBlocking(
-                    sampleRequests);
-
-        for (const auto& result :
-             sampleResults)
-        {
-            if (result.patches.empty())
-            {
-                continue;
-            }
-
-            ++stats_.
-                levelsTouchedLastUpdate;
-
-            stats_.
-                refreshedRegionsLastUpdate +=
-                    static_cast<u32>(
-                        result.patches.size());
-
-            stats_.
-                generatedSamplesLastUpdate +=
-                    result.sampleCount;
-
-            ApplySampleResult(result);
-        }
-
-        stats_.
-            cumulativeGeneratedSamples +=
-                stats_.
-                    generatedSamplesLastUpdate;
+        ServiceStreaming();
     }
 
     void Draw(
@@ -663,6 +578,8 @@ public:
         const u32 targetWidth,
         const u32 targetHeight)
     {
+        ServiceStreaming();
+
         stats_.uploadedBytesLastFrame = 0;
         stats_.drawCallsLastFrame = 0;
 
@@ -868,6 +785,24 @@ public:
     }
 
 private:
+    struct CandidateState
+    {
+        terrain_view::ClipmapTracker tracker;
+        terrain_stream::ToroidalResidency residency;
+        terrain_view::ClipmapMotionUpdate motion;
+        terrain_stream::ResidencyUpdate residencyUpdate;
+        std::vector<
+            terrain_stream::TerrainSampleRequest>
+            requests;
+    };
+
+    struct PendingUpdate
+    {
+        u64 generation{0};
+        CandidateState candidate;
+        terrain_stream::TerrainSampleBatch batch;
+    };
+
     struct DirtyUpdate
     {
         u64 serial{0};
@@ -1091,6 +1026,287 @@ private:
                 });
     }
 
+    void SetObserverView(
+        const world::WorldPosition& observer)
+    {
+        const f64 observerRadius =
+            math::Length(
+                observer.meters);
+
+        if (observerRadius <=
+            planet_.radiusMeters)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain preview observer must be above the planet surface.");
+        }
+
+        observer_ = observer;
+        observerFrame_ =
+            world::MakeSurfaceFrame(
+                observer.meters);
+
+        observerRadiusMeters_ =
+            static_cast<f32>(
+                observerRadius);
+    }
+
+    [[nodiscard]] CandidateState BuildCandidate(
+        const world::WorldPosition& observer)
+    {
+        CandidateState candidate{
+            .tracker = tracker_,
+            .residency = residency_
+        };
+
+        candidate.motion =
+            candidate.tracker.Update(
+                observer);
+
+        candidate.residencyUpdate =
+            candidate.residency.Apply(
+                candidate.motion);
+
+        candidate.requests.reserve(
+            levels_.size());
+
+        for (u32 levelIndex = 0;
+             levelIndex <
+                static_cast<u32>(
+                    levels_.size());
+             ++levelIndex)
+        {
+            const auto& levelUpdate =
+                candidate.residencyUpdate.
+                    levels[levelIndex];
+
+            if (levelUpdate.
+                    refreshRegions.empty())
+            {
+                continue;
+            }
+
+            const auto& level =
+                layout_.levels[
+                    levelIndex];
+
+            candidate.requests.push_back({
+                .levelIndex = levelIndex,
+                .resolution =
+                    level.gridResolution,
+                .spacingMeters =
+                    level.sampleSpacingMeters,
+                .footprintMeters =
+                    level.terrainFootprintMeters,
+                .surfaceFrame =
+                    candidate.motion.levels[
+                        levelIndex].
+                        surfaceFrame,
+                .originX =
+                    levelUpdate.originX,
+                .originY =
+                    levelUpdate.originY,
+                .regions =
+                    levelUpdate.
+                        refreshRegions
+            });
+        }
+
+        return candidate;
+    }
+
+    void ResetCommitStats() noexcept
+    {
+        stats_.generatedSamplesLastUpdate = 0;
+        stats_.refreshedRegionsLastUpdate = 0;
+        stats_.levelsTouchedLastUpdate = 0;
+    }
+
+    void CommitCandidate(
+        CandidateState&& candidate,
+        const std::vector<
+            terrain_stream::TerrainSampleResult>&
+            results)
+    {
+        ResetCommitStats();
+
+        tracker_ =
+            std::move(
+                candidate.tracker);
+
+        residency_ =
+            std::move(
+                candidate.residency);
+
+        motion_ =
+            std::move(
+                candidate.motion);
+
+        residencyUpdate_ =
+            std::move(
+                candidate.residencyUpdate);
+
+        for (const auto& result :
+             results)
+        {
+            if (result.patches.empty())
+            {
+                continue;
+            }
+
+            ++stats_.
+                levelsTouchedLastUpdate;
+
+            stats_.
+                refreshedRegionsLastUpdate +=
+                    static_cast<u32>(
+                        result.patches.size());
+
+            stats_.
+                generatedSamplesLastUpdate +=
+                    result.sampleCount;
+
+            ApplySampleResult(result);
+        }
+
+        stats_.
+            cumulativeGeneratedSamples +=
+                stats_.
+                    generatedSamplesLastUpdate;
+    }
+
+    void InitializeBlocking(
+        const world::WorldPosition& observer)
+    {
+        SetObserverView(observer);
+
+        desiredObserver_ = observer;
+        desiredGeneration_ = 1;
+
+        CandidateState candidate =
+            BuildCandidate(observer);
+
+        const auto results =
+            sampleStreamer_.
+                GenerateBlocking(
+                    candidate.requests);
+
+        CommitCandidate(
+            std::move(candidate),
+            results);
+
+        committedGeneration_ =
+            desiredGeneration_;
+
+        ++stats_.committedBatches;
+        stats_.updatePending = false;
+    }
+
+    void LaunchLatestUpdate()
+    {
+        if (pendingUpdate_.has_value() ||
+            committedGeneration_ ==
+                desiredGeneration_)
+        {
+            return;
+        }
+
+        CandidateState candidate =
+            BuildCandidate(
+                desiredObserver_);
+
+        if (candidate.requests.empty())
+        {
+            CommitCandidate(
+                std::move(candidate),
+                {});
+
+            committedGeneration_ =
+                desiredGeneration_;
+
+            ++stats_.committedBatches;
+            stats_.updatePending = false;
+            return;
+        }
+
+        terrain_stream::TerrainSampleBatch batch =
+            sampleStreamer_.Submit(
+                candidate.requests);
+
+        pendingUpdate_.emplace(
+            PendingUpdate{
+                .generation =
+                    desiredGeneration_,
+                .candidate =
+                    std::move(candidate),
+                .batch =
+                    std::move(batch)
+            });
+
+        ++stats_.submittedBatches;
+        stats_.updatePending = true;
+    }
+
+    void ServiceStreaming()
+    {
+        if (pendingUpdate_.has_value())
+        {
+            if (!pendingUpdate_->
+                    batch.IsComplete())
+            {
+                stats_.updatePending = true;
+                return;
+            }
+
+            std::vector<
+                terrain_stream::
+                    TerrainSampleResult>
+                results;
+
+            if (!sampleStreamer_.TryCollect(
+                    pendingUpdate_->batch,
+                    results))
+            {
+                stats_.updatePending = true;
+                return;
+            }
+
+            const u64 generation =
+                pendingUpdate_->generation;
+
+            CandidateState candidate =
+                std::move(
+                    pendingUpdate_->
+                        candidate);
+
+            pendingUpdate_.reset();
+            stats_.updatePending = false;
+
+            if (generation ==
+                desiredGeneration_)
+            {
+                CommitCandidate(
+                    std::move(candidate),
+                    results);
+
+                committedGeneration_ =
+                    generation;
+
+                ++stats_.committedBatches;
+            }
+            else
+            {
+                ++stats_.discardedBatches;
+            }
+        }
+
+        if (!pendingUpdate_.has_value() &&
+            committedGeneration_ !=
+                desiredGeneration_)
+        {
+            LaunchLatestUpdate();
+        }
+    }
+
     void ApplySampleResult(
         const terrain_stream::
             TerrainSampleResult& result)
@@ -1301,6 +1517,7 @@ private:
         pipeline_;
 
     world::WorldPosition observer_{};
+    world::WorldPosition desiredObserver_{};
     world::SurfaceFrame observerFrame_{};
 
     terrain_view::ClipmapMotionUpdate
@@ -1310,6 +1527,12 @@ private:
         residencyUpdate_;
 
     f32 observerRadiusMeters_{0.0F};
+
+    u64 desiredGeneration_{0};
+    u64 committedGeneration_{0};
+
+    std::optional<PendingUpdate>
+        pendingUpdate_;
 
     TerrainStreamingStats stats_{};
 

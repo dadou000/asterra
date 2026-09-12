@@ -24,6 +24,11 @@ struct TerrainStreamingStats
 
     u64 cumulativeGeneratedSamples{0};
     u64 cumulativeUploadedBytes{0};
+
+    u64 submittedBatches{0};
+    u64 committedBatches{0};
+    u64 discardedBatches{0};
+    bool updatePending{false};
 };
 
 struct TerrainPreviewConfig
