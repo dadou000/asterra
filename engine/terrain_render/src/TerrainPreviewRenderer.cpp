@@ -853,7 +853,7 @@ float4 main(VSOutput input) : SV_Target0
         color,
         1.0);
 }
-)"
+)";
 } // namespace
 
 class TerrainPreviewRenderer::Impl
