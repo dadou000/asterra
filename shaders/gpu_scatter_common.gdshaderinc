@@ -283,6 +283,27 @@ float sg_river_stone_suitability(float terrain_h, vec4 soil, vec4 surface,
 	return clamp(gravel * (1.0 - secondary.r * 0.70) * smoothstep(-0.50, 0.70, terrain_h), 0.0, 1.0);
 }
 
+// Camera-relative distance thinning: the GPU-vertex-shader equivalent of
+// godot-forest-demo's per-chunk visible_instance_count density LOD
+// (Biomes.gd's _apply_density_lod). Since candidates here are accepted/rejected
+// per-INSTANCE_ID every frame rather than baked once into a static buffer, the
+// same effect is achieved by fading acceptance probability out smoothly
+// between u_scatter_lod_start_m and u_scatter_lod_end_m instead of shrinking a
+// visible count. u_scatter_camera_pos is pushed explicitly every frame by the
+// CPU controller (gpu_terrain_scatter.gd/_global.gd), in the same
+// origin-relative space candidate_pos_local (== VERTEX before MODEL_MATRIX)
+// is computed in -- deliberately not Godot's built-in CAMERA_POSITION_WORLD,
+// since VERTEX here is a hand-built position, not a normal object-local one.
+// Defaults are "no thinning" (start == end) until a caller sets real values.
+uniform vec3 u_scatter_camera_pos = vec3(0.0);
+uniform float u_scatter_lod_start_m = 1.0e30;
+uniform float u_scatter_lod_end_m = 1.0e30;
+
+float sg_distance_lod_weight(vec3 candidate_pos_local) {
+	float dist = distance(candidate_pos_local, u_scatter_camera_pos);
+	return 1.0 - smoothstep(u_scatter_lod_start_m, u_scatter_lod_end_m, dist);
+}
+
 // Author-level per-family enable/density, from Planet Studio (Global Terrain
 // -> Surface Detail -> Scatter). Deliberately SEPARATE uniforms from
 // u_scatter_enabled/u_scatter_density above: those two are the pre-existing
@@ -359,4 +380,55 @@ float sg_gate_weight(float biome, vec3 dir, float height_m, float local_baseline
 	}
 	return asterra_biome_texture_mask_weight(u_scatter_gate_biome, u_scatter_gate_layer_index,
 		dir, height_m, local_baseline_m, slope_deg) * slope_w;
+}
+
+// One wind field shared by every scatter family, pushed per-frame by
+// GlobalWindDriver (scripts/rendering/global_wind_driver.gd) via
+// RenderingServer.global_shader_parameter_set(). Direction defaults to the
+// same (11, 0, 4.5) m/s convention already used for cosmetic cloud/rain drift
+// (VolumetricCloudController.WIND_METRES_PER_SECOND, weather_fx_system.gd) so
+// scatter sway visually agrees with cloud/particle drift direction. Speed here
+// is a sway oscillation rate, not that vector's literal m/s magnitude -- the
+// existing per-asset wind_speed defaults in this codebase (1.25, 1.7) and the
+// reference forest demo's (1.0) are all in this same small range, and reusing
+// 11.9 directly as an oscillation rate would flicker far too fast.
+global uniform vec2 u_global_wind_direction = vec2(0.9258, 0.3785);
+global uniform float u_global_wind_speed = 1.6;
+global uniform float u_global_wind_strength = 1.0;
+
+// Sway shape ported from godot-forest-demo's materials/tree_wind.gdshader:
+// a primary wave along the wind direction, a higher-frequency secondary wave
+// across it, and a slow low-frequency gust, combined the same way (weights
+// 1.0 / 0.35 / 0.2). `cell_pos` only needs to vary smoothly between
+// neighbouring instances (the absolute lattice cell already serves this
+// purpose elsewhere in this file); it does not need to be a true metre
+// position. `phase_seed` is a per-instance random offset so neighbouring
+// plants don't sway in lockstep.
+float sg_wind_sway(vec2 cell_pos, float phase_seed) {
+	vec2 wind_dir = normalize(u_global_wind_direction + vec2(1e-5, 0.0));
+	vec2 perp = vec2(-wind_dir.y, wind_dir.x);
+	float speed = u_global_wind_speed;
+	float primary = sin(dot(cell_pos, wind_dir) * 0.35 + TIME * speed + phase_seed);
+	float secondary = sin(dot(cell_pos, perp) * 1.15 + TIME * speed * 1.73 + phase_seed * 1.7);
+	float gust = sin(dot(cell_pos, vec2(0.19, 0.27)) + TIME * speed * 0.41);
+	return (primary + secondary * 0.35 + gust * 0.2) * u_global_wind_strength;
+}
+
+// height01: 0 at the asset's root, 1 at its tip. trunk_floor: fraction of full
+// sway a rigid trunk/stem still gets at height01 == 0 (reference repo's
+// trunk_strength), so trunks/stems are stiff but not perfectly frozen.
+float sg_wind_height_factor(float height01, float trunk_floor) {
+	return mix(trunk_floor, 1.0, smoothstep(0.0, 1.0, clamp(height01, 0.0, 1.0)));
+}
+
+// Combined wind displacement in world space, along the caller's own local
+// tangent-plane basis (right/north) -- NOT the instance's own randomly
+// yawed local axes, so every instance sways toward the same shared wind
+// direction regardless of its individual placement rotation.
+vec3 sg_wind_offset(vec3 right, vec3 north, vec2 cell_pos, float phase_seed,
+		float asset_strength, float height01, float trunk_floor) {
+	vec2 wind_dir = normalize(u_global_wind_direction + vec2(1e-5, 0.0));
+	float amount = sg_wind_sway(cell_pos, phase_seed) * asset_strength
+		* sg_wind_height_factor(height01, trunk_floor);
+	return (right * wind_dir.x + north * wind_dir.y) * amount;
 }

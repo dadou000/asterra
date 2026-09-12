@@ -397,6 +397,7 @@ func _ecology_definitions() -> Array[Dictionary]:
 			"scale_min":float(authored.get("scale_min", 0.82)),
 			"scale_max":float(authored.get("scale_max", 1.18)),
 			"wind":float(authored.get("wind", defaults.get("wind", 0.0))) * 0.05,
+			"max_distance_m":float(authored.get("max_distance_m", defaults.get("max_distance_m", 200.0))),
 			# Shadow casting defaults on for every tier now, matching the reference
 			# forest demo's philosophy. The per-tier cost this used to avoid (dense
 			# micro/ground foliage casting shadows at any distance) is handled by
@@ -561,6 +562,12 @@ func _make_ecology_material(source_material: Material, definition: Dictionary,
 	material.set_shader_parameter("u_asset_scale_max", float(definition.get("scale_max", 1.18)))
 	material.set_shader_parameter("u_asset_height_m", maxf(height_m, 0.05))
 	material.set_shader_parameter("u_wind_strength", float(definition.get("wind", 0.0)))
+	# Distance thinning fades acceptance out over the last third of each asset's
+	# authored max_distance_m rather than an abrupt edge -- see
+	# sg_distance_lod_weight() in gpu_scatter_common.gdshaderinc.
+	var lod_end_m: float = maxf(float(definition.get("max_distance_m", 200.0)), 1.0)
+	material.set_shader_parameter("u_scatter_lod_start_m", lod_end_m * 0.65)
+	material.set_shader_parameter("u_scatter_lod_end_m", lod_end_m)
 	var biome_ids: PackedInt32Array = definition.get("biome_ids", PackedInt32Array()) as PackedInt32Array
 	var padded_biomes := PackedInt32Array()
 	padded_biomes.resize(18)

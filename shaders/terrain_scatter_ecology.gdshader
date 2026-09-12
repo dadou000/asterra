@@ -22,7 +22,6 @@ uniform float u_asset_scale_min = 0.82;
 uniform float u_asset_scale_max = 1.18;
 uniform float u_asset_height_m = 1.0;
 uniform float u_wind_strength = 0.0;
-uniform float u_wind_speed = 1.25;
 uniform int u_asset_biome_count = 0;
 uniform int u_asset_biome_ids[18];
 uniform float u_asset_slope_min_deg = 0.0;
@@ -186,6 +185,8 @@ void vertex() {
 	suitability *= ecology_asset_gate(biome, asset_slope);
 	suitability *= sg_gate_weight(biome, d, terrain_h, macro_h,
 		asset_slope);
+	vec3 candidate_pos_local = d * (u_scatter_planet_radius + terrain_h) - u_scatter_origin;
+	suitability *= sg_distance_lod_weight(candidate_pos_local);
 	v_alive = sg_acceptance(suitability, h, INSTANCE_ID);
 
 	vec3 right;
@@ -206,16 +207,16 @@ void vertex() {
 			scaled.y,
 			scaled.x * sa + scaled.z * ca);
 
-		float tip = clamp(source_vertex.y / max(u_asset_height_m, 0.05), 0.0, 1.0);
-		float phase = float(absolute_cell.x) * 0.233 + float(absolute_cell.y) * 0.371 + r2 * TAU;
-		float wind = sin(TIME * u_wind_speed + phase) * u_wind_strength * tip * tip;
-		local_rotated.x += wind;
+		float height01 = clamp(source_vertex.y / max(u_asset_height_m, 0.05), 0.0, 1.0);
+		vec3 wind_offset = sg_wind_offset(right, north, vec2(absolute_cell), r2 * TAU,
+			u_wind_strength, height01, 0.05);
 
 		vec3 base = d * (u_scatter_planet_radius + terrain_h + u_scatter_surface_bias);
 		VERTEX = base - u_scatter_origin
 			+ right * local_rotated.x
 			+ d * local_rotated.y
-			+ north * local_rotated.z;
+			+ north * local_rotated.z
+			+ wind_offset;
 
 		vec3 n_rotated = vec3(
 			source_normal.x * ca - source_normal.z * sa,

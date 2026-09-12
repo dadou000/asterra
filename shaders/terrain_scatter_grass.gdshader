@@ -11,7 +11,6 @@ uniform float u_grass_height_min = 0.22;
 uniform float u_grass_height_max = 0.82;
 uniform float u_grass_width = 0.055;
 uniform float u_grass_wind_strength = 0.055;
-uniform float u_grass_wind_speed = 1.7;
 
 varying float v_alive;
 varying vec3 v_grass_color;
@@ -38,6 +37,8 @@ void vertex() {
 		terrain_h, soil, surface, geology, structure, climate, hydro, landform, biome);
 	suitability *= sg_gate_weight(biome, d, terrain_h, macro_h,
 		sg_slope_proxy_deg(surface, structure, landform));
+	vec3 candidate_pos_local = d * (u_scatter_planet_radius + terrain_h) - u_scatter_origin;
+	suitability *= sg_distance_lod_weight(candidate_pos_local);
 	v_alive = sg_acceptance(suitability, h, INSTANCE_ID);
 
 	vec3 right;
@@ -57,15 +58,15 @@ void vertex() {
 		height_m *= mix(1.0, 0.62, biome_short);
 		float width_m = u_grass_width * mix(0.72, 1.28, r2);
 
-		float tip = clamp(local_vertex.y, 0.0, 1.0);
-		float phase = float(absolute_cell.x) * 0.37 + float(absolute_cell.y) * 0.21 + r2 * TAU;
-		float wind = sin(TIME * u_grass_wind_speed + phase) * u_grass_wind_strength * tip * tip;
-		horizontal.x += wind;
+		float height01 = clamp(local_vertex.y, 0.0, 1.0);
+		vec3 wind_offset = sg_wind_offset(right, north, vec2(absolute_cell), r2 * TAU,
+			u_grass_wind_strength, height01, 0.05);
 		vec3 base = d * (u_scatter_planet_radius + terrain_h + u_scatter_surface_bias);
 		VERTEX = base - u_scatter_origin
 			+ right * (horizontal.x * width_m)
 			+ north * (horizontal.y * width_m)
-			+ d * (local_vertex.y * height_m);
+			+ d * (local_vertex.y * height_m)
+			+ wind_offset;
 
 		vec3 n_local = vec3(
 			local_normal.x * ca - local_normal.z * sa,

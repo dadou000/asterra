@@ -47,16 +47,12 @@ TerrainHeightDebugOverlay="*res://scripts/terrain/terrain_height_debug_overlay.g
 TerrainDeformationExperiment="*res://scripts/terrain/terrain_deformation_experiment_gpu_safe.gd"
 AppSettings="*res://scripts/core/app_settings.gd"
 ClosestCharacterDebug="*res://scripts/ui/closest_character_debug.gd"
-WeatherNativeBootstrap="*res://scripts/weather/weather_native_bootstrap.gd"
 WeatherSystem="*res://scripts/weather/weather_system.gd"
 PersistentHydrologySystem="*res://scripts/water/persistent_hydrology_reach_system.gd"
-HydroWeatherCoupling="*res://scripts/water/hydro_weather_coupling.gd"
 HydroAutomaticSurfacePromotion="*res://scripts/water/hydro_automatic_surface_promotion.gd"
 HydroAutomaticSurfaceDemotion="*res://scripts/water/hydro_automatic_surface_demotion.gd"
 HydroChannelRefinement="*res://scripts/water/hydro_automatic_channel_refinement_cluster_capacity.gd"
 HydroFineExternalFluxLedger="*res://scripts/water/hydro_fine_external_flux_ledger.gd"
-WeatherRefinement="*res://scripts/weather/weather_refinement_manager_v2.gd"
-SurfaceEnergy="*res://scripts/weather/surface_energy_bridge.gd"
 WeatherMap="*res://scripts/ui/weather_map.gd"
 VolumetricClouds="*res://scripts/rendering/weather_volumetric_cloud_controller.gd"
 RenderDebug="*res://scripts/rendering/render_debug_controller.gd"
@@ -64,6 +60,7 @@ MotionBlur="*res://scripts/rendering/motion_blur_controller.gd"
 RingCountDebug="*res://scripts/terrain/ring_count_debug_controller.gd"
 VehicleTests="*res://scripts/vehicles/vehicle_test_harness.gd"
 PlanetStudioMCP="*res://scripts/world_authoring/mcp/planet_studio_bridge.gd"
+GlobalWindDriver="*res://scripts/rendering/global_wind_driver.gd"
 
 [display]
 
@@ -124,3 +121,18 @@ fill={
 scaling_3d/mode=2
 scaling_3d/scale=0.77
 scaling_3d/fsr_sharpness=0.18
+
+[shader_globals]
+
+u_global_wind_direction={
+"type": "vec2",
+"value": Vector2(0.9258, 0.3785)
+}
+u_global_wind_speed={
+"type": "float",
+"value": 1.6
+}
+u_global_wind_strength={
+"type": "float",
+"value": 1.0
+}

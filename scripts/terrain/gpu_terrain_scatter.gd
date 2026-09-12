@@ -229,6 +229,14 @@ func _sync_material_window(material: ShaderMaterial, grid: int, spacing: float,
 	material.set_shader_parameter("u_scatter_anchor_up", _anchor_up)
 	material.set_shader_parameter("u_scatter_planet_radius", Planet.cfg.planet_radius)
 	material.set_shader_parameter("u_scatter_origin", origin)
+	# Distance-thinning reference point (sg_distance_lod_weight). Candidates are
+	# built in this same origin-relative space (VERTEX before MODEL_MATRIX), so
+	# this must be the camera's own origin-relative position, not a raw planet-
+	# centered one -- see the comment on u_scatter_camera_pos in
+	# gpu_scatter_common.gdshaderinc.
+	var camera: Camera3D = get_viewport().get_camera_3d()
+	if camera != null:
+		material.set_shader_parameter("u_scatter_camera_pos", camera.global_position)
 
 
 static func _build_grass_clump_mesh() -> ArrayMesh:

@@ -123,10 +123,22 @@ static func configure_world_environment(environment: Environment, preset: int) -
 	environment.sdfgi_energy = 1.0
 	environment.sdfgi_read_sky_light = true
 
-	# Godot's local volumetric fog sees the global DirectionalLight even when the
-	# planet is between the camera and the sun, which lights the night side gray.
-	# Planet shaders already provide horizon-aware atmospheric perspective.
-	environment.volumetric_fog_enabled = false
+	# Re-enabled 2026-09-11 to try porting godot-forest-demo's tuned volumetric
+	# fog. Previously forced off because Godot's local volumetric fog sees the
+	# global DirectionalLight even when the planet is between the camera and the
+	# sun, lighting the night side gray -- pending live verification at a planet
+	# terminator (low/grazing sun angle). If that bug reproduces, revert this to
+	# false and record the outcome in planning/PROBLEMS.md (P-012); planet
+	# shaders already provide horizon-aware atmospheric perspective as a fallback.
+	environment.volumetric_fog_enabled = true
+	environment.volumetric_fog_density = 0.015
+	environment.volumetric_fog_albedo = Color(0.7734375, 0.7425537, 0.703949, 1.0)
+	environment.volumetric_fog_anisotropy = 0.35
+	environment.volumetric_fog_length = 6.23
+	environment.volumetric_fog_detail_spread = 1.5157164
+	environment.volumetric_fog_ambient_inject = 0.11
+	environment.volumetric_fog_sky_affect = 0.768
+	environment.volumetric_fog_temporal_reprojection_amount = 0.951
 
 
 static func configure_studio_environment(environment: Environment, preset: int) -> void:

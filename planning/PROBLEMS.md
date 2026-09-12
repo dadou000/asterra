@@ -273,6 +273,104 @@ Status key: `OPEN` · `FIX-UNVERIFIED` (fix landed, needs confirmation) · `RESO
   at a rebase boundary to confirm the L0 offset and correlate its timing with
   the scatter floating; separately verify light-direction wiring and
   shadow-caster flags on scatter mesh/MultiMesh instances.
+- **2026-09-11 session — ported scatter shadow/LOD, wind shader, and
+  volumetric fog from the reference repo `GamesNotDeveloped/godot-forest-demo`
+  (user request: keep our planet-scale terrain generation, adopt his scatter
+  LOD/shadow technique, wind shader, and volumetric fog).** His repo's exact
+  mechanism (CPU-baked per-chunk `MultiMeshInstance3D`s with native
+  `visibility_range` billboard crossfade) does not transplant onto our
+  100%-GPU-vertex-shader-driven, one-`MultiMeshInstance3D`-per-asset
+  architecture, so the *effects* were ported instead, adapted to our system:
+  - **Symptom 3 (no shadows), finished:** the earlier fix only touched the
+    base procedural fallback batches (grass/geologic-stone/river-stone).
+    `gpu_terrain_scatter_global.gd:400`'s `_ecology_definitions()` still
+    defaulted `"shadows"` to `tier in ["major", "canopy"]` — every real-asset
+    grass/fern/shrub/moss ecology tier cast no shadow by default. Flipped to
+    default `true` for every tier. Also fixed a dead-code hardcoded
+    `SHADOW_CASTING_SETTING_OFF` in `gpu_terrain_scatter_compact.gd:158`
+    (currently-disabled `STABLE_FALLBACK_ONLY` indirect-compute path) for
+    consistency.
+  - **Wind shader upgraded**, `shaders/terrain_scatter_ecology.gdshader` and
+    `terrain_scatter_grass.gdshader`/`terrain_scatter_compact_grass.gdshader`:
+    replaced the old single-octave, texture-free `tip*tip`-gated sway (which
+    pushed only along each instance's own randomly-yawed local X, i.e. not a
+    real shared wind direction at all) with a 3-octave sway (primary + a
+    perpendicular secondary + a slow gust, ported from the reference repo's
+    `materials/tree_wind.gdshader`) applied along a genuine shared world
+    tangent-plane direction (`sg_wind_offset()` in the new shared
+    `gpu_scatter_common.gdshaderinc` helpers), with a smoothstep height gate
+    and a small trunk floor so trunks aren't perfectly rigid. Added
+    `global uniform u_global_wind_direction/speed/strength` (registered in
+    `project.godot`'s new `[shader_globals]` section) driven by a new
+    autoload `scripts/rendering/global_wind_driver.gd`, defaulting to the
+    same `(11, 0, 4.5)` m/s direction already used for cosmetic cloud/rain
+    drift (`VolumetricCloudController.WIND_METRES_PER_SECOND`,
+    `weather_fx_system.gd:249`) for visual consistency, at a hand-picked
+    oscillation speed (not that vector's literal m/s magnitude, which would
+    flicker far too fast as a sway rate).
+  - **Distance-based scatter thinning added** (the GPU-driven equivalent of
+    the reference repo's per-chunk `visible_instance_count` density LOD):
+    `sg_distance_lod_weight()` in `gpu_scatter_common.gdshaderinc` fades
+    acceptance probability out smoothly between `u_scatter_lod_start_m`/
+    `u_scatter_lod_end_m`, sourced per ecology asset from the catalog's
+    existing (previously-unused for this purpose) `max_distance_m` field
+    (65%-to-100% taper). `u_scatter_camera_pos` is pushed explicitly per
+    frame from `camera.global_position` rather than relying on Godot's
+    built-in `CAMERA_POSITION_WORLD`, since these shaders hand-build `VERTEX`
+    as an origin-relative position, not a normal object-local one. Full
+    billboard/impostor tier explicitly **deferred** — no texture-bake
+    pipeline exists, and a flat billboard would make symptom 2's floating
+    *more* visible, not less.
+  - **Volumetric fog re-enabled** (`scripts/rendering/graphics_quality.gd`
+    `configure_world_environment()`), with the reference repo's tuned
+    parameters (density 0.015, anisotropy 0.35, length 6.23, etc.). This had
+    been deliberately forced `false` with a comment warning that Godot's
+    local volumetric fog sees the sun through the planet body and lights the
+    night side gray. **Live-tested at true local night** (lat 38.27° lon
+    61.17°, hour set to well past sunset): screen stayed appropriately dark,
+    only a faint plausible ambient/starlight-level glow on nearby
+    geometry, sky stayed black with no gray haze/wash — the described
+    failure mode did **not** reproduce in this pass. Kept enabled. (Not an
+    exhaustive test — only one lat/lon and one "well past sunset" hour was
+    checked, not a full sweep across the terminator or other latitudes.)
+  - **Verification done:** `--headless --import` clean after all script/
+    shader changes. Live in `Main` (F9-loaded `phase1` save, lat 38.27°
+    lon 61.17°, Temperate forest, `sectors 5/12`): game boots and renders
+    scatter (trees, rocks, ferns/shrubs) normally with no new shader-compile
+    or script errors in the console beyond the pre-existing harmless
+    `GPU terrain clipmap cache shader is invalid` boot artifact (see the
+    P-011 entry below — a discarded base-class shader, unrelated).
+  - **Not conclusively verified visually:** wind sway and shadow contact.
+    Two screenshots ~10s apart of the same conifer tree showed no visible
+    branch-tip movement — plausibly just sub-pixel amplitude at that zoom for
+    a canopy-tier asset's small authored wind value, not necessarily a sign
+    the code path isn't running, but not proven either way. Shadow contact
+    under scatter was not clearly visible against the site's flat khaki
+    ground texture at the tested sun angles. **RECHECK:** re-verify wind on a
+    grass patch (much higher authored amplitude than trees) at close range,
+    and verify shadow contact at a site with light-colored ground and a
+    clearly grazing sun angle, ideally using the `pssm_splits` or
+    `directional_shadow_atlas` debug view (`studio_view` tool) at high zoom
+    rather than the default lit view.
+  - **Symptoms 1 and 4 (L0 ring offset; lit-side mismatch) — still not
+    fixed, but symptom 4's leading hypothesis changed.** Reading
+    `spherical_geometry_clipmap_cached_surface.gdshader`'s `void light()`
+    closely: the actual N·L shading term uses Godot's built-in `NORMAL`/
+    `LIGHT`, the same real `DirectionalLight3D` scatter's un-overridden
+    automatic lighting reads — `u_cloud_shadow_sun_dir` (pushed only to
+    ground+ocean materials by `volumetric_cloud_controller.gd`) only feeds a
+    self-shadow/cloud-shadow *occlusion* multiplier and sky-irradiance
+    emission, not the lit-side direction itself. Both ultimately derive from
+    the same `Frames.helion_dir`. This weakens "scatter and terrain disagree
+    on light direction" as the cause. Stronger candidate: terrain gets a
+    self-shadow/cloud-shadow occlusion term scatter never receives at all
+    (scatter shaders have no `light()` override) — at a grazing sun, ground
+    near a tree could visibly darken while the tree doesn't, which would look
+    exactly like a lighting mismatch without being a direction bug. Not yet
+    live-verified either way — needs a side-by-side screenshot at a grazing
+    sun angle comparing terrain's shaded boundary to a tree/shrub's lit face,
+    which this session did not conclusively capture (viewing angles used were
+    mostly backlit silhouettes, not a clean side-by-side).
 
 ### P-009 — Weather WorkerThreadPool jobs degrade frame time ~25-30x; the "fps" HUD grossly overstates it as "1"
 - **Status:** OPEN — real, modest degradation confirmed; earlier "fps collapses
