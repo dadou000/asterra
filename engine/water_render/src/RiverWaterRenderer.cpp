@@ -629,6 +629,40 @@ private:
     {
         scratchVertices_.clear();
 
+        const f64 observerRadiusMeters =
+            math::Length(
+                observer_.meters);
+
+        const f64 horizonCosine =
+            std::clamp(
+                planet_.radiusMeters /
+                    observerRadiusMeters,
+                0.0,
+                1.0);
+
+        const auto aboveHorizon =
+            [this, horizonCosine](
+                const math::Double3& worldPosition)
+            {
+                const math::Double3 direction =
+                    math::Normalize(
+                        worldPosition);
+
+                if (math::LengthSquared(
+                        direction) <=
+                    1.0e-12)
+                {
+                    return false;
+                }
+
+                return
+                    math::Dot(
+                        direction,
+                        observerFrame_.up) +
+                        0.000002 >=
+                    horizonCosine;
+            };
+
         const auto regions =
             regionCache_->
                 ReadyRegionsSnapshot();
@@ -719,7 +753,9 @@ private:
                         midpoint -
                         observer_.meters) >
                     config_.
-                        maximumDrawDistanceMeters)
+                        maximumDrawDistanceMeters ||
+                    !aboveHorizon(
+                        midpoint))
                 {
                     continue;
                 }
@@ -878,7 +914,9 @@ private:
                         centerWorld -
                         observer_.meters) >
                     config_.
-                        maximumDrawDistanceMeters)
+                        maximumDrawDistanceMeters ||
+                    !aboveHorizon(
+                        centerWorld))
                 {
                     continue;
                 }
