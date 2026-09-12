@@ -1,6 +1,7 @@
 add_library(OrbitTerrainErosion STATIC
     src/RiverCarving.cpp
     src/RiverCarvedTerrainSource.cpp
+    src/SedimentTransport.cpp
 )
 
 add_library(Orbit::TerrainErosion ALIAS OrbitTerrainErosion)
