@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 namespace orbit::terrain_region
 {
@@ -68,6 +69,15 @@ public:
 
     [[nodiscard]] bool IsPending(
         const DerivedTerrainRegionId& id) const;
+
+    using ReadyRegionList =
+        std::vector<
+            std::shared_ptr<
+                const DerivedTerrainRegion>>;
+
+    [[nodiscard]] std::shared_ptr<
+        const ReadyRegionList>
+    ReadyRegionsSnapshot() const noexcept;
 
     [[nodiscard]] u8 TileLevel() const noexcept;
     [[nodiscard]] std::size_t EntryCount() const noexcept;

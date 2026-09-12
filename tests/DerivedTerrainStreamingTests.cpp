@@ -151,6 +151,17 @@ int main()
             return 1;
         }
 
+        const auto readySnapshot =
+            cache->ReadyRegionsSnapshot();
+
+        if (!readySnapshot ||
+            readySnapshot->size() != 1)
+        {
+            std::cerr
+                << "Derived region cache did not publish its ready snapshot.\n";
+            return 1;
+        }
+
         const orbit::u64 firstContentRevision =
             cache->ContentRevision();
 

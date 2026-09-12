@@ -10,12 +10,9 @@
 #include <orbit/shader/d3d/D3DShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
-#include <orbit/terrain_erosion/HydrologyRefinement.hpp>
-#include <orbit/terrain_erosion/RegionalElevationDelta.hpp>
-#include <orbit/terrain_erosion/RiverCarvedTerrainSource.hpp>
-#include <orbit/terrain_erosion/RiverCarving.hpp>
-#include <orbit/terrain_hydrology/HydrologyGrid.hpp>
-#include <orbit/terrain_hydrology/RiverGraph.hpp>
+#include <orbit/terrain_region/DerivedRegionTerrainSource.hpp>
+#include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
+#include <orbit/terrain_region/DerivedTerrainRegionStreamer.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/world/Planet.hpp>
@@ -26,7 +23,6 @@
 #include <exception>
 #include <format>
 #include <memory>
-#include <utility>
 #include <vector>
 
 int main()
@@ -140,154 +136,48 @@ int main()
                         .detailOctaves = 8
                     });
 
-        auto initialHydrology =
-            orbit::terrain_hydrology::
-                BuildHydrologyGrid(
-                    planet,
-                    *authoritativeTerrain,
-                    initialSurfaceFrame,
-                    {
-                        .resolution = 129,
-                        .halfExtentMeters =
-                            250'000.0,
-                        .footprintMeters = 0.0,
-                        .useCoarseElevation =
-                            false,
-                        .conditionDepressions =
-                            true,
-                        .minimumDrainageDropMeters =
-                            0.25
-                    });
+        orbit::jobs::JobSystem jobSystem;
 
-        const auto hydrologyRefinement =
-            orbit::terrain_erosion::
-                RefineHydrologyWithSediment(
-                    std::move(
-                        initialHydrology),
-                    {
-                        .iterations = 2,
-                        .elevationDeltaScale =
-                            0.35
-                    });
-
-        const auto& regionalHydrology =
-            hydrologyRefinement.
-                hydrology;
-
-        auto regionalDeltaField =
-            orbit::terrain_erosion::
-                BuildRegionalElevationDeltaField(
-                    regionalHydrology,
-                    hydrologyRefinement.
-                        cumulativeElevationDeltaMeters);
-
-        std::vector<
-            orbit::terrain_erosion::
-                RegionalElevationDeltaField>
-            regionalDeltaFields;
-
-        regionalDeltaFields.push_back(
-            std::move(
-                regionalDeltaField));
-
-        const auto regionallyErodedTerrain =
+        auto regionCache =
             std::make_shared<
-                orbit::terrain_erosion::
-                    RegionalElevationDeltaTerrainSource>(
+                orbit::terrain_region::
+                    DerivedTerrainRegionCache>(
                         planet,
                         authoritativeTerrain,
-                        std::move(
-                            regionalDeltaFields),
-                        orbit::terrain_erosion::
-                            RegionalElevationDeltaConfig{
-                                .regionEdgeFadeMeters =
-                                    25'000.0,
-                                .fullDetailFootprintScale =
-                                    0.5,
-                                .fadeOutFootprintScale =
-                                    4.0
+                        jobSystem,
+                        orbit::terrain_region::
+                            DerivedTerrainRegionCacheConfig{
+                                .tileLevel = 5,
+                                .maxEntries = 12,
+                                .region = {
+                                    .generatorVersion = 1,
+                                    .overlapScale = 1.35
+                                }
                             });
 
-        const auto riverGraph =
-            orbit::terrain_hydrology::
-                BuildRiverGraph(
-                    regionalHydrology,
-                    400'000'000.0);
-
-        auto carvingField =
-            orbit::terrain_erosion::
-                BuildRiverCarvingField(
-                    regionalHydrology,
-                    riverGraph,
-                    {
-                        .referenceDrainageAreaSquareMeters =
-                            1'000'000'000.0,
-                        .baseChannelHalfWidthMeters =
-                            20.0,
-                        .minimumChannelHalfWidthMeters =
-                            5.0,
-                        .maximumChannelHalfWidthMeters =
-                            180.0,
-                        .widthExponent =
-                            0.30,
-                        .baseDepthMeters =
-                            8.0,
-                        .minimumDepthMeters =
-                            2.0,
-                        .maximumDepthMeters =
-                            80.0,
-                        .depthExponent =
-                            0.18,
-                        .valleyWidthMultiplier =
-                            8.0,
-                        .minimumBedSlope =
-                            0.00008,
-                        .maximumIncisionMeters =
-                            250.0,
-                        .spatialIndexResolution =
-                            64
-                    });
-
-        orbit::log::Info(
-            std::format(
-                "Regional terrain | hydrology {}x{} | river nodes {} segments {} | erosion index refs {} | exported sediment {:.2f}",
-                regionalHydrology.
-                    config.resolution,
-                regionalHydrology.
-                    config.resolution,
-                riverGraph.nodes.size(),
-                riverGraph.segments.size(),
-                carvingField.
-                    spatialSegmentIndices.
-                    size(),
-                hydrologyRefinement.
-                    lastSediment.
-                    exportedSediment));
-
-        std::vector<
-            orbit::terrain_erosion::
-                RiverCarvingField>
-            carvingFields;
-
-        carvingFields.push_back(
-            std::move(
-                carvingField));
-
-        const auto carvedTerrain =
+        const auto streamedTerrain =
             std::make_shared<
-                orbit::terrain_erosion::
-                    RiverCarvedTerrainSource>(
+                orbit::terrain_region::
+                    DerivedRegionTerrainSource>(
                         planet,
-                        regionallyErodedTerrain,
-                        std::move(
-                            carvingFields));
+                        authoritativeTerrain,
+                        regionCache);
 
-        orbit::jobs::JobSystem jobSystem;
+        orbit::terrain_region::
+            DerivedTerrainRegionStreamer
+                regionStreamer(
+                    planet,
+                    *regionCache,
+                    {
+                        .neighborhoodRadius = 1,
+                        .forwardPrefetchDistanceTiles =
+                            1.0
+                    });
 
         orbit::terrain_cache::CachedTerrainSource
             terrain(
                 planet,
-                carvedTerrain,
+                streamedTerrain,
                 jobSystem,
                 {
                     .pageResolution = 33,
@@ -322,6 +212,9 @@ int main()
         orbit::world::SurfaceFrame
             observerTravelFrame =
                 initialSurfaceFrame;
+
+        orbit::math::Double3
+            lastSurfaceTravelDirection{};
 
         const orbit::shader::d3d::D3DShaderCompiler
             shaderCompiler;
@@ -506,6 +399,15 @@ int main()
                         tangentMotionMeters.y !=
                         0.0)
                 {
+                    lastSurfaceTravelDirection =
+                        orbit::math::Normalize(
+                            observerTravelFrame.east *
+                                cameraUpdate.
+                                    tangentMotionMeters.x +
+                            observerTravelFrame.north *
+                                cameraUpdate.
+                                    tangentMotionMeters.y);
+
                     observerTravelFrame =
                         orbit::world::
                             SurfaceFrameAtOffset(
@@ -535,6 +437,11 @@ int main()
                 terrainPreview.UpdateObserver(
                     observer);
             }
+
+            regionStreamer.Update(
+                orbit::math::Normalize(
+                    observer.meters),
+                lastSurfaceTravelDirection);
 
             const orbit::terrain_render::
                 TerrainPreviewCamera camera{
@@ -619,10 +526,9 @@ int main()
             frameFenceValues[frameIndex] =
                 signalValue;
 
-            if (moved &&
-                currentFrameTime -
+            if (currentFrameTime -
                     previousStatsTime >=
-                    std::chrono::seconds(1))
+                std::chrono::seconds(1))
             {
                 const auto& stats =
                     terrainPreview.
@@ -634,9 +540,18 @@ int main()
                 const auto pageCacheStats =
                     terrain.PageCacheStats();
 
+                const auto regionStats =
+                    regionCache->Stats();
+
+                const auto& regionStreamStats =
+                    regionStreamer.Stats();
+
+                constexpr orbit::f64 bytesPerMiB =
+                    1024.0 * 1024.0;
+
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | generated {} samples across {} levels / {} regions | uploaded {} bytes | {} draws | cache hits {} fallback {} requests {} resident {} evictions {} rejects {}",
+                        "Terrain stream | samples {} levels {} regions {} | upload {} B | draws {} | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {}",
                         stats.
                             generatedSamplesLastUpdate,
                         stats.
@@ -647,14 +562,28 @@ int main()
                             uploadedBytesLastFrame,
                         stats.
                             drawCallsLastFrame,
-                        cacheStats.pageHits,
-                        cacheStats.
-                            directFallbackSamples,
-                        cacheStats.pageRequests,
+                        static_cast<orbit::f64>(
+                            pageCacheStats.
+                                residentBytes) /
+                            bytesPerMiB,
+                        static_cast<orbit::f64>(
+                            pageCacheStats.
+                                budgetBytes) /
+                            bytesPerMiB,
                         pageCacheStats.entries,
                         pageCacheStats.evictions,
                         pageCacheStats.
-                            capacityRejects));
+                            capacityRejects,
+                        regionStats.readyEntries,
+                        regionStats.pendingEntries,
+                        regionStreamStats.
+                            desiredRegions,
+                        regionStats.
+                            acceptedRequests,
+                        stats.
+                            revisionInvalidations,
+                        stats.
+                            staleRevisionBatches));
 
                 previousStatsTime =
                     currentFrameTime;

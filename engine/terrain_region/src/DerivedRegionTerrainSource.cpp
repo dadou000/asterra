@@ -3,13 +3,10 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/TerrainFields.hpp>
 #include <orbit/terrain_erosion/RiverCarving.hpp>
-#include <orbit/world/PlanetTileNeighborhood.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace orbit::terrain_region
 {
@@ -134,14 +131,6 @@ namespace
     return value;
 }
 
-struct RegionContribution
-{
-    std::shared_ptr<const DerivedTerrainRegion>
-        region;
-
-    math::Double2 offset{};
-    f64 weight{0.0};
-};
 } // namespace
 
 DerivedRegionTerrainSource::
@@ -199,33 +188,27 @@ DerivedRegionTerrainSource::Sample(
         return result;
     }
 
-    const DerivedTerrainRegionId owner =
-        regionCache_->IdForDirection(
-            direction);
+    const u64 sourceRevision =
+        source_->Revision();
 
-    const auto tiles =
-        world::TileNeighborhood(
-            owner.tile,
-            config_.neighborhoodRadius);
+    const auto regions =
+        regionCache_->
+            ReadyRegionsSnapshot();
 
-    std::vector<RegionContribution>
-        contributions;
-
-    contributions.reserve(
-        tiles.size());
+    if (!regions ||
+        regions->empty())
+    {
+        return result;
+    }
 
     f64 totalWeight = 0.0;
 
-    for (const world::PlanetTileId tile :
-         tiles)
+    for (const auto& region :
+         *regions)
     {
-        const DerivedTerrainRegionId id =
-            regionCache_->IdForTile(tile);
-
-        const auto region =
-            regionCache_->TryGet(id);
-
-        if (!region)
+        if (!region ||
+            region->id.sourceRevision !=
+                sourceRevision)
         {
             continue;
         }
@@ -236,27 +219,13 @@ DerivedRegionTerrainSource::Sample(
                 region->elevationDelta.surfaceFrame,
                 direction);
 
-        const f64 weight =
+        totalWeight +=
             RegionInfluence(
                 *region,
                 offset);
-
-        if (weight <= 0.0)
-        {
-            continue;
-        }
-
-        totalWeight += weight;
-
-        contributions.push_back({
-            .region = region,
-            .offset = offset,
-            .weight = weight
-        });
     }
 
-    if (contributions.empty() ||
-        totalWeight <= 0.0)
+    if (totalWeight <= 0.0)
     {
         return result;
     }
@@ -268,20 +237,42 @@ DerivedRegionTerrainSource::Sample(
     f64 carveDelta = 0.0;
     f64 wetlandInfluence = 0.0;
 
-    for (const RegionContribution& contribution :
-         contributions)
+    for (const auto& region :
+         *regions)
     {
-        const DerivedTerrainRegion& region =
-            *contribution.region;
+        if (!region ||
+            region->id.sourceRevision !=
+                sourceRevision)
+        {
+            continue;
+        }
+
+        const math::Double2 offset =
+            world::SurfaceOffsetBetweenDirections(
+                planet_,
+                region->elevationDelta.surfaceFrame,
+                direction);
+
+        const f64 regionWeight =
+            RegionInfluence(
+                *region,
+                offset);
+
+        if (regionWeight <= 0.0)
+        {
+            continue;
+        }
 
         const f64 normalizedWeight =
-            contribution.weight /
+            regionWeight /
             totalWeight;
 
         const f64 lodWeight =
             FootprintWeight(
                 query.footprintMeters,
-                region.elevationDelta.spacingMeters,
+                region->
+                    elevationDelta.
+                    spacingMeters,
                 config_);
 
         if (lodWeight <= 0.0)
@@ -290,8 +281,10 @@ DerivedRegionTerrainSource::Sample(
         }
 
         const f64 localRegionalDelta =
-            region.elevationDelta.SampleOffset(
-                contribution.offset);
+            region->
+                elevationDelta.
+                SampleOffset(
+                    offset);
 
         regionalDelta +=
             localRegionalDelta *
@@ -299,9 +292,10 @@ DerivedRegionTerrainSource::Sample(
             lodWeight;
 
         const auto carving =
-            terrain_erosion::SampleRiverCarving(
-                region.carving,
-                contribution.offset);
+            terrain_erosion::
+                SampleRiverCarving(
+                    region->carving,
+                    offset);
 
         if (!carving.active)
         {

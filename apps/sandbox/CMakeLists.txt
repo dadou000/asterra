@@ -14,6 +14,7 @@ target_link_libraries(OrbitSandbox
         Orbit::ShaderD3D
         Orbit::Terrain
         Orbit::TerrainCache
+        Orbit::TerrainRegion
         Orbit::TerrainErosion
         Orbit::TerrainHydrology
         Orbit::TerrainRender

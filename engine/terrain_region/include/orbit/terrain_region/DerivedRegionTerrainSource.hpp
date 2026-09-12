@@ -11,8 +11,6 @@ namespace orbit::terrain_region
 {
 struct DerivedRegionTerrainSourceConfig
 {
-    u32 neighborhoodRadius{1};
-
     // Relative to the regional hydrology sample spacing.
     f64 fullDetailFootprintScale{0.5};
     f64 fadeOutFootprintScale{4.0};

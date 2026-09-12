@@ -75,6 +75,11 @@ public:
             throw std::invalid_argument(
                 "Orbit derived terrain region cache generator version must be non-zero.");
         }
+
+        readySnapshot_.store(
+            std::make_shared<
+                const ReadyRegionList>(),
+            std::memory_order_release);
     }
 
     ~Impl()
@@ -237,13 +242,13 @@ public:
                                 EntryState::Ready;
                         }
 
-                        readyEntries_.fetch_add(
-                            1,
-                            std::memory_order_acq_rel);
+                        {
+                            std::scoped_lock entriesLock(
+                                entriesMutex_);
 
-                        pendingEntries_.fetch_sub(
-                            1,
-                            std::memory_order_acq_rel);
+                            PublishCountsLocked();
+                            PublishReadySnapshotLocked();
+                        }
 
                         contentRevision_.fetch_add(
                             1,
@@ -262,9 +267,12 @@ public:
                                 EntryState::Failed;
                         }
 
-                        pendingEntries_.fetch_sub(
-                            1,
-                            std::memory_order_acq_rel);
+                        {
+                            std::scoped_lock entriesLock(
+                                entriesMutex_);
+
+                            PublishCountsLocked();
+                        }
 
                         failedBuilds_.fetch_add(
                             1,
@@ -365,6 +373,14 @@ public:
         return
             entry->state ==
             EntryState::Pending;
+    }
+
+    [[nodiscard]] std::shared_ptr<
+        const ReadyRegionList>
+    ReadyRegionsSnapshot() const noexcept
+    {
+        return readySnapshot_.load(
+            std::memory_order_acquire);
     }
 
     [[nodiscard]] u8 TileLevel() const noexcept
@@ -524,9 +540,7 @@ private:
 
         if (oldestReady)
         {
-            readyEntries_.fetch_sub(
-                1,
-                std::memory_order_acq_rel);
+            PublishReadySnapshotLocked();
 
             contentRevision_.fetch_add(
                 1,
@@ -539,6 +553,40 @@ private:
 
         PublishCountsLocked();
         return true;
+    }
+
+    void PublishReadySnapshotLocked()
+    {
+        auto snapshot =
+            std::make_shared<ReadyRegionList>();
+
+        snapshot->reserve(
+            entries_.size());
+
+        for (const auto& [id, entry] :
+             entries_)
+        {
+            static_cast<void>(id);
+
+            std::scoped_lock entryLock(
+                entry->mutex);
+
+            if (entry->state ==
+                    EntryState::Ready &&
+                entry->region)
+            {
+                snapshot->push_back(
+                    entry->region);
+            }
+        }
+
+        readyEntries_.store(
+            snapshot->size(),
+            std::memory_order_release);
+
+        readySnapshot_.store(
+            std::move(snapshot),
+            std::memory_order_release);
     }
 
     void PublishCountsLocked() noexcept
@@ -589,6 +637,11 @@ private:
 
     std::atomic<std::size_t>
         readyEntries_{0};
+
+    std::atomic<
+        std::shared_ptr<
+            const ReadyRegionList>>
+        readySnapshot_{};
 
     std::atomic<std::size_t>
         pendingEntries_{0};
@@ -677,6 +730,15 @@ bool DerivedTerrainRegionCache::IsPending(
     const
 {
     return impl_->IsPending(id);
+}
+
+std::shared_ptr<
+    const DerivedTerrainRegionCache::
+        ReadyRegionList>
+DerivedTerrainRegionCache::ReadyRegionsSnapshot()
+    const noexcept
+{
+    return impl_->ReadyRegionsSnapshot();
 }
 
 u8 DerivedTerrainRegionCache::TileLevel()
