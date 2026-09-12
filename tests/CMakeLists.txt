@@ -99,3 +99,21 @@ add_test(
     NAME Orbit.ShaderCompiler
     COMMAND OrbitShaderCompilerTests
 )
+
+
+add_executable(OrbitTerrainStreamTests
+    TerrainStreamTests.cpp
+)
+
+target_link_libraries(OrbitTerrainStreamTests
+    PRIVATE
+        Orbit::TerrainStream
+)
+
+target_compile_features(OrbitTerrainStreamTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainStreamTests)
+
+add_test(
+    NAME Orbit.TerrainStream
+    COMMAND OrbitTerrainStreamTests
+)
