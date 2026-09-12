@@ -14,9 +14,41 @@ namespace orbit::platform
 {
 namespace
 {
-constexpr const char* kWindowClassName = "OrbitWindowClass";
+constexpr const char* kWindowClassName =
+    "OrbitWindowClass";
 
-LRESULT CALLBACK OrbitWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+[[nodiscard]] int ToVirtualKey(
+    const Key key)
+{
+    switch (key)
+    {
+    case Key::W:
+        return 'W';
+    case Key::A:
+        return 'A';
+    case Key::S:
+        return 'S';
+    case Key::D:
+        return 'D';
+    case Key::Q:
+        return 'Q';
+    case Key::E:
+        return 'E';
+    case Key::LeftShift:
+        return VK_LSHIFT;
+    case Key::Escape:
+        return VK_ESCAPE;
+    }
+
+    throw std::invalid_argument(
+        "Orbit received an invalid platform key.");
+}
+
+LRESULT CALLBACK OrbitWindowProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
 {
     switch (message)
     {
@@ -29,34 +61,53 @@ LRESULT CALLBACK OrbitWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
         return 0;
 
     default:
-        return DefWindowProcA(hwnd, message, wParam, lParam);
+        return DefWindowProcA(
+            hwnd,
+            message,
+            wParam,
+            lParam);
     }
 }
 
 void EnsureWindowClassRegistered()
 {
     static std::once_flag once;
-    std::call_once(once, []
-    {
-        WNDCLASSEXA windowClass{};
-        windowClass.cbSize = sizeof(windowClass);
-        windowClass.style = CS_HREDRAW | CS_VREDRAW;
-        windowClass.lpfnWndProc = OrbitWindowProc;
-        windowClass.hInstance = GetModuleHandleA(nullptr);
-        windowClass.hCursor = LoadCursorA(nullptr, IDC_ARROW);
-        windowClass.lpszClassName = kWindowClassName;
 
-        if (RegisterClassExA(&windowClass) == 0)
+    std::call_once(
+        once,
+        []
         {
-            throw std::runtime_error("Orbit failed to register the Win32 window class.");
-        }
-    });
+            WNDCLASSEXA windowClass{};
+            windowClass.cbSize =
+                sizeof(windowClass);
+            windowClass.style =
+                CS_HREDRAW |
+                CS_VREDRAW;
+            windowClass.lpfnWndProc =
+                OrbitWindowProc;
+            windowClass.hInstance =
+                GetModuleHandleA(nullptr);
+            windowClass.hCursor =
+                LoadCursorA(
+                    nullptr,
+                    IDC_ARROW);
+            windowClass.lpszClassName =
+                kWindowClassName;
+
+            if (RegisterClassExA(
+                    &windowClass) == 0)
+            {
+                throw std::runtime_error(
+                    "Orbit failed to register the Win32 window class.");
+            }
+        });
 }
 
 class Win32Window final : public Window
 {
 public:
-    explicit Win32Window(const WindowDesc& desc)
+    explicit Win32Window(
+        const WindowDesc& desc)
         : width_(desc.width),
           height_(desc.height)
     {
@@ -72,9 +123,14 @@ public:
             static_cast<LONG>(height_)
         };
 
-        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+        AdjustWindowRect(
+            &rect,
+            WS_OVERLAPPEDWINDOW,
+            FALSE);
 
-        const std::string title(desc.title);
+        const std::string title(
+            desc.title);
+
         hwnd_ = CreateWindowExA(
             0,
             kWindowClassName,
@@ -87,22 +143,28 @@ public:
             nullptr,
             nullptr,
             GetModuleHandleA(nullptr),
-            nullptr
-        );
+            nullptr);
 
         if (hwnd_ == nullptr)
         {
-            throw std::runtime_error("Orbit failed to create a Win32 window.");
+            throw std::runtime_error(
+                "Orbit failed to create a Win32 window.");
         }
 
-        ShowWindow(hwnd_, SW_SHOW);
+        ShowWindow(
+            hwnd_,
+            SW_SHOW);
+
         UpdateWindow(hwnd_);
-        log::Info("Win32 window created.");
+
+        log::Info(
+            "Win32 window created.");
     }
 
     ~Win32Window() override
     {
-        if (hwnd_ != nullptr && IsWindow(hwnd_) != FALSE)
+        if (hwnd_ != nullptr &&
+            IsWindow(hwnd_) != FALSE)
         {
             DestroyWindow(hwnd_);
         }
@@ -112,31 +174,58 @@ public:
     {
         MSG message{};
 
-        while (PeekMessageA(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
+        while (PeekMessageA(
+                   &message,
+                   nullptr,
+                   0,
+                   0,
+                   PM_REMOVE) != FALSE)
         {
-            if (message.message == WM_QUIT)
+            if (message.message ==
+                WM_QUIT)
             {
                 return false;
             }
 
-            TranslateMessage(&message);
-            DispatchMessageA(&message);
+            TranslateMessage(
+                &message);
+
+            DispatchMessageA(
+                &message);
         }
 
         return true;
     }
 
-    [[nodiscard]] void* NativeHandle() const override
+    [[nodiscard]] bool KeyDown(
+        const Key key) const override
+    {
+        if (GetForegroundWindow() !=
+            hwnd_)
+        {
+            return false;
+        }
+
+        return (
+            GetAsyncKeyState(
+                ToVirtualKey(key)) &
+            0x8000) != 0;
+    }
+
+    [[nodiscard]] void*
+    NativeHandle() const override
     {
         return hwnd_;
     }
 
-    [[nodiscard]] u32 Width() const override
+    [[nodiscard]] u32
+    Width() const override
     {
         return width_;
     }
 
-    [[nodiscard]] u32 Height() const override
+    [[nodiscard]] u32
+    Height() const override
     {
         return height_;
     }
@@ -148,8 +237,10 @@ private:
 };
 } // namespace
 
-std::unique_ptr<Window> MakeWindow(const WindowDesc& desc)
+std::unique_ptr<Window> MakeWindow(
+    const WindowDesc& desc)
 {
-    return std::make_unique<Win32Window>(desc);
+    return std::make_unique<
+        Win32Window>(desc);
 }
 } // namespace orbit::platform

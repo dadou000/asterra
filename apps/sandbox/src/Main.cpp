@@ -7,6 +7,9 @@
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <exception>
 #include <format>
 #include <memory>
@@ -95,10 +98,10 @@ int main()
                 0.68
             });
 
-        const orbit::world::WorldPosition observer{
+        orbit::world::WorldPosition observer{
             .meters =
                 observerDirection *
-                (planet.radiusMeters + 3'500.0)
+                (planet.radiusMeters + 8'000.0)
         };
 
         const orbit::shader::d3d::D3DShaderCompiler
@@ -155,8 +158,157 @@ int main()
 
         orbit::u64 nextFenceValue = 1;
 
+        using FrameClock =
+            std::chrono::steady_clock;
+
+        auto previousFrameTime =
+            FrameClock::now();
+
         while (window->PumpEvents())
         {
+            const auto currentFrameTime =
+                FrameClock::now();
+
+            const orbit::f64 deltaSeconds =
+                std::clamp(
+                    std::chrono::duration<
+                        orbit::f64>(
+                            currentFrameTime -
+                            previousFrameTime)
+                        .count(),
+                    0.0,
+                    0.05);
+
+            previousFrameTime =
+                currentFrameTime;
+
+            if (window->KeyDown(
+                    orbit::platform::Key::Escape))
+            {
+                break;
+            }
+
+            orbit::f64 eastInput = 0.0;
+            orbit::f64 northInput = 0.0;
+            orbit::f64 altitudeInput = 0.0;
+
+            if (window->KeyDown(
+                    orbit::platform::Key::D))
+            {
+                eastInput += 1.0;
+            }
+
+            if (window->KeyDown(
+                    orbit::platform::Key::A))
+            {
+                eastInput -= 1.0;
+            }
+
+            if (window->KeyDown(
+                    orbit::platform::Key::W))
+            {
+                northInput += 1.0;
+            }
+
+            if (window->KeyDown(
+                    orbit::platform::Key::S))
+            {
+                northInput -= 1.0;
+            }
+
+            if (window->KeyDown(
+                    orbit::platform::Key::E))
+            {
+                altitudeInput += 1.0;
+            }
+
+            if (window->KeyDown(
+                    orbit::platform::Key::Q))
+            {
+                altitudeInput -= 1.0;
+            }
+
+            const orbit::f64 planarLength =
+                std::sqrt(
+                    eastInput * eastInput +
+                    northInput * northInput);
+
+            if (planarLength > 1.0)
+            {
+                eastInput /= planarLength;
+                northInput /= planarLength;
+            }
+
+            const bool accelerated =
+                window->KeyDown(
+                    orbit::platform::Key::LeftShift);
+
+            const orbit::f64 surfaceSpeed =
+                accelerated
+                    ? 4'000.0
+                    : 400.0;
+
+            const orbit::f64 verticalSpeed =
+                accelerated
+                    ? 2'000.0
+                    : 200.0;
+
+            const bool moved =
+                eastInput != 0.0 ||
+                northInput != 0.0 ||
+                altitudeInput != 0.0;
+
+            if (moved)
+            {
+                const orbit::f64 radius =
+                    orbit::math::Length(
+                        observer.meters);
+
+                orbit::math::Double3 direction =
+                    orbit::math::Normalize(
+                        observer.meters);
+
+                if (eastInput != 0.0 ||
+                    northInput != 0.0)
+                {
+                    const orbit::world::SurfaceFrame
+                        frame =
+                            orbit::world::MakeSurfaceFrame(
+                                direction);
+
+                    direction =
+                        orbit::world::DirectionAtSurfaceOffset(
+                            planet,
+                            frame,
+                            {
+                                eastInput *
+                                    surfaceSpeed *
+                                    deltaSeconds,
+                                northInput *
+                                    surfaceSpeed *
+                                    deltaSeconds
+                            });
+                }
+
+                const orbit::f64 altitude =
+                    std::clamp(
+                        radius -
+                            planet.radiusMeters +
+                            altitudeInput *
+                                verticalSpeed *
+                                deltaSeconds,
+                        250.0,
+                        100'000.0);
+
+                observer.meters =
+                    direction *
+                    (planet.radiusMeters +
+                     altitude);
+
+                terrainPreview.UpdateObserver(
+                    observer);
+            }
+
             const orbit::u32 frameIndex =
                 swapchain->CurrentBackBufferIndex();
 

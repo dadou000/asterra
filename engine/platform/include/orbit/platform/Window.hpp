@@ -7,6 +7,18 @@
 
 namespace orbit::platform
 {
+enum class Key : u8
+{
+    W,
+    A,
+    S,
+    D,
+    Q,
+    E,
+    LeftShift,
+    Escape
+};
+
 struct WindowDesc
 {
     std::string_view title{"Orbit"};
@@ -23,6 +35,10 @@ public:
     Window& operator=(const Window&) = delete;
 
     virtual bool PumpEvents() = 0;
+
+    [[nodiscard]] virtual bool KeyDown(
+        Key key) const = 0;
+
     [[nodiscard]] virtual void* NativeHandle() const = 0;
     [[nodiscard]] virtual u32 Width() const = 0;
     [[nodiscard]] virtual u32 Height() const = 0;
@@ -31,5 +47,6 @@ protected:
     Window() = default;
 };
 
-[[nodiscard]] std::unique_ptr<Window> MakeWindow(const WindowDesc& desc);
+[[nodiscard]] std::unique_ptr<Window> MakeWindow(
+    const WindowDesc& desc);
 } // namespace orbit::platform
