@@ -71,6 +71,10 @@ struct SurfaceFrame
     const PlanetDefinition& planet,
     const PlanetTileId& tile) noexcept;
 
+[[nodiscard]] f64 HorizonArcDistanceMeters(
+    f64 sphereRadiusMeters,
+    f64 observerRadiusMeters) noexcept;
+
 [[nodiscard]] SurfaceFrame MakeSurfaceFrame(
     const math::Double3& upDirection) noexcept;
 
