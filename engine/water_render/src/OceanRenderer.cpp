@@ -36,6 +36,43 @@ void UploadBuffer(
     buffer.Unmap();
 }
 
+[[nodiscard]] f64 EffectiveOceanRadiusMeters(
+    const world::PlanetDefinition& planet,
+    const world::WorldPosition& observer,
+    const OceanRendererConfig& config) noexcept
+{
+    const f64 seaRadius =
+        planet.radiusMeters +
+        config.seaLevelMeters;
+
+    const f64 observerRadius =
+        math::Length(
+            observer.meters);
+
+    if (seaRadius <= 0.0 ||
+        observerRadius <= seaRadius)
+    {
+        return config.minimumRadiusMeters;
+    }
+
+    const f64 cosine =
+        std::clamp(
+            seaRadius /
+                observerRadius,
+            0.0,
+            1.0);
+
+    const f64 horizonArcMeters =
+        seaRadius *
+        std::acos(cosine);
+
+    return std::clamp(
+        horizonArcMeters *
+            config.horizonOverscan,
+        config.minimumRadiusMeters,
+        config.maximumRadiusMeters);
+}
+
 [[nodiscard]] std::array<u32, 40>
 BuildConstants(
     const math::Mat4& matrix,
@@ -43,6 +80,7 @@ BuildConstants(
     const world::WorldPosition& observer,
     const world::SurfaceFrame& observerFrame,
     const OceanRendererConfig& config,
+    const f64 maximumRadiusMeters,
     const f32 timeSeconds) noexcept
 {
     std::array<u32, 40> result{};
@@ -100,7 +138,7 @@ BuildConstants(
     store(
         22,
         static_cast<f32>(
-            config.maximumRadiusMeters));
+            maximumRadiusMeters));
 
     store(
         23,
@@ -528,6 +566,9 @@ public:
             config_.maximumRadiusMeters >=
                 planet_.radiusMeters *
                     3.14159265358979323846 ||
+            !std::isfinite(
+                config_.horizonOverscan) ||
+            config_.horizonOverscan < 1.0 ||
             config_.waveAmplitudeScale < 0.0F ||
             config_.nearPlaneMeters <= 0.0F ||
             config_.farPlaneMeters <=
@@ -667,6 +708,15 @@ public:
                 startTime_).
                 count();
 
+        const f64 effectiveRadiusMeters =
+            EffectiveOceanRadiusMeters(
+                planet_,
+                observer_,
+                config_);
+
+        stats_.effectiveRadiusMeters =
+            effectiveRadiusMeters;
+
         const auto constants =
             BuildConstants(
                 math::Multiply(
@@ -676,6 +726,7 @@ public:
                 observer_,
                 observerFrame_,
                 config_,
+                effectiveRadiusMeters,
                 timeSeconds);
 
         commandList.SetRenderTargets(
