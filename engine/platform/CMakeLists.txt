@@ -12,6 +12,8 @@ target_include_directories(OrbitPlatform
 target_link_libraries(OrbitPlatform
     PUBLIC
         Orbit::Core
+    PRIVATE
+        user32
 )
 
 target_compile_features(OrbitPlatform PUBLIC cxx_std_23)
