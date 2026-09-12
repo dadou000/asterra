@@ -10,6 +10,30 @@ The first milestone establishes a strict modular engine layout, a native Windows
 
 ## Build
 
+### One-click Windows build
+
+Double-click `build_orbit.bat` from the repository root.
+
+It configures CMake, builds `OrbitLauncher` + `OrbitSandbox`, and packages the runnable build into:
+
+```text
+dist/Orbit-Windows-Release/
+├── OrbitLauncher.exe
+├── OrbitSandbox.exe
+└── symbols/
+```
+
+Useful command-line options:
+
+```bat
+build_orbit.bat run
+build_orbit.bat debug run
+build_orbit.bat rebuild
+build_orbit.bat release nopause
+```
+
+### Manual build
+
 Requirements:
 
 - Windows 10/11
