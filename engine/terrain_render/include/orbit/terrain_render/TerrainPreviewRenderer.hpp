@@ -27,6 +27,7 @@ struct TerrainPreviewConfig
     f32 nearPlaneMeters{10.0F};
     f32 farPlaneMeters{250'000.0F};
     bool wireframe{false};
+    u32 framesInFlight{3};
 };
 
 class TerrainPreviewRenderer
@@ -56,6 +57,7 @@ public:
 
     void Draw(
         rhi::CommandList& commandList,
+        u32 frameIndex,
         u32 targetWidth,
         u32 targetHeight);
 

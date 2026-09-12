@@ -10,6 +10,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -564,6 +565,12 @@ public:
                 "Orbit terrain preview observer must be above the planet surface.");
         }
 
+        if (config_.framesInFlight == 0)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain preview requires at least one frame in flight.");
+        }
+
         CreateSharedTopology();
         CreateLevelBuffers();
         CreatePipeline(
@@ -616,9 +623,17 @@ public:
 
     void Draw(
         rhi::CommandList& commandList,
+        const u32 frameIndex,
         const u32 targetWidth,
         const u32 targetHeight)
     {
+        if (frameIndex >=
+            config_.framesInFlight)
+        {
+            throw std::out_of_range(
+                "Orbit terrain frame index exceeds configured frames in flight.");
+        }
+
         if (targetWidth == 0 ||
             targetHeight == 0)
         {
@@ -686,6 +701,10 @@ public:
                     levels_.size());
              ++levelIndex)
         {
+            PrepareLevelFrame(
+                levelIndex,
+                frameIndex);
+
             const terrain_view::ClipmapLevel&
                 level =
                     layout_.levels[
@@ -724,7 +743,8 @@ public:
                 SetGraphicsBuffer(
                     0,
                     *levels_[levelIndex].
-                        heightBuffer);
+                        frameHeightBuffers[
+                            frameIndex]);
 
             if (levelIndex == 0)
             {
@@ -795,10 +815,25 @@ public:
     }
 
 private:
+    struct DirtyUpdate
+    {
+        u64 serial{0};
+        std::vector<
+            terrain_stream::PhysicalRegion>
+            regions;
+    };
+
     struct LevelGpuState
     {
-        std::unique_ptr<rhi::Buffer>
-            heightBuffer;
+        std::vector<f32> cpuHeights;
+
+        std::vector<
+            std::unique_ptr<rhi::Buffer>>
+            frameHeightBuffers;
+
+        std::vector<u64> frameSerials;
+        std::deque<DirtyUpdate> dirtyUpdates;
+        u64 currentSerial{0};
     };
 
     void CreateSharedTopology()
@@ -894,19 +929,36 @@ private:
         for (LevelGpuState& level :
              levels_)
         {
-            level.heightBuffer =
-                device_.CreateBuffer({
-                    .sizeBytes = bytes,
-                    .usage =
-                        rhi::BufferUsage::
-                            Structured,
-                    .memory =
-                        rhi::MemoryUsage::
-                            HostVisible,
-                    .initialState =
-                        rhi::ResourceState::
-                            ShaderResource
-                });
+            level.cpuHeights.resize(
+                static_cast<std::size_t>(
+                    sampleCount));
+
+            level.frameSerials.assign(
+                config_.framesInFlight,
+                0);
+
+            level.frameHeightBuffers.reserve(
+                config_.framesInFlight);
+
+            for (u32 frameIndex = 0;
+                 frameIndex <
+                    config_.framesInFlight;
+                 ++frameIndex)
+            {
+                level.frameHeightBuffers.push_back(
+                    device_.CreateBuffer({
+                        .sizeBytes = bytes,
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                HostVisible,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource
+                    }));
+            }
         }
     }
 
@@ -1015,16 +1067,11 @@ private:
                 resolution - 1U) *
             0.5;
 
-        rhi::Buffer& buffer =
-            *levels_[levelIndex].
-                heightBuffer;
+        LevelGpuState& state =
+            levels_[levelIndex];
 
-        std::byte* mapped =
-            buffer.Map();
-
-        auto* heights =
-            reinterpret_cast<f32*>(
-                mapped);
+        std::vector<f32>& heights =
+            state.cpuHeights;
 
         for (const terrain_stream::
                  PhysicalRegion& region :
@@ -1075,7 +1122,8 @@ private:
                         };
 
                     heights[
-                        physicalY *
+                        static_cast<std::size_t>(
+                            physicalY) *
                             resolution +
                         physicalX] =
                             SampleElevation(
@@ -1090,7 +1138,108 @@ private:
             }
         }
 
+        ++state.currentSerial;
+
+        state.dirtyUpdates.push_back({
+            .serial = state.currentSerial,
+            .regions = update.refreshRegions
+        });
+    }
+
+    void PrepareLevelFrame(
+        const u32 levelIndex,
+        const u32 frameIndex)
+    {
+        LevelGpuState& state =
+            levels_[levelIndex];
+
+        u64& frameSerial =
+            state.frameSerials[
+                frameIndex];
+
+        if (frameSerial ==
+            state.currentSerial)
+        {
+            return;
+        }
+
+        rhi::Buffer& buffer =
+            *state.frameHeightBuffers[
+                frameIndex];
+
+        std::byte* mapped =
+            buffer.Map();
+
+        auto* destination =
+            reinterpret_cast<f32*>(
+                mapped);
+
+        const u32 resolution =
+            config_.clipmap.
+                gridResolution;
+
+        for (const DirtyUpdate& update :
+             state.dirtyUpdates)
+        {
+            if (update.serial <=
+                frameSerial)
+            {
+                continue;
+            }
+
+            for (const terrain_stream::
+                     PhysicalRegion& region :
+                 update.regions)
+            {
+                for (u32 row = 0;
+                     row < region.height;
+                     ++row)
+                {
+                    const std::size_t offset =
+                        static_cast<std::size_t>(
+                            region.y + row) *
+                            resolution +
+                        region.x;
+
+                    std::memcpy(
+                        destination + offset,
+                        state.cpuHeights.data() +
+                            offset,
+                        static_cast<std::size_t>(
+                            region.width) *
+                            sizeof(f32));
+                }
+            }
+        }
+
         buffer.Unmap();
+
+        frameSerial =
+            state.currentSerial;
+
+        PruneDirtyHistory(state);
+    }
+
+    static void PruneDirtyHistory(
+        LevelGpuState& state)
+    {
+        if (state.frameSerials.empty())
+        {
+            return;
+        }
+
+        const u64 minimumAppliedSerial =
+            *std::min_element(
+                state.frameSerials.begin(),
+                state.frameSerials.end());
+
+        while (!state.dirtyUpdates.empty() &&
+               state.dirtyUpdates.front().
+                   serial <=
+                   minimumAppliedSerial)
+        {
+            state.dirtyUpdates.pop_front();
+        }
     }
 
     rhi::Device& device_;
@@ -1170,11 +1319,13 @@ void TerrainPreviewRenderer::UpdateObserver(
 
 void TerrainPreviewRenderer::Draw(
     rhi::CommandList& commandList,
+    const u32 frameIndex,
     const u32 targetWidth,
     const u32 targetHeight)
 {
     impl_->Draw(
         commandList,
+        frameIndex,
         targetWidth,
         targetHeight);
 }

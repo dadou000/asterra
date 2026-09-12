@@ -104,13 +104,20 @@ int main()
         const orbit::shader::d3d::D3DShaderCompiler
             shaderCompiler;
 
+        orbit::terrain_render::TerrainPreviewConfig
+            terrainPreviewConfig{};
+
+        terrainPreviewConfig.framesInFlight =
+            swapchain->BufferCount();
+
         orbit::terrain_render::TerrainPreviewRenderer
             terrainPreview(
                 *device,
                 shaderCompiler,
                 planet,
                 terrain,
-                observer);
+                observer,
+                terrainPreviewConfig);
 
         orbit::log::Info(std::format(
             "Terrain preview: {} vertices, {} indices",
@@ -194,6 +201,7 @@ int main()
 
             terrainPreview.Draw(
                 *commandList,
+                frameIndex,
                 swapchain->Width(),
                 swapchain->Height());
 
