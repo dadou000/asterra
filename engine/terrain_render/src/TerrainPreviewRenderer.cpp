@@ -1511,18 +1511,20 @@ private:
         const world::WorldPosition& observer,
         const u32 currentTier) const
     {
-        const f64 altitudeMeters =
-            std::max(
-                0.0,
-                math::Length(
-                    observer.meters) -
-                    planet_.radiusMeters);
+        const f64 observerRadiusMeters =
+            math::Length(
+                observer.meters);
+
+        const f64 horizonArcMeters =
+            world::HorizonArcDistanceMeters(
+                planet_.radiusMeters,
+                observerRadiusMeters);
 
         return terrain_view::
-            SelectAdaptiveClipmapTier(
+            SelectAdaptiveClipmapTierForHalfExtent(
                 baseClipmapConfig_,
                 config_.adaptiveCoverage,
-                altitudeMeters,
+                horizonArcMeters,
                 currentTier);
     }
 
