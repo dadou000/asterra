@@ -21,10 +21,14 @@ extends "res://scripts/terrain/spherical_geometry_clipmap_procedural.gd"
 const RING_LABEL_REFRESH_S: float = 0.12
 const RING_LABEL_AZIMUTH_RAD: float = -0.20
 
-# Same screen-space budget used when GRID_CELLS=400 was selected. If the finest
-# active spacing is <=8 px at the nearest local surface, its 2x parent is <=16 px.
-const TARGET_FINE_VERTEX_PX: float = 8.0
-const TARGET_PARENT_VERTEX_PX: float = 16.0
+# Same screen-space budget used when GRID_CELLS=400 was selected, loosened from
+# the original 8/16 px pair (perf pass, 2026-09-12): the extra ~1.4x triangle-edge
+# tolerance drops the innermost, most expensive active ring one level sooner at a
+# given altitude with no change to generation, materials or any other terrain
+# system -- only how many concentric LOD rings the renderer keeps resident. See
+# planning/PROBLEMS.md P-013.
+const TARGET_FINE_VERTEX_PX: float = 11.0
+const TARGET_PARENT_VERTEX_PX: float = 22.0
 # Do not let small height/noise errors make the renderer discard fine geometry
 # while skimming mountains. This is only relevant close to the surface; in orbit
 # it is negligible compared with observer distance.

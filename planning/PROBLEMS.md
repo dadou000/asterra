@@ -11,6 +11,200 @@ Status key: `OPEN` · `FIX-UNVERIFIED` (fix landed, needs confirmation) · `RESO
 
 ## Open
 
+### P-014 — Scatter instances (rocks, trees, grass) render essentially unlit/black against bright sunlit terrain
+- **Status:** OPEN, not yet investigated this pass.
+- **Found:** 2026-09-12, user screenshot from live gameplay (`Main`, FLY mode,
+  seed 4707684752384786688, lat 30.50° lon 49.09°, alt 12.6 m / AGL 9.0 m,
+  Sandstone geology, `BIOME Temperate forest`, `GPU scatter global 2048²×6
+  STABLE FALLBACK`, `terrain cache BOUND`).
+- **What:** A nearby conifer sapling, a grass/fern clump, and a cluster of
+  geologic-stone rocks all render as near-black silhouettes with essentially
+  no visible lit face, while the sandy ground right next to them is fully
+  bright/sunlit. This reads as more severe than a subtle direction mismatch —
+  the scatter geometry looks like it is receiving little to no direct
+  lighting at all, not just a differently-angled highlight.
+- **Likely related to P-012 symptom 4** ("scatter's lit side not aligned with
+  light source") below, which already has an open investigation trail
+  (terrain's self-shadow/cloud-shadow occlusion term vs. scatter's plain
+  built-in `NORMAL`/`LIGHT` shading, both ultimately sourced from
+  `Frames.helion_dir`) — but logged as its own entry since this screenshot
+  shows near-total unlit blackness rather than the grazing-angle darkening
+  P-012 hypothesized, so the two may not turn out to be the same bug.
+- **RECHECK / next step:** side-by-side screenshot comparing a scatter
+  instance's shaded face to adjacent terrain at the same sun angle; check
+  whether scatter materials receive `LIGHT`/`ATTENUATION` at all in this
+  scene (vs. e.g. an ambient-only or occluded path), and whether this
+  correlates with `STABLE FALLBACK` / the recently-touched scatter shaders
+  (`shaders/gpu_scatter_common.gdshaderinc`, `terrain_scatter_ecology.gdshader`,
+  `terrain_scatter_grass.gdshader`, `terrain_scatter_compact_grass.gdshader` —
+  all currently uncommitted WIP on this branch).
+
+### P-013 — Live gameplay frame rate needs a dedicated optimization/profiling pass
+- **Status:** OPEN. One safe, verified fix landed (`TARGET_FINE_VERTEX_PX`).
+  Deep investigation this session closed out the other candidate levers
+  (near-field LOD guard, horizon-cap margin, outer-ring occlusion) as either
+  not applicable or not safely fixable without a larger, separately-scoped
+  change — see the dated findings below. No further safe lever identified
+  for the specific 9-50 m AGL scenario; next step is real GPU/CPU profiling
+  (see RECHECK) rather than more constant-tuning guesses.
+- **Found:** 2026-09-12, user report while flying low over terrain in `Main`
+  (same session/screenshot as P-014): HUD read `fps 35` at that moment, and
+  the user's expectation is that this is well below what the scene should
+  cost. Not yet correlated with a specific subsystem.
+- **What:** General ask for an extensive optimization pass on live gameplay
+  frame rate — not a specific regression pinpointed yet, just "should not be
+  this slow."
+- **Context already on file:** the HUD in the reported screenshot also shows
+  `GPU scatter global 2048²×6 STABLE FALLBACK` (the GPU-compute scatter
+  classification path is permanently disabled project-wide per
+  `gpu_terrain_scatter_global.gd:12`'s `STABLE_FALLBACK_ONLY := true`, see
+  P-012) and `GPU height PENDING async` patterns noted elsewhere in this file
+  (P-008) — both plausible contributors but neither confirmed as the cause of
+  a general fps complaint.
+- **2026-09-12, deep pass — methodology and findings:** used `studio_perf`
+  (rolling fps/frame-time + subsystem counters) to A/B real numbers rather
+  than guess. Ruled out several things before finding a real, safe win:
+  - **The weather system P-009 describes no longer exists.** `weather_system.gd`
+    was already rewritten on this branch's uncommitted WIP (827-line diff) to
+    a pure-GDScript procedural-noise model with no native backend, no
+    simulation backlog, and `WorkerThreadPool` usage that only ever calls
+    `wait_for_task_completion` after confirming `is_task_completed` (a
+    non-blocking formality, not a stall). P-009's native-backend/backlog
+    mechanism is stale; do not chase it further under the current code.
+  - **`studio_perf`'s `cpu.process_ms` (`Performance.TIME_PROCESS`) is not
+    trustworthy as a per-frame signal in this build.** It read ~60.2 ms
+    across four samples taken seconds apart at wildly different camera
+    altitudes/primitive counts (892k to 8.26M primitives), sometimes
+    *exceeding* the same sample's own `fps.frame_ms_avg` (60.2 ms "process"
+    inside a 32 ms average frame is not physically possible for a real
+    per-frame cost). Use `fps.frame_ms_avg`/`fps.one_percent_low` and the
+    `render`/`subsystems` counters instead; do not spend further time trying
+    to attribute cost using `process_ms`.
+  - **Geometry load genuinely correlates with frame time at cruise altitude,
+    confirmed by real A/B data, not just toggling systems off:** at
+    `lod_surface_distance_m` (screen-space LOD system's distance-above-local-
+    terrain input) ≈ 20 km, only 3 of the normal 9 clipmap rings were active
+    and primitives dropped to 892k — frame time was the best of any sample
+    taken (32 ms avg). At the two ground-level samples (9 rings active, 8.1-
+    8.3M primitives), frame time was worst (38-70 ms avg, worse still right
+    after a fresh teleport while the terrain cache was cold). This is an
+    independent confirmation, from a completely different angle (varying
+    real LOD state via altitude rather than disabling render toggles), of
+    the same conclusion P-009's RECHECK reached before: geometry/rendering
+    cost is real and altitude-dependent, it just doesn't explain a *flat*
+    cost — it explains the cruise-altitude case specifically.
+  - **Fix landed, verified safe:** `TARGET_FINE_VERTEX_PX` /
+    `TARGET_PARENT_VERTEX_PX` in `scripts/terrain/
+    spherical_geometry_clipmap_procedural_safe.gd` (8.0/16.0 → 11.0/22.0) —
+    the screen-space triangle-edge budget that decides how many of the
+    innermost, most expensive clipmap rings stay resident at a given
+    distance from the local terrain surface. This is a pure LOD threshold:
+    same generation, same materials, same physics, same GRID_CELLS=400 mesh
+    topology — only how many concentric rings the renderer keeps resident
+    changes, and only above ~220 m AGL (see next finding for why). Verified
+    live: identical screenshot at ground level (expected — see below), and
+    at the 20 km-surface-distance test point the active ring count dropped
+    from what 8.0 would have kept resident, with no visible popping in the
+    one altitude tested. **Not yet swept across a full climb from 0-orbit to
+    confirm no LOD popping becomes visible at some intermediate altitude —
+    RECHECK with a slow ascent + screenshots every few hundred metres before
+    considering this fully verified.**
+  - **CORRECTION (same day, later in this pass): the guard analysis above
+    named the wrong file/value and its conclusion was wrong.** The class
+    actually driving the live `GroundGeometryClipmap` autoload is
+    `spherical_geometry_clipmap_phase31.gd` (confirmed by tracing the real
+    `extends` chain: `phase31 → phase30 → phase29 → cache_contract_phase42 →
+    blankaware → authoritative → occlusion → horizon_safe → cached → micro →
+    global_gpu → global → procedural_safe → procedural → fast →` base
+    `spherical_geometry_clipmap.gd` — the `TARGET_FINE_VERTEX_PX` fix above
+    is still correctly in this chain via `procedural_safe.gd`, but the
+    near-field guard is overridden further down in `phase31.gd`). Its
+    `_current_displacement_guard_m()` does not return the flat 220 m — it
+    returns `max(LOD_SURFACE_GUARD_M, total_max_abs_m)`, where
+    `total_max_abs_m` is the **authored terrain's global max displacement
+    envelope** (533.4 m in this world, i.e. `terrain_displacement_guard_m` in
+    `studio_perf`). Redoing the crossover-distance math with the *real* guard
+    value: even fully zeroing the guard would need true AGL ≳103 m before
+    `active_min_level` could rise past 0 at `TARGET_FINE_VERTEX_PX=11` (vs.
+    the ≈45-140 m range assumed above using the wrong 220 m figure) — so at
+    the user's actual reported 9-50 m AGL, the innermost ring staying at
+    level 0 is **correct, necessary behavior** (you want full detail directly
+    under a low-flying camera), not a bug, and this guard is not a fruitful
+    lever at all. Retracting the previous claim that it's "very likely why
+    the user sees poor fps."
+  - **The real mechanism for the 9-ring-resident-near-ground cost, and why
+    it's not safely fixable within this session's budget:** `_visible_cap_arc_m`
+    (`_update_visible_cap()`, same file) = true curvature horizon distance
+    (correctly small at low altitude, ~10 km at 50 m AGL) + a flat 20 km
+    production margin (`HORIZON_MARGIN_M`, traced to the shared base
+    `spherical_geometry_clipmap.gd`) + `relief_horizon_reach = sqrt(2·R·guard)`
+    (≈32.7 km using the same 533.4 m global envelope above). That sum (~63 km)
+    matches the observed `visible_cap_km` (57-64 km) closely. **Ring count
+    only drops at power-of-2 coverage thresholds** (150 m × 2^level — level 9
+    covers 76.8 km, level 8 covers 38.4 km), so trimming `HORIZON_MARGIN_M`
+    alone (worth ≤20 km) cannot cross the 66→38.4 km threshold needed to drop
+    even one ring — **verified this would be a real code change with zero
+    measurable effect, and was not shipped.** Only the ~32.7 km
+    `relief_horizon_reach` term is large enough to matter, but it is
+    deliberately sized off the *global* worst-case authored terrain height
+    everywhere, and making it local safely would require sampling real
+    height data around the horizon ring — `Planet.macro_height()` was
+    considered but is **not safe for this**: this file's own header comment
+    establishes that live-authored production-geomorph displacement is not
+    reliably reflected in `macro_height()`, so sampling it could silently
+    under-cover a real authored mountain at the horizon (exactly the failure
+    this guard exists to prevent). A correct fix needs to evaluate the same
+    spatial masks the GPU production-geomorph pipeline already uses
+    (`studio_perf` surfaces their names/formulas as `latitude_mask_opcode`,
+    `radial_mask_opcode`, `ring_mask_lowering: "inner_outside_radial*
+    outer_radial; invert=1-ring"`, `geographic_region_lowering: "latitude*
+    longitude; invert=1-region"`) at ring-sample points — a real, separately-
+    scoped integration task, not attempted this session. **Conclusion: for
+    this world's current terrain-authoring settings, 9 resident rings near
+    the ground is close to load-bearing given the architecture, not a bug.**
+  - **Outer-ring occlusion culling investigated to a firm conclusion: not a
+    bug, working as designed, just rarely triggers in open flight.** Read
+    `scripts/rendering/terrain_occlusion_compositor_effect.gd` and
+    `shaders/terrain_occlusion.glsl` end to end (not just the stats).
+    The conservative depth test is implemented correctly: a candidate ring
+    is only marked occluded when *every* coarse tile (128×72, ~14×14 px each)
+    its screen projection overlaps has real scene geometry nearer than the
+    candidate's closest point, and by explicit design any tile that touches
+    open sky fails open (never occludes — "fail-open avoids stale offscreen
+    results"). A far ring's projected footprint is large and its silhouette
+    typically grazes the sky near the horizon, so in ordinary open flight
+    (the user's desert site, or any gently-rolling terrain with sky visible
+    in most directions) it rarely gets a fully sky-free tile set — matching
+    the observed `terrain_occlusion_culled_ring_instances: 0` across every
+    sample this session, including an 8-second static-camera hold with
+    genuinely successful (non-rejected) readbacks. This would need to be
+    deep in a valley or directly behind a tall ridge with no sky in the
+    ring's footprint to engage — not a fix, and not expected to help the
+    reported low-altitude-over-open-terrain scenario even if it were
+    triggering more often.
+  - **Not investigated this pass, still worth checking:** scatter's
+    `custom_aabb` in both `gpu_terrain_scatter.gd` and
+    `gpu_terrain_scatter_global.gd` is a fixed `SCATTER_BOUNDS_M = 24000.0`
+    (48 km cube) on every scatter `MultiMeshInstance3D`, regardless of the
+    actual windowed candidate extent (grid × spacing, typically well under
+    1.5 km for every authored ecology asset). Real instance placement is
+    computed entirely in the vertex shader from a uniform anchor (every
+    per-instance `MultiMesh` transform is identity), so Godot's own
+    node-level frustum culling can only reject the *whole* batch using this
+    AABB — an oversized AABB may mean these batches never get culled by the
+    engine even when the actual windowed footprint is well outside the
+    camera frustum (e.g. looking straight up, or with the ground window
+    behind the camera). Tightening it to the real per-batch extent would be
+    a zero-visual-diff win if confirmed, but needs verification that the
+    window-recentring logic in `_process` never leaves stale/unbounded
+    instance positions before the AABB is safe to shrink.
+- **RECHECK / next step:** profile a normal low-altitude flight with a real
+  Godot profiler (not HUD `fps`, which P-009 already showed to be an
+  unreliable smoothed/laggy readout during background jobs) to find where
+  frame time actually goes — GPU scatter fallback cost, terrain
+  streaming/clipmap cache traffic, weather jobs, shadow/PSSM cost, or
+  something else entirely.
+
 ### P-012 — Center L0 quadtree ring offset causes bind-camera-culling terrain disappearance; scatter placement offset in the air; scatter casts no shadows; scatter lit side not aligned with light source
 - **Status:** OPEN, partially fixed. Symptom 3 (no shadows) fixed and verified.
   Symptom 2 (floating) root-caused to a specific mechanism, not yet fixed.
