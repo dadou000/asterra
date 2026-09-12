@@ -1,7 +1,10 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/rhi/Queue.hpp>
+#include <orbit/rhi/Swapchain.hpp>
 
+#include <memory>
 #include <string_view>
 
 namespace orbit::rhi
@@ -17,6 +20,7 @@ struct DeviceCapabilities
     bool rayTracing{false};
     bool meshShaders{false};
     bool variableRateShading{false};
+    bool presentTearing{false};
     u32 shaderModelMajor{0};
     u32 shaderModelMinor{0};
 };
@@ -32,6 +36,11 @@ public:
     [[nodiscard]] virtual Backend GetBackend() const noexcept = 0;
     [[nodiscard]] virtual std::string_view AdapterName() const noexcept = 0;
     [[nodiscard]] virtual const DeviceCapabilities& Capabilities() const noexcept = 0;
+
+    [[nodiscard]] virtual std::unique_ptr<Queue> CreateQueue(QueueType type) = 0;
+    [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
+        Queue& queue,
+        const SwapchainDesc& desc) = 0;
 
 protected:
     Device() = default;

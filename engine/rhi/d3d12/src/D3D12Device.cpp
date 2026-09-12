@@ -10,6 +10,7 @@
 #include <orbit/rhi/d3d12/D3D12Backend.hpp>
 
 #include <array>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -60,6 +61,21 @@ std::string WideToUtf8(const wchar_t* text)
     return result;
 }
 
+D3D12_COMMAND_LIST_TYPE ToD3D12QueueType(const QueueType type)
+{
+    switch (type)
+    {
+    case QueueType::Graphics:
+        return D3D12_COMMAND_LIST_TYPE_DIRECT;
+    case QueueType::Compute:
+        return D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    case QueueType::Copy:
+        return D3D12_COMMAND_LIST_TYPE_COPY;
+    }
+
+    throw std::runtime_error("Orbit received an invalid RHI queue type.");
+}
+
 ComPtr<IDXGIAdapter1> SelectHardwareAdapter(IDXGIFactory6& factory)
 {
     for (u32 index = 0;; ++index)
@@ -105,9 +121,27 @@ ComPtr<IDXGIAdapter1> SelectHardwareAdapter(IDXGIFactory6& factory)
     throw std::runtime_error("Orbit could not find a hardware D3D12 adapter.");
 }
 
-DeviceCapabilities QueryCapabilities(ID3D12Device& device)
+bool QueryPresentTearingSupport(IDXGIFactory6& factory)
+{
+    BOOL allowTearing = FALSE;
+
+    if (FAILED(factory.CheckFeatureSupport(
+            DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+            &allowTearing,
+            sizeof(allowTearing))))
+    {
+        return false;
+    }
+
+    return allowTearing == TRUE;
+}
+
+DeviceCapabilities QueryCapabilities(
+    ID3D12Device& device,
+    IDXGIFactory6& factory)
 {
     DeviceCapabilities capabilities{};
+    capabilities.presentTearing = QueryPresentTearingSupport(factory);
 
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
     if (SUCCEEDED(device.CheckFeatureSupport(
@@ -169,14 +203,93 @@ DeviceCapabilities QueryCapabilities(ID3D12Device& device)
     return capabilities;
 }
 
+class D3D12Queue final : public Queue
+{
+public:
+    D3D12Queue(
+        const QueueType type,
+        ComPtr<ID3D12CommandQueue> nativeQueue)
+        : type_(type),
+          nativeQueue_(std::move(nativeQueue))
+    {
+    }
+
+    [[nodiscard]] QueueType Type() const noexcept override
+    {
+        return type_;
+    }
+
+    [[nodiscard]] ID3D12CommandQueue* Native() const noexcept
+    {
+        return nativeQueue_.Get();
+    }
+
+private:
+    QueueType type_;
+    ComPtr<ID3D12CommandQueue> nativeQueue_;
+};
+
+class D3D12Swapchain final : public Swapchain
+{
+public:
+    D3D12Swapchain(
+        ComPtr<IDXGISwapChain4> nativeSwapchain,
+        const SwapchainDesc& desc,
+        const bool tearingEnabled)
+        : nativeSwapchain_(std::move(nativeSwapchain)),
+          width_(desc.width),
+          height_(desc.height),
+          bufferCount_(desc.bufferCount),
+          tearingEnabled_(tearingEnabled)
+    {
+    }
+
+    void Present(const bool verticalSync) override
+    {
+        const UINT syncInterval = verticalSync ? 1U : 0U;
+        const UINT flags =
+            (!verticalSync && tearingEnabled_) ? DXGI_PRESENT_ALLOW_TEARING : 0U;
+
+        const HRESULT result = nativeSwapchain_->Present(syncInterval, flags);
+        if (FAILED(result))
+        {
+            throw std::runtime_error("Orbit failed to present the D3D12 swapchain.");
+        }
+    }
+
+    [[nodiscard]] u32 Width() const noexcept override
+    {
+        return width_;
+    }
+
+    [[nodiscard]] u32 Height() const noexcept override
+    {
+        return height_;
+    }
+
+    [[nodiscard]] u32 BufferCount() const noexcept override
+    {
+        return bufferCount_;
+    }
+
+private:
+    ComPtr<IDXGISwapChain4> nativeSwapchain_;
+    u32 width_{};
+    u32 height_{};
+    u32 bufferCount_{};
+    bool tearingEnabled_{false};
+};
+
 class D3D12Device final : public Device
 {
 public:
     D3D12Device(
         ComPtr<ID3D12Device> nativeDevice,
+        ComPtr<IDXGIFactory6> factory,
         std::string adapterName,
         DeviceCapabilities capabilities)
         : nativeDevice_(std::move(nativeDevice)),
+          factory_(std::move(factory)),
           adapterName_(std::move(adapterName)),
           capabilities_(capabilities)
     {
@@ -197,8 +310,101 @@ public:
         return capabilities_;
     }
 
+    [[nodiscard]] std::unique_ptr<Queue> CreateQueue(const QueueType type) override
+    {
+        D3D12_COMMAND_QUEUE_DESC queueDesc{};
+        queueDesc.Type = ToD3D12QueueType(type);
+        queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+        queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        queueDesc.NodeMask = 0;
+
+        ComPtr<ID3D12CommandQueue> nativeQueue;
+        if (FAILED(nativeDevice_->CreateCommandQueue(
+                &queueDesc,
+                IID_PPV_ARGS(&nativeQueue))))
+        {
+            throw std::runtime_error("Orbit failed to create a D3D12 command queue.");
+        }
+
+        return std::make_unique<D3D12Queue>(type, std::move(nativeQueue));
+    }
+
+    [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
+        Queue& queue,
+        const SwapchainDesc& desc) override
+    {
+        if (desc.nativeWindow == nullptr)
+        {
+            throw std::runtime_error("Orbit cannot create a swapchain without a native window.");
+        }
+
+        if (desc.width == 0 || desc.height == 0)
+        {
+            throw std::runtime_error("Orbit cannot create a zero-sized swapchain.");
+        }
+
+        if (desc.bufferCount < 2)
+        {
+            throw std::runtime_error("Orbit requires at least two swapchain buffers.");
+        }
+
+        auto* d3dQueue = dynamic_cast<D3D12Queue*>(&queue);
+        if (d3dQueue == nullptr || d3dQueue->Type() != QueueType::Graphics)
+        {
+            throw std::runtime_error("A D3D12 swapchain requires an Orbit D3D12 graphics queue.");
+        }
+
+        const bool tearingEnabled =
+            desc.allowTearing && capabilities_.presentTearing;
+
+        DXGI_SWAP_CHAIN_DESC1 swapchainDesc{};
+        swapchainDesc.Width = desc.width;
+        swapchainDesc.Height = desc.height;
+        swapchainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        swapchainDesc.Stereo = FALSE;
+        swapchainDesc.SampleDesc.Count = 1;
+        swapchainDesc.SampleDesc.Quality = 0;
+        swapchainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapchainDesc.BufferCount = desc.bufferCount;
+        swapchainDesc.Scaling = DXGI_SCALING_STRETCH;
+        swapchainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        swapchainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+        swapchainDesc.Flags = tearingEnabled
+            ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+            : 0U;
+
+        const HWND hwnd = static_cast<HWND>(desc.nativeWindow);
+
+        ComPtr<IDXGISwapChain1> swapchain1;
+        if (FAILED(factory_->CreateSwapChainForHwnd(
+                d3dQueue->Native(),
+                hwnd,
+                &swapchainDesc,
+                nullptr,
+                nullptr,
+                &swapchain1)))
+        {
+            throw std::runtime_error("Orbit failed to create the D3D12 swapchain.");
+        }
+
+        factory_->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+
+        ComPtr<IDXGISwapChain4> swapchain4;
+        if (FAILED(swapchain1.As(&swapchain4)))
+        {
+            throw std::runtime_error("Orbit failed to acquire IDXGISwapChain4.");
+        }
+
+        return std::make_unique<D3D12Swapchain>(
+            std::move(swapchain4),
+            desc,
+            tearingEnabled
+        );
+    }
+
 private:
     ComPtr<ID3D12Device> nativeDevice_;
+    ComPtr<IDXGIFactory6> factory_;
     std::string adapterName_;
     DeviceCapabilities capabilities_{};
 };
@@ -246,13 +452,14 @@ std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
         throw std::runtime_error("Orbit failed to create the D3D12 device.");
     }
 
-    const auto capabilities = QueryCapabilities(*nativeDevice.Get());
+    const auto capabilities = QueryCapabilities(*nativeDevice.Get(), *factory.Get());
     auto adapterName = WideToUtf8(adapterDesc.Description);
 
     log::Info("D3D12 device created.");
 
     return std::make_unique<D3D12Device>(
         std::move(nativeDevice),
+        std::move(factory),
         std::move(adapterName),
         capabilities
     );

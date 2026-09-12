@@ -30,18 +30,29 @@ int main()
         const auto& capabilities = device->Capabilities();
 
         orbit::log::Info(std::format(
-            "GPU: {} | SM {}.{} | RT: {} | Mesh shaders: {} | VRS: {}",
+            "GPU: {} | SM {}.{} | RT: {} | Mesh shaders: {} | VRS: {} | Tearing: {}",
             device->AdapterName(),
             capabilities.shaderModelMajor,
             capabilities.shaderModelMinor,
             capabilities.rayTracing,
             capabilities.meshShaders,
-            capabilities.variableRateShading
+            capabilities.variableRateShading,
+            capabilities.presentTearing
         ));
+
+        auto graphicsQueue = device->CreateQueue(orbit::rhi::QueueType::Graphics);
+
+        auto swapchain = device->CreateSwapchain(*graphicsQueue, {
+            .nativeWindow = window->NativeHandle(),
+            .width = window->Width(),
+            .height = window->Height(),
+            .bufferCount = 3,
+            .allowTearing = true
+        });
 
         while (window->PumpEvents())
         {
-            // Rendering, simulation, and editor systems remain independent modules.
+            swapchain->Present(true);
         }
 
         orbit::log::Info("Orbit shutdown.");
