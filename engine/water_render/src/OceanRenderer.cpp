@@ -216,6 +216,7 @@ struct VSOutput
     float3 localPosition : TEXCOORD0;
     float3 surfaceNormal : TEXCOORD1;
     float waveHeight : TEXCOORD2;
+    float horizonClip : SV_ClipDistance0;
 };
 
 float OceanWaveHeight(
@@ -444,6 +445,20 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.waveHeight =
         waveHeight;
 
+    const float seaRadius =
+        planetRadius +
+        seaLevel;
+
+    const float horizonCosine =
+        saturate(
+            seaRadius /
+            observerRadius);
+
+    output.horizonClip =
+        localSurfaceDirection.y -
+        horizonCosine +
+        0.0015;
+
     return output;
 }
 )";
@@ -455,6 +470,7 @@ struct VSOutput
     float3 localPosition : TEXCOORD0;
     float3 surfaceNormal : TEXCOORD1;
     float waveHeight : TEXCOORD2;
+    float horizonClip : SV_ClipDistance0;
 };
 
 float4 main(VSOutput input) : SV_Target0
