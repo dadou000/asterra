@@ -369,6 +369,7 @@ private:
 
     bool TryTakeOwn(
         const u32 workerIndex,
+        const JobPriority priority,
         JobItem& item)
     {
         if (workerIndex >=
@@ -383,32 +384,27 @@ private:
         std::scoped_lock lock(
             worker.mutex);
 
-        for (const JobPriority priority :
-             kPriorityOrder)
+        auto& queue =
+            worker.queues[
+                PriorityIndex(
+                    priority)];
+
+        if (queue.empty())
         {
-            auto& queue =
-                worker.queues[
-                    PriorityIndex(
-                        priority)];
-
-            if (queue.empty())
-            {
-                continue;
-            }
-
-            item =
-                std::move(
-                    queue.back());
-
-            queue.pop_back();
-            return true;
+            return false;
         }
 
-        return false;
+        item =
+            std::move(
+                queue.back());
+
+        queue.pop_back();
+        return true;
     }
 
     bool TrySteal(
         const u32 victimIndex,
+        const JobPriority priority,
         JobItem& item)
     {
         Worker& worker =
@@ -417,28 +413,22 @@ private:
         std::scoped_lock lock(
             worker.mutex);
 
-        for (const JobPriority priority :
-             kPriorityOrder)
+        auto& queue =
+            worker.queues[
+                PriorityIndex(
+                    priority)];
+
+        if (queue.empty())
         {
-            auto& queue =
-                worker.queues[
-                    PriorityIndex(
-                        priority)];
-
-            if (queue.empty())
-            {
-                continue;
-            }
-
-            item =
-                std::move(
-                    queue.front());
-
-            queue.pop_front();
-            return true;
+            return false;
         }
 
-        return false;
+        item =
+            std::move(
+                queue.front());
+
+        queue.pop_front();
+        return true;
     }
 
     bool TryExecuteOne(
@@ -446,38 +436,44 @@ private:
     {
         JobItem item{};
 
-        if (workerIndex !=
-                kExternalThread &&
-            TryTakeOwn(
-                workerIndex,
-                item))
+        for (const JobPriority priority :
+             kPriorityOrder)
         {
-            Execute(
-                std::move(item));
-
-            return true;
-        }
-
-        for (u32 victim = 0;
-             victim <
-                static_cast<u32>(
-                    workers_.size());
-             ++victim)
-        {
-            if (victim ==
-                workerIndex)
-            {
-                continue;
-            }
-
-            if (TrySteal(
-                    victim,
+            if (workerIndex !=
+                    kExternalThread &&
+                TryTakeOwn(
+                    workerIndex,
+                    priority,
                     item))
             {
                 Execute(
                     std::move(item));
 
                 return true;
+            }
+
+            for (u32 victim = 0;
+                 victim <
+                    static_cast<u32>(
+                        workers_.size());
+                 ++victim)
+            {
+                if (victim ==
+                    workerIndex)
+                {
+                    continue;
+                }
+
+                if (TrySteal(
+                        victim,
+                        priority,
+                        item))
+                {
+                    Execute(
+                        std::move(item));
+
+                    return true;
+                }
             }
         }
 
