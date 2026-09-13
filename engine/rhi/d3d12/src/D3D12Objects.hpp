@@ -218,6 +218,10 @@ public:
         u32 firstIndex,
         i32 vertexOffset) override;
 
+    void Draw(
+        u32 vertexCount,
+        u32 firstVertex) override;
+
     void Close() override;
 
     [[nodiscard]] ID3D12GraphicsCommandList* Native() const noexcept;

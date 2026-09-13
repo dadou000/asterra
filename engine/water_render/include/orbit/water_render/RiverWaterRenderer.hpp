@@ -49,6 +49,23 @@ struct RiverWaterRenderStats
 class RiverWaterRenderer
 {
 public:
+    // `fineRegionCache`, when provided, is a second region cache at a
+    // finer tile level. Wherever it has ready coverage for a given
+    // segment or lake cell, that finer version is drawn instead of
+    // the coarse one, instead of drawing both (which would either
+    // z-fight or double up water surfaces at slightly different
+    // elevations).
+    RiverWaterRenderer(
+        rhi::Device& device,
+        const shader::Compiler& shaderCompiler,
+        world::PlanetDefinition planet,
+        std::shared_ptr<
+            terrain_region::DerivedTerrainRegionCache> regionCache,
+        std::shared_ptr<
+            terrain_region::DerivedTerrainRegionCache> fineRegionCache,
+        const world::WorldPosition& observer,
+        RiverWaterRendererConfig config = {});
+
     RiverWaterRenderer(
         rhi::Device& device,
         const shader::Compiler& shaderCompiler,

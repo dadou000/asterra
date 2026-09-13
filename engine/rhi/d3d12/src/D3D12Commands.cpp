@@ -537,6 +537,18 @@ void D3D12CommandList::DrawIndexed(
             0);
 }
 
+void D3D12CommandList::Draw(
+    const u32 vertexCount,
+    const u32 firstVertex)
+{
+    nativeCommandList_->
+        DrawInstanced(
+            vertexCount,
+            1,
+            firstVertex,
+            0);
+}
+
 void D3D12CommandList::Close()
 {
     if (FAILED(nativeCommandList_->Close()))

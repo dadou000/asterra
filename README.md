@@ -96,3 +96,5 @@ real desktop pixels, so the dev server briefly raises the Orbit
 window's Z-order before capturing to make sure it isn't occluded.
 
 Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) before adding engine systems.
+
+Known issues and their fix status are tracked in [docs/PROBLEMS.md](docs/PROBLEMS.md).

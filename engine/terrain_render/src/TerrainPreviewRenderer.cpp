@@ -22,131 +22,6 @@ namespace orbit::terrain_render
 {
 namespace
 {
-void AppendCell(
-    std::vector<u32>& indices,
-    const u32 resolution,
-    const u32 x,
-    const u32 y)
-{
-    const u32 row0 =
-        y * resolution;
-
-    const u32 row1 =
-        (y + 1U) * resolution;
-
-    const u32 v00 = row0 + x;
-    const u32 v10 = row0 + x + 1U;
-    const u32 v01 = row1 + x;
-    const u32 v11 = row1 + x + 1U;
-
-    indices.push_back(v00);
-    indices.push_back(v01);
-    indices.push_back(v10);
-
-    indices.push_back(v10);
-    indices.push_back(v01);
-    indices.push_back(v11);
-}
-
-[[nodiscard]] std::vector<u32> BuildCenterIndices(
-    const u32 resolution)
-{
-    std::vector<u32> indices;
-
-    const u32 cells =
-        resolution - 1U;
-
-    indices.reserve(
-        static_cast<std::size_t>(cells) *
-        static_cast<std::size_t>(cells) *
-        6U);
-
-    for (u32 y = 0; y < cells; ++y)
-    {
-        for (u32 x = 0; x < cells; ++x)
-        {
-            AppendCell(
-                indices,
-                resolution,
-                x,
-                y);
-        }
-    }
-
-    return indices;
-}
-
-[[nodiscard]] std::vector<u32> BuildRingIndices(
-    const terrain_view::ClipmapLevel& ringLevel)
-{
-    std::vector<u32> indices;
-
-    const u32 resolution =
-        ringLevel.gridResolution;
-
-    const u32 cells =
-        resolution - 1U;
-
-    const f64 halfCells =
-        static_cast<f64>(cells) * 0.5;
-
-    indices.reserve(
-        static_cast<std::size_t>(cells) *
-        static_cast<std::size_t>(cells) *
-        6U);
-
-    for (u32 y = 0; y < cells; ++y)
-    {
-        const f64 centerY =
-            (static_cast<f64>(y) +
-             0.5 -
-             halfCells) *
-            ringLevel.sampleSpacingMeters;
-
-        for (u32 x = 0; x < cells; ++x)
-        {
-            const f64 centerX =
-                (static_cast<f64>(x) +
-                 0.5 -
-                 halfCells) *
-                ringLevel.sampleSpacingMeters;
-
-            const bool insideHole =
-                std::abs(centerX) <
-                    ringLevel.innerHoleHalfExtentMeters &&
-                std::abs(centerY) <
-                    ringLevel.innerHoleHalfExtentMeters;
-
-            if (!insideHole)
-            {
-                AppendCell(
-                    indices,
-                    resolution,
-                    x,
-                    y);
-            }
-        }
-    }
-
-    return indices;
-}
-
-void UploadBuffer(
-    rhi::Buffer& buffer,
-    const void* source,
-    const std::size_t bytes)
-{
-    std::byte* destination =
-        buffer.Map();
-
-    std::memcpy(
-        destination,
-        source,
-        bytes);
-
-    buffer.Unmap();
-}
-
 [[nodiscard]] math::Float3 ToObserverLocal(
     const math::Double3& vector,
     const world::SurfaceFrame& observerFrame) noexcept
@@ -265,7 +140,10 @@ void UploadBuffer(
         coarserLevel != nullptr
             ? 1.0F
             : 0.0F);
-    store(35, 0.0F);
+    store(
+        35,
+        static_cast<f32>(
+            level.innerHoleHalfExtentMeters));
 
     return result;
 }
@@ -393,11 +271,43 @@ VSOutput main(uint vertexId : SV_VertexID)
     const uint resolution =
         (uint)round(g_planet.w);
 
+    // Index-free grid: SV_VertexID directly encodes (cell, corner)
+    // instead of a unique grid vertex resolved through an index
+    // buffer, so each of the 6 corners per cell runs the full vertex
+    // shader independently. Trades some redundant ALU (no shared-
+    // vertex reuse across triangles) for zero index-buffer storage
+    // or rebuild cost.
+    const uint cellsPerAxis =
+        resolution - 1u;
+
+    const uint cellIndex =
+        vertexId / 6u;
+
+    const uint cornerIndex =
+        vertexId % 6u;
+
+    const uint cellX =
+        cellIndex % cellsPerAxis;
+
+    const uint cellY =
+        cellIndex / cellsPerAxis;
+
+    // Matches the winding of the original CPU-built index buffer:
+    // triangle 0 = (0,0)-(0,1)-(1,0), triangle 1 = (1,0)-(0,1)-(1,1).
+    uint2 cornerOffset = uint2(0u, 0u);
+
+    if (cornerIndex == 0u) cornerOffset = uint2(0u, 0u);
+    else if (cornerIndex == 1u) cornerOffset = uint2(0u, 1u);
+    else if (cornerIndex == 2u) cornerOffset = uint2(1u, 0u);
+    else if (cornerIndex == 3u) cornerOffset = uint2(1u, 0u);
+    else if (cornerIndex == 4u) cornerOffset = uint2(0u, 1u);
+    else cornerOffset = uint2(1u, 1u);
+
     const uint logicalX =
-        vertexId % resolution;
+        cellX + cornerOffset.x;
 
     const uint logicalY =
-        vertexId / resolution;
+        cellY + cornerOffset.y;
 
     const uint originX =
         (uint)round(
@@ -680,6 +590,46 @@ VSOutput main(uint vertexId : SV_VertexID)
         horizonCosine +
         0.000002 +
         positiveReliefPadding;
+
+    // Ring patches have a hole in the middle where the next finer
+    // level is drawn instead -- collapsing every corner of a
+    // hole cell to the same clip-space point makes it a zero-area
+    // triangle the rasterizer discards, standing in for the
+    // per-cell skip the old CPU-built index buffer used to do.
+    const float innerHoleHalfExtentMeters =
+        g_morph.w;
+
+    const float cellCenterX =
+        ((float)cellX +
+         0.5 -
+         (float)cellsPerAxis *
+             0.5) *
+        spacing;
+
+    const float cellCenterY =
+        ((float)cellY +
+         0.5 -
+         (float)cellsPerAxis *
+             0.5) *
+        spacing;
+
+    const bool insideHole =
+        innerHoleHalfExtentMeters >
+            0.0 &&
+        abs(cellCenterX) <
+            innerHoleHalfExtentMeters &&
+        abs(cellCenterY) <
+            innerHoleHalfExtentMeters;
+
+    if (insideHole)
+    {
+        output.position =
+            float4(
+                0.0,
+                0.0,
+                0.0,
+                0.0);
+    }
 
     return output;
 }
@@ -1137,52 +1087,28 @@ public:
                         frameGpuSampleBuffers[
                             frameIndex]);
 
-            if (levelIndex == 0)
-            {
-                commandList.
-                    SetIndexBuffer(
-                        *centerIndexBuffer_,
-                        rhi::IndexFormat::
-                            UInt32);
+            // Same vertex count for the center patch and every ring
+            // -- the vertex shader itself decides, per invocation,
+            // whether it's inside level 0's full grid or a ring's
+            // hole (see g_morph.w / innerHoleHalfExtentMeters).
+            commandList.Draw(
+                patchVertexCount_);
 
-                commandList.
-                    DrawIndexed(
-                        centerIndexCount_);
-
-                ++stats_.drawCallsLastFrame;
-            }
-            else
-            {
-                commandList.
-                    SetIndexBuffer(
-                        *ringIndexBuffer_,
-                        rhi::IndexFormat::
-                            UInt32);
-
-                commandList.
-                    DrawIndexed(
-                        ringIndexCount_);
-
-                ++stats_.drawCallsLastFrame;
-            }
+            ++stats_.drawCallsLastFrame;
         }
 
         stats_.cumulativeUploadedBytes +=
             stats_.uploadedBytesLastFrame;
     }
 
+    // Index-free rendering: every one of these is a vertex shader
+    // invocation (SV_VertexID), not a unique stored vertex -- there
+    // is no index buffer any more, so IndexCount() is always 0.
     [[nodiscard]] u32 VertexCount() const noexcept
     {
-        const u64 perLevel =
-            static_cast<u64>(
-                config_.clipmap.
-                    gridResolution) *
-            static_cast<u64>(
-                config_.clipmap.
-                    gridResolution);
-
         const u64 total =
-            perLevel *
+            static_cast<u64>(
+                patchVertexCount_) *
             static_cast<u64>(
                 config_.clipmap.
                     levelCount);
@@ -1196,20 +1122,7 @@ public:
 
     [[nodiscard]] u32 IndexCount() const noexcept
     {
-        const u64 total =
-            static_cast<u64>(
-                centerIndexCount_) +
-            static_cast<u64>(
-                ringIndexCount_) *
-            static_cast<u64>(
-                config_.clipmap.
-                    levelCount - 1U);
-
-        return static_cast<u32>(
-            std::min<u64>(
-                total,
-                std::numeric_limits<u32>::
-                    max()));
+        return 0U;
     }
 
     [[nodiscard]] const TerrainStreamingStats&
@@ -1269,78 +1182,27 @@ private:
 
     void CreateSharedTopology()
     {
-        const std::vector<u32>
-            centerIndices =
-                BuildCenterIndices(
-                    config_.clipmap.
-                        gridResolution);
-
-        centerIndexCount_ =
-            static_cast<u32>(
-                centerIndices.size());
-
-        const u64 centerBytes =
+        // Index-free: every patch (center or ring) shares the same
+        // resolution, so a single vertex count covers all of them --
+        // SV_VertexID alone determines which cell/corner/hole status
+        // a given invocation belongs to (see the vertex shader).
+        const u64 cellsPerAxis =
             static_cast<u64>(
-                centerIndices.size()) *
-            sizeof(u32);
+                config_.clipmap.
+                    gridResolution) -
+            1ULL;
 
-        centerIndexBuffer_ =
-            device_.CreateBuffer({
-                .sizeBytes = centerBytes,
-                .usage =
-                    rhi::BufferUsage::
-                        Index,
-                .memory =
-                    rhi::MemoryUsage::
-                        HostVisible,
-                .initialState =
-                    rhi::ResourceState::
-                        IndexBuffer
-            });
+        const u64 vertexCount =
+            cellsPerAxis *
+            cellsPerAxis *
+            6ULL;
 
-        UploadBuffer(
-            *centerIndexBuffer_,
-            centerIndices.data(),
-            static_cast<std::size_t>(
-                centerBytes));
-
-        if (config_.clipmap.levelCount > 1)
-        {
-            const std::vector<u32>
-                ringIndices =
-                    BuildRingIndices(
-                        layout_.levels[1]);
-
-            ringIndexCount_ =
-                static_cast<u32>(
-                    ringIndices.size());
-
-            const u64 ringBytes =
-                static_cast<u64>(
-                    ringIndices.size()) *
-                sizeof(u32);
-
-            ringIndexBuffer_ =
-                device_.CreateBuffer({
-                    .sizeBytes =
-                        ringBytes,
-                    .usage =
-                        rhi::BufferUsage::
-                            Index,
-                    .memory =
-                        rhi::MemoryUsage::
-                            HostVisible,
-                    .initialState =
-                        rhi::ResourceState::
-                            IndexBuffer
-                });
-
-            UploadBuffer(
-                *ringIndexBuffer_,
-                ringIndices.data(),
-                static_cast<std::size_t>(
-                    ringBytes));
-        }
+        patchVertexCount_ =
+            static_cast<u32>(
+                std::min<u64>(
+                    vertexCount,
+                    std::numeric_limits<
+                        u32>::max()));
     }
 
     void CreateLevelBuffers()
@@ -2266,12 +2128,6 @@ private:
 
     std::vector<LevelGpuState> levels_;
 
-    std::unique_ptr<rhi::Buffer>
-        centerIndexBuffer_;
-
-    std::unique_ptr<rhi::Buffer>
-        ringIndexBuffer_;
-
     std::unique_ptr<
         rhi::GraphicsPipeline>
         pipeline_;
@@ -2300,8 +2156,9 @@ private:
 
     TerrainStreamingStats stats_{};
 
-    u32 centerIndexCount_{0};
-    u32 ringIndexCount_{0};
+    // Vertex-shader invocation count for one patch (center or ring,
+    // identical for both -- see CreateSharedTopology).
+    u32 patchVertexCount_{0};
 };
 
 TerrainPreviewRenderer::

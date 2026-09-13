@@ -161,13 +161,54 @@ int main()
                                 }
                             });
 
+        // A second, finer-tiled region cache covering only the
+        // immediate neighborhood of the observer. Hydrology/erosion/
+        // river generation uses the same fixed grid resolution
+        // (DerivedTerrainRegionConfig::hydrology) regardless of tile
+        // level, so a physically smaller tile is proportionally
+        // finer -- level 9 tiles are ~1/16th the width of the level
+        // 5 coarse tiles, giving ~16x finer sample spacing (roughly
+        // 3km -> ~200m) right around the camera, where the coarse
+        // grid's sparse river/carving nodes visibly let raw terrain
+        // poke back up through the river between them. Everywhere
+        // outside this near-field neighborhood, rendering and
+        // elevation still fall back to the coarse cache unchanged.
+        auto fineRegionCache =
+            std::make_shared<
+                orbit::terrain_region::
+                    DerivedTerrainRegionCache>(
+                        planet,
+                        authoritativeTerrain,
+                        jobSystem,
+                        orbit::terrain_region::
+                            DerivedTerrainRegionCacheConfig{
+                                .tileLevel = 9,
+                                .maxEntries = 16,
+                                .region = {
+                                    .generatorVersion = 1,
+                                    .overlapScale = 1.35
+                                }
+                            });
+
+        orbit::terrain_region::
+            DerivedTerrainRegionStreamer
+                fineRegionStreamer(
+                    planet,
+                    *fineRegionCache,
+                    {
+                        .neighborhoodRadius = 1,
+                        .forwardPrefetchDistanceTiles =
+                            1.0
+                    });
+
         const auto streamedTerrain =
             std::make_shared<
                 orbit::terrain_region::
                     DerivedRegionTerrainSource>(
                         planet,
                         authoritativeTerrain,
-                        regionCache);
+                        regionCache,
+                        fineRegionCache);
 
         orbit::terrain_region::
             DerivedTerrainRegionStreamer
@@ -367,6 +408,7 @@ int main()
                 shaderCompiler,
                 planet,
                 regionCache,
+                fineRegionCache,
                 observer,
                 {
                     .framesInFlight =
@@ -1016,6 +1058,11 @@ int main()
                     observer.meters),
                 lastSurfaceTravelDirection);
 
+            fineRegionStreamer.Update(
+                orbit::math::Normalize(
+                    observer.meters),
+                lastSurfaceTravelDirection);
+
             if (debugOverlayVisible)
             {
                 const orbit::f64 fps =
@@ -1222,6 +1269,9 @@ int main()
                 const auto& regionStreamStats =
                     regionStreamer.Stats();
 
+                const auto fineRegionStats =
+                    fineRegionCache->Stats();
+
                 const auto& oceanStats =
                     ocean.Stats();
 
@@ -1233,7 +1283,7 @@ int main()
 
                 lastStatsLine =
                     std::format(
-                        "alt_km={:.0f} samples={} levels={} regions={} upload_b={} draws={} clip_tier={} spacing_m={:.0f} radius_km={:.0f} page_mib={:.1f}/{:.0f} entries={} evict={} reject={} derived_ready={} pending={} desired={} requests={} revisions={} stale={} ocean_v={} ocean_i={} ocean_draws={} ocean_km={:.0f} rivers={} lakes={} water_upload_b={}",
+                        "alt_km={:.0f} samples={} levels={} regions={} upload_b={} draws={} clip_tier={} spacing_m={:.0f} radius_km={:.0f} page_mib={:.1f}/{:.0f} entries={} evict={} reject={} derived_ready={} pending={} desired={} requests={} fine_ready={} fine_pending={} revisions={} stale={} ocean_v={} ocean_i={} ocean_draws={} ocean_km={:.0f} rivers={} lakes={} water_upload_b={}",
                         (orbit::math::Length(
                             observer.meters) -
                          planet.radiusMeters) /
@@ -1273,6 +1323,10 @@ int main()
                             desiredRegions,
                         regionStats.
                             acceptedRequests,
+                        fineRegionStats.
+                            readyEntries,
+                        fineRegionStats.
+                            pendingEntries,
                         stats.
                             revisionInvalidations,
                         stats.
@@ -1334,7 +1388,7 @@ int main()
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | alt {:.0f} km | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | revisions {} stale {} | ocean {}v/{}i {} draw {:.0f} km | water rivers {} lakes {} upload {} B",
+                        "Terrain stream | alt {:.0f} km | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | fine ready {} pending {} | revisions {} stale {} | ocean {}v/{}i {} draw {:.0f} km | water rivers {} lakes {} upload {} B",
                         (orbit::math::Length(
                             observer.meters) -
                          planet.radiusMeters) /
@@ -1374,6 +1428,10 @@ int main()
                             desiredRegions,
                         regionStats.
                             acceptedRequests,
+                        fineRegionStats.
+                            readyEntries,
+                        fineRegionStats.
+                            pendingEntries,
                         stats.
                             revisionInvalidations,
                         stats.

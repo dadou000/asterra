@@ -125,6 +125,14 @@ public:
         u32 firstIndex = 0,
         i32 vertexOffset = 0) = 0;
 
+    // Non-indexed draw: SV_VertexID runs from firstVertex to
+    // firstVertex + vertexCount. Used by GPU-driven meshes that
+    // decode their own topology from the vertex index instead of
+    // reading an index buffer -- see TerrainPreviewRenderer.
+    virtual void Draw(
+        u32 vertexCount,
+        u32 firstVertex = 0) = 0;
+
     virtual void Close() = 0;
 
 protected:

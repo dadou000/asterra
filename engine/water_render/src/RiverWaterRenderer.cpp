@@ -216,11 +216,14 @@ public:
         const world::PlanetDefinition planet,
         std::shared_ptr<
             terrain_region::DerivedTerrainRegionCache> regionCache,
+        std::shared_ptr<
+            terrain_region::DerivedTerrainRegionCache> fineRegionCache,
         const world::WorldPosition& observer,
         const RiverWaterRendererConfig config)
         : device_(device),
           planet_(planet),
           regionCache_(std::move(regionCache)),
+          fineRegionCache_(std::move(fineRegionCache)),
           config_(config)
     {
         if (!regionCache_)
@@ -625,10 +628,59 @@ private:
                 sizeof(u32));
     }
 
+    [[nodiscard]] bool CoveredByFineRegion(
+        const math::Double3& worldPosition)
+        const
+    {
+        if (!fineRegionCache_)
+        {
+            return false;
+        }
+
+        const math::Double3 direction =
+            math::Normalize(
+                worldPosition);
+
+        if (math::LengthSquared(
+                direction) <=
+            1.0e-12)
+        {
+            return false;
+        }
+
+        return
+            fineRegionCache_->TryGet(
+                fineRegionCache_->
+                    IdForDirection(
+                        direction)) !=
+            nullptr;
+    }
+
     void BuildVisibleVertices()
     {
         scratchVertices_.clear();
+        stats_.readyRegionsLastFrame = 0;
 
+        if (fineRegionCache_)
+        {
+            DrawRegionsFrom(
+                *fineRegionCache_,
+                false);
+        }
+
+        DrawRegionsFrom(
+            *regionCache_,
+            fineRegionCache_ !=
+                nullptr);
+    }
+
+    void DrawRegionsFrom(
+        const terrain_region::
+            DerivedTerrainRegionCache&
+                cache,
+        const bool
+            skipWhereFineCovers)
+    {
         const f64 observerRadiusMeters =
             math::Length(
                 observer_.meters);
@@ -664,7 +716,7 @@ private:
             };
 
         const auto regions =
-            regionCache_->
+            cache.
                 ReadyRegionsSnapshot();
 
         if (!regions)
@@ -672,7 +724,7 @@ private:
             return;
         }
 
-        stats_.readyRegionsLastFrame =
+        stats_.readyRegionsLastFrame +=
             static_cast<u32>(
                 regions->size());
 
@@ -685,7 +737,7 @@ private:
             }
 
             const auto currentId =
-                regionCache_->
+                cache.
                     IdForTile(
                         region->id.tile);
 
@@ -755,7 +807,10 @@ private:
                     config_.
                         maximumDrawDistanceMeters ||
                     !aboveHorizon(
-                        midpoint))
+                        midpoint) ||
+                    (skipWhereFineCovers &&
+                     CoveredByFineRegion(
+                         midpoint)))
                 {
                     continue;
                 }
@@ -916,7 +971,10 @@ private:
                     config_.
                         maximumDrawDistanceMeters ||
                     !aboveHorizon(
-                        centerWorld))
+                        centerWorld) ||
+                    (skipWhereFineCovers &&
+                     CoveredByFineRegion(
+                         centerWorld)))
                 {
                     continue;
                 }
@@ -996,6 +1054,11 @@ private:
             DerivedTerrainRegionCache>
         regionCache_;
 
+    std::shared_ptr<
+        terrain_region::
+            DerivedTerrainRegionCache>
+        fineRegionCache_;
+
     RiverWaterRendererConfig config_{};
 
     world::WorldPosition observer_{};
@@ -1024,6 +1087,8 @@ RiverWaterRenderer::RiverWaterRenderer(
     const world::PlanetDefinition planet,
     std::shared_ptr<
         terrain_region::DerivedTerrainRegionCache> regionCache,
+    std::shared_ptr<
+        terrain_region::DerivedTerrainRegionCache> fineRegionCache,
     const world::WorldPosition& observer,
     const RiverWaterRendererConfig config)
     : impl_(
@@ -1032,8 +1097,28 @@ RiverWaterRenderer::RiverWaterRenderer(
             shaderCompiler,
             planet,
             std::move(regionCache),
+            std::move(fineRegionCache),
             observer,
             config))
+{
+}
+
+RiverWaterRenderer::RiverWaterRenderer(
+    rhi::Device& device,
+    const shader::Compiler& shaderCompiler,
+    const world::PlanetDefinition planet,
+    std::shared_ptr<
+        terrain_region::DerivedTerrainRegionCache> regionCache,
+    const world::WorldPosition& observer,
+    const RiverWaterRendererConfig config)
+    : RiverWaterRenderer(
+        device,
+        shaderCompiler,
+        planet,
+        std::move(regionCache),
+        nullptr,
+        observer,
+        config)
 {
 }
 

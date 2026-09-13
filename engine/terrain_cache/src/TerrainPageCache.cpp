@@ -424,6 +424,61 @@ public:
                     0.0,
                     1.0};
 
+        // Sizing the keep-radius from each *candidate* tile's own
+        // ApproximateTileWidthMeters is unsafe: the cube-sphere
+        // projection is non-uniform, so a tile sitting near a cube
+        // face's edge or corner can report a width many times
+        // smaller than a same-level tile near a face center. That
+        // shrinks the keep radius pathologically and evicts tiles
+        // that are genuinely still next to the observer -- measured
+        // as ~13,000 evictions/call against a ~7,500-entry cache
+        // with the observer barely moving. Sizing it instead from
+        // the width of the observer's *own* same-level tile is
+        // stable (one value, always centered on real camera
+        // position) and memoized per level since many candidates
+        // share a level.
+        std::array<f64, 31>
+            observerTileWidthByLevel{};
+
+        std::array<bool, 31>
+            observerTileWidthKnown{};
+
+        const auto ObserverTileWidth =
+            [&](const u8 level) -> f64
+        {
+            const std::size_t index =
+                (std::min)(
+                    static_cast<
+                        std::size_t>(
+                        level),
+                    observerTileWidthByLevel
+                        .size() -
+                        1);
+
+            if (!observerTileWidthKnown
+                    [index])
+            {
+                observerTileWidthByLevel
+                    [index] =
+                        world::
+                            ApproximateTileWidthMeters(
+                                planet_,
+                                world::
+                                    TileForDirection(
+                                        direction,
+                                        static_cast<
+                                            u8>(
+                                            index)));
+
+                observerTileWidthKnown
+                    [index] = true;
+            }
+
+            return
+                observerTileWidthByLevel
+                    [index];
+        };
+
         std::scoped_lock lock(
             entriesMutex_);
 
@@ -483,15 +538,13 @@ public:
                 planet_.radiusMeters;
 
             const f64
-                tileWidthMeters =
-                    world::
-                        ApproximateTileWidthMeters(
-                            planet_,
-                            tile);
+                keepRadiusMeters =
+                    ObserverTileWidth(
+                        tile.level) *
+                    keepRadiusTileWidths;
 
             if (arcMeters >
-                tileWidthMeters *
-                    keepRadiusTileWidths)
+                keepRadiusMeters)
             {
                 iterator =
                     RemoveEntryLocked(

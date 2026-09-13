@@ -138,10 +138,12 @@ DerivedRegionTerrainSource(
     const world::PlanetDefinition planet,
     std::shared_ptr<const terrain::TerrainSource> source,
     std::shared_ptr<DerivedTerrainRegionCache> regionCache,
+    std::shared_ptr<DerivedTerrainRegionCache> fineRegionCache,
     const DerivedRegionTerrainSourceConfig config)
     : planet_(planet),
       source_(std::move(source)),
       regionCache_(std::move(regionCache)),
+      fineRegionCache_(std::move(fineRegionCache)),
       config_(config)
 {
     if (!source_ ||
@@ -171,43 +173,44 @@ DerivedRegionTerrainSource(
     }
 }
 
-terrain::TerrainSample
-DerivedRegionTerrainSource::Sample(
-    const terrain::TerrainQuery& query) const noexcept
+DerivedRegionTerrainSource::
+DerivedRegionTerrainSource(
+    const world::PlanetDefinition planet,
+    std::shared_ptr<const terrain::TerrainSource> source,
+    std::shared_ptr<DerivedTerrainRegionCache> regionCache,
+    const DerivedRegionTerrainSourceConfig config)
+    : DerivedRegionTerrainSource(
+        planet,
+        std::move(source),
+        std::move(regionCache),
+        nullptr,
+        config)
 {
-    terrain::TerrainSample result =
-        source_->Sample(query);
+}
 
-    const math::Double3 direction =
-        math::Normalize(
-            query.unitDirection);
-
-    if (math::LengthSquared(direction) <=
-        0.0)
-    {
-        return result;
-    }
-
+bool DerivedRegionTerrainSource::
+AccumulateFromCache(
+    const DerivedTerrainRegionCache& cache,
+    const math::Double3& direction,
+    const terrain::TerrainQuery& query,
+    const f64 baseElevation,
+    f64& totalWeight,
+    f64& weightedRegionalDelta,
+    f64& weightedCarveDelta,
+    f64& weightedWetlandInfluence)
+    const noexcept
+{
     const u64 sourceRevision =
         source_->Revision();
 
     const auto regions =
-        regionCache_->
-            ReadyRegionsSnapshot();
+        cache.ReadyRegionsSnapshot();
 
     if (!regions ||
         regions->empty())
     {
-        return result;
+        return false;
     }
-
-    const f64 baseElevation =
-        result.elevationMeters;
-
-    f64 totalWeight = 0.0;
-    f64 weightedRegionalDelta = 0.0;
-    f64 weightedCarveDelta = 0.0;
-    f64 weightedWetlandInfluence = 0.0;
 
     for (const auto& region :
          *regions)
@@ -295,9 +298,71 @@ DerivedRegionTerrainSource::Sample(
             weightedInfluence;
     }
 
-    if (totalWeight <= 0.0)
+    return totalWeight > 0.0;
+}
+
+terrain::TerrainSample
+DerivedRegionTerrainSource::Sample(
+    const terrain::TerrainQuery& query) const noexcept
+{
+    terrain::TerrainSample result =
+        source_->Sample(query);
+
+    const math::Double3 direction =
+        math::Normalize(
+            query.unitDirection);
+
+    if (math::LengthSquared(direction) <=
+        0.0)
     {
         return result;
+    }
+
+    const f64 baseElevation =
+        result.elevationMeters;
+
+    f64 totalWeight = 0.0;
+    f64 weightedRegionalDelta = 0.0;
+    f64 weightedCarveDelta = 0.0;
+    f64 weightedWetlandInfluence = 0.0;
+
+    // The fine cache, where it has ready coverage, fully replaces
+    // the coarse one rather than blending with it -- averaging a
+    // finely-carved near-camera delta with a coarse one would just
+    // produce a third, still-wrong shape. Only fall back to the
+    // coarse cache where the fine one has nothing loaded (e.g. just
+    // outside its streamed neighborhood).
+    const bool usedFine =
+        fineRegionCache_ &&
+        AccumulateFromCache(
+            *fineRegionCache_,
+            direction,
+            query,
+            baseElevation,
+            totalWeight,
+            weightedRegionalDelta,
+            weightedCarveDelta,
+            weightedWetlandInfluence);
+
+    if (!usedFine)
+    {
+        totalWeight = 0.0;
+        weightedRegionalDelta = 0.0;
+        weightedCarveDelta = 0.0;
+        weightedWetlandInfluence = 0.0;
+
+        if (!AccumulateFromCache(
+                *regionCache_,
+                direction,
+                query,
+                baseElevation,
+                totalWeight,
+                weightedRegionalDelta,
+                weightedCarveDelta,
+                weightedWetlandInfluence))
+        {
+            return result;
+        }
     }
 
     const f64 inverseTotalWeight =
@@ -346,10 +411,21 @@ DerivedRegionTerrainSource::Sample(
 u64 DerivedRegionTerrainSource::Revision()
     const noexcept
 {
-    return
+    const u64 mixed =
         MixRevision(
             source_->Revision(),
             regionCache_->
+                ContentRevision());
+
+    if (!fineRegionCache_)
+    {
+        return mixed;
+    }
+
+    return
+        MixRevision(
+            mixed,
+            fineRegionCache_->
                 ContentRevision());
 }
 } // namespace orbit::terrain_region
