@@ -62,19 +62,29 @@ namespace
 
 VulkanSwapchain::VulkanSwapchain(
     const VkInstance instance,
+    const VkPhysicalDevice physicalDevice,
     const VkDevice device,
     const VkSurfaceKHR surface,
     const VkSwapchainKHR nativeSwapchain,
     VulkanQueue& presentQueue,
     const SwapchainDesc& desc,
-    const VkFormat format)
+    const VkFormat format,
+    const VkColorSpaceKHR colorSpace)
     : instance_(instance),
+      physicalDevice_(physicalDevice),
       device_(device),
       surface_(surface),
       nativeSwapchain_(nativeSwapchain),
+      format_(format),
+      colorSpace_(colorSpace),
       presentQueue_(&presentQueue),
       width_(desc.width),
       height_(desc.height)
+{
+    CreatePerImageResources();
+}
+
+void VulkanSwapchain::CreatePerImageResources()
 {
     u32 imageCount = 0;
     vkGetSwapchainImagesKHR(
@@ -98,7 +108,7 @@ VulkanSwapchain::VulkanSwapchain(
             VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewCreateInfo.image = image;
         viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewCreateInfo.format = format;
+        viewCreateInfo.format = format_;
         viewCreateInfo.subresourceRange = {
             VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
@@ -142,18 +152,8 @@ VulkanSwapchain::VulkanSwapchain(
     }
 }
 
-VulkanSwapchain::~VulkanSwapchain()
+void VulkanSwapchain::DestroyPerImageResources()
 {
-    // VulkanDevice::~VulkanDevice also waits for the device to go
-    // idle, but Main.cpp (like any normal C++ destruction order)
-    // destroys the swapchain *before* the device that owns it, so
-    // that later wait cannot protect the semaphores/swapchain this
-    // destructor is about to destroy -- without waiting here first,
-    // tearing down while a present or submission is still in flight
-    // (e.g. on an error/exception unwind mid-frame) hits "in use"
-    // validation errors destroying each of them.
-    vkDeviceWaitIdle(device_);
-
     backBuffers_.clear();
 
     for (const VkSemaphore semaphore : imageAvailableSemaphores_)
@@ -171,6 +171,29 @@ VulkanSwapchain::~VulkanSwapchain()
         vkDestroyFence(device_, fence, nullptr);
     }
 
+    imageAvailableSemaphores_.clear();
+    renderFinishedSemaphores_.clear();
+    imageAvailableFences_.clear();
+
+    currentImageIndex_ = 0;
+    acquired_ = false;
+    frameSlot_ = 0;
+}
+
+VulkanSwapchain::~VulkanSwapchain()
+{
+    // VulkanDevice::~VulkanDevice also waits for the device to go
+    // idle, but Main.cpp (like any normal C++ destruction order)
+    // destroys the swapchain *before* the device that owns it, so
+    // that later wait cannot protect the semaphores/swapchain this
+    // destructor is about to destroy -- without waiting here first,
+    // tearing down while a present or submission is still in flight
+    // (e.g. on an error/exception unwind mid-frame) hits "in use"
+    // validation errors destroying each of them.
+    vkDeviceWaitIdle(device_);
+
+    DestroyPerImageResources();
+
     if (nativeSwapchain_ != VK_NULL_HANDLE)
     {
         vkDestroySwapchainKHR(device_, nativeSwapchain_, nullptr);
@@ -180,6 +203,95 @@ VulkanSwapchain::~VulkanSwapchain()
     {
         vkDestroySurfaceKHR(instance_, surface_, nullptr);
     }
+}
+
+void VulkanSwapchain::Resize(const u32 width, const u32 height)
+{
+    // Minimized (or a spurious zero-size event) -- nothing to
+    // recreate against; the caller (Main.cpp) is expected to skip
+    // rendering entirely while the window reports a zero size rather
+    // than call this.
+    if (width == 0 || height == 0)
+    {
+        return;
+    }
+
+    if (width == width_ && height == height_)
+    {
+        return;
+    }
+
+    // Recreating in place while a previous frame's submission or
+    // present could still be using the old images/semaphores would
+    // hit "in use" validation errors, same reasoning as the
+    // destructor.
+    vkDeviceWaitIdle(device_);
+
+    DestroyPerImageResources();
+
+    VkSurfaceCapabilitiesKHR capabilities{};
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        physicalDevice_, surface_, &capabilities);
+
+    VkExtent2D extent = capabilities.currentExtent;
+    if (extent.width == 0xFFFFFFFFU)
+    {
+        extent.width = std::clamp(
+            width,
+            capabilities.minImageExtent.width,
+            capabilities.maxImageExtent.width);
+        extent.height = std::clamp(
+            height,
+            capabilities.minImageExtent.height,
+            capabilities.maxImageExtent.height);
+    }
+
+    u32 imageCount =
+        std::max(bufferCount_, capabilities.minImageCount);
+
+    if (capabilities.maxImageCount > 0)
+    {
+        imageCount =
+            std::min(imageCount, capabilities.maxImageCount);
+    }
+
+    VkSwapchainCreateInfoKHR createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    createInfo.surface = surface_;
+    createInfo.minImageCount = imageCount;
+    createInfo.imageFormat = format_;
+    createInfo.imageColorSpace = colorSpace_;
+    createInfo.imageExtent = extent;
+    createInfo.imageArrayLayers = 1;
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    createInfo.preTransform = capabilities.currentTransform;
+    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    createInfo.clipped = VK_TRUE;
+    createInfo.oldSwapchain = nativeSwapchain_;
+
+    VkSwapchainKHR newSwapchain = VK_NULL_HANDLE;
+    const VkResult createResult = vkCreateSwapchainKHR(
+        device_, &createInfo, nullptr, &newSwapchain);
+
+    // The old swapchain must be destroyed once it is no longer in use
+    // by the new one regardless of whether creation succeeded (the
+    // spec requires retiring it either way).
+    vkDestroySwapchainKHR(device_, nativeSwapchain_, nullptr);
+    nativeSwapchain_ = VK_NULL_HANDLE;
+
+    if (createResult != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "Orbit failed to recreate the Vulkan swapchain.");
+    }
+
+    nativeSwapchain_ = newSwapchain;
+    width_ = extent.width;
+    height_ = extent.height;
+
+    CreatePerImageResources();
 }
 
 void VulkanSwapchain::AcquireIfNeeded() const
@@ -262,7 +374,13 @@ void VulkanSwapchain::Present(const bool /*verticalSync*/)
     const VkResult result =
         vkQueuePresentKHR(presentQueue_->Native(), &presentInfo);
 
-    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+    // OUT_OF_DATE here just means the window was resized since this
+    // image was acquired -- not a real failure. Main.cpp checks the
+    // window's size against Width()/Height() at the start of every
+    // frame and calls Resize() before the *next* acquire, so this
+    // image simply goes unused rather than crashing the app.
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR &&
+        result != VK_ERROR_OUT_OF_DATE_KHR)
     {
         throw std::runtime_error(
             "Orbit failed to present the Vulkan swapchain.");
@@ -416,11 +534,13 @@ std::unique_ptr<Swapchain> VulkanDevice::CreateSwapchain(
 
     return std::make_unique<VulkanSwapchain>(
         instance_,
+        physicalDevice_,
         nativeDevice_,
         surface,
         nativeSwapchain,
         *vulkanQueue,
         desc,
-        chosenFormat.format);
+        chosenFormat.format,
+        chosenFormat.colorSpace);
 }
 } // namespace orbit::rhi::vulkan::detail

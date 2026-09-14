@@ -4,6 +4,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Fence.hpp>
 #include <orbit/rhi/Pipeline.hpp>
+#include <orbit/rhi/Query.hpp>
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/rhi/Swapchain.hpp>
 
@@ -58,6 +59,14 @@ public:
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) = 0;
+
+    [[nodiscard]] virtual std::unique_ptr<TimestampQueryPool>
+    CreateTimestampQueryPool(u32 count) = 0;
+
+    // Nanoseconds per GPU timestamp tick, for converting
+    // TimestampQueryPool::TryGetResults' raw ticks into real time.
+    [[nodiscard]] virtual f64 TimestampPeriodNanoseconds()
+        const noexcept = 0;
 
 protected:
     Device() = default;

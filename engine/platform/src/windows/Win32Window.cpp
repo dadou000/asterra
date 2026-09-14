@@ -522,12 +522,14 @@ public:
     [[nodiscard]] u32
     Width() const override
     {
+        RefreshCachedSize();
         return width_;
     }
 
     [[nodiscard]] u32
     Height() const override
     {
+        RefreshCachedSize();
         return height_;
     }
 
@@ -591,6 +593,37 @@ public:
     }
 
 private:
+    // Width()/Height() must reflect the window's *current* client
+    // size (not the size it was created with) so Main.cpp can detect
+    // a resize by comparing them against the swapchain's own cached
+    // size each frame -- there is no WM_SIZE handling to push updates
+    // the other way, so this pulls them live instead.
+    void RefreshCachedSize() const
+    {
+        if (hwnd_ == nullptr ||
+            IsWindow(hwnd_) == FALSE)
+        {
+            return;
+        }
+
+        RECT clientRect{};
+
+        if (GetClientRect(
+                hwnd_,
+                &clientRect) == FALSE)
+        {
+            return;
+        }
+
+        width_ = static_cast<u32>(
+            clientRect.right -
+            clientRect.left);
+
+        height_ = static_cast<u32>(
+            clientRect.bottom -
+            clientRect.top);
+    }
+
     void UpdateRelativeMouseCapture()
     {
         const bool shouldCapture =
@@ -694,8 +727,8 @@ private:
     }
 
     HWND hwnd_{nullptr};
-    u32 width_{};
-    u32 height_{};
+    mutable u32 width_{};
+    mutable u32 height_{};
     bool relativeMouseMode_{false};
     bool relativeMouseCaptured_{false};
 };

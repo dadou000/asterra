@@ -277,8 +277,16 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugMessengerCallback(
     return VK_FALSE;
 }
 
+struct ValidationFeatureRequest
+{
+    bool bestPractices{false};
+    bool synchronization{false};
+    bool gpuAssisted{false};
+};
+
 [[nodiscard]] VkInstance CreateInstance(
     const bool enableValidation,
+    const ValidationFeatureRequest& extraFeatures,
     bool& validationActuallyEnabled)
 {
     VkApplicationInfo appInfo{};
@@ -335,6 +343,47 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugMessengerCallback(
         }
     }
 
+    // VK_EXT_validation_features toggles extra VK_LAYER_KHRONOS_validation
+    // behavior beyond plain error/warning messages -- see DeviceDesc's
+    // comment for why each is a separate, independently-toggleable
+    // knob rather than always-on.
+    std::vector<VkValidationFeatureEnableEXT> enabledValidationFeatures;
+
+    if (validationActuallyEnabled)
+    {
+        if (extraFeatures.bestPractices)
+        {
+            enabledValidationFeatures.push_back(
+                VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT);
+        }
+
+        if (extraFeatures.synchronization)
+        {
+            enabledValidationFeatures.push_back(
+                VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+        }
+
+        if (extraFeatures.gpuAssisted)
+        {
+            enabledValidationFeatures.push_back(
+                VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT);
+        }
+
+        if (!enabledValidationFeatures.empty())
+        {
+            instanceExtensions.push_back(
+                VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+        }
+    }
+
+    VkValidationFeaturesEXT validationFeaturesInfo{};
+    validationFeaturesInfo.sType =
+        VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+    validationFeaturesInfo.enabledValidationFeatureCount =
+        static_cast<u32>(enabledValidationFeatures.size());
+    validationFeaturesInfo.pEnabledValidationFeatures =
+        enabledValidationFeatures.data();
+
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
@@ -344,6 +393,19 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugMessengerCallback(
     createInfo.enabledLayerCount =
         static_cast<u32>(layers.size());
     createInfo.ppEnabledLayerNames = layers.data();
+
+    if (!enabledValidationFeatures.empty())
+    {
+        createInfo.pNext = &validationFeaturesInfo;
+
+        log::Info(
+            std::format(
+                "Vulkan extra validation features: best-practices={} "
+                "synchronization={} gpu-assisted={}",
+                extraFeatures.bestPractices,
+                extraFeatures.synchronization,
+                extraFeatures.gpuAssisted));
+    }
 
     VkInstance instance = VK_NULL_HANDLE;
     if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS)
@@ -470,7 +532,8 @@ VulkanDevice::VulkanDevice(
     const DeviceCapabilities capabilities,
     const DeviceFunctions functions,
     const bool validationEnabled,
-    const VkDebugUtilsMessengerEXT debugMessenger)
+    const VkDebugUtilsMessengerEXT debugMessenger,
+    std::unique_ptr<RenderDocCapture> renderDoc)
     : instance_(instance),
       physicalDevice_(physicalDevice),
       nativeDevice_(nativeDevice),
@@ -480,8 +543,19 @@ VulkanDevice::VulkanDevice(
       capabilities_(capabilities),
       functions_(functions),
       validationEnabled_(validationEnabled),
-      debugMessenger_(debugMessenger)
+      debugMessenger_(debugMessenger),
+      renderDoc_(std::move(renderDoc))
 {
+}
+
+RenderDocCapture* VulkanDevice::GetRenderDocCapture() const noexcept
+{
+    return renderDoc_.get();
+}
+
+VkInstance VulkanDevice::NativeInstance() const noexcept
+{
+    return instance_;
 }
 
 VulkanDevice::~VulkanDevice()
@@ -638,10 +712,33 @@ std::unique_ptr<CommandList> VulkanDevice::CreateCommandList(
 
 std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
 {
+    // Must happen before vkCreateInstance: RenderDoc's Vulkan capture
+    // layer only activates for instances created after renderdoc.dll is
+    // loaded into the process (or was already loaded because the app was
+    // launched under the RenderDoc UI).
+    std::unique_ptr<RenderDocCapture> renderDoc;
+
+    if (desc.enableRenderDoc)
+    {
+        renderDoc = RenderDocCapture::TryLoad();
+
+        log::Info(
+            renderDoc != nullptr
+                ? "RenderDoc capture support enabled."
+                : "RenderDoc capture requested but renderdoc.dll was "
+                  "not found (checked ORBIT_RENDERDOC_DLL, the default "
+                  "install path, and an already-loaded module).");
+    }
+
     bool validationEnabled = false;
     const VkInstance instance =
         detail::CreateInstance(
-            desc.enableValidation, validationEnabled);
+            desc.enableValidation,
+            detail::ValidationFeatureRequest{
+                desc.enableBestPracticesValidation,
+                desc.enableSynchronizationValidation,
+                desc.enableGpuAssistedValidation},
+            validationEnabled);
 
     if (validationEnabled)
     {
@@ -690,6 +787,66 @@ std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
         capabilities,
         functions,
         validationEnabled,
-        debugMessenger);
+        debugMessenger,
+        std::move(renderDoc));
+}
+
+void SetRenderDocActiveWindow(Device& device, void* const nativeWindow)
+{
+    auto* vulkanDevice = dynamic_cast<detail::VulkanDevice*>(&device);
+
+    if (vulkanDevice == nullptr ||
+        vulkanDevice->GetRenderDocCapture() == nullptr)
+    {
+        return;
+    }
+
+    vulkanDevice->GetRenderDocCapture()->SetActiveWindow(
+        vulkanDevice->NativeInstance(), nativeWindow);
+}
+
+void TriggerRenderDocCapture(Device& device)
+{
+    auto* vulkanDevice = dynamic_cast<detail::VulkanDevice*>(&device);
+
+    if (vulkanDevice == nullptr ||
+        vulkanDevice->GetRenderDocCapture() == nullptr)
+    {
+        log::Warning(
+            "Orbit ignored a RenderDoc capture request: RenderDoc is "
+            "not available for this device.");
+        return;
+    }
+
+    vulkanDevice->GetRenderDocCapture()->TriggerCapture();
+}
+
+bool IsRenderDocAvailable(const Device& device) noexcept
+{
+    const auto* vulkanDevice = dynamic_cast<const detail::VulkanDevice*>(&device);
+    return vulkanDevice != nullptr &&
+        vulkanDevice->GetRenderDocCapture() != nullptr;
+}
+
+bool IsRenderDocCapturing(const Device& device) noexcept
+{
+    const auto* vulkanDevice = dynamic_cast<const detail::VulkanDevice*>(&device);
+
+    return vulkanDevice != nullptr &&
+        vulkanDevice->GetRenderDocCapture() != nullptr &&
+        vulkanDevice->GetRenderDocCapture()->IsCapturing();
+}
+
+std::string LastRenderDocCapturePath(const Device& device)
+{
+    const auto* vulkanDevice = dynamic_cast<const detail::VulkanDevice*>(&device);
+
+    if (vulkanDevice == nullptr ||
+        vulkanDevice->GetRenderDocCapture() == nullptr)
+    {
+        return {};
+    }
+
+    return vulkanDevice->GetRenderDocCapture()->LastCapturePath();
 }
 } // namespace orbit::rhi::vulkan

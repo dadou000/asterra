@@ -21,13 +21,37 @@
 #include <orbit/world/Planet.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <format>
 #include <memory>
 #include <vector>
+
+namespace
+{
+// Environment-variable opt-ins for performance-analysis tooling (extra
+// Vulkan validation-layer features, RenderDoc) -- see their call site.
+// Any non-empty value counts as enabled; unset counts as disabled.
+[[nodiscard]] bool EnvFlagEnabled(const char* name)
+{
+    char* value = nullptr;
+    std::size_t valueLength = 0;
+
+    const bool found =
+        _dupenv_s(&value, &valueLength, name) == 0 && value != nullptr;
+
+    if (found)
+    {
+        free(value);
+    }
+
+    return found;
+}
+} // namespace
 
 int main()
 {
@@ -67,9 +91,38 @@ int main()
         constexpr bool enableValidation = true;
 #endif
 
+        // Extra validation-layer features and RenderDoc are opt-in via
+        // environment variables rather than compiled in, so they can be
+        // toggled per-run for a performance-analysis session without a
+        // rebuild -- e.g. turn on synchronization validation to hunt a
+        // bug, then back off to get accurate timing again.
+        const bool enableBestPractices =
+            EnvFlagEnabled("ORBIT_VK_BEST_PRACTICES");
+        const bool enableSyncValidation =
+            EnvFlagEnabled("ORBIT_VK_SYNC_VALIDATION");
+        const bool enableGpuAssisted =
+            EnvFlagEnabled("ORBIT_VK_GPU_ASSISTED");
+        const bool enableRenderDoc =
+            EnvFlagEnabled("ORBIT_RENDERDOC");
+
         auto device = orbit::rhi::vulkan::CreateDevice({
-            .enableValidation = enableValidation
+            .enableValidation =
+                enableValidation ||
+                enableBestPractices ||
+                enableSyncValidation ||
+                enableGpuAssisted,
+            .enableBestPracticesValidation = enableBestPractices,
+            .enableSynchronizationValidation = enableSyncValidation,
+            .enableGpuAssistedValidation = enableGpuAssisted,
+            .enableRenderDoc = enableRenderDoc
         });
+
+        if (enableRenderDoc)
+        {
+            orbit::rhi::vulkan::SetRenderDocActiveWindow(
+                *device,
+                window->NativeHandle());
+        }
 
         const auto& capabilities = device->Capabilities();
 
@@ -109,6 +162,24 @@ int main()
                 .initialState =
                     orbit::rhi::ResourceState::DepthWrite
             });
+
+        // Per-frame-in-flight GPU timing: 4 timestamps per swapchain
+        // slot (scene begin/end, overlay begin/end), so a slot's
+        // previous timestamps are only ever read back after the same
+        // frame-fence wait that already guards reusing that slot's
+        // allocator -- no separate synchronization needed.
+        constexpr orbit::u32 kTimestampsPerFrame = 4;
+
+        auto gpuTimestamps =
+            device->CreateTimestampQueryPool(
+                swapchain->BufferCount() *
+                kTimestampsPerFrame);
+
+        const orbit::f64 timestampPeriodNs =
+            device->TimestampPeriodNanoseconds();
+
+        orbit::f64 lastGpuSceneMs = 0.0;
+        orbit::f64 lastGpuOverlayMs = 0.0;
 
         const orbit::world::PlanetDefinition planet{
             .radiusMeters = 6'000'000.0
@@ -316,7 +387,7 @@ int main()
         // F3 debug HUD: a stack of small text panels pinned to the
         // top-left corner, updated live and toggled at runtime.
         constexpr orbit::u32
-            kDebugOverlayLineCount = 7;
+            kDebugOverlayLineCount = 8;
 
         std::vector<
             std::unique_ptr<
@@ -551,6 +622,44 @@ int main()
                     ? std::string(
                         "ERR no stats yet")
                     : lastStatsLine;
+            });
+
+        devServer.RegisterCommand(
+            "RENDERDOC_CAPTURE",
+            [&device](const auto&)
+            {
+                if (!orbit::rhi::vulkan::IsRenderDocAvailable(*device))
+                {
+                    return std::string(
+                        "ERR RenderDoc unavailable -- relaunch with "
+                        "ORBIT_RENDERDOC=1 set (and renderdoc.dll "
+                        "installed or ORBIT_RENDERDOC_DLL pointing at "
+                        "it)");
+                }
+
+                orbit::rhi::vulkan::TriggerRenderDocCapture(*device);
+
+                return std::string(
+                    "OK capturing next frame");
+            });
+
+        devServer.RegisterCommand(
+            "RENDERDOC_STATUS",
+            [&device](const auto&)
+            {
+                if (!orbit::rhi::vulkan::IsRenderDocAvailable(*device))
+                {
+                    return std::string("unavailable");
+                }
+
+                const std::string lastCapture =
+                    orbit::rhi::vulkan::LastRenderDocCapturePath(
+                        *device);
+
+                return std::format(
+                    "available capturing={} last={}",
+                    orbit::rhi::vulkan::IsRenderDocCapturing(*device),
+                    lastCapture.empty() ? "(none)" : lastCapture);
             });
 
         devServer.RegisterCommand(
@@ -866,6 +975,42 @@ int main()
             if (remoteQuitRequested)
             {
                 break;
+            }
+
+            // The window's client size is only ever known live via
+            // Win32Window::Width()/Height() (there is no WM_SIZE
+            // push) -- compare it against the swapchain's own cached
+            // size every frame so a resize (including minimize,
+            // which reports 0x0) is caught before anything tries to
+            // acquire/present against a now-stale swapchain.
+            const orbit::u32 windowWidth =
+                window->Width();
+
+            const orbit::u32 windowHeight =
+                window->Height();
+
+            if (windowWidth == 0 ||
+                windowHeight == 0)
+            {
+                continue;
+            }
+
+            if (windowWidth != swapchain->Width() ||
+                windowHeight != swapchain->Height())
+            {
+                swapchain->Resize(
+                    windowWidth,
+                    windowHeight);
+
+                depthTarget =
+                    device->CreateTexture({
+                        .width = swapchain->Width(),
+                        .height = swapchain->Height(),
+                        .format =
+                            orbit::rhi::TextureFormat::D32_Float,
+                        .initialState =
+                            orbit::rhi::ResourceState::DepthWrite
+                    });
             }
 
             if (window->KeyDown(
@@ -1225,6 +1370,35 @@ int main()
             if (pendingFence != 0)
             {
                 frameFence->Wait(pendingFence);
+
+                // Safe precisely because this frame slot's fence (just
+                // waited above) guards both its allocator reuse and
+                // these same timestamp queries -- the GPU work that
+                // wrote them last time this slot came around is
+                // guaranteed complete.
+                const orbit::u32 timestampBase =
+                    frameIndex * kTimestampsPerFrame;
+
+                std::array<orbit::u64, kTimestampsPerFrame>
+                    ticks{};
+
+                if (gpuTimestamps->TryGetResults(
+                        timestampBase,
+                        kTimestampsPerFrame,
+                        ticks.data()))
+                {
+                    lastGpuSceneMs =
+                        static_cast<orbit::f64>(
+                            ticks[1] - ticks[0]) *
+                        timestampPeriodNs /
+                        1'000'000.0;
+
+                    lastGpuOverlayMs =
+                        static_cast<orbit::f64>(
+                            ticks[3] - ticks[2]) *
+                        timestampPeriodNs /
+                        1'000'000.0;
+                }
             }
 
             auto& allocator =
@@ -1232,6 +1406,11 @@ int main()
 
             allocator.Reset();
             commandList->Reset(allocator);
+
+            commandList->ResetTimestampQueryPool(
+                *gpuTimestamps,
+                frameIndex * kTimestampsPerFrame,
+                kTimestampsPerFrame);
 
             auto& backBuffer =
                 swapchain->CurrentBackBuffer();
@@ -1257,6 +1436,13 @@ int main()
             commandList->SetRenderTargets(
                 backBuffer,
                 *depthTarget);
+
+            const orbit::u32 timestampBase =
+                frameIndex * kTimestampsPerFrame;
+
+            commandList->WriteTimestamp(
+                *gpuTimestamps,
+                timestampBase + 0);
 
             const bool drawWholePlanetLod =
                 wholePlanetLodForced &&
@@ -1298,6 +1484,14 @@ int main()
                     });
             }
 
+            commandList->WriteTimestamp(
+                *gpuTimestamps,
+                timestampBase + 1);
+
+            commandList->WriteTimestamp(
+                *gpuTimestamps,
+                timestampBase + 2);
+
             versionOverlay.Draw(
                 *commandList,
                 backBuffer,
@@ -1324,6 +1518,12 @@ int main()
                                 : "")
                         : "PLANET LOD AUTO");
 
+                debugOverlayLines[7]->SetText(
+                    std::format(
+                        "GPU SCENE {:.2f}MS OVERLAY {:.2f}MS",
+                        lastGpuSceneMs,
+                        lastGpuOverlayMs));
+
                 for (const auto& line :
                      debugOverlayLines)
                 {
@@ -1334,6 +1534,10 @@ int main()
                         swapchain->Height());
                 }
             }
+
+            commandList->WriteTimestamp(
+                *gpuTimestamps,
+                timestampBase + 3);
 
             commandList->Transition(
                 backBuffer,

@@ -24,6 +24,12 @@ public:
 
     virtual void Present(bool verticalSync) = 0;
 
+    // Recreates the swapchain's images against a new size (e.g. after
+    // the window was resized). No-op if width/height already match.
+    // The caller is responsible for recreating anything else sized to
+    // the swapchain (depth buffers, etc.) afterward.
+    virtual void Resize(u32 width, u32 height) = 0;
+
     [[nodiscard]] virtual u32 Width() const noexcept = 0;
     [[nodiscard]] virtual u32 Height() const noexcept = 0;
     [[nodiscard]] virtual u32 BufferCount() const noexcept = 0;

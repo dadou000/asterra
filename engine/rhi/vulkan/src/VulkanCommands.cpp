@@ -17,9 +17,19 @@ ImageBarrierInfo ToImageBarrierInfo(
             VK_ACCESS_2_NONE};
 
     case ResourceState::Present:
+        // Stage must be COLOR_ATTACHMENT_OUTPUT, matching where the
+        // swapchain's acquire/render-finished semaphores wait and
+        // signal (see VulkanQueue::Submit) -- NONE here (the "obvious"
+        // choice, since the presentation engine has no real access
+        // mask) doesn't chain with either semaphore's stage, which
+        // synchronization validation flags as a WRITE_AFTER_READ on
+        // the following Present->RenderTarget transition and a
+        // PRESENT_AFTER_WRITE on the preceding RenderTarget->Present
+        // one. Access stays NONE: presenting genuinely has no
+        // barrier-visible memory access of its own to declare.
         return {
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            VK_PIPELINE_STAGE_2_NONE,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             VK_ACCESS_2_NONE};
 
     case ResourceState::RenderTarget:
@@ -391,13 +401,25 @@ void VulkanCommandList::Transition(
 
     const bool isDepth = vulkanTexture->IsDepth();
     const bool firstUse = !vulkanTexture->EverUsed();
+    // Only the *layout* is forced here -- there's genuinely no prior
+    // content to preserve on a never-before-used swapchain image, so
+    // claiming its real one (from `before`) would lie about that.
+    // The stage/access mask, however, must still come from `before`'s
+    // real mapping: for a swapchain image that's specifically
+    // ResourceState::Present, whose stage now matches where the
+    // acquire semaphore's wait is declared (see ToImageBarrierInfo) --
+    // hardcoding NONE here instead broke that chain on exactly a
+    // swapchain image's first-ever use, which is the one case this
+    // branch exists for, and synchronization validation flagged it as
+    // a WRITE_AFTER_READ against vkAcquireNextImageKHR.
+    const ImageBarrierInfo realSource = ToImageBarrierInfo(before, isDepth);
     const ImageBarrierInfo source =
         firstUse
             ? ImageBarrierInfo{
                 VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_PIPELINE_STAGE_2_NONE,
-                VK_ACCESS_2_NONE}
-            : ToImageBarrierInfo(before, isDepth);
+                realSource.stageMask,
+                realSource.accessMask}
+            : realSource;
 
     if (firstUse)
     {
@@ -843,6 +865,54 @@ void VulkanCommandList::Draw(
     const u32 firstVertex)
 {
     vkCmdDraw(nativeCommandList_, vertexCount, 1, firstVertex, 0);
+}
+
+void VulkanCommandList::ResetTimestampQueryPool(
+    TimestampQueryPool& pool,
+    const u32 firstQuery,
+    const u32 count)
+{
+    auto* vulkanPool = dynamic_cast<VulkanTimestampQueryPool*>(&pool);
+    if (vulkanPool == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a timestamp query pool from another "
+            "backend.");
+    }
+
+    // vkCmdResetQueryPool must not be recorded inside a dynamic-rendering
+    // scope (same restriction as barriers/copies -- see the note on
+    // PauseRenderingIfActive above), but every call site in this
+    // codebase resets right after Reset(), before the frame's first
+    // SetRenderTarget(s), so this is never actually mid-render-pass in
+    // practice; pause/resume isn't worth the complexity here.
+    vkCmdResetQueryPool(
+        nativeCommandList_, vulkanPool->Native(), firstQuery, count);
+}
+
+void VulkanCommandList::WriteTimestamp(
+    TimestampQueryPool& pool,
+    const u32 query)
+{
+    auto* vulkanPool = dynamic_cast<VulkanTimestampQueryPool*>(&pool);
+    if (vulkanPool == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a timestamp query pool from another "
+            "backend.");
+    }
+
+    // BOTTOM_OF_PIPE: the timestamp is written only once every command
+    // submitted before this one has finished executing, which is what
+    // you want for both ends of a "how long did this pass take" region
+    // (TOP_OF_PIPE for the start mark would fire before earlier
+    // in-flight work drains, understating a pass that stalls behind the
+    // one before it).
+    vkCmdWriteTimestamp2(
+        nativeCommandList_,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+        vulkanPool->Native(),
+        query);
 }
 
 void VulkanCommandList::Close()

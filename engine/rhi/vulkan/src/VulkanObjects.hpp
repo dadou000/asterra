@@ -10,6 +10,7 @@
 #include <vma/vk_mem_alloc.h>
 
 #include <orbit/rhi/Device.hpp>
+#include <orbit/rhi/vulkan/RenderDocCapture.hpp>
 
 #include <memory>
 #include <optional>
@@ -233,6 +234,34 @@ private:
     bool everUsed_{true};
 };
 
+class VulkanTimestampQueryPool final : public TimestampQueryPool
+{
+public:
+    VulkanTimestampQueryPool(
+        VkDevice device,
+        VkQueryPool pool,
+        u32 count);
+    ~VulkanTimestampQueryPool() override;
+
+    VulkanTimestampQueryPool(const VulkanTimestampQueryPool&) = delete;
+    VulkanTimestampQueryPool& operator=(
+        const VulkanTimestampQueryPool&) = delete;
+
+    [[nodiscard]] u32 Count() const noexcept override;
+
+    [[nodiscard]] bool TryGetResults(
+        u32 first,
+        u32 count,
+        u64* outTicks) const override;
+
+    [[nodiscard]] VkQueryPool Native() const noexcept;
+
+private:
+    VkDevice device_{VK_NULL_HANDLE};
+    VkQueryPool pool_{VK_NULL_HANDLE};
+    u32 count_{0};
+};
+
 class VulkanGraphicsPipeline final : public GraphicsPipeline
 {
 public:
@@ -364,6 +393,15 @@ public:
         u32 vertexCount,
         u32 firstVertex) override;
 
+    void ResetTimestampQueryPool(
+        TimestampQueryPool& pool,
+        u32 firstQuery,
+        u32 count) override;
+
+    void WriteTimestamp(
+        TimestampQueryPool& pool,
+        u32 query) override;
+
     void Close() override;
 
     [[nodiscard]] VkCommandBuffer Native() const noexcept;
@@ -417,18 +455,21 @@ class VulkanSwapchain final : public Swapchain
 public:
     VulkanSwapchain(
         VkInstance instance,
+        VkPhysicalDevice physicalDevice,
         VkDevice device,
         VkSurfaceKHR surface,
         VkSwapchainKHR nativeSwapchain,
         VulkanQueue& presentQueue,
         const SwapchainDesc& desc,
-        VkFormat format);
+        VkFormat format,
+        VkColorSpaceKHR colorSpace);
     ~VulkanSwapchain() override;
 
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
 
     void Present(bool verticalSync) override;
+    void Resize(u32 width, u32 height) override;
 
     [[nodiscard]] u32 Width() const noexcept override;
     [[nodiscard]] u32 Height() const noexcept override;
@@ -438,11 +479,16 @@ public:
 
 private:
     void AcquireIfNeeded() const;
+    void CreatePerImageResources();
+    void DestroyPerImageResources();
 
     VkInstance instance_{VK_NULL_HANDLE};
+    VkPhysicalDevice physicalDevice_{VK_NULL_HANDLE};
     VkDevice device_{VK_NULL_HANDLE};
     VkSurfaceKHR surface_{VK_NULL_HANDLE};
     VkSwapchainKHR nativeSwapchain_{VK_NULL_HANDLE};
+    VkFormat format_{VK_FORMAT_UNDEFINED};
+    VkColorSpaceKHR colorSpace_{VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     VulkanQueue* presentQueue_{nullptr};
     u32 width_{};
     u32 height_{};
@@ -480,7 +526,8 @@ public:
         DeviceCapabilities capabilities,
         DeviceFunctions functions,
         bool validationEnabled,
-        VkDebugUtilsMessengerEXT debugMessenger);
+        VkDebugUtilsMessengerEXT debugMessenger,
+        std::unique_ptr<RenderDocCapture> renderDoc);
     ~VulkanDevice() override;
 
     VulkanDevice(const VulkanDevice&) = delete;
@@ -510,6 +557,20 @@ public:
         Queue& queue,
         const SwapchainDesc& desc) override;
 
+    [[nodiscard]] std::unique_ptr<TimestampQueryPool>
+    CreateTimestampQueryPool(u32 count) override;
+
+    [[nodiscard]] f64 TimestampPeriodNanoseconds()
+        const noexcept override;
+
+    // Not part of the abstract Device interface -- RenderDoc integration
+    // is inherently backend-specific. Null if the device wasn't created
+    // with DeviceDesc::enableRenderDoc or RenderDoc wasn't found; see
+    // orbit::rhi::vulkan::TriggerRenderDocCapture and friends, which are
+    // the actual public entry points (they dynamic_cast down to this).
+    [[nodiscard]] RenderDocCapture* GetRenderDocCapture() const noexcept;
+    [[nodiscard]] VkInstance NativeInstance() const noexcept;
+
 private:
     VkInstance instance_{VK_NULL_HANDLE};
     VkPhysicalDevice physicalDevice_{VK_NULL_HANDLE};
@@ -521,5 +582,6 @@ private:
     DeviceFunctions functions_{};
     bool validationEnabled_{false};
     VkDebugUtilsMessengerEXT debugMessenger_{VK_NULL_HANDLE};
+    std::unique_ptr<RenderDocCapture> renderDoc_;
 };
 } // namespace orbit::rhi::vulkan::detail

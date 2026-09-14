@@ -8,6 +8,7 @@ add_library(OrbitRhiVulkan STATIC
     src/VulkanResources.cpp
     src/VulkanSwapchain.cpp
     src/VulkanMemoryAllocatorImpl.cpp
+    src/RenderDocCapture.cpp
 )
 
 add_library(Orbit::RhiVulkan ALIAS OrbitRhiVulkan)

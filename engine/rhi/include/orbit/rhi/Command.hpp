@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/rhi/Pipeline.hpp>
+#include <orbit/rhi/Query.hpp>
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/rhi/Resource.hpp>
 
@@ -132,6 +133,21 @@ public:
     virtual void Draw(
         u32 vertexCount,
         u32 firstVertex = 0) = 0;
+
+    // Must be called for a query range before the first WriteTimestamp
+    // into it each frame (and outside any active render target -- call
+    // it right after Reset(), before the frame's first SetRenderTarget/
+    // SetRenderTargets).
+    virtual void ResetTimestampQueryPool(
+        TimestampQueryPool& pool,
+        u32 firstQuery,
+        u32 count) = 0;
+
+    // Records a GPU timestamp at this point in the command stream.
+    // Safe to call both inside and outside an active render target.
+    virtual void WriteTimestamp(
+        TimestampQueryPool& pool,
+        u32 query) = 0;
 
     virtual void Close() = 0;
 

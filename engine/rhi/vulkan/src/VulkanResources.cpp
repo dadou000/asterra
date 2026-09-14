@@ -447,4 +447,81 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         desc.format,
         true);
 }
+
+VulkanTimestampQueryPool::VulkanTimestampQueryPool(
+    const VkDevice device, const VkQueryPool pool, const u32 count)
+    : device_(device), pool_(pool), count_(count)
+{
+}
+
+VulkanTimestampQueryPool::~VulkanTimestampQueryPool()
+{
+    if (pool_ != VK_NULL_HANDLE)
+    {
+        vkDestroyQueryPool(device_, pool_, nullptr);
+    }
+}
+
+u32 VulkanTimestampQueryPool::Count() const noexcept
+{
+    return count_;
+}
+
+VkQueryPool VulkanTimestampQueryPool::Native() const noexcept
+{
+    return pool_;
+}
+
+bool VulkanTimestampQueryPool::TryGetResults(
+    const u32 first, const u32 count, u64* const outTicks) const
+{
+    // No WAIT bit: the caller already knows (via its own frame fence)
+    // that the writing work has completed, so a query that isn't ready
+    // here means it was simply never written this frame (e.g. a pass
+    // that didn't run) rather than something worth blocking on.
+    const VkResult result = vkGetQueryPoolResults(
+        device_,
+        pool_,
+        first,
+        count,
+        static_cast<std::size_t>(count) * sizeof(u64),
+        outTicks,
+        sizeof(u64),
+        VK_QUERY_RESULT_64_BIT);
+
+    return result == VK_SUCCESS;
+}
+
+std::unique_ptr<TimestampQueryPool>
+VulkanDevice::CreateTimestampQueryPool(const u32 count)
+{
+    if (count == 0)
+    {
+        throw std::invalid_argument(
+            "Orbit cannot create a zero-size timestamp query pool.");
+    }
+
+    VkQueryPoolCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    createInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    createInfo.queryCount = count;
+
+    VkQueryPool pool = VK_NULL_HANDLE;
+    if (vkCreateQueryPool(
+            nativeDevice_, &createInfo, nullptr, &pool) != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "Orbit failed to create a Vulkan timestamp query pool.");
+    }
+
+    return std::make_unique<VulkanTimestampQueryPool>(
+        nativeDevice_, pool, count);
+}
+
+f64 VulkanDevice::TimestampPeriodNanoseconds() const noexcept
+{
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &properties);
+    return static_cast<f64>(properties.limits.timestampPeriod);
+}
 } // namespace orbit::rhi::vulkan::detail
