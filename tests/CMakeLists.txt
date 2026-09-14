@@ -2,6 +2,20 @@ add_executable(OrbitWorldTests
     WorldCoordinatesTests.cpp
 )
 
+# Manual performance/height survey; timing is deliberately not a CTest gate.
+add_executable(OrbitTerrainBenchmark EXCLUDE_FROM_ALL
+    ../tools/TerrainBenchmark.cpp
+)
+target_link_libraries(OrbitTerrainBenchmark PRIVATE Orbit::TerrainCache)
+target_compile_features(OrbitTerrainBenchmark PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainBenchmark)
+
+add_executable(OrbitTerrainMountainTests TerrainMountainTests.cpp)
+target_link_libraries(OrbitTerrainMountainTests PRIVATE Orbit::Terrain)
+target_compile_features(OrbitTerrainMountainTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainMountainTests)
+add_test(NAME Orbit.TerrainMountains COMMAND OrbitTerrainMountainTests)
+
 target_link_libraries(OrbitWorldTests
     PRIVATE
         Orbit::World
@@ -89,11 +103,20 @@ add_executable(OrbitShaderCompilerTests
 
 target_link_libraries(OrbitShaderCompilerTests
     PRIVATE
-        Orbit::ShaderD3D
+        Orbit::ShaderDxc
 )
 
 target_compile_features(OrbitShaderCompilerTests PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitShaderCompilerTests)
+
+# dxcompiler.dll is loaded at runtime, not just link time -- without
+# it next to the executable, Windows blocks on a modal "module not
+# found" dialog instead of failing fast, hanging the test.
+add_custom_command(TARGET OrbitShaderCompilerTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitShaderCompilerTests>"
+)
 
 add_test(
     NAME Orbit.ShaderCompiler
@@ -134,6 +157,22 @@ orbit_enable_warnings(OrbitTerrainSampleStreamerTests)
 add_test(
     NAME Orbit.TerrainSampleStreamer
     COMMAND OrbitTerrainSampleStreamerTests
+)
+
+add_executable(OrbitTerrainMorphRefreshTests
+    TerrainMorphRefreshTests.cpp
+)
+
+target_link_libraries(OrbitTerrainMorphRefreshTests
+    PRIVATE Orbit::TerrainStream
+)
+
+target_compile_features(OrbitTerrainMorphRefreshTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainMorphRefreshTests)
+
+add_test(
+    NAME Orbit.TerrainMorphRefresh
+    COMMAND OrbitTerrainMorphRefreshTests
 )
 
 
@@ -368,3 +407,9 @@ add_test(
     NAME Orbit.OceanMesh
     COMMAND OrbitOceanMeshTests
 )
+
+add_executable(OrbitStandingWaterTests StandingWaterTests.cpp)
+target_link_libraries(OrbitStandingWaterTests PRIVATE Orbit::TerrainRegion Orbit::TerrainCache Orbit::TerrainStream)
+target_compile_features(OrbitStandingWaterTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitStandingWaterTests)
+add_test(NAME Orbit.StandingWater COMMAND OrbitStandingWaterTests)

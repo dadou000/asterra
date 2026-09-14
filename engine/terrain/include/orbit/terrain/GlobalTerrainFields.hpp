@@ -31,6 +31,7 @@ struct GlobalTerrainFieldDesc
 struct GlobalTerrainFieldSample
 {
     f64 coarseElevationMeters{0.0};
+    f64 landMask{0.0};
     TerrainClimate climate{};
     BiomeWeights biomes{};
 };
@@ -49,6 +50,13 @@ public:
     Description() const noexcept;
 
 private:
+    // The analytic source already normalizes its direction and classifies
+    // biomes after adding relief. Avoid doing that work twice per sample.
+    friend class AnalyticTerrainSource;
+    [[nodiscard]] GlobalTerrainFieldSample SampleNormalized(
+        const TerrainQuery& query,
+        bool includeBiomes) const noexcept;
+
     world::PlanetDefinition planet_;
     GlobalTerrainFieldDesc desc_;
 };

@@ -33,7 +33,7 @@ struct DerivedTerrainRegionIdHash
 
 struct DerivedTerrainRegionConfig
 {
-    u32 generatorVersion{1};
+    u32 generatorVersion{2};
     f64 overlapScale{1.35};
 
     terrain_hydrology::HydrologyGridConfig hydrology{

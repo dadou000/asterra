@@ -79,6 +79,7 @@ LakeWaterField BuildLakeWaterField(
             static_cast<std::size_t>(
                 resolution) *
             resolution ||
+        !std::isfinite(hydrology.spacingMeters) ||
         hydrology.spacingMeters <= 0.0 ||
         !std::isfinite(
             coreHalfExtentMeters) ||
@@ -102,6 +103,15 @@ LakeWaterField BuildLakeWaterField(
 
     result.coreHalfExtentMeters =
         coreHalfExtentMeters;
+
+    result.resolution = resolution;
+    result.bedElevationsMeters.reserve(hydrology.cells.size());
+    for (const auto& cell : hydrology.cells)
+    {
+        result.bedElevationsMeters.push_back(cell.elevationMeters);
+    }
+    result.depthsMeters.resize(hydrology.cells.size(), 0.0F);
+    result.bankInfluence.resize(hydrology.cells.size(), 0U);
 
     std::vector<u8> visited(
         hydrology.cells.size(),
@@ -142,8 +152,7 @@ LakeWaterField BuildLakeWaterField(
 
         if (seed.oceanWeight >= 0.5F ||
             static_cast<f64>(
-                seed.depressionFillMeters) <
-                config.minimumWaterDepthMeters)
+                seed.depressionFillMeters) <= 0.0)
         {
             visited[seedIndex] = 1U;
             continue;
@@ -229,9 +238,7 @@ LakeWaterField BuildLakeWaterField(
                 if (target.oceanWeight >= 0.5F ||
                     static_cast<f64>(
                         target.
-                            depressionFillMeters) <
-                        config.
-                            minimumWaterDepthMeters)
+                            depressionFillMeters) <= 0.0)
                 {
                     continue;
                 }
@@ -244,8 +251,13 @@ LakeWaterField BuildLakeWaterField(
             }
         }
 
-        if (component.size() <
-            config.minimumCellsPerBasin)
+        const auto deepCells = std::count_if(component.begin(), component.end(),
+            [&](const u32 index)
+            {
+                return basinSurface - hydrology.cells[index].elevationMeters >=
+                    config.minimumWaterDepthMeters;
+            });
+        if (deepCells < static_cast<std::ptrdiff_t>(config.minimumCellsPerBasin))
         {
             continue;
         }
@@ -276,13 +288,6 @@ LakeWaterField BuildLakeWaterField(
                     x,
                     y);
 
-            if (!IsCoreOwned(
-                    offset,
-                    coreHalfExtentMeters))
-            {
-                continue;
-            }
-
             const auto& cell =
                 hydrology.cells[
                     index];
@@ -295,8 +300,28 @@ LakeWaterField BuildLakeWaterField(
                 basinSurface -
                 terrainElevation;
 
-            if (depth <
-                config.minimumWaterDepthMeters)
+            if (depth <= 0.0)
+            {
+                continue;
+            }
+
+            result.depthsMeters[index] = static_cast<f32>(depth);
+            // Include the dry neighbours: sub-grid detail must not resurrect
+            // mountains through a basin computed from a lower-bandwidth bed.
+            for (i32 oy = -1; oy <= 1; ++oy)
+            {
+                for (i32 ox = -1; ox <= 1; ++ox)
+                {
+                    const i32 nx = static_cast<i32>(x) + ox;
+                    const i32 ny = static_cast<i32>(y) + oy;
+                    if (IsInside(nx, resolution) && IsInside(ny, resolution))
+                    {
+                        result.bankInfluence[CellIndex(resolution,
+                            static_cast<u32>(nx), static_cast<u32>(ny))] = 1U;
+                    }
+                }
+            }
+            if (!IsCoreOwned(offset, coreHalfExtentMeters))
             {
                 continue;
             }
@@ -366,6 +391,61 @@ LakeWaterField BuildLakeWaterField(
         });
     }
 
+    return result;
+}
+
+LakeWaterSample SampleLakeWater(
+    const LakeWaterField& field, const math::Double2& offsetMeters) noexcept
+{
+    const auto count = static_cast<std::size_t>(field.resolution) * field.resolution;
+    if (field.resolution < 2 || !std::isfinite(field.cellSpacingMeters) ||
+        field.cellSpacingMeters <= 0.0 ||
+        field.depthsMeters.size() != count || field.bedElevationsMeters.size() != count ||
+        field.bankInfluence.size() != count || !std::isfinite(offsetMeters.x) ||
+        !std::isfinite(offsetMeters.y))
+    {
+        return {};
+    }
+    const f64 half = static_cast<f64>(field.resolution - 1U) * 0.5;
+    const f64 x = offsetMeters.x / field.cellSpacingMeters + half;
+    const f64 y = offsetMeters.y / field.cellSpacingMeters + half;
+    if (x < 0.0 || y < 0.0 || x > half * 2.0 || y > half * 2.0)
+    {
+        return {};
+    }
+    const u32 ix = std::min(static_cast<u32>(x), field.resolution - 2U);
+    const u32 iy = std::min(static_cast<u32>(y), field.resolution - 2U);
+    const f64 tx = x - ix;
+    const f64 ty = y - iy;
+    LakeWaterSample result{};
+    f64 wetWeight = 0.0;
+    f64 weightedSurface = 0.0;
+    for (u32 oy = 0; oy < 2; ++oy)
+    {
+        for (u32 ox = 0; ox < 2; ++ox)
+        {
+            const auto index = CellIndex(field.resolution, ix + ox, iy + oy);
+            const f64 weight = (ox == 0 ? 1.0 - tx : tx) * (oy == 0 ? 1.0 - ty : ty);
+            const f64 influence = weight * field.bankInfluence[index];
+            result.influence += influence;
+            result.bedElevationMeters += influence * field.bedElevationsMeters[index];
+            if (field.depthsMeters[index] > 0.0F)
+            {
+                wetWeight += weight;
+                weightedSurface += weight * (static_cast<f64>(field.bedElevationsMeters[index]) +
+                    field.depthsMeters[index]);
+            }
+        }
+    }
+    if (result.influence > 0.0)
+    {
+        result.bedElevationMeters /= result.influence;
+        if (wetWeight > 0.0)
+        {
+            result.depthMeters = std::max(weightedSurface / wetWeight -
+                result.bedElevationMeters, 0.0);
+        }
+    }
     return result;
 }
 } // namespace orbit::terrain_water

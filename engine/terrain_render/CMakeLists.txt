@@ -1,5 +1,6 @@
 add_library(OrbitTerrainRender STATIC
     src/TerrainPreviewRenderer.cpp
+    src/UniformPlanetRenderer.cpp
 )
 
 add_library(Orbit::TerrainRender ALIAS OrbitTerrainRender)

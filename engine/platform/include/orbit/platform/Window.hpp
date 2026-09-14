@@ -17,7 +17,11 @@ enum class Key : u8
     E,
     LeftShift,
     Escape,
-    F3
+    F3,
+    F4,
+    ArrowLeft,
+    ArrowRight,
+    Enter
 };
 
 struct MouseDelta

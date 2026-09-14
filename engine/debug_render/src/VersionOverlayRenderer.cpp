@@ -184,7 +184,7 @@ BuildConstants(
 }
 
 constexpr const char* kVertexShader = R"(
-cbuffer OverlayConstants : register(b0)
+struct OverlayConstants
 {
     uint4 g_metrics0;
     uint4 g_metrics1;
@@ -192,6 +192,7 @@ cbuffer OverlayConstants : register(b0)
     uint4 g_text0;
     uint4 g_text1;
 };
+[[vk::push_constant]] OverlayConstants g_pc;
 
 struct VSOutput
 {
@@ -211,21 +212,21 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     const float2 targetSize =
         float2(
-            (float)g_metrics0.x,
-            (float)g_metrics0.y);
+            (float)g_pc.g_metrics0.x,
+            (float)g_pc.g_metrics0.y);
 
     const float2 panelSize =
         float2(
-            (float)g_metrics0.z,
-            (float)g_metrics0.w);
+            (float)g_pc.g_metrics0.z,
+            (float)g_pc.g_metrics0.w);
 
     const float2 margin =
         float2(
-            (float)g_metrics1.x,
-            (float)g_metrics1.y);
+            (float)g_pc.g_metrics1.x,
+            (float)g_pc.g_metrics1.y);
 
     const bool anchorTopLeft =
-        g_metrics2.y != 0u;
+        g_pc.g_metrics2.y != 0u;
 
     const float2 panelTopLeft =
         anchorTopLeft
@@ -273,7 +274,7 @@ VSOutput main(uint vertexId : SV_VertexID)
 )";
 
 constexpr const char* kPixelShader = R"(
-cbuffer OverlayConstants : register(b0)
+struct OverlayConstants
 {
     uint4 g_metrics0;
     uint4 g_metrics1;
@@ -281,6 +282,7 @@ cbuffer OverlayConstants : register(b0)
     uint4 g_text0;
     uint4 g_text1;
 };
+[[vk::push_constant]] OverlayConstants g_pc;
 
 struct VSOutput
 {
@@ -290,14 +292,14 @@ struct VSOutput
 
 uint PackedTextWord(uint index)
 {
-    uint word = g_text1.w;
-    if (index == 0u) word = g_text0.x;
-    else if (index == 1u) word = g_text0.y;
-    else if (index == 2u) word = g_text0.z;
-    else if (index == 3u) word = g_text0.w;
-    else if (index == 4u) word = g_text1.x;
-    else if (index == 5u) word = g_text1.y;
-    else if (index == 6u) word = g_text1.z;
+    uint word = g_pc.g_text1.w;
+    if (index == 0u) word = g_pc.g_text0.x;
+    else if (index == 1u) word = g_pc.g_text0.y;
+    else if (index == 2u) word = g_pc.g_text0.z;
+    else if (index == 3u) word = g_pc.g_text0.w;
+    else if (index == 4u) word = g_pc.g_text1.x;
+    else if (index == 5u) word = g_pc.g_text1.y;
+    else if (index == 6u) word = g_pc.g_text1.z;
     return word;
 }
 
@@ -398,19 +400,19 @@ float4 main(VSOutput input) : SV_Target0
 {
     const float2 panelSize =
         float2(
-            (float)g_metrics0.z,
-            (float)g_metrics0.w);
+            (float)g_pc.g_metrics0.z,
+            (float)g_pc.g_metrics0.w);
 
     const float padding =
-        (float)g_metrics1.z;
+        (float)g_pc.g_metrics1.z;
 
     const float scale =
         max(
-            (float)g_metrics1.w,
+            (float)g_pc.g_metrics1.w,
             1.0);
 
     const uint textLength =
-        g_metrics2.x;
+        g_pc.g_metrics2.x;
 
     const float2 local =
         input.localPixel;

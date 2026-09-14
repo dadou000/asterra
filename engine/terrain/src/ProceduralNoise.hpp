@@ -4,6 +4,7 @@
 #include <orbit/math/Vector.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace orbit::terrain::detail
@@ -104,140 +105,88 @@ namespace orbit::terrain::detail
             t;
 }
 
+struct NoiseCell
+{
+    std::array<u64, 8> hashes;
+    math::Double3 blend;
+};
+
+[[nodiscard]] inline NoiseCell MakeNoiseCell(
+    const math::Double3& position,
+    const u64 seed) noexcept
+{
+    const i64 x = static_cast<i64>(std::floor(position.x));
+    const i64 y = static_cast<i64>(std::floor(position.y));
+    const i64 z = static_cast<i64>(std::floor(position.z));
+    // Six axis hashes serve all eight corners (formerly 24 axis mixes).
+    // Unsigned arithmetic also defines wraparound at negative coordinates.
+    const u64 x0 = Mix64(static_cast<u64>(x) + 0x632BE59BD9B4E019ULL);
+    const u64 x1 = Mix64(static_cast<u64>(x) + 1U + 0x632BE59BD9B4E019ULL);
+    const u64 y0 = Mix64(static_cast<u64>(y) + 0x8CB92BA72F3D8DD7ULL);
+    const u64 y1 = Mix64(static_cast<u64>(y) + 1U + 0x8CB92BA72F3D8DD7ULL);
+    const u64 z0 = Mix64(static_cast<u64>(z) + 0x58F38DED8C5A935FULL);
+    const u64 z1 = Mix64(static_cast<u64>(z) + 1U + 0x58F38DED8C5A935FULL);
+    return {
+        .hashes = {
+            Mix64(seed ^ x0 ^ y0 ^ z0), Mix64(seed ^ x1 ^ y0 ^ z0),
+            Mix64(seed ^ x0 ^ y1 ^ z0), Mix64(seed ^ x1 ^ y1 ^ z0),
+            Mix64(seed ^ x0 ^ y0 ^ z1), Mix64(seed ^ x1 ^ y0 ^ z1),
+            Mix64(seed ^ x0 ^ y1 ^ z1), Mix64(seed ^ x1 ^ y1 ^ z1)
+        },
+        .blend = {
+            Smooth(position.x - static_cast<f64>(x)),
+            Smooth(position.y - static_cast<f64>(y)),
+            Smooth(position.z - static_cast<f64>(z))
+        }
+    };
+}
+
+template <typename T>
+[[nodiscard]] inline T InterpolateNoiseCell(
+    const std::array<T, 8>& values,
+    const math::Double3& blend) noexcept
+{
+    const auto lerp = [](const T& a, const T& b, const f64 t) { return a + (b - a) * t; };
+    return lerp(
+        lerp(lerp(values[0], values[1], blend.x), lerp(values[2], values[3], blend.x), blend.y),
+        lerp(lerp(values[4], values[5], blend.x), lerp(values[6], values[7], blend.x), blend.y),
+        blend.z);
+}
+
 [[nodiscard]] inline f64 ValueNoise3D(
     const math::Double3& position,
     const u64 seed) noexcept
 {
-    const i64 x0 =
-        static_cast<i64>(
-            std::floor(
-                position.x));
+    const auto cell = MakeNoiseCell(position, seed);
+    std::array<f64, 8> values;
+    constexpr f64 inverse53 = 1.0 / static_cast<f64>(1ULL << 53U);
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+        values[i] = static_cast<f64>(cell.hashes[i] >> 11U) * inverse53 * 2.0 - 1.0;
+    }
+    return InterpolateNoiseCell(values, cell.blend);
+}
 
-    const i64 y0 =
-        static_cast<i64>(
-            std::floor(
-                position.y));
-
-    const i64 z0 =
-        static_cast<i64>(
-            std::floor(
-                position.z));
-
-    const i64 x1 = x0 + 1;
-    const i64 y1 = y0 + 1;
-    const i64 z1 = z0 + 1;
-
-    const f64 tx =
-        Smooth(
-            position.x -
-            static_cast<f64>(x0));
-
-    const f64 ty =
-        Smooth(
-            position.y -
-            static_cast<f64>(y0));
-
-    const f64 tz =
-        Smooth(
-            position.z -
-            static_cast<f64>(z0));
-
-    const f64 c000 =
-        HashValue(
-            x0,
-            y0,
-            z0,
-            seed);
-
-    const f64 c100 =
-        HashValue(
-            x1,
-            y0,
-            z0,
-            seed);
-
-    const f64 c010 =
-        HashValue(
-            x0,
-            y1,
-            z0,
-            seed);
-
-    const f64 c110 =
-        HashValue(
-            x1,
-            y1,
-            z0,
-            seed);
-
-    const f64 c001 =
-        HashValue(
-            x0,
-            y0,
-            z1,
-            seed);
-
-    const f64 c101 =
-        HashValue(
-            x1,
-            y0,
-            z1,
-            seed);
-
-    const f64 c011 =
-        HashValue(
-            x0,
-            y1,
-            z1,
-            seed);
-
-    const f64 c111 =
-        HashValue(
-            x1,
-            y1,
-            z1,
-            seed);
-
-    const f64 x00 =
-        Lerp(
-            c000,
-            c100,
-            tx);
-
-    const f64 x10 =
-        Lerp(
-            c010,
-            c110,
-            tx);
-
-    const f64 x01 =
-        Lerp(
-            c001,
-            c101,
-            tx);
-
-    const f64 x11 =
-        Lerp(
-            c011,
-            c111,
-            tx);
-
-    const f64 y0v =
-        Lerp(
-            x00,
-            x10,
-            ty);
-
-    const f64 y1v =
-        Lerp(
-            x01,
-            x11,
-            ty);
-
-    return Lerp(
-        y0v,
-        y1v,
-        tz);
+[[nodiscard]] inline math::Double3 VectorNoise3D(
+    const math::Double3& position,
+    const u64 seed) noexcept
+{
+    const auto cell = MakeNoiseCell(position, seed);
+    std::array<math::Double3, 8> values;
+    constexpr u64 mask = (1ULL << 21U) - 1U;
+    constexpr f64 scale = 2.0 / static_cast<f64>(mask);
+    // Three disjoint 21-bit channels share lattice hashing, floor and fade.
+    // This is deterministic vector noise, not three full scalar noise calls.
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+        const u64 bits = cell.hashes[i];
+        values[i] = {
+            static_cast<f64>(bits & mask) * scale - 1.0,
+            static_cast<f64>((bits >> 21U) & mask) * scale - 1.0,
+            static_cast<f64>((bits >> 42U) & mask) * scale - 1.0
+        };
+    }
+    return InterpolateNoiseCell(values, cell.blend);
 }
 
 [[nodiscard]] inline f64 DetailWeight(

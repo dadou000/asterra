@@ -36,6 +36,9 @@ public:
         const world::WorldPosition& observer);
 
     void Reset() noexcept;
+    // Refresh data without relocating or rotating the sampling lattice.
+    void InvalidateSamples() noexcept;
+    [[nodiscard]] ClipmapTracker Reconfigured(ClipmapConfig config) const;
 
     [[nodiscard]] const ClipmapConfig& Config() const noexcept;
 
@@ -43,6 +46,7 @@ private:
     struct LevelState
     {
         bool initialized{false};
+        bool samplesInvalidated{false};
         math::Double3 centerDirection{};
         world::SurfaceFrame frame{};
     };

@@ -57,7 +57,8 @@ CachedTerrainSample ToCachedSample(
             QuantizeWeight(biomes.tundra),
             QuantizeWeight(biomes.alpine),
             QuantizeWeight(biomes.wetland)
-        }
+        },
+        .standingWaterDepthMeters = static_cast<f32>(sample.standingWaterDepthMeters)
     };
 }
 
@@ -94,7 +95,8 @@ terrain::TerrainSample FromCachedSample(
                 DequantizeWeight(q[6]),
             .wetland =
                 DequantizeWeight(q[7])
-        }
+        },
+        .standingWaterDepthMeters = sample.standingWaterDepthMeters
     };
 }
 

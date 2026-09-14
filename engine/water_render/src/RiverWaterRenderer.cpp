@@ -111,10 +111,11 @@ BuildConstants(
 }
 
 constexpr const char* kVertexShader = R"(
-cbuffer DrawConstants : register(b0)
+struct DrawConstants
 {
     row_major float4x4 g_mvp;
 };
+[[vk::push_constant]] DrawConstants g_pc;
 
 struct VSInput
 {
@@ -138,7 +139,7 @@ VSOutput main(VSInput input)
             float4(
                 input.position,
                 1.0),
-            g_mvp);
+            g_pc.g_mvp);
 
     output.lateral =
         input.water.x;
@@ -931,6 +932,10 @@ private:
                     visibleSegmentsLastFrame;
             }
 
+            if (config_.maximumLakeCells == 0)
+            {
+                continue;
+            }
             const auto& lakes =
                 region->lakes;
 

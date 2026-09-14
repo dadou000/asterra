@@ -550,7 +550,8 @@ TerrainSampleStreamer::GeneratePatch(
                     .biomeWeights0 =
                         packedBiomes.first,
                     .biomeWeights1 =
-                        packedBiomes.second
+                        packedBiomes.second,
+                    .standingWaterDepthMeters = static_cast<f32>(sample.standingWaterDepthMeters)
                 };
         }
     }

@@ -7,20 +7,21 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/platform/CrashHandler.hpp>
 #include <orbit/platform/Window.hpp>
-#include <orbit/rhi/d3d12/D3D12Backend.hpp>
-#include <orbit/shader/d3d/D3DShaderCompiler.hpp>
+#include <orbit/rhi/vulkan/VulkanBackend.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
 #include <orbit/terrain_region/DerivedRegionTerrainSource.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegionStreamer.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
+#include <orbit/terrain_render/UniformPlanetRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
-#include <orbit/water_render/OceanRenderer.hpp>
 #include <orbit/water_render/RiverWaterRenderer.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <exception>
@@ -66,14 +67,14 @@ int main()
         constexpr bool enableValidation = true;
 #endif
 
-        auto device = orbit::rhi::d3d12::CreateDevice({
+        auto device = orbit::rhi::vulkan::CreateDevice({
             .enableValidation = enableValidation
         });
 
         const auto& capabilities = device->Capabilities();
 
         orbit::log::Info(std::format(
-            "GPU: {} | SM {}.{} | RT: {} | Mesh shaders: {} | VRS: {} | Tearing: {}",
+            "GPU: {} | Vulkan {}.{} | RT: {} | Mesh shaders: {} | VRS: {} | Tearing: {}",
             device->AdapterName(),
             capabilities.shaderModelMajor,
             capabilities.shaderModelMinor,
@@ -116,9 +117,9 @@ int main()
         const orbit::math::Double3 observerDirection =
             orbit::math::Normalize(
                 orbit::math::Double3{
-                    0.65,
-                    0.35,
-                    0.68
+                    0.365111510558,
+                    0.187057495117,
+                    -0.911977564625
                 });
 
         const orbit::world::SurfaceFrame
@@ -128,12 +129,7 @@ int main()
 
         const orbit::terrain::AnalyticTerrainDesc
             terrainDescription{
-                .seed = 0xA57E22AULL,
-                .macroAmplitudeMeters = 4'000.0,
-                .macroWavelengthMeters = 800'000.0,
-                .detailAmplitudeMeters = 1'100.0,
-                .detailWavelengthMeters = 90'000.0,
-                .detailOctaves = 8
+                .seed = 0xA57E22AULL
             };
 
         const auto authoritativeTerrain =
@@ -156,7 +152,7 @@ int main()
                                 .tileLevel = 5,
                                 .maxEntries = 12,
                                 .region = {
-                                    .generatorVersion = 1,
+                                    .generatorVersion = 2,
                                     .overlapScale = 1.35
                                 }
                             });
@@ -185,7 +181,7 @@ int main()
                                 .tileLevel = 9,
                                 .maxEntries = 16,
                                 .region = {
-                                    .generatorVersion = 1,
+                                    .generatorVersion = 2,
                                     .overlapScale = 1.35
                                 }
                             });
@@ -250,10 +246,17 @@ int main()
                 "Terrain workers: {}",
                 jobSystem.WorkerCount()));
 
+        // Start above a surveyed mountain range, with clearance derived from
+        // the authoritative terrain rather than an assumed sea-level height.
+        const orbit::f64 initialGroundElevationMeters =
+            authoritativeTerrain->Sample({observerDirection, 1.0}).elevationMeters;
+        const orbit::f64 initialAltitudeMeters =
+            std::max(8'000.0, initialGroundElevationMeters + 2'500.0);
+
         orbit::world::WorldPosition observer{
             .meters =
                 observerDirection *
-                (planet.radiusMeters + 8'000.0)
+                (planet.radiusMeters + initialAltitudeMeters)
         };
 
         orbit::world::SurfaceFrame
@@ -268,7 +271,7 @@ int main()
         // curve (one frame of lag, imperceptible).
         orbit::f64
             lastAltitudeAboveGroundMeters =
-                8'000.0;
+                initialAltitudeMeters - initialGroundElevationMeters;
 
         // A screenshot must be captured from a *later* frame than
         // the one that raised the window, since raising it cannot
@@ -301,7 +304,7 @@ int main()
 
         SlewState slewState;
 
-        const orbit::shader::d3d::D3DShaderCompiler
+        const orbit::shader::dxc::DxcShaderCompiler
             shaderCompiler;
 
         orbit::debug_render::VersionOverlayRenderer
@@ -313,7 +316,7 @@ int main()
         // F3 debug HUD: a stack of small text panels pinned to the
         // top-left corner, updated live and toggled at runtime.
         constexpr orbit::u32
-            kDebugOverlayLineCount = 5;
+            kDebugOverlayLineCount = 7;
 
         std::vector<
             std::unique_ptr<
@@ -357,6 +360,12 @@ int main()
         bool f3PressedLastFrame = false;
         std::string lastStatsLine;
 
+        bool wholePlanetLodForced = false;
+        orbit::i32 forcedPlanetLod = 0;
+        bool f4PressedLastFrame = false;
+        bool planetLodDecPressedLastFrame = false;
+        bool planetLodIncPressedLastFrame = false;
+
         orbit::terrain_render::TerrainPreviewConfig
             terrainPreviewConfig{};
 
@@ -372,35 +381,18 @@ int main()
                 observer,
                 terrainPreviewConfig);
 
-        orbit::water_render::OceanRenderer
-            ocean(
+        // F4 force-LOD: renders the whole closed planet as one fixed-
+        // resolution mesh instead of the altitude-adaptive near-field
+        // clipmap, so a specific LOD can be inspected across the
+        // entire sphere on demand rather than only wherever the
+        // observer happens to be.
+        orbit::terrain_render::UniformPlanetRenderer
+            uniformPlanet(
                 *device,
                 shaderCompiler,
                 planet,
-                observer,
-                {
-                    .mesh = {
-                        .radialRings = 112,
-                        .angularSegments = 128
-                    },
-                    .seaLevelMeters =
-                        terrainDescription.
-                            global.
-                            seaLevelMeters,
-                    .minimumRadiusMeters = 25.0,
-                    .maximumRadiusMeters =
-                        12'000'000.0,
-                    .waveAmplitudeScale = 1.0F,
-                    .verticalFovRadians =
-                        terrainPreviewConfig.
-                            verticalFovRadians,
-                    .nearPlaneMeters =
-                        terrainPreviewConfig.
-                            nearPlaneMeters,
-                    .farPlaneMeters =
-                        terrainPreviewConfig.
-                            farPlaneMeters
-                });
+                authoritativeTerrain,
+                terrainPreviewConfig);
 
         orbit::water_render::RiverWaterRenderer
             riverWater(
@@ -414,7 +406,7 @@ int main()
                     .framesInFlight =
                         swapchain->BufferCount(),
                     .maximumSegments = 16'384,
-                    .maximumLakeCells = 8'192,
+                    .maximumLakeCells = 0,
                     .verticalFovRadians =
                         terrainPreviewConfig.
                             verticalFovRadians,
@@ -448,7 +440,6 @@ int main()
              authoritativeTerrain,
              &lastAltitudeAboveGroundMeters,
              &terrainPreview,
-             &ocean,
              &riverWater](
                 const orbit::math::Double3&
                     direction,
@@ -493,8 +484,6 @@ int main()
             terrainPreview.UpdateObserver(
                 observer);
 
-            ocean.UpdateObserver(
-                observer);
 
             riverWater.UpdateObserver(
                 observer);
@@ -713,6 +702,61 @@ int main()
             });
 
         devServer.RegisterCommand(
+            "PLANET_LOD",
+            [&wholePlanetLodForced,
+             &forcedPlanetLod,
+             &uniformPlanet](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() !=
+                    1)
+                {
+                    return std::string(
+                        "ERR usage: PLANET_LOD <AUTO|tier>");
+                }
+
+                if (arguments[0] ==
+                    "AUTO")
+                {
+                    wholePlanetLodForced =
+                        false;
+                    uniformPlanet.RequestLod(
+                        -1);
+                    return std::string("OK");
+                }
+
+                orbit::i32 tier = 0;
+
+                const auto result =
+                    std::from_chars(
+                        arguments[0].data(),
+                        arguments[0].data() +
+                            arguments[0].size(),
+                        tier);
+
+                if (result.ec !=
+                        std::errc{} ||
+                    tier < 0 ||
+                    tier >
+                        static_cast<orbit::i32>(
+                            orbit::terrain_stream::
+                                kMaximumUniformPlanetLod))
+                {
+                    return std::string(
+                        "ERR usage: PLANET_LOD <AUTO|tier>");
+                }
+
+                wholePlanetLodForced = true;
+                forcedPlanetLod = tier;
+                uniformPlanet.RequestLod(
+                    forcedPlanetLod);
+
+                return std::string("OK");
+            });
+
+        devServer.RegisterCommand(
             "QUIT",
             [&remoteQuitRequested](
                 const auto&)
@@ -842,6 +886,79 @@ int main()
             }
 
             f3PressedLastFrame = f3Down;
+
+            const bool f4Down =
+                window->KeyDown(
+                    orbit::platform::Key::F4);
+
+            if (f4Down &&
+                !f4PressedLastFrame)
+            {
+                wholePlanetLodForced =
+                    !wholePlanetLodForced;
+
+                uniformPlanet.RequestLod(
+                    wholePlanetLodForced
+                        ? forcedPlanetLod
+                        : -1);
+            }
+
+            f4PressedLastFrame = f4Down;
+
+            if (wholePlanetLodForced)
+            {
+                const bool decDown =
+                    window->KeyDown(
+                        orbit::platform::Key::
+                            ArrowLeft);
+
+                const bool incDown =
+                    window->KeyDown(
+                        orbit::platform::Key::
+                            ArrowRight);
+
+                if (decDown &&
+                    !planetLodDecPressedLastFrame &&
+                    forcedPlanetLod > 0)
+                {
+                    --forcedPlanetLod;
+                    uniformPlanet.RequestLod(
+                        forcedPlanetLod);
+                }
+
+                if (incDown &&
+                    !planetLodIncPressedLastFrame &&
+                    forcedPlanetLod <
+                        static_cast<orbit::i32>(
+                            orbit::terrain_stream::
+                                kMaximumUniformPlanetLod))
+                {
+                    ++forcedPlanetLod;
+                    uniformPlanet.RequestLod(
+                        forcedPlanetLod);
+                }
+
+                planetLodDecPressedLastFrame =
+                    decDown;
+                planetLodIncPressedLastFrame =
+                    incDown;
+            }
+
+            uniformPlanet.Poll();
+
+            if (uniformPlanet.HasReadyMesh())
+            {
+                // CommitReadyMesh replaces GPU buffers the pipeline
+                // may still be reading from an in-flight frame --
+                // wait for every frame submitted so far first.
+                if (nextFenceValue > 1)
+                {
+                    frameFence->Wait(
+                        nextFenceValue - 1);
+                }
+
+                uniformPlanet.CommitReadyMesh();
+            }
 
             const orbit::platform::MouseDelta
                 mouseDelta =
@@ -1141,39 +1258,45 @@ int main()
                 backBuffer,
                 *depthTarget);
 
-            terrainPreview.Draw(
-                *commandList,
-                frameIndex,
-                swapchain->Width(),
-                swapchain->Height(),
-                camera);
+            const bool drawWholePlanetLod =
+                wholePlanetLodForced &&
+                uniformPlanet.ActiveLod() >= 0;
 
-            ocean.Draw(
-                *commandList,
-                backBuffer,
-                *depthTarget,
-                swapchain->Width(),
-                swapchain->Height(),
-                {
-                    .forward =
-                        camera.forward,
-                    .up =
-                        camera.up
-                });
+            if (drawWholePlanetLod)
+            {
+                uniformPlanet.Draw(
+                    *commandList,
+                    observer,
+                    orbit::world::MakeSurfaceFrame(
+                        orbit::math::Normalize(
+                            observer.meters)),
+                    swapchain->Width(),
+                    swapchain->Height(),
+                    camera);
+            }
+            else
+            {
+                terrainPreview.Draw(
+                    *commandList,
+                    frameIndex,
+                    swapchain->Width(),
+                    swapchain->Height(),
+                    camera);
 
-            riverWater.Draw(
-                *commandList,
-                backBuffer,
-                *depthTarget,
-                frameIndex,
-                swapchain->Width(),
-                swapchain->Height(),
-                {
-                    .forward =
-                        camera.forward,
-                    .up =
-                        camera.up
-                });
+                riverWater.Draw(
+                    *commandList,
+                    backBuffer,
+                    *depthTarget,
+                    frameIndex,
+                    swapchain->Width(),
+                    swapchain->Height(),
+                    {
+                        .forward =
+                            camera.forward,
+                        .up =
+                            camera.up
+                    });
+            }
 
             versionOverlay.Draw(
                 *commandList,
@@ -1183,6 +1306,24 @@ int main()
 
             if (debugOverlayVisible)
             {
+                const auto& rebase = terrainPreview.StreamingStats();
+                debugOverlayLines[5]->SetText(rebase.rebaseCount == 0
+                    ? "REBASE 0 NONE"
+                    : std::format("REBASE {} {} {} LVL {:.1f}S {}",
+                        rebase.rebaseCount, rebase.lastRebaseReason,
+                        rebase.lastRebaseLevels, rebase.secondsSinceLastRebase,
+                        rebase.secondsSinceLastRebase < 2.0 ? "NOW" : ""));
+
+                debugOverlayLines[6]->SetText(
+                    wholePlanetLodForced
+                        ? std::format(
+                            "PLANET LOD {}{}",
+                            forcedPlanetLod,
+                            uniformPlanet.Building()
+                                ? " BUILDING"
+                                : "")
+                        : "PLANET LOD AUTO");
+
                 for (const auto& line :
                      debugOverlayLines)
                 {
@@ -1272,8 +1413,6 @@ int main()
                 const auto fineRegionStats =
                     fineRegionCache->Stats();
 
-                const auto& oceanStats =
-                    ocean.Stats();
 
                 const auto& waterStats =
                     riverWater.Stats();
@@ -1283,7 +1422,7 @@ int main()
 
                 lastStatsLine =
                     std::format(
-                        "alt_km={:.0f} samples={} levels={} regions={} upload_b={} draws={} clip_tier={} spacing_m={:.0f} radius_km={:.0f} page_mib={:.1f}/{:.0f} entries={} evict={} reject={} derived_ready={} pending={} desired={} requests={} fine_ready={} fine_pending={} revisions={} stale={} ocean_v={} ocean_i={} ocean_draws={} ocean_km={:.0f} rivers={} lakes={} water_upload_b={}",
+                        "alt_km={:.0f} samples={} levels={} regions={} upload_b={} draws={} clip_tier={} spacing_m={:.0f} radius_km={:.0f} page_mib={:.1f}/{:.0f} entries={} evict={} reject={} derived_ready={} pending={} desired={} requests={} fine_ready={} fine_pending={} revisions={} stale={} rebases={} rebase_reason={} rebase_levels={} rebase_age_s={:.2f} standing_water=terrain rivers={} legacy_lake_cells={} water_upload_b={}",
                         (orbit::math::Length(
                             observer.meters) -
                          planet.radiusMeters) /
@@ -1331,13 +1470,10 @@ int main()
                             revisionInvalidations,
                         stats.
                             staleRevisionBatches,
-                        oceanStats.vertices,
-                        oceanStats.indices,
-                        oceanStats.
-                            drawCallsLastFrame,
-                        oceanStats.
-                            effectiveRadiusMeters /
-                            1000.0,
+                        stats.rebaseCount,
+                        stats.lastRebaseReason,
+                        stats.lastRebaseLevels,
+                        stats.secondsSinceLastRebase,
                         waterStats.
                             visibleSegmentsLastFrame,
                         waterStats.
@@ -1378,17 +1514,13 @@ int main()
                     debugOverlayLines[4]->
                         SetText(
                             std::format(
-                                "OCEAN {}V RIV {} LK {}",
-                                oceanStats.vertices,
-                                waterStats.
-                                    visibleSegmentsLastFrame,
-                                waterStats.
-                                    visibleLakeCellsLastFrame));
+                                "WATER TERRAIN RIV {}",
+                                waterStats.visibleSegmentsLastFrame));
                 }
 
                 orbit::log::Info(
                     std::format(
-                        "Terrain stream | alt {:.0f} km | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | fine ready {} pending {} | revisions {} stale {} | ocean {}v/{}i {} draw {:.0f} km | water rivers {} lakes {} upload {} B",
+                        "Terrain stream | alt {:.0f} km | samples {} levels {} regions {} | upload {} B | draws {} | clip tier {} spacing {:.0f} m radius {:.0f} km | page {:.1f}/{:.0f} MiB entries {} evict {} reject {} | derived ready {} pending {} desired {} requests {} | fine ready {} pending {} | revisions {} stale {} | standing water: terrain | water rivers {} legacy lake cells {} upload {} B",
                         (orbit::math::Length(
                             observer.meters) -
                          planet.radiusMeters) /
@@ -1436,13 +1568,6 @@ int main()
                             revisionInvalidations,
                         stats.
                             staleRevisionBatches,
-                        oceanStats.vertices,
-                        oceanStats.indices,
-                        oceanStats.
-                            drawCallsLastFrame,
-                        oceanStats.
-                            effectiveRadiusMeters /
-                            1000.0,
                         waterStats.
                             visibleSegmentsLastFrame,
                         waterStats.

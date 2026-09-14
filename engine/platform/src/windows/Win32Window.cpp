@@ -40,6 +40,14 @@ constexpr const char* kWindowClassName =
         return VK_ESCAPE;
     case Key::F3:
         return VK_F3;
+    case Key::F4:
+        return VK_F4;
+    case Key::ArrowLeft:
+        return VK_LEFT;
+    case Key::ArrowRight:
+        return VK_RIGHT;
+    case Key::Enter:
+        return VK_RETURN;
     }
 
     throw std::invalid_argument(
@@ -79,8 +87,8 @@ constexpr const char* kWindowClassName =
         return false;
     }
 
-    // Orbit presents through a D3D12 flip-model swapchain, which
-    // never draws through GDI -- BitBlt'ing from GetDC(hwnd) reads
+    // Orbit presents through a Vulkan swapchain, which never draws
+    // through GDI -- BitBlt'ing from GetDC(hwnd) reads
     // whatever stale/foreign content happens to sit in the window's
     // own (unused) GDI surface, not what's on screen. Capturing from
     // the desktop DC at the window's screen position instead reads

@@ -98,3 +98,32 @@ window's Z-order before capturing to make sure it isn't occluded.
 Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) before adding engine systems.
 
 Known issues and their fix status are tracked in [docs/PROBLEMS.md](docs/PROBLEMS.md).
+
+### Mountain terrain and performance
+
+The default terrain recipe combines domain-warped ridges, multifractal mountain
+detail, and footprint-filtered hills, with elevations bounded below 8 km above
+sea level. The sandbox starts over a mountain range with terrain-derived camera
+clearance. The implementation, measured CPU costs, and optimization research
+are documented in [the terrain research report](docs/research/TERRAIN_SYNTHESIS_AND_OPTIMIZATION.md).
+
+To run the deterministic height survey and CPU benchmark:
+
+```powershell
+cmake --build build --config Release --target OrbitTerrainBenchmark
+.\build\tests\Release\OrbitTerrainBenchmark.exe build/terrain-heightfield.csv
+```
+
+### Standing water
+
+The sandbox renders oceans and lakes on the terrain clipmap itself, sharing its
+sample cache, morphing and depth surface. Lake levels use coarse hydrology as
+one authority while fine regions continue to refine rivers and surrounding land.
+See [standing water rendering](docs/STANDING_WATER_RENDERING.md) for validation,
+storage costs and remaining limitations. The HUD reports `WATER TERRAIN`; the
+legacy ocean vertex and lake-cell counts no longer describe the active surface.
+
+F3 also reports committed full-grid rebuilds as `REBASE`: cumulative count,
+reason (`SOURCE`, `LOD`, or `MOVE`), number of levels, and elapsed seconds. `NOW`
+stays visible for two seconds. Source refreshes preserve sampling grid placement;
+coverage changes retain grids shared between the old and new resolutions.

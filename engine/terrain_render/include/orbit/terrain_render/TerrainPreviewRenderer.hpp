@@ -32,6 +32,11 @@ struct TerrainStreamingStats
     u64 revisionInvalidations{0};
     u64 staleRevisionBatches{0};
     u64 coverageTierChanges{0};
+    // Committed full-grid rebuilds, excluding initial population.
+    u64 rebaseCount{0};
+    u32 lastRebaseLevels{0};
+    const char* lastRebaseReason{"NONE"};
+    f64 secondsSinceLastRebase{-1.0};
 
     u32 adaptiveCoverageTier{0};
     f64 activeBaseSpacingMeters{0.0};

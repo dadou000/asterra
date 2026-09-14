@@ -242,7 +242,7 @@ int main()
         sizeof(orbit::terrain_cache::TerrainPage) +
         lruResolution *
             lruResolution *
-            sizeof(orbit::terrain::TerrainSample);
+            sizeof(orbit::terrain_cache::CachedTerrainSample);
 
     orbit::terrain_cache::TerrainPageCache
         limitedCache(

@@ -30,6 +30,9 @@ struct TerrainSample
     f64 coarseElevationMeters{0.0};
     TerrainClimate climate{};
     BiomeWeights biomes{};
+    // Ground queries retain the bed. Rendering uses elevation + depth.
+    // Interpolate both linearly so wet/dry transitions share the terrain morph.
+    f64 standingWaterDepthMeters{0.0};
 };
 
 [[nodiscard]] BiomeWeights NormalizeBiomeWeights(

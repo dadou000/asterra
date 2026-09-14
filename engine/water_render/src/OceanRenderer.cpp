@@ -196,7 +196,7 @@ BuildConstants(
 }
 
 constexpr const char* kVertexShader = R"(
-cbuffer DrawConstants : register(b0)
+struct DrawConstants
 {
     row_major float4x4 g_mvp;
 
@@ -209,6 +209,7 @@ cbuffer DrawConstants : register(b0)
 
     float4 g_waves;
 };
+[[vk::push_constant]] DrawConstants g_pc;
 
 struct VSOutput
 {
@@ -299,27 +300,27 @@ float OceanWaveHeight(
          wave1 +
          wave2 +
          wave3) *
-        g_waves.x;
+        g_pc.g_waves.x;
 }
 
 VSOutput main(uint vertexId : SV_VertexID)
 {
     const float planetRadius =
-        g_planet.x;
+        g_pc.g_planet.x;
 
     const float observerRadius =
-        g_planet.y;
+        g_pc.g_planet.y;
 
     const float seaLevel =
-        g_planet.z;
+        g_pc.g_planet.z;
 
     const uint radialRings =
         (uint)round(
-            g_planet.w);
+            g_pc.g_planet.w);
 
     const uint angularSegments =
         (uint)round(
-            g_mesh.x);
+            g_pc.g_mesh.x);
 
     float radiusMeters = 0.0;
     float theta = 0.0;
@@ -347,12 +348,12 @@ VSOutput main(uint vertexId : SV_VertexID)
 
         const float minimumRadius =
             max(
-                g_mesh.y,
+                g_pc.g_mesh.y,
                 0.001);
 
         const float maximumRadius =
             max(
-                g_mesh.z,
+                g_pc.g_mesh.z,
                 minimumRadius);
 
         radiusMeters =
@@ -393,14 +394,14 @@ VSOutput main(uint vertexId : SV_VertexID)
                 sinAngle);
 
     const float3 tangentPlanet =
-        g_centerEastPlanet.xyz *
+        g_pc.g_centerEastPlanet.xyz *
             tangentX +
-        g_centerNorthPlanet.xyz *
+        g_pc.g_centerNorthPlanet.xyz *
             tangentY;
 
     const float3 globalSurfaceDirection =
         normalize(
-            g_centerUpPlanet.xyz *
+            g_pc.g_centerUpPlanet.xyz *
                 cosAngle +
             tangentPlanet *
                 sinAngle);
@@ -412,7 +413,7 @@ VSOutput main(uint vertexId : SV_VertexID)
     const float waveHeight =
         OceanWaveHeight(
             globalSurfacePosition,
-            g_mesh.w);
+            g_pc.g_mesh.w);
 
     const float displacedRadius =
         planetRadius +
@@ -434,7 +435,7 @@ VSOutput main(uint vertexId : SV_VertexID)
             float4(
                 localPosition,
                 1.0),
-            g_mvp);
+            g_pc.g_mvp);
 
     output.localPosition =
         localPosition;

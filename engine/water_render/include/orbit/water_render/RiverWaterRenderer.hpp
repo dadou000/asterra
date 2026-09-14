@@ -23,7 +23,9 @@ struct RiverWaterRendererConfig
 {
     u32 framesInFlight{3};
     u32 maximumSegments{16'384};
-    u32 maximumLakeCells{8'192};
+    // Legacy cell overlays are opt-in. Standing water normally belongs to
+    // the terrain surface; enabling both draws duplicate lake surfaces.
+    u32 maximumLakeCells{0};
 
     f32 verticalFovRadians{1.22173048F};
     f32 nearPlaneMeters{10.0F};

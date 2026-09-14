@@ -11,8 +11,8 @@ target_link_libraries(OrbitSandbox
         Orbit::Jobs
         Orbit::Math
         Orbit::Platform
-        Orbit::RhiD3D12
-        Orbit::ShaderD3D
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
         Orbit::Terrain
         Orbit::TerrainCache
         Orbit::TerrainRegion
@@ -29,4 +29,13 @@ orbit_enable_warnings(OrbitSandbox)
 
 set_target_properties(OrbitSandbox PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+# dxcompiler.dll (the SPIR-V-capable DXC the shader compiler links
+# against, see engine/shader/dxc) is loaded at runtime, not just link
+# time -- it has to sit next to the executable.
+add_custom_command(TARGET OrbitSandbox POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitSandbox>"
 )

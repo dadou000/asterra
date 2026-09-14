@@ -14,7 +14,6 @@ namespace orbit::rhi
 {
 enum class Backend : u8
 {
-    D3D12,
     Vulkan
 };
 

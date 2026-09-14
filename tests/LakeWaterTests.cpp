@@ -151,5 +151,39 @@ int main()
         }
     }
 
+    // A shallow fringe remains part of a qualifying deep basin. Water extends
+    // past the old half-cell quad and stops at the interpolated bank crossing.
+    setCell(1, 2, 99.8F, 100.0F);
+    const auto shore = orbit::terrain_water::BuildLakeWaterField(hydrology, 1'500.0);
+    if (shore.cells.size() != 4 || shore.basins.size() != 1)
+    {
+        std::cerr << "Shallow shoreline cells were discarded.\n";
+        return 1;
+    }
+    for (int step = 0; step <= 100; ++step)
+    {
+        const double x = -static_cast<double>(step) * 10.0;
+        const auto sample = orbit::terrain_water::SampleLakeWater(shore, {x, 0.0});
+        if (sample.depthMeters <= 0.0 || sample.influence != 1.0 ||
+            std::abs(sample.bedElevationMeters + sample.depthMeters - 100.0) > 1.0e-4)
+        {
+            std::cerr << "Lake surface did not stay level through the shallow shore.\n";
+            return 1;
+        }
+    }
+    const auto dry = orbit::terrain_water::SampleLakeWater(shore, {-1'100.0, 0.0});
+    const auto outside = orbit::terrain_water::SampleLakeWater(shore, {-3'000.0, 0.0});
+    if (dry.depthMeters != 0.0 || outside.influence != 0.0)
+    {
+        std::cerr << "Lake leaked through the bank or outside its support.\n";
+        return 1;
+    }
+    // Support survives core clipping; neighbouring regions can sample overlap.
+    const auto overlap = orbit::terrain_water::SampleLakeWater(shore, {2'000.0, 0.0});
+    if (overlap.depthMeters <= 0.0)
+    {
+        std::cerr << "Lake overlap was discarded with the owned-cell mesh.\n";
+        return 1;
+    }
     return 0;
 }

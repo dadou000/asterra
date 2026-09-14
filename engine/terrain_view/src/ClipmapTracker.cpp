@@ -58,6 +58,7 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         if (!state.initialized)
         {
             state.initialized = true;
+            state.samplesInvalidated = false;
             state.centerDirection = observerDirection;
             state.frame =
                 world::MakeSurfaceFrame(observerDirection);
@@ -108,8 +109,10 @@ ClipmapMotionUpdate ClipmapTracker::Update(
             static_cast<i64>(level.gridResolution);
 
         motion.fullRefresh =
+            state.samplesInvalidated ||
             std::abs(shiftX) >= gridSize ||
             std::abs(shiftY) >= gridSize;
+        state.samplesInvalidated = false;
 
         motion.centerDirection = state.centerDirection;
         motion.surfaceFrame = state.frame;
@@ -126,6 +129,37 @@ void ClipmapTracker::Reset() noexcept
     {
         state = {};
     }
+}
+
+void ClipmapTracker::InvalidateSamples() noexcept
+{
+    for (LevelState& state : levels_)
+    {
+        state.samplesInvalidated = true;
+    }
+}
+
+ClipmapTracker ClipmapTracker::Reconfigured(const ClipmapConfig config) const
+{
+    ClipmapTracker result(planet_, config);
+    const world::WorldPosition observer{{planet_.radiusMeters, 0.0, 0.0}};
+    const auto previous = BuildClipmapLayout(config_, observer);
+    const auto next = BuildClipmapLayout(config, observer);
+    for (std::size_t target = 0; target < result.levels_.size(); ++target)
+    {
+        for (std::size_t source = 0; source < levels_.size(); ++source)
+        {
+            if (next.levels[target].sampleSpacingMeters == previous.levels[source].sampleSpacingMeters)
+            {
+                // Changing coverage shifts level indices, not world-space
+                // sample locations for resolutions common to both layouts.
+                result.levels_[target] = levels_[source];
+                result.levels_[target].samplesInvalidated = true;
+                break;
+            }
+        }
+    }
+    return result;
 }
 
 const ClipmapConfig& ClipmapTracker::Config() const noexcept

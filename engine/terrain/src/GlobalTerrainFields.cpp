@@ -30,6 +30,15 @@ GlobalTerrainFields::Sample(
         return {};
     }
 
+    return SampleNormalized({direction, query.footprintMeters}, true);
+}
+
+GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
+    const TerrainQuery& query,
+    const bool includeBiomes) const noexcept
+{
+    const auto& direction = query.unitDirection;
+
     const f64 continentalWeight =
         detail::DetailWeight(
             desc_.
@@ -80,16 +89,17 @@ GlobalTerrainFields::Sample(
             0.55);
 
     const f64 mountainRidges =
-        detail::RidgedBand(
+        landMask > 0.0 && mountainWeight > 0.0 && desc_.mountainAmplitudeMeters > 0.0
+        ? detail::RidgedBand(
             direction,
             planet_.radiusMeters,
             desc_.
                 mountainWavelengthMeters,
             desc_.seed ^
-                0xD1B54A32D192ED03ULL);
+                0xD1B54A32D192ED03ULL) : 0.0;
 
     const f64 mountainModulation =
-        std::clamp(
+        mountainRidges > 0.0 ? std::clamp(
             detail::SampleBand(
                 direction,
                 planet_.radiusMeters,
@@ -101,7 +111,7 @@ GlobalTerrainFields::Sample(
                 0.5 +
             0.5,
             0.0,
-            1.0);
+            1.0) : 0.0;
 
     const f64 mountainElevation =
         mountainRidges *
@@ -252,14 +262,15 @@ GlobalTerrainFields::Sample(
     return {
         .coarseElevationMeters =
             coarseElevation,
+        .landMask = landMask,
         .climate =
             climate,
         .biomes =
-            ClassifyBiomeWeights(
+            includeBiomes ? ClassifyBiomeWeights(
                 climate,
                 coarseElevation,
                 desc_.
-                    seaLevelMeters)
+                    seaLevelMeters) : BiomeWeights{}
     };
 }
 

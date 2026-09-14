@@ -42,11 +42,12 @@ struct TerrainSampleValue
     // Eight normalized biome weights packed as RGBA8 + RGBA8.
     u32 biomeWeights0{0};
     u32 biomeWeights1{0};
+    f32 standingWaterDepthMeters{0.0F};
 };
 
 static_assert(
     sizeof(TerrainSampleValue) ==
-    5U * sizeof(u32));
+    6U * sizeof(u32));
 
 struct TerrainSamplePatch
 {

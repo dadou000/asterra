@@ -1,13 +1,16 @@
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
+#include "TerrainSurfaceShader.hpp"
 
 #include <orbit/math/Matrix.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/terrain_stream/TerrainMorphRefresh.hpp>
 #include <orbit/terrain_stream/ToroidalResidency.hpp>
 #include <orbit/terrain_view/ClipmapTracker.hpp>
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -149,7 +152,7 @@ namespace
 }
 
 constexpr const char* kVertexShader = R"(
-cbuffer DrawConstants : register(b0)
+struct DrawConstants
 {
     row_major float4x4 g_mvp;
 
@@ -159,7 +162,9 @@ cbuffer DrawConstants : register(b0)
     float4 g_centerNorthAndMorphStart;
     float4 g_morph;
 };
+[[vk::push_constant]] DrawConstants g_pc;
 
+[[vk::binding(0, 0)]]
 ByteAddressBuffer g_samples : register(t0);
 
 struct VSOutput
@@ -170,6 +175,8 @@ struct VSOutput
     float4 biome1 : TEXCOORD2;
     float3 terrainNormal : TEXCOORD3;
     float3 surfaceDirection : TEXCOORD4;
+    float waterDepth : TEXCOORD5;
+    float3 localPosition : TEXCOORD6;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -218,9 +225,8 @@ float LoadElevation(
             originX,
             originY);
 
-    return asfloat(
-        g_samples.Load(
-            sampleIndex * 20u));
+    const uint address = sampleIndex * 24u;
+    return asfloat(g_samples.Load(address)) + asfloat(g_samples.Load(address + 20u));
 }
 
 float3 SurfaceDirectionForOffset(
@@ -228,7 +234,7 @@ float3 SurfaceDirectionForOffset(
     float planetRadius)
 {
     float3 direction =
-        g_centerUpAndOriginX.xyz;
+        g_pc.g_centerUpAndOriginX.xyz;
 
     const float distanceMeters =
         length(offsetMeters);
@@ -237,9 +243,9 @@ float3 SurfaceDirectionForOffset(
     {
         const float3 tangentDirection =
             normalize(
-                g_centerEastAndOriginY.xyz *
+                g_pc.g_centerEastAndOriginY.xyz *
                     offsetMeters.x +
-                g_centerNorthAndMorphStart.xyz *
+                g_pc.g_centerNorthAndMorphStart.xyz *
                     offsetMeters.y);
 
         const float angle =
@@ -248,7 +254,7 @@ float3 SurfaceDirectionForOffset(
 
         direction =
             normalize(
-                g_centerUpAndOriginX.xyz *
+                g_pc.g_centerUpAndOriginX.xyz *
                     cos(angle) +
                 tangentDirection *
                     sin(angle));
@@ -260,16 +266,16 @@ float3 SurfaceDirectionForOffset(
 VSOutput main(uint vertexId : SV_VertexID)
 {
     const float planetRadius =
-        g_planet.x;
+        g_pc.g_planet.x;
 
     const float observerRadius =
-        g_planet.y;
+        g_pc.g_planet.y;
 
     const float spacing =
-        g_planet.z;
+        g_pc.g_planet.z;
 
     const uint resolution =
-        (uint)round(g_planet.w);
+        (uint)round(g_pc.g_planet.w);
 
     // Index-free grid: SV_VertexID directly encodes (cell, corner)
     // instead of a unique grid vertex resolved through an index
@@ -311,11 +317,11 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     const uint originX =
         (uint)round(
-            g_centerUpAndOriginX.w);
+            g_pc.g_centerUpAndOriginX.w);
 
     const uint originY =
         (uint)round(
-            g_centerEastAndOriginY.w);
+            g_pc.g_centerEastAndOriginY.w);
 
     const uint physicalIndex =
         PhysicalSampleIndex(
@@ -326,12 +332,12 @@ VSOutput main(uint vertexId : SV_VertexID)
             originY);
 
     const uint sampleByteOffset =
-        physicalIndex * 20u;
+        physicalIndex * 24u;
 
-    const float elevation =
-        asfloat(
-            g_samples.Load(
-                sampleByteOffset));
+    const float waterDepth = asfloat(g_samples.Load(sampleByteOffset + 20u));
+    // Bed + depth is linear through page filtering and parent morphing.
+    // Land, ocean and lakes therefore use exactly the same triangles.
+    const float elevation = asfloat(g_samples.Load(sampleByteOffset)) + waterDepth;
 
     const float2 morphTargetOffset =
         asfloat(
@@ -358,13 +364,13 @@ VSOutput main(uint vertexId : SV_VertexID)
         spacing;
 
     const float morphStart =
-        g_centerNorthAndMorphStart.w;
+        g_pc.g_centerNorthAndMorphStart.w;
 
     const float morphEnd =
-        g_morph.x;
+        g_pc.g_morph.x;
 
     const float hasCoarser =
-        g_morph.z;
+        g_pc.g_morph.z;
 
     if (hasCoarser > 0.5)
     {
@@ -487,10 +493,10 @@ VSOutput main(uint vertexId : SV_VertexID)
         yDistance;
 
     float3 tangentEast =
-        g_centerEastAndOriginY.xyz -
+        g_pc.g_centerEastAndOriginY.xyz -
         surfaceDirection *
             dot(
-                g_centerEastAndOriginY.xyz,
+                g_pc.g_centerEastAndOriginY.xyz,
                 surfaceDirection);
 
     const float tangentEastLength =
@@ -511,10 +517,10 @@ VSOutput main(uint vertexId : SV_VertexID)
     }
 
     float3 tangentNorth =
-        g_centerNorthAndMorphStart.xyz -
+        g_pc.g_centerNorthAndMorphStart.xyz -
         surfaceDirection *
             dot(
-                g_centerNorthAndMorphStart.xyz,
+                g_pc.g_centerNorthAndMorphStart.xyz,
                 surfaceDirection);
 
     tangentNorth -=
@@ -555,10 +561,11 @@ VSOutput main(uint vertexId : SV_VertexID)
             float4(
                 localPosition,
                 1.0),
-            g_mvp);
+            g_pc.g_mvp);
 
-    output.elevation =
-        elevation;
+    output.elevation = elevation;
+    output.waterDepth = waterDepth;
+    output.localPosition = localPosition;
 
     output.biome0 =
         UnpackUnorm4x8(
@@ -597,7 +604,7 @@ VSOutput main(uint vertexId : SV_VertexID)
     // triangle the rasterizer discards, standing in for the
     // per-cell skip the old CPU-built index buffer used to do.
     const float innerHoleHalfExtentMeters =
-        g_morph.w;
+        g_pc.g_morph.w;
 
     const float cellCenterX =
         ((float)cellX +
@@ -635,197 +642,7 @@ VSOutput main(uint vertexId : SV_VertexID)
 }
 )";
 
-constexpr const char* kPixelShader = R"(
-struct VSOutput
-{
-    float4 position : SV_Position;
-    float elevation : TEXCOORD0;
-    float4 biome0 : TEXCOORD1;
-    float4 biome1 : TEXCOORD2;
-    float3 terrainNormal : TEXCOORD3;
-    float3 surfaceDirection : TEXCOORD4;
-    float horizonClip : SV_ClipDistance0;
-};
-
-float4 main(VSOutput input) : SV_Target0
-{
-    float4 biome0 =
-        max(
-            input.biome0,
-            0.0);
-
-    float4 biome1 =
-        max(
-            input.biome1,
-            0.0);
-
-    const float weightSum =
-        biome0.x +
-        biome0.y +
-        biome0.z +
-        biome0.w +
-        biome1.x +
-        biome1.y +
-        biome1.z +
-        biome1.w;
-
-    const float inverseWeight =
-        1.0 /
-        max(
-            weightSum,
-            0.0001);
-
-    biome0 *= inverseWeight;
-    biome1 *= inverseWeight;
-
-    const float3 oceanColor =
-        float3(
-            0.025,
-            0.11,
-            0.24);
-
-    const float3 desertColor =
-        float3(
-            0.72,
-            0.56,
-            0.31);
-
-    const float3 grasslandColor =
-        float3(
-            0.26,
-            0.42,
-            0.16);
-
-    const float3 temperateForestColor =
-        float3(
-            0.075,
-            0.25,
-            0.11);
-
-    const float3 borealForestColor =
-        float3(
-            0.08,
-            0.20,
-            0.16);
-
-    const float3 tundraColor =
-        float3(
-            0.43,
-            0.48,
-            0.42);
-
-    const float3 alpineColor =
-        float3(
-            0.58,
-            0.59,
-            0.57);
-
-    const float3 wetlandColor =
-        float3(
-            0.09,
-            0.27,
-            0.22);
-
-    float3 color =
-        oceanColor *
-            biome0.x +
-        desertColor *
-            biome0.y +
-        grasslandColor *
-            biome0.z +
-        temperateForestColor *
-            biome0.w +
-        borealForestColor *
-            biome1.x +
-        tundraColor *
-            biome1.y +
-        alpineColor *
-            biome1.z +
-        wetlandColor *
-            biome1.w;
-
-    const float3 terrainNormal =
-        normalize(
-            input.terrainNormal);
-
-    const float3 surfaceDirection =
-        normalize(
-            input.surfaceDirection);
-
-    const float slopeCosine =
-        saturate(
-            dot(
-                terrainNormal,
-                surfaceDirection));
-
-    const float slopeStrength =
-        1.0 -
-        slopeCosine;
-
-    const float landWeight =
-        saturate(
-            1.0 -
-            biome0.x);
-
-    const float rockBlend =
-        smoothstep(
-            0.06,
-            0.34,
-            slopeStrength) *
-        landWeight *
-        0.72;
-
-    const float3 rockColor =
-        float3(
-            0.30,
-            0.295,
-            0.285);
-
-    color =
-        lerp(
-            color,
-            rockColor,
-            rockBlend);
-
-    const float3 previewLightDirection =
-        normalize(
-            float3(
-                -0.42,
-                0.78,
-                0.46));
-
-    const float diffuse =
-        saturate(
-            dot(
-                terrainNormal,
-                previewLightDirection));
-
-    const float hemispheric =
-        0.58 +
-        0.42 *
-        slopeCosine;
-
-    const float lighting =
-        (0.36 +
-         diffuse * 0.64) *
-        hemispheric;
-
-    const float elevationLight =
-        saturate(
-            input.elevation /
-                8000.0);
-
-    color *=
-        lighting *
-        (0.92 +
-         elevationLight *
-            0.15);
-
-    return float4(
-        color,
-        1.0);
-}
-)";
+constexpr auto kPixelShader = detail::kTerrainSurfacePixelShader;
 } // namespace
 
 class TerrainPreviewRenderer::Impl
@@ -925,6 +742,11 @@ public:
         ServiceStreaming();
 
         stats_.uploadedBytesLastFrame = 0;
+        if (stats_.rebaseCount > 0)
+        {
+            stats_.secondsSinceLastRebase = std::chrono::duration<f64>(
+                std::chrono::steady_clock::now() - lastRebaseTime_).count();
+        }
         stats_.drawCallsLastFrame = 0;
 
         if (frameIndex >=
@@ -1439,10 +1261,7 @@ private:
             .tracker =
                 reuseCommittedState
                     ? tracker_
-                    : terrain_view::
-                        ClipmapTracker(
-                            planet_,
-                            candidateConfig),
+                    : tracker_.Reconfigured(candidateConfig),
             .residency =
                 reuseCommittedState
                     ? residency_
@@ -1458,6 +1277,11 @@ private:
         candidate.residencyUpdate =
             candidate.residency.Apply(
                 candidate.motion);
+
+        terrain_stream::RefreshTerrainMorphRegions(
+            candidate.layout,
+            candidate.motion,
+            candidate.residencyUpdate);
 
         candidate.requests.reserve(
             levels_.size());
@@ -1566,6 +1390,20 @@ private:
         const bool coverageTierChanged =
             candidate.coverageTier !=
                 activeCoverageTier_;
+
+        const auto fullLevels = static_cast<u32>(std::count_if(
+            candidate.residencyUpdate.levels.begin(), candidate.residencyUpdate.levels.end(),
+            [](const auto& level) { return level.fullRefresh; }));
+        if (stats_.committedBatches > 0 && fullLevels > 0)
+        {
+            ++stats_.rebaseCount;
+            stats_.lastRebaseLevels = fullLevels;
+            stats_.lastRebaseReason = coverageTierChanged ? "LOD" :
+                (committedSourceRevision_ != observedSourceRevision_ ? "SOURCE" : "MOVE");
+            lastRebaseTime_ = std::chrono::steady_clock::now();
+            stats_.secondsSinceLastRebase = 0.0;
+        }
+        committedSourceRevision_ = observedSourceRevision_;
 
         config_.clipmap =
             candidate.clipmapConfig;
@@ -1707,8 +1545,10 @@ private:
         observedSourceRevision_ =
             currentRevision;
 
-        tracker_.Reset();
-        residency_.Reset();
+        // A content revision is not a coordinate rebase. Recentring here
+        // changes the phase of every grid, including kilometre-scale outer
+        // levels, even when their sample footprint and world field are fixed.
+        tracker_.InvalidateSamples();
 
         ++desiredGeneration_;
         ++stats_.revisionInvalidations;
@@ -2155,6 +1995,8 @@ private:
         pendingUpdate_;
 
     TerrainStreamingStats stats_{};
+    u64 committedSourceRevision_{0};
+    std::chrono::steady_clock::time_point lastRebaseTime_{};
 
     // Vertex-shader invocation count for one patch (center or ring,
     // identical for both -- see CreateSharedTopology).

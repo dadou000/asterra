@@ -386,6 +386,57 @@ DerivedRegionTerrainSource::Sample(
         regionalDelta +
         carveDelta;
 
+    // Standing basins have one authority (the coarse hydrology cache).
+    // A fine region arriving refines rivers/land, but cannot replace a lake's
+    // spill height with an independently solved local depression.
+    f64 lakeRegionWeight = 0.0;
+    f64 lakeInfluence = 0.0;
+    f64 lakeBed = 0.0;
+    f64 lakeDepth = 0.0;
+    const auto lakeRegions = regionCache_->ReadyRegionsSnapshot();
+    if (lakeRegions)
+    {
+        for (const auto& region : *lakeRegions)
+        {
+            if (!region || region->id.sourceRevision != source_->Revision())
+            {
+                continue;
+            }
+            const auto offset = world::SurfaceOffsetBetweenDirections(
+                planet_, region->lakes.surfaceFrame, direction);
+            const f64 regionWeight = RegionInfluence(*region, offset);
+            if (regionWeight <= 0.0)
+            {
+                continue;
+            }
+            lakeRegionWeight += regionWeight;
+            const f64 weight = regionWeight * FootprintWeight(
+                query.footprintMeters, region->lakes.cellSpacingMeters, config_);
+            if (weight <= 0.0)
+            {
+                continue;
+            }
+            const auto lake = terrain_water::SampleLakeWater(region->lakes, offset);
+            lakeInfluence += weight * lake.influence;
+            lakeBed += weight * lake.influence * lake.bedElevationMeters;
+            lakeDepth += weight * lake.depthMeters;
+        }
+    }
+    const f64 originalWaterSurface = baseElevation + result.standingWaterDepthMeters;
+    const bool hadOcean = result.standingWaterDepthMeters > 0.0;
+    if (lakeRegionWeight > 0.0)
+    {
+        result.elevationMeters = result.elevationMeters *
+            (1.0 - std::clamp(lakeInfluence / lakeRegionWeight, 0.0, 1.0)) +
+            lakeBed / lakeRegionWeight;
+        result.standingWaterDepthMeters = lakeDepth / lakeRegionWeight;
+    }
+    if (hadOcean)
+    {
+        result.standingWaterDepthMeters = std::max(result.standingWaterDepthMeters,
+            std::max(originalWaterSurface - result.elevationMeters, 0.0));
+    }
+
     if (wetlandInfluence > 0.0 &&
         result.biomes.ocean < 0.5F)
     {

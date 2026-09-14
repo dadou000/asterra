@@ -234,7 +234,9 @@ TerrainSample LerpTerrainSample(
             LerpBiomeWeights(
                 a.biomes,
                 b.biomes,
-                blend)
+                blend),
+        .standingWaterDepthMeters = a.standingWaterDepthMeters +
+            (b.standingWaterDepthMeters - a.standingWaterDepthMeters) * blend
     };
 }
 

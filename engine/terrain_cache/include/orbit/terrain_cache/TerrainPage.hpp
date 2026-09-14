@@ -28,20 +28,15 @@ struct TerrainPageDescHash
         const TerrainPageDesc& desc) const noexcept;
 };
 
-// Storage-only, lossy-compressed form of terrain::TerrainSample: 32
-// bytes instead of 64. Elevations only need single-precision at page
-// scale (a handful of km across at most, so f32's ~7 significant
-// digits keep sub-millimeter error), and biome weights are a
-// normalized blend so 8-bit quantization (1/255 steps) is well below
-// visible/gameplay-relevant precision. This halves the resident
-// bytes per cached page, which is what the page cache's byte budget
-// is actually rationing -- see TerrainPageCache.
+// Storage-only form: float heights/depth, float climate and RGBA8 biomes.
+// TerrainPageCache budgets the actual sizeof(CachedTerrainSample).
 struct CachedTerrainSample
 {
     f32 elevationMeters{0.0F};
     f32 coarseElevationMeters{0.0F};
     terrain::TerrainClimate climate{};
     std::array<u8, 8> quantizedBiomeWeights{};
+    f32 standingWaterDepthMeters{0.0F};
 };
 
 [[nodiscard]] CachedTerrainSample ToCachedSample(

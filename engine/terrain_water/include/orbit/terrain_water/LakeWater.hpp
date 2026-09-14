@@ -47,7 +47,24 @@ struct LakeWaterField
 
     std::vector<LakeWaterCell> cells;
     std::vector<LakeWaterBasin> basins;
+
+    // Dense support includes the overlap and a dry bank around each basin.
+    // Sample in O(1); no per-frame cell mesh or visibility budget is needed.
+    u32 resolution{0};
+    std::vector<f32> bedElevationsMeters;
+    std::vector<f32> depthsMeters;
+    std::vector<u8> bankInfluence;
 };
+
+struct LakeWaterSample
+{
+    f64 bedElevationMeters{0.0};
+    f64 depthMeters{0.0};
+    f64 influence{0.0};
+};
+
+[[nodiscard]] LakeWaterSample SampleLakeWater(
+    const LakeWaterField& field, const math::Double2& offsetMeters) noexcept;
 
 [[nodiscard]] LakeWaterField BuildLakeWaterField(
     const terrain_hydrology::HydrologyGrid& hydrology,

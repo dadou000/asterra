@@ -1,10 +1,10 @@
-#include <orbit/shader/d3d/D3DShaderCompiler.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 
 #include <iostream>
 
 int main()
 {
-    const orbit::shader::d3d::D3DShaderCompiler compiler;
+    const orbit::shader::dxc::DxcShaderCompiler compiler;
 
     constexpr const char* vertexSource = R"(
 struct VSInput

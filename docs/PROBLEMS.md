@@ -13,35 +13,67 @@ Status legend:
 
 ## Open
 
-### ⚠️ Terrain clipmap ring overlap / gaps
-Adjacent clipmap rings (or the coarse/fine tile boundaries within the terrain
-streaming system) may not hand off cleanly — visible as either a seam where
-neither ring draws (a gap) or two rings drawing the same area (overlap /
-z-fighting). Related recent work: `66d0d21f Test clipmap ring morph-band
-overlap`, `2a048d65 Align coarse ring overlap to finer morph band`. Not yet
-isolated to a specific ring pair or altitude band — needs a targeted repro
-(fly through a ring boundary at a fixed altitude, screenshot before/after the
-transition, check for a hard edge).
+### 🔍 Terrain changes shape on source refresh / rebase
+**Correction implemented on 2026-09-13; awaiting visual confirmation.** Source
+revision changes called `ClipmapTracker::Reset`, relocating every grid around
+the current observer. A refresh therefore changed the sampling phase even for
+distant levels whose spacing and underlying field were unchanged.
 
-**Also causes terrain to fill in over rivers**: where a ring overlaps, the
-terrain drawn from the wrong (or a conflicting) ring can sit above the actual
-river/lake water surface, swallowing it the same way the hydrology
-resolution mismatch below did. This is a second, separate cause of that same
-"river disappears into the ground" symptom — fixing the hydrology resolution
-mismatch did not fix this one, since it's a rendering-time ring conflict, not
-a simulation-resolution gap. Not yet fixed.
+Source changes now call `InvalidateSamples`: the next candidate refreshes every
+sample while retaining each grid's center and orientation. Coverage tier changes
+also retain grids whose sample spacing exists in both tiers. The regression
+checks eight repeated invalidations across 12 displaced grids, full refresh
+coverage, consumption of the invalidation, and shared grids across an LOD change.
+
+F3 now shows `REBASE <count> <reason> <levels> LVL <age>S`, with `NOW` for two
+seconds after a committed rebuild. Reasons are `SOURCE`, `LOD`, and `MOVE`.
+This counts full-grid data rebuilds, not just coordinate-origin changes; initial
+population and discarded batches are excluded. `STATS` exposes the same fields.
+Actual newly arrived hydrology and changing detail levels can still change
+terrain content; this correction removes the unintended grid relocation.
+
+### 🔍 Standing water rings, changing lake levels and detached shorelines
+**Implemented on 2026-09-13; awaiting visual confirmation.** The orbital
+screenshot has `LK 0`: its rings come from the independent ocean polar mesh
+intersecting the terrain's differently tessellated sphere. Inland water also
+used half-cell quads, discarded shallow cells, switched between independently
+solved coarse/fine lake levels, and could truncate at 8,192 cells.
+
+**Change:** the sandbox now renders land, ocean and lakes in the same terrain
+surface pass. Bed elevation and standing-water depth are cached and morphed
+together; the GPU uses their sum. Lakes use the coarse hydrology cache as their
+level authority, retain shallow fringes/overlap, and sample a continuous bank
+and basin bed. Separate ocean and lake overlays are disabled in the sandbox.
+Details and limitations: [standing water rendering](STANDING_WATER_RENDERING.md).
+Automated shoreline, cache/morph, lake-authority and shader/runtime checks pass;
+this status does not claim that the user's view has been checked.
 
 ### 🔍 Soft brightness band on terrain, ~19–56 km altitude
 A faint, non-hard-edged brightness/color discontinuity visible on the terrain
 surface specifically in the 19–56 km altitude range (seen in two separate
 `SLEW` captures at the same spot, both altitudes inside that band, not seen
-below or above it). Could be the clipmap morph band overlap above, or an
+below or above it). Could be a clipmap morph band overlap, or an
 unrelated lighting artifact — not isolated. Not seen during the ground-level
 (300 m) or mildly-high (4 km) clipmap movement test, which stayed clean.
 
 ---
 
 ## Fixed
+
+### ✅ Terrain clipmap garbles during movement, cleared by rebasing
+**Confirmed fixed by the user on 2026-09-13.** Reused samples contained XY morph
+targets relative to an old ring center and heights/biomes blended for the old
+transition band. As the toroidal origin moved, these stale values stretched
+triangles and distorted heights. Full refreshes regenerated them correctly.
+
+**Fix:** `RefreshTerrainMorphRegions` refreshes the current and previous morph
+bands when either the level or its coarser parent moves, unions these with
+exposed strips, and retains the unaffected interior. The regression fails
+before the fix and passes through movement, reversals, wraparound, parent-only
+movement, and rebasing. Release build and live movement smoke test passed;
+the user's visual confirmation closes this issue. The earlier streaming-latency
+diagnosis was superseded; the committed terrain frame is already transformed
+into the current observer frame correctly.
 
 ### ✅ River/terrain resolution mismatch ("terrain filling the river") — one of two causes
 River and lake water surfaces are generated from a hydrology grid that ran at
@@ -55,12 +87,12 @@ same fixed grid resolution → ~16x finer real-world spacing) that both
 `DerivedRegionTerrainSource` (ground elevation) and `RiverWaterRenderer`
 (water surfaces) now prefer over the coarse cache wherever it has ready
 coverage near the observer, falling back to the coarse cache beyond that
-neighborhood. Verified: lake/coastline shorelines render continuous and
-detailed with no gaps in multiple test locations.
-**Not the whole story**: the clipmap ring overlap/gap problem above produces
-the same "terrain fills the river" symptom through a different mechanism
-(a rendering-time ring conflict, not a simulation-resolution gap), and is
-still open — so this symptom can still occur.
+neighborhood. This improved river resolution, but the earlier claim that it
+also resolved lake/coastline continuity was contradicted by subsequent user
+testing. See the standing-water issue above; lakes now use a different path.
+**Related rendering issue:** stale morph data also distorted terrain heights
+while moving. That bug is now fixed and user-confirmed above. Its specific
+contribution to river occlusion was not separately established.
 
 ### ✅ Terrain page cache thrashing near cube-face boundaries
 `TerrainPageCache::PruneFarPages` (proactive distance-based eviction, added

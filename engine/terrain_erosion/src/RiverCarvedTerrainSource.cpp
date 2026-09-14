@@ -227,6 +227,10 @@ RiverCarvedTerrainSource::Sample(
                     lodWeight);
     }
 
+    if (result.standingWaterDepthMeters > 0.0)
+    {
+        result.standingWaterDepthMeters += result.elevationMeters - finalElevation;
+    }
     result.elevationMeters =
         finalElevation;
 
