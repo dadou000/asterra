@@ -738,3 +738,21 @@ add_test(
     NAME Orbit.FrameGraph
     COMMAND OrbitFrameGraphTests
 )
+
+
+add_executable(OrbitBodyRegistryTests
+    BodyRegistryTests.cpp
+)
+
+target_link_libraries(OrbitBodyRegistryTests
+    PRIVATE
+        Orbit::Universe
+)
+
+target_compile_features(OrbitBodyRegistryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitBodyRegistryTests)
+
+add_test(
+    NAME Orbit.BodyRegistry
+    COMMAND OrbitBodyRegistryTests
+)
