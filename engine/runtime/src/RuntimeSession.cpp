@@ -16,8 +16,19 @@ namespace
 {
 [[nodiscard]] bool EnvironmentFlagEnabled(const char* name) noexcept
 {
-    const char* value = std::getenv(name);
-    return value != nullptr && value[0] != '\0';
+    char* value = nullptr;
+    std::size_t valueLength = 0;
+
+    const bool found =
+        _dupenv_s(
+            &value,
+            &valueLength,
+            name) == 0 &&
+        value != nullptr &&
+        valueLength > 1;
+
+    std::free(value);
+    return found;
 }
 } // namespace
 
