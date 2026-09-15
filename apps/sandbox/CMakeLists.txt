@@ -23,6 +23,7 @@ target_link_libraries(OrbitSandbox
         Orbit::TerrainHydrology
         Orbit::TerrainRender
         Orbit::TerrainStream
+        Orbit::Universe
         Orbit::World
 )
 
