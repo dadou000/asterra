@@ -1,5 +1,8 @@
 #pragma once
 
+#include <orbit/core/Types.hpp>
+
+#include <functional>
 #include <string_view>
 
 namespace orbit::log
@@ -12,7 +15,16 @@ enum class Level
     Error
 };
 
+using SinkId = u64;
+using Sink =
+    std::function<void(
+        Level,
+        std::string_view)>;
+
 void Write(Level level, std::string_view message);
+
+[[nodiscard]] SinkId AddSink(Sink sink);
+void RemoveSink(SinkId id) noexcept;
 
 inline void Info(std::string_view message)
 {
