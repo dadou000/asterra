@@ -829,3 +829,25 @@ add_test(
     NAME Orbit.Documents
     COMMAND OrbitDocumentsTests
 )
+
+
+add_executable(OrbitAuthoringModelTests
+    AuthoringModelTests.cpp
+)
+
+target_link_libraries(OrbitAuthoringModelTests
+    PRIVATE
+        Orbit::Commands
+        Orbit::Documents
+        Orbit::Scene
+        Orbit::Schema
+        Orbit::Selection
+)
+
+target_compile_features(OrbitAuthoringModelTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitAuthoringModelTests)
+
+add_test(
+    NAME Orbit.AuthoringModel
+    COMMAND OrbitAuthoringModelTests
+)
