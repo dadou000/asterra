@@ -71,7 +71,10 @@ and can look like terrain swimming, phase jumps, or incorrect sinking.
 **Change:** any spherical clipmap frame recenter now forces a full regeneration
 of that level until Orbit has a stable spherical integer lattice. Coarse-ring
 holes are centered on the actual finer-level frame instead of assuming both
-independently snapped levels share the same center. Hole cells are rejected via
+independently snapped levels share the same center. Adjacent LOD orientations
+are now hierarchical (fine frame transported directly from its coarse parent),
+preventing path-dependent relative roll from accumulating over long travel.
+Hole cells are rejected via
 clip distance rather than `(0,0,0,0)` homogeneous vertices. The innermost
 coarse overlap cell is smoothly sunk under the fine patch (5% of spacing,
 capped at 8 m) to suppress residual z-fighting/raster cracks without modifying

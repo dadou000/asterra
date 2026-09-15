@@ -43,17 +43,37 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         BuildClipmapLayout(config_, observer);
 
     ClipmapMotionUpdate update{};
-    update.levels.reserve(levels_.size());
+    update.levels.resize(levels_.size());
 
-    for (u32 index = 0;
-         index < static_cast<u32>(levels_.size());
-         ++index)
+    // Frame orientation is hierarchical from coarse to fine. This removes the
+    // path-dependent relative roll (spherical holonomy) that accumulated when
+    // every LOD independently parallel-transported its own frame. A fine frame
+    // is always the direct transport of its immediate coarse parent to the
+    // fine center. When a parent frame changes, descendants are regenerated
+    // because their local coordinate basis changed even if their centers did
+    // not cross a cell boundary.
+    std::vector<bool> frameChanged(
+        levels_.size(),
+        false);
+
+    for (std::size_t reverse = levels_.size();
+         reverse > 0;
+         --reverse)
     {
+        const u32 index =
+            static_cast<u32>(
+                reverse - 1U);
+
         LevelState& state = levels_[index];
         const ClipmapLevel& level = layout.levels[index];
 
         ClipmapLevelMotion motion{};
         motion.levelIndex = index;
+
+        const bool hasParent =
+            index + 1U <
+            static_cast<u32>(
+                levels_.size());
 
         if (!state.initialized)
         {
@@ -61,13 +81,32 @@ ClipmapMotionUpdate ClipmapTracker::Update(
             state.samplesInvalidated = false;
             state.centerDirection = observerDirection;
             state.frame =
-                world::MakeSurfaceFrame(observerDirection);
+                hasParent
+                    ? world::TransportSurfaceFrameToDirection(
+                        levels_[index + 1U].frame,
+                        observerDirection)
+                    : world::MakeSurfaceFrame(
+                        observerDirection);
+
+            frameChanged[index] = true;
 
             motion.centerDirection = state.centerDirection;
             motion.surfaceFrame = state.frame;
             motion.fullRefresh = true;
-            update.levels.push_back(motion);
+            update.levels[index] = motion;
             continue;
+        }
+
+        const bool parentFrameChanged =
+            hasParent &&
+            frameChanged[index + 1U];
+
+        if (parentFrameChanged)
+        {
+            state.frame =
+                world::TransportSurfaceFrameToDirection(
+                    levels_[index + 1U].frame,
+                    state.centerDirection);
         }
 
         const math::Double2 offset =
@@ -87,7 +126,11 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         motion.cellShiftX = shiftX;
         motion.cellShiftY = shiftY;
 
-        if (shiftX != 0 || shiftY != 0)
+        const bool centerMoved =
+            shiftX != 0 ||
+            shiftY != 0;
+
+        if (centerMoved)
         {
             const math::Double2 snappedOffset{
                 static_cast<f64>(shiftX) *
@@ -96,41 +139,40 @@ ClipmapMotionUpdate ClipmapTracker::Update(
                     level.sampleSpacingMeters
             };
 
-            state.frame =
+            const world::SurfaceFrame movedFrame =
                 world::SurfaceFrameAtOffset(
                     planet_,
                     state.frame,
                     snappedOffset);
 
-            state.centerDirection = state.frame.up;
+            state.centerDirection = movedFrame.up;
+            state.frame =
+                hasParent
+                    ? world::TransportSurfaceFrameToDirection(
+                        levels_[index + 1U].frame,
+                        state.centerDirection)
+                    : movedFrame;
         }
 
-        const i64 gridSize =
-            static_cast<i64>(level.gridResolution);
+        frameChanged[index] =
+            parentFrameChanged ||
+            centerMoved;
 
         // A toroidal strip reuse is only exact on a flat, translation-
-        // invariant lattice. On the sphere, moving the tangent frame changes
-        // the world-space address of every retained logical sample:
-        //
-        //   Exp_{Exp_F(A)}(B - A) != Exp_F(B)
-        //
-        // for general non-collinear A/B. Reusing the untouched interior after
-        // a recenter therefore makes cached height/biome/water data drift away
-        // from the geometry reconstructed from the new frame. Until the
-        // clipmap is backed by a stable spherical integer lattice, any frame
-        // recenter must regenerate the complete level.
+        // invariant lattice. On the sphere, moving or rotating the tangent
+        // frame changes the world-space address of every retained logical
+        // sample. Regenerate the whole level until the clipmap is backed by a
+        // stable spherical integer lattice.
         motion.fullRefresh =
             state.samplesInvalidated ||
-            shiftX != 0 ||
-            shiftY != 0 ||
-            std::abs(shiftX) >= gridSize ||
-            std::abs(shiftY) >= gridSize;
+            frameChanged[index];
+
         state.samplesInvalidated = false;
 
         motion.centerDirection = state.centerDirection;
         motion.surfaceFrame = state.frame;
 
-        update.levels.push_back(motion);
+        update.levels[index] = motion;
     }
 
     return update;

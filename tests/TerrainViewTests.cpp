@@ -344,6 +344,33 @@ int main()
         return 1;
     }
 
+    // Adjacent LOD frames must not acquire independent path-dependent roll.
+    // Each fine frame is the direct parallel transport of its coarse parent
+    // to the fine center.
+    for (orbit::u32 index = 0;
+         index + 1U < config.levelCount;
+         ++index)
+    {
+        const auto expectedFineFrame =
+            orbit::world::TransportSurfaceFrameToDirection(
+                oneCell.levels[index + 1U].surfaceFrame,
+                oneCell.levels[index].centerDirection);
+
+        if (orbit::math::Length(
+                expectedFineFrame.east -
+                oneCell.levels[index].surfaceFrame.east) >
+                1.0e-12 ||
+            orbit::math::Length(
+                expectedFineFrame.north -
+                oneCell.levels[index].surfaceFrame.north) >
+                1.0e-12)
+        {
+            std::cerr
+                << "Adjacent clipmap frames lost hierarchical phase alignment.\n";
+            return 1;
+        }
+    }
+
     const orbit::math::Double2 observerFromSnappedCenter =
         orbit::world::SurfaceOffsetBetweenDirections(
             planet,
