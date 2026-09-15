@@ -268,12 +268,12 @@ int main()
 
         selection.Toggle(rootObject);
 
-        assert(
-            selection.Ordered().size() ==
-            1);
-        assert(
-            selection.Revision() ==
-            selectionRevision + 1);
+        if (selection.Ordered().size() != 1 ||
+            selection.Revision() !=
+                selectionRevision + 1)
+        {
+            return 1;
+        }
 
         world.Checkpoint();
     }
