@@ -49,11 +49,13 @@ namespace
 
 [[nodiscard]] std::array<u32, 40> BuildDrawConstants(
     const math::Mat4& matrix,
+    const world::PlanetDefinition& planet,
     const f32 planetRadiusMeters,
     const f32 observerRadiusMeters,
     const terrain_view::ClipmapLevel& level,
     const terrain_view::ClipmapLevel* coarserLevel,
     const terrain_view::ClipmapLevelMotion& motion,
+    const terrain_view::ClipmapLevelMotion* finerMotion,
     const terrain_stream::LevelResidencyUpdate& residency,
     const world::SurfaceFrame& observerFrame,
     const u32 levelIndex,
@@ -86,13 +88,20 @@ namespace
             motion.surfaceFrame.north,
             observerFrame);
 
-    const f32 coarseSpacing =
-        coarserLevel != nullptr
-            ? static_cast<f32>(
-                coarserLevel->
-                    sampleSpacingMeters)
-            : static_cast<f32>(
-                level.sampleSpacingMeters);
+    math::Double2 innerHoleCenterOffset{};
+
+    if (finerMotion != nullptr &&
+        level.innerHoleHalfExtentMeters > 0.0)
+    {
+        // The finer and coarser levels snap independently. The hole in this
+        // ring must therefore follow the actual finer-level center rather
+        // than being assumed to sit at this level's local (0,0).
+        innerHoleCenterOffset =
+            world::SurfaceOffsetBetweenDirections(
+                planet,
+                motion.surfaceFrame,
+                finerMotion->surfaceFrame.up);
+    }
 
     const auto store =
         [&result](
@@ -142,7 +151,10 @@ namespace
         32,
         static_cast<f32>(
             level.morphEndHalfExtentMeters));
-    store(33, coarseSpacing);
+    store(
+        33,
+        static_cast<f32>(
+            innerHoleCenterOffset.x));
     store(
         34,
         coarserLevel != nullptr
@@ -159,7 +171,10 @@ namespace
     store(36, static_cast<f32>(levelIndex));
     store(37, debugLodColorEnabled ? 1.0F : 0.0F);
     store(38, debugSideCutEnabled ? 1.0F : 0.0F);
-    store(39, 0.0F);
+    store(
+        39,
+        static_cast<f32>(
+            innerHoleCenterOffset.y));
 
     return result;
 }
@@ -173,10 +188,12 @@ struct DrawConstants
     float4 g_centerUpAndOriginX;
     float4 g_centerEastAndOriginY;
     float4 g_centerNorthAndMorphStart;
+    // x = morph end, y = inner-hole center X in this level's local
+    // tangent frame, z = has coarser level, w = inner-hole half extent.
     float4 g_morph;
     // Debug-visuals block (F2 menu): x = this level's index (as a
     // float), y = LOD-color override enabled, z = side-cut enabled,
-    // w = reserved.
+    // w = inner-hole center Y in this level's local tangent frame.
     float4 g_debug;
 };
 [[vk::push_constant]] DrawConstants g_pc;
@@ -448,6 +465,49 @@ VSOutput main(uint vertexId : SV_VertexID)
                 morph);
     }
 
+    const float innerHoleHalfExtentMeters =
+        g_pc.g_morph.w;
+
+    const float2 innerHoleCenterOffsetMeters =
+        float2(
+            g_pc.g_morph.y,
+            g_pc.g_debug.w);
+
+    // The coarse ring overlaps the finer patch. Sink only the innermost
+    // coarse cell under that overlap, then fade smoothly back to the true
+    // surface. This prevents z-fighting/tiny raster cracks without changing
+    // the authoritative terrain or creating a visible broad depression.
+    float seamSinkMeters = 0.0;
+
+    if (innerHoleHalfExtentMeters > 0.0)
+    {
+        const float holeDistance =
+            max(
+                abs(
+                    offsetMeters.x -
+                    innerHoleCenterOffsetMeters.x),
+                abs(
+                    offsetMeters.y -
+                    innerHoleCenterOffsetMeters.y));
+
+        const float seamT =
+            saturate(
+                (holeDistance -
+                 innerHoleHalfExtentMeters) /
+                max(spacing, 0.0001));
+
+        const float seamWeight =
+            1.0 -
+            seamT * seamT *
+                (3.0 - 2.0 * seamT);
+
+        seamSinkMeters =
+            min(
+                spacing * 0.05,
+                8.0) *
+            seamWeight;
+    }
+
     const float3 surfaceDirection =
         SurfaceDirectionForOffset(
             offsetMeters,
@@ -455,7 +515,8 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     const float displacedRadius =
         planetRadius +
-        elevation;
+        elevation -
+        seamSinkMeters;
 
     const float3 localPosition =
         surfaceDirection *
@@ -626,14 +687,10 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.horizonClip = -1.0;
     }
 
-    // Ring patches have a hole in the middle where the next finer
-    // level is drawn instead -- collapsing every corner of a
-    // hole cell to the same clip-space point makes it a zero-area
-    // triangle the rasterizer discards, standing in for the
-    // per-cell skip the old CPU-built index buffer used to do.
-    const float innerHoleHalfExtentMeters =
-        g_pc.g_morph.w;
-
+    // Reject complete hole cells explicitly through the existing clip
+    // distance instead of manufacturing a homogeneous (0,0,0,0) vertex.
+    // The cell-center predicate is shared by all six invocations for a cell,
+    // so no triangle is partially clipped by this hole test.
     const float cellCenterX =
         ((float)cellX +
          0.5 -
@@ -651,19 +708,18 @@ VSOutput main(uint vertexId : SV_VertexID)
     const bool insideHole =
         innerHoleHalfExtentMeters >
             0.0 &&
-        abs(cellCenterX) <
+        abs(
+            cellCenterX -
+            innerHoleCenterOffsetMeters.x) <
             innerHoleHalfExtentMeters &&
-        abs(cellCenterY) <
+        abs(
+            cellCenterY -
+            innerHoleCenterOffsetMeters.y) <
             innerHoleHalfExtentMeters;
 
     if (insideHole)
     {
-        output.position =
-            float4(
-                0.0,
-                0.0,
-                0.0,
-                0.0);
+        output.horizonClip = -1.0;
     }
 
     return output;
@@ -910,9 +966,17 @@ public:
                             1U]
                         : nullptr;
 
+            const terrain_view::ClipmapLevelMotion*
+                finerMotion =
+                    levelIndex > 0U
+                        ? &motion_.levels[
+                            levelIndex - 1U]
+                        : nullptr;
+
             const auto constants =
                 BuildDrawConstants(
                     mvp,
+                    planet_,
                     static_cast<f32>(
                         planet_.
                             radiusMeters),
@@ -921,6 +985,7 @@ public:
                     coarserLevel,
                     motion_.levels[
                         levelIndex],
+                    finerMotion,
                     residencyUpdate_.levels[
                         levelIndex],
                     observerFrame_,

@@ -60,6 +60,24 @@ unrelated lighting artifact — not isolated. Not seen during the ground-level
 
 ## Fixed
 
+### ✅ Spherical clipmap phase drift and seam sinking
+**Correctness fix implemented on 2026-09-15; awaiting visual confirmation.**
+Toroidal strip reuse treated a recentered spherical tangent frame like a flat
+translation. Retained samples therefore kept height/biome/water values from
+old world directions while the renderer reconstructed their geometry from the
+new frame. The error is tiny on fine rings but grows rapidly on coarse rings
+and can look like terrain swimming, phase jumps, or incorrect sinking.
+
+**Change:** any spherical clipmap frame recenter now forces a full regeneration
+of that level until Orbit has a stable spherical integer lattice. Coarse-ring
+holes are centered on the actual finer-level frame instead of assuming both
+independently snapped levels share the same center. Hole cells are rejected via
+clip distance rather than `(0,0,0,0)` homogeneous vertices. The innermost
+coarse overlap cell is smoothly sunk under the fine patch (5% of spacing,
+capped at 8 m) to suppress residual z-fighting/raster cracks without modifying
+authoritative terrain. TerrainViewTests now explicitly proves that flat-style
+retained-sample translation drifts on the sphere and requires a full refresh.
+
 ### ✅ Terrain clipmap garbles during movement, cleared by rebasing
 **Confirmed fixed by the user on 2026-09-13.** Reused samples contained XY morph
 targets relative to an old ring center and heights/biomes blended for the old

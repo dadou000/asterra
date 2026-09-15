@@ -331,9 +331,10 @@ int main()
 
     if (oneCell.levels[0].cellShiftX != 1 ||
         oneCell.levels[0].cellShiftY != 0 ||
-        oneCell.levels[0].fullRefresh)
+        !oneCell.levels[0].fullRefresh)
     {
-        std::cerr << "Fine clipmap did not snap by one cell.\n";
+        std::cerr
+            << "Spherical clipmap recenter did not force a full level refresh.\n";
         return 1;
     }
 
@@ -352,6 +353,42 @@ int main()
     if (std::abs(observerFromSnappedCenter.x) > 50.0 + 1.0e-6)
     {
         std::cerr << "Clipmap snap did not keep observer within half a cell.\n";
+        return 1;
+    }
+
+    // Demonstrate why strip-only toroidal reuse is invalid on a sphere.
+    // A retained sample that would be translated to compensate for the
+    // center shift does not land on its former world direction.
+    const orbit::math::Double2 retainedOldOffset{3'200.0, 2'700.0};
+    const orbit::math::Double3 retainedOldDirection =
+        orbit::world::DirectionAtSurfaceOffset(
+            planet,
+            startFrame,
+            retainedOldOffset);
+    const orbit::math::Double3 retainedAfterRecenter =
+        orbit::world::DirectionAtSurfaceOffset(
+            planet,
+            oneCell.levels[0].surfaceFrame,
+            {
+                retainedOldOffset.x -
+                    config.baseSpacingMeters,
+                retainedOldOffset.y
+            });
+
+    const orbit::f64 retainedDriftMeters =
+        std::acos(
+            std::clamp(
+                orbit::math::Dot(
+                    retainedOldDirection,
+                    retainedAfterRecenter),
+                -1.0,
+                1.0)) *
+        planet.radiusMeters;
+
+    if (retainedDriftMeters <= 1.0e-5)
+    {
+        std::cerr
+            << "Spherical reuse regression failed to expose retained-sample drift.\n";
         return 1;
     }
 

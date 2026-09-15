@@ -108,8 +108,21 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         const i64 gridSize =
             static_cast<i64>(level.gridResolution);
 
+        // A toroidal strip reuse is only exact on a flat, translation-
+        // invariant lattice. On the sphere, moving the tangent frame changes
+        // the world-space address of every retained logical sample:
+        //
+        //   Exp_{Exp_F(A)}(B - A) != Exp_F(B)
+        //
+        // for general non-collinear A/B. Reusing the untouched interior after
+        // a recenter therefore makes cached height/biome/water data drift away
+        // from the geometry reconstructed from the new frame. Until the
+        // clipmap is backed by a stable spherical integer lattice, any frame
+        // recenter must regenerate the complete level.
         motion.fullRefresh =
             state.samplesInvalidated ||
+            shiftX != 0 ||
+            shiftY != 0 ||
             std::abs(shiftX) >= gridSize ||
             std::abs(shiftY) >= gridSize;
         state.samplesInvalidated = false;
