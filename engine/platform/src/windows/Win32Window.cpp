@@ -34,10 +34,50 @@ constexpr const char* kWindowClassName =
         return 'Q';
     case Key::E:
         return 'E';
+    case Key::C:
+        return 'C';
+    case Key::G:
+        return 'G';
+    case Key::L:
+        return 'L';
+    case Key::M:
+        return 'M';
+    case Key::V:
+        return 'V';
+    case Key::X:
+        return 'X';
+    case Key::Y:
+        return 'Y';
+    case Key::Z:
+        return 'Z';
     case Key::LeftShift:
         return VK_LSHIFT;
+    case Key::LeftControl:
+        return VK_LCONTROL;
+    case Key::LeftAlt:
+        return VK_LMENU;
     case Key::Escape:
         return VK_ESCAPE;
+    case Key::Tab:
+        return VK_TAB;
+    case Key::Enter:
+        return VK_RETURN;
+    case Key::Space:
+        return VK_SPACE;
+    case Key::Backspace:
+        return VK_BACK;
+    case Key::Delete:
+        return VK_DELETE;
+    case Key::Insert:
+        return VK_INSERT;
+    case Key::Home:
+        return VK_HOME;
+    case Key::End:
+        return VK_END;
+    case Key::PageUp:
+        return VK_PRIOR;
+    case Key::PageDown:
+        return VK_NEXT;
     case Key::F2:
         return VK_F2;
     case Key::F3:
@@ -48,16 +88,10 @@ constexpr const char* kWindowClassName =
         return VK_LEFT;
     case Key::ArrowRight:
         return VK_RIGHT;
-    case Key::Enter:
-        return VK_RETURN;
-    case Key::M:
-        return 'M';
-    case Key::L:
-        return 'L';
-    case Key::G:
-        return 'G';
-    case Key::C:
-        return 'C';
+    case Key::ArrowUp:
+        return VK_UP;
+    case Key::ArrowDown:
+        return VK_DOWN;
     }
 
     throw std::invalid_argument(
@@ -278,14 +312,62 @@ constexpr const char* kWindowClassName =
     return succeeded;
 }
 
+struct WindowEventState
+{
+    f32 wheelDelta{0.0F};
+    std::u16string textInput;
+};
+
 LRESULT CALLBACK OrbitWindowProc(
     HWND hwnd,
     UINT message,
     WPARAM wParam,
     LPARAM lParam)
 {
+    if (message == WM_NCCREATE)
+    {
+        const auto* create =
+            reinterpret_cast<
+                const CREATESTRUCTA*>(
+                    lParam);
+
+        SetWindowLongPtrA(
+            hwnd,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(
+                create->lpCreateParams));
+    }
+
+    auto* events =
+        reinterpret_cast<WindowEventState*>(
+            GetWindowLongPtrA(
+                hwnd,
+                GWLP_USERDATA));
+
     switch (message)
     {
+    case WM_MOUSEWHEEL:
+        if (events != nullptr)
+        {
+            events->wheelDelta +=
+                static_cast<f32>(
+                    GET_WHEEL_DELTA_WPARAM(
+                        wParam)) /
+                static_cast<f32>(
+                    WHEEL_DELTA);
+        }
+        return 0;
+
+    case WM_CHAR:
+        if (events != nullptr &&
+            wParam <= 0xFFFFU)
+        {
+            events->textInput.push_back(
+                static_cast<char16_t>(
+                    wParam));
+        }
+        return 0;
+
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
@@ -377,7 +459,7 @@ public:
             nullptr,
             nullptr,
             GetModuleHandleA(nullptr),
-            nullptr);
+            &eventState_);
 
         if (hwnd_ == nullptr)
         {
@@ -450,7 +532,8 @@ public:
     }
 
     [[nodiscard]] bool
-    LeftMouseButtonDown() const override
+    MouseButtonDown(
+        const MouseButton button) const override
     {
         if (GetForegroundWindow() !=
             hwnd_)
@@ -458,9 +541,24 @@ public:
             return false;
         }
 
+        int virtualKey = 0;
+
+        switch (button)
+        {
+        case MouseButton::Left:
+            virtualKey = VK_LBUTTON;
+            break;
+        case MouseButton::Right:
+            virtualKey = VK_RBUTTON;
+            break;
+        case MouseButton::Middle:
+            virtualKey = VK_MBUTTON;
+            break;
+        }
+
         return (
             GetAsyncKeyState(
-                VK_LBUTTON) &
+                virtualKey) &
             0x8000) != 0;
     }
 
@@ -562,6 +660,25 @@ public:
         CenterAndClipCursor();
 
         return delta;
+    }
+
+    [[nodiscard]] f32
+    ConsumeMouseWheelDelta() override
+    {
+        const f32 result =
+            eventState_.wheelDelta;
+        eventState_.wheelDelta = 0.0F;
+        return result;
+    }
+
+    [[nodiscard]] std::u16string
+    ConsumeTextInputUtf16() override
+    {
+        std::u16string result =
+            std::move(
+                eventState_.textInput);
+        eventState_.textInput.clear();
+        return result;
     }
 
     [[nodiscard]] void*
@@ -777,6 +894,7 @@ private:
                 centerY));
     }
 
+    WindowEventState eventState_{};
     HWND hwnd_{nullptr};
     mutable u32 width_{};
     mutable u32 height_{};
