@@ -1,14 +1,18 @@
 #include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
 
 #include <orbit/core/Log.hpp>
+#include <orbit/terrain_region/DerivedTerrainRegionGpu.hpp>
 
 #include <atomic>
+#include <cstring>
+#include <deque>
 #include <exception>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace orbit::terrain_region
 {
@@ -30,6 +34,41 @@ struct CacheEntry
     std::exception_ptr exception;
 
     std::atomic<u64> lastUseTicket{0};
+};
+
+struct GpuPendingRequest
+{
+    DerivedTerrainRegionId id;
+    std::shared_ptr<CacheEntry> entry;
+};
+
+// One fixed-size working set the GPU path dispatches a single tile's
+// worth of hydrology into, reads back once its fence retires, then
+// reuses for the next queued tile -- see Flush(). Buffers are sized
+// once, for config_.region.hydrology.resolution, at construction.
+struct GpuBuildSlot
+{
+    bool active{false};
+    u64 targetFenceValue{0};
+
+    DerivedTerrainRegionId id{};
+    std::shared_ptr<CacheEntry> entry;
+    world::SurfaceFrame surfaceFrame{};
+    f64 approximateTileWidthMeters{0.0};
+    f64 halfExtentMeters{0.0};
+    f64 spacingMeters{0.0};
+
+    std::unique_ptr<rhi::Buffer> rawGpu;
+    std::unique_ptr<rhi::Buffer> drainageGpu;
+    std::unique_ptr<rhi::Buffer> accumulationGpu;
+    std::unique_ptr<rhi::Buffer> downstreamGpu;
+    std::unique_ptr<rhi::Buffer> netDeltaGpu;
+
+    std::unique_ptr<rhi::Buffer> rawReadback;
+    std::unique_ptr<rhi::Buffer> drainageReadback;
+    std::unique_ptr<rhi::Buffer> accumulationReadback;
+    std::unique_ptr<rhi::Buffer> downstreamReadback;
+    std::unique_ptr<rhi::Buffer> netDeltaReadback;
 };
 } // namespace
 
@@ -80,6 +119,63 @@ public:
             std::make_shared<
                 const ReadyRegionList>(),
             std::memory_order_release);
+
+        if ((config_.gpuHydrology != nullptr) !=
+            (config_.gpuFence != nullptr))
+        {
+            throw std::invalid_argument(
+                "Orbit derived terrain region cache requires both "
+                "gpuDevice/gpuHydrology/gpuFence set together, or all "
+                "left null for the CPU path.");
+        }
+
+        if (config_.gpuHydrology != nullptr)
+        {
+            if (config_.gpuDevice == nullptr)
+            {
+                throw std::invalid_argument(
+                    "Orbit derived terrain region cache's GPU path "
+                    "requires a device.");
+            }
+
+            const u32 resolution = config_.region.hydrology.resolution;
+            const u64 floatBytes =
+                static_cast<u64>(resolution) * resolution * sizeof(f32);
+            const u64 uintBytes =
+                static_cast<u64>(resolution) * resolution * sizeof(u32);
+
+            const auto makeGpu = [&](const u64 bytes)
+            {
+                return config_.gpuDevice->CreateBuffer({
+                    .sizeBytes = bytes,
+                    .usage = rhi::BufferUsage::Structured,
+                    .memory = rhi::MemoryUsage::GpuOnly,
+                    .initialState = rhi::ResourceState::CopyDestination
+                });
+            };
+
+            const auto makeReadback = [&](const u64 bytes)
+            {
+                return config_.gpuDevice->CreateBuffer({
+                    .sizeBytes = bytes,
+                    .usage = rhi::BufferUsage::Generic,
+                    .memory = rhi::MemoryUsage::HostVisible,
+                    .initialState = rhi::ResourceState::CopyDestination
+                });
+            };
+
+            gpuSlot_.rawGpu = makeGpu(floatBytes);
+            gpuSlot_.drainageGpu = makeGpu(floatBytes);
+            gpuSlot_.accumulationGpu = makeGpu(floatBytes);
+            gpuSlot_.downstreamGpu = makeGpu(uintBytes);
+            gpuSlot_.netDeltaGpu = makeGpu(floatBytes);
+
+            gpuSlot_.rawReadback = makeReadback(floatBytes);
+            gpuSlot_.drainageReadback = makeReadback(floatBytes);
+            gpuSlot_.accumulationReadback = makeReadback(floatBytes);
+            gpuSlot_.downstreamReadback = makeReadback(uintBytes);
+            gpuSlot_.netDeltaReadback = makeReadback(floatBytes);
+        }
     }
 
     ~Impl()
@@ -196,6 +292,13 @@ public:
         acceptedRequests_.fetch_add(
             1,
             std::memory_order_relaxed);
+
+        if (config_.gpuHydrology != nullptr)
+        {
+            std::scoped_lock lock(entriesMutex_);
+            pendingGpuRequests_.push_back({.id = id, .entry = entry});
+            return true;
+        }
 
         const world::PlanetDefinition planet =
             planet_;
@@ -442,6 +545,58 @@ public:
         jobs_.Wait(group_);
     }
 
+    void Flush(
+        rhi::CommandList& commandList,
+        const u64 submittedFenceValue)
+    {
+        if (config_.gpuHydrology == nullptr)
+        {
+            return;
+        }
+
+        // 1. Promote a retired in-flight dispatch: read it back and
+        // hand the rest (CPU-only graph extraction) to a background
+        // job, exactly like the CPU path's own job does today.
+        if (gpuSlot_.active &&
+            gpuSlot_.targetFenceValue <=
+                config_.gpuFence->CompletedValue())
+        {
+            PromoteRetiredSlot();
+        }
+
+        // 2. Dispatch the next queued tile, if the slot is free.
+        if (!gpuSlot_.active)
+        {
+            GpuPendingRequest request;
+
+            {
+                std::scoped_lock lock(entriesMutex_);
+
+                if (pendingGpuRequests_.empty())
+                {
+                    return;
+                }
+
+                request = std::move(pendingGpuRequests_.front());
+                pendingGpuRequests_.pop_front();
+            }
+
+            // The entry may have been evicted (capacity pressure)
+            // since it was queued -- nothing to build for it anymore.
+            {
+                std::scoped_lock entryLock(request.entry->mutex);
+
+                if (request.entry->state == EntryState::Failed)
+                {
+                    return;
+                }
+            }
+
+            DispatchSlot(
+                commandList, submittedFenceValue, std::move(request));
+        }
+    }
+
 private:
     using EntryMap =
         std::unordered_map<
@@ -589,6 +744,261 @@ private:
             std::memory_order_release);
     }
 
+    void DispatchSlot(
+        rhi::CommandList& commandList,
+        const u64 submittedFenceValue,
+        GpuPendingRequest&& request)
+    {
+        const math::Double3 centerDirection =
+            world::CubeToUnitDirection(
+                world::TileCenter(request.id.tile));
+
+        const world::SurfaceFrame surfaceFrame =
+            world::MakeSurfaceFrame(centerDirection);
+
+        const f64 approximateTileWidthMeters =
+            world::ApproximateTileWidthMeters(planet_, request.id.tile);
+
+        const f64 halfExtentMeters =
+            approximateTileWidthMeters *
+            config_.region.overlapScale * 0.5;
+
+        const u32 resolution = config_.region.hydrology.resolution;
+
+        const f64 spacingMeters =
+            halfExtentMeters * 2.0 /
+            static_cast<f64>(resolution - 1U);
+
+        const f64 footprintMeters =
+            config_.region.hydrology.footprintMeters > 0.0
+                ? config_.region.hydrology.footprintMeters
+                : spacingMeters;
+
+        gpuSlot_.id = request.id;
+        gpuSlot_.entry = std::move(request.entry);
+        gpuSlot_.surfaceFrame = surfaceFrame;
+        gpuSlot_.approximateTileWidthMeters = approximateTileWidthMeters;
+        gpuSlot_.halfExtentMeters = halfExtentMeters;
+        gpuSlot_.spacingMeters = spacingMeters;
+
+        terrain_gpu::GpuHydrologyRegionRequest gpuRequest{};
+        gpuRequest.resolution = resolution;
+        gpuRequest.spacingMeters = spacingMeters;
+        gpuRequest.footprintMeters = footprintMeters;
+        gpuRequest.surfaceFrame = surfaceFrame;
+        // Sea level isn't part of DerivedTerrainRegionConfig today --
+        // 0.0 matches AnalyticTerrainDesc's own default.
+        gpuRequest.seaLevelMeters = 0.0F;
+        gpuRequest.minimumDropMeters = static_cast<f32>(
+            config_.region.hydrology.minimumDrainageDropMeters);
+
+        config_.gpuHydrology->Dispatch(
+            commandList,
+            gpuRequest,
+            *gpuSlot_.rawGpu,
+            *gpuSlot_.drainageGpu,
+            *gpuSlot_.accumulationGpu,
+            *gpuSlot_.downstreamGpu,
+            *gpuSlot_.netDeltaGpu);
+
+        const u64 floatBytes =
+            static_cast<u64>(resolution) * resolution * sizeof(f32);
+        const u64 uintBytes =
+            static_cast<u64>(resolution) * resolution * sizeof(u32);
+
+        const auto copyOut =
+            [&](rhi::Buffer& source, rhi::Buffer& readback,
+                const u64 bytes)
+        {
+            commandList.Transition(
+                source,
+                rhi::ResourceState::CopyDestination,
+                rhi::ResourceState::CopySource);
+
+            commandList.CopyBuffer(source, 0, readback, 0, bytes);
+        };
+
+        copyOut(*gpuSlot_.rawGpu, *gpuSlot_.rawReadback, floatBytes);
+        copyOut(
+            *gpuSlot_.drainageGpu, *gpuSlot_.drainageReadback,
+            floatBytes);
+        copyOut(
+            *gpuSlot_.accumulationGpu, *gpuSlot_.accumulationReadback,
+            floatBytes);
+        copyOut(
+            *gpuSlot_.downstreamGpu, *gpuSlot_.downstreamReadback,
+            uintBytes);
+        copyOut(
+            *gpuSlot_.netDeltaGpu, *gpuSlot_.netDeltaReadback,
+            floatBytes);
+
+        // Restore every GPU-only buffer back to CopyDestination (its
+        // resting state) so the next DispatchSlot call can reuse them
+        // the same way GpuHydrologyRegion::Dispatch itself expects.
+        const auto restore = [&](rhi::Buffer& buffer)
+        {
+            commandList.Transition(
+                buffer,
+                rhi::ResourceState::CopySource,
+                rhi::ResourceState::CopyDestination);
+        };
+
+        restore(*gpuSlot_.rawGpu);
+        restore(*gpuSlot_.drainageGpu);
+        restore(*gpuSlot_.accumulationGpu);
+        restore(*gpuSlot_.downstreamGpu);
+        restore(*gpuSlot_.netDeltaGpu);
+
+        gpuSlot_.active = true;
+        gpuSlot_.targetFenceValue = submittedFenceValue;
+    }
+
+    void PromoteRetiredSlot()
+    {
+        const u32 resolution = config_.region.hydrology.resolution;
+        const std::size_t cellCount =
+            static_cast<std::size_t>(resolution) * resolution;
+
+        auto raw = std::make_shared<std::vector<f32>>(cellCount);
+        auto drainage = std::make_shared<std::vector<f32>>(cellCount);
+        auto accumulation =
+            std::make_shared<std::vector<f32>>(cellCount);
+        auto downstream = std::make_shared<std::vector<u32>>(cellCount);
+        auto netDelta = std::make_shared<std::vector<f32>>(cellCount);
+
+        const auto readInto = [](rhi::Buffer& buffer, void* dest,
+                                  const std::size_t bytes)
+        {
+            const std::byte* mapped = buffer.Map();
+            std::memcpy(dest, mapped, bytes);
+            buffer.Unmap();
+        };
+
+        readInto(
+            *gpuSlot_.rawReadback, raw->data(), cellCount * sizeof(f32));
+        readInto(
+            *gpuSlot_.drainageReadback, drainage->data(),
+            cellCount * sizeof(f32));
+        readInto(
+            *gpuSlot_.accumulationReadback, accumulation->data(),
+            cellCount * sizeof(f32));
+        readInto(
+            *gpuSlot_.downstreamReadback, downstream->data(),
+            cellCount * sizeof(u32));
+        readInto(
+            *gpuSlot_.netDeltaReadback, netDelta->data(),
+            cellCount * sizeof(f32));
+
+        const DerivedTerrainRegionId id = gpuSlot_.id;
+        const auto entry = gpuSlot_.entry;
+        const world::SurfaceFrame surfaceFrame = gpuSlot_.surfaceFrame;
+        const f64 approximateTileWidthMeters =
+            gpuSlot_.approximateTileWidthMeters;
+        const f64 halfExtentMeters = gpuSlot_.halfExtentMeters;
+        const f64 spacingMeters = gpuSlot_.spacingMeters;
+        const DerivedTerrainRegionConfig regionConfig = config_.region;
+
+        gpuSlot_.active = false;
+        gpuSlot_.entry.reset();
+
+        try
+        {
+            jobs_.Submit(
+                group_,
+                jobs::JobPriority::Low,
+                [
+                    this,
+                    id,
+                    entry,
+                    surfaceFrame,
+                    approximateTileWidthMeters,
+                    halfExtentMeters,
+                    spacingMeters,
+                    regionConfig,
+                    resolution,
+                    raw,
+                    drainage,
+                    accumulation,
+                    downstream,
+                    netDelta
+                ]
+                {
+                    try
+                    {
+                        GpuHydrologyReadback readback{};
+                        readback.resolution = resolution;
+                        readback.spacingMeters = spacingMeters;
+                        readback.seaLevelMeters = 0.0F;
+                        readback.surfaceFrame = surfaceFrame;
+                        readback.rawElevationMeters = *raw;
+                        readback.drainageElevationMeters = *drainage;
+                        readback.accumulation = *accumulation;
+                        readback.downstream = *downstream;
+                        readback.netElevationDeltaMeters = *netDelta;
+
+                        auto region =
+                            std::make_shared<DerivedTerrainRegion>(
+                                BuildDerivedTerrainRegionFromGpuReadback(
+                                    id,
+                                    approximateTileWidthMeters,
+                                    halfExtentMeters,
+                                    readback,
+                                    regionConfig));
+
+                        {
+                            std::scoped_lock lock(entry->mutex);
+
+                            entry->region = std::move(region);
+                            entry->state = EntryState::Ready;
+                        }
+
+                        {
+                            std::scoped_lock entriesLock(entriesMutex_);
+
+                            PublishCountsLocked();
+                            PublishReadySnapshotLocked();
+                        }
+
+                        contentRevision_.fetch_add(
+                            1, std::memory_order_acq_rel);
+                    }
+                    catch (...)
+                    {
+                        {
+                            std::scoped_lock lock(entry->mutex);
+
+                            entry->exception =
+                                std::current_exception();
+
+                            entry->state = EntryState::Failed;
+                        }
+
+                        {
+                            std::scoped_lock entriesLock(entriesMutex_);
+
+                            PublishCountsLocked();
+                        }
+
+                        failedBuilds_.fetch_add(
+                            1, std::memory_order_relaxed);
+
+                        throw;
+                    }
+                });
+        }
+        catch (...)
+        {
+            {
+                std::scoped_lock lock(entry->mutex);
+
+                entry->exception = std::current_exception();
+                entry->state = EntryState::Failed;
+            }
+
+            failedBuilds_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     void PublishCountsLocked() noexcept
     {
         entryCount_.store(
@@ -628,6 +1038,8 @@ private:
 
     mutable std::mutex entriesMutex_;
     EntryMap entries_;
+    std::deque<GpuPendingRequest> pendingGpuRequests_;
+    GpuBuildSlot gpuSlot_;
 
     mutable std::atomic<u64>
         accessTicket_{0};
@@ -769,5 +1181,12 @@ DerivedTerrainRegionCache::Stats()
 void DerivedTerrainRegionCache::WaitAll()
 {
     impl_->WaitAll();
+}
+
+void DerivedTerrainRegionCache::Flush(
+    rhi::CommandList& commandList,
+    const u64 submittedFenceValue)
+{
+    impl_->Flush(commandList, submittedFenceValue);
 }
 } // namespace orbit::terrain_region

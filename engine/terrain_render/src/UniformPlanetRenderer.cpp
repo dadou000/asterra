@@ -35,6 +35,8 @@ struct VSOutput
     float3 surfaceDirection : TEXCOORD4;
     float waterDepth : TEXCOORD5;
     float3 localPosition : TEXCOORD6;
+    float spacingMeters : TEXCOORD7;
+    float3 worldPosition : TEXCOORD8;
     float horizonClip : SV_ClipDistance0;
 };
 float3 Direction(uint2 cell)
@@ -97,6 +99,19 @@ VSOutput main(uint id : SV_VertexID)
     output.surfaceDirection = localDir;
     output.waterDepth = asfloat(data.y);
     output.localPosition = local;
+    // Unlike localPosition/surfaceDirection above (deliberately
+    // observer-relative, see LocalDirection), `direction` here is
+    // computed purely from the cube-sphere cell/face -- already
+    // camera-independent, so no extra reconstruction is needed the
+    // way TerrainPreviewRenderer's vertex shader requires (it has no
+    // equivalent observer-independent direction available).
+    output.worldPosition = direction * g_pc.g_planet.x;
+    // This mesh has no clipmap levels to derive a real sample spacing
+    // from -- approximate it from a cube face's ~90-degree arc over
+    // its resolution, just to fade the shader-only detail-normal
+    // bump (see ApplyDetailNormal) in the same way the clipmap
+    // renderer does.
+    output.spacingMeters = (g_pc.g_planet.x * 1.5707963) / max(g_pc.g_planet.z - 1.0, 1.0);
     // Full closed planet; depth testing handles occlusion, no clipmap horizon cut.
     output.horizonClip = 1.0;
     return output;

@@ -56,6 +56,9 @@ public:
     [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         const GraphicsPipelineDesc& desc) = 0;
 
+    [[nodiscard]] virtual std::unique_ptr<ComputePipeline> CreateComputePipeline(
+        const ComputePipelineDesc& desc) = 0;
+
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) = 0;

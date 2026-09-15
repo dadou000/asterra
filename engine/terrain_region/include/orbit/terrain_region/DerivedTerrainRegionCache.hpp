@@ -3,7 +3,11 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/rhi/Command.hpp>
+#include <orbit/rhi/Device.hpp>
+#include <orbit/rhi/Fence.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
+#include <orbit/terrain_gpu/GpuHydrologyRegion.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegion.hpp>
 #include <orbit/world/Planet.hpp>
 
@@ -18,6 +22,21 @@ struct DerivedTerrainRegionCacheConfig
     u8 tileLevel{5};
     std::size_t maxEntries{12};
     DerivedTerrainRegionConfig region{};
+
+    // Optional -- when both are set, region tiles are built on the
+    // GPU (see DerivedTerrainRegionGpu.hpp and the GPU terrain
+    // generation plan's Milestone 4) instead of entirely on a
+    // background CPU job: Request() only queues the tile, and the
+    // caller's own Flush() (called once per frame, same pattern as
+    // terrain_gpu::GpuElevationQuery) records the actual GPU dispatch
+    // and, once its fence value retires, hands the readback to a
+    // lightweight background job that just runs the CPU-side graph
+    // extraction (BuildRiverGraph and friends) the GPU passes don't
+    // replace. Leave both null to keep the fully-CPU path (e.g. for
+    // tests that have no GPU device available).
+    rhi::Device* gpuDevice{nullptr};
+    terrain_gpu::GpuHydrologyRegion* gpuHydrology{nullptr};
+    rhi::Fence* gpuFence{nullptr};
 };
 
 struct DerivedTerrainRegionCacheStats
@@ -88,6 +107,14 @@ public:
     [[nodiscard]] DerivedTerrainRegionCacheStats Stats() const noexcept;
 
     void WaitAll();
+
+    // No-op unless constructed with gpuHydrology/gpuFence set. Call
+    // once per frame, with the same command list about to be
+    // submitted this frame and the fence value that submission will
+    // signal -- see GpuElevationQuery::Flush's identical contract.
+    void Flush(
+        rhi::CommandList& commandList,
+        u64 submittedFenceValue);
 
 private:
     class Impl;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/math/Vector.hpp>
 
 #include <memory>
 #include <string_view>
@@ -17,11 +18,16 @@ enum class Key : u8
     E,
     LeftShift,
     Escape,
+    F2,
     F3,
     F4,
     ArrowLeft,
     ArrowRight,
-    Enter
+    Enter,
+    M,
+    L,
+    G,
+    C
 };
 
 struct MouseDelta
@@ -56,6 +62,12 @@ public:
     [[nodiscard]] virtual bool RelativeMouseMode() const noexcept = 0;
 
     [[nodiscard]] virtual MouseDelta ConsumeMouseDelta() = 0;
+
+    // Absolute state, meaningful independent of relative-mouse mode --
+    // used for click-to-select UI (e.g. the planet map) rather than
+    // camera look, which goes through ConsumeMouseDelta instead.
+    [[nodiscard]] virtual bool LeftMouseButtonDown() const = 0;
+    [[nodiscard]] virtual math::Double2 CursorPositionPixels() const = 0;
 
     [[nodiscard]] virtual void* NativeHandle() const = 0;
     [[nodiscard]] virtual u32 Width() const = 0;

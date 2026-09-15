@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Orbit
-    VERSION 0.0.1
+    VERSION 0.0.2
     DESCRIPTION "Orbit - custom engine for Asterra"
     LANGUAGES CXX
 )

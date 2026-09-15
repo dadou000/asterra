@@ -12,8 +12,128 @@ struct VSOutput
     float3 surfaceDirection : TEXCOORD4;
     float waterDepth : TEXCOORD5;
     float3 localPosition : TEXCOORD6;
+    float spacingMeters : TEXCOORD7;
+    // Camera-independent (direction * planetRadius) -- see the
+    // comment on this field where each vertex shader sets it. Used
+    // instead of localPosition/surfaceDirection for anything that must
+    // stay fixed for a given physical point as the camera moves.
+    float3 worldPosition : TEXCOORD8;
     float horizonClip : SV_ClipDistance0;
 };
+
+// Fine surface detail (rock/ground micro-relief) is only ever baked
+// into vertex positions/normals at a fine enough resolution to
+// represent it geometrically -- see LoadFineSlope in
+// TerrainPreviewRenderer.cpp, which is why that renderer always
+// passes spacingMeters == 0 here (fully disabling this fake bump: its
+// terrainNormal is already real ground truth, and layering synthetic
+// noise on top of it would fight the real shape instead of matching
+// it). UniformPlanetRenderer's whole-planet mesh has no equivalent
+// per-vertex fine data, so it still uses this to fake the same-looking
+// detail as a shading-only normal perturbation: it never moves a
+// vertex, so it can't alias, and it fades out toward finer spacing
+// (see detailFade below).
+float DetailHash(float3 p)
+{
+    p = frac(p * 0.3183099 + float3(0.1, 0.2, 0.3));
+    p *= 17.0;
+    return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float DetailValueNoise(float3 p)
+{
+    const float3 cell = floor(p);
+    float3 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    const float n000 = DetailHash(cell + float3(0.0, 0.0, 0.0));
+    const float n100 = DetailHash(cell + float3(1.0, 0.0, 0.0));
+    const float n010 = DetailHash(cell + float3(0.0, 1.0, 0.0));
+    const float n110 = DetailHash(cell + float3(1.0, 1.0, 0.0));
+    const float n001 = DetailHash(cell + float3(0.0, 0.0, 1.0));
+    const float n101 = DetailHash(cell + float3(1.0, 0.0, 1.0));
+    const float n011 = DetailHash(cell + float3(0.0, 1.0, 1.0));
+    const float n111 = DetailHash(cell + float3(1.0, 1.0, 1.0));
+
+    const float nx00 = lerp(n000, n100, f.x);
+    const float nx10 = lerp(n010, n110, f.x);
+    const float nx01 = lerp(n001, n101, f.x);
+    const float nx11 = lerp(n011, n111, f.x);
+
+    const float nxy0 = lerp(nx00, nx10, f.y);
+    const float nxy1 = lerp(nx01, nx11, f.y);
+
+    return lerp(nxy0, nxy1, f.z);
+}
+
+// Wavelength scales with this level's own sample spacing rather than
+// a fixed size: a coarse level (rendered only from far away) gets
+// proportionally broad bumps that read cleanly at that distance,
+// while a finer level gets proportionally small ones -- so this
+// always looks like "one LOD finer" of the same terrain instead of
+// either aliasing into noise or vanishing below a pixel.
+float DetailHeight(float3 worldPosition, float spacingMeters)
+{
+    float height = 0.0;
+    height += (DetailValueNoise(worldPosition / (spacingMeters * 2.2)) - 0.5) * 1.0;
+    height += (DetailValueNoise(worldPosition / (spacingMeters * 0.7)) - 0.5) * 0.4;
+    return height;
+}
+
+// Perturbs a base normal with fine bump detail evaluated in world
+// space (continuous across tiles/levels, so it never seams), fading
+// out toward finer spacing where real geometry already resolves it.
+float3 ApplyDetailNormal(
+    float3 baseNormal,
+    float3 worldPosition,
+    float spacingMeters)
+{
+    const float fade =
+        smoothstep(20.0, 260.0, spacingMeters);
+
+    if (fade <= 0.0)
+    {
+        return baseNormal;
+    }
+
+    const float3 arbitrary =
+        abs(baseNormal.y) < 0.99
+            ? float3(0.0, 1.0, 0.0)
+            : float3(1.0, 0.0, 0.0);
+
+    const float3 tangent =
+        normalize(cross(arbitrary, baseNormal));
+
+    const float3 bitangent =
+        cross(baseNormal, tangent);
+
+    // A fraction of the noise's own wavelength, so the finite
+    // difference always samples within one "bump" regardless of how
+    // coarse this level is.
+    const float epsilon = spacingMeters * 0.25;
+
+    const float h0 = DetailHeight(worldPosition, spacingMeters);
+    const float hT = DetailHeight(worldPosition + tangent * epsilon, spacingMeters);
+    const float hB = DetailHeight(worldPosition + bitangent * epsilon, spacingMeters);
+
+    const float dT = (hT - h0) / epsilon;
+    const float dB = (hB - h0) / epsilon;
+
+    // Apparent bump relief as a fraction of this level's own spacing
+    // -- keeps the bump-to-wavelength ratio (and so how "steep" it
+    // reads) consistent across levels instead of a fixed meter count
+    // that would look sharp up close and flat far away (or the
+    // reverse).
+    const float bumpStrength = spacingMeters * 0.35;
+
+    const float3 perturbed =
+        normalize(
+            baseNormal -
+            tangent * dT * bumpStrength -
+            bitangent * dB * bumpStrength);
+
+    return normalize(lerp(baseNormal, perturbed, fade));
+}
 
 float4 main(VSOutput input) : SV_Target0
 {
@@ -113,8 +233,10 @@ float4 main(VSOutput input) : SV_Target0
             biome1.w;
 
     const float3 terrainNormal =
-        normalize(
-            input.terrainNormal);
+        ApplyDetailNormal(
+            normalize(input.terrainNormal),
+            input.worldPosition,
+            input.spacingMeters);
 
     const float3 surfaceDirection =
         normalize(

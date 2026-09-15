@@ -4,6 +4,7 @@
 #include <orbit/debug_render/VersionOverlayRenderer.hpp>
 #include <orbit/dev_server/DevServer.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/map_render/PlanetMapRenderer.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/platform/CrashHandler.hpp>
 #include <orbit/platform/Window.hpp>
@@ -11,6 +12,9 @@
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
+#include <orbit/terrain_gpu/GpuElevationQuery.hpp>
+#include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
+#include <orbit/terrain_gpu/GpuRegionDelta.hpp>
 #include <orbit/terrain_region/DerivedRegionTerrainSource.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegionStreamer.hpp>
@@ -50,6 +54,25 @@ namespace
     }
 
     return found;
+}
+
+[[nodiscard]] const char* MapLayerName(
+    const orbit::map_render::MapLayer layer) noexcept
+{
+    switch (layer)
+    {
+        case orbit::map_render::MapLayer::Elevation:
+            return "ELEVATION";
+        case orbit::map_render::MapLayer::Tectonics:
+            return "TECTONICS";
+        case orbit::map_render::MapLayer::Biomes:
+            return "BIOMES";
+        case orbit::map_render::MapLayer::Temperature:
+            return "TEMPERATURE";
+        case orbit::map_render::MapLayer::Precipitation:
+            return "PRECIPITATION";
+    }
+    return "UNKNOWN";
 }
 } // namespace
 
@@ -181,6 +204,43 @@ int main()
         orbit::f64 lastGpuSceneMs = 0.0;
         orbit::f64 lastGpuOverlayMs = 0.0;
 
+        // Created here (rather than just before the render loop) so
+        // GpuElevationQuery -- constructed below, before
+        // applyObserverPosition captures it -- has a real frame fence
+        // to check GPU-dispatch completion against. The render loop
+        // further down uses these same objects exactly as it always
+        // has; nothing about their own lifecycle changes, only when
+        // they come into existence.
+        std::vector<
+            std::unique_ptr<
+                orbit::rhi::CommandAllocator>>
+            frameAllocators;
+
+        frameAllocators.reserve(
+            swapchain->BufferCount());
+
+        for (orbit::u32 index = 0;
+             index < swapchain->BufferCount();
+             ++index)
+        {
+            frameAllocators.push_back(
+                device->CreateCommandAllocator(
+                    orbit::rhi::QueueType::Graphics));
+        }
+
+        auto commandList =
+            device->CreateCommandList(
+                *frameAllocators.front());
+
+        auto frameFence =
+            device->CreateFence(0);
+
+        std::vector<orbit::u64> frameFenceValues(
+            swapchain->BufferCount(),
+            0);
+
+        orbit::u64 nextFenceValue = 1;
+
         const orbit::world::PlanetDefinition planet{
             .radiusMeters = 6'000'000.0
         };
@@ -209,6 +269,36 @@ int main()
                     planet,
                     terrainDescription);
 
+        const orbit::shader::dxc::DxcShaderCompiler
+            shaderCompiler;
+
+        // The clipmap's near-field terrain is generated on the GPU
+        // (see engine/terrain_gpu) directly from the raw analytic
+        // recipe, then composited against the fine region cache's own
+        // GPU-computed hydrology (erosion/lake-fill -- see
+        // GpuHydrologyRegion and GpuRegionDelta) right after
+        // generation, below. The region caches themselves also run
+        // hydrology/erosion/river/lake generation on the GPU (see
+        // DerivedTerrainRegionCacheConfig::gpuHydrology) -- so the 2D
+        // map, river/lake water rendering, and the clipmap all show
+        // the same GPU-computed hydrology.
+        orbit::terrain_gpu::GpuFieldGenerator
+            gpuFieldGenerator(
+                *device,
+                shaderCompiler,
+                planet,
+                *authoritativeTerrain);
+
+        // Shared by both region caches below -- one GPU hydrology
+        // pipeline instance, sized for the larger of their two
+        // (currently identical) region resolutions.
+        orbit::terrain_gpu::GpuHydrologyRegion
+            gpuHydrologyRegion(
+                *device,
+                shaderCompiler,
+                gpuFieldGenerator,
+                129);
+
         orbit::jobs::JobSystem jobSystem;
 
         auto regionCache =
@@ -225,7 +315,10 @@ int main()
                                 .region = {
                                     .generatorVersion = 2,
                                     .overlapScale = 1.35
-                                }
+                                },
+                                .gpuDevice = device.get(),
+                                .gpuHydrology = &gpuHydrologyRegion,
+                                .gpuFence = frameFence.get()
                             });
 
         // A second, finer-tiled region cache covering only the
@@ -254,7 +347,10 @@ int main()
                                 .region = {
                                     .generatorVersion = 2,
                                     .overlapScale = 1.35
-                                }
+                                },
+                                .gpuDevice = device.get(),
+                                .gpuHydrology = &gpuHydrologyRegion,
+                                .gpuFence = frameFence.get()
                             });
 
         orbit::terrain_region::
@@ -305,12 +401,6 @@ int main()
                             16384
                     }
                 });
-
-        orbit::terrain_stream::TerrainSampleStreamer
-            terrainSampleStreamer(
-                jobSystem,
-                planet,
-                terrain);
 
         orbit::log::Info(
             std::format(
@@ -375,9 +465,6 @@ int main()
 
         SlewState slewState;
 
-        const orbit::shader::dxc::DxcShaderCompiler
-            shaderCompiler;
-
         orbit::debug_render::VersionOverlayRenderer
             versionOverlay(
                 *device,
@@ -387,7 +474,7 @@ int main()
         // F3 debug HUD: a stack of small text panels pinned to the
         // top-left corner, updated live and toggled at runtime.
         constexpr orbit::u32
-            kDebugOverlayLineCount = 8;
+            kDebugOverlayLineCount = 12;
 
         std::vector<
             std::unique_ptr<
@@ -431,6 +518,64 @@ int main()
         bool f3PressedLastFrame = false;
         std::string lastStatsLine;
 
+        // F2 debug visuals menu: LOD lattice coloring, frozen
+        // generation, and a side cutaway through the clipmap -- see
+        // TerrainPreviewRenderer::SetDebugVisuals/SetGenerationFrozen.
+        // Drawn as its own small stack of overlay lines, positioned
+        // right below the F3 HUD's own 12 lines so the two never
+        // overlap even when both are visible at once.
+        constexpr orbit::u32
+            kDebugVisualsLineCount = 4;
+
+        std::vector<
+            std::unique_ptr<
+                orbit::debug_render::
+                    VersionOverlayRenderer>>
+            debugVisualsLines;
+
+        debugVisualsLines.reserve(
+            kDebugVisualsLineCount);
+
+        for (orbit::u32 lineIndex = 0;
+             lineIndex <
+                kDebugVisualsLineCount;
+             ++lineIndex)
+        {
+            orbit::debug_render::
+                VersionOverlayConfig
+                    lineConfig{};
+
+            lineConfig.anchor =
+                orbit::debug_render::
+                    OverlayAnchor::TopLeft;
+
+            constexpr orbit::u32
+                lineHeight = 28;
+
+            lineConfig.extraTopMarginPixels =
+                (kDebugOverlayLineCount +
+                 lineIndex) *
+                lineHeight;
+
+            debugVisualsLines.push_back(
+                std::make_unique<
+                    orbit::debug_render::
+                        VersionOverlayRenderer>(
+                    *device,
+                    shaderCompiler,
+                    "ORBIT",
+                    lineConfig));
+        }
+
+        bool debugVisualsMenuVisible = false;
+        bool f2PressedLastFrame = false;
+        bool debugLodColorEnabled = false;
+        bool debugSideCutEnabled = false;
+        bool debugGenerationFrozen = false;
+        bool lPressedLastFrame = false;
+        bool gPressedLastFrame = false;
+        bool cPressedLastFrame = false;
+
         bool wholePlanetLodForced = false;
         orbit::i32 forcedPlanetLod = 0;
         bool f4PressedLastFrame = false;
@@ -443,14 +588,45 @@ int main()
         terrainPreviewConfig.framesInFlight =
             swapchain->BufferCount();
 
+        // Async GPU->CPU ground-elevation readback for camera
+        // ground-clamp/teleport/slew -- see engine/terrain_gpu's
+        // GpuElevationQuery and the GPU terrain generation plan's
+        // Milestones 3 and 4. Runs the full local hydrology stack
+        // (depression fill + erosion) per query, not just the raw
+        // field, so collision rests on eroded ground / lake surfaces
+        // consistently with the rest of the GPU terrain pipeline.
+        // Shares the render loop's own frameFence so it can tell when
+        // a queued dispatch has actually retired.
+        orbit::terrain_gpu::GpuElevationQuery
+            gpuElevationQuery(
+                *device,
+                shaderCompiler,
+                gpuFieldGenerator,
+                authoritativeTerrain->GlobalFields(),
+                *frameFence);
+
+        // Composites the fine region cache's GPU-computed hydrology
+        // (erosion/lake-fill) into the clipmap's own GPU-generated
+        // samples, in place, right after generation -- see
+        // TerrainPreviewRenderer's constructor comment and
+        // engine/terrain_gpu's GpuRegionDelta. The fine cache (not the
+        // coarse one) is used since it's the higher-detail match for
+        // what the near-field clipmap actually renders.
+        orbit::terrain_gpu::GpuRegionDelta
+            gpuRegionDelta(
+                *device,
+                shaderCompiler);
+
         orbit::terrain_render::TerrainPreviewRenderer
             terrainPreview(
                 *device,
                 shaderCompiler,
                 planet,
-                terrainSampleStreamer,
+                gpuFieldGenerator,
                 observer,
-                terrainPreviewConfig);
+                terrainPreviewConfig,
+                &gpuRegionDelta,
+                fineRegionCache.get());
 
         // F4 force-LOD: renders the whole closed planet as one fixed-
         // resolution mesh instead of the altitude-adaptive near-field
@@ -464,6 +640,21 @@ int main()
                 planet,
                 authoritativeTerrain,
                 terrainPreviewConfig);
+
+        // M key: full-screen planet map with switchable layers
+        // (elevation/tectonics/biomes/temperature/precipitation),
+        // click-to-teleport. Built once against the same authoritative
+        // terrain source used for ground collision.
+        orbit::map_render::PlanetMapRenderer
+            planetMap(
+                *device,
+                shaderCompiler,
+                *graphicsQueue,
+                authoritativeTerrain);
+
+        bool mapVisible = false;
+        bool mPressedLastFrame = false;
+        bool leftClickPressedLastFrame = false;
 
         orbit::water_render::RiverWaterRenderer
             riverWater(
@@ -505,10 +696,20 @@ int main()
         // every renderer that tracks it. Shared by keyboard movement,
         // TELEPORT, and SLEW so the ground-collision rule can't drift
         // out of sync between them.
+        //
+        // Ground elevation comes from GpuElevationQuery::LastKnownGood
+        // rather than a direct, synchronous CPU
+        // AnalyticTerrainSource::Sample() call -- it answers instantly
+        // every time (a cached nearby GPU readback, or a cheap coarse
+        // analytic estimate before the first one lands), while
+        // Request() keeps a fresh, ground-truth GPU sample for this
+        // exact direction flowing in behind it for next call. A few
+        // frames of latency/approximation here is imperceptible for a
+        // clearance check.
         const auto applyObserverPosition =
             [&observer,
              &planet,
-             authoritativeTerrain,
+             &gpuElevationQuery,
              &lastAltitudeAboveGroundMeters,
              &terrainPreview,
              &riverWater](
@@ -517,23 +718,19 @@ int main()
                 const orbit::f64
                     desiredAltitudeMeters)
         {
-            const orbit::terrain::TerrainSample
-                groundSample =
-                    authoritativeTerrain->
-                        Sample({
-                            .unitDirection =
-                                direction,
-                            .footprintMeters =
-                                10.0
-                        });
+            static_cast<void>(
+                gpuElevationQuery.Request(direction));
+
+            const orbit::f64 groundElevationMeters =
+                gpuElevationQuery.LastKnownGood(
+                    direction);
 
             constexpr orbit::f64
                 minClearanceMeters = 2.0;
 
             const orbit::f64
                 minAltitudeMeters =
-                    groundSample.
-                        elevationMeters +
+                    groundElevationMeters +
                     minClearanceMeters;
 
             const orbit::f64 altitude =
@@ -549,8 +746,7 @@ int main()
 
             lastAltitudeAboveGroundMeters =
                 altitude -
-                groundSample.
-                    elevationMeters;
+                groundElevationMeters;
 
             terrainPreview.UpdateObserver(
                 observer);
@@ -910,35 +1106,176 @@ int main()
                 return std::string("OK");
             });
 
-        std::vector<
-            std::unique_ptr<
-                orbit::rhi::CommandAllocator>>
-            frameAllocators;
+        // Loopback-only equivalent of the F2/L/G/C keys, for
+        // automated verification -- <TARGET> is MENU, LOD, FREEZE, or
+        // CUT.
+        devServer.RegisterCommand(
+            "DEBUG_VISUALS",
+            [&debugVisualsMenuVisible,
+             &debugLodColorEnabled,
+             &debugSideCutEnabled,
+             &debugGenerationFrozen,
+             &terrainPreview](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() != 2)
+                {
+                    return std::string(
+                        "ERR usage: DEBUG_VISUALS <MENU|LOD|FREEZE|CUT> <ON|OFF>");
+                }
 
-        frameAllocators.reserve(
-            swapchain->BufferCount());
+                bool value = false;
 
-        for (orbit::u32 index = 0;
-             index < swapchain->BufferCount();
-             ++index)
-        {
-            frameAllocators.push_back(
-                device->CreateCommandAllocator(
-                    orbit::rhi::QueueType::Graphics));
-        }
+                if (arguments[1] == "ON")
+                {
+                    value = true;
+                }
+                else if (arguments[1] == "OFF")
+                {
+                    value = false;
+                }
+                else
+                {
+                    return std::string(
+                        "ERR usage: DEBUG_VISUALS <MENU|LOD|FREEZE|CUT> <ON|OFF>");
+                }
 
-        auto commandList =
-            device->CreateCommandList(
-                *frameAllocators.front());
+                if (arguments[0] == "MENU")
+                {
+                    debugVisualsMenuVisible = value;
+                }
+                else if (arguments[0] == "LOD")
+                {
+                    debugLodColorEnabled = value;
+                    terrainPreview.SetDebugVisuals(
+                        debugLodColorEnabled,
+                        debugSideCutEnabled);
+                }
+                else if (arguments[0] == "FREEZE")
+                {
+                    debugGenerationFrozen = value;
+                    terrainPreview.SetGenerationFrozen(
+                        debugGenerationFrozen);
+                }
+                else if (arguments[0] == "CUT")
+                {
+                    debugSideCutEnabled = value;
+                    terrainPreview.SetDebugVisuals(
+                        debugLodColorEnabled,
+                        debugSideCutEnabled);
+                }
+                else
+                {
+                    return std::string(
+                        "ERR usage: DEBUG_VISUALS <MENU|LOD|FREEZE|CUT> <ON|OFF>");
+                }
 
-        auto frameFence =
-            device->CreateFence(0);
+                return std::string("OK");
+            });
 
-        std::vector<orbit::u64> frameFenceValues(
-            swapchain->BufferCount(),
-            0);
+        devServer.RegisterCommand(
+            "MAP",
+            [&mapVisible,
+             &window](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() !=
+                    1)
+                {
+                    return std::string(
+                        "ERR usage: MAP <ON|OFF>");
+                }
 
-        orbit::u64 nextFenceValue = 1;
+                if (arguments[0] ==
+                    "ON")
+                {
+                    mapVisible = true;
+                }
+                else if (
+                    arguments[0] ==
+                    "OFF")
+                {
+                    mapVisible = false;
+                }
+                else
+                {
+                    return std::string(
+                        "ERR usage: MAP <ON|OFF>");
+                }
+
+                window->SetRelativeMouseMode(
+                    !mapVisible);
+
+                return std::string("OK");
+            });
+
+        devServer.RegisterCommand(
+            "MAP_LAYER",
+            [&planetMap](
+                const std::vector<
+                    std::string>&
+                    arguments)
+            {
+                if (arguments.size() !=
+                    1)
+                {
+                    return std::string(
+                        "ERR usage: MAP_LAYER "
+                        "<ELEVATION|TECTONICS|BIOMES|TEMPERATURE|"
+                        "PRECIPITATION>");
+                }
+
+                const auto& name =
+                    arguments[0];
+
+                if (name == "ELEVATION")
+                {
+                    planetMap.SetActiveLayer(
+                        orbit::map_render::
+                            MapLayer::Elevation);
+                }
+                else if (
+                    name == "TECTONICS")
+                {
+                    planetMap.SetActiveLayer(
+                        orbit::map_render::
+                            MapLayer::Tectonics);
+                }
+                else if (
+                    name == "BIOMES")
+                {
+                    planetMap.SetActiveLayer(
+                        orbit::map_render::
+                            MapLayer::Biomes);
+                }
+                else if (
+                    name == "TEMPERATURE")
+                {
+                    planetMap.SetActiveLayer(
+                        orbit::map_render::
+                            MapLayer::Temperature);
+                }
+                else if (
+                    name == "PRECIPITATION")
+                {
+                    planetMap.SetActiveLayer(
+                        orbit::map_render::
+                            MapLayer::Precipitation);
+                }
+                else
+                {
+                    return std::string(
+                        "ERR usage: MAP_LAYER "
+                        "<ELEVATION|TECTONICS|BIOMES|TEMPERATURE|"
+                        "PRECIPITATION>");
+                }
+
+                return std::string("OK");
+            });
 
         using FrameClock =
             std::chrono::steady_clock;
@@ -1050,7 +1387,197 @@ int main()
 
             f4PressedLastFrame = f4Down;
 
-            if (wholePlanetLodForced)
+            const bool f2Down =
+                window->KeyDown(
+                    orbit::platform::Key::F2);
+
+            if (f2Down &&
+                !f2PressedLastFrame)
+            {
+                debugVisualsMenuVisible =
+                    !debugVisualsMenuVisible;
+            }
+
+            f2PressedLastFrame = f2Down;
+
+            // L/G/C only change anything while the F2 menu itself is
+            // visible, so they don't steal those letters from normal
+            // play.
+            if (debugVisualsMenuVisible)
+            {
+                const bool lDown =
+                    window->KeyDown(
+                        orbit::platform::Key::L);
+
+                if (lDown && !lPressedLastFrame)
+                {
+                    debugLodColorEnabled =
+                        !debugLodColorEnabled;
+
+                    terrainPreview.SetDebugVisuals(
+                        debugLodColorEnabled,
+                        debugSideCutEnabled);
+                }
+
+                lPressedLastFrame = lDown;
+
+                const bool gDown =
+                    window->KeyDown(
+                        orbit::platform::Key::G);
+
+                if (gDown && !gPressedLastFrame)
+                {
+                    debugGenerationFrozen =
+                        !debugGenerationFrozen;
+
+                    terrainPreview.SetGenerationFrozen(
+                        debugGenerationFrozen);
+                }
+
+                gPressedLastFrame = gDown;
+
+                const bool cDown =
+                    window->KeyDown(
+                        orbit::platform::Key::C);
+
+                if (cDown && !cPressedLastFrame)
+                {
+                    debugSideCutEnabled =
+                        !debugSideCutEnabled;
+
+                    terrainPreview.SetDebugVisuals(
+                        debugLodColorEnabled,
+                        debugSideCutEnabled);
+                }
+
+                cPressedLastFrame = cDown;
+            }
+
+            const bool mDown =
+                window->KeyDown(
+                    orbit::platform::Key::M);
+
+            if (mDown &&
+                !mPressedLastFrame)
+            {
+                mapVisible = !mapVisible;
+
+                // The map is a click-to-select UI, not a look-around
+                // view -- show the real cursor while it's open instead
+                // of capturing/centering it for camera look.
+                window->SetRelativeMouseMode(
+                    !mapVisible);
+            }
+
+            mPressedLastFrame = mDown;
+
+            if (mapVisible)
+            {
+                const bool cycleLeft =
+                    window->KeyDown(
+                        orbit::platform::Key::
+                            ArrowLeft);
+
+                const bool cycleRight =
+                    window->KeyDown(
+                        orbit::platform::Key::
+                            ArrowRight);
+
+                if (cycleLeft &&
+                    !planetLodDecPressedLastFrame)
+                {
+                    planetMap.CycleLayer(
+                        false);
+                }
+
+                if (cycleRight &&
+                    !planetLodIncPressedLastFrame)
+                {
+                    planetMap.CycleLayer(
+                        true);
+                }
+
+                planetLodDecPressedLastFrame =
+                    cycleLeft;
+                planetLodIncPressedLastFrame =
+                    cycleRight;
+
+                const bool leftClickDown =
+                    window->LeftMouseButtonDown();
+
+                if (leftClickDown &&
+                    !leftClickPressedLastFrame &&
+                    planetMap.Ready())
+                {
+                    const orbit::math::Double2
+                        cursorPixels =
+                            window->CursorPositionPixels();
+
+                    const orbit::math::Double2 uv{
+                        std::clamp(
+                            cursorPixels.x /
+                                std::max(
+                                    static_cast<orbit::f64>(
+                                        swapchain->Width()),
+                                    1.0),
+                            0.0,
+                            1.0),
+                        std::clamp(
+                            cursorPixels.y /
+                                std::max(
+                                    static_cast<orbit::f64>(
+                                        swapchain->Height()),
+                                    1.0),
+                            0.0,
+                            1.0)
+                    };
+
+                    const orbit::math::Double3
+                        clickedDirection =
+                            orbit::map_render::
+                                EquirectDirectionFromUv(
+                                    uv);
+
+                    const orbit::f64
+                        groundElevationMeters =
+                            authoritativeTerrain->
+                                Sample({
+                                    .unitDirection =
+                                        clickedDirection,
+                                    .footprintMeters =
+                                        20.0
+                                }).elevationMeters;
+
+                    constexpr orbit::f64
+                        teleportClearanceMeters = 300.0;
+
+                    // A click over open ocean samples the sea BED, which
+                    // can be thousands of meters below the nominal
+                    // sphere -- floor at sea level (0) first so the
+                    // clearance always lands above water, never still
+                    // below the planet's base radius (which
+                    // TerrainPreviewRenderer/RiverWaterRenderer both
+                    // require of the observer).
+                    const orbit::f64
+                        baseElevationMeters =
+                            std::max(
+                                groundElevationMeters,
+                                0.0);
+
+                    applyObserverPosition(
+                        clickedDirection,
+                        baseElevationMeters +
+                            teleportClearanceMeters);
+
+                    mapVisible = false;
+                    window->SetRelativeMouseMode(
+                        true);
+                }
+
+                leftClickPressedLastFrame =
+                    leftClickDown;
+            }
+            else if (wholePlanetLodForced)
             {
                 const bool decDown =
                     window->KeyDown(
@@ -1088,6 +1615,8 @@ int main()
                 planetLodIncPressedLastFrame =
                     incDown;
             }
+
+            planetMap.Poll();
 
             uniformPlanet.Poll();
 
@@ -1412,6 +1941,27 @@ int main()
                 frameIndex * kTimestampsPerFrame,
                 kTimestampsPerFrame);
 
+            // Records this frame's ground-elevation dispatches (if
+            // any are queued) and promotes previously-dispatched ones
+            // whose fence value has now retired -- nextFenceValue here
+            // is exactly the value this frame's Signal() call below
+            // will use (see signalValue's assignment).
+            gpuElevationQuery.Flush(
+                *commandList,
+                nextFenceValue);
+
+            // Same pattern -- dispatches at most one queued region
+            // tile's GPU hydrology build this frame, and reads back
+            // any previously-dispatched one whose fence value has now
+            // retired (see DerivedTerrainRegionCacheConfig::gpuHydrology).
+            regionCache->Flush(
+                *commandList,
+                nextFenceValue);
+
+            fineRegionCache->Flush(
+                *commandList,
+                nextFenceValue);
+
             auto& backBuffer =
                 swapchain->CurrentBackBuffer();
 
@@ -1448,7 +1998,15 @@ int main()
                 wholePlanetLodForced &&
                 uniformPlanet.ActiveLod() >= 0;
 
-            if (drawWholePlanetLod)
+            if (mapVisible)
+            {
+                planetMap.Draw(
+                    *commandList,
+                    backBuffer,
+                    swapchain->Width(),
+                    swapchain->Height());
+            }
+            else if (drawWholePlanetLod)
             {
                 uniformPlanet.Draw(
                     *commandList,
@@ -1498,6 +2056,60 @@ int main()
                 swapchain->Width(),
                 swapchain->Height());
 
+            // Names the active map layer (ELEVATION, TECTONICS, ...) so a
+            // screenshot of the map is self-identifying -- shown whenever
+            // the map is on screen, independent of the F3 debug HUD below.
+            if (mapVisible)
+            {
+                debugOverlayLines[8]->SetText(
+                    std::format(
+                        "MAP {}",
+                        MapLayerName(
+                            planetMap.ActiveLayer())));
+
+                debugOverlayLines[8]->Draw(
+                    *commandList,
+                    backBuffer,
+                    swapchain->Width(),
+                    swapchain->Height());
+
+                // Color legend for the Tectonics layer -- the boundary
+                // colors alone (see TectonicsColor in PlanetMapRenderer.cpp)
+                // don't say which plate-tectonics subtype they mean. Uses
+                // "-" (not "=") and stays under 32 chars/line: the debug
+                // overlay font only supports A-Z 0-9 space . - : and
+                // silently truncates past that, which "=" and two longer
+                // combined lines both hit.
+                if (planetMap.ActiveLayer() ==
+                    orbit::map_render::MapLayer::Tectonics)
+                {
+                    debugOverlayLines[9]->SetText(
+                        "RED-OROGENY ORANGE-SUBDUCTION");
+                    debugOverlayLines[10]->SetText(
+                        "MAGENTA-HOTSPOT CYAN-RIDGE");
+                    debugOverlayLines[11]->SetText(
+                        "GREEN-RIFT YELLOW-TRANSFORM");
+
+                    debugOverlayLines[9]->Draw(
+                        *commandList,
+                        backBuffer,
+                        swapchain->Width(),
+                        swapchain->Height());
+
+                    debugOverlayLines[10]->Draw(
+                        *commandList,
+                        backBuffer,
+                        swapchain->Width(),
+                        swapchain->Height());
+
+                    debugOverlayLines[11]->Draw(
+                        *commandList,
+                        backBuffer,
+                        swapchain->Width(),
+                        swapchain->Height());
+                }
+            }
+
             if (debugOverlayVisible)
             {
                 const auto& rebase = terrainPreview.StreamingStats();
@@ -1524,10 +2136,45 @@ int main()
                         lastGpuSceneMs,
                         lastGpuOverlayMs));
 
-                for (const auto& line :
-                     debugOverlayLines)
+                // Line 8 (the map layer name) is drawn separately above,
+                // gated on mapVisible instead of this F3 toggle.
+                for (orbit::u32 lineIndex = 0;
+                     lineIndex < 8;
+                     ++lineIndex)
                 {
-                    line->Draw(
+                    debugOverlayLines[lineIndex]->Draw(
+                        *commandList,
+                        backBuffer,
+                        swapchain->Width(),
+                        swapchain->Height());
+                }
+            }
+
+            if (debugVisualsMenuVisible)
+            {
+                debugVisualsLines[0]->SetText(
+                    "F2 DEBUG VISUALS MENU");
+
+                debugVisualsLines[1]->SetText(
+                    std::format(
+                        "L LOD COLOR {}",
+                        debugLodColorEnabled ? "ON" : "OFF"));
+
+                debugVisualsLines[2]->SetText(
+                    std::format(
+                        "G FREEZE GEN {}",
+                        debugGenerationFrozen ? "ON" : "OFF"));
+
+                debugVisualsLines[3]->SetText(
+                    std::format(
+                        "C SIDE CUT {}",
+                        debugSideCutEnabled ? "ON" : "OFF"));
+
+                for (orbit::u32 lineIndex = 0;
+                     lineIndex < kDebugVisualsLineCount;
+                     ++lineIndex)
+                {
+                    debugVisualsLines[lineIndex]->Draw(
                         *commandList,
                         backBuffer,
                         swapchain->Width(),

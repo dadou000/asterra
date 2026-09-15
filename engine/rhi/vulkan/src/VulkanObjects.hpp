@@ -272,6 +272,7 @@ public:
         VkDescriptorSetLayout descriptorSetLayout,
         u32 pushConstantDwords,
         u32 shaderResourceBuffers,
+        u32 sampledTextures,
         PrimitiveTopology topology);
     ~VulkanGraphicsPipeline() override;
 
@@ -280,6 +281,7 @@ public:
 
     [[nodiscard]] u32 PushConstantDwords() const noexcept override;
     [[nodiscard]] u32 ShaderResourceBuffers() const noexcept override;
+    [[nodiscard]] u32 SampledTextures() const noexcept override;
     [[nodiscard]] PrimitiveTopology Topology() const noexcept override;
 
     [[nodiscard]] VkPipeline Native() const noexcept;
@@ -292,7 +294,44 @@ private:
     VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
     u32 pushConstantDwords_{0};
     u32 shaderResourceBuffers_{0};
+    u32 sampledTextures_{0};
     PrimitiveTopology topology_{PrimitiveTopology::TriangleList};
+};
+
+class VulkanComputePipeline final : public ComputePipeline
+{
+public:
+    VulkanComputePipeline(
+        VkDevice device,
+        VkPipeline pipeline,
+        VkPipelineLayout layout,
+        VkDescriptorSetLayout descriptorSetLayout,
+        u32 pushConstantDwords,
+        u32 shaderResourceBuffers,
+        u32 storageTextures,
+        u32 sampledTextures);
+    ~VulkanComputePipeline() override;
+
+    VulkanComputePipeline(const VulkanComputePipeline&) = delete;
+    VulkanComputePipeline& operator=(const VulkanComputePipeline&) = delete;
+
+    [[nodiscard]] u32 PushConstantDwords() const noexcept override;
+    [[nodiscard]] u32 ShaderResourceBuffers() const noexcept override;
+    [[nodiscard]] u32 StorageTextures() const noexcept override;
+    [[nodiscard]] u32 SampledTextures() const noexcept override;
+
+    [[nodiscard]] VkPipeline Native() const noexcept;
+    [[nodiscard]] VkPipelineLayout Layout() const noexcept;
+
+private:
+    VkDevice device_{VK_NULL_HANDLE};
+    VkPipeline pipeline_{VK_NULL_HANDLE};
+    VkPipelineLayout layout_{VK_NULL_HANDLE};
+    VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
+    u32 pushConstantDwords_{0};
+    u32 shaderResourceBuffers_{0};
+    u32 storageTextures_{0};
+    u32 sampledTextures_{0};
 };
 
 class VulkanCommandAllocator final : public CommandAllocator
@@ -326,7 +365,8 @@ public:
         QueueType type,
         VkCommandPool pool,
         VkCommandBuffer nativeCommandList,
-        const DeviceFunctions& functions);
+        const DeviceFunctions& functions,
+        VkSampler defaultSampler);
 
     [[nodiscard]] QueueType Type() const noexcept override;
 
@@ -342,12 +382,20 @@ public:
         ResourceState before,
         ResourceState after) override;
 
+    void UavBarrier(Buffer& buffer) override;
+    void UavBarrier(Texture& texture) override;
+
     void CopyBuffer(
         Buffer& source,
         u64 sourceOffsetBytes,
         Buffer& destination,
         u64 destinationOffsetBytes,
         u64 sizeBytes) override;
+
+    void CopyBufferToTexture(
+        Buffer& source,
+        u64 sourceOffsetBytes,
+        Texture& destination) override;
 
     void ClearColorTarget(
         Texture& texture,
@@ -375,6 +423,33 @@ public:
     void SetGraphicsBuffer(
         u32 slot,
         Buffer& buffer) override;
+
+    void SetGraphicsTexture(
+        u32 slot,
+        Texture& texture) override;
+
+    void SetComputePipeline(
+        ComputePipeline& pipeline) override;
+
+    void SetComputeConstants(
+        std::span<const u32> dwords) override;
+
+    void SetComputeBuffer(
+        u32 slot,
+        Buffer& buffer) override;
+
+    void SetComputeStorageTexture(
+        u32 slot,
+        Texture& texture) override;
+
+    void SetComputeTexture(
+        u32 slot,
+        Texture& texture) override;
+
+    void Dispatch(
+        u32 groupCountX,
+        u32 groupCountY,
+        u32 groupCountZ) override;
 
     void SetVertexBuffer(
         Buffer& buffer,
@@ -437,7 +512,9 @@ private:
     VkCommandPool pool_{VK_NULL_HANDLE};
     VkCommandBuffer nativeCommandList_{VK_NULL_HANDLE};
     const DeviceFunctions* functions_{nullptr};
+    VkSampler defaultSampler_{VK_NULL_HANDLE};
     VulkanGraphicsPipeline* activePipeline_{nullptr};
+    VulkanComputePipeline* activeComputePipeline_{nullptr};
     bool renderingActive_{false};
 
     // One command buffer per pool this list has ever been Reset()
@@ -553,6 +630,9 @@ public:
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         const GraphicsPipelineDesc& desc) override;
 
+    [[nodiscard]] std::unique_ptr<ComputePipeline> CreateComputePipeline(
+        const ComputePipelineDesc& desc) override;
+
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) override;
@@ -571,6 +651,14 @@ public:
     [[nodiscard]] RenderDocCapture* GetRenderDocCapture() const noexcept;
     [[nodiscard]] VkInstance NativeInstance() const noexcept;
 
+    // Single reusable linear/clamp-to-edge sampler shared by every
+    // SetGraphicsTexture call -- nothing in this codebase currently
+    // needs per-texture sampler state (point filtering, wrap modes,
+    // anisotropy), so one sampler for the device's lifetime avoids
+    // per-draw VkSampler churn. Not part of the abstract Device
+    // interface; used only by VulkanCommandList::SetGraphicsTexture.
+    [[nodiscard]] VkSampler DefaultSampler() const noexcept;
+
 private:
     VkInstance instance_{VK_NULL_HANDLE};
     VkPhysicalDevice physicalDevice_{VK_NULL_HANDLE};
@@ -583,5 +671,6 @@ private:
     bool validationEnabled_{false};
     VkDebugUtilsMessengerEXT debugMessenger_{VK_NULL_HANDLE};
     std::unique_ptr<RenderDocCapture> renderDoc_;
+    VkSampler defaultSampler_{VK_NULL_HANDLE};
 };
 } // namespace orbit::rhi::vulkan::detail

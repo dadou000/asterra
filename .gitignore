@@ -1,9 +1,14 @@
 # Orbit build output
 /build/
 /out/
+/dist/
 /.vs/
 .vscode/
 .idea/
+
+# Godot editor cache (Asterra, a separate Godot project sharing this
+# working directory -- unrelated to the Orbit C++ engine)
+/.godot/
 
 # CMake
 CMakeUserPresets.json

@@ -4,6 +4,7 @@
 #include <orbit/math/Matrix.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain_stream/TerrainMorphRefresh.hpp>
+#include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/terrain_stream/ToroidalResidency.hpp>
 #include <orbit/terrain_view/ClipmapTracker.hpp>
 
@@ -18,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -45,7 +47,7 @@ namespace
     };
 }
 
-[[nodiscard]] std::array<u32, 36> BuildDrawConstants(
+[[nodiscard]] std::array<u32, 40> BuildDrawConstants(
     const math::Mat4& matrix,
     const f32 planetRadiusMeters,
     const f32 observerRadiusMeters,
@@ -53,9 +55,12 @@ namespace
     const terrain_view::ClipmapLevel* coarserLevel,
     const terrain_view::ClipmapLevelMotion& motion,
     const terrain_stream::LevelResidencyUpdate& residency,
-    const world::SurfaceFrame& observerFrame) noexcept
+    const world::SurfaceFrame& observerFrame,
+    const u32 levelIndex,
+    const bool debugLodColorEnabled,
+    const bool debugSideCutEnabled) noexcept
 {
-    std::array<u32, 36> result{};
+    std::array<u32, 40> result{};
 
     static_assert(
         sizeof(matrix.values) ==
@@ -148,6 +153,14 @@ namespace
         static_cast<f32>(
             level.innerHoleHalfExtentMeters));
 
+    // Debug-visuals block (F2 menu) -- see the vertex shader's use of
+    // g_debug. Zero/false by default, so this is a no-op unless a
+    // caller explicitly turns one of these on.
+    store(36, static_cast<f32>(levelIndex));
+    store(37, debugLodColorEnabled ? 1.0F : 0.0F);
+    store(38, debugSideCutEnabled ? 1.0F : 0.0F);
+    store(39, 0.0F);
+
     return result;
 }
 
@@ -161,6 +174,10 @@ struct DrawConstants
     float4 g_centerEastAndOriginY;
     float4 g_centerNorthAndMorphStart;
     float4 g_morph;
+    // Debug-visuals block (F2 menu): x = this level's index (as a
+    // float), y = LOD-color override enabled, z = side-cut enabled,
+    // w = reserved.
+    float4 g_debug;
 };
 [[vk::push_constant]] DrawConstants g_pc;
 
@@ -177,6 +194,13 @@ struct VSOutput
     float3 surfaceDirection : TEXCOORD4;
     float waterDepth : TEXCOORD5;
     float3 localPosition : TEXCOORD6;
+    // Shared pixel-shader interface with UniformPlanetRenderer's
+    // whole-planet mesh (see TerrainSurfaceShader.hpp / ApplyDetailNormal)
+    // -- always zero here, since this renderer's terrainNormal is
+    // already real ground truth (see LoadFineSlope below) and doesn't
+    // need or want the shared fake-bump fallback.
+    float spacingMeters : TEXCOORD7;
+    float3 worldPosition : TEXCOORD8;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -210,7 +234,14 @@ uint PhysicalSampleIndex(
         physicalX;
 }
 
-float LoadElevation(
+// Ground-truth slope baked in at sample-generation time from the
+// finest active clipmap level's own footprint/epsilon (see
+// TerrainSampleRequest::fineNormalFootprintMeters), independent of
+// this ring's own (possibly much wider) sample spacing -- this is
+// what lets a far ring's shading normal still read like real L0
+// ground detail instead of a blocky normal faceted by wide geometric
+// sample spacing.
+float2 LoadFineSlope(
     uint logicalX,
     uint logicalY,
     uint resolution,
@@ -225,16 +256,23 @@ float LoadElevation(
             originX,
             originY);
 
-    const uint address = sampleIndex * 24u;
-    return asfloat(g_samples.Load(address)) + asfloat(g_samples.Load(address + 20u));
+    const uint address = sampleIndex * 32u;
+    return asfloat(g_samples.Load2(address + 24u));
 }
 
-float3 SurfaceDirectionForOffset(
+// Walks `offsetMeters` (a tangent-plane displacement from the tile
+// center) along the sphere's curvature, starting from the given
+// up/east/north basis (the observer-relative one, g_centerUpAndOriginX
+// etc, for render-time positioning precision near a moving camera --
+// see SurfaceDirectionForOffset below).
+float3 SurfaceDirectionForOffsetFromBasis(
     float2 offsetMeters,
-    float planetRadius)
+    float planetRadius,
+    float3 up,
+    float3 east,
+    float3 north)
 {
-    float3 direction =
-        g_pc.g_centerUpAndOriginX.xyz;
+    float3 direction = up;
 
     const float distanceMeters =
         length(offsetMeters);
@@ -243,10 +281,8 @@ float3 SurfaceDirectionForOffset(
     {
         const float3 tangentDirection =
             normalize(
-                g_pc.g_centerEastAndOriginY.xyz *
-                    offsetMeters.x +
-                g_pc.g_centerNorthAndMorphStart.xyz *
-                    offsetMeters.y);
+                east * offsetMeters.x +
+                north * offsetMeters.y);
 
         const float angle =
             distanceMeters /
@@ -254,13 +290,24 @@ float3 SurfaceDirectionForOffset(
 
         direction =
             normalize(
-                g_pc.g_centerUpAndOriginX.xyz *
-                    cos(angle) +
+                up * cos(angle) +
                 tangentDirection *
                     sin(angle));
     }
 
     return direction;
+}
+
+float3 SurfaceDirectionForOffset(
+    float2 offsetMeters,
+    float planetRadius)
+{
+    return SurfaceDirectionForOffsetFromBasis(
+        offsetMeters,
+        planetRadius,
+        g_pc.g_centerUpAndOriginX.xyz,
+        g_pc.g_centerEastAndOriginY.xyz,
+        g_pc.g_centerNorthAndMorphStart.xyz);
 }
 
 VSOutput main(uint vertexId : SV_VertexID)
@@ -332,7 +379,7 @@ VSOutput main(uint vertexId : SV_VertexID)
             originY);
 
     const uint sampleByteOffset =
-        physicalIndex * 24u;
+        physicalIndex * 32u;
 
     const float waterDepth = asfloat(g_samples.Load(sampleByteOffset + 20u));
     // Bed + depth is linear through page filtering and parent morphing.
@@ -418,79 +465,21 @@ VSOutput main(uint vertexId : SV_VertexID)
             observerRadius,
             0.0);
 
-    const uint leftX =
-        logicalX > 0u
-            ? logicalX - 1u
-            : logicalX;
-
-    const uint rightX =
-        logicalX + 1u < resolution
-            ? logicalX + 1u
-            : logicalX;
-
-    const uint downY =
-        logicalY > 0u
-            ? logicalY - 1u
-            : logicalY;
-
-    const uint upY =
-        logicalY + 1u < resolution
-            ? logicalY + 1u
-            : logicalY;
-
-    const float elevationLeft =
-        LoadElevation(
-            leftX,
+    // Ground-truth slope baked in at the finest active level's own
+    // resolution (see LoadFineSlope) -- not a finite difference across
+    // this ring's own (possibly much wider) neighboring samples, so
+    // distant rings shade with real L0 micro-relief instead of a
+    // faceted/pixelated normal.
+    const float2 fineSlope =
+        LoadFineSlope(
+            logicalX,
             logicalY,
             resolution,
             originX,
             originY);
 
-    const float elevationRight =
-        LoadElevation(
-            rightX,
-            logicalY,
-            resolution,
-            originX,
-            originY);
-
-    const float elevationDown =
-        LoadElevation(
-            logicalX,
-            downY,
-            resolution,
-            originX,
-            originY);
-
-    const float elevationUp =
-        LoadElevation(
-            logicalX,
-            upY,
-            resolution,
-            originX,
-            originY);
-
-    const float xDistance =
-        max(
-            (float)(rightX - leftX) *
-                spacing,
-            0.0001);
-
-    const float yDistance =
-        max(
-            (float)(upY - downY) *
-                spacing,
-            0.0001);
-
-    const float slopeEast =
-        (elevationRight -
-         elevationLeft) /
-        xDistance;
-
-    const float slopeNorth =
-        (elevationUp -
-         elevationDown) /
-        yDistance;
+    const float slopeEast = fineSlope.x;
+    const float slopeNorth = fineSlope.y;
 
     float3 tangentEast =
         g_pc.g_centerEastAndOriginY.xyz -
@@ -566,6 +555,10 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.elevation = elevation;
     output.waterDepth = waterDepth;
     output.localPosition = localPosition;
+    // Disables the shared pixel shader's fake detail-normal bump --
+    // see the comment on these fields in VSOutput above.
+    output.spacingMeters = 0.0;
+    output.worldPosition = float3(0.0, 0.0, 0.0);
 
     output.biome0 =
         UnpackUnorm4x8(
@@ -574,6 +567,30 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.biome1 =
         UnpackUnorm4x8(
             packedBiome1);
+
+    // F2 debug menu: LOD lattice inspection. Overrides the real
+    // biome weights with a one-hot vector selecting one of the 8
+    // palette colors the pixel shader already knows how to blend
+    // (see kTerrainSurfacePixelShader) -- cycling through them by
+    // level index, so two adjacent rings never land on the same
+    // color, with zero changes needed to the (shared) pixel shader.
+    if (g_pc.g_debug.y > 0.5)
+    {
+        const uint colorIndex =
+            ((uint)round(g_pc.g_debug.x)) % 8u;
+
+        output.biome0 = float4(
+            colorIndex == 0u ? 1.0 : 0.0,
+            colorIndex == 1u ? 1.0 : 0.0,
+            colorIndex == 2u ? 1.0 : 0.0,
+            colorIndex == 3u ? 1.0 : 0.0);
+
+        output.biome1 = float4(
+            colorIndex == 4u ? 1.0 : 0.0,
+            colorIndex == 5u ? 1.0 : 0.0,
+            colorIndex == 6u ? 1.0 : 0.0,
+            colorIndex == 7u ? 1.0 : 0.0);
+    }
 
     output.terrainNormal =
         terrainNormal;
@@ -597,6 +614,17 @@ VSOutput main(uint vertexId : SV_VertexID)
         horizonCosine +
         0.000002 +
         positiveReliefPadding;
+
+    // F2 debug menu: side cut. Discards (via the same clip-distance
+    // mechanism the horizon test already uses -- SV_ClipDistance0 is
+    // negative here) everything on one side of a vertical plane
+    // through the observer, so the clipmap's LOD ring structure is
+    // visible in cross-section instead of occluded by the near side.
+    if (g_pc.g_debug.z > 0.5 &&
+        localPosition.x < 0.0)
+    {
+        output.horizonClip = -1.0;
+    }
 
     // Ring patches have a hole in the middle where the next finer
     // level is drawn instead -- collapsing every corner of a
@@ -652,14 +680,16 @@ public:
         rhi::Device& device,
         const shader::Compiler& shaderCompiler,
         const world::PlanetDefinition& planet,
-        terrain_stream::TerrainSampleStreamer& sampleStreamer,
+        terrain_gpu::GpuFieldGenerator& gpuFieldGenerator,
         const world::WorldPosition& observer,
-        TerrainPreviewConfig config)
+        TerrainPreviewConfig config,
+        terrain_gpu::GpuRegionDelta* regionDeltaComposite,
+        terrain_region::DerivedTerrainRegionCache* hydrologyRegionCache)
         : device_(device),
           planet_(planet),
-          sampleStreamer_(sampleStreamer),
-          observedSourceRevision_(
-              sampleStreamer.SourceRevision()),
+          gpuFieldGenerator_(gpuFieldGenerator),
+          regionDeltaComposite_(regionDeltaComposite),
+          hydrologyRegionCache_(hydrologyRegionCache),
           config_(std::move(config)),
           baseClipmapConfig_(
               config_.clipmap),
@@ -696,24 +726,7 @@ public:
         InitializeBlocking(observer);
     }
 
-    ~Impl()
-    {
-        if (pendingUpdate_.has_value() &&
-            pendingUpdate_->batch.IsValid())
-        {
-            try
-            {
-                static_cast<void>(
-                    sampleStreamer_.
-                        WaitCollect(
-                            pendingUpdate_->
-                                batch));
-            }
-            catch (...)
-            {
-            }
-        }
-    }
+    ~Impl() = default;
 
     void UpdateObserver(
         const world::WorldPosition& observer)
@@ -730,6 +743,20 @@ public:
         ++desiredGeneration_;
 
         ServiceStreaming();
+    }
+
+    void SetDebugVisuals(
+        const bool lodColorEnabled,
+        const bool sideCutEnabled) noexcept
+    {
+        debugLodColorEnabled_ = lodColorEnabled;
+        debugSideCutEnabled_ = sideCutEnabled;
+    }
+
+    void SetGenerationFrozen(
+        const bool frozen) noexcept
+    {
+        generationFrozen_ = frozen;
     }
 
     void Draw(
@@ -896,7 +923,10 @@ public:
                         levelIndex],
                     residencyUpdate_.levels[
                         levelIndex],
-                    observerFrame_);
+                    observerFrame_,
+                    levelIndex,
+                    debugLodColorEnabled_,
+                    debugSideCutEnabled_);
 
             commandList.
                 SetGraphicsConstants(
@@ -968,34 +998,22 @@ private:
             requests;
     };
 
-    struct PendingUpdate
-    {
-        u64 generation{0};
-        CandidateState candidate;
-        terrain_stream::TerrainSampleBatch batch;
-    };
-
+    // A single dirty-region batch recorded against a level, carrying the
+    // full request it came from (surface frame/origin/spacing can all
+    // change between updates, e.g. on recentring) so it can be replayed
+    // as a GPU dispatch independently for each frame-in-flight ring slot
+    // whenever that slot's own catch-up serial falls behind.
     struct DirtyUpdate
     {
         u64 serial{0};
-        std::vector<
-            terrain_stream::PhysicalRegion>
-            regions;
+        terrain_stream::TerrainSampleRequest request;
     };
 
     struct LevelGpuState
     {
         std::vector<
-            terrain_stream::TerrainSampleValue>
-            cpuSamples;
-
-        std::vector<
             std::unique_ptr<rhi::Buffer>>
             frameGpuSampleBuffers;
-
-        std::vector<
-            std::unique_ptr<rhi::Buffer>>
-            frameUploadBuffers;
 
         std::vector<u64> frameSerials;
         std::deque<DirtyUpdate> dirtyUpdates;
@@ -1046,10 +1064,6 @@ private:
         for (LevelGpuState& level :
              levels_)
         {
-            level.cpuSamples.resize(
-                static_cast<std::size_t>(
-                    sampleCount));
-
             level.frameSerials.assign(
                 config_.framesInFlight,
                 0);
@@ -1057,14 +1071,18 @@ private:
             level.frameGpuSampleBuffers.reserve(
                 config_.framesInFlight);
 
-            level.frameUploadBuffers.reserve(
-                config_.framesInFlight);
-
             for (u32 frameIndex = 0;
                  frameIndex <
                     config_.framesInFlight;
                  ++frameIndex)
             {
+                // BufferUsage::Structured already carries
+                // VK_BUFFER_USAGE_STORAGE_BUFFER_BIT unconditionally
+                // (see VulkanResources.cpp), so this same buffer is
+                // both the compute shader's UAV write target
+                // (PrepareLevelFrame) and the vertex shader's SRV read
+                // (Draw) -- no separate upload/staging buffer needed
+                // now that generation happens on the GPU.
                 level.frameGpuSampleBuffers.push_back(
                     device_.CreateBuffer({
                         .sizeBytes = bytes,
@@ -1077,20 +1095,6 @@ private:
                         .initialState =
                             rhi::ResourceState::
                                 ShaderResource
-                    }));
-
-                level.frameUploadBuffers.push_back(
-                    device_.CreateBuffer({
-                        .sizeBytes = bytes,
-                        .usage =
-                            rhi::BufferUsage::
-                                Structured,
-                        .memory =
-                            rhi::MemoryUsage::
-                                HostVisible,
-                        .initialState =
-                            rhi::ResourceState::
-                                CopySource
                     }));
             }
         }
@@ -1150,7 +1154,7 @@ private:
                     },
                     .vertexAttributes = {},
                     .vertexStrideBytes = 0,
-                    .pushConstantDwords = 36,
+                    .pushConstantDwords = 40,
                     .shaderResourceBuffers = 1,
                     .topology =
                         rhi::
@@ -1344,6 +1348,16 @@ private:
                         ? coarserLevel->
                             terrainFootprintMeters
                         : 0.0,
+                // Shading normals always resolve the finest active
+                // level's own ground detail, however coarse this
+                // particular ring's own geometry is -- see the
+                // comment on TerrainSampleRequest.
+                .fineNormalFootprintMeters =
+                    candidate.layout.levels[0].
+                        sampleSpacingMeters,
+                .fineNormalEpsilonMeters =
+                    candidate.layout.levels[0].
+                        sampleSpacingMeters,
                 .surfaceFrame =
                     candidate.motion.levels[
                         levelIndex].
@@ -1380,10 +1394,7 @@ private:
     }
 
     void CommitCandidate(
-        CandidateState&& candidate,
-        const std::vector<
-            terrain_stream::TerrainSampleResult>&
-            results)
+        CandidateState&& candidate)
     {
         ResetCommitStats();
 
@@ -1398,12 +1409,17 @@ private:
         {
             ++stats_.rebaseCount;
             stats_.lastRebaseLevels = fullLevels;
-            stats_.lastRebaseReason = coverageTierChanged ? "LOD" :
-                (committedSourceRevision_ != observedSourceRevision_ ? "SOURCE" : "MOVE");
+            stats_.lastRebaseReason = coverageTierChanged ? "LOD" : "MOVE";
             lastRebaseTime_ = std::chrono::steady_clock::now();
             stats_.secondsSinceLastRebase = 0.0;
         }
-        committedSourceRevision_ = observedSourceRevision_;
+
+        // Requests describe the (still-pending) work, not generated
+        // output -- record them as dirty now, but the actual GPU
+        // dispatches happen later, lazily, in PrepareLevelFrame as each
+        // frame-in-flight ring slot comes due for its own draw.
+        const std::vector<terrain_stream::TerrainSampleRequest>
+            requests = std::move(candidate.requests);
 
         config_.clipmap =
             candidate.clipmapConfig;
@@ -1431,10 +1447,9 @@ private:
             std::move(
                 candidate.residencyUpdate);
 
-        for (const auto& result :
-             results)
+        for (const auto& request : requests)
         {
-            if (result.patches.empty())
+            if (request.regions.empty())
             {
                 continue;
             }
@@ -1445,13 +1460,20 @@ private:
             stats_.
                 refreshedRegionsLastUpdate +=
                     static_cast<u32>(
-                        result.patches.size());
+                        request.regions.size());
+
+            u64 requestSampleCount = 0;
+            for (const auto& region : request.regions)
+            {
+                requestSampleCount +=
+                    static_cast<u64>(region.width) * region.height;
+            }
 
             stats_.
                 generatedSamplesLastUpdate +=
-                    result.sampleCount;
+                    requestSampleCount;
 
-            ApplySampleResult(result);
+            RecordDirtyRequest(request);
         }
 
         stats_.
@@ -1477,6 +1499,12 @@ private:
                     config_.clipmap);
     }
 
+    // Unlike the old CPU-job path, there is no asynchronous batch to
+    // poll here: BuildCandidate's requests are recorded as dirty
+    // immediately, and the actual GPU generation is deferred to
+    // PrepareLevelFrame, which runs on the very next Draw() before any
+    // vertex shader reads the buffer it just wrote -- so committing
+    // "blocking" or from steady-state streaming is the same operation.
     void InitializeBlocking(
         const world::WorldPosition& observer)
     {
@@ -1491,74 +1519,33 @@ private:
 
         desiredGeneration_ = 1;
 
-        for (;;)
-        {
-            CandidateState candidate =
-                BuildCandidate(observer);
+        CandidateState candidate =
+            BuildCandidate(observer);
 
-            auto batch =
-                sampleStreamer_.Submit(
-                    candidate.requests);
+        CommitCandidate(
+            std::move(candidate));
 
-            const u64 sourceRevision =
-                batch.SourceRevision();
+        committedGeneration_ =
+            desiredGeneration_;
 
-            auto results =
-                sampleStreamer_.WaitCollect(
-                    batch);
-
-            if (sourceRevision !=
-                sampleStreamer_.SourceRevision())
-            {
-                DetectSourceRevisionChange();
-                ++stats_.staleRevisionBatches;
-                continue;
-            }
-
-            observedSourceRevision_ =
-                sourceRevision;
-
-            CommitCandidate(
-                std::move(candidate),
-                results);
-
-            committedGeneration_ =
-                desiredGeneration_;
-
-            ++stats_.committedBatches;
-            stats_.updatePending = false;
-            break;
-        }
+        ++stats_.committedBatches;
+        stats_.updatePending = false;
     }
 
-    void DetectSourceRevisionChange()
+    void ServiceStreaming()
     {
-        const u64 currentRevision =
-            sampleStreamer_.SourceRevision();
-
-        if (currentRevision ==
-            observedSourceRevision_)
+        // F2 debug menu: freeze generation. Observer motion still
+        // tracks normally (so the camera can keep moving to inspect
+        // the frozen lattice from any angle) -- only committing new
+        // dirty regions is suppressed, leaving desiredGeneration_
+        // ahead of committedGeneration_ until unfrozen.
+        if (generationFrozen_)
         {
             return;
         }
 
-        observedSourceRevision_ =
-            currentRevision;
-
-        // A content revision is not a coordinate rebase. Recentring here
-        // changes the phase of every grid, including kilometre-scale outer
-        // levels, even when their sample footprint and world field are fixed.
-        tracker_.InvalidateSamples();
-
-        ++desiredGeneration_;
-        ++stats_.revisionInvalidations;
-    }
-
-    void LaunchLatestUpdate()
-    {
-        if (pendingUpdate_.has_value() ||
-            committedGeneration_ ==
-                desiredGeneration_)
+        if (committedGeneration_ ==
+            desiredGeneration_)
         {
             return;
         }
@@ -1567,214 +1554,47 @@ private:
             BuildCandidate(
                 desiredObserver_);
 
-        if (candidate.requests.empty())
-        {
-            CommitCandidate(
-                std::move(candidate),
-                {});
+        CommitCandidate(
+            std::move(candidate));
 
-            committedGeneration_ =
-                desiredGeneration_;
+        committedGeneration_ =
+            desiredGeneration_;
 
-            ++stats_.committedBatches;
-            stats_.updatePending = false;
-            return;
-        }
-
-        terrain_stream::TerrainSampleBatch batch =
-            sampleStreamer_.Submit(
-                candidate.requests);
-
-        pendingUpdate_.emplace(
-            PendingUpdate{
-                .generation =
-                    desiredGeneration_,
-                .candidate =
-                    std::move(candidate),
-                .batch =
-                    std::move(batch)
-            });
-
-        ++stats_.submittedBatches;
-        stats_.updatePending = true;
+        ++stats_.committedBatches;
+        stats_.updatePending = false;
     }
 
-    void ServiceStreaming()
-    {
-        DetectSourceRevisionChange();
-
-        if (pendingUpdate_.has_value())
-        {
-            if (!pendingUpdate_->
-                    batch.IsComplete())
-            {
-                stats_.updatePending = true;
-                return;
-            }
-
-            const u64 batchSourceRevision =
-                pendingUpdate_->
-                    batch.SourceRevision();
-
-            std::vector<
-                terrain_stream::
-                    TerrainSampleResult>
-                results;
-
-            if (!sampleStreamer_.TryCollect(
-                    pendingUpdate_->batch,
-                    results))
-            {
-                stats_.updatePending = true;
-                return;
-            }
-
-            DetectSourceRevisionChange();
-
-            const u64 generation =
-                pendingUpdate_->generation;
-
-            CandidateState candidate =
-                std::move(
-                    pendingUpdate_->
-                        candidate);
-
-            pendingUpdate_.reset();
-            stats_.updatePending = false;
-
-            const bool staleRevision =
-                batchSourceRevision !=
-                    observedSourceRevision_;
-
-            if (staleRevision)
-            {
-                ResetCommitStats();
-                ++stats_.staleRevisionBatches;
-            }
-            else
-            {
-                const bool superseded =
-                    generation !=
-                        desiredGeneration_;
-
-                const bool obsoleteCoverageTier =
-                    superseded &&
-                    candidate.coverageTier !=
-                        desiredCoverageTier_;
-
-                if (obsoleteCoverageTier)
-                {
-                    ResetCommitStats();
-                    ++stats_.supersededBatches;
-                }
-                else
-                {
-                    CommitCandidate(
-                        std::move(candidate),
-                        results);
-
-                    committedGeneration_ =
-                        generation;
-
-                    ++stats_.committedBatches;
-
-                    if (superseded)
-                    {
-                        ++stats_.supersededBatches;
-                    }
-                }
-            }
-        }
-
-        if (!pendingUpdate_.has_value() &&
-            committedGeneration_ !=
-                desiredGeneration_)
-        {
-            LaunchLatestUpdate();
-        }
-    }
-
-    void ApplySampleResult(
+    void RecordDirtyRequest(
         const terrain_stream::
-            TerrainSampleResult& result)
+            TerrainSampleRequest& request)
     {
-        if (result.levelIndex >=
+        if (request.levelIndex >=
             levels_.size())
         {
             throw std::out_of_range(
-                "Orbit terrain sample result references an invalid clipmap level.");
+                "Orbit terrain sample request references an invalid clipmap level.");
         }
 
         LevelGpuState& state =
-            levels_[result.levelIndex];
-
-        const u32 resolution =
-            config_.clipmap.
-                gridResolution;
-
-        std::vector<
-            terrain_stream::PhysicalRegion>
-            dirtyRegions;
-
-        dirtyRegions.reserve(
-            result.patches.size());
-
-        for (const auto& patch :
-             result.patches)
-        {
-            const std::size_t expectedSamples =
-                static_cast<std::size_t>(
-                    patch.region.width) *
-                patch.region.height;
-
-            if (patch.samples.size() !=
-                expectedSamples)
-            {
-                throw std::runtime_error(
-                    "Orbit terrain sample patch size does not match its physical region.");
-            }
-
-            for (u32 row = 0;
-                 row < patch.region.height;
-                 ++row)
-            {
-                const std::size_t destinationOffset =
-                    static_cast<std::size_t>(
-                        patch.region.y + row) *
-                        resolution +
-                    patch.region.x;
-
-                const std::size_t sourceOffset =
-                    static_cast<std::size_t>(
-                        row) *
-                    patch.region.width;
-
-                std::memcpy(
-                    state.cpuSamples.data() +
-                        destinationOffset,
-                    patch.samples.data() +
-                        sourceOffset,
-                    static_cast<std::size_t>(
-                        patch.region.width) *
-                        sizeof(
-                            terrain_stream::
-                                TerrainSampleValue));
-            }
-
-            dirtyRegions.push_back(
-                patch.region);
-        }
+            levels_[request.levelIndex];
 
         ++state.currentSerial;
 
         state.dirtyUpdates.push_back({
-            .serial =
-                state.currentSerial,
-            .regions =
-                std::move(dirtyRegions)
+            .serial = state.currentSerial,
+            .request = request
         });
     }
 
+    // Unlike the old CPU path (which memcpy'd from one shared,
+    // already-generated cpuSamples mirror into each ring slot's own
+    // upload buffer), there is no CPU-side mirror any more -- each of
+    // the framesInFlight ring buffers independently replays whichever
+    // dirty requests it hasn't caught up to yet as real GPU dispatches.
+    // A ring slot that lagged behind several updates redoes several
+    // dispatches the first time it's used again, exactly mirroring how
+    // the CPU path redid several regions' worth of memcpy/CopyBuffer in
+    // that same situation.
     [[nodiscard]] u64 PrepareLevelFrame(
         rhi::CommandList& commandList,
         const u32 levelIndex,
@@ -1797,24 +1617,8 @@ private:
             *state.frameGpuSampleBuffers[
                 frameIndex];
 
-        rhi::Buffer& uploadBuffer =
-            *state.frameUploadBuffers[
-                frameIndex];
-
-        std::byte* mapped =
-            uploadBuffer.Map();
-
-        auto* destination =
-            reinterpret_cast<
-                terrain_stream::
-                    TerrainSampleValue*>(
-                        mapped);
-
-        u64 uploadedBytes = 0;
-
-        const u32 resolution =
-            config_.clipmap.
-                gridResolution;
+        u64 generatedBytes = 0;
+        bool touchedBuffer = false;
 
         for (const DirtyUpdate& update :
              state.dirtyUpdates)
@@ -1827,106 +1631,217 @@ private:
 
             for (const terrain_stream::
                      PhysicalRegion& region :
-                 update.regions)
+                 update.request.regions)
             {
-                for (u32 row = 0;
-                     row < region.height;
-                     ++row)
+                if (!touchedBuffer)
                 {
-                    const std::size_t offset =
-                        static_cast<std::size_t>(
-                            region.y + row) *
-                            resolution +
-                        region.x;
-
-                    const std::size_t rowBytes =
-                        static_cast<std::size_t>(
-                            region.width) *
-                        sizeof(
-                            terrain_stream::
-                                TerrainSampleValue);
-
-                    std::memcpy(
-                        destination + offset,
-                        state.cpuSamples.data() +
-                            offset,
-                        rowBytes);
-
-                    uploadedBytes +=
-                        static_cast<u64>(
-                            rowBytes);
-                }
-            }
-        }
-
-        uploadBuffer.Unmap();
-
-        commandList.Transition(
-            gpuBuffer,
-            rhi::ResourceState::
-                ShaderResource,
-            rhi::ResourceState::
-                CopyDestination);
-
-        for (const DirtyUpdate& update :
-             state.dirtyUpdates)
-        {
-            if (update.serial <=
-                frameSerial)
-            {
-                continue;
-            }
-
-            for (const terrain_stream::
-                     PhysicalRegion& region :
-                 update.regions)
-            {
-                for (u32 row = 0;
-                     row < region.height;
-                     ++row)
-                {
-                    const u64 elementOffset =
-                        static_cast<u64>(
-                            region.y + row) *
-                            resolution +
-                        region.x;
-
-                    const u64 byteOffset =
-                        elementOffset *
-                        sizeof(
-                            terrain_stream::
-                                TerrainSampleValue);
-
-                    const u64 rowBytes =
-                        static_cast<u64>(
-                            region.width) *
-                        sizeof(
-                            terrain_stream::
-                                TerrainSampleValue);
-
-                    commandList.CopyBuffer(
-                        uploadBuffer,
-                        byteOffset,
+                    commandList.Transition(
                         gpuBuffer,
-                        byteOffset,
-                        rowBytes);
+                        rhi::ResourceState::
+                            ShaderResource,
+                        rhi::ResourceState::
+                            UnorderedAccess);
+                    touchedBuffer = true;
                 }
+
+                terrain_gpu::GpuFieldRequest
+                    gpuRequest{
+                        .resolution =
+                            update.request.
+                                resolution,
+                        .spacingMeters =
+                            update.request.
+                                spacingMeters,
+                        .footprintMeters =
+                            update.request.
+                                footprintMeters,
+                        .morphToCoarser =
+                            update.request.
+                                morphToCoarser,
+                        .morphStartHalfExtentMeters =
+                            update.request.
+                                morphStartHalfExtentMeters,
+                        .morphEndHalfExtentMeters =
+                            update.request.
+                                morphEndHalfExtentMeters,
+                        .coarseSpacingMeters =
+                            update.request.
+                                coarseSpacingMeters,
+                        .coarseFootprintMeters =
+                            update.request.
+                                coarseFootprintMeters,
+                        .fineNormalFootprintMeters =
+                            update.request.
+                                fineNormalFootprintMeters,
+                        .fineNormalEpsilonMeters =
+                            update.request.
+                                fineNormalEpsilonMeters,
+                        .surfaceFrame =
+                            update.request.
+                                surfaceFrame,
+                        .coarseSurfaceFrame =
+                            update.request.
+                                coarseSurfaceFrame,
+                        .originX =
+                            update.request.
+                                originX,
+                        .originY =
+                            update.request.
+                                originY,
+                        .region = {
+                            .x = region.x,
+                            .y = region.y,
+                            .width = region.width,
+                            .height = region.height
+                        }
+                    };
+
+                gpuFieldGenerator_.Dispatch(
+                    commandList,
+                    gpuRequest,
+                    gpuBuffer);
+
+                CompositeRegionDelta(
+                    commandList,
+                    update.request,
+                    region,
+                    gpuBuffer);
+
+                generatedBytes +=
+                    static_cast<u64>(
+                        region.width) *
+                    region.height *
+                    sizeof(
+                        terrain_stream::
+                            TerrainSampleValue);
             }
         }
 
-        commandList.Transition(
-            gpuBuffer,
-            rhi::ResourceState::
-                CopyDestination,
-            rhi::ResourceState::
-                ShaderResource);
+        if (touchedBuffer)
+        {
+            commandList.UavBarrier(
+                gpuBuffer);
+
+            commandList.Transition(
+                gpuBuffer,
+                rhi::ResourceState::
+                    UnorderedAccess,
+                rhi::ResourceState::
+                    ShaderResource);
+        }
 
         frameSerial =
             state.currentSerial;
 
         PruneDirtyHistory(state);
 
-        return uploadedBytes;
+        return generatedBytes;
+    }
+
+    // No-op when regionDeltaComposite_/hydrologyRegionCache_ are null
+    // (the default). Otherwise, composites whichever hydrology region
+    // tile covers `request`'s surface frame -- if one is ready -- into
+    // the samples this Dispatch call just wrote for `region`, in
+    // place. `gpuBuffer` must already be
+    // ResourceState::UnorderedAccess (true here: the caller only ever
+    // calls this immediately after gpuFieldGenerator_.Dispatch, still
+    // inside the same UAV window).
+    void CompositeRegionDelta(
+        rhi::CommandList& commandList,
+        const terrain_stream::TerrainSampleRequest& request,
+        const terrain_stream::PhysicalRegion& region,
+        rhi::Buffer& gpuBuffer)
+    {
+        if (regionDeltaComposite_ == nullptr ||
+            hydrologyRegionCache_ == nullptr)
+        {
+            return;
+        }
+
+        const terrain_region::DerivedTerrainRegionId regionId =
+            hydrologyRegionCache_->IdForDirection(
+                request.surfaceFrame.up);
+
+        const auto hydrologyRegion =
+            hydrologyRegionCache_->TryGet(regionId);
+
+        if (!hydrologyRegion)
+        {
+            return;
+        }
+
+        rhi::Buffer* deltaBuffer =
+            GetOrCreateRegionDeltaBuffer(*hydrologyRegion);
+
+        if (deltaBuffer == nullptr)
+        {
+            return;
+        }
+
+        terrain_gpu::GpuRegionDeltaRequest deltaRequest{};
+        deltaRequest.resolution = request.resolution;
+        deltaRequest.spacingMeters = request.spacingMeters;
+        deltaRequest.surfaceFrame = request.surfaceFrame;
+        deltaRequest.originX = request.originX;
+        deltaRequest.originY = request.originY;
+        deltaRequest.region = {
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height
+        };
+        deltaRequest.planetRadiusMeters = planet_.radiusMeters;
+        deltaRequest.regionSurfaceFrame =
+            hydrologyRegion->elevationDelta.surfaceFrame;
+        deltaRequest.regionHalfExtentMeters =
+            hydrologyRegion->elevationDelta.halfExtentMeters;
+        deltaRequest.regionSpacingMeters =
+            hydrologyRegion->elevationDelta.spacingMeters;
+        deltaRequest.regionResolution =
+            hydrologyRegion->elevationDelta.resolution;
+        deltaRequest.edgeFadeStartDot = 0.75F;
+
+        regionDeltaComposite_->Dispatch(
+            commandList, deltaRequest, *deltaBuffer, gpuBuffer);
+    }
+
+    [[nodiscard]] rhi::Buffer* GetOrCreateRegionDeltaBuffer(
+        const terrain_region::DerivedTerrainRegion& hydrologyRegion)
+    {
+        const auto existing =
+            regionDeltaBuffers_.find(hydrologyRegion.id);
+
+        if (existing != regionDeltaBuffers_.end())
+        {
+            return existing->second.get();
+        }
+
+        const auto& deltas =
+            hydrologyRegion.elevationDelta.elevationDeltaMeters;
+
+        if (deltas.empty())
+        {
+            return nullptr;
+        }
+
+        auto buffer = device_.CreateBuffer({
+            .sizeBytes = deltas.size() * sizeof(f32),
+            .usage = rhi::BufferUsage::Structured,
+            .memory = rhi::MemoryUsage::HostVisible,
+            .initialState = rhi::ResourceState::ShaderResource
+        });
+
+        std::byte* mapped = buffer->Map();
+        std::memcpy(
+            mapped, deltas.data(), deltas.size() * sizeof(f32));
+        buffer->Unmap();
+
+        rhi::Buffer* ptr = buffer.get();
+
+        regionDeltaBuffers_.emplace(
+            hydrologyRegion.id, std::move(buffer));
+
+        return ptr;
     }
 
     static void PruneDirtyHistory(
@@ -1953,10 +1868,29 @@ private:
 
     rhi::Device& device_;
     world::PlanetDefinition planet_;
-    terrain_stream::TerrainSampleStreamer&
-        sampleStreamer_;
+    terrain_gpu::GpuFieldGenerator&
+        gpuFieldGenerator_;
 
-    u64 observedSourceRevision_{0};
+    // Optional GPU hydrology compositing -- see the constructor's own
+    // comment. Null means "off"; every use below is guarded on this.
+    terrain_gpu::GpuRegionDelta* regionDeltaComposite_{nullptr};
+    terrain_region::DerivedTerrainRegionCache*
+        hydrologyRegionCache_{nullptr};
+
+    // Lazily uploaded once per ready region tile (its elevation-delta
+    // field never changes after BuildDerivedTerrainRegionFromGpuReadback
+    // produces it, so one upload covers every clipmap dispatch that
+    // tile ever composites into) -- HostVisible so no transfer/copy
+    // dispatch is needed, matching GpuFieldGenerator's own
+    // platesBuffer_/hotspotsBuffer_ convention. Reset whenever a
+    // region's entry is replaced (new sourceRevision/generatorVersion),
+    // never otherwise -- this cache can only grow across a run, but
+    // stays bounded by the region cache's own maxEntries in practice.
+    std::unordered_map<
+        terrain_region::DerivedTerrainRegionId,
+        std::unique_ptr<rhi::Buffer>,
+        terrain_region::DerivedTerrainRegionIdHash>
+        regionDeltaBuffers_;
 
     TerrainPreviewConfig config_;
     terrain_view::ClipmapConfig
@@ -1985,17 +1919,18 @@ private:
 
     f32 observerRadiusMeters_{0.0F};
 
+    // F2 debug menu state -- see SetDebugVisuals/SetGenerationFrozen.
+    bool debugLodColorEnabled_{false};
+    bool debugSideCutEnabled_{false};
+    bool generationFrozen_{false};
+
     u64 desiredGeneration_{0};
     u64 committedGeneration_{0};
 
     u32 activeCoverageTier_{0};
     u32 desiredCoverageTier_{0};
 
-    std::optional<PendingUpdate>
-        pendingUpdate_;
-
     TerrainStreamingStats stats_{};
-    u64 committedSourceRevision_{0};
     std::chrono::steady_clock::time_point lastRebaseTime_{};
 
     // Vertex-shader invocation count for one patch (center or ring,
@@ -2008,16 +1943,20 @@ TerrainPreviewRenderer(
     rhi::Device& device,
     const shader::Compiler& shaderCompiler,
     const world::PlanetDefinition& planet,
-    terrain_stream::TerrainSampleStreamer& sampleStreamer,
+    terrain_gpu::GpuFieldGenerator& gpuFieldGenerator,
     const world::WorldPosition& observer,
-    TerrainPreviewConfig config)
+    TerrainPreviewConfig config,
+    terrain_gpu::GpuRegionDelta* regionDeltaComposite,
+    terrain_region::DerivedTerrainRegionCache* hydrologyRegionCache)
     : impl_(std::make_unique<Impl>(
         device,
         shaderCompiler,
         planet,
-        sampleStreamer,
+        gpuFieldGenerator,
         observer,
-        std::move(config)))
+        std::move(config),
+        regionDeltaComposite,
+        hydrologyRegionCache))
 {
 }
 
@@ -2038,6 +1977,19 @@ void TerrainPreviewRenderer::UpdateObserver(
     const world::WorldPosition& observer)
 {
     impl_->UpdateObserver(observer);
+}
+
+void TerrainPreviewRenderer::SetDebugVisuals(
+    const bool lodColorEnabled,
+    const bool sideCutEnabled)
+{
+    impl_->SetDebugVisuals(lodColorEnabled, sideCutEnabled);
+}
+
+void TerrainPreviewRenderer::SetGenerationFrozen(
+    const bool frozen)
+{
+    impl_->SetGenerationFrozen(frozen);
 }
 
 void TerrainPreviewRenderer::Draw(

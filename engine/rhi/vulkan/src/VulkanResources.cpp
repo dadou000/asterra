@@ -137,6 +137,10 @@ VkFormat ToNativeTextureFormat(const TextureFormat format)
         return VK_FORMAT_R8G8B8A8_UNORM;
     case TextureFormat::D32_Float:
         return VK_FORMAT_D32_SFLOAT;
+    case TextureFormat::R32_Float:
+        return VK_FORMAT_R32_SFLOAT;
+    case TextureFormat::RG32_Float:
+        return VK_FORMAT_R32G32_SFLOAT;
     }
 
     throw std::invalid_argument(
@@ -382,10 +386,26 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
     imageCreateInfo.arrayLayers = 1;
     imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    // TRANSFER_DST + SAMPLED are harmless to add unconditionally for
+    // every texture (attachments were never sampled before this, so
+    // existing render targets/depth buffers are unaffected) and let
+    // CopyBufferToTexture and SetGraphicsTexture work on any texture
+    // without a new TextureDesc field to opt in.
     imageCreateInfo.usage =
-        isDepth
-            ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-            : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        (isDepth
+             ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+        VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    // Opt-in, unlike the above: storage-image support isn't universally
+    // free on every format/tiling combination, and it signals real UAV
+    // intent (a compute shader imageLoad/imageStore-ing this texture) --
+    // see TextureDesc::allowUnorderedAccess.
+    if (desc.allowUnorderedAccess)
+    {
+        imageCreateInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
     imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 

@@ -25,6 +25,15 @@ struct TerrainSampleRequest
     f64 coarseSpacingMeters{0.0};
     f64 coarseFootprintMeters{0.0};
 
+    // Shading normals are sampled at this footprint/epsilon regardless
+    // of this level's own (possibly much coarser) geometric spacing, so
+    // every ring shades with the same ground-truth micro-relief the
+    // finest clipmap level would see up close instead of a blocky
+    // normal derived from wide-apart geometry samples. Zero falls back
+    // to this level's own footprint/spacing (legacy behavior).
+    f64 fineNormalFootprintMeters{0.0};
+    f64 fineNormalEpsilonMeters{0.0};
+
     world::SurfaceFrame surfaceFrame{};
     world::SurfaceFrame coarseSurfaceFrame{};
 
@@ -43,11 +52,18 @@ struct TerrainSampleValue
     u32 biomeWeights0{0};
     u32 biomeWeights1{0};
     f32 standingWaterDepthMeters{0.0F};
+
+    // Ground-truth slope (d elevation / d east, d elevation / d north),
+    // sampled at the request's fine-normal footprint/epsilon -- see
+    // TerrainSampleRequest above. Independent of this level's own
+    // geometric sample spacing.
+    f32 fineSlopeEast{0.0F};
+    f32 fineSlopeNorth{0.0F};
 };
 
 static_assert(
     sizeof(TerrainSampleValue) ==
-    6U * sizeof(u32));
+    8U * sizeof(u32));
 
 struct TerrainSamplePatch
 {
@@ -127,6 +143,16 @@ private:
     [[nodiscard]] TerrainSamplePatch GeneratePatch(
         const TerrainSampleRequest& request,
         const PhysicalRegion& region) const;
+
+    // Finite-differences the terrain source at a small, LOD-independent
+    // epsilon to recover the actual ground micro-slope at `offsetMeters`
+    // within `surfaceFrame`, instead of the level's own (possibly huge)
+    // sample spacing.
+    [[nodiscard]] math::Double2 SampleFineSlope(
+        const world::SurfaceFrame& surfaceFrame,
+        const math::Double2& offsetMeters,
+        f64 footprintMeters,
+        f64 epsilonMeters) const noexcept;
 
     jobs::JobSystem& jobSystem_;
     world::PlanetDefinition planet_;

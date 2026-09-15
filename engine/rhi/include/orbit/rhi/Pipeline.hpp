@@ -60,6 +60,11 @@ struct GraphicsPipelineDesc
     u32 vertexStrideBytes{0};
     u32 pushConstantDwords{0};
     u32 shaderResourceBuffers{0};
+    // Combined-image-sampler bindings, counted separately from and
+    // placed after shaderResourceBuffers in the descriptor set layout
+    // (binding indices shaderResourceBuffers .. shaderResourceBuffers
+    // + sampledTextures - 1). See CommandList::SetGraphicsTexture.
+    u32 sampledTextures{0};
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     FillMode fillMode{FillMode::Solid};
     CullMode cullMode{CullMode::Back};
@@ -78,9 +83,44 @@ public:
 
     [[nodiscard]] virtual u32 PushConstantDwords() const noexcept = 0;
     [[nodiscard]] virtual u32 ShaderResourceBuffers() const noexcept = 0;
+    [[nodiscard]] virtual u32 SampledTextures() const noexcept = 0;
     [[nodiscard]] virtual PrimitiveTopology Topology() const noexcept = 0;
 
 protected:
     GraphicsPipeline() = default;
+};
+
+struct ComputePipelineDesc
+{
+    ShaderBytecodeView computeShader{};
+    u32 pushConstantDwords{0};
+    // Read/write storage buffer bindings, slots 0..shaderResourceBuffers-1.
+    // See CommandList::SetComputeBuffer.
+    u32 shaderResourceBuffers{0};
+    // Read/write storage image bindings, counted separately from and
+    // placed after shaderResourceBuffers -- mirrors GraphicsPipelineDesc::
+    // sampledTextures' "counted separately, placed after" convention. See
+    // CommandList::SetComputeStorageTexture.
+    u32 storageTextures{0};
+    // Read-only sampled texture bindings, placed after storageTextures.
+    // See CommandList::SetComputeTexture.
+    u32 sampledTextures{0};
+};
+
+class ComputePipeline
+{
+public:
+    virtual ~ComputePipeline() = default;
+
+    ComputePipeline(const ComputePipeline&) = delete;
+    ComputePipeline& operator=(const ComputePipeline&) = delete;
+
+    [[nodiscard]] virtual u32 PushConstantDwords() const noexcept = 0;
+    [[nodiscard]] virtual u32 ShaderResourceBuffers() const noexcept = 0;
+    [[nodiscard]] virtual u32 StorageTextures() const noexcept = 0;
+    [[nodiscard]] virtual u32 SampledTextures() const noexcept = 0;
+
+protected:
+    ComputePipeline() = default;
 };
 } // namespace orbit::rhi

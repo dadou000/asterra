@@ -48,6 +48,26 @@ public:
 
     [[nodiscard]] u64 Revision() const noexcept override;
 
+    // Exposes the coarse whole-planet fields (continents, coarse
+    // mountain ridges, climate, plate/hotspot tectonic data) this
+    // source is itself built on. Used by callers that need cheap
+    // planet-wide surveys -- e.g. the map renderer's per-layer
+    // textures, or a rain-shadow-style upwind probe -- without paying
+    // for this source's own detail octaves/fine ridge noise.
+    [[nodiscard]] const GlobalTerrainFields& GlobalFields() const noexcept
+    {
+        return globalFields_;
+    }
+
+    // The exact (already-resolved) recipe this instance was built from --
+    // e.g. a GPU field generator built from this source needs these
+    // scalar parameters verbatim, the same way it needs GlobalFields()'s
+    // plates/hotspots verbatim (see GpuTectonicPlate's comment).
+    [[nodiscard]] const AnalyticTerrainDesc& Description() const noexcept
+    {
+        return desc_;
+    }
+
 private:
     struct NoiseOctave
     {

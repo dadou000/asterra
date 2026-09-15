@@ -1,19 +1,40 @@
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 
 #include "ProceduralNoise.hpp"
+#include "TectonicField.hpp"
 
 #include <algorithm>
 #include <cmath>
 
 namespace orbit::terrain
 {
+namespace
+{
+[[nodiscard]] TectonicFieldDesc ResolveTectonicDesc(
+    const GlobalTerrainFieldDesc& desc) noexcept
+{
+    TectonicFieldDesc tectonic = desc.tectonic;
+    if (tectonic.seed == 0)
+    {
+        tectonic.seed = desc.seed ^ 0x544543544F4E4943ULL;
+    }
+    return tectonic;
+}
+} // namespace
+
 GlobalTerrainFields::GlobalTerrainFields(
     const world::PlanetDefinition planet,
     const GlobalTerrainFieldDesc desc)
     : planet_(planet),
-      desc_(desc)
+      desc_(desc),
+      tectonicField_(std::make_unique<detail::TectonicField>(
+          planet.radiusMeters, ResolveTectonicDesc(desc)))
 {
 }
+
+GlobalTerrainFields::~GlobalTerrainFields() = default;
+GlobalTerrainFields::GlobalTerrainFields(GlobalTerrainFields&&) noexcept = default;
+GlobalTerrainFields& GlobalTerrainFields::operator=(GlobalTerrainFields&&) noexcept = default;
 
 GlobalTerrainFieldSample
 GlobalTerrainFields::Sample(
@@ -31,6 +52,26 @@ GlobalTerrainFields::Sample(
     }
 
     return SampleNormalized({direction, query.footprintMeters}, true);
+}
+
+f64 GlobalTerrainFields::ContinentalSignal(
+    const math::Double3& direction) const noexcept
+{
+    const f64 continentalPrimary =
+        detail::SampleBand(
+            direction,
+            planet_.radiusMeters,
+            desc_.continentalWavelengthMeters,
+            desc_.seed);
+
+    const f64 continentalSecondary =
+        detail::SampleBand(
+            direction,
+            planet_.radiusMeters,
+            desc_.continentalWavelengthMeters * 0.53,
+            desc_.seed ^ 0x58F38DED8C5A935FULL);
+
+    return continentalPrimary * 0.76 + continentalSecondary * 0.24;
 }
 
 GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
@@ -51,32 +92,28 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
                 mountainWavelengthMeters,
             query.footprintMeters);
 
-    const f64 continentalPrimary =
-        detail::SampleBand(
-            direction,
-            planet_.radiusMeters,
-            desc_.
-                continentalWavelengthMeters,
-            desc_.seed);
-
-    const f64 continentalSecondary =
-        detail::SampleBand(
-            direction,
-            planet_.radiusMeters,
-            desc_.
-                continentalWavelengthMeters *
-                0.53,
-            desc_.seed ^
-                0x58F38DED8C5A935FULL);
+    const detail::TectonicSample tectonic =
+        tectonicField_->Sample(direction);
 
     const f64 continentSignal =
-        continentalPrimary *
-            0.76 +
-        continentalSecondary *
-            0.24;
+        ContinentalSignal(direction);
+
+    const f64 continentalAmplitudeSafe =
+        std::max(
+            desc_.continentalAmplitudeMeters,
+            1.0e-9);
+
+    // Plate identity nudges the same noise signal that already shapes
+    // coastlines, rather than replacing it -- continents stay naturally
+    // irregular while their overall placement coheres with plate shape.
+    // tectonicContinentInfluence == 0 reproduces the old noise-only field.
+    const f64 blendedSignal =
+        continentSignal +
+        (tectonic.plateBiasMeters / continentalAmplitudeSafe) *
+            desc_.tectonic.tectonicContinentInfluence;
 
     const f64 continentalElevation =
-        (continentSignal *
+        (blendedSignal *
              desc_.
                  continentalAmplitudeMeters +
          desc_.continentalBiasMeters) *
@@ -84,7 +121,7 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
 
     const f64 landMask =
         detail::Smooth(
-            (continentSignal +
+            (blendedSignal +
              0.15) /
             0.55);
 
@@ -113,10 +150,14 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
             0.0,
             1.0) : 0.0;
 
+    // Coarse ranges now cohere with plate boundaries instead of "wherever
+    // this modulation noise happens to be high" -- convergenceMask carries
+    // that structure (see TectonicField::Sample).
     const f64 mountainElevation =
         mountainRidges *
         mountainModulation *
         landMask *
+        tectonic.convergenceMask *
         desc_.
             mountainAmplitudeMeters *
         mountainWeight;
@@ -270,8 +311,46 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
                 climate,
                 coarseElevation,
                 desc_.
-                    seaLevelMeters) : BiomeWeights{}
+                    seaLevelMeters) : BiomeWeights{},
+        .convergenceMask = tectonic.convergenceMask,
+        .divergenceMask = tectonic.divergenceMask,
+        .transformMask = tectonic.transformMask,
+        .nearestPlateContinental = tectonic.nearestIsContinental,
+        .secondPlateContinental = tectonic.secondIsContinental,
+        .hotspotElevationMeters =
+            tectonicField_->HotspotElevationMeters(direction)
     };
+}
+
+f64 GlobalTerrainFields::PlateElevationEstimateMeters(
+    const math::Double3& direction) const noexcept
+{
+    const detail::TectonicSample tectonic =
+        tectonicField_->Sample(direction);
+
+    const f64 continentalAmplitudeSafe =
+        std::max(
+            desc_.continentalAmplitudeMeters,
+            1.0e-9);
+
+    const f64 blendedSignal =
+        ContinentalSignal(direction) +
+        (tectonic.plateBiasMeters / continentalAmplitudeSafe) *
+            desc_.tectonic.tectonicContinentInfluence;
+
+    const f64 continentalElevation =
+        blendedSignal *
+            desc_.continentalAmplitudeMeters +
+        desc_.continentalBiasMeters;
+
+    const f64 convergenceBump =
+        tectonic.convergenceMask *
+        desc_.tectonic.convergenceUpliftMeters;
+
+    const f64 hotspotBump =
+        tectonicField_->HotspotElevationMeters(direction);
+
+    return continentalElevation + convergenceBump + hotspotBump;
 }
 
 const GlobalTerrainFieldDesc&
@@ -279,5 +358,17 @@ GlobalTerrainFields::Description()
     const noexcept
 {
     return desc_;
+}
+
+std::vector<GpuTectonicPlate>
+GlobalTerrainFields::TectonicPlatesForGpu() const
+{
+    return tectonicField_->BuildGpuPlates();
+}
+
+std::vector<GpuTectonicHotspot>
+GlobalTerrainFields::TectonicHotspotsForGpu() const
+{
+    return tectonicField_->BuildGpuHotspots();
 }
 } // namespace orbit::terrain

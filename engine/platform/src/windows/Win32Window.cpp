@@ -38,6 +38,8 @@ constexpr const char* kWindowClassName =
         return VK_LSHIFT;
     case Key::Escape:
         return VK_ESCAPE;
+    case Key::F2:
+        return VK_F2;
     case Key::F3:
         return VK_F3;
     case Key::F4:
@@ -48,6 +50,14 @@ constexpr const char* kWindowClassName =
         return VK_RIGHT;
     case Key::Enter:
         return VK_RETURN;
+    case Key::M:
+        return 'M';
+    case Key::L:
+        return 'L';
+    case Key::G:
+        return 'G';
+    case Key::C:
+        return 'C';
     }
 
     throw std::invalid_argument(
@@ -437,6 +447,47 @@ public:
             GetAsyncKeyState(
                 ToVirtualKey(key)) &
             0x8000) != 0;
+    }
+
+    [[nodiscard]] bool
+    LeftMouseButtonDown() const override
+    {
+        if (GetForegroundWindow() !=
+            hwnd_)
+        {
+            return false;
+        }
+
+        return (
+            GetAsyncKeyState(
+                VK_LBUTTON) &
+            0x8000) != 0;
+    }
+
+    [[nodiscard]] math::Double2
+    CursorPositionPixels() const override
+    {
+        POINT cursor{};
+
+        if (GetCursorPos(
+                &cursor) == FALSE)
+        {
+            return {};
+        }
+
+        if (ScreenToClient(
+                hwnd_,
+                &cursor) == FALSE)
+        {
+            return {};
+        }
+
+        return {
+            static_cast<f64>(
+                cursor.x),
+            static_cast<f64>(
+                cursor.y)
+        };
     }
 
     void SetRelativeMouseMode(

@@ -168,6 +168,20 @@ struct Candidate
             continue;
         }
 
+        // The field-generation compute shader (engine/terrain_gpu) needs
+        // real 64-bit integer hashing to match the CPU terrain
+        // generator's noise bit-for-bit -- unlike the GPU-side hydrology
+        // relaxation passes (a deliberately different parallel
+        // algorithm), the base elevation/climate noise field has to
+        // agree between the CPU-generated map/hydrology and the
+        // GPU-generated clipmap, or they'd show a different planet.
+        // Broadly supported on desktop GPUs (unlike shaderFloat64, which
+        // this codebase deliberately avoids requiring).
+        if (features.shaderInt64 != VK_TRUE)
+        {
+            continue;
+        }
+
         Candidate candidate{
             physicalDevice, *graphicsFamily, properties};
 
@@ -476,6 +490,7 @@ struct ValidationFeatureRequest
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.features.fillModeNonSolid = VK_TRUE;
     features2.features.shaderClipDistance = VK_TRUE;
+    features2.features.shaderInt64 = VK_TRUE;
     features2.pNext = &features13;
 
     VkDeviceCreateInfo createInfo{};
@@ -546,6 +561,23 @@ VulkanDevice::VulkanDevice(
       debugMessenger_(debugMessenger),
       renderDoc_(std::move(renderDoc))
 {
+    VkSamplerCreateInfo samplerCreateInfo{};
+    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
+    samplerCreateInfo.minFilter = VK_FILTER_LINEAR;
+    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerCreateInfo.maxLod = VK_LOD_CLAMP_NONE;
+
+    if (vkCreateSampler(
+            nativeDevice_, &samplerCreateInfo, nullptr, &defaultSampler_) !=
+        VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "Orbit failed to create the default Vulkan sampler.");
+    }
 }
 
 RenderDocCapture* VulkanDevice::GetRenderDocCapture() const noexcept
@@ -558,11 +590,21 @@ VkInstance VulkanDevice::NativeInstance() const noexcept
     return instance_;
 }
 
+VkSampler VulkanDevice::DefaultSampler() const noexcept
+{
+    return defaultSampler_;
+}
+
 VulkanDevice::~VulkanDevice()
 {
     if (nativeDevice_ != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(nativeDevice_);
+    }
+
+    if (defaultSampler_ != VK_NULL_HANDLE)
+    {
+        vkDestroySampler(nativeDevice_, defaultSampler_, nullptr);
     }
 
     if (allocator_ != nullptr)
@@ -706,7 +748,8 @@ std::unique_ptr<CommandList> VulkanDevice::CreateCommandList(
         allocator.Type(),
         vulkanAllocator->Native(),
         commandBuffer,
-        functions_);
+        functions_,
+        defaultSampler_);
 }
 } // namespace detail
 

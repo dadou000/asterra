@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 
 namespace orbit::terrain
@@ -16,6 +17,27 @@ constexpr f64 kMeanRidgeSignal = 0.5;
 [[nodiscard]] f64 ShapeRidge(const f64 ridge) noexcept
 {
     return ridge + 0.85 * ridge * (1.0 - ridge);
+}
+
+// Sign of the prevailing zonal wind at a given latitude, Earth's 3-cell
+// pattern: trade winds (0-30, blow west), westerlies (30-60, blow east),
+// polar easterlies (60-90, blow west again). Smoothly blended across each
+// breakpoint (width `transitionDegrees`) rather than switching abruptly,
+// so the rain-shadow probe direction never jumps discontinuously.
+[[nodiscard]] f64 ZonalWindSign(
+    const f64 latitudeDeg,
+    const f64 transitionDegrees) noexcept
+{
+    const f64 absLatitude = std::abs(latitudeDeg);
+    const f64 halfWidth = std::max(transitionDegrees, 0.1) * 0.5;
+
+    const f64 tradeToWesterly = detail::Smooth(
+        (absLatitude - (30.0 - halfWidth)) / (2.0 * halfWidth));
+    const f64 westerlyToPolar = detail::Smooth(
+        (absLatitude - (60.0 - halfWidth)) / (2.0 * halfWidth));
+
+    const f64 throughWesterlies = detail::Lerp(-1.0, 1.0, tradeToWesterly);
+    return detail::Lerp(throughWesterlies, -1.0, westerlyToPolar);
 }
 
 [[nodiscard]] GlobalTerrainFieldDesc
@@ -56,7 +78,16 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     }
     for (const f64 value : {desc.macroAmplitudeMeters, desc.detailAmplitudeMeters,
              desc.mountains.reliefMeters, desc.mountains.warpAmplitudeMeters,
-             desc.global.continentalAmplitudeMeters, desc.global.mountainAmplitudeMeters})
+             desc.global.continentalAmplitudeMeters, desc.global.mountainAmplitudeMeters,
+             desc.global.tectonic.plateIrregularity, desc.global.tectonic.boundaryWidthDot,
+             desc.global.tectonic.minPlateAngularSpeed, desc.global.tectonic.maxPlateAngularSpeed,
+             desc.global.tectonic.convergenceReferenceSpeed, desc.global.tectonic.oceanicConvergenceScale,
+             desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
+             desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
+             desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
+             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
+             desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowRangeMeters,
+             desc.global.tectonic.windBandTransitionDegrees})
     {
         if (!std::isfinite(value) || value < 0.0)
         {
@@ -104,6 +135,11 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     mix(desc.global.seed);
     mix(desc.detailOctaves);
     mix(desc.mountains.octaves);
+    mix(desc.global.tectonic.seed);
+    mix(desc.global.tectonic.plateCount);
+    mix(desc.global.tectonic.hotspotCount);
+    mix(desc.global.tectonic.hotspotAgeSteps);
+    mix(desc.global.tectonic.rainShadowSteps);
     for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
              desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
              desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
@@ -113,7 +149,18 @@ AnalyticTerrainSource::AnalyticTerrainSource(
              desc.global.continentalBiasMeters, desc.global.mountainAmplitudeMeters,
              desc.global.mountainWavelengthMeters, desc.global.climateWavelengthMeters,
              desc.global.equatorTemperatureC, desc.global.poleTemperatureC,
-             desc.global.temperatureVariationC, desc.global.lapseRateCPerKilometer})
+             desc.global.temperatureVariationC, desc.global.lapseRateCPerKilometer,
+             desc.global.tectonic.plateIrregularity, desc.global.tectonic.continentalPlateFraction,
+             desc.global.tectonic.continentalPlateBiasMeters, desc.global.tectonic.oceanicPlateBiasMeters,
+             desc.global.tectonic.tectonicContinentInfluence, desc.global.tectonic.boundaryWidthDot,
+             desc.global.tectonic.minPlateAngularSpeed, desc.global.tectonic.maxPlateAngularSpeed,
+             desc.global.tectonic.convergenceReferenceSpeed, desc.global.tectonic.oceanicConvergenceScale,
+             desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
+             desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
+             desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
+             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
+             desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowThresholdMeters,
+             desc.global.tectonic.rainShadowRangeMeters, desc.global.tectonic.windBandTransitionDegrees})
     {
         if (!std::isfinite(value))
         {
@@ -214,10 +261,13 @@ TerrainSample AnalyticTerrainSource::Sample(
     f64 elevation = LimitElevation(global.coarseElevationMeters +
         macroNoise * desc_.macroAmplitudeMeters * macroWeight);
 
-    // Reuse continental and regional fields as a range selector. Smooth gates
-    // preserve coastlines and make the expensive mountain branch absent at sea.
+    // Reuse continental fields and coherent plate-boundary convergence as a
+    // range selector. Smooth gates preserve coastlines and make the
+    // expensive mountain branch absent at sea. convergenceMask is a
+    // function of direction only (see TectonicField::Sample), so it can't
+    // introduce a footprint-dependent discontinuity here.
     const f64 coastMask = detail::Smooth((elevation - desc_.global.seaLevelMeters) / 700.0);
-    const f64 rangeMask = detail::Lerp(0.5, detail::Smooth((macroNoise + 0.35) / 0.75), macroWeight);
+    const f64 rangeMask = global.convergenceMask;
     const f64 mountainMask = desc_.mountains.reliefMeters > 0.0 && desc_.mountains.octaves > 0
         ? global.landMask * coastMask * rangeMask : 0.0;
     const f64 ceiling = desc_.global.seaLevelMeters + desc_.maximumElevationAboveSeaLevelMeters;
@@ -226,6 +276,11 @@ TerrainSample AnalyticTerrainSource::Sample(
         const f64 availableRelief = std::min(desc_.mountains.reliefMeters, ceiling - elevation);
         elevation += mountainMask * availableRelief *
             MountainShape(direction, query.footprintMeters);
+    }
+    if (global.hotspotElevationMeters > 0.0)
+    {
+        const f64 headroom = std::max(0.0, ceiling - elevation);
+        elevation += std::min(global.hotspotElevationMeters, headroom);
     }
     const f64 coarseElevation = elevation;
     // The full signed fBm sum is bounded by twice its initial amplitude.
@@ -255,6 +310,51 @@ TerrainSample AnalyticTerrainSource::Sample(
         (std::max(elevation - desc_.global.seaLevelMeters, 0.0) -
          std::max(global.coarseElevationMeters - desc_.global.seaLevelMeters, 0.0)) *
         desc_.global.lapseRateCPerKilometer / 1'000.0);
+
+    // Rain shadow: attenuate precipitation/humidity when a taller range
+    // sits between this point and the prevailing wind's source, so
+    // biomes actually respond to the coherent mountain chains above
+    // (dry leeward deserts, unattenuated wet windward coasts -- the
+    // latter already falls out of the existing continentality term).
+    // Uses only the cheap coarse plate/continental estimate upwind, never
+    // the full detailed Sample() recursively.
+    if (desc_.global.tectonic.rainShadowStrength > 0.0 &&
+        desc_.global.tectonic.rainShadowSteps > 0)
+    {
+        const f64 latitudeDeg = std::asin(std::clamp(direction.y, -1.0, 1.0)) *
+            (180.0 / std::numbers::pi);
+        const f64 windSign = ZonalWindSign(
+            latitudeDeg, desc_.global.tectonic.windBandTransitionDegrees);
+        const world::SurfaceFrame frame = world::MakeSurfaceFrame(direction);
+
+        f64 blockingHeightMeters = -1.0e30;
+        f64 stepDistanceMeters = desc_.global.tectonic.rainShadowStepMeters;
+        for (u32 step = 0; step < desc_.global.tectonic.rainShadowSteps; ++step)
+        {
+            // Upwind is where the wind blows FROM: a positive windSign
+            // means wind blows eastward, so upwind is west (negative
+            // east offset).
+            const math::Double3 upwindDirection = world::DirectionAtSurfaceOffset(
+                planet_, frame, math::Double2{-windSign * stepDistanceMeters, 0.0});
+            blockingHeightMeters = std::max(
+                blockingHeightMeters,
+                globalFields_.PlateElevationEstimateMeters(upwindDirection));
+            stepDistanceMeters *= desc_.global.tectonic.rainShadowStepGrowth;
+        }
+
+        const f64 shadow = detail::Smooth(
+            (blockingHeightMeters - coarseElevation -
+             desc_.global.tectonic.rainShadowThresholdMeters) /
+            std::max(desc_.global.tectonic.rainShadowRangeMeters, 1.0));
+
+        climate.precipitation = static_cast<f32>(
+            climate.precipitation *
+            (1.0 - desc_.global.tectonic.rainShadowStrength * shadow));
+        climate.humidity = static_cast<f32>(
+            climate.humidity *
+            (1.0 - desc_.global.tectonic.rainShadowStrength * 0.7 * shadow));
+    }
+
     return {
         .elevationMeters = elevation,
         .coarseElevationMeters = coarseElevation,

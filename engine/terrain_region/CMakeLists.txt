@@ -2,6 +2,7 @@ add_library(OrbitTerrainRegion STATIC
     src/DerivedRegionTerrainSource.cpp
     src/DerivedTerrainRegion.cpp
     src/DerivedTerrainRegionCache.cpp
+    src/DerivedTerrainRegionGpu.cpp
     src/DerivedTerrainRegionStreamer.cpp
 )
 
@@ -17,9 +18,11 @@ target_link_libraries(OrbitTerrainRegion
         Orbit::Core
         Orbit::Jobs
         Orbit::Math
+        Orbit::RHI
         Orbit::Terrain
-        Orbit::TerrainHydrology
         Orbit::TerrainErosion
+        Orbit::TerrainGpu
+        Orbit::TerrainHydrology
         Orbit::TerrainWater
         Orbit::World
 )

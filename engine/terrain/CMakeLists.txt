@@ -1,6 +1,7 @@
 add_library(OrbitTerrain STATIC
     src/AnalyticTerrainSource.cpp
     src/GlobalTerrainFields.cpp
+    src/TectonicField.cpp
     src/TerrainFields.cpp
 )
 

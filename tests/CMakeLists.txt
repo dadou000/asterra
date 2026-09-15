@@ -124,6 +124,245 @@ add_test(
 )
 
 
+add_executable(OrbitRhiComputeTests
+    RhiComputeTests.cpp
+)
+
+target_link_libraries(OrbitRhiComputeTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+)
+
+target_compile_features(OrbitRhiComputeTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRhiComputeTests)
+
+# dxcompiler.dll is loaded at runtime, not just link time -- see the
+# identical comment on OrbitShaderCompilerTests above.
+add_custom_command(TARGET OrbitRhiComputeTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitRhiComputeTests>"
+)
+
+add_test(
+    NAME Orbit.RhiCompute
+    COMMAND OrbitRhiComputeTests
+)
+
+
+add_executable(OrbitTerrainGpuFieldTests
+    TerrainGpuFieldTests.cpp
+)
+
+target_link_libraries(OrbitTerrainGpuFieldTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::Terrain
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitTerrainGpuFieldTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainGpuFieldTests)
+
+add_custom_command(TARGET OrbitTerrainGpuFieldTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainGpuFieldTests>"
+)
+
+add_test(
+    NAME Orbit.TerrainGpuField
+    COMMAND OrbitTerrainGpuFieldTests
+)
+
+
+add_executable(OrbitTerrainGpuRegionDeltaTests
+    TerrainGpuRegionDeltaTests.cpp
+)
+
+target_link_libraries(OrbitTerrainGpuRegionDeltaTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::Terrain
+        Orbit::TerrainGpu
+        Orbit::TerrainStream
+)
+
+target_compile_features(OrbitTerrainGpuRegionDeltaTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainGpuRegionDeltaTests)
+
+add_custom_command(TARGET OrbitTerrainGpuRegionDeltaTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainGpuRegionDeltaTests>"
+)
+
+add_test(
+    NAME Orbit.TerrainGpuRegionDelta
+    COMMAND OrbitTerrainGpuRegionDeltaTests
+)
+
+
+add_executable(OrbitTerrainGpuElevationQueryTests
+    TerrainGpuElevationQueryTests.cpp
+)
+
+target_link_libraries(OrbitTerrainGpuElevationQueryTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::Terrain
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitTerrainGpuElevationQueryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainGpuElevationQueryTests)
+
+add_custom_command(TARGET OrbitTerrainGpuElevationQueryTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainGpuElevationQueryTests>"
+)
+
+add_test(
+    NAME Orbit.TerrainGpuElevationQuery
+    COMMAND OrbitTerrainGpuElevationQueryTests
+)
+
+
+add_executable(OrbitHydrologyGpuDepressionFillTests
+    HydrologyGpuDepressionFillTests.cpp
+)
+
+target_link_libraries(OrbitHydrologyGpuDepressionFillTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitHydrologyGpuDepressionFillTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitHydrologyGpuDepressionFillTests)
+
+add_custom_command(TARGET OrbitHydrologyGpuDepressionFillTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitHydrologyGpuDepressionFillTests>"
+)
+
+add_test(
+    NAME Orbit.HydrologyGpuDepressionFill
+    COMMAND OrbitHydrologyGpuDepressionFillTests
+)
+
+
+add_executable(OrbitHydrologyGpuFlowAccumulationTests
+    HydrologyGpuFlowAccumulationTests.cpp
+)
+
+target_link_libraries(OrbitHydrologyGpuFlowAccumulationTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitHydrologyGpuFlowAccumulationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitHydrologyGpuFlowAccumulationTests)
+
+add_custom_command(TARGET OrbitHydrologyGpuFlowAccumulationTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitHydrologyGpuFlowAccumulationTests>"
+)
+
+add_test(
+    NAME Orbit.HydrologyGpuFlowAccumulation
+    COMMAND OrbitHydrologyGpuFlowAccumulationTests
+)
+
+
+add_executable(OrbitHydrologyGpuErosionTests
+    HydrologyGpuErosionTests.cpp
+)
+
+target_link_libraries(OrbitHydrologyGpuErosionTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitHydrologyGpuErosionTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitHydrologyGpuErosionTests)
+
+add_custom_command(TARGET OrbitHydrologyGpuErosionTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitHydrologyGpuErosionTests>"
+)
+
+add_test(
+    NAME Orbit.HydrologyGpuErosion
+    COMMAND OrbitHydrologyGpuErosionTests
+)
+
+
+add_executable(OrbitHydrologyGpuRiverGeometryTests
+    HydrologyGpuRiverGeometryTests.cpp
+)
+
+target_link_libraries(OrbitHydrologyGpuRiverGeometryTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitHydrologyGpuRiverGeometryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitHydrologyGpuRiverGeometryTests)
+
+add_custom_command(TARGET OrbitHydrologyGpuRiverGeometryTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitHydrologyGpuRiverGeometryTests>"
+)
+
+add_test(
+    NAME Orbit.HydrologyGpuRiverGeometry
+    COMMAND OrbitHydrologyGpuRiverGeometryTests
+)
+
+
+add_executable(OrbitHydrologyGpuLakeBasinsTests
+    HydrologyGpuLakeBasinsTests.cpp
+)
+
+target_link_libraries(OrbitHydrologyGpuLakeBasinsTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitHydrologyGpuLakeBasinsTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitHydrologyGpuLakeBasinsTests)
+
+add_custom_command(TARGET OrbitHydrologyGpuLakeBasinsTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitHydrologyGpuLakeBasinsTests>"
+)
+
+add_test(
+    NAME Orbit.HydrologyGpuLakeBasins
+    COMMAND OrbitHydrologyGpuLakeBasinsTests
+)
+
+
 add_executable(OrbitTerrainStreamTests
     TerrainStreamTests.cpp
 )
@@ -318,6 +557,35 @@ add_test(
     NAME Orbit.DerivedTerrainRegion
     COMMAND OrbitDerivedTerrainRegionTests
 )
+
+
+add_executable(OrbitDerivedTerrainRegionGpuTests
+    DerivedTerrainRegionGpuTests.cpp
+)
+
+target_link_libraries(OrbitDerivedTerrainRegionGpuTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::Terrain
+        Orbit::TerrainGpu
+        Orbit::TerrainRegion
+)
+
+target_compile_features(OrbitDerivedTerrainRegionGpuTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitDerivedTerrainRegionGpuTests)
+
+add_custom_command(TARGET OrbitDerivedTerrainRegionGpuTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitDerivedTerrainRegionGpuTests>"
+)
+
+add_test(
+    NAME Orbit.DerivedTerrainRegionGpu
+    COMMAND OrbitDerivedTerrainRegionGpuTests
+)
+
 
 add_executable(OrbitPlanetTileNeighborhoodTests
     PlanetTileNeighborhoodTests.cpp

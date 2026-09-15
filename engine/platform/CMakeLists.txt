@@ -13,6 +13,7 @@ target_include_directories(OrbitPlatform
 target_link_libraries(OrbitPlatform
     PUBLIC
         Orbit::Core
+        Orbit::Math
     PRIVATE
         dbghelp
         user32

@@ -9,6 +9,7 @@ target_link_libraries(OrbitSandbox
         Orbit::DebugRender
         Orbit::DevServer
         Orbit::Jobs
+        Orbit::MapRender
         Orbit::Math
         Orbit::Platform
         Orbit::RhiVulkan

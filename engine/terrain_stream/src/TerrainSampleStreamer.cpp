@@ -131,6 +131,20 @@ void ValidateRequest(
             "Orbit terrain sampling toroidal origin is outside the sample window.");
     }
 
+    if (request.fineNormalFootprintMeters < 0.0 ||
+        !std::isfinite(request.fineNormalFootprintMeters))
+    {
+        throw std::invalid_argument(
+            "Orbit terrain fine-normal footprint must be non-negative and finite.");
+    }
+
+    if (request.fineNormalEpsilonMeters < 0.0 ||
+        !std::isfinite(request.fineNormalEpsilonMeters))
+    {
+        throw std::invalid_argument(
+            "Orbit terrain fine-normal epsilon must be non-negative and finite.");
+    }
+
     for (const PhysicalRegion& region :
          request.regions)
     {
@@ -361,6 +375,43 @@ TerrainSampleStreamer::GenerateBlocking(
     }
 }
 
+math::Double2 TerrainSampleStreamer::SampleFineSlope(
+    const world::SurfaceFrame& surfaceFrame,
+    const math::Double2& offsetMeters,
+    const f64 footprintMeters,
+    const f64 epsilonMeters) const noexcept
+{
+    const auto elevationAt =
+        [&](const math::Double2& offset) noexcept -> f64
+        {
+            return terrainSource_.Sample({
+                .unitDirection =
+                    world::DirectionAtSurfaceOffset(
+                        planet_,
+                        surfaceFrame,
+                        offset),
+                .footprintMeters = footprintMeters
+            }).elevationMeters;
+        };
+
+    const f64 center = elevationAt(offsetMeters);
+
+    const f64 east =
+        elevationAt(
+            offsetMeters +
+            math::Double2{epsilonMeters, 0.0});
+
+    const f64 north =
+        elevationAt(
+            offsetMeters +
+            math::Double2{0.0, epsilonMeters});
+
+    return {
+        (east - center) / epsilonMeters,
+        (north - center) / epsilonMeters
+    };
+}
+
 TerrainSamplePatch
 TerrainSampleStreamer::GeneratePatch(
     const TerrainSampleRequest& request,
@@ -379,6 +430,16 @@ TerrainSampleStreamer::GeneratePatch(
         static_cast<f64>(
             request.resolution - 1U) *
         0.5;
+
+    const f64 fineNormalFootprintMeters =
+        request.fineNormalFootprintMeters > 0.0
+            ? request.fineNormalFootprintMeters
+            : request.footprintMeters;
+
+    const f64 fineNormalEpsilonMeters =
+        request.fineNormalEpsilonMeters > 0.0
+            ? request.fineNormalEpsilonMeters
+            : request.spacingMeters;
 
     for (u32 localY = 0;
          localY < region.height;
@@ -438,6 +499,13 @@ TerrainSampleStreamer::GeneratePatch(
 
             math::Double2 morphTarget =
                 offsetMeters;
+
+            math::Double2 fineSlope =
+                SampleFineSlope(
+                    request.surfaceFrame,
+                    offsetMeters,
+                    fineNormalFootprintMeters,
+                    fineNormalEpsilonMeters);
 
             if (request.morphToCoarser)
             {
@@ -525,6 +593,26 @@ TerrainSampleStreamer::GeneratePatch(
                             sample,
                             coarseSample,
                             morph);
+
+                    const math::Double2
+                        coarseFineSlope =
+                            SampleFineSlope(
+                                request.
+                                    coarseSurfaceFrame,
+                                snappedCoarseOffset,
+                                fineNormalFootprintMeters,
+                                fineNormalEpsilonMeters);
+
+                    fineSlope = {
+                        fineSlope.x +
+                            (coarseFineSlope.x -
+                             fineSlope.x) *
+                                morph,
+                        fineSlope.y +
+                            (coarseFineSlope.y -
+                             fineSlope.y) *
+                                morph
+                    };
                 }
             }
 
@@ -551,7 +639,13 @@ TerrainSampleStreamer::GeneratePatch(
                         packedBiomes.first,
                     .biomeWeights1 =
                         packedBiomes.second,
-                    .standingWaterDepthMeters = static_cast<f32>(sample.standingWaterDepthMeters)
+                    .standingWaterDepthMeters = static_cast<f32>(sample.standingWaterDepthMeters),
+                    .fineSlopeEast =
+                        static_cast<f32>(
+                            fineSlope.x),
+                    .fineSlopeNorth =
+                        static_cast<f32>(
+                            fineSlope.y)
                 };
         }
     }

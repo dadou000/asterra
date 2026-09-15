@@ -5,7 +5,9 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
-#include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
+#include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
+#include <orbit/terrain_gpu/GpuRegionDelta.hpp>
+#include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
 #include <orbit/terrain_view/ClipmapLayout.hpp>
 #include <orbit/world/Planet.hpp>
 #include <orbit/world/WorldPosition.hpp>
@@ -74,13 +76,25 @@ struct TerrainPreviewConfig
 class TerrainPreviewRenderer
 {
 public:
+    // `regionDeltaComposite`/`hydrologyRegionCache` are optional --
+    // when both are set, each dirty region's freshly GPU-generated
+    // samples are composited against whichever hydrology region tile
+    // (see engine/terrain_gpu's GpuHydrologyRegion and
+    // DerivedTerrainRegionCache's GPU path) covers it and is ready,
+    // in place, right after generation -- so the clipmap itself shows
+    // GPU-computed erosion/lake-fill, not just the raw procedural
+    // field. Leave both null to keep the raw-field-only behavior
+    // (e.g. for tests with no region cache available).
     TerrainPreviewRenderer(
         rhi::Device& device,
         const shader::Compiler& shaderCompiler,
         const world::PlanetDefinition& planet,
-        terrain_stream::TerrainSampleStreamer& sampleStreamer,
+        terrain_gpu::GpuFieldGenerator& gpuFieldGenerator,
         const world::WorldPosition& observer,
-        TerrainPreviewConfig config = {});
+        TerrainPreviewConfig config = {},
+        terrain_gpu::GpuRegionDelta* regionDeltaComposite = nullptr,
+        terrain_region::DerivedTerrainRegionCache*
+            hydrologyRegionCache = nullptr);
 
     ~TerrainPreviewRenderer();
 
@@ -95,6 +109,15 @@ public:
 
     void UpdateObserver(
         const world::WorldPosition& observer);
+
+    // F2 debug menu (see apps/sandbox/src/Main.cpp): LOD lattice
+    // coloring and a side cutaway through the observer, and pausing
+    // clipmap regeneration so LOD boundaries hold still for
+    // inspection while the camera keeps moving freely.
+    void SetDebugVisuals(
+        bool lodColorEnabled,
+        bool sideCutEnabled);
+    void SetGenerationFrozen(bool frozen);
 
     void Draw(
         rhi::CommandList& commandList,

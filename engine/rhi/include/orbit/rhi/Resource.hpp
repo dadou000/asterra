@@ -47,7 +47,12 @@ struct BufferDesc
 enum class TextureFormat : u8
 {
     RGBA8_UNorm,
-    D32_Float
+    D32_Float,
+    // Single/dual-channel float rasters for compute-generated data
+    // (elevation, flow accumulation, slope pairs, etc.) -- meters-scale
+    // values need more range/precision than RGBA8_UNorm's [0,1] can hold.
+    R32_Float,
+    RG32_Float
 };
 
 struct TextureDesc
@@ -56,6 +61,13 @@ struct TextureDesc
     u32 height{0};
     TextureFormat format{TextureFormat::RGBA8_UNorm};
     ResourceState initialState{ResourceState::Common};
+    // Opt-in (not unconditional, unlike the backend's blanket
+    // TRANSFER_DST/SAMPLED usage flags): allows a compute shader to
+    // imageLoad/imageStore this texture. Storage-image support isn't
+    // universally free on every format/tiling combination, and it
+    // signals real UAV intent, so callers that don't need it shouldn't
+    // pay for it.
+    bool allowUnorderedAccess{false};
 };
 
 class Buffer

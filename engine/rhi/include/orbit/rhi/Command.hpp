@@ -79,12 +79,32 @@ public:
         ResourceState before,
         ResourceState after) = 0;
 
+    // Unlike Transition (which early-outs when before == after), this
+    // always emits a barrier -- needed to express a same-state
+    // UnorderedAccess write/write or write/read hazard between successive
+    // passes of a ping-pong compute algorithm (e.g. depression-fill or
+    // flow-accumulation relaxation), which Transition cannot express
+    // since both sides of such a pass are ResourceState::UnorderedAccess.
+    virtual void UavBarrier(Buffer& buffer) = 0;
+    virtual void UavBarrier(Texture& texture) = 0;
+
     virtual void CopyBuffer(
         Buffer& source,
         u64 sourceOffsetBytes,
         Buffer& destination,
         u64 destinationOffsetBytes,
         u64 sizeBytes) = 0;
+
+    // Copies tightly-packed RGBA8 (or the destination's own format)
+    // pixel data from a HostVisible source buffer into the full extent
+    // of destination. The caller transitions destination to
+    // ResourceState::CopyDestination first and to ShaderResource
+    // afterward, matching CopyBuffer's convention -- this call issues
+    // no barrier of its own.
+    virtual void CopyBufferToTexture(
+        Buffer& source,
+        u64 sourceOffsetBytes,
+        Texture& destination) = 0;
 
     virtual void ClearColorTarget(
         Texture& texture,
@@ -112,6 +132,45 @@ public:
     virtual void SetGraphicsBuffer(
         u32 slot,
         Buffer& buffer) = 0;
+
+    // Binds a sampled texture at a pipeline slot counted separately
+    // from SetGraphicsBuffer's slots -- see
+    // GraphicsPipelineDesc::sampledTextures. The texture must already
+    // be in ResourceState::ShaderResource.
+    virtual void SetGraphicsTexture(
+        u32 slot,
+        Texture& texture) = 0;
+
+    virtual void SetComputePipeline(
+        ComputePipeline& pipeline) = 0;
+
+    virtual void SetComputeConstants(
+        std::span<const u32> dwords) = 0;
+
+    virtual void SetComputeBuffer(
+        u32 slot,
+        Buffer& buffer) = 0;
+
+    // Binds a read/write storage image, distinct from SetComputeTexture's
+    // read-only combined-image-sampler bind -- see
+    // ComputePipelineDesc::storageTextures. The texture must already be
+    // in ResourceState::UnorderedAccess.
+    virtual void SetComputeStorageTexture(
+        u32 slot,
+        Texture& texture) = 0;
+
+    // Read-only sampled texture, counted separately from and bound after
+    // SetComputeBuffer/SetComputeStorageTexture's slots -- see
+    // ComputePipelineDesc::sampledTextures. The texture must already be
+    // in ResourceState::ShaderResource.
+    virtual void SetComputeTexture(
+        u32 slot,
+        Texture& texture) = 0;
+
+    virtual void Dispatch(
+        u32 groupCountX,
+        u32 groupCountY,
+        u32 groupCountZ) = 0;
 
     virtual void SetVertexBuffer(
         Buffer& buffer,

@@ -191,12 +191,14 @@ VulkanCommandList::VulkanCommandList(
     const QueueType type,
     const VkCommandPool pool,
     const VkCommandBuffer nativeCommandList,
-    const DeviceFunctions& functions)
+    const DeviceFunctions& functions,
+    const VkSampler defaultSampler)
     : device_(device),
       type_(type),
       pool_(pool),
       nativeCommandList_(nativeCommandList),
-      functions_(&functions)
+      functions_(&functions),
+      defaultSampler_(defaultSampler)
 {
 }
 
@@ -497,6 +499,90 @@ void VulkanCommandList::Transition(
     ResumeRenderingIfPaused(wasRendering);
 }
 
+void VulkanCommandList::UavBarrier(Buffer& buffer)
+{
+    auto* vulkanBuffer = dynamic_cast<VulkanBuffer*>(&buffer);
+    if (vulkanBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a buffer from another backend.");
+    }
+
+    const bool wasRendering = PauseRenderingIfActive();
+
+    VkBufferMemoryBarrier2 barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask =
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask =
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = vulkanBuffer->Native();
+    barrier.offset = 0;
+    barrier.size = VK_WHOLE_SIZE;
+
+    VkDependencyInfo dependencyInfo{};
+    dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.bufferMemoryBarrierCount = 1;
+    dependencyInfo.pBufferMemoryBarriers = &barrier;
+
+    vkCmdPipelineBarrier2(nativeCommandList_, &dependencyInfo);
+
+    ResumeRenderingIfPaused(wasRendering);
+}
+
+void VulkanCommandList::UavBarrier(Texture& texture)
+{
+    auto* vulkanTexture = dynamic_cast<VulkanTexture*>(&texture);
+    if (vulkanTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a texture from another backend.");
+    }
+
+    const bool wasRendering = PauseRenderingIfActive();
+
+    const bool isDepth = vulkanTexture->IsDepth();
+
+    // A UAV texture is always in GENERAL layout while used as a storage
+    // image (see ToImageBarrierInfo's UnorderedAccess case), so this is a
+    // same-layout execution/memory dependency, not a transition.
+    VkImageMemoryBarrier2 barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask =
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask =
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = vulkanTexture->Native();
+    barrier.subresourceRange = {
+        isDepth
+            ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT)
+            : static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT),
+        0, 1, 0, 1};
+
+    VkDependencyInfo dependencyInfo{};
+    dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.imageMemoryBarrierCount = 1;
+    dependencyInfo.pImageMemoryBarriers = &barrier;
+
+    vkCmdPipelineBarrier2(nativeCommandList_, &dependencyInfo);
+
+    ResumeRenderingIfPaused(wasRendering);
+}
+
 void VulkanCommandList::CopyBuffer(
     Buffer& source,
     const u64 sourceOffsetBytes,
@@ -544,6 +630,59 @@ void VulkanCommandList::CopyBuffer(
     copyInfo.pRegions = &region;
 
     vkCmdCopyBuffer2(nativeCommandList_, &copyInfo);
+
+    ResumeRenderingIfPaused(wasRendering);
+}
+
+void VulkanCommandList::CopyBufferToTexture(
+    Buffer& source,
+    const u64 sourceOffsetBytes,
+    Texture& destination)
+{
+    auto* vulkanSource = dynamic_cast<VulkanBuffer*>(&source);
+    auto* vulkanDestination = dynamic_cast<VulkanTexture*>(&destination);
+
+    if (vulkanSource == nullptr || vulkanDestination == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a resource from another backend.");
+    }
+
+    // RGBA8_UNorm is the only format CopyBufferToTexture is used for
+    // today (see TextureFormat); 4 bytes per texel, tightly packed.
+    const u64 sizeBytes = static_cast<u64>(vulkanDestination->Width()) *
+        vulkanDestination->Height() * 4U;
+
+    if (sourceOffsetBytes > source.SizeBytes() ||
+        sizeBytes > source.SizeBytes() - sourceOffsetBytes)
+    {
+        throw std::out_of_range(
+            "Orbit buffer-to-texture copy exceeds the source buffer's "
+            "bounds.");
+    }
+
+    const bool wasRendering = PauseRenderingIfActive();
+
+    VkBufferImageCopy2 region{};
+    region.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2;
+    region.bufferOffset = sourceOffsetBytes;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = vulkanDestination->Width();
+    region.imageExtent.height = vulkanDestination->Height();
+    region.imageExtent.depth = 1;
+
+    VkCopyBufferToImageInfo2 copyInfo{};
+    copyInfo.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2;
+    copyInfo.srcBuffer = vulkanSource->Native();
+    copyInfo.dstImage = vulkanDestination->Native();
+    copyInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    copyInfo.regionCount = 1;
+    copyInfo.pRegions = &region;
+
+    vkCmdCopyBufferToImage2(nativeCommandList_, &copyInfo);
 
     ResumeRenderingIfPaused(wasRendering);
 }
@@ -798,6 +937,277 @@ void VulkanCommandList::SetGraphicsBuffer(
         0,
         1,
         &write);
+}
+
+void VulkanCommandList::SetGraphicsTexture(
+    const u32 slot,
+    Texture& texture)
+{
+    if (activePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind a graphics texture without an active "
+            "pipeline.");
+    }
+
+    if (slot >= activePipeline_->SampledTextures())
+    {
+        throw std::out_of_range(
+            "Orbit graphics texture slot exceeds the active pipeline "
+            "layout.");
+    }
+
+    auto* vulkanTexture = dynamic_cast<VulkanTexture*>(&texture);
+    if (vulkanTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a texture from another backend.");
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = defaultSampler_;
+    imageInfo.imageView = vulkanTexture->View();
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    // Texture bindings sit right after the buffer bindings in the
+    // descriptor set layout -- see GraphicsPipelineDesc::sampledTextures
+    // and its construction in VulkanPipeline.cpp.
+    write.dstBinding = activePipeline_->ShaderResourceBuffers() + slot;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+
+    functions_->vkCmdPushDescriptorSetKHR(
+        nativeCommandList_,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        activePipeline_->Layout(),
+        0,
+        1,
+        &write);
+}
+
+void VulkanCommandList::SetComputePipeline(ComputePipeline& pipeline)
+{
+    auto* vulkanPipeline =
+        dynamic_cast<VulkanComputePipeline*>(&pipeline);
+
+    if (vulkanPipeline == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a compute pipeline from another "
+            "backend.");
+    }
+
+    vkCmdBindPipeline(
+        nativeCommandList_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        vulkanPipeline->Native());
+
+    activeComputePipeline_ = vulkanPipeline;
+}
+
+void VulkanCommandList::SetComputeConstants(
+    const std::span<const u32> dwords)
+{
+    if (activeComputePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind compute constants without an active "
+            "pipeline.");
+    }
+
+    if (dwords.empty())
+    {
+        return;
+    }
+
+    if (dwords.size() > activeComputePipeline_->PushConstantDwords())
+    {
+        throw std::runtime_error(
+            "Orbit compute constants exceed the active pipeline push "
+            "constant range.");
+    }
+
+    vkCmdPushConstants(
+        nativeCommandList_,
+        activeComputePipeline_->Layout(),
+        VK_SHADER_STAGE_COMPUTE_BIT,
+        0,
+        static_cast<u32>(dwords.size() * sizeof(u32)),
+        dwords.data());
+}
+
+void VulkanCommandList::SetComputeBuffer(
+    const u32 slot,
+    Buffer& buffer)
+{
+    if (activeComputePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind a compute buffer without an active "
+            "pipeline.");
+    }
+
+    if (slot >= activeComputePipeline_->ShaderResourceBuffers())
+    {
+        throw std::out_of_range(
+            "Orbit compute SRV slot exceeds the active pipeline "
+            "layout.");
+    }
+
+    auto* vulkanBuffer = dynamic_cast<VulkanBuffer*>(&buffer);
+    if (vulkanBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a shader buffer from another "
+            "backend.");
+    }
+
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = vulkanBuffer->Native();
+    bufferInfo.offset = 0;
+    bufferInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstBinding = slot;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &bufferInfo;
+
+    functions_->vkCmdPushDescriptorSetKHR(
+        nativeCommandList_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        activeComputePipeline_->Layout(),
+        0,
+        1,
+        &write);
+}
+
+void VulkanCommandList::SetComputeStorageTexture(
+    const u32 slot,
+    Texture& texture)
+{
+    if (activeComputePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind a compute storage texture without an "
+            "active pipeline.");
+    }
+
+    if (slot >= activeComputePipeline_->StorageTextures())
+    {
+        throw std::out_of_range(
+            "Orbit compute storage texture slot exceeds the active "
+            "pipeline layout.");
+    }
+
+    auto* vulkanTexture = dynamic_cast<VulkanTexture*>(&texture);
+    if (vulkanTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a texture from another backend.");
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageView = vulkanTexture->View();
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    // Storage images sit right after the buffer bindings -- see
+    // ComputePipelineDesc::storageTextures and its layout construction
+    // in VulkanPipeline.cpp.
+    write.dstBinding =
+        activeComputePipeline_->ShaderResourceBuffers() + slot;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    write.pImageInfo = &imageInfo;
+
+    functions_->vkCmdPushDescriptorSetKHR(
+        nativeCommandList_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        activeComputePipeline_->Layout(),
+        0,
+        1,
+        &write);
+}
+
+void VulkanCommandList::SetComputeTexture(
+    const u32 slot,
+    Texture& texture)
+{
+    if (activeComputePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind a compute texture without an active "
+            "pipeline.");
+    }
+
+    if (slot >= activeComputePipeline_->SampledTextures())
+    {
+        throw std::out_of_range(
+            "Orbit compute texture slot exceeds the active pipeline "
+            "layout.");
+    }
+
+    auto* vulkanTexture = dynamic_cast<VulkanTexture*>(&texture);
+    if (vulkanTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a texture from another backend.");
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = defaultSampler_;
+    imageInfo.imageView = vulkanTexture->View();
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    // Sampled textures sit after the buffer and storage-image bindings --
+    // see ComputePipelineDesc::sampledTextures.
+    write.dstBinding =
+        activeComputePipeline_->ShaderResourceBuffers() +
+        activeComputePipeline_->StorageTextures() +
+        slot;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+
+    functions_->vkCmdPushDescriptorSetKHR(
+        nativeCommandList_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        activeComputePipeline_->Layout(),
+        0,
+        1,
+        &write);
+}
+
+void VulkanCommandList::Dispatch(
+    const u32 groupCountX,
+    const u32 groupCountY,
+    const u32 groupCountZ)
+{
+    if (activeComputePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot dispatch without an active compute pipeline.");
+    }
+
+    // vkCmdDispatch must not be recorded inside a dynamic-rendering scope
+    // (same restriction as the barrier/copy commands PauseRenderingIfActive
+    // already exists for -- see its comment) -- pause/resume around it for
+    // correctness regardless of call-site ordering, even though every
+    // current caller dispatches before the frame's first SetRenderTarget.
+    const bool wasRendering = PauseRenderingIfActive();
+
+    vkCmdDispatch(
+        nativeCommandList_, groupCountX, groupCountY, groupCountZ);
+
+    ResumeRenderingIfPaused(wasRendering);
 }
 
 void VulkanCommandList::SetVertexBuffer(
