@@ -78,7 +78,10 @@ Hole cells are rejected via
 clip distance rather than `(0,0,0,0)` homogeneous vertices. The innermost
 coarse overlap cell is smoothly sunk under the fine patch (5% of spacing,
 capped at 8 m) to suppress residual z-fighting/raster cracks without modifying
-authoritative terrain. TerrainViewTests now explicitly proves that flat-style
+authoritative terrain. Observer-relative vertical position is also reconstructed
+with a cancellation-free spherical formula instead of subtracting two roughly
+6,000 km float values, preserving the near-field curvature drop that previously
+quantized away at sub-meter scale. TerrainViewTests now explicitly proves that flat-style
 retained-sample translation drifts on the sphere and requires a full refresh.
 
 ### ✅ Terrain clipmap garbles during movement, cleared by rebasing

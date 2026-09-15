@@ -513,18 +513,64 @@ VSOutput main(uint vertexId : SV_VertexID)
             offsetMeters,
             planetRadius);
 
-    const float displacedRadius =
-        planetRadius +
+    const float displacedElevation =
         elevation -
         seamSinkMeters;
 
+    const float displacedRadius =
+        planetRadius +
+        displacedElevation;
+
+    // Do not form Y as direction.y * ~6,000,000 - ~6,000,000.
+    // At near-field angles direction.y rounds extremely close to 1 and that
+    // subtraction quantizes away the centimeter/sub-meter spherical drop.
+    // x/z retain sin(theta) accurately, so recover cos(theta)-1 through the
+    // cancellation-free identity:
+    //
+    //   cos(theta) - 1 = -sin^2(theta) / (1 + cos(theta)).
+    //
+    // Visible terrain is on the observer-facing hemisphere. For a negative
+    // cosine (already beyond the horizon) the ordinary expression is far from
+    // the cancellation regime and is safe.
+    const float sinSquaredFromObserver =
+        saturate(
+            surfaceDirection.x *
+                surfaceDirection.x +
+            surfaceDirection.z *
+                surfaceDirection.z);
+
+    const float positiveCosine =
+        sqrt(
+            max(
+                1.0 -
+                    sinSquaredFromObserver,
+                0.0));
+
+    const float cosineMinusOne =
+        surfaceDirection.y >= 0.0
+            ? -sinSquaredFromObserver /
+                max(
+                    1.0 +
+                        positiveCosine,
+                    0.000001)
+            : surfaceDirection.y -
+                1.0;
+
+    const float observerAltitude =
+        observerRadius -
+        planetRadius;
+
     const float3 localPosition =
-        surfaceDirection *
-            displacedRadius -
         float3(
-            0.0,
-            observerRadius,
-            0.0);
+            surfaceDirection.x *
+                displacedRadius,
+            planetRadius *
+                    cosineMinusOne +
+                displacedElevation *
+                    surfaceDirection.y -
+                observerAltitude,
+            surfaceDirection.z *
+                displacedRadius);
 
     // Ground-truth slope baked in at the finest active level's own
     // resolution (see LoadFineSlope) -- not a finite difference across
