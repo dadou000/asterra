@@ -434,23 +434,26 @@ int main()
             };
         };
 
-    const auto subCell = tracker.Update(makeObserver(49.0));
+    // L0 is phase-locked to L1, so with a 2:1 LOD ratio its center moves
+    // in two-L0-cell increments. This keeps every L0 transition boundary on
+    // an L1 grid coordinate instead of alternating into a half-cell phase.
+    const auto subCell = tracker.Update(makeObserver(99.0));
 
     if (subCell.levels.front().cellShiftX != 0 ||
         subCell.levels.front().cellShiftY != 0)
     {
-        std::cerr << "Sub-cell observer motion moved the clipmap.\n";
+        std::cerr << "Sub-alignment observer motion moved the clipmap.\n";
         return 1;
     }
 
-    const auto oneCell = tracker.Update(makeObserver(51.0));
+    const auto oneCell = tracker.Update(makeObserver(101.0));
 
-    if (oneCell.levels[0].cellShiftX != 1 ||
+    if (oneCell.levels[0].cellShiftX != 2 ||
         oneCell.levels[0].cellShiftY != 0 ||
         oneCell.levels[0].fullRefresh)
     {
         std::cerr
-            << "Stable spherical lattice did not reuse a one-cell toroidal shift.\n";
+            << "Phase-locked spherical lattice did not reuse a two-cell toroidal shift.\n";
         return 1;
     }
 
@@ -491,7 +494,7 @@ int main()
         orbit::world::SurfaceOffsetBetweenDirections(
             planet,
             oneCell.levels[0].surfaceFrame,
-            orbit::math::Normalize(makeObserver(51.0).meters));
+            orbit::math::Normalize(makeObserver(101.0).meters));
 
     const orbit::math::Double2 observerFromSnappedCenter{
         observerFromAnchor.x -
@@ -500,8 +503,8 @@ int main()
             oneCell.levels[0].centerOffsetMeters.y
     };
 
-    if (std::abs(observerFromSnappedCenter.x) > 50.0 + 1.0e-6 ||
-        std::abs(observerFromSnappedCenter.y) > 50.0 + 1.0e-6)
+    if (std::abs(observerFromSnappedCenter.x) > 100.0 + 1.0e-6 ||
+        std::abs(observerFromSnappedCenter.y) > 100.0 + 1.0e-6)
     {
         std::cerr << "Clipmap snap did not keep observer within half a cell.\n";
         return 1;
@@ -520,7 +523,9 @@ int main()
     const orbit::math::Double2 retainedNewAbsoluteOffset{
         oneCell.levels[0].centerOffsetMeters.x +
             retainedOldOffset.x -
-            config.baseSpacingMeters,
+            static_cast<orbit::f64>(
+                oneCell.levels[0].cellShiftX) *
+                config.baseSpacingMeters,
         oneCell.levels[0].centerOffsetMeters.y +
             retainedOldOffset.y
     };
@@ -550,12 +555,48 @@ int main()
 
     const auto multiCell = tracker.Update(makeObserver(451.0));
 
-    if (std::abs(multiCell.levels[0].cellShiftX) < 3 ||
+    if (std::abs(multiCell.levels[0].cellShiftX) != 2 ||
         multiCell.levels[0].fullRefresh)
     {
         std::cerr
             << "Multi-cell clipmap jump did not stay on the toroidal fast path.\n";
         return 1;
+    }
+
+    // Every fine center must remain on its parent's lattice. This is the
+    // invariant that makes the fine morph edge and coarse hole use the same
+    // phase for every observer position.
+    for (orbit::u32 index = 0;
+         index + 1U < config.levelCount;
+         ++index)
+    {
+        const orbit::f64 parentSpacing =
+            layout.levels[index + 1U].
+                sampleSpacingMeters;
+
+        const orbit::f64 phaseX =
+            multiCell.levels[index].
+                centerOffsetMeters.x /
+            parentSpacing;
+
+        const orbit::f64 phaseY =
+            multiCell.levels[index].
+                centerOffsetMeters.y /
+            parentSpacing;
+
+        if (std::abs(
+                phaseX -
+                std::round(phaseX)) >
+                1.0e-9 ||
+            std::abs(
+                phaseY -
+                std::round(phaseY)) >
+                1.0e-9)
+        {
+            std::cerr
+                << "Clipmap child center lost parent-grid phase alignment.\n";
+            return 1;
+        }
     }
 
     const auto rebased =
