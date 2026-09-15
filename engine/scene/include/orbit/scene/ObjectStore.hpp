@@ -26,8 +26,14 @@ struct ObjectRecord
     schema::TypeId type{};
     std::string name;
     i64 sortOrder{0};
+
+    [[nodiscard]] bool operator==(
+        const ObjectRecord&) const noexcept = default;
 };
 
+// Capability token: only the command layer can construct one, so editor
+// panels, plugins and future MCP adapters cannot mutate persistent scene
+// state by reaching around validation/undo.
 class MutationKey
 {
 private:
@@ -45,7 +51,7 @@ public:
     ObjectStore(const ObjectStore&) = delete;
     ObjectStore& operator=(const ObjectStore&) = delete;
 
-    [[nodiscard]] const ObjectRecord*
+    [[nodiscard]] std::optional<ObjectRecord>
     Find(ObjectId id) const;
 
     [[nodiscard]] std::vector<ObjectRecord>
@@ -89,6 +95,15 @@ public:
         MutationKey,
         ObjectId object,
         schema::PropertyId property);
+
+    // Explicit editor transactions use the same SQLite connection as the
+    // scene mutations, making multi-command commits genuinely atomic on
+    // disk rather than merely grouped in the undo history.
+    void BeginTransaction(MutationKey);
+    void CommitTransaction(MutationKey);
+    void RollbackTransaction(MutationKey) noexcept;
+
+    [[nodiscard]] bool TransactionActive() const noexcept;
 
 private:
     class Impl;
