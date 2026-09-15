@@ -1,6 +1,7 @@
 #include <orbit/selection/SelectionService.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace orbit::selection
 {
