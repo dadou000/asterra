@@ -49,7 +49,6 @@ namespace
 
 [[nodiscard]] std::array<u32, 42> BuildDrawConstants(
     const math::Mat4& matrix,
-    const world::PlanetDefinition& planet,
     const f32 planetRadiusMeters,
     const f32 observerRadiusMeters,
     const terrain_view::ClipmapLevel& level,
@@ -1039,7 +1038,6 @@ public:
             const auto constants =
                 BuildDrawConstants(
                     mvp,
-                    planet_,
                     static_cast<f32>(
                         planet_.
                             radiusMeters),
