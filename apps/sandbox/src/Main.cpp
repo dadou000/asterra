@@ -22,6 +22,7 @@
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_render/UniformPlanetRenderer.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
+#include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/water_render/RiverWaterRenderer.hpp>
 #include <orbit/world/Planet.hpp>
 
@@ -34,6 +35,7 @@
 #include <exception>
 #include <format>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -163,8 +165,74 @@ int main()
 
         orbit::u64 nextFenceValue = 1;
 
+        orbit::frames::FrameGraph celestialFrames;
+        orbit::universe::BodyRegistry celestialBodies(
+            celestialFrames);
+
+        const orbit::universe::SystemId helionSystem =
+            celestialBodies.CreateSystem("Helion");
+
+        const orbit::universe::BodyId asterraBodyId =
+            celestialBodies.CreateBody({
+                .system = helionSystem,
+                .name = "Asterra",
+                .shape =
+                    orbit::universe::SphereShape{
+                        .radiusMeters =
+                            6'000'000.0
+                    },
+                .mass =
+                    orbit::universe::MassProperties{
+                        .massKilograms =
+                            5.0e24
+                    },
+                .transformModel =
+                    orbit::universe::
+                        FixedBodyTransform{}
+            });
+
+        // A second body is registered even though this sandbox currently
+        // renders Asterra only. This makes the composition root exercise
+        // the multi-body universe path instead of retaining a hidden
+        // one-planet assumption.
+        static_cast<void>(
+            celestialBodies.CreateBody({
+                .system = helionSystem,
+                .name = "Luma",
+                .shape =
+                    orbit::universe::SphereShape{
+                        .radiusMeters =
+                            1'500'000.0
+                    },
+                .transformModel =
+                    orbit::universe::
+                        FixedBodyTransform{
+                            .parentFromBody = {
+                                .translation = {
+                                    400'000'000.0,
+                                    0.0,
+                                    0.0
+                                }
+                            }
+                        }
+            }));
+
+        const orbit::universe::CelestialBody*
+            activeBody =
+                celestialBodies.FindBody(
+                    asterraBodyId);
+
+        if (activeBody == nullptr)
+        {
+            throw std::runtime_error(
+                "Asterra body registration failed.");
+        }
+
         const orbit::world::PlanetDefinition planet{
-            .radiusMeters = 6'000'000.0
+            .radiusMeters =
+                orbit::universe::
+                    ReferenceRadiusMeters(
+                        activeBody->shape)
         };
 
         const orbit::math::Double3 observerDirection =
