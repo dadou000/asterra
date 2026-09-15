@@ -80,6 +80,13 @@ for /f "tokens=3" %%V in ('cmake --version ^| findstr /B /C:"cmake version"') do
     echo [Orbit] CMake %%V
 )
 
+set "GIT_SHA=nogit"
+where git >nul 2>nul
+if not errorlevel 1 (
+    for /f %%G in ('git rev-parse --short^=8 HEAD 2^>nul') do set "GIT_SHA=%%G"
+)
+echo [Orbit] Source commit %GIT_SHA%
+
 if "%DO_REBUILD%"=="1" (
     if exist "build" (
         echo [Orbit] Removing previous build directory...
@@ -147,6 +154,14 @@ if errorlevel 1 goto package_fail
 copy /y "%SANDBOX%" "%PACKAGE%\OrbitSandbox.exe" >nul
 if errorlevel 1 goto package_fail
 
+echo [Orbit] Updating root executables...
+copy /y "%LAUNCHER%" "Orbit.exe" >nul
+if errorlevel 1 goto root_copy_fail
+copy /y "%LAUNCHER%" "OrbitLauncher.exe" >nul
+if errorlevel 1 goto root_copy_fail
+copy /y "%SANDBOX%" "OrbitSandbox.exe" >nul
+if errorlevel 1 goto root_copy_fail
+
 if exist "build\apps\launcher\%CONFIG%\OrbitLauncher.pdb" (
     copy /y "build\apps\launcher\%CONFIG%\OrbitLauncher.pdb" "%SYMBOLS%\OrbitLauncher.pdb" >nul
 )
@@ -170,22 +185,31 @@ if exist "build\apps\sandbox\%CONFIG%\OrbitSandbox.pdb" (
 
 echo.
 echo ============================================================
-echo [Orbit] BUILD SUCCESS
+echo [Orbit] BUILD SUCCESS  %GIT_SHA%
 echo.
-echo Launcher:
+echo Root executable:
+echo   %CD%\Orbit.exe
+echo.
+echo Root runtime:
+echo   %CD%\OrbitSandbox.exe
+echo.
+echo Package:
 echo   %CD%\%PACKAGE%\OrbitLauncher.exe
-echo.
-echo Runtime:
-echo   %CD%\%PACKAGE%\OrbitSandbox.exe
 echo ============================================================
 echo.
 
 if "%DO_RUN%"=="1" (
-    echo [Orbit] Starting launcher...
-    start "" "%PACKAGE%\OrbitLauncher.exe"
+    echo [Orbit] Starting root executable %GIT_SHA%...
+    start "" "%CD%\Orbit.exe"
 )
 
 goto success
+
+:root_copy_fail
+echo.
+echo [Orbit] ERROR: Failed to update the root executables.
+echo Close any running Orbit.exe / OrbitLauncher.exe / OrbitSandbox.exe and retry.
+goto fail
 
 :package_fail
 echo.
