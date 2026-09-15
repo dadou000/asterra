@@ -14,6 +14,9 @@ struct Vec2
     T x{};
     T y{};
 
+    [[nodiscard]] constexpr bool operator==(
+        const Vec2&) const noexcept = default;
+
     [[nodiscard]] constexpr Vec2 operator+(const Vec2& other) const noexcept
     {
         return {x + other.x, y + other.y};
@@ -37,6 +40,9 @@ struct Vec3
     T x{};
     T y{};
     T z{};
+
+    [[nodiscard]] constexpr bool operator==(
+        const Vec3&) const noexcept = default;
 
     [[nodiscard]] constexpr Vec3 operator+(const Vec3& other) const noexcept
     {
