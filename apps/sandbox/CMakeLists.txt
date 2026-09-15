@@ -14,6 +14,8 @@ target_link_libraries(OrbitSandbox
         Orbit::Math
         Orbit::Platform
         Orbit::RhiVulkan
+        Orbit::RenderGraph
+        Orbit::RenderView
         Orbit::Runtime
         Orbit::ShaderDxc
         Orbit::Surface
