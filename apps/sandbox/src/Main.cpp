@@ -3,6 +3,7 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/debug_render/VersionOverlayRenderer.hpp>
 #include <orbit/dev_server/DevServer.hpp>
+#include <orbit/fields/FieldRegistry.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/map_render/PlanetMapRenderer.hpp>
 #include <orbit/math/Vector.hpp>
@@ -262,6 +263,134 @@ int main()
         bodySurfaces.AttachTerrain(
             asterraBodyId,
             authoritativeTerrain);
+
+        orbit::fields::FieldRegistry fieldRegistry;
+
+        static_cast<void>(
+            fieldRegistry.Register({
+                .descriptor = {
+                    .ownerBody = asterraBodyId,
+                    .name = "Elevation",
+                    .valueKind =
+                        orbit::fields::
+                            FieldValueKind::Scalar,
+                    .domain =
+                        orbit::fields::
+                            FieldDomain::Surface,
+                    .unit = "m",
+                    .residency =
+                        orbit::fields::
+                            FieldResidency::Cpu,
+                    .resolution = {
+                        .mode =
+                            orbit::fields::
+                                FieldResolutionMode::
+                                    AdaptiveLod
+                    }
+                },
+                .cpuEvaluator =
+                    [authoritativeTerrain](
+                        const orbit::fields::
+                            FieldLocation& location)
+                        -> std::optional<
+                            orbit::fields::
+                                FieldValue>
+                    {
+                        const auto* surface =
+                            std::get_if<
+                                orbit::fields::
+                                    SurfaceFieldLocation>(
+                                        &location);
+
+                        if (surface == nullptr)
+                        {
+                            return std::nullopt;
+                        }
+
+                        return orbit::fields::
+                            FieldValue(
+                                authoritativeTerrain->
+                                    Sample({
+                                        .unitDirection =
+                                            surface->
+                                                unitDirection,
+                                        .footprintMeters =
+                                            surface->
+                                                footprintMeters
+                                    }).elevationMeters);
+                    },
+                .revision =
+                    [authoritativeTerrain]
+                    {
+                        return
+                            authoritativeTerrain->
+                                Revision();
+                    }
+            }));
+
+        static_cast<void>(
+            fieldRegistry.Register({
+                .descriptor = {
+                    .ownerBody = asterraBodyId,
+                    .name = "Temperature",
+                    .valueKind =
+                        orbit::fields::
+                            FieldValueKind::Scalar,
+                    .domain =
+                        orbit::fields::
+                            FieldDomain::Surface,
+                    .unit = "degC",
+                    .residency =
+                        orbit::fields::
+                            FieldResidency::Cpu,
+                    .resolution = {
+                        .mode =
+                            orbit::fields::
+                                FieldResolutionMode::
+                                    AdaptiveLod
+                    }
+                },
+                .cpuEvaluator =
+                    [authoritativeTerrain](
+                        const orbit::fields::
+                            FieldLocation& location)
+                        -> std::optional<
+                            orbit::fields::
+                                FieldValue>
+                    {
+                        const auto* surface =
+                            std::get_if<
+                                orbit::fields::
+                                    SurfaceFieldLocation>(
+                                        &location);
+
+                        if (surface == nullptr)
+                        {
+                            return std::nullopt;
+                        }
+
+                        return orbit::fields::
+                            FieldValue(
+                                static_cast<orbit::f64>(
+                                    authoritativeTerrain->
+                                        Sample({
+                                            .unitDirection =
+                                                surface->
+                                                    unitDirection,
+                                            .footprintMeters =
+                                                surface->
+                                                    footprintMeters
+                                        }).climate.
+                                            temperatureC));
+                    },
+                .revision =
+                    [authoritativeTerrain]
+                    {
+                        return
+                            authoritativeTerrain->
+                                Revision();
+                    }
+            }));
 
         const orbit::shader::dxc::DxcShaderCompiler
             shaderCompiler;
