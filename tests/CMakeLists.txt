@@ -792,3 +792,21 @@ add_test(
     NAME Orbit.FieldRegistry
     COMMAND OrbitFieldRegistryTests
 )
+
+
+add_executable(OrbitProceduralGraphTests
+    ProceduralGraphTests.cpp
+)
+
+target_link_libraries(OrbitProceduralGraphTests
+    PRIVATE
+        Orbit::ProceduralGraph
+)
+
+target_compile_features(OrbitProceduralGraphTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitProceduralGraphTests)
+
+add_test(
+    NAME Orbit.ProceduralGraph
+    COMMAND OrbitProceduralGraphTests
+)
