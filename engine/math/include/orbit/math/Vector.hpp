@@ -81,10 +81,25 @@ struct Vec3
     }
 };
 
+template <typename T>
+requires std::is_arithmetic_v<T>
+struct Vec4
+{
+    T x{};
+    T y{};
+    T z{};
+    T w{};
+
+    [[nodiscard]] constexpr bool operator==(
+        const Vec4&) const noexcept = default;
+};
+
 using Float2 = Vec2<f32>;
 using Double2 = Vec2<f64>;
 using Float3 = Vec3<f32>;
 using Double3 = Vec3<f64>;
+using Float4 = Vec4<f32>;
+using Double4 = Vec4<f64>;
 
 template <typename T>
 [[nodiscard]] constexpr T Dot(
