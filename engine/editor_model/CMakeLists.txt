@@ -1,4 +1,5 @@
 add_library(OrbitEditorModel STATIC
+    src/BuiltinSchemas.cpp
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
     src/OutputLog.cpp
