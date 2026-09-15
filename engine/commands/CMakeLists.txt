@@ -1,4 +1,5 @@
 add_library(OrbitCommands STATIC
+    src/CommandRegistry.cpp
     src/CommandService.cpp
 )
 
