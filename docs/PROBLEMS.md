@@ -78,16 +78,19 @@ lattice is globally rebased only after long-distance travel (currently 0.025
 radians, about 150 km on a 6,000 km planet), where one coherent full refresh
 bounds chart distortion and float precision.
 
-Coarse-ring holes are now centered by the exact difference between finer and
-coarser centers in that shared lattice, eliminating the per-LOD frame phase
-ambiguity. Hole cells are rejected via clip distance rather than
-`(0,0,0,0)` homogeneous vertices. The innermost coarse overlap cell is
-smoothly sunk under the fine patch (5% of spacing, capped at 8 m) to suppress
-residual z-fighting/raster cracks without modifying authoritative terrain.
-Observer-relative vertical position is reconstructed with a cancellation-free
-spherical formula instead of subtracting two roughly 6,000 km float values.
-TerrainViewTests now verifies one-cell and multi-cell toroidal reuse, invariant
-retained-sample world addresses, half-cell snapping, and coherent rare rebases.
+Coarse-ring holes are centered by the exact finer/coarser center difference
+on that shared lattice. After visual comparison with Asterra's working Godot
+terrain, the handoff was tightened further: every finer center is phase-locked
+to its parent grid, the finer patch performs its geomorph entirely inside its
+own extent, and the coarse parent begins only at the finer outer edge. Orbit no
+longer overlaps and physically sinks a coarse row under the child. A coarse
+cell is removed only when the complete cell is covered by the finer patch, and
+fine morph targets snap directly to the globally anchored parent lattice
+without a spherical frame round-trip. Observer-relative vertical position is
+still reconstructed with a cancellation-free spherical formula instead of
+subtracting two roughly 6,000 km float values. TerrainViewTests verifies
+toroidal reuse, parent-grid phase alignment, complete-cell coverage, aligned
+fine borders, and coherent rare rebases.
 
 ### ✅ Terrain clipmap garbles during movement, cleared by rebasing
 **Confirmed fixed by the user on 2026-09-13.** Reused samples contained XY morph
@@ -96,13 +99,12 @@ transition band. As the toroidal origin moved, these stale values stretched
 triangles and distorted heights. Full refreshes regenerated them correctly.
 
 **Fix:** `RefreshTerrainMorphRegions` refreshes the current and previous morph
-bands when either the level or its coarser parent moves, unions these with
-exposed strips, and retains the unaffected interior. The final spherical
-clipmap implementation makes that reuse exact: all LODs now use one stable
-spherical lattice, and toroidal motion changes only integer center/origin
-coordinates instead of rotating each level's tangent frame. The regression
-covers movement, reversals, wraparound, parent-only movement, stationary
-frames, and rebasing, and compares incremental results against a fresh rebuild.
+bands only when that level moves, unions them with exposed strips, and retains
+the unaffected interior. Parent-only recentering no longer dirties a child:
+morph targets are globally anchored parent-grid coordinates and therefore do
+not change when the parent's toroidal window moves. The regression covers
+movement, reversals, wraparound, parent-only movement, stationary frames, and
+rebasing, and compares incremental results against a fresh rebuild.
 
 ### ✅ River/terrain resolution mismatch ("terrain filling the river") — one of two causes
 River and lake water surfaces are generated from a hydrology grid that ran at
