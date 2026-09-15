@@ -439,7 +439,7 @@ int main()
                                     .generatorVersion = 2,
                                     .overlapScale = 1.35
                                 },
-                                .gpuDevice = device.get(),
+                                .gpuDevice = device,
                                 .gpuHydrology = &gpuHydrologyRegion,
                                 .gpuFence = frameFence.get()
                             });
@@ -471,7 +471,7 @@ int main()
                                     .generatorVersion = 2,
                                     .overlapScale = 1.35
                                 },
-                                .gpuDevice = device.get(),
+                                .gpuDevice = device,
                                 .gpuHydrology = &gpuHydrologyRegion,
                                 .gpuFence = frameFence.get()
                             });
