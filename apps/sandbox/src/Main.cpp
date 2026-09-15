@@ -9,6 +9,7 @@
 #include <orbit/platform/CrashHandler.hpp>
 #include <orbit/platform/Window.hpp>
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
+#include <orbit/runtime/RuntimeSession.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
@@ -37,25 +38,6 @@
 
 namespace
 {
-// Environment-variable opt-ins for performance-analysis tooling (extra
-// Vulkan validation-layer features, RenderDoc) -- see their call site.
-// Any non-empty value counts as enabled; unset counts as disabled.
-[[nodiscard]] bool EnvFlagEnabled(const char* name)
-{
-    char* value = nullptr;
-    std::size_t valueLength = 0;
-
-    const bool found =
-        _dupenv_s(&value, &valueLength, name) == 0 && value != nullptr;
-
-    if (found)
-    {
-        free(value);
-    }
-
-    return found;
-}
-
 [[nodiscard]] const char* MapLayerName(
     const orbit::map_render::MapLayer layer) noexcept
 {
@@ -78,74 +60,30 @@ namespace
 
 int main()
 {
-    const bool crashHandlerInstalled =
-        orbit::platform::InstallCrashHandler({
-            .applicationName = "OrbitSandbox",
-            .writeMiniDump = true
-        });
-
     try
     {
-        if (!crashHandlerInstalled)
-        {
-            orbit::log::Warning(
-                "Orbit crash handler could not be installed.");
-        }
-
         orbit::log::Info(
             std::format(
                 "Orbit M0 boot | {}",
                 orbit::build::DisplayVersion));
 
-        auto window = orbit::platform::MakeWindow({
-            .title = "Orbit - Asterra Engine",
+        orbit::runtime::RuntimeSession runtime({
+            .applicationName = "OrbitSandbox",
+            .windowTitle = "Orbit - Asterra Engine",
             .width = 1600,
-            .height = 900
+            .height = 900,
+            .swapchainBufferCount = 3,
+            .allowTearing = true,
+            .relativeMouseMode = true
         });
 
-        window->SetRelativeMouseMode(true);
+        auto* window = &runtime.Window();
+        auto* device = &runtime.Device();
+        auto* graphicsQueue = &runtime.GraphicsQueue();
+        auto* swapchain = &runtime.Swapchain();
 
         orbit::log::Info(
             "Camera controls: WASD move, mouse look, Q/E down/up, Shift boost, Esc quit.");
-
-#if defined(NDEBUG)
-        constexpr bool enableValidation = false;
-#else
-        constexpr bool enableValidation = true;
-#endif
-
-        // Extra validation-layer features and RenderDoc are opt-in via
-        // environment variables rather than compiled in, so they can be
-        // toggled per-run for a performance-analysis session without a
-        // rebuild -- e.g. turn on synchronization validation to hunt a
-        // bug, then back off to get accurate timing again.
-        const bool enableBestPractices =
-            EnvFlagEnabled("ORBIT_VK_BEST_PRACTICES");
-        const bool enableSyncValidation =
-            EnvFlagEnabled("ORBIT_VK_SYNC_VALIDATION");
-        const bool enableGpuAssisted =
-            EnvFlagEnabled("ORBIT_VK_GPU_ASSISTED");
-        const bool enableRenderDoc =
-            EnvFlagEnabled("ORBIT_RENDERDOC");
-
-        auto device = orbit::rhi::vulkan::CreateDevice({
-            .enableValidation =
-                enableValidation ||
-                enableBestPractices ||
-                enableSyncValidation ||
-                enableGpuAssisted,
-            .enableBestPracticesValidation = enableBestPractices,
-            .enableSynchronizationValidation = enableSyncValidation,
-            .enableGpuAssistedValidation = enableGpuAssisted,
-            .enableRenderDoc = enableRenderDoc
-        });
-
-        if (enableRenderDoc)
-        {
-            orbit::rhi::vulkan::SetRenderDocActiveWindow(
-                *device,
-                window->NativeHandle());
-        }
 
         const auto& capabilities = device->Capabilities();
 
@@ -159,22 +97,6 @@ int main()
             capabilities.variableRateShading,
             capabilities.presentTearing
         ));
-
-        auto graphicsQueue =
-            device->CreateQueue(
-                orbit::rhi::QueueType::Graphics);
-
-        auto swapchain =
-            device->CreateSwapchain(
-                *graphicsQueue,
-                {
-                    .nativeWindow =
-                        window->NativeHandle(),
-                    .width = window->Width(),
-                    .height = window->Height(),
-                    .bufferCount = 3,
-                    .allowTearing = true
-                });
 
         auto depthTarget =
             device->CreateTexture({
@@ -1332,13 +1254,8 @@ int main()
                 continue;
             }
 
-            if (windowWidth != swapchain->Width() ||
-                windowHeight != swapchain->Height())
+            if (runtime.ResizeSwapchainToWindow())
             {
-                swapchain->Resize(
-                    windowWidth,
-                    windowHeight);
-
                 depthTarget =
                     device->CreateTexture({
                         .width = swapchain->Width(),
