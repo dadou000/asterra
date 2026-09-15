@@ -774,3 +774,21 @@ add_test(
     NAME Orbit.SurfaceRegistry
     COMMAND OrbitSurfaceRegistryTests
 )
+
+
+add_executable(OrbitFieldRegistryTests
+    FieldRegistryTests.cpp
+)
+
+target_link_libraries(OrbitFieldRegistryTests
+    PRIVATE
+        Orbit::Fields
+)
+
+target_compile_features(OrbitFieldRegistryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitFieldRegistryTests)
+
+add_test(
+    NAME Orbit.FieldRegistry
+    COMMAND OrbitFieldRegistryTests
+)
