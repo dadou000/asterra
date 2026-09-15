@@ -66,7 +66,7 @@ private:
         std::string_view label,
         Action action);
 
-    [[nodiscard]] const scene::ObjectRecord&
+    [[nodiscard]] scene::ObjectRecord
     RequireObject(scene::ObjectId id) const;
 
     scene::ObjectStore& objects_;
