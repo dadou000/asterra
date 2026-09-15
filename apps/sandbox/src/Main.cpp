@@ -2128,11 +2128,6 @@ int main()
                 [&](orbit::rhi::CommandList&,
                     const orbit::render_graph::Resources&)
                 {
-                                commandList->Transition(
-                                    sceneView.Color(),
-                                    orbit::rhi::ResourceState::Present,
-                                    orbit::rhi::ResourceState::RenderTarget);
-                    
                                 commandList->ClearColorTarget(
                                     sceneView.Color(),
                                     {
@@ -2150,16 +2145,9 @@ int main()
                                     sceneView.Color(),
                                     sceneView.Depth());
                     
-                                const orbit::u32 timestampBase =
-                                    frameIndex * kTimestampsPerFrame;
-                    
                                 commandList->WriteTimestamp(
                                     *gpuTimestamps,
                                     timestampBase + 0);
-                    
-                                const bool drawWholePlanetLod =
-                                    wholePlanetLodForced &&
-                                    uniformPlanet.ActiveLod() >= 0;
                     
                                 if (mapVisible)
                                 {
