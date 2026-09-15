@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cassert>
 #include <string>
+#include <thread>
 
 int main()
 {
