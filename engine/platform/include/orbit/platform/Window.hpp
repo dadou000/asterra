@@ -4,6 +4,7 @@
 #include <orbit/math/Vector.hpp>
 
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace orbit::platform
@@ -16,18 +17,42 @@ enum class Key : u8
     D,
     Q,
     E,
+    C,
+    G,
+    L,
+    M,
+    V,
+    X,
+    Y,
+    Z,
     LeftShift,
+    LeftControl,
+    LeftAlt,
     Escape,
+    Tab,
+    Enter,
+    Space,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
     F2,
     F3,
     F4,
     ArrowLeft,
     ArrowRight,
-    Enter,
-    M,
-    L,
-    G,
-    C
+    ArrowUp,
+    ArrowDown
+};
+
+enum class MouseButton : u8
+{
+    Left,
+    Right,
+    Middle
 };
 
 struct MouseDelta
@@ -56,6 +81,9 @@ public:
     [[nodiscard]] virtual bool KeyDown(
         Key key) const = 0;
 
+    [[nodiscard]] virtual bool MouseButtonDown(
+        MouseButton button) const = 0;
+
     virtual void SetRelativeMouseMode(
         bool enabled) = 0;
 
@@ -63,33 +91,30 @@ public:
 
     [[nodiscard]] virtual MouseDelta ConsumeMouseDelta() = 0;
 
-    // Absolute state, meaningful independent of relative-mouse mode --
-    // used for click-to-select UI (e.g. the planet map) rather than
-    // camera look, which goes through ConsumeMouseDelta instead.
-    [[nodiscard]] virtual bool LeftMouseButtonDown() const = 0;
+    // Accumulated wheel movement since the previous consume, measured
+    // in conventional 120-delta wheel notches.
+    [[nodiscard]] virtual f32 ConsumeMouseWheelDelta() = 0;
+
+    // UTF-16 text entered through the native window message stream since
+    // the previous consume. Kept separate from key state so IME/text input
+    // never has to be reconstructed from virtual keys.
+    [[nodiscard]] virtual std::u16string ConsumeTextInputUtf16() = 0;
+
+    [[nodiscard]] bool LeftMouseButtonDown() const
+    {
+        return MouseButtonDown(
+            MouseButton::Left);
+    }
+
     [[nodiscard]] virtual math::Double2 CursorPositionPixels() const = 0;
 
     [[nodiscard]] virtual void* NativeHandle() const = 0;
     [[nodiscard]] virtual u32 Width() const = 0;
     [[nodiscard]] virtual u32 Height() const = 0;
 
-    // Captures the current window client area to an uncompressed
-    // BMP file. Used by the dev server to hand screenshots to
-    // external tooling (e.g. an MCP client) for visual testing.
-    // Pure screen readback -- does not change window Z-order or
-    // wait for anything, so call it only once the window is known
-    // to be unoccluded and to have actually presented a fresh
-    // frame (see RaiseToTop).
     [[nodiscard]] virtual bool CaptureScreenshotBmp(
         std::string_view path) const = 0;
 
-    // Raises the window above other normal (non-topmost) windows
-    // without taking input focus. Screen capture only sees what is
-    // actually on top on screen; since presenting to an occluded
-    // D3D swapchain is typically skipped by the compositor, the
-    // caller must let at least one more frame render and present
-    // *after* calling this before capturing, or the capture will
-    // read a stale pre-occlusion frame.
     virtual void RaiseToTop() const = 0;
 
 protected:
