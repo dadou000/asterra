@@ -89,6 +89,39 @@ public:
                         ");");
                     break;
 
+                case 2:
+                    database.exec(
+                        "CREATE TABLE objects ("
+                        "id TEXT PRIMARY KEY NOT NULL,"
+                        "parent_id TEXT NULL "
+                        "REFERENCES objects(id) "
+                        "ON DELETE RESTRICT,"
+                        "type_id TEXT NOT NULL,"
+                        "name TEXT NOT NULL,"
+                        "sort_order INTEGER NOT NULL DEFAULT 0"
+                        ");");
+
+                    database.exec(
+                        "CREATE INDEX "
+                        "objects_parent_order "
+                        "ON objects(parent_id, sort_order, name, id);");
+
+                    database.exec(
+                        "CREATE TABLE object_properties ("
+                        "object_id TEXT NOT NULL "
+                        "REFERENCES objects(id) ON DELETE CASCADE,"
+                        "property_id TEXT NOT NULL,"
+                        "value_kind INTEGER NOT NULL,"
+                        "value_integer INTEGER NULL,"
+                        "value_real REAL NULL,"
+                        "value_text TEXT NULL,"
+                        "value_x REAL NULL,"
+                        "value_y REAL NULL,"
+                        "value_z REAL NULL,"
+                        "PRIMARY KEY(object_id, property_id)"
+                        ");");
+                    break;
+
                 default:
                     throw std::runtime_error(
                         "Missing world database migration.");
