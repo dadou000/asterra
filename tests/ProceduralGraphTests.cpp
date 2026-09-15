@@ -179,12 +179,14 @@ int main()
     const int* product =
         graph.Product<int>(derived);
 
-    assert(product != nullptr);
-    assert(
-        *product ==
-        static_cast<int>(
-            graph.Status(derived)->
-                requestedGeneration));
+    if (product == nullptr ||
+        *product !=
+            static_cast<int>(
+                graph.Status(derived)->
+                    requestedGeneration))
+    {
+        return 1;
+    }
 
     return 0;
 }
