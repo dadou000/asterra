@@ -58,3 +58,21 @@ if(MSVC)
 endif()
 
 add_library(Orbit::ThirdPartyImGui ALIAS OrbitThirdPartyImGui)
+
+
+# Embedded plugin/runtime scripting. Only the VM/compiler are built; Orbit
+# supplies the sandbox/global API and does not expose Luau CLI filesystem
+# helpers to project plugins.
+set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_WEB OFF CACHE BOOL "" FORCE)
+set(LUAU_WERROR OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    luau
+    GIT_REPOSITORY https://github.com/luau-lang/luau.git
+    GIT_TAG 0.738
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(luau)
