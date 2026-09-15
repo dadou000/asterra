@@ -1,5 +1,6 @@
 add_library(OrbitPlatform STATIC
     src/windows/Win32CrashHandler.cpp
+    src/windows/Win32Paths.cpp
     src/windows/Win32Window.cpp
 )
 
