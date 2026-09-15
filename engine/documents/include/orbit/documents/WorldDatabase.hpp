@@ -14,7 +14,7 @@ namespace orbit::documents
 struct WorldIdTag;
 using WorldId = core::StrongId<WorldIdTag>;
 
-inline constexpr i32 kCurrentWorldSchemaVersion = 1;
+inline constexpr i32 kCurrentWorldSchemaVersion = 2;
 
 class WorldDatabase
 {
