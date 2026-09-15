@@ -516,25 +516,24 @@ TerrainSampleStreamer::GeneratePatch(
 
             if (request.morphToCoarser)
             {
-                const math::Double2
-                    coarseLocalOffset =
-                        world::
-                            SurfaceOffsetBetweenDirections(
-                                planet_,
-                                request.
-                                    coarseSurfaceFrame,
-                                direction);
-
+                // Every active LOD now shares one stable spherical lattice.
+                // Snap the absolute lattice coordinate directly onto the parent
+                // spacing instead of converting direction -> spherical log map
+                // -> parent frame -> direction -> spherical log map again.
+                // Besides being cheaper, this makes the fine morph target
+                // exactly the parent-grid coordinate, matching Godot's
+                // parity-based child-to-parent morph and eliminating numerical
+                // phase drift between adjacent clipmaps.
                 const math::Double2
                     snappedCoarseOffset{
                         std::round(
-                            coarseLocalOffset.x /
+                            surfaceOffsetMeters.x /
                             request.
                                 coarseSpacingMeters) *
                             request.
                                 coarseSpacingMeters,
                         std::round(
-                            coarseLocalOffset.y /
+                            surfaceOffsetMeters.y /
                             request.
                                 coarseSpacingMeters) *
                             request.
@@ -547,16 +546,11 @@ TerrainSampleStreamer::GeneratePatch(
                             DirectionAtSurfaceOffset(
                                 planet_,
                                 request.
-                                    coarseSurfaceFrame,
+                                    surfaceFrame,
                                 snappedCoarseOffset);
 
                 morphTarget =
-                    world::
-                        SurfaceOffsetBetweenDirections(
-                            planet_,
-                            request.
-                                surfaceFrame,
-                            coarseDirection);
+                    snappedCoarseOffset;
 
                 const f64 edgeDistance =
                     std::max(
@@ -605,7 +599,7 @@ TerrainSampleStreamer::GeneratePatch(
                         coarseFineSlope =
                             SampleFineSlope(
                                 request.
-                                    coarseSurfaceFrame,
+                                    surfaceFrame,
                                 snappedCoarseOffset,
                                 fineNormalFootprintMeters,
                                 fineNormalEpsilonMeters);
