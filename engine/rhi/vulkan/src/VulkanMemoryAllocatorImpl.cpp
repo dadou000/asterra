@@ -2,4 +2,4 @@
 // unit must define VMA_IMPLEMENTATION before including it to actually
 // generate the function bodies every other file only declares.
 #define VMA_IMPLEMENTATION
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
