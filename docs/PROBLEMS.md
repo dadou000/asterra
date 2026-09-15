@@ -68,21 +68,26 @@ old world directions while the renderer reconstructed their geometry from the
 new frame. The error is tiny on fine rings but grows rapidly on coarse rings
 and can look like terrain swimming, phase jumps, or incorrect sinking.
 
-**Change:** any spherical clipmap frame recenter now forces a full regeneration
-of that level until Orbit has a stable spherical integer lattice. Coarse-ring
-holes are centered on the actual finer-level frame instead of assuming both
-independently snapped levels share the same center. Adjacent LOD orientations
-are now hierarchical (fine frame transported directly from its coarse parent),
-preventing path-dependent relative roll from accumulating over long travel.
-Hole cells are rejected via
-clip distance rather than `(0,0,0,0)` homogeneous vertices. The innermost
-coarse overlap cell is smoothly sunk under the fine patch (5% of spacing,
-capped at 8 m) to suppress residual z-fighting/raster cracks without modifying
-authoritative terrain. Observer-relative vertical position is also reconstructed
-with a cancellation-free spherical formula instead of subtracting two roughly
-6,000 km float values, preserving the near-field curvature drop that previously
-quantized away at sub-meter scale. TerrainViewTests now explicitly proves that flat-style
-retained-sample translation drifts on the sphere and requires a full refresh.
+**Final implementation (2026-09-15):** Orbit now uses one stable spherical
+integer lattice shared by every active LOD. The visible topology remains nested
+square clipmap rings, while sample storage remains toroidal. Ordinary camera
+motion advances each level's center by exact integer cell offsets inside the
+shared lattice, so retained ring-buffer samples keep the same absolute
+world-space address and only the newly exposed strips are regenerated. The
+lattice is globally rebased only after long-distance travel (currently 0.025
+radians, about 150 km on a 6,000 km planet), where one coherent full refresh
+bounds chart distortion and float precision.
+
+Coarse-ring holes are now centered by the exact difference between finer and
+coarser centers in that shared lattice, eliminating the per-LOD frame phase
+ambiguity. Hole cells are rejected via clip distance rather than
+`(0,0,0,0)` homogeneous vertices. The innermost coarse overlap cell is
+smoothly sunk under the fine patch (5% of spacing, capped at 8 m) to suppress
+residual z-fighting/raster cracks without modifying authoritative terrain.
+Observer-relative vertical position is reconstructed with a cancellation-free
+spherical formula instead of subtracting two roughly 6,000 km float values.
+TerrainViewTests now verifies one-cell and multi-cell toroidal reuse, invariant
+retained-sample world addresses, half-cell snapping, and coherent rare rebases.
 
 ### ✅ Terrain clipmap garbles during movement, cleared by rebasing
 **Confirmed fixed by the user on 2026-09-13.** Reused samples contained XY morph
@@ -92,14 +97,12 @@ triangles and distorted heights. Full refreshes regenerated them correctly.
 
 **Fix:** `RefreshTerrainMorphRegions` refreshes the current and previous morph
 bands when either the level or its coarser parent moves, unions these with
-exposed strips, and retains the unaffected interior on a translation-safe
-lattice. That regression still covers movement, reversals, wraparound,
-parent-only movement, and rebasing. The spherical tracker now deliberately
-takes the stricter path: any tangent-frame recenter regenerates the complete
-affected level, because retaining the interior across that frame change gives
-those samples different world-space addresses. The earlier live movement fix
-and user confirmation remain valid; the stricter refresh closes the deeper
-spherical phase error found later.
+exposed strips, and retains the unaffected interior. The final spherical
+clipmap implementation makes that reuse exact: all LODs now use one stable
+spherical lattice, and toroidal motion changes only integer center/origin
+coordinates instead of rotating each level's tangent frame. The regression
+covers movement, reversals, wraparound, parent-only movement, stationary
+frames, and rebasing, and compares incremental results against a fresh rebuild.
 
 ### ✅ River/terrain resolution mismatch ("terrain filling the river") — one of two causes
 River and lake water surfaces are generated from a hydrology grid that ran at
