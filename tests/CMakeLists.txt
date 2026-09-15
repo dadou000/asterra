@@ -756,3 +756,21 @@ add_test(
     NAME Orbit.BodyRegistry
     COMMAND OrbitBodyRegistryTests
 )
+
+
+add_executable(OrbitSurfaceRegistryTests
+    SurfaceRegistryTests.cpp
+)
+
+target_link_libraries(OrbitSurfaceRegistryTests
+    PRIVATE
+        Orbit::Surface
+)
+
+target_compile_features(OrbitSurfaceRegistryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitSurfaceRegistryTests)
+
+add_test(
+    NAME Orbit.SurfaceRegistry
+    COMMAND OrbitSurfaceRegistryTests
+)
