@@ -567,7 +567,10 @@ TreeItemInteraction PanelContext::TreeItem(
         .open = open,
         .clicked =
             ImGui::IsItemClicked(
-                ImGuiMouseButton_Left)
+                ImGuiMouseButton_Left),
+        .rightClicked =
+            ImGui::IsItemClicked(
+                ImGuiMouseButton_Right)
     };
 }
 
@@ -592,6 +595,10 @@ ImageInteraction PanelContext::Image(
     const bool clicked =
         ImGui::IsItemClicked(
             ImGuiMouseButton_Left);
+
+    const bool rightClicked =
+        ImGui::IsItemClicked(
+            ImGuiMouseButton_Right);
 
     f32 u = 0.0F;
     f32 v = 0.0F;
@@ -622,6 +629,7 @@ ImageInteraction PanelContext::Image(
     return {
         .hovered = hovered,
         .clicked = clicked,
+        .rightClicked = rightClicked,
         .u = u,
         .v = v
     };
@@ -782,6 +790,214 @@ PanelContext::AcceptDragPayload(
 
     ImGui::EndDragDropTarget();
     return result;
+}
+
+void PanelContext::Toolbar(
+    const std::span<const ActionPresentation> actions)
+{
+    bool first = true;
+
+    for (const ActionPresentation& action : actions)
+    {
+        if (!first)
+        {
+            ImGui::SameLine();
+        }
+
+        first = false;
+
+        if (!action.enabled)
+        {
+            ImGui::BeginDisabled();
+        }
+
+        const bool pressed =
+            ImGui::Button(
+                action.label.c_str());
+
+        const bool hovered =
+            ImGui::IsItemHovered(
+                ImGuiHoveredFlags_AllowWhenDisabled);
+
+        if (!action.enabled)
+        {
+            ImGui::EndDisabled();
+
+            if (hovered &&
+                !action.disabledReason.empty())
+            {
+                ImGui::SetTooltip(
+                    "%s",
+                    action.disabledReason.c_str());
+            }
+        }
+
+        if (pressed &&
+            action.enabled &&
+            action.invoke)
+        {
+            action.invoke();
+        }
+    }
+}
+
+void PanelContext::ContextMenu(
+    const std::string_view id,
+    const std::span<const ActionPresentation> actions,
+    const bool openRequested)
+{
+    const std::string ownedId(id);
+
+    if (openRequested)
+    {
+        ImGui::OpenPopup(
+            ownedId.c_str());
+    }
+
+    if (!ImGui::BeginPopup(
+            ownedId.c_str()))
+    {
+        return;
+    }
+
+    for (const ActionPresentation& action : actions)
+    {
+        const bool selected =
+            ImGui::MenuItem(
+                action.label.c_str(),
+                nullptr,
+                false,
+                action.enabled);
+
+        if (!action.enabled &&
+            ImGui::IsItemHovered(
+                ImGuiHoveredFlags_AllowWhenDisabled) &&
+            !action.disabledReason.empty())
+        {
+            ImGui::SetTooltip(
+                "%s",
+                action.disabledReason.c_str());
+        }
+
+        if (selected &&
+            action.enabled &&
+            action.invoke)
+        {
+            action.invoke();
+        }
+    }
+
+    ImGui::EndPopup();
+}
+
+void PanelContext::RadialMenu(
+    const std::string_view id,
+    const std::span<const ActionPresentation> actions,
+    const bool openRequested)
+{
+    const std::string ownedId(id);
+
+    if (openRequested)
+    {
+        ImGui::OpenPopup(
+            ownedId.c_str());
+    }
+
+    constexpr f32 diameter = 280.0F;
+    constexpr f32 radius = 88.0F;
+
+    ImGui::SetNextWindowSize(
+        ImVec2(diameter, diameter),
+        ImGuiCond_Appearing);
+
+    if (!ImGui::BeginPopup(
+            ownedId.c_str(),
+            ImGuiWindowFlags_NoTitleBar |
+                ImGuiWindowFlags_NoResize))
+    {
+        return;
+    }
+
+    const ImVec2 center{
+        diameter * 0.5F,
+        diameter * 0.5F
+    };
+
+    if (actions.empty())
+    {
+        ImGui::SetCursorPos(
+            ImVec2(
+                center.x - 40.0F,
+                center.y - 10.0F));
+        ImGui::TextDisabled(
+            "No actions");
+    }
+
+    for (std::size_t index = 0;
+         index < actions.size();
+         ++index)
+    {
+        const ActionPresentation& action =
+            actions[index];
+
+        const f32 angle =
+            -1.57079632679F +
+            static_cast<f32>(index) *
+                6.28318530718F /
+                static_cast<f32>(
+                    actions.size());
+
+        const ImVec2 position{
+            center.x +
+                std::cos(angle) *
+                    radius -
+                45.0F,
+            center.y +
+                std::sin(angle) *
+                    radius -
+                14.0F
+        };
+
+        ImGui::SetCursorPos(
+            position);
+
+        if (!action.enabled)
+        {
+            ImGui::BeginDisabled();
+        }
+
+        const bool pressed =
+            ImGui::Button(
+                action.label.c_str(),
+                ImVec2(90.0F, 28.0F));
+
+        const bool hovered =
+            ImGui::IsItemHovered(
+                ImGuiHoveredFlags_AllowWhenDisabled);
+
+        if (!action.enabled)
+        {
+            ImGui::EndDisabled();
+
+            if (hovered &&
+                !action.disabledReason.empty())
+            {
+                ImGui::SetTooltip(
+                    "%s",
+                    action.disabledReason.c_str());
+            }
+        }
+
+        if (pressed &&
+            action.enabled &&
+            action.invoke)
+        {
+            action.invoke();
+            ImGui::CloseCurrentPopup();
+        }
+    }
+
+    ImGui::EndPopup();
 }
 
 void PanelContext::SameLine()
