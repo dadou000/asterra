@@ -87,6 +87,9 @@ public:
     void Register(
         CommandDescriptor descriptor);
 
+    [[nodiscard]] bool Unregister(
+        CommandId id) noexcept;
+
     [[nodiscard]] const CommandDescriptor*
     Find(CommandId id) const noexcept;
 
