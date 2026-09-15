@@ -10,6 +10,8 @@
 #include <orbit/platform/CrashHandler.hpp>
 #include <orbit/platform/Window.hpp>
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
+#include <orbit/render_graph/RenderGraph.hpp>
+#include <orbit/render_view/RenderView.hpp>
 #include <orbit/runtime/RuntimeSession.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/surface/SurfaceRegistry.hpp>
@@ -101,16 +103,6 @@ int main()
             capabilities.variableRateShading,
             capabilities.presentTearing
         ));
-
-        auto depthTarget =
-            device->CreateTexture({
-                .width = swapchain->Width(),
-                .height = swapchain->Height(),
-                .format =
-                    orbit::rhi::TextureFormat::D32_Float,
-                .initialState =
-                    orbit::rhi::ResourceState::DepthWrite
-            });
 
         // Per-frame-in-flight GPU timing: 4 timestamps per swapchain
         // slot (scene begin/end, overlay begin/end), so a slot's
@@ -394,6 +386,18 @@ int main()
 
         const orbit::shader::dxc::DxcShaderCompiler
             shaderCompiler;
+
+        orbit::render_view::RenderView sceneView(
+            *device,
+            {
+                .width = swapchain->Width(),
+                .height = swapchain->Height()
+            });
+
+        orbit::render_view::CompositeRenderer
+            viewComposite(
+                *device,
+                shaderCompiler);
 
         // The clipmap's near-field terrain is generated on the GPU
         // (see engine/terrain_gpu) directly from the raw analytic
@@ -1457,15 +1461,9 @@ int main()
 
             if (runtime.ResizeSwapchainToWindow())
             {
-                depthTarget =
-                    device->CreateTexture({
-                        .width = swapchain->Width(),
-                        .height = swapchain->Height(),
-                        .format =
-                            orbit::rhi::TextureFormat::D32_Float,
-                        .initialState =
-                            orbit::rhi::ResourceState::DepthWrite
-                    });
+                sceneView.Resize(
+                    swapchain->Width(),
+                    swapchain->Height());
             }
 
             if (window->KeyDown(
