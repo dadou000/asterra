@@ -38,13 +38,28 @@ ClipmapLayout BuildClipmapLayout(
             "Orbit terrain clipmap base spacing must be positive.");
     }
 
-    if (config.levelScale <= 1.0)
+    // This implementation uses the standard 2:1 geometry-clipmap hierarchy.
+    // Keeping the ratio fixed is what lets a finer border and its parent grid
+    // share exact lattice coordinates while the finer window scrolls
+    // toroidally. Supporting arbitrary ratios would require a different
+    // transition topology rather than silently accepting misaligned grids.
+    if (std::abs(config.levelScale - 2.0) >
+        1.0e-12)
     {
         throw std::invalid_argument(
-            "Orbit terrain clipmap level scale must be greater than one.");
+            "Orbit terrain clipmap level scale must be exactly 2.0.");
     }
 
     const u32 cellsPerAxis = config.gridResolution - 1U;
+
+    // With a 2:1 parent ratio, half the grid must contain an even number of
+    // fine cells so both +/- outer borders fall on parent-grid coordinates.
+    // Common clipmap sizes (9, 17, 33, 65, 129, ...) satisfy this 4k+1 rule.
+    if ((cellsPerAxis % 4U) != 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap grid resolution must be 4k+1 for 2:1 LOD alignment.");
+    }
     const u32 halfCells = cellsPerAxis / 2U;
 
     if (config.overlapCells == 0 ||
@@ -131,15 +146,25 @@ f64 ClipmapOuterHalfExtentMeters(
             "Orbit terrain clipmap coverage requires a finite positive base spacing.");
     }
 
-    if (config.levelScale <= 1.0 ||
-        !std::isfinite(config.levelScale))
+    if (!std::isfinite(config.levelScale) ||
+        std::abs(config.levelScale - 2.0) >
+            1.0e-12)
     {
         throw std::invalid_argument(
-            "Orbit terrain clipmap coverage requires a finite level scale greater than one.");
+            "Orbit terrain clipmap coverage requires a 2:1 level scale.");
+    }
+
+    const u32 cellsPerAxis =
+        config.gridResolution - 1U;
+
+    if ((cellsPerAxis % 4U) != 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap coverage requires a 4k+1 grid resolution.");
     }
 
     const u32 halfCells =
-        (config.gridResolution - 1U) / 2U;
+        cellsPerAxis / 2U;
 
     const f64 coarsestSpacing =
         config.baseSpacingMeters *
