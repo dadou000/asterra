@@ -13,14 +13,14 @@ CommandService::CommandService(
 {
 }
 
-const scene::ObjectRecord&
+scene::ObjectRecord
 CommandService::RequireObject(
     const scene::ObjectId id) const
 {
-    const scene::ObjectRecord* object =
+    const auto object =
         objects_.Find(id);
 
-    if (object == nullptr)
+    if (!object.has_value())
     {
         throw std::invalid_argument(
             "Command references unknown object.");
@@ -34,14 +34,27 @@ void CommandService::ApplyAndRecord(
     Action action)
 {
     scene::MutationKey key;
-    action.redo(key);
 
     if (activeTransaction_.has_value())
     {
+        action.redo(key);
         activeTransaction_->
             actions.push_back(
                 std::move(action));
         return;
+    }
+
+    objects_.BeginTransaction(key);
+
+    try
+    {
+        action.redo(key);
+        objects_.CommitTransaction(key);
+    }
+    catch (...)
+    {
+        objects_.RollbackTransaction(key);
+        throw;
     }
 
     Transaction transaction;
@@ -283,6 +296,9 @@ void CommandService::BeginTransaction(
         label = "Edit";
     }
 
+    scene::MutationKey key;
+    objects_.BeginTransaction(key);
+
     activeTransaction_ =
         Transaction{
             .label = std::move(label)
@@ -295,6 +311,19 @@ void CommandService::CommitTransaction()
     {
         throw std::logic_error(
             "No active authoring transaction.");
+    }
+
+    scene::MutationKey key;
+
+    try
+    {
+        objects_.CommitTransaction(key);
+    }
+    catch (...)
+    {
+        objects_.RollbackTransaction(key);
+        activeTransaction_.reset();
+        throw;
     }
 
     if (!activeTransaction_->
@@ -318,18 +347,7 @@ void CommandService::RollbackTransaction()
     }
 
     scene::MutationKey key;
-
-    for (auto iterator =
-             activeTransaction_->
-                 actions.rbegin();
-         iterator !=
-             activeTransaction_->
-                 actions.rend();
-         ++iterator)
-    {
-        iterator->undo(key);
-    }
-
+    objects_.RollbackTransaction(key);
     activeTransaction_.reset();
 }
 
@@ -359,14 +377,27 @@ void CommandService::Undo()
     undoStack_.pop_back();
 
     scene::MutationKey key;
+    objects_.BeginTransaction(key);
 
-    for (auto iterator =
-             transaction.actions.rbegin();
-         iterator !=
-             transaction.actions.rend();
-         ++iterator)
+    try
     {
-        iterator->undo(key);
+        for (auto iterator =
+                 transaction.actions.rbegin();
+             iterator !=
+                 transaction.actions.rend();
+             ++iterator)
+        {
+            iterator->undo(key);
+        }
+
+        objects_.CommitTransaction(key);
+    }
+    catch (...)
+    {
+        objects_.RollbackTransaction(key);
+        undoStack_.push_back(
+            std::move(transaction));
+        throw;
     }
 
     redoStack_.push_back(
@@ -387,11 +418,24 @@ void CommandService::Redo()
     redoStack_.pop_back();
 
     scene::MutationKey key;
+    objects_.BeginTransaction(key);
 
-    for (Action& action :
-         transaction.actions)
+    try
     {
-        action.redo(key);
+        for (Action& action :
+             transaction.actions)
+        {
+            action.redo(key);
+        }
+
+        objects_.CommitTransaction(key);
+    }
+    catch (...)
+    {
+        objects_.RollbackTransaction(key);
+        redoStack_.push_back(
+            std::move(transaction));
+        throw;
     }
 
     undoStack_.push_back(
