@@ -167,6 +167,61 @@ ObjectStore::Children(
     return result;
 }
 
+std::vector<ObjectRecord>
+ObjectStore::SearchByName(
+    const std::string_view queryText,
+    const u32 limit) const
+{
+    if (queryText.empty() ||
+        limit == 0)
+    {
+        return {};
+    }
+
+    std::string escaped;
+    escaped.reserve(
+        queryText.size());
+
+    for (const char character :
+         queryText)
+    {
+        if (character == '%' ||
+            character == '_' ||
+            character == '\\')
+        {
+            escaped.push_back('\\');
+        }
+
+        escaped.push_back(
+            character);
+    }
+
+    SQLite::Statement query(
+        impl_->database,
+        "SELECT id, parent_id, type_id, name, sort_order "
+        "FROM objects "
+        "WHERE name LIKE ? ESCAPE '\\' COLLATE NOCASE "
+        "ORDER BY name, id LIMIT ?;");
+
+    query.bind(
+        1,
+        "%" + escaped + "%");
+    query.bind(
+        2,
+        static_cast<int>(
+            limit));
+
+    std::vector<ObjectRecord> result;
+
+    while (query.executeStep())
+    {
+        result.push_back(
+            ReadObject(query));
+    }
+
+    return result;
+}
+
 std::optional<schema::PropertyValue>
 ObjectStore::GetProperty(
     const ObjectId object,
