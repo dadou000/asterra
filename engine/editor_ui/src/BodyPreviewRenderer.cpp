@@ -2,6 +2,7 @@
 
 #include <orbit/rhi/Pipeline.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <type_traits>
@@ -62,7 +63,7 @@ float4 main(VSOutput input) : SV_Target0
     const float3 radii =
         max(
             g_pc.radiiAndAspect.xyz,
-            0.001.xxx);
+            float3(0.001, 0.001, 0.001));
 
     const float3 camera =
         float3(0.0, 0.0, -3.2);
