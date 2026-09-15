@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 
