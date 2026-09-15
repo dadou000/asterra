@@ -100,6 +100,12 @@ void CommandRegistry::Register(
         std::move(descriptor));
 }
 
+bool CommandRegistry::Unregister(
+    const CommandId id) noexcept
+{
+    return commands_.erase(id) != 0U;
+}
+
 const CommandDescriptor*
 CommandRegistry::Find(
     const CommandId id) const noexcept
