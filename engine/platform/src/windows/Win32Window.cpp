@@ -4,6 +4,7 @@
 
 #include <orbit/core/Assert.hpp>
 #include <orbit/core/Log.hpp>
+#include <orbit/platform/AppResources.hpp>
 #include <orbit/platform/Window.hpp>
 
 #include <mutex>
@@ -327,6 +328,15 @@ void EnsureWindowClassRegistered()
                     IDC_ARROW);
             windowClass.lpszClassName =
                 kWindowClassName;
+
+            windowClass.hIcon =
+                LoadIconA(
+                    windowClass.hInstance,
+                    MAKEINTRESOURCEA(
+                        ORBIT_RESOURCE_ICON));
+
+            windowClass.hIconSm =
+                windowClass.hIcon;
 
             if (RegisterClassExA(
                     &windowClass) == 0)

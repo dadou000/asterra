@@ -1,5 +1,6 @@
 add_executable(OrbitSandbox
     src/Main.cpp
+    resources/OrbitSandbox.rc
 )
 
 target_link_libraries(OrbitSandbox

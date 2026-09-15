@@ -1,5 +1,6 @@
 add_executable(OrbitLauncher WIN32
     src/Main.cpp
+    resources/OrbitLauncher.rc
 )
 
 add_dependencies(OrbitLauncher OrbitSandbox)
@@ -7,6 +8,7 @@ add_dependencies(OrbitLauncher OrbitSandbox)
 target_link_libraries(OrbitLauncher
     PRIVATE
         Orbit::Platform
+        gdiplus
         shell32
         user32
 )
