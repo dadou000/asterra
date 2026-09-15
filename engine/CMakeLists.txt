@@ -1,4 +1,5 @@
 add_subdirectory(core)
+add_subdirectory(documents)
 add_subdirectory(math)
 add_subdirectory(time)
 add_subdirectory(frames)
