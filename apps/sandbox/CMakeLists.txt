@@ -8,6 +8,7 @@ target_link_libraries(OrbitSandbox
         Orbit::Core
         Orbit::DebugRender
         Orbit::DevServer
+        Orbit::Fields
         Orbit::Jobs
         Orbit::MapRender
         Orbit::Math
