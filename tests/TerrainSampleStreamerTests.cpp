@@ -351,13 +351,6 @@ int main()
         return 1;
     }
 
-    const orbit::world::SurfaceFrame
-        fineFrame =
-            orbit::world::SurfaceFrameAtOffset(
-                planet,
-                frame,
-                {20.0, 0.0});
-
     const std::vector<
         orbit::terrain_stream::TerrainSampleRequest>
         morphRequests{
@@ -371,7 +364,8 @@ int main()
                 .morphEndHalfExtentMeters = 40.0,
                 .coarseSpacingMeters = 40.0,
                 .coarseFootprintMeters = 20.0,
-                .surfaceFrame = fineFrame,
+                .centerOffsetMeters = {20.0, 0.0},
+                .surfaceFrame = frame,
                 .coarseSurfaceFrame = frame,
                 .originX = 0,
                 .originY = 0,
@@ -424,7 +418,7 @@ int main()
             orbit::world::
                 DirectionAtSurfaceOffset(
                     planet,
-                    fineFrame,
+                    frame,
                     {
                         transitionSample.
                             morphTargetXMeters,
