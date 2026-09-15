@@ -92,12 +92,14 @@ triangles and distorted heights. Full refreshes regenerated them correctly.
 
 **Fix:** `RefreshTerrainMorphRegions` refreshes the current and previous morph
 bands when either the level or its coarser parent moves, unions these with
-exposed strips, and retains the unaffected interior. The regression fails
-before the fix and passes through movement, reversals, wraparound, parent-only
-movement, and rebasing. Release build and live movement smoke test passed;
-the user's visual confirmation closes this issue. The earlier streaming-latency
-diagnosis was superseded; the committed terrain frame is already transformed
-into the current observer frame correctly.
+exposed strips, and retains the unaffected interior on a translation-safe
+lattice. That regression still covers movement, reversals, wraparound,
+parent-only movement, and rebasing. The spherical tracker now deliberately
+takes the stricter path: any tangent-frame recenter regenerates the complete
+affected level, because retaining the interior across that frame change gives
+those samples different world-space addresses. The earlier live movement fix
+and user confirmation remain valid; the stricter refresh closes the deeper
+spherical phase error found later.
 
 ### ✅ River/terrain resolution mismatch ("terrain filling the river") — one of two causes
 River and lake water surfaces are generated from a hydrology grid that ran at
