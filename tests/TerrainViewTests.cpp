@@ -200,11 +200,15 @@ int main()
 
         bool exercisedPartialCell = false;
 
+        // Include a deliberately off-phase quarter parent cell here to
+        // regression-test the conservative coverage predicate itself. Runtime
+        // clipmap centers are phase-locked below, so this is an adversarial
+        // geometry test rather than an expected steady-state phase.
         for (const orbit::f64 phaseX :
-             {-halfCell, 0.0, halfCell})
+             {-halfCell * 0.5, 0.0, halfCell * 0.5})
         {
             for (const orbit::f64 phaseY :
-                 {-halfCell, 0.0, halfCell})
+                 {-halfCell * 0.5, 0.0, halfCell * 0.5})
             {
                 for (orbit::u32 y = 0;
                      y < cellsPerAxis;
@@ -295,7 +299,7 @@ int main()
         if (!exercisedPartialCell)
         {
             std::cerr
-                << "Clipmap coverage regression did not exercise a half-cell phase boundary.\n";
+                << "Clipmap coverage regression did not exercise a partial-cell boundary.\n";
             return 1;
         }
     }
