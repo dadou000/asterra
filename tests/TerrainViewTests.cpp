@@ -603,6 +603,60 @@ int main()
         }
     }
 
+    // The complete finer-patch border must also land on parent grid lines.
+    // This is what lets the fine edge morph to the parent and the parent ring
+    // begin immediately outside it without skirts, overlap, or a half-cell gap.
+    for (orbit::u32 fineIndex = 0;
+         fineIndex + 1U < config.levelCount;
+         ++fineIndex)
+    {
+        const orbit::u32 coarseIndex =
+            fineIndex + 1U;
+
+        const orbit::f64 coarseSpacing =
+            layout.levels[coarseIndex].
+                sampleSpacingMeters;
+
+        const orbit::f64 halfExtent =
+            layout.levels[fineIndex].
+                outerHalfExtentMeters;
+
+        const orbit::math::Double2 centerDelta{
+            multiCell.levels[fineIndex].
+                    centerOffsetMeters.x -
+                multiCell.levels[coarseIndex].
+                    centerOffsetMeters.x,
+            multiCell.levels[fineIndex].
+                    centerOffsetMeters.y -
+                multiCell.levels[coarseIndex].
+                    centerOffsetMeters.y
+        };
+
+        for (const orbit::f64 edge :
+             {
+                 centerDelta.x - halfExtent,
+                 centerDelta.x + halfExtent,
+                 centerDelta.y - halfExtent,
+                 centerDelta.y + halfExtent
+             })
+        {
+            const orbit::f64 coarseCoordinate =
+                edge /
+                coarseSpacing;
+
+            if (std::abs(
+                    coarseCoordinate -
+                    std::round(
+                        coarseCoordinate)) >
+                1.0e-9)
+            {
+                std::cerr
+                    << "Finer clipmap border is not aligned to the parent grid.\n";
+                return 1;
+            }
+        }
+    }
+
     const auto rebased =
         tracker.Update(
             makeObserver(
