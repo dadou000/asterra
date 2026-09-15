@@ -1,11 +1,19 @@
 #include <orbit/terrain_view/ClipmapTracker.hpp>
 
 #include <cmath>
-#include <cstdlib>
 #include <stdexcept>
 
 namespace orbit::terrain_view
 {
+namespace
+{
+// Keep the exponential-map chart bounded so float shader coordinates stay
+// precise and spherical distortion remains small. A rebase is deliberately
+// rare: on a 6000 km planet this is about 150 km of travel, versus ordinary
+// toroidal strip updates every sample cell.
+constexpr f64 kLatticeRebaseAngleRadians = 0.025;
+} // namespace
+
 ClipmapTracker::ClipmapTracker(
     const world::PlanetDefinition planet,
     const ClipmapConfig config)
@@ -42,164 +50,153 @@ ClipmapMotionUpdate ClipmapTracker::Update(
     const ClipmapLayout layout =
         BuildClipmapLayout(config_, observer);
 
+    if (!latticeInitialized_)
+    {
+        latticeFrame_ =
+            world::MakeSurfaceFrame(
+                observerDirection);
+        latticeInitialized_ = true;
+    }
+
+    math::Double2 observerOffset =
+        world::SurfaceOffsetBetweenDirections(
+            planet_,
+            latticeFrame_,
+            observerDirection);
+
+    const f64 rebaseDistanceMeters =
+        planet_.radiusMeters *
+        kLatticeRebaseAngleRadians;
+
+    const bool rebase =
+        observerOffset.x * observerOffset.x +
+            observerOffset.y * observerOffset.y >
+        rebaseDistanceMeters *
+            rebaseDistanceMeters;
+
+    if (rebase)
+    {
+        // Re-anchor the whole LOD stack at once. Between these rare rebases
+        // every level lives on one immutable spherical integer lattice, which
+        // makes toroidal strip reuse exact instead of merely approximate.
+        latticeFrame_ =
+            world::TransportSurfaceFrameToDirection(
+                latticeFrame_,
+                observerDirection);
+
+        observerOffset = {};
+
+        for (LevelState& state : levels_)
+        {
+            if (!state.initialized)
+            {
+                continue;
+            }
+
+            state.centerOffsetMeters = {};
+            state.centerDirection =
+                observerDirection;
+        }
+    }
+
     ClipmapMotionUpdate update{};
     update.levels.resize(levels_.size());
 
-    // Frame orientation is hierarchical from coarse to fine. This removes the
-    // path-dependent relative roll (spherical holonomy) that accumulated when
-    // every LOD independently parallel-transported its own frame. A fine frame
-    // is always the direct transport of its immediate coarse parent to the
-    // fine center. When a parent frame changes, descendants are regenerated
-    // because their local coordinate basis changed even if their centers did
-    // not cross a cell boundary.
-    std::vector<bool> frameChanged(
-        levels_.size(),
-        false);
-
-    for (std::size_t reverse = levels_.size();
-         reverse > 0;
-         --reverse)
+    for (u32 index = 0;
+         index < static_cast<u32>(levels_.size());
+         ++index)
     {
-        const u32 index =
-            static_cast<u32>(
-                reverse - 1U);
+        LevelState& state =
+            levels_[index];
 
-        LevelState& state = levels_[index];
-        const ClipmapLevel& level = layout.levels[index];
+        const ClipmapLevel& level =
+            layout.levels[index];
 
         ClipmapLevelMotion motion{};
         motion.levelIndex = index;
-
-        const bool hasParent =
-            index + 1U <
-            static_cast<u32>(
-                levels_.size());
+        motion.surfaceFrame = latticeFrame_;
 
         if (!state.initialized)
         {
-            const bool hasResidentChild =
-                index > 0U &&
-                levels_[index - 1U].initialized;
-
             state.initialized = true;
             state.samplesInvalidated = false;
-            state.centerDirection = observerDirection;
 
-            if (hasParent)
-            {
-                state.frame =
-                    world::TransportSurfaceFrameToDirection(
-                        levels_[index + 1U].frame,
-                        observerDirection);
-            }
-            else if (hasResidentChild)
-            {
-                // Adaptive coverage can introduce one new coarsest level
-                // while all finer spacings are preserved. Orient that new
-                // parent by reverse-transporting the existing child frame so
-                // transporting it back to the child's center reproduces the
-                // resident child basis instead of rotating every shared grid.
-                state.frame =
-                    world::TransportSurfaceFrameToDirection(
-                        levels_[index - 1U].frame,
-                        observerDirection);
-            }
-            else
-            {
-                state.frame =
-                    world::MakeSurfaceFrame(
-                        observerDirection);
-            }
+            state.centerOffsetMeters = {
+                std::round(
+                    observerOffset.x /
+                    level.sampleSpacingMeters) *
+                    level.sampleSpacingMeters,
+                std::round(
+                    observerOffset.y /
+                    level.sampleSpacingMeters) *
+                    level.sampleSpacingMeters
+            };
 
-            // A newly introduced coarsest parent constructed from a resident
-            // child has no old samples of its own, but it also does not change
-            // that child's coordinate frame. Do not propagate a false frame
-            // change down the preserved hierarchy.
-            frameChanged[index] =
-                !( !hasParent &&
-                   hasResidentChild );
+            state.centerDirection =
+                world::DirectionAtSurfaceOffset(
+                    planet_,
+                    latticeFrame_,
+                    state.centerOffsetMeters);
 
-            motion.centerDirection = state.centerDirection;
-            motion.surfaceFrame = state.frame;
+            motion.centerDirection =
+                state.centerDirection;
+            motion.centerOffsetMeters =
+                state.centerOffsetMeters;
             motion.fullRefresh = true;
+
             update.levels[index] = motion;
             continue;
         }
 
-        const bool parentFrameChanged =
-            hasParent &&
-            frameChanged[index + 1U];
-
-        if (parentFrameChanged)
+        if (!rebase)
         {
-            state.frame =
-                world::TransportSurfaceFrameToDirection(
-                    levels_[index + 1U].frame,
-                    state.centerDirection);
-        }
-
-        const math::Double2 offset =
-            world::SurfaceOffsetBetweenDirections(
-                planet_,
-                state.frame,
-                observerDirection);
-
-        const i64 shiftX = static_cast<i64>(
-            std::llround(
-                offset.x / level.sampleSpacingMeters));
-
-        const i64 shiftY = static_cast<i64>(
-            std::llround(
-                offset.y / level.sampleSpacingMeters));
-
-        motion.cellShiftX = shiftX;
-        motion.cellShiftY = shiftY;
-
-        const bool centerMoved =
-            shiftX != 0 ||
-            shiftY != 0;
-
-        if (centerMoved)
-        {
-            const math::Double2 snappedOffset{
-                static_cast<f64>(shiftX) *
-                    level.sampleSpacingMeters,
-                static_cast<f64>(shiftY) *
-                    level.sampleSpacingMeters
+            const math::Double2 delta{
+                observerOffset.x -
+                    state.centerOffsetMeters.x,
+                observerOffset.y -
+                    state.centerOffsetMeters.y
             };
 
-            const world::SurfaceFrame movedFrame =
-                world::SurfaceFrameAtOffset(
-                    planet_,
-                    state.frame,
-                    snappedOffset);
+            const i64 shiftX =
+                static_cast<i64>(
+                    std::llround(
+                        delta.x /
+                        level.sampleSpacingMeters));
 
-            state.centerDirection = movedFrame.up;
-            state.frame =
-                hasParent
-                    ? world::TransportSurfaceFrameToDirection(
-                        levels_[index + 1U].frame,
-                        state.centerDirection)
-                    : movedFrame;
+            const i64 shiftY =
+                static_cast<i64>(
+                    std::llround(
+                        delta.y /
+                        level.sampleSpacingMeters));
+
+            motion.cellShiftX = shiftX;
+            motion.cellShiftY = shiftY;
+
+            state.centerOffsetMeters.x +=
+                static_cast<f64>(shiftX) *
+                level.sampleSpacingMeters;
+
+            state.centerOffsetMeters.y +=
+                static_cast<f64>(shiftY) *
+                level.sampleSpacingMeters;
+
+            state.centerDirection =
+                world::DirectionAtSurfaceOffset(
+                    planet_,
+                    latticeFrame_,
+                    state.centerOffsetMeters);
         }
 
-        frameChanged[index] =
-            parentFrameChanged ||
-            centerMoved;
+        motion.centerDirection =
+            state.centerDirection;
+        motion.centerOffsetMeters =
+            state.centerOffsetMeters;
 
-        // A toroidal strip reuse is only exact on a flat, translation-
-        // invariant lattice. On the sphere, moving or rotating the tangent
-        // frame changes the world-space address of every retained logical
-        // sample. Regenerate the whole level until the clipmap is backed by a
-        // stable spherical integer lattice.
         motion.fullRefresh =
-            state.samplesInvalidated ||
-            frameChanged[index];
+            rebase ||
+            state.samplesInvalidated;
 
         state.samplesInvalidated = false;
-
-        motion.centerDirection = state.centerDirection;
-        motion.surfaceFrame = state.frame;
 
         update.levels[index] = motion;
     }
@@ -213,6 +210,9 @@ void ClipmapTracker::Reset() noexcept
     {
         state = {};
     }
+
+    latticeInitialized_ = false;
+    latticeFrame_ = {};
 }
 
 void ClipmapTracker::InvalidateSamples() noexcept
@@ -223,30 +223,64 @@ void ClipmapTracker::InvalidateSamples() noexcept
     }
 }
 
-ClipmapTracker ClipmapTracker::Reconfigured(const ClipmapConfig config) const
+ClipmapTracker ClipmapTracker::Reconfigured(
+    const ClipmapConfig config) const
 {
-    ClipmapTracker result(planet_, config);
-    const world::WorldPosition observer{{planet_.radiusMeters, 0.0, 0.0}};
-    const auto previous = BuildClipmapLayout(config_, observer);
-    const auto next = BuildClipmapLayout(config, observer);
-    for (std::size_t target = 0; target < result.levels_.size(); ++target)
+    ClipmapTracker result(
+        planet_,
+        config);
+
+    result.latticeInitialized_ =
+        latticeInitialized_;
+    result.latticeFrame_ =
+        latticeFrame_;
+
+    const world::WorldPosition observer{
+        {planet_.radiusMeters, 0.0, 0.0}
+    };
+
+    const auto previous =
+        BuildClipmapLayout(
+            config_,
+            observer);
+
+    const auto next =
+        BuildClipmapLayout(
+            config,
+            observer);
+
+    for (std::size_t target = 0;
+         target < result.levels_.size();
+         ++target)
     {
-        for (std::size_t source = 0; source < levels_.size(); ++source)
+        for (std::size_t source = 0;
+             source < levels_.size();
+             ++source)
         {
-            if (next.levels[target].sampleSpacingMeters == previous.levels[source].sampleSpacingMeters)
+            if (next.levels[target].
+                    sampleSpacingMeters ==
+                previous.levels[source].
+                    sampleSpacingMeters)
             {
-                // Changing coverage shifts level indices, not world-space
-                // sample locations for resolutions common to both layouts.
-                result.levels_[target] = levels_[source];
-                result.levels_[target].samplesInvalidated = true;
+                // Coverage tier changes remap level indices. Preserve the
+                // stable spherical lattice coordinates, but force one refill
+                // because the renderer's per-index GPU buffers/residency are
+                // rebuilt for the new tier.
+                result.levels_[target] =
+                    levels_[source];
+
+                result.levels_[target].
+                    samplesInvalidated = true;
                 break;
             }
         }
     }
+
     return result;
 }
 
-const ClipmapConfig& ClipmapTracker::Config() const noexcept
+const ClipmapConfig&
+ClipmapTracker::Config() const noexcept
 {
     return config_;
 }
