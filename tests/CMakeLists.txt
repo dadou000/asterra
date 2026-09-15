@@ -870,3 +870,22 @@ add_test(
     NAME Orbit.RenderGraph
     COMMAND OrbitRenderGraphTests
 )
+
+
+add_executable(OrbitEditorModelTests
+    EditorModelTests.cpp
+)
+
+target_link_libraries(OrbitEditorModelTests
+    PRIVATE
+        Orbit::Core
+        Orbit::EditorModel
+)
+
+target_compile_features(OrbitEditorModelTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitEditorModelTests)
+
+add_test(
+    NAME Orbit.EditorModel
+    COMMAND OrbitEditorModelTests
+)
