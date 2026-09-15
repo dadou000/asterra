@@ -37,9 +37,10 @@ int main()
 {
     orbit::camera::FreeCamera camera({
         .mouseSensitivityRadiansPerPixel = 0.01,
-        .moveSpeedMetersPerSecond = 100.0,
-        .verticalSpeedMetersPerSecond = 50.0,
-        .boostMultiplier = 4.0,
+        .groundSpeedMetersPerSecond = 100.0,
+        .groundBoostSpeedMetersPerSecond = 200.0,
+        .orbitSpeedMetersPerSecond = 100.0,
+        .orbitBoostSpeedMetersPerSecond = 200.0,
         .maximumPitchRadians = 1.0,
         .initialYawRadians = 0.0,
         .initialPitchRadians = 0.0
@@ -87,9 +88,10 @@ int main()
     }
 
     orbit::camera::FreeCamera diagonal({
-        .moveSpeedMetersPerSecond = 100.0,
-        .verticalSpeedMetersPerSecond = 50.0,
-        .boostMultiplier = 4.0,
+        .groundSpeedMetersPerSecond = 100.0,
+        .groundBoostSpeedMetersPerSecond = 200.0,
+        .orbitSpeedMetersPerSecond = 100.0,
+        .orbitBoostSpeedMetersPerSecond = 200.0,
         .initialPitchRadians = 0.0
     });
 
