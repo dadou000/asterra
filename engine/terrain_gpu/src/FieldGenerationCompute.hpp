@@ -938,8 +938,19 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         // is therefore pure integer-grid snapping: no spherical frame round trip
         // is necessary. This is both faster and exactly phase-consistent with
         // the parent samples.
+        float2 coarseCoordinate =
+            offsetMeters /
+            g_pc.coarseSpacingMeters;
+
+        // Match C++ std::round exactly at half cells (away from zero).
+        // HLSL round() is not a portable tie-breaking contract for this
+        // purpose, and half-parent cells occur on every second fine vertex.
+        float2 snappedCoarseCoordinate =
+            sign(coarseCoordinate) *
+            floor(abs(coarseCoordinate) + 0.5);
+
         float2 snappedCoarseOffset =
-            round(offsetMeters / g_pc.coarseSpacingMeters) *
+            snappedCoarseCoordinate *
             g_pc.coarseSpacingMeters;
 
         float3 coarseDirection = DirectionAtSurfaceOffset(
