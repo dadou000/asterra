@@ -46,6 +46,12 @@ enum class CullMode : u8
     Back
 };
 
+enum class BlendMode : u8
+{
+    Opaque,
+    Alpha
+};
+
 enum class DepthCompare : u8
 {
     LessEqual,
@@ -68,6 +74,7 @@ struct GraphicsPipelineDesc
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     FillMode fillMode{FillMode::Solid};
     CullMode cullMode{CullMode::Back};
+    BlendMode blendMode{BlendMode::Opaque};
     DepthCompare depthCompare{DepthCompare::LessEqual};
     bool depthTest{false};
     bool depthWrite{false};
