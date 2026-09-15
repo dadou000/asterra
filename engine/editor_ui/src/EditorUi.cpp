@@ -444,7 +444,7 @@ public:
     ImGuiContext* context{nullptr};
 
     std::vector<PanelDefinition> panels;
-    std::vector<bool> panelOpen;
+    std::vector<u8> panelOpen;
     std::vector<MenuAction> menuActions;
 
     std::unique_ptr<rhi::GraphicsPipeline>
@@ -1043,7 +1043,7 @@ void EditorUi::RegisterPanel(
     }
 
     impl_->panelOpen.push_back(
-        panel.defaultOpen);
+        panel.defaultOpen ? 1U : 0U);
     impl_->panels.push_back(
         std::move(panel));
 }
@@ -1261,7 +1261,7 @@ void EditorUi::DrawStudioShell()
          index < impl_->panels.size();
          ++index)
     {
-        if (!impl_->panelOpen[index])
+        if (impl_->panelOpen[index] == 0U)
         {
             continue;
         }
@@ -1269,14 +1269,20 @@ void EditorUi::DrawStudioShell()
         PanelDefinition& panel =
             impl_->panels[index];
 
+        bool open =
+            impl_->panelOpen[index] != 0U;
+
         if (ImGui::Begin(
                 panel.title.c_str(),
-                &impl_->panelOpen[index]))
+                &open))
         {
             panel.draw(context);
         }
 
         ImGui::End();
+
+        impl_->panelOpen[index] =
+            open ? 1U : 0U;
     }
 }
 
