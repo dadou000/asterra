@@ -1,9 +1,17 @@
 #include <orbit/procedural_graph/ProceduralGraph.hpp>
 
 #include <atomic>
-#include <cassert>
 #include <string>
 #include <thread>
+
+#define ORBIT_TEST_CHECK(expression) \
+    do \
+    { \
+        if (!(expression)) \
+        { \
+            return __LINE__; \
+        } \
+    } while (false)
 
 int main()
 {
@@ -72,16 +80,16 @@ int main()
                 return std::any(7);
             });
 
-    assert(graph.BuildBlocking(biomes));
-    assert(graph.BuildBlocking(terrain));
+    ORBIT_TEST_CHECK(graph.BuildBlocking(biomes));
+    ORBIT_TEST_CHECK(graph.BuildBlocking(terrain));
 
-    assert(climateBuildCount == 1);
-    assert(biomeBuildCount == 1);
-    assert(terrainBuildCount == 1);
+    ORBIT_TEST_CHECK(climateBuildCount == 1);
+    ORBIT_TEST_CHECK(biomeBuildCount == 1);
+    ORBIT_TEST_CHECK(terrainBuildCount == 1);
 
     const auto terrainBefore =
         graph.Status(terrain);
-    assert(terrainBefore.has_value());
+    ORBIT_TEST_CHECK(terrainBefore.has_value());
 
     // Axial tilt affects climate and biomes, but not the independent
     // tectonics -> terrain chain.
@@ -89,17 +97,17 @@ int main()
         axialTilt,
         2);
 
-    assert(graph.BuildBlocking(biomes));
+    ORBIT_TEST_CHECK(graph.BuildBlocking(biomes));
 
-    assert(climateBuildCount == 2);
-    assert(biomeBuildCount == 2);
-    assert(terrainBuildCount == 1);
+    ORBIT_TEST_CHECK(climateBuildCount == 2);
+    ORBIT_TEST_CHECK(biomeBuildCount == 2);
+    ORBIT_TEST_CHECK(terrainBuildCount == 1);
 
     const auto terrainAfter =
         graph.Status(terrain);
 
-    assert(terrainAfter.has_value());
-    assert(
+    ORBIT_TEST_CHECK(terrainAfter.has_value());
+    ORBIT_TEST_CHECK(
         terrainAfter->committedRevision ==
         terrainBefore->committedRevision);
 
@@ -147,8 +155,8 @@ int main()
 
     const auto building =
         graph.Status(derived);
-    assert(building.has_value());
-    assert(
+    ORBIT_TEST_CHECK(building.has_value());
+    ORBIT_TEST_CHECK(
         building->state ==
         orbit::procedural_graph::
             NodeState::Building);
@@ -167,26 +175,24 @@ int main()
     const auto afterStale =
         graph.Status(derived);
 
-    assert(afterStale.has_value());
-    assert(
+    ORBIT_TEST_CHECK(afterStale.has_value());
+    ORBIT_TEST_CHECK(
         afterStale->state ==
         orbit::procedural_graph::
             NodeState::Dirty);
 
-    assert(graph.BuildBlocking(derived));
-    assert(staleBuildCount == 2);
+    ORBIT_TEST_CHECK(graph.BuildBlocking(derived));
+    ORBIT_TEST_CHECK(staleBuildCount == 2);
 
     const int* product =
         graph.Product<int>(derived);
 
-    if (product == nullptr ||
-        *product !=
-            static_cast<int>(
-                graph.Status(derived)->
-                    requestedGeneration))
-    {
-        return 1;
-    }
+    ORBIT_TEST_CHECK(product != nullptr);
+    ORBIT_TEST_CHECK(
+        *product ==
+        static_cast<int>(
+            graph.Status(derived)->
+                requestedGeneration));
 
     return 0;
 }
