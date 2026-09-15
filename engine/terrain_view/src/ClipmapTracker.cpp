@@ -77,18 +77,47 @@ ClipmapMotionUpdate ClipmapTracker::Update(
 
         if (!state.initialized)
         {
+            const bool hasResidentChild =
+                index > 0U &&
+                levels_[index - 1U].initialized;
+
             state.initialized = true;
             state.samplesInvalidated = false;
             state.centerDirection = observerDirection;
-            state.frame =
-                hasParent
-                    ? world::TransportSurfaceFrameToDirection(
-                        levels_[index + 1U].frame,
-                        observerDirection)
-                    : world::MakeSurfaceFrame(
-                        observerDirection);
 
-            frameChanged[index] = true;
+            if (hasParent)
+            {
+                state.frame =
+                    world::TransportSurfaceFrameToDirection(
+                        levels_[index + 1U].frame,
+                        observerDirection);
+            }
+            else if (hasResidentChild)
+            {
+                // Adaptive coverage can introduce one new coarsest level
+                // while all finer spacings are preserved. Orient that new
+                // parent by reverse-transporting the existing child frame so
+                // transporting it back to the child's center reproduces the
+                // resident child basis instead of rotating every shared grid.
+                state.frame =
+                    world::TransportSurfaceFrameToDirection(
+                        levels_[index - 1U].frame,
+                        observerDirection);
+            }
+            else
+            {
+                state.frame =
+                    world::MakeSurfaceFrame(
+                        observerDirection);
+            }
+
+            // A newly introduced coarsest parent constructed from a resident
+            // child has no old samples of its own, but it also does not change
+            // that child's coordinate frame. Do not propagate a false frame
+            // change down the preserved hierarchy.
+            frameChanged[index] =
+                !( !hasParent &&
+                   hasResidentChild );
 
             motion.centerDirection = state.centerDirection;
             motion.surfaceFrame = state.frame;
