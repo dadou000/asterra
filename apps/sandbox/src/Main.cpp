@@ -2081,231 +2081,352 @@ int main()
             auto& backBuffer =
                 swapchain->CurrentBackBuffer();
 
-            commandList->Transition(
-                backBuffer,
-                orbit::rhi::ResourceState::Present,
-                orbit::rhi::ResourceState::RenderTarget);
+            orbit::render_graph::RenderGraph
+                frameGraph(*device);
 
-            commandList->ClearColorTarget(
-                backBuffer,
-                {
-                    .red = 0.008F,
-                    .green = 0.012F,
-                    .blue = 0.020F,
-                    .alpha = 1.0F
-                });
+            const auto viewTargets =
+                sceneView.Import(
+                    frameGraph,
+                    "SandboxView");
 
-            commandList->ClearDepthTarget(
-                *depthTarget,
-                0.0F);
-
-            commandList->SetRenderTargets(
-                backBuffer,
-                *depthTarget);
+            const auto backBufferHandle =
+                frameGraph.ImportTexture(
+                    "Swapchain",
+                    backBuffer,
+                    orbit::rhi::ResourceState::
+                        Present);
 
             const orbit::u32 timestampBase =
                 frameIndex * kTimestampsPerFrame;
-
-            commandList->WriteTimestamp(
-                *gpuTimestamps,
-                timestampBase + 0);
 
             const bool drawWholePlanetLod =
                 wholePlanetLodForced &&
                 uniformPlanet.ActiveLod() >= 0;
 
-            if (mapVisible)
-            {
-                planetMap.Draw(
-                    *commandList,
-                    backBuffer,
-                    swapchain->Width(),
-                    swapchain->Height());
-            }
-            else if (drawWholePlanetLod)
-            {
-                uniformPlanet.Draw(
-                    *commandList,
-                    observer,
-                    orbit::world::MakeSurfaceFrame(
-                        orbit::math::Normalize(
-                            observer.meters)),
-                    swapchain->Width(),
-                    swapchain->Height(),
-                    camera);
-            }
-            else
-            {
-                terrainPreview.Draw(
-                    *commandList,
-                    frameIndex,
-                    swapchain->Width(),
-                    swapchain->Height(),
-                    camera);
-
-                riverWater.Draw(
-                    *commandList,
-                    backBuffer,
-                    *depthTarget,
-                    frameIndex,
-                    swapchain->Width(),
-                    swapchain->Height(),
+            frameGraph.AddPass(
+                "Sandbox.Scene",
+                {
                     {
-                        .forward =
-                            camera.forward,
-                        .up =
-                            camera.up
-                    });
-            }
-
-            commandList->WriteTimestamp(
-                *gpuTimestamps,
-                timestampBase + 1);
-
-            commandList->WriteTimestamp(
-                *gpuTimestamps,
-                timestampBase + 2);
-
-            versionOverlay.Draw(
-                *commandList,
-                backBuffer,
-                swapchain->Width(),
-                swapchain->Height());
-
-            // Names the active map layer (ELEVATION, TECTONICS, ...) so a
-            // screenshot of the map is self-identifying -- shown whenever
-            // the map is on screen, independent of the F3 debug HUD below.
-            if (mapVisible)
-            {
-                debugOverlayLines[8]->SetText(
-                    std::format(
-                        "MAP {}",
-                        MapLayerName(
-                            planetMap.ActiveLayer())));
-
-                debugOverlayLines[8]->Draw(
-                    *commandList,
-                    backBuffer,
-                    swapchain->Width(),
-                    swapchain->Height());
-
-                // Color legend for the Tectonics layer -- the boundary
-                // colors alone (see TectonicsColor in PlanetMapRenderer.cpp)
-                // don't say which plate-tectonics subtype they mean. Uses
-                // "-" (not "=") and stays under 32 chars/line: the debug
-                // overlay font only supports A-Z 0-9 space . - : and
-                // silently truncates past that, which "=" and two longer
-                // combined lines both hit.
-                if (planetMap.ActiveLayer() ==
-                    orbit::map_render::MapLayer::Tectonics)
+                        .texture = viewTargets.color,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    },
+                    {
+                        .texture = viewTargets.depth,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                DepthWrite,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    }
+                },
+                [&](orbit::rhi::CommandList&,
+                    const orbit::render_graph::Resources&)
                 {
-                    debugOverlayLines[9]->SetText(
-                        "RED-OROGENY ORANGE-SUBDUCTION");
-                    debugOverlayLines[10]->SetText(
-                        "MAGENTA-HOTSPOT CYAN-RIDGE");
-                    debugOverlayLines[11]->SetText(
-                        "GREEN-RIFT YELLOW-TRANSFORM");
+                                commandList->Transition(
+                                    sceneView.Color(),
+                                    orbit::rhi::ResourceState::Present,
+                                    orbit::rhi::ResourceState::RenderTarget);
+                    
+                                commandList->ClearColorTarget(
+                                    sceneView.Color(),
+                                    {
+                                        .red = 0.008F,
+                                        .green = 0.012F,
+                                        .blue = 0.020F,
+                                        .alpha = 1.0F
+                                    });
+                    
+                                commandList->ClearDepthTarget(
+                                    sceneView.Depth(),
+                                    0.0F);
+                    
+                                commandList->SetRenderTargets(
+                                    sceneView.Color(),
+                                    sceneView.Depth());
+                    
+                                const orbit::u32 timestampBase =
+                                    frameIndex * kTimestampsPerFrame;
+                    
+                                commandList->WriteTimestamp(
+                                    *gpuTimestamps,
+                                    timestampBase + 0);
+                    
+                                const bool drawWholePlanetLod =
+                                    wholePlanetLodForced &&
+                                    uniformPlanet.ActiveLod() >= 0;
+                    
+                                if (mapVisible)
+                                {
+                                    planetMap.Draw(
+                                        *commandList,
+                                        sceneView.Color(),
+                                        sceneView.Width(),
+                                        sceneView.Height());
+                                }
+                                else if (drawWholePlanetLod)
+                                {
+                                    uniformPlanet.Draw(
+                                        *commandList,
+                                        observer,
+                                        orbit::world::MakeSurfaceFrame(
+                                            orbit::math::Normalize(
+                                                observer.meters)),
+                                        sceneView.Width(),
+                                        sceneView.Height(),
+                                        camera);
+                                }
+                                else
+                                {
+                                    terrainPreview.Draw(
+                                        *commandList,
+                                        frameIndex,
+                                        sceneView.Width(),
+                                        sceneView.Height(),
+                                        camera);
+                    
+                                    riverWater.Draw(
+                                        *commandList,
+                                        sceneView.Color(),
+                                        sceneView.Depth(),
+                                        frameIndex,
+                                        sceneView.Width(),
+                                        sceneView.Height(),
+                                        {
+                                            .forward =
+                                                camera.forward,
+                                            .up =
+                                                camera.up
+                                        });
+                                }
+                    
+                                commandList->WriteTimestamp(
+                                    *gpuTimestamps,
+                                    timestampBase + 1);
+                    
+                                    });
 
-                    debugOverlayLines[9]->Draw(
-                        *commandList,
-                        backBuffer,
-                        swapchain->Width(),
-                        swapchain->Height());
-
-                    debugOverlayLines[10]->Draw(
-                        *commandList,
-                        backBuffer,
-                        swapchain->Width(),
-                        swapchain->Height());
-
-                    debugOverlayLines[11]->Draw(
-                        *commandList,
-                        backBuffer,
-                        swapchain->Width(),
-                        swapchain->Height());
-                }
-            }
-
-            if (debugOverlayVisible)
-            {
-                const auto& rebase = terrainPreview.StreamingStats();
-                debugOverlayLines[5]->SetText(rebase.rebaseCount == 0
-                    ? "REBASE 0 NONE"
-                    : std::format("REBASE {} {} {} LVL {:.1f}S {}",
-                        rebase.rebaseCount, rebase.lastRebaseReason,
-                        rebase.lastRebaseLevels, rebase.secondsSinceLastRebase,
-                        rebase.secondsSinceLastRebase < 2.0 ? "NOW" : ""));
-
-                debugOverlayLines[6]->SetText(
-                    wholePlanetLodForced
-                        ? std::format(
-                            "PLANET LOD {}{}",
-                            forcedPlanetLod,
-                            uniformPlanet.Building()
-                                ? " BUILDING"
-                                : "")
-                        : "PLANET LOD AUTO");
-
-                debugOverlayLines[7]->SetText(
-                    std::format(
-                        "GPU SCENE {:.2f}MS OVERLAY {:.2f}MS",
-                        lastGpuSceneMs,
-                        lastGpuOverlayMs));
-
-                // Line 8 (the map layer name) is drawn separately above,
-                // gated on mapVisible instead of this F3 toggle.
-                for (orbit::u32 lineIndex = 0;
-                     lineIndex < 8;
-                     ++lineIndex)
+            frameGraph.AddPass(
+                "Sandbox.Composite",
                 {
-                    debugOverlayLines[lineIndex]->Draw(
-                        *commandList,
-                        backBuffer,
-                        swapchain->Width(),
-                        swapchain->Height());
-                }
-            }
-
-            if (debugVisualsMenuVisible)
-            {
-                debugVisualsLines[0]->SetText(
-                    "F2 DEBUG VISUALS MENU");
-
-                debugVisualsLines[1]->SetText(
-                    std::format(
-                        "L LOD COLOR {}",
-                        debugLodColorEnabled ? "ON" : "OFF"));
-
-                debugVisualsLines[2]->SetText(
-                    std::format(
-                        "G FREEZE GEN {}",
-                        debugGenerationFrozen ? "ON" : "OFF"));
-
-                debugVisualsLines[3]->SetText(
-                    std::format(
-                        "C SIDE CUT {}",
-                        debugSideCutEnabled ? "ON" : "OFF"));
-
-                for (orbit::u32 lineIndex = 0;
-                     lineIndex < kDebugVisualsLineCount;
-                     ++lineIndex)
+                    {
+                        .texture = viewTargets.color,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            orbit::render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture = backBufferHandle,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    }
+                },
+                [&](orbit::rhi::CommandList& commands,
+                    const orbit::render_graph::Resources&)
                 {
-                    debugVisualsLines[lineIndex]->Draw(
-                        *commandList,
+                    commands.ClearColorTarget(
+                        backBuffer,
+                        {
+                            .red = 0.008F,
+                            .green = 0.012F,
+                            .blue = 0.020F,
+                            .alpha = 1.0F
+                        });
+
+                    viewComposite.Draw(
+                        commands,
+                        sceneView.Color(),
                         backBuffer,
                         swapchain->Width(),
                         swapchain->Height());
-                }
-            }
+                });
 
-            commandList->WriteTimestamp(
-                *gpuTimestamps,
-                timestampBase + 3);
+            frameGraph.AddPass(
+                "Sandbox.Overlay",
+                {
+                    {
+                        .texture = backBufferHandle,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    }
+                },
+                [&](orbit::rhi::CommandList&,
+                    const orbit::render_graph::Resources&)
+                {
+                                commandList->WriteTimestamp(
+                                    *gpuTimestamps,
+                                    timestampBase + 2);
+                    
+                                versionOverlay.Draw(
+                                    *commandList,
+                                    backBuffer,
+                                    swapchain->Width(),
+                                    swapchain->Height());
+                    
+                                // Names the active map layer (ELEVATION, TECTONICS, ...) so a
+                                // screenshot of the map is self-identifying -- shown whenever
+                                // the map is on screen, independent of the F3 debug HUD below.
+                                if (mapVisible)
+                                {
+                                    debugOverlayLines[8]->SetText(
+                                        std::format(
+                                            "MAP {}",
+                                            MapLayerName(
+                                                planetMap.ActiveLayer())));
+                    
+                                    debugOverlayLines[8]->Draw(
+                                        *commandList,
+                                        backBuffer,
+                                        swapchain->Width(),
+                                        swapchain->Height());
+                    
+                                    // Color legend for the Tectonics layer -- the boundary
+                                    // colors alone (see TectonicsColor in PlanetMapRenderer.cpp)
+                                    // don't say which plate-tectonics subtype they mean. Uses
+                                    // "-" (not "=") and stays under 32 chars/line: the debug
+                                    // overlay font only supports A-Z 0-9 space . - : and
+                                    // silently truncates past that, which "=" and two longer
+                                    // combined lines both hit.
+                                    if (planetMap.ActiveLayer() ==
+                                        orbit::map_render::MapLayer::Tectonics)
+                                    {
+                                        debugOverlayLines[9]->SetText(
+                                            "RED-OROGENY ORANGE-SUBDUCTION");
+                                        debugOverlayLines[10]->SetText(
+                                            "MAGENTA-HOTSPOT CYAN-RIDGE");
+                                        debugOverlayLines[11]->SetText(
+                                            "GREEN-RIFT YELLOW-TRANSFORM");
+                    
+                                        debugOverlayLines[9]->Draw(
+                                            *commandList,
+                                            backBuffer,
+                                            swapchain->Width(),
+                                            swapchain->Height());
+                    
+                                        debugOverlayLines[10]->Draw(
+                                            *commandList,
+                                            backBuffer,
+                                            swapchain->Width(),
+                                            swapchain->Height());
+                    
+                                        debugOverlayLines[11]->Draw(
+                                            *commandList,
+                                            backBuffer,
+                                            swapchain->Width(),
+                                            swapchain->Height());
+                                    }
+                                }
+                    
+                                if (debugOverlayVisible)
+                                {
+                                    const auto& rebase = terrainPreview.StreamingStats();
+                                    debugOverlayLines[5]->SetText(rebase.rebaseCount == 0
+                                        ? "REBASE 0 NONE"
+                                        : std::format("REBASE {} {} {} LVL {:.1f}S {}",
+                                            rebase.rebaseCount, rebase.lastRebaseReason,
+                                            rebase.lastRebaseLevels, rebase.secondsSinceLastRebase,
+                                            rebase.secondsSinceLastRebase < 2.0 ? "NOW" : ""));
+                    
+                                    debugOverlayLines[6]->SetText(
+                                        wholePlanetLodForced
+                                            ? std::format(
+                                                "PLANET LOD {}{}",
+                                                forcedPlanetLod,
+                                                uniformPlanet.Building()
+                                                    ? " BUILDING"
+                                                    : "")
+                                            : "PLANET LOD AUTO");
+                    
+                                    debugOverlayLines[7]->SetText(
+                                        std::format(
+                                            "GPU SCENE {:.2f}MS OVERLAY {:.2f}MS",
+                                            lastGpuSceneMs,
+                                            lastGpuOverlayMs));
+                    
+                                    // Line 8 (the map layer name) is drawn separately above,
+                                    // gated on mapVisible instead of this F3 toggle.
+                                    for (orbit::u32 lineIndex = 0;
+                                         lineIndex < 8;
+                                         ++lineIndex)
+                                    {
+                                        debugOverlayLines[lineIndex]->Draw(
+                                            *commandList,
+                                            backBuffer,
+                                            swapchain->Width(),
+                                            swapchain->Height());
+                                    }
+                                }
+                    
+                                if (debugVisualsMenuVisible)
+                                {
+                                    debugVisualsLines[0]->SetText(
+                                        "F2 DEBUG VISUALS MENU");
+                    
+                                    debugVisualsLines[1]->SetText(
+                                        std::format(
+                                            "L LOD COLOR {}",
+                                            debugLodColorEnabled ? "ON" : "OFF"));
+                    
+                                    debugVisualsLines[2]->SetText(
+                                        std::format(
+                                            "G FREEZE GEN {}",
+                                            debugGenerationFrozen ? "ON" : "OFF"));
+                    
+                                    debugVisualsLines[3]->SetText(
+                                        std::format(
+                                            "C SIDE CUT {}",
+                                            debugSideCutEnabled ? "ON" : "OFF"));
+                    
+                                    for (orbit::u32 lineIndex = 0;
+                                         lineIndex < kDebugVisualsLineCount;
+                                         ++lineIndex)
+                                    {
+                                        debugVisualsLines[lineIndex]->Draw(
+                                            *commandList,
+                                            backBuffer,
+                                            swapchain->Width(),
+                                            swapchain->Height());
+                                    }
+                                }
+                    
+                                commandList->WriteTimestamp(
+                                    *gpuTimestamps,
+                                    timestampBase + 3);
+                    
+                                    });
 
-            commandList->Transition(
-                backBuffer,
-                orbit::rhi::ResourceState::RenderTarget,
-                orbit::rhi::ResourceState::Present);
+            frameGraph.AddPass(
+                "Sandbox.Present",
+                {
+                    {
+                        .texture = backBufferHandle,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                Present,
+                        .access =
+                            orbit::render_graph::Access::
+                                Read
+                    }
+                },
+                {});
+
+            frameGraph.Execute(*commandList);
 
             commandList->Close();
             graphicsQueue->Submit(*commandList);
