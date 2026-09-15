@@ -530,7 +530,53 @@ UiSize PanelContext::ContentAvailable() const
     };
 }
 
-void PanelContext::Image(
+bool PanelContext::Selectable(
+    const std::string_view label,
+    const bool selected)
+{
+    const std::string owned(label);
+
+    return ImGui::Selectable(
+        owned.c_str(),
+        selected);
+}
+
+TreeItemInteraction PanelContext::TreeItem(
+    const std::string_view label,
+    const bool selected)
+{
+    const std::string owned(label);
+
+    ImGuiTreeNodeFlags flags =
+        ImGuiTreeNodeFlags_OpenOnArrow |
+        ImGuiTreeNodeFlags_OpenOnDoubleClick |
+        ImGuiTreeNodeFlags_SpanAvailWidth;
+
+    if (selected)
+    {
+        flags |=
+            ImGuiTreeNodeFlags_Selected;
+    }
+
+    const bool open =
+        ImGui::TreeNodeEx(
+            owned.c_str(),
+            flags);
+
+    return {
+        .open = open,
+        .clicked =
+            ImGui::IsItemClicked(
+                ImGuiMouseButton_Left)
+    };
+}
+
+void PanelContext::TreePop()
+{
+    ImGui::TreePop();
+}
+
+ImageInteraction PanelContext::Image(
     rhi::Texture& texture,
     const UiSize size)
 {
@@ -539,6 +585,203 @@ void PanelContext::Image(
         ImVec2(
             size.width,
             size.height));
+
+    const bool hovered =
+        ImGui::IsItemHovered();
+
+    const bool clicked =
+        ImGui::IsItemClicked(
+            ImGuiMouseButton_Left);
+
+    f32 u = 0.0F;
+    f32 v = 0.0F;
+
+    if (hovered &&
+        size.width > 0.0F &&
+        size.height > 0.0F)
+    {
+        const ImVec2 minimum =
+            ImGui::GetItemRectMin();
+
+        const ImVec2 mouse =
+            ImGui::GetMousePos();
+
+        u = std::clamp(
+            (mouse.x - minimum.x) /
+                size.width,
+            0.0F,
+            1.0F);
+
+        v = std::clamp(
+            (mouse.y - minimum.y) /
+                size.height,
+            0.0F,
+            1.0F);
+    }
+
+    return {
+        .hovered = hovered,
+        .clicked = clicked,
+        .u = u,
+        .v = v
+    };
+}
+
+bool PanelContext::Checkbox(
+    const std::string_view label,
+    bool& value)
+{
+    const std::string owned(label);
+    return ImGui::Checkbox(
+        owned.c_str(),
+        &value);
+}
+
+bool PanelContext::InputDouble(
+    const std::string_view label,
+    f64& value)
+{
+    const std::string owned(label);
+
+    return ImGui::InputDouble(
+        owned.c_str(),
+        &value,
+        0.0,
+        0.0,
+        "%.6g");
+}
+
+bool PanelContext::InputInteger(
+    const std::string_view label,
+    i64& value)
+{
+    const std::string owned(label);
+
+    ImS64 native =
+        static_cast<ImS64>(
+            value);
+
+    if (!ImGui::InputScalar(
+            owned.c_str(),
+            ImGuiDataType_S64,
+            &native))
+    {
+        return false;
+    }
+
+    value =
+        static_cast<i64>(
+            native);
+
+    return true;
+}
+
+bool PanelContext::InputDouble3(
+    const std::string_view label,
+    math::Double3& value)
+{
+    const std::string owned(label);
+
+    std::array<double, 3> native{
+        value.x,
+        value.y,
+        value.z
+    };
+
+    if (!ImGui::InputScalarN(
+            owned.c_str(),
+            ImGuiDataType_Double,
+            native.data(),
+            3))
+    {
+        return false;
+    }
+
+    value = {
+        native[0],
+        native[1],
+        native[2]
+    };
+
+    return true;
+}
+
+bool PanelContext::ControlDown() const noexcept
+{
+    return ImGui::GetIO().KeyCtrl;
+}
+
+bool PanelContext::BeginDragSource()
+{
+    return ImGui::BeginDragDropSource(
+        ImGuiDragDropFlags_SourceAllowNullID);
+}
+
+void PanelContext::SetDragPayload(
+    const std::string_view type,
+    const std::span<const std::byte> bytes)
+{
+    if (type.empty())
+    {
+        throw std::invalid_argument(
+            "Editor drag payload type must not be empty.");
+    }
+
+    const std::string ownedType(type);
+
+    ImGui::SetDragDropPayload(
+        ownedType.c_str(),
+        bytes.data(),
+        bytes.size());
+}
+
+void PanelContext::EndDragSource()
+{
+    ImGui::EndDragDropSource();
+}
+
+std::optional<std::vector<std::byte>>
+PanelContext::AcceptDragPayload(
+    const std::string_view type)
+{
+    if (type.empty())
+    {
+        return std::nullopt;
+    }
+
+    if (!ImGui::BeginDragDropTarget())
+    {
+        return std::nullopt;
+    }
+
+    const std::string ownedType(type);
+
+    const ImGuiPayload* payload =
+        ImGui::AcceptDragDropPayload(
+            ownedType.c_str());
+
+    std::optional<
+        std::vector<std::byte>>
+        result;
+
+    if (payload != nullptr &&
+        payload->Data != nullptr &&
+        payload->DataSize > 0)
+    {
+        const auto* begin =
+            static_cast<
+                const std::byte*>(
+                    payload->Data);
+
+        result =
+            std::vector<std::byte>(
+                begin,
+                begin +
+                    payload->DataSize);
+    }
+
+    ImGui::EndDragDropTarget();
+    return result;
 }
 
 void PanelContext::SameLine()
