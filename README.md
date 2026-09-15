@@ -8,6 +8,12 @@ The `orbit` branch is intentionally independent of Godot. The previous Godot imp
 
 The first milestone establishes a strict modular engine layout, a native Windows runtime, C++23 build configuration, explicit platform boundaries, and the foundation for D3D12, the planetary world database, concentric terrain clipmaps, runtime editing, and procedural blueprints.
 
+## V0.0.3 — Celestial Authoring Scaffold
+
+The next architecture milestone generalizes Orbit from a terrain-focused planetary runtime into a frame-aware celestial authoring engine with a permanent project/editor/plugin/MCP scaffold.
+
+Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor, asset, path, plugin, build or platform-service systems. It defines the small implementation milestones, CPU/GPU residency rules, Orbit Studio editor architecture, Luau plugin model, project persistence, Material Service, dynamic path networks, MCP V2 and Steam integration boundary.
+
 ## Build
 
 ### One-click Windows build
