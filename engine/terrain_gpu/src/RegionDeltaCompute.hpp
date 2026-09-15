@@ -34,6 +34,8 @@ struct PushConstants
     // back to back this way, with no implicit padding for the C++
     // side to have to reproduce (see GpuRegionDelta.cpp's push
     // constant layout comment).
+    // fineUp.w / fineEast.w carry the clipmap window center offset
+    // inside the stable spherical lattice frame.
     float4 fineUp;
     float4 fineEast;
     float4 fineNorth;
@@ -140,7 +142,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
     float halfCells = (float(g_pc.resolution) - 1.0) * 0.5;
     float2 fineOffsetMeters =
-        (float2(float(logicalX), float(logicalY)) - halfCells) * g_pc.spacingMeters;
+        float2(g_pc.fineUp.w, g_pc.fineEast.w) +
+        (float2(float(logicalX), float(logicalY)) - halfCells) *
+            g_pc.spacingMeters;
 
     float3 direction = DirectionAtSurfaceOffset(
         g_pc.fineUp.xyz, g_pc.fineEast.xyz, g_pc.fineNorth.xyz,
