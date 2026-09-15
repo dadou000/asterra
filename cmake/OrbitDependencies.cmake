@@ -25,3 +25,36 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(sqlitecpp tomlplusplus)
+
+
+# Dear ImGui is the long-term native editor widget/docking implementation.
+# Orbit owns the public editor UI abstraction and renderer/input adapters;
+# plugin/public engine APIs never expose ImGui types.
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.91.9b-docking
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(imgui)
+
+add_library(OrbitThirdPartyImGui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+)
+
+target_include_directories(OrbitThirdPartyImGui
+    PUBLIC
+        ${imgui_SOURCE_DIR}
+)
+
+target_compile_features(OrbitThirdPartyImGui PUBLIC cxx_std_23)
+
+if(MSVC)
+    target_compile_options(OrbitThirdPartyImGui PRIVATE /W0)
+endif()
+
+add_library(Orbit::ThirdPartyImGui ALIAS OrbitThirdPartyImGui)
