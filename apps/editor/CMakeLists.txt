@@ -5,6 +5,10 @@ add_executable(OrbitStudio
 target_link_libraries(OrbitStudio
     PRIVATE
         Orbit::Core
+        Orbit::Selection
+        Orbit::Schema
+        Orbit::Scene
+        Orbit::Commands
         Orbit::Documents
         Orbit::EditorModel
         Orbit::EditorUi
