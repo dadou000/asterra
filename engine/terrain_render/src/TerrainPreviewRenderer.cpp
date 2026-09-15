@@ -47,7 +47,7 @@ namespace
     };
 }
 
-[[nodiscard]] std::array<u32, 42> BuildDrawConstants(
+[[nodiscard]] std::array<u32, 44> BuildDrawConstants(
     const math::Mat4& matrix,
     const f32 planetRadiusMeters,
     const f32 observerRadiusMeters,
@@ -61,7 +61,7 @@ namespace
     const bool debugLodColorEnabled,
     const bool debugSideCutEnabled) noexcept
 {
-    std::array<u32, 42> result{};
+    std::array<u32, 44> result{};
 
     static_assert(
         sizeof(matrix.values) ==
@@ -206,7 +206,9 @@ struct DrawConstants
     // w = inner-hole center Y in this level's local tangent frame.
     float4 g_debug;
     // Stable spherical-lattice offset of this LOD window center.
-    float2 g_centerOffsetMeters;
+    // Kept as a full float4 so the push-constant block remains naturally
+    // 16-byte aligned across D3D-style HLSL packing and Vulkan.
+    float4 g_centerOffsetMeters;
 };
 [[vk::push_constant]] DrawConstants g_pc;
 
@@ -1280,7 +1282,7 @@ private:
                     },
                     .vertexAttributes = {},
                     .vertexStrideBytes = 0,
-                    .pushConstantDwords = 42,
+                    .pushConstantDwords = 44,
                     .shaderResourceBuffers = 1,
                     .topology =
                         rhi::
