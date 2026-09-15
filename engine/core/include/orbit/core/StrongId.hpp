@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstddef>
+#include <compare>
 #include <functional>
 #include <optional>
 #include <random>
