@@ -53,7 +53,10 @@ jobs:
         run: cmake --build build --config Release
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        # Hosted GitHub Windows runners expose no Vulkan physical device.
+        # GPU tests are still compiled above; execute them on Vulkan-capable
+        # developer/self-hosted machines via plain ctest.
+        run: ctest --test-dir build -C Release -LE gpu --output-on-failure
 
       - name: Package Windows build
         shell: pwsh
