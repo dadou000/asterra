@@ -89,8 +89,11 @@ int main()
     const auto* lumaRecord =
         bodies.FindBody(luma);
 
-    assert(asterraRecord != nullptr);
-    assert(lumaRecord != nullptr);
+    if (asterraRecord == nullptr ||
+        lumaRecord == nullptr)
+    {
+        return 1;
+    }
     assert(
         orbit::universe::
             ReferenceRadiusMeters(
