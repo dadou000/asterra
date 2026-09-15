@@ -48,6 +48,8 @@ RenderGraph::RenderGraph(
 {
 }
 
+RenderGraph::~RenderGraph() = default;
+
 TextureHandle RenderGraph::ImportTexture(
     const std::string_view name,
     rhi::Texture& texture,
