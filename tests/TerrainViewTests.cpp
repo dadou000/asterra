@@ -331,76 +331,89 @@ int main()
 
     if (oneCell.levels[0].cellShiftX != 1 ||
         oneCell.levels[0].cellShiftY != 0 ||
-        !oneCell.levels[0].fullRefresh)
+        oneCell.levels[0].fullRefresh)
     {
         std::cerr
-            << "Spherical clipmap recenter did not force a full level refresh.\n";
+            << "Stable spherical lattice did not reuse a one-cell toroidal shift.\n";
         return 1;
     }
 
-    if (oneCell.levels[1].cellShiftX != 0)
+    if (oneCell.levels[1].cellShiftX != 0 ||
+        oneCell.levels[1].fullRefresh)
     {
-        std::cerr << "Coarser clipmap moved too early.\n";
+        std::cerr << "Coarser clipmap moved or refreshed too early.\n";
         return 1;
     }
 
-    // Adjacent LOD frames must not acquire independent path-dependent roll.
-    // Each fine frame is the direct parallel transport of its coarse parent
-    // to the fine center.
+    // Every LOD must retain exactly the same anchor frame between rare global
+    // rebases. Independent per-level frame rotation is what previously made
+    // retained toroidal samples acquire a different world-space address.
     for (orbit::u32 index = 0;
-         index + 1U < config.levelCount;
+         index < config.levelCount;
          ++index)
     {
-        const auto expectedFineFrame =
-            orbit::world::TransportSurfaceFrameToDirection(
-                oneCell.levels[index + 1U].surfaceFrame,
-                oneCell.levels[index].centerDirection);
-
         if (orbit::math::Length(
-                expectedFineFrame.east -
-                oneCell.levels[index].surfaceFrame.east) >
+                oneCell.levels[index].surfaceFrame.east -
+                startFrame.east) >
                 1.0e-12 ||
             orbit::math::Length(
-                expectedFineFrame.north -
-                oneCell.levels[index].surfaceFrame.north) >
+                oneCell.levels[index].surfaceFrame.north -
+                startFrame.north) >
+                1.0e-12 ||
+            orbit::math::Length(
+                oneCell.levels[index].surfaceFrame.up -
+                startFrame.up) >
                 1.0e-12)
         {
             std::cerr
-                << "Adjacent clipmap frames lost hierarchical phase alignment.\n";
+                << "Clipmap LODs did not retain the shared stable lattice frame.\n";
             return 1;
         }
     }
 
-    const orbit::math::Double2 observerFromSnappedCenter =
+    const orbit::math::Double2 observerFromAnchor =
         orbit::world::SurfaceOffsetBetweenDirections(
             planet,
             oneCell.levels[0].surfaceFrame,
             orbit::math::Normalize(makeObserver(51.0).meters));
 
-    if (std::abs(observerFromSnappedCenter.x) > 50.0 + 1.0e-6)
+    const orbit::math::Double2 observerFromSnappedCenter{
+        observerFromAnchor.x -
+            oneCell.levels[0].centerOffsetMeters.x,
+        observerFromAnchor.y -
+            oneCell.levels[0].centerOffsetMeters.y
+    };
+
+    if (std::abs(observerFromSnappedCenter.x) > 50.0 + 1.0e-6 ||
+        std::abs(observerFromSnappedCenter.y) > 50.0 + 1.0e-6)
     {
         std::cerr << "Clipmap snap did not keep observer within half a cell.\n";
         return 1;
     }
 
-    // Demonstrate why strip-only toroidal reuse is invalid on a sphere.
-    // A retained sample that would be translated to compensate for the
-    // center shift does not land on its former world direction.
+    // A retained physical sample changes logical index when the toroidal
+    // origin advances, but centerOffset advances by the exact opposite world
+    // distance. Its absolute lattice coordinate must therefore be unchanged.
     const orbit::math::Double2 retainedOldOffset{3'200.0, 2'700.0};
     const orbit::math::Double3 retainedOldDirection =
         orbit::world::DirectionAtSurfaceOffset(
             planet,
             startFrame,
             retainedOldOffset);
+
+    const orbit::math::Double2 retainedNewAbsoluteOffset{
+        oneCell.levels[0].centerOffsetMeters.x +
+            retainedOldOffset.x -
+            config.baseSpacingMeters,
+        oneCell.levels[0].centerOffsetMeters.y +
+            retainedOldOffset.y
+    };
+
     const orbit::math::Double3 retainedAfterRecenter =
         orbit::world::DirectionAtSurfaceOffset(
             planet,
             oneCell.levels[0].surfaceFrame,
-            {
-                retainedOldOffset.x -
-                    config.baseSpacingMeters,
-                retainedOldOffset.y
-            });
+            retainedNewAbsoluteOffset);
 
     const orbit::f64 retainedDriftMeters =
         std::acos(
@@ -412,19 +425,38 @@ int main()
                 1.0)) *
         planet.radiusMeters;
 
-    if (retainedDriftMeters <= 1.0e-5)
+    if (retainedDriftMeters > 1.0e-5)
     {
         std::cerr
-            << "Spherical reuse regression failed to expose retained-sample drift.\n";
+            << "Stable spherical lattice changed a retained toroidal sample address.\n";
         return 1;
     }
 
     const auto multiCell = tracker.Update(makeObserver(451.0));
 
-    if (std::abs(multiCell.levels[0].cellShiftX) < 3)
+    if (std::abs(multiCell.levels[0].cellShiftX) < 3 ||
+        multiCell.levels[0].fullRefresh)
     {
-        std::cerr << "Multi-cell clipmap jump was not detected.\n";
+        std::cerr
+            << "Multi-cell clipmap jump did not stay on the toroidal fast path.\n";
         return 1;
+    }
+
+    const auto rebased =
+        tracker.Update(
+            makeObserver(
+                planet.radiusMeters * 0.026));
+
+    for (const auto& level : rebased.levels)
+    {
+        if (!level.fullRefresh ||
+            level.cellShiftX != 0 ||
+            level.cellShiftY != 0)
+        {
+            std::cerr
+                << "Long-distance spherical lattice rebase did not refresh coherently.\n";
+            return 1;
+        }
     }
 
     tracker.Reset();
