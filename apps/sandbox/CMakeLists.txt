@@ -13,6 +13,7 @@ target_link_libraries(OrbitSandbox
         Orbit::Math
         Orbit::Platform
         Orbit::RhiVulkan
+        Orbit::Runtime
         Orbit::ShaderDxc
         Orbit::Terrain
         Orbit::TerrainCache
