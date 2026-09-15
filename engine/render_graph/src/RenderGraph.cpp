@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
