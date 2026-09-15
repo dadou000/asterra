@@ -60,6 +60,11 @@ public:
     [[nodiscard]] std::vector<ObjectRecord>
     Children(ObjectId parent) const;
 
+    [[nodiscard]] std::vector<ObjectRecord>
+    SearchByName(
+        std::string_view query,
+        u32 limit = 128) const;
+
     [[nodiscard]] std::optional<
         schema::PropertyValue>
     GetProperty(
