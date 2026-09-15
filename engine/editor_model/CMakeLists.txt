@@ -1,4 +1,6 @@
 add_library(OrbitEditorModel STATIC
+    src/ExplorerModel.cpp
+    src/InspectorModel.cpp
     src/OutputLog.cpp
 )
 
@@ -11,6 +13,7 @@ target_include_directories(OrbitEditorModel
 
 target_link_libraries(OrbitEditorModel
     PUBLIC
+        Orbit::Commands
         Orbit::Core
         Orbit::Documents
         Orbit::Scene
