@@ -184,6 +184,122 @@ int main()
         }
     }
 
+    // The fine and coarse centers are independently snapped, so their relative
+    // phase can be half a coarse cell on either axis. A coarse cell may be
+    // removed only when the complete cell lies inside the finer guaranteed
+    // coverage. This is the coverage-first invariant used by the working Godot
+    // terrain handoff and prevents rectangular holes at clipmap boundaries.
+    {
+        const auto& coarse = layout.levels[1];
+        const orbit::f64 spacing =
+            coarse.sampleSpacingMeters;
+        const orbit::f64 halfCell =
+            spacing * 0.5;
+        const orbit::u32 cellsPerAxis =
+            coarse.gridResolution - 1U;
+
+        bool exercisedPartialCell = false;
+
+        for (const orbit::f64 phaseX :
+             {-halfCell, 0.0, halfCell})
+        {
+            for (const orbit::f64 phaseY :
+                 {-halfCell, 0.0, halfCell})
+            {
+                for (orbit::u32 y = 0;
+                     y < cellsPerAxis;
+                     ++y)
+                {
+                    for (orbit::u32 x = 0;
+                         x < cellsPerAxis;
+                         ++x)
+                    {
+                        const orbit::f64 centerX =
+                            (static_cast<orbit::f64>(x) +
+                             0.5 -
+                             static_cast<orbit::f64>(
+                                 cellsPerAxis) *
+                                 0.5) *
+                            spacing;
+
+                        const orbit::f64 centerY =
+                            (static_cast<orbit::f64>(y) +
+                             0.5 -
+                             static_cast<orbit::f64>(
+                                 cellsPerAxis) *
+                                 0.5) *
+                            spacing;
+
+                        const bool fullyCovered =
+                            orbit::terrain_view::
+                                ClipmapCellFullyInsideInnerHole(
+                                    coarse,
+                                    centerX,
+                                    centerY,
+                                    phaseX,
+                                    phaseY);
+
+                        const bool centerInside =
+                            std::abs(
+                                centerX -
+                                phaseX) <
+                                coarse.
+                                    innerHoleHalfExtentMeters &&
+                            std::abs(
+                                centerY -
+                                phaseY) <
+                                coarse.
+                                    innerHoleHalfExtentMeters;
+
+                        if (centerInside &&
+                            !fullyCovered)
+                        {
+                            exercisedPartialCell = true;
+                        }
+
+                        if (!fullyCovered)
+                        {
+                            continue;
+                        }
+
+                        const orbit::f64 farX =
+                            std::abs(
+                                centerX -
+                                phaseX) +
+                            halfCell;
+
+                        const orbit::f64 farY =
+                            std::abs(
+                                centerY -
+                                phaseY) +
+                            halfCell;
+
+                        if (farX >
+                                coarse.
+                                    innerHoleHalfExtentMeters +
+                                    1.0e-9 ||
+                            farY >
+                                coarse.
+                                    innerHoleHalfExtentMeters +
+                                    1.0e-9)
+                        {
+                            std::cerr
+                                << "Clipmap hole removed a coarse cell not fully covered by the finer level.\n";
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!exercisedPartialCell)
+        {
+            std::cerr
+                << "Clipmap coverage regression did not exercise a half-cell phase boundary.\n";
+            return 1;
+        }
+    }
+
     const orbit::f64 baseOuterExtent =
         orbit::terrain_view::
             ClipmapOuterHalfExtentMeters(
