@@ -322,7 +322,9 @@ void GpuFieldGenerator::Dispatch(
     storeUint(14, request.region.width);
     storeUint(15, request.region.height);
     storeFloat3(16, request.surfaceFrame.up);
+    storeFloat(19, request.centerOffsetMeters.x);
     storeFloat3(20, request.surfaceFrame.east);
+    storeFloat(23, request.centerOffsetMeters.y);
     storeFloat3(24, request.surfaceFrame.north);
     storeFloat3(28, request.coarseSurfaceFrame.up);
     storeFloat3(32, request.coarseSurfaceFrame.east);

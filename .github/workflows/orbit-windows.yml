@@ -13,14 +13,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          if (-not (Test-Path "$sdk\Include\vulkan\vulkan.h") -or
+              -not (Test-Path "$sdk\Lib\vulkan-1.lib")) {
+            throw "Vulkan SDK was not installed at the expected path: $sdk"
+          }
+
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Configure
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build terrain clipmap regression targets
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender
+
+      - name: Run terrain clipmap regression tests
+        shell: pwsh
+        run: |
+          & "build/tests/Release/OrbitTerrainViewTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitTerrainViewTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/tests/Release/OrbitTerrainMorphRefreshTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitTerrainMorphRefreshTests failed with exit code $LASTEXITCODE"
+          }
 
       - name: Build
         run: cmake --build build --config Release
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        # Hosted GitHub Windows runners expose no Vulkan physical device.
+        # GPU tests are still compiled above; execute them on Vulkan-capable
+        # developer/self-hosted machines via plain ctest.
+        run: ctest --test-dir build -C Release -LE gpu --output-on-failure
 
       - name: Package Windows build
         shell: pwsh

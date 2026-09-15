@@ -15,8 +15,17 @@ struct ClipmapLevelMotion
     u32 levelIndex{0};
     i64 cellShiftX{0};
     i64 cellShiftY{0};
+
+    // Snapped center of this level on the shared spherical lattice.
     math::Double3 centerDirection{};
+
+    // Stable anchor frame shared by every active LOD. Samples are addressed
+    // from this frame plus centerOffsetMeters; the frame does not rotate on
+    // ordinary cell shifts, so retained toroidal samples keep the exact same
+    // world-space address.
     world::SurfaceFrame surfaceFrame{};
+    math::Double2 centerOffsetMeters{};
+
     bool fullRefresh{false};
 };
 
@@ -36,7 +45,7 @@ public:
         const world::WorldPosition& observer);
 
     void Reset() noexcept;
-    // Refresh data without relocating or rotating the sampling lattice.
+    // Refresh data without relocating the stable sampling lattice.
     void InvalidateSamples() noexcept;
     [[nodiscard]] ClipmapTracker Reconfigured(ClipmapConfig config) const;
 
@@ -47,12 +56,15 @@ private:
     {
         bool initialized{false};
         bool samplesInvalidated{false};
+        math::Double2 centerOffsetMeters{};
         math::Double3 centerDirection{};
-        world::SurfaceFrame frame{};
     };
 
     world::PlanetDefinition planet_;
     ClipmapConfig config_;
     std::vector<LevelState> levels_;
+
+    bool latticeInitialized_{false};
+    world::SurfaceFrame latticeFrame_{};
 };
 } // namespace orbit::terrain_view

@@ -471,7 +471,7 @@ TerrainSampleStreamer::GeneratePatch(
                         request.originX),
                     request.resolution);
 
-            const math::Double2 offsetMeters{
+            const math::Double2 localOffsetMeters{
                 (static_cast<f64>(
                      logicalX) -
                  halfCells) *
@@ -482,11 +482,18 @@ TerrainSampleStreamer::GeneratePatch(
                     request.spacingMeters
             };
 
+            const math::Double2 surfaceOffsetMeters{
+                request.centerOffsetMeters.x +
+                    localOffsetMeters.x,
+                request.centerOffsetMeters.y +
+                    localOffsetMeters.y
+            };
+
             const math::Double3 direction =
                 world::DirectionAtSurfaceOffset(
                     planet_,
                     request.surfaceFrame,
-                    offsetMeters);
+                    surfaceOffsetMeters);
 
             terrain::TerrainSample sample =
                 terrainSource_.Sample({
@@ -498,12 +505,12 @@ TerrainSampleStreamer::GeneratePatch(
                 });
 
             math::Double2 morphTarget =
-                offsetMeters;
+                surfaceOffsetMeters;
 
             math::Double2 fineSlope =
                 SampleFineSlope(
                     request.surfaceFrame,
-                    offsetMeters,
+                    surfaceOffsetMeters,
                     fineNormalFootprintMeters,
                     fineNormalEpsilonMeters);
 
@@ -554,9 +561,9 @@ TerrainSampleStreamer::GeneratePatch(
                 const f64 edgeDistance =
                     std::max(
                         std::abs(
-                            offsetMeters.x),
+                            localOffsetMeters.x),
                         std::abs(
-                            offsetMeters.y));
+                            localOffsetMeters.y));
 
                 const f64 normalized =
                     std::clamp(

@@ -47,9 +47,8 @@ namespace
     };
 }
 
-[[nodiscard]] std::array<u32, 40> BuildDrawConstants(
+[[nodiscard]] std::array<u32, 44> BuildDrawConstants(
     const math::Mat4& matrix,
-    const world::PlanetDefinition& planet,
     const f32 planetRadiusMeters,
     const f32 observerRadiusMeters,
     const terrain_view::ClipmapLevel& level,
@@ -62,7 +61,7 @@ namespace
     const bool debugLodColorEnabled,
     const bool debugSideCutEnabled) noexcept
 {
-    std::array<u32, 40> result{};
+    std::array<u32, 44> result{};
 
     static_assert(
         sizeof(matrix.values) ==
@@ -93,14 +92,16 @@ namespace
     if (finerMotion != nullptr &&
         level.innerHoleHalfExtentMeters > 0.0)
     {
-        // The finer and coarser levels snap independently. The hole in this
-        // ring must therefore follow the actual finer-level center rather
-        // than being assumed to sit at this level's local (0,0).
-        innerHoleCenterOffset =
-            world::SurfaceOffsetBetweenDirections(
-                planet,
-                motion.surfaceFrame,
-                finerMotion->surfaceFrame.up);
+        // All LODs share one stable spherical lattice. Their independently
+        // snapped centers are therefore expressed in the same chart, so the
+        // coarse ring hole is an exact integer-lattice offset with no
+        // spherical reprojection/phase ambiguity.
+        innerHoleCenterOffset = {
+            finerMotion->centerOffsetMeters.x -
+                motion.centerOffsetMeters.x,
+            finerMotion->centerOffsetMeters.y -
+                motion.centerOffsetMeters.y
+        };
     }
 
     const auto store =
@@ -176,6 +177,15 @@ namespace
         static_cast<f32>(
             innerHoleCenterOffset.y));
 
+    store(
+        40,
+        static_cast<f32>(
+            motion.centerOffsetMeters.x));
+    store(
+        41,
+        static_cast<f32>(
+            motion.centerOffsetMeters.y));
+
     return result;
 }
 
@@ -195,6 +205,10 @@ struct DrawConstants
     // float), y = LOD-color override enabled, z = side-cut enabled,
     // w = inner-hole center Y in this level's local tangent frame.
     float4 g_debug;
+    // Stable spherical-lattice offset of this LOD window center.
+    // Kept as a full float4 so the push-constant block remains naturally
+    // 16-byte aligned across D3D-style HLSL packing and Vulkan.
+    float4 g_centerOffsetMeters;
 };
 [[vk::push_constant]] DrawConstants g_pc;
 
@@ -420,12 +434,16 @@ VSOutput main(uint vertexId : SV_VertexID)
         ((float)resolution - 1.0) *
         0.5;
 
-    float2 offsetMeters =
+    float2 localOffsetMeters =
         (float2(
             (float)logicalX,
             (float)logicalY) -
          halfCells) *
         spacing;
+
+    float2 offsetMeters =
+        g_pc.g_centerOffsetMeters +
+        localOffsetMeters;
 
     const float morphStart =
         g_pc.g_centerNorthAndMorphStart.w;
@@ -440,8 +458,8 @@ VSOutput main(uint vertexId : SV_VertexID)
     {
         const float edgeDistance =
             max(
-                abs(offsetMeters.x),
-                abs(offsetMeters.y));
+                abs(localOffsetMeters.x),
+                abs(localOffsetMeters.y));
 
         const float normalized =
             saturate(
@@ -484,10 +502,10 @@ VSOutput main(uint vertexId : SV_VertexID)
         const float holeDistance =
             max(
                 abs(
-                    offsetMeters.x -
+                    localOffsetMeters.x -
                     innerHoleCenterOffsetMeters.x),
                 abs(
-                    offsetMeters.y -
+                    localOffsetMeters.y -
                     innerHoleCenterOffsetMeters.y));
 
         const float seamT =
@@ -1022,7 +1040,6 @@ public:
             const auto constants =
                 BuildDrawConstants(
                     mvp,
-                    planet_,
                     static_cast<f32>(
                         planet_.
                             radiusMeters),
@@ -1265,7 +1282,7 @@ private:
                     },
                     .vertexAttributes = {},
                     .vertexStrideBytes = 0,
-                    .pushConstantDwords = 40,
+                    .pushConstantDwords = 44,
                     .shaderResourceBuffers = 1,
                     .topology =
                         rhi::
@@ -1469,6 +1486,10 @@ private:
                 .fineNormalEpsilonMeters =
                     candidate.layout.levels[0].
                         sampleSpacingMeters,
+                .centerOffsetMeters =
+                    candidate.motion.levels[
+                        levelIndex].
+                        centerOffsetMeters,
                 .surfaceFrame =
                     candidate.motion.levels[
                         levelIndex].
@@ -1787,6 +1808,9 @@ private:
                         .fineNormalEpsilonMeters =
                             update.request.
                                 fineNormalEpsilonMeters,
+                        .centerOffsetMeters =
+                            update.request.
+                                centerOffsetMeters,
                         .surfaceFrame =
                             update.request.
                                 surfaceFrame,
@@ -1871,7 +1895,10 @@ private:
 
         const terrain_region::DerivedTerrainRegionId regionId =
             hydrologyRegionCache_->IdForDirection(
-                request.surfaceFrame.up);
+                world::DirectionAtSurfaceOffset(
+                    planet_,
+                    request.surfaceFrame,
+                    request.centerOffsetMeters));
 
         const auto hydrologyRegion =
             hydrologyRegionCache_->TryGet(regionId);
@@ -1893,6 +1920,8 @@ private:
         deltaRequest.resolution = request.resolution;
         deltaRequest.spacingMeters = request.spacingMeters;
         deltaRequest.surfaceFrame = request.surfaceFrame;
+        deltaRequest.centerOffsetMeters =
+            request.centerOffsetMeters;
         deltaRequest.originX = request.originX;
         deltaRequest.originY = request.originY;
         deltaRequest.region = {

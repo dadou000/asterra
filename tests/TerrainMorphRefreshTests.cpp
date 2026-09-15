@@ -48,6 +48,7 @@ terrain_stream::TerrainSampleRequest MakeRequest(
         .morphEndHalfExtentMeters = level.morphEndHalfExtentMeters,
         .coarseSpacingMeters = coarse.sampleSpacingMeters,
         .coarseFootprintMeters = coarse.terrainFootprintMeters,
+        .centerOffsetMeters = motion.levels[index].centerOffsetMeters,
         .surfaceFrame = motion.levels[index].surfaceFrame,
         .coarseSurfaceFrame = motion.levels[coarseIndex].surfaceFrame,
         .originX = update.originX,
@@ -103,11 +104,15 @@ bool RunMovementRegression()
                     movement.cellShiftX = 1;
                 }
                 const f64 spacing = layout.levels[index].sampleSpacingMeters;
-                movement.surfaceFrame = world::SurfaceFrameAtOffset(
-                    planet, movement.surfaceFrame,
-                    {static_cast<f64>(movement.cellShiftX) * spacing,
-                     static_cast<f64>(movement.cellShiftY) * spacing});
-                movement.centerDirection = movement.surfaceFrame.up;
+                movement.centerOffsetMeters.x +=
+                    static_cast<f64>(movement.cellShiftX) * spacing;
+                movement.centerOffsetMeters.y +=
+                    static_cast<f64>(movement.cellShiftY) * spacing;
+                movement.centerDirection =
+                    world::DirectionAtSurfaceOffset(
+                        planet,
+                        movement.surfaceFrame,
+                        movement.centerOffsetMeters);
                 movement.fullRefresh =
                     std::abs(movement.cellShiftX) >= resolution ||
                     std::abs(movement.cellShiftY) >= resolution;

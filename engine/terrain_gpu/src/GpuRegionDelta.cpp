@@ -31,7 +31,8 @@ void StoreFloat3(
     out[index + 0] = std::bit_cast<u32>(static_cast<f32>(v.x));
     out[index + 1] = std::bit_cast<u32>(static_cast<f32>(v.y));
     out[index + 2] = std::bit_cast<u32>(static_cast<f32>(v.z));
-    // out[index + 3] (the float4's .w) stays zero-initialized; unused.
+    // out[index + 3] (the float4's .w) stays zero-initialized unless the
+    // caller explicitly uses it for packed scalar data.
 }
 } // namespace
 
@@ -74,7 +75,11 @@ void GpuRegionDelta::Dispatch(
     std::array<u32, kPushConstantDwords> pushConstants{};
 
     StoreFloat3(pushConstants, 0, request.surfaceFrame.up);
+    pushConstants[3] = std::bit_cast<u32>(
+        static_cast<f32>(request.centerOffsetMeters.x));
     StoreFloat3(pushConstants, 4, request.surfaceFrame.east);
+    pushConstants[7] = std::bit_cast<u32>(
+        static_cast<f32>(request.centerOffsetMeters.y));
     StoreFloat3(pushConstants, 8, request.surfaceFrame.north);
     StoreFloat3(pushConstants, 12, request.regionSurfaceFrame.up);
     StoreFloat3(pushConstants, 16, request.regionSurfaceFrame.east);

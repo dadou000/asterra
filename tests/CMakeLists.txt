@@ -681,3 +681,23 @@ target_link_libraries(OrbitStandingWaterTests PRIVATE Orbit::TerrainRegion Orbit
 target_compile_features(OrbitStandingWaterTests PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitStandingWaterTests)
 add_test(NAME Orbit.StandingWater COMMAND OrbitStandingWaterTests)
+
+
+# These are real Vulkan execution tests, not compile-only tests. GitHub's
+# hosted Windows runners do not expose a Vulkan physical device, so CI builds
+# every target but excludes this label from execution. Developer/workstation
+# ctest runs still execute them normally on Vulkan-capable hardware.
+set_tests_properties(
+    Orbit.RhiCompute
+    Orbit.TerrainGpuField
+    Orbit.TerrainGpuRegionDelta
+    Orbit.TerrainGpuElevationQuery
+    Orbit.HydrologyGpuDepressionFill
+    Orbit.HydrologyGpuFlowAccumulation
+    Orbit.HydrologyGpuErosion
+    Orbit.HydrologyGpuRiverGeometry
+    Orbit.HydrologyGpuLakeBasins
+    Orbit.DerivedTerrainRegionGpu
+    PROPERTIES
+        LABELS "gpu"
+)

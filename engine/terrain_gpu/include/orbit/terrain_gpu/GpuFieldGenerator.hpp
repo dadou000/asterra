@@ -49,6 +49,9 @@ struct GpuFieldRequest
     f64 fineNormalFootprintMeters{0.0};
     f64 fineNormalEpsilonMeters{0.0};
 
+    // Snapped window center inside the stable surfaceFrame lattice.
+    math::Double2 centerOffsetMeters{};
+
     world::SurfaceFrame surfaceFrame{};
     world::SurfaceFrame coarseSurfaceFrame{};
 

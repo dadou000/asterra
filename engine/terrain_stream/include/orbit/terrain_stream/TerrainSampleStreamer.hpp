@@ -34,6 +34,12 @@ struct TerrainSampleRequest
     f64 fineNormalFootprintMeters{0.0};
     f64 fineNormalEpsilonMeters{0.0};
 
+    // Offset of this level's snapped window center inside surfaceFrame's
+    // stable spherical lattice. Ordinary clipmap motion changes this by exact
+    // integer cell steps while surfaceFrame stays fixed, so retained toroidal
+    // samples keep their world-space address.
+    math::Double2 centerOffsetMeters{};
+
     world::SurfaceFrame surfaceFrame{};
     world::SurfaceFrame coarseSurfaceFrame{};
 

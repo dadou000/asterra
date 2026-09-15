@@ -7,7 +7,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/vulkan/RenderDocCapture.hpp>

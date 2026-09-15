@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/math/Vector.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/Pipeline.hpp>
@@ -20,6 +21,7 @@ struct GpuRegionDeltaRequest
     u32 resolution{0};
     f64 spacingMeters{0.0};
     world::SurfaceFrame surfaceFrame{};
+    math::Double2 centerOffsetMeters{};
     u32 originX{0};
     u32 originY{0};
     struct
