@@ -77,8 +77,12 @@ void RefreshTerrainMorphRegions(
     {
         auto& update = residency.levels[index];
         const auto& movement = motion.levels[index];
+        // Morph targets now snap to the globally anchored parent lattice,
+        // not to the parent's moving window. A parent recenter therefore does
+        // not change any retained fine sample. Only motion of this level can
+        // change a retained sample's local morph weight/band membership.
         if (update.fullRefresh ||
-            (!Moved(movement) && !Moved(motion.levels[index + 1U])))
+            !Moved(movement))
         {
             continue;
         }
