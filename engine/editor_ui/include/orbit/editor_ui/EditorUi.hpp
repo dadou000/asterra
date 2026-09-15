@@ -33,14 +33,24 @@ struct TreeItemInteraction
 {
     bool open{false};
     bool clicked{false};
+    bool rightClicked{false};
 };
 
 struct ImageInteraction
 {
     bool hovered{false};
     bool clicked{false};
+    bool rightClicked{false};
     f32 u{0.0F};
     f32 v{0.0F};
+};
+
+struct ActionPresentation
+{
+    std::string label;
+    bool enabled{true};
+    std::string disabledReason;
+    std::function<void()> invoke;
 };
 
 class PanelContext
@@ -100,6 +110,19 @@ public:
         std::vector<std::byte>>
     AcceptDragPayload(
         std::string_view type);
+
+    void Toolbar(
+        std::span<const ActionPresentation> actions);
+
+    void ContextMenu(
+        std::string_view id,
+        std::span<const ActionPresentation> actions,
+        bool openRequested);
+
+    void RadialMenu(
+        std::string_view id,
+        std::span<const ActionPresentation> actions,
+        bool openRequested);
 
     void SameLine();
 
