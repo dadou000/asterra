@@ -8,7 +8,10 @@
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
+#include <cstddef>
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <functional>
 #include <memory>
 #include <string>
@@ -26,6 +29,20 @@ struct UiSize
     f32 height{0.0F};
 };
 
+struct TreeItemInteraction
+{
+    bool open{false};
+    bool clicked{false};
+};
+
+struct ImageInteraction
+{
+    bool hovered{false};
+    bool clicked{false};
+    f32 u{0.0F};
+    f32 v{0.0F};
+};
+
 class PanelContext
 {
 public:
@@ -41,9 +58,48 @@ public:
 
     [[nodiscard]] UiSize ContentAvailable() const;
 
-    void Image(
+    [[nodiscard]] bool Selectable(
+        std::string_view label,
+        bool selected);
+
+    [[nodiscard]] TreeItemInteraction TreeItem(
+        std::string_view label,
+        bool selected);
+
+    void TreePop();
+
+    [[nodiscard]] ImageInteraction Image(
         rhi::Texture& texture,
         UiSize size);
+
+    [[nodiscard]] bool Checkbox(
+        std::string_view label,
+        bool& value);
+
+    [[nodiscard]] bool InputDouble(
+        std::string_view label,
+        f64& value);
+
+    [[nodiscard]] bool InputInteger(
+        std::string_view label,
+        i64& value);
+
+    [[nodiscard]] bool InputDouble3(
+        std::string_view label,
+        math::Double3& value);
+
+    [[nodiscard]] bool ControlDown() const noexcept;
+
+    [[nodiscard]] bool BeginDragSource();
+    void SetDragPayload(
+        std::string_view type,
+        std::span<const std::byte> bytes);
+    void EndDragSource();
+
+    [[nodiscard]] std::optional<
+        std::vector<std::byte>>
+    AcceptDragPayload(
+        std::string_view type);
 
     void SameLine();
 
