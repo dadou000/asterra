@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
