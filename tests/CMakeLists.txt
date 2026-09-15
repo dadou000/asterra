@@ -701,3 +701,22 @@ set_tests_properties(
     PROPERTIES
         LABELS "gpu"
 )
+
+
+add_executable(OrbitTimeAndIdTests
+    TimeAndIdTests.cpp
+)
+
+target_link_libraries(OrbitTimeAndIdTests
+    PRIVATE
+        Orbit::Core
+        Orbit::Time
+)
+
+target_compile_features(OrbitTimeAndIdTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTimeAndIdTests)
+
+add_test(
+    NAME Orbit.TimeAndIds
+    COMMAND OrbitTimeAndIdTests
+)
