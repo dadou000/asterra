@@ -720,3 +720,21 @@ add_test(
     NAME Orbit.TimeAndIds
     COMMAND OrbitTimeAndIdTests
 )
+
+
+add_executable(OrbitFrameGraphTests
+    FrameGraphTests.cpp
+)
+
+target_link_libraries(OrbitFrameGraphTests
+    PRIVATE
+        Orbit::Frames
+)
+
+target_compile_features(OrbitFrameGraphTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitFrameGraphTests)
+
+add_test(
+    NAME Orbit.FrameGraph
+    COMMAND OrbitFrameGraphTests
+)
