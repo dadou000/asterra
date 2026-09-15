@@ -4,6 +4,8 @@ Orbit is being built for Asterra's unusual requirements: a planet-scale persiste
 
 The engine must stay modular as it grows. These rules are architectural constraints, not suggestions.
 
+For the V0.0.3 celestial/editor expansion, [V0.0.3_SPEC.md](V0.0.3_SPEC.md) is the implementation specification layered on top of these rules. New world, editor, plugin, asset, path, MCP, build and platform-service work must follow both documents.
+
 ## 1. Dependency direction
 
 Dependencies are one-way.
