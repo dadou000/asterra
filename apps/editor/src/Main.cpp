@@ -1,11 +1,15 @@
+#include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
+#include <orbit/editor_model/CommandSurfaces.hpp>
 #include <orbit/editor_model/ExplorerModel.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/OutputLog.hpp>
+#include <orbit/editor_model/ShortcutRegistry.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
@@ -358,6 +362,145 @@ int main(
             std::span(
                 initialSelection));
 
+        orbit::commands::CommandRegistry
+            authoringCommands;
+
+        orbit::editor_model::
+            authoring_commands::Register(
+                authoringCommands,
+                commandService,
+                objects,
+                selection);
+
+        orbit::editor_model::
+            CommandSurfaceRegistry
+                commandSurfaces;
+
+        commandSurfaces.Set(
+            "viewport",
+            orbit::editor_model::
+                CommandSurfaceKind::Toolbar,
+            {
+                orbit::editor_model::
+                    authoring_commands::kUndo,
+                orbit::editor_model::
+                    authoring_commands::kRedo,
+                orbit::editor_model::
+                    authoring_commands::
+                        kClearSelection
+            });
+
+        commandSurfaces.Set(
+            "viewport",
+            orbit::editor_model::
+                CommandSurfaceKind::Radial,
+            {
+                orbit::editor_model::
+                    authoring_commands::
+                        kMoveToRoot,
+                orbit::editor_model::
+                    authoring_commands::
+                        kClearSelection,
+                orbit::editor_model::
+                    authoring_commands::kUndo,
+                orbit::editor_model::
+                    authoring_commands::kRedo
+            });
+
+        commandSurfaces.Set(
+            "explorer",
+            orbit::editor_model::
+                CommandSurfaceKind::
+                    ContextMenu,
+            {
+                orbit::editor_model::
+                    authoring_commands::
+                        kMoveToRoot,
+                orbit::editor_model::
+                    authoring_commands::
+                        kClearSelection,
+                orbit::editor_model::
+                    authoring_commands::kUndo,
+                orbit::editor_model::
+                    authoring_commands::kRedo
+            });
+
+        orbit::editor_model::ShortcutRegistry
+            shortcuts;
+
+        shortcuts.Register(
+            {
+                .key =
+                    orbit::platform::Key::Z,
+                .control = true
+            },
+            orbit::editor_model::
+                authoring_commands::kUndo);
+
+        shortcuts.Register(
+            {
+                .key =
+                    orbit::platform::Key::Y,
+                .control = true
+            },
+            orbit::editor_model::
+                authoring_commands::kRedo);
+
+        const auto presentActions =
+            [&commandSurfaces,
+             &authoringCommands](
+                const std::string_view surface,
+                const orbit::editor_model::
+                    CommandSurfaceKind kind)
+            {
+                std::vector<
+                    orbit::editor_ui::
+                        ActionPresentation>
+                    result;
+
+                for (const auto& command :
+                     commandSurfaces.Present(
+                         surface,
+                         kind,
+                         authoringCommands))
+                {
+                    const orbit::commands::
+                        CommandId id =
+                            command.id;
+
+                    result.push_back({
+                        .label = command.label,
+                        .enabled =
+                            command.enabled,
+                        .disabledReason =
+                            command.
+                                disabledReason,
+                        .invoke =
+                            [&authoringCommands,
+                             id]
+                            {
+                                try
+                                {
+                                    authoringCommands.
+                                        Invoke(id);
+                                }
+                                catch (
+                                    const std::
+                                        exception&
+                                            exception)
+                                {
+                                    orbit::log::
+                                        Warning(
+                                            exception.
+                                                what());
+                                }
+                            }
+                    });
+                }
+
+                return result;
+            };
+
         const std::string windowTitle =
             std::format(
                 "Orbit Studio - {}",
@@ -501,10 +644,20 @@ int main(
                 [&bodyView,
                  &selection,
                  bodyObject,
-                 &objects](
+                 &objects,
+                 &presentActions](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
+                    const auto toolbar =
+                        presentActions(
+                            "viewport",
+                            orbit::editor_model::
+                                CommandSurfaceKind::
+                                    Toolbar);
+
+                    context.Toolbar(toolbar);
+
                     const auto available =
                         context.ContentAvailable();
 
@@ -547,7 +700,8 @@ int main(
                                                 Height())
                             });
 
-                    if (interaction.clicked)
+                    if (interaction.clicked ||
+                        interaction.rightClicked)
                     {
                         const std::array selected{
                             bodyObject
@@ -557,6 +711,18 @@ int main(
                             std::span(
                                 selected));
                     }
+
+                    const auto radial =
+                        presentActions(
+                            "viewport",
+                            orbit::editor_model::
+                                CommandSurfaceKind::
+                                    Radial);
+
+                    context.RadialMenu(
+                        "ViewportRadial",
+                        radial,
+                        interaction.rightClicked);
 
                     const auto body =
                         objects.Find(
@@ -587,7 +753,7 @@ int main(
                  &renameBuffer,
                  &renameSelectionRevision,
                  &objects,
-                 &commandService](
+                 &presentActions](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -689,6 +855,29 @@ int main(
                                         context.
                                             ControlDown());
                                 }
+
+                                if (item.rightClicked &&
+                                    !selection.Contains(
+                                        object.id))
+                                {
+                                    explorer.Select(
+                                        object.id,
+                                        false);
+                                }
+
+                                const auto objectMenu =
+                                    presentActions(
+                                        "explorer",
+                                        orbit::editor_model::
+                                            CommandSurfaceKind::
+                                                ContextMenu);
+
+                                context.ContextMenu(
+                                    "ExplorerObjectMenu##" +
+                                        object.id.
+                                            ToString(),
+                                    objectMenu,
+                                    item.rightClicked);
 
                                 if (const auto payload =
                                         context.
@@ -809,22 +998,14 @@ int main(
                         }
                     }
 
-                    if (commandService.CanUndo() &&
-                        context.Button("Undo"))
-                    {
-                        commandService.Undo();
-                    }
+                    const auto toolbar =
+                        presentActions(
+                            "viewport",
+                            orbit::editor_model::
+                                CommandSurfaceKind::
+                                    Toolbar);
 
-                    if (commandService.CanUndo())
-                    {
-                        context.SameLine();
-                    }
-
-                    if (commandService.CanRedo() &&
-                        context.Button("Redo"))
-                    {
-                        commandService.Redo();
-                    }
+                    context.Toolbar(toolbar);
                 }
         });
 
@@ -1044,15 +1225,22 @@ int main(
             .menu = "Home",
             .label = "Undo",
             .invoke =
-                [&commandService]
+                [&authoringCommands]
                 {
-                    commandService.Undo();
+                    authoringCommands.Invoke(
+                        orbit::editor_model::
+                            authoring_commands::
+                                kUndo);
                 },
             .enabled =
-                [&commandService]
+                [&authoringCommands]
                 {
-                    return commandService.
-                        CanUndo();
+                    return authoringCommands.
+                        Enablement(
+                            orbit::editor_model::
+                                authoring_commands::
+                                    kUndo).
+                        enabled;
                 }
         });
 
@@ -1060,15 +1248,22 @@ int main(
             .menu = "Home",
             .label = "Redo",
             .invoke =
-                [&commandService]
+                [&authoringCommands]
                 {
-                    commandService.Redo();
+                    authoringCommands.Invoke(
+                        orbit::editor_model::
+                            authoring_commands::
+                                kRedo);
                 },
             .enabled =
-                [&commandService]
+                [&authoringCommands]
                 {
-                    return commandService.
-                        CanRedo();
+                    return authoringCommands.
+                        Enablement(
+                            orbit::editor_model::
+                                authoring_commands::
+                                    kRedo).
+                        enabled;
                 }
         });
 
@@ -1145,6 +1340,11 @@ int main(
                 deltaSeconds);
 
             ui.DrawStudioShell();
+
+            shortcuts.Update(
+                window,
+                authoringCommands,
+                ui.WantsKeyboard());
 
             if (window.KeyDown(
                     orbit::platform::
