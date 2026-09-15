@@ -1,4 +1,5 @@
 add_library(OrbitEditorUi STATIC
+    src/BodyPreviewRenderer.cpp
     src/EditorUi.cpp
 )
 
@@ -16,6 +17,7 @@ target_link_libraries(OrbitEditorUi
         Orbit::Platform
         Orbit::RHI
         Orbit::Shader
+        Orbit::Universe
     PRIVATE
         Orbit::ThirdPartyImGui
 )
