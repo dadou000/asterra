@@ -4,6 +4,7 @@ include(FetchContent)
 # only through Orbit-owned adapter modules so third-party types do not leak
 # into engine interfaces.
 set(SQLITECPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SQLITECPP_RUN_CPPCHECK OFF CACHE BOOL "" FORCE)
 set(SQLITECPP_INTERNAL_SQLITE ON CACHE BOOL "" FORCE)
 set(SQLITECPP_INCLUDE_SCRIPT OFF CACHE BOOL "" FORCE)
 set(SQLITECPP_USE_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
