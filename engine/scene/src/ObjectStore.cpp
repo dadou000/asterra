@@ -3,6 +3,7 @@
 #include <SQLiteCpp/SQLiteCpp.h>
 
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace orbit::scene
