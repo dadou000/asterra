@@ -851,3 +851,22 @@ add_test(
     NAME Orbit.AuthoringModel
     COMMAND OrbitAuthoringModelTests
 )
+
+
+add_executable(OrbitRenderGraphTests
+    RenderGraphTests.cpp
+)
+
+target_link_libraries(OrbitRenderGraphTests
+    PRIVATE
+        Orbit::RenderGraph
+        Orbit::RenderView
+)
+
+target_compile_features(OrbitRenderGraphTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRenderGraphTests)
+
+add_test(
+    NAME Orbit.RenderGraph
+    COMMAND OrbitRenderGraphTests
+)
