@@ -40,21 +40,6 @@ namespace
     return *value;
 }
 
-[[nodiscard]] schema::PropertyId ParsePropertyId(
-    const std::string& text)
-{
-    const auto value =
-        schema::PropertyId::Parse(text);
-
-    if (!value.has_value())
-    {
-        throw std::runtime_error(
-            "World database contains invalid property ID.");
-    }
-
-    return *value;
-}
-
 [[nodiscard]] ObjectRecord ReadObject(
     SQLite::Statement& query)
 {
@@ -80,8 +65,9 @@ namespace
         query.getColumn(3).
             getString();
     object.sortOrder =
-        query.getColumn(4).
-            getInt64();
+        static_cast<i64>(
+            query.getColumn(4).
+                getInt64());
 
     return object;
 }
@@ -98,11 +84,13 @@ public:
     {
         database.exec(
             "PRAGMA foreign_keys = ON;");
+        database.exec(
+            "PRAGMA busy_timeout = 5000;");
     }
 
     SQLite::Database database;
-    mutable std::optional<ObjectRecord>
-        scratchObject;
+    std::unique_ptr<SQLite::Transaction>
+        transaction;
 };
 
 ObjectStore::ObjectStore(
@@ -115,7 +103,7 @@ ObjectStore::ObjectStore(
 
 ObjectStore::~ObjectStore() = default;
 
-const ObjectRecord*
+std::optional<ObjectRecord>
 ObjectStore::Find(
     const ObjectId id) const
 {
@@ -129,14 +117,10 @@ ObjectStore::Find(
 
     if (!query.executeStep())
     {
-        impl_->scratchObject.reset();
-        return nullptr;
+        return std::nullopt;
     }
 
-    impl_->scratchObject =
-        ReadObject(query);
-
-    return &*impl_->scratchObject;
+    return ReadObject(query);
 }
 
 std::vector<ObjectRecord>
@@ -283,7 +267,7 @@ void ObjectStore::Insert(
     }
 
     if (object.parent.has_value() &&
-        Find(*object.parent) == nullptr)
+        !Find(*object.parent).has_value())
     {
         throw std::invalid_argument(
             "Object parent does not exist.");
@@ -307,8 +291,7 @@ void ObjectStore::Insert(
     }
     else
     {
-        statement.bind(
-            2);
+        statement.bind(2);
     }
 
     statement.bind(
@@ -380,6 +363,12 @@ void ObjectStore::Reparent(
     const ObjectId object,
     const std::optional<ObjectId> parent)
 {
+    if (!Find(object).has_value())
+    {
+        throw std::invalid_argument(
+            "Cannot reparent unknown object.");
+    }
+
     if (parent.has_value())
     {
         if (*parent == object)
@@ -388,10 +377,10 @@ void ObjectStore::Reparent(
                 "Object cannot parent itself.");
         }
 
-        const ObjectRecord* parentRecord =
+        const auto parentRecord =
             Find(*parent);
 
-        if (parentRecord == nullptr)
+        if (!parentRecord.has_value())
         {
             throw std::invalid_argument(
                 "New parent does not exist.");
@@ -408,12 +397,13 @@ void ObjectStore::Reparent(
                     "Reparent would create a hierarchy cycle.");
             }
 
-            const ObjectRecord* record =
+            const auto record =
                 Find(*ancestor);
 
-            if (record == nullptr)
+            if (!record.has_value())
             {
-                break;
+                throw std::runtime_error(
+                    "Object hierarchy references a missing ancestor.");
             }
 
             ancestor = record->parent;
@@ -452,7 +442,7 @@ void ObjectStore::SetProperty(
     const schema::PropertyId property,
     const schema::PropertyValue& value)
 {
-    if (Find(object) == nullptr)
+    if (!Find(object).has_value())
     {
         throw std::invalid_argument(
             "Cannot set property on unknown object.");
@@ -482,18 +472,12 @@ void ObjectStore::SetProperty(
         2,
         property.ToString());
 
-    const auto bindNulls =
-        [&statement]
-        {
-            for (int index = 4;
-                 index <= 9;
-                 ++index)
-            {
-                statement.bind(index);
-            }
-        };
-
-    bindNulls();
+    for (int index = 4;
+         index <= 9;
+         ++index)
+    {
+        statement.bind(index);
+    }
 
     std::visit(
         [&statement](const auto& item)
@@ -611,5 +595,61 @@ void ObjectStore::RemoveProperty(
         2,
         property.ToString());
     statement.exec();
+}
+
+void ObjectStore::BeginTransaction(
+    MutationKey)
+{
+    if (impl_->transaction != nullptr)
+    {
+        throw std::logic_error(
+            "Scene transaction is already active.");
+    }
+
+    impl_->transaction =
+        std::make_unique<SQLite::Transaction>(
+            impl_->database,
+            SQLite::TransactionBehavior::
+                IMMEDIATE);
+}
+
+void ObjectStore::CommitTransaction(
+    MutationKey)
+{
+    if (impl_->transaction == nullptr)
+    {
+        throw std::logic_error(
+            "No scene transaction is active.");
+    }
+
+    impl_->transaction->commit();
+    impl_->transaction.reset();
+}
+
+void ObjectStore::RollbackTransaction(
+    MutationKey) noexcept
+{
+    if (impl_->transaction == nullptr)
+    {
+        return;
+    }
+
+    try
+    {
+        impl_->transaction->rollback();
+    }
+    catch (...)
+    {
+        // The destructor performs a best-effort rollback as well. This
+        // function is noexcept so command error paths cannot mask the
+        // original edit failure.
+    }
+
+    impl_->transaction.reset();
+}
+
+bool ObjectStore::TransactionActive() const noexcept
+{
+    return impl_->transaction != nullptr;
 }
 } // namespace orbit::scene
