@@ -305,4 +305,35 @@ f64 LodMorphFactor(
 
     return SmoothStep01(normalized);
 }
+
+bool ClipmapCellFullyInsideInnerHole(
+    const ClipmapLevel& level,
+    const f64 cellCenterXMeters,
+    const f64 cellCenterYMeters,
+    const f64 holeCenterXMeters,
+    const f64 holeCenterYMeters) noexcept
+{
+    if (level.innerHoleHalfExtentMeters <= 0.0 ||
+        level.sampleSpacingMeters <= 0.0)
+    {
+        return false;
+    }
+
+    const f64 halfCell =
+        level.sampleSpacingMeters * 0.5;
+
+    // Use <= intentionally: a cell whose outer edge lands exactly on the
+    // finer guaranteed-coverage boundary is safe to remove.
+    return
+        std::abs(
+            cellCenterXMeters -
+            holeCenterXMeters) +
+                halfCell <=
+            level.innerHoleHalfExtentMeters &&
+        std::abs(
+            cellCenterYMeters -
+            holeCenterYMeters) +
+                halfCell <=
+            level.innerHoleHalfExtentMeters;
+}
 } // namespace orbit::terrain_view
