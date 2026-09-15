@@ -15,6 +15,7 @@ target_link_libraries(OrbitSandbox
         Orbit::RhiVulkan
         Orbit::Runtime
         Orbit::ShaderDxc
+        Orbit::Surface
         Orbit::Terrain
         Orbit::TerrainCache
         Orbit::TerrainRegion
