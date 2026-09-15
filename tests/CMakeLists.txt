@@ -889,3 +889,26 @@ add_test(
     NAME Orbit.EditorModel
     COMMAND OrbitEditorModelTests
 )
+
+
+add_executable(OrbitExplorerInspectorTests
+    ExplorerInspectorTests.cpp
+)
+
+target_link_libraries(OrbitExplorerInspectorTests
+    PRIVATE
+        Orbit::Commands
+        Orbit::Documents
+        Orbit::EditorModel
+        Orbit::Scene
+        Orbit::Schema
+        Orbit::Selection
+)
+
+target_compile_features(OrbitExplorerInspectorTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitExplorerInspectorTests)
+
+add_test(
+    NAME Orbit.ExplorerInspector
+    COMMAND OrbitExplorerInspectorTests
+)
