@@ -810,3 +810,22 @@ add_test(
     NAME Orbit.ProceduralGraph
     COMMAND OrbitProceduralGraphTests
 )
+
+
+add_executable(OrbitDocumentsTests
+    DocumentsTests.cpp
+)
+
+target_link_libraries(OrbitDocumentsTests
+    PRIVATE
+        Orbit::Documents
+        SQLiteCpp
+)
+
+target_compile_features(OrbitDocumentsTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitDocumentsTests)
+
+add_test(
+    NAME Orbit.Documents
+    COMMAND OrbitDocumentsTests
+)
