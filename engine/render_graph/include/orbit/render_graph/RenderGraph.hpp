@@ -71,6 +71,12 @@ class RenderGraph
 {
 public:
     explicit RenderGraph(rhi::Device& device);
+    ~RenderGraph();
+
+    RenderGraph(const RenderGraph&) = delete;
+    RenderGraph& operator=(const RenderGraph&) = delete;
+    RenderGraph(RenderGraph&&) = delete;
+    RenderGraph& operator=(RenderGraph&&) = delete;
 
     [[nodiscard]] TextureHandle ImportTexture(
         std::string_view name,
