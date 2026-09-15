@@ -75,11 +75,18 @@ ClipmapLayout BuildClipmapLayout(
         const f64 overlapWidth =
             static_cast<f64>(config.overlapCells) * spacing;
 
+        // The parent ring starts only outside the complete finer patch.
+        // The finer level performs its geomorph inside its own outer band and
+        // reaches parent geometry at the outer edge. Keeping the coarse parent
+        // hidden beneath that whole patch avoids the overlapping coplanar
+        // surfaces that previously required "seam sinking" and produced large
+        // rectangular terraces. This mirrors the proven Godot quadtree handoff:
+        // once a child covers an area, its parent is not drawn underneath it.
         const f64 innerHoleHalfExtent =
             levelIndex == 0
                 ? 0.0
                 : layout.levels.back().
-                    morphStartHalfExtentMeters;
+                    outerHalfExtentMeters;
 
         const f64 morphStart =
             std::max(
