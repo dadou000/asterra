@@ -9,6 +9,7 @@
 #include <cassert>
 #include <filesystem>
 #include <span>
+#include <stdexcept>
 #include <string>
 
 int main()
