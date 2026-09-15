@@ -464,6 +464,21 @@ bool ProceduralGraph::TryScheduleRecursive(
                 visiting))
         {
             dependenciesReady = false;
+
+            const auto dependencyRecord =
+                nodes_.find(dependency);
+
+            if (dependencyRecord != nodes_.end() &&
+                dependencyRecord->second.state ==
+                    NodeState::Failed)
+            {
+                record.state =
+                    NodeState::Failed;
+                record.error =
+                    "Dependency failed: " +
+                    dependencyRecord->second.name;
+                break;
+            }
         }
     }
 
