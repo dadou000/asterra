@@ -11,6 +11,7 @@
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/runtime/RuntimeSession.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/surface/SurfaceRegistry.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_cache/CachedTerrainSource.hpp>
 #include <orbit/terrain_gpu/GpuElevationQuery.hpp>
@@ -217,23 +218,22 @@ int main()
                         }
             }));
 
-        const orbit::universe::CelestialBody*
-            activeBody =
-                celestialBodies.FindBody(
+        orbit::surface::SurfaceRegistry bodySurfaces(
+            celestialBodies);
+
+        const auto planetDefinition =
+            bodySurfaces.
+                SphericalPlanetDefinition(
                     asterraBodyId);
 
-        if (activeBody == nullptr)
+        if (!planetDefinition.has_value())
         {
             throw std::runtime_error(
-                "Asterra body registration failed.");
+                "Asterra requires a spherical reference surface.");
         }
 
-        const orbit::world::PlanetDefinition planet{
-            .radiusMeters =
-                orbit::universe::
-                    ReferenceRadiusMeters(
-                        activeBody->shape)
-        };
+        const orbit::world::PlanetDefinition planet =
+            *planetDefinition;
 
         const orbit::math::Double3 observerDirection =
             orbit::math::Normalize(
@@ -258,6 +258,10 @@ int main()
                 orbit::terrain::AnalyticTerrainSource>(
                     planet,
                     terrainDescription);
+
+        bodySurfaces.AttachTerrain(
+            asterraBodyId,
+            authoritativeTerrain);
 
         const orbit::shader::dxc::DxcShaderCompiler
             shaderCompiler;
