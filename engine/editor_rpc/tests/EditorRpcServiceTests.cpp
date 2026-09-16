@@ -809,6 +809,50 @@ int main()
 
     Check(routeInvalidated);
 
+    editorRpc.AttachPathGeometry({
+        .result =
+            [](const orbit::scene::ObjectId edge)
+            {
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "edge",
+                            edge.ToString()
+                        },
+                        {"ready", true},
+                        {"lane_count", 2},
+                        {"visual_vertices", 12},
+                        {"collision_triangles", 10},
+                        {"reference_nodes", 6}
+                    });
+            }
+    });
+
+    const auto derived =
+        Call(
+            dispatcher,
+            "21g1",
+            "path.derived_result",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"edge", pathEdgeId}
+                }));
+
+    Check(
+        derived.Find("ready") !=
+            nullptr &&
+        derived.Find("ready")->AsBool());
+    Check(
+        derived.Find("lane_count") !=
+            nullptr &&
+        derived.Find("lane_count")->
+            AsInteger() == 2);
+    Check(
+        derived.Find("collision_triangles") !=
+            nullptr &&
+        derived.Find("collision_triangles")->
+            AsInteger() == 10);
+
     static_cast<void>(
         Call(
             dispatcher,
