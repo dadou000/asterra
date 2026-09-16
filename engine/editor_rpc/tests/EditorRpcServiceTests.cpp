@@ -695,6 +695,120 @@ int main()
         objects.Find(*pathEdgeObject).
             has_value());
 
+    bool routeInvalidated = false;
+
+    editorRpc.AttachPathRouting({
+        .status =
+            [](const orbit::scene::ObjectId edge)
+            {
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "edge",
+                            edge.ToString()
+                        },
+                        {"state", "ready"},
+                        {"generation", 4}
+                    });
+            },
+        .result =
+            [](const orbit::scene::ObjectId edge)
+            {
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "edge",
+                            edge.ToString()
+                        },
+                        {"ready", true},
+                        {
+                            "points",
+                            orbit::rpc::Value::Array{
+                                orbit::rpc::Value(
+                                    orbit::rpc::Value::Object{
+                                        {
+                                            "position",
+                                            orbit::rpc::Value::Array{
+                                                0.0,
+                                                0.0,
+                                                0.0
+                                            }
+                                        }
+                                    }),
+                                orbit::rpc::Value(
+                                    orbit::rpc::Value::Object{
+                                        {
+                                            "position",
+                                            orbit::rpc::Value::Array{
+                                                1.0,
+                                                0.0,
+                                                0.0
+                                            }
+                                        }
+                                    })
+                            }
+                        }
+                    });
+            },
+        .invalidate =
+            [&routeInvalidated](
+                const orbit::scene::ObjectId)
+            {
+                routeInvalidated = true;
+            }
+    });
+
+    const auto routeStatus =
+        Call(
+            dispatcher,
+            "21r1",
+            "path.route_status",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"edge", pathEdgeId}
+                }));
+
+    Check(
+        routeStatus.Find("state") !=
+            nullptr &&
+        routeStatus.Find("state")->
+            AsString() ==
+            "ready");
+
+    const auto routeResult =
+        Call(
+            dispatcher,
+            "21r2",
+            "path.route_result",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"edge", pathEdgeId}
+                }));
+
+    Check(
+        routeResult.Find("ready") !=
+            nullptr &&
+        routeResult.Find("ready")->
+            AsBool());
+    Check(
+        routeResult.Find("points") !=
+            nullptr &&
+        routeResult.Find("points")->
+            AsArray().size() ==
+            2);
+
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "21r3",
+            "path.route_invalidate",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"edge", pathEdgeId}
+                })));
+
+    Check(routeInvalidated);
+
     static_cast<void>(
         Call(
             dispatcher,
