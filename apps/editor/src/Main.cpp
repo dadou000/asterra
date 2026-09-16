@@ -502,20 +502,21 @@ int main(
                 objects,
                 selection);
 
+        orbit::editor_model::
+            CommandSurfaceRegistry
+                commandSurfaces;
+
         orbit::plugins::PluginManager
             plugins(
                 project.RootDirectory(),
                 authoringCommands,
                 commandService,
+                commandSurfaces,
                 objects,
                 selection);
 
         plugins.LoadEnabled(
             project.Manifest());
-
-        orbit::editor_model::
-            CommandSurfaceRegistry
-                commandSurfaces;
 
         commandSurfaces.Set(
             "viewport",
