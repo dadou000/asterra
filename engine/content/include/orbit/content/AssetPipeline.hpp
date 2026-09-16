@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -101,7 +102,9 @@ public:
         const std::filesystem::path& projectRoot,
         const std::filesystem::path& source,
         std::string settings = {},
-        std::string targetPlatform = "source");
+        std::string targetPlatform = "source",
+        std::optional<ContentHash> knownSourceHash =
+            std::nullopt);
 
 private:
     const ImporterRegistry& importers_;
