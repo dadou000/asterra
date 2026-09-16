@@ -87,6 +87,36 @@ int main()
         objects,
         schemas);
     orbit::commands::CommandRegistry commandRegistry;
+
+    const auto hiddenCommand =
+        orbit::commands::CommandId::Random();
+    const auto visibleCommand =
+        orbit::commands::CommandId::Random();
+
+    commandRegistry.Register({
+        .id = hiddenCommand,
+        .name = "Hidden Tool",
+        .category = "Test",
+        .description = "Must not appear in automation.",
+        .automationVisible = false,
+        .invoke =
+            [](const orbit::commands::CommandArguments&)
+            {
+            }
+    });
+
+    commandRegistry.Register({
+        .id = visibleCommand,
+        .name = "Visible Tool",
+        .category = "Test",
+        .description = "Automation-visible test command.",
+        .automationVisible = true,
+        .invoke =
+            [](const orbit::commands::CommandArguments&)
+            {
+            }
+    });
+
     orbit::rpc::Dispatcher dispatcher;
 
     orbit::editor_rpc::EditorRpcService rpcService(
@@ -118,6 +148,39 @@ int main()
     Check(schemaCatalog.IsArray());
     Check(schemaCatalog.AsArray().size() >= 2);
 
+    const auto commandCatalog =
+        Call(
+            dispatcher,
+            "2b",
+            "command.catalog");
+
+    Check(commandCatalog.IsArray());
+    Check(commandCatalog.AsArray().size() == 1);
+    Check(
+        commandCatalog.AsArray()[0].
+            Find("id")->AsString() ==
+        visibleCommand.ToString());
+
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "2c",
+            "command.invoke",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "id",
+                        visibleCommand.ToString()
+                    },
+                    {
+                        "arguments",
+                        orbit::rpc::Value::Object{}
+                    }
+                })));
+
+    const orbit::u64 revisionBeforeCreate =
+        objects.Revision();
+
     const auto created =
         Call(
             dispatcher,
@@ -140,6 +203,10 @@ int main()
     Check(createdId != nullptr);
     const std::string objectId =
         createdId->AsString();
+
+    Check(
+        objects.Revision() ==
+        revisionBeforeCreate + 1U);
 
     const auto selected =
         Call(
@@ -173,6 +240,10 @@ int main()
             front().
             AsString() ==
         objectId);
+
+    const orbit::u64
+        revisionBeforeTransaction =
+            objects.Revision();
 
     static_cast<void>(
         Call(
@@ -212,11 +283,19 @@ int main()
                     {"value", 7'000'000.0}
                 })));
 
+    Check(
+        objects.Revision() ==
+        revisionBeforeTransaction);
+
     static_cast<void>(
         Call(
             dispatcher,
             "9",
             "transaction.commit"));
+
+    Check(
+        objects.Revision() ==
+        revisionBeforeTransaction + 1U);
 
     const auto object =
         orbit::scene::ObjectId::Parse(
@@ -241,11 +320,19 @@ int main()
         std::get<orbit::f64>(*radius) ==
         7'000'000.0);
 
+    const orbit::u64
+        revisionBeforeUndo =
+            objects.Revision();
+
     static_cast<void>(
         Call(
             dispatcher,
             "10",
             "history.undo"));
+
+    Check(
+        objects.Revision() ==
+        revisionBeforeUndo + 1U);
 
     const auto undone =
         objects.Find(*object);
@@ -259,11 +346,19 @@ int main()
                 kBodyRadius).
             has_value());
 
+    const orbit::u64
+        revisionBeforeRedo =
+            objects.Revision();
+
     static_cast<void>(
         Call(
             dispatcher,
             "11",
             "history.redo"));
+
+    Check(
+        objects.Revision() ==
+        revisionBeforeRedo + 1U);
 
     const auto redone =
         objects.Find(*object);
