@@ -18,6 +18,9 @@ set_target_properties(OrbitBuild PROPERTIES
 )
 
 
+orbit_copy_dxc_runtime(OrbitBuild)
+
+
 if(BUILD_TESTING)
     add_executable(OrbitBuildCliTests
         tests/OrbitBuildCliTests.cpp
