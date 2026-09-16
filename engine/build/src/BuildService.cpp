@@ -416,7 +416,9 @@ CompileScript(
 
 [[nodiscard]] std::vector<std::filesystem::path>
 CollectProjectScripts(
-    const std::filesystem::path& projectRoot)
+    const std::filesystem::path& projectRoot,
+    const std::vector<std::filesystem::path>&
+        entryPoints)
 {
     const std::filesystem::path scriptsRoot =
         projectRoot /
@@ -460,6 +462,19 @@ CollectProjectScripts(
                 projectRoot));
     }
 
+    for (const auto& entryPoint :
+         entryPoints)
+    {
+        if (std::ranges::find(
+                scripts,
+                entryPoint) ==
+            scripts.end())
+        {
+            scripts.push_back(
+                entryPoint);
+        }
+    }
+
     std::ranges::sort(
         scripts,
         [](
@@ -469,6 +484,12 @@ CollectProjectScripts(
             return a.generic_string() <
                 b.generic_string();
         });
+
+    scripts.erase(
+        std::unique(
+            scripts.begin(),
+            scripts.end()),
+        scripts.end());
 
     return scripts;
 }
@@ -1100,7 +1121,9 @@ BuildResult BuildService::Cook(
 
         const auto projectScripts =
             CollectProjectScripts(
-                validation.projectRoot);
+                validation.projectRoot,
+                project.Manifest().
+                    scriptEntryPoints);
 
         for (const auto& script :
              projectScripts)
