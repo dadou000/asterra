@@ -53,16 +53,22 @@ int main()
     const auto stableId = materials[0].id;
     content.Scan();
     const auto* same = content.FindByPath("Content/Materials/steel.orbitmaterial");
-    assert(same != nullptr);
-    assert(same->id == stableId);
+    if (same == nullptr || same->id != stableId)
+    {
+        return 1;
+    }
 
     const auto external = root / "source.png";
     Write(external, "image");
     const auto imported = content.ImportFile(external);
     const auto* importedRecord = content.Find(imported);
-    assert(importedRecord != nullptr);
-    assert(importedRecord->kind == orbit::content::AssetKind::Texture);
-    assert(importedRecord->sourcePath == std::filesystem::path("Content/Imported/source.png"));
+    if (importedRecord == nullptr ||
+        importedRecord->kind != orbit::content::AssetKind::Texture ||
+        importedRecord->sourcePath !=
+            std::filesystem::path("Content/Imported/source.png"))
+    {
+        return 1;
+    }
 
     std::filesystem::remove_all(root);
     return 0;
