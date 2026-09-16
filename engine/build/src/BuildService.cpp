@@ -2,6 +2,7 @@
 
 #include <orbit/core/BuildInfo.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/plugins/PluginManifest.hpp>
 
 #include <Luau/Compiler.h>
 #include <lua.h>
@@ -835,14 +836,16 @@ BuildValidation BuildService::Validate(
     for (const auto& plugin :
          manifest.plugins)
     {
-        const auto pluginManifest =
+        const auto packageRoot =
             result.projectRoot /
             "Plugins" /
-            plugin.id /
+            plugin.id;
+        const auto pluginManifestPath =
+            packageRoot /
             "plugin.toml";
 
         if (!std::filesystem::is_regular_file(
-                pluginManifest))
+                pluginManifestPath))
         {
             AddIssue(
                 result.issues,
@@ -850,7 +853,151 @@ BuildValidation BuildService::Validate(
                 "build.plugin.missing",
                 "Enabled plugin package is missing: " +
                     plugin.id,
-                pluginManifest);
+                pluginManifestPath);
+            continue;
+        }
+
+        try
+        {
+            const auto package =
+                plugins::LoadPluginManifest(
+                    pluginManifestPath);
+
+            if (package.id != plugin.id)
+            {
+                AddIssue(
+                    result.issues,
+                    IssueSeverity::Error,
+                    "build.plugin.id",
+                    "Plugin package ID '" +
+                        package.id +
+                        "' does not match enabled ID '" +
+                        plugin.id +
+                        "'.",
+                    pluginManifestPath);
+            }
+
+            if (!plugin.version.empty() &&
+                plugin.version != "*" &&
+                package.version !=
+                    plugin.version)
+            {
+                AddIssue(
+                    result.issues,
+                    IssueSeverity::Error,
+                    "build.plugin.version",
+                    "Plugin '" +
+                        plugin.id +
+                        "' version '" +
+                        package.version +
+                        "' does not satisfy project version '" +
+                        plugin.version +
+                        "'.",
+                    pluginManifestPath);
+            }
+
+            if (package.orbitApiVersion !=
+                Version)
+            {
+                AddIssue(
+                    result.issues,
+                    IssueSeverity::Error,
+                    "build.plugin.api",
+                    "Plugin '" +
+                        plugin.id +
+                        "' targets Orbit API '" +
+                        package.orbitApiVersion +
+                        "', current engine is '" +
+                        std::string(Version) +
+                        "'.",
+                    pluginManifestPath);
+            }
+
+            const auto canonicalRoot =
+                std::filesystem::
+                    weakly_canonical(
+                        packageRoot);
+            const auto entry =
+                std::filesystem::
+                    weakly_canonical(
+                        canonicalRoot /
+                        package.entryScript);
+            const auto relativeEntry =
+                entry.lexically_relative(
+                    canonicalRoot);
+
+            if (relativeEntry.empty() ||
+                *relativeEntry.begin() ==
+                    ".." ||
+                !std::filesystem::
+                    is_regular_file(
+                        entry))
+            {
+                AddIssue(
+                    result.issues,
+                    IssueSeverity::Error,
+                    "build.plugin.entry",
+                    "Plugin entry script is missing or escapes its package.",
+                    package.entryScript);
+            }
+
+            for (const auto& dependency :
+                 package.dependencies)
+            {
+                const auto found =
+                    std::ranges::find(
+                        manifest.plugins,
+                        dependency.id,
+                        &documents::
+                            PluginRequirement::id);
+
+                if (found ==
+                    manifest.plugins.end())
+                {
+                    AddIssue(
+                        result.issues,
+                        IssueSeverity::Error,
+                        "build.plugin.dependency",
+                        "Plugin '" +
+                            plugin.id +
+                            "' requires disabled plugin '" +
+                            dependency.id +
+                            "'.",
+                        pluginManifestPath);
+                    continue;
+                }
+
+                if (dependency.version != "*" &&
+                    found->version != "*" &&
+                    dependency.version !=
+                        found->version)
+                {
+                    AddIssue(
+                        result.issues,
+                        IssueSeverity::Error,
+                        "build.plugin.dependency_version",
+                        "Plugin '" +
+                            plugin.id +
+                            "' requires '" +
+                            dependency.id +
+                            "' version '" +
+                            dependency.version +
+                            "', project enables '" +
+                            found->version +
+                            "'.",
+                        pluginManifestPath);
+                }
+            }
+        }
+        catch (const std::exception&
+                   exception)
+        {
+            AddIssue(
+                result.issues,
+                IssueSeverity::Error,
+                "build.plugin.invalid",
+                exception.what(),
+                pluginManifestPath);
         }
     }
 
