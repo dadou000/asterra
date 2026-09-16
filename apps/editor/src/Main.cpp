@@ -794,6 +794,9 @@ int main(
         std::string renameBuffer;
         std::vector<orbit::editor_ui::PanelId>
             pluginPanelIds;
+        std::vector<
+            orbit::plugins::PluginValidationIssue>
+            pluginValidationIssues;
         orbit::u64 pluginPanelRevision =
             ~orbit::u64{0};
         orbit::f64 pluginReloadAccumulator =
