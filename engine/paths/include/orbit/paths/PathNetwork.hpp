@@ -195,6 +195,10 @@ public:
         math::Double3 startHandleMeters,
         math::Double3 endHandleMeters);
 
+    void SetProfile(
+        scene::ObjectId pathObject,
+        std::string profileAsset);
+
     [[nodiscard]] std::optional<PathNetworkRecord>
     FindNetwork(NetworkId network) const;
 
