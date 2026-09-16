@@ -247,6 +247,20 @@ int main(
             "roughness_factor = 0.5\n"
             "metallic_factor = 0.0\n");
 
+
+        WriteText(
+            temporary.Root() /
+                "Content/Shaders/Smoke.hlsl",
+            "[numthreads(1, 1, 1)]\n"
+            "void CSMain(uint3 id : SV_DispatchThreadID) {}\n");
+
+        WriteText(
+            temporary.Root() /
+                "Content/Shaders/Smoke.hlsl.orbitshader.toml",
+            "[shader]\n"
+            "stage = \"compute\"\n"
+            "entry = \"CSMain\"\n");
+
         project.Manifest().
             scriptEntryPoints = {
                 "Scripts/main.luau"
