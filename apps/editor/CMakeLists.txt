@@ -12,6 +12,7 @@ target_link_libraries(OrbitStudio
         Orbit::Documents
         Orbit::EditorModel
         Orbit::EditorUi
+        Orbit::Plugins
         Orbit::Frames
         Orbit::Platform
         Orbit::RenderGraph
