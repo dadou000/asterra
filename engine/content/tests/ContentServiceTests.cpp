@@ -1,17 +1,25 @@
 #include <orbit/content/ContentService.hpp>
 #include <orbit/core/StrongId.hpp>
 
-#include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 
 namespace
 {
+void Check(const bool condition)
+{
+    if (!condition)
+    {
+        std::abort();
+    }
+}
+
 void Write(const std::filesystem::path& path, std::string_view text)
 {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    assert(output.good());
+    Check(output.good());
     output << text;
 }
 }
@@ -41,13 +49,22 @@ int main()
     orbit::content::ContentService content(root);
     content.Scan();
     const auto materials = content.Search("steel", orbit::content::AssetKind::Material);
-    assert(materials.size() == 1);
-    assert(materials[0].name == "Brushed Steel");
-    assert(materials[0].material.has_value());
-    assert(materials[0].material->metallicFactor == 1.0);
-    assert(materials[0].tags.size() == 2);
-    assert(content.Diagnostics().size() == 1);
-    assert(content.Diagnostics()[0].sourcePath ==
+    Check(materials.size() == 1);
+    Check(materials[0].name == "Brushed Steel");
+    Check(materials[0].material.has_value());
+    Check(materials[0].material->metallicFactor == 1.0);
+    Check(materials[0].tags.size() == 2);
+    Check(
+        materials[0].sourceHash.ToHex().size() ==
+        64);
+    Check(materials[0].derivedReady);
+    Check(materials[0].derivedKey.has_value());
+    Check(
+        content.Cache().Contains(
+            *materials[0].derivedKey,
+            "material.toml"));
+    Check(content.Diagnostics().size() == 1);
+    Check(content.Diagnostics()[0].sourcePath ==
         std::filesystem::path("Content/Materials/broken.orbitmaterial"));
 
     const auto stableId = materials[0].id;
@@ -69,6 +86,28 @@ int main()
     {
         return 1;
     }
+
+    const auto thumbnail =
+        content.GetThumbnail(
+            imported,
+            32,
+            24);
+
+    Check(!thumbnail.cacheHit);
+    Check(
+        std::filesystem::is_regular_file(
+            thumbnail.path));
+
+    const auto cachedThumbnail =
+        content.GetThumbnail(
+            imported,
+            32,
+            24);
+
+    Check(cachedThumbnail.cacheHit);
+    Check(
+        cachedThumbnail.key ==
+        thumbnail.key);
 
     std::filesystem::remove_all(root);
     return 0;
