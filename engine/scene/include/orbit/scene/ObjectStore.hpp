@@ -110,6 +110,11 @@ public:
 
     [[nodiscard]] bool TransactionActive() const noexcept;
 
+    // Monotonic semantic-state revision. Mutations inside an explicit
+    // transaction publish one revision only when the transaction commits;
+    // rolled-back transactions do not advance it.
+    [[nodiscard]] u64 Revision() const noexcept;
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
