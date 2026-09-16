@@ -5,6 +5,7 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 #include <orbit/editor_model/CommandSurfaces.hpp>
+#include <orbit/paths/PathNetwork.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
@@ -322,6 +323,120 @@ int main()
 
     ORBIT_TEST_CHECK(
         foundDisabledClear);
+
+    orbit::paths::PathNetworkService
+        pathService(
+            objects,
+            commandService);
+
+    const auto pathNetwork =
+        pathService.CreateNetwork(
+            "Road Network");
+
+    const auto nodeA =
+        pathService.CreateNode(
+            pathNetwork.id,
+            "A",
+            orbit::paths::FramePointAnchor{
+                .frame =
+                    orbit::frames::FrameId::Random(),
+                .localMeters = {
+                    0.0,
+                    0.0,
+                    0.0
+                }
+            });
+
+    const auto nodeB =
+        pathService.CreateNode(
+            pathNetwork.id,
+            "B",
+            orbit::paths::FramePointAnchor{
+                .frame =
+                    orbit::frames::FrameId::Random(),
+                .localMeters = {
+                    100.0,
+                    0.0,
+                    0.0
+                }
+            });
+
+    const std::array pathSelection{
+        nodeA.id,
+        nodeB.id
+    };
+
+    selection.Set(
+        std::span(pathSelection));
+
+    surfaces.Set(
+        "viewport",
+        orbit::editor_model::
+            CommandSurfaceKind::Radial,
+        {
+            orbit::editor_model::
+                authoring_commands::
+                    kConnectPathDirect,
+            orbit::editor_model::
+                authoring_commands::
+                    kConnectPathBezier,
+            orbit::editor_model::
+                authoring_commands::
+                    kConnectPathRouted
+        });
+
+    const auto pathRadial =
+        surfaces.Present(
+            "viewport",
+            orbit::editor_model::
+                CommandSurfaceKind::Radial,
+            registry);
+
+    ORBIT_TEST_CHECK(
+        pathRadial.size() == 3);
+
+    for (const auto& action :
+         pathRadial)
+    {
+        ORBIT_TEST_CHECK(
+            action.enabled);
+    }
+
+    registry.Invoke(
+        orbit::editor_model::
+            authoring_commands::
+                kConnectPathRouted);
+
+    const auto networkChildren =
+        objects.Children(
+            pathNetwork.object);
+
+    bool foundRouted = false;
+
+    for (const auto& child :
+         networkChildren)
+    {
+        if (child.type !=
+            orbit::paths::
+                kPathEdgeType)
+        {
+            continue;
+        }
+
+        const auto edge =
+            pathService.FindEdge(
+                child.id);
+
+        if (edge.has_value() &&
+            edge->mode ==
+                orbit::paths::
+                    EdgeMode::Routed)
+        {
+            foundRouted = true;
+        }
+    }
+
+    ORBIT_TEST_CHECK(foundRouted);
 
     }
 
