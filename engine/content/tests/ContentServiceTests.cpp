@@ -139,6 +139,76 @@ int main()
         *reformattedSettings->derivedKey ==
         semanticSettingsKey);
 
+    const auto pbrSource =
+        root / "ExternalPbr";
+
+    Write(
+        pbrSource / "factory_albedo.png",
+        "base");
+    Write(
+        pbrSource / "factory_normal.png",
+        "normal");
+    Write(
+        pbrSource / "factory_roughness.png",
+        "rough");
+    Write(
+        pbrSource / "factory_metallic.png",
+        "metal");
+
+    const auto pbrMaterialId =
+        content.ImportPbrSet(
+            pbrSource,
+            "Factory Steel");
+
+    const auto* pbrMaterial =
+        content.Find(
+            pbrMaterialId);
+
+    Check(pbrMaterial != nullptr);
+    Check(
+        pbrMaterial->kind ==
+        orbit::content::AssetKind::Material);
+    Check(pbrMaterial->derivedReady);
+    Check(
+        pbrMaterial->dependencies.size() ==
+        4);
+    Check(
+        pbrMaterial->material.has_value());
+    Check(
+        pbrMaterial->material->
+            metallicFactor ==
+        1.0);
+    Check(
+        std::filesystem::is_regular_file(
+            root /
+            pbrMaterial->sourcePath));
+
+    const auto ambiguousPbr =
+        root / "AmbiguousPbr";
+
+    Write(
+        ambiguousPbr / "part_normal.png",
+        "normal-a");
+    Write(
+        ambiguousPbr / "part_normal_detail.png",
+        "normal-b");
+
+    bool ambiguousRejected = false;
+
+    try
+    {
+        static_cast<void>(
+            content.ImportPbrSet(
+                ambiguousPbr,
+                "Ambiguous"));
+    }
+    catch (const std::invalid_argument&)
+    {
+        ambiguousRejected = true;
+    }
+
+    Check(ambiguousRejected);
+
     const auto external = root / "source.png";
     Write(external, "image");
     const auto imported = content.ImportFile(external);
