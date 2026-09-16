@@ -43,6 +43,10 @@ if(BUILD_TESTING)
     target_compile_features(OrbitBuildServiceTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitBuildServiceTests)
 
+    orbit_copy_dxc_runtime(
+        OrbitBuildServiceTests
+    )
+
     add_test(
         NAME Orbit.BuildService
         COMMAND OrbitBuildServiceTests
