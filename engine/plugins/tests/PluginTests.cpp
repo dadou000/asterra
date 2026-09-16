@@ -11,15 +11,26 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <source_location>
 #include <string>
 
 namespace
 {
-void Check(const bool condition)
+void Check(
+    const bool condition,
+    const std::source_location location =
+        std::source_location::current())
 {
     if (!condition)
     {
-        std::abort();
+        std::cerr
+            << "Plugin test check failed at "
+            << location.file_name()
+            << ':'
+            << location.line()
+            << '\n';
+        std::exit(1);
     }
 }
 
@@ -104,12 +115,9 @@ int main()
     Check(
         commandSurfaces.Commands(
             "explorer",
-            orbit::editor_model::
-                CommandSurfaceKind::ContextMenu).
-            size() == 1);
+            orbit::editor_model::CommandSurfaceKind::ContextMenu).size() == 1);
 
-    const auto validationIssues =
-        plugins.Validate();
+    const auto validationIssues = plugins.Validate();
     Check(validationIssues.size() == 1);
     Check(validationIssues[0].pluginId == "test.plugin");
     Check(validationIssues[0].message == "test validation issue");
@@ -127,9 +135,7 @@ int main()
     Check(
         commandSurfaces.Commands(
             "explorer",
-            orbit::editor_model::
-                CommandSurfaceKind::ContextMenu).
-            empty());
+            orbit::editor_model::CommandSurfaceKind::ContextMenu).empty());
     Check(plugins.Validate().empty());
 
     // A denied privileged API must fail inside the sandbox rather than
@@ -144,17 +150,14 @@ int main()
 
     // Once the project explicitly grants MCP registration, the same
     // package may expose an automation-visible command.
-    project.Manifest().plugins[0].
-        grantedPermissions.push_back(
-            "mcp_registration");
+    project.Manifest().plugins[0].grantedPermissions.push_back("mcp_registration");
     project.Save();
 
     Write(
         package / "main.luau",
         "Orbit.registerCommand('AgentTool', function() end, 'Test', '', true)\n");
 
-    plugins.LoadEnabled(
-        project.Manifest());
+    plugins.LoadEnabled(project.Manifest());
 
     statuses = plugins.Statuses();
     Check(statuses[0].loaded);
@@ -162,11 +165,19 @@ int main()
     Check(commandRegistry.Catalog()[0].automationVisible);
 
     // The host intentionally exposes no file/process/network libraries.
+    // Do not rely on an external test helper inside Luau: encode the result
+    // into the registered command name and inspect it from the host.
     Write(package / "main.luau",
-        "Check(io == nil)\nCheck(os == nil)\nCheck(debug == nil)\n");
+        "if io == nil and os == nil and debug == nil then\n"
+        "  Orbit.registerCommand('SafeGlobals', function() end, 'Test', '', false)\n"
+        "else\n"
+        "  Orbit.registerCommand('UnsafeGlobals', function() end, 'Test', '', false)\n"
+        "end\n");
     Check(plugins.PollHotReload() == 1);
     statuses = plugins.Statuses();
     Check(statuses[0].loaded);
+    Check(commandRegistry.Catalog().size() == 1);
+    Check(commandRegistry.Catalog()[0].name == "SafeGlobals");
 
     // A malformed sibling package must be isolated. Valid enabled plugins
     // continue loading and registering commands in the same editor session.
@@ -199,9 +210,7 @@ int main()
         }
         else if (status.id == "broken.plugin")
         {
-            foundBroken =
-                !status.loaded &&
-                !status.error.empty();
+            foundBroken = !status.loaded && !status.error.empty();
         }
     }
 
