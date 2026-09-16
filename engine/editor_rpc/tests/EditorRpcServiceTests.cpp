@@ -9,47 +9,55 @@
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
 
-#include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <utility>
 
 namespace
 {
+void Check(const bool condition)
+{
+    if (!condition)
+    {
+        std::abort();
+    }
+}
+
 orbit::rpc::Value Call(
     orbit::rpc::Dispatcher& dispatcher,
-    const std::string& id,
-    const std::string& method,
-    const std::string& params = "{}")
+    std::string id,
+    std::string method,
+    orbit::rpc::Value params =
+        orbit::rpc::Value(
+            orbit::rpc::Value::Object{}))
 {
+    orbit::rpc::Value request(
+        orbit::rpc::Value::Object{
+            {"jsonrpc", "2.0"},
+            {"id", std::move(id)},
+            {"method", std::move(method)},
+            {"params", std::move(params)}
+        });
+
     const auto response =
         dispatcher.Dispatch(
-            "{"jsonrpc":"2.0","id":"" +
-            id +
-            "","method":"" +
-            method +
-            "","params":" +
-            params +
-            "}");
+            orbit::rpc::Serialize(request));
 
-    assert(response.has_value());
+    Check(response.has_value());
 
-    auto document =
-        orbit::rpc::ParseValue(
-            *response);
+    orbit::rpc::Value document =
+        orbit::rpc::ParseValue(*response);
 
-    const auto* error =
-        document.Find("error");
-
-    assert(error == nullptr);
+    Check(document.Find("error") == nullptr);
 
     const auto* result =
         document.Find("result");
 
-    assert(result != nullptr);
-
+    Check(result != nullptr);
     return *result;
 }
-}
+} // namespace
 
 int main()
 {
@@ -75,17 +83,17 @@ int main()
 
     orbit::scene::ObjectStore objects(world);
     orbit::selection::SelectionService selection;
-    orbit::commands::CommandService commands(
+    orbit::commands::CommandService commandService(
         objects,
         schemas);
-    orbit::commands::CommandRegistry registry;
+    orbit::commands::CommandRegistry commandRegistry;
     orbit::rpc::Dispatcher dispatcher;
 
     orbit::editor_rpc::EditorRpcService rpcService(
         dispatcher,
         project,
-        registry,
-        commands,
+        commandRegistry,
+        commandService,
         schemas,
         objects,
         selection);
@@ -96,11 +104,10 @@ int main()
             "1",
             "project.info");
 
-    assert(
-        projectInfo.
-            Find("name")->
-            AsString() ==
-        "RPC Test");
+    Check(
+        projectInfo.Find("name") != nullptr &&
+        projectInfo.Find("name")->AsString() ==
+            "RPC Test");
 
     const auto schemaCatalog =
         Call(
@@ -108,36 +115,50 @@ int main()
             "2",
             "schema.catalog");
 
-    assert(schemaCatalog.IsArray());
-    assert(
-        schemaCatalog.AsArray().size() >= 2);
+    Check(schemaCatalog.IsArray());
+    Check(schemaCatalog.AsArray().size() >= 2);
 
     const auto created =
         Call(
             dispatcher,
             "3",
             "object.create",
-            "{"type":"" +
-                orbit::editor_model::builtin::
-                    kCelestialBodyType.
-                    ToString() +
-                "","name":"Asterra"}");
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "type",
+                        orbit::editor_model::builtin::
+                            kCelestialBodyType.
+                            ToString()
+                    },
+                    {"name", "Asterra"}
+                }));
 
+    const auto* createdId =
+        created.Find("id");
+
+    Check(createdId != nullptr);
     const std::string objectId =
-        created.Find("id")->AsString();
+        createdId->AsString();
 
     const auto selected =
         Call(
             dispatcher,
             "4",
             "selection.set",
-            "{"ids":["" +
-                objectId +
-                ""]}");
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "ids",
+                        orbit::rpc::Value::Array{
+                            objectId
+                        }
+                    }
+                }));
 
-    assert(
-        selected.Find("revision")->
-            AsInteger() > 0);
+    Check(
+        selected.Find("revision") != nullptr &&
+        selected.Find("revision")->AsInteger() > 0);
 
     const auto selectionValue =
         Call(
@@ -145,8 +166,9 @@ int main()
             "5",
             "selection.get");
 
-    assert(selectionValue.IsArray());
-    assert(
+    Check(selectionValue.IsArray());
+    Check(selectionValue.AsArray().size() == 1);
+    Check(
         selectionValue.AsArray().
             front().
             AsString() ==
@@ -157,29 +179,38 @@ int main()
             dispatcher,
             "6",
             "transaction.begin",
-            "{"label":"RPC edit"}"));
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"label", "RPC edit"}
+                })));
 
     static_cast<void>(
         Call(
             dispatcher,
             "7",
             "object.rename",
-            "{"id":"" +
-                objectId +
-                "","name":"Asterra Prime"}"));
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"id", objectId},
+                    {"name", "Asterra Prime"}
+                })));
 
     static_cast<void>(
         Call(
             dispatcher,
             "8",
             "property.set",
-            "{"object":"" +
-                objectId +
-                "","property":"" +
-                orbit::editor_model::builtin::
-                    kBodyRadius.
-                    ToString() +
-                "","value":7000000.0}"));
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"object", objectId},
+                    {
+                        "property",
+                        orbit::editor_model::builtin::
+                            kBodyRadius.
+                            ToString()
+                    },
+                    {"value", 7'000'000.0}
+                })));
 
     static_cast<void>(
         Call(
@@ -191,16 +222,23 @@ int main()
         orbit::scene::ObjectId::Parse(
             objectId);
 
-    assert(object.has_value());
-    assert(
-        objects.Find(*object)->name ==
-        "Asterra Prime");
-    assert(
-        std::get<orbit::f64>(
-            *objects.GetProperty(
-                *object,
-                orbit::editor_model::builtin::
-                    kBodyRadius)) ==
+    Check(object.has_value());
+
+    const auto renamed =
+        objects.Find(*object);
+
+    Check(renamed.has_value());
+    Check(renamed->name == "Asterra Prime");
+
+    const auto radius =
+        objects.GetProperty(
+            *object,
+            orbit::editor_model::builtin::
+                kBodyRadius);
+
+    Check(radius.has_value());
+    Check(
+        std::get<orbit::f64>(*radius) ==
         7'000'000.0);
 
     static_cast<void>(
@@ -209,10 +247,12 @@ int main()
             "10",
             "history.undo"));
 
-    assert(
-        objects.Find(*object)->name ==
-        "Asterra");
-    assert(
+    const auto undone =
+        objects.Find(*object);
+
+    Check(undone.has_value());
+    Check(undone->name == "Asterra");
+    Check(
         !objects.GetProperty(
             *object,
             orbit::editor_model::builtin::
@@ -225,28 +265,35 @@ int main()
             "11",
             "history.redo"));
 
-    assert(
-        objects.Find(*object)->name ==
-        "Asterra Prime");
+    const auto redone =
+        objects.Find(*object);
+
+    Check(redone.has_value());
+    Check(redone->name == "Asterra Prime");
 
     const auto objectValue =
         Call(
             dispatcher,
             "12",
             "object.get",
-            "{"id":"" +
-                objectId +
-                ""}");
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"id", objectId}
+                }));
 
-    assert(
-        objectValue.
-            Find("properties")->
-            Find(
-                orbit::editor_model::builtin::
-                    kBodyRadius.
-                    ToString())->
-            AsNumber() ==
-        7'000'000.0);
+    const auto* properties =
+        objectValue.Find("properties");
+
+    Check(properties != nullptr);
+
+    const auto* radiusValue =
+        properties->Find(
+            orbit::editor_model::builtin::
+                kBodyRadius.
+                ToString());
+
+    Check(radiusValue != nullptr);
+    Check(radiusValue->AsNumber() == 7'000'000.0);
 
     std::filesystem::remove_all(root);
     return 0;
