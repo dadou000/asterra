@@ -461,7 +461,7 @@ void ImporterRegistry::Register(
 
 const ImporterDescriptor*
 ImporterRegistry::FindFor(
-    const std::filesystem::path& source) const noexcept
+    const std::filesystem::path& source) const
 {
     const std::string extension =
         Lower(
