@@ -11,16 +11,27 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
+#include <source_location>
 #include <string>
 #include <utility>
 
 namespace
 {
-void Check(const bool condition)
+void Check(
+    const bool condition,
+    const std::source_location location =
+        std::source_location::current())
 {
     if (!condition)
     {
-        std::abort();
+        std::cerr
+            << "EditorRpc test failed at "
+            << location.file_name()
+            << ':'
+            << location.line()
+            << '\n';
+        std::exit(1);
     }
 }
 
@@ -446,6 +457,238 @@ int main()
 
     Check(radiusValue != nullptr);
     Check(radiusValue->AsNumber() == 7'000'000.0);
+
+    const auto pathFrame =
+        orbit::frames::FrameId::Random();
+
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "14",
+            "transaction.begin",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "label",
+                        "RPC path edit"
+                    }
+                })));
+
+    const auto pathNetwork =
+        Call(
+            dispatcher,
+            "15",
+            "path.create_network",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"name", "RPC Roads"},
+                    {
+                        "profile_asset",
+                        "11111111-1111-4111-8111-111111111111"
+                    }
+                }));
+
+    const std::string pathNetworkId =
+        pathNetwork.Find("id")->AsString();
+
+    const auto pathNodeA =
+        Call(
+            dispatcher,
+            "16",
+            "path.create_node",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "network",
+                        pathNetworkId
+                    },
+                    {"name", "Node A"},
+                    {
+                        "anchor",
+                        orbit::rpc::Value::Object{
+                            {"kind", "frame"},
+                            {
+                                "frame",
+                                pathFrame.ToString()
+                            },
+                            {
+                                "position",
+                                orbit::rpc::Value::Array{
+                                    0.0,
+                                    0.0,
+                                    0.0
+                                }
+                            }
+                        }
+                    }
+                }));
+
+    const auto pathNodeB =
+        Call(
+            dispatcher,
+            "17",
+            "path.create_node",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "network",
+                        pathNetworkId
+                    },
+                    {"name", "Node B"},
+                    {
+                        "anchor",
+                        orbit::rpc::Value::Object{
+                            {"kind", "frame"},
+                            {
+                                "frame",
+                                pathFrame.ToString()
+                            },
+                            {
+                                "position",
+                                orbit::rpc::Value::Array{
+                                    100.0,
+                                    0.0,
+                                    0.0
+                                }
+                            }
+                        }
+                    }
+                }));
+
+    const std::string pathNodeAId =
+        pathNodeA.Find("id")->AsString();
+    const std::string pathNodeBId =
+        pathNodeB.Find("id")->AsString();
+
+    const auto pathEdge =
+        Call(
+            dispatcher,
+            "18",
+            "path.connect",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"start", pathNodeAId},
+                    {"end", pathNodeBId},
+                    {"mode", "bezier"},
+                    {
+                        "start_handle",
+                        orbit::rpc::Value::Array{
+                            20.0,
+                            5.0,
+                            0.0
+                        }
+                    },
+                    {
+                        "end_handle",
+                        orbit::rpc::Value::Array{
+                            -20.0,
+                            5.0,
+                            0.0
+                        }
+                    }
+                }));
+
+    const std::string pathEdgeId =
+        pathEdge.Find("id")->AsString();
+
+    const auto inspectedPath =
+        Call(
+            dispatcher,
+            "19",
+            "path.inspect",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"id", pathEdgeId}
+                }));
+
+    Check(
+        inspectedPath.Find("mode") !=
+            nullptr &&
+        inspectedPath.Find("mode")->
+            AsString() ==
+            "bezier");
+
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "20",
+            "path.set_bezier_handles",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"edge", pathEdgeId},
+                    {
+                        "start_handle",
+                        orbit::rpc::Value::Array{
+                            30.0,
+                            8.0,
+                            0.0
+                        }
+                    },
+                    {
+                        "end_handle",
+                        orbit::rpc::Value::Array{
+                            -30.0,
+                            8.0,
+                            0.0
+                        }
+                    }
+                })));
+
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "21",
+            "transaction.commit"));
+
+    const auto pathNetworkObject =
+        orbit::scene::ObjectId::Parse(
+            pathNetwork.Find("object")->
+                AsString());
+    const auto pathNodeAObject =
+        orbit::scene::ObjectId::Parse(
+            pathNodeAId);
+    const auto pathNodeBObject =
+        orbit::scene::ObjectId::Parse(
+            pathNodeBId);
+    const auto pathEdgeObject =
+        orbit::scene::ObjectId::Parse(
+            pathEdgeId);
+
+    Check(pathNetworkObject.has_value());
+    Check(pathNodeAObject.has_value());
+    Check(pathNodeBObject.has_value());
+    Check(pathEdgeObject.has_value());
+    Check(
+        objects.Find(*pathNetworkObject).
+            has_value());
+    Check(
+        objects.Find(*pathNodeAObject).
+            has_value());
+    Check(
+        objects.Find(*pathNodeBObject).
+            has_value());
+    Check(
+        objects.Find(*pathEdgeObject).
+            has_value());
+
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "22",
+            "history.undo"));
+
+    Check(
+        !objects.Find(*pathNetworkObject).
+            has_value());
+    Check(
+        !objects.Find(*pathNodeAObject).
+            has_value());
+    Check(
+        !objects.Find(*pathNodeBObject).
+            has_value());
+    Check(
+        !objects.Find(*pathEdgeObject).
+            has_value());
 
     std::filesystem::remove_all(root);
     return 0;
