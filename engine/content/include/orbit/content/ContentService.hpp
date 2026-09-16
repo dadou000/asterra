@@ -48,6 +48,9 @@ struct AssetRecord
     ContentHash sourceHash{};
     std::optional<ContentHash> derivedKey;
     bool derivedReady{false};
+    std::vector<std::filesystem::path>
+        dependencyPaths;
+    std::vector<AssetId> dependencies;
     std::vector<std::string> tags;
     std::optional<MaterialChannels> material;
 };
@@ -76,6 +79,10 @@ public:
     [[nodiscard]] const AssetRecord* FindByPath(const std::filesystem::path& path) const noexcept;
     [[nodiscard]] std::vector<AssetRecord> Search(std::string_view query, std::optional<AssetKind> kind = std::nullopt) const;
     [[nodiscard]] std::vector<AssetRecord> All() const;
+    [[nodiscard]] std::vector<AssetId> Dependencies(
+        AssetId id) const;
+    [[nodiscard]] std::vector<AssetId> Dependents(
+        AssetId id) const;
     [[nodiscard]] const std::vector<ContentDiagnostic>& Diagnostics() const noexcept;
     [[nodiscard]] u64 Revision() const noexcept;
 
@@ -115,6 +122,8 @@ private:
     ThumbnailService thumbnails_;
     std::unordered_map<AssetId, AssetRecord> assets_;
     std::unordered_map<std::string, AssetId> pathIndex_;
+    std::unordered_map<AssetId, std::vector<AssetId>>
+        dependents_;
     std::vector<ContentDiagnostic> diagnostics_;
     u64 revision_{0};
 };
