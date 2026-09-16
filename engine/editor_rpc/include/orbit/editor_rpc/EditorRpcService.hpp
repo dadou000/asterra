@@ -57,6 +57,9 @@ struct BuildAutomation
     std::function<rpc::Value(
         std::optional<std::string>)>
         cook;
+    std::function<rpc::Value(
+        std::optional<std::string>)>
+        package;
 };
 
 // Registers the structured authoring API onto a transport-independent
