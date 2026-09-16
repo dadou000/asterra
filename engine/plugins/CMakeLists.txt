@@ -28,6 +28,13 @@ target_link_libraries(OrbitPlugins
 target_compile_features(OrbitPlugins PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitPlugins)
 
+if(MSVC)
+    # Luau 0.738 exposes a few intentionally unused visitor parameters in
+    # public headers. Keep Orbit /WX-clean without weakening warnings for
+    # Orbit code itself.
+    target_compile_options(OrbitPlugins PRIVATE /wd4100)
+endif()
+
 if(BUILD_TESTING)
     add_executable(OrbitPluginTests
         tests/PluginTests.cpp
