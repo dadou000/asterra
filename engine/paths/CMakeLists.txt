@@ -99,4 +99,22 @@ if(BUILD_TESTING)
         NAME Orbit.PathRouting
         COMMAND OrbitPathRoutingTests
     )
+
+    add_executable(OrbitPathRoutingPreparationTests
+        tests/RoutingPreparationTests.cpp
+    )
+
+    target_link_libraries(OrbitPathRoutingPreparationTests
+        PRIVATE
+            Orbit::Documents
+            Orbit::Paths
+    )
+
+    target_compile_features(OrbitPathRoutingPreparationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPathRoutingPreparationTests)
+
+    add_test(
+        NAME Orbit.PathRoutingPreparation
+        COMMAND OrbitPathRoutingPreparationTests
+    )
 endif()
