@@ -43,6 +43,7 @@ public:
     void CommitTransaction();
     void RollbackTransaction();
 
+    [[nodiscard]] bool HasActiveTransaction() const noexcept;
     [[nodiscard]] bool CanUndo() const noexcept;
     [[nodiscard]] bool CanRedo() const noexcept;
 
