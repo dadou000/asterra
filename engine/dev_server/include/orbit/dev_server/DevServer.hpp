@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
