@@ -26,6 +26,19 @@ struct ViewportAutomation
         capture;
 };
 
+struct PathRoutingAutomation
+{
+    std::function<rpc::Value(
+        scene::ObjectId)>
+        status;
+    std::function<rpc::Value(
+        scene::ObjectId)>
+        result;
+    std::function<void(
+        scene::ObjectId)>
+        invalidate;
+};
+
 // Registers the structured authoring API onto a transport-independent
 // JSON-RPC dispatcher. All persistent mutations route through CommandService
 // or CommandRegistry, preserving validation, transactions and undo/redo.
@@ -65,6 +78,9 @@ public:
     void AttachViewport(
         ViewportAutomation viewport);
 
+    void AttachPathRouting(
+        PathRoutingAutomation routing);
+
 private:
     void Register(
         rpc::MethodDescriptor descriptor,
@@ -85,5 +101,6 @@ private:
         pendingNotifications_;
     u64 nextEventSequence_{1};
     bool viewportRegistered_{false};
+    bool pathRoutingRegistered_{false};
 };
 } // namespace orbit::editor_rpc
