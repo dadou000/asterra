@@ -16,6 +16,9 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/path_routing/RouteDomains.hpp>
+#include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/platform/FileDialog.hpp>
 #include <orbit/platform/Paths.hpp>
 #include <orbit/paths/PathNetwork.hpp>
@@ -46,6 +49,8 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -68,6 +73,177 @@ template <typename TargetId, typename SourceId>
     }
 
     return result;
+}
+
+[[nodiscard]] orbit::u64
+ContentRevisionKey(
+    const orbit::content::ContentHash& hash)
+    noexcept
+{
+    orbit::u64 value =
+        0xcbf29ce484222325ULL;
+
+    for (const std::byte byte :
+         hash.Bytes())
+    {
+        value ^=
+            static_cast<orbit::u64>(
+                std::to_integer<
+                    orbit::u8>(byte));
+        value *=
+            0x100000001b3ULL;
+    }
+
+    return value;
+}
+
+struct ResolvedRoutingProfile
+{
+    orbit::paths::PathProfile profile;
+    orbit::u64 revision{1};
+};
+
+[[nodiscard]] ResolvedRoutingProfile
+ResolveRoutingProfile(
+    const orbit::paths::PathEdgeRecord& edge,
+    orbit::paths::PathNetworkService& paths,
+    const orbit::content::ContentService& content,
+    const std::filesystem::path& projectRoot)
+{
+    const auto network =
+        paths.FindNetwork(
+            edge.network);
+
+    if (!network.has_value())
+    {
+        throw std::runtime_error(
+            "Routed edge references an unknown path network.");
+    }
+
+    const std::string assetText =
+        edge.profileOverride.empty()
+            ? network->profileAsset
+            : edge.profileOverride;
+
+    if (assetText.empty())
+    {
+        return {
+            .profile = {
+                .name = "Default Road",
+                .kind =
+                    orbit::paths::
+                        PathProfileKind::Road
+            },
+            .revision = 1
+        };
+    }
+
+    const auto assetId =
+        orbit::content::AssetId::Parse(
+            assetText);
+
+    if (!assetId.has_value())
+    {
+        throw std::runtime_error(
+            "Routed edge path profile is not a valid AssetId.");
+    }
+
+    const auto* asset =
+        content.Find(
+            *assetId);
+
+    if (asset == nullptr ||
+        asset->kind !=
+            orbit::content::
+                AssetKind::PathProfile)
+    {
+        throw std::runtime_error(
+            "Routed edge path profile asset is missing or has the wrong kind.");
+    }
+
+    return {
+        .profile =
+            orbit::paths::LoadPathProfile(
+                projectRoot /
+                asset->sourcePath),
+        .revision =
+            ContentRevisionKey(
+                asset->sourceHash)
+    };
+}
+
+[[nodiscard]] std::vector<
+    orbit::scene::ObjectId>
+FindRoutedPathEdges(
+    orbit::scene::ObjectStore& objects,
+    orbit::paths::PathNetworkService& paths)
+{
+    std::vector<orbit::scene::ObjectRecord>
+        pending =
+            objects.Roots();
+    std::vector<orbit::scene::ObjectId>
+        result;
+
+    while (!pending.empty())
+    {
+        const auto object =
+            pending.back();
+        pending.pop_back();
+
+        if (object.type ==
+            orbit::paths::kPathEdgeType)
+        {
+            const auto edge =
+                paths.FindEdge(
+                    object.id);
+
+            if (edge.has_value() &&
+                edge->mode ==
+                    orbit::paths::
+                        EdgeMode::Routed)
+            {
+                result.push_back(
+                    object.id);
+            }
+        }
+
+        auto children =
+            objects.Children(
+                object.id);
+
+        pending.insert(
+            pending.end(),
+            children.begin(),
+            children.end());
+    }
+
+    return result;
+}
+
+[[nodiscard]]
+orbit::path_routing::RouteSearchConfig
+RouteSearchForProfile(
+    const orbit::paths::PathProfile& profile)
+{
+    const orbit::f64 spacing =
+        std::max(
+            5.0,
+            profile.widthMeters * 2.0);
+
+    return {
+        .spacingMeters = spacing,
+        .corridorHalfWidthMeters =
+            std::max({
+                100.0,
+                spacing * 8.0,
+                profile.
+                    minimumRadiusMeters *
+                    2.0
+            }),
+        .maximumAlongSamples = 256,
+        .maximumLateralSamples = 33,
+        .maximumGridCells = 8'192
+    };
 }
 
 [[nodiscard]] orbit::documents::ProjectDocument
