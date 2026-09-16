@@ -589,7 +589,10 @@ int main(
                         kConnectPathDirect,
                 orbit::editor_model::
                     authoring_commands::
-                        kConnectPathBezier
+                        kConnectPathBezier,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathRouted
             });
 
         commandSurfaces.Set(
@@ -609,6 +612,9 @@ int main(
                 orbit::editor_model::
                     authoring_commands::
                         kConnectPathBezier,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathRouted,
                 orbit::editor_model::
                     authoring_commands::kUndo,
                 orbit::editor_model::
@@ -633,6 +639,9 @@ int main(
                 orbit::editor_model::
                     authoring_commands::
                         kConnectPathBezier,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathRouted,
                 orbit::editor_model::
                     authoring_commands::kUndo,
                 orbit::editor_model::
