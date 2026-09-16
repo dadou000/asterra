@@ -271,10 +271,60 @@ int main()
     Check(redone.has_value());
     Check(redone->name == "Asterra Prime");
 
-    const auto objectValue =
+    editorRpc.PublishEvent(
+        "test.changed",
+        orbit::rpc::Value(
+            orbit::rpc::Value::Object{
+                {"value", 42}
+            }));
+
+    Check(
+        editorRpc.LatestEventSequence() == 1);
+
+    auto notifications =
+        editorRpc.DrainNotifications();
+
+    Check(notifications.size() == 1);
+
+    const auto notification =
+        orbit::rpc::ParseValue(
+            notifications.front());
+
+    Check(
+        notification.Find("method") != nullptr &&
+        notification.Find("method")->AsString() ==
+            "event.test.changed");
+
+    const auto replay =
         Call(
             dispatcher,
             "12",
+            "event.since",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"sequence", 0}
+                }));
+
+    Check(
+        replay.Find("latest_sequence") != nullptr &&
+        replay.Find("latest_sequence")->AsInteger() ==
+            1);
+
+    const auto* replayEvents =
+        replay.Find("events");
+
+    Check(replayEvents != nullptr);
+    Check(replayEvents->IsArray());
+    Check(replayEvents->AsArray().size() == 1);
+    Check(
+        replayEvents->AsArray()[0].
+            Find("type")->AsString() ==
+        "test.changed");
+
+    const auto objectValue =
+        Call(
+            dispatcher,
+            "13",
             "object.get",
             orbit::rpc::Value(
                 orbit::rpc::Value::Object{
