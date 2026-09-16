@@ -326,6 +326,24 @@ def orbit_path_set_profile(
 
 
 @mcp.tool()
+def orbit_path_route_status(edge_id: str) -> dict[str, Any]:
+    """Return async derived-route state for a routed PathEdge."""
+    return _rpc("path.route_status", {"edge": edge_id})
+
+
+@mcp.tool()
+def orbit_path_route_result(edge_id: str) -> dict[str, Any]:
+    """Return the current derived routed polyline, frame and route cost."""
+    return _rpc("path.route_result", {"edge": edge_id})
+
+
+@mcp.tool()
+def orbit_path_route_invalidate(edge_id: str) -> dict[str, Any]:
+    """Invalidate one derived route without changing project authority."""
+    return _rpc("path.route_invalidate", {"edge": edge_id})
+
+
+@mcp.tool()
 def orbit_path_inspect(object_id: str) -> dict[str, Any]:
     """Inspect a semantic path network, node, or edge."""
     return _rpc("path.inspect", {"id": object_id})
