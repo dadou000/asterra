@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <type_traits>
 
 namespace orbit::editor_ui
@@ -46,6 +47,9 @@ constexpr const char* kPixelShader = R"(
 struct Constants
 {
     float4 radiiAndAspect;
+    float4 cameraAndTanHalfFov;
+    float4 forward;
+    float4 up;
 };
 [[vk::push_constant]] Constants g_pc;
 
@@ -57,8 +61,7 @@ struct VSOutput
 
 float4 main(VSOutput input) : SV_Target0
 {
-    float2 p = input.uv;
-    p.x *= g_pc.radiiAndAspect.w;
+    const float2 p = input.uv;
 
     const float3 radii =
         max(
@@ -66,14 +69,36 @@ float4 main(VSOutput input) : SV_Target0
             float3(0.001, 0.001, 0.001));
 
     const float3 camera =
-        float3(0.0, 0.0, -3.2);
+        g_pc.cameraAndTanHalfFov.xyz;
+
+    const float3 forward =
+        normalize(g_pc.forward.xyz);
+    const float3 requestedUp =
+        normalize(g_pc.up.xyz);
+    const float3 right =
+        normalize(
+            cross(
+                forward,
+                requestedUp));
+    const float3 cameraUp =
+        normalize(
+            cross(
+                right,
+                forward));
+    const float tanHalfFov =
+        max(
+            g_pc.cameraAndTanHalfFov.w,
+            0.001);
 
     const float3 ray =
         normalize(
-            float3(
-                p.x,
-                -p.y,
-                1.8));
+            forward +
+            right *
+                (p.x *
+                 g_pc.radiiAndAspect.w *
+                 tanHalfFov) -
+            cameraUp *
+                (p.y * tanHalfFov));
 
     const float3 ro =
         camera / radii;
@@ -198,7 +223,7 @@ public:
                 },
                 .vertexAttributes = {},
                 .vertexStrideBytes = 0,
-                .pushConstantDwords = 4,
+                .pushConstantDwords = 16,
                 .sampledTextures = 0,
                 .topology =
                     rhi::PrimitiveTopology::
@@ -233,7 +258,8 @@ void BodyPreviewRenderer::Draw(
     rhi::Texture& target,
     const u32 width,
     const u32 height,
-    const universe::BodyShape& shape)
+    const universe::BodyShape& shape,
+    const render_view::CameraState& camera)
 {
     if (width == 0 || height == 0)
     {
@@ -276,22 +302,61 @@ void BodyPreviewRenderer::Draw(
             ellipsoid.radiiMeters.z
         });
 
-    const std::array<u32, 4> constants{
-        std::bit_cast<u32>(
+    const f64 scale =
+        std::max(maximum, 1.0);
+
+    const f32 tanHalfFov =
+        std::tan(
+            camera.verticalFovRadians *
+            0.5F);
+
+    const auto bits =
+        [](const f32 value)
+        {
+            return std::bit_cast<u32>(
+                value);
+        };
+
+    const std::array<u32, 16> constants{
+        bits(
             static_cast<f32>(
                 ellipsoid.radiiMeters.x /
-                maximum)),
-        std::bit_cast<u32>(
+                scale)),
+        bits(
             static_cast<f32>(
                 ellipsoid.radiiMeters.y /
-                maximum)),
-        std::bit_cast<u32>(
+                scale)),
+        bits(
             static_cast<f32>(
                 ellipsoid.radiiMeters.z /
-                maximum)),
-        std::bit_cast<u32>(
+                scale)),
+        bits(
             static_cast<f32>(width) /
-            static_cast<f32>(height))
+            static_cast<f32>(height)),
+
+        bits(
+            static_cast<f32>(
+                camera.localPositionMeters.x /
+                scale)),
+        bits(
+            static_cast<f32>(
+                camera.localPositionMeters.y /
+                scale)),
+        bits(
+            static_cast<f32>(
+                camera.localPositionMeters.z /
+                scale)),
+        bits(tanHalfFov),
+
+        bits(camera.forward.x),
+        bits(camera.forward.y),
+        bits(camera.forward.z),
+        bits(0.0F),
+
+        bits(camera.up.x),
+        bits(camera.up.y),
+        bits(camera.up.z),
+        bits(0.0F)
     };
 
     commands.SetRenderTarget(target);
