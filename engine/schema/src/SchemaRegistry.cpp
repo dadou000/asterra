@@ -1,5 +1,6 @@
 #include <orbit/schema/SchemaRegistry.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <type_traits>
@@ -163,6 +164,27 @@ SchemaRegistry::FindProperty(
     }
 
     return nullptr;
+}
+
+std::vector<TypeSchema>
+SchemaRegistry::Catalog() const
+{
+    std::vector<TypeSchema> result;
+    result.reserve(types_.size());
+
+    for (const auto& [id, schema] :
+         types_)
+    {
+        static_cast<void>(id);
+        result.push_back(schema);
+    }
+
+    std::ranges::sort(
+        result,
+        {},
+        &TypeSchema::displayName);
+
+    return result;
 }
 
 bool SchemaRegistry::ValidateValue(
