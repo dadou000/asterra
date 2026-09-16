@@ -1239,7 +1239,8 @@ int main(
             .title = "Properties",
             .defaultOpen = true,
             .draw =
-                [&inspector](
+                [&inspector,
+                 &presentActions](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -1260,6 +1261,19 @@ int main(
                             selected.size() == 1
                                 ? ""
                                 : "s"));
+
+                    const auto propertyActions =
+                        presentActions(
+                            "properties",
+                            orbit::editor_model::
+                                CommandSurfaceKind::
+                                    Toolbar);
+
+                    if (!propertyActions.empty())
+                    {
+                        context.Toolbar(
+                            propertyActions);
+                    }
 
                     context.Separator();
 
