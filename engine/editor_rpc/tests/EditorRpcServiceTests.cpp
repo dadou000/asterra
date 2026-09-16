@@ -366,18 +366,18 @@ int main()
     Check(redone.has_value());
     Check(redone->name == "Asterra Prime");
 
-    editorRpc.PublishEvent(
+    rpcService.PublishEvent(
         "test.changed",
         orbit::rpc::Value(
             orbit::rpc::Value::Object{
-                {"value", 42}
+                {"value", static_cast<orbit::i64>(42)}
             }));
 
     Check(
-        editorRpc.LatestEventSequence() == 1);
+        rpcService.LatestEventSequence() == 1);
 
     auto notifications =
-        editorRpc.DrainNotifications();
+        rpcService.DrainNotifications();
 
     Check(notifications.size() == 1);
 
