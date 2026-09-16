@@ -13,6 +13,7 @@ target_link_libraries(OrbitStudio
         Orbit::Scene
         Orbit::Commands
         Orbit::Content
+        Orbit::ContentWic
         Orbit::Documents
         Orbit::DevServer
         Orbit::EditorModel
