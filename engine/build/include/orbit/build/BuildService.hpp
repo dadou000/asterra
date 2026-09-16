@@ -85,6 +85,25 @@ struct BuildResult
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
+struct PackageRuntime
+{
+    std::filesystem::path playerExecutable;
+    std::vector<std::filesystem::path>
+        runtimeFiles;
+};
+
+struct PackageResult
+{
+    BuildManifest manifest;
+    std::filesystem::path outputDirectory;
+    std::filesystem::path manifestPath;
+    std::filesystem::path packageManifestPath;
+    std::filesystem::path executablePath;
+    std::vector<BuildIssue> issues;
+
+    [[nodiscard]] bool Succeeded() const noexcept;
+};
+
 class BuildService
 {
 public:
@@ -96,5 +115,10 @@ public:
     // this operation.
     [[nodiscard]] BuildResult Cook(
         const BuildRequest& request) const;
+
+
+    [[nodiscard]] PackageResult Package(
+        const BuildRequest& request,
+        const PackageRuntime& runtime) const;
 };
 } // namespace orbit::build
