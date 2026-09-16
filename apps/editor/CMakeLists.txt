@@ -4,6 +4,7 @@ add_executable(OrbitStudio
 
 target_link_libraries(OrbitStudio
     PRIVATE
+        Orbit::Build
         Orbit::Core
         Orbit::Selection
         Orbit::Schema
