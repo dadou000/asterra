@@ -707,6 +707,50 @@ void SynchronizePluginPanels(
 
     return 6'000'000.0;
 }
+
+[[nodiscard]] std::filesystem::path
+FindPlayerExecutable()
+{
+    const auto executable =
+        orbit::platform::
+            ExecutablePath();
+
+    const auto sibling =
+        executable.parent_path() /
+        "OrbitPlayer.exe";
+
+    if (std::filesystem::
+            is_regular_file(
+                sibling))
+    {
+        return sibling;
+    }
+
+    const auto configuration =
+        executable.parent_path().
+            filename();
+
+    const auto appsRoot =
+        executable.parent_path().
+            parent_path().
+            parent_path();
+
+    const auto development =
+        appsRoot /
+        "player" /
+        configuration /
+        "OrbitPlayer.exe";
+
+    if (std::filesystem::
+            is_regular_file(
+                development))
+    {
+        return development;
+    }
+
+    throw std::runtime_error(
+        "OrbitPlayer.exe was not found beside OrbitStudio or in the development build tree.");
+}
 } // namespace
 
 int main(
