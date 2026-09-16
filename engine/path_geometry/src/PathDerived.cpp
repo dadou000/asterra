@@ -81,7 +81,7 @@ constexpr f64 kEpsilon = 1.0e-9;
 
     math::Double3 lateral =
         math::Normalize(
-            math::Cross(up, tangent));
+            math::Cross(tangent, up));
 
     if (math::LengthSquared(lateral) <=
         kEpsilon)
@@ -94,8 +94,8 @@ constexpr f64 kEpsilon = 1.0e-9;
         lateral =
             math::Normalize(
                 math::Cross(
-                    fallback,
-                    tangent));
+                    tangent,
+                    fallback));
     }
 
     return lateral;
@@ -290,8 +290,8 @@ Resample(
         math::Double3 up =
             math::Normalize(
                 math::Cross(
-                    tangent,
-                    lateral));
+                    lateral,
+                    tangent));
 
         if (math::Dot(
                 up,
