@@ -31,6 +31,7 @@
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
+#include <orbit/universe/ReferenceSurface.hpp>
 
 #include <algorithm>
 #include <array>
@@ -967,6 +968,12 @@ int main(
         orbit::u64 renameSelectionRevision =
             ~orbit::u64{0};
 
+        bool pathPlacementMode = false;
+        std::optional<orbit::paths::NetworkId>
+            activePathNetwork;
+        std::optional<orbit::scene::ObjectId>
+            lastPlacedPathNode;
+
         orbit::u64 publishedObjectRevision =
             objects.Revision();
         orbit::u64 publishedSelectionRevision =
@@ -1103,7 +1110,13 @@ int main(
                  &objects,
                  &content,
                  &authoringCommands,
-                 &presentActions](
+                 &presentActions,
+                 &commandService,
+                 &pathPlacementMode,
+                 &activePathNetwork,
+                 &lastPlacedPathNode,
+                 &bodies,
+                 bodyId](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -1114,6 +1127,22 @@ int main(
                                 CommandSurfaceKind::
                                     Toolbar);
 
+                    if (context.Button(
+                            pathPlacementMode
+                                ? "Path Tool: On"
+                                : "Path Tool"))
+                    {
+                        pathPlacementMode =
+                            !pathPlacementMode;
+
+                        if (!pathPlacementMode)
+                        {
+                            lastPlacedPathNode.
+                                reset();
+                        }
+                    }
+
+                    context.SameLine();
                     context.Toolbar(toolbar);
 
                     const auto available =
@@ -1219,7 +1248,272 @@ int main(
                         }
                     }
 
-                    if (interaction.clicked ||
+                    if (interaction.clicked &&
+                        pathPlacementMode)
+                    {
+                        try
+                        {
+                            const auto* body =
+                                bodies.FindBody(
+                                    bodyId);
+
+                            const auto ray =
+                                orbit::render_view::
+                                    ViewportRay(
+                                        bodyView.Camera(),
+                                        bodyView.Width(),
+                                        bodyView.Height(),
+                                        interaction.u,
+                                        interaction.v);
+
+                            if (body == nullptr ||
+                                !ray.has_value())
+                            {
+                                throw std::runtime_error(
+                                    "Path placement could not construct a body-local view ray.");
+                            }
+
+                            const auto hit =
+                                orbit::universe::
+                                    IntersectReferenceSurfaceRay(
+                                        body->shape,
+                                        ray->origin,
+                                        ray->direction);
+
+                            if (!hit.has_value())
+                            {
+                                throw std::runtime_error(
+                                    "Path placement ray did not hit the active body's reference surface.");
+                            }
+
+                            const auto coordinate =
+                                orbit::universe::
+                                    ReferenceSurfaceCoordinate(
+                                        body->shape,
+                                        *hit);
+
+                            if (!coordinate.has_value())
+                            {
+                                throw std::runtime_error(
+                                    "Path placement could not resolve the body surface coordinate.");
+                            }
+
+                            orbit::paths::
+                                PathNetworkService
+                                    pathService(
+                                        objects,
+                                        commandService);
+
+                            std::optional<
+                                orbit::paths::NetworkId>
+                                targetNetwork;
+
+                            if (selection.Ordered().
+                                    size() == 1)
+                            {
+                                const auto selectedObject =
+                                    objects.Find(
+                                        selection.Ordered().
+                                            front());
+
+                                if (selectedObject.
+                                        has_value())
+                                {
+                                    if (selectedObject->
+                                            type ==
+                                        orbit::paths::
+                                            kPathNetworkType)
+                                    {
+                                        targetNetwork =
+                                            orbit::paths::
+                                                NetworkId{
+                                                    .high =
+                                                        selectedObject->
+                                                            id.high,
+                                                    .low =
+                                                        selectedObject->
+                                                            id.low
+                                                };
+                                    }
+                                    else if (
+                                        selectedObject->
+                                                type ==
+                                            orbit::paths::
+                                                kPathNodeType &&
+                                        selectedObject->
+                                            parent.
+                                            has_value())
+                                    {
+                                        targetNetwork =
+                                            orbit::paths::
+                                                NetworkId{
+                                                    .high =
+                                                        selectedObject->
+                                                            parent->
+                                                            high,
+                                                    .low =
+                                                        selectedObject->
+                                                            parent->
+                                                            low
+                                                };
+                                    }
+                                }
+                            }
+
+                            if (!targetNetwork.
+                                    has_value() &&
+                                activePathNetwork.
+                                    has_value() &&
+                                pathService.
+                                    FindNetwork(
+                                        *activePathNetwork).
+                                    has_value())
+                            {
+                                targetNetwork =
+                                    activePathNetwork;
+                            }
+
+                            commandService.
+                                BeginTransaction(
+                                    "Place Path Node");
+
+                            try
+                            {
+                                if (!targetNetwork.
+                                        has_value())
+                                {
+                                    const auto network =
+                                        pathService.
+                                            CreateNetwork(
+                                                "Path Network",
+                                                bodyObject);
+
+                                    targetNetwork =
+                                        network.id;
+                                }
+
+                                const orbit::scene::
+                                    ObjectId networkObject{
+                                        .high =
+                                            targetNetwork->
+                                                high,
+                                        .low =
+                                            targetNetwork->
+                                                low
+                                    };
+
+                                orbit::u32 nodeCount = 0;
+
+                                for (const auto& child :
+                                     objects.Children(
+                                         networkObject))
+                                {
+                                    if (child.type ==
+                                        orbit::paths::
+                                            kPathNodeType)
+                                    {
+                                        ++nodeCount;
+                                    }
+                                }
+
+                                const auto node =
+                                    pathService.
+                                        CreateNode(
+                                            *targetNetwork,
+                                            std::format(
+                                                "Path Node {}",
+                                                nodeCount +
+                                                    1U),
+                                            orbit::paths::
+                                                SurfaceAnchor{
+                                                    .body =
+                                                        bodyId,
+                                                    .coordinate = {
+                                                        coordinate->
+                                                            latitudeRadians,
+                                                        coordinate->
+                                                            longitudeRadians,
+                                                        0.0
+                                                    }
+                                                });
+
+                                commandService.
+                                    CommitTransaction();
+
+                                activePathNetwork =
+                                    targetNetwork;
+
+                                if (lastPlacedPathNode.
+                                        has_value())
+                                {
+                                    const auto previous =
+                                        pathService.
+                                            FindNode(
+                                                *lastPlacedPathNode);
+
+                                    if (previous.
+                                            has_value() &&
+                                        previous->network ==
+                                            *targetNetwork)
+                                    {
+                                        const std::array
+                                            selected{
+                                                *lastPlacedPathNode,
+                                                node.id
+                                            };
+
+                                        selection.Set(
+                                            std::span(
+                                                selected));
+                                    }
+                                    else
+                                    {
+                                        const std::array
+                                            selected{
+                                                node.id
+                                            };
+
+                                        selection.Set(
+                                            std::span(
+                                                selected));
+                                    }
+                                }
+                                else
+                                {
+                                    const std::array
+                                        selected{
+                                            node.id
+                                        };
+
+                                    selection.Set(
+                                        std::span(
+                                            selected));
+                                }
+
+                                lastPlacedPathNode =
+                                    node.id;
+                            }
+                            catch (...)
+                            {
+                                if (commandService.
+                                        HasActiveTransaction())
+                                {
+                                    commandService.
+                                        RollbackTransaction();
+                                }
+
+                                throw;
+                            }
+                        }
+                        catch (const std::exception&
+                                   exception)
+                        {
+                            orbit::log::Warning(
+                                exception.what());
+                        }
+                    }
+                    else if (
+                        interaction.clicked ||
                         interaction.rightClicked)
                     {
                         const std::array selected{
