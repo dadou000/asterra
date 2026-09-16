@@ -3,12 +3,15 @@
 #include <atomic>
 #include <string>
 #include <thread>
+#include <iostream>
 
 #define ORBIT_TEST_CHECK(expression) \
     do \
     { \
         if (!(expression)) \
         { \
+            std::cerr << "ProceduralGraph test failed: " #expression \
+                      << " at line " << __LINE__ << '\\n'; \
             return __LINE__; \
         } \
     } while (false)
