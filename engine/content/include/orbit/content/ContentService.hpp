@@ -109,6 +109,14 @@ public:
     // formats. The copied source becomes the canonical project asset.
     [[nodiscard]] AssetId ImportFile(const std::filesystem::path& source);
 
+    // Detects common PBR channel maps in a source directory, copies the
+    // recognized source maps into project Content, writes a reusable
+    // .orbitmaterial authority file, rescans the registry, and returns its ID.
+    // Ambiguous duplicate channels are rejected rather than guessed.
+    [[nodiscard]] AssetId ImportPbrSet(
+        const std::filesystem::path& sourceDirectory,
+        std::string materialName = {});
+
 private:
     [[nodiscard]] AssetRecord BuildRecord(const std::filesystem::path& absolute) const;
     [[nodiscard]] AssetId StableId(const std::filesystem::path& absolute) const;
