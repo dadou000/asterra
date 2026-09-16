@@ -2793,15 +2793,44 @@ void EditorRpcService::AttachBuild(
                         "build.cook params must be an object or null.");
                 }
 
-                rpc::Value result =
-                    cook(
-                        std::move(profile));
-
                 PublishEvent(
-                    "build.cooked",
-                    result);
+                    "build.started",
+                    rpc::Value(
+                        rpc::Value::Object{
+                            {
+                                "profile",
+                                profile.
+                                    value_or(
+                                        std::string{})
+                            }
+                        }));
 
-                return result;
+                try
+                {
+                    rpc::Value result =
+                        cook(
+                            std::move(profile));
+
+                    PublishEvent(
+                        "build.completed",
+                        result);
+
+                    return result;
+                }
+                catch (const std::exception&
+                           exception)
+                {
+                    PublishEvent(
+                        "build.failed",
+                        rpc::Value(
+                            rpc::Value::Object{
+                                {
+                                    "message",
+                                    exception.what()
+                                }
+                            }));
+                    throw;
+                }
             });
     }
 }
