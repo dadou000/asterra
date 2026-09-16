@@ -1,5 +1,6 @@
 add_library(OrbitUniverse STATIC
     src/BodyRegistry.cpp
+    src/ReferenceSurface.cpp
 )
 
 add_library(Orbit::Universe ALIAS OrbitUniverse)
