@@ -13,6 +13,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,18 @@ struct PathGeometryAutomation
     std::function<rpc::Value(
         scene::ObjectId)>
         result;
+};
+
+struct BuildAutomation
+{
+    std::function<rpc::Value()>
+        profiles;
+    std::function<rpc::Value(
+        std::optional<std::string>)>
+        validate;
+    std::function<rpc::Value(
+        std::optional<std::string>)>
+        cook;
 };
 
 // Registers the structured authoring API onto a transport-independent
@@ -91,6 +104,9 @@ public:
     void AttachPathGeometry(
         PathGeometryAutomation geometry);
 
+    void AttachBuild(
+        BuildAutomation build);
+
 private:
     void Register(
         rpc::MethodDescriptor descriptor,
@@ -113,5 +129,6 @@ private:
     bool viewportRegistered_{false};
     bool pathRoutingRegistered_{false};
     bool pathGeometryRegistered_{false};
+    bool buildRegistered_{false};
 };
 } // namespace orbit::editor_rpc
