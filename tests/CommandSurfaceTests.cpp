@@ -143,6 +143,56 @@ int main()
 
     ORBIT_TEST_CHECK(enabled.enabled);
 
+    const auto materialEnabled =
+        registry.Enablement(
+            orbit::editor_model::
+                authoring_commands::
+                    kAssignMaterial);
+
+    ORBIT_TEST_CHECK(materialEnabled.enabled);
+
+    registry.Invoke(
+        orbit::editor_model::
+            authoring_commands::
+                kAssignMaterial,
+        {
+            {
+                "material",
+                std::string(
+                    "Content/Materials/steel.orbitmaterial")
+            }
+        });
+
+    ORBIT_TEST_CHECK(
+        std::get<std::string>(
+            *objects.GetProperty(
+                bodyObject,
+                orbit::editor_model::builtin::
+                    kBodyMaterialAsset)) ==
+        "Content/Materials/steel.orbitmaterial");
+
+    registry.Invoke(
+        orbit::editor_model::
+            authoring_commands::kUndo);
+
+    ORBIT_TEST_CHECK(
+        !objects.GetProperty(
+            bodyObject,
+            orbit::editor_model::builtin::
+                kBodyMaterialAsset).has_value());
+
+    registry.Invoke(
+        orbit::editor_model::
+            authoring_commands::kRedo);
+
+    ORBIT_TEST_CHECK(
+        std::get<std::string>(
+            *objects.GetProperty(
+                bodyObject,
+                orbit::editor_model::builtin::
+                    kBodyMaterialAsset)) ==
+        "Content/Materials/steel.orbitmaterial");
+
     const auto radial =
         surfaces.Present(
             "viewport",
