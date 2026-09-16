@@ -59,6 +59,12 @@ public:
     void SetMessageHandler(
         MessageHandler handler);
 
+    // Queues one server-originated line for the currently connected local
+    // client. Used by JSON-RPC notifications. Returns false when no client is
+    // connected; callers can retain the event in a journal for later replay.
+    [[nodiscard]] bool SendMessage(
+        std::string_view message);
+
     // Accepts a pending connection if there isn't one already, and
     // dispatches any complete lines already received from the
     // current client. Must be called every frame.
