@@ -1694,6 +1694,42 @@ int main(
                 runtime.
                     ResizeSwapchainToWindow());
 
+            pluginReloadAccumulator +=
+                deltaSeconds;
+
+            if (pluginReloadAccumulator >=
+                0.5)
+            {
+                const orbit::u32 reloaded =
+                    plugins.PollHotReload();
+
+                if (reloaded != 0)
+                {
+                    orbit::log::Info(
+                        std::format(
+                            "Hot reloaded {} plugin{}.",
+                            reloaded,
+                            reloaded == 1
+                                ? ""
+                                : "s"));
+                }
+
+                pluginReloadAccumulator =
+                    0.0;
+            }
+
+            if (plugins.PanelCatalogRevision() !=
+                pluginPanelRevision)
+            {
+                SynchronizePluginPanels(
+                    ui,
+                    plugins,
+                    pluginPanelIds);
+                pluginPanelRevision =
+                    plugins.
+                        PanelCatalogRevision();
+            }
+
             ui.BeginFrame(
                 window,
                 deltaSeconds);
