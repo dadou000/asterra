@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace orbit::content
@@ -43,6 +44,29 @@ namespace
     return AssetKind::Unknown;
 }
 
+[[nodiscard]] std::string CanonicalImportSettings(
+    const std::filesystem::path& source)
+{
+    std::filesystem::path sidecar =
+        source;
+    sidecar +=
+        ".orbitimport.toml";
+
+    if (!std::filesystem::is_regular_file(
+            sidecar))
+    {
+        return {};
+    }
+
+    const toml::table settings =
+        toml::parse_file(
+            sidecar.string());
+
+    std::ostringstream stream;
+    stream << settings;
+    return stream.str();
+}
+
 [[nodiscard]] std::filesystem::path ChannelPath(
     const toml::table& table, std::string_view key)
 {
@@ -52,10 +76,24 @@ namespace
 }
 
 ContentService::ContentService(std::filesystem::path projectRoot)
-    : projectRoot_(std::filesystem::weakly_canonical(std::move(projectRoot))),
-      contentRoot_(projectRoot_ / "Content")
+    : projectRoot_(
+          std::filesystem::weakly_canonical(
+              std::move(projectRoot))),
+      contentRoot_(
+          projectRoot_ / "Content"),
+      cache_(
+          projectRoot_ /
+          ".orbit" /
+          "DerivedData"),
+      pipeline_(
+          importers_,
+          cache_)
 {
-    std::filesystem::create_directories(contentRoot_);
+    std::filesystem::create_directories(
+        contentRoot_);
+
+    RegisterBuiltinImporters(
+        importers_);
 }
 
 void ContentService::Scan()
@@ -85,6 +123,39 @@ void ContentService::Scan()
                 if (record.kind == AssetKind::Unknown)
                 {
                     continue;
+                }
+
+                if (importers_.FindFor(
+                        entry.path()) !=
+                    nullptr)
+                {
+                    try
+                    {
+                        const auto imported =
+                            pipeline_.Import(
+                                projectRoot_,
+                                entry.path(),
+                                CanonicalImportSettings(
+                                    entry.path()),
+                                "source");
+
+                        record.derivedKey =
+                            imported.key;
+                        record.derivedReady =
+                            true;
+                    }
+                    catch (const std::exception&
+                               exception)
+                    {
+                        diagnostics.push_back({
+                            .sourcePath =
+                                record.sourcePath,
+                            .message =
+                                std::string(
+                                    "Derived import failed: ") +
+                                exception.what()
+                        });
+                    }
                 }
 
                 const std::string key =
@@ -174,6 +245,52 @@ u64 ContentService::Revision() const noexcept
     return revision_;
 }
 
+ImporterRegistry&
+ContentService::Importers() noexcept
+{
+    return importers_;
+}
+
+const ImporterRegistry&
+ContentService::Importers() const noexcept
+{
+    return importers_;
+}
+
+DerivedDataCache&
+ContentService::Cache() noexcept
+{
+    return cache_;
+}
+
+const DerivedDataCache&
+ContentService::Cache() const noexcept
+{
+    return cache_;
+}
+
+ImportResult ContentService::ImportDerived(
+    const AssetId id,
+    std::string settings,
+    std::string targetPlatform)
+{
+    const AssetRecord* asset =
+        Find(id);
+
+    if (asset == nullptr)
+    {
+        throw std::invalid_argument(
+            "Cannot import an unknown asset.");
+    }
+
+    return pipeline_.Import(
+        projectRoot_,
+        projectRoot_ /
+            asset->sourcePath,
+        std::move(settings),
+        std::move(targetPlatform));
+}
+
 AssetId ContentService::ImportFile(const std::filesystem::path& source)
 {
     if (!std::filesystem::is_regular_file(source))
@@ -209,7 +326,13 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
         .id = StableId(absolute),
         .kind = KindFromExtension(absolute),
         .name = absolute.stem().string(),
-        .sourcePath = std::filesystem::relative(absolute, projectRoot_)
+        .sourcePath =
+            std::filesystem::relative(
+                absolute,
+                projectRoot_),
+        .sourceHash =
+            HashFile(
+                absolute)
     };
 
     if (result.kind == AssetKind::Material)
