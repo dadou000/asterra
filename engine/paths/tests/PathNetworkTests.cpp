@@ -305,6 +305,31 @@ int main()
             endHandleMeters ==
         editedEnd);
 
+    const std::string edgeProfileId =
+        "22222222-2222-4222-8222-222222222222";
+
+    paths.SetProfile(
+        bezier.id,
+        edgeProfileId);
+
+    ORBIT_TEST_CHECK(
+        paths.FindEdge(bezier.id)->
+            profileOverride ==
+        edgeProfileId);
+
+    commands.Undo();
+
+    ORBIT_TEST_CHECK(
+        paths.FindEdge(bezier.id)->
+            profileOverride.empty());
+
+    commands.Redo();
+
+    ORBIT_TEST_CHECK(
+        paths.FindEdge(bezier.id)->
+            profileOverride ==
+        edgeProfileId);
+
     // Entity/socket anchors are persistent semantic anchors rather than
     // resolved world positions. Runtime entity motion therefore does not
     // mutate the authored path node.
