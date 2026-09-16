@@ -153,6 +153,20 @@ int main()
             "roughness_factor = 0.75\n"
             "metallic_factor = 0.0\n");
 
+
+        WriteText(
+            temporary.Root() /
+                "Content/Shaders/Test.hlsl",
+            "[numthreads(1, 1, 1)]\n"
+            "void CSMain(uint3 id : SV_DispatchThreadID) {}\n");
+
+        WriteText(
+            temporary.Root() /
+                "Content/Shaders/Test.hlsl.orbitshader.toml",
+            "[shader]\n"
+            "stage = \"compute\"\n"
+            "entry = \"CSMain\"\n");
+
         project.Manifest().
             scriptEntryPoints = {
                 "Scripts/main.luau"
@@ -213,7 +227,7 @@ int main()
                     "Scripts/main.luauc"));
         ORBIT_TEST_CHECK(
             first.manifest.assets.size() ==
-            1U);
+            2U);
         ORBIT_TEST_CHECK(
             first.manifest.scripts.size() ==
             2U);
