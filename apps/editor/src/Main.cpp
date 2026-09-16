@@ -943,7 +943,7 @@ int main(
                      editorRpc.DrainNotifications())
                 {
                     static_cast<void>(
-                        rpcServer.SendMessage(
+                        rpcServer.SendServerMessage(
                             notification));
                 }
             };
