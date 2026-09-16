@@ -1500,12 +1500,32 @@ EditorRpcService::EditorRpcService(
                     });
             }
 
+            const u64 oldestSequence =
+                events_.empty()
+                    ? nextEventSequence_
+                    : events_.front().
+                        sequence;
+
+            const bool truncated =
+                !events_.empty() &&
+                static_cast<u64>(after) + 1U <
+                    oldestSequence;
+
             return rpc::Value(
                 rpc::Value::Object{
+                    {
+                        "oldest_sequence",
+                        static_cast<i64>(
+                            oldestSequence)
+                    },
                     {
                         "latest_sequence",
                         static_cast<i64>(
                             LatestEventSequence())
+                    },
+                    {
+                        "truncated",
+                        truncated
                     },
                     {
                         "events",
