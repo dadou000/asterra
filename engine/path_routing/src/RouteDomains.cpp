@@ -2,6 +2,7 @@
 
 #include <orbit/math/RigidTransform.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
+#include <orbit/universe/ReferenceSurface.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,111 @@
 
 namespace orbit::path_routing
 {
+RouteEnvironment
+MakeReferenceSurfaceEnvironment(
+    const universe::BodyId body,
+    const frames::FrameId routeFrame,
+    const time::SimulationTime atTime,
+    const frames::FrameGraph& frames,
+    const universe::BodyRegistry& bodies,
+    const RouteSearchConfig search)
+{
+    const universe::CelestialBody* bodyRecord =
+        bodies.FindBody(body);
+
+    if (bodyRecord == nullptr)
+    {
+        throw std::invalid_argument(
+            "Reference-surface routing body does not exist.");
+    }
+
+    if (!routeFrame ||
+        !frames.Contains(routeFrame))
+    {
+        throw std::invalid_argument(
+            "Reference-surface routing frame does not exist.");
+    }
+
+    const auto bodyFromRoute =
+        frames.ResolveTransform(
+            routeFrame,
+            bodyRecord->frame,
+            atTime);
+    const auto routeFromBody =
+        frames.ResolveTransform(
+            bodyRecord->frame,
+            routeFrame,
+            atTime);
+
+    if (!bodyFromRoute.has_value() ||
+        !routeFromBody.has_value())
+    {
+        throw std::invalid_argument(
+            "Reference-surface routing frame is not connected to the body frame.");
+    }
+
+    const universe::BodyShape shape =
+        bodyRecord->shape;
+    const math::RigidTransformD
+        capturedBodyFromRoute =
+            *bodyFromRoute;
+    const math::RigidTransformD
+        capturedRouteFromBody =
+            *routeFromBody;
+
+    return RouteEnvironment{
+        .frame = routeFrame,
+        .domainKey =
+            "reference-surface:" +
+            body.ToString(),
+        .projector =
+            [shape,
+             capturedBodyFromRoute,
+             capturedRouteFromBody](
+                const math::Double3& candidate,
+                const f64)
+                -> std::optional<
+                    RouteProjectedPoint>
+            {
+                const math::Double3 bodyPoint =
+                    math::TransformPoint(
+                        capturedBodyFromRoute,
+                        candidate);
+
+                const math::Double3 direction =
+                    math::Normalize(
+                        bodyPoint);
+
+                if (math::LengthSquared(
+                        direction) <=
+                    1.0e-20)
+                {
+                    return std::nullopt;
+                }
+
+                const auto hit =
+                    universe::
+                        IntersectReferenceSurfaceRay(
+                            shape,
+                            {},
+                            direction);
+
+                if (!hit.has_value())
+                {
+                    return std::nullopt;
+                }
+
+                return RouteProjectedPoint{
+                    .localMeters =
+                        math::TransformPoint(
+                            capturedRouteFromBody,
+                            *hit)
+                };
+            },
+        .search = search
+    };
+}
+
 RouteEnvironment
 MakeTerrainSurfaceEnvironment(
     const universe::BodyId body,
