@@ -286,7 +286,7 @@ MakeSurfaceScalarFieldCostSource(
     const time::SimulationTime atTime,
     const frames::FrameGraph& frames,
     const universe::BodyRegistry& bodies,
-    const fields::FieldRegistry& fields)
+    const fields::FieldRegistry& fieldRegistry)
 {
     if (key.empty())
     {
@@ -302,7 +302,7 @@ MakeSurfaceScalarFieldCostSource(
     }
 
     const fields::FieldDescriptor* descriptor =
-        fields.Find(field);
+        fieldRegistry.Find(field);
 
     if (descriptor == nullptr)
     {
@@ -364,7 +364,7 @@ MakeSurfaceScalarFieldCostSource(
             *bodyFromRoute;
 
     const fields::FieldRegistry* registry =
-        &fields;
+        &fieldRegistry;
 
     return RouteCostSource{
         .key = std::move(key),
@@ -446,7 +446,7 @@ MakePreferredSurfaceFieldCosts(
     const time::SimulationTime atTime,
     const frames::FrameGraph& frames,
     const universe::BodyRegistry& bodies,
-    const fields::FieldRegistry& fields)
+    const fields::FieldRegistry& fieldRegistry)
 {
     std::vector<RouteCostSource> result;
 
@@ -454,7 +454,7 @@ MakePreferredSurfaceFieldCosts(
          profile.preferredCostFields)
     {
         const auto bodyFields =
-            fields.FieldsForBody(
+            fieldRegistry.FieldsForBody(
                 body);
 
         const auto found =
@@ -463,7 +463,7 @@ MakePreferredSurfaceFieldCosts(
                 [&](const fields::FieldId id)
                 {
                     const auto* descriptor =
-                        fields.Find(id);
+                        fieldRegistry.Find(id);
 
                     return descriptor != nullptr &&
                         descriptor->name ==
@@ -496,7 +496,7 @@ MakePreferredSurfaceFieldCosts(
                 atTime,
                 frames,
                 bodies,
-                fields));
+                fieldRegistry));
     }
 
     return result;
