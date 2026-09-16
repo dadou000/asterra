@@ -2550,6 +2550,107 @@ void EditorRpcService::AttachViewport(
         }
 }
 
+void EditorRpcService::AttachPathRouting(
+    PathRoutingAutomation routing)
+{
+    if (!routing.status &&
+        !routing.result &&
+        !routing.invalidate)
+    {
+        return;
+    }
+
+    if (pathRoutingRegistered_)
+    {
+        throw std::logic_error(
+            "Editor RPC path routing is already attached.");
+    }
+
+    pathRoutingRegistered_ = true;
+
+    if (routing.status)
+    {
+        Register(
+            {
+                .name = "path.route_status",
+                .description =
+                    "Returns derived routing state for a routed PathEdge.",
+                .mutating = false
+            },
+            [status =
+                 std::move(
+                     routing.status)](
+                const rpc::Value& params)
+            {
+                const auto& values =
+                    RequireObject(params);
+
+                return status(
+                    RequireObjectId(
+                        values,
+                        "edge"));
+            });
+    }
+
+    if (routing.result)
+    {
+        Register(
+            {
+                .name = "path.route_result",
+                .description =
+                    "Returns the current derived routed polyline and cost.",
+                .mutating = false
+            },
+            [result =
+                 std::move(
+                     routing.result)](
+                const rpc::Value& params)
+            {
+                const auto& values =
+                    RequireObject(params);
+
+                return result(
+                    RequireObjectId(
+                        values,
+                        "edge"));
+            });
+    }
+
+    if (routing.invalidate)
+    {
+        Register(
+            {
+                .name = "path.route_invalidate",
+                .description =
+                    "Invalidates one derived route without mutating project authority.",
+                .mutating = true
+            },
+            [invalidate =
+                 std::move(
+                     routing.invalidate)](
+                const rpc::Value& params)
+            {
+                const auto& values =
+                    RequireObject(params);
+                const scene::ObjectId edge =
+                    RequireObjectId(
+                        values,
+                        "edge");
+
+                invalidate(edge);
+
+                return rpc::Value(
+                    rpc::Value::Object{
+                        {"ok", true},
+                        {
+                            "edge",
+                            edge.ToString()
+                        }
+                    });
+            });
+    }
+}
+
 void EditorRpcService::PublishEvent(
     std::string type,
     rpc::Value data)
