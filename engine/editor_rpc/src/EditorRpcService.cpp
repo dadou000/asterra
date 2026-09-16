@@ -1758,6 +1758,67 @@ EditorRpcService::EditorRpcService(
 
     Register(
         {
+            .name = "path.set_profile",
+            .description =
+                "Assigns or clears a path-profile asset on a network or edge override.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            paths::PathNetworkService
+                service(
+                    objects,
+                    commandService);
+
+            const scene::ObjectId object =
+                RequireObjectId(
+                    values,
+                    "object");
+
+            std::string profile;
+
+            if (const auto found =
+                    values.find(
+                        "profile_asset");
+                found != values.end() &&
+                !found->second.IsNull())
+            {
+                if (!found->second.IsString())
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "profile_asset must be a string or null.");
+                }
+
+                profile =
+                    found->second.AsString();
+            }
+
+            service.SetProfile(
+                object,
+                profile);
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"ok", true},
+                    {
+                        "object",
+                        object.ToString()
+                    },
+                    {
+                        "profile_asset",
+                        profile
+                    }
+                });
+        });
+
+    Register(
+        {
             .name = "path.inspect",
             .description =
                 "Returns semantic path network, node, or edge data for an object ID.",
