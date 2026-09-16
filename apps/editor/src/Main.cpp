@@ -2102,6 +2102,235 @@ int main(
                 }
         });
 
+        editorRpc.AttachPathGeometry({
+            .result =
+                [&derivedPaths](
+                    const orbit::scene::ObjectId edge)
+                {
+                    const auto found =
+                        derivedPaths.find(edge);
+
+                    if (found ==
+                        derivedPaths.end())
+                    {
+                        return orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "edge",
+                                    edge.ToString()
+                                },
+                                {"ready", false}
+                            });
+                    }
+
+                    const auto& product =
+                        found->second;
+
+                    orbit::rpc::Value::Array
+                        lanes;
+                    lanes.reserve(
+                        product.lanes.size());
+
+                    for (const auto& lane :
+                         product.lanes)
+                    {
+                        orbit::rpc::Value::Array
+                            points;
+                        points.reserve(
+                            lane.points.size());
+
+                        for (const auto& point :
+                             lane.points)
+                        {
+                            points.emplace_back(
+                                orbit::rpc::Value::Object{
+                                    {
+                                        "station_meters",
+                                        point.
+                                            stationMeters
+                                    },
+                                    {
+                                        "position",
+                                        orbit::rpc::Value::Array{
+                                            point.position.x,
+                                            point.position.y,
+                                            point.position.z
+                                        }
+                                    },
+                                    {
+                                        "tangent",
+                                        orbit::rpc::Value::Array{
+                                            point.tangent.x,
+                                            point.tangent.y,
+                                            point.tangent.z
+                                        }
+                                    }
+                                });
+                        }
+
+                        lanes.emplace_back(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "lane",
+                                    static_cast<
+                                        orbit::i64>(
+                                            lane.
+                                                laneIndex)
+                                },
+                                {
+                                    "lateral_offset_meters",
+                                    lane.
+                                        lateralOffsetMeters
+                                },
+                                {
+                                    "points",
+                                    std::move(points)
+                                }
+                            });
+                    }
+
+                    orbit::rpc::Value::Array
+                        navigation;
+                    navigation.reserve(
+                        product.navigation.
+                            size());
+
+                    for (const auto& sample :
+                         product.navigation)
+                    {
+                        navigation.emplace_back(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "station_meters",
+                                    sample.
+                                        stationMeters
+                                },
+                                {
+                                    "position",
+                                    orbit::rpc::Value::Array{
+                                        sample.position.x,
+                                        sample.position.y,
+                                        sample.position.z
+                                    }
+                                },
+                                {
+                                    "tangent",
+                                    orbit::rpc::Value::Array{
+                                        sample.tangent.x,
+                                        sample.tangent.y,
+                                        sample.tangent.z
+                                    }
+                                },
+                                {
+                                    "half_width_meters",
+                                    sample.
+                                        halfWidthMeters
+                                },
+                                {
+                                    "lanes",
+                                    static_cast<
+                                        orbit::i64>(
+                                            sample.lanes)
+                                }
+                            });
+                    }
+
+                    return orbit::rpc::Value(
+                        orbit::rpc::Value::Object{
+                            {
+                                "edge",
+                                edge.ToString()
+                            },
+                            {"ready", true},
+                            {
+                                "frame",
+                                product.frame.
+                                    ToString()
+                            },
+                            {
+                                "build_signature",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            buildSignature &
+                                        0x7fffffffffffffffULL)
+                            },
+                            {
+                                "width_meters",
+                                product.widthMeters
+                            },
+                            {
+                                "lane_count",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            laneCount)
+                            },
+                            {
+                                "stations",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            stations.
+                                            size())
+                            },
+                            {
+                                "visual_vertices",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            visualMesh.
+                                            vertices.
+                                            size())
+                            },
+                            {
+                                "visual_indices",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            visualMesh.
+                                            indices.
+                                            size())
+                            },
+                            {
+                                "collision_triangles",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            collision.
+                                            size())
+                            },
+                            {
+                                "reference_nodes",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            referenceGraph.
+                                            nodes.
+                                            size())
+                            },
+                            {
+                                "reference_edges",
+                                static_cast<
+                                    orbit::i64>(
+                                        product.
+                                            referenceGraph.
+                                            edges.
+                                            size())
+                            },
+                            {
+                                "lanes",
+                                std::move(lanes)
+                            },
+                            {
+                                "navigation",
+                                std::move(
+                                    navigation)
+                            }
+                        });
+                }
+        });
+
         requestRoutedPaths();
 
         orbit::u64 publishedObjectRevision =
