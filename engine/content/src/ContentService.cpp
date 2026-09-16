@@ -43,6 +43,7 @@ namespace
         extension == ".exr") return AssetKind::Texture;
     if (extension == ".gltf" || extension == ".glb" || extension == ".fbx" ||
         extension == ".obj") return AssetKind::Mesh;
+    if (extension == ".hlsl") return AssetKind::Shader;
     return AssetKind::Unknown;
 }
 
@@ -632,6 +633,93 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
         result.tags.push_back(
             Lower(*profileKind));
     }
+    else if (result.kind == AssetKind::Shader)
+    {
+        std::filesystem::path sidecar =
+            absolute;
+        sidecar +=
+            ".orbitshader.toml";
+
+        if (!std::filesystem::
+                is_regular_file(
+                    sidecar))
+        {
+            throw std::runtime_error(
+                "HLSL shader requires a .orbitshader.toml sidecar: " +
+                absolute.string());
+        }
+
+        const toml::table document =
+            toml::parse_file(
+                sidecar.string());
+
+        const toml::table* shader =
+            document["shader"].
+                as_table();
+
+        if (shader == nullptr)
+        {
+            throw std::runtime_error(
+                "Shader sidecar is missing [shader]: " +
+                sidecar.string());
+        }
+
+        const auto stage =
+            (*shader)["stage"].
+                value<std::string>();
+        const auto entry =
+            (*shader)["entry"].
+                value<std::string>();
+
+        if (!stage.has_value() ||
+            stage->empty() ||
+            !entry.has_value() ||
+            entry->empty())
+        {
+            throw std::runtime_error(
+                "Shader sidecar requires non-empty stage and entry.");
+        }
+
+        ShaderAssetStage parsedStage{};
+
+        if (*stage == "vertex")
+        {
+            parsedStage =
+                ShaderAssetStage::Vertex;
+        }
+        else if (*stage == "pixel")
+        {
+            parsedStage =
+                ShaderAssetStage::Pixel;
+        }
+        else if (*stage == "compute")
+        {
+            parsedStage =
+                ShaderAssetStage::Compute;
+        }
+        else
+        {
+            throw std::runtime_error(
+                "Shader stage must be vertex, pixel, or compute.");
+        }
+
+        result.shader =
+            ShaderAssetData{
+                .stage = parsedStage,
+                .entryPoint = *entry
+            };
+
+        result.tags.push_back(
+            "shader");
+        result.tags.push_back(
+            *stage);
+
+        result.sourceHash =
+            HashString(
+                result.sourceHash.ToHex() +
+                "|" +
+                HashFile(sidecar).ToHex());
+    }
 
     return result;
 }
@@ -667,6 +755,7 @@ std::string_view AssetKindName(const AssetKind kind) noexcept
     case AssetKind::Component: return "Component";
     case AssetKind::Mesh: return "Mesh";
     case AssetKind::PathProfile: return "Path Profile";
+    case AssetKind::Shader: return "Shader";
     case AssetKind::Unknown: return "Unknown";
     }
     return "Unknown";
