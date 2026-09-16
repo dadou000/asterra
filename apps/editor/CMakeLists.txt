@@ -17,6 +17,9 @@ target_link_libraries(OrbitStudio
         Orbit::EditorUi
         Orbit::Plugins
         Orbit::Frames
+        Orbit::Jobs
+        Orbit::PathRouting
+        Orbit::Paths
         Orbit::Platform
         Orbit::RenderGraph
         Orbit::RenderView
