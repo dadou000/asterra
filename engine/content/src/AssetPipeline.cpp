@@ -521,22 +521,35 @@ ContentHash BuildDerivedDataKey(
     const std::string_view targetPlatform)
 {
     std::string canonical =
-        "orbit-ddc-v1\n";
+        "orbit-ddc-v1";
 
-    canonical +=
-        sourceHash.ToHex();
-    canonical.push_back('\n');
-    canonical.append(
+    const auto appendField =
+        [&canonical](
+            const std::string_view field)
+        {
+            canonical.push_back('|');
+            canonical +=
+                std::to_string(
+                    field.size());
+            canonical.push_back(':');
+            canonical.append(
+                field);
+        };
+
+    appendField(
+        sourceHash.ToHex());
+    appendField(
         importerId);
-    canonical.push_back('\n');
-    canonical +=
+
+    const std::string version =
         std::to_string(
             importerVersion);
-    canonical.push_back('\n');
-    canonical.append(
+
+    appendField(
+        version);
+    appendField(
         targetPlatform);
-    canonical.push_back('\n');
-    canonical.append(
+    appendField(
         settings);
 
     return HashString(
@@ -657,10 +670,14 @@ ImportResult AssetPipeline::Import(
     for (const auto& artifact :
          output.artifacts)
     {
-        if (artifact.name ==
+        const std::string normalizedName =
+            Lower(
+                artifact.name);
+
+        if (normalizedName ==
                 kManifestName ||
             !artifactNames.insert(
-                artifact.name).
+                normalizedName).
                 second)
         {
             throw std::runtime_error(
