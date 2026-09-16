@@ -420,6 +420,31 @@ ImportResult ContentService::ImportDerived(
         asset->sourceHash);
 }
 
+ImportResult ContentService::CookDerived(
+    const AssetId id,
+    std::string targetPlatform)
+{
+    const AssetRecord* asset =
+        Find(id);
+
+    if (asset == nullptr)
+    {
+        throw std::invalid_argument(
+            "Cannot cook an unknown asset.");
+    }
+
+    const std::filesystem::path source =
+        projectRoot_ /
+        asset->sourcePath;
+
+    return pipeline_.Import(
+        projectRoot_,
+        source,
+        CanonicalImportSettings(source),
+        std::move(targetPlatform),
+        asset->sourceHash);
+}
+
 AssetId ContentService::ImportFile(const std::filesystem::path& source)
 {
     if (!std::filesystem::is_regular_file(source))
