@@ -108,7 +108,7 @@ int main()
         paths.CreateNetwork(
             "Asterra Roads",
             std::nullopt,
-            "Content/PathProfiles/Road.orbitpathprofile");
+            "11111111-1111-4111-8111-111111111111");
 
     ORBIT_TEST_CHECK(network.id);
     ORBIT_TEST_CHECK(
