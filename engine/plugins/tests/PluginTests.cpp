@@ -109,6 +109,48 @@ int main()
     statuses = plugins.Statuses();
     assert(statuses[0].loaded);
 
+    // A malformed sibling package must be isolated. Valid enabled plugins
+    // continue loading and registering commands in the same editor session.
+    project.Manifest().plugins.push_back({
+        .id = "broken.plugin",
+        .version = "1.0.0"
+    });
+    project.Save();
+
+    Write(
+        root / "Plugins" / "broken.plugin" / "plugin.toml",
+        "[plugin\nid =");
+    Write(
+        package / "main.luau",
+        "Orbit.registerCommand('StillLoaded', function() end, 'Test', '', false)\n");
+
+    plugins.LoadEnabled(project.Manifest());
+
+    statuses = plugins.Statuses();
+    assert(statuses.size() == 2);
+
+    bool foundHealthy = false;
+    bool foundBroken = false;
+
+    for (const auto& status : statuses)
+    {
+        if (status.id == "test.plugin")
+        {
+            foundHealthy = status.loaded;
+        }
+        else if (status.id == "broken.plugin")
+        {
+            foundBroken =
+                !status.loaded &&
+                !status.error.empty();
+        }
+    }
+
+    assert(foundHealthy);
+    assert(foundBroken);
+    assert(commandRegistry.Catalog().size() == 1);
+    assert(commandRegistry.Catalog()[0].name == "StillLoaded");
+
     std::filesystem::remove_all(root);
     return 0;
 }
