@@ -2524,7 +2524,8 @@ int main(
             .defaultOpen = true,
             .draw =
                 [&inspector,
-                 &presentActions](
+                 &presentActions,
+                 &content](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
