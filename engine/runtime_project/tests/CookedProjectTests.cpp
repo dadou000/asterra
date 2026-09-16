@@ -1,6 +1,8 @@
 #include <orbit/build/BuildService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/runtime_project/CookedProject.hpp>
+#include <orbit/scene/ObjectStore.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -152,6 +154,38 @@ int main()
             cooked.FindScript(
                 "Scripts/main.luau") !=
             nullptr);
+
+        orbit::documents::WorldDatabase
+            runtimeWorld(
+                cooked.StartupWorldPath(),
+                orbit::documents::
+                    WorldOpenMode::ReadOnly);
+
+        ORBIT_TEST_CHECK(
+            runtimeWorld.ReadOnly());
+
+        orbit::scene::ObjectStore
+            runtimeObjects(
+                runtimeWorld);
+
+        static_cast<void>(
+            runtimeObjects.Roots());
+
+        bool mutationRejected = false;
+
+        try
+        {
+            runtimeWorld.SetMetadata(
+                "runtime_test",
+                "must_not_write");
+        }
+        catch (const std::logic_error&)
+        {
+            mutationRejected = true;
+        }
+
+        ORBIT_TEST_CHECK(
+            mutationRejected);
 
         orbit::runtime_project::
             ScriptRuntime runtime(
