@@ -835,6 +835,8 @@ public:
                     .category = category,
                     .description =
                         description,
+                    .automationVisible =
+                        mcpVisible,
                     .invoke =
                         [self,
                          functionRef](
