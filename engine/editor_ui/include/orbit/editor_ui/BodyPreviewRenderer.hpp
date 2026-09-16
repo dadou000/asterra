@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -30,7 +31,8 @@ public:
         rhi::Texture& target,
         u32 width,
         u32 height,
-        const universe::BodyShape& shape);
+        const universe::BodyShape& shape,
+        const render_view::CameraState& camera);
 
 private:
     class Impl;
