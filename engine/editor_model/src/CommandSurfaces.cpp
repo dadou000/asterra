@@ -1,5 +1,6 @@
 #include <orbit/editor_model/CommandSurfaces.hpp>
 
+#include <algorithm>
 #include <functional>
 #include <stdexcept>
 #include <utility>
@@ -45,6 +46,78 @@ void CommandSurfaceRegistry::Set(
             .kind = kind
         },
         std::move(commandIds));
+}
+
+void CommandSurfaceRegistry::Add(
+    const std::string_view surface,
+    const CommandSurfaceKind kind,
+    const commands::CommandId commandId)
+{
+    if (surface.empty() || !commandId)
+    {
+        throw std::invalid_argument(
+            "Dynamic command surface contribution requires a surface and command ID.");
+    }
+
+    auto& commands =
+        surfaces_[
+            Key{
+                .surface =
+                    std::string(surface),
+                .kind = kind
+            }];
+
+    if (std::find(
+            commands.begin(),
+            commands.end(),
+            commandId) ==
+        commands.end())
+    {
+        commands.push_back(
+            commandId);
+    }
+}
+
+bool CommandSurfaceRegistry::Remove(
+    const std::string_view surface,
+    const CommandSurfaceKind kind,
+    const commands::CommandId commandId) noexcept
+{
+    const auto found =
+        surfaces_.find(
+            Key{
+                .surface =
+                    std::string(surface),
+                .kind = kind
+            });
+
+    if (found == surfaces_.end())
+    {
+        return false;
+    }
+
+    auto& commands =
+        found->second;
+
+    const auto item =
+        std::find(
+            commands.begin(),
+            commands.end(),
+            commandId);
+
+    if (item == commands.end())
+    {
+        return false;
+    }
+
+    commands.erase(item);
+
+    if (commands.empty())
+    {
+        surfaces_.erase(found);
+    }
+
+    return true;
 }
 
 std::vector<commands::CommandId>
