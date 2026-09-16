@@ -4,6 +4,7 @@
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/plugins/PluginManifest.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 
 #include <Luau/Compiler.h>
 #include <lua.h>
@@ -307,6 +308,41 @@ void WriteText(
         {
             return value == std::byte{0};
         });
+}
+
+[[nodiscard]] shader::Stage
+ShaderStage(
+    const content::ShaderAssetStage stage)
+{
+    switch (stage)
+    {
+    case content::ShaderAssetStage::Vertex:
+        return shader::Stage::Vertex;
+    case content::ShaderAssetStage::Pixel:
+        return shader::Stage::Pixel;
+    case content::ShaderAssetStage::Compute:
+        return shader::Stage::Compute;
+    }
+
+    throw std::invalid_argument(
+        "Unknown authored shader stage.");
+}
+
+[[nodiscard]] std::string_view
+ShaderStageName(
+    const content::ShaderAssetStage stage)
+{
+    switch (stage)
+    {
+    case content::ShaderAssetStage::Vertex:
+        return "vertex";
+    case content::ShaderAssetStage::Pixel:
+        return "pixel";
+    case content::ShaderAssetStage::Compute:
+        return "compute";
+    }
+
+    return "unknown";
 }
 
 [[nodiscard]] bool IsSemanticRuntimeAsset(
@@ -1225,6 +1261,9 @@ BuildResult BuildService::Cook(
         auto assets =
             content.All();
 
+        shader::dxc::DxcShaderCompiler
+            shaderCompiler;
+
         std::ranges::sort(
             assets,
             {},
@@ -1247,7 +1286,132 @@ BuildResult BuildService::Cook(
                 validation.projectRoot /
                 asset.sourcePath;
 
-            if (content.Importers().
+            if (asset.kind ==
+                content::AssetKind::Shader)
+            {
+                if (!asset.shader.has_value())
+                {
+                    throw std::runtime_error(
+                        "Indexed shader is missing shader metadata: " +
+                        asset.sourcePath.
+                            generic_string());
+                }
+
+                const auto& metadata =
+                    *asset.shader;
+
+                const bool debug =
+                    validation.profile.
+                        configuration ==
+                    "Debug";
+
+                const std::string settings =
+                    "stage=" +
+                    std::string(
+                        ShaderStageName(
+                            metadata.stage)) +
+                    "|entry=" +
+                    metadata.entryPoint +
+                    "|debug=" +
+                    (debug
+                        ? "1"
+                        : "0") +
+                    "|spirv=vulkan1.3-sm6.0";
+
+                const auto key =
+                    content::
+                        BuildDerivedDataKey(
+                            asset.sourceHash,
+                            "orbit.shader.dxc",
+                            1,
+                            settings,
+                            validation.profile.
+                                platform);
+
+                constexpr std::string_view
+                    kShaderArtifact =
+                        "shader.spv";
+
+                cooked.derivedKey =
+                    key;
+                cooked.cacheHit =
+                    content.Cache().
+                        Contains(
+                            key,
+                            kShaderArtifact);
+
+                std::filesystem::path
+                    compiledPath;
+
+                if (cooked.cacheHit)
+                {
+                    compiledPath =
+                        content.Cache().
+                            ArtifactPath(
+                                key,
+                                kShaderArtifact);
+                }
+                else
+                {
+                    const std::string sourceText =
+                        ReadText(
+                            source);
+
+                    const shader::Binary binary =
+                        shaderCompiler.Compile({
+                            .source = sourceText,
+                            .entryPoint =
+                                metadata.
+                                    entryPoint,
+                            .stage =
+                                ShaderStage(
+                                    metadata.
+                                        stage),
+                            .debug = debug
+                        });
+
+                    const auto bytes =
+                        std::as_bytes(
+                            std::span(
+                                binary.
+                                    bytecode.data(),
+                                binary.
+                                    bytecode.size()));
+
+                    compiledPath =
+                        content.Cache().
+                            Store(
+                                key,
+                                kShaderArtifact,
+                                bytes);
+                }
+
+                const auto relative =
+                    std::filesystem::path(
+                        "Content") /
+                    ".cooked" /
+                    asset.id.ToString() /
+                    std::filesystem::path(
+                        kShaderArtifact);
+
+                std::filesystem::
+                    create_directories(
+                        (staging /
+                         relative).
+                            parent_path());
+
+                std::filesystem::copy_file(
+                    compiledPath,
+                    staging /
+                        relative,
+                    std::filesystem::
+                        copy_options::
+                            overwrite_existing);
+
+                cooked.artifacts.push_back(
+                    relative);
+            }
+            else if (content.Importers().
                     FindFor(source) !=
                 nullptr)
             {
