@@ -140,6 +140,7 @@ int main()
         schemas,
         objects,
         selection);
+    auto& editorRpc = rpcService;
 
     const auto projectInfo =
         Call(
