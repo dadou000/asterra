@@ -139,12 +139,15 @@ void ContentService::Scan()
                                 entry.path(),
                                 CanonicalImportSettings(
                                     entry.path()),
-                                "source");
+                                "source",
+                                record.sourceHash);
 
                         record.derivedKey =
                             imported.key;
                         record.derivedReady =
                             true;
+                        record.dependencyPaths =
+                            imported.dependencies;
                     }
                     catch (const std::exception&
                                exception)
@@ -186,8 +189,78 @@ void ContentService::Scan()
         }
     }
 
+    std::unordered_map<
+        AssetId,
+        std::vector<AssetId>>
+        nextDependents;
+
+    for (auto& [assetId, record] :
+         next)
+    {
+        for (const auto& dependencyPath :
+             record.dependencyPaths)
+        {
+            const auto found =
+                nextPaths.find(
+                    Lower(
+                        dependencyPath.
+                            generic_string()));
+
+            if (found ==
+                nextPaths.end())
+            {
+                continue;
+            }
+
+            record.dependencies.push_back(
+                found->second);
+
+            nextDependents[
+                found->second].
+                push_back(
+                    assetId);
+        }
+
+        std::ranges::sort(
+            record.dependencies,
+            {},
+            [](const AssetId id)
+            {
+                return id.ToString();
+            });
+
+        record.dependencies.erase(
+            std::unique(
+                record.dependencies.begin(),
+                record.dependencies.end()),
+            record.dependencies.end());
+    }
+
+    for (auto& [dependency, users] :
+         nextDependents)
+    {
+        static_cast<void>(
+            dependency);
+
+        std::ranges::sort(
+            users,
+            {},
+            [](const AssetId id)
+            {
+                return id.ToString();
+            });
+
+        users.erase(
+            std::unique(
+                users.begin(),
+                users.end()),
+            users.end());
+    }
+
     assets_ = std::move(next);
     pathIndex_ = std::move(nextPaths);
+    dependents_ =
+        std::move(nextDependents);
     diagnostics_ = std::move(diagnostics);
     ++revision_;
 }
@@ -234,6 +307,29 @@ std::vector<AssetRecord> ContentService::Search(
 std::vector<AssetRecord> ContentService::All() const
 {
     return Search({});
+}
+
+std::vector<AssetId> ContentService::Dependencies(
+    const AssetId id) const
+{
+    const AssetRecord* asset =
+        Find(id);
+
+    return asset != nullptr
+        ? asset->dependencies
+        : std::vector<AssetId>{};
+}
+
+std::vector<AssetId> ContentService::Dependents(
+    const AssetId id) const
+{
+    const auto found =
+        dependents_.find(
+            id);
+
+    return found != dependents_.end()
+        ? found->second
+        : std::vector<AssetId>{};
 }
 
 const std::vector<ContentDiagnostic>&
@@ -328,7 +424,8 @@ ImportResult ContentService::ImportDerived(
         projectRoot_ /
             asset->sourcePath,
         std::move(settings),
-        std::move(targetPlatform));
+        std::move(targetPlatform),
+        asset->sourceHash);
 }
 
 AssetId ContentService::ImportFile(const std::filesystem::path& source)
