@@ -174,7 +174,7 @@ public:
         FlushOutgoing();
     }
 
-    [[nodiscard]] bool SendMessage(
+    [[nodiscard]] bool SendServerMessage(
         const std::string_view message)
     {
         if (clientSocket_ ==
@@ -523,10 +523,10 @@ void DevServer::SetMessageHandler(
         std::move(handler));
 }
 
-bool DevServer::SendMessage(
+bool DevServer::SendServerMessage(
     const std::string_view message)
 {
-    return impl_->SendMessage(
+    return impl_->SendServerMessage(
         message);
 }
 
