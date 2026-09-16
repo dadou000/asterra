@@ -23,9 +23,9 @@ include(CTest)
 
 add_subdirectory(engine)
 add_subdirectory(apps/sandbox)
+add_subdirectory(apps/player)
 add_subdirectory(apps/editor)
 add_subdirectory(apps/build)
-add_subdirectory(apps/player)
 add_subdirectory(apps/launcher)
 
 if(BUILD_TESTING)
