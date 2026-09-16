@@ -39,8 +39,8 @@ namespace
     if (extension == ".orbitdecal") return AssetKind::Decal;
     if (extension == ".orbitpathprofile") return AssetKind::PathProfile;
     if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
-        extension == ".tga" || extension == ".dds" || extension == ".ktx2" ||
-        extension == ".exr") return AssetKind::Texture;
+        extension == ".bmp" || extension == ".tga" || extension == ".dds" ||
+        extension == ".ktx2" || extension == ".exr") return AssetKind::Texture;
     if (extension == ".gltf" || extension == ".glb" || extension == ".fbx" ||
         extension == ".obj") return AssetKind::Mesh;
     if (extension == ".hlsl") return AssetKind::Shader;
