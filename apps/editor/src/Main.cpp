@@ -275,6 +275,117 @@ DecodeObjectId(
         : std::nullopt;
 }
 
+[[nodiscard]] std::array<
+    std::byte,
+    sizeof(orbit::content::AssetId)>
+EncodeAssetId(
+    const orbit::content::AssetId id)
+{
+    static_assert(
+        std::is_trivially_copyable_v<
+            orbit::content::AssetId>);
+
+    std::array<
+        std::byte,
+        sizeof(orbit::content::AssetId)>
+        bytes{};
+
+    std::memcpy(
+        bytes.data(),
+        &id,
+        sizeof(id));
+
+    return bytes;
+}
+
+[[nodiscard]] std::optional<
+    orbit::content::AssetId>
+DecodeAssetId(
+    const std::vector<std::byte>& bytes)
+{
+    if (bytes.size() !=
+        sizeof(orbit::content::AssetId))
+    {
+        return std::nullopt;
+    }
+
+    orbit::content::AssetId id{};
+
+    std::memcpy(
+        &id,
+        bytes.data(),
+        sizeof(id));
+
+    return id.IsValid()
+        ? std::optional(id)
+        : std::nullopt;
+}
+
+void SynchronizePluginPanels(
+    orbit::editor_ui::EditorUi& ui,
+    orbit::plugins::PluginManager& plugins,
+    std::vector<orbit::editor_ui::PanelId>&
+        registered)
+{
+    const auto catalog =
+        plugins.PanelCatalog();
+
+    for (auto item = registered.begin();
+         item != registered.end();)
+    {
+        const bool stillPresent =
+            std::find_if(
+                catalog.begin(),
+                catalog.end(),
+                [id = *item](const auto& panel)
+                {
+                    return panel.id == id;
+                }) != catalog.end();
+
+        if (stillPresent)
+        {
+            ++item;
+            continue;
+        }
+
+        static_cast<void>(
+            ui.UnregisterPanel(*item));
+        item = registered.erase(item);
+    }
+
+    for (const auto& panel : catalog)
+    {
+        const auto id = panel.id;
+
+        ui.UpsertPanel({
+            .id = id,
+            .title = panel.title,
+            .defaultOpen = false,
+            .draw =
+                [&plugins, id](
+                    orbit::editor_ui::PanelContext&
+                        context)
+                {
+                    if (!plugins.DrawPanel(
+                            id,
+                            context))
+                    {
+                        context.Text(
+                            "Plugin panel is unavailable.");
+                    }
+                }
+        });
+
+        if (std::find(
+                registered.begin(),
+                registered.end(),
+                id) == registered.end())
+        {
+            registered.push_back(id);
+        }
+    }
+}
+
 [[nodiscard]] orbit::f64 BodyRadius(
     orbit::scene::ObjectStore& objects,
     const orbit::scene::ObjectId body)
