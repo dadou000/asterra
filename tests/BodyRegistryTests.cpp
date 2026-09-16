@@ -264,4 +264,4 @@ int main()
     assert(!rayMiss.has_value());
 
     return 0;
-
+}
