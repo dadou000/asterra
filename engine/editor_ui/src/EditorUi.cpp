@@ -1081,7 +1081,7 @@ void EditorUi::UpsertPanel(
 }
 
 bool EditorUi::UnregisterPanel(
-    const PanelId id) noexcept
+    const PanelId id)
 {
     for (std::size_t index = 0;
          index < impl_->panels.size();
