@@ -16,6 +16,12 @@ FrameId FrameGraph::CreateRoot()
         id = FrameId::Random();
     }
 
+    return CreateRoot(id);
+}
+
+FrameId FrameGraph::CreateRoot(
+    const FrameId id)
+{
     AddFrame({
         .id = id,
         .parent = std::nullopt,
@@ -36,6 +42,17 @@ FrameId FrameGraph::CreateFrame(
         id = FrameId::Random();
     }
 
+    return CreateFrame(
+        id,
+        parent,
+        std::move(parentFromFrame));
+}
+
+FrameId FrameGraph::CreateFrame(
+    const FrameId id,
+    const FrameId parent,
+    FrameTransformProvider parentFromFrame)
+{
     AddFrame({
         .id = id,
         .parent = parent,
