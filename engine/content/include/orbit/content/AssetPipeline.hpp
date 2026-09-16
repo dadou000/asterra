@@ -57,7 +57,7 @@ public:
 
     [[nodiscard]] const ImporterDescriptor*
     FindFor(
-        const std::filesystem::path& source) const noexcept;
+        const std::filesystem::path& source) const;
 
     [[nodiscard]] std::vector<ImporterCatalogEntry>
     Catalog() const;
