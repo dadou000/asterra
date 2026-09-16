@@ -26,10 +26,10 @@ import socket
 import time
 
 try:
-    # mcp >= 2.0
-    from mcp.server.mcpserver import MCPServer as _Server
-except ModuleNotFoundError:
-    # mcp 1.x
+    # MCP Python SDK v2 public API.
+    from mcp.server import MCPServer as _Server
+except (ImportError, ModuleNotFoundError):
+    # MCP Python SDK v1 fallback.
     from mcp.server.fastmcp import FastMCP as _Server
 
 HOST = "127.0.0.1"
