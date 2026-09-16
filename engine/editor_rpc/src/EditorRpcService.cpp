@@ -2694,7 +2694,8 @@ void EditorRpcService::AttachBuild(
 {
     if (!build.profiles &&
         !build.validate &&
-        !build.cook)
+        !build.cook &&
+        !build.package)
     {
         return;
     }
@@ -2822,6 +2823,79 @@ void EditorRpcService::AttachBuild(
                 {
                     PublishEvent(
                         "build.failed",
+                        rpc::Value(
+                            rpc::Value::Object{
+                                {
+                                    "message",
+                                    exception.what()
+                                }
+                            }));
+                    throw;
+                }
+            });
+    }
+
+    if (build.package)
+    {
+        Register(
+            {
+                .name = "build.package",
+                .description =
+                    "Checkpoints the open project and assembles a standalone OrbitPlayer package.",
+                .mutating = true
+            },
+            [this,
+             package =
+                 std::move(
+                     build.package)](
+                const rpc::Value& params)
+            {
+                std::optional<std::string>
+                    profile;
+
+                if (params.IsObject())
+                {
+                    profile =
+                        OptionalString(
+                            params.AsObject(),
+                            "profile");
+                }
+                else if (!params.IsNull())
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "build.package params must be an object or null.");
+                }
+
+                PublishEvent(
+                    "build.package_started",
+                    rpc::Value(
+                        rpc::Value::Object{
+                            {
+                                "profile",
+                                profile.
+                                    value_or(
+                                        std::string{})
+                            }
+                        }));
+
+                try
+                {
+                    rpc::Value result =
+                        package(
+                            std::move(profile));
+
+                    PublishEvent(
+                        "build.package_completed",
+                        result);
+
+                    return result;
+                }
+                catch (const std::exception&
+                           exception)
+                {
+                    PublishEvent(
+                        "build.package_failed",
                         rpc::Value(
                             rpc::Value::Object{
                                 {
