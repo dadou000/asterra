@@ -209,13 +209,11 @@ using Json = nlohmann::json;
         id.is_number_float();
 }
 
+template <typename Methods>
 [[nodiscard]] std::optional<Json>
 DispatchSingle(
     const Json& request,
-    const std::map<
-        std::string,
-        Dispatcher::Method,
-        std::less<>>& methods)
+    const Methods& methods)
 {
     if (!request.is_object())
     {
