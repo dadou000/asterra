@@ -1,4 +1,5 @@
 #include <orbit/universe/BodyRegistry.hpp>
+#include <orbit/universe/ReferenceSurface.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -194,5 +195,73 @@ int main()
         std::optional<orbit::frames::FrameId>(
             persistentSystemFrame));
 
+    const orbit::universe::BodyShape
+        testEllipsoid =
+            orbit::universe::EllipsoidShape{
+                .radiiMeters = {
+                    10.0,
+                    8.0,
+                    6.0
+                }
+            };
+
+    const orbit::universe::SurfaceCoordinate
+        authoredCoordinate{
+            .latitudeRadians = 0.35,
+            .longitudeRadians = -0.7,
+            .offsetMeters = 0.0
+        };
+
+    const auto referencePoint =
+        orbit::universe::
+            ReferenceSurfacePoint(
+                testEllipsoid,
+                authoredCoordinate);
+
+    const auto roundTripCoordinate =
+        orbit::universe::
+            ReferenceSurfaceCoordinate(
+                testEllipsoid,
+                referencePoint);
+
+    assert(
+        roundTripCoordinate.has_value());
+    assert(
+        std::abs(
+            roundTripCoordinate->
+                latitudeRadians -
+            authoredCoordinate.
+                latitudeRadians) <
+        1.0e-10);
+    assert(
+        std::abs(
+            roundTripCoordinate->
+                longitudeRadians -
+            authoredCoordinate.
+                longitudeRadians) <
+        1.0e-10);
+
+    const auto rayHit =
+        orbit::universe::
+            IntersectReferenceSurfaceRay(
+                testEllipsoid,
+                {0.0, 0.0, -20.0},
+                {0.0, 0.0, 1.0});
+
+    assert(rayHit.has_value());
+    assert(
+        std::abs(
+            rayHit->z + 6.0) <
+        1.0e-10);
+
+    const auto rayMiss =
+        orbit::universe::
+            IntersectReferenceSurfaceRay(
+                testEllipsoid,
+                {20.0, 20.0, -20.0},
+                {0.0, 0.0, 1.0});
+
+    assert(!rayMiss.has_value());
+
     return 0;
-}
+
