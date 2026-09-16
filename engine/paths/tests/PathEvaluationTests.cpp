@@ -33,14 +33,15 @@ int main()
         0.0, 0.0, 0.0};
     const orbit::math::Double3 end{
         10.0, 0.0, 0.0};
+    const orbit::math::Double3 quarter{
+        2.5, 0.0, 0.0};
 
     ORBIT_TEST_CHECK(
         orbit::paths::EvaluateDirect(
             start,
             end,
             0.25) ==
-        orbit::math::Double3{
-            2.5, 0.0, 0.0});
+        quarter);
 
     const orbit::math::Double3 startHandle{
         0.0, 4.0, 0.0};
