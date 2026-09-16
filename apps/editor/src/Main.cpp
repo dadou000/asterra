@@ -1307,6 +1307,8 @@ int main(
             buildIssues;
         std::filesystem::path
             lastBuildManifest;
+        std::filesystem::path
+            lastPackageExecutable;
         std::string buildStatus{
             "Not run"};
 
@@ -1462,6 +1464,64 @@ int main(
                     orbit::log::Error(
                         exception.what());
                 }
+            };
+
+        const auto packageProjectBuild =
+            [&](const std::string&
+                    requestedProfile)
+                -> orbit::build::
+                    PackageResult
+            {
+                project.Save();
+                world.Checkpoint();
+
+                const auto result =
+                    buildService.Package(
+                        {
+                            .manifestPath =
+                                project.ManifestPath(),
+                            .profileName =
+                                requestedProfile
+                        },
+                        {
+                            .playerExecutable =
+                                FindPlayerExecutable()
+                        });
+
+                buildIssues =
+                    result.issues;
+
+                if (result.Succeeded())
+                {
+                    selectedBuildProfile =
+                        result.manifest.
+                            profile.name;
+                    lastBuildManifest =
+                        result.manifestPath;
+                    lastPackageExecutable =
+                        result.executablePath;
+                    buildStatus =
+                        std::format(
+                            "Packaged {}",
+                            result.executablePath.
+                                filename().
+                                string());
+
+                    orbit::log::Info(
+                        std::format(
+                            "Standalone package succeeded: {}",
+                            result.outputDirectory.
+                                string()));
+                }
+                else
+                {
+                    buildStatus =
+                        "Package failed";
+                    orbit::log::Error(
+                        "Standalone package failed.");
+                }
+
+                return result;
             };
 
         const auto buildIssuesToRpc =
