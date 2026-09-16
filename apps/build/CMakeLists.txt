@@ -2,6 +2,8 @@ add_executable(OrbitBuild
     src/Main.cpp
 )
 
+add_dependencies(OrbitBuild OrbitPlayer)
+
 target_link_libraries(OrbitBuild
     PRIVATE
         Orbit::Build
