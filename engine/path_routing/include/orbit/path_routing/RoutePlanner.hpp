@@ -61,12 +61,6 @@ struct RouteSearchConfig
     u32 maximumAlongSamples{512};
     u32 maximumLateralSamples{65};
     u32 maximumGridCells{32'768};
-
-    // Cross-frame endpoints may move continuously even when a new route is
-    // not materially required. Re-solve only after either endpoint has moved
-    // this far in the selected route frame. Zero means every movement is
-    // significant. Same-frame endpoints are unaffected by this threshold.
-    f64 relativeMotionThresholdMeters{1.0};
 };
 
 struct RouteEnvironment
