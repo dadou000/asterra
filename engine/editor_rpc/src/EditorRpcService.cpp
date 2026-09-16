@@ -3,6 +3,7 @@
 #include <orbit/math/Vector.hpp>
 
 #include <array>
+#include <cmath>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -1561,7 +1562,7 @@ void EditorRpcService::AttachViewport(
                 const auto& values =
                     RequireObject(params);
 
-                auto& camera =
+                auto camera =
                     view->Camera();
 
                 if (const auto found =
@@ -1701,6 +1702,39 @@ void EditorRpcService::AttachViewport(
                         -32602,
                         "Viewport far plane must exceed its near plane.");
                 }
+
+                if (math::Length(
+                        camera.forward) <=
+                        0.0001F ||
+                    math::Length(
+                        camera.up) <=
+                        0.0001F)
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "Viewport forward and up vectors must be non-zero.");
+                }
+
+                camera.forward =
+                    math::Normalize(
+                        camera.forward);
+                camera.up =
+                    math::Normalize(
+                        camera.up);
+
+                if (std::abs(
+                        math::Dot(
+                            camera.forward,
+                            camera.up)) >
+                    0.999F)
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "Viewport forward and up vectors must not be parallel.");
+                }
+
+                view->Camera() =
+                    camera;
 
                 PublishEvent(
                     "viewport.changed",
