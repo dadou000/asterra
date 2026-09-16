@@ -27,6 +27,11 @@ inline constexpr commands::CommandId kMoveToRoot{
     .low = 0x4d4f5645524f4f54ULL
 };
 
+inline constexpr commands::CommandId kAssignMaterial{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x41535349474e4d54ULL
+};
+
 void Register(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
