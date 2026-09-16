@@ -62,7 +62,7 @@ public:
     // Queues one server-originated line for the currently connected local
     // client. Used by JSON-RPC notifications. Returns false when no client is
     // connected; callers can retain the event in a journal for later replay.
-    [[nodiscard]] bool SendMessage(
+    [[nodiscard]] bool SendServerMessage(
         std::string_view message);
 
     // Accepts a pending connection if there isn't one already, and
