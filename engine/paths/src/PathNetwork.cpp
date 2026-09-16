@@ -77,9 +77,14 @@ template <typename T>
 [[nodiscard]] const char* ModeName(
     const EdgeMode mode) noexcept
 {
-    return mode == EdgeMode::Bezier
-        ? "bezier"
-        : "direct";
+    switch (mode)
+    {
+    case EdgeMode::Direct: return "direct";
+    case EdgeMode::Bezier: return "bezier";
+    case EdgeMode::Routed: return "routed";
+    }
+
+    return "direct";
 }
 
 [[nodiscard]] EdgeMode ParseMode(
@@ -93,6 +98,11 @@ template <typename T>
     if (value == "bezier")
     {
         return EdgeMode::Bezier;
+    }
+
+    if (value == "routed")
+    {
+        return EdgeMode::Routed;
     }
 
     throw std::runtime_error(
@@ -478,6 +488,86 @@ PathEdgeRecord PathNetworkService::ConnectBezier(
             edge,
             kBezierEndHandle,
             endHandleMeters);
+        commands_.SetProperty(
+            edge,
+            kEdgeProfileOverride,
+            std::string{});
+
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
+
+        return *FindEdge(edge);
+    }
+    catch (...)
+    {
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
+        throw;
+    }
+}
+
+PathEdgeRecord PathNetworkService::ConnectRouted(
+    const scene::ObjectId startNode,
+    const scene::ObjectId endNode,
+    std::string name)
+{
+    if (startNode == endNode)
+    {
+        throw std::invalid_argument(
+            "A path edge requires two different nodes.");
+    }
+
+    const NetworkId network =
+        RequireNodeNetwork(startNode);
+
+    if (RequireNodeNetwork(endNode) != network)
+    {
+        throw std::invalid_argument(
+            "Path edge endpoints must belong to the same network.");
+    }
+
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Connect Path Nodes Routed");
+    }
+
+    try
+    {
+        const scene::ObjectId edge =
+            commands_.CreateObject(
+                kPathEdgeType,
+                std::move(name),
+                NetworkObject(network));
+
+        commands_.SetProperty(
+            edge,
+            kEdgeStartNode,
+            ToReference(startNode));
+        commands_.SetProperty(
+            edge,
+            kEdgeEndNode,
+            ToReference(endNode));
+        commands_.SetProperty(
+            edge,
+            kEdgeMode,
+            std::string("routed"));
+        commands_.SetProperty(
+            edge,
+            kBezierStartHandle,
+            math::Double3{});
+        commands_.SetProperty(
+            edge,
+            kBezierEndHandle,
+            math::Double3{});
         commands_.SetProperty(
             edge,
             kEdgeProfileOverride,
