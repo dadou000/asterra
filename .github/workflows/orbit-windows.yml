@@ -102,6 +102,7 @@ jobs:
           Copy-Item "build/apps/editor/Release/OrbitStudio.exe" "$package/OrbitStudio.exe"
           Copy-Item "build/apps/build/Release/OrbitBuild.exe" "$package/OrbitBuild.exe"
           Copy-Item "build/apps/player/Release/OrbitPlayer.exe" "$package/OrbitPlayer.exe"
+          Copy-Item "build/apps/build/Release/dxcompiler.dll" "$package/dxcompiler.dll"
           Copy-Item "tools/mcp_server/orbit_mcp_server.py" "$mcp/orbit_mcp_server.py"
           Copy-Item "tools/mcp_server/orbit_editor_mcp_server.py" "$mcp/orbit_editor_mcp_server.py"
           Copy-Item "tools/mcp_server/requirements.txt" "$mcp/requirements.txt"
