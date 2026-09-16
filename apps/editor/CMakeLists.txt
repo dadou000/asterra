@@ -11,7 +11,9 @@ target_link_libraries(OrbitStudio
         Orbit::Commands
         Orbit::Content
         Orbit::Documents
+        Orbit::DevServer
         Orbit::EditorModel
+        Orbit::EditorRpc
         Orbit::EditorUi
         Orbit::Plugins
         Orbit::Frames
