@@ -87,6 +87,9 @@ public:
         TypeId type,
         PropertyId property) const noexcept;
 
+    [[nodiscard]] std::vector<TypeSchema>
+    Catalog() const;
+
     [[nodiscard]] bool ValidateValue(
         const PropertySchema& property,
         const PropertyValue& value) const noexcept;
