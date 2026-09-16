@@ -2,8 +2,6 @@ add_library(OrbitPaths STATIC
     src/PathNetwork.cpp
     src/PathProfile.cpp
     src/PathEvaluation.cpp
-    src/Routing.cpp
-    src/RoutingPreparation.cpp
 )
 
 add_library(Orbit::Paths ALIAS OrbitPaths)
@@ -18,7 +16,6 @@ target_link_libraries(OrbitPaths
         Orbit::Commands
         Orbit::Core
         Orbit::Frames
-        Orbit::Jobs
         Orbit::Math
         Orbit::Scene
         Orbit::Schema
@@ -81,40 +78,5 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.PathEvaluation
         COMMAND OrbitPathEvaluationTests
-    )
-
-    add_executable(OrbitPathRoutingTests
-        tests/RoutingTests.cpp
-    )
-
-    target_link_libraries(OrbitPathRoutingTests
-        PRIVATE
-            Orbit::Paths
-    )
-
-    target_compile_features(OrbitPathRoutingTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitPathRoutingTests)
-
-    add_test(
-        NAME Orbit.PathRouting
-        COMMAND OrbitPathRoutingTests
-    )
-
-    add_executable(OrbitPathRoutingPreparationTests
-        tests/RoutingPreparationTests.cpp
-    )
-
-    target_link_libraries(OrbitPathRoutingPreparationTests
-        PRIVATE
-            Orbit::Documents
-            Orbit::Paths
-    )
-
-    target_compile_features(OrbitPathRoutingPreparationTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitPathRoutingPreparationTests)
-
-    add_test(
-        NAME Orbit.PathRoutingPreparation
-        COMMAND OrbitPathRoutingPreparationTests
     )
 endif()
