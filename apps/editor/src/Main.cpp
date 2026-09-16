@@ -577,6 +577,12 @@ int main(
                     authoring_commands::
                         kClearSelection,
                 orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathDirect,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathBezier,
+                orbit::editor_model::
                     authoring_commands::kUndo,
                 orbit::editor_model::
                     authoring_commands::kRedo
@@ -594,6 +600,12 @@ int main(
                 orbit::editor_model::
                     authoring_commands::
                         kClearSelection,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathDirect,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathBezier,
                 orbit::editor_model::
                     authoring_commands::kUndo,
                 orbit::editor_model::
