@@ -6,6 +6,7 @@ add_library(OrbitContent STATIC
     src/ThumbnailService.cpp
     src/PbrSetImport.cpp
     src/MaterialInstance.cpp
+    src/RuntimeTexture.cpp
 )
 
 add_library(Orbit::Content ALIAS OrbitContent)
