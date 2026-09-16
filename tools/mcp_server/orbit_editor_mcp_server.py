@@ -308,6 +308,24 @@ def orbit_path_set_bezier_handles(
 
 
 @mcp.tool()
+def orbit_path_set_profile(
+    object_id: str,
+    profile_asset: str | None,
+) -> dict[str, Any]:
+    """Assign a path-profile asset to a network or edge override.
+
+    Pass profile_asset=None to clear the assignment.
+    """
+    return _rpc(
+        "path.set_profile",
+        {
+            "object": object_id,
+            "profile_asset": profile_asset,
+        },
+    )
+
+
+@mcp.tool()
 def orbit_path_inspect(object_id: str) -> dict[str, Any]:
     """Inspect a semantic path network, node, or edge."""
     return _rpc("path.inspect", {"id": object_id})
