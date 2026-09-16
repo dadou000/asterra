@@ -13,9 +13,11 @@
 #include <fstream>
 #include <iterator>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace orbit::build
 {
