@@ -11,12 +11,15 @@
 #include <array>
 #include <filesystem>
 #include <span>
+#include <iostream>
 
 #define ORBIT_TEST_CHECK(expression) \
     do \
     { \
         if (!(expression)) \
         { \
+            std::cerr << "Explorer/Inspector test failed: " #expression \
+                      << " at line " << __LINE__ << '\\n'; \
             return __LINE__; \
         } \
     } while (false)
