@@ -809,6 +809,8 @@ int main(
                  &selection,
                  bodyObject,
                  &objects,
+                 &content,
+                 &authoringCommands,
                  &presentActions](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -863,6 +865,64 @@ int main(
                                             bodyView.
                                                 Height())
                             });
+
+                    if (const auto payload =
+                            context.AcceptDragPayload(
+                                "ORBIT_ASSET");
+                        payload.has_value())
+                    {
+                        if (const auto assetId =
+                                DecodeAssetId(
+                                    *payload);
+                            assetId.has_value())
+                        {
+                            const auto* asset =
+                                content.Find(
+                                    *assetId);
+
+                            if (asset != nullptr &&
+                                asset->kind ==
+                                    orbit::content::
+                                        AssetKind::Material)
+                            {
+                                const std::array selected{
+                                    bodyObject
+                                };
+
+                                selection.Set(
+                                    std::span(
+                                        selected));
+
+                                try
+                                {
+                                    authoringCommands.
+                                        Invoke(
+                                            orbit::editor_model::
+                                                authoring_commands::
+                                                    kAssignMaterial,
+                                            {
+                                                {
+                                                    "material",
+                                                    asset->
+                                                        sourcePath.
+                                                        generic_string()
+                                                }
+                                            });
+                                }
+                                catch (const std::exception&
+                                           exception)
+                                {
+                                    orbit::log::Warning(
+                                        exception.what());
+                                }
+                            }
+                            else
+                            {
+                                orbit::log::Warning(
+                                    "Viewport drop expects a material asset.");
+                            }
+                        }
+                    }
 
                     if (interaction.clicked ||
                         interaction.rightClicked)
