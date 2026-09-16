@@ -210,12 +210,6 @@ BodyRegistry::BodyRegistry(
 SystemId BodyRegistry::CreateSystem(
     const std::string_view name)
 {
-    if (name.empty())
-    {
-        throw std::invalid_argument(
-            "Celestial system name must not be empty.");
-    }
-
     SystemId id = SystemId::Random();
 
     while (systems_.contains(id))
@@ -223,11 +217,64 @@ SystemId BodyRegistry::CreateSystem(
         id = SystemId::Random();
     }
 
+    frames::FrameId inertialFrame =
+        frames::FrameId::Random();
+
+    while (frameGraph_.Contains(inertialFrame))
+    {
+        inertialFrame =
+            frames::FrameId::Random();
+    }
+
+    return CreateSystem(
+        name,
+        id,
+        inertialFrame);
+}
+
+SystemId BodyRegistry::CreateSystem(
+    const std::string_view name,
+    const SystemId id,
+    const frames::FrameId inertialFrame)
+{
+    if (name.empty())
+    {
+        throw std::invalid_argument(
+            "Celestial system name must not be empty.");
+    }
+
+    if (!id)
+    {
+        throw std::invalid_argument(
+            "Celestial system ID must be valid.");
+    }
+
+    if (!inertialFrame)
+    {
+        throw std::invalid_argument(
+            "Celestial system inertial frame ID must be valid.");
+    }
+
+    if (systems_.contains(id))
+    {
+        throw std::invalid_argument(
+            "Celestial system ID already exists.");
+    }
+
+    if (frameGraph_.Contains(inertialFrame))
+    {
+        throw std::invalid_argument(
+            "Celestial system inertial frame already exists.");
+    }
+
+    frameGraph_.CreateRoot(
+        inertialFrame);
+
     CelestialSystem system{
         .id = id,
         .name = std::string(name),
         .inertialFrame =
-            frameGraph_.CreateRoot()
+            inertialFrame
     };
 
     systems_.emplace(
@@ -279,26 +326,57 @@ BodyId BodyRegistry::CreateBody(
             "Body parent frame does not exist.");
     }
 
+    BodyId id =
+        desc.id;
+
+    if (!id)
+    {
+        id = BodyId::Random();
+
+        while (bodies_.contains(id))
+        {
+            id = BodyId::Random();
+        }
+    }
+    else if (bodies_.contains(id))
+    {
+        throw std::invalid_argument(
+            "Celestial body ID already exists.");
+    }
+
+    frames::FrameId bodyFrame =
+        desc.frame;
+
+    if (!bodyFrame)
+    {
+        bodyFrame =
+            frames::FrameId::Random();
+
+        while (frameGraph_.Contains(bodyFrame))
+        {
+            bodyFrame =
+                frames::FrameId::Random();
+        }
+    }
+    else if (frameGraph_.Contains(bodyFrame))
+    {
+        throw std::invalid_argument(
+            "Celestial body frame already exists.");
+    }
+
     const BodyTransformModel model =
         desc.transformModel;
 
-    const frames::FrameId bodyFrame =
-        frameGraph_.CreateFrame(
-            parentFrame,
-            [model](
-                const time::SimulationTime atTime)
-            {
-                return EvaluateTransform(
-                    model,
-                    atTime);
-            });
-
-    BodyId id = BodyId::Random();
-
-    while (bodies_.contains(id))
-    {
-        id = BodyId::Random();
-    }
+    frameGraph_.CreateFrame(
+        bodyFrame,
+        parentFrame,
+        [model](
+            const time::SimulationTime atTime)
+        {
+            return EvaluateTransform(
+                model,
+                atTime);
+        });
 
     CelestialBody body{
         .id = id,
