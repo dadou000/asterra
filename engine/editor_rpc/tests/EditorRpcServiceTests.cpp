@@ -854,6 +854,141 @@ int main()
         derived.Find("collision_triangles")->
             AsInteger() == 10);
 
+    bool buildCooked = false;
+
+    editorRpc.AttachBuild({
+        .profiles =
+            []
+            {
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Array{
+                        orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "name",
+                                    "Development Windows"
+                                },
+                                {
+                                    "configuration",
+                                    "Development"
+                                },
+                                {
+                                    "platform",
+                                    "Windows"
+                                },
+                                {
+                                    "storefront",
+                                    "standalone"
+                                }
+                            })
+                    });
+            },
+        .validate =
+            [](
+                std::optional<std::string>
+                    profile)
+            {
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"ok", true},
+                        {
+                            "profile",
+                            profile.value_or(
+                                "Development Windows")
+                        }
+                    });
+            },
+        .cook =
+            [&buildCooked](
+                std::optional<std::string>
+                    profile)
+            {
+                buildCooked = true;
+
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"ok", true},
+                        {
+                            "profile",
+                            profile.value_or(
+                                "Development Windows")
+                        },
+                        {
+                            "manifest",
+                            "Build/OrbitBuildManifest.toml"
+                        }
+                    });
+            }
+    });
+
+    const auto buildProfiles =
+        Call(
+            dispatcher,
+            "21b1",
+            "build.profiles");
+
+    Check(
+        buildProfiles.IsArray() &&
+        buildProfiles.AsArray().size() ==
+            1U);
+
+    const auto buildValidation =
+        Call(
+            dispatcher,
+            "21b2",
+            "build.validate",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "profile",
+                        "Development Windows"
+                    }
+                }));
+
+    Check(
+        buildValidation.Find("ok") !=
+            nullptr &&
+        buildValidation.Find("ok")->
+            AsBool());
+
+    const auto buildCook =
+        Call(
+            dispatcher,
+            "21b3",
+            "build.cook",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "profile",
+                        "Development Windows"
+                    }
+                }));
+
+    Check(buildCooked);
+    Check(
+        buildCook.Find("manifest") !=
+            nullptr &&
+        buildCook.Find("manifest")->
+            AsString() ==
+            "Build/OrbitBuildManifest.toml");
+
+    const auto buildNotifications =
+        editorRpc.DrainNotifications();
+
+    Check(
+        !buildNotifications.empty());
+
+    const auto buildNotification =
+        orbit::rpc::ParseValue(
+            buildNotifications.back());
+
+    Check(
+        buildNotification.Find("method") !=
+            nullptr &&
+        buildNotification.Find("method")->
+            AsString() ==
+            "event.build.cooked");
+
     static_cast<void>(
         Call(
             dispatcher,
