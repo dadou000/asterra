@@ -584,6 +584,11 @@ EditorRpcService::EditorRpcService(
             for (const auto& command :
                  commandRegistry.Catalog())
             {
+                if (!command.automationVisible)
+                {
+                    continue;
+                }
+
                 rpc::Value::Array parameters;
 
                 for (const auto& parameter :
@@ -686,11 +691,12 @@ EditorRpcService::EditorRpcService(
             const auto* descriptor =
                 commandRegistry.Find(*id);
 
-            if (descriptor == nullptr)
+            if (descriptor == nullptr ||
+                !descriptor->automationVisible)
             {
                 throw rpc::Error(
                     -32601,
-                    "Command is not registered.");
+                    "Command is not available to automation.");
             }
 
             commands::CommandArguments
