@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/content/AssetPipeline.hpp>
+#include <orbit/content/ThumbnailService.hpp>
 #include <orbit/core/StrongId.hpp>
 #include <orbit/core/Types.hpp>
 
@@ -82,6 +83,13 @@ public:
     [[nodiscard]] const ImporterRegistry& Importers() const noexcept;
     [[nodiscard]] DerivedDataCache& Cache() noexcept;
     [[nodiscard]] const DerivedDataCache& Cache() const noexcept;
+    [[nodiscard]] ThumbnailService& Thumbnails() noexcept;
+    [[nodiscard]] const ThumbnailService& Thumbnails() const noexcept;
+
+    [[nodiscard]] ThumbnailResult GetThumbnail(
+        AssetId id,
+        u32 width = 96,
+        u32 height = 96);
 
     // Runs the registered importer for an indexed source asset using the
     // shared project DDC. This does not replace or mutate project authority.
@@ -104,6 +112,7 @@ private:
     ImporterRegistry importers_;
     DerivedDataCache cache_;
     AssetPipeline pipeline_;
+    ThumbnailService thumbnails_;
     std::unordered_map<AssetId, AssetRecord> assets_;
     std::unordered_map<std::string, AssetId> pathIndex_;
     std::vector<ContentDiagnostic> diagnostics_;
