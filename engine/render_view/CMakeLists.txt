@@ -1,5 +1,6 @@
 add_library(OrbitRenderView STATIC
     src/RenderView.cpp
+    src/Capture.cpp
 )
 
 add_library(Orbit::RenderView ALIAS OrbitRenderView)
