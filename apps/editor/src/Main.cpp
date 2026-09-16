@@ -562,7 +562,13 @@ int main(
                     authoring_commands::kRedo,
                 orbit::editor_model::
                     authoring_commands::
-                        kClearSelection
+                        kClearSelection,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathDirect,
+                orbit::editor_model::
+                    authoring_commands::
+                        kConnectPathBezier
             });
 
         commandSurfaces.Set(
