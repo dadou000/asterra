@@ -16,11 +16,19 @@ using WorldId = core::StrongId<WorldIdTag>;
 
 inline constexpr i32 kCurrentWorldSchemaVersion = 2;
 
+enum class WorldOpenMode : u8
+{
+    ReadWrite,
+    ReadOnly
+};
+
 class WorldDatabase
 {
 public:
     explicit WorldDatabase(
-        const std::filesystem::path& path);
+        const std::filesystem::path& path,
+        WorldOpenMode mode =
+            WorldOpenMode::ReadWrite);
     ~WorldDatabase();
 
     WorldDatabase(const WorldDatabase&) = delete;
@@ -34,6 +42,9 @@ public:
 
     [[nodiscard]] i32 SchemaVersion() const noexcept;
     [[nodiscard]] WorldId Id() const noexcept;
+
+    [[nodiscard]] WorldOpenMode Mode() const noexcept;
+    [[nodiscard]] bool ReadOnly() const noexcept;
 
     [[nodiscard]] std::optional<std::string>
     GetMetadata(std::string_view key) const;
