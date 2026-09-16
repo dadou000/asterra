@@ -1,5 +1,6 @@
 add_library(OrbitEditorUi STATIC
     src/BodyPreviewRenderer.cpp
+    src/PathPreviewRenderer.cpp
     src/EditorUi.cpp
 )
 
@@ -13,7 +14,9 @@ target_include_directories(OrbitEditorUi
 target_link_libraries(OrbitEditorUi
     PUBLIC
         Orbit::Core
+        Orbit::Frames
         Orbit::Math
+        Orbit::PathGeometry
         Orbit::Platform
         Orbit::RHI
         Orbit::RenderView
