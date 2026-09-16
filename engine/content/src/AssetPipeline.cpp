@@ -3,6 +3,7 @@
 #include <toml++/toml.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <fstream>
 #include <set>
@@ -312,6 +313,87 @@ void StoreManifest(
             StringBytes(text)));
 }
 } // namespace
+
+void RegisterBuiltinImporters(
+    ImporterRegistry& registry)
+{
+    registry.Register({
+        .id = "orbit.material",
+        .version = 1,
+        .extensions = {
+            ".orbitmaterial"
+        },
+        .import =
+            [](
+                const ImportRequest& request)
+            {
+                const toml::table document =
+                    toml::parse_file(
+                        request.sourcePath.
+                            string());
+
+                const toml::table* material =
+                    document["material"].
+                        as_table();
+
+                if (material == nullptr)
+                {
+                    throw std::runtime_error(
+                        "Material source is missing [material].");
+                }
+
+                std::vector<std::filesystem::path>
+                    dependencies;
+
+                constexpr std::array<
+                    std::string_view,
+                    6>
+                    kTextureChannels{
+                        "base_color",
+                        "normal",
+                        "roughness",
+                        "metallic",
+                        "ambient_occlusion",
+                        "emissive"
+                    };
+
+                for (const auto channel :
+                     kTextureChannels)
+                {
+                    if (const auto path =
+                            (*material)[channel].
+                                value<std::string>();
+                        path.has_value() &&
+                        !path->empty())
+                    {
+                        dependencies.emplace_back(
+                            *path);
+                    }
+                }
+
+                std::ostringstream stream;
+                stream << document;
+
+                const std::string normalized =
+                    stream.str();
+
+                return ImportOutput{
+                    .artifacts = {
+                        {
+                            .name =
+                                "material.toml",
+                            .bytes =
+                                StringBytes(
+                                    normalized)
+                        }
+                    },
+                    .dependencies =
+                        std::move(
+                            dependencies)
+                };
+            }
+    });
+}
 
 void ImporterRegistry::Register(
     ImporterDescriptor descriptor)
