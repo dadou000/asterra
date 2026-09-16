@@ -62,4 +62,21 @@ if(BUILD_TESTING)
         NAME Orbit.PathProfile
         COMMAND OrbitPathProfileTests
     )
+
+    add_executable(OrbitPathEvaluationTests
+        tests/PathEvaluationTests.cpp
+    )
+
+    target_link_libraries(OrbitPathEvaluationTests
+        PRIVATE
+            Orbit::Paths
+    )
+
+    target_compile_features(OrbitPathEvaluationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPathEvaluationTests)
+
+    add_test(
+        NAME Orbit.PathEvaluation
+        COMMAND OrbitPathEvaluationTests
+    )
 endif()
