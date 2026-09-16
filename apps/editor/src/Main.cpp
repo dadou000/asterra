@@ -1478,6 +1478,194 @@ int main(
                 }
             };
 
+        editorRpc.AttachPathRouting({
+            .status =
+                [&routePlanner](
+                    const orbit::scene::ObjectId edge)
+                {
+                    const auto status =
+                        routePlanner.Status(edge);
+
+                    if (!status.has_value())
+                    {
+                        return orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {"state", "missing"},
+                                {
+                                    "edge",
+                                    edge.ToString()
+                                }
+                            });
+                    }
+
+                    const char* stateName =
+                        "missing";
+
+                    switch (status->state)
+                    {
+                    case orbit::path_routing::
+                            RouteState::Missing:
+                        stateName = "missing";
+                        break;
+                    case orbit::path_routing::
+                            RouteState::Dirty:
+                        stateName = "dirty";
+                        break;
+                    case orbit::path_routing::
+                            RouteState::Building:
+                        stateName = "building";
+                        break;
+                    case orbit::path_routing::
+                            RouteState::Ready:
+                        stateName = "ready";
+                        break;
+                    case orbit::path_routing::
+                            RouteState::Failed:
+                        stateName = "failed";
+                        break;
+                    }
+
+                    return orbit::rpc::Value(
+                        orbit::rpc::Value::Object{
+                            {
+                                "edge",
+                                edge.ToString()
+                            },
+                            {"state", stateName},
+                            {
+                                "generation",
+                                static_cast<
+                                    orbit::i64>(
+                                        status->
+                                            generation)
+                            },
+                            {
+                                "committed_revision",
+                                static_cast<
+                                    orbit::i64>(
+                                        status->
+                                            committedRevision)
+                            },
+                            {
+                                "dependency_signature",
+                                static_cast<
+                                    orbit::i64>(
+                                        status->
+                                            dependencySignature &
+                                        0x7fffffffffffffffULL)
+                            },
+                            {
+                                "cross_frame",
+                                status->
+                                    crossFrameEndpoints
+                            },
+                            {
+                                "error",
+                                status->error
+                            }
+                        });
+                },
+            .result =
+                [&routePlanner](
+                    const orbit::scene::ObjectId edge)
+                {
+                    const auto* result =
+                        routePlanner.Result(edge);
+
+                    if (result == nullptr)
+                    {
+                        return orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "edge",
+                                    edge.ToString()
+                                },
+                                {"ready", false}
+                            });
+                    }
+
+                    orbit::rpc::Value::Array
+                        points;
+
+                    points.reserve(
+                        result->points.size());
+
+                    for (const auto& point :
+                         result->points)
+                    {
+                        points.emplace_back(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "position",
+                                    orbit::rpc::Value::Array{
+                                        point.localMeters.x,
+                                        point.localMeters.y,
+                                        point.localMeters.z
+                                    }
+                                },
+                                {
+                                    "elevation_meters",
+                                    point.
+                                        elevationMeters
+                                },
+                                {
+                                    "water_depth_meters",
+                                    point.
+                                        waterDepthMeters
+                                }
+                            });
+                    }
+
+                    return orbit::rpc::Value(
+                        orbit::rpc::Value::Object{
+                            {
+                                "edge",
+                                edge.ToString()
+                            },
+                            {"ready", true},
+                            {
+                                "frame",
+                                result->frame.
+                                    ToString()
+                            },
+                            {
+                                "generation",
+                                static_cast<
+                                    orbit::i64>(
+                                        result->
+                                            generation)
+                            },
+                            {
+                                "dependency_signature",
+                                static_cast<
+                                    orbit::i64>(
+                                        result->
+                                            dependencySignature &
+                                        0x7fffffffffffffffULL)
+                            },
+                            {
+                                "total_cost",
+                                result->totalCost
+                            },
+                            {
+                                "cross_frame",
+                                result->
+                                    crossFrameEndpoints
+                            },
+                            {
+                                "points",
+                                std::move(points)
+                            }
+                        });
+                },
+            .invalidate =
+                [&routePlanner](
+                    const orbit::scene::ObjectId edge)
+                {
+                    routePlanner.Invalidate(edge);
+                }
+        });
+
         requestRoutedPaths();
 
         orbit::u64 publishedObjectRevision =
