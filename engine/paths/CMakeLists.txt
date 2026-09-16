@@ -1,5 +1,6 @@
 add_library(OrbitPaths STATIC
     src/PathNetwork.cpp
+    src/PathProfile.cpp
 )
 
 add_library(Orbit::Paths ALIAS OrbitPaths)
@@ -18,6 +19,8 @@ target_link_libraries(OrbitPaths
         Orbit::Scene
         Orbit::Schema
         Orbit::Universe
+    PRIVATE
+        tomlplusplus::tomlplusplus
 )
 
 target_compile_features(OrbitPaths PUBLIC cxx_std_23)
