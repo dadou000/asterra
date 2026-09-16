@@ -43,7 +43,13 @@ int main()
     std::filesystem::remove_all(root);
 
     auto project = orbit::documents::ProjectDocument::Create(root, "Plugin Test");
-    project.Manifest().plugins.push_back({.id = "test.plugin", .version = "1.0.0"});
+    project.Manifest().plugins.push_back({
+        .id = "test.plugin",
+        .version = "1.0.0",
+        .grantedPermissions = {
+            "project_mutation"
+        }
+    });
     project.Save();
 
     const auto package = root / "Plugins" / "test.plugin";
@@ -70,9 +76,6 @@ int main()
         objects,
         selection);
 
-    orbit::plugins::PluginPermissionSet grants;
-    grants.Add(orbit::plugins::PluginPermission::ProjectMutation);
-    plugins.SetGrantedPermissions("test.plugin", grants);
     plugins.LoadEnabled(project.Manifest());
 
     auto statuses = plugins.Statuses();
