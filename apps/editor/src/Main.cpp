@@ -50,6 +50,25 @@
 
 namespace
 {
+template <typename TargetId, typename SourceId>
+[[nodiscard]] TargetId DerivedPersistentId(
+    const SourceId source,
+    const orbit::u64 highSalt,
+    const orbit::u64 lowSalt) noexcept
+{
+    TargetId result{
+        .high = source.high ^ highSalt,
+        .low = source.low ^ lowSalt
+    };
+
+    if (!result)
+    {
+        result.low = 1;
+    }
+
+    return result;
+}
+
 [[nodiscard]] orbit::documents::ProjectDocument
 OpenProject(
     const int argc,
@@ -731,10 +750,47 @@ int main(
         orbit::universe::BodyRegistry bodies(
             frames);
 
+        const auto projectId =
+            project.Manifest().projectId;
+
+        const orbit::universe::SystemId
+            persistentSystemId =
+                DerivedPersistentId<
+                    orbit::universe::SystemId>(
+                        projectId,
+                        0x53595354454d4944ULL,
+                        0x4f52424954563033ULL);
+
+        const orbit::frames::FrameId
+            persistentSystemFrame =
+                DerivedPersistentId<
+                    orbit::frames::FrameId>(
+                        projectId,
+                        0x5359534652414d45ULL,
+                        0x4f52424954563033ULL);
+
         const orbit::universe::SystemId
             system =
                 bodies.CreateSystem(
-                    "Helion");
+                    "Helion",
+                    persistentSystemId,
+                    persistentSystemFrame);
+
+        const orbit::universe::BodyId
+            persistentBodyId =
+                DerivedPersistentId<
+                    orbit::universe::BodyId>(
+                        bodyObject,
+                        0x424f445949440003ULL,
+                        0x4f52424954563033ULL);
+
+        const orbit::frames::FrameId
+            persistentBodyFrame =
+                DerivedPersistentId<
+                    orbit::frames::FrameId>(
+                        bodyObject,
+                        0x424f44594652414dULL,
+                        0x4f52424954563033ULL);
 
         const orbit::universe::BodyId
             bodyId =
@@ -754,7 +810,11 @@ int main(
                             MassProperties{
                                 .massKilograms =
                                     5.0e24
-                            }
+                            },
+                    .id =
+                        persistentBodyId,
+                    .frame =
+                        persistentBodyFrame
                 });
 
         if (bodies.FindBody(bodyId) ==
