@@ -687,6 +687,86 @@ void VulkanCommandList::CopyBufferToTexture(
     ResumeRenderingIfPaused(wasRendering);
 }
 
+void VulkanCommandList::CopyTextureToBuffer(
+    Texture& source,
+    Buffer& destination,
+    const u64 destinationOffsetBytes)
+{
+    auto* vulkanSource =
+        dynamic_cast<VulkanTexture*>(&source);
+    auto* vulkanDestination =
+        dynamic_cast<VulkanBuffer*>(&destination);
+
+    if (vulkanSource == nullptr ||
+        vulkanDestination == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a resource from another backend.");
+    }
+
+    if (source.Format() !=
+        TextureFormat::RGBA8_UNorm)
+    {
+        throw std::invalid_argument(
+            "Orbit texture readback currently supports RGBA8_UNorm only.");
+    }
+
+    const u64 sizeBytes =
+        static_cast<u64>(
+            source.Width()) *
+        static_cast<u64>(
+            source.Height()) *
+        4U;
+
+    if (destinationOffsetBytes >
+            destination.SizeBytes() ||
+        sizeBytes >
+            destination.SizeBytes() -
+                destinationOffsetBytes)
+    {
+        throw std::out_of_range(
+            "Orbit texture-to-buffer copy exceeds the destination buffer bounds.");
+    }
+
+    const bool wasRendering =
+        PauseRenderingIfActive();
+
+    VkBufferImageCopy2 region{};
+    region.sType =
+        VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2;
+    region.bufferOffset =
+        destinationOffsetBytes;
+    region.imageSubresource.aspectMask =
+        VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width =
+        source.Width();
+    region.imageExtent.height =
+        source.Height();
+    region.imageExtent.depth = 1;
+
+    VkCopyImageToBufferInfo2 copyInfo{};
+    copyInfo.sType =
+        VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2;
+    copyInfo.srcImage =
+        vulkanSource->Native();
+    copyInfo.srcImageLayout =
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    copyInfo.dstBuffer =
+        vulkanDestination->Native();
+    copyInfo.regionCount = 1;
+    copyInfo.pRegions = &region;
+
+    vkCmdCopyImageToBuffer2(
+        nativeCommandList_,
+        &copyInfo);
+
+    ResumeRenderingIfPaused(
+        wasRendering);
+}
+
 void VulkanCommandList::ClearColorTarget(
     Texture& texture,
     const ClearColor& color)
