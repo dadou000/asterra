@@ -384,9 +384,9 @@ public:
 
 namespace
 {
+template <typename Request>
 [[nodiscard]] RouteResult SolveRoute(
-    const RoutePlanner::ResolvedRequest&
-        request,
+    const Request& request,
     const u64 generation,
     const u64 signature)
 {
