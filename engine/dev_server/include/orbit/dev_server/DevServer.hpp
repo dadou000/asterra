@@ -4,7 +4,9 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace orbit::dev_server
@@ -12,12 +14,14 @@ namespace orbit::dev_server
 struct DevServerConfig
 {
     u16 port{4319};
+    std::size_t maxMessageBytes{
+        1024U * 1024U};
 };
 
-// A minimal loopback-only TCP text protocol for driving and
-// inspecting a running Orbit process from external tooling -- an
-// MCP bridge, a Python test harness, etc. One line in, one line
-// out: `COMMAND arg0 arg1 ...\n` gets a single-line response back.
+// Loopback-only, non-blocking, line-framed transport for local Orbit
+// automation. The transport is protocol-agnostic through MessageHandler;
+// legacy whitespace commands remain available while clients migrate to
+// JSON-RPC. Each message and response is one UTF-8 line.
 //
 // Bound to 127.0.0.1 only; never reachable from the network. Polled
 // from the main thread once per frame and never blocks, so a
@@ -28,6 +32,10 @@ public:
     using CommandHandler =
         std::function<std::string(
             const std::vector<std::string>& arguments)>;
+
+    using MessageHandler =
+        std::function<std::optional<std::string>(
+            std::string_view message)>;
 
     explicit DevServer(DevServerConfig config = {});
     ~DevServer();
@@ -42,6 +50,13 @@ public:
     void RegisterCommand(
         std::string name,
         CommandHandler handler);
+
+    // Installs a transport-level message handler. When present, complete
+    // lines are passed through unchanged and legacy whitespace commands are
+    // bypassed. Returning nullopt implements notification/no-response
+    // protocols such as JSON-RPC 2.0 notifications.
+    void SetMessageHandler(
+        MessageHandler handler);
 
     // Accepts a pending connection if there isn't one already, and
     // dispatches any complete lines already received from the
