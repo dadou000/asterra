@@ -827,6 +827,27 @@ int main()
                         {"collision_triangles", 10},
                         {"reference_nodes", 6}
                     });
+            },
+        .package =
+            [&buildPackaged](
+                std::optional<std::string>
+                    profile)
+            {
+                buildPackaged = true;
+
+                return orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"ok", true},
+                        {
+                            "profile",
+                            profile.value_or(
+                                "Development Windows")
+                        },
+                        {
+                            "executable",
+                            "Build/RPC_Test.exe"
+                        }
+                    });
             }
     });
 
@@ -856,6 +877,7 @@ int main()
             AsInteger() == 10);
 
     bool buildCooked = false;
+    bool buildPackaged = false;
 
     editorRpc.AttachBuild({
         .profiles =
@@ -973,6 +995,27 @@ int main()
             AsString() ==
             "Build/OrbitBuildManifest.toml");
 
+    const auto buildPackage =
+        Call(
+            dispatcher,
+            "21b4",
+            "build.package",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {
+                        "profile",
+                        "Development Windows"
+                    }
+                }));
+
+    Check(buildPackaged);
+    Check(
+        buildPackage.Find("executable") !=
+            nullptr &&
+        buildPackage.Find("executable")->
+            AsString() ==
+            "Build/RPC_Test.exe");
+
     const auto buildNotifications =
         editorRpc.DrainNotifications();
 
@@ -988,7 +1031,7 @@ int main()
             nullptr &&
         buildNotification.Find("method")->
             AsString() ==
-            "event.build.completed");
+            "event.build.package_completed");
 
     static_cast<void>(
         Call(
