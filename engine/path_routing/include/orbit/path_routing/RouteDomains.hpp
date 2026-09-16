@@ -9,6 +9,17 @@
 
 namespace orbit::path_routing
 {
+// Reference-shape domain for bodies without terrain capability. Candidates
+// are snapped to the body's sphere/ellipsoid reference shape.
+[[nodiscard]] RouteEnvironment
+MakeReferenceSurfaceEnvironment(
+    universe::BodyId body,
+    frames::FrameId routeFrame,
+    time::SimulationTime atTime,
+    const frames::FrameGraph& frames,
+    const universe::BodyRegistry& bodies,
+    RouteSearchConfig search = {});
+
 // Terrain-backed surface domain for the current spherical terrain capability.
 // The projector snaps every search candidate to terrain elevation and exports
 // water depth for profile bridge/water costs. Terrain Revision() participates
