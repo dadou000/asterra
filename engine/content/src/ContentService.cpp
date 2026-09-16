@@ -1,0 +1,234 @@
+#include <orbit/content/ContentService.hpp>
+
+#include <toml++/toml.hpp>
+
+#include <algorithm>
+#include <cctype>
+#include <fstream>
+#include <stdexcept>
+
+namespace orbit::content
+{
+namespace
+{
+[[nodiscard]] u64 Hash(std::string_view text, u64 seed) noexcept
+{
+    u64 value = seed;
+    for (const unsigned char c : text)
+    {
+        value ^= static_cast<u64>(c);
+        value *= 1099511628211ULL;
+    }
+    return value;
+}
+
+[[nodiscard]] std::string Lower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+[[nodiscard]] AssetKind KindFromExtension(const std::filesystem::path& path)
+{
+    const std::string extension = Lower(path.extension().string());
+    if (extension == ".orbitmaterial") return AssetKind::Material;
+    if (extension == ".orbitcomponent") return AssetKind::Component;
+    if (extension == ".orbitdecal") return AssetKind::Decal;
+    if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
+        extension == ".tga" || extension == ".dds" || extension == ".ktx2" ||
+        extension == ".exr") return AssetKind::Texture;
+    if (extension == ".gltf" || extension == ".glb" || extension == ".fbx" ||
+        extension == ".obj") return AssetKind::Mesh;
+    return AssetKind::Unknown;
+}
+
+[[nodiscard]] std::filesystem::path ChannelPath(
+    const toml::table& table, std::string_view key)
+{
+    const auto value = table[key].value<std::string>();
+    return value.has_value() ? std::filesystem::path(*value) : std::filesystem::path{};
+}
+}
+
+ContentService::ContentService(std::filesystem::path projectRoot)
+    : projectRoot_(std::filesystem::weakly_canonical(std::move(projectRoot))),
+      contentRoot_(projectRoot_ / "Content")
+{
+    std::filesystem::create_directories(contentRoot_);
+}
+
+void ContentService::Scan()
+{
+    std::unordered_map<AssetId, AssetRecord> next;
+    std::unordered_map<std::string, AssetId> nextPaths;
+
+    if (std::filesystem::exists(contentRoot_))
+    {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                 contentRoot_, std::filesystem::directory_options::skip_permission_denied))
+        {
+            if (!entry.is_regular_file()) continue;
+            AssetRecord record = BuildRecord(entry.path());
+            if (record.kind == AssetKind::Unknown) continue;
+            const std::string key = std::filesystem::relative(entry.path(), projectRoot_).generic_string();
+            nextPaths.insert_or_assign(Lower(key), record.id);
+            next.insert_or_assign(record.id, std::move(record));
+        }
+    }
+
+    assets_ = std::move(next);
+    pathIndex_ = std::move(nextPaths);
+    ++revision_;
+}
+
+const AssetRecord* ContentService::Find(const AssetId id) const noexcept
+{
+    const auto found = assets_.find(id);
+    return found == assets_.end() ? nullptr : &found->second;
+}
+
+const AssetRecord* ContentService::FindByPath(const std::filesystem::path& path) const noexcept
+{
+    try
+    {
+        const auto absolute = path.is_absolute() ? path : projectRoot_ / path;
+        const std::string key = Lower(std::filesystem::relative(absolute, projectRoot_).generic_string());
+        const auto indexed = pathIndex_.find(key);
+        return indexed == pathIndex_.end() ? nullptr : Find(indexed->second);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+std::vector<AssetRecord> ContentService::Search(
+    const std::string_view query, const std::optional<AssetKind> kind) const
+{
+    const std::string needle = Lower(std::string(query));
+    std::vector<AssetRecord> result;
+    for (const auto& [id, asset] : assets_)
+    {
+        static_cast<void>(id);
+        if (kind.has_value() && asset.kind != *kind) continue;
+        std::string haystack = Lower(asset.name + " " + asset.sourcePath.generic_string());
+        for (const auto& tag : asset.tags) haystack += " " + Lower(tag);
+        if (needle.empty() || haystack.find(needle) != std::string::npos)
+            result.push_back(asset);
+    }
+    std::ranges::sort(result, {}, &AssetRecord::name);
+    return result;
+}
+
+std::vector<AssetRecord> ContentService::All() const
+{
+    return Search({});
+}
+
+u64 ContentService::Revision() const noexcept
+{
+    return revision_;
+}
+
+AssetId ContentService::ImportFile(const std::filesystem::path& source)
+{
+    if (!std::filesystem::is_regular_file(source))
+        throw std::invalid_argument("Content import source is not a regular file.");
+
+    const auto destinationDirectory = contentRoot_ / "Imported";
+    std::filesystem::create_directories(destinationDirectory);
+    auto destination = destinationDirectory / source.filename();
+
+    if (std::filesystem::exists(destination))
+    {
+        const std::string stem = source.stem().string();
+        const std::string extension = source.extension().string();
+        u32 suffix = 2;
+        do
+        {
+            destination = destinationDirectory /
+                (stem + "_" + std::to_string(suffix++) + extension);
+        } while (std::filesystem::exists(destination));
+    }
+
+    std::filesystem::copy_file(source, destination);
+    Scan();
+    const AssetRecord* record = FindByPath(destination);
+    if (record == nullptr)
+        throw std::runtime_error("Imported file type is not supported by ContentService.");
+    return record->id;
+}
+
+AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) const
+{
+    AssetRecord result{
+        .id = StableId(absolute),
+        .kind = KindFromExtension(absolute),
+        .name = absolute.stem().string(),
+        .sourcePath = std::filesystem::relative(absolute, projectRoot_)
+    };
+
+    if (result.kind == AssetKind::Material)
+    {
+        const toml::table document = toml::parse_file(absolute.string());
+        const toml::table* material = document["material"].as_table();
+        if (material == nullptr)
+            throw std::runtime_error("Material asset is missing [material]: " + absolute.string());
+
+        if (const auto name = (*material)["name"].value<std::string>(); name.has_value())
+            result.name = *name;
+
+        MaterialChannels channels;
+        channels.baseColor = ChannelPath(*material, "base_color");
+        channels.normal = ChannelPath(*material, "normal");
+        channels.roughness = ChannelPath(*material, "roughness");
+        channels.metallic = ChannelPath(*material, "metallic");
+        channels.ambientOcclusion = ChannelPath(*material, "ambient_occlusion");
+        channels.emissive = ChannelPath(*material, "emissive");
+        channels.roughnessFactor = (*material)["roughness_factor"].value_or(1.0);
+        channels.metallicFactor = (*material)["metallic_factor"].value_or(0.0);
+        result.material = std::move(channels);
+
+        if (const toml::array* tags = (*material)["tags"].as_array())
+            for (const auto& node : *tags)
+                if (const auto tag = node.value<std::string>(); tag.has_value()) result.tags.push_back(*tag);
+    }
+
+    return result;
+}
+
+AssetId ContentService::StableId(const std::filesystem::path& absolute) const
+{
+    const std::string key = Lower(std::filesystem::relative(absolute, projectRoot_).generic_string());
+    AssetId id{
+        .high = Hash(key, 1469598103934665603ULL),
+        .low = Hash(key, 1099511628211ULL ^ 0x9e3779b97f4a7c15ULL)
+    };
+    if (!id) id.low = 1;
+    return id;
+}
+
+std::filesystem::path ContentService::NormalizeInsideProject(const std::filesystem::path& path) const
+{
+    const auto absolute = std::filesystem::weakly_canonical(path.is_absolute() ? path : projectRoot_ / path);
+    const auto relative = absolute.lexically_relative(projectRoot_);
+    if (relative.empty() || (!relative.empty() && *relative.begin() == ".."))
+        throw std::invalid_argument("Content path escapes the project root.");
+    return absolute;
+}
+
+std::string_view AssetKindName(const AssetKind kind) noexcept
+{
+    switch (kind)
+    {
+    case AssetKind::Texture: return "Texture";
+    case AssetKind::Material: return "Material";
+    case AssetKind::Decal: return "Decal";
+    case AssetKind::Component: return "Component";
+    case AssetKind::Mesh: return "Mesh";
+    case AssetKind::Unknown: return "Unknown";
+    }
+    return "Unknown";
+}
+} // namespace orbit::content
