@@ -20,6 +20,7 @@ target_link_libraries(OrbitEditorModel
         Orbit::Commands
         Orbit::Core
         Orbit::Documents
+        Orbit::Paths
         Orbit::Platform
         Orbit::Scene
         Orbit::Schema
