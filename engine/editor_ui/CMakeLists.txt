@@ -16,6 +16,7 @@ target_link_libraries(OrbitEditorUi
         Orbit::Math
         Orbit::Platform
         Orbit::RHI
+        Orbit::RenderView
         Orbit::Shader
         Orbit::Universe
     PRIVATE
