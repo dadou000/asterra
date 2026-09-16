@@ -40,7 +40,7 @@ public:
     [[nodiscard]] bool Remove(
         std::string_view surface,
         CommandSurfaceKind kind,
-        commands::CommandId commandId) noexcept;
+        commands::CommandId commandId);
 
     [[nodiscard]] std::vector<commands::CommandId>
     Commands(
