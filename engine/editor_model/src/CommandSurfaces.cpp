@@ -81,7 +81,7 @@ void CommandSurfaceRegistry::Add(
 bool CommandSurfaceRegistry::Remove(
     const std::string_view surface,
     const CommandSurfaceKind kind,
-    const commands::CommandId commandId) noexcept
+    const commands::CommandId commandId)
 {
     const auto found =
         surfaces_.find(
