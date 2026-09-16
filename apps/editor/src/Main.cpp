@@ -1134,9 +1134,10 @@ int main(
                             kObjectPayload =
                                 "ORBIT_OBJECT";
 
-                    context.InputText(
-                        "Search",
-                        explorerSearch);
+                    static_cast<void>(
+                        context.InputText(
+                            "Search",
+                            explorerSearch));
 
                     context.Separator();
 
@@ -1347,9 +1348,10 @@ int main(
                                 selection.Revision();
                         }
 
-                        context.InputText(
-                            "Name",
-                            renameBuffer);
+                        static_cast<void>(
+                            context.InputText(
+                                "Name",
+                                renameBuffer));
 
                         if (context.Button(
                                 "Rename"))
@@ -1679,9 +1681,10 @@ int main(
                             kAssetPayload =
                                 "ORBIT_ASSET";
 
-                    context.InputText(
-                        "Search",
-                        contentSearch);
+                    static_cast<void>(
+                        context.InputText(
+                            "Search",
+                            contentSearch));
 
                     context.SameLine();
 
