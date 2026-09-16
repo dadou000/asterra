@@ -4352,9 +4352,11 @@ int main(
                  &selectedBuildProfile,
                  &buildIssues,
                  &lastBuildManifest,
+                 &lastPackageExecutable,
                  &buildStatus,
                  &validateProjectBuild,
-                 &cookProjectBuild](
+                 &cookProjectBuild,
+                 &packageProjectBuild](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -4430,6 +4432,16 @@ int main(
                         cookProjectBuild();
                     }
 
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Package Standalone"))
+                    {
+                        static_cast<void>(
+                            packageProjectBuild(
+                                selectedBuildProfile));
+                    }
+
                     context.Separator();
                     context.Text(
                         "Status: " +
@@ -4440,6 +4452,14 @@ int main(
                         context.Text(
                             "Manifest: " +
                             lastBuildManifest.
+                                generic_string());
+                    }
+
+                    if (!lastPackageExecutable.empty())
+                    {
+                        context.Text(
+                            "Executable: " +
+                            lastPackageExecutable.
                                 generic_string());
                     }
 
@@ -4527,6 +4547,19 @@ int main(
                 [&cookProjectBuild]
                 {
                     cookProjectBuild();
+                }
+        });
+
+        ui.RegisterMenuAction({
+            .menu = "Build",
+            .label = "Package Standalone",
+            .invoke =
+                [&packageProjectBuild,
+                 &selectedBuildProfile]
+                {
+                    static_cast<void>(
+                        packageProjectBuild(
+                            selectedBuildProfile));
                 }
         });
 
