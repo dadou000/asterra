@@ -1,6 +1,7 @@
 #include <orbit/content/AssetPipeline.hpp>
 #include <orbit/content/ContentHash.hpp>
 #include <orbit/content/DerivedDataCache.hpp>
+#include <orbit/content/ThumbnailService.hpp>
 #include <orbit/core/StrongId.hpp>
 
 #include <cstdlib>
@@ -346,6 +347,109 @@ int main()
     Check(
         std::filesystem::is_regular_file(
             dependency));
+
+    orbit::content::ThumbnailService
+        thumbnails(
+            rebuiltCache);
+
+    const auto fallback =
+        thumbnails.Get({
+            .sourceHash =
+                orbit::content::HashFile(
+                    source),
+            .category = "Mesh",
+            .label = "Vehicle",
+            .width = 48,
+            .height = 32
+        });
+
+    Check(!fallback.cacheHit);
+    Check(
+        fallback.providerId ==
+        "orbit.fallback");
+    Check(
+        std::filesystem::is_regular_file(
+            fallback.path));
+
+    const auto fallbackCached =
+        thumbnails.Get({
+            .sourceHash =
+                orbit::content::HashFile(
+                    source),
+            .category = "Mesh",
+            .label = "Vehicle",
+            .width = 48,
+            .height = 32
+        });
+
+    Check(fallbackCached.cacheHit);
+    Check(
+        fallbackCached.key ==
+        fallback.key);
+
+    int thumbnailProviderCalls = 0;
+
+    thumbnails.RegisterProvider({
+        .id = "test.mesh.thumbnail",
+        .version = 1,
+        .category = "Mesh",
+        .generate =
+            [&thumbnailProviderCalls](
+                const orbit::content::
+                    ThumbnailRequest& request)
+            {
+                ++thumbnailProviderCalls;
+
+                return orbit::content::
+                    ThumbnailPixels{
+                        .width =
+                            request.width,
+                        .height =
+                            request.height,
+                        .rgba8 =
+                            std::vector<std::byte>(
+                                static_cast<std::size_t>(
+                                    request.width) *
+                                request.height *
+                                4U,
+                                std::byte{0x7f})
+                    };
+            }
+    });
+
+    const auto specialized =
+        thumbnails.Get({
+            .sourceHash =
+                orbit::content::HashFile(
+                    source),
+            .category = "Mesh",
+            .label = "Vehicle",
+            .width = 48,
+            .height = 32
+        });
+
+    Check(!specialized.cacheHit);
+    Check(thumbnailProviderCalls == 1);
+    Check(
+        specialized.providerId ==
+        "test.mesh.thumbnail");
+    Check(
+        specialized.key !=
+        fallback.key);
+
+    const auto specializedCached =
+        thumbnails.Get({
+            .sourceHash =
+                orbit::content::HashFile(
+                    source),
+            .category = "Mesh",
+            .label = "Vehicle",
+            .width = 48,
+            .height = 32
+        });
+
+    Check(specializedCached.cacheHit);
+    Check(thumbnailProviderCalls == 1);
 
     std::filesystem::remove_all(
         root);
