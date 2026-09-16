@@ -19,6 +19,7 @@
 #include <orbit/platform/Paths.hpp>
 #include <orbit/plugins/PluginManager.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
+#include <orbit/render_view/Capture.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/runtime/RuntimeSession.hpp>
@@ -751,6 +752,24 @@ int main(
                     .height = 640
                 });
 
+        editorRpc.AttachViewport({
+            .view = &bodyView,
+            .capture =
+                [&device,
+                 &graphicsQueue,
+                 &bodyView](
+                    const std::filesystem::path&
+                        path)
+                {
+                    return orbit::render_view::
+                        CaptureBmp(
+                            device,
+                            graphicsQueue,
+                            bodyView,
+                            path);
+                }
+        });
+
         orbit::editor_ui::
             BodyPreviewRenderer
                 bodyPreview(
@@ -834,6 +853,100 @@ int main(
             0.0;
         orbit::u64 renameSelectionRevision =
             ~orbit::u64{0};
+
+        orbit::u64 publishedObjectRevision =
+            objects.Revision();
+        orbit::u64 publishedSelectionRevision =
+            selection.Revision();
+        orbit::u64 publishedContentRevision =
+            content.Revision();
+
+        const auto publishAutomationChanges =
+            [&]
+            {
+                if (objects.Revision() !=
+                    publishedObjectRevision)
+                {
+                    publishedObjectRevision =
+                        objects.Revision();
+
+                    editorRpc.PublishEvent(
+                        "object.changed",
+                        orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "revision",
+                                    static_cast<orbit::i64>(
+                                        publishedObjectRevision)
+                                }
+                            }));
+                }
+
+                if (selection.Revision() !=
+                    publishedSelectionRevision)
+                {
+                    publishedSelectionRevision =
+                        selection.Revision();
+
+                    orbit::rpc::Value::Array ids;
+                    ids.reserve(
+                        selection.Ordered().size());
+
+                    for (const auto id :
+                         selection.Ordered())
+                    {
+                        ids.emplace_back(
+                            id.ToString());
+                    }
+
+                    editorRpc.PublishEvent(
+                        "selection.changed",
+                        orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "revision",
+                                    static_cast<orbit::i64>(
+                                        publishedSelectionRevision)
+                                },
+                                {
+                                    "ids",
+                                    std::move(ids)
+                                }
+                            }));
+                }
+
+                if (content.Revision() !=
+                    publishedContentRevision)
+                {
+                    publishedContentRevision =
+                        content.Revision();
+
+                    editorRpc.PublishEvent(
+                        "content.changed",
+                        orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "revision",
+                                    static_cast<orbit::i64>(
+                                        publishedContentRevision)
+                                },
+                                {
+                                    "diagnostics",
+                                    static_cast<orbit::i64>(
+                                        content.Diagnostics().
+                                            size())
+                                }
+                            }));
+                }
+
+                for (const std::string& notification :
+                     editorRpc.DrainNotifications())
+                {
+                    static_cast<void>(
+                        rpcServer.SendMessage(
+                            notification));
+                }
+            };
 
         ui.RegisterPanel({
             .id = kViewportPanel,
@@ -1859,6 +1972,17 @@ int main(
                             reloaded == 1
                                 ? ""
                                 : "s"));
+
+                    editorRpc.PublishEvent(
+                        "plugin.reloaded",
+                        orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "count",
+                                    static_cast<orbit::i64>(
+                                        reloaded)
+                                }
+                            }));
                 }
 
                 pluginReloadAccumulator =
@@ -1877,6 +2001,8 @@ int main(
                         PanelCatalogRevision();
             }
 
+            publishAutomationChanges();
+
             ui.BeginFrame(
                 window,
                 deltaSeconds);
@@ -1887,6 +2013,8 @@ int main(
                 window,
                 authoringCommands,
                 ui.WantsKeyboard());
+
+            publishAutomationChanges();
 
             if (window.KeyDown(
                     orbit::platform::
