@@ -593,6 +593,20 @@ int main()
     const std::string pathEdgeId =
         pathEdge.Find("id")->AsString();
 
+    static_cast<void>(
+        Call(
+            dispatcher,
+            "18p",
+            "path.set_profile",
+            orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"object", pathEdgeId},
+                    {
+                        "profile_asset",
+                        "33333333-3333-4333-8333-333333333333"
+                    }
+                })));
+
     const auto inspectedPath =
         Call(
             dispatcher,
@@ -609,6 +623,14 @@ int main()
         inspectedPath.Find("mode")->
             AsString() ==
             "bezier");
+    Check(
+        inspectedPath.Find(
+            "profile_override") !=
+            nullptr &&
+        inspectedPath.Find(
+            "profile_override")->
+            AsString() ==
+            "33333333-3333-4333-8333-333333333333");
 
     static_cast<void>(
         Call(
