@@ -871,7 +871,10 @@ PathEdgeToRpc(
                 edge.mode ==
                         paths::EdgeMode::Bezier
                     ? "bezier"
-                    : "direct"
+                    : (edge.mode ==
+                               paths::EdgeMode::Routed
+                           ? "routed"
+                           : "direct")
             },
             {
                 "start_handle",
@@ -1663,6 +1666,16 @@ EditorRpcService::EditorRpcService(
                             "Direct Edge")));
             }
 
+            if (mode == "routed")
+            {
+                return PathEdgeToRpc(
+                    service.ConnectRouted(
+                        start,
+                        end,
+                        name.value_or(
+                            "Routed Edge")));
+            }
+
             if (mode == "bezier")
             {
                 math::Double3 startHandle{};
@@ -1702,7 +1715,7 @@ EditorRpcService::EditorRpcService(
 
             throw rpc::Error(
                 -32602,
-                "Path connection mode must be direct or bezier.");
+                "Path connection mode must be direct, bezier, or routed.");
         });
 
     Register(
