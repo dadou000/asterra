@@ -1,6 +1,7 @@
 #include <orbit/build/BuildService.hpp>
 
 #include <orbit/core/BuildInfo.hpp>
+#include <orbit/content_wic/WicTextureImporter.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/plugins/PluginManifest.hpp>
@@ -1140,6 +1141,9 @@ BuildValidation BuildService::Validate(
     {
         content::ContentService content(
             result.projectRoot);
+        content_wic::
+            RegisterTextureImporters(
+                content.Importers());
         content.Scan();
 
         for (const auto& diagnostic :
@@ -1256,6 +1260,9 @@ BuildResult BuildService::Cook(
 
         content::ContentService content(
             validation.projectRoot);
+        content_wic::
+            RegisterTextureImporters(
+                content.Importers());
         content.Scan();
 
         auto assets =
