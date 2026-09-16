@@ -521,6 +521,34 @@ int main(
         plugins.LoadEnabled(
             project.Manifest());
 
+        orbit::rpc::Dispatcher
+            rpcDispatcher;
+
+        orbit::editor_rpc::EditorRpcService
+            editorRpc(
+                rpcDispatcher,
+                project,
+                authoringCommands,
+                commandService,
+                schemas,
+                objects,
+                selection);
+
+        orbit::dev_server::DevServer
+            rpcServer({
+                .port = 4320,
+                .maxMessageBytes =
+                    1024U * 1024U
+            });
+
+        rpcServer.SetMessageHandler(
+            [&rpcDispatcher](
+                const std::string_view message)
+            {
+                return rpcDispatcher.Dispatch(
+                    message);
+            });
+
         commandSurfaces.Set(
             "viewport",
             orbit::editor_model::
@@ -1810,6 +1838,8 @@ int main(
             static_cast<void>(
                 runtime.
                     ResizeSwapchainToWindow());
+
+            rpcServer.Poll();
 
             pluginReloadAccumulator +=
                 deltaSeconds;
