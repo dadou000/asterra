@@ -87,6 +87,8 @@ ContentService::ContentService(std::filesystem::path projectRoot)
           "DerivedData"),
       pipeline_(
           importers_,
+          cache_),
+      thumbnails_(
           cache_)
 {
     std::filesystem::create_directories(
@@ -267,6 +269,44 @@ const DerivedDataCache&
 ContentService::Cache() const noexcept
 {
     return cache_;
+}
+
+ThumbnailService&
+ContentService::Thumbnails() noexcept
+{
+    return thumbnails_;
+}
+
+const ThumbnailService&
+ContentService::Thumbnails() const noexcept
+{
+    return thumbnails_;
+}
+
+ThumbnailResult ContentService::GetThumbnail(
+    const AssetId id,
+    const u32 width,
+    const u32 height)
+{
+    const AssetRecord* asset =
+        Find(id);
+
+    if (asset == nullptr)
+    {
+        throw std::invalid_argument(
+            "Cannot thumbnail an unknown asset.");
+    }
+
+    return thumbnails_.Get({
+        .sourceHash = asset->sourceHash,
+        .category =
+            std::string(
+                AssetKindName(
+                    asset->kind)),
+        .label = asset->name,
+        .width = width,
+        .height = height
+    });
 }
 
 ImportResult ContentService::ImportDerived(
