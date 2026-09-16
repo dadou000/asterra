@@ -47,6 +47,12 @@ struct AssetRecord
     std::optional<MaterialChannels> material;
 };
 
+struct ContentDiagnostic
+{
+    std::filesystem::path sourcePath;
+    std::string message;
+};
+
 class ContentService
 {
 public:
@@ -60,6 +66,7 @@ public:
     [[nodiscard]] const AssetRecord* FindByPath(const std::filesystem::path& path) const noexcept;
     [[nodiscard]] std::vector<AssetRecord> Search(std::string_view query, std::optional<AssetKind> kind = std::nullopt) const;
     [[nodiscard]] std::vector<AssetRecord> All() const;
+    [[nodiscard]] const std::vector<ContentDiagnostic>& Diagnostics() const noexcept;
     [[nodiscard]] u64 Revision() const noexcept;
 
     // Imports a source file into Content/Imported without temporary staging
@@ -75,6 +82,7 @@ private:
     std::filesystem::path contentRoot_;
     std::unordered_map<AssetId, AssetRecord> assets_;
     std::unordered_map<std::string, AssetId> pathIndex_;
+    std::vector<ContentDiagnostic> diagnostics_;
     u64 revision_{0};
 };
 
