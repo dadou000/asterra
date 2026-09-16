@@ -63,6 +63,26 @@ int main()
         content.Cache().Contains(
             *materials[0].derivedKey,
             "material.toml"));
+    Check(materials[0].dependencies.size() == 3);
+
+    const auto* baseTexture =
+        content.FindByPath(
+            "Content/Materials/steel_base.ktx2");
+
+    Check(baseTexture != nullptr);
+
+    const auto baseDependents =
+        content.Dependents(
+            baseTexture->id);
+
+    Check(baseDependents.size() == 1);
+    Check(
+        baseDependents[0] ==
+        materials[0].id);
+
+    const auto firstDerivedKey =
+        *materials[0].derivedKey;
+
     Check(content.Diagnostics().size() == 1);
     Check(content.Diagnostics()[0].sourcePath ==
         std::filesystem::path("Content/Materials/broken.orbitmaterial"));
@@ -74,6 +94,50 @@ int main()
     {
         return 1;
     }
+
+    Write(
+        root /
+            "Content" /
+            "Materials" /
+            "steel.orbitmaterial.orbitimport.toml",
+        "[import]\n"
+        "quality = \"high\"\n");
+
+    content.Scan();
+
+    const auto* withSettings =
+        content.FindByPath(
+            "Content/Materials/steel.orbitmaterial");
+
+    Check(withSettings != nullptr);
+    Check(withSettings->derivedKey.has_value());
+    Check(
+        *withSettings->derivedKey !=
+        firstDerivedKey);
+
+    const auto semanticSettingsKey =
+        *withSettings->derivedKey;
+
+    Write(
+        root /
+            "Content" /
+            "Materials" /
+            "steel.orbitmaterial.orbitimport.toml",
+        "# formatting/comment-only edit\n"
+        "[import]\n"
+        "quality    =    \"high\"\n");
+
+    content.Scan();
+
+    const auto* reformattedSettings =
+        content.FindByPath(
+            "Content/Materials/steel.orbitmaterial");
+
+    Check(reformattedSettings != nullptr);
+    Check(reformattedSettings->derivedKey.has_value());
+    Check(
+        *reformattedSettings->derivedKey ==
+        semanticSettingsKey);
 
     const auto external = root / "source.png";
     Write(external, "image");
