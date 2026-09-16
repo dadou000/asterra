@@ -2,6 +2,7 @@
 
 #include <orbit/core/BuildInfo.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/plugins/PluginManifest.hpp>
 
 #include <Luau/Compiler.h>
@@ -1185,6 +1186,13 @@ BuildResult BuildService::Cook(
 
         const auto worldSource =
             project.StartupWorldPath();
+
+        {
+            documents::WorldDatabase
+                sourceWorld(
+                    worldSource);
+            sourceWorld.Checkpoint();
+        }
 
         const auto worldRelative =
             std::filesystem::path(
