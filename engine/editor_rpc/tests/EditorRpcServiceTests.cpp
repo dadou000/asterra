@@ -80,6 +80,8 @@ int main()
 
     std::filesystem::remove_all(root);
 
+    {
+
     auto project =
         orbit::documents::ProjectDocument::Create(
             root,
@@ -689,6 +691,8 @@ int main()
     Check(
         !objects.Find(*pathEdgeObject).
             has_value());
+
+    }
 
     std::filesystem::remove_all(root);
     return 0;
