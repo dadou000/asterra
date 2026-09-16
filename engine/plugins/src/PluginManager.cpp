@@ -161,12 +161,15 @@ public:
             Impl& owner,
             std::filesystem::path packageRoot,
             std::filesystem::path manifestPath,
+            std::string expectedId,
             std::string requiredVersion)
             : owner_(owner),
               packageRoot_(
                   std::move(packageRoot)),
               manifestPath_(
                   std::move(manifestPath)),
+              expectedId_(
+                  std::move(expectedId)),
               requiredVersion_(
                   std::move(requiredVersion))
         {
@@ -184,6 +187,36 @@ public:
             manifest_ =
                 LoadPluginManifest(
                     manifestPath_);
+
+            if (manifest_.id != expectedId_)
+            {
+                throw std::runtime_error(
+                    std::format(
+                        "Plugin package ID '{}' does not match enabled project ID '{}'.",
+                        manifest_.id,
+                        expectedId_));
+            }
+
+            for (const PluginDependency& dependency :
+                 manifest_.dependencies)
+            {
+                const auto found =
+                    owner_.enabledVersions.find(
+                        dependency.id);
+
+                if (found ==
+                        owner_.enabledVersions.end() ||
+                    (dependency.version != "*" &&
+                     found->second != dependency.version))
+                {
+                    throw std::runtime_error(
+                        std::format(
+                            "Plugin '{}' dependency '{} {}' is not enabled at the required version.",
+                            manifest_.id,
+                            dependency.id,
+                            dependency.version));
+                }
+            }
 
             if (manifest_.orbitApiVersion !=
                 kOrbitApiVersion)
@@ -445,7 +478,9 @@ public:
         [[nodiscard]] const std::string&
         Id() const noexcept
         {
-            return manifest_.id;
+            return manifest_.id.empty()
+                ? expectedId_
+                : manifest_.id;
         }
 
     private:
@@ -1159,6 +1194,7 @@ public:
         Impl& owner_;
         std::filesystem::path packageRoot_;
         std::filesystem::path manifestPath_;
+        std::string expectedId_;
         std::string requiredVersion_;
         PluginManifest manifest_{};
         PluginPermissionSet effectivePermissions_{};
@@ -1197,6 +1233,10 @@ public:
         std::string,
         PluginPermissionSet>
         grantedPermissions;
+    std::unordered_map<
+        std::string,
+        std::string>
+        enabledVersions;
     std::vector<
         std::unique_ptr<PluginInstance>>
         instances;
@@ -1235,31 +1275,17 @@ void PluginManager::LoadEnabled(
     const documents::ProjectManifest& project)
 {
     impl_->instances.clear();
+    impl_->enabledVersions.clear();
     ++impl_->panelCatalogRevision;
-
-    std::unordered_map<
-        std::string,
-        std::string>
-        enabledVersions;
 
     for (const documents::PluginRequirement&
              requirement :
          project.plugins)
     {
-        enabledVersions.insert_or_assign(
+        impl_->enabledVersions.insert_or_assign(
             requirement.id,
             requirement.version);
     }
-
-    struct Pending
-    {
-        documents::PluginRequirement requirement;
-        PluginManifest manifest;
-        std::filesystem::path packageRoot;
-        std::filesystem::path manifestPath;
-    };
-
-    std::vector<Pending> pending;
 
     for (const documents::PluginRequirement&
              requirement :
@@ -1276,62 +1302,14 @@ void PluginManager::LoadEnabled(
                 packageRoot /
                 "plugin.toml";
 
-        const PluginManifest manifest =
-            LoadPluginManifest(
-                manifestPath);
-
-        if (manifest.id !=
-            requirement.id)
-        {
-            throw std::runtime_error(
-                "Plugin folder/project ID does not match plugin.toml ID.");
-        }
-
-        for (const PluginDependency&
-                 dependency :
-             manifest.dependencies)
-        {
-            const auto found =
-                enabledVersions.find(
-                    dependency.id);
-
-            if (found ==
-                    enabledVersions.end() ||
-                (dependency.version != "*" &&
-                 found->second !=
-                    dependency.version))
-            {
-                throw std::runtime_error(
-                    std::format(
-                        "Plugin '{}' dependency '{} {}' is not enabled at the required version.",
-                        manifest.id,
-                        dependency.id,
-                        dependency.version));
-            }
-        }
-
-        pending.push_back({
-            .requirement =
-                requirement,
-            .manifest = manifest,
-            .packageRoot =
-                packageRoot,
-            .manifestPath =
-                manifestPath
-        });
-    }
-
-    for (Pending& item : pending)
-    {
         auto instance =
             std::make_unique<
                 Impl::PluginInstance>(
                     *impl_,
-                    std::move(
-                        item.packageRoot),
-                    std::move(
-                        item.manifestPath),
-                    item.requirement.version);
+                    packageRoot,
+                    manifestPath,
+                    requirement.id,
+                    requirement.version);
 
         try
         {
@@ -1347,7 +1325,7 @@ void PluginManager::LoadEnabled(
             log::Error(
                 std::format(
                     "Plugin '{}' failed to load: {}",
-                    item.requirement.id,
+                    requirement.id,
                     exception.what()));
         }
 
