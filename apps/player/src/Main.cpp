@@ -96,7 +96,9 @@ int main(
 
         orbit::documents::WorldDatabase
             world(
-                project.StartupWorldPath());
+                project.StartupWorldPath(),
+                orbit::documents::
+                    WorldOpenMode::ReadOnly);
 
         orbit::scene::ObjectStore objects(
             world);
