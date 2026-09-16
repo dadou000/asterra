@@ -176,7 +176,7 @@ private:
 
     [[nodiscard]] u64 CurrentSignature(
         const ResolvedRequest& request,
-        u64 manualRevision) const noexcept;
+        u64 manualRevision) const;
 
     void RefreshDependencies();
     void FinalizeCompleted();
