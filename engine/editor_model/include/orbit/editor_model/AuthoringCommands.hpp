@@ -32,6 +32,16 @@ inline constexpr commands::CommandId kAssignMaterial{
     .low = 0x41535349474e4d54ULL
 };
 
+inline constexpr commands::CommandId kConnectPathDirect{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x5041544844495245ULL
+};
+
+inline constexpr commands::CommandId kConnectPathBezier{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x5041544842455a49ULL
+};
+
 void Register(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
