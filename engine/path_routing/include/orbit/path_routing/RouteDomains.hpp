@@ -34,6 +34,7 @@ MakeSurfaceScalarFieldCostSource(
     frames::FrameId routeFrame,
     time::SimulationTime atTime,
     const frames::FrameGraph& frames,
+    const universe::BodyRegistry& bodies,
     const fields::FieldRegistry& fields);
 
 // Resolves PathProfile::preferredCostFields by descriptor name for the body.
@@ -46,5 +47,6 @@ MakePreferredSurfaceFieldCosts(
     frames::FrameId routeFrame,
     time::SimulationTime atTime,
     const frames::FrameGraph& frames,
+    const universe::BodyRegistry& bodies,
     const fields::FieldRegistry& fields);
 } // namespace orbit::path_routing
