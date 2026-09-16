@@ -1811,6 +1811,72 @@ int main(
                             1100,
                             exception.what());
                     }
+                },
+            .package =
+                [&packageProjectBuild,
+                 buildIssuesToRpc](
+                    std::optional<
+                        std::string>
+                        profile)
+                {
+                    try
+                    {
+                        const auto result =
+                            packageProjectBuild(
+                                profile.
+                                    value_or(
+                                        std::string{}));
+
+                        return orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "ok",
+                                    result.
+                                        Succeeded()
+                                },
+                                {
+                                    "profile",
+                                    result.manifest.
+                                        profile.name
+                                },
+                                {
+                                    "output",
+                                    result.
+                                        outputDirectory.
+                                        generic_string()
+                                },
+                                {
+                                    "executable",
+                                    result.
+                                        executablePath.
+                                        generic_string()
+                                },
+                                {
+                                    "build_manifest",
+                                    result.
+                                        manifestPath.
+                                        generic_string()
+                                },
+                                {
+                                    "package_manifest",
+                                    result.
+                                        packageManifestPath.
+                                        generic_string()
+                                },
+                                {
+                                    "issues",
+                                    buildIssuesToRpc(
+                                        result.issues)
+                                }
+                            });
+                    }
+                    catch (const std::exception&
+                               exception)
+                    {
+                        throw orbit::rpc::Error(
+                            1101,
+                            exception.what());
+                    }
                 }
         });
 
