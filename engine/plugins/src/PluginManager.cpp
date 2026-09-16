@@ -376,7 +376,7 @@ public:
             ++revision_;
 
             fingerprint_ =
-                SourceFingerprint();
+                ObservedFingerprint();
 
             log::Info(
                 std::format(
@@ -392,20 +392,15 @@ public:
         {
             loaded_ = false;
             error_ = std::move(error);
+            fingerprint_ =
+                ObservedFingerprint();
             ++revision_;
         }
 
         [[nodiscard]] bool NeedsReload() const
         {
-            try
-            {
-                return SourceFingerprint() !=
-                    fingerprint_;
-            }
-            catch (...)
-            {
-                return true;
-            }
+            return ObservedFingerprint() !=
+                fingerprint_;
         }
 
         [[nodiscard]] PluginStatus Status() const
@@ -1153,6 +1148,68 @@ public:
             }
 
             loaded_ = false;
+        }
+
+        [[nodiscard]] u64 ObservedFingerprint() const noexcept
+        {
+            u64 hash =
+                1469598103934665603ULL;
+
+            try
+            {
+                const std::string manifestText =
+                    ReadTextFile(
+                        manifestPath_);
+
+                hash =
+                    HashText(
+                        manifestText,
+                        hash);
+            }
+            catch (...)
+            {
+                hash =
+                    HashText(
+                        "<missing-manifest>",
+                        hash);
+            }
+
+            std::filesystem::path entry =
+                manifest_.entryScript;
+
+            if (entry.empty())
+            {
+                try
+                {
+                    entry =
+                        LoadPluginManifest(
+                            manifestPath_).
+                            entryScript;
+                }
+                catch (...)
+                {
+                    return hash;
+                }
+            }
+
+            try
+            {
+                hash =
+                    HashText(
+                        ReadTextFile(
+                            packageRoot_ /
+                            entry),
+                        hash);
+            }
+            catch (...)
+            {
+                hash =
+                    HashText(
+                        "<missing-entry>",
+                        hash);
+            }
+
+            return hash;
         }
 
         [[nodiscard]] u64 SourceFingerprint() const
