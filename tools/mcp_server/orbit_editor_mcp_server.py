@@ -275,7 +275,7 @@ def orbit_path_connect(
     start_handle: list[float] | None = None,
     end_handle: list[float] | None = None,
 ) -> dict[str, Any]:
-    """Connect two nodes using direct or bezier semantic geometry."""
+    """Connect two nodes using direct, bezier, or routed semantic geometry."""
     params: dict[str, Any] = {
         "start": start_node_id,
         "end": end_node_id,
