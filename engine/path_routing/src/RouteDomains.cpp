@@ -339,6 +339,7 @@ MakePreferredSurfaceFieldCosts(
     const frames::FrameId routeFrame,
     const time::SimulationTime atTime,
     const frames::FrameGraph& frames,
+    const universe::BodyRegistry& bodies,
     const fields::FieldRegistry& fields)
 {
     std::vector<RouteCostSource> result;
