@@ -275,6 +275,7 @@ def orbit_viewport_get() -> dict[str, Any]:
 @mcp.tool()
 def orbit_viewport_set_camera(
     frame_id: str | None = None,
+    clear_frame: bool = False,
     position: list[float] | None = None,
     forward: list[float] | None = None,
     up: list[float] | None = None,
@@ -285,11 +286,13 @@ def orbit_viewport_set_camera(
     """Update fields of the primary Studio RenderView camera.
 
     Vector arguments are three-number arrays. Omitted values retain the
-    existing camera state; frame_id=None clears the current frame binding.
+    existing camera state. Set clear_frame=True to clear the frame binding.
     """
     params: dict[str, Any] = {}
 
-    if frame_id is not None:
+    if clear_frame:
+        params["frame"] = None
+    elif frame_id is not None:
         params["frame"] = frame_id
     if position is not None:
         params["position"] = position
