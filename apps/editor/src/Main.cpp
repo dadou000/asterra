@@ -1342,6 +1342,71 @@ int main(
         });
 
         ui.RegisterPanel({
+            .id = kPluginsPanel,
+            .title = "Plugins",
+            .defaultOpen = false,
+            .draw =
+                [&plugins](
+                    orbit::editor_ui::
+                        PanelContext& context)
+                {
+                    const auto statuses =
+                        plugins.Statuses();
+
+                    context.Text(
+                        std::format(
+                            "{} enabled plugin{}",
+                            statuses.size(),
+                            statuses.size() == 1
+                                ? ""
+                                : "s"));
+
+                    context.Separator();
+
+                    for (const auto& status :
+                         statuses)
+                    {
+                        context.Text(
+                            std::format(
+                                "{} {}  [{}]",
+                                status.id,
+                                status.version.empty()
+                                    ? "<unknown>"
+                                    : status.version,
+                                status.loaded
+                                    ? "loaded"
+                                    : "failed"));
+
+                        if (!status.error.empty())
+                        {
+                            context.Text(
+                                "  " +
+                                status.error);
+                        }
+
+                        const std::string reloadLabel =
+                            "Reload##plugin-" +
+                            status.id;
+
+                        if (context.Button(
+                                reloadLabel))
+                        {
+                            if (!plugins.Reload(
+                                    status.id))
+                            {
+                                orbit::log::Warning(
+                                    std::format(
+                                        "Plugin '{}' reload failed.",
+                                        status.id));
+                            }
+                        }
+
+                        context.Separator();
+                    }
+                }
+        });
+
+        ui.RegisterPanel({
             .id = kContentPanel,
             .title = "Material Service",
             .defaultOpen = true,
