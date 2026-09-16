@@ -1,4 +1,8 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/editor_model/BuiltinSchemas.hpp>
+
+#include <stdexcept>
+#include <string>
 
 namespace orbit::editor_model::authoring_commands
 {
@@ -89,6 +93,87 @@ void Register(
                 const commands::CommandArguments&)
             {
                 selection.Clear();
+            }
+    });
+
+    registry.Register({
+        .id = kAssignMaterial,
+        .name = "Assign Material",
+        .category = "Material",
+        .description =
+            "Assign a project material asset to the selected compatible object.",
+        .parameters = {
+            commands::CommandParameter{
+                .name = "material",
+                .kind =
+                    commands::CommandValueKind::String,
+                .required = true
+            }
+        },
+        .enablement =
+            [&selection, &objects]
+            {
+                if (selection.Ordered().size() != 1)
+                {
+                    return commands::CommandEnablement{
+                        .enabled = false,
+                        .reason =
+                            "Select exactly one material-compatible object."
+                    };
+                }
+
+                const auto object =
+                    objects.Find(
+                        selection.Ordered().front());
+
+                if (!object.has_value())
+                {
+                    return commands::CommandEnablement{
+                        .enabled = false,
+                        .reason =
+                            "The selected object no longer exists."
+                    };
+                }
+
+                if (object->type !=
+                    builtin::kCelestialBodyType)
+                {
+                    return commands::CommandEnablement{
+                        .enabled = false,
+                        .reason =
+                            "The selected object does not expose a material assignment property."
+                    };
+                }
+
+                return commands::CommandEnablement{};
+            },
+        .invoke =
+            [&selection, &commandService](
+                const commands::CommandArguments& arguments)
+            {
+                const auto found =
+                    arguments.find("material");
+
+                if (found == arguments.end())
+                {
+                    throw std::invalid_argument(
+                        "Assign Material requires a material argument.");
+                }
+
+                const auto* material =
+                    std::get_if<std::string>(
+                        &found->second);
+
+                if (material == nullptr)
+                {
+                    throw std::invalid_argument(
+                        "Assign Material material argument must be a string.");
+                }
+
+                commandService.SetProperty(
+                    selection.Ordered().front(),
+                    builtin::kBodyMaterialAsset,
+                    *material);
             }
     });
 
