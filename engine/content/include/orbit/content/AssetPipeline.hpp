@@ -67,6 +67,12 @@ private:
         importers_;
 };
 
+// Registers Orbit-owned source importers that already have a real derived
+// representation. Additional texture/mesh codecs land in later milestones
+// without changing the registry contract.
+void RegisterBuiltinImporters(
+    ImporterRegistry& registry);
+
 struct ImportedArtifact
 {
     std::string name;
