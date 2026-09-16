@@ -69,6 +69,8 @@ struct BuildManifest
     std::string engineCompatibilityVersion;
     documents::BuildProfile profile;
     std::filesystem::path startupWorld;
+    std::vector<std::filesystem::path>
+        scriptEntryPoints;
     std::vector<CookedAsset> assets;
     std::vector<CookedScript> scripts;
 };
