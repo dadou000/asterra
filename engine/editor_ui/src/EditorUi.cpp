@@ -1048,6 +1048,62 @@ void EditorUi::RegisterPanel(
         std::move(panel));
 }
 
+void EditorUi::UpsertPanel(
+    PanelDefinition panel)
+{
+    if (!panel.id ||
+        panel.title.empty() ||
+        !panel.draw)
+    {
+        throw std::invalid_argument(
+            "Editor panel requires stable ID, title and draw callback.");
+    }
+
+    for (std::size_t index = 0;
+         index < impl_->panels.size();
+         ++index)
+    {
+        if (impl_->panels[index].id ==
+            panel.id)
+        {
+            // Preserve the live open/closed state. Plugin reload is a
+            // definition update, not a request to reset the user's layout.
+            impl_->panels[index] =
+                std::move(panel);
+            return;
+        }
+    }
+
+    impl_->panelOpen.push_back(
+        panel.defaultOpen ? 1U : 0U);
+    impl_->panels.push_back(
+        std::move(panel));
+}
+
+bool EditorUi::UnregisterPanel(
+    const PanelId id) noexcept
+{
+    for (std::size_t index = 0;
+         index < impl_->panels.size();
+         ++index)
+    {
+        if (impl_->panels[index].id != id)
+        {
+            continue;
+        }
+
+        impl_->panels.erase(
+            impl_->panels.begin() +
+            static_cast<std::ptrdiff_t>(index));
+        impl_->panelOpen.erase(
+            impl_->panelOpen.begin() +
+            static_cast<std::ptrdiff_t>(index));
+        return true;
+    }
+
+    return false;
+}
+
 void EditorUi::RegisterMenuAction(
     MenuAction action)
 {
