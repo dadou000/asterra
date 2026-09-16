@@ -42,6 +42,11 @@ inline constexpr commands::CommandId kConnectPathBezier{
     .low = 0x5041544842455a49ULL
 };
 
+inline constexpr commands::CommandId kConnectPathRouted{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x50415448524f5554ULL
+};
+
 void Register(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
