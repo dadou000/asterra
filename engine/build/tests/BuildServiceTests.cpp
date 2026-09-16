@@ -132,6 +132,21 @@ int main()
 
         WriteText(
             temporary.Root() /
+                "Plugins/test.plugin/plugin.toml",
+            "[plugin]\n"
+            "id = \"test.plugin\"\n"
+            "version = \"1.0.0\"\n"
+            "orbit_api = \"0.0.3\"\n"
+            "entry = \"Scripts/main.luau\"\n"
+            "scope = \"both\"\n");
+
+        WriteText(
+            temporary.Root() /
+                "Plugins/test.plugin/Scripts/main.luau",
+            "return {}\n");
+
+        WriteText(
+            temporary.Root() /
                 "Content/Test.orbitmaterial",
             "[material]\n"
             "name = \"Test Material\"\n"
@@ -142,6 +157,11 @@ int main()
             scriptEntryPoints = {
                 "Scripts/main.luau"
             };
+        project.Manifest().
+            plugins.push_back({
+                .id = "test.plugin",
+                .version = "1.0.0"
+            });
         project.Save();
 
         orbit::build::BuildService service;
