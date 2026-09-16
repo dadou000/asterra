@@ -88,9 +88,23 @@ public:
             "PRAGMA busy_timeout = 5000;");
     }
 
+    void MarkChanged() noexcept
+    {
+        if (transaction != nullptr)
+        {
+            transactionDirty = true;
+        }
+        else
+        {
+            ++revision;
+        }
+    }
+
     SQLite::Database database;
     std::unique_ptr<SQLite::Transaction>
         transaction;
+    u64 revision{0};
+    bool transactionDirty{false};
 };
 
 ObjectStore::ObjectStore(
@@ -359,6 +373,7 @@ void ObjectStore::Insert(
         5,
         object.sortOrder);
     statement.exec();
+    impl_->MarkChanged();
 }
 
 void ObjectStore::Erase(
@@ -383,6 +398,8 @@ void ObjectStore::Erase(
         throw std::invalid_argument(
             "Cannot erase unknown object.");
     }
+
+    impl_->MarkChanged();
 }
 
 void ObjectStore::Rename(
@@ -411,6 +428,8 @@ void ObjectStore::Rename(
         throw std::invalid_argument(
             "Cannot rename unknown object.");
     }
+
+    impl_->MarkChanged();
 }
 
 void ObjectStore::Reparent(
@@ -489,6 +508,8 @@ void ObjectStore::Reparent(
         throw std::invalid_argument(
             "Cannot reparent unknown object.");
     }
+
+    impl_->MarkChanged();
 }
 
 void ObjectStore::SetProperty(
@@ -632,6 +653,7 @@ void ObjectStore::SetProperty(
         value);
 
     statement.exec();
+    impl_->MarkChanged();
 }
 
 void ObjectStore::RemoveProperty(
@@ -649,7 +671,10 @@ void ObjectStore::RemoveProperty(
     statement.bind(
         2,
         property.ToString());
-    statement.exec();
+    if (statement.exec() != 0)
+    {
+        impl_->MarkChanged();
+    }
 }
 
 void ObjectStore::BeginTransaction(
@@ -666,6 +691,7 @@ void ObjectStore::BeginTransaction(
             impl_->database,
             SQLite::TransactionBehavior::
                 IMMEDIATE);
+    impl_->transactionDirty = false;
 }
 
 void ObjectStore::CommitTransaction(
@@ -679,6 +705,13 @@ void ObjectStore::CommitTransaction(
 
     impl_->transaction->commit();
     impl_->transaction.reset();
+
+    if (impl_->transactionDirty)
+    {
+        ++impl_->revision;
+    }
+
+    impl_->transactionDirty = false;
 }
 
 void ObjectStore::RollbackTransaction(
@@ -701,10 +734,16 @@ void ObjectStore::RollbackTransaction(
     }
 
     impl_->transaction.reset();
+    impl_->transactionDirty = false;
 }
 
 bool ObjectStore::TransactionActive() const noexcept
 {
     return impl_->transaction != nullptr;
+}
+
+u64 ObjectStore::Revision() const noexcept
+{
+    return impl_->revision;
 }
 } // namespace orbit::scene
