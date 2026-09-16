@@ -24,6 +24,11 @@ inline constexpr schema::PropertyId kBodyMass{
     .low = 0x504d415353000001ULL
 };
 
+inline constexpr schema::PropertyId kBodyMaterialAsset{
+    .high = 0x4f5242495450524fULL,
+    .low = 0x504d41544c000001ULL
+};
+
 void RegisterSchemas(
     schema::SchemaRegistry& schemas);
 } // namespace orbit::editor_model::builtin
