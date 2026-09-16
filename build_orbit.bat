@@ -110,8 +110,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [Orbit] Building OrbitLauncher and OrbitSandbox...
-cmake --build build --config %CONFIG% --target OrbitLauncher --parallel
+echo [Orbit] Building OrbitLauncher, OrbitStudio and OrbitBuild...
+cmake --build build --config %CONFIG% --target OrbitLauncher OrbitStudio OrbitBuild --parallel
 if errorlevel 1 (
     echo.
     echo [Orbit] ERROR: Build failed.
@@ -120,6 +120,8 @@ if errorlevel 1 (
 
 set "LAUNCHER=build\apps\launcher\%CONFIG%\OrbitLauncher.exe"
 set "SANDBOX=build\apps\sandbox\%CONFIG%\OrbitSandbox.exe"
+set "STUDIO=build\apps\editor\%CONFIG%\OrbitStudio.exe"
+set "BUILDCLI=build\apps\build\%CONFIG%\OrbitBuild.exe"
 
 if not exist "%LAUNCHER%" (
     echo.
@@ -132,6 +134,20 @@ if not exist "%SANDBOX%" (
     echo.
     echo [Orbit] ERROR: Sandbox was not produced:
     echo   %SANDBOX%
+    goto fail
+)
+
+if not exist "%STUDIO%" (
+    echo.
+    echo [Orbit] ERROR: Studio was not produced:
+    echo   %STUDIO%
+    goto fail
+)
+
+if not exist "%BUILDCLI%" (
+    echo.
+    echo [Orbit] ERROR: OrbitBuild was not produced:
+    echo   %BUILDCLI%
     goto fail
 )
 
@@ -154,12 +170,22 @@ if errorlevel 1 goto package_fail
 copy /y "%SANDBOX%" "%PACKAGE%\OrbitSandbox.exe" >nul
 if errorlevel 1 goto package_fail
 
+copy /y "%STUDIO%" "%PACKAGE%\OrbitStudio.exe" >nul
+if errorlevel 1 goto package_fail
+
+copy /y "%BUILDCLI%" "%PACKAGE%\OrbitBuild.exe" >nul
+if errorlevel 1 goto package_fail
+
 echo [Orbit] Updating root executables...
 copy /y "%LAUNCHER%" "Orbit.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%LAUNCHER%" "OrbitLauncher.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%SANDBOX%" "OrbitSandbox.exe" >nul
+if errorlevel 1 goto root_copy_fail
+copy /y "%STUDIO%" "OrbitStudio.exe" >nul
+if errorlevel 1 goto root_copy_fail
+copy /y "%BUILDCLI%" "OrbitBuild.exe" >nul
 if errorlevel 1 goto root_copy_fail
 
 if exist "build\apps\launcher\%CONFIG%\OrbitLauncher.pdb" (
@@ -170,12 +196,27 @@ if exist "build\apps\sandbox\%CONFIG%\OrbitSandbox.pdb" (
     copy /y "build\apps\sandbox\%CONFIG%\OrbitSandbox.pdb" "%SYMBOLS%\OrbitSandbox.pdb" >nul
 )
 
+if exist "build\apps\editor\%CONFIG%\OrbitStudio.pdb" (
+    copy /y "build\apps\editor\%CONFIG%\OrbitStudio.pdb" "%SYMBOLS%\OrbitStudio.pdb" >nul
+)
+
+if exist "build\apps\build\%CONFIG%\OrbitBuild.pdb" (
+    copy /y "build\apps\build\%CONFIG%\OrbitBuild.pdb" "%SYMBOLS%\OrbitBuild.pdb" >nul
+)
+
 > "%PACKAGE%\README.txt" (
     echo Orbit Windows %CONFIG%
     echo =====================
     echo.
     echo Start Orbit with:
     echo     OrbitLauncher.exe
+    echo.
+    echo Start Orbit Studio with:
+    echo     OrbitStudio.exe [project-directory-or-Project.orbit.toml]
+    echo.
+    echo Validate or cook a project headlessly with:
+    echo     OrbitBuild.exe ^<project-directory-or-Project.orbit.toml^> --validate
+    echo     OrbitBuild.exe ^<project-directory-or-Project.orbit.toml^> --cook
     echo.
     echo Runtime logs and crash reports are written under:
     echo     logs\
@@ -193,6 +234,12 @@ echo.
 echo Root runtime:
 echo   %CD%\OrbitSandbox.exe
 echo.
+echo Root Studio:
+echo   %CD%\OrbitStudio.exe
+echo.
+echo Root build CLI:
+echo   %CD%\OrbitBuild.exe
+echo.
 echo Package:
 echo   %CD%\%PACKAGE%\OrbitLauncher.exe
 echo ============================================================
@@ -208,7 +255,7 @@ goto success
 :root_copy_fail
 echo.
 echo [Orbit] ERROR: Failed to update the root executables.
-echo Close any running Orbit.exe / OrbitLauncher.exe / OrbitSandbox.exe and retry.
+echo Close any running Orbit.exe / OrbitLauncher.exe / OrbitSandbox.exe / OrbitStudio.exe / OrbitBuild.exe and retry.
 goto fail
 
 :package_fail
