@@ -393,6 +393,67 @@ void RegisterBuiltinImporters(
                 };
             }
     });
+
+
+    registry.Register({
+        .id = "orbit.material_instance",
+        .version = 1,
+        .extensions = {
+            ".orbitmaterialinstance"
+        },
+        .import =
+            [](
+                const ImportRequest& request)
+            {
+                const toml::table document =
+                    toml::parse_file(
+                        request.sourcePath.
+                            string());
+
+                const toml::table* instance =
+                    document["material_instance"].
+                        as_table();
+
+                if (instance == nullptr)
+                {
+                    throw std::runtime_error(
+                        "Material instance source is missing [material_instance].");
+                }
+
+                const auto parent =
+                    (*instance)["parent"].
+                        value<std::string>();
+
+                if (!parent.has_value() ||
+                    parent->empty())
+                {
+                    throw std::runtime_error(
+                        "Material instance source requires parent.");
+                }
+
+                std::ostringstream stream;
+                stream << document;
+
+                const std::string normalized =
+                    stream.str();
+
+                return ImportOutput{
+                    .artifacts = {
+                        {
+                            .name =
+                                "material-instance.toml",
+                            .bytes =
+                                StringBytes(
+                                    normalized)
+                        }
+                    },
+                    .dependencies = {
+                        std::filesystem::path(
+                            *parent)
+                    }
+                };
+            }
+    });
 }
 
 void ImporterRegistry::Register(

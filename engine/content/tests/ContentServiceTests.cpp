@@ -183,6 +183,39 @@ int main()
             root /
             pbrMaterial->sourcePath));
 
+    const auto instanceId =
+        content.CreateMaterialInstance(
+            pbrMaterialId,
+            "Factory Steel Wet");
+
+    const auto* materialInstance =
+        content.Find(
+            instanceId);
+
+    Check(materialInstance != nullptr);
+    Check(
+        materialInstance->kind ==
+        orbit::content::
+            AssetKind::MaterialInstance);
+    Check(
+        materialInstance->
+            materialInstance.
+            has_value());
+    Check(materialInstance->derivedReady);
+    Check(
+        materialInstance->
+            dependencies.size() ==
+        1);
+    Check(
+        materialInstance->
+            dependencies[0] ==
+        pbrMaterialId);
+    Check(
+        content.Dependents(
+            pbrMaterialId).
+            size() >=
+        1);
+
     const auto ambiguousPbr =
         root / "AmbiguousPbr";
 

@@ -1094,9 +1094,12 @@ int main(
                                     *assetId);
 
                             if (asset != nullptr &&
-                                asset->kind ==
-                                    orbit::content::
-                                        AssetKind::Material)
+                                (asset->kind ==
+                                     orbit::content::
+                                         AssetKind::Material ||
+                                 asset->kind ==
+                                     orbit::content::
+                                         AssetKind::MaterialInstance))
                             {
                                 const std::array selected{
                                     bodyObject
@@ -1846,6 +1849,50 @@ int main(
                             context.Selectable(
                                 label,
                                 false));
+
+                        if (asset.kind ==
+                            orbit::content::
+                                AssetKind::Material)
+                        {
+                            context.SameLine();
+
+                            const std::string
+                                instanceLabel =
+                                    "Instance##asset-" +
+                                    asset.id.
+                                        ToString();
+
+                            if (context.Button(
+                                    instanceLabel))
+                            {
+                                try
+                                {
+                                    const auto instanceId =
+                                        content.
+                                            CreateMaterialInstance(
+                                                asset.id);
+
+                                    const auto* instance =
+                                        content.Find(
+                                            instanceId);
+
+                                    orbit::log::Info(
+                                        std::format(
+                                            "Created material instance '{}'.",
+                                            instance != nullptr
+                                                ? instance->name
+                                                : instanceId.ToString()));
+                                }
+                                catch (const std::exception&
+                                           exception)
+                                {
+                                    orbit::log::Warning(
+                                        std::format(
+                                            "Material instance creation failed: {}",
+                                            exception.what()));
+                                }
+                            }
+                        }
 
                         if (context.
                                 BeginDragSource())

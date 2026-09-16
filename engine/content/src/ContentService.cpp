@@ -34,6 +34,7 @@ namespace
 {
     const std::string extension = Lower(path.extension().string());
     if (extension == ".orbitmaterial") return AssetKind::Material;
+    if (extension == ".orbitmaterialinstance") return AssetKind::MaterialInstance;
     if (extension == ".orbitcomponent") return AssetKind::Component;
     if (extension == ".orbitdecal") return AssetKind::Decal;
     if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
@@ -497,6 +498,76 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
             for (const auto& node : *tags)
                 if (const auto tag = node.value<std::string>(); tag.has_value()) result.tags.push_back(*tag);
     }
+    else if (result.kind == AssetKind::MaterialInstance)
+    {
+        const toml::table document =
+            toml::parse_file(
+                absolute.string());
+
+        const toml::table* instance =
+            document["material_instance"].
+                as_table();
+
+        if (instance == nullptr)
+        {
+            throw std::runtime_error(
+                "Material instance is missing [material_instance]: " +
+                absolute.string());
+        }
+
+        const auto parent =
+            (*instance)["parent"].
+                value<std::string>();
+
+        if (!parent.has_value() ||
+            parent->empty())
+        {
+            throw std::runtime_error(
+                "Material instance requires a parent material.");
+        }
+
+        if (const auto name =
+                (*instance)["name"].
+                    value<std::string>();
+            name.has_value())
+        {
+            result.name = *name;
+        }
+
+        MaterialInstanceData data{
+            .parent =
+                std::filesystem::path(
+                    *parent),
+            .roughnessFactor =
+                (*instance)[
+                    "roughness_factor"].
+                    value<f64>(),
+            .metallicFactor =
+                (*instance)[
+                    "metallic_factor"].
+                    value<f64>()
+        };
+
+        result.materialInstance =
+            std::move(data);
+
+        if (const toml::array* tags =
+                (*instance)["tags"].
+                    as_array())
+        {
+            for (const auto& node :
+                 *tags)
+            {
+                if (const auto tag =
+                        node.value<std::string>();
+                    tag.has_value())
+                {
+                    result.tags.push_back(
+                        *tag);
+                }
+            }
+        }
+    }
 
     return result;
 }
@@ -527,6 +598,7 @@ std::string_view AssetKindName(const AssetKind kind) noexcept
     {
     case AssetKind::Texture: return "Texture";
     case AssetKind::Material: return "Material";
+    case AssetKind::MaterialInstance: return "Material Instance";
     case AssetKind::Decal: return "Decal";
     case AssetKind::Component: return "Component";
     case AssetKind::Mesh: return "Mesh";

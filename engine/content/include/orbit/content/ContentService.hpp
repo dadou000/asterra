@@ -21,6 +21,7 @@ enum class AssetKind : u8
 {
     Texture,
     Material,
+    MaterialInstance,
     Decal,
     Component,
     Mesh,
@@ -39,6 +40,13 @@ struct MaterialChannels
     f64 metallicFactor{0.0};
 };
 
+struct MaterialInstanceData
+{
+    std::filesystem::path parent;
+    std::optional<f64> roughnessFactor;
+    std::optional<f64> metallicFactor;
+};
+
 struct AssetRecord
 {
     AssetId id{};
@@ -53,6 +61,8 @@ struct AssetRecord
     std::vector<AssetId> dependencies;
     std::vector<std::string> tags;
     std::optional<MaterialChannels> material;
+    std::optional<MaterialInstanceData>
+        materialInstance;
 };
 
 struct ContentDiagnostic
@@ -116,6 +126,12 @@ public:
     [[nodiscard]] AssetId ImportPbrSet(
         const std::filesystem::path& sourceDirectory,
         std::string materialName = {});
+
+    // Creates a reusable material-instance authority asset that references a
+    // base material and stores only overrides. The base remains immutable.
+    [[nodiscard]] AssetId CreateMaterialInstance(
+        AssetId baseMaterial,
+        std::string instanceName = {});
 
 private:
     [[nodiscard]] AssetRecord BuildRecord(const std::filesystem::path& absolute) const;
