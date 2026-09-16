@@ -2,6 +2,7 @@
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/CommandSurfaces.hpp>
 #include <orbit/plugins/PluginManager.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
@@ -49,7 +50,8 @@ int main()
     Write(package / "plugin.toml", Manifest("\"project_mutation\", \"mcp_registration\""));
     Write(package / "main.luau",
         "Orbit.log('loaded')\n"
-        "Orbit.registerCommand('Ping', function() Orbit.log('pong') end, 'Test', 'Ping command', false)\n"
+        "local ping = Orbit.registerCommand('Ping', function() Orbit.log('pong') end, 'Test', 'Ping command', false)\n"
+        "Orbit.registerContextAction(ping, 'explorer', 'context')\n"
         "Orbit.registerPanel('Test Panel', function() Orbit.ui.text('hello') end)\n");
 
     orbit::documents::WorldDatabase world(project.StartupWorldPath());
@@ -58,9 +60,15 @@ int main()
     orbit::selection::SelectionService selection;
     orbit::commands::CommandService commandService(objects, schemas);
     orbit::commands::CommandRegistry commandRegistry;
+    orbit::editor_model::CommandSurfaceRegistry commandSurfaces;
 
     orbit::plugins::PluginManager plugins(
-        root, commandRegistry, commandService, objects, selection);
+        root,
+        commandRegistry,
+        commandService,
+        commandSurfaces,
+        objects,
+        selection);
 
     orbit::plugins::PluginPermissionSet grants;
     grants.Add(orbit::plugins::PluginPermission::ProjectMutation);
@@ -80,6 +88,12 @@ int main()
         orbit::plugins::PluginPermission::McpRegistration));
     assert(commandRegistry.Catalog().size() == 1);
     assert(plugins.PanelCatalog().size() == 1);
+    assert(
+        commandSurfaces.Commands(
+            "explorer",
+            orbit::editor_model::
+                CommandSurfaceKind::ContextMenu).
+            size() == 1);
 
     const auto revision = statuses[0].revision;
     Write(package / "main.luau",
@@ -91,6 +105,12 @@ int main()
     assert(commandRegistry.Catalog().size() == 1);
     assert(commandRegistry.Catalog()[0].name == "Pong");
     assert(plugins.PanelCatalog().empty());
+    assert(
+        commandSurfaces.Commands(
+            "explorer",
+            orbit::editor_model::
+                CommandSurfaceKind::ContextMenu).
+            empty());
 
     // A denied privileged API must fail inside the sandbox rather than
     // silently escalating the plugin's capabilities.
