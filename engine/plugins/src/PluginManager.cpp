@@ -1463,42 +1463,6 @@ public:
             return hash;
         }
 
-        [[nodiscard]] u64 SourceFingerprint() const
-        {
-            const std::string manifestText =
-                ReadTextFile(
-                    manifestPath_);
-
-            std::filesystem::path entry =
-                manifest_.entryScript;
-
-            if (entry.empty())
-            {
-                const PluginManifest parsed =
-                    LoadPluginManifest(
-                        manifestPath_);
-                entry =
-                    parsed.entryScript;
-            }
-
-            const std::string scriptText =
-                ReadTextFile(
-                    packageRoot_ /
-                    entry);
-
-            u64 hash =
-                HashText(
-                    manifestText,
-                    1469598103934665603ULL);
-
-            hash =
-                HashText(
-                    scriptText,
-                    hash);
-
-            return hash;
-        }
-
         Impl& owner_;
         std::filesystem::path packageRoot_;
         std::filesystem::path manifestPath_;
