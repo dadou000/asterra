@@ -397,7 +397,7 @@ int main()
             "event.since",
             orbit::rpc::Value(
                 orbit::rpc::Value::Object{
-                    {"sequence", 0}
+                    {"sequence", static_cast<orbit::i64>(0)}
                 }));
 
     Check(
