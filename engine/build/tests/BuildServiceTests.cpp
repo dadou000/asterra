@@ -1,10 +1,12 @@
 #include <orbit/build/BuildService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,6 +55,52 @@ void WriteText(
         throw std::runtime_error(
             "Unable to write test file: " +
             path.string());
+    }
+}
+
+void WriteTinyBmp(
+    const std::filesystem::path& path)
+{
+    constexpr std::array<
+        unsigned char,
+        58>
+        bytes{
+            0x42, 0x4d,
+            0x3a, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x36, 0x00, 0x00, 0x00,
+            0x28, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00,
+            0x20, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x20, 0x40, 0x80, 0xff
+        };
+
+    std::filesystem::create_directories(
+        path.parent_path());
+
+    std::ofstream output(
+        path,
+        std::ios::binary |
+            std::ios::trunc);
+
+    output.write(
+        reinterpret_cast<const char*>(
+            bytes.data()),
+        static_cast<std::streamsize>(
+            bytes.size()));
+
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Unable to write test BMP.");
     }
 }
 
@@ -145,11 +193,16 @@ int main()
                 "Plugins/test.plugin/Scripts/main.luau",
             "return {}\n");
 
+        WriteTinyBmp(
+            temporary.Root() /
+                "Content/Test.bmp");
+
         WriteText(
             temporary.Root() /
                 "Content/Test.orbitmaterial",
             "[material]\n"
             "name = \"Test Material\"\n"
+            "base_color = \"Test.bmp\"\n"
             "roughness_factor = 0.75\n"
             "metallic_factor = 0.0\n");
 
@@ -227,7 +280,7 @@ int main()
                     "Scripts/main.luauc"));
         ORBIT_TEST_CHECK(
             first.manifest.assets.size() ==
-            2U);
+            3U);
         ORBIT_TEST_CHECK(
             first.manifest.scripts.size() ==
             2U);
