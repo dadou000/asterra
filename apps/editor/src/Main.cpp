@@ -502,6 +502,17 @@ int main(
                 objects,
                 selection);
 
+        orbit::plugins::PluginManager
+            plugins(
+                project.RootDirectory(),
+                authoringCommands,
+                commandService,
+                objects,
+                selection);
+
+        plugins.LoadEnabled(
+            project.Manifest());
+
         orbit::editor_model::
             CommandSurfaceRegistry
                 commandSurfaces;
