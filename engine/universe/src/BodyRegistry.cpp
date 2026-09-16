@@ -267,8 +267,9 @@ SystemId BodyRegistry::CreateSystem(
             "Celestial system inertial frame already exists.");
     }
 
-    frameGraph_.CreateRoot(
-        inertialFrame);
+    static_cast<void>(
+        frameGraph_.CreateRoot(
+            inertialFrame));
 
     CelestialSystem system{
         .id = id,
@@ -367,16 +368,17 @@ BodyId BodyRegistry::CreateBody(
     const BodyTransformModel model =
         desc.transformModel;
 
-    frameGraph_.CreateFrame(
-        bodyFrame,
-        parentFrame,
-        [model](
+    static_cast<void>(
+        frameGraph_.CreateFrame(
+            bodyFrame,
+            parentFrame,
+            [model](
             const time::SimulationTime atTime)
         {
-            return EvaluateTransform(
-                model,
-                atTime);
-        });
+                return EvaluateTransform(
+                    model,
+                    atTime);
+            }));
 
     CelestialBody body{
         .id = id,
