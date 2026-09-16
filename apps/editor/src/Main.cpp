@@ -893,6 +893,10 @@ int main(
             selection.Revision();
         orbit::u64 publishedContentRevision =
             content.Revision();
+        orbit::u32 publishedViewportWidth =
+            bodyView.Width();
+        orbit::u32 publishedViewportHeight =
+            bodyView.Height();
 
         const auto publishAutomationChanges =
             [&]
@@ -968,6 +972,33 @@ int main(
                                     static_cast<orbit::i64>(
                                         content.Diagnostics().
                                             size())
+                                }
+                            }));
+                }
+
+                if (bodyView.Width() !=
+                        publishedViewportWidth ||
+                    bodyView.Height() !=
+                        publishedViewportHeight)
+                {
+                    publishedViewportWidth =
+                        bodyView.Width();
+                    publishedViewportHeight =
+                        bodyView.Height();
+
+                    editorRpc.PublishEvent(
+                        "viewport.resized",
+                        orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "width",
+                                    static_cast<orbit::i64>(
+                                        publishedViewportWidth)
+                                },
+                                {
+                                    "height",
+                                    static_cast<orbit::i64>(
+                                        publishedViewportHeight)
                                 }
                             }));
                 }
