@@ -15,8 +15,11 @@
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/platform/FileDialog.hpp>
@@ -218,6 +221,96 @@ FindRoutedPathEdges(
     }
 
     return result;
+}
+
+[[nodiscard]] std::vector<
+    orbit::scene::ObjectId>
+FindPathEdges(
+    orbit::scene::ObjectStore& objects,
+    orbit::paths::PathNetworkService& paths)
+{
+    std::vector<orbit::scene::ObjectRecord>
+        pending =
+            objects.Roots();
+    std::vector<orbit::scene::ObjectId>
+        result;
+
+    while (!pending.empty())
+    {
+        const auto object =
+            pending.back();
+        pending.pop_back();
+
+        if (object.type ==
+            orbit::paths::kPathEdgeType &&
+            paths.FindEdge(object.id).
+                has_value())
+        {
+            result.push_back(
+                object.id);
+        }
+
+        auto children =
+            objects.Children(
+                object.id);
+
+        pending.insert(
+            pending.end(),
+            children.begin(),
+            children.end());
+    }
+
+    return result;
+}
+
+[[nodiscard]] std::optional<
+    orbit::frames::FrameId>
+PathAnchorNativeFrame(
+    const orbit::paths::PathAnchor& anchor,
+    const orbit::universe::BodyRegistry& bodies)
+{
+    return std::visit(
+        [&bodies](const auto& value)
+            -> std::optional<
+                orbit::frames::FrameId>
+        {
+            using Anchor =
+                std::decay_t<
+                    decltype(value)>;
+
+            if constexpr (
+                std::is_same_v<
+                    Anchor,
+                    orbit::paths::
+                        FramePointAnchor>)
+            {
+                return value.frame;
+            }
+            else if constexpr (
+                std::is_same_v<
+                    Anchor,
+                    orbit::paths::
+                        SurfaceAnchor>)
+            {
+                const auto* body =
+                    bodies.FindBody(
+                        value.body);
+
+                if (body == nullptr)
+                {
+                    return std::nullopt;
+                }
+
+                return body->frame;
+            }
+            else
+            {
+                // Entity/socket anchors require the owning entity runtime to
+                // provide a frame. Studio does not invent one.
+                return std::nullopt;
+            }
+        },
+        anchor);
 }
 
 [[nodiscard]]
