@@ -1419,6 +1419,296 @@ int main(
                 }
             };
 
+        const auto buildIssuesToRpc =
+            [](
+                const std::vector<
+                    orbit::build::BuildIssue>&
+                    issues)
+            {
+                orbit::rpc::Value::Array
+                    result;
+
+                result.reserve(
+                    issues.size());
+
+                for (const auto& issue :
+                     issues)
+                {
+                    result.emplace_back(
+                        orbit::rpc::Value::Object{
+                            {
+                                "severity",
+                                issue.severity ==
+                                        orbit::build::
+                                            IssueSeverity::Error
+                                    ? "error"
+                                    : "warning"
+                            },
+                            {"code", issue.code},
+                            {
+                                "message",
+                                issue.message
+                            },
+                            {
+                                "path",
+                                issue.path.
+                                    generic_string()
+                            }
+                        });
+                }
+
+                return orbit::rpc::Value(
+                    std::move(result));
+            };
+
+        editorRpc.AttachBuild({
+            .profiles =
+                [&project]
+                {
+                    orbit::rpc::Value::Array
+                        profiles;
+
+                    for (const auto& profile :
+                         project.Manifest().
+                             buildProfiles)
+                    {
+                        profiles.emplace_back(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "name",
+                                    profile.name
+                                },
+                                {
+                                    "configuration",
+                                    profile.
+                                        configuration
+                                },
+                                {
+                                    "platform",
+                                    profile.platform
+                                },
+                                {
+                                    "storefront",
+                                    profile.storefront
+                                }
+                            });
+                    }
+
+                    return orbit::rpc::Value(
+                        std::move(
+                            profiles));
+                },
+            .validate =
+                [&buildService,
+                 &project,
+                 &buildIssues,
+                 &buildStatus,
+                 &selectedBuildProfile,
+                 buildIssuesToRpc](
+                    std::optional<
+                        std::string>
+                        profile)
+                {
+                    const std::string
+                        requestedProfile =
+                            profile.
+                                value_or(
+                                    std::string{});
+
+                    const auto result =
+                        buildService.Validate({
+                            .manifestPath =
+                                project.
+                                    ManifestPath(),
+                            .profileName =
+                                requestedProfile
+                        });
+
+                    buildIssues =
+                        result.issues;
+
+                    if (result.Succeeded())
+                    {
+                        selectedBuildProfile =
+                            result.profile.name;
+                        buildStatus =
+                            std::format(
+                                "Validated {} / {} / {}",
+                                result.profile.platform,
+                                result.profile.
+                                    configuration,
+                                result.profile.
+                                    storefront);
+                    }
+                    else
+                    {
+                        buildStatus =
+                            "Validation failed";
+                    }
+
+                    return orbit::rpc::Value(
+                        orbit::rpc::Value::Object{
+                            {
+                                "ok",
+                                result.Succeeded()
+                            },
+                            {
+                                "profile",
+                                result.profile.name
+                            },
+                            {
+                                "configuration",
+                                result.profile.
+                                    configuration
+                            },
+                            {
+                                "platform",
+                                result.profile.
+                                    platform
+                            },
+                            {
+                                "storefront",
+                                result.profile.
+                                    storefront
+                            },
+                            {
+                                "output",
+                                result.
+                                    outputDirectory.
+                                    generic_string()
+                            },
+                            {
+                                "issues",
+                                buildIssuesToRpc(
+                                    result.issues)
+                            }
+                        });
+                },
+            .cook =
+                [&buildService,
+                 &project,
+                 &world,
+                 &buildIssues,
+                 &buildStatus,
+                 &selectedBuildProfile,
+                 &lastBuildManifest,
+                 buildIssuesToRpc](
+                    std::optional<
+                        std::string>
+                        profile)
+                {
+                    try
+                    {
+                        project.Save();
+                        world.Checkpoint();
+
+                        const std::string
+                            requestedProfile =
+                                profile.
+                                    value_or(
+                                        std::string{});
+
+                        const auto result =
+                            buildService.Cook({
+                                .manifestPath =
+                                    project.
+                                        ManifestPath(),
+                                .profileName =
+                                    requestedProfile
+                            });
+
+                        buildIssues =
+                            result.issues;
+
+                        if (result.Succeeded())
+                        {
+                            selectedBuildProfile =
+                                result.manifest.
+                                    profile.name;
+                            lastBuildManifest =
+                                result.manifestPath;
+                            buildStatus =
+                                std::format(
+                                    "Cooked {} asset{} and {} script{}",
+                                    result.manifest.
+                                        assets.size(),
+                                    result.manifest.
+                                        assets.size() == 1U
+                                        ? ""
+                                        : "s",
+                                    result.manifest.
+                                        scripts.size(),
+                                    result.manifest.
+                                        scripts.size() == 1U
+                                        ? ""
+                                        : "s");
+                        }
+                        else
+                        {
+                            buildStatus =
+                                "Cook failed";
+                        }
+
+                        return orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {
+                                    "ok",
+                                    result.
+                                        Succeeded()
+                                },
+                                {
+                                    "profile",
+                                    result.manifest.
+                                        profile.name
+                                },
+                                {
+                                    "output",
+                                    result.
+                                        outputDirectory.
+                                        generic_string()
+                                },
+                                {
+                                    "manifest",
+                                    result.
+                                        manifestPath.
+                                        generic_string()
+                                },
+                                {
+                                    "assets",
+                                    static_cast<
+                                        orbit::i64>(
+                                            result.
+                                                manifest.
+                                                assets.
+                                                size())
+                                },
+                                {
+                                    "scripts",
+                                    static_cast<
+                                        orbit::i64>(
+                                            result.
+                                                manifest.
+                                                scripts.
+                                                size())
+                                },
+                                {
+                                    "issues",
+                                    buildIssuesToRpc(
+                                        result.
+                                            issues)
+                                }
+                            });
+                    }
+                    catch (const std::exception&
+                               exception)
+                    {
+                        throw orbit::rpc::Error(
+                            1100,
+                            exception.what());
+                    }
+                }
+        });
+
         orbit::jobs::JobSystem routeJobs;
         orbit::path_routing::RoutePlanner
             routePlanner(
