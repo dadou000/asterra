@@ -2651,6 +2651,44 @@ void EditorRpcService::AttachPathRouting(
     }
 }
 
+void EditorRpcService::AttachPathGeometry(
+    PathGeometryAutomation geometry)
+{
+    if (!geometry.result)
+    {
+        return;
+    }
+
+    if (pathGeometryRegistered_)
+    {
+        throw std::logic_error(
+            "Editor RPC path geometry is already attached.");
+    }
+
+    pathGeometryRegistered_ = true;
+
+    Register(
+        {
+            .name = "path.derived_result",
+            .description =
+                "Returns deterministic M20 visual/AI/collision derived state for a PathEdge.",
+            .mutating = false
+        },
+        [result =
+             std::move(
+                 geometry.result)](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            return result(
+                RequireObjectId(
+                    values,
+                    "edge"));
+        });
+}
+
 void EditorRpcService::PublishEvent(
     std::string type,
     rpc::Value data)
