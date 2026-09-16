@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <format>
 #include <sstream>
 #include <unordered_map>
