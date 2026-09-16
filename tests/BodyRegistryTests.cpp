@@ -134,5 +134,65 @@ int main()
             10.0) <
         1e-6);
 
+    const orbit::universe::SystemId
+        persistentSystem{
+            .high = 0x1010101010101010ULL,
+            .low = 0x2020202020202020ULL
+        };
+    const orbit::frames::FrameId
+        persistentSystemFrame{
+            .high = 0x3030303030303030ULL,
+            .low = 0x4040404040404040ULL
+        };
+
+    const auto stableSystem =
+        bodies.CreateSystem(
+            "Persistent System",
+            persistentSystem,
+            persistentSystemFrame);
+
+    assert(stableSystem == persistentSystem);
+    assert(
+        bodies.FindSystem(stableSystem)->
+            inertialFrame ==
+        persistentSystemFrame);
+
+    const orbit::universe::BodyId
+        persistentBody{
+            .high = 0x5050505050505050ULL,
+            .low = 0x6060606060606060ULL
+        };
+    const orbit::frames::FrameId
+        persistentBodyFrame{
+            .high = 0x7070707070707070ULL,
+            .low = 0x8080808080808080ULL
+        };
+
+    const auto stableBody =
+        bodies.CreateBody({
+            .system = stableSystem,
+            .name = "Persistent Body",
+            .shape =
+                orbit::universe::SphereShape{
+                    .radiusMeters = 42.0
+                },
+            .id = persistentBody,
+            .frame = persistentBodyFrame
+        });
+
+    assert(stableBody == persistentBody);
+    assert(
+        bodies.FindBody(stableBody)->
+            frame ==
+        persistentBodyFrame);
+    assert(
+        frames.Contains(
+            persistentBodyFrame));
+    assert(
+        frames.Parent(
+            persistentBodyFrame) ==
+        std::optional<orbit::frames::FrameId>(
+            persistentSystemFrame));
+
     return 0;
 }
