@@ -124,7 +124,8 @@ using PathAnchor = std::variant<
 enum class EdgeMode : u8
 {
     Direct,
-    Bezier
+    Bezier,
+    Routed
 };
 
 struct PathNetworkRecord
@@ -185,6 +186,11 @@ public:
         math::Double3 startHandleMeters,
         math::Double3 endHandleMeters,
         std::string name = "Bezier Edge");
+
+    [[nodiscard]] PathEdgeRecord ConnectRouted(
+        scene::ObjectId startNode,
+        scene::ObjectId endNode,
+        std::string name = "Routed Edge");
 
     void SetNodeAnchor(
         scene::ObjectId node,
