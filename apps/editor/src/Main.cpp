@@ -4,6 +4,7 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/dev_server/DevServer.hpp>
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 #include <orbit/editor_model/CommandSurfaces.hpp>
@@ -11,6 +12,7 @@
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/OutputLog.hpp>
 #include <orbit/editor_model/ShortcutRegistry.hpp>
+#include <orbit/editor_rpc/EditorRpcService.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
@@ -20,6 +22,7 @@
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/runtime/RuntimeSession.hpp>
+#include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
