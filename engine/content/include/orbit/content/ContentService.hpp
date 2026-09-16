@@ -116,6 +116,13 @@ public:
         std::string settings = {},
         std::string targetPlatform = "source");
 
+    // Target-platform cook path used by BuildService. It preserves the
+    // asset's canonical .orbitimport.toml settings so editor imports and
+    // headless cooks share exactly the same DDC key semantics.
+    [[nodiscard]] ImportResult CookDerived(
+        AssetId id,
+        std::string targetPlatform);
+
     // Imports a source file into Content/Imported without temporary staging
     // formats. The copied source becomes the canonical project asset.
     [[nodiscard]] AssetId ImportFile(const std::filesystem::path& source);
