@@ -2689,6 +2689,123 @@ void EditorRpcService::AttachPathGeometry(
         });
 }
 
+void EditorRpcService::AttachBuild(
+    BuildAutomation build)
+{
+    if (!build.profiles &&
+        !build.validate &&
+        !build.cook)
+    {
+        return;
+    }
+
+    if (buildRegistered_)
+    {
+        throw std::logic_error(
+            "Editor RPC build automation is already attached.");
+    }
+
+    buildRegistered_ = true;
+
+    if (build.profiles)
+    {
+        Register(
+            {
+                .name = "build.profiles",
+                .description =
+                    "Returns project build profiles available to Studio and OrbitBuild.",
+                .mutating = false
+            },
+            [profiles =
+                 std::move(
+                     build.profiles)](
+                const rpc::Value&)
+            {
+                return profiles();
+            });
+    }
+
+    if (build.validate)
+    {
+        Register(
+            {
+                .name = "build.validate",
+                .description =
+                    "Validates one project build profile through the shared BuildService.",
+                .mutating = false
+            },
+            [validate =
+                 std::move(
+                     build.validate)](
+                const rpc::Value& params)
+            {
+                std::optional<std::string>
+                    profile;
+
+                if (params.IsObject())
+                {
+                    profile =
+                        OptionalString(
+                            params.AsObject(),
+                            "profile");
+                }
+                else if (!params.IsNull())
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "build.validate params must be an object or null.");
+                }
+
+                return validate(
+                    std::move(profile));
+            });
+    }
+
+    if (build.cook)
+    {
+        Register(
+            {
+                .name = "build.cook",
+                .description =
+                    "Checkpoints the open project and cooks one build profile through the shared BuildService.",
+                .mutating = true
+            },
+            [this,
+             cook =
+                 std::move(
+                     build.cook)](
+                const rpc::Value& params)
+            {
+                std::optional<std::string>
+                    profile;
+
+                if (params.IsObject())
+                {
+                    profile =
+                        OptionalString(
+                            params.AsObject(),
+                            "profile");
+                }
+                else if (!params.IsNull())
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "build.cook params must be an object or null.");
+                }
+
+                rpc::Value result =
+                    cook(
+                        std::move(profile));
+
+                PublishEvent(
+                    "build.cooked",
+                    result);
+
+                return result;
+            });
+    }
+}
+
 void EditorRpcService::PublishEvent(
     std::string type,
     rpc::Value data)
