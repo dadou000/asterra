@@ -140,9 +140,18 @@ ResolveDependency(
         return false;
     }
 
-    const toml::table manifest =
-        toml::parse(
-            manifestText);
+    toml::table manifest;
+
+    try
+    {
+        manifest =
+            toml::parse(
+                manifestText);
+    }
+    catch (const toml::parse_error&)
+    {
+        return false;
+    }
 
     const toml::array* artifacts =
         manifest["artifacts"].as_array();
@@ -534,6 +543,9 @@ ImportResult AssetPipeline::Import(
     // artifact under the same primary-source key.
     cache_.Remove(
         result.key);
+
+    result.artifacts.clear();
+    result.dependencies.clear();
 
     ImportOutput output =
         importer->import({
