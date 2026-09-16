@@ -758,6 +758,11 @@ bool BuildResult::Succeeded() const noexcept
     return !HasErrors(issues);
 }
 
+bool PackageResult::Succeeded() const noexcept
+{
+    return !HasErrors(issues);
+}
+
 BuildValidation BuildService::Validate(
     const BuildRequest& request) const
 {
@@ -1430,6 +1435,150 @@ BuildResult BuildService::Cook(
             result.issues,
             IssueSeverity::Error,
             "build.cook.failed",
+            exception.what(),
+            result.outputDirectory);
+    }
+
+    return result;
+}
+
+PackageResult BuildService::Package(
+    const BuildRequest& request,
+    const PackageRuntime& runtime) const
+{
+    const BuildResult build =
+        Cook(request);
+
+    PackageResult result{
+        .manifest =
+            build.manifest,
+        .outputDirectory =
+            build.outputDirectory,
+        .manifestPath =
+            build.manifestPath,
+        .issues =
+            build.issues
+    };
+
+    if (!build.Succeeded())
+    {
+        return result;
+    }
+
+    try
+    {
+        if (!std::filesystem::
+                is_regular_file(
+                    runtime.
+                        playerExecutable))
+        {
+            throw std::runtime_error(
+                "OrbitPlayer executable is unavailable: " +
+                runtime.playerExecutable.
+                    string());
+        }
+
+        const std::string executableName =
+            SanitizeProfileName(
+                result.manifest.
+                    projectName) +
+            ".exe";
+
+        result.executablePath =
+            result.outputDirectory /
+            executableName;
+
+        std::filesystem::copy_file(
+            runtime.playerExecutable,
+            result.executablePath,
+            std::filesystem::
+                copy_options::
+                    overwrite_existing);
+
+        std::set<std::string>
+            packagedRuntimeNames{
+                executableName
+            };
+
+        for (const auto& source :
+             runtime.runtimeFiles)
+        {
+            if (!std::filesystem::
+                    is_regular_file(
+                        source))
+            {
+                throw std::runtime_error(
+                    "Runtime package dependency is unavailable: " +
+                    source.string());
+            }
+
+            const std::string fileName =
+                source.filename().
+                    string();
+
+            if (fileName.empty() ||
+                !packagedRuntimeNames.
+                    insert(fileName).
+                    second)
+            {
+                throw std::runtime_error(
+                    "Runtime package contains a duplicate file name: " +
+                    fileName);
+            }
+
+            std::filesystem::copy_file(
+                source,
+                result.outputDirectory /
+                    source.filename(),
+                std::filesystem::
+                    copy_options::
+                        overwrite_existing);
+        }
+
+        toml::table package;
+        package.insert(
+            "format_version",
+            static_cast<i64>(1));
+
+        toml::table runtimeTable;
+        runtimeTable.insert(
+            "project_id",
+            result.manifest.
+                projectId.ToString());
+        runtimeTable.insert(
+            "project_name",
+            result.manifest.
+                projectName);
+        runtimeTable.insert(
+            "executable",
+            executableName);
+        runtimeTable.insert(
+            "build_manifest",
+            "OrbitBuildManifest.toml");
+
+        package.insert(
+            "runtime",
+            std::move(
+                runtimeTable));
+
+        std::ostringstream stream;
+        stream << package;
+
+        result.packageManifestPath =
+            result.outputDirectory /
+            "OrbitPackage.toml";
+
+        WriteText(
+            result.packageManifestPath,
+            stream.str());
+    }
+    catch (const std::exception&
+               exception)
+    {
+        AddIssue(
+            result.issues,
+            IssueSeverity::Error,
+            "build.package.failed",
             exception.what(),
             result.outputDirectory);
     }
