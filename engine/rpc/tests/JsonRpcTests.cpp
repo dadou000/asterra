@@ -69,7 +69,10 @@ int main()
     const auto* result =
         root.Find("result");
 
-    assert(result != nullptr);
+    if (result == nullptr)
+    {
+        return 1;
+    }
     assert(
         result->Find("pong")->AsBool());
     assert(
