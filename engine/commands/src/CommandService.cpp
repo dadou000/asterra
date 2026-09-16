@@ -351,6 +351,11 @@ void CommandService::RollbackTransaction()
     activeTransaction_.reset();
 }
 
+bool CommandService::HasActiveTransaction() const noexcept
+{
+    return activeTransaction_.has_value();
+}
+
 bool CommandService::CanUndo() const noexcept
 {
     return !undoStack_.empty() &&
