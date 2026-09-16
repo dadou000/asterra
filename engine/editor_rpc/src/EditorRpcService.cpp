@@ -1,6 +1,7 @@
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 
 #include <orbit/math/Vector.hpp>
+#include <orbit/paths/PathNetwork.hpp>
 
 #include <array>
 #include <cmath>
@@ -558,6 +559,341 @@ RequireDouble3(
             std::string(name) +
                 " must contain numbers.");
     }
+}
+
+[[nodiscard]] std::string
+RequireString(
+    const rpc::Value::Object& object,
+    const std::string_view key)
+{
+    const rpc::Value& value =
+        Require(object, key);
+
+    if (!value.IsString() ||
+        value.AsString().empty())
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(key) +
+                " must be a non-empty string.");
+    }
+
+    return value.AsString();
+}
+
+[[nodiscard]] std::optional<std::string>
+OptionalString(
+    const rpc::Value::Object& object,
+    const std::string_view key)
+{
+    const auto found =
+        object.find(key);
+
+    if (found == object.end() ||
+        found->second.IsNull())
+    {
+        return std::nullopt;
+    }
+
+    if (!found->second.IsString())
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(key) +
+                " must be a string.");
+    }
+
+    return found->second.AsString();
+}
+
+[[nodiscard]] paths::NetworkId
+RequireNetworkId(
+    const rpc::Value::Object& object,
+    const std::string_view key)
+{
+    const auto parsed =
+        paths::NetworkId::Parse(
+            RequireString(
+                object,
+                key));
+
+    if (!parsed.has_value())
+    {
+        throw rpc::Error(
+            -32602,
+            "Invalid path network ID.");
+    }
+
+    return *parsed;
+}
+
+[[nodiscard]] paths::PathAnchor
+PathAnchorFromRpc(
+    const rpc::Value& value)
+{
+    if (!value.IsObject())
+    {
+        throw rpc::Error(
+            -32602,
+            "Path anchor must be an object.");
+    }
+
+    const auto& anchor =
+        value.AsObject();
+    const std::string kind =
+        RequireString(
+            anchor,
+            "kind");
+
+    if (kind == "frame")
+    {
+        const auto frame =
+            frames::FrameId::Parse(
+                RequireString(
+                    anchor,
+                    "frame"));
+
+        if (!frame.has_value())
+        {
+            throw rpc::Error(
+                -32602,
+                "Invalid path anchor frame ID.");
+        }
+
+        return paths::FramePointAnchor{
+            .frame = *frame,
+            .localMeters =
+                RequireDouble3(
+                    Require(
+                        anchor,
+                        "position"),
+                    "anchor.position")
+        };
+    }
+
+    if (kind == "surface")
+    {
+        const auto body =
+            universe::BodyId::Parse(
+                RequireString(
+                    anchor,
+                    "body"));
+
+        if (!body.has_value())
+        {
+            throw rpc::Error(
+                -32602,
+                "Invalid path anchor body ID.");
+        }
+
+        return paths::SurfaceAnchor{
+            .body = *body,
+            .coordinate =
+                RequireDouble3(
+                    Require(
+                        anchor,
+                        "coordinate"),
+                    "anchor.coordinate")
+        };
+    }
+
+    if (kind == "entity_socket")
+    {
+        return paths::EntitySocketAnchor{
+            .entity =
+                RequireObjectId(
+                    anchor,
+                    "entity"),
+            .socket =
+                RequireString(
+                    anchor,
+                    "socket"),
+            .localMeters =
+                RequireDouble3(
+                    Require(
+                        anchor,
+                        "position"),
+                    "anchor.position")
+        };
+    }
+
+    throw rpc::Error(
+        -32602,
+        "Path anchor kind must be frame, surface, or entity_socket.");
+}
+
+[[nodiscard]] rpc::Value
+PathAnchorToRpc(
+    const paths::PathAnchor& anchor)
+{
+    return std::visit(
+        [](const auto& value)
+            -> rpc::Value
+        {
+            using Anchor =
+                std::decay_t<
+                    decltype(value)>;
+
+            if constexpr (
+                std::is_same_v<
+                    Anchor,
+                    paths::FramePointAnchor>)
+            {
+                return rpc::Value(
+                    rpc::Value::Object{
+                        {"kind", "frame"},
+                        {
+                            "frame",
+                            value.frame.ToString()
+                        },
+                        {
+                            "position",
+                            rpc::Value::Array{
+                                value.localMeters.x,
+                                value.localMeters.y,
+                                value.localMeters.z
+                            }
+                        }
+                    });
+            }
+            else if constexpr (
+                std::is_same_v<
+                    Anchor,
+                    paths::SurfaceAnchor>)
+            {
+                return rpc::Value(
+                    rpc::Value::Object{
+                        {"kind", "surface"},
+                        {
+                            "body",
+                            value.body.ToString()
+                        },
+                        {
+                            "coordinate",
+                            rpc::Value::Array{
+                                value.coordinate.x,
+                                value.coordinate.y,
+                                value.coordinate.z
+                            }
+                        }
+                    });
+            }
+            else
+            {
+                return rpc::Value(
+                    rpc::Value::Object{
+                        {
+                            "kind",
+                            "entity_socket"
+                        },
+                        {
+                            "entity",
+                            value.entity.ToString()
+                        },
+                        {
+                            "socket",
+                            value.socket
+                        },
+                        {
+                            "position",
+                            rpc::Value::Array{
+                                value.localMeters.x,
+                                value.localMeters.y,
+                                value.localMeters.z
+                            }
+                        }
+                    });
+            }
+        },
+        anchor);
+}
+
+[[nodiscard]] rpc::Value
+PathNetworkToRpc(
+    const paths::PathNetworkRecord& network)
+{
+    return rpc::Value(
+        rpc::Value::Object{
+            {"id", network.id.ToString()},
+            {
+                "object",
+                network.object.ToString()
+            },
+            {"name", network.name},
+            {
+                "profile_asset",
+                network.profileAsset
+            }
+        });
+}
+
+[[nodiscard]] rpc::Value
+PathNodeToRpc(
+    const paths::PathNodeRecord& node)
+{
+    return rpc::Value(
+        rpc::Value::Object{
+            {"id", node.id.ToString()},
+            {
+                "network",
+                node.network.ToString()
+            },
+            {"name", node.name},
+            {
+                "anchor",
+                PathAnchorToRpc(
+                    node.anchor)
+            }
+        });
+}
+
+[[nodiscard]] rpc::Value
+PathEdgeToRpc(
+    const paths::PathEdgeRecord& edge)
+{
+    return rpc::Value(
+        rpc::Value::Object{
+            {"id", edge.id.ToString()},
+            {
+                "network",
+                edge.network.ToString()
+            },
+            {
+                "start",
+                edge.startNode.ToString()
+            },
+            {
+                "end",
+                edge.endNode.ToString()
+            },
+            {
+                "mode",
+                edge.mode ==
+                        paths::EdgeMode::Bezier
+                    ? "bezier"
+                    : "direct"
+            },
+            {
+                "start_handle",
+                rpc::Value::Array{
+                    edge.startHandleMeters.x,
+                    edge.startHandleMeters.y,
+                    edge.startHandleMeters.z
+                }
+            },
+            {
+                "end_handle",
+                rpc::Value::Array{
+                    edge.endHandleMeters.x,
+                    edge.endHandleMeters.y,
+                    edge.endHandleMeters.z
+                }
+            },
+            {
+                "profile_override",
+                edge.profileOverride
+            }
+        });
 }
 
 [[nodiscard]] math::Float3
@@ -1207,6 +1543,312 @@ EditorRpcService::EditorRpcService(
                 rpc::Value::Object{
                     {"ok", true}
                 });
+        });
+
+    Register(
+        {
+            .name = "path.create_network",
+            .description =
+                "Creates a semantic path network through the shared command layer.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            paths::PathNetworkService
+                service(
+                    objects,
+                    commandService);
+
+            const auto result =
+                service.CreateNetwork(
+                    RequireString(
+                        values,
+                        "name"),
+                    OptionalObjectId(
+                        values,
+                        "parent"),
+                    OptionalString(
+                        values,
+                        "profile_asset").
+                        value_or(
+                            std::string{}));
+
+            return PathNetworkToRpc(
+                result);
+        });
+
+    Register(
+        {
+            .name = "path.create_node",
+            .description =
+                "Creates a frame, surface, or entity/socket anchored path node.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            paths::PathNetworkService
+                service(
+                    objects,
+                    commandService);
+
+            const auto result =
+                service.CreateNode(
+                    RequireNetworkId(
+                        values,
+                        "network"),
+                    RequireString(
+                        values,
+                        "name"),
+                    PathAnchorFromRpc(
+                        Require(
+                            values,
+                            "anchor")));
+
+            return PathNodeToRpc(
+                result);
+        });
+
+    Register(
+        {
+            .name = "path.connect",
+            .description =
+                "Connects two path nodes with a Direct or Bezier edge.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+            const scene::ObjectId start =
+                RequireObjectId(
+                    values,
+                    "start");
+            const scene::ObjectId end =
+                RequireObjectId(
+                    values,
+                    "end");
+            const std::string mode =
+                RequireString(
+                    values,
+                    "mode");
+            const auto name =
+                OptionalString(
+                    values,
+                    "name");
+
+            paths::PathNetworkService
+                service(
+                    objects,
+                    commandService);
+
+            if (mode == "direct")
+            {
+                return PathEdgeToRpc(
+                    service.ConnectDirect(
+                        start,
+                        end,
+                        name.value_or(
+                            "Direct Edge")));
+            }
+
+            if (mode == "bezier")
+            {
+                math::Double3 startHandle{};
+                math::Double3 endHandle{};
+
+                if (const auto found =
+                        values.find(
+                            "start_handle");
+                    found != values.end())
+                {
+                    startHandle =
+                        RequireDouble3(
+                            found->second,
+                            "start_handle");
+                }
+
+                if (const auto found =
+                        values.find(
+                            "end_handle");
+                    found != values.end())
+                {
+                    endHandle =
+                        RequireDouble3(
+                            found->second,
+                            "end_handle");
+                }
+
+                return PathEdgeToRpc(
+                    service.ConnectBezier(
+                        start,
+                        end,
+                        startHandle,
+                        endHandle,
+                        name.value_or(
+                            "Bezier Edge")));
+            }
+
+            throw rpc::Error(
+                -32602,
+                "Path connection mode must be direct or bezier.");
+        });
+
+    Register(
+        {
+            .name = "path.set_bezier_handles",
+            .description =
+                "Edits the two local Bezier handles transactionally.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            paths::PathNetworkService
+                service(
+                    objects,
+                    commandService);
+
+            const scene::ObjectId edge =
+                RequireObjectId(
+                    values,
+                    "edge");
+
+            service.SetBezierHandles(
+                edge,
+                RequireDouble3(
+                    Require(
+                        values,
+                        "start_handle"),
+                    "start_handle"),
+                RequireDouble3(
+                    Require(
+                        values,
+                        "end_handle"),
+                    "end_handle"));
+
+            const auto result =
+                service.FindEdge(edge);
+
+            if (!result.has_value())
+            {
+                throw rpc::Error(
+                    1010,
+                    "Path edge disappeared after edit.");
+            }
+
+            return PathEdgeToRpc(
+                *result);
+        });
+
+    Register(
+        {
+            .name = "path.inspect",
+            .description =
+                "Returns semantic path network, node, or edge data for an object ID.",
+            .mutating = false
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+            const scene::ObjectId id =
+                RequireObjectId(
+                    values,
+                    "id");
+            const auto object =
+                objects.Find(id);
+
+            if (!object.has_value())
+            {
+                throw rpc::Error(
+                    1001,
+                    "Path object does not exist.");
+            }
+
+            paths::PathNetworkService
+                service(
+                    objects,
+                    commandService);
+
+            if (object->type ==
+                paths::kPathNetworkType)
+            {
+                const paths::NetworkId
+                    network{
+                        .high = id.high,
+                        .low = id.low
+                    };
+
+                const auto result =
+                    service.FindNetwork(
+                        network);
+
+                if (!result.has_value())
+                {
+                    throw rpc::Error(
+                        1011,
+                        "Path network is invalid.");
+                }
+
+                return PathNetworkToRpc(
+                    *result);
+            }
+
+            if (object->type ==
+                paths::kPathNodeType)
+            {
+                const auto result =
+                    service.FindNode(id);
+
+                if (!result.has_value())
+                {
+                    throw rpc::Error(
+                        1012,
+                        "Path node is invalid.");
+                }
+
+                return PathNodeToRpc(
+                    *result);
+            }
+
+            if (object->type ==
+                paths::kPathEdgeType)
+            {
+                const auto result =
+                    service.FindEdge(id);
+
+                if (!result.has_value())
+                {
+                    throw rpc::Error(
+                        1013,
+                        "Path edge is invalid.");
+                }
+
+                return PathEdgeToRpc(
+                    *result);
+            }
+
+            throw rpc::Error(
+                -32602,
+                "Object is not a path network, node, or edge.");
         });
 
     Register(
