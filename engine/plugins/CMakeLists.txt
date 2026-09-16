@@ -26,3 +26,24 @@ target_link_libraries(OrbitPlugins
 
 target_compile_features(OrbitPlugins PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitPlugins)
+
+if(BUILD_TESTING)
+    add_executable(OrbitPluginTests
+        tests/PluginTests.cpp
+    )
+
+    target_link_libraries(OrbitPluginTests
+        PRIVATE
+            Orbit::Plugins
+            Orbit::Schema
+            SQLiteCpp
+    )
+
+    target_compile_features(OrbitPluginTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPluginTests)
+
+    add_test(
+        NAME Orbit.Plugins
+        COMMAND OrbitPluginTests
+    )
+endif()
