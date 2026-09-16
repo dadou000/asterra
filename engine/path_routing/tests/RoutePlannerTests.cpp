@@ -385,6 +385,31 @@ int main()
             committedRevision ==
         routeBRevision);
 
+    const orbit::u64
+        routeAAfterCostRevision =
+            planner.Status(edgeId)->
+                committedRevision;
+
+    requestA.profileRevision = 2;
+
+    ORBIT_TEST_CHECK(
+        planner.Request(
+            requestA));
+    ORBIT_TEST_CHECK(
+        FinishBuild(
+            planner,
+            jobs,
+            edgeId));
+
+    ORBIT_TEST_CHECK(
+        planner.Status(edgeId)->
+            committedRevision ==
+        routeAAfterCostRevision + 1U);
+    ORBIT_TEST_CHECK(
+        planner.Status(edgeBId)->
+            committedRevision ==
+        routeBRevision);
+
     // Same-frame endpoints stay local even when the parent frame itself is
     // moving. Re-requesting at another simulation time must be a cache hit.
     const auto sameFrameStartId =
