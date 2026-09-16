@@ -934,48 +934,33 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
     if (g_pc.morphToCoarser != 0u)
     {
-        // SurfaceOffsetBetweenDirections(coarseFrame, direction), ported.
-        float3 fromUp = g_pc.coarseUp.xyz;
-        float cosine = clamp(dot(fromUp, direction), -1.0, 1.0);
-        float angle = acos(cosine);
+        // Adjacent clipmaps share one stable spherical lattice. Parent morphing
+        // is therefore pure integer-grid snapping: no spherical frame round trip
+        // is necessary. This is both faster and exactly phase-consistent with
+        // the parent samples.
+        float2 coarseCoordinate =
+            offsetMeters /
+            g_pc.coarseSpacingMeters;
 
-        float2 coarseLocalOffset = float2(0.0, 0.0);
-        if (angle > 1.0e-6)
-        {
-            float3 tangent = direction - fromUp * cosine;
-            float tangentLength = length(tangent);
-            if (tangentLength > 1.0e-6)
-            {
-                float3 tangentDirection = tangent / tangentLength;
-                float distance = angle * radius;
-                coarseLocalOffset = float2(
-                    dot(tangentDirection, g_pc.coarseEast.xyz) * distance,
-                    dot(tangentDirection, g_pc.coarseNorth.xyz) * distance);
-            }
-        }
+        // Match C++ std::round exactly at half cells (away from zero).
+        // HLSL round() is not a portable tie-breaking contract for this
+        // purpose, and half-parent cells occur on every second fine vertex.
+        float2 snappedCoarseCoordinate =
+            sign(coarseCoordinate) *
+            floor(abs(coarseCoordinate) + 0.5);
 
-        float2 snappedCoarseOffset = round(coarseLocalOffset / g_pc.coarseSpacingMeters) * g_pc.coarseSpacingMeters;
+        float2 snappedCoarseOffset =
+            snappedCoarseCoordinate *
+            g_pc.coarseSpacingMeters;
+
         float3 coarseDirection = DirectionAtSurfaceOffset(
-            g_pc.coarseUp.xyz, g_pc.coarseEast.xyz, g_pc.coarseNorth.xyz, snappedCoarseOffset, radius);
+            g_pc.fineUp.xyz,
+            g_pc.fineEast.xyz,
+            g_pc.fineNorth.xyz,
+            snappedCoarseOffset,
+            radius);
 
-        // SurfaceOffsetBetweenDirections(fineFrame, coarseDirection), for
-        // the morph target the vertex shader lerps the render position
-        // toward.
-        float cosineBack = clamp(dot(g_pc.fineUp.xyz, coarseDirection), -1.0, 1.0);
-        float angleBack = acos(cosineBack);
-        if (angleBack > 1.0e-6)
-        {
-            float3 tangentBack = coarseDirection - g_pc.fineUp.xyz * cosineBack;
-            float tangentBackLength = length(tangentBack);
-            if (tangentBackLength > 1.0e-6)
-            {
-                float3 tangentBackDirection = tangentBack / tangentBackLength;
-                float distanceBack = angleBack * radius;
-                morphTarget = float2(
-                    dot(tangentBackDirection, g_pc.fineEast.xyz) * distanceBack,
-                    dot(tangentBackDirection, g_pc.fineNorth.xyz) * distanceBack);
-            }
-        }
+        morphTarget = snappedCoarseOffset;
 
         float edgeDistance =
             max(abs(localOffsetMeters.x), abs(localOffsetMeters.y));
@@ -990,7 +975,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             sample = LerpFullSample(sample, coarseSample, morph);
 
             float2 coarseFineSlope = SampleFineSlope(
-                g_pc.coarseUp.xyz, g_pc.coarseEast.xyz, g_pc.coarseNorth.xyz, snappedCoarseOffset,
+                g_pc.fineUp.xyz, g_pc.fineEast.xyz, g_pc.fineNorth.xyz, snappedCoarseOffset,
                 fineFootprint, fineEpsilon, radius);
             fineSlope = lerp(fineSlope, coarseFineSlope, morph);
         }

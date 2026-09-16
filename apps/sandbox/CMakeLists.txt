@@ -9,12 +9,17 @@ target_link_libraries(OrbitSandbox
         Orbit::Core
         Orbit::DebugRender
         Orbit::DevServer
+        Orbit::Fields
         Orbit::Jobs
         Orbit::MapRender
         Orbit::Math
         Orbit::Platform
         Orbit::RhiVulkan
+        Orbit::RenderGraph
+        Orbit::RenderView
+        Orbit::Runtime
         Orbit::ShaderDxc
+        Orbit::Surface
         Orbit::Terrain
         Orbit::TerrainCache
         Orbit::TerrainRegion
@@ -23,6 +28,7 @@ target_link_libraries(OrbitSandbox
         Orbit::TerrainHydrology
         Orbit::TerrainRender
         Orbit::TerrainStream
+        Orbit::Universe
         Orbit::World
 )
 

@@ -38,13 +38,28 @@ ClipmapLayout BuildClipmapLayout(
             "Orbit terrain clipmap base spacing must be positive.");
     }
 
-    if (config.levelScale <= 1.0)
+    // This implementation uses the standard 2:1 geometry-clipmap hierarchy.
+    // Keeping the ratio fixed is what lets a finer border and its parent grid
+    // share exact lattice coordinates while the finer window scrolls
+    // toroidally. Supporting arbitrary ratios would require a different
+    // transition topology rather than silently accepting misaligned grids.
+    if (std::abs(config.levelScale - 2.0) >
+        1.0e-12)
     {
         throw std::invalid_argument(
-            "Orbit terrain clipmap level scale must be greater than one.");
+            "Orbit terrain clipmap level scale must be exactly 2.0.");
     }
 
     const u32 cellsPerAxis = config.gridResolution - 1U;
+
+    // With a 2:1 parent ratio, half the grid must contain an even number of
+    // fine cells so both +/- outer borders fall on parent-grid coordinates.
+    // Common clipmap sizes (9, 17, 33, 65, 129, ...) satisfy this 4k+1 rule.
+    if ((cellsPerAxis % 4U) != 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap grid resolution must be 4k+1 for 2:1 LOD alignment.");
+    }
     const u32 halfCells = cellsPerAxis / 2U;
 
     if (config.overlapCells == 0 ||
@@ -75,11 +90,18 @@ ClipmapLayout BuildClipmapLayout(
         const f64 overlapWidth =
             static_cast<f64>(config.overlapCells) * spacing;
 
+        // The parent ring starts only outside the complete finer patch.
+        // The finer level performs its geomorph inside its own outer band and
+        // reaches parent geometry at the outer edge. Keeping the coarse parent
+        // hidden beneath that whole patch avoids the overlapping coplanar
+        // surfaces that previously required "seam sinking" and produced large
+        // rectangular terraces. This mirrors the proven Godot quadtree handoff:
+        // once a child covers an area, its parent is not drawn underneath it.
         const f64 innerHoleHalfExtent =
             levelIndex == 0
                 ? 0.0
                 : layout.levels.back().
-                    morphStartHalfExtentMeters;
+                    outerHalfExtentMeters;
 
         const f64 morphStart =
             std::max(
@@ -124,15 +146,25 @@ f64 ClipmapOuterHalfExtentMeters(
             "Orbit terrain clipmap coverage requires a finite positive base spacing.");
     }
 
-    if (config.levelScale <= 1.0 ||
-        !std::isfinite(config.levelScale))
+    if (!std::isfinite(config.levelScale) ||
+        std::abs(config.levelScale - 2.0) >
+            1.0e-12)
     {
         throw std::invalid_argument(
-            "Orbit terrain clipmap coverage requires a finite level scale greater than one.");
+            "Orbit terrain clipmap coverage requires a 2:1 level scale.");
+    }
+
+    const u32 cellsPerAxis =
+        config.gridResolution - 1U;
+
+    if ((cellsPerAxis % 4U) != 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap coverage requires a 4k+1 grid resolution.");
     }
 
     const u32 halfCells =
-        (config.gridResolution - 1U) / 2U;
+        cellsPerAxis / 2U;
 
     const f64 coarsestSpacing =
         config.baseSpacingMeters *
@@ -304,5 +336,36 @@ f64 LodMorphFactor(
          level.morphStartHalfExtentMeters);
 
     return SmoothStep01(normalized);
+}
+
+bool ClipmapCellFullyInsideInnerHole(
+    const ClipmapLevel& level,
+    const f64 cellCenterXMeters,
+    const f64 cellCenterYMeters,
+    const f64 holeCenterXMeters,
+    const f64 holeCenterYMeters) noexcept
+{
+    if (level.innerHoleHalfExtentMeters <= 0.0 ||
+        level.sampleSpacingMeters <= 0.0)
+    {
+        return false;
+    }
+
+    const f64 halfCell =
+        level.sampleSpacingMeters * 0.5;
+
+    // Use <= intentionally: a cell whose outer edge lands exactly on the
+    // finer guaranteed-coverage boundary is safe to remove.
+    return
+        std::abs(
+            cellCenterXMeters -
+            holeCenterXMeters) +
+                halfCell <=
+            level.innerHoleHalfExtentMeters &&
+        std::abs(
+            cellCenterYMeters -
+            holeCenterYMeters) +
+                halfCell <=
+            level.innerHoleHalfExtentMeters;
 }
 } // namespace orbit::terrain_view

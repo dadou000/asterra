@@ -1,5 +1,7 @@
 add_library(OrbitPlatform STATIC
     src/windows/Win32CrashHandler.cpp
+    src/windows/Win32FileDialog.cpp
+    src/windows/Win32Paths.cpp
     src/windows/Win32Window.cpp
 )
 
@@ -18,6 +20,8 @@ target_link_libraries(OrbitPlatform
         dbghelp
         user32
         gdi32
+        ole32
+        shell32
 )
 
 target_compile_features(OrbitPlatform PUBLIC cxx_std_23)

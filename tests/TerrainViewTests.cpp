@@ -167,11 +167,11 @@ int main()
 
             if (!NearlyEqual(
                     level.innerHoleHalfExtentMeters,
-                    finer.morphStartHalfExtentMeters,
+                    finer.outerHalfExtentMeters,
                     1.0e-9))
             {
                 std::cerr
-                    << "Coarse clipmap ring does not begin at the finer morph band.\n";
+                    << "Coarse clipmap ring does not begin at the finer outer edge.\n";
                 return 1;
             }
 
@@ -181,6 +181,126 @@ int main()
                 std::cerr << "Clipmap extent did not grow with LOD.\n";
                 return 1;
             }
+        }
+    }
+
+    // The fine and coarse centers are independently snapped, so their relative
+    // phase can be half a coarse cell on either axis. A coarse cell may be
+    // removed only when the complete cell lies inside the finer guaranteed
+    // coverage. This is the coverage-first invariant used by the working Godot
+    // terrain handoff and prevents rectangular holes at clipmap boundaries.
+    {
+        const auto& coarse = layout.levels[1];
+        const orbit::f64 spacing =
+            coarse.sampleSpacingMeters;
+        const orbit::f64 halfCell =
+            spacing * 0.5;
+        const orbit::u32 cellsPerAxis =
+            coarse.gridResolution - 1U;
+
+        bool exercisedPartialCell = false;
+
+        // Include a deliberately off-phase quarter parent cell here to
+        // regression-test the conservative coverage predicate itself. Runtime
+        // clipmap centers are phase-locked below, so this is an adversarial
+        // geometry test rather than an expected steady-state phase.
+        for (const orbit::f64 phaseX :
+             {-halfCell * 0.5, 0.0, halfCell * 0.5})
+        {
+            for (const orbit::f64 phaseY :
+                 {-halfCell * 0.5, 0.0, halfCell * 0.5})
+            {
+                for (orbit::u32 y = 0;
+                     y < cellsPerAxis;
+                     ++y)
+                {
+                    for (orbit::u32 x = 0;
+                         x < cellsPerAxis;
+                         ++x)
+                    {
+                        const orbit::f64 centerX =
+                            (static_cast<orbit::f64>(x) +
+                             0.5 -
+                             static_cast<orbit::f64>(
+                                 cellsPerAxis) *
+                                 0.5) *
+                            spacing;
+
+                        const orbit::f64 centerY =
+                            (static_cast<orbit::f64>(y) +
+                             0.5 -
+                             static_cast<orbit::f64>(
+                                 cellsPerAxis) *
+                                 0.5) *
+                            spacing;
+
+                        const bool fullyCovered =
+                            orbit::terrain_view::
+                                ClipmapCellFullyInsideInnerHole(
+                                    coarse,
+                                    centerX,
+                                    centerY,
+                                    phaseX,
+                                    phaseY);
+
+                        const bool centerInside =
+                            std::abs(
+                                centerX -
+                                phaseX) <
+                                coarse.
+                                    innerHoleHalfExtentMeters &&
+                            std::abs(
+                                centerY -
+                                phaseY) <
+                                coarse.
+                                    innerHoleHalfExtentMeters;
+
+                        if (centerInside &&
+                            !fullyCovered)
+                        {
+                            exercisedPartialCell = true;
+                        }
+
+                        if (!fullyCovered)
+                        {
+                            continue;
+                        }
+
+                        const orbit::f64 farX =
+                            std::abs(
+                                centerX -
+                                phaseX) +
+                            halfCell;
+
+                        const orbit::f64 farY =
+                            std::abs(
+                                centerY -
+                                phaseY) +
+                            halfCell;
+
+                        if (farX >
+                                coarse.
+                                    innerHoleHalfExtentMeters +
+                                    1.0e-9 ||
+                            farY >
+                                coarse.
+                                    innerHoleHalfExtentMeters +
+                                    1.0e-9)
+                        {
+                            std::cerr
+                                << "Clipmap hole removed a coarse cell not fully covered by the finer level.\n";
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!exercisedPartialCell)
+        {
+            std::cerr
+                << "Clipmap coverage regression did not exercise a partial-cell boundary.\n";
+            return 1;
         }
     }
 
@@ -318,23 +438,26 @@ int main()
             };
         };
 
-    const auto subCell = tracker.Update(makeObserver(49.0));
+    // L0 is phase-locked to L1, so with a 2:1 LOD ratio its center moves
+    // in two-L0-cell increments. This keeps every L0 transition boundary on
+    // an L1 grid coordinate instead of alternating into a half-cell phase.
+    const auto subCell = tracker.Update(makeObserver(99.0));
 
     if (subCell.levels.front().cellShiftX != 0 ||
         subCell.levels.front().cellShiftY != 0)
     {
-        std::cerr << "Sub-cell observer motion moved the clipmap.\n";
+        std::cerr << "Sub-alignment observer motion moved the clipmap.\n";
         return 1;
     }
 
-    const auto oneCell = tracker.Update(makeObserver(51.0));
+    const auto oneCell = tracker.Update(makeObserver(101.0));
 
-    if (oneCell.levels[0].cellShiftX != 1 ||
+    if (oneCell.levels[0].cellShiftX != 2 ||
         oneCell.levels[0].cellShiftY != 0 ||
         oneCell.levels[0].fullRefresh)
     {
         std::cerr
-            << "Stable spherical lattice did not reuse a one-cell toroidal shift.\n";
+            << "Phase-locked spherical lattice did not reuse a two-cell toroidal shift.\n";
         return 1;
     }
 
@@ -375,7 +498,7 @@ int main()
         orbit::world::SurfaceOffsetBetweenDirections(
             planet,
             oneCell.levels[0].surfaceFrame,
-            orbit::math::Normalize(makeObserver(51.0).meters));
+            orbit::math::Normalize(makeObserver(101.0).meters));
 
     const orbit::math::Double2 observerFromSnappedCenter{
         observerFromAnchor.x -
@@ -384,8 +507,8 @@ int main()
             oneCell.levels[0].centerOffsetMeters.y
     };
 
-    if (std::abs(observerFromSnappedCenter.x) > 50.0 + 1.0e-6 ||
-        std::abs(observerFromSnappedCenter.y) > 50.0 + 1.0e-6)
+    if (std::abs(observerFromSnappedCenter.x) > 100.0 + 1.0e-6 ||
+        std::abs(observerFromSnappedCenter.y) > 100.0 + 1.0e-6)
     {
         std::cerr << "Clipmap snap did not keep observer within half a cell.\n";
         return 1;
@@ -404,7 +527,9 @@ int main()
     const orbit::math::Double2 retainedNewAbsoluteOffset{
         oneCell.levels[0].centerOffsetMeters.x +
             retainedOldOffset.x -
-            config.baseSpacingMeters,
+            static_cast<orbit::f64>(
+                oneCell.levels[0].cellShiftX) *
+                config.baseSpacingMeters,
         oneCell.levels[0].centerOffsetMeters.y +
             retainedOldOffset.y
     };
@@ -434,12 +559,102 @@ int main()
 
     const auto multiCell = tracker.Update(makeObserver(451.0));
 
-    if (std::abs(multiCell.levels[0].cellShiftX) < 3 ||
+    if (std::abs(multiCell.levels[0].cellShiftX) != 2 ||
         multiCell.levels[0].fullRefresh)
     {
         std::cerr
             << "Multi-cell clipmap jump did not stay on the toroidal fast path.\n";
         return 1;
+    }
+
+    // Every fine center must remain on its parent's lattice. This is the
+    // invariant that makes the fine morph edge and coarse hole use the same
+    // phase for every observer position.
+    for (orbit::u32 index = 0;
+         index + 1U < config.levelCount;
+         ++index)
+    {
+        const orbit::f64 parentSpacing =
+            layout.levels[index + 1U].
+                sampleSpacingMeters;
+
+        const orbit::f64 phaseX =
+            multiCell.levels[index].
+                centerOffsetMeters.x /
+            parentSpacing;
+
+        const orbit::f64 phaseY =
+            multiCell.levels[index].
+                centerOffsetMeters.y /
+            parentSpacing;
+
+        if (std::abs(
+                phaseX -
+                std::round(phaseX)) >
+                1.0e-9 ||
+            std::abs(
+                phaseY -
+                std::round(phaseY)) >
+                1.0e-9)
+        {
+            std::cerr
+                << "Clipmap child center lost parent-grid phase alignment.\n";
+            return 1;
+        }
+    }
+
+    // The complete finer-patch border must also land on parent grid lines.
+    // This is what lets the fine edge morph to the parent and the parent ring
+    // begin immediately outside it without skirts, overlap, or a half-cell gap.
+    for (orbit::u32 fineIndex = 0;
+         fineIndex + 1U < config.levelCount;
+         ++fineIndex)
+    {
+        const orbit::u32 coarseIndex =
+            fineIndex + 1U;
+
+        const orbit::f64 coarseSpacing =
+            layout.levels[coarseIndex].
+                sampleSpacingMeters;
+
+        const orbit::f64 halfExtent =
+            layout.levels[fineIndex].
+                outerHalfExtentMeters;
+
+        const orbit::math::Double2 centerDelta{
+            multiCell.levels[fineIndex].
+                    centerOffsetMeters.x -
+                multiCell.levels[coarseIndex].
+                    centerOffsetMeters.x,
+            multiCell.levels[fineIndex].
+                    centerOffsetMeters.y -
+                multiCell.levels[coarseIndex].
+                    centerOffsetMeters.y
+        };
+
+        for (const orbit::f64 edge :
+             {
+                 centerDelta.x - halfExtent,
+                 centerDelta.x + halfExtent,
+                 centerDelta.y - halfExtent,
+                 centerDelta.y + halfExtent
+             })
+        {
+            const orbit::f64 coarseCoordinate =
+                edge /
+                coarseSpacing;
+
+            if (std::abs(
+                    coarseCoordinate -
+                    std::round(
+                        coarseCoordinate)) >
+                1.0e-9)
+            {
+                std::cerr
+                    << "Finer clipmap border is not aligned to the parent grid.\n";
+                return 1;
+            }
+        }
     }
 
     const auto rebased =

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Orbit
-    VERSION 0.0.2
+    VERSION 0.0.3
     DESCRIPTION "Orbit - custom engine for Asterra"
     LANGUAGES CXX
 )
@@ -18,10 +18,13 @@ option(ORBIT_WARNINGS_AS_ERRORS "Treat Orbit warnings as errors" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(OrbitWarnings)
+include(OrbitDependencies)
 include(CTest)
 
 add_subdirectory(engine)
 add_subdirectory(apps/sandbox)
+add_subdirectory(apps/editor)
+add_subdirectory(apps/build)
 add_subdirectory(apps/launcher)
 
 if(BUILD_TESTING)

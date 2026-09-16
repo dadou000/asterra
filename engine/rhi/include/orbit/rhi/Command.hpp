@@ -106,6 +106,14 @@ public:
         u64 sourceOffsetBytes,
         Texture& destination) = 0;
 
+    // Copies the complete texture into a tightly packed host/readback
+    // buffer. The source must be in CopySource and the destination in
+    // CopyDestination. RGBA8 is currently the supported readback format.
+    virtual void CopyTextureToBuffer(
+        Texture& source,
+        Buffer& destination,
+        u64 destinationOffsetBytes = 0) = 0;
+
     virtual void ClearColorTarget(
         Texture& texture,
         const ClearColor& color) = 0;

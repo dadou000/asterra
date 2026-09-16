@@ -701,3 +701,237 @@ set_tests_properties(
     PROPERTIES
         LABELS "gpu"
 )
+
+
+add_executable(OrbitTimeAndIdTests
+    TimeAndIdTests.cpp
+)
+
+target_link_libraries(OrbitTimeAndIdTests
+    PRIVATE
+        Orbit::Core
+        Orbit::Time
+)
+
+target_compile_features(OrbitTimeAndIdTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTimeAndIdTests)
+
+add_test(
+    NAME Orbit.TimeAndIds
+    COMMAND OrbitTimeAndIdTests
+)
+
+
+add_executable(OrbitFrameGraphTests
+    FrameGraphTests.cpp
+)
+
+target_link_libraries(OrbitFrameGraphTests
+    PRIVATE
+        Orbit::Frames
+)
+
+target_compile_features(OrbitFrameGraphTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitFrameGraphTests)
+
+add_test(
+    NAME Orbit.FrameGraph
+    COMMAND OrbitFrameGraphTests
+)
+
+
+add_executable(OrbitBodyRegistryTests
+    BodyRegistryTests.cpp
+)
+
+target_link_libraries(OrbitBodyRegistryTests
+    PRIVATE
+        Orbit::Universe
+)
+
+target_compile_features(OrbitBodyRegistryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitBodyRegistryTests)
+
+add_test(
+    NAME Orbit.BodyRegistry
+    COMMAND OrbitBodyRegistryTests
+)
+
+
+add_executable(OrbitSurfaceRegistryTests
+    SurfaceRegistryTests.cpp
+)
+
+target_link_libraries(OrbitSurfaceRegistryTests
+    PRIVATE
+        Orbit::Surface
+)
+
+target_compile_features(OrbitSurfaceRegistryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitSurfaceRegistryTests)
+
+add_test(
+    NAME Orbit.SurfaceRegistry
+    COMMAND OrbitSurfaceRegistryTests
+)
+
+
+add_executable(OrbitFieldRegistryTests
+    FieldRegistryTests.cpp
+)
+
+target_link_libraries(OrbitFieldRegistryTests
+    PRIVATE
+        Orbit::Fields
+)
+
+target_compile_features(OrbitFieldRegistryTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitFieldRegistryTests)
+
+add_test(
+    NAME Orbit.FieldRegistry
+    COMMAND OrbitFieldRegistryTests
+)
+
+
+add_executable(OrbitProceduralGraphTests
+    ProceduralGraphTests.cpp
+)
+
+target_link_libraries(OrbitProceduralGraphTests
+    PRIVATE
+        Orbit::ProceduralGraph
+)
+
+target_compile_features(OrbitProceduralGraphTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitProceduralGraphTests)
+
+add_test(
+    NAME Orbit.ProceduralGraph
+    COMMAND OrbitProceduralGraphTests
+)
+
+
+add_executable(OrbitDocumentsTests
+    DocumentsTests.cpp
+)
+
+target_link_libraries(OrbitDocumentsTests
+    PRIVATE
+        Orbit::Documents
+        SQLiteCpp
+)
+
+target_compile_features(OrbitDocumentsTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitDocumentsTests)
+
+add_test(
+    NAME Orbit.Documents
+    COMMAND OrbitDocumentsTests
+)
+
+
+add_executable(OrbitAuthoringModelTests
+    AuthoringModelTests.cpp
+)
+
+target_link_libraries(OrbitAuthoringModelTests
+    PRIVATE
+        Orbit::Commands
+        Orbit::Documents
+        Orbit::Scene
+        Orbit::Schema
+        Orbit::Selection
+)
+
+target_compile_features(OrbitAuthoringModelTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitAuthoringModelTests)
+
+add_test(
+    NAME Orbit.AuthoringModel
+    COMMAND OrbitAuthoringModelTests
+)
+
+
+add_executable(OrbitRenderGraphTests
+    RenderGraphTests.cpp
+)
+
+target_link_libraries(OrbitRenderGraphTests
+    PRIVATE
+        Orbit::RenderGraph
+        Orbit::RenderView
+)
+
+target_compile_features(OrbitRenderGraphTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRenderGraphTests)
+
+add_test(
+    NAME Orbit.RenderGraph
+    COMMAND OrbitRenderGraphTests
+)
+
+
+add_executable(OrbitEditorModelTests
+    EditorModelTests.cpp
+)
+
+target_link_libraries(OrbitEditorModelTests
+    PRIVATE
+        Orbit::Core
+        Orbit::EditorModel
+)
+
+target_compile_features(OrbitEditorModelTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitEditorModelTests)
+
+add_test(
+    NAME Orbit.EditorModel
+    COMMAND OrbitEditorModelTests
+)
+
+
+add_executable(OrbitExplorerInspectorTests
+    ExplorerInspectorTests.cpp
+)
+
+target_link_libraries(OrbitExplorerInspectorTests
+    PRIVATE
+        Orbit::Commands
+        Orbit::Documents
+        Orbit::EditorModel
+        Orbit::Scene
+        Orbit::Schema
+        Orbit::Selection
+)
+
+target_compile_features(OrbitExplorerInspectorTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitExplorerInspectorTests)
+
+add_test(
+    NAME Orbit.ExplorerInspector
+    COMMAND OrbitExplorerInspectorTests
+)
+
+
+add_executable(OrbitCommandSurfaceTests
+    CommandSurfaceTests.cpp
+)
+
+target_link_libraries(OrbitCommandSurfaceTests
+    PRIVATE
+        Orbit::Commands
+        Orbit::Documents
+        Orbit::EditorModel
+        Orbit::Scene
+        Orbit::Schema
+        Orbit::Selection
+)
+
+target_compile_features(OrbitCommandSurfaceTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitCommandSurfaceTests)
+
+add_test(
+    NAME Orbit.CommandSurfaces
+    COMMAND OrbitCommandSurfaceTests
+)

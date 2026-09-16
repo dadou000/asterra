@@ -189,7 +189,7 @@ MemoryUsage VulkanBuffer::Memory() const noexcept
 
 std::byte* VulkanBuffer::Map()
 {
-    if (desc_.memory != MemoryUsage::HostVisible)
+    if (desc_.memory == MemoryUsage::GpuOnly)
     {
         throw std::runtime_error(
             "Orbit cannot map a GPU-only Vulkan buffer.");
@@ -206,6 +206,23 @@ std::byte* VulkanBuffer::Map()
     {
         throw std::runtime_error(
             "Orbit failed to map a Vulkan buffer.");
+    }
+
+    if (desc_.memory == MemoryUsage::HostReadback)
+    {
+        if (vmaInvalidateAllocation(
+                allocator_,
+                allocation_,
+                0,
+                VK_WHOLE_SIZE) !=
+            VK_SUCCESS)
+        {
+            vmaUnmapMemory(
+                allocator_,
+                allocation_);
+            throw std::runtime_error(
+                "Orbit failed to invalidate a Vulkan readback buffer.");
+        }
     }
 
     mapped_ = true;
@@ -343,6 +360,13 @@ std::unique_ptr<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc)
         allocationCreateInfo.flags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     }
+    else if (desc.memory == MemoryUsage::HostReadback)
+    {
+        allocationCreateInfo.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        allocationCreateInfo.usage =
+            VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    }
 
     VkBuffer nativeBuffer = VK_NULL_HANDLE;
     VmaAllocation allocation = nullptr;
@@ -396,6 +420,7 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
              ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
              : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
         VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+        VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
         VK_IMAGE_USAGE_SAMPLED_BIT;
 
     // Opt-in, unlike the above: storage-image support isn't universally

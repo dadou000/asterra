@@ -24,7 +24,11 @@ enum class ResourceState : u8
 enum class MemoryUsage : u8
 {
     GpuOnly,
-    HostVisible
+    HostVisible,
+    // CPU-readable staging memory for GPU -> host transfers. Mapping a
+    // readback buffer invalidates non-coherent Vulkan memory before the
+    // pointer is returned.
+    HostReadback
 };
 
 enum class BufferUsage : u8

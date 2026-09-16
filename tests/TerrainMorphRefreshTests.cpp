@@ -152,6 +152,12 @@ bool RunMovementRegression()
                 std::cerr << "Small moves should preserve the unaffected interior.\n";
                 return false;
             }
+            if (step == 11 && index == 0 && touchedCount != 0)
+            {
+                std::cerr
+                    << "Parent-only clipmap motion unnecessarily resampled the stable child lattice.\n";
+                return false;
+            }
             if (step == 12 && touchedCount != 0)
             {
                 std::cerr << "Stationary clipmaps should not resample.\n";

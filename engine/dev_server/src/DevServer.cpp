@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <format>
 #include <sstream>
 #include <unordered_map>
@@ -39,7 +40,9 @@ class DevServer::Impl
 public:
     explicit Impl(
         const DevServerConfig& config)
-        : port_(config.port)
+        : port_(config.port),
+          maxMessageBytes_(
+              config.maxMessageBytes)
     {
         WSADATA wsaData{};
 
@@ -151,6 +154,13 @@ public:
             std::move(handler);
     }
 
+    void SetMessageHandler(
+        DevServer::MessageHandler handler)
+    {
+        messageHandler_ =
+            std::move(handler);
+    }
+
     void Poll()
     {
         if (listenSocket_ ==
@@ -161,6 +171,20 @@ public:
 
         AcceptPendingClient();
         ReceiveAndDispatch();
+        FlushOutgoing();
+    }
+
+    [[nodiscard]] bool SendServerMessage(
+        const std::string_view message)
+    {
+        if (clientSocket_ ==
+            INVALID_SOCKET)
+        {
+            return false;
+        }
+
+        SendLine(message);
+        return true;
     }
 
     [[nodiscard]] bool Listening()
@@ -222,6 +246,7 @@ private:
 
         clientSocket_ = accepted;
         receiveBuffer_.clear();
+        sendBuffer_.clear();
 
         orbit::log::Info(
             "Orbit dev server client connected.");
@@ -251,6 +276,15 @@ private:
                 static_cast<
                     std::size_t>(
                     received));
+
+            if (receiveBuffer_.size() >
+                maxMessageBytes_)
+            {
+                orbit::log::Warning(
+                    "Orbit dev server disconnected a client after an oversized message.");
+                DisconnectClient();
+                return;
+            }
 
             DispatchCompleteLines();
             return;
@@ -295,6 +329,29 @@ private:
 
             if (line.empty())
             {
+                continue;
+            }
+
+            if (messageHandler_)
+            {
+                try
+                {
+                    if (auto response =
+                            messageHandler_(line);
+                        response.has_value())
+                    {
+                        SendLine(*response);
+                    }
+                }
+                catch (const std::exception&
+                           exception)
+                {
+                    orbit::log::Warning(
+                        std::format(
+                            "Orbit dev server message handler failed: {}",
+                            exception.what()));
+                }
+
                 continue;
             }
 
@@ -348,7 +405,7 @@ private:
     }
 
     void SendLine(
-        const std::string& text)
+        const std::string_view text)
     {
         if (clientSocket_ ==
             INVALID_SOCKET)
@@ -356,15 +413,54 @@ private:
             return;
         }
 
-        std::string payload = text;
-        payload.push_back('\n');
+        sendBuffer_.append(
+            text.data(),
+            text.size());
+        sendBuffer_.push_back('\n');
+        FlushOutgoing();
+    }
 
-        send(
-            clientSocket_,
-            payload.data(),
-            static_cast<int>(
-                payload.size()),
-            0);
+    void FlushOutgoing()
+    {
+        if (clientSocket_ ==
+                INVALID_SOCKET ||
+            sendBuffer_.empty())
+        {
+            return;
+        }
+
+        while (!sendBuffer_.empty())
+        {
+            const int sent =
+                send(
+                    clientSocket_,
+                    sendBuffer_.data(),
+                    static_cast<int>(
+                        (std::min)(
+                            sendBuffer_.size(),
+                            static_cast<std::size_t>(
+                                INT_MAX))),
+                    0);
+
+            if (sent > 0)
+            {
+                sendBuffer_.erase(
+                    0,
+                    static_cast<std::size_t>(
+                        sent));
+                continue;
+            }
+
+            if (sent == SOCKET_ERROR &&
+                WSAGetLastError() ==
+                    WSAEWOULDBLOCK)
+            {
+                return;
+            }
+
+            DisconnectClient();
+            return;
+        }
     }
 
     void DisconnectClient()
@@ -377,6 +473,8 @@ private:
 
             clientSocket_ =
                 INVALID_SOCKET;
+            receiveBuffer_.clear();
+            sendBuffer_.clear();
 
             orbit::log::Info(
                 "Orbit dev server client disconnected.");
@@ -384,15 +482,19 @@ private:
     }
 
     u16 port_;
+    std::size_t maxMessageBytes_;
     bool wsaInitialized_{false};
     SOCKET listenSocket_{INVALID_SOCKET};
     SOCKET clientSocket_{INVALID_SOCKET};
     std::string receiveBuffer_;
+    std::string sendBuffer_;
 
     std::unordered_map<
         std::string,
         DevServer::CommandHandler>
         handlers_;
+    DevServer::MessageHandler
+        messageHandler_;
 };
 
 DevServer::DevServer(
@@ -412,6 +514,20 @@ void DevServer::RegisterCommand(
     impl_->RegisterCommand(
         std::move(name),
         std::move(handler));
+}
+
+void DevServer::SetMessageHandler(
+    MessageHandler handler)
+{
+    impl_->SetMessageHandler(
+        std::move(handler));
+}
+
+bool DevServer::SendServerMessage(
+    const std::string_view message)
+{
+    return impl_->SendServerMessage(
+        message);
 }
 
 void DevServer::Poll()

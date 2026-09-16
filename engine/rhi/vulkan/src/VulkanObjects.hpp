@@ -397,6 +397,11 @@ public:
         u64 sourceOffsetBytes,
         Texture& destination) override;
 
+    void CopyTextureToBuffer(
+        Texture& source,
+        Buffer& destination,
+        u64 destinationOffsetBytes) override;
+
     void ClearColorTarget(
         Texture& texture,
         const ClearColor& color) override;

@@ -73,4 +73,21 @@ struct ClipmapLayout
 [[nodiscard]] f64 LodMorphFactor(
     const ClipmapLevel& level,
     f64 maxAbsOffsetMeters) noexcept;
+
+/**
+ * Returns true only when an entire coarse clipmap cell is contained by the
+ * finer level's guaranteed inner coverage.
+ *
+ * The finer/coarser centers can differ by half a coarse cell. Culling from the
+ * cell center alone can therefore remove a coarse cell whose outer half is not
+ * covered by the finer level, producing rectangular cracks. This coverage-first
+ * rule mirrors Asterra's proven Godot terrain handoff: the parent is removed
+ * only after the child fully covers the region.
+ */
+[[nodiscard]] bool ClipmapCellFullyInsideInnerHole(
+    const ClipmapLevel& level,
+    f64 cellCenterXMeters,
+    f64 cellCenterYMeters,
+    f64 holeCenterXMeters,
+    f64 holeCenterYMeters) noexcept;
 } // namespace orbit::terrain_view

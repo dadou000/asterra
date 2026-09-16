@@ -116,21 +116,36 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         motion.levelIndex = index;
         motion.surfaceFrame = latticeFrame_;
 
+        // Keep each level phase-locked to its parent lattice. A finer level
+        // therefore recenters in whole parent-cell increments (two of its own
+        // cells for the normal 2:1 clipmap ratio). This is the same structural
+        // invariant the working Godot quadtree gets naturally: child borders
+        // always land on parent-grid coordinates instead of alternating between
+        // aligned and half-cell phases as the observer moves.
+        const f64 alignmentSpacingMeters =
+            index + 1U < layout.levels.size()
+                ? layout.levels[index + 1U].
+                    sampleSpacingMeters
+                : level.sampleSpacingMeters;
+
+        const math::Double2 desiredCenterOffsetMeters{
+            std::round(
+                observerOffset.x /
+                alignmentSpacingMeters) *
+                alignmentSpacingMeters,
+            std::round(
+                observerOffset.y /
+                alignmentSpacingMeters) *
+                alignmentSpacingMeters
+        };
+
         if (!state.initialized)
         {
             state.initialized = true;
             state.samplesInvalidated = false;
 
-            state.centerOffsetMeters = {
-                std::round(
-                    observerOffset.x /
-                    level.sampleSpacingMeters) *
-                    level.sampleSpacingMeters,
-                std::round(
-                    observerOffset.y /
-                    level.sampleSpacingMeters) *
-                    level.sampleSpacingMeters
-            };
+            state.centerOffsetMeters =
+                desiredCenterOffsetMeters;
 
             state.centerDirection =
                 world::DirectionAtSurfaceOffset(
@@ -151,9 +166,9 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         if (!rebase)
         {
             const math::Double2 delta{
-                observerOffset.x -
+                desiredCenterOffsetMeters.x -
                     state.centerOffsetMeters.x,
-                observerOffset.y -
+                desiredCenterOffsetMeters.y -
                     state.centerOffsetMeters.y
             };
 
@@ -172,13 +187,11 @@ ClipmapMotionUpdate ClipmapTracker::Update(
             motion.cellShiftX = shiftX;
             motion.cellShiftY = shiftY;
 
-            state.centerOffsetMeters.x +=
-                static_cast<f64>(shiftX) *
-                level.sampleSpacingMeters;
-
-            state.centerOffsetMeters.y +=
-                static_cast<f64>(shiftY) *
-                level.sampleSpacingMeters;
+            // Assign the snapped target directly instead of accumulating the
+            // rounded cell delta. That prevents long-run floating point drift
+            // from ever breaking the parent/child phase lock.
+            state.centerOffsetMeters =
+                desiredCenterOffsetMeters;
 
             state.centerDirection =
                 world::DirectionAtSurfaceOffset(

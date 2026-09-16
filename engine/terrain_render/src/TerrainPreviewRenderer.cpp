@@ -491,49 +491,19 @@ VSOutput main(uint vertexId : SV_VertexID)
             g_pc.g_morph.y,
             g_pc.g_debug.w);
 
-    // The coarse ring overlaps the finer patch. Sink only the innermost
-    // coarse cell under that overlap, then fade smoothly back to the true
-    // surface. This prevents z-fighting/tiny raster cracks without changing
-    // the authoritative terrain or creating a visible broad depression.
-    float seamSinkMeters = 0.0;
-
-    if (innerHoleHalfExtentMeters > 0.0)
-    {
-        const float holeDistance =
-            max(
-                abs(
-                    localOffsetMeters.x -
-                    innerHoleCenterOffsetMeters.x),
-                abs(
-                    localOffsetMeters.y -
-                    innerHoleCenterOffsetMeters.y));
-
-        const float seamT =
-            saturate(
-                (holeDistance -
-                 innerHoleHalfExtentMeters) /
-                max(spacing, 0.0001));
-
-        const float seamWeight =
-            1.0 -
-            seamT * seamT *
-                (3.0 - 2.0 * seamT);
-
-        seamSinkMeters =
-            min(
-                spacing * 0.05,
-                8.0) *
-            seamWeight;
-    }
-
+    // Do not alter terrain height to hide LOD seams. The previous implementation
+    // physically sank the innermost coarse row by up to 8 m; when several LODs
+    // were visible together this produced the large rectangular terraces/walls
+    // seen in motion. Asterra's Godot terrain solved the same handoff by keeping
+    // the parent until the child fully covered it and morphing geometry onto the
+    // parent lattice. Orbit now follows that coverage-first rule below instead.
     const float3 surfaceDirection =
         SurfaceDirectionForOffset(
             offsetMeters,
             planetRadius);
 
     const float displacedElevation =
-        elevation -
-        seamSinkMeters;
+        elevation;
 
     const float displacedRadius =
         planetRadius +
@@ -751,10 +721,13 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.horizonClip = -1.0;
     }
 
-    // Reject complete hole cells explicitly through the existing clip
-    // distance instead of manufacturing a homogeneous (0,0,0,0) vertex.
-    // The cell-center predicate is shared by all six invocations for a cell,
-    // so no triangle is partially clipped by this hole test.
+    // Coverage-first parent removal. Finer and coarser centers can differ by
+    // half a coarse cell, so testing only the coarse cell center can discard a
+    // cell that is not fully covered by the finer patch and leave a rectangular
+    // crack. Remove a coarse cell only when all four of its corners are inside
+    // the finer level's guaranteed inner coverage. This is the clipmap form of
+    // the proven Godot Asterra rule: never hide the parent before the child
+    // covers the whole region.
     const float cellCenterX =
         ((float)cellX +
          0.5 -
@@ -769,16 +742,21 @@ VSOutput main(uint vertexId : SV_VertexID)
              0.5) *
         spacing;
 
+    const float halfCell =
+        spacing * 0.5;
+
     const bool insideHole =
         innerHoleHalfExtentMeters >
             0.0 &&
         abs(
             cellCenterX -
-            innerHoleCenterOffsetMeters.x) <
+            innerHoleCenterOffsetMeters.x) +
+                halfCell <=
             innerHoleHalfExtentMeters &&
         abs(
             cellCenterY -
-            innerHoleCenterOffsetMeters.y) <
+            innerHoleCenterOffsetMeters.y) +
+                halfCell <=
             innerHoleHalfExtentMeters;
 
     if (insideHole)

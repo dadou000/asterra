@@ -30,13 +30,16 @@ jobs:
           "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Validate MCP adapters
+        run: python -m py_compile tools/mcp_server/orbit_mcp_server.py tools/mcp_server/orbit_editor_mcp_server.py
+
       - name: Configure
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
-      - name: Build terrain clipmap regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender
+      - name: Build terrain and path regression targets
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests
 
-      - name: Run terrain clipmap regression tests
+      - name: Run terrain and path regression tests
         shell: pwsh
         run: |
           & "build/tests/Release/OrbitTerrainViewTests.exe"
@@ -47,6 +50,21 @@ jobs:
           & "build/tests/Release/OrbitTerrainMorphRefreshTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitTerrainMorphRefreshTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/path_geometry/Release/OrbitPathGeometryTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitPathGeometryTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/path_geometry/Release/OrbitPathSourceTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitPathSourceTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/build/Release/OrbitBuildServiceTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitBuildServiceTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Build
@@ -63,12 +81,19 @@ jobs:
         run: |
           $package = "dist/Orbit-Windows-Release"
           $symbols = "$package/symbols"
+          $mcp = "$package/tools/mcp_server"
 
           New-Item -ItemType Directory -Force -Path $package | Out-Null
           New-Item -ItemType Directory -Force -Path $symbols | Out-Null
+          New-Item -ItemType Directory -Force -Path $mcp | Out-Null
 
           Copy-Item "build/apps/launcher/Release/OrbitLauncher.exe" "$package/OrbitLauncher.exe"
           Copy-Item "build/apps/sandbox/Release/OrbitSandbox.exe" "$package/OrbitSandbox.exe"
+          Copy-Item "build/apps/editor/Release/OrbitStudio.exe" "$package/OrbitStudio.exe"
+          Copy-Item "build/apps/build/Release/OrbitBuild.exe" "$package/OrbitBuild.exe"
+          Copy-Item "tools/mcp_server/orbit_mcp_server.py" "$mcp/orbit_mcp_server.py"
+          Copy-Item "tools/mcp_server/orbit_editor_mcp_server.py" "$mcp/orbit_editor_mcp_server.py"
+          Copy-Item "tools/mcp_server/requirements.txt" "$mcp/requirements.txt"
 
           if (Test-Path "build/apps/launcher/Release/OrbitLauncher.pdb") {
             Copy-Item "build/apps/launcher/Release/OrbitLauncher.pdb" "$symbols/OrbitLauncher.pdb"
@@ -78,12 +103,31 @@ jobs:
             Copy-Item "build/apps/sandbox/Release/OrbitSandbox.pdb" "$symbols/OrbitSandbox.pdb"
           }
 
+          if (Test-Path "build/apps/editor/Release/OrbitStudio.pdb") {
+            Copy-Item "build/apps/editor/Release/OrbitStudio.pdb" "$symbols/OrbitStudio.pdb"
+          }
+
+          if (Test-Path "build/apps/build/Release/OrbitBuild.pdb") {
+            Copy-Item "build/apps/build/Release/OrbitBuild.pdb" "$symbols/OrbitBuild.pdb"
+          }
+
           @"
           Orbit Windows Release
           =====================
 
-          Start Orbit with:
+          Start the terrain/runtime sandbox with:
               OrbitLauncher.exe
+
+          Start the authoring environment with:
+              OrbitStudio.exe [project-directory-or-Project.orbit.toml]
+
+          Validate/cook an Orbit project headlessly with:
+              OrbitBuild.exe <project-directory-or-Project.orbit.toml> --validate
+              OrbitBuild.exe <project-directory-or-Project.orbit.toml> --cook
+
+          Orbit Studio structured automation:
+              JSON-RPC 2.0: 127.0.0.1:4320
+              MCP adapter: tools/mcp_server/orbit_editor_mcp_server.py
 
           The launcher starts OrbitSandbox.exe and writes runtime logs to:
               logs/
