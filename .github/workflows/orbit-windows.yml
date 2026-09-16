@@ -37,7 +37,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build terrain and path regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests
 
       - name: Run terrain and path regression tests
         shell: pwsh
@@ -70,6 +70,11 @@ jobs:
           & "build/engine/runtime_project/Release/OrbitRuntimeProjectTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitRuntimeProjectTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/apps/build/Release/OrbitBuildCliTests.exe" "build/apps/build/Release/OrbitBuild.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitBuildCliTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Build
