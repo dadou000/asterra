@@ -1,5 +1,6 @@
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
+#include <orbit/content/ContentService.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
@@ -14,6 +15,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/platform/Paths.hpp>
+#include <orbit/plugins/PluginManager.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
