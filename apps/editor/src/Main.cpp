@@ -1159,6 +1159,327 @@ int main(
         std::optional<orbit::scene::ObjectId>
             lastPlacedPathNode;
 
+        orbit::jobs::JobSystem routeJobs;
+        orbit::path_routing::RoutePlanner
+            routePlanner(
+                routeJobs,
+                frames,
+                bodies);
+
+        std::unordered_set<
+            orbit::scene::ObjectId>
+            knownRoutedEdges;
+        std::unordered_map<
+            orbit::scene::ObjectId,
+            orbit::u64>
+            publishedRouteGeneration;
+
+        orbit::u64 routedObjectRevision =
+            ~orbit::u64{0};
+        orbit::u64 routedContentRevision =
+            ~orbit::u64{0};
+
+        const auto requestRoutedPaths =
+            [&]
+            {
+                orbit::paths::PathNetworkService
+                    pathService(
+                        objects,
+                        commandService);
+
+                const auto routedEdges =
+                    FindRoutedPathEdges(
+                        objects,
+                        pathService);
+
+                std::unordered_set<
+                    orbit::scene::ObjectId>
+                    liveEdges(
+                        routedEdges.begin(),
+                        routedEdges.end());
+
+                for (const auto edge :
+                     knownRoutedEdges)
+                {
+                    if (!liveEdges.
+                            contains(edge))
+                    {
+                        routePlanner.Erase(edge);
+                        publishedRouteGeneration.
+                            erase(edge);
+                    }
+                }
+
+                for (const auto edgeId :
+                     routedEdges)
+                {
+                    try
+                    {
+                        const auto edge =
+                            pathService.FindEdge(
+                                edgeId);
+
+                        if (!edge.has_value())
+                        {
+                            continue;
+                        }
+
+                        const auto start =
+                            pathService.FindNode(
+                                edge->startNode);
+                        const auto end =
+                            pathService.FindNode(
+                                edge->endNode);
+
+                        if (!start.has_value() ||
+                            !end.has_value())
+                        {
+                            throw std::runtime_error(
+                                "Routed edge has an invalid endpoint.");
+                        }
+
+                        const auto resolvedProfile =
+                            ResolveRoutingProfile(
+                                *edge,
+                                pathService,
+                                content,
+                                project.
+                                    RootDirectory());
+
+                        orbit::path_routing::
+                            RouteEnvironment
+                                environment;
+
+                        environment.search =
+                            RouteSearchForProfile(
+                                resolvedProfile.
+                                    profile);
+
+                        const auto* startSurface =
+                            std::get_if<
+                                orbit::paths::
+                                    SurfaceAnchor>(
+                                        &start->
+                                            anchor);
+                        const auto* endSurface =
+                            std::get_if<
+                                orbit::paths::
+                                    SurfaceAnchor>(
+                                        &end->
+                                            anchor);
+
+                        if (startSurface !=
+                                nullptr &&
+                            endSurface !=
+                                nullptr &&
+                            startSurface->body ==
+                                endSurface->body)
+                        {
+                            const auto* routeBody =
+                                bodies.FindBody(
+                                    startSurface->
+                                        body);
+
+                            if (routeBody ==
+                                nullptr)
+                            {
+                                throw std::runtime_error(
+                                    "Routed surface edge references an unknown runtime body.");
+                            }
+
+                            environment =
+                                orbit::path_routing::
+                                    MakeReferenceSurfaceEnvironment(
+                                        startSurface->
+                                            body,
+                                        routeBody->
+                                            frame,
+                                        {},
+                                        frames,
+                                        bodies,
+                                        RouteSearchForProfile(
+                                            resolvedProfile.
+                                                profile));
+                        }
+
+                        static_cast<void>(
+                            routePlanner.Request({
+                                .edge = *edge,
+                                .startNode =
+                                    *start,
+                                .endNode =
+                                    *end,
+                                .profile =
+                                    resolvedProfile.
+                                        profile,
+                                .profileRevision =
+                                    resolvedProfile.
+                                        revision,
+                                .environment =
+                                    std::move(
+                                        environment)
+                            }));
+                    }
+                    catch (const std::exception&
+                               exception)
+                    {
+                        routePlanner.Erase(
+                            edgeId);
+
+                        orbit::log::Warning(
+                            std::format(
+                                "Route '{}': {}",
+                                edgeId.ToString(),
+                                exception.what()));
+                    }
+                }
+
+                knownRoutedEdges =
+                    std::move(liveEdges);
+                routedObjectRevision =
+                    objects.Revision();
+                routedContentRevision =
+                    content.Revision();
+            };
+
+        const auto pollRoutedPaths =
+            [&]
+            {
+                if (objects.Revision() !=
+                        routedObjectRevision ||
+                    content.Revision() !=
+                        routedContentRevision)
+                {
+                    requestRoutedPaths();
+                }
+
+                routePlanner.Poll();
+
+                for (const auto edge :
+                     knownRoutedEdges)
+                {
+                    const auto status =
+                        routePlanner.Status(edge);
+
+                    if (!status.has_value())
+                    {
+                        continue;
+                    }
+
+                    const auto published =
+                        publishedRouteGeneration.
+                            find(edge);
+
+                    if (published !=
+                            publishedRouteGeneration.
+                                end() &&
+                        published->second ==
+                            status->generation)
+                    {
+                        continue;
+                    }
+
+                    if (status->state ==
+                        orbit::path_routing::
+                            RouteState::Ready)
+                    {
+                        const auto* result =
+                            routePlanner.Result(edge);
+
+                        if (result == nullptr)
+                        {
+                            continue;
+                        }
+
+                        publishedRouteGeneration[
+                            edge] =
+                                status->
+                                    generation;
+
+                        editorRpc.PublishEvent(
+                            "path.route_ready",
+                            orbit::rpc::Value(
+                                orbit::rpc::Value::Object{
+                                    {
+                                        "edge",
+                                        edge.ToString()
+                                    },
+                                    {
+                                        "generation",
+                                        static_cast<
+                                            orbit::i64>(
+                                                status->
+                                                    generation)
+                                    },
+                                    {
+                                        "revision",
+                                        static_cast<
+                                            orbit::i64>(
+                                                status->
+                                                    committedRevision)
+                                    },
+                                    {
+                                        "points",
+                                        static_cast<
+                                            orbit::i64>(
+                                                result->
+                                                    points.
+                                                    size())
+                                    },
+                                    {
+                                        "total_cost",
+                                        result->
+                                            totalCost
+                                    },
+                                    {
+                                        "cross_frame",
+                                        result->
+                                            crossFrameEndpoints
+                                    }
+                                }));
+                    }
+                    else if (
+                        status->state ==
+                            orbit::path_routing::
+                                RouteState::Failed)
+                    {
+                        publishedRouteGeneration[
+                            edge] =
+                                status->
+                                    generation;
+
+                        orbit::log::Warning(
+                            std::format(
+                                "Route '{}' failed: {}",
+                                edge.ToString(),
+                                status->error));
+
+                        editorRpc.PublishEvent(
+                            "path.route_failed",
+                            orbit::rpc::Value(
+                                orbit::rpc::Value::Object{
+                                    {
+                                        "edge",
+                                        edge.ToString()
+                                    },
+                                    {
+                                        "generation",
+                                        static_cast<
+                                            orbit::i64>(
+                                                status->
+                                                    generation)
+                                    },
+                                    {
+                                        "error",
+                                        status->error
+                                    }
+                                }));
+                    }
+                }
+            };
+
+        requestRoutedPaths();
+
         orbit::u64 publishedObjectRevision =
             objects.Revision();
         orbit::u64 publishedSelectionRevision =
@@ -2706,6 +3027,7 @@ int main(
                     ResizeSwapchainToWindow());
 
             rpcServer.Poll();
+            pollRoutedPaths();
 
             pluginReloadAccumulator +=
                 deltaSeconds;
