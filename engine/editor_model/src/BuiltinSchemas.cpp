@@ -1,5 +1,7 @@
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 
+#include <orbit/paths/PathNetwork.hpp>
+
 #include <string>
 
 namespace orbit::editor_model::builtin
@@ -53,5 +55,10 @@ void RegisterSchemas(
             }
         }
     });
+
+    // Path objects are ordinary semantic scene objects. Registering them in
+    // the shared catalog makes Explorer, Properties, plugins and MCP discover
+    // the same production schemas without an editor-only parallel model.
+    paths::RegisterSchemas(schemas);
 }
 } // namespace orbit::editor_model::builtin
