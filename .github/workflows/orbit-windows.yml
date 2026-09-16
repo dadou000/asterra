@@ -37,7 +37,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build terrain and path regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests
 
       - name: Run terrain and path regression tests
         shell: pwsh
@@ -67,6 +67,11 @@ jobs:
             throw "OrbitBuildServiceTests failed with exit code $LASTEXITCODE"
           }
 
+          & "build/engine/runtime_project/Release/OrbitRuntimeProjectTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitRuntimeProjectTests failed with exit code $LASTEXITCODE"
+          }
+
       - name: Build
         run: cmake --build build --config Release
 
@@ -91,6 +96,7 @@ jobs:
           Copy-Item "build/apps/sandbox/Release/OrbitSandbox.exe" "$package/OrbitSandbox.exe"
           Copy-Item "build/apps/editor/Release/OrbitStudio.exe" "$package/OrbitStudio.exe"
           Copy-Item "build/apps/build/Release/OrbitBuild.exe" "$package/OrbitBuild.exe"
+          Copy-Item "build/apps/player/Release/OrbitPlayer.exe" "$package/OrbitPlayer.exe"
           Copy-Item "tools/mcp_server/orbit_mcp_server.py" "$mcp/orbit_mcp_server.py"
           Copy-Item "tools/mcp_server/orbit_editor_mcp_server.py" "$mcp/orbit_editor_mcp_server.py"
           Copy-Item "tools/mcp_server/requirements.txt" "$mcp/requirements.txt"
@@ -111,6 +117,10 @@ jobs:
             Copy-Item "build/apps/build/Release/OrbitBuild.pdb" "$symbols/OrbitBuild.pdb"
           }
 
+          if (Test-Path "build/apps/player/Release/OrbitPlayer.pdb") {
+            Copy-Item "build/apps/player/Release/OrbitPlayer.pdb" "$symbols/OrbitPlayer.pdb"
+          }
+
           @"
           Orbit Windows Release
           =====================
@@ -124,6 +134,12 @@ jobs:
           Validate/cook an Orbit project headlessly with:
               OrbitBuild.exe <project-directory-or-Project.orbit.toml> --validate
               OrbitBuild.exe <project-directory-or-Project.orbit.toml> --cook
+
+          Assemble a standalone project package with:
+              OrbitBuild.exe <project-directory-or-Project.orbit.toml> --package
+
+          OrbitPlayer.exe is the project-driven runtime copied into standalone packages.
+          It accepts a cooked package directory or OrbitBuildManifest.toml as its first argument.
 
           Orbit Studio structured automation:
               JSON-RPC 2.0: 127.0.0.1:4320
