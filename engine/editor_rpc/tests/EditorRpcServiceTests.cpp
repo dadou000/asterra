@@ -988,7 +988,7 @@ int main()
             nullptr &&
         buildNotification.Find("method")->
             AsString() ==
-            "event.build.cooked");
+            "event.build.completed");
 
     static_cast<void>(
         Call(
