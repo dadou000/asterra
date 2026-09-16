@@ -24,6 +24,11 @@ namespace orbit::build
 {
 namespace
 {
+constexpr std::string_view kOutputMarker =
+    ".orbit-build-output";
+constexpr std::string_view kStagingMarker =
+    ".orbit-build-staging";
+
 [[nodiscard]] bool HasErrors(
     const std::vector<BuildIssue>& issues) noexcept
 {
@@ -427,40 +432,38 @@ CollectProjectScripts(
 
     std::vector<std::filesystem::path> scripts;
 
-    if (!std::filesystem::exists(
+    if (std::filesystem::exists(
             scriptsRoot))
     {
-        return scripts;
-    }
-
-    for (const auto& entry :
-         std::filesystem::
-             recursive_directory_iterator(
-                 scriptsRoot,
-                 std::filesystem::
-                     directory_options::
-                         skip_permission_denied))
-    {
-        if (!entry.is_regular_file())
+        for (const auto& entry :
+             std::filesystem::
+                 recursive_directory_iterator(
+                     scriptsRoot,
+                     std::filesystem::
+                         directory_options::
+                             skip_permission_denied))
         {
-            continue;
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+
+            const std::string extension =
+                entry.path().
+                    extension().
+                    string();
+
+            if (extension != ".luau" &&
+                extension != ".lua")
+            {
+                continue;
+            }
+
+            scripts.push_back(
+                std::filesystem::relative(
+                    entry.path(),
+                    projectRoot));
         }
-
-        const std::string extension =
-            entry.path().
-                extension().
-                string();
-
-        if (extension != ".luau" &&
-            extension != ".lua")
-        {
-            continue;
-        }
-
-        scripts.push_back(
-            std::filesystem::relative(
-                entry.path(),
-                projectRoot));
     }
 
     for (const auto& entryPoint :
@@ -607,9 +610,6 @@ SerializeManifest(
             item.insert(
                 "derived_key",
                 asset.derivedKey.ToHex());
-            item.insert(
-                "cache_hit",
-                asset.cacheHit);
         }
 
         toml::array artifacts;
@@ -667,11 +667,51 @@ SerializeManifest(
     return stream.str();
 }
 
+[[nodiscard]] bool HasBuildMarker(
+    const std::filesystem::path& directory,
+    const std::string_view marker)
+{
+    return std::filesystem::is_regular_file(
+        directory /
+        std::filesystem::path(marker));
+}
+
+void RemoveOwnedStaging(
+    const std::filesystem::path& staging)
+{
+    if (!std::filesystem::exists(
+            staging))
+    {
+        return;
+    }
+
+    if (!std::filesystem::is_directory(
+            staging) ||
+        !HasBuildMarker(
+            staging,
+            kStagingMarker))
+    {
+        throw std::runtime_error(
+            "Refusing to remove unowned build staging directory: " +
+            staging.string());
+    }
+
+    std::filesystem::remove_all(
+        staging);
+}
+
 void FinalizeStaging(
     const std::filesystem::path& staging,
     const std::filesystem::path& output,
     const bool cleanOutput)
 {
+    if (output ==
+        output.root_path())
+    {
+        throw std::runtime_error(
+            "Build output must not be a filesystem root.");
+    }
+
     if (std::filesystem::exists(
             output))
     {
@@ -679,6 +719,23 @@ void FinalizeStaging(
         {
             throw std::runtime_error(
                 "Build output already exists and cleanOutput is disabled.");
+        }
+
+        const bool owned =
+            std::filesystem::is_directory(
+                output) &&
+            (HasBuildMarker(
+                 output,
+                 kOutputMarker) ||
+             std::filesystem::is_regular_file(
+                 output /
+                 "OrbitBuildManifest.toml"));
+
+        if (!owned)
+        {
+            throw std::runtime_error(
+                "Refusing to clean an existing directory not owned by OrbitBuild: " +
+                output.string());
         }
 
         std::filesystem::remove_all(
@@ -1089,13 +1146,22 @@ BuildResult BuildService::Cook(
     std::filesystem::path staging =
         result.outputDirectory;
     staging += ".staging";
+    bool stagingOwned = false;
 
     try
     {
-        std::filesystem::remove_all(
+        RemoveOwnedStaging(
             staging);
+
         std::filesystem::create_directories(
             staging);
+
+        WriteText(
+            staging /
+                std::filesystem::path(
+                    kStagingMarker),
+            "orbit-build-staging-v1\n");
+        stagingOwned = true;
 
         documents::ProjectDocument project =
             documents::ProjectDocument::Open(
@@ -1329,10 +1395,22 @@ BuildResult BuildService::Cook(
                 "OrbitBuildManifest.toml",
             manifestText);
 
+        std::filesystem::remove(
+            staging /
+                std::filesystem::path(
+                    kStagingMarker));
+
+        WriteText(
+            staging /
+                std::filesystem::path(
+                    kOutputMarker),
+            "orbit-build-output-v1\n");
+
         FinalizeStaging(
             staging,
             result.outputDirectory,
             request.cleanOutput);
+        stagingOwned = false;
 
         result.manifestPath =
             result.outputDirectory /
@@ -1340,10 +1418,13 @@ BuildResult BuildService::Cook(
     }
     catch (const std::exception& exception)
     {
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            staging,
-            ignored);
+        if (stagingOwned)
+        {
+            std::error_code ignored;
+            std::filesystem::remove_all(
+                staging,
+                ignored);
+        }
 
         AddIssue(
             result.issues,
