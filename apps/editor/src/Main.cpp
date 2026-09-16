@@ -1619,6 +1619,13 @@ int main(
                 }
         });
 
+        SynchronizePluginPanels(
+            ui,
+            plugins,
+            pluginPanelIds);
+        pluginPanelRevision =
+            plugins.PanelCatalogRevision();
+
         orbit::log::Info(
             std::format(
                 "Opened project '{}' ({})",
