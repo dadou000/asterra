@@ -555,7 +555,8 @@ ImportResult AssetPipeline::Import(
     const std::filesystem::path& projectRoot,
     const std::filesystem::path& source,
     std::string settings,
-    std::string targetPlatform)
+    std::string targetPlatform,
+    const std::optional<ContentHash> knownSourceHash)
 {
     const auto normalizedRoot =
         std::filesystem::weakly_canonical(
@@ -593,8 +594,10 @@ ImportResult AssetPipeline::Import(
     }
 
     const ContentHash sourceHash =
-        HashFile(
-            normalizedSource);
+        knownSourceHash.has_value()
+            ? *knownSourceHash
+            : HashFile(
+                  normalizedSource);
 
     ImportResult result{
         .key =
