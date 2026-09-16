@@ -235,8 +235,14 @@ PathNetworkRecord PathNetworkService::CreateNetwork(
             "Path network name must not be empty.");
     }
 
-    commands_.BeginTransaction(
-        "Create Path Network");
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Create Path Network");
+    }
 
     try
     {
@@ -251,7 +257,10 @@ PathNetworkRecord PathNetworkService::CreateNetwork(
             kNetworkProfile,
             profileAsset);
 
-        commands_.CommitTransaction();
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
 
         return {
             .id = ToNetworkId(object),
@@ -263,7 +272,11 @@ PathNetworkRecord PathNetworkService::CreateNetwork(
     }
     catch (...)
     {
-        commands_.RollbackTransaction();
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
         throw;
     }
 }
@@ -282,8 +295,14 @@ PathNodeRecord PathNetworkService::CreateNode(
             "Path node name must not be empty.");
     }
 
-    commands_.BeginTransaction(
-        "Create Path Node");
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Create Path Node");
+    }
 
     try
     {
@@ -297,7 +316,10 @@ PathNodeRecord PathNetworkService::CreateNode(
             node,
             anchor);
 
-        commands_.CommitTransaction();
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
 
         return {
             .id = node,
@@ -308,7 +330,11 @@ PathNodeRecord PathNetworkService::CreateNode(
     }
     catch (...)
     {
-        commands_.RollbackTransaction();
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
         throw;
     }
 }
@@ -333,8 +359,14 @@ PathEdgeRecord PathNetworkService::ConnectDirect(
             "Path edge endpoints must belong to the same network.");
     }
 
-    commands_.BeginTransaction(
-        "Connect Path Nodes");
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Connect Path Nodes");
+    }
 
     try
     {
@@ -369,13 +401,20 @@ PathEdgeRecord PathNetworkService::ConnectDirect(
             kEdgeProfileOverride,
             std::string{});
 
-        commands_.CommitTransaction();
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
 
         return *FindEdge(edge);
     }
     catch (...)
     {
-        commands_.RollbackTransaction();
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
         throw;
     }
 }
@@ -402,8 +441,14 @@ PathEdgeRecord PathNetworkService::ConnectBezier(
             "Path edge endpoints must belong to the same network.");
     }
 
-    commands_.BeginTransaction(
-        "Connect Path Nodes Bezier");
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Connect Path Nodes Bezier");
+    }
 
     try
     {
@@ -438,13 +483,20 @@ PathEdgeRecord PathNetworkService::ConnectBezier(
             kEdgeProfileOverride,
             std::string{});
 
-        commands_.CommitTransaction();
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
 
         return *FindEdge(edge);
     }
     catch (...)
     {
-        commands_.RollbackTransaction();
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
         throw;
     }
 }
@@ -456,19 +508,32 @@ void PathNetworkService::SetNodeAnchor(
     static_cast<void>(
         RequireNodeNetwork(node));
 
-    commands_.BeginTransaction(
-        "Set Path Anchor");
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Set Path Anchor");
+    }
 
     try
     {
         WriteAnchor(
             node,
             anchor);
-        commands_.CommitTransaction();
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
     }
     catch (...)
     {
-        commands_.RollbackTransaction();
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
         throw;
     }
 }
@@ -488,8 +553,14 @@ void PathNetworkService::SetBezierHandles(
             "Bezier handles require a Bezier path edge.");
     }
 
-    commands_.BeginTransaction(
-        "Edit Bezier Handles");
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Edit Bezier Handles");
+    }
 
     try
     {
@@ -501,11 +572,18 @@ void PathNetworkService::SetBezierHandles(
             edge,
             kBezierEndHandle,
             endHandleMeters);
-        commands_.CommitTransaction();
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
     }
     catch (...)
     {
-        commands_.RollbackTransaction();
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
         throw;
     }
 }
