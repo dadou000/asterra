@@ -752,15 +752,28 @@ int main(
                     .height = 640
                 });
 
+        const orbit::f64 initialBodyRadius =
+            BodyRadius(
+                objects,
+                bodyObject);
+
+        bodyView.Camera().frame =
+            bodies.FindBody(bodyId)->frame;
         bodyView.Camera().
             localPositionMeters = {
                 0.0,
                 0.0,
-                -BodyRadius(
-                    objects,
-                    bodyObject) *
-                    3.2
+                -initialBodyRadius * 3.2
             };
+        bodyView.Camera().nearPlaneMeters =
+            static_cast<orbit::f32>(
+                std::max(
+                    initialBodyRadius *
+                        1.0e-6,
+                    1.0));
+        bodyView.Camera().farPlaneMeters =
+            static_cast<orbit::f32>(
+                initialBodyRadius * 10.0);
         bodyView.Camera().forward = {
             0.0F,
             0.0F,
