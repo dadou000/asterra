@@ -4,6 +4,7 @@
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Resource.hpp>
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -74,6 +75,105 @@ float4 main(VSOutput input) : SV_Target0
 }
 )";
 } // namespace
+
+std::optional<ViewRay>
+ViewportRay(
+    const CameraState& camera,
+    const u32 width,
+    const u32 height,
+    const f32 u,
+    const f32 v) noexcept
+{
+    if (width == 0 ||
+        height == 0 ||
+        !std::isfinite(u) ||
+        !std::isfinite(v) ||
+        u < 0.0F ||
+        u > 1.0F ||
+        v < 0.0F ||
+        v > 1.0F ||
+        !std::isfinite(
+            camera.verticalFovRadians) ||
+        camera.verticalFovRadians <= 0.0F ||
+        camera.verticalFovRadians >=
+            3.14159265F)
+    {
+        return std::nullopt;
+    }
+
+    const math::Double3 forward =
+        math::Normalize(
+            math::Double3{
+                camera.forward.x,
+                camera.forward.y,
+                camera.forward.z
+            });
+    const math::Double3 requestedUp =
+        math::Normalize(
+            math::Double3{
+                camera.up.x,
+                camera.up.y,
+                camera.up.z
+            });
+    const math::Double3 right =
+        math::Normalize(
+            math::Cross(
+                forward,
+                requestedUp));
+
+    if (math::LengthSquared(forward) <=
+            1.0e-20 ||
+        math::LengthSquared(right) <=
+            1.0e-20)
+    {
+        return std::nullopt;
+    }
+
+    const math::Double3 cameraUp =
+        math::Normalize(
+            math::Cross(
+                right,
+                forward));
+
+    const f64 aspect =
+        static_cast<f64>(width) /
+        static_cast<f64>(height);
+    const f64 tanHalfFov =
+        std::tan(
+            static_cast<f64>(
+                camera.verticalFovRadians) *
+            0.5);
+    const f64 pX =
+        static_cast<f64>(u) * 2.0 -
+        1.0;
+    const f64 pY =
+        static_cast<f64>(v) * 2.0 -
+        1.0;
+
+    const math::Double3 direction =
+        math::Normalize(
+            forward +
+            right *
+                (pX *
+                 aspect *
+                 tanHalfFov) -
+            cameraUp *
+                (pY *
+                 tanHalfFov));
+
+    if (math::LengthSquared(direction) <=
+        1.0e-20)
+    {
+        return std::nullopt;
+    }
+
+    return ViewRay{
+        .origin =
+            camera.localPositionMeters,
+        .direction =
+            direction
+    };
+}
 
 RenderView::RenderView(
     rhi::Device& device,
