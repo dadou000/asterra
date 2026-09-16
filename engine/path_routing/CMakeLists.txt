@@ -44,4 +44,21 @@ if(BUILD_TESTING)
         NAME Orbit.PathRouting
         COMMAND OrbitPathRoutingTests
     )
+
+    add_executable(OrbitPathRoutingStaleTests
+        tests/RoutePlannerStaleTests.cpp
+    )
+
+    target_link_libraries(OrbitPathRoutingStaleTests
+        PRIVATE
+            Orbit::PathRouting
+    )
+
+    target_compile_features(OrbitPathRoutingStaleTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPathRoutingStaleTests)
+
+    add_test(
+        NAME Orbit.PathRoutingStale
+        COMMAND OrbitPathRoutingStaleTests
+    )
 endif()
