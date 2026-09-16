@@ -26,6 +26,17 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(sqlitecpp tomlplusplus)
 
+# JSON is kept behind Orbit::Rpc. Third-party JSON types never appear in
+# public engine interfaces; the library is only the parser/serializer backend.
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.12.0
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(nlohmann_json)
+
 
 # Dear ImGui is the long-term native editor widget/docking implementation.
 # Orbit owns the public editor UI abstraction and renderer/input adapters;
