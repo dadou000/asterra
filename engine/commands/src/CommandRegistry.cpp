@@ -137,7 +137,9 @@ CommandRegistry::Catalog() const
             .description =
                 command.description,
             .parameters =
-                command.parameters
+                command.parameters,
+            .automationVisible =
+                command.automationVisible
         });
     }
 
