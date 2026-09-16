@@ -1,5 +1,6 @@
 #include <orbit/content/ContentHash.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <fstream>
@@ -7,7 +8,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace orbit::content
 {
@@ -27,7 +27,7 @@ constexpr std::array<u32, 64> kRoundConstants{
     0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
     0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
     0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
-    0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+    0x391c0cb3U, 0x4ed8aa4fU, 0x5b9cca4fU, 0x682e6ff3U,
     0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
     0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
 };
@@ -38,7 +38,8 @@ constexpr std::array<u32, 64> kRoundConstants{
 {
     return std::rotr(
         value,
-        static_cast<int>(bits));
+        static_cast<int>(
+            bits));
 }
 
 [[nodiscard]] u32 ReadBigEndian(
@@ -75,94 +76,174 @@ void WriteBigEndian(
         static_cast<std::byte>(
             value & 0xffU);
 }
-} // namespace
 
-ContentHash::ContentHash(
-    std::array<std::byte, Size> bytes) noexcept
-    : bytes_(
-          std::move(bytes))
+class Sha256
 {
-}
-
-const std::array<std::byte, ContentHash::Size>&
-ContentHash::Bytes() const noexcept
-{
-    return bytes_;
-}
-
-std::string ContentHash::ToHex() const
-{
-    std::ostringstream stream;
-    stream << std::hex << std::setfill('0');
-
-    for (const std::byte value : bytes_)
+public:
+    void Update(
+        std::span<const std::byte> input)
     {
-        stream << std::setw(2)
-               << static_cast<unsigned int>(
-                      std::to_integer<u8>(
-                          value));
+        if (finalized_)
+        {
+            throw std::logic_error(
+                "SHA-256 has already been finalized.");
+        }
+
+        if (input.size() >
+            (std::numeric_limits<u64>::max() -
+             totalBytes_))
+        {
+            throw std::overflow_error(
+                "SHA-256 input length overflow.");
+        }
+
+        totalBytes_ +=
+            static_cast<u64>(
+                input.size());
+
+        std::size_t offset = 0;
+
+        if (bufferSize_ != 0)
+        {
+            const std::size_t copyCount =
+                (std::min)(
+                    input.size(),
+                    buffer_.size() -
+                        bufferSize_);
+
+            std::copy_n(
+                input.data(),
+                copyCount,
+                buffer_.data() +
+                    bufferSize_);
+
+            bufferSize_ +=
+                copyCount;
+            offset +=
+                copyCount;
+
+            if (bufferSize_ ==
+                buffer_.size())
+            {
+                Transform(
+                    buffer_.data());
+                bufferSize_ = 0;
+            }
+        }
+
+        while (input.size() - offset >=
+               buffer_.size())
+        {
+            Transform(
+                input.data() +
+                offset);
+
+            offset +=
+                buffer_.size();
+        }
+
+        const std::size_t remaining =
+            input.size() -
+            offset;
+
+        if (remaining != 0)
+        {
+            std::copy_n(
+                input.data() +
+                    offset,
+                remaining,
+                buffer_.data());
+
+            bufferSize_ =
+                remaining;
+        }
     }
 
-    return stream.str();
-}
-
-ContentHash HashBytes(
-    const std::span<const std::byte> bytes)
-{
-    std::vector<std::byte> padded(
-        bytes.begin(),
-        bytes.end());
-
-    padded.push_back(
-        std::byte{0x80});
-
-    while ((padded.size() % 64U) != 56U)
+    [[nodiscard]] ContentHash Finalize()
     {
-        padded.push_back(
+        if (finalized_)
+        {
+            throw std::logic_error(
+                "SHA-256 has already been finalized.");
+        }
+
+        finalized_ = true;
+
+        const u64 bitLength =
+            totalBytes_ * 8ULL;
+
+        buffer_[bufferSize_++] =
+            std::byte{0x80};
+
+        if (bufferSize_ > 56U)
+        {
+            std::fill(
+                buffer_.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        bufferSize_),
+                buffer_.end(),
+                std::byte{0});
+
+            Transform(
+                buffer_.data());
+
+            bufferSize_ = 0;
+        }
+
+        std::fill(
+            buffer_.begin() +
+                static_cast<std::ptrdiff_t>(
+                    bufferSize_),
+            buffer_.begin() + 56,
             std::byte{0});
+
+        for (std::size_t index = 0;
+             index < 8U;
+             ++index)
+        {
+            buffer_[56U + index] =
+                static_cast<std::byte>(
+                    (bitLength >>
+                     static_cast<u32>(
+                         56U -
+                         index * 8U)) &
+                    0xffULL);
+        }
+
+        Transform(
+            buffer_.data());
+
+        std::array<std::byte, ContentHash::Size>
+            digest{};
+
+        for (std::size_t index = 0;
+             index < state_.size();
+             ++index)
+        {
+            WriteBigEndian(
+                digest.data() +
+                    index * 4U,
+                state_[index]);
+        }
+
+        return ContentHash(
+            digest);
     }
 
-    const u64 bitLength =
-        static_cast<u64>(
-            bytes.size()) *
-        8ULL;
-
-    for (int shift = 56;
-         shift >= 0;
-         shift -= 8)
+private:
+    void Transform(
+        const std::byte* block)
     {
-        padded.push_back(
-            static_cast<std::byte>(
-                (bitLength >>
-                 static_cast<u32>(shift)) &
-                0xffULL));
-    }
+        std::array<u32, 64>
+            schedule{};
 
-    std::array<u32, 8> state{
-        0x6a09e667U,
-        0xbb67ae85U,
-        0x3c6ef372U,
-        0xa54ff53aU,
-        0x510e527fU,
-        0x9b05688cU,
-        0x1f83d9abU,
-        0x5be0cd19U
-    };
-
-    std::array<u32, 64> schedule{};
-
-    for (std::size_t offset = 0;
-         offset < padded.size();
-         offset += 64U)
-    {
         for (std::size_t index = 0;
              index < 16U;
              ++index)
         {
             schedule[index] =
                 ReadBigEndian(
-                    padded.data() +
-                    offset +
+                    block +
                     index * 4U);
         }
 
@@ -176,13 +257,21 @@ ContentHash HashBytes(
                 schedule[index - 2U];
 
             const u32 sigma0 =
-                RotateRight(previous15, 7U) ^
-                RotateRight(previous15, 18U) ^
+                RotateRight(
+                    previous15,
+                    7U) ^
+                RotateRight(
+                    previous15,
+                    18U) ^
                 (previous15 >> 3U);
 
             const u32 sigma1 =
-                RotateRight(previous2, 17U) ^
-                RotateRight(previous2, 19U) ^
+                RotateRight(
+                    previous2,
+                    17U) ^
+                RotateRight(
+                    previous2,
+                    19U) ^
                 (previous2 >> 10U);
 
             schedule[index] =
@@ -192,14 +281,14 @@ ContentHash HashBytes(
                 sigma1;
         }
 
-        u32 a = state[0];
-        u32 b = state[1];
-        u32 c = state[2];
-        u32 d = state[3];
-        u32 e = state[4];
-        u32 f = state[5];
-        u32 g = state[6];
-        u32 h = state[7];
+        u32 a = state_[0];
+        u32 b = state_[1];
+        u32 c = state_[2];
+        u32 d = state_[3];
+        u32 e = state_[4];
+        u32 f = state_[5];
+        u32 g = state_[6];
+        u32 h = state_[7];
 
         for (std::size_t index = 0;
              index < 64U;
@@ -242,34 +331,78 @@ ContentHash HashBytes(
             d = c;
             c = b;
             b = a;
-            a = temporary1 + temporary2;
+            a = temporary1 +
+                temporary2;
         }
 
-        state[0] += a;
-        state[1] += b;
-        state[2] += c;
-        state[3] += d;
-        state[4] += e;
-        state[5] += f;
-        state[6] += g;
-        state[7] += h;
+        state_[0] += a;
+        state_[1] += b;
+        state_[2] += c;
+        state_[3] += d;
+        state_[4] += e;
+        state_[5] += f;
+        state_[6] += g;
+        state_[7] += h;
     }
 
-    std::array<std::byte, ContentHash::Size>
-        digest{};
+    std::array<u32, 8> state_{
+        0x6a09e667U,
+        0xbb67ae85U,
+        0x3c6ef372U,
+        0xa54ff53aU,
+        0x510e527fU,
+        0x9b05688cU,
+        0x1f83d9abU,
+        0x5be0cd19U
+    };
 
-    for (std::size_t index = 0;
-         index < state.size();
-         ++index)
+    std::array<std::byte, 64>
+        buffer_{};
+    std::size_t bufferSize_{0};
+    u64 totalBytes_{0};
+    bool finalized_{false};
+};
+} // namespace
+
+ContentHash::ContentHash(
+    std::array<std::byte, Size> bytes) noexcept
+    : bytes_(
+          std::move(bytes))
+{
+}
+
+const std::array<std::byte, ContentHash::Size>&
+ContentHash::Bytes() const noexcept
+{
+    return bytes_;
+}
+
+std::string ContentHash::ToHex() const
+{
+    std::ostringstream stream;
+    stream << std::hex
+           << std::setfill('0');
+
+    for (const std::byte value :
+         bytes_)
     {
-        WriteBigEndian(
-            digest.data() +
-                index * 4U,
-            state[index]);
+        stream
+            << std::setw(2)
+            << static_cast<unsigned int>(
+                   std::to_integer<u8>(
+                       value));
     }
 
-    return ContentHash(
-        digest);
+    return stream.str();
+}
+
+ContentHash HashBytes(
+    const std::span<const std::byte> bytes)
+{
+    Sha256 hash;
+    hash.Update(
+        bytes);
+    return hash.Finalize();
 }
 
 ContentHash HashString(
@@ -296,44 +429,43 @@ ContentHash HashFile(
             path.string());
     }
 
-    input.seekg(
-        0,
-        std::ios::end);
+    constexpr std::size_t
+        kChunkBytes =
+            1024U * 1024U;
 
-    const auto size =
-        input.tellg();
+    std::array<std::byte, kChunkBytes>
+        buffer{};
 
-    if (size < 0)
-    {
-        throw std::runtime_error(
-            "Unable to determine content source size: " +
-            path.string());
-    }
+    Sha256 hash;
 
-    input.seekg(
-        0,
-        std::ios::beg);
-
-    std::vector<std::byte> bytes(
-        static_cast<std::size_t>(
-            size));
-
-    if (!bytes.empty())
+    while (input)
     {
         input.read(
             reinterpret_cast<char*>(
-                bytes.data()),
+                buffer.data()),
             static_cast<std::streamsize>(
-                bytes.size()));
+                buffer.size()));
 
-        if (!input)
+        const std::streamsize count =
+            input.gcount();
+
+        if (count > 0)
         {
-            throw std::runtime_error(
-                "Unable to read content source for hashing: " +
-                path.string());
+            hash.Update(
+                std::span(
+                    buffer.data(),
+                    static_cast<std::size_t>(
+                        count)));
         }
     }
 
-    return HashBytes(bytes);
+    if (!input.eof())
+    {
+        throw std::runtime_error(
+            "Unable to read content source for hashing: " +
+            path.string());
+    }
+
+    return hash.Finalize();
 }
 } // namespace orbit::content
