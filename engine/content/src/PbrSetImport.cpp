@@ -6,6 +6,7 @@
 #include <array>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -479,9 +480,7 @@ AssetId ContentService::ImportPbrSet(
 
             std::filesystem::copy_file(
                 candidate.source,
-                destination,
-                std::filesystem::copy_options::
-                    fail_if_exists);
+                destination);
 
             material.insert(
                 ChannelTomlKey(
