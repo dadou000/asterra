@@ -44,4 +44,21 @@ if(BUILD_TESTING)
         NAME Orbit.PathNetwork
         COMMAND OrbitPathNetworkTests
     )
+
+    add_executable(OrbitPathProfileTests
+        tests/PathProfileTests.cpp
+    )
+
+    target_link_libraries(OrbitPathProfileTests
+        PRIVATE
+            Orbit::Paths
+    )
+
+    target_compile_features(OrbitPathProfileTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPathProfileTests)
+
+    add_test(
+        NAME Orbit.PathProfile
+        COMMAND OrbitPathProfileTests
+    )
 endif()
