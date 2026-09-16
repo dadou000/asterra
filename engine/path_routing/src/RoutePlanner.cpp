@@ -1307,10 +1307,40 @@ void RoutePlanner::RefreshDependencies()
             continue;
         }
 
-        const u64 signature =
-            CurrentSignature(
-                *entry.desired,
-                entry.manualRevision);
+        u64 signature = 0;
+
+        try
+        {
+            signature =
+                CurrentSignature(
+                    *entry.desired,
+                    entry.manualRevision);
+        }
+        catch (const std::exception&
+                   exception)
+        {
+            ++entry.generation;
+            entry.state =
+                RouteState::Failed;
+            entry.error =
+                std::string(
+                    "Route dependency revision failed: ") +
+                exception.what();
+            entry.pending.reset();
+            entry.jobGroup.reset();
+            continue;
+        }
+        catch (...)
+        {
+            ++entry.generation;
+            entry.state =
+                RouteState::Failed;
+            entry.error =
+                "Route dependency revision failed with an unknown error.";
+            entry.pending.reset();
+            entry.jobGroup.reset();
+            continue;
+        }
 
         if (signature ==
             entry.desiredSignature)
