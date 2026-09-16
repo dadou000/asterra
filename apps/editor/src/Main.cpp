@@ -752,6 +752,26 @@ int main(
                     .height = 640
                 });
 
+        bodyView.Camera().
+            localPositionMeters = {
+                0.0,
+                0.0,
+                -BodyRadius(
+                    objects,
+                    bodyObject) *
+                    3.2
+            };
+        bodyView.Camera().forward = {
+            0.0F,
+            0.0F,
+            1.0F
+        };
+        bodyView.Camera().up = {
+            0.0F,
+            1.0F,
+            0.0F
+        };
+
         editorRpc.AttachViewport({
             .view = &bodyView,
             .capture =
@@ -2086,7 +2106,8 @@ int main(
                         bodyView.Color(),
                         bodyView.Width(),
                         bodyView.Height(),
-                        previewShape);
+                        previewShape,
+                        bodyView.Camera());
                 });
 
             graph.AddPass(
