@@ -42,7 +42,15 @@ public:
 
     [[nodiscard]] FrameId CreateRoot();
 
+    [[nodiscard]] FrameId CreateRoot(
+        FrameId id);
+
     [[nodiscard]] FrameId CreateFrame(
+        FrameId parent,
+        FrameTransformProvider parentFromFrame);
+
+    [[nodiscard]] FrameId CreateFrame(
+        FrameId id,
         FrameId parent,
         FrameTransformProvider parentFromFrame);
 
