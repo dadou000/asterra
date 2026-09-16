@@ -414,6 +414,65 @@ CompileScript(
     return bytecode;
 }
 
+[[nodiscard]] std::vector<std::filesystem::path>
+CollectProjectScripts(
+    const std::filesystem::path& projectRoot)
+{
+    const std::filesystem::path scriptsRoot =
+        projectRoot /
+        "Scripts";
+
+    std::vector<std::filesystem::path> scripts;
+
+    if (!std::filesystem::exists(
+            scriptsRoot))
+    {
+        return scripts;
+    }
+
+    for (const auto& entry :
+         std::filesystem::
+             recursive_directory_iterator(
+                 scriptsRoot,
+                 std::filesystem::
+                     directory_options::
+                         skip_permission_denied))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
+        }
+
+        const std::string extension =
+            entry.path().
+                extension().
+                string();
+
+        if (extension != ".luau" &&
+            extension != ".lua")
+        {
+            continue;
+        }
+
+        scripts.push_back(
+            std::filesystem::relative(
+                entry.path(),
+                projectRoot));
+    }
+
+    std::ranges::sort(
+        scripts,
+        [](
+            const std::filesystem::path& a,
+            const std::filesystem::path& b)
+        {
+            return a.generic_string() <
+                b.generic_string();
+        });
+
+    return scripts;
+}
+
 [[nodiscard]] std::filesystem::path
 ScriptOutputPath(
     const std::filesystem::path& sourcePath)
@@ -463,6 +522,20 @@ SerializeManifest(
         "startup_world",
         manifest.startupWorld.
             generic_string());
+
+    toml::array scriptEntryPoints;
+
+    for (const auto& path :
+         manifest.scriptEntryPoints)
+    {
+        scriptEntryPoints.push_back(
+            path.generic_string());
+    }
+
+    project.insert(
+        "script_entry_points",
+        std::move(scriptEntryPoints));
+
     root.insert(
         "project",
         std::move(project));
@@ -894,6 +967,9 @@ BuildResult BuildService::Cook(
 
         result.manifest.startupWorld =
             worldRelative;
+        result.manifest.scriptEntryPoints =
+            project.Manifest().
+                scriptEntryPoints;
 
         content::ContentService content(
             validation.projectRoot);
@@ -1022,9 +1098,12 @@ BuildResult BuildService::Cook(
             return result;
         }
 
+        const auto projectScripts =
+            CollectProjectScripts(
+                validation.projectRoot);
+
         for (const auto& script :
-             project.Manifest().
-                 scriptEntryPoints)
+             projectScripts)
         {
             const auto sourcePath =
                 ResolveProjectFile(
