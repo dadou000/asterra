@@ -188,7 +188,7 @@ int main()
             "transaction.commit"));
 
     const auto object =
-        scene::ObjectId::Parse(
+        orbit::scene::ObjectId::Parse(
             objectId);
 
     assert(object.has_value());
