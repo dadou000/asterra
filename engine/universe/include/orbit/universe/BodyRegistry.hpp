@@ -87,10 +87,6 @@ struct CelestialBody
     BodyShape shape{};
     std::optional<MassProperties> mass;
     BodyTransformModel transformModel{};
-    // Invalid IDs request generated session identities. Persistent
-    // composition layers provide stable IDs reconstructed from authority.
-    BodyId id{};
-    frames::FrameId frame{};
 };
 
 struct BodyCreateDesc
@@ -102,6 +98,10 @@ struct BodyCreateDesc
     BodyShape shape{};
     std::optional<MassProperties> mass;
     BodyTransformModel transformModel{};
+    // Invalid IDs request generated session identities. Persistent
+    // composition layers provide stable IDs reconstructed from authority.
+    BodyId id{};
+    frames::FrameId frame{};
 };
 
 class BodyRegistry
