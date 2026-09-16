@@ -465,6 +465,94 @@ public:
             return panels_;
         }
 
+        [[nodiscard]] std::vector<std::string>
+        Validate()
+        {
+            std::vector<std::string> issues;
+
+            if (!loaded_ ||
+                state_ == nullptr)
+            {
+                return issues;
+            }
+
+            for (const int reference :
+                 validatorRefs_)
+            {
+                lua_getref(
+                    state_,
+                    reference);
+
+                if (!lua_isfunction(
+                        state_,
+                        -1))
+                {
+                    lua_pop(
+                        state_,
+                        1);
+                    issues.push_back(
+                        "Validator callback is unavailable.");
+                    continue;
+                }
+
+                if (lua_pcall(
+                        state_,
+                        0,
+                        1,
+                        0) != 0)
+                {
+                    const char* error =
+                        lua_tostring(
+                            state_,
+                            -1);
+
+                    issues.push_back(
+                        std::string(
+                            "Validator failed: ") +
+                        (error != nullptr
+                            ? error
+                            : "unknown Luau error"));
+
+                    lua_pop(
+                        state_,
+                        1);
+                    continue;
+                }
+
+                if (lua_isnil(
+                        state_,
+                        -1))
+                {
+                    lua_pop(
+                        state_,
+                        1);
+                    continue;
+                }
+
+                if (!lua_isstring(
+                        state_,
+                        -1))
+                {
+                    lua_pop(
+                        state_,
+                        1);
+                    issues.push_back(
+                        "Validator must return nil or a diagnostic string.");
+                    continue;
+                }
+
+                issues.emplace_back(
+                    lua_tostring(
+                        state_,
+                        -1));
+                lua_pop(
+                    state_,
+                    1);
+            }
+
+            return issues;
+        }
+
         [[nodiscard]] bool DrawPanel(
             const editor_ui::PanelId panel,
             editor_ui::PanelContext& context)
@@ -859,6 +947,29 @@ public:
             return 0;
         }
 
+        static int LuaRegisterValidator(
+            lua_State* state)
+        {
+            PluginInstance* self =
+                Self(state);
+
+            luaL_checktype(
+                state,
+                1,
+                LUA_TFUNCTION);
+
+            const int functionRef =
+                lua_ref(
+                    state,
+                    1);
+
+            self->validatorRefs_.
+                push_back(
+                    functionRef);
+
+            return 0;
+        }
+
         static int LuaRegisterPanel(
             lua_State* state)
         {
@@ -1133,6 +1244,9 @@ public:
                 "registerContextAction",
                 &LuaRegisterContextAction);
             setFunction(
+                "registerValidator",
+                &LuaRegisterValidator);
+            setFunction(
                 "registerPanel",
                 &LuaRegisterPanel);
 
@@ -1274,6 +1388,7 @@ public:
             }
 
             commandIds_.clear();
+            validatorRefs_.clear();
             panels_.clear();
             activePanelContext_ = nullptr;
 
@@ -1398,6 +1513,7 @@ public:
             commandIds_;
         std::vector<SurfaceContribution>
             surfaceContributions_;
+        std::vector<int> validatorRefs_;
         std::vector<Panel> panels_;
         u64 fingerprint_{0};
         u64 revision_{0};
@@ -1645,6 +1761,29 @@ PluginManager::Statuses() const
     {
         result.push_back(
             instance->Status());
+    }
+
+    return result;
+}
+
+std::vector<PluginValidationIssue>
+PluginManager::Validate()
+{
+    std::vector<PluginValidationIssue>
+        result;
+
+    for (auto& instance :
+         impl_->instances)
+    {
+        for (std::string& message :
+             instance->Validate())
+        {
+            result.push_back({
+                .pluginId = instance->Id(),
+                .message =
+                    std::move(message)
+            });
+        }
     }
 
     return result;
