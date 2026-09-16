@@ -772,8 +772,31 @@ int main(
                     0x44494f4f55545054ULL
             };
 
+        constexpr orbit::editor_ui::PanelId
+            kContentPanel{
+                .high =
+                    0x4f52424954535455ULL,
+                .low =
+                    0x44494f434f4e544eULL
+            };
+
+        constexpr orbit::editor_ui::PanelId
+            kPluginsPanel{
+                .high =
+                    0x4f52424954535455ULL,
+                .low =
+                    0x44494f504c554749ULL
+            };
+
         std::string explorerSearch;
+        std::string contentSearch;
         std::string renameBuffer;
+        std::vector<orbit::editor_ui::PanelId>
+            pluginPanelIds;
+        orbit::u64 pluginPanelRevision =
+            ~orbit::u64{0};
+        orbit::f64 pluginReloadAccumulator =
+            0.0;
         orbit::u64 renameSelectionRevision =
             ~orbit::u64{0};
 
