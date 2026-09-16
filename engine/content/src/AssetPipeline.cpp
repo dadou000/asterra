@@ -6,6 +6,7 @@
 #include <cctype>
 #include <fstream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -526,6 +527,13 @@ ImportResult AssetPipeline::Import(
     {
         return result;
     }
+
+    // A missing/invalid manifest or changed dependency means this key's
+    // previously derived products are stale or incomplete. Remove the whole
+    // entry before regeneration so immutable Store() cannot preserve an old
+    // artifact under the same primary-source key.
+    cache_.Remove(
+        result.key);
 
     ImportOutput output =
         importer->import({
