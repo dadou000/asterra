@@ -1,5 +1,6 @@
 #include <orbit/build/BuildService.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
