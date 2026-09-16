@@ -2,6 +2,7 @@
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/content/ContentService.hpp>
+#include <orbit/content_wic/WicTextureImporter.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
@@ -771,6 +772,10 @@ int main(
         orbit::content::ContentService
             content(
                 project.RootDirectory());
+
+        orbit::content_wic::
+            RegisterTextureImporters(
+                content.Importers());
 
         content.Scan();
 
