@@ -39,7 +39,9 @@ class DevServer::Impl
 public:
     explicit Impl(
         const DevServerConfig& config)
-        : port_(config.port)
+        : port_(config.port),
+          maxMessageBytes_(
+              config.maxMessageBytes)
     {
         WSADATA wsaData{};
 
@@ -151,6 +153,13 @@ public:
             std::move(handler);
     }
 
+    void SetMessageHandler(
+        DevServer::MessageHandler handler)
+    {
+        messageHandler_ =
+            std::move(handler);
+    }
+
     void Poll()
     {
         if (listenSocket_ ==
@@ -252,6 +261,15 @@ private:
                     std::size_t>(
                     received));
 
+            if (receiveBuffer_.size() >
+                maxMessageBytes_)
+            {
+                orbit::log::Warning(
+                    "Orbit dev server disconnected a client after an oversized message.");
+                DisconnectClient();
+                return;
+            }
+
             DispatchCompleteLines();
             return;
         }
@@ -295,6 +313,29 @@ private:
 
             if (line.empty())
             {
+                continue;
+            }
+
+            if (messageHandler_)
+            {
+                try
+                {
+                    if (auto response =
+                            messageHandler_(line);
+                        response.has_value())
+                    {
+                        SendLine(*response);
+                    }
+                }
+                catch (const std::exception&
+                           exception)
+                {
+                    orbit::log::Warning(
+                        std::format(
+                            "Orbit dev server message handler failed: {}",
+                            exception.what()));
+                }
+
                 continue;
             }
 
@@ -384,6 +425,7 @@ private:
     }
 
     u16 port_;
+    std::size_t maxMessageBytes_;
     bool wsaInitialized_{false};
     SOCKET listenSocket_{INVALID_SOCKET};
     SOCKET clientSocket_{INVALID_SOCKET};
@@ -393,6 +435,8 @@ private:
         std::string,
         DevServer::CommandHandler>
         handlers_;
+    DevServer::MessageHandler
+        messageHandler_;
 };
 
 DevServer::DevServer(
@@ -411,6 +455,13 @@ void DevServer::RegisterCommand(
 {
     impl_->RegisterCommand(
         std::move(name),
+        std::move(handler));
+}
+
+void DevServer::SetMessageHandler(
+    MessageHandler handler)
+{
+    impl_->SetMessageHandler(
         std::move(handler));
 }
 
