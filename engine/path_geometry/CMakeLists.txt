@@ -57,4 +57,28 @@ if(BUILD_TESTING)
         NAME Orbit.PathGeometry
         COMMAND OrbitPathGeometryTests
     )
+
+    add_executable(
+        OrbitPathSourceTests
+        tests/PathSourceTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitPathSourceTests
+        PRIVATE
+            Orbit::PathGeometry
+    )
+
+    target_compile_features(
+        OrbitPathSourceTests
+        PRIVATE cxx_std_23
+    )
+    orbit_enable_warnings(
+        OrbitPathSourceTests
+    )
+
+    add_test(
+        NAME Orbit.PathSource
+        COMMAND OrbitPathSourceTests
+    )
 endif()
