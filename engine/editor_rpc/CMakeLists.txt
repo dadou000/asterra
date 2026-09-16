@@ -13,6 +13,7 @@ target_link_libraries(OrbitEditorRpc
     PUBLIC
         Orbit::Commands
         Orbit::Documents
+        Orbit::Paths
         Orbit::Rpc
         Orbit::RenderView
         Orbit::Scene
