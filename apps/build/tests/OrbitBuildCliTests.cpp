@@ -4,6 +4,7 @@
 
 #include <orbit/documents/ProjectDocument.hpp>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -57,6 +58,52 @@ void WriteText(
         throw std::runtime_error(
             "Unable to write CLI test file: " +
             path.string());
+    }
+}
+
+void WriteTinyBmp(
+    const std::filesystem::path& path)
+{
+    constexpr std::array<
+        unsigned char,
+        58>
+        bytes{
+            0x42, 0x4d,
+            0x3a, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x36, 0x00, 0x00, 0x00,
+            0x28, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00,
+            0x20, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x20, 0x40, 0x80, 0xff
+        };
+
+    std::filesystem::create_directories(
+        path.parent_path());
+
+    std::ofstream output(
+        path,
+        std::ios::binary |
+            std::ios::trunc);
+
+    output.write(
+        reinterpret_cast<const char*>(
+            bytes.data()),
+        static_cast<std::streamsize>(
+            bytes.size()));
+
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Unable to write CLI test BMP.");
     }
 }
 
@@ -239,11 +286,16 @@ int main(
             "assert(Orbit.project_name == \"CLI Package Test\")\n"
             "return true\n");
 
+        WriteTinyBmp(
+            temporary.Root() /
+                "Content/Test.bmp");
+
         WriteText(
             temporary.Root() /
                 "Content/Test.orbitmaterial",
             "[material]\n"
             "name = \"CLI Material\"\n"
+            "base_color = \"Test.bmp\"\n"
             "roughness_factor = 0.5\n"
             "metallic_factor = 0.0\n");
 
