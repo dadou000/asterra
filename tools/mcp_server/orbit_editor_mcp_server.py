@@ -338,6 +338,12 @@ def orbit_path_route_result(edge_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_path_derived_result(edge_id: str) -> dict[str, Any]:
+    """Return M20 visual/lane/reference/collision/nav derived state for a PathEdge."""
+    return _rpc("path.derived_result", {"edge": edge_id})
+
+
+@mcp.tool()
 def orbit_path_route_invalidate(edge_id: str) -> dict[str, Any]:
     """Invalidate one derived route without changing project authority."""
     return _rpc("path.route_invalidate", {"edge": edge_id})
