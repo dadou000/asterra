@@ -277,28 +277,43 @@ FallbackThumbnail(
     const u32 providerVersion)
 {
     std::string canonical =
-        "orbit-thumbnail-v1\n";
+        "orbit-thumbnail-v1";
 
-    canonical +=
-        request.sourceHash.ToHex();
-    canonical.push_back('\n');
-    canonical.append(
+    const auto appendField =
+        [&canonical](
+            const std::string_view field)
+        {
+            canonical.push_back('|');
+            canonical +=
+                std::to_string(
+                    field.size());
+            canonical.push_back(':');
+            canonical.append(
+                field);
+        };
+
+    appendField(
+        request.sourceHash.ToHex());
+    appendField(
         providerId);
-    canonical.push_back('\n');
-    canonical +=
+
+    const std::string version =
         std::to_string(
             providerVersion);
-    canonical.push_back('\n');
-    canonical.append(
-        request.category);
-    canonical.push_back('\n');
-    canonical +=
+    const std::string width =
         std::to_string(
             request.width);
-    canonical.push_back('x');
-    canonical +=
+    const std::string height =
         std::to_string(
             request.height);
+
+    appendField(version);
+    appendField(
+        request.category);
+    appendField(
+        request.label);
+    appendField(width);
+    appendField(height);
 
     return HashString(
         canonical);
@@ -338,7 +353,7 @@ void ThumbnailService::RegisterProvider(
 
 const ThumbnailProviderDescriptor*
 ThumbnailService::FindProvider(
-    const std::string_view category) const noexcept
+    const std::string_view category) const
 {
     const auto found =
         std::ranges::find_if(
@@ -438,6 +453,15 @@ ThumbnailResult ThumbnailService::Get(
                   request)
             : FallbackThumbnail(
                   request);
+
+    if (pixels.width !=
+            request.width ||
+        pixels.height !=
+            request.height)
+    {
+        throw std::runtime_error(
+            "Thumbnail provider must return the requested dimensions.");
+    }
 
     const auto encoded =
         EncodeBmp(
