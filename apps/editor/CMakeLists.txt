@@ -9,6 +9,7 @@ target_link_libraries(OrbitStudio
         Orbit::Schema
         Orbit::Scene
         Orbit::Commands
+        Orbit::Content
         Orbit::Documents
         Orbit::EditorModel
         Orbit::EditorUi
