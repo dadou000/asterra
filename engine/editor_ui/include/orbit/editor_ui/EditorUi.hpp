@@ -115,6 +115,14 @@ public:
     EditorUi& operator=(const EditorUi&) = delete;
 
     void RegisterPanel(PanelDefinition panel);
+
+    // Replaces an existing panel definition while preserving its current
+    // open/closed state, or registers it when the ID is new. This is the
+    // dynamic extension path used by hot-reloadable editor plugins.
+    void UpsertPanel(PanelDefinition panel);
+
+    [[nodiscard]] bool UnregisterPanel(PanelId id) noexcept;
+
     void RegisterMenuAction(MenuAction action);
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
