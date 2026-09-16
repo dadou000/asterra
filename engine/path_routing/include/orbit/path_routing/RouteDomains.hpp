@@ -46,7 +46,7 @@ MakeSurfaceScalarFieldCostSource(
     time::SimulationTime atTime,
     const frames::FrameGraph& frames,
     const universe::BodyRegistry& bodies,
-    const fields::FieldRegistry& fields);
+    const fields::FieldRegistry& fieldRegistry);
 
 // Resolves PathProfile::preferredCostFields by descriptor name for the body.
 // Unknown/GPU-only/non-scalar fields are skipped rather than faked.
@@ -59,5 +59,5 @@ MakePreferredSurfaceFieldCosts(
     time::SimulationTime atTime,
     const frames::FrameGraph& frames,
     const universe::BodyRegistry& bodies,
-    const fields::FieldRegistry& fields);
+    const fields::FieldRegistry& fieldRegistry);
 } // namespace orbit::path_routing
