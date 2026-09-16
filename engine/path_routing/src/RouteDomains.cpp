@@ -179,6 +179,7 @@ MakeSurfaceScalarFieldCostSource(
     const frames::FrameId routeFrame,
     const time::SimulationTime atTime,
     const frames::FrameGraph& frames,
+    const universe::BodyRegistry& bodies,
     const fields::FieldRegistry& fields)
 {
     if (key.empty())
@@ -225,22 +226,14 @@ MakeSurfaceScalarFieldCostSource(
     }
 
     const universe::CelestialBody* bodyRecord =
-        nullptr;
+        bodies.FindBody(body);
 
-    // The field registry owns descriptors, while the frame graph owns the
-    // actual relation. routeFrame must be transformable into the supplied
-    // body's frame; the caller supplies the BodyRegistry relation through
-    // the frame ID encoded by the field's owning composition.
-    static_cast<void>(bodyRecord);
+    if (bodyRecord == nullptr)
+    {
+        throw std::invalid_argument(
+            "Route field cost body does not exist.");
+    }
 
-    // Surface scalar sampling only needs a body-local unit direction. The
-    // route domain should normally already use the body frame. For another
-    // connected frame, resolve the transform once at the requested time.
-    //
-    // We cannot discover BodyId -> FrameId from FieldRegistry, so require the
-    // common M19 composition convention: routeFrame is the owning body frame
-    // for body surface costs. This keeps worker sampling independent of a
-    // mutable BodyRegistry and makes same-frame parent motion irrelevant.
     if (!routeFrame ||
         !frames.Contains(routeFrame))
     {
@@ -248,7 +241,21 @@ MakeSurfaceScalarFieldCostSource(
             "Route field cost frame does not exist.");
     }
 
-    static_cast<void>(atTime);
+    const auto bodyFromRoute =
+        frames.ResolveTransform(
+            routeFrame,
+            bodyRecord->frame,
+            atTime);
+
+    if (!bodyFromRoute.has_value())
+    {
+        throw std::invalid_argument(
+            "Route field cost frame is not connected to the body frame.");
+    }
+
+    const math::RigidTransformD
+        capturedBodyFromRoute =
+            *bodyFromRoute;
 
     const fields::FieldRegistry* registry =
         &fields;
@@ -265,14 +272,20 @@ MakeSurfaceScalarFieldCostSource(
             [registry,
              field,
              body,
-             weight](
+             weight,
+             capturedBodyFromRoute](
                 const RouteProjectedPoint& point,
                 const f64 footprintMeters)
                 -> std::optional<f64>
             {
+                const math::Double3 bodyPoint =
+                    math::TransformPoint(
+                        capturedBodyFromRoute,
+                        point.localMeters);
+
                 const math::Double3 direction =
                     math::Normalize(
-                        point.localMeters);
+                        bodyPoint);
 
                 if (math::LengthSquared(
                         direction) <=
@@ -375,6 +388,7 @@ MakePreferredSurfaceFieldCosts(
                 routeFrame,
                 atTime,
                 frames,
+                bodies,
                 fields));
     }
 
