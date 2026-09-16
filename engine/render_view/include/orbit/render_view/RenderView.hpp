@@ -7,6 +7,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <memory>
+#include <optional>
 
 namespace orbit::render_view
 {
@@ -26,6 +27,20 @@ struct CameraState
     f32 nearPlaneMeters{0.05F};
     f32 farPlaneMeters{12'000'000.0F};
 };
+
+struct ViewRay
+{
+    math::Double3 origin{};
+    math::Double3 direction{};
+};
+
+[[nodiscard]] std::optional<ViewRay>
+ViewportRay(
+    const CameraState& camera,
+    u32 width,
+    u32 height,
+    f32 u,
+    f32 v) noexcept;
 
 struct RenderViewDesc
 {
