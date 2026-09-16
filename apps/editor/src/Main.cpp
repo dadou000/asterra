@@ -3766,6 +3766,40 @@ int main(
                                     bodyObject)
                         };
 
+            std::vector<
+                const orbit::path_geometry::
+                    PathDerivedProduct*>
+                visiblePathProducts;
+
+            visiblePathProducts.reserve(
+                derivedPaths.size());
+
+            for (const auto&
+                     [edge, product] :
+                 derivedPaths)
+            {
+                static_cast<void>(edge);
+                visiblePathProducts.push_back(
+                    &product);
+            }
+
+            std::sort(
+                visiblePathProducts.begin(),
+                visiblePathProducts.end(),
+                [](const auto* a,
+                   const auto* b)
+                {
+                    if (a->edge.high !=
+                        b->edge.high)
+                    {
+                        return a->edge.high <
+                            b->edge.high;
+                    }
+
+                    return a->edge.low <
+                        b->edge.low;
+                });
+
             graph.AddPass(
                 "Studio.BodyPreview",
                 {
@@ -3793,6 +3827,46 @@ int main(
                         bodyView.Height(),
                         previewShape,
                         bodyView.Camera());
+                });
+
+            graph.AddPass(
+                "Studio.Paths",
+                {
+                    {
+                        .texture =
+                            viewTargets.color,
+                        .state =
+                            orbit::rhi::
+                                ResourceState::
+                                    RenderTarget,
+                        .access =
+                            orbit::render_graph::
+                                Access::Write
+                    }
+                },
+                [&](orbit::rhi::CommandList&
+                        commandList,
+                    const orbit::render_graph::
+                        Resources&)
+                {
+                    pathPreview.Draw(
+                        commandList,
+                        bodyView.Color(),
+                        bodyView.Width(),
+                        bodyView.Height(),
+                        bodyView.Camera(),
+                        frames,
+                        {},
+                        std::span<
+                            const orbit::
+                                path_geometry::
+                                    PathDerivedProduct*
+                                    const>(
+                            visiblePathProducts.
+                                data(),
+                            visiblePathProducts.
+                                size()),
+                        pathDebugVisualization);
                 });
 
             graph.AddPass(
