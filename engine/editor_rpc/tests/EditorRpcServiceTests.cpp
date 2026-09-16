@@ -401,9 +401,16 @@ int main()
                 }));
 
     Check(
+        replay.Find("oldest_sequence") != nullptr &&
+        replay.Find("oldest_sequence")->AsInteger() ==
+            1);
+    Check(
         replay.Find("latest_sequence") != nullptr &&
         replay.Find("latest_sequence")->AsInteger() ==
             1);
+    Check(
+        replay.Find("truncated") != nullptr &&
+        !replay.Find("truncated")->AsBool());
 
     const auto* replayEvents =
         replay.Find("events");
