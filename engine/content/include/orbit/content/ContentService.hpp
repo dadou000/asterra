@@ -26,6 +26,7 @@ enum class AssetKind : u8
     Component,
     Mesh,
     PathProfile,
+    Shader,
     Unknown
 };
 
@@ -48,6 +49,20 @@ struct MaterialInstanceData
     std::optional<f64> metallicFactor;
 };
 
+enum class ShaderAssetStage : u8
+{
+    Vertex,
+    Pixel,
+    Compute
+};
+
+struct ShaderAssetData
+{
+    ShaderAssetStage stage{
+        ShaderAssetStage::Vertex};
+    std::string entryPoint{"main"};
+};
+
 struct AssetRecord
 {
     AssetId id{};
@@ -64,6 +79,8 @@ struct AssetRecord
     std::optional<MaterialChannels> material;
     std::optional<MaterialInstanceData>
         materialInstance;
+    std::optional<ShaderAssetData>
+        shader;
 };
 
 struct ContentDiagnostic
