@@ -7,16 +7,27 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <source_location>
 #include <string>
 #include <vector>
 
 namespace
 {
-void Check(const bool condition)
+void Check(
+    const bool condition,
+    const std::source_location location =
+        std::source_location::current())
 {
     if (!condition)
     {
-        std::abort();
+        std::cerr
+            << "AssetPipeline test failed at "
+            << location.file_name()
+            << ':'
+            << location.line()
+            << '\n';
+        std::exit(1);
     }
 }
 
