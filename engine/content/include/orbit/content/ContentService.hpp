@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/content/AssetPipeline.hpp>
 #include <orbit/core/StrongId.hpp>
 #include <orbit/core/Types.hpp>
 
@@ -43,6 +44,9 @@ struct AssetRecord
     AssetKind kind{AssetKind::Unknown};
     std::string name;
     std::filesystem::path sourcePath;
+    ContentHash sourceHash{};
+    std::optional<ContentHash> derivedKey;
+    bool derivedReady{false};
     std::vector<std::string> tags;
     std::optional<MaterialChannels> material;
 };
@@ -58,6 +62,11 @@ class ContentService
 public:
     explicit ContentService(std::filesystem::path projectRoot);
 
+    ContentService(const ContentService&) = delete;
+    ContentService& operator=(const ContentService&) = delete;
+    ContentService(ContentService&&) = delete;
+    ContentService& operator=(ContentService&&) = delete;
+
     // Rebuilds the in-memory index from project Content mounts. IDs are
     // derived from normalized project-relative paths and remain stable.
     void Scan();
@@ -68,6 +77,18 @@ public:
     [[nodiscard]] std::vector<AssetRecord> All() const;
     [[nodiscard]] const std::vector<ContentDiagnostic>& Diagnostics() const noexcept;
     [[nodiscard]] u64 Revision() const noexcept;
+
+    [[nodiscard]] ImporterRegistry& Importers() noexcept;
+    [[nodiscard]] const ImporterRegistry& Importers() const noexcept;
+    [[nodiscard]] DerivedDataCache& Cache() noexcept;
+    [[nodiscard]] const DerivedDataCache& Cache() const noexcept;
+
+    // Runs the registered importer for an indexed source asset using the
+    // shared project DDC. This does not replace or mutate project authority.
+    [[nodiscard]] ImportResult ImportDerived(
+        AssetId id,
+        std::string settings = {},
+        std::string targetPlatform = "source");
 
     // Imports a source file into Content/Imported without temporary staging
     // formats. The copied source becomes the canonical project asset.
@@ -80,6 +101,9 @@ private:
 
     std::filesystem::path projectRoot_;
     std::filesystem::path contentRoot_;
+    ImporterRegistry importers_;
+    DerivedDataCache cache_;
+    AssetPipeline pipeline_;
     std::unordered_map<AssetId, AssetRecord> assets_;
     std::unordered_map<std::string, AssetId> pathIndex_;
     std::vector<ContentDiagnostic> diagnostics_;
