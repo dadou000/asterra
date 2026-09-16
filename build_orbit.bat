@@ -110,8 +110,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [Orbit] Building OrbitLauncher, OrbitStudio and OrbitBuild...
-cmake --build build --config %CONFIG% --target OrbitLauncher OrbitStudio OrbitBuild --parallel
+echo [Orbit] Building OrbitLauncher, OrbitStudio, OrbitBuild and OrbitPlayer...
+cmake --build build --config %CONFIG% --target OrbitLauncher OrbitStudio OrbitBuild OrbitPlayer --parallel
 if errorlevel 1 (
     echo.
     echo [Orbit] ERROR: Build failed.
@@ -122,6 +122,7 @@ set "LAUNCHER=build\apps\launcher\%CONFIG%\OrbitLauncher.exe"
 set "SANDBOX=build\apps\sandbox\%CONFIG%\OrbitSandbox.exe"
 set "STUDIO=build\apps\editor\%CONFIG%\OrbitStudio.exe"
 set "BUILDCLI=build\apps\build\%CONFIG%\OrbitBuild.exe"
+set "PLAYER=build\apps\player\%CONFIG%\OrbitPlayer.exe"
 
 if not exist "%LAUNCHER%" (
     echo.
@@ -151,6 +152,13 @@ if not exist "%BUILDCLI%" (
     goto fail
 )
 
+if not exist "%PLAYER%" (
+    echo.
+    echo [Orbit] ERROR: OrbitPlayer was not produced:
+    echo   %PLAYER%
+    goto fail
+)
+
 set "PACKAGE=dist\Orbit-Windows-%CONFIG%"
 set "SYMBOLS=%PACKAGE%\symbols"
 
@@ -176,6 +184,9 @@ if errorlevel 1 goto package_fail
 copy /y "%BUILDCLI%" "%PACKAGE%\OrbitBuild.exe" >nul
 if errorlevel 1 goto package_fail
 
+copy /y "%PLAYER%" "%PACKAGE%\OrbitPlayer.exe" >nul
+if errorlevel 1 goto package_fail
+
 echo [Orbit] Updating root executables...
 copy /y "%LAUNCHER%" "Orbit.exe" >nul
 if errorlevel 1 goto root_copy_fail
@@ -186,6 +197,8 @@ if errorlevel 1 goto root_copy_fail
 copy /y "%STUDIO%" "OrbitStudio.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%BUILDCLI%" "OrbitBuild.exe" >nul
+if errorlevel 1 goto root_copy_fail
+copy /y "%PLAYER%" "OrbitPlayer.exe" >nul
 if errorlevel 1 goto root_copy_fail
 
 if exist "build\apps\launcher\%CONFIG%\OrbitLauncher.pdb" (
@@ -204,6 +217,10 @@ if exist "build\apps\build\%CONFIG%\OrbitBuild.pdb" (
     copy /y "build\apps\build\%CONFIG%\OrbitBuild.pdb" "%SYMBOLS%\OrbitBuild.pdb" >nul
 )
 
+if exist "build\apps\player\%CONFIG%\OrbitPlayer.pdb" (
+    copy /y "build\apps\player\%CONFIG%\OrbitPlayer.pdb" "%SYMBOLS%\OrbitPlayer.pdb" >nul
+)
+
 > "%PACKAGE%\README.txt" (
     echo Orbit Windows %CONFIG%
     echo =====================
@@ -217,6 +234,12 @@ if exist "build\apps\build\%CONFIG%\OrbitBuild.pdb" (
     echo Validate or cook a project headlessly with:
     echo     OrbitBuild.exe ^<project-directory-or-Project.orbit.toml^> --validate
     echo     OrbitBuild.exe ^<project-directory-or-Project.orbit.toml^> --cook
+    echo.
+    echo Assemble a standalone project package with:
+    echo     OrbitBuild.exe ^<project-directory-or-Project.orbit.toml^> --package
+    echo.
+    echo Run a cooked project directly with:
+    echo     OrbitPlayer.exe ^<cooked-package-or-OrbitBuildManifest.toml^>
     echo.
     echo Runtime logs and crash reports are written under:
     echo     logs\
@@ -240,6 +263,9 @@ echo.
 echo Root build CLI:
 echo   %CD%\OrbitBuild.exe
 echo.
+echo Root player runtime:
+echo   %CD%\OrbitPlayer.exe
+echo.
 echo Package:
 echo   %CD%\%PACKAGE%\OrbitLauncher.exe
 echo ============================================================
@@ -255,7 +281,7 @@ goto success
 :root_copy_fail
 echo.
 echo [Orbit] ERROR: Failed to update the root executables.
-echo Close any running Orbit.exe / OrbitLauncher.exe / OrbitSandbox.exe / OrbitStudio.exe / OrbitBuild.exe and retry.
+echo Close any running Orbit.exe / OrbitLauncher.exe / OrbitSandbox.exe / OrbitStudio.exe / OrbitBuild.exe / OrbitPlayer.exe and retry.
 goto fail
 
 :package_fail
