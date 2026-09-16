@@ -588,6 +588,68 @@ void PathNetworkService::SetBezierHandles(
     }
 }
 
+void PathNetworkService::SetProfile(
+    const scene::ObjectId pathObject,
+    std::string profileAsset)
+{
+    const auto stored =
+        objects_.Find(pathObject);
+
+    if (!stored.has_value())
+    {
+        throw std::invalid_argument(
+            "Cannot assign a profile to an unknown path object.");
+    }
+
+    schema::PropertyId property{};
+
+    if (stored->type == kPathNetworkType)
+    {
+        property = kNetworkProfile;
+    }
+    else if (stored->type == kPathEdgeType)
+    {
+        property = kEdgeProfileOverride;
+    }
+    else
+    {
+        throw std::invalid_argument(
+            "Path profiles may be assigned only to networks or edges.");
+    }
+
+    const bool ownsTransaction =
+        !commands_.HasActiveTransaction();
+
+    if (ownsTransaction)
+    {
+        commands_.BeginTransaction(
+            "Assign Path Profile");
+    }
+
+    try
+    {
+        commands_.SetProperty(
+            pathObject,
+            property,
+            std::move(profileAsset));
+
+        if (ownsTransaction)
+        {
+            commands_.CommitTransaction();
+        }
+    }
+    catch (...)
+    {
+        if (ownsTransaction &&
+            commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
+
+        throw;
+    }
+}
+
 std::optional<PathNetworkRecord>
 PathNetworkService::FindNetwork(
     const NetworkId network) const
