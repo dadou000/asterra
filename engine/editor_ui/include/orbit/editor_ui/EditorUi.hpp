@@ -121,7 +121,7 @@ public:
     // dynamic extension path used by hot-reloadable editor plugins.
     void UpsertPanel(PanelDefinition panel);
 
-    [[nodiscard]] bool UnregisterPanel(PanelId id) noexcept;
+    [[nodiscard]] bool UnregisterPanel(PanelId id);
 
     void RegisterMenuAction(MenuAction action);
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
