@@ -1,4 +1,5 @@
 #include <orbit/build/BuildService.hpp>
+#include <orbit/platform/Paths.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -12,6 +13,7 @@ namespace
 enum class Action
 {
     Cook,
+    Package,
     Validate
 };
 
@@ -35,6 +37,7 @@ void PrintUsage()
         << "  --output <path>    Override the profile build output directory.\n"
         << "  --validate         Validate only; do not write build products.\n"
         << "  --cook             Validate and cook project products (default).\n"
+        << "  --package          Cook and assemble a standalone OrbitPlayer package.\n"
         << "  --no-clean         Refuse to replace an existing output directory.\n"
         << "  --help, -h         Show this help.\n";
 }
@@ -106,6 +109,13 @@ void PrintUsage()
             continue;
         }
 
+        if (argument == "--package")
+        {
+            options.action =
+                Action::Package;
+            continue;
+        }
+
         if (argument == "--no-clean")
         {
             options.cleanOutput = false;
@@ -159,6 +169,53 @@ void PrintUsage()
     }
 
     return options;
+}
+
+[[nodiscard]] std::filesystem::path
+FindPlayerExecutable()
+{
+    const auto executable =
+        orbit::platform::
+            ExecutablePath();
+
+    const auto sibling =
+        executable.parent_path() /
+        "OrbitPlayer.exe";
+
+    if (std::filesystem::
+            is_regular_file(
+                sibling))
+    {
+        return sibling;
+    }
+
+    // Development tree:
+    // build/apps/build/<Config>/OrbitBuild.exe
+    // build/apps/player/<Config>/OrbitPlayer.exe
+    const auto configuration =
+        executable.parent_path().
+            filename();
+
+    const auto appsRoot =
+        executable.parent_path().
+            parent_path().
+            parent_path();
+
+    const auto development =
+        appsRoot /
+        "player" /
+        configuration /
+        "OrbitPlayer.exe";
+
+    if (std::filesystem::
+            is_regular_file(
+                development))
+    {
+        return development;
+    }
+
+    throw std::runtime_error(
+        "OrbitPlayer.exe was not found beside OrbitBuild or in the development build tree.");
 }
 
 void PrintIssues(
@@ -249,6 +306,40 @@ int main(
                 << result.profile.storefront
                 << "\nOutput: "
                 << result.outputDirectory.string()
+                << '\n';
+
+            return 0;
+        }
+
+        if (options.action ==
+            Action::Package)
+        {
+            const auto result =
+                service.Package(
+                    request,
+                    {
+                        .playerExecutable =
+                            FindPlayerExecutable()
+                    });
+
+            PrintIssues(
+                result.issues);
+
+            if (!result.Succeeded())
+            {
+                return 4;
+            }
+
+            std::cout
+                << "Package succeeded.\n"
+                << "Profile: "
+                << result.manifest.profile.name
+                << "\nExecutable: "
+                << result.executablePath.string()
+                << "\nBuild manifest: "
+                << result.manifestPath.string()
+                << "\nPackage manifest: "
+                << result.packageManifestPath.string()
                 << '\n';
 
             return 0;
