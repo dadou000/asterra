@@ -62,23 +62,60 @@ void ContentService::Scan()
 {
     std::unordered_map<AssetId, AssetRecord> next;
     std::unordered_map<std::string, AssetId> nextPaths;
+    std::vector<ContentDiagnostic> diagnostics;
 
     if (std::filesystem::exists(contentRoot_))
     {
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(
-                 contentRoot_, std::filesystem::directory_options::skip_permission_denied))
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(
+                 contentRoot_,
+                 std::filesystem::directory_options::
+                     skip_permission_denied))
         {
-            if (!entry.is_regular_file()) continue;
-            AssetRecord record = BuildRecord(entry.path());
-            if (record.kind == AssetKind::Unknown) continue;
-            const std::string key = std::filesystem::relative(entry.path(), projectRoot_).generic_string();
-            nextPaths.insert_or_assign(Lower(key), record.id);
-            next.insert_or_assign(record.id, std::move(record));
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+
+            try
+            {
+                AssetRecord record =
+                    BuildRecord(entry.path());
+
+                if (record.kind == AssetKind::Unknown)
+                {
+                    continue;
+                }
+
+                const std::string key =
+                    std::filesystem::relative(
+                        entry.path(),
+                        projectRoot_).
+                        generic_string();
+
+                nextPaths.insert_or_assign(
+                    Lower(key),
+                    record.id);
+                next.insert_or_assign(
+                    record.id,
+                    std::move(record));
+            }
+            catch (const std::exception& exception)
+            {
+                diagnostics.push_back({
+                    .sourcePath =
+                        std::filesystem::relative(
+                            entry.path(),
+                            projectRoot_),
+                    .message = exception.what()
+                });
+            }
         }
     }
 
     assets_ = std::move(next);
     pathIndex_ = std::move(nextPaths);
+    diagnostics_ = std::move(diagnostics);
     ++revision_;
 }
 
@@ -124,6 +161,12 @@ std::vector<AssetRecord> ContentService::Search(
 std::vector<AssetRecord> ContentService::All() const
 {
     return Search({});
+}
+
+const std::vector<ContentDiagnostic>&
+ContentService::Diagnostics() const noexcept
+{
+    return diagnostics_;
 }
 
 u64 ContentService::Revision() const noexcept
