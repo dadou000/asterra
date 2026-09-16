@@ -1,5 +1,7 @@
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 
+#include <string>
+
 namespace orbit::editor_model::builtin
 {
 void RegisterSchemas(
