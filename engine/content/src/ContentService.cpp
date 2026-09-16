@@ -222,12 +222,7 @@ void ContentService::Scan()
         }
 
         std::ranges::sort(
-            record.dependencies,
-            {},
-            [](const AssetId id)
-            {
-                return id.ToString();
-            });
+            record.dependencies);
 
         record.dependencies.erase(
             std::unique(
@@ -243,12 +238,7 @@ void ContentService::Scan()
             dependency);
 
         std::ranges::sort(
-            users,
-            {},
-            [](const AssetId id)
-            {
-                return id.ToString();
-            });
+            users);
 
         users.erase(
             std::unique(
@@ -459,18 +449,28 @@ AssetId ContentService::ImportFile(const std::filesystem::path& source)
 
 AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) const
 {
+    const AssetKind kind =
+        KindFromExtension(
+            absolute);
+
     AssetRecord result{
         .id = StableId(absolute),
-        .kind = KindFromExtension(absolute),
+        .kind = kind,
         .name = absolute.stem().string(),
         .sourcePath =
             std::filesystem::relative(
                 absolute,
-                projectRoot_),
-        .sourceHash =
-            HashFile(
-                absolute)
+                projectRoot_)
     };
+
+    if (kind == AssetKind::Unknown)
+    {
+        return result;
+    }
+
+    result.sourceHash =
+        HashFile(
+            absolute);
 
     if (result.kind == AssetKind::Material)
     {
