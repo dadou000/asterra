@@ -18,6 +18,7 @@ target_link_libraries(OrbitStudio
         Orbit::Plugins
         Orbit::Frames
         Orbit::Jobs
+        Orbit::PathGeometry
         Orbit::PathRouting
         Orbit::Paths
         Orbit::Platform
