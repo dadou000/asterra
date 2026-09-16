@@ -5,6 +5,7 @@ add_executable(OrbitBuild
 target_link_libraries(OrbitBuild
     PRIVATE
         Orbit::Build
+        Orbit::Platform
 )
 
 target_compile_features(OrbitBuild PRIVATE cxx_std_23)
