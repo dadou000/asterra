@@ -95,6 +95,37 @@ int main()
                     kClearSelection
         });
 
+    surfaces.Add(
+        "viewport",
+        orbit::editor_model::
+            CommandSurfaceKind::Toolbar,
+        orbit::editor_model::
+            authoring_commands::
+                kAssignMaterial);
+
+    ORBIT_TEST_CHECK(
+        surfaces.Commands(
+            "viewport",
+            orbit::editor_model::
+                CommandSurfaceKind::Toolbar).
+            size() == 3);
+
+    ORBIT_TEST_CHECK(
+        surfaces.Remove(
+            "viewport",
+            orbit::editor_model::
+                CommandSurfaceKind::Toolbar,
+            orbit::editor_model::
+                authoring_commands::
+                    kAssignMaterial));
+
+    ORBIT_TEST_CHECK(
+        surfaces.Commands(
+            "viewport",
+            orbit::editor_model::
+                CommandSurfaceKind::Toolbar).
+            size() == 2);
+
     surfaces.Set(
         "viewport",
         orbit::editor_model::
