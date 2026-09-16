@@ -61,6 +61,8 @@ int main()
         ("orbit-plugin-" + orbit::documents::ProjectId::Random().ToString());
     std::filesystem::remove_all(root);
 
+    {
+
     auto project = orbit::documents::ProjectDocument::Create(root, "Plugin Test");
     project.Manifest().plugins.push_back({
         .id = "test.plugin",
@@ -218,6 +220,8 @@ int main()
     Check(foundBroken);
     Check(commandRegistry.Catalog().size() == 1);
     Check(commandRegistry.Catalog()[0].name == "StillLoaded");
+
+    }
 
     std::filesystem::remove_all(root);
     return 0;
