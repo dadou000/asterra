@@ -4,14 +4,25 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <source_location>
 
 namespace
 {
-void Check(const bool condition)
+void Check(
+    const bool condition,
+    const std::source_location location =
+        std::source_location::current())
 {
     if (!condition)
     {
-        std::abort();
+        std::cerr
+            << "ContentService test failed at "
+            << location.file_name()
+            << ':'
+            << location.line()
+            << '\n';
+        std::exit(1);
     }
 }
 
@@ -46,6 +57,14 @@ int main()
     Write(root / "Content" / "Materials" / "broken.orbitmaterial",
         "[not_material]\nname = \"Broken\"\n");
 
+    Write(
+        root / "Content" / "Paths" / "road.orbitpathprofile",
+        "[path_profile]\n"
+        "name = \"Regional Road\"\n"
+        "kind = \"road\"\n"
+        "width_meters = 7.0\n"
+        "lanes = 2\n");
+
     orbit::content::ContentService content(root);
     content.Scan();
     const auto materials = content.Search("steel", orbit::content::AssetKind::Material);
@@ -64,6 +83,21 @@ int main()
             *materials[0].derivedKey,
             "material.toml"));
     Check(materials[0].dependencies.size() == 3);
+
+    const auto pathProfiles =
+        content.Search(
+            "regional",
+            orbit::content::AssetKind::PathProfile);
+
+    Check(pathProfiles.size() == 1);
+    Check(pathProfiles[0].name == "Regional Road");
+    Check(pathProfiles[0].tags.size() == 2);
+    Check(pathProfiles[0].tags[0] == "path");
+    Check(pathProfiles[0].tags[1] == "road");
+    Check(
+        orbit::content::AssetKindName(
+            pathProfiles[0].kind) ==
+        "Path Profile");
 
     const auto* baseTexture =
         content.FindByPath(
@@ -88,12 +122,23 @@ int main()
         std::filesystem::path("Content/Materials/broken.orbitmaterial"));
 
     const auto stableId = materials[0].id;
+    const auto stablePathProfileId =
+        pathProfiles[0].id;
     content.Scan();
     const auto* same = content.FindByPath("Content/Materials/steel.orbitmaterial");
     if (same == nullptr || same->id != stableId)
     {
         return 1;
     }
+
+    const auto* samePathProfile =
+        content.FindByPath(
+            "Content/Paths/road.orbitpathprofile");
+
+    Check(samePathProfile != nullptr);
+    Check(
+        samePathProfile->id ==
+        stablePathProfileId);
 
     Write(
         root /
