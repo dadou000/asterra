@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from mcp.server.mcpserver import MCPServer as _Server
-except ModuleNotFoundError:
+    # MCP Python SDK v2 public API.
+    from mcp.server import MCPServer as _Server
+except (ImportError, ModuleNotFoundError):
+    # Keep the bridge usable with supported v1 environments.
     from mcp.server.fastmcp import FastMCP as _Server
 
 HOST = os.environ.get("ORBIT_RPC_HOST", "127.0.0.1")
@@ -340,7 +342,10 @@ def orbit_rpc_call(method: str, params_json: str = "{}") -> Any:
 
 
 if hasattr(mcp, "resource"):
-    @mcp.resource("orbit://viewport/screenshot")
+    @mcp.resource(
+        "orbit://viewport/screenshot",
+        mime_type="image/bmp",
+    )
     def orbit_viewport_screenshot_resource() -> bytes:
         """Return a fresh BMP capture of Orbit Studio's primary viewport."""
         import tempfile
