@@ -179,10 +179,12 @@ int main()
         graph.Status(derived);
 
     ORBIT_TEST_CHECK(afterStale.has_value());
+    // The target remains requested, so Poll() discards the stale product
+    // and immediately schedules the newer generation.
     ORBIT_TEST_CHECK(
         afterStale->state ==
         orbit::procedural_graph::
-            NodeState::Dirty);
+            NodeState::Building);
 
     ORBIT_TEST_CHECK(graph.BuildBlocking(derived));
     ORBIT_TEST_CHECK(staleBuildCount == 2);
