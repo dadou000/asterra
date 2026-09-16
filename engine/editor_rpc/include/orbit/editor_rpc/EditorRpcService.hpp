@@ -60,6 +60,11 @@ public:
 
     [[nodiscard]] u64 LatestEventSequence() const noexcept;
 
+    // Attaches the live primary Studio view once graphics/runtime
+    // composition exists. May be called at most once.
+    void AttachViewport(
+        ViewportAutomation viewport);
+
 private:
     void Register(
         rpc::MethodDescriptor descriptor,
@@ -79,5 +84,6 @@ private:
     std::vector<std::string>
         pendingNotifications_;
     u64 nextEventSequence_{1};
+    bool viewportRegistered_{false};
 };
 } // namespace orbit::editor_rpc
