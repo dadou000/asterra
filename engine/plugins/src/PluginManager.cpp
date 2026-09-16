@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <fstream>
 #include <format>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -143,6 +144,32 @@ void OpenLibrary(
     return scope == PluginScope::Editor ||
         scope == PluginScope::Both;
 }
+
+[[nodiscard]] std::optional<
+    editor_model::CommandSurfaceKind>
+CommandSurfaceKindFromString(
+    const std::string_view value) noexcept
+{
+    if (value == "toolbar")
+    {
+        return editor_model::
+            CommandSurfaceKind::Toolbar;
+    }
+
+    if (value == "context")
+    {
+        return editor_model::
+            CommandSurfaceKind::ContextMenu;
+    }
+
+    if (value == "radial")
+    {
+        return editor_model::
+            CommandSurfaceKind::Radial;
+    }
+
+    return std::nullopt;
+}
 } // namespace
 
 class PluginManager::Impl
@@ -155,6 +182,14 @@ public:
         {
             PluginPanelDescriptor descriptor;
             int functionRef{LUA_NOREF};
+        };
+
+        struct SurfaceContribution
+        {
+            std::string surface;
+            editor_model::CommandSurfaceKind kind{
+                editor_model::CommandSurfaceKind::Toolbar};
+            commands::CommandId command{};
         };
 
         PluginInstance(
@@ -741,6 +776,89 @@ public:
             return 1;
         }
 
+        static int LuaRegisterContextAction(
+            lua_State* state)
+        {
+            PluginInstance* self =
+                Self(state);
+
+            const std::string_view idText(
+                luaL_checkstring(
+                    state,
+                    1));
+            const std::string surface =
+                luaL_checkstring(
+                    state,
+                    2);
+            const std::string_view kindText(
+                luaL_checkstring(
+                    state,
+                    3));
+
+            const auto id =
+                commands::CommandId::Parse(
+                    idText);
+
+            if (!id.has_value() ||
+                self->owner_.
+                    commandRegistry.
+                    Find(*id) == nullptr)
+            {
+                luaL_error(
+                    state,
+                    "registerContextAction requires a registered Orbit command ID");
+            }
+
+            const auto kind =
+                CommandSurfaceKindFromString(
+                    kindText);
+
+            if (!kind.has_value())
+            {
+                luaL_error(
+                    state,
+                    "registerContextAction kind must be 'toolbar', 'context', or 'radial'");
+            }
+
+            self->owner_.
+                commandSurfaces.
+                Add(
+                    surface,
+                    *kind,
+                    *id);
+
+            const auto duplicate =
+                std::find_if(
+                    self->surfaceContributions_.
+                        begin(),
+                    self->surfaceContributions_.
+                        end(),
+                    [&](const SurfaceContribution&
+                            contribution)
+                    {
+                        return
+                            contribution.surface ==
+                                surface &&
+                            contribution.kind ==
+                                *kind &&
+                            contribution.command ==
+                                *id;
+                    });
+
+            if (duplicate ==
+                self->surfaceContributions_.end())
+            {
+                self->surfaceContributions_.
+                    push_back({
+                        .surface = surface,
+                        .kind = *kind,
+                        .command = *id
+                    });
+            }
+
+            return 0;
+        }
+
         static int LuaRegisterPanel(
             lua_State* state)
         {
@@ -1012,6 +1130,9 @@ public:
                 "registerCommand",
                 &LuaRegisterCommand);
             setFunction(
+                "registerContextAction",
+                &LuaRegisterContextAction);
+            setFunction(
                 "registerPanel",
                 &LuaRegisterPanel);
 
@@ -1128,6 +1249,21 @@ public:
 
         void Unload()
         {
+            for (const SurfaceContribution&
+                     contribution :
+                 surfaceContributions_)
+            {
+                static_cast<void>(
+                    owner_.
+                        commandSurfaces.
+                        Remove(
+                            contribution.surface,
+                            contribution.kind,
+                            contribution.command));
+            }
+
+            surfaceContributions_.clear();
+
             for (const commands::CommandId id :
                  commandIds_)
             {
@@ -1260,6 +1396,8 @@ public:
             activePanelContext_{nullptr};
         std::vector<commands::CommandId>
             commandIds_;
+        std::vector<SurfaceContribution>
+            surfaceContributions_;
         std::vector<Panel> panels_;
         u64 fingerprint_{0};
         u64 revision_{0};
@@ -1271,11 +1409,13 @@ public:
         std::filesystem::path root,
         commands::CommandRegistry& registry,
         commands::CommandService& commands,
+        editor_model::CommandSurfaceRegistry& surfaces,
         scene::ObjectStore& objectStore,
         selection::SelectionService& selectionService)
         : projectRoot(std::move(root)),
           commandRegistry(registry),
           commandService(commands),
+          commandSurfaces(surfaces),
           objects(objectStore),
           selection(selectionService)
     {
@@ -1284,6 +1424,8 @@ public:
     std::filesystem::path projectRoot;
     commands::CommandRegistry& commandRegistry;
     commands::CommandService& commandService;
+    editor_model::CommandSurfaceRegistry&
+        commandSurfaces;
     scene::ObjectStore& objects;
     selection::SelectionService& selection;
     std::unordered_map<
@@ -1304,6 +1446,7 @@ PluginManager::PluginManager(
     std::filesystem::path projectRoot,
     commands::CommandRegistry& commandRegistry,
     commands::CommandService& commandService,
+    editor_model::CommandSurfaceRegistry& commandSurfaces,
     scene::ObjectStore& objects,
     selection::SelectionService& selection)
     : impl_(
@@ -1311,6 +1454,7 @@ PluginManager::PluginManager(
               std::move(projectRoot),
               commandRegistry,
               commandService,
+              commandSurfaces,
               objects,
               selection))
 {
