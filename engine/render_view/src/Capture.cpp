@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 
 namespace orbit::render_view
@@ -241,10 +242,14 @@ CaptureResult CaptureBmp(
                     4U;
 
             const std::array<char, 4> bgra{
-                static_cast<char>(pixel[2]),
-                static_cast<char>(pixel[1]),
-                static_cast<char>(pixel[0]),
-                static_cast<char>(pixel[3])
+                static_cast<char>(
+                    std::to_integer<u8>(pixel[2])),
+                static_cast<char>(
+                    std::to_integer<u8>(pixel[1])),
+                static_cast<char>(
+                    std::to_integer<u8>(pixel[0])),
+                static_cast<char>(
+                    std::to_integer<u8>(pixel[3]))
             };
 
             output.write(
