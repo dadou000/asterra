@@ -291,6 +291,39 @@ int main()
                     unownedOutput /
                     "keep.txt"));
 
+        const auto dummyPlayer =
+            temporary.Root() /
+            "TestRuntime/OrbitPlayer.exe";
+
+        WriteText(
+            dummyPlayer,
+            "orbit-player-test-binary");
+
+        const auto package =
+            service.Package(
+                request,
+                {
+                    .playerExecutable =
+                        dummyPlayer
+                });
+
+        ORBIT_TEST_CHECK(
+            package.Succeeded());
+        ORBIT_TEST_CHECK(
+            std::filesystem::
+                is_regular_file(
+                    package.
+                        executablePath));
+        ORBIT_TEST_CHECK(
+            std::filesystem::
+                is_regular_file(
+                    package.
+                        packageManifestPath));
+        ORBIT_TEST_CHECK(
+            package.executablePath.
+                parent_path() ==
+            package.outputDirectory);
+
         orbit::build::BuildRequest
             protectedRequest = request;
 
