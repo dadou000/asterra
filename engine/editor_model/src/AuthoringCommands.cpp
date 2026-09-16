@@ -384,5 +384,35 @@ void Register(
                             "end_handle")));
             }
     });
+    registry.Register({
+        .id = kConnectPathRouted,
+        .name = "Connect Routed",
+        .category = "Path",
+        .description =
+            "Connect the two selected path nodes with an asynchronously solved routed edge.",
+        .enablement =
+            [&objects, &selection]
+            {
+                return PathPairEnablement(
+                    objects,
+                    selection);
+            },
+        .invoke =
+            [&objects,
+             &commandService,
+             &selection](
+                const commands::CommandArguments&)
+            {
+                paths::PathNetworkService service(
+                    objects,
+                    commandService);
+
+                static_cast<void>(
+                    service.ConnectRouted(
+                        selection.Ordered()[0],
+                        selection.Ordered()[1]));
+            }
+    });
+
 }
 } // namespace orbit::editor_model::authoring_commands
