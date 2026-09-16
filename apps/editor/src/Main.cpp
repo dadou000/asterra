@@ -1,3 +1,4 @@
+#include <orbit/build/BuildService.hpp>
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/content/ContentService.hpp>
@@ -1222,6 +1223,14 @@ int main(
             };
 
         constexpr orbit::editor_ui::PanelId
+            kBuildPanel{
+                .high =
+                    0x4f52424954535455ULL,
+                .low =
+                    0x44494f4255494c44ULL
+            };
+
+        constexpr orbit::editor_ui::PanelId
             kContentPanel{
                 .high =
                     0x4f52424954535455ULL,
@@ -1240,6 +1249,22 @@ int main(
         std::string explorerSearch;
         std::string contentSearch;
         std::string renameBuffer;
+        orbit::build::BuildService
+            buildService;
+        std::string selectedBuildProfile =
+            project.Manifest().
+                    buildProfiles.empty()
+                ? std::string{}
+                : project.Manifest().
+                      buildProfiles.front().
+                      name;
+        std::vector<orbit::build::BuildIssue>
+            buildIssues;
+        std::filesystem::path
+            lastBuildManifest;
+        std::string buildStatus{
+            "Not run"};
+
         std::vector<orbit::editor_ui::PanelId>
             pluginPanelIds;
         std::vector<
@@ -1258,6 +1283,141 @@ int main(
             activePathNetwork;
         std::optional<orbit::scene::ObjectId>
             lastPlacedPathNode;
+
+        const auto validateProjectBuild =
+            [&]
+            {
+                try
+                {
+                    const auto result =
+                        buildService.Validate({
+                            .manifestPath =
+                                project.ManifestPath(),
+                            .profileName =
+                                selectedBuildProfile
+                        });
+
+                    buildIssues =
+                        result.issues;
+
+                    if (result.Succeeded())
+                    {
+                        buildStatus =
+                            std::format(
+                                "Validated {} / {} / {}",
+                                result.profile.platform,
+                                result.profile.configuration,
+                                result.profile.storefront);
+
+                        orbit::log::Info(
+                            std::format(
+                                "Build validation succeeded for profile '{}'.",
+                                result.profile.name));
+                    }
+                    else
+                    {
+                        buildStatus =
+                            "Validation failed";
+                        orbit::log::Error(
+                            "Project build validation failed.");
+                    }
+                }
+                catch (const std::exception&
+                           exception)
+                {
+                    buildIssues = {
+                        {
+                            .severity =
+                                orbit::build::
+                                    IssueSeverity::Error,
+                            .code =
+                                "studio.build.exception",
+                            .message =
+                                exception.what()
+                        }
+                    };
+                    buildStatus =
+                        "Validation failed";
+                    orbit::log::Error(
+                        exception.what());
+                }
+            };
+
+        const auto cookProjectBuild =
+            [&]
+            {
+                try
+                {
+                    // Studio builds always package the currently authored
+                    // semantic state, never a stale pre-edit checkpoint.
+                    project.Save();
+                    world.Checkpoint();
+
+                    const auto result =
+                        buildService.Cook({
+                            .manifestPath =
+                                project.ManifestPath(),
+                            .profileName =
+                                selectedBuildProfile
+                        });
+
+                    buildIssues =
+                        result.issues;
+
+                    if (result.Succeeded())
+                    {
+                        lastBuildManifest =
+                            result.manifestPath;
+                        buildStatus =
+                            std::format(
+                                "Cooked {} asset{} and {} script{}",
+                                result.manifest.
+                                    assets.size(),
+                                result.manifest.
+                                    assets.size() == 1U
+                                    ? ""
+                                    : "s",
+                                result.manifest.
+                                    scripts.size(),
+                                result.manifest.
+                                    scripts.size() == 1U
+                                    ? ""
+                                    : "s");
+
+                        orbit::log::Info(
+                            std::format(
+                                "Build cook succeeded: {}",
+                                result.manifestPath.
+                                    string()));
+                    }
+                    else
+                    {
+                        buildStatus =
+                            "Cook failed";
+                        orbit::log::Error(
+                            "Project build cook failed.");
+                    }
+                }
+                catch (const std::exception&
+                           exception)
+                {
+                    buildIssues = {
+                        {
+                            .severity =
+                                orbit::build::
+                                    IssueSeverity::Error,
+                            .code =
+                                "studio.build.exception",
+                            .message =
+                                exception.what()
+                        }
+                    };
+                    buildStatus =
+                        "Cook failed";
+                    orbit::log::Error(
+                        exception.what());
+                }
+            };
 
         orbit::jobs::JobSystem routeJobs;
         orbit::path_routing::RoutePlanner
@@ -3723,6 +3883,129 @@ int main(
         });
 
         ui.RegisterPanel({
+            .id = kBuildPanel,
+            .title = "Build",
+            .defaultOpen = true,
+            .draw =
+                [&project,
+                 &selectedBuildProfile,
+                 &buildIssues,
+                 &lastBuildManifest,
+                 &buildStatus,
+                 &validateProjectBuild,
+                 &cookProjectBuild](
+                    orbit::editor_ui::
+                        PanelContext& context)
+                {
+                    context.Text(
+                        project.Manifest().
+                            displayName);
+                    context.Separator();
+
+                    const auto& profiles =
+                        project.Manifest().
+                            buildProfiles;
+
+                    if (profiles.empty())
+                    {
+                        context.Text(
+                            "No build profiles are defined.");
+                    }
+                    else
+                    {
+                        context.Text(
+                            "Build profile");
+
+                        for (std::size_t index = 0;
+                             index < profiles.size();
+                             ++index)
+                        {
+                            const auto& profile =
+                                profiles[index];
+
+                            const bool selected =
+                                profile.name ==
+                                selectedBuildProfile;
+
+                            const std::string button =
+                                std::format(
+                                    "{}##build-profile-{}",
+                                    selected
+                                        ? "Selected"
+                                        : "Use",
+                                    index);
+
+                            if (context.Button(
+                                    button))
+                            {
+                                selectedBuildProfile =
+                                    profile.name;
+                            }
+
+                            context.SameLine();
+                            context.Text(
+                                std::format(
+                                    "{} — {} / {} / {}",
+                                    profile.name,
+                                    profile.platform,
+                                    profile.configuration,
+                                    profile.storefront));
+                        }
+                    }
+
+                    context.Separator();
+
+                    if (context.Button(
+                            "Validate Project"))
+                    {
+                        validateProjectBuild();
+                    }
+
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Cook Project"))
+                    {
+                        cookProjectBuild();
+                    }
+
+                    context.Separator();
+                    context.Text(
+                        "Status: " +
+                        buildStatus);
+
+                    if (!lastBuildManifest.empty())
+                    {
+                        context.Text(
+                            "Manifest: " +
+                            lastBuildManifest.
+                                generic_string());
+                    }
+
+                    for (const auto& issue :
+                         buildIssues)
+                    {
+                        context.Text(
+                            std::format(
+                                "{} [{}] {}{}",
+                                issue.severity ==
+                                        orbit::build::
+                                            IssueSeverity::Error
+                                    ? "ERROR"
+                                    : "WARN",
+                                issue.code,
+                                issue.message,
+                                issue.path.empty()
+                                    ? std::string{}
+                                    : std::format(
+                                          " ({})",
+                                          issue.path.
+                                              generic_string())));
+                    }
+                }
+        });
+
+        ui.RegisterPanel({
             .id = kOutputPanel,
             .title = "Output",
             .defaultOpen = true,
@@ -3763,6 +4046,26 @@ int main(
 
                     orbit::log::Info(
                         "Project and world checkpoint saved.");
+                }
+        });
+
+        ui.RegisterMenuAction({
+            .menu = "Build",
+            .label = "Validate Project",
+            .invoke =
+                [&validateProjectBuild]
+                {
+                    validateProjectBuild();
+                }
+        });
+
+        ui.RegisterMenuAction({
+            .menu = "Build",
+            .label = "Cook Project",
+            .invoke =
+                [&cookProjectBuild]
+                {
+                    cookProjectBuild();
                 }
         });
 
