@@ -433,6 +433,130 @@ ObjectToRpc(
     return rpc::Value(
         std::move(result));
 }
+
+[[nodiscard]] rpc::Value
+ViewportToRpc(
+    const render_view::RenderView& view)
+{
+    const auto& camera =
+        view.Camera();
+
+    rpc::Value::Object result{
+        {
+            "width",
+            static_cast<i64>(
+                view.Width())
+        },
+        {
+            "height",
+            static_cast<i64>(
+                view.Height())
+        },
+        {
+            "position",
+            rpc::Value::Array{
+                camera.localPositionMeters.x,
+                camera.localPositionMeters.y,
+                camera.localPositionMeters.z
+            }
+        },
+        {
+            "forward",
+            rpc::Value::Array{
+                static_cast<f64>(
+                    camera.forward.x),
+                static_cast<f64>(
+                    camera.forward.y),
+                static_cast<f64>(
+                    camera.forward.z)
+            }
+        },
+        {
+            "up",
+            rpc::Value::Array{
+                static_cast<f64>(
+                    camera.up.x),
+                static_cast<f64>(
+                    camera.up.y),
+                static_cast<f64>(
+                    camera.up.z)
+            }
+        },
+        {
+            "vertical_fov_radians",
+            static_cast<f64>(
+                camera.verticalFovRadians)
+        },
+        {
+            "near_plane_meters",
+            static_cast<f64>(
+                camera.nearPlaneMeters)
+        },
+        {
+            "far_plane_meters",
+            static_cast<f64>(
+                camera.farPlaneMeters)
+        }
+    };
+
+    result.emplace(
+        "frame",
+        camera.frame
+            ? rpc::Value(
+                  camera.frame.ToString())
+            : rpc::Value{});
+
+    return rpc::Value(
+        std::move(result));
+}
+
+[[nodiscard]] math::Double3
+RequireDouble3(
+    const rpc::Value& value,
+    const std::string_view name)
+{
+    if (!value.IsArray() ||
+        value.AsArray().size() != 3)
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(name) +
+                " must be a 3-number array.");
+    }
+
+    try
+    {
+        return {
+            value.AsArray()[0].AsNumber(),
+            value.AsArray()[1].AsNumber(),
+            value.AsArray()[2].AsNumber()
+        };
+    }
+    catch (const std::bad_variant_access&)
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(name) +
+                " must contain numbers.");
+    }
+}
+
+[[nodiscard]] math::Float3
+RequireFloat3(
+    const rpc::Value& value,
+    const std::string_view name)
+{
+    const math::Double3 parsed =
+        RequireDouble3(
+            value,
+            name);
+
+    return {
+        static_cast<f32>(parsed.x),
+        static_cast<f32>(parsed.y),
+        static_cast<f32>(parsed.z)
+    };
+}
 } // namespace
 
 EditorRpcService::EditorRpcService(
@@ -442,7 +566,8 @@ EditorRpcService::EditorRpcService(
     commands::CommandService& commandService,
     const schema::SchemaRegistry& schemas,
     scene::ObjectStore& objects,
-    selection::SelectionService& selection)
+    selection::SelectionService& selection,
+    ViewportAutomation viewport)
     : dispatcher_(dispatcher)
 {
     Register(
@@ -1288,6 +1413,400 @@ EditorRpcService::EditorRpcService(
                     {"ok", true}
                 });
         });
+
+    Register(
+        {
+            .name = "event.since",
+            .description =
+                "Returns replayable editor events newer than a sequence number.",
+            .mutating = false
+        },
+        [this](const rpc::Value& params)
+        {
+            i64 after = 0;
+
+            if (params.IsObject())
+            {
+                if (const auto* value =
+                        params.Find("sequence");
+                    value != nullptr)
+                {
+                    try
+                    {
+                        after =
+                            value->AsInteger();
+                    }
+                    catch (const std::bad_variant_access&)
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "event.since sequence must be an integer.");
+                    }
+                }
+            }
+            else
+            {
+                throw rpc::Error(
+                    -32602,
+                    "event.since params must be an object.");
+            }
+
+            if (after < 0)
+            {
+                throw rpc::Error(
+                    -32602,
+                    "event.since sequence must not be negative.");
+            }
+
+            rpc::Value::Array events;
+
+            for (const EventRecord& event :
+                 events_)
+            {
+                if (event.sequence <=
+                    static_cast<u64>(after))
+                {
+                    continue;
+                }
+
+                events.emplace_back(
+                    rpc::Value::Object{
+                        {
+                            "sequence",
+                            static_cast<i64>(
+                                event.sequence)
+                        },
+                        {"type", event.type},
+                        {"data", event.data}
+                    });
+            }
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {
+                        "latest_sequence",
+                        static_cast<i64>(
+                            LatestEventSequence())
+                    },
+                    {
+                        "events",
+                        std::move(events)
+                    }
+                });
+        });
+
+    if (viewport.view != nullptr)
+    {
+        Register(
+            {
+                .name = "viewport.get",
+                .description =
+                    "Returns the primary Studio RenderView state and dimensions.",
+                .mutating = false
+            },
+            [view = viewport.view](
+                const rpc::Value&)
+            {
+                return ViewportToRpc(
+                    *view);
+            });
+
+        Register(
+            {
+                .name = "viewport.set_camera",
+                .description =
+                    "Updates primary RenderView camera state.",
+                .mutating = true
+            },
+            [this,
+             view = viewport.view](
+                const rpc::Value& params)
+            {
+                const auto& values =
+                    RequireObject(params);
+
+                auto& camera =
+                    view->Camera();
+
+                if (const auto found =
+                        values.find("frame");
+                    found != values.end())
+                {
+                    if (found->second.IsNull())
+                    {
+                        camera.frame = {};
+                    }
+                    else if (found->second.IsString())
+                    {
+                        const auto frame =
+                            frames::FrameId::Parse(
+                                found->second.
+                                    AsString());
+
+                        if (!frame.has_value())
+                        {
+                            throw rpc::Error(
+                                -32602,
+                                "Invalid viewport frame ID.");
+                        }
+
+                        camera.frame = *frame;
+                    }
+                    else
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "viewport frame must be a string or null.");
+                    }
+                }
+
+                if (const auto found =
+                        values.find("position");
+                    found != values.end())
+                {
+                    camera.localPositionMeters =
+                        RequireDouble3(
+                            found->second,
+                            "position");
+                }
+
+                if (const auto found =
+                        values.find("forward");
+                    found != values.end())
+                {
+                    camera.forward =
+                        RequireFloat3(
+                            found->second,
+                            "forward");
+                }
+
+                if (const auto found =
+                        values.find("up");
+                    found != values.end())
+                {
+                    camera.up =
+                        RequireFloat3(
+                            found->second,
+                            "up");
+                }
+
+                if (const auto found =
+                        values.find(
+                            "vertical_fov_radians");
+                    found != values.end())
+                {
+                    const f64 fov =
+                        found->second.
+                            AsNumber();
+
+                    if (fov <= 0.0 ||
+                        fov >= 3.13)
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "vertical_fov_radians must be between 0 and pi.");
+                    }
+
+                    camera.verticalFovRadians =
+                        static_cast<f32>(
+                            fov);
+                }
+
+                if (const auto found =
+                        values.find(
+                            "near_plane_meters");
+                    found != values.end())
+                {
+                    const f64 nearPlane =
+                        found->second.
+                            AsNumber();
+
+                    if (nearPlane <= 0.0)
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "near_plane_meters must be positive.");
+                    }
+
+                    camera.nearPlaneMeters =
+                        static_cast<f32>(
+                            nearPlane);
+                }
+
+                if (const auto found =
+                        values.find(
+                            "far_plane_meters");
+                    found != values.end())
+                {
+                    const f64 farPlane =
+                        found->second.
+                            AsNumber();
+
+                    if (farPlane <=
+                        camera.nearPlaneMeters)
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "far_plane_meters must exceed near_plane_meters.");
+                    }
+
+                    camera.farPlaneMeters =
+                        static_cast<f32>(
+                            farPlane);
+                }
+
+                if (camera.farPlaneMeters <=
+                    camera.nearPlaneMeters)
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "Viewport far plane must exceed its near plane.");
+                }
+
+                PublishEvent(
+                    "viewport.changed",
+                    ViewportToRpc(*view));
+
+                return ViewportToRpc(
+                    *view);
+            });
+
+        if (viewport.capture)
+        {
+            Register(
+                {
+                    .name = "viewport.screenshot",
+                    .description =
+                        "Captures the completed primary RenderView to a BMP file.",
+                    .mutating = false
+                },
+                [this,
+                 capture =
+                     std::move(
+                         viewport.capture)](
+                    const rpc::Value& params)
+                {
+                    const auto& values =
+                        RequireObject(params);
+
+                    const auto& pathValue =
+                        Require(
+                            values,
+                            "path");
+
+                    if (!pathValue.IsString() ||
+                        pathValue.AsString().
+                            empty())
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "viewport.screenshot path must be a non-empty string.");
+                    }
+
+                    const auto captured =
+                        capture(
+                            pathValue.
+                                AsString());
+
+                    rpc::Value data(
+                        rpc::Value::Object{
+                            {
+                                "path",
+                                captured.path.
+                                    generic_string()
+                            },
+                            {
+                                "width",
+                                static_cast<i64>(
+                                    captured.width)
+                            },
+                            {
+                                "height",
+                                static_cast<i64>(
+                                    captured.height)
+                            },
+                            {
+                                "file_bytes",
+                                static_cast<i64>(
+                                    captured.fileBytes)
+                            }
+                        });
+
+                    PublishEvent(
+                        "viewport.captured",
+                        data);
+
+                    return data;
+                });
+        }
+    }
+}
+
+void EditorRpcService::PublishEvent(
+    std::string type,
+    rpc::Value data)
+{
+    if (type.empty())
+    {
+        throw std::invalid_argument(
+            "Editor RPC event type must not be empty.");
+    }
+
+    const u64 sequence =
+        nextEventSequence_++;
+
+    events_.push_back({
+        .sequence = sequence,
+        .type = type,
+        .data = data
+    });
+
+    constexpr std::size_t
+        kMaximumRetainedEvents = 512;
+
+    while (events_.size() >
+           kMaximumRetainedEvents)
+    {
+        events_.pop_front();
+    }
+
+    pendingNotifications_.push_back(
+        rpc::Serialize(
+            rpc::Value(
+                rpc::Value::Object{
+                    {"jsonrpc", "2.0"},
+                    {
+                        "method",
+                        "event." + type
+                    },
+                    {
+                        "params",
+                        rpc::Value::Object{
+                            {
+                                "sequence",
+                                static_cast<i64>(
+                                    sequence)
+                            },
+                            {"type", type},
+                            {"data", std::move(data)}
+                        }
+                    }
+                })));
+}
+
+std::vector<std::string>
+EditorRpcService::DrainNotifications()
+{
+    std::vector<std::string> result;
+    result.swap(
+        pendingNotifications_);
+    return result;
+}
+
+u64 EditorRpcService::LatestEventSequence()
+    const noexcept
+{
+    return nextEventSequence_ - 1U;
 }
 
 EditorRpcService::~EditorRpcService()
