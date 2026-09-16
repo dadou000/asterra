@@ -1,6 +1,7 @@
 add_library(OrbitPaths STATIC
     src/PathNetwork.cpp
     src/PathProfile.cpp
+    src/PathEvaluation.cpp
 )
 
 add_library(Orbit::Paths ALIAS OrbitPaths)
