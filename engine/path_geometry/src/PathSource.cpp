@@ -47,11 +47,13 @@ ReferenceNormal(
                         value.radiiMeters.z,
                         1.0e-9);
 
-                return math::Normalize({
+                const math::Double3 normal{
                     point.x / (x * x),
                     point.y / (y * y),
                     point.z / (z * z)
-                });
+                };
+
+                return math::Normalize(normal);
             }
         },
         shape);
