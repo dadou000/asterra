@@ -25,6 +25,12 @@ struct PluginPanelDescriptor
     std::string title;
 };
 
+struct PluginValidationIssue
+{
+    std::string pluginId;
+    std::string message;
+};
+
 struct PluginStatus
 {
     std::string id;
@@ -70,6 +76,11 @@ public:
 
     [[nodiscard]] std::vector<PluginStatus>
     Statuses() const;
+
+    // Executes registered validator callbacks. A validator returns nil when
+    // valid or one diagnostic string when it rejects the current project.
+    [[nodiscard]] std::vector<PluginValidationIssue>
+    Validate();
 
     [[nodiscard]] std::vector<PluginPanelDescriptor>
     PanelCatalog() const;
