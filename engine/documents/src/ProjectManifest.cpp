@@ -163,7 +163,7 @@ ProjectManifest LoadProjectManifest(
                     "Each plugins entry must be a table.");
             }
 
-            manifest.plugins.push_back({
+            PluginRequirement requirement{
                 .id =
                     RequiredString(
                         *item,
@@ -172,7 +172,33 @@ ProjectManifest LoadProjectManifest(
                     RequiredString(
                         *item,
                         "version")
-            });
+            };
+
+            if (const toml::array* permissions =
+                    (*item)["granted_permissions"].
+                        as_array())
+            {
+                for (const toml::node& permission :
+                     *permissions)
+                {
+                    const auto value =
+                        permission.
+                            value<std::string>();
+
+                    if (!value.has_value())
+                    {
+                        throw std::runtime_error(
+                            "Plugin granted_permissions entries must be strings.");
+                    }
+
+                    requirement.
+                        grantedPermissions.
+                        push_back(*value);
+                }
+            }
+
+            manifest.plugins.push_back(
+                std::move(requirement));
         }
     }
 
@@ -317,6 +343,18 @@ void SaveProjectManifestAtomic(
         item.insert(
             "version",
             plugin.version);
+
+        toml::array grantedPermissions;
+        for (const std::string& permission :
+             plugin.grantedPermissions)
+        {
+            grantedPermissions.push_back(
+                permission);
+        }
+        item.insert(
+            "granted_permissions",
+            std::move(grantedPermissions));
+
         plugins.push_back(
             std::move(item));
     }
