@@ -58,6 +58,7 @@ int main()
         "Orbit.log('loaded')\n"
         "local ping = Orbit.registerCommand('Ping', function() Orbit.log('pong') end, 'Test', 'Ping command', false)\n"
         "Orbit.registerContextAction(ping, 'explorer', 'context')\n"
+        "Orbit.registerValidator(function() return 'test validation issue' end)\n"
         "Orbit.registerPanel('Test Panel', function() Orbit.ui.text('hello') end)\n");
 
     orbit::documents::WorldDatabase world(project.StartupWorldPath());
@@ -98,6 +99,12 @@ int main()
                 CommandSurfaceKind::ContextMenu).
             size() == 1);
 
+    const auto validationIssues =
+        plugins.Validate();
+    assert(validationIssues.size() == 1);
+    assert(validationIssues[0].pluginId == "test.plugin");
+    assert(validationIssues[0].message == "test validation issue");
+
     const auto revision = statuses[0].revision;
     Write(package / "main.luau",
         "Orbit.registerCommand('Pong', function() end, 'Test', 'Reloaded', false)\n");
@@ -114,6 +121,7 @@ int main()
             orbit::editor_model::
                 CommandSurfaceKind::ContextMenu).
             empty());
+    assert(plugins.Validate().empty());
 
     // A denied privileged API must fail inside the sandbox rather than
     // silently escalating the plugin's capabilities.
