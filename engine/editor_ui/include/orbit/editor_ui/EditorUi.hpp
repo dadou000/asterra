@@ -58,7 +58,6 @@ class PanelContext
 public:
     void Text(std::string_view text);
     void Separator();
-
     [[nodiscard]] bool Button(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
     [[nodiscard]] UiSize ContentAvailable() const;
@@ -116,24 +115,10 @@ public:
     EditorUi& operator=(const EditorUi&) = delete;
 
     void RegisterPanel(PanelDefinition panel);
-
-    // Replaces an existing definition while preserving its current open
-    // state, or registers it when the ID is new. This is the dynamic path
-    // used by plugin/catalog hot reload.
-    void UpsertPanel(PanelDefinition panel);
-
-    [[nodiscard]] bool UnregisterPanel(PanelId id) noexcept;
-
     void RegisterMenuAction(MenuAction action);
-
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
-    void Render(
-        rhi::CommandList& commands,
-        rhi::Texture& target,
-        u32 targetWidth,
-        u32 targetHeight);
-
+    void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;
     [[nodiscard]] bool WantsKeyboard() const noexcept;
 
