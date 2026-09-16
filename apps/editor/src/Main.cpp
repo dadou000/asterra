@@ -1424,12 +1424,22 @@ int main(
             .title = "Plugins",
             .defaultOpen = false,
             .draw =
-                [&plugins](
+                [&plugins,
+                 &pluginValidationIssues](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
                     const auto statuses =
                         plugins.Statuses();
+
+                    if (context.Button(
+                            "Validate"))
+                    {
+                        pluginValidationIssues =
+                            plugins.Validate();
+                    }
+
+                    context.SameLine();
 
                     context.Text(
                         std::format(
@@ -1440,6 +1450,32 @@ int main(
                                 : "s"));
 
                     context.Separator();
+
+                    if (!pluginValidationIssues.
+                            empty())
+                    {
+                        context.Text(
+                            std::format(
+                                "{} validation issue{}",
+                                pluginValidationIssues.
+                                    size(),
+                                pluginValidationIssues.
+                                        size() == 1
+                                    ? ""
+                                    : "s"));
+
+                        for (const auto& issue :
+                             pluginValidationIssues)
+                        {
+                            context.Text(
+                                std::format(
+                                    "[{}] {}",
+                                    issue.pluginId,
+                                    issue.message));
+                        }
+
+                        context.Separator();
+                    }
 
                     for (const auto& status :
                          statuses)
