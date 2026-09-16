@@ -41,6 +41,10 @@ if(BUILD_TESTING)
     target_compile_features(OrbitRuntimeProjectTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitRuntimeProjectTests)
 
+    orbit_copy_dxc_runtime(
+        OrbitRuntimeProjectTests
+    )
+
     add_test(
         NAME Orbit.RuntimeProject
         COMMAND OrbitRuntimeProjectTests
