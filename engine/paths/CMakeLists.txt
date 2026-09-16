@@ -3,6 +3,7 @@ add_library(OrbitPaths STATIC
     src/PathProfile.cpp
     src/PathEvaluation.cpp
     src/Routing.cpp
+    src/RoutingPreparation.cpp
 )
 
 add_library(Orbit::Paths ALIAS OrbitPaths)
