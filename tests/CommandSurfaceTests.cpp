@@ -35,6 +35,8 @@ int main()
 
     std::filesystem::remove_all(root);
 
+    {
+
     auto project =
         orbit::documents::ProjectDocument::Create(
             root,
@@ -320,6 +322,8 @@ int main()
 
     ORBIT_TEST_CHECK(
         foundDisabledClear);
+
+    }
 
     std::filesystem::remove_all(root);
     return 0;
