@@ -15,6 +15,7 @@ import itertools
 import json
 import os
 import socket
+from pathlib import Path
 from typing import Any
 
 try:
@@ -47,22 +48,53 @@ def _rpc(method: str, params: dict[str, Any] | list[Any] | None = None) -> Any:
             sock.sendall(payload)
 
             buffer = bytearray()
-            while b"\n" not in buffer:
-                chunk = sock.recv(65536)
-                if not chunk:
-                    raise RuntimeError("Orbit Studio closed the RPC connection.")
-                buffer.extend(chunk)
-                if len(buffer) > MAX_RESPONSE_BYTES:
-                    raise RuntimeError("Orbit Studio RPC response exceeded the adapter limit.")
+
+            while True:
+                while b"\n" not in buffer:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        raise RuntimeError(
+                            "Orbit Studio closed the RPC connection before replying."
+                        )
+                    buffer.extend(chunk)
+                    if len(buffer) > MAX_RESPONSE_BYTES:
+                        raise RuntimeError(
+                            "Orbit Studio RPC response exceeded the adapter limit."
+                        )
+
+                raw_line, _, remainder = bytes(buffer).partition(b"\n")
+                buffer = bytearray(remainder)
+
+                if not raw_line:
+                    continue
+
+                message = json.loads(raw_line.decode("utf-8"))
+
+                # JSON-RPC server notifications can share the same connection
+                # with a response. They are intentionally ignored by this
+                # one-shot helper; event.since provides lossless replay.
+                if (
+                    isinstance(message, dict)
+                    and message.get("jsonrpc") == "2.0"
+                    and "method" in message
+                    and "id" not in message
+                ):
+                    continue
+
+                if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+                    raise RuntimeError(
+                        f"Invalid Orbit Studio JSON-RPC response: {message!r}"
+                    )
+
+                if message.get("id") != request_id:
+                    continue
+
+                response = message
+                break
     except (ConnectionRefusedError, TimeoutError, OSError) as error:
         raise RuntimeError(
             f"Could not reach Orbit Studio RPC at {HOST}:{PORT}: {error}"
         ) from error
-
-    response = json.loads(bytes(buffer).split(b"\n", 1)[0].decode("utf-8"))
-
-    if not isinstance(response, dict) or response.get("jsonrpc") != "2.0":
-        raise RuntimeError(f"Invalid Orbit Studio JSON-RPC response: {response!r}")
 
     if "error" in response:
         error = response["error"]
@@ -235,6 +267,63 @@ def orbit_redo() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_viewport_get() -> dict[str, Any]:
+    """Return the primary Studio RenderView dimensions and camera state."""
+    return _rpc("viewport.get")
+
+
+@mcp.tool()
+def orbit_viewport_set_camera(
+    frame_id: str | None = None,
+    position: list[float] | None = None,
+    forward: list[float] | None = None,
+    up: list[float] | None = None,
+    vertical_fov_radians: float | None = None,
+    near_plane_meters: float | None = None,
+    far_plane_meters: float | None = None,
+) -> dict[str, Any]:
+    """Update fields of the primary Studio RenderView camera.
+
+    Vector arguments are three-number arrays. Omitted values retain the
+    existing camera state; frame_id=None clears the current frame binding.
+    """
+    params: dict[str, Any] = {}
+
+    if frame_id is not None:
+        params["frame"] = frame_id
+    if position is not None:
+        params["position"] = position
+    if forward is not None:
+        params["forward"] = forward
+    if up is not None:
+        params["up"] = up
+    if vertical_fov_radians is not None:
+        params["vertical_fov_radians"] = vertical_fov_radians
+    if near_plane_meters is not None:
+        params["near_plane_meters"] = near_plane_meters
+    if far_plane_meters is not None:
+        params["far_plane_meters"] = far_plane_meters
+
+    return _rpc("viewport.set_camera", params)
+
+
+@mcp.tool()
+def orbit_viewport_screenshot(path: str) -> dict[str, Any]:
+    """Capture the completed offscreen Studio RenderView to a 32-bit BMP."""
+    return _rpc("viewport.screenshot", {"path": path})
+
+
+@mcp.tool()
+def orbit_events_since(sequence: int = 0) -> dict[str, Any]:
+    """Replay editor events newer than sequence.
+
+    Events are sequenced by Orbit and retained in a bounded journal, covering
+    semantic object changes, selection, content, plugins and viewport changes.
+    """
+    return _rpc("event.since", {"sequence": sequence})
+
+
+@mcp.tool()
 def orbit_rpc_call(method: str, params_json: str = "{}") -> Any:
     """Call any JSON-RPC method exposed by Orbit Studio.
 
@@ -245,6 +334,24 @@ def orbit_rpc_call(method: str, params_json: str = "{}") -> Any:
     if not isinstance(params, (dict, list)):
         raise ValueError("params_json must decode to a JSON object or array.")
     return _rpc(method, params)
+
+
+if hasattr(mcp, "resource"):
+    @mcp.resource("orbit://viewport/screenshot")
+    def orbit_viewport_screenshot_resource() -> bytes:
+        """Return a fresh BMP capture of Orbit Studio's primary viewport."""
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".bmp", delete=False
+        ) as temporary:
+            path = Path(temporary.name)
+
+        try:
+            _rpc("viewport.screenshot", {"path": str(path)})
+            return path.read_bytes()
+        finally:
+            path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
