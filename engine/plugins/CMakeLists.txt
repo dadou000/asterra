@@ -15,6 +15,7 @@ target_link_libraries(OrbitPlugins
         Orbit::Commands
         Orbit::Core
         Orbit::Documents
+        Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Scene
         Orbit::Selection
