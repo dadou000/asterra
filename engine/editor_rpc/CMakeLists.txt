@@ -14,6 +14,7 @@ target_link_libraries(OrbitEditorRpc
         Orbit::Commands
         Orbit::Documents
         Orbit::Rpc
+        Orbit::RenderView
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
