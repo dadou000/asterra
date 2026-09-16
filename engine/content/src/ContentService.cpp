@@ -37,6 +37,7 @@ namespace
     if (extension == ".orbitmaterialinstance") return AssetKind::MaterialInstance;
     if (extension == ".orbitcomponent") return AssetKind::Component;
     if (extension == ".orbitdecal") return AssetKind::Decal;
+    if (extension == ".orbitpathprofile") return AssetKind::PathProfile;
     if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
         extension == ".tga" || extension == ".dds" || extension == ".ktx2" ||
         extension == ".exr") return AssetKind::Texture;
@@ -568,6 +569,44 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
             }
         }
     }
+    else if (result.kind == AssetKind::PathProfile)
+    {
+        const toml::table document =
+            toml::parse_file(
+                absolute.string());
+
+        const toml::table* profile =
+            document["path_profile"].
+                as_table();
+
+        if (profile == nullptr)
+        {
+            throw std::runtime_error(
+                "Path profile asset is missing [path_profile]: " +
+                absolute.string());
+        }
+
+        const auto name =
+            (*profile)["name"].
+                value<std::string>();
+        const auto kind =
+            (*profile)["kind"].
+                value<std::string>();
+
+        if (!name.has_value() ||
+            name->empty() ||
+            !kind.has_value() ||
+            kind->empty())
+        {
+            throw std::runtime_error(
+                "Path profile requires non-empty name and kind.");
+        }
+
+        result.name = *name;
+        result.tags.push_back("path");
+        result.tags.push_back(
+            Lower(*kind));
+    }
 
     return result;
 }
@@ -602,6 +641,7 @@ std::string_view AssetKindName(const AssetKind kind) noexcept
     case AssetKind::Decal: return "Decal";
     case AssetKind::Component: return "Component";
     case AssetKind::Mesh: return "Mesh";
+    case AssetKind::PathProfile: return "Path Profile";
     case AssetKind::Unknown: return "Unknown";
     }
     return "Unknown";
