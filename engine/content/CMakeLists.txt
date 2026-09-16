@@ -38,4 +38,12 @@ if(BUILD_TESTING)
     target_compile_features(OrbitAssetPipelineTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitAssetPipelineTests)
     add_test(NAME Orbit.AssetPipeline COMMAND OrbitAssetPipelineTests)
+
+    add_executable(OrbitRuntimeTextureTests
+        tests/RuntimeTextureTests.cpp
+    )
+    target_link_libraries(OrbitRuntimeTextureTests PRIVATE Orbit::Content)
+    target_compile_features(OrbitRuntimeTextureTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRuntimeTextureTests)
+    add_test(NAME Orbit.RuntimeTexture COMMAND OrbitRuntimeTextureTests)
 endif()
