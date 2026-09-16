@@ -17,22 +17,63 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace
 {
-[[nodiscard]] std::filesystem::path
-ProjectInput(
+struct Options
+{
+    std::filesystem::path projectInput;
+    bool validateOnly{false};
+};
+
+[[nodiscard]] Options ParseOptions(
     const int argc,
     char** argv)
 {
-    if (argc >= 2)
+    Options options{
+        .projectInput =
+            std::filesystem::
+                current_path()
+    };
+
+    bool projectSeen = false;
+
+    for (int index = 1;
+         index < argc;
+         ++index)
     {
-        return std::filesystem::path(
-            argv[1]);
+        const std::string_view argument =
+            argv[index];
+
+        if (argument == "--validate-only")
+        {
+            options.validateOnly = true;
+            continue;
+        }
+
+        if (!argument.empty() &&
+            argument.front() == '-')
+        {
+            throw std::invalid_argument(
+                "Unknown OrbitPlayer option: " +
+                std::string(argument));
+        }
+
+        if (projectSeen)
+        {
+            throw std::invalid_argument(
+                "OrbitPlayer accepts only one cooked project path.");
+        }
+
+        options.projectInput =
+            std::filesystem::path(
+                argument);
+        projectSeen = true;
     }
 
-    return std::filesystem::current_path();
+    return options;
 }
 } // namespace
 
@@ -42,12 +83,16 @@ int main(
 {
     try
     {
+        const Options options =
+            ParseOptions(
+                argc,
+                argv);
+
         const auto project =
             orbit::runtime_project::
                 CookedProject::Open(
-                    ProjectInput(
-                        argc,
-                        argv));
+                    options.
+                        projectInput);
 
         orbit::documents::WorldDatabase
             world(
@@ -79,6 +124,13 @@ int main(
                 project);
 
         scriptRuntime.ExecuteEntryPoints();
+
+        if (options.validateOnly)
+        {
+            orbit::log::Info(
+                "Cooked project validation completed without creating a graphics device.");
+            return 0;
+        }
 
         const std::string title =
             project.Manifest().
