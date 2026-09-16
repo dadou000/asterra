@@ -3,6 +3,7 @@
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/documents/ProjectManifest.hpp>
+#include <orbit/editor_model/CommandSurfaces.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/plugins/PluginManifest.hpp>
 #include <orbit/scene/ObjectStore.hpp>
@@ -42,6 +43,7 @@ public:
         std::filesystem::path projectRoot,
         commands::CommandRegistry& commandRegistry,
         commands::CommandService& commandService,
+        editor_model::CommandSurfaceRegistry& commandSurfaces,
         scene::ObjectStore& objects,
         selection::SelectionService& selection);
 
