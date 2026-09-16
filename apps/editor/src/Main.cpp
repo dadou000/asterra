@@ -18,6 +18,7 @@
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/platform/FileDialog.hpp>
 #include <orbit/platform/Paths.hpp>
+#include <orbit/paths/PathNetwork.hpp>
 #include <orbit/plugins/PluginManager.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/Capture.hpp>
@@ -1627,6 +1628,38 @@ int main(
                                 }
                             },
                             property.value);
+
+                        if (property.schema.id ==
+                                orbit::paths::
+                                    kNetworkProfile)
+                        {
+                            if (const auto payload =
+                                    context.AcceptDragPayload(
+                                        "ORBIT_ASSET");
+                                payload.has_value())
+                            {
+                                if (const auto assetId =
+                                        DecodeAssetId(
+                                            *payload);
+                                    assetId.has_value())
+                                {
+                                    const auto* asset =
+                                        content.Find(
+                                            *assetId);
+
+                                    if (asset != nullptr &&
+                                        asset->kind ==
+                                            orbit::content::
+                                                AssetKind::PathProfile)
+                                    {
+                                        property.value =
+                                            asset->id.
+                                                ToString();
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
 
                         if (changed)
                         {
