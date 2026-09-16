@@ -40,6 +40,14 @@ void RegisterSchemas(
                     .minimum = 0.0
                 },
                 .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBodyMaterialAsset,
+                .name = "Material Asset",
+                .kind =
+                    schema::PropertyKind::String,
+                .defaultValue =
+                    std::string{}
             }
         }
     });
