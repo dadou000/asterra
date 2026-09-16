@@ -36,10 +36,10 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
-      - name: Build terrain clipmap regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender
+      - name: Build terrain and path regression targets
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests
 
-      - name: Run terrain clipmap regression tests
+      - name: Run terrain and path regression tests
         shell: pwsh
         run: |
           & "build/tests/Release/OrbitTerrainViewTests.exe"
@@ -50,6 +50,16 @@ jobs:
           & "build/tests/Release/OrbitTerrainMorphRefreshTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitTerrainMorphRefreshTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/path_geometry/Release/OrbitPathGeometryTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitPathGeometryTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/path_geometry/Release/OrbitPathSourceTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitPathSourceTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Build
