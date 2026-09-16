@@ -1486,6 +1486,32 @@ void PluginManager::LoadEnabled(
         impl_->enabledVersions.insert_or_assign(
             requirement.id,
             requirement.version);
+
+        PluginPermissionSet grants{};
+
+        for (const std::string& name :
+             requirement.grantedPermissions)
+        {
+            const auto permission =
+                PermissionFromString(name);
+
+            if (!permission.has_value())
+            {
+                log::Warning(
+                    std::format(
+                        "Project grants unknown permission '{}' to plugin '{}'; the grant is ignored.",
+                        name,
+                        requirement.id));
+                continue;
+            }
+
+            grants.Add(*permission);
+        }
+
+        impl_->grantedPermissions.
+            insert_or_assign(
+                requirement.id,
+                grants);
     }
 
     for (const documents::PluginRequirement&
