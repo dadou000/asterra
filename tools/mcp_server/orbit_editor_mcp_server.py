@@ -221,6 +221,99 @@ def orbit_property_set(
 
 
 @mcp.tool()
+def orbit_path_create_network(
+    name: str,
+    parent_id: str | None = None,
+    profile_asset: str | None = None,
+) -> dict[str, Any]:
+    """Create a semantic path network.
+
+    profile_asset is the stable ContentService asset ID string when a
+    .orbitpathprofile asset is assigned.
+    """
+    params: dict[str, Any] = {
+        "name": name,
+        "parent": parent_id,
+    }
+    if profile_asset is not None:
+        params["profile_asset"] = profile_asset
+    return _rpc("path.create_network", params)
+
+
+@mcp.tool()
+def orbit_path_create_node(
+    network_id: str,
+    name: str,
+    anchor: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a path node with a frame, surface, or entity/socket anchor.
+
+    Frame anchor:
+      {"kind":"frame","frame":"<FrameId>","position":[x,y,z]}
+    Surface anchor:
+      {"kind":"surface","body":"<BodyId>","coordinate":[lat,lon,offset]}
+    Entity/socket anchor:
+      {"kind":"entity_socket","entity":"<ObjectId>","socket":"name",
+       "position":[x,y,z]}
+    """
+    return _rpc(
+        "path.create_node",
+        {
+            "network": network_id,
+            "name": name,
+            "anchor": anchor,
+        },
+    )
+
+
+@mcp.tool()
+def orbit_path_connect(
+    start_node_id: str,
+    end_node_id: str,
+    mode: str = "direct",
+    name: str | None = None,
+    start_handle: list[float] | None = None,
+    end_handle: list[float] | None = None,
+) -> dict[str, Any]:
+    """Connect two nodes using direct or bezier semantic geometry."""
+    params: dict[str, Any] = {
+        "start": start_node_id,
+        "end": end_node_id,
+        "mode": mode,
+    }
+    if name is not None:
+        params["name"] = name
+    if start_handle is not None:
+        params["start_handle"] = start_handle
+    if end_handle is not None:
+        params["end_handle"] = end_handle
+    return _rpc("path.connect", params)
+
+
+@mcp.tool()
+def orbit_path_set_bezier_handles(
+    edge_id: str,
+    start_handle: list[float],
+    end_handle: list[float],
+) -> dict[str, Any]:
+    """Edit both cubic Bezier handles through the shared transaction layer."""
+    return _rpc(
+        "path.set_bezier_handles",
+        {
+            "edge": edge_id,
+            "start_handle": start_handle,
+            "end_handle": end_handle,
+        },
+    )
+
+
+@mcp.tool()
+def orbit_path_inspect(object_id: str) -> dict[str, Any]:
+    """Inspect a semantic path network, node, or edge."""
+    return _rpc("path.inspect", {"id": object_id})
+
+
+@mcp.tool()
 def orbit_selection_get() -> list[str]:
     """Return the ordered shared selection from Orbit Studio."""
     return _rpc("selection.get")
