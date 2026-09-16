@@ -4,6 +4,7 @@ add_library(OrbitContent STATIC
     src/DerivedDataCache.cpp
     src/AssetPipeline.cpp
     src/ThumbnailService.cpp
+    src/PbrSetImport.cpp
 )
 
 add_library(Orbit::Content ALIAS OrbitContent)
