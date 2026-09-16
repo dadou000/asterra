@@ -123,6 +123,7 @@ set "SANDBOX=build\apps\sandbox\%CONFIG%\OrbitSandbox.exe"
 set "STUDIO=build\apps\editor\%CONFIG%\OrbitStudio.exe"
 set "BUILDCLI=build\apps\build\%CONFIG%\OrbitBuild.exe"
 set "PLAYER=build\apps\player\%CONFIG%\OrbitPlayer.exe"
+set "DXC=build\apps\build\%CONFIG%\dxcompiler.dll"
 
 if not exist "%LAUNCHER%" (
     echo.
@@ -159,6 +160,13 @@ if not exist "%PLAYER%" (
     goto fail
 )
 
+if not exist "%DXC%" (
+    echo.
+    echo [Orbit] ERROR: dxcompiler.dll was not deployed:
+    echo   %DXC%
+    goto fail
+)
+
 set "PACKAGE=dist\Orbit-Windows-%CONFIG%"
 set "SYMBOLS=%PACKAGE%\symbols"
 
@@ -187,6 +195,9 @@ if errorlevel 1 goto package_fail
 copy /y "%PLAYER%" "%PACKAGE%\OrbitPlayer.exe" >nul
 if errorlevel 1 goto package_fail
 
+copy /y "%DXC%" "%PACKAGE%\dxcompiler.dll" >nul
+if errorlevel 1 goto package_fail
+
 echo [Orbit] Updating root executables...
 copy /y "%LAUNCHER%" "Orbit.exe" >nul
 if errorlevel 1 goto root_copy_fail
@@ -199,6 +210,8 @@ if errorlevel 1 goto root_copy_fail
 copy /y "%BUILDCLI%" "OrbitBuild.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%PLAYER%" "OrbitPlayer.exe" >nul
+if errorlevel 1 goto root_copy_fail
+copy /y "%DXC%" "dxcompiler.dll" >nul
 if errorlevel 1 goto root_copy_fail
 
 if exist "build\apps\launcher\%CONFIG%\OrbitLauncher.pdb" (
