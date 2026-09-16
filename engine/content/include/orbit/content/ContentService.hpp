@@ -25,6 +25,7 @@ enum class AssetKind : u8
     Decal,
     Component,
     Mesh,
+    PathProfile,
     Unknown
 };
 
