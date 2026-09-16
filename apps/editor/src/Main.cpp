@@ -1342,6 +1342,129 @@ int main(
         });
 
         ui.RegisterPanel({
+            .id = kContentPanel,
+            .title = "Material Service",
+            .defaultOpen = true,
+            .draw =
+                [&content,
+                 &contentSearch](
+                    orbit::editor_ui::
+                        PanelContext& context)
+                {
+                    static constexpr
+                        std::string_view
+                            kAssetPayload =
+                                "ORBIT_ASSET";
+
+                    context.InputText(
+                        "Search",
+                        contentSearch);
+
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Rescan"))
+                    {
+                        content.Scan();
+
+                        for (const auto& diagnostic :
+                             content.Diagnostics())
+                        {
+                            orbit::log::Warning(
+                                std::format(
+                                    "Content '{}': {}",
+                                    diagnostic.
+                                        sourcePath.
+                                        generic_string(),
+                                    diagnostic.message));
+                        }
+                    }
+
+                    context.Separator();
+
+                    const auto assets =
+                        content.Search(
+                            contentSearch);
+
+                    context.Text(
+                        std::format(
+                            "{} asset{} indexed",
+                            assets.size(),
+                            assets.size() == 1
+                                ? ""
+                                : "s"));
+
+                    for (const auto& asset :
+                         assets)
+                    {
+                        const std::string label =
+                            std::format(
+                                "{}  [{}]##asset-{}",
+                                asset.name,
+                                orbit::content::
+                                    AssetKindName(
+                                        asset.kind),
+                                asset.id.ToString());
+
+                        static_cast<void>(
+                            context.Selectable(
+                                label,
+                                false));
+
+                        if (context.
+                                BeginDragSource())
+                        {
+                            const auto payload =
+                                EncodeAssetId(
+                                    asset.id);
+
+                            context.SetDragPayload(
+                                kAssetPayload,
+                                std::span(
+                                    payload));
+
+                            context.Text(
+                                asset.name);
+                            context.EndDragSource();
+                        }
+
+                        context.Text(
+                            "  " +
+                            asset.sourcePath.
+                                generic_string());
+                    }
+
+                    if (!content.
+                            Diagnostics().
+                            empty())
+                    {
+                        context.Separator();
+                        context.Text(
+                            std::format(
+                                "{} indexing diagnostic{}",
+                                content.Diagnostics().
+                                    size(),
+                                content.Diagnostics().
+                                        size() == 1
+                                    ? ""
+                                    : "s"));
+
+                        for (const auto& diagnostic :
+                             content.Diagnostics())
+                        {
+                            context.Text(
+                                std::format(
+                                    "{}: {}",
+                                    diagnostic.
+                                        sourcePath.
+                                        generic_string(),
+                                    diagnostic.message));
+                        }
+                    }
+                }
+        });
+
+        ui.RegisterPanel({
             .id = kOutputPanel,
             .title = "Output",
             .defaultOpen = true,
