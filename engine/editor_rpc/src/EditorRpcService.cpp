@@ -510,6 +510,24 @@ ViewportToRpc(
         std::move(result));
 }
 
+[[nodiscard]] f64
+RequireNumber(
+    const rpc::Value& value,
+    const std::string_view name)
+{
+    try
+    {
+        return value.AsNumber();
+    }
+    catch (const std::bad_variant_access&)
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(name) +
+                " must be a number.");
+    }
+}
+
 [[nodiscard]] math::Double3
 RequireDouble3(
     const rpc::Value& value,
@@ -1515,9 +1533,7 @@ void EditorRpcService::AttachViewport(
 
     viewportRegistered_ = true;
 
-    if (viewport.view != nullptr)
-    {
-        Register(
+    Register(
             {
                 .name = "viewport.get",
                 .description =
@@ -1616,8 +1632,9 @@ void EditorRpcService::AttachViewport(
                     found != values.end())
                 {
                     const f64 fov =
-                        found->second.
-                            AsNumber();
+                        RequireNumber(
+                            found->second,
+                            "vertical_fov_radians");
 
                     if (fov <= 0.0 ||
                         fov >= 3.13)
@@ -1638,8 +1655,9 @@ void EditorRpcService::AttachViewport(
                     found != values.end())
                 {
                     const f64 nearPlane =
-                        found->second.
-                            AsNumber();
+                        RequireNumber(
+                            found->second,
+                            "near_plane_meters");
 
                     if (nearPlane <= 0.0)
                     {
@@ -1659,8 +1677,9 @@ void EditorRpcService::AttachViewport(
                     found != values.end())
                 {
                     const f64 farPlane =
-                        found->second.
-                            AsNumber();
+                        RequireNumber(
+                            found->second,
+                            "far_plane_meters");
 
                     if (farPlane <=
                         camera.nearPlaneMeters)
@@ -1759,7 +1778,6 @@ void EditorRpcService::AttachViewport(
                     return data;
                 });
         }
-    }
 }
 
 void EditorRpcService::PublishEvent(
