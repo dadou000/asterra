@@ -17,6 +17,7 @@ target_link_libraries(OrbitBuildService
     PRIVATE
         Luau.Compiler
         Luau.VM
+        Orbit::ContentWic
         Orbit::PluginManifest
         Orbit::ShaderDxc
         tomlplusplus::tomlplusplus
