@@ -1,5 +1,8 @@
 add_library(OrbitContent STATIC
     src/ContentService.cpp
+    src/ContentHash.cpp
+    src/DerivedDataCache.cpp
+    src/AssetPipeline.cpp
 )
 
 add_library(Orbit::Content ALIAS OrbitContent)
@@ -25,4 +28,10 @@ if(BUILD_TESTING)
     target_compile_features(OrbitContentTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitContentTests)
     add_test(NAME Orbit.Content COMMAND OrbitContentTests)
+
+    add_executable(OrbitAssetPipelineTests tests/AssetPipelineTests.cpp)
+    target_link_libraries(OrbitAssetPipelineTests PRIVATE Orbit::Content)
+    target_compile_features(OrbitAssetPipelineTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitAssetPipelineTests)
+    add_test(NAME Orbit.AssetPipeline COMMAND OrbitAssetPipelineTests)
 endif()
