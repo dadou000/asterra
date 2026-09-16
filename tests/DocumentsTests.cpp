@@ -42,7 +42,11 @@ int main()
         project.Manifest().
             plugins.push_back({
                 .id = "example.plugin",
-                .version = "1.2.3"
+                .version = "1.2.3",
+                .grantedPermissions = {
+                    "project_mutation",
+                    "mcp_registration"
+                }
             });
         project.Save();
 
@@ -63,6 +67,15 @@ int main()
         assert(
             reopened.Manifest().
                 plugins.size() == 1);
+        assert(
+            reopened.Manifest().
+                plugins[0].
+                grantedPermissions.size() == 2);
+        assert(
+            reopened.Manifest().
+                plugins[0].
+                grantedPermissions[0] ==
+            "project_mutation");
     }
 
     const std::filesystem::path
