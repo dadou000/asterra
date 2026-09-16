@@ -589,14 +589,14 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
         const auto name =
             (*profile)["name"].
                 value<std::string>();
-        const auto kind =
+        const auto profileKind =
             (*profile)["kind"].
                 value<std::string>();
 
         if (!name.has_value() ||
             name->empty() ||
-            !kind.has_value() ||
-            kind->empty())
+            !profileKind.has_value() ||
+            profileKind->empty())
         {
             throw std::runtime_error(
                 "Path profile requires non-empty name and kind.");
@@ -605,7 +605,7 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
         result.name = *name;
         result.tags.push_back("path");
         result.tags.push_back(
-            Lower(*kind));
+            Lower(*profileKind));
     }
 
     return result;
