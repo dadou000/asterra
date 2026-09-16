@@ -20,12 +20,14 @@ Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor,
 
 Double-click `build_orbit.bat` from the repository root.
 
-It configures CMake, builds `OrbitLauncher` + `OrbitSandbox`, and packages the runnable build into:
+It configures CMake, builds the runtime, Studio and headless build CLI, and packages the developer build into:
 
 ```text
 dist/Orbit-Windows-Release/
 ├── OrbitLauncher.exe
 ├── OrbitSandbox.exe
+├── OrbitStudio.exe
+├── OrbitBuild.exe
 └── symbols/
 ```
 
@@ -53,6 +55,19 @@ cmake --build build --config Debug
 ```
 
 `OrbitLauncher` supervises the runtime and captures stdout/stderr into a timestamped session log. Logs are stored under `apps/launcher/<config>/logs` in a development build. If Orbit hits an unhandled Windows exception or `std::terminate`, the runtime also writes a crash report and minidump (`.dmp`) into the same log directory.
+
+### Headless project validation and cooking
+
+`OrbitBuild.exe` and Orbit Studio use the same `Orbit::Build` service. The current M21 path validates a project/build profile, resolves plugin manifests, cooks importer-backed target DDC products, compiles project Luau modules, copies the startup world and writes a deterministic `OrbitBuildManifest.toml`.
+
+```powershell
+.\build\apps\build\Release\OrbitBuild.exe C:\path\to\Project --validate
+.\build\apps\build\Release\OrbitBuild.exe C:\path\to\Project --cook --profile "Development Windows"
+```
+
+Standalone player/package assembly is intentionally not exposed yet: `OrbitSandbox` is still a development terrain composition rather than a project-driven player.
+
+Orbit Studio also exposes `build.profiles`, `build.validate`, and `build.cook` over its structured JSON-RPC/MCP bridge.
 
 You can still launch `OrbitSandbox.exe` directly while developing; its crash handler falls back to a local `logs` directory when it is not started by the launcher.
 
