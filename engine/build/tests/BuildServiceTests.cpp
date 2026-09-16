@@ -5,7 +5,10 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 #define ORBIT_TEST_CHECK(expression) \
     do \
