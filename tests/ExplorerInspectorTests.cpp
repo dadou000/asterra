@@ -34,6 +34,8 @@ int main()
 
     std::filesystem::remove_all(root);
 
+    {
+
     auto project =
         orbit::documents::ProjectDocument::Create(
             root,
@@ -186,6 +188,8 @@ int main()
                 worldRoot));
 
     world.Checkpoint();
+    }
+
     std::filesystem::remove_all(root);
     return 0;
 }
