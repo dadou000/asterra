@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -363,6 +364,21 @@ ThumbnailResult ThumbnailService::Get(
     {
         throw std::invalid_argument(
             "Thumbnail dimensions must be non-zero.");
+    }
+
+    const u64 pixelCount =
+        static_cast<u64>(
+            request.width) *
+        static_cast<u64>(
+            request.height);
+
+    if (pixelCount >
+        static_cast<u64>(
+            std::numeric_limits<std::size_t>::max() /
+            4U))
+    {
+        throw std::overflow_error(
+            "Thumbnail dimensions exceed addressable memory.");
     }
 
     const ThumbnailProviderDescriptor*
