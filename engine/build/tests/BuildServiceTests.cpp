@@ -200,6 +200,11 @@ int main()
             std::filesystem::
                 is_regular_file(
                     first.outputDirectory /
+                    ".orbit-build-output"));
+        ORBIT_TEST_CHECK(
+            std::filesystem::
+                is_regular_file(
+                    first.outputDirectory /
                     "Worlds/Main.orbitworld"));
         ORBIT_TEST_CHECK(
             std::filesystem::
@@ -247,6 +252,44 @@ int main()
         ORBIT_TEST_CHECK(
             firstManifest ==
             secondManifest);
+
+        const auto warmCache =
+            service.Cook(
+                request);
+
+        ORBIT_TEST_CHECK(
+            warmCache.Succeeded());
+        ORBIT_TEST_CHECK(
+            ReadText(
+                warmCache.manifestPath) ==
+            firstManifest);
+
+        const auto unownedOutput =
+            temporary.Root() /
+            "UnownedOutput";
+
+        WriteText(
+            unownedOutput /
+                "keep.txt",
+            "must survive\n");
+
+        orbit::build::BuildRequest
+            unownedRequest = request;
+
+        unownedRequest.outputDirectory =
+            unownedOutput;
+
+        const auto unownedResult =
+            service.Cook(
+                unownedRequest);
+
+        ORBIT_TEST_CHECK(
+            !unownedResult.Succeeded());
+        ORBIT_TEST_CHECK(
+            std::filesystem::
+                is_regular_file(
+                    unownedOutput /
+                    "keep.txt"));
 
         orbit::build::BuildRequest
             protectedRequest = request;
