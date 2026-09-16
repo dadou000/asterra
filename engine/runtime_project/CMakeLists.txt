@@ -35,6 +35,7 @@ if(BUILD_TESTING)
             Orbit::Build
             Orbit::Documents
             Orbit::RuntimeProject
+            Orbit::Scene
     )
 
     target_compile_features(OrbitRuntimeProjectTests PRIVATE cxx_std_23)
