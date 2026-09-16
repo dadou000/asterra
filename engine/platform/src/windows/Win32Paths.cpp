@@ -45,4 +45,45 @@ std::filesystem::path UserDataDirectory()
                buffer.data()) /
         "Orbit";
 }
+
+std::filesystem::path ExecutablePath()
+{
+    std::vector<wchar_t> buffer(
+        1024);
+
+    for (;;)
+    {
+        const DWORD written =
+            GetModuleFileNameW(
+                nullptr,
+                buffer.data(),
+                static_cast<DWORD>(
+                    buffer.size()));
+
+        if (written == 0)
+        {
+            throw std::runtime_error(
+                "Failed to resolve executable path.");
+        }
+
+        if (written <
+            buffer.size() - 1U)
+        {
+            return std::filesystem::
+                weakly_canonical(
+                    std::filesystem::path(
+                        buffer.data()));
+        }
+
+        if (buffer.size() >=
+            32768U)
+        {
+            throw std::runtime_error(
+                "Executable path exceeds the Windows path limit.");
+        }
+
+        buffer.resize(
+            buffer.size() * 2U);
+    }
+}
 } // namespace orbit::platform
