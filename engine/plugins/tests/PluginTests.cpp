@@ -8,18 +8,26 @@
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
 
-#include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 namespace
 {
+void Check(const bool condition)
+{
+    if (!condition)
+    {
+        std::abort();
+    }
+}
+
 void Write(const std::filesystem::path& path, const std::string& text)
 {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    assert(output.good());
+    Check(output.good());
     output << text;
 }
 
@@ -80,19 +88,20 @@ int main()
     plugins.LoadEnabled(project.Manifest());
 
     auto statuses = plugins.Statuses();
-    assert(statuses.size() == 1);
-    assert(statuses[0].loaded);
-    assert(statuses[0].requestedPermissions.Contains(
+    Check(statuses.size() == 1);
+    Check(statuses[0].loaded);
+    Check(statuses[0].requestedPermissions.Contains(
         orbit::plugins::PluginPermission::ProjectMutation));
-    assert(statuses[0].requestedPermissions.Contains(
+    Check(statuses[0].requestedPermissions.Contains(
         orbit::plugins::PluginPermission::McpRegistration));
-    assert(statuses[0].grantedPermissions.Contains(
+    Check(statuses[0].grantedPermissions.Contains(
         orbit::plugins::PluginPermission::ProjectMutation));
-    assert(!statuses[0].grantedPermissions.Contains(
+    Check(!statuses[0].grantedPermissions.Contains(
         orbit::plugins::PluginPermission::McpRegistration));
-    assert(commandRegistry.Catalog().size() == 1);
-    assert(plugins.PanelCatalog().size() == 1);
-    assert(
+    Check(commandRegistry.Catalog().size() == 1);
+    Check(!commandRegistry.Catalog()[0].automationVisible);
+    Check(plugins.PanelCatalog().size() == 1);
+    Check(
         commandSurfaces.Commands(
             "explorer",
             orbit::editor_model::
@@ -101,44 +110,63 @@ int main()
 
     const auto validationIssues =
         plugins.Validate();
-    assert(validationIssues.size() == 1);
-    assert(validationIssues[0].pluginId == "test.plugin");
-    assert(validationIssues[0].message == "test validation issue");
+    Check(validationIssues.size() == 1);
+    Check(validationIssues[0].pluginId == "test.plugin");
+    Check(validationIssues[0].message == "test validation issue");
 
     const auto revision = statuses[0].revision;
     Write(package / "main.luau",
         "Orbit.registerCommand('Pong', function() end, 'Test', 'Reloaded', false)\n");
-    assert(plugins.PollHotReload() == 1);
+    Check(plugins.PollHotReload() == 1);
     statuses = plugins.Statuses();
-    assert(statuses[0].loaded);
-    assert(statuses[0].revision > revision);
-    assert(commandRegistry.Catalog().size() == 1);
-    assert(commandRegistry.Catalog()[0].name == "Pong");
-    assert(plugins.PanelCatalog().empty());
-    assert(
+    Check(statuses[0].loaded);
+    Check(statuses[0].revision > revision);
+    Check(commandRegistry.Catalog().size() == 1);
+    Check(commandRegistry.Catalog()[0].name == "Pong");
+    Check(plugins.PanelCatalog().empty());
+    Check(
         commandSurfaces.Commands(
             "explorer",
             orbit::editor_model::
                 CommandSurfaceKind::ContextMenu).
             empty());
-    assert(plugins.Validate().empty());
+    Check(plugins.Validate().empty());
 
     // A denied privileged API must fail inside the sandbox rather than
     // silently escalating the plugin's capabilities.
     Write(package / "main.luau",
         "Orbit.registerCommand('AgentTool', function() end, 'Test', '', true)\n");
-    assert(plugins.PollHotReload() == 1);
+    Check(plugins.PollHotReload() == 1);
     statuses = plugins.Statuses();
-    assert(!statuses[0].loaded);
-    assert(!statuses[0].error.empty());
-    assert(commandRegistry.Catalog().empty());
+    Check(!statuses[0].loaded);
+    Check(!statuses[0].error.empty());
+    Check(commandRegistry.Catalog().empty());
+
+    // Once the project explicitly grants MCP registration, the same
+    // package may expose an automation-visible command.
+    project.Manifest().plugins[0].
+        grantedPermissions.push_back(
+            "mcp_registration");
+    project.Save();
+
+    Write(
+        package / "main.luau",
+        "Orbit.registerCommand('AgentTool', function() end, 'Test', '', true)\n");
+
+    plugins.LoadEnabled(
+        project.Manifest());
+
+    statuses = plugins.Statuses();
+    Check(statuses[0].loaded);
+    Check(commandRegistry.Catalog().size() == 1);
+    Check(commandRegistry.Catalog()[0].automationVisible);
 
     // The host intentionally exposes no file/process/network libraries.
     Write(package / "main.luau",
-        "assert(io == nil)\nassert(os == nil)\nassert(debug == nil)\n");
-    assert(plugins.PollHotReload() == 1);
+        "Check(io == nil)\nCheck(os == nil)\nCheck(debug == nil)\n");
+    Check(plugins.PollHotReload() == 1);
     statuses = plugins.Statuses();
-    assert(statuses[0].loaded);
+    Check(statuses[0].loaded);
 
     // A malformed sibling package must be isolated. Valid enabled plugins
     // continue loading and registering commands in the same editor session.
@@ -158,7 +186,7 @@ int main()
     plugins.LoadEnabled(project.Manifest());
 
     statuses = plugins.Statuses();
-    assert(statuses.size() == 2);
+    Check(statuses.size() == 2);
 
     bool foundHealthy = false;
     bool foundBroken = false;
@@ -177,10 +205,10 @@ int main()
         }
     }
 
-    assert(foundHealthy);
-    assert(foundBroken);
-    assert(commandRegistry.Catalog().size() == 1);
-    assert(commandRegistry.Catalog()[0].name == "StillLoaded");
+    Check(foundHealthy);
+    Check(foundBroken);
+    Check(commandRegistry.Catalog().size() == 1);
+    Check(commandRegistry.Catalog()[0].name == "StillLoaded");
 
     std::filesystem::remove_all(root);
     return 0;
