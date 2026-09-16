@@ -1,5 +1,7 @@
 #include <orbit/paths/PathEvaluation.hpp>
 
+#include <orbit/universe/ReferenceSurface.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <type_traits>
@@ -8,75 +10,6 @@ namespace orbit::paths
 {
 namespace
 {
-[[nodiscard]] math::Double3 SurfacePoint(
-    const universe::BodyShape& shape,
-    const math::Double3& coordinate) noexcept
-{
-    const f64 latitude = coordinate.x;
-    const f64 longitude = coordinate.y;
-    const f64 offset = coordinate.z;
-
-    universe::EllipsoidShape ellipsoid =
-        std::visit(
-            [](const auto& value)
-            {
-                using Shape =
-                    std::decay_t<decltype(value)>;
-
-                if constexpr (
-                    std::is_same_v<
-                        Shape,
-                        universe::SphereShape>)
-                {
-                    return universe::EllipsoidShape{
-                        .radiiMeters = {
-                            value.radiusMeters,
-                            value.radiusMeters,
-                            value.radiusMeters
-                        }
-                    };
-                }
-                else
-                {
-                    return value;
-                }
-            },
-            shape);
-
-    const f64 cosLatitude =
-        std::cos(latitude);
-    const f64 sinLatitude =
-        std::sin(latitude);
-    const f64 cosLongitude =
-        std::cos(longitude);
-    const f64 sinLongitude =
-        std::sin(longitude);
-
-    math::Double3 point{
-        ellipsoid.radiiMeters.x *
-            cosLatitude * cosLongitude,
-        ellipsoid.radiiMeters.y *
-            sinLatitude,
-        ellipsoid.radiiMeters.z *
-            cosLatitude * sinLongitude
-    };
-
-    math::Double3 normal{
-        point.x /
-            (ellipsoid.radiiMeters.x *
-             ellipsoid.radiiMeters.x),
-        point.y /
-            (ellipsoid.radiiMeters.y *
-             ellipsoid.radiiMeters.y),
-        point.z /
-            (ellipsoid.radiiMeters.z *
-             ellipsoid.radiiMeters.z)
-    };
-
-    normal = math::Normalize(normal);
-    return point + normal * offset;
-}
-
 [[nodiscard]] f64 ClampT(
     const f64 t) noexcept
 {
@@ -132,9 +65,16 @@ ResolveAnchor(
                     {
                         .frame = body->frame,
                         .localMeters =
-                            SurfacePoint(
+                            universe::ReferenceSurfacePoint(
                                 body->shape,
-                                value.coordinate)
+                                {
+                                    .latitudeRadians =
+                                        value.coordinate.x,
+                                    .longitudeRadians =
+                                        value.coordinate.y,
+                                    .offsetMeters =
+                                        value.coordinate.z
+                                })
                     },
                     targetFrame,
                     atTime);
