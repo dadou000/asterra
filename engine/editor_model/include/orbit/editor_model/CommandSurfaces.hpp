@@ -32,6 +32,16 @@ public:
         CommandSurfaceKind kind,
         std::vector<commands::CommandId> commandIds);
 
+    void Add(
+        std::string_view surface,
+        CommandSurfaceKind kind,
+        commands::CommandId commandId);
+
+    [[nodiscard]] bool Remove(
+        std::string_view surface,
+        CommandSurfaceKind kind,
+        commands::CommandId commandId) noexcept;
+
     [[nodiscard]] std::vector<commands::CommandId>
     Commands(
         std::string_view surface,
