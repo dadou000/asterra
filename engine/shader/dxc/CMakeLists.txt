@@ -36,3 +36,12 @@ target_link_libraries(OrbitShaderDxc
 
 target_compile_features(OrbitShaderDxc PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitShaderDxc)
+
+
+function(orbit_copy_dxc_runtime target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ORBIT_DXCOMPILER_DLL}"
+            "$<TARGET_FILE_DIR:${target}>"
+    )
+endfunction()
