@@ -427,6 +427,23 @@ int main(
                     argc,
                     argv);
 
+        orbit::content::ContentService
+            content(
+                project.RootDirectory());
+
+        content.Scan();
+
+        for (const auto& diagnostic :
+             content.Diagnostics())
+        {
+            orbit::log::Warning(
+                std::format(
+                    "Content '{}': {}",
+                    diagnostic.sourcePath.
+                        generic_string(),
+                    diagnostic.message));
+        }
+
         orbit::documents::WorldDatabase
             world(
                 project.StartupWorldPath());
