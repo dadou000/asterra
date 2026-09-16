@@ -1495,6 +1495,26 @@ EditorRpcService::EditorRpcService(
                 });
         });
 
+    AttachViewport(
+        std::move(viewport));
+}
+
+void EditorRpcService::AttachViewport(
+    ViewportAutomation viewport)
+{
+    if (viewport.view == nullptr)
+    {
+        return;
+    }
+
+    if (viewportRegistered_)
+    {
+        throw std::logic_error(
+            "Editor RPC viewport is already attached.");
+    }
+
+    viewportRegistered_ = true;
+
     if (viewport.view != nullptr)
     {
         Register(
