@@ -127,6 +127,11 @@ int main()
 
         WriteText(
             temporary.Root() /
+                "Scripts/vehicle/control.luau",
+            "local M = {}\nfunction M.update() return 1 end\nreturn M\n");
+
+        WriteText(
+            temporary.Root() /
                 "Content/Test.orbitmaterial",
             "[material]\n"
             "name = \"Test Material\"\n"
@@ -186,7 +191,16 @@ int main()
             1U);
         ORBIT_TEST_CHECK(
             first.manifest.scripts.size() ==
+            2U);
+        ORBIT_TEST_CHECK(
+            first.manifest.
+                scriptEntryPoints.size() ==
             1U);
+        ORBIT_TEST_CHECK(
+            std::filesystem::
+                is_regular_file(
+                    first.outputDirectory /
+                    "Scripts/vehicle/control.luauc"));
         ORBIT_TEST_CHECK(
             !first.manifest.assets.front().
                 artifacts.empty());
