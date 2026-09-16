@@ -80,12 +80,25 @@ public:
         const documents::WorldDatabase& world)
         : database(
               world.Path().string(),
-              SQLite::OPEN_READWRITE)
+              world.ReadOnly()
+                  ? SQLite::OPEN_READONLY
+                  : SQLite::OPEN_READWRITE),
+          readOnly(
+              world.ReadOnly())
     {
         database.exec(
             "PRAGMA foreign_keys = ON;");
         database.exec(
             "PRAGMA busy_timeout = 5000;");
+    }
+
+    void RequireWritable() const
+    {
+        if (readOnly)
+        {
+            throw std::logic_error(
+                "Scene object store is read-only.");
+        }
     }
 
     void MarkChanged() noexcept
@@ -101,6 +114,7 @@ public:
     }
 
     SQLite::Database database;
+    bool readOnly{false};
     std::unique_ptr<SQLite::Transaction>
         transaction;
     u64 revision{0};
@@ -328,6 +342,8 @@ void ObjectStore::Insert(
     MutationKey,
     const ObjectRecord& object)
 {
+    impl_->RequireWritable();
+
     if (!object.id || !object.type ||
         object.name.empty())
     {
@@ -380,6 +396,8 @@ void ObjectStore::Erase(
     MutationKey,
     const ObjectId object)
 {
+    impl_->RequireWritable();
+
     if (!Children(object).empty())
     {
         throw std::invalid_argument(
@@ -407,6 +425,8 @@ void ObjectStore::Rename(
     const ObjectId object,
     std::string name)
 {
+    impl_->RequireWritable();
+
     if (name.empty())
     {
         throw std::invalid_argument(
@@ -437,6 +457,8 @@ void ObjectStore::Reparent(
     const ObjectId object,
     const std::optional<ObjectId> parent)
 {
+    impl_->RequireWritable();
+
     if (!Find(object).has_value())
     {
         throw std::invalid_argument(
@@ -518,6 +540,8 @@ void ObjectStore::SetProperty(
     const schema::PropertyId property,
     const schema::PropertyValue& value)
 {
+    impl_->RequireWritable();
+
     if (!Find(object).has_value())
     {
         throw std::invalid_argument(
@@ -661,6 +685,8 @@ void ObjectStore::RemoveProperty(
     const ObjectId object,
     const schema::PropertyId property)
 {
+    impl_->RequireWritable();
+
     SQLite::Statement statement(
         impl_->database,
         "DELETE FROM object_properties "
@@ -680,6 +706,8 @@ void ObjectStore::RemoveProperty(
 void ObjectStore::BeginTransaction(
     MutationKey)
 {
+    impl_->RequireWritable();
+
     if (impl_->transaction != nullptr)
     {
         throw std::logic_error(
@@ -697,6 +725,8 @@ void ObjectStore::BeginTransaction(
 void ObjectStore::CommitTransaction(
     MutationKey)
 {
+    impl_->RequireWritable();
+
     if (impl_->transaction == nullptr)
     {
         throw std::logic_error(
