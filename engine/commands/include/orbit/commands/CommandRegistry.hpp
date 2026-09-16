@@ -65,6 +65,7 @@ struct CommandDescriptor
     std::string category;
     std::string description;
     std::vector<CommandParameter> parameters;
+    bool automationVisible{true};
     std::function<CommandEnablement()>
         enablement;
     std::function<void(
@@ -79,6 +80,7 @@ struct CommandCatalogEntry
     std::string category;
     std::string description;
     std::vector<CommandParameter> parameters;
+    bool automationVisible{true};
 };
 
 class CommandRegistry
