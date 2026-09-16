@@ -59,71 +59,25 @@ public:
     void Text(std::string_view text);
     void Separator();
 
-    [[nodiscard]] bool Button(
-        std::string_view label);
-
-    [[nodiscard]] bool InputText(
-        std::string_view label,
-        std::string& value);
-
+    [[nodiscard]] bool Button(std::string_view label);
+    [[nodiscard]] bool InputText(std::string_view label, std::string& value);
     [[nodiscard]] UiSize ContentAvailable() const;
-
-    [[nodiscard]] bool Selectable(
-        std::string_view label,
-        bool selected);
-
-    [[nodiscard]] TreeItemInteraction TreeItem(
-        std::string_view label,
-        bool selected);
-
+    [[nodiscard]] bool Selectable(std::string_view label, bool selected);
+    [[nodiscard]] TreeItemInteraction TreeItem(std::string_view label, bool selected);
     void TreePop();
-
-    [[nodiscard]] ImageInteraction Image(
-        rhi::Texture& texture,
-        UiSize size);
-
-    [[nodiscard]] bool Checkbox(
-        std::string_view label,
-        bool& value);
-
-    [[nodiscard]] bool InputDouble(
-        std::string_view label,
-        f64& value);
-
-    [[nodiscard]] bool InputInteger(
-        std::string_view label,
-        i64& value);
-
-    [[nodiscard]] bool InputDouble3(
-        std::string_view label,
-        math::Double3& value);
-
+    [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
+    [[nodiscard]] bool Checkbox(std::string_view label, bool& value);
+    [[nodiscard]] bool InputDouble(std::string_view label, f64& value);
+    [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
+    [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;
-
     [[nodiscard]] bool BeginDragSource();
-    void SetDragPayload(
-        std::string_view type,
-        std::span<const std::byte> bytes);
+    void SetDragPayload(std::string_view type, std::span<const std::byte> bytes);
     void EndDragSource();
-
-    [[nodiscard]] std::optional<
-        std::vector<std::byte>>
-    AcceptDragPayload(
-        std::string_view type);
-
-    void Toolbar(
-        std::span<const ActionPresentation> actions);
-
-    void ContextMenu(
-        std::string_view id,
-        std::span<const ActionPresentation> actions,
-        bool openRequested);
-
-    void RadialMenu(
-        std::string_view id,
-        std::span<const ActionPresentation> actions,
-        bool openRequested);
-
+    [[nodiscard]] std::optional<std::vector<std::byte>> AcceptDragPayload(std::string_view type);
+    void Toolbar(std::span<const ActionPresentation> actions);
+    void ContextMenu(std::string_view id, std::span<const ActionPresentation> actions, bool openRequested);
+    void RadialMenu(std::string_view id, std::span<const ActionPresentation> actions, bool openRequested);
     void SameLine();
 
 private:
@@ -161,22 +115,19 @@ public:
     EditorUi(const EditorUi&) = delete;
     EditorUi& operator=(const EditorUi&) = delete;
 
-    void RegisterPanel(
-        PanelDefinition panel);
+    void RegisterPanel(PanelDefinition panel);
 
-    void RegisterMenuAction(
-        MenuAction action);
+    // Replaces an existing definition while preserving its current open
+    // state, or registers it when the ID is new. This is the dynamic path
+    // used by plugin/catalog hot reload.
+    void UpsertPanel(PanelDefinition panel);
 
-    void BeginFrame(
-        platform::Window& window,
-        f64 deltaSeconds);
+    [[nodiscard]] bool UnregisterPanel(PanelId id) noexcept;
 
-    // Creates the main dockspace, top menu/ribbon and all registered
-    // panels. Panel code sees only PanelContext, never ImGui.
+    void RegisterMenuAction(MenuAction action);
+
+    void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
-
-    // Finalizes ImGui and emits draw data through Orbit RHI into a color
-    // target already transitioned to RenderTarget.
     void Render(
         rhi::CommandList& commands,
         rhi::Texture& target,
