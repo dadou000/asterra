@@ -16,6 +16,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
+#include <orbit/platform/FileDialog.hpp>
 #include <orbit/platform/Paths.hpp>
 #include <orbit/plugins/PluginManager.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
@@ -1736,7 +1737,8 @@ int main(
             .defaultOpen = true,
             .draw =
                 [&content,
-                 &contentSearch](
+                 &contentSearch,
+                 &window](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -1767,6 +1769,50 @@ int main(
                                         sourcePath.
                                         generic_string(),
                                     diagnostic.message));
+                        }
+                    }
+
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Import PBR Set..."))
+                    {
+                        try
+                        {
+                            const auto folder =
+                                orbit::platform::
+                                    SelectFolder(
+                                        window,
+                                        {
+                                            .title =
+                                                "Import PBR Material Set"
+                                        });
+
+                            if (folder.has_value())
+                            {
+                                const auto assetId =
+                                    content.ImportPbrSet(
+                                        *folder);
+
+                                const auto* imported =
+                                    content.Find(
+                                        assetId);
+
+                                orbit::log::Info(
+                                    std::format(
+                                        "Imported PBR material '{}'.",
+                                        imported != nullptr
+                                            ? imported->name
+                                            : assetId.ToString()));
+                            }
+                        }
+                        catch (const std::exception&
+                                   exception)
+                        {
+                            orbit::log::Warning(
+                                std::format(
+                                    "PBR material import failed: {}",
+                                    exception.what()));
                         }
                     }
 
