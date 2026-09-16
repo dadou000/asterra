@@ -65,7 +65,7 @@ public:
 private:
     [[nodiscard]] const ThumbnailProviderDescriptor*
     FindProvider(
-        std::string_view category) const noexcept;
+        std::string_view category) const;
 
     DerivedDataCache& cache_;
     std::vector<ThumbnailProviderDescriptor>
