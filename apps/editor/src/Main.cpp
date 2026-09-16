@@ -1631,7 +1631,10 @@ int main(
 
                         if (property.schema.id ==
                                 orbit::paths::
-                                    kNetworkProfile)
+                                    kNetworkProfile ||
+                            property.schema.id ==
+                                orbit::paths::
+                                    kEdgeProfileOverride)
                         {
                             if (const auto payload =
                                     context.AcceptDragPayload(
