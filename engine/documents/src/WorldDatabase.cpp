@@ -11,15 +11,29 @@ class WorldDatabase::Impl
 {
 public:
     explicit Impl(
-        std::filesystem::path databasePath)
+        std::filesystem::path databasePath,
+        const WorldOpenMode openMode)
         : path(std::move(databasePath)),
+          mode(openMode),
           database(
               path.string(),
-              SQLite::OPEN_READWRITE |
-                  SQLite::OPEN_CREATE)
+              mode == WorldOpenMode::ReadOnly
+                  ? SQLite::OPEN_READONLY
+                  : SQLite::OPEN_READWRITE |
+                        SQLite::OPEN_CREATE)
     {
         database.exec(
             "PRAGMA foreign_keys = ON;");
+        database.exec(
+            "PRAGMA busy_timeout = 5000;");
+
+        if (mode ==
+            WorldOpenMode::ReadOnly)
+        {
+            LoadExisting();
+            return;
+        }
+
         database.exec(
             "PRAGMA journal_mode = WAL;");
         database.exec(
@@ -27,6 +41,78 @@ public:
 
         InitializeAndMigrate();
         EnsureWorldId();
+    }
+
+    void LoadExisting()
+    {
+        if (!database.tableExists(
+                "orbit_schema"))
+        {
+            throw std::runtime_error(
+                "Runtime world is missing Orbit schema metadata.");
+        }
+
+        SQLite::Statement versionQuery(
+            database,
+            "SELECT version FROM orbit_schema LIMIT 1;");
+
+        if (!versionQuery.executeStep())
+        {
+            throw std::runtime_error(
+                "Runtime world schema table is empty.");
+        }
+
+        schemaVersion =
+            versionQuery.getColumn(0).
+                getInt();
+
+        if (schemaVersion !=
+            kCurrentWorldSchemaVersion)
+        {
+            throw std::runtime_error(
+                "Runtime world requires migration before read-only execution.");
+        }
+
+        if (!database.tableExists(
+                "world_metadata"))
+        {
+            throw std::runtime_error(
+                "Runtime world is missing world metadata.");
+        }
+
+        SQLite::Statement query(
+            database,
+            "SELECT value FROM world_metadata "
+            "WHERE key = 'world_id';");
+
+        if (!query.executeStep())
+        {
+            throw std::runtime_error(
+                "Runtime world is missing world_id.");
+        }
+
+        const auto parsed =
+            WorldId::Parse(
+                query.getColumn(0).
+                    getString());
+
+        if (!parsed.has_value())
+        {
+            throw std::runtime_error(
+                "Runtime world contains an invalid world_id.");
+        }
+
+        worldId = *parsed;
+    }
+
+    void RequireWritable() const
+    {
+        if (mode ==
+            WorldOpenMode::ReadOnly)
+        {
+            throw std::logic_error(
+                "World database was opened read-only.");
+        }
     }
 
     void InitializeAndMigrate()
@@ -180,16 +266,20 @@ public:
     }
 
     std::filesystem::path path;
+    WorldOpenMode mode{
+        WorldOpenMode::ReadWrite};
     SQLite::Database database;
     i32 schemaVersion{0};
     WorldId worldId{};
 };
 
 WorldDatabase::WorldDatabase(
-    const std::filesystem::path& path)
+    const std::filesystem::path& path,
+    const WorldOpenMode mode)
     : impl_(
           std::make_unique<Impl>(
-              path))
+              path,
+              mode))
 {
 }
 
@@ -217,6 +307,17 @@ WorldId WorldDatabase::Id() const noexcept
     return impl_->worldId;
 }
 
+WorldOpenMode WorldDatabase::Mode() const noexcept
+{
+    return impl_->mode;
+}
+
+bool WorldDatabase::ReadOnly() const noexcept
+{
+    return impl_->mode ==
+        WorldOpenMode::ReadOnly;
+}
+
 std::optional<std::string>
 WorldDatabase::GetMetadata(
     const std::string_view key) const
@@ -242,6 +343,8 @@ void WorldDatabase::SetMetadata(
     const std::string_view key,
     const std::string_view value)
 {
+    impl_->RequireWritable();
+
     if (key.empty())
     {
         throw std::invalid_argument(
@@ -268,6 +371,8 @@ void WorldDatabase::RunTransaction(
     const std::function<void(WorldDatabase&)>&
         callback)
 {
+    impl_->RequireWritable();
+
     if (!callback)
     {
         throw std::invalid_argument(
@@ -284,6 +389,8 @@ void WorldDatabase::RunTransaction(
 
 void WorldDatabase::Checkpoint()
 {
+    impl_->RequireWritable();
+
     impl_->database.exec(
         "PRAGMA wal_checkpoint(TRUNCATE);");
 }
