@@ -17,6 +17,7 @@ struct PluginRequirement
 {
     std::string id;
     std::string version;
+    std::vector<std::string> grantedPermissions;
 };
 
 struct BuildProfile
