@@ -323,6 +323,63 @@ int main()
             socket ==
         "deck.road.out");
 
+    commands.BeginTransaction(
+        "Composite Path Edit");
+
+    ORBIT_TEST_CHECK(
+        commands.HasActiveTransaction());
+
+    const auto compositeNode =
+        paths.CreateNode(
+            network.id,
+            "Composite Node",
+            orbit::paths::FramePointAnchor{
+                .frame = bodyFrame,
+                .localMeters = {
+                    80.0,
+                    0.0,
+                    0.0
+                }
+            });
+
+    const auto compositeEdge =
+        paths.ConnectDirect(
+            nodeB.id,
+            compositeNode.id,
+            "Composite Edge");
+
+    ORBIT_TEST_CHECK(
+        commands.HasActiveTransaction());
+
+    commands.CommitTransaction();
+
+    ORBIT_TEST_CHECK(
+        !commands.HasActiveTransaction());
+    ORBIT_TEST_CHECK(
+        objects.Find(compositeNode.id).
+            has_value());
+    ORBIT_TEST_CHECK(
+        objects.Find(compositeEdge.id).
+            has_value());
+
+    commands.Undo();
+
+    ORBIT_TEST_CHECK(
+        !objects.Find(compositeNode.id).
+            has_value());
+    ORBIT_TEST_CHECK(
+        !objects.Find(compositeEdge.id).
+            has_value());
+
+    commands.Redo();
+
+    ORBIT_TEST_CHECK(
+        objects.Find(compositeNode.id).
+            has_value());
+    ORBIT_TEST_CHECK(
+        objects.Find(compositeEdge.id).
+            has_value());
+
     project.Save();
     world.Checkpoint();
     std::filesystem::remove_all(root);
