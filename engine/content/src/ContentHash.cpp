@@ -9,6 +9,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace orbit::content
 {
@@ -442,8 +443,11 @@ ContentHash HashFile(
         kChunkBytes =
             1024U * 1024U;
 
-    std::array<std::byte, kChunkBytes>
-        buffer{};
+    // File hashing is routinely called from deep import/build stacks. Keep the
+    // streaming buffer off the thread stack so Windows' default 1 MiB stack is
+    // not consumed by a single hash operation.
+    std::vector<std::byte> buffer(
+        kChunkBytes);
 
     Sha256 hash;
 
