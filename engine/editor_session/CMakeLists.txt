@@ -1,5 +1,6 @@
 add_library(OrbitEditorSession STATIC
     src/EditorWorldSession.cpp
+    src/WorldDocumentsModel.cpp
 )
 
 add_library(Orbit::EditorSession ALIAS OrbitEditorSession)
@@ -40,5 +41,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.EditorWorldSession
         COMMAND OrbitEditorWorldSessionTests
+    )
+
+    add_executable(OrbitWorldDocumentsModelTests
+        tests/WorldDocumentsModelTests.cpp
+    )
+
+    target_link_libraries(OrbitWorldDocumentsModelTests
+        PRIVATE
+            Orbit::EditorSession
+    )
+
+    target_compile_features(
+        OrbitWorldDocumentsModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWorldDocumentsModelTests)
+
+    add_test(
+        NAME Orbit.WorldDocumentsModel
+        COMMAND OrbitWorldDocumentsModelTests
     )
 endif()
