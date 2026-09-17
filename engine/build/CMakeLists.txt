@@ -40,6 +40,7 @@ if(BUILD_TESTING)
     target_link_libraries(OrbitBuildServiceTests
         PRIVATE
             Orbit::Build
+            Orbit::PlatformServices
     )
 
     target_compile_features(OrbitBuildServiceTests PRIVATE cxx_std_23)
