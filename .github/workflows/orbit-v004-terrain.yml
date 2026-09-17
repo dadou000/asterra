@@ -68,8 +68,9 @@ jobs:
           OrbitTerrainFaceSeamTests
           OrbitTerrainM01IntegrationTests
           OrbitTerrainGeologyTests
+          OrbitTerrainStratigraphyTests
 
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.]Terrain(Contracts|FaceSeams|M01Integration|GeologyMaterials)"
+          -R "Orbit[.]Terrain(Contracts|FaceSeams|M01Integration|GeologyMaterials|Stratigraphy)"
