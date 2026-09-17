@@ -16,21 +16,7 @@ StudioRenderViewSet::StudioRenderViewSet(
 {
 }
 
-StudioRenderViewSet::~StudioRenderViewSet()
-{
-    if (session_ == nullptr)
-    {
-        return;
-    }
-
-    auto& targets = session_->Viewports();
-
-    for (const auto& [id, view] : views_)
-    {
-        static_cast<void>(view);
-        static_cast<void>(targets.Unregister(id));
-    }
-}
+StudioRenderViewSet::~StudioRenderViewSet() = default;
 
 void StudioRenderViewSet::CreateDefaults()
 {
