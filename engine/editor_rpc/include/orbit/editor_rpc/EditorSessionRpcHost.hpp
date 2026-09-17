@@ -4,6 +4,7 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,6 +37,12 @@ public:
     [[nodiscard]] EditorRpcService* Editor() noexcept;
     [[nodiscard]] const EditorRpcService* Editor() const noexcept;
 
+    // Persists application-owned automation attachments across world-service
+    // reconstruction. The callback is applied immediately to the current
+    // editor and again to every EditorRpcService created after world.open.
+    void SetEditorConfigurator(
+        std::function<void(EditorRpcService&)> configurator);
+
 private:
     void RegisterHostMethods();
     void RegisterClosedProjectMethods();
@@ -51,5 +58,7 @@ private:
     std::vector<std::string> hostMethods_;
     std::vector<std::string> closedProjectMethods_;
     bool pendingRebind_{false};
+    std::function<void(EditorRpcService&)>
+        editorConfigurator_;
 };
 } // namespace orbit::editor_rpc

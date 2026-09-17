@@ -180,6 +180,19 @@ EditorSessionRpcHost::Editor() const noexcept
     return editor_.get();
 }
 
+void EditorSessionRpcHost::SetEditorConfigurator(
+    std::function<void(EditorRpcService&)> configurator)
+{
+    editorConfigurator_ =
+        std::move(configurator);
+
+    if (editor_ != nullptr &&
+        editorConfigurator_)
+    {
+        editorConfigurator_(*editor_);
+    }
+}
+
 void EditorSessionRpcHost::RegisterHostMethods()
 {
     const auto registerMethod =
@@ -530,6 +543,11 @@ void EditorSessionRpcHost::RebindEditor()
                 session_.Schemas(),
                 session_.Objects(),
                 session_.Selection());
+
+        if (editorConfigurator_)
+        {
+            editorConfigurator_(*editor_);
+        }
     }
     catch (...)
     {
