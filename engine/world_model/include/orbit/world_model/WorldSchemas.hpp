@@ -27,6 +27,24 @@ inline constexpr schema::TypeId kTerrainSurfaceType{
     .low = 0x5241494e00000001ULL
 };
 
+// V0.0.4 permanent authored surface asset identities. These are schema type
+// IDs, not runtime/cache handles: instances live in the semantic document and
+// therefore inherit the V0.0.3 command/undo/persistence authority path.
+inline constexpr schema::TypeId kGeologyAssetType{
+    .high = 0x4f5242495447454fULL,
+    .low = 0x4c4f475941535431ULL
+};
+
+inline constexpr schema::TypeId kTerrainProcessAssetType{
+    .high = 0x4f52424954505243ULL,
+    .low = 0x4553534153543031ULL
+};
+
+inline constexpr schema::TypeId kBiomeAssetType{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45415353455431ULL
+};
+
 inline constexpr schema::TypeId kSurfaceDecalType{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c545950450001ULL
