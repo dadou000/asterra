@@ -270,17 +270,22 @@ void ProjectAuthoringUi::DrawProjectSettings(
 
     for (const auto& world : snapshot.worlds)
     {
-        context.Text(
-            std::format(
-                "{}{}",
-                world.displayName,
-                world.startup ? " [Startup]" : ""));
+        context.Text(WorldLabel(world));
 
-        if (!world.startup)
+        if (!world.valid)
+        {
+            context.Text(
+                std::format(
+                    "  Validation: {}",
+                    world.diagnostic));
+            continue;
+        }
+
+        if (!world.descriptor.startup)
         {
             const std::string button =
                 "Set Startup##settings:" +
-                world.id.ToString();
+                world.descriptor.id.ToString();
 
             if (context.Button(button))
             {
@@ -288,7 +293,7 @@ void ProjectAuthoringUi::DrawProjectSettings(
                 {
                     static_cast<void>(
                         projectSettings_.SetStartupWorld(
-                            world.relativePath));
+                            world.descriptor.relativePath));
                     status_ = "Startup world updated.";
                 }
                 catch (const std::exception& exception)
