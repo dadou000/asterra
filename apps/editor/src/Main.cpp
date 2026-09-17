@@ -5502,13 +5502,7 @@ int main(
 
             const orbit::universe::BodyShape
                 previewShape =
-                    orbit::universe::
-                        SphereShape{
-                            .radiusMeters =
-                                BodyRadius(
-                                    objects,
-                                    bodyObject)
-                        };
+                    bodies.FindBody(bodyId)->shape;
 
             std::vector<
                 const orbit::path_geometry::
