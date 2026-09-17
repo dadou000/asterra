@@ -1,5 +1,7 @@
 #include <orbit/terrain_cache/TerrainPageBuilder.hpp>
 
+#include <orbit/world/CubeProjection.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -167,11 +169,16 @@ TerrainPage::SampleDirection(
         return {};
     }
 
-    const world::CubeCoordinate cube =
-        world::UnitDirectionToCube(
-            unitDirection);
+    // Do not canonicalize the direction to a single major-axis face here.
+    // Exact cube edges/corners are physically shared by adjacent pages, so
+    // project onto the face owned by this page. This allows either page to
+    // return the same boundary sample and removes face-tie phase dependence.
+    const auto cube =
+        world::ProjectDirectionToCubeFace(
+            unitDirection,
+            desc.tile.face);
 
-    if (cube.face != desc.tile.face)
+    if (!cube.has_value())
     {
         return {};
     }
@@ -200,7 +207,7 @@ TerrainPage::SampleDirection(
 
     const f64 sampleX =
         std::clamp(
-            (cube.uv.x -
+            (cube->uv.x -
              bounds.minimumUv.x) /
                 widthU *
                 sampleMaximum,
@@ -209,7 +216,7 @@ TerrainPage::SampleDirection(
 
     const f64 sampleY =
         std::clamp(
-            (cube.uv.y -
+            (cube->uv.y -
              bounds.minimumUv.y) /
                 widthV *
                 sampleMaximum,
@@ -379,7 +386,11 @@ TerrainPage BuildTerrainPage(
                             direction,
                         .footprintMeters =
                             page.
-                                approximateSampleSpacingMeters
+                                approximateSampleSpacingMeters,
+                        .planet =
+                            desc.planet.IsValid()
+                                ? desc.planet
+                                : planet.id
                     }));
         }
     }
