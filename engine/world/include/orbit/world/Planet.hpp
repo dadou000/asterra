@@ -1,10 +1,14 @@
 #pragma once
 
+#include <orbit/core/StrongId.hpp>
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
 
 namespace orbit::world
 {
+struct PlanetIdTag;
+using PlanetId = core::StrongId<PlanetIdTag>;
+
 enum class CubeFace : u8
 {
     PositiveX,
@@ -42,6 +46,15 @@ struct PlanetTileId
 struct PlanetDefinition
 {
     f64 radiusMeters{6'000'000.0};
+
+    // Stable identity is authored/persisted. It must never be derived from
+    // camera, render, cache-slot or process-local state.
+    PlanetId id{};
+
+    // Root for deterministic procedural domains on this planet. Individual
+    // systems derive domain/page seeds from this value rather than owning
+    // independent random generators.
+    u64 generationSeed{0};
 };
 
 struct SurfaceFrame
