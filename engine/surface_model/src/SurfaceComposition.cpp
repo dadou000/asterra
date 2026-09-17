@@ -117,6 +117,15 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     const scene::ObjectStore& objects,
     const world_model::UniverseComposition& universe)
 {
+    // UniverseComposition replaces BodyRegistry storage during a rebuild.
+    // Drop every reference to the previous registry before validating the
+    // replacement capability graph; a failed terrain recipe therefore leaves
+    // the surface layer unavailable rather than dangling into freed bodies.
+    registry_.reset();
+    bodyByTerrainObject_.clear();
+    terrainObjectByBody_.clear();
+    sourceRevision_ = ~u64{0};
+
     auto candidate =
         std::make_unique<surface::SurfaceRegistry>(
             universe.Bodies());
