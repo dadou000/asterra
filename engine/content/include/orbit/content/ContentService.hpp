@@ -49,6 +49,14 @@ struct MaterialInstanceData
     std::optional<f64> metallicFactor;
 };
 
+struct DecalData
+{
+    std::filesystem::path texture;
+    f64 widthMeters{1.0};
+    f64 heightMeters{1.0};
+    f64 opacity{1.0};
+};
+
 enum class ShaderAssetStage : u8
 {
     Vertex,
@@ -79,6 +87,7 @@ struct AssetRecord
     std::optional<MaterialChannels> material;
     std::optional<MaterialInstanceData>
         materialInstance;
+    std::optional<DecalData> decal;
     std::optional<ShaderAssetData>
         shader;
 };
@@ -157,6 +166,16 @@ public:
     [[nodiscard]] AssetId CreateMaterialInstance(
         AssetId baseMaterial,
         std::string instanceName = {});
+
+    // Creates a persistent .orbitdecal authority asset from an indexed texture.
+    // The decal owns semantic size/opacity metadata and references the texture
+    // through the ordinary asset dependency graph/DDC pipeline.
+    [[nodiscard]] AssetId CreateDecal(
+        AssetId textureAsset,
+        std::string decalName = {},
+        f64 widthMeters = 1.0,
+        f64 heightMeters = 1.0,
+        f64 opacity = 1.0);
 
 private:
     [[nodiscard]] AssetRecord BuildRecord(const std::filesystem::path& absolute) const;
