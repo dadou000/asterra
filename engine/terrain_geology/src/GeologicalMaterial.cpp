@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
+#include <utility>
 
 namespace orbit::terrain_geology
 {
