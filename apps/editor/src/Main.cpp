@@ -1342,18 +1342,8 @@ int main(
         static_cast<void>(
             worldSession.RebuildUniverse());
 
-        orbit::rpc::Dispatcher
-            rpcDispatcher;
-
-        orbit::editor_rpc::EditorRpcService
-            editorRpc(
-                rpcDispatcher,
-                project,
-                authoringCommands,
-                commandService,
-                schemas,
-                objects,
-                selection);
+        auto& rpcHost =
+            studioSession.Rpc();
 
         orbit::dev_server::DevServer
             rpcServer({
@@ -1363,10 +1353,10 @@ int main(
             });
 
         rpcServer.SetMessageHandler(
-            [&rpcDispatcher](
+            [&studioSession](
                 const std::string_view message)
             {
-                return rpcDispatcher.Dispatch(
+                return studioSession.DispatchRpc(
                     message);
             });
 
@@ -1682,7 +1672,7 @@ int main(
             0.0F
         };
 
-        editorRpc.AttachViewport({
+        rpcHost.AttachViewport({
             .view = &bodyView,
             .capture =
                 [&device,
@@ -2159,7 +2149,7 @@ int main(
                     std::move(result));
             };
 
-        editorRpc.AttachBuild({
+        rpcHost.AttachBuild({
             .profiles =
                 [&project]
                 {
@@ -2726,7 +2716,7 @@ int main(
                                 status->
                                     generation;
 
-                        editorRpc.PublishEvent(
+                        rpcHost.PublishEvent(
                             "path.route_ready",
                             orbit::rpc::Value(
                                 orbit::rpc::Value::Object{
@@ -2784,7 +2774,7 @@ int main(
                                 edge.ToString(),
                                 status->error));
 
-                        editorRpc.PublishEvent(
+                        rpcHost.PublishEvent(
                             "path.route_failed",
                             orbit::rpc::Value(
                                 orbit::rpc::Value::Object{
@@ -3057,7 +3047,7 @@ int main(
                                 derivedPaths.at(
                                     edgeId);
 
-                            editorRpc.PublishEvent(
+                            rpcHost.PublishEvent(
                                 "path.derived_ready",
                                 orbit::rpc::Value(
                                     orbit::rpc::Value::Object{
@@ -3128,7 +3118,7 @@ int main(
                     content.Revision();
             };
 
-        editorRpc.AttachPathRouting({
+        rpcHost.AttachPathRouting({
             .status =
                 [&routePlanner](
                     const orbit::scene::ObjectId edge)
@@ -3316,7 +3306,7 @@ int main(
                 }
         });
 
-        editorRpc.AttachPathGeometry({
+        rpcHost.AttachPathGeometry({
             .result =
                 [&derivedPaths](
                     const orbit::scene::ObjectId edge)
@@ -3567,7 +3557,7 @@ int main(
                     publishedObjectRevision =
                         objects.Revision();
 
-                    editorRpc.PublishEvent(
+                    rpcHost.PublishEvent(
                         "object.changed",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
@@ -3596,7 +3586,7 @@ int main(
                             id.ToString());
                     }
 
-                    editorRpc.PublishEvent(
+                    rpcHost.PublishEvent(
                         "selection.changed",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
@@ -3618,7 +3608,7 @@ int main(
                     publishedContentRevision =
                         content.Revision();
 
-                    editorRpc.PublishEvent(
+                    rpcHost.PublishEvent(
                         "content.changed",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
@@ -3646,7 +3636,7 @@ int main(
                     publishedViewportHeight =
                         bodyView.Height();
 
-                    editorRpc.PublishEvent(
+                    rpcHost.PublishEvent(
                         "viewport.resized",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
@@ -3664,7 +3654,7 @@ int main(
                 }
 
                 for (const std::string& notification :
-                     editorRpc.DrainNotifications())
+                     rpcHost.DrainNotifications())
                 {
                     static_cast<void>(
                         rpcServer.SendServerMessage(
@@ -5851,7 +5841,7 @@ int main(
                                 ? ""
                                 : "s"));
 
-                    editorRpc.PublishEvent(
+                    rpcHost.PublishEvent(
                         "plugin.reloaded",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
