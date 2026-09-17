@@ -22,7 +22,7 @@ public:
     StudioWorkspace& operator=(const StudioWorkspace&) = delete;
 
     StudioWorkspace(StudioWorkspace&&) noexcept;
-    StudioWorkspace& operator=(StudioWorkspace&&) noexcept;
+    StudioWorkspace& operator=(StudioWorkspace&& other);
 
     void CreateProject(
         const std::filesystem::path& rootDirectory,
@@ -45,9 +45,6 @@ public:
 
 private:
     struct State;
-
-    explicit StudioWorkspace(
-        std::unique_ptr<State> state) noexcept;
 
     void CommitCandidate(std::unique_ptr<State> candidate);
     void CheckpointCurrent();
