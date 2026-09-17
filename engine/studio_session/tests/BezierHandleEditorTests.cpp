@@ -130,8 +130,8 @@ int main()
 
         const auto secondary =
             project.CreateWorld("Secondary", "Secondary");
-        const u64 firstBinding = boundPaths.BindingGeneration();
-        world.OpenWorld(secondary.relativePath);
+        const orbit::u64 firstBinding = boundPaths.BindingGeneration();
+        world.OpenWorld(secondary);
         Check(boundPaths.RefreshBinding());
         Check(boundPaths.BindingGeneration() > firstBinding);
         Check(boundPaths.HasService());
