@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 namespace
@@ -37,9 +38,15 @@ int main()
 
         auto catalog = model.Catalog();
         Check(catalog.size() == 1U);
+        Check(catalog.front().valid);
+        Check(catalog.front().diagnostic.empty());
         Check(catalog.front().active);
         Check(catalog.front().descriptor.startup);
         Check(catalog.front().descriptor.displayName == "Main");
+        Check(catalog.front().descriptor.id.IsValid());
+        Check(
+            catalog.front().descriptor.relativePath ==
+            std::filesystem::path("Worlds/Main.orbitworld"));
 
         const auto mainId = catalog.front().descriptor.id;
         const auto generationBeforeSwitch = session.Generation();
@@ -81,6 +88,9 @@ int main()
         bool foundInactiveMain = false;
         for (const auto& item : catalog)
         {
+            Check(item.valid);
+            Check(item.diagnostic.empty());
+
             if (item.descriptor.id == secondary.id)
             {
                 Check(item.active);
@@ -103,6 +113,47 @@ int main()
 
         const auto reopened = model.Open("Main");
         Check(reopened.id == mainId);
+        Check(model.Active()->descriptor.id == mainId);
+
+        const auto brokenPath = root / "Worlds/Broken.orbitworld";
+        {
+            std::ofstream broken(
+                brokenPath,
+                std::ios::binary | std::ios::trunc);
+            broken << "not a sqlite world";
+        }
+
+        const auto generationBeforeBrokenOpen = session.Generation();
+        catalog = model.Catalog();
+        Check(catalog.size() == 3U);
+
+        bool foundBroken = false;
+        for (const auto& item : catalog)
+        {
+            if (item.descriptor.relativePath ==
+                std::filesystem::path("Worlds/Broken.orbitworld"))
+            {
+                Check(!item.valid);
+                Check(!item.active);
+                Check(!item.descriptor.id.IsValid());
+                Check(!item.diagnostic.empty());
+                foundBroken = true;
+            }
+        }
+        Check(foundBroken);
+        Check(model.Active()->descriptor.id == mainId);
+
+        bool brokenOpenRejected = false;
+        try
+        {
+            static_cast<void>(model.Open("Broken"));
+        }
+        catch (const std::exception&)
+        {
+            brokenOpenRejected = true;
+        }
+        Check(brokenOpenRejected);
+        Check(session.Generation() == generationBeforeBrokenOpen);
         Check(model.Active()->descriptor.id == mainId);
     }
 
