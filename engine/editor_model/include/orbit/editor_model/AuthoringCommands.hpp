@@ -42,6 +42,11 @@ inline constexpr commands::CommandId kCreateTerrainSurface{
     .low = 0x4352454154455452ULL
 };
 
+inline constexpr commands::CommandId kRemoveTerrainSurface{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x52454d4f56455452ULL
+};
+
 inline constexpr commands::CommandId kAssignMaterial{
     .high = 0x4f52424954434d44ULL,
     .low = 0x41535349474e4d54ULL
@@ -82,9 +87,9 @@ void RegisterMaterialCommands(
     scene::ObjectStore& objects,
     selection::SelectionService& selection);
 
-// Registers real surface capability creation. This is separate from the core
-// hierarchy commands because it is valid only for capabilities with an actual
-// runtime composition path.
+// Registers real surface capability creation/removal. This is separate from
+// the core hierarchy commands because it is valid only for capabilities with
+// an actual runtime composition path.
 void RegisterTerrainCommands(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
