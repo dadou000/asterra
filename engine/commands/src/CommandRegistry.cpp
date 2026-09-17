@@ -95,6 +95,20 @@ void CommandRegistry::Register(
         }
     }
 
+    std::unordered_set<std::string>
+        surfaceNames;
+
+    for (const std::string& surface :
+         descriptor.presentationSurfaces)
+    {
+        if (surface.empty() ||
+            !surfaceNames.insert(surface).second)
+        {
+            throw std::invalid_argument(
+                "Command presentation surfaces require unique non-empty names.");
+        }
+    }
+
     commands_.emplace(
         descriptor.id,
         std::move(descriptor));
@@ -138,6 +152,8 @@ CommandRegistry::Catalog() const
                 command.description,
             .parameters =
                 command.parameters,
+            .presentationSurfaces =
+                command.presentationSurfaces,
             .automationVisible =
                 command.automationVisible
         });
