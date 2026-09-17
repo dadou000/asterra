@@ -11,6 +11,7 @@
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
+#include <orbit/surface_model/SurfaceComposition.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
 
 #include <filesystem>
@@ -92,11 +93,19 @@ public:
     [[nodiscard]] world_model::UniverseComposition& Universe();
     [[nodiscard]] const world_model::UniverseComposition& Universe() const;
 
+    [[nodiscard]] surface_model::SurfaceComposition& Surfaces();
+    [[nodiscard]] const surface_model::SurfaceComposition& Surfaces() const;
+
+    // Rebuilds the universe and every runtime capability whose lifetime is
+    // bound to its BodyRegistry. Terrain surfaces therefore never retain a
+    // registry from a previous universe generation.
     [[nodiscard]] world_model::UniverseCompositionStats
     RebuildUniverse();
     [[nodiscard]] bool RefreshUniverseIfChanged();
     [[nodiscard]] const world_model::UniverseCompositionStats&
     UniverseStats() const;
+    [[nodiscard]] const surface_model::SurfaceCompositionStats&
+    SurfaceStats() const;
 
     void Checkpoint();
 
