@@ -593,6 +593,25 @@ int main(const int argc, char** argv)
                 {
                     .playerExecutable = playerExecutable
                 });
+        if (!firstPackage.Succeeded())
+        {
+            for (const auto& issue : firstPackage.issues)
+            {
+                std::cerr
+                    << "[V0.0.3 build issue] "
+                    << issue.code
+                    << ": "
+                    << issue.message;
+                if (!issue.path.empty())
+                {
+                    std::cerr
+                        << " ["
+                        << issue.path.generic_string()
+                        << "]";
+                }
+                std::cerr << '\n';
+            }
+        }
         Check(firstPackage.Succeeded());
         Check(std::filesystem::is_regular_file(
             firstPackage.executablePath));
@@ -611,6 +630,25 @@ int main(const int argc, char** argv)
                 {
                     .playerExecutable = playerExecutable
                 });
+        if (!secondPackage.Succeeded())
+        {
+            for (const auto& issue : secondPackage.issues)
+            {
+                std::cerr
+                    << "[V0.0.3 build issue] "
+                    << issue.code
+                    << ": "
+                    << issue.message;
+                if (!issue.path.empty())
+                {
+                    std::cerr
+                        << " ["
+                        << issue.path.generic_string()
+                        << "]";
+                }
+                std::cerr << '\n';
+            }
+        }
         Check(secondPackage.Succeeded());
         Check(
             ReadText(secondPackage.manifestPath) ==
