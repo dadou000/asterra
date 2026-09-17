@@ -23,3 +23,25 @@ target_link_libraries(OrbitWorldModel
 
 target_compile_features(OrbitWorldModel PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitWorldModel)
+
+if(BUILD_TESTING)
+    add_executable(OrbitUniverseCompositionTests
+        tests/UniverseCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitUniverseCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitUniverseCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitUniverseCompositionTests)
+
+    add_test(
+        NAME Orbit.UniverseComposition
+        COMMAND OrbitUniverseCompositionTests
+    )
+endif()
