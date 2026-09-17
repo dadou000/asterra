@@ -2,8 +2,6 @@
 
 #include <orbit/paths/PathNetwork.hpp>
 
-#include <string>
-
 namespace orbit::editor_model::builtin
 {
 void RegisterSchemas(
@@ -12,26 +10,7 @@ void RegisterSchemas(
     schemas.RegisterType({
         .id = kWorldType,
         .displayName = "World",
-        .category = "World",
-        .properties = {
-            schema::PropertySchema{
-                .id = kWorldEpochMicroseconds,
-                .name = "Simulation Epoch",
-                .kind = schema::PropertyKind::Integer,
-                .unit = "us",
-                .defaultValue = i64{0},
-                .advanced = true
-            },
-            schema::PropertySchema{
-                .id = kWorldTimeScale,
-                .name = "Time Scale",
-                .kind = schema::PropertyKind::Float,
-                .defaultValue = 1.0,
-                .range = {
-                    .minimum = 0.0
-                }
-            }
-        }
+        .category = "World"
     });
 
     schemas.RegisterType({
@@ -56,19 +35,17 @@ void RegisterSchemas(
         .category = "World",
         .properties = {
             schema::PropertySchema{
-                .id = kBodyShapeMode,
-                .name = "Shape Mode",
-                .kind = schema::PropertyKind::String,
-                .defaultValue = std::string{"Sphere"}
+                .id = kBodyEllipsoidEnabled,
+                .name = "Ellipsoid Shape",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = false
             },
             schema::PropertySchema{
                 .id = kBodyRadius,
-                .name = "Reference Radius",
-                .kind =
-                    schema::PropertyKind::Float,
+                .name = "Equatorial / Reference Radius",
+                .kind = schema::PropertyKind::Float,
                 .unit = "m",
-                .defaultValue =
-                    6'000'000.0,
+                .defaultValue = 6'000'000.0,
                 .range = {
                     .minimum = 1.0
                 }
@@ -87,15 +64,20 @@ void RegisterSchemas(
             schema::PropertySchema{
                 .id = kBodyMass,
                 .name = "Mass",
-                .kind =
-                    schema::PropertyKind::Float,
+                .kind = schema::PropertyKind::Float,
                 .unit = "kg",
-                .defaultValue =
-                    5.0e24,
+                .defaultValue = 5.0e24,
                 .range = {
                     .minimum = 0.0
                 },
                 .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBodyParentPositionMeters,
+                .name = "Parent-frame Position",
+                .kind = schema::PropertyKind::Vector3,
+                .unit = "m",
+                .defaultValue = math::Double3{}
             },
             schema::PropertySchema{
                 .id = kBodyRotationPeriodSeconds,
@@ -104,7 +86,7 @@ void RegisterSchemas(
                 .unit = "s",
                 .defaultValue = 86'400.0,
                 .range = {
-                    .minimum = 0.001
+                    .minimum = 0.0
                 }
             },
             schema::PropertySchema{
@@ -119,55 +101,18 @@ void RegisterSchemas(
                 }
             },
             schema::PropertySchema{
-                .id = kBodySurfaceEnabled,
-                .name = "Surface Enabled",
-                .kind = schema::PropertyKind::Boolean,
-                .defaultValue = true
-            },
-            schema::PropertySchema{
-                .id = kBodyAtmosphereEnabled,
-                .name = "Atmosphere Enabled",
-                .kind = schema::PropertyKind::Boolean,
-                .defaultValue = false
-            },
-            schema::PropertySchema{
-                .id = kBodyHydrosphereEnabled,
-                .name = "Hydrosphere Enabled",
-                .kind = schema::PropertyKind::Boolean,
-                .defaultValue = false
-            },
-            schema::PropertySchema{
-                .id = kBodyTerrainSeed,
-                .name = "Terrain Seed",
-                .kind = schema::PropertyKind::Integer,
-                .defaultValue = i64{0}
-            },
-            schema::PropertySchema{
-                .id = kBodyOceanLevelMeters,
-                .name = "Ocean Level",
+                .id = kBodyRotationPhaseDegrees,
+                .name = "Rotation Phase At Epoch",
                 .kind = schema::PropertyKind::Float,
-                .unit = "m",
+                .unit = "deg",
                 .defaultValue = 0.0,
-                .advanced = true
-            },
-            schema::PropertySchema{
-                .id = kBodyMaximumElevationMeters,
-                .name = "Maximum Elevation",
-                .kind = schema::PropertyKind::Float,
-                .unit = "m",
-                .defaultValue = 8'000.0,
-                .range = {
-                    .minimum = 0.0
-                },
                 .advanced = true
             },
             schema::PropertySchema{
                 .id = kBodyMaterialAsset,
                 .name = "Material Asset",
-                .kind =
-                    schema::PropertyKind::String,
-                .defaultValue =
-                    std::string{}
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{}
             }
         }
     });
