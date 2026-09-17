@@ -1053,7 +1053,7 @@ BuildValidation BuildService::Validate(
             }
 
             if (package.orbitApiVersion !=
-                Version)
+                plugins::OrbitApiVersion)
             {
                 AddIssue(
                     result.issues,
@@ -1064,7 +1064,7 @@ BuildValidation BuildService::Validate(
                         "' targets Orbit API '" +
                         package.orbitApiVersion +
                         "', current engine is '" +
-                        std::string(Version) +
+                        std::string(plugins::OrbitApiVersion) +
                         "'.",
                     pluginManifestPath);
             }

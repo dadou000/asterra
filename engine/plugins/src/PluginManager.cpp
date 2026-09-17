@@ -20,9 +20,6 @@ namespace orbit::plugins
 {
 namespace
 {
-inline constexpr std::string_view kOrbitApiVersion =
-    "0.0.3";
-
 [[nodiscard]] std::string ReadTextFile(
     const std::filesystem::path& path)
 {
@@ -254,14 +251,14 @@ public:
             }
 
             if (manifest_.orbitApiVersion !=
-                kOrbitApiVersion)
+                OrbitApiVersion)
             {
                 throw std::runtime_error(
                     std::format(
                         "Plugin '{}' targets Orbit API '{}', expected '{}'.",
                         manifest_.id,
                         manifest_.orbitApiVersion,
-                        kOrbitApiVersion));
+                        OrbitApiVersion));
             }
 
             if (!requiredVersion_.empty() &&

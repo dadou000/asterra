@@ -212,7 +212,7 @@ int main(const int argc, char** argv)
                 "id = \"proof.plugin\"\n"
                 "version = \"1.0.0\"\n"
                 "orbit_api = \"") +
-                project.Manifest().engineCompatibilityVersion +
+                std::string(orbit::plugins::OrbitApiVersion) +
                 "\"\n"
                 "entry = \"main.luau\"\n"
                 "scope = \"editor\"\n"

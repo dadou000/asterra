@@ -10,6 +10,8 @@
 
 namespace orbit::plugins
 {
+inline constexpr std::string_view OrbitApiVersion = "0.0.3";
+
 enum class PluginScope : u8
 {
     Editor,
