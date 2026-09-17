@@ -48,6 +48,24 @@ if(BUILD_TESTING)
         COMMAND OrbitEditorRpcTests
     )
 
+    add_executable(OrbitBuildPackageRpcTests
+        tests/BuildPackageRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitBuildPackageRpcTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::EditorRpc
+    )
+
+    target_compile_features(OrbitBuildPackageRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitBuildPackageRpcTests)
+
+    add_test(
+        NAME Orbit.BuildPackageRpc
+        COMMAND OrbitBuildPackageRpcTests
+    )
+
     add_executable(OrbitProjectWorldRpcTests
         tests/ProjectWorldRpcTests.cpp
     )

@@ -31,6 +31,10 @@ public:
     Value() = default;
     Value(std::nullptr_t) noexcept;
     Value(bool value) noexcept;
+    Value(i32 value) noexcept
+        : data_(static_cast<i64>(value))
+    {
+    }
     Value(i64 value) noexcept;
     Value(f64 value) noexcept;
     Value(std::string value);

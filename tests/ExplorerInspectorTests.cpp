@@ -21,7 +21,7 @@
         if (!(expression)) \
         { \
             std::cerr << "Explorer/Inspector test failed: " #expression \
-                      << " at line " << __LINE__ << '\\n'; \
+                      << " at line " << __LINE__ << '\n'; \
             return __LINE__; \
         } \
     } while (false)
@@ -80,9 +80,10 @@ int main()
                     kWorldType,
                 "World");
 
-        selection.Set(
-            std::span(
-                std::array{worldRoot}));
+        const std::array worldSelection{
+            worldRoot
+        };
+        selection.Set(worldSelection);
 
         ORBIT_TEST_CHECK(
             registry.Enablement(
@@ -129,9 +130,10 @@ int main()
             selection.Ordered().front();
         explorer.Rename(bodyA, "Asterra");
 
-        selection.Set(
-            std::span(
-                std::array{system}));
+        const std::array systemSelection{
+            system
+        };
+        selection.Set(systemSelection);
         registry.Invoke(
             orbit::editor_model::
                 authoring_commands::
