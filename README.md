@@ -14,6 +14,8 @@ The next architecture milestone generalizes Orbit from a terrain-focused planeta
 
 Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor, asset, path, plugin, build or platform-service systems. It defines the small implementation milestones, CPU/GPU residency rules, Orbit Studio editor architecture, Luau plugin model, project persistence, Material Service, dynamic path networks, MCP V2 and Steam integration boundary.
 
+World and celestial setup is now tracked explicitly by **M20A — World & Celestial Authoring** in [docs/V0.0.3_WORLD_AUTHORING.md](docs/V0.0.3_WORLD_AUTHORING.md). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. Its first production slice adds semantic celestial-system authoring, runtime-backed body properties, transactional system/body creation, metadata-driven contextual commands, and regression coverage; project-browser, multi-world lifecycle and live semantic-to-runtime universe synchronization remain acceptance items rather than placeholders.
+
 ## Build
 
 ### One-click Windows build
