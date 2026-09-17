@@ -952,6 +952,8 @@ target_link_libraries(OrbitV003ScaffoldIntegrationTests
         Orbit::Paths
         Orbit::PlatformServices
         Orbit::Plugins
+        Orbit::Surface
+        Orbit::Terrain
         Orbit::Universe
 )
 

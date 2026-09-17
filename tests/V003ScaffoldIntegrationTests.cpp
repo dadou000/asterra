@@ -17,15 +17,19 @@
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
+#include <orbit/surface/SurfaceRegistry.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <source_location>
 #include <span>
 #include <string>
@@ -353,6 +357,33 @@ int main(const int argc, char** argv)
         const auto* primaryBody =
             bodies.FindBody(primary);
         Check(primaryBody != nullptr);
+
+        // M23 must prove that the existing rocky-planet terrain stack is a
+        // capability of a celestial body, not a parallel global planet.
+        orbit::surface::SurfaceRegistry surfaces(bodies);
+        auto terrainSource =
+            std::make_shared<orbit::terrain::AnalyticTerrainSource>(
+                orbit::world::PlanetDefinition{
+                    .radiusMeters = 6'000'000.0
+                });
+        surfaces.AttachTerrain(primary, terrainSource);
+
+        const auto* terrainCapability =
+            surfaces.FindTerrainSurface(primary);
+        Check(terrainCapability != nullptr);
+        Check(terrainCapability->terrain == terrainSource);
+
+        const auto terrainPlanet =
+            surfaces.SphericalPlanetDefinition(primary);
+        Check(terrainPlanet.has_value());
+        Check(terrainPlanet->radiusMeters == 6'000'000.0);
+
+        const orbit::terrain::TerrainSample terrainSample =
+            terrainCapability->terrain->Sample({
+                .unitDirection = {0.0, 1.0, 0.0},
+                .footprintMeters = 100.0
+            });
+        Check(std::isfinite(terrainSample.elevationMeters));
 
         const auto movingBody =
             bodies.CreateBody({
