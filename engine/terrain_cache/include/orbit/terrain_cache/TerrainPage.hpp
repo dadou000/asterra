@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/terrain/TerrainContracts.hpp>
 #include <orbit/terrain/TerrainFields.hpp>
 #include <orbit/world/Planet.hpp>
 
@@ -14,9 +15,23 @@ namespace orbit::terrain_cache
 {
 struct TerrainPageDesc
 {
+    world::PlanetId planet{};
     world::PlanetTileId tile{};
     u32 resolution{65};
-    u64 sourceRevision{0};
+    terrain::TerrainGenerationRevisions revisions{};
+
+    [[nodiscard]] constexpr terrain::PhysicalTerrainPageKey
+    PhysicalKey() const noexcept
+    {
+        return {
+            .address = {
+                .planet = planet,
+                .tile = tile
+            },
+            .resolution = resolution,
+            .revisions = revisions
+        };
+    }
 
     [[nodiscard]] constexpr bool operator==(
         const TerrainPageDesc&) const noexcept = default;
