@@ -4,8 +4,123 @@
 #include <cmath>
 #include <iostream>
 
+namespace
+{
+class RecordingTerrainSource final :
+    public orbit::terrain::TerrainSource
+{
+public:
+    explicit RecordingTerrainSource(
+        const orbit::world::PlanetId expectedPlanet)
+        : expectedPlanet_(expectedPlanet)
+    {
+    }
+
+    [[nodiscard]] orbit::terrain::TerrainSample Sample(
+        const orbit::terrain::TerrainQuery& query)
+        const noexcept override
+    {
+        ++calls_;
+
+        const auto position =
+            query.SurfacePosition();
+
+        canonical_ =
+            canonical_ &&
+            position.planet == expectedPlanet_ &&
+            std::abs(
+                orbit::math::Length(
+                    position.unitDirection) -
+                1.0) < 1.0e-12 &&
+            query.Footprint().IsValid();
+
+        return {
+            .elevationMeters = 100.0,
+            .coarseElevationMeters = 100.0,
+            .climate = {
+                .temperatureC = 15.0F,
+                .humidity = 0.5F,
+                .precipitation = 0.5F,
+                .continentality = 0.5F
+            }
+        };
+    }
+
+    [[nodiscard]] bool Canonical() const noexcept
+    {
+        return canonical_;
+    }
+
+    [[nodiscard]] orbit::u32 Calls() const noexcept
+    {
+        return calls_;
+    }
+
+private:
+    orbit::world::PlanetId expectedPlanet_{};
+    mutable bool canonical_{true};
+    mutable orbit::u32 calls_{0};
+};
+} // namespace
+
 int main()
 {
+    const orbit::world::PlanetId planetId{
+        .high = 0x485944524f4c4f47ULL,
+        .low = 0x594d303100000001ULL
+    };
+
+    const orbit::world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = planetId
+    };
+
+    const orbit::math::Double3 regionDirection =
+        orbit::math::Normalize(
+            orbit::math::Double3{
+                1.0,
+                2.0,
+                3.0
+            });
+
+    const orbit::world::SurfaceFrame regionFrame =
+        orbit::world::MakeSurfaceFrame(
+            regionDirection);
+
+    RecordingTerrainSource recordingSource{
+        planetId
+    };
+
+    const auto sampledGrid =
+        orbit::terrain_hydrology::BuildHydrologyGrid(
+            planet,
+            recordingSource,
+            regionFrame,
+            {
+                .resolution = 5,
+                .halfExtentMeters = 200.0,
+                .footprintMeters = 20.0,
+                .useCoarseElevation = true,
+                .conditionDepressions = false
+            });
+
+    if (sampledGrid.origin.planet != planetId ||
+        orbit::math::Dot(
+            sampledGrid.origin.unitDirection,
+            regionDirection) <
+            1.0 - 1.0e-12 ||
+        orbit::math::Dot(
+            sampledGrid.surfaceFrame.up,
+            regionDirection) <
+            1.0 - 1.0e-12 ||
+        !recordingSource.Canonical() ||
+        recordingSource.Calls() != 25U)
+    {
+        std::cerr
+            << "Hydrology did not preserve and propagate the canonical M01 surface position.\n";
+        return 1;
+    }
+
     orbit::terrain_hydrology::HydrologyGrid grid{};
 
     grid.config = {
