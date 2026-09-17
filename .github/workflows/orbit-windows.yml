@@ -37,7 +37,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build terrain and path regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests
 
       - name: Run terrain and path regression tests
         shell: pwsh
@@ -75,6 +75,16 @@ jobs:
           & "build/apps/build/Release/OrbitBuildCliTests.exe" "build/apps/build/Release/OrbitBuild.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitBuildCliTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/platform_services/Release/OrbitPlatformServicesTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitPlatformServicesTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/engine/platform_services/steam/Release/OrbitPlatformServicesSteamTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitPlatformServicesSteamTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Build
@@ -141,10 +151,10 @@ jobs:
               OrbitBuild.exe <project-directory-or-Project.orbit.toml> --validate
               OrbitBuild.exe <project-directory-or-Project.orbit.toml> --cook
 
-          Assemble a standalone project package with:
+          Assemble a project package with:
               OrbitBuild.exe <project-directory-or-Project.orbit.toml> --package
 
-          OrbitPlayer.exe is the project-driven runtime copied into standalone packages.
+          OrbitPlayer.exe is the project-driven runtime copied into project packages.
           It accepts a cooked package directory or OrbitBuildManifest.toml as its first argument.
 
           Orbit Studio structured automation:
