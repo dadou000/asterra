@@ -1,0 +1,41 @@
+name: Finalize Orbit V0.0.3 Scaffold
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - tools/finalize_v003_scaffold.py
+      - .github/workflows/orbit-scaffold-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply scaffold completion patch
+        run: python tools/finalize_v003_scaffold.py
+
+      - name: Verify patch changed expected sources
+        shell: pwsh
+        run: |
+          git diff --check
+          git diff --exit-code -- tools/finalize_v003_scaffold.py .github/workflows/orbit-scaffold-finalize.yml
+          if (-not (git status --porcelain)) {
+            throw "Scaffold finalizer produced no source changes"
+          }
+
+      - name: Commit scaffold completion
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/build engine/platform_services apps/build apps/editor .github/workflows/orbit-windows.yml docs/V0.0.3_SPEC.md
+          git commit -m "Finish V0.0.3 build and platform scaffolding"
+          git push origin HEAD:orbit
