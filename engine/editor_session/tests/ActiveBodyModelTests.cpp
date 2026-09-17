@@ -104,6 +104,9 @@ int main()
         Check(
             active.Active()->referenceRadiusMeters ==
             6'000'000.0);
+        Check(
+            active.Active()->universeGeneration ==
+            session.UniverseGeneration());
 
         const std::array moonSelection{luma};
         session.Selection().Set(moonSelection);
@@ -111,6 +114,8 @@ int main()
         Check(active.Refresh());
         Check(active.Active()->semanticObject == luma);
         const auto stableMoonBody = active.Active()->body;
+        const auto moonUniverseGeneration =
+            active.Active()->universeGeneration;
         Check(active.Active()->name == "Luma");
 
         session.Commands().SetProperty(
@@ -123,6 +128,12 @@ int main()
         Check(
             active.Active()->referenceRadiusMeters ==
             1'800'000.0);
+        Check(
+            active.Active()->universeGeneration >
+            moonUniverseGeneration);
+        Check(
+            active.Active()->universeGeneration ==
+            session.UniverseGeneration());
 
         session.Selection().Clear();
         Check(!active.Refresh());
@@ -130,6 +141,9 @@ int main()
 
         active.Focus(asterra);
         Check(active.Active()->semanticObject == asterra);
+        Check(
+            active.Active()->universeGeneration ==
+            session.UniverseGeneration());
 
         const auto firstGeneration =
             session.Generation();
@@ -156,6 +170,9 @@ int main()
         Check(
             active.Active()->sessionGeneration ==
             session.Generation());
+        Check(
+            active.Active()->universeGeneration ==
+            session.UniverseGeneration());
 
         session.CloseWorld();
         Check(active.Refresh());
