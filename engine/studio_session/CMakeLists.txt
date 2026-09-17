@@ -4,6 +4,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioWorkspaceRpcHost.cpp
     src/ProjectBrowserModel.cpp
     src/ProjectSettingsModel.cpp
+    src/UniverseBoundRoutePlanner.cpp
     src/ViewportTargetRegistry.cpp
     src/ViewportTargetRpc.cpp
 )
@@ -20,6 +21,8 @@ target_link_libraries(OrbitStudioSession
         Orbit::Documents
         Orbit::EditorRpc
         Orbit::EditorSession
+        Orbit::Jobs
+        Orbit::PathRouting
         Orbit::Rpc
 )
 
@@ -113,6 +116,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioWorkspaceRpcHost
         COMMAND OrbitStudioWorkspaceRpcHostTests
+    )
+
+    add_executable(OrbitUniverseBoundRoutePlannerTests
+        tests/UniverseBoundRoutePlannerTests.cpp
+    )
+
+    target_link_libraries(OrbitUniverseBoundRoutePlannerTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitUniverseBoundRoutePlannerTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitUniverseBoundRoutePlannerTests)
+
+    add_test(
+        NAME Orbit.UniverseBoundRoutePlanner
+        COMMAND OrbitUniverseBoundRoutePlannerTests
     )
 
     add_executable(OrbitViewportTargetRegistryTests
