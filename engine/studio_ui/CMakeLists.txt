@@ -1,6 +1,7 @@
 add_library(OrbitStudioUi STATIC
     src/ProjectAuthoringUi.cpp
     src/StudioRenderViewSet.cpp
+    src/StudioUiBundle.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp
