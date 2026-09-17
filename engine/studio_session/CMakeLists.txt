@@ -1,4 +1,5 @@
 add_library(OrbitStudioSession STATIC
+    src/BezierHandleEditor.cpp
     src/StudioAuthoringBinding.cpp
     src/StudioSession.cpp
     src/StudioRuntimeBinding.cpp
@@ -10,6 +11,7 @@ add_library(OrbitStudioSession STATIC
     src/UniverseBoundRoutePlanner.cpp
     src/ViewportTargetRegistry.cpp
     src/ViewportTargetRpc.cpp
+    src/WorldBoundPathNetwork.cpp
 )
 
 add_library(Orbit::StudioSession ALIAS OrbitStudioSession)
@@ -27,6 +29,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::Jobs
         Orbit::PathGeometry
         Orbit::PathRouting
+        Orbit::Paths
         Orbit::Rpc
 )
 
@@ -86,6 +89,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioAuthoringBinding
         COMMAND OrbitStudioAuthoringBindingTests
+    )
+
+    add_executable(OrbitBezierHandleEditorTests
+        tests/BezierHandleEditorTests.cpp
+    )
+
+    target_link_libraries(OrbitBezierHandleEditorTests
+        PRIVATE
+            Orbit::StudioSession
+    )
+
+    target_compile_features(OrbitBezierHandleEditorTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitBezierHandleEditorTests)
+
+    add_test(
+        NAME Orbit.BezierHandleEditor
+        COMMAND OrbitBezierHandleEditorTests
     )
 
     add_executable(OrbitStudioWorkspaceTests
