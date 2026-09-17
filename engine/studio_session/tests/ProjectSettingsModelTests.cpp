@@ -1,3 +1,4 @@
+#include <orbit/core/BuildInfo.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/studio_session/ProjectSettingsModel.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
@@ -51,7 +52,7 @@ int main()
         Check(snapshot.displayName == "Initial Name");
         Check(snapshot.rootDirectory == std::filesystem::absolute(root));
         Check(snapshot.manifestPath == std::filesystem::absolute(root / "Project.orbit.toml"));
-        Check(snapshot.engineCompatibilityVersion == "0.0.3");
+        Check(snapshot.engineCompatibilityVersion == orbit::build::Version);
         Check(snapshot.startupWorld == std::filesystem::path("Worlds/Main.orbitworld"));
         Check(snapshot.worlds.size() == 1U);
         Check(snapshot.worlds[0].valid);
