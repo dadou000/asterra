@@ -110,6 +110,21 @@ void StudioViewportPanels::Register(
     });
 }
 
+void StudioViewportPanels::RegisterSecondary(
+    editor_ui::EditorUi& ui)
+{
+    ui.RegisterPanel({
+        .id = kSecondaryViewportPanel,
+        .title = "Body Map / Debug View",
+        .defaultOpen = true,
+        .draw =
+            [this](editor_ui::PanelContext& context)
+            {
+                DrawView(context, "studio.map");
+            }
+    });
+}
+
 void StudioViewportPanels::DrawView(
     editor_ui::PanelContext& context,
     const std::string_view id)

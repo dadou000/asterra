@@ -38,6 +38,7 @@ public:
     void ClearBinding() noexcept;
 
     void Register(editor_ui::EditorUi& ui);
+    void RegisterSecondary(editor_ui::EditorUi& ui);
 
 private:
     void DrawView(
