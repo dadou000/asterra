@@ -17,6 +17,8 @@ struct StudioWorkspace::State
     StudioSession session;
 };
 
+StudioWorkspace::StudioWorkspace() = default;
+
 StudioWorkspace::~StudioWorkspace()
 {
     try
