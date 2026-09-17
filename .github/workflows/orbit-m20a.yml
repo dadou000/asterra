@@ -70,7 +70,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build M20A targets
-        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioViewportCameraTests OrbitStudioUi OrbitStudio
+        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioViewportCameraTests OrbitStudioUi OrbitStudio
 
       - name: Test M20A
         shell: pwsh
@@ -90,6 +90,7 @@ jobs:
             "build/engine/studio_session/Release/OrbitStudioSessionTests.exe",
             "build/engine/studio_session/Release/OrbitStudioRuntimeBindingTests.exe",
             "build/engine/studio_session/Release/OrbitStudioAuthoringBindingTests.exe",
+            "build/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
             "build/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe",
             "build/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe",
             "build/engine/studio_session/Release/OrbitProjectSettingsModelTests.exe",
