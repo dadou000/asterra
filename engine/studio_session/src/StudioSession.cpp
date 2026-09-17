@@ -36,12 +36,14 @@ StudioSession::StudioSession(
       documents_(world_),
       activeBody_(world_),
       viewports_(world_, activeBody_),
+      pathRouting_(world_),
       rpc_(world_)
 {
     RegisterViewportTargetRpc(
         rpc_.Dispatcher(),
         viewports_);
     static_cast<void>(activeBody_.Refresh());
+    static_cast<void>(pathRouting_.RefreshBinding());
 }
 
 editor_session::EditorWorldSession&
@@ -78,6 +80,18 @@ const ViewportTargetRegistry&
 StudioSession::Viewports() const noexcept
 {
     return viewports_;
+}
+
+UniverseBoundRoutePlanner&
+StudioSession::PathRouting() noexcept
+{
+    return pathRouting_;
+}
+
+const UniverseBoundRoutePlanner&
+StudioSession::PathRouting() const noexcept
+{
+    return pathRouting_;
 }
 
 std::vector<editor_session::WorldDocumentItem>
@@ -150,6 +164,7 @@ StudioSession::DispatchRpc(
         activeBody_.Clear();
     }
 
+    static_cast<void>(pathRouting_.RefreshBinding());
     static_cast<void>(viewports_.Refresh());
     return response;
 }
@@ -179,6 +194,8 @@ StudioTickResult StudioSession::Tick()
             activeBody_.Active().has_value();
         activeBody_.Clear();
         result.activeBodyChanged = hadBody;
+        result.pathRoutingRebound =
+            pathRouting_.RefreshBinding();
         result.viewportTargetsChanged =
             viewports_.Refresh();
         result.worldGeneration =
@@ -192,6 +209,8 @@ StudioTickResult StudioSession::Tick()
         world_.Plugins().PollHotReload();
     result.activeBodyChanged =
         activeBody_.Refresh();
+    result.pathRoutingRebound =
+        pathRouting_.RefreshBinding();
     result.viewportTargetsChanged =
         viewports_.Refresh();
     result.worldGeneration =
