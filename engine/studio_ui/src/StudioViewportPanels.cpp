@@ -1,7 +1,10 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
+#include <orbit/paths/PathNetwork.hpp>
+
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -23,6 +26,32 @@ namespace
     }
 
     return "Perspective";
+}
+
+[[nodiscard]] std::optional<paths::PathEdgeRecord>
+SelectedBezierEdge(
+    studio_session::StudioSession& session)
+{
+    if (!session.World().HasWorld())
+    {
+        return std::nullopt;
+    }
+
+    auto& paths = session.PathNetwork().Service();
+
+    for (const auto object :
+         session.World().Selection().Ordered())
+    {
+        const auto edge = paths.FindEdge(object);
+
+        if (edge.has_value() &&
+            edge->mode == paths::EdgeMode::Bezier)
+        {
+            return edge;
+        }
+    }
+
+    return std::nullopt;
 }
 } // namespace
 
@@ -206,6 +235,51 @@ void StudioViewportPanels::DrawView(
                     {
                         status_ = exception.what();
                     }
+                }
+            }
+        }
+
+        if (const auto edge = SelectedBezierEdge(*session_);
+            edge.has_value())
+        {
+            context.Separator();
+            context.Text("Bezier handles (metres, edge evaluation frame)");
+
+            math::Double3 startHandle =
+                edge->startHandleMeters;
+            math::Double3 endHandle =
+                edge->endHandleMeters;
+
+            const std::string startLabel =
+                "Start Handle##" + std::string(id);
+            const std::string endLabel =
+                "End Handle##" + std::string(id);
+
+            bool changed =
+                context.InputDouble3(
+                    startLabel,
+                    startHandle);
+            changed =
+                context.InputDouble3(
+                    endLabel,
+                    endHandle) ||
+                changed;
+
+            if (changed)
+            {
+                try
+                {
+                    session_->PathNetwork().
+                        Service().SetBezierHandles(
+                            edge->id,
+                            startHandle,
+                            endHandle);
+                    status_ =
+                        "Bezier handles updated. Undo/redo uses the shared command transaction stack.";
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
                 }
             }
         }
