@@ -5,6 +5,7 @@
 #include <orbit/editor_session/ActiveBodyModel.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
+#include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
 
 #include <filesystem>
@@ -19,6 +20,7 @@ struct StudioTickResult
 {
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
+    bool pathRoutingRebound{false};
     u32 pluginsReloaded{0};
     u64 worldGeneration{0};
     u64 universeGeneration{0};
@@ -48,6 +50,11 @@ public:
     Viewports() noexcept;
     [[nodiscard]] const ViewportTargetRegistry&
     Viewports() const noexcept;
+
+    [[nodiscard]] UniverseBoundRoutePlanner&
+    PathRouting() noexcept;
+    [[nodiscard]] const UniverseBoundRoutePlanner&
+    PathRouting() const noexcept;
 
     [[nodiscard]] std::vector<editor_session::WorldDocumentItem>
     Worlds() const;
@@ -86,6 +93,7 @@ private:
     editor_session::WorldDocumentsModel documents_;
     editor_session::ActiveBodyModel activeBody_;
     ViewportTargetRegistry viewports_;
+    UniverseBoundRoutePlanner pathRouting_;
     editor_rpc::EditorSessionRpcHost rpc_;
 };
 } // namespace orbit::studio_session
