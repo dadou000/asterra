@@ -2,12 +2,14 @@
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace orbit::editor_rpc
@@ -44,6 +46,24 @@ RequireWorldParams(const rpc::Value& params)
     }
 
     return found->second.AsString();
+}
+
+[[nodiscard]] bool RequireWorldBool(
+    const rpc::Value::Object& object,
+    const std::string_view key)
+{
+    const auto found = object.find(key);
+
+    if (found == object.end() ||
+        !found->second.IsBool())
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(key) +
+                " must be a boolean.");
+    }
+
+    return found->second.AsBool();
 }
 
 [[nodiscard]] std::optional<std::string>
@@ -161,6 +181,106 @@ CelestialBodies(scene::ObjectStore& objects)
     }
 
     return result;
+}
+
+[[nodiscard]] scene::ObjectRecord RequireBody(
+    scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    const auto object = objects.Find(body);
+
+    if (!object.has_value() ||
+        object->type != editor_model::builtin::kCelestialBodyType)
+    {
+        throw rpc::Error(
+            1004,
+            "Requested body object does not exist or is not a Celestial Body.");
+    }
+
+    return *object;
+}
+
+[[nodiscard]] std::optional<scene::ObjectRecord>
+TerrainCapability(
+    scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    for (const auto& child : objects.Children(body))
+    {
+        if (child.type == world_model::kTerrainSurfaceType)
+        {
+            return child;
+        }
+    }
+
+    return std::nullopt;
+}
+
+[[nodiscard]] bool BodyUsesEllipsoid(
+    scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    const auto property = objects.GetProperty(
+        body,
+        world_model::kBodyEllipsoidEnabled);
+
+    if (!property.has_value())
+    {
+        return false;
+    }
+
+    const auto* enabled = std::get_if<bool>(&*property);
+
+    if (enabled == nullptr)
+    {
+        throw rpc::Error(
+            1023,
+            "Celestial Body ellipsoid property has an invalid persisted type.");
+    }
+
+    return *enabled;
+}
+
+[[nodiscard]] rpc::Value TerrainCapabilityToRpc(
+    scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    const auto terrain = TerrainCapability(objects, body);
+    const bool ellipsoid = BodyUsesEllipsoid(objects, body);
+    const bool canDisable =
+        terrain.has_value() &&
+        objects.Children(terrain->id).empty();
+
+    rpc::Value::Object result{
+        {"capability", "surface.terrain"},
+        {"semantic_type", world_model::kTerrainSurfaceType.ToString()},
+        {"runtime_owner", "SurfaceRegistry"},
+        {"implementation", "AnalyticTerrainSource"},
+        {"enabled", terrain.has_value()},
+        {"can_enable", !terrain.has_value() && !ellipsoid},
+        {"can_disable", canDisable}
+    };
+
+    result.emplace(
+        "object",
+        terrain.has_value()
+            ? rpc::Value(terrain->id.ToString())
+            : rpc::Value{});
+
+    if (!terrain.has_value() && ellipsoid)
+    {
+        result.emplace(
+            "unavailable_reason",
+            "Analytic terrain currently requires a spherical Celestial Body.");
+    }
+    else if (terrain.has_value() && !canDisable)
+    {
+        result.emplace(
+            "unavailable_reason",
+            "Terrain Surface has semantic children and cannot be removed as a leaf capability.");
+    }
+
+    return rpc::Value(std::move(result));
 }
 
 template <typename Callback>
@@ -461,7 +581,7 @@ void EditorRpcService::RegisterProjectWorldAutomation(
             if (!enablement.enabled)
             {
                 selection.Set(
-                    std::span(previousSelection));
+                    std::span<const scene::ObjectId>(previousSelection));
                 throw rpc::Error(
                     1022,
                     enablement.reason.empty()
@@ -532,7 +652,7 @@ void EditorRpcService::RegisterProjectWorldAutomation(
                     commandService.RollbackTransaction();
                 }
                 selection.Set(
-                    std::span(previousSelection));
+                    std::span<const scene::ObjectId>(previousSelection));
                 throw;
             }
             catch (const std::exception& exception)
@@ -543,10 +663,105 @@ void EditorRpcService::RegisterProjectWorldAutomation(
                     commandService.RollbackTransaction();
                 }
                 selection.Set(
-                    std::span(previousSelection));
+                    std::span<const scene::ObjectId>(previousSelection));
                 throw rpc::Error(
                     1022,
                     exception.what());
+            }
+        });
+
+    Register(
+        {
+            .name = "body.capabilities",
+            .description =
+                "Returns registered real capability domains for one celestial body.",
+            .mutating = false
+        },
+        [&objects](const rpc::Value& params)
+        {
+            const auto& values = RequireWorldParams(params);
+            const scene::ObjectId body = RequireWorldObjectId(values, "body");
+            static_cast<void>(RequireBody(objects, body));
+
+            rpc::Value::Array capabilities;
+            capabilities.push_back(
+                TerrainCapabilityToRpc(objects, body));
+            return rpc::Value(std::move(capabilities));
+        });
+
+    Register(
+        {
+            .name = "body.set_capability",
+            .description =
+                "Enables or disables a real body capability through its shared authoring command.",
+            .mutating = true
+        },
+        [this,
+         &commandRegistry,
+         &objects,
+         &selection](const rpc::Value& params)
+        {
+            const auto& values = RequireWorldParams(params);
+            const scene::ObjectId body = RequireWorldObjectId(values, "body");
+            static_cast<void>(RequireBody(objects, body));
+            const std::string capability =
+                RequireWorldString(values, "capability");
+            const bool enabled =
+                RequireWorldBool(values, "enabled");
+
+            if (capability != "surface.terrain")
+            {
+                throw rpc::Error(
+                    1023,
+                    "Unknown or unavailable body capability: " + capability);
+            }
+
+            const bool currentlyEnabled =
+                TerrainCapability(objects, body).has_value();
+
+            if (currentlyEnabled == enabled)
+            {
+                return TerrainCapabilityToRpc(objects, body);
+            }
+
+            const auto previousSelection = selection.Ordered();
+            const scene::ObjectId selected[] = {body};
+            selection.Set(selected);
+
+            const commands::CommandId command = enabled
+                ? editor_model::authoring_commands::kCreateTerrainSurface
+                : editor_model::authoring_commands::kRemoveTerrainSurface;
+            const auto enablement = commandRegistry.Enablement(command);
+
+            if (!enablement.enabled)
+            {
+                selection.Set(
+                    std::span<const scene::ObjectId>(previousSelection));
+                throw rpc::Error(
+                    1023,
+                    enablement.reason.empty()
+                        ? "Requested body capability mutation is disabled."
+                        : enablement.reason);
+            }
+
+            try
+            {
+                commandRegistry.Invoke(command);
+                rpc::Value result = TerrainCapabilityToRpc(objects, body);
+                PublishEvent("body.capability_changed", result);
+                return result;
+            }
+            catch (const rpc::Error&)
+            {
+                selection.Set(
+                    std::span<const scene::ObjectId>(previousSelection));
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                selection.Set(
+                    std::span<const scene::ObjectId>(previousSelection));
+                throw rpc::Error(1023, exception.what());
             }
         });
 }
