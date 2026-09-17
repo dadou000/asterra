@@ -25,6 +25,7 @@ target_link_libraries(OrbitEditorModel
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
+        Orbit::WorldModel
 )
 
 target_compile_features(OrbitEditorModel PUBLIC cxx_std_23)
