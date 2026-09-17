@@ -69,9 +69,14 @@ private:
 };
 
 // Registers Orbit-owned source importers that already have a real derived
-// representation. Additional texture/mesh codecs land in later milestones
-// without changing the registry contract.
+// representation. Additional texture/mesh codecs land without changing the
+// registry contract.
 void RegisterBuiltinImporters(
+    ImporterRegistry& registry);
+
+// Decals are authored as semantic .orbitdecal assets whose texture dependency
+// is tracked through the same DDC dependency manifest as materials.
+void RegisterDecalImporter(
     ImporterRegistry& registry);
 
 struct ImportedArtifact
