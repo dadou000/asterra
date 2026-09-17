@@ -1063,7 +1063,7 @@ BuildValidation BuildService::Validate(
                         plugin.id +
                         "' targets Orbit API '" +
                         package.orbitApiVersion +
-                        "', current engine is '" +
+                        "', expected Orbit API '" +
                         std::string(plugins::OrbitApiVersion) +
                         "'.",
                     pluginManifestPath);
