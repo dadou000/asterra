@@ -1,8 +1,19 @@
 #include <orbit/platform_services/PlatformConfig.hpp>
 #include <orbit/platform_services/PlatformServices.hpp>
 
-#include <cassert>
+#include <cstdlib>
 #include <filesystem>
+
+namespace
+{
+void Check(const bool condition)
+{
+    if (!condition)
+    {
+        std::abort();
+    }
+}
+} // namespace
 
 int main()
 {
@@ -39,17 +50,17 @@ int main()
                 "Completed a repair."
         });
 
-    assert(result.handled);
-    assert(result.providerSucceeded);
+    Check(result.handled);
+    Check(result.providerSucceeded);
 
     orbit::i64 repaired = 0;
-    assert(provider.GetIntegerStat(
+    Check(provider.GetIntegerStat(
         "vehicles.repaired",
         repaired));
-    assert(repaired == 1);
-    assert(provider.AchievementUnlocked(
+    Check(repaired == 1);
+    Check(provider.AchievementUnlocked(
         "garage.first_repair"));
-    assert(provider.TimelineEvents().size() == 1);
+    Check(provider.TimelineEvents().size() == 1);
 
     PlatformConfiguration configuration;
     configuration.steam.enabled = true;
@@ -82,7 +93,7 @@ int main()
         .emitTimeline = true
     });
 
-    assert(ValidatePlatformConfiguration(
+    Check(ValidatePlatformConfiguration(
         configuration,
         true).empty());
 
@@ -103,11 +114,11 @@ int main()
     const auto loaded =
         LoadPlatformConfiguration(path);
 
-    assert(loaded.steam.enabled);
-    assert(loaded.steam.appId == 480);
-    assert(loaded.steam.stats.size() == 1);
-    assert(loaded.eventRules.size() == 1);
-    assert(ValidatePlatformConfiguration(
+    Check(loaded.steam.enabled);
+    Check(loaded.steam.appId == 480);
+    Check(loaded.steam.stats.size() == 1);
+    Check(loaded.eventRules.size() == 1);
+    Check(ValidatePlatformConfiguration(
         loaded,
         true).empty());
 
