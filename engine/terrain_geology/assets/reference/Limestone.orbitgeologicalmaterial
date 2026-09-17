@@ -1,0 +1,11 @@
+[geological_material]
+id = "4f524249-5452-4f43-4b00-000000000004"
+name = "Limestone"
+hardness = 0.52
+cohesion = 0.62
+hydraulic_erodibility = 0.42
+aeolian_erodibility = 0.25
+permeability = 0.35
+chemical_weatherability = 0.90
+fracture_tendency = 0.65
+density = 2600.0
