@@ -2,6 +2,7 @@
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/content/ContentService.hpp>
+#include <orbit/content/RuntimeTexture.hpp>
 #include <orbit/content_wic/WicTextureImporter.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
@@ -710,6 +711,181 @@ void SynchronizePluginPanels(
     return 6'000'000.0;
 }
 
+[[nodiscard]] orbit::math::Float3
+AverageTextureColor(
+    orbit::content::ContentService& content,
+    const orbit::content::AssetRecord* texture)
+{
+    constexpr orbit::math::Float3 fallback{
+        0.34F,
+        0.37F,
+        0.42F
+    };
+
+    if (texture == nullptr ||
+        texture->kind != orbit::content::AssetKind::Texture ||
+        !texture->derivedKey.has_value())
+    {
+        return fallback;
+    }
+
+    const auto bytes =
+        content.Cache().Read(
+            *texture->derivedKey,
+            "texture.orbittex");
+
+    if (!bytes.has_value())
+    {
+        return fallback;
+    }
+
+    try
+    {
+        const auto runtimeTexture =
+            orbit::content::DecodeRuntimeTexture(
+                std::span(
+                    bytes->data(),
+                    bytes->size()));
+
+        const std::size_t pixelCount =
+            runtimeTexture.pixels.size() / 4U;
+
+        if (pixelCount == 0)
+        {
+            return fallback;
+        }
+
+        const std::size_t stride =
+            std::max<std::size_t>(
+                1U,
+                pixelCount / 4096U);
+
+        orbit::f64 red = 0.0;
+        orbit::f64 green = 0.0;
+        orbit::f64 blue = 0.0;
+        std::size_t samples = 0;
+
+        for (std::size_t pixel = 0;
+             pixel < pixelCount;
+             pixel += stride)
+        {
+            const std::size_t offset =
+                pixel * 4U;
+
+            red += std::to_integer<orbit::u8>(
+                runtimeTexture.pixels[offset]);
+            green += std::to_integer<orbit::u8>(
+                runtimeTexture.pixels[offset + 1U]);
+            blue += std::to_integer<orbit::u8>(
+                runtimeTexture.pixels[offset + 2U]);
+            ++samples;
+        }
+
+        const orbit::f32 scale =
+            1.0F /
+            static_cast<orbit::f32>(
+                samples * 255U);
+
+        return {
+            static_cast<orbit::f32>(red) * scale,
+            static_cast<orbit::f32>(green) * scale,
+            static_cast<orbit::f32>(blue) * scale
+        };
+    }
+    catch (const std::exception&)
+    {
+        return fallback;
+    }
+}
+
+[[nodiscard]] orbit::editor_ui::PreviewMaterial
+PreviewMaterialForAsset(
+    orbit::content::ContentService& content,
+    const orbit::content::AssetRecord* asset,
+    const orbit::u32 depth = 0)
+{
+    orbit::editor_ui::PreviewMaterial result{};
+
+    if (asset == nullptr || depth > 4U)
+    {
+        return result;
+    }
+
+    if (asset->kind == orbit::content::AssetKind::Material &&
+        asset->material.has_value())
+    {
+        const auto& material = *asset->material;
+        result.roughness = static_cast<orbit::f32>(
+            std::clamp(material.roughnessFactor, 0.0, 1.0));
+        result.metallic = static_cast<orbit::f32>(
+            std::clamp(material.metallicFactor, 0.0, 1.0));
+
+        if (!material.baseColor.empty())
+        {
+            const auto texturePath =
+                asset->sourcePath.parent_path() /
+                material.baseColor;
+            result.baseColor =
+                AverageTextureColor(
+                    content,
+                    content.FindByPath(texturePath));
+        }
+
+        return result;
+    }
+
+    if (asset->kind == orbit::content::AssetKind::MaterialInstance &&
+        asset->materialInstance.has_value())
+    {
+        const auto& instance =
+            *asset->materialInstance;
+        const auto parentPath =
+            asset->sourcePath.parent_path() /
+            instance.parent;
+
+        result = PreviewMaterialForAsset(
+            content,
+            content.FindByPath(parentPath),
+            depth + 1U);
+
+        if (instance.roughnessFactor.has_value())
+        {
+            result.roughness = static_cast<orbit::f32>(
+                std::clamp(
+                    *instance.roughnessFactor,
+                    0.0,
+                    1.0));
+        }
+
+        if (instance.metallicFactor.has_value())
+        {
+            result.metallic = static_cast<orbit::f32>(
+                std::clamp(
+                    *instance.metallicFactor,
+                    0.0,
+                    1.0));
+        }
+
+        return result;
+    }
+
+    if (asset->kind == orbit::content::AssetKind::Decal &&
+        asset->decal.has_value())
+    {
+        const auto texturePath =
+            asset->sourcePath.parent_path() /
+            asset->decal->texture;
+        result.baseColor =
+            AverageTextureColor(
+                content,
+                content.FindByPath(texturePath));
+        result.roughness = 0.55F;
+        result.metallic = 0.0F;
+    }
+
+    return result;
+}
+
 [[nodiscard]] std::filesystem::path
 FindPlayerExecutable()
 {
@@ -844,6 +1020,13 @@ int main(
 
         orbit::editor_model::
             authoring_commands::Register(
+                authoringCommands,
+                commandService,
+                objects,
+                selection);
+
+        orbit::editor_model::
+            authoring_commands::RegisterMaterialCommands(
                 authoringCommands,
                 commandService,
                 objects,
@@ -1163,6 +1346,14 @@ int main(
                     .height = 640
                 });
 
+        orbit::render_view::RenderView
+            materialView(
+                device,
+                {
+                    .width = 384,
+                    .height = 240
+                });
+
         const orbit::f64 initialBodyRadius =
             BodyRadius(
                 objects,
@@ -1191,6 +1382,26 @@ int main(
             1.0F
         };
         bodyView.Camera().up = {
+            0.0F,
+            1.0F,
+            0.0F
+        };
+
+        materialView.Camera().frame =
+            bodyView.Camera().frame;
+        materialView.Camera().localPositionMeters = {
+            0.0,
+            0.0,
+            -3.2
+        };
+        materialView.Camera().nearPlaneMeters = 0.01F;
+        materialView.Camera().farPlaneMeters = 10.0F;
+        materialView.Camera().forward = {
+            0.0F,
+            0.0F,
+            1.0F
+        };
+        materialView.Camera().up = {
             0.0F,
             1.0F,
             0.0F
@@ -1307,6 +1518,10 @@ int main(
 
         std::string explorerSearch;
         std::string contentSearch;
+        std::optional<orbit::content::AssetId>
+            materialPreviewAsset;
+        orbit::editor_ui::PreviewMaterial
+            materialPreviewMaterial{};
         std::string renameBuffer;
         orbit::build::BuildService
             buildService;
@@ -3301,10 +3516,79 @@ int main(
                                         exception.what());
                                 }
                             }
+                            else if (
+                                asset != nullptr &&
+                                asset->kind ==
+                                    orbit::content::AssetKind::Decal &&
+                                asset->decal.has_value())
+                            {
+                                try
+                                {
+                                    const auto* body =
+                                        bodies.FindBody(bodyId);
+                                    const auto ray =
+                                        orbit::render_view::ViewportRay(
+                                            bodyView.Camera(),
+                                            bodyView.Width(),
+                                            bodyView.Height(),
+                                            interaction.u,
+                                            interaction.v);
+
+                                    if (body == nullptr || !ray.has_value())
+                                    {
+                                        throw std::runtime_error(
+                                            "Decal drop could not construct a body-local view ray.");
+                                    }
+
+                                    const auto hit =
+                                        orbit::universe::IntersectReferenceSurfaceRay(
+                                            body->shape,
+                                            ray->origin,
+                                            ray->direction);
+
+                                    if (!hit.has_value())
+                                    {
+                                        throw std::runtime_error(
+                                            "Decal drop did not hit the active body.");
+                                    }
+
+                                    const auto coordinate =
+                                        orbit::universe::ReferenceSurfaceCoordinate(
+                                            body->shape,
+                                            *hit);
+
+                                    if (!coordinate.has_value())
+                                    {
+                                        throw std::runtime_error(
+                                            "Decal drop could not resolve a surface coordinate.");
+                                    }
+
+                                    const std::array selected{
+                                        bodyObject
+                                    };
+                                    selection.Set(std::span(selected));
+
+                                    authoringCommands.Invoke(
+                                        orbit::editor_model::authoring_commands::kAttachDecal,
+                                        {
+                                            {"decal", asset->sourcePath.generic_string()},
+                                            {"latitude", coordinate->latitudeRadians},
+                                            {"longitude", coordinate->longitudeRadians},
+                                            {"width", asset->decal->widthMeters},
+                                            {"height", asset->decal->heightMeters},
+                                            {"rotation", 0.0},
+                                            {"opacity", asset->decal->opacity}
+                                        });
+                                }
+                                catch (const std::exception& exception)
+                                {
+                                    orbit::log::Warning(exception.what());
+                                }
+                            }
                             else
                             {
                                 orbit::log::Warning(
-                                    "Viewport drop expects a material asset.");
+                                    "Viewport drop expects a material or decal asset.");
                             }
                         }
                     }
@@ -4211,6 +4495,9 @@ int main(
             .draw =
                 [&content,
                  &contentSearch,
+                 &materialView,
+                 &materialPreviewAsset,
+                 &materialPreviewMaterial,
                  &window](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -4291,6 +4578,44 @@ int main(
 
                     context.Separator();
 
+                    const auto previewAvailable =
+                        context.ContentAvailable();
+                    const orbit::f32 previewWidth =
+                        std::clamp(
+                            previewAvailable.width,
+                            180.0F,
+                            520.0F);
+                    const orbit::f32 previewHeight =
+                        previewWidth * 0.625F;
+
+                    const orbit::u32 previewPixelsWide =
+                        static_cast<orbit::u32>(
+                            std::max(previewWidth, 1.0F));
+                    const orbit::u32 previewPixelsHigh =
+                        static_cast<orbit::u32>(
+                            std::max(previewHeight, 1.0F));
+
+                    if (materialView.Width() != previewPixelsWide ||
+                        materialView.Height() != previewPixelsHigh)
+                    {
+                        materialView.Resize(
+                            previewPixelsWide,
+                            previewPixelsHigh);
+                    }
+
+                    context.Text(
+                        materialPreviewAsset.has_value()
+                            ? "Rendered material/decal preview"
+                            : "Select a material, instance or decal to preview");
+                    static_cast<void>(
+                        context.Image(
+                            materialView.Color(),
+                            {
+                                .width = previewWidth,
+                                .height = previewHeight
+                            }));
+                    context.Separator();
+
                     const auto assets =
                         content.Search(
                             contentSearch);
@@ -4315,10 +4640,28 @@ int main(
                                         asset.kind),
                                 asset.id.ToString());
 
-                        static_cast<void>(
-                            context.Selectable(
+                        const bool previewSelected =
+                            materialPreviewAsset.has_value() &&
+                            *materialPreviewAsset == asset.id;
+
+                        if (context.Selectable(
                                 label,
-                                false));
+                                previewSelected))
+                        {
+                            if (asset.kind ==
+                                    orbit::content::AssetKind::Material ||
+                                asset.kind ==
+                                    orbit::content::AssetKind::MaterialInstance ||
+                                asset.kind ==
+                                    orbit::content::AssetKind::Decal)
+                            {
+                                materialPreviewAsset = asset.id;
+                                materialPreviewMaterial =
+                                    PreviewMaterialForAsset(
+                                        content,
+                                        &asset);
+                            }
+                        }
 
                         if (asset.kind ==
                             orbit::content::
@@ -4359,6 +4702,47 @@ int main(
                                     orbit::log::Warning(
                                         std::format(
                                             "Material instance creation failed: {}",
+                                            exception.what()));
+                                }
+                            }
+                        }
+
+                        if (asset.kind ==
+                            orbit::content::AssetKind::Texture)
+                        {
+                            context.SameLine();
+
+                            const std::string decalLabel =
+                                "Create Decal##asset-" +
+                                asset.id.ToString();
+
+                            if (context.Button(decalLabel))
+                            {
+                                try
+                                {
+                                    const auto decalId =
+                                        content.CreateDecal(
+                                            asset.id);
+                                    const auto* decal =
+                                        content.Find(decalId);
+                                    materialPreviewAsset = decalId;
+                                    materialPreviewMaterial =
+                                        PreviewMaterialForAsset(
+                                            content,
+                                            decal);
+
+                                    orbit::log::Info(
+                                        std::format(
+                                            "Created decal '{}'.",
+                                            decal != nullptr
+                                                ? decal->name
+                                                : decalId.ToString()));
+                                }
+                                catch (const std::exception& exception)
+                                {
+                                    orbit::log::Warning(
+                                        std::format(
+                                            "Decal creation failed: {}",
                                             exception.what()));
                                 }
                             }
@@ -5144,6 +5528,11 @@ int main(
                     graph,
                     "StudioBody");
 
+            const auto materialViewTargets =
+                materialView.Import(
+                    graph,
+                    "StudioMaterialPreview");
+
             const auto backBufferTarget =
                 graph.ImportTexture(
                     "StudioSwapchain",
@@ -5223,6 +5612,35 @@ int main(
                         bodyView.Height(),
                         previewShape,
                         bodyView.Camera());
+                });
+
+            graph.AddPass(
+                "Studio.MaterialPreview",
+                {
+                    {
+                        .texture =
+                            materialViewTargets.color,
+                        .state =
+                            orbit::rhi::ResourceState::RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::Write
+                    }
+                },
+                [&](orbit::rhi::CommandList& commandList,
+                    const orbit::render_graph::Resources&)
+                {
+                    bodyPreview.Draw(
+                        commandList,
+                        materialView.Color(),
+                        materialView.Width(),
+                        materialView.Height(),
+                        orbit::universe::BodyShape{
+                            orbit::universe::SphereShape{
+                                .radiusMeters = 1.0
+                            }
+                        },
+                        materialView.Camera(),
+                        materialPreviewMaterial);
                 });
 
             graph.AddPass(
@@ -5310,6 +5728,17 @@ int main(
                     {
                         .texture =
                             viewTargets.color,
+                        .state =
+                            orbit::rhi::
+                                ResourceState::
+                                    ShaderResource,
+                        .access =
+                            orbit::render_graph::
+                                Access::Read
+                    },
+                    {
+                        .texture =
+                            materialViewTargets.color,
                         .state =
                             orbit::rhi::
                                 ResourceState::
