@@ -3,10 +3,37 @@
 #include <algorithm>
 #include <functional>
 #include <stdexcept>
+#include <string>
+#include <unordered_set>
 #include <utility>
 
 namespace orbit::editor_model
 {
+namespace
+{
+[[nodiscard]] std::string PresentationSurfaceName(
+    const std::string_view surface,
+    const CommandSurfaceKind kind)
+{
+    const char* suffix = nullptr;
+
+    switch (kind)
+    {
+    case CommandSurfaceKind::Toolbar:
+        suffix = ".toolbar";
+        break;
+    case CommandSurfaceKind::ContextMenu:
+        suffix = ".context";
+        break;
+    case CommandSurfaceKind::Radial:
+        suffix = ".radial";
+        break;
+    }
+
+    return std::string(surface) + suffix;
+}
+} // namespace
+
 std::size_t
 CommandSurfaceRegistry::KeyHash::operator()(
     const Key& key) const noexcept
@@ -144,10 +171,56 @@ CommandSurfaceRegistry::Present(
     const CommandSurfaceKind kind,
     const commands::CommandRegistry& registry) const
 {
-    std::vector<PresentedCommand> result;
+    std::vector<commands::CommandId> ids =
+        Commands(surface, kind);
+    std::unordered_set<commands::CommandId> seen(
+        ids.begin(),
+        ids.end());
 
-    for (const commands::CommandId id :
-         Commands(surface, kind))
+    const std::string presentationSurface =
+        PresentationSurfaceName(
+            surface,
+            kind);
+
+    auto catalog =
+        registry.Catalog();
+
+    std::sort(
+        catalog.begin(),
+        catalog.end(),
+        [](const auto& left, const auto& right)
+        {
+            if (left.category != right.category)
+            {
+                return left.category < right.category;
+            }
+            return left.name < right.name;
+        });
+
+    for (const auto& command : catalog)
+    {
+        if (seen.contains(command.id))
+        {
+            continue;
+        }
+
+        if (std::find(
+                command.presentationSurfaces.begin(),
+                command.presentationSurfaces.end(),
+                presentationSurface) ==
+            command.presentationSurfaces.end())
+        {
+            continue;
+        }
+
+        ids.push_back(command.id);
+        seen.insert(command.id);
+    }
+
+    std::vector<PresentedCommand> result;
+    result.reserve(ids.size());
+
+    for (const commands::CommandId id : ids)
     {
         const commands::CommandDescriptor* descriptor =
             registry.Find(id);
