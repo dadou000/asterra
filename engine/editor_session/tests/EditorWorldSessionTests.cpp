@@ -1,5 +1,7 @@
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cstdlib>
@@ -54,6 +56,7 @@ int main()
                 "Worlds/Main.orbitworld"));
         Check(session.UniverseStats().systems == 0U);
         Check(session.UniverseStats().bodies == 0U);
+        Check(session.SurfaceStats().terrainSurfaces == 0U);
 
         const auto worldObject =
             session.Commands().CreateObject(
@@ -77,6 +80,7 @@ int main()
         Check(session.RefreshUniverseIfChanged());
         Check(session.UniverseStats().systems == 1U);
         Check(session.UniverseStats().bodies == 1U);
+        Check(session.SurfaceStats().terrainSurfaces == 0U);
 
         const auto firstRuntimeBody =
             session.Universe().BodyForObject(
@@ -86,6 +90,68 @@ int main()
             session.Universe().Bodies().FindBody(
                 *firstRuntimeBody) != nullptr);
         Check(!session.RefreshUniverseIfChanged());
+
+        const orbit::scene::ObjectId bodySelection[] = {
+            bodyObject
+        };
+        session.Selection().Set(bodySelection);
+        const auto terrainEnablement =
+            session.CommandRegistry().Enablement(
+                orbit::editor_model::authoring_commands::
+                    kCreateTerrainSurface);
+        Check(terrainEnablement.enabled);
+        session.CommandRegistry().Invoke(
+            orbit::editor_model::authoring_commands::
+                kCreateTerrainSurface);
+        Check(session.Selection().Ordered().size() == 1U);
+
+        const auto terrainObject =
+            session.Selection().Ordered().front();
+        const auto terrainRecord =
+            session.Objects().Find(terrainObject);
+        Check(terrainRecord.has_value());
+        Check(
+            terrainRecord->type ==
+            orbit::world_model::kTerrainSurfaceType);
+        Check(terrainRecord->parent == bodyObject);
+
+        Check(session.RefreshUniverseIfChanged());
+        Check(session.SurfaceStats().terrainSurfaces == 1U);
+        const auto bodyAfterTerrain =
+            session.Universe().BodyForObject(bodyObject);
+        Check(bodyAfterTerrain.has_value());
+        Check(*bodyAfterTerrain == *firstRuntimeBody);
+
+        const auto* terrainCapability =
+            session.Surfaces().Registry().FindTerrainSurface(
+                *bodyAfterTerrain);
+        Check(terrainCapability != nullptr);
+        Check(terrainCapability->terrain != nullptr);
+        const auto* analyticTerrain =
+            dynamic_cast<const orbit::terrain::AnalyticTerrainSource*>(
+                terrainCapability->terrain.get());
+        Check(analyticTerrain != nullptr);
+        Check(
+            analyticTerrain->Description().macroAmplitudeMeters ==
+            1'200.0);
+
+        session.Commands().SetProperty(
+            terrainObject,
+            orbit::world_model::kTerrainMacroAmplitudeMeters,
+            2'400.0);
+        Check(session.RefreshUniverseIfChanged());
+        Check(session.SurfaceStats().terrainSurfaces == 1U);
+        const auto* rebuiltTerrain =
+            session.Surfaces().Registry().FindTerrainSurface(
+                *session.Universe().BodyForObject(bodyObject));
+        Check(rebuiltTerrain != nullptr);
+        const auto* rebuiltAnalytic =
+            dynamic_cast<const orbit::terrain::AnalyticTerrainSource*>(
+                rebuiltTerrain->terrain.get());
+        Check(rebuiltAnalytic != nullptr);
+        Check(
+            rebuiltAnalytic->Description().macroAmplitudeMeters ==
+            2'400.0);
 
         const auto secondary =
             project.CreateWorld(
@@ -115,6 +181,7 @@ int main()
         Check(
             session.Objects().Find(bodyObject).
                 has_value());
+        Check(session.SurfaceStats().terrainSurfaces == 1U);
 
         session.Commands().BeginTransaction(
             "Block switch");
@@ -142,6 +209,7 @@ int main()
         Check(session.Selection().Ordered().empty());
         Check(session.UniverseStats().systems == 0U);
         Check(session.UniverseStats().bodies == 0U);
+        Check(session.SurfaceStats().terrainSurfaces == 0U);
 
         const auto secondaryWorldObject =
             session.Commands().CreateObject(
@@ -172,6 +240,7 @@ int main()
             session.UniverseStats().systems == 1U);
         Check(
             session.UniverseStats().bodies == 1U);
+        Check(session.SurfaceStats().terrainSurfaces == 1U);
 
         const auto reopenedRuntimeBody =
             session.Universe().BodyForObject(
@@ -180,6 +249,9 @@ int main()
         Check(
             *reopenedRuntimeBody ==
             *firstRuntimeBody);
+        Check(
+            session.Surfaces().Registry().FindTerrainSurface(
+                *reopenedRuntimeBody) != nullptr);
 
         project.SetStartupWorld(secondary);
         session.OpenStartupWorld();
