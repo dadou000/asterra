@@ -688,7 +688,7 @@ EnsureInitialBodyObject(
     orbit::commands::CommandService& commands)
 {
     const auto existingBody =
-        FindFirstBodyObject(objects);
+        FindFirstBodyObject(objects());
 
     // Legacy preview projects created the first body directly under World.
     // M20A authority requires World -> Celestial System -> Celestial Body.
@@ -1367,8 +1367,8 @@ int main(
         {
             bodyObject =
                 EnsureInitialBodyObject(
-                    objects,
-                    commandService);
+                    objects(),
+                    commandService());
         }
 
         if (bodyObject.IsValid())
@@ -1519,7 +1519,7 @@ int main(
                      commandSurfaces().Present(
                          surface,
                          kind,
-                         authoringCommands))
+                         authoringCommands()))
                 {
                     const orbit::commands::
                         CommandId id =
@@ -1652,7 +1652,7 @@ int main(
         {
             const orbit::f64 initialBodyRadius =
                 BodyRadius(
-                    objects,
+                    objects(),
                     bodyObject);
 
             bodyView.Camera().frame =
@@ -2555,7 +2555,7 @@ int main(
 
                 const auto routedEdges =
                     FindRoutedPathEdges(
-                        objects,
+                        objects(),
                         pathService);
 
                 std::unordered_set<
@@ -2892,7 +2892,7 @@ int main(
 
                 const auto edgeIds =
                     FindPathEdges(
-                        objects,
+                        objects(),
                         pathService);
 
                 std::unordered_set<
@@ -5925,7 +5925,7 @@ int main(
 
             shortcuts.Update(
                 window,
-                authoringCommands,
+                authoringCommands(),
                 ui.WantsKeyboard());
 
             publishAutomationChanges();
