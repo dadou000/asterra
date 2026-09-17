@@ -72,6 +72,25 @@ int main()
                     }));
         Check(created.Find("open")->AsBool());
         Check(created.Find("name")->AsString() == "First Project");
+        Check(
+            created.Find("startup_world")->AsString() ==
+            "Worlds/Main.orbitworld");
+
+        const auto renamed =
+            Call(
+                rpc,
+                "3",
+                "project.set_display_name",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"name", "First Project Renamed"}
+                    }));
+        Check(
+            renamed.Find("name")->AsString() ==
+            "First Project Renamed");
+        Check(
+            workspace.Project().Manifest().displayName ==
+            "First Project Renamed");
 
         const auto root =
             workspace.Session().World().Commands().CreateObject(
@@ -79,10 +98,12 @@ int main()
                 "Persisted Root");
         Check(root.IsValid());
 
-        const auto projectInfo = Call(rpc, "3", "project.info");
-        Check(projectInfo.Find("name")->AsString() == "First Project");
+        const auto projectInfo = Call(rpc, "4", "project.info");
+        Check(
+            projectInfo.Find("name")->AsString() ==
+            "First Project Renamed");
 
-        const auto roots = Call(rpc, "4", "object.roots");
+        const auto roots = Call(rpc, "5", "object.roots");
         Check(roots.IsArray());
         Check(roots.AsArray().size() == 1U);
         Check(
@@ -92,7 +113,7 @@ int main()
         static_cast<void>(
             Call(
                 rpc,
-                "5",
+                "6",
                 "project.create",
                 orbit::rpc::Value(
                     orbit::rpc::Value::Object{
@@ -101,33 +122,35 @@ int main()
                     })));
         Check(workspace.Project().Manifest().displayName == "Second Project");
         Check(
-            Call(rpc, "6", "object.roots").
+            Call(rpc, "7", "object.roots").
                 AsArray().empty());
 
         const auto reopened =
             Call(
                 rpc,
-                "7",
+                "8",
                 "project.open",
                 orbit::rpc::Value(
                     orbit::rpc::Value::Object{
                         {"path", first.generic_string()}
                     }));
-        Check(reopened.Find("name")->AsString() == "First Project");
-        const auto reopenedRoots = Call(rpc, "8", "object.roots");
+        Check(
+            reopened.Find("name")->AsString() ==
+            "First Project Renamed");
+        const auto reopenedRoots = Call(rpc, "9", "object.roots");
         Check(reopenedRoots.AsArray().size() == 1U);
         Check(
             reopenedRoots.AsArray().front().Find("id")->AsString() ==
             root.ToString());
 
-        const auto closed = Call(rpc, "9", "project.close");
+        const auto closed = Call(rpc, "10", "project.close");
         Check(!closed.Find("open")->AsBool());
         Check(!workspace.HasProject());
 
         const orbit::rpc::Value noProjectRequest(
             orbit::rpc::Value::Object{
                 {"jsonrpc", "2.0"},
-                {"id", "10"},
+                {"id", "11"},
                 {"method", "object.roots"},
                 {"params", orbit::rpc::Value::Object{}}
             });
@@ -138,6 +161,29 @@ int main()
         Check(noProject.Find("error") != nullptr);
         Check(
             noProject.Find("error")->Find("code")->AsInteger() ==
+            1040);
+
+        const orbit::rpc::Value noProjectRenameRequest(
+            orbit::rpc::Value::Object{
+                {"jsonrpc", "2.0"},
+                {"id", "12"},
+                {"method", "project.set_display_name"},
+                {
+                    "params",
+                    orbit::rpc::Value::Object{
+                        {"name", "Unavailable"}
+                    }
+                }
+            });
+        const auto noProjectRenameText =
+            rpc.Dispatch(
+                orbit::rpc::Serialize(noProjectRenameRequest));
+        Check(noProjectRenameText.has_value());
+        const auto noProjectRename =
+            orbit::rpc::ParseValue(*noProjectRenameText);
+        Check(noProjectRename.Find("error") != nullptr);
+        Check(
+            noProjectRename.Find("error")->Find("code")->AsInteger() ==
             1040);
     }
 
