@@ -2,6 +2,12 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/platform/Window.hpp>
+#include <orbit/platform_services/PlatformConfig.hpp>
+#include <orbit/platform_services/PlatformServices.hpp>
+#include <orbit/platform_services/steam/SteamProvider.hpp>
+#if defined(ORBIT_HAS_STEAMWORKS)
+#include <orbit/platform_services/steam/SteamworksBridge.hpp>
+#endif
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/Fence.hpp>
@@ -75,6 +81,110 @@ struct Options
 
     return options;
 }
+
+struct PlatformRuntime
+{
+    std::unique_ptr<
+        orbit::platform_services::
+            PlatformServiceRegistry>
+        registry;
+    std::unique_ptr<
+        orbit::platform_services::
+            GameEventService>
+        events;
+};
+
+[[nodiscard]] PlatformRuntime
+CreatePlatformRuntime(
+    const orbit::runtime_project::CookedProject& project)
+{
+    using namespace orbit::platform_services;
+
+    PlatformConfiguration configuration;
+    const auto configurationPath =
+        project.RootDirectory() /
+        "PlatformServices.toml";
+
+    if (std::filesystem::is_regular_file(
+            configurationPath))
+    {
+        configuration =
+            LoadPlatformConfiguration(
+                configurationPath);
+
+        const auto issues =
+            ValidatePlatformConfiguration(
+                configuration,
+                configuration.steam.enabled);
+
+        if (!issues.empty())
+        {
+            throw std::runtime_error(
+                "Packaged platform service configuration is invalid: " +
+                issues.front().message);
+        }
+    }
+
+    std::unique_ptr<IPlatformProvider>
+        provider;
+
+    if (configuration.steam.enabled)
+    {
+#if defined(ORBIT_HAS_STEAMWORKS)
+        provider =
+            std::make_unique<
+                steam::SteamProvider>(
+                    configuration.steam,
+                    steam::
+                        CreateSteamworksBridge());
+#else
+        throw std::runtime_error(
+            "This package enables Steam, but OrbitPlayer was built without the Steamworks SDK.");
+#endif
+    }
+    else
+    {
+        provider =
+            std::make_unique<
+                StandaloneProvider>();
+    }
+
+    auto registry =
+        std::make_unique<
+            PlatformServiceRegistry>(
+                std::move(provider));
+
+    std::vector<StatDefinition>
+        stats;
+    stats.reserve(
+        configuration.steam.stats.size());
+
+    for (const auto& mapping :
+         configuration.steam.stats)
+    {
+        stats.push_back({
+            .id = mapping.id,
+            .kind = mapping.kind
+        });
+    }
+
+    auto events =
+        std::make_unique<
+            GameEventService>(
+                registry->Provider(),
+                std::move(stats),
+                configuration.eventRules);
+
+    orbit::log::Info(
+        std::format(
+            "Platform provider: {}",
+            registry->Provider().Name()));
+
+    return {
+        .registry = std::move(registry),
+        .events = std::move(events)
+    };
+}
 } // namespace
 
 int main(
@@ -93,6 +203,10 @@ int main(
                 CookedProject::Open(
                     options.
                         projectInput);
+
+        PlatformRuntime platformRuntime =
+            CreatePlatformRuntime(
+                project);
 
         orbit::documents::WorldDatabase
             world(
@@ -292,6 +406,12 @@ int main(
             frameFence->Wait(
                 nextFenceValue - 1);
         }
+
+        static_cast<void>(
+            platformRuntime.
+                registry->
+                Provider().
+                Flush());
 
         return 0;
     }

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -37,7 +38,7 @@ void PrintUsage()
         << "  --output <path>    Override the profile build output directory.\n"
         << "  --validate         Validate only; do not write build products.\n"
         << "  --cook             Validate and cook project products (default).\n"
-        << "  --package          Cook and assemble a standalone OrbitPlayer package.\n"
+        << "  --package          Cook and assemble an OrbitPlayer package.\n"
         << "  --no-clean         Refuse to replace an existing output directory.\n"
         << "  --help, -h         Show this help.\n";
 }
@@ -218,6 +219,41 @@ FindPlayerExecutable()
         "OrbitPlayer.exe was not found beside OrbitBuild or in the development build tree.");
 }
 
+[[nodiscard]] std::vector<
+    std::filesystem::path>
+FindPackageRuntimeFiles(
+    const std::filesystem::path& manifestPath,
+    const std::filesystem::path& playerExecutable)
+{
+    std::vector<std::filesystem::path>
+        runtimeFiles;
+
+    const auto platformConfiguration =
+        manifestPath.parent_path() /
+        "Config" /
+        "PlatformServices.toml";
+
+    if (std::filesystem::is_regular_file(
+            platformConfiguration))
+    {
+        runtimeFiles.push_back(
+            platformConfiguration);
+    }
+
+    const auto steamRuntime =
+        playerExecutable.parent_path() /
+        "steam_api64.dll";
+
+    if (std::filesystem::is_regular_file(
+            steamRuntime))
+    {
+        runtimeFiles.push_back(
+            steamRuntime);
+    }
+
+    return runtimeFiles;
+}
+
 void PrintIssues(
     const std::vector<orbit::build::BuildIssue>& issues)
 {
@@ -314,12 +350,19 @@ int main(
         if (options.action ==
             Action::Package)
         {
+            const auto playerExecutable =
+                FindPlayerExecutable();
+
             const auto result =
                 service.Package(
                     request,
                     {
                         .playerExecutable =
-                            FindPlayerExecutable()
+                            playerExecutable,
+                        .runtimeFiles =
+                            FindPackageRuntimeFiles(
+                                options.manifestPath,
+                                playerExecutable)
                     });
 
             PrintIssues(
