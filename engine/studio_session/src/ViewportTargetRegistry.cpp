@@ -157,7 +157,9 @@ bool ViewportTargetRegistry::Refresh()
              previous->sourceRevision !=
                  view.target->sourceRevision ||
              previous->sessionGeneration !=
-                 view.target->sessionGeneration))
+                 view.target->sessionGeneration ||
+             previous->universeGeneration !=
+                 view.target->universeGeneration))
         {
             changed = true;
         }
