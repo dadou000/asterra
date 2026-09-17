@@ -88,6 +88,12 @@ void ProjectAuthoringUi::Register(
     });
 }
 
+void ProjectAuthoringUi::SetWorkspaceChangedCallback(
+    std::function<void()> callback)
+{
+    workspaceChanged_ = std::move(callback);
+}
+
 void ProjectAuthoringUi::DrawProjectBrowser(
     editor_ui::PanelContext& context)
 {
@@ -110,6 +116,7 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                 projectBrowser_.CloseProject();
                 status_ = "Project closed.";
                 SynchronizeProjectBuffers();
+                NotifyWorkspaceChanged();
             }
             catch (const std::exception& exception)
             {
@@ -139,6 +146,7 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                 newProjectName_);
             status_ = "Project created and opened.";
             SynchronizeProjectBuffers();
+            NotifyWorkspaceChanged();
         }
         catch (const std::exception& exception)
         {
@@ -161,6 +169,7 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                 std::filesystem::path(openProjectPath_));
             status_ = "Project opened.";
             SynchronizeProjectBuffers();
+            NotifyWorkspaceChanged();
         }
         catch (const std::exception& exception)
         {
@@ -200,6 +209,7 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                     recent.manifestPath);
                 status_ = "Recent project opened.";
                 SynchronizeProjectBuffers();
+                NotifyWorkspaceChanged();
             }
             catch (const std::exception& exception)
             {
@@ -517,5 +527,13 @@ void ProjectAuthoringUi::SynchronizeProjectBuffers()
 
     projectDisplayName_ =
         workspace_->Project().Manifest().displayName;
+}
+
+void ProjectAuthoringUi::NotifyWorkspaceChanged()
+{
+    if (workspaceChanged_)
+    {
+        workspaceChanged_();
+    }
 }
 } // namespace orbit::studio_ui
