@@ -120,13 +120,81 @@ jobs:
           }
 
       - name: Test - V0.0.3 scaffold integration
+        id: v003
         if: ${{ always() }}
         shell: pwsh
         run: |
-          & "build/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build/apps/player/Release/OrbitPlayer.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitV003ScaffoldIntegrationTests failed with exit code $LASTEXITCODE"
+          $output = @(& "build/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build/apps/player/Release/OrbitPlayer.exe" 2>&1)
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+
+          if ($exitCode -eq 0) {
+            "failed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "stage=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            exit 0
           }
+
+          $text = $output -join "`n"
+          $line = 0
+          if ($text -match 'V0\.0\.3 integration proof failed at .*:(\d+)') {
+            $line = [int]$Matches[1]
+          }
+
+          if ($line -gt 0 -and $line -le 240) {
+            $stage = "bootstrap-content"
+          } elseif ($line -le 340 -and $line -gt 0) {
+            $stage = "authoring-material"
+          } elseif ($line -le 480 -and $line -gt 0) {
+            $stage = "universe-path-plugin"
+          } elseif ($line -le 540 -and $line -gt 0) {
+            $stage = "rpc-platform"
+          } elseif ($line -le 610 -and $line -gt 0) {
+            $stage = "build-package"
+          } elseif ($line -gt 610) {
+            $stage = "persistence"
+          } else {
+            $stage = "unknown"
+          }
+
+          "failed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "stage=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "line=$line" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "M23 integration failure classified as '$stage' at source line $line (exit $exitCode)."
+
+      - name: M23 failure - bootstrap/content
+        if: ${{ always() && steps.v003.outputs.stage == 'bootstrap-content' }}
+        shell: pwsh
+        run: throw "M23 integration failed in bootstrap/content at source line ${{ steps.v003.outputs.line }}"
+
+      - name: M23 failure - authoring/material
+        if: ${{ always() && steps.v003.outputs.stage == 'authoring-material' }}
+        shell: pwsh
+        run: throw "M23 integration failed in authoring/material at source line ${{ steps.v003.outputs.line }}"
+
+      - name: M23 failure - universe/path/plugin
+        if: ${{ always() && steps.v003.outputs.stage == 'universe-path-plugin' }}
+        shell: pwsh
+        run: throw "M23 integration failed in universe/path/plugin at source line ${{ steps.v003.outputs.line }}"
+
+      - name: M23 failure - RPC/platform
+        if: ${{ always() && steps.v003.outputs.stage == 'rpc-platform' }}
+        shell: pwsh
+        run: throw "M23 integration failed in RPC/platform at source line ${{ steps.v003.outputs.line }}"
+
+      - name: M23 failure - build/package
+        if: ${{ always() && steps.v003.outputs.stage == 'build-package' }}
+        shell: pwsh
+        run: throw "M23 integration failed in build/package at source line ${{ steps.v003.outputs.line }}"
+
+      - name: M23 failure - persistence
+        if: ${{ always() && steps.v003.outputs.stage == 'persistence' }}
+        shell: pwsh
+        run: throw "M23 integration failed in persistence at source line ${{ steps.v003.outputs.line }}"
+
+      - name: M23 failure - unclassified
+        if: ${{ always() && steps.v003.outputs.stage == 'unknown' }}
+        shell: pwsh
+        run: throw "M23 integration failed but no source line was captured"
 
       - name: Build
         run: cmake --build build --config Release
