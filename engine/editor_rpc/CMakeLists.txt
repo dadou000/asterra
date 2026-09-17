@@ -1,6 +1,7 @@
 add_library(OrbitEditorRpc STATIC
     src/EditorRpcService.cpp
     src/ProjectWorldRpc.cpp
+    src/EditorSessionRpcHost.cpp
 )
 
 add_library(Orbit::EditorRpc ALIAS OrbitEditorRpc)
@@ -22,6 +23,7 @@ target_link_libraries(OrbitEditorRpc
         Orbit::Selection
     PRIVATE
         Orbit::EditorModel
+        Orbit::EditorSession
 )
 
 target_compile_features(OrbitEditorRpc PUBLIC cxx_std_23)
@@ -62,5 +64,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ProjectWorldRpc
         COMMAND OrbitProjectWorldRpcTests
+    )
+
+    add_executable(OrbitEditorSessionRpcHostTests
+        tests/EditorSessionRpcHostTests.cpp
+    )
+
+    target_link_libraries(OrbitEditorSessionRpcHostTests
+        PRIVATE
+            Orbit::EditorRpc
+            Orbit::EditorSession
+    )
+
+    target_compile_features(OrbitEditorSessionRpcHostTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitEditorSessionRpcHostTests)
+
+    add_test(
+        NAME Orbit.EditorSessionRpcHost
+        COMMAND OrbitEditorSessionRpcHostTests
     )
 endif()
