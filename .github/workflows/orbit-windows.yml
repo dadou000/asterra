@@ -41,7 +41,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build V0.0.3 regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitStudioViewportCameraTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
 
       - name: Test - Terrain view
         shell: pwsh
@@ -178,6 +178,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitStudioSessionTests failed with exit code $LASTEXITCODE"
           }
+          & "build/engine/studio_session/Release/OrbitStudioRuntimeBindingTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioRuntimeBindingTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitStudioAuthoringBindingTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioAuthoringBindingTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitBezierHandleEditorTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitUniverseBoundRoutePlannerTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitUniverseBoundRoutePlannerTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitUniverseBoundPathCacheTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitUniverseBoundPathCacheTests failed with exit code $LASTEXITCODE"
+          }
           & "build/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitStudioWorkspaceTests failed with exit code $LASTEXITCODE"
@@ -193,6 +213,14 @@ jobs:
           & "build/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitProjectBrowserModelTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitProjectSettingsModelTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitProjectSettingsModelTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioViewportCameraTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Test - Multi-viewport targeting
