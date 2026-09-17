@@ -385,6 +385,24 @@ void ProjectDocument::SetWorldDisplayName(
     world.Checkpoint();
 }
 
+void ProjectDocument::SetDisplayName(
+    const std::string_view displayName)
+{
+    if (displayName.empty())
+    {
+        throw std::invalid_argument(
+            "Project display name must not be empty.");
+    }
+
+    if (manifest_.displayName == displayName)
+    {
+        return;
+    }
+
+    manifest_.displayName = std::string(displayName);
+    Save();
+}
+
 void ProjectDocument::SetStartupWorld(
     const std::filesystem::path& relativePath)
 {
