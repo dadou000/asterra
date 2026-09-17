@@ -265,6 +265,63 @@ int main()
             query.Footprint().diameterMeters == 64.0,
         "TerrainQuery must transport canonical planet position and physical footprint.");
 
+    const TerrainQuery rebuiltQuery =
+        MakeTerrainQuery(
+            queryPosition,
+            footprint);
+
+    ok &= Check(
+        rebuiltQuery.planet == planetId &&
+            rebuiltQuery.unitDirection ==
+                queryPosition.unitDirection &&
+            rebuiltQuery.radialOffsetMeters == 25.0 &&
+            rebuiltQuery.footprintMeters == 64.0,
+        "Canonical position and footprint must reconstruct a stable terrain query.");
+
+    const world::PlanetDefinition testPlanet{
+        .radiusMeters = 6'000'000.0,
+        .id = planetId
+    };
+
+    const PlanetSurfacePosition offsetPosition =
+        OffsetSurfacePosition(
+            testPlanet,
+            positiveXEdge,
+            edgeFrame,
+            {1'250.0, -775.0});
+
+    const math::Double2 recoveredOffset =
+        SurfaceOffsetBetweenPositions(
+            testPlanet,
+            positiveXEdge,
+            edgeFrame,
+            offsetPosition);
+
+    ok &= Check(
+        std::abs(recoveredOffset.x - 1'250.0) < 1.0e-6 &&
+            std::abs(recoveredOffset.y + 775.0) < 1.0e-6,
+        "Canonical tangent offset conversion must round-trip in physical meters.");
+
+    const PlanetSurfacePosition otherPlanetPosition{
+        .planet = {
+            .high = 0xAAULL,
+            .low = 0xBBULL
+        },
+        .unitDirection = positiveXEdge.unitDirection
+    };
+
+    const math::Double2 crossPlanetOffset =
+        SurfaceOffsetBetweenPositions(
+            testPlanet,
+            positiveXEdge,
+            edgeFrame,
+            otherPlanetPosition);
+
+    ok &= Check(
+        std::isinf(crossPlanetOffset.x) &&
+            std::isinf(crossPlanetOffset.y),
+        "Surface offsets must reject cross-planet coordinate aliasing.");
+
     std::array<f32, 4> bedrock{
         10.0F,
         11.0F,
