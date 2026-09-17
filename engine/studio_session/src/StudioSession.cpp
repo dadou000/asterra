@@ -169,7 +169,8 @@ StudioSession::Rpc() const noexcept
 StudioTickResult StudioSession::Tick()
 {
     StudioTickResult result{
-        .worldGeneration = world_.Generation()
+        .worldGeneration = world_.Generation(),
+        .universeGeneration = world_.UniverseGeneration()
     };
 
     if (!world_.HasWorld())
@@ -180,6 +181,10 @@ StudioTickResult StudioSession::Tick()
         result.activeBodyChanged = hadBody;
         result.viewportTargetsChanged =
             viewports_.Refresh();
+        result.worldGeneration =
+            world_.Generation();
+        result.universeGeneration =
+            world_.UniverseGeneration();
         return result;
     }
 
@@ -191,6 +196,8 @@ StudioTickResult StudioSession::Tick()
         viewports_.Refresh();
     result.worldGeneration =
         world_.Generation();
+    result.universeGeneration =
+        world_.UniverseGeneration();
     return result;
 }
 
