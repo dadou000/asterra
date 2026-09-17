@@ -140,18 +140,47 @@ terrain::TerrainSample
 RiverCarvedTerrainSource::Sample(
     const terrain::TerrainQuery& query) const noexcept
 {
-    terrain::TerrainSample result =
-        source_->Sample(query);
-
-    const math::Double3 direction =
-        math::Normalize(
+    const f64 directionLengthSquared =
+        math::LengthSquared(
             query.unitDirection);
 
-    if (math::LengthSquared(
-            direction) <= 0.0)
+    if (!std::isfinite(query.unitDirection.x) ||
+        !std::isfinite(query.unitDirection.y) ||
+        !std::isfinite(query.unitDirection.z) ||
+        !std::isfinite(directionLengthSquared) ||
+        directionLengthSquared <= 0.0)
     {
-        return result;
+        return source_->Sample(query);
     }
+
+    if (query.planet.IsValid() &&
+        planet_.id.IsValid() &&
+        query.planet != planet_.id)
+    {
+        return source_->Sample(query);
+    }
+
+    const terrain::PlanetSurfacePosition position =
+        terrain::CanonicalizeSurfacePosition({
+            .planet = query.planet.IsValid()
+                ? query.planet
+                : planet_.id,
+            .unitDirection = query.unitDirection,
+            .radialOffsetMeters =
+                query.radialOffsetMeters
+        });
+
+    const terrain::TerrainSampleFootprint footprint =
+        query.Footprint();
+
+    const terrain::TerrainQuery canonicalQuery =
+        terrain::MakeTerrainQuery(
+            position,
+            footprint);
+
+    terrain::TerrainSample result =
+        source_->Sample(
+            canonicalQuery);
 
     f64 finalElevation =
         result.elevationMeters;
@@ -162,11 +191,31 @@ RiverCarvedTerrainSource::Sample(
     for (const RiverCarvingField& field :
          fields_)
     {
+        terrain::PlanetSurfacePosition fieldOrigin =
+            field.origin;
+
+        if (!fieldOrigin.planet.IsValid())
+        {
+            fieldOrigin =
+                terrain::CanonicalizeSurfacePosition({
+                    .planet = planet_.id,
+                    .unitDirection =
+                        field.surfaceFrame.up
+                });
+        }
+
         const math::Double2 offset =
-            world::SurfaceOffsetBetweenDirections(
+            terrain::SurfaceOffsetBetweenPositions(
                 planet_,
+                fieldOrigin,
                 field.surfaceFrame,
-                direction);
+                position);
+
+        if (!std::isfinite(offset.x) ||
+            !std::isfinite(offset.y))
+        {
+            continue;
+        }
 
         const RiverCarvingSample carving =
             SampleRiverCarving(
@@ -197,7 +246,7 @@ RiverCarvedTerrainSource::Sample(
 
         const f64 lodWeight =
             FootprintWeight(
-                query.footprintMeters,
+                footprint.diameterMeters,
                 carving.
                     valleyHalfWidthMeters,
                 config_) *
