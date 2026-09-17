@@ -2,6 +2,7 @@ add_library(OrbitEditorModel STATIC
     src/ShortcutRegistry.cpp
     src/CommandSurfaces.cpp
     src/AuthoringCommands.cpp
+    src/MaterialAuthoringCommands.cpp
     src/BuiltinSchemas.cpp
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
