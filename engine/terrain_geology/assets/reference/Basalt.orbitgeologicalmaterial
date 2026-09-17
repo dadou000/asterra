@@ -1,0 +1,11 @@
+[geological_material]
+id = "4f524249-5452-4f43-4b00-000000000001"
+name = "Basalt"
+hardness = 0.92
+cohesion = 0.90
+hydraulic_erodibility = 0.10
+aeolian_erodibility = 0.05
+permeability = 0.08
+chemical_weatherability = 0.35
+fracture_tendency = 0.55
+density = 2950.0
