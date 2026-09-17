@@ -16,6 +16,7 @@
 #include <cctype>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -382,7 +383,7 @@ SemanticOutputPath(
 
 [[nodiscard]] std::string
 CompileScript(
-    const std::string_view source,
+    const std::string& source,
     const std::filesystem::path& sourcePath,
     const std::string_view configuration)
 {
