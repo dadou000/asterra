@@ -37,6 +37,11 @@ inline constexpr commands::CommandId kCreateCelestialBody{
     .low = 0x4352454154454244ULL
 };
 
+inline constexpr commands::CommandId kCreateTerrainSurface{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x4352454154455452ULL
+};
+
 inline constexpr commands::CommandId kAssignMaterial{
     .high = 0x4f52424954434d44ULL,
     .low = 0x41535349474e4d54ULL
@@ -72,6 +77,15 @@ void Register(
 // are split into their own translation unit so the core authoring command
 // implementation stays focused on hierarchy/path operations.
 void RegisterMaterialCommands(
+    commands::CommandRegistry& registry,
+    commands::CommandService& commandService,
+    scene::ObjectStore& objects,
+    selection::SelectionService& selection);
+
+// Registers real surface capability creation. This is separate from the core
+// hierarchy commands because it is valid only for capabilities with an actual
+// runtime composition path.
+void RegisterTerrainCommands(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
     scene::ObjectStore& objects,
