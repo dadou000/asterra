@@ -13,6 +13,7 @@
 
 #include <array>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -76,7 +77,7 @@ int main()
                 kCelestialBodyType);
 
     if (bodySchema == nullptr ||
-        bodySchema->properties.size() < 10U)
+        bodySchema->properties.size() < 9U)
     {
         return 3;
     }
@@ -187,26 +188,44 @@ int main()
             bodyObject,
             orbit::editor_model::builtin::
                 kBodyRadius);
-    const auto surfaceEnabled =
+    const auto ellipsoidEnabled =
         objects.GetProperty(
             bodyObject,
             orbit::editor_model::builtin::
-                kBodySurfaceEnabled);
-    const auto atmosphereEnabled =
+                kBodyEllipsoidEnabled);
+    const auto rotationPeriod =
         objects.GetProperty(
             bodyObject,
             orbit::editor_model::builtin::
-                kBodyAtmosphereEnabled);
+                kBodyRotationPeriodSeconds);
+    const auto parentPosition =
+        objects.GetProperty(
+            bodyObject,
+            orbit::editor_model::builtin::
+                kBodyParentPositionMeters);
 
     if (!radius.has_value() ||
         std::get<orbit::f64>(*radius) !=
             6'000'000.0 ||
-        !surfaceEnabled.has_value() ||
-        !std::get<bool>(*surfaceEnabled) ||
-        !atmosphereEnabled.has_value() ||
-        std::get<bool>(*atmosphereEnabled))
+        !ellipsoidEnabled.has_value() ||
+        std::get<bool>(*ellipsoidEnabled) ||
+        !rotationPeriod.has_value() ||
+        std::get<orbit::f64>(*rotationPeriod) !=
+            86'400.0 ||
+        !parentPosition.has_value())
     {
         return 9;
+    }
+
+    const auto position =
+        std::get<orbit::math::Double3>(
+            *parentPosition);
+
+    if (position.x != 0.0 ||
+        position.y != 0.0 ||
+        position.z != 0.0)
+    {
+        return 10;
     }
 
     const auto systemObject =
@@ -219,7 +238,7 @@ int main()
     if (objects.Find(bodyObject).has_value() ||
         objects.Find(systemObject).has_value())
     {
-        return 10;
+        return 11;
     }
 
     registry.Invoke(
@@ -229,7 +248,7 @@ int main()
     if (!objects.Find(bodyObject).has_value() ||
         !objects.Find(systemObject).has_value())
     {
-        return 11;
+        return 12;
     }
 
     world.Checkpoint();
