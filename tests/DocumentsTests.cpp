@@ -1,3 +1,4 @@
+#include <orbit/core/BuildInfo.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
 
@@ -34,6 +35,10 @@ int main()
             project.Manifest().
                 displayName ==
             "Document Test");
+        assert(
+            project.Manifest().
+                engineCompatibilityVersion ==
+            orbit::Version);
         assert(
             std::filesystem::exists(
                 project.StartupWorldPath()));
