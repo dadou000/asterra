@@ -66,11 +66,22 @@ public:
     terrain::TerrainSample Sample(
         const terrain::TerrainQuery& query) const noexcept
     {
-        if (math::LengthSquared(
-                query.unitDirection) <= 0.0 ||
-            !std::isfinite(
-                query.footprintMeters) ||
-            query.footprintMeters <= 0.0)
+        const f64 directionLengthSquared =
+            math::LengthSquared(
+                query.unitDirection);
+
+        const bool directionValid =
+            std::isfinite(query.unitDirection.x) &&
+            std::isfinite(query.unitDirection.y) &&
+            std::isfinite(query.unitDirection.z) &&
+            std::isfinite(directionLengthSquared) &&
+            directionLengthSquared > 0.0;
+
+        const terrain::TerrainSampleFootprint footprint =
+            query.Footprint();
+
+        if (!directionValid ||
+            !footprint.IsValid())
         {
             directFallbackSamples_.
                 fetch_add(
@@ -80,10 +91,46 @@ public:
             return source_->Sample(query);
         }
 
+        // CachedTerrainSource is bound to one physical planet. Legacy callers
+        // that omit the planet ID are upgraded at this boundary; an explicit
+        // request for another planet bypasses this cache instead of aliasing
+        // physical pages across bodies.
+        if (query.planet.IsValid() &&
+            planet_.id.IsValid() &&
+            query.planet != planet_.id)
+        {
+            directFallbackSamples_.
+                fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+
+            return source_->Sample(query);
+        }
+
+        const world::PlanetId effectivePlanet =
+            query.planet.IsValid()
+                ? query.planet
+                : planet_.id;
+
+        const terrain::PlanetSurfacePosition position =
+            terrain::CanonicalizeSurfacePosition({
+                .planet = effectivePlanet,
+                .unitDirection = query.unitDirection,
+                .radialOffsetMeters =
+                    query.radialOffsetMeters
+            });
+
+        const terrain::TerrainQuery canonicalQuery =
+            terrain::MakeTerrainQuery(
+                position,
+                footprint);
+
         try
         {
             const TerrainPageDesc desc =
-                SelectPage(query);
+                SelectPage(
+                    position,
+                    footprint);
 
             if (const auto page =
                     cache_.TryGet(desc))
@@ -93,7 +140,7 @@ public:
                     std::memory_order_relaxed);
 
                 return page->SampleDirection(
-                    query.unitDirection);
+                    position.unitDirection);
             }
 
             bool shouldRequest = false;
@@ -138,7 +185,8 @@ public:
                 1,
                 std::memory_order_relaxed);
 
-        return source_->Sample(query);
+        return source_->Sample(
+            canonicalQuery);
     }
 
     u64 Revision() const noexcept
@@ -198,16 +246,17 @@ public:
 
 private:
     TerrainPageDesc SelectPage(
-        const terrain::TerrainQuery& query) const
+        const terrain::PlanetSurfacePosition& position,
+        const terrain::TerrainSampleFootprint& footprint) const
     {
-        const f64 footprint =
+        const f64 footprintMeters =
             std::max(
-                query.footprintMeters,
+                footprint.diameterMeters,
                 1.0e-3);
 
         world::PlanetTileId selected =
             world::TileForDirection(
-                query.unitDirection,
+                position.unitDirection,
                 config_.maximumTileLevel);
 
         for (u32 level =
@@ -218,7 +267,7 @@ private:
         {
             const auto tile =
                 world::TileForDirection(
-                    query.unitDirection,
+                    position.unitDirection,
                     static_cast<u8>(level));
 
             selected = tile;
@@ -234,14 +283,14 @@ private:
                     1U);
 
             if (spacing <=
-                footprint)
+                footprintMeters)
             {
                 break;
             }
         }
 
         return {
-            .planet = planet_.id,
+            .planet = position.planet,
             .tile = selected,
             .resolution =
                 config_.pageResolution,
