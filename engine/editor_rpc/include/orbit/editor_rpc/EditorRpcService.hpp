@@ -130,7 +130,11 @@ private:
         rpc::Dispatcher::MethodHandler handler);
 
     void RegisterProjectWorldAutomation(
-        documents::ProjectDocument& project);
+        documents::ProjectDocument& project,
+        commands::CommandRegistry& commandRegistry,
+        commands::CommandService& commandService,
+        scene::ObjectStore& objects,
+        selection::SelectionService& selection);
 
     struct EventRecord
     {

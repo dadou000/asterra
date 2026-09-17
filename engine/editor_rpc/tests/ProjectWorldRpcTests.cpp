@@ -2,6 +2,7 @@
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
@@ -93,7 +94,17 @@ int main()
             objects,
             schemas);
         orbit::commands::CommandRegistry registry;
+        orbit::editor_model::authoring_commands::Register(
+            registry,
+            commands,
+            objects,
+            selection);
         orbit::rpc::Dispatcher dispatcher;
+
+        const auto semanticWorld =
+            commands.CreateObject(
+                orbit::editor_model::builtin::kWorldType,
+                "World");
 
         orbit::editor_rpc::EditorRpcService rpc(
             dispatcher,
@@ -221,10 +232,90 @@ int main()
         }
         Check(foundStartup);
 
-        const auto events =
+        const auto noBodies =
             Call(
                 dispatcher,
                 "7",
+                "body.list");
+        Check(noBodies.IsArray());
+        Check(noBodies.AsArray().empty());
+
+        const auto body =
+            Call(
+                dispatcher,
+                "8",
+                "body.create",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "parent",
+                            semanticWorld.ToString()
+                        },
+                        {"name", "RPC Planet"}
+                    }));
+        Check(body.Find("id") != nullptr);
+        Check(
+            body.Find("name")->AsString() ==
+            "RPC Planet");
+        const std::string bodyId =
+            body.Find("id")->AsString();
+
+        const auto bodies =
+            Call(
+                dispatcher,
+                "9",
+                "body.list");
+        Check(bodies.IsArray());
+        Check(bodies.AsArray().size() == 1);
+        Check(
+            bodies.AsArray()[0].
+                Find("id")->AsString() ==
+            bodyId);
+        Check(
+            bodies.AsArray()[0].
+                Find("name")->AsString() ==
+            "RPC Planet");
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "10",
+                "history.undo"));
+
+        const auto afterUndo =
+            Call(
+                dispatcher,
+                "11",
+                "body.list");
+        Check(afterUndo.IsArray());
+        Check(afterUndo.AsArray().empty());
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "12",
+                "history.redo"));
+
+        const auto afterRedo =
+            Call(
+                dispatcher,
+                "13",
+                "body.list");
+        Check(afterRedo.IsArray());
+        Check(afterRedo.AsArray().size() == 1);
+        Check(
+            afterRedo.AsArray()[0].
+                Find("id")->AsString() ==
+            bodyId);
+        Check(
+            afterRedo.AsArray()[0].
+                Find("name")->AsString() ==
+            "RPC Planet");
+
+        const auto events =
+            Call(
+                dispatcher,
+                "14",
                 "event.since",
                 orbit::rpc::Value(
                     orbit::rpc::Value::Object{
@@ -234,7 +325,7 @@ int main()
         Check(events.Find("events")->IsArray());
         Check(
             events.Find("events")->AsArray().size() ==
-            3);
+            4);
     }
 
     std::filesystem::remove_all(root);
