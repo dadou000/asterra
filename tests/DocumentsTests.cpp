@@ -38,7 +38,7 @@ int main()
         assert(
             project.Manifest().
                 engineCompatibilityVersion ==
-            orbit::Version);
+            orbit::build::Version);
         assert(
             std::filesystem::exists(
                 project.StartupWorldPath()));
