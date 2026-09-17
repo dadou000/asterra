@@ -10,6 +10,7 @@ on:
       - "engine/terrain_erosion/**"
       - "engine/terrain_region/**"
       - "engine/terrain_geology/**"
+      - "engine/surface_authoring/**"
       - "tests/contracts/**"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
@@ -24,6 +25,7 @@ on:
       - "engine/terrain_erosion/**"
       - "engine/terrain_region/**"
       - "engine/terrain_geology/**"
+      - "engine/surface_authoring/**"
       - "tests/contracts/**"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
@@ -69,8 +71,9 @@ jobs:
           OrbitTerrainM01IntegrationTests
           OrbitTerrainGeologyTests
           OrbitTerrainStratigraphyTests
+          OrbitSurfaceAuthoringTests
 
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.]Terrain(Contracts|FaceSeams|M01Integration|GeologyMaterials|Stratigraphy)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints)"
