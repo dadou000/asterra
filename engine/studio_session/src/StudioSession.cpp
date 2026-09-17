@@ -1,6 +1,7 @@
 #include <orbit/studio_session/StudioSession.hpp>
 
 #include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/studio_session/ViewportTargetRpc.hpp>
 
 #include <stdexcept>
 #include <utility>
@@ -37,6 +38,9 @@ StudioSession::StudioSession(
       viewports_(world_, activeBody_),
       rpc_(world_)
 {
+    RegisterViewportTargetRpc(
+        rpc_.Dispatcher(),
+        viewports_);
     static_cast<void>(activeBody_.Refresh());
 }
 
