@@ -1309,10 +1309,22 @@ int main(
         // No editor-only Helion/Asterra FrameGraph or BodyRegistry is built.
         auto& universe =
             worldSession.Universe();
-        auto& frames =
-            universe.Frames();
-        auto& bodies =
-            universe.Bodies();
+
+        const auto frames =
+            [&worldSession]()
+                -> orbit::frames::FrameGraph&
+            {
+                return worldSession.
+                    Universe().Frames();
+            };
+
+        const auto bodies =
+            [&worldSession]()
+                -> orbit::universe::BodyRegistry&
+            {
+                return worldSession.
+                    Universe().Bodies();
+            };
 
         const auto composedBodyId =
             bodyObject.IsValid()
@@ -1322,14 +1334,14 @@ int main(
 
         if (bodyObject.IsValid() &&
             (!composedBodyId.has_value() ||
-             bodies.FindBody(*composedBodyId) ==
+             bodies().FindBody(*composedBodyId) ==
                  nullptr))
         {
             throw std::runtime_error(
                 "Studio failed to compose its authored semantic body.");
         }
 
-        const orbit::universe::BodyId
+        orbit::universe::BodyId
             bodyId =
                 composedBodyId.value_or(
                     orbit::universe::BodyId{});
@@ -1352,7 +1364,7 @@ int main(
 
         if (const auto* initialBody =
                 bodyId.IsValid()
-                    ? bodies.FindBody(bodyId)
+                    ? bodies().FindBody(bodyId)
                     : nullptr;
             initialBody != nullptr)
         {
@@ -2187,9 +2199,15 @@ int main(
         });
 
         // Route planning is owned by StudioSession and rebound whenever the
-        // composed universe generation changes.
-        auto& routePlanner =
-            studioSession.PathRouting().Planner();
+        // composed universe generation changes. Resolve it on use so no
+        // reference survives a generation swap.
+        const auto routePlanner =
+            [&studioSession]()
+                -> orbit::path_routing::RoutePlanner&
+            {
+                return studioSession.
+                    PathRouting().Planner();
+            };
 
         std::unordered_set<
             orbit::scene::ObjectId>
@@ -2241,7 +2259,7 @@ int main(
                     if (!liveEdges.
                             contains(edge))
                     {
-                        routePlanner.Erase(edge);
+                        routePlanner().Erase(edge);
                         publishedRouteGeneration.
                             erase(edge);
                     }
@@ -2313,7 +2331,7 @@ int main(
                                 endSurface->body)
                         {
                             const auto* routeBody =
-                                bodies.FindBody(
+                                bodies().FindBody(
                                     startSurface->
                                         body);
 
@@ -2332,15 +2350,15 @@ int main(
                                         routeBody->
                                             frame,
                                         {},
-                                        frames,
-                                        bodies,
+                                        frames(),
+                                        bodies(),
                                         RouteSearchForProfile(
                                             resolvedProfile.
                                                 profile));
                         }
 
                         static_cast<void>(
-                            routePlanner.Request({
+                            routePlanner().Request({
                                 .edge = *edge,
                                 .startNode =
                                     *start,
@@ -2360,7 +2378,7 @@ int main(
                     catch (const std::exception&
                                exception)
                     {
-                        routePlanner.Erase(
+                        routePlanner().Erase(
                             edgeId);
 
                         orbit::log::Warning(
@@ -2390,13 +2408,13 @@ int main(
                     requestRoutedPaths();
                 }
 
-                routePlanner.Poll();
+                routePlanner().Poll();
 
                 for (const auto edge :
                      knownRoutedEdges)
                 {
                     const auto status =
-                        routePlanner.Status(edge);
+                        routePlanner().Status(edge);
 
                     if (!status.has_value())
                     {
@@ -2421,7 +2439,7 @@ int main(
                             RouteState::Ready)
                     {
                         const auto* result =
-                            routePlanner.Result(edge);
+                            routePlanner().Result(edge);
 
                         if (result == nullptr)
                         {
@@ -2528,7 +2546,7 @@ int main(
                      knownRoutedEdges)
                 {
                     const auto status =
-                        routePlanner.Status(edge);
+                        routePlanner().Status(edge);
 
                     if (!status.has_value() ||
                         status->state !=
@@ -2642,7 +2660,7 @@ int main(
                                 EdgeMode::Routed)
                         {
                             const auto status =
-                                routePlanner.Status(
+                                routePlanner().Status(
                                     edgeId);
 
                             if (!status.has_value() ||
@@ -2654,7 +2672,7 @@ int main(
                             }
 
                             routeResult =
-                                routePlanner.Result(
+                                routePlanner().Result(
                                     edgeId);
 
                             if (routeResult ==
@@ -2673,11 +2691,11 @@ int main(
                             const auto startFrame =
                                 PathAnchorNativeFrame(
                                     start->anchor,
-                                    bodies);
+                                    bodies());
                             const auto endFrame =
                                 PathAnchorNativeFrame(
                                     end->anchor,
-                                    bodies);
+                                    bodies());
 
                             targetFrame =
                                 startFrame.
@@ -2713,8 +2731,8 @@ int main(
                                     .endNode = *end,
                                     .targetFrame =
                                         targetFrame,
-                                    .frames = &frames,
-                                    .bodies = &bodies,
+                                    .frames = &frames(),
+                                    .bodies = &bodies(),
                                     .routed =
                                         routeResult,
                                     .curveSampleSpacingMeters =
@@ -2841,7 +2859,7 @@ int main(
                     const orbit::scene::ObjectId edge)
                 {
                     const auto status =
-                        routePlanner.Status(edge);
+                        routePlanner().Status(edge);
 
                     if (!status.has_value())
                     {
@@ -2927,7 +2945,7 @@ int main(
                     const orbit::scene::ObjectId edge)
                 {
                     const auto* result =
-                        routePlanner.Result(edge);
+                        routePlanner().Result(edge);
 
                     if (result == nullptr)
                     {
@@ -3019,7 +3037,7 @@ int main(
                 [&routePlanner](
                     const orbit::scene::ObjectId edge)
                 {
-                    routePlanner.Invalidate(edge);
+                    routePlanner().Invalidate(edge);
                 }
         });
 
@@ -3386,7 +3404,7 @@ int main(
             .draw =
                 [&bodyView,
                  &selection,
-                 bodyObject,
+                 &bodyObject,
                  &objects,
                  &content,
                  &authoringCommands,
@@ -3397,7 +3415,7 @@ int main(
                  &activePathNetwork,
                  &lastPlacedPathNode,
                  &bodies,
-                 bodyId](
+                 &bodyId](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -3477,7 +3495,7 @@ int main(
                     const bool hasAuthoredBody =
                         bodyObject.IsValid() &&
                         bodyId.IsValid() &&
-                        bodies.FindBody(bodyId) !=
+                        bodies().FindBody(bodyId) !=
                             nullptr;
 
                     if (!hasAuthoredBody)
@@ -3553,7 +3571,7 @@ int main(
                                 try
                                 {
                                     const auto* body =
-                                        bodies.FindBody(bodyId);
+                                        bodies().FindBody(bodyId);
                                     const auto ray =
                                         orbit::render_view::ViewportRay(
                                             bodyView.Camera(),
@@ -3627,7 +3645,7 @@ int main(
                         try
                         {
                             const auto* body =
-                                bodies.FindBody(
+                                bodies().FindBody(
                                     bodyId);
 
                             const auto ray =
@@ -5464,6 +5482,78 @@ int main(
                     ResizeSwapchainToWindow());
 
             rpcServer.Poll();
+
+            const auto studioTick =
+                studioSession.Tick(false);
+
+            const auto& activeBody =
+                studioSession.ActiveBody().Active();
+
+            if (activeBody.has_value())
+            {
+                const bool activeIdentityChanged =
+                    bodyObject !=
+                        activeBody->semanticObject ||
+                    bodyId != activeBody->body;
+
+                bodyObject =
+                    activeBody->semanticObject;
+                bodyId =
+                    activeBody->body;
+
+                bodyView.Camera().frame =
+                    activeBody->frame;
+
+                const orbit::f64 activeRadius =
+                    std::max(
+                        activeBody->
+                            referenceRadiusMeters,
+                        1.0);
+
+                bodyView.Camera().
+                    nearPlaneMeters =
+                        static_cast<orbit::f32>(
+                            std::max(
+                                activeRadius *
+                                    1.0e-6,
+                                1.0));
+                bodyView.Camera().
+                    farPlaneMeters =
+                        static_cast<orbit::f32>(
+                            activeRadius * 10.0);
+
+                if (activeIdentityChanged)
+                {
+                    bodyView.Camera().
+                        localPositionMeters = {
+                            0.0,
+                            0.0,
+                            -activeRadius * 3.2
+                        };
+                }
+            }
+            else
+            {
+                bodyObject = {};
+                bodyId = {};
+            }
+
+            if (studioTick.pathRoutingRebound)
+            {
+                routedObjectRevision =
+                    ~orbit::u64{0};
+                publishedRouteGeneration.
+                    clear();
+            }
+
+            if (studioTick.pathProductsInvalidated)
+            {
+                derivedObjectRevision =
+                    ~orbit::u64{0};
+                derivedPaths.clear();
+                derivedRouteGeneration.clear();
+            }
+
             pollRoutedPaths();
             refreshDerivedPaths();
 
@@ -5568,7 +5658,7 @@ int main(
 
             const auto* previewBody =
                 bodyId.IsValid()
-                    ? bodies.FindBody(bodyId)
+                    ? bodies().FindBody(bodyId)
                     : nullptr;
 
             std::vector<
@@ -5732,7 +5822,7 @@ int main(
                         bodyView.Width(),
                         bodyView.Height(),
                         bodyView.Camera(),
-                        frames,
+                        frames(),
                         {},
                         std::span<
                             const orbit::
