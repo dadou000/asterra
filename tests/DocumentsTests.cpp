@@ -37,6 +37,84 @@ int main()
             std::filesystem::exists(
                 project.StartupWorldPath()));
 
+        const auto initialWorlds =
+            project.WorldPaths();
+        assert(initialWorlds.size() == 1);
+        assert(
+            initialWorlds.front() ==
+            std::filesystem::path(
+                "Worlds/Main.orbitworld"));
+
+        const auto secondWorld =
+            project.CreateWorld(
+                "Secondary",
+                "Secondary World");
+        assert(
+            secondWorld ==
+            std::filesystem::path(
+                "Worlds/Secondary.orbitworld"));
+        assert(
+            std::filesystem::exists(
+                root / secondWorld));
+
+        {
+            orbit::documents::WorldDatabase secondary(
+                root / secondWorld);
+            assert(
+                secondary.GetMetadata(
+                    "display_name") ==
+                std::optional<std::string>(
+                    "Secondary World"));
+        }
+
+        const auto worlds =
+            project.WorldPaths();
+        assert(worlds.size() == 2);
+        assert(
+            worlds[0] ==
+            std::filesystem::path(
+                "Worlds/Main.orbitworld"));
+        assert(
+            worlds[1] ==
+            std::filesystem::path(
+                "Worlds/Secondary.orbitworld"));
+
+        bool overwriteRejected = false;
+        try
+        {
+            static_cast<void>(
+                project.CreateWorld(
+                    secondWorld,
+                    "Duplicate"));
+        }
+        catch (const std::runtime_error&)
+        {
+            overwriteRejected = true;
+        }
+        assert(overwriteRejected);
+
+        bool escapeRejected = false;
+        try
+        {
+            static_cast<void>(
+                project.CreateWorld(
+                    "../Outside.orbitworld",
+                    "Outside"));
+        }
+        catch (const std::invalid_argument&)
+        {
+            escapeRejected = true;
+        }
+        assert(escapeRejected);
+
+        project.SetStartupWorld(secondWorld);
+        assert(
+            project.Manifest().startupWorld ==
+            secondWorld);
+        assert(
+            project.StartupWorldPath() ==
+            root / secondWorld);
+
         project.Manifest().displayName =
             "Renamed Project";
         project.Manifest().
@@ -64,6 +142,9 @@ int main()
             reopened.Manifest().
                 displayName ==
             "Renamed Project");
+        assert(
+            reopened.Manifest().startupWorld ==
+            secondWorld);
         assert(
             reopened.Manifest().
                 plugins.size() == 1);
