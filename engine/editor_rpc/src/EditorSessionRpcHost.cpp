@@ -193,6 +193,78 @@ void EditorSessionRpcHost::SetEditorConfigurator(
     }
 }
 
+void EditorSessionRpcHost::AttachViewport(
+    ViewportAutomation viewport)
+{
+    viewportAutomation_ =
+        std::move(viewport);
+
+    if (editor_ != nullptr)
+    {
+        editor_->AttachViewport(
+            *viewportAutomation_);
+    }
+}
+
+void EditorSessionRpcHost::AttachPathRouting(
+    PathRoutingAutomation routing)
+{
+    pathRoutingAutomation_ =
+        std::move(routing);
+
+    if (editor_ != nullptr)
+    {
+        editor_->AttachPathRouting(
+            *pathRoutingAutomation_);
+    }
+}
+
+void EditorSessionRpcHost::AttachPathGeometry(
+    PathGeometryAutomation geometry)
+{
+    pathGeometryAutomation_ =
+        std::move(geometry);
+
+    if (editor_ != nullptr)
+    {
+        editor_->AttachPathGeometry(
+            *pathGeometryAutomation_);
+    }
+}
+
+void EditorSessionRpcHost::AttachBuild(
+    BuildAutomation build)
+{
+    buildAutomation_ =
+        std::move(build);
+
+    if (editor_ != nullptr)
+    {
+        editor_->AttachBuild(
+            *buildAutomation_);
+    }
+}
+
+void EditorSessionRpcHost::PublishEvent(
+    std::string type,
+    rpc::Value data)
+{
+    if (editor_ != nullptr)
+    {
+        editor_->PublishEvent(
+            std::move(type),
+            std::move(data));
+    }
+}
+
+std::vector<std::string>
+EditorSessionRpcHost::DrainNotifications()
+{
+    return editor_ != nullptr
+        ? editor_->DrainNotifications()
+        : std::vector<std::string>{};
+}
+
 void EditorSessionRpcHost::RegisterHostMethods()
 {
     const auto registerMethod =
@@ -547,6 +619,27 @@ void EditorSessionRpcHost::RebindEditor()
         if (editorConfigurator_)
         {
             editorConfigurator_(*editor_);
+        }
+
+        if (viewportAutomation_.has_value())
+        {
+            editor_->AttachViewport(
+                *viewportAutomation_);
+        }
+        if (pathRoutingAutomation_.has_value())
+        {
+            editor_->AttachPathRouting(
+                *pathRoutingAutomation_);
+        }
+        if (pathGeometryAutomation_.has_value())
+        {
+            editor_->AttachPathGeometry(
+                *pathGeometryAutomation_);
+        }
+        if (buildAutomation_.has_value())
+        {
+            editor_->AttachBuild(
+                *buildAutomation_);
         }
     }
     catch (...)

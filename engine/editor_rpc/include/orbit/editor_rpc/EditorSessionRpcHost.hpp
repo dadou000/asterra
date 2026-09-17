@@ -43,6 +43,21 @@ public:
     void SetEditorConfigurator(
         std::function<void(EditorRpcService&)> configurator);
 
+    void AttachViewport(
+        ViewportAutomation viewport);
+    void AttachPathRouting(
+        PathRoutingAutomation routing);
+    void AttachPathGeometry(
+        PathGeometryAutomation geometry);
+    void AttachBuild(
+        BuildAutomation build);
+
+    void PublishEvent(
+        std::string type,
+        rpc::Value data = {});
+    [[nodiscard]] std::vector<std::string>
+    DrainNotifications();
+
 private:
     void RegisterHostMethods();
     void RegisterClosedProjectMethods();
@@ -60,5 +75,13 @@ private:
     bool pendingRebind_{false};
     std::function<void(EditorRpcService&)>
         editorConfigurator_;
+    std::optional<ViewportAutomation>
+        viewportAutomation_;
+    std::optional<PathRoutingAutomation>
+        pathRoutingAutomation_;
+    std::optional<PathGeometryAutomation>
+        pathGeometryAutomation_;
+    std::optional<BuildAutomation>
+        buildAutomation_;
 };
 } // namespace orbit::editor_rpc
