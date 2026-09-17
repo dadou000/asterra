@@ -297,9 +297,16 @@ int main()
             edgeFrame,
             offsetPosition);
 
+    // The inverse uses acos on a ~0.014-degree angular separation. A
+    // 0.1-millimetre bound is far tighter than any terrain sample while
+    // remaining stable under expected double-precision conditioning.
+    constexpr f64 geodesicToleranceMeters = 1.0e-4;
+
     ok &= Check(
-        std::abs(recoveredOffset.x - 1'250.0) < 1.0e-6 &&
-            std::abs(recoveredOffset.y + 775.0) < 1.0e-6,
+        std::abs(recoveredOffset.x - 1'250.0) <
+                geodesicToleranceMeters &&
+            std::abs(recoveredOffset.y + 775.0) <
+                geodesicToleranceMeters,
         "Canonical tangent offset conversion must round-trip in physical meters.");
 
     const PlanetSurfacePosition otherPlanetPosition{
