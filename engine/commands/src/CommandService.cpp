@@ -114,6 +114,75 @@ CommandService::CreateObject(
     return record.id;
 }
 
+void CommandService::DeleteObject(
+    const scene::ObjectId object)
+{
+    const scene::ObjectRecord record =
+        RequireObject(object);
+
+    if (!objects_.Children(object).empty())
+    {
+        throw std::invalid_argument(
+            "Cannot delete an object while it has children.");
+    }
+
+    const schema::TypeSchema* typeSchema =
+        schemas_.FindType(record.type);
+
+    if (typeSchema == nullptr)
+    {
+        throw std::runtime_error(
+            "Cannot snapshot properties for an object with an unknown schema type.");
+    }
+
+    std::vector<std::pair<
+        schema::PropertyId,
+        schema::PropertyValue>>
+        storedProperties;
+
+    for (const auto& property : typeSchema->properties)
+    {
+        const auto value =
+            objects_.GetProperty(object, property.id);
+
+        if (value.has_value())
+        {
+            storedProperties.emplace_back(
+                property.id,
+                *value);
+        }
+    }
+
+    ApplyAndRecord(
+        "Delete Object",
+        Action{
+            .redo =
+                [this, object](
+                    scene::MutationKey key)
+                {
+                    objects_.Erase(key, object);
+                },
+            .undo =
+                [this,
+                 record,
+                 storedProperties](
+                    scene::MutationKey key)
+                {
+                    objects_.Insert(key, record);
+
+                    for (const auto& [property, value] :
+                         storedProperties)
+                    {
+                        objects_.SetProperty(
+                            key,
+                            record.id,
+                            property,
+                            value);
+                    }
+                }
+        });
+}
+
 void CommandService::RenameObject(
     const scene::ObjectId object,
     std::string name)
