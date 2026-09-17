@@ -20,6 +20,8 @@ target_link_libraries(OrbitEditorRpc
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
+    PRIVATE
+        Orbit::EditorModel
 )
 
 target_compile_features(OrbitEditorRpc PUBLIC cxx_std_23)
