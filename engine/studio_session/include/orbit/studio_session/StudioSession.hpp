@@ -5,6 +5,7 @@
 #include <orbit/editor_session/ActiveBodyModel.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
+#include <orbit/studio_session/ViewportTargetRegistry.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -17,6 +18,7 @@ namespace orbit::studio_session
 struct StudioTickResult
 {
     bool activeBodyChanged{false};
+    bool viewportTargetsChanged{false};
     u32 pluginsReloaded{0};
     u64 worldGeneration{0};
 };
@@ -40,6 +42,11 @@ public:
     ActiveBody() noexcept;
     [[nodiscard]] const editor_session::ActiveBodyModel&
     ActiveBody() const noexcept;
+
+    [[nodiscard]] ViewportTargetRegistry&
+    Viewports() noexcept;
+    [[nodiscard]] const ViewportTargetRegistry&
+    Viewports() const noexcept;
 
     [[nodiscard]] std::vector<editor_session::WorldDocumentItem>
     Worlds() const;
@@ -77,6 +84,7 @@ private:
     editor_session::EditorWorldSession world_;
     editor_session::WorldDocumentsModel documents_;
     editor_session::ActiveBodyModel activeBody_;
+    ViewportTargetRegistry viewports_;
     editor_rpc::EditorSessionRpcHost rpc_;
 };
 } // namespace orbit::studio_session
