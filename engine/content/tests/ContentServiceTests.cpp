@@ -299,6 +299,41 @@ int main()
         return 1;
     }
 
+    const auto decalId =
+        content.CreateDecal(
+            imported,
+            "Workshop Mark",
+            2.5,
+            1.25,
+            0.8);
+
+    const auto* decal =
+        content.Find(decalId);
+
+    Check(decal != nullptr);
+    Check(decal->kind == orbit::content::AssetKind::Decal);
+    Check(decal->decal.has_value());
+    Check(decal->decal->widthMeters == 2.5);
+    Check(decal->decal->heightMeters == 1.25);
+    Check(decal->decal->opacity == 0.8);
+    Check(decal->derivedReady);
+    Check(decal->derivedKey.has_value());
+    Check(
+        content.Cache().Contains(
+            *decal->derivedKey,
+            "decal.toml"));
+    Check(decal->dependencies.size() == 1);
+    Check(decal->dependencies[0] == imported);
+
+    const auto decalDependents =
+        content.Dependents(imported);
+    Check(
+        std::find(
+            decalDependents.begin(),
+            decalDependents.end(),
+            decalId) !=
+        decalDependents.end());
+
     const auto thumbnail =
         content.GetThumbnail(
             imported,
