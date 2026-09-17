@@ -6,6 +6,7 @@ on:
     paths:
       - tools/finalize_v003_scaffold.py
       - tools/run_v003_finalizer_compat.py
+      - tools/finalize_v003_remaining.py
       - .github/workflows/orbit-scaffold-finalize.yml
 
 permissions:
@@ -20,23 +21,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply scaffold completion patch
-        run: python tools/run_v003_finalizer_compat.py
+      - name: Apply remaining scaffold completion patch
+        run: python tools/finalize_v003_remaining.py
 
       - name: Verify patch changed expected sources
         shell: pwsh
         run: |
           git diff --check
-          git diff --exit-code -- tools/finalize_v003_scaffold.py tools/run_v003_finalizer_compat.py .github/workflows/orbit-scaffold-finalize.yml
+          git diff --exit-code -- tools/finalize_v003_scaffold.py tools/run_v003_finalizer_compat.py tools/finalize_v003_remaining.py .github/workflows/orbit-scaffold-finalize.yml
           if (-not (git status --porcelain)) {
-            throw "Scaffold finalizer produced no source changes"
+            throw "Remaining scaffold finalizer produced no source changes"
           }
 
-      - name: Commit scaffold completion
+      - name: Commit remaining scaffold completion
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add engine/build engine/platform_services apps/build apps/editor docs/V0.0.3_SPEC.md
-          git commit -m "Finish V0.0.3 build and platform scaffolding"
+          git add apps/editor
+          git commit -m "Finish M17 Studio material and decal workflow"
           git push origin HEAD:orbit
