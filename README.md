@@ -14,7 +14,7 @@ The next architecture milestone generalizes Orbit from a terrain-focused planeta
 
 Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor, asset, path, plugin, build or platform-service systems. It defines the small implementation milestones, CPU/GPU residency rules, Orbit Studio editor architecture, Luau plugin model, project persistence, Material Service, dynamic path networks, MCP V2 and Steam integration boundary.
 
-World and celestial setup is now tracked explicitly by **M20A — World & Celestial Authoring** in [docs/V0.0.3_WORLD_AUTHORING.md](docs/V0.0.3_WORLD_AUTHORING.md). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. Its first production slice adds semantic celestial-system authoring, runtime-backed body properties, transactional system/body creation, metadata-driven contextual commands, and regression coverage; project-browser, multi-world lifecycle and live semantic-to-runtime universe synchronization remain acceptance items rather than placeholders.
+World and celestial setup is tracked explicitly by **M20A — World & Celestial Authoring** in [docs/V0.0.3_WORLD_AUTHORING.md](docs/V0.0.3_WORLD_AUTHORING.md). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. The production foundation now includes semantic World/System/Body schemas, runtime-backed body properties, transactional contextual system/body creation, multi-world project enumeration/creation/startup-world selection, metadata-driven command surfaces and regression coverage. Project-browser UI, active-world session switching and live semantic-to-runtime universe synchronization remain M20A acceptance items rather than placeholders.
 
 ## Build
 
@@ -67,13 +67,9 @@ cmake --build build --config Debug
 .\build\apps\build\Release\OrbitBuild.exe C:\path\to\Project --cook --profile "Development Windows"
 ```
 
-Standalone player/package assembly is intentionally not exposed yet: `OrbitSandbox` is still a development terrain composition rather than a project-driven player.
-
-Orbit Studio also exposes `build.profiles`, `build.validate`, and `build.cook` over its structured JSON-RPC/MCP bridge.
+Orbit Studio also exposes build operations over its structured JSON-RPC/MCP bridge.
 
 You can still launch `OrbitSandbox.exe` directly while developing; its crash handler falls back to a local `logs` directory when it is not started by the launcher.
-
-
 
 ### Sandbox camera controls
 
