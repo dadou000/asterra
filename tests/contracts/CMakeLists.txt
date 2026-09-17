@@ -31,3 +31,23 @@ add_test(
     NAME Orbit.TerrainFaceSeams
     COMMAND OrbitTerrainFaceSeamTests
 )
+
+add_executable(OrbitTerrainM01IntegrationTests
+    TerrainM01IntegrationTests.cpp
+)
+
+target_link_libraries(OrbitTerrainM01IntegrationTests
+    PRIVATE
+        Orbit::TerrainCache
+        Orbit::TerrainErosion
+        Orbit::TerrainHydrology
+)
+
+target_compile_features(
+    OrbitTerrainM01IntegrationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainM01IntegrationTests)
+
+add_test(
+    NAME Orbit.TerrainM01Integration
+    COMMAND OrbitTerrainM01IntegrationTests
+)
