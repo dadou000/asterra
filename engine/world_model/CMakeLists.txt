@@ -44,4 +44,22 @@ if(BUILD_TESTING)
         NAME Orbit.UniverseComposition
         COMMAND OrbitUniverseCompositionTests
     )
+
+    add_executable(OrbitSurfaceAuthorityContractTests
+        tests/SurfaceAuthorityContractTests.cpp
+    )
+
+    target_link_libraries(OrbitSurfaceAuthorityContractTests
+        PRIVATE
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitSurfaceAuthorityContractTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSurfaceAuthorityContractTests)
+
+    add_test(
+        NAME Orbit.SurfaceAuthorityContracts
+        COMMAND OrbitSurfaceAuthorityContractTests
+    )
 endif()
