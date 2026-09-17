@@ -1053,22 +1053,46 @@ int main(
                     diagnostic.message));
         }
 
-        const orbit::scene::ObjectId
+        const std::filesystem::path
+            scratchPreviewRoot =
+                orbit::platform::
+                    UserDataDirectory() /
+                "Scratch" /
+                "StudioPreview";
+
+        const bool isScratchPreview =
+            std::filesystem::absolute(
+                project.RootDirectory()).
+                lexically_normal() ==
+            std::filesystem::absolute(
+                scratchPreviewRoot).
+                lexically_normal();
+
+        orbit::scene::ObjectId bodyObject{};
+
+        if (FindFirstBodyObject(objects).has_value() ||
+            isScratchPreview)
+        {
             bodyObject =
                 EnsureInitialBodyObject(
                     objects,
                     commandService);
+        }
 
-        const std::array initialSelection{
-            bodyObject
-        };
+        if (bodyObject.IsValid())
+        {
+            const std::array initialSelection{
+                bodyObject
+            };
 
-        selection.Set(
-            std::span(
-                initialSelection));
+            selection.Set(
+                std::span(
+                    initialSelection));
+        }
 
-        // Ensure the initial visible preview is composed from the same
-        // persisted semantic hierarchy after any legacy scratch bootstrap.
+        // Real user projects may intentionally be blank. Composition remains
+        // valid with zero bodies; only the built-in scratch preview bootstraps
+        // a default semantic system/body.
         static_cast<void>(
             worldSession.RebuildUniverse());
 
@@ -1291,20 +1315,24 @@ int main(
             universe.Bodies();
 
         const auto composedBodyId =
-            universe.BodyForObject(
-                bodyObject);
+            bodyObject.IsValid()
+                ? universe.BodyForObject(
+                      bodyObject)
+                : std::nullopt;
 
-        if (!composedBodyId.has_value() ||
-            bodies.FindBody(*composedBodyId) ==
-                nullptr)
+        if (bodyObject.IsValid() &&
+            (!composedBodyId.has_value() ||
+             bodies.FindBody(*composedBodyId) ==
+                 nullptr))
         {
             throw std::runtime_error(
-                "Studio failed to compose its active semantic body.");
+                "Studio failed to compose its authored semantic body.");
         }
 
         const orbit::universe::BodyId
             bodyId =
-                *composedBodyId;
+                composedBodyId.value_or(
+                    orbit::universe::BodyId{});
 
         orbit::render_view::RenderView
             bodyView(
@@ -1322,28 +1350,49 @@ int main(
                     .height = 240
                 });
 
-        const orbit::f64 initialBodyRadius =
-            BodyRadius(
-                objects,
-                bodyObject);
+        if (const auto* initialBody =
+                bodyId.IsValid()
+                    ? bodies.FindBody(bodyId)
+                    : nullptr;
+            initialBody != nullptr)
+        {
+            const orbit::f64 initialBodyRadius =
+                BodyRadius(
+                    objects,
+                    bodyObject);
 
-        bodyView.Camera().frame =
-            bodies.FindBody(bodyId)->frame;
-        bodyView.Camera().
-            localPositionMeters = {
-                0.0,
-                0.0,
-                -initialBodyRadius * 3.2
-            };
-        bodyView.Camera().nearPlaneMeters =
-            static_cast<orbit::f32>(
-                std::max(
-                    initialBodyRadius *
-                        1.0e-6,
-                    1.0));
-        bodyView.Camera().farPlaneMeters =
-            static_cast<orbit::f32>(
-                initialBodyRadius * 10.0);
+            bodyView.Camera().frame =
+                initialBody->frame;
+            bodyView.Camera().
+                localPositionMeters = {
+                    0.0,
+                    0.0,
+                    -initialBodyRadius * 3.2
+                };
+            bodyView.Camera().nearPlaneMeters =
+                static_cast<orbit::f32>(
+                    std::max(
+                        initialBodyRadius *
+                            1.0e-6,
+                        1.0));
+            bodyView.Camera().farPlaneMeters =
+                static_cast<orbit::f32>(
+                    initialBodyRadius * 10.0);
+        }
+        else
+        {
+            bodyView.Camera().
+                localPositionMeters = {
+                    0.0,
+                    0.0,
+                    -3.2
+                };
+            bodyView.Camera().nearPlaneMeters =
+                0.01F;
+            bodyView.Camera().farPlaneMeters =
+                10.0F;
+        }
+
         bodyView.Camera().forward = {
             0.0F,
             0.0F,
@@ -3425,6 +3474,23 @@ int main(
                                                 Height())
                             });
 
+                    const bool hasAuthoredBody =
+                        bodyObject.IsValid() &&
+                        bodyId.IsValid() &&
+                        bodies.FindBody(bodyId) !=
+                            nullptr;
+
+                    if (!hasAuthoredBody)
+                    {
+                        pathPlacementMode = false;
+                        lastPlacedPathNode.reset();
+                        context.Text(
+                            "No celestial body is authored in this world.");
+                        context.Text(
+                            "Create a celestial system/body from Explorer or automation.");
+                        return;
+                    }
+
                     if (const auto payload =
                             context.AcceptDragPayload(
                                 "ORBIT_ASSET");
@@ -5500,9 +5566,10 @@ int main(
                         ResourceState::
                             Present);
 
-            const orbit::universe::BodyShape
-                previewShape =
-                    bodies.FindBody(bodyId)->shape;
+            const auto* previewBody =
+                bodyId.IsValid()
+                    ? bodies.FindBody(bodyId)
+                    : nullptr;
 
             std::vector<
                 const orbit::path_geometry::
@@ -5538,34 +5605,75 @@ int main(
                         b->edge.low;
                 });
 
-            graph.AddPass(
-                "Studio.BodyPreview",
-                {
+            if (previewBody != nullptr)
+            {
+                const orbit::universe::BodyShape
+                    previewShape =
+                        previewBody->shape;
+
+                graph.AddPass(
+                    "Studio.BodyPreview",
                     {
-                        .texture =
-                            viewTargets.color,
-                        .state =
-                            orbit::rhi::
-                                ResourceState::
-                                    RenderTarget,
-                        .access =
-                            orbit::render_graph::
-                                Access::Write
-                    }
-                },
-                [&](orbit::rhi::CommandList&
-                        commandList,
-                    const orbit::render_graph::
-                        Resources&)
-                {
-                    bodyPreview.Draw(
-                        commandList,
-                        bodyView.Color(),
-                        bodyView.Width(),
-                        bodyView.Height(),
-                        previewShape,
-                        bodyView.Camera());
-                });
+                        {
+                            .texture =
+                                viewTargets.color,
+                            .state =
+                                orbit::rhi::
+                                    ResourceState::
+                                        RenderTarget,
+                            .access =
+                                orbit::render_graph::
+                                    Access::Write
+                        }
+                    },
+                    [&, previewShape](
+                        orbit::rhi::CommandList&
+                            commandList,
+                        const orbit::render_graph::
+                            Resources&)
+                    {
+                        bodyPreview.Draw(
+                            commandList,
+                            bodyView.Color(),
+                            bodyView.Width(),
+                            bodyView.Height(),
+                            previewShape,
+                            bodyView.Camera());
+                    });
+            }
+            else
+            {
+                graph.AddPass(
+                    "Studio.BodyPreview.Blank",
+                    {
+                        {
+                            .texture =
+                                viewTargets.color,
+                            .state =
+                                orbit::rhi::
+                                    ResourceState::
+                                        RenderTarget,
+                            .access =
+                                orbit::render_graph::
+                                    Access::Write
+                        }
+                    },
+                    [&bodyView](
+                        orbit::rhi::CommandList&
+                            commandList,
+                        const orbit::render_graph::
+                            Resources&)
+                    {
+                        commandList.ClearColorTarget(
+                            bodyView.Color(),
+                            {
+                                .red = 0.018F,
+                                .green = 0.021F,
+                                .blue = 0.027F,
+                                .alpha = 1.0F
+                            });
+                    });
+            }
 
             graph.AddPass(
                 "Studio.MaterialPreview",
@@ -5596,7 +5704,9 @@ int main(
                         materialPreviewMaterial);
                 });
 
-            graph.AddPass(
+            if (previewBody != nullptr)
+            {
+                graph.AddPass(
                 "Studio.Paths",
                 {
                     {
@@ -5635,6 +5745,8 @@ int main(
                                 size()),
                         pathDebugVisualization);
                 });
+
+            }
 
             graph.AddPass(
                 "Studio.Canvas",
