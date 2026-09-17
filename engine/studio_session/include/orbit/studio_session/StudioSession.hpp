@@ -21,6 +21,7 @@ struct StudioTickResult
     bool viewportTargetsChanged{false};
     u32 pluginsReloaded{0};
     u64 worldGeneration{0};
+    u64 universeGeneration{0};
 };
 
 // Application-facing composition root for Orbit Studio's authoritative
