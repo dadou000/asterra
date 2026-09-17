@@ -429,8 +429,8 @@ void Register(
 
                     commandService.SetProperty(
                         body,
-                        builtin::kBodyShapeMode,
-                        std::string{"Sphere"});
+                        builtin::kBodyEllipsoidEnabled,
+                        false);
                     commandService.SetProperty(
                         body,
                         builtin::kBodyRadius,
@@ -445,6 +445,10 @@ void Register(
                         5.0e24);
                     commandService.SetProperty(
                         body,
+                        builtin::kBodyParentPositionMeters,
+                        math::Double3{});
+                    commandService.SetProperty(
+                        body,
                         builtin::kBodyRotationPeriodSeconds,
                         86'400.0);
                     commandService.SetProperty(
@@ -453,28 +457,8 @@ void Register(
                         0.0);
                     commandService.SetProperty(
                         body,
-                        builtin::kBodySurfaceEnabled,
-                        true);
-                    commandService.SetProperty(
-                        body,
-                        builtin::kBodyAtmosphereEnabled,
-                        false);
-                    commandService.SetProperty(
-                        body,
-                        builtin::kBodyHydrosphereEnabled,
-                        false);
-                    commandService.SetProperty(
-                        body,
-                        builtin::kBodyTerrainSeed,
-                        i64{0});
-                    commandService.SetProperty(
-                        body,
-                        builtin::kBodyOceanLevelMeters,
+                        builtin::kBodyRotationPhaseDegrees,
                         0.0);
-                    commandService.SetProperty(
-                        body,
-                        builtin::kBodyMaximumElevationMeters,
-                        8'000.0);
 
                     if (ownsTransaction)
                     {
