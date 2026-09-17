@@ -84,6 +84,7 @@ jobs:
           OrbitTerrainReliefTests
           OrbitTerrainImpactsTests
           OrbitTerrainMaterialColumnTests
+          OrbitTerrainGpu
 
       - name: Test V0.0.4 terrain contracts
         run: >-
