@@ -116,5 +116,78 @@ void RegisterSchemas(
             }
         }
     });
+
+    schemas.RegisterType({
+        .id = kSurfaceDecalType,
+        .displayName = "Surface Decal",
+        .category = "Material",
+        .properties = {
+            schema::PropertySchema{
+                .id = kDecalAsset,
+                .name = "Decal Asset",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{}
+            },
+            schema::PropertySchema{
+                .id = kDecalLatitudeRadians,
+                .name = "Latitude",
+                .kind = schema::PropertyKind::Float,
+                .unit = "rad",
+                .defaultValue = 0.0,
+                .range = {
+                    .minimum = -1.5707963267948966,
+                    .maximum = 1.5707963267948966
+                }
+            },
+            schema::PropertySchema{
+                .id = kDecalLongitudeRadians,
+                .name = "Longitude",
+                .kind = schema::PropertyKind::Float,
+                .unit = "rad",
+                .defaultValue = 0.0,
+                .range = {
+                    .minimum = -3.141592653589793,
+                    .maximum = 3.141592653589793
+                }
+            },
+            schema::PropertySchema{
+                .id = kDecalWidthMeters,
+                .name = "Width",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.001
+                }
+            },
+            schema::PropertySchema{
+                .id = kDecalHeightMeters,
+                .name = "Height",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.001
+                }
+            },
+            schema::PropertySchema{
+                .id = kDecalRotationDegrees,
+                .name = "Rotation",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 0.0
+            },
+            schema::PropertySchema{
+                .id = kDecalOpacity,
+                .name = "Opacity",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 1.0
+                }
+            }
+        }
+    });
 }
 } // namespace orbit::world_model
