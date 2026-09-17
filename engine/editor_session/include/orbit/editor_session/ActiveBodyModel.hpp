@@ -18,6 +18,7 @@ struct ActiveBodyTarget
     std::string name;
     f64 referenceRadiusMeters{0.0};
     u64 sessionGeneration{0};
+    u64 universeGeneration{0};
     u64 sourceRevision{0};
 };
 
