@@ -3,6 +3,7 @@ add_library(OrbitEditorModel STATIC
     src/CommandSurfaces.cpp
     src/AuthoringCommands.cpp
     src/MaterialAuthoringCommands.cpp
+    src/TerrainAuthoringCommands.cpp
     src/BuiltinSchemas.cpp
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
@@ -31,3 +32,23 @@ target_link_libraries(OrbitEditorModel
 
 target_compile_features(OrbitEditorModel PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitEditorModel)
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainAuthoringCommandTests
+        tests/TerrainAuthoringCommandTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainAuthoringCommandTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitTerrainAuthoringCommandTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainAuthoringCommandTests)
+
+    add_test(
+        NAME Orbit.TerrainAuthoringCommand
+        COMMAND OrbitTerrainAuthoringCommandTests
+    )
+endif()
