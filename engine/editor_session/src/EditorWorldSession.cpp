@@ -34,6 +34,12 @@ struct EditorWorldSession::State
                 commands,
                 objects,
                 selection);
+        editor_model::authoring_commands::
+            RegisterTerrainCommands(
+                commandRegistry,
+                commands,
+                objects,
+                selection);
 
         explorer =
             std::make_unique<editor_model::ExplorerModel>(
