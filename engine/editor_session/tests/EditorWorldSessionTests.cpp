@@ -139,7 +139,7 @@ int main()
             session.ActiveWorld().relativePath ==
             secondary);
         Check(session.Objects().Roots().empty());
-        Check(session.Selection().Empty());
+        Check(session.Selection().Ordered().empty());
         Check(session.UniverseStats().systems == 0U);
         Check(session.UniverseStats().bodies == 0U);
 
