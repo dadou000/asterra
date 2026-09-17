@@ -916,12 +916,14 @@ DecodeAssetId(
 
 void SynchronizePluginPanels(
     orbit::editor_ui::EditorUi& ui,
-    orbit::plugins::PluginManager& plugins,
+    const std::function<
+        orbit::plugins::PluginManager&()>&
+        plugins,
     std::vector<orbit::editor_ui::PanelId>&
         registered)
 {
     const auto catalog =
-        plugins.PanelCatalog();
+        plugins().PanelCatalog();
 
     for (auto item = registered.begin();
          item != registered.end();)
@@ -959,7 +961,7 @@ void SynchronizePluginPanels(
                     orbit::editor_ui::PanelContext&
                         context)
                 {
-                    if (!plugins.DrawPanel(
+                    if (!plugins().DrawPanel(
                             id,
                             context))
                     {
@@ -1257,26 +1259,70 @@ int main(
 
         auto& worldSession =
             studioSession.World();
-        auto& world =
-            worldSession.World();
-        auto& schemas =
-            worldSession.Schemas();
-        auto& objects =
-            worldSession.Objects();
-        auto& selection =
-            worldSession.Selection();
-        auto& commandService =
-            worldSession.Commands();
-        auto& authoringCommands =
-            worldSession.CommandRegistry();
-        auto& commandSurfaces =
-            worldSession.CommandSurfaces();
-        auto& explorer =
-            worldSession.Explorer();
-        auto& inspector =
-            worldSession.Inspector();
-        auto& plugins =
-            worldSession.Plugins();
+
+        const auto world =
+            [&worldSession]()
+                -> orbit::documents::WorldDatabase&
+            {
+                return worldSession.World();
+            };
+        const auto schemas =
+            [&worldSession]()
+                -> orbit::schema::SchemaRegistry&
+            {
+                return worldSession.Schemas();
+            };
+        const auto objects =
+            [&worldSession]()
+                -> orbit::scene::ObjectStore&
+            {
+                return worldSession.Objects();
+            };
+        const auto selection =
+            [&worldSession]()
+                -> orbit::selection::SelectionService&
+            {
+                return worldSession.Selection();
+            };
+        const auto commandService =
+            [&worldSession]()
+                -> orbit::commands::CommandService&
+            {
+                return worldSession.Commands();
+            };
+        const auto authoringCommands =
+            [&worldSession]()
+                -> orbit::commands::CommandRegistry&
+            {
+                return worldSession.CommandRegistry();
+            };
+        const auto commandSurfaces =
+            [&worldSession]()
+                -> orbit::editor_model::
+                    CommandSurfaceRegistry&
+            {
+                return worldSession.CommandSurfaces();
+            };
+        const auto explorer =
+            [&worldSession]()
+                -> orbit::editor_model::ExplorerModel&
+            {
+                return worldSession.Explorer();
+            };
+        const auto inspector =
+            [&worldSession]()
+                -> orbit::editor_model::InspectorModel&
+            {
+                return worldSession.Inspector();
+            };
+        const std::function<
+            orbit::plugins::PluginManager&()>
+            plugins =
+                [&worldSession]()
+                    -> orbit::plugins::PluginManager&
+                {
+                    return worldSession.Plugins();
+                };
 
         orbit::content::ContentService
             content(
@@ -1331,7 +1377,7 @@ int main(
                 bodyObject
             };
 
-            selection.Set(
+            selection().Set(
                 std::span(
                     initialSelection));
         }
@@ -1360,7 +1406,7 @@ int main(
                     message);
             });
 
-        commandSurfaces.Set(
+        commandSurfaces().Set(
             "viewport",
             orbit::editor_model::
                 CommandSurfaceKind::Toolbar,
@@ -1383,7 +1429,7 @@ int main(
                         kConnectPathRouted
             });
 
-        commandSurfaces.Set(
+        commandSurfaces().Set(
             "viewport",
             orbit::editor_model::
                 CommandSurfaceKind::Radial,
@@ -1409,7 +1455,7 @@ int main(
                     authoring_commands::kRedo
             });
 
-        commandSurfaces.Set(
+        commandSurfaces().Set(
             "explorer",
             orbit::editor_model::
                 CommandSurfaceKind::
@@ -1470,7 +1516,7 @@ int main(
                     result;
 
                 for (const auto& command :
-                     commandSurfaces.Present(
+                     commandSurfaces().Present(
                          surface,
                          kind,
                          authoringCommands))
@@ -1492,7 +1538,7 @@ int main(
                             {
                                 try
                                 {
-                                    authoringCommands.
+                                    authoringCommands().
                                         Invoke(id);
                                 }
                                 catch (
@@ -1981,7 +2027,7 @@ int main(
                     // Studio builds always package the currently authored
                     // semantic state, never a stale pre-edit checkpoint.
                     project.Save();
-                    world.Checkpoint();
+                    world().Checkpoint();
 
                     const auto result =
                         buildService.Cook({
@@ -2056,7 +2102,7 @@ int main(
                     PackageResult
             {
                 project.Save();
-                world.Checkpoint();
+                world().Checkpoint();
 
                 const auto result =
                     buildService.Package(
@@ -2288,7 +2334,7 @@ int main(
                     try
                     {
                         project.Save();
-                        world.Checkpoint();
+                        world().Checkpoint();
 
                         const std::string
                             requestedProfile =
@@ -2657,7 +2703,7 @@ int main(
                 knownRoutedEdges =
                     std::move(liveEdges);
                 routedObjectRevision =
-                    objects.Revision();
+                    objects().Revision();
                 routedContentRevision =
                     content.Revision();
             };
@@ -2665,7 +2711,7 @@ int main(
         const auto pollRoutedPaths =
             [&]
             {
-                if (objects.Revision() !=
+                if (objects().Revision() !=
                         routedObjectRevision ||
                     content.Revision() !=
                         routedContentRevision)
@@ -2802,7 +2848,7 @@ int main(
             [&]
             {
                 bool requiresRefresh =
-                    objects.Revision() !=
+                    objects().Revision() !=
                         derivedObjectRevision ||
                     content.Revision() !=
                         derivedContentRevision;
@@ -3113,7 +3159,7 @@ int main(
                 }
 
                 derivedObjectRevision =
-                    objects.Revision();
+                    objects().Revision();
                 derivedContentRevision =
                     content.Revision();
             };
@@ -3538,9 +3584,9 @@ int main(
         requestRoutedPaths();
 
         orbit::u64 publishedObjectRevision =
-            objects.Revision();
+            objects().Revision();
         orbit::u64 publishedSelectionRevision =
-            selection.Revision();
+            selection().Revision();
         orbit::u64 publishedContentRevision =
             content.Revision();
         orbit::u32 publishedViewportWidth =
@@ -3551,11 +3597,11 @@ int main(
         const auto publishAutomationChanges =
             [&]
             {
-                if (objects.Revision() !=
+                if (objects().Revision() !=
                     publishedObjectRevision)
                 {
                     publishedObjectRevision =
-                        objects.Revision();
+                        objects().Revision();
 
                     rpcHost.PublishEvent(
                         "object.changed",
@@ -3569,25 +3615,25 @@ int main(
                             }));
                 }
 
-                if (selection.Revision() !=
+                if (selection().Revision() !=
                     publishedSelectionRevision)
                 {
                     publishedSelectionRevision =
-                        selection.Revision();
+                        selection().Revision();
 
                     orbit::rpc::Value::Array ids;
                     ids.reserve(
-                        selection.Ordered().size());
+                        selection().Ordered().size());
 
                     for (const auto id :
-                         selection.Ordered())
+                         selection().Ordered())
                     {
                         ids.emplace_back(
                             id.ToString());
                     }
 
                     rpcHost.PublishEvent(
-                        "selection.changed",
+                        "selection().changed",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
                                 {
@@ -3768,7 +3814,7 @@ int main(
                         pathPlacementMode = false;
                         lastPlacedPathNode.reset();
                         context.Text(
-                            "No celestial body is authored in this world.");
+                            "No celestial body is authored in this world().");
                         context.Text(
                             "Create a celestial system/body from Explorer or automation.");
                         return;
@@ -3800,13 +3846,13 @@ int main(
                                     bodyObject
                                 };
 
-                                selection.Set(
+                                selection().Set(
                                     std::span(
                                         selected));
 
                                 try
                                 {
-                                    authoringCommands.
+                                    authoringCommands().
                                         Invoke(
                                             orbit::editor_model::
                                                 authoring_commands::
@@ -3877,9 +3923,9 @@ int main(
                                     const std::array selected{
                                         bodyObject
                                     };
-                                    selection.Set(std::span(selected));
+                                    selection().Set(std::span(selected));
 
-                                    authoringCommands.Invoke(
+                                    authoringCommands().Invoke(
                                         orbit::editor_model::authoring_commands::kAttachDecal,
                                         {
                                             {"decal", asset->sourcePath.generic_string()},
@@ -3961,12 +4007,12 @@ int main(
                                 orbit::paths::NetworkId>
                                 targetNetwork;
 
-                            if (selection.Ordered().
+                            if (selection().Ordered().
                                     size() == 1)
                             {
                                 const auto selectedObject =
-                                    objects.Find(
-                                        selection.Ordered().
+                                    objects().Find(
+                                        selection().Ordered().
                                             front());
 
                                 if (selectedObject.
@@ -4026,7 +4072,7 @@ int main(
                                     activePathNetwork;
                             }
 
-                            commandService.
+                            commandService().
                                 BeginTransaction(
                                     "Place Path Node");
 
@@ -4058,7 +4104,7 @@ int main(
                                 orbit::u32 nodeCount = 0;
 
                                 for (const auto& child :
-                                     objects.Children(
+                                     objects().Children(
                                          networkObject))
                                 {
                                     if (child.type ==
@@ -4090,7 +4136,7 @@ int main(
                                                     }
                                                 });
 
-                                commandService.
+                                commandService().
                                     CommitTransaction();
 
                                 activePathNetwork =
@@ -4115,7 +4161,7 @@ int main(
                                                 node.id
                                             };
 
-                                        selection.Set(
+                                        selection().Set(
                                             std::span(
                                                 selected));
                                     }
@@ -4126,7 +4172,7 @@ int main(
                                                 node.id
                                             };
 
-                                        selection.Set(
+                                        selection().Set(
                                             std::span(
                                                 selected));
                                     }
@@ -4138,7 +4184,7 @@ int main(
                                             node.id
                                         };
 
-                                    selection.Set(
+                                    selection().Set(
                                         std::span(
                                             selected));
                                 }
@@ -4148,10 +4194,10 @@ int main(
                             }
                             catch (...)
                             {
-                                if (commandService.
+                                if (commandService().
                                         HasActiveTransaction())
                                 {
-                                    commandService.
+                                    commandService().
                                         RollbackTransaction();
                                 }
 
@@ -4173,7 +4219,7 @@ int main(
                             bodyObject
                         };
 
-                        selection.Set(
+                        selection().Set(
                             std::span(
                                 selected));
                     }
@@ -4191,7 +4237,7 @@ int main(
                         interaction.rightClicked);
 
                     const auto body =
-                        objects.Find(
+                        objects().Find(
                             bodyObject);
 
                     if (body.has_value())
@@ -4200,7 +4246,7 @@ int main(
                             std::format(
                                 "{}{}",
                                 body->name,
-                                selection.Contains(
+                                selection().Contains(
                                     bodyObject)
                                     ? "  [selected]"
                                     : ""));
@@ -4254,7 +4300,7 @@ int main(
                         {
                             try
                             {
-                                explorer.Reparent(
+                                explorer().Reparent(
                                     *id,
                                     std::nullopt);
                             }
@@ -4271,7 +4317,7 @@ int main(
                     if (!explorerSearch.empty())
                     {
                         for (const auto& object :
-                             explorer.Search(
+                             explorer().Search(
                                  explorerSearch))
                         {
                             const std::string label =
@@ -4281,10 +4327,10 @@ int main(
 
                             if (context.Selectable(
                                     label,
-                                    selection.Contains(
+                                    selection().Contains(
                                         object.id)))
                             {
-                                explorer.Select(
+                                explorer().Select(
                                     object.id,
                                     context.
                                         ControlDown());
@@ -4311,23 +4357,23 @@ int main(
                                 const auto item =
                                     context.TreeItem(
                                         label,
-                                        selection.
+                                        selection().
                                             Contains(
                                                 object.id));
 
                                 if (item.clicked)
                                 {
-                                    explorer.Select(
+                                    explorer().Select(
                                         object.id,
                                         context.
                                             ControlDown());
                                 }
 
                                 if (item.rightClicked &&
-                                    !selection.Contains(
+                                    !selection().Contains(
                                         object.id))
                                 {
-                                    explorer.Select(
+                                    explorer().Select(
                                         object.id,
                                         false);
                                 }
@@ -4360,7 +4406,7 @@ int main(
                                     {
                                         try
                                         {
-                                            explorer.
+                                            explorer().
                                                 Reparent(
                                                     *id,
                                                     object.id);
@@ -4401,7 +4447,7 @@ int main(
                                 {
                                     for (const auto&
                                              child :
-                                         explorer.Children(
+                                         explorer().Children(
                                              object.id))
                                     {
                                         drawObject(
@@ -4413,7 +4459,7 @@ int main(
                             };
 
                         for (const auto& root :
-                             explorer.Roots())
+                             explorer().Roots())
                         {
                             drawObject(root);
                         }
@@ -4422,15 +4468,15 @@ int main(
                     context.Separator();
 
                     const auto& selected =
-                        selection.Ordered();
+                        selection().Ordered();
 
                     if (selected.size() == 1)
                     {
                         if (renameSelectionRevision !=
-                            selection.Revision())
+                            selection().Revision())
                         {
                             const auto object =
-                                objects.Find(
+                                objects().Find(
                                     selected.front());
 
                             renameBuffer =
@@ -4439,7 +4485,7 @@ int main(
                                     : std::string{};
 
                             renameSelectionRevision =
-                                selection.Revision();
+                                selection().Revision();
                         }
 
                         static_cast<void>(
@@ -4452,7 +4498,7 @@ int main(
                         {
                             try
                             {
-                                explorer.Rename(
+                                explorer().Rename(
                                     selected.front(),
                                     renameBuffer);
                             }
@@ -4489,7 +4535,7 @@ int main(
                         PanelContext& context)
                 {
                     const auto selected =
-                        inspector.SelectedObjects();
+                        inspector().SelectedObjects();
 
                     if (selected.empty())
                     {
@@ -4522,7 +4568,7 @@ int main(
                     context.Separator();
 
                     for (auto property :
-                         inspector.CommonProperties())
+                         inspector().CommonProperties())
                     {
                         context.Text(
                             std::format(
@@ -4676,7 +4722,7 @@ int main(
                         {
                             try
                             {
-                                inspector.
+                                inspector().
                                     SetForSelection(
                                         property.schema.id,
                                         property.value);
@@ -4706,13 +4752,13 @@ int main(
                         PanelContext& context)
                 {
                     const auto statuses =
-                        plugins.Statuses();
+                        plugins().Statuses();
 
                     if (context.Button(
                             "Validate"))
                     {
                         pluginValidationIssues =
-                            plugins.Validate();
+                            plugins().Validate();
                     }
 
                     context.SameLine();
@@ -4781,7 +4827,7 @@ int main(
                         if (context.Button(
                                 reloadLabel))
                         {
-                            if (!plugins.Reload(
+                            if (!plugins().Reload(
                                     status.id))
                             {
                                 orbit::log::Warning(
@@ -5585,7 +5631,7 @@ int main(
                  &world]
                 {
                     project.Save();
-                    world.Checkpoint();
+                    world().Checkpoint();
 
                     orbit::log::Info(
                         "Project and world checkpoint saved.");
@@ -5631,7 +5677,7 @@ int main(
             .invoke =
                 [&authoringCommands]
                 {
-                    authoringCommands.Invoke(
+                    authoringCommands().Invoke(
                         orbit::editor_model::
                             authoring_commands::
                                 kUndo);
@@ -5639,7 +5685,7 @@ int main(
             .enabled =
                 [&authoringCommands]
                 {
-                    return authoringCommands.
+                    return authoringCommands().
                         Enablement(
                             orbit::editor_model::
                                 authoring_commands::
@@ -5654,7 +5700,7 @@ int main(
             .invoke =
                 [&authoringCommands]
                 {
-                    authoringCommands.Invoke(
+                    authoringCommands().Invoke(
                         orbit::editor_model::
                             authoring_commands::
                                 kRedo);
@@ -5662,7 +5708,7 @@ int main(
             .enabled =
                 [&authoringCommands]
                 {
-                    return authoringCommands.
+                    return authoringCommands().
                         Enablement(
                             orbit::editor_model::
                                 authoring_commands::
@@ -5676,7 +5722,7 @@ int main(
             plugins,
             pluginPanelIds);
         pluginPanelRevision =
-            plugins.PanelCatalogRevision();
+            plugins().PanelCatalogRevision();
 
         orbit::log::Info(
             std::format(
@@ -5829,7 +5875,7 @@ int main(
                 0.5)
             {
                 const orbit::u32 reloaded =
-                    plugins.PollHotReload();
+                    plugins().PollHotReload();
 
                 if (reloaded != 0)
                 {
@@ -5857,7 +5903,7 @@ int main(
                     0.0;
             }
 
-            if (plugins.PanelCatalogRevision() !=
+            if (plugins().PanelCatalogRevision() !=
                 pluginPanelRevision)
             {
                 SynchronizePluginPanels(
@@ -5865,7 +5911,7 @@ int main(
                     plugins,
                     pluginPanelIds);
                 pluginPanelRevision =
-                    plugins.
+                    plugins().
                         PanelCatalogRevision();
             }
 
@@ -6264,7 +6310,7 @@ int main(
                 submittedFence);
         }
 
-        world.Checkpoint();
+        world().Checkpoint();
         return 0;
     }
     catch (const std::exception& exception)
