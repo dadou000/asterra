@@ -1,0 +1,67 @@
+name: Orbit Studio Smoke
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-studio-smoke.yml'
+      - 'apps/editor/**'
+      - 'engine/editor_rpc/**'
+      - 'engine/editor_session/**'
+      - 'engine/studio_session/**'
+      - 'engine/studio_ui/**'
+      - 'engine/world_model/**'
+      - 'engine/render_view/**'
+      - 'engine/render_graph/**'
+  workflow_dispatch:
+
+concurrency:
+  group: orbit-studio-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  studio-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake -S . -B build-studio-smoke -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build Studio seam
+        run: >
+          cmake --build build-studio-smoke --config Release --target
+          OrbitEditorSessionRpcHostTests
+          OrbitStudioSessionTests
+          OrbitBezierHandleEditorTests
+          OrbitStudio
+          OrbitPlayer
+
+      - name: Test Studio seam
+        shell: pwsh
+        run: |
+          $tests = @(
+            "build-studio-smoke/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
+            "build-studio-smoke/engine/studio_session/Release/OrbitStudioSessionTests.exe",
+            "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe"
+          )
+          foreach ($test in $tests) {
+            & $test
+            if ($LASTEXITCODE -ne 0) {
+              throw "$test failed with exit code $LASTEXITCODE"
+            }
+          }
+          if (-not (Test-Path "build-studio-smoke/apps/editor/Release/OrbitStudio.exe")) {
+            throw "OrbitStudio.exe was not produced."
+          }
