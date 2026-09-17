@@ -87,8 +87,9 @@ void StudioRenderViewSet::Create(
     desc.width = std::max(desc.width, 1U);
     desc.height = std::max(desc.height, 1U);
 
+    const std::string targetId = id;
     session_->Viewports().Register(
-        id,
+        targetId,
         mode,
         followActiveBody);
 
@@ -105,7 +106,8 @@ void StudioRenderViewSet::Create(
     catch (...)
     {
         static_cast<void>(
-            session_->Viewports().Unregister(id));
+            session_->Viewports().Unregister(
+                targetId));
         throw;
     }
 }
