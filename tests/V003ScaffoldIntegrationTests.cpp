@@ -529,10 +529,23 @@ int main(const int argc, char** argv)
             selection);
         static_cast<void>(editorRpc);
 
+        const orbit::u64 rpcRevisionBefore =
+            objects.Revision();
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "mcp-proof-begin",
+                "transaction.begin",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"label", "MCP proof transaction"}
+                    })));
+
         const auto rpcCreated =
             Call(
                 dispatcher,
-                "mcp-proof",
+                "mcp-proof-create",
                 "object.create",
                 orbit::rpc::Value(
                     orbit::rpc::Value::Object{
@@ -544,7 +557,52 @@ int main(const int argc, char** argv)
                         {"name", "MCP Proof Body"},
                         {"parent", systemObject.ToString()}
                     }));
-        Check(rpcCreated.Find("id") != nullptr);
+        const auto* rpcCreatedId =
+            rpcCreated.Find("id");
+        Check(rpcCreatedId != nullptr);
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "mcp-proof-property",
+                "property.set",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "object",
+                            rpcCreatedId->AsString()
+                        },
+                        {
+                            "property",
+                            orbit::editor_model::builtin::
+                                kBodyRadius.ToString()
+                        },
+                        {"value", 2'500'000.0}
+                    })));
+
+        Check(objects.Revision() == rpcRevisionBefore);
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "mcp-proof-commit",
+                "transaction.commit"));
+
+        Check(
+            objects.Revision() ==
+            rpcRevisionBefore + 1U);
+
+        const auto rpcObjectId =
+            orbit::scene::ObjectId::Parse(
+                rpcCreatedId->AsString());
+        Check(rpcObjectId.has_value());
+        Check(
+            std::get<orbit::f64>(
+                *objects.GetProperty(
+                    *rpcObjectId,
+                    orbit::editor_model::builtin::
+                        kBodyRadius)) ==
+            2'500'000.0);
 
         Stage("platform-configuration");
         orbit::platform_services::PlatformConfiguration
