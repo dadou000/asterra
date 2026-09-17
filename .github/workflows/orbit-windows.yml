@@ -36,8 +36,8 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
-      - name: Build terrain and path regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitV003ScaffoldIntegrationTests
+      - name: Build V0.0.3 regression targets
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitV003ScaffoldIntegrationTests
 
       - name: Test - Terrain view
         shell: pwsh
@@ -48,7 +48,6 @@ jobs:
           }
 
       - name: Test - Terrain morph refresh
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/tests/Release/OrbitTerrainMorphRefreshTests.exe"
@@ -57,7 +56,6 @@ jobs:
           }
 
       - name: Test - Path geometry
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/engine/path_geometry/Release/OrbitPathGeometryTests.exe"
@@ -66,7 +64,6 @@ jobs:
           }
 
       - name: Test - Path source
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/engine/path_geometry/Release/OrbitPathSourceTests.exe"
@@ -74,8 +71,39 @@ jobs:
             throw "OrbitPathSourceTests failed with exit code $LASTEXITCODE"
           }
 
+      - name: Test - Documents and multi-world catalog
+        shell: pwsh
+        run: |
+          & "build/tests/Release/OrbitDocumentsTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitDocumentsTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Universe composition
+        shell: pwsh
+        run: |
+          & "build/engine/world_model/Release/OrbitUniverseCompositionTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitUniverseCompositionTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Project/world/body RPC
+        shell: pwsh
+        run: |
+          & "build/engine/editor_rpc/Release/OrbitProjectWorldRpcTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitProjectWorldRpcTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Editor world session
+        shell: pwsh
+        run: |
+          & "build/engine/editor_session/Release/OrbitEditorWorldSessionTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitEditorWorldSessionTests failed with exit code $LASTEXITCODE"
+          }
+
       - name: Test - Build service
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/engine/build/Release/OrbitBuildServiceTests.exe"
@@ -84,7 +112,6 @@ jobs:
           }
 
       - name: Test - Runtime project
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/engine/runtime_project/Release/OrbitRuntimeProjectTests.exe"
@@ -93,7 +120,6 @@ jobs:
           }
 
       - name: Test - Build CLI
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/apps/build/Release/OrbitBuildCliTests.exe" "build/apps/build/Release/OrbitBuild.exe"
@@ -102,7 +128,6 @@ jobs:
           }
 
       - name: Test - Platform services
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/engine/platform_services/Release/OrbitPlatformServicesTests.exe"
@@ -111,7 +136,6 @@ jobs:
           }
 
       - name: Test - Steam provider
-        if: ${{ always() }}
         shell: pwsh
         run: |
           & "build/engine/platform_services/steam/Release/OrbitPlatformServicesSteamTests.exe"
@@ -120,81 +144,12 @@ jobs:
           }
 
       - name: Test - V0.0.3 scaffold integration
-        id: v003
-        if: ${{ always() }}
         shell: pwsh
         run: |
-          $output = @(& "build/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build/apps/player/Release/OrbitPlayer.exe" 2>&1)
-          $exitCode = $LASTEXITCODE
-          $output | ForEach-Object { Write-Host $_ }
-
-          if ($exitCode -eq 0) {
-            "failed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            "stage=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            exit 0
+          & "build/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build/apps/player/Release/OrbitPlayer.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitV003ScaffoldIntegrationTests failed with exit code $LASTEXITCODE"
           }
-
-          $text = $output -join "`n"
-          $line = 0
-          if ($text -match 'V0\.0\.3 integration proof failed at .*:(\d+)') {
-            $line = [int]$Matches[1]
-          }
-
-          if ($line -gt 0 -and $line -le 240) {
-            $stage = "bootstrap-content"
-          } elseif ($line -le 340 -and $line -gt 0) {
-            $stage = "authoring-material"
-          } elseif ($line -le 480 -and $line -gt 0) {
-            $stage = "universe-path-plugin"
-          } elseif ($line -le 540 -and $line -gt 0) {
-            $stage = "rpc-platform"
-          } elseif ($line -le 610 -and $line -gt 0) {
-            $stage = "build-package"
-          } elseif ($line -gt 610) {
-            $stage = "persistence"
-          } else {
-            $stage = "unknown"
-          }
-
-          "failed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "stage=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "line=$line" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "M23 integration failure classified as '$stage' at source line $line (exit $exitCode)."
-
-      - name: M23 failure - bootstrap/content
-        if: ${{ always() && steps.v003.outputs.stage == 'bootstrap-content' }}
-        shell: pwsh
-        run: throw "M23 integration failed in bootstrap/content at source line ${{ steps.v003.outputs.line }}"
-
-      - name: M23 failure - authoring/material
-        if: ${{ always() && steps.v003.outputs.stage == 'authoring-material' }}
-        shell: pwsh
-        run: throw "M23 integration failed in authoring/material at source line ${{ steps.v003.outputs.line }}"
-
-      - name: M23 failure - universe/path/plugin
-        if: ${{ always() && steps.v003.outputs.stage == 'universe-path-plugin' }}
-        shell: pwsh
-        run: throw "M23 integration failed in universe/path/plugin at source line ${{ steps.v003.outputs.line }}"
-
-      - name: M23 failure - RPC/platform
-        if: ${{ always() && steps.v003.outputs.stage == 'rpc-platform' }}
-        shell: pwsh
-        run: throw "M23 integration failed in RPC/platform at source line ${{ steps.v003.outputs.line }}"
-
-      - name: M23 failure - build/package
-        if: ${{ always() && steps.v003.outputs.stage == 'build-package' }}
-        shell: pwsh
-        run: throw "M23 integration failed in build/package at source line ${{ steps.v003.outputs.line }}"
-
-      - name: M23 failure - persistence
-        if: ${{ always() && steps.v003.outputs.stage == 'persistence' }}
-        shell: pwsh
-        run: throw "M23 integration failed in persistence at source line ${{ steps.v003.outputs.line }}"
-
-      - name: M23 failure - unclassified
-        if: ${{ always() && steps.v003.outputs.stage == 'unknown' }}
-        shell: pwsh
-        run: throw "M23 integration failed but no source line was captured"
 
       - name: Build
         run: cmake --build build --config Release
