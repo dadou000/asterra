@@ -3,8 +3,8 @@
 #include <orbit/core/StrongId.hpp>
 #include <orbit/core/Types.hpp>
 
-#include <array>
 #include <cstddef>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -131,7 +131,8 @@ struct GeologicalErosionResponse
 
 // Stable IDs for the initial authored reference records. These are persisted
 // identity values, not array indices; append new reference materials rather
-// than renumbering/reusing them.
+// than renumbering/reusing them. Their physical coefficient values live in
+// .orbitgeologicalmaterial authority files, not in C++ or shader constants.
 namespace reference_rock
 {
 inline constexpr RockTypeId Basalt{
@@ -156,12 +157,6 @@ inline constexpr RockTypeId VolcanicAsh{
 };
 } // namespace reference_rock
 
-[[nodiscard]] std::array<GeologicalMaterial, 5>
-EarthReferenceGeologicalMaterials();
-
-void RegisterEarthReferenceGeologicalMaterials(
-    GeologicalMaterialLibrary& library);
-
 // Project-authority codec for .orbitgeologicalmaterial files. This is the
 // physical-data boundary that content/editor indexing can discover without
 // moving geological semantics into the renderer material system.
@@ -170,4 +165,13 @@ void RegisterEarthReferenceGeologicalMaterials(
 
 [[nodiscard]] std::string SerializeGeologicalMaterialToml(
     const GeologicalMaterial& material);
+
+[[nodiscard]] GeologicalMaterial LoadGeologicalMaterialFile(
+    const std::filesystem::path& path);
+
+// Loads all .orbitgeologicalmaterial authority files in deterministic path
+// order. Duplicate stable IDs or case-insensitive names are rejected instead
+// of silently replacing authored records.
+[[nodiscard]] GeologicalMaterialLibrary LoadGeologicalMaterialDirectory(
+    const std::filesystem::path& directory);
 } // namespace orbit::terrain_geology
