@@ -15,7 +15,7 @@ namespace orbit::studio_session
 class StudioWorkspace
 {
 public:
-    StudioWorkspace() = default;
+    StudioWorkspace();
     ~StudioWorkspace();
 
     StudioWorkspace(const StudioWorkspace&) = delete;
