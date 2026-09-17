@@ -41,7 +41,13 @@ struct HydrologyCell
 struct HydrologyGrid
 {
     HydrologyGridConfig config{};
+
+    // Canonical planet-space origin of this regional grid. surfaceFrame keeps
+    // the chosen tangent orientation, but physical identity comes from this
+    // position rather than from an arbitrary local 2D plane.
+    terrain::PlanetSurfacePosition origin{};
     world::SurfaceFrame surfaceFrame{};
+
     f64 spacingMeters{0.0};
     std::vector<HydrologyCell> cells;
 
