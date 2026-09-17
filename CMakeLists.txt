@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Orbit
-    VERSION 0.0.3
+    VERSION 0.0.4
     DESCRIPTION "Orbit - custom engine for Asterra"
     LANGUAGES CXX
 )
@@ -30,4 +30,5 @@ add_subdirectory(apps/launcher)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+    add_subdirectory(tests/contracts)
 endif()
