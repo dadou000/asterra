@@ -8,6 +8,7 @@
 #include <fstream>
 #include <limits>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
