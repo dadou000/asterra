@@ -55,6 +55,27 @@ int main()
         .processes = 23
     };
 
+    static_assert(
+        RevisionForDomain(
+            revisions,
+            TerrainRevisionDomain::Geology) == 7 &&
+        RevisionForDomain(
+            revisions,
+            TerrainRevisionDomain::Climate) == 11 &&
+        RevisionForDomain(
+            revisions,
+            TerrainRevisionDomain::Authoring) == 13 &&
+        RevisionForDomain(
+            revisions,
+            TerrainRevisionDomain::Biome) == 17 &&
+        RevisionForDomain(
+            revisions,
+            TerrainRevisionDomain::Water) == 19 &&
+        RevisionForDomain(
+            revisions,
+            TerrainRevisionDomain::Processes) == 23,
+        "Procedural graph source domains must map to the correct revisions.");
+
     constexpr PhysicalTerrainPageKey key{
         .address = address,
         .resolution = 129,
