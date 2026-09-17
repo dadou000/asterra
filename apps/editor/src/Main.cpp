@@ -2137,12 +2137,10 @@ int main(
                 }
         });
 
-        orbit::jobs::JobSystem routeJobs;
-        orbit::path_routing::RoutePlanner
-            routePlanner(
-                routeJobs,
-                frames,
-                bodies);
+        // Route planning is owned by StudioSession and rebound whenever the
+        // composed universe generation changes.
+        auto& routePlanner =
+            studioSession.PathRouting().Planner();
 
         std::unordered_set<
             orbit::scene::ObjectId>
@@ -2174,10 +2172,8 @@ int main(
         const auto requestRoutedPaths =
             [&]
             {
-                orbit::paths::PathNetworkService
-                    pathService(
-                        objects,
-                        commandService);
+                auto& pathService =
+                    studioSession.PathNetwork().Service();
 
                 const auto routedEdges =
                     FindRoutedPathEdges(
@@ -2513,10 +2509,8 @@ int main(
                     return;
                 }
 
-                orbit::paths::PathNetworkService
-                    pathService(
-                        objects,
-                        commandService);
+                auto& pathService =
+                    studioSession.PathNetwork().Service();
 
                 const auto edgeIds =
                     FindPathEdges(
@@ -3611,11 +3605,8 @@ int main(
                                     "Path placement could not resolve the body surface coordinate.");
                             }
 
-                            orbit::paths::
-                                PathNetworkService
-                                    pathService(
-                                        objects,
-                                        commandService);
+                            auto& pathService =
+                                studioSession.PathNetwork().Service();
 
                             std::optional<
                                 orbit::paths::NetworkId>
