@@ -32,6 +32,7 @@ target_link_libraries(OrbitStudio
         Orbit::RhiVulkan
         Orbit::Runtime
         Orbit::ShaderDxc
+        Orbit::StudioSession
         Orbit::Universe
 )
 
