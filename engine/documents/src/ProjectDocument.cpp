@@ -152,7 +152,7 @@ ProjectDocument ProjectDocument::Create(
     manifest.displayName =
         std::string(displayName);
     manifest.engineCompatibilityVersion =
-        std::string(Version);
+        std::string(orbit::build::Version);
     manifest.buildProfiles.push_back({
         .name = "Development Windows",
         .configuration = "Development",
