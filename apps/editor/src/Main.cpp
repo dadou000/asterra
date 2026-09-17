@@ -1362,7 +1362,7 @@ int main(
 
         orbit::scene::ObjectId bodyObject{};
 
-        if (FindFirstBodyObject(objects).has_value() ||
+        if (FindFirstBodyObject(objects()).has_value() ||
             isScratchPreview)
         {
             bodyObject =
