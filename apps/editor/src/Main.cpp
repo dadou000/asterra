@@ -450,15 +450,43 @@ EnsureInitialBodyObject(
     orbit::scene::ObjectStore& objects,
     orbit::commands::CommandService& commands)
 {
-    if (const auto existing =
-            FindFirstBodyObject(objects);
-        existing.has_value())
+    const auto existingBody =
+        FindFirstBodyObject(objects);
+
+    // Legacy preview projects created the first body directly under World.
+    // M20A authority requires World -> Celestial System -> Celestial Body.
+    // Normalize that hierarchy through ordinary undoable semantic commands
+    // instead of teaching UniverseComposition an editor-only exception.
+    if (existingBody.has_value())
     {
-        return *existing;
+        const auto bodyRecord =
+            objects.Find(*existingBody);
+
+        if (!bodyRecord.has_value())
+        {
+            throw std::runtime_error(
+                "Studio initial body disappeared during hierarchy inspection.");
+        }
+
+        if (bodyRecord->parent.has_value())
+        {
+            const auto parent =
+                objects.Find(*bodyRecord->parent);
+
+            if (parent.has_value() &&
+                parent->type ==
+                    orbit::editor_model::builtin::
+                        kCelestialSystemType)
+            {
+                return *existingBody;
+            }
+        }
     }
 
     commands.BeginTransaction(
-        "Initialize World");
+        existingBody.has_value()
+            ? "Migrate Initial World Hierarchy"
+            : "Initialize World");
 
     try
     {
@@ -467,7 +495,18 @@ EnsureInitialBodyObject(
 
         orbit::scene::ObjectId worldRoot{};
 
-        if (roots.empty())
+        for (const auto& root : roots)
+        {
+            if (root.type ==
+                orbit::editor_model::builtin::
+                    kWorldType)
+            {
+                worldRoot = root.id;
+                break;
+            }
+        }
+
+        if (!worldRoot)
         {
             worldRoot =
                 commands.CreateObject(
@@ -475,38 +514,73 @@ EnsureInitialBodyObject(
                         builtin::kWorldType,
                     "World");
         }
-        else
+
+        orbit::scene::ObjectId systemObject{};
+
+        for (const auto& child :
+             objects.Children(worldRoot))
         {
-            worldRoot =
-                roots.front().id;
+            if (child.type ==
+                orbit::editor_model::builtin::
+                    kCelestialSystemType)
+            {
+                systemObject = child.id;
+                break;
+            }
         }
 
-        const orbit::scene::ObjectId body =
-            commands.CreateObject(
+        if (!systemObject)
+        {
+            systemObject =
+                commands.CreateObject(
+                    orbit::editor_model::
+                        builtin::
+                            kCelestialSystemType,
+                    "Helion",
+                    worldRoot);
+        }
+
+        orbit::scene::ObjectId body{};
+
+        if (existingBody.has_value())
+        {
+            body = *existingBody;
+            commands.ReparentObject(
+                body,
+                systemObject);
+        }
+        else
+        {
+            body =
+                commands.CreateObject(
+                    orbit::editor_model::
+                        builtin::
+                            kCelestialBodyType,
+                    "Asterra",
+                    systemObject);
+
+            commands.SetProperty(
+                body,
                 orbit::editor_model::
-                    builtin::
-                        kCelestialBodyType,
-                "Asterra",
-                worldRoot);
+                    builtin::kBodyRadius,
+                6'000'000.0);
 
-        commands.SetProperty(
-            body,
-            orbit::editor_model::
-                builtin::kBodyRadius,
-            6'000'000.0);
-
-        commands.SetProperty(
-            body,
-            orbit::editor_model::
-                builtin::kBodyMass,
-            5.0e24);
+            commands.SetProperty(
+                body,
+                orbit::editor_model::
+                    builtin::kBodyMass,
+                5.0e24);
+        }
 
         commands.CommitTransaction();
         return body;
     }
     catch (...)
     {
-        commands.RollbackTransaction();
+        if (commands.HasActiveTransaction())
+        {
+            commands.RollbackTransaction();
+        }
         throw;
     }
 }
