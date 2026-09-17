@@ -106,14 +106,14 @@ bool ActiveBodyModel::Refresh()
         universeChanged;
 }
 
-void ActiveBodyModel::Focus(
+std::optional<ActiveBodyTarget>
+ActiveBodyModel::Resolve(
     const scene::ObjectId object)
 {
     if (session_ == nullptr ||
         !session_->HasWorld())
     {
-        throw std::logic_error(
-            "Cannot focus a body without an open editor world.");
+        return std::nullopt;
     }
 
     observedGeneration_ =
@@ -126,11 +126,24 @@ void ActiveBodyModel::Focus(
 
     if (!bodyObject.has_value())
     {
+        return std::nullopt;
+    }
+
+    return BuildTarget(*bodyObject);
+}
+
+void ActiveBodyModel::Focus(
+    const scene::ObjectId object)
+{
+    const auto target = Resolve(object);
+
+    if (!target.has_value())
+    {
         throw std::invalid_argument(
             "The requested semantic object is not part of a composed celestial body.");
     }
 
-    active_ = BuildTarget(*bodyObject);
+    active_ = *target;
 }
 
 void ActiveBodyModel::Clear() noexcept
