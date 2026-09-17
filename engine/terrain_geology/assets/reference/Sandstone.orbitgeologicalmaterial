@@ -1,0 +1,11 @@
+[geological_material]
+id = "4f524249-5452-4f43-4b00-000000000003"
+name = "Sandstone"
+hardness = 0.55
+cohesion = 0.50
+hydraulic_erodibility = 0.58
+aeolian_erodibility = 0.45
+permeability = 0.65
+chemical_weatherability = 0.38
+fracture_tendency = 0.60
+density = 2350.0
