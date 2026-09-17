@@ -129,6 +129,43 @@ int main()
 
         Check(host.Editor() != nullptr);
 
+        orbit::u32 configuratorCalls = 0;
+        host.SetEditorConfigurator(
+            [&configuratorCalls](
+                orbit::editor_rpc::EditorRpcService& editor)
+            {
+                ++configuratorCalls;
+                editor.AttachPathGeometry({
+                    .result =
+                        [](const orbit::scene::ObjectId edge)
+                        {
+                            return orbit::rpc::Value(
+                                orbit::rpc::Value::Object{
+                                    {"edge", edge.ToString()},
+                                    {"configured", true}
+                                });
+                        }
+                });
+            });
+        Check(configuratorCalls == 1U);
+
+        const auto configuredMain =
+            Call(
+                host,
+                "configured-main",
+                "path.derived_result",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "edge",
+                            orbit::scene::ObjectId::Random().
+                                ToString()
+                        }
+                    }));
+        Check(
+            configuredMain.Find("configured") != nullptr &&
+            configuredMain.Find("configured")->AsBool());
+
         const auto activeMain =
             Call(host, "1", "world.active");
         Check(activeMain.Find("open")->AsBool());
@@ -241,6 +278,24 @@ int main()
             secondary.generic_string());
         Check(session.Generation() == 2U);
         Check(host.Editor() != nullptr);
+        Check(configuratorCalls == 2U);
+
+        const auto configuredSecondary =
+            Call(
+                host,
+                "configured-secondary",
+                "path.derived_result",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {
+                            "edge",
+                            orbit::scene::ObjectId::Random().
+                                ToString()
+                        }
+                    }));
+        Check(
+            configuredSecondary.Find("configured") != nullptr &&
+            configuredSecondary.Find("configured")->AsBool());
 
         const auto secondaryRoots =
             Call(host, "7", "object.roots");
@@ -303,6 +358,7 @@ int main()
         Check(reopenedMain.Find("open")->AsBool());
         Check(session.Generation() == 4U);
         Check(host.Editor() != nullptr);
+        Check(configuratorCalls == 3U);
 
         const auto mainRoots =
             Call(host, "14", "object.roots");
