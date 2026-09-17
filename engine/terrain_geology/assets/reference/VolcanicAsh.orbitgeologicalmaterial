@@ -1,0 +1,11 @@
+[geological_material]
+id = "4f524249-5452-4f43-4b00-000000000005"
+name = "Unconsolidated Volcanic Ash"
+hardness = 0.08
+cohesion = 0.12
+hydraulic_erodibility = 0.95
+aeolian_erodibility = 1.00
+permeability = 0.72
+chemical_weatherability = 0.70
+fracture_tendency = 0.10
+density = 1200.0
