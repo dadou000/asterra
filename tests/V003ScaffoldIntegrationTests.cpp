@@ -54,6 +54,15 @@ void Check(
     }
 }
 
+void Stage(const std::string_view name)
+{
+    std::cerr
+        << "[V0.0.3 integration] "
+        << name
+        << '\n'
+        << std::flush;
+}
+
 void WriteText(
     const std::filesystem::path& path,
     const std::string_view text)
@@ -145,6 +154,7 @@ void WriteTinyBmp(
 
 int main(const int argc, char** argv)
 {
+    Stage("bootstrap");
     Check(argc >= 2);
 
     const std::filesystem::path playerExecutable =
@@ -164,6 +174,7 @@ int main(const int argc, char** argv)
     std::string firstBuildManifest;
 
     {
+        Stage("project-and-source-assets");
         auto project =
             orbit::documents::ProjectDocument::Create(
                 root,
@@ -219,6 +230,7 @@ int main(const int argc, char** argv)
         });
         project.Save();
 
+        Stage("content-import");
         orbit::content::ContentService content(root);
         orbit::content_wic::RegisterTextureImporters(
             content.Importers());
@@ -247,6 +259,7 @@ int main(const int argc, char** argv)
                 0.85);
         Check(content.Find(decalAsset) != nullptr);
 
+        Stage("semantic-authoring");
         orbit::documents::WorldDatabase world(
             project.StartupWorldPath());
         orbit::schema::SchemaRegistry schemas;
@@ -339,6 +352,7 @@ int main(const int argc, char** argv)
         commands.Redo();
         Check(objects.Find(persistedDecal).has_value());
 
+        Stage("runtime-universe-and-terrain");
         orbit::frames::FrameGraph frameGraph;
         orbit::universe::BodyRegistry bodies(frameGraph);
         const auto system =
@@ -425,6 +439,7 @@ int main(const int argc, char** argv)
         Check(transform1.has_value());
         Check(transform0->rotation != transform1->rotation);
 
+        Stage("path-authoring");
         orbit::paths::PathNetworkService pathService(
             objects,
             commands);
@@ -484,6 +499,7 @@ int main(const int argc, char** argv)
         Check(bezier.mode == orbit::paths::EdgeMode::Bezier);
         Check(routed.mode == orbit::paths::EdgeMode::Routed);
 
+        Stage("plugin-loading");
         orbit::editor_model::CommandSurfaceRegistry
             commandSurfaces;
         orbit::plugins::PluginManager plugins(
@@ -499,6 +515,7 @@ int main(const int argc, char** argv)
         Check(statuses[0].loaded);
         Check(plugins.PanelCatalog().size() == 1);
 
+        Stage("rpc-automation");
         orbit::rpc::Dispatcher dispatcher;
         orbit::editor_rpc::EditorRpcService editorRpc(
             dispatcher,
@@ -527,6 +544,7 @@ int main(const int argc, char** argv)
                     }));
         Check(rpcCreated.Find("id") != nullptr);
 
+        Stage("platform-configuration");
         orbit::platform_services::PlatformConfiguration
             platformConfig;
         platformConfig.steam.enabled = true;
@@ -569,6 +587,7 @@ int main(const int argc, char** argv)
             .profileName = "Development Windows"
         };
 
+        Stage("first-package");
         const auto firstPackage =
             buildService.Package(
                 request,
@@ -586,6 +605,7 @@ int main(const int argc, char** argv)
         std::filesystem::remove_all(
             root / ".orbit" / "DerivedData");
 
+        Stage("second-package");
         const auto secondPackage =
             buildService.Package(
                 request,
@@ -599,6 +619,7 @@ int main(const int argc, char** argv)
     }
 
     {
+        Stage("persistence-reopen");
         const auto reopenedProject =
             orbit::documents::ProjectDocument::Open(
                 root / "Project.orbit.toml");
@@ -618,6 +639,7 @@ int main(const int argc, char** argv)
             std::string::npos);
     }
 
+    Stage("complete");
     std::filesystem::remove_all(root);
     return 0;
 }
