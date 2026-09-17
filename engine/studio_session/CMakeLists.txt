@@ -1,6 +1,7 @@
 add_library(OrbitStudioSession STATIC
     src/StudioSession.cpp
     src/ViewportTargetRegistry.cpp
+    src/ViewportTargetRpc.cpp
 )
 
 add_library(Orbit::StudioSession ALIAS OrbitStudioSession)
@@ -56,5 +57,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ViewportTargetRegistry
         COMMAND OrbitViewportTargetRegistryTests
+    )
+
+    add_executable(OrbitViewportTargetRpcTests
+        tests/ViewportTargetRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitViewportTargetRpcTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitViewportTargetRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitViewportTargetRpcTests)
+
+    add_test(
+        NAME Orbit.ViewportTargetRpc
+        COMMAND OrbitViewportTargetRpcTests
     )
 endif()
