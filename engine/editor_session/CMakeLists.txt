@@ -46,6 +46,24 @@ if(BUILD_TESTING)
         COMMAND OrbitEditorWorldSessionTests
     )
 
+    add_executable(OrbitTransactionalCompositionTests
+        tests/TransactionalCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitTransactionalCompositionTests
+        PRIVATE
+            Orbit::EditorSession
+    )
+
+    target_compile_features(
+        OrbitTransactionalCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTransactionalCompositionTests)
+
+    add_test(
+        NAME Orbit.TransactionalComposition
+        COMMAND OrbitTransactionalCompositionTests
+    )
+
     add_executable(OrbitWorldDocumentsModelTests
         tests/WorldDocumentsModelTests.cpp
     )
