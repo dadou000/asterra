@@ -33,7 +33,9 @@ target_link_libraries(OrbitStudio
         Orbit::Runtime
         Orbit::ShaderDxc
         Orbit::StudioSession
+        Orbit::StudioUi
         Orbit::Universe
+        Orbit::WorldModel
 )
 
 target_compile_features(OrbitStudio PRIVATE cxx_std_23)
