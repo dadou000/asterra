@@ -1,0 +1,101 @@
+name: Orbit V0.0.3 Clean Acceptance
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-v003-clean.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'apps/build/**'
+      - 'apps/player/**'
+      - 'engine/assets/**'
+      - 'engine/build/**'
+      - 'engine/content/**'
+      - 'engine/content_wic/**'
+      - 'engine/documents/**'
+      - 'engine/materials/**'
+      - 'engine/paths/**'
+      - 'engine/platform_services/**'
+      - 'engine/plugins/**'
+      - 'engine/runtime_project/**'
+      - 'engine/scripting/**'
+      - 'engine/shader/**'
+      - 'tests/V003ScaffoldIntegrationTests.cpp'
+  pull_request:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-v003-clean.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'apps/build/**'
+      - 'apps/player/**'
+      - 'engine/assets/**'
+      - 'engine/build/**'
+      - 'engine/content/**'
+      - 'engine/content_wic/**'
+      - 'engine/documents/**'
+      - 'engine/materials/**'
+      - 'engine/paths/**'
+      - 'engine/platform_services/**'
+      - 'engine/plugins/**'
+      - 'engine/runtime_project/**'
+      - 'engine/scripting/**'
+      - 'engine/shader/**'
+      - 'tests/V003ScaffoldIntegrationTests.cpp'
+
+concurrency:
+  group: orbit-v003-clean-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-source-rebuild:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify checkout has no derived project cache
+        shell: pwsh
+        run: |
+          $derived = Get-ChildItem -Path . -Directory -Recurse -Filter DerivedData -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]\.orbit[\\/]DerivedData$' }
+          if ($derived) {
+            $derived | ForEach-Object { Write-Host $_.FullName }
+            throw "Source checkout unexpectedly contains an Orbit DerivedData cache."
+          }
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure from fresh source tree
+        run: cmake -S . -B build-v003-clean -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build proof and standalone runtime from scratch
+        run: cmake --build build-v003-clean --config Release --target OrbitV003ScaffoldIntegrationTests OrbitPlayer OrbitBuild
+
+      - name: Rebuild package twice with empty DDC
+        shell: pwsh
+        run: |
+          & "build-v003-clean/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build-v003-clean/apps/player/Release/OrbitPlayer.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Clean-source V0.0.3 integration proof failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify source checkout remains authoritative-only
+        shell: pwsh
+        run: |
+          $derived = Get-ChildItem -Path . -Directory -Recurse -Filter DerivedData -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]\.orbit[\\/]DerivedData$' }
+          if ($derived) {
+            $derived | ForEach-Object { Write-Host $_.FullName }
+            throw "V0.0.3 proof leaked derived project authority into the source checkout."
+          }
