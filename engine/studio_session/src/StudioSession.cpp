@@ -34,6 +34,7 @@ StudioSession::StudioSession(
     : world_(project),
       documents_(world_),
       activeBody_(world_),
+      viewports_(world_, activeBody_),
       rpc_(world_)
 {
     static_cast<void>(activeBody_.Refresh());
@@ -61,6 +62,18 @@ const editor_session::ActiveBodyModel&
 StudioSession::ActiveBody() const noexcept
 {
     return activeBody_;
+}
+
+ViewportTargetRegistry&
+StudioSession::Viewports() noexcept
+{
+    return viewports_;
+}
+
+const ViewportTargetRegistry&
+StudioSession::Viewports() const noexcept
+{
+    return viewports_;
 }
 
 std::vector<editor_session::WorldDocumentItem>
@@ -133,6 +146,7 @@ StudioSession::DispatchRpc(
         activeBody_.Clear();
     }
 
+    static_cast<void>(viewports_.Refresh());
     return response;
 }
 
@@ -160,6 +174,8 @@ StudioTickResult StudioSession::Tick()
             activeBody_.Active().has_value();
         activeBody_.Clear();
         result.activeBodyChanged = hadBody;
+        result.viewportTargetsChanged =
+            viewports_.Refresh();
         return result;
     }
 
@@ -167,6 +183,8 @@ StudioTickResult StudioSession::Tick()
         world_.Plugins().PollHotReload();
     result.activeBodyChanged =
         activeBody_.Refresh();
+    result.viewportTargetsChanged =
+        viewports_.Refresh();
     result.worldGeneration =
         world_.Generation();
     return result;
