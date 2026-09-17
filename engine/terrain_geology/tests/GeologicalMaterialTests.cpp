@@ -1,9 +1,15 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
+
+#ifndef ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR
+#error ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR must point at M02 authority assets.
+#endif
 
 namespace
 {
@@ -34,15 +40,20 @@ int main()
     using namespace orbit;
     using namespace orbit::terrain_geology;
 
-    GeologicalMaterialLibrary library;
-    RegisterEarthReferenceGeologicalMaterials(
-        library);
+    const std::filesystem::path referenceDirectory{
+        ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR
+    };
+
+    GeologicalMaterialLibrary library =
+        LoadGeologicalMaterialDirectory(
+            referenceDirectory);
 
     bool ok = true;
 
     ok &= Check(
-        library.Size() == 5,
-        "M02 must register the five initial geological materials.");
+        library.Size() == 5 &&
+            library.Revision() == 5,
+        "M02 must load the five initial geological materials from authored authority files.");
 
     std::unordered_set<RockTypeId> ids;
 
@@ -51,13 +62,13 @@ int main()
     {
         ok &= Check(
             material.IsValid(),
-            "Reference geological material failed validation.");
+            "Authored reference geological material failed validation.");
         ids.insert(material.id);
     }
 
     ok &= Check(
         ids.size() == library.Size(),
-        "Reference geological materials must have unique stable RockTypeIds.");
+        "Authored geological materials must have unique stable RockTypeIds.");
 
     const GeologicalMaterial* basalt =
         library.Find(reference_rock::Basalt);
@@ -76,7 +87,7 @@ int main()
             sandstone != nullptr &&
             limestone != nullptr &&
             ash != nullptr,
-        "Reference RockTypeId lookup failed.");
+        "Authored reference records do not match the frozen stable RockTypeIds.");
 
     ok &= Check(
         library.FindByName("sandstone") ==
@@ -117,19 +128,19 @@ int main()
                 sandstoneResponse.hydraulicDetachment &&
             sandstoneResponse.hydraulicDetachment <
                 ashResponse.hydraulicDetachment,
-            "Identical hydraulic forcing must measurably differentiate basalt, sandstone and volcanic ash.");
+            "Identical hydraulic forcing must measurably differentiate authored basalt, sandstone and volcanic ash.");
 
         ok &= Check(
             basaltResponse.aeolianDetachment <
                 sandstoneResponse.aeolianDetachment &&
             sandstoneResponse.aeolianDetachment <
                 ashResponse.aeolianDetachment,
-            "Identical aeolian forcing must measurably differentiate basalt, sandstone and volcanic ash.");
+            "Identical aeolian forcing must measurably differentiate authored basalt, sandstone and volcanic ash.");
 
         ok &= Check(
             limestoneResponse.chemicalWeathering >
                 basaltResponse.chemicalWeathering,
-            "Limestone chemical weatherability must remain distinct from basalt under identical forcing.");
+            "Authored limestone chemical weatherability must remain distinct from basalt under identical forcing.");
     }
 
     const GeologicalMaterialGpuTable gpu =
@@ -194,6 +205,16 @@ int main()
                 roundTrip.density,
                 sandstone->density),
             "Authored geological material TOML did not round-trip.");
+
+        const GeologicalMaterial directFileLoad =
+            LoadGeologicalMaterialFile(
+                referenceDirectory /
+                "Sandstone.orbitgeologicalmaterial");
+
+        ok &= Check(
+            directFileLoad.id == sandstone->id &&
+                directFileLoad.name == sandstone->name,
+            "Direct authored geological material file loading disagrees with directory loading.");
     }
 
     const u64 beforeReplace =
@@ -206,12 +227,16 @@ int main()
         edited.hardness = 0.81F;
         library.Upsert(edited);
 
+        const GeologicalMaterial* replaced =
+            library.Find(reference_rock::Granite);
+
         ok &= Check(
             library.Size() == 5 &&
                 library.Revision() ==
                     beforeReplace + 1 &&
+                replaced != nullptr &&
                 NearlyEqual(
-                    library.Find(reference_rock::Granite)->hardness,
+                    replaced->hardness,
                     0.81F),
             "Editing an authored geological material must replace by stable ID and invalidate derived consumers.");
     }
