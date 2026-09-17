@@ -99,6 +99,8 @@ ContentService::ContentService(std::filesystem::path projectRoot)
 
     RegisterBuiltinImporters(
         importers_);
+    RegisterDecalImporter(
+        importers_);
 }
 
 void ContentService::Scan()
@@ -591,6 +593,74 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
                 {
                     result.tags.push_back(
                         *tag);
+                }
+            }
+        }
+    }
+    else if (result.kind == AssetKind::Decal)
+    {
+        const toml::table document =
+            toml::parse_file(
+                absolute.string());
+
+        const toml::table* decal =
+            document["decal"].as_table();
+
+        if (decal == nullptr)
+        {
+            throw std::runtime_error(
+                "Decal asset is missing [decal]: " +
+                absolute.string());
+        }
+
+        const auto texture =
+            (*decal)["texture"].value<std::string>();
+
+        if (!texture.has_value() ||
+            texture->empty())
+        {
+            throw std::runtime_error(
+                "Decal asset requires a texture dependency.");
+        }
+
+        if (const auto name =
+                (*decal)["name"].value<std::string>();
+            name.has_value() && !name->empty())
+        {
+            result.name = *name;
+        }
+
+        DecalData data{
+            .texture = std::filesystem::path(*texture),
+            .widthMeters =
+                (*decal)["width_meters"].value_or(1.0),
+            .heightMeters =
+                (*decal)["height_meters"].value_or(1.0),
+            .opacity =
+                (*decal)["opacity"].value_or(1.0)
+        };
+
+        if (!(data.widthMeters > 0.0) ||
+            !(data.heightMeters > 0.0) ||
+            data.opacity < 0.0 ||
+            data.opacity > 1.0)
+        {
+            throw std::runtime_error(
+                "Decal dimensions must be positive and opacity must be in [0, 1].");
+        }
+
+        result.decal = std::move(data);
+        result.tags.push_back("decal");
+
+        if (const toml::array* tags =
+                (*decal)["tags"].as_array())
+        {
+            for (const auto& node : *tags)
+            {
+                if (const auto tag = node.value<std::string>();
+                    tag.has_value() && *tag != "decal")
+                {
+                    result.tags.push_back(*tag);
                 }
             }
         }
