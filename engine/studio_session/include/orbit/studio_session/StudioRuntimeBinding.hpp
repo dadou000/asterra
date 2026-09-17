@@ -23,6 +23,7 @@ struct StudioRuntimeSnapshot
 
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
+    bool pathNetworkRebound{false};
     bool pathRoutingRebound{false};
     bool pathProductsInvalidated{false};
     u32 pluginsReloaded{0};
