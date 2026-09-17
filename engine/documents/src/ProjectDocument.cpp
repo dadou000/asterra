@@ -2,11 +2,68 @@
 
 #include <orbit/documents/WorldDatabase.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
 namespace orbit::documents
 {
+namespace
+{
+[[nodiscard]] std::filesystem::path NormalizeWorldPath(
+    const std::filesystem::path& input)
+{
+    if (input.empty())
+    {
+        throw std::invalid_argument(
+            "World path must not be empty.");
+    }
+
+    if (input.is_absolute())
+    {
+        throw std::invalid_argument(
+            "World path must be project-relative.");
+    }
+
+    std::filesystem::path relative =
+        input.lexically_normal();
+
+    if (relative.empty() ||
+        relative == "." ||
+        relative.native().find("..") !=
+            std::filesystem::path::string_type::npos)
+    {
+        throw std::invalid_argument(
+            "World path must stay inside the project Worlds directory.");
+    }
+
+    if (relative.begin() == relative.end() ||
+        *relative.begin() != "Worlds")
+    {
+        relative =
+            std::filesystem::path("Worlds") /
+            relative;
+    }
+
+    relative = relative.lexically_normal();
+
+    if (relative.begin() == relative.end() ||
+        *relative.begin() != "Worlds")
+    {
+        throw std::invalid_argument(
+            "World path must stay inside the project Worlds directory.");
+    }
+
+    if (relative.extension() != ".orbitworld")
+    {
+        relative.replace_extension(
+            ".orbitworld");
+    }
+
+    return relative;
+}
+} // namespace
+
 ProjectDocument ProjectDocument::Create(
     const std::filesystem::path& rootDirectory,
     const std::string_view displayName)
@@ -149,6 +206,98 @@ ProjectDocument::StartupWorldPath() const
 {
     return rootDirectory_ /
         manifest_.startupWorld;
+}
+
+std::vector<std::filesystem::path>
+ProjectDocument::WorldPaths() const
+{
+    std::vector<std::filesystem::path> worlds;
+    const auto directory =
+        rootDirectory_ /
+        "Worlds";
+
+    if (!std::filesystem::exists(directory))
+    {
+        return worlds;
+    }
+
+    for (const auto& entry :
+         std::filesystem::directory_iterator(directory))
+    {
+        if (!entry.is_regular_file() ||
+            entry.path().extension() !=
+                ".orbitworld")
+        {
+            continue;
+        }
+
+        worlds.push_back(
+            std::filesystem::relative(
+                entry.path(),
+                rootDirectory_));
+    }
+
+    std::sort(
+        worlds.begin(),
+        worlds.end());
+    return worlds;
+}
+
+std::filesystem::path ProjectDocument::CreateWorld(
+    const std::filesystem::path& relativePath,
+    const std::string_view displayName)
+{
+    if (displayName.empty())
+    {
+        throw std::invalid_argument(
+            "World display name must not be empty.");
+    }
+
+    const auto normalized =
+        NormalizeWorldPath(relativePath);
+    const auto absolute =
+        rootDirectory_ /
+        normalized;
+
+    if (std::filesystem::exists(absolute))
+    {
+        throw std::runtime_error(
+            "World document already exists.");
+    }
+
+    std::filesystem::create_directories(
+        absolute.parent_path());
+
+    WorldDatabase world(absolute);
+    world.SetMetadata(
+        "display_name",
+        std::string(displayName));
+    world.Checkpoint();
+
+    return normalized;
+}
+
+void ProjectDocument::SetStartupWorld(
+    const std::filesystem::path& relativePath)
+{
+    const auto normalized =
+        NormalizeWorldPath(relativePath);
+    const auto absolute =
+        rootDirectory_ /
+        normalized;
+
+    if (!std::filesystem::is_regular_file(absolute))
+    {
+        throw std::runtime_error(
+            "Startup world must reference an existing project world document.");
+    }
+
+    WorldDatabase world(absolute);
+    static_cast<void>(world.Id());
+
+    manifest_.startupWorld =
+        normalized;
+    Save();
 }
 
 const ProjectManifest&
