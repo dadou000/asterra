@@ -207,13 +207,16 @@ int main(const int argc, char** argv)
             root / "Plugins" / "proof.plugin";
         WriteText(
             pluginRoot / "plugin.toml",
-            "[plugin]\n"
-            "id = \"proof.plugin\"\n"
-            "version = \"1.0.0\"\n"
-            "orbit_api = \"0.0.3\"\n"
-            "entry = \"main.luau\"\n"
-            "scope = \"editor\"\n"
-            "permissions = []\n");
+            std::string(
+                "[plugin]\n"
+                "id = \"proof.plugin\"\n"
+                "version = \"1.0.0\"\n"
+                "orbit_api = \"") +
+                project.Manifest().engineCompatibilityVersion +
+                "\"\n"
+                "entry = \"main.luau\"\n"
+                "scope = \"editor\"\n"
+                "permissions = []\n");
         WriteText(
             pluginRoot / "main.luau",
             "local cmd = Orbit.registerCommand('Proof Tool', function() end, 'Proof', 'V0.0.3 proof command', false)\n"
