@@ -9,6 +9,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <filesystem>
+#include <variant>
 
 int main()
 {
@@ -96,41 +97,63 @@ int main()
         }
 
         selection.Set(bodySelection);
-        const auto duplicate = registry.Enablement(
-            orbit::editor_model::authoring_commands::kCreateTerrainSurface);
 
-        if (duplicate.enabled)
+        if (registry.Enablement(
+                orbit::editor_model::authoring_commands::
+                    kCreateTerrainSurface).enabled)
         {
             return 5;
         }
 
-        if (!commands.CanUndo())
+        if (!registry.Enablement(
+                orbit::editor_model::authoring_commands::
+                    kRemoveTerrainSurface).enabled)
         {
             return 6;
         }
 
-        commands.Undo();
+        registry.Invoke(
+            orbit::editor_model::authoring_commands::kRemoveTerrainSurface);
 
-        if (objects.Find(terrainObject).has_value())
+        if (objects.Find(terrainObject).has_value() ||
+            selection.Ordered().size() != 1U ||
+            selection.Ordered().front() != bodyObject)
         {
             return 7;
         }
 
-        if (!commands.CanRedo())
+        if (!commands.CanUndo())
         {
             return 8;
         }
 
-        commands.Redo();
+        commands.Undo();
 
         const auto restored = objects.Find(terrainObject);
+        const auto restoredSeed = objects.GetProperty(
+            terrainObject,
+            orbit::world_model::kTerrainSeed);
+
         if (!restored.has_value() ||
-            restored->type != orbit::world_model::kTerrainSurfaceType)
+            restored->type != orbit::world_model::kTerrainSurfaceType ||
+            !restoredSeed.has_value() ||
+            std::get<orbit::i64>(*restoredSeed) != 0x41535445525241LL)
         {
             return 9;
         }
 
-        commands.Undo();
+        if (!commands.CanRedo())
+        {
+            return 10;
+        }
+
+        commands.Redo();
+
+        if (objects.Find(terrainObject).has_value())
+        {
+            return 11;
+        }
+
         commands.SetProperty(
             bodyObject,
             orbit::world_model::kBodyEllipsoidEnabled,
@@ -142,7 +165,7 @@ int main()
 
         if (ellipsoid.enabled)
         {
-            return 10;
+            return 12;
         }
 
         world.Checkpoint();
