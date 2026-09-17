@@ -3,6 +3,7 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
+#include <algorithm>
 #include <cassert>
 #include <filesystem>
 #include <stdexcept>
@@ -45,6 +46,23 @@ int main()
             std::filesystem::path(
                 "Worlds/Main.orbitworld"));
 
+        const auto initialCatalog =
+            project.Worlds();
+        assert(initialCatalog.size() == 1);
+        assert(initialCatalog.front().id.IsValid());
+        assert(
+            initialCatalog.front().relativePath ==
+            std::filesystem::path(
+                "Worlds/Main.orbitworld"));
+        assert(
+            initialCatalog.front().displayName ==
+            "Main");
+        assert(
+            initialCatalog.front().schemaVersion ==
+            orbit::documents::
+                kCurrentWorldSchemaVersion);
+        assert(initialCatalog.front().startup);
+
         const auto secondWorld =
             project.CreateWorld(
                 "Secondary",
@@ -56,6 +74,18 @@ int main()
         assert(
             std::filesystem::exists(
                 root / secondWorld));
+
+        const auto nestedWorld =
+            project.CreateWorld(
+                "Archive/Deep",
+                "Deep World");
+        assert(
+            nestedWorld ==
+            std::filesystem::path(
+                "Worlds/Archive/Deep.orbitworld"));
+        assert(
+            std::filesystem::exists(
+                root / nestedWorld));
 
         {
             orbit::documents::WorldDatabase secondary(
@@ -69,15 +99,67 @@ int main()
 
         const auto worlds =
             project.WorldPaths();
-        assert(worlds.size() == 2);
+        assert(worlds.size() == 3);
         assert(
             worlds[0] ==
             std::filesystem::path(
-                "Worlds/Main.orbitworld"));
+                "Worlds/Archive/Deep.orbitworld"));
         assert(
             worlds[1] ==
             std::filesystem::path(
+                "Worlds/Main.orbitworld"));
+        assert(
+            worlds[2] ==
+            std::filesystem::path(
                 "Worlds/Secondary.orbitworld"));
+
+        const auto catalog =
+            project.Worlds();
+        assert(catalog.size() == 3);
+
+        const auto secondaryDescriptor =
+            std::find_if(
+                catalog.begin(),
+                catalog.end(),
+                [&secondWorld](const auto& descriptor)
+                {
+                    return descriptor.relativePath ==
+                        secondWorld;
+                });
+        assert(
+            secondaryDescriptor !=
+            catalog.end());
+        assert(secondaryDescriptor->id.IsValid());
+        assert(
+            secondaryDescriptor->displayName ==
+            "Secondary World");
+        assert(
+            secondaryDescriptor->schemaVersion ==
+            orbit::documents::
+                kCurrentWorldSchemaVersion);
+        assert(!secondaryDescriptor->startup);
+
+        project.SetWorldDisplayName(
+            secondWorld,
+            "Renamed Secondary");
+        const auto renamedSecondary =
+            project.DescribeWorld(secondWorld);
+        assert(
+            renamedSecondary.displayName ==
+            "Renamed Secondary");
+        assert(
+            renamedSecondary.id ==
+            secondaryDescriptor->id);
+
+        {
+            orbit::documents::WorldDatabase secondary(
+                root / secondWorld);
+            assert(
+                secondary.GetMetadata(
+                    "display_name") ==
+                std::optional<std::string>(
+                    "Renamed Secondary"));
+        }
 
         bool overwriteRejected = false;
         try
@@ -107,6 +189,36 @@ int main()
         }
         assert(escapeRejected);
 
+        bool rootWorldsRejected = false;
+        try
+        {
+            static_cast<void>(
+                project.CreateWorld(
+                    "Worlds",
+                    "Invalid"));
+        }
+        catch (const std::invalid_argument&)
+        {
+            rootWorldsRejected = true;
+        }
+        assert(rootWorldsRejected);
+        assert(
+            !std::filesystem::exists(
+                root / "Worlds.orbitworld"));
+
+        bool emptyDisplayNameRejected = false;
+        try
+        {
+            project.SetWorldDisplayName(
+                secondWorld,
+                "");
+        }
+        catch (const std::invalid_argument&)
+        {
+            emptyDisplayNameRejected = true;
+        }
+        assert(emptyDisplayNameRejected);
+
         project.SetStartupWorld(secondWorld);
         assert(
             project.Manifest().startupWorld ==
@@ -114,6 +226,13 @@ int main()
         assert(
             project.StartupWorldPath() ==
             root / secondWorld);
+        assert(
+            project.DescribeWorld(secondWorld).
+                startup);
+        assert(
+            !project.DescribeWorld(
+                "Worlds/Main.orbitworld").
+                startup);
 
         project.Manifest().displayName =
             "Renamed Project";
@@ -145,6 +264,12 @@ int main()
         assert(
             reopened.Manifest().startupWorld ==
             secondWorld);
+        assert(
+            reopened.DescribeWorld(secondWorld).
+                displayName ==
+            "Renamed Secondary");
+        assert(
+            reopened.WorldPaths().size() == 3);
         assert(
             reopened.Manifest().
                 plugins.size() == 1);

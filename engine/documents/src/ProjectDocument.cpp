@@ -1,7 +1,5 @@
 #include <orbit/documents/ProjectDocument.hpp>
 
-#include <orbit/documents/WorldDatabase.hpp>
-
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -54,11 +52,21 @@ namespace
 
     relative = relative.lexically_normal();
 
-    if (relative.begin() == relative.end() ||
-        *relative.begin() != "Worlds")
+    auto component = relative.begin();
+
+    if (component == relative.end() ||
+        *component != "Worlds")
     {
         throw std::invalid_argument(
             "World path must stay inside the project Worlds directory.");
+    }
+
+    ++component;
+
+    if (component == relative.end())
+    {
+        throw std::invalid_argument(
+            "World path must name a document inside the project Worlds directory.");
     }
 
     if (relative.extension() != ".orbitworld")
@@ -68,6 +76,26 @@ namespace
     }
 
     return relative;
+}
+
+[[nodiscard]] std::filesystem::path RequireExistingWorld(
+    const std::filesystem::path& rootDirectory,
+    const std::filesystem::path& relativePath)
+{
+    const auto normalized =
+        NormalizeWorldPath(relativePath);
+    const auto absolute =
+        rootDirectory /
+        normalized;
+
+    if (!std::filesystem::is_regular_file(absolute) ||
+        std::filesystem::is_symlink(absolute))
+    {
+        throw std::runtime_error(
+            "World path must reference an existing project-owned world document.");
+    }
+
+    return normalized;
 }
 } // namespace
 
@@ -229,9 +257,10 @@ ProjectDocument::WorldPaths() const
     }
 
     for (const auto& entry :
-         std::filesystem::directory_iterator(directory))
+         std::filesystem::recursive_directory_iterator(directory))
     {
-        if (!entry.is_regular_file() ||
+        if (entry.is_symlink() ||
+            !entry.is_regular_file() ||
             entry.path().extension() !=
                 ".orbitworld")
         {
@@ -248,6 +277,54 @@ ProjectDocument::WorldPaths() const
         worlds.begin(),
         worlds.end());
     return worlds;
+}
+
+std::vector<WorldDescriptor>
+ProjectDocument::Worlds() const
+{
+    std::vector<WorldDescriptor> worlds;
+    const auto paths = WorldPaths();
+    worlds.reserve(paths.size());
+
+    for (const auto& path : paths)
+    {
+        worlds.push_back(
+            DescribeWorld(path));
+    }
+
+    return worlds;
+}
+
+WorldDescriptor ProjectDocument::DescribeWorld(
+    const std::filesystem::path& relativePath) const
+{
+    const auto normalized =
+        RequireExistingWorld(
+            rootDirectory_,
+            relativePath);
+
+    WorldDatabase world(
+        rootDirectory_ /
+        normalized);
+
+    const auto displayName =
+        world.GetMetadata(
+            "display_name");
+
+    return {
+        .id = world.Id(),
+        .relativePath = normalized,
+        .displayName =
+            displayName.has_value() &&
+                    !displayName->empty()
+                ? *displayName
+                : normalized.stem().string(),
+        .schemaVersion =
+            world.SchemaVersion(),
+        .startup =
+            normalized ==
+            manifest_.startupWorld.lexically_normal()
+    };
 }
 
 std::filesystem::path ProjectDocument::CreateWorld(
@@ -284,20 +361,40 @@ std::filesystem::path ProjectDocument::CreateWorld(
     return normalized;
 }
 
+void ProjectDocument::SetWorldDisplayName(
+    const std::filesystem::path& relativePath,
+    const std::string_view displayName)
+{
+    if (displayName.empty())
+    {
+        throw std::invalid_argument(
+            "World display name must not be empty.");
+    }
+
+    const auto normalized =
+        RequireExistingWorld(
+            rootDirectory_,
+            relativePath);
+
+    WorldDatabase world(
+        rootDirectory_ /
+        normalized);
+    world.SetMetadata(
+        "display_name",
+        displayName);
+    world.Checkpoint();
+}
+
 void ProjectDocument::SetStartupWorld(
     const std::filesystem::path& relativePath)
 {
     const auto normalized =
-        NormalizeWorldPath(relativePath);
+        RequireExistingWorld(
+            rootDirectory_,
+            relativePath);
     const auto absolute =
         rootDirectory_ /
         normalized;
-
-    if (!std::filesystem::is_regular_file(absolute))
-    {
-        throw std::runtime_error(
-            "Startup world must reference an existing project world document.");
-    }
 
     WorldDatabase world(absolute);
     static_cast<void>(world.Id());

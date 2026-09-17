@@ -1,13 +1,24 @@
 #pragma once
 
 #include <orbit/documents/ProjectManifest.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
 
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace orbit::documents
 {
+struct WorldDescriptor
+{
+    WorldId id{};
+    std::filesystem::path relativePath;
+    std::string displayName;
+    i32 schemaVersion{0};
+    bool startup{false};
+};
+
 class ProjectDocument
 {
 public:
@@ -28,14 +39,31 @@ public:
     StartupWorldPath() const;
 
     // Returns project-relative authoritative world document paths in a stable
-    // lexical order. Derived data and runtime saves are intentionally excluded.
+    // lexical order. Derived data, runtime saves and symlink targets are
+    // intentionally excluded. Nested Worlds/ subdirectories are supported.
     [[nodiscard]] std::vector<std::filesystem::path>
     WorldPaths() const;
+
+    // Returns the authoritative project-owned world catalog. Each descriptor
+    // comes from the world document itself rather than a parallel editor cache.
+    [[nodiscard]] std::vector<WorldDescriptor>
+    Worlds() const;
+
+    // Opens and validates one project-owned world and returns its persistent
+    // identity, display metadata, schema version and startup state.
+    [[nodiscard]] WorldDescriptor DescribeWorld(
+        const std::filesystem::path& relativePath) const;
 
     // Creates another authoritative .orbitworld document inside Worlds/. The
     // caller may pass either "City.orbitworld" or "Worlds/City.orbitworld".
     // Existing documents are never overwritten.
     [[nodiscard]] std::filesystem::path CreateWorld(
+        const std::filesystem::path& relativePath,
+        std::string_view displayName);
+
+    // Changes persistent display metadata without renaming or replacing the
+    // authoritative world document.
+    void SetWorldDisplayName(
         const std::filesystem::path& relativePath,
         std::string_view displayName);
 
