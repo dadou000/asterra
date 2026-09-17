@@ -14,6 +14,7 @@ on:
       - "engine/terrain_macro_geology/**"
       - "engine/terrain_relief/**"
       - "engine/terrain_impacts/**"
+      - "engine/terrain_material_column/**"
       - "tests/contracts/**"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
@@ -32,6 +33,7 @@ on:
       - "engine/terrain_macro_geology/**"
       - "engine/terrain_relief/**"
       - "engine/terrain_impacts/**"
+      - "engine/terrain_material_column/**"
       - "tests/contracts/**"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
@@ -81,8 +83,9 @@ jobs:
           OrbitTerrainMacroGeologyTests
           OrbitTerrainReliefTests
           OrbitTerrainImpactsTests
+          OrbitTerrainMaterialColumnTests
 
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn)"
