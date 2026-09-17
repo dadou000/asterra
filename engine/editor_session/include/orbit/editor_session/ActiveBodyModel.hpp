@@ -37,8 +37,13 @@ public:
     // fresh world session falls back to the first composed body.
     [[nodiscard]] bool Refresh();
 
-    // Explicit viewport/body focus. Descendants resolve to their nearest
-    // celestial-body ancestor. Throws when the object has no composed body.
+    // Resolves an object (or one of its descendants) to the nearest composed
+    // celestial body without changing the shared active body.
+    [[nodiscard]] std::optional<ActiveBodyTarget>
+    Resolve(scene::ObjectId object);
+
+    // Explicit shared viewport/body focus. Descendants resolve to their
+    // nearest celestial-body ancestor. Throws when no composed body exists.
     void Focus(scene::ObjectId object);
 
     void Clear() noexcept;
