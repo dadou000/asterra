@@ -1,4 +1,5 @@
 add_library(OrbitStudioSession STATIC
+    src/StudioAuthoringBinding.cpp
     src/StudioSession.cpp
     src/StudioRuntimeBinding.cpp
     src/StudioWorkspace.cpp
@@ -67,6 +68,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioRuntimeBinding
         COMMAND OrbitStudioRuntimeBindingTests
+    )
+
+    add_executable(OrbitStudioAuthoringBindingTests
+        tests/StudioAuthoringBindingTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioAuthoringBindingTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioAuthoringBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioAuthoringBindingTests)
+
+    add_test(
+        NAME Orbit.StudioAuthoringBinding
+        COMMAND OrbitStudioAuthoringBindingTests
     )
 
     add_executable(OrbitStudioWorkspaceTests
