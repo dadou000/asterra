@@ -2,6 +2,7 @@
 
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <optional>
 #include <stdexcept>
 #include <variant>
 
@@ -33,7 +34,8 @@ namespace
     return *enabled;
 }
 
-[[nodiscard]] bool HasTerrainSurface(
+[[nodiscard]] std::optional<scene::ObjectId>
+TerrainSurfaceObject(
     const scene::ObjectStore& objects,
     const scene::ObjectId body)
 {
@@ -41,14 +43,14 @@ namespace
     {
         if (child.type == world_model::kTerrainSurfaceType)
         {
-            return true;
+            return child.id;
         }
     }
 
-    return false;
+    return std::nullopt;
 }
 
-[[nodiscard]] commands::CommandEnablement TerrainEnablement(
+[[nodiscard]] commands::CommandEnablement CreateTerrainEnablement(
     const scene::ObjectStore& objects,
     const selection::SelectionService& selection)
 {
@@ -80,12 +82,58 @@ namespace
         };
     }
 
-    if (HasTerrainSurface(objects, object->id))
+    if (TerrainSurfaceObject(objects, object->id).has_value())
     {
         return {
             .enabled = false,
             .reason =
                 "This Celestial Body already owns a Terrain Surface capability."
+        };
+    }
+
+    return {};
+}
+
+[[nodiscard]] commands::CommandEnablement RemoveTerrainEnablement(
+    const scene::ObjectStore& objects,
+    const selection::SelectionService& selection)
+{
+    if (selection.Ordered().size() != 1U)
+    {
+        return {
+            .enabled = false,
+            .reason = "Select exactly one Celestial Body."
+        };
+    }
+
+    const auto object = objects.Find(selection.Ordered().front());
+
+    if (!object.has_value() ||
+        object->type != world_model::kCelestialBodyType)
+    {
+        return {
+            .enabled = false,
+            .reason = "Select a Celestial Body."
+        };
+    }
+
+    const auto terrain = TerrainSurfaceObject(objects, object->id);
+
+    if (!terrain.has_value())
+    {
+        return {
+            .enabled = false,
+            .reason =
+                "This Celestial Body has no Terrain Surface capability."
+        };
+    }
+
+    if (!objects.Children(*terrain).empty())
+    {
+        return {
+            .enabled = false,
+            .reason =
+                "The Terrain Surface has semantic children and cannot be removed as a leaf capability."
         };
     }
 
@@ -112,7 +160,7 @@ void RegisterTerrainCommands(
         .enablement =
             [&objects, &selection]
             {
-                return TerrainEnablement(objects, selection);
+                return CreateTerrainEnablement(objects, selection);
             },
         .invoke =
             [&objects,
@@ -121,7 +169,7 @@ void RegisterTerrainCommands(
                 const commands::CommandArguments&)
             {
                 const auto enabled =
-                    TerrainEnablement(objects, selection);
+                    CreateTerrainEnablement(objects, selection);
 
                 if (!enabled.enabled)
                 {
@@ -182,6 +230,77 @@ void RegisterTerrainCommands(
                     }
 
                     const scene::ObjectId selected[] = {terrain};
+                    selection.Set(selected);
+                }
+                catch (...)
+                {
+                    if (ownsTransaction &&
+                        commandService.HasActiveTransaction())
+                    {
+                        commandService.RollbackTransaction();
+                    }
+                    throw;
+                }
+            }
+    });
+
+    registry.Register({
+        .id = kRemoveTerrainSurface,
+        .name = "Remove Terrain Surface",
+        .category = "World / Surface",
+        .description =
+            "Remove the authored terrain capability from the selected Celestial Body.",
+        .presentationSurfaces = {
+            "explorer.context",
+            "properties.toolbar"
+        },
+        .enablement =
+            [&objects, &selection]
+            {
+                return RemoveTerrainEnablement(objects, selection);
+            },
+        .invoke =
+            [&objects,
+             &commandService,
+             &selection](
+                const commands::CommandArguments&)
+            {
+                const auto enabled =
+                    RemoveTerrainEnablement(objects, selection);
+
+                if (!enabled.enabled)
+                {
+                    throw std::invalid_argument(enabled.reason);
+                }
+
+                const scene::ObjectId body = selection.Ordered().front();
+                const auto terrain = TerrainSurfaceObject(objects, body);
+
+                if (!terrain.has_value())
+                {
+                    throw std::logic_error(
+                        "Terrain capability disappeared after command enablement.");
+                }
+
+                const bool ownsTransaction =
+                    !commandService.HasActiveTransaction();
+
+                if (ownsTransaction)
+                {
+                    commandService.BeginTransaction(
+                        "Remove Terrain Surface");
+                }
+
+                try
+                {
+                    commandService.DeleteObject(*terrain);
+
+                    if (ownsTransaction)
+                    {
+                        commandService.CommitTransaction();
+                    }
+
+                    const scene::ObjectId selected[] = {body};
                     selection.Set(selected);
                 }
                 catch (...)
