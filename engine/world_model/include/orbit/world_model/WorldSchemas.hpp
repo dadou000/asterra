@@ -19,6 +19,11 @@ inline constexpr schema::TypeId kCelestialBodyType{
     .low = 0x5954595045000001ULL
 };
 
+inline constexpr schema::TypeId kSurfaceDecalType{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c545950450001ULL
+};
+
 inline constexpr schema::PropertyId kSystemEpochMicroseconds{
     .high = 0x4f5242495450524fULL,
     .low = 0x505345504f434801ULL
@@ -67,6 +72,41 @@ inline constexpr schema::PropertyId kBodyRotationPhaseDegrees{
 inline constexpr schema::PropertyId kBodyMaterialAsset{
     .high = 0x4f5242495450524fULL,
     .low = 0x504d41544c000001ULL
+};
+
+inline constexpr schema::PropertyId kDecalAsset{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c415353455401ULL
+};
+
+inline constexpr schema::PropertyId kDecalLatitudeRadians{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c4c4154495401ULL
+};
+
+inline constexpr schema::PropertyId kDecalLongitudeRadians{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c4c4f4e470001ULL
+};
+
+inline constexpr schema::PropertyId kDecalWidthMeters{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c574944544801ULL
+};
+
+inline constexpr schema::PropertyId kDecalHeightMeters{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c484549474801ULL
+};
+
+inline constexpr schema::PropertyId kDecalRotationDegrees{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c524f54415401ULL
+};
+
+inline constexpr schema::PropertyId kDecalOpacity{
+    .high = 0x4f52424954444543ULL,
+    .low = 0x414c4f5041434901ULL
 };
 
 void RegisterSchemas(
