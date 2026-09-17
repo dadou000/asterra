@@ -146,6 +146,12 @@ public:
         return source_->Revision();
     }
 
+    terrain::TerrainGenerationRevisions
+    GenerationRevisions() const noexcept
+    {
+        return source_->GenerationRevisions();
+    }
+
     CachedTerrainSourceStats Stats() const noexcept
     {
         return {
@@ -235,11 +241,12 @@ private:
         }
 
         return {
+            .planet = planet_.id,
             .tile = selected,
             .resolution =
                 config_.pageResolution,
-            .sourceRevision =
-                source_->Revision()
+            .revisions =
+                source_->GenerationRevisions()
         };
     }
 
@@ -296,6 +303,12 @@ CachedTerrainSource::Sample(
 u64 CachedTerrainSource::Revision() const noexcept
 {
     return impl_->Revision();
+}
+
+terrain::TerrainGenerationRevisions
+CachedTerrainSource::GenerationRevisions() const noexcept
+{
+    return impl_->GenerationRevisions();
 }
 
 CachedTerrainSourceStats
