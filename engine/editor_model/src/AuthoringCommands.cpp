@@ -58,6 +58,77 @@ PathPairEnablement(
     return {};
 }
 
+[[nodiscard]] commands::CommandEnablement
+WorldSelectionEnablement(
+    const scene::ObjectStore& objects,
+    const selection::SelectionService& selection)
+{
+    if (selection.Ordered().size() != 1)
+    {
+        return {
+            .enabled = false,
+            .reason = "Select exactly one World object."
+        };
+    }
+
+    const auto object =
+        objects.Find(selection.Ordered().front());
+
+    if (!object.has_value())
+    {
+        return {
+            .enabled = false,
+            .reason = "The selected object no longer exists."
+        };
+    }
+
+    if (object->type != builtin::kWorldType)
+    {
+        return {
+            .enabled = false,
+            .reason = "Select a World object."
+        };
+    }
+
+    return {};
+}
+
+[[nodiscard]] commands::CommandEnablement
+BodyParentEnablement(
+    const scene::ObjectStore& objects,
+    const selection::SelectionService& selection)
+{
+    if (selection.Ordered().size() != 1)
+    {
+        return {
+            .enabled = false,
+            .reason = "Select one World or Celestial System."
+        };
+    }
+
+    const auto object =
+        objects.Find(selection.Ordered().front());
+
+    if (!object.has_value())
+    {
+        return {
+            .enabled = false,
+            .reason = "The selected object no longer exists."
+        };
+    }
+
+    if (object->type != builtin::kWorldType &&
+        object->type != builtin::kCelestialSystemType)
+    {
+        return {
+            .enabled = false,
+            .reason = "Select a World or Celestial System."
+        };
+    }
+
+    return {};
+}
+
 [[nodiscard]] math::Double3 OptionalVector(
     const commands::CommandArguments& arguments,
     const std::string_view name)
@@ -172,6 +243,250 @@ void Register(
                 const commands::CommandArguments&)
             {
                 selection.Clear();
+            }
+    });
+
+    registry.Register({
+        .id = kCreateCelestialSystem,
+        .name = "Create Celestial System",
+        .category = "World",
+        .description =
+            "Create a persistent celestial system under the selected World.",
+        .enablement =
+            [&objects, &selection]
+            {
+                return WorldSelectionEnablement(
+                    objects,
+                    selection);
+            },
+        .invoke =
+            [&objects,
+             &commandService,
+             &selection](
+                const commands::CommandArguments&)
+            {
+                const auto worldId =
+                    selection.Ordered().front();
+
+                u32 count = 0;
+
+                for (const auto& child :
+                     objects.Children(worldId))
+                {
+                    if (child.type ==
+                        builtin::kCelestialSystemType)
+                    {
+                        ++count;
+                    }
+                }
+
+                const bool ownsTransaction =
+                    !commandService.HasActiveTransaction();
+
+                if (ownsTransaction)
+                {
+                    commandService.BeginTransaction(
+                        "Create Celestial System");
+                }
+
+                try
+                {
+                    const auto system =
+                        commandService.CreateObject(
+                            builtin::kCelestialSystemType,
+                            "Celestial System " +
+                                std::to_string(count + 1U),
+                            worldId);
+
+                    commandService.SetProperty(
+                        system,
+                        builtin::kSystemEpochMicroseconds,
+                        i64{0});
+
+                    if (ownsTransaction)
+                    {
+                        commandService.CommitTransaction();
+                    }
+
+                    const scene::ObjectId selected[] = {
+                        system
+                    };
+                    selection.Set(selected);
+                }
+                catch (...)
+                {
+                    if (ownsTransaction &&
+                        commandService.HasActiveTransaction())
+                    {
+                        commandService.RollbackTransaction();
+                    }
+                    throw;
+                }
+            }
+    });
+
+    registry.Register({
+        .id = kCreateCelestialBody,
+        .name = "Create Celestial Body",
+        .category = "World",
+        .description =
+            "Create a persistent celestial body. Selecting a World automatically creates or reuses its first celestial system.",
+        .enablement =
+            [&objects, &selection]
+            {
+                return BodyParentEnablement(
+                    objects,
+                    selection);
+            },
+        .invoke =
+            [&objects,
+             &commandService,
+             &selection](
+                const commands::CommandArguments&)
+            {
+                const auto selectedId =
+                    selection.Ordered().front();
+                const auto selectedObject =
+                    objects.Find(selectedId);
+
+                if (!selectedObject.has_value())
+                {
+                    throw std::invalid_argument(
+                        "The selected world parent no longer exists.");
+                }
+
+                const bool ownsTransaction =
+                    !commandService.HasActiveTransaction();
+
+                if (ownsTransaction)
+                {
+                    commandService.BeginTransaction(
+                        "Create Celestial Body");
+                }
+
+                try
+                {
+                    scene::ObjectId systemId =
+                        selectedId;
+
+                    if (selectedObject->type ==
+                        builtin::kWorldType)
+                    {
+                        bool foundSystem = false;
+
+                        for (const auto& child :
+                             objects.Children(selectedId))
+                        {
+                            if (child.type ==
+                                builtin::kCelestialSystemType)
+                            {
+                                systemId = child.id;
+                                foundSystem = true;
+                                break;
+                            }
+                        }
+
+                        if (!foundSystem)
+                        {
+                            systemId =
+                                commandService.CreateObject(
+                                    builtin::kCelestialSystemType,
+                                    "Celestial System 1",
+                                    selectedId);
+                            commandService.SetProperty(
+                                systemId,
+                                builtin::kSystemEpochMicroseconds,
+                                i64{0});
+                        }
+                    }
+
+                    u32 bodyCount = 0;
+
+                    for (const auto& child :
+                         objects.Children(systemId))
+                    {
+                        if (child.type ==
+                            builtin::kCelestialBodyType)
+                        {
+                            ++bodyCount;
+                        }
+                    }
+
+                    const auto body =
+                        commandService.CreateObject(
+                            builtin::kCelestialBodyType,
+                            "Celestial Body " +
+                                std::to_string(bodyCount + 1U),
+                            systemId);
+
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyShapeMode,
+                        std::string{"Sphere"});
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyRadius,
+                        6'000'000.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyPolarRadius,
+                        6'000'000.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyMass,
+                        5.0e24);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyRotationPeriodSeconds,
+                        86'400.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyAxialTiltDegrees,
+                        0.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodySurfaceEnabled,
+                        true);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyAtmosphereEnabled,
+                        false);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyHydrosphereEnabled,
+                        false);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyTerrainSeed,
+                        i64{0});
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyOceanLevelMeters,
+                        0.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyMaximumElevationMeters,
+                        8'000.0);
+
+                    if (ownsTransaction)
+                    {
+                        commandService.CommitTransaction();
+                    }
+
+                    const scene::ObjectId selected[] = {
+                        body
+                    };
+                    selection.Set(selected);
+                }
+                catch (...)
+                {
+                    if (ownsTransaction &&
+                        commandService.HasActiveTransaction())
+                    {
+                        commandService.RollbackTransaction();
+                    }
+                    throw;
+                }
             }
     });
 
