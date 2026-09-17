@@ -1,0 +1,176 @@
+name: Orbit V0.0.3 Final Acceptance
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-v003-final.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'apps/editor/**'
+      - 'apps/player/**'
+      - 'apps/build/**'
+      - 'engine/build/**'
+      - 'engine/commands/**'
+      - 'engine/content/**'
+      - 'engine/content_wic/**'
+      - 'engine/documents/**'
+      - 'engine/editor_model/**'
+      - 'engine/editor_rpc/**'
+      - 'engine/editor_session/**'
+      - 'engine/editor_ui/**'
+      - 'engine/frames/**'
+      - 'engine/materials/**'
+      - 'engine/path_geometry/**'
+      - 'engine/path_routing/**'
+      - 'engine/paths/**'
+      - 'engine/platform_services/**'
+      - 'engine/plugins/**'
+      - 'engine/render_graph/**'
+      - 'engine/render_view/**'
+      - 'engine/rpc/**'
+      - 'engine/runtime_project/**'
+      - 'engine/schema/**'
+      - 'engine/scene/**'
+      - 'engine/selection/**'
+      - 'engine/studio_session/**'
+      - 'engine/studio_ui/**'
+      - 'engine/surface_model/**'
+      - 'engine/universe/**'
+      - 'engine/world_model/**'
+      - 'tests/DocumentsTests.cpp'
+      - 'tests/ExplorerInspectorTests.cpp'
+      - 'tests/V003ScaffoldIntegrationTests.cpp'
+  workflow_dispatch:
+
+concurrency:
+  group: orbit-v003-final-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Validate MCP adapters
+        run: python -m py_compile tools/mcp_server/orbit_mcp_server.py tools/mcp_server/orbit_editor_mcp_server.py
+
+      - name: Configure
+        run: cmake -S . -B build-v003-final -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build V0.0.3 acceptance targets
+        run: >
+          cmake --build build-v003-final --config Release --target
+          OrbitDocumentsTests
+          OrbitUniverseCompositionTests
+          OrbitSurfaceCompositionTests
+          OrbitTerrainAuthoringCommandTests
+          OrbitEditorRpcTests
+          OrbitBuildPackageRpcTests
+          OrbitProjectWorldRpcTests
+          OrbitEditorWorldSessionTests
+          OrbitTransactionalCompositionTests
+          OrbitWorldDocumentsModelTests
+          OrbitActiveBodyModelTests
+          OrbitWorldScopedFacadesTests
+          OrbitEditorSessionRpcHostTests
+          OrbitStudioSessionTests
+          OrbitStudioRuntimeBindingTests
+          OrbitStudioAuthoringBindingTests
+          OrbitBezierHandleEditorTests
+          OrbitStudioWorkspaceTests
+          OrbitProjectBrowserModelTests
+          OrbitProjectSettingsModelTests
+          OrbitStudioWorkspaceRpcHostTests
+          OrbitUniverseBoundRoutePlannerTests
+          OrbitUniverseBoundPathCacheTests
+          OrbitViewportTargetRegistryTests
+          OrbitViewportTargetRpcTests
+          OrbitStudioViewportCameraTests
+          OrbitExplorerInspectorTests
+          OrbitPathGeometryTests
+          OrbitPathSourceTests
+          OrbitBuildServiceTests
+          OrbitRuntimeProjectTests
+          OrbitBuildCliTests
+          OrbitPlatformServicesTests
+          OrbitPlatformServicesSteamTests
+          OrbitV003ScaffoldIntegrationTests
+          OrbitStudio
+          OrbitPlayer
+          OrbitBuild
+
+      - name: Run V0.0.3 acceptance suite
+        shell: pwsh
+        run: |
+          $tests = @(
+            "build-v003-final/tests/Release/OrbitDocumentsTests.exe",
+            "build-v003-final/engine/world_model/Release/OrbitUniverseCompositionTests.exe",
+            "build-v003-final/engine/surface_model/Release/OrbitSurfaceCompositionTests.exe",
+            "build-v003-final/engine/editor_model/Release/OrbitTerrainAuthoringCommandTests.exe",
+            "build-v003-final/engine/editor_rpc/Release/OrbitEditorRpcTests.exe",
+            "build-v003-final/engine/editor_rpc/Release/OrbitBuildPackageRpcTests.exe",
+            "build-v003-final/engine/editor_rpc/Release/OrbitProjectWorldRpcTests.exe",
+            "build-v003-final/engine/editor_session/Release/OrbitEditorWorldSessionTests.exe",
+            "build-v003-final/engine/editor_session/Release/OrbitTransactionalCompositionTests.exe",
+            "build-v003-final/engine/editor_session/Release/OrbitWorldDocumentsModelTests.exe",
+            "build-v003-final/engine/editor_session/Release/OrbitActiveBodyModelTests.exe",
+            "build-v003-final/engine/editor_session/Release/OrbitWorldScopedFacadesTests.exe",
+            "build-v003-final/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitStudioSessionTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitStudioRuntimeBindingTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitStudioAuthoringBindingTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitProjectSettingsModelTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitStudioWorkspaceRpcHostTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitUniverseBoundRoutePlannerTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitUniverseBoundPathCacheTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe",
+            "build-v003-final/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe",
+            "build-v003-final/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
+            "build-v003-final/tests/Release/OrbitExplorerInspectorTests.exe",
+            "build-v003-final/engine/path_geometry/Release/OrbitPathGeometryTests.exe",
+            "build-v003-final/engine/path_geometry/Release/OrbitPathSourceTests.exe",
+            "build-v003-final/engine/build/Release/OrbitBuildServiceTests.exe",
+            "build-v003-final/engine/runtime_project/Release/OrbitRuntimeProjectTests.exe",
+            "build-v003-final/engine/platform_services/Release/OrbitPlatformServicesTests.exe",
+            "build-v003-final/engine/platform_services/steam/Release/OrbitPlatformServicesSteamTests.exe"
+          )
+          foreach ($test in $tests) {
+            & $test
+            if ($LASTEXITCODE -ne 0) {
+              throw "$test failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          & "build-v003-final/apps/build/Release/OrbitBuildCliTests.exe" "build-v003-final/apps/build/Release/OrbitBuild.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitBuildCliTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build-v003-final/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build-v003-final/apps/player/Release/OrbitPlayer.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitV003ScaffoldIntegrationTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify Studio executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build-v003-final/apps/editor/Release/OrbitStudio.exe")) {
+            throw "OrbitStudio.exe was not produced by the V0.0.3 final acceptance build."
+          }
