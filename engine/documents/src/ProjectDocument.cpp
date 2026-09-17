@@ -25,13 +25,20 @@ namespace
             "World path must be project-relative.");
     }
 
+    for (const auto& part : input)
+    {
+        if (part == "..")
+        {
+            throw std::invalid_argument(
+                "World path must stay inside the project Worlds directory.");
+        }
+    }
+
     std::filesystem::path relative =
         input.lexically_normal();
 
     if (relative.empty() ||
-        relative == "." ||
-        relative.native().find("..") !=
-            std::filesystem::path::string_type::npos)
+        relative == ".")
     {
         throw std::invalid_argument(
             "World path must stay inside the project Worlds directory.");
