@@ -40,6 +40,7 @@
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
 
@@ -64,25 +65,6 @@
 
 namespace
 {
-template <typename TargetId, typename SourceId>
-[[nodiscard]] TargetId DerivedPersistentId(
-    const SourceId source,
-    const orbit::u64 highSalt,
-    const orbit::u64 lowSalt) noexcept
-{
-    TargetId result{
-        .high = source.high ^ highSalt,
-        .low = source.low ^ lowSalt
-    };
-
-    if (!result)
-    {
-        result.low = 1;
-    }
-
-    return result;
-}
-
 [[nodiscard]] orbit::u64
 ContentRevisionKey(
     const orbit::content::ContentHash& hash)
@@ -946,6 +928,36 @@ int main(
                     argc,
                     argv);
 
+        // The legacy Studio shell now consumes the same permanent world-scoped
+        // service graph as the M20A application model. This removes the second
+        // WorldDatabase/ObjectStore/command/plugin stack that previously lived
+        // beside StudioSession and makes semantic world authority singular.
+        orbit::studio_session::StudioSession
+            studioSession(project);
+
+        auto& worldSession =
+            studioSession.World();
+        auto& world =
+            worldSession.World();
+        auto& schemas =
+            worldSession.Schemas();
+        auto& objects =
+            worldSession.Objects();
+        auto& selection =
+            worldSession.Selection();
+        auto& commandService =
+            worldSession.Commands();
+        auto& authoringCommands =
+            worldSession.CommandRegistry();
+        auto& commandSurfaces =
+            worldSession.CommandSurfaces();
+        auto& explorer =
+            worldSession.Explorer();
+        auto& inspector =
+            worldSession.Inspector();
+        auto& plugins =
+            worldSession.Plugins();
+
         orbit::content::ContentService
             content(
                 project.RootDirectory());
@@ -967,40 +979,6 @@ int main(
                     diagnostic.message));
         }
 
-        orbit::documents::WorldDatabase
-            world(
-                project.StartupWorldPath());
-
-        orbit::schema::SchemaRegistry
-            schemas;
-
-        orbit::editor_model::builtin::
-            RegisterSchemas(schemas);
-
-        orbit::scene::ObjectStore objects(
-            world);
-
-        orbit::selection::SelectionService
-            selection;
-
-        orbit::commands::CommandService
-            commandService(
-                objects,
-                schemas);
-
-        orbit::editor_model::ExplorerModel
-            explorer(
-                objects,
-                commandService,
-                selection);
-
-        orbit::editor_model::InspectorModel
-            inspector(
-                objects,
-                schemas,
-                commandService,
-                selection);
-
         const orbit::scene::ObjectId
             bodyObject =
                 EnsureInitialBodyObject(
@@ -1015,38 +993,10 @@ int main(
             std::span(
                 initialSelection));
 
-        orbit::commands::CommandRegistry
-            authoringCommands;
-
-        orbit::editor_model::
-            authoring_commands::Register(
-                authoringCommands,
-                commandService,
-                objects,
-                selection);
-
-        orbit::editor_model::
-            authoring_commands::RegisterMaterialCommands(
-                authoringCommands,
-                commandService,
-                objects,
-                selection);
-
-        orbit::editor_model::
-            CommandSurfaceRegistry
-                commandSurfaces;
-
-        orbit::plugins::PluginManager
-            plugins(
-                project.RootDirectory(),
-                authoringCommands,
-                commandService,
-                commandSurfaces,
-                objects,
-                selection);
-
-        plugins.LoadEnabled(
-            project.Manifest());
+        // Ensure the initial visible preview is composed from the same
+        // persisted semantic hierarchy after any legacy scratch bootstrap.
+        static_cast<void>(
+            worldSession.RebuildUniverse());
 
         orbit::rpc::Dispatcher
             rpcDispatcher;
@@ -1256,87 +1206,31 @@ int main(
         const orbit::shader::dxc::
             DxcShaderCompiler compiler;
 
-        // Studio still exercises the runtime celestial registry instead
-        // of owning a separate editor-only body representation. The
-        // semantic ObjectRecord above is the persisted authoring record;
-        // the registry is the active runtime representation.
-        orbit::frames::FrameGraph frames;
-        orbit::universe::BodyRegistry bodies(
-            frames);
+        // The visible legacy preview now consumes UniverseComposition,
+        // the same semantic-to-runtime derivation used by StudioSession.
+        // No editor-only Helion/Asterra FrameGraph or BodyRegistry is built.
+        auto& universe =
+            worldSession.Universe();
+        auto& frames =
+            universe.Frames();
+        auto& bodies =
+            universe.Bodies();
 
-        const auto projectId =
-            project.Manifest().projectId;
+        const auto composedBodyId =
+            universe.BodyForObject(
+                bodyObject);
 
-        const orbit::universe::SystemId
-            persistentSystemId =
-                DerivedPersistentId<
-                    orbit::universe::SystemId>(
-                        projectId,
-                        0x53595354454d4944ULL,
-                        0x4f52424954563033ULL);
-
-        const orbit::frames::FrameId
-            persistentSystemFrame =
-                DerivedPersistentId<
-                    orbit::frames::FrameId>(
-                        projectId,
-                        0x5359534652414d45ULL,
-                        0x4f52424954563033ULL);
-
-        const orbit::universe::SystemId
-            system =
-                bodies.CreateSystem(
-                    "Helion",
-                    persistentSystemId,
-                    persistentSystemFrame);
-
-        const orbit::universe::BodyId
-            persistentBodyId =
-                DerivedPersistentId<
-                    orbit::universe::BodyId>(
-                        bodyObject,
-                        0x424f445949440003ULL,
-                        0x4f52424954563033ULL);
-
-        const orbit::frames::FrameId
-            persistentBodyFrame =
-                DerivedPersistentId<
-                    orbit::frames::FrameId>(
-                        bodyObject,
-                        0x424f44594652414dULL,
-                        0x4f52424954563033ULL);
+        if (!composedBodyId.has_value() ||
+            bodies.FindBody(*composedBodyId) ==
+                nullptr)
+        {
+            throw std::runtime_error(
+                "Studio failed to compose its active semantic body.");
+        }
 
         const orbit::universe::BodyId
             bodyId =
-                bodies.CreateBody({
-                    .system = system,
-                    .name = "Asterra",
-                    .shape =
-                        orbit::universe::
-                            SphereShape{
-                                .radiusMeters =
-                                    BodyRadius(
-                                        objects,
-                                        bodyObject)
-                            },
-                    .mass =
-                        orbit::universe::
-                            MassProperties{
-                                .massKilograms =
-                                    5.0e24
-                            },
-                    .id =
-                        persistentBodyId,
-                    .frame =
-                        persistentBodyFrame
-                });
-
-        if (bodies.FindBody(bodyId) ==
-            nullptr)
-        {
-            throw std::runtime_error(
-                "Studio failed to create its active body.");
-        }
+                *composedBodyId;
 
         orbit::render_view::RenderView
             bodyView(
