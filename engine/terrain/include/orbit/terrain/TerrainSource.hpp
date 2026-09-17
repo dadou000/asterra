@@ -4,13 +4,36 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
 #include <orbit/terrain/TerrainFields.hpp>
+#include <orbit/terrain/TerrainPosition.hpp>
 
 namespace orbit::terrain
 {
 struct TerrainQuery
 {
+    // Legacy field layout remains source-compatible while the query now also
+    // carries the canonical planet-relative identity required by V0.0.4.
     math::Double3 unitDirection{};
     f64 footprintMeters{1.0};
+    world::PlanetId planet{};
+    f64 radialOffsetMeters{0.0};
+
+    [[nodiscard]] PlanetSurfacePosition
+    SurfacePosition() const noexcept
+    {
+        return CanonicalizeSurfacePosition({
+            .planet = planet,
+            .unitDirection = unitDirection,
+            .radialOffsetMeters = radialOffsetMeters
+        });
+    }
+
+    [[nodiscard]] TerrainSampleFootprint
+    Footprint() const noexcept
+    {
+        return {
+            .diameterMeters = footprintMeters
+        };
+    }
 };
 
 class TerrainSource
