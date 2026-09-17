@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <source_location>
 #include <stdexcept>
@@ -53,7 +54,8 @@ int main()
         Check(snapshot.engineCompatibilityVersion == "0.0.3");
         Check(snapshot.startupWorld == std::filesystem::path("Worlds/Main.orbitworld"));
         Check(snapshot.worlds.size() == 1U);
-        Check(snapshot.worlds[0].startup);
+        Check(snapshot.worlds[0].valid);
+        Check(snapshot.worlds[0].descriptor.startup);
 
         settings.SetDisplayName("Renamed Project");
         snapshot = settings.Snapshot();
@@ -108,7 +110,7 @@ int main()
         orbit::studio_session::StudioWorkspace workspace;
         workspace.OpenProject(root);
         orbit::studio_session::ProjectSettingsModel settings(workspace);
-        const auto snapshot = settings.Snapshot();
+        auto snapshot = settings.Snapshot();
 
         Check(snapshot.projectId == stableProjectId);
         Check(snapshot.displayName == "Renamed Project");
@@ -120,15 +122,41 @@ int main()
         std::size_t startupCount = 0U;
         for (const auto& world : snapshot.worlds)
         {
-            if (world.startup)
+            Check(world.valid);
+
+            if (world.descriptor.startup)
             {
                 ++startupCount;
                 Check(
-                    world.relativePath ==
+                    world.descriptor.relativePath ==
                     std::filesystem::path("Worlds/Secondary.orbitworld"));
             }
         }
         Check(startupCount == 1U);
+
+        const auto brokenPath = root / "Worlds/Broken.orbitworld";
+        {
+            std::ofstream broken(
+                brokenPath,
+                std::ios::binary | std::ios::trunc);
+            broken << "invalid world";
+        }
+
+        snapshot = settings.Snapshot();
+        Check(snapshot.worlds.size() == 3U);
+
+        bool foundBroken = false;
+        for (const auto& world : snapshot.worlds)
+        {
+            if (world.descriptor.relativePath ==
+                std::filesystem::path("Worlds/Broken.orbitworld"))
+            {
+                Check(!world.valid);
+                Check(!world.diagnostic.empty());
+                foundBroken = true;
+            }
+        }
+        Check(foundBroken);
     }
 
     std::filesystem::remove_all(root);
