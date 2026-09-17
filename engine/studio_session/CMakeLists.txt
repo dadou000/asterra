@@ -1,5 +1,6 @@
 add_library(OrbitStudioSession STATIC
     src/StudioSession.cpp
+    src/StudioRuntimeBinding.cpp
     src/StudioWorkspace.cpp
     src/StudioWorkspaceRpcHost.cpp
     src/ProjectBrowserModel.cpp
@@ -48,6 +49,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioSession
         COMMAND OrbitStudioSessionTests
+    )
+
+    add_executable(OrbitStudioRuntimeBindingTests
+        tests/StudioRuntimeBindingTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioRuntimeBindingTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioRuntimeBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioRuntimeBindingTests)
+
+    add_test(
+        NAME Orbit.StudioRuntimeBinding
+        COMMAND OrbitStudioRuntimeBindingTests
     )
 
     add_executable(OrbitStudioWorkspaceTests
