@@ -121,6 +121,11 @@ int main()
             primary.Find("target")->
                 Find("object")->AsString() ==
             asterra.ToString());
+        Check(
+            primary.Find("target")->
+                Find("universe_generation")->AsInteger() ==
+            static_cast<orbit::i64>(
+                studio.World().UniverseGeneration()));
 
         static_cast<void>(
             Call(
@@ -149,6 +154,11 @@ int main()
                 Find("object")->AsString() ==
             luma.ToString());
         Check(
+            pinned.Find("target")->
+                Find("universe_generation")->AsInteger() ==
+            static_cast<orbit::i64>(
+                studio.World().UniverseGeneration()));
+        Check(
             pinned.Find("mode")->AsString() ==
             "body_map");
 
@@ -170,6 +180,11 @@ int main()
             const auto object =
                 view.Find("target")->
                     Find("object")->AsString();
+            Check(
+                view.Find("target")->
+                    Find("universe_generation")->AsInteger() ==
+                static_cast<orbit::i64>(
+                    studio.World().UniverseGeneration()));
 
             if (id == "primary")
             {
@@ -183,6 +198,28 @@ int main()
 
         Check(primaryTracksLuma);
         Check(mapTracksLuma);
+
+        const auto previousUniverseGeneration =
+            studio.World().UniverseGeneration();
+        studio.World().Commands().SetProperty(
+            luma,
+            orbit::world_model::kBodyRadius,
+            1'800'000.0);
+        static_cast<void>(studio.Tick());
+        Check(
+            studio.World().UniverseGeneration() >
+            previousUniverseGeneration);
+
+        const auto refreshedCatalog =
+            Call(studio, "4b", "view.list");
+        for (const auto& view : refreshedCatalog.AsArray())
+        {
+            Check(
+                view.Find("target")->
+                    Find("universe_generation")->AsInteger() ==
+                static_cast<orbit::i64>(
+                    studio.World().UniverseGeneration()));
+        }
 
         const auto debug =
             Call(
