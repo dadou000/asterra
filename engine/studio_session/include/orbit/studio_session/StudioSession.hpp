@@ -8,6 +8,7 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
+#include <orbit/studio_session/WorldBoundPathNetwork.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -21,6 +22,7 @@ struct StudioTickResult
 {
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
+    bool pathNetworkRebound{false};
     bool pathRoutingRebound{false};
     bool pathProductsInvalidated{false};
     u32 pluginsReloaded{0};
@@ -52,6 +54,11 @@ public:
     Viewports() noexcept;
     [[nodiscard]] const ViewportTargetRegistry&
     Viewports() const noexcept;
+
+    [[nodiscard]] WorldBoundPathNetwork&
+    PathNetwork() noexcept;
+    [[nodiscard]] const WorldBoundPathNetwork&
+    PathNetwork() const noexcept;
 
     [[nodiscard]] UniverseBoundRoutePlanner&
     PathRouting() noexcept;
@@ -100,6 +107,7 @@ private:
     editor_session::WorldDocumentsModel documents_;
     editor_session::ActiveBodyModel activeBody_;
     ViewportTargetRegistry viewports_;
+    WorldBoundPathNetwork pathNetwork_;
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
     editor_rpc::EditorSessionRpcHost rpc_;
