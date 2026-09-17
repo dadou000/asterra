@@ -16,6 +16,7 @@ target_link_libraries(OrbitEditorSession
         Orbit::Commands
         Orbit::Documents
         Orbit::EditorModel
+        Orbit::Plugins
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
@@ -78,5 +79,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ActiveBodyModel
         COMMAND OrbitActiveBodyModelTests
+    )
+
+    add_executable(OrbitWorldScopedFacadesTests
+        tests/WorldScopedFacadesTests.cpp
+    )
+
+    target_link_libraries(OrbitWorldScopedFacadesTests
+        PRIVATE
+            Orbit::EditorSession
+    )
+
+    target_compile_features(
+        OrbitWorldScopedFacadesTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWorldScopedFacadesTests)
+
+    add_test(
+        NAME Orbit.WorldScopedFacades
+        COMMAND OrbitWorldScopedFacadesTests
     )
 endif()

@@ -35,6 +35,28 @@ struct EditorWorldSession::State
                 objects,
                 selection);
 
+        explorer =
+            std::make_unique<editor_model::ExplorerModel>(
+                objects,
+                commands,
+                selection);
+        inspector =
+            std::make_unique<editor_model::InspectorModel>(
+                objects,
+                schemas,
+                commands,
+                selection);
+        plugins =
+            std::make_unique<plugins::PluginManager>(
+                project.RootDirectory(),
+                commandRegistry,
+                commands,
+                commandSurfaces,
+                objects,
+                selection);
+        plugins->LoadEnabled(
+            project.Manifest());
+
         universeStats =
             universe.Rebuild(objects);
     }
@@ -46,6 +68,10 @@ struct EditorWorldSession::State
     selection::SelectionService selection;
     commands::CommandService commands;
     commands::CommandRegistry commandRegistry;
+    editor_model::CommandSurfaceRegistry commandSurfaces;
+    std::unique_ptr<editor_model::ExplorerModel> explorer;
+    std::unique_ptr<editor_model::InspectorModel> inspector;
+    std::unique_ptr<plugins::PluginManager> plugins;
     world_model::UniverseComposition universe;
     world_model::UniverseCompositionStats
         universeStats{};
@@ -80,7 +106,7 @@ void EditorWorldSession::OpenWorld(
             "Cannot switch worlds while an authoring transaction is active.");
     }
 
-    // Build every world-scoped service first. A validation, schema or
+    // Build every world-scoped service first. A validation, schema, plugin or
     // composition failure leaves the currently active session untouched.
     auto candidate =
         std::make_unique<State>(
@@ -207,6 +233,53 @@ const commands::CommandRegistry&
 EditorWorldSession::CommandRegistry() const
 {
     return RequireState().commandRegistry;
+}
+
+editor_model::CommandSurfaceRegistry&
+EditorWorldSession::CommandSurfaces()
+{
+    return RequireState().commandSurfaces;
+}
+
+const editor_model::CommandSurfaceRegistry&
+EditorWorldSession::CommandSurfaces() const
+{
+    return RequireState().commandSurfaces;
+}
+
+editor_model::ExplorerModel&
+EditorWorldSession::Explorer()
+{
+    return *RequireState().explorer;
+}
+
+const editor_model::ExplorerModel&
+EditorWorldSession::Explorer() const
+{
+    return *RequireState().explorer;
+}
+
+editor_model::InspectorModel&
+EditorWorldSession::Inspector()
+{
+    return *RequireState().inspector;
+}
+
+const editor_model::InspectorModel&
+EditorWorldSession::Inspector() const
+{
+    return *RequireState().inspector;
+}
+
+plugins::PluginManager& EditorWorldSession::Plugins()
+{
+    return *RequireState().plugins;
+}
+
+const plugins::PluginManager&
+EditorWorldSession::Plugins() const
+{
+    return *RequireState().plugins;
 }
 
 world_model::UniverseComposition&

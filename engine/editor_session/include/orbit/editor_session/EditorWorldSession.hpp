@@ -4,6 +4,10 @@
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/CommandSurfaces.hpp>
+#include <orbit/editor_model/ExplorerModel.hpp>
+#include <orbit/editor_model/InspectorModel.hpp>
+#include <orbit/plugins/PluginManager.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
@@ -16,7 +20,10 @@ namespace orbit::editor_session
 {
 // Owns every service whose lifetime is scoped to one authoritative
 // .orbitworld document. Switching worlds constructs a complete candidate
-// session first, then atomically replaces the old service graph.
+// session first, then atomically replaces the old service graph. Any facade
+// that retains references into world authority (Explorer, Inspector, plugins,
+// command surfaces) lives inside the same state and is destroyed before the
+// referenced services.
 class EditorWorldSession
 {
 public:
@@ -67,6 +74,20 @@ public:
 
     [[nodiscard]] commands::CommandRegistry& CommandRegistry();
     [[nodiscard]] const commands::CommandRegistry& CommandRegistry() const;
+
+    [[nodiscard]] editor_model::CommandSurfaceRegistry&
+    CommandSurfaces();
+    [[nodiscard]] const editor_model::CommandSurfaceRegistry&
+    CommandSurfaces() const;
+
+    [[nodiscard]] editor_model::ExplorerModel& Explorer();
+    [[nodiscard]] const editor_model::ExplorerModel& Explorer() const;
+
+    [[nodiscard]] editor_model::InspectorModel& Inspector();
+    [[nodiscard]] const editor_model::InspectorModel& Inspector() const;
+
+    [[nodiscard]] plugins::PluginManager& Plugins();
+    [[nodiscard]] const plugins::PluginManager& Plugins() const;
 
     [[nodiscard]] world_model::UniverseComposition& Universe();
     [[nodiscard]] const world_model::UniverseComposition& Universe() const;
