@@ -63,11 +63,25 @@ struct BuildAutomation
 };
 
 // Registers the structured authoring API onto a transport-independent
-// JSON-RPC dispatcher. All persistent mutations route through CommandService
-// or CommandRegistry, preserving validation, transactions and undo/redo.
+// JSON-RPC dispatcher. Semantic mutations route through CommandService or
+// CommandRegistry; project-document mutations route through ProjectDocument.
 class EditorRpcService
 {
 public:
+    // Mutable project composition adds project/world convenience methods on
+    // top of the common semantic authoring API.
+    EditorRpcService(
+        rpc::Dispatcher& dispatcher,
+        documents::ProjectDocument& project,
+        commands::CommandRegistry& commandRegistry,
+        commands::CommandService& commandService,
+        const schema::SchemaRegistry& schemas,
+        scene::ObjectStore& objects,
+        selection::SelectionService& selection,
+        ViewportAutomation viewport = {});
+
+    // Read-only project composition retains the common semantic API but does
+    // not expose project-document mutations.
     EditorRpcService(
         rpc::Dispatcher& dispatcher,
         const documents::ProjectDocument& project,
@@ -114,6 +128,9 @@ private:
     void Register(
         rpc::MethodDescriptor descriptor,
         rpc::Dispatcher::MethodHandler handler);
+
+    void RegisterProjectWorldAutomation(
+        documents::ProjectDocument& project);
 
     struct EventRecord
     {

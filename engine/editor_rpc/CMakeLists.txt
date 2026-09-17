@@ -1,5 +1,6 @@
 add_library(OrbitEditorRpc STATIC
     src/EditorRpcService.cpp
+    src/ProjectWorldRpc.cpp
 )
 
 add_library(Orbit::EditorRpc ALIAS OrbitEditorRpc)
@@ -41,5 +42,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.EditorRpc
         COMMAND OrbitEditorRpcTests
+    )
+
+    add_executable(OrbitProjectWorldRpcTests
+        tests/ProjectWorldRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitProjectWorldRpcTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::EditorRpc
+    )
+
+    target_compile_features(OrbitProjectWorldRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitProjectWorldRpcTests)
+
+    add_test(
+        NAME Orbit.ProjectWorldRpc
+        COMMAND OrbitProjectWorldRpcTests
     )
 endif()
