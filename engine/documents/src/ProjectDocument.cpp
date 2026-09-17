@@ -1,5 +1,7 @@
 #include <orbit/documents/ProjectDocument.hpp>
 
+#include <orbit/core/BuildInfo.hpp>
+
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -149,6 +151,8 @@ ProjectDocument ProjectDocument::Create(
         ProjectId::Random();
     manifest.displayName =
         std::string(displayName);
+    manifest.engineCompatibilityVersion =
+        std::string(Version);
     manifest.buildProfiles.push_back({
         .name = "Development Windows",
         .configuration = "Development",
