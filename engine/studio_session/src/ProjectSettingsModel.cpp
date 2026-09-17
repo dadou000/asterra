@@ -21,7 +21,7 @@ ProjectSettingsSnapshot ProjectSettingsModel::Snapshot() const
         .engineCompatibilityVersion =
             manifest.engineCompatibilityVersion,
         .startupWorld = manifest.startupWorld,
-        .worlds = project.Worlds()
+        .worlds = workspace_.Session().Worlds()
     };
 }
 
