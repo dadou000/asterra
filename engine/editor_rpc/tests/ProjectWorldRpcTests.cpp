@@ -99,6 +99,12 @@ int main()
             commands,
             objects,
             selection);
+        orbit::editor_model::authoring_commands::
+            RegisterTerrainCommands(
+                registry,
+                commands,
+                objects,
+                selection);
         orbit::rpc::Dispatcher dispatcher;
 
         const auto semanticWorld =
@@ -312,7 +318,7 @@ int main()
                 Find("name")->AsString() ==
             "RPC Planet");
 
-        const auto events =
+        const auto eventsBeforeCapabilities =
             Call(
                 dispatcher,
                 "14",
@@ -321,11 +327,117 @@ int main()
                     orbit::rpc::Value::Object{
                         {"sequence", orbit::i64{0}}
                     }));
-        Check(events.Find("events") != nullptr);
-        Check(events.Find("events")->IsArray());
+        Check(eventsBeforeCapabilities.Find("events") != nullptr);
+        Check(eventsBeforeCapabilities.Find("events")->IsArray());
         Check(
-            events.Find("events")->AsArray().size() ==
+            eventsBeforeCapabilities.Find("events")->AsArray().size() ==
             4);
+
+        const auto capabilities =
+            Call(
+                dispatcher,
+                "15",
+                "body.capabilities",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"body", bodyId}
+                    }));
+        Check(capabilities.IsArray());
+        Check(capabilities.AsArray().size() == 1U);
+        Check(
+            capabilities.AsArray()[0].Find("capability")->AsString() ==
+            "surface.terrain");
+        Check(!capabilities.AsArray()[0].Find("enabled")->AsBool());
+        Check(capabilities.AsArray()[0].Find("can_enable")->AsBool());
+
+        const auto enabledTerrain =
+            Call(
+                dispatcher,
+                "16",
+                "body.set_capability",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"body", bodyId},
+                        {"capability", "surface.terrain"},
+                        {"enabled", true}
+                    }));
+        Check(enabledTerrain.Find("enabled")->AsBool());
+        Check(enabledTerrain.Find("object") != nullptr);
+        Check(enabledTerrain.Find("object")->IsString());
+        const std::string terrainId =
+            enabledTerrain.Find("object")->AsString();
+
+        static_cast<void>(
+            Call(dispatcher, "17", "history.undo"));
+        const auto afterCapabilityUndo =
+            Call(
+                dispatcher,
+                "18",
+                "body.capabilities",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"body", bodyId}
+                    }));
+        Check(!afterCapabilityUndo.AsArray()[0].Find("enabled")->AsBool());
+
+        static_cast<void>(
+            Call(dispatcher, "19", "history.redo"));
+        const auto afterCapabilityRedo =
+            Call(
+                dispatcher,
+                "20",
+                "body.capabilities",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"body", bodyId}
+                    }));
+        Check(afterCapabilityRedo.AsArray()[0].Find("enabled")->AsBool());
+        Check(
+            afterCapabilityRedo.AsArray()[0].Find("object")->AsString() ==
+            terrainId);
+
+        const auto disabledTerrain =
+            Call(
+                dispatcher,
+                "21",
+                "body.set_capability",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"body", bodyId},
+                        {"capability", "surface.terrain"},
+                        {"enabled", false}
+                    }));
+        Check(!disabledTerrain.Find("enabled")->AsBool());
+        Check(disabledTerrain.Find("object")->IsNull());
+
+        static_cast<void>(
+            Call(dispatcher, "22", "history.undo"));
+        const auto restoredTerrain =
+            Call(
+                dispatcher,
+                "23",
+                "body.capabilities",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"body", bodyId}
+                    }));
+        Check(restoredTerrain.AsArray()[0].Find("enabled")->AsBool());
+        Check(
+            restoredTerrain.AsArray()[0].Find("object")->AsString() ==
+            terrainId);
+
+        const auto finalEvents =
+            Call(
+                dispatcher,
+                "24",
+                "event.since",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"sequence", orbit::i64{0}}
+                    }));
+        Check(
+            finalEvents.Find("events")->AsArray().size() ==
+            6);
     }
 
     std::filesystem::remove_all(root);
