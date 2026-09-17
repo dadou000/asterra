@@ -54,6 +54,7 @@ struct RiverCarvingSegment
 
 struct RiverCarvingField
 {
+    terrain::PlanetSurfacePosition origin{};
     world::SurfaceFrame surfaceFrame{};
     f64 halfExtentMeters{0.0};
 
