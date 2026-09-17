@@ -2,6 +2,7 @@ add_library(OrbitStudioUi STATIC
     src/ProjectAuthoringUi.cpp
     src/StudioRenderViewSet.cpp
     src/StudioViewportCamera.cpp
+    src/StudioViewportRenderer.cpp
 )
 
 add_library(Orbit::StudioUi ALIAS OrbitStudioUi)
@@ -14,6 +15,7 @@ target_include_directories(OrbitStudioUi
 target_link_libraries(OrbitStudioUi
     PUBLIC
         Orbit::EditorUi
+        Orbit::RenderGraph
         Orbit::RenderView
         Orbit::StudioSession
 )
