@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/editor_session/WorldDocumentsModel.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 
 #include <filesystem>
@@ -18,12 +19,13 @@ struct ProjectSettingsSnapshot
     std::filesystem::path manifestPath;
     std::string engineCompatibilityVersion;
     std::filesystem::path startupWorld;
-    std::vector<documents::WorldDescriptor> worlds;
+    std::vector<editor_session::WorldDocumentItem> worlds;
 };
 
 // Project-settings presentation model. ProjectDocument remains authority;
 // setters here are only application-facing adapters over validated persistent
-// document/session operations.
+// document/session operations. World entries come from the diagnostic Studio
+// catalog so one invalid world document cannot make settings unavailable.
 class ProjectSettingsModel
 {
 public:
