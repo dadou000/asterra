@@ -37,7 +37,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build V0.0.3 regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitV003ScaffoldIntegrationTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitEditorSessionRpcHostTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
 
       - name: Test - Terrain view
         shell: pwsh
@@ -87,6 +87,22 @@ jobs:
             throw "OrbitUniverseCompositionTests failed with exit code $LASTEXITCODE"
           }
 
+      - name: Test - Core editor RPC
+        shell: pwsh
+        run: |
+          & "build/engine/editor_rpc/Release/OrbitEditorRpcTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitEditorRpcTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Build package RPC
+        shell: pwsh
+        run: |
+          & "build/engine/editor_rpc/Release/OrbitBuildPackageRpcTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitBuildPackageRpcTests failed with exit code $LASTEXITCODE"
+          }
+
       - name: Test - Project/world/body RPC
         shell: pwsh
         run: |
@@ -101,6 +117,22 @@ jobs:
           & "build/engine/editor_session/Release/OrbitEditorWorldSessionTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitEditorWorldSessionTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Session-aware RPC host
+        shell: pwsh
+        run: |
+          & "build/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitEditorSessionRpcHostTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Explorer and inspector
+        shell: pwsh
+        run: |
+          & "build/tests/Release/OrbitExplorerInspectorTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitExplorerInspectorTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Test - Build service
