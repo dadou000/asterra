@@ -57,8 +57,8 @@ struct EditorWorldSession::State
         plugins->LoadEnabled(
             project.Manifest());
 
-        universeStats =
-            universe.Rebuild(objects);
+        universeStats = universe.Rebuild(objects);
+        surfaceStats = surfaces.Rebuild(objects, universe);
     }
 
     documents::WorldDescriptor descriptor;
@@ -73,8 +73,9 @@ struct EditorWorldSession::State
     std::unique_ptr<editor_model::InspectorModel> inspector;
     std::unique_ptr<plugins::PluginManager> plugins;
     world_model::UniverseComposition universe;
-    world_model::UniverseCompositionStats
-        universeStats{};
+    surface_model::SurfaceComposition surfaces;
+    world_model::UniverseCompositionStats universeStats{};
+    surface_model::SurfaceCompositionStats surfaceStats{};
 };
 
 EditorWorldSession::EditorWorldSession(
@@ -294,13 +295,26 @@ EditorWorldSession::Universe() const
     return RequireState().universe;
 }
 
+surface_model::SurfaceComposition&
+EditorWorldSession::Surfaces()
+{
+    return RequireState().surfaces;
+}
+
+const surface_model::SurfaceComposition&
+EditorWorldSession::Surfaces() const
+{
+    return RequireState().surfaces;
+}
+
 world_model::UniverseCompositionStats
 EditorWorldSession::RebuildUniverse()
 {
     auto& state = RequireState();
-    state.universeStats =
-        state.universe.Rebuild(
-            state.objects);
+    state.universeStats = state.universe.Rebuild(state.objects);
+    state.surfaceStats = state.surfaces.Rebuild(
+        state.objects,
+        state.universe);
     return state.universeStats;
 }
 
@@ -314,9 +328,10 @@ bool EditorWorldSession::RefreshUniverseIfChanged()
         return false;
     }
 
-    state.universeStats =
-        state.universe.Rebuild(
-            state.objects);
+    state.universeStats = state.universe.Rebuild(state.objects);
+    state.surfaceStats = state.surfaces.Rebuild(
+        state.objects,
+        state.universe);
     return true;
 }
 
@@ -324,6 +339,12 @@ const world_model::UniverseCompositionStats&
 EditorWorldSession::UniverseStats() const
 {
     return RequireState().universeStats;
+}
+
+const surface_model::SurfaceCompositionStats&
+EditorWorldSession::SurfaceStats() const
+{
+    return RequireState().surfaceStats;
 }
 
 void EditorWorldSession::Checkpoint()
