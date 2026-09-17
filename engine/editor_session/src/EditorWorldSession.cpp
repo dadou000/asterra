@@ -127,6 +127,7 @@ void EditorWorldSession::OpenWorld(
 
     state_ = std::move(candidate);
     ++generation_;
+    ++universeGeneration_;
 }
 
 void EditorWorldSession::CloseWorld()
@@ -145,6 +146,7 @@ void EditorWorldSession::CloseWorld()
     state_->world.Checkpoint();
     state_.reset();
     ++generation_;
+    ++universeGeneration_;
 }
 
 bool EditorWorldSession::HasWorld() const noexcept
@@ -155,6 +157,11 @@ bool EditorWorldSession::HasWorld() const noexcept
 u64 EditorWorldSession::Generation() const noexcept
 {
     return generation_;
+}
+
+u64 EditorWorldSession::UniverseGeneration() const noexcept
+{
+    return universeGeneration_;
 }
 
 documents::ProjectDocument&
@@ -202,7 +209,8 @@ scene::ObjectStore& EditorWorldSession::Objects()
     return RequireState().objects;
 }
 
-const scene::ObjectStore& EditorWorldSession::Objects() const
+const scene::ObjectStore&
+EditorWorldSession::Objects() const
 {
     return RequireState().objects;
 }
@@ -321,6 +329,7 @@ EditorWorldSession::RebuildUniverse()
     state.surfaceStats = state.surfaces.Rebuild(
         state.objects,
         state.universe);
+    ++universeGeneration_;
     return state.universeStats;
 }
 
@@ -338,6 +347,7 @@ bool EditorWorldSession::RefreshUniverseIfChanged()
     state.surfaceStats = state.surfaces.Rebuild(
         state.objects,
         state.universe);
+    ++universeGeneration_;
     return true;
 }
 
