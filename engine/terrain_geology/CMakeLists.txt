@@ -30,6 +30,11 @@ if(BUILD_TESTING)
             Orbit::TerrainGeology
     )
 
+    target_compile_definitions(OrbitTerrainGeologyTests
+        PRIVATE
+            ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/reference"
+    )
+
     target_compile_features(OrbitTerrainGeologyTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitTerrainGeologyTests)
 
