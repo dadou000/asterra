@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -14,11 +15,15 @@ struct WorldDocumentItem
 {
     documents::WorldDescriptor descriptor;
     bool active{false};
+    bool valid{true};
+    std::string diagnostic;
 };
 
 // Project/world document presentation model shared by Studio surfaces.
 // It owns no parallel catalog: every query is reconstructed from
-// ProjectDocument and active state comes from EditorWorldSession.
+// ProjectDocument and active state comes from EditorWorldSession. Invalid or
+// incompatible world files are represented as diagnostic catalog entries so a
+// single damaged document cannot hide the rest of a project's worlds.
 class WorldDocumentsModel
 {
 public:
