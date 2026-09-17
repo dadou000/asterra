@@ -50,6 +50,8 @@ struct Constants
     float4 cameraAndTanHalfFov;
     float4 forward;
     float4 up;
+    float4 baseColorAndRoughness;
+    float4 materialParameters;
 };
 [[vk::push_constant]] Constants g_pc;
 
@@ -143,43 +145,90 @@ float4 main(VSOutput input) : SV_Target0
                 hit.z /
                     (radii.z * radii.z)));
 
-    const float3 light =
+    const float3 lightDirection =
         normalize(
             float3(
-                -0.55,
-                0.65,
-                -0.70));
+                0.55,
+                0.70,
+                -0.65));
+    const float3 viewDirection =
+        normalize(-ray);
+    const float3 halfVector =
+        normalize(
+            lightDirection +
+            viewDirection);
 
-    const float diffuse =
+    const float nDotL =
         saturate(
-            dot(normal, -light));
+            dot(normal, lightDirection));
+    const float nDotV =
+        saturate(
+            dot(normal, viewDirection));
+    const float nDotH =
+        saturate(
+            dot(normal, halfVector));
+
+    const float3 baseColor =
+        saturate(
+            g_pc.baseColorAndRoughness.xyz);
+    const float roughness =
+        saturate(
+            g_pc.baseColorAndRoughness.w);
+    const float metallic =
+        saturate(
+            g_pc.materialParameters.x);
+
+    const float3 dielectricF0 =
+        float3(0.04, 0.04, 0.04);
+    const float3 f0 =
+        lerp(
+            dielectricF0,
+            baseColor,
+            metallic);
+
+    const float specularPower =
+        lerp(
+            192.0,
+            6.0,
+            max(roughness, 0.04));
+    const float specularLobe =
+        pow(
+            nDotH,
+            specularPower) *
+        lerp(
+            1.25,
+            0.18,
+            roughness);
+
+    const float fresnel =
+        pow(
+            1.0 - nDotV,
+            5.0);
+    const float3 specular =
+        (f0 +
+         (1.0 - f0) * fresnel) *
+        specularLobe;
+
+    const float3 diffuse =
+        baseColor *
+        (1.0 - metallic) *
+        (0.08 + 0.92 * nDotL);
 
     const float rim =
         pow(
-            1.0 -
-                saturate(
-                    dot(
-                        normal,
-                        -ray)),
+            1.0 - nDotV,
             3.0);
 
-    const float3 base =
-        float3(
-            0.11,
-            0.26,
-            0.36);
-
     const float3 color =
-        base *
-            (0.18 +
-             diffuse * 0.95) +
-        float3(
-            0.08,
-            0.24,
-            0.42) *
-            rim;
+        diffuse +
+        specular *
+            (0.35 + 0.65 * nDotL) +
+        baseColor *
+            rim * 0.08;
 
-    return float4(color, 1.0);
+    return float4(
+        color / (1.0 + color),
+        1.0);
 }
 )";
 } // namespace
@@ -223,7 +272,7 @@ public:
                 },
                 .vertexAttributes = {},
                 .vertexStrideBytes = 0,
-                .pushConstantDwords = 16,
+                .pushConstantDwords = 24,
                 .sampledTextures = 0,
                 .topology =
                     rhi::PrimitiveTopology::
@@ -259,7 +308,8 @@ void BodyPreviewRenderer::Draw(
     const u32 width,
     const u32 height,
     const universe::BodyShape& shape,
-    const render_view::CameraState& camera)
+    const render_view::CameraState& camera,
+    const PreviewMaterial& material)
 {
     if (width == 0 || height == 0)
     {
@@ -317,7 +367,7 @@ void BodyPreviewRenderer::Draw(
                 value);
         };
 
-    const std::array<u32, 16> constants{
+    const std::array<u32, 24> constants{
         bits(
             static_cast<f32>(
                 ellipsoid.radiiMeters.x /
@@ -356,6 +406,22 @@ void BodyPreviewRenderer::Draw(
         bits(camera.up.x),
         bits(camera.up.y),
         bits(camera.up.z),
+        bits(0.0F),
+
+        bits(material.baseColor.x),
+        bits(material.baseColor.y),
+        bits(material.baseColor.z),
+        bits(std::clamp(
+            material.roughness,
+            0.0F,
+            1.0F)),
+
+        bits(std::clamp(
+            material.metallic,
+            0.0F,
+            1.0F)),
+        bits(0.0F),
+        bits(0.0F),
         bits(0.0F)
     };
 
