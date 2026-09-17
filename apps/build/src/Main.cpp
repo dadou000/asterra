@@ -219,41 +219,6 @@ FindPlayerExecutable()
         "OrbitPlayer.exe was not found beside OrbitBuild or in the development build tree.");
 }
 
-[[nodiscard]] std::vector<
-    std::filesystem::path>
-FindPackageRuntimeFiles(
-    const std::filesystem::path& manifestPath,
-    const std::filesystem::path& playerExecutable)
-{
-    std::vector<std::filesystem::path>
-        runtimeFiles;
-
-    const auto platformConfiguration =
-        manifestPath.parent_path() /
-        "Config" /
-        "PlatformServices.toml";
-
-    if (std::filesystem::is_regular_file(
-            platformConfiguration))
-    {
-        runtimeFiles.push_back(
-            platformConfiguration);
-    }
-
-    const auto steamRuntime =
-        playerExecutable.parent_path() /
-        "steam_api64.dll";
-
-    if (std::filesystem::is_regular_file(
-            steamRuntime))
-    {
-        runtimeFiles.push_back(
-            steamRuntime);
-    }
-
-    return runtimeFiles;
-}
-
 void PrintIssues(
     const std::vector<orbit::build::BuildIssue>& issues)
 {
@@ -358,11 +323,7 @@ int main(
                     request,
                     {
                         .playerExecutable =
-                            playerExecutable,
-                        .runtimeFiles =
-                            FindPackageRuntimeFiles(
-                                options.manifestPath,
-                                playerExecutable)
+                            playerExecutable
                     });
 
             PrintIssues(

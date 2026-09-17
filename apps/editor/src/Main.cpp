@@ -26,6 +26,7 @@
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/platform/FileDialog.hpp>
 #include <orbit/platform/Paths.hpp>
+#include <orbit/platform_services/PlatformConfig.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/plugins/PluginManager.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
@@ -1281,6 +1282,14 @@ int main(
             };
 
         constexpr orbit::editor_ui::PanelId
+            kPlatformServicesPanel{
+                .high =
+                    0x4f52424954535455ULL,
+                .low =
+                    0x44494f504c415446ULL
+            };
+
+        constexpr orbit::editor_ui::PanelId
             kContentPanel{
                 .high =
                     0x4f52424954535455ULL,
@@ -1316,6 +1325,66 @@ int main(
             lastPackageExecutable;
         std::string buildStatus{
             "Not run"};
+
+        const std::filesystem::path
+            platformConfigurationPath =
+                project.RootDirectory() /
+                "Config" /
+                "PlatformServices.toml";
+        orbit::platform_services::
+            PlatformConfiguration
+                platformConfiguration;
+        std::vector<
+            orbit::platform_services::
+                PlatformConfigIssue>
+            platformConfigurationIssues;
+        std::string platformStatus{
+            "Not configured"};
+        orbit::i64 steamAppIdEditor = 0;
+        std::string newAchievementId;
+        std::string newAchievementApiName;
+        std::string newStatId;
+        std::string newStatApiName;
+        bool newStatFloat = false;
+        std::string newTimelineEventId;
+        std::string newTimelineTitle;
+        std::string newTimelineDescription;
+        std::string newTimelineIcon{
+            "steam_marker"};
+
+        if (std::filesystem::is_regular_file(
+                platformConfigurationPath))
+        {
+            try
+            {
+                platformConfiguration =
+                    orbit::platform_services::
+                        LoadPlatformConfiguration(
+                            platformConfigurationPath);
+                steamAppIdEditor =
+                    static_cast<orbit::i64>(
+                        platformConfiguration.
+                            steam.appId);
+                platformConfigurationIssues =
+                    orbit::platform_services::
+                        ValidatePlatformConfiguration(
+                            platformConfiguration,
+                            false);
+                platformStatus =
+                    platformConfigurationIssues.
+                            empty()
+                        ? "Loaded"
+                        : "Loaded with validation issues";
+            }
+            catch (const std::exception&
+                       exception)
+            {
+                platformStatus =
+                    std::string(
+                        "Load failed: ") +
+                    exception.what();
+            }
+        }
 
         std::vector<orbit::editor_ui::PanelId>
             pluginPanelIds;
@@ -1514,7 +1583,7 @@ int main(
 
                     orbit::log::Info(
                         std::format(
-                            "Standalone package succeeded: {}",
+                            "Project package succeeded: {}",
                             result.outputDirectory.
                                 string()));
                 }
@@ -1523,7 +1592,7 @@ int main(
                     buildStatus =
                         "Package failed";
                     orbit::log::Error(
-                        "Standalone package failed.");
+                        "Project package failed.");
                 }
 
                 return result;
@@ -4349,6 +4418,302 @@ int main(
         });
 
         ui.RegisterPanel({
+            .id = kPlatformServicesPanel,
+            .title = "Platform Services",
+            .defaultOpen = false,
+            .draw =
+                [&project,
+                 &platformConfiguration,
+                 &platformConfigurationIssues,
+                 &platformConfigurationPath,
+                 &platformStatus,
+                 &steamAppIdEditor,
+                 &newAchievementId,
+                 &newAchievementApiName,
+                 &newStatId,
+                 &newStatApiName,
+                 &newStatFloat,
+                 &newTimelineEventId,
+                 &newTimelineTitle,
+                 &newTimelineDescription,
+                 &newTimelineIcon](
+                    orbit::editor_ui::
+                        PanelContext& context)
+                {
+                    context.Text(
+                        "Provider-neutral IDs remain project authority; storefront mappings live here.");
+                    context.Separator();
+
+                    static_cast<void>(
+                        context.Checkbox(
+                            "Enable Steam",
+                            platformConfiguration.
+                                steam.enabled));
+                    static_cast<void>(
+                        context.InputInteger(
+                            "Steam App ID",
+                            steamAppIdEditor));
+
+                    context.Text(
+                        std::format(
+                            "Achievements: {}  Stats: {}  Timeline events: {}",
+                            platformConfiguration.
+                                steam.achievements.
+                                size(),
+                            platformConfiguration.
+                                steam.stats.size(),
+                            platformConfiguration.
+                                steam.timelineEvents.
+                                size()));
+
+                    context.Separator();
+                    context.Text(
+                        "Achievement mapping");
+                    static_cast<void>(
+                        context.InputText(
+                            "Orbit Achievement ID",
+                            newAchievementId));
+                    static_cast<void>(
+                        context.InputText(
+                            "Steam Achievement API",
+                            newAchievementApiName));
+                    if (context.Button(
+                            "Add Achievement Mapping") &&
+                        !newAchievementId.empty() &&
+                        !newAchievementApiName.empty())
+                    {
+                        platformConfiguration.
+                            steam.achievements.
+                            push_back({
+                                .id =
+                                    newAchievementId,
+                                .steamApiName =
+                                    newAchievementApiName
+                            });
+                        newAchievementId.clear();
+                        newAchievementApiName.clear();
+                    }
+
+                    context.Separator();
+                    context.Text("Stat mapping");
+                    static_cast<void>(
+                        context.InputText(
+                            "Orbit Stat ID",
+                            newStatId));
+                    static_cast<void>(
+                        context.InputText(
+                            "Steam Stat API",
+                            newStatApiName));
+                    static_cast<void>(
+                        context.Checkbox(
+                            "Float Stat",
+                            newStatFloat));
+                    if (context.Button(
+                            "Add Stat Mapping") &&
+                        !newStatId.empty() &&
+                        !newStatApiName.empty())
+                    {
+                        platformConfiguration.
+                            steam.stats.push_back({
+                                .id = newStatId,
+                                .kind = newStatFloat
+                                    ? orbit::platform_services::
+                                        StatKind::Float
+                                    : orbit::platform_services::
+                                        StatKind::Integer,
+                                .steamApiName =
+                                    newStatApiName
+                            });
+                        newStatId.clear();
+                        newStatApiName.clear();
+                    }
+
+                    context.Separator();
+                    context.Text(
+                        "Timeline event mapping");
+                    static_cast<void>(
+                        context.InputText(
+                            "Semantic Event ID",
+                            newTimelineEventId));
+                    static_cast<void>(
+                        context.InputText(
+                            "Timeline Title",
+                            newTimelineTitle));
+                    static_cast<void>(
+                        context.InputText(
+                            "Timeline Description",
+                            newTimelineDescription));
+                    static_cast<void>(
+                        context.InputText(
+                            "Timeline Icon",
+                            newTimelineIcon));
+                    if (context.Button(
+                            "Add Timeline Mapping") &&
+                        !newTimelineEventId.empty())
+                    {
+                        platformConfiguration.
+                            steam.timelineEvents.
+                            push_back({
+                                .eventId =
+                                    newTimelineEventId,
+                                .title =
+                                    newTimelineTitle,
+                                .description =
+                                    newTimelineDescription,
+                                .icon =
+                                    newTimelineIcon.empty()
+                                        ? "steam_marker"
+                                        : newTimelineIcon
+                            });
+                        newTimelineEventId.clear();
+                        newTimelineTitle.clear();
+                        newTimelineDescription.clear();
+                        newTimelineIcon =
+                            "steam_marker";
+                    }
+
+                    context.Separator();
+
+                    if (context.Button(
+                            "Validate Configuration"))
+                    {
+                        if (steamAppIdEditor < 0 ||
+                            steamAppIdEditor >
+                                4294967295LL)
+                        {
+                            platformStatus =
+                                "Steam App ID is outside the uint32 range";
+                        }
+                        else
+                        {
+                            platformConfiguration.
+                                steam.appId =
+                                    static_cast<
+                                        orbit::u32>(
+                                            steamAppIdEditor);
+                            platformConfigurationIssues =
+                                orbit::platform_services::
+                                    ValidatePlatformConfiguration(
+                                        platformConfiguration,
+                                        platformConfiguration.
+                                            steam.enabled);
+                            platformStatus =
+                                platformConfigurationIssues.
+                                        empty()
+                                    ? "Configuration valid"
+                                    : std::format(
+                                        "{} validation issue{}",
+                                        platformConfigurationIssues.
+                                            size(),
+                                        platformConfigurationIssues.
+                                                size() == 1U
+                                            ? ""
+                                            : "s");
+                        }
+                    }
+
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Save Platform Config"))
+                    {
+                        if (steamAppIdEditor < 0 ||
+                            steamAppIdEditor >
+                                4294967295LL)
+                        {
+                            platformStatus =
+                                "Steam App ID is outside the uint32 range";
+                        }
+                        else
+                        {
+                            platformConfiguration.
+                                steam.appId =
+                                    static_cast<
+                                        orbit::u32>(
+                                            steamAppIdEditor);
+                            orbit::platform_services::
+                                SavePlatformConfigurationAtomic(
+                                    platformConfigurationPath,
+                                    platformConfiguration);
+                            platformConfigurationIssues =
+                                orbit::platform_services::
+                                    ValidatePlatformConfiguration(
+                                        platformConfiguration,
+                                        platformConfiguration.
+                                            steam.enabled);
+                            platformStatus =
+                                platformConfigurationIssues.
+                                        empty()
+                                    ? "Saved"
+                                    : std::format(
+                                        "Saved with {} validation issue{}",
+                                        platformConfigurationIssues.
+                                            size(),
+                                        platformConfigurationIssues.
+                                                size() == 1U
+                                            ? ""
+                                            : "s");
+                        }
+                    }
+
+                    if (context.Button(
+                            "Add Shipping Steam Profile"))
+                    {
+                        const auto found =
+                            std::ranges::find_if(
+                                project.Manifest().
+                                    buildProfiles,
+                                [](const auto& profile)
+                                {
+                                    return profile.storefront ==
+                                        "steam";
+                                });
+
+                        if (found ==
+                            project.Manifest().
+                                buildProfiles.end())
+                        {
+                            project.Manifest().
+                                buildProfiles.push_back({
+                                    .name =
+                                        "Shipping Steam",
+                                    .configuration =
+                                        "Shipping",
+                                    .platform =
+                                        "Windows",
+                                    .storefront =
+                                        "steam"
+                                });
+                            project.Save();
+                            platformStatus =
+                                "Added Shipping Steam build profile";
+                        }
+                        else
+                        {
+                            platformStatus =
+                                "Steam build profile already exists";
+                        }
+                    }
+
+                    context.Separator();
+                    context.Text(
+                        std::format(
+                            "Status: {}",
+                            platformStatus));
+
+                    for (const auto& issue :
+                         platformConfigurationIssues)
+                    {
+                        context.Text(
+                            std::format(
+                                "[{}] {}",
+                                issue.code,
+                                issue.message));
+                    }
+                }
+        });
+
+        ui.RegisterPanel({
             .id = kBuildPanel,
             .title = "Build",
             .defaultOpen = true,
@@ -4440,7 +4805,7 @@ int main(
                     context.SameLine();
 
                     if (context.Button(
-                            "Package Standalone"))
+                            "Package Project"))
                     {
                         static_cast<void>(
                             packageProjectBuild(
@@ -4557,7 +4922,7 @@ int main(
 
         ui.RegisterMenuAction({
             .menu = "Build",
-            .label = "Package Standalone",
+            .label = "Package Project",
             .invoke =
                 [&packageProjectBuild,
                  &selectedBuildProfile]

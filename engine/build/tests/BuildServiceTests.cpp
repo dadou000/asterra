@@ -1,5 +1,6 @@
 #include <orbit/build/BuildService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/platform_services/PlatformConfig.hpp>
 
 #include <array>
 #include <filesystem>
@@ -390,6 +391,116 @@ int main()
             package.executablePath.
                 parent_path() ==
             package.outputDirectory);
+
+        orbit::platform_services::
+            PlatformConfiguration steamConfiguration;
+        steamConfiguration.steam.enabled = true;
+        steamConfiguration.steam.appId = 480;
+        steamConfiguration.steam.achievements.
+            push_back({
+                .id = "garage.first_repair",
+                .steamApiName =
+                    "ACH_FIRST_REPAIR"
+            });
+        steamConfiguration.steam.stats.
+            push_back({
+                .id = "vehicles.repaired",
+                .kind = orbit::platform_services::
+                    StatKind::Integer,
+                .steamApiName =
+                    "STAT_VEHICLES_REPAIRED"
+            });
+        steamConfiguration.steam.timelineEvents.
+            push_back({
+                .eventId = "vehicle.repaired",
+                .title = "Vehicle repaired",
+                .description =
+                    "Completed a repair.",
+                .icon = "steam_achievement",
+                .priority = 10,
+                .clipPriority =
+                    orbit::platform_services::
+                        TimelineClipPriority::Standard
+            });
+        steamConfiguration.eventRules.
+            push_back({
+                .eventId = "vehicle.repaired",
+                .incrementStat =
+                    "vehicles.repaired",
+                .statDelta = 1.0,
+                .unlockAchievement =
+                    "garage.first_repair",
+                .unlockAtStatValue = 1.0,
+                .emitTimeline = true
+            });
+
+        orbit::platform_services::
+            SavePlatformConfigurationAtomic(
+                temporary.Root() /
+                    "Config/PlatformServices.toml",
+                steamConfiguration);
+
+        project.Manifest().buildProfiles.
+            push_back({
+                .name = "Shipping Steam",
+                .configuration = "Shipping",
+                .platform = "Windows",
+                .storefront = "steam"
+            });
+        project.Save();
+
+        orbit::build::BuildRequest
+            steamRequest{
+                .manifestPath =
+                    project.ManifestPath(),
+                .profileName =
+                    "Shipping Steam"
+            };
+
+        const auto steamValidation =
+            service.Validate(
+                steamRequest);
+
+        ORBIT_TEST_CHECK(
+            steamValidation.Succeeded());
+        ORBIT_TEST_CHECK(
+            steamValidation.profile.storefront ==
+            "steam");
+
+        const auto steamCook =
+            service.Cook(
+                steamRequest);
+
+        ORBIT_TEST_CHECK(
+            steamCook.Succeeded());
+        ORBIT_TEST_CHECK(
+            std::filesystem::is_regular_file(
+                steamCook.outputDirectory /
+                "PlatformServices.toml"));
+
+        WriteText(
+            dummyPlayer.parent_path() /
+                "steam_api64.dll",
+            "steam-runtime-test-binary");
+
+        const auto steamPackage =
+            service.Package(
+                steamRequest,
+                {
+                    .playerExecutable =
+                        dummyPlayer
+                });
+
+        ORBIT_TEST_CHECK(
+            steamPackage.Succeeded());
+        ORBIT_TEST_CHECK(
+            std::filesystem::is_regular_file(
+                steamPackage.outputDirectory /
+                "steam_api64.dll"));
+        ORBIT_TEST_CHECK(
+            std::filesystem::is_regular_file(
+                steamPackage.outputDirectory /
+                "PlatformServices.toml"));
 
         orbit::build::BuildRequest
             protectedRequest = request;

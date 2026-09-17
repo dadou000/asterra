@@ -19,6 +19,7 @@ target_link_libraries(OrbitBuildService
         Luau.VM
         Orbit::ContentWic
         Orbit::PluginManifest
+        Orbit::PlatformServices
         Orbit::ShaderDxc
         tomlplusplus::tomlplusplus
 )

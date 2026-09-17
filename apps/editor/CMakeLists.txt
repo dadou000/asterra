@@ -26,6 +26,7 @@ target_link_libraries(OrbitStudio
         Orbit::PathRouting
         Orbit::Paths
         Orbit::Platform
+        Orbit::PlatformServices
         Orbit::RenderGraph
         Orbit::RenderView
         Orbit::RhiVulkan

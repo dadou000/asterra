@@ -4,6 +4,7 @@
 #include <orbit/content_wic/WicTextureImporter.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/platform_services/PlatformConfig.hpp>
 #include <orbit/plugins/PluginManifest.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 
@@ -907,15 +908,69 @@ BuildValidation BuildService::Validate(
             project.ManifestPath());
     }
 
+    const bool steamStorefront =
+        profile->storefront == "steam";
+
     if (profile->storefront !=
-        "standalone")
+            "standalone" &&
+        !steamStorefront)
     {
         AddIssue(
             result.issues,
             IssueSeverity::Error,
-            "build.storefront.unavailable",
-            "Only standalone packaging is available before M22 platform services.",
+            "build.storefront.unsupported",
+            "Unsupported storefront: " +
+                profile->storefront,
             project.ManifestPath());
+    }
+
+    const auto platformConfigurationPath =
+        result.projectRoot /
+        "Config" /
+        "PlatformServices.toml";
+
+    if (std::filesystem::is_regular_file(
+            platformConfigurationPath))
+    {
+        try
+        {
+            const auto platformConfiguration =
+                platform_services::
+                    LoadPlatformConfiguration(
+                        platformConfigurationPath);
+
+            for (const auto& issue :
+                 platform_services::
+                     ValidatePlatformConfiguration(
+                         platformConfiguration,
+                         steamStorefront))
+            {
+                AddIssue(
+                    result.issues,
+                    IssueSeverity::Error,
+                    "build." + issue.code,
+                    issue.message,
+                    platformConfigurationPath);
+            }
+        }
+        catch (const std::exception& exception)
+        {
+            AddIssue(
+                result.issues,
+                IssueSeverity::Error,
+                "build.platform_services.invalid",
+                exception.what(),
+                platformConfigurationPath);
+        }
+    }
+    else if (steamStorefront)
+    {
+        AddIssue(
+            result.issues,
+            IssueSeverity::Error,
+            "build.platform_services.missing",
+            "Steam build profiles require Config/PlatformServices.toml.",
+            platformConfigurationPath);
     }
 
     if (manifest.engineCompatibilityVersion !=
@@ -1224,6 +1279,23 @@ BuildResult BuildService::Cook(
                     engineCompatibilityVersion;
         result.manifest.profile =
             validation.profile;
+
+        const auto platformConfigurationSource =
+            validation.projectRoot /
+            "Config" /
+            "PlatformServices.toml";
+
+        if (std::filesystem::is_regular_file(
+                platformConfigurationSource))
+        {
+            std::filesystem::copy_file(
+                platformConfigurationSource,
+                staging /
+                    "PlatformServices.toml",
+                std::filesystem::
+                    copy_options::
+                        overwrite_existing);
+        }
 
         const auto worldSource =
             project.StartupWorldPath();
@@ -1679,6 +1751,33 @@ PackageResult BuildService::Package(
             packagedRuntimeNames{
                 executableName
             };
+
+        if (result.manifest.profile.storefront ==
+            "steam")
+        {
+            const auto steamRuntime =
+                runtime.playerExecutable.
+                    parent_path() /
+                "steam_api64.dll";
+
+            if (!std::filesystem::is_regular_file(
+                    steamRuntime))
+            {
+                throw std::runtime_error(
+                    "Steam package requires steam_api64.dll beside OrbitPlayer.exe. Configure Orbit with ORBIT_STEAMWORKS_SDK_ROOT before packaging a Steam profile.");
+            }
+
+            packagedRuntimeNames.insert(
+                "steam_api64.dll");
+
+            std::filesystem::copy_file(
+                steamRuntime,
+                result.outputDirectory /
+                    "steam_api64.dll",
+                std::filesystem::
+                    copy_options::
+                        overwrite_existing);
+        }
 
         for (const auto& source :
              runtime.runtimeFiles)
