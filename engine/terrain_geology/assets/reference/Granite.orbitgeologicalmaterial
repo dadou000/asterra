@@ -1,0 +1,11 @@
+[geological_material]
+id = "4f524249-5452-4f43-4b00-000000000002"
+name = "Granite"
+hardness = 0.88
+cohesion = 0.86
+hydraulic_erodibility = 0.12
+aeolian_erodibility = 0.04
+permeability = 0.03
+chemical_weatherability = 0.28
+fracture_tendency = 0.45
+density = 2700.0
