@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/math/Vector.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
@@ -10,9 +11,21 @@
 
 namespace orbit::editor_ui
 {
-// Lightweight but real editor body preview. It renders analytic sphere/
-// ellipsoid reference shapes directly; terrain-capable views can replace
-// this with the full surface renderer without changing the panel contract.
+struct PreviewMaterial
+{
+    math::Float3 baseColor{
+        0.11F,
+        0.26F,
+        0.36F
+    };
+    f32 roughness{0.65F};
+    f32 metallic{0.0F};
+};
+
+// Lightweight but real editor body/material preview. It renders analytic
+// sphere/ellipsoid reference shapes directly with a compact PBR lighting
+// model. Terrain-capable views can replace the geometry without changing
+// the panel contract.
 class BodyPreviewRenderer
 {
 public:
@@ -32,7 +45,8 @@ public:
         u32 width,
         u32 height,
         const universe::BodyShape& shape,
-        const render_view::CameraState& camera);
+        const render_view::CameraState& camera,
+        const PreviewMaterial& material = {});
 
 private:
     class Impl;
