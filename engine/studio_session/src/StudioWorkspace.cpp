@@ -31,13 +31,20 @@ StudioWorkspace::~StudioWorkspace()
 
 StudioWorkspace::StudioWorkspace(
     StudioWorkspace&&) noexcept = default;
-StudioWorkspace& StudioWorkspace::operator=(
-    StudioWorkspace&&) noexcept = default;
 
-StudioWorkspace::StudioWorkspace(
-    std::unique_ptr<State> state) noexcept
-    : state_(std::move(state))
+StudioWorkspace& StudioWorkspace::operator=(
+    StudioWorkspace&& other)
 {
+    if (this == &other)
+    {
+        return *this;
+    }
+
+    CheckpointCurrent();
+    state_ = std::move(other.state_);
+    generation_ = other.generation_;
+    other.generation_ = 0;
+    return *this;
 }
 
 void StudioWorkspace::CreateProject(
