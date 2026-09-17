@@ -4,6 +4,7 @@
 #include <orbit/core/Types.hpp>
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <string>
@@ -161,8 +162,9 @@ EarthReferenceGeologicalMaterials();
 void RegisterEarthReferenceGeologicalMaterials(
     GeologicalMaterialLibrary& library);
 
-// Project-authority codec for .orbitgeologicalmaterial files. The content
-// system indexes these files; TerrainGeology owns their physical semantics.
+// Project-authority codec for .orbitgeologicalmaterial files. This is the
+// physical-data boundary that content/editor indexing can discover without
+// moving geological semantics into the renderer material system.
 [[nodiscard]] GeologicalMaterial ParseGeologicalMaterialToml(
     std::string_view text);
 
