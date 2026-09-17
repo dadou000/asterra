@@ -935,3 +935,32 @@ add_test(
     NAME Orbit.CommandSurfaces
     COMMAND OrbitCommandSurfaceTests
 )
+
+
+add_executable(OrbitV003ScaffoldIntegrationTests
+    V003ScaffoldIntegrationTests.cpp
+)
+
+target_link_libraries(OrbitV003ScaffoldIntegrationTests
+    PRIVATE
+        Orbit::Build
+        Orbit::Content
+        Orbit::ContentWic
+        Orbit::EditorModel
+        Orbit::EditorRpc
+        Orbit::Frames
+        Orbit::Paths
+        Orbit::PlatformServices
+        Orbit::Plugins
+        Orbit::Universe
+)
+
+target_compile_features(OrbitV003ScaffoldIntegrationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitV003ScaffoldIntegrationTests)
+add_dependencies(OrbitV003ScaffoldIntegrationTests OrbitPlayer)
+orbit_copy_dxc_runtime(OrbitV003ScaffoldIntegrationTests)
+
+add_test(
+    NAME Orbit.V003ScaffoldIntegration
+    COMMAND OrbitV003ScaffoldIntegrationTests $<TARGET_FILE:OrbitPlayer>
+)
