@@ -1,6 +1,6 @@
 #include <orbit/platform_services/steam/SteamProvider.hpp>
 
-#include <cassert>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -9,6 +9,14 @@
 
 namespace
 {
+void Check(const bool condition)
+{
+    if (!condition)
+    {
+        std::abort();
+    }
+}
+
 class FakeSteamBridge final :
     public orbit::platform_services::steam::
         ISteamClientBridge
@@ -156,24 +164,24 @@ int main()
         configuration,
         std::move(bridge));
 
-    assert(bridgeView->initializedAppId == 480);
-    assert(provider.SetIntegerStat(
+    Check(bridgeView->initializedAppId == 480);
+    Check(provider.SetIntegerStat(
         "vehicles.repaired",
         3));
-    assert(bridgeView->integers[
+    Check(bridgeView->integers[
         "STAT_VEHICLES_REPAIRED"] == 3);
 
-    assert(provider.UnlockAchievement(
+    Check(provider.UnlockAchievement(
         "garage.first_repair"));
-    assert(bridgeView->achievements.contains(
+    Check(bridgeView->achievements.contains(
         "ACH_FIRST_REPAIR"));
 
-    assert(provider.EmitTimelineEvent({
+    Check(provider.EmitTimelineEvent({
         .id = "vehicle.repaired"
     }));
-    assert(bridgeView->timeline.size() == 1);
-    assert(provider.Flush());
-    assert(bridgeView->flushed);
+    Check(bridgeView->timeline.size() == 1);
+    Check(provider.Flush());
+    Check(bridgeView->flushed);
 
     return 0;
 }
