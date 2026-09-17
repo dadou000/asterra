@@ -57,6 +57,15 @@ template <typename Id>
     return table[key].value<bool>().value_or(fallback);
 }
 
+[[nodiscard]] std::string OptionalString(
+    const toml::table& table,
+    const std::string_view key,
+    std::string fallback)
+{
+    return table[key].value<std::string>().
+        value_or(std::move(fallback));
+}
+
 [[nodiscard]] u32 OptionalU32(
     const toml::table& table,
     const std::string_view key,
@@ -233,9 +242,10 @@ ImpactFieldDefinition ParseImpactFieldToml(
                         -1.0),
                 .profile =
                     ParseProfile(
-                        table->get_as<std::string>("profile")
-                            ? **table->get_as<std::string>("profile")
-                            : std::string("auto")),
+                        OptionalString(
+                            *table,
+                            "profile",
+                            "auto")),
                 .simpleDepthRatio =
                     OptionalFloat(
                         *table,
@@ -357,7 +367,7 @@ std::string SerializeImpactFieldToml(
             impact.radiusMeters);
         table.insert(
             "profile",
-            ProfileName(impact.profile));
+            std::string(ProfileName(impact.profile)));
         table.insert(
             "simple_depth_ratio",
             impact.simpleDepthRatio);
