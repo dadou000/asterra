@@ -65,6 +65,13 @@ void ProjectAuthoringUi::Register(
             }
     });
 
+    RegisterProjectSettings(ui);
+    RegisterWorldDocuments(ui, true);
+}
+
+void ProjectAuthoringUi::RegisterProjectSettings(
+    editor_ui::EditorUi& ui)
+{
     ui.RegisterPanel({
         .id = kProjectSettingsPanel,
         .title = "Project Settings",
@@ -75,6 +82,13 @@ void ProjectAuthoringUi::Register(
                 DrawProjectSettings(context);
             }
     });
+}
+
+void ProjectAuthoringUi::RegisterWorldDocuments(
+    editor_ui::EditorUi& ui,
+    const bool allowCloseWorld)
+{
+    allowCloseWorld_ = allowCloseWorld;
 
     ui.RegisterPanel({
         .id = kWorldDocumentsPanel,
@@ -487,7 +501,8 @@ void ProjectAuthoringUi::DrawWorldDocuments(
         }
     }
 
-    if (workspace_->Session().ActiveWorld().has_value() &&
+    if (allowCloseWorld_ &&
+        workspace_->Session().ActiveWorld().has_value() &&
         context.Button("Close Active World"))
     {
         try

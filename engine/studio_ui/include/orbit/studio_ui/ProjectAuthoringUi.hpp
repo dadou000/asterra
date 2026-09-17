@@ -23,6 +23,11 @@ public:
         std::filesystem::path recentProjectsFile);
 
     void Register(editor_ui::EditorUi& ui);
+    void RegisterProjectSettings(
+        editor_ui::EditorUi& ui);
+    void RegisterWorldDocuments(
+        editor_ui::EditorUi& ui,
+        bool allowCloseWorld = true);
 
     // Called synchronously after a successful project create/open/close. This
     // lets the application rebuild project-bound GPU/session presentation in
@@ -68,5 +73,6 @@ private:
     std::optional<std::filesystem::path> selectedWorld_;
     std::string selectedWorldName_;
     std::string status_;
+    bool allowCloseWorld_{true};
 };
 } // namespace orbit::studio_ui
