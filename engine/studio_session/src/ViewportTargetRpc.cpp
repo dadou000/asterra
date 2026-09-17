@@ -111,6 +111,10 @@ namespace
                 static_cast<i64>(target.sessionGeneration)
             },
             {
+                "universe_generation",
+                static_cast<i64>(target.universeGeneration)
+            },
+            {
                 "source_revision",
                 static_cast<i64>(target.sourceRevision)
             }
