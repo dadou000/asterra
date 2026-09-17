@@ -50,6 +50,12 @@ public:
     [[nodiscard]] bool HasWorld() const noexcept;
     [[nodiscard]] u64 Generation() const noexcept;
 
+    // Monotonically changes whenever the runtime celestial representation is
+    // replaced or invalidated. Consumers that retain FrameGraph/BodyRegistry
+    // references must rebind whenever this token changes, even if the active
+    // world document itself did not switch.
+    [[nodiscard]] u64 UniverseGeneration() const noexcept;
+
     [[nodiscard]] documents::ProjectDocument&
     Project() noexcept;
     [[nodiscard]] const documents::ProjectDocument&
@@ -118,5 +124,6 @@ private:
     documents::ProjectDocument* project_{nullptr};
     std::unique_ptr<State> state_;
     u64 generation_{0};
+    u64 universeGeneration_{0};
 };
 } // namespace orbit::editor_session
