@@ -1,0 +1,75 @@
+name: Orbit V0.0.4 Terrain
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - "engine/terrain/**"
+      - "engine/terrain_cache/**"
+      - "engine/terrain_hydrology/**"
+      - "engine/terrain_erosion/**"
+      - "engine/terrain_region/**"
+      - "engine/terrain_geology/**"
+      - "tests/contracts/**"
+      - "tests/TerrainContractTests.cpp"
+      - "tests/TerrainFaceSeamTests.cpp"
+      - "engine/CMakeLists.txt"
+      - ".github/workflows/orbit-v004-terrain.yml"
+  pull_request:
+    branches: [orbit]
+    paths:
+      - "engine/terrain/**"
+      - "engine/terrain_cache/**"
+      - "engine/terrain_hydrology/**"
+      - "engine/terrain_erosion/**"
+      - "engine/terrain_region/**"
+      - "engine/terrain_geology/**"
+      - "tests/contracts/**"
+      - "tests/TerrainContractTests.cpp"
+      - "tests/TerrainFaceSeamTests.cpp"
+      - "engine/CMakeLists.txt"
+      - ".github/workflows/orbit-v004-terrain.yml"
+
+concurrency:
+  group: orbit-v004-terrain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          if (-not (Test-Path "$sdk\Include\vulkan\vulkan.h") -or
+              -not (Test-Path "$sdk\Lib\vulkan-1.lib")) {
+            throw "Vulkan SDK was not installed at the expected path: $sdk"
+          }
+
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build terrain contract targets
+        run: >-
+          cmake --build build --config Release --target
+          OrbitTerrainContractTests
+          OrbitTerrainFaceSeamTests
+          OrbitTerrainM01IntegrationTests
+          OrbitTerrainGeologyTests
+
+      - name: Test V0.0.4 terrain contracts
+        run: >-
+          ctest --test-dir build -C Release --output-on-failure
+          -R "Orbit\.(TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials)"
