@@ -14,6 +14,7 @@ namespace orbit::terrain_erosion
 {
 struct RegionalElevationDeltaField
 {
+    terrain::PlanetSurfacePosition origin{};
     world::SurfaceFrame surfaceFrame{};
     u32 resolution{0};
     f64 halfExtentMeters{0.0};
