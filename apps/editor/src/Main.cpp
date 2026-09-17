@@ -41,6 +41,10 @@
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/StudioRuntimeBinding.hpp>
+#include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
 
@@ -1480,6 +1484,35 @@ int main(
             graphicsQueue,
             compiler,
             layoutPath);
+
+        orbit::studio_session::StudioRuntimeBinding
+            studioRuntime(
+                studioSession);
+
+        orbit::studio_ui::StudioRenderViewSet
+            studioViews(
+                device,
+                studioSession);
+
+        orbit::studio_ui::StudioViewportPanels
+            studioViewportPanels(
+                studioViews,
+                studioSession);
+
+        // The legacy primary viewport remains the interaction-heavy authoring
+        // view for V0.0.3. The new target registry owns the independent map /
+        // debug view; remove its unused hidden primary slot.
+        static_cast<void>(
+            studioViews.Destroy(
+                "studio.primary"));
+
+        orbit::studio_ui::StudioViewportRenderer
+            studioViewportRenderer(
+                device,
+                compiler);
+
+        studioViewportPanels.
+            RegisterSecondary(ui);
 
         constexpr orbit::editor_ui::PanelId
             kViewportPanel{
@@ -5838,6 +5871,19 @@ int main(
 
             }
 
+            const auto studioSnapshot =
+                studioRuntime.Capture();
+
+            const auto renderedStudioViews =
+                studioViewportRenderer.Compose(
+                    graph,
+                    studioViews,
+                    studioSession,
+                    studioRuntime,
+                    studioSnapshot,
+                    {},
+                    pathDebugVisualization);
+
             graph.AddPass(
                 "Studio.Canvas",
                 {
@@ -5877,9 +5923,9 @@ int main(
                             backBuffer);
                 });
 
-            graph.AddPass(
-                "Studio.Ui",
-                {
+            std::vector<
+                orbit::render_graph::TextureUse>
+                studioUiTextures{
                     {
                         .texture =
                             viewTargets.color,
@@ -5913,7 +5959,28 @@ int main(
                             orbit::render_graph::
                                 Access::Write
                     }
-                },
+                };
+
+            for (const auto& renderedView :
+                 renderedStudioViews)
+            {
+                studioUiTextures.push_back({
+                    .texture =
+                        renderedView.targets.color,
+                    .state =
+                        orbit::rhi::
+                            ResourceState::
+                                ShaderResource,
+                    .access =
+                        orbit::render_graph::
+                            Access::Read
+                });
+            }
+
+            graph.AddPass(
+                "Studio.Ui",
+                std::move(
+                    studioUiTextures),
                 [&](orbit::rhi::CommandList&
                         commandList,
                     const orbit::render_graph::
