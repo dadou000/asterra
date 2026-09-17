@@ -97,6 +97,8 @@ bool ActiveBodyModel::Refresh()
             next.referenceRadiusMeters ||
         active_->sessionGeneration !=
             next.sessionGeneration ||
+        active_->universeGeneration !=
+            next.universeGeneration ||
         active_->sourceRevision !=
             next.sourceRevision;
 
@@ -259,6 +261,8 @@ ActiveBodyTarget ActiveBodyModel::BuildTarget(
                 body->shape),
         .sessionGeneration =
             session_->Generation(),
+        .universeGeneration =
+            session_->UniverseGeneration(),
         .sourceRevision =
             session_->Universe().
                 SourceRevision()
