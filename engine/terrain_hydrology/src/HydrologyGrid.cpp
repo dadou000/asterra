@@ -199,7 +199,15 @@ HydrologyGrid BuildHydrologyGrid(
 
     HydrologyGrid grid{};
     grid.config = config;
-    grid.surfaceFrame = surfaceFrame;
+    grid.origin =
+        terrain::CanonicalizeSurfacePosition({
+            .planet = planet.id,
+            .unitDirection = surfaceFrame.up
+        });
+    grid.surfaceFrame =
+        terrain::AlignSurfaceTangentFrame(
+            grid.origin,
+            surfaceFrame);
 
     grid.spacingMeters =
         config.halfExtentMeters *
@@ -207,10 +215,14 @@ HydrologyGrid BuildHydrologyGrid(
         static_cast<f64>(
             config.resolution - 1U);
 
-    const f64 footprint =
+    const f64 footprintMeters =
         config.footprintMeters > 0.0
             ? config.footprintMeters
             : grid.spacingMeters;
+
+    const terrain::TerrainSampleFootprint footprint{
+        .diameterMeters = footprintMeters
+    };
 
     const std::size_t sampleCount =
         static_cast<std::size_t>(
@@ -242,19 +254,18 @@ HydrologyGrid BuildHydrologyGrid(
                     grid.spacingMeters
             };
 
-            const math::Double3 direction =
-                world::DirectionAtSurfaceOffset(
+            const terrain::PlanetSurfacePosition position =
+                terrain::OffsetSurfacePosition(
                     planet,
-                    surfaceFrame,
+                    grid.origin,
+                    grid.surfaceFrame,
                     offset);
 
             const terrain::TerrainSample sample =
-                source.Sample({
-                    .unitDirection =
-                        direction,
-                    .footprintMeters =
-                        footprint
-                });
+                source.Sample(
+                    terrain::MakeTerrainQuery(
+                        position,
+                        footprint));
 
             HydrologyCell& cell =
                 grid.cells[
@@ -482,7 +493,7 @@ void RouteHydrology(
 {
     ValidateGrid(
         grid,
-        "Orbit hydrology routing requires a valid populated grid.");
+        "Orbit hydrology routing requires a valid populated hydrology grid.");
 
     const u32 resolution =
         grid.config.resolution;
