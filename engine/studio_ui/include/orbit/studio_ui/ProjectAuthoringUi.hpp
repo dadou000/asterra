@@ -6,6 +6,7 @@
 #include <orbit/studio_session/StudioWorkspace.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -22,6 +23,12 @@ public:
         std::filesystem::path recentProjectsFile);
 
     void Register(editor_ui::EditorUi& ui);
+
+    // Called synchronously after a successful project create/open/close. This
+    // lets the application rebuild project-bound GPU/session presentation in
+    // the same UI frame before any other panel can observe stale references.
+    void SetWorkspaceChangedCallback(
+        std::function<void()> callback);
 
     inline static constexpr editor_ui::PanelId kProjectBrowserPanel{
         .high = 0x4f52424954535455ULL,
@@ -43,10 +50,12 @@ private:
     void DrawProjectSettings(editor_ui::PanelContext& context);
     void DrawWorldDocuments(editor_ui::PanelContext& context);
     void SynchronizeProjectBuffers();
+    void NotifyWorkspaceChanged();
 
     studio_session::StudioWorkspace* workspace_{nullptr};
     studio_session::ProjectBrowserModel projectBrowser_;
     studio_session::ProjectSettingsModel projectSettings_;
+    std::function<void()> workspaceChanged_;
 
     u64 observedWorkspaceGeneration_{~u64{0}};
     std::string newProjectRoot_;
