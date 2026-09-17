@@ -37,7 +37,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build terrain and path regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitV003ScaffoldIntegrationTests
 
       - name: Run terrain and path regression tests
         shell: pwsh
@@ -85,6 +85,11 @@ jobs:
           & "build/engine/platform_services/steam/Release/OrbitPlatformServicesSteamTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitPlatformServicesSteamTests failed with exit code $LASTEXITCODE"
+          }
+
+          & "build/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build/apps/player/Release/OrbitPlayer.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitV003ScaffoldIntegrationTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Build
