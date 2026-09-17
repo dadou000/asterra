@@ -252,6 +252,10 @@ void Register(
         .category = "World",
         .description =
             "Create a persistent celestial system under the selected World.",
+        .presentationSurfaces = {
+            "explorer.context",
+            "properties.toolbar"
+        },
         .enablement =
             [&objects, &selection]
             {
@@ -331,6 +335,10 @@ void Register(
         .category = "World",
         .description =
             "Create a persistent celestial body. Selecting a World automatically creates or reuses its first celestial system.",
+        .presentationSurfaces = {
+            "explorer.context",
+            "properties.toolbar"
+        },
         .enablement =
             [&objects, &selection]
             {
@@ -699,6 +707,7 @@ void Register(
                             "end_handle")));
             }
     });
+
     registry.Register({
         .id = kConnectPathRouted,
         .name = "Connect Routed",
@@ -728,6 +737,5 @@ void Register(
                         selection.Ordered()[1]));
             }
     });
-
 }
 } // namespace orbit::editor_model::authoring_commands
