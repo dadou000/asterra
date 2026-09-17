@@ -66,8 +66,8 @@ private:
 
     [[nodiscard]] bool AccumulateFromCache(
         const DerivedTerrainRegionCache& cache,
-        const math::Double3& direction,
-        const terrain::TerrainQuery& query,
+        const terrain::PlanetSurfacePosition& position,
+        const terrain::TerrainSampleFootprint& footprint,
         f64 baseElevation,
         f64& totalWeight,
         f64& weightedRegionalDelta,
