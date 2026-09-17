@@ -20,6 +20,7 @@ target_link_libraries(OrbitEditorSession
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
+        Orbit::SurfaceModel
         Orbit::WorldModel
 )
 
