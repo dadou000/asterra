@@ -1,6 +1,9 @@
 #include <orbit/terrain/TerrainContracts.hpp>
+#include <orbit/terrain/TerrainPosition.hpp>
+#include <orbit/terrain/TerrainSource.hpp>
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <type_traits>
 
@@ -183,6 +186,84 @@ int main()
             IsDerivedOnly(
                 TerrainAuthorityDomain::ViewInterest),
         "Cache and view state must remain derived-only.");
+
+    // M01: the same physical direction expressed on two adjacent cube faces
+    // canonicalizes to one direction and therefore one physical tile.
+    const PlanetSurfacePosition positiveXEdge =
+        SurfacePositionFromCube(
+            planetId,
+            {
+                .face = world::CubeFace::PositiveX,
+                .uv = {-1.0, 0.0}
+            });
+
+    const PlanetSurfacePosition positiveZEdge =
+        SurfacePositionFromCube(
+            planetId,
+            {
+                .face = world::CubeFace::PositiveZ,
+                .uv = {1.0, 0.0}
+            });
+
+    ok &= Check(
+        math::Dot(
+            positiveXEdge.unitDirection,
+            positiveZEdge.unitDirection) >
+            1.0 - 1.0e-12,
+        "Equivalent cube-face boundary coordinates must canonicalize to the same surface direction.");
+
+    ok &= Check(
+        PhysicalTileForPosition(
+            positiveXEdge,
+            10) ==
+            PhysicalTileForPosition(
+                positiveZEdge,
+                10),
+        "Equivalent face-boundary samples must resolve to one physical tile identity.");
+
+    const world::SurfaceFrame edgeFrame =
+        SurfaceTangentFrame(positiveXEdge);
+
+    ok &= Check(
+        std::abs(
+            math::Dot(
+                edgeFrame.east,
+                edgeFrame.up)) < 1.0e-12 &&
+        std::abs(
+            math::Dot(
+                edgeFrame.north,
+                edgeFrame.up)) < 1.0e-12,
+        "Canonical surface tangent frame must remain tangent at face boundaries.");
+
+    const TerrainSampleFootprint footprint{
+        .diameterMeters = 64.0
+    };
+
+    ok &= Check(
+        footprint.IsValid() &&
+            footprint.MinimumResolvedWavelengthMeters() ==
+                128.0,
+        "LOD sampling footprint must be represented in physical meters.");
+
+    const TerrainQuery query{
+        .unitDirection = {2.0, 0.0, 0.0},
+        .footprintMeters = 64.0,
+        .planet = planetId,
+        .radialOffsetMeters = 25.0
+    };
+
+    const PlanetSurfacePosition queryPosition =
+        query.SurfacePosition();
+
+    ok &= Check(
+        queryPosition.planet == planetId &&
+            std::abs(
+                math::Length(
+                    queryPosition.unitDirection) -
+                1.0) < 1.0e-12 &&
+            queryPosition.radialOffsetMeters == 25.0 &&
+            query.Footprint().diameterMeters == 64.0,
+        "TerrainQuery must transport canonical planet position and physical footprint.");
 
     std::array<f32, 4> bedrock{
         10.0F,
