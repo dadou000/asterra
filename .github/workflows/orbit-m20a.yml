@@ -70,7 +70,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build M20A targets
-        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioUi OrbitStudio
+        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioUi OrbitStudio
 
       - name: Test M20A
         shell: pwsh
@@ -92,6 +92,7 @@ jobs:
             "build/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe",
             "build/engine/studio_session/Release/OrbitProjectSettingsModelTests.exe",
             "build/engine/studio_session/Release/OrbitStudioWorkspaceRpcHostTests.exe",
+            "build/engine/studio_session/Release/OrbitUniverseBoundRoutePlannerTests.exe",
             "build/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe",
             "build/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe"
           )
