@@ -36,6 +36,7 @@ StudioSession::StudioSession(
       documents_(world_),
       activeBody_(world_),
       viewports_(world_, activeBody_),
+      pathNetwork_(world_),
       pathRouting_(world_),
       pathProducts_(world_),
       rpc_(world_)
@@ -44,6 +45,7 @@ StudioSession::StudioSession(
         rpc_.Dispatcher(),
         viewports_);
     static_cast<void>(activeBody_.Refresh());
+    static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());
     static_cast<void>(pathProducts_.RefreshBinding());
 }
@@ -82,6 +84,18 @@ const ViewportTargetRegistry&
 StudioSession::Viewports() const noexcept
 {
     return viewports_;
+}
+
+WorldBoundPathNetwork&
+StudioSession::PathNetwork() noexcept
+{
+    return pathNetwork_;
+}
+
+const WorldBoundPathNetwork&
+StudioSession::PathNetwork() const noexcept
+{
+    return pathNetwork_;
 }
 
 UniverseBoundRoutePlanner&
@@ -178,6 +192,7 @@ StudioSession::DispatchRpc(
         activeBody_.Clear();
     }
 
+    static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());
     static_cast<void>(pathProducts_.RefreshBinding());
     static_cast<void>(viewports_.Refresh());
@@ -209,6 +224,8 @@ StudioTickResult StudioSession::Tick()
             activeBody_.Active().has_value();
         activeBody_.Clear();
         result.activeBodyChanged = hadBody;
+        result.pathNetworkRebound =
+            pathNetwork_.RefreshBinding();
         result.pathRoutingRebound =
             pathRouting_.RefreshBinding();
         result.pathProductsInvalidated =
@@ -226,6 +243,8 @@ StudioTickResult StudioSession::Tick()
         world_.Plugins().PollHotReload();
     result.activeBodyChanged =
         activeBody_.Refresh();
+    result.pathNetworkRebound =
+        pathNetwork_.RefreshBinding();
     result.pathRoutingRebound =
         pathRouting_.RefreshBinding();
     result.pathProductsInvalidated =
