@@ -64,6 +64,9 @@ namespace
         result.emplace(
             "manifest",
             project.ManifestPath().generic_string());
+        result.emplace(
+            "startup_world",
+            project.Manifest().startupWorld.generic_string());
     }
 
     return rpc::Value(std::move(result));
@@ -108,7 +111,7 @@ StudioWorkspaceRpcHost::Dispatch(
                                 {"code", i64{1041}},
                                 {
                                     "message",
-                                    "project.create, project.open, project.close and workspace.active must be dispatched as standalone requests."
+                                    "Workspace-level project methods must be dispatched as standalone requests."
                                 }
                             }
                         }
@@ -266,6 +269,40 @@ void StudioWorkspaceRpcHost::RegisterMethods()
             catch (const std::exception& exception)
             {
                 throw rpc::Error(1043, exception.what());
+            }
+        });
+
+    registerMethod(
+        {
+            .name = "project.set_display_name",
+            .description =
+                "Changes persistent project display metadata without changing project identity or path.",
+            .mutating = true
+        },
+        [this](const rpc::Value& params)
+        {
+            if (!workspace_.HasProject())
+            {
+                throw rpc::Error(
+                    1040,
+                    "Orbit Studio has no open project.");
+            }
+
+            const auto& values = RequireObject(params);
+
+            try
+            {
+                workspace_.Project().SetDisplayName(
+                    RequireString(values, "name"));
+                return WorkspaceState(workspace_);
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(1044, exception.what());
             }
         });
 }
