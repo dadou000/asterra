@@ -118,6 +118,83 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kTerrainSurfaceType,
+        .displayName = "Terrain Surface",
+        .category = "World / Surface",
+        .properties = {
+            schema::PropertySchema{
+                .id = kTerrainSeed,
+                .name = "Seed",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{0x41535445525241LL},
+                .range = {
+                    .minimum = 0.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kTerrainMacroAmplitudeMeters,
+                .name = "Macro Amplitude",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 1'200.0,
+                .range = {
+                    .minimum = 0.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kTerrainMacroWavelengthMeters,
+                .name = "Macro Wavelength",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 800'000.0,
+                .range = {
+                    .minimum = 1.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kTerrainDetailAmplitudeMeters,
+                .name = "Detail Amplitude",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 320.0,
+                .range = {
+                    .minimum = 0.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kTerrainDetailWavelengthMeters,
+                .name = "Detail Wavelength",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 40'000.0,
+                .range = {
+                    .minimum = 1.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kTerrainDetailOctaves,
+                .name = "Detail Octaves",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{10},
+                .range = {
+                    .minimum = 1.0,
+                    .maximum = 16.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kTerrainMaximumElevationMeters,
+                .name = "Maximum Elevation Above Sea Level",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 8'000.0,
+                .range = {
+                    .minimum = 1.0
+                }
+            }
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",
