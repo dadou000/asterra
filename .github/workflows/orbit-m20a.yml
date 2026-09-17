@@ -70,7 +70,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build M20A targets
-        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioUi OrbitStudio
+        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioUi OrbitStudio
 
       - name: Test M20A
         shell: pwsh
@@ -88,6 +88,7 @@ jobs:
             "build/engine/editor_rpc/Release/OrbitProjectWorldRpcTests.exe",
             "build/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
             "build/engine/studio_session/Release/OrbitStudioSessionTests.exe",
+            "build/engine/studio_session/Release/OrbitStudioRuntimeBindingTests.exe",
             "build/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe",
             "build/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe",
             "build/engine/studio_session/Release/OrbitProjectSettingsModelTests.exe",
