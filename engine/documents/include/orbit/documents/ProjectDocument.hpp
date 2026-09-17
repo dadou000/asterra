@@ -67,6 +67,11 @@ public:
         const std::filesystem::path& relativePath,
         std::string_view displayName);
 
+    // Changes project display metadata and persists Project.orbit.toml
+    // atomically. ProjectId and project directory identity are unchanged.
+    void SetDisplayName(
+        std::string_view displayName);
+
     // Changes the project startup world after validating that the target is an
     // existing authoritative world owned by this project. The manifest update
     // is persisted atomically.
