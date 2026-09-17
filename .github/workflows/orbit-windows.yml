@@ -41,7 +41,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build V0.0.3 regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
 
       - name: Test - Terrain view
         shell: pwsh
@@ -185,6 +185,14 @@ jobs:
           & "build/engine/studio_session/Release/OrbitStudioWorkspaceRpcHostTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitStudioWorkspaceRpcHostTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Project browser model
+        shell: pwsh
+        run: |
+          & "build/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitProjectBrowserModelTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Test - Multi-viewport targeting
