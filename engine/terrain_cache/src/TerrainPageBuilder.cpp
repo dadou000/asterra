@@ -103,28 +103,21 @@ terrain::TerrainSample FromCachedSample(
 std::size_t TerrainPageDescHash::operator()(
     const TerrainPageDesc& desc) const noexcept
 {
-    std::size_t hash =
-        static_cast<std::size_t>(
-            desc.tile.face);
+    const u64 fingerprint =
+        terrain::PhysicalPageFingerprint(
+            desc.PhysicalKey());
 
-    const auto combine =
-        [&hash](const u64 value)
-        {
-            hash ^=
-                static_cast<std::size_t>(
-                    value) +
-                0x9E3779B97F4A7C15ULL +
-                (hash << 6U) +
-                (hash >> 2U);
-        };
-
-    combine(desc.tile.level);
-    combine(desc.tile.x);
-    combine(desc.tile.y);
-    combine(desc.resolution);
-    combine(desc.sourceRevision);
-
-    return hash;
+    if constexpr (sizeof(std::size_t) >= sizeof(u64))
+    {
+        return static_cast<std::size_t>(
+            fingerprint);
+    }
+    else
+    {
+        return static_cast<std::size_t>(
+            fingerprint ^
+            (fingerprint >> 32U));
+    }
 }
 
 terrain::TerrainSample
