@@ -19,6 +19,14 @@ inline constexpr schema::TypeId kCelestialBodyType{
     .low = 0x5954595045000001ULL
 };
 
+// Real body capability record. The semantic child is CPU authority; the
+// surface_model composition layer reconstructs SurfaceRegistry +
+// AnalyticTerrainSource from these properties.
+inline constexpr schema::TypeId kTerrainSurfaceType{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x5241494e00000001ULL
+};
+
 inline constexpr schema::TypeId kSurfaceDecalType{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c545950450001ULL
@@ -72,6 +80,41 @@ inline constexpr schema::PropertyId kBodyRotationPhaseDegrees{
 inline constexpr schema::PropertyId kBodyMaterialAsset{
     .high = 0x4f5242495450524fULL,
     .low = 0x504d41544c000001ULL
+};
+
+inline constexpr schema::PropertyId kTerrainSeed{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x5241494e53454544ULL
+};
+
+inline constexpr schema::PropertyId kTerrainMacroAmplitudeMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4d4143524f414d50ULL
+};
+
+inline constexpr schema::PropertyId kTerrainMacroWavelengthMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4d4143524f574156ULL
+};
+
+inline constexpr schema::PropertyId kTerrainDetailAmplitudeMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x44455441494c414dULL
+};
+
+inline constexpr schema::PropertyId kTerrainDetailWavelengthMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x44455441494c5741ULL
+};
+
+inline constexpr schema::PropertyId kTerrainDetailOctaves{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x44455441494c4f43ULL
+};
+
+inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4d4158454c455641ULL
 };
 
 inline constexpr schema::PropertyId kDecalAsset{
