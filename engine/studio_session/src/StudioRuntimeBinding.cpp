@@ -28,6 +28,7 @@ StudioRuntimeSnapshot StudioRuntimeBinding::Refresh()
         .universeGeneration = tick.universeGeneration,
         .activeBodyChanged = tick.activeBodyChanged,
         .viewportTargetsChanged = tick.viewportTargetsChanged,
+        .pathNetworkRebound = tick.pathNetworkRebound,
         .pathRoutingRebound = tick.pathRoutingRebound,
         .pathProductsInvalidated = tick.pathProductsInvalidated,
         .pluginsReloaded = tick.pluginsReloaded
