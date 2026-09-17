@@ -2,9 +2,11 @@
 #include <orbit/terrain_impacts/ImpactField.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <numbers>
 #include <string>
 
 namespace
