@@ -37,6 +37,7 @@ StudioSession::StudioSession(
       activeBody_(world_),
       viewports_(world_, activeBody_),
       pathRouting_(world_),
+      pathProducts_(world_),
       rpc_(world_)
 {
     RegisterViewportTargetRpc(
@@ -44,6 +45,7 @@ StudioSession::StudioSession(
         viewports_);
     static_cast<void>(activeBody_.Refresh());
     static_cast<void>(pathRouting_.RefreshBinding());
+    static_cast<void>(pathProducts_.RefreshBinding());
 }
 
 editor_session::EditorWorldSession&
@@ -92,6 +94,18 @@ const UniverseBoundRoutePlanner&
 StudioSession::PathRouting() const noexcept
 {
     return pathRouting_;
+}
+
+UniverseBoundPathCache&
+StudioSession::PathProducts() noexcept
+{
+    return pathProducts_;
+}
+
+const UniverseBoundPathCache&
+StudioSession::PathProducts() const noexcept
+{
+    return pathProducts_;
 }
 
 std::vector<editor_session::WorldDocumentItem>
@@ -165,6 +179,7 @@ StudioSession::DispatchRpc(
     }
 
     static_cast<void>(pathRouting_.RefreshBinding());
+    static_cast<void>(pathProducts_.RefreshBinding());
     static_cast<void>(viewports_.Refresh());
     return response;
 }
@@ -196,6 +211,8 @@ StudioTickResult StudioSession::Tick()
         result.activeBodyChanged = hadBody;
         result.pathRoutingRebound =
             pathRouting_.RefreshBinding();
+        result.pathProductsInvalidated =
+            pathProducts_.RefreshBinding();
         result.viewportTargetsChanged =
             viewports_.Refresh();
         result.worldGeneration =
@@ -211,6 +228,8 @@ StudioTickResult StudioSession::Tick()
         activeBody_.Refresh();
     result.pathRoutingRebound =
         pathRouting_.RefreshBinding();
+    result.pathProductsInvalidated =
+        pathProducts_.RefreshBinding();
     result.viewportTargetsChanged =
         viewports_.Refresh();
     result.worldGeneration =
