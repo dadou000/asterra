@@ -36,6 +36,23 @@ struct TerrainQuery
     }
 };
 
+[[nodiscard]] inline TerrainQuery
+MakeTerrainQuery(
+    const PlanetSurfacePosition& position,
+    const TerrainSampleFootprint& footprint) noexcept
+{
+    const PlanetSurfacePosition canonical =
+        CanonicalizeSurfacePosition(position);
+
+    return {
+        .unitDirection = canonical.unitDirection,
+        .footprintMeters = footprint.diameterMeters,
+        .planet = canonical.planet,
+        .radialOffsetMeters =
+            canonical.radialOffsetMeters
+    };
+}
+
 class TerrainSource
 {
 public:
