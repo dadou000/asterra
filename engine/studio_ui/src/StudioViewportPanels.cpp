@@ -58,21 +58,34 @@ SelectedBezierEdge(
 StudioViewportPanels::StudioViewportPanels(
     StudioRenderViewSet& views,
     studio_session::StudioSession& session) noexcept
-    : views_(&views),
-      session_(&session)
 {
+    Rebind(views, session);
+}
+
+void StudioViewportPanels::Rebind(
+    StudioRenderViewSet& views,
+    studio_session::StudioSession& session)
+{
+    views_ = &views;
+    session_ = &session;
+    views_->CreateDefaults();
+    status_.clear();
+}
+
+void StudioViewportPanels::ClearBinding() noexcept
+{
+    views_ = nullptr;
+    session_ = nullptr;
+    status_.clear();
 }
 
 void StudioViewportPanels::Register(
     editor_ui::EditorUi& ui)
 {
-    if (views_ == nullptr || session_ == nullptr)
+    if (views_ != nullptr)
     {
-        throw std::logic_error(
-            "Studio viewport panels have no view/session binding.");
+        views_->CreateDefaults();
     }
-
-    views_->CreateDefaults();
 
     ui.RegisterPanel({
         .id = kPrimaryViewportPanel,
@@ -103,7 +116,7 @@ void StudioViewportPanels::DrawView(
 {
     if (views_ == nullptr || session_ == nullptr)
     {
-        context.Text("Viewport binding unavailable.");
+        context.Text("Open or create a project to activate this viewport.");
         return;
     }
 
