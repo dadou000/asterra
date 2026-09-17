@@ -4,9 +4,7 @@ on:
   push:
     branches: [orbit]
     paths:
-      - tools/finalize_v003_scaffold.py
-      - tools/run_v003_finalizer_compat.py
-      - tools/finalize_v003_remaining.py
+      - tools/finalize_v003_m23.py
       - .github/workflows/orbit-scaffold-finalize.yml
 
 permissions:
@@ -21,23 +19,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply remaining scaffold completion patch
-        run: python tools/finalize_v003_remaining.py
+      - name: Apply M23 acceptance patch
+        run: python tools/finalize_v003_m23.py
 
       - name: Verify patch changed expected sources
         shell: pwsh
         run: |
           git diff --check
-          git diff --exit-code -- tools/finalize_v003_scaffold.py tools/run_v003_finalizer_compat.py tools/finalize_v003_remaining.py .github/workflows/orbit-scaffold-finalize.yml
+          git diff --exit-code -- tools/finalize_v003_m23.py .github/workflows/orbit-scaffold-finalize.yml
           if (-not (git status --porcelain)) {
-            throw "Remaining scaffold finalizer produced no source changes"
+            throw "M23 finalizer produced no source changes"
           }
 
-      - name: Commit remaining scaffold completion
+      - name: Commit M23 acceptance wiring
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps/editor
-          git commit -m "Finish M17 Studio material and decal workflow"
+          git add tests/CMakeLists.txt docs/V0.0.3_SPEC.md
+          git commit -m "Wire V0.0.3 integration proof"
           git push origin HEAD:orbit
