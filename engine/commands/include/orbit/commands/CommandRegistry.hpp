@@ -65,6 +65,12 @@ struct CommandDescriptor
     std::string category;
     std::string description;
     std::vector<CommandParameter> parameters;
+    // Optional presentation metadata consumed by editor command surfaces.
+    // Values use the stable "<surface>.<kind>" convention, for example
+    // "explorer.context", "properties.toolbar" or "viewport.radial".
+    // The command module intentionally treats these as opaque strings so it
+    // remains independent of the editor UI implementation.
+    std::vector<std::string> presentationSurfaces;
     bool automationVisible{true};
     std::function<CommandEnablement()>
         enablement;
@@ -80,6 +86,7 @@ struct CommandCatalogEntry
     std::string category;
     std::string description;
     std::vector<CommandParameter> parameters;
+    std::vector<std::string> presentationSurfaces;
     bool automationVisible{true};
 };
 
