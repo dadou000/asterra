@@ -3,6 +3,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioWorkspace.cpp
     src/StudioWorkspaceRpcHost.cpp
     src/ProjectBrowserModel.cpp
+    src/ProjectSettingsModel.cpp
     src/ViewportTargetRegistry.cpp
     src/ViewportTargetRpc.cpp
 )
@@ -77,6 +78,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ProjectBrowserModel
         COMMAND OrbitProjectBrowserModelTests
+    )
+
+    add_executable(OrbitProjectSettingsModelTests
+        tests/ProjectSettingsModelTests.cpp
+    )
+
+    target_link_libraries(OrbitProjectSettingsModelTests
+        PRIVATE
+            Orbit::StudioSession
+    )
+
+    target_compile_features(OrbitProjectSettingsModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitProjectSettingsModelTests)
+
+    add_test(
+        NAME Orbit.ProjectSettingsModel
+        COMMAND OrbitProjectSettingsModelTests
     )
 
     add_executable(OrbitStudioWorkspaceRpcHostTests
