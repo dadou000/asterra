@@ -302,6 +302,14 @@ TerrainPage BuildTerrainPage(
             "Orbit terrain pages require at least two samples per axis.");
     }
 
+    if (desc.planet.IsValid() &&
+        planet.id.IsValid() &&
+        desc.planet != planet.id)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain page planet does not match its physical planet definition.");
+    }
+
     const std::size_t resolution =
         static_cast<std::size_t>(
             desc.resolution);
@@ -322,12 +330,24 @@ TerrainPage BuildTerrainPage(
     TerrainPage page{};
     page.desc = desc;
 
+    const world::PlanetId pagePlanet =
+        desc.planet.IsValid()
+            ? desc.planet
+            : planet.id;
+
+    page.desc.planet = pagePlanet;
+
     page.approximateSampleSpacingMeters =
         world::ApproximateTileWidthMeters(
             planet,
             desc.tile) /
         static_cast<f64>(
             desc.resolution - 1U);
+
+    const terrain::TerrainSampleFootprint footprint{
+        .diameterMeters =
+            page.approximateSampleSpacingMeters
+    };
 
     page.samples.resize(
         sampleCount);
@@ -368,11 +388,13 @@ TerrainPage BuildTerrainPage(
                  bounds.minimumUv.x) *
                     tx;
 
-            const math::Double3 direction =
-                world::CubeToUnitDirection({
-                    .face = bounds.face,
-                    .uv = {u, v}
-                });
+            const terrain::PlanetSurfacePosition position =
+                terrain::SurfacePositionFromCube(
+                    pagePlanet,
+                    {
+                        .face = bounds.face,
+                        .uv = {u, v}
+                    });
 
             const std::size_t index =
                 static_cast<std::size_t>(y) *
@@ -381,17 +403,10 @@ TerrainPage BuildTerrainPage(
 
             page.samples[index] =
                 ToCachedSample(
-                    source.Sample({
-                        .unitDirection =
-                            direction,
-                        .footprintMeters =
-                            page.
-                                approximateSampleSpacingMeters,
-                        .planet =
-                            desc.planet.IsValid()
-                                ? desc.planet
-                                : planet.id
-                    }));
+                    source.Sample(
+                        terrain::MakeTerrainQuery(
+                            position,
+                            footprint)));
         }
     }
 
