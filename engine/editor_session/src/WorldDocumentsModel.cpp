@@ -22,18 +22,42 @@ WorldDocumentsModel::Catalog() const
     }
 
     std::vector<WorldDocumentItem> result;
+    const auto paths = session_.Project().WorldPaths();
+    result.reserve(paths.size());
 
-    for (auto descriptor :
-         session_.Project().Worlds())
+    for (const auto& path : paths)
     {
-        const bool isActive =
-            active.has_value() &&
-            descriptor.id == active->id;
+        try
+        {
+            auto descriptor =
+                session_.Project().DescribeWorld(path);
+            const bool isActive =
+                active.has_value() &&
+                descriptor.id == active->id;
 
-        result.push_back({
-            .descriptor = std::move(descriptor),
-            .active = isActive
-        });
+            result.push_back({
+                .descriptor = std::move(descriptor),
+                .active = isActive,
+                .valid = true
+            });
+        }
+        catch (const std::exception& exception)
+        {
+            result.push_back({
+                .descriptor = {
+                    .relativePath = path,
+                    .displayName = path.stem().string(),
+                    .schemaVersion = 0,
+                    .startup =
+                        path.lexically_normal() ==
+                        session_.Project().Manifest().
+                            startupWorld.lexically_normal()
+                },
+                .active = false,
+                .valid = false,
+                .diagnostic = exception.what()
+            });
+        }
     }
 
     return result;
@@ -49,7 +73,8 @@ WorldDocumentsModel::Active() const
 
     return WorldDocumentItem{
         .descriptor = session_.ActiveWorld(),
-        .active = true
+        .active = true,
+        .valid = true
     };
 }
 
