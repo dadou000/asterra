@@ -1,5 +1,6 @@
 add_library(OrbitStudioSession STATIC
     src/StudioSession.cpp
+    src/StudioWorkspace.cpp
     src/ViewportTargetRegistry.cpp
     src/ViewportTargetRpc.cpp
 )
@@ -39,6 +40,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioSession
         COMMAND OrbitStudioSessionTests
+    )
+
+    add_executable(OrbitStudioWorkspaceTests
+        tests/StudioWorkspaceTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioWorkspaceTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioWorkspaceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioWorkspaceTests)
+
+    add_test(
+        NAME Orbit.StudioWorkspace
+        COMMAND OrbitStudioWorkspaceTests
     )
 
     add_executable(OrbitViewportTargetRegistryTests
