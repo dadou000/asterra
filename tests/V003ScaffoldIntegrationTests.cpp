@@ -265,7 +265,6 @@ int main(const int argc, char** argv)
         orbit::schema::SchemaRegistry schemas;
         orbit::editor_model::builtin::RegisterSchemas(
             schemas);
-        orbit::paths::RegisterSchemas(schemas);
 
         orbit::scene::ObjectStore objects(world);
         orbit::selection::SelectionService selection;
