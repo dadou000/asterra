@@ -5,6 +5,7 @@
 #include <orbit/world/Planet.hpp>
 
 #include <cmath>
+#include <limits>
 
 namespace orbit::terrain
 {
@@ -89,6 +90,17 @@ SurfaceTangentFrame(
             unitDirection);
 }
 
+[[nodiscard]] inline world::SurfaceFrame
+AlignSurfaceTangentFrame(
+    const PlanetSurfacePosition& position,
+    const world::SurfaceFrame& frame) noexcept
+{
+    return world::TransportSurfaceFrameToDirection(
+        frame,
+        CanonicalizeSurfacePosition(position).
+            unitDirection);
+}
+
 [[nodiscard]] inline math::Double3
 BodyLocalPoint(
     const world::PlanetDefinition& planet,
@@ -129,7 +141,8 @@ PhysicalTileForPosition(
 
 // Move in the origin frame's tangent plane using geodesic distance on the
 // reference sphere. The returned physical position remains independent of any
-// cube-face/clipmap representation.
+// cube-face/clipmap representation. Supplying the frame explicitly preserves
+// authored/regional tangent orientation while keeping the position canonical.
 [[nodiscard]] inline PlanetSurfacePosition
 OffsetSurfacePosition(
     const world::PlanetDefinition& planet,
@@ -140,10 +153,15 @@ OffsetSurfacePosition(
     PlanetSurfacePosition result =
         CanonicalizeSurfacePosition(origin);
 
+    const world::SurfaceFrame alignedFrame =
+        AlignSurfaceTangentFrame(
+            result,
+            originFrame);
+
     result.unitDirection =
         world::DirectionAtSurfaceOffset(
             planet,
-            originFrame,
+            alignedFrame,
             offsetMeters);
 
     return CanonicalizeSurfacePosition(result);
@@ -164,5 +182,57 @@ OffsetSurfacePosition(
         world::MakeSurfaceFrame(
             canonical.unitDirection),
         offsetMeters);
+}
+
+// Inverse of OffsetSurfacePosition in the same tangent orientation. A planet
+// mismatch has no meaningful surface displacement and returns infinities so
+// callers cannot accidentally treat another body's coordinates as local.
+[[nodiscard]] inline math::Double2
+SurfaceOffsetBetweenPositions(
+    const world::PlanetDefinition& planet,
+    const PlanetSurfacePosition& origin,
+    const world::SurfaceFrame& originFrame,
+    const PlanetSurfacePosition& target) noexcept
+{
+    const PlanetSurfacePosition canonicalOrigin =
+        CanonicalizeSurfacePosition(origin);
+    const PlanetSurfacePosition canonicalTarget =
+        CanonicalizeSurfacePosition(target);
+
+    if (canonicalOrigin.planet.IsValid() &&
+        canonicalTarget.planet.IsValid() &&
+        canonicalOrigin.planet != canonicalTarget.planet)
+    {
+        const f64 infinity =
+            std::numeric_limits<f64>::infinity();
+        return {infinity, infinity};
+    }
+
+    const world::SurfaceFrame alignedFrame =
+        AlignSurfaceTangentFrame(
+            canonicalOrigin,
+            originFrame);
+
+    return world::SurfaceOffsetBetweenDirections(
+        planet,
+        alignedFrame,
+        canonicalTarget.unitDirection);
+}
+
+[[nodiscard]] inline math::Double2
+SurfaceOffsetBetweenPositions(
+    const world::PlanetDefinition& planet,
+    const PlanetSurfacePosition& origin,
+    const PlanetSurfacePosition& target) noexcept
+{
+    const PlanetSurfacePosition canonicalOrigin =
+        CanonicalizeSurfacePosition(origin);
+
+    return SurfaceOffsetBetweenPositions(
+        planet,
+        canonicalOrigin,
+        world::MakeSurfaceFrame(
+            canonicalOrigin.unitDirection),
+        target);
 }
 } // namespace orbit::terrain
