@@ -137,6 +137,14 @@ VkFormat ToNativeTextureFormat(const TextureFormat format)
         return VK_FORMAT_R8G8B8A8_UNORM;
     case TextureFormat::D32_Float:
         return VK_FORMAT_D32_SFLOAT;
+    case TextureFormat::R16_Float:
+        return VK_FORMAT_R16_SFLOAT;
+    case TextureFormat::RG16_Float:
+        return VK_FORMAT_R16G16_SFLOAT;
+    case TextureFormat::RGBA16_Float:
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case TextureFormat::R16_UInt:
+        return VK_FORMAT_R16_UINT;
     case TextureFormat::R32_Float:
         return VK_FORMAT_R32_SFLOAT;
     case TextureFormat::RG32_Float:
