@@ -72,4 +72,4 @@ jobs:
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit\.(TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials)"
+          -R "Orbit[.]Terrain(Contracts|FaceSeams|M01Integration|GeologyMaterials)"
