@@ -49,6 +49,9 @@ public:
 
     [[nodiscard]] u64 Revision() const noexcept override;
 
+    [[nodiscard]] terrain::TerrainGenerationRevisions
+    GenerationRevisions() const noexcept override;
+
     [[nodiscard]] CachedTerrainSourceStats Stats() const noexcept;
     [[nodiscard]] TerrainPageCacheStats PageCacheStats() const noexcept;
 
