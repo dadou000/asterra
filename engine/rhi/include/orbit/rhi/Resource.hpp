@@ -55,9 +55,35 @@ enum class TextureFormat : u8
     // Single/dual-channel float rasters for compute-generated data
     // (elevation, flow accumulation, slope pairs, etc.) -- meters-scale
     // values need more range/precision than RGBA8_UNorm's [0,1] can hold.
+    R16_Float,
+    RG16_Float,
+    RGBA16_Float,
+    R16_UInt,
     R32_Float,
     RG32_Float
 };
+
+[[nodiscard]] constexpr u32 TextureFormatBytesPerTexel(
+    const TextureFormat format) noexcept
+{
+    switch (format)
+    {
+    case TextureFormat::RGBA8_UNorm:
+    case TextureFormat::D32_Float:
+    case TextureFormat::R32_Float:
+        return 4U;
+    case TextureFormat::R16_Float:
+    case TextureFormat::R16_UInt:
+        return 2U;
+    case TextureFormat::RG16_Float:
+        return 4U;
+    case TextureFormat::RGBA16_Float:
+    case TextureFormat::RG32_Float:
+        return 8U;
+    }
+
+    return 0U;
+}
 
 struct TextureDesc
 {
