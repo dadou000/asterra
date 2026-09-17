@@ -213,6 +213,15 @@ CommandSurfaceRegistry::Present(
             continue;
         }
 
+        // Metadata-contributed commands are contextual rather than fixed
+        // toolbar slots. Hide them when their predicate does not apply;
+        // explicitly registered commands still remain visible disabled and
+        // retain their reason string.
+        if (!registry.Enablement(command.id).enabled)
+        {
+            continue;
+        }
+
         ids.push_back(command.id);
         seen.insert(command.id);
     }
