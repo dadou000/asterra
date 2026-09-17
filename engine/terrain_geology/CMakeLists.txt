@@ -1,6 +1,8 @@
 add_library(OrbitTerrainGeology STATIC
     src/GeologicalMaterial.cpp
     src/GeologicalMaterialToml.cpp
+    src/Stratigraphy.cpp
+    src/StratigraphyToml.cpp
 )
 
 add_library(Orbit::TerrainGeology ALIAS OrbitTerrainGeology)
@@ -13,6 +15,7 @@ target_include_directories(OrbitTerrainGeology
 target_link_libraries(OrbitTerrainGeology
     PUBLIC
         Orbit::Core
+        Orbit::Terrain
     PRIVATE
         tomlplusplus::tomlplusplus
 )
@@ -41,5 +44,27 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainGeologyMaterials
         COMMAND OrbitTerrainGeologyTests
+    )
+
+    add_executable(OrbitTerrainStratigraphyTests
+        tests/StratigraphyTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainStratigraphyTests
+        PRIVATE
+            Orbit::TerrainGeology
+    )
+
+    target_compile_definitions(OrbitTerrainStratigraphyTests
+        PRIVATE
+            ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/reference"
+    )
+
+    target_compile_features(OrbitTerrainStratigraphyTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainStratigraphyTests)
+
+    add_test(
+        NAME Orbit.TerrainStratigraphy
+        COMMAND OrbitTerrainStratigraphyTests
     )
 endif()
