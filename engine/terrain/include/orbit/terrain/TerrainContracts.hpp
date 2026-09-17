@@ -50,6 +50,29 @@ enum class TerrainResidency : u8
     CpuAndGpu
 };
 
+// Stable source channels used when V0.0.4 feeds V0.0.3 ProceduralGraph source
+// nodes. View/camera/render state has no revision domain and therefore cannot
+// invalidate physical products through this contract.
+enum class TerrainRevisionDomain : u8
+{
+    Geology,
+    Climate,
+    Authoring,
+    Biome,
+    Water,
+    Processes
+};
+
+// The only reasons a physical terrain product may be generated. A view may
+// reveal that a physical page is missing, but camera motion itself is not a
+// generation/invalidation reason.
+enum class TerrainGenerationTrigger : u8
+{
+    MissingPhysicalPage,
+    AuthorityRevisionChanged,
+    ExplicitBake
+};
+
 // Every domain that can change canonical generated terrain has an explicit,
 // monotonic revision. View/camera/render revisions are intentionally absent.
 struct TerrainGenerationRevisions
@@ -64,6 +87,29 @@ struct TerrainGenerationRevisions
     [[nodiscard]] constexpr bool operator==(
         const TerrainGenerationRevisions&) const noexcept = default;
 };
+
+[[nodiscard]] constexpr u64 RevisionForDomain(
+    const TerrainGenerationRevisions& revisions,
+    const TerrainRevisionDomain domain) noexcept
+{
+    switch (domain)
+    {
+    case TerrainRevisionDomain::Geology:
+        return revisions.geology;
+    case TerrainRevisionDomain::Climate:
+        return revisions.climate;
+    case TerrainRevisionDomain::Authoring:
+        return revisions.authoring;
+    case TerrainRevisionDomain::Biome:
+        return revisions.biome;
+    case TerrainRevisionDomain::Water:
+        return revisions.water;
+    case TerrainRevisionDomain::Processes:
+        return revisions.processes;
+    }
+
+    return 0;
+}
 
 // Stable planet-space address. Render clipmap rings, GPU slots and frame state
 // are not represented here, so moving a camera cannot change physical page
