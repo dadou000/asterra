@@ -6,6 +6,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuFlowAccumulation.cpp
     src/GpuHydrologyRegion.cpp
     src/GpuLakeBasins.cpp
+    src/GpuMaterialColumnResources.cpp
     src/GpuRegionDelta.cpp
     src/GpuRiverGeometry.cpp
 )
@@ -24,6 +25,7 @@ target_link_libraries(OrbitTerrainGpu
         Orbit::Shader
         Orbit::Terrain
         Orbit::TerrainStream
+        Orbit::TerrainMaterialColumn
         Orbit::World
 )
 
