@@ -254,7 +254,7 @@ void TestCanonicalPositionHasNoFacePhase()
             planet.id,
             world::CubeCoordinate{
                 .face = world::CubeFace::PositiveX,
-                .uv = {direction.z / direction.x,
+                .uv = {-direction.z / direction.x,
                        direction.y / direction.x}
             });
 
