@@ -67,4 +67,13 @@ void Register(
     commands::CommandService& commandService,
     scene::ObjectStore& objects,
     selection::SelectionService& selection);
+
+// Material-specific commands remain in the same shared command registry but
+// are split into their own translation unit so the core authoring command
+// implementation stays focused on hierarchy/path operations.
+void RegisterMaterialCommands(
+    commands::CommandRegistry& registry,
+    commands::CommandService& commandService,
+    scene::ObjectStore& objects,
+    selection::SelectionService& selection);
 } // namespace orbit::editor_model::authoring_commands
