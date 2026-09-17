@@ -25,6 +25,11 @@ public:
             std::nullopt,
         i64 sortOrder = 0);
 
+    // Deletes one leaf semantic object as an undoable command. The complete
+    // object record and all explicitly stored schema properties are restored
+    // with the same stable ID on undo.
+    void DeleteObject(scene::ObjectId object);
+
     void RenameObject(
         scene::ObjectId object,
         std::string name);
