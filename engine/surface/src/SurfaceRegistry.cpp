@@ -39,7 +39,14 @@ SurfaceRegistry::SphericalPlanetDefinition(
 
     return world::PlanetDefinition{
         .radiusMeters =
-            sphere->radiusMeters
+            sphere->radiusMeters,
+        // BodyId is derived deterministically from the persisted semantic
+        // body object. Preserve those bits across the terrain type boundary
+        // so physical page identity survives registry/composition rebuilds.
+        .id = {
+            .high = body.high,
+            .low = body.low
+        }
     };
 }
 
