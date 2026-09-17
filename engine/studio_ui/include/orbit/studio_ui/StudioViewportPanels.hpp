@@ -20,14 +20,22 @@ inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
 };
 
 // Dockable presentation for the two default independent Studio RenderViews.
-// All target mutations delegate to ViewportTargetRegistry; panels own only UI
-// state and RenderView sizing.
+// Panel registrations may outlive a project/session; Rebind() swaps only the
+// project-bound presentation services while the panel object itself remains
+// stable across StudioWorkspace project replacement.
 class StudioViewportPanels
 {
 public:
+    StudioViewportPanels() = default;
+
     StudioViewportPanels(
         StudioRenderViewSet& views,
         studio_session::StudioSession& session) noexcept;
+
+    void Rebind(
+        StudioRenderViewSet& views,
+        studio_session::StudioSession& session);
+    void ClearBinding() noexcept;
 
     void Register(editor_ui::EditorUi& ui);
 
