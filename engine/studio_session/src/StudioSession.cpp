@@ -211,7 +211,8 @@ StudioSession::Rpc() const noexcept
     return rpc_;
 }
 
-StudioTickResult StudioSession::Tick()
+StudioTickResult StudioSession::Tick(
+    const bool pollPlugins)
 {
     StudioTickResult result{
         .worldGeneration = world_.Generation(),
@@ -239,8 +240,11 @@ StudioTickResult StudioSession::Tick()
         return result;
     }
 
-    result.pluginsReloaded =
-        world_.Plugins().PollHotReload();
+    if (pollPlugins)
+    {
+        result.pluginsReloaded =
+            world_.Plugins().PollHotReload();
+    }
     result.activeBodyChanged =
         activeBody_.Refresh();
     result.pathNetworkRebound =

@@ -96,7 +96,7 @@ public:
     [[nodiscard]] const editor_rpc::EditorSessionRpcHost&
     Rpc() const noexcept;
 
-    [[nodiscard]] StudioTickResult Tick();
+    [[nodiscard]] StudioTickResult Tick(bool pollPlugins = true);
 
 private:
     void DispatchWorldLifecycle(
