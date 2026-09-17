@@ -107,16 +107,50 @@ int main()
                 "Studio Session Test");
         orbit::studio_session::StudioSession studio(project);
 
+        const auto initialWorldGeneration =
+            studio.World().Generation();
+        const auto initialUniverseGeneration =
+            studio.World().UniverseGeneration();
+        Check(initialWorldGeneration != 0);
+        Check(initialUniverseGeneration != 0);
+
+        const auto idleTick = studio.Tick();
+        Check(
+            idleTick.worldGeneration ==
+            initialWorldGeneration);
+        Check(
+            idleTick.universeGeneration ==
+            initialUniverseGeneration);
+
         const auto asterra =
             AddBody(
                 studio,
                 "Asterra",
                 6'000'000.0);
-        static_cast<void>(studio.Tick());
+        const auto composedTick = studio.Tick();
+        Check(
+            composedTick.universeGeneration >
+            initialUniverseGeneration);
         Check(studio.ActiveBody().Active().has_value());
         Check(
             studio.ActiveBody().Active()->semanticObject ==
             asterra);
+
+        const auto stableUniverseGeneration =
+            studio.World().UniverseGeneration();
+        const auto noOpTick = studio.Tick();
+        Check(
+            noOpTick.universeGeneration ==
+            stableUniverseGeneration);
+        Check(
+            studio.World().UniverseGeneration() ==
+            stableUniverseGeneration);
+
+        static_cast<void>(
+            studio.World().RebuildUniverse());
+        Check(
+            studio.World().UniverseGeneration() >
+            stableUniverseGeneration);
 
         const auto secondary =
             studio.CreateWorld(
@@ -124,7 +158,12 @@ int main()
                 "Secondary");
         Check(studio.Worlds().size() == 2U);
 
+        const auto beforeWorldSwitchUniverseGeneration =
+            studio.World().UniverseGeneration();
         studio.OpenWorld(secondary.relativePath);
+        Check(
+            studio.World().UniverseGeneration() >
+            beforeWorldSwitchUniverseGeneration);
         Check(studio.ActiveWorld().has_value());
         Check(
             studio.ActiveWorld()->descriptor.id ==
@@ -132,12 +171,17 @@ int main()
         Check(studio.World().Explorer().Roots().empty());
         Check(!studio.ActiveBody().Active().has_value());
 
+        const auto secondaryEmptyGeneration =
+            studio.World().UniverseGeneration();
         const auto veyra =
             AddBody(
                 studio,
                 "Veyra",
                 4'200'000.0);
-        static_cast<void>(studio.Tick());
+        const auto secondaryComposedTick = studio.Tick();
+        Check(
+            secondaryComposedTick.universeGeneration >
+            secondaryEmptyGeneration);
         Check(studio.ActiveBody().Active().has_value());
         Check(
             studio.ActiveBody().Active()->semanticObject ==
@@ -155,8 +199,13 @@ int main()
                 Find("name")->AsString() ==
             "World");
 
+        const auto beforeCloseUniverseGeneration =
+            studio.World().UniverseGeneration();
         studio.CloseWorld();
         Check(!studio.World().HasWorld());
+        Check(
+            studio.World().UniverseGeneration() >
+            beforeCloseUniverseGeneration);
         Check(!studio.ActiveWorld().has_value());
         Check(!studio.ActiveBody().Active().has_value());
 
@@ -168,8 +217,13 @@ int main()
         Check(catalog.IsArray());
         Check(catalog.AsArray().size() == 2U);
 
+        const auto beforeReopenUniverseGeneration =
+            studio.World().UniverseGeneration();
         studio.OpenWorld("Main");
-        static_cast<void>(studio.Tick());
+        const auto reopenedTick = studio.Tick();
+        Check(
+            reopenedTick.universeGeneration >
+            beforeReopenUniverseGeneration);
         Check(studio.World().HasWorld());
         Check(studio.ActiveBody().Active().has_value());
         Check(
