@@ -131,6 +131,23 @@ namespace
     return value;
 }
 
+[[nodiscard]] terrain::PlanetSurfacePosition
+RegionOrigin(
+    const world::PlanetDefinition& planet,
+    const terrain::PlanetSurfacePosition& storedOrigin,
+    const world::SurfaceFrame& frame) noexcept
+{
+    if (storedOrigin.planet.IsValid())
+    {
+        return terrain::CanonicalizeSurfacePosition(
+            storedOrigin);
+    }
+
+    return terrain::CanonicalizeSurfacePosition({
+        .planet = planet.id,
+        .unitDirection = frame.up
+    });
+}
 } // namespace
 
 DerivedRegionTerrainSource::
@@ -191,8 +208,8 @@ DerivedRegionTerrainSource(
 bool DerivedRegionTerrainSource::
 AccumulateFromCache(
     const DerivedTerrainRegionCache& cache,
-    const math::Double3& direction,
-    const terrain::TerrainQuery& query,
+    const terrain::PlanetSurfacePosition& position,
+    const terrain::TerrainSampleFootprint& footprint,
     const f64 baseElevation,
     f64& totalWeight,
     f64& weightedRegionalDelta,
@@ -222,11 +239,24 @@ AccumulateFromCache(
             continue;
         }
 
-        const math::Double2 offset =
-            world::SurfaceOffsetBetweenDirections(
+        const terrain::PlanetSurfacePosition origin =
+            RegionOrigin(
                 planet_,
+                region->elevationDelta.origin,
+                region->elevationDelta.surfaceFrame);
+
+        const math::Double2 offset =
+            terrain::SurfaceOffsetBetweenPositions(
+                planet_,
+                origin,
                 region->elevationDelta.surfaceFrame,
-                direction);
+                position);
+
+        if (!std::isfinite(offset.x) ||
+            !std::isfinite(offset.y))
+        {
+            continue;
+        }
 
         const f64 regionWeight =
             RegionInfluence(
@@ -243,7 +273,7 @@ AccumulateFromCache(
 
         const f64 lodWeight =
             FootprintWeight(
-                query.footprintMeters,
+                footprint.diameterMeters,
                 region->
                     elevationDelta.
                     spacingMeters,
@@ -305,18 +335,47 @@ terrain::TerrainSample
 DerivedRegionTerrainSource::Sample(
     const terrain::TerrainQuery& query) const noexcept
 {
-    terrain::TerrainSample result =
-        source_->Sample(query);
-
-    const math::Double3 direction =
-        math::Normalize(
+    const f64 directionLengthSquared =
+        math::LengthSquared(
             query.unitDirection);
 
-    if (math::LengthSquared(direction) <=
-        0.0)
+    if (!std::isfinite(query.unitDirection.x) ||
+        !std::isfinite(query.unitDirection.y) ||
+        !std::isfinite(query.unitDirection.z) ||
+        !std::isfinite(directionLengthSquared) ||
+        directionLengthSquared <= 0.0)
     {
-        return result;
+        return source_->Sample(query);
     }
+
+    if (query.planet.IsValid() &&
+        planet_.id.IsValid() &&
+        query.planet != planet_.id)
+    {
+        return source_->Sample(query);
+    }
+
+    const terrain::PlanetSurfacePosition position =
+        terrain::CanonicalizeSurfacePosition({
+            .planet = query.planet.IsValid()
+                ? query.planet
+                : planet_.id,
+            .unitDirection = query.unitDirection,
+            .radialOffsetMeters =
+                query.radialOffsetMeters
+        });
+
+    const terrain::TerrainSampleFootprint footprint =
+        query.Footprint();
+
+    const terrain::TerrainQuery canonicalQuery =
+        terrain::MakeTerrainQuery(
+            position,
+            footprint);
+
+    terrain::TerrainSample result =
+        source_->Sample(
+            canonicalQuery);
 
     const f64 baseElevation =
         result.elevationMeters;
@@ -336,8 +395,8 @@ DerivedRegionTerrainSource::Sample(
         fineRegionCache_ &&
         AccumulateFromCache(
             *fineRegionCache_,
-            direction,
-            query,
+            position,
+            footprint,
             baseElevation,
             totalWeight,
             weightedRegionalDelta,
@@ -353,8 +412,8 @@ DerivedRegionTerrainSource::Sample(
 
         if (!AccumulateFromCache(
                 *regionCache_,
-                direction,
-                query,
+                position,
+                footprint,
                 baseElevation,
                 totalWeight,
                 weightedRegionalDelta,
@@ -402,8 +461,26 @@ DerivedRegionTerrainSource::Sample(
             {
                 continue;
             }
-            const auto offset = world::SurfaceOffsetBetweenDirections(
-                planet_, region->lakes.surfaceFrame, direction);
+
+            const terrain::PlanetSurfacePosition lakeOrigin =
+                RegionOrigin(
+                    planet_,
+                    region->elevationDelta.origin,
+                    region->lakes.surfaceFrame);
+
+            const auto offset =
+                terrain::SurfaceOffsetBetweenPositions(
+                    planet_,
+                    lakeOrigin,
+                    region->lakes.surfaceFrame,
+                    position);
+
+            if (!std::isfinite(offset.x) ||
+                !std::isfinite(offset.y))
+            {
+                continue;
+            }
+
             const f64 regionWeight = RegionInfluence(*region, offset);
             if (regionWeight <= 0.0)
             {
@@ -411,7 +488,7 @@ DerivedRegionTerrainSource::Sample(
             }
             lakeRegionWeight += regionWeight;
             const f64 weight = regionWeight * FootprintWeight(
-                query.footprintMeters, region->lakes.cellSpacingMeters, config_);
+                footprint.diameterMeters, region->lakes.cellSpacingMeters, config_);
             if (weight <= 0.0)
             {
                 continue;
