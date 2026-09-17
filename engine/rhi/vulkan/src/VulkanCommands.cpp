@@ -648,10 +648,20 @@ void VulkanCommandList::CopyBufferToTexture(
             "Orbit Vulkan received a resource from another backend.");
     }
 
-    // RGBA8_UNorm is the only format CopyBufferToTexture is used for
-    // today (see TextureFormat); 4 bytes per texel, tightly packed.
-    const u64 sizeBytes = static_cast<u64>(vulkanDestination->Width()) *
-        vulkanDestination->Height() * 4U;
+    const u32 bytesPerTexel =
+        TextureFormatBytesPerTexel(
+            vulkanDestination->Format());
+
+    if (bytesPerTexel == 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit cannot determine texture upload texel size.");
+    }
+
+    const u64 sizeBytes =
+        static_cast<u64>(vulkanDestination->Width()) *
+        static_cast<u64>(vulkanDestination->Height()) *
+        bytesPerTexel;
 
     if (sourceOffsetBytes > source.SizeBytes() ||
         sizeBytes > source.SizeBytes() - sourceOffsetBytes)
