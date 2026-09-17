@@ -14,7 +14,13 @@ WorldDocumentsModel::WorldDocumentsModel(
 std::vector<WorldDocumentItem>
 WorldDocumentsModel::Catalog() const
 {
-    const auto active = session_.ActiveWorld();
+    std::optional<documents::WorldDescriptor> active;
+
+    if (session_.HasWorld())
+    {
+        active = session_.ActiveWorld();
+    }
+
     std::vector<WorldDocumentItem> result;
 
     for (auto descriptor :
@@ -36,17 +42,13 @@ WorldDocumentsModel::Catalog() const
 std::optional<WorldDocumentItem>
 WorldDocumentsModel::Active() const
 {
-    const auto active = session_.ActiveWorld();
-
-    if (!active.has_value())
+    if (!session_.HasWorld())
     {
         return std::nullopt;
     }
 
     return WorldDocumentItem{
-        .descriptor =
-            session_.Project().DescribeWorld(
-                active->relativePath),
+        .descriptor = session_.ActiveWorld(),
         .active = true
     };
 }
