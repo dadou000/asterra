@@ -194,6 +194,28 @@ void RegisterSchemas(
         }
     });
 
+    // These V0.0.4 surface assets intentionally have no placeholder process
+    // properties yet. Their stable schema identities are real persistence and
+    // command-layer contracts now; each milestone adds only the properties
+    // whose runtime semantics are implemented at that point.
+    schemas.RegisterType({
+        .id = kGeologyAssetType,
+        .displayName = "Geology Asset",
+        .category = "World / Surface / Geology"
+    });
+
+    schemas.RegisterType({
+        .id = kTerrainProcessAssetType,
+        .displayName = "Terrain Process Asset",
+        .category = "World / Surface / Processes"
+    });
+
+    schemas.RegisterType({
+        .id = kBiomeAssetType,
+        .displayName = "Biome Asset",
+        .category = "World / Surface / Biomes"
+    });
+
     schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
