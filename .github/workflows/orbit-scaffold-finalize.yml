@@ -5,6 +5,7 @@ on:
     branches: [orbit]
     paths:
       - tools/finalize_v003_scaffold.py
+      - tools/run_v003_finalizer_compat.py
       - .github/workflows/orbit-scaffold-finalize.yml
 
 permissions:
@@ -20,13 +21,13 @@ jobs:
           fetch-depth: 0
 
       - name: Apply scaffold completion patch
-        run: python tools/finalize_v003_scaffold.py
+        run: python tools/run_v003_finalizer_compat.py
 
       - name: Verify patch changed expected sources
         shell: pwsh
         run: |
           git diff --check
-          git diff --exit-code -- tools/finalize_v003_scaffold.py .github/workflows/orbit-scaffold-finalize.yml
+          git diff --exit-code -- tools/finalize_v003_scaffold.py tools/run_v003_finalizer_compat.py .github/workflows/orbit-scaffold-finalize.yml
           if (-not (git status --porcelain)) {
             throw "Scaffold finalizer produced no source changes"
           }
