@@ -37,6 +37,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add engine/build engine/platform_services apps/build apps/editor .github/workflows/orbit-windows.yml docs/V0.0.3_SPEC.md
+          git add engine/build engine/platform_services apps/build apps/editor docs/V0.0.3_SPEC.md
           git commit -m "Finish V0.0.3 build and platform scaffolding"
           git push origin HEAD:orbit
