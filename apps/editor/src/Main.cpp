@@ -41,7 +41,9 @@
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
+#include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
@@ -330,7 +332,258 @@ RouteSearchForProfile(
     };
 }
 
-[[nodiscard]] orbit::documents::ProjectDocument
+[[nodiscard]] std::optional<
+    orbit::documents::ProjectDocument>
+OpenProjectBrowser()
+{
+    orbit::studio_session::StudioWorkspace
+        workspace;
+
+    orbit::runtime::RuntimeSession runtime({
+        .applicationName = "OrbitStudio",
+        .windowTitle = "Orbit Studio - Project Browser",
+        .width = 1180,
+        .height = 760,
+        .swapchainBufferCount = 3,
+        .allowTearing = true,
+        .relativeMouseMode = false
+    });
+
+    auto& window = runtime.Window();
+    auto& device = runtime.Device();
+    auto& graphicsQueue =
+        runtime.GraphicsQueue();
+    auto& swapchain =
+        runtime.Swapchain();
+
+    const orbit::shader::dxc::
+        DxcShaderCompiler compiler;
+
+    const auto layoutPath =
+        orbit::platform::
+            UserDataDirectory() /
+        "EditorLayouts" /
+        "ProjectBrowser.ini";
+
+    orbit::editor_ui::EditorUi ui(
+        device,
+        graphicsQueue,
+        compiler,
+        layoutPath);
+
+    orbit::studio_ui::ProjectAuthoringUi
+        projectUi(
+            workspace,
+            orbit::platform::
+                UserDataDirectory() /
+                "RecentProjects.txt");
+
+    projectUi.Register(ui);
+
+    auto allocator =
+        device.CreateCommandAllocator(
+            orbit::rhi::QueueType::Graphics);
+    auto commands =
+        device.CreateCommandList(
+            *allocator);
+    auto fence =
+        device.CreateFence(0);
+
+    orbit::u64 submittedFence = 0;
+    orbit::u64 nextFence = 1;
+
+    using Clock =
+        std::chrono::steady_clock;
+    auto previous =
+        Clock::now();
+
+    std::optional<std::filesystem::path>
+        selectedManifest;
+
+    while (window.PumpEvents())
+    {
+        if (submittedFence != 0)
+        {
+            fence->Wait(
+                submittedFence);
+        }
+
+        const auto now =
+            Clock::now();
+        const orbit::f64 deltaSeconds =
+            std::clamp(
+                std::chrono::duration<
+                    orbit::f64>(
+                        now - previous).
+                    count(),
+                1.0 / 1000.0,
+                0.1);
+        previous = now;
+
+        const orbit::u32 width =
+            window.Width();
+        const orbit::u32 height =
+            window.Height();
+
+        if (width == 0 ||
+            height == 0)
+        {
+            continue;
+        }
+
+        static_cast<void>(
+            runtime.ResizeSwapchainToWindow());
+
+        ui.BeginFrame(
+            window,
+            deltaSeconds);
+        ui.DrawStudioShell();
+
+        if (workspace.HasProject())
+        {
+            workspace.Project().Save();
+            workspace.Session().
+                World().Checkpoint();
+
+            selectedManifest =
+                workspace.Project().
+                    ManifestPath();
+        }
+
+        allocator->Reset();
+        commands->Reset(
+            *allocator);
+
+        auto& backBuffer =
+            swapchain.CurrentBackBuffer();
+
+        orbit::render_graph::RenderGraph
+            graph(device);
+
+        const auto backBufferTarget =
+            graph.ImportTexture(
+                "ProjectBrowserSwapchain",
+                backBuffer,
+                orbit::rhi::
+                    ResourceState::Present);
+
+        graph.AddPass(
+            "ProjectBrowser.Canvas",
+            {
+                {
+                    .texture =
+                        backBufferTarget,
+                    .state =
+                        orbit::rhi::
+                            ResourceState::
+                                RenderTarget,
+                    .access =
+                        orbit::render_graph::
+                            Access::Write
+                }
+            },
+            [&](orbit::rhi::CommandList&
+                    commandList,
+                const orbit::render_graph::
+                    Resources&)
+            {
+                commandList.ClearColorTarget(
+                    backBuffer,
+                    {
+                        .red = 0.018F,
+                        .green = 0.021F,
+                        .blue = 0.027F,
+                        .alpha = 1.0F
+                    });
+                commandList.SetRenderTarget(
+                    backBuffer);
+            });
+
+        graph.AddPass(
+            "ProjectBrowser.Ui",
+            {
+                {
+                    .texture =
+                        backBufferTarget,
+                    .state =
+                        orbit::rhi::
+                            ResourceState::
+                                RenderTarget,
+                    .access =
+                        orbit::render_graph::
+                            Access::Write
+                }
+            },
+            [&](orbit::rhi::CommandList&
+                    commandList,
+                const orbit::render_graph::
+                    Resources&)
+            {
+                ui.Render(
+                    commandList,
+                    backBuffer,
+                    swapchain.Width(),
+                    swapchain.Height());
+            });
+
+        graph.AddPass(
+            "ProjectBrowser.Present",
+            {
+                {
+                    .texture =
+                        backBufferTarget,
+                    .state =
+                        orbit::rhi::
+                            ResourceState::
+                                Present,
+                    .access =
+                        orbit::render_graph::
+                            Access::Read
+                }
+            },
+            {});
+
+        graph.Execute(*commands);
+
+        commands->Close();
+        graphicsQueue.Submit(
+            *commands);
+        swapchain.Present(true);
+
+        submittedFence =
+            nextFence++;
+        graphicsQueue.Signal(
+            *fence,
+            submittedFence);
+
+        if (selectedManifest.has_value())
+        {
+            break;
+        }
+    }
+
+    if (submittedFence != 0)
+    {
+        fence->Wait(
+            submittedFence);
+    }
+
+    if (!selectedManifest.has_value())
+    {
+        return std::nullopt;
+    }
+
+    // Destroy the browser workspace/session graph before opening the selected
+    // project as the editor's authoritative project graph.
+    workspace.CloseProject();
+
+    return orbit::documents::
+        ProjectDocument::Open(
+            *selectedManifest);
+}
+
+[[nodiscard]] std::optional<
+    orbit::documents::ProjectDocument>
 OpenProject(
     const int argc,
     char** argv)
@@ -370,29 +623,9 @@ OpenProject(
                 manifest);
     }
 
-    const std::filesystem::path scratch =
-        orbit::platform::
-            UserDataDirectory() /
-        "Scratch" /
-        "StudioPreview";
-
-    const std::filesystem::path
-        scratchManifest =
-            scratch /
-            "Project.orbit.toml";
-
-    if (std::filesystem::exists(
-            scratchManifest))
-    {
-        return orbit::documents::
-            ProjectDocument::Open(
-                scratchManifest);
-    }
-
-    return orbit::documents::
-        ProjectDocument::Create(
-            scratch,
-            "Orbit Studio Preview");
+    // Normal Studio launches now use the real project browser instead of
+    // silently manufacturing/opening a hidden scratch project.
+    return OpenProjectBrowser();
 }
 
 [[nodiscard]] const char* LogPrefix(
@@ -1000,11 +1233,20 @@ int main(
         orbit::editor_model::OutputLog
             outputLog;
 
+        auto openedProject =
+            OpenProject(
+                argc,
+                argv);
+
+        if (!openedProject.has_value())
+        {
+            return 0;
+        }
+
         orbit::documents::ProjectDocument
             project =
-                OpenProject(
-                    argc,
-                    argv);
+                std::move(
+                    *openedProject);
 
         // The legacy Studio shell now consumes the same permanent world-scoped
         // service graph as the M20A application model. This removes the second
