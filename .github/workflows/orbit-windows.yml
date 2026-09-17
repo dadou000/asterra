@@ -37,7 +37,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build V0.0.3 regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitEditorSessionRpcHostTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioWorkspaceTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
 
       - name: Test - Terrain view
         shell: pwsh
@@ -87,6 +87,22 @@ jobs:
             throw "OrbitUniverseCompositionTests failed with exit code $LASTEXITCODE"
           }
 
+      - name: Test - Surface composition
+        shell: pwsh
+        run: |
+          & "build/engine/surface_model/Release/OrbitSurfaceCompositionTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitSurfaceCompositionTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Terrain capability authoring
+        shell: pwsh
+        run: |
+          & "build/engine/editor_model/Release/OrbitTerrainAuthoringCommandTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitTerrainAuthoringCommandTests failed with exit code $LASTEXITCODE"
+          }
+
       - name: Test - Core editor RPC
         shell: pwsh
         run: |
@@ -119,12 +135,56 @@ jobs:
             throw "OrbitEditorWorldSessionTests failed with exit code $LASTEXITCODE"
           }
 
+      - name: Test - World-scoped authoring models
+        shell: pwsh
+        run: |
+          & "build/engine/editor_session/Release/OrbitWorldDocumentsModelTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitWorldDocumentsModelTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/editor_session/Release/OrbitActiveBodyModelTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitActiveBodyModelTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/editor_session/Release/OrbitWorldScopedFacadesTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitWorldScopedFacadesTests failed with exit code $LASTEXITCODE"
+          }
+
       - name: Test - Session-aware RPC host
         shell: pwsh
         run: |
           & "build/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitEditorSessionRpcHostTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Studio session and workspace
+        shell: pwsh
+        run: |
+          & "build/engine/studio_session/Release/OrbitStudioSessionTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioSessionTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioWorkspaceTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitStudioWorkspaceRpcHostTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioWorkspaceRpcHostTests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test - Multi-viewport targeting
+        shell: pwsh
+        run: |
+          & "build/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitViewportTargetRegistryTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitViewportTargetRpcTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Test - Explorer and inspector
