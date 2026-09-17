@@ -186,6 +186,13 @@ DerivedTerrainRegion BuildDerivedTerrainRegion(
                 rivers,
                 config.carving);
 
+    // M01 physical identity must survive the conversion from hydrology to
+    // the local river-carving representation. RiverCarvingField still keeps
+    // its oriented local frame for fast sampling, but that frame is anchored
+    // to this canonical planet-space origin.
+    carving.origin =
+        refinement.hydrology.origin;
+
     auto water =
         terrain_water::
             BuildRiverWaterNetwork(
