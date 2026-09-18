@@ -688,7 +688,7 @@ EnsureInitialBodyObject(
     orbit::commands::CommandService& commands)
 {
     const auto existingBody =
-        FindFirstBodyObject(objects());
+        FindFirstBodyObject(objects);
 
     // Legacy preview projects created the first body directly under World.
     // M20A authority requires World -> Celestial System -> Celestial Body.
@@ -3726,7 +3726,8 @@ int main(
                  &activePathNetwork,
                  &lastPlacedPathNode,
                  &bodies,
-                 &bodyId](
+                 &bodyId,
+                 &studioSession](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
