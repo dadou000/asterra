@@ -12,6 +12,7 @@ target_include_directories(OrbitTerrainBiome
 target_link_libraries(OrbitTerrainBiome
     PUBLIC
         Orbit::Core
+        Orbit::TerrainGeology
         Orbit::Universe
 )
 
