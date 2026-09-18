@@ -4,7 +4,9 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_erosion/SedimentExchange.hpp>
 
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -23,7 +25,9 @@ struct HydraulicCellState
 
     math::Double2 velocityMetersPerSecond{};
 
-    // Total mobile sediment mass currently suspended over this cell.
+    // M14 typed shared waterborne state. The scalar is retained as a
+    // compatibility/debug total and is synchronized from this value.
+    SedimentMass suspendedSediment{};
     f64 suspendedSedimentKg{0.0};
 
     f64 cumulativeErodedKg{0.0};
@@ -102,6 +106,11 @@ struct HydraulicErosionResult
 {
     terrain_material_column::MaterialColumnPage material;
     std::vector<HydraulicCellState> cells;
+
+    // M14 inter-process authority for mobile sediment. M11 hydrodynamic
+    // buffers remain solver scratch; this typed page is the handoff state.
+    std::optional<SedimentExchangePage> sedimentExchange;
+
     HydraulicMassBalance massBalance{};
 
     [[nodiscard]] const HydraulicCellState& At(
