@@ -1,7 +1,9 @@
 #include <orbit/terrain_erosion/RiverNetwork.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <iostream>
 #include <string>
 #include <vector>
