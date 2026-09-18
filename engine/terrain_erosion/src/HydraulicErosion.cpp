@@ -863,8 +863,17 @@ HydraulicErosionResult SimulateHydraulicErosion(
                                 result.sedimentExchange->
                                     ConversionRules());
 
-                        shared +=
-                            typed;
+                        result.sedimentExchange->
+                            PublishPhysicalRemoval(
+                                x,
+                                y,
+                                SedimentTransportMedium::Waterborne,
+                                typed);
+
+                        shared =
+                            result.sedimentExchange->
+                                At(x, y).
+                                waterborne;
 
                         state.suspendedSediment =
                             shared;
