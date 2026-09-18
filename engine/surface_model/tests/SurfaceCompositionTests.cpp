@@ -77,6 +77,8 @@ int main()
         const auto surfaceStats = surfaces.Rebuild(objects, universe);
 
         if (surfaceStats.terrainSurfaces != 1U ||
+            surfaceStats.biomeServices != 1U ||
+            surfaceStats.biomeDefinitions != 1U ||
             surfaceStats.sourceRevision != objects.Revision())
         {
             return 2;
@@ -105,6 +107,108 @@ int main()
             analytic->Description().detailOctaves != 6U)
         {
             return 4;
+        }
+
+        const auto* baseOnlyBiomes =
+            surfaces.BiomesForBody(
+                *bodyId);
+
+        if (baseOnlyBiomes == nullptr ||
+            baseOnlyBiomes->Definitions().size() != 1U ||
+            baseOnlyBiomes->Resolve({}).size() != 1U ||
+            !baseOnlyBiomes->Resolve({}).front().base ||
+            baseOnlyBiomes->Resolve({}).front().weight != 1.0F)
+        {
+            return 11;
+        }
+
+        const auto forestObject =
+            commands.CreateObject(
+                orbit::world_model::kBiomeAssetType,
+                "Temperate Forest",
+                terrainObject);
+
+        commands.SetProperty(
+            forestObject,
+            orbit::world_model::kBiomeMinimumResolvedWeight,
+            0.25);
+
+        commands.SetProperty(
+            forestObject,
+            orbit::world_model::kBiomeScatterDensityMultiplier,
+            1.4);
+
+        if (!universe.RebuildIfChanged(objects))
+        {
+            return 12;
+        }
+
+        const auto bodyAfterBiomeAdd =
+            universe.BodyForObject(
+                bodyObject);
+
+        if (!bodyAfterBiomeAdd.has_value() ||
+            *bodyAfterBiomeAdd != *bodyId)
+        {
+            return 13;
+        }
+
+        const auto withBiomeStats =
+            surfaces.Rebuild(
+                objects,
+                universe);
+
+        const auto* withBiome =
+            surfaces.BiomesForBody(
+                *bodyAfterBiomeAdd);
+
+        if (withBiomeStats.biomeServices != 1U ||
+            withBiomeStats.biomeDefinitions != 2U ||
+            withBiome == nullptr ||
+            withBiome->Definitions().size() != 2U)
+        {
+            return 14;
+        }
+
+        const auto definitions =
+            withBiome->Definitions();
+
+        const auto forest =
+            definitions.size() > 1U
+                ? definitions[1]
+                : orbit::terrain_biome::BiomeDefinition{};
+
+        if (forest.name != "Temperate Forest" ||
+            forest.placement.minimumResolvedWeight != 0.25F ||
+            forest.scatter.densityMultiplier != 1.4F)
+        {
+            return 15;
+        }
+
+        commands.DeleteObject(
+            forestObject);
+
+        if (!universe.RebuildIfChanged(objects))
+        {
+            return 16;
+        }
+
+        static_cast<void>(
+            surfaces.Rebuild(
+                objects,
+                universe));
+
+        const auto* afterBiomeDelete =
+            surfaces.BiomesForBody(
+                *universe.BodyForObject(
+                    bodyObject));
+
+        if (afterBiomeDelete == nullptr ||
+            afterBiomeDelete->Definitions().size() != 1U ||
+            afterBiomeDelete->Resolve({}).size() != 1U ||
+            afterBiomeDelete->Resolve({}).front().weight != 1.0F)
+        {
+            return 17;
         }
 
         commands.SetProperty(
