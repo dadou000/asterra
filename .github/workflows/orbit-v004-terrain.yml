@@ -7,6 +7,7 @@ on:
       - "engine/terrain/**"
       - "engine/terrain_cache/**"
       - "engine/terrain_hydrology/**"
+      - "engine/terrain_gpu/**"
       - "engine/terrain_erosion/**"
       - "engine/terrain_region/**"
       - "engine/terrain_geology/**"
@@ -26,6 +27,7 @@ on:
       - "engine/terrain/**"
       - "engine/terrain_cache/**"
       - "engine/terrain_hydrology/**"
+      - "engine/terrain_gpu/**"
       - "engine/terrain_erosion/**"
       - "engine/terrain_region/**"
       - "engine/terrain_geology/**"
@@ -84,9 +86,10 @@ jobs:
           OrbitTerrainReliefTests
           OrbitTerrainImpactsTests
           OrbitTerrainMaterialColumnTests
+          OrbitTerrainDrainagePageTests
           OrbitTerrainGpu
 
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainDrainagePage)"
