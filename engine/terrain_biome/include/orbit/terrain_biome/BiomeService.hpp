@@ -20,6 +20,9 @@ using BiomeId = core::StrongId<BiomeIdTag>;
 struct BiomeUserFieldIdTag;
 using BiomeUserFieldId = core::StrongId<BiomeUserFieldIdTag>;
 
+struct BiomeAuthoredMaskIdTag;
+using BiomeAuthoredMaskId = core::StrongId<BiomeAuthoredMaskIdTag>;
+
 enum class BiomePlacementMode : u8
 {
     Automatic,
@@ -84,7 +87,7 @@ struct BiomeAutomaticSelector
 
 struct BiomeAuthoredMask
 {
-    core::StrongId<struct BiomeAuthoredMaskIdTag> id{};
+    BiomeAuthoredMaskId id{};
 
     BiomeAuthoredWeightOperation operation{
         BiomeAuthoredWeightOperation::Add};
