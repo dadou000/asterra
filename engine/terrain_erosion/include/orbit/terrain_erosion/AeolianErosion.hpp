@@ -3,7 +3,9 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_erosion/SedimentExchange.hpp>
 
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -107,6 +109,11 @@ struct AeolianErosionResult
 {
     terrain_material_column::MaterialColumnPage material;
     std::vector<AeolianCellState> cells;
+
+    // M14 shared inter-process mobile sediment. Airborne sand/fines are
+    // authoritative here; AeolianCellState mirrors totals for diagnostics.
+    std::optional<SedimentExchangePage> sedimentExchange;
+
     AeolianMassBalance massBalance{};
 
     [[nodiscard]] const AeolianCellState& At(
