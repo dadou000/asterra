@@ -197,9 +197,12 @@ struct CoastalProcessDiagnostics
     f64 transportedBedloadKg{0.0};
 
     f64 initialMaterialLooseKg{0.0};
+    f64 initialMobileSedimentKg{0.0};
+
     f64 finalMaterialLooseKg{0.0};
     f64 newlyExcavatedBedrockKg{0.0};
     f64 finalMobileSedimentKg{0.0};
+    f64 exportedSedimentKg{0.0};
 
     f64 materialBalanceErrorKg{0.0};
     f64 materialBalanceRelativeError{0.0};
