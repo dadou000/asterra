@@ -1,4 +1,5 @@
 add_library(OrbitTerrainErosion STATIC
+    src/HydraulicErosion.cpp
     src/HydrologyRefinement.cpp
     src/RegionalElevationDelta.cpp
     src/RiverCarving.cpp
@@ -46,5 +47,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainStreamPower
         COMMAND OrbitTerrainStreamPowerTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainHydraulicErosionTests
+        tests/HydraulicErosionTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainHydraulicErosionTests
+        PRIVATE
+            Orbit::TerrainErosion
+    )
+
+    target_compile_features(OrbitTerrainHydraulicErosionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainHydraulicErosionTests)
+
+    add_test(
+        NAME Orbit.TerrainHydraulicErosion
+        COMMAND OrbitTerrainHydraulicErosionTests
     )
 endif()
