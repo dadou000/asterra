@@ -384,6 +384,9 @@ HydraulicErosionResult SimulateHydraulicErosion(
             "Orbit M11 rainfall source field must match the physical page.");
     }
 
+    const auto initialMass =
+        material.QueryMass(geology);
+
     HydraulicErosionResult result{
         .material = std::move(material),
         .cells =
@@ -1126,6 +1129,21 @@ HydraulicErosionResult SimulateHydraulicErosion(
             totalEroded,
             1.0);
 
+    const auto finalMass =
+        result.material.QueryMass(geology);
+
+    const f64 physicalError =
+        initialMass.LooseMassKg() +
+        finalMass.excavatedBedrockKg -
+        finalMass.LooseMassKg() -
+        finalSuspended;
+
+    const f64 physicalReference =
+        std::max(
+            initialMass.LooseMassKg() +
+                finalMass.excavatedBedrockKg,
+            1.0);
+
     result.massBalance = {
         .totalErodedKg = totalEroded,
         .totalDepositedKg = totalDeposited,
@@ -1134,7 +1152,12 @@ HydraulicErosionResult SimulateHydraulicErosion(
         .materialBalanceErrorKg = error,
         .materialBalanceRelativeError =
             std::abs(error) /
-            referenceMass
+            referenceMass,
+        .physicalColumnBalanceErrorKg =
+            physicalError,
+        .physicalColumnBalanceRelativeError =
+            std::abs(physicalError) /
+            physicalReference
     };
 
     return result;
