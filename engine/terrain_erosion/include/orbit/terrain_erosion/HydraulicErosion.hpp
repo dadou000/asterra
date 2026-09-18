@@ -91,6 +91,11 @@ struct HydraulicMassBalance
 
     f64 materialBalanceErrorKg{0.0};
     f64 materialBalanceRelativeError{0.0};
+
+    // Independent check from the physical M08 column:
+    // initial loose + excavated bedrock == final loose + suspended.
+    f64 physicalColumnBalanceErrorKg{0.0};
+    f64 physicalColumnBalanceRelativeError{0.0};
 };
 
 struct HydraulicErosionResult
