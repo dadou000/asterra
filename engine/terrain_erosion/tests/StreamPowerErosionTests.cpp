@@ -472,6 +472,114 @@ void TestProtectionAndAuthoredEquilibrium()
         "M05 uplift/authored displacement must not be miscounted as bedrock excavation.");
 }
 
+void TestUpliftCreatesConvergingDrainage()
+{
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacing = 100.0;
+
+    auto geology = MakeGeology();
+    MaterialColumnPage page(resolution, spacing);
+
+    // Start from an almost featureless east-draining plane: without uplift,
+    // deterministic D8 flow has no reason to move north/south.
+    for (u32 y = 0; y < resolution; ++y)
+    {
+        for (u32 x = 0; x < resolution; ++x)
+        {
+            page.SetCell(
+                x,
+                y,
+                Cell(
+                    120.0F -
+                        static_cast<f32>(x) * 0.5F,
+                    terrain_geology::reference_rock::VolcanicAsh));
+        }
+    }
+
+    auto forcing = Forcing(resolution);
+
+    // Symmetric side-band uplift creates two mountain flanks around a lower
+    // central corridor. The drainage network should converge toward y=3 and
+    // then continue east, producing tributary flow rather than parallel rows.
+    for (u32 y = 0; y < resolution; ++y)
+    {
+        const f64 uplift =
+            (y == 0U || y == resolution - 1U)
+                ? 240.0
+                : ((y == 1U || y == resolution - 2U)
+                    ? 140.0
+                    : 0.0);
+
+        for (u32 x = 0; x < resolution; ++x)
+        {
+            forcing[
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x].
+                upliftForcingMeters =
+                    uplift;
+        }
+    }
+
+    auto config = TestConfig();
+    config.iterations = 8U;
+    config.upliftCouplingPerIteration = 0.01;
+    config.incisionCoefficientMetersPerIteration = 2.0;
+    config.maximumIncisionMetersPerIteration = 2.0;
+
+    const auto result =
+        SolveStreamPowerErosion(
+            page,
+            Key(resolution, 25U),
+            geology,
+            Inputs(resolution),
+            Halo(
+                resolution,
+                500.0F,
+                110.0F,
+                500.0F,
+                500.0F,
+                88U),
+            forcing,
+            config);
+
+    bool upperTributary = false;
+    bool lowerTributary = false;
+
+    for (u32 y = 0; y < resolution; ++y)
+    {
+        for (u32 x = 0; x < resolution - 1U; ++x)
+        {
+            const auto& cell =
+                result.At(x, y);
+
+            if (y < resolution / 2U &&
+                cell.finalFlowDy > 0)
+            {
+                upperTributary = true;
+            }
+
+            if (y > resolution / 2U &&
+                cell.finalFlowDy < 0)
+            {
+                lowerTributary = true;
+            }
+        }
+    }
+
+    Require(
+        upperTributary && lowerTributary,
+        "M05 uplift forcing did not produce converging tributary flow.");
+
+    const f64 cellArea = spacing * spacing;
+
+    Require(
+        result.At(5, resolution / 2U).
+            finalDrainageAreaSquareMeters >
+            3.0 * cellArea,
+        "Uplifted M10 terrain did not develop a concentrated central drainage network.");
+}
+
 void TestCrossPageStreamPowerBoundary()
 {
     constexpr u32 resolution = 4U;
@@ -686,6 +794,7 @@ int main()
     TestDrainageAreaDrivesValleyIncisionAndBake();
     TestGeologyControlsIncision();
     TestProtectionAndAuthoredEquilibrium();
+    TestUpliftCreatesConvergingDrainage();
     TestCrossPageStreamPowerBoundary();
     TestDeterministicRevision();
 
