@@ -97,6 +97,7 @@ struct PushConstants
     uint paddedResolution;
     float spacingMeters;
     float guidanceWeight;
+    float seaLevelMeters;
 };
 
 [[vk::push_constant]] PushConstants g_pc;
@@ -134,6 +135,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         asfloat(
             g_drainage.Load(
                 index * 4u));
+
+    if (myDrainage <= g_pc.seaLevelMeters)
+    {
+        g_downstreamOut.Store(
+            index * 4u,
+            kNoDownstream);
+        return;
+    }
 
     float bestScore = 0.0;
     uint bestIndex = kNoDownstream;
