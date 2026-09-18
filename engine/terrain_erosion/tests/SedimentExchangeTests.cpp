@@ -185,6 +185,14 @@ void TestCanonicalMaterialClassification()
             SedimentSourceProcess::
                 GlacialErosion);
 
+    const auto coastal =
+        ClassifyRemovedMaterial(
+            removal,
+            page,
+            *rock,
+            SedimentSourceProcess::
+                CoastalErosion);
+
     RequireNear(
         hydraulic.TotalKg(),
         removal.removedMassKg,
@@ -209,6 +217,12 @@ void TestCanonicalMaterialClassification()
         1.0e-7,
         "M15 glacial material classification changed mass.");
 
+    RequireNear(
+        coastal.TotalKg(),
+        removal.removedMassKg,
+        1.0e-7,
+        "M17 coastal material classification changed mass.");
+
     Require(
         hydraulic.finesKg >
             hydraulic.sandKg,
@@ -230,6 +244,12 @@ void TestCanonicalMaterialClassification()
         glacial.finesKg > 0.0 &&
         glacial.sandKg > 0.0,
         "M15 glacial erosion did not produce a mixed till/abrasion load.");
+
+    Require(
+        coastal.sandKg >
+            hydraulic.sandKg &&
+        coastal.finesKg > 0.0,
+        "M17 coastal abrasion did not produce the expected sand-rich load.");
 }
 
 void TestHydraulicDepositBecomesWindTransportable()
