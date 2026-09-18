@@ -222,3 +222,4 @@ ExposedSurfaceState ResolveSurface(
 
     return result;
 }
+} // namespace orbit::terrain_material_column
