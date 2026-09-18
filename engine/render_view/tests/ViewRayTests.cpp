@@ -82,6 +82,22 @@ int main()
     ORBIT_TEST_CHECK(
         topLeft->direction.z > 0.0);
 
+    const auto bottomRight =
+        orbit::render_view::ViewportRay(
+            camera,
+            200,
+            100,
+            1.0F,
+            1.0F);
+
+    ORBIT_TEST_CHECK(bottomRight.has_value());
+    ORBIT_TEST_CHECK(
+        bottomRight->direction.x > 0.0);
+    ORBIT_TEST_CHECK(
+        bottomRight->direction.y < 0.0);
+    ORBIT_TEST_CHECK(
+        bottomRight->direction.z > 0.0);
+
     ORBIT_TEST_CHECK(
         !orbit::render_view::ViewportRay(
             camera,
