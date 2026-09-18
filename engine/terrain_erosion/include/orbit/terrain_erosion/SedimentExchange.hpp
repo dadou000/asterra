@@ -31,7 +31,8 @@ enum class SedimentSourceProcess : u8
     Hydraulic,
     AeolianAbrasion,
     ThermalFracture,
-    GlacialErosion
+    GlacialErosion,
+    CoastalErosion
 };
 
 struct SedimentMass
@@ -69,6 +70,9 @@ struct SedimentConversionRules
     // plucked blocks/till; the remaining non-sand fraction is fines.
     f64 glacialBedrockSandFraction{0.25};
     f64 glacialBedrockCoarseFraction{0.50};
+
+    // Surf abrasion is sand-rich but still creates suspended fines.
+    f64 coastalBedrockSandFraction{0.60};
 
     // Thermal fracture always produces coarse debris.
     [[nodiscard]] bool IsValid() const noexcept;
