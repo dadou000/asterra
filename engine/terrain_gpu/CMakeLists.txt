@@ -13,6 +13,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuMaterialColumnResources.cpp
     src/GpuRegionDelta.cpp
     src/GpuRiverGeometry.cpp
+    src/GpuSedimentExchangeResources.cpp
 )
 
 add_library(Orbit::TerrainGpu ALIAS OrbitTerrainGpu)
@@ -28,6 +29,7 @@ target_link_libraries(OrbitTerrainGpu
         Orbit::RHI
         Orbit::Shader
         Orbit::Terrain
+        Orbit::TerrainErosion
         Orbit::TerrainGeology
         Orbit::TerrainStream
         Orbit::TerrainMaterialColumn
