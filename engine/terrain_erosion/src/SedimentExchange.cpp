@@ -224,6 +224,21 @@ bool SedimentConversionRules::IsValid() const noexcept
         aeolianBedrockSandFraction >=
             0.0 &&
         aeolianBedrockSandFraction <=
+            1.0 &&
+        std::isfinite(
+            glacialBedrockSandFraction) &&
+        glacialBedrockSandFraction >=
+            0.0 &&
+        glacialBedrockSandFraction <=
+            1.0 &&
+        std::isfinite(
+            glacialBedrockCoarseFraction) &&
+        glacialBedrockCoarseFraction >=
+            0.0 &&
+        glacialBedrockCoarseFraction <=
+            1.0 &&
+        glacialBedrockSandFraction +
+                glacialBedrockCoarseFraction <=
             1.0;
 }
 
@@ -1103,6 +1118,31 @@ SedimentMass ClassifyRemovedMaterial(
         result.coarseDebrisKg +=
             bedrockMass;
         break;
+
+    case SedimentSourceProcess::GlacialErosion:
+    {
+        const f64 sand =
+            bedrockMass *
+            rules.
+                glacialBedrockSandFraction;
+
+        const f64 coarse =
+            bedrockMass *
+            rules.
+                glacialBedrockCoarseFraction;
+
+        result.sandKg +=
+            sand;
+
+        result.coarseDebrisKg +=
+            coarse;
+
+        result.finesKg +=
+            bedrockMass -
+            sand -
+            coarse;
+        break;
+    }
     }
 
     const f64 classified =
