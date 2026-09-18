@@ -31,6 +31,12 @@ struct LocalExchange
     f64 reptationSandKg{0.0};
 };
 
+struct SandAvalancheProposal
+{
+    std::size_t target{0U};
+    f64 sourceDepthMeters{0.0};
+};
+
 [[nodiscard]] std::size_t Index(
     const u32 resolution,
     const u32 x,
@@ -339,6 +345,16 @@ bool AeolianErosionConfig::IsValid() const noexcept
             maximumSoilPickupDepthPerStepMeters) &&
         nonnegative(
             maximumDepositionDepthPerStepMeters) &&
+        std::isfinite(
+            sandAvalancheReposeDegrees) &&
+        sandAvalancheReposeDegrees > 0.0 &&
+        sandAvalancheReposeDegrees < 90.0 &&
+        std::isfinite(
+            avalancheRelaxation) &&
+        avalancheRelaxation > 0.0 &&
+        avalancheRelaxation <= 1.0 &&
+        nonnegative(
+            maximumAvalancheDepthPerStepMeters) &&
         nonnegative(
             moistureSuppressionExponent) &&
         nonnegative(
@@ -437,6 +453,13 @@ AeolianErosionResult SimulateAeolianErosion(
         0.0);
 
     std::vector<f64> reptationIncomingSandKg(
+        cellCount,
+        0.0);
+
+    std::vector<SandAvalancheProposal> avalanche(
+        cellCount);
+
+    std::vector<f64> avalancheSandDelta(
         cellCount,
         0.0);
 
@@ -1039,7 +1062,245 @@ AeolianErosionResult SimulateAeolianErosion(
             }
         }
 
-        // 4. Saltation advection. Closed M13 page boundaries retain airborne
+        // 4. Sand-only avalanche relaxation for depositional dune slip faces.
+        std::fill(
+            avalanche.begin(),
+            avalanche.end(),
+            SandAvalancheProposal{});
+
+        for (u32 y = 0U;
+             y < resolution;
+             ++y)
+        {
+            for (u32 x = 0U;
+                 x < resolution;
+                 ++x)
+            {
+                const std::size_t index =
+                    Index(
+                        resolution,
+                        x,
+                        y);
+
+                const auto& cell =
+                    result.material.At(
+                        x,
+                        y);
+
+                if (cell.ExposedSurface() !=
+                        terrain_material_column::
+                            ExposedSurfaceKind::
+                                Sand ||
+                    cell.sandMeters <= 0.0F)
+                {
+                    continue;
+                }
+
+                const f64 source =
+                    SurfaceHeight(
+                        result.material,
+                        x,
+                        y);
+
+                f64 bestAngle = 0.0;
+                f64 bestDrop = 0.0;
+                f64 bestDistance = 1.0;
+                std::size_t bestTarget = index;
+
+                constexpr std::array<std::pair<i32, i32>, 8>
+                    offsets{{
+                        {-1, -1},
+                        {0, -1},
+                        {1, -1},
+                        {-1, 0},
+                        {1, 0},
+                        {-1, 1},
+                        {0, 1},
+                        {1, 1}
+                    }};
+
+                for (const auto [dx, dy] : offsets)
+                {
+                    const i32 nx =
+                        static_cast<i32>(x) + dx;
+
+                    const i32 ny =
+                        static_cast<i32>(y) + dy;
+
+                    if (!Inside(
+                            nx,
+                            ny,
+                            resolution))
+                    {
+                        continue;
+                    }
+
+                    const f64 targetHeight =
+                        SurfaceHeight(
+                            result.material,
+                            static_cast<u32>(nx),
+                            static_cast<u32>(ny));
+
+                    const f64 drop =
+                        source -
+                        targetHeight;
+
+                    if (drop <= 0.0)
+                    {
+                        continue;
+                    }
+
+                    const f64 distance =
+                        result.material.
+                            SpacingMeters() *
+                        ((dx != 0 &&
+                          dy != 0)
+                             ? 1.4142135623730951
+                             : 1.0);
+
+                    const f64 angle =
+                        std::atan2(
+                            drop,
+                            distance) *
+                        180.0 /
+                        kPi;
+
+                    if (angle >
+                        bestAngle)
+                    {
+                        bestAngle = angle;
+                        bestDrop = drop;
+                        bestDistance = distance;
+                        bestTarget =
+                            Index(
+                                resolution,
+                                static_cast<u32>(nx),
+                                static_cast<u32>(ny));
+                    }
+                }
+
+                if (bestAngle <=
+                    config.
+                        sandAvalancheReposeDegrees)
+                {
+                    continue;
+                }
+
+                const f64 allowedDrop =
+                    std::tan(
+                        config.
+                            sandAvalancheReposeDegrees *
+                        kPi /
+                        180.0) *
+                    bestDistance;
+
+                const f64 depth =
+                    std::min({
+                        0.5 *
+                            std::max(
+                                bestDrop -
+                                    allowedDrop,
+                                0.0) *
+                            config.
+                                avalancheRelaxation,
+                        static_cast<f64>(
+                            cell.sandMeters),
+                        config.
+                            maximumAvalancheDepthPerStepMeters
+                    });
+
+                if (depth > 0.0)
+                {
+                    avalanche[index] = {
+                        .target =
+                            bestTarget,
+                        .sourceDepthMeters =
+                            depth
+                    };
+                }
+            }
+        }
+
+        std::fill(
+            avalancheSandDelta.begin(),
+            avalancheSandDelta.end(),
+            0.0);
+
+        for (std::size_t index = 0U;
+             index < cellCount;
+             ++index)
+        {
+            const auto& proposal =
+                avalanche[index];
+
+            if (proposal.
+                    sourceDepthMeters <=
+                0.0)
+            {
+                continue;
+            }
+
+            avalancheSandDelta[index] -=
+                proposal.
+                    sourceDepthMeters;
+
+            avalancheSandDelta[
+                proposal.target] +=
+                    proposal.
+                        sourceDepthMeters;
+
+            result.cells[index].
+                cumulativeAvalanchedKg +=
+                    proposal.
+                        sourceDepthMeters *
+                    area *
+                    result.material.
+                        Densities().
+                        sandKgPerCubicMeter;
+        }
+
+        for (u32 y = 0U;
+             y < resolution;
+             ++y)
+        {
+            for (u32 x = 0U;
+                 x < resolution;
+                 ++x)
+            {
+                const std::size_t index =
+                    Index(
+                        resolution,
+                        x,
+                        y);
+
+                if (avalancheSandDelta[index] ==
+                    0.0)
+                {
+                    continue;
+                }
+
+                auto cell =
+                    result.material.At(
+                        x,
+                        y);
+
+                cell.sandMeters =
+                    static_cast<f32>(
+                        std::max(
+                            static_cast<f64>(
+                                cell.sandMeters) +
+                            avalancheSandDelta[index],
+                            0.0));
+
+                result.material.SetCell(
+                    x,
+                    y,
+                    cell,
+                    false);
+            }
+        }
+
+        // 5. Saltation advection. Closed M13 page boundaries retain airborne
         // mass in the edge cell; M14 later owns explicit boundary flux.
         std::fill(
             nextAirborneSand.begin(),
