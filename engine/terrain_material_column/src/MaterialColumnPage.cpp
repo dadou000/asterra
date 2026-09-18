@@ -271,6 +271,57 @@ void MaterialColumnPage::SetCell(
     At(x, y) = cell;
 }
 
+void MaterialColumnPage::DisplaceBedrock(
+    const u32 x,
+    const u32 y,
+    const f64 deltaMeters,
+    const bool shiftReference)
+{
+    if (!std::isfinite(deltaMeters))
+    {
+        throw std::invalid_argument(
+            "M08 bedrock displacement must be finite.");
+    }
+
+    MaterialColumnCell& cell = At(x, y);
+
+    if (!cell.IsValid())
+    {
+        throw std::logic_error(
+            "M08 cannot displace an uninitialized material-column cell.");
+    }
+
+    const f64 nextBedrock =
+        static_cast<f64>(
+            cell.bedrockHeightMeters) +
+        deltaMeters;
+
+    const f64 nextReference =
+        static_cast<f64>(
+            cell.referenceBedrockHeightMeters) +
+        (shiftReference ? deltaMeters : 0.0);
+
+    if (!std::isfinite(nextBedrock) ||
+        !std::isfinite(nextReference) ||
+        std::abs(nextBedrock) >
+            std::numeric_limits<f32>::max() ||
+        std::abs(nextReference) >
+            std::numeric_limits<f32>::max())
+    {
+        throw std::overflow_error(
+            "M08 bedrock displacement exceeds representable range.");
+    }
+
+    cell.bedrockHeightMeters =
+        static_cast<f32>(nextBedrock);
+
+    if (shiftReference)
+    {
+        cell.referenceBedrockHeightMeters =
+            static_cast<f32>(nextReference);
+    }
+}
+
 MaterialRemoval MaterialColumnPage::Erode(
     const u32 x,
     const u32 y,
