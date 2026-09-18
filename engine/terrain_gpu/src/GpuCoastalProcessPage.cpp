@@ -118,14 +118,6 @@ void RequireBufferSize(
     }
 }
 
-[[nodiscard]] f64 SedimentTotal(
-    const std::array<f32, 3>& mass) noexcept
-{
-    return
-        static_cast<f64>(mass[0]) +
-        static_cast<f64>(mass[1]) +
-        static_cast<f64>(mass[2]);
-}
 } // namespace
 
 bool GpuCoastalProcessConfig::IsValid() const noexcept
