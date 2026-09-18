@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace orbit::terrain_gpu
@@ -36,6 +37,39 @@ constexpr u32 kMaxDonors = 8U;
         resolution *
         kMaxDonors *
         sizeof(u32);
+}
+
+[[nodiscard]] u32 CheckedPaddedResolution(
+    const u32 coreResolution)
+{
+    if (coreResolution == 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit M09 GPU drainage requires a non-zero maximum page "
+            "resolution.");
+    }
+
+    const u64 padded =
+        static_cast<u64>(
+            coreResolution) +
+        2ULL;
+
+    const u64 nodeCount =
+        padded *
+        padded;
+
+    if (padded >
+            std::numeric_limits<u32>::max() ||
+        nodeCount >
+            std::numeric_limits<u32>::max())
+    {
+        throw std::invalid_argument(
+            "Orbit M09 GPU drainage maximum resolution exceeds its "
+            "32-bit graph-addressing contract.");
+    }
+
+    return static_cast<u32>(
+        padded);
 }
 
 [[nodiscard]] std::unique_ptr<rhi::Buffer>
@@ -190,22 +224,13 @@ GpuDrainagePage::GpuDrainagePage(
     : maxCoreResolution_(
           maxCoreResolution),
       maxPaddedResolution_(
-          PaddedResolution(
+          CheckedPaddedResolution(
               maxCoreResolution)),
       depressionFill_(
           device,
           shaderCompiler,
-          PaddedResolution(
-              maxCoreResolution))
+          maxPaddedResolution_)
 {
-    if (maxCoreResolution == 0U ||
-        maxCoreResolution >
-            std::numeric_limits<u16>::max())
-    {
-        throw std::invalid_argument(
-            "Orbit M09 GPU drainage requires a non-zero practical "
-            "maximum page resolution.");
-    }
 
     extractSurfacePipeline_ =
         CompilePipeline(
@@ -223,7 +248,7 @@ GpuDrainagePage::GpuDrainagePage(
             shaderCompiler,
             detail::
                 kM09DownstreamShader,
-            4U,
+            5U,
             3U);
 
     initializeFlowPipeline_ =
@@ -526,7 +551,7 @@ void GpuDrainagePage::Dispatch(
         2U,
         downstreamOut);
 
-    std::array<u32, 4>
+    std::array<u32, 5>
         downstreamConstants{};
 
     downstreamConstants[0] =
@@ -543,6 +568,11 @@ void GpuDrainagePage::Dispatch(
         std::bit_cast<u32>(
             request.
                 authoredGuidanceWeight);
+
+    downstreamConstants[4] =
+        std::bit_cast<u32>(
+            request.
+                seaLevelMeters);
 
     commandList.SetComputeConstants(
         downstreamConstants);
