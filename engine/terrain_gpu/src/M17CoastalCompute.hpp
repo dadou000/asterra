@@ -775,13 +775,17 @@ void main(uint3 id : SV_DispatchThreadID)
 
     if (remaining > 0.0)
     {
-        bedrock -= remaining;
+        const float removedBedrockDepth = remaining;
 
-        const float bedrockMass = remaining * bedrockDensity;
+        bedrock -= removedBedrockDepth;
+
+        const float bedrockMass = removedBedrockDepth * bedrockDensity;
         const float sand = bedrockMass * saturate(g_pc.coastalBedrockSandFraction);
 
         picked.x += sand;
         picked.y += bedrockMass - sand;
+
+        remaining = 0.0;
     }
 
     const float removedDepth = requested - remaining;
