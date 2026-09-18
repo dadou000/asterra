@@ -157,6 +157,7 @@ private:
     bool readbackRecorded_{false};
 
     f32 elapsedSeconds_{0.0F};
+    GpuCoastalProcessConfig activeConfig_{};
 
     std::unique_ptr<rhi::ComputePipeline> initializePipeline_;
     std::unique_ptr<rhi::ComputePipeline> advancePipeline_;
@@ -184,7 +185,6 @@ private:
     std::unique_ptr<rhi::Buffer> zeroProtection_;
     std::unique_ptr<rhi::Buffer> geologyTable_;
 
-    std::unique_ptr<rhi::Buffer> waterSnapshot_;
     std::unique_ptr<rhi::Buffer> waterReadback_;
 
     std::unique_ptr<rhi::Buffer> materialSnapshot_;
