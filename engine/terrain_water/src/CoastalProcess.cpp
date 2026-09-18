@@ -2799,6 +2799,12 @@ CoastalProcessResult SimulateCoastalProcess(
             TotalMobileMass().
             TotalKg();
 
+    const f64 initialExported =
+        sedimentExchange.
+            Accounting().
+            exported.
+            TotalKg();
+
     CoastalProcessResult result{
         .material =
             std::move(
@@ -3070,11 +3076,14 @@ CoastalProcessResult SimulateCoastalProcess(
             TotalKg();
 
     const f64 exported =
-        result.
-            sedimentExchange.
-            Accounting().
-            exported.
-            TotalKg();
+        std::max(
+            result.
+                sedimentExchange.
+                Accounting().
+                exported.
+                TotalKg() -
+                initialExported,
+            0.0);
 
     const f64 materialError =
         initialMaterial.
