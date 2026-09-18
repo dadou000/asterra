@@ -511,6 +511,400 @@ void TestBiomeAssetIsIndependentFromGeology()
 }
 } // namespace
 
+
+void TestAutomaticSelectorCatalogAndSmoothBlend()
+{
+    BiomeService service(
+        Body());
+
+    BiomeDefinition biome =
+        Forest();
+
+    biome.placement.mode =
+        BiomePlacementMode::Automatic;
+
+    const BiomeUserFieldId custom =
+        BiomeUserFieldIdFromName(
+            "alkalinity");
+
+    const auto basalt =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+
+    biome.placement.selectors = {
+        {
+            .field =
+                BiomeSelectorField::
+                    Temperature,
+            .minimum = 10.0,
+            .maximum = 20.0,
+            .lowerFalloff = 10.0,
+            .upperFalloff = 5.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Moisture,
+            .minimum = 0.4,
+            .maximum = 0.8
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Rainfall,
+            .minimum = 0.5,
+            .maximum = 1.5
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Elevation,
+            .minimum = 100.0,
+            .maximum = 1'000.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Slope,
+            .minimum = 0.0,
+            .maximum = 30.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Aspect,
+            .minimum = 5.5,
+            .maximum = 0.8,
+            .lowerFalloff = 0.2,
+            .upperFalloff = 0.2
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Latitude,
+            .minimum = -0.8,
+            .maximum = 0.8
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Continentality,
+            .minimum = 0.2,
+            .maximum = 0.8
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    DistanceToCoastWater,
+            .minimum = 100.0,
+            .maximum = 10'000.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Drainage,
+            .minimum = 0.1,
+            .maximum = 1.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    SoilDepth,
+            .minimum = 0.1,
+            .maximum = 2.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    SandDepth,
+            .minimum = 0.0,
+            .maximum = 0.5
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    GeologyMaterial,
+            .material = basalt
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    SolarExposure,
+            .minimum = 0.2,
+            .maximum = 0.9
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    WindExposure,
+            .minimum = 0.1,
+            .maximum = 0.8
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    SnowPersistence,
+            .minimum = 0.0,
+            .maximum = 0.4
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    UserField,
+            .minimum = 6.0,
+            .maximum = 8.0,
+            .userField = custom
+        }
+    };
+
+    service.UpsertBiome(
+        biome);
+
+    const std::array<
+        BiomeUserFieldValue,
+        1>
+        userFields{{
+            {
+                .id = custom,
+                .value = 7.0
+            }
+        }};
+
+    BiomePlacementContext context{};
+    context.temperatureC = 5.0;
+    context.moisture = 0.6;
+    context.rainfall = 1.0;
+    context.elevationMeters = 500.0;
+    context.slopeDegrees = 15.0;
+    context.aspectRadians = 0.2;
+    context.latitudeRadians = 0.2;
+    context.continentality = 0.5;
+    context.distanceToCoastWaterMeters = 2'000.0;
+    context.drainage = 0.5;
+    context.soilDepthMeters = 0.5;
+    context.sandDepthMeters = 0.1;
+    context.substrateRock = basalt;
+    context.solarExposure = 0.6;
+    context.windExposure = 0.5;
+    context.snowPersistence = 0.2;
+    context.userFields = userFields;
+
+    const auto evaluation =
+        service.EvaluatePlacement(
+            *service.Find(
+                ForestId()),
+            context);
+
+    RequireNear(
+        evaluation.automaticWeight,
+        0.5,
+        1.0e-6,
+        "M20 automatic selectors did not blend smoothly across the complete field catalog.");
+
+    const auto resolved =
+        service.ResolvePlacement(
+            context);
+
+    const auto* forest =
+        FindResolved(
+            resolved,
+            ForestId());
+
+    Require(
+        forest != nullptr,
+        "M20 automatic selector catalog produced no biome contribution.");
+
+    RequireNear(
+        forest->weight,
+        0.5,
+        1.0e-6,
+        "M20 resolved automatic weight changed after residual fallback.");
+}
+
+void TestSameFieldSelectorsFormSmoothUnion()
+{
+    BiomeService service(
+        Body());
+
+    BiomeDefinition biome =
+        Forest();
+
+    biome.placement.mode =
+        BiomePlacementMode::Automatic;
+
+    biome.placement.selectors = {
+        {
+            .field =
+                BiomeSelectorField::
+                    Temperature,
+            .minimum = -20.0,
+            .maximum = -5.0
+        },
+        {
+            .field =
+                BiomeSelectorField::
+                    Temperature,
+            .minimum = 20.0,
+            .maximum = 35.0
+        }
+    };
+
+    service.UpsertBiome(
+        biome);
+
+    BiomePlacementContext warm{};
+    warm.temperatureC = 25.0;
+
+    const auto evaluation =
+        service.EvaluatePlacement(
+            *service.Find(
+                ForestId()),
+            warm);
+
+    RequireNear(
+        evaluation.finalWeight,
+        1.0,
+        1.0e-6,
+        "M20 same-field selectors were multiplied instead of unioned.");
+}
+
+void TestAuthoredReplaceOverridesClimate()
+{
+    BiomeService service(
+        Body());
+
+    BiomeDefinition biome =
+        Forest();
+
+    biome.placement.mode =
+        BiomePlacementMode::
+            AutomaticAndAuthored;
+
+    biome.placement.selectors = {
+        {
+            .field =
+                BiomeSelectorField::
+                    Temperature,
+            .minimum = -20.0,
+            .maximum = 0.0
+        }
+    };
+
+    biome.placement.authoredMasks = {
+        {
+            .id = {
+                .high =
+                    0x4d32304d41534b00ULL,
+                .low = 1U
+            },
+            .operation =
+                BiomeAuthoredWeightOperation::
+                    Replace,
+            .global = true,
+            .value = 1.0,
+            .opacity = 1.0
+        }
+    };
+
+    service.UpsertBiome(
+        biome);
+
+    BiomePlacementContext desert{};
+    desert.temperatureC = 45.0;
+    desert.moisture = 0.05;
+
+    const auto evaluation =
+        service.EvaluatePlacement(
+            *service.Find(
+                ForestId()),
+            desert);
+
+    RequireNear(
+        evaluation.automaticWeight,
+        0.0,
+        0.0,
+        "M20 climate fixture unexpectedly matched the cold automatic selector.");
+
+    RequireNear(
+        evaluation.finalWeight,
+        1.0,
+        0.0,
+        "M20 authored Replace could not force a biome contrary to climate.");
+}
+
+void TestAllAuthoredOperationsCompose()
+{
+    BiomeService service(
+        Body());
+
+    BiomeDefinition biome =
+        Forest();
+
+    biome.placement.mode =
+        BiomePlacementMode::Authored;
+
+    const auto mask =
+        [](const u64 low,
+           const BiomeAuthoredWeightOperation operation,
+           const f64 value)
+        {
+            return BiomeAuthoredMask{
+                .id = {
+                    .high =
+                        0x4d32304f504d4153ULL,
+                    .low = low
+                },
+                .operation = operation,
+                .global = true,
+                .value = value,
+                .opacity = 1.0
+            };
+        };
+
+    biome.placement.authoredMasks = {
+        mask(
+            1U,
+            BiomeAuthoredWeightOperation::Add,
+            0.8),
+        mask(
+            2U,
+            BiomeAuthoredWeightOperation::Subtract,
+            0.2),
+        mask(
+            3U,
+            BiomeAuthoredWeightOperation::Multiply,
+            0.5),
+        mask(
+            4U,
+            BiomeAuthoredWeightOperation::Min,
+            0.25),
+        mask(
+            5U,
+            BiomeAuthoredWeightOperation::Max,
+            0.7),
+        mask(
+            6U,
+            BiomeAuthoredWeightOperation::Replace,
+            0.4)
+    };
+
+    service.UpsertBiome(
+        biome);
+
+    const auto evaluation =
+        service.EvaluatePlacement(
+            *service.Find(
+                ForestId()),
+            {});
+
+    RequireNear(
+        evaluation.finalWeight,
+        0.4,
+        1.0e-6,
+        "M20 authored Add/Subtract/Multiply/Min/Max/Replace composition is incorrect.");
+}
+
 int main()
 {
     TestBaseOnlyPlanetIsValid();
@@ -518,9 +912,13 @@ int main()
     TestOverSubscribedBiomesNormalize();
     TestRemovingBiomeCannotLeaveUndefinedTerrain();
     TestBiomeAssetIsIndependentFromGeology();
+    TestAutomaticSelectorCatalogAndSmoothBlend();
+    TestSameFieldSelectorsFormSmoothUnion();
+    TestAuthoredReplaceOverridesClimate();
+    TestAllAuthoredOperationsCompose();
 
     std::cout
-        << "Orbit M19 biome service tests passed.\n";
+        << "Orbit M19/M20 biome service tests passed.\n";
 
     return EXIT_SUCCESS;
 }
