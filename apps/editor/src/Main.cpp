@@ -44,6 +44,7 @@
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
+#include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
@@ -1812,6 +1813,12 @@ int main(
                 studioSession,
                 true);
         worldDocumentsUi.Register(ui);
+
+        orbit::studio_ui::ProjectSettingsUi
+            projectSettingsUi(
+                project,
+                studioSession);
+        projectSettingsUi.Register(ui);
 
         constexpr orbit::editor_ui::PanelId
             kViewportPanel{
