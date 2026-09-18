@@ -1,3 +1,5 @@
+#include <orbit/terrain_erosion/AeolianErosion.hpp>
+#include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
 
@@ -479,6 +481,214 @@ void TestThermalCollapseFeedsLaterTransport()
         "M14 thermal debris was not published to the shared waterborne lane.");
 }
 
+void TestHydraulicPublishesTypedWaterborneState()
+{
+    constexpr u32 resolution = 4U;
+
+    auto geology =
+        MakeGeology();
+
+    MaterialColumnPage page(
+        resolution,
+        6.0);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            page.SetCell(
+                x,
+                y,
+                Cell(
+                    10.0F -
+                        static_cast<f32>(x),
+                    terrain_geology::
+                        reference_rock::VolcanicAsh,
+                    0.10F,
+                    0.10F,
+                    0.20F));
+        }
+    }
+
+    HydraulicErosionConfig config{};
+    config.iterations = 12U;
+    config.timeStepSeconds = 0.15;
+    config.rainfallMetersPerSecond = 0.004;
+    config.sedimentCapacityCoefficient = 1'500.0;
+    config.erosionRatePerSecond = 1.0;
+    config.depositionRatePerSecond = 0.1;
+    config.maximumErosionDepthPerStepMeters = 0.03;
+    config.maximumDepositionDepthPerStepMeters = 0.02;
+    config.evaporationRatePerSecond = 0.0;
+
+    const auto result =
+        SimulateHydraulicErosion(
+            std::move(page),
+            geology,
+            {},
+            config);
+
+    Require(
+        result.sedimentExchange.
+            has_value(),
+        "M11 did not publish its mobile sediment through M14.");
+
+    f64 typedTotal = 0.0;
+    f64 scalarTotal = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& typed =
+                result.sedimentExchange->
+                    At(x, y).
+                    waterborne;
+
+            typedTotal +=
+                typed.TotalKg();
+
+            scalarTotal +=
+                result.At(x, y).
+                    suspendedSedimentKg;
+
+            RequireNear(
+                result.At(x, y).
+                    suspendedSediment.
+                    TotalKg(),
+                typed.TotalKg(),
+                1.0e-9,
+                "M11 diagnostic typed state diverged from M14 waterborne authority.");
+        }
+    }
+
+    Require(
+        typedTotal > 0.0,
+        "M11 produced no M14 typed waterborne sediment.");
+
+    RequireNear(
+        typedTotal,
+        scalarTotal,
+        std::max(
+            typedTotal * 1.0e-10,
+            1.0e-7),
+        "M11 scalar compatibility totals diverged from M14 typed sediment.");
+}
+
+void TestAeolianPublishesBoundaryFlux()
+{
+    constexpr u32 resolution = 4U;
+
+    auto geology =
+        MakeGeology();
+
+    MaterialColumnPage page(
+        resolution,
+        5.0);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            page.SetCell(
+                x,
+                y,
+                Cell(
+                    0.0F,
+                    terrain_geology::
+                        reference_rock::Basalt,
+                    0.0F,
+                    0.0F,
+                    0.30F));
+        }
+    }
+
+    std::vector<AeolianCellForcing> wind(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 20.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F});
+
+    AeolianErosionConfig config{};
+    config.iterations = 8U;
+    config.timeStepSeconds = 0.25;
+    config.capacityCoefficient = 0.08;
+    config.pickupRatePerSecond = 3.0;
+    config.depositionRatePerSecond = 0.0;
+    config.reptationFraction = 0.0;
+    config.saltationRatePerSecond = 4.0;
+    config.referenceSaltationWindMetersPerSecond = 10.0;
+    config.maximumSandPickupDepthPerStepMeters = 0.04;
+    config.maximumSoilPickupDepthPerStepMeters = 0.0;
+    config.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
+
+    auto result =
+        SimulateAeolianErosion(
+            std::move(page),
+            geology,
+            wind,
+            config);
+
+    Require(
+        result.sedimentExchange.
+            has_value(),
+        "M13 did not publish airborne sediment through M14.");
+
+    const f64 accountedExport =
+        result.sedimentExchange->
+            Accounting().
+            exported.
+            TotalKg();
+
+    Require(
+        accountedExport > 0.0,
+        "M13 edge saltation did not publish M14 cross-page boundary flux.");
+
+    RequireNear(
+        result.massBalance.
+            boundaryLossKg,
+        accountedExport,
+        std::max(
+            accountedExport *
+                1.0e-10,
+            1.0e-7),
+        "M13 mass balance does not use M14 boundary export accounting.");
+
+    const auto outgoing =
+        result.sedimentExchange->
+            TakeOutgoingBoundaryFlux(
+                123U);
+
+    f64 eastAirborne = 0.0;
+
+    for (const auto& packet :
+         outgoing.east)
+    {
+        eastAirborne +=
+            packet.airborne.
+                TotalKg();
+    }
+
+    Require(
+        eastAirborne > 0.0,
+        "M13 did not place eastward saltation into the explicit M14 east boundary packet.");
+}
+
 void TestDepositionPriority()
 {
     auto geology =
@@ -774,6 +984,8 @@ int main()
     TestHydraulicDepositBecomesWindTransportable();
     TestWindCanExposeRockCoveredByHydraulicSediment();
     TestThermalCollapseFeedsLaterTransport();
+    TestHydraulicPublishesTypedWaterborneState();
+    TestAeolianPublishesBoundaryFlux();
     TestDepositionPriority();
     TestCrossPageBoundaryFlux();
     TestCornerBoundaryFlux();
