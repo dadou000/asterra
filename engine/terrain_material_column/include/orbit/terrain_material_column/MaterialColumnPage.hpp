@@ -124,6 +124,16 @@ public:
         MaterialColumnCell cell,
         bool establishReference = true);
 
+    // Moves the geological substrate without creating/removing material.
+    // Used by tectonic/uplift processes. When shiftReference=true the bedrock
+    // excavation mass reference moves with the substrate, so uplift/subsidence
+    // is not misreported as erosion.
+    void DisplaceBedrock(
+        u32 x,
+        u32 y,
+        f64 deltaMeters,
+        bool shiftReference = true);
+
     [[nodiscard]] MaterialRemoval Erode(
         u32 x,
         u32 y,
