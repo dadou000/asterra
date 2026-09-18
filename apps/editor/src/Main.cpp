@@ -2050,13 +2050,7 @@ int main(
                     project.Save();
                     if (worldSession.HasWorld())
                     {
-                        if (worldSession.HasWorld())
-                        {
-                            if (worldSession.HasWorld())
-        {
-            world().Checkpoint();
-        }
-                        }
+                        world().Checkpoint();
                     }
 
                     const auto result =
@@ -2133,9 +2127,9 @@ int main(
             {
                 project.Save();
                 if (worldSession.HasWorld())
-        {
-            world().Checkpoint();
-        }
+                {
+                    world().Checkpoint();
+                }
 
                 const auto result =
                     buildService.Package(
@@ -2355,6 +2349,7 @@ int main(
                 [&buildService,
                  &project,
                  &world,
+                 &worldSession,
                  &buildIssues,
                  &buildStatus,
                  &selectedBuildProfile,
@@ -2369,13 +2364,7 @@ int main(
                         project.Save();
                         if (worldSession.HasWorld())
                     {
-                        if (worldSession.HasWorld())
-                        {
-                            if (worldSession.HasWorld())
-        {
-            world().Checkpoint();
-        }
-                        }
+                        world().Checkpoint();
                     }
 
                         const std::string
@@ -5714,18 +5703,13 @@ int main(
             .label = "Save Project",
             .invoke =
                 [&project,
-                 &world]
+                 &world,
+                 &worldSession]
                 {
                     project.Save();
                     if (worldSession.HasWorld())
                     {
-                        if (worldSession.HasWorld())
-                        {
-                            if (worldSession.HasWorld())
-        {
-            world().Checkpoint();
-        }
-                        }
+                        world().Checkpoint();
                     }
 
                     orbit::log::Info(
@@ -5782,7 +5766,7 @@ int main(
                                 kUndo);
                 },
             .enabled =
-                [&authoringCommands]
+                [&authoringCommands, &worldSession]
                 {
                     if (!worldSession.HasWorld())
                     {
@@ -5813,7 +5797,7 @@ int main(
                                 kRedo);
                 },
             .enabled =
-                [&authoringCommands]
+                [&authoringCommands, &worldSession]
                 {
                     if (!worldSession.HasWorld())
                     {
