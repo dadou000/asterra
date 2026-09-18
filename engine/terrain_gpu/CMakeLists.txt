@@ -1,4 +1,5 @@
 add_library(OrbitTerrainGpu STATIC
+    src/GpuAeolianErosionPage.cpp
     src/GpuDepressionFill.cpp
     src/GpuDrainagePage.cpp
     src/GpuElevationQuery.cpp
@@ -94,5 +95,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainGpuThermalShaders
         COMMAND OrbitTerrainGpuThermalShaderTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainGpuAeolianShaderTests
+        tests/M13AeolianShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainGpuAeolianShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(OrbitTerrainGpuAeolianShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainGpuAeolianShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainGpuAeolianShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainGpuAeolianShaders
+        COMMAND OrbitTerrainGpuAeolianShaderTests
     )
 endif()
