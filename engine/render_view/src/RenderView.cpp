@@ -115,11 +115,14 @@ ViewportRay(
                 camera.up.y,
                 camera.up.z
             });
+    // Orbit view space is right-handed with +Z forward and +Y up.
+    // up x forward therefore yields +X screen-right. Using forward x up
+    // mirrors horizontal viewport picking.
     const math::Double3 right =
         math::Normalize(
             math::Cross(
-                forward,
-                requestedUp));
+                requestedUp,
+                forward));
 
     if (math::LengthSquared(forward) <=
             1.0e-20 ||
@@ -132,8 +135,8 @@ ViewportRay(
     const math::Double3 cameraUp =
         math::Normalize(
             math::Cross(
-                right,
-                forward));
+                forward,
+                right));
 
     const f64 aspect =
         static_cast<f64>(width) /
