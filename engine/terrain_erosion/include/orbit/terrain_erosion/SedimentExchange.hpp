@@ -30,7 +30,8 @@ enum class SedimentSourceProcess : u8
 {
     Hydraulic,
     AeolianAbrasion,
-    ThermalFracture
+    ThermalFracture,
+    GlacialErosion
 };
 
 struct SedimentMass
@@ -63,6 +64,11 @@ struct SedimentConversionRules
     // Only freshly eroded bedrock needs process-specific conversion.
     f64 hydraulicBedrockSandFraction{0.25};
     f64 aeolianBedrockSandFraction{0.85};
+
+    // Glacier abrasion/plucking produces a mixed load. Coarse material models
+    // plucked blocks/till; the remaining non-sand fraction is fines.
+    f64 glacialBedrockSandFraction{0.25};
+    f64 glacialBedrockCoarseFraction{0.50};
 
     // Thermal fracture always produces coarse debris.
     [[nodiscard]] bool IsValid() const noexcept;
