@@ -82,6 +82,11 @@ struct CoastalShallowWaterConfig
 
 struct CoastalCellState
 {
+    // Physical bed elevation used when the current water depth was last
+    // synchronized. If M08 changes between steps, the solver preserves the
+    // existing free surface and recomputes depth against the new bed.
+    f64 bedElevationMeters{0.0};
+
     f64 waterDepthMeters{0.0};
     f64 waterSurfaceElevationMeters{0.0};
 
