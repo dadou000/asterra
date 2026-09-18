@@ -94,11 +94,13 @@ jobs:
           OrbitTerrainDrainagePageTests
           OrbitTerrainStreamPowerTests
           OrbitTerrainHydraulicErosionTests
+          OrbitTerrainThermalErosionTests
           OrbitTerrainGpuDrainageShaderTests
           OrbitTerrainGpuHydraulicShaderTests
+          OrbitTerrainGpuThermalShaderTests
           OrbitTerrainGpu
 
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders)"
