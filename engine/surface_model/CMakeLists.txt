@@ -15,6 +15,7 @@ target_link_libraries(OrbitSurfaceModel
         Orbit::Scene
         Orbit::Surface
         Orbit::Terrain
+        Orbit::TerrainBiome
         Orbit::Universe
         Orbit::WorldModel
 )
