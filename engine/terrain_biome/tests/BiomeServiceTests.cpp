@@ -2,6 +2,7 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
