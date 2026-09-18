@@ -1,4 +1,5 @@
 add_library(OrbitTerrainErosion STATIC
+    src/AeolianErosion.cpp
     src/HydraulicErosion.cpp
     src/HydrologyRefinement.cpp
     src/RegionalElevationDelta.cpp
@@ -86,5 +87,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainThermalErosion
         COMMAND OrbitTerrainThermalErosionTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainAeolianErosionTests
+        tests/AeolianErosionTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainAeolianErosionTests
+        PRIVATE
+            Orbit::TerrainErosion
+    )
+
+    target_compile_features(OrbitTerrainAeolianErosionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainAeolianErosionTests)
+
+    add_test(
+        NAME Orbit.TerrainAeolianErosion
+        COMMAND OrbitTerrainAeolianErosionTests
     )
 endif()
