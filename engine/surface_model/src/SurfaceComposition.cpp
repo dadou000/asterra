@@ -40,6 +40,276 @@ template <typename Value>
     return *value;
 }
 
+[[nodiscard]] terrain_biome::BiomeAuthoredMaskId BiomeMaskIdFor(
+    const scene::ObjectId object) noexcept
+{
+    terrain_biome::BiomeAuthoredMaskId id{
+        .high =
+            object.high ^
+            0x4d32304d41534b49ULL,
+        .low =
+            object.low ^
+            0x444f524249540001ULL
+    };
+
+    if (!id.IsValid())
+    {
+        id.low = 1U;
+    }
+
+    return id;
+}
+
+[[nodiscard]] terrain_biome::BiomePlacementMode PlacementModeFor(
+    const i64 value)
+{
+    if (value < 0 ||
+        value > 2)
+    {
+        throw std::runtime_error(
+            "Biome placement mode must be Automatic, Authored, or Automatic+Authored.");
+    }
+
+    return
+        static_cast<
+            terrain_biome::
+                BiomePlacementMode>(
+                    value);
+}
+
+[[nodiscard]] terrain_biome::BiomeSelectorField SelectorFieldFor(
+    const i64 value)
+{
+    if (value < 0 ||
+        value > 16)
+    {
+        throw std::runtime_error(
+            "Biome selector field is outside the M20 field catalog.");
+    }
+
+    return
+        static_cast<
+            terrain_biome::
+                BiomeSelectorField>(
+                    value);
+}
+
+[[nodiscard]] terrain_biome::BiomeAuthoredWeightOperation MaskOperationFor(
+    const i64 value)
+{
+    if (value < 0 ||
+        value > 5)
+    {
+        throw std::runtime_error(
+            "Biome authored mask operation is invalid.");
+    }
+
+    return
+        static_cast<
+            terrain_biome::
+                BiomeAuthoredWeightOperation>(
+                    value);
+}
+
+[[nodiscard]] terrain_biome::BiomeAutomaticSelector BiomeSelectorDescription(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& object)
+{
+    terrain_biome::BiomeAutomaticSelector selector{
+        .field =
+            SelectorFieldFor(
+                PropertyOr<i64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSelectorField,
+                    i64{0})),
+        .minimum =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorMinimum,
+                0.0),
+        .maximum =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorMaximum,
+                1.0),
+        .lowerFalloff =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorLowerFalloff,
+                0.0),
+        .upperFalloff =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorUpperFalloff,
+                0.0),
+        .invert =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorInvert,
+                false),
+        .enabled =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorEnabled,
+                true)
+    };
+
+    if (selector.field ==
+        terrain_biome::
+            BiomeSelectorField::
+                GeologyMaterial)
+    {
+        const std::string text =
+            PropertyOr<std::string>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorMaterial,
+                {});
+
+        const auto parsed =
+            terrain_geology::
+                RockTypeId::Parse(
+                    text);
+
+        if (!parsed.has_value())
+        {
+            throw std::runtime_error(
+                "Biome geology selector requires a valid RockTypeId string.");
+        }
+
+        selector.material =
+            *parsed;
+    }
+
+    if (selector.field ==
+        terrain_biome::
+            BiomeSelectorField::
+                UserField)
+    {
+        const std::string name =
+            PropertyOr<std::string>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSelectorUserField,
+                {});
+
+        if (name.empty())
+        {
+            throw std::runtime_error(
+                "Biome user-field selector requires a non-empty field name.");
+        }
+
+        selector.userField =
+            terrain_biome::
+                BiomeUserFieldIdFromName(
+                    name);
+    }
+
+    if (!selector.IsValid())
+    {
+        throw std::runtime_error(
+            "Biome automatic selector contains invalid M20 parameters on object " +
+            object.id.ToString() +
+            ".");
+    }
+
+    return selector;
+}
+
+[[nodiscard]] terrain_biome::BiomeAuthoredMask BiomeMaskDescription(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& object)
+{
+    terrain_biome::BiomeAuthoredMask mask{
+        .id =
+            BiomeMaskIdFor(
+                object.id),
+        .operation =
+            MaskOperationFor(
+                PropertyOr<i64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeMaskOperation,
+                    i64{0})),
+        .centerUnitDirection =
+            PropertyOr<math::Double3>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskCenter,
+                {0.0, 1.0, 0.0}),
+        .innerRadiusMeters =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskInnerRadius,
+                0.0),
+        .outerRadiusMeters =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskOuterRadius,
+                1'000.0),
+        .global =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskGlobal,
+                false),
+        .value =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskValue,
+                1.0),
+        .opacity =
+            PropertyOr<f64>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskOpacity,
+                1.0),
+        .enabled =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeMaskEnabled,
+                true)
+    };
+
+    if (!mask.IsValid())
+    {
+        throw std::runtime_error(
+            "Biome authored mask contains invalid M20 parameters on object " +
+            object.id.ToString() +
+            ".");
+    }
+
+    return mask;
+}
+
 [[nodiscard]] terrain_biome::BiomeId BiomeIdFor(
     const scene::ObjectId object) noexcept
 {
@@ -76,7 +346,15 @@ template <typename Value>
                         object.id,
                         world_model::kBiomeMinimumResolvedWeight,
                         0.05)),
-            .enabled = true
+            .enabled = true,
+            .mode =
+                PlacementModeFor(
+                    PropertyOr<i64>(
+                        objects,
+                        object.id,
+                        world_model::
+                            kBiomePlacementMode,
+                        i64{0}))
         },
         .surface = {
             .materialInfluence =
@@ -142,10 +420,36 @@ template <typename Value>
         }
     };
 
+    for (const auto& child :
+         objects.Children(
+             object.id))
+    {
+        if (child.type ==
+            world_model::
+                kBiomeSelectorType)
+        {
+            result.placement.
+                selectors.push_back(
+                    BiomeSelectorDescription(
+                        objects,
+                        child));
+        }
+        else if (child.type ==
+            world_model::
+                kBiomeAuthoredMaskType)
+        {
+            result.placement.
+                authoredMasks.push_back(
+                    BiomeMaskDescription(
+                        objects,
+                        child));
+        }
+    }
+
     if (!result.IsValid())
     {
         throw std::runtime_error(
-            "Biome Asset contains invalid M19 rules on object " +
+            "Biome Asset contains invalid M19/M20 rules on object " +
             object.id.ToString() +
             ".");
     }
