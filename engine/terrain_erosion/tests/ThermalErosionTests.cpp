@@ -219,20 +219,23 @@ void TestMaterialSpecificRepose()
             {},
             config);
 
-    const f64 sandMoved =
-        TotalMovedOut(sand);
+    const f64 sandRemaining =
+        sand.material.At(2U, 2U).
+            sandMeters;
 
-    const f64 debrisMoved =
-        TotalMovedOut(debris);
+    const f64 debrisRemaining =
+        debris.material.At(2U, 2U).
+            debrisMeters;
 
-    const f64 soilMoved =
-        TotalMovedOut(soil);
+    const f64 soilRemaining =
+        soil.material.At(2U, 2U).
+            soilMeters;
 
     Require(
-        sandMoved >
-            debrisMoved &&
-        debrisMoved >
-            soilMoved,
+        sandRemaining <
+            debrisRemaining &&
+        debrisRemaining <
+            soilRemaining,
         "M12 sand, debris and cohesive soil do not exhibit distinct "
         "angle-of-repose behavior.");
 
