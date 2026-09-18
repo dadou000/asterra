@@ -231,7 +231,14 @@ void TestMaterialMassConservation()
         result.massBalance.
             materialBalanceRelativeError <
             1.0e-9,
-        "M11 eroded material was created/deleted instead of conserved.");
+        "M11 eroded material was created/deleted in the process ledger.");
+
+    Require(
+        result.massBalance.
+            physicalColumnBalanceRelativeError <
+            2.0e-5,
+        "M11 M08 physical-column mass changed beyond the documented "
+        "half-float/float-layer tolerance.");
 
     RequireNear(
         result.massBalance.
