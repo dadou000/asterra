@@ -5,6 +5,7 @@ add_library(OrbitTerrainErosion STATIC
     src/RegionalElevationDelta.cpp
     src/RiverCarving.cpp
     src/RiverCarvedTerrainSource.cpp
+    src/SedimentExchange.cpp
     src/SedimentTransport.cpp
     src/StreamPowerErosion.cpp
     src/ThermalErosion.cpp
@@ -106,5 +107,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainAeolianErosion
         COMMAND OrbitTerrainAeolianErosionTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainSedimentExchangeTests
+        tests/SedimentExchangeTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainSedimentExchangeTests
+        PRIVATE
+            Orbit::TerrainErosion
+    )
+
+    target_compile_features(OrbitTerrainSedimentExchangeTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainSedimentExchangeTests)
+
+    add_test(
+        NAME Orbit.TerrainSedimentExchange
+        COMMAND OrbitTerrainSedimentExchangeTests
     )
 endif()
