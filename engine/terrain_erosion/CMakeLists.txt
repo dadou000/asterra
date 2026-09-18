@@ -6,6 +6,7 @@ add_library(OrbitTerrainErosion STATIC
     src/RiverCarvedTerrainSource.cpp
     src/SedimentTransport.cpp
     src/StreamPowerErosion.cpp
+    src/ThermalErosion.cpp
 )
 
 add_library(Orbit::TerrainErosion ALIAS OrbitTerrainErosion)
@@ -66,5 +67,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainHydraulicErosion
         COMMAND OrbitTerrainHydraulicErosionTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainThermalErosionTests
+        tests/ThermalErosionTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainThermalErosionTests
+        PRIVATE
+            Orbit::TerrainErosion
+    )
+
+    target_compile_features(OrbitTerrainThermalErosionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainThermalErosionTests)
+
+    add_test(
+        NAME Orbit.TerrainThermalErosion
+        COMMAND OrbitTerrainThermalErosionTests
     )
 endif()
