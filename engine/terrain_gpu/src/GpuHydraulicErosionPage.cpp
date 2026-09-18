@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace orbit::terrain_gpu
 {
