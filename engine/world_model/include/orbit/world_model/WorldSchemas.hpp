@@ -45,6 +45,16 @@ inline constexpr schema::TypeId kBiomeAssetType{
     .low = 0x4d45415353455431ULL
 };
 
+inline constexpr schema::TypeId kBiomeSelectorType{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553454c454331ULL
+};
+
+inline constexpr schema::TypeId kBiomeAuthoredMaskType{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d41534b3031ULL
+};
+
 inline constexpr schema::TypeId kSurfaceDecalType{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c545950450001ULL
@@ -133,6 +143,96 @@ inline constexpr schema::PropertyId kTerrainDetailOctaves{
 inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .high = 0x4f52424954544552ULL,
     .low = 0x4d4158454c455641ULL
+};
+
+inline constexpr schema::PropertyId kBiomePlacementMode{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45504c41434501ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorField{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534649454c01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorMinimum{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534d494e0001ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorMaximum{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534d41580001ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorLowerFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c46414c01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorUpperFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45535546414c01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorMaterial{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534d41544c01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorUserField{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45535553455201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorInvert{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553494e564501ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSelectorEnabled{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553454e414201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskOperation{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d4f50455201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskCenter{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d43454e5401ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskInnerRadius{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d494e4e5201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskOuterRadius{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d4f55544501ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskGlobal{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d474c4f4201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskValue{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d56414c5501ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskOpacity{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d4f50414301ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaskEnabled{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d454e414201ULL
 };
 
 inline constexpr schema::PropertyId kBiomeMinimumResolvedWeight{
