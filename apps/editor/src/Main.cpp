@@ -962,12 +962,20 @@ void SynchronizePluginPanels(
                     orbit::editor_ui::PanelContext&
                         context)
                 {
-                    if (!plugins().DrawPanel(
-                            id,
-                            context))
+                    try
+                    {
+                        if (!plugins().DrawPanel(
+                                id,
+                                context))
+                        {
+                            context.Text(
+                                "Plugin panel is unavailable.");
+                        }
+                    }
+                    catch (const std::logic_error&)
                     {
                         context.Text(
-                            "Plugin panel is unavailable.");
+                            "No world is open.");
                     }
                 }
         });
@@ -1506,7 +1514,8 @@ int main(
 
         const auto presentActions =
             [&commandSurfaces,
-             &authoringCommands](
+             &authoringCommands,
+             &worldSession](
                 const std::string_view surface,
                 const orbit::editor_model::
                     CommandSurfaceKind kind)
@@ -1515,6 +1524,11 @@ int main(
                     orbit::editor_ui::
                         ActionPresentation>
                     result;
+
+                if (!worldSession.HasWorld())
+                {
+                    return result;
+                }
 
                 for (const auto& command :
                      commandSurfaces().Present(
@@ -1796,7 +1810,7 @@ int main(
         orbit::studio_ui::WorldDocumentsUi
             worldDocumentsUi(
                 studioSession,
-                false);
+                true);
         worldDocumentsUi.Register(ui);
 
         constexpr orbit::editor_ui::PanelId
@@ -2034,7 +2048,16 @@ int main(
                     // Studio builds always package the currently authored
                     // semantic state, never a stale pre-edit checkpoint.
                     project.Save();
-                    world().Checkpoint();
+                    if (worldSession.HasWorld())
+                    {
+                        if (worldSession.HasWorld())
+                        {
+                            if (worldSession.HasWorld())
+        {
+            world().Checkpoint();
+        }
+                        }
+                    }
 
                     const auto result =
                         buildService.Cook({
@@ -2109,7 +2132,10 @@ int main(
                     PackageResult
             {
                 project.Save();
-                world().Checkpoint();
+                if (worldSession.HasWorld())
+        {
+            world().Checkpoint();
+        }
 
                 const auto result =
                     buildService.Package(
@@ -2341,7 +2367,16 @@ int main(
                     try
                     {
                         project.Save();
-                        world().Checkpoint();
+                        if (worldSession.HasWorld())
+                    {
+                        if (worldSession.HasWorld())
+                        {
+                            if (worldSession.HasWorld())
+        {
+            world().Checkpoint();
+        }
+                        }
+                    }
 
                         const std::string
                             requestedProfile =
@@ -3588,12 +3623,19 @@ int main(
                 }
         });
 
-        requestRoutedPaths();
+        if (worldSession.HasWorld())
+        {
+            requestRoutedPaths();
+        }
 
         orbit::u64 publishedObjectRevision =
-            objects().Revision();
+            worldSession.HasWorld()
+                ? objects().Revision()
+                : 0;
         orbit::u64 publishedSelectionRevision =
-            selection().Revision();
+            worldSession.HasWorld()
+                ? selection().Revision()
+                : 0;
         orbit::u64 publishedContentRevision =
             content.Revision();
         orbit::u32 publishedViewportWidth =
@@ -3604,8 +3646,9 @@ int main(
         const auto publishAutomationChanges =
             [&]
             {
-                if (objects().Revision() !=
-                    publishedObjectRevision)
+                if (worldSession.HasWorld() &&
+                    objects().Revision() !=
+                        publishedObjectRevision)
                 {
                     publishedObjectRevision =
                         objects().Revision();
@@ -3622,8 +3665,9 @@ int main(
                             }));
                 }
 
-                if (selection().Revision() !=
-                    publishedSelectionRevision)
+                if (worldSession.HasWorld() &&
+                    selection().Revision() !=
+                        publishedSelectionRevision)
                 {
                     publishedSelectionRevision =
                         selection().Revision();
@@ -3640,7 +3684,7 @@ int main(
                     }
 
                     rpcHost.PublishEvent(
-                        "selection().changed",
+                        "selection.changed",
                         orbit::rpc::Value(
                             orbit::rpc::Value::Object{
                                 {
@@ -3653,6 +3697,12 @@ int main(
                                     std::move(ids)
                                 }
                             }));
+                }
+
+                if (!worldSession.HasWorld())
+                {
+                    publishedObjectRevision = 0;
+                    publishedSelectionRevision = 0;
                 }
 
                 if (content.Revision() !=
@@ -3734,10 +3784,17 @@ int main(
                  &lastPlacedPathNode,
                  &bodies,
                  &bodyId,
-                 &studioSession](
+                 &studioSession,
+                 &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        context.Text("No world is open. Use World Documents to open or create one.");
+                        return;
+                    }
+
                     const auto toolbar =
                         presentActions(
                             "viewport",
@@ -3822,7 +3879,7 @@ int main(
                         pathPlacementMode = false;
                         lastPlacedPathNode.reset();
                         context.Text(
-                            "No celestial body is authored in this world().");
+                            "No celestial body is authored in this world.");
                         context.Text(
                             "Create a celestial system/body from Explorer or automation.");
                         return;
@@ -4273,10 +4330,17 @@ int main(
                  &renameBuffer,
                  &renameSelectionRevision,
                  &objects,
-                 &presentActions](
+                 &presentActions,
+                 &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        context.Text("No world is open.");
+                        return;
+                    }
+
                     static constexpr
                         std::string_view
                             kObjectPayload =
@@ -4538,10 +4602,17 @@ int main(
             .draw =
                 [&inspector,
                  &presentActions,
-                 &content](
+                 &content,
+                 &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        context.Text("No world is open.");
+                        return;
+                    }
+
                     const auto selected =
                         inspector().SelectedObjects();
 
@@ -4755,10 +4826,17 @@ int main(
             .defaultOpen = false,
             .draw =
                 [&plugins,
-                 &pluginValidationIssues](
+                 &pluginValidationIssues,
+                 &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        context.Text("No world is open.");
+                        return;
+                    }
+
                     const auto statuses =
                         plugins().Statuses();
 
@@ -5639,7 +5717,16 @@ int main(
                  &world]
                 {
                     project.Save();
-                    world().Checkpoint();
+                    if (worldSession.HasWorld())
+                    {
+                        if (worldSession.HasWorld())
+                        {
+                            if (worldSession.HasWorld())
+        {
+            world().Checkpoint();
+        }
+                        }
+                    }
 
                     orbit::log::Info(
                         "Project and world checkpoint saved.");
@@ -5683,8 +5770,12 @@ int main(
             .menu = "Home",
             .label = "Undo",
             .invoke =
-                [&authoringCommands]
+                [&authoringCommands, &worldSession]
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        return;
+                    }
                     authoringCommands().Invoke(
                         orbit::editor_model::
                             authoring_commands::
@@ -5693,6 +5784,10 @@ int main(
             .enabled =
                 [&authoringCommands]
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        return false;
+                    }
                     return authoringCommands().
                         Enablement(
                             orbit::editor_model::
@@ -5706,8 +5801,12 @@ int main(
             .menu = "Home",
             .label = "Redo",
             .invoke =
-                [&authoringCommands]
+                [&authoringCommands, &worldSession]
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        return;
+                    }
                     authoringCommands().Invoke(
                         orbit::editor_model::
                             authoring_commands::
@@ -5716,6 +5815,10 @@ int main(
             .enabled =
                 [&authoringCommands]
                 {
+                    if (!worldSession.HasWorld())
+                    {
+                        return false;
+                    }
                     return authoringCommands().
                         Enablement(
                             orbit::editor_model::
@@ -5725,12 +5828,15 @@ int main(
                 }
         });
 
-        SynchronizePluginPanels(
-            ui,
-            plugins,
-            pluginPanelIds);
-        pluginPanelRevision =
-            plugins().PanelCatalogRevision();
+        if (worldSession.HasWorld())
+        {
+            SynchronizePluginPanels(
+                ui,
+                plugins,
+                pluginPanelIds);
+            pluginPanelRevision =
+                plugins().PanelCatalogRevision();
+        }
 
         orbit::log::Info(
             std::format(
@@ -5873,14 +5979,26 @@ int main(
                 derivedRouteGeneration.clear();
             }
 
-            pollRoutedPaths();
-            refreshDerivedPaths();
+            if (worldSession.HasWorld())
+            {
+                pollRoutedPaths();
+                refreshDerivedPaths();
+            }
+            else
+            {
+                derivedPaths.clear();
+                knownRoutedEdges.clear();
+                activePathNetwork.reset();
+                lastPlacedPathNode.reset();
+                pathPlacementMode = false;
+            }
 
             pluginReloadAccumulator +=
                 deltaSeconds;
 
-            if (pluginReloadAccumulator >=
-                0.5)
+            if (worldSession.HasWorld() &&
+                pluginReloadAccumulator >=
+                    0.5)
             {
                 const orbit::u32 reloaded =
                     plugins().PollHotReload();
@@ -5911,16 +6029,24 @@ int main(
                     0.0;
             }
 
-            if (plugins().PanelCatalogRevision() !=
-                pluginPanelRevision)
+            if (worldSession.HasWorld())
             {
-                SynchronizePluginPanels(
-                    ui,
-                    plugins,
-                    pluginPanelIds);
+                if (plugins().PanelCatalogRevision() !=
+                    pluginPanelRevision)
+                {
+                    SynchronizePluginPanels(
+                        ui,
+                        plugins,
+                        pluginPanelIds);
+                    pluginPanelRevision =
+                        plugins().
+                            PanelCatalogRevision();
+                }
+            }
+            else
+            {
                 pluginPanelRevision =
-                    plugins().
-                        PanelCatalogRevision();
+                    ~orbit::u64{0};
             }
 
             publishAutomationChanges();
@@ -5931,10 +6057,13 @@ int main(
 
             ui.DrawStudioShell();
 
-            shortcuts.Update(
-                window,
-                authoringCommands(),
-                ui.WantsKeyboard());
+            if (worldSession.HasWorld())
+            {
+                shortcuts.Update(
+                    window,
+                    authoringCommands(),
+                    ui.WantsKeyboard());
+            }
 
             publishAutomationChanges();
 
@@ -6318,7 +6447,10 @@ int main(
                 submittedFence);
         }
 
-        world().Checkpoint();
+        if (worldSession.HasWorld())
+        {
+            world().Checkpoint();
+        }
         return 0;
     }
     catch (const std::exception& exception)
