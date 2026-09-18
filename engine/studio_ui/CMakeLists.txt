@@ -5,6 +5,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioViewportCamera.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp
+    src/WorldDocumentsUi.cpp
 )
 
 add_library(Orbit::StudioUi ALIAS OrbitStudioUi)

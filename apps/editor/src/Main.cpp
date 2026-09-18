@@ -47,6 +47,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
+#include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
 
@@ -1791,6 +1792,12 @@ int main(
 
         studioViewportPanels.
             RegisterSecondary(ui);
+
+        orbit::studio_ui::WorldDocumentsUi
+            worldDocumentsUi(
+                studioSession,
+                false);
+        worldDocumentsUi.Register(ui);
 
         constexpr orbit::editor_ui::PanelId
             kViewportPanel{
