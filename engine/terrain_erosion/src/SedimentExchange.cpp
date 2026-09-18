@@ -239,6 +239,12 @@ bool SedimentConversionRules::IsValid() const noexcept
             1.0 &&
         glacialBedrockSandFraction +
                 glacialBedrockCoarseFraction <=
+            1.0 &&
+        std::isfinite(
+            coastalBedrockSandFraction) &&
+        coastalBedrockSandFraction >=
+            0.0 &&
+        coastalBedrockSandFraction <=
             1.0;
 }
 
@@ -1141,6 +1147,22 @@ SedimentMass ClassifyRemovedMaterial(
             bedrockMass -
             sand -
             coarse;
+        break;
+    }
+
+    case SedimentSourceProcess::CoastalErosion:
+    {
+        const f64 sand =
+            bedrockMass *
+            rules.
+                coastalBedrockSandFraction;
+
+        result.sandKg +=
+            sand;
+
+        result.finesKg +=
+            bedrockMass -
+            sand;
         break;
     }
     }
