@@ -5858,6 +5858,62 @@ int main(
         auto previous =
             Clock::now();
 
+        const auto synchronizeActiveBodyPreview =
+            [&]
+            {
+                const auto& activeBody =
+                    studioSession.ActiveBody().Active();
+
+                if (activeBody.has_value())
+                {
+                    const bool activeIdentityChanged =
+                        bodyObject !=
+                            activeBody->semanticObject ||
+                        bodyId != activeBody->body;
+
+                    bodyObject =
+                        activeBody->semanticObject;
+                    bodyId =
+                        activeBody->body;
+
+                    bodyView.Camera().frame =
+                        activeBody->frame;
+
+                    const orbit::f64 activeRadius =
+                        std::max(
+                            activeBody->
+                                referenceRadiusMeters,
+                            1.0);
+
+                    bodyView.Camera().
+                        nearPlaneMeters =
+                            static_cast<orbit::f32>(
+                                std::max(
+                                    activeRadius *
+                                        1.0e-6,
+                                    1.0));
+                    bodyView.Camera().
+                        farPlaneMeters =
+                            static_cast<orbit::f32>(
+                                activeRadius * 10.0);
+
+                    if (activeIdentityChanged)
+                    {
+                        bodyView.Camera().
+                            localPositionMeters = {
+                                0.0,
+                                0.0,
+                                -activeRadius * 3.2
+                            };
+                    }
+                }
+                else
+                {
+                    bodyObject = {};
+                    bodyId = {};
+                }
+            };
+
         while (window.PumpEvents())
         {
             if (submittedFence != 0)
@@ -5902,57 +5958,7 @@ int main(
             const auto studioTick =
                 studioSession.Tick(false);
 
-            const auto& activeBody =
-                studioSession.ActiveBody().Active();
-
-            if (activeBody.has_value())
-            {
-                const bool activeIdentityChanged =
-                    bodyObject !=
-                        activeBody->semanticObject ||
-                    bodyId != activeBody->body;
-
-                bodyObject =
-                    activeBody->semanticObject;
-                bodyId =
-                    activeBody->body;
-
-                bodyView.Camera().frame =
-                    activeBody->frame;
-
-                const orbit::f64 activeRadius =
-                    std::max(
-                        activeBody->
-                            referenceRadiusMeters,
-                        1.0);
-
-                bodyView.Camera().
-                    nearPlaneMeters =
-                        static_cast<orbit::f32>(
-                            std::max(
-                                activeRadius *
-                                    1.0e-6,
-                                1.0));
-                bodyView.Camera().
-                    farPlaneMeters =
-                        static_cast<orbit::f32>(
-                            activeRadius * 10.0);
-
-                if (activeIdentityChanged)
-                {
-                    bodyView.Camera().
-                        localPositionMeters = {
-                            0.0,
-                            0.0,
-                            -activeRadius * 3.2
-                        };
-                }
-            }
-            else
-            {
-                bodyObject = {};
-                bodyId = {};
-            }
+            synchronizeActiveBodyPreview();
 
             if (studioTick.pathRoutingRebound)
             {
@@ -6047,6 +6053,17 @@ int main(
                 deltaSeconds);
 
             ui.DrawStudioShell();
+
+            synchronizeActiveBodyPreview();
+
+            if (!worldSession.HasWorld())
+            {
+                derivedPaths.clear();
+                knownRoutedEdges.clear();
+                activePathNetwork.reset();
+                lastPlacedPathNode.reset();
+                pathPlacementMode = false;
+            }
 
             if (worldSession.HasWorld())
             {
