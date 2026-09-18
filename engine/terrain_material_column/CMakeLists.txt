@@ -1,5 +1,6 @@
 add_library(OrbitTerrainMaterialColumn STATIC
     src/MaterialColumnPage.cpp
+    src/SurfaceResolver.cpp
 )
 
 add_library(Orbit::TerrainMaterialColumn ALIAS OrbitTerrainMaterialColumn)
@@ -36,5 +37,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainMaterialColumn
         COMMAND OrbitTerrainMaterialColumnTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainSurfaceResolverTests
+        tests/SurfaceResolverTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainSurfaceResolverTests
+        PRIVATE
+            Orbit::TerrainMaterialColumn
+            Orbit::TerrainRender
+            Orbit::TerrainScatter
+    )
+
+    target_compile_features(OrbitTerrainSurfaceResolverTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainSurfaceResolverTests)
+
+    add_test(
+        NAME Orbit.TerrainSurfaceResolver
+        COMMAND OrbitTerrainSurfaceResolverTests
     )
 endif()
