@@ -244,7 +244,7 @@ struct Flux4
             std::max(
                 maximumSlope,
                 (source - downstream) /
-                    material.SpacingMeters());
+                    result.material.SpacingMeters());
     }
 
     return std::max(maximumSlope, 0.0);
@@ -269,11 +269,15 @@ struct Flux4
     return 0.0;
 }
 
-[[nodiscard]] f64 DepositionDensity(
-    const terrain_material_column::MaterialColumnPage& material,
-    const terrain_material_column::LooseMaterialKind kind) noexcept
+[[nodiscard]] SedimentMass ScaleSediment(
+    const SedimentMass& mass,
+    const f64 scale) noexcept
 {
-    return material.Densities().Density(kind);
+    return {
+        .sandKg = mass.sandKg * scale,
+        .finesKg = mass.finesKg * scale,
+        .coarseDebrisKg = mass.coarseDebrisKg * scale
+    };
 }
 } // namespace
 
@@ -408,13 +412,15 @@ HydraulicErosionResult SimulateHydraulicErosion(
     std::vector<math::Double2> nextVelocity(
         cellCount);
 
-    std::vector<f64> sedimentAfterExchange(
-        cellCount,
-        0.0);
+    std::vector<SedimentMass> sedimentAfterExchange(
+        cellCount);
 
-    std::vector<f64> sedimentNext(
-        cellCount,
-        0.0);
+    std::vector<SedimentMass> sedimentNext(
+        cellCount);
+
+    result.sedimentExchange.emplace(
+        resolution,
+        material.SpacingMeters());
 
     const f64 spacing =
         result.material.SpacingMeters();
@@ -769,6 +775,17 @@ HydraulicErosionResult SimulateHydraulicErosion(
                     concentration *
                     waterVolume;
 
+                auto& shared =
+                    result.sedimentExchange->
+                        At(x, y).
+                        waterborne;
+
+                state.suspendedSediment =
+                    shared;
+
+                state.suspendedSedimentKg =
+                    shared.TotalKg();
+
                 if (state.suspendedSedimentKg <
                         capacityKg &&
                     config.maximumErosionDepthPerStepMeters >
@@ -825,8 +842,35 @@ HydraulicErosionResult SimulateHydraulicErosion(
                                 desiredDepth,
                                 geology);
 
-                        state.suspendedSedimentKg +=
-                            removal.removedMassKg;
+                        const auto* rock =
+                            geology.Find(
+                                result.material.
+                                    At(x, y).
+                                    bedrockMaterial);
+
+                        if (rock == nullptr)
+                        {
+                            throw std::logic_error(
+                                "Orbit M14 hydraulic classification lost M02 rock identity.");
+                        }
+
+                        const SedimentMass typed =
+                            ClassifyRemovedMaterial(
+                                removal,
+                                result.material,
+                                *rock,
+                                SedimentSourceProcess::Hydraulic,
+                                result.sedimentExchange->
+                                    ConversionRules());
+
+                        shared +=
+                            typed;
+
+                        state.suspendedSediment =
+                            shared;
+
+                        state.suspendedSedimentKg =
+                            shared.TotalKg();
 
                         state.cumulativeErodedKg +=
                             removal.removedMassKg;
@@ -854,17 +898,21 @@ HydraulicErosionResult SimulateHydraulicErosion(
                             0.0,
                             1.0);
 
-                    const f64 density =
-                        DepositionDensity(
-                            result.material,
-                            config.
-                                depositionMaterial);
-
                     const f64 maximumMass =
                         config.
                             maximumDepositionDepthPerStepMeters *
                         area *
-                        density;
+                        std::max({
+                            static_cast<f64>(
+                                result.material.Densities().
+                                    debrisKgPerCubicMeter),
+                            static_cast<f64>(
+                                result.material.Densities().
+                                    sandKgPerCubicMeter),
+                            static_cast<f64>(
+                                result.material.Densities().
+                                    soilKgPerCubicMeter)
+                        });
 
                     const f64 depositMass =
                         std::min(
@@ -872,28 +920,53 @@ HydraulicErosionResult SimulateHydraulicErosion(
                                 exchangeFraction,
                             maximumMass);
 
-                    const f64 depositDepth =
-                        depositMass /
-                        std::max(
-                            area * density,
-                            1.0e-12);
-
-                    if (depositDepth > 0.0)
+                    if (depositMass > 0.0)
                     {
+                        const auto deposited =
+                            result.sedimentExchange->
+                                DepositToColumn(
+                                    result.material,
+                                    x,
+                                    y,
+                                    SedimentTransportMedium::Waterborne,
+                                    depositMass);
+
                         const f64 depositedMass =
-                            result.material.Deposit(
-                                x,
-                                y,
-                                config.
-                                    depositionMaterial,
-                                depositDepth);
+                            deposited.DepositedKg();
+
+                        const f64 depositDepth =
+                            deposited.deposited.coarseDebrisKg /
+                                std::max(
+                                    area *
+                                    static_cast<f64>(
+                                        result.material.Densities().
+                                            debrisKgPerCubicMeter),
+                                    1.0e-12) +
+                            deposited.deposited.sandKg /
+                                std::max(
+                                    area *
+                                    static_cast<f64>(
+                                        result.material.Densities().
+                                            sandKgPerCubicMeter),
+                                    1.0e-12) +
+                            deposited.deposited.finesKg /
+                                std::max(
+                                    area *
+                                    static_cast<f64>(
+                                        result.material.Densities().
+                                            soilKgPerCubicMeter),
+                                    1.0e-12);
+
+                        shared =
+                            result.sedimentExchange->
+                                At(x, y).
+                                waterborne;
+
+                        state.suspendedSediment =
+                            shared;
 
                         state.suspendedSedimentKg =
-                            std::max(
-                                0.0,
-                                state.
-                                    suspendedSedimentKg -
-                                depositedMass);
+                            shared.TotalKg();
 
                         state.cumulativeDepositedKg +=
                             depositedMass;
@@ -904,7 +977,9 @@ HydraulicErosionResult SimulateHydraulicErosion(
                 }
 
                 sedimentAfterExchange[index] =
-                    state.suspendedSedimentKg;
+                    result.sedimentExchange->
+                        At(x, y).
+                        waterborne;
             }
         }
 
@@ -913,7 +988,7 @@ HydraulicErosionResult SimulateHydraulicErosion(
         std::fill(
             sedimentNext.begin(),
             sedimentNext.end(),
-            0.0);
+            SedimentMass{});
 
         for (u32 y = 0; y < resolution; ++y)
         {
@@ -931,10 +1006,10 @@ HydraulicErosionResult SimulateHydraulicErosion(
                 const f64 totalFlux =
                     flux.Sum();
 
-                const f64 sourceSediment =
+                const SedimentMass sourceSediment =
                     sedimentAfterExchange[index];
 
-                if (sourceSediment <= 0.0 ||
+                if (sourceSediment.Empty() ||
                     totalFlux <= 0.0)
                 {
                     sedimentNext[index] +=
@@ -956,9 +1031,10 @@ HydraulicErosionResult SimulateHydraulicErosion(
                         0.0,
                         1.0);
 
-                const f64 transportedMass =
-                    sourceSediment *
-                    transportedFraction;
+                const SedimentMass transportedMass =
+                    ScaleSediment(
+                        sourceSediment,
+                        transportedFraction);
 
                 sedimentNext[index] +=
                     sourceSediment -
@@ -985,10 +1061,11 @@ HydraulicErosionResult SimulateHydraulicErosion(
                             return;
                         }
 
-                        const f64 mass =
-                            transportedMass *
-                            directionFlux /
-                            totalFlux;
+                        const SedimentMass mass =
+                            ScaleSediment(
+                                transportedMass,
+                                directionFlux /
+                                    totalFlux);
 
                         sedimentNext[Index(
                             resolution,
@@ -1019,13 +1096,34 @@ HydraulicErosionResult SimulateHydraulicErosion(
             }
         }
 
-        for (std::size_t index = 0;
-             index < cellCount;
-             ++index)
+        for (u32 y = 0U;
+             y < resolution;
+             ++y)
         {
-            result.cells[index].
-                suspendedSedimentKg =
-                    sedimentNext[index];
+            for (u32 x = 0U;
+                 x < resolution;
+                 ++x)
+            {
+                const std::size_t index =
+                    Index(
+                        resolution,
+                        x,
+                        y);
+
+                result.sedimentExchange->
+                    At(x, y).
+                    waterborne =
+                        sedimentNext[index];
+
+                result.cells[index].
+                    suspendedSediment =
+                        sedimentNext[index];
+
+                result.cells[index].
+                    suspendedSedimentKg =
+                        sedimentNext[index].
+                            TotalKg();
+            }
         }
 
         // 6. Infiltration/moisture then evaporation.
@@ -1116,7 +1214,8 @@ HydraulicErosionResult SimulateHydraulicErosion(
             state.cumulativeDepositedKg;
 
         finalSuspended +=
-            state.suspendedSedimentKg;
+            state.suspendedSediment.
+                TotalKg();
     }
 
     const f64 error =
