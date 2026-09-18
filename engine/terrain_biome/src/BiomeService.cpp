@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 namespace orbit::terrain_biome
 {
@@ -361,7 +362,6 @@ BiomeService::Resolve(
                     inverse);
         }
 
-        acceptedTotal = 1.0;
     }
 
     std::vector<ResolvedBiomeWeight> result;
