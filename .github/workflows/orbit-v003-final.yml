@@ -100,6 +100,7 @@ jobs:
           OrbitViewportTargetRegistryTests
           OrbitViewportTargetRpcTests
           OrbitStudioViewportCameraTests
+          OrbitViewRayTests
           OrbitExplorerInspectorTests
           OrbitPathGeometryTests
           OrbitPathSourceTests
@@ -143,6 +144,7 @@ jobs:
             "build-v003-final/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe",
             "build-v003-final/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe",
             "build-v003-final/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
+            "build-v003-final/engine/render_view/Release/OrbitViewRayTests.exe",
             "build-v003-final/tests/Release/OrbitExplorerInspectorTests.exe",
             "build-v003-final/engine/path_geometry/Release/OrbitPathGeometryTests.exe",
             "build-v003-final/engine/path_geometry/Release/OrbitPathSourceTests.exe",
