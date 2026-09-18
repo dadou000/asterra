@@ -1,4 +1,5 @@
 add_library(OrbitTerrainRender STATIC
+    src/PhysicalSurface.cpp
     src/TerrainPreviewRenderer.cpp
     src/UniformPlanetRenderer.cpp
 )
@@ -17,6 +18,7 @@ target_link_libraries(OrbitTerrainRender
         Orbit::Shader
         Orbit::Terrain
         Orbit::TerrainGpu
+        Orbit::TerrainMaterialColumn
         Orbit::TerrainRegion
         Orbit::TerrainStream
         Orbit::TerrainView
