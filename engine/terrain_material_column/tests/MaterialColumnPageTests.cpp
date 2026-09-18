@@ -125,6 +125,63 @@ void TestTopDownErosionOrder()
         "Bedrock excavation did not lower the physical substrate.");
 }
 
+void TestTectonicBedrockDisplacement()
+{
+    auto geology = MakeGeology();
+
+    MaterialColumnPage page(1, 2.0);
+    page.SetCell(0, 0, BaseCell());
+
+    const f64 looseBefore =
+        page.At(0, 0).LooseDepthMeters();
+
+    page.DisplaceBedrock(
+        0,
+        0,
+        12.5);
+
+    RequireNear(
+        page.At(0, 0).bedrockHeightMeters,
+        112.5,
+        1.0e-5,
+        "Tectonic uplift must move the bedrock surface.");
+
+    RequireNear(
+        page.At(0, 0).referenceBedrockHeightMeters,
+        112.5,
+        1.0e-5,
+        "Tectonic displacement must move the mass-accounting reference.");
+
+    RequireNear(
+        page.At(0, 0).LooseDepthMeters(),
+        looseBefore,
+        0.0,
+        "Tectonic displacement must preserve overlying loose material.");
+
+    RequireNear(
+        page.QueryMass(geology).excavatedBedrockKg,
+        0.0,
+        1.0e-9,
+        "Uplift must not be counted as negative/positive excavation.");
+
+    page.DisplaceBedrock(
+        0,
+        0,
+        -20.0);
+
+    RequireNear(
+        page.At(0, 0).bedrockHeightMeters,
+        92.5,
+        1.0e-5,
+        "Tectonic subsidence must move bedrock downward without erosion.");
+
+    RequireNear(
+        page.QueryMass(geology).excavatedBedrockKg,
+        0.0,
+        1.0e-9,
+        "Subsidence with reference rebasing must not count as excavation.");
+}
+
 void TestMassAccounting()
 {
     auto geology = MakeGeology();
@@ -372,6 +429,7 @@ void TestFixedSurfaceStack()
 int main()
 {
     TestTopDownErosionOrder();
+    TestTectonicBedrockDisplacement();
     TestMassAccounting();
     TestDepositionCoversExposedRock();
     TestImpactChannelsFeedMaterialColumn();
