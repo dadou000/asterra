@@ -150,6 +150,12 @@ struct BiomePlacementEvaluation
     f64 finalWeight{0.0};
 };
 
+// Stable arbitrary-user-field identity for authored/plugin-provided scalar
+// fields. The name is hashed deterministically; it is project/session
+// independent and contains no runtime/cache address.
+[[nodiscard]] BiomeUserFieldId BiomeUserFieldIdFromName(
+    std::string_view name) noexcept;
+
 struct BiomePlacementRules
 {
     // A non-base biome must reach this weight before it participates in the
