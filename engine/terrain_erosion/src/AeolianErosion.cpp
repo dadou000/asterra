@@ -430,6 +430,10 @@ AeolianErosionResult SimulateAeolianErosion(
                 cellCount)
     };
 
+    result.sedimentExchange.emplace(
+        resolution,
+        result.material.SpacingMeters());
+
     std::vector<WindStep> windStep(
         cellCount);
 
@@ -449,10 +453,6 @@ AeolianErosionResult SimulateAeolianErosion(
         0.0);
 
     std::vector<f64> nextAirborneFines(
-        cellCount,
-        0.0);
-
-    std::vector<f64> reptationIncomingSandKg(
         cellCount,
         0.0);
 
@@ -518,15 +518,27 @@ AeolianErosionResult SimulateAeolianErosion(
                         suppression,
                         config);
 
-                result.cells[index].
-                    exposure =
-                        static_cast<f32>(
-                            exposure);
+                auto& state =
+                    result.cells[index];
 
-                result.cells[index].
-                    capacityKgPerSquareMeter =
-                        static_cast<f32>(
-                            capacity);
+                const auto& airborne =
+                    result.sedimentExchange->
+                        At(x, y).
+                        airborne;
+
+                state.airborneSandKg =
+                    airborne.sandKg;
+
+                state.airborneFinesKg =
+                    airborne.finesKg;
+
+                state.exposure =
+                    static_cast<f32>(
+                        exposure);
+
+                state.capacityKgPerSquareMeter =
+                    static_cast<f32>(
+                        capacity);
             }
         }
 
@@ -534,11 +546,6 @@ AeolianErosionResult SimulateAeolianErosion(
             exchange.begin(),
             exchange.end(),
             LocalExchange{});
-
-        std::fill(
-            reptationIncomingSandKg.begin(),
-            reptationIncomingSandKg.end(),
-            0.0);
 
         // 2. Capacity-controlled pickup/deposition. No physical mutation yet.
         for (u32 y = 0U;
@@ -837,76 +844,47 @@ AeolianErosionResult SimulateAeolianErosion(
                 const LocalExchange& proposal =
                     exchange[index];
 
+                auto& sharedAirborne =
+                    result.sedimentExchange->
+                        At(x, y).
+                        airborne;
+
                 f64 sand =
-                    state.airborneSandKg;
+                    sharedAirborne.sandKg;
 
                 f64 fines =
-                    state.airborneFinesKg;
+                    sharedAirborne.finesKg;
 
-                if (proposal.depositSandKg >
-                    0.0)
+                const f64 depositionBudget =
+                    proposal.depositSandKg +
+                    proposal.depositFinesKg;
+
+                if (depositionBudget > 0.0)
                 {
-                    const f64 depth =
-                        proposal.
-                            depositSandKg /
-                        std::max(
-                            area *
-                                result.material.
-                                    Densities().
-                                    sandKgPerCubicMeter,
-                            1.0e-12);
+                    const auto deposited =
+                        result.sedimentExchange->
+                            DepositToColumn(
+                                result.material,
+                                x,
+                                y,
+                                SedimentTransportMedium::Airborne,
+                                depositionBudget);
 
-                    const f64 deposited =
-                        result.material.Deposit(
-                            x,
-                            y,
-                            terrain_material_column::
-                                LooseMaterialKind::
-                                    Sand,
-                            depth);
+                    state.
+                        cumulativeDepositedKg +=
+                            deposited.DepositedKg();
 
                     sand =
-                        std::max(
-                            0.0,
-                            sand -
-                                deposited);
-
-                    state.
-                        cumulativeDepositedKg +=
-                            deposited;
-                }
-
-                if (proposal.depositFinesKg >
-                    0.0)
-                {
-                    const f64 depth =
-                        proposal.
-                            depositFinesKg /
-                        std::max(
-                            area *
-                                result.material.
-                                    Densities().
-                                    soilKgPerCubicMeter,
-                            1.0e-12);
-
-                    const f64 deposited =
-                        result.material.Deposit(
-                            x,
-                            y,
-                            terrain_material_column::
-                                LooseMaterialKind::
-                                    Soil,
-                            depth);
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            sandKg;
 
                     fines =
-                        std::max(
-                            0.0,
-                            fines -
-                                deposited);
-
-                    state.
-                        cumulativeDepositedKg +=
-                            deposited;
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            finesKg;
                 }
 
                 if (proposal.
@@ -921,51 +899,123 @@ AeolianErosionResult SimulateAeolianErosion(
                                 pickupSandDepthMeters,
                             geology);
 
+                    const auto* rock =
+                        geology.Find(
+                            result.material.
+                                At(x, y).
+                                bedrockMaterial);
+
+                    if (rock == nullptr)
+                    {
+                        throw std::logic_error(
+                            "Orbit M14 aeolian pickup lost M02 rock identity.");
+                    }
+
+                    const SedimentMass typed =
+                        ClassifyRemovedMaterial(
+                            removal,
+                            result.material,
+                            *rock,
+                            SedimentSourceProcess::AeolianAbrasion,
+                            result.sedimentExchange->
+                                ConversionRules());
+
+                    result.sedimentExchange->
+                        PublishPhysicalRemoval(
+                            x,
+                            y,
+                            SedimentTransportMedium::Airborne,
+                            typed);
+
                     const f64 reptated =
                         std::min(
                             proposal.
                                 reptationSandKg,
-                            removal.
-                                removedMassKg);
+                            typed.sandKg);
 
-                    sand +=
-                        removal.
-                            removedMassKg -
-                        reptated;
+                    if (reptated > 0.0)
+                    {
+                        const SedimentMass moved =
+                            result.sedimentExchange->
+                                Take(
+                                    x,
+                                    y,
+                                    SedimentTransportMedium::Airborne,
+                                    SedimentMass{
+                                        .sandKg = reptated});
+
+                        result.sedimentExchange->
+                            Add(
+                                x,
+                                y,
+                                SedimentTransportMedium::SurfaceMobile,
+                                moved);
+
+                        const WindStep step =
+                            windStep[index];
+
+                        const i32 tx =
+                            static_cast<i32>(x) +
+                            step.dx;
+
+                        const i32 ty =
+                            static_cast<i32>(y) +
+                            step.dy;
+
+                        if (Inside(
+                                tx,
+                                ty,
+                                resolution))
+                        {
+                            const SedimentMass surfaceMoved =
+                                result.sedimentExchange->
+                                    Take(
+                                        x,
+                                        y,
+                                        SedimentTransportMedium::SurfaceMobile,
+                                        moved);
+
+                            result.sedimentExchange->
+                                Add(
+                                    static_cast<u32>(tx),
+                                    static_cast<u32>(ty),
+                                    SedimentTransportMedium::SurfaceMobile,
+                                    surfaceMoved);
+                        }
+                        else
+                        {
+                            static_cast<void>(
+                                result.sedimentExchange->
+                                    ExportAcrossBoundary(
+                                        x,
+                                        y,
+                                        tx,
+                                        ty,
+                                        SedimentTransportMedium::SurfaceMobile,
+                                        moved));
+                        }
+
+                        state.
+                            cumulativeReptatedKg +=
+                                moved.TotalKg();
+                    }
 
                     state.
                         cumulativeSandPickedKg +=
                             removal.
                                 removedMassKg;
 
-                    state.
-                        cumulativeReptatedKg +=
-                            reptated;
+                    sand =
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            sandKg;
 
-                    const WindStep step =
-                        windStep[index];
-
-                    const i32 tx =
-                        static_cast<i32>(x) +
-                        step.dx;
-
-                    const i32 ty =
-                        static_cast<i32>(y) +
-                        step.dy;
-
-                    const std::size_t target =
-                        Inside(
-                            tx,
-                            ty,
-                            resolution)
-                            ? Index(
-                                  resolution,
-                                  static_cast<u32>(tx),
-                                  static_cast<u32>(ty))
-                            : index;
-
-                    reptationIncomingSandKg[target] +=
-                        reptated;
+                    fines =
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            finesKg;
                 }
 
                 if (proposal.
@@ -980,14 +1030,50 @@ AeolianErosionResult SimulateAeolianErosion(
                                 pickupSoilDepthMeters,
                             geology);
 
-                    fines +=
-                        removal.
-                            removedMassKg;
+                    const auto* rock =
+                        geology.Find(
+                            result.material.
+                                At(x, y).
+                                bedrockMaterial);
+
+                    if (rock == nullptr)
+                    {
+                        throw std::logic_error(
+                            "Orbit M14 aeolian fines pickup lost M02 rock identity.");
+                    }
+
+                    const SedimentMass typed =
+                        ClassifyRemovedMaterial(
+                            removal,
+                            result.material,
+                            *rock,
+                            SedimentSourceProcess::AeolianAbrasion,
+                            result.sedimentExchange->
+                                ConversionRules());
+
+                    result.sedimentExchange->
+                        PublishPhysicalRemoval(
+                            x,
+                            y,
+                            SedimentTransportMedium::Airborne,
+                            typed);
 
                     state.
                         cumulativeSoilPickedKg +=
                             removal.
                                 removedMassKg;
+
+                    sand =
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            sandKg;
+
+                    fines =
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            finesKg;
                 }
 
                 if (proposal.
@@ -1002,14 +1088,50 @@ AeolianErosionResult SimulateAeolianErosion(
                                 abrasionDepthMeters,
                             geology);
 
-                    sand +=
-                        removal.
-                            removedMassKg;
+                    const auto* rock =
+                        geology.Find(
+                            result.material.
+                                At(x, y).
+                                bedrockMaterial);
+
+                    if (rock == nullptr)
+                    {
+                        throw std::logic_error(
+                            "Orbit M14 aeolian abrasion lost M02 rock identity.");
+                    }
+
+                    const SedimentMass typed =
+                        ClassifyRemovedMaterial(
+                            removal,
+                            result.material,
+                            *rock,
+                            SedimentSourceProcess::AeolianAbrasion,
+                            result.sedimentExchange->
+                                ConversionRules());
+
+                    result.sedimentExchange->
+                        PublishPhysicalRemoval(
+                            x,
+                            y,
+                            SedimentTransportMedium::Airborne,
+                            typed);
 
                     state.
                         cumulativeBedrockAbradedKg +=
                             removal.
                                 removedMassKg;
+
+                    sand =
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            sandKg;
+
+                    fines =
+                        result.sedimentExchange->
+                            At(x, y).
+                            airborne.
+                            finesKg;
                 }
 
                 airborneSandAfterExchange[index] =
@@ -1028,37 +1150,19 @@ AeolianErosionResult SimulateAeolianErosion(
                  x < resolution;
                  ++x)
             {
-                const std::size_t index =
-                    Index(
-                        resolution,
-                        x,
-                        y);
-
-                const f64 reptated =
-                    reptationIncomingSandKg[index];
-
-                if (reptated <= 0.0)
+                if (!result.sedimentExchange->
+                        At(x, y).
+                        surfaceMobile.
+                        Empty())
                 {
-                    continue;
+                    static_cast<void>(
+                        result.sedimentExchange->
+                            DepositToColumn(
+                                result.material,
+                                x,
+                                y,
+                                SedimentTransportMedium::SurfaceMobile));
                 }
-
-                const f64 depth =
-                    reptated /
-                    std::max(
-                        area *
-                            result.material.
-                                Densities().
-                                sandKgPerCubicMeter,
-                        1.0e-12);
-
-                static_cast<void>(
-                    result.material.Deposit(
-                        x,
-                        y,
-                        terrain_material_column::
-                            LooseMaterialKind::
-                                Sand,
-                        depth));
             }
         }
 
@@ -1353,17 +1457,6 @@ AeolianErosionResult SimulateAeolianErosion(
                     static_cast<i32>(y) +
                     step.dy;
 
-                const std::size_t target =
-                    Inside(
-                        tx,
-                        ty,
-                        resolution)
-                        ? Index(
-                              resolution,
-                              static_cast<u32>(tx),
-                              static_cast<u32>(ty))
-                        : index;
-
                 const f64 outgoingSand =
                     airborneSandAfterExchange[index] *
                     transportedFraction;
@@ -1380,25 +1473,73 @@ AeolianErosionResult SimulateAeolianErosion(
                     airborneFinesAfterExchange[index] -
                     outgoingFines;
 
-                nextAirborneSand[target] +=
-                    outgoingSand;
+                if (Inside(
+                        tx,
+                        ty,
+                        resolution))
+                {
+                    const std::size_t target =
+                        Index(
+                            resolution,
+                            static_cast<u32>(tx),
+                            static_cast<u32>(ty));
 
-                nextAirborneFines[target] +=
-                    outgoingFines;
+                    nextAirborneSand[target] +=
+                        outgoingSand;
+
+                    nextAirborneFines[target] +=
+                        outgoingFines;
+                }
+                else
+                {
+                    static_cast<void>(
+                        result.sedimentExchange->
+                            ExportAcrossBoundary(
+                                x,
+                                y,
+                                tx,
+                                ty,
+                                SedimentTransportMedium::Airborne,
+                                SedimentMass{
+                                    .sandKg = outgoingSand,
+                                    .finesKg = outgoingFines}));
+                }
             }
         }
 
-        for (std::size_t index = 0U;
-             index < cellCount;
-             ++index)
+        for (u32 y = 0U;
+             y < resolution;
+             ++y)
         {
-            result.cells[index].
-                airborneSandKg =
+            for (u32 x = 0U;
+                 x < resolution;
+                 ++x)
+            {
+                const std::size_t index =
+                    Index(
+                        resolution,
+                        x,
+                        y);
+
+                auto& airborne =
+                    result.sedimentExchange->
+                        At(x, y).
+                        airborne;
+
+                airborne.sandKg =
                     nextAirborneSand[index];
 
-            result.cells[index].
-                airborneFinesKg =
+                airborne.finesKg =
                     nextAirborneFines[index];
+
+                result.cells[index].
+                    airborneSandKg =
+                        airborne.sandKg;
+
+                result.cells[index].
+                    airborneFinesKg =
+                        airborne.finesKg;
+            }
         }
     }
 
@@ -1406,15 +1547,16 @@ AeolianErosionResult SimulateAeolianErosion(
         result.material.QueryMass(
             geology);
 
-    f64 airborneMass = 0.0;
+    const f64 airborneMass =
+        result.sedimentExchange->
+            TotalMobileMass().
+            TotalKg();
 
-    for (const auto& state :
-         result.cells)
-    {
-        airborneMass +=
-            state.airborneSandKg +
-            state.airborneFinesKg;
-    }
+    const f64 boundaryLoss =
+        result.sedimentExchange->
+            Accounting().
+            exported.
+            TotalKg();
 
     const f64 abradedBedrock =
         std::max(
@@ -1428,7 +1570,8 @@ AeolianErosionResult SimulateAeolianErosion(
         initialMass.LooseMassKg() +
         abradedBedrock -
         finalMass.LooseMassKg() -
-        airborneMass;
+        airborneMass -
+        boundaryLoss;
 
     const f64 reference =
         std::max(
@@ -1445,7 +1588,8 @@ AeolianErosionResult SimulateAeolianErosion(
             abradedBedrock,
         .finalAirborneMassKg =
             airborneMass,
-        .boundaryLossKg = 0.0,
+        .boundaryLossKg =
+            boundaryLoss,
         .materialBalanceErrorKg =
             error,
         .materialBalanceRelativeError =
