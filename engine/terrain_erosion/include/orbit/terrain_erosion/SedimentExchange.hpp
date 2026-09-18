@@ -169,6 +169,14 @@ public:
         SedimentTransportMedium medium,
         const SedimentMass& mass);
 
+    // Publishes mass that has already been physically removed from M08 by a
+    // process that needs the detailed MaterialRemoval for its own diagnostics.
+    void PublishPhysicalRemoval(
+        u32 x,
+        u32 y,
+        SedimentTransportMedium medium,
+        const SedimentMass& mass);
+
     // Removes at most the requested amount, component by component.
     [[nodiscard]] SedimentMass Take(
         u32 x,
