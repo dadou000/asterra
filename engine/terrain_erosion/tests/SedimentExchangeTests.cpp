@@ -177,6 +177,14 @@ void TestCanonicalMaterialClassification()
             SedimentSourceProcess::
                 ThermalFracture);
 
+    const auto glacial =
+        ClassifyRemovedMaterial(
+            removal,
+            page,
+            *rock,
+            SedimentSourceProcess::
+                GlacialErosion);
+
     RequireNear(
         hydraulic.TotalKg(),
         removal.removedMassKg,
@@ -195,6 +203,12 @@ void TestCanonicalMaterialClassification()
         1.0e-7,
         "M14 thermal material classification changed mass.");
 
+    RequireNear(
+        glacial.TotalKg(),
+        removal.removedMassKg,
+        1.0e-7,
+        "M15 glacial material classification changed mass.");
+
     Require(
         hydraulic.finesKg >
             hydraulic.sandKg,
@@ -209,6 +223,13 @@ void TestCanonicalMaterialClassification()
         thermal.coarseDebrisKg >
             hydraulic.coarseDebrisKg,
         "M14 thermal fracture did not convert bedrock to coarse debris.");
+
+    Require(
+        glacial.coarseDebrisKg >
+            hydraulic.coarseDebrisKg &&
+        glacial.finesKg > 0.0 &&
+        glacial.sandKg > 0.0,
+        "M15 glacial erosion did not produce a mixed till/abrasion load.");
 }
 
 void TestHydraulicDepositBecomesWindTransportable()
