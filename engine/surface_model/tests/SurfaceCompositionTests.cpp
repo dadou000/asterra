@@ -211,6 +211,214 @@ int main()
             return 17;
         }
 
+        const auto forcedForestObject =
+            commands.CreateObject(
+                orbit::world_model::kBiomeAssetType,
+                "Authored Cold Forest",
+                terrainObject);
+
+        commands.SetProperty(
+            forcedForestObject,
+            orbit::world_model::kBiomePlacementMode,
+            orbit::i64{2});
+
+        commands.SetProperty(
+            forcedForestObject,
+            orbit::world_model::kBiomeMinimumResolvedWeight,
+            0.01);
+
+        const auto temperatureSelector =
+            commands.CreateObject(
+                orbit::world_model::kBiomeSelectorType,
+                "Cold climate selector",
+                forcedForestObject,
+                0);
+
+        commands.SetProperty(
+            temperatureSelector,
+            orbit::world_model::kBiomeSelectorField,
+            orbit::i64{0});
+
+        commands.SetProperty(
+            temperatureSelector,
+            orbit::world_model::kBiomeSelectorMinimum,
+            -20.0);
+
+        commands.SetProperty(
+            temperatureSelector,
+            orbit::world_model::kBiomeSelectorMaximum,
+            0.0);
+
+        commands.SetProperty(
+            temperatureSelector,
+            orbit::world_model::kBiomeSelectorUpperFalloff,
+            5.0);
+
+        const auto authoredMask =
+            commands.CreateObject(
+                orbit::world_model::kBiomeAuthoredMaskType,
+                "Force forest",
+                forcedForestObject,
+                10);
+
+        commands.SetProperty(
+            authoredMask,
+            orbit::world_model::kBiomeMaskOperation,
+            orbit::i64{2});
+
+        commands.SetProperty(
+            authoredMask,
+            orbit::world_model::kBiomeMaskGlobal,
+            true);
+
+        commands.SetProperty(
+            authoredMask,
+            orbit::world_model::kBiomeMaskValue,
+            1.0);
+
+        commands.SetProperty(
+            authoredMask,
+            orbit::world_model::kBiomeMaskOpacity,
+            1.0);
+
+        if (!universe.RebuildIfChanged(objects))
+        {
+            return 18;
+        }
+
+        static_cast<void>(
+            surfaces.Rebuild(
+                objects,
+                universe));
+
+        const auto* forcedService =
+            surfaces.BiomesForBody(
+                *universe.BodyForObject(
+                    bodyObject));
+
+        if (forcedService == nullptr ||
+            forcedService->Definitions().size() != 2U)
+        {
+            return 19;
+        }
+
+        const auto forcedDefinitions =
+            forcedService->Definitions();
+
+        const auto forcedForest =
+            forcedDefinitions.size() > 1U
+                ? forcedDefinitions[1]
+                : orbit::terrain_biome::BiomeDefinition{};
+
+        if (forcedForest.placement.mode !=
+                orbit::terrain_biome::
+                    BiomePlacementMode::
+                        AutomaticAndAuthored ||
+            forcedForest.placement.selectors.size() != 1U ||
+            forcedForest.placement.authoredMasks.size() != 1U)
+        {
+            return 20;
+        }
+
+        const auto persistedMaskId =
+            forcedForest.
+                placement.
+                authoredMasks.
+                front().
+                id;
+
+        orbit::terrain_biome::BiomePlacementContext hotClimate{};
+        hotClimate.temperatureC = 45.0;
+
+        const auto forcedEvaluation =
+            forcedService->EvaluatePlacement(
+                forcedForest,
+                hotClimate);
+
+        if (forcedEvaluation.automaticWeight != 0.0 ||
+            forcedEvaluation.finalWeight != 1.0)
+        {
+            return 21;
+        }
+
+        // Regenerate terrain and independently edit the procedural climate
+        // selector. The authored semantic child must survive with the same
+        // stable mask identity and continue to force the biome.
+        commands.SetProperty(
+            terrainObject,
+            orbit::world_model::kTerrainMacroAmplitudeMeters,
+            725.0);
+
+        commands.SetProperty(
+            temperatureSelector,
+            orbit::world_model::kBiomeSelectorMinimum,
+            30.0);
+
+        commands.SetProperty(
+            temperatureSelector,
+            orbit::world_model::kBiomeSelectorMaximum,
+            50.0);
+
+        if (!universe.RebuildIfChanged(objects))
+        {
+            return 22;
+        }
+
+        static_cast<void>(
+            surfaces.Rebuild(
+                objects,
+                universe));
+
+        const auto* regeneratedService =
+            surfaces.BiomesForBody(
+                *universe.BodyForObject(
+                    bodyObject));
+
+        if (regeneratedService == nullptr ||
+            regeneratedService->Definitions().size() != 2U)
+        {
+            return 23;
+        }
+
+        const auto regeneratedForest =
+            regeneratedService->
+                Definitions()[1];
+
+        if (regeneratedForest.
+                placement.
+                authoredMasks.
+                size() != 1U ||
+            regeneratedForest.
+                placement.
+                authoredMasks.
+                front().
+                id !=
+                persistedMaskId ||
+            regeneratedForest.
+                placement.
+                selectors.
+                size() != 1U ||
+            regeneratedForest.
+                placement.
+                selectors.
+                front().
+                minimum != 30.0)
+        {
+            return 24;
+        }
+
+        const auto regeneratedEvaluation =
+            regeneratedService->
+                EvaluatePlacement(
+                    regeneratedForest,
+                    hotClimate);
+
+        if (regeneratedEvaluation.automaticWeight != 1.0 ||
+            regeneratedEvaluation.finalWeight != 1.0)
+        {
+            return 25;
+        }
+
         commands.SetProperty(
             terrainObject,
             orbit::world_model::kTerrainMacroAmplitudeMeters,
