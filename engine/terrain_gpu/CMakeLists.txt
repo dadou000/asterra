@@ -1,5 +1,6 @@
 add_library(OrbitTerrainGpu STATIC
     src/GpuDepressionFill.cpp
+    src/GpuDrainagePage.cpp
     src/GpuElevationQuery.cpp
     src/GpuErosion.cpp
     src/GpuFieldGenerator.cpp
@@ -26,6 +27,7 @@ target_link_libraries(OrbitTerrainGpu
         Orbit::Terrain
         Orbit::TerrainStream
         Orbit::TerrainMaterialColumn
+        Orbit::TerrainHydrology
         Orbit::World
 )
 
