@@ -56,6 +56,11 @@ struct AeolianErosionConfig
     f64 maximumSoilPickupDepthPerStepMeters{0.02};
     f64 maximumDepositionDepthPerStepMeters{0.08};
 
+    // Depositional dunes relax by a dedicated sand-only avalanche stage.
+    f64 sandAvalancheReposeDegrees{33.0};
+    f64 avalancheRelaxation{0.50};
+    f64 maximumAvalancheDepthPerStepMeters{0.08};
+
     // Moisture suppresses pickup/capacity without altering wind direction.
     f64 moistureSuppressionExponent{2.0};
 
@@ -78,6 +83,7 @@ struct AeolianCellState
     f64 cumulativeSandPickedKg{0.0};
     f64 cumulativeSoilPickedKg{0.0};
     f64 cumulativeReptatedKg{0.0};
+    f64 cumulativeAvalanchedKg{0.0};
     f64 cumulativeDepositedKg{0.0};
     f64 cumulativeBedrockAbradedKg{0.0};
 };
