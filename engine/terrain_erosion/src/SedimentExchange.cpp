@@ -498,9 +498,10 @@ SedimentExchangePage::PickupFromColumn(
     const SedimentSourceProcess sourceProcess,
     const SedimentTransportMedium medium)
 {
-    NonNegativeFinite(
-        depthMeters,
-        "Orbit M14 pickup depth must be finite and nonnegative.");
+    static_cast<void>(
+        NonNegativeFinite(
+            depthMeters,
+            "Orbit M14 pickup depth must be finite and nonnegative."));
 
     if (material.Resolution() !=
             resolution_ ||
