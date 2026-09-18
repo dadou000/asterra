@@ -81,8 +81,13 @@ struct StreamPowerCellResult
     f32 lastSlope{0.0F};
     f32 lastErodibility{0.0F};
 
+    f32 finalDrainageElevationMeters{0.0F};
     f64 finalDrainageAreaSquareMeters{0.0};
     f64 finalDischargeCubicMetersPerSecond{0.0};
+
+    i8 finalFlowDx{0};
+    i8 finalFlowDy{0};
+    bool finalFlowExitsPage{false};
 };
 
 struct StreamPowerErosionResult
