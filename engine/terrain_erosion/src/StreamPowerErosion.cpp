@@ -975,6 +975,10 @@ StreamPowerErosionResult SolveStreamPowerErosion(
                 static_cast<f32>(
                     lastErodibility[index]);
 
+            output.finalDrainageElevationMeters =
+                hydro.
+                    drainageElevationMeters;
+
             output.finalDrainageAreaSquareMeters =
                 hydro.
                     drainageAreaSquareMeters;
@@ -982,6 +986,15 @@ StreamPowerErosionResult SolveStreamPowerErosion(
             output.finalDischargeCubicMetersPerSecond =
                 hydro.
                     dischargeCubicMetersPerSecond;
+
+            output.finalFlowDx =
+                hydro.flow.dx;
+
+            output.finalFlowDy =
+                hydro.flow.dy;
+
+            output.finalFlowExitsPage =
+                hydro.flow.exitsPage;
         }
     }
 
