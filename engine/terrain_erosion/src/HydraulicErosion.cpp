@@ -244,7 +244,7 @@ struct Flux4
             std::max(
                 maximumSlope,
                 (source - downstream) /
-                    result.material.SpacingMeters());
+                    material.SpacingMeters());
     }
 
     return std::max(maximumSlope, 0.0);
