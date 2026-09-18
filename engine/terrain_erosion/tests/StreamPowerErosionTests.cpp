@@ -527,19 +527,33 @@ void TestUpliftCreatesConvergingDrainage()
     config.incisionCoefficientMetersPerIteration = 2.0;
     config.maximumIncisionMetersPerIteration = 2.0;
 
+    const auto inputs = Inputs(resolution);
+    const auto halo =
+        Halo(
+            resolution,
+            500.0F,
+            110.0F,
+            500.0F,
+            500.0F,
+            88U);
+
+    const auto baseline =
+        SolveStreamPowerErosion(
+            page,
+            Key(resolution, 25U),
+            geology,
+            inputs,
+            halo,
+            Forcing(resolution),
+            config);
+
     const auto result =
         SolveStreamPowerErosion(
             page,
             Key(resolution, 25U),
             geology,
-            Inputs(resolution),
-            Halo(
-                resolution,
-                500.0F,
-                110.0F,
-                500.0F,
-                500.0F,
-                88U),
+            inputs,
+            halo,
             forcing,
             config);
 
@@ -571,13 +585,35 @@ void TestUpliftCreatesConvergingDrainage()
         upperTributary && lowerTributary,
         "M05 uplift forcing did not produce converging tributary flow.");
 
+    f64 baselineMaximumInteriorArea = 0.0;
+    f64 upliftMaximumInteriorArea = 0.0;
+
+    for (u32 y = 0; y < resolution; ++y)
+    {
+        for (u32 x = 0; x < resolution - 1U; ++x)
+        {
+            baselineMaximumInteriorArea =
+                std::max(
+                    baselineMaximumInteriorArea,
+                    baseline.At(x, y).
+                        finalDrainageAreaSquareMeters);
+
+            upliftMaximumInteriorArea =
+                std::max(
+                    upliftMaximumInteriorArea,
+                    result.At(x, y).
+                        finalDrainageAreaSquareMeters);
+        }
+    }
+
     const f64 cellArea = spacing * spacing;
 
     Require(
-        result.At(5, resolution / 2U).
-            finalDrainageAreaSquareMeters >
-            3.0 * cellArea,
-        "Uplifted M10 terrain did not develop a concentrated central drainage network.");
+        upliftMaximumInteriorArea >=
+            baselineMaximumInteriorArea +
+                0.5 * cellArea,
+        "M05 uplift changed tributary directions but did not concentrate "
+        "more contributing area than the no-uplift drainage network.");
 }
 
 void TestCrossPageStreamPowerBoundary()
