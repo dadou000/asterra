@@ -2,6 +2,7 @@
 
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/surface/SurfaceRegistry.hpp>
+#include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
 
@@ -14,6 +15,8 @@ namespace orbit::surface_model
 struct SurfaceCompositionStats
 {
     u32 terrainSurfaces{0};
+    u32 biomeServices{0};
+    u32 biomeDefinitions{0};
     u64 sourceRevision{0};
 };
 
@@ -44,6 +47,11 @@ public:
     [[nodiscard]] std::optional<scene::ObjectId>
     TerrainObjectForBody(universe::BodyId body) const noexcept;
 
+    [[nodiscard]] terrain_biome::BiomeService* BiomesForBody(
+        universe::BodyId body) noexcept;
+    [[nodiscard]] const terrain_biome::BiomeService* BiomesForBody(
+        universe::BodyId body) const noexcept;
+
     [[nodiscard]] u64 SourceRevision() const noexcept;
 
 private:
@@ -52,6 +60,10 @@ private:
         bodyByTerrainObject_;
     std::unordered_map<universe::BodyId, scene::ObjectId>
         terrainObjectByBody_;
+    std::unordered_map<
+        universe::BodyId,
+        std::unique_ptr<terrain_biome::BiomeService>>
+        biomesByBody_;
     u64 sourceRevision_{~u64{0}};
 };
 } // namespace orbit::surface_model
