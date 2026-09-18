@@ -5,6 +5,7 @@ on:
     branches: [orbit]
     paths:
       - "engine/terrain/**"
+      - "engine/world/**"
       - "engine/terrain_cache/**"
       - "engine/terrain_hydrology/**"
       - "engine/terrain_gpu/**"
@@ -17,6 +18,7 @@ on:
       - "engine/terrain_impacts/**"
       - "engine/terrain_material_column/**"
       - "tests/contracts/**"
+      - "tests/PlanetTileNeighborhoodTests.cpp"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
       - "engine/CMakeLists.txt"
@@ -25,6 +27,7 @@ on:
     branches: [orbit]
     paths:
       - "engine/terrain/**"
+      - "engine/world/**"
       - "engine/terrain_cache/**"
       - "engine/terrain_hydrology/**"
       - "engine/terrain_gpu/**"
@@ -37,6 +40,7 @@ on:
       - "engine/terrain_impacts/**"
       - "engine/terrain_material_column/**"
       - "tests/contracts/**"
+      - "tests/PlanetTileNeighborhoodTests.cpp"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
       - "engine/CMakeLists.txt"
@@ -79,6 +83,7 @@ jobs:
           OrbitTerrainContractTests
           OrbitTerrainFaceSeamTests
           OrbitTerrainM01IntegrationTests
+          OrbitPlanetTileNeighborhoodTests
           OrbitTerrainGeologyTests
           OrbitTerrainStratigraphyTests
           OrbitSurfaceAuthoringTests
@@ -93,4 +98,4 @@ jobs:
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainDrainagePage|TerrainGpuDrainageShaders)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainDrainagePage|TerrainGpuDrainageShaders)"
