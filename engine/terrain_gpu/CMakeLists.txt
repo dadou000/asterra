@@ -1,5 +1,6 @@
 add_library(OrbitTerrainGpu STATIC
     src/GpuAeolianErosionPage.cpp
+    src/GpuCoastalProcessPage.cpp
     src/GpuDepressionFill.cpp
     src/GpuDrainagePage.cpp
     src/GpuElevationQuery.cpp
@@ -33,6 +34,7 @@ target_link_libraries(OrbitTerrainGpu
         Orbit::TerrainGeology
         Orbit::TerrainStream
         Orbit::TerrainMaterialColumn
+        Orbit::TerrainWater
         Orbit::TerrainHydrology
         Orbit::World
 )
@@ -117,5 +119,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainGpuAeolianShaders
         COMMAND OrbitTerrainGpuAeolianShaderTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainGpuCoastalShaderTests
+        tests/M17CoastalShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainGpuCoastalShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(OrbitTerrainGpuCoastalShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainGpuCoastalShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainGpuCoastalShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainGpuCoastalShaders
+        COMMAND OrbitTerrainGpuCoastalShaderTests
     )
 endif()
