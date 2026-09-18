@@ -461,6 +461,23 @@ void SedimentExchangePage::Add(
             mass;
 }
 
+void SedimentExchangePage::PublishPhysicalRemoval(
+    const u32 x,
+    const u32 y,
+    const SedimentTransportMedium medium,
+    const SedimentMass& mass)
+{
+    Add(
+        x,
+        y,
+        medium,
+        mass);
+
+    accounting_.
+        physicalToMobile +=
+            mass;
+}
+
 SedimentMass SedimentExchangePage::Take(
     const u32 x,
     const u32 y,
