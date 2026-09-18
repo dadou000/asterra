@@ -135,6 +135,51 @@ inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .low = 0x4d4158454c455641ULL
 };
 
+inline constexpr schema::PropertyId kBiomeMinimumResolvedWeight{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45544852455301ULL
+};
+
+inline constexpr schema::PropertyId kBiomeMaterialInfluence{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454d4154494e01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterDensityMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534341545401ULL
+};
+
+inline constexpr schema::PropertyId kBiomeHydraulicErosionMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45485944524f01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeThermalTransportMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45544845524d01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeAeolianTransportMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4541454f4c4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeGlacialErosionMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45474c41434901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeCoastalErosionMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45434f41535401ULL
+};
+
+inline constexpr schema::PropertyId kBiomeChemicalWeatheringMultiplier{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d454348454d5701ULL
+};
+
 inline constexpr schema::PropertyId kDecalAsset{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c415353455401ULL
