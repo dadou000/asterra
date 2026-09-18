@@ -74,7 +74,7 @@ template <typename Value>
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeMinimumResolvedWeight,
+                        world_model::world_model::kBiomeMinimumResolvedWeight,
                         0.05)),
             .enabled = true
         },
@@ -84,7 +84,7 @@ template <typename Value>
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeMaterialInfluence,
+                        world_model::world_model::kBiomeMaterialInfluence,
                         1.0))
         },
         .scatter = {
@@ -93,7 +93,7 @@ template <typename Value>
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeScatterDensityMultiplier,
+                        world_model::world_model::kBiomeScatterDensityMultiplier,
                         1.0))
         },
         .processModifiers = {
@@ -102,42 +102,42 @@ template <typename Value>
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeHydraulicErosionMultiplier,
+                        world_model::world_model::kBiomeHydraulicErosionMultiplier,
                         1.0)),
             .thermalTransport =
                 static_cast<f32>(
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeThermalTransportMultiplier,
+                        world_model::world_model::kBiomeThermalTransportMultiplier,
                         1.0)),
             .aeolianTransport =
                 static_cast<f32>(
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeAeolianTransportMultiplier,
+                        world_model::world_model::kBiomeAeolianTransportMultiplier,
                         1.0)),
             .glacialErosion =
                 static_cast<f32>(
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeGlacialErosionMultiplier,
+                        world_model::world_model::kBiomeGlacialErosionMultiplier,
                         1.0)),
             .coastalErosion =
                 static_cast<f32>(
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeCoastalErosionMultiplier,
+                        world_model::world_model::kBiomeCoastalErosionMultiplier,
                         1.0)),
             .chemicalWeathering =
                 static_cast<f32>(
                     PropertyOr<f64>(
                         objects,
                         object.id,
-                        world_model::kBiomeChemicalWeatheringMultiplier,
+                        world_model::world_model::kBiomeChemicalWeatheringMultiplier,
                         1.0))
         }
     };
@@ -327,7 +327,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
 
         for (const auto& child : objects.Children(object.id))
         {
-            if (child.type != world_model::kBiomeAssetType)
+            if (child.type != world_model::world_model::kBiomeAssetType)
             {
                 continue;
             }
