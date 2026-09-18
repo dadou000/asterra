@@ -640,6 +640,48 @@ bool BiomePlacementContext::IsValid() const noexcept
     return true;
 }
 
+BiomeUserFieldId BiomeUserFieldIdFromName(
+    const std::string_view name) noexcept
+{
+    // Two deterministic 64-bit FNV-1a streams with distinct offsets. This is
+    // an opaque stable field key, not cryptographic identity.
+    u64 high =
+        1469598103934665603ULL;
+
+    u64 low =
+        1099511628211ULL ^
+        0x4d32305553455246ULL;
+
+    for (const unsigned char value :
+         name)
+    {
+        high ^=
+            static_cast<u64>(value);
+
+        high *=
+            1099511628211ULL;
+
+        low ^=
+            static_cast<u64>(value) +
+            0x9eU;
+
+        low *=
+            1469598103934665603ULL;
+    }
+
+    BiomeUserFieldId id{
+        .high = high,
+        .low = low
+    };
+
+    if (!id.IsValid())
+    {
+        id.low = 1U;
+    }
+
+    return id;
+}
+
 bool BiomePlacementRules::IsValid() const noexcept
 {
     if (!FiniteUnit(
