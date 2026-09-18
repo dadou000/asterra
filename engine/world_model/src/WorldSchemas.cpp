@@ -213,7 +213,85 @@ void RegisterSchemas(
     schemas.RegisterType({
         .id = kBiomeAssetType,
         .displayName = "Biome Asset",
-        .category = "World / Surface / Biomes"
+        .category = "World / Surface / Biomes",
+        .properties = {
+            schema::PropertySchema{
+                .id = kBiomeMinimumResolvedWeight,
+                .name = "Minimum Resolved Weight",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.05,
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 1.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaterialInfluence,
+                .name = "Surface Material Influence",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterDensityMultiplier,
+                .name = "Scatter Density Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeHydraulicErosionMultiplier,
+                .name = "Hydraulic Erosion Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeThermalTransportMultiplier,
+                .name = "Thermal Transport Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeAeolianTransportMultiplier,
+                .name = "Aeolian Transport Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeGlacialErosionMultiplier,
+                .name = "Glacial Erosion Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeCoastalErosionMultiplier,
+                .name = "Coastal Erosion Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeChemicalWeatheringMultiplier,
+                .name = "Chemical Weathering Multiplier",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0},
+                .advanced = true
+            }
+        }
     });
 
     schemas.RegisterType({
