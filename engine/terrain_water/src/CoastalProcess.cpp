@@ -919,6 +919,9 @@ void RefreshDerivedState(
                         0.0;
             }
 
+            state.bedElevationMeters =
+                bed;
+
             state.wet =
                 state.
                     waterDepthMeters >=
@@ -1812,6 +1815,9 @@ void SynchronizeWaterAfterBedChange(
                     oldSurface -
                         newBed,
                     0.0);
+
+            state.bedElevationMeters =
+                newBed;
         }
     }
 
@@ -2026,14 +2032,20 @@ CoastalWaterPage InitializeCoastalShallowWater(
                     x,
                     y);
 
-            result.
-                At(x, y).
-                waterDepthMeters =
-                    std::max(
-                        config.
-                            seaLevelMeters -
-                            bed,
-                        0.0);
+            auto& state =
+                result.At(
+                    x,
+                    y);
+
+            state.bedElevationMeters =
+                bed;
+
+            state.waterDepthMeters =
+                std::max(
+                    config.
+                        seaLevelMeters -
+                        bed,
+                    0.0);
         }
     }
 
@@ -2092,6 +2104,44 @@ void AdvanceCoastalShallowWater(
          step < stepCount;
          ++step)
     {
+        // M08 may have changed since the previous water step. Preserve each
+        // cell's free-surface elevation while reconciling depth to the new bed.
+        for (u32 y = 0U;
+             y < resolution;
+             ++y)
+        {
+            for (u32 x = 0U;
+                 x < resolution;
+                 ++x)
+            {
+                auto& state =
+                    water.At(
+                        x,
+                        y);
+
+                const f64 newBed =
+                    SurfaceHeight(
+                        material,
+                        x,
+                        y);
+
+                const f64 previousSurface =
+                    state.
+                        bedElevationMeters +
+                    state.
+                        waterDepthMeters;
+
+                state.waterDepthMeters =
+                    std::max(
+                        previousSurface -
+                            newBed,
+                        0.0);
+
+                state.bedElevationMeters =
+                    newBed;
+            }
+        }
+
         RefreshDerivedState(
             water,
             material,
