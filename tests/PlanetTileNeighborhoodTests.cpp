@@ -9,6 +9,8 @@ namespace
 using orbit::u32;
 using orbit::world::CubeFace;
 using orbit::world::PlanetTileId;
+using orbit::world::TileEdge;
+using orbit::world::TileGridOffset;
 
 [[nodiscard]] bool ContainsFace(
     const std::vector<PlanetTileId>& tiles,
@@ -83,6 +85,41 @@ using orbit::world::PlanetTileId;
 
             return false;
         }();
+}
+[[nodiscard]] TileGridOffset ExitNormal(
+    const TileEdge edge)
+{
+    switch (edge)
+    {
+    case TileEdge::North:
+        return {0, -1};
+    case TileEdge::East:
+        return {1, 0};
+    case TileEdge::South:
+        return {0, 1};
+    case TileEdge::West:
+        return {-1, 0};
+    }
+
+    return {};
+}
+
+[[nodiscard]] TileGridOffset InwardNormal(
+    const TileEdge edge)
+{
+    switch (edge)
+    {
+    case TileEdge::North:
+        return {0, 1};
+    case TileEdge::East:
+        return {-1, 0};
+    case TileEdge::South:
+        return {0, -1};
+    case TileEdge::West:
+        return {1, 0};
+    }
+
+    return {};
 }
 } // namespace
 
@@ -269,6 +306,109 @@ int main()
     {
         std::cerr << "Zero-radius neighborhood failed.\n";
         return 1;
+    }
+
+    // M09 boundary exchange needs more than a neighbor ID: the receiving
+    // cube-face edge can rotate and its sample order can reverse. Verify the
+    // geometric edge mapping is reciprocal across every cube face.
+    constexpr std::array<TileEdge, 4> edges{
+        TileEdge::North,
+        TileEdge::East,
+        TileEdge::South,
+        TileEdge::West
+    };
+
+    for (const CubeFace face : faces)
+    {
+        for (const TileEdge edge : edges)
+        {
+            PlanetTileId edgeTile{
+                face,
+                level,
+                middle,
+                middle
+            };
+
+            switch (edge)
+            {
+            case TileEdge::North:
+                edgeTile.y = 0U;
+                break;
+            case TileEdge::East:
+                edgeTile.x = last;
+                break;
+            case TileEdge::South:
+                edgeTile.y = last;
+                break;
+            case TileEdge::West:
+                edgeTile.x = 0U;
+                break;
+            }
+
+            const auto mapping =
+                orbit::world::NeighborAcrossTileEdge(
+                    edgeTile,
+                    edge);
+
+            if (mapping.tile.face == edgeTile.face)
+            {
+                std::cerr
+                    << "Cube-face edge mapping did not cross a face.\n";
+                return 1;
+            }
+
+            const auto reverse =
+                orbit::world::NeighborAcrossTileEdge(
+                    mapping.tile,
+                    mapping.edge);
+
+            if (reverse.tile != edgeTile)
+            {
+                std::cerr
+                    << "Cube-face edge mapping was not reciprocal.\n";
+                return 1;
+            }
+
+            constexpr u32 sampleResolution = 17U;
+
+            for (const u32 sample : {0U, 3U, 8U, 16U})
+            {
+                const u32 onNeighbor =
+                    orbit::world::RemapTileEdgeSampleIndex(
+                        mapping,
+                        sample,
+                        sampleResolution);
+
+                const u32 backOnSource =
+                    orbit::world::RemapTileEdgeSampleIndex(
+                        reverse,
+                        onNeighbor,
+                        sampleResolution);
+
+                if (backOnSource != sample)
+                {
+                    std::cerr
+                        << "Cube-face edge sample orientation did not "
+                           "round-trip.\n";
+                    return 1;
+                }
+            }
+
+            const TileGridOffset transformed =
+                orbit::world::TransformFlowAcrossTileEdge(
+                    edge,
+                    mapping,
+                    ExitNormal(edge));
+
+            if (transformed !=
+                InwardNormal(mapping.edge))
+            {
+                std::cerr
+                    << "Cube-face D8 normal did not rotate into the "
+                       "receiving page.\n";
+                return 1;
+            }
+        }
     }
 
     return 0;
