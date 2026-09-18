@@ -33,3 +33,23 @@ target_link_libraries(OrbitTerrainGpu
 
 target_compile_features(OrbitTerrainGpu PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitTerrainGpu)
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainGpuDrainageShaderTests
+        tests/M09DrainageShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainGpuDrainageShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(OrbitTerrainGpuDrainageShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainGpuDrainageShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainGpuDrainageShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainGpuDrainageShaders
+        COMMAND OrbitTerrainGpuDrainageShaderTests
+    )
+endif()
