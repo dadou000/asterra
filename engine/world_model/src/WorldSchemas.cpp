@@ -216,6 +216,16 @@ void RegisterSchemas(
         .category = "World / Surface / Biomes",
         .properties = {
             schema::PropertySchema{
+                .id = kBiomePlacementMode,
+                .name = "Placement Mode",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{0},
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 2.0
+                }
+            },
+            schema::PropertySchema{
                 .id = kBiomeMinimumResolvedWeight,
                 .name = "Minimum Resolved Weight",
                 .kind = schema::PropertyKind::Float,
@@ -290,6 +300,148 @@ void RegisterSchemas(
                 .defaultValue = 1.0,
                 .range = {.minimum = 0.0},
                 .advanced = true
+            }
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kBiomeSelectorType,
+        .displayName = "Biome Automatic Selector",
+        .category = "World / Surface / Biomes",
+        .properties = {
+            schema::PropertySchema{
+                .id = kBiomeSelectorField,
+                .name = "Field",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{0},
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 16.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorMinimum,
+                .name = "Minimum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorMaximum,
+                .name = "Maximum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorLowerFalloff,
+                .name = "Lower Falloff",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorUpperFalloff,
+                .name = "Upper Falloff",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorMaterial,
+                .name = "Geological Material ID",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorUserField,
+                .name = "User Field",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{},
+                .advanced = true
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorInvert,
+                .name = "Invert",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = false
+            },
+            schema::PropertySchema{
+                .id = kBiomeSelectorEnabled,
+                .name = "Enabled",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
+            }
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kBiomeAuthoredMaskType,
+        .displayName = "Biome Authored Mask",
+        .category = "World / Surface / Biomes",
+        .properties = {
+            schema::PropertySchema{
+                .id = kBiomeMaskOperation,
+                .name = "Operation",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{0},
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 5.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskCenter,
+                .name = "Center Unit Direction",
+                .kind = schema::PropertyKind::Vector3,
+                .defaultValue = math::Double3{0.0, 1.0, 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskInnerRadius,
+                .name = "Inner Radius",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskOuterRadius,
+                .name = "Outer Radius",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 1000.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskGlobal,
+                .name = "Global",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = false
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskValue,
+                .name = "Weight Value",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 1.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskOpacity,
+                .name = "Opacity",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {
+                    .minimum = 0.0,
+                    .maximum = 1.0
+                }
+            },
+            schema::PropertySchema{
+                .id = kBiomeMaskEnabled,
+                .name = "Enabled",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
             }
         }
     });
