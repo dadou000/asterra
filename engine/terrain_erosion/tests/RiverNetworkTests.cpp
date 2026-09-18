@@ -416,7 +416,7 @@ void TestMeanderConstraintMovesCenterlineAndIncisionFollows()
     };
     trajectory.directionMeters = {1.0, 0.0};
     trajectory.radiusMeters = 500.0;
-    trajectory.strength = 4.0;
+    trajectory.strength = 100.0;
     trajectory.revision = 1U;
 
     const std::vector<RiverConstraint> constraints{
