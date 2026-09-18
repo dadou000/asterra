@@ -5,6 +5,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuErosion.cpp
     src/GpuFieldGenerator.cpp
     src/GpuFlowAccumulation.cpp
+    src/GpuHydraulicErosionPage.cpp
     src/GpuHydrologyRegion.cpp
     src/GpuLakeBasins.cpp
     src/GpuMaterialColumnResources.cpp
@@ -25,6 +26,7 @@ target_link_libraries(OrbitTerrainGpu
         Orbit::RHI
         Orbit::Shader
         Orbit::Terrain
+        Orbit::TerrainGeology
         Orbit::TerrainStream
         Orbit::TerrainMaterialColumn
         Orbit::TerrainHydrology
@@ -51,5 +53,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainGpuDrainageShaders
         COMMAND OrbitTerrainGpuDrainageShaderTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainGpuHydraulicShaderTests
+        tests/M11HydraulicShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainGpuHydraulicShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(OrbitTerrainGpuHydraulicShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainGpuHydraulicShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainGpuHydraulicShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainGpuHydraulicShaders
+        COMMAND OrbitTerrainGpuHydraulicShaderTests
     )
 endif()
