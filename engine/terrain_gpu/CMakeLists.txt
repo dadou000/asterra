@@ -6,6 +6,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuFieldGenerator.cpp
     src/GpuFlowAccumulation.cpp
     src/GpuHydraulicErosionPage.cpp
+    src/GpuThermalErosionPage.cpp
     src/GpuHydrologyRegion.cpp
     src/GpuLakeBasins.cpp
     src/GpuMaterialColumnResources.cpp
@@ -73,5 +74,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainGpuHydraulicShaders
         COMMAND OrbitTerrainGpuHydraulicShaderTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainGpuThermalShaderTests
+        tests/M12ThermalShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainGpuThermalShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(OrbitTerrainGpuThermalShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainGpuThermalShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainGpuThermalShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainGpuThermalShaders
+        COMMAND OrbitTerrainGpuThermalShaderTests
     )
 endif()
