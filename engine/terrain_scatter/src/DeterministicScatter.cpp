@@ -28,7 +28,7 @@ namespace
         static_cast<u32>(value >> 32U);
 }
 
-[[nodiscard]] u32 RuleHash(
+[[nodiscard]] u32 RuleHashInternal(
     const terrain_biome::BiomeScatterLayerRule& rule) noexcept
 {
     return Hash32(
@@ -45,7 +45,7 @@ namespace
 {
     return Hash32(
         pageHash ^
-        RuleHash(rule) ^
+        RuleHashInternal(rule) ^
         Hash32(x * 0x9E3779B9U) ^
         Hash32(y * 0x85EBCA6BU));
 }
@@ -589,6 +589,14 @@ u32 ScatterPageHash(
             Fold64(
                 identity.
                     generationSeed));
+}
+
+u32 ScatterRuleHash(
+    const terrain_biome::BiomeScatterLayerRule& rule) noexcept
+{
+    return
+        RuleHashInternal(
+            rule);
 }
 
 std::vector<DerivedScatterInstance>
