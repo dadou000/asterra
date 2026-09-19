@@ -29,3 +29,23 @@ target_link_libraries(OrbitTerrainRender
 
 target_compile_features(OrbitTerrainRender PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitTerrainRender)
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainSurfaceShaderTests
+        tests/TerrainSurfaceShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainSurfaceShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(OrbitTerrainSurfaceShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainSurfaceShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainSurfaceShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainSurfaceShader
+        COMMAND OrbitTerrainSurfaceShaderTests
+    )
+endif()
