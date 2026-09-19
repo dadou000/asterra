@@ -193,7 +193,7 @@ bool PhysicalTerrainSelection::Includes(
 {
     const std::size_t index = ScaleIndex(scale);
     return index < kPhysicalTerrainScaleCount &&
-           index < activeLevelCount;
+           index < static_cast<std::size_t>(activeLevelCount);
 }
 
 bool PhysicalTerrainSelection::Allows(

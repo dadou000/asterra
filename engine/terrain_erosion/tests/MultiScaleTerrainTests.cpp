@@ -133,7 +133,8 @@ void TestPhysicalSelectionOnlyAddsFinerTiers()
 
     Require(
         micro.activeLevelCount ==
-            terrain_erosion::kPhysicalTerrainScaleCount,
+            static_cast<u8>(
+                terrain_erosion::kPhysicalTerrainScaleCount),
         "Sub-micro request must activate all physical tiers.");
 
     Require(
