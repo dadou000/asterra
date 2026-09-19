@@ -45,6 +45,7 @@ jobs:
           OrbitEditorSessionRpcHostTests
           OrbitStudioSessionTests
           OrbitBezierHandleEditorTests
+          OrbitStudioViewportPresentationTests
           OrbitStudio
           OrbitPlayer
 
@@ -54,7 +55,8 @@ jobs:
           $tests = @(
             "build-studio-smoke/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitStudioSessionTests.exe",
-            "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe"
+            "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
+            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
           )
           foreach ($test in $tests) {
             & $test

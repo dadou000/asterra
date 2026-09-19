@@ -14,6 +14,10 @@ namespace
 {
 using namespace orbit;
 
+static_assert(
+    terrain_debug::kRequiredTerrainDebugFieldCount == 21U,
+    "M29 Studio acceptance must cover the complete required field catalog.");
+
 void Check(const bool condition)
 {
     if (!condition)
