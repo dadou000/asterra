@@ -96,6 +96,9 @@ struct DerivedScatterInstance
 [[nodiscard]] u32 ScatterPageHash(
     const ScatterPageIdentity& identity) noexcept;
 
+[[nodiscard]] u32 ScatterRuleHash(
+    const terrain_biome::BiomeScatterLayerRule& rule) noexcept;
+
 // CPU/reference implementation of the same planting-grid algorithm used by
 // the M22 GPU pass. One input sample corresponds to one planting-grid cell.
 [[nodiscard]] std::vector<DerivedScatterInstance>
