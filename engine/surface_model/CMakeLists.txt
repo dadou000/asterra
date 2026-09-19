@@ -1,5 +1,6 @@
 add_library(OrbitSurfaceModel STATIC
     src/SurfaceComposition.cpp
+    src/SurfaceMaterialResolver.cpp
 )
 
 add_library(Orbit::SurfaceModel ALIAS OrbitSurfaceModel)
@@ -16,6 +17,7 @@ target_link_libraries(OrbitSurfaceModel
         Orbit::Surface
         Orbit::Terrain
         Orbit::TerrainBiome
+        Orbit::TerrainMaterialColumn
         Orbit::Universe
         Orbit::WorldModel
 )
@@ -42,5 +44,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.SurfaceComposition
         COMMAND OrbitSurfaceCompositionTests
+    )
+
+    add_executable(OrbitSurfaceMaterialResolverTests
+        tests/SurfaceMaterialResolverTests.cpp
+    )
+
+    target_link_libraries(OrbitSurfaceMaterialResolverTests
+        PRIVATE
+            Orbit::SurfaceModel
+            Orbit::TerrainGeology
+            Orbit::TerrainMaterialColumn
+            Orbit::TerrainRender
+    )
+
+    target_compile_features(OrbitSurfaceMaterialResolverTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSurfaceMaterialResolverTests)
+
+    add_test(
+        NAME Orbit.SurfaceMaterialResolver
+        COMMAND OrbitSurfaceMaterialResolverTests
     )
 endif()
