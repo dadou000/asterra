@@ -546,6 +546,130 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kBiomeScatterRuleType,
+        .displayName = "Biome Scatter Rule",
+        .category = "World / Surface / Biomes",
+        .properties = {
+            schema::PropertySchema{
+                .id = kBiomeScatterKind,
+                .name = "Scatter Kind",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{2},
+                .range = {.minimum = 0.0, .maximum = 5.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterDensity,
+                .name = "Density",
+                .kind = schema::PropertyKind::Float,
+                .unit = "1/m2",
+                .defaultValue = 0.01,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterSpacing,
+                .name = "Minimum Spacing",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.001}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterSeedSalt,
+                .name = "Seed Salt",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{0},
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterCompatibility,
+                .name = "Compatible Exposed Materials",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{31},
+                .range = {.minimum = 1.0, .maximum = 31.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterRequiresSoil,
+                .name = "Requires Soil",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = false
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterMinimumSoilDepth,
+                .name = "Minimum Soil Depth",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterSlopeMin,
+                .name = "Slope Minimum",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0, .maximum = 90.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterSlopeMax,
+                .name = "Slope Maximum",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 90.0,
+                .range = {.minimum = 0.0, .maximum = 90.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterSlopeFalloff,
+                .name = "Slope Falloff",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterMoistureMin,
+                .name = "Moisture Minimum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0, .maximum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterMoistureMax,
+                .name = "Moisture Maximum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0, .maximum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterMoistureFalloff,
+                .name = "Moisture Falloff",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterScaleMin,
+                .name = "Scale Minimum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.001}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterScaleMax,
+                .name = "Scale Maximum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.001}
+            },
+            schema::PropertySchema{
+                .id = kBiomeScatterEnabled,
+                .name = "Enabled",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
+            }
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",

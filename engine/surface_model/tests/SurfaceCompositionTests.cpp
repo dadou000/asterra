@@ -308,6 +308,58 @@ int main()
             orbit::world_model::kBiomeSurfaceLayerMoistureMin,
             0.5);
 
+        const auto treeScatter =
+            commands.CreateObject(
+                orbit::world_model::kBiomeScatterRuleType,
+                "Canopy trees",
+                forcedForestObject,
+                30);
+
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterKind,
+            orbit::i64{0});
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterDensity,
+            0.0125);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterSpacing,
+            3.0);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterSeedSalt,
+            orbit::i64{77});
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterRequiresSoil,
+            true);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterMinimumSoilDepth,
+            0.15);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterSlopeMax,
+            50.0);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterMoistureMin,
+            0.1);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterMoistureMax,
+            0.8);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterScaleMin,
+            0.8);
+        commands.SetProperty(
+            treeScatter,
+            orbit::world_model::kBiomeScatterScaleMax,
+            1.2);
+
         if (!universe.RebuildIfChanged(objects))
         {
             return 18;
@@ -344,6 +396,12 @@ int main()
             forcedForest.placement.selectors.size() != 1U ||
             forcedForest.placement.authoredMasks.size() != 1U ||
             forcedForest.surface.layers.size() != 1U ||
+            forcedForest.scatter.layers.size() != 1U ||
+            forcedForest.scatter.layers.front().kind !=
+                orbit::terrain_biome::BiomeScatterKind::Tree ||
+            forcedForest.scatter.layers.front().densityPerSquareMeter !=
+                0.0125F ||
+            forcedForest.scatter.layers.front().seedSalt != 77U ||
             forcedForest.surface.layers.front().kind !=
                 orbit::terrain_biome::BiomeSurfaceLayerKind::Moss ||
             forcedForest.surface.layers.front().strength != 0.7F)
@@ -438,6 +496,15 @@ int main()
                 surface.
                 layers.
                 size() != 1U ||
+            regeneratedForest.
+                scatter.
+                layers.
+                size() != 1U ||
+            regeneratedForest.
+                scatter.
+                layers.
+                front().
+                seedSalt != 77U ||
             regeneratedForest.
                 surface.
                 layers.

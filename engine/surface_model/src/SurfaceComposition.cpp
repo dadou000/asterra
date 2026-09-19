@@ -5,6 +5,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <stdexcept>
+#include <limits>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -461,6 +462,183 @@ template <typename Value>
     return layer;
 }
 
+[[nodiscard]] terrain_biome::BiomeScatterRuleId BiomeScatterRuleIdFor(
+    const scene::ObjectId object) noexcept
+{
+    terrain_biome::BiomeScatterRuleId id{
+        .high =
+            object.high ^
+            0x4d32325343415449ULL,
+        .low =
+            object.low ^
+            0x4f52424954000001ULL
+    };
+
+    if (!id.IsValid())
+    {
+        id.low = 1U;
+    }
+
+    return id;
+}
+
+[[nodiscard]] terrain_biome::BiomeScatterKind ScatterKindFor(
+    const i64 value)
+{
+    if (value < 0 ||
+        value > 5)
+    {
+        throw std::runtime_error(
+            "Biome scatter kind is outside the M22 scatter catalog.");
+    }
+
+    return static_cast<terrain_biome::BiomeScatterKind>(value);
+}
+
+[[nodiscard]] terrain_biome::BiomeScatterLayerRule BiomeScatterRuleDescription(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& object)
+{
+    const i64 compatibility =
+        PropertyOr<i64>(
+            objects,
+            object.id,
+            world_model::kBiomeScatterCompatibility,
+            i64{31});
+
+    const i64 seedSalt =
+        PropertyOr<i64>(
+            objects,
+            object.id,
+            world_model::kBiomeScatterSeedSalt,
+            i64{0});
+
+    if (compatibility < 1 ||
+        compatibility > 31 ||
+        seedSalt < 0 ||
+        seedSalt >
+            static_cast<i64>(
+                (std::numeric_limits<u32>::max)()))
+    {
+        throw std::runtime_error(
+            "Biome scatter rule has invalid compatibility or seed salt.");
+    }
+
+    terrain_biome::BiomeScatterLayerRule rule{
+        .id = BiomeScatterRuleIdFor(object.id),
+        .kind =
+            ScatterKindFor(
+                PropertyOr<i64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterKind,
+                    i64{2})),
+        .densityPerSquareMeter =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterDensity,
+                    0.01)),
+        .minimumSpacingMeters =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterSpacing,
+                    1.0)),
+        .seedSalt = static_cast<u32>(seedSalt),
+        .compatibleExposed =
+            static_cast<terrain_biome::BiomeExposedMaterialMask>(
+                static_cast<u32>(compatibility)),
+        .requiresSoil =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::kBiomeScatterRequiresSoil,
+                false),
+        .minimumSoilDepthMeters =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterMinimumSoilDepth,
+                    0.0)),
+        .minimumSlopeDegrees =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterSlopeMin,
+                    0.0)),
+        .maximumSlopeDegrees =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterSlopeMax,
+                    90.0)),
+        .slopeFalloffDegrees =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterSlopeFalloff,
+                    0.0)),
+        .minimumMoisture =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterMoistureMin,
+                    0.0)),
+        .maximumMoisture =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterMoistureMax,
+                    1.0)),
+        .moistureFalloff =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterMoistureFalloff,
+                    0.0)),
+        .minimumScale =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterScaleMin,
+                    1.0)),
+        .maximumScale =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::kBiomeScatterScaleMax,
+                    1.0)),
+        .enabled =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::kBiomeScatterEnabled,
+                true)
+    };
+
+    if (!rule.IsValid())
+    {
+        throw std::runtime_error(
+            "Biome scatter rule contains invalid M22 parameters on object " +
+            object.id.ToString() +
+            ".");
+    }
+
+    return rule;
+}
+
 [[nodiscard]] terrain_biome::BiomeId BiomeIdFor(
     const scene::ObjectId object) noexcept
 {
@@ -602,6 +780,16 @@ template <typename Value>
             result.surface.
                 layers.push_back(
                     BiomeSurfaceLayerDescription(
+                        objects,
+                        child));
+        }
+        else if (child.type ==
+            world_model::
+                kBiomeScatterRuleType)
+        {
+            result.scatter.
+                layers.push_back(
+                    BiomeScatterRuleDescription(
                         objects,
                         child));
         }
