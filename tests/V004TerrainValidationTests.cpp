@@ -225,11 +225,157 @@ void Test01StratigraphyExposure()
             1.0e-4),
         "M30-01 virtual stratigraphic depth must track the eroded physical bedrock height.");
 }
+
+void Test02BedrockStripping()
+{
+    using namespace terrain_material_column;
+
+    StratigraphyFixture fixture;
+    auto page =
+        fixture.MakePage();
+
+    auto& cell =
+        page.At(0U, 0U);
+
+    // Binary-exact layer depths keep the exact-cover threshold deterministic:
+    // debris -> sand -> soil -> regolith -> bedrock.
+    cell.regolithMeters = 0.5F;
+    cell.soilMeters = 0.25F;
+    cell.sandMeters = 0.125F;
+    cell.debrisMeters = 0.125F;
+
+    const f64 bedrockBefore =
+        cell.bedrockHeightMeters;
+    const f64 referenceBefore =
+        cell.referenceBedrockHeightMeters;
+
+    const auto& densities =
+        page.Densities();
+    const f64 area =
+        page.CellAreaSquareMeters();
+
+    const f64 expectedLooseMass =
+        area *
+        (0.5 * densities.regolithKgPerCubicMeter +
+         0.25 * densities.soilKgPerCubicMeter +
+         0.125 * densities.sandKgPerCubicMeter +
+         0.125 * densities.debrisKgPerCubicMeter);
+
+    Require(
+        cell.ExposedSurface() ==
+            ExposedSurfaceKind::Debris,
+        "M30-02 setup must begin with the complete loose-material stack covering bedrock.");
+
+    const auto partial =
+        page.Erode(
+            0U,
+            0U,
+            0.75,
+            fixture.materials);
+
+    Require(
+        NearlyEqual(partial.debrisMeters, 0.125) &&
+        NearlyEqual(partial.sandMeters, 0.125) &&
+        NearlyEqual(partial.soilMeters, 0.25) &&
+        NearlyEqual(partial.regolithMeters, 0.25) &&
+        NearlyEqual(partial.bedrockMeters, 0.0),
+        "M30-02 stripping must consume debris, sand and soil before regolith, without touching bedrock while loose cover remains.");
+
+    Require(
+        page.At(0U, 0U).ExposedSurface() ==
+            ExposedSurfaceKind::Regolith &&
+        NearlyEqual(
+            page.At(0U, 0U).LooseDepthMeters(),
+            0.25) &&
+        NearlyEqual(
+            page.At(0U, 0U).bedrockHeightMeters,
+            bedrockBefore),
+        "M30-02 partial stripping must leave the surviving regolith exposed and preserve the physical bedrock surface.");
+
+    const auto finish =
+        page.Erode(
+            0U,
+            0U,
+            0.25,
+            fixture.materials);
+
+    Require(
+        NearlyEqual(finish.regolithMeters, 0.25) &&
+        NearlyEqual(finish.bedrockMeters, 0.0) &&
+        page.At(0U, 0U).ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock,
+        "M30-02 exact removal of the final loose cover must expose bedrock without consuming bedrock.");
+
+    Require(
+        NearlyEqual(
+            page.At(0U, 0U).bedrockHeightMeters,
+            bedrockBefore) &&
+        NearlyEqual(
+            page.At(0U, 0U).referenceBedrockHeightMeters,
+            referenceBefore),
+        "M30-02 stripping loose cover must not move either the current or reference bedrock surface.");
+
+    const auto strippedMass =
+        page.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            partial.removedMassKg +
+                finish.removedMassKg,
+            expectedLooseMass) &&
+        NearlyEqual(
+            strippedMass.LooseMassKg(),
+            0.0) &&
+        NearlyEqual(
+            strippedMass.excavatedBedrockKg,
+            0.0),
+        "M30-02 loose-cover stripping must conserve the removed loose mass without reporting false bedrock excavation.");
+
+    const auto* rock =
+        fixture.materials.Find(
+            page.At(0U, 0U).bedrockMaterial);
+
+    Require(
+        rock != nullptr,
+        "M30-02 exposed bedrock must retain a valid M02 geological material identity.");
+
+    const auto bedrockCut =
+        page.Erode(
+            0U,
+            0U,
+            0.5,
+            fixture.materials);
+
+    const auto afterCutMass =
+        page.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            bedrockCut.bedrockMeters,
+            0.5) &&
+        NearlyEqual(
+            page.At(0U, 0U).bedrockHeightMeters,
+            bedrockBefore - 0.5) &&
+        page.At(0U, 0U).ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock,
+        "M30-02 only erosion demand after complete stripping may lower the physical bedrock surface.");
+
+    Require(
+        NearlyEqual(
+            afterCutMass.excavatedBedrockKg,
+            0.5 * area * rock->density,
+            1.0e-3),
+        "M30-02 post-exposure bedrock excavation must enter M08 mass accounting using the exposed M02 rock density.");
+}
+
 } // namespace
 
 int main()
 {
     Test01StratigraphyExposure();
+    Test02BedrockStripping();
 
     std::cout
         << "Orbit V0.0.4 M30 validation: 1/20 deterministic cases passed.\n";
