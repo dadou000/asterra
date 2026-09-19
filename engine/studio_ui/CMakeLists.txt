@@ -24,6 +24,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::RenderGraph
         Orbit::RenderView
         Orbit::StudioSession
+        Orbit::TerrainDebug
 )
 
 target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)

@@ -81,6 +81,10 @@ void StudioRenderViewSet::Create(
 
     try
     {
+        debugFields_.emplace(
+            targetId,
+            terrain_debug::TerrainDebugField::Uplift);
+
         auto view =
             std::make_unique<render_view::RenderView>(
                 *device_,
@@ -91,6 +95,7 @@ void StudioRenderViewSet::Create(
     }
     catch (...)
     {
+        debugFields_.erase(targetId);
         static_cast<void>(
             session_->Viewports().Unregister(
                 targetId));
@@ -110,6 +115,7 @@ bool StudioRenderViewSet::Destroy(
 
     const std::string ownedId = found->first;
     views_.erase(found);
+    debugFields_.erase(ownedId);
 
     if (session_ != nullptr)
     {
@@ -136,6 +142,41 @@ void StudioRenderViewSet::Resize(
     view->Resize(
         std::max(width, 1U),
         std::max(height, 1U));
+}
+
+void StudioRenderViewSet::SetDebugField(
+    const std::string_view id,
+    const terrain_debug::TerrainDebugField field)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    static_cast<void>(
+        terrain_debug::Descriptor(field));
+
+    debugFields_[std::string(id)] = field;
+}
+
+terrain_debug::TerrainDebugField
+StudioRenderViewSet::DebugField(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found = debugFields_.find(id);
+    if (found == debugFields_.end())
+    {
+        return terrain_debug::TerrainDebugField::Uplift;
+    }
+
+    return found->second;
 }
 
 u32 StudioRenderViewSet::Refresh(
@@ -216,7 +257,9 @@ StudioRenderViewSet::Catalog() const
             .height = view->Height(),
             .hasTarget =
                 target != nullptr &&
-                target->target.has_value()
+                target->target.has_value(),
+            .debugField =
+                DebugField(id)
         });
     }
 

@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
 #include <orbit/paths/PathNetwork.hpp>
+#include <orbit/terrain_debug/TerrainDebugField.hpp>
 
 #include <algorithm>
 #include <format>
@@ -175,6 +176,55 @@ void StudioViewportPanels::DrawView(
         session_->Viewports().SetMode(
             id,
             studio_session::ViewportMode::Debug);
+    }
+
+    if (target->mode ==
+        studio_session::ViewportMode::Debug)
+    {
+        context.Separator();
+        context.Text("Terrain Debug Field");
+
+        const auto selectedField =
+            views_->DebugField(id);
+
+        for (const auto& descriptor :
+             terrain_debug::FieldCatalog())
+        {
+            const std::string label =
+                std::string(descriptor.name) +
+                "##terrain-debug:" +
+                std::string(id) + ":" +
+                std::to_string(
+                    static_cast<u32>(
+                        descriptor.field));
+
+            if (context.Selectable(
+                    label,
+                    selectedField ==
+                        descriptor.field))
+            {
+                views_->SetDebugField(
+                    id,
+                    descriptor.field);
+                status_ =
+                    "Debug field: " +
+                    std::string(descriptor.name);
+            }
+        }
+
+        const auto& descriptor =
+            terrain_debug::Descriptor(
+                views_->DebugField(id));
+
+        context.Text("Upstream provenance");
+        for (const auto stage :
+             descriptor.upstream)
+        {
+            context.Text(
+                std::format(
+                    "- {}",
+                    terrain_debug::StageName(stage)));
+        }
     }
 
     const std::string followButton =

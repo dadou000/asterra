@@ -3,6 +3,7 @@
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/terrain_debug/TerrainDebugField.hpp>
 
 #include <map>
 #include <memory>
@@ -20,6 +21,8 @@ struct StudioRenderViewInfo
     u32 width{1};
     u32 height{1};
     bool hasTarget{false};
+    terrain_debug::TerrainDebugField debugField{
+        terrain_debug::TerrainDebugField::Uplift};
 };
 
 // Owns the actual resizable GPU RenderViews corresponding to logical Studio
@@ -54,6 +57,15 @@ public:
         u32 width,
         u32 height);
 
+    // Debug-field choice is transient RenderView presentation state. It is
+    // deliberately excluded from StudioSession/project terrain authority.
+    void SetDebugField(
+        std::string_view id,
+        terrain_debug::TerrainDebugField field);
+
+    [[nodiscard]] terrain_debug::TerrainDebugField
+    DebugField(std::string_view id) const;
+
     // Applies generation-validated target cameras to every GPU view. Missing
     // targets are normal for blank worlds and leave a neutral unbound camera.
     [[nodiscard]] u32 Refresh(
@@ -78,5 +90,11 @@ private:
         std::unique_ptr<render_view::RenderView>,
         std::less<>>
         views_;
+
+    std::map<
+        std::string,
+        terrain_debug::TerrainDebugField,
+        std::less<>>
+        debugFields_;
 };
 } // namespace orbit::studio_ui
