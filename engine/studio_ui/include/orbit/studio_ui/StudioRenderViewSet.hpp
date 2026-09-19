@@ -4,9 +4,11 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
+#include <orbit/studio_ui/StudioViewportCamera.hpp>
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +25,8 @@ struct StudioRenderViewInfo
     bool hasTarget{false};
     terrain_debug::TerrainDebugField debugField{
         terrain_debug::TerrainDebugField::Uplift};
+    u8 debugPhysicalPageLevel{8};
+    std::optional<StudioPhysicalPageSelection> debugPhysicalPage;
 };
 
 // Owns the actual resizable GPU RenderViews corresponding to logical Studio
@@ -66,6 +70,21 @@ public:
     [[nodiscard]] terrain_debug::TerrainDebugField
     DebugField(std::string_view id) const;
 
+    void SetDebugPhysicalPageLevel(
+        std::string_view id,
+        u8 level);
+
+    [[nodiscard]] u8 DebugPhysicalPageLevel(
+        std::string_view id) const;
+
+    [[nodiscard]] bool SelectDebugPhysicalPage(
+        std::string_view id,
+        f32 u,
+        f32 v);
+
+    [[nodiscard]] std::optional<StudioPhysicalPageSelection>
+    DebugPhysicalPage(std::string_view id) const;
+
     // Applies generation-validated target cameras to every GPU view. Missing
     // targets are normal for blank worlds and leave a neutral unbound camera.
     [[nodiscard]] u32 Refresh(
@@ -96,5 +115,17 @@ private:
         terrain_debug::TerrainDebugField,
         std::less<>>
         debugFields_;
+
+    std::map<
+        std::string,
+        u8,
+        std::less<>>
+        debugPhysicalPageLevels_;
+
+    std::map<
+        std::string,
+        StudioPhysicalPageSelection,
+        std::less<>>
+        debugPhysicalPages_;
 };
 } // namespace orbit::studio_ui

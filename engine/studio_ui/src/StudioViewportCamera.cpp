@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace orbit::studio_ui
@@ -107,6 +108,105 @@ ComposeViewportCamera(
     }
 
     return camera;
+}
+
+std::optional<StudioPhysicalPageSelection>
+PhysicalPageAtViewportPoint(
+    const studio_session::ViewportTargetState& view,
+    const render_view::CameraState& camera,
+    const u32 width,
+    const u32 height,
+    const f32 u,
+    const f32 v,
+    const u8 physicalTileLevel) noexcept
+{
+    if (!view.target.has_value() ||
+        view.target->referenceRadiusMeters <= 0.0)
+    {
+        return std::nullopt;
+    }
+
+    const auto ray =
+        render_view::ViewportRay(
+            camera,
+            width,
+            height,
+            u,
+            v);
+
+    if (!ray.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const f64 radius =
+        view.target->referenceRadiusMeters;
+    const f64 projection =
+        math::Dot(
+            ray->origin,
+            ray->direction);
+    const f64 radial =
+        math::Dot(
+            ray->origin,
+            ray->origin) -
+        radius * radius;
+    const f64 discriminant =
+        projection * projection -
+        radial;
+
+    if (discriminant < 0.0)
+    {
+        return std::nullopt;
+    }
+
+    const f64 root =
+        std::sqrt(
+            std::max(
+                discriminant,
+                0.0));
+
+    f64 distance =
+        -projection - root;
+
+    if (distance < 0.0)
+    {
+        distance =
+            -projection + root;
+    }
+
+    if (distance < 0.0)
+    {
+        return std::nullopt;
+    }
+
+    const math::Double3 hit =
+        ray->origin +
+        ray->direction * distance;
+    const math::Double3 direction =
+        math::Normalize(hit);
+
+    if (math::LengthSquared(direction) <= 1.0e-20)
+    {
+        return std::nullopt;
+    }
+
+    // SurfaceRegistry preserves BodyId bits as PlanetId, so this matches the
+    // stable physical planet identity used by terrain pages.
+    const world::PlanetId planet{
+        .high = view.target->body.high,
+        .low = view.target->body.low
+    };
+
+    return StudioPhysicalPageSelection{
+        .address = {
+            .planet = planet,
+            .tile =
+                world::TileForDirection(
+                    direction,
+                    physicalTileLevel)
+        },
+        .surfaceDirection = direction
+    };
 }
 
 void ApplyViewportCamera(

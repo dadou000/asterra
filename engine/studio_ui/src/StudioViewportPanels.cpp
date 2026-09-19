@@ -29,6 +29,28 @@ namespace
     return "Perspective";
 }
 
+[[nodiscard]] const char* CubeFaceName(
+    const world::CubeFace face) noexcept
+{
+    switch (face)
+    {
+    case world::CubeFace::PositiveX:
+        return "+X";
+    case world::CubeFace::NegativeX:
+        return "-X";
+    case world::CubeFace::PositiveY:
+        return "+Y";
+    case world::CubeFace::NegativeY:
+        return "-Y";
+    case world::CubeFace::PositiveZ:
+        return "+Z";
+    case world::CubeFace::NegativeZ:
+        return "-Z";
+    }
+
+    return "?";
+}
+
 [[nodiscard]] std::optional<paths::PathEdgeRecord>
 SelectedBezierEdge(
     studio_session::StudioSession& session)
@@ -216,6 +238,50 @@ void StudioViewportPanels::DrawView(
             terrain_debug::Descriptor(
                 views_->DebugField(id));
 
+        i64 pageLevel =
+            static_cast<i64>(
+                views_->DebugPhysicalPageLevel(id));
+
+        if (context.InputInteger(
+                "Physical page tile level",
+                pageLevel))
+        {
+            pageLevel =
+                std::clamp<i64>(
+                    pageLevel,
+                    0,
+                    30);
+            views_->SetDebugPhysicalPageLevel(
+                id,
+                static_cast<u8>(pageLevel));
+            status_ =
+                "Physical page level changed; the center page will be reselected.";
+        }
+
+        const auto selectedPage =
+            views_->DebugPhysicalPage(id);
+
+        if (selectedPage.has_value())
+        {
+            const auto& tile =
+                selectedPage->address.tile;
+            context.Text(
+                std::format(
+                    "Physical page: {} L{} ({}, {})",
+                    CubeFaceName(tile.face),
+                    tile.level,
+                    tile.x,
+                    tile.y));
+        }
+        else
+        {
+            context.Text(
+                "Physical page: <none> (click the planet in this viewport)");
+        }
+
+        context.Text(
+            "Click the debug viewport image to select a physical terrain page.");
+
         context.Text("Upstream provenance");
         for (const auto stage :
              descriptor.upstream)
@@ -384,7 +450,7 @@ void StudioViewportPanels::DrawView(
         renderView = views_->Find(id);
     }
 
-    static_cast<void>(
+    const auto imageInteraction =
         context.Image(
             renderView->Color(),
             {
@@ -392,6 +458,38 @@ void StudioViewportPanels::DrawView(
                     renderView->Width()),
                 .height = static_cast<f32>(
                     renderView->Height())
-            }));
+            });
+
+    if (target->mode ==
+            studio_session::ViewportMode::Debug &&
+        imageInteraction.clicked)
+    {
+        if (views_->SelectDebugPhysicalPage(
+                id,
+                imageInteraction.u,
+                imageInteraction.v))
+        {
+            const auto page =
+                views_->DebugPhysicalPage(id);
+
+            if (page.has_value())
+            {
+                const auto& tile =
+                    page->address.tile;
+                status_ =
+                    std::format(
+                        "Selected physical page {} L{} ({}, {}).",
+                        CubeFaceName(tile.face),
+                        tile.level,
+                        tile.x,
+                        tile.y);
+            }
+        }
+        else
+        {
+            status_ =
+                "Debug click did not intersect the target planet.";
+        }
+    }
 }
 } // namespace orbit::studio_ui

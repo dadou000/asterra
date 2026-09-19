@@ -99,6 +99,63 @@ int main()
     }
 
     {
+        const auto target =
+            Target(
+                orbit::studio_session::ViewportMode::BodyMap,
+                generation);
+        const auto camera =
+            orbit::studio_ui::ComposeViewportCamera(
+                target,
+                generation);
+        Check(camera.has_value());
+
+        const auto page =
+            orbit::studio_ui::PhysicalPageAtViewportPoint(
+                target,
+                *camera,
+                640,
+                480,
+                0.5F,
+                0.5F,
+                8);
+
+        Check(page.has_value());
+        Check(page->address.planet.high == 3);
+        Check(page->address.planet.low == 4);
+        Check(page->address.tile.level == 8);
+        Check(
+            page->address.tile ==
+            orbit::world::TileForDirection(
+                page->surfaceDirection,
+                8));
+        Check(
+            page->address.tile.face ==
+            orbit::world::CubeFace::PositiveY);
+    }
+
+    {
+        const auto target =
+            Target(
+                orbit::studio_session::ViewportMode::Debug,
+                generation);
+        const auto camera =
+            orbit::studio_ui::ComposeViewportCamera(
+                target,
+                generation);
+        Check(camera.has_value());
+        Check(
+            !orbit::studio_ui::PhysicalPageAtViewportPoint(
+                 target,
+                 *camera,
+                 640,
+                 480,
+                 -0.1F,
+                 0.5F,
+                 8).
+                 has_value());
+    }
+
+    {
         orbit::studio_session::ViewportTargetState blank{
             .id = "blank",
             .mode = orbit::studio_session::ViewportMode::Perspective,

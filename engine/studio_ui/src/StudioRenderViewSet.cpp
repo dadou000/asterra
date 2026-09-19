@@ -84,6 +84,9 @@ void StudioRenderViewSet::Create(
         debugFields_.emplace(
             targetId,
             terrain_debug::TerrainDebugField::Uplift);
+        debugPhysicalPageLevels_.emplace(
+            targetId,
+            8U);
 
         auto view =
             std::make_unique<render_view::RenderView>(
@@ -96,6 +99,8 @@ void StudioRenderViewSet::Create(
     catch (...)
     {
         debugFields_.erase(targetId);
+        debugPhysicalPageLevels_.erase(targetId);
+        debugPhysicalPages_.erase(targetId);
         static_cast<void>(
             session_->Viewports().Unregister(
                 targetId));
@@ -116,6 +121,8 @@ bool StudioRenderViewSet::Destroy(
     const std::string ownedId = found->first;
     views_.erase(found);
     debugFields_.erase(ownedId);
+    debugPhysicalPageLevels_.erase(ownedId);
+    debugPhysicalPages_.erase(ownedId);
 
     if (session_ != nullptr)
     {
@@ -179,6 +186,102 @@ StudioRenderViewSet::DebugField(
     return found->second;
 }
 
+void StudioRenderViewSet::SetDebugPhysicalPageLevel(
+    const std::string_view id,
+    const u8 level)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    if (level > 30U)
+    {
+        throw std::invalid_argument(
+            "Physical terrain page tile level must be in [0,30].");
+    }
+
+    debugPhysicalPageLevels_[std::string(id)] = level;
+    debugPhysicalPages_.erase(std::string(id));
+}
+
+u8 StudioRenderViewSet::DebugPhysicalPageLevel(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        debugPhysicalPageLevels_.find(id);
+
+    return found == debugPhysicalPageLevels_.end()
+        ? 8U
+        : found->second;
+}
+
+bool StudioRenderViewSet::SelectDebugPhysicalPage(
+    const std::string_view id,
+    const f32 u,
+    const f32 v)
+{
+    auto* view = Find(id);
+
+    if (view == nullptr || session_ == nullptr)
+    {
+        return false;
+    }
+
+    const auto* target =
+        session_->Viewports().Find(id);
+
+    if (target == nullptr)
+    {
+        return false;
+    }
+
+    const auto selection =
+        PhysicalPageAtViewportPoint(
+            *target,
+            view->Camera(),
+            view->Width(),
+            view->Height(),
+            u,
+            v,
+            DebugPhysicalPageLevel(id));
+
+    if (!selection.has_value())
+    {
+        return false;
+    }
+
+    debugPhysicalPages_.insert_or_assign(
+        std::string(id),
+        *selection);
+    return true;
+}
+
+std::optional<StudioPhysicalPageSelection>
+StudioRenderViewSet::DebugPhysicalPage(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        debugPhysicalPages_.find(id);
+
+    return found == debugPhysicalPages_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
 u32 StudioRenderViewSet::Refresh(
     const studio_session::StudioRuntimeSnapshot& snapshot)
 {
@@ -205,12 +308,43 @@ u32 StudioRenderViewSet::Refresh(
         if (!camera.has_value())
         {
             view->Camera() = {};
+            debugPhysicalPages_.erase(id);
             continue;
         }
 
         ApplyViewportCamera(
             *view,
             *camera);
+
+        const auto selected =
+            debugPhysicalPages_.find(id);
+
+        if (target->target.has_value() &&
+            selected != debugPhysicalPages_.end())
+        {
+            const world::PlanetId expectedPlanet{
+                .high = target->target->body.high,
+                .low = target->target->body.low
+            };
+
+            if (selected->second.address.planet !=
+                expectedPlanet)
+            {
+                debugPhysicalPages_.erase(selected);
+            }
+        }
+
+        if (target->mode ==
+                studio_session::ViewportMode::Debug &&
+            !debugPhysicalPages_.contains(id))
+        {
+            static_cast<void>(
+                SelectDebugPhysicalPage(
+                    id,
+                    0.5F,
+                    0.5F));
+        }
+
         ++targetedViews;
     }
 
@@ -259,7 +393,11 @@ StudioRenderViewSet::Catalog() const
                 target != nullptr &&
                 target->target.has_value(),
             .debugField =
-                DebugField(id)
+                DebugField(id),
+            .debugPhysicalPageLevel =
+                DebugPhysicalPageLevel(id),
+            .debugPhysicalPage =
+                DebugPhysicalPage(id)
         });
     }
 
