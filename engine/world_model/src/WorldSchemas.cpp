@@ -447,6 +447,105 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kBiomeSurfaceLayerType,
+        .displayName = "Biome Surface Layer",
+        .category = "World / Surface / Biomes",
+        .properties = {
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerKind,
+                .name = "Layer Kind",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{3},
+                .range = {.minimum = 0.0, .maximum = 3.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerStrength,
+                .name = "Strength",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0, .maximum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerCompatibility,
+                .name = "Compatible Exposed Materials",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{31},
+                .range = {.minimum = 1.0, .maximum = 31.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerSlopeMin,
+                .name = "Slope Minimum",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0, .maximum = 90.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerSlopeMax,
+                .name = "Slope Maximum",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 90.0,
+                .range = {.minimum = 0.0, .maximum = 90.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerSlopeFalloff,
+                .name = "Slope Falloff",
+                .kind = schema::PropertyKind::Float,
+                .unit = "deg",
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerCurvatureMin,
+                .name = "Curvature Minimum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = -1.0
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerCurvatureMax,
+                .name = "Curvature Maximum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerCurvatureFalloff,
+                .name = "Curvature Falloff",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerMoistureMin,
+                .name = "Moisture Minimum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0, .maximum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerMoistureMax,
+                .name = "Moisture Maximum",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.0, .maximum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerMoistureFalloff,
+                .name = "Moisture Falloff",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.0,
+                .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kBiomeSurfaceLayerEnabled,
+                .name = "Enabled",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
+            }
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",
