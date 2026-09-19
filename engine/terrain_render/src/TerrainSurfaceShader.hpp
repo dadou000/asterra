@@ -248,34 +248,9 @@ float4 main(VSOutput input) : SV_Target0
                 terrainNormal,
                 surfaceDirection));
 
-    const float slopeStrength =
-        1.0 -
-        slopeCosine;
-
-    const float landWeight =
-        saturate(
-            1.0 -
-            biome0.x);
-
-    const float rockBlend =
-        smoothstep(
-            0.06,
-            0.34,
-            slopeStrength) *
-        landWeight *
-        0.72;
-
-    const float3 rockColor =
-        float3(
-            0.30,
-            0.295,
-            0.285);
-
-    color =
-        lerp(
-            color,
-            rockColor,
-            rockBlend);
+    // M21: do not infer exposed rock from slope in the shader. Physical
+    // exposure is resolved once by M18 and any visual overlay/material
+    // partition is resolved by the shared M21 surface-material path.
 
     const float3 previewLightDirection =
         normalize(
