@@ -310,6 +310,157 @@ template <typename Value>
     return mask;
 }
 
+[[nodiscard]] terrain_biome::BiomeSurfaceLayerKind SurfaceLayerKindFor(
+    const i64 value)
+{
+    if (value < 0 ||
+        value > 3)
+    {
+        throw std::runtime_error(
+            "Biome surface layer kind is outside the M21 layer catalog.");
+    }
+
+    return
+        static_cast<
+            terrain_biome::
+                BiomeSurfaceLayerKind>(
+                    value);
+}
+
+[[nodiscard]] terrain_biome::BiomeSurfaceLayerRule BiomeSurfaceLayerDescription(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& object)
+{
+    const i64 compatibility =
+        PropertyOr<i64>(
+            objects,
+            object.id,
+            world_model::
+                kBiomeSurfaceLayerCompatibility,
+            i64{31});
+
+    if (compatibility < 1 ||
+        compatibility > 31)
+    {
+        throw std::runtime_error(
+            "Biome surface layer compatibility mask must be in [1,31].");
+    }
+
+    terrain_biome::BiomeSurfaceLayerRule layer{
+        .kind =
+            SurfaceLayerKindFor(
+                PropertyOr<i64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerKind,
+                    i64{3})),
+        .strength =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerStrength,
+                    1.0)),
+        .compatibleExposed =
+            static_cast<
+                terrain_biome::
+                    BiomeExposedMaterialMask>(
+                        static_cast<u32>(
+                            compatibility)),
+        .minimumSlopeDegrees =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerSlopeMin,
+                    0.0)),
+        .maximumSlopeDegrees =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerSlopeMax,
+                    90.0)),
+        .slopeFalloffDegrees =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerSlopeFalloff,
+                    0.0)),
+        .minimumCurvature =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerCurvatureMin,
+                    -1.0)),
+        .maximumCurvature =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerCurvatureMax,
+                    1.0)),
+        .curvatureFalloff =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerCurvatureFalloff,
+                    0.0)),
+        .minimumMoisture =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerMoistureMin,
+                    0.0)),
+        .maximumMoisture =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerMoistureMax,
+                    1.0)),
+        .moistureFalloff =
+            static_cast<f32>(
+                PropertyOr<f64>(
+                    objects,
+                    object.id,
+                    world_model::
+                        kBiomeSurfaceLayerMoistureFalloff,
+                    0.0)),
+        .enabled =
+            PropertyOr<bool>(
+                objects,
+                object.id,
+                world_model::
+                    kBiomeSurfaceLayerEnabled,
+                true)
+    };
+
+    if (!layer.IsValid())
+    {
+        throw std::runtime_error(
+            "Biome surface layer contains invalid M21 parameters on object " +
+            object.id.ToString() +
+            ".");
+    }
+
+    return layer;
+}
+
 [[nodiscard]] terrain_biome::BiomeId BiomeIdFor(
     const scene::ObjectId object) noexcept
 {
@@ -441,6 +592,16 @@ template <typename Value>
             result.placement.
                 authoredMasks.push_back(
                     BiomeMaskDescription(
+                        objects,
+                        child));
+        }
+        else if (child.type ==
+            world_model::
+                kBiomeSurfaceLayerType)
+        {
+            result.surface.
+                layers.push_back(
+                    BiomeSurfaceLayerDescription(
                         objects,
                         child));
         }
