@@ -718,11 +718,67 @@ bool BiomePlacementRules::IsValid() const noexcept
     return true;
 }
 
+bool BiomeSurfaceLayerRule::IsValid() const noexcept
+{
+    const auto finite =
+        [](const f32 value)
+        {
+            return
+                std::isfinite(value);
+        };
+
+    const u32 compatibility =
+        static_cast<u32>(
+            compatibleExposed);
+
+    return
+        finite(strength) &&
+        strength >= 0.0F &&
+        strength <= 1.0F &&
+        compatibility != 0U &&
+        (compatibility &
+         ~static_cast<u32>(
+             BiomeExposedMaterialMask::All)) ==
+            0U &&
+        finite(minimumSlopeDegrees) &&
+        finite(maximumSlopeDegrees) &&
+        finite(slopeFalloffDegrees) &&
+        minimumSlopeDegrees >= 0.0F &&
+        maximumSlopeDegrees <= 90.0F &&
+        minimumSlopeDegrees <= maximumSlopeDegrees &&
+        slopeFalloffDegrees >= 0.0F &&
+        finite(minimumCurvature) &&
+        finite(maximumCurvature) &&
+        finite(curvatureFalloff) &&
+        minimumCurvature <= maximumCurvature &&
+        curvatureFalloff >= 0.0F &&
+        finite(minimumMoisture) &&
+        finite(maximumMoisture) &&
+        finite(moistureFalloff) &&
+        minimumMoisture >= 0.0F &&
+        maximumMoisture <= 1.0F &&
+        minimumMoisture <= maximumMoisture &&
+        moistureFalloff >= 0.0F;
+}
+
 bool BiomeSurfaceRules::IsValid() const noexcept
 {
-    return
-        FiniteNonNegative(
-            materialInfluence);
+    if (!FiniteNonNegative(
+            materialInfluence))
+    {
+        return false;
+    }
+
+    for (const auto& layer :
+         layers)
+    {
+        if (!layer.IsValid())
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool BiomeScatterRules::IsValid() const noexcept
