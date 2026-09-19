@@ -189,7 +189,7 @@ enum class BiomeExposedMaterialMask : u32
     Soil = 1U << 2U,
     Sand = 1U << 3U,
     Debris = 1U << 4U,
-    All = Bedrock | Regolith | Soil | Sand | Debris
+    All = 31U
 };
 
 [[nodiscard]] constexpr BiomeExposedMaterialMask operator|(
