@@ -47,4 +47,21 @@ if(BUILD_TESTING)
         NAME Orbit.StudioViewportCamera
         COMMAND OrbitStudioViewportCameraTests
     )
+
+    add_executable(OrbitStudioViewportPresentationTests
+        tests/StudioViewportPresentationTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioViewportPresentationTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStudioViewportPresentationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioViewportPresentationTests)
+
+    add_test(
+        NAME Orbit.StudioViewportPresentation
+        COMMAND OrbitStudioViewportPresentationTests
+    )
 endif()

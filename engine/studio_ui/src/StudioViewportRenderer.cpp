@@ -9,8 +9,10 @@ namespace orbit::studio_ui
 StudioViewportRenderer::StudioViewportRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
-    : bodyRenderer_(device, compiler),
-      pathRenderer_(device, compiler)
+    : device_(&device),
+      bodyRenderer_(device, compiler),
+      pathRenderer_(device, compiler),
+      debugComposite_(device, compiler)
 {
 }
 
@@ -92,13 +94,132 @@ StudioViewportRenderer::Compose(
             shape = body->shape;
         }
 
-        if (shape.has_value())
+        const auto liveDebugPage =
+            views.LiveDebugPage(info.id);
+        const bool hasDebugField =
+            liveDebugPage != nullptr &&
+            liveDebugPage->Has(
+                info.debugField);
+
+        const auto presentation =
+            SelectStudioViewportPresentation(
+                logicalTarget->mode,
+                shape.has_value(),
+                liveDebugPage != nullptr,
+                hasDebugField);
+
+        const u32 width = view->Width();
+        const u32 height = view->Height();
+        auto* color = &view->Color();
+
+        switch (presentation)
+        {
+        case StudioViewportPresentation::TerrainDebug:
+        {
+            if (device_ == nullptr ||
+                liveDebugPage == nullptr)
+            {
+                throw std::logic_error(
+                    "Studio terrain-debug presentation lost its device or live page.");
+            }
+
+            auto& debug =
+                debugPresentations_[info.id];
+
+            if (debug.texture == nullptr ||
+                debug.texture->Width() !=
+                    liveDebugPage->Width() ||
+                debug.texture->Height() !=
+                    liveDebugPage->Height())
+            {
+                debug.texture =
+                    std::make_unique<
+                        terrain_debug::TerrainDebugTexture>(
+                            *device_,
+                            liveDebugPage->Width(),
+                            liveDebugPage->Height());
+                debug.source.reset();
+            }
+
+            const bool needsUpload =
+                debug.source != liveDebugPage ||
+                debug.field != info.debugField ||
+                !debug.texture->HasContent();
+
+            auto* debugTexture =
+                debug.texture.get();
+            const auto field =
+                info.debugField;
+
+            graph.AddPass(
+                prefix + ".TerrainDebug",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this,
+                 color,
+                 width,
+                 height,
+                 debugTexture,
+                 liveDebugPage,
+                 field,
+                 needsUpload](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    if (needsUpload)
+                    {
+                        debugTexture->Upload(
+                            commands,
+                            liveDebugPage->View(field));
+                    }
+
+                    debugComposite_.Draw(
+                        commands,
+                        debugTexture->Texture(),
+                        *color,
+                        width,
+                        height);
+                });
+
+            debug.source = liveDebugPage;
+            debug.field = field;
+            break;
+        }
+
+        case StudioViewportPresentation::TerrainDebugUnavailable:
+            graph.AddPass(
+                prefix + ".TerrainDebugUnavailable",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [color](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    commands.ClearColorTarget(
+                        *color,
+                        {
+                            .red = 0.055F,
+                            .green = 0.018F,
+                            .blue = 0.024F,
+                            .alpha = 1.0F
+                        });
+                });
+            break;
+
+        case StudioViewportPresentation::BodyPreview:
         {
             const auto camera = view->Camera();
             const auto bodyShape = *shape;
-            const u32 width = view->Width();
-            const u32 height = view->Height();
-            auto* color = &view->Color();
 
             graph.AddPass(
                 prefix + ".Body",
@@ -169,11 +290,10 @@ StudioViewportRenderer::Compose(
                             drawPathDebug);
                     });
             }
+            break;
         }
-        else
-        {
-            auto* color = &view->Color();
 
+        case StudioViewportPresentation::Blank:
             graph.AddPass(
                 prefix + ".Blank",
                 {
@@ -196,6 +316,7 @@ StudioViewportRenderer::Compose(
                             .alpha = 1.0F
                         });
                 });
+            break;
         }
 
         rendered.push_back({

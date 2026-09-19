@@ -8,8 +8,11 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/terrain_debug/TerrainDebugTexture.hpp>
 #include <orbit/time/SimulationTime.hpp>
 
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,9 +25,40 @@ struct StudioRenderedView
     bool targeted{false};
 };
 
-// Adds one body/path preview composition per owned Studio RenderView. Each pass
-// resolves the body from that view's own logical target, so pinned map/debug
-// views do not depend on a global active body.
+enum class StudioViewportPresentation : u8
+{
+    Blank,
+    BodyPreview,
+    TerrainDebug,
+    TerrainDebugUnavailable
+};
+
+// Debug mode is intentionally exclusive: when the selected physical page or
+// field is unavailable, Studio shows an unavailable debug surface instead of
+// silently falling back to the normal body preview.
+[[nodiscard]] constexpr StudioViewportPresentation
+SelectStudioViewportPresentation(
+    const studio_session::ViewportMode mode,
+    const bool hasBody,
+    const bool hasLiveDebugPage,
+    const bool hasSelectedDebugField) noexcept
+{
+    if (mode == studio_session::ViewportMode::Debug)
+    {
+        return hasLiveDebugPage &&
+                       hasSelectedDebugField
+            ? StudioViewportPresentation::TerrainDebug
+            : StudioViewportPresentation::TerrainDebugUnavailable;
+    }
+
+    return hasBody
+        ? StudioViewportPresentation::BodyPreview
+        : StudioViewportPresentation::Blank;
+}
+
+// Adds one body/path or physical-terrain-debug composition per owned Studio
+// RenderView. Debug textures are persistent derived presentation resources;
+// physical terrain authority stays in TerrainDebugPageData's source products.
 class StudioViewportRenderer
 {
 public:
@@ -42,7 +76,23 @@ public:
         bool drawPathDebug = true);
 
 private:
+    struct DebugPresentation
+    {
+        std::unique_ptr<terrain_debug::TerrainDebugTexture> texture;
+        std::shared_ptr<const terrain_debug::TerrainDebugPageData> source;
+        terrain_debug::TerrainDebugField field{
+            terrain_debug::TerrainDebugField::Uplift};
+    };
+
+    rhi::Device* device_{nullptr};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
+    render_view::CompositeRenderer debugComposite_;
+
+    std::map<
+        std::string,
+        DebugPresentation,
+        std::less<>>
+        debugPresentations_;
 };
 } // namespace orbit::studio_ui
