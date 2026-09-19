@@ -199,29 +199,32 @@ void TestRevisitResidentTerrainDoesNotRegenerate()
     const auto aKey = MakeKey(2);
     const auto bKey = MakeKey(3);
 
-    cache.GetOrCreate(
-        aKey,
-        [&]()
-        {
-            ++aCalls;
-            return MakePage(512);
-        });
+    static_cast<void>(
+        cache.GetOrCreate(
+            aKey,
+            [&]()
+            {
+                ++aCalls;
+                return MakePage(512);
+            }));
 
-    cache.GetOrCreate(
-        bKey,
+    static_cast<void>(
+        cache.GetOrCreate(
+            bKey,
         [&]()
-        {
-            ++bCalls;
-            return MakePage(512);
-        });
+            {
+                ++bCalls;
+                return MakePage(512);
+            }));
 
-    cache.GetOrCreate(
-        aKey,
+    static_cast<void>(
+        cache.GetOrCreate(
+            aKey,
         [&]()
-        {
-            ++aCalls;
-            return MakePage(512);
-        });
+            {
+                ++aCalls;
+                return MakePage(512);
+            }));
 
     Require(
         aCalls == 1 && bCalls == 1,
@@ -243,9 +246,12 @@ void TestRevisionAndPhysicalLodArePartOfIdentity()
             return MakePage(128);
         };
 
-    cache.GetOrCreate(MakeKey(4, 2, 10), generate);
-    cache.GetOrCreate(MakeKey(4, 2, 11), generate);
-    cache.GetOrCreate(MakeKey(4, 3, 11), generate);
+    static_cast<void>(
+        cache.GetOrCreate(MakeKey(4, 2, 10), generate));
+    static_cast<void>(
+        cache.GetOrCreate(MakeKey(4, 2, 11), generate));
+    static_cast<void>(
+        cache.GetOrCreate(MakeKey(4, 3, 11), generate));
 
     Require(
         calls == 3,
