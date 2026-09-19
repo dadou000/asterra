@@ -32,6 +32,8 @@ on:
       - "tests/PlanetTileNeighborhoodTests.cpp"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
+      - "tests/V004TerrainValidationTests.cpp"
+      - "tests/CMakeLists.txt"
       - "engine/CMakeLists.txt"
       - ".github/workflows/orbit-v004-terrain.yml"
   pull_request:
@@ -65,6 +67,8 @@ on:
       - "tests/PlanetTileNeighborhoodTests.cpp"
       - "tests/TerrainContractTests.cpp"
       - "tests/TerrainFaceSeamTests.cpp"
+      - "tests/V004TerrainValidationTests.cpp"
+      - "tests/CMakeLists.txt"
       - "engine/CMakeLists.txt"
       - ".github/workflows/orbit-v004-terrain.yml"
 
@@ -103,6 +107,7 @@ jobs:
         run: >-
           cmake --build build --config Release --target
           OrbitTerrainContractTests
+          OrbitV004ValidationTests
           OrbitTerrainFaceSeamTests
           OrbitTerrainM01IntegrationTests
           OrbitPlanetTileNeighborhoodTests
@@ -153,4 +158,4 @@ jobs:
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainLocal3DPromotion|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceAuthoringModel|SurfaceMaterialResolver|TerrainSurfaceShader|TerrainScatter|TerrainGpuScatterShaders|TerrainGpuPersistentCache|TerrainMultiScale|TerrainBoundaryExchange|TerrainDependency|TerrainDebug|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders|StudioViewportPresentation)"
+          -R "Orbit[.](TerrainContracts|V004Validation|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainLocal3DPromotion|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceAuthoringModel|SurfaceMaterialResolver|TerrainSurfaceShader|TerrainScatter|TerrainGpuScatterShaders|TerrainGpuPersistentCache|TerrainMultiScale|TerrainBoundaryExchange|TerrainDependency|TerrainDebug|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders|StudioViewportPresentation)"

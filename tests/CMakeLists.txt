@@ -966,3 +966,30 @@ add_test(
     NAME Orbit.V003ScaffoldIntegration
     COMMAND OrbitV003ScaffoldIntegrationTests $<TARGET_FILE:OrbitPlayer>
 )
+
+
+# V0.0.4 M30 deterministic cross-system validation suite. Keep the twenty
+# mandatory cases in this single acceptance target so milestone status cannot
+# be inferred from unrelated unit tests.
+add_executable(OrbitV004ValidationTests
+    V004TerrainValidationTests.cpp
+)
+
+target_link_libraries(OrbitV004ValidationTests
+    PRIVATE
+        Orbit::TerrainGeology
+        Orbit::TerrainMaterialColumn
+)
+
+target_compile_definitions(OrbitV004ValidationTests
+    PRIVATE
+        ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR="${CMAKE_SOURCE_DIR}/engine/terrain_geology/assets/reference"
+)
+
+target_compile_features(OrbitV004ValidationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitV004ValidationTests)
+
+add_test(
+    NAME Orbit.V004Validation
+    COMMAND OrbitV004ValidationTests
+)
