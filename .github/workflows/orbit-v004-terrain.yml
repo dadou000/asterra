@@ -24,6 +24,7 @@ on:
       - "engine/surface_model/**"
       - "engine/world_model/**"
       - "engine/studio_ui/**"
+      - "engine/studio_session/**"
       - "engine/editor_model/**"
       - "engine/terrain_render/**"
       - "engine/terrain_scatter/**"
@@ -56,6 +57,7 @@ on:
       - "engine/surface_model/**"
       - "engine/world_model/**"
       - "engine/studio_ui/**"
+      - "engine/studio_session/**"
       - "engine/editor_model/**"
       - "engine/terrain_render/**"
       - "engine/terrain_scatter/**"
@@ -130,6 +132,7 @@ jobs:
           OrbitTerrainDebugLivePageTests
           OrbitTerrainDebugSeamTests
           OrbitStudioUi
+          OrbitStudioSession
           OrbitTerrainDrainagePageTests
           OrbitTerrainStreamPowerTests
           OrbitTerrainHydraulicErosionTests
