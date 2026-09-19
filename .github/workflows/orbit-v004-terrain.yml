@@ -106,6 +106,7 @@ jobs:
           OrbitTerrainSurfaceResolverTests
           OrbitTerrainBiomeTests
           OrbitSurfaceCompositionTests
+          OrbitSurfaceMaterialResolverTests
           OrbitTerrainDrainagePageTests
           OrbitTerrainStreamPowerTests
           OrbitTerrainHydraulicErosionTests
@@ -125,4 +126,4 @@ jobs:
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceMaterialResolver|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders)"
