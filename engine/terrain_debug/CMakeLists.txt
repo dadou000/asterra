@@ -12,6 +12,7 @@ target_include_directories(OrbitTerrainDebug
 target_link_libraries(OrbitTerrainDebug
     PUBLIC
         Orbit::Core
+        Orbit::RHI
         Orbit::Terrain
         Orbit::World
 )
