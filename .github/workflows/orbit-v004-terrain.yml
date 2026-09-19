@@ -127,6 +127,7 @@ jobs:
           OrbitTerrainDebugTests
           OrbitTerrainDebugRasterTests
           OrbitTerrainDebugPageDataTests
+          OrbitTerrainDebugSeamTests
           OrbitStudioUi
           OrbitTerrainDrainagePageTests
           OrbitTerrainStreamPowerTests
