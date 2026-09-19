@@ -55,6 +55,11 @@ inline constexpr schema::TypeId kBiomeAuthoredMaskType{
     .low = 0x4d454d41534b3031ULL
 };
 
+inline constexpr schema::TypeId kBiomeSurfaceLayerType{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45535552463031ULL
+};
+
 inline constexpr schema::TypeId kSurfaceDecalType{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c545950450001ULL
@@ -233,6 +238,71 @@ inline constexpr schema::PropertyId kBiomeMaskOpacity{
 inline constexpr schema::PropertyId kBiomeMaskEnabled{
     .high = 0x4f5242495442494fULL,
     .low = 0x4d454d454e414201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerKind{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c4b494e01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerStrength{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c53545201ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerCompatibility{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c434f4d01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerSlopeMin{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c534d4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerSlopeMax{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c534d4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerSlopeFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c53464101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerCurvatureMin{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c434d4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerCurvatureMax{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c434d4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerCurvatureFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c43464101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerMoistureMin{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c4d4d4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerMoistureMax{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c4d4d4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerMoistureFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c4d464101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeSurfaceLayerEnabled{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534c454e4101ULL
 };
 
 inline constexpr schema::PropertyId kBiomeMinimumResolvedWeight{
