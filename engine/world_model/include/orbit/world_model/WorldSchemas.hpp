@@ -60,6 +60,11 @@ inline constexpr schema::TypeId kBiomeSurfaceLayerType{
     .low = 0x4d45535552463031ULL
 };
 
+inline constexpr schema::TypeId kBiomeScatterRuleType{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534341543031ULL
+};
+
 inline constexpr schema::TypeId kSurfaceDecalType{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c545950450001ULL
@@ -303,6 +308,86 @@ inline constexpr schema::PropertyId kBiomeSurfaceLayerMoistureFalloff{
 inline constexpr schema::PropertyId kBiomeSurfaceLayerEnabled{
     .high = 0x4f5242495442494fULL,
     .low = 0x4d45534c454e4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterKind{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553434b494e01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterDensity{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534344454e01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterSpacing{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534353504101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterSeedSalt{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534353454501ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterCompatibility{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d455343434f4d01ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterRequiresSoil{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534352535101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterMinimumSoilDepth{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d455343534f4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterSlopeMin{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d455343534d4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterSlopeMax{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d455343534d4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterSlopeFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d45534353464101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterMoistureMin{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553434d4d4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterMoistureMax{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553434d4d4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterMoistureFalloff{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553434d464101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterScaleMin{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553435a4d4901ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterScaleMax{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d4553435a4d4101ULL
+};
+
+inline constexpr schema::PropertyId kBiomeScatterEnabled{
+    .high = 0x4f5242495442494fULL,
+    .low = 0x4d455343454e4101ULL
 };
 
 inline constexpr schema::PropertyId kBiomeMinimumResolvedWeight{
