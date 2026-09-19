@@ -65,9 +65,9 @@ public:
     [[nodiscard]] bool Erase(
         const terrain::PhysicalTerrainPageAddress& address);
 
-    void Clear() noexcept;
+    void Clear();
 
-    [[nodiscard]] std::size_t Size() const noexcept;
+    [[nodiscard]] std::size_t Size() const;
 
 private:
     struct AddressHash

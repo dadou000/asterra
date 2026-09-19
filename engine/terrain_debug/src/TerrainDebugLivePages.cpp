@@ -161,9 +161,12 @@ void TerrainDebugLivePages::Publish(
             "Terrain debug live-page publication requires a valid immutable page.");
     }
 
+    const auto address =
+        page->Stamp().address;
+
     std::unique_lock lock(mutex_);
     pages_.insert_or_assign(
-        page->Stamp().address,
+        address,
         std::move(page));
 }
 
@@ -188,13 +191,13 @@ bool TerrainDebugLivePages::Erase(
     return pages_.erase(address) > 0U;
 }
 
-void TerrainDebugLivePages::Clear() noexcept
+void TerrainDebugLivePages::Clear()
 {
     std::unique_lock lock(mutex_);
     pages_.clear();
 }
 
-std::size_t TerrainDebugLivePages::Size() const noexcept
+std::size_t TerrainDebugLivePages::Size() const
 {
     std::shared_lock lock(mutex_);
     return pages_.size();
