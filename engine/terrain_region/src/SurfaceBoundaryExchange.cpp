@@ -679,7 +679,8 @@ WaterBoundaryFluxPacket::operator+=(
 {
     volumeCubicMeters +=
         other.volumeCubicMeters;
-    velocityMoment +=
+    velocityMoment =
+        velocityMoment +
         other.velocityMoment;
     return *this;
 }
@@ -873,14 +874,12 @@ math::Double2 TransformBoundaryVectorAcrossEdge(
         PositiveTangent(sourceEdge);
 
     const f64 normal =
-        math::Dot(
-            sourceVector,
-            sourceNormal);
+        sourceVector.x * sourceNormal.x +
+        sourceVector.y * sourceNormal.y;
 
     f64 tangent =
-        math::Dot(
-            sourceVector,
-            sourceTangent);
+        sourceVector.x * sourceTangent.x +
+        sourceVector.y * sourceTangent.y;
 
     if (mapping.reverseSamples)
     {
