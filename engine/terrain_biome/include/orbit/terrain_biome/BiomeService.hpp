@@ -173,11 +173,70 @@ struct BiomePlacementRules
     [[nodiscard]] bool IsValid() const noexcept;
 };
 
+enum class BiomeSurfaceLayerKind : u8
+{
+    Snow,
+    Moss,
+    Litter,
+    Dust
+};
+
+enum class BiomeExposedMaterialMask : u32
+{
+    None = 0U,
+    Bedrock = 1U << 0U,
+    Regolith = 1U << 1U,
+    Soil = 1U << 2U,
+    Sand = 1U << 3U,
+    Debris = 1U << 4U,
+    All = Bedrock | Regolith | Soil | Sand | Debris
+};
+
+[[nodiscard]] constexpr BiomeExposedMaterialMask operator|(
+    const BiomeExposedMaterialMask a,
+    const BiomeExposedMaterialMask b) noexcept
+{
+    return
+        static_cast<BiomeExposedMaterialMask>(
+            static_cast<u32>(a) |
+            static_cast<u32>(b));
+}
+
+struct BiomeSurfaceLayerRule
+{
+    BiomeSurfaceLayerKind kind{
+        BiomeSurfaceLayerKind::Dust};
+
+    f32 strength{1.0F};
+
+    BiomeExposedMaterialMask compatibleExposed{
+        BiomeExposedMaterialMask::All};
+
+    f32 minimumSlopeDegrees{0.0F};
+    f32 maximumSlopeDegrees{90.0F};
+    f32 slopeFalloffDegrees{0.0F};
+
+    f32 minimumCurvature{-1.0F};
+    f32 maximumCurvature{1.0F};
+    f32 curvatureFalloff{0.0F};
+
+    f32 minimumMoisture{0.0F};
+    f32 maximumMoisture{1.0F};
+    f32 moistureFalloff{0.0F};
+
+    bool enabled{true};
+
+    [[nodiscard]] bool IsValid() const noexcept;
+};
+
 struct BiomeSurfaceRules
 {
-    // Generic multiplier carried into M21's physical-surface × biome material
-    // resolver. Zero means the biome contributes no visual surface layer.
+    // Global multiplier for every authored surface layer in this biome.
     f32 materialInfluence{1.0F};
+
+    // Stable semantic child order is the layer stack order. The shared M21
+    // resolver evaluates these rules; shaders receive only the resolved blend.
+    std::vector<BiomeSurfaceLayerRule> layers;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
