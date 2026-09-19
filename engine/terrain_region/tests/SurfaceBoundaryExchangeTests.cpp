@@ -429,14 +429,14 @@ void TestGhostSnapshotsAreDeterministic()
         "Adjacent physical pages must exchange a ghost edge.");
 
     for (u32 sourceIndex = 0U;
-         sourceIndex < a.Resolution();
+         sourceIndex < a.resolution;
          ++sourceIndex)
     {
         const u32 targetIndex =
             world::RemapTileEdgeSampleIndex(
                 east,
                 sourceIndex,
-                a.Resolution());
+                a.resolution);
 
         RequireNear(
             incoming->cells[targetIndex].
