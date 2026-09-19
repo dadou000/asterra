@@ -3,8 +3,16 @@
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugRaster.hpp>
 
+#include <array>
+#include <span>
+#include <string_view>
+#include <vector>
+
 namespace orbit::terrain_debug
 {
+class TerrainDebugLivePages;
+class TerrainDebugPageData;
+
 struct TerrainDebugSeamComparison
 {
     TerrainDebugSeamProbe provenance{};
@@ -30,4 +38,49 @@ struct TerrainDebugSeamComparison
     const TerrainDebugPageStamp* neighbor,
     const TerrainDebugRasterView* neighborView,
     f64 numericTolerance = 1.0e-5);
+
+enum class TerrainDebugSeamState : u8
+{
+    Continuous,
+    MissingNeighbor,
+    PhysicalLodMismatch,
+    RevisionMismatch,
+    FieldUnavailable,
+    ValueMismatch
+};
+
+struct TerrainDebugSeamInspection
+{
+    world::TileEdge edge{world::TileEdge::North};
+    TerrainDebugSeamState state{
+        TerrainDebugSeamState::MissingNeighbor};
+    TerrainDebugSeamComparison comparison{};
+};
+
+[[nodiscard]] std::string_view TerrainDebugSeamStateName(
+    TerrainDebugSeamState state) noexcept;
+
+// Resolves the four canonical physical neighbors from the live-page registry
+// and evaluates the selected field using the same cube-face/sample remapping
+// as CompareSeamValues(). No terrain generation is triggered by inspection.
+[[nodiscard]] std::array<TerrainDebugSeamInspection, 4>
+InspectTerrainDebugSeams(
+    const TerrainDebugPageData& page,
+    TerrainDebugField field,
+    const TerrainDebugLivePages& livePages,
+    f64 numericTolerance = 1.0e-5);
+
+[[nodiscard]] u64 TerrainDebugSeamOverlayFingerprint(
+    std::span<const TerrainDebugSeamInspection> seams) noexcept;
+
+// Draws a presentation-only colored border directly into a tightly-packed
+// RGBA8 physical-page debug image. Each N/E/S/W edge reflects its inspection
+// state. This never mutates the underlying terrain/debug field samples.
+void ApplyTerrainDebugSeamOverlayRgba8(
+    std::vector<u8>& rgba,
+    u32 width,
+    u32 height,
+    std::span<const TerrainDebugSeamInspection> seams,
+    u32 thickness = 2U);
+
 } // namespace orbit::terrain_debug

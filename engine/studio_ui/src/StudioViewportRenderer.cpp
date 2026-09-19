@@ -141,9 +141,22 @@ StudioViewportRenderer::Compose(
                 debug.source.reset();
             }
 
+            const auto seams =
+                terrain_debug::InspectTerrainDebugSeams(
+                    *liveDebugPage,
+                    info.debugField,
+                    session.TerrainDebugPages());
+
+            const u64 seamFingerprint =
+                terrain_debug::
+                    TerrainDebugSeamOverlayFingerprint(
+                        seams);
+
             const bool needsUpload =
                 debug.source != liveDebugPage ||
                 debug.field != info.debugField ||
+                debug.seamFingerprint !=
+                    seamFingerprint ||
                 !debug.texture->HasContent();
 
             auto* debugTexture =
@@ -167,6 +180,7 @@ StudioViewportRenderer::Compose(
                  debugTexture,
                  liveDebugPage,
                  field,
+                 seams,
                  needsUpload](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
@@ -175,7 +189,8 @@ StudioViewportRenderer::Compose(
                     {
                         debugTexture->Upload(
                             commands,
-                            liveDebugPage->View(field));
+                            liveDebugPage->View(field),
+                            seams);
                     }
 
                     debugComposite_.Draw(
@@ -188,6 +203,8 @@ StudioViewportRenderer::Compose(
 
             debug.source = liveDebugPage;
             debug.field = field;
+            debug.seamFingerprint =
+                seamFingerprint;
             break;
         }
 

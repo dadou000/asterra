@@ -46,7 +46,8 @@ TerrainDebugTexture::TerrainDebugTexture(
 
 void TerrainDebugTexture::Upload(
     rhi::CommandList& commands,
-    const TerrainDebugRasterView& view)
+    const TerrainDebugRasterView& view,
+    const std::span<const TerrainDebugSeamInspection> seams)
 {
     if (view.width != width_ ||
         view.height != height_)
@@ -55,8 +56,14 @@ void TerrainDebugTexture::Upload(
             "Terrain debug raster dimensions do not match the GPU debug texture.");
     }
 
-    const auto rgba =
+    auto rgba =
         ComposeTerrainDebugRgba8(view);
+
+    ApplyTerrainDebugSeamOverlayRgba8(
+        rgba,
+        width_,
+        height_,
+        seams);
 
     const u64 expectedBytes =
         static_cast<u64>(rgba.size());

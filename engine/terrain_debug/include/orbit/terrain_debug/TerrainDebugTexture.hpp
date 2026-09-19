@@ -4,6 +4,7 @@
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/Resource.hpp>
 #include <orbit/terrain_debug/TerrainDebugRaster.hpp>
+#include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 
 #include <memory>
 
@@ -25,7 +26,8 @@ public:
 
     void Upload(
         rhi::CommandList& commands,
-        const TerrainDebugRasterView& view);
+        const TerrainDebugRasterView& view,
+        std::span<const TerrainDebugSeamInspection> seams = {});
 
     [[nodiscard]] u32 Width() const noexcept;
     [[nodiscard]] u32 Height() const noexcept;

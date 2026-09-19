@@ -1,9 +1,12 @@
+#include <orbit/terrain_debug/TerrainDebugLivePages.hpp>
 #include <orbit/terrain_debug/TerrainDebugPageData.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 #include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
 
 #include <cstdlib>
+#include <array>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -376,6 +379,283 @@ void TestValueMismatchIsReported()
         mismatch.maximumDifference > 0.49,
         "A real edge-value discontinuity must be counted and quantified.");
 }
+
+std::shared_ptr<terrain_debug::TerrainDebugPageData>
+MakeUniformSoilPage(
+    const terrain_debug::TerrainDebugPageStamp& stamp,
+    const f32 value,
+    const bool publishSoil = true)
+{
+    auto page =
+        std::make_shared<
+            terrain_debug::TerrainDebugPageData>(
+                stamp,
+                4,
+                4);
+
+    if (publishSoil)
+    {
+        const std::vector<f32> values(
+            16,
+            value);
+
+        page->SetScalar(
+            terrain_debug::TerrainDebugField::Soil,
+            values);
+    }
+
+    return page;
+}
+
+void TestLiveSeamInspectionClassifiesAllStates()
+{
+    const world::PlanetTileId tile{
+        .face = world::CubeFace::PositiveZ,
+        .level = 3,
+        .x = 3,
+        .y = 3
+    };
+
+    const auto sourceStamp =
+        MakeStamp(tile);
+    const auto source =
+        MakeUniformSoilPage(
+            sourceStamp,
+            1.0F);
+
+    terrain_debug::TerrainDebugLivePages live;
+
+    auto inspections =
+        terrain_debug::InspectTerrainDebugSeams(
+            *source,
+            terrain_debug::TerrainDebugField::Soil,
+            live);
+
+    for (const auto& seam : inspections)
+    {
+        Require(
+            seam.state ==
+                terrain_debug::
+                    TerrainDebugSeamState::
+                        MissingNeighbor,
+            "Unpublished physical neighbors must be reported as missing.");
+    }
+
+    const auto northAddress =
+        terrain_debug::ExpectedNeighbor(
+            sourceStamp.address,
+            world::TileEdge::North);
+    auto northStamp =
+        MakeStamp(
+            northAddress.tile);
+    live.Publish(
+        MakeUniformSoilPage(
+            northStamp,
+            1.0F));
+
+    const auto eastAddress =
+        terrain_debug::ExpectedNeighbor(
+            sourceStamp.address,
+            world::TileEdge::East);
+    auto eastStamp =
+        MakeStamp(
+            eastAddress.tile);
+    eastStamp.physicalLod =
+        static_cast<u8>(
+            sourceStamp.physicalLod + 1U);
+    live.Publish(
+        MakeUniformSoilPage(
+            eastStamp,
+            1.0F));
+
+    const auto southAddress =
+        terrain_debug::ExpectedNeighbor(
+            sourceStamp.address,
+            world::TileEdge::South);
+    auto southStamp =
+        MakeStamp(
+            southAddress.tile);
+    ++southStamp.revisions.geology;
+    live.Publish(
+        MakeUniformSoilPage(
+            southStamp,
+            1.0F));
+
+    const auto westAddress =
+        terrain_debug::ExpectedNeighbor(
+            sourceStamp.address,
+            world::TileEdge::West);
+    auto westStamp =
+        MakeStamp(
+            westAddress.tile);
+    live.Publish(
+        MakeUniformSoilPage(
+            westStamp,
+            0.0F,
+            false));
+
+    inspections =
+        terrain_debug::InspectTerrainDebugSeams(
+            *source,
+            terrain_debug::TerrainDebugField::Soil,
+            live);
+
+    Require(
+        inspections[
+            static_cast<u8>(
+                world::TileEdge::North)].
+            state ==
+            terrain_debug::
+                TerrainDebugSeamState::
+                    Continuous,
+        "Matching live north neighbor must be continuous.");
+
+    Require(
+        inspections[
+            static_cast<u8>(
+                world::TileEdge::East)].
+            state ==
+            terrain_debug::
+                TerrainDebugSeamState::
+                    PhysicalLodMismatch,
+        "Physical LOD disagreement must be classified explicitly.");
+
+    Require(
+        inspections[
+            static_cast<u8>(
+                world::TileEdge::South)].
+            state ==
+            terrain_debug::
+                TerrainDebugSeamState::
+                    RevisionMismatch,
+        "Generation revision disagreement must be classified explicitly.");
+
+    Require(
+        inspections[
+            static_cast<u8>(
+                world::TileEdge::West)].
+            state ==
+            terrain_debug::
+                TerrainDebugSeamState::
+                    FieldUnavailable,
+        "A present neighbor without the selected field must stay unavailable.");
+
+    live.Publish(
+        MakeUniformSoilPage(
+            westStamp,
+            2.0F));
+
+    inspections =
+        terrain_debug::InspectTerrainDebugSeams(
+            *source,
+            terrain_debug::TerrainDebugField::Soil,
+            live);
+
+    const auto& west =
+        inspections[
+            static_cast<u8>(
+                world::TileEdge::West)];
+
+    Require(
+        west.state ==
+            terrain_debug::
+                TerrainDebugSeamState::
+                    ValueMismatch &&
+        west.comparison.mismatchedSamples == 4U &&
+        west.comparison.maximumDifference > 0.99,
+        "A live field discontinuity must become an explicit value mismatch.");
+}
+
+void TestSeamOverlayDrawsCanonicalEdges()
+{
+    std::vector<u8> rgba(
+        4U * 4U * 4U,
+        0U);
+
+    const std::array<
+        terrain_debug::TerrainDebugSeamInspection,
+        4> seams{{
+        {
+            .edge = world::TileEdge::North,
+            .state =
+                terrain_debug::
+                    TerrainDebugSeamState::
+                        Continuous
+        },
+        {
+            .edge = world::TileEdge::East,
+            .state =
+                terrain_debug::
+                    TerrainDebugSeamState::
+                        MissingNeighbor
+        },
+        {
+            .edge = world::TileEdge::South,
+            .state =
+                terrain_debug::
+                    TerrainDebugSeamState::
+                        PhysicalLodMismatch
+        },
+        {
+            .edge = world::TileEdge::West,
+            .state =
+                terrain_debug::
+                    TerrainDebugSeamState::
+                        ValueMismatch
+        }
+    }};
+
+    terrain_debug::
+        ApplyTerrainDebugSeamOverlayRgba8(
+            rgba,
+            4,
+            4,
+            seams,
+            1);
+
+    const auto pixel =
+        [&](const u32 x,
+            const u32 y)
+        {
+            const std::size_t index =
+                (static_cast<std::size_t>(y) *
+                     4U +
+                 x) *
+                4U;
+
+            return std::array<u8, 4>{
+                rgba[index + 0U],
+                rgba[index + 1U],
+                rgba[index + 2U],
+                rgba[index + 3U]
+            };
+        };
+
+    Require(
+        pixel(1U, 0U) ==
+            std::array<u8, 4>{
+                48U, 208U, 96U, 255U},
+        "North continuous seam must draw the green top border.");
+
+    Require(
+        pixel(3U, 1U) ==
+            std::array<u8, 4>{
+                96U, 96U, 96U, 255U},
+        "East missing seam must draw the gray right border.");
+
+    Require(
+        pixel(1U, 3U) ==
+            std::array<u8, 4>{
+                64U, 160U, 255U, 255U},
+        "South LOD mismatch must draw the blue bottom border.");
+
+    Require(
+        pixel(0U, 1U) ==
+            std::array<u8, 4>{
+                255U, 64U, 64U, 255U},
+        "West value mismatch must draw the red left border.");
+}
+
 } // namespace
 
 int main()
@@ -383,6 +663,8 @@ int main()
     TestCrossFaceSampleMapping();
     TestCrossFaceVectorOrientation();
     TestValueMismatchIsReported();
+    TestLiveSeamInspectionClassifiesAllStates();
+    TestSeamOverlayDrawsCanonicalEdges();
 
     std::cout << "Orbit M29 value-level seam tests passed.\n";
     return EXIT_SUCCESS;

@@ -2,6 +2,7 @@
 
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
+#include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 
 #include <algorithm>
 #include <format>
@@ -27,6 +28,24 @@ namespace
     }
 
     return "Perspective";
+}
+
+[[nodiscard]] const char* EdgeName(
+    const world::TileEdge edge) noexcept
+{
+    switch (edge)
+    {
+    case world::TileEdge::North:
+        return "N";
+    case world::TileEdge::East:
+        return "E";
+    case world::TileEdge::South:
+        return "S";
+    case world::TileEdge::West:
+        return "W";
+    }
+
+    return "?";
 }
 
 [[nodiscard]] const char* CubeFaceName(
@@ -299,6 +318,55 @@ void StudioViewportPanels::DrawView(
                 livePage->Has(field)
                     ? "Selected field: available"
                     : "Selected field: not published by the live page producer");
+
+            if (livePage->Has(field))
+            {
+                const auto seams =
+                    terrain_debug::
+                        InspectTerrainDebugSeams(
+                            *livePage,
+                            field,
+                            session_->
+                                TerrainDebugPages());
+
+                context.Text("Physical page seams");
+
+                for (const auto& seam : seams)
+                {
+                    if (seam.state ==
+                        terrain_debug::
+                            TerrainDebugSeamState::
+                                ValueMismatch)
+                    {
+                        context.Text(
+                            std::format(
+                                "{}: {} ({}/{} samples, max diff {:.6g})",
+                                EdgeName(seam.edge),
+                                terrain_debug::
+                                    TerrainDebugSeamStateName(
+                                        seam.state),
+                                seam.comparison.
+                                    mismatchedSamples,
+                                seam.comparison.
+                                    samplesCompared,
+                                seam.comparison.
+                                    maximumDifference));
+                    }
+                    else
+                    {
+                        context.Text(
+                            std::format(
+                                "{}: {}",
+                                EdgeName(seam.edge),
+                                terrain_debug::
+                                    TerrainDebugSeamStateName(
+                                        seam.state)));
+                    }
+                }
+
+                context.Text(
+                    "Seam border: green continuous | gray missing | blue LOD | yellow revision | magenta unavailable | red mismatch");
+            }
         }
         else
         {

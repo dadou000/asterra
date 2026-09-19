@@ -82,6 +82,7 @@ private:
         std::shared_ptr<const terrain_debug::TerrainDebugPageData> source;
         terrain_debug::TerrainDebugField field{
             terrain_debug::TerrainDebugField::Uplift};
+        u64 seamFingerprint{0};
     };
 
     rhi::Device* device_{nullptr};
