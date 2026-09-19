@@ -1,6 +1,7 @@
 add_library(OrbitTerrainDebug STATIC
     src/TerrainDebugField.cpp
     src/TerrainDebugPageData.cpp
+    src/TerrainDebugLivePages.cpp
     src/TerrainDebugRaster.cpp
     src/TerrainDebugSeam.cpp
     src/TerrainDebugTexture.cpp
@@ -56,6 +57,14 @@ if(BUILD_TESTING)
     target_compile_features(OrbitTerrainDebugPageDataTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitTerrainDebugPageDataTests)
     add_test(NAME Orbit.TerrainDebugPageData COMMAND OrbitTerrainDebugPageDataTests)
+
+    add_executable(OrbitTerrainDebugLivePageTests
+        tests/TerrainDebugLivePagesTests.cpp
+    )
+    target_link_libraries(OrbitTerrainDebugLivePageTests PRIVATE Orbit::TerrainDebug)
+    target_compile_features(OrbitTerrainDebugLivePageTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainDebugLivePageTests)
+    add_test(NAME Orbit.TerrainDebugLivePages COMMAND OrbitTerrainDebugLivePageTests)
 
     add_executable(OrbitTerrainDebugSeamTests
         tests/TerrainDebugSeamTests.cpp

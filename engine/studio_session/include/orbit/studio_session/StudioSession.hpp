@@ -9,6 +9,7 @@
 #include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
 #include <orbit/studio_session/WorldBoundPathNetwork.hpp>
+#include <orbit/terrain_debug/TerrainDebugLivePages.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -70,6 +71,11 @@ public:
     [[nodiscard]] const UniverseBoundPathCache&
     PathProducts() const noexcept;
 
+    [[nodiscard]] terrain_debug::TerrainDebugLivePages&
+    TerrainDebugPages() noexcept;
+    [[nodiscard]] const terrain_debug::TerrainDebugLivePages&
+    TerrainDebugPages() const noexcept;
+
     [[nodiscard]] std::vector<editor_session::WorldDocumentItem>
     Worlds() const;
     [[nodiscard]] std::optional<editor_session::WorldDocumentItem>
@@ -99,6 +105,8 @@ public:
     [[nodiscard]] StudioTickResult Tick(bool pollPlugins = true);
 
 private:
+    void RefreshTerrainDebugGeneration();
+
     void DispatchWorldLifecycle(
         std::string_view method,
         std::optional<std::filesystem::path> path);
@@ -110,6 +118,8 @@ private:
     WorldBoundPathNetwork pathNetwork_;
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
+    terrain_debug::TerrainDebugLivePages terrainDebugPages_;
+    u64 terrainDebugUniverseGeneration_{~u64{0}};
     editor_rpc::EditorSessionRpcHost rpc_;
 };
 } // namespace orbit::studio_session

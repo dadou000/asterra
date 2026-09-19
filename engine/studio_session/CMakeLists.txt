@@ -31,6 +31,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::PathRouting
         Orbit::Paths
         Orbit::Rpc
+        Orbit::TerrainDebug
 )
 
 target_compile_features(OrbitStudioSession PUBLIC cxx_std_23)

@@ -279,6 +279,33 @@ void StudioViewportPanels::DrawView(
                 "Physical page: <none> (click the planet in this viewport)");
         }
 
+        const auto livePage =
+            views_->LiveDebugPage(id);
+
+        if (livePage != nullptr)
+        {
+            const auto& stamp =
+                livePage->Stamp();
+            const auto field =
+                views_->DebugField(id);
+
+            context.Text(
+                std::format(
+                    "Live products: ready (physical LOD {}, {}x{})",
+                    stamp.physicalLod,
+                    livePage->Width(),
+                    livePage->Height()));
+            context.Text(
+                livePage->Has(field)
+                    ? "Selected field: available"
+                    : "Selected field: not published by the live page producer");
+        }
+        else
+        {
+            context.Text(
+                "Live products: no physical-page snapshot published yet");
+        }
+
         context.Text(
             "Click the debug viewport image to select a physical terrain page.");
 

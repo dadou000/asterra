@@ -101,6 +101,7 @@ void StudioRenderViewSet::Create(
         debugFields_.erase(targetId);
         debugPhysicalPageLevels_.erase(targetId);
         debugPhysicalPages_.erase(targetId);
+        liveDebugPages_.erase(targetId);
         static_cast<void>(
             session_->Viewports().Unregister(
                 targetId));
@@ -123,6 +124,7 @@ bool StudioRenderViewSet::Destroy(
     debugFields_.erase(ownedId);
     debugPhysicalPageLevels_.erase(ownedId);
     debugPhysicalPages_.erase(ownedId);
+    liveDebugPages_.erase(ownedId);
 
     if (session_ != nullptr)
     {
@@ -204,6 +206,7 @@ void StudioRenderViewSet::SetDebugPhysicalPageLevel(
 
     debugPhysicalPageLevels_[std::string(id)] = level;
     debugPhysicalPages_.erase(std::string(id));
+    liveDebugPages_.erase(std::string(id));
 }
 
 u8 StudioRenderViewSet::DebugPhysicalPageLevel(
@@ -219,7 +222,7 @@ u8 StudioRenderViewSet::DebugPhysicalPageLevel(
         debugPhysicalPageLevels_.find(id);
 
     return found == debugPhysicalPageLevels_.end()
-        ? 8U
+        ? static_cast<u8>(8)
         : found->second;
 }
 
@@ -261,6 +264,7 @@ bool StudioRenderViewSet::SelectDebugPhysicalPage(
     debugPhysicalPages_.insert_or_assign(
         std::string(id),
         *selection);
+    liveDebugPages_.erase(std::string(id));
     return true;
 }
 
@@ -280,6 +284,24 @@ StudioRenderViewSet::DebugPhysicalPage(
     return found == debugPhysicalPages_.end()
         ? std::nullopt
         : std::optional(found->second);
+}
+
+std::shared_ptr<const terrain_debug::TerrainDebugPageData>
+StudioRenderViewSet::LiveDebugPage(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        liveDebugPages_.find(id);
+
+    return found == liveDebugPages_.end()
+        ? nullptr
+        : found->second;
 }
 
 u32 StudioRenderViewSet::Refresh(
@@ -309,6 +331,7 @@ u32 StudioRenderViewSet::Refresh(
         {
             view->Camera() = {};
             debugPhysicalPages_.erase(id);
+            liveDebugPages_.erase(id);
             continue;
         }
 
@@ -331,6 +354,7 @@ u32 StudioRenderViewSet::Refresh(
                 expectedPlanet)
             {
                 debugPhysicalPages_.erase(selected);
+                liveDebugPages_.erase(id);
             }
         }
 
@@ -343,6 +367,33 @@ u32 StudioRenderViewSet::Refresh(
                     id,
                     0.5F,
                     0.5F));
+        }
+
+        const auto selectedPage =
+            debugPhysicalPages_.find(id);
+
+        if (target->mode ==
+                studio_session::ViewportMode::Debug &&
+            selectedPage != debugPhysicalPages_.end())
+        {
+            auto live =
+                session_->TerrainDebugPages().Find(
+                    selectedPage->second.address);
+
+            if (live != nullptr)
+            {
+                liveDebugPages_.insert_or_assign(
+                    id,
+                    std::move(live));
+            }
+            else
+            {
+                liveDebugPages_.erase(id);
+            }
+        }
+        else
+        {
+            liveDebugPages_.erase(id);
         }
 
         ++targetedViews;
@@ -397,7 +448,9 @@ StudioRenderViewSet::Catalog() const
             .debugPhysicalPageLevel =
                 DebugPhysicalPageLevel(id),
             .debugPhysicalPage =
-                DebugPhysicalPage(id)
+                DebugPhysicalPage(id),
+            .hasLiveDebugPage =
+                LiveDebugPage(id) != nullptr
         });
     }
 

@@ -27,6 +27,7 @@ struct StudioRenderViewInfo
         terrain_debug::TerrainDebugField::Uplift};
     u8 debugPhysicalPageLevel{8};
     std::optional<StudioPhysicalPageSelection> debugPhysicalPage;
+    bool hasLiveDebugPage{false};
 };
 
 // Owns the actual resizable GPU RenderViews corresponding to logical Studio
@@ -85,6 +86,10 @@ public:
     [[nodiscard]] std::optional<StudioPhysicalPageSelection>
     DebugPhysicalPage(std::string_view id) const;
 
+    [[nodiscard]] std::shared_ptr<
+        const terrain_debug::TerrainDebugPageData>
+    LiveDebugPage(std::string_view id) const;
+
     // Applies generation-validated target cameras to every GPU view. Missing
     // targets are normal for blank worlds and leave a neutral unbound camera.
     [[nodiscard]] u32 Refresh(
@@ -127,5 +132,11 @@ private:
         StudioPhysicalPageSelection,
         std::less<>>
         debugPhysicalPages_;
+
+    std::map<
+        std::string,
+        std::shared_ptr<const terrain_debug::TerrainDebugPageData>,
+        std::less<>>
+        liveDebugPages_;
 };
 } // namespace orbit::studio_ui

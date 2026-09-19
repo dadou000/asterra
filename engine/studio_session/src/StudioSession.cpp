@@ -48,6 +48,7 @@ StudioSession::StudioSession(
     static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());
     static_cast<void>(pathProducts_.RefreshBinding());
+    RefreshTerrainDebugGeneration();
 }
 
 editor_session::EditorWorldSession&
@@ -120,6 +121,18 @@ const UniverseBoundPathCache&
 StudioSession::PathProducts() const noexcept
 {
     return pathProducts_;
+}
+
+terrain_debug::TerrainDebugLivePages&
+StudioSession::TerrainDebugPages() noexcept
+{
+    return terrainDebugPages_;
+}
+
+const terrain_debug::TerrainDebugLivePages&
+StudioSession::TerrainDebugPages() const noexcept
+{
+    return terrainDebugPages_;
 }
 
 std::vector<editor_session::WorldDocumentItem>
@@ -196,6 +209,7 @@ StudioSession::DispatchRpc(
     static_cast<void>(pathRouting_.RefreshBinding());
     static_cast<void>(pathProducts_.RefreshBinding());
     static_cast<void>(viewports_.Refresh());
+    RefreshTerrainDebugGeneration();
     return response;
 }
 
@@ -237,6 +251,7 @@ StudioTickResult StudioSession::Tick(
             world_.Generation();
         result.universeGeneration =
             world_.UniverseGeneration();
+        RefreshTerrainDebugGeneration();
         return result;
     }
 
@@ -259,7 +274,24 @@ StudioTickResult StudioSession::Tick(
         world_.Generation();
     result.universeGeneration =
         world_.UniverseGeneration();
+    RefreshTerrainDebugGeneration();
     return result;
+}
+
+void StudioSession::RefreshTerrainDebugGeneration()
+{
+    const u64 generation =
+        world_.UniverseGeneration();
+
+    if (generation ==
+        terrainDebugUniverseGeneration_)
+    {
+        return;
+    }
+
+    terrainDebugPages_.Clear();
+    terrainDebugUniverseGeneration_ =
+        generation;
 }
 
 void StudioSession::DispatchWorldLifecycle(
