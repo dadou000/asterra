@@ -111,6 +111,7 @@ jobs:
           OrbitTerrainSurfaceShaderTests
           OrbitTerrainScatterTests
           OrbitTerrainGpuScatterShaderTests
+          OrbitTerrainGpuPersistentCacheTests
           OrbitTerrainMultiScaleTests
           OrbitTerrainBoundaryExchangeTests
           OrbitTerrainDrainagePageTests
@@ -132,4 +133,4 @@ jobs:
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainLocal3DPromotion|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceMaterialResolver|TerrainSurfaceShader|TerrainScatter|TerrainGpuScatterShaders|TerrainMultiScale|TerrainBoundaryExchange|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders)"
+          -R "Orbit[.](TerrainContracts|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainLocal3DPromotion|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceMaterialResolver|TerrainSurfaceShader|TerrainScatter|TerrainGpuScatterShaders|TerrainGpuPersistentCache|TerrainMultiScale|TerrainBoundaryExchange|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders)"
