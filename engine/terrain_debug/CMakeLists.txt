@@ -21,6 +21,7 @@ target_link_libraries(OrbitTerrainDebug
         Orbit::TerrainErosion
         Orbit::TerrainHydrology
         Orbit::TerrainMaterialColumn
+        Orbit::TerrainRegion
         Orbit::World
 )
 

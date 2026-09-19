@@ -1,4 +1,5 @@
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
+#include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -238,9 +239,26 @@ TerrainDebugSeamComparison CompareSeamValues(
                     "Terrain debug vector seam source is incomplete.");
             }
 
+            const auto transformed =
+                terrain_region::
+                    TransformBoundaryVectorAcrossEdge(
+                        edge,
+                        mapping,
+                        {
+                            static_cast<f64>(
+                                pageView.vector[a].x),
+                            static_cast<f64>(
+                                pageView.vector[a].y)
+                        });
+
             const f64 difference =
                 VectorDifference(
-                    pageView.vector[a],
+                    {
+                        static_cast<f32>(
+                            transformed.x),
+                        static_cast<f32>(
+                            transformed.y)
+                    },
                     neighborView->vector[b]);
             result.maximumDifference =
                 std::max(

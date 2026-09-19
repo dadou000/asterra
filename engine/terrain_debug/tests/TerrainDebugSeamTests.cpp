@@ -1,5 +1,6 @@
 #include <orbit/terrain_debug/TerrainDebugPageData.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
+#include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -150,6 +151,110 @@ void TestCrossFaceSampleMapping()
         "Cross-face seam comparison must honor receiving edge and sample orientation.");
 }
 
+void TestCrossFaceVectorOrientation()
+{
+    const world::PlanetTileId tile{
+        .face = world::CubeFace::PositiveX,
+        .level = 3,
+        .x = 7,
+        .y = 1
+    };
+
+    const auto sourceStamp = MakeStamp(tile);
+    const auto mapping =
+        world::NeighborAcrossTileEdge(
+            tile,
+            world::TileEdge::East);
+    const auto neighborStamp =
+        MakeStamp(mapping.tile);
+
+    terrain_debug::TerrainDebugPageData source(
+        sourceStamp, 2, 2);
+    terrain_debug::TerrainDebugPageData neighbor(
+        neighborStamp, 2, 2);
+
+    std::vector<terrain_debug::TerrainDebugVector2>
+        sourceValues(4);
+    std::vector<terrain_debug::TerrainDebugVector2>
+        neighborValues(4);
+
+    for (u32 i = 0; i < 2; ++i)
+    {
+        const terrain_debug::TerrainDebugVector2 value{
+            .x = 2.0F + static_cast<f32>(i),
+            .y = -1.0F
+        };
+        sourceValues[
+            static_cast<std::size_t>(i) * 2U + 1U] =
+                value;
+
+        const auto transformed =
+            terrain_region::
+                TransformBoundaryVectorAcrossEdge(
+                    world::TileEdge::East,
+                    mapping,
+                    {
+                        static_cast<f64>(value.x),
+                        static_cast<f64>(value.y)
+                    });
+
+        const terrain_debug::TerrainDebugVector2 target{
+            .x = static_cast<f32>(transformed.x),
+            .y = static_cast<f32>(transformed.y)
+        };
+        const u32 j =
+            world::RemapTileEdgeSampleIndex(
+                mapping, i, 2);
+
+        switch (mapping.edge)
+        {
+        case world::TileEdge::North:
+            neighborValues[j] = target;
+            break;
+        case world::TileEdge::East:
+            neighborValues[
+                static_cast<std::size_t>(j) * 2U + 1U] =
+                    target;
+            break;
+        case world::TileEdge::South:
+            neighborValues[2U + j] = target;
+            break;
+        case world::TileEdge::West:
+            neighborValues[
+                static_cast<std::size_t>(j) * 2U] =
+                    target;
+            break;
+        }
+    }
+
+    source.SetVector(
+        terrain_debug::TerrainDebugField::Drainage,
+        sourceValues);
+    neighbor.SetVector(
+        terrain_debug::TerrainDebugField::Drainage,
+        neighborValues);
+
+    const auto sourceView =
+        source.View(
+            terrain_debug::TerrainDebugField::Drainage);
+    const auto neighborView =
+        neighbor.View(
+            terrain_debug::TerrainDebugField::Drainage);
+
+    const auto comparison =
+        terrain_debug::CompareSeamValues(
+            sourceStamp,
+            sourceView,
+            world::TileEdge::East,
+            &neighborStamp,
+            &neighborView,
+            1.0e-5);
+
+    Require(
+        comparison.ValuesContinuous(),
+        "Cross-face vector seams must compare in the receiving page tangent frame.");
+}
+
 void TestValueMismatchIsReported()
 {
     const world::PlanetTileId tile{
@@ -276,6 +381,7 @@ void TestValueMismatchIsReported()
 int main()
 {
     TestCrossFaceSampleMapping();
+    TestCrossFaceVectorOrientation();
     TestValueMismatchIsReported();
 
     std::cout << "Orbit M29 value-level seam tests passed.\n";
