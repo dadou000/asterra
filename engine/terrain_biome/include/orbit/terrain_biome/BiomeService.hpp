@@ -241,10 +241,65 @@ struct BiomeSurfaceRules
     [[nodiscard]] bool IsValid() const noexcept;
 };
 
+struct BiomeScatterRuleIdTag;
+using BiomeScatterRuleId =
+    core::StrongId<BiomeScatterRuleIdTag>;
+
+enum class BiomeScatterKind : u8
+{
+    Tree,
+    Shrub,
+    Grass,
+    Stone,
+    Debris,
+    GroundClutter
+};
+
+struct BiomeScatterLayerRule
+{
+    BiomeScatterRuleId id{};
+
+    BiomeScatterKind kind{
+        BiomeScatterKind::Grass};
+
+    // Expected unthinned candidate density before minimum-spacing rejection.
+    f32 densityPerSquareMeter{0.01F};
+
+    // The deterministic planting grid uses this as its cell size. Neighboring
+    // candidate cells then apply a lower-priority rejection if their jittered
+    // positions fall closer than this distance.
+    f32 minimumSpacingMeters{1.0F};
+
+    u32 seedSalt{0U};
+
+    BiomeExposedMaterialMask compatibleExposed{
+        BiomeExposedMaterialMask::All};
+
+    bool requiresSoil{false};
+    f32 minimumSoilDepthMeters{0.0F};
+
+    f32 minimumSlopeDegrees{0.0F};
+    f32 maximumSlopeDegrees{90.0F};
+    f32 slopeFalloffDegrees{0.0F};
+
+    f32 minimumMoisture{0.0F};
+    f32 maximumMoisture{1.0F};
+    f32 moistureFalloff{0.0F};
+
+    f32 minimumScale{1.0F};
+    f32 maximumScale{1.0F};
+
+    bool enabled{true};
+
+    [[nodiscard]] bool IsValid() const noexcept;
+};
+
 struct BiomeScatterRules
 {
-    // Multiplicative density control for the M22 scatter system.
+    // Multiplicative density control for every derived bulk scatter rule.
     f32 densityMultiplier{1.0F};
+
+    std::vector<BiomeScatterLayerRule> layers;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
