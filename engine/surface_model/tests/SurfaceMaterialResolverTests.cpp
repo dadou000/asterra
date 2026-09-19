@@ -2,6 +2,7 @@
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
 #include <orbit/terrain_render/SurfaceMaterial.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -137,6 +138,25 @@ ExposedSurfaceState Surface(
                 geology));
 }
 
+std::vector<ResolvedBiomeWeight> FullBiomeWeight(
+    const BiomeService& service,
+    const BiomeId id)
+{
+    const std::array<
+        BiomeWeightContribution,
+        1>
+        contribution{{
+            {
+                .id = id,
+                .weight = 1.0F
+            }
+        }};
+
+    return
+        service.Resolve(
+            contribution);
+}
+
 BiomeDefinition Forest()
 {
     BiomeDefinition biome{
@@ -240,12 +260,9 @@ void TestWetBasaltForestAddsMoss()
         Forest());
 
     const auto weights =
-        service.Resolve({
-            BiomeWeightContribution{
-                .id = ForestId(),
-                .weight = 1.0F
-            }
-        });
+        FullBiomeWeight(
+            service,
+            ForestId());
 
     const auto blend =
         ResolveSurfaceMaterialBlend(
@@ -308,12 +325,9 @@ void TestDryBasaltDesertAddsDust()
         Desert());
 
     const auto weights =
-        service.Resolve({
-            BiomeWeightContribution{
-                .id = DesertId(),
-                .weight = 1.0F
-            }
-        });
+        FullBiomeWeight(
+            service,
+            DesertId());
 
     const auto blend =
         ResolveSurfaceMaterialBlend(
@@ -354,12 +368,9 @@ void TestDeepSandDesertStaysSand()
         Desert());
 
     const auto weights =
-        service.Resolve({
-            BiomeWeightContribution{
-                .id = DesertId(),
-                .weight = 1.0F
-            }
-        });
+        FullBiomeWeight(
+            service,
+            DesertId());
 
     const auto blend =
         ResolveSurfaceMaterialBlend(
@@ -402,12 +413,9 @@ void TestDeepSoilForestBuildsForestFloor()
         Forest());
 
     const auto weights =
-        service.Resolve({
-            BiomeWeightContribution{
-                .id = ForestId(),
-                .weight = 1.0F
-            }
-        });
+        FullBiomeWeight(
+            service,
+            ForestId());
 
     const auto blend =
         ResolveSurfaceMaterialBlend(
@@ -472,12 +480,9 @@ void TestSnowIsExplicitPhysicalOverlay()
         alpine);
 
     const auto weights =
-        service.Resolve({
-            BiomeWeightContribution{
-                .id = alpine.id,
-                .weight = 1.0F
-            }
-        });
+        FullBiomeWeight(
+            service,
+            alpine.id);
 
     const auto blend =
         ResolveSurfaceMaterialBlend(
@@ -518,12 +523,9 @@ void TestFeatureMasksAreSharedAndDeterministic()
         Forest());
 
     const auto weights =
-        service.Resolve({
-            BiomeWeightContribution{
-                .id = ForestId(),
-                .weight = 1.0F
-            }
-        });
+        FullBiomeWeight(
+            service,
+            ForestId());
 
     const auto physical =
         Surface(
