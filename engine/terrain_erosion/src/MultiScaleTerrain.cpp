@@ -2,8 +2,10 @@
 
 #include <orbit/terrain/TerrainContracts.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
+#include <initializer_list>
 #include <stdexcept>
 #include <utility>
 
