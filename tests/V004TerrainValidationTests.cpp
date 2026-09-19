@@ -1,5 +1,6 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
+#include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 
 #include <cmath>
@@ -370,14 +371,231 @@ void Test02BedrockStripping()
         "M30-02 post-exposure bedrock excavation must enter M08 mass accounting using the exposed M02 rock density.");
 }
 
+
+void Test03SedimentDepositionBurial()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    StratigraphyFixture fixture;
+    auto page =
+        fixture.MakePage();
+
+    const auto initialStratum =
+        fixture.SampleBedrock(page);
+
+    const auto& initialCell =
+        page.At(0U, 0U);
+
+    Require(
+        initialCell.ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock &&
+        NearlyEqual(
+            initialCell.LooseDepthMeters(),
+            0.0),
+        "M30-03 setup must begin with genuinely exposed bedrock.");
+
+    const f64 bedrockBefore =
+        initialCell.bedrockHeightMeters;
+    const f64 referenceBefore =
+        initialCell.referenceBedrockHeightMeters;
+    const auto materialBefore =
+        initialCell.bedrockMaterial;
+    const f64 surfaceBefore =
+        initialCell.SurfaceHeightMeters();
+
+    SedimentExchangePage sediment(
+        page.Resolution(),
+        page.SpacingMeters());
+
+    const f64 area =
+        page.CellAreaSquareMeters();
+    const auto& densities =
+        page.Densities();
+
+    // Choose binary-exact physical depths so the M14 -> M08 conversion can be
+    // checked without a tolerance-sensitive boundary:
+    // 0.125 m debris + 0.250 m sand + 0.500 m fines/soil.
+    const SedimentMass load{
+        .sandKg =
+            0.25 *
+            area *
+            densities.sandKgPerCubicMeter,
+        .finesKg =
+            0.5 *
+            area *
+            densities.soilKgPerCubicMeter,
+        .coarseDebrisKg =
+            0.125 *
+            area *
+            densities.debrisKgPerCubicMeter
+    };
+
+    sediment.Add(
+        0U,
+        0U,
+        SedimentTransportMedium::Waterborne,
+        load);
+
+    Require(
+        NearlyEqual(
+            sediment.TotalMobileMass().TotalKg(),
+            load.TotalKg()),
+        "M30-03 typed sediment must exist in M14 mobile state before physical deposition.");
+
+    const auto burial =
+        sediment.DepositToColumn(
+            page,
+            0U,
+            0U,
+            SedimentTransportMedium::Waterborne);
+
+    const auto& buried =
+        page.At(0U, 0U);
+
+    Require(
+        NearlyEqual(
+            burial.requested.sandKg,
+            load.sandKg) &&
+        NearlyEqual(
+            burial.requested.finesKg,
+            load.finesKg) &&
+        NearlyEqual(
+            burial.requested.coarseDebrisKg,
+            load.coarseDebrisKg) &&
+        NearlyEqual(
+            burial.deposited.TotalKg(),
+            load.TotalKg()) &&
+        burial.remaining.Empty(1.0e-9) &&
+        sediment.TotalMobileMass().Empty(1.0e-9),
+        "M30-03 complete burial must transfer the full typed M14 load back into M08 without duplicated mobile mass.");
+
+    Require(
+        NearlyEqual(
+            buried.debrisMeters,
+            0.125) &&
+        NearlyEqual(
+            buried.sandMeters,
+            0.25) &&
+        NearlyEqual(
+            buried.soilMeters,
+            0.5) &&
+        NearlyEqual(
+            buried.regolithMeters,
+            0.0) &&
+        NearlyEqual(
+            buried.LooseDepthMeters(),
+            0.875),
+        "M30-03 M14 sediment classes must resolve into the canonical M08 debris/sand/soil physical layers.");
+
+    Require(
+        buried.ExposedSurface() ==
+            ExposedSurfaceKind::Debris &&
+        NearlyEqual(
+            buried.SurfaceHeightMeters(),
+            surfaceBefore + 0.875),
+        "M30-03 deposited sediment must physically bury bedrock and raise the M08 surface by the deposited loose depth.");
+
+    Require(
+        NearlyEqual(
+            buried.bedrockHeightMeters,
+            bedrockBefore) &&
+        NearlyEqual(
+            buried.referenceBedrockHeightMeters,
+            referenceBefore) &&
+        buried.bedrockMaterial ==
+            materialBefore,
+        "M30-03 burial must cover geological substrate without rewriting bedrock height, excavation reference or M02 rock identity.");
+
+    const auto buriedStratum =
+        fixture.SampleBedrock(page);
+
+    Require(
+        buriedStratum.primaryMaterial ==
+            initialStratum.primaryMaterial &&
+        buriedStratum.layerIndex ==
+            initialStratum.layerIndex &&
+        buriedStratum.basement ==
+            initialStratum.basement,
+        "M30-03 loose sediment burial must not rewrite the underlying M03 stratigraphic identity.");
+
+    const auto accounting =
+        sediment.Accounting();
+
+    Require(
+        accounting.physicalToMobile.Empty(1.0e-9) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.sandKg,
+            load.sandKg) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.finesKg,
+            load.finesKg) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.coarseDebrisKg,
+            load.coarseDebrisKg),
+        "M30-03 M14 accounting must report the burial exactly once as mobile-to-physical transfer.");
+
+    const auto physicalMass =
+        page.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            physicalMass.LooseMassKg(),
+            load.TotalKg(),
+            1.0e-3) &&
+        NearlyEqual(
+            physicalMass.excavatedBedrockKg,
+            0.0),
+        "M30-03 buried sediment mass must reside in M08 while bedrock excavation remains zero.");
+
+    const auto reExposure =
+        page.Erode(
+            0U,
+            0U,
+            0.875,
+            fixture.materials);
+
+    const auto& exposedAgain =
+        page.At(0U, 0U);
+
+    Require(
+        NearlyEqual(
+            reExposure.removedMassKg,
+            load.TotalKg(),
+            1.0e-3) &&
+        NearlyEqual(
+            reExposure.bedrockMeters,
+            0.0) &&
+        exposedAgain.ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock &&
+        NearlyEqual(
+            exposedAgain.bedrockHeightMeters,
+            bedrockBefore) &&
+        exposedAgain.bedrockMaterial ==
+            materialBefore,
+        "M30-03 stripping only the deposited sediment must re-expose the same bedrock without geological incision.");
+
+    const auto finalStratum =
+        fixture.SampleBedrock(page);
+
+    Require(
+        finalStratum.primaryMaterial ==
+            initialStratum.primaryMaterial &&
+        finalStratum.layerIndex ==
+            initialStratum.layerIndex,
+        "M30-03 burial and re-exposure must leave the virtual stratigraphic substrate unchanged.");
+}
+
 } // namespace
 
 int main()
 {
     Test01StratigraphyExposure();
     Test02BedrockStripping();
+    Test03SedimentDepositionBurial();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 2/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 3/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
