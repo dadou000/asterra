@@ -26,6 +26,7 @@ struct TerrainDebugLivePageInputs
     const terrain_material_column::MaterialColumnPage* materialColumn{nullptr};
     const terrain_hydrology::DrainagePage* drainage{nullptr};
     const terrain_erosion::HydraulicErosionResult* hydraulic{nullptr};
+    const terrain_erosion::SedimentExchangePage* sedimentExchange{nullptr};
 
     std::span<const terrain_macro_geology::MacroGeologySample>
         macroGeology{};

@@ -149,6 +149,34 @@ struct SedimentMassBalance
     [[nodiscard]] SedimentMass NetBoundary() const noexcept;
 };
 
+// Derived M14 transport diagnostics. Values are actual transported mass, not
+// inferred mobile inventory. Page-local +X is east; page-local -Y is north.
+// A solver may clear these at the start of a new diagnostic window.
+struct SedimentTransportVector
+{
+    f64 eastKg{0.0};
+    f64 northKg{0.0};
+
+    [[nodiscard]] bool IsValid() const noexcept;
+
+    SedimentTransportVector& operator+=(
+        const SedimentTransportVector& other) noexcept;
+};
+
+struct SedimentTransportCell
+{
+    SedimentTransportVector waterborne{};
+    SedimentTransportVector airborne{};
+    SedimentTransportVector surfaceMobile{};
+
+    [[nodiscard]] SedimentTransportVector& Medium(
+        SedimentTransportMedium medium) noexcept;
+    [[nodiscard]] const SedimentTransportVector& Medium(
+        SedimentTransportMedium medium) const noexcept;
+
+    [[nodiscard]] SedimentTransportVector Total() const noexcept;
+};
+
 // One M14 shared mobile-sediment page. M08 continues to own physical terrain.
 // This object owns only sediment that is currently mobile between processes.
 class SedimentExchangePage
@@ -172,6 +200,24 @@ public:
 
     [[nodiscard]] const SedimentMassBalance&
     Accounting() const noexcept;
+
+    [[nodiscard]] const SedimentTransportCell&
+    TransportAt(
+        u32 x,
+        u32 y) const;
+
+    // Records one actual transport event performed by a process. targetX/Y may
+    // be an adjacent in-page coordinate or a one-cell boundary coordinate.
+    // The mass is projected onto the normalized page-local east/north vector.
+    void RecordTransport(
+        u32 sourceX,
+        u32 sourceY,
+        i32 targetX,
+        i32 targetY,
+        SedimentTransportMedium medium,
+        const SedimentMass& mass);
+
+    void ClearTransportDiagnostics() noexcept;
 
     void Add(
         u32 x,
@@ -244,6 +290,14 @@ public:
 private:
     [[nodiscard]] std::size_t Index(u32 x, u32 y) const;
 
+    void AccumulateTransport(
+        u32 cellX,
+        u32 cellY,
+        f64 eastDirection,
+        f64 northDirection,
+        SedimentTransportMedium medium,
+        const SedimentMass& mass);
+
     void AccumulateBoundary(
         u32 sourceX,
         u32 sourceY,
@@ -257,6 +311,7 @@ private:
     SedimentConversionRules conversionRules_{};
 
     std::vector<MobileSedimentCell> cells_;
+    std::vector<SedimentTransportCell> transport_;
     SedimentBoundaryFlux outgoing_{};
     SedimentMassBalance accounting_{};
 };

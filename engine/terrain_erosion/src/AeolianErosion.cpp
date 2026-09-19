@@ -981,6 +981,15 @@ AeolianErosionResult SimulateAeolianErosion(
                                     static_cast<u32>(ty),
                                     SedimentTransportMedium::SurfaceMobile,
                                     surfaceMoved);
+
+                            result.sedimentExchange->
+                                RecordTransport(
+                                    x,
+                                    y,
+                                    tx,
+                                    ty,
+                                    SedimentTransportMedium::SurfaceMobile,
+                                    surfaceMoved);
                         }
                         else
                         {
@@ -1489,6 +1498,17 @@ AeolianErosionResult SimulateAeolianErosion(
 
                     nextAirborneFines[target] +=
                         outgoingFines;
+
+                    result.sedimentExchange->
+                        RecordTransport(
+                            x,
+                            y,
+                            tx,
+                            ty,
+                            SedimentTransportMedium::Airborne,
+                            SedimentMass{
+                                .sandKg = outgoingSand,
+                                .finesKg = outgoingFines});
                 }
                 else
                 {

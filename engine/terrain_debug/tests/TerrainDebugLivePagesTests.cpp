@@ -72,6 +72,28 @@ Build(const u64 geologyRevision)
         geology(4);
     geology[0].upliftMeters = 125.0;
 
+    terrain_erosion::SedimentExchangePage sediment(
+        2,
+        5.0);
+
+    sediment.RecordTransport(
+        0,
+        0,
+        1,
+        0,
+        terrain_erosion::SedimentTransportMedium::Waterborne,
+        terrain_erosion::SedimentMass{
+            .sandKg = 100.0});
+
+    sediment.RecordTransport(
+        0,
+        0,
+        0,
+        -1,
+        terrain_erosion::SedimentTransportMedium::Airborne,
+        terrain_erosion::SedimentMass{
+            .finesKg = 50.0});
+
     const terrain_debug::TerrainDebugLivePageInputs inputs{
         .address = Address(),
         .physicalLod = 2,
@@ -88,6 +110,7 @@ Build(const u64 geologyRevision)
         .width = 2,
         .height = 2,
         .materialColumn = &material,
+        .sedimentExchange = &sediment,
         .macroGeology = geology
     };
 
@@ -115,6 +138,15 @@ void TestCaptureUsesActualProducts()
             terrain_debug::TerrainDebugField::Uplift).
                 scalar[0] == 125.0F,
         "M05 live capture must copy the actual macro-geology value.");
+
+    const auto sedimentFlux =
+        page->View(
+            terrain_debug::TerrainDebugField::SedimentFlux);
+
+    Require(
+        sedimentFlux.vector[0].x == 4.0F &&
+        sedimentFlux.vector[0].y == 2.0F,
+        "M14 live capture must expose actual transported mass density in east/north orientation.");
 
     Require(
         !page->Has(

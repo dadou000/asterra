@@ -622,6 +622,32 @@ void TestHydraulicPublishesTypedWaterborneState()
             typedTotal * 1.0e-10,
             1.0e-7),
         "M11 scalar compatibility totals diverged from M14 typed sediment.");
+
+    f64 transportedKg = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto vector =
+                result.sedimentExchange->
+                    TransportAt(x, y).
+                    waterborne;
+
+            transportedKg +=
+                std::hypot(
+                    vector.eastKg,
+                    vector.northKg);
+        }
+    }
+
+    Require(
+        transportedKg > 0.0,
+        "M11 hydraulic advection did not publish actual M14 directional transport.");
 }
 
 void TestAeolianPublishesBoundaryFlux()
@@ -728,6 +754,28 @@ void TestAeolianPublishesBoundaryFlux()
     Require(
         eastAirborne > 0.0,
         "M13 did not place eastward saltation into the explicit M14 east boundary packet.");
+
+    f64 eastTransport = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            eastTransport +=
+                result.sedimentExchange->
+                    TransportAt(x, y).
+                    airborne.
+                    eastKg;
+        }
+    }
+
+    Require(
+        eastTransport > 0.0,
+        "M13 saltation did not publish eastward M14 transport diagnostics.");
 }
 
 void TestDepositionPriority()
@@ -907,6 +955,26 @@ void TestCrossPageBoundaryFlux()
         payload.TotalKg(),
         1.0e-12,
         "M14 neighbor did not receive the full boundary payload.");
+
+    RequireNear(
+        source.TransportAt(
+            resolution - 1U,
+            2U).
+            airborne.
+            eastKg,
+        payload.TotalKg(),
+        1.0e-12,
+        "M14 source-side boundary transport direction was not recorded.");
+
+    RequireNear(
+        neighbor.TransportAt(
+            0U,
+            2U).
+            airborne.
+            eastKg,
+        payload.TotalKg(),
+        1.0e-12,
+        "M14 receiver-side boundary transport direction was not continuous.");
 }
 
 void TestCornerBoundaryFlux()
@@ -952,6 +1020,103 @@ void TestCornerBoundaryFlux()
         9.0,
         1.0e-12,
         "M14 NW corner flux was not preserved explicitly.");
+}
+
+void TestDirectionalTransportDiagnostics()
+{
+    SedimentExchangePage page(
+        3U,
+        2.0);
+
+    page.RecordTransport(
+        1U,
+        1U,
+        2,
+        1,
+        SedimentTransportMedium::Waterborne,
+        SedimentMass{
+            .sandKg = 12.0});
+
+    page.RecordTransport(
+        1U,
+        1U,
+        1,
+        0,
+        SedimentTransportMedium::Airborne,
+        SedimentMass{
+            .finesKg = 5.0});
+
+    page.Add(
+        0U,
+        1U,
+        SedimentTransportMedium::SurfaceMobile,
+        SedimentMass{
+            .coarseDebrisKg = 3.0});
+
+    static_cast<void>(
+        page.ExportAcrossBoundary(
+            0U,
+            1U,
+            -1,
+            1,
+            SedimentTransportMedium::SurfaceMobile,
+            SedimentMass{
+                .coarseDebrisKg = 3.0}));
+
+    const auto center =
+        page.TransportAt(
+            1U,
+            1U);
+
+    RequireNear(
+        center.waterborne.eastKg,
+        12.0,
+        1.0e-12,
+        "M14 waterborne transport diagnostic lost eastward mass.");
+
+    RequireNear(
+        center.airborne.northKg,
+        5.0,
+        1.0e-12,
+        "M14 airborne transport diagnostic lost northward mass.");
+
+    const auto west =
+        page.TransportAt(
+            0U,
+            1U);
+
+    RequireNear(
+        west.surfaceMobile.eastKg,
+        -3.0,
+        1.0e-12,
+        "M14 boundary export did not record westward surface-mobile transport.");
+
+    const auto total =
+        center.Total();
+
+    RequireNear(
+        total.eastKg,
+        12.0,
+        1.0e-12,
+        "M14 combined transport vector changed eastward mass.");
+
+    RequireNear(
+        total.northKg,
+        5.0,
+        1.0e-12,
+        "M14 combined transport vector changed northward mass.");
+
+    page.ClearTransportDiagnostics();
+
+    RequireNear(
+        page.TransportAt(
+            1U,
+            1U).
+            Total().
+            eastKg,
+        0.0,
+        1.0e-12,
+        "M14 transport diagnostic clear did not reset the page.");
 }
 
 void TestGpuPacking()
@@ -1030,6 +1195,7 @@ int main()
     TestDepositionPriority();
     TestCrossPageBoundaryFlux();
     TestCornerBoundaryFlux();
+    TestDirectionalTransportDiagnostics();
     TestGpuPacking();
 
     std::cout

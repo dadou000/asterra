@@ -1081,6 +1081,15 @@ HydraulicErosionResult SimulateHydraulicErosion(
                             static_cast<u32>(nx),
                             static_cast<u32>(ny))] +=
                                 mass;
+
+                        result.sedimentExchange->
+                            RecordTransport(
+                                x,
+                                y,
+                                nx,
+                                ny,
+                                SedimentTransportMedium::Waterborne,
+                                mass);
                     };
 
                 send(

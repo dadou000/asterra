@@ -83,6 +83,12 @@ CaptureLiveTerrainDebugPage(
             *inputs.hydraulic);
     }
 
+    if (inputs.sedimentExchange != nullptr)
+    {
+        page->CaptureSedimentExchange(
+            *inputs.sedimentExchange);
+    }
+
     if (!inputs.macroGeology.empty())
     {
         page->CaptureMacroGeology(

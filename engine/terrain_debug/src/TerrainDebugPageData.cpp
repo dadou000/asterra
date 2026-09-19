@@ -242,6 +242,54 @@ void TerrainDebugPageData::CaptureHydraulic(
     }
 }
 
+void TerrainDebugPageData::CaptureSedimentExchange(
+    const terrain_erosion::SedimentExchangePage& page)
+{
+    if (page.Resolution() != width_ ||
+        page.Resolution() != height_)
+    {
+        throw std::invalid_argument(
+            "M14 sediment-exchange resolution does not match the M29 debug page.");
+    }
+
+    auto& flux =
+        fields_[Index(TerrainDebugField::SedimentFlux)].vector;
+    flux.resize(
+        static_cast<std::size_t>(
+            TexelCount()));
+
+    const f64 inverseArea =
+        1.0 /
+        std::max(
+            page.SpacingMeters() *
+                page.SpacingMeters(),
+            1.0e-12);
+
+    for (u32 y = 0; y < height_; ++y)
+    {
+        for (u32 x = 0; x < width_; ++x)
+        {
+            const auto total =
+                page.TransportAt(x, y).
+                    Total();
+
+            const auto index =
+                static_cast<std::size_t>(y) *
+                    width_ +
+                x;
+
+            flux[index] = {
+                .x = static_cast<f32>(
+                    total.eastKg *
+                    inverseArea),
+                .y = static_cast<f32>(
+                    total.northKg *
+                    inverseArea)
+            };
+        }
+    }
+}
+
 void TerrainDebugPageData::CaptureMacroGeology(
     const std::span<const terrain_macro_geology::MacroGeologySample> samples)
 {

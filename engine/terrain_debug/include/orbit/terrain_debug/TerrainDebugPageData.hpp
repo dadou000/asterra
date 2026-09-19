@@ -5,6 +5,7 @@
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
+#include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_hydrology/DrainagePage.hpp>
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
@@ -42,6 +43,9 @@ public:
 
     void CaptureHydraulic(
         const terrain_erosion::HydraulicErosionResult& result);
+
+    void CaptureSedimentExchange(
+        const terrain_erosion::SedimentExchangePage& page);
 
     void CaptureMacroGeology(
         std::span<const terrain_macro_geology::MacroGeologySample> samples);

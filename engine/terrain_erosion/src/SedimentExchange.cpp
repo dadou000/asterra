@@ -386,6 +386,66 @@ SedimentMassBalance::NetBoundary() const noexcept
         exported;
 }
 
+bool SedimentTransportVector::IsValid() const noexcept
+{
+    return
+        std::isfinite(eastKg) &&
+        std::isfinite(northKg);
+}
+
+SedimentTransportVector&
+SedimentTransportVector::operator+=(
+    const SedimentTransportVector& other) noexcept
+{
+    eastKg += other.eastKg;
+    northKg += other.northKg;
+    return *this;
+}
+
+SedimentTransportVector&
+SedimentTransportCell::Medium(
+    const SedimentTransportMedium medium) noexcept
+{
+    switch (medium)
+    {
+    case SedimentTransportMedium::Waterborne:
+        return waterborne;
+    case SedimentTransportMedium::Airborne:
+        return airborne;
+    case SedimentTransportMedium::SurfaceMobile:
+        return surfaceMobile;
+    }
+
+    return waterborne;
+}
+
+const SedimentTransportVector&
+SedimentTransportCell::Medium(
+    const SedimentTransportMedium medium) const noexcept
+{
+    switch (medium)
+    {
+    case SedimentTransportMedium::Waterborne:
+        return waterborne;
+    case SedimentTransportMedium::Airborne:
+        return airborne;
+    case SedimentTransportMedium::SurfaceMobile:
+        return surfaceMobile;
+    }
+
+    return waterborne;
+}
+
+SedimentTransportVector
+SedimentTransportCell::Total() const noexcept
+{
+    SedimentTransportVector total =
+        waterborne;
+    total += airborne;
+    total += surfaceMobile;
+    return total;
+}
+
 SedimentExchangePage::SedimentExchangePage(
     const u32 resolution,
     const f64 spacingMeters,
@@ -396,6 +456,10 @@ SedimentExchangePage::SedimentExchangePage(
           std::move(
               conversionRules)),
       cells_(
+          static_cast<std::size_t>(
+              resolution) *
+          resolution),
+      transport_(
           static_cast<std::size_t>(
               resolution) *
           resolution),
@@ -463,6 +527,100 @@ const SedimentMassBalance&
 SedimentExchangePage::Accounting() const noexcept
 {
     return accounting_;
+}
+
+const SedimentTransportCell&
+SedimentExchangePage::TransportAt(
+    const u32 x,
+    const u32 y) const
+{
+    return transport_[Index(x, y)];
+}
+
+void SedimentExchangePage::RecordTransport(
+    const u32 sourceX,
+    const u32 sourceY,
+    const i32 targetX,
+    const i32 targetY,
+    const SedimentTransportMedium medium,
+    const SedimentMass& mass)
+{
+    if (!mass.IsValid())
+    {
+        throw std::invalid_argument(
+            "Orbit M14 cannot record invalid transported sediment mass.");
+    }
+
+    if (sourceX >= resolution_ ||
+        sourceY >= resolution_)
+    {
+        throw std::out_of_range(
+            "Orbit M14 transport source coordinate is out of range.");
+    }
+
+    const f64 east =
+        static_cast<f64>(targetX) -
+        static_cast<f64>(sourceX);
+
+    // Page-local y grows south. M14 diagnostics expose tangent-space north.
+    const f64 north =
+        static_cast<f64>(sourceY) -
+        static_cast<f64>(targetY);
+
+    AccumulateTransport(
+        sourceX,
+        sourceY,
+        east,
+        north,
+        medium,
+        mass);
+}
+
+void SedimentExchangePage::AccumulateTransport(
+    const u32 cellX,
+    const u32 cellY,
+    const f64 eastDirection,
+    const f64 northDirection,
+    const SedimentTransportMedium medium,
+    const SedimentMass& mass)
+{
+    const f64 length =
+        std::hypot(
+            eastDirection,
+            northDirection);
+
+    if (length <= 0.0 ||
+        mass.Empty())
+    {
+        return;
+    }
+
+    const f64 kilograms =
+        mass.TotalKg();
+
+    auto& vector =
+        transport_[Index(
+            cellX,
+            cellY)].
+            Medium(medium);
+
+    vector.eastKg +=
+        kilograms *
+        eastDirection /
+        length;
+
+    vector.northKg +=
+        kilograms *
+        northDirection /
+        length;
+}
+
+void SedimentExchangePage::ClearTransportDiagnostics() noexcept
+{
+    std::fill(
+        transport_.begin(),
+        transport_.end(),
+        SedimentTransportCell{});
 }
 
 void SedimentExchangePage::Add(
@@ -801,6 +959,14 @@ SedimentExchangePage::ExportAcrossBoundary(
         medium,
         exported);
 
+    RecordTransport(
+        sourceX,
+        sourceY,
+        targetX,
+        targetY,
+        medium,
+        exported);
+
     accounting_.
         exported +=
             exported;
@@ -849,6 +1015,8 @@ void SedimentExchangePage::ImportBoundaryFlux(
     const auto importPacket =
         [&](const u32 x,
             const u32 y,
+            const f64 eastDirection,
+            const f64 northDirection,
             const SedimentTransportPacket& packet)
         {
             At(x, y).
@@ -863,6 +1031,30 @@ void SedimentExchangePage::ImportBoundaryFlux(
                 surfaceMobile +=
                     packet.surfaceMobile;
 
+            AccumulateTransport(
+                x,
+                y,
+                eastDirection,
+                northDirection,
+                SedimentTransportMedium::Waterborne,
+                packet.waterborne);
+
+            AccumulateTransport(
+                x,
+                y,
+                eastDirection,
+                northDirection,
+                SedimentTransportMedium::Airborne,
+                packet.airborne);
+
+            AccumulateTransport(
+                x,
+                y,
+                eastDirection,
+                northDirection,
+                SedimentTransportMedium::SurfaceMobile,
+                packet.surfaceMobile);
+
             accounting_.
                 imported +=
                     packet.Total();
@@ -875,21 +1067,29 @@ void SedimentExchangePage::ImportBoundaryFlux(
         importPacket(
             i,
             0U,
+            0.0,
+            -1.0,
             incoming.north[i]);
 
         importPacket(
             resolution_ - 1U,
             i,
+            -1.0,
+            0.0,
             incoming.east[i]);
 
         importPacket(
             i,
             resolution_ - 1U,
+            0.0,
+            1.0,
             incoming.south[i]);
 
         importPacket(
             0U,
             i,
+            1.0,
+            0.0,
             incoming.west[i]);
     }
 
@@ -897,21 +1097,29 @@ void SedimentExchangePage::ImportBoundaryFlux(
     importPacket(
         0U,
         0U,
+        1.0,
+        -1.0,
         incoming.corners[0]);
 
     importPacket(
         resolution_ - 1U,
         0U,
+        -1.0,
+        -1.0,
         incoming.corners[1]);
 
     importPacket(
         resolution_ - 1U,
         resolution_ - 1U,
+        -1.0,
+        1.0,
         incoming.corners[2]);
 
     importPacket(
         0U,
         resolution_ - 1U,
+        1.0,
+        1.0,
         incoming.corners[3]);
 }
 

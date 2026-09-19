@@ -1101,6 +1101,16 @@ GlacialErosionResult SimulateGlacialErosion(
                             SurfaceMobile,
                         moved);
 
+                result.sedimentExchange->
+                    RecordTransport(
+                        x,
+                        y,
+                        static_cast<i32>(targetX),
+                        static_cast<i32>(targetY),
+                        SedimentTransportMedium::
+                            SurfaceMobile,
+                        moved);
+
                 result.cells[index].
                     cumulativeTransportedSedimentKg +=
                         moved.TotalKg();

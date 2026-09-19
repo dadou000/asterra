@@ -1546,6 +1546,14 @@ void AdvectSediment(
                                 static_cast<u32>(ty))] +=
                                     moved;
 
+                        sediment.RecordTransport(
+                            x,
+                            y,
+                            tx,
+                            ty,
+                            medium,
+                            moved);
+
                         return;
                     }
 
