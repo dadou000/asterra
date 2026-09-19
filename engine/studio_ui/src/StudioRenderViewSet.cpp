@@ -86,7 +86,7 @@ void StudioRenderViewSet::Create(
             terrain_debug::TerrainDebugField::Uplift);
         debugPhysicalPageLevels_.emplace(
             targetId,
-            8U);
+            static_cast<u8>(8));
 
         auto view =
             std::make_unique<render_view::RenderView>(
