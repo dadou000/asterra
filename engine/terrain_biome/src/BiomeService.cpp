@@ -781,11 +781,77 @@ bool BiomeSurfaceRules::IsValid() const noexcept
     return true;
 }
 
+bool BiomeScatterLayerRule::IsValid() const noexcept
+{
+    const auto finite =
+        [](const f32 value)
+        {
+            return
+                std::isfinite(value);
+        };
+
+    const u32 compatibility =
+        static_cast<u32>(
+            compatibleExposed);
+
+    return
+        id.IsValid() &&
+        finite(densityPerSquareMeter) &&
+        densityPerSquareMeter >= 0.0F &&
+        finite(minimumSpacingMeters) &&
+        minimumSpacingMeters > 0.0F &&
+        compatibility != 0U &&
+        (compatibility &
+         ~static_cast<u32>(
+             BiomeExposedMaterialMask::All)) ==
+            0U &&
+        finite(minimumSoilDepthMeters) &&
+        minimumSoilDepthMeters >= 0.0F &&
+        finite(minimumSlopeDegrees) &&
+        finite(maximumSlopeDegrees) &&
+        finite(slopeFalloffDegrees) &&
+        minimumSlopeDegrees >= 0.0F &&
+        maximumSlopeDegrees <= 90.0F &&
+        minimumSlopeDegrees <= maximumSlopeDegrees &&
+        slopeFalloffDegrees >= 0.0F &&
+        finite(minimumMoisture) &&
+        finite(maximumMoisture) &&
+        finite(moistureFalloff) &&
+        minimumMoisture >= 0.0F &&
+        maximumMoisture <= 1.0F &&
+        minimumMoisture <= maximumMoisture &&
+        moistureFalloff >= 0.0F &&
+        finite(minimumScale) &&
+        finite(maximumScale) &&
+        minimumScale > 0.0F &&
+        minimumScale <= maximumScale;
+}
+
 bool BiomeScatterRules::IsValid() const noexcept
 {
-    return
-        FiniteNonNegative(
-            densityMultiplier);
+    if (!FiniteNonNegative(
+            densityMultiplier))
+    {
+        return false;
+    }
+
+    std::unordered_set<
+        BiomeScatterRuleId>
+        ids;
+
+    for (const auto& layer :
+         layers)
+    {
+        if (!layer.IsValid() ||
+            !ids.insert(
+                 layer.id).
+                 second)
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool BiomeProcessModifiers::IsValid() const noexcept
