@@ -125,6 +125,8 @@ jobs:
           OrbitTerrainBoundaryExchangeTests
           OrbitTerrainDependencyTests
           OrbitTerrainDebugTests
+          OrbitTerrainDebugRasterTests
+          OrbitTerrainDebugPageDataTests
           OrbitStudioUi
           OrbitTerrainDrainagePageTests
           OrbitTerrainStreamPowerTests
