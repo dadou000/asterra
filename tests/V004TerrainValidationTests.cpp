@@ -378,6 +378,6 @@ int main()
     Test02BedrockStripping();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 1/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 2/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
