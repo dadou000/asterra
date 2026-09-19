@@ -8,6 +8,7 @@ add_library(OrbitEditorModel STATIC
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
     src/OutputLog.cpp
+    src/SurfaceAuthoringModel.cpp
 )
 
 add_library(Orbit::EditorModel ALIAS OrbitEditorModel)
@@ -27,6 +28,7 @@ target_link_libraries(OrbitEditorModel
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
+        Orbit::TerrainBiome
         Orbit::WorldModel
 )
 
@@ -50,5 +52,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainAuthoringCommand
         COMMAND OrbitTerrainAuthoringCommandTests
+    )
+endif()
+
+
+if(BUILD_TESTING)
+    add_executable(OrbitSurfaceAuthoringModelTests
+        tests/SurfaceAuthoringModelTests.cpp
+    )
+
+    target_link_libraries(OrbitSurfaceAuthoringModelTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitSurfaceAuthoringModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSurfaceAuthoringModelTests)
+
+    add_test(
+        NAME Orbit.SurfaceAuthoringModel
+        COMMAND OrbitSurfaceAuthoringModelTests
     )
 endif()

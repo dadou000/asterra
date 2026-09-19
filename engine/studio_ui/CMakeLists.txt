@@ -3,6 +3,7 @@ add_library(OrbitStudioUi STATIC
     src/ProjectSettingsUi.cpp
     src/StudioRenderViewSet.cpp
     src/StudioUiBundle.cpp
+    src/SurfaceAuthoringUi.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp
@@ -18,6 +19,7 @@ target_include_directories(OrbitStudioUi
 
 target_link_libraries(OrbitStudioUi
     PUBLIC
+        Orbit::EditorModel
         Orbit::EditorUi
         Orbit::RenderGraph
         Orbit::RenderView

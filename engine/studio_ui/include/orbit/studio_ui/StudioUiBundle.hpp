@@ -8,6 +8,7 @@
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/time/SimulationTime.hpp>
@@ -66,6 +67,7 @@ private:
     u64 observedWorkspaceGeneration_{~u64{0}};
 
     ProjectAuthoringUi projectAuthoring_;
+    SurfaceAuthoringUi surfaceAuthoring_;
     StudioViewportRenderer viewportRenderer_;
     StudioViewportPanels viewportPanels_;
 
