@@ -977,6 +977,7 @@ add_executable(OrbitV004ValidationTests
 
 target_link_libraries(OrbitV004ValidationTests
     PRIVATE
+        Orbit::TerrainErosion
         Orbit::TerrainGeology
         Orbit::TerrainMaterialColumn
 )
