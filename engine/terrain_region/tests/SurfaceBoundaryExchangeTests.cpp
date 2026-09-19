@@ -282,6 +282,14 @@ void TestCrossFaceVectorAndSampleOrientation()
                 0.25
             }
         };
+
+        flux.sediment.east[index].
+            airborneTransport = {
+                .eastKg =
+                    static_cast<f64>(
+                        index + 1U),
+                .northKg = 0.25
+            };
     }
 
     const terrain_region::PhysicalPageBoundaryFlux page{
@@ -340,6 +348,33 @@ void TestCrossFaceVectorAndSampleOrientation()
                 it->water[targetIndex].
                     velocityMoment.y),
             "Cross-face vector remap must stay finite.");
+
+        const auto expectedTransport =
+            terrain_region::
+                TransformBoundaryVectorAcrossEdge(
+                    world::TileEdge::East,
+                    mapping,
+                    {
+                        static_cast<f64>(
+                            sourceIndex + 1U),
+                        -0.25
+                    });
+
+        RequireNear(
+            it->sediment[targetIndex].
+                airborneTransport.
+                eastKg,
+            expectedTransport.x,
+            1.0e-12,
+            "Cross-face M14 sediment transport lost its tangent X component.");
+
+        RequireNear(
+            it->sediment[targetIndex].
+                airborneTransport.
+                northKg,
+            -expectedTransport.y,
+            1.0e-12,
+            "Cross-face M14 sediment transport lost its tangent north component.");
     }
 }
 

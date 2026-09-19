@@ -100,15 +100,38 @@ enum class SedimentBoundarySide : u8
     West
 };
 
+// Derived M14 transport diagnostics. Values are actual transported mass, not
+// inferred mobile inventory. Page-local +X is east; page-local -Y is north.
+// A solver may clear these at the start of a new diagnostic window.
+struct SedimentTransportVector
+{
+    f64 eastKg{0.0};
+    f64 northKg{0.0};
+
+    [[nodiscard]] bool IsValid() const noexcept;
+
+    SedimentTransportVector& operator+=(
+        const SedimentTransportVector& other) noexcept;
+};
+
 struct SedimentTransportPacket
 {
     SedimentMass waterborne{};
     SedimentMass airborne{};
     SedimentMass surfaceMobile{};
 
+    SedimentTransportVector waterborneTransport{};
+    SedimentTransportVector airborneTransport{};
+    SedimentTransportVector surfaceMobileTransport{};
+
     [[nodiscard]] SedimentMass& Medium(
         SedimentTransportMedium medium) noexcept;
     [[nodiscard]] const SedimentMass& Medium(
+        SedimentTransportMedium medium) const noexcept;
+
+    [[nodiscard]] SedimentTransportVector& Transport(
+        SedimentTransportMedium medium) noexcept;
+    [[nodiscard]] const SedimentTransportVector& Transport(
         SedimentTransportMedium medium) const noexcept;
 
     [[nodiscard]] SedimentMass Total() const noexcept;
@@ -147,20 +170,6 @@ struct SedimentMassBalance
     SedimentMass exported{};
 
     [[nodiscard]] SedimentMass NetBoundary() const noexcept;
-};
-
-// Derived M14 transport diagnostics. Values are actual transported mass, not
-// inferred mobile inventory. Page-local +X is east; page-local -Y is north.
-// A solver may clear these at the start of a new diagnostic window.
-struct SedimentTransportVector
-{
-    f64 eastKg{0.0};
-    f64 northKg{0.0};
-
-    [[nodiscard]] bool IsValid() const noexcept;
-
-    SedimentTransportVector& operator+=(
-        const SedimentTransportVector& other) noexcept;
 };
 
 struct SedimentTransportCell

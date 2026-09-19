@@ -325,6 +325,40 @@ SedimentTransportPacket::Medium(
     return waterborne;
 }
 
+SedimentTransportVector&
+SedimentTransportPacket::Transport(
+    const SedimentTransportMedium medium) noexcept
+{
+    switch (medium)
+    {
+    case SedimentTransportMedium::Waterborne:
+        return waterborneTransport;
+    case SedimentTransportMedium::Airborne:
+        return airborneTransport;
+    case SedimentTransportMedium::SurfaceMobile:
+        return surfaceMobileTransport;
+    }
+
+    return waterborneTransport;
+}
+
+const SedimentTransportVector&
+SedimentTransportPacket::Transport(
+    const SedimentTransportMedium medium) const noexcept
+{
+    switch (medium)
+    {
+    case SedimentTransportMedium::Waterborne:
+        return waterborneTransport;
+    case SedimentTransportMedium::Airborne:
+        return airborneTransport;
+    case SedimentTransportMedium::SurfaceMobile:
+        return surfaceMobileTransport;
+    }
+
+    return waterborneTransport;
+}
+
 SedimentMass
 SedimentTransportPacket::Total() const noexcept
 {
@@ -1015,8 +1049,6 @@ void SedimentExchangePage::ImportBoundaryFlux(
     const auto importPacket =
         [&](const u32 x,
             const u32 y,
-            const f64 eastDirection,
-            const f64 northDirection,
             const SedimentTransportPacket& packet)
         {
             At(x, y).
@@ -1031,29 +1063,17 @@ void SedimentExchangePage::ImportBoundaryFlux(
                 surfaceMobile +=
                     packet.surfaceMobile;
 
-            AccumulateTransport(
-                x,
-                y,
-                eastDirection,
-                northDirection,
-                SedimentTransportMedium::Waterborne,
-                packet.waterborne);
+            auto& diagnostic =
+                transport_[Index(x, y)];
 
-            AccumulateTransport(
-                x,
-                y,
-                eastDirection,
-                northDirection,
-                SedimentTransportMedium::Airborne,
-                packet.airborne);
+            diagnostic.waterborne +=
+                packet.waterborneTransport;
 
-            AccumulateTransport(
-                x,
-                y,
-                eastDirection,
-                northDirection,
-                SedimentTransportMedium::SurfaceMobile,
-                packet.surfaceMobile);
+            diagnostic.airborne +=
+                packet.airborneTransport;
+
+            diagnostic.surfaceMobile +=
+                packet.surfaceMobileTransport;
 
             accounting_.
                 imported +=
@@ -1067,29 +1087,21 @@ void SedimentExchangePage::ImportBoundaryFlux(
         importPacket(
             i,
             0U,
-            0.0,
-            -1.0,
             incoming.north[i]);
 
         importPacket(
             resolution_ - 1U,
             i,
-            -1.0,
-            0.0,
             incoming.east[i]);
 
         importPacket(
             i,
             resolution_ - 1U,
-            0.0,
-            1.0,
             incoming.south[i]);
 
         importPacket(
             0U,
             i,
-            1.0,
-            0.0,
             incoming.west[i]);
     }
 
@@ -1097,29 +1109,21 @@ void SedimentExchangePage::ImportBoundaryFlux(
     importPacket(
         0U,
         0U,
-        1.0,
-        -1.0,
         incoming.corners[0]);
 
     importPacket(
         resolution_ - 1U,
         0U,
-        -1.0,
-        -1.0,
         incoming.corners[1]);
 
     importPacket(
         resolution_ - 1U,
         resolution_ - 1U,
-        -1.0,
-        1.0,
         incoming.corners[2]);
 
     importPacket(
         0U,
         resolution_ - 1U,
-        1.0,
-        1.0,
         incoming.corners[3]);
 }
 
@@ -1238,6 +1242,35 @@ void SedimentExchangePage::AccumulateBoundary(
     packet->
         Medium(medium) +=
             mass;
+
+    const f64 east =
+        static_cast<f64>(targetX) -
+        static_cast<f64>(sourceX);
+
+    const f64 north =
+        static_cast<f64>(sourceY) -
+        static_cast<f64>(targetY);
+
+    const f64 length =
+        std::hypot(
+            east,
+            north);
+
+    if (length > 0.0)
+    {
+        auto& vector =
+            packet->Transport(medium);
+
+        vector.eastKg +=
+            mass.TotalKg() *
+            east /
+            length;
+
+        vector.northKg +=
+            mass.TotalKg() *
+            north /
+            length;
+    }
 }
 
 SedimentMass ClassifyRemovedMaterial(

@@ -344,6 +344,64 @@ MappingFromTileToTarget(
         transformed);
 }
 
+void TransformSedimentPacketAcrossEdge(
+    terrain_erosion::SedimentTransportPacket& packet,
+    const world::TileEdge sourceEdge,
+    const world::TileEdgeNeighborMapping& mapping) noexcept
+{
+    const auto transform =
+        [&](terrain_erosion::SedimentTransportVector& vector)
+        {
+            const math::Double2 remapped =
+                TransformBoundaryVectorAcrossEdge(
+                    sourceEdge,
+                    mapping,
+                    {
+                        vector.eastKg,
+                        -vector.northKg
+                    });
+
+            vector.eastKg =
+                remapped.x;
+            vector.northKg =
+                -remapped.y;
+        };
+
+    transform(packet.waterborneTransport);
+    transform(packet.airborneTransport);
+    transform(packet.surfaceMobileTransport);
+}
+
+void TransformSedimentPacketAtCorner(
+    terrain_erosion::SedimentTransportPacket& packet,
+    const world::PlanetTileId& source,
+    const world::PlanetTileId& target,
+    const SurfaceBoundaryCorner corner) noexcept
+{
+    const auto transform =
+        [&](terrain_erosion::SedimentTransportVector& vector)
+        {
+            const math::Double2 remapped =
+                TransformCornerVector(
+                    source,
+                    target,
+                    corner,
+                    {
+                        vector.eastKg,
+                        -vector.northKg
+                    });
+
+            vector.eastKg =
+                remapped.x;
+            vector.northKg =
+                -remapped.y;
+        };
+
+    transform(packet.waterborneTransport);
+    transform(packet.airborneTransport);
+    transform(packet.surfaceMobileTransport);
+}
+
 [[nodiscard]] terrain_hydrology::DrainageBoundaryCell
 DrainageBoundaryFromCell(
     const terrain_hydrology::DrainageCell& cell) noexcept
@@ -1005,8 +1063,16 @@ BuildDeterministicBoundaryTransfers(
                 transfer.water[targetIndex] =
                     water;
 
-                transfer.sediment[targetIndex] =
+                auto sedimentPacket =
                     sedimentSource[sourceIndex];
+
+                TransformSedimentPacketAcrossEdge(
+                    sedimentPacket,
+                    edge,
+                    mapping);
+
+                transfer.sediment[targetIndex] =
+                    sedimentPacket;
             }
 
             result.edges.push_back(
@@ -1058,6 +1124,16 @@ BuildDeterministicBoundaryTransfers(
                     corner,
                     water.velocityMoment);
 
+            auto sedimentPacket =
+                page->outgoing.sediment.
+                    corners[sourceCornerIndex];
+
+            TransformSedimentPacketAtCorner(
+                sedimentPacket,
+                page->address.tile,
+                targetTile,
+                corner);
+
             result.corners.push_back({
                 .source = page->address,
                 .target = {
@@ -1069,8 +1145,7 @@ BuildDeterministicBoundaryTransfers(
                 .revision = page->outgoing.revision,
                 .water = water,
                 .sediment =
-                    page->outgoing.sediment.
-                        corners[sourceCornerIndex]
+                    sedimentPacket
             });
         }
     }
@@ -1140,6 +1215,18 @@ void ApplySedimentBoundaryTransfers(
                 transfer->sediment[index].airborne;
             target[index].surfaceMobile +=
                 transfer->sediment[index].surfaceMobile;
+
+            target[index].waterborneTransport +=
+                transfer->sediment[index].
+                    waterborneTransport;
+
+            target[index].airborneTransport +=
+                transfer->sediment[index].
+                    airborneTransport;
+
+            target[index].surfaceMobileTransport +=
+                transfer->sediment[index].
+                    surfaceMobileTransport;
         }
 
         revision =
@@ -1163,6 +1250,18 @@ void ApplySedimentBoundaryTransfers(
             transfer->sediment.airborne;
         target.surfaceMobile +=
             transfer->sediment.surfaceMobile;
+
+        target.waterborneTransport +=
+            transfer->sediment.
+                waterborneTransport;
+
+        target.airborneTransport +=
+            transfer->sediment.
+                airborneTransport;
+
+        target.surfaceMobileTransport +=
+            transfer->sediment.
+                surfaceMobileTransport;
 
         revision =
             CombinedRevision(
