@@ -281,6 +281,33 @@ int main()
             orbit::world_model::kBiomeMaskOpacity,
             1.0);
 
+        const auto mossLayer =
+            commands.CreateObject(
+                orbit::world_model::kBiomeSurfaceLayerType,
+                "Wet basalt moss",
+                forcedForestObject,
+                20);
+
+        commands.SetProperty(
+            mossLayer,
+            orbit::world_model::kBiomeSurfaceLayerKind,
+            orbit::i64{1});
+
+        commands.SetProperty(
+            mossLayer,
+            orbit::world_model::kBiomeSurfaceLayerStrength,
+            0.7);
+
+        commands.SetProperty(
+            mossLayer,
+            orbit::world_model::kBiomeSurfaceLayerCompatibility,
+            orbit::i64{1});
+
+        commands.SetProperty(
+            mossLayer,
+            orbit::world_model::kBiomeSurfaceLayerMoistureMin,
+            0.5);
+
         if (!universe.RebuildIfChanged(objects))
         {
             return 18;
@@ -315,7 +342,11 @@ int main()
                     BiomePlacementMode::
                         AutomaticAndAuthored ||
             forcedForest.placement.selectors.size() != 1U ||
-            forcedForest.placement.authoredMasks.size() != 1U)
+            forcedForest.placement.authoredMasks.size() != 1U ||
+            forcedForest.surface.layers.size() != 1U ||
+            forcedForest.surface.layers.front().kind !=
+                orbit::terrain_biome::BiomeSurfaceLayerKind::Moss ||
+            forcedForest.surface.layers.front().strength != 0.7F)
         {
             return 20;
         }
@@ -402,7 +433,19 @@ int main()
                 placement.
                 selectors.
                 front().
-                minimum != 30.0)
+                minimum != 30.0 ||
+            regeneratedForest.
+                surface.
+                layers.
+                size() != 1U ||
+            regeneratedForest.
+                surface.
+                layers.
+                front().
+                kind !=
+                orbit::terrain_biome::
+                    BiomeSurfaceLayerKind::
+                        Moss)
         {
             return 24;
         }
