@@ -26,6 +26,33 @@ namespace
 {
     return static_cast<u32>(kind);
 }
+
+[[nodiscard]] u32 StableCategory(
+    const u64 high,
+    const u64 low) noexcept
+{
+    const u64 mixed =
+        terrain::StableCombine64(high, low);
+    return static_cast<u32>(mixed ^ (mixed >> 32U));
+}
+
+[[nodiscard]] u32 StratigraphyCategory(
+    const terrain_geology::StratigraphySample& sample) noexcept
+{
+    u64 value =
+        terrain::StableCombine64(
+            sample.primaryMaterial.high,
+            sample.primaryMaterial.low);
+    value =
+        terrain::StableCombine64(
+            value,
+            sample.layerIndex);
+    value =
+        terrain::StableCombine64(
+            value,
+            sample.basement ? 1U : 0U);
+    return static_cast<u32>(value ^ (value >> 32U));
+}
 } // namespace
 
 TerrainDebugPageData::TerrainDebugPageData(
@@ -212,6 +239,189 @@ void TerrainDebugPageData::CaptureHydraulic(
             static_cast<f32>(
                 cell.cumulativeDepositedDepthMeters -
                 cell.cumulativeErodedDepthMeters);
+    }
+}
+
+void TerrainDebugPageData::CaptureMacroGeology(
+    const std::span<const terrain_macro_geology::MacroGeologySample> samples)
+{
+    RequireTexelCount(samples.size(), "macro geology");
+
+    auto& uplift =
+        fields_[Index(TerrainDebugField::Uplift)].scalar;
+    uplift.resize(samples.size());
+
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        uplift[i] =
+            static_cast<f32>(samples[i].upliftMeters);
+    }
+}
+
+void TerrainDebugPageData::CaptureStratigraphy(
+    const std::span<const terrain_geology::StratigraphySample> samples)
+{
+    RequireTexelCount(samples.size(), "stratigraphy");
+
+    auto& strata =
+        fields_[Index(TerrainDebugField::Strata)].category;
+    strata.resize(samples.size());
+
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        strata[i] =
+            StratigraphyCategory(samples[i]);
+    }
+}
+
+void TerrainDebugPageData::CaptureAeolian(
+    const std::span<const terrain_erosion::AeolianCellForcing> forcing,
+    const terrain_erosion::AeolianErosionResult& result)
+{
+    RequireTexelCount(forcing.size(), "aeolian forcing");
+    RequireTexelCount(result.cells.size(), "aeolian result");
+
+    auto& wind =
+        fields_[Index(TerrainDebugField::Wind)].vector;
+    auto& flux =
+        fields_[Index(TerrainDebugField::AeolianFlux)].vector;
+    wind.resize(forcing.size());
+    flux.assign(forcing.size(), {});
+
+    const auto* sediment =
+        result.sedimentExchange.has_value()
+            ? &*result.sedimentExchange
+            : nullptr;
+
+    if (sediment != nullptr &&
+        (sediment->Resolution() != width_ ||
+         sediment->Resolution() != height_))
+    {
+        throw std::invalid_argument(
+            "M13 sediment-exchange resolution does not match the M29 debug page.");
+    }
+
+    const f64 cellArea =
+        sediment != nullptr
+            ? sediment->SpacingMeters() *
+                  sediment->SpacingMeters()
+            : 1.0;
+
+    for (u32 y = 0; y < height_; ++y)
+    {
+        for (u32 x = 0; x < width_; ++x)
+        {
+            const std::size_t i =
+                static_cast<std::size_t>(y) *
+                    width_ +
+                x;
+            const f32 east =
+                forcing[i].windEastMetersPerSecond;
+            const f32 north =
+                forcing[i].windNorthMetersPerSecond;
+
+            wind[i] = {
+                .x = east,
+                .y = north
+            };
+
+            if (sediment == nullptr)
+            {
+                continue;
+            }
+
+            const f64 speed =
+                std::hypot(
+                    static_cast<f64>(east),
+                    static_cast<f64>(north));
+            if (speed <= 0.0)
+            {
+                continue;
+            }
+
+            const auto& mobile =
+                sediment->At(x, y);
+            const f64 transportedKg =
+                mobile.airborne.TotalKg() +
+                mobile.surfaceMobile.TotalKg();
+            const f64 density =
+                transportedKg /
+                std::max(cellArea, 1.0e-12);
+
+            flux[i] = {
+                .x = static_cast<f32>(
+                    static_cast<f64>(east) /
+                    speed * density),
+                .y = static_cast<f32>(
+                    static_cast<f64>(north) /
+                    speed * density)
+            };
+        }
+    }
+}
+
+void TerrainDebugPageData::CaptureBiomeResolution(
+    const std::span<const f32> dominantWeights,
+    const std::span<const terrain_biome::BiomeId> dominantBiomes)
+{
+    RequireTexelCount(dominantWeights.size(), "biome weights");
+    RequireTexelCount(dominantBiomes.size(), "final biome");
+
+    auto& weights =
+        fields_[Index(TerrainDebugField::BiomeWeights)].scalar;
+    auto& finalBiome =
+        fields_[Index(TerrainDebugField::FinalBiome)].category;
+
+    weights.assign(
+        dominantWeights.begin(),
+        dominantWeights.end());
+    finalBiome.resize(dominantBiomes.size());
+
+    for (std::size_t i = 0; i < dominantBiomes.size(); ++i)
+    {
+        finalBiome[i] =
+            StableCategory(
+                dominantBiomes[i].high,
+                dominantBiomes[i].low);
+    }
+}
+
+void TerrainDebugPageData::CaptureScatterDensity(
+    const terrain_scatter::ScatterPageRequest& request,
+    const std::span<const terrain_scatter::DerivedScatterInstance> instances)
+{
+    if (request.gridResolution != width_ ||
+        request.gridResolution != height_ ||
+        !request.IsValid())
+    {
+        throw std::invalid_argument(
+            "M22 scatter request does not match the M29 debug page.");
+    }
+
+    auto& density =
+        fields_[Index(TerrainDebugField::ScatterDensity)].scalar;
+    density.assign(
+        static_cast<std::size_t>(TexelCount()),
+        0.0F);
+
+    const f32 cellArea =
+        request.cellSizeMeters *
+        request.cellSizeMeters;
+
+    for (const auto& instance : instances)
+    {
+        if (instance.cellX >= width_ ||
+            instance.cellY >= height_)
+        {
+            throw std::invalid_argument(
+                "M22 scatter instance lies outside the M29 debug page.");
+        }
+
+        const auto i =
+            static_cast<std::size_t>(instance.cellY) *
+                width_ +
+            instance.cellX;
+        density[i] += 1.0F / cellArea;
     }
 }
 

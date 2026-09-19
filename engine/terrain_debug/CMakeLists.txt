@@ -18,9 +18,13 @@ target_link_libraries(OrbitTerrainDebug
         Orbit::Core
         Orbit::RHI
         Orbit::Terrain
+        Orbit::TerrainBiome
         Orbit::TerrainErosion
+        Orbit::TerrainGeology
         Orbit::TerrainHydrology
+        Orbit::TerrainMacroGeology
         Orbit::TerrainMaterialColumn
+        Orbit::TerrainScatter
         Orbit::TerrainRegion
         Orbit::World
 )

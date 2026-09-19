@@ -164,6 +164,148 @@ void TestExplicitTypedBindingAndProvenance()
         "Value-class mismatches must be rejected instead of reinterpreting terrain data.");
 }
 
+void TestCanonicalProducerBindings()
+{
+    terrain_debug::TerrainDebugPageData debug(
+        MakeStamp(),
+        2,
+        2);
+
+    std::vector<terrain_macro_geology::MacroGeologySample> geology(4);
+    geology[0].upliftMeters = -50.0;
+    geology[1].upliftMeters = 10.0;
+    geology[2].upliftMeters = 20.0;
+    geology[3].upliftMeters = 30.0;
+    debug.CaptureMacroGeology(geology);
+
+    std::vector<terrain_geology::StratigraphySample> strata(4);
+    for (u32 i = 0; i < 4; ++i)
+    {
+        strata[i].primaryMaterial = {
+            .high = 0x100U + i,
+            .low = 0x200U + i
+        };
+        strata[i].layerIndex = i;
+    }
+    debug.CaptureStratigraphy(strata);
+
+    std::vector<terrain_erosion::AeolianCellForcing> forcing(4);
+    for (auto& cell : forcing)
+    {
+        cell.windEastMetersPerSecond = 6.0F;
+        cell.windNorthMetersPerSecond = 8.0F;
+    }
+
+    terrain_erosion::AeolianErosionResult aeolian{
+        .material =
+            terrain_material_column::MaterialColumnPage(
+                2,
+                5.0),
+        .cells =
+            std::vector<terrain_erosion::AeolianCellState>(4),
+        .sedimentExchange =
+            terrain_erosion::SedimentExchangePage(
+                2,
+                5.0)
+    };
+    aeolian.sedimentExchange->Add(
+        0,
+        0,
+        terrain_erosion::SedimentTransportMedium::Airborne,
+        {
+            .sandKg = 25.0,
+            .finesKg = 0.0,
+            .coarseDebrisKg = 0.0
+        });
+    debug.CaptureAeolian(forcing, aeolian);
+
+    const std::vector<f32> biomeWeights{
+        0.2F, 0.5F, 0.9F, 1.0F};
+    const std::vector<terrain_biome::BiomeId> biomes{
+        {.high = 1, .low = 10},
+        {.high = 2, .low = 20},
+        {.high = 3, .low = 30},
+        {.high = 4, .low = 40}
+    };
+    debug.CaptureBiomeResolution(
+        biomeWeights,
+        biomes);
+
+    terrain_scatter::ScatterPageRequest request{};
+    request.identity = {
+        .planet = MakeStamp().address.planet,
+        .tile = MakeStamp().address.tile,
+        .sourceRevision = 1,
+        .scatterRevision = 1,
+        .generationSeed = 7
+    };
+    request.gridResolution = 2;
+    request.cellSizeMeters = 2.0F;
+    request.rule.id = {
+        .high = 9,
+        .low = 10
+    };
+    request.rule.densityPerSquareMeter = 0.25F;
+    request.rule.minimumSpacingMeters = 2.0F;
+
+    const std::vector<terrain_scatter::DerivedScatterInstance> instances{
+        {
+            .id = {.high = 11, .low = 12},
+            .cellX = 1,
+            .cellY = 0
+        },
+        {
+            .id = {.high = 13, .low = 14},
+            .cellX = 1,
+            .cellY = 0
+        }
+    };
+    debug.CaptureScatterDensity(
+        request,
+        instances);
+
+    Require(
+        debug.View(
+            terrain_debug::TerrainDebugField::Uplift).
+                scalar[0] == -50.0F,
+        "M05 uplift adapter must preserve the canonical macro-geology sample.");
+
+    Require(
+        debug.Has(
+            terrain_debug::TerrainDebugField::Strata),
+        "M03 stratigraphy adapter must publish a categorical page view.");
+
+    const auto wind =
+        debug.View(
+            terrain_debug::TerrainDebugField::Wind);
+    const auto aeolianFlux =
+        debug.View(
+            terrain_debug::TerrainDebugField::AeolianFlux);
+    Require(
+        wind.vector[0].x == 6.0F &&
+        wind.vector[0].y == 8.0F &&
+        aeolianFlux.vector[0].x > 0.59F &&
+        aeolianFlux.vector[0].x < 0.61F &&
+        aeolianFlux.vector[0].y > 0.79F &&
+        aeolianFlux.vector[0].y < 0.81F,
+        "M13 adapter must expose true wind and orient mobile aeolian mass along it.");
+
+    Require(
+        debug.View(
+            terrain_debug::TerrainDebugField::BiomeWeights).
+                scalar[2] == 0.9F &&
+        debug.Has(
+            terrain_debug::TerrainDebugField::FinalBiome),
+        "M19-M20 adapter must preserve dominant biome weight and identity.");
+
+    const auto scatter =
+        debug.View(
+            terrain_debug::TerrainDebugField::ScatterDensity);
+    Require(
+        scatter.scalar[1] == 0.5F,
+        "M22 adapter must convert actual instances into per-square-metre cell density.");
+}
+
 void TestMissingFieldIsExplicit()
 {
     terrain_debug::TerrainDebugPageData debug(
@@ -198,6 +340,7 @@ int main()
 {
     TestMaterialColumnBinding();
     TestExplicitTypedBindingAndProvenance();
+    TestCanonicalProducerBindings();
     TestMissingFieldIsExplicit();
 
     std::cout << "Orbit M29 live page binding tests passed.\n";

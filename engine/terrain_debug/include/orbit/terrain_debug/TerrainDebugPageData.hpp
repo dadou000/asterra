@@ -2,9 +2,14 @@
 
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugRaster.hpp>
+#include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_hydrology/DrainagePage.hpp>
+#include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_scatter/DeterministicScatter.hpp>
 
 #include <array>
 #include <optional>
@@ -37,6 +42,24 @@ public:
 
     void CaptureHydraulic(
         const terrain_erosion::HydraulicErosionResult& result);
+
+    void CaptureMacroGeology(
+        std::span<const terrain_macro_geology::MacroGeologySample> samples);
+
+    void CaptureStratigraphy(
+        std::span<const terrain_geology::StratigraphySample> samples);
+
+    void CaptureAeolian(
+        std::span<const terrain_erosion::AeolianCellForcing> forcing,
+        const terrain_erosion::AeolianErosionResult& result);
+
+    void CaptureBiomeResolution(
+        std::span<const f32> dominantWeights,
+        std::span<const terrain_biome::BiomeId> dominantBiomes);
+
+    void CaptureScatterDensity(
+        const terrain_scatter::ScatterPageRequest& request,
+        std::span<const terrain_scatter::DerivedScatterInstance> instances);
 
     // Explicit bindings for fields whose canonical producers live outside the
     // page types above (geology, climate/wind, biome resolution, M14 boundary
