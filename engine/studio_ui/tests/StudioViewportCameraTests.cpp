@@ -101,6 +101,96 @@ int main()
     {
         const auto target =
             Target(
+                orbit::studio_session::ViewportMode::Perspective,
+                generation);
+
+        orbit::studio_session::
+            StudioTerrainViewportRuntimeSnapshot terrain{
+                .viewportId = "test",
+                .worldGeneration = 7,
+                .universeGeneration = generation,
+                .runtimeGeneration = 1,
+                .semanticBody = {
+                    .high = 1,
+                    .low = 2
+                },
+                .body = {
+                    .high = 3,
+                    .low = 4
+                },
+                .terrainObject = {
+                    .high = 9,
+                    .low = 10
+                },
+                .planet = {
+                    .radiusMeters = 6'000'000.0,
+                    .id = {
+                        .high = 3,
+                        .low = 4
+                    }
+                },
+                .observer = {
+                    .meters = {
+                        6'010'000.0,
+                        0.0,
+                        0.0
+                    }
+                }
+            };
+
+        const auto camera =
+            orbit::studio_ui::
+                ComposeTerrainViewportCamera(
+                    target,
+                    terrain);
+
+        Check(
+            camera.frame.high == 5 &&
+            camera.frame.low == 6);
+        Check(
+            camera.localPositionMeters ==
+                terrain.observer.meters);
+        Check(
+            camera.nearPlaneMeters ==
+                10.0F);
+        Check(
+            camera.farPlaneMeters ==
+                12'000'000.0F);
+
+        const auto observerDirection =
+            orbit::math::Normalize(
+                terrain.observer.meters);
+
+        const orbit::math::Double3
+            cameraForward{
+                camera.forward.x,
+                camera.forward.y,
+                camera.forward.z
+            };
+
+        const orbit::math::Double3
+            cameraUp{
+                camera.up.x,
+                camera.up.y,
+                camera.up.z
+            };
+
+        Check(
+            orbit::math::Dot(
+                cameraForward,
+                observerDirection) <
+            0.0);
+
+        Check(
+            orbit::math::Dot(
+                cameraUp,
+                observerDirection) >
+            0.999);
+    }
+
+    {
+        const auto target =
+            Target(
                 orbit::studio_session::ViewportMode::BodyMap,
                 generation);
         const auto camera =
