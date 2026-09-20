@@ -93,6 +93,7 @@ struct AeolianCellState
 struct AeolianMassBalance
 {
     f64 initialLooseMassKg{0.0};
+    f64 initialMobileMassKg{0.0};
     f64 finalLooseMassKg{0.0};
     f64 abradedBedrockMassKg{0.0};
     f64 finalAirborneMassKg{0.0};
@@ -123,9 +124,16 @@ struct AeolianErosionResult
 
 // The forcing field must contain N*N samples. Wind is in the page-local M01
 // east/north tangent frame. Fixed inputs are deterministic.
+//
+// seededSediment is the canonical continuation path for M14 mass imported from
+// neighboring physical pages or produced by an earlier process stage. When
+// supplied it must match the physical page resolution/spacing; its accounting
+// history is preserved while this solve reports only newly exported boundary
+// mass in AeolianMassBalance::boundaryLossKg.
 [[nodiscard]] AeolianErosionResult SimulateAeolianErosion(
     terrain_material_column::MaterialColumnPage material,
     const terrain_geology::GeologicalMaterialLibrary& geology,
     std::span<const AeolianCellForcing> forcing,
-    const AeolianErosionConfig& config = {});
+    const AeolianErosionConfig& config = {},
+    std::optional<SedimentExchangePage> seededSediment = std::nullopt);
 } // namespace orbit::terrain_erosion
