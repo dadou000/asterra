@@ -191,6 +191,69 @@ inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .low = 0x4d4158454c455641ULL
 };
 
+// M11 authored terrain-process configuration. The semantic record owns
+// service policy; physical pages/products remain derived runtime state.
+inline constexpr schema::PropertyId kProcessStreamPowerEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000101ULL};
+inline constexpr schema::PropertyId kProcessStreamPowerIterations{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000102ULL};
+inline constexpr schema::PropertyId kProcessStreamPowerIncision{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000103ULL};
+
+inline constexpr schema::PropertyId kProcessHydraulicEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000201ULL};
+inline constexpr schema::PropertyId kProcessHydraulicIterations{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000202ULL};
+inline constexpr schema::PropertyId kProcessHydraulicRainfall{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000203ULL};
+inline constexpr schema::PropertyId kProcessHydraulicTimeStep{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000204ULL};
+
+inline constexpr schema::PropertyId kProcessThermalEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000301ULL};
+inline constexpr schema::PropertyId kProcessThermalIterations{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000302ULL};
+inline constexpr schema::PropertyId kProcessThermalRelaxation{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000303ULL};
+
+inline constexpr schema::PropertyId kProcessAeolianEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000401ULL};
+inline constexpr schema::PropertyId kProcessAeolianIterations{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000402ULL};
+inline constexpr schema::PropertyId kProcessAeolianCapacity{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000403ULL};
+inline constexpr schema::PropertyId kProcessAeolianTimeStep{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000404ULL};
+
+inline constexpr schema::PropertyId kProcessGlacialEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000501ULL};
+inline constexpr schema::PropertyId kProcessGlacialIterations{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000502ULL};
+inline constexpr schema::PropertyId kProcessGlacialMaximumTemperature{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000503ULL};
+inline constexpr schema::PropertyId kProcessGlacialTimeStepYears{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000504ULL};
+
+inline constexpr schema::PropertyId kProcessRiversEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000601ULL};
+inline constexpr schema::PropertyId kProcessRiverMeandersEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000602ULL};
+inline constexpr schema::PropertyId kProcessRiverMeanderIterations{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000603ULL};
+inline constexpr schema::PropertyId kProcessRiverCutoffsEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000604ULL};
+inline constexpr schema::PropertyId kProcessRiverMinimumDrainageArea{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000605ULL};
+
+inline constexpr schema::PropertyId kProcessCoastalEnabled{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000701ULL};
+inline constexpr schema::PropertyId kProcessCoastalHydrodynamicSteps{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000702ULL};
+inline constexpr schema::PropertyId kProcessCoastalCflNumber{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000703ULL};
+inline constexpr schema::PropertyId kProcessCoastalMaximumTimeStep{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000704ULL};
+
 inline constexpr schema::PropertyId kWaterOceanEnabled{
     .high = 0x4f52424954574154ULL,
     .low = 0x45524f43454e4142ULL
