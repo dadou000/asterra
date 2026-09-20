@@ -98,6 +98,9 @@ public:
     [[nodiscard]] std::shared_ptr<CachedGpuTerrainPage>
     Find(const PersistentGpuTerrainCacheKey& key);
 
+    [[nodiscard]] bool IsResident(
+        const PersistentGpuTerrainCacheKey& key) const noexcept;
+
     [[nodiscard]] std::shared_ptr<CachedGpuTerrainPage>
     GetOrCreate(
         const PersistentGpuTerrainCacheKey& key,
