@@ -9,6 +9,8 @@
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_debug/TerrainDebugTexture.hpp>
+#include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
+#include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/time/SimulationTime.hpp>
 
 #include <map>
@@ -29,6 +31,7 @@ enum class StudioViewportPresentation : u8
 {
     Blank,
     BodyPreview,
+    ProductionTerrain,
     TerrainDebug,
     TerrainDebugUnavailable
 };
@@ -40,6 +43,7 @@ enum class StudioViewportPresentation : u8
 SelectStudioViewportPresentation(
     const studio_session::ViewportMode mode,
     const bool hasBody,
+    const bool hasTerrainRuntime,
     const bool hasLiveDebugPage,
     const bool hasSelectedDebugField) noexcept
 {
@@ -49,6 +53,12 @@ SelectStudioViewportPresentation(
                        hasSelectedDebugField
             ? StudioViewportPresentation::TerrainDebug
             : StudioViewportPresentation::TerrainDebugUnavailable;
+    }
+
+    if (mode == studio_session::ViewportMode::Perspective &&
+        hasTerrainRuntime)
+    {
+        return StudioViewportPresentation::ProductionTerrain;
     }
 
     return hasBody
@@ -64,7 +74,8 @@ class StudioViewportRenderer
 public:
     StudioViewportRenderer(
         rhi::Device& device,
-        const shader::Compiler& compiler);
+        const shader::Compiler& compiler,
+        u32 framesInFlight = 1U);
 
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
@@ -73,7 +84,8 @@ public:
         studio_session::StudioRuntimeBinding& runtime,
         const studio_session::StudioRuntimeSnapshot& snapshot,
         time::SimulationTime atTime = {},
-        bool drawPathDebug = true);
+        bool drawPathDebug = true,
+        u32 frameIndex = 0U);
 
 private:
     struct DebugPresentation
@@ -85,7 +97,25 @@ private:
         u64 seamFingerprint{0};
     };
 
+    struct TerrainPresentation
+    {
+        u64 universeGeneration{0U};
+        u64 terrainSourceRevision{0U};
+        u64 runtimeGeneration{0U};
+        universe::BodyId body{};
+        world::PlanetId planet{};
+        terrain_view::ClipmapConfig clipmap{};
+        world::WorldPosition observer{};
+
+        std::unique_ptr<terrain_gpu::GpuFieldGenerator>
+            fieldGenerator;
+        std::unique_ptr<terrain_render::TerrainPreviewRenderer>
+            renderer;
+    };
+
     rhi::Device* device_{nullptr};
+    const shader::Compiler* compiler_{nullptr};
+    u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
@@ -95,5 +125,11 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        TerrainPresentation,
+        std::less<>>
+        terrainPresentations_;
 };
 } // namespace orbit::studio_ui
