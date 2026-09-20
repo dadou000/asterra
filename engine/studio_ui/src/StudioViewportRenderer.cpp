@@ -1,6 +1,9 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 
 #include <algorithm>
@@ -22,6 +25,113 @@ namespace
         a.baseSpacingMeters == b.baseSpacingMeters &&
         a.levelScale == b.levelScale &&
         a.overlapCells == b.overlapCells;
+}
+
+[[nodiscard]] std::optional<StudioTerrainAuthoringOverlay>
+SelectedTerrainConstraintOverlay(
+    studio_session::StudioSession& session,
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime)
+{
+    if (!session.World().HasWorld())
+    {
+        return std::nullopt;
+    }
+
+    auto& world = session.World();
+    const auto& selected = world.Selection().Ordered();
+
+    if (selected.size() != 1U)
+    {
+        return std::nullopt;
+    }
+
+    scene::ObjectId constraintId = selected.front();
+    const auto selectedRecord = world.Objects().Find(constraintId);
+
+    if (!selectedRecord.has_value())
+    {
+        return std::nullopt;
+    }
+
+    if (selectedRecord->type ==
+        world_model::kTerrainConstraintControlPointType)
+    {
+        if (!selectedRecord->parent.has_value())
+        {
+            return std::nullopt;
+        }
+
+        constraintId = *selectedRecord->parent;
+    }
+
+    const auto constraintRecord =
+        world.Objects().Find(constraintId);
+
+    if (!constraintRecord.has_value() ||
+        constraintRecord->type !=
+            world_model::kTerrainConstraintType)
+    {
+        return std::nullopt;
+    }
+
+    editor_model::SurfaceAuthoringModel model(
+        world.Objects(),
+        world.Commands(),
+        world.Selection());
+
+    const auto body =
+        model.SelectedRockyBody();
+
+    if (!body.has_value() ||
+        body->terrain != runtime.terrainObject)
+    {
+        return std::nullopt;
+    }
+
+    const auto constraints =
+        model.TerrainConstraints(body->terrain);
+
+    const auto found =
+        std::find_if(
+            constraints.begin(),
+            constraints.end(),
+            [&](const editor_model::SurfaceTerrainConstraintDetail& item)
+            {
+                return item.id == constraintId;
+            });
+
+    if (found == constraints.end())
+    {
+        return std::nullopt;
+    }
+
+    StudioTerrainAuthoringOverlay overlay{
+        .body = runtime.body,
+        .kind =
+            found->shape ==
+                    editor_model::SurfaceTerrainConstraintShape::Spline
+                ? StudioTerrainOverlayKind::Spline
+                : StudioTerrainOverlayKind::Brush,
+        .influenceRadiusMeters =
+            found->shape ==
+                    editor_model::SurfaceTerrainConstraintShape::Spline
+                ? found->halfWidthMeters + found->falloffMeters
+                : found->outerRadiusMeters
+    };
+
+    if (found->shape ==
+        editor_model::SurfaceTerrainConstraintShape::Spline)
+    {
+        overlay.controlUnitDirections =
+            found->controlUnitDirections;
+    }
+    else
+    {
+        overlay.controlUnitDirections.push_back(
+            found->centerUnitDirection);
+    }
+
+    return overlay;
 }
 
 [[nodiscard]] terrain_render::TerrainPreviewCamera
@@ -668,6 +778,70 @@ StudioViewportRenderer::Compose(
                         });
                 });
             break;
+        }
+
+        if (terrainRuntime.has_value() &&
+            logicalTarget->mode !=
+                studio_session::ViewportMode::Debug)
+        {
+            auto overlay =
+                views.TerrainAuthoringOverlay(info.id);
+
+            if (!overlay.has_value())
+            {
+                overlay =
+                    SelectedTerrainConstraintOverlay(
+                        session,
+                        *terrainRuntime);
+            }
+
+            if (overlay.has_value() &&
+                overlay->body == terrainRuntime->body)
+            {
+                const auto& source =
+                    session.TerrainRuntime().TerrainSource(
+                        *terrainRuntime);
+
+                auto overlayLines =
+                    BuildTerrainAuthoringOverlayLines(
+                        *overlay,
+                        *terrainRuntime,
+                        source,
+                        view->Camera());
+
+                if (!overlayLines.empty())
+                {
+                    const auto camera = view->Camera();
+                    auto* overlayColor = color;
+
+                    graph.AddPass(
+                        prefix + ".TerrainAuthoringOverlay",
+                        {
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         overlayColor,
+                         width,
+                         height,
+                         camera,
+                         overlayLines = std::move(overlayLines)](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            pathRenderer_.DrawCameraRelativeLines(
+                                commands,
+                                *overlayColor,
+                                width,
+                                height,
+                                camera,
+                                overlayLines);
+                        });
+                }
+            }
         }
 
         rendered.push_back({
