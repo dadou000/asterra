@@ -1047,9 +1047,11 @@ target_link_libraries(OrbitV004IntegrationGateTests
     PRIVATE
         Orbit::Commands
         Orbit::Documents
+        Orbit::EditorModel
         Orbit::Jobs
         Orbit::Scene
         Orbit::Schema
+        Orbit::Selection
         Orbit::SurfaceAuthoring
         Orbit::SurfaceModel
         Orbit::Terrain
