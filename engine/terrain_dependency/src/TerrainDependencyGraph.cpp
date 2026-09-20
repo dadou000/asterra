@@ -307,6 +307,13 @@ TerrainDependencyGraph::Backend(
     return BackendFor(product);
 }
 
+TerrainDependencyProductMask
+TerrainDependencyGraph::ProductsForChange(
+    const TerrainChangeKind kind) noexcept
+{
+    return DirtyProductsFor(kind);
+}
+
 TerrainDependencyGraph::SourceKind
 TerrainDependencyGraph::SourceFor(
     const TerrainChangeKind kind) noexcept
