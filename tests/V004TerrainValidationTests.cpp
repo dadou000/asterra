@@ -51,6 +51,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #ifndef ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR
@@ -7120,7 +7121,7 @@ void Test20SaveLoadEquivalenceForAuthoredInputs()
 
     std::array<
         TerrainConstraintSample,
-        constraintProbes.size()>
+        3U>
         constraintSamplesBefore{};
 
     for (std::size_t index = 0U;
