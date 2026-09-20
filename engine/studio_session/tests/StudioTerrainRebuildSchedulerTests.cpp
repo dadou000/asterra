@@ -770,8 +770,66 @@ void TestStaleUploadCannotCommitOverNewRevision()
 }
 } // namespace
 
+void TestLateResidentPageInheritsPendingDebounce()
+{
+    Fixture fixture({
+        .editDebounceSeconds = 0.20,
+        .maxBuildRequestsPerTick = 4U
+    });
+
+    const auto first =
+        MakeAddress(50U, 51U);
+    const auto late =
+        MakeAddress(51U, 51U);
+
+    fixture.scheduler.RegisterPage(
+        first,
+        InitialRevisions());
+    DriveReady(
+        fixture,
+        first);
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            first.planet));
+
+    fixture.scheduler.RegisterPage(
+        late,
+        InitialRevisions());
+
+    fixture.scheduler.Tick(0.10);
+    fixture.jobs.WaitIdle();
+
+    const auto status =
+        fixture.scheduler.PageStatus(
+            late);
+
+    Require(
+        status.has_value() &&
+        status->state ==
+            studio_session::TerrainRebuildState::Dirty,
+        "A page entering residency during debounce must remain unscheduled.");
+
+    fixture.scheduler.Tick(0.10);
+
+    const auto applied =
+        fixture.scheduler.TakeAppliedChanges();
+
+    Require(
+        applied.size() == 1U &&
+        applied.front().kind ==
+            terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+        "M12 applied-change journal must report only the flushed authority edit.");
+
+    DriveReady(
+        fixture,
+        late);
+}
+
 int main()
 {
+    TestLateResidentPageInheritsPendingDebounce();
     TestInitialDirtyBuildConvergesAndReportsProgress();
     TestSliderChangesDebounceAndCoalesce();
     TestOverlappingDebounceWindowsDoNotSubmitIntermediateWork();
