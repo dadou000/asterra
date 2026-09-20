@@ -26,10 +26,10 @@ It configures CMake, builds the runtime, Studio and headless build CLI, and pack
 
 ```text
 dist/Orbit-Windows-Release/
-├── OrbitLauncher.exe
-├── OrbitSandbox.exe
 ├── OrbitStudio.exe
+├── OrbitPlayer.exe
 ├── OrbitBuild.exe
+├── dxcompiler.dll
 └── symbols/
 ```
 
@@ -95,7 +95,7 @@ real render-device check must not silently fall back to a GPU-less hosted runner
 
 Orbit Studio also exposes build operations over its structured JSON-RPC/MCP bridge.
 
-You can still launch `OrbitSandbox.exe` directly while developing; its crash handler falls back to a local `logs` directory when it is not started by the launcher.
+The terrain sandbox remains a developer/test executable and is not a launcher or alternate Studio front end. Normal interactive authoring starts from the root `Orbit.exe`.
 
 ### Sandbox camera controls
 
@@ -135,7 +135,7 @@ pip install -r tools/mcp_server/requirements.txt
 claude mcp add orbit -- python C:\path\to\asterra\tools\mcp_server\orbit_mcp_server.py
 ```
 
-Launch `OrbitSandbox` separately first (the bridge only talks to an
+Launch `OrbitSandbox` separately only for this dedicated terrain-test workflow (the bridge only talks to an
 already-running process, it doesn't launch one). Screenshots read
 real desktop pixels, so the dev server briefly raises the Orbit
 window's Z-order before capturing to make sure it isn't occluded.
