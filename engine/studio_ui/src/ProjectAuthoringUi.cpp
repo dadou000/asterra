@@ -328,6 +328,101 @@ void ProjectAuthoringUi::DrawProjectSettings(
         }
     }
 
+    context.Separator();
+    context.Text("Terrain Validation");
+    context.Text(
+        "Developer check: checkpoint, close/reopen the real project/session, "
+        "verify authored identity and fresh derived residency, then regenerate "
+        "the same physical page.");
+
+    if (context.Button(
+            "Save, Reopen & Verify Terrain"))
+    {
+        try
+        {
+            terrainRoundTripReport_ =
+                studio_session::
+                    VerifyStudioTerrainRoundTrip(
+                        *workspace_,
+                        "studio.primary");
+
+            const auto& report =
+                *terrainRoundTripReport_;
+
+            status_ =
+                report.success
+                    ? "Terrain round trip verified: authored state and regenerated physical result are equivalent."
+                    : std::format(
+                          "Terrain round trip failed at {}: {}",
+                          report.failureStage.empty()
+                              ? std::string("unknown")
+                              : report.failureStage,
+                          report.diagnostic);
+
+            SynchronizeProjectBuffers();
+            NotifyWorkspaceChanged();
+
+            // The workspace owns a new StudioSession after this action. End
+            // this panel draw immediately so no pre-reopen presentation state
+            // can be observed later in the same callback.
+            return;
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+            terrainRoundTripReport_.reset();
+        }
+    }
+
+    if (terrainRoundTripReport_.has_value())
+    {
+        const auto& report =
+            *terrainRoundTripReport_;
+
+        context.Text(
+            std::format(
+                "Result: {}",
+                report.success
+                    ? "PASS"
+                    : "FAIL"));
+
+        context.Text(
+            std::format(
+                "Semantic fingerprint: {} -> {}",
+                report.semanticFingerprintBefore,
+                report.semanticFingerprintAfter));
+
+        context.Text(
+            std::format(
+                "Terrain source revision: {} -> {}",
+                report.terrainSourceRevisionBefore,
+                report.terrainSourceRevisionAfter));
+
+        context.Text(
+            std::format(
+                "Physical/M29 fingerprint: {} -> {}",
+                report.physicalFingerprintBefore,
+                report.physicalFingerprintAfter));
+
+        context.Text(
+            std::format(
+                "Derived reset: M26 {} | M29 {} | page {}",
+                report.derivedCacheFreshAfterReopen
+                    ? "fresh"
+                    : "stale",
+                report.debugResidencyFreshAfterReopen
+                    ? "fresh"
+                    : "stale",
+                report.comparisonPagePreserved
+                    ? "preserved"
+                    : "changed"));
+
+        if (!report.diagnostic.empty())
+        {
+            context.Text(report.diagnostic);
+        }
+    }
+
     if (!status_.empty())
     {
         context.Separator();
