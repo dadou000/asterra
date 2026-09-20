@@ -3,6 +3,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioAuthoringBinding.cpp
     src/StudioSession.cpp
     src/StudioRuntimeBinding.cpp
+    src/StudioTerrainAuthoringInvalidation.cpp
     src/StudioTerrainRebuildScheduler.cpp
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioTerrainServiceStatus.cpp
@@ -85,6 +86,24 @@ if(BUILD_TESTING)
     )
 
 
+
+    add_executable(OrbitStudioTerrainAuthoringInvalidationTests
+        tests/StudioTerrainAuthoringInvalidationTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainAuthoringInvalidationTests
+        PRIVATE
+            Orbit::StudioSession
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainAuthoringInvalidationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainAuthoringInvalidationTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainAuthoringInvalidation
+        COMMAND OrbitStudioTerrainAuthoringInvalidationTests
+    )
 
     add_executable(OrbitStudioTerrainRebuildSchedulerTests
         tests/StudioTerrainRebuildSchedulerTests.cpp
