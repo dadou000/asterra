@@ -786,6 +786,9 @@ public:
         : device_(device),
           planet_(planet),
           gpuFieldGenerator_(gpuFieldGenerator),
+          physicalPageComposite_(
+              device,
+              shaderCompiler),
           regionDeltaComposite_(regionDeltaComposite),
           hydrologyRegionCache_(hydrologyRegionCache),
           config_(std::move(config)),
@@ -855,6 +858,56 @@ public:
         const bool frozen) noexcept
     {
         generationFrozen_ = frozen;
+    }
+
+    void SetPhysicalPages(
+        const std::span<
+            const terrain_gpu::GpuPhysicalSurfacePage>
+            pages,
+        const u64 generation)
+    {
+        if (physicalPageGeneration_ ==
+                generation &&
+            physicalPages_.size() ==
+                pages.size())
+        {
+            bool same = true;
+
+            for (std::size_t index = 0U;
+                 index < pages.size();
+                 ++index)
+            {
+                const auto& left =
+                    physicalPages_[index];
+                const auto& right =
+                    pages[index];
+
+                if (!(left.address ==
+                          right.address) ||
+                    left.resolution !=
+                        right.resolution ||
+                    left.samples !=
+                        right.samples)
+                {
+                    same = false;
+                    break;
+                }
+            }
+
+            if (same)
+            {
+                return;
+            }
+        }
+
+        physicalPages_.assign(
+            pages.begin(),
+            pages.end());
+
+        physicalPageGeneration_ =
+            generation;
+
+        RecordPhysicalPageRefresh();
     }
 
     void Draw(
@@ -1674,6 +1727,109 @@ private:
         stats_.updatePending = false;
     }
 
+    void RecordPhysicalPageRefresh()
+    {
+        if (motion_.levels.size() !=
+                levels_.size() ||
+            residencyUpdate_.levels.size() !=
+                levels_.size())
+        {
+            return;
+        }
+
+        for (u32 levelIndex = 0U;
+             levelIndex <
+                 static_cast<u32>(
+                     levels_.size());
+             ++levelIndex)
+        {
+            const auto& level =
+                layout_.levels[
+                    levelIndex];
+
+            const auto& levelUpdate =
+                residencyUpdate_.levels[
+                    levelIndex];
+
+            const bool hasCoarser =
+                levelIndex + 1U <
+                static_cast<u32>(
+                    levels_.size());
+
+            const auto* coarser =
+                hasCoarser
+                    ? &layout_.levels[
+                        levelIndex + 1U]
+                    : nullptr;
+
+            terrain_stream::TerrainSampleRequest request{
+                .levelIndex =
+                    levelIndex,
+                .resolution =
+                    level.gridResolution,
+                .spacingMeters =
+                    level.sampleSpacingMeters,
+                .footprintMeters =
+                    level.terrainFootprintMeters,
+                .morphToCoarser =
+                    hasCoarser,
+                .morphStartHalfExtentMeters =
+                    level.
+                        morphStartHalfExtentMeters,
+                .morphEndHalfExtentMeters =
+                    level.
+                        morphEndHalfExtentMeters,
+                .coarseSpacingMeters =
+                    coarser != nullptr
+                        ? coarser->
+                              sampleSpacingMeters
+                        : 0.0,
+                .coarseFootprintMeters =
+                    coarser != nullptr
+                        ? coarser->
+                              terrainFootprintMeters
+                        : 0.0,
+                .fineNormalFootprintMeters =
+                    layout_.levels[0].
+                        sampleSpacingMeters,
+                .fineNormalEpsilonMeters =
+                    layout_.levels[0].
+                        sampleSpacingMeters,
+                .centerOffsetMeters =
+                    motion_.levels[
+                        levelIndex].
+                        centerOffsetMeters,
+                .surfaceFrame =
+                    motion_.levels[
+                        levelIndex].
+                        surfaceFrame,
+                .coarseSurfaceFrame =
+                    hasCoarser
+                        ? motion_.levels[
+                              levelIndex + 1U].
+                              surfaceFrame
+                        : motion_.levels[
+                              levelIndex].
+                              surfaceFrame,
+                .originX =
+                    levelUpdate.originX,
+                .originY =
+                    levelUpdate.originY,
+                .regions = {{
+                    .x = 0U,
+                    .y = 0U,
+                    .width =
+                        level.gridResolution,
+                    .height =
+                        level.gridResolution
+                }}
+            };
+
+            RecordDirtyRequest(
+                request);
+        }
+    }
+
     void RecordDirtyRequest(
         const terrain_stream::
             TerrainSampleRequest& request)
@@ -1819,6 +1975,29 @@ private:
                     update.request,
                     region,
                     gpuBuffer);
+
+                if (!physicalPages_.empty())
+                {
+                    commandList.UavBarrier(
+                        gpuBuffer);
+
+                    for (const auto& page :
+                         physicalPages_)
+                    {
+                        physicalPageComposite_.
+                            Dispatch(
+                                commandList,
+                                update.request,
+                                region,
+                                page,
+                                planet_.
+                                    radiusMeters,
+                                gpuBuffer);
+
+                        commandList.UavBarrier(
+                            gpuBuffer);
+                    }
+                }
 
                 generatedBytes +=
                     static_cast<u64>(
@@ -1989,6 +2168,15 @@ private:
     terrain_gpu::GpuFieldGenerator&
         gpuFieldGenerator_;
 
+    terrain_gpu::GpuPhysicalPageComposite
+        physicalPageComposite_;
+
+    std::vector<
+        terrain_gpu::GpuPhysicalSurfacePage>
+        physicalPages_;
+
+    u64 physicalPageGeneration_{0U};
+
     // Optional GPU hydrology compositing -- see the constructor's own
     // comment. Null means "off"; every use below is guarded on this.
     terrain_gpu::GpuRegionDelta* regionDeltaComposite_{nullptr};
@@ -2108,6 +2296,17 @@ void TerrainPreviewRenderer::SetGenerationFrozen(
     const bool frozen)
 {
     impl_->SetGenerationFrozen(frozen);
+}
+
+void TerrainPreviewRenderer::SetPhysicalPages(
+    const std::span<
+        const terrain_gpu::GpuPhysicalSurfacePage>
+        pages,
+    const u64 generation)
+{
+    impl_->SetPhysicalPages(
+        pages,
+        generation);
 }
 
 void TerrainPreviewRenderer::Draw(
