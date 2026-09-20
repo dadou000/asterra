@@ -1124,6 +1124,136 @@ void StudioViewportPanels::DrawView(
         }
     }
 
+    if (target->mode ==
+        studio_session::ViewportMode::Perspective)
+    {
+        context.Separator();
+        context.Text("Terrain Diagnostics");
+
+        auto diagnostics =
+            views_->
+                TerrainDiagnosticOverlays(
+                    id);
+
+        bool diagnosticsChanged =
+            false;
+
+        const auto toggle =
+            [&](const char* name,
+                bool& value)
+            {
+                const std::string label =
+                    std::string(name) +
+                    "##terrain-diagnostics:" +
+                    std::string(id) + ":" +
+                    name;
+
+                diagnosticsChanged =
+                    context.Checkbox(
+                        label,
+                        value) ||
+                    diagnosticsChanged;
+            };
+
+        toggle(
+            "Dirty page bounds",
+            diagnostics.dirtyPageBounds);
+        context.SameLine();
+        toggle(
+            "Build/upload states",
+            diagnostics.buildStates);
+
+        toggle(
+            "Physical LOD",
+            diagnostics.physicalLod);
+        context.SameLine();
+        toggle(
+            "Clipmap rings",
+            diagnostics.clipmapRings);
+
+        toggle(
+            "Cache status",
+            diagnostics.cacheStatus);
+        context.SameLine();
+        toggle(
+            "Authored constraints",
+            diagnostics.authoredConstraints);
+
+        toggle(
+            "Biome weights",
+            diagnostics.biomeWeights);
+        context.SameLine();
+        toggle(
+            "Process effects",
+            diagnostics.processEffects);
+
+        toggle(
+            "Drainage vectors",
+            diagnostics.drainageVectors);
+
+        if (diagnosticsChanged)
+        {
+            views_->
+                SetTerrainDiagnosticOverlays(
+                    id,
+                    diagnostics);
+        }
+
+        if (diagnostics.cacheStatus)
+        {
+            const auto terrainRuntime =
+                session_->
+                    TerrainRuntime().
+                    Capture(id);
+
+            if (terrainRuntime.has_value())
+            {
+                const auto* services =
+                    session_->
+                        World().
+                        Surfaces().
+                        ServicesForBody(
+                            terrainRuntime->body);
+
+                if (services != nullptr)
+                {
+                    const auto stats =
+                        services->
+                            Cache().
+                            Stats();
+
+                    context.Text(
+                        std::format(
+                            "M26 cache: {} pages | {} bytes | hits {} | misses {} | evictions {}",
+                            stats.residentPages,
+                            stats.residentBytes,
+                            stats.hits,
+                            stats.misses,
+                            stats.evictions));
+                }
+
+                const auto rebuild =
+                    session_->
+                        TerrainPhysicalPages().
+                        BodyStatus(
+                            terrainRuntime->
+                                planet.id);
+
+                if (rebuild.has_value())
+                {
+                    context.Text(
+                        std::format(
+                            "M06 pages: {} dirty | {} queued | {} building | {} uploading | {} ready",
+                            rebuild->dirtyPages,
+                            rebuild->queuedPages,
+                            rebuild->buildingPages,
+                            rebuild->uploadingPages,
+                            rebuild->readyPages));
+                }
+            }
+        }
+    }
+
     if (!status_.empty())
     {
         context.Text(status_);
