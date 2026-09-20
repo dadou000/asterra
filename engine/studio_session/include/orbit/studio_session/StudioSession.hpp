@@ -5,6 +5,7 @@
 #include <orbit/editor_session/ActiveBodyModel.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
+#include <orbit/studio_session/StudioTerrainPerformanceDiagnostics.hpp>
 #include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
@@ -94,6 +95,11 @@ public:
     [[nodiscard]] const StudioTerrainRuntimeBridge&
     TerrainRuntime() const noexcept;
 
+    [[nodiscard]] StudioTerrainPerformanceDiagnostics&
+    TerrainPerformance() noexcept;
+    [[nodiscard]] const StudioTerrainPerformanceDiagnostics&
+    TerrainPerformance() const noexcept;
+
     // Semantic terrain tools enqueue only bounded M27 scopes here. M12
     // drains them into the production rebuild scheduler.
     void QueueTerrainInvalidation(
@@ -155,6 +161,7 @@ private:
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
     StudioTerrainPhysicalPageService terrainPhysicalPages_;
     StudioTerrainRuntimeBridge terrainRuntime_;
+    StudioTerrainPerformanceDiagnostics terrainPerformance_;
     std::vector<
         terrain_dependency::TerrainInvalidationRequest>
         pendingTerrainInvalidations_;
