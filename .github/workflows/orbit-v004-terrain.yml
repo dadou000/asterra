@@ -147,6 +147,7 @@ jobs:
           OrbitTerrainMultiScaleTests
           OrbitTerrainBoundaryExchangeTests
           OrbitTerrainDependencyTests
+          OrbitStudioTerrainRebuildSchedulerTests
           OrbitTerrainDebugTests
           OrbitTerrainDebugRasterTests
           OrbitTerrainDebugPageDataTests
@@ -175,4 +176,4 @@ jobs:
       - name: Test V0.0.4 terrain contracts
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          -R "Orbit[.](TerrainContracts|V004Validation|WaterService|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainLocal3DPromotion|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceAuthoringModel|SurfaceMaterialResolver|TerrainSurfaceShader|TerrainScatter|TerrainGpuScatterShaders|TerrainGpuPersistentCache|TerrainMultiScale|TerrainBoundaryExchange|TerrainDependency|TerrainDebug|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders|StudioViewportPresentation)"
+          -R "Orbit[.](TerrainContracts|V004Validation|WaterService|TerrainFaceSeams|TerrainM01Integration|PlanetTileNeighborhood|TerrainGeologyMaterials|TerrainStratigraphy|TerrainAuthoredConstraints|TerrainMacroGeology|TerrainRelief|TerrainImpacts|TerrainMaterialColumn|TerrainLocal3DPromotion|TerrainSurfaceResolver|TerrainBiome|SurfaceComposition|SurfaceAuthoringModel|SurfaceMaterialResolver|TerrainSurfaceShader|TerrainScatter|TerrainGpuScatterShaders|TerrainGpuPersistentCache|TerrainMultiScale|TerrainBoundaryExchange|TerrainDependency|StudioTerrainRebuildScheduler|TerrainDebug|TerrainDrainagePage|TerrainStreamPower|TerrainHydraulicErosion|TerrainThermalErosion|TerrainAeolianErosion|TerrainSedimentExchange|TerrainGlacialErosion|TerrainRiverNetwork|TerrainCoastalProcess|TerrainGpuCoastalShaders|TerrainGpuDrainageShaders|TerrainGpuHydraulicShaders|TerrainGpuThermalShaders|TerrainGpuAeolianShaders|StudioViewportPresentation)"
