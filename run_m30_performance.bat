@@ -131,16 +131,49 @@ if errorlevel 1 (
 )
 
 echo.
-echo ============================================================
-echo [M30] CAPTURE SUCCESS
+echo [M31] Enabling final integration CTest registration...
+cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON -DORBIT_ENABLE_V004_M31_GATE=ON
+if errorlevel 1 (
+    echo [M31] ERROR: Failed to enable the final integration gate.
+    goto fail
+)
+
 echo.
-echo Canonical record:
+echo [M31] Building final integration target...
+cmake --build build --config %CONFIG% --target OrbitV004IntegrationGateTests --parallel
+if errorlevel 1 (
+    echo [M31] ERROR: Final integration target build failed.
+    goto fail
+)
+
+set "M31_EXE=build\tests\%CONFIG%\OrbitV004IntegrationGateTests.exe"
+
+if not exist "%M31_EXE%" (
+    echo [M31] ERROR: Final integration executable was not produced:
+    echo   %M31_EXE%
+    goto fail
+)
+
+echo.
+echo [M31] Executing aggregate V0.0.4 completion gate...
+python tools\complete_v004_m31.py "%M31_EXE%" "%CONFIG%"
+if errorlevel 1 (
+    echo [M31] ERROR: Final integration gate failed.
+    goto fail
+)
+
+echo.
+echo ============================================================
+echo [V0.0.4] COMPLETE
+echo.
+echo Canonical M30 performance record:
 echo   docs\research\v004-m30-performance.csv
 echo.
-echo Summary:
+echo M30 summary:
 echo   docs\V0.0.4_M30_PERFORMANCE_CAPTURE.md
 echo.
-echo M31 entry gate: OPEN
+echo M31 summary:
+echo   docs\V0.0.4_M31_INTEGRATION_GATE.md
 echo ============================================================
 echo.
 
