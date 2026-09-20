@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
