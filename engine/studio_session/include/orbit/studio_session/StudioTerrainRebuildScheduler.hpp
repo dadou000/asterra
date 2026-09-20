@@ -4,6 +4,7 @@
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 
 #include <array>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -51,6 +52,12 @@ struct StudioTerrainPageRebuildStatus
     u64 revisionFingerprint{0U};
     u64 staleRejected{0U};
 
+    // M16 responsiveness diagnostics. Negative values mean no authored edit
+    // has completed a Ready cycle for this page yet.
+    f64 lastEditToReadySeconds{-1.0};
+    f64 maximumEditToReadySeconds{-1.0};
+    bool awaitingEditReady{false};
+
     // Diagnostic-only reason for the current/most recent regeneration cycle.
     // This is derived from the M27 invalidation request and never becomes
     // terrain authority.
@@ -78,6 +85,14 @@ struct StudioTerrainBodyRebuildStatus
     f64 progress{1.0};
 
     u64 staleRejected{0U};
+
+    // Highest number of simultaneously non-converged resident pages observed
+    // by this body scheduler since construction.
+    u32 peakOutstandingPages{0U};
+
+    f64 lastEditToReadySeconds{-1.0};
+    f64 maximumEditToReadySeconds{-1.0};
+
     bool paused{false};
 };
 
@@ -183,6 +198,12 @@ private:
 
         std::optional<terrain_dependency::TerrainChangeKind>
             lastChangeKind;
+
+        std::chrono::steady_clock::time_point
+            lastEditCommittedAt{};
+        bool awaitingEditReady{false};
+        f64 lastEditToReadySeconds{-1.0};
+        f64 maximumEditToReadySeconds{-1.0};
     };
 
     [[nodiscard]] PageEntry* FindPage(
@@ -198,6 +219,8 @@ private:
     void RecomputePendingProducts();
     void RefreshPage(PageEntry& page);
     void RefreshAll();
+    void RecordReadyLatency(PageEntry& page);
+    void UpdatePeakOutstandingPages();
     void ScheduleBudget();
 
     [[nodiscard]] std::optional<
@@ -219,5 +242,7 @@ private:
 
     AppliedChangeCallback
         appliedChangeCallback_;
+
+    u32 peakOutstandingPages_{0U};
 };
 } // namespace orbit::studio_session
