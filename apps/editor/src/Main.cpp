@@ -6183,6 +6183,9 @@ int main(
                     submittedFence);
             }
 
+            const auto frameCpuStarted =
+                Clock::now();
+
             const auto now =
                 Clock::now();
 
@@ -6723,6 +6726,18 @@ int main(
             graph.Execute(*commands);
 
             commands->Close();
+
+            studioSession.
+                TerrainPerformance().
+                RecordFrameCpuSeconds(
+                    std::chrono::duration<
+                        orbit::f64>(
+                            Clock::now() -
+                            frameCpuStarted).
+                        count(),
+                    studioSession,
+                    "studio.primary");
+
             graphicsQueue.Submit(
                 *commands);
 
