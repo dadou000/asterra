@@ -3,7 +3,10 @@
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
+#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 
+#include <optional>
 #include <string>
 
 namespace orbit::studio_ui
@@ -32,6 +35,12 @@ private:
     studio_session::StudioSession* session_{nullptr};
     std::string displayName_;
     std::string observedDisplayName_;
+    std::optional<
+        studio_session::StudioTerrainRoundTripReport>
+        terrainRoundTripReport_;
+    std::optional<
+        studio_session::StudioTerrainValidationScenarioReport>
+        terrainValidationScenarioReport_;
     std::string status_;
 };
 } // namespace orbit::studio_ui
