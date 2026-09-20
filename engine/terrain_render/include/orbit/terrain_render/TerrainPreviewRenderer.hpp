@@ -6,6 +6,7 @@
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
+#include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
 #include <orbit/terrain_gpu/GpuRegionDelta.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
 #include <orbit/terrain_view/ClipmapLayout.hpp>
@@ -13,6 +14,7 @@
 #include <orbit/world/WorldPosition.hpp>
 
 #include <memory>
+#include <span>
 
 namespace orbit::terrain_render
 {
@@ -118,6 +120,12 @@ public:
         bool lodColorEnabled,
         bool sideCutEnabled);
     void SetGenerationFrozen(bool frozen);
+
+    // M12 live physical pages. A changed generation records one full derived
+    // refresh of the current clipmap lattice; stable generations are free.
+    void SetPhysicalPages(
+        std::span<const terrain_gpu::GpuPhysicalSurfacePage> pages,
+        u64 generation);
 
     void Draw(
         rhi::CommandList& commandList,
