@@ -49,6 +49,19 @@ add_custom_command(TARGET OrbitStudio POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${ORBIT_DXCOMPILER_DLL}"
         "$<TARGET_FILE_DIR:OrbitStudio>"
+
+    # Canonical developer entry point: every successful Studio build publishes
+    # the unified application directly at the repository root.
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:OrbitStudio>"
+        "${CMAKE_SOURCE_DIR}/Orbit.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:OrbitPlayer>"
+        "${CMAKE_SOURCE_DIR}/OrbitPlayer.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "${CMAKE_SOURCE_DIR}/dxcompiler.dll"
+    COMMENT "Publishing unified Orbit Studio to repository root"
 )
 
 # Real-device Studio smoke gate. This is intentionally an explicit target
