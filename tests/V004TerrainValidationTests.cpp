@@ -2397,7 +2397,7 @@ void Test09CrossPageDuneMigration()
     sourceConfig.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
     sourceConfig.maximumBedrockAbrasionDepthPerStepMeters = 0.0;
 
-    const auto sourceResult =
+    auto sourceResult =
         SimulateAeolianErosion(
             std::move(sourcePage),
             fixture.materials,
