@@ -1906,12 +1906,12 @@ void Test08CrossPageSedimentFlux()
 
     SedimentMass totalPayload{};
 
-    for (u32 lane = 0U;
+    for (std::size_t lane = 0U;
          lane < media.size();
          ++lane)
     {
         const u32 sourceY =
-            lane;
+            static_cast<u32>(lane);
 
         sourceSediment.Add(
             resolution - 1U,
@@ -2071,12 +2071,12 @@ void Test08CrossPageSedimentFlux()
                 0U};
         };
 
-    for (u32 lane = 0U;
+    for (std::size_t lane = 0U;
          lane < media.size();
          ++lane)
     {
         const u32 sourceY =
-            lane;
+            static_cast<u32>(lane);
 
         const u32 targetIndex =
             world::RemapTileEdgeSampleIndex(
@@ -2193,14 +2193,14 @@ void Test08CrossPageSedimentFlux()
             1.0e-12),
         "M30-08 receiver M14 import accounting and mobile inventory must equal the source export exactly.");
 
-    for (u32 lane = 0U;
+    for (std::size_t lane = 0U;
          lane < media.size();
          ++lane)
     {
         const u32 targetIndex =
             world::RemapTileEdgeSampleIndex(
                 mapping,
-                lane,
+                static_cast<u32>(lane),
                 resolution);
 
         const auto [x, y] =
