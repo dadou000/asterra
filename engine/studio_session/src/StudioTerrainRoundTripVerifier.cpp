@@ -1019,4 +1019,111 @@ VerifyStudioTerrainRoundTrip(
         return report;
     }
 }
+
+StudioTerrainRoundTripReport
+VerifyStudioTerrainRoundTrip(
+    documents::ProjectDocument& project,
+    StudioSession& session,
+    const std::string_view viewportId)
+{
+    StudioTerrainRoundTripReport report{};
+
+    try
+    {
+        if (!session.World().HasWorld())
+        {
+            Fail(
+                report,
+                "preflight",
+                "No world is open.");
+            return report;
+        }
+
+        static_cast<void>(
+            session.Tick(false));
+
+        const auto liveRuntime =
+            session.TerrainRuntime().
+                Capture(viewportId);
+
+        if (!liveRuntime.has_value())
+        {
+            Fail(
+                report,
+                "preflight",
+                "The active Studio viewport has no production terrain runtime.");
+            return report;
+        }
+
+        const std::filesystem::path activeWorld =
+            session.World().
+                ActiveWorld().
+                relativePath;
+
+        const scene::ObjectId semanticBody =
+            liveRuntime->semanticBody;
+        const world::WorldPosition observer =
+            liveRuntime->observer;
+
+        // Persist the exact authority currently visible in Studio. The
+        // verification workspace below is intentionally short lived and owns
+        // no presentation state from the active application.
+        project.Save();
+        session.World().Checkpoint();
+
+        StudioWorkspace verificationWorkspace;
+        verificationWorkspace.OpenProject(
+            project.ManifestPath());
+
+        auto& verificationSession =
+            verificationWorkspace.Session();
+
+        if (!verificationSession.World().HasWorld() ||
+            verificationSession.World().
+                    ActiveWorld().
+                    relativePath !=
+                activeWorld)
+        {
+            verificationSession.OpenWorld(
+                activeWorld);
+        }
+
+        verificationSession.Viewports().Register(
+            std::string(viewportId),
+            ViewportMode::Perspective,
+            false);
+
+        verificationSession.Viewports().PinToObject(
+            viewportId,
+            semanticBody);
+
+        static_cast<void>(
+            verificationSession.Tick(false));
+
+        static_cast<void>(
+            verificationSession.
+                TerrainRuntime().
+                SetObserver(
+                    viewportId,
+                    observer));
+
+        static_cast<void>(
+            verificationSession.Tick(false));
+
+        return VerifyStudioTerrainRoundTrip(
+            verificationWorkspace,
+            viewportId);
+    }
+    catch (const std::exception& exception)
+    {
+        Fail(
+            report,
+            report.failureStage.empty()
+                ? "exception"
+                : report.failureStage,
+            exception.what());
+        return report;
+    }
+}
+
 } // namespace orbit::studio_session
