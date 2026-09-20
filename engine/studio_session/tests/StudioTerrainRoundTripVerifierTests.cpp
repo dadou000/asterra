@@ -219,6 +219,13 @@ int main()
         Check(
             report.semanticIdsPreserved);
         Check(
+            report.terrainSourceRevisionPreserved);
+        Check(
+            report.terrainSourceRevisionBefore !=
+                0U &&
+            report.terrainSourceRevisionBefore ==
+                report.terrainSourceRevisionAfter);
+        Check(
             report.derivedCacheFreshAfterReopen);
         Check(
             report.debugResidencyFreshAfterReopen);
