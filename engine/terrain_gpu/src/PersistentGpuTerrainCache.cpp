@@ -65,7 +65,9 @@ bool CachedGpuTerrainPage::IsCacheable() const noexcept
 {
     return
         products != 0 &&
-        (!buffers.empty() || !textures.empty()) &&
+        (physicalSurface != nullptr ||
+         !buffers.empty() ||
+         !textures.empty()) &&
         ResidentBytes() > 0;
 }
 
