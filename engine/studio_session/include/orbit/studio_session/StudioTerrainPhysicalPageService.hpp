@@ -101,6 +101,12 @@ public:
     BodyStatus(
         world::PlanetId planet) const;
 
+    // M13 presentation diagnostics. Value-only scheduler snapshots; callers
+    // gain no build/product authority through this seam.
+    [[nodiscard]] std::vector<StudioTerrainPageRebuildStatus>
+    Catalog(
+        world::PlanetId planet) const;
+
     void Clear();
 
 private:
