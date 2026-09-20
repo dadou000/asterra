@@ -118,8 +118,6 @@ if errorlevel 1 (
     goto fail
 )
 
-set "LAUNCHER=build\apps\launcher\%CONFIG%\OrbitLauncher.exe"
-set "SANDBOX=build\apps\sandbox\%CONFIG%\OrbitSandbox.exe"
 set "STUDIO=build\apps\editor\%CONFIG%\OrbitStudio.exe"
 set "BUILDCLI=build\apps\build\%CONFIG%\OrbitBuild.exe"
 set "PLAYER=build\apps\player\%CONFIG%\OrbitPlayer.exe"
@@ -181,10 +179,6 @@ if errorlevel 1 goto package_fail
 echo [Orbit] Updating root executables...
 copy /y "%STUDIO%" "Orbit.exe" >nul
 if errorlevel 1 goto root_copy_fail
-copy /y "%STUDIO%" "OrbitStudio.exe" >nul
-if errorlevel 1 goto root_copy_fail
-copy /y "%BUILDCLI%" "OrbitBuild.exe" >nul
-if errorlevel 1 goto root_copy_fail
 copy /y "%PLAYER%" "OrbitPlayer.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%DXC%" "dxcompiler.dll" >nul
@@ -235,13 +229,7 @@ echo.
 echo Root executable:
 echo   %CD%\Orbit.exe
 echo.
-echo Root Studio:
-echo   %CD%\OrbitStudio.exe
-echo.
-echo Root build CLI:
-echo   %CD%\OrbitBuild.exe
-echo.
-echo Root player runtime:
+echo Runtime dependency:
 echo   %CD%\OrbitPlayer.exe
 echo.
 echo Package:
@@ -259,7 +247,7 @@ goto success
 :root_copy_fail
 echo.
 echo [Orbit] ERROR: Failed to update the root executables.
-echo Close any running Orbit.exe / OrbitStudio.exe / OrbitBuild.exe / OrbitPlayer.exe and retry.
+echo Close any running Orbit.exe / OrbitPlayer.exe and retry.
 goto fail
 
 :package_fail
