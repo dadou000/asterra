@@ -93,6 +93,24 @@ int main()
         report.cacheStats.residentBytes !=
         0U);
 
+    Check(
+        report.performance.
+            hasTerrainRuntime);
+    Check(
+        report.performance.
+            residentTrackedPages <=
+        5U);
+    Check(
+        report.performance.
+            peakOutstandingPages <=
+        5U);
+    Check(
+        !report.performance.
+             buildConfiguration.empty());
+    Check(
+        !report.performance.
+             sourceCommit.empty());
+
     Check(report.roundTrip.success);
     Check(
         report.roundTrip.semanticBody ==
