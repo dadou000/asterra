@@ -235,9 +235,11 @@ int main()
             orbit::world_model::kBodyRadius,
             6'100'000.0);
 
-        // Until Refresh advances composition, the current runtime state is
-        // intentionally still the previous immutable composition.
-        Check(runtime.IsCurrent(composed));
+        // Until Refresh advances composition, the current post-terrain
+        // runtime state remains the immutable composition visible to consumers.
+        Check(
+            runtime.IsCurrent(
+                idleAfterTerrainEdit));
 
         const auto edited = runtime.Refresh();
         Check(runtime.IsCurrent(edited));
