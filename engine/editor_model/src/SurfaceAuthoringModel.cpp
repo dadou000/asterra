@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <variant>
 
@@ -37,6 +38,337 @@ template <typename Value>
 [[nodiscard]] bool FiniteNonNegative(const f64 value) noexcept
 {
     return std::isfinite(value) && value >= 0.0;
+}
+
+[[nodiscard]] u32 U32PropertyOr(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId object,
+    const schema::PropertyId property,
+    const u32 fallback)
+{
+    const i64 stored =
+        PropertyOr<i64>(
+            objects,
+            object,
+            property,
+            static_cast<i64>(fallback));
+
+    if (stored < 0 ||
+        static_cast<u64>(stored) >
+            static_cast<u64>(
+                std::numeric_limits<u32>::max()))
+    {
+        throw std::runtime_error(
+            "Terrain process integer property is outside uint32 range.");
+    }
+
+    return static_cast<u32>(stored);
+}
+
+[[nodiscard]] surface_model::TerrainProcessService
+ReadProcessSettings(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId object)
+{
+    surface_model::TerrainProcessService result{};
+
+    result.streamPowerEnabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessStreamPowerEnabled,
+            true);
+    result.streamPower.iterations =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessStreamPowerIterations,
+            result.streamPower.iterations);
+    result.streamPower.incisionCoefficientMetersPerIteration =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessStreamPowerIncision,
+            result.streamPower.incisionCoefficientMetersPerIteration);
+
+    result.hydraulicEnabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessHydraulicEnabled,
+            true);
+    result.hydraulic.iterations =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessHydraulicIterations,
+            result.hydraulic.iterations);
+    result.hydraulic.rainfallMetersPerSecond =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessHydraulicRainfall,
+            result.hydraulic.rainfallMetersPerSecond);
+    result.hydraulic.timeStepSeconds =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessHydraulicTimeStep,
+            result.hydraulic.timeStepSeconds);
+
+    result.thermalEnabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessThermalEnabled,
+            true);
+    result.thermal.maximumIterations =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessThermalIterations,
+            result.thermal.maximumIterations);
+    result.thermal.relaxation =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessThermalRelaxation,
+            result.thermal.relaxation);
+
+    result.aeolianEnabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessAeolianEnabled,
+            true);
+    result.aeolian.iterations =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessAeolianIterations,
+            result.aeolian.iterations);
+    result.aeolian.capacityCoefficient =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessAeolianCapacity,
+            result.aeolian.capacityCoefficient);
+    result.aeolian.timeStepSeconds =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessAeolianTimeStep,
+            result.aeolian.timeStepSeconds);
+
+    result.glacialEnabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessGlacialEnabled,
+            true);
+    result.glacial.iterations =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessGlacialIterations,
+            result.glacial.iterations);
+    result.glacial.maximumGlacierTemperatureC =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessGlacialMaximumTemperature,
+            result.glacial.maximumGlacierTemperatureC);
+    result.glacial.timeStepYears =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessGlacialTimeStepYears,
+            result.glacial.timeStepYears);
+
+    result.riversEnabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessRiversEnabled,
+            true);
+    result.rivers.enableMeanders =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessRiverMeandersEnabled,
+            result.rivers.enableMeanders);
+    result.rivers.meanderIterations =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessRiverMeanderIterations,
+            result.rivers.meanderIterations);
+    result.rivers.enableCutoffs =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessRiverCutoffsEnabled,
+            result.rivers.enableCutoffs);
+    result.rivers.minimumDrainageAreaSquareMeters =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessRiverMinimumDrainageArea,
+            result.rivers.minimumDrainageAreaSquareMeters);
+
+    result.coastal.enabled =
+        PropertyOr<bool>(
+            objects,
+            object,
+            world_model::kProcessCoastalEnabled,
+            result.coastal.enabled);
+    result.coastal.hydrodynamicSteps =
+        U32PropertyOr(
+            objects,
+            object,
+            world_model::kProcessCoastalHydrodynamicSteps,
+            result.coastal.hydrodynamicSteps);
+    result.coastal.water.cflNumber =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessCoastalCflNumber,
+            result.coastal.water.cflNumber);
+    result.coastal.water.maximumTimeStepSeconds =
+        PropertyOr<f64>(
+            objects,
+            object,
+            world_model::kProcessCoastalMaximumTimeStep,
+            result.coastal.water.maximumTimeStepSeconds);
+
+    if (!result.IsValid())
+    {
+        throw std::runtime_error(
+            "Persisted terrain process configuration is invalid.");
+    }
+
+    return result;
+}
+
+void WriteProcessSettings(
+    commands::CommandService& commands,
+    const scene::ObjectId object,
+    const surface_model::TerrainProcessService& settings)
+{
+    commands.SetProperty(
+        object,
+        world_model::kProcessStreamPowerEnabled,
+        settings.streamPowerEnabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessStreamPowerIterations,
+        static_cast<i64>(settings.streamPower.iterations));
+    commands.SetProperty(
+        object,
+        world_model::kProcessStreamPowerIncision,
+        settings.streamPower.incisionCoefficientMetersPerIteration);
+
+    commands.SetProperty(
+        object,
+        world_model::kProcessHydraulicEnabled,
+        settings.hydraulicEnabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessHydraulicIterations,
+        static_cast<i64>(settings.hydraulic.iterations));
+    commands.SetProperty(
+        object,
+        world_model::kProcessHydraulicRainfall,
+        settings.hydraulic.rainfallMetersPerSecond);
+    commands.SetProperty(
+        object,
+        world_model::kProcessHydraulicTimeStep,
+        settings.hydraulic.timeStepSeconds);
+
+    commands.SetProperty(
+        object,
+        world_model::kProcessThermalEnabled,
+        settings.thermalEnabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessThermalIterations,
+        static_cast<i64>(settings.thermal.maximumIterations));
+    commands.SetProperty(
+        object,
+        world_model::kProcessThermalRelaxation,
+        settings.thermal.relaxation);
+
+    commands.SetProperty(
+        object,
+        world_model::kProcessAeolianEnabled,
+        settings.aeolianEnabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessAeolianIterations,
+        static_cast<i64>(settings.aeolian.iterations));
+    commands.SetProperty(
+        object,
+        world_model::kProcessAeolianCapacity,
+        settings.aeolian.capacityCoefficient);
+    commands.SetProperty(
+        object,
+        world_model::kProcessAeolianTimeStep,
+        settings.aeolian.timeStepSeconds);
+
+    commands.SetProperty(
+        object,
+        world_model::kProcessGlacialEnabled,
+        settings.glacialEnabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessGlacialIterations,
+        static_cast<i64>(settings.glacial.iterations));
+    commands.SetProperty(
+        object,
+        world_model::kProcessGlacialMaximumTemperature,
+        settings.glacial.maximumGlacierTemperatureC);
+    commands.SetProperty(
+        object,
+        world_model::kProcessGlacialTimeStepYears,
+        settings.glacial.timeStepYears);
+
+    commands.SetProperty(
+        object,
+        world_model::kProcessRiversEnabled,
+        settings.riversEnabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessRiverMeandersEnabled,
+        settings.rivers.enableMeanders);
+    commands.SetProperty(
+        object,
+        world_model::kProcessRiverMeanderIterations,
+        static_cast<i64>(settings.rivers.meanderIterations));
+    commands.SetProperty(
+        object,
+        world_model::kProcessRiverCutoffsEnabled,
+        settings.rivers.enableCutoffs);
+    commands.SetProperty(
+        object,
+        world_model::kProcessRiverMinimumDrainageArea,
+        settings.rivers.minimumDrainageAreaSquareMeters);
+
+    commands.SetProperty(
+        object,
+        world_model::kProcessCoastalEnabled,
+        settings.coastal.enabled);
+    commands.SetProperty(
+        object,
+        world_model::kProcessCoastalHydrodynamicSteps,
+        static_cast<i64>(settings.coastal.hydrodynamicSteps));
+    commands.SetProperty(
+        object,
+        world_model::kProcessCoastalCflNumber,
+        settings.coastal.water.cflNumber);
+    commands.SetProperty(
+        object,
+        world_model::kProcessCoastalMaximumTimeStep,
+        settings.coastal.water.maximumTimeStepSeconds);
 }
 
 [[nodiscard]] bool ValidBand(
@@ -372,6 +704,162 @@ void SurfaceAuthoringModel::SetRelief(
     }
 }
 
+
+std::optional<scene::ObjectId>
+SurfaceAuthoringModel::ProcessSettingsObject(
+    const scene::ObjectId terrain) const
+{
+    static_cast<void>(
+        RequireTerrain(terrain));
+
+    std::optional<scene::ObjectId> result;
+
+    for (const auto& child :
+         objects_->Children(terrain))
+    {
+        if (child.type !=
+            world_model::kTerrainProcessAssetType)
+        {
+            continue;
+        }
+
+        if (result.has_value())
+        {
+            throw std::runtime_error(
+                "Terrain Surface contains more than one Terrain Process Settings record.");
+        }
+
+        result = child.id;
+    }
+
+    return result;
+}
+
+scene::ObjectId
+SurfaceAuthoringModel::EnsureProcessSettings(
+    const scene::ObjectId terrain)
+{
+    static_cast<void>(
+        RequireTerrain(terrain));
+
+    if (const auto existing =
+            ProcessSettingsObject(terrain);
+        existing.has_value())
+    {
+        return *existing;
+    }
+
+    const bool owns =
+        !commands_->HasActiveTransaction();
+
+    if (owns)
+    {
+        commands_->BeginTransaction(
+            "Create Terrain Process Settings");
+    }
+
+    try
+    {
+        const auto object =
+            commands_->CreateObject(
+                world_model::
+                    kTerrainProcessAssetType,
+                "Terrain Process Settings",
+                terrain,
+                50);
+
+        WriteProcessSettings(
+            *commands_,
+            object,
+            surface_model::
+                TerrainProcessService{});
+
+        if (owns)
+        {
+            commands_->CommitTransaction();
+        }
+
+        return object;
+    }
+    catch (...)
+    {
+        if (owns &&
+            commands_->HasActiveTransaction())
+        {
+            commands_->RollbackTransaction();
+        }
+
+        throw;
+    }
+}
+
+surface_model::TerrainProcessService
+SurfaceAuthoringModel::ProcessSettings(
+    const scene::ObjectId terrain) const
+{
+    static_cast<void>(
+        RequireTerrain(terrain));
+
+    const auto object =
+        ProcessSettingsObject(terrain);
+
+    return object.has_value()
+        ? ReadProcessSettings(
+              *objects_,
+              *object)
+        : surface_model::
+              TerrainProcessService{};
+}
+
+void SurfaceAuthoringModel::SetProcessSettings(
+    const scene::ObjectId terrain,
+    const surface_model::TerrainProcessService& settings)
+{
+    static_cast<void>(
+        RequireTerrain(terrain));
+
+    if (!settings.IsValid())
+    {
+        throw std::invalid_argument(
+            "Terrain process settings are invalid for one or more physical solvers.");
+    }
+
+    const bool owns =
+        !commands_->HasActiveTransaction();
+
+    if (owns)
+    {
+        commands_->BeginTransaction(
+            "Edit Terrain Process Settings");
+    }
+
+    try
+    {
+        const auto object =
+            EnsureProcessSettings(
+                terrain);
+
+        WriteProcessSettings(
+            *commands_,
+            object,
+            settings);
+
+        if (owns)
+        {
+            commands_->CommitTransaction();
+        }
+    }
+    catch (...)
+    {
+        if (owns &&
+            commands_->HasActiveTransaction())
+        {
+            commands_->RollbackTransaction();
+        }
+
+        throw;
+    }
+}
 
 std::vector<SurfaceTerrainConstraintDetail>
 SurfaceAuthoringModel::TerrainConstraints(const scene::ObjectId terrain) const
