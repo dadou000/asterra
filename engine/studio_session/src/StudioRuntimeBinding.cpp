@@ -26,6 +26,7 @@ StudioRuntimeSnapshot StudioRuntimeBinding::Refresh()
         .hasWorld = session_->World().HasWorld(),
         .worldGeneration = tick.worldGeneration,
         .universeGeneration = tick.universeGeneration,
+        .compositionChanged = tick.compositionChanged,
         .activeBodyChanged = tick.activeBodyChanged,
         .viewportTargetsChanged = tick.viewportTargetsChanged,
         .pathNetworkRebound = tick.pathNetworkRebound,
