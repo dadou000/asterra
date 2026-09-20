@@ -10,6 +10,7 @@
 #include <array>
 #include <format>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -301,7 +302,7 @@ void StudioViewportPanels::DrawView(
                     terrainTool_)));
 
         const auto setTool =
-            [this](
+            [this, id](
                 const StudioTerrainAuthoringTool tool)
             {
                 if (terrainTool_ != tool &&
@@ -312,6 +313,7 @@ void StudioViewportPanels::DrawView(
                     terrainSplineTerrain_.reset();
                 }
                 terrainTool_ = tool;
+                views_->ClearTerrainAuthoringOverlay(id);
             };
 
         const std::string selectTool =
@@ -508,6 +510,7 @@ void StudioViewportPanels::DrawView(
             {
                 terrainSplinePoints_.clear();
                 terrainSplineTerrain_.reset();
+                views_->ClearTerrainAuthoringOverlay(id);
                 status_ =
                     "Transient terrain spline cancelled.";
             }
@@ -849,6 +852,100 @@ void StudioViewportPanels::DrawView(
                 .height = static_cast<f32>(
                     renderView->Height())
             });
+
+    if (target->mode ==
+            studio_session::ViewportMode::Debug ||
+        terrainTool_ ==
+            StudioTerrainAuthoringTool::Select)
+    {
+        views_->ClearTerrainAuthoringOverlay(id);
+    }
+    else if (imageInteraction.hovered)
+    {
+        const auto hoverPick =
+            views_->PickTerrainSurface(
+                id,
+                imageInteraction.u,
+                imageInteraction.v);
+
+        if (hoverPick.has_value())
+        {
+            StudioTerrainAuthoringOverlay overlay{
+                .body = hoverPick->body,
+                .kind =
+                    IsSplineTool(terrainTool_)
+                        ? StudioTerrainOverlayKind::Spline
+                        : StudioTerrainOverlayKind::Brush,
+                .influenceRadiusMeters =
+                    IsSplineTool(terrainTool_)
+                        ? terrainSplineHalfWidthMeters_ +
+                              terrainSplineFalloffMeters_
+                        : terrainBrushOuterRadiusMeters_
+            };
+
+            if (IsSplineTool(terrainTool_))
+            {
+                overlay.controlUnitDirections =
+                    terrainSplinePoints_;
+
+                const auto direction =
+                    hoverPick->surface.unitDirection;
+
+                if (overlay.controlUnitDirections.empty() ||
+                    math::Length(
+                        overlay.controlUnitDirections.back() -
+                        direction) > 1.0e-10)
+                {
+                    overlay.controlUnitDirections.push_back(
+                        direction);
+                }
+            }
+            else
+            {
+                overlay.controlUnitDirections.push_back(
+                    hoverPick->surface.unitDirection);
+            }
+
+            views_->SetTerrainAuthoringOverlay(
+                id,
+                std::move(overlay));
+        }
+        else
+        {
+            views_->ClearTerrainAuthoringOverlay(id);
+        }
+    }
+    else if (IsSplineTool(terrainTool_) &&
+             !terrainSplinePoints_.empty() &&
+             terrainSplineTerrain_.has_value())
+    {
+        const auto body =
+            session_->World().Surfaces().
+                BodyForTerrainObject(
+                    *terrainSplineTerrain_);
+
+        if (body.has_value())
+        {
+            views_->SetTerrainAuthoringOverlay(
+                id,
+                {
+                    .body = *body,
+                    .kind = StudioTerrainOverlayKind::Spline,
+                    .controlUnitDirections = terrainSplinePoints_,
+                    .influenceRadiusMeters =
+                        terrainSplineHalfWidthMeters_ +
+                        terrainSplineFalloffMeters_
+                });
+        }
+        else
+        {
+            views_->ClearTerrainAuthoringOverlay(id);
+        }
+    }
+    else
+    {
+        views_->ClearTerrainAuthoringOverlay(id);
+    }
 
     if (imageInteraction.clicked)
     {
