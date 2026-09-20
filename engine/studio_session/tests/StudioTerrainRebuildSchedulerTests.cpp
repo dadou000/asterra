@@ -3,6 +3,7 @@
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/procedural_graph/ProceduralGraph.hpp>
 
+#include <any>
 #include <array>
 #include <atomic>
 #include <cstdlib>
