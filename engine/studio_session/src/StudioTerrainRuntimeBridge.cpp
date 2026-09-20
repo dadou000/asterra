@@ -217,27 +217,46 @@ bool StudioTerrainRuntimeBridge::Refresh()
     const u64 universeGeneration =
         world_->UniverseGeneration();
 
-    const bool generationChanged =
+    const bool worldGenerationChanged =
         worldGeneration !=
-            observedWorldGeneration_ ||
+            observedWorldGeneration_;
+
+    const bool universeGenerationChanged =
         universeGeneration !=
             observedUniverseGeneration_;
 
-    std::map<
-        std::string,
-        world::WorldPosition,
-        std::less<>>
-        previousObservers;
+    const bool generationChanged =
+        worldGenerationChanged ||
+        universeGenerationChanged;
+
+    bool changed = false;
 
     if (generationChanged)
     {
-        for (const auto& [id, runtime] :
-             runtimes_)
+        if (worldGenerationChanged)
         {
-            previousObservers.emplace(
-                id,
-                runtime->observer);
+            observerHistory_.clear();
         }
+        else
+        {
+            for (const auto& [id, runtime] :
+                 runtimes_)
+            {
+                observerHistory_.insert_or_assign(
+                    id,
+                    ObserverHistory{
+                        .semanticBody =
+                            runtime->semanticBody,
+                        .planet =
+                            runtime->planet.id,
+                        .observer =
+                            runtime->observer
+                    });
+            }
+        }
+
+        changed =
+            !runtimes_.empty();
 
         runtimes_.clear();
 
@@ -246,8 +265,6 @@ bool StudioTerrainRuntimeBridge::Refresh()
         observedUniverseGeneration_ =
             universeGeneration;
     }
-
-    bool changed = generationChanged;
 
     const auto targets =
         viewports_->Catalog();
@@ -267,10 +284,34 @@ bool StudioTerrainRuntimeBridge::Refresh()
 
         if (!target.target.has_value())
         {
-            changed =
+            const auto existing =
+                runtimes_.find(
+                    target.id);
+
+            if (existing !=
+                runtimes_.end())
+            {
+                observerHistory_.
+                    insert_or_assign(
+                        target.id,
+                        ObserverHistory{
+                            .semanticBody =
+                                existing->second->
+                                    semanticBody,
+                            .planet =
+                                existing->second->
+                                    planet.id,
+                            .observer =
+                                existing->second->
+                                    observer
+                        });
+
                 runtimes_.erase(
-                    target.id) > 0U ||
-                changed;
+                    existing);
+
+                changed = true;
+            }
+
             continue;
         }
 
@@ -306,10 +347,34 @@ bool StudioTerrainRuntimeBridge::Refresh()
             !terrainObject.has_value() ||
             services == nullptr)
         {
-            changed =
+            const auto existing =
+                runtimes_.find(
+                    target.id);
+
+            if (existing !=
+                runtimes_.end())
+            {
+                observerHistory_.
+                    insert_or_assign(
+                        target.id,
+                        ObserverHistory{
+                            .semanticBody =
+                                existing->second->
+                                    semanticBody,
+                            .planet =
+                                existing->second->
+                                    planet.id,
+                            .observer =
+                                existing->second->
+                                    observer
+                        });
+
                 runtimes_.erase(
-                    target.id) > 0U ||
-                changed;
+                    existing);
+
+                changed = true;
+            }
+
             continue;
         }
 
@@ -359,7 +424,12 @@ bool StudioTerrainRuntimeBridge::Refresh()
             world::WorldPosition>
             previousObserver;
 
-        if (found != runtimes_.end())
+        if (found != runtimes_.end() &&
+            found->second->semanticBody ==
+                target.target->
+                    semanticObject &&
+            found->second->planet.id ==
+                planet->id)
         {
             previousObserver =
                 found->second->observer;
@@ -367,14 +437,19 @@ bool StudioTerrainRuntimeBridge::Refresh()
         else
         {
             const auto old =
-                previousObservers.find(
+                observerHistory_.find(
                     target.id);
 
             if (old !=
-                previousObservers.end())
+                    observerHistory_.end() &&
+                old->second.semanticBody ==
+                    target.target->
+                        semanticObject &&
+                old->second.planet ==
+                    planet->id)
             {
                 previousObserver =
-                    old->second;
+                    old->second.observer;
             }
         }
 
@@ -386,6 +461,18 @@ bool StudioTerrainRuntimeBridge::Refresh()
 
         if (runtime != nullptr)
         {
+            observerHistory_.
+                insert_or_assign(
+                    target.id,
+                    ObserverHistory{
+                        .semanticBody =
+                            runtime->semanticBody,
+                        .planet =
+                            runtime->planet.id,
+                        .observer =
+                            runtime->observer
+                    });
+
             runtimes_.insert_or_assign(
                 target.id,
                 std::move(runtime));
@@ -407,6 +494,21 @@ bool StudioTerrainRuntimeBridge::Refresh()
         if (!seen.contains(
                 iterator->first))
         {
+            observerHistory_.
+                insert_or_assign(
+                    iterator->first,
+                    ObserverHistory{
+                        .semanticBody =
+                            iterator->second->
+                                semanticBody,
+                        .planet =
+                            iterator->second->
+                                planet.id,
+                        .observer =
+                            iterator->second->
+                                observer
+                    });
+
             iterator =
                 runtimes_.erase(
                     iterator);
@@ -424,6 +526,7 @@ bool StudioTerrainRuntimeBridge::Refresh()
 void StudioTerrainRuntimeBridge::Clear() noexcept
 {
     runtimes_.clear();
+    observerHistory_.clear();
 }
 
 bool StudioTerrainRuntimeBridge::SetObserver(
@@ -456,6 +559,21 @@ bool StudioTerrainRuntimeBridge::SetObserver(
     UpdateObserverPlan(
         *found->second,
         observer);
+
+    observerHistory_.
+        insert_or_assign(
+            found->first,
+            ObserverHistory{
+                .semanticBody =
+                    found->second->
+                        semanticBody,
+                .planet =
+                    found->second->
+                        planet.id,
+                .observer =
+                    found->second->
+                        observer
+            });
 
     ++found->second->
         runtimeGeneration;
