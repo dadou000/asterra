@@ -757,8 +757,9 @@ void StudioTerrainRuntimeBridge::PublishDebugPage(
             "Studio terrain runtime has no M29 publication registry.");
     }
 
-    debugPages_->Publish(
-        std::move(page));
+    static_cast<void>(
+        debugPages_->Publish(
+            std::move(page)));
 }
 
 std::unique_ptr<
