@@ -253,6 +253,24 @@ int main()
             }
         });
 
+        // First Studio tick composes the new semantic source and hands the
+        // invalidation to M06 without waiting for its debounce window.
+        static_cast<void>(
+            studio.Tick(false));
+
+        studio.TerrainPhysicalPages().
+            RebuildDirty();
+
+        Check(
+            studio.TerrainDebugPages().
+                Find(address) ==
+            nullptr);
+
+        Check(
+            studio.TerrainPhysicalPages().
+                Find(address) ==
+            nullptr);
+
         DriveReady(
             studio,
             address,
