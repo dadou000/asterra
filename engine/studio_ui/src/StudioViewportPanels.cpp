@@ -1351,6 +1351,86 @@ void StudioViewportPanels::DrawView(
                     status_ =
                         "Picked body has no semantic Terrain Surface.";
                 }
+                else if (terrainTool_ ==
+                         StudioTerrainAuthoringTool::BiomePaint)
+                {
+                    const auto biomeObject =
+                        SelectedBiomeObject(*session_);
+
+                    if (!biomeObject.has_value())
+                    {
+                        status_ =
+                            "Select a Biome or one of its authored children before painting.";
+                    }
+                    else
+                    {
+                        try
+                        {
+                            editor_model::
+                                SurfaceAuthoringModel
+                                model(
+                                    session_->World().
+                                        Objects(),
+                                    session_->World().
+                                        Commands(),
+                                    session_->World().
+                                        Selection());
+
+                            const auto rocky =
+                                model.SelectedRockyBody();
+
+                            if (!rocky.has_value() ||
+                                rocky->terrain !=
+                                    *terrainObject)
+                            {
+                                throw std::runtime_error(
+                                    "Selected biome belongs to a different terrain body.");
+                            }
+
+                            const auto mask =
+                                model.PaintBiomeMask(
+                                    *biomeObject,
+                                    biomePaintOperation_,
+                                    pick->surface.
+                                        unitDirection,
+                                    biomeBrushInnerRadiusMeters_,
+                                    biomeBrushOuterRadiusMeters_,
+                                    biomeBrushValue_,
+                                    biomeBrushOpacity_);
+
+                            model.SelectObject(mask);
+
+                            const math::Double3 point =
+                                pick->surface.
+                                    unitDirection;
+
+                            queueTerrainAuthoringInvalidation(
+                                pick->body,
+                                std::span{
+                                    &point,
+                                    std::size_t{1U}},
+                                biomeBrushOuterRadiusMeters_,
+                                0U,
+                                terrain_dependency::
+                                    TerrainChangeKind::
+                                        BiomePlacement);
+
+                            inspectSelectedBiomeAtPick(
+                                *pick);
+
+                            status_ =
+                                std::format(
+                                    "Biome {} mask committed; only M27 biome descendants were invalidated.",
+                                    BiomeOperationName(
+                                        biomePaintOperation_));
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            status_ =
+                                exception.what();
+                        }
+                    }
+                }
                 else if (IsSplineTool(
                              terrainTool_))
                 {
@@ -1536,6 +1616,7 @@ void StudioViewportPanels::DrawView(
                         case StudioTerrainAuthoringTool::Select:
                         case StudioTerrainAuthoringTool::Canyon:
                         case StudioTerrainAuthoringTool::Ridge:
+                        case StudioTerrainAuthoringTool::BiomePaint:
                             break;
                         }
 
