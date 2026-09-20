@@ -1,5 +1,14 @@
+#include <orbit/commands/CommandService.hpp>
+#include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/scene/ObjectStore.hpp>
+#include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/selection/SelectionService.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
+#include <orbit/surface_model/SurfaceComposition.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain_cache/TerrainPageCache.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
@@ -24,6 +33,8 @@
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
 #include <orbit/terrain_stream/ToroidalResidency.hpp>
 #include <orbit/terrain_view/ClipmapTracker.hpp>
+#include <orbit/world_model/UniverseComposition.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
 #include <any>
@@ -33,6 +44,7 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <span>
@@ -6885,6 +6897,1365 @@ void Test19PlanetFaceSeamConsistency()
         "M30-19 acceptance must cover all 24 face-edge crossings including reversed sample order and rotated receiving-edge cases.");
 }
 
+
+void Test20SaveLoadEquivalenceForAuthoredInputs()
+{
+    using namespace surface_authoring;
+
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("orbit-m30-save-load-" +
+         documents::ProjectId::Random().
+             ToString());
+
+    std::filesystem::remove_all(
+        root);
+
+    auto project =
+        documents::ProjectDocument::Create(
+            root,
+            "M30 Save Load Equivalence");
+
+    const auto manifestPath =
+        project.ManifestPath();
+
+    const auto worldPath =
+        project.StartupWorldPath();
+
+    const auto projectIdBefore =
+        project.Manifest().projectId;
+
+    // ---------------------------------------------------------------------
+    // M04 authored terrain-constraint asset: write the production TOML codec
+    // to disk, load it through the production file loader, then regenerate
+    // the derived constraint sample from authored intent only.
+    // ---------------------------------------------------------------------
+
+    const world::PlanetDefinition
+        constraintPlanet{
+            .radiusMeters = 6'000'000.0,
+            .id = {
+                .high =
+                    0x4D3330534156454CULL,
+                .low =
+                    0x4F41440000000020ULL
+            },
+            .generationSeed =
+                0x4D333032304D3034ULL
+        };
+
+    const terrain::PlanetSurfacePosition
+        constraintOrigin{
+            .planet =
+                constraintPlanet.id,
+            .unitDirection =
+                {1.0, 0.0, 0.0},
+            .radialOffsetMeters =
+                0.0
+        };
+
+    const auto constraintWest =
+        terrain::OffsetSurfacePosition(
+            constraintPlanet,
+            constraintOrigin,
+            {-800.0, 0.0});
+
+    const auto constraintEast =
+        terrain::OffsetSurfacePosition(
+            constraintPlanet,
+            constraintOrigin,
+            {800.0, 0.0});
+
+    const SplineConstraintPrimitive
+        authoredSpline{
+            .controlUnitDirections = {
+                constraintWest.
+                    unitDirection,
+                constraintOrigin.
+                    unitDirection,
+                constraintEast.
+                    unitDirection
+            },
+            .halfWidthMeters = 120.0,
+            .falloffMeters = 180.0
+        };
+
+    const BrushConstraintPrimitive
+        authoredBrush{
+            .centerUnitDirection =
+                constraintOrigin.
+                    unitDirection,
+            .innerRadiusMeters =
+                250.0,
+            .outerRadiusMeters =
+                750.0
+        };
+
+    TerrainConstraintSet authoredConstraints{
+        .id = {
+            .high =
+                0x4D333054434F4E53ULL,
+            .low =
+                0x4554000000000020ULL
+        },
+        .planet =
+            constraintPlanet.id,
+        .name =
+            "M30 persisted authored terrain"
+    };
+
+    const auto constraintId =
+        [](const u64 low)
+        {
+            return TerrainConstraintId{
+                .high =
+                    0x4D3330434F4E5354ULL,
+                .low = low
+            };
+        };
+
+    authoredConstraints.
+        height.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2001ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Add,
+            .primitive =
+                authoredSpline,
+            .value = -180.0,
+            .opacity = 0.85,
+            .enabled = true
+        });
+
+    authoredConstraints.
+        protection.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2002ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Replace,
+            .primitive =
+                authoredBrush,
+            .value = 0.65,
+            .opacity = 0.75,
+            .enabled = true
+        });
+
+    authoredConstraints.
+        drainage.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2003ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Add,
+            .primitive =
+                authoredSpline,
+            .value = 0.90,
+            .opacity = 1.0,
+            .enabled = true
+        });
+
+    authoredConstraints.
+        material.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2004ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Replace,
+            .primitive =
+                authoredBrush,
+            .material =
+                terrain_geology::
+                    reference_rock::
+                        Basalt,
+            .weight = 0.90,
+            .opacity = 0.80,
+            .enabled = true
+        });
+
+    Require(
+        authoredConstraints.IsValid(),
+        "M30-20 authored M04 constraint asset must validate before save.");
+
+    const TerrainConstraintBaseline
+        constraintBaseline{
+            .heightMeters = 900.0,
+            .gradient = {},
+            .upliftMeters = 0.0,
+            .material =
+                terrain_geology::
+                    reference_rock::
+                        Sandstone,
+            .protection = 0.10,
+            .drainage = 0.05
+        };
+
+    const std::array<
+        terrain::PlanetSurfacePosition,
+        3>
+        constraintProbes{{
+            constraintOrigin,
+            terrain::OffsetSurfacePosition(
+                constraintPlanet,
+                constraintOrigin,
+                {0.0, 400.0}),
+            terrain::OffsetSurfacePosition(
+                constraintPlanet,
+                constraintOrigin,
+                {0.0, 1'400.0})
+        }};
+
+    std::array<
+        TerrainConstraintSample,
+        constraintProbes.size()>
+        constraintSamplesBefore{};
+
+    for (std::size_t index = 0U;
+         index < constraintProbes.size();
+         ++index)
+    {
+        constraintSamplesBefore[index] =
+            EvaluateTerrainConstraintSet(
+                authoredConstraints,
+                constraintPlanet,
+                constraintProbes[index],
+                constraintBaseline);
+    }
+
+    const std::string constraintText =
+        SerializeTerrainConstraintSetToml(
+            authoredConstraints);
+
+    const auto constraintPath =
+        root /
+        "Content" /
+        "M30.orbitterrainconstraints";
+
+    {
+        std::ofstream output(
+            constraintPath,
+            std::ios::binary |
+                std::ios::trunc);
+
+        Require(
+            output.good(),
+            "M30-20 constraint asset file must open for production-codec persistence.");
+
+        output.write(
+            constraintText.data(),
+            static_cast<std::streamsize>(
+                constraintText.size()));
+
+        Require(
+            output.good(),
+            "M30-20 constraint asset save must write the complete serialized authority.");
+    }
+
+    const auto loadedConstraints =
+        LoadTerrainConstraintSetFile(
+            constraintPath);
+
+    Require(
+        loadedConstraints.id ==
+                authoredConstraints.id &&
+        loadedConstraints.planet ==
+                authoredConstraints.planet &&
+        loadedConstraints.name ==
+                authoredConstraints.name &&
+        loadedConstraints.
+                height.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                protection.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                drainage.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                material.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                height.
+                constraints.front().id ==
+            authoredConstraints.
+                height.
+                constraints.front().id &&
+        loadedConstraints.
+                material.
+                constraints.front().id ==
+            authoredConstraints.
+                material.
+                constraints.front().id &&
+        loadedConstraints.
+                material.
+                constraints.front().
+                material ==
+            terrain_geology::
+                reference_rock::
+                    Basalt,
+        "M30-20 M04 load must preserve authored set/constraint/material stable identities.");
+
+    Require(
+        SerializeTerrainConstraintSetToml(
+            loadedConstraints) ==
+            constraintText,
+        "M30-20 M04 canonical serialization must be stable after save/load.");
+
+    for (std::size_t index = 0U;
+         index < constraintProbes.size();
+         ++index)
+    {
+        const auto after =
+            EvaluateTerrainConstraintSet(
+                loadedConstraints,
+                constraintPlanet,
+                constraintProbes[index],
+                constraintBaseline);
+
+        const auto& before =
+            constraintSamplesBefore[index];
+
+        Require(
+            after.heightMeters ==
+                    before.heightMeters &&
+            after.gradient ==
+                    before.gradient &&
+            after.upliftMeters ==
+                    before.upliftMeters &&
+            after.protection ==
+                    before.protection &&
+            after.drainage ==
+                    before.drainage &&
+            after.material.count ==
+                    before.material.count,
+            "M30-20 regenerated M04 scalar/gradient/material-count outputs must be bit-identical after file reload.");
+
+        for (u32 materialIndex = 0U;
+             materialIndex <
+                 before.material.count;
+             ++materialIndex)
+        {
+            Require(
+                after.material.
+                        materials[
+                            materialIndex] ==
+                    before.material.
+                        materials[
+                            materialIndex] &&
+                after.material.
+                        weights[
+                            materialIndex] ==
+                    before.material.
+                        weights[
+                            materialIndex],
+                "M30-20 regenerated M04 material blend must be bit-identical after reload.");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // M28 semantic world persistence: author relief + biome selectors/mask +
+    // M21 surface layer + M22 scatter rule, checkpoint the real SQLite world,
+    // destroy the runtime/editor objects, reopen, and compose again.
+    // ---------------------------------------------------------------------
+
+    scene::ObjectId worldObject{};
+    scene::ObjectId systemObject{};
+    scene::ObjectId bodyObject{};
+    scene::ObjectId terrainObject{};
+    scene::ObjectId biomeObject{};
+    scene::ObjectId maskObject{};
+    scene::ObjectId mossObject{};
+    scene::ObjectId treeObject{};
+
+    std::vector<scene::ObjectId>
+        selectorIdsBefore;
+
+    documents::WorldId worldIdBefore{};
+    universe::BodyId bodyIdBefore{};
+
+    terrain::AnalyticTerrainDesc
+        terrainRecipeBefore{};
+
+    terrain_biome::BiomeDefinition
+        biomeDefinitionBefore{};
+
+    terrain_biome::BiomePlacementEvaluation
+        placementBefore{};
+
+    std::vector<
+        terrain_biome::ResolvedBiomeWeight>
+        resolvedBefore;
+
+    editor_model::SurfaceReliefSettings
+        authoredRelief{};
+
+    editor_model::SurfaceBiomePreferences
+        authoredPreferences{};
+
+    editor_model::SurfaceBiomeSettings
+        authoredBiomeSettings{};
+
+    terrain_biome::BiomePlacementContext
+        placementContext{};
+
+    placementContext.unitDirection =
+        {1.0, 0.0, 0.0};
+    placementContext.planetRadiusMeters =
+        6'000'000.0;
+    placementContext.temperatureC =
+        22.0;
+    placementContext.moisture =
+        0.50;
+    placementContext.rainfall =
+        0.45;
+    placementContext.elevationMeters =
+        650.0;
+    placementContext.slopeDegrees =
+        11.0;
+    placementContext.aspectRadians =
+        0.25;
+    placementContext.latitudeRadians =
+        0.0;
+    placementContext.continentality =
+        0.60;
+    placementContext.
+        distanceToCoastWaterMeters =
+        18'000.0;
+    placementContext.drainage =
+        0.35;
+    placementContext.soilDepthMeters =
+        0.70;
+    placementContext.sandDepthMeters =
+        0.05;
+    placementContext.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+    placementContext.solarExposure =
+        0.65;
+    placementContext.windExposure =
+        0.30;
+    placementContext.snowPersistence =
+        0.0;
+
+    Require(
+        placementContext.IsValid(),
+        "M30-20 runtime biome probe context must validate.");
+
+    {
+        documents::WorldDatabase world(
+            worldPath);
+
+        worldIdBefore =
+            world.Id();
+
+        schema::SchemaRegistry schemas;
+        world_model::RegisterSchemas(
+            schemas);
+
+        scene::ObjectStore objects(
+            world);
+
+        commands::CommandService commands(
+            objects,
+            schemas);
+
+        selection::SelectionService
+            selection;
+
+        worldObject =
+            commands.CreateObject(
+                world_model::kWorldType,
+                "World");
+
+        systemObject =
+            commands.CreateObject(
+                world_model::
+                    kCelestialSystemType,
+                "Helion",
+                worldObject);
+
+        bodyObject =
+            commands.CreateObject(
+                world_model::
+                    kCelestialBodyType,
+                "Asterra",
+                systemObject);
+
+        terrainObject =
+            commands.CreateObject(
+                world_model::
+                    kTerrainSurfaceType,
+                "Asterra Terrain",
+                bodyObject);
+
+        commands.SetProperty(
+            bodyObject,
+            world_model::kBodyRadius,
+            6'000'000.0);
+
+        commands.SetProperty(
+            terrainObject,
+            world_model::kTerrainSeed,
+            i64{424'242});
+
+        const scene::ObjectId selected[] = {
+            bodyObject
+        };
+
+        selection.Set(
+            selected);
+
+        editor_model::SurfaceAuthoringModel
+            authoring(
+                objects,
+                commands,
+                selection);
+
+        authoredRelief = {
+            .macroAmplitudeMeters =
+                3'150.0,
+            .macroWavelengthMeters =
+                620'000.0,
+            .detailAmplitudeMeters =
+                425.0,
+            .detailWavelengthMeters =
+                24'000.0,
+            .detailOctaves = 9,
+            .maximumElevationMeters =
+                9'250.0
+        };
+
+        authoring.SetRelief(
+            terrainObject,
+            authoredRelief);
+
+        biomeObject =
+            authoring.AddBiome(
+                terrainObject,
+                "M30 Temperate Basin");
+
+        authoredPreferences = {
+            .temperature = {
+                15.0,
+                28.0,
+                5.0,
+                7.0
+            },
+            .moisture = {
+                0.30,
+                0.70,
+                0.15,
+                0.20
+            },
+            .elevation = {
+                -250.0,
+                2'500.0,
+                350.0,
+                600.0
+            }
+        };
+
+        authoring.SetCommonPreferences(
+            biomeObject,
+            authoredPreferences);
+
+        authoredBiomeSettings = {
+            .minimumResolvedWeight =
+                0.075,
+            .materialInfluence =
+                0.65,
+            .scatterDensityMultiplier =
+                1.25,
+            .hydraulicErosion =
+                0.90,
+            .thermalTransport =
+                1.10,
+            .aeolianTransport =
+                0.55,
+            .glacialErosion =
+                0.25,
+            .coastalErosion =
+                0.80,
+            .chemicalWeathering =
+                1.15
+        };
+
+        authoring.SetBiomeSettings(
+            biomeObject,
+            authoredBiomeSettings);
+
+        maskObject =
+            authoring.PaintLocalOverride(
+                biomeObject,
+                {2.0, 0.0, 0.0},
+                1'000.0,
+                5'000.0,
+                0.80,
+                0.60);
+
+        mossObject =
+            authoring.AddSurfaceLayer(
+                biomeObject,
+                terrain_biome::
+                    BiomeSurfaceLayerKind::
+                        Moss);
+
+        treeObject =
+            authoring.AddScatterRule(
+                biomeObject,
+                terrain_biome::
+                    BiomeScatterKind::
+                        Tree);
+
+        commands.SetProperty(
+            mossObject,
+            world_model::
+                kBiomeSurfaceLayerStrength,
+            0.42);
+
+        commands.SetProperty(
+            mossObject,
+            world_model::
+                kBiomeSurfaceLayerMoistureMin,
+            0.35);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterDensity,
+            0.018);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterSpacing,
+            7.5);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterSeedSalt,
+            i64{2020});
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterRequiresSoil,
+            true);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterMinimumSoilDepth,
+            0.25);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterScaleMin,
+            0.90);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterScaleMax,
+            1.15);
+
+        const auto selectors =
+            authoring.Selectors(
+                biomeObject);
+
+        Require(
+            selectors.size() == 3U,
+            "M30-20 M28 biome authoring must persist the three semantic automatic-selector children.");
+
+        selectorIdsBefore.reserve(
+            selectors.size());
+
+        for (const auto& selector :
+             selectors)
+        {
+            selectorIdsBefore.push_back(
+                selector.id);
+        }
+
+        world_model::UniverseComposition
+            universe;
+
+        const auto universeStats =
+            universe.Rebuild(
+                objects);
+
+        Require(
+            universeStats.bodies == 1U,
+            "M30-20 pre-save semantic world must compose one terrain-bearing body.");
+
+        surface_model::SurfaceComposition
+            surfaces;
+
+        const auto surfaceStats =
+            surfaces.Rebuild(
+                objects,
+                universe);
+
+        Require(
+            surfaceStats.
+                    terrainSurfaces ==
+                1U &&
+            surfaceStats.
+                    biomeServices ==
+                1U &&
+            surfaceStats.
+                    biomeDefinitions ==
+                2U,
+            "M30-20 pre-save surface composition must contain BaseBiome plus the authored optional biome.");
+
+        const auto bodyId =
+            universe.BodyForObject(
+                bodyObject);
+
+        Require(
+            bodyId.has_value(),
+            "M30-20 pre-save body must have a stable runtime BodyId.");
+
+        bodyIdBefore =
+            *bodyId;
+
+        const auto* capability =
+            surfaces.Registry().
+                FindTerrainSurface(
+                    bodyIdBefore);
+
+        const auto* analytic =
+            capability != nullptr
+                ? dynamic_cast<
+                      const terrain::
+                          AnalyticTerrainSource*>(
+                      capability->terrain.
+                          get())
+                : nullptr;
+
+        Require(
+            analytic != nullptr,
+            "M30-20 authored terrain surface must compose to the production analytic terrain source.");
+
+        terrainRecipeBefore =
+            analytic->Description();
+
+        const auto* biomeService =
+            surfaces.BiomesForBody(
+                bodyIdBefore);
+
+        Require(
+            biomeService != nullptr &&
+            biomeService->
+                    Definitions().
+                    size() ==
+                2U,
+            "M30-20 authored biome must reach the production M19/M20 service before save.");
+
+        biomeDefinitionBefore =
+            biomeService->
+                Definitions()[1];
+
+        Require(
+            biomeDefinitionBefore.
+                    placement.
+                    selectors.
+                    size() ==
+                3U &&
+            biomeDefinitionBefore.
+                    placement.
+                    authoredMasks.
+                    size() ==
+                1U &&
+            biomeDefinitionBefore.
+                    surface.
+                    layers.
+                    size() ==
+                1U &&
+            biomeDefinitionBefore.
+                    scatter.
+                    layers.
+                    size() ==
+                1U,
+            "M30-20 pre-save runtime biome must contain selectors, authored mask, M21 layer and M22 scatter rule.");
+
+        placementBefore =
+            biomeService->
+                EvaluatePlacement(
+                    biomeDefinitionBefore,
+                    placementContext);
+
+        resolvedBefore =
+            biomeService->
+                ResolvePlacement(
+                    placementContext);
+
+        Require(
+            !resolvedBefore.empty(),
+            "M30-20 pre-save biome placement must produce a resolved coverage vector.");
+
+        world.Checkpoint();
+    }
+
+    // Every editor/runtime owner above is destroyed here. Reopen only from
+    // project/world persistence and reconstruct the same runtime products.
+    auto reopenedProject =
+        documents::ProjectDocument::Open(
+            manifestPath);
+
+    Require(
+        reopenedProject.
+                Manifest().
+                projectId ==
+            projectIdBefore &&
+        reopenedProject.
+                StartupWorldPath() ==
+            worldPath,
+        "M30-20 reopening the project must preserve ProjectId and startup world authority.");
+
+    {
+        documents::WorldDatabase world(
+            reopenedProject.
+                StartupWorldPath());
+
+        Require(
+            world.Id() ==
+                worldIdBefore &&
+            world.SchemaVersion() ==
+                documents::
+                    kCurrentWorldSchemaVersion,
+            "M30-20 reopened SQLite world must preserve WorldId and current schema.");
+
+        schema::SchemaRegistry schemas;
+        world_model::RegisterSchemas(
+            schemas);
+
+        scene::ObjectStore objects(
+            world);
+
+        // ObjectStore::Revision is intentionally session-local. Persistence
+        // equivalence is based on semantic authority, not carrying a process
+        // counter across application restarts.
+        Require(
+            objects.Revision() == 0U,
+            "M30-20 reopened ObjectStore should begin a fresh session revision rather than persisting derived change counters.");
+
+        const std::array<
+            scene::ObjectId,
+            8>
+            stableObjects{{
+                worldObject,
+                systemObject,
+                bodyObject,
+                terrainObject,
+                biomeObject,
+                maskObject,
+                mossObject,
+                treeObject
+            }};
+
+        for (const auto object :
+             stableObjects)
+        {
+            Require(
+                objects.Find(object).
+                    has_value(),
+                "M30-20 every authored semantic object must reload with its original stable ObjectId.");
+        }
+
+        for (const auto selectorId :
+             selectorIdsBefore)
+        {
+            Require(
+                objects.Find(
+                    selectorId).
+                    has_value(),
+                "M30-20 authored biome selector ObjectIds must survive save/load.");
+        }
+
+        commands::CommandService commands(
+            objects,
+            schemas);
+
+        selection::SelectionService
+            selection;
+
+        editor_model::SurfaceAuthoringModel
+            authoring(
+                objects,
+                commands,
+                selection);
+
+        const auto reliefAfter =
+            authoring.Relief(
+                terrainObject);
+
+        Require(
+            reliefAfter.
+                    macroAmplitudeMeters ==
+                authoredRelief.
+                    macroAmplitudeMeters &&
+            reliefAfter.
+                    macroWavelengthMeters ==
+                authoredRelief.
+                    macroWavelengthMeters &&
+            reliefAfter.
+                    detailAmplitudeMeters ==
+                authoredRelief.
+                    detailAmplitudeMeters &&
+            reliefAfter.
+                    detailWavelengthMeters ==
+                authoredRelief.
+                    detailWavelengthMeters &&
+            reliefAfter.
+                    detailOctaves ==
+                authoredRelief.
+                    detailOctaves &&
+            reliefAfter.
+                    maximumElevationMeters ==
+                authoredRelief.
+                    maximumElevationMeters,
+            "M30-20 M28 relief authority must reload exactly through the production authoring model.");
+
+        const auto preferencesAfter =
+            authoring.CommonPreferences(
+                biomeObject);
+
+        Require(
+            preferencesAfter.
+                    temperature.minimum ==
+                authoredPreferences.
+                    temperature.minimum &&
+            preferencesAfter.
+                    temperature.maximum ==
+                authoredPreferences.
+                    temperature.maximum &&
+            preferencesAfter.
+                    moisture.minimum ==
+                authoredPreferences.
+                    moisture.minimum &&
+            preferencesAfter.
+                    moisture.maximum ==
+                authoredPreferences.
+                    moisture.maximum &&
+            preferencesAfter.
+                    elevation.minimum ==
+                authoredPreferences.
+                    elevation.minimum &&
+            preferencesAfter.
+                    elevation.maximum ==
+                authoredPreferences.
+                    elevation.maximum,
+            "M30-20 persisted biome preference bands must reload exactly.");
+
+        const auto settingsAfter =
+            authoring.BiomeSettings(
+                biomeObject);
+
+        Require(
+            settingsAfter.
+                    minimumResolvedWeight ==
+                authoredBiomeSettings.
+                    minimumResolvedWeight &&
+            settingsAfter.
+                    materialInfluence ==
+                authoredBiomeSettings.
+                    materialInfluence &&
+            settingsAfter.
+                    scatterDensityMultiplier ==
+                authoredBiomeSettings.
+                    scatterDensityMultiplier &&
+            settingsAfter.
+                    hydraulicErosion ==
+                authoredBiomeSettings.
+                    hydraulicErosion &&
+            settingsAfter.
+                    thermalTransport ==
+                authoredBiomeSettings.
+                    thermalTransport &&
+            settingsAfter.
+                    aeolianTransport ==
+                authoredBiomeSettings.
+                    aeolianTransport &&
+            settingsAfter.
+                    glacialErosion ==
+                authoredBiomeSettings.
+                    glacialErosion &&
+            settingsAfter.
+                    coastalErosion ==
+                authoredBiomeSettings.
+                    coastalErosion &&
+            settingsAfter.
+                    chemicalWeathering ==
+                authoredBiomeSettings.
+                    chemicalWeathering,
+            "M30-20 persisted biome process/material/scatter settings must reload exactly.");
+
+        const auto masksAfter =
+            authoring.Masks(
+                biomeObject);
+
+        Require(
+            masksAfter.size() ==
+                1U &&
+            masksAfter.front().id ==
+                maskObject &&
+            masksAfter.front().
+                    centerUnitDirection ==
+                math::Double3{
+                    1.0, 0.0, 0.0} &&
+            masksAfter.front().
+                    innerRadiusMeters ==
+                1'000.0 &&
+            masksAfter.front().
+                    outerRadiusMeters ==
+                5'000.0 &&
+            masksAfter.front().
+                    value ==
+                0.80 &&
+            masksAfter.front().
+                    opacity ==
+                0.60,
+            "M30-20 authored local biome mask geometry/weight/opacity must survive world reopen.");
+
+        const auto selectorsAfter =
+            authoring.Selectors(
+                biomeObject);
+
+        Require(
+            selectorsAfter.size() ==
+                selectorIdsBefore.size(),
+            "M30-20 selector child count must survive world reopen.");
+
+        for (const auto selectorId :
+             selectorIdsBefore)
+        {
+            Require(
+                std::any_of(
+                    selectorsAfter.begin(),
+                    selectorsAfter.end(),
+                    [&](const auto& selector)
+                    {
+                        return
+                            selector.id ==
+                            selectorId;
+                    }),
+                "M30-20 each automatic selector must retain its stable semantic identity.");
+        }
+
+        const auto treeDensity =
+            objects.GetProperty(
+                treeObject,
+                world_model::
+                    kBiomeScatterDensity);
+
+        const auto treeSalt =
+            objects.GetProperty(
+                treeObject,
+                world_model::
+                    kBiomeScatterSeedSalt);
+
+        const auto mossStrength =
+            objects.GetProperty(
+                mossObject,
+                world_model::
+                    kBiomeSurfaceLayerStrength);
+
+        Require(
+            treeDensity.has_value() &&
+            std::get<f64>(
+                *treeDensity) ==
+                0.018 &&
+            treeSalt.has_value() &&
+            std::get<i64>(
+                *treeSalt) ==
+                2020 &&
+            mossStrength.has_value() &&
+            std::get<f64>(
+                *mossStrength) ==
+                0.42,
+            "M30-20 exact M21/M22 child-rule properties must survive SQLite save/load.");
+
+        world_model::UniverseComposition
+            universe;
+
+        static_cast<void>(
+            universe.Rebuild(
+                objects));
+
+        const auto bodyIdAfter =
+            universe.BodyForObject(
+                bodyObject);
+
+        Require(
+            bodyIdAfter.has_value() &&
+            *bodyIdAfter ==
+                bodyIdBefore,
+            "M30-20 stable semantic body ObjectId must regenerate the identical runtime BodyId after reopen.");
+
+        surface_model::SurfaceComposition
+            surfaces;
+
+        const auto surfaceStats =
+            surfaces.Rebuild(
+                objects,
+                universe);
+
+        Require(
+            surfaceStats.
+                    terrainSurfaces ==
+                1U &&
+            surfaceStats.
+                    biomeServices ==
+                1U &&
+            surfaceStats.
+                    biomeDefinitions ==
+                2U &&
+            surfaceStats.
+                    sourceRevision ==
+                objects.Revision(),
+            "M30-20 reopened authored world must recompose one terrain service and one optional biome from the fresh session state.");
+
+        const auto* capability =
+            surfaces.Registry().
+                FindTerrainSurface(
+                    *bodyIdAfter);
+
+        const auto* analytic =
+            capability != nullptr
+                ? dynamic_cast<
+                      const terrain::
+                          AnalyticTerrainSource*>(
+                      capability->terrain.
+                          get())
+                : nullptr;
+
+        Require(
+            analytic != nullptr,
+            "M30-20 reopened terrain authority must regenerate the analytic terrain capability.");
+
+        const auto& terrainRecipeAfter =
+            analytic->Description();
+
+        Require(
+            terrainRecipeAfter.seed ==
+                    terrainRecipeBefore.seed &&
+            terrainRecipeAfter.
+                    macroAmplitudeMeters ==
+                terrainRecipeBefore.
+                    macroAmplitudeMeters &&
+            terrainRecipeAfter.
+                    macroWavelengthMeters ==
+                terrainRecipeBefore.
+                    macroWavelengthMeters &&
+            terrainRecipeAfter.
+                    detailAmplitudeMeters ==
+                terrainRecipeBefore.
+                    detailAmplitudeMeters &&
+            terrainRecipeAfter.
+                    detailWavelengthMeters ==
+                terrainRecipeBefore.
+                    detailWavelengthMeters &&
+            terrainRecipeAfter.
+                    detailOctaves ==
+                terrainRecipeBefore.
+                    detailOctaves &&
+            terrainRecipeAfter.
+                    maximumElevationAboveSeaLevelMeters ==
+                terrainRecipeBefore.
+                    maximumElevationAboveSeaLevelMeters,
+            "M30-20 save/load must regenerate an identical production terrain recipe from authored semantic inputs.");
+
+        const auto* biomeService =
+            surfaces.BiomesForBody(
+                *bodyIdAfter);
+
+        Require(
+            biomeService != nullptr &&
+            biomeService->
+                    Definitions().
+                    size() ==
+                2U,
+            "M30-20 reopened world must regenerate BaseBiome plus the persisted optional biome.");
+
+        const auto biomeAfter =
+            biomeService->
+                Definitions()[1];
+
+        Require(
+            biomeAfter.id ==
+                    biomeDefinitionBefore.id &&
+            biomeAfter.name ==
+                    biomeDefinitionBefore.name &&
+            biomeAfter.
+                    placement.mode ==
+                biomeDefinitionBefore.
+                    placement.mode &&
+            biomeAfter.
+                    placement.
+                    minimumResolvedWeight ==
+                biomeDefinitionBefore.
+                    placement.
+                    minimumResolvedWeight &&
+            biomeAfter.
+                    placement.
+                    selectors.size() ==
+                biomeDefinitionBefore.
+                    placement.
+                    selectors.size() &&
+            biomeAfter.
+                    placement.
+                    authoredMasks.size() ==
+                1U &&
+            biomeAfter.
+                    placement.
+                    authoredMasks.front().id ==
+                biomeDefinitionBefore.
+                    placement.
+                    authoredMasks.front().id &&
+            biomeAfter.
+                    surface.
+                    materialInfluence ==
+                biomeDefinitionBefore.
+                    surface.
+                    materialInfluence &&
+            biomeAfter.
+                    surface.
+                    layers.size() ==
+                1U &&
+            biomeAfter.
+                    surface.
+                    layers.front().kind ==
+                biomeDefinitionBefore.
+                    surface.
+                    layers.front().kind &&
+            biomeAfter.
+                    surface.
+                    layers.front().strength ==
+                biomeDefinitionBefore.
+                    surface.
+                    layers.front().strength &&
+            biomeAfter.
+                    scatter.
+                    densityMultiplier ==
+                biomeDefinitionBefore.
+                    scatter.
+                    densityMultiplier &&
+            biomeAfter.
+                    scatter.
+                    layers.size() ==
+                1U &&
+            biomeAfter.
+                    scatter.
+                    layers.front().id ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().id &&
+            biomeAfter.
+                    scatter.
+                    layers.front().kind ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().kind &&
+            biomeAfter.
+                    scatter.
+                    layers.front().
+                    densityPerSquareMeter ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().
+                    densityPerSquareMeter &&
+            biomeAfter.
+                    scatter.
+                    layers.front().
+                    minimumSpacingMeters ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().
+                    minimumSpacingMeters &&
+            biomeAfter.
+                    scatter.
+                    layers.front().
+                    seedSalt ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().
+                    seedSalt,
+            "M30-20 persisted semantic IDs/properties must regenerate identical M20/M21/M22 runtime identities and rules.");
+
+        const auto placementAfter =
+            biomeService->
+                EvaluatePlacement(
+                    biomeAfter,
+                    placementContext);
+
+        Require(
+            placementAfter.
+                    automaticWeight ==
+                placementBefore.
+                    automaticWeight &&
+            placementAfter.
+                    authoredWeight ==
+                placementBefore.
+                    authoredWeight &&
+            placementAfter.
+                    finalWeight ==
+                placementBefore.
+                    finalWeight,
+            "M30-20 biome placement evaluation must be bit-identical after world save/load.");
+
+        const auto resolvedAfter =
+            biomeService->
+                ResolvePlacement(
+                    placementContext);
+
+        Require(
+            resolvedAfter.size() ==
+                resolvedBefore.size(),
+            "M30-20 resolved biome coverage cardinality must survive world save/load.");
+
+        for (std::size_t index = 0U;
+             index <
+                 resolvedBefore.size();
+             ++index)
+        {
+            Require(
+                resolvedAfter[index].id ==
+                        resolvedBefore[index].id &&
+                resolvedAfter[index].weight ==
+                        resolvedBefore[index].weight &&
+                resolvedAfter[index].base ==
+                        resolvedBefore[index].base,
+                "M30-20 resolved biome IDs/weights/base flags must be bit-identical after reload.");
+        }
+
+        world.Checkpoint();
+    }
+
+    std::filesystem::remove_all(
+        root);
+}
+
 } // namespace
 
 int main()
@@ -6908,8 +8279,9 @@ int main()
     Test17RevisionInvalidation();
     Test18ClipmapPhysicalPageIndependence();
     Test19PlanetFaceSeamConsistency();
+    Test20SaveLoadEquivalenceForAuthoredInputs();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 19/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 20/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
