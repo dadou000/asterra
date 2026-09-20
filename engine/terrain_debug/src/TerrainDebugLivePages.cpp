@@ -59,6 +59,14 @@ CaptureLiveTerrainDebugPage(
             "Live terrain debug scatter instances require their canonical page request.");
     }
 
+    if (!inputs.scatterDensityPerSquareMeter.empty() &&
+        (inputs.scatterRequest != nullptr ||
+         !inputs.scatterInstances.empty()))
+    {
+        throw std::invalid_argument(
+            "Live terrain debug aggregate scatter density is mutually exclusive with a single M22 request.");
+    }
+
     auto page =
         std::make_shared<TerrainDebugPageData>(
             stamp,
@@ -120,6 +128,12 @@ CaptureLiveTerrainDebugPage(
         page->CaptureScatterDensity(
             *inputs.scatterRequest,
             inputs.scatterInstances);
+    }
+    else if (!inputs.scatterDensityPerSquareMeter.empty())
+    {
+        page->SetScalar(
+            TerrainDebugField::ScatterDensity,
+            inputs.scatterDensityPerSquareMeter);
     }
 
     return page;
