@@ -157,7 +157,23 @@ std::size_t TerrainDebugLivePages::AddressHash::operator()(
     return static_cast<std::size_t>(value);
 }
 
-void TerrainDebugLivePages::Publish(
+namespace
+{
+[[nodiscard]] bool RevisionsDominate(
+    const terrain::TerrainGenerationRevisions& candidate,
+    const terrain::TerrainGenerationRevisions& current) noexcept
+{
+    return
+        candidate.geology >= current.geology &&
+        candidate.climate >= current.climate &&
+        candidate.authoring >= current.authoring &&
+        candidate.biome >= current.biome &&
+        candidate.water >= current.water &&
+        candidate.processes >= current.processes;
+}
+} // namespace
+
+bool TerrainDebugLivePages::Publish(
     std::shared_ptr<const TerrainDebugPageData> page)
 {
     if (page == nullptr ||
@@ -171,9 +187,33 @@ void TerrainDebugLivePages::Publish(
         page->Stamp().address;
 
     std::unique_lock lock(mutex_);
+
+    const auto current =
+        pages_.find(address);
+
+    if (current != pages_.end())
+    {
+        const auto& candidateStamp =
+            page->Stamp();
+        const auto& currentStamp =
+            current->second->Stamp();
+
+        if (!RevisionsDominate(
+                candidateStamp.revisions,
+                currentStamp.revisions) ||
+            (candidateStamp.revisions ==
+                 currentStamp.revisions &&
+             candidateStamp.invalidationRevision <
+                 currentStamp.invalidationRevision))
+        {
+            return false;
+        }
+    }
+
     pages_.insert_or_assign(
         address,
         std::move(page));
+    return true;
 }
 
 std::shared_ptr<const TerrainDebugPageData>
