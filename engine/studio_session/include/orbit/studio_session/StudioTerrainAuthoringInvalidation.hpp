@@ -19,5 +19,7 @@ BuildTerrainAuthoringInvalidations(
     std::span<const math::Double3> controlUnitDirections,
     f64 influenceRadiusMeters,
     u8 physicalTileLevel,
-    u32 downstreamRadiusTiles = 2U);
+    u32 downstreamRadiusTiles = 2U,
+    terrain_dependency::TerrainChangeKind kind =
+        terrain_dependency::TerrainChangeKind::TerrainAuthoring);
 } // namespace orbit::studio_session
