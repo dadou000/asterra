@@ -47,9 +47,11 @@ using BuildFunction =
 struct NodeStatus
 {
     NodeState state{NodeState::Dirty};
+    ExecutionBackend backend{ExecutionBackend::Cpu};
     u64 committedRevision{0};
     u64 requestedGeneration{0};
     u64 lastInputRevisionHash{0};
+    u64 staleCompletions{0};
     std::string error;
 };
 
@@ -130,6 +132,7 @@ private:
         u64 configurationRevision{1};
         u64 requestedGeneration{1};
         u64 lastInputRevisionHash{0};
+        u64 staleCompletions{0};
         std::any product;
         std::string error;
         std::shared_ptr<PendingBuild> pending;
