@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +16,7 @@ from validate_v004_m30_performance import EXPECTED, RESOLUTION, validate
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_CSV = REPO_ROOT / "docs" / "research" / "v004-m30-performance.csv"
 SUMMARY_MD = REPO_ROOT / "docs" / "V0.0.4_M30_PERFORMANCE_CAPTURE.md"
+PROVENANCE_TOML = REPO_ROOT / "docs" / "research" / "v004-m30-performance.meta.toml"
 M30_DOC = REPO_ROOT / "docs" / "V0.0.4_M30_VALIDATION_REGRESSION.md"
 PROGRESS_DOC = REPO_ROOT / "docs" / "V0.0.4_PROGRESS.md"
 
@@ -68,14 +71,16 @@ def format_value(value: float, unit: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         print(
-            "usage: import_v004_m30_performance.py <validated-performance.csv>",
+            "usage: import_v004_m30_performance.py "
+            "<validated-performance.csv> [build-config]",
             file=sys.stderr,
         )
         return 2
 
     source = Path(sys.argv[1]).resolve()
+    build_config = sys.argv[2].strip() if len(sys.argv) == 3 else "unknown"
 
     try:
         adapter, values = validate(source)
@@ -92,12 +97,50 @@ def main() -> int:
     captured_at = datetime.now(timezone.utc).replace(microsecond=0)
     captured_iso = captured_at.isoformat().replace("+00:00", "Z")
 
+    try:
+        source_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            text=True,
+            encoding="utf-8",
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        source_commit = "unknown"
+
+    csv_sha256 = hashlib.sha256(
+        CANONICAL_CSV.read_bytes()
+    ).hexdigest()
+
+    provenance_lines = [
+        'schema = "orbit_v004_m30_capture_v1"',
+        f'captured_utc = "{captured_iso}"',
+        f'adapter = "{adapter.replace(chr(34), chr(39))}"',
+        f'build_config = "{build_config.replace(chr(34), chr(39))}"',
+        f'source_commit = "{source_commit}"',
+        f'csv_sha256 = "{csv_sha256}"',
+        f'resolution = {RESOLUTION}',
+        f'metric_count = {len(EXPECTED)}',
+        "",
+    ]
+
+    PROVENANCE_TOML.write_text(
+        "\n".join(provenance_lines),
+        encoding="utf-8",
+        newline="\n",
+    )
+
     summary_lines = [
         "# Orbit V0.0.4 M30 — Captured performance record",
         "",
         f"Captured: **{captured_iso}**",
         "",
         f"Adapter: **{adapter}**",
+        "",
+        f"Build configuration: **{build_config}**",
+        "",
+        f"Source commit: `{source_commit}`",
+        "",
+        f"CSV SHA-256: `{csv_sha256}`",
         "",
         f"Physical page / planting-grid resolution: **{RESOLUTION}×{RESOLUTION}**",
         "",
@@ -125,9 +168,11 @@ def main() -> int:
         "run_m30_performance.bat performs that deterministic run before "
         "capturing/importing this record.",
         "",
-        "Canonical machine-readable source:",
+        "Canonical machine-readable sources:",
         "",
         "docs/research/v004-m30-performance.csv",
+        "",
+        "docs/research/v004-m30-performance.meta.toml",
         "",
     ]
 
@@ -199,6 +244,9 @@ M30 is complete. Run the V0.0.4 end-to-end integration acceptance: automatic roc
     print(f"captured: {captured_iso}")
     print(f"csv: {CANONICAL_CSV.relative_to(REPO_ROOT)}")
     print(f"summary: {SUMMARY_MD.relative_to(REPO_ROOT)}")
+    print(f"provenance: {PROVENANCE_TOML.relative_to(REPO_ROOT)}")
+    print(f"source commit: {source_commit}")
+    print(f"build config: {build_config}")
     print("M30 ledger: COMPLETE")
     print("M31 ledger: READY")
     return 0
