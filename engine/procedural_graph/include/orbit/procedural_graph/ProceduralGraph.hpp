@@ -38,6 +38,24 @@ struct BuildContext
     u64 generation{0};
     u64 inputRevisionHash{0};
     u64 configurationRevision{0};
+
+    // Immutable snapshot captured only after all dependencies are Clean.
+    // Async build code consumes these copies without reading graph state from
+    // worker threads. Shared-pointer products stay cheap to snapshot.
+    std::vector<std::any> dependencyProducts;
+
+    template <typename T>
+    [[nodiscard]] const T* DependencyProduct(
+        const std::size_t index) const noexcept
+    {
+        if (index >= dependencyProducts.size())
+        {
+            return nullptr;
+        }
+
+        return std::any_cast<T>(
+            &dependencyProducts[index]);
+    }
 };
 
 using BuildFunction =
