@@ -190,6 +190,24 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioTerrainValidationScenarioTests
     )
 
+    add_executable(OrbitStudioTerrainPerformanceDiagnosticsTests
+        tests/StudioTerrainPerformanceDiagnosticsTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainPerformanceDiagnosticsTests
+        PRIVATE
+            Orbit::StudioSession
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainPerformanceDiagnosticsTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainPerformanceDiagnosticsTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainPerformanceDiagnostics
+        COMMAND OrbitStudioTerrainPerformanceDiagnosticsTests
+    )
+
     add_executable(OrbitStudioTerrainServiceStatusTests
         tests/StudioTerrainServiceStatusTests.cpp
     )
