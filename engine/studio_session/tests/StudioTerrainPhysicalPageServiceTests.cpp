@@ -46,6 +46,35 @@ OnlyChildOfType(
     return result;
 }
 
+void DriveResidencyBounded(
+    orbit::studio_session::StudioSession& studio,
+    const orbit::world::PlanetId planet,
+    const orbit::u32 maximumPages)
+{
+    for (orbit::u32 iteration = 0U;
+         iteration < 20'000U;
+         ++iteration)
+    {
+        static_cast<void>(
+            studio.Tick(false));
+
+        const auto status =
+            studio.TerrainPhysicalPages().
+                BodyStatus(planet);
+
+        if (status.has_value() &&
+            status->pages <=
+                maximumPages)
+        {
+            return;
+        }
+
+        std::this_thread::yield();
+    }
+
+    Check(false);
+}
+
 void DriveReady(
     orbit::studio_session::StudioSession& studio,
     const orbit::terrain::PhysicalTerrainPageAddress& address,
@@ -307,6 +336,64 @@ int main()
                 TerrainRebuildState::Ready);
         Check(
             status->dirtyProducts == 0U);
+
+        const auto farDirection =
+            orbit::math::Normalize(
+                orbit::math::Double3{
+                    -0.81,
+                    0.28,
+                    0.51
+                });
+
+        Check(
+            studio.TerrainRuntime().
+                SetObserver(
+                    "studio.primary",
+                    {
+                        .meters =
+                            farDirection *
+                            (runtime->planet.
+                                 radiusMeters +
+                             10'000.0)
+                    }));
+
+        static_cast<void>(
+            studio.Tick(false));
+
+        const auto movedRuntime =
+            studio.TerrainRuntime().
+                Capture(
+                    "studio.primary");
+
+        Check(movedRuntime.has_value());
+        Check(
+            movedRuntime->
+                observerPhysicalPage !=
+            address);
+
+        DriveResidencyBounded(
+            studio,
+            address.planet,
+            5U);
+
+        Check(
+            !studio.TerrainPhysicalPages().
+                PageStatus(address).
+                has_value());
+
+        Check(
+            studio.TerrainDebugPages().
+                Find(address) ==
+            nullptr);
+
+        const auto bounded =
+            studio.TerrainPhysicalPages().
+                BodyStatus(
+                    address.planet);
+
+        Check(
+            bounded.has_value() &&
+            bounded->pages <= 5U);
     }
 
     std::filesystem::remove_all(root);
