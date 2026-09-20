@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <optional>
 #include <span>
@@ -323,6 +324,122 @@ void StudioViewportPanels::DrawView(
                         kind);
 
             session_->QueueTerrainInvalidations(requests);
+        };
+
+    const auto inspectSelectedBiomeAtPick =
+        [this](const StudioSurfacePick& pick)
+        {
+            hoveredBiomeAuthoredWeight_.reset();
+            hoveredBiomeAutomaticWeight_.reset();
+
+            if (terrainTool_ !=
+                StudioTerrainAuthoringTool::BiomePaint)
+            {
+                return;
+            }
+
+            const auto biomeObject =
+                SelectedBiomeObject(*session_);
+
+            if (!biomeObject.has_value())
+            {
+                return;
+            }
+
+            auto& surfaces =
+                session_->World().Surfaces();
+
+            const auto biomeId =
+                surfaces.BiomeForObject(
+                    *biomeObject);
+
+            const auto planet =
+                surfaces.Registry().
+                    SphericalPlanetDefinition(
+                        pick.body);
+
+            const auto* services =
+                surfaces.ServicesForBody(
+                    pick.body);
+
+            if (!biomeId.has_value() ||
+                !planet.has_value() ||
+                services == nullptr)
+            {
+                return;
+            }
+
+            const auto* biome =
+                services->Biomes().Find(
+                    *biomeId);
+
+            if (biome == nullptr)
+            {
+                return;
+            }
+
+            hoveredBiomeAuthoredWeight_ =
+                services->Biomes().
+                    EvaluateAuthoredWeight(
+                        *biome,
+                        pick.surface.unitDirection,
+                        planet->radiusMeters);
+
+            if (!biomeAutomaticOverlay_)
+            {
+                return;
+            }
+
+            bool supported = true;
+
+            for (const auto& selector :
+                 biome->placement.selectors)
+            {
+                if (!selector.enabled)
+                {
+                    continue;
+                }
+
+                if (selector.field !=
+                        terrain_biome::
+                            BiomeSelectorField::Elevation &&
+                    selector.field !=
+                        terrain_biome::
+                            BiomeSelectorField::Latitude)
+                {
+                    supported = false;
+                    break;
+                }
+            }
+
+            if (!supported)
+            {
+                return;
+            }
+
+            terrain_biome::BiomePlacementContext
+                placement{};
+
+            placement.unitDirection =
+                pick.surface.unitDirection;
+            placement.planetRadiusMeters =
+                planet->radiusMeters;
+            placement.elevationMeters =
+                pick.physicalElevationMeters;
+            placement.latitudeRadians =
+                std::asin(
+                    std::clamp(
+                        pick.surface.
+                            unitDirection.y,
+                        -1.0,
+                        1.0));
+
+            hoveredBiomeAutomaticWeight_ =
+                services->Biomes().
+                    EvaluatePlacement(
+                        *biome,
+                        placement).
+                    automaticWeight;
         };
 
     context.Text(
@@ -1043,6 +1160,8 @@ void StudioViewportPanels::DrawView(
         terrainTool_ ==
             StudioTerrainAuthoringTool::Select)
     {
+        hoveredBiomeAuthoredWeight_.reset();
+        hoveredBiomeAutomaticWeight_.reset();
         views_->ClearTerrainAuthoringOverlay(id);
     }
     else if (imageInteraction.hovered)
@@ -1055,6 +1174,9 @@ void StudioViewportPanels::DrawView(
 
         if (hoverPick.has_value())
         {
+            inspectSelectedBiomeAtPick(
+                *hoverPick);
+
             StudioTerrainAuthoringOverlay overlay{
                 .body = hoverPick->body,
                 .kind =
@@ -1065,7 +1187,10 @@ void StudioViewportPanels::DrawView(
                     IsSplineTool(terrainTool_)
                         ? terrainSplineHalfWidthMeters_ +
                               terrainSplineFalloffMeters_
-                        : terrainBrushOuterRadiusMeters_
+                        : terrainTool_ ==
+                                  StudioTerrainAuthoringTool::BiomePaint
+                            ? biomeBrushOuterRadiusMeters_
+                            : terrainBrushOuterRadiusMeters_
             };
 
             if (IsSplineTool(terrainTool_))
@@ -1097,6 +1222,8 @@ void StudioViewportPanels::DrawView(
         }
         else
         {
+            hoveredBiomeAuthoredWeight_.reset();
+            hoveredBiomeAutomaticWeight_.reset();
             views_->ClearTerrainAuthoringOverlay(id);
         }
     }
@@ -1129,6 +1256,13 @@ void StudioViewportPanels::DrawView(
     }
     else
     {
+        if (terrainTool_ ==
+            StudioTerrainAuthoringTool::BiomePaint)
+        {
+            hoveredBiomeAuthoredWeight_.reset();
+            hoveredBiomeAutomaticWeight_.reset();
+        }
+
         views_->ClearTerrainAuthoringOverlay(id);
     }
 
