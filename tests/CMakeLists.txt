@@ -1009,3 +1009,23 @@ add_test(
     NAME Orbit.V004Validation
     COMMAND OrbitV004ValidationTests
 )
+
+# M30 performance measurement is intentionally a hardware diagnostic rather
+# than a CTest pass/fail gate. It uses real Vulkan timestamps and reports
+# adapter-specific timing while exact terrain-owned memory bytes remain
+# comparable across machines.
+add_executable(OrbitV004TerrainPerformance
+    V004TerrainPerformance.cpp
+)
+
+target_link_libraries(OrbitV004TerrainPerformance
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(
+    OrbitV004TerrainPerformance PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitV004TerrainPerformance)
+orbit_copy_dxc_runtime(OrbitV004TerrainPerformance)
