@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 
 namespace orbit::studio_session
 {
@@ -247,6 +248,10 @@ void StudioTerrainRebuildScheduler::RegisterPage(
 
     pages_.push_back(
         std::move(page));
+
+    // A page entering residency while an edit is still debouncing must not
+    // submit an obsolete initial build before that pending authority change.
+    RecomputePendingProducts();
 }
 
 bool StudioTerrainRebuildScheduler::ContainsPage(
@@ -404,6 +409,9 @@ void StudioTerrainRebuildScheduler::FlushChanges(
         const auto result =
             graph_->ApplyChange(
                 request);
+
+        appliedChanges_.push_back(
+            request);
 
         for (auto& page : pages_)
         {
@@ -1032,6 +1040,16 @@ StudioTerrainRebuildScheduler::BodyStatus(
                 : TerrainRebuildState::BuildingCpu;
     }
 
-    return result;
+  
+std::vector<
+    terrain_dependency::TerrainInvalidationRequest>
+StudioTerrainRebuildScheduler::TakeAppliedChanges()
+{
+    return std::exchange(
+        appliedChanges_,
+        {});
+}
+
+  return result;
 }
 } // namespace orbit::studio_session
