@@ -207,8 +207,43 @@ void RegisterSchemas(
 
     schemas.RegisterType({
         .id = kTerrainProcessAssetType,
-        .displayName = "Terrain Process Asset",
-        .category = "World / Surface / Processes"
+        .displayName = "Terrain Process Settings",
+        .category = "World / Surface / Processes",
+        .properties = {
+            {.id=kProcessStreamPowerEnabled,.name="Stream Power Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessStreamPowerIterations,.name="Stream Power Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{32},.range={.minimum=1.0}},
+            {.id=kProcessStreamPowerIncision,.name="Stream Incision Coefficient",.kind=schema::PropertyKind::Float,.unit="m/iteration",.defaultValue=0.25,.range={.minimum=0.0},.advanced=true},
+
+            {.id=kProcessHydraulicEnabled,.name="Hydraulic Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessHydraulicIterations,.name="Hydraulic Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=1.0}},
+            {.id=kProcessHydraulicRainfall,.name="Hydraulic Rainfall",.kind=schema::PropertyKind::Float,.unit="m/s",.defaultValue=0.0002,.range={.minimum=0.0}},
+            {.id=kProcessHydraulicTimeStep,.name="Hydraulic Time Step",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=0.25,.range={.minimum=0.000001},.advanced=true},
+
+            {.id=kProcessThermalEnabled,.name="Thermal / Gravity Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessThermalIterations,.name="Thermal Maximum Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{96},.range={.minimum=1.0}},
+            {.id=kProcessThermalRelaxation,.name="Thermal Relaxation",.kind=schema::PropertyKind::Float,.defaultValue=0.50,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
+
+            {.id=kProcessAeolianEnabled,.name="Aeolian Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessAeolianIterations,.name="Aeolian Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{96},.range={.minimum=1.0}},
+            {.id=kProcessAeolianCapacity,.name="Aeolian Capacity Coefficient",.kind=schema::PropertyKind::Float,.defaultValue=0.030,.range={.minimum=0.0}},
+            {.id=kProcessAeolianTimeStep,.name="Aeolian Time Step",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=0.20,.range={.minimum=0.000001},.advanced=true},
+
+            {.id=kProcessGlacialEnabled,.name="Glacial Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessGlacialIterations,.name="Glacial Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{80},.range={.minimum=1.0}},
+            {.id=kProcessGlacialMaximumTemperature,.name="Maximum Glacier Temperature",.kind=schema::PropertyKind::Float,.unit="C",.defaultValue=1.0},
+            {.id=kProcessGlacialTimeStepYears,.name="Glacial Time Step",.kind=schema::PropertyKind::Float,.unit="yr",.defaultValue=0.5,.range={.minimum=0.000001},.advanced=true},
+
+            {.id=kProcessRiversEnabled,.name="River Network Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessRiverMeandersEnabled,.name="Meanders Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessRiverMeanderIterations,.name="Meander Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{8},.range={.minimum=1.0}},
+            {.id=kProcessRiverCutoffsEnabled,.name="River Cutoffs Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessRiverMinimumDrainageArea,.name="Minimum River Drainage Area",.kind=schema::PropertyKind::Float,.unit="m2",.defaultValue=25'000.0,.range={.minimum=0.0},.advanced=true},
+
+            {.id=kProcessCoastalEnabled,.name="Coastal Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kProcessCoastalHydrodynamicSteps,.name="Coastal Hydrodynamic Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{160},.range={.minimum=1.0}},
+            {.id=kProcessCoastalCflNumber,.name="Coastal CFL Number",.kind=schema::PropertyKind::Float,.defaultValue=0.42,.range={.minimum=0.000001,.maximum=1.0},.advanced=true},
+            {.id=kProcessCoastalMaximumTimeStep,.name="Coastal Maximum Time Step",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=0.20,.range={.minimum=0.000001},.advanced=true}
+        }
     });
 
     schemas.RegisterType({
