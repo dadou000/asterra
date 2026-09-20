@@ -151,6 +151,13 @@ PersistentGpuTerrainCache::Find(
     return it->second.page;
 }
 
+bool PersistentGpuTerrainCache::IsResident(
+    const PersistentGpuTerrainCacheKey& key) const noexcept
+{
+    return entries_.contains(key);
+}
+
+
 std::shared_ptr<CachedGpuTerrainPage>
 PersistentGpuTerrainCache::GetOrCreate(
     const PersistentGpuTerrainCacheKey& key,
