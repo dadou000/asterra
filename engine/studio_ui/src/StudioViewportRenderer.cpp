@@ -5,8 +5,13 @@
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
+#include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
+#include <orbit/world/PlanetTileNeighborhood.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -272,6 +277,336 @@ TerrainCameraFromBodyCamera(
                 localUp)
     };
 }
+
+struct StudioPhysicalRenderPages
+{
+    std::vector<
+        terrain_gpu::GpuPhysicalSurfacePage>
+        pages;
+    u64 generation{
+        0x4D31325048595352ULL};
+};
+
+[[nodiscard]] StudioPhysicalRenderPages
+BuildPhysicalRenderPages(
+    studio_session::StudioSession& session,
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime,
+    const terrain::AnalyticTerrainSource& analytic,
+    rhi::Device& device)
+{
+    StudioPhysicalRenderPages result{};
+
+    auto* services =
+        session.World().
+            Surfaces().
+            ServicesForBody(
+                runtime.body);
+
+    if (services == nullptr)
+    {
+        return result;
+    }
+
+    std::array<
+        terrain::PhysicalTerrainPageAddress,
+        5U>
+        addresses{};
+
+    addresses[0] =
+        runtime.observerPhysicalPage;
+
+    constexpr std::array<
+        world::TileEdge,
+        4U>
+        edges{
+            world::TileEdge::North,
+            world::TileEdge::East,
+            world::TileEdge::South,
+            world::TileEdge::West
+        };
+
+    for (u32 index = 0U;
+         index < edges.size();
+         ++index)
+    {
+        const auto neighbor =
+            world::NeighborAcrossTileEdge(
+                runtime.
+                    observerPhysicalPage.
+                    tile,
+                edges[index]);
+
+        addresses[index + 1U] = {
+            .planet =
+                runtime.
+                    observerPhysicalPage.
+                    planet,
+            .tile =
+                neighbor.tile
+        };
+    }
+
+    auto& cache =
+        services->Cache();
+
+    const f64 seaLevelMeters =
+        analytic.
+            Description().
+            global.
+            seaLevelMeters;
+
+    for (const auto& address :
+         addresses)
+    {
+        const auto snapshot =
+            session.
+                TerrainPhysicalPages().
+                Find(
+                    address);
+
+        if (snapshot == nullptr ||
+            snapshot->material == nullptr)
+        {
+            continue;
+        }
+
+        const auto status =
+            session.
+                TerrainPhysicalPages().
+                PageStatus(
+                    address);
+
+        if (!status.has_value() ||
+            status->revisionFingerprint !=
+                snapshot->
+                    revisionFingerprint)
+        {
+            continue;
+        }
+
+        const terrain_gpu::
+            PersistentGpuTerrainCacheKey
+            key{
+                .address =
+                    address,
+                .physicalLod =
+                    snapshot->
+                        physicalLod,
+                .revisions =
+                    snapshot->
+                        revisions
+            };
+
+        auto cached =
+            cache.Find(
+                key);
+
+        if (cached == nullptr)
+        {
+            const auto uploadRevision =
+                session.
+                    TerrainPhysicalPages().
+                    BeginUpload(
+                        address);
+
+            if (!uploadRevision.has_value() ||
+                *uploadRevision !=
+                    snapshot->
+                        revisionFingerprint)
+            {
+                if (uploadRevision.has_value())
+                {
+                    static_cast<void>(
+                        session.
+                            TerrainPhysicalPages().
+                            CompleteUpload(
+                                address,
+                                *uploadRevision,
+                                false,
+                                "M12 physical snapshot changed before GPU upload."));
+                }
+
+                continue;
+            }
+
+            try
+            {
+                const u32 resolution =
+                    snapshot->material->
+                        Resolution();
+
+                std::vector<
+                    terrain_gpu::
+                        GpuPhysicalSurfaceTexel>
+                    texels(
+                        static_cast<
+                            std::size_t>(
+                                resolution) *
+                        resolution);
+
+                for (u32 y = 0U;
+                     y < resolution;
+                     ++y)
+                {
+                    for (u32 x = 0U;
+                         x < resolution;
+                         ++x)
+                    {
+                        const auto& cell =
+                            snapshot->
+                                material->
+                                At(
+                                    x,
+                                    y);
+
+                        const f32 elevation =
+                            cell.
+                                SurfaceHeightMeters();
+
+                        texels[
+                            static_cast<
+                                std::size_t>(
+                                    y) *
+                                resolution +
+                            x] = {
+                                .elevationMeters =
+                                    elevation,
+                                .standingWaterDepthMeters =
+                                    static_cast<f32>(
+                                        std::max(
+                                            seaLevelMeters -
+                                                static_cast<f64>(
+                                                    elevation),
+                                            0.0))
+                            };
+                    }
+                }
+
+                std::shared_ptr<
+                    rhi::Buffer>
+                    buffer{
+                        device.
+                            CreateBuffer({
+                                .sizeBytes =
+                                    static_cast<u64>(
+                                        texels.size()) *
+                                    sizeof(
+                                        terrain_gpu::
+                                            GpuPhysicalSurfaceTexel),
+                                .usage =
+                                    rhi::BufferUsage::
+                                        Structured,
+                                .memory =
+                                    rhi::MemoryUsage::
+                                        HostVisible,
+                                .initialState =
+                                    rhi::ResourceState::
+                                        ShaderResource
+                            })};
+
+                std::byte* mapped =
+                    buffer->Map();
+
+                std::memcpy(
+                    mapped,
+                    texels.data(),
+                    texels.size() *
+                        sizeof(
+                            terrain_gpu::
+                                GpuPhysicalSurfaceTexel));
+
+                buffer->Unmap();
+
+                cached =
+                    std::make_shared<
+                        terrain_gpu::
+                            CachedGpuTerrainPage>();
+
+                cached->products =
+                    terrain_gpu::
+                        ProductBit(
+                            terrain_gpu::
+                                CachedTerrainProduct::
+                                    PhysicalSurface);
+
+                cached->buffers.
+                    push_back(
+                        std::move(
+                            buffer));
+
+                cache.Insert(
+                    key,
+                    cached);
+
+                if (!session.
+                        TerrainPhysicalPages().
+                        CompleteUpload(
+                            address,
+                            *uploadRevision,
+                            true))
+                {
+                    static_cast<void>(
+                        cache.Erase(
+                            key));
+                    cached.reset();
+                    continue;
+                }
+            }
+            catch (const std::exception& error)
+            {
+                static_cast<void>(
+                    session.
+                        TerrainPhysicalPages().
+                        CompleteUpload(
+                            address,
+                            *uploadRevision,
+                            false,
+                            error.what()));
+                continue;
+            }
+        }
+
+        if ((cached->products &
+             terrain_gpu::
+                 ProductBit(
+                     terrain_gpu::
+                         CachedTerrainProduct::
+                             PhysicalSurface)) == 0U ||
+            cached->buffers.empty() ||
+            cached->buffers.front() ==
+                nullptr)
+        {
+            continue;
+        }
+
+        result.pages.push_back({
+            .address =
+                address,
+            .resolution =
+                snapshot->
+                    material->
+                    Resolution(),
+            .samples =
+                cached->
+                    buffers.front()
+        });
+
+        result.generation =
+            terrain::StableCombine64(
+                result.generation,
+                terrain_gpu::
+                    PersistentGpuTerrainCacheFingerprint(
+                        key));
+
+        result.generation =
+            terrain::StableCombine64(
+                result.generation,
+                snapshot->
+                    revisionFingerprint);
+    }
+
+    return result;
+}
 } // namespace
 
 StudioViewportRenderer::StudioViewportRenderer(
@@ -534,6 +869,18 @@ StudioViewportRenderer::Compose(
             terrain.runtimeGeneration =
                 terrainRuntime->
                     runtimeGeneration;
+
+            auto physicalPages =
+                BuildPhysicalRenderPages(
+                    session,
+                    *terrainRuntime,
+                    *analytic,
+                    *device_);
+
+            terrain.renderer->
+                SetPhysicalPages(
+                    physicalPages.pages,
+                    physicalPages.generation);
 
             const auto camera =
                 TerrainCameraFromBodyCamera(
