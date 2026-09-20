@@ -5,6 +5,7 @@
 #include <orbit/editor_session/ActiveBodyModel.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
+#include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
@@ -83,6 +84,11 @@ public:
     [[nodiscard]] const terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() const noexcept;
 
+    [[nodiscard]] StudioTerrainPhysicalPageService&
+    TerrainPhysicalPages() noexcept;
+    [[nodiscard]] const StudioTerrainPhysicalPageService&
+    TerrainPhysicalPages() const noexcept;
+
     [[nodiscard]] StudioTerrainRuntimeBridge&
     TerrainRuntime() noexcept;
     [[nodiscard]] const StudioTerrainRuntimeBridge&
@@ -147,6 +153,7 @@ private:
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
+    StudioTerrainPhysicalPageService terrainPhysicalPages_;
     StudioTerrainRuntimeBridge terrainRuntime_;
     std::vector<
         terrain_dependency::TerrainInvalidationRequest>
