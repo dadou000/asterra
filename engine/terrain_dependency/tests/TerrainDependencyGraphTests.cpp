@@ -322,6 +322,132 @@ void TestRockErodibilityInvalidatesProcessDescendants()
         "Rock erodibility must rerun geology, erosion/process descendants and scatter.");
 }
 
+void TestProcessSettingsInvalidatesOnlyProcessDescendants()
+{
+    Fixture fixture;
+
+    const auto address = MakeAddress({
+        .face = world::CubeFace::NegativeY,
+        .level = 6,
+        .x = 11,
+        .y = 13
+    });
+
+    const auto initial =
+        InitialRevisions();
+
+    fixture.dependencies.RegisterPage(
+        address,
+        initial);
+
+    BuildMaterialAndScatter(
+        fixture,
+        address);
+
+    const u64 geologyBefore =
+        fixture.Count(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    Geology);
+    const u64 processBefore =
+        fixture.Count(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    TerrainProcesses);
+    const u64 scatterBefore =
+        fixture.Count(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    Scatter);
+
+    const auto result =
+        fixture.dependencies.ApplyChange(
+            GlobalChange(
+                terrain_dependency::
+                    TerrainChangeKind::
+                        ProcessSettings,
+                address.planet));
+
+    const auto expectedMask =
+        terrain_dependency::ProductBit(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    TerrainProcesses) |
+        terrain_dependency::ProductBit(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    ExposedSurface) |
+        terrain_dependency::ProductBit(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    BiomeWeights) |
+        terrain_dependency::ProductBit(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    SurfaceMaterial) |
+        terrain_dependency::ProductBit(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    Scatter);
+
+    Require(
+        result.affectedPages == 1 &&
+        result.dirtyProducts == expectedMask,
+        "Process settings must dirty only process products and descendants.");
+
+    const auto revisions =
+        fixture.dependencies.Revisions(
+            address);
+
+    Require(
+        revisions.has_value() &&
+        revisions->processes ==
+            initial.processes + 1U &&
+        revisions->geology ==
+            initial.geology &&
+        revisions->climate ==
+            initial.climate &&
+        revisions->authoring ==
+            initial.authoring &&
+        revisions->biome ==
+            initial.biome &&
+        revisions->water ==
+            initial.water,
+        "Process settings must increment only the processes revision domain.");
+
+    Require(
+        fixture.dependencies.BuildBlocking(
+            address,
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    Scatter),
+        "Process settings scatter descendant rebuild must succeed.");
+
+    Require(
+        fixture.Count(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    Geology) ==
+            geologyBefore,
+        "Aeolian/hydraulic process edits must never rebuild geology.");
+
+    Require(
+        fixture.Count(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    TerrainProcesses) ==
+            processBefore + 1U,
+        "Process settings must rebuild the process stage.");
+
+    Require(
+        fixture.Count(
+            terrain_dependency::
+                TerrainDependencyProduct::
+                    Scatter) ==
+            scatterBefore + 1U,
+        "Process settings must rebuild downstream scatter once.");
+}
+
 void TestSpatialInvalidationIsBounded()
 {
     Fixture fixture;
@@ -447,6 +573,7 @@ int main()
     TestBiomeTreeDensityInvalidatesScatterOnly();
     TestMossMaterialInvalidatesSurfaceOnly();
     TestRockErodibilityInvalidatesProcessDescendants();
+    TestProcessSettingsInvalidatesOnlyProcessDescendants();
     TestSpatialInvalidationIsBounded();
     TestRevisionsAndPersistentCacheAreInvalidatedTogether();
 
