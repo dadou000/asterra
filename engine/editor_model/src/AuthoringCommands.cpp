@@ -4,6 +4,7 @@
 #include <orbit/paths/PathNetwork.hpp>
 
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <variant>
