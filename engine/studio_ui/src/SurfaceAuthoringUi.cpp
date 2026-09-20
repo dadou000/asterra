@@ -415,7 +415,7 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
                     selected->terrain,
                     settings);
 
-                workspace_->Session().
+                session->
                     QueueTerrainInvalidation({
                         .kind =
                             terrain_dependency::
@@ -837,16 +837,16 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
 
         const auto terrainStatus =
             studio_session::StudioTerrainStatusInspector::Capture(
-                workspace_->Session(),
+                *session,
                 selected->terrain,
                 nullptr,
                 "studio.primary");
 
         const auto performance =
-            workspace_->Session().
+            session->
                 TerrainPerformance().
                 Capture(
-                    workspace_->Session(),
+                    *session,
                     "studio.primary");
 
         context.Text(std::format("Semantic Revision: {}", counts.semanticRevision));
