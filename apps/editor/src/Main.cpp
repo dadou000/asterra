@@ -6251,6 +6251,14 @@ int main(
         auto previous =
             Clock::now();
 
+        bool terrainUiSmokeValidated = false;
+        orbit::u32 terrainUiSmokeAttempts = 0U;
+        orbit::u32 terrainUiSmokeRenderedFrames = 0U;
+        const std::filesystem::path
+            terrainUiSmokeCapture =
+                terrainUiSmokeRoot /
+                "terrain-ui-smoke.bmp";
+
         const auto synchronizeActiveBodyPreview =
             [&]
             {
