@@ -1,4 +1,5 @@
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
+#include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
@@ -10,7 +11,9 @@
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_material_column/SurfaceResolver.hpp>
 #include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
+#include <orbit/terrain_render/SurfaceMaterial.hpp>
 
 #include <algorithm>
 #include <array>
@@ -4439,6 +4442,380 @@ void Test13AutomaticAuthoredBiomeBlend()
         "M30-13 oversubscribed optional coverage must normalize proportionally while retaining exactly one zero-weight BaseBiome entry.");
 }
 
+
+void Test14ExposedRockMaterialResolution()
+{
+    using namespace surface_model;
+    using namespace terrain_biome;
+    using namespace terrain_material_column;
+
+    StratigraphyFixture fixture;
+
+    constexpr f32 regolithMeters = 0.50F;
+    constexpr f32 soilMeters = 0.25F;
+    constexpr f32 sandMeters = 0.125F;
+    constexpr f32 debrisMeters = 0.125F;
+    constexpr f64 totalCoverMeters = 1.0;
+
+    MaterialColumnPage page(
+        1U,
+        2.0);
+
+    page.SetCell(
+        0U,
+        0U,
+        {
+            .bedrockHeightMeters = 100.0F,
+            .referenceBedrockHeightMeters = 100.0F,
+            .bedrockMaterial =
+                terrain_geology::
+                    reference_rock::
+                        Basalt,
+            .regolithMeters =
+                regolithMeters,
+            .soilMeters =
+                soilMeters,
+            .sandMeters =
+                sandMeters,
+            .debrisMeters =
+                debrisMeters,
+            .moisture = 0.80F,
+            .temporaryScalar = 0.0F
+        });
+
+    const universe::BodyId body{
+        .high = 0x4D33305355524641ULL,
+        .low = 0x4345000000000014ULL
+    };
+
+    const BiomeId biomeId{
+        .high = 0x4D33305355524641ULL,
+        .low = 0x4345000000001401ULL
+    };
+
+    BiomeDefinition biome{
+        .id = biomeId,
+        .name = "M30 exposed-rock dressing",
+        .placement = {
+            .minimumResolvedWeight = 0.0F,
+            .enabled = true
+        },
+        .surface = {
+            .materialInfluence = 1.0F,
+            .layers = {
+                BiomeSurfaceLayerRule{
+                    .kind =
+                        BiomeSurfaceLayerKind::
+                            Moss,
+                    .strength = 0.40F,
+                    .compatibleExposed =
+                        BiomeExposedMaterialMask::
+                            Bedrock,
+                    .minimumSlopeDegrees =
+                        0.0F,
+                    .maximumSlopeDegrees =
+                        90.0F,
+                    .slopeFalloffDegrees =
+                        0.0F,
+                    .minimumCurvature =
+                        -1.0F,
+                    .maximumCurvature =
+                        1.0F,
+                    .curvatureFalloff =
+                        0.0F,
+                    .minimumMoisture =
+                        0.0F,
+                    .maximumMoisture =
+                        1.0F,
+                    .moistureFalloff =
+                        0.0F,
+                    .enabled = true
+                }
+            }
+        }
+    };
+
+    BiomeService biomes(
+        body);
+
+    biomes.UpsertBiome(
+        biome);
+
+    const std::array<
+        BiomeWeightContribution,
+        1>
+        contribution{{
+            {
+                .id = biomeId,
+                .weight = 1.0F
+            }
+        }};
+
+    const auto biomeWeights =
+        biomes.Resolve(
+            contribution);
+
+    const SurfaceMaterialFeatureMasks features{
+        .slopeDegrees = 12.0F,
+        .curvature = 0.0F,
+        .snowCoverage = 0.0F,
+        .mossPotential = 1.0F,
+        .litterAvailability = 0.0F,
+        .dustAvailability = 0.0F
+    };
+
+    const auto resolve =
+        [&]()
+        {
+            const auto geology =
+                SampleColumnGeology(
+                    page.At(
+                        0U,
+                        0U),
+                    fixture.materials);
+
+            const auto physical =
+                ResolveSurface(
+                    page.At(
+                        0U,
+                        0U),
+                    geology);
+
+            const auto blend =
+                ResolveSurfaceMaterialBlend(
+                    physical,
+                    biomes,
+                    biomeWeights,
+                    features);
+
+            const auto render =
+                terrain_render::
+                    MakeSurfaceMaterialRenderInput(
+                        blend);
+
+            return
+                std::tuple{
+                    physical,
+                    blend,
+                    render
+                };
+        };
+
+    const auto [
+        coveredPhysical,
+        coveredBlend,
+        coveredRender] =
+        resolve();
+
+    Require(
+        coveredPhysical.material ==
+                ExposedSurfaceKind::
+                    Debris &&
+        coveredPhysical.substrateRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        !coveredPhysical.
+            exposedRock.IsValid() &&
+        NearlyEqual(
+            coveredPhysical.
+                exposedLayerDepthMeters,
+            debrisMeters,
+            0.0),
+        "M30-14 initial M18 state must report the real topmost M08 debris while retaining buried basalt only as substrate identity.");
+
+    Require(
+        NearlyEqual(
+            coveredBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Debris),
+            1.0,
+            1.0e-6) &&
+        NearlyEqual(
+            coveredBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Moss),
+            0.0,
+            0.0) &&
+        !coveredRender.
+            exposedBedrock.IsValid(),
+        "M30-14 M21/renderer must not expose or dress buried basalt through incompatible loose cover.");
+
+    const auto removed =
+        page.Erode(
+            0U,
+            0U,
+            totalCoverMeters,
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            removed.debrisMeters,
+            debrisMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.sandMeters,
+            sandMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.soilMeters,
+            soilMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.regolithMeters,
+            regolithMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.bedrockMeters,
+            0.0,
+            0.0),
+        "M30-14 cover stripping must reveal bedrock without shaving or replacing the authoritative M08 substrate.");
+
+    const auto [
+        exposedPhysical,
+        exposedBlend,
+        exposedRender] =
+        resolve();
+
+    Require(
+        exposedPhysical.
+            BedrockExposed() &&
+        exposedPhysical.material ==
+                ExposedSurfaceKind::
+                    Bedrock &&
+        exposedPhysical.substrateRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        exposedPhysical.exposedRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        exposedPhysical.geology.
+            bedrockMaterial ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt,
+        "M30-14 stripping the last loose layer must expose the exact M02 basalt identity already owned by M08.");
+
+    const auto* basalt =
+        fixture.materials.Find(
+            terrain_geology::
+                reference_rock::
+                    Basalt);
+
+    Require(
+        basalt != nullptr &&
+        exposedPhysical.geology.
+                hardness ==
+            basalt->hardness &&
+        exposedPhysical.geology.
+                cohesion ==
+            basalt->cohesion &&
+        exposedPhysical.geology.
+                densityKgPerCubicMeter ==
+            basalt->density,
+        "M30-14 M18 exposed-rock geology must come from the matching M02 material record rather than renderer/biome constants.");
+
+    Require(
+        NearlyEqual(
+            exposedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Bedrock),
+            0.60,
+            1.0e-6) &&
+        NearlyEqual(
+            exposedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Moss),
+            0.40,
+            1.0e-6) &&
+        exposedRender.exposedBedrock ==
+            terrain_geology::
+                reference_rock::
+                    Basalt &&
+        NearlyEqual(
+            exposedRender.TotalWeight(),
+            1.0,
+            2.0e-5),
+        "M30-14 M21 may add a compatible moss overlay, but the renderer must retain exposed basalt identity underneath the deterministic normalized blend.");
+
+    const auto substrateBeforeBurial =
+        page.At(
+            0U,
+            0U).
+            bedrockMaterial;
+
+    const f64 deposited =
+        page.Deposit(
+            0U,
+            0U,
+            LooseMaterialKind::Sand,
+            0.75);
+
+    Require(
+        NearlyEqual(
+            deposited,
+            0.75,
+            1.0e-12) &&
+        page.At(
+            0U,
+            0U).
+            bedrockMaterial ==
+                substrateBeforeBurial,
+        "M30-14 sand deposition must cover the exposed rock without redefining geological substrate identity.");
+
+    const auto [
+        buriedPhysical,
+        buriedBlend,
+        buriedRender] =
+        resolve();
+
+    Require(
+        buriedPhysical.material ==
+                ExposedSurfaceKind::
+                    Sand &&
+        buriedPhysical.substrateRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        !buriedPhysical.
+            exposedRock.IsValid() &&
+        NearlyEqual(
+            buriedPhysical.
+                exposedLayerDepthMeters,
+            0.75,
+            1.0e-6),
+        "M30-14 new M08 deposition must immediately replace bedrock as the canonical exposed surface while preserving buried basalt substrate.");
+
+    Require(
+        NearlyEqual(
+            buriedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Sand),
+            1.0,
+            1.0e-6) &&
+        NearlyEqual(
+            buriedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Bedrock),
+            0.0,
+            0.0) &&
+        NearlyEqual(
+            buriedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Moss),
+            0.0,
+            0.0) &&
+        !buriedRender.
+            exposedBedrock.IsValid() &&
+        NearlyEqual(
+            buriedRender.TotalWeight(),
+            1.0,
+            2.0e-5),
+        "M30-14 M21 and renderer must follow the newly exposed physical sand instead of caching the previously visible basalt/moss material.");
+}
+
 } // namespace
 
 int main()
@@ -4456,8 +4833,9 @@ int main()
     Test11AuthoredCanyonPersistence();
     Test12BiomeFallback();
     Test13AutomaticAuthoredBiomeBlend();
+    Test14ExposedRockMaterialResolution();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 13/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 14/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
