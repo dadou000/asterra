@@ -985,6 +985,26 @@ StudioViewportRenderer::Compose(
             auto* depth =
                 &view->Depth();
 
+            auto* performance =
+                &session.TerrainPerformance();
+
+            const std::string
+                performanceViewportId =
+                    info.id;
+
+            const world::WorldPosition
+                performanceObserver =
+                    terrainRuntime->observer;
+
+            const auto performanceCacheStats =
+                terrainRuntime->cacheStats;
+
+            const std::string
+                performanceAdapter =
+                    std::string(
+                        device_->
+                            AdapterName());
+
             graph.AddPass(
                 prefix + ".ProductionTerrain",
                 {
@@ -1006,6 +1026,11 @@ StudioViewportRenderer::Compose(
                  terrainRenderer,
                  camera,
                  frameIndex,
+                 performance,
+                 performanceViewportId,
+                 performanceObserver,
+                 performanceCacheStats,
+                 performanceAdapter,
                  framesInFlight =
                     framesInFlight_](
                     rhi::CommandList& commands,
@@ -1035,6 +1060,55 @@ StudioViewportRenderer::Compose(
                         width,
                         height,
                         camera);
+
+                    const auto& stats =
+                        terrainRenderer->
+                            StreamingStats();
+
+                    performance->
+                        RecordViewportStreaming(
+                            performanceViewportId,
+                            performanceObserver,
+                            performanceCacheStats,
+                            {
+                                .generatedSamplesLastUpdate =
+                                    stats.generatedSamplesLastUpdate,
+                                .refreshedRegionsLastUpdate =
+                                    stats.refreshedRegionsLastUpdate,
+                                .levelsTouchedLastUpdate =
+                                    stats.levelsTouchedLastUpdate,
+                                .uploadedBytesLastFrame =
+                                    stats.uploadedBytesLastFrame,
+                                .drawCallsLastFrame =
+                                    stats.drawCallsLastFrame,
+                                .cumulativeGeneratedSamples =
+                                    stats.cumulativeGeneratedSamples,
+                                .cumulativeUploadedBytes =
+                                    stats.cumulativeUploadedBytes,
+                                .submittedBatches =
+                                    stats.submittedBatches,
+                                .committedBatches =
+                                    stats.committedBatches,
+                                .supersededBatches =
+                                    stats.supersededBatches,
+                                .revisionInvalidations =
+                                    stats.revisionInvalidations,
+                                .staleRevisionBatches =
+                                    stats.staleRevisionBatches,
+                                .coverageTierChanges =
+                                    stats.coverageTierChanges,
+                                .rebaseCount =
+                                    stats.rebaseCount,
+                                .adaptiveCoverageTier =
+                                    stats.adaptiveCoverageTier,
+                                .activeBaseSpacingMeters =
+                                    stats.activeBaseSpacingMeters,
+                                .activeOuterHalfExtentMeters =
+                                    stats.activeOuterHalfExtentMeters,
+                                .updatePending =
+                                    stats.updatePending
+                            },
+                            performanceAdapter);
                 });
             break;
         }
