@@ -1841,6 +1841,452 @@ void Test07CrossPageWaterFlux()
         "M30-07 corner water flux must route through the canonical physical diagonal neighbor with finite transformed momentum.");
 }
 
+
+void Test08CrossPageSedimentFlux()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_region;
+
+    constexpr u32 resolution = 4U;
+    constexpr f64 spacingMeters = 5.0;
+    constexpr u64 revision = 0x4D3330534544494DULL;
+
+    const world::PlanetId planet{
+        .high = 0x4F524249544D3330ULL,
+        .low = 0x0000000000008000ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress sourceAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 2U,
+            .x = 3U,
+            .y = 1U
+        }
+    };
+
+    const auto mapping =
+        world::NeighborAcrossTileEdge(
+            sourceAddress.tile,
+            world::TileEdge::East);
+
+    Require(
+        mapping.tile.face !=
+            sourceAddress.tile.face,
+        "M30-08 fixture must exercise sediment transfer across a cube-face boundary.");
+
+    SedimentExchangePage sourceSediment(
+        resolution,
+        spacingMeters);
+
+    const std::array<SedimentMass, 3> payloads{{
+        {
+            .sandKg = 1.0,
+            .finesKg = 2.0,
+            .coarseDebrisKg = 3.0
+        },
+        {
+            .sandKg = 4.0,
+            .finesKg = 5.0,
+            .coarseDebrisKg = 6.0
+        },
+        {
+            .sandKg = 7.0,
+            .finesKg = 8.0,
+            .coarseDebrisKg = 9.0
+        }
+    }};
+
+    const std::array<SedimentTransportMedium, 3> media{{
+        SedimentTransportMedium::Waterborne,
+        SedimentTransportMedium::Airborne,
+        SedimentTransportMedium::SurfaceMobile
+    }};
+
+    SedimentMass totalPayload{};
+
+    for (u32 lane = 0U;
+         lane < media.size();
+         ++lane)
+    {
+        const u32 sourceY =
+            lane;
+
+        sourceSediment.Add(
+            resolution - 1U,
+            sourceY,
+            media[lane],
+            payloads[lane]);
+
+        const auto exported =
+            sourceSediment.ExportAcrossBoundary(
+                resolution - 1U,
+                sourceY,
+                static_cast<i32>(
+                    resolution),
+                static_cast<i32>(
+                    sourceY),
+                media[lane],
+                payloads[lane]);
+
+        Require(
+            NearlyEqual(
+                exported.sandKg,
+                payloads[lane].sandKg,
+                0.0) &&
+            NearlyEqual(
+                exported.finesKg,
+                payloads[lane].finesKg,
+                0.0) &&
+            NearlyEqual(
+                exported.coarseDebrisKg,
+                payloads[lane].
+                    coarseDebrisKg,
+                0.0),
+            "M30-08 source M14 page must export the exact requested typed sediment payload.");
+
+        totalPayload +=
+            payloads[lane];
+    }
+
+    Require(
+        sourceSediment.
+            TotalMobileMass().
+            Empty(1.0e-12) &&
+        NearlyEqual(
+            sourceSediment.
+                Accounting().
+                exported.TotalKg(),
+            totalPayload.TotalKg(),
+            1.0e-12),
+        "M30-08 full boundary export must remove the payload from source mobile state and record it exactly once as exported mass.");
+
+    auto outgoing =
+        sourceSediment.
+            TakeOutgoingBoundaryFlux(
+                revision);
+
+    Require(
+        NearlyEqual(
+            outgoing.Total().sandKg,
+            totalPayload.sandKg,
+            1.0e-12) &&
+        NearlyEqual(
+            outgoing.Total().finesKg,
+            totalPayload.finesKg,
+            1.0e-12) &&
+        NearlyEqual(
+            outgoing.Total().
+                coarseDebrisKg,
+            totalPayload.
+                coarseDebrisKg,
+            1.0e-12),
+        "M30-08 outgoing M14 boundary flux must preserve sediment classes before M25 remapping.");
+
+    auto surface =
+        MakeSurfaceBoundaryFlux(
+            resolution,
+            revision,
+            std::move(outgoing));
+
+    const PhysicalPageBoundaryFlux source{
+        .address = sourceAddress,
+        .outgoing = std::move(surface)
+    };
+
+    const auto batch =
+        BuildDeterministicBoundaryTransfers(
+            std::span<const PhysicalPageBoundaryFlux>(
+                &source,
+                1U));
+
+    Require(
+        NearlyEqual(
+            batch.TotalSediment().sandKg,
+            totalPayload.sandKg,
+            1.0e-12) &&
+        NearlyEqual(
+            batch.TotalSediment().finesKg,
+            totalPayload.finesKg,
+            1.0e-12) &&
+        NearlyEqual(
+            batch.TotalSediment().
+                coarseDebrisKg,
+            totalPayload.
+                coarseDebrisKg,
+            1.0e-12),
+        "M30-08 M25 remapping must conserve every typed sediment class.");
+
+    const auto transfer =
+        std::find_if(
+            batch.edges.begin(),
+            batch.edges.end(),
+            [&](const SurfaceBoundaryEdgeTransfer& edge)
+            {
+                return
+                    edge.source ==
+                        sourceAddress &&
+                    edge.sourceEdge ==
+                        world::TileEdge::East;
+            });
+
+    Require(
+        transfer !=
+            batch.edges.end() &&
+        transfer->target.tile ==
+            mapping.tile &&
+        transfer->targetEdge ==
+            mapping.edge &&
+        transfer->reversed ==
+            mapping.reverseSamples,
+        "M30-08 sediment edge transfer must use the canonical M01 cube-face mapping.");
+
+    const auto receiverCoordinate =
+        [](const world::TileEdge edge,
+           const u32 sample)
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return std::pair<u32, u32>{
+                    sample,
+                    0U};
+            case world::TileEdge::East:
+                return std::pair<u32, u32>{
+                    resolution - 1U,
+                    sample};
+            case world::TileEdge::South:
+                return std::pair<u32, u32>{
+                    sample,
+                    resolution - 1U};
+            case world::TileEdge::West:
+                return std::pair<u32, u32>{
+                    0U,
+                    sample};
+            }
+
+            return std::pair<u32, u32>{
+                0U,
+                0U};
+        };
+
+    for (u32 lane = 0U;
+         lane < media.size();
+         ++lane)
+    {
+        const u32 sourceY =
+            lane;
+
+        const u32 targetIndex =
+            world::RemapTileEdgeSampleIndex(
+                mapping,
+                sourceY,
+                resolution);
+
+        const auto& packet =
+            transfer->
+                sediment[targetIndex];
+
+        const auto& mappedMass =
+            packet.Medium(
+                media[lane]);
+
+        Require(
+            NearlyEqual(
+                mappedMass.sandKg,
+                payloads[lane].sandKg,
+                0.0) &&
+            NearlyEqual(
+                mappedMass.finesKg,
+                payloads[lane].finesKg,
+                0.0) &&
+            NearlyEqual(
+                mappedMass.coarseDebrisKg,
+                payloads[lane].
+                    coarseDebrisKg,
+                0.0),
+            "M30-08 sample remapping must preserve typed mass in its original M14 transport medium.");
+
+        for (const auto other :
+             media)
+        {
+            if (other ==
+                media[lane])
+            {
+                continue;
+            }
+
+            Require(
+                packet.Medium(other).
+                    Empty(1.0e-12),
+                "M30-08 cross-page remapping must not leak sediment into another transport medium.");
+        }
+
+        const f64 kilograms =
+            payloads[lane].
+                TotalKg();
+
+        const auto transformed =
+            TransformBoundaryVectorAcrossEdge(
+                world::TileEdge::East,
+                mapping,
+                {
+                    kilograms,
+                    0.0
+                });
+
+        const auto& transport =
+            packet.Transport(
+                media[lane]);
+
+        Require(
+            NearlyEqual(
+                transport.eastKg,
+                transformed.x,
+                1.0e-12) &&
+            NearlyEqual(
+                transport.northKg,
+                -transformed.y,
+                1.0e-12),
+            "M30-08 M14 transport diagnostics must rotate from source-local east/north into receiver-local orientation with the packet.");
+    }
+
+    const terrain::PhysicalTerrainPageAddress receiverAddress{
+        .planet = planet,
+        .tile = mapping.tile
+    };
+
+    SedimentExchangePage receiverSediment(
+        resolution,
+        spacingMeters);
+
+    ApplySedimentBoundaryTransfers(
+        receiverAddress,
+        batch,
+        receiverSediment);
+
+    const auto imported =
+        receiverSediment.
+            Accounting().
+            imported;
+
+    Require(
+        NearlyEqual(
+            imported.sandKg,
+            totalPayload.sandKg,
+            1.0e-12) &&
+        NearlyEqual(
+            imported.finesKg,
+            totalPayload.finesKg,
+            1.0e-12) &&
+        NearlyEqual(
+            imported.coarseDebrisKg,
+            totalPayload.
+                coarseDebrisKg,
+            1.0e-12) &&
+        NearlyEqual(
+            receiverSediment.
+                TotalMobileMass().
+                TotalKg(),
+            totalPayload.TotalKg(),
+            1.0e-12),
+        "M30-08 receiver M14 import accounting and mobile inventory must equal the source export exactly.");
+
+    for (u32 lane = 0U;
+         lane < media.size();
+         ++lane)
+    {
+        const u32 targetIndex =
+            world::RemapTileEdgeSampleIndex(
+                mapping,
+                lane,
+                resolution);
+
+        const auto [x, y] =
+            receiverCoordinate(
+                mapping.edge,
+                targetIndex);
+
+        const auto& receiverCell =
+            receiverSediment.At(
+                x,
+                y);
+
+        const auto& received =
+            receiverCell.Medium(
+                media[lane]);
+
+        Require(
+            NearlyEqual(
+                received.sandKg,
+                payloads[lane].sandKg,
+                0.0) &&
+            NearlyEqual(
+                received.finesKg,
+                payloads[lane].finesKg,
+                0.0) &&
+            NearlyEqual(
+                received.coarseDebrisKg,
+                payloads[lane].
+                    coarseDebrisKg,
+                0.0),
+            "M30-08 imported typed sediment must land on the receiver boundary cell selected by the canonical sample remap.");
+
+        const f64 kilograms =
+            payloads[lane].
+                TotalKg();
+
+        const auto transformed =
+            TransformBoundaryVectorAcrossEdge(
+                world::TileEdge::East,
+                mapping,
+                {
+                    kilograms,
+                    0.0
+                });
+
+        const auto& diagnostic =
+            receiverSediment.
+                TransportAt(
+                    x,
+                    y).
+                Medium(
+                    media[lane]);
+
+        Require(
+            NearlyEqual(
+                diagnostic.eastKg,
+                transformed.x,
+                1.0e-12) &&
+            NearlyEqual(
+                diagnostic.northKg,
+                -transformed.y,
+                1.0e-12),
+            "M30-08 receiver transport diagnostics must preserve the receiver-local direction produced by M25 remapping.");
+    }
+
+    Require(
+        NearlyEqual(
+            sourceSediment.
+                Accounting().
+                exported.TotalKg(),
+            receiverSediment.
+                Accounting().
+                imported.TotalKg(),
+            1.0e-12) &&
+        NearlyEqual(
+            sourceSediment.
+                    TotalMobileMass().
+                    TotalKg() +
+                receiverSediment.
+                    TotalMobileMass().
+                    TotalKg(),
+            totalPayload.TotalKg(),
+            1.0e-12),
+        "M30-08 two-page M14 mass must be conserved exactly across export, M25 remap and receiver import.");
+}
+
 } // namespace
 
 int main()
@@ -1852,8 +2298,9 @@ int main()
     Test05AeolianMassConservation();
     Test06ThermalReposeConvergence();
     Test07CrossPageWaterFlux();
+    Test08CrossPageSedimentFlux();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 7/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 8/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
