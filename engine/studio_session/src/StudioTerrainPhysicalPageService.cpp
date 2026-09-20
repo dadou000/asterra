@@ -31,6 +31,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace orbit::studio_session
@@ -2505,6 +2506,13 @@ void StudioTerrainPhysicalPageService::Sync(
         }
     }
 
+    std::unordered_map<
+        universe::BodyId,
+        std::unordered_set<
+            terrain::PhysicalTerrainPageAddress,
+            AddressHash>>
+        interests;
+
     for (const auto& runtime :
          runtimes)
     {
@@ -2602,6 +2610,14 @@ void StudioTerrainPhysicalPageService::Sync(
         auto& body =
             *found->second;
 
+        auto& bodyInterests =
+            interests[
+                runtime.body];
+
+        bodyInterests.insert(
+            runtime.
+                observerPhysicalPage);
+
         impl_->RegisterInterest(
             body,
             runtime.
@@ -2628,16 +2644,69 @@ void StudioTerrainPhysicalPageService::Sync(
                             tile,
                         edge);
 
-            impl_->RegisterInterest(
-                body,
-                {
+            const terrain::
+                PhysicalTerrainPageAddress
+                neighborAddress{
                     .planet =
                         runtime.
                             observerPhysicalPage.
                             planet,
                     .tile =
                         neighbor.tile
-                });
+                };
+
+            bodyInterests.insert(
+                neighborAddress);
+
+            impl_->RegisterInterest(
+                body,
+                neighborAddress);
+        }
+    }
+
+    // Retire pages that no viewport currently needs. In-flight procedural
+    // work is never blocked or cancelled here; UnregisterPage returns false
+    // and the next Sync retries after that job completes.
+    for (auto& [bodyId, body] :
+         impl_->bodies)
+    {
+        const auto wanted =
+            interests.find(
+                bodyId);
+
+        const auto statuses =
+            body->scheduler.
+                Catalog();
+
+        for (const auto& status :
+             statuses)
+        {
+            if (wanted !=
+                    interests.end() &&
+                wanted->second.contains(
+                    status.address))
+            {
+                continue;
+            }
+
+            if (!body->scheduler.
+                    UnregisterPage(
+                        status.address))
+            {
+                continue;
+            }
+
+            body->publications.erase(
+                status.address);
+
+            if (impl_->debugPages !=
+                nullptr)
+            {
+                static_cast<void>(
+                    impl_->debugPages->
+                        Erase(
+                            status.address));
+            }
         }
     }
 }
