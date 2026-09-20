@@ -3,6 +3,7 @@
 #include "ReferenceGeologicalMaterials.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 namespace orbit::terrain_geology
 {
