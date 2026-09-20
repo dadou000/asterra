@@ -98,5 +98,61 @@ int main()
         }
     }
 
+    {
+        const orbit::math::Double3 center{
+            0.0, 1.0, 0.0
+        };
+
+        const auto requests =
+            orbit::studio_session::
+                BuildTerrainAuthoringInvalidations(
+                    planet,
+                    std::span{
+                        &center,
+                        std::size_t{1U}},
+                    750.0,
+                    9U,
+                    0U,
+                    orbit::terrain_dependency::
+                        TerrainChangeKind::
+                            BiomePlacement);
+
+        Check(requests.size() == 1U);
+        Check(
+            requests.front().kind ==
+            orbit::terrain_dependency::
+                TerrainChangeKind::
+                    BiomePlacement);
+        Check(!requests.front().scope.global);
+        Check(
+            requests.front().
+                scope.downstreamRadiusTiles ==
+            0U);
+
+        const auto dirty =
+            orbit::terrain_dependency::
+                TerrainDependencyGraph::
+                    ProductsForChange(
+                        orbit::terrain_dependency::
+                            TerrainChangeKind::
+                                BiomePlacement);
+
+        const auto expected =
+            orbit::terrain_dependency::ProductBit(
+                orbit::terrain_dependency::
+                    TerrainDependencyProduct::
+                        BiomeWeights) |
+            orbit::terrain_dependency::ProductBit(
+                orbit::terrain_dependency::
+                    TerrainDependencyProduct::
+                        SurfaceMaterial) |
+            orbit::terrain_dependency::ProductBit(
+                orbit::terrain_dependency::
+                    TerrainDependencyProduct::
+                        Scatter);
+
+        Check(dirty == expected);
+    }
+
     return 0;
 }
