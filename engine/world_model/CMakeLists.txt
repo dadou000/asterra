@@ -1,4 +1,5 @@
 add_library(OrbitWorldModel STATIC
+    src/CelestialSchemas.cpp
     src/WorldSchemas.cpp
     src/UniverseComposition.cpp
 )
@@ -61,5 +62,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.SurfaceAuthorityContracts
         COMMAND OrbitSurfaceAuthorityContractTests
+    )
+
+    add_executable(OrbitCelestialCapabilitySchemasTests
+        tests/CelestialCapabilitySchemasTests.cpp
+    )
+
+    target_link_libraries(OrbitCelestialCapabilitySchemasTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialCapabilitySchemasTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCelestialCapabilitySchemasTests)
+
+    add_test(
+        NAME Orbit.CelestialCapabilitySchemas
+        COMMAND OrbitCelestialCapabilitySchemasTests
     )
 endif()
