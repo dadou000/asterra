@@ -24,6 +24,7 @@ struct StudioRuntimeSnapshot
     bool compositionChanged{false};
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
+    bool terrainRuntimeChanged{false};
     bool pathNetworkRebound{false};
     bool pathRoutingRebound{false};
     bool pathProductsInvalidated{false};
