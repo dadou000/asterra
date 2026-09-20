@@ -263,6 +263,41 @@ int main()
                     kTerrainDetailOctaves) ==
             orbit::i64{10});
 
+        const auto terrainChildren =
+            objects.Children(
+                terrain);
+
+        Check(
+            terrainChildren.size() == 1U);
+        Check(
+            terrainChildren.front().type ==
+                orbit::world_model::
+                    kTerrainProcessAssetType);
+
+        const auto processSettings =
+            terrainChildren.front().id;
+
+        Check(
+            Property<bool>(
+                objects,
+                processSettings,
+                orbit::world_model::
+                    kProcessAeolianEnabled));
+        Check(
+            Property<orbit::f64>(
+                objects,
+                processSettings,
+                orbit::world_model::
+                    kProcessAeolianCapacity) ==
+            0.030);
+        Check(
+            Property<orbit::i64>(
+                objects,
+                processSettings,
+                orbit::world_model::
+                    kProcessCoastalHydrodynamicSteps) ==
+            orbit::i64{160});
+
         // The complete hierarchy was one transaction. One undo removes the
         // terrain, body and the system created for the previously empty World.
         commands.Undo();
@@ -270,6 +305,10 @@ int main()
         Check(
             !objects.Find(
                 terrain).
+                has_value());
+        Check(
+            !objects.Find(
+                processSettings).
                 has_value());
         Check(
             !objects.Find(
@@ -301,6 +340,10 @@ int main()
         Check(
             objects.Find(
                 terrain).
+                has_value());
+        Check(
+            objects.Find(
+                processSettings).
                 has_value());
 
         // Existing systems are reused and therefore survive undo.
