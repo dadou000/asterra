@@ -21,6 +21,9 @@ namespace orbit::studio_session
 {
 struct StudioTickResult
 {
+    // True only when semantic ObjectStore authority changed and the
+    // UniverseComposition + SurfaceComposition pair was rebuilt this tick.
+    bool compositionChanged{false};
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
     bool pathNetworkRebound{false};
