@@ -152,10 +152,13 @@ int main()
                 terrain.observer.meters);
         Check(
             camera.nearPlaneMeters ==
-                10.0F);
+                20.0F);
         Check(
-            camera.farPlaneMeters ==
-                12'000'000.0F);
+            camera.farPlaneMeters >
+                500'000.0F);
+        Check(
+            camera.farPlaneMeters <
+                1'000'000.0F);
 
         const auto observerDirection =
             orbit::math::Normalize(

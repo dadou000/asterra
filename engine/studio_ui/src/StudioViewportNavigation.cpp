@@ -372,8 +372,8 @@ AdvanceTerrainNavigation(
         newFrame;
 
     const bool positionMoved =
-        math::DistanceSquared(
-            observer.meters,
+        math::LengthSquared(
+            observer.meters -
             terrain.observer.meters) >
         1.0e-18;
 

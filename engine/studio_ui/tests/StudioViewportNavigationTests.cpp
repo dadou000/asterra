@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioViewportNavigation.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
