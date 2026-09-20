@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
@@ -29,6 +30,31 @@ namespace
     }
 
     return "Perspective";
+}
+
+[[nodiscard]] const char* TerrainToolName(
+    const StudioTerrainAuthoringTool tool) noexcept
+{
+    switch (tool)
+    {
+    case StudioTerrainAuthoringTool::Select: return "Select";
+    case StudioTerrainAuthoringTool::Raise: return "Raise";
+    case StudioTerrainAuthoringTool::Lower: return "Lower";
+    case StudioTerrainAuthoringTool::Protection: return "Protect";
+    case StudioTerrainAuthoringTool::Drainage: return "Drainage";
+    case StudioTerrainAuthoringTool::Canyon: return "Canyon";
+    case StudioTerrainAuthoringTool::Ridge: return "Ridge";
+    case StudioTerrainAuthoringTool::Material: return "Geology";
+    }
+    return "Select";
+}
+
+[[nodiscard]] bool IsSplineTool(
+    const StudioTerrainAuthoringTool tool) noexcept
+{
+    return
+        tool == StudioTerrainAuthoringTool::Canyon ||
+        tool == StudioTerrainAuthoringTool::Ridge;
 }
 
 [[nodiscard]] const char* EdgeName(
@@ -113,6 +139,10 @@ void StudioViewportPanels::Rebind(
     session_ = &session;
     views_->CreateDefaults();
     status_.clear();
+    terrainTool_ =
+        StudioTerrainAuthoringTool::Select;
+    terrainSplinePoints_.clear();
+    terrainSplineTerrain_.reset();
 }
 
 void StudioViewportPanels::ClearBinding() noexcept
@@ -120,6 +150,8 @@ void StudioViewportPanels::ClearBinding() noexcept
     views_ = nullptr;
     session_ = nullptr;
     status_.clear();
+    terrainSplinePoints_.clear();
+    terrainSplineTerrain_.reset();
 }
 
 void StudioViewportPanels::Register(
@@ -218,6 +250,210 @@ void StudioViewportPanels::DrawView(
         session_->Viewports().SetMode(
             id,
             studio_session::ViewportMode::Debug);
+    }
+
+    if (target->mode !=
+        studio_session::ViewportMode::Debug)
+    {
+        context.Separator();
+        context.Text(
+            std::format(
+                "Terrain Tool: {}",
+                TerrainToolName(
+                    terrainTool_)));
+
+        const auto setTool =
+            [this](
+                const StudioTerrainAuthoringTool tool)
+            {
+                if (terrainTool_ != tool &&
+                    (IsSplineTool(terrainTool_) ||
+                     IsSplineTool(tool)))
+                {
+                    terrainSplinePoints_.clear();
+                    terrainSplineTerrain_.reset();
+                }
+                terrainTool_ = tool;
+            };
+
+        const std::string selectTool =
+            "Select##terrain-tool-select:" +
+            std::string(id);
+        const std::string raiseTool =
+            "Raise##terrain-tool-raise:" +
+            std::string(id);
+        const std::string lowerTool =
+            "Lower##terrain-tool-lower:" +
+            std::string(id);
+        const std::string protectTool =
+            "Protect##terrain-tool-protect:" +
+            std::string(id);
+        const std::string drainageTool =
+            "Drainage##terrain-tool-drainage:" +
+            std::string(id);
+        const std::string canyonTool =
+            "Canyon##terrain-tool-canyon:" +
+            std::string(id);
+        const std::string ridgeTool =
+            "Ridge##terrain-tool-ridge:" +
+            std::string(id);
+        const std::string materialTool =
+            "Geology##terrain-tool-material:" +
+            std::string(id);
+
+        if (context.Button(selectTool))
+            setTool(StudioTerrainAuthoringTool::Select);
+        context.SameLine();
+        if (context.Button(raiseTool))
+            setTool(StudioTerrainAuthoringTool::Raise);
+        context.SameLine();
+        if (context.Button(lowerTool))
+            setTool(StudioTerrainAuthoringTool::Lower);
+        context.SameLine();
+        if (context.Button(protectTool))
+            setTool(StudioTerrainAuthoringTool::Protection);
+
+        if (context.Button(drainageTool))
+            setTool(StudioTerrainAuthoringTool::Drainage);
+        context.SameLine();
+        if (context.Button(canyonTool))
+            setTool(StudioTerrainAuthoringTool::Canyon);
+        context.SameLine();
+        if (context.Button(ridgeTool))
+            setTool(StudioTerrainAuthoringTool::Ridge);
+        context.SameLine();
+        if (context.Button(materialTool))
+            setTool(StudioTerrainAuthoringTool::Material);
+
+        if (terrainTool_ !=
+            StudioTerrainAuthoringTool::Select)
+        {
+            static_cast<void>(
+                context.InputDouble(
+                    "Inner Radius (m)##terrain-brush-inner",
+                    terrainBrushInnerRadiusMeters_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Outer Radius (m)##terrain-brush-outer",
+                    terrainBrushOuterRadiusMeters_));
+        }
+
+        if (terrainTool_ ==
+                StudioTerrainAuthoringTool::Raise ||
+            terrainTool_ ==
+                StudioTerrainAuthoringTool::Lower)
+        {
+            static_cast<void>(
+                context.InputDouble(
+                    "Height Delta (m)##terrain-brush-height",
+                    terrainBrushHeightMeters_));
+        }
+        else if (
+            terrainTool_ ==
+                StudioTerrainAuthoringTool::Protection)
+        {
+            static_cast<void>(
+                context.InputDouble(
+                    "Protection [0..1]##terrain-protection",
+                    terrainProtection_));
+        }
+        else if (
+            terrainTool_ ==
+                StudioTerrainAuthoringTool::Drainage)
+        {
+            static_cast<void>(
+                context.InputDouble(
+                    "Drainage Guidance##terrain-drainage",
+                    terrainDrainageGuidance_));
+        }
+
+        if (IsSplineTool(terrainTool_))
+        {
+            static_cast<void>(
+                context.InputDouble(
+                    "Spline Half Width (m)##terrain-spline-width",
+                    terrainSplineHalfWidthMeters_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Spline Falloff (m)##terrain-spline-falloff",
+                    terrainSplineFalloffMeters_));
+            static_cast<void>(
+                context.InputDouble(
+                    terrainTool_ ==
+                            StudioTerrainAuthoringTool::Canyon
+                        ? "Canyon Depth (m)##terrain-spline-height"
+                        : "Ridge Height (m)##terrain-spline-height",
+                    terrainSplineHeightMeters_));
+
+            context.Text(
+                std::format(
+                    "Control Points: {} (click terrain; double-click or Commit to finish)",
+                    terrainSplinePoints_.size()));
+
+            const std::string commitLabel =
+                "Commit Spline##terrain-spline-commit:" +
+                std::string(id);
+            const std::string cancelLabel =
+                "Cancel Spline##terrain-spline-cancel:" +
+                std::string(id);
+
+            if (context.Button(commitLabel))
+            {
+                if (terrainSplinePoints_.size() < 2U ||
+                    !terrainSplineTerrain_.has_value())
+                {
+                    status_ =
+                        "A terrain spline requires at least two picked control points.";
+                }
+                else
+                {
+                    try
+                    {
+                        editor_model::SurfaceAuthoringModel model(
+                            session_->World().Objects(),
+                            session_->World().Commands(),
+                            session_->World().Selection());
+
+                        const auto constraint =
+                            terrainTool_ ==
+                                    StudioTerrainAuthoringTool::Canyon
+                                ? model.AddCanyonSpline(
+                                      *terrainSplineTerrain_,
+                                      terrainSplinePoints_,
+                                      terrainSplineHalfWidthMeters_,
+                                      terrainSplineFalloffMeters_,
+                                      terrainSplineHeightMeters_)
+                                : model.AddRidgeSpline(
+                                      *terrainSplineTerrain_,
+                                      terrainSplinePoints_,
+                                      terrainSplineHalfWidthMeters_,
+                                      terrainSplineFalloffMeters_,
+                                      terrainSplineHeightMeters_);
+
+                        model.SelectObject(
+                            constraint);
+                        terrainSplinePoints_.clear();
+                        terrainSplineTerrain_.reset();
+                        status_ =
+                            "Terrain spline committed as one undoable semantic transaction.";
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                }
+            }
+
+            context.SameLine();
+
+            if (context.Button(cancelLabel))
+            {
+                terrainSplinePoints_.clear();
+                terrainSplineTerrain_.reset();
+                status_ =
+                    "Transient terrain spline cancelled.";
+            }
+        }
     }
 
     if (target->mode ==
@@ -596,7 +832,14 @@ void StudioViewportPanels::DrawView(
                     imageInteraction.u,
                     imageInteraction.v);
 
-            if (pick.has_value())
+            if (!pick.has_value())
+            {
+                status_ =
+                    "Viewport click did not intersect production terrain.";
+            }
+            else if (
+                terrainTool_ ==
+                StudioTerrainAuthoringTool::Select)
             {
                 const std::array<
                     scene::ObjectId,
@@ -623,8 +866,214 @@ void StudioViewportPanels::DrawView(
             }
             else
             {
-                status_ =
-                    "Viewport click did not intersect production terrain.";
+                const auto terrainObject =
+                    session_->World().
+                        Surfaces().
+                        TerrainObjectForBody(
+                            pick->body);
+
+                if (!terrainObject.has_value())
+                {
+                    status_ =
+                        "Picked body has no semantic Terrain Surface.";
+                }
+                else if (IsSplineTool(
+                             terrainTool_))
+                {
+                    if (terrainSplineTerrain_ !=
+                        terrainObject)
+                    {
+                        terrainSplinePoints_.clear();
+                        terrainSplineTerrain_ =
+                            terrainObject;
+                    }
+
+                    const auto direction =
+                        pick->surface.
+                            unitDirection;
+
+                    if (terrainSplinePoints_.empty() ||
+                        math::Length(
+                            terrainSplinePoints_.back() -
+                            direction) >
+                            1.0e-10)
+                    {
+                        terrainSplinePoints_.
+                            push_back(
+                                direction);
+                    }
+
+                    status_ =
+                        std::format(
+                            "{} spline point {} picked.",
+                            TerrainToolName(
+                                terrainTool_),
+                            terrainSplinePoints_.
+                                size());
+
+                    if (imageInteraction.doubleClicked &&
+                        terrainSplinePoints_.size() >=
+                            2U)
+                    {
+                        try
+                        {
+                            editor_model::
+                                SurfaceAuthoringModel
+                                model(
+                                    session_->World().
+                                        Objects(),
+                                    session_->World().
+                                        Commands(),
+                                    session_->World().
+                                        Selection());
+
+                            const auto constraint =
+                                terrainTool_ ==
+                                        StudioTerrainAuthoringTool::
+                                            Canyon
+                                    ? model.AddCanyonSpline(
+                                          *terrainSplineTerrain_,
+                                          terrainSplinePoints_,
+                                          terrainSplineHalfWidthMeters_,
+                                          terrainSplineFalloffMeters_,
+                                          terrainSplineHeightMeters_)
+                                    : model.AddRidgeSpline(
+                                          *terrainSplineTerrain_,
+                                          terrainSplinePoints_,
+                                          terrainSplineHalfWidthMeters_,
+                                          terrainSplineFalloffMeters_,
+                                          terrainSplineHeightMeters_);
+
+                            model.SelectObject(
+                                constraint);
+                            terrainSplinePoints_.
+                                clear();
+                            terrainSplineTerrain_.
+                                reset();
+                            status_ =
+                                "Terrain spline committed as one undoable semantic transaction.";
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            status_ =
+                                exception.what();
+                        }
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        editor_model::
+                            SurfaceAuthoringModel
+                            model(
+                                session_->World().
+                                    Objects(),
+                                session_->World().
+                                    Commands(),
+                                session_->World().
+                                    Selection());
+
+                        scene::ObjectId constraint{};
+
+                        switch (terrainTool_)
+                        {
+                        case StudioTerrainAuthoringTool::Raise:
+                            constraint =
+                                model.AddHeightBrush(
+                                    *terrainObject,
+                                    pick->surface.
+                                        unitDirection,
+                                    terrainBrushInnerRadiusMeters_,
+                                    terrainBrushOuterRadiusMeters_,
+                                    std::abs(
+                                        terrainBrushHeightMeters_));
+                            break;
+
+                        case StudioTerrainAuthoringTool::Lower:
+                            constraint =
+                                model.AddHeightBrush(
+                                    *terrainObject,
+                                    pick->surface.
+                                        unitDirection,
+                                    terrainBrushInnerRadiusMeters_,
+                                    terrainBrushOuterRadiusMeters_,
+                                    -std::abs(
+                                        terrainBrushHeightMeters_));
+                            break;
+
+                        case StudioTerrainAuthoringTool::Protection:
+                            constraint =
+                                model.AddProtectionBrush(
+                                    *terrainObject,
+                                    pick->surface.
+                                        unitDirection,
+                                    terrainBrushInnerRadiusMeters_,
+                                    terrainBrushOuterRadiusMeters_,
+                                    terrainProtection_);
+                            break;
+
+                        case StudioTerrainAuthoringTool::Drainage:
+                            constraint =
+                                model.AddDrainageBrush(
+                                    *terrainObject,
+                                    pick->surface.
+                                        unitDirection,
+                                    terrainBrushInnerRadiusMeters_,
+                                    terrainBrushOuterRadiusMeters_,
+                                    terrainDrainageGuidance_);
+                            break;
+
+                        case StudioTerrainAuthoringTool::Material:
+                        {
+                            const auto* services =
+                                session_->World().
+                                    Surfaces().
+                                    ServicesForBody(
+                                        pick->body);
+
+                            if (services == nullptr)
+                            {
+                                throw std::runtime_error(
+                                    "TerrainBodyServices are unavailable for geology override.");
+                            }
+
+                            constraint =
+                                model.AddMaterialBrush(
+                                    *terrainObject,
+                                    pick->surface.
+                                        unitDirection,
+                                    terrainBrushInnerRadiusMeters_,
+                                    terrainBrushOuterRadiusMeters_,
+                                    services->
+                                        DefaultBedrock(),
+                                    1.0);
+                            break;
+                        }
+
+                        case StudioTerrainAuthoringTool::Select:
+                        case StudioTerrainAuthoringTool::Canyon:
+                        case StudioTerrainAuthoringTool::Ridge:
+                            break;
+                        }
+
+                        if (constraint.IsValid())
+                        {
+                            model.SelectObject(
+                                constraint);
+                            status_ =
+                                std::string(
+                                    TerrainToolName(
+                                        terrainTool_)) +
+                                " constraint committed as one undoable terrain-authoring transaction.";
+                        }
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ =
+                            exception.what();
+                    }
+                }
             }
         }
     }

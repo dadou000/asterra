@@ -4,14 +4,28 @@
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace orbit::studio_ui
 {
 inline constexpr editor_ui::PanelId kPrimaryViewportPanel{
     .high = 0x4f52424954535455ULL,
     .low = 0x44494f5657455750ULL
+};
+
+enum class StudioTerrainAuthoringTool : u8
+{
+    Select,
+    Raise,
+    Lower,
+    Protection,
+    Drainage,
+    Canyon,
+    Ridge,
+    Material
 };
 
 inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
@@ -48,5 +62,19 @@ private:
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::string status_;
+
+    StudioTerrainAuthoringTool terrainTool_{
+        StudioTerrainAuthoringTool::Select};
+    f64 terrainBrushInnerRadiusMeters_{250.0};
+    f64 terrainBrushOuterRadiusMeters_{1'000.0};
+    f64 terrainBrushHeightMeters_{100.0};
+    f64 terrainProtection_{0.9};
+    f64 terrainDrainageGuidance_{1.0};
+
+    f64 terrainSplineHalfWidthMeters_{500.0};
+    f64 terrainSplineFalloffMeters_{500.0};
+    f64 terrainSplineHeightMeters_{200.0};
+    std::vector<math::Double3> terrainSplinePoints_;
+    std::optional<scene::ObjectId> terrainSplineTerrain_;
 };
 } // namespace orbit::studio_ui

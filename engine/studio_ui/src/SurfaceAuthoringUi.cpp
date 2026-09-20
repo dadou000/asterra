@@ -191,6 +191,99 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
         context.TreePop();
     }
 
+    const auto authoredTerrainTree =
+        context.TreeItem(
+            "Authored Terrain##m09-authored-terrain",
+            false);
+
+    if (authoredTerrainTree.open)
+    {
+        const auto constraints =
+            model.TerrainConstraints(
+                selected->terrain);
+
+        context.Text(
+            std::format(
+                "Constraints: {}",
+                constraints.size()));
+        context.Text(
+            "Create brush/spline constraints directly in a Perspective or Body Map viewport.");
+        context.Text(
+            "Select a constraint below to edit its numeric authority fields in Properties.");
+
+        for (const auto& constraint :
+             constraints)
+        {
+            std::string kind;
+
+            switch (constraint.channel)
+            {
+            case editor_model::
+                SurfaceTerrainConstraintChannel::
+                    Height:
+                kind = "Height";
+                break;
+            case editor_model::
+                SurfaceTerrainConstraintChannel::
+                    Protection:
+                kind = "Protection";
+                break;
+            case editor_model::
+                SurfaceTerrainConstraintChannel::
+                    Drainage:
+                kind = "Drainage";
+                break;
+            case editor_model::
+                SurfaceTerrainConstraintChannel::
+                    Material:
+                kind = "Geology";
+                break;
+            }
+
+            kind +=
+                constraint.shape ==
+                        editor_model::
+                            SurfaceTerrainConstraintShape::
+                                Spline
+                    ? " Spline"
+                    : " Brush";
+
+            const std::string label =
+                constraint.name +
+                " [" + kind + "]##m09-constraint-" +
+                constraint.id.ToString();
+
+            if (context.Selectable(
+                    label,
+                    world.Selection().
+                        Contains(
+                            constraint.id)))
+            {
+                model.SelectObject(
+                    constraint.id);
+            }
+
+            if (constraint.shape ==
+                editor_model::
+                    SurfaceTerrainConstraintShape::
+                        Spline)
+            {
+                context.Text(
+                    std::format(
+                        "  {} control points | half-width {:.3g} m | falloff {:.3g} m",
+                        constraint.
+                            controlUnitDirections.
+                            size(),
+                        constraint.
+                            halfWidthMeters,
+                        constraint.
+                            falloffMeters));
+            }
+        }
+
+        context.TreePop();
+    }
+
     const auto biomeTree = context.TreeItem("Biomes##m28-biomes", false);
     if (biomeTree.open)
     {
