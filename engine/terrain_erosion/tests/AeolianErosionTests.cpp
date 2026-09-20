@@ -502,6 +502,105 @@ void TestSoilFinesTransport()
         "M13 soil/fines pickup did not enter the airborne transport lane.");
 }
 
+
+void TestSeededMobileSedimentContinues()
+{
+    constexpr u32 resolution = 5U;
+    constexpr f64 spacing = 5.0;
+    constexpr f64 seededSandKg = 1'000.0;
+
+    auto geology =
+        MakeGeology();
+
+    MaterialColumnPage page(
+        resolution,
+        spacing);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            page.SetCell(
+                x,
+                y,
+                Cell(
+                    0.0F,
+                    terrain_geology::
+                        reference_rock::Basalt));
+        }
+    }
+
+    SedimentExchangePage seeded(
+        resolution,
+        spacing);
+
+    seeded.Add(
+        0U,
+        resolution / 2U,
+        SedimentTransportMedium::Airborne,
+        {
+            .sandKg = seededSandKg
+        });
+
+    auto config =
+        TestConfig();
+
+    config.iterations = 2U;
+    config.pickupRatePerSecond = 0.0;
+    config.depositionRatePerSecond = 5.0;
+    config.saltationRatePerSecond = 0.0;
+    config.maximumDepositionDepthPerStepMeters = 1.0;
+    config.maximumAvalancheDepthPerStepMeters = 0.0;
+    config.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
+    config.maximumBedrockAbrasionDepthPerStepMeters = 0.0;
+
+    const auto result =
+        SimulateAeolianErosion(
+            std::move(page),
+            geology,
+            EastWind(
+                resolution,
+                0.0F),
+            config,
+            std::move(seeded));
+
+    Require(
+        std::abs(
+            result.massBalance.
+                initialMobileMassKg -
+            seededSandKg) <
+            1.0e-9,
+        "M13 seeded M14 sediment was not included in the initial process mass ledger.");
+
+    Require(
+        result.sedimentExchange->
+            TotalMobileMass().
+            Empty(1.0e-9),
+        "M13 calm receiver did not consume seeded airborne sand through normal deposition.");
+
+    const auto finalMass =
+        result.material.QueryMass(
+            geology);
+
+    Require(
+        std::abs(
+            finalMass.LooseMassKg() -
+            seededSandKg) <
+            1.0e-2,
+        "M13 seeded mobile sand did not become physical M08 sand.");
+
+    Require(
+        result.massBalance.
+            materialBalanceRelativeError <
+            2.0e-6,
+        "M13 seeded-mobile continuation violated the physical/mobile mass ledger.");
+}
+
+
 void TestDeterministicFixedInputs()
 {
     constexpr u32 resolution = 6U;
@@ -631,6 +730,7 @@ int main()
     TestWetAndResistantSurfaceSuppressPickup();
     TestBedrockAbrasionIsMuchSlowerThanLooseTransport();
     TestSoilFinesTransport();
+    TestSeededMobileSedimentContinues();
     TestDeterministicFixedInputs();
 
     std::cout
