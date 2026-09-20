@@ -49,6 +49,9 @@ public:
     [[nodiscard]] std::optional<scene::ObjectId>
     TerrainObjectForBody(universe::BodyId body) const noexcept;
 
+    [[nodiscard]] std::optional<terrain_biome::BiomeId>
+    BiomeForObject(scene::ObjectId object) const noexcept;
+
     [[nodiscard]] TerrainBodyServices* ServicesForBody(
         universe::BodyId body) noexcept;
     [[nodiscard]] const TerrainBodyServices* ServicesForBody(
@@ -91,6 +94,10 @@ private:
         bodyByTerrainObject_;
     std::unordered_map<universe::BodyId, scene::ObjectId>
         terrainObjectByBody_;
+    std::unordered_map<
+        scene::ObjectId,
+        terrain_biome::BiomeId>
+        biomeByObject_;
     std::unordered_map<
         universe::BodyId,
         std::unique_ptr<TerrainBodyServices>>
