@@ -140,6 +140,18 @@ void SurfaceAuthoringUi::Register(editor_ui::EditorUi& ui)
     });
 }
 
+void SurfaceAuthoringUi::SetAutomationCoverageMode(
+    const bool enabled) noexcept
+{
+    automationCoverageMode_ = enabled;
+
+    if (enabled)
+    {
+        advancedBiome_ = true;
+        advancedProcesses_ = true;
+    }
+}
+
 void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
 {
     studio_session::StudioSession* session =
@@ -553,6 +565,14 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
     if (biomeTree.open)
     {
         auto biomes = model.Biomes(selected->terrain);
+
+        if (automationCoverageMode_ &&
+            !selectedBiome_.has_value() &&
+            !biomes.empty())
+        {
+            selectedBiome_ =
+                biomes.front().id;
+        }
 
         if (selectedBiome_.has_value())
         {
