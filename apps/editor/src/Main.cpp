@@ -1249,10 +1249,51 @@ int main(
         orbit::editor_model::OutputLog
             outputLog;
 
-        auto openedProject =
-            OpenProject(
-                argc,
-                argv);
+        bool terrainUiSmoke = false;
+
+        for (int index = 1;
+             index < argc;
+             ++index)
+        {
+            if (argv[index] != nullptr &&
+                std::string_view(argv[index]) ==
+                    "--terrain-ui-smoke")
+            {
+                terrainUiSmoke = true;
+                break;
+            }
+        }
+
+        std::filesystem::path
+            terrainUiSmokeRoot;
+
+        std::optional<
+            orbit::documents::ProjectDocument>
+            openedProject;
+
+        if (terrainUiSmoke)
+        {
+            terrainUiSmokeRoot =
+                std::filesystem::
+                    temp_directory_path() /
+                ("orbit-terrain-ui-smoke-" +
+                 orbit::documents::ProjectId::
+                     Random().
+                     ToString());
+
+            openedProject =
+                orbit::documents::
+                    ProjectDocument::Create(
+                        terrainUiSmokeRoot,
+                        "Orbit Terrain UI Smoke");
+        }
+        else
+        {
+            openedProject =
+                OpenProject(
+                    argc,
+                    argv);
+        }
 
         if (!openedProject.has_value())
         {
