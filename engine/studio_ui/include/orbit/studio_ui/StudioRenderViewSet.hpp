@@ -32,6 +32,38 @@ struct StudioTerrainAuthoringOverlay
     f64 influenceRadiusMeters{0.0};
 };
 
+// M13 diagnostics are transient view state. None of these flags may enter
+// terrain identity, invalidation, persistence or generation contracts.
+struct StudioTerrainDiagnosticOverlayOptions
+{
+    bool dirtyPageBounds{false};
+    bool buildStates{false};
+    bool physicalLod{false};
+    bool clipmapRings{false};
+    bool cacheStatus{false};
+    bool authoredConstraints{false};
+    bool biomeWeights{false};
+    bool processEffects{false};
+    bool drainageVectors{false};
+
+    [[nodiscard]] constexpr bool Any() const noexcept
+    {
+        return
+            dirtyPageBounds ||
+            buildStates ||
+            physicalLod ||
+            clipmapRings ||
+            cacheStatus ||
+            authoredConstraints ||
+            biomeWeights ||
+            processEffects ||
+            drainageVectors;
+    }
+
+    [[nodiscard]] constexpr bool operator==(
+        const StudioTerrainDiagnosticOverlayOptions&) const noexcept = default;
+};
+
 struct StudioRenderViewInfo
 {
     std::string id;
@@ -45,6 +77,7 @@ struct StudioRenderViewInfo
     u8 debugPhysicalPageLevel{8};
     std::optional<StudioPhysicalPageSelection> debugPhysicalPage;
     bool hasLiveDebugPage{false};
+    StudioTerrainDiagnosticOverlayOptions diagnostics{};
 };
 
 // Owns the actual resizable GPU RenderViews corresponding to logical Studio
@@ -126,6 +159,14 @@ public:
     [[nodiscard]] std::optional<
         StudioTerrainAuthoringOverlay>
     TerrainAuthoringOverlay(
+        std::string_view id) const;
+
+    void SetTerrainDiagnosticOverlays(
+        std::string_view id,
+        StudioTerrainDiagnosticOverlayOptions options);
+
+    [[nodiscard]] StudioTerrainDiagnosticOverlayOptions
+    TerrainDiagnosticOverlays(
         std::string_view id) const;
 
     // Debug-field choice is transient RenderView presentation state. It is
@@ -224,6 +265,12 @@ private:
         StudioTerrainAuthoringOverlay,
         std::less<>>
         terrainAuthoringOverlays_;
+
+    std::map<
+        std::string,
+        StudioTerrainDiagnosticOverlayOptions,
+        std::less<>>
+        terrainDiagnosticOverlays_;
 
     std::map<
         std::string,
