@@ -1,5 +1,6 @@
 #include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
 
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
@@ -21,6 +22,7 @@
 #include <orbit/world/PlanetTileNeighborhood.hpp>
 
 #include <algorithm>
+#include <any>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -441,11 +443,10 @@ BuildDrainageHalo(
     terrain_hydrology::DrainagePageHalo halo{};
     halo.revision = revision;
 
-    auto* sides =
-        std::array<
+    std::array<
             std::vector<
                 terrain_hydrology::DrainageBoundaryCell>*,
-            4U>{
+            4U> sides{
                 &halo.north,
                 &halo.east,
                 &halo.south,
@@ -558,7 +559,8 @@ BuildDrainageHalo(
     const BodyBuildInputs& inputs,
     const terrain::PhysicalTerrainPageAddress& address,
     const u32 resolution,
-    const procedural_graph::BuildContext& context)
+    const terrain::TerrainGenerationRevisions& revisions,
+    const procedural_graph::BuildContext&)
 {
     auto result =
         std::make_shared<PhysicalBundle>();
@@ -567,8 +569,8 @@ BuildDrainageHalo(
         address;
     result->key.resolution =
         resolution;
-    result->key.revisions.geology =
-        context.inputRevisionHash;
+    result->key.revisions =
+        revisions;
     result->physicalLod =
         address.tile.level;
 
@@ -682,6 +684,7 @@ BuildDrainageHalo(
 
 [[nodiscard]] BundlePtr BuildDrainage(
     const BodyBuildInputs& inputs,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     const BundlePtr upstream =
@@ -693,8 +696,8 @@ BuildDrainageHalo(
         std::make_shared<PhysicalBundle>(
             *upstream);
 
-    result->key.revisions.climate =
-        context.inputRevisionHash;
+    result->key.revisions =
+        revisions;
 
     const u32 resolution =
         result->key.resolution;
@@ -821,6 +824,7 @@ void MergeSediment(
 
 [[nodiscard]] BundlePtr BuildProcesses(
     const BodyBuildInputs& inputs,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     // TerrainProcesses depends on Geology then Drainage; the drainage bundle
@@ -834,8 +838,8 @@ void MergeSediment(
         std::make_shared<PhysicalBundle>(
             *upstream);
 
-    result->key.revisions.processes =
-        context.inputRevisionHash;
+    result->key.revisions =
+        revisions;
 
     auto material =
         std::make_shared<
@@ -1267,6 +1271,7 @@ void MergeSediment(
 
 [[nodiscard]] BundlePtr BuildExposedSurface(
     const BodyBuildInputs& inputs,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     const BundlePtr upstream =
@@ -1277,6 +1282,9 @@ void MergeSediment(
     auto result =
         std::make_shared<PhysicalBundle>(
             *upstream);
+
+    result->key.revisions =
+        revisions;
 
     const u32 resolution =
         result->key.resolution;
@@ -1319,6 +1327,7 @@ void MergeSediment(
 
 [[nodiscard]] BundlePtr BuildBiomeWeights(
     const BodyBuildInputs& inputs,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     const BundlePtr upstream =
@@ -1330,8 +1339,8 @@ void MergeSediment(
         std::make_shared<PhysicalBundle>(
             *upstream);
 
-    result->key.revisions.biome =
-        context.inputRevisionHash;
+    result->key.revisions =
+        revisions;
 
     const u32 resolution =
         result->key.resolution;
@@ -1486,6 +1495,7 @@ void MergeSediment(
 
 [[nodiscard]] BundlePtr BuildSurfaceMaterial(
     const BodyBuildInputs& inputs,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     const BundlePtr exposed =
@@ -1500,6 +1510,9 @@ void MergeSediment(
     auto result =
         std::make_shared<PhysicalBundle>(
             *biomes);
+
+    result->key.revisions =
+        revisions;
 
     const u32 resolution =
         result->key.resolution;
@@ -1567,6 +1580,7 @@ void MergeSediment(
 
 [[nodiscard]] BundlePtr BuildScatter(
     const BodyBuildInputs& inputs,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     const BundlePtr exposed =
@@ -1581,6 +1595,9 @@ void MergeSediment(
     auto result =
         std::make_shared<PhysicalBundle>(
             *biomes);
+
+    result->key.revisions =
+        revisions;
 
     const u32 resolution =
         result->key.resolution;
@@ -1631,11 +1648,11 @@ void MergeSediment(
                                 address.
                                 tile,
                         .sourceRevision =
-                            context.
-                                inputRevisionHash,
+                            terrain::
+                                RevisionFingerprint(
+                                    revisions),
                         .scatterRevision =
-                            context.
-                                configurationRevision,
+                            revisions.biome,
                         .generationSeed =
                             terrain::
                                 DeriveTerrainSeed(
@@ -1753,6 +1770,7 @@ void MergeSediment(
     const terrain::PhysicalTerrainPageAddress& address,
     const Product product,
     const u32 resolution,
+    const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
     const auto inputs =
@@ -1773,36 +1791,43 @@ void MergeSediment(
                 *inputs,
                 address,
                 resolution,
+                revisions,
                 context));
     case Product::Drainage:
         return std::any(
             BuildDrainage(
                 *inputs,
+                revisions,
                 context));
     case Product::TerrainProcesses:
         return std::any(
             BuildProcesses(
                 *inputs,
+                revisions,
                 context));
     case Product::ExposedSurface:
         return std::any(
             BuildExposedSurface(
                 *inputs,
+                revisions,
                 context));
     case Product::BiomeWeights:
         return std::any(
             BuildBiomeWeights(
                 *inputs,
+                revisions,
                 context));
     case Product::SurfaceMaterial:
         return std::any(
             BuildSurfaceMaterial(
                 *inputs,
+                revisions,
                 context));
     case Product::Scatter:
         return std::any(
             BuildScatter(
                 *inputs,
+                revisions,
                 context));
     case Product::Count:
         break;
@@ -1954,6 +1979,7 @@ public:
                    resolution = config.resolution](
                       const terrain::PhysicalTerrainPageAddress& address,
                       const Product product,
+                      const terrain::TerrainGenerationRevisions& revisions,
                       const procedural_graph::BuildContext& context)
                   {
                       return BuildProduct(
@@ -1961,6 +1987,7 @@ public:
                           address,
                           product,
                           resolution,
+                          revisions,
                           context);
                   },
                   &cache),
@@ -1991,8 +2018,6 @@ public:
 
         terrain::TerrainGenerationRevisions
             baseRevisions{};
-        bool baseRevisionsInitialized{false};
-
         u64 surfaceSourceRevision{~u64{0}};
 
         std::vector<
@@ -2462,9 +2487,6 @@ void StudioTerrainPhysicalPageService::Sync(
             body->baseRevisions =
                 InitialRevisions(
                     *inputs);
-            body->
-                baseRevisionsInitialized =
-                    true;
             body->
                 surfaceSourceRevision =
                     runtime.
