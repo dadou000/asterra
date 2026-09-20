@@ -20,6 +20,9 @@ TerrainBodyServices::TerrainBodyServices(
     const universe::BodyId body,
     const terrain_gpu::PersistentGpuTerrainCacheConfig cacheConfig)
     : body_(body),
+      geology_(
+          terrain_geology::
+              LoadReferenceGeologicalMaterialLibrary()),
       biomes_(body),
       water_(body),
       cache_(cacheConfig)
