@@ -322,10 +322,42 @@ u32 StudioRenderViewSet::Refresh(
                 "Studio RenderView lost its logical viewport target slot.");
         }
 
-        const auto camera =
-            ComposeViewportCamera(
-                *target,
-                snapshot.universeGeneration);
+        std::optional<
+            render_view::CameraState>
+            camera;
+
+        if (target->mode ==
+                studio_session::ViewportMode::Perspective)
+        {
+            const auto terrain =
+                session_->TerrainRuntime().
+                    Capture(id);
+
+            if (terrain.has_value())
+            {
+                if (!session_->
+                        TerrainRuntime().
+                        IsCurrent(*terrain))
+                {
+                    throw std::logic_error(
+                        "Studio RenderView received a stale terrain runtime snapshot.");
+                }
+
+                camera =
+                    ComposeTerrainViewportCamera(
+                        *target,
+                        *terrain);
+            }
+        }
+
+        if (!camera.has_value())
+        {
+            camera =
+                ComposeViewportCamera(
+                    *target,
+                    snapshot.
+                        universeGeneration);
+        }
 
         if (!camera.has_value())
         {
