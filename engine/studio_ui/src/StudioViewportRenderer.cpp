@@ -2,6 +2,7 @@
 
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
@@ -191,6 +192,84 @@ SelectedTerrainAuthoringOverlay(
     }
 
     return overlay;
+}
+
+[[nodiscard]] std::vector<StudioTerrainAuthoringOverlay>
+TerrainConstraintDiagnosticOverlays(
+    studio_session::StudioSession& session,
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime)
+{
+    std::vector<StudioTerrainAuthoringOverlay>
+        result;
+
+    if (!session.World().HasWorld())
+    {
+        return result;
+    }
+
+    auto& world =
+        session.World();
+
+    editor_model::SurfaceAuthoringModel model(
+        world.Objects(),
+        world.Commands(),
+        world.Selection());
+
+    const auto constraints =
+        model.TerrainConstraints(
+            runtime.terrainObject);
+
+    result.reserve(
+        constraints.size());
+
+    for (const auto& constraint :
+         constraints)
+    {
+        StudioTerrainAuthoringOverlay overlay{
+            .body = runtime.body,
+            .kind =
+                constraint.shape ==
+                        editor_model::
+                            SurfaceTerrainConstraintShape::
+                                Spline
+                    ? StudioTerrainOverlayKind::Spline
+                    : StudioTerrainOverlayKind::Brush,
+            .influenceRadiusMeters =
+                constraint.shape ==
+                        editor_model::
+                            SurfaceTerrainConstraintShape::
+                                Spline
+                    ? constraint.halfWidthMeters +
+                        constraint.falloffMeters
+                    : constraint.outerRadiusMeters
+        };
+
+        if (constraint.shape ==
+            editor_model::
+                SurfaceTerrainConstraintShape::
+                    Spline)
+        {
+            overlay.controlUnitDirections =
+                constraint.controlUnitDirections;
+        }
+        else
+        {
+            overlay.controlUnitDirections.
+                push_back(
+                    constraint.
+                        centerUnitDirection);
+        }
+
+        if (!overlay.
+                controlUnitDirections.
+                empty())
+        {
+            result.push_back(
+                std::move(overlay));
+        }
+    }
+
+    return result;
 }
 
 [[nodiscard]] terrain_render::TerrainPreviewCamera
@@ -1198,6 +1277,14 @@ StudioViewportRenderer::Compose(
             logicalTarget->mode !=
                 studio_session::ViewportMode::Debug)
         {
+            const auto& source =
+                session.TerrainRuntime().TerrainSource(
+                    *terrainRuntime);
+
+            std::vector<
+                editor_ui::PreviewLine>
+                overlayLines;
+
             auto overlay =
                 views.TerrainAuthoringOverlay(info.id);
 
@@ -1210,51 +1297,128 @@ StudioViewportRenderer::Compose(
             }
 
             if (overlay.has_value() &&
-                overlay->body == terrainRuntime->body)
+                overlay->body ==
+                    terrainRuntime->body)
             {
-                const auto& source =
-                    session.TerrainRuntime().TerrainSource(
-                        *terrainRuntime);
-
-                auto overlayLines =
+                auto lines =
                     BuildTerrainAuthoringOverlayLines(
                         *overlay,
                         *terrainRuntime,
                         source,
                         view->Camera());
 
-                if (!overlayLines.empty())
-                {
-                    const auto camera = view->Camera();
-                    auto* overlayColor = color;
+                overlayLines.insert(
+                    overlayLines.end(),
+                    lines.begin(),
+                    lines.end());
+            }
 
-                    graph.AddPass(
-                        prefix + ".TerrainAuthoringOverlay",
+            const auto diagnostics =
+                views.TerrainDiagnosticOverlays(
+                    info.id);
+
+            if (diagnostics.authoredConstraints)
+            {
+                const auto constraints =
+                    TerrainConstraintDiagnosticOverlays(
+                        session,
+                        *terrainRuntime);
+
+                for (const auto& constraint :
+                     constraints)
+                {
+                    auto lines =
+                        BuildTerrainAuthoringOverlayLines(
+                            constraint,
+                            *terrainRuntime,
+                            source,
+                            view->Camera());
+
+                    overlayLines.insert(
+                        overlayLines.end(),
+                        lines.begin(),
+                        lines.end());
+                }
+            }
+
+            if (diagnostics.Any())
+            {
+                const auto statuses =
+                    session.
+                        TerrainPhysicalPages().
+                        Catalog(
+                            terrainRuntime->
+                                planet.id);
+
+                std::vector<
+                    StudioTerrainDiagnosticPage>
+                    pages;
+
+                pages.reserve(
+                    statuses.size());
+
+                for (const auto& status :
+                     statuses)
+                {
+                    pages.push_back({
+                        .status = status,
+                        .snapshot =
+                            session.
+                                TerrainPhysicalPages().
+                                Find(
+                                    status.address)
+                    });
+                }
+
+                auto lines =
+                    BuildTerrainDiagnosticOverlayLines(
+                        diagnostics,
+                        *terrainRuntime,
+                        source,
+                        pages,
+                        view->Camera());
+
+                overlayLines.insert(
+                    overlayLines.end(),
+                    lines.begin(),
+                    lines.end());
+            }
+
+            if (!overlayLines.empty())
+            {
+                const auto camera =
+                    view->Camera();
+
+                auto* overlayColor =
+                    color;
+
+                graph.AddPass(
+                    prefix + ".TerrainOverlays",
+                    {
                         {
-                            {
-                                .texture = targets.color,
-                                .state = rhi::ResourceState::RenderTarget,
-                                .access = render_graph::Access::Write
-                            }
-                        },
-                        [this,
-                         overlayColor,
-                         width,
-                         height,
-                         camera,
-                         overlayLines = std::move(overlayLines)](
-                            rhi::CommandList& commands,
-                            const render_graph::Resources&)
-                        {
-                            pathRenderer_.DrawCameraRelativeLines(
+                            .texture = targets.color,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        }
+                    },
+                    [this,
+                     overlayColor,
+                     width,
+                     height,
+                     camera,
+                     overlayLines = std::move(overlayLines)](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        pathRenderer_.
+                            DrawCameraRelativeLines(
                                 commands,
                                 *overlayColor,
                                 width,
                                 height,
                                 camera,
                                 overlayLines);
-                        });
-                }
+                    });
             }
         }
 
