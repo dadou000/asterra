@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <optional>
 #include <stdexcept>
@@ -482,27 +483,30 @@ BuildPhysicalRenderPages(
                     }
                 }
 
+                auto uniqueBuffer =
+                    device.CreateBuffer({
+                        .sizeBytes =
+                            static_cast<u64>(
+                                texels.size()) *
+                            sizeof(
+                                terrain_gpu::
+                                    GpuPhysicalSurfaceTexel),
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                HostVisible,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource
+                    });
+
                 std::shared_ptr<
                     rhi::Buffer>
                     buffer{
-                        device.
-                            CreateBuffer({
-                                .sizeBytes =
-                                    static_cast<u64>(
-                                        texels.size()) *
-                                    sizeof(
-                                        terrain_gpu::
-                                            GpuPhysicalSurfaceTexel),
-                                .usage =
-                                    rhi::BufferUsage::
-                                        Structured,
-                                .memory =
-                                    rhi::MemoryUsage::
-                                        HostVisible,
-                                .initialState =
-                                    rhi::ResourceState::
-                                        ShaderResource
-                            })};
+                        std::move(
+                            uniqueBuffer)};
 
                 std::byte* mapped =
                     buffer->Map();
