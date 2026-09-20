@@ -1208,7 +1208,14 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     bodyByTerrainObject_.clear();
     terrainObjectByBody_.clear();
     biomeByObject_.clear();
+
+    // Derived per-body services keep stable lifetime across semantic
+    // recomposition for a stable BodyId. This preserves M26 residency and gives
+    // M27 a durable cache target while authored policy below is rebuilt.
+    auto previousServices =
+        std::move(servicesByBody_);
     servicesByBody_.clear();
+
     constraintsByBody_.clear();
     sourceRevision_ = ~u64{0};
 
@@ -1299,8 +1306,35 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         candidateBodyByObject.emplace(object.id, *bodyId);
         candidateObjectByBody.emplace(*bodyId, object.id);
 
-        auto services =
-            std::make_unique<TerrainBodyServices>(
+        std::unique_ptr<TerrainBodyServices>
+            services;
+
+        if (auto previous =
+                previousServices.find(
+                    *bodyId);
+            previous !=
+                previousServices.end())
+        {
+            services =
+                std::move(
+                    previous->second);
+            previousServices.erase(
+                previous);
+        }
+        else
+        {
+            services =
+                std::make_unique<
+                    TerrainBodyServices>(
+                        *bodyId);
+        }
+
+        // Semantic policy is reconstructed from ObjectStore authority while
+        // runtime-only cache/water state remains owned by the stable service.
+        services->Processes() =
+            TerrainProcessService{};
+        services->Biomes() =
+            terrain_biome::BiomeService(
                 *bodyId);
 
         std::optional<scene::ObjectId>
