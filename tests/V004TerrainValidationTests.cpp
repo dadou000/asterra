@@ -2,6 +2,7 @@
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain_cache/TerrainPageCache.hpp>
+#include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
@@ -19,6 +20,7 @@
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
 
 #include <algorithm>
+#include <any>
 #include <atomic>
 #include <array>
 #include <cmath>
@@ -5507,6 +5509,496 @@ void Test16CacheHitStability()
         "M30-16 final cache accounting must show exactly two generated resident pages and hit-only reuse thereafter.");
 }
 
+
+void Test17RevisionInvalidation()
+{
+    using namespace terrain_dependency;
+
+    const world::PlanetId planet{
+        .high = 0x4D3330494E56414CULL,
+        .low = 0x4944000000000017ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress center{
+        .planet = planet,
+        .tile = {
+            .face =
+                world::CubeFace::
+                    PositiveX,
+            .level = 7U,
+            .x = 64U,
+            .y = 64U
+        }
+    };
+
+    const terrain::PhysicalTerrainPageAddress far{
+        .planet = planet,
+        .tile =
+            world::OffsetTile(
+                center.tile,
+                4,
+                0)
+    };
+
+    const terrain::TerrainGenerationRevisions initial{
+        .geology = 10U,
+        .climate = 20U,
+        .authoring = 30U,
+        .biome = 40U,
+        .water = 50U,
+        .processes = 60U
+    };
+
+    jobs::JobSystem jobs(
+        2U);
+
+    procedural_graph::ProceduralGraph graph(
+        jobs);
+
+    std::array<
+        std::atomic<u64>,
+        kTerrainDependencyProductCount>
+        centerCounts{};
+
+    std::array<
+        std::atomic<u64>,
+        kTerrainDependencyProductCount>
+        farCounts{};
+
+    const auto productIndex =
+        [](const TerrainDependencyProduct product)
+        {
+            return static_cast<std::size_t>(
+                product);
+        };
+
+    TerrainDependencyGraph dependencies(
+        graph,
+        [&](const terrain::PhysicalTerrainPageAddress& address,
+            const TerrainDependencyProduct product,
+            const procedural_graph::BuildContext&)
+            -> std::any
+        {
+            if (address == center)
+            {
+                ++centerCounts[
+                    productIndex(product)];
+            }
+            else if (address == far)
+            {
+                ++farCounts[
+                    productIndex(product)];
+            }
+            else
+            {
+                Fail(
+                    "M30-17 dependency graph attempted to build an unregistered fixture address.");
+            }
+
+            return std::any(
+                static_cast<u32>(
+                    product));
+        });
+
+    dependencies.RegisterPage(
+        center,
+        initial);
+
+    dependencies.RegisterPage(
+        far,
+        initial);
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter) &&
+        dependencies.BuildBlocking(
+            far,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            far,
+            TerrainDependencyProduct::
+                Scatter),
+        "M30-17 initial dependency products must build successfully.");
+
+    const auto count =
+        [&](const bool centerPage,
+            const TerrainDependencyProduct product)
+        {
+            return (
+                centerPage
+                    ? centerCounts[
+                          productIndex(
+                              product)]
+                    : farCounts[
+                          productIndex(
+                              product)])
+                .load(
+                    std::memory_order_relaxed);
+        };
+
+    const auto centerInitialRevisions =
+        dependencies.Revisions(
+            center);
+
+    const auto farInitialRevisions =
+        dependencies.Revisions(
+            far);
+
+    Require(
+        centerInitialRevisions.has_value() &&
+        farInitialRevisions.has_value() &&
+        *centerInitialRevisions ==
+            initial &&
+        *farInitialRevisions ==
+            initial,
+        "M30-17 registered pages must begin with the supplied physical revision domains.");
+
+    const terrain::PhysicalTerrainPageKey
+        centerInitialKey{
+            .address = center,
+            .resolution = 65U,
+            .revisions =
+                *centerInitialRevisions
+        };
+
+    const terrain::PhysicalTerrainPageKey
+        farInitialKey{
+            .address = far,
+            .resolution = 65U,
+            .revisions =
+                *farInitialRevisions
+        };
+
+    const auto farScatterBefore =
+        dependencies.Status(
+            far,
+            TerrainDependencyProduct::
+                Scatter);
+
+    Require(
+        farScatterBefore.has_value() &&
+        farScatterBefore->state ==
+            procedural_graph::
+                NodeState::Clean,
+        "M30-17 distant control page must be clean before bounded invalidation.");
+
+    const u64 centerProcessBeforeScatter =
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses);
+
+    const u64 centerSurfaceBeforeScatter =
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial);
+
+    const u64 centerScatterBefore =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter);
+
+    const u64 farScatterBuildsBefore =
+        count(
+            false,
+            TerrainDependencyProduct::
+                Scatter);
+
+    const auto scatterEdit =
+        dependencies.ApplyChange({
+            .kind =
+                TerrainChangeKind::
+                    BiomeScatter,
+            .scope = {
+                .planet = planet,
+                .global = false,
+                .center = center.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+
+    Require(
+        scatterEdit.affectedPages ==
+                1U &&
+        scatterEdit.dirtyProducts ==
+            ProductBit(
+                TerrainDependencyProduct::
+                    Scatter),
+        "M30-17 biome scatter edit must invalidate only scatter on the bounded target page.");
+
+    const auto centerAfterScatterRevision =
+        dependencies.Revisions(
+            center);
+
+    const auto farAfterScatterRevision =
+        dependencies.Revisions(
+            far);
+
+    Require(
+        centerAfterScatterRevision.
+                has_value() &&
+        centerAfterScatterRevision->
+                biome ==
+            initial.biome + 1U &&
+        centerAfterScatterRevision->
+                geology ==
+            initial.geology &&
+        centerAfterScatterRevision->
+                processes ==
+            initial.processes &&
+        farAfterScatterRevision.
+                has_value() &&
+        *farAfterScatterRevision ==
+            initial,
+        "M30-17 scatter-only edit must advance only center biome revision and leave distant page revisions unchanged.");
+
+    const terrain::PhysicalTerrainPageKey
+        centerScatterKey{
+            .address = center,
+            .resolution = 65U,
+            .revisions =
+                *centerAfterScatterRevision
+        };
+
+    Require(
+        terrain::PhysicalPageFingerprint(
+            centerScatterKey) !=
+                terrain::PhysicalPageFingerprint(
+                    centerInitialKey) &&
+        terrain::PhysicalPageFingerprint({
+            .address = far,
+            .resolution = 65U,
+            .revisions =
+                *farAfterScatterRevision
+        }) ==
+            terrain::PhysicalPageFingerprint(
+                farInitialKey),
+        "M30-17 affected page revision must produce a new physical cache fingerprint while the out-of-scope page identity remains stable.");
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter),
+        "M30-17 scatter-only rebuild must succeed.");
+
+    Require(
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses) ==
+                centerProcessBeforeScatter &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial) ==
+                centerSurfaceBeforeScatter &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter) ==
+                centerScatterBefore + 1U &&
+        count(
+            false,
+            TerrainDependencyProduct::
+                Scatter) ==
+                farScatterBuildsBefore,
+        "M30-17 biome scatter revision must rebuild scatter exactly once without rerunning erosion, surface material, or distant-page products.");
+
+    const u64 centerGeologyBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Geology);
+
+    const u64 centerDrainageBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Drainage);
+
+    const u64 centerProcessBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses);
+
+    const u64 centerExposedBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                ExposedSurface);
+
+    const u64 centerBiomeBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                BiomeWeights);
+
+    const u64 centerSurfaceBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial);
+
+    const u64 centerScatterBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter);
+
+    const auto rockEdit =
+        dependencies.ApplyChange({
+            .kind =
+                TerrainChangeKind::
+                    RockPhysics,
+            .scope = {
+                .planet = planet,
+                .global = false,
+                .center = center.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+
+    constexpr TerrainDependencyProductMask
+        allRockDescendants =
+            ProductBit(
+                TerrainDependencyProduct::
+                    Geology) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    Drainage) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    TerrainProcesses) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    ExposedSurface) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    BiomeWeights) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    SurfaceMaterial) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    Scatter);
+
+    Require(
+        rockEdit.affectedPages ==
+                1U &&
+        rockEdit.dirtyProducts ==
+                allRockDescendants,
+        "M30-17 rock-physics revision must invalidate geology and every dependent physical/derived product on the target page.");
+
+    const auto centerAfterRockRevision =
+        dependencies.Revisions(
+            center);
+
+    Require(
+        centerAfterRockRevision.
+                has_value() &&
+        centerAfterRockRevision->
+                geology ==
+            initial.geology + 1U &&
+        centerAfterRockRevision->
+                biome ==
+            initial.biome + 1U &&
+        centerAfterRockRevision->
+                climate ==
+            initial.climate &&
+        centerAfterRockRevision->
+                authoring ==
+            initial.authoring &&
+        centerAfterRockRevision->
+                water ==
+            initial.water &&
+        centerAfterRockRevision->
+                processes ==
+            initial.processes,
+        "M30-17 rock edit must advance geology revision without spuriously changing unrelated revision domains.");
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter),
+        "M30-17 rock-dependent descendant rebuild chain must succeed.");
+
+    Require(
+        count(
+            true,
+            TerrainDependencyProduct::
+                Geology) ==
+                centerGeologyBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                Drainage) ==
+                centerDrainageBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses) ==
+                centerProcessBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                ExposedSurface) ==
+                centerExposedBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                BiomeWeights) ==
+                centerBiomeBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial) ==
+                centerSurfaceBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter) ==
+                centerScatterBeforeRock + 1U,
+        "M30-17 geology revision must rebuild each downstream terrain product exactly once.");
+
+    const auto farScatterAfter =
+        dependencies.Status(
+            far,
+            TerrainDependencyProduct::
+                Scatter);
+
+    Require(
+        farScatterAfter.has_value() &&
+        farScatterAfter->state ==
+            procedural_graph::
+                NodeState::Clean &&
+        farScatterAfter->
+                committedRevision ==
+            farScatterBefore->
+                committedRevision &&
+        dependencies.Revisions(
+            far) ==
+            farAfterScatterRevision,
+        "M30-17 out-of-scope terrain must remain clean, keep its committed product revision, and retain identical generation revisions.");
+}
+
 } // namespace
 
 int main()
@@ -5527,8 +6019,9 @@ int main()
     Test14ExposedRockMaterialResolution();
     Test15DeterministicScatter();
     Test16CacheHitStability();
+    Test17RevisionInvalidation();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 16/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 17/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
