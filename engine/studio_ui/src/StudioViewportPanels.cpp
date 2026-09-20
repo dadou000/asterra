@@ -2,6 +2,7 @@
 
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/paths/PathNetwork.hpp>
+#include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 
@@ -219,6 +220,43 @@ void StudioViewportPanels::DrawView(
         return;
     }
 
+    const auto queueTerrainAuthoringInvalidation =
+        [this, id](
+            const universe::BodyId body,
+            const std::span<const math::Double3> points,
+            const f64 influenceRadiusMeters,
+            const u32 downstreamRadiusTiles = 2U)
+        {
+            const auto planet =
+                session_->World().
+                    Surfaces().
+                    Registry().
+                    SphericalPlanetDefinition(body);
+
+            const auto runtime =
+                session_->TerrainRuntime().
+                    Capture(id);
+
+            if (!planet.has_value() ||
+                !runtime.has_value() ||
+                runtime->body != body)
+            {
+                throw std::runtime_error(
+                    "Terrain invalidation requires a current spherical terrain viewport runtime.");
+            }
+
+            const auto requests =
+                studio_session::
+                    BuildTerrainAuthoringInvalidations(
+                        *planet,
+                        points,
+                        influenceRadiusMeters,
+                        runtime->physicalPageLevel,
+                        downstreamRadiusTiles);
+
+            session_->QueueTerrainInvalidations(requests);
+        };
+
     context.Text(
         std::format(
             "Mode: {}",
@@ -432,10 +470,30 @@ void StudioViewportPanels::DrawView(
 
                         model.SelectObject(
                             constraint);
+
+                        const auto body =
+                            session_->World().
+                                Surfaces().
+                                BodyForTerrainObject(
+                                    *terrainSplineTerrain_);
+
+                        if (!body.has_value())
+                        {
+                            throw std::runtime_error(
+                                "Committed terrain spline lost its target body.");
+                        }
+
+                        queueTerrainAuthoringInvalidation(
+                            *body,
+                            terrainSplinePoints_,
+                            terrainSplineHalfWidthMeters_ +
+                                terrainSplineFalloffMeters_,
+                            3U);
+
                         terrainSplinePoints_.clear();
                         terrainSplineTerrain_.reset();
                         status_ =
-                            "Terrain spline committed as one undoable semantic transaction.";
+                            "Terrain spline committed with bounded M27 invalidation.";
                     }
                     catch (const std::exception& exception)
                     {
@@ -946,12 +1004,20 @@ void StudioViewportPanels::DrawView(
 
                             model.SelectObject(
                                 constraint);
+
+                            queueTerrainAuthoringInvalidation(
+                                pick->body,
+                                terrainSplinePoints_,
+                                terrainSplineHalfWidthMeters_ +
+                                    terrainSplineFalloffMeters_,
+                                3U);
+
                             terrainSplinePoints_.
                                 clear();
                             terrainSplineTerrain_.
                                 reset();
                             status_ =
-                                "Terrain spline committed as one undoable semantic transaction.";
+                                "Terrain spline committed with bounded M27 invalidation.";
                         }
                         catch (const std::exception& exception)
                         {
@@ -1061,11 +1127,26 @@ void StudioViewportPanels::DrawView(
                         {
                             model.SelectObject(
                                 constraint);
+
+                            const math::Double3 point =
+                                pick->surface.unitDirection;
+
+                            queueTerrainAuthoringInvalidation(
+                                pick->body,
+                                std::span{
+                                    &point,
+                                    std::size_t{1U}},
+                                terrainBrushOuterRadiusMeters_,
+                                terrainTool_ ==
+                                        StudioTerrainAuthoringTool::Drainage
+                                    ? 3U
+                                    : 2U);
+
                             status_ =
                                 std::string(
                                     TerrainToolName(
                                         terrainTool_)) +
-                                " constraint committed as one undoable terrain-authoring transaction.";
+                                " constraint committed with bounded M27 invalidation.";
                         }
                     }
                     catch (const std::exception& exception)
