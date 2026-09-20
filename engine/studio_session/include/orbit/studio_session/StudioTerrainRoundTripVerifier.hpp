@@ -24,6 +24,10 @@ struct StudioTerrainRoundTripReport
     u64 semanticFingerprintBefore{0U};
     u64 semanticFingerprintAfter{0U};
 
+    u64 terrainSourceRevisionBefore{0U};
+    u64 terrainSourceRevisionAfter{0U};
+    bool terrainSourceRevisionPreserved{false};
+
     u64 physicalFingerprintBefore{0U};
     u64 physicalFingerprintAfter{0U};
 
