@@ -46,6 +46,8 @@ jobs:
           OrbitStudioSessionTests
           OrbitStudioTerrainRuntimeBridgeTests
           OrbitBezierHandleEditorTests
+          OrbitStudioViewportCameraTests
+          OrbitStudioViewportNavigationTests
           OrbitStudioViewportPresentationTests
           OrbitStudio
           OrbitPlayer
@@ -58,6 +60,8 @@ jobs:
             "build-studio-smoke/engine/studio_session/Release/OrbitStudioSessionTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRuntimeBridgeTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
+            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
+            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe",
             "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
           )
           foreach ($test in $tests) {

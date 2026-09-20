@@ -230,6 +230,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitStudioViewportCameraTests failed with exit code $LASTEXITCODE"
           }
+          & "build/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitStudioViewportNavigationTests failed with exit code $LASTEXITCODE"
+          }
           & "build/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitStudioViewportPresentationTests failed with exit code $LASTEXITCODE"

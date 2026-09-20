@@ -102,6 +102,7 @@ jobs:
             "build/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe",
             "build/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe",
             "build/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
+            "build/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe",
             "build/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
           )
 
