@@ -91,6 +91,9 @@ void StudioRenderViewSet::Create(
         debugPhysicalPageLevels_.emplace(
             targetId,
             static_cast<u8>(8));
+        terrainDiagnosticOverlays_.emplace(
+            targetId,
+            StudioTerrainDiagnosticOverlayOptions{});
 
         auto view =
             std::make_unique<render_view::RenderView>(
@@ -108,6 +111,7 @@ void StudioRenderViewSet::Create(
         debugPhysicalPages_.erase(targetId);
         terrainSurfacePicks_.erase(targetId);
         terrainAuthoringOverlays_.erase(targetId);
+        terrainDiagnosticOverlays_.erase(targetId);
         liveDebugPages_.erase(targetId);
         static_cast<void>(
             session_->Viewports().Unregister(
@@ -134,6 +138,7 @@ bool StudioRenderViewSet::Destroy(
     debugPhysicalPages_.erase(ownedId);
     terrainSurfacePicks_.erase(ownedId);
     terrainAuthoringOverlays_.erase(ownedId);
+    terrainDiagnosticOverlays_.erase(ownedId);
     liveDebugPages_.erase(ownedId);
 
     if (session_ != nullptr)
@@ -486,6 +491,40 @@ StudioRenderViewSet::TerrainAuthoringOverlay(
             terrainAuthoringOverlays_.end()
         ? std::nullopt
         : std::optional(found->second);
+}
+
+void StudioRenderViewSet::SetTerrainDiagnosticOverlays(
+    const std::string_view id,
+    const StudioTerrainDiagnosticOverlayOptions options)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    terrainDiagnosticOverlays_.insert_or_assign(
+        std::string(id),
+        options);
+}
+
+StudioTerrainDiagnosticOverlayOptions
+StudioRenderViewSet::TerrainDiagnosticOverlays(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        terrainDiagnosticOverlays_.find(id);
+
+    return found ==
+            terrainDiagnosticOverlays_.end()
+        ? StudioTerrainDiagnosticOverlayOptions{}
+        : found->second;
 }
 
 bool StudioRenderViewSet::ResetTerrainView(
@@ -871,7 +910,9 @@ StudioRenderViewSet::Catalog() const
             .debugPhysicalPage =
                 DebugPhysicalPage(id),
             .hasLiveDebugPage =
-                LiveDebugPage(id) != nullptr
+                LiveDebugPage(id) != nullptr,
+            .diagnostics =
+                TerrainDiagnosticOverlays(id)
         });
     }
 
