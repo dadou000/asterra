@@ -168,6 +168,26 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioTerrainRoundTripVerifierTests
     )
 
+    add_executable(OrbitStudioTerrainValidationScenarioTests
+        tests/StudioTerrainValidationScenarioTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainValidationScenarioTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainValidationScenarioTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainValidationScenarioTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainValidationScenario
+        COMMAND OrbitStudioTerrainValidationScenarioTests
+    )
+
     add_executable(OrbitStudioTerrainServiceStatusTests
         tests/StudioTerrainServiceStatusTests.cpp
     )
