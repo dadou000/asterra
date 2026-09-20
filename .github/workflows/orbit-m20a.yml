@@ -70,7 +70,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build M20A targets
-        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioViewportCameraTests OrbitStudioUi OrbitStudio
+        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitRockyPlanetAuthoringTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioViewportCameraTests OrbitStudioUi OrbitStudio
 
       - name: Test M20A
         shell: pwsh
@@ -80,6 +80,7 @@ jobs:
             "build/engine/world_model/Release/OrbitUniverseCompositionTests.exe",
             "build/engine/surface_model/Release/OrbitSurfaceCompositionTests.exe",
             "build/engine/editor_model/Release/OrbitTerrainAuthoringCommandTests.exe",
+            "build/engine/editor_model/Release/OrbitRockyPlanetAuthoringTests.exe",
             "build/engine/editor_session/Release/OrbitEditorWorldSessionTests.exe",
             "build/engine/editor_session/Release/OrbitTransactionalCompositionTests.exe",
             "build/engine/editor_session/Release/OrbitWorldDocumentsModelTests.exe",
