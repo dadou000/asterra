@@ -708,6 +708,85 @@ void TestStaleBuildIsReplacedByLatestRevision()
         "Latest revision must win and converge back to Ready after stale work is rejected.");
 }
 
+void TestM16LatencyAndPeakQueueDiagnostics()
+{
+    Fixture fixture({
+        .editDebounceSeconds = 0.0,
+        .maxBuildRequestsPerTick = 2U
+    });
+
+    const auto first =
+        MakeAddress(44U, 45U);
+    const auto second =
+        MakeAddress(45U, 45U);
+
+    fixture.scheduler.RegisterPage(
+        first,
+        InitialRevisions());
+    fixture.scheduler.RegisterPage(
+        second,
+        InitialRevisions());
+
+    DriveReady(
+        fixture,
+        first);
+    DriveReady(
+        fixture,
+        second);
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::
+                TerrainChangeKind::
+                    TerrainAuthoring,
+            first.planet));
+
+    const auto pending =
+        fixture.scheduler.PageStatus(
+            first);
+
+    Require(
+        pending.has_value() &&
+        pending->awaitingEditReady,
+        "M16 must expose that the selected page is awaiting edit-to-Ready convergence.");
+
+    const auto queuedBody =
+        fixture.scheduler.BodyStatus(
+            first.planet);
+
+    Require(
+        queuedBody.peakOutstandingPages >= 2U,
+        "M16 must remember the peak number of non-converged resident pages.");
+
+    DriveReady(
+        fixture,
+        first);
+    DriveReady(
+        fixture,
+        second);
+
+    const auto ready =
+        fixture.scheduler.PageStatus(
+            first);
+
+    Require(
+        ready.has_value() &&
+        !ready->awaitingEditReady &&
+        ready->lastEditToReadySeconds >= 0.0 &&
+        ready->maximumEditToReadySeconds >=
+            ready->lastEditToReadySeconds,
+        "M16 must publish edit-to-Ready latency after the newest authority revision converges.");
+
+    const auto body =
+        fixture.scheduler.BodyStatus(
+            first.planet);
+
+    Require(
+        body.maximumEditToReadySeconds >= 0.0 &&
+        body.peakOutstandingPages >= 2U,
+        "M16 body diagnostics must aggregate latency and queue peaks.");
+}
+
 void TestStaleUploadCannotCommitOverNewRevision()
 {
     Fixture fixture;
@@ -920,6 +999,7 @@ int main()
     TestCpuAndGpuBuildStates();
     TestBoundedRequestBudgetAcrossPages();
     TestStaleBuildIsReplacedByLatestRevision();
+    TestM16LatencyAndPeakQueueDiagnostics();
     TestStaleUploadCannotCommitOverNewRevision();
 
     std::cout
