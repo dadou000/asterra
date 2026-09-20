@@ -235,6 +235,33 @@ int main()
                 terrainSurfaces ==
             1U);
 
+        const auto activeRuntimeBody =
+            studio.ActiveBody().Active()->
+                body;
+
+        const auto* terrainServices =
+            studio.World().Surfaces().
+                ServicesForBody(
+                    activeRuntimeBody);
+
+        Check(
+            terrainServices !=
+                nullptr);
+        Check(
+            terrainServices->
+                IsValid());
+        Check(
+            terrainServices->
+                Biomes().
+                Definitions().
+                size() ==
+            1U);
+        Check(
+            terrainServices->
+                Biomes().
+                BaseBiome().
+                IsValid());
+
         const auto veyraChildren =
             studio.World().Objects().
                 Children(
