@@ -225,6 +225,15 @@ public:
         scene::ObjectId biome,
         const SurfaceBiomeSettings& settings);
 
+    [[nodiscard]] scene::ObjectId PaintBiomeMask(
+        scene::ObjectId biome,
+        terrain_biome::BiomeAuthoredWeightOperation operation,
+        math::Double3 centerUnitDirection,
+        f64 innerRadiusMeters,
+        f64 outerRadiusMeters,
+        f64 weight,
+        f64 opacity = 1.0);
+
     [[nodiscard]] scene::ObjectId PaintLocalOverride(
         scene::ObjectId biome,
         math::Double3 centerUnitDirection,
