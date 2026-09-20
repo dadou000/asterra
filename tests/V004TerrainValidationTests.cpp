@@ -2287,6 +2287,384 @@ void Test08CrossPageSedimentFlux()
         "M30-08 two-page M14 mass must be conserved exactly across export, M25 remap and receiver import.");
 }
 
+
+void Test09CrossPageDuneMigration()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+    using namespace terrain_region;
+
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacingMeters = 5.0;
+    constexpr f32 sourceSandMeters = 0.25F;
+    constexpr u64 revision = 0x4D333044554E4539ULL;
+
+    StratigraphyFixture fixture;
+
+    const world::PlanetId planet{
+        .high = 0x4F524249544D3330ULL,
+        .low = 0x0000000000009000ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress sourceAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 3U,
+            .x = 3U,
+            .y = 3U
+        }
+    };
+
+    const auto eastMapping =
+        world::NeighborAcrossTileEdge(
+            sourceAddress.tile,
+            world::TileEdge::East);
+
+    Require(
+        eastMapping.tile.face ==
+            sourceAddress.tile.face,
+        "M30-09 fixture intentionally uses a same-face neighbor so the test isolates process-driven dune migration from cube-face orientation already covered by M30-08.");
+
+    MaterialColumnPage sourcePage(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            sourcePage.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters = 0.0F,
+                    .referenceBedrockHeightMeters = 0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters =
+                        x >= resolution - 2U
+                            ? sourceSandMeters
+                            : 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto sourceInitialMass =
+        sourcePage.QueryMass(
+            fixture.materials);
+
+    std::vector<AeolianCellForcing> sourceWind(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 14.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F
+        });
+
+    AeolianErosionConfig sourceConfig{};
+    sourceConfig.iterations = 40U;
+    sourceConfig.timeStepSeconds = 0.20;
+    sourceConfig.capacityCoefficient = 0.045;
+    sourceConfig.windSpeedExponent = 2.0;
+    sourceConfig.shadowRayCells = 4U;
+    sourceConfig.shadowStrength = 8.0;
+    sourceConfig.windwardExposureGain = 0.50;
+    sourceConfig.minimumExposure = 0.05;
+    sourceConfig.maximumExposure = 1.75;
+    sourceConfig.pickupRatePerSecond = 2.0;
+    sourceConfig.depositionRatePerSecond = 2.0;
+    sourceConfig.reptationFraction = 0.25;
+    sourceConfig.saltationRatePerSecond = 3.0;
+    sourceConfig.referenceSaltationWindMetersPerSecond = 12.0;
+    sourceConfig.maximumSandPickupDepthPerStepMeters = 0.03;
+    sourceConfig.maximumSoilPickupDepthPerStepMeters = 0.0;
+    sourceConfig.maximumDepositionDepthPerStepMeters = 0.05;
+    sourceConfig.maximumAvalancheDepthPerStepMeters = 0.05;
+    sourceConfig.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
+    sourceConfig.maximumBedrockAbrasionDepthPerStepMeters = 0.0;
+
+    const auto sourceResult =
+        SimulateAeolianErosion(
+            std::move(sourcePage),
+            fixture.materials,
+            sourceWind,
+            sourceConfig);
+
+    Require(
+        sourceResult.sedimentExchange.has_value(),
+        "M30-09 source M13 solve must expose canonical M14 mobile state.");
+
+    const f64 exportedKg =
+        sourceResult.sedimentExchange->
+            Accounting().
+            exported.
+            TotalKg();
+
+    Require(
+        exportedKg > 1.0 &&
+        sourceResult.massBalance.
+            boundaryLossKg > 1.0 &&
+        NearlyEqual(
+            exportedKg,
+            sourceResult.massBalance.
+                boundaryLossKg,
+            1.0e-6),
+        "M30-09 source dune must produce measurable M13-driven M14 boundary export.");
+
+    const auto sourceExported =
+        sourceResult.sedimentExchange->
+            Accounting().
+            exported;
+
+    Require(
+        sourceExported.finesKg <=
+                1.0e-9 &&
+        sourceExported.coarseDebrisKg <=
+                1.0e-9 &&
+        sourceExported.sandKg >
+                1.0,
+        "M30-09 source migration fixture must export sand only, so the downwind physical buildup is unambiguously dune material.");
+
+    auto outgoing =
+        sourceResult.sedimentExchange->
+            TakeOutgoingBoundaryFlux(
+                revision);
+
+    Require(
+        NearlyEqual(
+            outgoing.Total().TotalKg(),
+            exportedKg,
+            1.0e-6),
+        "M30-09 M13-produced boundary packets must carry the full exported dune mass into M25.");
+
+    auto surface =
+        MakeSurfaceBoundaryFlux(
+            resolution,
+            revision,
+            std::move(outgoing));
+
+    const PhysicalPageBoundaryFlux sourceBoundary{
+        .address = sourceAddress,
+        .outgoing = std::move(surface)
+    };
+
+    const auto transfers =
+        BuildDeterministicBoundaryTransfers(
+            std::span<const PhysicalPageBoundaryFlux>(
+                &sourceBoundary,
+                1U));
+
+    const terrain::PhysicalTerrainPageAddress receiverAddress{
+        .planet = planet,
+        .tile = eastMapping.tile
+    };
+
+    SedimentExchangePage receiverSediment(
+        resolution,
+        spacingMeters);
+
+    ApplySedimentBoundaryTransfers(
+        receiverAddress,
+        transfers,
+        receiverSediment);
+
+    Require(
+        NearlyEqual(
+            receiverSediment.
+                Accounting().
+                imported.TotalKg(),
+            exportedKg,
+            1.0e-6) &&
+        NearlyEqual(
+            receiverSediment.
+                TotalMobileMass().
+                TotalKg(),
+            exportedKg,
+            1.0e-6),
+        "M30-09 M25 must deliver the complete process-generated dune load into the neighboring M14 page before the receiver aeolian solve.");
+
+    MaterialColumnPage receiverPage(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            receiverPage.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters = 0.0F,
+                    .referenceBedrockHeightMeters = 0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto receiverInitialMass =
+        receiverPage.QueryMass(
+            fixture.materials);
+
+    std::vector<AeolianCellForcing> calmReceiver(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 0.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F
+        });
+
+    AeolianErosionConfig receiverConfig{};
+    receiverConfig.iterations = 4U;
+    receiverConfig.timeStepSeconds = 0.20;
+    receiverConfig.capacityCoefficient = 0.045;
+    receiverConfig.pickupRatePerSecond = 0.0;
+    receiverConfig.depositionRatePerSecond = 5.0;
+    receiverConfig.reptationFraction = 0.0;
+    receiverConfig.saltationRatePerSecond = 0.0;
+    receiverConfig.maximumSandPickupDepthPerStepMeters = 0.0;
+    receiverConfig.maximumSoilPickupDepthPerStepMeters = 0.0;
+    receiverConfig.maximumDepositionDepthPerStepMeters = 2.0;
+    receiverConfig.maximumAvalancheDepthPerStepMeters = 0.05;
+    receiverConfig.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
+    receiverConfig.maximumBedrockAbrasionDepthPerStepMeters = 0.0;
+
+    const auto receiverResult =
+        SimulateAeolianErosion(
+            std::move(receiverPage),
+            fixture.materials,
+            calmReceiver,
+            receiverConfig,
+            std::move(receiverSediment));
+
+    Require(
+        receiverResult.sedimentExchange.has_value() &&
+        NearlyEqual(
+            receiverResult.massBalance.
+                initialMobileMassKg,
+            exportedKg,
+            1.0e-6),
+        "M30-09 receiver M13 solve must continue from imported M14 mobile state instead of replacing it with a fresh page.");
+
+    Require(
+        NearlyEqual(
+            receiverResult.sedimentExchange->
+                Accounting().
+                imported.TotalKg(),
+            exportedKg,
+            1.0e-6),
+        "M30-09 receiver M13 continuation must preserve the M14 import ledger supplied by M25.");
+
+    const auto receiverFinalMass =
+        receiverResult.material.QueryMass(
+            fixture.materials);
+
+    Require(
+        receiverFinalMass.LooseMassKg() >
+            receiverInitialMass.LooseMassKg() +
+                1.0 &&
+        receiverResult.sedimentExchange->
+            TotalMobileMass().
+            Empty(1.0e-6) &&
+        receiverResult.massBalance.
+            boundaryLossKg <=
+                1.0e-9,
+        "M30-09 imported dune sediment must become physical M08 loose sand on the downwind page rather than disappearing or immediately leaving the receiver.");
+
+    f64 receiverSandMassKg = 0.0;
+    f64 receiverSandDepthMeters = 0.0;
+
+    const f64 receiverArea =
+        receiverResult.material.
+            CellAreaSquareMeters();
+
+    for (const auto& cell :
+         receiverResult.material.Cells())
+    {
+        receiverSandDepthMeters +=
+            cell.sandMeters;
+
+        receiverSandMassKg +=
+            static_cast<f64>(
+                cell.sandMeters) *
+            receiverArea *
+            receiverResult.material.
+                Densities().
+                sandKgPerCubicMeter;
+    }
+
+    Require(
+        receiverSandDepthMeters > 0.0 &&
+        NearlyEqual(
+            receiverSandMassKg,
+            exportedKg,
+            std::max(
+                exportedKg * 3.0e-5,
+                1.0e-3)),
+        "M30-09 process-generated exported sand must reappear as the same physical dune mass on the receiver page.");
+
+    Require(
+        receiverResult.massBalance.
+            materialBalanceRelativeError <
+            3.0e-5,
+        "M30-09 receiver aeolian continuation must conserve imported mobile mass while depositing the dune.");
+
+    const f64 combinedFinalMass =
+        sourceResult.massBalance.
+            finalLooseMassKg +
+        sourceResult.sedimentExchange->
+            TotalMobileMass().
+            TotalKg() +
+        receiverResult.massBalance.
+            finalLooseMassKg +
+        receiverResult.sedimentExchange->
+            TotalMobileMass().
+            TotalKg();
+
+    const f64 combinedInitialMass =
+        sourceInitialMass.LooseMassKg() +
+        receiverInitialMass.LooseMassKg();
+
+    Require(
+        NearlyEqual(
+            combinedFinalMass,
+            combinedInitialMass,
+            std::max(
+                combinedInitialMass *
+                    4.0e-5,
+                1.0e-3)),
+        "M30-09 two-page dune migration must conserve the original physical sand across M13 pickup, M14 export, M25 transfer, M14 import and receiver M13 deposition.");
+}
+
 } // namespace
 
 int main()
@@ -2299,8 +2677,9 @@ int main()
     Test06ThermalReposeConvergence();
     Test07CrossPageWaterFlux();
     Test08CrossPageSedimentFlux();
+    Test09CrossPageDuneMigration();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 8/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 9/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
