@@ -4,6 +4,8 @@
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_gpu/GpuAeolianErosionPage.hpp>
+#include <orbit/terrain_gpu/GpuBiomeScatterPage.hpp>
+#include <orbit/terrain_gpu/GpuDrainagePage.hpp>
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
 #include <orbit/terrain_gpu/GpuHydraulicErosionPage.hpp>
 #include <orbit/terrain_gpu/GpuHydrologyRegion.hpp>
@@ -21,6 +23,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -71,6 +74,38 @@ MakeOutputBuffer(
         }));
 }
 
+template <typename T>
+[[nodiscard]] std::unique_ptr<rhi::Buffer>
+MakeInputBuffer(
+    rhi::Device& device,
+    const std::span<const T> values)
+{
+    const u64 bytes =
+        static_cast<u64>(
+            values.size_bytes());
+
+    auto buffer =
+        device.CreateBuffer({
+            .sizeBytes = bytes,
+            .usage = rhi::BufferUsage::Structured,
+            .memory = rhi::MemoryUsage::HostVisible,
+            .initialState =
+                rhi::ResourceState::ShaderResource
+        });
+
+    std::byte* mapped =
+        buffer->Map();
+
+    std::memcpy(
+        mapped,
+        values.data(),
+        values.size_bytes());
+
+    buffer->Unmap();
+
+    return buffer;
+}
+
 struct PerformanceRecord
 {
     std::string adapter;
@@ -80,6 +115,8 @@ struct PerformanceRecord
     f64 cacheHitRatePercent{0.0};
     f64 hydraulicIterationGpuMedianMs{0.0};
     f64 aeolianIterationGpuMedianMs{0.0};
+    f64 drainageBuildGpuMedianMs{0.0};
+    f64 scatterGenerationGpuMedianMs{0.0};
 };
 
 void WriteRecord(
@@ -139,6 +176,24 @@ void WriteRecord(
         << ",aeolian_iteration_gpu_time,"
         << std::fixed << std::setprecision(6)
         << record.aeolianIterationGpuMedianMs
+        << ",ms," << kMeasuredRuns << '\n';
+
+    output
+        << "orbit_v004_m30,"
+        << CsvEscape(record.adapter)
+        << ',' << kResolution
+        << ",drainage_build_gpu_time,"
+        << std::fixed << std::setprecision(6)
+        << record.drainageBuildGpuMedianMs
+        << ",ms," << kMeasuredRuns << '\n';
+
+    output
+        << "orbit_v004_m30,"
+        << CsvEscape(record.adapter)
+        << ',' << kResolution
+        << ",scatter_generation_gpu_time,"
+        << std::fixed << std::setprecision(6)
+        << record.scatterGenerationGpuMedianMs
         << ",ms," << kMeasuredRuns << '\n';
 }
 } // namespace
@@ -272,6 +327,11 @@ int main(int argc, char** argv)
                 *device,
                 kResolution);
 
+        terrain_gpu::GpuMaterialColumnResources
+            drainageMaterial(
+                *device,
+                kResolution);
+
         terrain_gpu::GpuHydraulicErosionPage
             hydraulic(
                 *device,
@@ -287,6 +347,18 @@ int main(int argc, char** argv)
                 kResolution,
                 static_cast<u32>(
                     geologyTable.materials.size()));
+
+        terrain_gpu::GpuDrainagePage
+            drainageBuilder(
+                *device,
+                shaderCompiler,
+                kResolution);
+
+        terrain_gpu::GpuBiomeScatterPage
+            scatterBuilder(
+                *device,
+                shaderCompiler,
+                kResolution);
 
         hydraulic.UploadGeologyTable(
             geologyTable);
@@ -332,6 +404,226 @@ int main(int argc, char** argv)
                     sizeof(wind.front()));
 
             windForcing->Unmap();
+        }
+
+        const u32 paddedResolution =
+            terrain_gpu::
+                GpuDrainagePage::
+                    PaddedResolution(
+                        kResolution);
+
+        const u64 paddedCells =
+            static_cast<u64>(
+                paddedResolution) *
+            paddedResolution;
+
+        std::vector<f32>
+            haloConditionedValues(
+                static_cast<std::size_t>(
+                    paddedCells),
+                900.0F);
+
+        std::vector<f32>
+            runoffValues(
+                static_cast<std::size_t>(
+                    cells),
+                0.0025F);
+
+        std::vector<f32>
+            guidanceValues(
+                static_cast<std::size_t>(
+                    cells),
+                0.0F);
+
+        std::vector<f32>
+            zeroCoreValues(
+                static_cast<std::size_t>(
+                    cells),
+                0.0F);
+
+        auto haloConditioned =
+            MakeInputBuffer(
+                *device,
+                std::span<const f32>(
+                    haloConditionedValues));
+
+        auto runoffRate =
+            MakeInputBuffer(
+                *device,
+                std::span<const f32>(
+                    runoffValues));
+
+        auto authoredGuidance =
+            MakeInputBuffer(
+                *device,
+                std::span<const f32>(
+                    guidanceValues));
+
+        auto incomingArea =
+            MakeInputBuffer(
+                *device,
+                std::span<const f32>(
+                    zeroCoreValues));
+
+        auto incomingDischarge =
+            MakeInputBuffer(
+                *device,
+                std::span<const f32>(
+                    zeroCoreValues));
+
+        auto drainagePageOut =
+            MakeOutputBuffer(
+                *device,
+                paddedCells *
+                    sizeof(f32));
+
+        auto drainageAreaOut =
+            MakeOutputBuffer(
+                *device,
+                paddedCells *
+                    sizeof(f32));
+
+        auto dischargeOut =
+            MakeOutputBuffer(
+                *device,
+                paddedCells *
+                    sizeof(f32));
+
+        auto downstreamPageOut =
+            MakeOutputBuffer(
+                *device,
+                paddedCells *
+                    sizeof(u32));
+
+        const terrain_gpu::
+            GpuDrainagePageRequest
+            drainageRequest{
+                .resolution =
+                    kResolution,
+                .spacingMeters =
+                    4.0F,
+                .minimumDrainageDropMeters =
+                    0.01F,
+                .seaLevelMeters =
+                    -1.0e6F,
+                .authoredGuidanceWeight =
+                    0.20F,
+                .depressionPolicy =
+                    terrain_hydrology::
+                        DepressionRoutingPolicy::
+                            FillToBoundary
+            };
+
+        terrain_scatter::
+            ScatterPageRequest
+            scatterRequest{
+                .identity = {
+                    .planet =
+                        planet.id,
+                    .tile =
+                        world::TileForDirection(
+                            math::Normalize(
+                                math::Double3{
+                                    0.31,
+                                    0.27,
+                                    0.91}),
+                            10U),
+                    .sourceRevision = 31U,
+                    .scatterRevision = 22U,
+                    .generationSeed =
+                        0xA57E22A60022ULL
+                },
+                .gridResolution =
+                    kResolution,
+                .cellSizeMeters =
+                    4.0F,
+                .rule = {
+                    .id = {
+                        .high =
+                            0x4D33305045524632ULL,
+                        .low =
+                            0x0000000000000022ULL
+                    },
+                    .kind =
+                        terrain_biome::
+                            BiomeScatterKind::Tree,
+                    .densityPerSquareMeter =
+                        0.035F,
+                    .minimumSpacingMeters =
+                        4.0F,
+                    .seedSalt = 220U,
+                    .compatibleExposed =
+                        terrain_biome::
+                            BiomeExposedMaterialMask::
+                                Soil,
+                    .requiresSoil = true,
+                    .minimumSoilDepthMeters =
+                        0.10F,
+                    .minimumSlopeDegrees =
+                        0.0F,
+                    .maximumSlopeDegrees =
+                        35.0F,
+                    .slopeFalloffDegrees =
+                        8.0F,
+                    .minimumMoisture =
+                        0.05F,
+                    .maximumMoisture =
+                        0.90F,
+                    .moistureFalloff =
+                        0.10F,
+                    .minimumScale =
+                        0.85F,
+                    .maximumScale =
+                        1.15F,
+                    .enabled = true
+                },
+                .biomeDensityMultiplier =
+                    1.0F
+            };
+
+        std::vector<
+            terrain_scatter::
+                ScatterCellInput>
+            scatterCells(
+                static_cast<std::size_t>(
+                    cells));
+
+        for (u32 y = 0U;
+             y < kResolution;
+             ++y)
+        {
+            for (u32 x = 0U;
+                 x < kResolution;
+                 ++x)
+            {
+                auto& cell =
+                    scatterCells[
+                        static_cast<
+                            std::size_t>(
+                                y) *
+                            kResolution +
+                        x];
+
+                cell = {
+                    .biomeWeight =
+                        0.85F,
+                    .exposedMaterial =
+                        terrain_material_column::
+                            ExposedSurfaceKind::Soil,
+                    .slopeDegrees =
+                        6.0F +
+                        static_cast<f32>(
+                            (x + y) % 7U),
+                    .soilDepthMeters =
+                        0.20F,
+                    .moisture =
+                        0.45F,
+                    .exclusionMask =
+                        0.0F,
+                    .authoredDensity =
+                        1.0F
+                };
+            }
         }
 
         auto rawElevation =
@@ -587,6 +879,44 @@ int main(int argc, char** argv)
                         *windForcing);
                 });
 
+        const f64 drainageBuildMs =
+            measureGpuMedianMs(
+                [&](rhi::CommandList& list)
+                {
+                    drainageMaterial.Upload(
+                        list,
+                        packedMaterial);
+                },
+                [&](rhi::CommandList& list)
+                {
+                    drainageBuilder.Dispatch(
+                        list,
+                        drainageRequest,
+                        drainageMaterial,
+                        *haloConditioned,
+                        *runoffRate,
+                        *authoredGuidance,
+                        *incomingArea,
+                        *incomingDischarge,
+                        *drainagePageOut,
+                        *drainageAreaOut,
+                        *dischargeOut,
+                        *downstreamPageOut);
+                });
+
+        const f64 scatterGenerationMs =
+            measureGpuMedianMs(
+                [](rhi::CommandList&)
+                {
+                },
+                [&](rhi::CommandList& list)
+                {
+                    scatterBuilder.Dispatch(
+                        list,
+                        scatterRequest,
+                        scatterCells);
+                });
+
         auto cachedPage =
             std::make_shared<
                 terrain_gpu::
@@ -731,7 +1061,11 @@ int main(int argc, char** argv)
             .hydraulicIterationGpuMedianMs =
                 hydraulicIterationMs,
             .aeolianIterationGpuMedianMs =
-                aeolianIterationMs
+                aeolianIterationMs,
+            .drainageBuildGpuMedianMs =
+                drainageBuildMs,
+            .scatterGenerationGpuMedianMs =
+                scatterGenerationMs
         };
 
         WriteRecord(
