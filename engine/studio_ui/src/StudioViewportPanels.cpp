@@ -5,6 +5,7 @@
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <optional>
 #include <stdexcept>
@@ -555,35 +556,76 @@ void StudioViewportPanels::DrawView(
                     renderView->Height())
             });
 
-    if (target->mode ==
-            studio_session::ViewportMode::Debug &&
-        imageInteraction.clicked)
+    if (imageInteraction.clicked)
     {
-        if (views_->SelectDebugPhysicalPage(
-                id,
-                imageInteraction.u,
-                imageInteraction.v))
+        if (target->mode ==
+            studio_session::ViewportMode::Debug)
         {
-            const auto page =
-                views_->DebugPhysicalPage(id);
-
-            if (page.has_value())
+            if (views_->SelectDebugPhysicalPage(
+                    id,
+                    imageInteraction.u,
+                    imageInteraction.v))
             {
-                const auto& tile =
-                    page->address.tile;
+                const auto page =
+                    views_->DebugPhysicalPage(id);
+
+                if (page.has_value())
+                {
+                    const auto& tile =
+                        page->address.tile;
+                    status_ =
+                        std::format(
+                            "Selected physical page {} L{} ({}, {}).",
+                            CubeFaceName(tile.face),
+                            tile.level,
+                            tile.x,
+                            tile.y);
+                }
+            }
+            else
+            {
                 status_ =
-                    std::format(
-                        "Selected physical page {} L{} ({}, {}).",
-                        CubeFaceName(tile.face),
-                        tile.level,
-                        tile.x,
-                        tile.y);
+                    "Debug click did not intersect production terrain.";
             }
         }
         else
         {
-            status_ =
-                "Debug click did not intersect the target planet.";
+            const auto pick =
+                views_->PickTerrainSurface(
+                    id,
+                    imageInteraction.u,
+                    imageInteraction.v);
+
+            if (pick.has_value())
+            {
+                const std::array<
+                    scene::ObjectId,
+                    1U>
+                    selectedObjects{
+                        pick->semanticBody
+                    };
+
+                session_->World().
+                    Selection().Set(
+                        selectedObjects);
+
+                status_ =
+                    std::format(
+                        "Terrain pick: elevation {:.2f} m | dir [{:.6f}, {:.6f}, {:.6f}].",
+                        pick->
+                            physicalElevationMeters,
+                        pick->
+                            surface.unitDirection.x,
+                        pick->
+                            surface.unitDirection.y,
+                        pick->
+                            surface.unitDirection.z);
+            }
+            else
+            {
+                status_ =
+                    "Viewport click did not intersect production terrain.";
+            }
         }
     }
 }

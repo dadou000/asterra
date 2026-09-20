@@ -106,6 +106,7 @@ void StudioRenderViewSet::Create(
         debugFields_.erase(targetId);
         debugPhysicalPageLevels_.erase(targetId);
         debugPhysicalPages_.erase(targetId);
+        terrainSurfacePicks_.erase(targetId);
         liveDebugPages_.erase(targetId);
         static_cast<void>(
             session_->Viewports().Unregister(
@@ -130,6 +131,7 @@ bool StudioRenderViewSet::Destroy(
     debugFields_.erase(ownedId);
     debugPhysicalPageLevels_.erase(ownedId);
     debugPhysicalPages_.erase(ownedId);
+    terrainSurfacePicks_.erase(ownedId);
     liveDebugPages_.erase(ownedId);
 
     if (session_ != nullptr)
@@ -289,23 +291,11 @@ bool StudioRenderViewSet::FocusTerrainSurfacePoint(
         return false;
     }
 
-    auto* view = Find(id);
-
-    if (view == nullptr)
-    {
-        return false;
-    }
-
-    const auto* target =
-        session_->Viewports().
-            Find(id);
-
     auto terrain =
         session_->TerrainRuntime().
             Capture(id);
 
-    if (target == nullptr ||
-        !terrain.has_value() ||
+    if (!terrain.has_value() ||
         !session_->TerrainRuntime().
             IsCurrent(*terrain))
     {
@@ -313,11 +303,8 @@ bool StudioRenderViewSet::FocusTerrainSurfacePoint(
     }
 
     const auto selection =
-        PhysicalPageAtViewportPoint(
-            *target,
-            view->Camera(),
-            view->Width(),
-            view->Height(),
+        PickTerrainSurface(
+            id,
             u,
             v,
             terrain->
@@ -341,7 +328,8 @@ bool StudioRenderViewSet::FocusTerrainSurfacePoint(
             *terrain,
             source,
             selection->
-                surfaceDirection);
+                surface.
+                unitDirection);
 
     static_cast<void>(
         session_->TerrainRuntime().
@@ -350,6 +338,84 @@ bool StudioRenderViewSet::FocusTerrainSurfacePoint(
                 update.observer));
 
     return true;
+}
+
+std::optional<StudioSurfacePick>
+StudioRenderViewSet::PickTerrainSurface(
+    const std::string_view id,
+    const f32 u,
+    const f32 v,
+    const std::optional<u8> physicalTileLevel)
+{
+    if (session_ == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    auto* view =
+        Find(id);
+
+    const auto* target =
+        session_->Viewports().
+            Find(id);
+
+    auto runtime =
+        session_->TerrainRuntime().
+            Capture(id);
+
+    if (view == nullptr ||
+        target == nullptr ||
+        !runtime.has_value() ||
+        !session_->TerrainRuntime().
+            IsCurrent(*runtime))
+    {
+        return std::nullopt;
+    }
+
+    const auto& source =
+        session_->TerrainRuntime().
+            TerrainSource(*runtime);
+
+    auto pick =
+        PickStudioTerrainSurface(
+            *target,
+            view->Camera(),
+            view->Width(),
+            view->Height(),
+            u,
+            v,
+            *runtime,
+            source,
+            physicalTileLevel);
+
+    if (pick.has_value())
+    {
+        terrainSurfacePicks_.
+            insert_or_assign(
+                std::string(id),
+                *pick);
+    }
+
+    return pick;
+}
+
+std::optional<StudioSurfacePick>
+StudioRenderViewSet::LastTerrainSurfacePick(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        terrainSurfacePicks_.find(id);
+
+    return found ==
+            terrainSurfacePicks_.end()
+        ? std::nullopt
+        : std::optional(found->second);
 }
 
 bool StudioRenderViewSet::ResetTerrainView(
@@ -465,39 +531,34 @@ bool StudioRenderViewSet::SelectDebugPhysicalPage(
     const f32 u,
     const f32 v)
 {
-    auto* view = Find(id);
-
-    if (view == nullptr || session_ == nullptr)
+    if (Find(id) == nullptr ||
+        session_ == nullptr)
     {
         return false;
     }
 
-    const auto* target =
-        session_->Viewports().Find(id);
-
-    if (target == nullptr)
-    {
-        return false;
-    }
-
-    const auto selection =
-        PhysicalPageAtViewportPoint(
-            *target,
-            view->Camera(),
-            view->Width(),
-            view->Height(),
+    const auto pick =
+        PickTerrainSurface(
+            id,
             u,
             v,
             DebugPhysicalPageLevel(id));
 
-    if (!selection.has_value())
+    if (!pick.has_value() ||
+        !pick->physicalPage.has_value())
     {
         return false;
     }
 
     debugPhysicalPages_.insert_or_assign(
         std::string(id),
-        *selection);
+        StudioPhysicalPageSelection{
+            .address =
+                *pick->physicalPage,
+            .surfaceDirection =
+                pick->surface.
+                    unitDirection
+        });
     liveDebugPages_.erase(std::string(id));
     return true;
 }
@@ -617,6 +678,7 @@ u32 StudioRenderViewSet::Refresh(
         {
             view->Camera() = {};
             debugPhysicalPages_.erase(id);
+            terrainSurfacePicks_.erase(id);
             liveDebugPages_.erase(id);
             continue;
         }
@@ -640,6 +702,7 @@ u32 StudioRenderViewSet::Refresh(
                 expectedPlanet)
             {
                 debugPhysicalPages_.erase(selected);
+                terrainSurfacePicks_.erase(id);
                 liveDebugPages_.erase(id);
             }
         }

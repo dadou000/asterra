@@ -2,6 +2,7 @@ add_library(OrbitStudioUi STATIC
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/StudioRenderViewSet.cpp
+    src/StudioSurfacePicking.cpp
     src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
     src/StudioViewportCamera.cpp
@@ -36,6 +37,24 @@ target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitStudioUi)
 
 if(BUILD_TESTING)
+    add_executable(OrbitStudioSurfacePickingTests
+        tests/StudioSurfacePickingTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioSurfacePickingTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitStudioSurfacePickingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioSurfacePickingTests)
+
+    add_test(
+        NAME Orbit.StudioSurfacePicking
+        COMMAND OrbitStudioSurfacePickingTests
+    )
+
     add_executable(OrbitStudioViewportCameraTests
         tests/StudioViewportCameraTests.cpp
     )

@@ -3,6 +3,7 @@
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/StudioSurfacePicking.hpp>
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
 #include <orbit/studio_ui/StudioViewportNavigation.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
@@ -86,6 +87,19 @@ public:
 
     [[nodiscard]] bool ResetTerrainView(
         std::string_view id);
+
+    // M08 shared production-terrain surface pick. All viewport authoring tools
+    // consume this seam instead of deriving their own cube/ray identity.
+    [[nodiscard]] std::optional<StudioSurfacePick>
+    PickTerrainSurface(
+        std::string_view id,
+        f32 u,
+        f32 v,
+        std::optional<u8> physicalTileLevel = std::nullopt);
+
+    [[nodiscard]] std::optional<StudioSurfacePick>
+    LastTerrainSurfacePick(
+        std::string_view id) const;
 
     // Debug-field choice is transient RenderView presentation state. It is
     // deliberately excluded from StudioSession/project terrain authority.
@@ -171,6 +185,12 @@ private:
         StudioPhysicalPageSelection,
         std::less<>>
         debugPhysicalPages_;
+
+    std::map<
+        std::string,
+        StudioSurfacePick,
+        std::less<>>
+        terrainSurfacePicks_;
 
     std::map<
         std::string,
