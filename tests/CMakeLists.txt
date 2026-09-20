@@ -980,6 +980,7 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::TerrainErosion
         Orbit::TerrainGeology
         Orbit::TerrainMaterialColumn
+        Orbit::TerrainRegion
 )
 
 target_compile_definitions(OrbitV004ValidationTests
