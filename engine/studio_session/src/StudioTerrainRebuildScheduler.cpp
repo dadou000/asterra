@@ -1055,7 +1055,9 @@ StudioTerrainRebuildScheduler::BodyStatus(
                 : TerrainRebuildState::BuildingCpu;
     }
 
-  
+    return result;
+}
+
 std::vector<
     terrain_dependency::TerrainInvalidationRequest>
 StudioTerrainRebuildScheduler::TakeAppliedChanges()
@@ -1063,8 +1065,5 @@ StudioTerrainRebuildScheduler::TakeAppliedChanges()
     return std::exchange(
         appliedChanges_,
         {});
-}
-
-  return result;
 }
 } // namespace orbit::studio_session
