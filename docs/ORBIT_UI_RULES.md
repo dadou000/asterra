@@ -319,6 +319,27 @@ Orbit chooses the second option.
 
 The exception is a capability that violates an explicit engine invariant. Such restrictions belong to engine validation, not arbitrary UI policy.
 
+## 29. One unified Studio application — never separate launchers
+
+Orbit must not split the authoring experience across separate launcher applications, project browsers, setup tools, configuration executables, or disconnected editor shells.
+
+There is one primary Orbit Studio UI, comparable in philosophy to Roblox Studio: startup, project selection, project creation, world editing, play/test, build/export, plugin management, engine/project settings, diagnostics, account/platform integration, and developer tools all belong to the same coherent application surface.
+
+A startup or project-browser view may exist, but it is a state/view of Orbit Studio, not a separate launcher executable or separately designed application.
+
+Rules:
+
+- do not create an `OrbitLauncher`, separate project-manager executable, or equivalent standalone launcher;
+- do not require users to close one Orbit application and open another to move from project selection into editing;
+- do not duplicate settings, authentication, plugin management, project configuration, build controls, or update controls across multiple shells;
+- project browser, recent projects, templates, creation/import, recovery, and workspace entry live inside Orbit Studio;
+- editor, runtime-authoring, build/test, profiling, debugging, materials/assets, plugins, and project administration remain navigable inside the same UI framework;
+- mode/view transitions may substantially rearrange the workspace, but they remain part of one application and preserve shared state;
+- helper/background processes are allowed for technical isolation, compilation, crash handling, asset work, or services, but they must not become separate user-facing launchers or alternative front ends;
+- a platform-specific bootstrapper may exist only when technically unavoidable for installation/update mechanics; it must not become the normal project-selection or authoring experience.
+
+The rule is **one product surface, multiple views**, not multiple launchers.
+
 ---
 
 # UI review checklist
@@ -340,6 +361,7 @@ A new or changed editor surface should be reviewed against these questions:
 - Does the UI introduce an arbitrary limit not present in the engine?
 - Does the UI remain responsive while expensive work runs?
 - Does the design preserve user freedom while enforcing genuine engine invariants?
+- Is the feature integrated into the unified Orbit Studio surface rather than creating or depending on a separate launcher/application shell?
 
 A feature that fails the common-case test should be simplified.
 
