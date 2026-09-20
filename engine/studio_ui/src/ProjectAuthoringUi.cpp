@@ -126,14 +126,19 @@ void ProjectAuthoringUi::DrawProjectBrowser(
 {
     SynchronizeProjectBuffers();
 
+    context.Heading("ORBIT STUDIO");
+    context.MutedText(
+        "Create, open, and return to projects from the same unified Studio "
+        "workspace. Projects open directly into the authoring environment.");
+
     if (workspace_->HasProject())
     {
         const auto& project = workspace_->Project();
+
+        context.Heading("Current Project");
         context.Text(
-            std::format(
-                "Open: {}",
-                project.Manifest().displayName));
-        context.Text(
+            project.Manifest().displayName);
+        context.MutedText(
             project.ManifestPath().generic_string());
 
         if (context.Button("Close Project"))
@@ -150,21 +155,23 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                 status_ = exception.what();
             }
         }
-
-        context.Separator();
     }
 
-    context.Text("New Project");
+    context.Heading("Create Project");
+    context.MutedText(
+        "Start a new Orbit project with a persistent project manifest and "
+        "world-authoring workspace.");
+
     static_cast<void>(
         context.InputText(
-            "Root##new-project-root",
+            "Project Folder##new-project-root",
             newProjectRoot_));
     static_cast<void>(
         context.InputText(
-            "Name##new-project-name",
+            "Project Name##new-project-name",
             newProjectName_));
 
-    if (context.Button("Create Project"))
+    if (context.PrimaryButton("Create Project"))
     {
         try
         {
@@ -181,14 +188,16 @@ void ProjectAuthoringUi::DrawProjectBrowser(
         }
     }
 
-    context.Separator();
-    context.Text("Open Project");
+    context.Heading("Open Existing Project");
+    context.MutedText(
+        "Open a Project.orbit.toml manifest or a project folder.");
+
     static_cast<void>(
         context.InputText(
-            "Path##open-project-path",
+            "Project Path##open-project-path",
             openProjectPath_));
 
-    if (context.Button("Open Project"))
+    if (context.PrimaryButton("Open Project"))
     {
         try
         {
@@ -204,10 +213,18 @@ void ProjectAuthoringUi::DrawProjectBrowser(
         }
     }
 
-    context.Separator();
-    context.Text("Recent Projects");
+    context.Heading("Recent Projects");
 
-    for (const auto& recent : projectBrowser_.RecentProjects())
+    const auto recentProjects =
+        projectBrowser_.RecentProjects();
+
+    if (recentProjects.empty())
+    {
+        context.MutedText(
+            "No recent projects yet.");
+    }
+
+    for (const auto& recent : recentProjects)
     {
         std::string label =
             recent.displayName.empty()
@@ -216,7 +233,7 @@ void ProjectAuthoringUi::DrawProjectBrowser(
 
         if (!recent.available)
         {
-            label += " [Unavailable]";
+            label += "  - unavailable";
         }
 
         label += "##recent:";
@@ -244,12 +261,13 @@ void ProjectAuthoringUi::DrawProjectBrowser(
             }
         }
 
-        context.Text(recent.manifestPath.generic_string());
+        context.MutedText(
+            recent.manifestPath.generic_string());
     }
 
     if (!status_.empty())
     {
-        context.Separator();
+        context.Heading("Status");
         context.Text(status_);
     }
 }
