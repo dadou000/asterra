@@ -2,6 +2,7 @@
 
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/surface/SurfaceRegistry.hpp>
+#include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/TerrainBodyServices.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
@@ -17,6 +18,7 @@ struct SurfaceCompositionStats
     u32 terrainSurfaces{0};
     u32 biomeServices{0};
     u32 biomeDefinitions{0};
+    u32 terrainConstraints{0};
     u64 sourceRevision{0};
 };
 
@@ -72,6 +74,10 @@ public:
     [[nodiscard]] const terrain_water::WaterService* WaterForBody(
         universe::BodyId body) const noexcept;
 
+    [[nodiscard]] const surface_authoring::TerrainConstraintSet*
+    ConstraintsForBody(
+        universe::BodyId body) const noexcept;
+
     [[nodiscard]] terrain_gpu::PersistentGpuTerrainCache* CacheForBody(
         universe::BodyId body) noexcept;
     [[nodiscard]] const terrain_gpu::PersistentGpuTerrainCache* CacheForBody(
@@ -89,6 +95,10 @@ private:
         universe::BodyId,
         std::unique_ptr<TerrainBodyServices>>
         servicesByBody_;
+    std::unordered_map<
+        universe::BodyId,
+        surface_authoring::TerrainConstraintSet>
+        constraintsByBody_;
     u64 sourceRevision_{~u64{0}};
 };
 } // namespace orbit::surface_model

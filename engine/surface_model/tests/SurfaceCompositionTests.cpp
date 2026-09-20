@@ -109,9 +109,48 @@ int main()
             return 4;
         }
 
+        const auto canyon=commands.CreateObject(
+            orbit::world_model::kTerrainConstraintType,
+            "Canyon",terrainObject,4'000);
+        commands.SetProperty(canyon,orbit::world_model::kTerrainConstraintChannel,orbit::i64{0});
+        commands.SetProperty(canyon,orbit::world_model::kTerrainConstraintShape,orbit::i64{1});
+        commands.SetProperty(canyon,orbit::world_model::kTerrainConstraintMode,orbit::i64{1});
+        commands.SetProperty(canyon,orbit::world_model::kTerrainConstraintHalfWidth,500.0);
+        commands.SetProperty(canyon,orbit::world_model::kTerrainConstraintFalloff,250.0);
+        commands.SetProperty(canyon,orbit::world_model::kTerrainConstraintValue,300.0);
+
+        const auto pointA=commands.CreateObject(
+            orbit::world_model::kTerrainConstraintControlPointType,"Point 1",canyon,0);
+        const auto pointB=commands.CreateObject(
+            orbit::world_model::kTerrainConstraintControlPointType,"Point 2",canyon,10);
+        commands.SetProperty(pointA,orbit::world_model::kTerrainConstraintPointDirection,
+            orbit::math::Double3{1.0,0.0,0.0});
+        commands.SetProperty(pointB,orbit::world_model::kTerrainConstraintPointDirection,
+            orbit::math::Double3{0.9999,0.01,0.0});
+
+        if(!universe.RebuildIfChanged(objects)) return 5;
+        const auto bodyWithConstraint=universe.BodyForObject(bodyObject);
+        if(!bodyWithConstraint.has_value()) return 6;
+
+        const auto constrainedStats=surfaces.Rebuild(objects,universe);
+        const auto* authored=surfaces.ConstraintsForBody(*bodyWithConstraint);
+        if(authored==nullptr||authored->height.constraints.size()!=1U||
+           constrainedStats.terrainConstraints!=1U) return 7;
+
+        const auto planet=surfaces.Registry().SphericalPlanetDefinition(*bodyWithConstraint);
+        if(!planet.has_value()) return 8;
+
+        const auto authoredSample=orbit::surface_authoring::EvaluateTerrainConstraintSet(
+            *authored,*planet,{
+                .planet=planet->id,
+                .unitDirection={1.0,0.0,0.0},
+                .radialOffsetMeters=0.0
+            });
+        if(authoredSample.heightMeters>-299.0) return 9;
+
         const auto* baseOnlyBiomes =
             surfaces.BiomesForBody(
-                *bodyId);
+                *bodyWithConstraint);
 
         if (baseOnlyBiomes == nullptr ||
             baseOnlyBiomes->Definitions().size() != 1U ||

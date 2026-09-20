@@ -16,6 +16,7 @@ target_link_libraries(OrbitSurfaceModel
         Orbit::Core
         Orbit::Scene
         Orbit::Surface
+        Orbit::SurfaceAuthoring
         Orbit::Terrain
         Orbit::TerrainBiome
         Orbit::TerrainErosion

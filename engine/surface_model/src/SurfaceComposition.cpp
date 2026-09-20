@@ -4,6 +4,7 @@
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <limits>
 #include <type_traits>
@@ -806,6 +807,139 @@ template <typename Value>
     return result;
 }
 
+[[nodiscard]] surface_authoring::ConstraintCompositionMode
+ConstraintModeFor(const i64 value)
+{
+    if (value < 0 || value > 5)
+        throw std::runtime_error("Terrain constraint composition mode is invalid.");
+    return static_cast<surface_authoring::ConstraintCompositionMode>(value);
+}
+
+[[nodiscard]] surface_authoring::TerrainConstraintPrimitive
+ConstraintPrimitiveFor(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& object)
+{
+    const i64 shape=PropertyOr<i64>(
+        objects,object.id,world_model::kTerrainConstraintShape,i64{0});
+
+    if(shape==0)
+    {
+        auto center=PropertyOr<math::Double3>(
+            objects,object.id,world_model::kTerrainConstraintCenter,{0.0,1.0,0.0});
+        if(math::LengthSquared(center)<=1.0e-20)
+            throw std::runtime_error("Terrain brush has an invalid center direction.");
+        center=math::Normalize(center);
+        return surface_authoring::BrushConstraintPrimitive{
+            .centerUnitDirection=center,
+            .innerRadiusMeters=PropertyOr<f64>(
+                objects,object.id,world_model::kTerrainConstraintInnerRadius,250.0),
+            .outerRadiusMeters=PropertyOr<f64>(
+                objects,object.id,world_model::kTerrainConstraintOuterRadius,1'000.0)
+        };
+    }
+
+    if(shape==1)
+    {
+        auto children=objects.Children(object.id);
+        std::sort(children.begin(),children.end(),
+            [](const scene::ObjectRecord& a,const scene::ObjectRecord& b){
+                return a.sortOrder<b.sortOrder;
+            });
+
+        std::vector<math::Double3> points;
+        for(const auto& child:children)
+        {
+            if(child.type!=world_model::kTerrainConstraintControlPointType) continue;
+            auto direction=PropertyOr<math::Double3>(
+                objects,child.id,world_model::kTerrainConstraintPointDirection,{0.0,1.0,0.0});
+            if(math::LengthSquared(direction)<=1.0e-20)
+                throw std::runtime_error("Terrain spline control point has an invalid direction.");
+            points.push_back(math::Normalize(direction));
+        }
+
+        return surface_authoring::SplineConstraintPrimitive{
+            .controlUnitDirections=std::move(points),
+            .halfWidthMeters=PropertyOr<f64>(
+                objects,object.id,world_model::kTerrainConstraintHalfWidth,500.0),
+            .falloffMeters=PropertyOr<f64>(
+                objects,object.id,world_model::kTerrainConstraintFalloff,500.0)
+        };
+    }
+
+    throw std::runtime_error("Terrain constraint primitive is outside the M09 catalog.");
+}
+
+[[nodiscard]] surface_authoring::TerrainConstraintSet
+ConstraintSetFor(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& terrainObject,
+    const world::PlanetId planet)
+{
+    surface_authoring::TerrainConstraintSet result{
+        .id={.high=terrainObject.id.high,.low=terrainObject.id.low},
+        .planet=planet,
+        .name=terrainObject.name+" Constraints"
+    };
+
+    for(const auto& child:objects.Children(terrainObject.id))
+    {
+        if(child.type!=world_model::kTerrainConstraintType) continue;
+
+        const i64 channel=PropertyOr<i64>(
+            objects,child.id,world_model::kTerrainConstraintChannel,i64{0});
+        if(channel<0||channel>3)
+            throw std::runtime_error("Terrain constraint channel is outside the M09 catalog.");
+
+        const auto id=surface_authoring::TerrainConstraintId{
+            .high=child.id.high,.low=child.id.low};
+        const auto mode=ConstraintModeFor(PropertyOr<i64>(
+            objects,child.id,world_model::kTerrainConstraintMode,i64{0}));
+        auto primitive=ConstraintPrimitiveFor(objects,child);
+        const f64 value=PropertyOr<f64>(
+            objects,child.id,world_model::kTerrainConstraintValue,0.0);
+        const f64 opacity=PropertyOr<f64>(
+            objects,child.id,world_model::kTerrainConstraintOpacity,1.0);
+        const bool enabled=PropertyOr<bool>(
+            objects,child.id,world_model::kTerrainConstraintEnabled,true);
+
+        if(channel==3)
+        {
+            const auto material=terrain_geology::RockTypeId::Parse(
+                PropertyOr<std::string>(
+                    objects,child.id,world_model::kTerrainConstraintMaterial,{}));
+            if(!material.has_value())
+                throw std::runtime_error("Terrain geology override requires a valid RockTypeId.");
+            result.material.constraints.push_back({
+                .id=id,.mode=mode,.primitive=std::move(primitive),
+                .material=*material,.weight=value,.opacity=opacity,.enabled=enabled
+            });
+            continue;
+        }
+
+        surface_authoring::ScalarTerrainConstraint scalar{
+            .id=id,.mode=mode,.primitive=std::move(primitive),
+            .value=value,.opacity=opacity,.enabled=enabled
+        };
+        if(channel==0) result.height.constraints.push_back(std::move(scalar));
+        else if(channel==1) result.protection.constraints.push_back(std::move(scalar));
+        else result.drainage.constraints.push_back(std::move(scalar));
+    }
+
+    if(!result.IsValid())
+        throw std::runtime_error("Semantic terrain constraints did not compose into a valid M04 authority set.");
+    return result;
+}
+
+[[nodiscard]] u32 ConstraintCount(
+    const surface_authoring::TerrainConstraintSet& set) noexcept
+{
+    return static_cast<u32>(
+        set.height.constraints.size()+set.gradient.constraints.size()+
+        set.uplift.constraints.size()+set.material.constraints.size()+
+        set.protection.constraints.size()+set.drainage.constraints.size());
+}
+
 [[nodiscard]] terrain::AnalyticTerrainDesc TerrainDescription(
     const scene::ObjectStore& objects,
     const scene::ObjectId object)
@@ -892,6 +1026,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     bodyByTerrainObject_.clear();
     terrainObjectByBody_.clear();
     servicesByBody_.clear();
+    constraintsByBody_.clear();
     sourceRevision_ = ~u64{0};
 
     auto candidate =
@@ -905,10 +1040,15 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         universe::BodyId,
         std::unique_ptr<TerrainBodyServices>>
         candidateServices;
+    std::unordered_map<
+        universe::BodyId,
+        surface_authoring::TerrainConstraintSet>
+        candidateConstraints;
 
     std::vector<scene::ObjectRecord> pending = objects.Roots();
     u32 terrainCount = 0;
     u32 biomeDefinitionCount = 0;
+    u32 terrainConstraintCount = 0;
 
     while (!pending.empty())
     {
@@ -999,6 +1139,17 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
                 "Rocky terrain body services failed default validation.");
         }
 
+        auto constraints=
+            ConstraintSetFor(
+                objects,
+                object,
+                planet->id);
+        terrainConstraintCount +=
+            ConstraintCount(constraints);
+        candidateConstraints.emplace(
+            *bodyId,
+            std::move(constraints));
+
         candidateServices.emplace(
             *bodyId,
             std::move(
@@ -1011,6 +1162,8 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     bodyByTerrainObject_ = std::move(candidateBodyByObject);
     terrainObjectByBody_ = std::move(candidateObjectByBody);
     servicesByBody_ = std::move(candidateServices);
+    constraintsByBody_ =
+        std::move(candidateConstraints);
     sourceRevision_ = objects.Revision();
 
     return {
@@ -1020,6 +1173,8 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
                 servicesByBody_.size()),
         .biomeDefinitions =
             biomeDefinitionCount,
+        .terrainConstraints =
+            terrainConstraintCount,
         .sourceRevision = sourceRevision_
     };
 }
@@ -1186,6 +1341,16 @@ SurfaceComposition::WaterForBody(
 {
     const auto* services = ServicesForBody(body);
     return services != nullptr ? &services->Water() : nullptr;
+}
+
+const surface_authoring::TerrainConstraintSet*
+SurfaceComposition::ConstraintsForBody(
+    const universe::BodyId body) const noexcept
+{
+    const auto found=constraintsByBody_.find(body);
+    return found!=constraintsByBody_.end()
+        ? &found->second
+        : nullptr;
 }
 
 terrain_gpu::PersistentGpuTerrainCache*
