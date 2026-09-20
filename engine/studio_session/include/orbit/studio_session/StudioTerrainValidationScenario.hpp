@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/scene/ObjectStore.hpp>
+#include <orbit/studio_session/StudioTerrainPerformanceDiagnostics.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
@@ -44,6 +45,7 @@ struct StudioTerrainValidationScenarioReport
     bool debugBiomeWeightsAvailable{false};
 
     terrain_gpu::PersistentGpuTerrainCacheStats cacheStats{};
+    StudioTerrainPerformanceSnapshot performance{};
 
     StudioTerrainRoundTripReport roundTrip{};
     std::vector<StudioTerrainValidationScenarioStep> steps;
