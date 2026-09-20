@@ -446,6 +446,9 @@ public:
     std::vector<PanelDefinition> panels;
     std::vector<u8> panelOpen;
     std::vector<MenuAction> menuActions;
+    bool automationExpandTrees{false};
+    bool automationTraceWidgets{false};
+    std::vector<std::string> automationTrace;
 
     std::unique_ptr<rhi::GraphicsPipeline>
         pipeline;
@@ -461,6 +464,23 @@ public:
     std::vector<u32> convertedIndices;
     bool frameBegun{false};
 };
+
+PanelContext::PanelContext(
+    const bool forceTreeOpen,
+    std::vector<std::string>* automationTrace) noexcept
+    : forceTreeOpen_(forceTreeOpen),
+      automationTrace_(automationTrace)
+{
+}
+
+void PanelContext::TraceWidget(
+    const std::string_view label) const
+{
+    if (automationTrace_ != nullptr)
+    {
+        automationTrace_->emplace_back(label);
+    }
+}
 
 void PanelContext::Text(
     const std::string_view text)
@@ -478,6 +498,7 @@ void PanelContext::Separator()
 bool PanelContext::Button(
     const std::string_view label)
 {
+    TraceWidget(label);
     const std::string owned(label);
     return ImGui::Button(
         owned.c_str());
@@ -487,6 +508,7 @@ bool PanelContext::InputText(
     const std::string_view label,
     std::string& value)
 {
+    TraceWidget(label);
     const std::string ownedLabel(
         label);
 
@@ -534,6 +556,7 @@ bool PanelContext::Selectable(
     const std::string_view label,
     const bool selected)
 {
+    TraceWidget(label);
     const std::string owned(label);
 
     return ImGui::Selectable(
@@ -545,6 +568,15 @@ TreeItemInteraction PanelContext::TreeItem(
     const std::string_view label,
     const bool selected)
 {
+    TraceWidget(label);
+
+    if (forceTreeOpen_)
+    {
+        ImGui::SetNextItemOpen(
+            true,
+            ImGuiCond_Always);
+    }
+
     const std::string owned(label);
 
     ImGuiTreeNodeFlags flags =
@@ -645,6 +677,7 @@ bool PanelContext::Checkbox(
     const std::string_view label,
     bool& value)
 {
+    TraceWidget(label);
     const std::string owned(label);
     return ImGui::Checkbox(
         owned.c_str(),
@@ -655,6 +688,7 @@ bool PanelContext::InputDouble(
     const std::string_view label,
     f64& value)
 {
+    TraceWidget(label);
     const std::string owned(label);
 
     return ImGui::InputDouble(
@@ -669,6 +703,7 @@ bool PanelContext::InputInteger(
     const std::string_view label,
     i64& value)
 {
+    TraceWidget(label);
     const std::string owned(label);
 
     ImS64 native =
@@ -694,6 +729,7 @@ bool PanelContext::InputDouble3(
     const std::string_view label,
     math::Double3& value)
 {
+    TraceWidget(label);
     const std::string owned(label);
 
     std::array<double, 3> native{
@@ -1158,6 +1194,40 @@ bool EditorUi::PanelOpen(
     return false;
 }
 
+void EditorUi::SetAutomationUiProbe(
+    const bool expandTrees,
+    const bool traceWidgets) noexcept
+{
+    impl_->automationExpandTrees =
+        expandTrees;
+    impl_->automationTraceWidgets =
+        traceWidgets;
+
+    if (!traceWidgets)
+    {
+        impl_->automationTrace.clear();
+    }
+}
+
+void EditorUi::ClearAutomationUiTrace()
+{
+    impl_->automationTrace.clear();
+}
+
+bool EditorUi::AutomationUiTraceContains(
+    const std::string_view label) const
+{
+    return std::ranges::find(
+               impl_->automationTrace,
+               label) !=
+        impl_->automationTrace.end();
+}
+
+std::size_t EditorUi::AutomationUiTraceSize() const noexcept
+{
+    return impl_->automationTrace.size();
+}
+
 void EditorUi::RegisterMenuAction(
     MenuAction action)
 {
@@ -1365,7 +1435,11 @@ void EditorUi::DrawStudioShell()
         ImGui::EndMainMenuBar();
     }
 
-    PanelContext context;
+    PanelContext context(
+        impl_->automationExpandTrees,
+        impl_->automationTraceWidgets
+            ? &impl_->automationTrace
+            : nullptr);
 
     for (std::size_t index = 0;
          index < impl_->panels.size();
