@@ -61,6 +61,8 @@ public:
         rhi::Buffer& downstream,
         rhi::Buffer& netElevationDeltaOut) const;
 
+    [[nodiscard]] u64 TransientWorkingSetBytes() const noexcept;
+
 private:
     u32 maxResolution_;
     std::unique_ptr<rhi::ComputePipeline> zeroPipeline_;
