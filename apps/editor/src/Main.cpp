@@ -384,9 +384,9 @@ OpenProjectBrowser()
                 UserDataDirectory() /
                 "RecentProjects.txt");
 
-    // The startup browser is a dedicated shell: keep its required content in
-    // the central dock and do not expose project-bound panels before a project
-    // has been opened.
+    // The startup browser is a Studio workspace state inside the unified
+    // OrbitStudio executable. Keep its required content in the central dock
+    // and do not expose project-bound panels before a project has been opened.
     projectUi.RegisterProjectBrowser(ui, true);
 
     auto allocator =
@@ -582,8 +582,8 @@ OpenProjectBrowser()
         return std::nullopt;
     }
 
-    // Destroy the browser workspace/session graph before opening the selected
-    // project as the editor's authoritative project graph.
+    // Transition from the startup workspace into the selected project's
+    // authoritative Studio session graph inside the same application.
     workspace.CloseProject();
 
     return orbit::documents::
