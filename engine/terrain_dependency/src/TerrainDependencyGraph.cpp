@@ -320,6 +320,67 @@ bool TerrainDependencyGraph::ContainsPage(
     return pages_.contains(address);
 }
 
+bool TerrainDependencyGraph::UnregisterPage(
+    const terrain::PhysicalTerrainPageAddress& address)
+{
+    const auto found =
+        pages_.find(address);
+
+    if (found == pages_.end())
+    {
+        return true;
+    }
+
+    const auto& page =
+        found->second;
+
+    std::array<
+        procedural_graph::NodeId,
+        kSourceCount +
+            kTerrainDependencyProductCount>
+        nodes{};
+
+    std::size_t index = 0U;
+
+    for (const auto source :
+         page.sources)
+    {
+        nodes[index++] =
+            source;
+    }
+
+    nodes[index++] =
+        page.nodes.geology;
+    nodes[index++] =
+        page.nodes.drainage;
+    nodes[index++] =
+        page.nodes.terrainProcesses;
+    nodes[index++] =
+        page.nodes.exposedSurface;
+    nodes[index++] =
+        page.nodes.biomeWeights;
+    nodes[index++] =
+        page.nodes.surfaceMaterial;
+    nodes[index++] =
+        page.nodes.scatter;
+
+    if (!graph_.RemoveNodes(
+            nodes))
+    {
+        return false;
+    }
+
+    if (cache_ != nullptr)
+    {
+        static_cast<void>(
+            cache_->InvalidateAddress(
+                address));
+    }
+
+    pages_.erase(found);
+    return true;
+}
+
 void TerrainDependencyGraph::RequestBuild(
     const terrain::PhysicalTerrainPageAddress& address,
     const TerrainDependencyProduct product)
