@@ -56,6 +56,71 @@ void ProjectSettingsUi::Register(
     });
 }
 
+
+studio_session::StudioTerrainRoundTripReport
+ProjectSettingsUi::RunTerrainRoundTripValidation()
+{
+    if (project_ == nullptr ||
+        session_ == nullptr)
+    {
+        throw std::logic_error(
+            "Project settings terrain validation has no active project/session.");
+    }
+
+    terrainRoundTripReport_ =
+        studio_session::
+            VerifyStudioTerrainRoundTrip(
+                *project_,
+                *session_,
+                "studio.primary");
+
+    const auto& report =
+        *terrainRoundTripReport_;
+
+    status_ =
+        report.success
+            ? "Terrain round trip verified: authored state and regenerated physical result are equivalent."
+            : std::format(
+                  "Terrain round trip failed at {}: {}",
+                  report.failureStage.empty()
+                      ? std::string("unknown")
+                      : report.failureStage,
+                  report.diagnostic);
+
+    return report;
+}
+
+studio_session::StudioTerrainValidationScenarioReport
+ProjectSettingsUi::RunTerrainValidationScenario()
+{
+    const auto validationRoot =
+        std::filesystem::temp_directory_path() /
+        ("orbit-studio-m15-" +
+         documents::ProjectId::Random().
+             ToString());
+
+    terrainValidationScenarioReport_ =
+        studio_session::
+            RunStudioTerrainValidationScenario(
+                validationRoot,
+                "studio.primary");
+
+    const auto& report =
+        *terrainValidationScenarioReport_;
+
+    status_ =
+        report.success
+            ? "M15 terrain validation scenario passed."
+            : std::format(
+                  "M15 terrain validation failed at {}: {}",
+                  report.failureStage.empty()
+                      ? std::string("unknown")
+                      : report.failureStage,
+                  report.diagnostic);
+
+    return report;
+}
+
 void ProjectSettingsUi::Draw(
     editor_ui::PanelContext& context)
 {
@@ -176,25 +241,8 @@ void ProjectSettingsUi::Draw(
     {
         try
         {
-            terrainRoundTripReport_ =
-                studio_session::
-                    VerifyStudioTerrainRoundTrip(
-                        *project_,
-                        *session_,
-                        "studio.primary");
-
-            const auto& report =
-                *terrainRoundTripReport_;
-
-            status_ =
-                report.success
-                    ? "Terrain round trip verified: authored state and regenerated physical result are equivalent."
-                    : std::format(
-                          "Terrain round trip failed at {}: {}",
-                          report.failureStage.empty()
-                              ? std::string("unknown")
-                              : report.failureStage,
-                          report.diagnostic);
+            static_cast<void>(
+                RunTerrainRoundTripValidation());
         }
         catch (const std::exception& exception)
         {
@@ -263,30 +311,8 @@ void ProjectSettingsUi::Draw(
     {
         try
         {
-            const auto validationRoot =
-                std::filesystem::temp_directory_path() /
-                ("orbit-studio-m15-" +
-                 documents::ProjectId::Random().
-                     ToString());
-
-            terrainValidationScenarioReport_ =
-                studio_session::
-                    RunStudioTerrainValidationScenario(
-                        validationRoot,
-                        "studio.primary");
-
-            const auto& report =
-                *terrainValidationScenarioReport_;
-
-            status_ =
-                report.success
-                    ? "M15 terrain validation scenario passed."
-                    : std::format(
-                          "M15 terrain validation failed at {}: {}",
-                          report.failureStage.empty()
-                              ? std::string("unknown")
-                              : report.failureStage,
-                          report.diagnostic);
+            static_cast<void>(
+                RunTerrainValidationScenario());
         }
         catch (const std::exception& exception)
         {
