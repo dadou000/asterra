@@ -1,6 +1,7 @@
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
+#include <orbit/terrain_cache/TerrainPageCache.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
@@ -18,12 +19,14 @@
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <string>
 #include <tuple>
@@ -5181,6 +5184,329 @@ void Test15DeterministicScatter()
         "M30-15 bare rock must reject soil-dependent vegetation even when a stale soil-depth channel is nonzero.");
 }
 
+
+void Test16CacheHitStability()
+{
+    using namespace terrain_cache;
+
+    class CountingTerrainSource final :
+        public terrain::TerrainSource
+    {
+    public:
+        [[nodiscard]] terrain::TerrainSample Sample(
+            const terrain::TerrainQuery& query) const noexcept override
+        {
+            sampleCount.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+
+            const f64 elevation =
+                1'000.0 +
+                query.unitDirection.x *
+                    120.0 +
+                query.unitDirection.y *
+                    45.0 +
+                query.unitDirection.z *
+                    15.0;
+
+            return {
+                .elevationMeters =
+                    elevation,
+                .coarseElevationMeters =
+                    elevation - 2.0,
+                .climate = {
+                    .temperatureC = 18.0F,
+                    .humidity = 0.55F,
+                    .precipitation = 0.40F,
+                    .continentality = 0.65F
+                },
+                .biomes = {
+                    .ocean = 0.0F,
+                    .desert = 0.0F,
+                    .grassland = 1.0F,
+                    .temperateForest = 0.0F,
+                    .borealForest = 0.0F,
+                    .tundra = 0.0F,
+                    .alpine = 0.0F,
+                    .wetland = 0.0F
+                },
+                .standingWaterDepthMeters =
+                    0.0
+            };
+        }
+
+        [[nodiscard]] u64 Revision() const noexcept override
+        {
+            return 1601U;
+        }
+
+        [[nodiscard]] terrain::TerrainGenerationRevisions
+        GenerationRevisions() const noexcept override
+        {
+            return {
+                .geology = 11U,
+                .climate = 12U,
+                .authoring = 13U,
+                .biome = 14U,
+                .water = 15U,
+                .processes = 16U
+            };
+        }
+
+        mutable std::atomic<u64>
+            sampleCount{0U};
+    };
+
+    const world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = {
+            .high =
+                0x4D33304341434845ULL,
+            .low =
+                0x0000000000000016ULL
+        },
+        .generationSeed =
+            0x4D33303136434143ULL
+    };
+
+    auto source =
+        std::make_shared<
+            CountingTerrainSource>();
+
+    jobs::JobSystem jobs(
+        1U);
+
+    TerrainPageCache cache(
+        planet,
+        source,
+        jobs,
+        {
+            .budgetBytes =
+                8ULL *
+                1024ULL *
+                1024ULL,
+            .softEntryLimit = 8U
+        });
+
+    constexpr u32 resolution = 9U;
+    constexpr u64 samplesPerPage =
+        static_cast<u64>(
+            resolution) *
+        resolution;
+
+    const auto revisions =
+        source->
+            GenerationRevisions();
+
+    const TerrainPageDesc pageA{
+        .planet = planet.id,
+        .tile = {
+            .face =
+                world::CubeFace::
+                    PositiveX,
+            .level = 8U,
+            .x = 120U,
+            .y = 120U
+        },
+        .resolution =
+            resolution,
+        .revisions =
+            revisions
+    };
+
+    const TerrainPageDesc pageB{
+        .planet = planet.id,
+        .tile = {
+            .face =
+                world::CubeFace::
+                    PositiveX,
+            .level = 8U,
+            .x = 121U,
+            .y = 120U
+        },
+        .resolution =
+            resolution,
+        .revisions =
+            revisions
+    };
+
+    Require(
+        !cache.TryGet(pageA),
+        "M30-16 cold cache lookup must miss before a page is generated.");
+
+    const auto coldStats =
+        cache.Stats();
+
+    Require(
+        coldStats.misses == 1U &&
+        coldStats.readyHits == 0U &&
+        coldStats.acceptedRequests == 0U &&
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            0U,
+        "M30-16 cold lookup must record a miss without generating terrain implicitly.");
+
+    Require(
+        cache.Request(pageA),
+        "M30-16 first request for page A must be accepted as a cache miss/generation.");
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesPerPage,
+        "M30-16 first unique 9x9 physical page must sample the terrain source exactly 81 times.");
+
+    const auto firstA =
+        cache.TryGet(pageA);
+
+    Require(
+        firstA != nullptr &&
+        firstA->desc ==
+            pageA &&
+        firstA->samples.size() ==
+            samplesPerPage,
+        "M30-16 generated page A must become resident under the exact requested physical page key.");
+
+    const auto firstCenter =
+        firstA->SampleAt(
+            resolution / 2U,
+            resolution / 2U);
+
+    const u64 samplesAfterA =
+        source->sampleCount.load(
+            std::memory_order_relaxed);
+
+    for (u32 repeat = 0U;
+         repeat < 8U;
+         ++repeat)
+    {
+        Require(
+            !cache.Request(pageA),
+            "M30-16 repeated stationary request for resident page A must be suppressed as a duplicate.");
+
+        const auto hit =
+            cache.TryGet(pageA);
+
+        Require(
+            hit != nullptr &&
+            hit.get() ==
+                firstA.get() &&
+            hit->SampleAt(
+                resolution / 2U,
+                resolution / 2U).
+                    elevationMeters ==
+                firstCenter.
+                    elevationMeters,
+            "M30-16 stationary cache hits must reuse the same resident page payload and sample values.");
+    }
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesAfterA,
+        "M30-16 stationary cache hits/duplicate requests must cause zero physical page regeneration.");
+
+    const auto stationaryStats =
+        cache.Stats();
+
+    Require(
+        stationaryStats.acceptedRequests ==
+                1U &&
+        stationaryStats.duplicateRequests ==
+                8U &&
+        stationaryStats.readyHits ==
+                9U &&
+        stationaryStats.misses ==
+                1U &&
+        stationaryStats.entries ==
+                1U &&
+        stationaryStats.evictions ==
+                0U &&
+        stationaryStats.capacityRejects ==
+                0U &&
+        stationaryStats.residentBytes >
+                0U &&
+        stationaryStats.peakResidentBytes >=
+                stationaryStats.residentBytes,
+        "M30-16 cache statistics must distinguish one generation from repeated stable resident hits.");
+
+    Require(
+        cache.Request(pageB),
+        "M30-16 first request for adjacent page B must generate exactly one additional physical page.");
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesPerPage *
+                2U,
+        "M30-16 two unique resident 9x9 pages must account for exactly two page generations.");
+
+    const auto firstB =
+        cache.TryGet(pageB);
+
+    Require(
+        firstB != nullptr &&
+        firstB->desc ==
+            pageB,
+        "M30-16 generated page B must become resident under its own physical key.");
+
+    const u64 samplesAfterB =
+        source->sampleCount.load(
+            std::memory_order_relaxed);
+
+    // Simulate moving away from A and then returning while A remains resident.
+    const auto returnedA =
+        cache.TryGet(pageA);
+
+    Require(
+        returnedA != nullptr &&
+        returnedA.get() ==
+            firstA.get() &&
+        returnedA->SampleAt(
+            resolution / 2U,
+            resolution / 2U).
+                elevationMeters ==
+            firstCenter.
+                elevationMeters,
+        "M30-16 returning to resident page A must reuse its existing payload instead of rebuilding it.");
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesAfterB,
+        "M30-16 returning to resident terrain must cause zero regeneration.");
+
+    const auto finalStats =
+        cache.Stats();
+
+    Require(
+        finalStats.acceptedRequests ==
+                2U &&
+        finalStats.entries ==
+                2U &&
+        finalStats.readyHits ==
+                11U &&
+        finalStats.duplicateRequests ==
+                8U &&
+        finalStats.misses ==
+                1U &&
+        finalStats.evictions ==
+                0U &&
+        finalStats.capacityRejects ==
+                0U &&
+        finalStats.residentBytes <=
+                finalStats.budgetBytes,
+        "M30-16 final cache accounting must show exactly two generated resident pages and hit-only reuse thereafter.");
+}
+
 } // namespace
 
 int main()
@@ -5200,8 +5526,9 @@ int main()
     Test13AutomaticAuthoredBiomeBlend();
     Test14ExposedRockMaterialResolution();
     Test15DeterministicScatter();
+    Test16CacheHitStability();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 15/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 16/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
