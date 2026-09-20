@@ -121,6 +121,12 @@ SurfaceAuthoringUi::SurfaceAuthoringUi(
 {
 }
 
+SurfaceAuthoringUi::SurfaceAuthoringUi(
+    studio_session::StudioSession& session)
+    : session_(&session)
+{
+}
+
 void SurfaceAuthoringUi::Register(editor_ui::EditorUi& ui)
 {
     ui.RegisterPanel({
@@ -136,13 +142,27 @@ void SurfaceAuthoringUi::Register(editor_ui::EditorUi& ui)
 
 void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
 {
-    if (workspace_ == nullptr || !workspace_->HasProject())
+    studio_session::StudioSession* session =
+        session_;
+
+    if (workspace_ != nullptr)
+    {
+        if (!workspace_->HasProject())
+        {
+            context.Text("Open a project to author planetary surfaces.");
+            return;
+        }
+
+        session = &workspace_->Session();
+    }
+
+    if (session == nullptr)
     {
         context.Text("Open a project to author planetary surfaces.");
         return;
     }
 
-    auto& world = workspace_->Session().World();
+    auto& world = session->World();
     if (!world.HasWorld())
     {
         context.Text("Open a world to author planetary surfaces.");
