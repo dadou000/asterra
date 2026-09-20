@@ -198,7 +198,13 @@ StudioSession::DispatchRpc(
 
     if (world_.HasWorld())
     {
-        static_cast<void>(activeBody_.Refresh());
+        // Semantic edits must compose before any generation-bound consumer
+        // refreshes. ActiveBodyModel still has its own defensive refresh, but
+        // Studio's lifecycle no longer relies on that side effect.
+        static_cast<void>(
+            world_.RefreshUniverseIfChanged());
+        static_cast<void>(
+            activeBody_.Refresh());
     }
     else
     {
@@ -260,6 +266,14 @@ StudioTickResult StudioSession::Tick(
         result.pluginsReloaded =
             world_.Plugins().PollHotReload();
     }
+
+    // Composition is the first runtime-bound refresh after all semantic
+    // mutation sources for this tick. Everything below observes the new
+    // UniverseComposition/SurfaceComposition generation or the unchanged
+    // previous generation.
+    result.compositionChanged =
+        world_.RefreshUniverseIfChanged();
+
     result.activeBodyChanged =
         activeBody_.Refresh();
     result.pathNetworkRebound =
