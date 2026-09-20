@@ -935,7 +935,6 @@ void Test05AeolianMassConservation()
         result.massBalance;
 
     f64 pickedSandKg = 0.0;
-    f64 pickedSoilKg = 0.0;
     f64 depositedKg = 0.0;
     f64 diagnosticAirborneKg = 0.0;
     f64 eastwardTransportKg = 0.0;
@@ -956,8 +955,6 @@ void Test05AeolianMassConservation()
 
             pickedSandKg +=
                 state.cumulativeSandPickedKg;
-            pickedSoilKg +=
-                state.cumulativeSoilPickedKg;
             depositedKg +=
                 state.cumulativeDepositedKg;
             diagnosticAirborneKg +=
