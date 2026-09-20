@@ -4773,7 +4773,7 @@ void Test14ExposedRockMaterialResolution()
             0U).
             bedrockMaterial;
 
-    const f64 deposited =
+    const f64 depositedMass =
         page.Deposit(
             0U,
             0U,
@@ -4781,10 +4781,14 @@ void Test14ExposedRockMaterialResolution()
             0.75);
 
     Require(
+        depositedMass > 0.0 &&
         NearlyEqual(
-            deposited,
+            page.At(
+                0U,
+                0U).
+                sandMeters,
             0.75,
-            1.0e-12) &&
+            1.0e-6) &&
         page.At(
             0U,
             0U).

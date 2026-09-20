@@ -17,6 +17,7 @@ M30_DOC = REPO_ROOT / "docs" / "V0.0.4_M30_VALIDATION_REGRESSION.md"
 PROGRESS_DOC = REPO_ROOT / "docs" / "V0.0.4_PROGRESS.md"
 VALIDATION_CPP = REPO_ROOT / "tests" / "V004TerrainValidationTests.cpp"
 PERFORMANCE_CPP = REPO_ROOT / "tests" / "V004TerrainPerformance.cpp"
+WATER_CPP = REPO_ROOT / "engine" / "terrain_water" / "tests" / "WaterServiceTests.cpp"
 
 
 def fail(message: str) -> None:
@@ -52,6 +53,7 @@ def main() -> int:
             PERFORMANCE_CPP,
             "M30 performance diagnostic source",
         )
+        water = require_file(WATER_CPP, "WaterService acceptance source")
 
         status_line = next(
             (line for line in m30.splitlines() if line.startswith("Status:")),
@@ -125,6 +127,9 @@ def main() -> int:
         if "scatterBuilder.Dispatch" not in performance:
             fail("M30 performance diagnostic is missing production M22 scatter")
 
+        if "14/14 V0.0.4 acceptance behaviors passed" not in water:
+            fail("WaterService normative extension does not report 14/14 acceptance")
+
     except ValueError as exc:
         print(f"M31 gate CLOSED: {exc}", file=sys.stderr)
         return 1
@@ -133,8 +138,10 @@ def main() -> int:
     print(f"M30 performance adapter: {adapter}")
     print("deterministic cases: 20/20 registered")
     print(f"performance metrics: {len(EXPECTED)}/{len(EXPECTED)} captured")
+    print("WaterService behaviors: 14/14 registered")
     print("M30 ledger: COMPLETE")
-    print("M31 ledger: READY")
+    m31_state = "COMPLETE" if "| **Complete** |" in m31_row else "READY"
+    print(f"M31 ledger: {m31_state}")
     return 0
 
 

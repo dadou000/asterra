@@ -1,6 +1,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <string>
+#include <utility>
 
 namespace orbit::world_model
 {
@@ -209,6 +210,54 @@ void RegisterSchemas(
         .displayName = "Terrain Process Asset",
         .category = "World / Surface / Processes"
     });
+
+    schemas.RegisterType({
+        .id = kWaterServiceType,
+        .displayName = "Water Service",
+        .category = "World / Surface / Water",
+        .properties = {
+            schema::PropertySchema{
+                .id = kWaterOceanEnabled,
+                .name = "Ocean Enabled",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = false
+            },
+            schema::PropertySchema{
+                .id = kWaterOceanDatumMeters,
+                .name = "Ocean Datum",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 0.0
+            },
+            schema::PropertySchema{
+                .id = kWaterFluidAsset,
+                .name = "Fluid Asset",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{}
+            }
+        }
+    });
+
+    for (const auto& [type, name] : {
+             std::pair{kWaterSourceType, "Water Source"},
+             std::pair{kWaterBarrierType, "Water Barrier / Gate / Spillway"},
+             std::pair{kWaterDomainType, "Interior Water Domain"},
+             std::pair{kWaterEmitterType, "Water Force / Wave Emitter"}})
+    {
+        schemas.RegisterType({
+            .id = type,
+            .displayName = name,
+            .category = "World / Surface / Water",
+            .properties = {
+                schema::PropertySchema{
+                    .id = kWaterEnabled,
+                    .name = "Enabled",
+                    .kind = schema::PropertyKind::Boolean,
+                    .defaultValue = true
+                }
+            }
+        });
+    }
 
     schemas.RegisterType({
         .id = kBiomeAssetType,

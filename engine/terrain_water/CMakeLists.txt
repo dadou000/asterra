@@ -2,6 +2,7 @@ add_library(OrbitTerrainWater STATIC
     src/CoastalProcess.cpp
     src/LakeWater.cpp
     src/RiverWater.cpp
+    src/WaterService.cpp
 )
 
 add_library(Orbit::TerrainWater ALIAS OrbitTerrainWater)
@@ -20,6 +21,7 @@ target_link_libraries(OrbitTerrainWater
         Orbit::TerrainHydrology
         Orbit::TerrainMaterialColumn
         Orbit::World
+        Orbit::Universe
 )
 
 target_compile_features(OrbitTerrainWater PUBLIC cxx_std_23)
@@ -41,5 +43,22 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainCoastalProcess
         COMMAND OrbitTerrainCoastalProcessTests
+    )
+
+    add_executable(OrbitWaterServiceTests
+        tests/WaterServiceTests.cpp
+    )
+
+    target_link_libraries(OrbitWaterServiceTests
+        PRIVATE
+            Orbit::TerrainWater
+    )
+
+    target_compile_features(OrbitWaterServiceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWaterServiceTests)
+
+    add_test(
+        NAME Orbit.WaterService
+        COMMAND OrbitWaterServiceTests
     )
 endif()

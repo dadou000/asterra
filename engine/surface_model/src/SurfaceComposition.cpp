@@ -1172,6 +1172,22 @@ SurfaceComposition::BiomesForBody(
             : nullptr;
 }
 
+terrain_water::WaterService*
+SurfaceComposition::WaterForBody(
+    const universe::BodyId body) noexcept
+{
+    auto* services = ServicesForBody(body);
+    return services != nullptr ? &services->Water() : nullptr;
+}
+
+const terrain_water::WaterService*
+SurfaceComposition::WaterForBody(
+    const universe::BodyId body) const noexcept
+{
+    const auto* services = ServicesForBody(body);
+    return services != nullptr ? &services->Water() : nullptr;
+}
+
 terrain_gpu::PersistentGpuTerrainCache*
 SurfaceComposition::CacheForBody(
     const universe::BodyId body) noexcept

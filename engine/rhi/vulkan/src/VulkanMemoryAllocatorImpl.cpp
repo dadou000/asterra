@@ -7,6 +7,7 @@
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4100) // unreferenced formal parameter
+#pragma warning(disable : 4127) // conditional expression is constant
 #pragma warning(disable : 4189) // initialized but unreferenced local variable
 #pragma warning(disable : 4324) // structure padded due to alignment specifier
 #endif

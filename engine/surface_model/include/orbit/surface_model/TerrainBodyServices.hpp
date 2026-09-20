@@ -10,6 +10,7 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
 #include <orbit/terrain_water/CoastalProcess.hpp>
+#include <orbit/terrain_water/WaterService.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 
 namespace orbit::surface_model
@@ -62,6 +63,9 @@ public:
     [[nodiscard]] terrain_biome::BiomeService& Biomes() noexcept;
     [[nodiscard]] const terrain_biome::BiomeService& Biomes() const noexcept;
 
+    [[nodiscard]] terrain_water::WaterService& Water() noexcept;
+    [[nodiscard]] const terrain_water::WaterService& Water() const noexcept;
+
     [[nodiscard]] terrain_gpu::PersistentGpuTerrainCache& Cache() noexcept;
     [[nodiscard]] const terrain_gpu::PersistentGpuTerrainCache& Cache() const noexcept;
 
@@ -74,6 +78,7 @@ private:
         terrain_geology::reference_rock::Basalt};
     TerrainProcessService processes_{};
     terrain_biome::BiomeService biomes_;
+    terrain_water::WaterService water_;
     terrain_gpu::PersistentGpuTerrainCache cache_;
 };
 } // namespace orbit::surface_model

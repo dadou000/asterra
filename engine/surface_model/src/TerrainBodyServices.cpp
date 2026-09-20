@@ -21,6 +21,7 @@ TerrainBodyServices::TerrainBodyServices(
     const terrain_gpu::PersistentGpuTerrainCacheConfig cacheConfig)
     : body_(body),
       biomes_(body),
+      water_(body),
       cache_(cacheConfig)
 {
     if (!body_.IsValid())
@@ -95,6 +96,16 @@ TerrainBodyServices::Biomes() const noexcept
     return biomes_;
 }
 
+terrain_water::WaterService& TerrainBodyServices::Water() noexcept
+{
+    return water_;
+}
+
+const terrain_water::WaterService& TerrainBodyServices::Water() const noexcept
+{
+    return water_;
+}
+
 terrain_gpu::PersistentGpuTerrainCache&
 TerrainBodyServices::Cache() noexcept
 {
@@ -114,6 +125,7 @@ bool TerrainBodyServices::IsValid() const noexcept
         defaultBedrock_.IsValid() &&
         processes_.IsValid() &&
         biomes_.BaseBiome().IsValid() &&
+        water_.IsValid() &&
         cache_.Config().IsValid();
 }
 } // namespace orbit::surface_model

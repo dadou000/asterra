@@ -1,0 +1,8 @@
+schema = "orbit_v004_m30_capture_v1"
+captured_utc = "2026-09-20T13:16:13Z"
+adapter = "NVIDIA GeForce RTX 4090"
+build_config = "Release"
+source_commit = "fdca9966a608c0e75b7cadc121ed10843ca62983"
+csv_sha256 = "f06d62d8bab89972e5db574b5458d871a16dbd6e417386860405651d25ee0a4d"
+resolution = 129
+metric_count = 8

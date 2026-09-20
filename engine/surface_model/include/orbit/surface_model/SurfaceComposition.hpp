@@ -67,6 +67,11 @@ public:
     [[nodiscard]] const terrain_biome::BiomeService* BiomesForBody(
         universe::BodyId body) const noexcept;
 
+    [[nodiscard]] terrain_water::WaterService* WaterForBody(
+        universe::BodyId body) noexcept;
+    [[nodiscard]] const terrain_water::WaterService* WaterForBody(
+        universe::BodyId body) const noexcept;
+
     [[nodiscard]] terrain_gpu::PersistentGpuTerrainCache* CacheForBody(
         universe::BodyId body) noexcept;
     [[nodiscard]] const terrain_gpu::PersistentGpuTerrainCache* CacheForBody(

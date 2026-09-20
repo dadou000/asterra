@@ -40,6 +40,31 @@ inline constexpr schema::TypeId kTerrainProcessAssetType{
     .low = 0x4553534153543031ULL
 };
 
+inline constexpr schema::TypeId kWaterServiceType{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552534552563031ULL
+};
+
+inline constexpr schema::TypeId kWaterSourceType{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552534f55523031ULL
+};
+
+inline constexpr schema::TypeId kWaterBarrierType{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552424152523031ULL
+};
+
+inline constexpr schema::TypeId kWaterDomainType{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552444f4d413031ULL
+};
+
+inline constexpr schema::TypeId kWaterEmitterType{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552454d49543031ULL
+};
+
 inline constexpr schema::TypeId kBiomeAssetType{
     .high = 0x4f5242495442494fULL,
     .low = 0x4d45415353455431ULL
@@ -153,6 +178,26 @@ inline constexpr schema::PropertyId kTerrainDetailOctaves{
 inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .high = 0x4f52424954544552ULL,
     .low = 0x4d4158454c455641ULL
+};
+
+inline constexpr schema::PropertyId kWaterOceanEnabled{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x45524f43454e4142ULL
+};
+
+inline constexpr schema::PropertyId kWaterOceanDatumMeters{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x45524f4344415455ULL
+};
+
+inline constexpr schema::PropertyId kWaterFluidAsset{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552464c55494431ULL
+};
+
+inline constexpr schema::PropertyId kWaterEnabled{
+    .high = 0x4f52424954574154ULL,
+    .low = 0x4552454e41424c45ULL
 };
 
 inline constexpr schema::PropertyId kBiomePlacementMode{

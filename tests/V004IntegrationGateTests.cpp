@@ -28,6 +28,7 @@
 #include <orbit/terrain_render/SurfaceMaterial.hpp>
 #include <orbit/terrain_scatter/DeterministicScatter.hpp>
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
+#include <orbit/terrain_water/WaterService.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -324,6 +325,10 @@ void TestDefaultRockyPlanetComposition()
             surfaces.BiomesForBody(
                 *bodyId);
 
+        const auto* waterService =
+            surfaces.WaterForBody(
+                *bodyId);
+
         const auto* cacheService =
             surfaces.CacheForBody(
                 *bodyId);
@@ -335,13 +340,17 @@ void TestDefaultRockyPlanetComposition()
             processService != nullptr &&
             processService->IsValid() &&
             biomeService != nullptr &&
+            waterService != nullptr &&
+            waterService->Body() == *bodyId &&
+            waterService->IsValid() &&
+            !waterService->Ocean().enabled &&
             cacheService != nullptr &&
             cacheService->Stats().residentPages ==
                 0U &&
             services->DefaultBedrock() ==
                 terrain_geology::
                     reference_rock::Basalt,
-            "M31 entry: rocky body did not automatically own valid geology/process/biome/cache services.");
+            "M31 entry: rocky body did not automatically own valid geology/water/process/biome/cache services.");
 
         const auto definitions =
             biomeService->Definitions();
@@ -1264,6 +1273,17 @@ void TestBiomeOverrideDrivesConstrainedScatter()
 
     BiomePlacementContext hot = warm;
     hot.temperatureC = 45.0;
+
+    Require(
+        forest.IsValid(),
+        "M31 biome: authored forest definition became invalid before placement evaluation.");
+    Require(
+        warm.IsValid() && hot.IsValid(),
+        "M31 biome: warm/hot placement context is invalid.");
+    Require(
+        biomes.Find(forestId) != nullptr &&
+            biomes.Find(forestId)->IsValid(),
+        "M31 biome: stored authored forest definition is invalid.");
 
     const auto warmEvaluation =
         biomes.EvaluatePlacement(
@@ -2503,12 +2523,13 @@ void TestSaveLoadRegeneratesEquivalentTerrain()
                     2U,
                 "M31 save/load: optional biome did not reach the pre-save runtime service.");
 
+            const auto biomeDefinitions =
+                biomes->Definitions();
+
             const auto foundBiome =
                 std::find_if(
-                    biomes->Definitions().
-                        begin(),
-                    biomes->Definitions().
-                        end(),
+                    biomeDefinitions.begin(),
+                    biomeDefinitions.end(),
                     [&](const auto& biome)
                     {
                         return
@@ -2519,8 +2540,7 @@ void TestSaveLoadRegeneratesEquivalentTerrain()
 
             Require(
                 foundBiome !=
-                    biomes->Definitions().
-                        end(),
+                    biomeDefinitions.end(),
                 "M31 save/load: optional runtime biome is missing.");
 
             biomeIdBefore =
@@ -2855,12 +2875,13 @@ void TestSaveLoadRegeneratesEquivalentTerrain()
                 biomes != nullptr,
                 "M31 save/load: reopened biome service is missing.");
 
+            const auto biomeDefinitions =
+                biomes->Definitions();
+
             const auto foundBiome =
                 std::find_if(
-                    biomes->Definitions().
-                        begin(),
-                    biomes->Definitions().
-                        end(),
+                    biomeDefinitions.begin(),
+                    biomeDefinitions.end(),
                     [&](const auto& biome)
                     {
                         return
@@ -2870,8 +2891,7 @@ void TestSaveLoadRegeneratesEquivalentTerrain()
 
             Require(
                 foundBiome !=
-                    biomes->Definitions().
-                        end(),
+                    biomeDefinitions.end(),
                 "M31 save/load: runtime biome stable identity changed.");
 
             const auto placementAfter =
@@ -2954,24 +2974,106 @@ void TestSaveLoadRegeneratesEquivalentTerrain()
         root);
 }
 
+void TestWaterServiceCompletionBoundary()
+{
+    using namespace terrain_water;
+
+    constexpr universe::BodyId body{0x4d33315741544552ULL, 1U};
+    constexpr FluidId fluidId{0x4d3331464c554944ULL, 1U};
+    constexpr WaterPageId pageId{0x4d33315750414745ULL, 1U};
+
+    WaterService water(body);
+    water.RegisterFluid({
+        .id = fluidId,
+        .name = "M31 water",
+        .surfaceMaterial = {0x4d3331574d41544cULL, 1U}
+    });
+    water.ConfigureOcean({
+        .enabled = true,
+        .datumHeightMeters = 2.0,
+        .fluid = fluidId
+    });
+
+    WaterPageDefinition definition{
+        .id = pageId,
+        .resolution = 8U,
+        .spacingMeters = 2.0,
+        .fluid = fluidId
+    };
+    const std::vector<f64> bed(
+        static_cast<std::size_t>(definition.resolution) *
+            definition.resolution,
+        1.0);
+    water.CreatePage(definition, bed);
+    const f64 initialVolume =
+        water.FindPage(pageId)->VolumeCubicMeters();
+
+    water.EmitPhysicalWave(pageId, 4U, 4U, 0.5, {1.0, 0.0});
+    water.Step(0.5, 10U);
+
+    constexpr HullMaskId mask{0x4d333148554c4c4dULL, 1U};
+    water.AddExclusion({
+        .owner = {0x4d333148554c4c4fULL, 1U},
+        .hullMask = mask,
+        .sealedInterior = true,
+        .displacedVolumeCubicMeters = 2.0
+    });
+
+    const auto propeller = water.ApplyPropeller({
+        .id = {0x4d333150524f5045ULL, 1U},
+        .page = pageId,
+        .x = 4U,
+        .y = 4U,
+        .direction = {1.0, 0.0},
+        .radiusMeters = 1.0,
+        .linearImpulseNewtonSeconds = 100.0,
+        .angularImpulseNewtonMeterSeconds = 20.0,
+        .turbulence = 0.1,
+        .targetFluid = fluidId
+    });
+
+    Require(
+        water.IsValid() &&
+        water.IsOceanConnected(1.5) &&
+        water.FindPage(pageId)->VolumeCubicMeters() > initialVolume &&
+        water.MasksRenderedWater(mask) &&
+        NearlyEqual(
+            propeller.bodyImpulseNewtonSeconds.x +
+                propeller.waterImpulseNewtonSeconds.x,
+            0.0,
+            1.0e-12) &&
+        propeller.waterAngularImpulseNewtonMeterSeconds < 0.0,
+        "M31 WaterService: reservoir, wave, hull-mask or force-emitter boundary failed.");
+}
+
 } // namespace
 
 int main()
 {
     try
     {
+        std::cout << "M31 slice 1/9: default rocky planet\n";
         TestDefaultRockyPlanetComposition();
+        std::cout << "M31 slice 2/9: authored canyon\n";
         TestAuthoredCanyonDrivesDrainageAndErosion();
+        std::cout << "M31 slice 3/9: exposure and burial\n";
         TestExposureBurialDrivesRenderedMaterial();
+        std::cout << "M31 slice 4/9: biome and scatter\n";
         TestBiomeOverrideDrivesConstrainedScatter();
+        std::cout << "M31 slice 5/9: persistent cache\n";
         TestPersistentGpuCacheReusesAcrossFrames();
+        std::cout << "M31 slice 6/9: dependency regeneration\n";
         TestDependencyChangesRegenerateOnlyDependents();
+        std::cout << "M31 slice 7/9: debug fields\n";
         TestAllDebugFieldsAreInspectable();
+        std::cout << "M31 slice 8/9: save/load\n";
         TestSaveLoadRegeneratesEquivalentTerrain();
+        std::cout << "M31 slice 9/9: WaterService\n";
+        TestWaterServiceCompletionBoundary();
 
         std::cout
             << "Orbit V0.0.4 M31 integration entry: "
-            << "8 integration slices passed.\n";
+            << "9 integration slices passed.\n";
 
         return EXIT_SUCCESS;
     }

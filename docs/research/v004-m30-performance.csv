@@ -1,0 +1,9 @@
+schema,adapter,resolution,metric,value,unit,samples
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,page_generation_gpu_time,10.638688,ms,7
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,peak_transient_memory,1065024,bytes,1
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,persistent_page_memory,332820,bytes,1
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,cache_hit_rate,99.609375,percent,256
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,hydraulic_iteration_gpu_time,0.023552,ms,7
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,aeolian_iteration_gpu_time,0.033792,ms,7
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,drainage_build_gpu_time,3.606112,ms,7
+orbit_v004_m30,"NVIDIA GeForce RTX 4090",129,scatter_generation_gpu_time,0.019136,ms,7

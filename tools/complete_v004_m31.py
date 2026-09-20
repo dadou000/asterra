@@ -13,7 +13,7 @@ GATE_CHECKER = REPO_ROOT / "tools" / "check_v004_m31_gate.py"
 PROGRESS_DOC = REPO_ROOT / "docs" / "V0.0.4_PROGRESS.md"
 M31_SUMMARY = REPO_ROOT / "docs" / "V0.0.4_M31_INTEGRATION_GATE.md"
 
-EXPECTED_SUCCESS = "8 integration slices passed."
+EXPECTED_SUCCESS = "9 integration slices passed."
 
 
 def fail(message: str) -> None:
@@ -120,7 +120,7 @@ def main() -> int:
         "| M31 — Final integration gate | **Complete** | "
         f"All V0.0.4 integration acceptance slices passed on {completed_iso} "
         f"from source commit {source_commit}. M30 deterministic/performance "
-        "gates were already validated before execution. |",
+        "and WaterService 14/14 behavior gates were already validated before execution. |",
         "M31 progress row",
     )
 
@@ -130,7 +130,7 @@ def main() -> int:
 
 **V0.0.4 — Complete**
 
-M01–M31 acceptance is closed. Begin the next version only from the frozen V0.0.4 physical-terrain authority contracts; do not regress to camera-owned physical terrain, duplicate material authority, or non-deterministic authored identity.
+M01–M31 terrain acceptance and the normative WaterService M11–M15 extension are closed. Begin the next version only from the frozen V0.0.4 physical-terrain/water authority contracts; do not regress to camera-owned physical state, render-owned water, duplicate material authority, or non-deterministic authored identity.
 """,
     )
 
@@ -151,7 +151,7 @@ M01–M31 acceptance is closed. Begin the next version only from the frozen V0.0
         "performance record, provenance, 20/20 deterministic registration, "
         "and 8/8 performance instrumentation.",
         "",
-        "The aggregate integration executable then passed all eight staged slices:",
+        "The aggregate integration executable then passed all nine staged slices:",
         "",
         "1. default rocky-planet composition, automatic terrain-service ownership, "
         "BaseBiome fallback and complete no-input surface sampling;",
@@ -163,6 +163,8 @@ M01–M31 acceptance is closed. Begin the next version only from the frozen V0.0
         "7. all 21 M29 debug fields inspectable with upstream provenance;",
         "8. save → close → reopen preserving authored authority while regenerating "
         "bit-identical terrain/biome derived state and clearing derived cache residency.",
+        "9. WaterService ocean/reservoir, dynamic-wave, wake/sleep, hull/flood-domain "
+        "and conservative force-emitter boundaries passed their dedicated acceptance suite.",
         "",
         "**Orbit V0.0.4 terrain integration acceptance is complete.**",
         "",

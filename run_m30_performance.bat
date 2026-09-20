@@ -62,7 +62,7 @@ if errorlevel 1 (
 
 echo.
 echo [M30] Building deterministic validation + performance diagnostic...
-cmake --build build --config %CONFIG% --target OrbitV004ValidationTests OrbitV004TerrainPerformance --parallel
+cmake --build build --config %CONFIG% --target OrbitV004ValidationTests OrbitV004TerrainPerformance OrbitWaterServiceTests --parallel
 if errorlevel 1 (
     echo [M30] ERROR: M30 validation/performance build failed.
     goto fail
@@ -70,6 +70,7 @@ if errorlevel 1 (
 
 set "VALIDATION_EXE=build\tests\%CONFIG%\OrbitV004ValidationTests.exe"
 set "PERF_EXE=build\tests\%CONFIG%\OrbitV004TerrainPerformance.exe"
+set "WATER_EXE=build\engine\terrain_water\%CONFIG%\OrbitWaterServiceTests.exe"
 set "RAW_CSV=build\m30-performance-%CONFIG%.csv"
 
 if not exist "%VALIDATION_EXE%" (
@@ -89,6 +90,14 @@ echo [M30] Running 20/20 deterministic validation...
 "%VALIDATION_EXE%"
 if errorlevel 1 (
     echo [M30] ERROR: Deterministic M30 validation failed.
+    goto fail
+)
+
+echo.
+echo [M30] Running WaterService normative extension acceptance...
+"%WATER_EXE%"
+if errorlevel 1 (
+    echo [M30] ERROR: WaterService V0.0.4 acceptance failed.
     goto fail
 )
 
