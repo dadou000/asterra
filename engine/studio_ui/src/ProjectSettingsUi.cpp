@@ -48,6 +48,8 @@ void ProjectSettingsUi::Register(
         .id = kPanelId,
         .title = "Project Settings",
         .defaultOpen = false,
+        .defaultDock = orbit::editor_ui::DockRegion::Right,
+        .dockOrder = 30,
         .draw =
             [this](editor_ui::PanelContext& context)
             {

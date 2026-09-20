@@ -233,6 +233,9 @@ void StudioViewportPanels::Register(
         .id = kPrimaryViewportPanel,
         .title = "Viewport",
         .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Center,
+        .dockOrder = 0,
+        .minSize = {.width = 320.0F, .height = 200.0F},
         .draw =
             [this](editor_ui::PanelContext& context)
             {
@@ -244,6 +247,8 @@ void StudioViewportPanels::Register(
         .id = kSecondaryViewportPanel,
         .title = "Body Map / Debug View",
         .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Center,
+        .dockOrder = 10,
         .draw =
             [this](editor_ui::PanelContext& context)
             {
@@ -259,6 +264,8 @@ void StudioViewportPanels::RegisterSecondary(
         .id = kSecondaryViewportPanel,
         .title = "Body Map / Debug View",
         .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Center,
+        .dockOrder = 10,
         .draw =
             [this](editor_ui::PanelContext& context)
             {

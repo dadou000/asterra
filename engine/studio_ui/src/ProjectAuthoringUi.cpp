@@ -54,19 +54,28 @@ ProjectAuthoringUi::ProjectAuthoringUi(
 void ProjectAuthoringUi::Register(
     editor_ui::EditorUi& ui)
 {
+    RegisterProjectBrowser(ui);
+    RegisterProjectSettings(ui);
+    RegisterWorldDocuments(ui, true);
+}
+
+void ProjectAuthoringUi::RegisterProjectBrowser(
+    editor_ui::EditorUi& ui,
+    const bool dockToMainViewport)
+{
     ui.RegisterPanel({
         .id = kProjectBrowserPanel,
         .title = "Project Browser",
         .defaultOpen = true,
+        .dockToMainViewport = dockToMainViewport,
+        .defaultDock = orbit::editor_ui::DockRegion::Center,
+        .dockOrder = 0,
         .draw =
             [this](editor_ui::PanelContext& context)
             {
                 DrawProjectBrowser(context);
             }
     });
-
-    RegisterProjectSettings(ui);
-    RegisterWorldDocuments(ui, true);
 }
 
 void ProjectAuthoringUi::RegisterProjectSettings(
@@ -76,6 +85,8 @@ void ProjectAuthoringUi::RegisterProjectSettings(
         .id = kProjectSettingsPanel,
         .title = "Project Settings",
         .defaultOpen = false,
+        .defaultDock = orbit::editor_ui::DockRegion::Right,
+        .dockOrder = 30,
         .draw =
             [this](editor_ui::PanelContext& context)
             {
@@ -94,6 +105,8 @@ void ProjectAuthoringUi::RegisterWorldDocuments(
         .id = kWorldDocumentsPanel,
         .title = "World Documents",
         .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Left,
+        .dockOrder = 10,
         .draw =
             [this](editor_ui::PanelContext& context)
             {

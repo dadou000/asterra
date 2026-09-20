@@ -53,6 +53,8 @@ void WorldDocumentsUi::Register(
         .id = kPanelId,
         .title = "World Documents",
         .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Left,
+        .dockOrder = 10,
         .draw =
             [this](editor_ui::PanelContext& context)
             {

@@ -1,6 +1,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Resource.hpp>
@@ -8,10 +9,13 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cfloat>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -25,6 +29,66 @@ struct UiVertex
     math::Float2 uv{};
     math::Float4 color{};
 };
+
+struct UiProjection
+{
+    f32 scaleX{};
+    f32 scaleY{};
+    f32 translateX{};
+    f32 translateY{};
+};
+
+[[nodiscard]] constexpr UiProjection MakeUiProjection(
+    const f32 displayPositionX,
+    const f32 displayPositionY,
+    const f32 displayWidth,
+    const f32 displayHeight) noexcept
+{
+    return {
+        .scaleX = 2.0F / displayWidth,
+        .scaleY = -2.0F / displayHeight,
+        .translateX =
+            -1.0F -
+            displayPositionX *
+                (2.0F / displayWidth),
+        .translateY =
+            1.0F +
+            displayPositionY *
+                (2.0F / displayHeight)
+    };
+}
+
+constexpr UiProjection kProjectionContract =
+    MakeUiProjection(
+        0.0F,
+        0.0F,
+        100.0F,
+        100.0F);
+
+static_assert(
+    kProjectionContract.translateY > 0.99F &&
+    100.0F * kProjectionContract.scaleY +
+            kProjectionContract.translateY <
+        -0.99F,
+    "Editor UI must map top-left draw coordinates to the top of Orbit's D3D-style Vulkan viewport.");
+
+[[nodiscard]] std::string ReadLayoutText(
+    const std::filesystem::path& path)
+{
+    std::ifstream stream(
+        path,
+        std::ios::binary);
+
+    if (!stream)
+    {
+        return {};
+    }
+
+    return std::string(
+        std::istreambuf_iterator<char>(
+            stream),
+        std::istreambuf_iterator<char>());
+}
 
 constexpr const char* kVertexShader = R"(
 struct Push
@@ -172,6 +236,15 @@ public:
         io.IniFilename =
             layoutPathUtf8.c_str();
 
+        // ImGui loads this file on the first frame. If it does not dock
+        // anything (missing, or every panel floating) the default arrangement
+        // is built instead of leaving panels stacked at ImGui's default
+        // window position.
+        layoutBuildPending =
+            !LayoutTextHasDockedPanels(
+                ReadLayoutText(
+                    this->layoutPath));
+
         ImGui::StyleColorsDark();
 
         const shader::Binary vertex =
@@ -270,6 +343,148 @@ public:
             ImGui::DestroyContext(
                 context);
         }
+    }
+
+    // Splits the dock space into Left | Center | Right with Bottom spanning
+    // the full width, and docks every participating panel into its region.
+    // Regions with no panels are not split off. The caller must be inside a
+    // frame with the main dock space already submitted.
+    void BuildDefaultLayout(
+        const ImGuiID dockspace)
+    {
+        const std::vector<DockAssignment> assignments =
+            AssignDefaultDock(
+                panels);
+
+        if (assignments.empty())
+        {
+            return;
+        }
+
+        const DockSplitPlan plan =
+            PlanDockSplits(
+                assignments,
+                DockLayoutFractions{});
+
+        const ImGuiViewport* viewport =
+            ImGui::GetMainViewport();
+
+        ImGui::DockBuilderRemoveNode(
+            dockspace);
+        ImGui::DockBuilderAddNode(
+            dockspace,
+            ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodePos(
+            dockspace,
+            viewport->WorkPos);
+        ImGui::DockBuilderSetNodeSize(
+            dockspace,
+            viewport->WorkSize);
+
+        ImGuiID center = dockspace;
+        ImGuiID left = 0;
+        ImGuiID right = 0;
+        ImGuiID bottom = 0;
+
+        if (plan.bottomOfRoot > 0.0F)
+        {
+            ImGui::DockBuilderSplitNode(
+                center,
+                ImGuiDir_Down,
+                plan.bottomOfRoot,
+                &bottom,
+                &center);
+        }
+
+        if (plan.leftOfRemainder > 0.0F)
+        {
+            ImGui::DockBuilderSplitNode(
+                center,
+                ImGuiDir_Left,
+                plan.leftOfRemainder,
+                &left,
+                &center);
+        }
+
+        if (plan.rightOfRemainder > 0.0F)
+        {
+            ImGui::DockBuilderSplitNode(
+                center,
+                ImGuiDir_Right,
+                plan.rightOfRemainder,
+                &right,
+                &center);
+        }
+
+        // DockBuilderDockWindow clears each window's tab-order hint, which
+        // leaves tabs in first-submission order. Restore the intended order
+        // explicitly so the first assignment in a region is its first tab.
+        std::array<short, 5> nextOrder{};
+
+        for (const DockAssignment& assignment :
+             assignments)
+        {
+            const auto panel =
+                std::ranges::find_if(
+                    panels,
+                    [&assignment](
+                        const PanelDefinition& candidate)
+                    {
+                        return candidate.id ==
+                            assignment.panel;
+                    });
+
+            if (panel == panels.end())
+            {
+                continue;
+            }
+
+            ImGuiID node = center;
+
+            switch (assignment.region)
+            {
+            case DockRegion::Left:
+                node = left;
+                break;
+            case DockRegion::Right:
+                node = right;
+                break;
+            case DockRegion::Bottom:
+                node = bottom;
+                break;
+            case DockRegion::Center:
+            case DockRegion::Auto:
+                break;
+            }
+
+            ImGui::DockBuilderDockWindow(
+                panel->title.c_str(),
+                node);
+
+            const short order =
+                nextOrder[static_cast<std::size_t>(
+                    assignment.region)]++;
+            const ImGuiID windowId =
+                ImHashStr(
+                    panel->title.c_str());
+
+            if (ImGuiWindow* window =
+                    ImGui::FindWindowByID(
+                        windowId))
+            {
+                window->DockOrder = order;
+            }
+            else if (
+                ImGuiWindowSettings* settings =
+                    ImGui::FindWindowSettingsByID(
+                        windowId))
+            {
+                settings->DockOrder = order;
+            }
+        }
+
+        ImGui::DockBuilderFinish(
+            dockspace);
     }
 
     void UploadFontAtlas()
@@ -449,6 +664,7 @@ public:
     bool automationExpandTrees{false};
     bool automationTraceWidgets{false};
     std::vector<std::string> automationTrace;
+    bool layoutBuildPending{false};
 
     std::unique_ptr<rhi::GraphicsPipeline>
         pipeline;
@@ -1228,6 +1444,63 @@ std::size_t EditorUi::AutomationUiTraceSize() const noexcept
     return impl_->automationTrace.size();
 }
 
+PanelLayoutProbe EditorUi::AutomationPanelLayout(
+    const PanelId id) const
+{
+    ImGui::SetCurrentContext(
+        impl_->context);
+
+    const auto panel =
+        std::ranges::find_if(
+            impl_->panels,
+            [id](const PanelDefinition& candidate)
+            {
+                return candidate.id == id;
+            });
+
+    if (panel == impl_->panels.end())
+    {
+        return {};
+    }
+
+    const ImGuiWindow* window =
+        ImGui::FindWindowByName(
+            panel->title.c_str());
+
+    if (window == nullptr)
+    {
+        return {};
+    }
+
+    return {
+        .found = true,
+        .docked = window->DockNode != nullptr,
+        .x = window->Pos.x,
+        .y = window->Pos.y,
+        .width = window->Size.x,
+        .height = window->Size.y
+    };
+}
+
+UiSize EditorUi::AutomationWorkArea() const
+{
+    ImGui::SetCurrentContext(
+        impl_->context);
+
+    const ImGuiViewport* viewport =
+        ImGui::GetMainViewport();
+
+    return {
+        .width = viewport->WorkSize.x,
+        .height = viewport->WorkSize.y
+    };
+}
+
+void EditorUi::ResetLayout() noexcept
+{
+    impl_->layoutBuildPending = true;
+}
+
 void EditorUi::RegisterMenuAction(
     MenuAction action)
 {
@@ -1368,10 +1641,23 @@ void EditorUi::DrawStudioShell()
     ImGui::SetCurrentContext(
         impl_->context);
 
-    ImGui::DockSpaceOverViewport(
+    const ImGuiID mainDockspace =
+        ImGui::DockSpaceOverViewport(
         0,
         nullptr,
         ImGuiDockNodeFlags_None);
+
+    const bool hasLayoutPanels =
+        !AssignDefaultDock(
+             impl_->panels).
+            empty();
+
+    if (impl_->layoutBuildPending)
+    {
+        impl_->layoutBuildPending = false;
+        impl_->BuildDefaultLayout(
+            mainDockspace);
+    }
 
     static constexpr std::array<
         const char*,
@@ -1423,6 +1709,24 @@ void EditorUi::DrawStudioShell()
                 }
             }
 
+            if (std::string_view(menu) == "Home" &&
+                hasLayoutPanels)
+            {
+                if (emitted)
+                {
+                    ImGui::Separator();
+                }
+
+                emitted = true;
+
+                if (ImGui::MenuItem(
+                        "Reset Layout"))
+                {
+                    impl_->layoutBuildPending =
+                        true;
+                }
+            }
+
             if (!emitted)
             {
                 ImGui::TextDisabled(
@@ -1455,6 +1759,25 @@ void EditorUi::DrawStudioShell()
 
         bool open =
             impl_->panelOpen[index] != 0U;
+
+        if (panel.minSize.width > 0.0F ||
+            panel.minSize.height > 0.0F)
+        {
+            ImGui::SetNextWindowSizeConstraints(
+                ImVec2(
+                    panel.minSize.width,
+                    panel.minSize.height),
+                ImVec2(
+                    FLT_MAX,
+                    FLT_MAX));
+        }
+
+        if (panel.dockToMainViewport)
+        {
+            ImGui::SetNextWindowDockID(
+                mainDockspace,
+                ImGuiCond_Always);
+        }
 
         if (ImGui::Begin(
                 panel.title.c_str(),
@@ -1516,8 +1839,6 @@ void EditorUi::Render(
         static_cast<std::size_t>(
             drawData->TotalIdxCount));
 
-    u32 vertexBase = 0;
-
     for (int listIndex = 0;
          listIndex < drawData->CmdListsCount;
          ++listIndex)
@@ -1546,14 +1867,13 @@ void EditorUi::Render(
         for (const ImDrawIdx index :
              list->IdxBuffer)
         {
+            // List-local index: DrawIndexed applies the list's base vertex,
+            // so adding it here as well would offset every list after the
+            // first twice.
             impl_->convertedIndices.push_back(
-                vertexBase +
                 static_cast<u32>(index));
         }
 
-        vertexBase +=
-            static_cast<u32>(
-                list->VtxBuffer.Size);
     }
 
     std::memcpy(
@@ -1598,24 +1918,36 @@ void EditorUi::Render(
     const f32 displayHeight =
         drawData->DisplaySize.y;
 
+    // Windows may report ImGui coordinates in DPI-virtualized logical
+    // pixels while the swapchain is sized in physical pixels. Vertex
+    // projection naturally spans the physical viewport, but clip rectangles
+    // must be scaled explicitly or text and controls are truncated at 125%+
+    // display scaling. Deriving the factor from the actual render target also
+    // handles resize races more robustly than relying on backend-populated IO.
+    const f32 framebufferScaleX =
+        static_cast<f32>(targetWidth) /
+        displayWidth;
+    const f32 framebufferScaleY =
+        static_cast<f32>(targetHeight) /
+        displayHeight;
+
+    const UiProjection projection =
+        MakeUiProjection(
+            drawData->DisplayPos.x,
+            drawData->DisplayPos.y,
+            displayWidth,
+            displayHeight);
+
     const std::array<u32, 4>
         constants{
             std::bit_cast<u32>(
-                2.0F /
-                displayWidth),
+                projection.scaleX),
             std::bit_cast<u32>(
-                2.0F /
-                displayHeight),
+                projection.scaleY),
             std::bit_cast<u32>(
-                -1.0F -
-                drawData->DisplayPos.x *
-                    (2.0F /
-                     displayWidth)),
+                projection.translateX),
             std::bit_cast<u32>(
-                -1.0F -
-                drawData->DisplayPos.y *
-                    (2.0F /
-                     displayHeight))
+                projection.translateY)
         };
 
     commands.SetGraphicsConstants(
@@ -1650,23 +1982,19 @@ void EditorUi::Render(
             const ImVec2 clipMin{
                 (draw.ClipRect.x -
                  drawData->DisplayPos.x) *
-                    drawData->
-                        FramebufferScale.x,
+                    framebufferScaleX,
                 (draw.ClipRect.y -
                  drawData->DisplayPos.y) *
-                    drawData->
-                        FramebufferScale.y
+                    framebufferScaleY
             };
 
             const ImVec2 clipMax{
                 (draw.ClipRect.z -
                  drawData->DisplayPos.x) *
-                    drawData->
-                        FramebufferScale.x,
+                    framebufferScaleX,
                 (draw.ClipRect.w -
                  drawData->DisplayPos.y) *
-                    drawData->
-                        FramebufferScale.y
+                    framebufferScaleY
             };
 
             const i32 left =

@@ -25,6 +25,9 @@ public:
         std::filesystem::path recentProjectsFile);
 
     void Register(editor_ui::EditorUi& ui);
+    void RegisterProjectBrowser(
+        editor_ui::EditorUi& ui,
+        bool dockToMainViewport = false);
     void RegisterProjectSettings(
         editor_ui::EditorUi& ui);
     void RegisterWorldDocuments(

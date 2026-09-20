@@ -133,6 +133,8 @@ void SurfaceAuthoringUi::Register(editor_ui::EditorUi& ui)
         .id = kPanel,
         .title = "Surface Authoring",
         .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Right,
+        .dockOrder = 10,
         .draw = [this](editor_ui::PanelContext& context)
         {
             Draw(context);

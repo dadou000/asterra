@@ -384,7 +384,10 @@ OpenProjectBrowser()
                 UserDataDirectory() /
                 "RecentProjects.txt");
 
-    projectUi.Register(ui);
+    // The startup browser is a dedicated shell: keep its required content in
+    // the central dock and do not expose project-bound panels before a project
+    // has been opened.
+    projectUi.RegisterProjectBrowser(ui, true);
 
     auto allocator =
         device.CreateCommandAllocator(
@@ -1845,14 +1848,20 @@ int main(
                     device,
                     compiler);
 
+        // Smoke runs use a throwaway project, so their layout must not
+        // accumulate in the user's real EditorLayouts directory (and must
+        // always start from the default arrangement).
         const std::filesystem::path
             layoutPath =
-                orbit::platform::
-                    UserDataDirectory() /
-                "EditorLayouts" /
-                (project.Manifest().
-                     projectId.ToString() +
-                 ".ini");
+                terrainUiSmoke
+                    ? terrainUiSmokeRoot /
+                          "EditorLayout.ini"
+                    : orbit::platform::
+                              UserDataDirectory() /
+                          "EditorLayouts" /
+                          (project.Manifest().
+                               projectId.ToString() +
+                           ".ini");
 
         orbit::editor_ui::EditorUi ui(
             device,
@@ -3918,6 +3927,9 @@ int main(
             .id = kViewportPanel,
             .title = "Viewport",
             .defaultOpen = true,
+            .defaultDock = orbit::editor_ui::DockRegion::Center,
+            .dockOrder = 0,
+            .minSize = {.width = 320.0F, .height = 200.0F},
             .draw =
                 [&studioViews,
                  &selection,
@@ -4720,6 +4732,8 @@ int main(
             .id = kExplorerPanel,
             .title = "Explorer",
             .defaultOpen = true,
+            .defaultDock = orbit::editor_ui::DockRegion::Left,
+            .dockOrder = 0,
             .draw =
                 [&explorer,
                  &selection,
@@ -4996,6 +5010,8 @@ int main(
             .id = kPropertiesPanel,
             .title = "Properties",
             .defaultOpen = true,
+            .defaultDock = orbit::editor_ui::DockRegion::Right,
+            .dockOrder = 0,
             .draw =
                 [&inspector,
                  &presentActions,
@@ -5221,6 +5237,8 @@ int main(
             .id = kPluginsPanel,
             .title = "Plugins",
             .defaultOpen = false,
+            .defaultDock = orbit::editor_ui::DockRegion::Bottom,
+            .dockOrder = 20,
             .draw =
                 [&plugins,
                  &pluginValidationIssues,
@@ -5329,6 +5347,8 @@ int main(
             .id = kContentPanel,
             .title = "Material Service",
             .defaultOpen = true,
+            .defaultDock = orbit::editor_ui::DockRegion::Right,
+            .dockOrder = 20,
             .draw =
                 [&content,
                  &contentSearch,
@@ -5642,6 +5662,8 @@ int main(
             .id = kPlatformServicesPanel,
             .title = "Platform Services",
             .defaultOpen = false,
+            .defaultDock = orbit::editor_ui::DockRegion::Bottom,
+            .dockOrder = 30,
             .draw =
                 [&project,
                  &platformConfiguration,
@@ -5938,6 +5960,8 @@ int main(
             .id = kBuildPanel,
             .title = "Build",
             .defaultOpen = true,
+            .defaultDock = orbit::editor_ui::DockRegion::Bottom,
+            .dockOrder = 10,
             .draw =
                 [&project,
                  &selectedBuildProfile,
@@ -6081,6 +6105,8 @@ int main(
             .id = kOutputPanel,
             .title = "Output",
             .defaultOpen = true,
+            .defaultDock = orbit::editor_ui::DockRegion::Bottom,
+            .dockOrder = 0,
             .draw =
                 [&outputLog](
                     orbit::editor_ui::
@@ -7111,6 +7137,83 @@ int main(
                                 std::format(
                                     "Terrain UI smoke failed: live ImGui control '{}' was not rendered.",
                                     widget));
+                        }
+                    }
+
+                    // The default dock layout must give the production
+                    // viewport most of the window without any panel
+                    // covering it. A stacked layout once left it a 76px strip.
+                    {
+                        const auto workArea =
+                            ui.AutomationWorkArea();
+                        const auto viewportLayout =
+                            ui.AutomationPanelLayout(
+                                kViewportPanel);
+
+                        if (!viewportLayout.found ||
+                            !viewportLayout.docked ||
+                            viewportLayout.width *
+                                    viewportLayout.height <
+                                0.30F *
+                                    workArea.width *
+                                    workArea.height)
+                        {
+                            throw std::runtime_error(
+                                std::format(
+                                    "Terrain UI smoke failed: viewport panel is not docked with a usable size (found={}, docked={}, {}x{} of {}x{}).",
+                                    viewportLayout.found,
+                                    viewportLayout.docked,
+                                    viewportLayout.width,
+                                    viewportLayout.height,
+                                    workArea.width,
+                                    workArea.height));
+                        }
+
+                        for (const auto& [name, other] :
+                             {std::pair<std::string_view,
+                                        orbit::editor_ui::PanelId>{
+                                  "Explorer",
+                                  kExplorerPanel},
+                              std::pair<std::string_view,
+                                        orbit::editor_ui::PanelId>{
+                                  "Output",
+                                  kOutputPanel}})
+                        {
+                            const auto probe =
+                                ui.AutomationPanelLayout(
+                                    other);
+
+                            if (!probe.found)
+                            {
+                                continue;
+                            }
+
+                            const bool overlaps =
+                                probe.x <
+                                    viewportLayout.x +
+                                        viewportLayout.width -
+                                        1.0F &&
+                                viewportLayout.x <
+                                    probe.x +
+                                        probe.width -
+                                        1.0F &&
+                                probe.y <
+                                    viewportLayout.y +
+                                        viewportLayout.height -
+                                        1.0F &&
+                                viewportLayout.y <
+                                    probe.y +
+                                        probe.height -
+                                        1.0F;
+
+                            if (!probe.docked ||
+                                overlaps)
+                            {
+                                throw std::runtime_error(
+                                    std::format(
+                                        "Terrain UI smoke failed: '{}' panel is floating or overlaps the viewport.",
+                                        name));
+                            }
                         }
                     }
 

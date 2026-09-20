@@ -94,12 +94,86 @@ private:
     friend class EditorUi;
 };
 
+// Where a panel lives in the first-run (and Reset Layout) dock arrangement.
+// Auto is for panels the editor cannot know about, such as plugin panels; it
+// resolves to the Right tab group.
+enum class DockRegion : u8
+{
+    Auto,
+    Center,
+    Left,
+    Right,
+    Bottom
+};
+
 struct PanelDefinition
 {
     PanelId id{};
     std::string title;
     bool defaultOpen{true};
+    // Dedicated shell panels can opt into the central dock node. This is
+    // applied every frame so a stale or corrupt layout cannot strand a
+    // required panel as an unusably small floating window.
+    bool dockToMainViewport{false};
+    DockRegion defaultDock{DockRegion::Auto};
+    // Tab order inside the default region: lower comes first, and the first
+    // tab is the one shown. Ties keep registration order.
+    i32 dockOrder{100};
+    // Hard lower bound on the panel's size, in logical pixels. Zero leaves
+    // that axis unconstrained.
+    UiSize minSize{};
     std::function<void(PanelContext&)> draw;
+};
+
+struct DockLayoutFractions
+{
+    f32 left{0.20F};
+    f32 right{0.26F};
+    f32 bottom{0.22F};
+};
+
+struct DockAssignment
+{
+    PanelId panel{};
+    DockRegion region{DockRegion::Center};
+};
+
+// Successive splits for ImGui's DockBuilderSplitNode. Bottom is split from the
+// whole dock space first (full width); left and right are then split from what
+// remains, so their ratios are relative to that remainder rather than to the
+// whole. A zero ratio means the region has no panels and is not split off.
+struct DockSplitPlan
+{
+    f32 bottomOfRoot{0.0F};
+    f32 leftOfRemainder{0.0F};
+    f32 rightOfRemainder{0.0F};
+};
+
+// Assigns each panel that participates in the default layout (everything not
+// pinned with dockToMainViewport) to a concrete region, ordered by dockOrder
+// (ties in registration order).
+[[nodiscard]] std::vector<DockAssignment> AssignDefaultDock(
+    std::span<const PanelDefinition> panels);
+
+[[nodiscard]] DockSplitPlan PlanDockSplits(
+    std::span<const DockAssignment> assignments,
+    const DockLayoutFractions& fractions);
+
+// True when a saved ImGui layout actually docks at least one window. A layout
+// where every panel floats (or an empty one) is treated as "no layout" and
+// gets the default arrangement.
+[[nodiscard]] bool LayoutTextHasDockedPanels(
+    std::string_view layoutText) noexcept;
+
+// Deterministic probe of one panel's live window. Used by smoke validation.
+struct PanelLayoutProbe
+{
+    bool found{false};
+    bool docked{false};
+    f32 x{0.0F};
+    f32 y{0.0F};
+    f32 width{0.0F};
+    f32 height{0.0F};
 };
 
 struct MenuAction
@@ -146,6 +220,14 @@ public:
     [[nodiscard]] bool AutomationUiTraceContains(
         std::string_view label) const;
     [[nodiscard]] std::size_t AutomationUiTraceSize() const noexcept;
+    [[nodiscard]] PanelLayoutProbe AutomationPanelLayout(PanelId id) const;
+    // Work area available to docked panels (below the main menu bar), in the
+    // same logical pixels as AutomationPanelLayout.
+    [[nodiscard]] UiSize AutomationWorkArea() const;
+
+    // Discards the current arrangement and re-applies the default dock layout
+    // on the next DrawStudioShell.
+    void ResetLayout() noexcept;
 
     void RegisterMenuAction(MenuAction action);
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
