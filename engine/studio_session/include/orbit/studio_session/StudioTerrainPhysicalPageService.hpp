@@ -71,6 +71,7 @@ public:
     void QueueChanges(
         std::span<const terrain_dependency::TerrainInvalidationRequest> requests);
 
+    void Tick();
     void Tick(f64 deltaSeconds);
     void RebuildDirty();
 
