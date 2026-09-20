@@ -822,6 +822,13 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
                 nullptr,
                 "studio.primary");
 
+        const auto performance =
+            workspace_->Session().
+                TerrainPerformance().
+                Capture(
+                    workspace_->Session(),
+                    "studio.primary");
+
         context.Text(std::format("Semantic Revision: {}", counts.semanticRevision));
         context.Text(std::format("Terrain Surfaces: {}", surfaceStats.terrainSurfaces));
         context.Text(std::format(
@@ -975,10 +982,129 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
                 "No live TerrainBodyServices are composed for the selected Terrain Surface.");
         }
 
+        context.Separator();
+        context.Text("M16 Performance / Responsiveness");
+        context.Text(std::format(
+            "Build {} @ {} | {}",
+            performance.engineVersion,
+            performance.sourceCommit,
+            performance.buildConfiguration));
+        context.Text(std::format(
+            "CPU: {}",
+            performance.cpuName));
+        context.Text(std::format(
+            "GPU: {}",
+            performance.gpuName.empty()
+                ? std::string("no production terrain draw sampled")
+                : performance.gpuName));
+
+        context.Text(std::format(
+            "Frame CPU | last {:.3f} ms | avg {:.3f} ms | max {:.3f} ms | {} samples",
+            performance.lastFrameCpuMs,
+            performance.averageFrameCpuMs,
+            performance.maximumFrameCpuMs,
+            performance.frameSamples));
+
+        context.Text(std::format(
+            "During regeneration | avg {:.3f} ms | max {:.3f} ms | {} samples",
+            performance.averageRegeneratingFrameCpuMs,
+            performance.maximumRegeneratingFrameCpuMs,
+            performance.regeneratingFrameSamples));
+
+        context.Text(std::format(
+            "M06 pages | resident {} | outstanding {} | peak {} | queued {} | building {} | upload {} | stale {} | failed {} | rejected {}",
+            performance.residentTrackedPages,
+            performance.outstandingPages,
+            performance.peakOutstandingPages,
+            performance.queuedPages,
+            performance.buildingPages,
+            performance.uploadingPages,
+            performance.stalePages,
+            performance.failedPages,
+            performance.staleRejected));
+
+        context.Text(std::format(
+            "Selected page | {} | edit->Ready {} | max {}{}",
+            performance.selectedPageState.empty()
+                ? std::string("untracked")
+                : performance.selectedPageState,
+            performance.selectedEditToReadyMs >= 0.0
+                ? std::format(
+                      "{:.3f} ms",
+                      performance.selectedEditToReadyMs)
+                : std::string("not sampled"),
+            performance.maximumEditToReadyMs >= 0.0
+                ? std::format(
+                      "{:.3f} ms",
+                      performance.maximumEditToReadyMs)
+                : std::string("not sampled"),
+            performance.selectedAwaitingReady
+                ? " | WAITING"
+                : ""));
+
+        context.Text(std::format(
+            "M26 cache | hit {:.2f}% | stationary {:.2f}% over {} frames | {:.2f} MiB resident",
+            performance.cacheHitRatePercent,
+            performance.stationaryCacheHitRatePercent,
+            performance.stationaryFrames,
+            static_cast<double>(
+                performance.cacheStats.residentBytes) /
+                (1024.0 * 1024.0)));
+
+        context.Text(std::format(
+            "Terrain viewport | draws {} | upload {} B/frame | generated {} samples | refreshed {} regions | pending {}",
+            performance.streaming.drawCallsLastFrame,
+            performance.streaming.uploadedBytesLastFrame,
+            performance.streaming.generatedSamplesLastUpdate,
+            performance.streaming.refreshedRegionsLastUpdate,
+            performance.streaming.updatePending
+                ? "yes"
+                : "no"));
+
+        context.Text(std::format(
+            "Streaming totals | uploaded {:.2f} MiB | generated {} | batches {}/{} committed | superseded {} | stale revision {}",
+            static_cast<double>(
+                performance.streaming.cumulativeUploadedBytes) /
+                (1024.0 * 1024.0),
+            performance.streaming.cumulativeGeneratedSamples,
+            performance.streaming.submittedBatches,
+            performance.streaming.committedBatches,
+            performance.streaming.supersededBatches,
+            performance.streaming.staleRevisionBatches));
+
+        const auto& m30 =
+            performance.m30Reference;
+
+        context.Text(std::format(
+            "M30 reference | {} | {} | {} | {}x{} physical grid",
+            m30.adapter,
+            m30.buildConfiguration,
+            m30.sourceCommit,
+            m30.resolution,
+            m30.resolution));
+
+        context.Text(std::format(
+            "M30 GPU | page {:.3f} ms | drainage {:.3f} ms | hydraulic {:.4f} ms/iter | aeolian {:.4f} ms/iter | scatter {:.4f} ms",
+            m30.pageGenerationGpuMs,
+            m30.drainageBuildGpuMs,
+            m30.hydraulicIterationGpuMs,
+            m30.aeolianIterationGpuMs,
+            m30.scatterGenerationGpuMs));
+
+        context.Text(std::format(
+            "M30 memory/cache | peak transient {:.2f} MiB | persistent page {:.2f} KiB | hit {:.3f}%",
+            static_cast<double>(
+                m30.peakTransientBytes) /
+                (1024.0 * 1024.0),
+            static_cast<double>(
+                m30.persistentPageBytes) /
+                1024.0,
+            m30.cacheHitRatePercent));
+
         context.Text(
             "Persistent terrain cache identity: physical page + physical LOD + authority revisions.");
         context.Text(
-            "Dependency invalidation is source-domain and spatially bounded; this panel is diagnostic only.");
+            "Dependency invalidation is source-domain and spatially bounded; M16 metrics are diagnostic only.");
         context.TreePop();
     }
 
