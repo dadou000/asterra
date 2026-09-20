@@ -1,4 +1,5 @@
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -115,6 +116,7 @@ int main()
         Check(initialUniverseGeneration != 0);
 
         const auto idleTick = studio.Tick();
+        Check(!idleTick.compositionChanged);
         Check(
             idleTick.worldGeneration ==
             initialWorldGeneration);
@@ -128,6 +130,7 @@ int main()
                 "Asterra",
                 6'000'000.0);
         const auto composedTick = studio.Tick();
+        Check(composedTick.compositionChanged);
         Check(
             composedTick.universeGeneration >
             initialUniverseGeneration);
@@ -139,6 +142,7 @@ int main()
         const auto stableUniverseGeneration =
             studio.World().UniverseGeneration();
         const auto noOpTick = studio.Tick();
+        Check(!noOpTick.compositionChanged);
         Check(
             noOpTick.universeGeneration ==
             stableUniverseGeneration);
@@ -173,12 +177,52 @@ int main()
 
         const auto secondaryEmptyGeneration =
             studio.World().UniverseGeneration();
+
+        const auto secondaryWorldObject =
+            studio.World().Commands().
+                CreateObject(
+                    orbit::world_model::kWorldType,
+                    "World");
+
+        const orbit::scene::ObjectId
+            selectedWorld[] = {
+                secondaryWorldObject
+            };
+
+        studio.World().Selection().Set(
+            selectedWorld);
+
+        studio.World().CommandRegistry().
+            Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kCreateRockyPlanet,
+                {
+                    {
+                        "name",
+                        std::string("Veyra")
+                    },
+                    {
+                        "radiusMeters",
+                        4'200'000.0
+                    }
+                });
+
+        Check(
+            studio.World().Selection().
+                Ordered().size() ==
+            1U);
+
         const auto veyra =
-            AddBody(
-                studio,
-                "Veyra",
-                4'200'000.0);
-        const auto secondaryComposedTick = studio.Tick();
+            studio.World().Selection().
+                Ordered().front();
+
+        const auto secondaryComposedTick =
+            studio.Tick();
+
+        Check(
+            secondaryComposedTick.
+                compositionChanged);
         Check(
             secondaryComposedTick.universeGeneration >
             secondaryEmptyGeneration);
@@ -186,6 +230,49 @@ int main()
         Check(
             studio.ActiveBody().Active()->semanticObject ==
             veyra);
+        Check(
+            studio.World().SurfaceStats().
+                terrainSurfaces ==
+            1U);
+
+        const auto activeRuntimeBody =
+            studio.ActiveBody().Active()->
+                body;
+
+        const auto* terrainServices =
+            studio.World().Surfaces().
+                ServicesForBody(
+                    activeRuntimeBody);
+
+        Check(
+            terrainServices !=
+                nullptr);
+        Check(
+            terrainServices->
+                IsValid());
+        Check(
+            terrainServices->
+                Biomes().
+                Definitions().
+                size() ==
+            1U);
+        Check(
+            terrainServices->
+                Biomes().
+                BaseBiome().
+                IsValid());
+
+        const auto veyraChildren =
+            studio.World().Objects().
+                Children(
+                    veyra);
+
+        Check(
+            veyraChildren.size() ==
+                1U &&
+            veyraChildren.front().type ==
+                orbit::world_model::
+                    kTerrainSurfaceType);
 
         const auto roots =
             RpcCall(

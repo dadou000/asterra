@@ -1,19 +1,132 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
+#include <orbit/math/Vector.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
+
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 
 namespace orbit::studio_ui
 {
+namespace
+{
+[[nodiscard]] bool SameClipmapConfig(
+    const terrain_view::ClipmapConfig& a,
+    const terrain_view::ClipmapConfig& b) noexcept
+{
+    return
+        a.levelCount == b.levelCount &&
+        a.gridResolution == b.gridResolution &&
+        a.baseSpacingMeters == b.baseSpacingMeters &&
+        a.levelScale == b.levelScale &&
+        a.overlapCells == b.overlapCells;
+}
+
+[[nodiscard]] terrain_render::TerrainPreviewCamera
+TerrainCameraFromBodyCamera(
+    const render_view::CameraState& camera,
+    const world::WorldPosition& observer)
+{
+    const auto observerDirection =
+        math::Normalize(observer.meters);
+
+    const auto frame =
+        world::MakeSurfaceFrame(
+            observerDirection);
+
+    const math::Double3 forward{
+        static_cast<f64>(camera.forward.x),
+        static_cast<f64>(camera.forward.y),
+        static_cast<f64>(camera.forward.z)
+    };
+
+    const math::Double3 up{
+        static_cast<f64>(camera.up.x),
+        static_cast<f64>(camera.up.y),
+        static_cast<f64>(camera.up.z)
+    };
+
+    auto localForward =
+        math::Float3{
+            static_cast<f32>(
+                math::Dot(
+                    forward,
+                    frame.east)),
+            static_cast<f32>(
+                math::Dot(
+                    forward,
+                    frame.up)),
+            static_cast<f32>(
+                math::Dot(
+                    forward,
+                    frame.north))
+        };
+
+    auto localUp =
+        math::Float3{
+            static_cast<f32>(
+                math::Dot(
+                    up,
+                    frame.east)),
+            static_cast<f32>(
+                math::Dot(
+                    up,
+                    frame.up)),
+            static_cast<f32>(
+                math::Dot(
+                    up,
+                    frame.north))
+        };
+
+    if (math::LengthSquared(localForward) <=
+        1.0e-8F)
+    {
+        localForward = {
+            0.0F,
+            -0.28F,
+            1.0F
+        };
+    }
+
+    if (math::LengthSquared(localUp) <=
+        1.0e-8F)
+    {
+        localUp = {
+            0.0F,
+            1.0F,
+            0.0F
+        };
+    }
+
+    return {
+        .forward =
+            math::Normalize(
+                localForward),
+        .up =
+            math::Normalize(
+                localUp)
+    };
+}
+} // namespace
+
 StudioViewportRenderer::StudioViewportRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
+    const shader::Compiler& compiler,
+    const u32 framesInFlight)
     : device_(&device),
+      compiler_(&compiler),
+      framesInFlight_(framesInFlight),
       bodyRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler)
 {
+    if (framesInFlight_ == 0U)
+    {
+        throw std::invalid_argument(
+            "Studio terrain rendering requires at least one frame-in-flight slot.");
+    }
 }
 
 std::vector<StudioRenderedView>
@@ -24,7 +137,8 @@ StudioViewportRenderer::Compose(
     studio_session::StudioRuntimeBinding& runtime,
     const studio_session::StudioRuntimeSnapshot& snapshot,
     const time::SimulationTime atTime,
-    const bool drawPathDebug)
+    const bool drawPathDebug,
+    const u32 frameIndex)
 {
     static_cast<void>(views.Refresh(snapshot));
 
@@ -94,6 +208,20 @@ StudioViewportRenderer::Compose(
             shape = body->shape;
         }
 
+        const auto terrainRuntime =
+            session.TerrainRuntime().
+                Capture(
+                    info.id);
+
+        if (terrainRuntime.has_value() &&
+            !session.TerrainRuntime().
+                IsCurrent(
+                    *terrainRuntime))
+        {
+            throw std::logic_error(
+                "Studio terrain viewport runtime is stale for the current session generation.");
+        }
+
         const auto liveDebugPage =
             views.LiveDebugPage(info.id);
         const bool hasDebugField =
@@ -105,6 +233,7 @@ StudioViewportRenderer::Compose(
             SelectStudioViewportPresentation(
                 logicalTarget->mode,
                 shape.has_value(),
+                terrainRuntime.has_value(),
                 liveDebugPage != nullptr,
                 hasDebugField);
 
@@ -114,8 +243,204 @@ StudioViewportRenderer::Compose(
 
         switch (presentation)
         {
+        case StudioViewportPresentation::ProductionTerrain:
+        {
+            if (device_ == nullptr ||
+                compiler_ == nullptr ||
+                !terrainRuntime.has_value())
+            {
+                throw std::logic_error(
+                    "Studio production-terrain presentation lost its device, compiler or runtime binding.");
+            }
+
+            const auto& source =
+                session.TerrainRuntime().
+                    TerrainSource(
+                        *terrainRuntime);
+
+            const auto* analytic =
+                dynamic_cast<
+                    const terrain::
+                        AnalyticTerrainSource*>(
+                            &source);
+
+            if (analytic == nullptr)
+            {
+                throw std::logic_error(
+                    "Studio production terrain currently requires the composed AnalyticTerrainSource used by the shared GPU field generator.");
+            }
+
+            auto& terrain =
+                terrainPresentations_[
+                    info.id];
+
+            const bool recreate =
+                terrain.renderer == nullptr ||
+                terrain.fieldGenerator == nullptr ||
+                terrain.universeGeneration !=
+                    terrainRuntime->
+                        universeGeneration ||
+                terrain.body !=
+                    terrainRuntime->body ||
+                terrain.planet !=
+                    terrainRuntime->planet.id ||
+                terrain.terrainSourceRevision !=
+                    terrainRuntime->
+                        terrainSourceRevision ||
+                !SameClipmapConfig(
+                    terrain.clipmap,
+                    terrainRuntime->clipmap);
+
+            if (recreate)
+            {
+                terrain_render::
+                    TerrainPreviewConfig
+                    config{};
+
+                config.clipmap =
+                    terrainRuntime->clipmap;
+                config.adaptiveCoverage.enabled =
+                    false;
+                config.nearPlaneMeters =
+                    std::max(
+                        view->Camera().
+                            nearPlaneMeters,
+                        0.01F);
+                config.farPlaneMeters =
+                    std::max(
+                        view->Camera().
+                            farPlaneMeters,
+                        config.nearPlaneMeters *
+                            100.0F);
+                config.framesInFlight =
+                    framesInFlight_;
+
+                terrain.fieldGenerator =
+                    std::make_unique<
+                        terrain_gpu::
+                            GpuFieldGenerator>(
+                                *device_,
+                                *compiler_,
+                                terrainRuntime->
+                                    planet,
+                                *analytic);
+
+                terrain.renderer =
+                    std::make_unique<
+                        terrain_render::
+                            TerrainPreviewRenderer>(
+                                *device_,
+                                *compiler_,
+                                terrainRuntime->
+                                    planet,
+                                *terrain.
+                                    fieldGenerator,
+                                terrainRuntime->
+                                    observer,
+                                config);
+
+                terrain.universeGeneration =
+                    terrainRuntime->
+                        universeGeneration;
+                terrain.body =
+                    terrainRuntime->body;
+                terrain.planet =
+                    terrainRuntime->planet.id;
+                terrain.terrainSourceRevision =
+                    terrainRuntime->
+                        terrainSourceRevision;
+                terrain.clipmap =
+                    terrainRuntime->clipmap;
+                terrain.observer =
+                    terrainRuntime->observer;
+            }
+            else if (
+                terrain.observer.meters !=
+                    terrainRuntime->
+                        observer.meters)
+            {
+                terrain.renderer->
+                    UpdateObserver(
+                        terrainRuntime->
+                            observer);
+
+                terrain.observer =
+                    terrainRuntime->observer;
+            }
+
+            terrain.runtimeGeneration =
+                terrainRuntime->
+                    runtimeGeneration;
+
+            const auto camera =
+                TerrainCameraFromBodyCamera(
+                    view->Camera(),
+                    terrainRuntime->observer);
+
+            auto* terrainRenderer =
+                terrain.renderer.get();
+            auto* depth =
+                &view->Depth();
+
+            graph.AddPass(
+                prefix + ".ProductionTerrain",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state = rhi::ResourceState::DepthWrite,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [color,
+                 depth,
+                 width,
+                 height,
+                 terrainRenderer,
+                 camera,
+                 frameIndex,
+                 framesInFlight =
+                    framesInFlight_](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    commands.ClearColorTarget(
+                        *color,
+                        {
+                            .red = 0.008F,
+                            .green = 0.012F,
+                            .blue = 0.020F,
+                            .alpha = 1.0F
+                        });
+
+                    commands.ClearDepthTarget(
+                        *depth,
+                        0.0F);
+
+                    commands.SetRenderTargets(
+                        *color,
+                        *depth);
+
+                    terrainRenderer->Draw(
+                        commands,
+                        frameIndex %
+                            framesInFlight,
+                        width,
+                        height,
+                        camera);
+                });
+            break;
+        }
+
         case StudioViewportPresentation::TerrainDebug:
         {
+            terrainPresentations_.erase(
+                info.id);
+
             if (device_ == nullptr ||
                 liveDebugPage == nullptr)
             {
@@ -209,6 +534,9 @@ StudioViewportRenderer::Compose(
         }
 
         case StudioViewportPresentation::TerrainDebugUnavailable:
+            terrainPresentations_.erase(
+                info.id);
+
             graph.AddPass(
                 prefix + ".TerrainDebugUnavailable",
                 {
@@ -235,6 +563,9 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::BodyPreview:
         {
+            terrainPresentations_.erase(
+                info.id);
+
             const auto camera = view->Camera();
             const auto bodyShape = *shape;
 
@@ -311,6 +642,9 @@ StudioViewportRenderer::Compose(
         }
 
         case StudioViewportPresentation::Blank:
+            terrainPresentations_.erase(
+                info.id);
+
             graph.AddPass(
                 prefix + ".Blank",
                 {
@@ -341,6 +675,35 @@ StudioViewportRenderer::Compose(
             .targets = targets,
             .targeted = shape.has_value()
         });
+    }
+
+    for (auto iterator =
+             terrainPresentations_.begin();
+         iterator !=
+             terrainPresentations_.end();)
+    {
+        const bool stillExists =
+            std::find_if(
+                catalog.begin(),
+                catalog.end(),
+                [&iterator](
+                    const StudioRenderViewInfo& item)
+                {
+                    return item.id ==
+                        iterator->first;
+                }) !=
+            catalog.end();
+
+        if (!stillExists)
+        {
+            iterator =
+                terrainPresentations_.
+                    erase(iterator);
+        }
+        else
+        {
+            ++iterator;
+        }
     }
 
     return rendered;

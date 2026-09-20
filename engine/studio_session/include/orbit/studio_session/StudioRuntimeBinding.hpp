@@ -21,8 +21,10 @@ struct StudioRuntimeSnapshot
     u64 universeGeneration{0};
     std::optional<editor_session::ActiveBodyTarget> activeBody;
 
+    bool compositionChanged{false};
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
+    bool terrainRuntimeChanged{false};
     bool pathNetworkRebound{false};
     bool pathRoutingRebound{false};
     bool pathProductsInvalidated{false};

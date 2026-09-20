@@ -75,3 +75,24 @@ if(BUILD_TESTING)
         COMMAND OrbitSurfaceAuthoringModelTests
     )
 endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitRockyPlanetAuthoringTests
+        tests/RockyPlanetAuthoringTests.cpp
+    )
+
+    target_link_libraries(OrbitRockyPlanetAuthoringTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitRockyPlanetAuthoringTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRockyPlanetAuthoringTests)
+
+    add_test(
+        NAME Orbit.RockyPlanetAuthoring
+        COMMAND OrbitRockyPlanetAuthoringTests
+    )
+endif()
+

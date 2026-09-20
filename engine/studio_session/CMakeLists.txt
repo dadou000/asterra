@@ -3,6 +3,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioAuthoringBinding.cpp
     src/StudioSession.cpp
     src/StudioRuntimeBinding.cpp
+    src/StudioTerrainRuntimeBridge.cpp
     src/StudioWorkspace.cpp
     src/StudioWorkspaceRpcHost.cpp
     src/ProjectBrowserModel.cpp
@@ -31,7 +32,13 @@ target_link_libraries(OrbitStudioSession
         Orbit::PathRouting
         Orbit::Paths
         Orbit::Rpc
+        Orbit::SurfaceModel
+        Orbit::Terrain
         Orbit::TerrainDebug
+        Orbit::TerrainGpu
+        Orbit::TerrainStream
+        Orbit::TerrainView
+        Orbit::World
 )
 
 target_compile_features(OrbitStudioSession PUBLIC cxx_std_23)
@@ -72,6 +79,28 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioRuntimeBinding
         COMMAND OrbitStudioRuntimeBindingTests
+    )
+
+
+
+    add_executable(OrbitStudioTerrainRuntimeBridgeTests
+        tests/StudioTerrainRuntimeBridgeTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainRuntimeBridgeTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainRuntimeBridgeTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainRuntimeBridgeTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainRuntimeBridge
+        COMMAND OrbitStudioTerrainRuntimeBridgeTests
     )
 
     add_executable(OrbitStudioAuthoringBindingTests

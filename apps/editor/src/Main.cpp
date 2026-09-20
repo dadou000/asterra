@@ -1734,24 +1734,6 @@ int main(
             0.0F
         };
 
-        rpcHost.AttachViewport({
-            .view = &bodyView,
-            .capture =
-                [&device,
-                 &graphicsQueue,
-                 &bodyView](
-                    const std::filesystem::path&
-                        path)
-                {
-                    return orbit::render_view::
-                        CaptureBmp(
-                            device,
-                            graphicsQueue,
-                            bodyView,
-                            path);
-                }
-        });
-
         orbit::editor_ui::
             BodyPreviewRenderer
                 bodyPreview(
@@ -1793,17 +1775,39 @@ int main(
                 studioViews,
                 studioSession);
 
-        // The legacy primary viewport remains the interaction-heavy authoring
-        // view for V0.0.3. The new target registry owns the independent map /
-        // debug view; remove its unused hidden primary slot.
-        static_cast<void>(
-            studioViews.Destroy(
-                "studio.primary"));
-
         orbit::studio_ui::StudioViewportRenderer
             studioViewportRenderer(
                 device,
-                compiler);
+                compiler,
+                swapchain.BufferCount());
+
+        auto* primaryStudioView =
+            studioViews.Find(
+                "studio.primary");
+
+        if (primaryStudioView == nullptr)
+        {
+            throw std::logic_error(
+                "Studio primary RenderView was not created.");
+        }
+
+        rpcHost.AttachViewport({
+            .view = primaryStudioView,
+            .capture =
+                [&device,
+                 &graphicsQueue,
+                 primaryStudioView](
+                    const std::filesystem::path&
+                        path)
+                {
+                    return orbit::render_view::
+                        CaptureBmp(
+                            device,
+                            graphicsQueue,
+                            *primaryStudioView,
+                            path);
+                }
+        });
 
         studioViewportPanels.
             RegisterSecondary(ui);
@@ -3635,9 +3639,9 @@ int main(
         orbit::u64 publishedContentRevision =
             content.Revision();
         orbit::u32 publishedViewportWidth =
-            bodyView.Width();
+            primaryStudioView->Width();
         orbit::u32 publishedViewportHeight =
-            bodyView.Height();
+            primaryStudioView->Height();
 
         const auto publishAutomationChanges =
             [&]
@@ -3725,15 +3729,15 @@ int main(
                             }));
                 }
 
-                if (bodyView.Width() !=
+                if (primaryStudioView->Width() !=
                         publishedViewportWidth ||
-                    bodyView.Height() !=
+                    primaryStudioView->Height() !=
                         publishedViewportHeight)
                 {
                     publishedViewportWidth =
-                        bodyView.Width();
+                        primaryStudioView->Width();
                     publishedViewportHeight =
-                        bodyView.Height();
+                        primaryStudioView->Height();
 
                     rpcHost.PublishEvent(
                         "viewport.resized",
@@ -3766,7 +3770,7 @@ int main(
             .title = "Viewport",
             .defaultOpen = true,
             .draw =
-                [&bodyView,
+                [&studioViews,
                  &selection,
                  &bodyObject,
                  &objects,
@@ -3788,6 +3792,17 @@ int main(
                     if (!worldSession.HasWorld())
                     {
                         context.Text("No world is open. Use World Documents to open or create one.");
+                        return;
+                    }
+
+                    auto* primaryView =
+                        studioViews.Find(
+                            "studio.primary");
+
+                    if (primaryView == nullptr)
+                    {
+                        context.Text(
+                            "Primary Studio RenderView is unavailable.");
                         return;
                     }
 
@@ -3839,28 +3854,28 @@ int main(
                                 1.0F));
 
                     if (width !=
-                            bodyView.Width() ||
+                            primaryView->Width() ||
                         height !=
-                            bodyView.Height())
+                            primaryView->Height())
                     {
-                        bodyView.Resize(
+                        primaryView->Resize(
                             width,
                             height);
                     }
 
                     const auto interaction =
                         context.Image(
-                            bodyView.Color(),
+                            primaryView->Color(),
                             {
                                 .width =
                                     static_cast<
                                         orbit::f32>(
-                                            bodyView.
+                                            primaryView->
                                                 Width()),
                                 .height =
                                     static_cast<
                                         orbit::f32>(
-                                            bodyView.
+                                            primaryView->
                                                 Height())
                             });
 
@@ -3946,9 +3961,9 @@ int main(
                                         bodies().FindBody(bodyId);
                                     const auto ray =
                                         orbit::render_view::ViewportRay(
-                                            bodyView.Camera(),
-                                            bodyView.Width(),
-                                            bodyView.Height(),
+                                            primaryView->Camera(),
+                                            primaryView->Width(),
+                                            primaryView->Height(),
                                             interaction.u,
                                             interaction.v);
 
@@ -4023,9 +4038,9 @@ int main(
                             const auto ray =
                                 orbit::render_view::
                                     ViewportRay(
-                                        bodyView.Camera(),
-                                        bodyView.Width(),
-                                        bodyView.Height(),
+                                        primaryView->Camera(),
+                                        primaryView->Width(),
+                                        primaryView->Height(),
                                         interaction.u,
                                         interaction.v);
 
@@ -6305,7 +6320,9 @@ int main(
                     studioRuntime,
                     studioSnapshot,
                     {},
-                    pathDebugVisualization);
+                    pathDebugVisualization,
+                    swapchain.
+                        CurrentBackBufferIndex());
 
             graph.AddPass(
                 "Studio.Canvas",

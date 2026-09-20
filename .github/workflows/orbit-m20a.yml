@@ -70,7 +70,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build M20A targets
-        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioViewportCameraTests OrbitStudioUi OrbitStudio
+        run: cmake --build build --config Release --target OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitRockyPlanetAuthoringTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitProjectWorldRpcTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioTerrainRuntimeBridgeTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitStudioWorkspaceRpcHostTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioViewportCameraTests OrbitStudioViewportPresentationTests OrbitStudioUi OrbitStudio
 
       - name: Test M20A
         shell: pwsh
@@ -80,6 +80,7 @@ jobs:
             "build/engine/world_model/Release/OrbitUniverseCompositionTests.exe",
             "build/engine/surface_model/Release/OrbitSurfaceCompositionTests.exe",
             "build/engine/editor_model/Release/OrbitTerrainAuthoringCommandTests.exe",
+            "build/engine/editor_model/Release/OrbitRockyPlanetAuthoringTests.exe",
             "build/engine/editor_session/Release/OrbitEditorWorldSessionTests.exe",
             "build/engine/editor_session/Release/OrbitTransactionalCompositionTests.exe",
             "build/engine/editor_session/Release/OrbitWorldDocumentsModelTests.exe",
@@ -89,6 +90,7 @@ jobs:
             "build/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
             "build/engine/studio_session/Release/OrbitStudioSessionTests.exe",
             "build/engine/studio_session/Release/OrbitStudioRuntimeBindingTests.exe",
+            "build/engine/studio_session/Release/OrbitStudioTerrainRuntimeBridgeTests.exe",
             "build/engine/studio_session/Release/OrbitStudioAuthoringBindingTests.exe",
             "build/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
             "build/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe",
@@ -99,7 +101,8 @@ jobs:
             "build/engine/studio_session/Release/OrbitUniverseBoundPathCacheTests.exe",
             "build/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe",
             "build/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe",
-            "build/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe"
+            "build/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
+            "build/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
           )
 
           foreach ($test in $tests) {

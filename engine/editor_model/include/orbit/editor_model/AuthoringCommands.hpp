@@ -37,6 +37,11 @@ inline constexpr commands::CommandId kCreateCelestialBody{
     .low = 0x4352454154454244ULL
 };
 
+inline constexpr commands::CommandId kCreateRockyPlanet{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x524f434b59504c4eULL
+};
+
 inline constexpr commands::CommandId kCreateTerrainSurface{
     .high = 0x4f52424954434d44ULL,
     .low = 0x4352454154455452ULL

@@ -5,6 +5,7 @@
 #include <orbit/editor_session/ActiveBodyModel.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
+#include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
@@ -21,8 +22,12 @@ namespace orbit::studio_session
 {
 struct StudioTickResult
 {
+    // True only when semantic ObjectStore authority changed and the
+    // UniverseComposition + SurfaceComposition pair was rebuilt this tick.
+    bool compositionChanged{false};
     bool activeBodyChanged{false};
     bool viewportTargetsChanged{false};
+    bool terrainRuntimeChanged{false};
     bool pathNetworkRebound{false};
     bool pathRoutingRebound{false};
     bool pathProductsInvalidated{false};
@@ -76,6 +81,11 @@ public:
     [[nodiscard]] const terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() const noexcept;
 
+    [[nodiscard]] StudioTerrainRuntimeBridge&
+    TerrainRuntime() noexcept;
+    [[nodiscard]] const StudioTerrainRuntimeBridge&
+    TerrainRuntime() const noexcept;
+
     [[nodiscard]] std::vector<editor_session::WorldDocumentItem>
     Worlds() const;
     [[nodiscard]] std::optional<editor_session::WorldDocumentItem>
@@ -119,6 +129,7 @@ private:
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
+    StudioTerrainRuntimeBridge terrainRuntime_;
     u64 terrainDebugUniverseGeneration_{~u64{0}};
     editor_rpc::EditorSessionRpcHost rpc_;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/render_view/RenderView.hpp>
+#include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
 
@@ -16,6 +17,15 @@ namespace orbit::studio_ui
 ComposeViewportCamera(
     const studio_session::ViewportTargetState& view,
     u64 universeGeneration);
+
+// Perspective terrain camera aligned with the production renderer's
+// observer-local basis (east, up, north). The returned CameraState is expressed
+// in the body's frame so existing editor ray/picking code shares the same
+// physical observer as the rendered terrain.
+[[nodiscard]] render_view::CameraState
+ComposeTerrainViewportCamera(
+    const studio_session::ViewportTargetState& view,
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& terrain);
 
 struct StudioPhysicalPageSelection
 {

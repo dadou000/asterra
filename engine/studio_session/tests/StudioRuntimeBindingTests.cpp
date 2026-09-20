@@ -1,6 +1,7 @@
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cstdlib>
@@ -85,6 +86,7 @@ int main()
                 6'000'000.0);
         const auto composed = runtime.Refresh();
         Check(runtime.IsCurrent(composed));
+        Check(composed.compositionChanged);
         Check(composed.activeBody.has_value());
         Check(
             composed.activeBody->semanticObject ==
@@ -107,20 +109,144 @@ int main()
             captured.universeGeneration ==
             composed.universeGeneration);
 
+        auto& worldCommands =
+            studio.World().Commands();
+
+        const auto terrain =
+            worldCommands.CreateObject(
+                orbit::world_model::
+                    kTerrainSurfaceType,
+                "Asterra Terrain",
+                asterra);
+
+        worldCommands.SetProperty(
+            terrain,
+            orbit::world_model::kTerrainSeed,
+            orbit::i64{424242});
+
+        const auto terrainComposed =
+            runtime.Refresh();
+
+        Check(
+            terrainComposed.
+                compositionChanged);
+        Check(
+            terrainComposed.
+                universeGeneration >
+            composed.universeGeneration);
+        Check(
+            studio.World().
+                SurfaceStats().
+                terrainSurfaces ==
+            1U);
+
+        const auto terrainBody =
+            studio.World().Universe().
+                BodyForObject(
+                    asterra);
+        Check(terrainBody.has_value());
+
+        const auto* capability =
+            studio.World().Surfaces().
+                Registry().
+                FindTerrainSurface(
+                    *terrainBody);
+        Check(capability != nullptr);
+
+        const auto* analytic =
+            dynamic_cast<
+                const orbit::terrain::
+                    AnalyticTerrainSource*>(
+                        capability->
+                            terrain.get());
+        Check(analytic != nullptr);
+        Check(
+            analytic->Description().
+                macroAmplitudeMeters ==
+            1'200.0);
+
+        worldCommands.SetProperty(
+            terrain,
+            orbit::world_model::
+                kTerrainMacroAmplitudeMeters,
+            3'333.0);
+
+        // Before Refresh, the current runtime composition remains immutable.
+        Check(
+            analytic->Description().
+                macroAmplitudeMeters ==
+            1'200.0);
+        Check(
+            runtime.IsCurrent(
+                terrainComposed));
+
+        const auto terrainEdited =
+            runtime.Refresh();
+
+        Check(
+            terrainEdited.
+                compositionChanged);
+        Check(
+            terrainEdited.
+                universeGeneration >
+            terrainComposed.
+                universeGeneration);
+        Check(
+            !runtime.IsCurrent(
+                terrainComposed));
+
+        const auto* editedCapability =
+            studio.World().Surfaces().
+                Registry().
+                FindTerrainSurface(
+                    *terrainBody);
+        Check(
+            editedCapability !=
+            nullptr);
+
+        const auto* editedAnalytic =
+            dynamic_cast<
+                const orbit::terrain::
+                    AnalyticTerrainSource*>(
+                        editedCapability->
+                            terrain.get());
+
+        Check(editedAnalytic != nullptr);
+        Check(
+            editedAnalytic->
+                Description().
+                macroAmplitudeMeters ==
+            3'333.0);
+
+        const auto idleAfterTerrainEdit =
+            runtime.Refresh();
+
+        Check(
+            !idleAfterTerrainEdit.
+                compositionChanged);
+        Check(
+            idleAfterTerrainEdit.
+                universeGeneration ==
+            terrainEdited.
+                universeGeneration);
+
         studio.World().Commands().SetProperty(
             asterra,
             orbit::world_model::kBodyRadius,
             6'100'000.0);
 
-        // Until Refresh advances composition, the current runtime state is
-        // intentionally still the previous immutable composition.
-        Check(runtime.IsCurrent(composed));
+        // Until Refresh advances composition, the current post-terrain
+        // runtime state remains the immutable composition visible to consumers.
+        Check(
+            runtime.IsCurrent(
+                idleAfterTerrainEdit));
 
         const auto edited = runtime.Refresh();
         Check(runtime.IsCurrent(edited));
+        Check(edited.compositionChanged);
         Check(
             edited.universeGeneration >
-            composed.universeGeneration);
+            terrainEdited.universeGeneration);
         Check(!runtime.IsCurrent(composed));
         Check(edited.pathRoutingRebound);
         Check(edited.pathProductsInvalidated);

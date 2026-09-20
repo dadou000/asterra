@@ -39,6 +39,10 @@ StudioSession::StudioSession(
       pathNetwork_(world_),
       pathRouting_(world_),
       pathProducts_(world_),
+      terrainRuntime_(
+          world_,
+          viewports_,
+          terrainDebugPages_),
       rpc_(world_)
 {
     RegisterViewportTargetRpc(
@@ -135,6 +139,18 @@ StudioSession::TerrainDebugPages() const noexcept
     return terrainDebugPages_;
 }
 
+StudioTerrainRuntimeBridge&
+StudioSession::TerrainRuntime() noexcept
+{
+    return terrainRuntime_;
+}
+
+const StudioTerrainRuntimeBridge&
+StudioSession::TerrainRuntime() const noexcept
+{
+    return terrainRuntime_;
+}
+
 std::vector<editor_session::WorldDocumentItem>
 StudioSession::Worlds() const
 {
@@ -198,7 +214,13 @@ StudioSession::DispatchRpc(
 
     if (world_.HasWorld())
     {
-        static_cast<void>(activeBody_.Refresh());
+        // Semantic edits must compose before any generation-bound consumer
+        // refreshes. ActiveBodyModel still has its own defensive refresh, but
+        // Studio's lifecycle no longer relies on that side effect.
+        static_cast<void>(
+            world_.RefreshUniverseIfChanged());
+        static_cast<void>(
+            activeBody_.Refresh());
     }
     else
     {
@@ -210,6 +232,8 @@ StudioSession::DispatchRpc(
     static_cast<void>(pathProducts_.RefreshBinding());
     static_cast<void>(viewports_.Refresh());
     RefreshTerrainDebugGeneration();
+    static_cast<void>(
+        terrainRuntime_.Refresh());
     return response;
 }
 
@@ -247,11 +271,13 @@ StudioTickResult StudioSession::Tick(
             pathProducts_.RefreshBinding();
         result.viewportTargetsChanged =
             viewports_.Refresh();
+        RefreshTerrainDebugGeneration();
+        result.terrainRuntimeChanged =
+            terrainRuntime_.Refresh();
         result.worldGeneration =
             world_.Generation();
         result.universeGeneration =
             world_.UniverseGeneration();
-        RefreshTerrainDebugGeneration();
         return result;
     }
 
@@ -260,6 +286,14 @@ StudioTickResult StudioSession::Tick(
         result.pluginsReloaded =
             world_.Plugins().PollHotReload();
     }
+
+    // Composition is the first runtime-bound refresh after all semantic
+    // mutation sources for this tick. Everything below observes the new
+    // UniverseComposition/SurfaceComposition generation or the unchanged
+    // previous generation.
+    result.compositionChanged =
+        world_.RefreshUniverseIfChanged();
+
     result.activeBodyChanged =
         activeBody_.Refresh();
     result.pathNetworkRebound =
@@ -270,11 +304,16 @@ StudioTickResult StudioSession::Tick(
         pathProducts_.RefreshBinding();
     result.viewportTargetsChanged =
         viewports_.Refresh();
+
+    RefreshTerrainDebugGeneration();
+
+    result.terrainRuntimeChanged =
+        terrainRuntime_.Refresh();
+
     result.worldGeneration =
         world_.Generation();
     result.universeGeneration =
         world_.UniverseGeneration();
-    RefreshTerrainDebugGeneration();
     return result;
 }
 

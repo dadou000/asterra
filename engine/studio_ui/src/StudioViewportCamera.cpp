@@ -110,6 +110,118 @@ ComposeViewportCamera(
     return camera;
 }
 
+render_view::CameraState
+ComposeTerrainViewportCamera(
+    const studio_session::ViewportTargetState& view,
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& terrain)
+{
+    if (!view.target.has_value())
+    {
+        throw std::invalid_argument(
+            "Terrain viewport camera requires a resolved body target.");
+    }
+
+    if (view.mode !=
+            studio_session::ViewportMode::Perspective ||
+        view.target->body != terrain.body ||
+        view.target->semanticObject !=
+            terrain.semanticBody ||
+        view.target->universeGeneration !=
+            terrain.universeGeneration)
+    {
+        throw std::logic_error(
+            "Terrain viewport camera target does not match the current production terrain runtime.");
+    }
+
+    const math::Double3 direction =
+        math::Normalize(
+            terrain.observer.meters);
+
+    if (math::LengthSquared(direction) <=
+        1.0e-20)
+    {
+        throw std::logic_error(
+            "Terrain viewport observer has no valid body-space direction.");
+    }
+
+    const world::SurfaceFrame frame =
+        world::MakeSurfaceFrame(
+            direction);
+
+    math::Float3 localForward{
+        0.0F,
+        -0.28F,
+        1.0F
+    };
+    localForward =
+        math::Normalize(
+            localForward);
+
+    const math::Double3 bodyForward =
+        frame.east *
+            static_cast<f64>(
+                localForward.x) +
+        frame.up *
+            static_cast<f64>(
+                localForward.y) +
+        frame.north *
+            static_cast<f64>(
+                localForward.z);
+
+    const f64 observerRadius =
+        math::Length(
+            terrain.observer.meters);
+
+    const f64 altitude =
+        std::max(
+            observerRadius -
+                terrain.planet.radiusMeters,
+            0.0);
+
+    render_view::CameraState camera{};
+    camera.frame =
+        view.target->frame;
+    camera.localPositionMeters =
+        terrain.observer.meters;
+    camera.forward = {
+        static_cast<f32>(
+            bodyForward.x),
+        static_cast<f32>(
+            bodyForward.y),
+        static_cast<f32>(
+            bodyForward.z)
+    };
+    camera.forward =
+        math::Normalize(
+            camera.forward);
+    camera.up = {
+        static_cast<f32>(
+            frame.up.x),
+        static_cast<f32>(
+            frame.up.y),
+        static_cast<f32>(
+            frame.up.z)
+    };
+    camera.verticalFovRadians =
+        1.22173048F;
+    camera.nearPlaneMeters =
+        static_cast<f32>(
+            std::clamp(
+                altitude * 0.001,
+                0.05,
+                10.0));
+    camera.farPlaneMeters =
+        static_cast<f32>(
+            std::max(
+                terrain.planet.radiusMeters *
+                    2.0,
+                static_cast<f64>(
+                    camera.nearPlaneMeters) *
+                    100.0));
+
+    return camera;
+}
+
 std::optional<StudioPhysicalPageSelection>
 PhysicalPageAtViewportPoint(
     const studio_session::ViewportTargetState& view,
