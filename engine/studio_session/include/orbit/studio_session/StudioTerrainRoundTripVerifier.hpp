@@ -51,4 +51,16 @@ struct StudioTerrainRoundTripReport
 VerifyStudioTerrainRoundTrip(
     StudioWorkspace& workspace,
     std::string_view viewportId = "studio.primary");
+
+// Active-editor safe entry point. The currently bound StudioSession is
+// checkpointed, then verification is performed through an isolated
+// StudioWorkspace that executes the real close/open lifecycle. This avoids
+// invalidating application-owned references while still proving that persisted
+// semantic authority regenerates equivalent production terrain from a fresh
+// session.
+[[nodiscard]] StudioTerrainRoundTripReport
+VerifyStudioTerrainRoundTrip(
+    documents::ProjectDocument& project,
+    StudioSession& session,
+    std::string_view viewportId = "studio.primary");
 } // namespace orbit::studio_session
