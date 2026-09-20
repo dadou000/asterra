@@ -117,6 +117,15 @@ GpuHydrologyRegion::GpuHydrologyRegion(
 
 GpuHydrologyRegion::~GpuHydrologyRegion() = default;
 
+u64 GpuHydrologyRegion::TransientWorkingSetBytes() const noexcept
+{
+    return sampleScratch_->SizeBytes() +
+        runoff_->SizeBytes() +
+        depressionFill_.TransientWorkingSetBytes() +
+        flowAccumulation_.TransientWorkingSetBytes() +
+        erosion_.TransientWorkingSetBytes();
+}
+
 void GpuHydrologyRegion::Dispatch(
     rhi::CommandList& commandList,
     const GpuHydrologyRegionRequest& request,
