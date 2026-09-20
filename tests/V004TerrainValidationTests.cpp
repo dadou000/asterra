@@ -5,12 +5,15 @@
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1437,6 +1440,407 @@ void Test06ThermalReposeConvergence()
     }
 }
 
+
+void Test07CrossPageWaterFlux()
+{
+    using namespace terrain_region;
+
+    constexpr u32 resolution = 4U;
+    constexpr u64 revision = 0x4D33305741544552ULL;
+
+    const world::PlanetId planet{
+        .high = 0x4F524249544D3330ULL,
+        .low = 0x0000000000007000ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress sourceAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 2U,
+            .x = 3U,
+            .y = 1U
+        }
+    };
+
+    const auto eastMapping =
+        world::NeighborAcrossTileEdge(
+            sourceAddress.tile,
+            world::TileEdge::East);
+
+    Require(
+        eastMapping.tile.face !=
+            sourceAddress.tile.face,
+        "M30-07 fixture must cross a cube-face boundary rather than only a same-face page edge.");
+
+    auto sourceFlux =
+        MakeSurfaceBoundaryFlux(
+            resolution,
+            revision);
+
+    f64 expectedEdgeVolume = 0.0;
+
+    for (u32 sourceIndex = 0U;
+         sourceIndex < resolution;
+         ++sourceIndex)
+    {
+        const f64 volume =
+            static_cast<f64>(
+                sourceIndex + 1U);
+
+        // Positive x is outward through the source east edge. The unique
+        // tangent component makes sample reversal/vector remapping observable.
+        sourceFlux.east[sourceIndex] = {
+            .volumeCubicMeters = volume,
+            .velocityMoment = {
+                volume * 2.0,
+                static_cast<f64>(
+                    sourceIndex) +
+                    0.25
+            }
+        };
+
+        expectedEdgeVolume +=
+            volume;
+    }
+
+    constexpr f64 cornerVolume = 5.5;
+
+    sourceFlux.corners[
+        static_cast<std::size_t>(
+            SurfaceBoundaryCorner::
+                NorthEast)] = {
+        .volumeCubicMeters =
+            cornerVolume,
+        .velocityMoment = {
+            4.0,
+            -3.0
+        }
+    };
+
+    const PhysicalPageBoundaryFlux source{
+        .address = sourceAddress,
+        .outgoing = sourceFlux
+    };
+
+    const terrain::PhysicalTerrainPageAddress quietAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 2U,
+            .x = 1U,
+            .y = 2U
+        }
+    };
+
+    const PhysicalPageBoundaryFlux quiet{
+        .address = quietAddress,
+        .outgoing =
+            MakeSurfaceBoundaryFlux(
+                resolution,
+                revision + 1U)
+    };
+
+    const std::array<PhysicalPageBoundaryFlux, 2> forward{
+        source,
+        quiet
+    };
+
+    const std::array<PhysicalPageBoundaryFlux, 2> reverse{
+        quiet,
+        source
+    };
+
+    const auto forwardBatch =
+        BuildDeterministicBoundaryTransfers(
+            forward);
+
+    const auto reverseBatch =
+        BuildDeterministicBoundaryTransfers(
+            reverse);
+
+    const f64 expectedTotalVolume =
+        expectedEdgeVolume +
+        cornerVolume;
+
+    Require(
+        NearlyEqual(
+            forwardBatch.
+                TotalWaterVolumeCubicMeters(),
+            expectedTotalVolume,
+            1.0e-12) &&
+        NearlyEqual(
+            reverseBatch.
+                TotalWaterVolumeCubicMeters(),
+            expectedTotalVolume,
+            1.0e-12),
+        "M30-07 M25 boundary construction must conserve every exported water volume independent of input page ordering.");
+
+    Require(
+        forwardBatch.edges.size() ==
+            reverseBatch.edges.size() &&
+        forwardBatch.corners.size() ==
+            reverseBatch.corners.size(),
+        "M30-07 deterministic water transfer batches must have order-independent edge/corner cardinality.");
+
+    for (std::size_t index = 0U;
+         index < forwardBatch.edges.size();
+         ++index)
+    {
+        const auto& a =
+            forwardBatch.edges[index];
+        const auto& b =
+            reverseBatch.edges[index];
+
+        Require(
+            a.source == b.source &&
+            a.target == b.target &&
+            a.sourceEdge == b.sourceEdge &&
+            a.targetEdge == b.targetEdge &&
+            a.reversed == b.reversed &&
+            a.revision == b.revision &&
+            a.water.size() == b.water.size(),
+            "M30-07 deterministic edge routing changed when physical page input order was reversed.");
+
+        for (std::size_t sample = 0U;
+             sample < a.water.size();
+             ++sample)
+        {
+            Require(
+                NearlyEqual(
+                    a.water[sample].
+                        volumeCubicMeters,
+                    b.water[sample].
+                        volumeCubicMeters,
+                    0.0) &&
+                NearlyEqual(
+                    a.water[sample].
+                        velocityMoment.x,
+                    b.water[sample].
+                        velocityMoment.x,
+                    0.0) &&
+                NearlyEqual(
+                    a.water[sample].
+                        velocityMoment.y,
+                    b.water[sample].
+                        velocityMoment.y,
+                    0.0),
+                "M30-07 deterministic edge water packets changed with scheduler input order.");
+        }
+    }
+
+    for (std::size_t index = 0U;
+         index < forwardBatch.corners.size();
+         ++index)
+    {
+        const auto& a =
+            forwardBatch.corners[index];
+        const auto& b =
+            reverseBatch.corners[index];
+
+        Require(
+            a.source == b.source &&
+            a.target == b.target &&
+            a.sourceCorner == b.sourceCorner &&
+            a.targetCorner == b.targetCorner &&
+            a.revision == b.revision &&
+            NearlyEqual(
+                a.water.volumeCubicMeters,
+                b.water.volumeCubicMeters,
+                0.0) &&
+            NearlyEqual(
+                a.water.velocityMoment.x,
+                b.water.velocityMoment.x,
+                0.0) &&
+            NearlyEqual(
+                a.water.velocityMoment.y,
+                b.water.velocityMoment.y,
+                0.0),
+            "M30-07 deterministic corner water routing changed with scheduler input order.");
+    }
+
+    const auto edgeTransfer =
+        std::find_if(
+            forwardBatch.edges.begin(),
+            forwardBatch.edges.end(),
+            [&](const SurfaceBoundaryEdgeTransfer& transfer)
+            {
+                return
+                    transfer.source ==
+                        sourceAddress &&
+                    transfer.sourceEdge ==
+                        world::TileEdge::East;
+            });
+
+    Require(
+        edgeTransfer !=
+            forwardBatch.edges.end(),
+        "M30-07 cross-face east water transfer is missing.");
+
+    Require(
+        edgeTransfer->target.tile ==
+                eastMapping.tile &&
+        edgeTransfer->targetEdge ==
+                eastMapping.edge &&
+        edgeTransfer->reversed ==
+                eastMapping.reverseSamples,
+        "M30-07 water transfer must use the canonical M01 cube-face neighbor mapping.");
+
+    for (u32 sourceIndex = 0U;
+         sourceIndex < resolution;
+         ++sourceIndex)
+    {
+        const u32 targetIndex =
+            world::RemapTileEdgeSampleIndex(
+                eastMapping,
+                sourceIndex,
+                resolution);
+
+        const auto& packet =
+            edgeTransfer->
+                water[targetIndex];
+
+        const f64 volume =
+            static_cast<f64>(
+                sourceIndex + 1U);
+
+        const math::Double2 originalMoment{
+            volume * 2.0,
+            static_cast<f64>(
+                sourceIndex) +
+                0.25
+        };
+
+        const auto expectedMoment =
+            TransformBoundaryVectorAcrossEdge(
+                world::TileEdge::East,
+                eastMapping,
+                originalMoment);
+
+        Require(
+            NearlyEqual(
+                packet.volumeCubicMeters,
+                volume,
+                0.0) &&
+            NearlyEqual(
+                packet.velocityMoment.x,
+                expectedMoment.x,
+                1.0e-12) &&
+            NearlyEqual(
+                packet.velocityMoment.y,
+                expectedMoment.y,
+                1.0e-12),
+            "M30-07 cube-face water sample remap must preserve volume and rotate the conservative velocity moment into receiver-local orientation.");
+    }
+
+    const terrain::PhysicalTerrainPageAddress edgeReceiver{
+        .planet = planet,
+        .tile = eastMapping.tile
+    };
+
+    const auto incomingEdge =
+        IncomingWaterBoundaryFlux(
+            edgeReceiver,
+            forwardBatch);
+
+    Require(
+        NearlyEqual(
+            incomingEdge.volumeCubicMeters,
+            expectedEdgeVolume,
+            1.0e-12),
+        "M30-07 neighboring physical page must receive exactly the water volume exported through the source edge.");
+
+    const math::Double2 outward =
+        TransformBoundaryVectorAcrossEdge(
+            world::TileEdge::East,
+            eastMapping,
+            {1.0, 0.0});
+
+    math::Double2 expectedInward{};
+
+    switch (eastMapping.edge)
+    {
+    case world::TileEdge::North:
+        expectedInward = {0.0, 1.0};
+        break;
+    case world::TileEdge::East:
+        expectedInward = {-1.0, 0.0};
+        break;
+    case world::TileEdge::South:
+        expectedInward = {0.0, -1.0};
+        break;
+    case world::TileEdge::West:
+        expectedInward = {1.0, 0.0};
+        break;
+    }
+
+    Require(
+        NearlyEqual(
+            outward.x,
+            expectedInward.x,
+            1.0e-12) &&
+        NearlyEqual(
+            outward.y,
+            expectedInward.y,
+            1.0e-12),
+        "M30-07 outward source water momentum must become inward receiver-local momentum across a physical page boundary.");
+
+    const world::PlanetTileId cornerTile =
+        world::OffsetTile(
+            sourceAddress.tile,
+            1,
+            -1);
+
+    const terrain::PhysicalTerrainPageAddress cornerReceiver{
+        .planet = planet,
+        .tile = cornerTile
+    };
+
+    const auto incomingCorner =
+        IncomingWaterBoundaryFlux(
+            cornerReceiver,
+            forwardBatch);
+
+    Require(
+        NearlyEqual(
+            incomingCorner.volumeCubicMeters,
+            cornerVolume,
+            1.0e-12),
+        "M30-07 diagonal physical neighbor must receive exactly the exported corner water packet without edge duplication or loss.");
+
+    const auto cornerTransfer =
+        std::find_if(
+            forwardBatch.corners.begin(),
+            forwardBatch.corners.end(),
+            [&](const SurfaceBoundaryCornerTransfer& transfer)
+            {
+                return
+                    transfer.source ==
+                        sourceAddress &&
+                    transfer.sourceCorner ==
+                        SurfaceBoundaryCorner::
+                            NorthEast;
+            });
+
+    Require(
+        cornerTransfer !=
+            forwardBatch.corners.end() &&
+        cornerTransfer->target ==
+            cornerReceiver &&
+        NearlyEqual(
+            cornerTransfer->
+                water.volumeCubicMeters,
+            cornerVolume,
+            0.0) &&
+        std::isfinite(
+            cornerTransfer->
+                water.velocityMoment.x) &&
+        std::isfinite(
+            cornerTransfer->
+                water.velocityMoment.y),
+        "M30-07 corner water flux must route through the canonical physical diagonal neighbor with finite transformed momentum.");
+}
+
 } // namespace
 
 int main()
@@ -1447,8 +1851,9 @@ int main()
     Test04HydraulicMassConservation();
     Test05AeolianMassConservation();
     Test06ThermalReposeConvergence();
+    Test07CrossPageWaterFlux();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 6/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 7/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
