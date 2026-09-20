@@ -5,6 +5,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioRuntimeBinding.cpp
     src/StudioTerrainAuthoringInvalidation.cpp
     src/StudioTerrainRebuildScheduler.cpp
+    src/StudioTerrainPhysicalPageService.cpp
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioTerrainServiceStatus.cpp
     src/StudioWorkspace.cpp
@@ -40,6 +41,10 @@ target_link_libraries(OrbitStudioSession
         Orbit::TerrainDebug
         Orbit::TerrainDependency
         Orbit::TerrainGpu
+        Orbit::TerrainHydrology
+        Orbit::TerrainMacroGeology
+        Orbit::TerrainMaterialColumn
+        Orbit::TerrainScatter
         Orbit::TerrainStream
         Orbit::TerrainView
         Orbit::World
