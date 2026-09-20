@@ -2,6 +2,7 @@ add_library(OrbitWorldModel STATIC
     src/CelestialSchemas.cpp
     src/PropertyProvenanceSchema.cpp
     src/PropertyProvenance.cpp
+    src/PhysicalPropertySolver.cpp
     src/WorldSchemas.cpp
     src/UniverseComposition.cpp
 )
@@ -102,5 +103,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.PropertyProvenance
         COMMAND OrbitPropertyProvenanceTests
+    )
+
+    add_executable(OrbitPhysicalPropertySolverTests
+        tests/PhysicalPropertySolverTests.cpp
+    )
+
+    target_link_libraries(OrbitPhysicalPropertySolverTests
+        PRIVATE
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitPhysicalPropertySolverTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPhysicalPropertySolverTests)
+
+    add_test(
+        NAME Orbit.PhysicalPropertySolver
+        COMMAND OrbitPhysicalPropertySolverTests
     )
 endif()
