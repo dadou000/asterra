@@ -313,6 +313,9 @@ void StudioTerrainRebuildScheduler::QueueChange(
                 ProductsForChange(
                     request.kind);
 
+    const auto committedAt =
+        std::chrono::steady_clock::now();
+
     for (auto& page : pages_)
     {
         if (!AddressMatches(
@@ -321,6 +324,11 @@ void StudioTerrainRebuildScheduler::QueueChange(
         {
             continue;
         }
+
+        page.lastEditCommittedAt =
+            committedAt;
+        page.awaitingEditReady =
+            true;
 
         const bool newCycle =
             page.pendingProducts == 0U &&
@@ -386,6 +394,8 @@ void StudioTerrainRebuildScheduler::QueueChange(
         .remainingSeconds =
             config_.editDebounceSeconds
     });
+
+    UpdatePeakOutstandingPages();
 }
 
 void StudioTerrainRebuildScheduler::
@@ -558,7 +568,74 @@ void StudioTerrainRebuildScheduler::RefreshAll()
     for (auto& page : pages_)
     {
         RefreshPage(page);
+        RecordReadyLatency(page);
     }
+}
+
+void StudioTerrainRebuildScheduler::RecordReadyLatency(
+    PageEntry& page)
+{
+    if (!page.awaitingEditReady ||
+        page.pendingProducts != 0U ||
+        page.dirtyProducts != 0U ||
+        page.requestedProducts != 0U ||
+        page.uploading ||
+        page.uploadFailed ||
+        page.cycleProducts == 0U)
+    {
+        return;
+    }
+
+    const f64 seconds =
+        std::chrono::duration<f64>(
+            std::chrono::steady_clock::now() -
+            page.lastEditCommittedAt).
+            count();
+
+    page.lastEditToReadySeconds =
+        std::max(seconds, 0.0);
+
+    page.maximumEditToReadySeconds =
+        page.maximumEditToReadySeconds < 0.0
+            ? page.lastEditToReadySeconds
+            : std::max(
+                  page.maximumEditToReadySeconds,
+                  page.lastEditToReadySeconds);
+
+    page.awaitingEditReady = false;
+}
+
+void StudioTerrainRebuildScheduler::
+UpdatePeakOutstandingPages()
+{
+    u32 outstanding = 0U;
+
+    for (const auto& page : pages_)
+    {
+        const auto status =
+            MakeStatus(page);
+
+        switch (status.state)
+        {
+        case TerrainRebuildState::Dirty:
+        case TerrainRebuildState::Queued:
+        case TerrainRebuildState::BuildingCpu:
+        case TerrainRebuildState::BuildingGpu:
+        case TerrainRebuildState::Uploading:
+        case TerrainRebuildState::StaleReplaced:
+            ++outstanding;
+            break;
+        case TerrainRebuildState::Clean:
+        case TerrainRebuildState::Ready:
+        case TerrainRebuildState::Failed:
+            break;
+        }
+    }
+
+    peakOutstandingPages_ =
+        std::max(
+            peakOutstandingPages_,
+            outstanding);
 }
 
 std::optional<
@@ -672,6 +749,7 @@ void StudioTerrainRebuildScheduler::Tick(
     ScheduleBudget();
     graph_->Poll();
     RefreshAll();
+    UpdatePeakOutstandingPages();
 
     for (auto& page : pages_)
     {
@@ -693,6 +771,7 @@ void StudioTerrainRebuildScheduler::RebuildDirty()
     ScheduleBudget();
     graph_->Poll();
     RefreshAll();
+    UpdatePeakOutstandingPages();
 }
 
 void StudioTerrainRebuildScheduler::SetPaused(
@@ -811,6 +890,12 @@ StudioTerrainRebuildScheduler::MakeStatus(
                 page.address),
         .staleRejected =
             page.staleRejected,
+        .lastEditToReadySeconds =
+            page.lastEditToReadySeconds,
+        .maximumEditToReadySeconds =
+            page.maximumEditToReadySeconds,
+        .awaitingEditReady =
+            page.awaitingEditReady,
         .lastRegenerationReason =
             page.lastChangeKind.has_value()
                 ? TerrainChangeKindName(
@@ -977,6 +1062,8 @@ StudioTerrainRebuildScheduler::BodyStatus(
 {
     StudioTerrainBodyRebuildStatus result{
         .planet = planet,
+        .peakOutstandingPages =
+            peakOutstandingPages_,
         .paused = paused_
     };
 
@@ -1002,6 +1089,22 @@ StudioTerrainRebuildScheduler::BodyStatus(
             status.totalProducts;
         result.staleRejected +=
             status.staleRejected;
+
+        if (status.lastEditToReadySeconds >= 0.0)
+        {
+            result.lastEditToReadySeconds =
+                std::max(
+                    result.lastEditToReadySeconds,
+                    status.lastEditToReadySeconds);
+        }
+
+        if (status.maximumEditToReadySeconds >= 0.0)
+        {
+            result.maximumEditToReadySeconds =
+                std::max(
+                    result.maximumEditToReadySeconds,
+                    status.maximumEditToReadySeconds);
+        }
 
         switch (status.state)
         {
