@@ -5,6 +5,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioRuntimeBinding.cpp
     src/StudioTerrainAuthoringInvalidation.cpp
     src/StudioTerrainRebuildScheduler.cpp
+    src/StudioTerrainPerformanceDiagnostics.cpp
     src/StudioTerrainPhysicalPageService.cpp
     src/StudioTerrainRoundTripVerifier.cpp
     src/StudioTerrainRuntimeBridge.cpp
@@ -29,6 +30,7 @@ target_include_directories(OrbitStudioSession
 
 target_link_libraries(OrbitStudioSession
     PUBLIC
+        Orbit::Core
         Orbit::Documents
         Orbit::EditorRpc
         Orbit::EditorSession
