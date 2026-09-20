@@ -979,6 +979,7 @@ target_link_libraries(OrbitV004ValidationTests
     PRIVATE
         Orbit::TerrainErosion
         Orbit::TerrainGeology
+        Orbit::TerrainHydrology
         Orbit::TerrainMaterialColumn
         Orbit::TerrainRegion
 )
