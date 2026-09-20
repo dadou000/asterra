@@ -24,6 +24,7 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
