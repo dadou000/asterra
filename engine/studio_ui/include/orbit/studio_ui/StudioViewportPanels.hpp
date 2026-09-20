@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/terrain_biome/BiomeService.hpp>
 
 #include <optional>
 #include <string>
@@ -25,7 +26,8 @@ enum class StudioTerrainAuthoringTool : u8
     Drainage,
     Canyon,
     Ridge,
-    Material
+    Material,
+    BiomePaint
 };
 
 inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
@@ -76,5 +78,15 @@ private:
     f64 terrainSplineHeightMeters_{200.0};
     std::vector<math::Double3> terrainSplinePoints_;
     std::optional<scene::ObjectId> terrainSplineTerrain_;
+
+    terrain_biome::BiomeAuthoredWeightOperation
+        biomePaintOperation_{
+            terrain_biome::BiomeAuthoredWeightOperation::Replace};
+    f64 biomeBrushInnerRadiusMeters_{250.0};
+    f64 biomeBrushOuterRadiusMeters_{1'000.0};
+    f64 biomeBrushValue_{1.0};
+    f64 biomeBrushOpacity_{1.0};
+    bool biomeAutomaticOverlay_{false};
+    std::optional<f64> hoveredBiomeAuthoredWeight_;
 };
 } // namespace orbit::studio_ui
