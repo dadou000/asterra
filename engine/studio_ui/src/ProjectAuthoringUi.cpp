@@ -426,6 +426,103 @@ void ProjectAuthoringUi::DrawProjectSettings(
         }
     }
 
+    context.Separator();
+    context.Text("M15 End-to-End Terrain Scenario");
+    context.Text(
+        "Runs the deterministic production-terrain acceptance sequence in an "
+        "isolated scratch Studio project. The currently open project is not modified.");
+
+    if (context.Button(
+            "Run M15 Terrain Validation Scenario"))
+    {
+        try
+        {
+            const auto validationRoot =
+                std::filesystem::temp_directory_path() /
+                ("orbit-studio-m15-" +
+                 documents::ProjectId::Random().
+                     ToString());
+
+            terrainValidationScenarioReport_ =
+                studio_session::
+                    RunStudioTerrainValidationScenario(
+                        validationRoot,
+                        "studio.primary");
+
+            const auto& report =
+                *terrainValidationScenarioReport_;
+
+            status_ =
+                report.success
+                    ? "M15 terrain validation scenario passed."
+                    : std::format(
+                          "M15 terrain validation failed at {}: {}",
+                          report.failureStage.empty()
+                              ? std::string("unknown")
+                              : report.failureStage,
+                          report.diagnostic);
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+            terrainValidationScenarioReport_.reset();
+        }
+    }
+
+    if (terrainValidationScenarioReport_.has_value())
+    {
+        const auto& report =
+            *terrainValidationScenarioReport_;
+
+        context.Text(
+            std::format(
+                "M15 Result: {} | Steps: {}",
+                report.success
+                    ? "PASS"
+                    : "FAIL",
+                report.steps.size()));
+
+        context.Text(
+            std::format(
+                "Scratch project: {}",
+                report.projectRoot.generic_string()));
+
+        context.Text(
+            std::format(
+                "M29 fields: {} | physical LOD {} | biome weights {}",
+                report.debugFieldsAvailable,
+                report.debugPhysicalLodAvailable
+                    ? "yes"
+                    : "no",
+                report.debugBiomeWeightsAvailable
+                    ? "yes"
+                    : "no"));
+
+        context.Text(
+            std::format(
+                "M26 cache: {} pages | {} bytes | hits {} | misses {}",
+                report.cacheStats.residentPages,
+                report.cacheStats.residentBytes,
+                report.cacheStats.hits,
+                report.cacheStats.misses));
+
+        for (const auto& step :
+             report.steps)
+        {
+            context.Text(
+                std::format(
+                    "{} {}{}{}",
+                    step.passed
+                        ? "[PASS]"
+                        : "[FAIL]",
+                    step.name,
+                    step.diagnostic.empty()
+                        ? ""
+                        : " | ",
+                    step.diagnostic));
+        }
+    }
+
     if (!status_.empty())
     {
         context.Separator();
