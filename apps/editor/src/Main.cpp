@@ -1930,6 +1930,14 @@ int main(
 
         if (terrainUiSmoke)
         {
+            surfaceAuthoringUi.
+                SetAutomationCoverageMode(
+                    true);
+            ui.SetAutomationUiProbe(
+                true,
+                true);
+            ui.ClearAutomationUiTrace();
+
             if (!ui.HasPanel(
                     orbit::studio_ui::
                         SurfaceAuthoringUi::kPanel) ||
@@ -6405,6 +6413,57 @@ int main(
                         selectedSurface->terrain,
                         relief);
 
+                    auto smokeBiomes =
+                        surface.Biomes(
+                            selectedSurface->terrain);
+
+                    if (smokeBiomes.empty())
+                    {
+                        const auto smokeBiome =
+                            surface.AddBiome(
+                                selectedSurface->terrain,
+                                "Smoke Biome");
+
+                        static_cast<void>(
+                            surface.AddSurfaceLayer(
+                                smokeBiome,
+                                orbit::terrain_biome::
+                                    BiomeSurfaceLayerKind::
+                                        Moss));
+
+                        static_cast<void>(
+                            surface.AddScatterRule(
+                                smokeBiome,
+                                orbit::terrain_biome::
+                                    BiomeScatterKind::
+                                        Tree));
+
+                        static_cast<void>(
+                            surface.PaintLocalOverride(
+                                smokeBiome,
+                                {0.0, 1.0, 0.0},
+                                100.0,
+                                1'000.0,
+                                0.75,
+                                1.0));
+                    }
+
+                    if (surface.TerrainConstraints(
+                            selectedSurface->terrain).
+                            empty())
+                    {
+                        static_cast<void>(
+                            surface.AddHeightBrush(
+                                selectedSurface->terrain,
+                                {0.0, 1.0, 0.0},
+                                100.0,
+                                750.0,
+                                25.0));
+                    }
+
+                    surface.SelectObject(
+                        selectedSurface->body);
+
                     static_cast<void>(
                         studioSession.Tick(false));
 
@@ -7024,6 +7083,43 @@ int main(
                 {
                     fence->Wait(
                         submittedFence);
+
+                    static constexpr std::array<
+                        std::string_view,
+                        11> requiredTerrainWidgets{{
+                            "Geology##m28-geology",
+                            "Macro Amplitude (m)##m28-macro-amplitude",
+                            "Terrain Processes##m28-processes",
+                            "Hydraulic Iterations##m11-hydraulic-iterations",
+                            "Authored Terrain##m09-authored-terrain",
+                            "Biomes##m28-biomes",
+                            "Temperature Min##m28-Temperature-min",
+                            "Center Unit Direction##m28-mask-direction",
+                            "Surface Cache / Debug##m28-cache",
+                            "Save, Reopen & Verify Terrain",
+                            "Run M15 Terrain Validation Scenario"
+                        }};
+
+                    for (const auto widget :
+                         requiredTerrainWidgets)
+                    {
+                        if (!ui.
+                                AutomationUiTraceContains(
+                                    widget))
+                        {
+                            throw std::runtime_error(
+                                std::format(
+                                    "Terrain UI smoke failed: live ImGui control '{}' was not rendered.",
+                                    widget));
+                        }
+                    }
+
+                    if (ui.AutomationUiTraceSize() <
+                        requiredTerrainWidgets.size())
+                    {
+                        throw std::runtime_error(
+                            "Terrain UI smoke failed: live widget trace is incomplete.");
+                    }
 
                     const auto capture =
                         orbit::render_view::
