@@ -61,19 +61,34 @@ if errorlevel 1 (
 )
 
 echo.
-echo [M30] Building OrbitV004TerrainPerformance...
-cmake --build build --config %CONFIG% --target OrbitV004TerrainPerformance --parallel
+echo [M30] Building deterministic validation + performance diagnostic...
+cmake --build build --config %CONFIG% --target OrbitV004ValidationTests OrbitV004TerrainPerformance --parallel
 if errorlevel 1 (
-    echo [M30] ERROR: Performance diagnostic build failed.
+    echo [M30] ERROR: M30 validation/performance build failed.
     goto fail
 )
 
+set "VALIDATION_EXE=build\tests\%CONFIG%\OrbitV004ValidationTests.exe"
 set "PERF_EXE=build\tests\%CONFIG%\OrbitV004TerrainPerformance.exe"
 set "RAW_CSV=build\m30-performance-%CONFIG%.csv"
+
+if not exist "%VALIDATION_EXE%" (
+    echo [M30] ERROR: Deterministic validation executable was not produced:
+    echo   %VALIDATION_EXE%
+    goto fail
+)
 
 if not exist "%PERF_EXE%" (
     echo [M30] ERROR: Diagnostic executable was not produced:
     echo   %PERF_EXE%
+    goto fail
+)
+
+echo.
+echo [M30] Running 20/20 deterministic validation...
+"%VALIDATION_EXE%"
+if errorlevel 1 (
+    echo [M30] ERROR: Deterministic M30 validation failed.
     goto fail
 )
 
