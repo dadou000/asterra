@@ -2722,6 +2722,41 @@ StudioTerrainPhysicalPageService::Find(
         : nullptr;
 }
 
+std::optional<u64>
+StudioTerrainPhysicalPageService::BeginUpload(
+    const terrain::PhysicalTerrainPageAddress& address)
+{
+    auto* body =
+        impl_->FindBody(
+            address.planet);
+
+    return body != nullptr
+        ? body->scheduler.
+              BeginUpload(
+                  address)
+        : std::nullopt;
+}
+
+bool StudioTerrainPhysicalPageService::CompleteUpload(
+    const terrain::PhysicalTerrainPageAddress& address,
+    const u64 revisionFingerprint,
+    const bool success,
+    const std::string_view error)
+{
+    auto* body =
+        impl_->FindBody(
+            address.planet);
+
+    return
+        body != nullptr &&
+        body->scheduler.
+            CompleteUpload(
+                address,
+                revisionFingerprint,
+                success,
+                error);
+}
+
 std::optional<
     StudioTerrainPageRebuildStatus>
 StudioTerrainPhysicalPageService::PageStatus(
