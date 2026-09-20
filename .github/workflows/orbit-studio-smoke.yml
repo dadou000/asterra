@@ -44,6 +44,7 @@ jobs:
           cmake --build build-studio-smoke --config Release --target
           OrbitEditorSessionRpcHostTests
           OrbitStudioSessionTests
+          OrbitStudioTerrainRuntimeBridgeTests
           OrbitBezierHandleEditorTests
           OrbitStudioViewportPresentationTests
           OrbitStudio
@@ -55,6 +56,7 @@ jobs:
           $tests = @(
             "build-studio-smoke/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitStudioSessionTests.exe",
+            "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRuntimeBridgeTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
             "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
           )
