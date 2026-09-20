@@ -4,14 +4,21 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/procedural_graph/ProceduralGraph.hpp>
+#include <orbit/rhi/Resource.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/SurfaceComposition.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_debug/TerrainDebugPageData.hpp>
+#include <orbit/terrain_debug/TerrainDebugRaster.hpp>
+#include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 #include <orbit/terrain_erosion/StreamPowerErosion.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
 #include <orbit/terrain_hydrology/DrainagePage.hpp>
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
@@ -23,11 +30,14 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
+#include <any>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -52,6 +62,74 @@ void Require(
     const f64 epsilon = 1.0e-5)
 {
     return std::abs(a - b) <= epsilon;
+}
+
+class IntegrationBuffer final
+    : public rhi::Buffer
+{
+public:
+    explicit IntegrationBuffer(
+        const u64 bytes)
+        : storage_(
+              static_cast<std::size_t>(
+                  bytes))
+    {
+        if (bytes == 0U)
+        {
+            throw std::invalid_argument(
+                "M31 integration buffer must be non-empty.");
+        }
+    }
+
+    [[nodiscard]] u64 SizeBytes()
+        const noexcept override
+    {
+        return static_cast<u64>(
+            storage_.size());
+    }
+
+    [[nodiscard]] rhi::BufferUsage Usage()
+        const noexcept override
+    {
+        return rhi::BufferUsage::Structured;
+    }
+
+    [[nodiscard]] rhi::MemoryUsage Memory()
+        const noexcept override
+    {
+        return rhi::MemoryUsage::GpuOnly;
+    }
+
+    [[nodiscard]] std::byte* Map() override
+    {
+        return storage_.data();
+    }
+
+    void Unmap() override
+    {
+    }
+
+private:
+    std::vector<std::byte> storage_;
+};
+
+[[nodiscard]] std::shared_ptr<
+    terrain_gpu::CachedGpuTerrainPage>
+MakeIntegrationCachedPage(
+    const u64 bytes,
+    const terrain_gpu::CachedTerrainProductMask products)
+{
+    auto page =
+        std::make_shared<
+            terrain_gpu::CachedGpuTerrainPage>();
+
+    page->products = products;
+    page->buffers.push_back(
+        std::make_shared<
+            IntegrationBuffer>(
+                bytes));
+
+    return page;
 }
 
 [[nodiscard]] terrain_geology::GeologicalMaterialLibrary
@@ -1320,6 +1398,715 @@ void TestBiomeOverrideDrivesConstrainedScatter()
     }
 }
 
+
+void TestPersistentGpuCacheReusesAcrossFrames()
+{
+    using namespace terrain_gpu;
+
+    const terrain::PhysicalTerrainPageAddress
+        address{
+            .planet = {
+                .high =
+                    0x4D33314341434845ULL,
+                .low =
+                    0x0000000000000005ULL
+            },
+            .tile = {
+                .face =
+                    world::CubeFace::PositiveX,
+                .level = 10U,
+                .x = 511U,
+                .y = 511U
+            }
+        };
+
+    const PersistentGpuTerrainCacheKey key{
+        .address = address,
+        .physicalLod = 3U,
+        .revisions = {
+            .geology = 11U,
+            .climate = 12U,
+            .authoring = 13U,
+            .biome = 14U,
+            .water = 15U,
+            .processes = 16U
+        }
+    };
+
+    PersistentGpuTerrainCache cache({
+        .maximumResidentBytes =
+            8ULL * 1024ULL * 1024ULL,
+        .maximumPages = 8U
+    });
+
+    u64 generationCount = 0U;
+    std::shared_ptr<CachedGpuTerrainPage>
+        first;
+
+    constexpr u32 frameCount = 120U;
+
+    for (u32 frame = 0U;
+         frame < frameCount;
+         ++frame)
+    {
+        auto page =
+            cache.GetOrCreate(
+                key,
+                [&]()
+                {
+                    ++generationCount;
+
+                    return
+                        MakeIntegrationCachedPage(
+                            4096U,
+                            ProductBit(
+                                CachedTerrainProduct::
+                                    MaterialColumn) |
+                            ProductBit(
+                                CachedTerrainProduct::
+                                    Drainage));
+                });
+
+        if (frame == 0U)
+        {
+            first = page;
+        }
+
+        Require(
+            page != nullptr &&
+            page == first,
+            "M31 cache: stable physical page did not reuse the same resident solved payload across frames.");
+    }
+
+    const auto stats =
+        cache.Stats();
+
+    Require(
+        generationCount == 1U &&
+        stats.generations == 1U &&
+        stats.misses == 1U &&
+        stats.hits ==
+            frameCount - 1U &&
+        stats.insertions == 1U &&
+        stats.evictions == 0U &&
+        stats.residentPages == 1U &&
+        stats.residentBytes == 4096U,
+        "M31 cache: unchanged physical terrain regenerated or failed to stay resident across frames.");
+
+    const auto fingerprint =
+        PersistentGpuTerrainCacheFingerprint(
+            key);
+
+    Require(
+        fingerprint != 0U &&
+        cache.Find(key) == first &&
+        cache.Stats().hits ==
+            frameCount,
+        "M31 cache: resident lookup after the frame sequence did not preserve page identity.");
+}
+
+void TestDependencyChangesRegenerateOnlyDependents()
+{
+    using namespace terrain_dependency;
+    using namespace terrain_gpu;
+
+    const world::PlanetId planet{
+        .high =
+            0x4D3331444550454EULL,
+        .low =
+            0x4400000000000006ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress
+        center{
+            .planet = planet,
+            .tile = {
+                .face =
+                    world::CubeFace::PositiveX,
+                .level = 9U,
+                .x = 255U,
+                .y = 255U
+            }
+        };
+
+    const terrain::PhysicalTerrainPageAddress
+        distant{
+            .planet = planet,
+            .tile =
+                world::OffsetTile(
+                    center.tile,
+                    4,
+                    0)
+        };
+
+    terrain::TerrainGenerationRevisions
+        initial{
+            .geology = 1U,
+            .climate = 2U,
+            .authoring = 3U,
+            .biome = 4U,
+            .water = 5U,
+            .processes = 6U
+        };
+
+    PersistentGpuTerrainCache cache({
+        .maximumResidentBytes =
+            8ULL * 1024ULL * 1024ULL,
+        .maximumPages = 8U
+    });
+
+    const auto cacheKeyFor =
+        [&](const terrain::
+                PhysicalTerrainPageAddress&
+                    address,
+            const terrain::
+                TerrainGenerationRevisions&
+                    revisions)
+        {
+            return
+                PersistentGpuTerrainCacheKey{
+                    .address = address,
+                    .physicalLod = 2U,
+                    .revisions = revisions
+                };
+        };
+
+    cache.Insert(
+        cacheKeyFor(
+            center,
+            initial),
+        MakeIntegrationCachedPage(
+            2048U,
+            ProductBit(
+                CachedTerrainProduct::
+                    MaterialColumn)));
+
+    cache.Insert(
+        cacheKeyFor(
+            distant,
+            initial),
+        MakeIntegrationCachedPage(
+            2048U,
+            ProductBit(
+                CachedTerrainProduct::
+                    MaterialColumn)));
+
+    jobs::JobSystem jobs(
+        2U);
+
+    procedural_graph::ProceduralGraph
+        graph(
+            jobs);
+
+    std::array<
+        u64,
+        kTerrainDependencyProductCount>
+        centerBuilds{};
+
+    std::array<
+        u64,
+        kTerrainDependencyProductCount>
+        distantBuilds{};
+
+    const auto productIndex =
+        [](const TerrainDependencyProduct
+               product)
+        {
+            return
+                static_cast<std::size_t>(
+                    product);
+        };
+
+    TerrainDependencyGraph dependencies(
+        graph,
+        [&](const terrain::
+                PhysicalTerrainPageAddress&
+                    address,
+            const TerrainDependencyProduct
+                product,
+            const procedural_graph::
+                BuildContext&)
+            -> std::any
+        {
+            if (address == center)
+            {
+                ++centerBuilds[
+                    productIndex(
+                        product)];
+            }
+            else if (address == distant)
+            {
+                ++distantBuilds[
+                    productIndex(
+                        product)];
+            }
+            else
+            {
+                throw std::runtime_error(
+                    "M31 dependency: unexpected page build.");
+            }
+
+            return std::any(
+                static_cast<u32>(
+                    product));
+        },
+        &cache);
+
+    dependencies.RegisterPage(
+        center,
+        initial);
+
+    dependencies.RegisterPage(
+        distant,
+        initial);
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter) &&
+        dependencies.BuildBlocking(
+            distant,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            distant,
+            TerrainDependencyProduct::
+                Scatter),
+        "M31 dependency: initial product chain did not build.");
+
+    const auto centerBefore =
+        centerBuilds;
+
+    const auto distantBefore =
+        distantBuilds;
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter),
+        "M31 dependency: clean products could not be re-requested.");
+
+    Require(
+        centerBuilds ==
+            centerBefore,
+        "M31 dependency: unchanged terrain rebuilt without an authority change.");
+
+    const auto surfaceChange =
+        dependencies.ApplyChange({
+            .kind =
+                TerrainChangeKind::
+                    BiomeSurfaceMaterial,
+            .scope = {
+                .planet = planet,
+                .global = false,
+                .center = center.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+
+    Require(
+        surfaceChange.affectedPages ==
+                1U &&
+        surfaceChange.cacheEntriesRemoved ==
+                1U &&
+        surfaceChange.dirtyProducts ==
+            ProductBit(
+                TerrainDependencyProduct::
+                    SurfaceMaterial),
+        "M31 dependency: surface-only edit invalidated the wrong page/product set.");
+
+    const auto surfaceStatus =
+        dependencies.Status(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial);
+
+    const auto scatterStatus =
+        dependencies.Status(
+            center,
+            TerrainDependencyProduct::
+                Scatter);
+
+    Require(
+        surfaceStatus.has_value() &&
+        scatterStatus.has_value() &&
+        surfaceStatus->state ==
+            procedural_graph::
+                NodeState::Dirty &&
+        scatterStatus->state ==
+            procedural_graph::
+                NodeState::Clean,
+        "M31 dependency: surface-only edit dirtied unrelated scatter state.");
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial),
+        "M31 dependency: dirty surface material did not rebuild.");
+
+    for (std::size_t index = 0U;
+         index <
+             kTerrainDependencyProductCount;
+         ++index)
+    {
+        const auto product =
+            static_cast<
+                TerrainDependencyProduct>(
+                    index);
+
+        const u64 expected =
+            centerBefore[index] +
+            (product ==
+                 TerrainDependencyProduct::
+                     SurfaceMaterial
+                 ? 1U
+                 : 0U);
+
+        Require(
+            centerBuilds[index] ==
+                expected,
+            "M31 dependency: surface edit rebuilt a non-dependent product.");
+    }
+
+    Require(
+        distantBuilds ==
+            distantBefore &&
+        cache.Stats().residentPages ==
+            1U,
+        "M31 dependency: bounded edit regenerated or evicted out-of-scope terrain.");
+
+    const auto revisionsAfterSurface =
+        dependencies.Revisions(
+            center);
+
+    Require(
+        revisionsAfterSurface.
+                has_value() &&
+        revisionsAfterSurface->
+                biome ==
+            initial.biome + 1U &&
+        revisionsAfterSurface->
+                geology ==
+            initial.geology &&
+        revisionsAfterSurface->
+                processes ==
+            initial.processes,
+        "M31 dependency: biome surface edit advanced unrelated authority revisions.");
+
+    const auto scatterBefore =
+        centerBuilds[
+            productIndex(
+                TerrainDependencyProduct::
+                    Scatter)];
+
+    const auto surfaceBeforeScatter =
+        centerBuilds[
+            productIndex(
+                TerrainDependencyProduct::
+                    SurfaceMaterial)];
+
+    const auto scatterChange =
+        dependencies.ApplyChange({
+            .kind =
+                TerrainChangeKind::
+                    BiomeScatter,
+            .scope = {
+                .planet = planet,
+                .global = false,
+                .center = center.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+
+    Require(
+        scatterChange.affectedPages ==
+                1U &&
+        scatterChange.dirtyProducts ==
+            ProductBit(
+                TerrainDependencyProduct::
+                    Scatter),
+        "M31 dependency: scatter-only edit invalidated the wrong product set.");
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter) &&
+        centerBuilds[
+            productIndex(
+                TerrainDependencyProduct::
+                    Scatter)] ==
+            scatterBefore + 1U &&
+        centerBuilds[
+            productIndex(
+                TerrainDependencyProduct::
+                    SurfaceMaterial)] ==
+            surfaceBeforeScatter,
+        "M31 dependency: scatter edit did not regenerate exactly the scatter descendant.");
+
+    Require(
+        distantBuilds ==
+            distantBefore,
+        "M31 dependency: dependency-only regeneration crossed the bounded spatial scope.");
+}
+
+void TestAllDebugFieldsAreInspectable()
+{
+    using namespace terrain_debug;
+
+    constexpr u32 width = 4U;
+    constexpr u32 height = 4U;
+    constexpr std::size_t texels =
+        static_cast<std::size_t>(
+            width) *
+        height;
+
+    const TerrainDebugPageStamp stamp{
+        .address = {
+            .planet = {
+                .high =
+                    0x4D33314445425547ULL,
+                .low =
+                    0x0000000000000007ULL
+            },
+            .tile = {
+                .face =
+                    world::CubeFace::PositiveY,
+                .level = 8U,
+                .x = 120U,
+                .y = 121U
+            }
+        },
+        .physicalLod = 4U,
+        .revisions = {
+            .geology = 11U,
+            .climate = 12U,
+            .authoring = 13U,
+            .biome = 14U,
+            .water = 15U,
+            .processes = 16U
+        },
+        .cacheResident = true,
+        .invalidationRevision = 77U
+    };
+
+    TerrainDebugPageData page(
+        stamp,
+        width,
+        height);
+
+    std::array<f32, texels>
+        scalar{};
+
+    std::array<
+        TerrainDebugVector2,
+        texels>
+        vector{};
+
+    std::array<u32, texels>
+        category{};
+
+    for (std::size_t index = 0U;
+         index < texels;
+         ++index)
+    {
+        scalar[index] =
+            static_cast<f32>(
+                index) *
+            0.125F;
+
+        vector[index] = {
+            .x =
+                static_cast<f32>(
+                    index) *
+                0.25F,
+            .y =
+                -static_cast<f32>(
+                    index) *
+                0.125F
+        };
+
+        category[index] =
+            static_cast<u32>(
+                index + 1U);
+    }
+
+    const auto catalog =
+        FieldCatalog();
+
+    Require(
+        catalog.size() ==
+            kRequiredTerrainDebugFieldCount &&
+        catalog.size() == 21U,
+        "M31 debug: required M29 debug-field catalog is incomplete.");
+
+    for (const auto& descriptor :
+         catalog)
+    {
+        Require(
+            !descriptor.name.empty() &&
+            !descriptor.upstream.empty(),
+            "M31 debug: field is missing display name or upstream provenance.");
+
+        for (const auto stage :
+             descriptor.upstream)
+        {
+            const auto name =
+                StageName(stage);
+
+            Require(
+                !name.empty() &&
+                name != "Unknown",
+                "M31 debug: field provenance contains an unknown stage.");
+        }
+
+        if (!page.Has(
+                descriptor.field))
+        {
+            switch (
+                descriptor.valueClass)
+            {
+            case TerrainDebugValueClass::
+                Scalar:
+            case TerrainDebugValueClass::
+                SignedScalar:
+                page.SetScalar(
+                    descriptor.field,
+                    scalar);
+                break;
+
+            case TerrainDebugValueClass::
+                Vector:
+                page.SetVector(
+                    descriptor.field,
+                    vector);
+                break;
+
+            case TerrainDebugValueClass::
+                Category:
+                page.SetCategory(
+                    descriptor.field,
+                    category);
+                break;
+
+            case TerrainDebugValueClass::
+                Boolean:
+            case TerrainDebugValueClass::
+                Revision:
+            case TerrainDebugValueClass::
+                Lod:
+                throw std::runtime_error(
+                    "M31 debug: provenance field was not populated by the physical page stamp.");
+            }
+        }
+
+        Require(
+            page.Has(
+                descriptor.field),
+            "M31 debug: required field cannot be inspected on a physical page.");
+
+        const auto view =
+            page.View(
+                descriptor.field);
+
+        Require(
+            TerrainDebugTexelCount(
+                view) ==
+                texels,
+            "M31 debug: inspectable field has the wrong physical-page extent.");
+
+        switch (
+            descriptor.valueClass)
+        {
+        case TerrainDebugValueClass::
+            Scalar:
+        case TerrainDebugValueClass::
+            SignedScalar:
+            Require(
+                view.scalar.size() ==
+                    texels,
+                "M31 debug: scalar field is not exposed through a typed raster view.");
+            break;
+
+        case TerrainDebugValueClass::
+            Vector:
+            Require(
+                view.vector.size() ==
+                    texels,
+                "M31 debug: vector field is not exposed through a typed raster view.");
+            break;
+
+        case TerrainDebugValueClass::
+            Category:
+            Require(
+                view.category.size() ==
+                    texels,
+                "M31 debug: category field is not exposed through a typed raster view.");
+            break;
+
+        case TerrainDebugValueClass::
+            Boolean:
+            Require(
+                view.boolean.size() ==
+                    texels,
+                "M31 debug: cache residency field is not exposed through a typed raster view.");
+            break;
+
+        case TerrainDebugValueClass::
+            Revision:
+            Require(
+                view.revision.size() ==
+                        texels &&
+                view.revision.front() ==
+                    stamp.
+                        invalidationRevision,
+                "M31 debug: invalidation provenance is not inspectable.");
+            break;
+
+        case TerrainDebugValueClass::
+            Lod:
+            Require(
+                view.lod.size() ==
+                        texels &&
+                view.lod.front() ==
+                    stamp.physicalLod,
+                "M31 debug: physical LOD provenance is not inspectable.");
+            break;
+        }
+
+        const auto rgba =
+            ComposeTerrainDebugRgba8(
+                view);
+
+        Require(
+            rgba.size() ==
+                texels * 4U,
+            "M31 debug: inspectable field cannot be composed into the debug presentation raster.");
+    }
+
+    Require(
+        DebugPageFingerprint(
+            page.Stamp()) != 0U &&
+        page.Stamp().cacheResident &&
+        page.Stamp().
+                invalidationRevision ==
+            77U,
+        "M31 debug: page-level cache/invalidation/LOD provenance is incomplete.");
+}
+
 } // namespace
 
 int main()
@@ -1330,10 +2117,13 @@ int main()
         TestAuthoredCanyonDrivesDrainageAndErosion();
         TestExposureBurialDrivesRenderedMaterial();
         TestBiomeOverrideDrivesConstrainedScatter();
+        TestPersistentGpuCacheReusesAcrossFrames();
+        TestDependencyChangesRegenerateOnlyDependents();
+        TestAllDebugFieldsAreInspectable();
 
         std::cout
             << "Orbit V0.0.4 M31 integration entry: "
-            << "4 integration slices passed.\n";
+            << "7 integration slices passed.\n";
 
         return EXIT_SUCCESS;
     }
