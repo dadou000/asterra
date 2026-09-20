@@ -1130,3 +1130,58 @@ add_custom_target(OrbitV005Validation
         OrbitStudioViewportNavigationTests
     USES_TERMINAL
 )
+
+
+# V0.0.5 M18 final editor integration gate. GPU execution of the real Studio
+# viewport remains a workstation check on Vulkan hardware, while this target
+# compiles OrbitStudio and validates the full production session/authoring/
+# physical-page/save-reopen path on hosted CI.
+add_executable(OrbitV005IntegrationGateTests
+    V005IntegrationGateTests.cpp
+)
+
+target_link_libraries(OrbitV005IntegrationGateTests
+    PRIVATE
+        Orbit::StudioSession
+        Orbit::StudioUi
+)
+
+target_compile_features(
+    OrbitV005IntegrationGateTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitV005IntegrationGateTests)
+
+add_test(
+    NAME Orbit.V005IntegrationGate
+    COMMAND OrbitV005IntegrationGateTests
+)
+
+set_tests_properties(
+    Orbit.V005IntegrationGate
+    PROPERTIES
+        LABELS "v005"
+)
+
+add_custom_target(OrbitV005IntegrationGate
+    COMMAND
+        ${CMAKE_CTEST_COMMAND}
+        --test-dir ${CMAKE_BINARY_DIR}
+        -C $<CONFIG>
+        -L v005
+        --output-on-failure
+    DEPENDS
+        OrbitStudio
+        OrbitStudioSessionTests
+        OrbitRockyPlanetAuthoringTests
+        OrbitSurfaceAuthoringModelTests
+        OrbitStudioTerrainAuthoringInvalidationTests
+        OrbitStudioTerrainRuntimeBridgeTests
+        OrbitStudioTerrainRebuildSchedulerTests
+        OrbitStudioTerrainPhysicalPageServiceTests
+        OrbitStudioTerrainRoundTripVerifierTests
+        OrbitStudioTerrainValidationScenarioTests
+        OrbitStudioTerrainPerformanceDiagnosticsTests
+        OrbitStudioSurfacePickingTests
+        OrbitStudioViewportNavigationTests
+        OrbitV005IntegrationGateTests
+    USES_TERMINAL
+)
