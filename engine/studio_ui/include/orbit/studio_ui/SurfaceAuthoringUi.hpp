@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/scene/ObjectStore.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 
 #include <optional>
@@ -15,6 +16,8 @@ class SurfaceAuthoringUi
 public:
     explicit SurfaceAuthoringUi(
         studio_session::StudioWorkspace& workspace);
+    explicit SurfaceAuthoringUi(
+        studio_session::StudioSession& session);
 
     void Register(editor_ui::EditorUi& ui);
 
@@ -27,6 +30,7 @@ private:
     void Draw(editor_ui::PanelContext& context);
 
     studio_session::StudioWorkspace* workspace_{nullptr};
+    studio_session::StudioSession* session_{nullptr};
     std::optional<scene::ObjectId> selectedBiome_;
     std::string newBiomeName_{"Desert"};
 
