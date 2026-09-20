@@ -46,6 +46,10 @@ public:
         rhi::Buffer& rawElevation,
         rhi::Buffer& drainageOut) const;
 
+    // Exact bytes owned by this fixed scratch pool. Dispatch does not
+    // allocate, so this is also its peak page-generation transient use.
+    [[nodiscard]] u64 TransientWorkingSetBytes() const noexcept;
+
 private:
     u32 maxResolution_;
     std::unique_ptr<rhi::ComputePipeline> pipeline_;
