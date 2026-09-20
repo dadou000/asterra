@@ -94,7 +94,9 @@ int main()
     }
 
     {
-        orbit::documents::ProjectDocument project(root);
+        auto project =
+            orbit::documents::ProjectDocument::Open(
+                root / "Project.orbit.toml");
         orbit::documents::WorldDatabase world(
             project.StartupWorldPath(),
             orbit::documents::WorldOpenMode::ReadOnly);
