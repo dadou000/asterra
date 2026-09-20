@@ -167,6 +167,18 @@ StudioSession::TerrainRuntime() const noexcept
     return terrainRuntime_;
 }
 
+StudioTerrainPerformanceDiagnostics&
+StudioSession::TerrainPerformance() noexcept
+{
+    return terrainPerformance_;
+}
+
+const StudioTerrainPerformanceDiagnostics&
+StudioSession::TerrainPerformance() const noexcept
+{
+    return terrainPerformance_;
+}
+
 void StudioSession::QueueTerrainInvalidation(
     const terrain_dependency::TerrainInvalidationRequest& request)
 {
