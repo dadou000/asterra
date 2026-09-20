@@ -81,7 +81,16 @@ public:
     void SameLine();
 
 private:
-    PanelContext() = default;
+    PanelContext(
+        bool forceTreeOpen,
+        std::vector<std::string>* automationTrace) noexcept;
+
+    void TraceWidget(
+        std::string_view label) const;
+
+    bool forceTreeOpen_{false};
+    std::vector<std::string>* automationTrace_{nullptr};
+
     friend class EditorUi;
 };
 
@@ -126,6 +135,17 @@ public:
     [[nodiscard]] bool HasPanel(PanelId id) const noexcept;
     [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
     [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
+
+    // Deterministic real-UI validation seam. Normal Studio leaves this off.
+    // Smoke mode can expand tree nodes and record controls that actually pass
+    // through the live Dear ImGui draw path.
+    void SetAutomationUiProbe(
+        bool expandTrees,
+        bool traceWidgets) noexcept;
+    void ClearAutomationUiTrace();
+    [[nodiscard]] bool AutomationUiTraceContains(
+        std::string_view label) const;
+    [[nodiscard]] std::size_t AutomationUiTraceSize() const noexcept;
 
     void RegisterMenuAction(MenuAction action);
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
