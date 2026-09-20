@@ -29,6 +29,7 @@ StudioRuntimeSnapshot StudioRuntimeBinding::Refresh()
         .compositionChanged = tick.compositionChanged,
         .activeBodyChanged = tick.activeBodyChanged,
         .viewportTargetsChanged = tick.viewportTargetsChanged,
+        .terrainRuntimeChanged = tick.terrainRuntimeChanged,
         .pathNetworkRebound = tick.pathNetworkRebound,
         .pathRoutingRebound = tick.pathRoutingRebound,
         .pathProductsInvalidated = tick.pathProductsInvalidated,
