@@ -3,6 +3,8 @@
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain_cache/TerrainPageCache.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
+#include <orbit/terrain_debug/TerrainDebugPageData.hpp>
+#include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
@@ -6346,6 +6348,543 @@ void Test18ClipmapPhysicalPageIndependence()
         "M30-18 changing render clipmap spacing/tier must leave physical page, M26 cache and M23 macro identities unchanged.");
 }
 
+
+void Test19PlanetFaceSeamConsistency()
+{
+    using namespace terrain_debug;
+
+    constexpr u8 tileLevel = 4U;
+    constexpr u32 tileCount =
+        1U << tileLevel;
+    constexpr u32 resolution = 9U;
+
+    const world::PlanetId planet{
+        .high = 0x4D33305345414D53ULL,
+        .low = 0x0000000000000019ULL
+    };
+
+    const terrain::TerrainGenerationRevisions
+        revisions{
+            .geology = 201U,
+            .climate = 202U,
+            .authoring = 203U,
+            .biome = 204U,
+            .water = 205U,
+            .processes = 206U
+        };
+
+    const auto sourceTileFor =
+        [](const world::CubeFace face,
+           const world::TileEdge edge)
+        {
+            world::PlanetTileId tile{
+                .face = face,
+                .level = tileLevel,
+                .x = tileCount / 2U,
+                .y = tileCount / 2U
+            };
+
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                tile.y = 0U;
+                break;
+            case world::TileEdge::East:
+                tile.x =
+                    tileCount - 1U;
+                break;
+            case world::TileEdge::South:
+                tile.y =
+                    tileCount - 1U;
+                break;
+            case world::TileEdge::West:
+                tile.x = 0U;
+                break;
+            }
+
+            return tile;
+        };
+
+    const auto edgeUv =
+        [](const world::CubeBounds& bounds,
+           const world::TileEdge edge,
+           const f64 t)
+        {
+            const f64 u =
+                bounds.minimumUv.x +
+                (bounds.maximumUv.x -
+                 bounds.minimumUv.x) *
+                    t;
+
+            const f64 v =
+                bounds.minimumUv.y +
+                (bounds.maximumUv.y -
+                 bounds.minimumUv.y) *
+                    t;
+
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return math::Double2{
+                    u,
+                    bounds.minimumUv.y};
+            case world::TileEdge::East:
+                return math::Double2{
+                    bounds.maximumUv.x,
+                    v};
+            case world::TileEdge::South:
+                return math::Double2{
+                    u,
+                    bounds.maximumUv.y};
+            case world::TileEdge::West:
+                return math::Double2{
+                    bounds.minimumUv.x,
+                    v};
+            }
+
+            return math::Double2{};
+        };
+
+    const auto edgeIndex =
+        [](const world::TileEdge edge,
+           const u32 sample)
+            -> std::size_t
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return sample;
+            case world::TileEdge::East:
+                return
+                    static_cast<std::size_t>(
+                        sample) *
+                        resolution +
+                    (resolution - 1U);
+            case world::TileEdge::South:
+                return
+                    static_cast<std::size_t>(
+                        resolution - 1U) *
+                        resolution +
+                    sample;
+            case world::TileEdge::West:
+                return
+                    static_cast<std::size_t>(
+                        sample) *
+                    resolution;
+            }
+
+            return 0U;
+        };
+
+    const auto outwardFlow =
+        [](const world::TileEdge edge)
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return world::TileGridOffset{
+                    0, -1};
+            case world::TileEdge::East:
+                return world::TileGridOffset{
+                    1, 0};
+            case world::TileEdge::South:
+                return world::TileGridOffset{
+                    0, 1};
+            case world::TileEdge::West:
+                return world::TileGridOffset{
+                    -1, 0};
+            }
+
+            return world::TileGridOffset{};
+        };
+
+    const auto inwardFlow =
+        [](const world::TileEdge edge)
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return world::TileGridOffset{
+                    0, 1};
+            case world::TileEdge::East:
+                return world::TileGridOffset{
+                    -1, 0};
+            case world::TileEdge::South:
+                return world::TileGridOffset{
+                    0, -1};
+            case world::TileEdge::West:
+                return world::TileGridOffset{
+                    1, 0};
+            }
+
+            return world::TileGridOffset{};
+        };
+
+    u32 crossings = 0U;
+    u32 reversedCrossings = 0U;
+    u32 rotatedReceivingEdges = 0U;
+
+    for (u8 rawFace = 0U;
+         rawFace < 6U;
+         ++rawFace)
+    {
+        const auto face =
+            static_cast<world::CubeFace>(
+                rawFace);
+
+        for (u8 rawEdge = 0U;
+             rawEdge < 4U;
+             ++rawEdge)
+        {
+            const auto edge =
+                static_cast<world::TileEdge>(
+                    rawEdge);
+
+            const auto sourceTile =
+                sourceTileFor(
+                    face,
+                    edge);
+
+            const auto mapping =
+                world::NeighborAcrossTileEdge(
+                    sourceTile,
+                    edge);
+
+            Require(
+                mapping.tile.face !=
+                        sourceTile.face &&
+                mapping.tile.level ==
+                        sourceTile.level,
+                "M30-19 border fixture must cross onto a different cube face at the same physical tile level.");
+
+            const auto reciprocal =
+                world::NeighborAcrossTileEdge(
+                    mapping.tile,
+                    mapping.edge);
+
+            Require(
+                reciprocal.tile ==
+                        sourceTile &&
+                reciprocal.edge ==
+                        edge,
+                "M30-19 canonical cube-face edge mapping must be reciprocal.");
+
+            if (mapping.reverseSamples)
+            {
+                ++reversedCrossings;
+            }
+
+            if (mapping.edge != edge)
+            {
+                ++rotatedReceivingEdges;
+            }
+
+            TerrainDebugPageStamp sourceStamp{
+                .address = {
+                    .planet = planet,
+                    .tile = sourceTile
+                },
+                .physicalLod = 3U,
+                .revisions = revisions,
+                .cacheResident = true,
+                .invalidationRevision =
+                    19U
+            };
+
+            TerrainDebugPageStamp neighborStamp{
+                .address = {
+                    .planet = planet,
+                    .tile = mapping.tile
+                },
+                .physicalLod = 3U,
+                .revisions = revisions,
+                .cacheResident = true,
+                .invalidationRevision =
+                    19U
+            };
+
+            const auto probe =
+                ProbeSeam(
+                    sourceStamp,
+                    edge,
+                    &neighborStamp);
+
+            Require(
+                probe.IsContinuousCandidate() &&
+                probe.expectedNeighbor ==
+                    neighborStamp.address,
+                "M30-19 M29 seam provenance must resolve the exact canonical physical neighbor with matching LOD/revisions.");
+
+            TerrainDebugPageData source(
+                sourceStamp,
+                resolution,
+                resolution);
+
+            TerrainDebugPageData neighbor(
+                neighborStamp,
+                resolution,
+                resolution);
+
+            std::vector<f32> sourceScalar(
+                resolution *
+                    resolution,
+                0.0F);
+
+            std::vector<f32> neighborScalar(
+                resolution *
+                    resolution,
+                0.0F);
+
+            std::vector<TerrainDebugVector2>
+                sourceVector(
+                    resolution *
+                        resolution);
+
+            std::vector<TerrainDebugVector2>
+                neighborVector(
+                    resolution *
+                        resolution);
+
+            const auto sourceBounds =
+                world::TileBounds(
+                    sourceTile);
+
+            const auto neighborBounds =
+                world::TileBounds(
+                    mapping.tile);
+
+            for (u32 i = 0U;
+                 i < resolution;
+                 ++i)
+            {
+                const u32 j =
+                    world::
+                        RemapTileEdgeSampleIndex(
+                            mapping,
+                            i,
+                            resolution);
+
+                const f64 sourceT =
+                    static_cast<f64>(i) /
+                    static_cast<f64>(
+                        resolution - 1U);
+
+                const f64 neighborT =
+                    static_cast<f64>(j) /
+                    static_cast<f64>(
+                        resolution - 1U);
+
+                const math::Double3
+                    sourceDirection =
+                        world::
+                            CubeToUnitDirection({
+                                .face =
+                                    sourceTile.face,
+                                .uv =
+                                    edgeUv(
+                                        sourceBounds,
+                                        edge,
+                                        sourceT)
+                            });
+
+                const math::Double3
+                    neighborDirection =
+                        world::
+                            CubeToUnitDirection({
+                                .face =
+                                    mapping.tile.face,
+                                .uv =
+                                    edgeUv(
+                                        neighborBounds,
+                                        mapping.edge,
+                                        neighborT)
+                            });
+
+                Require(
+                    math::Length(
+                        sourceDirection -
+                        neighborDirection) <=
+                        2.0e-12,
+                    "M30-19 remapped source/receiving edge samples must represent the same canonical world-space direction.");
+
+                const f32 sourceValue =
+                    static_cast<f32>(
+                        sourceDirection.x *
+                            3.0 +
+                        sourceDirection.y *
+                            5.0 +
+                        sourceDirection.z *
+                            7.0);
+
+                const f32 neighborValue =
+                    static_cast<f32>(
+                        neighborDirection.x *
+                            3.0 +
+                        neighborDirection.y *
+                            5.0 +
+                        neighborDirection.z *
+                            7.0);
+
+                sourceScalar[
+                    edgeIndex(
+                        edge,
+                        i)] =
+                    sourceValue;
+
+                neighborScalar[
+                    edgeIndex(
+                        mapping.edge,
+                        j)] =
+                    neighborValue;
+
+                const TerrainDebugVector2
+                    sourceValueVector{
+                        .x =
+                            1.0F +
+                            static_cast<f32>(i) *
+                                0.125F,
+                        .y =
+                            -0.75F +
+                            static_cast<f32>(i) *
+                                0.0625F
+                    };
+
+                const auto transformed =
+                    terrain_region::
+                        TransformBoundaryVectorAcrossEdge(
+                            edge,
+                            mapping,
+                            {
+                                static_cast<f64>(
+                                    sourceValueVector.x),
+                                static_cast<f64>(
+                                    sourceValueVector.y)
+                            });
+
+                sourceVector[
+                    edgeIndex(
+                        edge,
+                        i)] =
+                    sourceValueVector;
+
+                neighborVector[
+                    edgeIndex(
+                        mapping.edge,
+                        j)] = {
+                            .x =
+                                static_cast<f32>(
+                                    transformed.x),
+                            .y =
+                                static_cast<f32>(
+                                    transformed.y)
+                        };
+            }
+
+            const auto normalTransform =
+                world::
+                    TransformFlowAcrossTileEdge(
+                        edge,
+                        mapping,
+                        outwardFlow(edge));
+
+            Require(
+                normalTransform ==
+                    inwardFlow(
+                        mapping.edge),
+                "M30-19 an outward page-local normal must become the receiving page's inward normal across every cube-face rotation.");
+
+            source.SetScalar(
+                TerrainDebugField::Soil,
+                sourceScalar);
+
+            neighbor.SetScalar(
+                TerrainDebugField::Soil,
+                neighborScalar);
+
+            const auto sourceScalarView =
+                source.View(
+                    TerrainDebugField::Soil);
+
+            const auto neighborScalarView =
+                neighbor.View(
+                    TerrainDebugField::Soil);
+
+            const auto scalarComparison =
+                CompareSeamValues(
+                    sourceStamp,
+                    sourceScalarView,
+                    edge,
+                    &neighborStamp,
+                    &neighborScalarView,
+                    2.0e-6);
+
+            Require(
+                scalarComparison.
+                    Comparable() &&
+                scalarComparison.
+                    ValuesContinuous() &&
+                scalarComparison.
+                    samplesCompared ==
+                        resolution &&
+                scalarComparison.
+                    mismatchedSamples ==
+                        0U &&
+                scalarComparison.
+                    maximumDifference <=
+                        2.0e-6,
+                "M30-19 scalar physical field must remain continuous across canonical planet-face seam remapping.");
+
+            source.SetVector(
+                TerrainDebugField::Drainage,
+                sourceVector);
+
+            neighbor.SetVector(
+                TerrainDebugField::Drainage,
+                neighborVector);
+
+            const auto sourceVectorView =
+                source.View(
+                    TerrainDebugField::
+                        Drainage);
+
+            const auto neighborVectorView =
+                neighbor.View(
+                    TerrainDebugField::
+                        Drainage);
+
+            const auto vectorComparison =
+                CompareSeamValues(
+                    sourceStamp,
+                    sourceVectorView,
+                    edge,
+                    &neighborStamp,
+                    &neighborVectorView,
+                    1.0e-6);
+
+            Require(
+                vectorComparison.
+                    Comparable() &&
+                vectorComparison.
+                    ValuesContinuous() &&
+                vectorComparison.
+                    samplesCompared ==
+                        resolution &&
+                vectorComparison.
+                    mismatchedSamples ==
+                        0U,
+                "M30-19 vector physical field must remain continuous after canonical cube-face tangent-frame transformation.");
+
+            ++crossings;
+        }
+    }
+
+    Require(
+        crossings == 24U &&
+        reversedCrossings > 0U &&
+        rotatedReceivingEdges > 0U,
+        "M30-19 acceptance must cover all 24 face-edge crossings including reversed sample order and rotated receiving-edge cases.");
+}
+
 } // namespace
 
 int main()
@@ -6368,8 +6907,9 @@ int main()
     Test16CacheHitStability();
     Test17RevisionInvalidation();
     Test18ClipmapPhysicalPageIndependence();
+    Test19PlanetFaceSeamConsistency();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 18/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 19/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
