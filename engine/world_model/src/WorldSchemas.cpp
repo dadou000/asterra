@@ -1,4 +1,5 @@
-#include <orbit/world_model/WorldSchemas.hpp>\n#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
 
 #include <string>
 #include <utility>
@@ -8,6 +9,8 @@ namespace orbit::world_model
 void RegisterSchemas(
     schema::SchemaRegistry& schemas)
 {
+    RegisterCelestialCapabilitySchemas(schemas);
+
     schemas.RegisterType({
         .id = kWorldType,
         .displayName = "World",
