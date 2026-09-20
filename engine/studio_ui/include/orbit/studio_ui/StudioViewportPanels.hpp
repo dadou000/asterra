@@ -88,5 +88,6 @@ private:
     f64 biomeBrushOpacity_{1.0};
     bool biomeAutomaticOverlay_{false};
     std::optional<f64> hoveredBiomeAuthoredWeight_;
+    std::optional<f64> hoveredBiomeAutomaticWeight_;
 };
 } // namespace orbit::studio_ui
