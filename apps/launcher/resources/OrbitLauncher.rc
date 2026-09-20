@@ -1,4 +1,0 @@
-#include "orbit/platform/AppResources.hpp"
-
-ORBIT_RESOURCE_ICON ICON "../../../assets/orbit_icon.ico"
-ORBIT_RESOURCE_SPLASH_PNG ORBIT_RESOURCE_SPLASH_TYPE "../../../assets/orbit_splash.png"
