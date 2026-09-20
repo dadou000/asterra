@@ -230,6 +230,61 @@ int main()
         if (!commands.CanUndo()) return 14;
 
         world.Checkpoint();
+
+        documents::WorldDatabase reopenedWorld(
+            project.StartupWorldPath());
+
+        schema::SchemaRegistry reopenedSchemas;
+        world_model::RegisterSchemas(
+            reopenedSchemas);
+
+        scene::ObjectStore reopenedObjects(
+            reopenedWorld);
+
+        commands::CommandService reopenedCommands(
+            reopenedObjects,
+            reopenedSchemas);
+
+        selection::SelectionService
+            reopenedSelection;
+
+        const scene::ObjectId reopenedSelected[] = {
+            desert
+        };
+
+        reopenedSelection.Set(
+            reopenedSelected);
+
+        editor_model::SurfaceAuthoringModel
+            reopenedModel(
+                reopenedObjects,
+                reopenedCommands,
+                reopenedSelection);
+
+        const auto reopenedMasks =
+            reopenedModel.Masks(
+                desert);
+
+        if (reopenedMasks.size() != 3U ||
+            reopenedMasks[0].operation !=
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::
+                        Replace ||
+            reopenedMasks[1].operation !=
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::
+                        Add ||
+            reopenedMasks[2].operation !=
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::
+                        Subtract ||
+            reopenedMasks[0].outerRadiusMeters !=
+                1'000.0 ||
+            reopenedMasks[1].opacity !=
+                0.5)
+        {
+            return 18;
+        }
     }
 
     std::filesystem::remove_all(root);
