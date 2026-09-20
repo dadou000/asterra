@@ -141,6 +141,13 @@ public:
 private:
     struct RuntimeState;
 
+    struct ObserverHistory
+    {
+        scene::ObjectId semanticBody{};
+        world::PlanetId planet{};
+        world::WorldPosition observer{};
+    };
+
     [[nodiscard]] std::unique_ptr<RuntimeState>
     BuildRuntime(
         std::string viewportId,
@@ -173,6 +180,12 @@ private:
         std::unique_ptr<RuntimeState>,
         std::less<>>
         runtimes_;
+
+    std::map<
+        std::string,
+        ObserverHistory,
+        std::less<>>
+        observerHistory_;
 
     u64 observedWorldGeneration_{~u64{0}};
     u64 observedUniverseGeneration_{~u64{0}};
