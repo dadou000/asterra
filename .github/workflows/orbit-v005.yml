@@ -1,0 +1,55 @@
+name: Orbit V0.0.5 Studio Terrain
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-v005.yml'
+      - 'CMakeLists.txt'
+      - 'tests/**'
+      - 'engine/core/**'
+      - 'engine/procedural_graph/**'
+      - 'engine/terrain_dependency/**'
+      - 'engine/editor_model/**'
+      - 'engine/editor_session/**'
+      - 'engine/studio_session/**'
+      - 'engine/studio_ui/**'
+      - 'engine/terrain_debug/**'
+      - 'engine/terrain_gpu/**'
+      - 'engine/terrain_render/**'
+      - 'engine/terrain_stream/**'
+      - 'engine/terrain_view/**'
+      - 'engine/world/**'
+      - 'engine/world_model/**'
+  pull_request:
+    branches: [orbit]
+  workflow_dispatch:
+
+concurrency:
+  group: orbit-v005-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  studio-terrain:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake -S . -B build-v005 -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build and run V0.0.5 validation
+        run: cmake --build build-v005 --config Release --target OrbitV005Validation
