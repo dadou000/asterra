@@ -1379,6 +1379,60 @@ int main(
                     return worldSession.Plugins();
                 };
 
+        if (terrainUiSmoke)
+        {
+            if (!worldSession.HasWorld())
+            {
+                const auto smokeWorld =
+                    studioSession.CreateWorld(
+                        "Worlds/TerrainUiSmoke.orbitworld",
+                        "Terrain UI Smoke");
+
+                studioSession.OpenWorld(
+                    smokeWorld.relativePath);
+            }
+
+            if (!FindFirstBodyObject(
+                    objects()).
+                    has_value())
+            {
+                const auto worldObject =
+                    commandService().
+                        CreateObject(
+                            orbit::editor_model::
+                                builtin::kWorldType,
+                            "World");
+
+                const orbit::scene::ObjectId
+                    selectedWorld[]{
+                        worldObject
+                    };
+
+                selection().Set(
+                    selectedWorld);
+
+                authoringCommands().Invoke(
+                    orbit::editor_model::
+                        authoring_commands::
+                            kCreateRockyPlanet,
+                    {
+                        {
+                            "name",
+                            std::string(
+                                "Terrain UI Smoke Planet")
+                        },
+                        {
+                            "radiusMeters",
+                            6'000'000.0
+                        },
+                        {
+                            "massKg",
+                            5.0e24
+                        }
+                    });
+            }
+        }
+
         orbit::content::ContentService
             content(
                 project.RootDirectory());
