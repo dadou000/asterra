@@ -4073,6 +4073,372 @@ void Test12BiomeFallback()
         "M30-12 stale IDs, below-threshold optional coverage and explicit BaseBiome contributions must all collapse safely to full fallback coverage.");
 }
 
+
+void Test13AutomaticAuthoredBiomeBlend()
+{
+    using namespace terrain_biome;
+
+    const universe::BodyId body{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000000013ULL
+    };
+
+    const BiomeId forestId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001301ULL
+    };
+
+    const BiomeId duneId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001302ULL
+    };
+
+    const BiomeId weakId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001303ULL
+    };
+
+    const auto globalMask =
+        [](const u64 low,
+           const BiomeAuthoredWeightOperation operation,
+           const f64 value)
+        {
+            return BiomeAuthoredMask{
+                .id = {
+                    .high =
+                        0x4D3330424D41534BULL,
+                    .low = low
+                },
+                .operation = operation,
+                .centerUnitDirection =
+                    {0.0, 1.0, 0.0},
+                .innerRadiusMeters = 0.0,
+                .outerRadiusMeters = 0.0,
+                .global = true,
+                .value = value,
+                .opacity = 1.0,
+                .enabled = true
+            };
+        };
+
+    BiomeDefinition forest{
+        .id = forestId,
+        .name = "M30 blended forest",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    AutomaticAndAuthored,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Temperature,
+                    .minimum = 10.0,
+                    .maximum = 20.0,
+                    .lowerFalloff = 10.0,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            },
+            .authoredMasks = {
+                globalMask(
+                    0x1301ULL,
+                    BiomeAuthoredWeightOperation::
+                        Add,
+                    0.125)
+            }
+        }
+    };
+
+    BiomeDefinition dunes{
+        .id = duneId,
+        .name = "M30 blended dunes",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    AutomaticAndAuthored,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Moisture,
+                    .minimum = 0.4,
+                    .maximum = 0.8,
+                    .lowerFalloff = 0.4,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            },
+            .authoredMasks = {
+                globalMask(
+                    0x1302ULL,
+                    BiomeAuthoredWeightOperation::
+                        Multiply,
+                    0.5)
+            }
+        }
+    };
+
+    BiomeDefinition weak{
+        .id = weakId,
+        .name = "M30 thresholded biome",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    AutomaticAndAuthored,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Temperature,
+                    .minimum = 10.0,
+                    .maximum = 20.0,
+                    .lowerFalloff = 10.0,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            },
+            .authoredMasks = {
+                globalMask(
+                    0x1303ULL,
+                    BiomeAuthoredWeightOperation::
+                        Multiply,
+                    0.05)
+            }
+        }
+    };
+
+    BiomeService service(
+        body);
+
+    // Insert in deliberately non-ID order. ResolvePlacement/Resolve must emit
+    // optional biome entries in stable ID order rather than hash-map order.
+    service.UpsertBiome(
+        weak);
+    service.UpsertBiome(
+        dunes);
+    service.UpsertBiome(
+        forest);
+
+    BiomePlacementContext context{};
+    context.unitDirection =
+        {0.0, 1.0, 0.0};
+    context.planetRadiusMeters =
+        6'000'000.0;
+    context.temperatureC =
+        5.0;
+    context.moisture =
+        0.2;
+    context.rainfall =
+        0.5;
+    context.elevationMeters =
+        200.0;
+    context.slopeDegrees =
+        8.0;
+    context.aspectRadians =
+        0.0;
+    context.latitudeRadians =
+        0.0;
+    context.continentality =
+        0.5;
+    context.distanceToCoastWaterMeters =
+        10'000.0;
+    context.drainage =
+        0.2;
+    context.soilDepthMeters =
+        0.5;
+    context.sandDepthMeters =
+        0.1;
+    context.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+    context.solarExposure =
+        0.5;
+    context.windExposure =
+        0.5;
+    context.snowPersistence =
+        0.0;
+
+    Require(
+        context.IsValid(),
+        "M30-13 biome blend context must be valid.");
+
+    const auto forestEval =
+        service.EvaluatePlacement(
+            *service.Find(forestId),
+            context);
+
+    const auto duneEval =
+        service.EvaluatePlacement(
+            *service.Find(duneId),
+            context);
+
+    const auto weakEval =
+        service.EvaluatePlacement(
+            *service.Find(weakId),
+            context);
+
+    Require(
+        NearlyEqual(
+            forestEval.automaticWeight,
+            0.5,
+            1.0e-12) &&
+        NearlyEqual(
+            forestEval.authoredWeight,
+            0.125,
+            1.0e-12) &&
+        NearlyEqual(
+            forestEval.finalWeight,
+            0.625,
+            1.0e-12),
+        "M30-13 automatic+authored Add composition must apply the authored mask after smooth automatic placement.");
+
+    Require(
+        NearlyEqual(
+            duneEval.automaticWeight,
+            0.5,
+            1.0e-12) &&
+        NearlyEqual(
+            duneEval.finalWeight,
+            0.25,
+            1.0e-12),
+        "M30-13 automatic+authored Multiply composition must scale the automatic biome weight.");
+
+    Require(
+        NearlyEqual(
+            weakEval.automaticWeight,
+            0.5,
+            1.0e-12) &&
+        NearlyEqual(
+            weakEval.finalWeight,
+            0.025,
+            1.0e-12),
+        "M30-13 threshold fixture must produce a nonzero final optional biome weight below its resolution threshold.");
+
+    const auto resolved =
+        service.ResolvePlacement(
+            context);
+
+    Require(
+        resolved.size() ==
+            3U,
+        "M30-13 resolved blend must contain BaseBiome plus the two eligible optional biomes only.");
+
+    Require(
+        resolved[0].id ==
+                service.BaseBiome().id &&
+        resolved[0].base &&
+        resolved[1].id ==
+                forestId &&
+        !resolved[1].base &&
+        resolved[2].id ==
+                duneId &&
+        !resolved[2].base,
+        "M30-13 biome blend must keep BaseBiome first and optional biomes in stable ID order independent of insertion/hash order.");
+
+    Require(
+        NearlyEqual(
+            resolved[0].weight,
+            0.125,
+            1.0e-6) &&
+        NearlyEqual(
+            resolved[1].weight,
+            0.625,
+            1.0e-6) &&
+        NearlyEqual(
+            resolved[2].weight,
+            0.25,
+            1.0e-6),
+        "M30-13 resolved biome weights must preserve eligible automatic/authored weights and assign the exact residual to BaseBiome.");
+
+    f64 totalWeight = 0.0;
+
+    for (const auto& weight :
+         resolved)
+    {
+        totalWeight +=
+            weight.weight;
+    }
+
+    Require(
+        NearlyEqual(
+            totalWeight,
+            1.0,
+            1.0e-6),
+        "M30-13 resolved automatic/authored biome blend must close to unit coverage.");
+
+    const auto replay =
+        service.ResolvePlacement(
+            context);
+
+    Require(
+        replay.size() ==
+            resolved.size(),
+        "M30-13 deterministic replay changed biome blend cardinality.");
+
+    for (std::size_t index = 0U;
+         index < resolved.size();
+         ++index)
+    {
+        Require(
+            replay[index].id ==
+                    resolved[index].id &&
+            replay[index].weight ==
+                    resolved[index].weight &&
+            replay[index].base ==
+                    resolved[index].base,
+            "M30-13 automatic/authored biome blend must replay bit-identically for fixed placement authority.");
+    }
+
+    // Force an oversubscribed case through the same production Resolve path.
+    // Base remains present at zero and optionals normalize proportionally.
+    const std::array<
+        BiomeWeightContribution,
+        2>
+        oversubscribed{{
+            {
+                .id = forestId,
+                .weight = 0.75F
+            },
+            {
+                .id = duneId,
+                .weight = 0.75F
+            }
+        }};
+
+    const auto normalized =
+        service.Resolve(
+            oversubscribed);
+
+    Require(
+        normalized.size() ==
+                3U &&
+        normalized[0].base &&
+        NearlyEqual(
+            normalized[0].weight,
+            0.0,
+            1.0e-6) &&
+        NearlyEqual(
+            normalized[1].weight,
+            0.5,
+            1.0e-6) &&
+        NearlyEqual(
+            normalized[2].weight,
+            0.5,
+            1.0e-6),
+        "M30-13 oversubscribed optional coverage must normalize proportionally while retaining exactly one zero-weight BaseBiome entry.");
+}
+
 } // namespace
 
 int main()
@@ -4089,8 +4455,9 @@ int main()
     Test10FastFlowDrainageReference();
     Test11AuthoredCanyonPersistence();
     Test12BiomeFallback();
+    Test13AutomaticAuthoredBiomeBlend();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 12/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 13/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
