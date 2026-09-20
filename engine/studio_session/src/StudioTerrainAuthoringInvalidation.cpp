@@ -106,7 +106,8 @@ BuildTerrainAuthoringInvalidations(
         controlUnitDirections,
     const f64 influenceRadiusMeters,
     const u8 physicalTileLevel,
-    const u32 downstreamRadiusTiles)
+    const u32 downstreamRadiusTiles,
+    const terrain_dependency::TerrainChangeKind kind)
 {
     if (!planet.id.IsValid() ||
         !std::isfinite(planet.radiusMeters) ||
@@ -262,10 +263,7 @@ BuildTerrainAuthoringInvalidations(
         terrain_dependency::
             TerrainInvalidationRequest
             request{
-                .kind =
-                    terrain_dependency::
-                        TerrainChangeKind::
-                            TerrainAuthoring,
+                .kind = kind,
                 .scope = {
                     .planet =
                         planet.id,
