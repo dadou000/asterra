@@ -346,6 +346,9 @@ void ProjectAuthoringUi::DrawProjectSettings(
                         *workspace_,
                         "studio.primary");
 
+            terrainRoundTripReportGeneration_ =
+                workspace_->Generation();
+
             const auto& report =
                 *terrainRoundTripReport_;
 
@@ -626,6 +629,16 @@ void ProjectAuthoringUi::SynchronizeProjectBuffers()
     }
 
     observedWorkspaceGeneration_ = workspace_->Generation();
+
+    if (terrainRoundTripReport_.has_value() &&
+        terrainRoundTripReportGeneration_ !=
+            observedWorkspaceGeneration_)
+    {
+        terrainRoundTripReport_.reset();
+        terrainRoundTripReportGeneration_ =
+            ~u64{0};
+    }
+
     selectedWorld_.reset();
     selectedWorldName_.clear();
 
