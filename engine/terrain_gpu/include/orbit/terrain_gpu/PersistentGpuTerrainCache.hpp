@@ -23,7 +23,8 @@ enum class CachedTerrainProduct : u32
     SedimentExchange = 1U << 5U,
     Coastal = 1U << 6U,
     Scatter = 1U << 7U,
-    RiverGeometry = 1U << 8U
+    RiverGeometry = 1U << 8U,
+    PhysicalSurface = 1U << 9U
 };
 
 using CachedTerrainProductMask = u32;
