@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR
