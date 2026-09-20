@@ -160,6 +160,19 @@ int main()
             return 26;
         }
 
+        const auto* services =
+            surfaces.ServicesForBody(
+                *bodyId);
+
+        if (services == nullptr ||
+            services->Geology().Size() != 5U ||
+            services->Geology().Find(
+                services->DefaultBedrock()) ==
+                nullptr)
+        {
+            return 27;
+        }
+
         const auto canyon=commands.CreateObject(
             orbit::world_model::kTerrainConstraintType,
             "Canyon",terrainObject,4'000);
