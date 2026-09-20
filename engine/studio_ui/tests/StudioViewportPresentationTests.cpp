@@ -119,6 +119,25 @@ void TestPresentationPolicy()
         SelectStudioViewportPresentation(
             ViewportMode::Perspective,
             true,
+            true,
+            false,
+            false) ==
+        StudioViewportPresentation::ProductionTerrain);
+
+    Check(
+        SelectStudioViewportPresentation(
+            ViewportMode::Perspective,
+            true,
+            false,
+            false,
+            false) ==
+        StudioViewportPresentation::BodyPreview);
+
+    Check(
+        SelectStudioViewportPresentation(
+            ViewportMode::BodyMap,
+            true,
+            true,
             false,
             false) ==
         StudioViewportPresentation::BodyPreview);
@@ -128,6 +147,7 @@ void TestPresentationPolicy()
             ViewportMode::BodyMap,
             false,
             false,
+            false,
             false) ==
         StudioViewportPresentation::Blank);
 
@@ -135,6 +155,7 @@ void TestPresentationPolicy()
         SelectStudioViewportPresentation(
             ViewportMode::Debug,
             true,
+            false,
             true,
             true) ==
         StudioViewportPresentation::TerrainDebug);
@@ -144,6 +165,7 @@ void TestPresentationPolicy()
             ViewportMode::Debug,
             true,
             false,
+            false,
             false) ==
         StudioViewportPresentation::TerrainDebugUnavailable);
 
@@ -151,6 +173,7 @@ void TestPresentationPolicy()
         SelectStudioViewportPresentation(
             ViewportMode::Debug,
             true,
+            false,
             true,
             false) ==
         StudioViewportPresentation::TerrainDebugUnavailable);
@@ -158,6 +181,7 @@ void TestPresentationPolicy()
     Check(
         SelectStudioViewportPresentation(
             ViewportMode::Debug,
+            false,
             false,
             true,
             true) ==
@@ -240,6 +264,7 @@ void TestM29StudioAcceptance()
             SelectStudioViewportPresentation(
                 ViewportMode::Debug,
                 true,
+                false,
                 true,
                 source->Has(
                     descriptor.field)) ==
