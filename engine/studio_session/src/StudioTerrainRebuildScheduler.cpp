@@ -388,6 +388,14 @@ void StudioTerrainRebuildScheduler::QueueChange(
     });
 }
 
+void StudioTerrainRebuildScheduler::
+SetAppliedChangeCallback(
+    AppliedChangeCallback callback)
+{
+    appliedChangeCallback_ =
+        std::move(callback);
+}
+
 void StudioTerrainRebuildScheduler::FlushChanges(
     const bool all)
 {
@@ -409,6 +417,13 @@ void StudioTerrainRebuildScheduler::FlushChanges(
         const auto result =
             graph_->ApplyChange(
                 request);
+
+        if (appliedChangeCallback_)
+        {
+            appliedChangeCallback_(
+                request,
+                result);
+        }
 
         appliedChanges_.push_back(
             request);

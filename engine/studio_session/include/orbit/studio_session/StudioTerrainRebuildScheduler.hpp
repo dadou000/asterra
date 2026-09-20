@@ -4,6 +4,7 @@
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -87,6 +88,11 @@ struct StudioTerrainBodyRebuildStatus
 class StudioTerrainRebuildScheduler
 {
 public:
+    using AppliedChangeCallback =
+        std::function<void(
+            const terrain_dependency::TerrainInvalidationRequest&,
+            const terrain_dependency::TerrainInvalidationResult&)>;
+
     explicit StudioTerrainRebuildScheduler(
         terrain_dependency::TerrainDependencyGraph& graph,
         StudioTerrainRebuildConfig config = {});
@@ -101,6 +107,11 @@ public:
     // Debounced/coalesced authority change. No build is submitted here.
     void QueueChange(
         const terrain_dependency::TerrainInvalidationRequest& request);
+
+    // Called synchronously after M27 publishes the new authority revisions and
+    // before any descendant build for that revision can be scheduled.
+    void SetAppliedChangeCallback(
+        AppliedChangeCallback callback);
 
     // Finalizes completed M27 jobs, flushes expired edits, and submits at most
     // maxBuildRequestsPerTick targets. This call never waits for terrain jobs.
@@ -205,5 +216,8 @@ private:
     std::vector<
         terrain_dependency::TerrainInvalidationRequest>
         appliedChanges_;
+
+    AppliedChangeCallback
+        appliedChangeCallback_;
 };
 } // namespace orbit::studio_session

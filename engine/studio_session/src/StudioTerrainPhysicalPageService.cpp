@@ -271,11 +271,34 @@ struct SharedBodyInputs
         std::scoped_lock lock(mutex);
         current =
             std::move(value);
+        pending.reset();
+    }
+
+    void Stage(
+        std::shared_ptr<
+            const BodyBuildInputs> value)
+    {
+        std::scoped_lock lock(mutex);
+        pending =
+            std::move(value);
+    }
+
+    void CommitPending() noexcept
+    {
+        std::scoped_lock lock(mutex);
+
+        if (pending != nullptr)
+        {
+            current =
+                std::move(pending);
+        }
     }
 
     mutable std::mutex mutex;
     std::shared_ptr<
         const BodyBuildInputs> current;
+    std::shared_ptr<
+        const BodyBuildInputs> pending;
 };
 
 struct PhysicalBundle
@@ -2540,6 +2563,19 @@ void StudioTerrainPhysicalPageService::Sync(
                 SetPaused(
                     impl_->paused);
 
+            body->scheduler.
+                SetAppliedChangeCallback(
+                    [sharedState =
+                         body->shared](
+                        const terrain_dependency::
+                            TerrainInvalidationRequest&,
+                        const terrain_dependency::
+                            TerrainInvalidationResult&)
+                    {
+                        sharedState->
+                            CommitPending();
+                    });
+
             found =
                 impl_->bodies.
                     emplace(
@@ -2555,7 +2591,7 @@ void StudioTerrainPhysicalPageService::Sync(
         {
             found->second->
                 shared->
-                Store(
+                Stage(
                     inputs);
             found->second->
                 surfaceSourceRevision =

@@ -827,8 +827,90 @@ void TestLateResidentPageInheritsPendingDebounce()
         late);
 }
 
+void TestAppliedChangeCallbackFiresAtAuthorityFlush()
+{
+    Fixture fixture({
+        .editDebounceSeconds = 0.20,
+        .maxBuildRequestsPerTick = 4U
+    });
+
+    const auto address =
+        MakeAddress(60U, 60U);
+
+    fixture.scheduler.RegisterPage(
+        address,
+        InitialRevisions());
+
+    DriveReady(
+        fixture,
+        address);
+
+    orbit::u32 callbacks = 0U;
+    orbit::u64 authoringRevision = 0U;
+
+    fixture.scheduler.
+        SetAppliedChangeCallback(
+            [&](const auto& request,
+                const auto& result)
+            {
+                ++callbacks;
+
+                Require(
+                    request.kind ==
+                        terrain_dependency::
+                            TerrainChangeKind::
+                                TerrainAuthoring,
+                    "M06 callback must identify the applied authority change.");
+
+                Require(
+                    result.affectedPages == 1U,
+                    "M06 callback must observe the completed M27 invalidation.");
+
+                const auto revisions =
+                    fixture.graph.Revisions(
+                        address);
+
+                Require(
+                    revisions.has_value(),
+                    "M06 callback must run after M27 publishes revisions.");
+
+                authoringRevision =
+                    revisions->authoring;
+            });
+
+    const auto before =
+        fixture.graph.Revisions(
+            address);
+
+    Require(
+        before.has_value(),
+        "M06 callback test requires registered revisions.");
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::
+                TerrainChangeKind::
+                    TerrainAuthoring,
+            address.planet));
+
+    fixture.scheduler.Tick(0.10);
+
+    Require(
+        callbacks == 0U,
+        "Debounced edits must not promote staged runtime inputs early.");
+
+    fixture.scheduler.Tick(0.10);
+
+    Require(
+        callbacks == 1U &&
+        authoringRevision ==
+            before->authoring + 1U,
+        "M06 callback must run exactly when M27 advances authority.");
+}
+
 int main()
 {
+    TestAppliedChangeCallbackFiresAtAuthorityFlush();
     TestLateResidentPageInheritsPendingDebounce();
     TestInitialDirtyBuildConvergesAndReportsProgress();
     TestSliderChangesDebounceAndCoalesce();
