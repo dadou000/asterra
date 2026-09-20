@@ -984,12 +984,15 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::TerrainDependency
         Orbit::TerrainErosion
         Orbit::TerrainGeology
+        Orbit::TerrainGpu
         Orbit::TerrainHydrology
         Orbit::TerrainMacroGeology
         Orbit::TerrainMaterialColumn
         Orbit::TerrainRegion
         Orbit::TerrainRender
         Orbit::TerrainScatter
+        Orbit::TerrainStream
+        Orbit::TerrainView
 )
 
 target_compile_definitions(OrbitV004ValidationTests
