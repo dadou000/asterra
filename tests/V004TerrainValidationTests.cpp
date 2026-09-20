@@ -2864,9 +2864,6 @@ void Test10FastFlowDrainageReference()
             resolution) *
         resolution;
 
-    std::vector<std::vector<u32>> donors(
-        cellCount);
-
     std::vector<i32> downstream(
         cellCount,
         -1);
@@ -2925,9 +2922,6 @@ void Test10FastFlowDrainageReference()
             downstream[index] =
                 static_cast<i32>(
                     target);
-
-            donors[target].
-                push_back(index);
 
             ++remainingDonors[target];
 
