@@ -107,6 +107,7 @@ void StudioRenderViewSet::Create(
         debugPhysicalPageLevels_.erase(targetId);
         debugPhysicalPages_.erase(targetId);
         terrainSurfacePicks_.erase(targetId);
+        terrainAuthoringOverlays_.erase(targetId);
         liveDebugPages_.erase(targetId);
         static_cast<void>(
             session_->Viewports().Unregister(
@@ -132,6 +133,7 @@ bool StudioRenderViewSet::Destroy(
     debugPhysicalPageLevels_.erase(ownedId);
     debugPhysicalPages_.erase(ownedId);
     terrainSurfacePicks_.erase(ownedId);
+    terrainAuthoringOverlays_.erase(ownedId);
     liveDebugPages_.erase(ownedId);
 
     if (session_ != nullptr)
@@ -418,6 +420,74 @@ StudioRenderViewSet::LastTerrainSurfacePick(
         : std::optional(found->second);
 }
 
+void StudioRenderViewSet::SetTerrainAuthoringOverlay(
+    const std::string_view id,
+    StudioTerrainAuthoringOverlay overlay)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    if (!overlay.body.IsValid() ||
+        overlay.controlUnitDirections.empty() ||
+        !std::isfinite(
+            overlay.influenceRadiusMeters) ||
+        overlay.influenceRadiusMeters < 0.0)
+    {
+        throw std::invalid_argument(
+            "Studio terrain authoring overlay is invalid.");
+    }
+
+    for (auto& direction :
+         overlay.controlUnitDirections)
+    {
+        const f64 length =
+            math::Length(direction);
+
+        if (!std::isfinite(length) ||
+            length <= 1.0e-12)
+        {
+            throw std::invalid_argument(
+                "Studio terrain authoring overlay contains an invalid direction.");
+        }
+
+        direction =
+            direction / length;
+    }
+
+    terrainAuthoringOverlays_.
+        insert_or_assign(
+            std::string(id),
+            std::move(overlay));
+}
+
+void StudioRenderViewSet::ClearTerrainAuthoringOverlay(
+    const std::string_view id) noexcept
+{
+    terrainAuthoringOverlays_.erase(id);
+}
+
+std::optional<StudioTerrainAuthoringOverlay>
+StudioRenderViewSet::TerrainAuthoringOverlay(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        terrainAuthoringOverlays_.find(id);
+
+    return found ==
+            terrainAuthoringOverlays_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
 bool StudioRenderViewSet::ResetTerrainView(
     const std::string_view id)
 {
@@ -679,6 +749,7 @@ u32 StudioRenderViewSet::Refresh(
             view->Camera() = {};
             debugPhysicalPages_.erase(id);
             terrainSurfacePicks_.erase(id);
+            terrainAuthoringOverlays_.erase(id);
             liveDebugPages_.erase(id);
             continue;
         }
@@ -703,6 +774,7 @@ u32 StudioRenderViewSet::Refresh(
             {
                 debugPhysicalPages_.erase(selected);
                 terrainSurfacePicks_.erase(id);
+                terrainAuthoringOverlays_.erase(id);
                 liveDebugPages_.erase(id);
             }
         }
