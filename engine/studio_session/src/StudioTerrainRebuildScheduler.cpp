@@ -291,10 +291,25 @@ void StudioTerrainRebuildScheduler::QueueChange(
             continue;
         }
 
+        const bool newCycle =
+            page.pendingProducts == 0U &&
+            page.dirtyProducts == 0U &&
+            page.requestedProducts == 0U &&
+            !page.uploading;
+
         page.pendingProducts |=
             products;
-        page.cycleProducts |=
-            products;
+
+        if (newCycle)
+        {
+            page.cycleProducts =
+                products;
+        }
+        else
+        {
+            page.cycleProducts |=
+                products;
+        }
     }
 
     auto found =

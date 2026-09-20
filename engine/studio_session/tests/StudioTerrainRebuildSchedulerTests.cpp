@@ -405,6 +405,16 @@ void TestM27DescendantsOnly()
             terrain_dependency::TerrainChangeKind::BiomeScatter,
             address.planet));
 
+    const auto scatterCycle =
+        fixture.scheduler.PageStatus(
+            address);
+
+    Require(
+        scatterCycle.has_value() &&
+        scatterCycle->totalProducts == 1U &&
+        scatterCycle->completedProducts == 0U,
+        "A new scatter-only cycle must report progress against Scatter only.");
+
     DriveReady(
         fixture,
         address);
