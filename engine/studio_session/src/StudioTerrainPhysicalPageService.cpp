@@ -2880,6 +2880,20 @@ StudioTerrainPhysicalPageService::BodyStatus(
         : std::nullopt;
 }
 
+std::vector<StudioTerrainPageRebuildStatus>
+StudioTerrainPhysicalPageService::Catalog(
+    const world::PlanetId planet) const
+{
+    const auto* body =
+        impl_->FindBody(
+            planet);
+
+    return body != nullptr
+        ? body->scheduler.Catalog()
+        : std::vector<
+              StudioTerrainPageRebuildStatus>{};
+}
+
 void StudioTerrainPhysicalPageService::Clear()
 {
     impl_->bodies.clear();
