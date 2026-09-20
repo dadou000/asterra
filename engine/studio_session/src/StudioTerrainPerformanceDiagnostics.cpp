@@ -134,6 +134,52 @@ RecordFrameCpuSeconds(
 }
 
 void StudioTerrainPerformanceDiagnostics::
+RecordFrameCpuSeconds(
+    const f64 seconds,
+    StudioSession& session,
+    const std::string_view viewportId)
+{
+    bool active = false;
+
+    const auto runtime =
+        session.TerrainRuntime().
+            Capture(viewportId);
+
+    if (runtime.has_value())
+    {
+        if (const auto body =
+                session.TerrainPhysicalPages().
+                    BodyStatus(
+                        runtime->planet.id);
+            body.has_value())
+        {
+            active =
+                body->dirtyPages != 0U ||
+                body->queuedPages != 0U ||
+                body->buildingPages != 0U ||
+                body->uploadingPages != 0U ||
+                body->stalePages != 0U;
+        }
+
+        if (const auto page =
+                session.TerrainPhysicalPages().
+                    PageStatus(
+                        runtime->
+                            observerPhysicalPage);
+            page.has_value())
+        {
+            active =
+                active ||
+                page->awaitingEditReady;
+        }
+    }
+
+    RecordFrameCpuSeconds(
+        seconds,
+        active);
+}
+
+void StudioTerrainPerformanceDiagnostics::
 RecordViewportStreaming(
     const std::string_view viewportId,
     const world::WorldPosition& observer,
