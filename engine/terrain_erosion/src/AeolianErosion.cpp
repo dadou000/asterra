@@ -386,7 +386,8 @@ AeolianErosionResult SimulateAeolianErosion(
     terrain_material_column::MaterialColumnPage material,
     const terrain_geology::GeologicalMaterialLibrary& geology,
     const std::span<const AeolianCellForcing> forcing,
-    const AeolianErosionConfig& config)
+    const AeolianErosionConfig& config,
+    std::optional<SedimentExchangePage> seededSediment)
 {
     if (!config.IsValid())
     {
@@ -430,9 +431,39 @@ AeolianErosionResult SimulateAeolianErosion(
                 cellCount)
     };
 
-    result.sedimentExchange.emplace(
-        resolution,
-        result.material.SpacingMeters());
+    if (seededSediment)
+    {
+        if (seededSediment->Resolution() !=
+                resolution ||
+            std::abs(
+                seededSediment->SpacingMeters() -
+                result.material.SpacingMeters()) >
+                1.0e-9)
+        {
+            throw std::invalid_argument(
+                "Orbit M13 seeded M14 sediment does not match the physical page.");
+        }
+
+        result.sedimentExchange =
+            std::move(seededSediment);
+    }
+    else
+    {
+        result.sedimentExchange.emplace(
+            resolution,
+            result.material.SpacingMeters());
+    }
+
+    const f64 initialMobileMass =
+        result.sedimentExchange->
+            TotalMobileMass().
+            TotalKg();
+
+    const f64 initialExportedMass =
+        result.sedimentExchange->
+            Accounting().
+            exported.
+            TotalKg();
 
     std::vector<WindStep> windStep(
         cellCount);
@@ -1573,10 +1604,13 @@ AeolianErosionResult SimulateAeolianErosion(
             TotalKg();
 
     const f64 boundaryLoss =
-        result.sedimentExchange->
-            Accounting().
-            exported.
-            TotalKg();
+        std::max(
+            result.sedimentExchange->
+                    Accounting().
+                    exported.
+                    TotalKg() -
+                initialExportedMass,
+            0.0);
 
     const f64 abradedBedrock =
         std::max(
@@ -1588,6 +1622,7 @@ AeolianErosionResult SimulateAeolianErosion(
 
     const f64 error =
         initialMass.LooseMassKg() +
+        initialMobileMass +
         abradedBedrock -
         finalMass.LooseMassKg() -
         airborneMass -
@@ -1596,12 +1631,15 @@ AeolianErosionResult SimulateAeolianErosion(
     const f64 reference =
         std::max(
             initialMass.LooseMassKg() +
+                initialMobileMass +
                 abradedBedrock,
             1.0);
 
     result.massBalance = {
         .initialLooseMassKg =
             initialMass.LooseMassKg(),
+        .initialMobileMassKg =
+            initialMobileMass,
         .finalLooseMassKg =
             finalMass.LooseMassKg(),
         .abradedBedrockMassKg =
