@@ -34,6 +34,7 @@ on:
       - "tests/TerrainFaceSeamTests.cpp"
       - "tests/V004TerrainValidationTests.cpp"
       - "tests/V004TerrainPerformance.cpp"
+      - "tests/V004IntegrationGateTests.cpp"
       - "tools/validate_v004_m30_performance.py"
       - "tools/import_v004_m30_performance.py"
       - "tools/check_v004_m31_gate.py"
@@ -74,6 +75,7 @@ on:
       - "tests/TerrainFaceSeamTests.cpp"
       - "tests/V004TerrainValidationTests.cpp"
       - "tests/V004TerrainPerformance.cpp"
+      - "tests/V004IntegrationGateTests.cpp"
       - "tools/validate_v004_m30_performance.py"
       - "tools/import_v004_m30_performance.py"
       - "tools/check_v004_m31_gate.py"
@@ -119,6 +121,7 @@ jobs:
           OrbitTerrainContractTests
           OrbitV004ValidationTests
           OrbitV004TerrainPerformance
+          OrbitV004IntegrationGateTests
           OrbitTerrainFaceSeamTests
           OrbitTerrainM01IntegrationTests
           OrbitPlanetTileNeighborhoodTests
