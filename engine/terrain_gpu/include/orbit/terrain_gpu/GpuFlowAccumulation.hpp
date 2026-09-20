@@ -45,6 +45,8 @@ public:
         rhi::Buffer& accumulationOut,
         rhi::Buffer* downstreamOut = nullptr) const;
 
+    [[nodiscard]] u64 TransientWorkingSetBytes() const noexcept;
+
 private:
     u32 maxResolution_;
     std::unique_ptr<rhi::ComputePipeline> downstreamPipeline_;
