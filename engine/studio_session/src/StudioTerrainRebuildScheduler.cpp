@@ -74,6 +74,32 @@ constexpr u32 kMaximumBoundedRadiusTiles = 64U;
 }
 } // namespace
 
+const char* TerrainChangeKindName(
+    const terrain_dependency::TerrainChangeKind kind) noexcept
+{
+    switch (kind)
+    {
+    case terrain_dependency::TerrainChangeKind::RockPhysics:
+        return "Rock physics";
+    case terrain_dependency::TerrainChangeKind::TerrainAuthoring:
+        return "Terrain authoring";
+    case terrain_dependency::TerrainChangeKind::Climate:
+        return "Climate";
+    case terrain_dependency::TerrainChangeKind::Water:
+        return "Water";
+    case terrain_dependency::TerrainChangeKind::ProcessSettings:
+        return "Process settings";
+    case terrain_dependency::TerrainChangeKind::BiomePlacement:
+        return "Biome placement";
+    case terrain_dependency::TerrainChangeKind::BiomeSurfaceMaterial:
+        return "Biome surface material";
+    case terrain_dependency::TerrainChangeKind::BiomeScatter:
+        return "Biome scatter";
+    }
+
+    return "Unknown terrain change";
+}
+
 const char* TerrainRebuildStateName(
     const TerrainRebuildState state) noexcept
 {
@@ -397,6 +423,8 @@ void StudioTerrainRebuildScheduler::FlushChanges(
 
             page.uploadFailed = false;
             page.uploadError.clear();
+            page.lastChangeKind =
+                request.kind;
 
             if (page.uploading)
             {
@@ -759,7 +787,12 @@ StudioTerrainRebuildScheduler::MakeStatus(
                 *graph_,
                 page.address),
         .staleRejected =
-            page.staleRejected
+            page.staleRejected,
+        .lastRegenerationReason =
+            page.lastChangeKind.has_value()
+                ? TerrainChangeKindName(
+                      *page.lastChangeKind)
+                : "Initial physical-page build"
     };
 
     bool buildingCpu = false;

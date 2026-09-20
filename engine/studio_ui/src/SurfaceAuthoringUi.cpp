@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/studio_session/StudioTerrainServiceStatus.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
 #include <algorithm>
@@ -64,6 +65,20 @@ void DrawPreferenceBand(
     changed |= context.InputDouble(base + " Max##m28-" + base + "-max", band.maximum);
     changed |= context.InputDouble(base + " Lower Falloff##m28-" + base + "-lower", band.lowerFalloff);
     changed |= context.InputDouble(base + " Upper Falloff##m28-" + base + "-upper", band.upperFalloff);
+}
+[[nodiscard]] std::string_view CubeFaceName(
+    const world::CubeFace face) noexcept
+{
+    switch (face)
+    {
+    case world::CubeFace::PositiveX: return "+X";
+    case world::CubeFace::NegativeX: return "-X";
+    case world::CubeFace::PositiveY: return "+Y";
+    case world::CubeFace::NegativeY: return "-Y";
+    case world::CubeFace::PositiveZ: return "+Z";
+    case world::CubeFace::NegativeZ: return "-Z";
+    }
+    return "?";
 }
 } // namespace
 
@@ -453,6 +468,13 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
         const auto surfaceStats = world.SurfaceStats();
         const auto universeStats = world.UniverseStats();
 
+        const auto terrainStatus =
+            studio_session::StudioTerrainStatusInspector::Capture(
+                workspace_->Session(),
+                selected->terrain,
+                nullptr,
+                "studio.primary");
+
         context.Text(std::format("Semantic Revision: {}", counts.semanticRevision));
         context.Text(std::format("Terrain Surfaces: {}", surfaceStats.terrainSurfaces));
         context.Text(std::format(
@@ -460,10 +482,156 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
             surfaceStats.biomeServices,
             surfaceStats.biomeDefinitions));
         context.Text(std::format("Universe Bodies: {}", universeStats.bodies));
+
+        if (terrainStatus.has_value())
+        {
+            context.Separator();
+            context.Text("Live TerrainBodyServices");
+            context.Text(std::format(
+                "BodyId: {}",
+                terrainStatus->body.ToString()));
+            context.Text(std::format(
+                "Terrain Object: {}",
+                terrainStatus->terrainObject.ToString()));
+
+            context.Text(std::format(
+                "Authority Revisions | semantic {} | surface {} | geology {} | biome {}",
+                terrainStatus->semanticRevision,
+                terrainStatus->surfaceSourceRevision,
+                terrainStatus->geologyRevision,
+                terrainStatus->biomeRevision));
+
+            if (terrainStatus->terrainSourceRevision.has_value())
+            {
+                context.Text(std::format(
+                    "Terrain Source Revision: {}",
+                    *terrainStatus->terrainSourceRevision));
+            }
+
+            if (terrainStatus->physicalRevisionFingerprint.has_value())
+            {
+                context.Text(std::format(
+                    "Physical Revision Fingerprint: {}",
+                    *terrainStatus->physicalRevisionFingerprint));
+            }
+
+            context.Separator();
+
+            const std::string bedrockName =
+                terrainStatus->defaultBedrockName.empty()
+                    ? std::string("<unresolved reference record>")
+                    : terrainStatus->defaultBedrockName;
+
+            context.Text(std::format(
+                "Default Bedrock: {} ({})",
+                bedrockName,
+                terrainStatus->defaultBedrock.ToString()));
+
+            context.Text(std::format(
+                "Selected-page Exposed Surface: {}",
+                terrainStatus->exposedSurfaceAvailable
+                    ? terrainStatus->exposedSurfaceName
+                    : std::string("not published")));
+
+            context.Text(std::format(
+                "BaseBiome: {} ({}) | Optional Biomes: {}",
+                terrainStatus->baseBiomeName,
+                terrainStatus->baseBiome.ToString(),
+                terrainStatus->optionalBiomeCount));
+
+            context.Separator();
+            context.Text("Process Service");
+            context.Text(std::format(
+                "Stream power {} iter | Hydraulic {} iter | Thermal {} max iter",
+                terrainStatus->processes.streamPowerIterations,
+                terrainStatus->processes.hydraulicIterations,
+                terrainStatus->processes.thermalMaximumIterations));
+            context.Text(std::format(
+                "Aeolian {} iter | Glacial {} iter | Coastal {} / {} hydro steps",
+                terrainStatus->processes.aeolianIterations,
+                terrainStatus->processes.glacialIterations,
+                terrainStatus->processes.coastalEnabled ? "enabled" : "disabled",
+                terrainStatus->processes.coastalHydrodynamicSteps));
+            context.Text(std::format(
+                "Rivers: meanders {} ({} iter) | cutoffs {}",
+                terrainStatus->processes.riverMeanders ? "on" : "off",
+                terrainStatus->processes.riverMeanderIterations,
+                terrainStatus->processes.riverCutoffs ? "on" : "off"));
+
+            context.Separator();
+            context.Text(std::format(
+                "M26 Cache | resident {} pages / {:.2f} MiB | hits {} | misses {} | evictions {}",
+                terrainStatus->cacheStats.residentPages,
+                static_cast<double>(terrainStatus->cacheStats.residentBytes) /
+                    (1024.0 * 1024.0),
+                terrainStatus->cacheStats.hits,
+                terrainStatus->cacheStats.misses,
+                terrainStatus->cacheStats.evictions));
+
+            if (terrainStatus->selectedPhysicalPage.has_value())
+            {
+                const auto& page =
+                    *terrainStatus->selectedPhysicalPage;
+
+                context.Text(std::format(
+                    "Selected Physical Page | face {} | L{} | ({}, {}) | physical LOD {}",
+                    CubeFaceName(page.tile.face),
+                    page.tile.level,
+                    page.tile.x,
+                    page.tile.y,
+                    terrainStatus->selectedPhysicalLod.value_or(0U)));
+
+                if (!terrainStatus->selectedViewport.empty())
+                {
+                    context.Text(std::format(
+                        "Viewport: {}",
+                        terrainStatus->selectedViewport));
+                }
+            }
+            else
+            {
+                context.Text("Selected Physical Page: no terrain viewport bound.");
+            }
+
+            if (terrainStatus->rebuildSchedulerAttached)
+            {
+                context.Text(std::format(
+                    "M06 Rebuild | pages {} | dirty {} | queued {} | building {} | uploading {} | failed {}{}",
+                    terrainStatus->rebuildPages,
+                    terrainStatus->dirtyPages,
+                    terrainStatus->queuedPages,
+                    terrainStatus->buildingPages,
+                    terrainStatus->uploadingPages,
+                    terrainStatus->failedPages,
+                    terrainStatus->regenerationPaused ? " | PAUSED" : ""));
+
+                context.Text(std::format(
+                    "Selected Rebuild State: {} | Last Regeneration: {}",
+                    terrainStatus->selectedRebuildState.empty()
+                        ? std::string("Clean/untracked")
+                        : terrainStatus->selectedRebuildState,
+                    terrainStatus->lastRegenerationReason.empty()
+                        ? std::string("No completed invalidation yet")
+                        : terrainStatus->lastRegenerationReason));
+            }
+            else
+            {
+                context.Text(
+                    "M06 Rebuild: live physical scheduler not attached yet; M12 will connect production page generation.");
+                context.Text(
+                    "Last Regeneration: unavailable until the production scheduler owns resident physical pages.");
+            }
+        }
+        else
+        {
+            context.Text(
+                "No live TerrainBodyServices are composed for the selected Terrain Surface.");
+        }
+
         context.Text(
             "Persistent terrain cache identity: physical page + physical LOD + authority revisions.");
         context.Text(
-            "Dependency invalidation is source-domain and spatially bounded; field/residency visualization is exposed by M29.");
+            "Dependency invalidation is source-domain and spatially bounded; this panel is diagnostic only.");
         context.TreePop();
     }
 

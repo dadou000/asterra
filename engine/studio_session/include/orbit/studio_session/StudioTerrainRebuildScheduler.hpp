@@ -27,6 +27,9 @@ enum class TerrainRebuildState : u8
 [[nodiscard]] const char* TerrainRebuildStateName(
     TerrainRebuildState state) noexcept;
 
+[[nodiscard]] const char* TerrainChangeKindName(
+    terrain_dependency::TerrainChangeKind kind) noexcept;
+
 struct StudioTerrainRebuildConfig
 {
     f64 editDebounceSeconds{0.15};
@@ -46,6 +49,12 @@ struct StudioTerrainPageRebuildStatus
 
     u64 revisionFingerprint{0U};
     u64 staleRejected{0U};
+
+    // Diagnostic-only reason for the current/most recent regeneration cycle.
+    // This is derived from the M27 invalidation request and never becomes
+    // terrain authority.
+    std::string lastRegenerationReason;
+
     std::string error;
 };
 
@@ -153,6 +162,9 @@ private:
         u64 uploadRevisionFingerprint{0U};
         bool uploadFailed{false};
         std::string uploadError;
+
+        std::optional<terrain_dependency::TerrainChangeKind>
+            lastChangeKind;
     };
 
     [[nodiscard]] PageEntry* FindPage(

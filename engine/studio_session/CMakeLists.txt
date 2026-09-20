@@ -5,6 +5,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioRuntimeBinding.cpp
     src/StudioTerrainRebuildScheduler.cpp
     src/StudioTerrainRuntimeBridge.cpp
+    src/StudioTerrainServiceStatus.cpp
     src/StudioWorkspace.cpp
     src/StudioWorkspaceRpcHost.cpp
     src/ProjectBrowserModel.cpp
@@ -101,6 +102,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioTerrainRebuildScheduler
         COMMAND OrbitStudioTerrainRebuildSchedulerTests
+    )
+
+    add_executable(OrbitStudioTerrainServiceStatusTests
+        tests/StudioTerrainServiceStatusTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainServiceStatusTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainServiceStatusTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainServiceStatusTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainServiceStatus
+        COMMAND OrbitStudioTerrainServiceStatusTests
     )
 
     add_executable(OrbitStudioTerrainRuntimeBridgeTests
