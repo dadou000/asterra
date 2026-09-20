@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <format>
 #include <string_view>
 
@@ -52,6 +53,38 @@ namespace
     case terrain_biome::BiomeAuthoredWeightOperation::Max: return "Max";
     }
     return "Unknown";
+}
+
+bool InputU32(
+    editor_ui::PanelContext& context,
+    const std::string& label,
+    u32& value,
+    std::string& error)
+{
+    i64 edited =
+        static_cast<i64>(value);
+
+    if (!context.InputInteger(
+            label,
+            edited))
+    {
+        return false;
+    }
+
+    if (edited < 1 ||
+        static_cast<u64>(edited) >
+            static_cast<u64>(
+                std::numeric_limits<u32>::max()))
+    {
+        error =
+            label +
+            " must be between 1 and uint32 max.";
+        return false;
+    }
+
+    value =
+        static_cast<u32>(edited);
+    return true;
 }
 
 void DrawPreferenceBand(
@@ -173,21 +206,233 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
         context.TreePop();
     }
 
-    const auto processTree = context.TreeItem("Terrain Processes##m28-processes", false);
+    const auto processTree =
+        context.TreeItem(
+            "Terrain Processes##m28-processes",
+            false);
+
     if (processTree.open)
     {
-        context.Text("Implemented Process Systems");
-        context.Text("- Stream power");
-        context.Text("- Water / hydraulic erosion");
-        context.Text("- Wind / aeolian erosion");
-        context.Text("- Unified sediment exchange");
-        context.Text("- Thermal / gravity");
-        context.Text("- Glacial");
-        context.Text("- River network / meanders");
-        context.Text("- Coastal");
-        context.Text(std::format("Semantic Process Assets: {}", counts.processAssets));
+        auto settings =
+            model.ProcessSettings(
+                selected->terrain);
+
+        bool changed = false;
+        std::string inputError;
+
         context.Text(
-            "Solver constants remain out of the ordinary workflow; semantic process assets remain available through Properties.");
+            std::format(
+                "Semantic Process Assets: {}",
+                counts.processAssets));
+
+        context.Text("Stream Power");
+        changed |= context.Checkbox(
+            "Enabled##m11-stream-enabled",
+            settings.streamPowerEnabled);
+        changed |= InputU32(
+            context,
+            "Iterations##m11-stream-iterations",
+            settings.streamPower.iterations,
+            inputError);
+
+        context.Separator();
+        context.Text("Hydraulic");
+        changed |= context.Checkbox(
+            "Enabled##m11-hydraulic-enabled",
+            settings.hydraulicEnabled);
+        changed |= context.InputDouble(
+            "Rainfall (m/s)##m11-hydraulic-rain",
+            settings.hydraulic.rainfallMetersPerSecond);
+
+        context.Separator();
+        context.Text("Thermal / Gravity");
+        changed |= context.Checkbox(
+            "Enabled##m11-thermal-enabled",
+            settings.thermalEnabled);
+        changed |= context.InputDouble(
+            "Relaxation##m11-thermal-relaxation",
+            settings.thermal.relaxation);
+
+        context.Separator();
+        context.Text("Aeolian");
+        changed |= context.Checkbox(
+            "Enabled##m11-aeolian-enabled",
+            settings.aeolianEnabled);
+        changed |= context.InputDouble(
+            "Capacity Coefficient##m11-aeolian-capacity",
+            settings.aeolian.capacityCoefficient);
+
+        context.Separator();
+        context.Text("Glacial");
+        changed |= context.Checkbox(
+            "Enabled##m11-glacial-enabled",
+            settings.glacialEnabled);
+        changed |= context.InputDouble(
+            "Maximum Glacier Temperature (C)##m11-glacial-temp",
+            settings.glacial.maximumGlacierTemperatureC);
+
+        context.Separator();
+        context.Text("River / Meander");
+        changed |= context.Checkbox(
+            "Enabled##m11-rivers-enabled",
+            settings.riversEnabled);
+        changed |= context.Checkbox(
+            "Meanders##m11-rivers-meanders",
+            settings.rivers.enableMeanders);
+        changed |= context.Checkbox(
+            "Cutoffs##m11-rivers-cutoffs",
+            settings.rivers.enableCutoffs);
+
+        context.Separator();
+        context.Text("Coastal");
+        changed |= context.Checkbox(
+            "Enabled##m11-coastal-enabled",
+            settings.coastal.enabled);
+        changed |= InputU32(
+            context,
+            "Hydrodynamic Steps##m11-coastal-steps",
+            settings.coastal.hydrodynamicSteps,
+            inputError);
+
+        context.Separator();
+        static_cast<void>(
+            context.Checkbox(
+                "Advanced##m11-process-advanced",
+                advancedProcesses_));
+
+        if (advancedProcesses_)
+        {
+            context.Text("Exact Solver Fields");
+
+            changed |= context.InputDouble(
+                "Stream Incision (m/iteration)##m11-stream-incision",
+                settings.streamPower.
+                    incisionCoefficientMetersPerIteration);
+
+            changed |= InputU32(
+                context,
+                "Hydraulic Iterations##m11-hydraulic-iterations",
+                settings.hydraulic.iterations,
+                inputError);
+            changed |= context.InputDouble(
+                "Hydraulic Time Step (s)##m11-hydraulic-dt",
+                settings.hydraulic.timeStepSeconds);
+
+            changed |= InputU32(
+                context,
+                "Thermal Iterations##m11-thermal-iterations",
+                settings.thermal.maximumIterations,
+                inputError);
+
+            changed |= InputU32(
+                context,
+                "Aeolian Iterations##m11-aeolian-iterations",
+                settings.aeolian.iterations,
+                inputError);
+            changed |= context.InputDouble(
+                "Aeolian Time Step (s)##m11-aeolian-dt",
+                settings.aeolian.timeStepSeconds);
+
+            changed |= InputU32(
+                context,
+                "Glacial Iterations##m11-glacial-iterations",
+                settings.glacial.iterations,
+                inputError);
+            changed |= context.InputDouble(
+                "Glacial Time Step (yr)##m11-glacial-dt",
+                settings.glacial.timeStepYears);
+
+            changed |= InputU32(
+                context,
+                "Meander Iterations##m11-river-iterations",
+                settings.rivers.meanderIterations,
+                inputError);
+            changed |= context.InputDouble(
+                "Minimum River Drainage Area (m2)##m11-river-area",
+                settings.rivers.minimumDrainageAreaSquareMeters);
+
+            changed |= context.InputDouble(
+                "Coastal CFL##m11-coastal-cfl",
+                settings.coastal.water.cflNumber);
+            changed |= context.InputDouble(
+                "Coastal Maximum Time Step (s)##m11-coastal-dt",
+                settings.coastal.water.maximumTimeStepSeconds);
+        }
+
+        if (!inputError.empty())
+        {
+            status_ =
+                inputError;
+        }
+        else if (changed)
+        {
+            try
+            {
+                const auto body =
+                    world.Surfaces().
+                        BodyForTerrainObject(
+                            selected->terrain);
+
+                if (!body.has_value())
+                {
+                    throw std::runtime_error(
+                        "Terrain process edit has no active runtime body.");
+                }
+
+                const auto planet =
+                    world.Surfaces().
+                        Registry().
+                        SphericalPlanetDefinition(
+                            *body);
+
+                if (!planet.has_value())
+                {
+                    throw std::runtime_error(
+                        "Terrain process edit requires a spherical planet.");
+                }
+
+                model.SetProcessSettings(
+                    selected->terrain,
+                    settings);
+
+                workspace_->Session().
+                    QueueTerrainInvalidation({
+                        .kind =
+                            terrain_dependency::
+                                TerrainChangeKind::
+                                    ProcessSettings,
+                        .scope = {
+                            .planet =
+                                planet->id,
+                            .global = true
+                        }
+                    });
+
+                status_ =
+                    "Terrain process settings updated; M27 process descendants queued.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ =
+                    exception.what();
+            }
+        }
+
+        if (const auto processObject =
+                model.ProcessSettingsObject(
+                    selected->terrain);
+            processObject.has_value())
+        {
+            const std::string selectLabel =
+                "Select Process Record##m11-select-process";
+
+            if (context.Button(selectLabel))
+            {
+                model.SelectObject(
+                    *processObject);
+            }
+        }
+
         context.TreePop();
     }
 
