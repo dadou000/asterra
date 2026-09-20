@@ -987,6 +987,7 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::TerrainMaterialColumn
         Orbit::TerrainRegion
         Orbit::TerrainRender
+        Orbit::TerrainScatter
 )
 
 target_compile_definitions(OrbitV004ValidationTests
