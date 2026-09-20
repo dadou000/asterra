@@ -135,6 +135,13 @@ public:
     [[nodiscard]] StudioTerrainBodyRebuildStatus BodyStatus(
         world::PlanetId planet) const;
 
+    // M12 consumes this journal to seed pages that become resident after
+    // earlier bounded/global authority changes. Only changes actually applied
+    // to M27 are reported; debounced superseded edits never appear here.
+    [[nodiscard]] std::vector<
+        terrain_dependency::TerrainInvalidationRequest>
+    TakeAppliedChanges();
+
 private:
     struct PendingChange
     {
@@ -195,5 +202,8 @@ private:
 
     std::vector<PageEntry> pages_;
     std::vector<PendingChange> pendingChanges_;
+    std::vector<
+        terrain_dependency::TerrainInvalidationRequest>
+        appliedChanges_;
 };
 } // namespace orbit::studio_session
