@@ -12,6 +12,7 @@ from validate_v004_m30_performance import EXPECTED, validate
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_CSV = REPO_ROOT / "docs" / "research" / "v004-m30-performance.csv"
 SUMMARY_MD = REPO_ROOT / "docs" / "V0.0.4_M30_PERFORMANCE_CAPTURE.md"
+PROVENANCE_TOML = REPO_ROOT / "docs" / "research" / "v004-m30-performance.meta.toml"
 M30_DOC = REPO_ROOT / "docs" / "V0.0.4_M30_VALIDATION_REGRESSION.md"
 PROGRESS_DOC = REPO_ROOT / "docs" / "V0.0.4_PROGRESS.md"
 VALIDATION_CPP = REPO_ROOT / "tests" / "V004TerrainValidationTests.cpp"
@@ -33,6 +34,14 @@ def main() -> int:
         adapter, _ = validate(CANONICAL_CSV)
 
         require_file(SUMMARY_MD, "M30 performance summary")
+        provenance = require_file(PROVENANCE_TOML, "M30 performance provenance")
+        if 'source_commit = "' not in provenance:
+            fail("M30 performance provenance is missing source commit")
+        if 'build_config = "' not in provenance:
+            fail("M30 performance provenance is missing build configuration")
+        if f'adapter = "{adapter.replace(chr(34), chr(39))}"' not in provenance:
+            fail("M30 performance provenance adapter does not match validated CSV")
+
         m30 = require_file(M30_DOC, "M30 validation document")
         progress = require_file(PROGRESS_DOC, "V0.0.4 progress ledger")
         validation = require_file(
