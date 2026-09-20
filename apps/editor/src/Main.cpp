@@ -7019,6 +7019,45 @@ int main(
             graphicsQueue.Signal(
                 *fence,
                 submittedFence);
+
+            if (terrainUiSmoke &&
+                terrainUiSmokeValidated)
+            {
+                ++terrainUiSmokeRenderedFrames;
+
+                if (terrainUiSmokeRenderedFrames >=
+                    2U)
+                {
+                    fence->Wait(
+                        submittedFence);
+
+                    const auto capture =
+                        orbit::render_view::
+                            CaptureBmp(
+                                device,
+                                graphicsQueue,
+                                *primaryStudioView,
+                                terrainUiSmokeCapture);
+
+                    if (capture.fileBytes == 0U ||
+                        capture.width == 0U ||
+                        capture.height == 0U)
+                    {
+                        throw std::runtime_error(
+                            "Terrain UI smoke failed: real Vulkan viewport capture is empty.");
+                    }
+
+                    orbit::log::Info(
+                        std::format(
+                            "Terrain UI smoke passed: {}x{} production viewport captured to {}.",
+                            capture.width,
+                            capture.height,
+                            capture.path.
+                                generic_string()));
+
+                    break;
+                }
+            }
         }
 
         if (submittedFence != 0)
