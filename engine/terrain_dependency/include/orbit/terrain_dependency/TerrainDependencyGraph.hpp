@@ -10,6 +10,8 @@
 #include <array>
 #include <cstddef>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -88,6 +90,13 @@ using TerrainPageBuildFunction =
     std::function<std::any(
         const terrain::PhysicalTerrainPageAddress&,
         TerrainDependencyProduct,
+        const terrain::TerrainGenerationRevisions&,
+        const procedural_graph::BuildContext&)>;
+
+using LegacyTerrainPageBuildFunction =
+    std::function<std::any(
+        const terrain::PhysicalTerrainPageAddress&,
+        TerrainDependencyProduct,
         const procedural_graph::BuildContext&)>;
 
 struct TerrainDependencyPageNodes
@@ -111,6 +120,11 @@ public:
     TerrainDependencyGraph(
         procedural_graph::ProceduralGraph& graph,
         TerrainPageBuildFunction build,
+        terrain_gpu::PersistentGpuTerrainCache* cache = nullptr);
+
+    TerrainDependencyGraph(
+        procedural_graph::ProceduralGraph& graph,
+        LegacyTerrainPageBuildFunction build,
         terrain_gpu::PersistentGpuTerrainCache* cache = nullptr);
 
     void RegisterPage(
@@ -171,10 +185,17 @@ private:
     static constexpr std::size_t kSourceCount =
         static_cast<std::size_t>(SourceKind::Count);
 
+    struct RevisionState
+    {
+        mutable std::mutex mutex;
+        terrain::TerrainGenerationRevisions revisions{};
+    };
+
     struct PageRecord
     {
         TerrainDependencyPageNodes nodes{};
         std::array<procedural_graph::NodeId, kSourceCount> sources{};
+        std::shared_ptr<RevisionState> revisions;
     };
 
     struct AddressHash
