@@ -28,6 +28,7 @@ target_link_libraries(OrbitEditorModel
         Orbit::Scene
         Orbit::Schema
         Orbit::Selection
+        Orbit::SurfaceAuthoring
         Orbit::TerrainBiome
         Orbit::WorldModel
 )

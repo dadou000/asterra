@@ -4,7 +4,9 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/selection/SelectionService.hpp>
+#include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_geology/GeologicalMaterial.hpp>
 
 #include <optional>
 #include <string>
@@ -93,11 +95,45 @@ struct SurfaceBiomeMaskDetail
     bool enabled{true};
 };
 
+enum class SurfaceTerrainConstraintChannel : u8
+{
+    Height = 0,
+    Protection = 1,
+    Drainage = 2,
+    Material = 3
+};
+
+enum class SurfaceTerrainConstraintShape : u8
+{
+    Brush = 0,
+    Spline = 1
+};
+
+struct SurfaceTerrainConstraintDetail
+{
+    scene::ObjectId id{};
+    std::string name;
+    SurfaceTerrainConstraintChannel channel{SurfaceTerrainConstraintChannel::Height};
+    SurfaceTerrainConstraintShape shape{SurfaceTerrainConstraintShape::Brush};
+    surface_authoring::ConstraintCompositionMode mode{surface_authoring::ConstraintCompositionMode::Add};
+    math::Double3 centerUnitDirection{0.0,1.0,0.0};
+    f64 innerRadiusMeters{0.0};
+    f64 outerRadiusMeters{1'000.0};
+    std::vector<math::Double3> controlUnitDirections;
+    f64 halfWidthMeters{500.0};
+    f64 falloffMeters{500.0};
+    f64 value{0.0};
+    f64 opacity{1.0};
+    terrain_geology::RockTypeId material{};
+    bool enabled{true};
+};
+
 struct SurfaceAuthoringCounts
 {
     u32 geologyAssets{0};
     u32 processAssets{0};
     u32 optionalBiomes{0};
+    u32 terrainConstraints{0};
     u64 semanticRevision{0};
 };
 
@@ -121,6 +157,52 @@ public:
     void SetRelief(
         scene::ObjectId terrain,
         const SurfaceReliefSettings& settings);
+
+    [[nodiscard]] std::vector<SurfaceTerrainConstraintDetail>
+    TerrainConstraints(scene::ObjectId terrain) const;
+
+    [[nodiscard]] scene::ObjectId AddHeightBrush(
+        scene::ObjectId terrain,
+        math::Double3 centerUnitDirection,
+        f64 innerRadiusMeters,
+        f64 outerRadiusMeters,
+        f64 deltaHeightMeters);
+
+    [[nodiscard]] scene::ObjectId AddProtectionBrush(
+        scene::ObjectId terrain,
+        math::Double3 centerUnitDirection,
+        f64 innerRadiusMeters,
+        f64 outerRadiusMeters,
+        f64 protection);
+
+    [[nodiscard]] scene::ObjectId AddDrainageBrush(
+        scene::ObjectId terrain,
+        math::Double3 centerUnitDirection,
+        f64 innerRadiusMeters,
+        f64 outerRadiusMeters,
+        f64 guidance);
+
+    [[nodiscard]] scene::ObjectId AddMaterialBrush(
+        scene::ObjectId terrain,
+        math::Double3 centerUnitDirection,
+        f64 innerRadiusMeters,
+        f64 outerRadiusMeters,
+        terrain_geology::RockTypeId material,
+        f64 weight = 1.0);
+
+    [[nodiscard]] scene::ObjectId AddCanyonSpline(
+        scene::ObjectId terrain,
+        const std::vector<math::Double3>& controlUnitDirections,
+        f64 halfWidthMeters,
+        f64 falloffMeters,
+        f64 depthMeters);
+
+    [[nodiscard]] scene::ObjectId AddRidgeSpline(
+        scene::ObjectId terrain,
+        const std::vector<math::Double3>& controlUnitDirections,
+        f64 halfWidthMeters,
+        f64 falloffMeters,
+        f64 heightMeters);
 
     [[nodiscard]] std::vector<SurfaceBiomeSummary> Biomes(
         scene::ObjectId terrain) const;
@@ -184,6 +266,25 @@ private:
     [[nodiscard]] std::optional<scene::ObjectId> FindSelector(
         scene::ObjectId biome,
         terrain_biome::BiomeSelectorField field) const;
+
+    [[nodiscard]] scene::ObjectId AddScalarBrush(
+        scene::ObjectId terrain,
+        std::string name,
+        SurfaceTerrainConstraintChannel channel,
+        surface_authoring::ConstraintCompositionMode mode,
+        math::Double3 centerUnitDirection,
+        f64 innerRadiusMeters,
+        f64 outerRadiusMeters,
+        f64 value);
+
+    [[nodiscard]] scene::ObjectId AddHeightSpline(
+        scene::ObjectId terrain,
+        std::string name,
+        surface_authoring::ConstraintCompositionMode mode,
+        const std::vector<math::Double3>& controlUnitDirections,
+        f64 halfWidthMeters,
+        f64 falloffMeters,
+        f64 value);
 
     scene::ObjectStore* objects_{nullptr};
     commands::CommandService* commands_{nullptr};

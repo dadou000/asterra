@@ -719,6 +719,35 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kTerrainConstraintType,
+        .displayName = "Authored Terrain Constraint",
+        .category = "World / Surface / Authored Terrain",
+        .properties = {
+            {.id=kTerrainConstraintChannel,.name="Channel",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
+            {.id=kTerrainConstraintShape,.name="Primitive",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kTerrainConstraintMode,.name="Composition Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=5.0}},
+            {.id=kTerrainConstraintCenter,.name="Center Unit Direction",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{0.0,1.0,0.0}},
+            {.id=kTerrainConstraintInnerRadius,.name="Inner Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=250.0,.range={.minimum=0.0}},
+            {.id=kTerrainConstraintOuterRadius,.name="Outer Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=1'000.0,.range={.minimum=0.001}},
+            {.id=kTerrainConstraintHalfWidth,.name="Spline Half Width",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=500.0,.range={.minimum=0.0}},
+            {.id=kTerrainConstraintFalloff,.name="Spline Falloff",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=500.0,.range={.minimum=0.0}},
+            {.id=kTerrainConstraintValue,.name="Value",.kind=schema::PropertyKind::Float,.defaultValue=0.0},
+            {.id=kTerrainConstraintOpacity,.name="Opacity",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kTerrainConstraintMaterial,.name="Geological Material ID",.kind=schema::PropertyKind::String,.defaultValue=std::string{}},
+            {.id=kTerrainConstraintEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true}
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kTerrainConstraintControlPointType,
+        .displayName = "Terrain Constraint Control Point",
+        .category = "World / Surface / Authored Terrain",
+        .properties = {
+            {.id=kTerrainConstraintPointDirection,.name="Unit Direction",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{0.0,1.0,0.0}}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",

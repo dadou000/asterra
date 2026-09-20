@@ -157,17 +157,25 @@ int main()
             return 9;
         }
 
-        const auto counts = model.Counts(terrainObject);
-        if (counts.optionalBiomes != 1U ||
-            counts.semanticRevision != objects.Revision())
-        {
-            return 10;
-        }
+        const auto raised=model.AddHeightBrush(terrainObject,{2.0,0.0,0.0},250.0,1'000.0,125.0);
+        const auto canyon=model.AddCanyonSpline(terrainObject,
+            {{1.0,0.0,0.0},{0.9999,0.01,0.0},{0.9996,0.02,0.0}},300.0,450.0,80.0);
 
-        if (!commands.CanUndo())
-        {
-            return 11;
-        }
+        auto constraints=model.TerrainConstraints(terrainObject);
+        if(constraints.size()!=2U||constraints[0].id!=raised||constraints[1].id!=canyon||
+           constraints[1].shape!=editor_model::SurfaceTerrainConstraintShape::Spline||
+           constraints[1].controlUnitDirections.size()!=3U) return 10;
+
+        commands.Undo();
+        if(model.TerrainConstraints(terrainObject).size()!=1U) return 11;
+        commands.Redo();
+        if(model.TerrainConstraints(terrainObject).size()!=2U) return 12;
+
+        const auto counts = model.Counts(terrainObject);
+        if (counts.optionalBiomes != 1U || counts.terrainConstraints != 2U ||
+            counts.semanticRevision != objects.Revision()) return 13;
+
+        if (!commands.CanUndo()) return 14;
 
         world.Checkpoint();
     }

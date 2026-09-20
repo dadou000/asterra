@@ -154,6 +154,36 @@ struct ScatterDefaults
     }
     return {};
 }
+[[nodiscard]] math::Double3 CanonicalDirection(const math::Double3& direction)
+{
+    const f64 length = math::Length(direction);
+    if (!std::isfinite(length) || length <= 1.0e-12)
+        throw std::invalid_argument("Terrain authoring requires a finite non-zero surface direction.");
+    return math::Normalize(direction);
+}
+
+void ValidateBrush(const f64 innerRadiusMeters, const f64 outerRadiusMeters)
+{
+    if (!std::isfinite(innerRadiusMeters) || !std::isfinite(outerRadiusMeters) ||
+        innerRadiusMeters < 0.0 || outerRadiusMeters <= innerRadiusMeters)
+        throw std::invalid_argument("Terrain authoring brush radii are invalid.");
+}
+
+[[nodiscard]] SurfaceTerrainConstraintChannel ConstraintChannelFor(const i64 value)
+{
+    if (value < 0 || value > 3) throw std::runtime_error("Terrain constraint channel is outside the M09 catalog.");
+    return static_cast<SurfaceTerrainConstraintChannel>(value);
+}
+[[nodiscard]] SurfaceTerrainConstraintShape ConstraintShapeFor(const i64 value)
+{
+    if (value < 0 || value > 1) throw std::runtime_error("Terrain constraint primitive is outside the M09 catalog.");
+    return static_cast<SurfaceTerrainConstraintShape>(value);
+}
+[[nodiscard]] surface_authoring::ConstraintCompositionMode ConstraintModeFor(const i64 value)
+{
+    if (value < 0 || value > 5) throw std::runtime_error("Terrain constraint composition mode is invalid.");
+    return static_cast<surface_authoring::ConstraintCompositionMode>(value);
+}
 } // namespace
 
 SurfaceAuthoringModel::SurfaceAuthoringModel(
@@ -286,6 +316,10 @@ SurfaceAuthoringCounts SurfaceAuthoringModel::Counts(
         {
             ++result.optionalBiomes;
         }
+        else if (child.type == world_model::kTerrainConstraintType)
+        {
+            ++result.terrainConstraints;
+        }
     }
     return result;
 }
@@ -336,6 +370,209 @@ void SurfaceAuthoringModel::SetRelief(
         if (owns && commands_->HasActiveTransaction()) commands_->RollbackTransaction();
         throw;
     }
+}
+
+
+std::vector<SurfaceTerrainConstraintDetail>
+SurfaceAuthoringModel::TerrainConstraints(const scene::ObjectId terrain) const
+{
+    static_cast<void>(RequireTerrain(terrain));
+    std::vector<SurfaceTerrainConstraintDetail> result;
+
+    for (const auto& child : objects_->Children(terrain))
+    {
+        if (child.type != world_model::kTerrainConstraintType) continue;
+
+        SurfaceTerrainConstraintDetail detail{
+            .id=child.id,
+            .name=child.name,
+            .channel=ConstraintChannelFor(PropertyOr<i64>(*objects_,child.id,world_model::kTerrainConstraintChannel,i64{0})),
+            .shape=ConstraintShapeFor(PropertyOr<i64>(*objects_,child.id,world_model::kTerrainConstraintShape,i64{0})),
+            .mode=ConstraintModeFor(PropertyOr<i64>(*objects_,child.id,world_model::kTerrainConstraintMode,i64{0})),
+            .centerUnitDirection=PropertyOr<math::Double3>(*objects_,child.id,world_model::kTerrainConstraintCenter,{0.0,1.0,0.0}),
+            .innerRadiusMeters=PropertyOr<f64>(*objects_,child.id,world_model::kTerrainConstraintInnerRadius,250.0),
+            .outerRadiusMeters=PropertyOr<f64>(*objects_,child.id,world_model::kTerrainConstraintOuterRadius,1'000.0),
+            .halfWidthMeters=PropertyOr<f64>(*objects_,child.id,world_model::kTerrainConstraintHalfWidth,500.0),
+            .falloffMeters=PropertyOr<f64>(*objects_,child.id,world_model::kTerrainConstraintFalloff,500.0),
+            .value=PropertyOr<f64>(*objects_,child.id,world_model::kTerrainConstraintValue,0.0),
+            .opacity=PropertyOr<f64>(*objects_,child.id,world_model::kTerrainConstraintOpacity,1.0),
+            .enabled=PropertyOr<bool>(*objects_,child.id,world_model::kTerrainConstraintEnabled,true)
+        };
+
+        const std::string materialText=PropertyOr<std::string>(*objects_,child.id,world_model::kTerrainConstraintMaterial,{});
+        if(!materialText.empty())
+        {
+            const auto parsed=terrain_geology::RockTypeId::Parse(materialText);
+            if(!parsed.has_value()) throw std::runtime_error("Terrain material constraint contains an invalid RockTypeId.");
+            detail.material=*parsed;
+        }
+
+        if(detail.shape==SurfaceTerrainConstraintShape::Spline)
+        {
+            auto points=objects_->Children(child.id);
+            std::sort(points.begin(),points.end(),[](const scene::ObjectRecord& a,const scene::ObjectRecord& b){return a.sortOrder<b.sortOrder;});
+            for(const auto& point:points)
+                if(point.type==world_model::kTerrainConstraintControlPointType)
+                    detail.controlUnitDirections.push_back(PropertyOr<math::Double3>(*objects_,point.id,world_model::kTerrainConstraintPointDirection,{0.0,1.0,0.0}));
+        }
+        result.push_back(std::move(detail));
+    }
+    return result;
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddScalarBrush(
+    const scene::ObjectId terrain,std::string name,
+    const SurfaceTerrainConstraintChannel channel,
+    const surface_authoring::ConstraintCompositionMode mode,
+    math::Double3 centerUnitDirection,const f64 innerRadiusMeters,
+    const f64 outerRadiusMeters,const f64 value)
+{
+    static_cast<void>(RequireTerrain(terrain));
+    ValidateBrush(innerRadiusMeters,outerRadiusMeters);
+    if(!std::isfinite(value)) throw std::invalid_argument("Terrain brush value must be finite.");
+    centerUnitDirection=CanonicalDirection(centerUnitDirection);
+
+    u32 count=0U;
+    for(const auto& child:objects_->Children(terrain))
+        if(child.type==world_model::kTerrainConstraintType) ++count;
+
+    const bool owns=!commands_->HasActiveTransaction();
+    if(owns) commands_->BeginTransaction("Add Authored Terrain Brush");
+    try
+    {
+        const auto id=commands_->CreateObject(world_model::kTerrainConstraintType,name,terrain,4'000+static_cast<i64>(count)*10);
+        commands_->SetProperty(id,world_model::kTerrainConstraintChannel,static_cast<i64>(channel));
+        commands_->SetProperty(id,world_model::kTerrainConstraintShape,i64{0});
+        commands_->SetProperty(id,world_model::kTerrainConstraintMode,static_cast<i64>(mode));
+        commands_->SetProperty(id,world_model::kTerrainConstraintCenter,centerUnitDirection);
+        commands_->SetProperty(id,world_model::kTerrainConstraintInnerRadius,innerRadiusMeters);
+        commands_->SetProperty(id,world_model::kTerrainConstraintOuterRadius,outerRadiusMeters);
+        commands_->SetProperty(id,world_model::kTerrainConstraintValue,value);
+        commands_->SetProperty(id,world_model::kTerrainConstraintOpacity,1.0);
+        commands_->SetProperty(id,world_model::kTerrainConstraintEnabled,true);
+        if(owns) commands_->CommitTransaction();
+        return id;
+    }
+    catch(...)
+    {
+        if(owns&&commands_->HasActiveTransaction()) commands_->RollbackTransaction();
+        throw;
+    }
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddHeightBrush(
+    const scene::ObjectId terrain,math::Double3 center,const f64 inner,const f64 outer,const f64 delta)
+{
+    return AddScalarBrush(terrain,delta>=0.0?"Raise Terrain":"Lower Terrain",
+        SurfaceTerrainConstraintChannel::Height,
+        delta>=0.0?surface_authoring::ConstraintCompositionMode::Add:surface_authoring::ConstraintCompositionMode::Subtract,
+        center,inner,outer,std::abs(delta));
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddProtectionBrush(
+    const scene::ObjectId terrain,math::Double3 center,const f64 inner,const f64 outer,const f64 protection)
+{
+    if(!std::isfinite(protection)||protection<0.0||protection>1.0) throw std::invalid_argument("Terrain protection must be in [0,1].");
+    return AddScalarBrush(terrain,"Protection Brush",SurfaceTerrainConstraintChannel::Protection,
+        surface_authoring::ConstraintCompositionMode::Max,center,inner,outer,protection);
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddDrainageBrush(
+    const scene::ObjectId terrain,math::Double3 center,const f64 inner,const f64 outer,const f64 guidance)
+{
+    return AddScalarBrush(terrain,"Drainage Guidance",SurfaceTerrainConstraintChannel::Drainage,
+        surface_authoring::ConstraintCompositionMode::Add,center,inner,outer,guidance);
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddMaterialBrush(
+    const scene::ObjectId terrain,math::Double3 center,const f64 inner,const f64 outer,
+    const terrain_geology::RockTypeId material,const f64 weight)
+{
+    static_cast<void>(RequireTerrain(terrain));
+    ValidateBrush(inner,outer);
+    if(!material.IsValid()||!std::isfinite(weight)||weight<0.0||weight>1.0) throw std::invalid_argument("Terrain geology override is invalid.");
+    center=CanonicalDirection(center);
+
+    const bool owns=!commands_->HasActiveTransaction();
+    if(owns) commands_->BeginTransaction("Add Terrain Geology Override");
+    try
+    {
+        const auto id=commands_->CreateObject(world_model::kTerrainConstraintType,"Geology Override",terrain,
+            4'000+static_cast<i64>(TerrainConstraints(terrain).size())*10);
+        commands_->SetProperty(id,world_model::kTerrainConstraintChannel,static_cast<i64>(SurfaceTerrainConstraintChannel::Material));
+        commands_->SetProperty(id,world_model::kTerrainConstraintShape,i64{0});
+        commands_->SetProperty(id,world_model::kTerrainConstraintMode,static_cast<i64>(surface_authoring::ConstraintCompositionMode::Replace));
+        commands_->SetProperty(id,world_model::kTerrainConstraintCenter,center);
+        commands_->SetProperty(id,world_model::kTerrainConstraintInnerRadius,inner);
+        commands_->SetProperty(id,world_model::kTerrainConstraintOuterRadius,outer);
+        commands_->SetProperty(id,world_model::kTerrainConstraintValue,weight);
+        commands_->SetProperty(id,world_model::kTerrainConstraintMaterial,material.ToString());
+        commands_->SetProperty(id,world_model::kTerrainConstraintOpacity,1.0);
+        commands_->SetProperty(id,world_model::kTerrainConstraintEnabled,true);
+        if(owns) commands_->CommitTransaction();
+        return id;
+    }
+    catch(...)
+    {
+        if(owns&&commands_->HasActiveTransaction()) commands_->RollbackTransaction();
+        throw;
+    }
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddHeightSpline(
+    const scene::ObjectId terrain,std::string name,const surface_authoring::ConstraintCompositionMode mode,
+    const std::vector<math::Double3>& input,const f64 halfWidth,const f64 falloff,const f64 value)
+{
+    static_cast<void>(RequireTerrain(terrain));
+    if(input.size()<2U||!std::isfinite(halfWidth)||!std::isfinite(falloff)||!std::isfinite(value)||
+       halfWidth<0.0||falloff<0.0||value<0.0) throw std::invalid_argument("Terrain height spline parameters are invalid.");
+
+    std::vector<math::Double3> points;
+    points.reserve(input.size());
+    for(const auto& p:input) points.push_back(CanonicalDirection(p));
+
+    const bool owns=!commands_->HasActiveTransaction();
+    if(owns) commands_->BeginTransaction("Add Authored Terrain Spline");
+    try
+    {
+        const auto id=commands_->CreateObject(world_model::kTerrainConstraintType,name,terrain,
+            4'000+static_cast<i64>(TerrainConstraints(terrain).size())*10);
+        commands_->SetProperty(id,world_model::kTerrainConstraintChannel,static_cast<i64>(SurfaceTerrainConstraintChannel::Height));
+        commands_->SetProperty(id,world_model::kTerrainConstraintShape,i64{1});
+        commands_->SetProperty(id,world_model::kTerrainConstraintMode,static_cast<i64>(mode));
+        commands_->SetProperty(id,world_model::kTerrainConstraintHalfWidth,halfWidth);
+        commands_->SetProperty(id,world_model::kTerrainConstraintFalloff,falloff);
+        commands_->SetProperty(id,world_model::kTerrainConstraintValue,value);
+        commands_->SetProperty(id,world_model::kTerrainConstraintOpacity,1.0);
+        commands_->SetProperty(id,world_model::kTerrainConstraintEnabled,true);
+        for(std::size_t i=0;i<points.size();++i)
+        {
+            const auto point=commands_->CreateObject(world_model::kTerrainConstraintControlPointType,
+                "Point "+std::to_string(i+1U),id,static_cast<i64>(i)*10);
+            commands_->SetProperty(point,world_model::kTerrainConstraintPointDirection,points[i]);
+        }
+        if(owns) commands_->CommitTransaction();
+        return id;
+    }
+    catch(...)
+    {
+        if(owns&&commands_->HasActiveTransaction()) commands_->RollbackTransaction();
+        throw;
+    }
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddCanyonSpline(
+    const scene::ObjectId terrain,const std::vector<math::Double3>& points,const f64 halfWidth,const f64 falloff,const f64 depth)
+{
+    if(!std::isfinite(depth)||depth<=0.0) throw std::invalid_argument("Canyon depth must be finite and positive.");
+    return AddHeightSpline(terrain,"Canyon",surface_authoring::ConstraintCompositionMode::Subtract,points,halfWidth,falloff,depth);
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddRidgeSpline(
+    const scene::ObjectId terrain,const std::vector<math::Double3>& points,const f64 halfWidth,const f64 falloff,const f64 height)
+{
+    if(!std::isfinite(height)||height<=0.0) throw std::invalid_argument("Ridge height must be finite and positive.");
+    return AddHeightSpline(terrain,"Ridge / Embankment",surface_authoring::ConstraintCompositionMode::Add,points,halfWidth,falloff,height);
 }
 
 std::vector<SurfaceBiomeSummary> SurfaceAuthoringModel::Biomes(

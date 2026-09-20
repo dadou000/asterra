@@ -90,6 +90,17 @@ inline constexpr schema::TypeId kBiomeScatterRuleType{
     .low = 0x4d45534341543031ULL
 };
 
+// M09 semantic bridge for the canonical M04 TerrainConstraintSet.
+inline constexpr schema::TypeId kTerrainConstraintType{
+    .high = 0x4f52424954434f4eULL,
+    .low = 0x53545241494e5431ULL
+};
+
+inline constexpr schema::TypeId kTerrainConstraintControlPointType{
+    .high = 0x4f52424954434f4eULL,
+    .low = 0x5452504f494e5431ULL
+};
+
 inline constexpr schema::TypeId kSurfaceDecalType{
     .high = 0x4f52424954444543ULL,
     .low = 0x414c545950450001ULL
@@ -478,6 +489,59 @@ inline constexpr schema::PropertyId kBiomeCoastalErosionMultiplier{
 inline constexpr schema::PropertyId kBiomeChemicalWeatheringMultiplier{
     .high = 0x4f5242495442494fULL,
     .low = 0x4d454348454d5701ULL
+};
+
+inline constexpr schema::PropertyId kTerrainConstraintChannel{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x4348414e4e454c31ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintShape{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x5348415045303031ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintMode{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x4d4f444530303031ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintCenter{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x43454e5445523031ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintInnerRadius{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x494e4e4552303031ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintOuterRadius{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x4f55544552303031ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintHalfWidth{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x48414c4657494431ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintFalloff{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x46414c4c4f464631ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintValue{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x56414c5545303031ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintOpacity{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x4f50414349545931ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintMaterial{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x4d4154455249414cULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintEnabled{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x454e41424c454431ULL
+};
+inline constexpr schema::PropertyId kTerrainConstraintPointDirection{
+    .high = 0x4f52424954434e53ULL,
+    .low = 0x504f494e54444952ULL
 };
 
 inline constexpr schema::PropertyId kDecalAsset{
