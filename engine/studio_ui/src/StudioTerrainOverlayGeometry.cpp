@@ -234,8 +234,8 @@ void AppendControlCross(
         offsetDirection(frame.north, -1.0),
         offsetDirection(frame.north, 1.0),
         color,
-      runtime,
-      source,
+        runtime,
+        source,
         camera);
 }
 } // namespace
@@ -248,7 +248,7 @@ BuildTerrainAuthoringOverlayLines(
     const render_view::CameraState& camera)
 {
     if (overlay.body != runtime.body ||
-        !truntime.planet.id.IsValid() ||
+        !runtime.planet.id.IsValid() ||
         runtime.planet.radiusMeters <= 0.0 ||
         overlay.controlUnitDirections.empty() ||
         !std::isfinite(
