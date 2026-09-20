@@ -196,6 +196,102 @@ void FeedKey(
         imguiKey,
         window.KeyDown(key));
 }
+
+
+void ApplyOrbitProTheme()
+{
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    // Orbit Studio deliberately avoids the stock Dear ImGui look.  The
+    // palette is neutral graphite with a restrained VFD-blue accent so tools
+    // remain readable for long authoring sessions without turning the editor
+    // into a decorative skin.
+    style.WindowPadding = ImVec2(10.0F, 9.0F);
+    style.FramePadding = ImVec2(9.0F, 5.0F);
+    style.CellPadding = ImVec2(7.0F, 4.0F);
+    style.ItemSpacing = ImVec2(8.0F, 6.0F);
+    style.ItemInnerSpacing = ImVec2(6.0F, 4.0F);
+    style.TouchExtraPadding = ImVec2(0.0F, 0.0F);
+    style.IndentSpacing = 18.0F;
+    style.ScrollbarSize = 13.0F;
+    style.GrabMinSize = 10.0F;
+
+    style.WindowBorderSize = 1.0F;
+    style.ChildBorderSize = 1.0F;
+    style.PopupBorderSize = 1.0F;
+    style.FrameBorderSize = 0.0F;
+    style.TabBorderSize = 0.0F;
+
+    style.WindowRounding = 5.0F;
+    style.ChildRounding = 4.0F;
+    style.FrameRounding = 4.0F;
+    style.PopupRounding = 5.0F;
+    style.ScrollbarRounding = 7.0F;
+    style.GrabRounding = 4.0F;
+    style.TabRounding = 4.0F;
+
+    style.WindowMenuButtonPosition = ImGuiDir_Right;
+    style.ColorButtonPosition = ImGuiDir_Right;
+    style.ButtonTextAlign = ImVec2(0.5F, 0.5F);
+    style.SelectableTextAlign = ImVec2(0.0F, 0.5F);
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_Text]                 = ImVec4(0.90F, 0.92F, 0.95F, 1.00F);
+    colors[ImGuiCol_TextDisabled]         = ImVec4(0.43F, 0.48F, 0.54F, 1.00F);
+    colors[ImGuiCol_WindowBg]             = ImVec4(0.055F, 0.064F, 0.078F, 1.00F);
+    colors[ImGuiCol_ChildBg]              = ImVec4(0.047F, 0.055F, 0.068F, 1.00F);
+    colors[ImGuiCol_PopupBg]              = ImVec4(0.060F, 0.070F, 0.086F, 0.99F);
+    colors[ImGuiCol_Border]               = ImVec4(0.15F, 0.18F, 0.22F, 1.00F);
+    colors[ImGuiCol_BorderShadow]         = ImVec4(0.00F, 0.00F, 0.00F, 0.00F);
+    colors[ImGuiCol_FrameBg]              = ImVec4(0.090F, 0.105F, 0.125F, 1.00F);
+    colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.125F, 0.155F, 0.185F, 1.00F);
+    colors[ImGuiCol_FrameBgActive]        = ImVec4(0.145F, 0.190F, 0.225F, 1.00F);
+    colors[ImGuiCol_TitleBg]              = ImVec4(0.043F, 0.050F, 0.061F, 1.00F);
+    colors[ImGuiCol_TitleBgActive]        = ImVec4(0.060F, 0.073F, 0.089F, 1.00F);
+    colors[ImGuiCol_TitleBgCollapsed]     = ImVec4(0.043F, 0.050F, 0.061F, 1.00F);
+    colors[ImGuiCol_MenuBarBg]            = ImVec4(0.038F, 0.045F, 0.055F, 1.00F);
+    colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.038F, 0.045F, 0.055F, 1.00F);
+    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.18F, 0.21F, 0.25F, 1.00F);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.24F, 0.29F, 0.34F, 1.00F);
+    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.20F, 0.48F, 0.67F, 1.00F);
+    colors[ImGuiCol_CheckMark]            = ImVec4(0.25F, 0.68F, 0.96F, 1.00F);
+    colors[ImGuiCol_SliderGrab]           = ImVec4(0.20F, 0.55F, 0.78F, 1.00F);
+    colors[ImGuiCol_SliderGrabActive]     = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
+    colors[ImGuiCol_Button]               = ImVec4(0.100F, 0.122F, 0.145F, 1.00F);
+    colors[ImGuiCol_ButtonHovered]        = ImVec4(0.145F, 0.250F, 0.325F, 1.00F);
+    colors[ImGuiCol_ButtonActive]         = ImVec4(0.170F, 0.390F, 0.535F, 1.00F);
+    colors[ImGuiCol_Header]               = ImVec4(0.105F, 0.145F, 0.180F, 1.00F);
+    colors[ImGuiCol_HeaderHovered]        = ImVec4(0.135F, 0.285F, 0.390F, 1.00F);
+    colors[ImGuiCol_HeaderActive]         = ImVec4(0.160F, 0.385F, 0.535F, 1.00F);
+    colors[ImGuiCol_Separator]            = ImVec4(0.14F, 0.17F, 0.20F, 1.00F);
+    colors[ImGuiCol_SeparatorHovered]     = ImVec4(0.24F, 0.55F, 0.74F, 1.00F);
+    colors[ImGuiCol_SeparatorActive]      = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
+    colors[ImGuiCol_ResizeGrip]           = ImVec4(0.18F, 0.40F, 0.55F, 0.20F);
+    colors[ImGuiCol_ResizeGripHovered]    = ImVec4(0.24F, 0.60F, 0.82F, 0.55F);
+    colors[ImGuiCol_ResizeGripActive]     = ImVec4(0.31F, 0.73F, 1.00F, 0.85F);
+    colors[ImGuiCol_Tab]                  = ImVec4(0.060F, 0.071F, 0.086F, 1.00F);
+    colors[ImGuiCol_TabHovered]           = ImVec4(0.125F, 0.260F, 0.350F, 1.00F);
+    colors[ImGuiCol_TabActive]            = ImVec4(0.095F, 0.185F, 0.245F, 1.00F);
+    colors[ImGuiCol_TabUnfocused]         = ImVec4(0.048F, 0.057F, 0.069F, 1.00F);
+    colors[ImGuiCol_TabUnfocusedActive]   = ImVec4(0.072F, 0.110F, 0.140F, 1.00F);
+    colors[ImGuiCol_DockingPreview]       = ImVec4(0.20F, 0.62F, 0.90F, 0.55F);
+    colors[ImGuiCol_DockingEmptyBg]       = ImVec4(0.030F, 0.036F, 0.045F, 1.00F);
+    colors[ImGuiCol_PlotLines]            = ImVec4(0.44F, 0.66F, 0.82F, 1.00F);
+    colors[ImGuiCol_PlotLinesHovered]     = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
+    colors[ImGuiCol_PlotHistogram]        = ImVec4(0.22F, 0.58F, 0.78F, 1.00F);
+    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
+    colors[ImGuiCol_TableHeaderBg]        = ImVec4(0.070F, 0.083F, 0.100F, 1.00F);
+    colors[ImGuiCol_TableBorderStrong]    = ImVec4(0.15F, 0.18F, 0.22F, 1.00F);
+    colors[ImGuiCol_TableBorderLight]     = ImVec4(0.10F, 0.12F, 0.15F, 1.00F);
+    colors[ImGuiCol_TableRowBg]           = ImVec4(0.00F, 0.00F, 0.00F, 0.00F);
+    colors[ImGuiCol_TableRowBgAlt]        = ImVec4(1.00F, 1.00F, 1.00F, 0.018F);
+    colors[ImGuiCol_TextSelectedBg]       = ImVec4(0.16F, 0.47F, 0.68F, 0.45F);
+    colors[ImGuiCol_DragDropTarget]       = ImVec4(0.31F, 0.73F, 1.00F, 0.95F);
+    colors[ImGuiCol_NavHighlight]         = ImVec4(0.31F, 0.73F, 1.00F, 0.85F);
+    colors[ImGuiCol_NavWindowingHighlight]= ImVec4(0.80F, 0.88F, 0.94F, 0.70F);
+    colors[ImGuiCol_NavWindowingDimBg]    = ImVec4(0.02F, 0.03F, 0.04F, 0.65F);
+    colors[ImGuiCol_ModalWindowDimBg]     = ImVec4(0.01F, 0.015F, 0.02F, 0.72F);
+}
 } // namespace
 
 class EditorUi::Impl
@@ -246,6 +342,7 @@ public:
                     this->layoutPath));
 
         ImGui::StyleColorsDark();
+        ApplyOrbitProTheme();
 
         const shader::Binary vertex =
             compiler.Compile({
@@ -1641,11 +1738,25 @@ void EditorUi::DrawStudioShell()
     ImGui::SetCurrentContext(
         impl_->context);
 
+    const ImGuiViewport* mainViewport =
+        ImGui::GetMainViewport();
+
+    // Give the whole application a deliberate editor-canvas background. The
+    // dockspace still owns the full viewport; this only removes the stock
+    // flat-window impression when panes are rearranged or temporarily empty.
+    ImGui::GetBackgroundDrawList()->AddRectFilled(
+        mainViewport->Pos,
+        ImVec2(
+            mainViewport->Pos.x + mainViewport->Size.x,
+            mainViewport->Pos.y + mainViewport->Size.y),
+        ImGui::GetColorU32(
+            ImVec4(0.025F, 0.030F, 0.038F, 1.00F)));
+
     const ImGuiID mainDockspace =
         ImGui::DockSpaceOverViewport(
         0,
         nullptr,
-        ImGuiDockNodeFlags_None);
+        ImGuiDockNodeFlags_PassthruCentralNode);
 
     const bool hasLayoutPanels =
         !AssignDefaultDock(
