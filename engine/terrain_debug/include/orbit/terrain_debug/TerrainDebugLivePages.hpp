@@ -43,6 +43,10 @@ struct TerrainDebugLivePageInputs
     const terrain_scatter::ScatterPageRequest* scatterRequest{nullptr};
     std::span<const terrain_scatter::DerivedScatterInstance>
         scatterInstances{};
+
+    // M12 aggregate path when multiple M22 rules contribute to one physical
+    // page. Mutually exclusive with scatterRequest/scatterInstances.
+    std::span<const f32> scatterDensityPerSquareMeter{};
 };
 
 [[nodiscard]] std::shared_ptr<const TerrainDebugPageData>
