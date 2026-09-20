@@ -6,6 +6,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainAuthoringInvalidation.cpp
     src/StudioTerrainRebuildScheduler.cpp
     src/StudioTerrainPhysicalPageService.cpp
+    src/StudioTerrainRoundTripVerifier.cpp
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioTerrainServiceStatus.cpp
     src/StudioWorkspace.cpp
@@ -145,6 +146,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioTerrainPhysicalPageService
         COMMAND OrbitStudioTerrainPhysicalPageServiceTests
+    )
+
+    add_executable(OrbitStudioTerrainRoundTripVerifierTests
+        tests/StudioTerrainRoundTripVerifierTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainRoundTripVerifierTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainRoundTripVerifierTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainRoundTripVerifierTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainRoundTripVerifier
+        COMMAND OrbitStudioTerrainRoundTripVerifierTests
     )
 
     add_executable(OrbitStudioTerrainServiceStatusTests
