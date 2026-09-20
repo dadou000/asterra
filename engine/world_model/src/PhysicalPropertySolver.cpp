@@ -1,5 +1,6 @@
 #include <orbit/world_model/PhysicalPropertySolver.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <string>
