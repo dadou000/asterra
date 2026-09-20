@@ -1184,8 +1184,8 @@ void StudioViewportPanels::DrawView(
             diagnostics.biomeWeights);
         context.SameLine();
         toggle(
-            "Process effects",
-            diagnostics.processEffects);
+            "Process masks",
+            diagnostics.processMasks);
 
         toggle(
             "Drainage vectors",
