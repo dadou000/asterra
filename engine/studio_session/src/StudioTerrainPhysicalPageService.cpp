@@ -963,34 +963,34 @@ void MergeSediment(
                         thermal.material);
     }
 
-    result->aeolianForcing.assign(
-        result->macroGeology.size(),
-        {});
-
-    for (std::size_t index = 0U;
-         index <
-            result->
-                aeolianForcing.size();
-         ++index)
-    {
-        // V0.0.4 has no independent wind-authority service yet. A missing
-        // forcing source is represented physically as calm air, never as a
-        // fabricated prevailing-wind algorithm.
-        result->
-            aeolianForcing[index].
-            surfaceResistance =
-                static_cast<f32>(
-                    std::clamp(
-                        result->
-                            macroGeology[index].
-                            protection,
-                        0.0,
-                        1.0));
-    }
-
     if (inputs.processes.
             aeolianEnabled)
     {
+        result->aeolianForcing.assign(
+            result->macroGeology.size(),
+            {});
+
+        for (std::size_t index = 0U;
+             index <
+                result->
+                    aeolianForcing.size();
+             ++index)
+        {
+            // V0.0.4 has no independent wind-authority service yet. A missing
+            // forcing source is represented physically as calm air, never as a
+            // fabricated prevailing-wind algorithm.
+            result->
+                aeolianForcing[index].
+                surfaceResistance =
+                    static_cast<f32>(
+                        std::clamp(
+                            result->
+                                macroGeology[index].
+                                protection,
+                            0.0,
+                            1.0));
+        }
+
         auto aeolian =
             std::make_shared<
                 terrain_erosion::
