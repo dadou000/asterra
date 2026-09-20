@@ -568,8 +568,75 @@ void TestRevisionsAndPersistentCacheAreInvalidatedTogether()
 }
 } // namespace
 
+void TestAsyncBuildReceivesCommittedDependencySnapshot()
+{
+    jobs::JobSystem jobs(2U);
+    procedural_graph::ProceduralGraph graph(
+        jobs);
+
+    const auto source =
+        graph.AddSource(
+            "M12.Source",
+            7U);
+
+    const auto upstream =
+        graph.AddDerived(
+            "M12.Upstream",
+            {source},
+            procedural_graph::
+                ExecutionBackend::Cpu,
+            [](const procedural_graph::BuildContext& context)
+            {
+                Require(
+                    context.dependencyProducts.size() == 1U &&
+                    !context.dependencyProducts[0].has_value(),
+                    "Source dependencies must preserve their empty product slot.");
+
+                return std::any(
+                    u32{41U});
+            });
+
+    const auto downstream =
+        graph.AddDerived(
+            "M12.Downstream",
+            {upstream, source},
+            procedural_graph::
+                ExecutionBackend::Cpu,
+            [](const procedural_graph::BuildContext& context)
+            {
+                const auto* product =
+                    context.DependencyProduct<u32>(
+                        0U);
+
+                Require(
+                    product != nullptr &&
+                    *product == 41U &&
+                    context.dependencyProducts.size() == 2U &&
+                    !context.dependencyProducts[1].has_value(),
+                    "Async builds must receive the committed upstream product in dependency order.");
+
+                return std::any(
+                    u32{42U});
+            });
+
+    Require(
+        graph.BuildBlocking(
+            downstream),
+        "Dependency snapshot fixture failed to build.");
+
+    const auto* result =
+        graph.Product<u32>(
+            downstream);
+
+    Require(
+        result != nullptr &&
+        *result == 42U,
+        "Dependency snapshot build did not commit its downstream product.");
+}
+
 int main()
 {
+    TestAsyncBuildReceivesCommittedDependencySnapshot();
     TestBiomeTreeDensityInvalidatesScatterOnly();
     TestMossMaterialInvalidatesSurfaceOnly();
     TestRockErodibilityInvalidatesProcessDescendants();
