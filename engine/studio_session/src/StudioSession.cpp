@@ -39,6 +39,10 @@ StudioSession::StudioSession(
       pathNetwork_(world_),
       pathRouting_(world_),
       pathProducts_(world_),
+      terrainRuntime_(
+          world_,
+          viewports_,
+          terrainDebugPages_),
       rpc_(world_)
 {
     RegisterViewportTargetRpc(
@@ -135,6 +139,18 @@ StudioSession::TerrainDebugPages() const noexcept
     return terrainDebugPages_;
 }
 
+StudioTerrainRuntimeBridge&
+StudioSession::TerrainRuntime() noexcept
+{
+    return terrainRuntime_;
+}
+
+const StudioTerrainRuntimeBridge&
+StudioSession::TerrainRuntime() const noexcept
+{
+    return terrainRuntime_;
+}
+
 std::vector<editor_session::WorldDocumentItem>
 StudioSession::Worlds() const
 {
@@ -216,6 +232,8 @@ StudioSession::DispatchRpc(
     static_cast<void>(pathProducts_.RefreshBinding());
     static_cast<void>(viewports_.Refresh());
     RefreshTerrainDebugGeneration();
+    static_cast<void>(
+        terrainRuntime_.Refresh());
     return response;
 }
 
@@ -253,11 +271,13 @@ StudioTickResult StudioSession::Tick(
             pathProducts_.RefreshBinding();
         result.viewportTargetsChanged =
             viewports_.Refresh();
+        RefreshTerrainDebugGeneration();
+        result.terrainRuntimeChanged =
+            terrainRuntime_.Refresh();
         result.worldGeneration =
             world_.Generation();
         result.universeGeneration =
             world_.UniverseGeneration();
-        RefreshTerrainDebugGeneration();
         return result;
     }
 
@@ -284,11 +304,16 @@ StudioTickResult StudioSession::Tick(
         pathProducts_.RefreshBinding();
     result.viewportTargetsChanged =
         viewports_.Refresh();
+
+    RefreshTerrainDebugGeneration();
+
+    result.terrainRuntimeChanged =
+        terrainRuntime_.Refresh();
+
     result.worldGeneration =
         world_.Generation();
     result.universeGeneration =
         world_.UniverseGeneration();
-    RefreshTerrainDebugGeneration();
     return result;
 }
 
