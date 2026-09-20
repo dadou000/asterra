@@ -37,6 +37,7 @@ private:
     f64 localOverrideOpacity_{1.0};
 
     bool advancedBiome_{false};
+    bool advancedProcesses_{false};
     std::string status_;
 };
 } // namespace orbit::studio_ui
