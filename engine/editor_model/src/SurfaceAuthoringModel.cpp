@@ -824,8 +824,9 @@ void SurfaceAuthoringModel::SetBiomeSettings(
     }
 }
 
-scene::ObjectId SurfaceAuthoringModel::PaintLocalOverride(
+scene::ObjectId SurfaceAuthoringModel::PaintBiomeMask(
     const scene::ObjectId biome,
+    const terrain_biome::BiomeAuthoredWeightOperation operation,
     math::Double3 centerUnitDirection,
     const f64 innerRadiusMeters,
     const f64 outerRadiusMeters,
@@ -847,7 +848,7 @@ scene::ObjectId SurfaceAuthoringModel::PaintLocalOverride(
 
     centerUnitDirection = math::Normalize(centerUnitDirection);
     const bool owns = !commands_->HasActiveTransaction();
-    if (owns) commands_->BeginTransaction("Paint Biome Local Override");
+    if (owns) commands_->BeginTransaction("Paint Biome Mask");
 
     try
     {
@@ -861,7 +862,10 @@ scene::ObjectId SurfaceAuthoringModel::PaintLocalOverride(
             biome,
             1000 + static_cast<i64>(maskCount) * 10);
 
-        commands_->SetProperty(mask, world_model::kBiomeMaskOperation, i64{2});
+        commands_->SetProperty(
+            mask,
+            world_model::kBiomeMaskOperation,
+            static_cast<i64>(operation));
         commands_->SetProperty(mask, world_model::kBiomeMaskCenter, centerUnitDirection);
         commands_->SetProperty(mask, world_model::kBiomeMaskInnerRadius, innerRadiusMeters);
         commands_->SetProperty(mask, world_model::kBiomeMaskOuterRadius, outerRadiusMeters);
@@ -879,6 +883,26 @@ scene::ObjectId SurfaceAuthoringModel::PaintLocalOverride(
         if (owns && commands_->HasActiveTransaction()) commands_->RollbackTransaction();
         throw;
     }
+}
+
+scene::ObjectId SurfaceAuthoringModel::PaintLocalOverride(
+    const scene::ObjectId biome,
+    math::Double3 centerUnitDirection,
+    const f64 innerRadiusMeters,
+    const f64 outerRadiusMeters,
+    const f64 weight,
+    const f64 opacity)
+{
+    return PaintBiomeMask(
+        biome,
+        terrain_biome::
+            BiomeAuthoredWeightOperation::
+                Replace,
+        centerUnitDirection,
+        innerRadiusMeters,
+        outerRadiusMeters,
+        weight,
+        opacity);
 }
 
 scene::ObjectId SurfaceAuthoringModel::AddSurfaceLayer(
