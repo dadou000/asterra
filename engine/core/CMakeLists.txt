@@ -30,4 +30,9 @@ target_include_directories(OrbitCore
 )
 
 target_compile_features(OrbitCore PUBLIC cxx_std_23)
+
+target_compile_definitions(OrbitCore
+    PUBLIC
+        ORBIT_BUILD_CONFIGURATION="$<CONFIG>"
+)
 orbit_enable_warnings(OrbitCore)
