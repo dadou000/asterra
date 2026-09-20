@@ -3,6 +3,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioAuthoringBinding.cpp
     src/StudioSession.cpp
     src/StudioRuntimeBinding.cpp
+    src/StudioTerrainRebuildScheduler.cpp
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioWorkspace.cpp
     src/StudioWorkspaceRpcHost.cpp
@@ -35,6 +36,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::SurfaceModel
         Orbit::Terrain
         Orbit::TerrainDebug
+        Orbit::TerrainDependency
         Orbit::TerrainGpu
         Orbit::TerrainStream
         Orbit::TerrainView
@@ -82,6 +84,24 @@ if(BUILD_TESTING)
     )
 
 
+
+    add_executable(OrbitStudioTerrainRebuildSchedulerTests
+        tests/StudioTerrainRebuildSchedulerTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainRebuildSchedulerTests
+        PRIVATE
+            Orbit::StudioSession
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainRebuildSchedulerTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainRebuildSchedulerTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainRebuildScheduler
+        COMMAND OrbitStudioTerrainRebuildSchedulerTests
+    )
 
     add_executable(OrbitStudioTerrainRuntimeBridgeTests
         tests/StudioTerrainRuntimeBridgeTests.cpp
