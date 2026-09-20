@@ -3870,12 +3870,12 @@ int main(
                                 .width =
                                     static_cast<
                                         orbit::f32>(
-                                            bodyView.
+                                            primaryView->
                                                 Width()),
                                 .height =
                                     static_cast<
                                         orbit::f32>(
-                                            bodyView.
+                                            primaryView->
                                                 Height())
                             });
 
