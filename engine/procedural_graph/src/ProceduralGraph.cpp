@@ -310,6 +310,19 @@ void ProceduralGraph::Schedule(
     record.state = NodeState::Building;
     record.error.clear();
 
+    std::vector<std::any>
+        dependencyProducts;
+
+    dependencyProducts.reserve(
+        record.dependencies.size());
+
+    for (const NodeId dependency :
+         record.dependencies)
+    {
+        dependencyProducts.push_back(
+            nodes_.at(dependency).product);
+    }
+
     const BuildFunction build =
         record.build;
     const BuildContext context{
@@ -317,7 +330,9 @@ void ProceduralGraph::Schedule(
         .generation = generation,
         .inputRevisionHash = inputHash,
         .configurationRevision =
-            configurationRevision
+            configurationRevision,
+        .dependencyProducts =
+            std::move(dependencyProducts)
     };
 
     jobs_.Submit(
