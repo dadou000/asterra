@@ -2139,6 +2139,51 @@ public:
                     address));
     }
 
+    void InvalidatePublished(
+        BodyRuntime& body,
+        const std::span<
+            const terrain_dependency::TerrainInvalidationRequest>
+            changes)
+    {
+        if (changes.empty())
+        {
+            return;
+        }
+
+        const auto statuses =
+            body.scheduler.Catalog();
+
+        for (const auto& status :
+             statuses)
+        {
+            const bool affected =
+                std::any_of(
+                    changes.begin(),
+                    changes.end(),
+                    [&](const auto& change)
+                    {
+                        return AddressMatches(
+                            status.address,
+                            change.scope);
+                    });
+
+            if (!affected)
+            {
+                continue;
+            }
+
+            body.publications.erase(
+                status.address);
+
+            if (debugPages != nullptr)
+            {
+                static_cast<void>(
+                    debugPages->Erase(
+                        status.address));
+            }
+        }
+    }
+
     void PublishReady(
         BodyRuntime& body)
     {
@@ -2637,6 +2682,10 @@ void StudioTerrainPhysicalPageService::Tick(
             body->scheduler.
                 TakeAppliedChanges();
 
+        impl_->InvalidatePublished(
+            *body,
+            applied);
+
         body->history.insert(
             body->history.end(),
             applied.begin(),
@@ -2662,6 +2711,10 @@ RebuildDirty()
         auto applied =
             body->scheduler.
                 TakeAppliedChanges();
+
+        impl_->InvalidatePublished(
+            *body,
+            applied);
 
         body->history.insert(
             body->history.end(),
