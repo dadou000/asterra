@@ -1081,3 +1081,52 @@ if(ORBIT_ENABLE_V004_M31_GATE)
     )
 endif()
 
+
+
+# V0.0.5 M17 Studio terrain validation suite. The implementation-specific
+# tests remain owned by their modules; this named gate makes the release
+# contract explicit and runnable as one target without duplicating those
+# production-path scenarios.
+set(ORBIT_V005_VALIDATION_TESTS
+    Orbit.StudioSession
+    Orbit.RockyPlanetAuthoring
+    Orbit.SurfaceAuthoringModel
+    Orbit.StudioTerrainAuthoringInvalidation
+    Orbit.StudioTerrainRuntimeBridge
+    Orbit.StudioTerrainRebuildScheduler
+    Orbit.StudioTerrainPhysicalPageService
+    Orbit.StudioTerrainRoundTripVerifier
+    Orbit.StudioTerrainValidationScenario
+    Orbit.StudioTerrainPerformanceDiagnostics
+    Orbit.StudioSurfacePicking
+    Orbit.StudioViewportNavigation
+)
+
+set_tests_properties(
+    ${ORBIT_V005_VALIDATION_TESTS}
+    PROPERTIES
+        LABELS "v005"
+)
+
+add_custom_target(OrbitV005Validation
+    COMMAND
+        ${CMAKE_CTEST_COMMAND}
+        --test-dir ${CMAKE_BINARY_DIR}
+        -C $<CONFIG>
+        -L v005
+        --output-on-failure
+    DEPENDS
+        OrbitStudioSessionTests
+        OrbitRockyPlanetAuthoringTests
+        OrbitSurfaceAuthoringModelTests
+        OrbitStudioTerrainAuthoringInvalidationTests
+        OrbitStudioTerrainRuntimeBridgeTests
+        OrbitStudioTerrainRebuildSchedulerTests
+        OrbitStudioTerrainPhysicalPageServiceTests
+        OrbitStudioTerrainRoundTripVerifierTests
+        OrbitStudioTerrainValidationScenarioTests
+        OrbitStudioTerrainPerformanceDiagnosticsTests
+        OrbitStudioSurfacePickingTests
+        OrbitStudioViewportNavigationTests
+    USES_TERMINAL
+)
