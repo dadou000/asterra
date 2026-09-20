@@ -120,6 +120,18 @@ public:
     [[nodiscard]] bool ContainsPage(
         const terrain::PhysicalTerrainPageAddress& address) const noexcept;
 
+    // Non-blocking build seam used by editor/runtime schedulers. The
+    // underlying ProceduralGraph still owns dependency ordering and stale
+    // generation rejection.
+    void RequestBuild(
+        const terrain::PhysicalTerrainPageAddress& address,
+        TerrainDependencyProduct product);
+
+    void Poll();
+
+    [[nodiscard]] static procedural_graph::ExecutionBackend Backend(
+        TerrainDependencyProduct product) noexcept;
+
     [[nodiscard]] TerrainInvalidationResult ApplyChange(
         const TerrainInvalidationRequest& request);
 
