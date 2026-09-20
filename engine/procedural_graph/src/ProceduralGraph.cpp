@@ -516,6 +516,107 @@ bool ProceduralGraph::TryScheduleRecursive(
         NodeState::Clean;
 }
 
+bool ProceduralGraph::RemoveNodes(
+    const std::span<const NodeId> nodes)
+{
+    if (nodes.empty())
+    {
+        return true;
+    }
+
+    std::unordered_set<NodeId>
+        remove;
+
+    remove.reserve(
+        nodes.size());
+
+    for (const NodeId id :
+         nodes)
+    {
+        if (!id.IsValid() ||
+            !nodes_.contains(id))
+        {
+            return false;
+        }
+
+        remove.insert(id);
+    }
+
+    for (const NodeId id :
+         remove)
+    {
+        const auto& record =
+            nodes_.at(id);
+
+        if (record.state ==
+                NodeState::Building ||
+            record.jobGroup != nullptr ||
+            record.pending != nullptr)
+        {
+            return false;
+        }
+
+        for (const NodeId dependent :
+             record.dependents)
+        {
+            if (!remove.contains(
+                    dependent))
+            {
+                return false;
+            }
+        }
+    }
+
+    for (const NodeId id :
+         remove)
+    {
+        const auto& record =
+            nodes_.at(id);
+
+        for (const NodeId dependency :
+             record.dependencies)
+        {
+            if (remove.contains(
+                    dependency))
+            {
+                continue;
+            }
+
+            auto found =
+                nodes_.find(
+                    dependency);
+
+            if (found ==
+                nodes_.end())
+            {
+                continue;
+            }
+
+            auto& dependents =
+                found->second.
+                    dependents;
+
+            dependents.erase(
+                std::remove(
+                    dependents.begin(),
+                    dependents.end(),
+                    id),
+                dependents.end());
+        }
+
+        requestedTargets_.erase(
+            id);
+    }
+
+    for (const NodeId id :
+         remove)
+    {
+        nodes_.erase(id);
+    }
+
+    return true;
+}
+
 void ProceduralGraph::Poll()
 {
     FinalizeCompleted();
