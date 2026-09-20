@@ -17,6 +17,21 @@
 
 namespace orbit::studio_ui
 {
+enum class StudioTerrainOverlayKind : u8
+{
+    Brush,
+    Spline
+};
+
+struct StudioTerrainAuthoringOverlay
+{
+    universe::BodyId body{};
+    StudioTerrainOverlayKind kind{
+        StudioTerrainOverlayKind::Brush};
+    std::vector<math::Double3> controlUnitDirections;
+    f64 influenceRadiusMeters{0.0};
+};
+
 struct StudioRenderViewInfo
 {
     std::string id;
@@ -99,6 +114,18 @@ public:
 
     [[nodiscard]] std::optional<StudioSurfacePick>
     LastTerrainSurfacePick(
+        std::string_view id) const;
+
+    void SetTerrainAuthoringOverlay(
+        std::string_view id,
+        StudioTerrainAuthoringOverlay overlay);
+
+    void ClearTerrainAuthoringOverlay(
+        std::string_view id) noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioTerrainAuthoringOverlay>
+    TerrainAuthoringOverlay(
         std::string_view id) const;
 
     // Debug-field choice is transient RenderView presentation state. It is
@@ -191,6 +218,12 @@ private:
         StudioSurfacePick,
         std::less<>>
         terrainSurfacePicks_;
+
+    std::map<
+        std::string,
+        StudioTerrainAuthoringOverlay,
+        std::less<>>
+        terrainAuthoringOverlays_;
 
     std::map<
         std::string,
