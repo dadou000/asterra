@@ -3,6 +3,7 @@
 #include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
+#include <orbit/terrain_erosion/ThermalErosion.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 
 #include <algorithm>
@@ -1107,6 +1108,335 @@ void Test05AeolianMassConservation()
         "M30-05 conservation fixture must retain its intended lee-side deposition so mass closure is tested across real pickup/transport/deposition behavior.");
 }
 
+
+void Test06ThermalReposeConvergence()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 5U;
+    constexpr f64 spacingMeters = 1.0;
+    constexpr f32 initialSandMeters = 2.0F;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage page(
+        resolution,
+        spacingMeters);
+
+    std::vector<f32> originalBedrock;
+    originalBedrock.reserve(
+        static_cast<std::size_t>(
+            resolution) *
+        resolution);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 bedrockHeight =
+                x == resolution / 2U &&
+                y == resolution / 2U
+                    ? 3.0F
+                    : 0.0F;
+
+            page.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        bedrockHeight,
+                    .referenceBedrockHeightMeters =
+                        bedrockHeight,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters =
+                        initialSandMeters,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+
+            originalBedrock.push_back(
+                bedrockHeight);
+        }
+    }
+
+    const auto initialMass =
+        page.QueryMass(
+            fixture.materials);
+
+    const auto maximumSandSlopeDegrees =
+        [](const MaterialColumnPage& material)
+        {
+            constexpr f64 radiansToDegrees =
+                57.2957795130823208768;
+
+            f64 maximum = 0.0;
+
+            for (u32 y = 0U;
+                 y < material.Resolution();
+                 ++y)
+            {
+                for (u32 x = 0U;
+                     x < material.Resolution();
+                     ++x)
+                {
+                    const auto& source =
+                        material.At(x, y);
+
+                    if (source.ExposedSurface() !=
+                        ExposedSurfaceKind::Sand)
+                    {
+                        continue;
+                    }
+
+                    for (i32 dy = -1;
+                         dy <= 1;
+                         ++dy)
+                    {
+                        for (i32 dx = -1;
+                             dx <= 1;
+                             ++dx)
+                        {
+                            if (dx == 0 &&
+                                dy == 0)
+                            {
+                                continue;
+                            }
+
+                            const i32 nx =
+                                static_cast<i32>(x) +
+                                dx;
+                            const i32 ny =
+                                static_cast<i32>(y) +
+                                dy;
+
+                            if (nx < 0 ||
+                                ny < 0 ||
+                                nx >=
+                                    static_cast<i32>(
+                                        material.Resolution()) ||
+                                ny >=
+                                    static_cast<i32>(
+                                        material.Resolution()))
+                            {
+                                continue;
+                            }
+
+                            const f64 drop =
+                                static_cast<f64>(
+                                    source.
+                                        SurfaceHeightMeters()) -
+                                static_cast<f64>(
+                                    material.At(
+                                        static_cast<u32>(nx),
+                                        static_cast<u32>(ny)).
+                                        SurfaceHeightMeters());
+
+                            if (drop <= 0.0)
+                            {
+                                continue;
+                            }
+
+                            const bool diagonal =
+                                dx != 0 &&
+                                dy != 0;
+
+                            const f64 distance =
+                                material.SpacingMeters() *
+                                (diagonal
+                                     ? 1.4142135623730951
+                                     : 1.0);
+
+                            maximum =
+                                std::max(
+                                    maximum,
+                                    std::atan2(
+                                        drop,
+                                        distance) *
+                                        radiansToDegrees);
+                        }
+                    }
+                }
+            }
+
+            return maximum;
+        };
+
+    const f64 initialMaximumSlope =
+        maximumSandSlopeDegrees(page);
+
+    ThermalErosionConfig config{};
+    config.maximumIterations = 128U;
+    config.sandReposeDegrees = 33.0;
+    config.bedrockFractureRate = 0.0;
+    config.maximumTransferDepthPerIterationMeters =
+        0.20;
+    config.convergenceDepthMeters =
+        2.0e-5;
+
+    const auto first =
+        SimulateThermalErosion(
+            page,
+            fixture.materials,
+            {},
+            config);
+
+    Require(
+        initialMaximumSlope >
+            config.sandReposeDegrees +
+                20.0,
+        "M30-06 fixture must begin substantially above the sand angle of repose.");
+
+    Require(
+        first.converged &&
+        first.iterationsExecuted > 1U &&
+        first.iterationsExecuted <=
+            config.maximumIterations,
+        "M30-06 M12 must converge a genuinely unstable slope within its bounded local iteration budget.");
+
+    f64 movedOutKg = 0.0;
+    f64 receivedKg = 0.0;
+
+    for (const auto& state :
+         first.cells)
+    {
+        movedOutKg +=
+            state.movedOutKg;
+        receivedKg +=
+            state.receivedKg;
+    }
+
+    Require(
+        movedOutKg > 0.0 &&
+        NearlyEqual(
+            movedOutKg,
+            receivedKg,
+            std::max(
+                movedOutKg * 1.0e-12,
+                1.0e-6)),
+        "M30-06 thermal relaxation must perform real internal mass transfer with equal moved/received ledgers.");
+
+    const f64 finalMaximumSlope =
+        maximumSandSlopeDegrees(
+            first.material);
+
+    Require(
+        finalMaximumSlope <=
+            config.sandReposeDegrees +
+                0.02,
+        "M30-06 converged exposed sand must remain at or below the configured repose angle within the convergence-depth tolerance.");
+
+    const auto finalMass =
+        first.material.QueryMass(
+            fixture.materials);
+
+    const f64 massReference =
+        std::max(
+            initialMass.LooseMassKg(),
+            1.0);
+
+    Require(
+        NearlyEqual(
+            first.massBalance.initialLooseMassKg,
+            initialMass.LooseMassKg(),
+            1.0e-6) &&
+        NearlyEqual(
+            first.massBalance.finalLooseMassKg,
+            finalMass.LooseMassKg(),
+            1.0e-6) &&
+        NearlyEqual(
+            first.massBalance.fracturedBedrockMassKg,
+            0.0,
+            1.0e-9) &&
+        first.massBalance.materialBalanceRelativeError <
+            2.0e-6 &&
+        std::abs(
+            first.massBalance.materialBalanceErrorKg) <=
+            massReference *
+                2.0e-6,
+        "M30-06 loose thermal redistribution must conserve M08 mass without inventing fractured bedrock when fracture is disabled.");
+
+    std::size_t bedrockIndex = 0U;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& cell =
+                first.material.At(x, y);
+
+            Require(
+                cell.bedrockHeightMeters ==
+                    originalBedrock[bedrockIndex] &&
+                cell.referenceBedrockHeightMeters ==
+                    originalBedrock[bedrockIndex] &&
+                cell.bedrockMaterial ==
+                    terrain_geology::
+                        reference_rock::
+                            Basalt,
+                "M30-06 loose-material convergence must not smooth, excavate or re-identify the underlying M08/M02 bedrock.");
+
+            ++bedrockIndex;
+        }
+    }
+
+    const auto replay =
+        SimulateThermalErosion(
+            first.material,
+            fixture.materials,
+            {},
+            config);
+
+    Require(
+        replay.converged &&
+        replay.iterationsExecuted == 1U,
+        "M30-06 a converged thermal surface must be recognized as converged immediately on the next identical solve.");
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& before =
+                first.material.At(x, y);
+            const auto& after =
+                replay.material.At(x, y);
+
+            Require(
+                before.bedrockHeightMeters ==
+                        after.bedrockHeightMeters &&
+                    before.referenceBedrockHeightMeters ==
+                        after.referenceBedrockHeightMeters &&
+                    before.regolithMeters ==
+                        after.regolithMeters &&
+                    before.soilMeters ==
+                        after.soilMeters &&
+                    before.sandMeters ==
+                        after.sandMeters &&
+                    before.debrisMeters ==
+                        after.debrisMeters,
+                "M30-06 converged thermal state must be an exact physical no-op on immediate replay.");
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -1116,8 +1446,9 @@ int main()
     Test03SedimentDepositionBurial();
     Test04HydraulicMassConservation();
     Test05AeolianMassConservation();
+    Test06ThermalReposeConvergence();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 5/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 6/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
