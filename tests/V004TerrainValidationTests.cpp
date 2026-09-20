@@ -1,3 +1,5 @@
+#include <orbit/surface_authoring/TerrainConstraints.hpp>
+#include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_hydrology/DrainagePage.hpp>
@@ -5,6 +7,7 @@
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
+#include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 #include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
 
@@ -3135,6 +3138,662 @@ void Test10FastFlowDrainageReference()
     }
 }
 
+
+void Test11AuthoredCanyonPersistence()
+{
+    using namespace surface_authoring;
+    using namespace terrain_erosion;
+    using namespace terrain_hydrology;
+    using namespace terrain_macro_geology;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 7U;
+    constexpr u32 centerY = resolution / 2U;
+
+    StratigraphyFixture fixture;
+
+    const world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E0000000000000BULL
+        },
+        .generationSeed =
+            0x4D3330313143414EULL
+    };
+
+    terrain::PhysicalTerrainPageKey key{};
+    key.address.planet =
+        planet.id;
+    key.address.tile = {
+        .face = world::CubeFace::PositiveX,
+        .level = 10U,
+        .x = 511U,
+        .y = 511U
+    };
+    key.resolution =
+        resolution;
+    key.revisions.geology = 11U;
+    key.revisions.authoring = 17U;
+    key.revisions.processes = 10U;
+    key.revisions.climate = 3U;
+
+    const world::CubeBounds bounds =
+        world::TileBounds(
+            key.address.tile);
+
+    const auto pagePosition =
+        [&](const u32 x,
+            const u32 y)
+        {
+            const f64 tx =
+                static_cast<f64>(x) /
+                static_cast<f64>(
+                    resolution - 1U);
+
+            const f64 ty =
+                static_cast<f64>(y) /
+                static_cast<f64>(
+                    resolution - 1U);
+
+            const f64 u =
+                bounds.minimumUv.x +
+                (bounds.maximumUv.x -
+                 bounds.minimumUv.x) *
+                    tx;
+
+            const f64 v =
+                bounds.minimumUv.y +
+                (bounds.maximumUv.y -
+                 bounds.minimumUv.y) *
+                    ty;
+
+            return
+                terrain::CanonicalizeSurfacePosition({
+                    .planet = planet.id,
+                    .unitDirection =
+                        world::CubeToUnitDirection({
+                            .face =
+                                bounds.face,
+                            .uv = {u, v}
+                        }),
+                    .radialOffsetMeters =
+                        0.0
+                });
+        };
+
+    const auto centerStart =
+        pagePosition(
+            0U,
+            centerY);
+
+    const auto centerNext =
+        pagePosition(
+            1U,
+            centerY);
+
+    const f64 cellSpacingMeters =
+        std::acos(
+            std::clamp(
+                math::Dot(
+                    centerStart.unitDirection,
+                    centerNext.unitDirection),
+                -1.0,
+                1.0)) *
+        planet.radiusMeters;
+
+    Require(
+        std::isfinite(
+            cellSpacingMeters) &&
+        cellSpacingMeters >
+            100.0,
+        "M30-11 physical page must resolve a meaningful authored canyon width.");
+
+    MaterialColumnPage upstream(
+        resolution,
+        cellSpacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 awayFromCenter =
+                static_cast<f32>(
+                    std::abs(
+                        static_cast<i32>(y) -
+                        static_cast<i32>(
+                            centerY)));
+
+            const f32 height =
+                220.0F -
+                static_cast<f32>(x) *
+                    1.5F -
+                awayFromCenter *
+                    1.0F;
+
+            upstream.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        height,
+                    .referenceBedrockHeightMeters =
+                        height,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                VolcanicAsh,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const SplineConstraintPrimitive canyon{
+        .controlUnitDirections = {
+            pagePosition(
+                0U,
+                centerY).
+                unitDirection,
+            pagePosition(
+                resolution / 2U,
+                centerY).
+                unitDirection,
+            pagePosition(
+                resolution - 1U,
+                centerY).
+                unitDirection
+        },
+        .halfWidthMeters =
+            cellSpacingMeters *
+            0.30,
+        .falloffMeters =
+            cellSpacingMeters *
+            0.35
+    };
+
+    TerrainConstraintSet authored{
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000100ULL
+        },
+        .planet = planet.id,
+        .name =
+            "M30 authored canyon"
+    };
+
+    authored.height.constraints.push_back({
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000101ULL
+        },
+        .mode =
+            ConstraintCompositionMode::Add,
+        .primitive = canyon,
+        .value = -24.0,
+        .opacity = 1.0,
+        .enabled = true
+    });
+
+    authored.protection.constraints.push_back({
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000102ULL
+        },
+        .mode =
+            ConstraintCompositionMode::Replace,
+        .primitive = canyon,
+        .value = 0.60,
+        .opacity = 1.0,
+        .enabled = true
+    });
+
+    authored.drainage.constraints.push_back({
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000103ULL
+        },
+        .mode =
+            ConstraintCompositionMode::Replace,
+        .primitive = canyon,
+        .value = 1.0,
+        .opacity = 1.0,
+        .enabled = true
+    });
+
+    Require(
+        authored.IsValid(),
+        "M30-11 authored spline canyon must be valid M04 project authority.");
+
+    terrain::GlobalTerrainFieldDesc globalDesc{};
+    globalDesc.seed =
+        0x4D33303131474C42ULL;
+
+    terrain::GlobalTerrainFields globals(
+        planet,
+        globalDesc);
+
+    MacroGeologyDesc macroDesc{};
+    macroDesc.seed =
+        0x4D333031314D4143ULL;
+    macroDesc.convergenceUpliftMeters =
+        0.0;
+    macroDesc.divergenceSubsidenceMeters =
+        0.0;
+    macroDesc.distortionAmplitude =
+        0.0;
+    macroDesc.distortionOctaves =
+        1U;
+
+    MacroGeologyField authoredMacro(
+        planet,
+        globals,
+        &authored,
+        macroDesc);
+
+    MacroGeologyField controlMacro(
+        planet,
+        globals,
+        nullptr,
+        macroDesc);
+
+    const auto authoredForcing =
+        BuildStreamPowerForcing(
+            upstream,
+            key,
+            planet,
+            authoredMacro);
+
+    const auto controlForcing =
+        BuildStreamPowerForcing(
+            upstream,
+            key,
+            planet,
+            controlMacro);
+
+    std::vector<DrainageCellInput>
+        authoredDrainage(
+            static_cast<std::size_t>(
+                resolution) *
+            resolution);
+
+    std::vector<DrainageCellInput>
+        controlDrainage(
+            static_cast<std::size_t>(
+                resolution) *
+            resolution);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const std::size_t index =
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x;
+
+            const auto authoredSample =
+                authoredMacro.Sample(
+                    pagePosition(
+                        x,
+                        y));
+
+            const auto controlSample =
+                controlMacro.Sample(
+                    pagePosition(
+                        x,
+                        y));
+
+            authoredDrainage[index] = {
+                .runoffMetersPerSecond =
+                    0.001F,
+                .authoredDrainage =
+                    static_cast<f32>(
+                        authoredSample.
+                            drainageGuidance),
+                .outlet = false
+            };
+
+            controlDrainage[index] = {
+                .runoffMetersPerSecond =
+                    0.001F,
+                .authoredDrainage =
+                    static_cast<f32>(
+                        controlSample.
+                            drainageGuidance),
+                .outlet = false
+            };
+        }
+    }
+
+    const std::size_t centerIndex =
+        static_cast<std::size_t>(
+            centerY) *
+            resolution +
+        resolution / 2U;
+
+    const std::size_t shoulderIndex =
+        static_cast<std::size_t>(
+            centerY - 2U) *
+            resolution +
+        resolution / 2U;
+
+    Require(
+        authoredForcing[
+            centerIndex].
+            authoredElevationOffsetMeters <
+                -23.0 &&
+        authoredForcing[
+            centerIndex].
+            protection >
+                0.59 &&
+        authoredDrainage[
+            centerIndex].
+            authoredDrainage >
+                0.99F &&
+        std::abs(
+            authoredForcing[
+                shoulderIndex].
+                authoredElevationOffsetMeters) <
+                1.0e-3 &&
+        authoredDrainage[
+            shoulderIndex].
+            authoredDrainage <
+                1.0e-3F,
+        "M30-11 M04 canyon height/protection/drainage fields must remain spatially coherent after M05 sampling.");
+
+    Require(
+        std::abs(
+            controlForcing[
+                centerIndex].
+                authoredElevationOffsetMeters) <
+                1.0e-9 &&
+        controlForcing[
+            centerIndex].
+            protection <
+                1.0e-9 &&
+        controlDrainage[
+            centerIndex].
+            authoredDrainage <
+                1.0e-9F,
+        "M30-11 un-authored control must not contain hidden canyon state.");
+
+    const auto boundary =
+        [](const f32 height)
+        {
+            return DrainageBoundaryCell{
+                .surfaceHeightMeters =
+                    height,
+                .conditionedHeightMeters =
+                    height,
+                .authoredDrainage = 0.0F,
+                .drainageAreaSquareMeters =
+                    0.0,
+                .dischargeCubicMetersPerSecond =
+                    0.0,
+                .flowDx = 0,
+                .flowDy = 0
+            };
+        };
+
+    DrainagePageHalo halo{};
+    halo.revision =
+        0x4D333043414E4841ULL;
+    halo.north.assign(
+        resolution,
+        boundary(400.0F));
+    halo.south.assign(
+        resolution,
+        boundary(400.0F));
+    halo.west.assign(
+        resolution,
+        boundary(400.0F));
+    halo.east.assign(
+        resolution,
+        boundary(100.0F));
+    halo.corners = {
+        boundary(400.0F),
+        boundary(400.0F),
+        boundary(400.0F),
+        boundary(400.0F)
+    };
+
+    StreamPowerErosionConfig config{};
+    config.iterations = 8U;
+    config.upliftCouplingPerIteration =
+        0.0;
+    config.authoredHeightRelaxation =
+        0.50;
+    config.incisionCoefficientMetersPerIteration =
+        2.0;
+    config.drainageExponent =
+        0.5;
+    config.slopeExponent =
+        1.0;
+    config.referenceDrainageAreaSquareMeters =
+        upstream.CellAreaSquareMeters();
+    config.referenceDischargeCubicMetersPerSecond =
+        1.0;
+    config.looseMaterialErodibility =
+        1.0;
+    config.minimumBedSlope =
+        1.0e-6;
+    config.maximumIncisionMetersPerIteration =
+        2.0;
+    config.drainage.depressionPolicy =
+        DepressionRoutingPolicy::
+            FillToBoundary;
+    config.drainage.minimumDrainageDropMeters =
+        0.01F;
+    config.drainage.authoredGuidanceWeight =
+        0.75F;
+
+    const auto authoredResult =
+        SolveStreamPowerErosion(
+            upstream,
+            key,
+            fixture.materials,
+            authoredDrainage,
+            halo,
+            authoredForcing,
+            config);
+
+    terrain::PhysicalTerrainPageKey controlKey =
+        key;
+
+    controlKey.revisions.authoring =
+        0U;
+
+    const auto controlResult =
+        SolveStreamPowerErosion(
+            upstream,
+            controlKey,
+            fixture.materials,
+            controlDrainage,
+            halo,
+            controlForcing,
+            config);
+
+    const auto& authoredCenter =
+        authoredResult.At(
+            resolution / 2U,
+            centerY);
+
+    const auto& controlCenter =
+        controlResult.At(
+            resolution / 2U,
+            centerY);
+
+    const auto& authoredDownstream =
+        authoredResult.At(
+            resolution - 2U,
+            centerY);
+
+    const auto& controlDownstream =
+        controlResult.At(
+            resolution - 2U,
+            centerY);
+
+    Require(
+        authoredCenter.
+            finalSurfaceHeightMeters <
+            controlCenter.
+                finalSurfaceHeightMeters -
+                10.0F,
+        "M30-11 M04 canyon must remain a large-scale depression after iterative M09/M10 regeneration.");
+
+    Require(
+        authoredDownstream.
+            finalDrainageAreaSquareMeters >
+            controlDownstream.
+                finalDrainageAreaSquareMeters +
+                upstream.
+                    CellAreaSquareMeters(),
+        "M30-11 authored canyon must attract additional contributing area instead of remaining a cosmetic height edit.");
+
+    Require(
+        authoredCenter.
+            cumulativeIncisionMeters >
+                0.0F &&
+        authoredCenter.
+            cumulativeIncisionMeters <
+            16.0F,
+        "M30-11 canyon must participate in real M10 erosion while M04 protection keeps the authored feature from becoming an immutable stamp or unrestricted carve.");
+
+    MaterialColumnPage baked =
+        upstream;
+
+    const auto bake =
+        ApplyStreamPowerErosionResult(
+            baked,
+            fixture.materials,
+            authoredResult);
+
+    Require(
+        bake.totalIncisionMeters >
+            0.0 &&
+        baked.At(
+            resolution / 2U,
+            centerY).
+            SurfaceHeightMeters() <
+            upstream.At(
+                resolution / 2U,
+                centerY).
+                SurfaceHeightMeters() -
+                10.0F,
+        "M30-11 authored canyon must bake through the normal M10→M08 physical path.");
+
+    MacroGeologyField regeneratedMacro(
+        planet,
+        globals,
+        &authored,
+        macroDesc);
+
+    const auto regeneratedForcing =
+        BuildStreamPowerForcing(
+            upstream,
+            key,
+            planet,
+            regeneratedMacro);
+
+    std::vector<DrainageCellInput>
+        regeneratedDrainage(
+            authoredDrainage.size());
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const std::size_t index =
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x;
+
+            regeneratedDrainage[index] = {
+                .runoffMetersPerSecond =
+                    0.001F,
+                .authoredDrainage =
+                    static_cast<f32>(
+                        regeneratedMacro.
+                            Sample(
+                                pagePosition(
+                                    x,
+                                    y)).
+                            drainageGuidance),
+                .outlet = false
+            };
+        }
+    }
+
+    const auto regeneratedResult =
+        SolveStreamPowerErosion(
+            upstream,
+            key,
+            fixture.materials,
+            regeneratedDrainage,
+            halo,
+            regeneratedForcing,
+            config);
+
+    Require(
+        regeneratedResult.revision ==
+            authoredResult.revision,
+        "M30-11 regenerating derived terrain from unchanged authored authority must reproduce the same M10 revision identity.");
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& a =
+                authoredResult.At(
+                    x,
+                    y);
+
+            const auto& b =
+                regeneratedResult.At(
+                    x,
+                    y);
+
+            Require(
+                a.finalSurfaceHeightMeters ==
+                        b.finalSurfaceHeightMeters &&
+                    a.cumulativeIncisionMeters ==
+                        b.cumulativeIncisionMeters &&
+                    a.finalDrainageAreaSquareMeters ==
+                        b.finalDrainageAreaSquareMeters &&
+                    a.finalDischargeCubicMetersPerSecond ==
+                        b.finalDischargeCubicMetersPerSecond &&
+                    a.finalFlowDx ==
+                        b.finalFlowDx &&
+                    a.finalFlowDy ==
+                        b.finalFlowDy &&
+                    a.finalFlowExitsPage ==
+                        b.finalFlowExitsPage,
+                "M30-11 authored canyon must survive complete derived-field regeneration bit-deterministically.");
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -3149,8 +3808,9 @@ int main()
     Test08CrossPageSedimentFlux();
     Test09CrossPageDuneMigration();
     Test10FastFlowDrainageReference();
+    Test11AuthoredCanyonPersistence();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 10/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 11/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
