@@ -58,8 +58,11 @@ class PanelContext
 {
 public:
     void Text(std::string_view text);
+    void MutedText(std::string_view text);
+    void Heading(std::string_view text);
     void Separator();
     [[nodiscard]] bool Button(std::string_view label);
+    [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
     [[nodiscard]] UiSize ContentAvailable() const;
     [[nodiscard]] bool Selectable(std::string_view label, bool selected);
