@@ -3,8 +3,10 @@
 
 #include <orbit/paths/PathNetwork.hpp>
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
+#include <variant>
 
 namespace orbit::editor_model::authoring_commands
 {
@@ -91,6 +93,60 @@ WorldSelectionEnablement(
     }
 
     return {};
+}
+
+[[nodiscard]] std::optional<std::string>
+OptionalStringArgument(
+    const commands::CommandArguments& arguments,
+    const std::string_view name)
+{
+    const auto found =
+        arguments.find(std::string(name));
+
+    if (found == arguments.end())
+    {
+        return std::nullopt;
+    }
+
+    const auto* value =
+        std::get_if<std::string>(
+            &found->second);
+
+    if (value == nullptr)
+    {
+        throw std::invalid_argument(
+            std::string(name) +
+            " must be a string.");
+    }
+
+    return *value;
+}
+
+[[nodiscard]] std::optional<f64>
+OptionalFloatArgument(
+    const commands::CommandArguments& arguments,
+    const std::string_view name)
+{
+    const auto found =
+        arguments.find(std::string(name));
+
+    if (found == arguments.end())
+    {
+        return std::nullopt;
+    }
+
+    const auto* value =
+        std::get_if<f64>(
+            &found->second);
+
+    if (value == nullptr)
+    {
+        throw std::invalid_argument(
+            std::string(name) +
+            " must be a float.");
+    }
+
+    return *value;
 }
 
 [[nodiscard]] commands::CommandEnablement
@@ -477,6 +533,305 @@ void Register(
                     {
                         commandService.RollbackTransaction();
                     }
+                    throw;
+                }
+            }
+    });
+
+    registry.Register({
+        .id = kCreateRockyPlanet,
+        .name = "Create Rocky Planet",
+        .category = "World",
+        .description =
+            "Create one spherical rocky body with a production Terrain Surface in a single undoable transaction.",
+        .parameters = {
+            commands::CommandParameter{
+                .name = "name",
+                .kind = commands::CommandValueKind::String,
+                .required = false
+            },
+            commands::CommandParameter{
+                .name = "radiusMeters",
+                .kind = commands::CommandValueKind::Float,
+                .required = false
+            },
+            commands::CommandParameter{
+                .name = "massKg",
+                .kind = commands::CommandValueKind::Float,
+                .required = false
+            }
+        },
+        .presentationSurfaces = {
+            "explorer.context",
+            "properties.toolbar"
+        },
+        .enablement =
+            [&objects, &selection]
+            {
+                return BodyParentEnablement(
+                    objects,
+                    selection);
+            },
+        .invoke =
+            [&objects,
+             &commandService,
+             &selection](
+                const commands::CommandArguments& arguments)
+            {
+                const auto enabled =
+                    BodyParentEnablement(
+                        objects,
+                        selection);
+
+                if (!enabled.enabled)
+                {
+                    throw std::invalid_argument(
+                        enabled.reason);
+                }
+
+                const f64 radiusMeters =
+                    OptionalFloatArgument(
+                        arguments,
+                        "radiusMeters").
+                        value_or(
+                            6'000'000.0);
+
+                const f64 massKg =
+                    OptionalFloatArgument(
+                        arguments,
+                        "massKg").
+                        value_or(
+                            5.0e24);
+
+                if (!std::isfinite(radiusMeters) ||
+                    radiusMeters <= 0.0)
+                {
+                    throw std::invalid_argument(
+                        "Rocky planet radius must be finite and positive.");
+                }
+
+                if (!std::isfinite(massKg) ||
+                    massKg < 0.0)
+                {
+                    throw std::invalid_argument(
+                        "Rocky planet mass must be finite and non-negative.");
+                }
+
+                const auto selectedId =
+                    selection.Ordered().front();
+
+                const auto selectedObject =
+                    objects.Find(
+                        selectedId);
+
+                if (!selectedObject.has_value())
+                {
+                    throw std::invalid_argument(
+                        "The selected rocky-planet parent no longer exists.");
+                }
+
+                const bool ownsTransaction =
+                    !commandService.
+                        HasActiveTransaction();
+
+                if (ownsTransaction)
+                {
+                    commandService.BeginTransaction(
+                        "Create Rocky Planet");
+                }
+
+                try
+                {
+                    scene::ObjectId systemId =
+                        selectedId;
+
+                    if (selectedObject->type ==
+                        builtin::kWorldType)
+                    {
+                        bool foundSystem = false;
+
+                        for (const auto& child :
+                             objects.Children(
+                                 selectedId))
+                        {
+                            if (child.type ==
+                                builtin::
+                                    kCelestialSystemType)
+                            {
+                                systemId =
+                                    child.id;
+                                foundSystem = true;
+                                break;
+                            }
+                        }
+
+                        if (!foundSystem)
+                        {
+                            systemId =
+                                commandService.
+                                    CreateObject(
+                                        builtin::
+                                            kCelestialSystemType,
+                                        "Celestial System 1",
+                                        selectedId);
+
+                            commandService.
+                                SetProperty(
+                                    systemId,
+                                    builtin::
+                                        kSystemEpochMicroseconds,
+                                    i64{0});
+                        }
+                    }
+
+                    u32 bodyCount = 0U;
+
+                    for (const auto& child :
+                         objects.Children(
+                             systemId))
+                    {
+                        if (child.type ==
+                            builtin::
+                                kCelestialBodyType)
+                        {
+                            ++bodyCount;
+                        }
+                    }
+
+                    std::string bodyName =
+                        "Rocky Planet " +
+                        std::to_string(
+                            bodyCount + 1U);
+
+                    if (const auto requested =
+                            OptionalStringArgument(
+                                arguments,
+                                "name");
+                        requested.has_value())
+                    {
+                        if (requested->empty())
+                        {
+                            throw std::invalid_argument(
+                                "Rocky planet name must not be empty.");
+                        }
+
+                        bodyName =
+                            *requested;
+                    }
+
+                    const auto body =
+                        commandService.
+                            CreateObject(
+                                builtin::
+                                    kCelestialBodyType,
+                                bodyName,
+                                systemId);
+
+                    commandService.SetProperty(
+                        body,
+                        builtin::
+                            kBodyEllipsoidEnabled,
+                        false);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyRadius,
+                        radiusMeters);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyPolarRadius,
+                        radiusMeters);
+                    commandService.SetProperty(
+                        body,
+                        builtin::kBodyMass,
+                        massKg);
+                    commandService.SetProperty(
+                        body,
+                        builtin::
+                            kBodyParentPositionMeters,
+                        math::Double3{});
+                    commandService.SetProperty(
+                        body,
+                        builtin::
+                            kBodyRotationPeriodSeconds,
+                        86'400.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::
+                            kBodyAxialTiltDegrees,
+                        0.0);
+                    commandService.SetProperty(
+                        body,
+                        builtin::
+                            kBodyRotationPhaseDegrees,
+                        0.0);
+
+                    const auto terrain =
+                        commandService.
+                            CreateObject(
+                                world_model::
+                                    kTerrainSurfaceType,
+                                "Terrain Surface",
+                                body);
+
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::kTerrainSeed,
+                        i64{0x41535445525241LL});
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::
+                            kTerrainMacroAmplitudeMeters,
+                        1'200.0);
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::
+                            kTerrainMacroWavelengthMeters,
+                        800'000.0);
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::
+                            kTerrainDetailAmplitudeMeters,
+                        320.0);
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::
+                            kTerrainDetailWavelengthMeters,
+                        40'000.0);
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::
+                            kTerrainDetailOctaves,
+                        i64{10});
+                    commandService.SetProperty(
+                        terrain,
+                        world_model::
+                            kTerrainMaximumElevationMeters,
+                        8'000.0);
+
+                    if (ownsTransaction)
+                    {
+                        commandService.
+                            CommitTransaction();
+                    }
+
+                    const scene::ObjectId
+                        selected[] = {
+                            body
+                        };
+
+                    selection.Set(
+                        selected);
+                }
+                catch (...)
+                {
+                    if (ownsTransaction &&
+                        commandService.
+                            HasActiveTransaction())
+                    {
+                        commandService.
+                            RollbackTransaction();
+                    }
+
                     throw;
                 }
             }
