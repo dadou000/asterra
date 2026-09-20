@@ -1110,6 +1110,54 @@ bool EditorUi::UnregisterPanel(
     return false;
 }
 
+bool EditorUi::HasPanel(
+    const PanelId id) const noexcept
+{
+    return std::ranges::any_of(
+        impl_->panels,
+        [id](const PanelDefinition& panel)
+        {
+            return panel.id == id;
+        });
+}
+
+bool EditorUi::SetPanelOpen(
+    const PanelId id,
+    const bool open) noexcept
+{
+    for (std::size_t index = 0;
+         index < impl_->panels.size();
+         ++index)
+    {
+        if (impl_->panels[index].id != id)
+        {
+            continue;
+        }
+
+        impl_->panelOpen[index] =
+            open ? 1U : 0U;
+        return true;
+    }
+
+    return false;
+}
+
+bool EditorUi::PanelOpen(
+    const PanelId id) const noexcept
+{
+    for (std::size_t index = 0;
+         index < impl_->panels.size();
+         ++index)
+    {
+        if (impl_->panels[index].id == id)
+        {
+            return impl_->panelOpen[index] != 0U;
+        }
+    }
+
+    return false;
+}
+
 void EditorUi::RegisterMenuAction(
     MenuAction action)
 {
