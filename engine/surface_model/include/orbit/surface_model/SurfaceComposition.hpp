@@ -2,7 +2,7 @@
 
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/surface/SurfaceRegistry.hpp>
-#include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/surface_model/TerrainBodyServices.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
 
@@ -47,9 +47,29 @@ public:
     [[nodiscard]] std::optional<scene::ObjectId>
     TerrainObjectForBody(universe::BodyId body) const noexcept;
 
+    [[nodiscard]] TerrainBodyServices* ServicesForBody(
+        universe::BodyId body) noexcept;
+    [[nodiscard]] const TerrainBodyServices* ServicesForBody(
+        universe::BodyId body) const noexcept;
+
+    [[nodiscard]] terrain_geology::GeologicalMaterialLibrary* GeologyForBody(
+        universe::BodyId body) noexcept;
+    [[nodiscard]] const terrain_geology::GeologicalMaterialLibrary* GeologyForBody(
+        universe::BodyId body) const noexcept;
+
+    [[nodiscard]] TerrainProcessService* ProcessesForBody(
+        universe::BodyId body) noexcept;
+    [[nodiscard]] const TerrainProcessService* ProcessesForBody(
+        universe::BodyId body) const noexcept;
+
     [[nodiscard]] terrain_biome::BiomeService* BiomesForBody(
         universe::BodyId body) noexcept;
     [[nodiscard]] const terrain_biome::BiomeService* BiomesForBody(
+        universe::BodyId body) const noexcept;
+
+    [[nodiscard]] terrain_gpu::PersistentGpuTerrainCache* CacheForBody(
+        universe::BodyId body) noexcept;
+    [[nodiscard]] const terrain_gpu::PersistentGpuTerrainCache* CacheForBody(
         universe::BodyId body) const noexcept;
 
     [[nodiscard]] u64 SourceRevision() const noexcept;
@@ -62,8 +82,8 @@ private:
         terrainObjectByBody_;
     std::unordered_map<
         universe::BodyId,
-        std::unique_ptr<terrain_biome::BiomeService>>
-        biomesByBody_;
+        std::unique_ptr<TerrainBodyServices>>
+        servicesByBody_;
     u64 sourceRevision_{~u64{0}};
 };
 } // namespace orbit::surface_model
