@@ -1049,8 +1049,17 @@ target_link_libraries(OrbitV004IntegrationGateTests
         Orbit::Documents
         Orbit::Scene
         Orbit::Schema
+        Orbit::SurfaceAuthoring
         Orbit::SurfaceModel
         Orbit::Terrain
+        Orbit::TerrainBiome
+        Orbit::TerrainErosion
+        Orbit::TerrainGeology
+        Orbit::TerrainHydrology
+        Orbit::TerrainMacroGeology
+        Orbit::TerrainMaterialColumn
+        Orbit::TerrainRender
+        Orbit::TerrainScatter
         Orbit::WorldModel
         SQLiteCpp
 )
