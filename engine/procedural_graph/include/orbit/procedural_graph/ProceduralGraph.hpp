@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -103,6 +104,12 @@ public:
     void Invalidate(NodeId node);
 
     void RequestBuild(NodeId target);
+
+    // Removes a closed subgraph only when none of its nodes are building and
+    // no surviving node depends on it. Returns false instead of blocking on
+    // in-flight work.
+    [[nodiscard]] bool RemoveNodes(
+        std::span<const NodeId> nodes);
 
     // Finalizes completed jobs and schedules newly-ready work.
     void Poll();
