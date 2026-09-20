@@ -77,6 +77,11 @@ public:
         rhi::Buffer& downstreamOut,
         rhi::Buffer& netElevationDeltaOut) const;
 
+    // Exact fixed working-set bytes used while building one physical
+    // region page. Output buffers are excluded because they become the
+    // persistent solved page rather than transient scratch.
+    [[nodiscard]] u64 TransientWorkingSetBytes() const noexcept;
+
 private:
     u32 maxResolution_;
     const GpuFieldGenerator& generator_;
