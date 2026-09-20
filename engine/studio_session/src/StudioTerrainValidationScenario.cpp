@@ -9,11 +9,14 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace orbit::studio_session
@@ -602,12 +605,13 @@ RunStudioTerrainValidationScenario(
             runtime->cacheStats;
 
         if (!report.debugPhysicalLodAvailable ||
+            !report.debugBiomeWeightsAvailable ||
             report.debugFieldsAvailable == 0U)
         {
             Fail(
                 report,
                 "inspect-m29",
-                "M29 page did not expose the required physical-LOD diagnostic field.");
+                "M29 page did not expose the required physical-LOD and biome-weight diagnostic fields.");
             return report;
         }
 
