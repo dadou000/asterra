@@ -1,0 +1,39 @@
+name: Orbit Studio Real Device Smoke
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: orbit-studio-real-device-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terrain-ui-real-device:
+    # Register the development machine (or another Vulkan-capable Windows host)
+    # with these labels. GitHub-hosted Windows runners are intentionally not
+    # used because this gate must exercise an actual Vulkan render device.
+    runs-on: [self-hosted, Windows, X64, orbit-vulkan]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Vulkan device
+        shell: pwsh
+        run: |
+          if (-not (Get-Command vulkaninfo -ErrorAction SilentlyContinue)) {
+            throw "vulkaninfo is not available. Install the Vulkan SDK/runtime on the GPU runner."
+          }
+          vulkaninfo --summary
+          if ($LASTEXITCODE -ne 0) {
+            throw "No working Vulkan device was detected."
+          }
+
+      - name: Configure
+        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build Orbit Studio
+        run: cmake --build build --config Release --target OrbitStudio --parallel
+
+      - name: Run real-device terrain UI smoke
+        shell: cmd
+        run: run_terrain_ui_smoke.bat release nobuild nopause
