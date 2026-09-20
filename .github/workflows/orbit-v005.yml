@@ -51,5 +51,5 @@ jobs:
       - name: Configure
         run: cmake -S . -B build-v005 -DORBIT_WARNINGS_AS_ERRORS=ON
 
-      - name: Build and run V0.0.5 validation
-        run: cmake --build build-v005 --config Release --target OrbitV005Validation
+      - name: Build and run V0.0.5 final integration gate
+        run: cmake --build build-v005 --config Release --target OrbitV005IntegrationGate
