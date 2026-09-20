@@ -115,6 +115,7 @@ int main()
         Check(initialUniverseGeneration != 0);
 
         const auto idleTick = studio.Tick();
+        Check(!idleTick.compositionChanged);
         Check(
             idleTick.worldGeneration ==
             initialWorldGeneration);
@@ -128,6 +129,7 @@ int main()
                 "Asterra",
                 6'000'000.0);
         const auto composedTick = studio.Tick();
+        Check(composedTick.compositionChanged);
         Check(
             composedTick.universeGeneration >
             initialUniverseGeneration);
@@ -139,6 +141,7 @@ int main()
         const auto stableUniverseGeneration =
             studio.World().UniverseGeneration();
         const auto noOpTick = studio.Tick();
+        Check(!noOpTick.compositionChanged);
         Check(
             noOpTick.universeGeneration ==
             stableUniverseGeneration);
