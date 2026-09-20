@@ -978,6 +978,7 @@ add_executable(OrbitV004ValidationTests
 target_link_libraries(OrbitV004ValidationTests
     PRIVATE
         Orbit::SurfaceAuthoring
+        Orbit::SurfaceModel
         Orbit::TerrainBiome
         Orbit::TerrainErosion
         Orbit::TerrainGeology
@@ -985,6 +986,7 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::TerrainMacroGeology
         Orbit::TerrainMaterialColumn
         Orbit::TerrainRegion
+        Orbit::TerrainRender
 )
 
 target_compile_definitions(OrbitV004ValidationTests
