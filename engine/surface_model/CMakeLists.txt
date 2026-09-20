@@ -1,6 +1,7 @@
 add_library(OrbitSurfaceModel STATIC
     src/SurfaceComposition.cpp
     src/SurfaceMaterialResolver.cpp
+    src/TerrainBodyServices.cpp
 )
 
 add_library(Orbit::SurfaceModel ALIAS OrbitSurfaceModel)
@@ -17,7 +18,11 @@ target_link_libraries(OrbitSurfaceModel
         Orbit::Surface
         Orbit::Terrain
         Orbit::TerrainBiome
+        Orbit::TerrainErosion
+        Orbit::TerrainGeology
+        Orbit::TerrainGpu
         Orbit::TerrainMaterialColumn
+        Orbit::TerrainWater
         Orbit::Universe
         Orbit::WorldModel
 )
