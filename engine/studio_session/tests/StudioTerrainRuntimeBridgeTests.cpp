@@ -397,10 +397,21 @@ int main()
                 Catalog().size() ==
             1U);
 
-        // Recreating a viewport cannot change physical identity when its
-        // canonical observer is the same default position.
-        studio.Viewports().Unregister(
-            "studio.primary");
+        // Recreating a viewport in the same world/body preserves its
+        // presentation observer. Physical page identity therefore remains
+        // identical and still contains no viewport or clipmap-slot identity.
+        const auto pageBeforeRecreate =
+            edited->
+                observerPhysicalPage;
+
+        const auto observerBeforeRecreate =
+            edited->
+                observer;
+
+        static_cast<void>(
+            studio.Viewports().
+                Unregister(
+                    "studio.primary"));
 
         static_cast<void>(
             studio.Tick());
@@ -428,27 +439,14 @@ int main()
                     "studio.primary");
 
         Check(recreated.has_value());
-
-        // Recreated viewport defaults to the same canonical +X observer as a
-        // clean runtime. Physical identity is a planet/direction/page-level
-        // function and contains no viewport or clipmap slot identifier.
-        const orbit::terrain::
-            PhysicalTerrainPageAddress
-            expectedDefaultPage{
-                .planet =
-                    recreated->planet.id,
-                .tile =
-                    orbit::world::
-                        TileForDirection(
-                            {1.0, 0.0, 0.0},
-                            recreated->
-                                physicalPageLevel)
-            };
-
+        Check(
+            recreated->observer.meters ==
+                observerBeforeRecreate.
+                    meters);
         Check(
             recreated->
                 observerPhysicalPage ==
-            expectedDefaultPage);
+            pageBeforeRecreate);
 
         // A non-terrain body is a valid viewport target but has no terrain
         // runtime bridge.
