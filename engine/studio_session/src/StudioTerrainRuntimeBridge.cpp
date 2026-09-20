@@ -141,6 +141,8 @@ struct StudioTerrainRuntimeBridge::RuntimeState
         requests;
 };
 
+StudioTerrainRuntimeBridge::~StudioTerrainRuntimeBridge() = default;
+
 bool StudioTerrainRuntimeConfig::IsValid() const noexcept
 {
     return

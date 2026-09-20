@@ -93,6 +93,8 @@ public:
         terrain_debug::TerrainDebugLivePages& debugPages,
         StudioTerrainRuntimeConfig config = {});
 
+    ~StudioTerrainRuntimeBridge();
+
     StudioTerrainRuntimeBridge(
         const StudioTerrainRuntimeBridge&) = delete;
     StudioTerrainRuntimeBridge& operator=(
