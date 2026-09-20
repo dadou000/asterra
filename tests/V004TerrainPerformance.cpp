@@ -2,14 +2,20 @@
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain_gpu/GpuAeolianErosionPage.hpp>
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
+#include <orbit/terrain_gpu/GpuHydraulicErosionPage.hpp>
 #include <orbit/terrain_gpu/GpuHydrologyRegion.hpp>
+#include <orbit/terrain_gpu/GpuMaterialColumnResources.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
+#include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <iomanip>
@@ -18,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -26,6 +33,7 @@ using namespace orbit;
 constexpr u32 kResolution = 129U;
 constexpr u32 kWarmupRuns = 2U;
 constexpr u32 kMeasuredRuns = 7U;
+constexpr u32 kCacheProbeCount = 256U;
 
 [[nodiscard]] std::string CsvEscape(
     const std::string_view value)
@@ -69,6 +77,9 @@ struct PerformanceRecord
     f64 pageGenerationGpuMedianMs{0.0};
     u64 peakTransientBytes{0U};
     u64 persistentPageBytes{0U};
+    f64 cacheHitRatePercent{0.0};
+    f64 hydraulicIterationGpuMedianMs{0.0};
+    f64 aeolianIterationGpuMedianMs{0.0};
 };
 
 void WriteRecord(
@@ -102,6 +113,33 @@ void WriteRecord(
         << ",persistent_page_memory,"
         << record.persistentPageBytes
         << ",bytes,1\n";
+
+    output
+        << "orbit_v004_m30,"
+        << CsvEscape(record.adapter)
+        << ',' << kResolution
+        << ",cache_hit_rate,"
+        << std::fixed << std::setprecision(6)
+        << record.cacheHitRatePercent
+        << ",percent," << kCacheProbeCount << '\n';
+
+    output
+        << "orbit_v004_m30,"
+        << CsvEscape(record.adapter)
+        << ',' << kResolution
+        << ",hydraulic_iteration_gpu_time,"
+        << std::fixed << std::setprecision(6)
+        << record.hydraulicIterationGpuMedianMs
+        << ",ms," << kMeasuredRuns << '\n';
+
+    output
+        << "orbit_v004_m30,"
+        << CsvEscape(record.adapter)
+        << ',' << kResolution
+        << ",aeolian_iteration_gpu_time,"
+        << std::fixed << std::setprecision(6)
+        << record.aeolianIterationGpuMedianMs
+        << ",ms," << kMeasuredRuns << '\n';
 }
 } // namespace
 
@@ -154,12 +192,147 @@ int main(int argc, char** argv)
                 fieldGenerator,
                 kResolution);
 
+        terrain_geology::GeologicalMaterialLibrary
+            geology;
+
+        geology.Upsert({
+            .id =
+                terrain_geology::
+                    reference_rock::Basalt,
+            .name =
+                "M30 performance basalt",
+            .hardness = 0.82F,
+            .cohesion = 0.78F,
+            .hydraulicErodibility = 0.34F,
+            .aeolianErodibility = 0.24F,
+            .permeability = 0.18F,
+            .chemicalWeatherability = 0.22F,
+            .fractureTendency = 0.36F,
+            .density = 2'900.0F
+        });
+
+        const auto geologyTable =
+            geology.BuildGpuTable();
+
+        terrain_material_column::
+            MaterialColumnPage materialPage(
+                kResolution,
+                4.0);
+
+        for (u32 y = 0U;
+             y < kResolution;
+             ++y)
+        {
+            for (u32 x = 0U;
+                 x < kResolution;
+                 ++x)
+            {
+                materialPage.SetCell(
+                    x,
+                    y,
+                    {
+                        .bedrockHeightMeters =
+                            1'000.0F -
+                            static_cast<f32>(x) *
+                                0.35F +
+                            static_cast<f32>(y) *
+                                0.05F,
+                        .referenceBedrockHeightMeters =
+                            1'000.0F -
+                            static_cast<f32>(x) *
+                                0.35F +
+                            static_cast<f32>(y) *
+                                0.05F,
+                        .bedrockMaterial =
+                            terrain_geology::
+                                reference_rock::Basalt,
+                        .regolithMeters = 0.15F,
+                        .soilMeters = 0.20F,
+                        .sandMeters = 0.18F,
+                        .debrisMeters = 0.02F,
+                        .moisture = 0.12F,
+                        .temporaryScalar = 0.0F
+                    });
+            }
+        }
+
+        const auto packedMaterial =
+            terrain_material_column::
+                PackGpuPage(
+                    materialPage,
+                    geologyTable);
+
+        terrain_gpu::GpuMaterialColumnResources
+            hydraulicMaterial(
+                *device,
+                kResolution);
+
+        terrain_gpu::GpuMaterialColumnResources
+            aeolianMaterial(
+                *device,
+                kResolution);
+
+        terrain_gpu::GpuHydraulicErosionPage
+            hydraulic(
+                *device,
+                shaderCompiler,
+                kResolution,
+                static_cast<u32>(
+                    geologyTable.materials.size()));
+
+        terrain_gpu::GpuAeolianErosionPage
+            aeolian(
+                *device,
+                shaderCompiler,
+                kResolution,
+                static_cast<u32>(
+                    geologyTable.materials.size()));
+
+        hydraulic.UploadGeologyTable(
+            geologyTable);
+
+        aeolian.UploadGeologyTable(
+            geologyTable);
+
         const u64 cells =
             static_cast<u64>(kResolution) *
             kResolution;
 
         const u64 scalarBytes =
             cells * sizeof(f32);
+
+        auto windForcing =
+            device->CreateBuffer({
+                .sizeBytes =
+                    cells *
+                    sizeof(f32) *
+                    4U,
+                .usage =
+                    rhi::BufferUsage::Structured,
+                .memory =
+                    rhi::MemoryUsage::HostVisible,
+                .initialState =
+                    rhi::ResourceState::ShaderResource
+            });
+
+        {
+            std::vector<std::array<f32, 4U>>
+                wind(
+                    static_cast<std::size_t>(
+                        cells),
+                    {14.0F, 1.5F, 0.10F, 0.0F});
+
+            std::byte* mapped =
+                windForcing->Map();
+
+            std::memcpy(
+                mapped,
+                wind.data(),
+                wind.size() *
+                    sizeof(wind.front()));
+
+            windForcing->Unmap();
+        }
 
         auto rawElevation =
             MakeOutputBuffer(
@@ -241,99 +414,178 @@ int main(int argc, char** argv)
                 .erosion = {}
             };
 
-        std::array<
-            f64,
-            kMeasuredRuns>
-            measuredMs{};
-
         u64 fenceValue = 0U;
 
-        const u32 totalRuns =
-            kWarmupRuns +
-            kMeasuredRuns;
-
-        for (u32 run = 0U;
-             run < totalRuns;
-             ++run)
-        {
-            allocator->Reset();
-            commandList->Reset(
-                *allocator);
-
-            commandList->
-                ResetTimestampQueryPool(
-                    *timestamps,
-                    0U,
-                    2U);
-
-            commandList->
-                WriteTimestamp(
-                    *timestamps,
-                    0U);
-
-            hydrology.Dispatch(
-                *commandList,
-                request,
-                *rawElevation,
-                *drainage,
-                *accumulation,
-                *downstream,
-                *netElevationDelta);
-
-            commandList->
-                WriteTimestamp(
-                    *timestamps,
-                    1U);
-
-            commandList->Close();
-
-            queue->Submit(
-                *commandList);
-
-            ++fenceValue;
-            queue->Signal(
-                *fence,
-                fenceValue);
-
-            fence->Wait(
-                fenceValue);
-
-            std::array<u64, 2U>
-                ticks{};
-
-            if (!timestamps->
-                    TryGetResults(
-                        0U,
-                        2U,
-                        ticks.data()) ||
-                ticks[1] < ticks[0])
+        const auto measureGpuMedianMs =
+            [&](auto&& prepare,
+                auto&& measured)
             {
-                throw std::runtime_error(
-                    "GPU page-generation timestamp query was unavailable.");
-            }
+                std::array<
+                    f64,
+                    kMeasuredRuns>
+                    measuredMs{};
 
-            if (run >=
-                kWarmupRuns)
-            {
-                measuredMs[
-                    run -
-                    kWarmupRuns] =
-                    static_cast<f64>(
-                        ticks[1] -
-                        ticks[0]) *
-                    timestampPeriodNs /
-                    1.0e6;
-            }
-        }
+                const u32 totalRuns =
+                    kWarmupRuns +
+                    kMeasuredRuns;
 
-        std::sort(
-            measuredMs.begin(),
-            measuredMs.end());
+                for (u32 run = 0U;
+                     run < totalRuns;
+                     ++run)
+                {
+                    allocator->Reset();
+
+                    commandList->Reset(
+                        *allocator);
+
+                    commandList->
+                        ResetTimestampQueryPool(
+                            *timestamps,
+                            0U,
+                            2U);
+
+                    prepare(
+                        *commandList);
+
+                    commandList->
+                        WriteTimestamp(
+                            *timestamps,
+                            0U);
+
+                    measured(
+                        *commandList);
+
+                    commandList->
+                        WriteTimestamp(
+                            *timestamps,
+                            1U);
+
+                    commandList->Close();
+
+                    queue->Submit(
+                        *commandList);
+
+                    ++fenceValue;
+
+                    queue->Signal(
+                        *fence,
+                        fenceValue);
+
+                    fence->Wait(
+                        fenceValue);
+
+                    std::array<u64, 2U>
+                        ticks{};
+
+                    if (!timestamps->
+                            TryGetResults(
+                                0U,
+                                2U,
+                                ticks.data()) ||
+                        ticks[1] <
+                            ticks[0])
+                    {
+                        throw std::runtime_error(
+                            "GPU performance timestamp query was unavailable.");
+                    }
+
+                    if (run >=
+                        kWarmupRuns)
+                    {
+                        measuredMs[
+                            run -
+                            kWarmupRuns] =
+                            static_cast<f64>(
+                                ticks[1] -
+                                ticks[0]) *
+                            timestampPeriodNs /
+                            1.0e6;
+                    }
+                }
+
+                std::sort(
+                    measuredMs.begin(),
+                    measuredMs.end());
+
+                return
+                    measuredMs[
+                        measuredMs.size() /
+                        2U];
+            };
 
         const f64 medianGpuMs =
-            measuredMs[
-                measuredMs.size() /
-                2U];
+            measureGpuMedianMs(
+                [](rhi::CommandList&)
+                {
+                },
+                [&](rhi::CommandList& list)
+                {
+                    hydrology.Dispatch(
+                        list,
+                        request,
+                        *rawElevation,
+                        *drainage,
+                        *accumulation,
+                        *downstream,
+                        *netElevationDelta);
+                });
+
+        const terrain_gpu::
+            GpuHydraulicErosionConfig
+            hydraulicConfig{};
+
+        const f64 hydraulicIterationMs =
+            measureGpuMedianMs(
+                [&](rhi::CommandList& list)
+                {
+                    hydraulicMaterial.Upload(
+                        list,
+                        packedMaterial);
+
+                    hydraulic.Reset(
+                        list,
+                        kResolution,
+                        0.01F,
+                        0.0F);
+                },
+                [&](rhi::CommandList& list)
+                {
+                    hydraulic.DispatchSteps(
+                        list,
+                        kResolution,
+                        4.0F,
+                        1U,
+                        hydraulicConfig,
+                        hydraulicMaterial);
+                });
+
+        const terrain_gpu::
+            GpuAeolianErosionConfig
+            aeolianConfig{};
+
+        const f64 aeolianIterationMs =
+            measureGpuMedianMs(
+                [&](rhi::CommandList& list)
+                {
+                    aeolianMaterial.Upload(
+                        list,
+                        packedMaterial);
+
+                    aeolian.Reset(
+                        list,
+                        kResolution);
+                },
+                [&](rhi::CommandList& list)
+                {
+                    aeolian.DispatchSteps(
+                        list,
+                        kResolution,
+                        4.0F,
+                        1U,
+                        aeolianConfig,
+                        aeolianMaterial,
+                        *windForcing);
+                });
 
         auto cachedPage =
             std::make_shared<
@@ -406,6 +658,62 @@ int main(int argc, char** argv)
                 "M26 persistent page byte accounting diverged from the inserted solved page.");
         }
 
+        terrain_gpu::
+            PersistentGpuTerrainCache
+            hitRateCache({
+                .maximumResidentBytes =
+                    64ULL *
+                    1024ULL *
+                    1024ULL,
+                .maximumPages = 8U
+            });
+
+        u64 hitRateGeneratorCalls = 0U;
+
+        for (u32 probe = 0U;
+             probe < kCacheProbeCount;
+             ++probe)
+        {
+            static_cast<void>(
+                hitRateCache.GetOrCreate(
+                    cacheKey,
+                    [&]()
+                    {
+                        ++hitRateGeneratorCalls;
+                        return cachedPage;
+                    }));
+        }
+
+        const auto hitRateStats =
+            hitRateCache.Stats();
+
+        const u64 cacheLookups =
+            hitRateStats.hits +
+            hitRateStats.misses;
+
+        if (hitRateGeneratorCalls !=
+                1U ||
+            hitRateStats.generations !=
+                1U ||
+            hitRateStats.misses !=
+                1U ||
+            hitRateStats.hits !=
+                kCacheProbeCount -
+                    1U ||
+            cacheLookups !=
+                kCacheProbeCount)
+        {
+            throw std::runtime_error(
+                "M26 controlled cache-hit workload did not produce one cold generation followed by resident hits.");
+        }
+
+        const f64 cacheHitRatePercent =
+            100.0 *
+            static_cast<f64>(
+                hitRateStats.hits) /
+            static_cast<f64>(
+                cacheLookups);
+
         const PerformanceRecord record{
             .adapter =
                 std::string(
@@ -417,7 +725,13 @@ int main(int argc, char** argv)
                     TransientWorkingSetBytes(),
             .persistentPageBytes =
                 cacheStats.
-                    residentBytes
+                    residentBytes,
+            .cacheHitRatePercent =
+                cacheHitRatePercent,
+            .hydraulicIterationGpuMedianMs =
+                hydraulicIterationMs,
+            .aeolianIterationGpuMedianMs =
+                aeolianIterationMs
         };
 
         WriteRecord(
