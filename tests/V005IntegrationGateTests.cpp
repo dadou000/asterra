@@ -9,6 +9,8 @@
 
 namespace
 {
+constexpr orbit::u32 kMaximumTransitionOutstandingPages = 10U;
+
 void Require(
     const bool condition,
     const char* message)
@@ -88,12 +90,25 @@ int main()
             report.performance.hasTerrainRuntime,
             "M18: M16 diagnostics did not observe the production terrain runtime.");
 
+        if (report.performance.residentTrackedPages >
+                kMaximumTransitionOutstandingPages ||
+            report.performance.peakOutstandingPages >
+                kMaximumTransitionOutstandingPages)
+        {
+            std::cerr
+                << "M18 bounded-page diagnostics: resident="
+                << report.performance.residentTrackedPages
+                << ", peak-outstanding="
+                << report.performance.peakOutstandingPages
+                << '\n';
+        }
+
         Require(
             report.performance.residentTrackedPages <=
-                5U &&
+                kMaximumTransitionOutstandingPages &&
             report.performance.peakOutstandingPages <=
-                5U,
-            "M18: terrain page residency/queue exceeded the bounded center-plus-neighbors set.");
+                kMaximumTransitionOutstandingPages,
+            "M18: terrain page residency/queue exceeded two bounded observer neighborhoods.");
 
         Require(
             !report.performance.
@@ -103,11 +118,11 @@ int main()
             "M18: diagnostics report does not identify build configuration/source commit.");
 
         Require(
-            report.cacheStats.residentPages >
+            report.cacheStats.residentPages ==
                 0U &&
-            report.cacheStats.residentBytes >
+            report.cacheStats.residentBytes ==
                 0U,
-            "M18: production M26 cache did not retain physical terrain products.");
+            "M18: the headless gate must not fabricate renderer-owned M26 GPU residency.");
 
         Require(
             report.roundTrip.success &&

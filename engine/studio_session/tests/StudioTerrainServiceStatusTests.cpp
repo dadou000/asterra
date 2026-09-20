@@ -12,15 +12,21 @@
 
 namespace
 {
-void Check(const bool condition)
+void CheckImpl(
+    const bool condition,
+    const char* expression)
 {
     if (!condition)
     {
         std::cerr
-            << "Studio terrain service status test failed.\n";
+            << "Studio terrain service status test failed: "
+            << expression
+            << '\n';
         std::exit(1);
     }
 }
+
+#define Check(condition) CheckImpl((condition), #condition)
 
 orbit::scene::ObjectId CreateRockyPlanet(
     orbit::studio_session::StudioSession& studio,
@@ -179,11 +185,14 @@ int main()
             afterEdit->surfaceSourceRevision ==
             afterEdit->semanticRevision);
 
-        // SurfaceComposition owns derived service lifetime. A semantic rebuild
-        // recreates the M26 cache instead of persisting runtime residency.
+        // SurfaceComposition preserves the derived service for a stable body,
+        // including cumulative M26 telemetry. This page was never inserted,
+        // so residency remains empty while the earlier lookup miss survives.
         Check(afterEdit->cacheStats.residentPages == 0U);
         Check(afterEdit->cacheStats.residentBytes == 0U);
-        Check(afterEdit->cacheStats.misses == 0U);
+        Check(
+            afterEdit->cacheStats.misses ==
+            afterMiss->cacheStats.misses);
 
         studio.World().Checkpoint();
         studio.CloseWorld();

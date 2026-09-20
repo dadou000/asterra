@@ -448,10 +448,11 @@ void TestLiveSeamInspectionClassifiesAllStates()
     auto northStamp =
         MakeStamp(
             northAddress.tile);
-    live.Publish(
-        MakeUniformSoilPage(
-            northStamp,
-            1.0F));
+    static_cast<void>(
+        live.Publish(
+            MakeUniformSoilPage(
+                northStamp,
+                1.0F)));
 
     const auto eastAddress =
         terrain_debug::ExpectedNeighbor(
@@ -463,10 +464,11 @@ void TestLiveSeamInspectionClassifiesAllStates()
     eastStamp.physicalLod =
         static_cast<u8>(
             sourceStamp.physicalLod + 1U);
-    live.Publish(
-        MakeUniformSoilPage(
-            eastStamp,
-            1.0F));
+    static_cast<void>(
+        live.Publish(
+            MakeUniformSoilPage(
+                eastStamp,
+                1.0F)));
 
     const auto southAddress =
         terrain_debug::ExpectedNeighbor(
@@ -476,10 +478,11 @@ void TestLiveSeamInspectionClassifiesAllStates()
         MakeStamp(
             southAddress.tile);
     ++southStamp.revisions.geology;
-    live.Publish(
-        MakeUniformSoilPage(
-            southStamp,
-            1.0F));
+    static_cast<void>(
+        live.Publish(
+            MakeUniformSoilPage(
+                southStamp,
+                1.0F)));
 
     const auto westAddress =
         terrain_debug::ExpectedNeighbor(
@@ -488,11 +491,12 @@ void TestLiveSeamInspectionClassifiesAllStates()
     auto westStamp =
         MakeStamp(
             westAddress.tile);
-    live.Publish(
-        MakeUniformSoilPage(
-            westStamp,
-            0.0F,
-            false));
+    static_cast<void>(
+        live.Publish(
+            MakeUniformSoilPage(
+                westStamp,
+                0.0F,
+                false)));
 
     inspections =
         terrain_debug::InspectTerrainDebugSeams(
@@ -540,10 +544,11 @@ void TestLiveSeamInspectionClassifiesAllStates()
                     FieldUnavailable,
         "A present neighbor without the selected field must stay unavailable.");
 
-    live.Publish(
-        MakeUniformSoilPage(
-            westStamp,
-            2.0F));
+    static_cast<void>(
+        live.Publish(
+            MakeUniformSoilPage(
+                westStamp,
+                2.0F)));
 
     inspections =
         terrain_debug::InspectTerrainDebugSeams(

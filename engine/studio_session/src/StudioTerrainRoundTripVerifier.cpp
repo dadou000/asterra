@@ -865,9 +865,9 @@ VerifyStudioTerrainRoundTrip(
 
         if (!afterSession.
                 TerrainRuntime().
-                SetObserver(
-                    kVerificationViewport,
-                    observer))
+                Capture(
+                    kVerificationViewport).
+                has_value())
         {
             static_cast<void>(
                 afterSession.
@@ -881,6 +881,16 @@ VerifyStudioTerrainRoundTrip(
                 "Could not restore the comparison observer after reopen.");
             return report;
         }
+
+        // SetObserver reports whether the observer changed. A freshly rebound
+        // viewport can already have this exact canonical observer, which is a
+        // successful restoration rather than an error.
+        static_cast<void>(
+            afterSession.
+                TerrainRuntime().
+                SetObserver(
+                    kVerificationViewport,
+                    observer));
 
         static_cast<void>(
             afterSession.Tick(false));

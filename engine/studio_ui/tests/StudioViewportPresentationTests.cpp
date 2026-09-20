@@ -212,18 +212,20 @@ void TestM29StudioAcceptance()
             sourceAddress);
 
     terrain_debug::TerrainDebugLivePages live;
-    live.Publish(source);
+    static_cast<void>(
+        live.Publish(source));
 
     for (u8 raw = 0U; raw < 4U; ++raw)
     {
         const auto edge =
             static_cast<world::TileEdge>(raw);
 
-        live.Publish(
-            MakeCompleteDebugPage(
-                terrain_debug::ExpectedNeighbor(
-                    sourceAddress,
-                    edge)));
+        static_cast<void>(
+            live.Publish(
+                MakeCompleteDebugPage(
+                    terrain_debug::ExpectedNeighbor(
+                        sourceAddress,
+                        edge))));
     }
 
     Check(

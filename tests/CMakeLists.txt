@@ -1102,10 +1102,9 @@ set(ORBIT_V005_VALIDATION_TESTS
     Orbit.StudioViewportNavigation
 )
 
-set_tests_properties(
-    ${ORBIT_V005_VALIDATION_TESTS}
-    PROPERTIES
-        LABELS "v005"
+list(JOIN ORBIT_V005_VALIDATION_TESTS "|" ORBIT_V005_VALIDATION_ALTERNATION)
+set(ORBIT_V005_VALIDATION_REGEX
+    "^(${ORBIT_V005_VALIDATION_ALTERNATION})$"
 )
 
 add_custom_target(OrbitV005Validation
@@ -1113,7 +1112,7 @@ add_custom_target(OrbitV005Validation
         ${CMAKE_CTEST_COMMAND}
         --test-dir ${CMAKE_BINARY_DIR}
         -C $<CONFIG>
-        -L v005
+        -R "${ORBIT_V005_VALIDATION_REGEX}"
         --output-on-failure
     DEPENDS
         OrbitStudioSessionTests
@@ -1128,6 +1127,7 @@ add_custom_target(OrbitV005Validation
         OrbitStudioTerrainPerformanceDiagnosticsTests
         OrbitStudioSurfacePickingTests
         OrbitStudioViewportNavigationTests
+    VERBATIM
     USES_TERMINAL
 )
 
@@ -1166,7 +1166,7 @@ add_custom_target(OrbitV005IntegrationGate
         ${CMAKE_CTEST_COMMAND}
         --test-dir ${CMAKE_BINARY_DIR}
         -C $<CONFIG>
-        -L v005
+        -R "^(${ORBIT_V005_VALIDATION_ALTERNATION}|Orbit.V005IntegrationGate)$"
         --output-on-failure
     DEPENDS
         OrbitStudio
@@ -1183,5 +1183,6 @@ add_custom_target(OrbitV005IntegrationGate
         OrbitStudioSurfacePickingTests
         OrbitStudioViewportNavigationTests
         OrbitV005IntegrationGateTests
+    VERBATIM
     USES_TERMINAL
 )

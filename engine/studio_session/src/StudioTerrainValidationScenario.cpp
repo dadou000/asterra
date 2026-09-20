@@ -546,6 +546,13 @@ RunStudioTerrainValidationScenario(
             return report;
         }
 
+        // Refresh the runtime-facing diagnostics after the page reaches Ready.
+        // A single focus transition may still retain completing pages from the
+        // previous five-page observer neighborhood; the M16 gate bounds that
+        // transition separately from steady-state renderer cache reuse.
+        static_cast<void>(
+            studio.Tick(false));
+
         AddStep(
             report,
             "wait-current-revision",
@@ -631,7 +638,7 @@ RunStudioTerrainValidationScenario(
             report,
             "inspect-cache-telemetry",
             true,
-            "Captured M26 cache counters from the active production terrain runtime.");
+            "Captured M26 cache counters; GPU residency remains renderer-owned in this headless scenario.");
 
         report.roundTrip =
             VerifyStudioTerrainRoundTrip(

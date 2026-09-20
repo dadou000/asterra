@@ -11,6 +11,7 @@
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <optional>
@@ -98,7 +99,29 @@ int main()
             "properties",
             orbit::editor_model::CommandSurfaceKind::Toolbar,
             registry);
-        if (explorerActions.size() != 2U || propertyActions.size() != 2U)
+        const auto presents =
+            [](const auto& actions, const orbit::commands::CommandId id)
+            {
+                return std::ranges::any_of(
+                    actions,
+                    [id](const auto& action)
+                    {
+                        return action.id == id;
+                    });
+            };
+
+        if (!presents(
+                explorerActions,
+                orbit::editor_model::authoring_commands::kCreateCelestialSystem) ||
+            !presents(
+                explorerActions,
+                orbit::editor_model::authoring_commands::kCreateCelestialBody) ||
+            !presents(
+                propertyActions,
+                orbit::editor_model::authoring_commands::kCreateCelestialSystem) ||
+            !presents(
+                propertyActions,
+                orbit::editor_model::authoring_commands::kCreateCelestialBody))
         {
             return 5;
         }

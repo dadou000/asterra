@@ -946,7 +946,7 @@ void TestAppliedChangeCallbackFiresAtAuthorityFlush()
                     "M06 callback must observe the completed M27 invalidation.");
 
                 const auto revisions =
-                    fixture.graph.Revisions(
+                    fixture.dependencies.Revisions(
                         address);
 
                 Require(
@@ -958,7 +958,7 @@ void TestAppliedChangeCallbackFiresAtAuthorityFlush()
             });
 
     const auto before =
-        fixture.graph.Revisions(
+        fixture.dependencies.Revisions(
             address);
 
     Require(
