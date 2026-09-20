@@ -21,6 +21,12 @@ public:
 
     void Register(editor_ui::EditorUi& ui);
 
+    // Used by the real-device Studio smoke gate to render the complete
+    // advanced authoring surface deterministically. Normal Studio leaves this
+    // disabled and preserves the user's progressive-disclosure choices.
+    void SetAutomationCoverageMode(
+        bool enabled) noexcept;
+
     inline static constexpr editor_ui::PanelId kPanel{
         .high = 0x4f52424954535455ULL,
         .low = 0x5355524641434534ULL
@@ -42,6 +48,7 @@ private:
 
     bool advancedBiome_{false};
     bool advancedProcesses_{false};
+    bool automationCoverageMode_{false};
     std::string status_;
 };
 } // namespace orbit::studio_ui
