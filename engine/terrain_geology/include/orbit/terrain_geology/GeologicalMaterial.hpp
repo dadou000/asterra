@@ -174,4 +174,7 @@ inline constexpr RockTypeId VolcanicAsh{
 // of silently replacing authored records.
 [[nodiscard]] GeologicalMaterialLibrary LoadGeologicalMaterialDirectory(
     const std::filesystem::path& directory);
+
+[[nodiscard]] GeologicalMaterialLibrary
+LoadReferenceGeologicalMaterialLibrary();
 } // namespace orbit::terrain_geology
