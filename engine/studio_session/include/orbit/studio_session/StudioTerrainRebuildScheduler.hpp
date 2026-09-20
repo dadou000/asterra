@@ -119,6 +119,11 @@ public:
     [[nodiscard]] bool ContainsPage(
         const terrain::PhysicalTerrainPageAddress& address) const noexcept;
 
+    // Releases a page that is no longer resident. Never blocks on jobs; an
+    // in-flight page returns false and can be retried on a later Studio tick.
+    [[nodiscard]] bool UnregisterPage(
+        const terrain::PhysicalTerrainPageAddress& address);
+
     // Debounced/coalesced authority change. No build is submitted here.
     void QueueChange(
         const terrain_dependency::TerrainInvalidationRequest& request);
