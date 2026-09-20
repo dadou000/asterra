@@ -432,6 +432,11 @@ void StudioTerrainRebuildScheduler::RefreshPage(
                 status->staleCompletions -
                 page.observedStaleCompletions[index];
             page.stalePulseTicks = 2U;
+
+            // A stale completion returns the M27 node to Dirty. Release the
+            // scheduler-side request latch so the newest generation can be
+            // submitted again on the next bounded scheduling pass.
+            page.requestedProducts &= ~bit;
         }
 
         page.observedStaleCompletions[index] =

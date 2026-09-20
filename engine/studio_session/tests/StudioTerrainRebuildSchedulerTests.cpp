@@ -537,6 +537,97 @@ void TestBoundedRequestBudgetAcrossPages()
         "A one-request frame budget must leave at least one dirty page unscheduled.");
 }
 
+void TestStaleBuildIsReplacedByLatestRevision()
+{
+    Fixture fixture({
+        .editDebounceSeconds = 0.0,
+        .maxBuildRequestsPerTick = 1U
+    });
+
+    const auto address =
+        MakeAddress(36U, 37U);
+
+    fixture.scheduler.RegisterPage(
+        address,
+        InitialRevisions());
+
+    DriveReady(
+        fixture,
+        address);
+
+    const u64 before =
+        fixture.Count(
+            terrain_dependency::TerrainDependencyProduct::Scatter);
+
+    fixture.Block(
+        terrain_dependency::TerrainDependencyProduct::Scatter);
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::TerrainChangeKind::BiomeScatter,
+            address.planet));
+    fixture.scheduler.Tick(0.0);
+
+    const auto building =
+        fixture.scheduler.PageStatus(
+            address);
+
+    Require(
+        building.has_value() &&
+        building->state ==
+            studio_session::TerrainRebuildState::BuildingGpu,
+        "First scatter revision must be building before the replacement edit.");
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::TerrainChangeKind::BiomeScatter,
+            address.planet));
+    fixture.scheduler.Tick(0.0);
+
+    fixture.Release();
+    fixture.jobs.WaitIdle();
+    fixture.scheduler.Tick(0.0);
+
+    const auto stale =
+        fixture.scheduler.PageStatus(
+            address);
+
+    Require(
+        stale.has_value() &&
+        stale->staleRejected > 0U,
+        "Completed work for the superseded scatter revision must be rejected as stale.");
+
+    DriveReady(
+        fixture,
+        address);
+
+    const auto revisions =
+        fixture.dependencies.Revisions(
+            address);
+
+    Require(
+        revisions.has_value() &&
+        revisions->biome ==
+            InitialRevisions().biome + 2U,
+        "Two committed scatter edit windows must advance the biome revision twice.");
+
+    Require(
+        fixture.Count(
+            terrain_dependency::TerrainDependencyProduct::Scatter) ==
+            before + 2U,
+        "The stale scatter build must be replaced exactly once by the latest requested revision.");
+
+    const auto ready =
+        fixture.scheduler.PageStatus(
+            address);
+
+    Require(
+        ready.has_value() &&
+        ready->state ==
+            studio_session::TerrainRebuildState::Ready,
+        "Latest revision must win and converge back to Ready after stale work is rejected.");
+}
+
 void TestStaleUploadCannotCommitOverNewRevision()
 {
     Fixture fixture;
@@ -607,6 +698,7 @@ int main()
     TestM27DescendantsOnly();
     TestCpuAndGpuBuildStates();
     TestBoundedRequestBudgetAcrossPages();
+    TestStaleBuildIsReplacedByLatestRevision();
     TestStaleUploadCannotCommitOverNewRevision();
 
     std::cout
