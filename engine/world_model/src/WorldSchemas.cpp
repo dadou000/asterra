@@ -1,4 +1,4 @@
-#include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>\n#include <orbit/world_model/CelestialSchemas.hpp>
 
 #include <string>
 #include <utility>
