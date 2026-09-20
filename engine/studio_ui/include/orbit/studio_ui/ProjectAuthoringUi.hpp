@@ -4,6 +4,7 @@
 #include <orbit/studio_session/ProjectBrowserModel.hpp>
 #include <orbit/studio_session/ProjectSettingsModel.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
+#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 
 #include <filesystem>
@@ -77,6 +78,9 @@ private:
         studio_session::StudioTerrainRoundTripReport>
         terrainRoundTripReport_;
     u64 terrainRoundTripReportGeneration_{~u64{0}};
+    std::optional<
+        studio_session::StudioTerrainValidationScenarioReport>
+        terrainValidationScenarioReport_;
     std::string status_;
     bool allowCloseWorld_{true};
 };
