@@ -128,6 +128,25 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioTerrainRebuildSchedulerTests
     )
 
+    add_executable(OrbitStudioTerrainPhysicalPageServiceTests
+        tests/StudioTerrainPhysicalPageServiceTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainPhysicalPageServiceTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainPhysicalPageServiceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainPhysicalPageServiceTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainPhysicalPageService
+        COMMAND OrbitStudioTerrainPhysicalPageServiceTests
+    )
+
     add_executable(OrbitStudioTerrainServiceStatusTests
         tests/StudioTerrainServiceStatusTests.cpp
     )
