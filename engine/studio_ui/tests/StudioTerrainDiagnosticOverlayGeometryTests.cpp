@@ -328,7 +328,7 @@ int main()
             StudioTerrainDiagnosticOverlayOptions
             options{};
 
-        options.processEffects = true;
+        options.processMasks = true;
 
         const auto lines =
             orbit::studio_ui::
