@@ -376,40 +376,49 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
                 }
 
                 context.Separator();
-                context.Text("Local Authored Override");
-                static_cast<void>(context.InputDouble3(
-                    "Center Unit Direction##m28-mask-direction",
-                    localOverrideDirection_));
-                static_cast<void>(context.InputDouble(
-                    "Inner Radius (m)##m28-mask-inner",
-                    localOverrideInnerRadiusMeters_));
-                static_cast<void>(context.InputDouble(
-                    "Outer Radius (m)##m28-mask-outer",
-                    localOverrideOuterRadiusMeters_));
-                static_cast<void>(context.InputDouble(
-                    "Weight##m28-mask-weight",
-                    localOverrideWeight_));
-                static_cast<void>(context.InputDouble(
-                    "Opacity##m28-mask-opacity",
-                    localOverrideOpacity_));
+                context.Text("Viewport Biome Paint");
+                context.Text(
+                    "Use Viewport > Biome Paint for normal Add/Subtract/Replace painting with production-terrain picking.");
 
-                if (context.Button("Paint Local Override##m28-paint-mask"))
+                if (advancedBiome_)
                 {
-                    try
+                    context.Text("Exact Authored Override (advanced)");
+
+                    static_cast<void>(context.InputDouble3(
+                        "Center Unit Direction##m28-mask-direction",
+                        localOverrideDirection_));
+                    static_cast<void>(context.InputDouble(
+                        "Inner Radius (m)##m28-mask-inner",
+                        localOverrideInnerRadiusMeters_));
+                    static_cast<void>(context.InputDouble(
+                        "Outer Radius (m)##m28-mask-outer",
+                        localOverrideOuterRadiusMeters_));
+                    static_cast<void>(context.InputDouble(
+                        "Weight##m28-mask-weight",
+                        localOverrideWeight_));
+                    static_cast<void>(context.InputDouble(
+                        "Opacity##m28-mask-opacity",
+                        localOverrideOpacity_));
+
+                    if (context.Button("Create Exact Replace Mask##m28-paint-mask"))
                     {
-                        const auto mask = model.PaintLocalOverride(
-                            selectedBiome->id,
-                            localOverrideDirection_,
-                            localOverrideInnerRadiusMeters_,
-                            localOverrideOuterRadiusMeters_,
-                            localOverrideWeight_,
-                            localOverrideOpacity_);
-                        model.SelectObject(mask);
-                        status_ = "Local authored biome override created and selected.";
-                    }
-                    catch (const std::exception& exception)
-                    {
-                        status_ = exception.what();
+                        try
+                        {
+                            const auto mask = model.PaintLocalOverride(
+                                selectedBiome->id,
+                                localOverrideDirection_,
+                                localOverrideInnerRadiusMeters_,
+                                localOverrideOuterRadiusMeters_,
+                                localOverrideWeight_,
+                                localOverrideOpacity_);
+                            model.SelectObject(mask);
+                            status_ =
+                                "Exact authored biome mask created and selected.";
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            status_ = exception.what();
+                        }
                     }
                 }
 
