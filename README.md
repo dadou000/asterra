@@ -52,11 +52,11 @@ Requirements:
 
 ```powershell
 cmake -S . -B build
-cmake --build build --config Debug
-.\build\apps\launcher\Debug\OrbitLauncher.exe
+cmake --build build --config Debug --target OrbitStudio
+.\Orbit.exe
 ```
 
-`OrbitLauncher` supervises the runtime and captures stdout/stderr into a timestamped session log. Logs are stored under `apps/launcher/<config>/logs` in a development build. If Orbit hits an unhandled Windows exception or `std::terminate`, the runtime also writes a crash report and minidump (`.dmp`) into the same log directory.
+Building `OrbitStudio` publishes the just-built unified Studio application to the repository root as `Orbit.exe`, together with the runtime files it requires. Starting `Orbit.exe` without a project path opens the integrated Studio project browser; selecting a project transitions into editing in the same application.
 
 ### Real-device terrain UI smoke
 
