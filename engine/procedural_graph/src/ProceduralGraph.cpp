@@ -399,6 +399,7 @@ void ProceduralGraph::FinalizeCompleted()
 
         if (stale)
         {
+            ++record.staleCompletions;
             record.state =
                 NodeState::Dirty;
             continue;
@@ -585,12 +586,15 @@ ProceduralGraph::Status(
 
     return NodeStatus{
         .state = record.state,
+        .backend = record.backend,
         .committedRevision =
             record.committedRevision,
         .requestedGeneration =
             record.requestedGeneration,
         .lastInputRevisionHash =
             record.lastInputRevisionHash,
+        .staleCompletions =
+            record.staleCompletions,
         .error = record.error
     };
 }
