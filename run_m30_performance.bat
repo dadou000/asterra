@@ -116,7 +116,7 @@ if errorlevel 1 (
 
 echo.
 echo [M30] Importing validated capture and advancing the ledger...
-python tools\import_v004_m30_performance.py "%RAW_CSV%"
+python tools\import_v004_m30_performance.py "%RAW_CSV%" "%CONFIG%"
 if errorlevel 1 (
     echo [M30] ERROR: Capture import failed.
     goto fail
