@@ -656,4 +656,104 @@ void PathPreviewRenderer::Draw(
                     size()));
     }
 }
+void PathPreviewRenderer::DrawCameraRelativeLines(
+    rhi::CommandList& commands,
+    rhi::Texture& target,
+    const u32 width,
+    const u32 height,
+    const render_view::CameraState& camera,
+    const std::span<const PreviewLine> lines)
+{
+    if (width == 0U ||
+        height == 0U ||
+        lines.empty())
+    {
+        return;
+    }
+
+    impl_->lineVertices.clear();
+    impl_->lineVertices.reserve(
+        lines.size() * 2U);
+
+    for (const auto& line : lines)
+    {
+        impl_->lineVertices.push_back({
+            .position = line.start,
+            .color = line.color
+        });
+        impl_->lineVertices.push_back({
+            .position = line.end,
+            .color = line.color
+        });
+    }
+
+    impl_->EnsureLineBuffer(
+        impl_->lineVertices.size());
+
+    std::memcpy(
+        impl_->lineVertexBuffer->Map(),
+        impl_->lineVertices.data(),
+        impl_->lineVertices.size() *
+            sizeof(RenderVertex));
+    impl_->lineVertexBuffer->Unmap();
+
+    const f32 tanHalfFov =
+        std::tan(
+            camera.verticalFovRadians *
+            0.5F);
+
+    const auto bits =
+        [](const f32 value)
+        {
+            return std::bit_cast<u32>(
+                value);
+        };
+
+    const std::array<u32, 12>
+        constants{
+            bits(
+                static_cast<f32>(width) /
+                static_cast<f32>(height)),
+            bits(tanHalfFov),
+            bits(camera.nearPlaneMeters),
+            bits(camera.farPlaneMeters),
+
+            bits(camera.forward.x),
+            bits(camera.forward.y),
+            bits(camera.forward.z),
+            bits(0.0F),
+
+            bits(camera.up.x),
+            bits(camera.up.y),
+            bits(camera.up.z),
+            bits(0.0F)
+        };
+
+    commands.SetRenderTarget(target);
+    commands.SetViewport({
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<f32>(width),
+        .height = static_cast<f32>(height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F
+    });
+    commands.SetScissor({
+        .left = 0,
+        .top = 0,
+        .right = static_cast<i32>(width),
+        .bottom = static_cast<i32>(height)
+    });
+    commands.SetGraphicsPipeline(
+        *impl_->linePipeline);
+    commands.SetGraphicsConstants(
+        constants);
+    commands.SetVertexBuffer(
+        *impl_->lineVertexBuffer,
+        sizeof(RenderVertex));
+    commands.Draw(
+        static_cast<u32>(
+            impl_->lineVertices.size()));
+}
+
 } // namespace orbit::editor_ui
