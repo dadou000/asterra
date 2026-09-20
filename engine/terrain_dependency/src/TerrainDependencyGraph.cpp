@@ -98,6 +98,27 @@ TerrainDependencyGraph::TerrainDependencyGraph(
     }
 }
 
+TerrainDependencyGraph::TerrainDependencyGraph(
+    procedural_graph::ProceduralGraph& graph,
+    LegacyTerrainPageBuildFunction build,
+    terrain_gpu::PersistentGpuTerrainCache* cache)
+    : TerrainDependencyGraph(
+          graph,
+          [legacy = std::move(build)](
+              const terrain::PhysicalTerrainPageAddress& address,
+              const TerrainDependencyProduct product,
+              const terrain::TerrainGenerationRevisions&,
+              const procedural_graph::BuildContext& context)
+          {
+              return legacy(
+                  address,
+                  product,
+                  context);
+          },
+          cache)
+{
+}
+
 std::size_t TerrainDependencyGraph::AddressHash::operator()(
     const terrain::PhysicalTerrainPageAddress& address) const noexcept
 {
@@ -126,6 +147,10 @@ void TerrainDependencyGraph::RegisterPage(
     PageRecord record{};
     record.nodes.address = address;
     record.nodes.revisions = revisions;
+    record.revisions =
+        std::make_shared<RevisionState>();
+    record.revisions->revisions =
+        revisions;
 
     const auto addSource =
         [&](const SourceKind source,
@@ -180,6 +205,8 @@ void TerrainDependencyGraph::RegisterPage(
         };
 
     const TerrainPageBuildFunction dispatcher = build_;
+    const auto revisionState =
+        record.revisions;
 
     const auto addProduct =
         [&](const TerrainDependencyProduct product,
@@ -190,12 +217,25 @@ void TerrainDependencyGraph::RegisterPage(
                 prefix + "." + suffix,
                 std::move(dependencies),
                 BackendFor(product),
-                [dispatcher, address, product](
+                [dispatcher,
+                 revisionState,
+                 address,
+                 product](
                     const procedural_graph::BuildContext& context)
                 {
+                    terrain::TerrainGenerationRevisions revisions{};
+
+                    {
+                        std::scoped_lock lock(
+                            revisionState->mutex);
+                        revisions =
+                            revisionState->revisions;
+                    }
+
                     return dispatcher(
                         address,
                         product,
+                        revisions,
                         context);
                 });
         };
@@ -514,6 +554,13 @@ TerrainInvalidationResult TerrainDependencyGraph::ApplyChange(
             page.nodes.revisions,
             request.kind);
 
+        {
+            std::scoped_lock lock(
+                page.revisions->mutex);
+            page.revisions->revisions =
+                page.nodes.revisions;
+        }
+
         if (cache_ != nullptr)
         {
             result.cacheEntriesRemoved +=
@@ -594,7 +641,9 @@ TerrainDependencyGraph::Revisions(
         return std::nullopt;
     }
 
-    return found->second.nodes.revisions;
+    std::scoped_lock lock(
+        found->second.revisions->mutex);
+    return found->second.revisions->revisions;
 }
 
 std::optional<TerrainDependencyPageNodes>
@@ -607,6 +656,16 @@ TerrainDependencyGraph::Nodes(
         return std::nullopt;
     }
 
-    return found->second.nodes;
+    auto result =
+        found->second.nodes;
+
+    {
+        std::scoped_lock lock(
+            found->second.revisions->mutex);
+        result.revisions =
+            found->second.revisions->revisions;
+    }
+
+    return result;
 }
 } // namespace orbit::terrain_dependency
