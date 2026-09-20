@@ -76,6 +76,7 @@ private:
     std::optional<
         studio_session::StudioTerrainRoundTripReport>
         terrainRoundTripReport_;
+    u64 terrainRoundTripReportGeneration_{~u64{0}};
     std::string status_;
     bool allowCloseWorld_{true};
 };
