@@ -1,5 +1,6 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
+#include <orbit/terrain_hydrology/DrainagePage.hpp>
 #include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
@@ -11,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <span>
@@ -2665,6 +2667,482 @@ void Test09CrossPageDuneMigration()
         "M30-09 two-page dune migration must conserve the original physical sand across M13 pickup, M14 export, M25 transfer, M14 import and receiver M13 deposition.");
 }
 
+
+void Test10FastFlowDrainageReference()
+{
+    using namespace terrain_hydrology;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacingMeters = 10.0;
+    constexpr u32 pitX = 2U;
+    constexpr u32 pitY = 3U;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage material(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 crossSlope =
+                static_cast<f32>(
+                    std::abs(
+                        static_cast<i32>(y) -
+                        static_cast<i32>(
+                            resolution / 2U))) *
+                0.75F;
+
+            f32 height =
+                100.0F -
+                static_cast<f32>(x) *
+                    3.0F +
+                crossSlope;
+
+            if (x == pitX &&
+                y == pitY)
+            {
+                height = 60.0F;
+            }
+
+            material.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        height,
+                    .referenceBedrockHeightMeters =
+                        height,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    std::vector<DrainageCellInput> inputs(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution);
+
+    f64 expectedTotalDischarge = 0.0;
+
+    const f64 cellArea =
+        material.CellAreaSquareMeters();
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const std::size_t index =
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x;
+
+            const f32 runoff =
+                static_cast<f32>(
+                    0.0001 *
+                    static_cast<f64>(
+                        1U +
+                        ((x + 2U * y) %
+                         5U)));
+
+            inputs[index] = {
+                .runoffMetersPerSecond =
+                    runoff,
+                .authoredDrainage = 0.0F,
+                .outlet = false
+            };
+
+            expectedTotalDischarge +=
+                static_cast<f64>(
+                    runoff) *
+                cellArea;
+        }
+    }
+
+    const auto makeBoundary =
+        [](const f32 height)
+        {
+            return DrainageBoundaryCell{
+                .surfaceHeightMeters =
+                    height,
+                .conditionedHeightMeters =
+                    height,
+                .authoredDrainage = 0.0F,
+                .drainageAreaSquareMeters =
+                    0.0,
+                .dischargeCubicMetersPerSecond =
+                    0.0,
+                .flowDx = 0,
+                .flowDy = 0
+            };
+        };
+
+    DrainagePageHalo halo{};
+    halo.revision =
+        0x4D33304641535446ULL;
+
+    halo.north.assign(
+        resolution,
+        makeBoundary(200.0F));
+    halo.south.assign(
+        resolution,
+        makeBoundary(200.0F));
+    halo.west.assign(
+        resolution,
+        makeBoundary(200.0F));
+    halo.east.assign(
+        resolution,
+        makeBoundary(60.0F));
+
+    halo.corners = {
+        makeBoundary(200.0F),
+        makeBoundary(200.0F),
+        makeBoundary(200.0F),
+        makeBoundary(200.0F)
+    };
+
+    terrain::PhysicalTerrainPageKey key{};
+    key.resolution = resolution;
+    key.revisions.geology = 10U;
+    key.revisions.processes = 20U;
+    key.revisions.climate = 30U;
+    key.revisions.authoring = 40U;
+
+    DrainageRoutingConfig config{};
+    config.depressionPolicy =
+        DepressionRoutingPolicy::
+            FillToBoundary;
+    config.minimumDrainageDropMeters =
+        0.10F;
+    config.authoredGuidanceWeight =
+        0.0F;
+
+    const DrainagePage drainage =
+        BuildDrainagePage(
+            material,
+            key,
+            inputs,
+            halo,
+            config);
+
+    const auto& pit =
+        drainage.At(
+            pitX,
+            pitY);
+
+    Require(
+        NearlyEqual(
+            pit.surfaceHeightMeters,
+            60.0,
+            1.0e-6) &&
+        pit.depressionFillMeters >
+            20.0F &&
+        pit.drainageElevationMeters >
+            pit.surfaceHeightMeters,
+        "M30-10 FastFlow reference fixture must exercise priority-flood conditioning while preserving the original M08 surface.");
+
+    const std::size_t cellCount =
+        static_cast<std::size_t>(
+            resolution) *
+        resolution;
+
+    std::vector<std::vector<u32>> donors(
+        cellCount);
+
+    std::vector<i32> downstream(
+        cellCount,
+        -1);
+
+    std::vector<u32> remainingDonors(
+        cellCount,
+        0U);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const u32 index =
+                y * resolution +
+                x;
+
+            const auto& cell =
+                drainage.At(x, y);
+
+            Require(
+                cell.flow.HasDownstream(),
+                "M30-10 conditioned catchment must give every physical cell a downstream route.");
+
+            if (cell.flow.exitsPage)
+            {
+                continue;
+            }
+
+            const i32 tx =
+                static_cast<i32>(x) +
+                cell.flow.dx;
+            const i32 ty =
+                static_cast<i32>(y) +
+                cell.flow.dy;
+
+            Require(
+                tx >= 0 &&
+                ty >= 0 &&
+                tx <
+                    static_cast<i32>(
+                        resolution) &&
+                ty <
+                    static_cast<i32>(
+                        resolution),
+                "M30-10 internal M09 route points outside the physical page without an exit flag.");
+
+            const u32 target =
+                static_cast<u32>(ty) *
+                    resolution +
+                static_cast<u32>(tx);
+
+            downstream[index] =
+                static_cast<i32>(
+                    target);
+
+            donors[target].
+                push_back(index);
+
+            ++remainingDonors[target];
+
+            Require(
+                drainage.At(
+                    static_cast<u32>(tx),
+                    static_cast<u32>(ty)).
+                    drainageElevationMeters <
+                cell.drainageElevationMeters,
+                "M30-10 M09 graph must be strictly downhill on the conditioned drainage surface.");
+        }
+    }
+
+    std::vector<f64> referenceArea(
+        cellCount,
+        cellArea);
+
+    std::vector<f64> referenceDischarge(
+        cellCount,
+        0.0);
+
+    for (std::size_t index = 0U;
+         index < cellCount;
+         ++index)
+    {
+        referenceDischarge[index] =
+            static_cast<f64>(
+                inputs[index].
+                    runoffMetersPerSecond) *
+            cellArea;
+    }
+
+    std::deque<u32> leaves;
+
+    for (u32 index = 0U;
+         index <
+             static_cast<u32>(
+                 cellCount);
+         ++index)
+    {
+        if (remainingDonors[index] ==
+            0U)
+        {
+            leaves.push_back(index);
+        }
+    }
+
+    u32 processed = 0U;
+
+    while (!leaves.empty())
+    {
+        const u32 index =
+            leaves.front();
+
+        leaves.pop_front();
+        ++processed;
+
+        if (downstream[index] <
+            0)
+        {
+            continue;
+        }
+
+        const u32 target =
+            static_cast<u32>(
+                downstream[index]);
+
+        referenceArea[target] +=
+            referenceArea[index];
+
+        referenceDischarge[target] +=
+            referenceDischarge[index];
+
+        Require(
+            remainingDonors[target] >
+                0U,
+            "M30-10 independent donor graph encountered an invalid dependency count.");
+
+        --remainingDonors[target];
+
+        if (remainingDonors[target] ==
+            0U)
+        {
+            leaves.push_back(
+                target);
+        }
+    }
+
+    Require(
+        processed ==
+            static_cast<u32>(
+                cellCount),
+        "M30-10 independent donor-graph reference detected a cycle in the supposedly downhill M09 graph.");
+
+    f64 exitArea = 0.0;
+    f64 exitDischarge = 0.0;
+    f64 maximumAccumulatedArea =
+        0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const u32 index =
+                y * resolution +
+                x;
+
+            const auto& cell =
+                drainage.At(x, y);
+
+            maximumAccumulatedArea =
+                std::max(
+                    maximumAccumulatedArea,
+                    cell.
+                        drainageAreaSquareMeters);
+
+            Require(
+                NearlyEqual(
+                    cell.
+                        drainageAreaSquareMeters,
+                    referenceArea[index],
+                    1.0e-9) &&
+                NearlyEqual(
+                    cell.
+                        dischargeCubicMetersPerSecond,
+                    referenceDischarge[index],
+                    1.0e-12),
+                "M30-10 production M09 accumulation must match the independent donor-graph FastFlow reference for every cell.");
+
+            if (cell.flow.exitsPage)
+            {
+                exitArea +=
+                    cell.
+                        drainageAreaSquareMeters;
+
+                exitDischarge +=
+                    cell.
+                        dischargeCubicMetersPerSecond;
+            }
+        }
+    }
+
+    const f64 expectedTotalArea =
+        cellArea *
+        static_cast<f64>(
+            cellCount);
+
+    Require(
+        maximumAccumulatedArea >=
+            cellArea * 10.0,
+        "M30-10 fixture must contain meaningful multi-donor accumulation rather than only isolated single-cell exits.");
+
+    Require(
+        NearlyEqual(
+            exitArea,
+            expectedTotalArea,
+            1.0e-9) &&
+        NearlyEqual(
+            exitDischarge,
+            expectedTotalDischarge,
+            1.0e-12),
+        "M30-10 sum of all page-exit drainage area/discharge must equal the complete conditioned catchment input exactly.");
+
+    const DrainagePage replay =
+        BuildDrainagePage(
+            material,
+            key,
+            inputs,
+            halo,
+            config);
+
+    Require(
+        drainage.Revision() ==
+            replay.Revision(),
+        "M30-10 identical physical drainage inputs must retain deterministic M09 revision identity.");
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& a =
+                drainage.At(x, y);
+            const auto& b =
+                replay.At(x, y);
+
+            Require(
+                a.drainageElevationMeters ==
+                        b.drainageElevationMeters &&
+                    a.depressionFillMeters ==
+                        b.depressionFillMeters &&
+                    a.flow.dx ==
+                        b.flow.dx &&
+                    a.flow.dy ==
+                        b.flow.dy &&
+                    a.flow.exitsPage ==
+                        b.flow.exitsPage &&
+                    a.drainageAreaSquareMeters ==
+                        b.drainageAreaSquareMeters &&
+                    a.dischargeCubicMetersPerSecond ==
+                        b.dischargeCubicMetersPerSecond,
+                "M30-10 FastFlow drainage reference must be bit-deterministic for fixed physical inputs.");
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -2678,8 +3156,9 @@ int main()
     Test07CrossPageWaterFlux();
     Test08CrossPageSedimentFlux();
     Test09CrossPageDuneMigration();
+    Test10FastFlowDrainageReference();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 9/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 10/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
