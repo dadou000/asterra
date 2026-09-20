@@ -58,6 +58,32 @@ cmake --build build --config Debug
 
 `OrbitLauncher` supervises the runtime and captures stdout/stderr into a timestamped session log. Logs are stored under `apps/launcher/<config>/logs` in a development build. If Orbit hits an unhandled Windows exception or `std::terminate`, the runtime also writes a crash report and minidump (`.dmp`) into the same log directory.
 
+### Real-device terrain UI smoke
+
+The terrain authoring workflow has a dedicated Studio smoke gate that launches the
+real editor and exercises the Vulkan-backed production viewport rather than only
+headless contracts. It verifies active `Surface Authoring` and project-validation
+panel registration, renders the advanced terrain controls through Dear ImGui,
+applies representative relief/biome/constraint edits, enables terrain diagnostics,
+runs the M15 end-to-end scenario, performs the save/reopen terrain round trip, and
+captures the production terrain viewport.
+
+On a Vulkan-capable Windows development machine:
+
+```bat
+run_terrain_ui_smoke.bat
+```
+
+Use `debug` or `release` to select the configuration, `nobuild` to reuse an
+existing build, and `nopause` for automation. The command exits non-zero if any
+required UI control is missing, terrain validation fails, or the real viewport
+cannot be rendered/captured.
+
+The GitHub-hosted `Orbit Studio Smoke` workflow remains the compile/headless
+contract gate. A separate manually dispatched `Orbit Studio Real Device Smoke`
+workflow targets a self-hosted Windows runner labelled `orbit-vulkan`, because a
+real render-device check must not silently fall back to a GPU-less hosted runner.
+
 ### Headless project validation and cooking
 
 `OrbitBuild.exe` and Orbit Studio use the same `Orbit::Build` service. The current M21 path validates a project/build profile, resolves plugin manifests, cooks importer-backed target DDC products, compiles project Luau modules, copies the startup world and writes a deterministic `OrbitBuildManifest.toml`.
