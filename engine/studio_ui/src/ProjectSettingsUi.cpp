@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 
+#include <filesystem>
 #include <format>
 #include <stdexcept>
 
