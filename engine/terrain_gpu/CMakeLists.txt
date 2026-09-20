@@ -13,6 +13,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuHydrologyRegion.cpp
     src/GpuLakeBasins.cpp
     src/GpuMaterialColumnResources.cpp
+    src/GpuPhysicalPageComposite.cpp
     src/PersistentGpuTerrainCache.cpp
     src/GpuRegionDelta.cpp
     src/GpuRiverGeometry.cpp
@@ -182,5 +183,27 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainGpuPersistentCache
         COMMAND OrbitTerrainGpuPersistentCacheTests
+    )
+endif()
+
+
+if(BUILD_TESTING)
+    add_executable(OrbitTerrainGpuPhysicalPageCompositeShaderTests
+        tests/M12PhysicalPageCompositeShaderTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainGpuPhysicalPageCompositeShaderTests
+        PRIVATE
+            Orbit::ShaderDxc
+    )
+
+    target_compile_features(
+        OrbitTerrainGpuPhysicalPageCompositeShaderTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainGpuPhysicalPageCompositeShaderTests)
+    orbit_copy_dxc_runtime(OrbitTerrainGpuPhysicalPageCompositeShaderTests)
+
+    add_test(
+        NAME Orbit.TerrainGpuPhysicalPageCompositeShader
+        COMMAND OrbitTerrainGpuPhysicalPageCompositeShaderTests
     )
 endif()
