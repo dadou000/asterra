@@ -128,3 +128,12 @@ Do not introduce a separate launcher, project-manager app, configuration shell, 
 Background/helper processes remain allowed when technically useful, but they must stay implementation details rather than become competing user-facing applications.
 
 This rule is defined in detail by [ORBIT_UI_RULES.md](ORBIT_UI_RULES.md).
+
+
+## 18. Root executable publishing is a build contract
+
+A successful local Orbit build must publish the current unified Studio executable to `<repo-root>/Orbit.exe`.
+
+The canonical interactive developer entry point is therefore always easy to find and run from the repository root. Internal CMake output layout may remain configuration-specific, but developers must not need to browse those directories to launch Orbit.
+
+`Orbit.exe` is the Studio application itself, not a launcher for another UI process. Failure to refresh the root executable after a successful build is considered a build failure.
