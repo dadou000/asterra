@@ -604,6 +604,12 @@ RunStudioTerrainValidationScenario(
         report.cacheStats =
             runtime->cacheStats;
 
+        report.performance =
+            studio.TerrainPerformance().
+                Capture(
+                    studio,
+                    viewportId);
+
         if (!report.debugPhysicalLodAvailable ||
             !report.debugBiomeWeightsAvailable ||
             report.debugFieldsAvailable == 0U)
